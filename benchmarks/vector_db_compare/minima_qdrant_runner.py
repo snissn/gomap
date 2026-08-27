@@ -39,6 +39,24 @@ RESOURCE_SEMANTICS = {
 MANIFEST_SCHEMA = "treedb_rag_minima_manifest/v1"
 ARTIFACT_SCHEMA = "treedb_rag_application/minima_v4"
 SERVER_VERSION = CLIENT_VERSION = "1.19.0"
+READINESS_SNAPSHOT_LIMIT = 256
+READINESS_RESOURCE_INTERVAL_SECONDS = 5.0
+READINESS_DIAGNOSTIC_TIMEOUT_SECONDS = 1.0
+PRODUCTION_HNSW_CONFIG = {
+    "m": 16, "ef_construct": 100, "full_scan_threshold": 10000,
+    "max_indexing_threads": 0, "on_disk": False,
+}
+PRODUCTION_OPTIMIZERS_CONFIG = {
+    "deleted_threshold": 0.2, "vacuum_min_vector_number": 1000,
+    "default_segment_number": 0, "indexing_threshold": 10000,
+    "flush_interval_sec": 5,
+}
+INITIAL_UPLOAD_HNSW_CONFIG = {**PRODUCTION_HNSW_CONFIG, "m": 0}
+INITIAL_UPLOAD_OPTIMIZERS_CONFIG = {**PRODUCTION_OPTIMIZERS_CONFIG, "indexing_threshold": 0}
+RESOURCE_STARVATION_MARKERS = (
+    "out of memory", "cannot allocate memory", "memory allocation failed",
+    "no space left on device", "disk full",
+)
 GENERATOR = (
     "ordinal-v3:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;"
     "vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;"
@@ -632,6 +650,81 @@ def enum_text(value: Any) -> str:
     return str(getattr(value, "value", value)).lower()
 
 
+def optimizer_is_ok(value: Any) -> bool:
+    raw = model_value(value)
+    return raw == "ok" or isinstance(raw, dict) and raw.get("ok") is True
+
+
+def readiness_disposition(snapshots: list[dict[str, Any]],
+                          server_logs: list[dict[str, Any]],
+                          deadline_seconds: float | None = None) -> str:
+    diagnostic_text = json.dumps([
+        {
+            "optimizer_status": row.get("optimizer_status"),
+            "optimizations": row.get("optimizations"),
+            "collection_error": row.get("collection_error"),
+        }
+        for row in snapshots
+    ] + server_logs, sort_keys=True, default=str).lower()
+    if any(marker in diagnostic_text for marker in RESOURCE_STARVATION_MARKERS):
+        return "resource starvation"
+    if not snapshots:
+        return "unknown"
+    latest = snapshots[-1]
+    optimizer = latest.get("optimizer_status")
+    if latest.get("status") == "red" or (
+        isinstance(optimizer, dict)
+        and (optimizer.get("error") or optimizer.get("ok") is False)
+    ):
+        return "optimizer error"
+
+    if deadline_seconds is None:
+        deadline_seconds = float(latest.get("elapsed_seconds", 0) or 0)
+    progress_window = min(60.0, max(0.0, deadline_seconds) * 0.1)
+    cutoff = max(0.0, deadline_seconds - progress_window)
+    recent = [
+        row for row in snapshots
+        if isinstance(row.get("elapsed_seconds"), (int, float))
+        and row["elapsed_seconds"] >= cutoff
+        and row.get("collection_error") is None
+    ]
+
+    def progress_signature(row: dict[str, Any]) -> tuple[Any, ...]:
+        detail = row.get("optimizations", {}).get("detail", {})
+        return (
+            row.get("points_count"),
+            row.get("indexed_vectors_count"),
+            row.get("segments_count"),
+            json.dumps(detail.get("summary"), sort_keys=True, default=str),
+            json.dumps(detail.get("running"), sort_keys=True, default=str),
+        )
+
+    if len(recent) > 1 and any(
+        progress_signature(current) != progress_signature(previous)
+        for previous, current in zip(recent, recent[1:])
+    ):
+        return "active progress"
+
+    latest_optimization = latest.get("optimizations", {})
+    latest_detail = (
+        latest_optimization.get("detail", {})
+        if latest_optimization.get("available")
+        and isinstance(latest_optimization.get("detail"), dict)
+        else {}
+    )
+    summary = latest_detail.get("summary") or {}
+    if (
+        latest_detail.get("running")
+        or latest_detail.get("queued")
+        or any(int(summary.get(key, 0) or 0) > 0 for key in (
+            "queued_optimizations", "queued_points", "queued_segments", "idle_segments",
+        ))
+        or latest.get("status") == "grey"
+    ):
+        return "queued/idle"
+    return "unknown"
+
+
 def is_timeout(exc: BaseException) -> bool:
     return isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower() or "timed out" in str(exc).lower()
 
@@ -974,6 +1067,20 @@ class QdrantMinimaRunner:
         self.state_scroll: dict[str, Any] = {}
         self.effective_collection: dict[str, Any] = {}
         self.overlap_evidence: dict[str, Any] = {}
+        self.readiness_evidence: list[dict[str, Any]] = []
+        self.configuration_transition: dict[str, Any] = {
+            "boundary": "initial_batch_insert_to_warmup_search",
+            "attempted": False, "completed": False,
+            "initial_upload_hnsw": INITIAL_UPLOAD_HNSW_CONFIG,
+            "initial_upload_optimizers": INITIAL_UPLOAD_OPTIMIZERS_CONFIG,
+            "production_hnsw": PRODUCTION_HNSW_CONFIG,
+            "production_optimizers": PRODUCTION_OPTIMIZERS_CONFIG,
+        }
+        self.production_restoration_attempted = False
+        self.server_log_path = (
+            storage_path.parent / "qdrant.log"
+            if deployment == "standalone" and storage_path is not None else None
+        )
 
     def connect(self) -> None:
         self.client = self.client_factory()
@@ -1037,6 +1144,91 @@ class QdrantMinimaRunner:
             "end": segments[-1]["end"],
         }
 
+    def optimization_snapshot(self, timeout_seconds: float | None = None) -> dict[str, Any]:
+        assert self.client is not None
+        method = getattr(self.client, "get_optimizations", None)
+        if not callable(method):
+            return {"available": False, "reason": "qdrant-client get_optimizations unavailable"}
+        try:
+            if timeout_seconds is None:
+                detail = method(collection_name=self.collection, _with="completed", completed_limit=16)
+            elif timeout_seconds <= 0:
+                return {"available": False, "reason": "readiness deadline has no optimizer diagnostic budget"}
+            else:
+                remote = getattr(self.client, "http", None)
+                api_client = getattr(remote, "client", None)
+                response_type = getattr(self.models, "InlineResponse20011", None)
+                request = getattr(api_client, "request", None)
+                if remote is None:
+                    # Test/local clients have no remote HTTP transport.
+                    detail = method(collection_name=self.collection, _with="completed", completed_limit=16)
+                elif not callable(request) or response_type is None:
+                    return {
+                        "available": False,
+                        "reason": "qdrant-client deadline-bounded optimizer transport unavailable",
+                    }
+                else:
+                    response = request(
+                        type_=response_type, method="GET",
+                        url="/collections/{collection_name}/optimizations",
+                        path_params={"collection_name": self.collection},
+                        params={"with": "completed", "completed_limit": 16}, timeout=timeout_seconds,
+                    )
+                    detail = getattr(response, "result", response)
+            return {"available": True, "detail": model_value(detail)}
+        except Exception as exc:
+            return {
+                "available": False,
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
+
+    def server_log_snapshot(self) -> dict[str, Any]:
+        path = self.server_log_path
+        if path is None:
+            return {
+                "available": False,
+                "reason": "server log path unavailable for this deployment",
+            }
+        try:
+            size = path.stat().st_size
+            with path.open("rb") as handle:
+                handle.seek(max(0, size - 65536))
+                tail = handle.read().decode("utf-8", errors="replace")
+            return {
+                "available": True, "path": str(path), "size_bytes": size,
+                "tail": tail,
+            }
+        except OSError as exc:
+            return {
+                "available": False,
+                "path": str(path),
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
+
+    def restore_production_configuration(self) -> None:
+        assert self.client is not None
+        if self.production_restoration_attempted:
+            raise RuntimeError("Qdrant production configuration restoration was already attempted")
+        self.production_restoration_attempted = True
+        self.configuration_transition["attempted"] = True
+        before = self.client.get_collection(self.collection)
+        self.configuration_transition["before"] = model_value(getattr(before, "config", None))
+        try:
+            self.client.update_collection(
+                collection_name=self.collection,
+                hnsw_config=self.models.HnswConfigDiff(**PRODUCTION_HNSW_CONFIG),
+                optimizers_config=self.models.OptimizersConfigDiff(**PRODUCTION_OPTIMIZERS_CONFIG),
+                timeout=self.operation_timeout,
+            )
+        except Exception as exc:
+            self.configuration_transition["error"] = f"{type(exc).__name__}: {exc}"
+            raise
+        self.configuration_transition["completed"] = True
+
+    def initial_load_to_query_boundary(self) -> None:
+        self.restore_production_configuration()
+
+
 
     def create_owned_collection(self) -> None:
         assert self.client is not None
@@ -1044,13 +1236,21 @@ class QdrantMinimaRunner:
             if not self.allow_drop:
                 raise RuntimeError(f"Qdrant collection {self.collection!r} already exists; set ALLOW_DROP=true only for a disposable namespace")
             self.client.delete_collection(self.collection, timeout=self.operation_timeout)
-        self.client.create_collection(collection_name=self.collection,
-            vectors_config={self.config["vector_field"]: self.models.VectorParams(size=self.config["dimension"], distance=self.models.Distance.COSINE)},
-            timeout=self.operation_timeout)
+        self.client.create_collection(
+            collection_name=self.collection,
+            vectors_config={
+                self.config["vector_field"]: self.models.VectorParams(
+                    size=self.config["dimension"], distance=self.models.Distance.COSINE,
+                ),
+            },
+            hnsw_config=self.models.HnswConfigDiff(**INITIAL_UPLOAD_HNSW_CONFIG),
+            optimizers_config=self.models.OptimizersConfigDiff(**INITIAL_UPLOAD_OPTIMIZERS_CONFIG),
+            timeout=self.operation_timeout,
+        )
         for field in self.config["scalar_fields"]:
             self.client.create_payload_index(collection_name=self.collection, field_name=field,
                 field_schema=self.models.PayloadSchemaType.KEYWORD, wait=True, timeout=self.operation_timeout)
-        self.wait_ready(expected_count=0)
+        self.wait_ready(expected_count=0, phase="initial_upload_collection_created")
         self.ensure_compatible()
 
     def ensure_compatible(self) -> None:
@@ -1070,19 +1270,138 @@ class QdrantMinimaRunner:
         if missing:
             raise RuntimeError(f"Qdrant collection is missing keyword payload indexes: {missing}")
 
-    def wait_ready(self, expected_count: int | None = None) -> None:
+    def wait_ready(self, expected_count: int | None = None,
+                   phase: str = "mutation_visibility") -> None:
         assert self.client is not None
-        deadline, last = time.monotonic() + self.optimizer_timeout, {}
+        started = time.monotonic()
+        deadline = started + self.optimizer_timeout
+        next_resource_sample = started
+        session: dict[str, Any] = {
+            "phase": phase, "deadline_seconds": self.optimizer_timeout,
+            "expected_points_count": expected_count,
+            "snapshot_limit": READINESS_SNAPSHOT_LIMIT,
+            "snapshots_dropped": 0, "snapshots": [],
+            "resource_samples": [], "server_log_samples": [],
+            "outcome": "polling", "disposition": "unknown",
+        }
+        self.readiness_evidence.append(session)
+
+        def finish(outcome: str) -> None:
+            session["outcome"] = outcome
+            session["disposition"] = (
+                "ready" if outcome == "ready"
+                else readiness_disposition(
+                    session["snapshots"], session["server_log_samples"],
+                    self.optimizer_timeout,
+                )
+            )
+
+        def bounded_optimization_snapshot() -> dict[str, Any]:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {
+                    "available": False,
+                    "reason": "readiness deadline has no optimizer diagnostic budget",
+                }
+            # HTTPX applies a timeout to connect/read/write/pool separately.
+            # Divide the remaining wall budget across those phases and cap the
+            # optional diagnostic so it cannot inherit the operation timeout.
+            timeout_seconds = min(READINESS_DIAGNOSTIC_TIMEOUT_SECONDS, remaining / 4)
+            return self.optimization_snapshot(timeout_seconds)
+
         while time.monotonic() < deadline:
-            info = self.client.get_collection(self.collection)
-            status, optimizer = enum_text(getattr(info, "status", "")), getattr(info, "optimizer_status", None)
-            optimizer_ok = getattr(optimizer, "ok", None) is True or enum_text(optimizer) == "ok"
-            points, schema = getattr(info, "points_count", None), getattr(info, "payload_schema", {}) or {}
-            last = {"status": status, "optimizer_status": model_value(optimizer), "points_count": points, "payload_fields": sorted(schema)}
-            if status == "green" and optimizer_ok and (expected_count is None or points == expected_count) and all(field in schema for field in self.config["scalar_fields"]):
+            now = time.monotonic()
+            resource_index: int | None = None
+            if now >= next_resource_sample:
+                session["resource_samples"].append({
+                    "elapsed_seconds": now - started,
+                    "sample": server_resource_usage(
+                        self.server_pid, self.storage_path, self.resource_server_name,
+                    ),
+                })
+                resource_index = len(session["resource_samples"]) - 1
+                log_payload = self.server_log_snapshot()
+                if (
+                    not session["server_log_samples"]
+                    or any(
+                        session["server_log_samples"][-1].get(key) != value
+                        for key, value in log_payload.items()
+                    )
+                    or any(
+                        key != "elapsed_seconds" and key not in log_payload
+                        for key in session["server_log_samples"][-1]
+                    )
+                ):
+                    session["server_log_samples"].append({
+                        "elapsed_seconds": now - started, **log_payload,
+                    })
+                next_resource_sample = now + READINESS_RESOURCE_INTERVAL_SECONDS
+            elif session["resource_samples"]:
+                resource_index = len(session["resource_samples"]) - 1
+
+            try:
+                info = self.client.get_collection(self.collection)
+            except Exception as exc:
+                snapshot = {
+                    "sequence": len(session["snapshots"]),
+                    "elapsed_seconds": now - started,
+                    "collection_error": f"{type(exc).__name__}: {exc}",
+                    "optimizations": bounded_optimization_snapshot(),
+                    "resource_sample_index": resource_index,
+                }
+                session["snapshots"].append(snapshot)
+                finish("error")
+                raise
+
+            optimizer = getattr(info, "optimizer_status", None)
+            schema = getattr(info, "payload_schema", {}) or {}
+            snapshot = {
+                "sequence": len(session["snapshots"]) + session["snapshots_dropped"],
+                "elapsed_seconds": now - started,
+                "status": enum_text(getattr(info, "status", "")),
+                "optimizer_status": model_value(optimizer),
+                "points_count": getattr(info, "points_count", None),
+                "indexed_vectors_count": getattr(info, "indexed_vectors_count", None),
+                "segments_count": getattr(info, "segments_count", None),
+                "payload_schema": model_value(schema),
+                "config": model_value(getattr(info, "config", None)),
+                "optimizations": bounded_optimization_snapshot(),
+                "resource_sample_index": resource_index,
+            }
+            ready_metadata = (
+                snapshot["status"] == "green"
+                and optimizer_is_ok(optimizer)
+                and all(field in schema for field in self.config["scalar_fields"])
+            )
+            if ready_metadata and expected_count is not None:
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    try:
+                        exact = self.client.count(
+                            collection_name=self.collection, count_filter=None, exact=True,
+                            timeout=min(self.operation_timeout, remaining),
+                        )
+                        snapshot["exact_points_count"] = getattr(exact, "count", None)
+                    except Exception as exc:
+                        snapshot["exact_count_error"] = f"{type(exc).__name__}: {exc}"
+            snapshots = session["snapshots"]
+            if len(snapshots) == READINESS_SNAPSHOT_LIMIT:
+                del snapshots[1]
+                session["snapshots_dropped"] += 1
+            snapshots.append(snapshot)
+            if (
+                ready_metadata
+                and (expected_count is None or snapshot.get("exact_points_count") == expected_count)
+            ):
+                finish("ready")
                 return
             time.sleep(self.poll_interval)
-        raise TimeoutError(f"Qdrant readiness exceeded {self.optimizer_timeout}s; last={last}")
+        finish("timeout")
+        last = session["snapshots"][-1] if session["snapshots"] else {}
+        raise TimeoutError(
+            f"Qdrant readiness exceeded {self.optimizer_timeout}s; "
+            f"disposition={session['disposition']}; last={last}"
+        )
 
     def point(self, document: dict[str, Any]) -> Any:
         return self.models.PointStruct(id=point_id(document["id"]), vector={self.config["vector_field"]: document["vector"]},
@@ -1105,7 +1424,16 @@ class QdrantMinimaRunner:
             documents = [generated_document(spec, ordinal) for ordinal in range(insertion["start"], insertion["start"] + insertion["rows"])]
             self.upsert(name, spec["name"], documents, wait_each)
         if ranges and not wait_each:
-            self.evidence.call(name, "writer_wait", "all", self.wait_ready)
+            if name == "initial_batch_insert":
+                self.initial_load_to_query_boundary()
+            expected_count = sum(insertion["rows"] for insertion in ranges)
+            phase = "initial_load_to_query" if name == "initial_batch_insert" else name
+            self.evidence.call(
+                name, "writer_wait", "all",
+                lambda: self.wait_ready(expected_count=expected_count, phase=phase),
+            )
+            if name == "initial_batch_insert":
+                self.ensure_compatible()
 
     def search(self, operation: str, scenario: str, interval: dict[str, int] | None = None) -> tuple[list[str], list[float]]:
         assert self.client is not None
@@ -1628,6 +1956,10 @@ class QdrantMinimaRunner:
             "server_pid": str(self.server_pid) if self.server_pid is not None else "unavailable",
             "server_listener_port": str(self.server_listener_port or urllib.parse.urlsplit(self.url).port or (443 if urllib.parse.urlsplit(self.url).scheme == "https" else 80)),
             "restart_identity": self.restart_identity,
+            "initial_upload_hnsw": json.dumps(INITIAL_UPLOAD_HNSW_CONFIG, sort_keys=True, separators=(",", ":")),
+            "initial_upload_optimizers": json.dumps(INITIAL_UPLOAD_OPTIMIZERS_CONFIG, sort_keys=True, separators=(",", ":")),
+            "production_hnsw": json.dumps(PRODUCTION_HNSW_CONFIG, sort_keys=True, separators=(",", ":")),
+            "production_optimizers": json.dumps(PRODUCTION_OPTIMIZERS_CONFIG, sort_keys=True, separators=(",", ":")),
             "effective_collection": json.dumps(self.effective_collection, sort_keys=True, separators=(",", ":"))}
         environment = {"os": platform.system() + " " + platform.release(), "arch": platform.machine() or "unavailable",
             "cpu": platform.processor() or "unavailable", "memory": memory_bytes(), "python": platform.python_version()}
@@ -1643,6 +1975,14 @@ class QdrantMinimaRunner:
                 "timed_overlap": self.overlap_evidence, "final_scroll_state": self.state_scroll,
                 "resource_measurement": resource,
                 "restart_boundary": self.restart_boundary,
+                "collection_configuration_transition": self.configuration_transition,
+                "readiness": {
+                    "sessions": self.readiness_evidence,
+                    "latest_non_ready_disposition": next((
+                        row["disposition"] for row in reversed(self.readiness_evidence)
+                        if row["outcome"] != "ready"
+                    ), "none"),
+                },
                 "resource_availability": {
                     "measurement": RESOURCE_SEMANTICS,
                     "baseline": resource["baseline"]["availability"],

@@ -12,7 +12,9 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as _dt
+import gzip
 import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -24,17 +26,40 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 ARTIFACT_SCHEMA = "treedb-vectordbbench-artifact/v1"
 ROUTE_PROOF_SCHEMA = "treedb-vectordbbench-route-proof/v2"
+LIFECYCLE_SCHEMA = "treedb-vectordbbench-lifecycle/v1"
+LIFECYCLE_EVENT_SCHEMA = "treedb-vectordbbench-lifecycle-event/v1"
+LIFECYCLE_VALIDATION_SCHEMA = "treedb-vectordbbench-lifecycle-validation/v1"
+PPROF_PROFILE_KINDS = frozenset({"cpu", "heap", "allocs", "block", "mutex"})
+OPTIMIZED_ROUTE_NAMES = frozenset({"exact_hnsw_search_pack_v1", "quantized_rerank"})
+LIFECYCLE_STAGES = (
+    "startup",
+    "reset",
+    "load_start",
+    "load_end",
+    "drain_checkpoint",
+    "optimize_start",
+    "optimize_end",
+    "cache_prime",
+    "cache_warm",
+    "graceful_close",
+    "cold_open_ready",
+    "exact_verify",
+    "route_verify",
+    "teardown",
+)
 DEFAULT_QUANTIZED_INDEX_NAME = "embedding.scalar_u8.fast"
 VDBBENCH_UV_DEPS = [
     "pytest",
@@ -728,6 +753,950 @@ def file_identity(path: Path) -> dict[str, Any]:
     return {"path": str(path), "bytes": path.stat().st_size, "sha256": sha256_file(path)}
 
 
+def canonical_sha256(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def lifecycle_config_sha256(manifest: dict[str, Any]) -> str:
+    service = manifest.get("service")
+    return canonical_sha256({
+        "service_profile": service.get("profile") if isinstance(service, dict) else None,
+        "service_command": service.get("command") if isinstance(service, dict) else None,
+        "harness": manifest.get("harness"),
+    })
+
+
+def _artifact_file(root: Path, relative: Any, label: str, errors: list[str]) -> Path | None:
+    if not isinstance(relative, str) or not relative:
+        errors.append(f"{label} path must be a non-empty relative path")
+        return None
+    try:
+        path = Path(relative)
+        if path.is_absolute() or ".." in path.parts:
+            errors.append(f"{label} path escapes artifact root: {relative!r}")
+            return None
+        resolved_root = root.resolve()
+        resolved = (resolved_root / path).resolve()
+    except (OSError, ValueError) as exc:
+        errors.append(f"{label} path is invalid: {exc}")
+        return None
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError:
+        errors.append(f"{label} path escapes artifact root: {relative!r}")
+        return None
+    return resolved
+
+
+def _nonnegative_int(value: Any, label: str, errors: list[str]) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        errors.append(f"{label} must be a non-negative integer")
+        return None
+    return value
+
+
+def _object(value: Any, label: str, errors: list[str]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        errors.append(f"{label} must be an object")
+        return {}
+    return value
+
+
+def _utc_timestamp(value: Any, label: str, errors: list[str]) -> _dt.datetime | None:
+    if not isinstance(value, str) or re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+        value,
+    ) is None:
+        errors.append(f"{label} must be an RFC3339 timestamp")
+        return None
+    try:
+        parsed = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, OverflowError):
+        errors.append(f"{label} must be an RFC3339 timestamp")
+        return None
+    if parsed.tzinfo is None:
+        errors.append(f"{label} must include a timezone")
+        return None
+    try:
+        return parsed.astimezone(_dt.timezone.utc)
+    except (ValueError, OverflowError):
+        errors.append(f"{label} must be an RFC3339 timestamp")
+        return None
+
+
+def _strict_json_loads(value: str) -> Any:
+    def reject_constant(constant: str) -> None:
+        raise ValueError(f"non-finite JSON number {constant}")
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON object key {key!r}")
+            result[key] = item
+        return result
+
+    return json.loads(value, parse_constant=reject_constant, object_pairs_hook=reject_duplicate_keys)
+
+
+def _valid_go_int64(value: str) -> bool:
+    unsigned = value
+    negative = False
+    if unsigned.startswith(("+", "-")):
+        negative = unsigned[0] == "-"
+        unsigned = unsigned[1:]
+    if not unsigned:
+        return False
+    base = 10
+    digits = unsigned
+    prefixed = False
+    if unsigned.startswith(("0b", "0B")):
+        base, digits, prefixed = 2, unsigned[2:], True
+    elif unsigned.startswith(("0o", "0O")):
+        base, digits, prefixed = 8, unsigned[2:], True
+    elif unsigned.startswith(("0x", "0X")):
+        base, digits, prefixed = 16, unsigned[2:], True
+    elif len(unsigned) > 1 and unsigned.startswith("0"):
+        base, digits, prefixed = 8, unsigned[1:], True
+    if prefixed and digits.startswith("_"):
+        digits = digits[1:]
+    if not digits or digits.startswith("_") or digits.endswith("_") or "__" in digits:
+        return False
+    allowed = {2: r"[01_]+", 8: r"[0-7_]+", 10: r"[0-9_]+", 16: r"[0-9a-fA-F_]+"}
+    if re.fullmatch(allowed[base], digits) is None:
+        return False
+    try:
+        number = int(digits.replace("_", ""), base)
+    except ValueError:
+        return False
+    if negative:
+        number = -number
+    return -(1 << 63) <= number < (1 << 63)
+
+
+def _valid_pprof_listen_address(value: str) -> bool:
+    if not value:
+        return True
+    if value.startswith("["):
+        closing = value.find("]")
+        if closing < 0 or value[closing + 1:closing + 2] != ":":
+            return False
+        host = value[1:closing]
+        port = value[closing + 2:]
+        if ":" in port:
+            return False
+    else:
+        if value.count(":") != 1:
+            return False
+        host, port = value.rsplit(":", 1)
+    if "%" in host or re.fullmatch(r"[0-9]{1,5}", port) is None or not 1 <= int(port) <= 65535:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _pprof_metadata(path: Path) -> bytes | None:
+    try:
+        process = subprocess.Popen(
+            ("go", "tool", "pprof", "-raw", str(path)),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return None
+    prefix = bytearray()
+
+    def drain() -> None:
+        assert process.stdout is not None
+        with process.stdout:
+            while chunk := process.stdout.read(64 * 1024):
+                if len(prefix) < 64 * 1024:
+                    prefix.extend(chunk[:64 * 1024 - len(prefix)])
+
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
+    try:
+        returncode = process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except OSError:
+            pass
+        process.wait()
+        reader.join()
+        return None
+    reader.join()
+    return bytes(prefix) if returncode == 0 else None
+
+
+def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
+    if not isinstance(kind, str):
+        return False
+    if kind in PPROF_PROFILE_KINDS:
+        if path.suffix != ".pprof" or not data.startswith(b"\x1f\x8b\x08"):
+            return False
+        try:
+            with gzip.open(path, "rb") as source:
+                saw_data = False
+                while chunk := source.read(64 * 1024):
+                    saw_data = True
+            if not saw_data:
+                return False
+            metadata = _pprof_metadata(path)
+            if metadata is None:
+                return False
+            lines = metadata.decode("utf-8").splitlines()
+            samples_position = lines.index("Samples:")
+            sample_tokens = lines[samples_position + 1].split()
+            saw_sample = False
+            for line in lines[samples_position + 2:]:
+                if line in {"Locations", "Mappings"}:
+                    break
+                values, separator, _ = line.partition(":")
+                if separator and len(values.split()) == len(sample_tokens):
+                    try:
+                        tuple(int(value) for value in values.split())
+                    except ValueError:
+                        continue
+                    saw_sample = True
+                    break
+            if not saw_sample:
+                return False
+            sample_types = {token.removesuffix("[dflt]") for token in sample_tokens}
+            default_types = {
+                token.removesuffix("[dflt]") for token in sample_tokens if token.endswith("[dflt]")
+            }
+            if kind == "cpu":
+                required = {"samples/count", "cpu/nanoseconds"}
+                return "PeriodType: cpu nanoseconds" in lines and required <= sample_types
+            if kind in {"heap", "allocs"}:
+                required = {
+                    "alloc_objects/count", "alloc_space/bytes", "inuse_objects/count", "inuse_space/bytes",
+                }
+                expected_default = "inuse_space/bytes" if kind == "heap" else "alloc_space/bytes"
+                valid_defaults = (
+                    {frozenset(), frozenset({expected_default})}
+                    if kind == "heap"
+                    else {frozenset({expected_default})}
+                )
+                return (
+                    "PeriodType: space bytes" in lines
+                    and required <= sample_types
+                    and frozenset(default_types) in valid_defaults
+                )
+            required = {"contentions/count", "delay/nanoseconds"}
+            return "PeriodType: contentions count" in lines and required <= sample_types
+        except (OSError, EOFError, UnicodeError, ValueError, IndexError, zlib.error):
+            return False
+    if kind == "trace":
+        header = re.match(rb"go 1\.[0-9]+ trace\x00\x00\x00", data)
+        if path.suffix != ".out" or header is None or len(data) <= header.end():
+            return False
+        try:
+            decoded = subprocess.run(
+                ("go", "tool", "trace", "-d=parsed", str(path)),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=False,
+            )
+            return decoded.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    if kind == "perf":
+        if path.suffix != ".data" or data[:8] not in {b"PERFILE2", b"2ELIFREP"}:
+            return False
+        byteorder = "little" if data.startswith(b"PERFILE2") else "big"
+        try:
+            file_size = path.stat().st_size
+            with path.open("rb") as source:
+                header = source.read(104)
+                if len(header) != 104:
+                    return False
+                header_size = int.from_bytes(header[8:16], byteorder)
+                attr_size = int.from_bytes(header[16:24], byteorder)
+                if header_size < 104 or header_size > file_size or attr_size == 0:
+                    return False
+                attrs_size = int.from_bytes(header[32:40], byteorder)
+                if attrs_size == 0 or attr_size > attrs_size or attrs_size % attr_size != 0:
+                    return False
+                sections = []
+                for start in (24, 40, 56):
+                    offset = int.from_bytes(header[start:start + 8], byteorder)
+                    size = int.from_bytes(header[start + 8:start + 16], byteorder)
+                    if size:
+                        if offset < header_size or offset > file_size - size:
+                            return False
+                        sections.append((offset, offset + size))
+                sections.sort()
+                if any(left[1] > right[0] for left, right in zip(sections, sections[1:])):
+                    return False
+                data_offset = int.from_bytes(header[40:48], byteorder)
+                data_size = int.from_bytes(header[48:56], byteorder)
+                if data_size < 8:
+                    return False
+                source.seek(data_offset)
+                remaining = data_size
+                saw_sample = False
+                while remaining:
+                    if remaining < 8:
+                        return False
+                    event_header = source.read(8)
+                    if len(event_header) != 8:
+                        return False
+                    event_type = int.from_bytes(event_header[:4], byteorder)
+                    event_size = int.from_bytes(event_header[6:8], byteorder)
+                    if event_size < 8 or event_size > remaining:
+                        return False
+                    if event_type == 9 and event_size > 8:  # PERF_RECORD_SAMPLE
+                        saw_sample = True
+                    source.seek(event_size - 8, os.SEEK_CUR)
+                    remaining -= event_size
+                if not saw_sample:
+                    return False
+            decoded = subprocess.run(
+                ("perf", "script", "-i", str(path)),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=False,
+            )
+            return decoded.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    return False
+
+
+def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
+    """Validate a lifecycle extension of the existing artifact-v1 envelope."""
+    root = root.resolve()
+    errors: list[str] = []
+    completion_errors: list[str] = []
+    report: dict[str, Any] = {
+        "schema_version": LIFECYCLE_VALIDATION_SCHEMA,
+        "artifact_root": str(root),
+        "analyzable": False,
+        "complete": False,
+        "result_status": None,
+        "last_stage": None,
+        "counts": None,
+        "t_ready_seconds": None,
+        "errors": errors,
+        "completion_errors": completion_errors,
+    }
+    manifest_path = root / "manifest.json"
+    try:
+        manifest = _strict_json_loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        errors.append(f"cannot read manifest.json: {exc}")
+        return report
+    if not isinstance(manifest, dict):
+        errors.append("manifest.json must contain an object")
+        return report
+    if manifest.get("schema_version") != ARTIFACT_SCHEMA:
+        errors.append(f"manifest schema_version must be {ARTIFACT_SCHEMA!r}")
+    lifecycle = manifest.get("lifecycle")
+    if not isinstance(lifecycle, dict):
+        errors.append("manifest.lifecycle must be an object")
+        return report
+    if lifecycle.get("schema_version") != LIFECYCLE_SCHEMA:
+        errors.append(f"lifecycle schema_version must be {LIFECYCLE_SCHEMA!r}")
+
+    expected_rows = _nonnegative_int(lifecycle.get("expected_rows"), "lifecycle.expected_rows", errors)
+    if expected_rows == 0:
+        errors.append("lifecycle.expected_rows must be positive")
+    dataset = _object(lifecycle.get("dataset"), "lifecycle.dataset", errors)
+    if not isinstance(dataset.get("name"), str) or not dataset.get("name"):
+        errors.append("lifecycle.dataset.name must be non-empty")
+    dataset_sha256 = dataset.get("sha256")
+    if not isinstance(dataset_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", dataset_sha256):
+        errors.append("lifecycle.dataset.sha256 must be a lowercase SHA-256")
+    dimensions = _nonnegative_int(dataset.get("dimensions"), "lifecycle.dataset.dimensions", errors)
+    if dimensions == 0:
+        errors.append("lifecycle.dataset.dimensions must be positive")
+    vectors = _nonnegative_int(dataset.get("vectors"), "lifecycle.dataset.vectors", errors)
+    if expected_rows is not None and vectors is not None and vectors != expected_rows:
+        errors.append("lifecycle.dataset.vectors must equal lifecycle.expected_rows")
+
+    context = _object(manifest.get("context"), "manifest.context", errors)
+    gomap = _object(context.get("gomap"), "manifest.context.gomap", errors)
+    vectordbbench = _object(context.get("vectordbbench"), "manifest.context.vectordbbench", errors)
+    service = _object(manifest.get("service"), "manifest.service", errors)
+    binary = _object(service.get("binary"), "manifest.service.binary", errors)
+    identity = _object(lifecycle.get("identity"), "lifecycle.identity", errors)
+    harness = _object(manifest.get("harness"), "manifest.harness", errors)
+    if service.get("profile") not in ("command_wal_durable", "command_wal_relaxed", "no_wal_fast"):
+        errors.append("manifest.service.profile must name a canonical public profile")
+    service_command = service.get("command")
+    effective_dir = None
+    effective_pprof = None
+    if (
+        not isinstance(service_command, list)
+        or not service_command
+        or any(not isinstance(argument, str) or not argument for argument in service_command)
+    ):
+        errors.append("manifest.service.command must be a non-empty argv list of strings")
+    else:
+        known_flags = {
+            "addr", "dir", "profile", "pprof", "block-profile-rate", "mutex-profile-fraction",
+        }
+        profile_values = []
+        effective_dir = "/tmp/treedb-document-service"
+        effective_pprof = ""
+        invalid_command = False
+        parsing_flags = True
+        position = 1
+        while position < len(service_command):
+            argument = service_command[position]
+            if not parsing_flags:
+                trailing_flag = argument[2:] if argument.startswith("--") else argument[1:]
+                if argument.startswith("-") and trailing_flag.partition("=")[0] == "profile":
+                    invalid_command = True
+                position += 1
+                continue
+            if argument == "--":
+                parsing_flags = False
+                position += 1
+                continue
+            if not argument.startswith("-") or argument == "-":
+                parsing_flags = False
+                position += 1
+                continue
+            flag = argument[2:] if argument.startswith("--") else argument[1:]
+            name, separator, inline_value = flag.partition("=")
+            if name not in known_flags:
+                invalid_command = True
+                position += 1
+                continue
+            if separator:
+                value = inline_value
+                position += 1
+            elif position + 1 < len(service_command):
+                value = service_command[position + 1]
+                position += 2
+            else:
+                invalid_command = True
+                break
+            if name in {"block-profile-rate", "mutex-profile-fraction"} and not _valid_go_int64(value):
+                invalid_command = True
+            if name == "profile":
+                profile_values.append(value)
+            elif name == "dir":
+                effective_dir = value
+            elif name == "pprof":
+                effective_pprof = value
+        if (
+            invalid_command
+            or not effective_dir
+            or effective_pprof is None
+            or not _valid_pprof_listen_address(effective_pprof)
+            or len(profile_values) != 1
+            or profile_values[0] != service.get("profile")
+        ):
+            errors.append("manifest.service.command has invalid flags or does not select exactly one matching profile")
+    declared_data_dir = service.get("data_dir")
+    if not isinstance(declared_data_dir, str) or not declared_data_dir:
+        errors.append("manifest.service.data_dir must be a non-empty absolute path")
+    elif effective_dir is not None:
+        try:
+            declared_path = Path(declared_data_dir)
+            effective_path = Path(effective_dir)
+            if not declared_path.is_absolute() or not effective_path.is_absolute():
+                raise ValueError("declared and effective paths must be absolute")
+            declared_resolved = declared_path.resolve(strict=False)
+            effective_resolved = effective_path.resolve(strict=False)
+            artifact_data_dir = root / "treedb-data"
+            if artifact_data_dir.is_symlink():
+                errors.append("manifest.service.data_dir must not be a symlink")
+            expected_data_dir = artifact_data_dir.resolve(strict=False)
+            if declared_resolved != effective_resolved:
+                errors.append("manifest.service.data_dir does not match the effective service -dir")
+            if declared_resolved != expected_data_dir or effective_resolved != expected_data_dir:
+                errors.append("manifest.service.data_dir must be the artifact-owned treedb-data directory")
+        except (OSError, RuntimeError, ValueError) as exc:
+            errors.append(f"manifest.service.data_dir is invalid: {exc}")
+    binary_path = binary.get("path")
+    binary_digest = None
+    if not isinstance(binary_path, str) or not binary_path:
+        errors.append("manifest.service.binary.path must be a non-empty string")
+    else:
+        try:
+            declared_binary = Path(binary_path)
+            if not declared_binary.is_absolute():
+                raise ValueError("path is not absolute")
+            resolved_binary = declared_binary.resolve(strict=True)
+            if not resolved_binary.is_file():
+                raise ValueError("path is not a regular file")
+            if not os.access(resolved_binary, os.R_OK | os.X_OK):
+                raise PermissionError("path is not readable and executable")
+            binary_digest = sha256_file(resolved_binary)
+        except (OSError, RuntimeError, ValueError) as exc:
+            errors.append(f"manifest service binary is unavailable or invalid: {exc}")
+        if (
+            isinstance(service_command, list)
+            and service_command
+            and isinstance(service_command[0], str)
+            and service_command[0] != binary_path
+        ):
+            errors.append("manifest.service.command[0] must match manifest.service.binary.path")
+    case_type = harness.get("case_type")
+    if not isinstance(case_type, str) or not case_type.strip():
+        errors.append("manifest.harness.case_type must be non-empty")
+    elif case_type == "PerformanceCustomDataset":
+        completion_errors.append("custom case cannot complete without task_config dataset shape evidence")
+    else:
+        try:
+            case_vectors = case_vector_count(case_type)
+            case_dimensions = case_vector_dimensions(case_type)
+        except ValueError as exc:
+            completion_errors.append(str(exc))
+        else:
+            if (
+                (expected_rows is not None and case_vectors != expected_rows)
+                or (vectors is not None and case_vectors != vectors)
+            ):
+                completion_errors.append(
+                    "standard case vector count does not match lifecycle.expected_rows/dataset.vectors"
+                )
+            if dimensions is not None and case_dimensions != dimensions:
+                completion_errors.append("standard case dimensions do not match lifecycle.dataset.dimensions")
+    concurrency = harness.get("num_concurrency")
+    if isinstance(concurrency, int) and not isinstance(concurrency, bool):
+        valid_concurrency = 0 < concurrency <= 999_999_999
+    elif isinstance(concurrency, str):
+        parts = [part.strip() for part in concurrency.split(",")]
+        valid_concurrency = bool(parts) and all(
+            re.fullmatch(r"[0-9]{1,9}", part) is not None and int(part) > 0 for part in parts
+        )
+    else:
+        valid_concurrency = False
+    if not valid_concurrency:
+        errors.append("manifest.harness.num_concurrency must contain positive integers")
+    for key in ("num_per_batch", "m", "ef_construction"):
+        value = _nonnegative_int(harness.get(key), f"manifest.harness.{key}", errors)
+        if value == 0:
+            errors.append(f"manifest.harness.{key} must be positive")
+    identities = (
+        ("gomap_commit", gomap.get("commit"), 40),
+        ("vectordbbench_commit", vectordbbench.get("commit"), 40),
+        ("service_binary_sha256", binary.get("sha256"), 64),
+    )
+    for name, actual, width in identities:
+        declared = identity.get(name)
+        actual_valid = isinstance(actual, str) and re.fullmatch(rf"[0-9a-f]{{{width}}}", actual)
+        declared_valid = isinstance(declared, str) and re.fullmatch(rf"[0-9a-f]{{{width}}}", declared)
+        if not actual_valid:
+            errors.append(f"manifest {name} is missing or invalid")
+        if not declared_valid:
+            errors.append(f"lifecycle identity {name} is missing or invalid")
+        elif actual_valid and declared != actual:
+            errors.append(f"lifecycle identity {name} does not match manifest")
+    if binary_digest is not None:
+        if binary.get("sha256") != binary_digest:
+            errors.append("manifest service binary SHA-256 does not match current binary bytes")
+        if identity.get("service_binary_sha256") != binary_digest:
+            errors.append("lifecycle identity service_binary_sha256 does not match current binary bytes")
+    if gomap.get("dirty") is not False or vectordbbench.get("dirty") is not False:
+        errors.append("gomap and VectorDBBench checkouts must be clean")
+    config_sha256 = lifecycle_config_sha256(manifest)
+    if identity.get("config_sha256") != config_sha256:
+        errors.append("lifecycle identity config_sha256 does not match manifest configuration")
+
+    host = _object(context.get("host"), "manifest.context.host", errors)
+    for key in ("logical_cpu_count", "physical_cpu_count", "memory_bytes"):
+        value = _nonnegative_int(host.get(key), f"manifest context.host.{key}", errors)
+        if value == 0:
+            errors.append(f"manifest context.host.{key} must be positive")
+    if not isinstance(host.get("storage"), dict) or not host["storage"]:
+        errors.append("manifest context.host.storage must describe the benchmark storage")
+
+    lifecycle_path = _artifact_file(root, lifecycle.get("file"), "lifecycle", errors)
+    events: list[dict[str, Any]] = []
+    if lifecycle_path is not None:
+        try:
+            raw_lifecycle = lifecycle_path.read_bytes()
+        except OSError as exc:
+            errors.append(f"cannot read lifecycle JSONL: {exc}")
+        else:
+            actual_hash = hashlib.sha256(raw_lifecycle).hexdigest()
+            if lifecycle.get("sha256") != actual_hash:
+                errors.append("lifecycle JSONL checksum mismatch")
+            try:
+                lifecycle_text = raw_lifecycle.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                errors.append(f"lifecycle JSONL is not UTF-8: {exc}")
+                lifecycle_text = ""
+            for line_number, raw_line in enumerate(lifecycle_text.splitlines(), 1):
+                if not raw_line.strip():
+                    errors.append(f"lifecycle JSONL line {line_number} is blank")
+                    continue
+                try:
+                    event = _strict_json_loads(raw_line)
+                except ValueError as exc:
+                    errors.append(f"lifecycle JSONL line {line_number} is invalid: {exc}")
+                    continue
+                if not isinstance(event, dict):
+                    errors.append(f"lifecycle JSONL line {line_number} must be an object")
+                    continue
+                events.append(event)
+    if not events:
+        errors.append("lifecycle JSONL has no events")
+
+    raw_by_path: dict[str, str] = {}
+    raw_artifacts = lifecycle.get("raw_artifacts")
+    if not isinstance(raw_artifacts, list):
+        errors.append("lifecycle.raw_artifacts must be a list")
+        raw_artifacts = []
+    for position, artifact in enumerate(raw_artifacts):
+        if not isinstance(artifact, dict):
+            errors.append(f"raw artifact {position} must be an object")
+            continue
+        relative = artifact.get("path")
+        path = _artifact_file(root, relative, f"raw artifact {position}", errors)
+        expected_hash = artifact.get("sha256")
+        if not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+            errors.append(f"raw artifact {position} has invalid SHA-256")
+            continue
+        if not isinstance(relative, str):
+            continue
+        if relative in raw_by_path:
+            errors.append(f"raw artifact path is duplicated: {relative}")
+            continue
+        raw_by_path[str(relative)] = str(expected_hash)
+        if path is None:
+            continue
+        try:
+            actual_hash = sha256_file(path)
+        except OSError as exc:
+            errors.append(f"cannot read raw artifact {relative}: {exc}")
+        else:
+            if actual_hash != expected_hash:
+                errors.append(f"raw artifact checksum mismatch: {relative}")
+
+    sequence_events: dict[int, dict[str, Any]] = {}
+    stage_events: dict[str, dict[str, Any]] = {}
+    previous_sequence = -1
+    previous_timestamp: _dt.datetime | None = None
+    previous_series: dict[str, int] = {}
+    counter_keys: set[str] | None = None
+    for position, event in enumerate(events):
+        prefix = f"lifecycle event {position}"
+        if event.get("schema_version") != LIFECYCLE_EVENT_SCHEMA:
+            errors.append(f"{prefix} schema_version must be {LIFECYCLE_EVENT_SCHEMA!r}")
+        sequence = _nonnegative_int(event.get("sequence"), f"{prefix} sequence", errors)
+        if sequence is not None:
+            if sequence <= previous_sequence:
+                errors.append(f"{prefix} sequence must increase")
+            if sequence in sequence_events:
+                errors.append(f"{prefix} sequence is duplicated")
+            sequence_events[sequence] = event
+            previous_sequence = sequence
+        timestamp = _utc_timestamp(event.get("timestamp"), f"{prefix} timestamp", errors)
+        if timestamp is not None:
+            if previous_timestamp is not None and timestamp < previous_timestamp:
+                errors.append(f"{prefix} timestamp decreased")
+            previous_timestamp = timestamp
+            event["_timestamp"] = timestamp
+        stage = event.get("stage")
+        if not isinstance(stage, str) or not stage:
+            errors.append(f"{prefix} stage must be non-empty")
+        elif stage in LIFECYCLE_STAGES:
+            if stage in stage_events:
+                errors.append(f"required lifecycle stage is duplicated: {stage}")
+            stage_events[stage] = event
+        state = event.get("state")
+        if not isinstance(state, dict):
+            errors.append(f"{prefix} state must be an object")
+            continue
+        if "index" in state:
+            index = state.get("index")
+            if not isinstance(index, dict):
+                errors.append(f"{prefix} state.index must be an object")
+            else:
+                if "identity" in index and not isinstance(index.get("identity"), str):
+                    errors.append(f"{prefix} state.index.identity must be a string")
+                generation = index.get("asset_generation")
+                if "asset_generation" in index and (
+                    isinstance(generation, bool) or not isinstance(generation, int)
+                ):
+                    errors.append(f"{prefix} state.index.asset_generation must be an integer")
+                if "status" in index and not isinstance(index.get("status"), str):
+                    errors.append(f"{prefix} state.index.status must be a string")
+        route = state.get("route") if "route" in state else None
+        if "route" in state:
+            if not isinstance(route, dict):
+                errors.append(f"{prefix} state.route must be an object")
+            else:
+                for key in ("name", "fallback_reason", "index_identity"):
+                    if key in route and not isinstance(route.get(key), str):
+                        errors.append(f"{prefix} state.route.{key} must be a string")
+                if "optimized" in route and not isinstance(route.get("optimized"), bool):
+                    errors.append(f"{prefix} state.route.optimized must be a boolean")
+                generation = route.get("index_asset_generation")
+                if "index_asset_generation" in route and (
+                    isinstance(generation, bool) or not isinstance(generation, int)
+                ):
+                    errors.append(f"{prefix} state.route.index_asset_generation must be an integer")
+        if stage == "route_verify":
+            if not isinstance(route, dict):
+                errors.append(f"{prefix} route_verify must contain a route proof object")
+            else:
+                for key in ("name", "fallback_reason", "optimized", "index_identity", "index_asset_generation"):
+                    if key not in route:
+                        errors.append(f"{prefix} state.route is missing required field {key}")
+        rows = state.get("rows")
+        wal = state.get("wal")
+        counters = state.get("counters")
+        if not isinstance(rows, dict) or not isinstance(wal, dict) or not isinstance(counters, dict):
+            errors.append(f"{prefix} state must contain rows, wal, and counters objects")
+            continue
+        current_counter_keys = set(counters)
+        if counter_keys is None:
+            counter_keys = current_counter_keys
+        elif current_counter_keys != counter_keys:
+            errors.append(f"{prefix} cumulative counter keys changed")
+        series = {
+            **{f"rows.{key}": rows.get(key) for key in ("client_sent", "server_accepted", "server_durable", "reopened")},
+            **{f"wal.{key}": wal.get(key) for key in ("frontier", "bytes_written_total")},
+            **{f"counters.{key}": value for key, value in counters.items()},
+        }
+        validated: dict[str, int] = {}
+        for name, value in series.items():
+            parsed = _nonnegative_int(value, f"{prefix} {name}", errors)
+            if parsed is None:
+                continue
+            validated[name] = parsed
+            if name in previous_series and parsed < previous_series[name]:
+                errors.append(f"{prefix} {name} decreased")
+            previous_series[name] = parsed
+        sent = validated.get("rows.client_sent")
+        accepted = validated.get("rows.server_accepted")
+        durable = validated.get("rows.server_durable")
+        reopened = validated.get("rows.reopened")
+        if None not in (sent, accepted, durable, reopened) and not (reopened <= durable <= accepted <= sent):
+            errors.append(f"{prefix} row counts violate reopened <= durable <= accepted <= sent")
+    if counter_keys == set():
+        errors.append("lifecycle requires a non-empty cumulative counter key set")
+
+    for stage in LIFECYCLE_STAGES:
+        if stage not in stage_events:
+            completion_errors.append(f"missing required stage {stage}")
+    stage_order = [
+        LIFECYCLE_STAGES.index(event.get("stage"))
+        for event in events
+        if event.get("stage") in LIFECYCLE_STAGES
+    ]
+    if stage_order != sorted(stage_order):
+        errors.append("known lifecycle stages are out of order")
+
+    status = lifecycle.get("result_status")
+    report["result_status"] = status
+    if not isinstance(status, str) or status not in {"completed", "partial", "interrupted"}:
+        errors.append("lifecycle.result_status must be completed, partial, or interrupted")
+    if status != "completed":
+        completion_errors.append(f"result_status is {status!r}, not 'completed'")
+    service_profile = service.get("profile")
+    if (
+        status == "completed"
+        and isinstance(service_profile, str)
+        and service_profile in {"command_wal_durable", "command_wal_relaxed"}
+    ):
+        for stage, row_count in (("load_end", "server_accepted"), ("drain_checkpoint", "server_durable")):
+            state = (stage_events.get(stage) or {}).get("state")
+            rows = state.get("rows") if isinstance(state, dict) else None
+            wal = state.get("wal") if isinstance(state, dict) else None
+            progress = rows.get(row_count) if isinstance(rows, dict) else None
+            if isinstance(progress, int) and not isinstance(progress, bool) and progress > 0:
+                for key in ("frontier", "bytes_written_total"):
+                    value = wal.get(key) if isinstance(wal, dict) else None
+                    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                        completion_errors.append(
+                            f"stage {stage} requires positive wal.{key} after positive rows.{row_count}"
+                        )
+    if events:
+        report["last_stage"] = events[-1].get("stage")
+        if report["last_stage"] != "teardown":
+            completion_errors.append("teardown must be the final lifecycle stage")
+        final_state = events[-1].get("state")
+        rows = final_state.get("rows") if isinstance(final_state, dict) else None
+        if isinstance(rows, dict):
+            report["counts"] = {key: rows.get(key) for key in ("client_sent", "server_accepted", "server_durable", "reopened")}
+
+    if expected_rows is not None:
+        for stage in ("reset", "load_start"):
+            if stage not in stage_events:
+                continue
+            state = stage_events[stage].get("state")
+            rows = state.get("rows") if isinstance(state, dict) else {}
+            if not isinstance(rows, dict):
+                rows = {}
+            for key in ("client_sent", "server_accepted", "server_durable", "reopened"):
+                if rows.get(key) != 0:
+                    completion_errors.append(f"stage {stage} rows.{key} must be zero")
+        count_stages = {
+            "load_end": ("client_sent", "server_accepted"),
+            "drain_checkpoint": ("client_sent", "server_accepted", "server_durable"),
+            "exact_verify": ("client_sent", "server_accepted", "server_durable", "reopened"),
+            "teardown": ("client_sent", "server_accepted", "server_durable", "reopened"),
+        }
+        for stage, keys in count_stages.items():
+            if stage not in stage_events:
+                continue
+            state = stage_events[stage].get("state")
+            rows = state.get("rows") if isinstance(state, dict) else {}
+            if not isinstance(rows, dict):
+                rows = {}
+            for key in keys:
+                if rows.get(key) != expected_rows:
+                    completion_errors.append(f"stage {stage} rows.{key} does not equal expected_rows")
+        for event in events:
+            stage = event.get("stage")
+            state = event.get("state")
+            rows = state.get("rows") if isinstance(state, dict) else None
+            if isinstance(rows, dict) and rows.get("reopened") != 0:
+                completion_errors.append(f"stage {stage} rows.reopened must remain zero before cold reopen")
+            if stage == "graceful_close":
+                break
+
+    index_reference: tuple[str, int] | None = None
+    for stage in ("optimize_end", "cache_prime", "cache_warm", "graceful_close", "cold_open_ready", "exact_verify", "route_verify"):
+        if stage not in stage_events:
+            continue
+        state = stage_events[stage].get("state")
+        index = state.get("index") if isinstance(state, dict) else None
+        if not isinstance(index, dict):
+            index = {}
+        index_identity = index.get("identity")
+        index_generation = index.get("asset_generation")
+        index_status = index.get("status")
+        current = (index_identity, index_generation)
+        if (
+            not isinstance(current[0], str)
+            or not current[0]
+            or isinstance(current[1], bool)
+            or not isinstance(current[1], int)
+            or current[1] <= 0
+            or index_status != "ready"
+        ):
+            completion_errors.append(f"stage {stage} lacks a ready index identity and asset generation")
+        elif index_reference is None:
+            index_reference = current
+        else:
+            if current[0] != index_reference[0]:
+                completion_errors.append(f"index identity changed at stage {stage}")
+            if current[1] != index_reference[1]:
+                completion_errors.append(f"index asset generation changed at stage {stage}")
+
+    database_snapshots: dict[str, tuple[str | None, int | None]] = {}
+    for stage in ("graceful_close", "cold_open_ready"):
+        event = stage_events.get(stage)
+        if event is None:
+            continue
+        state = event.get("state")
+        database = state.get("database") if isinstance(state, dict) else None
+        if not isinstance(database, dict):
+            errors.append(f"stage {stage} database must be an object")
+            continue
+        database_identity = database.get("identity")
+        if not isinstance(database_identity, str) or not database_identity:
+            errors.append(f"stage {stage} database.identity must be non-empty")
+            database_identity = None
+        commit = _nonnegative_int(database.get("commit_seq"), f"stage {stage} database.commit_seq", errors)
+        database_snapshots[stage] = (database_identity, commit)
+    close_database = database_snapshots.get("graceful_close")
+    reopen_database = database_snapshots.get("cold_open_ready")
+    if close_database is not None and reopen_database is not None:
+        if close_database[0] is not None and reopen_database[0] != close_database[0]:
+            completion_errors.append("cold reopen database.identity does not match graceful close")
+        if close_database[1] is not None and reopen_database[1] is not None and reopen_database[1] != close_database[1]:
+            completion_errors.append("cold reopen database.commit_seq does not match graceful close")
+
+    route_state = (stage_events.get("route_verify") or {}).get("state")
+    route = route_state.get("route") if isinstance(route_state, dict) else {}
+    if not isinstance(route, dict):
+        route = {}
+    route_generation = route.get("index_asset_generation")
+    if not (
+        route.get("optimized") is True
+        and route.get("fallback_reason") == "none"
+        and isinstance(route.get("name"), str)
+        and route.get("name") in OPTIMIZED_ROUTE_NAMES
+        and index_reference is not None
+        and route.get("index_identity") == index_reference[0]
+        and not isinstance(route_generation, bool)
+        and isinstance(route_generation, int)
+        and route_generation == index_reference[1]
+    ):
+        completion_errors.append("optimized route proof failed or used a stale index asset generation")
+
+    profiles = lifecycle.get("profiles")
+    if not isinstance(profiles, list):
+        errors.append("lifecycle.profiles must be a list")
+        profiles = []
+    if not profiles:
+        completion_errors.append("completed lifecycle requires at least one profile")
+    for position, profile in enumerate(profiles):
+        if not isinstance(profile, dict):
+            errors.append(f"profile {position} must be an object")
+            continue
+        relative = profile.get("path")
+        before = profile.get("before_sequence")
+        after = profile.get("after_sequence")
+        kind = profile.get("kind")
+        if (
+            not isinstance(relative, str)
+            or relative not in raw_by_path
+            or profile.get("sha256") != raw_by_path.get(relative)
+            or isinstance(before, bool)
+            or isinstance(after, bool)
+            or not isinstance(before, int)
+            or not isinstance(after, int)
+            or before not in sequence_events
+            or after not in sequence_events
+            or before >= after
+        ):
+            errors.append(f"profile state association {position} is invalid")
+        profile_path = _artifact_file(root, relative, f"profile {position}", errors)
+        if profile_path is not None:
+            try:
+                with profile_path.open("rb") as source:
+                    profile_data = source.read(64)
+            except OSError as exc:
+                errors.append(f"cannot read profile {position}: {exc}")
+            else:
+                decoder = None
+                if isinstance(kind, str):
+                    if kind in PPROF_PROFILE_KINDS or kind == "trace":
+                        decoder = "go"
+                    elif kind == "perf":
+                        decoder = "perf"
+                if decoder is not None and shutil.which(decoder) is None:
+                    errors.append(f"profile {position} requires unavailable native decoder: {decoder}")
+                elif not _valid_profile_payload(kind, profile_path, profile_data):
+                    errors.append(f"profile {position} content does not match a supported kind")
+
+    if all(stage in stage_events for stage in ("load_start", "load_end", "drain_checkpoint", "optimize_end", "graceful_close", "cold_open_ready")):
+        boundaries = [
+            "load_start", "load_end", "drain_checkpoint", "optimize_end", "graceful_close", "cold_open_ready",
+        ]
+        timestamps = [stage_events[stage].get("_timestamp") for stage in boundaries]
+        if all(isinstance(value, _dt.datetime) for value in timestamps):
+            report["t_ready_seconds"] = (timestamps[-1] - timestamps[0]).total_seconds()
+            if report["t_ready_seconds"] <= 0:
+                completion_errors.append("T_ready must be strictly positive")
+
+    report["analyzable"] = not errors
+    report["complete"] = not errors and not completion_errors
+    return report
+
+
 def positive_number(value: Any, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
         raise ValueError(f"canonical VDBBench result is missing positive {name}")
@@ -742,6 +1711,13 @@ def case_vector_count(case_type: str) -> int:
     if count <= 0:
         raise ValueError(f"cannot derive positive vector count from VDBBench case type {case_type!r}")
     return count
+
+
+def case_vector_dimensions(case_type: str) -> int:
+    match = re.fullmatch(r"Performance(\d+)D\d+[KMG]", case_type, flags=re.IGNORECASE)
+    if match is None or int(match.group(1)) <= 0:
+        raise ValueError(f"cannot derive positive dimensions from standard VDBBench case type {case_type!r}")
+    return int(match.group(1))
 
 
 def result_vector_count(task_config: dict[str, Any], case_type: str) -> tuple[int, str]:
@@ -1027,8 +2003,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--smoke-top-k", type=int, default=int(env_text("TREEDB_VDBBENCH_SMOKE_TOP_K", "2")))
     parser.add_argument("--skip-route-proof", action="store_true", default=env_flag("TREEDB_VDBBENCH_SKIP_ROUTE_PROOF", False), help="skip the independent route-proof smoke")
     parser.add_argument("--index-prefix", default=os.environ.get("TREEDB_VDBBENCH_INDEX_PREFIX", ""), help="unique benchmark index prefix")
+    parser.add_argument("--validate-lifecycle", default="", help="validate an existing artifact-v1 lifecycle root and exit")
+    parser.add_argument("--allow-partial", action="store_true", help="return success for an analyzable partial lifecycle validation")
     parser.add_argument("--self-test", action="store_true", help="run route-proof summarizer self-test and exit")
     args = parser.parse_args(argv)
+    if args.self_test and args.validate_lifecycle:
+        parser.error("self-test and validate-lifecycle are mutually exclusive")
+    if args.allow_partial and not args.validate_lifecycle:
+        parser.error("allow-partial requires --validate-lifecycle")
+    if args.validate_lifecycle:
+        args.validate_lifecycle = Path(args.validate_lifecycle).expanduser().resolve()
+        return args
     if args.skip_route_proof and (
         not args.run_vdbbench
         or args.vdbbench_dry_run
@@ -1043,6 +2028,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     if args.num_per_batch <= 0:
         parser.error("num-per-batch must be positive")
     args.out = Path(args.out).expanduser().resolve()
+    args.validate_lifecycle = None
     args.vectordbbench_dir = Path(args.vectordbbench_dir).expanduser().resolve() if args.vectordbbench_dir else None
     if args.port == 0:
         args.port = find_free_port(args.host)
@@ -1090,6 +2076,15 @@ def main(argv: list[str]) -> int:
     if args.self_test:
         self_test()
         return 0
+    if args.validate_lifecycle is not None:
+        result = validate_lifecycle_artifact(args.validate_lifecycle)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        partial_ok = (
+            args.allow_partial
+            and result["analyzable"]
+            and result["result_status"] in {"partial", "interrupted"}
+        )
+        return 0 if result["complete"] or partial_ok else 1
 
     gomap_root = repo_root()
     try:

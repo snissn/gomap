@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -14,6 +16,8 @@ import threading
 import time
 from types import SimpleNamespace
 from typing import Any
+import urllib.parse
+import urllib.request
 
 import minima_qdrant_runner as common
 from treedb_client import TreeDBClient
@@ -21,6 +25,17 @@ from treedb_client import TreeDBClient
 CLIENT_VERSION = "0.1.0"
 SERVICE_CONTRACT = "treedb-document-service/v1alpha2"
 SERVICE_LOG_TAIL_BYTES = 64 << 10
+DIAGNOSTICS_STATS_PATH = "/debug/treedb/stats"
+DIAGNOSTIC_CAPTURE_BYTES = 32 << 20
+DIAGNOSTIC_STATS_BYTES = 4 << 20
+DIAGNOSTIC_PROFILE_ENDPOINTS = {
+    "cpu": ("/debug/pprof/profile", "cpu.pprof"),
+    "goroutine": ("/debug/pprof/goroutine?debug=2", "goroutine.txt"),
+    "mutex": ("/debug/pprof/mutex", "mutex.pprof"),
+    "block": ("/debug/pprof/block", "block.pprof"),
+    "trace": ("/debug/pprof/trace", "trace.out"),
+    "stats": (DIAGNOSTICS_STATS_PATH, "stats.json"),
+}
 
 
 def scalar_filter(spec: dict[str, Any]) -> dict[str, Any]:
@@ -36,8 +51,14 @@ def service_document(document: dict[str, Any]) -> dict[str, Any]:
 
 
 class ServiceController:
-    def __init__(self, binary: Path, url: str, data_dir: Path, profile: str, timeout: float) -> None:
+    def __init__(self, binary: Path, url: str, data_dir: Path, profile: str, timeout: float, *,
+                 diagnostics_url: str | None = None, block_profile_rate: int = 1,
+                 mutex_profile_fraction: int = 1, diagnostics_timeout: float = 2) -> None:
         self.binary, self.url, self.data_dir, self.profile, self.timeout = binary, url.rstrip("/"), data_dir, profile, timeout
+        self.diagnostics_url = diagnostics_url.rstrip("/") if diagnostics_url else None
+        self.block_profile_rate = block_profile_rate
+        self.mutex_profile_fraction = mutex_profile_fraction
+        self.diagnostics_timeout = diagnostics_timeout
         self.process: subprocess.Popen[str] | None = None
         self.log_path = data_dir.parent / "treedb-document-service.log"
         self.log_file: Any | None = None
@@ -46,19 +67,54 @@ class ServiceController:
     def pid(self) -> int | None:
         return self.process.pid if self.process is not None and self.process.poll() is None else None
 
+    def _listen_address(self, url: str, label: str) -> str:
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme != "http" or parsed.path not in ("", "/") or parsed.query or parsed.fragment or not parsed.hostname or parsed.port is None:
+            raise ValueError(f"owned TreeDB {label} URL must be a plain http://host:port address")
+        if label == "diagnostics":
+            try:
+                loopback = parsed.hostname == "localhost" or ipaddress.ip_address(parsed.hostname).is_loopback
+            except ValueError:
+                loopback = False
+            if not loopback:
+                raise ValueError("owned TreeDB diagnostics URL must use a loopback host")
+        host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+        return f"{host}:{parsed.port}"
+    def _read_bounded(self, url: str, timeout: float, maximum: int) -> bytes:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            payload = response.read(maximum + 1)
+        if len(payload) > maximum:
+            raise RuntimeError(f"diagnostic response exceeded {maximum} bytes")
+        return payload
+
+    def _read_json(self, path: str, timeout: float | None = None) -> dict[str, Any]:
+        if self.diagnostics_url is None:
+            raise RuntimeError("TreeDB diagnostics are disabled")
+        payload = self._read_bounded(
+            self.diagnostics_url + path, timeout or self.diagnostics_timeout, DIAGNOSTIC_STATS_BYTES,
+        )
+        decoded = json.loads(payload)
+        if not isinstance(decoded, dict):
+            raise RuntimeError("TreeDB diagnostics response is not an object")
+        return decoded
+
     def start(self) -> None:
         if self.pid is not None:
             return
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        address = self.url.removeprefix("http://")
-        if "/" in address or self.url.startswith("https://"):
-            raise ValueError("owned TreeDB service URL must be a plain http://host:port address")
+        address = self._listen_address(self.url, "service")
+        argv = [str(self.binary), "-addr", address, "-dir", str(self.data_dir), "-profile", self.profile]
+        if self.diagnostics_url is not None:
+            argv.extend([
+                "-pprof", self._listen_address(self.diagnostics_url, "diagnostics"),
+                "-block-profile-rate", str(self.block_profile_rate),
+                "-mutex-profile-fraction", str(self.mutex_profile_fraction),
+            ])
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self.log_file = self.log_path.open("a", encoding="utf-8", buffering=1)
         try:
             self.process = subprocess.Popen(
-                [str(self.binary), "-addr", address, "-dir", str(self.data_dir), "-profile", self.profile],
-                stdout=self.log_file, stderr=subprocess.STDOUT, text=True,
+                argv, stdout=self.log_file, stderr=subprocess.STDOUT, text=True,
             )
             deadline, last = time.monotonic() + self.timeout, ""
             while time.monotonic() < deadline:
@@ -66,7 +122,11 @@ class ServiceController:
                     raise RuntimeError(f"TreeDB service exited during startup; log tail: {self.log_evidence()['tail']}")
                 try:
                     health = TreeDBClient(self.url, timeout=1).health()
-                    if health.get("ok") is True and health.get("contract_version") == SERVICE_CONTRACT:
+                    ready = health.get("ok") is True and health.get("contract_version") == SERVICE_CONTRACT
+                    if ready and self.diagnostics_url is not None:
+                        stats = self._read_json(DIAGNOSTICS_STATS_PATH)
+                        ready = stats.get("contract_version") == SERVICE_CONTRACT
+                    if ready:
                         return
                     last = repr(health)
                 except BaseException as exc:
@@ -108,6 +168,80 @@ class ServiceController:
             "max_tail_bytes": SERVICE_LOG_TAIL_BYTES,
         }
 
+    def stats_snapshot(self) -> dict[str, Any]:
+        captured = time.monotonic_ns()
+        if self.diagnostics_url is None:
+            return {"status": "disabled", "captured_monotonic_ns": captured}
+        try:
+            return {
+                "status": "captured", "captured_monotonic_ns": captured,
+                "snapshot": self._read_json(DIAGNOSTICS_STATS_PATH),
+            }
+        except BaseException as exc:
+            return {
+                "status": "failed", "captured_monotonic_ns": captured,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    def capture_profiles(self, directory: Path, *, profile_seconds: int,
+                         capture_timeout: float) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "directory": str(directory), "profile_seconds": profile_seconds,
+            "capture_timeout_seconds": capture_timeout, "captures": {},
+        }
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except BaseException as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            result["captures"] = {
+                name: {"status": "failed", "path": str(directory / filename), "error": error}
+                for name, (_, filename) in DIAGNOSTIC_PROFILE_ENDPOINTS.items()
+            }
+            result["manifest"] = {"status": "failed", "path": str(directory / "capture.json"), "error": error}
+            return result
+        if self.diagnostics_url is None:
+            error = "TreeDB diagnostics are disabled"
+            result["captures"] = {
+                name: {"status": "failed", "path": str(directory / filename), "error": error}
+                for name, (_, filename) in DIAGNOSTIC_PROFILE_ENDPOINTS.items()
+            }
+        else:
+            def capture(name: str, endpoint: str, filename: str) -> tuple[str, dict[str, Any]]:
+                separator = "&" if "?" in endpoint else "?"
+                if name in ("cpu", "trace"):
+                    seconds = max(1, min(profile_seconds, max(1, int(capture_timeout) - 1)))
+                    endpoint = f"{endpoint}{separator}seconds={seconds}"
+                path = directory / filename
+                url = self.diagnostics_url + endpoint
+                try:
+                    payload = self._read_bounded(url, capture_timeout, DIAGNOSTIC_CAPTURE_BYTES)
+                    path.write_bytes(payload)
+                    return name, {"status": "captured", "path": str(path), "bytes": len(payload), "url": url}
+                except BaseException as exc:
+                    return name, {
+                        "status": "failed", "path": str(path), "url": url,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+
+            with ThreadPoolExecutor(max_workers=len(DIAGNOSTIC_PROFILE_ENDPOINTS)) as pool:
+                futures = [
+                    pool.submit(capture, name, endpoint, filename)
+                    for name, (endpoint, filename) in DIAGNOSTIC_PROFILE_ENDPOINTS.items()
+                ]
+                for future in as_completed(futures):
+                    name, evidence = future.result()
+                    result["captures"][name] = evidence
+        manifest_path = directory / "capture.json"
+        try:
+            manifest_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            result["manifest"] = {"status": "captured", "path": str(manifest_path)}
+        except BaseException as exc:
+            result["manifest"] = {
+                "status": "failed", "path": str(manifest_path),
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        return result
+
 
 class ThreadLocalClients:
     def __init__(self, url: str, timeout: float, controller: ServiceController) -> None:
@@ -141,7 +275,9 @@ class ThreadLocalClients:
 
 class TreeDBMinimaRunner(common.QdrantMinimaRunner):
     def __init__(self, manifest: dict[str, Any], *, controller: ServiceController, collection: str,
-                 operation_timeout: float, ef_search: int) -> None:
+                 operation_timeout: float, ef_search: int, diagnostics_dir: Path | None = None,
+                 diagnostic_slow_seconds: float = 30, diagnostic_profile_seconds: int = 5,
+                 diagnostic_capture_timeout: float = 10) -> None:
         self.controller = controller
         controller.start()
         clients = ThreadLocalClients(controller.url, operation_timeout, controller)
@@ -154,6 +290,25 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                          resource_server_name="TreeDB")
         self.clients, self.ef_search = clients, ef_search
         self.route_evidence: dict[str, Any] = {}
+        self.diagnostics_dir = diagnostics_dir
+        self.diagnostic_slow_seconds = diagnostic_slow_seconds
+        self.diagnostic_profile_seconds = diagnostic_profile_seconds
+        self.diagnostic_capture_timeout = diagnostic_capture_timeout
+        self.batch_correlations: list[dict[str, Any]] = []
+        self.diagnostic_resume: dict[str, Any] | None = None
+        self._diagnostic_lock = threading.Lock()
+        self._expected_rows = 0
+        self._expected_insert_batches: dict[tuple[str, str, int], int] = {}
+        expected_rows = 0
+        for operation in manifest["operations"]:
+            if operation["name"] not in ("initial_batch_insert", "timed_search_with_batch_insert"):
+                continue
+            for insertion in operation.get("insert_ranges", []):
+                for start in range(insertion["start"], insertion["start"] + insertion["rows"], self.config["batch_size"]):
+                    expected_rows += min(self.config["batch_size"], insertion["start"] + insertion["rows"] - start)
+                    self._expected_insert_batches[(operation["name"], insertion["scenario"], start)] = expected_rows
+        if diagnostics_dir is not None and controller.diagnostics_url is None:
+            raise ValueError("diagnostics_dir requires an enabled controller diagnostics URL")
     def restart_controller(self) -> int:
         self.controller.start()
         if self.controller.pid is None:
@@ -191,22 +346,317 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             raise RuntimeError("TreeDB index is not the compatible native_runtime Minima schema")
         self.effective_collection = info.to_dict()
 
-    def wait_ready(self, expected_count: int | None = None) -> None:
+    def initial_load_to_query_boundary(self) -> None:
+        pass
+
+    def wait_ready(self, expected_count: int | None = None,
+                   phase: str = "mutation_visibility") -> None:
         assert self.client is not None
         if expected_count is not None:
             count = self.client.count_documents(self.collection).count
             if count != expected_count:
                 raise RuntimeError(f"TreeDB visible document count={count}, expected={expected_count}")
 
+    def _batch_start(self, scenario: str, documents: list[dict[str, Any]], local_start: int) -> int:
+        prefix = f"minima/{scenario}/"
+        try:
+            ordinals = [int(row["id"].removeprefix(prefix)) for row in documents]
+        except (KeyError, TypeError, ValueError):
+            return local_start
+        if all(row["id"].startswith(prefix) for row in documents) and ordinals == list(range(ordinals[0], ordinals[0] + len(ordinals))):
+            return ordinals[0]
+        return local_start
+
+    def _capture_directory(self, correlation: dict[str, Any]) -> Path:
+        assert self.diagnostics_dir is not None
+        label = "_".join(
+            "".join(character if character.isalnum() or character in "-_" else "_" for character in str(value))
+            for value in (
+                f"{correlation['sequence']:06d}", correlation["operation"], correlation["scenario"],
+                f"batch_{correlation['batch_ordinal']:06d}", f"start_{correlation['batch_start']}",
+            )
+        )
+        return self.diagnostics_dir / label
+
+    @staticmethod
+    def _timeout_failure(exc: BaseException) -> bool:
+        return isinstance(exc, TimeoutError) or "timed out" in str(exc).lower() or "timeout" in type(exc).__name__.lower()
+
+    def _public_count_snapshot(self) -> dict[str, Any]:
+        assert self.client is not None
+        try:
+            return {"status": "captured", "rows": self.client.count_documents(self.collection).count}
+        except BaseException as exc:
+            return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
     def upsert(self, operation: str, scenario: str, documents: list[dict[str, Any]], wait_ready: bool = True,
                on_writer_start: Callable[[], None] | None = None) -> None:
         assert self.client is not None
-        for start in range(0, len(documents), self.config["batch_size"]):
-            batch = [service_document(row) for row in documents[start:start + self.config["batch_size"]]]
-            response = self.evidence.call(operation, "writer", scenario, lambda batch=batch: self.client.upsert_documents(
-                self.collection, batch, defer_vector_index_rebuild=True), on_start=on_writer_start)
-            if response.upserted != len(batch) or response.ids != [row["id"] for row in batch]:
-                raise RuntimeError("TreeDB upsert completion did not cover the submitted batch")
+        batch_size = self.config["batch_size"]
+        for local_start in range(0, len(documents), batch_size):
+            source_batch = documents[local_start:local_start + batch_size]
+            batch = [service_document(row) for row in source_batch]
+            if self.diagnostics_dir is None:
+                response = self.evidence.call(
+                    operation, "writer", scenario,
+                    lambda batch=batch: self.client.upsert_documents(
+                        self.collection, batch, defer_vector_index_rebuild=True,
+                    ),
+                    on_start=on_writer_start,
+                )
+                if response.upserted != len(batch) or response.ids != [row["id"] for row in batch]:
+                    raise RuntimeError("TreeDB upsert completion did not cover the submitted batch")
+                continue
+            batch_start = self._batch_start(scenario, source_batch, local_start)
+            key = (operation, scenario, batch_start)
+            mapped_expected = key in self._expected_insert_batches
+            before_public_count = None if mapped_expected else self._public_count_snapshot()
+            expected_before = (
+                self._expected_rows if mapped_expected
+                else before_public_count.get("rows") if before_public_count is not None else None
+            )
+            expected_after = self._expected_insert_batches.get(key)
+            with self._diagnostic_lock:
+                sequence = len(self.batch_correlations)
+                correlation: dict[str, Any] = {
+                    "sequence": sequence, "operation": operation, "scenario": scenario,
+                    "batch_ordinal": batch_start // batch_size, "batch_start": batch_start,
+                    "rows": len(batch), "accumulated_expected_rows_before": expected_before,
+                    "accumulated_expected_rows": expected_after,
+                    "accumulated_rows_source": "frozen_manifest" if mapped_expected else "public_count",
+                    "before_stats": self.controller.stats_snapshot(),
+                    "outcome": "in_progress", "profile_capture": {"status": "not_triggered"},
+                }
+                if before_public_count is not None:
+                    correlation["before_public_count"] = before_public_count
+                self.batch_correlations.append(correlation)
+            done = threading.Event()
+            capture_started = threading.Event()
+            capture_lock = threading.Lock()
+            started_monotonic_ns = time.monotonic_ns()
+            correlation["started_monotonic_ns"] = started_monotonic_ns
+
+            def capture(reason: str, *, correlation: dict[str, Any] = correlation,
+                        capture_started: threading.Event = capture_started,
+                        capture_lock: threading.Lock = capture_lock) -> None:
+                with capture_lock:
+                    if capture_started.is_set():
+                        return
+                    capture_started.set()
+                correlation["capture_reason"] = reason
+                directory = self._capture_directory(correlation)
+                correlation["profile_capture"] = {"status": "in_progress", "directory": str(directory)}
+                try:
+                    correlation["profile_capture"] = self.controller.capture_profiles(
+                        directory, profile_seconds=self.diagnostic_profile_seconds,
+                        capture_timeout=self.diagnostic_capture_timeout,
+                    )
+                except BaseException as exc:
+                    correlation["profile_capture"] = {
+                        "status": "failed", "directory": str(directory),
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+
+            def slow_capture(*, done: threading.Event = done,
+                             capture_batch: Callable[[str], None] = capture,
+                             started_ns: int = started_monotonic_ns) -> None:
+                deadline_ns = started_ns + int(self.diagnostic_slow_seconds * 1e9)
+                remaining_seconds = max(0.0, (deadline_ns - time.monotonic_ns()) / 1e9)
+                if not done.wait(remaining_seconds):
+                    capture_batch("slow")
+
+            watcher: threading.Thread | None = None
+            if self.diagnostics_dir is not None:
+                watcher = threading.Thread(target=slow_capture, name=f"treedb-batch-diagnostic-{sequence}", daemon=True)
+                watcher.start()
+            response: Any | None = None
+            failure: BaseException | None = None
+            try:
+                response = self.evidence.call(
+                    operation, "writer", scenario,
+                    lambda batch=batch: self.client.upsert_documents(
+                        self.collection, batch, defer_vector_index_rebuild=True,
+                    ),
+                    on_start=on_writer_start,
+                )
+                if response.upserted != len(batch) or response.ids != [row["id"] for row in batch]:
+                    raise RuntimeError("TreeDB upsert completion did not cover the submitted batch")
+                if mapped_expected:
+                    with self._diagnostic_lock:
+                        self._expected_rows = expected_after
+                correlation["outcome"] = "completed"
+            except BaseException as exc:
+                failure = exc
+                correlation["outcome"] = "timeout" if self._timeout_failure(exc) else "failed"
+                correlation["error"] = f"{type(exc).__name__}: {exc}"
+                raise
+            finally:
+                correlation["ended_monotonic_ns"] = time.monotonic_ns()
+                correlation["duration_nanos"] = correlation["ended_monotonic_ns"] - correlation["started_monotonic_ns"]
+                done.set()
+                correlation["after_stats"] = self.controller.stats_snapshot()
+                if not mapped_expected:
+                    after_public_count = self._public_count_snapshot()
+                    correlation["after_public_count"] = after_public_count
+                    correlation["accumulated_expected_rows"] = after_public_count.get("rows")
+                    if after_public_count["status"] == "captured":
+                        with self._diagnostic_lock:
+                            self._expected_rows = after_public_count["rows"]
+                if failure is not None:
+                    capture(correlation["outcome"])
+                elif correlation["duration_nanos"] >= int(self.diagnostic_slow_seconds * 1e9):
+                    capture("slow")
+                if watcher is not None:
+                    watcher.join(self.diagnostic_capture_timeout + self.diagnostic_profile_seconds + 1)
+                    if watcher.is_alive():
+                        correlation["capture_wait"] = {
+                            "status": "failed",
+                            "error": "diagnostic capture exceeded its bounded join interval",
+                        }
+
+    def _preflight_batch_ids(self, ids: list[str]) -> list[str]:
+        assert self.client is not None
+        present = []
+        for identifier in ids:
+            result = self.client.filter_documents(
+                self.collection, {"field": "id", "operator": "==", "value": identifier}, limit=1,
+            )
+            if result.matched_count not in (0, 1) or len(result.documents) != result.matched_count:
+                raise RuntimeError(f"diagnostic resume ID preflight was ambiguous for {identifier!r}")
+            if result.documents:
+                if result.documents[0].id != identifier:
+                    raise RuntimeError(f"diagnostic resume ID preflight returned the wrong document for {identifier!r}")
+                present.append(identifier)
+        return present
+    def _initial_prefix_identity(self, operation: dict[str, Any], insertion: dict[str, Any],
+                                 start: int, expected_before: int) -> dict[str, Any]:
+        expected = common.StateAccumulator()
+        found = False
+        for row in operation.get("insert_ranges", []):
+            end = row["start"] + row["rows"]
+            if row is insertion:
+                end = start
+                found = True
+            spec = self.specs[row["scenario"]]
+            for ordinal in range(row["start"], end):
+                expected.add(common.generated_document(spec, ordinal))
+            if found:
+                break
+        if not found or expected.count != expected_before:
+            raise RuntimeError(
+                f"diagnostic resume prefix construction produced {expected.count} rows, expected {expected_before}",
+            )
+
+        assert self.client is not None
+        actual = common.StateAccumulator()
+        after_id: str | None = None
+        while True:
+            result = self.client.filter_documents(
+                self.collection, limit=1024, after_id=after_id, cursor_page=True,
+            )
+            if result.matched_count != len(result.documents) or len(result.documents) > 1024:
+                raise RuntimeError("diagnostic resume prefix stream returned an ambiguous page")
+            for document in result.documents:
+                actual.add({
+                    "id": document.id, "content": document.content,
+                    "user_id": document.meta.get("user_id"), "fpath": document.meta.get("fpath"),
+                })
+            if result.exhausted:
+                break
+            if not result.next_after_id or result.next_after_id == after_id:
+                raise RuntimeError("diagnostic resume prefix stream cursor did not advance")
+            after_id = result.next_after_id
+        expected_digest, actual_digest = expected.hexdigest(), actual.hexdigest()
+        return {
+            "algorithm": "public cursor stream plus minima-committed-payload-v1",
+            "expected_rows": expected.count, "actual_rows": actual.count,
+            "expected_digest": expected_digest, "actual_digest": actual_digest,
+            "match": expected.count == actual.count and expected_digest == actual_digest,
+        }
+
+
+    def run_diagnostic_resume(self, scenario: str, start: int) -> None:
+        self.diagnostic_resume = {
+            "enabled": True, "nonqualifying": True, "operation": "initial_batch_insert",
+            "scenario": scenario, "batch_start": start, "state": "preflight",
+        }
+        try:
+            self.evidence.failures.append("diagnostic exact-batch resume is nonqualifying evidence")
+            self._run_diagnostic_resume(scenario, start)
+        except BaseException as exc:
+            state = self.diagnostic_resume["state"]
+            if not state.startswith("rejected_"):
+                self.diagnostic_resume["failure_phase"] = state
+                self.diagnostic_resume["state"] = "failed"
+            self.diagnostic_resume["error"] = f"{type(exc).__name__}: {exc}"
+            raise
+
+    def _run_diagnostic_resume(self, scenario: str, start: int) -> None:
+        self.resource_baseline = common.server_resource_usage(
+            self.controller.pid, self.storage_path, self.resource_server_name,
+        )
+        self.connect()
+        self.ensure_compatible()
+        batch_size = self.config["batch_size"]
+        if batch_size != 256:
+            raise RuntimeError(f"diagnostic exact resume requires the frozen 256-document batch size, got {batch_size}")
+        operation = next(row for row in self.manifest["operations"] if row["name"] == "initial_batch_insert")
+        ranges = [
+            row for row in operation.get("insert_ranges", [])
+            if row["scenario"] == scenario and row["start"] <= start < row["start"] + row["rows"]
+        ]
+        if len(ranges) != 1:
+            raise RuntimeError("diagnostic resume selector does not identify exactly one initial insert range")
+        insertion = ranges[0]
+        if (start - insertion["start"]) % batch_size or start + batch_size > insertion["start"] + insertion["rows"]:
+            raise RuntimeError("diagnostic resume selector is not an exact full frozen batch")
+        expected_after = self._expected_insert_batches.get(("initial_batch_insert", scenario, start))
+        if expected_after is None:
+            raise RuntimeError("diagnostic resume selector is not in the frozen initial insertion stream")
+        expected_before = expected_after - batch_size
+        spec = self.specs[scenario]
+        documents = [common.generated_document(spec, ordinal) for ordinal in range(start, start + batch_size)]
+        ids = [row["id"] for row in documents]
+        try:
+            present = self._preflight_batch_ids(ids)
+            self.diagnostic_resume["present_ids"] = len(present)
+            if len(present) == batch_size:
+                self.diagnostic_resume["state"] = "rejected_all_present"
+                raise RuntimeError("diagnostic resume rejected: selected batch is all-present")
+            if present:
+                self.diagnostic_resume["state"] = "rejected_mixed"
+                raise RuntimeError(f"diagnostic resume rejected: selected batch is mixed ({len(present)}/{batch_size} present)")
+            visible_rows = self.client.count_documents(self.collection).count
+            self.diagnostic_resume["visible_rows_before"] = visible_rows
+            self.diagnostic_resume["expected_rows_before"] = expected_before
+            if visible_rows != expected_before:
+                self.diagnostic_resume["state"] = "rejected_ambiguous_count"
+                raise RuntimeError(
+                    f"diagnostic resume rejected: visible rows={visible_rows}, expected first missing boundary={expected_before}",
+                )
+            prefix_identity = self._initial_prefix_identity(operation, insertion, start, expected_before)
+            self.diagnostic_resume["prefix_identity"] = prefix_identity
+            if not prefix_identity["match"]:
+                self.diagnostic_resume["state"] = "rejected_prefix_mismatch"
+                raise RuntimeError(
+                    "diagnostic resume rejected: existing public collection does not match the exact initial prefix",
+                )
+            self._expected_rows = expected_before
+            self.diagnostic_resume["state"] = "submitting"
+            self.upsert("initial_batch_insert", scenario, documents)
+            present_after = self._preflight_batch_ids(ids)
+            visible_after = self.client.count_documents(self.collection).count
+            self.diagnostic_resume.update({
+                "present_ids_after": len(present_after), "visible_rows_after": visible_after,
+                "expected_rows_after": expected_after,
+            })
+            if len(present_after) != batch_size or visible_after != expected_after:
+                self.diagnostic_resume["state"] = "failed_postflight"
+                raise RuntimeError("diagnostic resume batch did not establish the exact expected public state")
+            self.diagnostic_resume["state"] = "completed"
+        except BaseException as exc:
+            self.diagnostic_resume.setdefault("state", "failed")
+            self.diagnostic_resume["error"] = f"{type(exc).__name__}: {exc}"
+            raise
     def search(self, operation: str, scenario: str, interval: dict[str, int] | None = None) -> tuple[list[str], list[float]]:
         assert self.client is not None
         spec, query = self.specs[scenario], self.queries[scenario]
@@ -353,6 +803,9 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                               "vector_strategy": "native_runtime", "ef_search": str(self.ef_search),
                               "profile": self.controller.profile, "service_binary": str(self.controller.binary),
                               "service_log_path": str(self.controller.log_path),
+                              "diagnostics_url": self.controller.diagnostics_url or "disabled",
+                              "block_profile_rate": str(self.controller.block_profile_rate) if self.controller.diagnostics_url else "0",
+                              "mutex_profile_fraction": str(self.controller.mutex_profile_fraction) if self.controller.diagnostics_url else "0",
                               "effective_collection": json.dumps(
                                   self.effective_collection, sort_keys=True, separators=(",", ":"))},
             "environment": {"os": platform.system() + " " + platform.release(), "arch": platform.machine() or "unavailable",
@@ -386,6 +839,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                                "cpu_seconds": resource["cpu_seconds"], "disk_bytes": resource["disk_bytes"]}
         raw = artifact["backend_raw_evidence"].pop("qdrant")
         artifact["backend_raw_evidence"]["treedb"] = raw
+        raw.pop("collection_configuration_transition", None)
+        raw.pop("readiness", None)
         raw["native_route_responses"] = {
             scenario: {"membership_source": value.scalar_filter_membership_source,
                        "plan": value.scalar_filter_plan, "probe_ids": value.scalar_filter_probe_ids,
@@ -401,6 +856,16 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         }
         raw["resource_measurement"] = resource
         raw["service_log"] = self.controller.log_evidence()
+        raw["upsert_batch_correlations"] = self.batch_correlations
+        raw["diagnostic_resume"] = self.diagnostic_resume
+        raw["diagnostics"] = {
+            "enabled": self.diagnostics_dir is not None,
+            "directory": str(self.diagnostics_dir) if self.diagnostics_dir is not None else None,
+            "slow_batch_seconds": self.diagnostic_slow_seconds,
+            "profile_seconds": self.diagnostic_profile_seconds,
+            "capture_timeout_seconds": self.diagnostic_capture_timeout,
+            "nonqualifying": self.diagnostic_resume is not None,
+        }
         raw["resource_availability"] = {
             "measurement": common.RESOURCE_SEMANTICS,
             "baseline": resource["baseline"]["availability"],
@@ -422,18 +887,49 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--startup-timeout", type=float, default=120)
     parser.add_argument("--ef-search", type=int, default=128)
     parser.add_argument("--small", action="store_true", help="run the real small-scenario lifecycle and emit validated partial evidence")
-    return parser.parse_args()
+    parser.add_argument("--diagnostics-dir", type=Path)
+    parser.add_argument("--diagnostics-url", default="http://127.0.0.1:17121")
+    parser.add_argument("--diagnostic-slow-seconds", type=float, default=30)
+    parser.add_argument("--diagnostic-profile-seconds", type=int, default=5)
+    parser.add_argument("--diagnostic-capture-timeout", type=float, default=10)
+    parser.add_argument("--diagnostic-resume-scenario")
+    parser.add_argument("--diagnostic-resume-start", type=int)
+    args = parser.parse_args()
+    resume_flags = (args.diagnostic_resume_scenario is not None, args.diagnostic_resume_start is not None)
+    if any(resume_flags) and not all(resume_flags):
+        parser.error("diagnostic resume requires both --diagnostic-resume-scenario and --diagnostic-resume-start")
+    if any(resume_flags) and args.diagnostics_dir is None:
+        parser.error("diagnostic resume requires --diagnostics-dir")
+    if any(resume_flags) and args.small:
+        parser.error("--small and diagnostic resume are mutually exclusive")
+    if args.diagnostic_slow_seconds <= 0 or args.diagnostic_profile_seconds <= 0 or args.diagnostic_capture_timeout <= 0:
+        parser.error("diagnostic durations must be positive")
+    return args
 
 
 def main() -> int:
     args = parse_args()
     manifest = common.load_manifest(args.manifest)
-    controller = ServiceController(args.service_bin.resolve(), args.url, args.data_dir.resolve(), args.profile, args.startup_timeout)
-    runner = TreeDBMinimaRunner(manifest, controller=controller, collection=args.collection,
-                                operation_timeout=args.operation_timeout, ef_search=args.ef_search)
+    diagnostics_dir = args.diagnostics_dir.resolve() if args.diagnostics_dir is not None else None
+    controller = ServiceController(
+        args.service_bin.resolve(), args.url, args.data_dir.resolve(), args.profile, args.startup_timeout,
+        diagnostics_url=args.diagnostics_url if diagnostics_dir is not None else None,
+    )
+    runner = TreeDBMinimaRunner(
+        manifest, controller=controller, collection=args.collection,
+        operation_timeout=args.operation_timeout, ef_search=args.ef_search,
+        diagnostics_dir=diagnostics_dir, diagnostic_slow_seconds=args.diagnostic_slow_seconds,
+        diagnostic_profile_seconds=args.diagnostic_profile_seconds,
+        diagnostic_capture_timeout=args.diagnostic_capture_timeout,
+    )
     exit_code = 0
     try:
-        runner.run_small() if args.small else runner.run()
+        if args.diagnostic_resume_scenario is not None:
+            runner.run_diagnostic_resume(args.diagnostic_resume_scenario, args.diagnostic_resume_start)
+        elif args.small:
+            runner.run_small()
+        else:
+            runner.run()
     except BaseException as exc:
         runner.evidence.failures.append(f"{type(exc).__name__}: {exc}")
         exit_code = 1

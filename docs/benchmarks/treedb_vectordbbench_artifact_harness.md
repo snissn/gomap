@@ -1,6 +1,6 @@
 # TreeDB VectorDBBench Artifact Harness
 
-Issues: `snissn/gomap#2599`, `#4181`, `#4193`. Parent tracker: `#2598`.
+Issues: `snissn/gomap#2599`, `#4181`, `#4193`, `#4380`. Parent tracker: `#2598`.
 
 This harness creates a repeatable TreeDB VectorDBBench artifact root. It starts
 `treedb-document-service` with a fresh artifact-owned data directory, captures
@@ -38,6 +38,109 @@ Expected primary files:
 The harness requires `--out` to be new or empty, then creates a fresh
 `treedb-data` directory under that artifact root. It does not truncate durable
 collections or modify WAL/storage semantics.
+
+## Lifecycle completion contract
+
+Issue #4380 extends the existing `treedb-vectordbbench-artifact/v1` manifest;
+it does not introduce a second runner. An integrated lifecycle artifact adds a
+`manifest.lifecycle` object with schema
+`treedb-vectordbbench-lifecycle/v1` and a checksum-bound `lifecycle.jsonl`.
+Each JSONL event uses `treedb-vectordbbench-lifecycle-event/v1`, an increasing
+sequence and lexical RFC3339 timestamp with timezone, and a state snapshot containing distinct
+`client_sent`, `server_accepted`, `server_durable`, and `reopened` row counts.
+WAL frontier/total-written counters and the selected cumulative product
+counters must also remain monotonic. Every event must repeat the same non-empty
+cumulative counter key set. `lifecycle.jsonl` must contain exactly one JSON
+object per line and no blank lines.
+
+The strict gate requires these ordered markers:
+
+```text
+startup -> reset -> load_start -> load_end -> drain_checkpoint
+-> optimize_start -> optimize_end -> cache_prime -> cache_warm
+-> graceful_close -> cold_open_ready -> exact_verify -> route_verify -> teardown
+```
+
+For a completed lifecycle, both `reset` and `load_start` must report zero for
+all four row counts. `teardown` must be the final event and must retain the
+exact expected row counts. The command-WAL profiles must also report positive
+WAL frontier and cumulative bytes at `load_end` after accepted rows and at
+`drain_checkpoint` after durable rows; `no_wal_fast` and partial streams are
+exempt from this completion proof. Reopened rows remain zero through
+`graceful_close` and become populated only after the cold-reopen boundary.
+
+The lifecycle declaration binds the exact clean gomap and VectorDBBench
+commits, service-binary SHA-256, effective service/harness configuration,
+dataset checksum/dimensions/count, CPU topology, memory, storage, lifecycle
+JSONL, raw artifacts, and every profile window. The minimum effective
+configuration includes a canonical public service profile, case type,
+the exact non-empty service argv using only the document service's defined
+flags and with one matching `profile` selector before Go flag parsing
+terminates at `--` or a positional argument,
+concurrency, batch size, `m`, and `ef_construction`. The argv is part
+of the effective-configuration checksum, and its executable must equal the
+path of a readable, executable local file whose current bytes match both
+recorded service-binary SHA-256 fields. The effective last `dir` flag value
+must be non-empty, match `service.data_dir`, and resolve to the artifact-owned
+`treedb-data` directory. Standard case names (for
+example, `Performance768D1M`) must match the lifecycle dataset dimensions and
+vector count. Integer diagnostic flags must also parse within the 64-bit Go
+service's signed `flag.Int` range. A nonempty effective `pprof` address must
+use an unscoped loopback host and an ASCII-decimal TCP port from 1 through
+65535; port zero is excluded because the service does not publish the selected
+ephemeral diagnostics port. `PerformanceCustomDataset` cannot complete until H2 binds its
+selected result's task-config dataset shape into this artifact. Profile entries
+name existing before/after event sequences and use the same checksum as their
+raw-artifact entry. Supported profile kinds are `cpu`, `heap`, `allocs`,
+`block`, and `mutex` as non-empty gzip-compressed `.pprof` files that the native `go tool pprof`
+decoder accepts with matching period and sample metadata. CPU profiles are
+distinct and every pprof must contain at least one actual sample; heap and
+allocs use the shared Go allocation family but require their
+respective sample-type selection (Go 1.26 heap profiles may omit the default
+marker, while allocs must mark `alloc_space/bytes`); block and mutex share
+indistinguishable Go contention metadata and are validated as that family. Go `trace` is a `.out`
+file that the native trace decoder accepts, and Linux `perf` as a `.data` file
+with bounded header sections that native `perf script` can decode while walking
+samples. Profile validation is an offline correctness gate and invokes the
+corresponding native decoder once per profile. The optimized index identity and durable `asset_generation`
+must survive close and cold reopen. H2 maps `asset_generation` to the vector-maintenance
+root ID, not the service's reopen-local generation counter. The artifact-owned
+database identity and server `commit_seq` must also match across close/reopen,
+and route proof must use the same index identity and asset generation without
+fallback through either `exact_hnsw_search_pack_v1` or `quantized_rerank`.
+`T_ready` is reconstructed from `load_start`
+through `cold_open_ready`; client, accepted/durable, and reopened counts are
+never substituted for one another, and a completed lifecycle requires strictly
+positive `T_ready`.
+
+When `graceful_close` or `cold_open_ready` is present, its database snapshot
+must contain a non-empty string identity and non-negative integer commit
+sequence. A partial stream that has not reached those stages remains
+analyzable; a present malformed snapshot does not.
+The same fail-closed rule applies to a present index snapshot's object and
+identity, asset-generation, and status field types; missing future index
+evidence remains a completion error.
+Any present route snapshot is likewise structurally validated as an object
+with typed route-proof fields, while a route that has not yet been emitted is
+only missing completion evidence. Once `route_verify` is emitted, all five
+route-proof fields are structurally required.
+
+Lifecycle validation requires the pinned Go toolchain for pprof and trace
+profiles, and Linux `perf` for perf-data profiles. A missing native decoder is
+a structural validation error rather than an invalid-profile diagnosis.
+
+Validate a completed artifact with:
+
+```sh
+python3 scripts/treedb_vectordbbench_artifact.py \
+  --validate-lifecycle "$OUT"
+```
+
+The command exits nonzero for partial, interrupted, stale, mismatched, or
+corrupt artifacts. `--allow-partial` returns success only when a partial or
+interrupted artifact is structurally analyzable; its JSON result still has
+`complete: false`. H2 owns emitting these fields and lifecycle events. Existing
+smoke-only artifact-v1 output remains unchanged until that integration lands.
 
 ## Route-proof sidecar contract
 

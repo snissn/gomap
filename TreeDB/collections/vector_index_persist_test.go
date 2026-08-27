@@ -1936,7 +1936,7 @@ type acceptedVectorMutationErrorForTest struct {
 	error
 }
 
-func TestNativeVectorCoveragePublishesEachAcknowledgedMutation(t *testing.T) {
+func TestNativeVectorCoverageAcknowledgesEachMutation(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -2066,9 +2066,14 @@ func TestNativeVectorCoverageNoopDoesNotRepublish(t *testing.T) {
 		t.Fatalf("insert seed: %v", err)
 	}
 	index := c.registeredVectorIndex(def.Name)
-	if index == nil || index.searchView.Load() == nil {
-		t.Fatal("seed insert did not publish native search view")
+	if index == nil {
+		t.Fatal("seed insert did not register native vector index")
 	}
+	view := index.acquireSearchView()
+	if view == nil {
+		t.Fatal("first acquisition did not publish native search view")
+	}
+	index.releaseSearchView(view)
 	before := index.searchView.Load()
 	if ids, err := c.InsertBatch(nil, nil); err != nil || len(ids) != 0 {
 		t.Fatalf("empty insert ids=%q err=%v", ids, err)
@@ -4726,6 +4731,20 @@ func TestCollectionVectorIndexNativeRootReopenMaintainsLoadedGraphOnWrite(t *tes
 	if got := len(reopenedCol.registeredVectorIndexes()); got != 1 {
 		t.Fatalf("write did not lazily load persisted vector index, got %d registered indexes", got)
 	}
+	loadedBeforeSearch := reopenedCol.registeredVectorIndex(def.Name)
+	if loadedBeforeSearch == nil {
+		t.Fatal("write did not retain the loaded persisted vector index")
+	}
+	staleView := loadedBeforeSearch.searchView.Load()
+	loadedBeforeSearch.mu.RLock()
+	staleMutation := loadedBeforeSearch.mutationSeq
+	loadedBeforeSearch.mu.RUnlock()
+	if staleView != nil && staleView.mutationSeq == staleMutation {
+		t.Fatalf("acknowledged reopen write published mutation %d before acquisition", staleMutation)
+	}
+	if loadedBeforeSearch.searchViewCurrent.Load() {
+		t.Fatal("acknowledged reopen write left the immutable view marked current")
+	}
 	if err := reopenedCol.Flush(); err != nil {
 		t.Fatalf("flush reopened vector write: %v", err)
 	}
@@ -4741,6 +4760,22 @@ func TestCollectionVectorIndexNativeRootReopenMaintainsLoadedGraphOnWrite(t *tes
 		t.Fatalf("search maintained vector index: %v", err)
 	}
 	requireVectorResultIDs(t, results, "a", "c", "b")
+	published := loaded.searchView.Load()
+	if published == nil {
+		t.Fatal("post-reopen acquisition did not publish an immutable view")
+	}
+	if staleView != nil && published == staleView {
+		t.Fatalf("post-reopen acquisition retained stale view %p", staleView)
+	}
+	if published.mutationSeq != staleMutation {
+		t.Fatalf("post-reopen acquisition mutation=%d want %d", published.mutationSeq, staleMutation)
+	}
+	if _, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true}); err != nil {
+		t.Fatalf("repeat search maintained vector index: %v", err)
+	}
+	if got := loaded.searchView.Load(); got != published {
+		t.Fatalf("repeat post-reopen search republished view %p want %p", got, published)
+	}
 }
 
 func TestCollectionVectorIndexNativeEmptyRootMaintainsInsertedDocuments(t *testing.T) {
