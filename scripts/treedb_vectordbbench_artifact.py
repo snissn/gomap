@@ -1029,6 +1029,20 @@ def _utc_timestamp(value: Any, label: str, errors: list[str]) -> _dt.datetime | 
         return None
 
 
+def _utc_datetime_from_ns(value: Any, label: str, errors: list[str]) -> _dt.datetime | None:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        errors.append(f"{label} must be a positive integer")
+        return None
+    seconds, nanoseconds = divmod(value, 1_000_000_000)
+    try:
+        return _dt.datetime.fromtimestamp(seconds, _dt.timezone.utc) + _dt.timedelta(
+            microseconds=nanoseconds // 1_000
+        )
+    except (OverflowError, OSError, ValueError):
+        errors.append(f"{label} is outside the supported UTC datetime range")
+        return None
+
+
 def _strict_json_loads(value: str) -> Any:
     def reject_constant(constant: str) -> None:
         raise ValueError(f"non-finite JSON number {constant}")
@@ -1919,11 +1933,19 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
 
     diagnostics_records: list[dict[str, Any]] | None = None
     boundary_acknowledgement: dict[str, Any] | None = None
+    adapter_records: list[dict[str, Any]] | None = None
     if "adapter-lifecycle.jsonl" in raw_by_path:
         try:
-            read_adapter_lifecycle_records(root / "adapter-lifecycle.jsonl")
+            adapter_records = read_adapter_lifecycle_records(root / "adapter-lifecycle.jsonl")
         except ValueError as exc:
             errors.append(f"cannot parse adapter lifecycle sidecar: {exc}")
+        else:
+            for line_number, record in enumerate(adapter_records, start=1):
+                _utc_datetime_from_ns(
+                    record.get("timestamp_ns"),
+                    f"adapter lifecycle line {line_number} timestamp_ns",
+                    errors,
+                )
     if "diagnostics.jsonl" in raw_by_path:
         try:
             diagnostics_text = (root / "diagnostics.jsonl").read_text(encoding="utf-8")
@@ -1942,11 +1964,11 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 if not isinstance(record, dict):
                     errors.append(f"lifecycle diagnostics line {line_number} must be an object")
                     continue
-                timestamp_ns = record.get("timestamp_ns")
-                if not isinstance(timestamp_ns, int) or isinstance(timestamp_ns, bool) or timestamp_ns <= 0:
-                    errors.append(
-                        f"lifecycle diagnostics line {line_number} timestamp_ns must be a positive integer"
-                    )
+                _utc_datetime_from_ns(
+                    record.get("timestamp_ns"),
+                    f"lifecycle diagnostics line {line_number} timestamp_ns",
+                    errors,
+                )
                 if not isinstance(record.get("snapshot"), dict):
                     errors.append(f"lifecycle diagnostics line {line_number} snapshot must be an object")
                 if "boundary" in record or "boundary_timestamp_ns" in record:
@@ -1956,14 +1978,11 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                         errors.append(
                             f"lifecycle diagnostics line {line_number} has an unknown boundary"
                         )
-                    if (
-                        not isinstance(boundary_timestamp_ns, int)
-                        or isinstance(boundary_timestamp_ns, bool)
-                        or boundary_timestamp_ns <= 0
-                    ):
-                        errors.append(
-                            f"lifecycle diagnostics line {line_number} boundary_timestamp_ns must be positive"
-                        )
+                    _utc_datetime_from_ns(
+                        boundary_timestamp_ns,
+                        f"lifecycle diagnostics line {line_number} boundary_timestamp_ns",
+                        errors,
+                    )
                 diagnostics_records.append(record)
     if "lifecycle-boundary-diagnostics.json" in raw_by_path:
         try:
@@ -1980,11 +1999,11 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 if boundary_acknowledgement.get("boundary") not in LIFECYCLE_DIAGNOSTIC_BOUNDARIES:
                     errors.append("lifecycle boundary acknowledgement has an unknown boundary")
                 for field in ("boundary_timestamp_ns", "sample_timestamp_ns"):
-                    value = boundary_acknowledgement.get(field)
-                    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-                        errors.append(
-                            f"lifecycle boundary acknowledgement {field} must be a positive integer"
-                        )
+                    _utc_datetime_from_ns(
+                        boundary_acknowledgement.get(field),
+                        f"lifecycle boundary acknowledgement {field}",
+                        errors,
+                    )
 
     sequence_events: dict[int, dict[str, Any]] = {}
     stage_events: dict[str, dict[str, Any]] = {}
@@ -2130,13 +2149,13 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             except ValueError as exc:
                 errors.append(f"completed adapter lifecycle sidecar is invalid: {exc}")
         if adapter is not None:
-            for boundary in LIFECYCLE_DIAGNOSTIC_BOUNDARIES:
+            for position, boundary in enumerate(LIFECYCLE_DIAGNOSTIC_BOUNDARIES):
                 boundary_ns = adapter[f"{boundary}_ns"]
                 event_timestamp = (stage_events.get(boundary) or {}).get("_timestamp")
-                expected_timestamp = _dt.datetime.fromtimestamp(
-                    boundary_ns / 1_000_000_000, _dt.timezone.utc
+                expected_timestamp = _utc_datetime_from_ns(
+                    boundary_ns, f"adapter {boundary} timestamp_ns", errors
                 )
-                if event_timestamp != expected_timestamp:
+                if expected_timestamp is not None and event_timestamp != expected_timestamp:
                     errors.append(
                         f"stage {boundary} timestamp does not match adapter lifecycle boundary"
                     )
@@ -2144,15 +2163,25 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     record for record in (diagnostics_records or [])
                     if record.get("boundary") == boundary
                 ]
+                sample_timestamp_ns = (
+                    boundary_records[0].get("timestamp_ns") if len(boundary_records) == 1 else None
+                )
+                next_boundary_ns = (
+                    adapter[f"{LIFECYCLE_DIAGNOSTIC_BOUNDARIES[position + 1]}_ns"]
+                    if position + 1 < len(LIFECYCLE_DIAGNOSTIC_BOUNDARIES)
+                    else None
+                )
                 if (
                     len(boundary_records) != 1
                     or boundary_records[0].get("boundary_timestamp_ns") != boundary_ns
-                    or not isinstance(boundary_records[0].get("timestamp_ns"), int)
-                    or isinstance(boundary_records[0].get("timestamp_ns"), bool)
-                    or boundary_records[0]["timestamp_ns"] < boundary_ns
+                    or not isinstance(sample_timestamp_ns, int)
+                    or isinstance(sample_timestamp_ns, bool)
+                    or sample_timestamp_ns < boundary_ns
+                    or (next_boundary_ns is not None and sample_timestamp_ns >= next_boundary_ns)
                 ):
                     errors.append(
-                        f"stage {boundary} requires exactly one matching tagged diagnostics sample"
+                        f"stage {boundary} requires exactly one matching tagged diagnostics sample "
+                        "at or after its boundary and before the next boundary"
                     )
             if boundary_acknowledgement is not None:
                 warm_matches = [

@@ -1334,6 +1334,70 @@ class LifecycleValidatorTest(unittest.TestCase):
             expected = "matching tagged diagnostics" if mutation == "mismatched" else "checksum mismatch"
             self.assertTrue(any(expected in item for item in got["errors"]), got)
 
+    def test_completed_fixture_rejects_samples_at_or_after_later_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _ = lifecycle_fixture(root)
+            diagnostics = root / "diagnostics.jsonl"
+            records = [json.loads(line) for line in diagnostics.read_text(encoding="utf-8").splitlines()]
+            late_timestamp_ns = records[-1]["boundary_timestamp_ns"] + 1
+            for record in records:
+                record["timestamp_ns"] = late_timestamp_ns
+            diagnostics.write_text(
+                "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            acknowledgement = root / "lifecycle-boundary-diagnostics.json"
+            acknowledgement_payload = json.loads(acknowledgement.read_text(encoding="utf-8"))
+            acknowledgement_payload["sample_timestamp_ns"] = late_timestamp_ns
+            harness.write_json(acknowledgement, acknowledgement_payload)
+            for artifact in manifest["lifecycle"]["raw_artifacts"]:
+                if artifact["path"] == "diagnostics.jsonl":
+                    artifact["sha256"] = harness.sha256_file(diagnostics)
+                elif artifact["path"] == "lifecycle-boundary-diagnostics.json":
+                    artifact["sha256"] = harness.sha256_file(acknowledgement)
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertEqual(
+            sum("before the next boundary" in item for item in got["errors"]),
+            len(harness.LIFECYCLE_DIAGNOSTIC_BOUNDARIES) - 1,
+            got,
+        )
+
+    def test_raw_evidence_timestamp_range_errors_are_structured(self) -> None:
+        for timestamp_ns in (10**30, -(10**30)):
+            with self.subTest(timestamp_ns=timestamp_ns), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _ = lifecycle_fixture(root)
+                sidecar = root / "adapter-lifecycle.jsonl"
+                records = [json.loads(line) for line in sidecar.read_text(encoding="utf-8").splitlines()]
+                records[-1]["timestamp_ns"] = timestamp_ns
+                sidecar.write_text(
+                    "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+                    encoding="utf-8",
+                )
+                next(
+                    artifact for artifact in manifest["lifecycle"]["raw_artifacts"]
+                    if artifact["path"] == "adapter-lifecycle.jsonl"
+                )["sha256"] = harness.sha256_file(sidecar)
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    exit_code = harness.main([
+                        "--validate-lifecycle", str(root), "--allow-partial",
+                    ])
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertEqual(exit_code, 1)
+            if timestamp_ns > 0:
+                self.assertTrue(any("outside the supported UTC datetime range" in item for item in got["errors"]), got)
+            else:
+                self.assertTrue(any("positive integer" in item for item in got["errors"]), got)
+
     def test_interrupted_fixture_is_analyzable_but_never_complete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

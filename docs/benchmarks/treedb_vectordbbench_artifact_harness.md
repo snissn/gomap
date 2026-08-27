@@ -71,7 +71,8 @@ phases; ordinary VectorDBBench runs retain their default phase ordering.
 Completed validation checksum-binds and cross-checks `adapter-lifecycle.jsonl`,
 `diagnostics.jsonl`, and `lifecycle-boundary-diagnostics.json`: all five
 load/build/search boundary timestamps must match their lifecycle stages and
-exact tagged diagnostics samples, with the final acknowledgement proving the
+exact tagged diagnostics samples. Each sample must occur at or after its own
+boundary and before the next boundary; the final acknowledgement proves the
 `cache_warm` sample. Partial artifacts may omit boundaries not yet reached.
 
 The integrated runner creates `startup` and a `partial` lifecycle declaration
