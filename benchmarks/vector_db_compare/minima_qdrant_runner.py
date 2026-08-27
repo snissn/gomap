@@ -871,9 +871,12 @@ class Evidence:
         self.stale_update = dict.fromkeys(names, 0)
         self.stale_delete = dict.fromkeys(names, 0)
 
-    def call(self, operation: str, category: str, scenario: str, function: Callable[[], Any]) -> Any:
+    def call(self, operation: str, category: str, scenario: str, function: Callable[[], Any],
+             on_start: Callable[[], None] | None = None) -> Any:
         start = time.monotonic_ns()
         try:
+            if on_start is not None:
+                on_start()
             return function()
         except BaseException as exc:
             if scenario in self.errors:
@@ -1085,12 +1088,14 @@ class QdrantMinimaRunner:
         return self.models.PointStruct(id=point_id(document["id"]), vector={self.config["vector_field"]: document["vector"]},
             payload={key: document[key] for key in ("id", "content", "user_id", "fpath")})
 
-    def upsert(self, operation: str, scenario: str, documents: list[dict[str, Any]], wait_ready: bool = True) -> None:
+    def upsert(self, operation: str, scenario: str, documents: list[dict[str, Any]], wait_ready: bool = True,
+               on_writer_start: Callable[[], None] | None = None) -> None:
         assert self.client is not None
         for start in range(0, len(documents), self.config["batch_size"]):
             points = [self.point(row) for row in documents[start:start + self.config["batch_size"]]]
             self.evidence.call(operation, "writer", scenario, lambda points=points: self.client.upsert(
-                collection_name=self.collection, points=points, wait=True, timeout=self.operation_timeout))
+                collection_name=self.collection, points=points, wait=True, timeout=self.operation_timeout),
+                on_start=on_writer_start)
         if wait_ready:
             self.evidence.call(operation, "writer_wait", scenario, self.wait_ready)
 
@@ -1163,12 +1168,14 @@ class QdrantMinimaRunner:
             collection_name=self.collection, ids=[point_id(value) for value in ids], with_payload=True,
             with_vectors=False, timeout=self.operation_timeout))
 
-    def delete_filter(self, operation: dict[str, Any]) -> None:
+    def delete_filter(self, operation: dict[str, Any],
+                      on_writer_start: Callable[[], None] | None = None) -> None:
         assert self.client is not None
         name, scenario = operation["name"], operation["target"]
         selector = payload_filter(self.models, operation["filter"])
         self.evidence.call(name, "writer", scenario, lambda: self.client.delete(
-            collection_name=self.collection, points_selector=selector, wait=True, timeout=self.operation_timeout))
+            collection_name=self.collection, points_selector=selector, wait=True, timeout=self.operation_timeout),
+            on_start=on_writer_start)
         self.evidence.call(name, "writer_wait", scenario, self.wait_ready)
         result = self.evidence.call(name, "fetch", scenario, lambda: self.client.count(
             collection_name=self.collection, count_filter=selector, exact=True, timeout=self.operation_timeout))
@@ -1320,6 +1327,7 @@ class QdrantMinimaRunner:
         start_barrier = threading.Barrier(readers + 1)
         end_barrier = threading.Barrier(readers + 1)
         mutation_interval: dict[str, int] = {}
+        mutation_started = threading.Event()
         observations: list[dict[str, Any] | None] = [None] * readers
 
         def mutate() -> None:
@@ -1327,9 +1335,10 @@ class QdrantMinimaRunner:
             try:
                 sample_start = len(self.evidence.samples)
                 if operation["effect"] == "delete":
-                    self.delete_filter(operation)
+                    self.delete_filter(operation, mutation_started.set)
                 elif operation["effect"] == "insert":
-                    self.upsert(operation["name"], operation["target"], operation["documents"])
+                    self.upsert(operation["name"], operation["target"], operation["documents"],
+                                on_writer_start=mutation_started.set)
                 else:
                     raise RuntimeError(f"unsupported concurrent mutation {operation['effect']}")
                 samples = [
@@ -1349,12 +1358,15 @@ class QdrantMinimaRunner:
                         raise RuntimeError("replacement insert did not become visible")
             except BaseException:
                 end_barrier.abort()
+                mutation_started.set()
                 raise
             end_barrier.wait()
 
         def read_during_mutation(assignment: dict[str, Any]) -> None:
             start_barrier.wait()
             try:
+                if not mutation_started.wait(self.operation_timeout) or end_barrier.broken:
+                    raise RuntimeError("concurrent mutation writer did not start")
                 interval: dict[str, int] = {}
                 ids, scores = self.search(operation["name"], assignment["scenario"], interval)
                 query = self.queries[assignment["scenario"]]

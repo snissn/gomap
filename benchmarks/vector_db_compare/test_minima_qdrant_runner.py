@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import copy
 import os
 import subprocess
@@ -121,6 +122,7 @@ class FakeClient:
             return [self.shared.points[value] for value in ids if value in self.shared.points]
 
     def delete(self, *, points_selector: Model, **_: object) -> None:
+        time.sleep(0.002)
         with self.shared.lock:
             if hasattr(points_selector, "must"):
                 doomed = [key for key, point in self.shared.points.items() if self._matches(point, points_selector)]
@@ -524,6 +526,36 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
             self.assertEqual(readers, {0, 1})
         for operation in operations["reindex_execution_trace"]["operations"]:
             self.assertEqual({row["reader"] for row in operation["reader_queries"]}, {0, 1})
+
+    def test_multi_reader_mutation_waits_for_actual_writer_start(self) -> None:
+        manifest, shared = tiny_manifest(2), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.connect()
+        workload.create_owned_collection()
+        original_delete_filter = workload.delete_filter
+        original_delete = FakeClient.delete
+
+        def delayed_delete_filter(operation: dict[str, object],
+                                  on_writer_start: Callable[[], None] | None = None) -> None:
+            original_delete_filter(operation, on_writer_start)
+
+        def slow_delete(client: FakeClient, **kwargs: object) -> None:
+            time.sleep(0.02)
+            original_delete(client, **kwargs)
+
+        workload.delete_filter = delayed_delete_filter
+        with mock.patch.object(FakeClient, "delete", slow_delete):
+            workload.run_concurrent_mutation(manifest["operations"][4])
+        operation = workload.operations["reindex_execution_trace"]["operations"][0]
+        self.assertEqual({row["reader"] for row in operation["reader_queries"]}, {0, 1})
+        self.assertTrue(all(
+            runner.intervals_overlap(
+                row["started_monotonic_ns"], row["ended_monotonic_ns"],
+                operation["mutation_started_monotonic_ns"], operation["mutation_ended_monotonic_ns"],
+            )
+            for row in operation["reader_queries"]
+        ))
+        workload.close()
 
     def test_actual_scroll_rejects_nonadvancing_cursor(self) -> None:
         manifest, shared = tiny_manifest(), SharedQdrant()
