@@ -155,6 +155,31 @@ func TestVacuumIndexOnlineRuntimeFailureRetainsResourceTotals(t *testing.T) {
 	}
 }
 
+func TestVacuumIndexOnlinePostPublicationStopFailureStillCompletesWork(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	if err := database.SetSync([]byte("before"), []byte("vacuum")); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("injected old root publication stop failure")
+	database.vacuumOldRootPublicationStopHook = func() error { return wantErr }
+	defer func() { database.vacuumOldRootPublicationStopHook = nil }()
+
+	if err := database.VacuumIndexOnline(context.Background()); !errors.Is(err, wantErr) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("VacuumIndexOnline error=%v want stop failure and ErrRecoveryRequired", err)
+	}
+	stats := database.VacuumOnlineStats()
+	if stats.AttemptID == 0 || !stats.WorkCompleted {
+		t.Fatalf("post-publication stop failure stats=%+v want completed replacement work", stats)
+	}
+}
+
 func seedVacuumOnlinePointer(t *testing.T, database *DB, key string) {
 	t.Helper()
 	ptrs, err := database.AppendValueLogValues([][]byte{bytes.Repeat([]byte("value"), 256)})

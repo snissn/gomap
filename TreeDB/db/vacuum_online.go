@@ -459,10 +459,11 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 	if runStats.AttemptID == 0 {
 		runStats.AttemptID = db.vacuumOnlineAttemptID.Add(1)
 	}
+	publicationCompleted := false
 	defer func() {
 		runStats.TotalDuration = time.Since(runStarted)
 		runStats.Canceled = errors.Is(retErr, context.Canceled)
-		runStats.WorkCompleted = retErr == nil
+		runStats.WorkCompleted = publicationCompleted
 		published := *runStats
 		db.publishVacuumOnlineStats(published)
 	}()
@@ -1417,6 +1418,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		db.clearLeafGenerationReachabilityCaches()
 
 		unlockCutover(true)
+		publicationCompleted = true
 		runStats.SwapPublishDuration += time.Since(swapPublishStarted)
 		if hook := db.vacuumAfterSwapPublishHook; hook != nil {
 			hook(*runStats)
@@ -1436,6 +1438,9 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			// RecoverableRootSet still pins the old physical closure while the
 			// stopped coordinator transfers its final recovery ownership.
 			handoff, handoffErr := stopRootPublicationRuntimeV1(oldRootPublication)
+			if hook := db.vacuumOldRootPublicationStopHook; hook != nil {
+				handoffErr = errors.Join(handoffErr, hook())
+			}
 			oldRootPublication.release()
 			if handoffErr != nil {
 				db.publicationPoisoned.Store(true)
