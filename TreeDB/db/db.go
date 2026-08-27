@@ -224,6 +224,7 @@ type DB struct {
 	vacuumCollectionClonePageHook func(vacuumCollectionClonePhase, uint64)
 	vacuumBeforeCutoverHook       func(int)
 	vacuumAfterCutoverLockHook    func()
+	vacuumBeforeMaintenanceHook   func()
 	vacuumBeforeRecorderFenceHook func()
 	vacuumPagerSyncHook           func(vacuumPagerSyncPhase)
 	vacuumPreflushHook            func() error

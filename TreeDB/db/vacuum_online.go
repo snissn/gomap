@@ -386,6 +386,18 @@ func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance
 	if runtime.GOOS == "windows" {
 		return ErrVacuumUnsupported
 	}
+	if lockMaintenance {
+		if publication := db.rootPublication; publication != nil && publication.coordinator != nil {
+			if err := publication.coordinator.Drain(ctx); err != nil {
+				return publicRootPublicationErrorV1(err)
+			}
+		}
+		if hook := db.vacuumBeforeMaintenanceHook; hook != nil {
+			hook()
+		}
+		db.maintenanceMu.Lock()
+		defer db.maintenanceMu.Unlock()
+	}
 	attemptID := db.vacuumOnlineAttemptID.Add(1)
 	attemptStarted := time.Now()
 	seed := VacuumOnlineStats{AttemptID: attemptID}
@@ -399,15 +411,6 @@ func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance
 		published := seed
 		db.publishVacuumOnlineStats(published)
 	}()
-	if lockMaintenance {
-		if publication := db.rootPublication; publication != nil && publication.coordinator != nil {
-			if err := publication.coordinator.Drain(ctx); err != nil {
-				return publicRootPublicationErrorV1(err)
-			}
-		}
-		db.maintenanceMu.Lock()
-		defer db.maintenanceMu.Unlock()
-	}
 	captureStarted := time.Now()
 	seed.RecoverableSetCaptureAttempts = 1
 	roots, err := db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)

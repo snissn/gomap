@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -184,6 +185,50 @@ func TestPublishVacuumOnlineStatsKeepsNewestAttempt(t *testing.T) {
 	database.publishVacuumOnlineStats(VacuumOnlineStats{AttemptID: 1, Canceled: true})
 	if got := database.VacuumOnlineStats(); got.AttemptID != 2 || !got.WorkCompleted {
 		t.Fatalf("published stats=%+v want attempt 2", got)
+	}
+}
+
+func TestVacuumOnlineStatsAttemptIDFollowsMaintenanceAdmission(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	if err := database.SetSync([]byte("before"), []byte("vacuum")); err != nil {
+		t.Fatal(err)
+	}
+	firstReached := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var calls atomic.Int32
+	database.vacuumBeforeMaintenanceHook = func() {
+		if calls.Add(1) == 1 {
+			close(firstReached)
+			<-releaseFirst
+		}
+	}
+	defer func() { database.vacuumBeforeMaintenanceHook = nil }()
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- database.VacuumIndexOnline(firstCtx) }()
+	waitVacuumTestSignal(t, firstReached, "first vacuum before maintenance admission")
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- database.VacuumIndexOnline(context.Background()) }()
+	if err := <-secondDone; err != nil {
+		cancelFirst()
+		close(releaseFirst)
+		t.Fatalf("second vacuum: %v", err)
+	}
+	cancelFirst()
+	close(releaseFirst)
+	if err := <-firstDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first vacuum error=%v want context.Canceled", err)
+	}
+	stats := database.VacuumOnlineStats()
+	if stats.AttemptID != 2 || !stats.Canceled || stats.WorkCompleted {
+		t.Fatalf("latest completed stats=%+v want later-admitted canceled attempt", stats)
 	}
 }
 
