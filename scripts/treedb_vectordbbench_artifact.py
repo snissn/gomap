@@ -1988,6 +1988,16 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 exit_code = selected_row_record.get("exit_code")
                 if isinstance(exit_code, bool) or not isinstance(exit_code, int) or exit_code != 0:
                     errors.append("bound manifest VDBBench execution must record exit_code=0")
+                row_batch_size = selected_row_record.get("num_per_batch")
+                harness_batch_size = harness.get("num_per_batch")
+                if (
+                    isinstance(row_batch_size, bool)
+                    or not isinstance(row_batch_size, int)
+                    or isinstance(harness_batch_size, bool)
+                    or not isinstance(harness_batch_size, int)
+                    or row_batch_size != harness_batch_size
+                ):
+                    errors.append("bound manifest VDBBench num_per_batch must match the lifecycle harness")
                 if not isinstance(selected_index_name, str) or not selected_index_name:
                     errors.append("bound manifest VDBBench result index_name must be a non-empty string")
                 else:

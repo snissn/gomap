@@ -365,6 +365,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "row": "exact",
             "command": vdbbench_command_string,
             "exit_code": 0,
+            "num_per_batch": 500,
             "load_metrics": load_metrics,
         }],
         "commands": [{
@@ -1453,6 +1454,22 @@ class LifecycleValidatorTest(unittest.TestCase):
 
             self.assertFalse(got["analyzable"], got)
             self.assertTrue(any("exit_code=0" in error for error in got["errors"]), got)
+
+    def test_bound_vdbbench_row_must_match_harness_batch_size(self) -> None:
+        for value in (None, 999, True):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                if value is None:
+                    manifest["vdbbench"][0].pop("num_per_batch")
+                else:
+                    manifest["vdbbench"][0]["num_per_batch"] = value
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any("num_per_batch" in error for error in got["errors"]), got)
 
     def test_bound_vdbbench_command_options_must_match_manifest_exactly_once(self) -> None:
         options = (

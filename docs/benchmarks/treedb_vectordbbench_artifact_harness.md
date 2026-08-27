@@ -376,6 +376,8 @@ requires one successful, non-skipped `manifest.commands` record whose argv and
 shell rendering exactly match the selected VDBBench row; the row summary alone
 is not authoritative execution evidence. The recorded `service.base_url` must
 also be the HTTP endpoint selected by the service command's effective `-addr`.
+The selected row's `num_per_batch` must exactly match the harness value exported
+through `NUM_PER_BATCH`.
 
 For a completed load, the harness selects exactly one *new* canonical
 `result_*.json` matching that generated index name. It records the result path,
