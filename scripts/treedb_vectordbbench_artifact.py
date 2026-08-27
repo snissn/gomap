@@ -3486,13 +3486,22 @@ def lifecycle_ready_asset(
         or status.get("rebuild_needed") is not False
     ):
         raise RuntimeError(f"optimize response does not prove a ready durable asset: {optimize}")
-    if (
-        expected_m is not None
-        and index_info.get("vector_m") != expected_m
-        or expected_ef_construction is not None
-        and index_info.get("vector_ef_construction") != expected_ef_construction
+    for field, expected in (
+        ("vector_m", expected_m),
+        ("vector_ef_construction", expected_ef_construction),
     ):
-        raise RuntimeError("optimize response build parameters do not match the lifecycle harness")
+        if expected is None:
+            continue
+        actual = index_info.get(field)
+        if (
+            isinstance(expected, bool)
+            or not isinstance(expected, int)
+            or expected <= 0
+            or isinstance(actual, bool)
+            or not isinstance(actual, int)
+            or actual != expected
+        ):
+            raise RuntimeError("optimize response build parameters do not match the lifecycle harness")
     expected_service_generation: int | None = None
     if strategy == "column_graph":
         generation = index_info.get("generation")

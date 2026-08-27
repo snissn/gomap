@@ -1920,6 +1920,35 @@ class LifecycleValidatorTest(unittest.TestCase):
             self.assertFalse(got["analyzable"], got)
             self.assertTrue(any("build parameters" in error for error in got["errors"]), got)
 
+        for harness_key, response_key in (
+            ("m", "vector_m"),
+            ("ef_construction", "vector_ef_construction"),
+        ):
+            with self.subTest(boolean_echo=response_key), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                manifest["harness"][harness_key] = 1
+                sidecar = root / "adapter-lifecycle.jsonl"
+                records = [
+                    json.loads(line) for line in sidecar.read_text(encoding="utf-8").splitlines()
+                ]
+                records[-3]["response"]["index"][response_key] = True
+                sidecar.write_text(
+                    "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+                    encoding="utf-8",
+                )
+                next(
+                    artifact for artifact in manifest["lifecycle"]["raw_artifacts"]
+                    if artifact["path"] == "adapter-lifecycle.jsonl"
+                )["sha256"] = harness.sha256_file(sidecar)
+                manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any("build parameters" in error for error in got["errors"]), got)
+
     def test_completed_fixture_malformed_boundary_state_is_structured_error(self) -> None:
         for mutation, expected in (("snapshot", "snapshot must be an object"), ("rows", "state must contain")):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
