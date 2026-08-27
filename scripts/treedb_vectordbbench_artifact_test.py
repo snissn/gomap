@@ -621,6 +621,25 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertFalse(got["analyzable"])
                 self.assertTrue(any(expected in item for item in got["errors"]), got)
 
+    def test_concurrency_tokens_are_bounded_ascii_decimals(self) -> None:
+        for concurrency in ("²", "9" * 5000):
+            with self.subTest(concurrency=concurrency[:10]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    manifest["lifecycle"]["result_status"] = "partial"
+                    manifest["harness"]["num_concurrency"] = concurrency
+                    manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                    harness.write_json(root / "manifest.json", manifest)
+                    output = io.StringIO()
+                    with contextlib.redirect_stdout(output):
+                        exit_code = harness.main(["--validate-lifecycle", str(root), "--allow-partial"])
+                    report = json.loads(output.getvalue())
+
+                self.assertEqual(exit_code, 1)
+                self.assertFalse(report["analyzable"])
+                self.assertTrue(any("num_concurrency" in item for item in report["errors"]), report)
+
     def test_case_shape_must_match_lifecycle_dataset(self) -> None:
         for case_type, expected in (
             ("Performance768D1M", "vector count"),
@@ -866,46 +885,75 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(header_only["analyzable"])
         self.assertTrue(any("content does not match" in item for item in header_only["errors"]), header_only)
 
-    def test_perf_profile_requires_bounded_sections_and_sample_data(self) -> None:
+    def test_perf_profile_requires_native_sample_decoding(self) -> None:
         valid_payload = valid_perf_fixture()
         zero_size_record = bytearray(valid_payload + b"\x00" * 8)
         zero_size_record[48:56] = (24).to_bytes(8, "little")
         trailing_garbage = bytearray(valid_payload + b"junk")
         trailing_garbage[48:56] = (20).to_bytes(8, "little")
-        invalid_payloads = {
-            "header-only": b"PERFILE2",
-            "truncated-data": valid_payload[:-1],
-            "data-overlaps-header": valid_payload[:40] + (1).to_bytes(8, "little") + valid_payload[48:],
-            "sample-then-zero-size-record": bytes(zero_size_record),
-            "sample-then-trailing-garbage": bytes(trailing_garbage),
-        }
-        for label, payload in {"valid": valid_payload, **invalid_payloads}.items():
+
+        def validate(payload: bytes, native: int | BaseException) -> dict:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _ = lifecycle_fixture(root)
+                perf = root / "profiles" / "build.perf.data"
+                perf.write_bytes(payload)
+                checksum = harness.sha256_file(perf)
+                manifest["lifecycle"]["raw_artifacts"] = [{
+                    "path": "profiles/build.perf.data", "sha256": checksum,
+                }]
+                manifest["lifecycle"]["profiles"] = [{
+                    "path": "profiles/build.perf.data",
+                    "sha256": checksum,
+                    "kind": "perf",
+                    "before_sequence": 5,
+                    "after_sequence": 6,
+                }]
+                harness.write_json(root / "manifest.json", manifest)
+                if isinstance(native, BaseException):
+                    decoder = mock.patch.object(harness.subprocess, "run", side_effect=native)
+                else:
+                    result = subprocess.CompletedProcess(("perf", "script"), native)
+                    decoder = mock.patch.object(harness.subprocess, "run", return_value=result)
+                with decoder:
+                    return harness.validate_lifecycle_artifact(root)
+
+        cases = (
+            ("native-accepted", valid_payload, 0, True),
+            ("native-rejected", valid_payload, 1, False),
+            ("missing-perf", valid_payload, FileNotFoundError("perf"), False),
+            ("sample-then-zero-size-record", bytes(zero_size_record), 1, False),
+            ("sample-then-trailing-garbage", bytes(trailing_garbage), 1, False),
+            ("header-only", b"PERFILE2", AssertionError("native decoder called"), False),
+            ("truncated-data", valid_payload[:-1], AssertionError("native decoder called"), False),
+            (
+                "data-overlaps-header",
+                valid_payload[:40] + (1).to_bytes(8, "little") + valid_payload[48:],
+                AssertionError("native decoder called"),
+                False,
+            ),
+        )
+        for label, payload, native, expected_complete in cases:
             with self.subTest(payload=label):
-                with tempfile.TemporaryDirectory() as tmp:
-                    root = Path(tmp)
-                    manifest, _ = lifecycle_fixture(root)
-                    perf = root / "profiles" / "build.perf.data"
-                    perf.write_bytes(payload)
-                    checksum = harness.sha256_file(perf)
-                    manifest["lifecycle"]["raw_artifacts"] = [{
-                        "path": "profiles/build.perf.data", "sha256": checksum,
-                    }]
-                    manifest["lifecycle"]["profiles"] = [{
-                        "path": "profiles/build.perf.data",
-                        "sha256": checksum,
-                        "kind": "perf",
-                        "before_sequence": 5,
-                        "after_sequence": 6,
-                    }]
-                    harness.write_json(root / "manifest.json", manifest)
+                got = validate(payload, native)
 
-                    got = harness.validate_lifecycle_artifact(root)
-
-                if label == "valid":
+                if expected_complete:
                     self.assertTrue(got["complete"], got)
                 else:
                     self.assertFalse(got["analyzable"], got)
                     self.assertTrue(any("content does not match" in item for item in got["errors"]), got)
+
+    def test_timestamp_overflow_is_structurally_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            events[-1]["timestamp"] = "9999-12-31T23:59:59-23:59"
+            rewrite_lifecycle_fixture(root, manifest, events)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("RFC3339 timestamp" in item for item in got["errors"]), got)
 
     def test_rows_wal_and_counters_must_be_monotonic(self) -> None:
         mutations = (

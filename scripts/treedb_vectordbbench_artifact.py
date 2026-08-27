@@ -805,13 +805,17 @@ def _utc_timestamp(value: Any, label: str, errors: list[str]) -> _dt.datetime | 
         return None
     try:
         parsed = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
+    except (ValueError, OverflowError):
         errors.append(f"{label} must be an RFC3339 timestamp")
         return None
     if parsed.tzinfo is None:
         errors.append(f"{label} must include a timezone")
         return None
-    return parsed.astimezone(_dt.timezone.utc)
+    try:
+        return parsed.astimezone(_dt.timezone.utc)
+    except (ValueError, OverflowError):
+        errors.append(f"{label} must be an RFC3339 timestamp")
+        return None
 
 
 def _pprof_metadata(path: Path) -> bytes | None:
@@ -937,27 +941,17 @@ def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
                 data_size = int.from_bytes(header[48:56], byteorder)
                 if data_size < 8:
                     return False
-                source.seek(data_offset)
-                remaining = data_size
-                saw_sample = False
-                while remaining:
-                    if remaining < 8:
-                        return False
-                    event_header = source.read(8)
-                    if len(event_header) != 8:
-                        return False
-                    event_type = int.from_bytes(event_header[:4], byteorder)
-                    event_size = int.from_bytes(event_header[6:8], byteorder)
-                    if event_size < 8 or event_size > remaining:
-                        return False
-                    if event_type == 9 and event_size > 8:  # PERF_RECORD_SAMPLE
-                        saw_sample = True
-                    source.seek(event_size - 8, os.SEEK_CUR)
-                    remaining -= event_size
-                return saw_sample
-        except OSError:
+            decoded = subprocess.run(
+                ("perf", "script", "-i", str(path)),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=False,
+            )
+            return decoded.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
             return False
-        return False
     return False
 
 
@@ -1043,10 +1037,12 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 completion_errors.append("standard case dimensions do not match lifecycle.dataset.dimensions")
     concurrency = harness.get("num_concurrency")
     if isinstance(concurrency, int) and not isinstance(concurrency, bool):
-        valid_concurrency = concurrency > 0
+        valid_concurrency = 0 < concurrency <= 999_999_999
     elif isinstance(concurrency, str):
         parts = [part.strip() for part in concurrency.split(",")]
-        valid_concurrency = bool(parts) and all(part.isdigit() and int(part) > 0 for part in parts)
+        valid_concurrency = bool(parts) and all(
+            re.fullmatch(r"[0-9]{1,9}", part) is not None and int(part) > 0 for part in parts
+        )
     else:
         valid_concurrency = False
     if not valid_concurrency:

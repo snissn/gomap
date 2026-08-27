@@ -82,9 +82,9 @@ distinct; heap and allocs use the shared Go allocation family but require their
 respective default sample type; block and mutex share indistinguishable Go
 contention metadata and are validated as that family. Go `trace` is a `.out`
 file that the native trace decoder accepts, and Linux `perf` as a `.data` file
-with bounded header sections and a nonempty sample record. Profile validation
-is an offline correctness gate and invokes the native decoder once per pprof or
-trace. The optimized index identity and durable `asset_generation`
+with bounded header sections that native `perf script` can decode while walking
+samples. Profile validation is an offline correctness gate and invokes the
+corresponding native decoder once per profile. The optimized index identity and durable `asset_generation`
 must survive close and cold reopen. H2 maps `asset_generation` to the vector-maintenance
 root ID, not the service's reopen-local generation counter. The artifact-owned
 database identity and server `commit_seq` must also match across close/reopen,
