@@ -11,6 +11,7 @@ import io
 import inspect
 import json
 import os
+import signal
 import subprocess
 import tempfile
 import threading
@@ -957,6 +958,45 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
     def test_custom_dataset_rejects_invalid_result_size(self) -> None:
         with self.assertRaisesRegex(ValueError, "PerformanceCustomDataset"):
             harness.result_vector_count({"case_config": {"custom_case": {"dataset_config": {"size": "0"}}}}, "PerformanceCustomDataset")
+
+
+class ServiceProcessOwnershipTest(unittest.TestCase):
+    def assert_startup_failure_cleans_child(
+        self, failure: BaseException, *, append_log: bool
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = harness.HarnessState(root=root)
+            proc = mock.Mock(pid=1234)
+            proc.poll.return_value = None
+            proc.wait.return_value = -signal.SIGTERM
+            with mock.patch.object(harness.subprocess, "Popen", return_value=proc), \
+                    mock.patch.object(harness, "wait_health", side_effect=failure), \
+                    mock.patch.object(harness.os, "killpg") as killpg:
+                with self.assertRaises(type(failure)):
+                    harness.start_service(
+                        state,
+                        gomap_root=root,
+                        service_bin=root / "treedb-document-service",
+                        data_dir=root / "treedb-data",
+                        host="127.0.0.1",
+                        port=9876,
+                        profile="command_wal_durable",
+                        health_timeout=1.0,
+                        append_log=append_log,
+                    )
+
+            killpg.assert_called_once_with(proc.pid, signal.SIGTERM)
+            proc.wait.assert_called_once_with(timeout=10.0)
+
+    def test_initial_start_interrupt_cleans_owned_child(self) -> None:
+        self.assert_startup_failure_cleans_child(KeyboardInterrupt(), append_log=False)
+
+    def test_reopened_start_interrupt_cleans_owned_child(self) -> None:
+        self.assert_startup_failure_cleans_child(KeyboardInterrupt(), append_log=True)
+
+    def test_start_service_preserves_ordinary_health_failure_cleanup(self) -> None:
+        self.assert_startup_failure_cleans_child(RuntimeError("unhealthy"), append_log=False)
 
 
 class HarnessOrderTest(unittest.TestCase):

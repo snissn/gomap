@@ -560,9 +560,11 @@ def start_service(
     state.service_pid = proc.pid
     try:
         health = wait_health(f"http://{address}", health_timeout)
-    except Exception:
-        terminate_process_group(proc)
-        log_fh.close()
+    except BaseException:
+        try:
+            terminate_process_group(proc)
+        finally:
+            log_fh.close()
         raise
     # Keep the file descriptor owned by the process open until shutdown; Python
     # can close its duplicate without affecting the child process.
