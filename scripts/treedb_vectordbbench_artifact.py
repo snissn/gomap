@@ -2608,14 +2608,18 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                         isinstance(harness_k, bool)
                         or not isinstance(harness_k, int)
                         or harness_k <= 0
+                        or isinstance(expected_rows, bool)
+                        or not isinstance(expected_rows, int)
                         or route.get("requested_top_k") != min(harness_k, expected_rows)
                     ):
                         errors.append("lifecycle route requested_top_k does not match harness k and expected rows")
                     expected_query_mode = "exact"
+                    expected_route_name = "exact_hnsw_search_pack_v1"
                     expected_quantized_index: str | None = None
                     expected_rerank_candidates = 0
                     if selected_row == "scalar":
                         expected_query_mode = "quantized_rerank"
+                        expected_route_name = "quantized_rerank"
                         expected_quantized_index = harness.get("quantized_index_name")
                         rerank_candidates = harness.get("rerank_candidates")
                         if (
@@ -2634,6 +2638,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                         errors.append("lifecycle harness rows must select exactly one supported route")
                     if (
                         raw_route_response.get("query_mode") != expected_query_mode
+                        or route.get("name") != expected_route_name
                         or raw_route_response.get("quantized_index_name") != expected_quantized_index
                         or raw_route_response.get("quantized_rerank_candidates", 0)
                         != expected_rerank_candidates

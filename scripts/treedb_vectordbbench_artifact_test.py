@@ -1359,6 +1359,42 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["analyzable"], got)
         self.assertTrue(any("requested_top_k" in error for error in got["errors"]), got)
 
+    def test_route_name_must_match_selected_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            events[12]["state"]["route"]["name"] = "quantized_rerank"
+            response_path = root / "lifecycle_route_response.json"
+            response = json.loads(response_path.read_text(encoding="utf-8"))
+            response["diagnostics"]["route"] = "quantized_rerank"
+            harness.write_json(response_path, response)
+            next(
+                artifact for artifact in manifest["lifecycle"]["raw_artifacts"]
+                if artifact["path"] == "lifecycle_route_response.json"
+            )["sha256"] = harness.sha256_file(response_path)
+            rewrite_lifecycle_fixture(root, manifest, events)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("search configuration" in error for error in got["errors"]), got)
+
+    def test_invalid_expected_rows_fails_structurally_without_top_k_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            manifest["lifecycle"]["expected_rows"] = None
+            harness.write_json(root / "manifest.json", manifest)
+            output = io.StringIO()
+
+            got = harness.validate_lifecycle_artifact(root)
+            with contextlib.redirect_stdout(output):
+                exit_code = harness.main(["--validate-lifecycle", str(root)])
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("expected_rows" in error for error in got["errors"]), got)
+        self.assertEqual(exit_code, 1)
+
     def test_manifest_vdbbench_must_be_a_list(self) -> None:
         for invalid in (None, {"row": "exact"}):
             with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as tmp:
