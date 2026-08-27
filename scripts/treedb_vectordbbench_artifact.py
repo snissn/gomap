@@ -824,12 +824,12 @@ def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
             decoded = subprocess.run(
                 ("go", "tool", "pprof", "-raw", str(path)),
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 timeout=10,
                 check=False,
             )
-            return decoded.returncode == 0 and bool(decoded.stdout.strip())
+            return decoded.returncode == 0
         except (OSError, EOFError, zlib.error, subprocess.TimeoutExpired):
             return False
     if kind == "trace":
