@@ -246,7 +246,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.controller.capture_profiles = mock.Mock(return_value={"status": "captured"})
         document = {"id": "minima/mixed/000000", "content": "c", "vector": [1.0, 0.0],
                     "user_id": "u", "fpath": "/a"}
-        with mock.patch.object(runner.time, "monotonic_ns", side_effect=[100, 110, 120, 130]):
+        with mock.patch.object(runner.time, "monotonic_ns", side_effect=range(100, 300, 10)):
             workload.upsert("initial_batch_insert", "mixed", [document])
         workload.controller.capture_profiles.assert_not_called()
         self.assertEqual(workload.batch_correlations[0]["profile_capture"], {"status": "not_triggered"})
@@ -319,6 +319,22 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             self.assertEqual(correlation["after_stats"]["status"], "failed")
             self.assertEqual(correlation["capture_reason"], "timeout")
             self.assertEqual(correlation["profile_capture"]["captures"]["cpu"]["status"], "failed")
+
+    def test_capture_setup_failure_does_not_replace_upsert_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            client = FakeClient(self.response(), upsert_error=TimeoutError("request timed out"))
+            workload = self.workload(self.response(), diagnostics_dir=Path(directory), client=client)
+            workload.diagnostic_slow_seconds = 60
+            workload.controller.capture_profiles = mock.Mock(side_effect=RuntimeError("cannot start capture worker"))
+            document = {"id": "minima/mixed/000000", "content": "c", "vector": [1.0, 0.0],
+                        "user_id": "u", "fpath": "/a"}
+            with self.assertRaisesRegex(TimeoutError, "request timed out"):
+                workload.upsert("initial_batch_insert", "mixed", [document])
+            correlation = workload.batch_correlations[0]
+            self.assertEqual(correlation["outcome"], "timeout")
+            self.assertEqual(correlation["capture_reason"], "timeout")
+            self.assertEqual(correlation["profile_capture"]["status"], "failed")
+            self.assertIn("cannot start capture worker", correlation["profile_capture"]["error"])
 
     def test_diagnostic_reads_and_profile_captures_are_bounded_and_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

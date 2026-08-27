@@ -428,6 +428,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             done = threading.Event()
             capture_started = threading.Event()
             capture_lock = threading.Lock()
+            started_monotonic_ns = time.monotonic_ns()
+            correlation["started_monotonic_ns"] = started_monotonic_ns
 
             def capture(reason: str, *, correlation: dict[str, Any] = correlation,
                         capture_started: threading.Event = capture_started,
@@ -439,21 +441,29 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 correlation["capture_reason"] = reason
                 directory = self._capture_directory(correlation)
                 correlation["profile_capture"] = {"status": "in_progress", "directory": str(directory)}
-                correlation["profile_capture"] = self.controller.capture_profiles(
-                    directory, profile_seconds=self.diagnostic_profile_seconds,
-                    capture_timeout=self.diagnostic_capture_timeout,
-                )
+                try:
+                    correlation["profile_capture"] = self.controller.capture_profiles(
+                        directory, profile_seconds=self.diagnostic_profile_seconds,
+                        capture_timeout=self.diagnostic_capture_timeout,
+                    )
+                except BaseException as exc:
+                    correlation["profile_capture"] = {
+                        "status": "failed", "directory": str(directory),
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
 
             def slow_capture(*, done: threading.Event = done,
-                             capture_batch: Callable[[str], None] = capture) -> None:
-                if not done.wait(self.diagnostic_slow_seconds):
+                             capture_batch: Callable[[str], None] = capture,
+                             started_ns: int = started_monotonic_ns) -> None:
+                deadline_ns = started_ns + int(self.diagnostic_slow_seconds * 1e9)
+                remaining_seconds = max(0.0, (deadline_ns - time.monotonic_ns()) / 1e9)
+                if not done.wait(remaining_seconds):
                     capture_batch("slow")
 
             watcher: threading.Thread | None = None
             if self.diagnostics_dir is not None:
                 watcher = threading.Thread(target=slow_capture, name=f"treedb-batch-diagnostic-{sequence}", daemon=True)
                 watcher.start()
-            correlation["started_monotonic_ns"] = time.monotonic_ns()
             response: Any | None = None
             failure: BaseException | None = None
             try:
