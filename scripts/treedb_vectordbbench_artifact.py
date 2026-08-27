@@ -2873,7 +2873,9 @@ def load_metrics_from_result(path: Path, index_name: str, case_type: str, artifa
         raise ValueError(f"canonical VDBBench result {path} has {len(matches)} entries for index {index_name!r}; expected one")
     if matches[0].get("label") != ":)":
         raise ValueError(f"canonical VDBBench result {path} did not report success")
-    metrics = matches[0].get("metrics") or {}
+    metrics = matches[0].get("metrics")
+    if not isinstance(metrics, dict):
+        raise ValueError(f"canonical VDBBench result {path} metrics must be an object")
     insert = positive_number(metrics.get("insert_duration"), "insert_duration")
     optimize = positive_number(metrics.get("optimize_duration"), "optimize_duration")
     load = positive_number(metrics.get("load_duration"), "load_duration")

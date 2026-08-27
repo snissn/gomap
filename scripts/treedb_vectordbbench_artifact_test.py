@@ -1497,22 +1497,27 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertTrue(any("PerformanceCustomDataset" in error for error in got["errors"]), got)
 
     def test_canonical_vdbbench_result_must_report_successful_load(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            manifest, _events = lifecycle_fixture(root)
-            result_path = root / "vdbbench-result.json"
-            result = json.loads(result_path.read_text(encoding="utf-8"))
-            result["results"][0]["label"] = ":("
-            harness.write_json(result_path, result)
-            result_sha = harness.sha256_file(result_path)
-            manifest["vdbbench"][0]["load_metrics"]["result_sha256"] = result_sha
-            manifest["lifecycle"]["task_config_binding"]["result_sha256"] = result_sha
-            harness.write_json(root / "manifest.json", manifest)
+        mutations = (
+            lambda row: row.__setitem__("label", ":("),
+            lambda row: row.__setitem__("metrics", "bad"),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                result_path = root / "vdbbench-result.json"
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+                mutate(result["results"][0])
+                harness.write_json(result_path, result)
+                result_sha = harness.sha256_file(result_path)
+                manifest["vdbbench"][0]["load_metrics"]["result_sha256"] = result_sha
+                manifest["lifecycle"]["task_config_binding"]["result_sha256"] = result_sha
+                harness.write_json(root / "manifest.json", manifest)
 
-            got = harness.validate_lifecycle_artifact(root)
+                got = harness.validate_lifecycle_artifact(root)
 
-        self.assertFalse(got["analyzable"], got)
-        self.assertTrue(any("unsuccessful or invalid" in error for error in got["errors"]), got)
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any("unsuccessful or invalid" in error for error in got["errors"]), got)
 
     def test_manifest_storage_requires_meaningful_identity_and_capacity(self) -> None:
         invalid_storage = (
