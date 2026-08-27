@@ -2,9 +2,10 @@
 """Capture a reproducible TreeDB VectorDBBench artifact.
 
 The harness owns a fresh TreeDB data directory, starts
-cmd/treedb-document-service, writes command/context manifests, runs a small
-route-proof smoke, and can optionally run selected VectorDBBench TreeDB rows
-from a checkout named by VECTORDBBENCH_DIR.
+cmd/treedb-document-service, writes command/context manifests, and can run a
+small route-proof smoke or selected VectorDBBench TreeDB rows from a checkout
+named by VECTORDBBENCH_DIR. Lifecycle mode proves the optimized route after a
+cold reopen instead of running the independent smoke.
 """
 
 from __future__ import annotations
@@ -1598,6 +1599,10 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     binary = _object(service.get("binary"), "manifest.service.binary", errors)
     identity = _object(lifecycle.get("identity"), "lifecycle.identity", errors)
     harness = _object(manifest.get("harness"), "manifest.harness", errors)
+    if harness.get("mode") != "vdbbench+lifecycle":
+        errors.append("manifest.harness.mode must be 'vdbbench+lifecycle' for lifecycle artifacts")
+    if manifest.get("route_proof") is not None:
+        errors.append("lifecycle artifacts must not claim the independent route_proof.json smoke")
     manifest_vdbbench = manifest.get("vdbbench")
     if not isinstance(manifest_vdbbench, list):
         errors.append("manifest.vdbbench must be a list")
@@ -2038,6 +2043,16 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         errors.append("lifecycle.result_status must be completed, partial, or interrupted")
     if status != "completed":
         completion_errors.append(f"result_status is {status!r}, not 'completed'")
+    if status == "completed":
+        lifecycle_route_proof = manifest.get("lifecycle_route_proof")
+        if lifecycle_route_proof != "lifecycle_route_response.json":
+            completion_errors.append(
+                "completed lifecycle must declare lifecycle_route_response.json route proof"
+            )
+        elif lifecycle_route_proof not in raw_by_path:
+            completion_errors.append(
+                "lifecycle_route_response.json must be a checksum-bound raw artifact"
+            )
     service_profile = service.get("profile")
     if (
         status == "completed"
@@ -3023,6 +3038,25 @@ def complete_lifecycle(
 
 
 def write_readme(state: HarnessState, args: argparse.Namespace) -> None:
+    if args.lifecycle:
+        lines = [
+            "# TreeDB VectorDBBench Lifecycle Artifact",
+            "",
+            "This artifact was produced by `scripts/treedb_vectordbbench_artifact.py`.",
+            "It is a reproducibility artifact, not public claim-quality throughput evidence unless the caller ran and documented a quiet-host benchmark matrix.",
+            "",
+            f"- generated_at: `{iso_now()}`",
+            "- manifest: `manifest.json`",
+            "- lifecycle: `lifecycle.jsonl`",
+            "- cold-reopen route proof: `lifecycle_route_response.json` (also embedded in the `route_verify` lifecycle stage)",
+            "- service log: `service.log`",
+            f"- data dir: `{args.data_dir}`",
+            f"- VDBBench load batch: `{args.num_per_batch}` documents",
+            "",
+            "VDBBench TreeDB rows include Python/client/HTTP/service overhead and must not be reported as native Go `B/op` or `allocs/op` evidence.",
+        ]
+        (state.root / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return
     proof = state.route_proof or {}
     exact = proof.get("exact_fp32", {})
     scalar = proof.get("scalar_u8_rerank", {})
@@ -3105,7 +3139,9 @@ def write_manifest(
             "log": "service.log",
         },
         "harness": {
-            "mode": "vdbbench" if args.skip_route_proof else ("vdbbench+smoke" if args.run_vdbbench else "smoke"),
+            "mode": "vdbbench+lifecycle" if args.lifecycle else (
+                "vdbbench" if args.skip_route_proof else ("vdbbench+smoke" if args.run_vdbbench else "smoke")
+            ),
             "rows": args.rows,
             "case_type": args.case_type,
             "k": args.k,
@@ -3130,6 +3166,12 @@ def write_manifest(
         "files_truncated": files_truncated,
         "data_dir_note": "treedb-data is artifact-owned and intentionally not enumerated in files; see service.data_dir.",
     }
+    if args.lifecycle:
+        manifest["lifecycle_route_proof"] = (
+            "lifecycle_route_response.json"
+            if (state.root / "lifecycle_route_response.json").is_file()
+            else None
+        )
     if state.lifecycle is not None:
         lifecycle = dict(state.lifecycle)
         lifecycle_path = state.root / str(lifecycle["file"])
@@ -3414,7 +3456,9 @@ def main(argv: list[str]) -> int:
         write_manifest(state, args=args, context=context, service_command=service_command)
         print(f"artifact_root={args.out}")
         print(f"manifest={args.out / 'manifest.json'}")
-        if not args.skip_route_proof:
+        if args.lifecycle:
+            print(f"lifecycle_route_proof={args.out / 'lifecycle_route_response.json'}")
+        elif not args.skip_route_proof:
             print(f"route_proof={args.out / 'route_proof.json'}")
         return 0
     except KeyboardInterrupt:

@@ -6,7 +6,9 @@ This harness creates a repeatable TreeDB VectorDBBench artifact root. It starts
 `treedb-document-service` with a fresh artifact-owned data directory, captures
 service logs and host/version context, optionally runs selected TreeDB
 VectorDBBench rows from a local `snissn/vectordbbench` checkout on that empty
-database, then runs a focused no-document route-proof smoke.
+database, then runs a focused no-document route-proof smoke. Lifecycle mode
+instead verifies the loaded optimized route after a real cold reopen; it does
+not run the independent smoke.
 
 The artifact is a reproducibility contract for downstream benchmark issues. A
 smoke artifact is **not** public claim-quality throughput evidence.
@@ -71,6 +73,12 @@ first service exits successfully, and terminal `teardown` only after the
 cold-reopened service exits successfully. The graceful-close timeout is
 configured with `--service-close-timeout` (300 seconds by default for 10M-scale
 reuse).
+
+Lifecycle manifests use harness mode `vdbbench+lifecycle`, leave the generic
+`route_proof` field empty, and name the checksum-bound cold-reopen response as
+`lifecycle_route_proof: lifecycle_route_response.json`. The same proof is
+embedded in the `route_verify` lifecycle event. The success output prints this
+lifecycle path and never advertises the independent `route_proof.json` smoke.
 
 For a completed lifecycle, both `reset` and `load_start` must report zero for
 all four row counts. `teardown` must be the final event and must retain the
@@ -206,7 +214,7 @@ aligned diagnostic companions: each must declare its nearest lifecycle
 before/after state window and is not silently included in the canonical wall
 measurement.
 
-## Route-proof sidecar contract
+## Independent smoke route-proof sidecar contract
 
 `route_proof.json` uses schema
 `treedb-vectordbbench-route-proof/v2` and contains:
@@ -221,6 +229,9 @@ measurement.
 - `scalar_u8_rerank.documents_fetched == 0`
 - `smoke_top_k <= scalar_u8_rerank.quantized_rerank_exact_score_calls <= scalar_u8_rerank.response.quantized_rerank_candidates`
 - `assertions[]` and top-level `passed` for machine-readable gating.
+
+This sidecar belongs only to non-lifecycle smoke runs. Lifecycle artifacts use
+the cold-reopen proof described above.
 
 The default remains the historical tiny `4 x 2`, `topK=2` smoke. Set only the
 three route-proof shape knobs when validating a campaign shape. The harness

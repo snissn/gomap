@@ -106,6 +106,8 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
     profile = root / "profiles" / "build.cpu.pprof"
     profile.parent.mkdir(parents=True)
     profile.write_bytes(valid_pprof_fixture())
+    lifecycle_route_response = root / "lifecycle_route_response.json"
+    lifecycle_route_response.write_text("{}\n", encoding="utf-8")
     stages = [
         "startup", "reset", "load_start", "load_end", "drain_checkpoint",
         "optimize_start", "optimize_end", "cache_prime", "cache_warm",
@@ -182,6 +184,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "binary": {"path": str(service_binary), "sha256": service_binary_sha256},
         },
         "harness": {
+            "mode": "vdbbench+lifecycle",
             "case_type": "Performance768D50K",
             "num_per_batch": 500,
             "num_concurrency": "32",
@@ -189,6 +192,8 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "ef_construction": 128,
         },
         "vdbbench": [],
+        "route_proof": None,
+        "lifecycle_route_proof": "lifecycle_route_response.json",
     }
     manifest["lifecycle"] = {
         "schema_version": harness.LIFECYCLE_SCHEMA,
@@ -203,7 +208,13 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "service_binary_sha256": service_binary_sha256,
             "config_sha256": harness.lifecycle_config_sha256(manifest),
         },
-        "raw_artifacts": [{"path": "profiles/build.cpu.pprof", "sha256": harness.sha256_file(profile)}],
+        "raw_artifacts": [
+            {"path": "profiles/build.cpu.pprof", "sha256": harness.sha256_file(profile)},
+            {
+                "path": "lifecycle_route_response.json",
+                "sha256": harness.sha256_file(lifecycle_route_response),
+            },
+        ],
         "profiles": [{
             "path": "profiles/build.cpu.pprof",
             "sha256": harness.sha256_file(profile),
@@ -977,6 +988,21 @@ class LifecycleValidatorTest(unittest.TestCase):
             "reopened": 50_000,
         })
         self.assertEqual(got["t_ready_seconds"], 8.0)
+
+    def test_lifecycle_manifest_rejects_generic_smoke_route_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            manifest["harness"]["mode"] = "vdbbench+smoke"
+            manifest["route_proof"] = "route_proof.json"
+            manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("vdbbench+lifecycle" in error for error in got["errors"]), got)
+        self.assertTrue(any("independent route_proof.json" in error for error in got["errors"]), got)
 
     def test_manifest_vdbbench_must_be_a_list(self) -> None:
         for invalid in (None, {"row": "exact"}):
@@ -2047,7 +2073,10 @@ class LifecycleValidatorTest(unittest.TestCase):
             profile = root / "profiles" / "build.heap.pprof"
             profile.write_bytes(valid_heap_pprof_fixture())
             checksum = harness.sha256_file(profile)
-            manifest["lifecycle"]["raw_artifacts"] = [{"path": "profiles/build.heap.pprof", "sha256": checksum}]
+            manifest["lifecycle"]["raw_artifacts"] = [
+                {"path": "profiles/build.heap.pprof", "sha256": checksum},
+                manifest["lifecycle"]["raw_artifacts"][1],
+            ]
             manifest["lifecycle"]["profiles"] = [{
                 "path": "profiles/build.heap.pprof",
                 "sha256": checksum,
@@ -2134,7 +2163,10 @@ class LifecycleValidatorTest(unittest.TestCase):
             trace = root / "profiles" / "build.trace.out"
             trace.write_bytes(valid_trace_fixture())
             checksum = harness.sha256_file(trace)
-            manifest["lifecycle"]["raw_artifacts"] = [{"path": "profiles/build.trace.out", "sha256": checksum}]
+            manifest["lifecycle"]["raw_artifacts"] = [
+                {"path": "profiles/build.trace.out", "sha256": checksum},
+                manifest["lifecycle"]["raw_artifacts"][1],
+            ]
             manifest["lifecycle"]["profiles"] = [{
                 "path": "profiles/build.trace.out",
                 "sha256": checksum,
@@ -2173,9 +2205,10 @@ class LifecycleValidatorTest(unittest.TestCase):
                 perf = root / "profiles" / "build.perf.data"
                 perf.write_bytes(payload)
                 checksum = harness.sha256_file(perf)
-                manifest["lifecycle"]["raw_artifacts"] = [{
-                    "path": "profiles/build.perf.data", "sha256": checksum,
-                }]
+                manifest["lifecycle"]["raw_artifacts"] = [
+                    {"path": "profiles/build.perf.data", "sha256": checksum},
+                    manifest["lifecycle"]["raw_artifacts"][1],
+                ]
                 manifest["lifecycle"]["profiles"] = [{
                     "path": "profiles/build.perf.data",
                     "sha256": checksum,
@@ -2851,6 +2884,7 @@ class ManifestFileListTest(unittest.TestCase):
 
             manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
             self.assertIsNone(manifest["vdbbench_load_metrics"])
+            self.assertNotIn("lifecycle_route_proof", manifest)
 
     def test_manifest_uses_service_identity_captured_before_launch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2870,6 +2904,26 @@ class ManifestFileListTest(unittest.TestCase):
 
             manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["service"]["binary"], identity)
+
+    def test_lifecycle_manifest_and_readme_name_cold_reopen_route_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lifecycle_route_response.json").write_text("{}\n", encoding="utf-8")
+            args = harness.parse_args([])
+            args.lifecycle = True
+            state = harness.HarnessState(root=root)
+
+            harness.write_readme(state, args)
+            harness.write_manifest(state, args=args, context={}, service_command=None)
+
+            manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            readme = (root / "README.md").read_text(encoding="utf-8")
+
+        self.assertEqual(manifest["harness"]["mode"], "vdbbench+lifecycle")
+        self.assertIsNone(manifest["route_proof"])
+        self.assertEqual(manifest["lifecycle_route_proof"], "lifecycle_route_response.json")
+        self.assertIn("lifecycle_route_response.json", readme)
+        self.assertNotIn("route_proof.json", readme)
 
 
 if __name__ == "__main__":
