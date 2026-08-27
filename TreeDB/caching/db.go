@@ -9085,6 +9085,7 @@ type DB struct {
 	checkpointStageWALRotate                                     checkpointStageStats
 	checkpointStageValueLogFlush                                 checkpointStageStats
 	checkpointStageCommandWALPublish                             checkpointStageStats
+	checkpointStageCommandWALCleanup                             checkpointStageStats
 	checkpointStageFlushAll                                      checkpointStageStats
 	checkpointStageLeafValueLogSync                              checkpointStageStats
 	checkpointStageReducerPublish                                checkpointStageStats
@@ -24401,7 +24402,7 @@ func (db *DB) checkpointContext(ctx context.Context) error {
 				if err != nil {
 					return err
 				}
-				if err := db.cleanupCommandWALCheckpoint(true); err != nil {
+				if err := db.cleanupCommandWALCheckpointTimed(true); err != nil {
 					return err
 				}
 			}
@@ -24633,7 +24634,7 @@ func (db *DB) checkpointContext(ctx context.Context) error {
 		return commitErr
 	}
 	if commandWALAppliedLSN != 0 || commandWALPublishCovered {
-		if err := db.cleanupCommandWALCheckpoint(true); err != nil {
+		if err := db.cleanupCommandWALCheckpointTimed(true); err != nil {
 			return err
 		}
 	}
@@ -24700,6 +24701,12 @@ func (db *DB) checkpointContext(ctx context.Context) error {
 	recordCheckpointStageSince(&db.checkpointStagePostMaintenance, postMaintenanceStart)
 
 	return nil
+}
+
+func (db *DB) cleanupCommandWALCheckpointTimed(sync bool) error {
+	commandWALCleanupStart := time.Now()
+	defer recordCheckpointStageSince(&db.checkpointStageCommandWALCleanup, commandWALCleanupStart)
+	return db.cleanupCommandWALCheckpoint(sync)
 }
 
 func (db *DB) publishCommandWALCheckpointApplied(appliedLSN uint64, ranges []backenddb.CommandWALLSNRange) (bool, error) {
@@ -30731,6 +30738,7 @@ func (db *DB) Stats() map[string]string {
 	appendCheckpointStageStats(stats, "wal_rotate", &db.checkpointStageWALRotate)
 	appendCheckpointStageStats(stats, "value_log_flush", &db.checkpointStageValueLogFlush)
 	appendCheckpointStageStats(stats, "command_wal_publish", &db.checkpointStageCommandWALPublish)
+	appendCheckpointStageStats(stats, "command_wal_cleanup", &db.checkpointStageCommandWALCleanup)
 	appendCheckpointStageStats(stats, "flush_all", &db.checkpointStageFlushAll)
 	appendCheckpointStageStats(stats, "leaf_value_log_sync", &db.checkpointStageLeafValueLogSync)
 	appendCheckpointStageStats(stats, "reducer_publish", &db.checkpointStageReducerPublish)

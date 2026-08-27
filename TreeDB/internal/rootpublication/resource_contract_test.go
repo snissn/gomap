@@ -816,6 +816,9 @@ func TestStableResourceSetRetainsRotatedIdentitiesAndGreatestFrontier(t *testing
 	if got := set.FrontierFor(first.Identity(), 1).Bytes; got != 16 {
 		t.Fatalf("coalesced frontier=%d want 16", got)
 	}
+	if count, bytes := set.PhysicalSummary(); count != 3 || bytes != 32 {
+		t.Fatalf("physical summary=(%d,%d) want (3,32)", count, bytes)
+	}
 }
 
 func TestStableResourceSetUnionsExactRIDMembershipAndExposesCoalescedDescriptor(t *testing.T) {

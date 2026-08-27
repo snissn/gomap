@@ -977,8 +977,24 @@ func (db *DB) captureRebuiltIndexDurableResourcesV1(p *pager.Pager, meta page.Me
 }
 
 func (db *DB) captureRebuiltIndexDurableResourcesFromV1(p *pager.Pager, meta page.MetaPageBody, source *rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, error) {
+	resources, _, err := db.captureRebuiltIndexDurableResourcesWithWorkV1(p, meta, source)
+	return resources, err
+}
+
+// rebuiltDurableResourceWorkV1 describes one completed rebuilt-index resource
+// capture.  It deliberately counts external segment identities, not outer
+// leaves: the shared leaf-reference scanner exposes segment IDs but not a
+// stable outer-leaf record identity.
+type rebuiltDurableResourceWorkV1 struct {
+	ExactCandidateScan            bool
+	ReusedNonValueLogDescriptors  uint64
+	UniqueScannedExternalSegments uint64
+}
+
+func (db *DB) captureRebuiltIndexDurableResourcesWithWorkV1(p *pager.Pager, meta page.MetaPageBody, source *rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, rebuiltDurableResourceWorkV1, error) {
+	var work rebuiltDurableResourceWorkV1
 	if db == nil || db.valueLogManager == nil || p == nil || meta.UserRootPageID < 2 || meta.SystemRootPageID < 2 {
-		return nil, fmt.Errorf("%w: rebuilt index dependency scanner unavailable", rootpublication.ErrUnresolvedResource)
+		return nil, work, fmt.Errorf("%w: rebuilt index dependency scanner unavailable", rootpublication.ErrUnresolvedResource)
 	}
 	set := db.valueLogManager.CurrentSetNoRefresh()
 	state := DBState{
@@ -995,8 +1011,10 @@ func (db *DB) captureRebuiltIndexDurableResourcesFromV1(p *pager.Pager, meta pag
 	references, scanErr := db.scanCandidateExternalReferencesV1(snapshot)
 	closeErr := snapshot.Close()
 	if scanErr != nil || closeErr != nil {
-		return nil, errors.Join(scanErr, closeErr)
+		return nil, work, errors.Join(scanErr, closeErr)
 	}
+	work.ExactCandidateScan = true
+	work.UniqueScannedExternalSegments = uint64(len(references))
 	exactPackedFileIDs := make(map[uint32]struct{})
 	for _, descriptor := range source.Descriptors() {
 		if descriptor.Kind() == rootpublication.ResourceOuterLeafPack && descriptor.Generation() <= uint64(^uint32(0)) {
@@ -1006,19 +1024,19 @@ func (db *DB) captureRebuiltIndexDurableResourcesFromV1(p *pager.Pager, meta pag
 	for fileID := range exactPackedFileIDs {
 		delete(references, fileID)
 	}
-
 	inherited, err := rootpublication.CloneStableResourceSetExcludingKinds(
 		source,
 		rootpublication.ResourceValueLog,
 		rootpublication.ResourceOuterLeafLog,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("clone rebuilt-index durable resources: %w", err)
+		return nil, work, fmt.Errorf("clone rebuilt-index durable resources: %w", err)
 	}
+	work.ReusedNonValueLogDescriptors = uint64(inherited.Len())
 	fresh, err := db.captureRegisteredDurableValueLogResourcesV1(references)
 	if err != nil {
 		inherited.Release()
-		return nil, err
+		return nil, work, err
 	}
 	builder := rootpublication.NewStableResourceSetBuilder()
 	defer builder.Abandon()
@@ -1036,18 +1054,18 @@ func (db *DB) captureRebuiltIndexDurableResourcesFromV1(p *pager.Pager, meta pag
 		}
 		if err := builder.Merge(resources); err != nil {
 			resources.Release()
-			return nil, fmt.Errorf("merge %s rebuilt-index durable resources: %w", closure.label, err)
+			return nil, work, fmt.Errorf("merge %s rebuilt-index durable resources: %w", closure.label, err)
 		}
 	}
 	resources, err := builder.Freeze()
 	if err != nil {
-		return nil, err
+		return nil, work, err
 	}
 	if resources.Len() == 0 {
 		resources.Release()
-		return nil, nil
+		return nil, work, nil
 	}
-	return resources, nil
+	return resources, work, nil
 }
 
 // prepareDurableRootCandidateV1 validates and freezes one exact publication

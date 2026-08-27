@@ -218,21 +218,26 @@ type DB struct {
 	vacuumCutoverDone      chan struct{}
 	vacuum                 vacuumRecorder
 	systemRootPublishEpoch atomic.Uint64
+	vacuumOnlineAttemptID  atomic.Uint64
 	vacuumOnlineLast       atomic.Pointer[VacuumOnlineStats]
 	// Package-private deterministic hooks for online-vacuum concurrency tests.
-	vacuumCollectionClonePageHook func(vacuumCollectionClonePhase, uint64)
-	vacuumBeforeCutoverHook       func(int)
-	vacuumBeforeRecorderFenceHook func()
-	vacuumPagerSyncHook           func(vacuumPagerSyncPhase)
-	vacuumPreflushHook            func() error
-	vacuumReplacementRuntimeHook  func(*rootPublicationRuntimeV1) error
-	meta                          page.MetaPageBody
-	metaPageID                    uint64
-	durableRoot                   durableRootRuntimeV1
-	entryRevisionFloor            atomic.Uint64
-	commandJournal                *commitlog.CommandJournal
-	conditionalActiveTxnCount     atomic.Int64
-	conditionalOracle             conditionalConflictOracle
+	vacuumCollectionClonePageHook    func(vacuumCollectionClonePhase, uint64)
+	vacuumBeforeCutoverHook          func(int)
+	vacuumAfterCutoverLockHook       func()
+	vacuumBeforeMaintenanceHook      func()
+	vacuumBeforeRecorderFenceHook    func()
+	vacuumPagerSyncHook              func(vacuumPagerSyncPhase)
+	vacuumPreflushHook               func() error
+	vacuumReplacementRuntimeHook     func(*rootPublicationRuntimeV1) error
+	vacuumOldRootPublicationStopHook func() error
+	vacuumAfterSwapPublishHook       func(VacuumOnlineStats)
+	meta                             page.MetaPageBody
+	metaPageID                       uint64
+	durableRoot                      durableRootRuntimeV1
+	entryRevisionFloor               atomic.Uint64
+	commandJournal                   *commitlog.CommandJournal
+	conditionalActiveTxnCount        atomic.Int64
+	conditionalOracle                conditionalConflictOracle
 
 	state atomic.Pointer[DBState]
 

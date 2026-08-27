@@ -3003,6 +3003,31 @@ func (set *StableResourceSet) Len() int {
 	return len(set.entries)
 }
 
+// PhysicalSummary returns the count and total frontier bytes of coalesced
+// physical resources without allocating descriptor views.
+func (set *StableResourceSet) PhysicalSummary() (count, bytes uint64) {
+	if set == nil {
+		return 0, 0
+	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	add := func(entry *stableResourceEntry) bool {
+		count++
+		bytes += entry.frontier.Bytes
+		return true
+	}
+	if set.kindViews != nil {
+		for _, view := range set.kindViews {
+			rangeStableResourceLogicalIndex(view.logical, add)
+		}
+		return count, bytes
+	}
+	for i := range set.entries {
+		add(&set.entries[i])
+	}
+	return count, bytes
+}
+
 func (set *StableResourceSet) Tokens() []*StableResourceToken {
 	if set == nil {
 		return nil

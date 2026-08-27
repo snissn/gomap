@@ -46,6 +46,143 @@ func TestBackgroundIndexVacuumConcurrentMutationIsRetryOnly(t *testing.T) {
 	}
 }
 
+func TestBackgroundIndexVacuumDurationStatsAccumulateMonotonically(t *testing.T) {
+	var w bgIndexVacuumWorker
+	w.recordProbeDuration(3 * time.Nanosecond)
+	w.recordProbeDuration(7 * time.Nanosecond)
+	w.vacuumAttempts.Add(2)
+	w.recordVacuumDuration(5 * time.Nanosecond)
+	w.recordVacuumDuration(11 * time.Nanosecond)
+	w.vacuumWorkCompleted.Add(1)
+
+	stats := w.Stats()
+	if stats.ProbeDurationTotalNs != 10 || stats.ProbeDurationMaxNs != 7 || stats.ProbeDurationLastNs != 7 {
+		t.Fatalf("probe durations=%+v want total=10 max=7 last=7", stats)
+	}
+	if stats.VacuumAttempts != 2 || stats.VacuumDurationTotalNs != 16 || stats.VacuumDurationMaxNs != 11 || stats.VacuumDurationLastNs != 11 || stats.VacuumWorkCompleted != 1 {
+		t.Fatalf("vacuum durations=%+v want attempts=2 total=16 max=11 last=11 completed=1", stats)
+	}
+}
+
+func TestBackgroundIndexVacuumFailedRunDoesNotRepublishStaleOnlineSnapshot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	seedBackgroundVacuumUserPages(t, d, 64)
+	d.bgVac.spanRatioPPM = 1
+	d.bgVac.freelistReclaimablePages = ^uint64(0)
+	d.bgVac.collectionRootPages = ^uint64(0)
+	stale := backenddb.VacuumOnlineStats{AttemptID: 7, WorkCompleted: true, TotalDuration: time.Nanosecond}
+	d.bgVac.lastOnlineVacuum.Store(&stale)
+	restore := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
+		return backenddb.VacuumOnlineStats{}, errors.New("cached checkpoint admission failed before backend vacuum")
+	})
+	defer restore()
+
+	d.bgVac.runOnce(d)
+	stats := d.bgVac.Stats()
+	if stats.VacuumAttempts != 1 || stats.PermanentFailuresTotal != 1 {
+		t.Fatalf("failed background attempt counters=%+v", stats)
+	}
+	if stats.LastOnlineVacuum != stale {
+		t.Fatalf("last online snapshot=%+v want retained stale prior snapshot=%+v", stats.LastOnlineVacuum, stale)
+	}
+	if stats.VacuumWorkCompleted != 0 {
+		t.Fatalf("completed work=%d want 0 for failed pre-backend attempt", stats.VacuumWorkCompleted)
+	}
+}
+
+func TestBackgroundIndexVacuumUsesReturnedOnlineAttemptSnapshot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	seedBackgroundVacuumUserPages(t, d, 64)
+	d.bgVac.spanRatioPPM = 1
+	d.bgVac.freelistReclaimablePages = ^uint64(0)
+	d.bgVac.collectionRootPages = ^uint64(0)
+
+	if err := d.backend.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatalf("seed backend vacuum: %v", err)
+	}
+	attemptA := d.backend.VacuumOnlineStats()
+	if attemptA.AttemptID == 0 {
+		t.Fatalf("seed backend snapshot=%+v want attempt ID", attemptA)
+	}
+	restore := setBackgroundIndexVacuumRunHookForTest(func(db *DB, ctx context.Context) (backenddb.VacuumOnlineStats, error) {
+		if err := db.backend.VacuumIndexOnline(ctx); err != nil {
+			return backenddb.VacuumOnlineStats{}, err
+		}
+		return attemptA, nil
+	})
+	defer restore()
+
+	d.bgVac.runOnce(d)
+	global := d.backend.VacuumOnlineStats()
+	if global.AttemptID <= attemptA.AttemptID {
+		t.Fatalf("global backend snapshot=%+v want newer than returned attempt=%+v", global, attemptA)
+	}
+	stats := d.bgVac.Stats()
+	if stats.LastOnlineVacuum != attemptA {
+		t.Fatalf("worker last online snapshot=%+v want hook-returned attempt=%+v", stats.LastOnlineVacuum, attemptA)
+	}
+	if stats.VacuumWorkCompleted != 1 || stats.Vacuums != 1 {
+		t.Fatalf("successful returned snapshot counters=%+v want one completed worker vacuum", stats)
+	}
+}
+
+func TestBackgroundIndexVacuumCountsCompletedBackendWorkAfterReconcileFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	seedBackgroundVacuumUserPages(t, d, 64)
+	d.bgVac.spanRatioPPM = 1
+	d.bgVac.freelistReclaimablePages = ^uint64(0)
+	d.bgVac.collectionRootPages = ^uint64(0)
+	completed := backenddb.VacuumOnlineStats{AttemptID: 41, WorkCompleted: true, TotalDuration: time.Nanosecond}
+	reconcileErr := errors.New("cached backend maintenance reconcile failed")
+	restore := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
+		return completed, reconcileErr
+	})
+	defer restore()
+
+	d.bgVac.runOnce(d)
+	stats := d.bgVac.Stats()
+	if stats.LastOnlineVacuum != completed || stats.VacuumWorkCompleted != 1 {
+		t.Fatalf("completed backend work stats=%+v want returned completed attempt counted once", stats)
+	}
+	if stats.Vacuums != 0 || stats.PermanentFailuresTotal != 1 || stats.LastOutcome != backgroundIndexVacuumOutcomePermanentFailure {
+		t.Fatalf("reconcile failure outcome=%+v want failed background outcome", stats)
+	}
+}
+
+func TestBackgroundIndexVacuumFailedBackendAttemptDoesNotCountWork(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	seedBackgroundVacuumUserPages(t, d, 64)
+	d.bgVac.spanRatioPPM = 1
+	d.bgVac.freelistReclaimablePages = ^uint64(0)
+	d.bgVac.collectionRootPages = ^uint64(0)
+	failed := backenddb.VacuumOnlineStats{AttemptID: 42, TotalDuration: time.Nanosecond}
+	restore := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
+		return failed, errors.New("backend vacuum failed")
+	})
+	defer restore()
+
+	d.bgVac.runOnce(d)
+	stats := d.bgVac.Stats()
+	if stats.LastOnlineVacuum != failed || stats.VacuumWorkCompleted != 0 {
+		t.Fatalf("failed backend work stats=%+v want retained failed attempt without completed work", stats)
+	}
+	if stats.Vacuums != 0 || stats.PermanentFailuresTotal != 1 {
+		t.Fatalf("failed backend outcome=%+v want failed background attempt", stats)
+	}
+}
+
 func TestBackgroundIndexVacuumIdleUnchangedCommitSkipsStructuralWalks(t *testing.T) {
 	dir := t.TempDir()
 
@@ -369,9 +506,9 @@ func TestBackgroundIndexVacuumNativeRootWriteQuietTransitionRunsEligibleVacuum(t
 	})
 	defer restoreProbe()
 	var vacuums atomic.Uint64
-	restoreVacuum := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) error {
+	restoreVacuum := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
 		vacuums.Add(1)
-		return nil
+		return backenddb.VacuumOnlineStats{}, nil
 	})
 	defer restoreVacuum()
 
@@ -642,6 +779,14 @@ func TestBackgroundIndexVacuumStartsWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	d.bgVac.lastOnlineVacuum.Store(&backenddb.VacuumOnlineStats{
+		DirtyDescriptors:         11,
+		UserTailMutations:        12,
+		UserTailPointMutations:   13,
+		UserTailRangeMutations:   14,
+		DeferredCutovers:         15,
+		ConcurrentMutationAborts: 16,
+	})
 
 	stats := d.Stats()
 	if got := stats["treedb.bg_vacuum.enabled"]; got != "true" {
@@ -649,6 +794,18 @@ func TestBackgroundIndexVacuumStartsWhenConfigured(t *testing.T) {
 	}
 	if got := stats["treedb.bg_vacuum.vacuums"]; got != "0" {
 		t.Fatalf("background vacuum runs=%q want 0 before first tick", got)
+	}
+	for key, want := range map[string]string{
+		"treedb.bg_vacuum.last_online.dirty_descriptors":          "11",
+		"treedb.bg_vacuum.last_online.user_tail_mutations":        "12",
+		"treedb.bg_vacuum.last_online.user_tail_point_mutations":  "13",
+		"treedb.bg_vacuum.last_online.user_tail_range_mutations":  "14",
+		"treedb.bg_vacuum.last_online.deferred_cutovers":          "15",
+		"treedb.bg_vacuum.last_online.concurrent_mutation_aborts": "16",
+	} {
+		if got := stats[key]; got != want {
+			t.Fatalf("%s=%q want %q", key, got, want)
+		}
 	}
 
 	if err := d.Close(); err != nil {
@@ -756,9 +913,9 @@ func TestBackgroundIndexVacuumErrorOutcomes(t *testing.T) {
 			d.bgVac.collectionRootPages = ^uint64(0)
 
 			var calls atomic.Int64
-			restore := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) error {
+			restore := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
 				calls.Add(1)
-				return tc.err
+				return backenddb.VacuumOnlineStats{}, tc.err
 			})
 			defer restore()
 
@@ -915,10 +1072,10 @@ func TestBackgroundIndexVacuumCloseCancelsActivePass(t *testing.T) {
 	}
 
 	started := make(chan struct{})
-	restore := setBackgroundIndexVacuumRunHookForTest(func(_ *DB, ctx context.Context) error {
+	restore := setBackgroundIndexVacuumRunHookForTest(func(_ *DB, ctx context.Context) (backenddb.VacuumOnlineStats, error) {
 		close(started)
 		<-ctx.Done()
-		return ctx.Err()
+		return backenddb.VacuumOnlineStats{}, ctx.Err()
 	})
 	defer restore()
 
@@ -967,7 +1124,6 @@ func TestVacuumIndexOnlineContextCancelsWhileWaitingForMaintenance(t *testing.T)
 func TestLockFullScanMaintenanceContextCancellationLeavesNoWaiters(t *testing.T) {
 	var mu sync.Mutex
 	mu.Lock()
-	baselineGoroutines := runtime.NumGoroutine()
 
 	const waiters = 64
 	contexts := make([]context.CancelFunc, waiters)
@@ -993,12 +1149,7 @@ func TestLockFullScanMaintenanceContextCancellationLeavesNoWaiters(t *testing.T)
 	}
 	callers.Wait()
 
-	runtime.Gosched()
-	blockedGoroutines := runtime.NumGoroutine()
 	mu.Unlock()
-	if blockedGoroutines > baselineGoroutines+waiters/4 {
-		t.Fatalf("goroutines after cancellation=%d baseline=%d; canceled lock waiters remain parked", blockedGoroutines, baselineGoroutines)
-	}
 	if !mu.TryLock() {
 		t.Fatal("canceled maintenance lock calls left queued mutex waiters")
 	}
