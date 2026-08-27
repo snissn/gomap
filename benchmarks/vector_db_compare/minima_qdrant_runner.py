@@ -41,6 +41,7 @@ ARTIFACT_SCHEMA = "treedb_rag_application/minima_v4"
 SERVER_VERSION = CLIENT_VERSION = "1.19.0"
 READINESS_SNAPSHOT_LIMIT = 256
 READINESS_RESOURCE_INTERVAL_SECONDS = 5.0
+READINESS_DIAGNOSTIC_TIMEOUT_SECONDS = 1.0
 PRODUCTION_HNSW_CONFIG = {
     "m": 16, "ef_construct": 100, "full_scan_threshold": 10000,
     "max_indexing_threads": 0, "on_disk": False,
@@ -1143,18 +1144,38 @@ class QdrantMinimaRunner:
             "end": segments[-1]["end"],
         }
 
-    def optimization_snapshot(self) -> dict[str, Any]:
+    def optimization_snapshot(self, timeout_seconds: float | None = None) -> dict[str, Any]:
         assert self.client is not None
         method = getattr(self.client, "get_optimizations", None)
         if not callable(method):
             return {"available": False, "reason": "qdrant-client get_optimizations unavailable"}
         try:
-            return {
-                "available": True,
-                "detail": model_value(method(
-                    collection_name=self.collection, completed_limit=16,
-                )),
-            }
+            if timeout_seconds is None:
+                detail = method(collection_name=self.collection, completed_limit=16)
+            elif timeout_seconds <= 0:
+                return {"available": False, "reason": "readiness deadline has no optimizer diagnostic budget"}
+            else:
+                remote = getattr(self.client, "http", None)
+                api_client = getattr(remote, "client", None)
+                response_type = getattr(self.models, "InlineResponse20011", None)
+                request = getattr(api_client, "request", None)
+                if remote is None:
+                    # Test/local clients have no remote HTTP transport.
+                    detail = method(collection_name=self.collection, completed_limit=16)
+                elif not callable(request) or response_type is None:
+                    return {
+                        "available": False,
+                        "reason": "qdrant-client deadline-bounded optimizer transport unavailable",
+                    }
+                else:
+                    response = request(
+                        type_=response_type, method="GET",
+                        url="/collections/{collection_name}/optimizations",
+                        path_params={"collection_name": self.collection},
+                        params={"completed_limit": 16}, timeout=timeout_seconds,
+                    )
+                    detail = getattr(response, "result", response)
+            return {"available": True, "detail": model_value(detail)}
         except Exception as exc:
             return {
                 "available": False,
@@ -1275,6 +1296,19 @@ class QdrantMinimaRunner:
                 )
             )
 
+        def bounded_optimization_snapshot() -> dict[str, Any]:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {
+                    "available": False,
+                    "reason": "readiness deadline has no optimizer diagnostic budget",
+                }
+            # HTTPX applies a timeout to connect/read/write/pool separately.
+            # Divide the remaining wall budget across those phases and cap the
+            # optional diagnostic so it cannot inherit the operation timeout.
+            timeout_seconds = min(READINESS_DIAGNOSTIC_TIMEOUT_SECONDS, remaining / 4)
+            return self.optimization_snapshot(timeout_seconds)
+
         while time.monotonic() < deadline:
             now = time.monotonic()
             resource_index: int | None = None
@@ -1286,9 +1320,21 @@ class QdrantMinimaRunner:
                     ),
                 })
                 resource_index = len(session["resource_samples"]) - 1
-                log_sample = {"elapsed_seconds": now - started, **self.server_log_snapshot()}
-                if not session["server_log_samples"] or log_sample != session["server_log_samples"][-1]:
-                    session["server_log_samples"].append(log_sample)
+                log_payload = self.server_log_snapshot()
+                if (
+                    not session["server_log_samples"]
+                    or any(
+                        session["server_log_samples"][-1].get(key) != value
+                        for key, value in log_payload.items()
+                    )
+                    or any(
+                        key != "elapsed_seconds" and key not in log_payload
+                        for key in session["server_log_samples"][-1]
+                    )
+                ):
+                    session["server_log_samples"].append({
+                        "elapsed_seconds": now - started, **log_payload,
+                    })
                 next_resource_sample = now + READINESS_RESOURCE_INTERVAL_SECONDS
             elif session["resource_samples"]:
                 resource_index = len(session["resource_samples"]) - 1
@@ -1300,7 +1346,7 @@ class QdrantMinimaRunner:
                     "sequence": len(session["snapshots"]),
                     "elapsed_seconds": now - started,
                     "collection_error": f"{type(exc).__name__}: {exc}",
-                    "optimizations": self.optimization_snapshot(),
+                    "optimizations": bounded_optimization_snapshot(),
                     "resource_sample_index": resource_index,
                 }
                 session["snapshots"].append(snapshot)
@@ -1319,7 +1365,7 @@ class QdrantMinimaRunner:
                 "segments_count": getattr(info, "segments_count", None),
                 "payload_schema": model_value(schema),
                 "config": model_value(getattr(info, "config", None)),
-                "optimizations": self.optimization_snapshot(),
+                "optimizations": bounded_optimization_snapshot(),
                 "resource_sample_index": resource_index,
             }
             snapshots = session["snapshots"]

@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -139,16 +140,43 @@ type minimaRawNativeRouteResponse struct {
 	VisibilityRetries    int    `json:"visibility_retries"`
 }
 
+type minimaRawQdrantConfigurationTransition struct {
+	Boundary                string          `json:"boundary"`
+	Attempted               bool            `json:"attempted"`
+	Completed               bool            `json:"completed"`
+	Error                   string          `json:"error,omitempty"`
+	InitialUploadHNSW       json.RawMessage `json:"initial_upload_hnsw"`
+	InitialUploadOptimizers json.RawMessage `json:"initial_upload_optimizers"`
+	ProductionHNSW          json.RawMessage `json:"production_hnsw"`
+	ProductionOptimizers    json.RawMessage `json:"production_optimizers"`
+}
+
+type minimaRawQdrantReadinessSession struct {
+	Phase           string            `json:"phase"`
+	DeadlineSeconds float64           `json:"deadline_seconds"`
+	Snapshots       []json.RawMessage `json:"snapshots"`
+	ResourceSamples []json.RawMessage `json:"resource_samples"`
+	Outcome         string            `json:"outcome"`
+	Disposition     string            `json:"disposition"`
+}
+
+type minimaRawQdrantReadiness struct {
+	Sessions                  []minimaRawQdrantReadinessSession `json:"sessions"`
+	LatestNonReadyDisposition string                            `json:"latest_non_ready_disposition"`
+}
+
 type minimaRawBackendEvidence struct {
-	PhaseLatencyDistributions map[string]minimaRawLatencyDistribution `json:"phase_latency_distributions,omitempty"`
-	Events                    []json.RawMessage                       `json:"events,omitempty"`
-	TimedOverlap              minimaRawTimedOverlap                   `json:"timed_overlap"`
-	FinalScrollState          minimaRawFinalState                     `json:"final_scroll_state"`
-	ResourceMeasurement       minimaRawResourceMeasurement            `json:"resource_measurement"`
-	RestartBoundary           minimaRawRestartBoundary                `json:"restart_boundary"`
-	ServiceLog                minimaRawServiceLog                     `json:"service_log,omitempty"`
-	ResourceAvailability      map[string]map[string]string            `json:"resource_availability,omitempty"`
-	NativeRouteResponses      map[string]json.RawMessage              `json:"native_route_responses,omitempty"`
+	PhaseLatencyDistributions         map[string]minimaRawLatencyDistribution `json:"phase_latency_distributions,omitempty"`
+	Events                            []json.RawMessage                       `json:"events,omitempty"`
+	TimedOverlap                      minimaRawTimedOverlap                   `json:"timed_overlap"`
+	FinalScrollState                  minimaRawFinalState                     `json:"final_scroll_state"`
+	ResourceMeasurement               minimaRawResourceMeasurement            `json:"resource_measurement"`
+	RestartBoundary                   minimaRawRestartBoundary                `json:"restart_boundary"`
+	ServiceLog                        minimaRawServiceLog                     `json:"service_log,omitempty"`
+	ResourceAvailability              map[string]map[string]string            `json:"resource_availability,omitempty"`
+	NativeRouteResponses              map[string]json.RawMessage              `json:"native_route_responses,omitempty"`
+	CollectionConfigurationTransition minimaRawQdrantConfigurationTransition  `json:"collection_configuration_transition"`
+	Readiness                         minimaRawQdrantReadiness                `json:"readiness"`
 }
 
 type minimaPayloadEvidence struct {
@@ -410,6 +438,50 @@ func validateMinimaResourceMeasurement(backend string, resource minimaRawResourc
 	}
 	return nil
 }
+func minimaRawJSONMatchesConfiguration(raw json.RawMessage, encoded string) bool {
+	if len(raw) == 0 || encoded == "" {
+		return false
+	}
+	var actual, expected any
+	if json.Unmarshal(raw, &actual) != nil || json.Unmarshal([]byte(encoded), &expected) != nil {
+		return false
+	}
+	return reflect.DeepEqual(actual, expected)
+}
+
+func validateMinimaQdrantReadiness(raw minimaRawBackendEvidence, backend minimaBackendEvidence) error {
+	transition := raw.CollectionConfigurationTransition
+	if transition.Boundary != "initial_batch_insert_to_warmup_search" ||
+		!transition.Attempted || !transition.Completed || transition.Error != "" {
+		return fmt.Errorf("minima artifact: Qdrant production configuration transition is incomplete")
+	}
+	for _, check := range []struct {
+		raw json.RawMessage
+		key string
+	}{
+		{transition.InitialUploadHNSW, "initial_upload_hnsw"},
+		{transition.InitialUploadOptimizers, "initial_upload_optimizers"},
+		{transition.ProductionHNSW, "production_hnsw"},
+		{transition.ProductionOptimizers, "production_optimizers"},
+	} {
+		if !minimaRawJSONMatchesConfiguration(check.raw, backend.Configuration[check.key]) {
+			return fmt.Errorf("minima artifact: Qdrant configuration transition disagrees with %s", check.key)
+		}
+	}
+	readiness := raw.Readiness
+	if len(readiness.Sessions) == 0 || readiness.LatestNonReadyDisposition != "none" {
+		return fmt.Errorf("minima artifact: Qdrant readiness sessions are incomplete")
+	}
+	for ordinal, session := range readiness.Sessions {
+		if session.Phase == "" || !finiteNonnegative(session.DeadlineSeconds) ||
+			session.DeadlineSeconds == 0 || session.Outcome != "ready" ||
+			session.Disposition != "ready" || len(session.Snapshots) == 0 ||
+			len(session.ResourceSamples) == 0 {
+			return fmt.Errorf("minima artifact: Qdrant readiness session %d is incomplete", ordinal)
+		}
+	}
+	return nil
+}
 
 func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]minimaBackendEvidence) error {
 	if len(artifact.RawEvidence) != len(backends) {
@@ -473,6 +545,11 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			}
 			if len(raw.NativeRouteResponses) != len(artifact.Manifest.Corpora) {
 				return fmt.Errorf("minima artifact: TreeDB raw route responses are incomplete")
+			}
+		}
+		if name == "qdrant" {
+			if err := validateMinimaQdrantReadiness(raw, backend); err != nil {
+				return err
 			}
 		}
 		resource := raw.ResourceMeasurement

@@ -527,6 +527,43 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertEqual(artifact["state"], "partial")
         workload.close()
 
+    def test_optimizer_diagnostic_uses_per_request_timeout(self) -> None:
+        manifest, shared = tiny_manifest(), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.connect()
+        request = mock.Mock(return_value=Model(result=Model(summary=Model(queued_optimizations=0))))
+        workload.client.http = Model(client=Model(request=request))
+        workload.models = Model(InlineResponse20011=object)
+        snapshot = workload.optimization_snapshot(0.25)
+        self.assertTrue(snapshot["available"])
+        self.assertEqual(request.call_args.kwargs["timeout"], 0.25)
+        self.assertEqual(request.call_args.kwargs["params"], {"completed_limit": 16})
+        workload.close()
+
+    def test_readiness_deduplicates_unchanged_server_log_tail(self) -> None:
+        manifest, shared = tiny_manifest(), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.connect()
+        workload.optimizer_timeout = 0.01
+        workload.poll_interval = 0
+        grey = Model(
+            status="grey", optimizer_status=Model(ok=True),
+            points_count=0, indexed_vectors_count=0, segments_count=1,
+            payload_schema={"user_id": "keyword", "fpath": "keyword"},
+            config=Model(params=Model(vectors={})),
+        )
+        with (
+            mock.patch.object(workload.client, "get_collection", return_value=grey),
+            mock.patch.object(workload, "server_log_snapshot", return_value={
+                "available": True, "path": "/tmp/qdrant.log", "size_bytes": 7, "tail": "same",
+            }),
+            mock.patch.object(runner, "READINESS_RESOURCE_INTERVAL_SECONDS", 0),
+        ):
+            with self.assertRaises(TimeoutError):
+                workload.wait_ready(expected_count=0, phase="dedupe_timeout")
+        self.assertEqual(len(workload.readiness_evidence[-1]["server_log_samples"]), 1)
+        workload.close()
+
     def test_frozen_hashes_and_operation_order_remain_literal(self) -> None:
         self.assertEqual(runner.FROZEN_HASHES, {
             "corpus_sha256": "0b1a213652fc97a4460f254f4d9e90f027e4b30ef6111a26807591ade10923e1",

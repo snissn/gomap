@@ -501,6 +501,21 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.ServiceLog.Tail = ""
 			a.RawEvidence["treedb"] = raw
 		}},
+		{"incomplete Qdrant production transition", func(a *minimaArtifact) {
+			raw := a.RawEvidence["qdrant"]
+			raw.CollectionConfigurationTransition.Completed = false
+			a.RawEvidence["qdrant"] = raw
+		}},
+		{"Qdrant production transition mismatch", func(a *minimaArtifact) {
+			raw := a.RawEvidence["qdrant"]
+			raw.CollectionConfigurationTransition.ProductionHNSW = json.RawMessage(`{"m":32}`)
+			a.RawEvidence["qdrant"] = raw
+		}},
+		{"non-ready Qdrant session", func(a *minimaArtifact) {
+			raw := a.RawEvidence["qdrant"]
+			raw.Readiness.Sessions[0].Outcome = "timeout"
+			a.RawEvidence["qdrant"] = raw
+		}},
 		{"missing reopen", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.Attempted = false }},
 		{"wrong nonempty reopen hash", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.ResultManifestHash = "wrong" }},
 		{"backend reopen hash mismatch", func(a *minimaArtifact) { minimaTestBackend(a, "qdrant").Reopen.ResultManifestHash = "different" }},
@@ -542,7 +557,10 @@ func validMinimaArtifact() minimaArtifact {
 	}
 	backends := []minimaBackendEvidence{
 		{Name: "treedb", ServerVersion: "test", ClientVersion: "test", Durability: "wal_sync", Configuration: map[string]string{"effective": "test"}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
-		{Name: "qdrant", ServerVersion: "test", ClientVersion: "test", Durability: "wal", Configuration: map[string]string{"effective": "test"}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
+		{Name: "qdrant", ServerVersion: "test", ClientVersion: "test", Durability: "wal", Configuration: map[string]string{
+			"effective": "test", "initial_upload_hnsw": `{"m":0}`, "initial_upload_optimizers": `{"indexing_threshold":0}`,
+			"production_hnsw": `{"m":16}`, "production_optimizers": `{"indexing_threshold":20000}`,
+		}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
 	}
 	queries := minimaQueryMap(&manifest)
 	expectedPayloadHash, expectedRows, err := minimaExpectedPayloadEvidence(&manifest)
@@ -600,6 +618,24 @@ func validMinimaArtifact() minimaArtifact {
 			evidence := rawEvidence[backend.Name]
 			evidence.ServiceLog = minimaRawServiceLog{
 				Path: "/tmp/treedb-service.log", Tail: "TreeDB Document Service listening", MaxTailBytes: 64 << 10,
+			}
+			rawEvidence[backend.Name] = evidence
+		}
+		if backend.Name == "qdrant" {
+			evidence := rawEvidence[backend.Name]
+			evidence.CollectionConfigurationTransition = minimaRawQdrantConfigurationTransition{
+				Boundary: "initial_batch_insert_to_warmup_search", Attempted: true, Completed: true,
+				InitialUploadHNSW: json.RawMessage(`{"m":0}`), InitialUploadOptimizers: json.RawMessage(`{"indexing_threshold":0}`),
+				ProductionHNSW: json.RawMessage(`{"m":16}`), ProductionOptimizers: json.RawMessage(`{"indexing_threshold":20000}`),
+			}
+			evidence.Readiness = minimaRawQdrantReadiness{
+				Sessions: []minimaRawQdrantReadinessSession{{
+					Phase: "qualification", DeadlineSeconds: 600,
+					Snapshots:       []json.RawMessage{json.RawMessage(`{"status":"green"}`)},
+					ResourceSamples: []json.RawMessage{json.RawMessage(`{"captured":true}`)},
+					Outcome:         "ready", Disposition: "ready",
+				}},
+				LatestNonReadyDisposition: "none",
 			}
 			rawEvidence[backend.Name] = evidence
 		}
