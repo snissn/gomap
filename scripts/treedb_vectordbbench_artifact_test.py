@@ -152,9 +152,9 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         "--db-label", "fixture-lifecycle",
     ]
     vdbbench_command_string = shlex.join(vdbbench_command)
-    profile = root / "profiles" / "build.cpu.pprof"
+    profile = root / "profiles" / "optimize.heap.pprof"
     profile.parent.mkdir(parents=True)
-    profile.write_bytes(valid_pprof_fixture())
+    profile.write_bytes(valid_heap_pprof_fixture())
     lifecycle_route_response = root / "lifecycle_route_response.json"
     harness.write_json(lifecycle_route_response, {
         "index": {"name": "index-a", "generation": 7},
@@ -410,7 +410,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "config_sha256": harness.lifecycle_config_sha256(manifest),
         },
         "raw_artifacts": [
-            {"path": "profiles/build.cpu.pprof", "sha256": harness.sha256_file(profile)},
+            {"path": "profiles/optimize.heap.pprof", "sha256": harness.sha256_file(profile)},
             {
                 "path": "lifecycle_route_response.json",
                 "sha256": harness.sha256_file(lifecycle_route_response),
@@ -432,11 +432,11 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             },
         ],
         "profiles": [{
-            "path": "profiles/build.cpu.pprof",
+            "path": "profiles/optimize.heap.pprof",
             "sha256": harness.sha256_file(profile),
-            "kind": "cpu",
-            "before_sequence": 5,
-            "after_sequence": 6,
+            "kind": "heap",
+            "before_sequence": 8,
+            "after_sequence": 9,
         }],
     }
     harness.write_json(root / "manifest.json", manifest)
@@ -3327,7 +3327,7 @@ class LifecycleValidatorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             lifecycle_fixture(root)
-            (root / "profiles" / "build.cpu.pprof").write_bytes(b"corrupt")
+            (root / "profiles" / "optimize.heap.pprof").write_bytes(b"corrupt")
 
             got = harness.validate_lifecycle_artifact(root)
 
@@ -3341,7 +3341,7 @@ class LifecycleValidatorTest(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     manifest, _ = lifecycle_fixture(root)
-                    profile = root / "profiles" / "build.cpu.pprof"
+                    profile = root / "profiles" / "optimize.heap.pprof"
                     if label == "empty":
                         payload = b""
                     elif label == "truncated-gzip":
@@ -3368,6 +3368,11 @@ class LifecycleValidatorTest(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     manifest, _ = lifecycle_fixture(root)
+                    profile = root / "profiles" / "optimize.heap.pprof"
+                    profile.write_bytes(valid_pprof_fixture())
+                    checksum = harness.sha256_file(profile)
+                    manifest["lifecycle"]["raw_artifacts"][0]["sha256"] = checksum
+                    manifest["lifecycle"]["profiles"][0]["sha256"] = checksum
                     manifest["lifecycle"]["profiles"][0]["kind"] = kind
                     harness.write_json(root / "manifest.json", manifest)
 
@@ -3401,6 +3406,28 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["complete"])
         self.assertTrue(any("at least one profile" in item for item in got["completion_errors"]), got)
 
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _ = lifecycle_fixture(root)
+            profile = root / "profiles" / "build.cpu.pprof"
+            profile.write_bytes(valid_pprof_fixture())
+            checksum = harness.sha256_file(profile)
+            manifest["lifecycle"]["raw_artifacts"][0] = {"path": "profiles/build.cpu.pprof", "sha256": checksum}
+            manifest["lifecycle"]["profiles"] = [{
+                "path": "profiles/build.cpu.pprof",
+                "sha256": checksum,
+                "kind": "cpu",
+                "before_sequence": 5,
+                "after_sequence": 6,
+            }]
+            harness.write_json(root / "manifest.json", manifest)
+
+            companion_only = harness.validate_lifecycle_artifact(root)
+
+        self.assertTrue(companion_only["analyzable"], companion_only)
+        self.assertFalse(companion_only["complete"], companion_only)
+        self.assertTrue(any("canonical optimize heap" in item for item in companion_only["completion_errors"]), companion_only)
+
     def test_pprof_profile_requires_at_least_one_actual_sample(self) -> None:
         metadata = b"\n".join((
             b"PeriodType: cpu nanoseconds",
@@ -3422,20 +3449,20 @@ class LifecycleValidatorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             manifest, _ = lifecycle_fixture(root)
-            profile = root / "profiles" / "build.heap.pprof"
+            profile = root / "profiles" / "optimize.heap.pprof"
             profile.write_bytes(valid_heap_pprof_fixture())
             checksum = harness.sha256_file(profile)
             manifest["lifecycle"]["raw_artifacts"] = [
-                {"path": "profiles/build.heap.pprof", "sha256": checksum},
+                {"path": "profiles/optimize.heap.pprof", "sha256": checksum},
                 manifest["lifecycle"]["raw_artifacts"][1],
                 *manifest["lifecycle"]["raw_artifacts"][2:],
             ]
             manifest["lifecycle"]["profiles"] = [{
-                "path": "profiles/build.heap.pprof",
+                "path": "profiles/optimize.heap.pprof",
                 "sha256": checksum,
                 "kind": "heap",
-                "before_sequence": 5,
-                "after_sequence": 6,
+                "before_sequence": 8,
+                "after_sequence": 9,
             }]
             harness.write_json(root / "manifest.json", manifest)
 
@@ -3516,26 +3543,24 @@ class LifecycleValidatorTest(unittest.TestCase):
             trace = root / "profiles" / "build.trace.out"
             trace.write_bytes(valid_trace_fixture())
             checksum = harness.sha256_file(trace)
-            manifest["lifecycle"]["raw_artifacts"] = [
-                {"path": "profiles/build.trace.out", "sha256": checksum},
-                manifest["lifecycle"]["raw_artifacts"][1],
-                *manifest["lifecycle"]["raw_artifacts"][2:],
-            ]
-            manifest["lifecycle"]["profiles"] = [{
+            manifest["lifecycle"]["raw_artifacts"].append(
+                {"path": "profiles/build.trace.out", "sha256": checksum}
+            )
+            manifest["lifecycle"]["profiles"].append({
                 "path": "profiles/build.trace.out",
                 "sha256": checksum,
                 "kind": "trace",
                 "before_sequence": 5,
                 "after_sequence": 6,
-            }]
+            })
             harness.write_json(root / "manifest.json", manifest)
 
             valid = harness.validate_lifecycle_artifact(root)
 
             trace.write_bytes(b"go 1.26 trace\x00\x00\x00")
             checksum = harness.sha256_file(trace)
-            manifest["lifecycle"]["raw_artifacts"][0]["sha256"] = checksum
-            manifest["lifecycle"]["profiles"][0]["sha256"] = checksum
+            manifest["lifecycle"]["raw_artifacts"][-1]["sha256"] = checksum
+            manifest["lifecycle"]["profiles"][-1]["sha256"] = checksum
             harness.write_json(root / "manifest.json", manifest)
             header_only = harness.validate_lifecycle_artifact(root)
 
@@ -3559,18 +3584,16 @@ class LifecycleValidatorTest(unittest.TestCase):
                 perf = root / "profiles" / "build.perf.data"
                 perf.write_bytes(payload)
                 checksum = harness.sha256_file(perf)
-                manifest["lifecycle"]["raw_artifacts"] = [
-                    {"path": "profiles/build.perf.data", "sha256": checksum},
-                    manifest["lifecycle"]["raw_artifacts"][1],
-                    *manifest["lifecycle"]["raw_artifacts"][2:],
-                ]
-                manifest["lifecycle"]["profiles"] = [{
+                manifest["lifecycle"]["raw_artifacts"].append(
+                    {"path": "profiles/build.perf.data", "sha256": checksum}
+                )
+                manifest["lifecycle"]["profiles"].append({
                     "path": "profiles/build.perf.data",
                     "sha256": checksum,
                     "kind": "perf",
                     "before_sequence": 5,
                     "after_sequence": 6,
-                }]
+                })
                 harness.write_json(root / "manifest.json", manifest)
                 if isinstance(native, BaseException):
                     decoder = mock.patch.object(harness.subprocess, "run", side_effect=native)

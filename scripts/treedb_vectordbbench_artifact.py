@@ -2882,6 +2882,18 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         profiles = []
     if not profiles:
         completion_errors.append("completed lifecycle requires at least one profile")
+    canonical_heap_profiles = [
+        profile for profile in profiles
+        if isinstance(profile, dict)
+        and profile.get("path") == "profiles/optimize.heap.pprof"
+        and profile.get("kind") == "heap"
+        and profile.get("before_sequence") == 8
+        and profile.get("after_sequence") == 9
+    ]
+    if status == "completed" and len(canonical_heap_profiles) != 1:
+        completion_errors.append(
+            "completed lifecycle requires one canonical optimize heap profile between cache_warm and graceful_close"
+        )
     for position, profile in enumerate(profiles):
         if not isinstance(profile, dict):
             errors.append(f"profile {position} must be an object")
