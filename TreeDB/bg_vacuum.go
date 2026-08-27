@@ -482,11 +482,14 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 	w.vacuumAttempts.Add(1)
 	vacuumStarted := time.Now()
 	onlineStats, err := backgroundIndexVacuumRun(db, ctx)
+	w.recordVacuumDuration(time.Since(vacuumStarted))
+	if onlineStats.AttemptID != 0 {
+		w.lastOnlineVacuum.Store(&onlineStats)
+	}
+	if onlineStats.WorkCompleted {
+		w.vacuumWorkCompleted.Add(1)
+	}
 	if err != nil {
-		w.recordVacuumDuration(time.Since(vacuumStarted))
-		if onlineStats.AttemptID != 0 {
-			w.lastOnlineVacuum.Store(&onlineStats)
-		}
 		w.recordVacuumError(err)
 		w.finishRun(now, err.Error())
 		// A bounded online-vacuum pass may lose its cutover race to foreground
@@ -497,12 +500,6 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		}
 		return
 	}
-	w.recordVacuumDuration(time.Since(vacuumStarted))
-	if onlineStats.AttemptID != 0 {
-		w.lastOnlineVacuum.Store(&onlineStats)
-	}
-	w.vacuumWorkCompleted.Add(1)
-
 	w.retryProbe = false
 	w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
 	w.lastOutcome.Store(backgroundIndexVacuumOutcomeSuccess)

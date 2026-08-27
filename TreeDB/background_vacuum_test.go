@@ -127,6 +127,60 @@ func TestBackgroundIndexVacuumUsesReturnedOnlineAttemptSnapshot(t *testing.T) {
 	if stats.LastOnlineVacuum != attemptA {
 		t.Fatalf("worker last online snapshot=%+v want hook-returned attempt=%+v", stats.LastOnlineVacuum, attemptA)
 	}
+	if stats.VacuumWorkCompleted != 1 || stats.Vacuums != 1 {
+		t.Fatalf("successful returned snapshot counters=%+v want one completed worker vacuum", stats)
+	}
+}
+
+func TestBackgroundIndexVacuumCountsCompletedBackendWorkAfterReconcileFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	seedBackgroundVacuumUserPages(t, d, 64)
+	d.bgVac.spanRatioPPM = 1
+	d.bgVac.freelistReclaimablePages = ^uint64(0)
+	d.bgVac.collectionRootPages = ^uint64(0)
+	completed := backenddb.VacuumOnlineStats{AttemptID: 41, WorkCompleted: true, TotalDuration: time.Nanosecond}
+	reconcileErr := errors.New("cached backend maintenance reconcile failed")
+	restore := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
+		return completed, reconcileErr
+	})
+	defer restore()
+
+	d.bgVac.runOnce(d)
+	stats := d.bgVac.Stats()
+	if stats.LastOnlineVacuum != completed || stats.VacuumWorkCompleted != 1 {
+		t.Fatalf("completed backend work stats=%+v want returned completed attempt counted once", stats)
+	}
+	if stats.Vacuums != 0 || stats.PermanentFailuresTotal != 1 || stats.LastOutcome != backgroundIndexVacuumOutcomePermanentFailure {
+		t.Fatalf("reconcile failure outcome=%+v want failed background outcome", stats)
+	}
+}
+
+func TestBackgroundIndexVacuumFailedBackendAttemptDoesNotCountWork(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	seedBackgroundVacuumUserPages(t, d, 64)
+	d.bgVac.spanRatioPPM = 1
+	d.bgVac.freelistReclaimablePages = ^uint64(0)
+	d.bgVac.collectionRootPages = ^uint64(0)
+	failed := backenddb.VacuumOnlineStats{AttemptID: 42, TotalDuration: time.Nanosecond}
+	restore := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
+		return failed, errors.New("backend vacuum failed")
+	})
+	defer restore()
+
+	d.bgVac.runOnce(d)
+	stats := d.bgVac.Stats()
+	if stats.LastOnlineVacuum != failed || stats.VacuumWorkCompleted != 0 {
+		t.Fatalf("failed backend work stats=%+v want retained failed attempt without completed work", stats)
+	}
+	if stats.Vacuums != 0 || stats.PermanentFailuresTotal != 1 {
+		t.Fatalf("failed backend outcome=%+v want failed background attempt", stats)
+	}
 }
 
 func TestBackgroundIndexVacuumIdleUnchangedCommitSkipsStructuralWalks(t *testing.T) {
