@@ -2213,6 +2213,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     if status != "completed":
         completion_errors.append(f"result_status is {status!r}, not 'completed'")
     raw_optimize_reference: tuple[str, int] | None = None
+    raw_expected_service_generation: int | None = None
     if status == "completed":
         required_evidence = {
             "adapter-lifecycle.jsonl",
@@ -2244,7 +2245,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 errors.append("adapter optimize response index name does not match bound VDBBench result")
             else:
                 try:
-                    raw_identity, raw_generation, _ = lifecycle_ready_asset(
+                    raw_identity, raw_generation, raw_expected_service_generation = lifecycle_ready_asset(
                         optimize_response, expected_index_name
                     )
                 except RuntimeError as exc:
@@ -2514,6 +2515,11 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         and route.get("result_count") == route.get("requested_top_k")
     ):
         completion_errors.append("optimized route proof failed or used a stale index asset generation")
+    if (
+        raw_expected_service_generation is not None
+        and route.get("service_generation") != raw_expected_service_generation
+    ):
+        errors.append("reopened service generation does not match optimized column graph")
 
     if status == "completed" and manifest.get("lifecycle_route_proof") == "lifecycle_route_response.json":
         try:

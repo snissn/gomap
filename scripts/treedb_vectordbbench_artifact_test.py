@@ -1317,6 +1317,27 @@ class LifecycleValidatorTest(unittest.TestCase):
             self.assertFalse(got["analyzable"], got)
             self.assertTrue(any(expected in error for error in got["errors"]), got)
 
+    def test_reopened_generation_must_match_optimized_column_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            events[12]["state"]["route"]["service_generation"] = 8
+            for relative in ("lifecycle_route_response.json", "lifecycle_count_response.json"):
+                response_path = root / relative
+                response = json.loads(response_path.read_text(encoding="utf-8"))
+                response["index"]["generation"] = 8
+                harness.write_json(response_path, response)
+                next(
+                    artifact for artifact in manifest["lifecycle"]["raw_artifacts"]
+                    if artifact["path"] == relative
+                )["sha256"] = harness.sha256_file(response_path)
+            rewrite_lifecycle_fixture(root, manifest, events)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("optimized column graph" in error for error in got["errors"]), got)
+
     def test_scalar_route_configuration_normalizes_row_and_uses_harness_k(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
