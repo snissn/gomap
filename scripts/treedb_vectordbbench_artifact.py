@@ -819,8 +819,18 @@ def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
                 saw_data = False
                 while chunk := source.read(64 * 1024):
                     saw_data = True
-                return saw_data
-        except (OSError, EOFError, zlib.error):
+            if not saw_data:
+                return False
+            decoded = subprocess.run(
+                ("go", "tool", "pprof", "-raw", str(path)),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+                check=False,
+            )
+            return decoded.returncode == 0 and bool(decoded.stdout.strip())
+        except (OSError, EOFError, zlib.error, subprocess.TimeoutExpired):
             return False
     if kind == "trace":
         return path.suffix == ".out" and re.match(rb"go 1\.[0-9]+ trace\x00\x00\x00", data) is not None
@@ -1237,6 +1247,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         timestamps = [stage_events[stage].get("_timestamp") for stage in boundaries]
         if all(isinstance(value, _dt.datetime) for value in timestamps):
             report["t_ready_seconds"] = (timestamps[-1] - timestamps[0]).total_seconds()
+            if report["t_ready_seconds"] <= 0:
+                completion_errors.append("T_ready must be strictly positive")
 
     report["analyzable"] = not errors
     report["complete"] = not errors and not completion_errors

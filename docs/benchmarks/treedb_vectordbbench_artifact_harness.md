@@ -76,8 +76,10 @@ count. `PerformanceCustomDataset` cannot complete until H2 binds its selected
 result's task-config dataset shape into this artifact. Profile entries name existing
 before/after event sequences and use the same checksum as their raw-artifact
 entry. Supported profile kinds are `cpu`, `heap`, `allocs`, `block`, and `mutex`
-as non-empty gzip-compressed `.pprof` files, Go `trace` as a `.out` file with a
-Go trace header, and Linux `perf` as a `.data` file with a perf-data header. The
+as non-empty gzip-compressed `.pprof` files that the native `go tool pprof`
+decoder accepts, Go `trace` as a `.out` file with a Go trace header, and Linux
+`perf` as a `.data` file with a perf-data header. Profile validation is an
+offline correctness gate and invokes the native decoder once per pprof. The
 optimized index identity and durable `asset_generation` must survive
 close and cold reopen. H2 maps `asset_generation` to the vector-maintenance
 root ID, not the service's reopen-local generation counter. The artifact-owned
@@ -85,7 +87,8 @@ database identity and server `commit_seq` must also match across close/reopen,
 and route proof must use the same index identity and asset generation without
 fallback. `T_ready` is reconstructed from `load_start`
 through `cold_open_ready`; client, accepted/durable, and reopened counts are
-never substituted for one another.
+never substituted for one another, and a completed lifecycle requires strictly
+positive `T_ready`.
 
 Validate a completed artifact with:
 

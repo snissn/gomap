@@ -4,22 +4,38 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import gzip
 import io
 import inspect
 import json
+import subprocess
 import tempfile
 import unittest
-from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 import treedb_vectordbbench_artifact as harness
+
+
+@functools.cache
+def valid_pprof_fixture() -> bytes:
+    goroot = subprocess.run(
+        ("go", "env", "GOROOT"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=10,
+        check=True,
+    ).stdout.strip()
+    path = Path(goroot) / "src/cmd/compile/internal/test/testdata/pgo/inline/inline_hot.pprof"
+    return path.read_bytes()
 
 
 def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
     profile = root / "profiles" / "build.cpu.pprof"
     profile.parent.mkdir(parents=True)
-    profile.write_bytes(gzip.compress(b"\x48\x01", mtime=0))
+    profile.write_bytes(valid_pprof_fixture())
     stages = [
         "startup", "reset", "load_start", "load_end", "drain_checkpoint",
         "optimize_start", "optimize_end", "cache_prime", "cache_warm",
@@ -425,6 +441,21 @@ class LifecycleValidatorTest(unittest.TestCase):
         })
         self.assertEqual(got["t_ready_seconds"], 8.0)
 
+    def test_completed_fixture_requires_positive_t_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            for event in events:
+                event["timestamp"] = "2026-08-27T00:00:00Z"
+            rewrite_lifecycle_fixture(root, manifest, events)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertTrue(got["analyzable"])
+        self.assertFalse(got["complete"])
+        self.assertEqual(got["t_ready_seconds"], 0.0)
+        self.assertIn("T_ready must be strictly positive", got["completion_errors"])
+
     def test_interrupted_fixture_is_analyzable_but_never_complete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -654,7 +685,9 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["analyzable"])
         self.assertTrue(any("checksum mismatch" in item for item in got["errors"]), got)
 
-        for label in ("empty", "truncated-gzip", "truncated-after-data", "relabeled-jsonl"):
+        for label in (
+            "empty", "truncated-gzip", "truncated-after-data", "valid-gzip-not-pprof", "relabeled-jsonl",
+        ):
             with self.subTest(profile_payload=label):
                 with tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
@@ -666,6 +699,8 @@ class LifecycleValidatorTest(unittest.TestCase):
                         payload = b"\x1f\x8b\x08"
                     elif label == "truncated-after-data":
                         payload = profile.read_bytes()[:-8]
+                    elif label == "valid-gzip-not-pprof":
+                        payload = gzip.compress(b"not a pprof", mtime=0)
                     else:
                         payload = (root / "lifecycle.jsonl").read_bytes()
                     profile.write_bytes(payload)
