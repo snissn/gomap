@@ -31,11 +31,23 @@ DEPLOYMENT=""
 
 cleanup() {
 	if [[ -s "$QDRANT_PID_FILE" ]]; then
-		IFS= read -r QDRANT_PID <"$QDRANT_PID_FILE"
+		local expected_identity=""
+		{
+			IFS= read -r QDRANT_PID
+			IFS= read -r expected_identity || true
+		} <"$QDRANT_PID_FILE"
 	fi
 	if [[ -n "$QDRANT_PID" ]]; then
-		kill "$QDRANT_PID" >/dev/null 2>&1 || true
-		wait "$QDRANT_PID" >/dev/null 2>&1 || true
+		local current_identity=""
+		if [[ "$QDRANT_PID" =~ ^[1-9][0-9]*$ ]]; then
+			current_identity=$(ps -o lstart= -o command= -p "$QDRANT_PID" 2>/dev/null || true)
+		fi
+		if [[ -z "${expected_identity:-}" || "$current_identity" != "$expected_identity" ]]; then
+			echo "owned Qdrant PID file is stale for PID $QDRANT_PID; refusing to signal that process during cleanup" >&2
+		else
+			kill "$QDRANT_PID" >/dev/null 2>&1 || true
+			wait "$QDRANT_PID" >/dev/null 2>&1 || true
+		fi
 	fi
 	if [[ -n "$QDRANT_CONTAINER" ]]; then
 		docker rm -f "$QDRANT_CONTAINER" >/dev/null 2>&1 || true
