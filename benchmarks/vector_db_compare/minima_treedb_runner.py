@@ -391,6 +391,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                                "cpu_seconds": resource["cpu_seconds"], "disk_bytes": resource["disk_bytes"]}
         raw = artifact["backend_raw_evidence"].pop("qdrant")
         artifact["backend_raw_evidence"]["treedb"] = raw
+        raw.pop("collection_configuration_transition", None)
+        raw.pop("readiness", None)
         raw["native_route_responses"] = {
             scenario: {"membership_source": value.scalar_filter_membership_source,
                        "plan": value.scalar_filter_plan, "probe_ids": value.scalar_filter_probe_ids,

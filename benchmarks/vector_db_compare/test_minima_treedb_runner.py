@@ -331,13 +331,32 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             visibility_mismatch_count=0,
             visibility_retry_count=0,
         )}
-        base_artifact = {"backends": [{}], "scenarios": [{"scenario": "small"}], "backend_raw_evidence": {"qdrant": {}}}
+        base_artifact = {
+            "backends": [{"configuration": {
+                "initial_upload_hnsw": "qdrant-only",
+                "initial_upload_optimizers": "qdrant-only",
+                "production_hnsw": "qdrant-only",
+                "production_optimizers": "qdrant-only",
+            }}],
+            "scenarios": [{"scenario": "small"}],
+            "backend_raw_evidence": {"qdrant": {
+                "collection_configuration_transition": {"completed": True},
+                "readiness": {"sessions": []},
+            }},
+        }
         with mock.patch.object(common.QdrantMinimaRunner, "artifact", return_value=base_artifact):
             artifact = workload.artifact()
         configuration = artifact["backends"][0]["configuration"]
         self.assertEqual(configuration["scalar_fields"], "meta.user_id,meta.fpath")
         self.assertEqual(json.loads(configuration["effective_collection"]), workload.effective_collection)
+        for key in (
+            "initial_upload_hnsw", "initial_upload_optimizers",
+            "production_hnsw", "production_optimizers",
+        ):
+            self.assertNotIn(key, configuration)
         raw = artifact["backend_raw_evidence"]["treedb"]
+        self.assertNotIn("collection_configuration_transition", raw)
+        self.assertNotIn("readiness", raw)
         self.assertEqual(raw["resource_measurement"], resource)
         self.assertEqual(raw["resource_availability"]["measurement"], common.RESOURCE_SEMANTICS)
         self.assertEqual(artifact["scenarios"][0]["route"]["candidate_ids"], 5)
