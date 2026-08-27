@@ -1511,6 +1511,24 @@ class LifecycleValidatorTest(unittest.TestCase):
             self.assertFalse(got["analyzable"], got)
             self.assertTrue(any(option in error for error in got["errors"]), got)
 
+    def test_bound_vdbbench_command_rejects_option_termination_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            command = list(manifest["commands"][0]["command"])
+            subcommand = command.index("treedbcolumngraphexact")
+            command.insert(subcommand + 1, "--")
+            set_fixture_vdbbench_command_tokens(manifest, command)
+            manifest["lifecycle"]["identity"]["config_sha256"] = (
+                harness.lifecycle_config_sha256(manifest)
+            )
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("terminate option parsing" in error for error in got["errors"]), got)
+
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             manifest, _events = lifecycle_fixture(root)

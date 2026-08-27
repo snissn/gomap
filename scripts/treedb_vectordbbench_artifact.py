@@ -1972,9 +1972,13 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 option_values: dict[str, list[str | None]] = {
                     name: [] for name in VDBBENCH_OWNED_OPTIONS
                 }
+                options_terminated = False
                 position = module_positions[0] + 3 if len(module_positions) == 1 else len(command_tokens)
                 while position < len(command_tokens):
                     token = command_tokens[position]
+                    if token == "--":
+                        options_terminated = True
+                        break
                     name, separator, inline_value = token.partition("=")
                     if name not in VDBBENCH_OWNED_OPTIONS:
                         position += 1
@@ -1991,6 +1995,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                         errors.append(f"manifest value for lifecycle VDBBench option {name} is invalid")
                     elif option_values[name] != [str(expected_value)]:
                         errors.append(f"bound lifecycle VDBBench option {name} must occur exactly once with its manifest value")
+                if options_terminated:
+                    errors.append("bound lifecycle VDBBench command may not terminate option parsing with --")
                 unexpected_owned = sorted(
                     name for name, values in option_values.items()
                     if name not in expected_command_values and values
