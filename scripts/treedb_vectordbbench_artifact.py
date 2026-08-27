@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as _dt
+import gzip
 import hashlib
 import json
 import math
@@ -29,6 +30,7 @@ import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -810,7 +812,13 @@ def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
     if not isinstance(kind, str):
         return False
     if kind in PPROF_PROFILE_KINDS:
-        return path.suffix == ".pprof" and data.startswith(b"\x1f\x8b\x08")
+        if path.suffix != ".pprof" or not data.startswith(b"\x1f\x8b\x08"):
+            return False
+        try:
+            with gzip.open(path, "rb") as source:
+                return bool(source.read(1))
+        except (OSError, EOFError, zlib.error):
+            return False
     if kind == "trace":
         return path.suffix == ".out" and re.match(rb"go 1\.[0-9]+ trace\x00\x00\x00", data) is not None
     if kind == "perf":

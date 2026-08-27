@@ -634,14 +634,17 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["analyzable"])
         self.assertTrue(any("checksum mismatch" in item for item in got["errors"]), got)
 
-        for label in ("empty", "relabeled-jsonl"):
+        for label, payload in (
+            ("empty", b""),
+            ("truncated-gzip", b"\x1f\x8b\x08"),
+            ("relabeled-jsonl", None),
+        ):
             with self.subTest(profile_payload=label):
                 with tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     manifest, _ = lifecycle_fixture(root)
                     profile = root / "profiles" / "build.cpu.pprof"
-                    payload = b"" if label == "empty" else (root / "lifecycle.jsonl").read_bytes()
-                    profile.write_bytes(payload)
+                    profile.write_bytes(payload if payload is not None else (root / "lifecycle.jsonl").read_bytes())
                     checksum = harness.sha256_file(profile)
                     manifest["lifecycle"]["raw_artifacts"][0]["sha256"] = checksum
                     manifest["lifecycle"]["profiles"][0]["sha256"] = checksum
