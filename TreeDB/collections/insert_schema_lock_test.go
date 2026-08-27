@@ -120,6 +120,68 @@ func TestCollectionInsertFallbackDoesNotReacquireSchemaRead(t *testing.T) {
 	}
 }
 
+func TestVectorIndexRebuildDoesNotDeadlockQueuedSchemaWriter(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{[]byte(`{"embedding":[1,0]}`), []byte(`{"embedding":[0,1]}`)},
+	); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	restore := setVectorIndexRebuildAfterLockHookForTest(func() {
+		close(locked)
+		<-release
+	})
+	t.Cleanup(restore)
+	rebuilt := make(chan error, 1)
+	go func() { rebuilt <- index.Rebuild() }()
+	<-locked
+
+	created := make(chan error, 1)
+	go func() {
+		_, err := col.CreateIndex(IndexDefinition{Name: "by_body", Field: "body", ValueType: IndexValueString})
+		created <- err
+	}()
+	coord := col.collectionSchemaCoordinator()
+	waitForLockState(t, func() bool {
+		if coord.schemaMu.TryRLock() {
+			coord.schemaMu.RUnlock()
+			return false
+		}
+		return true
+	}, "schema writer to queue behind rebuild")
+
+	close(release)
+	select {
+	case err := <-rebuilt:
+		if err != nil {
+			t.Fatalf("rebuild: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("rebuild deadlocked behind queued schema writer")
+	}
+	select {
+	case err := <-created:
+		if err != nil {
+			t.Fatalf("create index: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("schema writer remained blocked after rebuild")
+	}
+}
+
 func waitForLockState(t *testing.T, ready func() bool, description string) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
