@@ -267,6 +267,22 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 	return view, nil
 }
 
+// SearchVectorIndexWithBufferReadView searches and opens the matching document
+// snapshot while excluding coverage mutations across the combined operation.
+func (c *Collection) SearchVectorIndexWithBufferReadView(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, *CollectionReadView, error) {
+	unlock := c.lockVectorIndexCoveragePersistence()
+	defer unlock()
+	response, err := c.SearchVectorIndexWithBuffer(opts, buffer)
+	if err != nil {
+		return response, nil, err
+	}
+	view, err := c.OpenCollectionReadViewForVectorIndexSearch(response)
+	if err != nil {
+		return response, nil, err
+	}
+	return response, view, nil
+}
+
 func newCollectionReadViewAtSnapshot(c *Collection, snap *backenddb.Snapshot, catalog *collectionCatalog, ownsSnap bool, scopeKind mappedresource.ScopeKind) *CollectionReadView {
 	if scopeKind == "" {
 		scopeKind = mappedresource.ScopeCollectionReadView
