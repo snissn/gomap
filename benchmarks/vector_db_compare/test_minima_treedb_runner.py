@@ -225,6 +225,51 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertEqual(correlation["after_stats"]["snapshot"]["stage"], "after")
         self.assertEqual(correlation["outcome"], "completed")
         self.assertEqual(correlation["profile_capture"], {"status": "not_triggered"})
+    def test_diagnostic_batch_watchers_keep_iteration_local_capture_state(self) -> None:
+        workload = self.workload(self.response(), diagnostics_dir=Path("diagnostics"))
+        workload._expected_insert_batches = {
+            ("initial_batch_insert", "mixed", 0): 3,
+            ("initial_batch_insert", "mixed", 3): 6,
+        }
+        documents = [
+            {"id": f"minima/mixed/{ordinal:06d}", "content": "c", "vector": [1.0, 0.0],
+             "user_id": "u", "fpath": "/a"}
+            for ordinal in range(6)
+        ]
+        deferred: list[object] = []
+
+        class DeferredThread:
+            def __init__(self, *, target: object, **_kwargs: object) -> None:
+                self.target = target
+                deferred.append(self)
+
+            def start(self) -> None:
+                pass
+
+            def join(self, _timeout: float) -> None:
+                pass
+
+            def is_alive(self) -> bool:
+                return False
+
+        with mock.patch.object(runner.threading, "Thread", DeferredThread):
+            workload.upsert("initial_batch_insert", "mixed", documents)
+        first_slow_capture = deferred[0].target.__kwdefaults__["capture_batch"]
+        first_slow_capture("late")
+        self.assertEqual(workload.batch_correlations[0]["capture_reason"], "late")
+        self.assertEqual(workload.batch_correlations[1]["profile_capture"], {"status": "not_triggered"})
+
+    def test_unmapped_diagnostic_upsert_uses_public_counts(self) -> None:
+        client = FakeClient(self.response(), count=0)
+        workload = self.workload(self.response(), diagnostics_dir=Path("diagnostics"), client=client)
+        document = {"id": "new", "content": "c", "vector": [1.0, 0.0], "user_id": "u", "fpath": "/a"}
+        workload.upsert("explicit_update", "mixed", [document])
+        correlation = workload.batch_correlations[0]
+        self.assertEqual(correlation["accumulated_rows_source"], "public_count")
+        self.assertEqual(correlation["before_public_count"], {"status": "captured", "rows": 0})
+        self.assertEqual(correlation["after_public_count"], {"status": "captured", "rows": 1})
+        self.assertEqual(correlation["accumulated_expected_rows"], 1)
+
 
     def test_failed_upsert_keeps_timeout_correlation_and_capture_failure_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -324,6 +369,10 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             read_stats.assert_called_once_with(runner.DIAGNOSTICS_STATS_PATH)
             controller.process = None
             assert controller.log_file is not None
+            self.assertEqual(
+                controller._listen_address("http://[::1]:17121", "diagnostics"),
+                "[::1]:17121",
+            )
             controller.log_file.close()
             controller.log_file = None
 
@@ -353,6 +402,12 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertIsNone(args.diagnostics_dir)
         self.assertIsNone(args.diagnostic_resume_scenario)
         self.assertIsNone(args.diagnostic_resume_start)
+
+    def test_script_guards_empty_diagnostic_array_for_bash_nounset(self) -> None:
+        script = (Path(__file__).parents[2] / "scripts/bench_minima_qualification.sh").read_text(encoding="utf-8")
+        guarded = '${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"}'
+        self.assertEqual(script.count(guarded), 2)
+        self.assertNotIn('"${treedb_diagnostic_args[@]}" ||', script)
 
     def test_service_log_evidence_is_bounded_and_keeps_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

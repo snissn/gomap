@@ -73,7 +73,7 @@ small)
 		--profile "$TREEDB_PROFILE" \
 		--operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
 		--ef-search "$TREEDB_EF_SEARCH" \
-		"${treedb_diagnostic_args[@]}" ||
+		${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"} ||
 		treedb_status=$?
 	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -validate-minima-artifact "$TREEDB_EVIDENCE"
 	printf 'small manifest: %s\nvalidated partial TreeDB evidence: %s\n' "$MANIFEST_PATH" "$TREEDB_EVIDENCE"
@@ -104,7 +104,7 @@ PYTHONPATH=clients/python/treedb_client/src "$PYTHON" \
 	--profile "$TREEDB_PROFILE" \
 	--ef-search "$TREEDB_EF_SEARCH" \
 	--operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
-	"${treedb_diagnostic_args[@]}" ||
+	${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"} ||
 	treedb_status=$?
 
 if [[ "$MODE" == "diagnostic-resume" ]]; then

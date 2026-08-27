@@ -78,8 +78,8 @@ class ServiceController:
                 loopback = False
             if not loopback:
                 raise ValueError("owned TreeDB diagnostics URL must use a loopback host")
-        return f"{parsed.hostname}:{parsed.port}"
-
+        host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+        return f"{host}:{parsed.port}"
     def _read_bounded(self, url: str, timeout: float, maximum: int) -> bytes:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             payload = response.read(maximum + 1)
@@ -378,6 +378,12 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
     def _timeout_failure(exc: BaseException) -> bool:
         return isinstance(exc, TimeoutError) or "timed out" in str(exc).lower() or "timeout" in type(exc).__name__.lower()
 
+    def _public_count_snapshot(self) -> dict[str, Any]:
+        assert self.client is not None
+        try:
+            return {"status": "captured", "rows": self.client.count_documents(self.collection).count}
+        except BaseException as exc:
+            return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
     def upsert(self, operation: str, scenario: str, documents: list[dict[str, Any]], wait_ready: bool = True,
                on_writer_start: Callable[[], None] | None = None) -> None:
         assert self.client is not None
@@ -397,28 +403,35 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                     raise RuntimeError("TreeDB upsert completion did not cover the submitted batch")
                 continue
             batch_start = self._batch_start(scenario, source_batch, local_start)
+            key = (operation, scenario, batch_start)
+            mapped_expected = key in self._expected_insert_batches
+            before_public_count = None if mapped_expected else self._public_count_snapshot()
+            expected_before = (
+                self._expected_rows if mapped_expected
+                else before_public_count.get("rows") if before_public_count is not None else None
+            )
+            expected_after = self._expected_insert_batches.get(key)
             with self._diagnostic_lock:
                 sequence = len(self.batch_correlations)
-                expected_before = self._expected_rows
-                expected_after = self._expected_insert_batches.get(
-                    (operation, scenario, batch_start), expected_before,
-                )
                 correlation: dict[str, Any] = {
                     "sequence": sequence, "operation": operation, "scenario": scenario,
                     "batch_ordinal": batch_start // batch_size, "batch_start": batch_start,
                     "rows": len(batch), "accumulated_expected_rows_before": expected_before,
                     "accumulated_expected_rows": expected_after,
+                    "accumulated_rows_source": "frozen_manifest" if mapped_expected else "public_count",
                     "before_stats": self.controller.stats_snapshot(),
                     "outcome": "in_progress", "profile_capture": {"status": "not_triggered"},
                 }
+                if before_public_count is not None:
+                    correlation["before_public_count"] = before_public_count
                 self.batch_correlations.append(correlation)
             done = threading.Event()
             capture_started = threading.Event()
             capture_lock = threading.Lock()
 
-            def capture(reason: str) -> None:
-                if self.diagnostics_dir is None:
-                    return
+            def capture(reason: str, *, correlation: dict[str, Any] = correlation,
+                        capture_started: threading.Event = capture_started,
+                        capture_lock: threading.Lock = capture_lock) -> None:
                 with capture_lock:
                     if capture_started.is_set():
                         return
@@ -431,9 +444,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                     capture_timeout=self.diagnostic_capture_timeout,
                 )
 
-            def slow_capture() -> None:
+            def slow_capture(*, done: threading.Event = done,
+                             capture_batch: Callable[[str], None] = capture) -> None:
                 if not done.wait(self.diagnostic_slow_seconds):
-                    capture("slow")
+                    capture_batch("slow")
 
             watcher: threading.Thread | None = None
             if self.diagnostics_dir is not None:
@@ -452,8 +466,9 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 )
                 if response.upserted != len(batch) or response.ids != [row["id"] for row in batch]:
                     raise RuntimeError("TreeDB upsert completion did not cover the submitted batch")
-                with self._diagnostic_lock:
-                    self._expected_rows = expected_after
+                if mapped_expected:
+                    with self._diagnostic_lock:
+                        self._expected_rows = expected_after
                 correlation["outcome"] = "completed"
             except BaseException as exc:
                 failure = exc
@@ -464,6 +479,13 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 correlation["ended_monotonic_ns"] = time.monotonic_ns()
                 correlation["duration_nanos"] = correlation["ended_monotonic_ns"] - correlation["started_monotonic_ns"]
                 correlation["after_stats"] = self.controller.stats_snapshot()
+                if not mapped_expected:
+                    after_public_count = self._public_count_snapshot()
+                    correlation["after_public_count"] = after_public_count
+                    correlation["accumulated_expected_rows"] = after_public_count.get("rows")
+                    if after_public_count["status"] == "captured":
+                        with self._diagnostic_lock:
+                            self._expected_rows = after_public_count["rows"]
                 if failure is not None:
                     capture(correlation["outcome"])
                 elif correlation["duration_nanos"] >= int(self.diagnostic_slow_seconds * 1e9):
