@@ -69,7 +69,9 @@ samples and acknowledges both boundaries, so their timestamps and state are
 not aliases of `optimize_end`. Lifecycle mode therefore requires both search
 phases; ordinary VectorDBBench runs retain their default phase ordering.
 Completed validation checksum-binds and cross-checks `adapter-lifecycle.jsonl`,
-`diagnostics.jsonl`, and `lifecycle-boundary-diagnostics.json`: all five
+`diagnostics.jsonl`, `lifecycle-boundary-diagnostics.json`, `service.log`, and
+`lifecycle_load_milestones.json`. The milestone document must exactly equal the
+deterministic cumulative projection of the adapter sidecar. All five
 load/build/search boundary timestamps must match their lifecycle stages and
 exact tagged diagnostics samples. Each sample must occur at or after its own
 boundary and before the next boundary; the final acknowledgement proves the

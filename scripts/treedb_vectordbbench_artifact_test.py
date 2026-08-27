@@ -191,6 +191,12 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
     adapter_path.write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in adapter_records), encoding="utf-8"
     )
+    milestone_path = root / "lifecycle_load_milestones.json"
+    harness.write_json(
+        milestone_path, harness.lifecycle_load_milestone_document(adapter_records)
+    )
+    service_log = root / "service.log"
+    service_log.write_text("fixture service started and stopped cleanly\n", encoding="utf-8")
     diagnostics = [
         {
             "timestamp_ns": boundary_ns[stage] + 1,
@@ -272,6 +278,11 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             },
             {"path": "adapter-lifecycle.jsonl", "sha256": harness.sha256_file(adapter_path)},
             {"path": "diagnostics.jsonl", "sha256": harness.sha256_file(diagnostics_path)},
+            {
+                "path": "lifecycle_load_milestones.json",
+                "sha256": harness.sha256_file(milestone_path),
+            },
+            {"path": "service.log", "sha256": harness.sha256_file(service_log)},
             {
                 "path": "lifecycle-boundary-diagnostics.json",
                 "sha256": harness.sha256_file(acknowledgement_path),
@@ -1332,6 +1343,8 @@ class LifecycleValidatorTest(unittest.TestCase):
             "adapter-lifecycle.jsonl",
             "diagnostics.jsonl",
             "lifecycle-boundary-diagnostics.json",
+            "lifecycle_load_milestones.json",
+            "service.log",
         )
         for missing in required:
             with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmp:
@@ -1404,6 +1417,29 @@ class LifecycleValidatorTest(unittest.TestCase):
             expected = "matching tagged diagnostics" if mutation == "mismatched" else "checksum mismatch"
             self.assertTrue(any(expected in item for item in got["errors"]), got)
 
+    def test_completed_fixture_rejects_corrupt_or_mismatched_load_milestones(self) -> None:
+        for mutation, expected in (("corrupt", "cannot parse"), ("mismatch", "do not match")):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _ = lifecycle_fixture(root)
+                milestones = root / "lifecycle_load_milestones.json"
+                if mutation == "corrupt":
+                    milestones.write_text("{", encoding="utf-8")
+                else:
+                    document = json.loads(milestones.read_text(encoding="utf-8"))
+                    document["milestones"][0]["server_accepted_cumulative"] += 1
+                    harness.write_json(milestones, document)
+                next(
+                    artifact for artifact in manifest["lifecycle"]["raw_artifacts"]
+                    if artifact["path"] == "lifecycle_load_milestones.json"
+                )["sha256"] = harness.sha256_file(milestones)
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any(expected in error for error in got["errors"]), got)
+
     def test_completed_fixture_rejects_samples_at_or_after_later_boundaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1467,11 +1503,17 @@ class LifecycleValidatorTest(unittest.TestCase):
                 "".join(json.dumps(record, sort_keys=True) + "\n" for record in diagnostics_records),
                 encoding="utf-8",
             )
+            milestones = root / "lifecycle_load_milestones.json"
+            harness.write_json(
+                milestones, harness.lifecycle_load_milestone_document(sidecar_records)
+            )
             for artifact in manifest["lifecycle"]["raw_artifacts"]:
                 if artifact["path"] == "adapter-lifecycle.jsonl":
                     artifact["sha256"] = harness.sha256_file(sidecar)
                 elif artifact["path"] == "diagnostics.jsonl":
                     artifact["sha256"] = harness.sha256_file(diagnostics)
+                elif artifact["path"] == "lifecycle_load_milestones.json":
+                    artifact["sha256"] = harness.sha256_file(milestones)
             rewrite_lifecycle_fixture(root, manifest, events)
 
             got = harness.validate_lifecycle_artifact(root)

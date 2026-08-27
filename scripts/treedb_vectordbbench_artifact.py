@@ -2173,6 +2173,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             "adapter-lifecycle.jsonl",
             "diagnostics.jsonl",
             "lifecycle-boundary-diagnostics.json",
+            "lifecycle_load_milestones.json",
+            "service.log",
         }
         for relative in sorted(required_evidence - raw_by_path.keys()):
             errors.append(f"completed lifecycle requires checksum-bound raw artifact {relative}")
@@ -2183,6 +2185,18 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             except ValueError as exc:
                 errors.append(f"completed adapter lifecycle sidecar is invalid: {exc}")
         if adapter is not None:
+            if "lifecycle_load_milestones.json" in raw_by_path:
+                try:
+                    milestone_document = _strict_json_loads(
+                        (root / "lifecycle_load_milestones.json").read_text(encoding="utf-8")
+                    )
+                except (OSError, UnicodeError, ValueError) as exc:
+                    errors.append(f"cannot parse lifecycle load milestones: {exc}")
+                else:
+                    if milestone_document != lifecycle_load_milestone_document(adapter["records"]):
+                        errors.append(
+                            "lifecycle load milestones do not match the adapter lifecycle sidecar"
+                        )
             for position, boundary in enumerate(LIFECYCLE_DIAGNOSTIC_BOUNDARIES):
                 boundary_ns = adapter[f"{boundary}_ns"]
                 event_timestamp = (stage_events.get(boundary) or {}).get("_timestamp")
@@ -2859,7 +2873,7 @@ def lifecycle_raw_artifacts(state: HarnessState, paths: list[Path]) -> list[dict
     return artifacts
 
 
-def write_lifecycle_load_milestones(state: HarnessState, records: list[dict[str, Any]]) -> Path:
+def lifecycle_load_milestone_document(records: list[dict[str, Any]]) -> dict[str, Any]:
     load_start = next(record["timestamp_ns"] for record in records if record.get("event") == "load_start")
     batches = sorted(
         (record for record in records if record.get("event") == "batch_accepted"),
@@ -2879,12 +2893,16 @@ def write_lifecycle_load_milestones(state: HarnessState, records: list[dict[str,
             "elapsed_seconds": elapsed,
             "accepted_vectors_per_second_cumulative": accepted / elapsed if elapsed > 0 else None,
         })
-    path = state.root / "lifecycle_load_milestones.json"
-    write_json(path, {
+    return {
         "schema_version": "treedb-vectordbbench-load-milestones/v1",
         "ordering": "batch completion timestamp; equal-size NUM_PER_BATCH milestones except the final batch",
         "milestones": milestones,
-    })
+    }
+
+
+def write_lifecycle_load_milestones(state: HarnessState, records: list[dict[str, Any]]) -> Path:
+    path = state.root / "lifecycle_load_milestones.json"
+    write_json(path, lifecycle_load_milestone_document(records))
     return path
 
 
