@@ -47,6 +47,7 @@ func (idx *VectorIndex) insertLiveVectorBatchLocked(documentIDs [][]byte, vector
 	if len(documentIDs) == 0 {
 		return nil
 	}
+	idx.prepareSearchViewForMutationLocked()
 	delta, err := idx.ensureLiveDeltaLocked()
 	if err != nil {
 		return err
@@ -85,6 +86,11 @@ func (idx *VectorIndex) insertLiveVectorBatchLocked(documentIDs [][]byte, vector
 }
 
 func (idx *VectorIndex) tombstoneLiveDocumentLocked(documentID []byte) {
+	if idx.liveDelta != nil {
+		if _, ok := idx.liveDelta.currentNode[string(documentID)]; ok {
+			idx.prepareSearchViewForMutationLocked()
+		}
+	}
 	idx.tombstoneDocumentIDLocked(documentID)
 	if idx.liveDelta != nil {
 		beforeMutation := idx.liveDelta.mutationSeq
@@ -152,6 +158,6 @@ func (idx *VectorIndex) foldLiveDeltaForPersistence() error {
 	if err := idx.foldLiveDeltaLocked(); err != nil {
 		return err
 	}
-	idx.publishSearchViewLocked(false)
+	idx.acknowledgeSearchViewStateLocked()
 	return nil
 }
