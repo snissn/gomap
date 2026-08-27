@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1046,15 +1047,17 @@ func TestNativeScalarANNReducedSeedBudgetSpansWholeGraph(t *testing.T) {
 
 func TestNativeScalarANNSeedBudgetSharedAcrossViewPlanes(t *testing.T) {
 	const rows = 5200
-	buildPlane := func(prefix string) ([]vectorIndexNode, vectorIndexScalarColumn) {
+	buildPlane := func(prefix string, perfect bool) ([]vectorIndexNode, vectorIndexScalarColumn) {
 		nodes := make([]vectorIndexNode, rows)
 		column := newVectorIndexScalarColumn(IndexValueString)
 		for row := range nodes {
 			tenant := []byte("beta")
 			vector := []float32{0, 1}
-			if row >= 4800 {
+			if row >= 1000 {
 				tenant = []byte("alpha")
-				vector = []float32{1, 0}
+				if perfect {
+					vector = []float32{1, 0}
+				}
 			}
 			nodes[row] = vectorIndexNode{
 				documentID: []byte(fmt.Sprintf("%s-%05d", prefix, row)), vector: vector,
@@ -1064,8 +1067,8 @@ func TestNativeScalarANNSeedBudgetSharedAcrossViewPlanes(t *testing.T) {
 		}
 		return nodes, column
 	}
-	baseNodes, baseColumn := buildPlane("base")
-	deltaNodes, deltaColumn := buildPlane("delta")
+	baseNodes, baseColumn := buildPlane("base", false)
+	deltaNodes, deltaColumn := buildPlane("delta", true)
 	view := &vectorIndexSearchView{
 		name: "shared-seed-budget", sourceDocumentRootsValid: true,
 		metric: VectorMetricCosine, encoding: VectorIndexEncodingFloat32,
@@ -1086,6 +1089,11 @@ func TestNativeScalarANNSeedBudgetSharedAcrossViewPlanes(t *testing.T) {
 	got, work, err := view.searchWithNativeScalarFilterBuffer([]float32{1, 0}, 2, 16, plan, &buffer)
 	if err != nil || len(got) != 2 {
 		t.Fatalf("two-plane seeded search results=%+v work=%+v err=%v", got, work, err)
+	}
+	for _, result := range got {
+		if !bytes.HasPrefix(result.ID, []byte("delta-")) {
+			t.Fatalf("base plane exhausted shared seed rows before delta search: results=%+v work=%+v", got, work)
+		}
 	}
 	if work.seedRowsVisited > nativeScalarANNSeedProbeLimit ||
 		work.eligibleSeeds > nativeScalarANNSeedLimit {

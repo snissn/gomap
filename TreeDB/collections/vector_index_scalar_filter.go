@@ -873,6 +873,7 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 		planeProbeLimit := (seedBudget.rows + seedBudget.planesRemaining - 1) / seedBudget.planesRemaining
 		planeScoreLimit := (seedBudget.scores + seedBudget.planesRemaining - 1) / seedBudget.planesRemaining
 		seedBudget.planesRemaining--
+		planeRowsRemaining := planeProbeLimit
 		probeRows := minInt(len(idx.nodes), planeProbeLimit)
 		seedBuckets := minInt(probeRows, nativeScalarANNSeedLimit)
 		// Preserve at least three quarters of the plane's score budget for the
@@ -891,25 +892,28 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 			stride++
 		}
 		seedScores := 0
-		for ordinal := 0; ordinal < seedBuckets && seedScores < seedScoreLimit && seedBudget.rows > 0; ordinal++ {
+		for ordinal := 0; ordinal < seedBuckets && seedScores < seedScoreLimit &&
+			seedBudget.rows > 0 && planeRowsRemaining > 0; ordinal++ {
 			bucket := ordinal * stride % seedBuckets
 			start := bucket * probeRows / seedBuckets
 			end := (bucket + 1) * probeRows / seedBuckets
-			for probe := start; probe < end && seedBudget.rows > 0; probe++ {
+			for probe := start; probe < end && seedBudget.rows > 0 && planeRowsRemaining > 0; probe++ {
 				// Integer stratification visits every row for small graphs and
 				// evenly covers the full immutable ordinal space for large graphs.
 				nodeID := int(uint64(probe) * uint64(len(idx.nodes)) / uint64(probeRows))
 				work.seedRowsVisited++
 				seedBudget.rows--
+				planeRowsRemaining--
 				node := &idx.nodes[nodeID]
 				if node.deleted || !plan.matches(columns, nodeID, node.documentID) {
 					continue
 				}
 				clusterStart := nodeID
-				for clusterStart > 0 && seedBudget.rows > 0 {
+				for clusterStart > 0 && seedBudget.rows > 0 && planeRowsRemaining > 0 {
 					previous := clusterStart - 1
 					work.seedRowsVisited++
 					seedBudget.rows--
+					planeRowsRemaining--
 					previousNode := &idx.nodes[previous]
 					if previousNode.deleted || !plan.matches(columns, previous, previousNode.documentID) {
 						break
@@ -921,11 +925,12 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 				for candidateID := clusterStart; candidateID < len(idx.nodes) &&
 					clusterScores < clusterScoreLimit; candidateID++ {
 					if candidateID > nodeID {
-						if seedBudget.rows <= 0 {
+						if seedBudget.rows <= 0 || planeRowsRemaining <= 0 {
 							break
 						}
 						work.seedRowsVisited++
 						seedBudget.rows--
+						planeRowsRemaining--
 					}
 					candidateNode := &idx.nodes[candidateID]
 					if candidateNode.deleted || !plan.matches(columns, candidateID, candidateNode.documentID) {
