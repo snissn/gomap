@@ -1134,6 +1134,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     route = route_state.get("route") if isinstance(route_state, dict) else {}
     if not isinstance(route, dict):
         route = {}
+    route_generation = route.get("index_asset_generation")
     if not (
         route.get("optimized") is True
         and route.get("fallback_reason") == "none"
@@ -1141,7 +1142,9 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         and route.get("name")
         and index_reference is not None
         and route.get("index_identity") == index_reference[0]
-        and route.get("index_asset_generation") == index_reference[1]
+        and not isinstance(route_generation, bool)
+        and isinstance(route_generation, int)
+        and route_generation == index_reference[1]
     ):
         completion_errors.append("optimized route proof failed or used a stale index asset generation")
 

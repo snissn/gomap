@@ -592,13 +592,21 @@ class LifecycleValidatorTest(unittest.TestCase):
         def stale_route_identity(rows: list[dict]) -> None:
             rows[12]["state"]["route"]["index_identity"] = "stale-index"
 
+        def float_route_generation(rows: list[dict]) -> None:
+            rows[12]["state"]["route"]["index_asset_generation"] = 7.0
+
+        def bool_route_generation(rows: list[dict]) -> None:
+            rows[12]["state"]["route"]["index_asset_generation"] = True
+
         for mutation, expected in (
             (stale_identity, "index identity changed"),
             (stale_generation, "index asset generation changed"),
             (stale_route_identity, "optimized route proof failed"),
+            (float_route_generation, "optimized route proof failed"),
+            (bool_route_generation, "optimized route proof failed"),
             (fallback_route, "optimized route proof failed"),
         ):
-            with self.subTest(expected=expected):
+            with self.subTest(mutation=mutation.__name__, expected=expected):
                 with tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     manifest, events = lifecycle_fixture(root)
