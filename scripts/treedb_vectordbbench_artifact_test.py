@@ -1783,20 +1783,29 @@ class LifecycleValidatorTest(unittest.TestCase):
 
 class LifecycleIntegrationTest(unittest.TestCase):
     def _complete_fixture(self, root: Path):
-        dataset = root / "dataset.parquet"
+        dataset = root / "train.parquet"
         dataset.write_bytes(b"dataset")
         args = harness.parse_args([
             "--out", str(root), "--run-vdbbench", "--rows", "exact",
+            "--case-type", "PerformanceCustomDataset",
             "--lifecycle", "--lifecycle-dataset-file", str(dataset),
+            "--lifecycle-vectors", "50000", "--lifecycle-dimensions", "768",
             "--service-close-timeout", "1",
         ])
         state = harness.HarnessState(root=root, lifecycle_started_ns=1)
         state.lifecycle = harness.lifecycle_metadata(state, args)
+        task_config = {
+            "db_config": {"index_name": harness.lifecycle_index_name(args)},
+            "case_config": {"custom_case": {"dataset_config": {
+                "size": "50000", "dim": "768", "dir": str(root),
+                "file_count": "1", "use_shuffled": False,
+            }}},
+        }
         state.vdbbench = [{"load_metrics": {
             "result_file": "vdbbench-results/result.json",
             "result_sha256": "a" * 64,
-            "task_config": {"db_config": {"index_name": harness.lifecycle_index_name(args)}},
-            "task_config_sha256": harness.canonical_sha256({"db_config": {"index_name": harness.lifecycle_index_name(args)}}),
+            "task_config": task_config,
+            "task_config_sha256": harness.canonical_sha256(task_config),
         }}]
         snapshot = {
             "database": {
@@ -1856,6 +1865,54 @@ class LifecycleIntegrationTest(unittest.TestCase):
         )
         proc = mock.Mock(returncode=None)
         return args, state, Sampler(), proc
+
+    def test_lifecycle_rejects_standard_case_without_checksum_bound_task_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stderr(io.StringIO()) as stderr:
+            dataset = Path(tmp) / "train.parquet"
+            dataset.write_bytes(b"dataset")
+            with self.assertRaises(SystemExit):
+                harness.parse_args([
+                    "--run-vdbbench", "--rows", "exact", "--lifecycle",
+                    "--lifecycle-dataset-file", str(dataset),
+                ])
+
+        self.assertIn("requires PerformanceCustomDataset", stderr.getvalue())
+
+    def test_complete_lifecycle_binds_heap_to_actual_capture_stages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args, state, sampler, proc = self._complete_fixture(root)
+            reopened = mock.Mock(returncode=None)
+            snapshot = sampler.samples[0]["snapshot"]
+            responses = iter([
+                snapshot,
+                {"count": 50000},
+                {"index": {"generation": 7}},
+                {
+                    "no_documents": True,
+                    "diagnostics": {"route": "exact_hnsw_search_pack_v1", "fallback_reason": "none"},
+                },
+            ])
+
+            def fetch(_url, path):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"profile")
+
+            with mock.patch.object(harness, "fetch_file", side_effect=fetch), \
+                    mock.patch.object(harness, "http_json", side_effect=lambda *_args, **_kwargs: next(responses)), \
+                    mock.patch.object(harness, "close_process_group_cleanly"), \
+                    mock.patch.object(harness, "start_service", return_value=(reopened, {}, ["service"])):
+                harness.complete_lifecycle(state, args, root, root / "service", proc, sampler)
+
+            profile = state.lifecycle["profiles"][0]
+            events = [
+                json.loads(line)
+                for line in (root / "lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual((profile["before_sequence"], profile["after_sequence"]), (8, 9))
+        self.assertEqual(events[8]["stage"], "cache_warm")
+        self.assertEqual(events[9]["stage"], "graceful_close")
 
     def test_column_graph_ready_asset_uses_index_generation_not_root_id(self) -> None:
         optimize = {

@@ -2447,11 +2447,12 @@ def bind_lifecycle_task_config(
     task_config = selected.get("task_config")
     if not isinstance(task_config, dict):
         raise RuntimeError("canonical VDBBench result has no task_config object")
-    if args.case_type == "PerformanceCustomDataset":
-        if custom_task_config_shape(task_config) != (expected_rows, dimensions):
-            raise RuntimeError("custom VDBBench task_config shape does not match lifecycle dataset shape")
-        if custom_task_config_dataset_file(task_config) != args.lifecycle_dataset_file.resolve():
-            raise RuntimeError("custom VDBBench task_config does not select the checksum-bound lifecycle dataset file")
+    if args.case_type != "PerformanceCustomDataset":
+        raise RuntimeError("lifecycle requires PerformanceCustomDataset for checksum-bound task_config evidence")
+    if custom_task_config_shape(task_config) != (expected_rows, dimensions):
+        raise RuntimeError("custom VDBBench task_config shape does not match lifecycle dataset shape")
+    if custom_task_config_dataset_file(task_config) != args.lifecycle_dataset_file.resolve():
+        raise RuntimeError("custom VDBBench task_config does not select the checksum-bound lifecycle dataset file")
     binding = {
         "result_file": selected.get("result_file"),
         "result_sha256": selected.get("result_sha256"),
@@ -2712,8 +2713,8 @@ def complete_lifecycle(
                 "path": profile_relative,
                 "sha256": profile_sha,
                 "kind": "heap",
-                "before_sequence": 5,
-                "after_sequence": 6,
+                "before_sequence": 8,
+                "after_sequence": 9,
             }
         ],
     })
@@ -2923,9 +2924,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             parser.error("lifecycle completion currently requires command_wal_durable")
         if not args.lifecycle_dataset_file:
             parser.error("lifecycle requires --lifecycle-dataset-file")
-        if args.case_type == "PerformanceCustomDataset" and (
-            args.lifecycle_vectors <= 0 or args.lifecycle_dimensions <= 0
-        ):
+        if args.case_type != "PerformanceCustomDataset":
+            parser.error("lifecycle requires PerformanceCustomDataset for checksum-bound dataset evidence")
+        if args.lifecycle_vectors <= 0 or args.lifecycle_dimensions <= 0:
             parser.error("custom lifecycle requires positive --lifecycle-vectors and --lifecycle-dimensions")
         if args.diagnostics_interval <= 0:
             parser.error("diagnostics-interval must be positive")

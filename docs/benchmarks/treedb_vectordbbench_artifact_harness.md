@@ -111,7 +111,7 @@ vector count. Integer diagnostic flags must also parse within the 64-bit Go
 service's signed `flag.Int` range. A nonempty effective `pprof` address must
 use an unscoped loopback host and an ASCII-decimal TCP port from 1 through
 65535; port zero is excluded because the service does not publish the selected
-ephemeral diagnostics port. `PerformanceCustomDataset` additionally binds the
+ephemeral diagnostics port. Lifecycle capture requires `PerformanceCustomDataset` so it can bind the
 unique canonical result file and task-config checksum, verifies its size and
 dimension against the lifecycle declaration, resolves the exact one-file
 `train.parquet` or `shuffle_train.parquet` selection, and hashes those actual
