@@ -145,6 +145,12 @@ func registerColumnVectorGraphDurablePublication(ctx backenddb.CommandWALPublish
 	return ctx.RegisterDurableResources(resources)
 }
 
+func reconcileColumnGraphBuildTiming(timing *ColumnGraphBuildTiming) {
+	timing.AssetPreparation = max(timing.AssetPreparation, timing.InvNormPreparation+timing.AdjacencyStatePreparation+timing.RowRefPreparation+timing.DocumentIDPreparation+timing.QuantizedPreparation+timing.SearchPackPreparation+timing.ManifestFinalization)
+	timing.Publication = max(timing.Publication, timing.AssetPreparation)
+	timing.Total = max(timing.Total, timing.Snapshot+timing.RowExtraction+timing.AdjacencyBuild+timing.LocalityRemap+timing.Publication)
+}
+
 func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
 	started := time.Now()
 	var timing ColumnGraphBuildTiming
@@ -339,6 +345,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		return VectorIndexStatus{}, err
 	}
 	timing.Total = collectionObservedElapsedSince(started)
+	reconcileColumnGraphBuildTiming(&timing)
 	status.Duration = timing.Total
 	status.ColumnGraphBuild = timing
 	return status, nil
@@ -600,6 +607,7 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 	}
 	if timing != nil {
 		timing.Total = collectionObservedElapsedSince(started)
+		reconcileColumnGraphBuildTiming(timing)
 		status.Duration = timing.Total
 		status.ColumnGraphBuild = *timing
 	}

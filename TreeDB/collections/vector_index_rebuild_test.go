@@ -295,6 +295,27 @@ func TestColumnGraphRebuildVectorIndexPublishesEmptyPhysicalManifestV2A(t *testi
 	}
 }
 
+func TestColumnGraphBuildTimingReconcilesCoarseClockV2A(t *testing.T) {
+	timing := ColumnGraphBuildTiming{
+		Total:                     100,
+		Snapshot:                  1,
+		RowExtraction:             1,
+		AssetPreparation:          100,
+		InvNormPreparation:        1,
+		AdjacencyStatePreparation: 60,
+		RowRefPreparation:         1,
+		DocumentIDPreparation:     30,
+		QuantizedPreparation:      1,
+		SearchPackPreparation:     40,
+		ManifestFinalization:      1,
+		Publication:               100,
+	}
+	reconcileColumnGraphBuildTiming(&timing)
+	if timing.AssetPreparation != 134 || timing.Publication != 134 || timing.Total != 136 {
+		t.Fatalf("reconciled coarse-clock timing=%+v want asset/publication/total=134/134/136", timing)
+	}
+}
+
 func TestColumnGraphRebuildPublishesUint32ListAdjacencyStateNotLegacySource1989(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
