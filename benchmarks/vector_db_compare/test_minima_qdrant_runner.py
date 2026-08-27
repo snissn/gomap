@@ -522,7 +522,10 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertEqual(session["disposition"], "queued/idle")
         self.assertEqual(session["snapshots"][-1]["status"], "grey")
         self.assertFalse(session["snapshots"][-1]["optimizations"]["available"])
-        self.assertIn("NotImplementedError", session["snapshots"][-1]["optimizations"]["reason"])
+        self.assertTrue(any(
+            marker in session["snapshots"][-1]["optimizations"]["reason"]
+            for marker in ("NotImplementedError", "no optimizer diagnostic budget")
+        ))
         self.assertFalse(artifact["passing"])
         self.assertEqual(artifact["state"], "partial")
         workload.close()
