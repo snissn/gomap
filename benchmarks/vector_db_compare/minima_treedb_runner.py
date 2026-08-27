@@ -513,13 +513,70 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                     raise RuntimeError(f"diagnostic resume ID preflight returned the wrong document for {identifier!r}")
                 present.append(identifier)
         return present
+    def _initial_prefix_identity(self, operation: dict[str, Any], insertion: dict[str, Any],
+                                 start: int, expected_before: int) -> dict[str, Any]:
+        expected = common.StateAccumulator()
+        found = False
+        for row in operation.get("insert_ranges", []):
+            end = row["start"] + row["rows"]
+            if row is insertion:
+                end = start
+                found = True
+            spec = self.specs[row["scenario"]]
+            for ordinal in range(row["start"], end):
+                expected.add(common.generated_document(spec, ordinal))
+            if found:
+                break
+        if not found or expected.count != expected_before:
+            raise RuntimeError(
+                f"diagnostic resume prefix construction produced {expected.count} rows, expected {expected_before}",
+            )
+
+        assert self.client is not None
+        actual = common.StateAccumulator()
+        after_id: str | None = None
+        while True:
+            result = self.client.filter_documents(
+                self.collection, limit=1024, after_id=after_id, cursor_page=True,
+            )
+            if result.matched_count != len(result.documents) or len(result.documents) > 1024:
+                raise RuntimeError("diagnostic resume prefix stream returned an ambiguous page")
+            for document in result.documents:
+                actual.add({
+                    "id": document.id, "content": document.content,
+                    "user_id": document.meta.get("user_id"), "fpath": document.meta.get("fpath"),
+                })
+            if result.exhausted:
+                break
+            if not result.next_after_id or result.next_after_id == after_id:
+                raise RuntimeError("diagnostic resume prefix stream cursor did not advance")
+            after_id = result.next_after_id
+        expected_digest, actual_digest = expected.hexdigest(), actual.hexdigest()
+        return {
+            "algorithm": "public cursor stream plus minima-committed-payload-v1",
+            "expected_rows": expected.count, "actual_rows": actual.count,
+            "expected_digest": expected_digest, "actual_digest": actual_digest,
+            "match": expected.count == actual.count and expected_digest == actual_digest,
+        }
+
 
     def run_diagnostic_resume(self, scenario: str, start: int) -> None:
         self.diagnostic_resume = {
             "enabled": True, "nonqualifying": True, "operation": "initial_batch_insert",
             "scenario": scenario, "batch_start": start, "state": "preflight",
         }
-        self.evidence.failures.append("diagnostic exact-batch resume is nonqualifying evidence")
+        try:
+            self.evidence.failures.append("diagnostic exact-batch resume is nonqualifying evidence")
+            self._run_diagnostic_resume(scenario, start)
+        except BaseException as exc:
+            state = self.diagnostic_resume["state"]
+            if not state.startswith("rejected_"):
+                self.diagnostic_resume["failure_phase"] = state
+                self.diagnostic_resume["state"] = "failed"
+            self.diagnostic_resume["error"] = f"{type(exc).__name__}: {exc}"
+            raise
+
+    def _run_diagnostic_resume(self, scenario: str, start: int) -> None:
         self.resource_baseline = common.server_resource_usage(
             self.controller.pid, self.storage_path, self.resource_server_name,
         )
@@ -561,6 +618,13 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 self.diagnostic_resume["state"] = "rejected_ambiguous_count"
                 raise RuntimeError(
                     f"diagnostic resume rejected: visible rows={visible_rows}, expected first missing boundary={expected_before}",
+                )
+            prefix_identity = self._initial_prefix_identity(operation, insertion, start, expected_before)
+            self.diagnostic_resume["prefix_identity"] = prefix_identity
+            if not prefix_identity["match"]:
+                self.diagnostic_resume["state"] = "rejected_prefix_mismatch"
+                raise RuntimeError(
+                    "diagnostic resume rejected: existing public collection does not match the exact initial prefix",
                 )
             self._expected_rows = expected_before
             self.diagnostic_resume["state"] = "submitting"

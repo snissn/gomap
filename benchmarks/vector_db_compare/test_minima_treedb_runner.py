@@ -153,6 +153,10 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.controller.pid = 123
         workload.connect = lambda: None
         workload.ensure_compatible = lambda: None
+        workload._initial_prefix_identity = lambda *_args: {
+            "algorithm": "test", "expected_rows": 512, "actual_rows": 512,
+            "expected_digest": "expected", "actual_digest": "expected", "match": True,
+        }
         return workload
 
     def test_search_uses_public_filtered_ann_and_captures_actual_interval(self) -> None:
@@ -341,6 +345,35 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 self.assertEqual(workload.diagnostic_resume["present_ids_after"], 256)
                 self.assertEqual(workload.diagnostic_resume["visible_rows_after"], 768)
                 self.assertEqual(workload.batch_correlations[0]["accumulated_expected_rows"], 768)
+
+    def test_exact_resume_rejects_matching_count_with_prefix_digest_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(common, "server_resource_usage", return_value={}):
+            workload = self.resume_workload(Path(directory), present_ids=set(), count=512)
+            workload._initial_prefix_identity = lambda *_args: {
+                "algorithm": "test", "expected_rows": 512, "actual_rows": 512,
+                "expected_digest": "expected", "actual_digest": "unrelated-replacement", "match": False,
+            }
+            with self.assertRaisesRegex(RuntimeError, "does not match the exact initial prefix"):
+                workload.run_diagnostic_resume("resume", 512)
+            self.assertEqual(workload.diagnostic_resume["state"], "rejected_prefix_mismatch")
+            self.assertFalse(workload.diagnostic_resume["prefix_identity"]["match"])
+            self.assertEqual(workload.batch_correlations, [])
+
+    def test_exact_resume_unexpected_exception_sets_failed_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(common, "server_resource_usage", return_value={}):
+            workload = self.resume_workload(Path(directory), present_ids=set(), count=512)
+
+            def fail_connect() -> None:
+                raise OSError("unexpected connection failure")
+
+            workload.connect = fail_connect
+            with self.assertRaisesRegex(OSError, "unexpected connection failure"):
+                workload.run_diagnostic_resume("resume", 512)
+            self.assertEqual(workload.diagnostic_resume["state"], "failed")
+            self.assertEqual(workload.diagnostic_resume["failure_phase"], "preflight")
+            self.assertIn("OSError", workload.diagnostic_resume["error"])
 
 
     def test_diagnostic_controller_argv_and_stats_readiness_are_opt_in(self) -> None:
