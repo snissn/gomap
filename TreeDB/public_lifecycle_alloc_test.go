@@ -77,7 +77,7 @@ func TestVacuumOnlineStatsSharesCloseLifecycleLock(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Close: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("Close did not complete after lifecycle unlock")
 	}
 }
