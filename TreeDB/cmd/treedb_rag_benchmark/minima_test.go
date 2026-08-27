@@ -502,6 +502,16 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.ServiceLog.Tail = ""
 			a.RawEvidence["treedb"] = raw
 		}},
+		{"missing Qdrant transition evidence", func(a *minimaArtifact) {
+			raw := a.RawEvidence["qdrant"]
+			raw.CollectionConfigurationTransition = nil
+			a.RawEvidence["qdrant"] = raw
+		}},
+		{"missing Qdrant readiness evidence", func(a *minimaArtifact) {
+			raw := a.RawEvidence["qdrant"]
+			raw.Readiness = nil
+			a.RawEvidence["qdrant"] = raw
+		}},
 		{"incomplete Qdrant production transition", func(a *minimaArtifact) {
 			raw := a.RawEvidence["qdrant"]
 			raw.CollectionConfigurationTransition.Completed = false
@@ -646,7 +656,7 @@ func validMinimaArtifact() minimaArtifact {
 		}
 		if backend.Name == "qdrant" {
 			evidence := rawEvidence[backend.Name]
-			evidence.CollectionConfigurationTransition = minimaRawQdrantConfigurationTransition{
+			evidence.CollectionConfigurationTransition = &minimaRawQdrantConfigurationTransition{
 				Boundary: "initial_batch_insert_to_warmup_search", Attempted: true, Completed: true,
 				InitialUploadHNSW: json.RawMessage(minimaQdrantInitialHNSWConfig), InitialUploadOptimizers: json.RawMessage(minimaQdrantInitialOptimizerConfig),
 				ProductionHNSW: json.RawMessage(minimaQdrantProductionHNSWConfig), ProductionOptimizers: json.RawMessage(minimaQdrantProductionOptimizerConfig),
@@ -682,7 +692,7 @@ func validMinimaArtifact() minimaArtifact {
 					ResourceSamples: []json.RawMessage{json.RawMessage(`{"captured":true}`)}, Outcome: "ready", Disposition: "ready",
 				})
 			}
-			evidence.Readiness = minimaRawQdrantReadiness{
+			evidence.Readiness = &minimaRawQdrantReadiness{
 				Sessions: sessions, LatestNonReadyDisposition: "none",
 			}
 			rawEvidence[backend.Name] = evidence
@@ -900,6 +910,25 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 		len(combined.RawEvidence["qdrant"].Events) != 1 ||
 		combined.RawEvidence["qdrant"].ResourceAvailability["end"]["rss_bytes"] != "test" {
 		t.Fatal("combined artifact dropped typed backend raw evidence fields")
+	}
+	var wire struct {
+		RawEvidence map[string]map[string]json.RawMessage `json:"backend_raw_evidence"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	treeRaw, qdrantRaw := wire.RawEvidence["treedb"], wire.RawEvidence["qdrant"]
+	if _, leaked := treeRaw["collection_configuration_transition"]; leaked {
+		t.Fatal("combined TreeDB raw evidence leaked Qdrant configuration transition")
+	}
+	if _, leaked := treeRaw["readiness"]; leaked {
+		t.Fatal("combined TreeDB raw evidence leaked Qdrant readiness")
+	}
+	if _, ok := qdrantRaw["collection_configuration_transition"]; !ok {
+		t.Fatal("combined Qdrant raw evidence dropped configuration transition")
+	}
+	if _, ok := qdrantRaw["readiness"]; !ok {
+		t.Fatal("combined Qdrant raw evidence dropped readiness")
 	}
 	if err := validateMinimaArtifact(&combined); err != nil || combined.State != "pass" || !combined.Passing {
 		t.Fatalf("combined artifact=%+v err=%v", combined, err)

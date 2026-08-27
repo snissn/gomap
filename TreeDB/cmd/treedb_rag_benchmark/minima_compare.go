@@ -197,8 +197,8 @@ type minimaRawBackendEvidence struct {
 	ServiceLog                        minimaRawServiceLog                     `json:"service_log,omitempty"`
 	ResourceAvailability              map[string]map[string]string            `json:"resource_availability,omitempty"`
 	NativeRouteResponses              map[string]json.RawMessage              `json:"native_route_responses,omitempty"`
-	CollectionConfigurationTransition minimaRawQdrantConfigurationTransition  `json:"collection_configuration_transition"`
-	Readiness                         minimaRawQdrantReadiness                `json:"readiness"`
+	CollectionConfigurationTransition *minimaRawQdrantConfigurationTransition `json:"collection_configuration_transition,omitempty"`
+	Readiness                         *minimaRawQdrantReadiness               `json:"readiness,omitempty"`
 }
 
 type minimaPayloadEvidence struct {
@@ -516,7 +516,10 @@ func minimaQdrantOptimizerReady(raw json.RawMessage) bool {
 }
 
 func validateMinimaQdrantReadiness(raw minimaRawBackendEvidence, backend minimaBackendEvidence, expectedSessions int) error {
-	transition := raw.CollectionConfigurationTransition
+	if raw.CollectionConfigurationTransition == nil || raw.Readiness == nil {
+		return fmt.Errorf("minima artifact: Qdrant transition/readiness evidence is missing")
+	}
+	transition := *raw.CollectionConfigurationTransition
 	if transition.Boundary != "initial_batch_insert_to_warmup_search" ||
 		!transition.Attempted || !transition.Completed || transition.Error != "" {
 		return fmt.Errorf("minima artifact: Qdrant production configuration transition is incomplete")

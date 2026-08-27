@@ -159,6 +159,15 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         }
         return workload
 
+    def test_qdrant_lifecycle_hooks_are_isolated_from_treedb(self) -> None:
+        workload = self.workload(self.response())
+        workload.restore_production_configuration = mock.Mock(
+            side_effect=AssertionError("Qdrant production transition invoked for TreeDB"),
+        )
+        workload.initial_load_to_query_boundary()
+        workload.restore_production_configuration.assert_not_called()
+        workload.wait_ready(expected_count=0, phase="initial_load_to_query")
+
     def test_search_uses_public_filtered_ann_and_captures_actual_interval(self) -> None:
         workload = self.workload(self.response())
         interval: dict[str, int] = {}
@@ -654,7 +663,14 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             visibility_mismatch_count=0,
             visibility_retry_count=0,
         )}
-        base_artifact = {"backends": [{}], "scenarios": [{"scenario": "small"}], "backend_raw_evidence": {"qdrant": {}}}
+        base_artifact = {
+            "backends": [{"configuration": {"initial_upload_hnsw": "qdrant-only"}}],
+            "scenarios": [{"scenario": "small"}],
+            "backend_raw_evidence": {"qdrant": {
+                "collection_configuration_transition": {"attempted": False},
+                "readiness": {"sessions": []},
+            }},
+        }
         with mock.patch.object(common.QdrantMinimaRunner, "artifact", return_value=base_artifact):
             artifact = workload.artifact()
         configuration = artifact["backends"][0]["configuration"]
@@ -663,6 +679,9 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         raw = artifact["backend_raw_evidence"]["treedb"]
         self.assertEqual(raw["resource_measurement"], resource)
         self.assertEqual(raw["resource_availability"]["measurement"], common.RESOURCE_SEMANTICS)
+        self.assertNotIn("initial_upload_hnsw", configuration)
+        self.assertNotIn("collection_configuration_transition", raw)
+        self.assertNotIn("readiness", raw)
         self.assertEqual(artifact["scenarios"][0]["route"]["candidate_ids"], 5)
         self.assertEqual(artifact["scenarios"][0]["route"]["visited_candidates"], 41)
         self.assertEqual(raw["native_route_responses"]["small"]["candidates"], 41)
