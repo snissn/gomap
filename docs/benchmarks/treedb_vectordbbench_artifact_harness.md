@@ -211,7 +211,8 @@ are structurally required. Completion requires the cold-reopened query to
 return exactly `requested_top_k` well-formed result objects. The validator
 parses the checksum-bound raw response and requires its no-document status,
 route, fallback status, reopened service generation, index/vector-index identity,
-and result count to match the embedded event. The checksum-bound count response
+result count, query mode, and (for scalar-u8 rerank) quantized index and candidate
+budget to match the checksum-bound harness configuration. The checksum-bound count response
 must report the exact expected rows from that same reopened index generation and
 identity. The raw route response must also carry the service-emitted
 `no_document_guardrails_ok: true` diagnostic and exact zero

@@ -2590,6 +2590,35 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                         errors.append("lifecycle route response route does not match route_verify")
                     if raw_summary["fallback_reason"] != route.get("fallback_reason"):
                         errors.append("lifecycle route response fallback status does not match route_verify")
+                    selected_row = harness.get("rows")
+                    expected_query_mode = "exact"
+                    expected_quantized_index: str | None = None
+                    expected_rerank_candidates = 0
+                    if selected_row == "scalar":
+                        expected_query_mode = "quantized_rerank"
+                        expected_quantized_index = harness.get("quantized_index_name")
+                        rerank_candidates = harness.get("rerank_candidates")
+                        top_k = route.get("requested_top_k")
+                        if (
+                            not isinstance(expected_quantized_index, str)
+                            or not expected_quantized_index
+                            or isinstance(rerank_candidates, bool)
+                            or not isinstance(rerank_candidates, int)
+                            or isinstance(top_k, bool)
+                            or not isinstance(top_k, int)
+                        ):
+                            errors.append("scalar lifecycle route configuration is invalid")
+                        else:
+                            expected_rerank_candidates = max(rerank_candidates, top_k)
+                    elif selected_row != "exact":
+                        errors.append("lifecycle harness rows must select exactly one supported route")
+                    if (
+                        raw_route_response.get("query_mode") != expected_query_mode
+                        or raw_route_response.get("quantized_index_name") != expected_quantized_index
+                        or raw_route_response.get("quantized_rerank_candidates")
+                        != expected_rerank_candidates
+                    ):
+                        errors.append("lifecycle route response search configuration does not match harness")
 
     if status == "completed" and manifest.get("lifecycle_count_proof") == "lifecycle_count_response.json":
         try:
@@ -3291,6 +3320,13 @@ def run_loaded_route_proof(
     ):
         raise RuntimeError("cold-reopen route proof response index identity is missing or stale")
     if (
+        response.get("query_mode") != request["query_mode"]
+        or response.get("quantized_index_name") != request.get("quantized_index_name")
+        or response.get("quantized_rerank_candidates", 0)
+        != request.get("quantized_rerank_candidates", 0)
+    ):
+        raise RuntimeError("cold-reopen route proof response search configuration is missing or stale")
+    if (
         not isinstance(diagnostics, dict)
         or not isinstance(diagnostics.get("route"), str)
         or not diagnostics.get("route")
@@ -3681,6 +3717,7 @@ def write_manifest(
             "smoke_documents": args.smoke_documents,
             "smoke_top_k": args.smoke_top_k,
             "rerank_candidates": args.rerank_candidates,
+            "quantized_index_name": args.quantized_index_name,
             "num_per_batch": args.num_per_batch,
             "vdbbench_dry_run": args.vdbbench_dry_run,
         },

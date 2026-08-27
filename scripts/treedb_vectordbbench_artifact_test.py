@@ -112,6 +112,9 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
     harness.write_json(lifecycle_route_response, {
         "index": {"name": "index-a", "generation": 7},
         "vector_index_name": "vector_hnsw",
+        "query_mode": "exact",
+        "quantized_index_name": None,
+        "quantized_rerank_candidates": 0,
         "results": [{"id": "1"}, {"id": "2"}],
         "no_documents": True,
         "stats": {"search_route_hnsw_search_pack": 1},
@@ -292,11 +295,15 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         },
         "harness": {
             "mode": "vdbbench+lifecycle",
+            "rows": "exact",
             "case_type": "Performance768D50K",
+            "k": 2,
             "num_per_batch": 500,
             "num_concurrency": "32",
             "m": 16,
             "ef_construction": 128,
+            "rerank_candidates": 32,
+            "quantized_index_name": "embedding_scalar_u8",
         },
         "vdbbench": [],
         "route_proof": None,
@@ -1245,6 +1252,9 @@ class LifecycleValidatorTest(unittest.TestCase):
             (lambda response: response["index"].__setitem__("generation", 8), "generation"),
             (lambda response: response["index"].__setitem__("name", "other-index"), "index identity"),
             (lambda response: response.__setitem__("vector_index_name", "other-vector"), "index identity"),
+            (lambda response: response.__setitem__("query_mode", "quantized_rerank"), "search configuration"),
+            (lambda response: response.__setitem__("quantized_index_name", "other-quantized"), "search configuration"),
+            (lambda response: response.__setitem__("quantized_rerank_candidates", 64), "search configuration"),
             (lambda response: response["diagnostics"].__setitem__("route", "quantized_rerank"), "route"),
         )
         for mutation, expected in mutations:
@@ -2721,6 +2731,12 @@ class LifecycleValidatorTest(unittest.TestCase):
                     response_path = root / "lifecycle_route_response.json"
                     response = json.loads(response_path.read_text(encoding="utf-8"))
                     response["diagnostics"]["route"] = route_name
+                    if route_name == "quantized_rerank":
+                        manifest["harness"]["rows"] = "scalar"
+                        response["query_mode"] = "quantized_rerank"
+                        response["quantized_index_name"] = manifest["harness"]["quantized_index_name"]
+                        response["quantized_rerank_candidates"] = manifest["harness"]["rerank_candidates"]
+                        manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
                     harness.write_json(response_path, response)
                     manifest["lifecycle"]["raw_artifacts"][1]["sha256"] = harness.sha256_file(response_path)
                     rewrite_lifecycle_fixture(root, manifest, events)
@@ -3328,6 +3344,9 @@ class LifecycleIntegrationTest(unittest.TestCase):
                 {
                     "index": {"name": harness.lifecycle_index_name(args), "generation": 7},
                     "vector_index_name": "vector_hnsw",
+                    "query_mode": "exact",
+                    "quantized_index_name": None,
+                    "quantized_rerank_candidates": 0,
                     "no_documents": True,
                     "results": [{"id": "1"}, {"id": "2"}],
                     "stats": {"search_route_hnsw_search_pack": 1},
@@ -3368,6 +3387,9 @@ class LifecycleIntegrationTest(unittest.TestCase):
         valid_response = {
             "index": {"name": "cohere", "generation": 7},
             "vector_index_name": "vector_hnsw",
+            "query_mode": "exact",
+            "quantized_index_name": None,
+            "quantized_rerank_candidates": 0,
             "no_documents": True,
             "results": [{"id": "1"}, {"id": "2"}],
             "stats": {"search_route_hnsw_search_pack": 1},
@@ -3387,6 +3409,27 @@ class LifecycleIntegrationTest(unittest.TestCase):
 
         self.assertEqual(route["requested_top_k"], 2)
         self.assertEqual(route["result_count"], 2)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args, state, _sampler, _proc = self._complete_fixture(root)
+            args.rows = "scalar"
+            scalar_response = json.loads(json.dumps(valid_response))
+            scalar_response.update({
+                "query_mode": "quantized_rerank",
+                "quantized_index_name": args.quantized_index_name,
+                "quantized_rerank_candidates": max(args.rerank_candidates, args.k),
+            })
+            scalar_response["diagnostics"]["route"] = "quantized_rerank"
+            responses = iter([{"index": {"generation": 7}}, scalar_response])
+            with mock.patch.object(
+                harness, "http_json", side_effect=lambda *_args, **_kwargs: next(responses)
+            ):
+                scalar_route = harness.run_loaded_route_proof(
+                    state, args, "cohere", "cohere:vector_hnsw", 7, 7
+                )
+
+        self.assertEqual(scalar_route["name"], "quantized_rerank")
 
         for results in (
             [],
@@ -3450,6 +3493,9 @@ class LifecycleIntegrationTest(unittest.TestCase):
                 "index identity",
             ),
             (dict(valid_response, vector_index_name="other"), "index identity"),
+            (dict(valid_response, query_mode="quantized_rerank"), "search configuration"),
+            (dict(valid_response, quantized_index_name="other"), "search configuration"),
+            (dict(valid_response, quantized_rerank_candidates=32), "search configuration"),
             (dict(valid_response, diagnostics=[]), "diagnostics"),
             (dict(valid_response, no_documents="true"), "no-document"),
         )
