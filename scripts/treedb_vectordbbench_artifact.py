@@ -273,8 +273,96 @@ def memory_bytes() -> int | None:
 
 
 def storage_context(path: Path) -> dict[str, Any]:
-    output = command_output(["findmnt", "-n", "-o", "SOURCE,FSTYPE,TARGET", "--target", str(path)])
-    return {"path": str(path.resolve()), "mount": output or "unavailable"}
+    resolved = path.resolve(strict=False)
+    try:
+        resolved = path.resolve(strict=True)
+        result = subprocess.run(
+            ["findmnt", "--json", "-b", "-o", "SOURCE,FSTYPE,TARGET,SIZE", "--target", str(resolved)],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=10,
+        )
+        document = json.loads(result.stdout)
+        if not isinstance(document, dict):
+            raise ValueError("findmnt output is not an object")
+        filesystems = document.get("filesystems")
+        if not isinstance(filesystems, list) or len(filesystems) != 1 or not isinstance(filesystems[0], dict):
+            raise ValueError("findmnt did not identify exactly one filesystem")
+        filesystem = filesystems[0]
+        capacity = filesystem.get("size")
+        if isinstance(capacity, str) and capacity.isascii() and capacity.isdigit():
+            capacity = int(capacity)
+        storage = {
+            "path": str(resolved),
+            "method": "findmnt",
+            "device": filesystem.get("source"),
+            "filesystem": filesystem.get("fstype"),
+            "mount": filesystem.get("target"),
+            "capacity_bytes": capacity,
+        }
+        if valid_storage_context(storage):
+            return storage
+    except (FileNotFoundError, json.JSONDecodeError, OSError, subprocess.SubprocessError, ValueError):
+        pass
+
+    try:
+        result = subprocess.run(
+            ["df", "-P", "-k", str(resolved)],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=10,
+        )
+        fields = result.stdout.strip().splitlines()[-1].split(maxsplit=5)
+        if len(fields) != 6 or not fields[1].isascii() or not fields[1].isdigit():
+            raise ValueError("df did not report POSIX storage fields")
+        stat_command = ["stat", "-f", "%T", str(resolved)]
+        if platform.system() == "Linux":
+            stat_command = ["stat", "-f", "-c", "%T", str(resolved)]
+        filesystem = subprocess.run(
+            stat_command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=10,
+        ).stdout.strip()
+        storage = {
+            "path": str(resolved),
+            "method": "df-p+stat",
+            "device": fields[0],
+            "filesystem": filesystem,
+            "mount": fields[5],
+            "capacity_bytes": int(fields[1]) * 1024,
+        }
+        return storage if valid_storage_context(storage) else {}
+    except (FileNotFoundError, OSError, subprocess.SubprocessError, ValueError):
+        return {}
+
+
+def valid_storage_context(storage: Any) -> bool:
+    def meaningful_text(key: str) -> bool:
+        value = storage.get(key)
+        return (
+            isinstance(value, str)
+            and bool(value.strip())
+            and value.strip().lower() != "unknown"
+            and not value.strip().lower().startswith("unavailable")
+        )
+
+    return (
+        isinstance(storage, dict)
+        and storage.get("method") in {"findmnt", "df-p+stat"}
+        and all(meaningful_text(key) for key in ("path", "device", "filesystem", "mount"))
+        and Path(storage["path"]).is_absolute()
+        and Path(storage["mount"]).is_absolute()
+        and isinstance(storage.get("capacity_bytes"), int)
+        and not isinstance(storage.get("capacity_bytes"), bool)
+        and storage["capacity_bytes"] > 0
+    )
 
 
 def collect_context(
@@ -1403,6 +1491,10 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     binary = _object(service.get("binary"), "manifest.service.binary", errors)
     identity = _object(lifecycle.get("identity"), "lifecycle.identity", errors)
     harness = _object(manifest.get("harness"), "manifest.harness", errors)
+    manifest_vdbbench = manifest.get("vdbbench")
+    if not isinstance(manifest_vdbbench, list):
+        errors.append("manifest.vdbbench must be a list")
+        manifest_vdbbench = []
     if service.get("profile") not in ("command_wal_durable", "command_wal_relaxed", "no_wal_fast"):
         errors.append("manifest.service.profile must name a canonical public profile")
     service_command = service.get("command")
@@ -1531,7 +1623,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     errors.append(f"lifecycle.task_config_binding.{key} must be a non-empty string")
             candidates = [
                 row.get("load_metrics")
-                for row in manifest.get("vdbbench", [])
+                for row in manifest_vdbbench
                 if isinstance(row, dict) and isinstance(row.get("load_metrics"), dict)
             ]
             matches = [
@@ -1640,8 +1732,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         value = _nonnegative_int(host.get(key), f"manifest context.host.{key}", errors)
         if value == 0:
             errors.append(f"manifest context.host.{key} must be positive")
-    if not isinstance(host.get("storage"), dict) or not host["storage"]:
-        errors.append("manifest context.host.storage must describe the benchmark storage")
+    if not valid_storage_context(host.get("storage")):
+        errors.append("manifest context.host.storage must contain method, device, filesystem, mount, and positive capacity")
 
     lifecycle_path = _artifact_file(root, lifecycle.get("file"), "lifecycle", errors)
     events: list[dict[str, Any]] = []
@@ -1770,11 +1862,18 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     isinstance(generation, bool) or not isinstance(generation, int)
                 ):
                     errors.append(f"{prefix} state.route.index_asset_generation must be an integer")
+                for key in ("requested_top_k", "result_count"):
+                    value = route.get(key)
+                    if key in route and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
+                        errors.append(f"{prefix} state.route.{key} must be a positive integer")
         if stage == "route_verify":
             if not isinstance(route, dict):
                 errors.append(f"{prefix} route_verify must contain a route proof object")
             else:
-                for key in ("name", "fallback_reason", "optimized", "index_identity", "index_asset_generation"):
+                for key in (
+                    "name", "fallback_reason", "optimized", "index_identity", "index_asset_generation",
+                    "requested_top_k", "result_count",
+                ):
                     if key not in route:
                         errors.append(f"{prefix} state.route is missing required field {key}")
         rows = state.get("rows")
@@ -1959,6 +2058,10 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         and not isinstance(route_generation, bool)
         and isinstance(route_generation, int)
         and route_generation == index_reference[1]
+        and isinstance(route.get("requested_top_k"), int)
+        and not isinstance(route.get("requested_top_k"), bool)
+        and route.get("requested_top_k") > 0
+        and route.get("result_count") == route.get("requested_top_k")
     ):
         completion_errors.append("optimized route proof failed or used a stale index asset generation")
 
@@ -2520,6 +2623,16 @@ def run_loaded_route_proof(
         )
     response = http_json("POST", index_url(args.base_url, index_name, "/search/vector-index"), request)
     write_json(state.root / "lifecycle_route_response.json", response)
+    results = response.get("results")
+    if (
+        not isinstance(results, list)
+        or any(not isinstance(result, dict) for result in results)
+        or len(results) != request["top_k"]
+    ):
+        raise RuntimeError(
+            "cold-reopen route proof did not return exactly the requested results: "
+            f"requested={request['top_k']} actual={len(results) if isinstance(results, list) else 'malformed'}"
+        )
     summary = proof_summary(row, index_name, response, request)
     route = {
         "name": summary["route"],
@@ -2527,6 +2640,8 @@ def run_loaded_route_proof(
         "optimized": summary["route"] == expected_route and summary["fallback_reason"] == "none",
         "index_identity": index_identity,
         "index_asset_generation": asset_generation,
+        "requested_top_k": request["top_k"],
+        "result_count": len(results),
     }
     if not route["optimized"] or not response.get("no_documents"):
         raise RuntimeError(f"cold-reopen route proof failed: {route}")
@@ -3028,6 +3143,9 @@ def main(argv: list[str]) -> int:
         total_memory = context.get("host", {}).get("memory_bytes")
         if isinstance(total_memory, bool) or not isinstance(total_memory, int) or total_memory <= 0:
             print("harness failed before start; error=positive host memory size is unavailable", file=sys.stderr)
+            return 2
+        if not valid_storage_context(context.get("host", {}).get("storage")):
+            print("harness failed before start; error=benchmark storage identity is unavailable", file=sys.stderr)
             return 2
     service_proc: subprocess.Popen[str] | None = None
     service_command: list[str] | None = None

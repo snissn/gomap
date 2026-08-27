@@ -139,6 +139,8 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
                 "optimized": True,
                 "index_identity": "index-a",
                 "index_asset_generation": 7,
+                "requested_top_k": 2,
+                "result_count": 2,
             }
         events.append({
             "schema_version": harness.LIFECYCLE_EVENT_SCHEMA,
@@ -158,7 +160,14 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
                 "logical_cpu_count": 16,
                 "physical_cpu_count": 8,
                 "memory_bytes": 64 * 1024**3,
-                "storage": {"kind": "local-nvme", "filesystem": "xfs"},
+                "storage": {
+                    "path": str(root),
+                    "method": "findmnt",
+                    "device": "/dev/nvme0n1p1",
+                    "filesystem": "xfs",
+                    "mount": str(root),
+                    "capacity_bytes": 1_000_000,
+                },
             },
         },
         "service": {
@@ -177,6 +186,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "m": 16,
             "ef_construction": 128,
         },
+        "vdbbench": [],
     }
     manifest["lifecycle"] = {
         "schema_version": harness.LIFECYCLE_SCHEMA,
@@ -275,6 +285,67 @@ class HostContextTest(unittest.TestCase):
         with mock.patch.object(Path, "read_text", side_effect=OSError("no proc")), \
                 mock.patch.object(harness.os, "sysconf", side_effect=(4096, 1000)):
             self.assertEqual(harness.memory_bytes(), 4_096_000)
+
+    def test_storage_context_uses_structured_findmnt_evidence(self) -> None:
+        payload = json.dumps({"filesystems": [{
+            "source": "/dev/nvme0n1p1", "fstype": "ext4", "target": "/mnt/fast4tb", "size": 4096,
+        }]})
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            harness.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0, stdout=payload),
+        ):
+            got = harness.storage_context(Path(tmp))
+
+        self.assertEqual(got["method"], "findmnt")
+        self.assertEqual(got["capacity_bytes"], 4096)
+        self.assertTrue(harness.valid_storage_context(got))
+
+    def test_storage_context_falls_back_to_df_and_stat(self) -> None:
+        df_output = "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk1 1000 1 999 1% /\n"
+        responses = [
+            FileNotFoundError("findmnt"),
+            subprocess.CompletedProcess([], 0, stdout=df_output),
+            subprocess.CompletedProcess([], 0, stdout="apfs\n"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(harness.platform, "system", return_value="Darwin"), \
+                mock.patch.object(harness.subprocess, "run", side_effect=responses):
+            got = harness.storage_context(Path(tmp))
+
+        self.assertEqual(got["method"], "df-p+stat")
+        self.assertEqual(got["device"], "/dev/disk1")
+        self.assertEqual(got["filesystem"], "apfs")
+        self.assertEqual(got["capacity_bytes"], 1_024_000)
+
+    def test_storage_context_fails_closed_when_discovery_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            harness.subprocess,
+            "run",
+            side_effect=FileNotFoundError("storage commands unavailable"),
+        ):
+            self.assertEqual(harness.storage_context(Path(tmp)), {})
+
+    def test_lifecycle_fails_before_build_when_storage_identity_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "artifact"
+            dataset = Path(tmp) / "train.parquet"
+            dataset.write_bytes(b"dataset")
+            context = {"host": {"memory_bytes": 1024, "storage": {}}}
+            stderr = io.StringIO()
+            with mock.patch.object(harness, "collect_context", return_value=context), \
+                    mock.patch.object(harness, "build_service") as build, \
+                    contextlib.redirect_stderr(stderr):
+                exit_code = harness.main([
+                    "--out", str(root), "--run-vdbbench", "--rows", "exact",
+                    "--case-type", "PerformanceCustomDataset", "--lifecycle",
+                    "--lifecycle-dataset-file", str(dataset),
+                    "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
+                ])
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("benchmark storage identity is unavailable", stderr.getvalue())
+        build.assert_not_called()
 
     def test_lifecycle_fails_before_build_when_memory_size_is_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -555,6 +626,36 @@ class LifecycleValidatorTest(unittest.TestCase):
             "reopened": 50_000,
         })
         self.assertEqual(got["t_ready_seconds"], 8.0)
+
+    def test_manifest_vdbbench_must_be_a_list(self) -> None:
+        for invalid in (None, {"row": "exact"}):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                manifest["vdbbench"] = invalid
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any("manifest.vdbbench must be a list" in item for item in got["errors"]), got)
+
+    def test_manifest_storage_requires_meaningful_identity_and_capacity(self) -> None:
+        invalid_storage = (
+            {"mount": "unavailable: findmnt missing"},
+            {"path": "/tmp", "method": "findmnt", "device": "/dev/x", "filesystem": "xfs", "mount": "/tmp", "capacity_bytes": 0},
+        )
+        for storage in invalid_storage:
+            with self.subTest(storage=storage), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                manifest["context"]["host"]["storage"] = storage
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any("positive capacity" in item for item in got["errors"]), got)
 
     def test_custom_case_binds_canonical_task_config_and_dataset_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -846,8 +947,13 @@ class LifecycleValidatorTest(unittest.TestCase):
             (12, lambda state: state["route"].__setitem__("optimized", 1), "route.optimized"),
             (12, lambda state: state["route"].__setitem__("index_identity", 7), "route.index_identity"),
             (12, lambda state: state["route"].__setitem__("index_asset_generation", 7.0), "route.index_asset_generation"),
+            (12, lambda state: state["route"].__setitem__("requested_top_k", "2"), "route.requested_top_k"),
+            (12, lambda state: state["route"].__setitem__("result_count", []), "route.result_count"),
         ]
-        for field in ("name", "fallback_reason", "optimized", "index_identity", "index_asset_generation"):
+        for field in (
+            "name", "fallback_reason", "optimized", "index_identity", "index_asset_generation",
+            "requested_top_k", "result_count",
+        ):
             cases.append((12, lambda state, key=field: state["route"].pop(key), f"required field {field}"))
         for event_position, mutation, expected in cases:
             with self.subTest(stage_position=event_position, expected=expected):
@@ -1440,6 +1546,23 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertFalse(got["complete"])
                 self.assertTrue(any(expected in item for item in got["completion_errors"]), got)
 
+    def test_route_result_count_must_equal_positive_requested_top_k(self) -> None:
+        for result_count in (0, 1, []):
+            with self.subTest(result_count=result_count), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, events = lifecycle_fixture(root)
+                events[12]["state"]["route"]["result_count"] = result_count
+                rewrite_lifecycle_fixture(root, manifest, events)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["complete"], got)
+            self.assertTrue(
+                any("result_count" in item for item in got["errors"])
+                or any("optimized route proof failed" in item for item in got["completion_errors"]),
+                got,
+            )
+
     def test_canonical_optimized_route_names_complete(self) -> None:
         for route_name in harness.OPTIMIZED_ROUTE_NAMES:
             with self.subTest(route=route_name):
@@ -1855,6 +1978,7 @@ class LifecycleIntegrationTest(unittest.TestCase):
             "--case-type", "PerformanceCustomDataset",
             "--lifecycle", "--lifecycle-dataset-file", str(dataset),
             "--lifecycle-vectors", "50000", "--lifecycle-dimensions", "768",
+            "--k", "2",
             "--service-close-timeout", "1",
         ])
         state = harness.HarnessState(root=root, lifecycle_started_ns=1)
@@ -1955,6 +2079,7 @@ class LifecycleIntegrationTest(unittest.TestCase):
                 {"index": {"generation": 7}},
                 {
                     "no_documents": True,
+                    "results": [{"id": "1"}, {"id": "2"}],
                     "diagnostics": {"route": "exact_hnsw_search_pack_v1", "fallback_reason": "none"},
                 },
             ])
@@ -1978,6 +2103,32 @@ class LifecycleIntegrationTest(unittest.TestCase):
         self.assertEqual((profile["before_sequence"], profile["after_sequence"]), (8, 9))
         self.assertEqual(events[8]["stage"], "cache_warm")
         self.assertEqual(events[9]["stage"], "graceful_close")
+
+    def test_loaded_route_proof_requires_exact_requested_results(self) -> None:
+        valid_response = {
+            "no_documents": True,
+            "results": [{"id": "1"}, {"id": "2"}],
+            "diagnostics": {"route": "exact_hnsw_search_pack_v1", "fallback_reason": "none"},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args, state, _sampler, _proc = self._complete_fixture(root)
+            responses = iter([{"index": {"generation": 7}}, valid_response])
+            with mock.patch.object(harness, "http_json", side_effect=lambda *_args, **_kwargs: next(responses)):
+                route = harness.run_loaded_route_proof(state, args, "cohere", "cohere:vector_hnsw", 7, 7)
+
+        self.assertEqual(route["requested_top_k"], 2)
+        self.assertEqual(route["result_count"], 2)
+
+        for results in ([], [{"id": "1"}], {"0": {"id": "1"}}, ["malformed", {"id": "2"}]):
+            with self.subTest(results=results), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                args, state, _sampler, _proc = self._complete_fixture(root)
+                response = dict(valid_response, results=results)
+                responses = iter([{"index": {"generation": 7}}, response])
+                with mock.patch.object(harness, "http_json", side_effect=lambda *_args, **_kwargs: next(responses)), \
+                        self.assertRaisesRegex(RuntimeError, "exactly the requested results"):
+                    harness.run_loaded_route_proof(state, args, "cohere", "cohere:vector_hnsw", 7, 7)
 
     def test_column_graph_ready_asset_uses_index_generation_not_root_id(self) -> None:
         optimize = {

@@ -111,7 +111,15 @@ vector count. Integer diagnostic flags must also parse within the 64-bit Go
 service's signed `flag.Int` range. A nonempty effective `pprof` address must
 use an unscoped loopback host and an ASCII-decimal TCP port from 1 through
 65535; port zero is excluded because the service does not publish the selected
-ephemeral diagnostics port. Lifecycle capture requires `PerformanceCustomDataset` so it can bind the
+ephemeral diagnostics port.
+
+Storage evidence names the discovery method, device, filesystem, mount,
+resolved benchmark path, and positive byte capacity. Linux uses structured
+`findmnt` output; minimal Linux and macOS hosts fall back to `df -P` plus the
+platform `stat` filesystem type. Lifecycle mode stops before building the
+service if neither path provides complete evidence. `manifest.vdbbench` is
+always a list, including when it is empty.
+Lifecycle capture requires `PerformanceCustomDataset` so it can bind the
 unique canonical result file and task-config checksum, verifies its size and
 dimension against the lifecycle declaration, resolves the exact one-file
 `train.parquet` or `shuffle_train.parquet` selection, and hashes those actual
@@ -156,7 +164,10 @@ evidence remains a completion error.
 Any present route snapshot is likewise structurally validated as an object
 with typed route-proof fields, while a route that has not yet been emitted is
 only missing completion evidence. Once `route_verify` is emitted, all five
-route-proof fields are structurally required.
+index/route fields plus positive `requested_top_k` and `result_count` are
+structurally required. Completion requires the cold-reopened query to return
+exactly `requested_top_k` well-formed result objects; empty, short, or malformed
+responses fail closed.
 
 Lifecycle validation requires the pinned Go toolchain for pprof and trace
 profiles, and Linux `perf` for perf-data profiles. A missing native decoder is
