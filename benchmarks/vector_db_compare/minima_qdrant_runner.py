@@ -361,6 +361,20 @@ def intervals_overlap(first_start: int, first_end: int, second_start: int, secon
     )
 
 
+def await_concurrent_futures(futures: Iterable[Any]) -> None:
+    errors: list[BaseException] = []
+    for future in futures:
+        try:
+            future.result()
+        except BaseException as exc:
+            errors.append(exc)
+    for error in errors:
+        if not isinstance(error, threading.BrokenBarrierError):
+            raise error
+    if errors:
+        raise errors[0]
+
+
 def timed_trace_digest(trace: dict[str, list[dict[str, Any]]]) -> str:
     lines = [
         f"query|ordinal={row['ordinal']}|round={row['round']}|reader={row['reader']}|scenario={row['scenario']}|"
@@ -1600,9 +1614,7 @@ class QdrantMinimaRunner:
 
                 writer = pool.submit(write_round)
                 reader_futures = [pool.submit(read_round, worker) for worker in range(readers)]
-                writer.result()
-                for future in reader_futures:
-                    future.result()
+                await_concurrent_futures([writer, *reader_futures])
 
                 round_observation = {
                     "ordinal": round_value["ordinal"], "query_start": round_value["query_start"],
@@ -1727,9 +1739,7 @@ class QdrantMinimaRunner:
                 pool.submit(read_during_mutation, assignment)
                 for assignment in plan["reader_assignments"]
             ]
-            writer.result()
-            for future in reader_futures:
-                future.result()
+            await_concurrent_futures([writer, *reader_futures])
 
         reader_queries = [row for row in observations if row is not None]
         observed = {
