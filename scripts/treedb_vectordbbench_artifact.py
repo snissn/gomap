@@ -1886,6 +1886,17 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                         ]
                         if len(result_configs) != 1 or result_configs[0] != selected.get("task_config"):
                             errors.append("task_config result does not contain the uniquely bound manifest task_config")
+                        try:
+                            canonical_load_metrics = load_metrics_from_result(
+                                result_path, selected_index_name, case_type, root
+                            )
+                        except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+                            errors.append(f"canonical VDBBench result is unsuccessful or invalid: {exc}")
+                        else:
+                            if canonical_load_metrics != selected:
+                                errors.append(
+                                    "manifest load_metrics do not match canonical VDBBench result"
+                                )
     else:
         if lifecycle.get("result_status") == "completed":
             errors.append(
@@ -2842,12 +2853,21 @@ def throughput_vector_count(metrics: dict[str, Any], expected: int) -> tuple[int
 
 def load_metrics_from_result(path: Path, index_name: str, case_type: str, artifact_root: Path) -> dict[str, Any]:
     try:
-        result = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        result = _strict_json_loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise ValueError(f"cannot read canonical VDBBench result {path}: {exc}") from exc
+    if not isinstance(result, dict):
+        raise ValueError(f"canonical VDBBench result {path} must be an object")
+    results = result.get("results")
+    if not isinstance(results, list):
+        raise ValueError(f"canonical VDBBench result {path} results must be a list")
+    if any(not isinstance(item, dict) for item in results):
+        raise ValueError(f"canonical VDBBench result {path} entries must be objects")
     matches = [
-        item for item in result.get("results", [])
-        if item.get("task_config", {}).get("db_config", {}).get("index_name") == index_name
+        item for item in results
+        if isinstance(item.get("task_config"), dict)
+        and isinstance(item["task_config"].get("db_config"), dict)
+        and item["task_config"]["db_config"].get("index_name") == index_name
     ]
     if len(matches) != 1:
         raise ValueError(f"canonical VDBBench result {path} has {len(matches)} entries for index {index_name!r}; expected one")

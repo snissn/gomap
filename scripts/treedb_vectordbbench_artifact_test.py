@@ -114,7 +114,22 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
     }
     task_config_sha256 = harness.canonical_sha256(task_config)
     result_path = root / "vdbbench-result.json"
-    harness.write_json(result_path, {"results": [{"task_config": task_config}]})
+    harness.write_json(result_path, {
+        "run_id": "fixture-run",
+        "results": [{
+            "label": ":)",
+            "task_config": task_config,
+            "metrics": {
+                "inserted_count": 50_000,
+                "insert_duration": 1.0,
+                "optimize_duration": 2.0,
+                "load_duration": 3.0,
+            },
+        }],
+    })
+    load_metrics = harness.load_metrics_from_result(
+        result_path, "index-a", "PerformanceCustomDataset", root
+    )
     service_binary = root / "bin" / "treedb-document-service"
     service_binary.parent.mkdir(parents=True)
     service_binary.write_bytes(b"fixture treedb document service\n")
@@ -319,13 +334,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "rerank_candidates": 32,
             "quantized_index_name": "embedding_scalar_u8",
         },
-        "vdbbench": [{"load_metrics": {
-            "result_file": "vdbbench-result.json",
-            "result_sha256": harness.sha256_file(result_path),
-            "task_config_sha256": task_config_sha256,
-            "index_name": "index-a",
-            "task_config": task_config,
-        }}],
+        "vdbbench": [{"load_metrics": load_metrics}],
         "route_proof": None,
         "lifecycle_count_proof": "lifecycle_count_response.json",
         "lifecycle_route_proof": "lifecycle_route_response.json",
@@ -1487,6 +1496,24 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["analyzable"], got)
         self.assertTrue(any("PerformanceCustomDataset" in error for error in got["errors"]), got)
 
+    def test_canonical_vdbbench_result_must_report_successful_load(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            result_path = root / "vdbbench-result.json"
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            result["results"][0]["label"] = ":("
+            harness.write_json(result_path, result)
+            result_sha = harness.sha256_file(result_path)
+            manifest["vdbbench"][0]["load_metrics"]["result_sha256"] = result_sha
+            manifest["lifecycle"]["task_config_binding"]["result_sha256"] = result_sha
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("unsuccessful or invalid" in error for error in got["errors"]), got)
+
     def test_manifest_storage_requires_meaningful_identity_and_capacity(self) -> None:
         invalid_storage = (
             {"mount": "unavailable: findmnt missing"},
@@ -1523,14 +1550,25 @@ class LifecycleValidatorTest(unittest.TestCase):
             }
             result = root / "vdbbench-results" / "result.json"
             result.parent.mkdir()
-            result.write_text(json.dumps({"results": [{"task_config": task_config}]}), encoding="utf-8")
-            metrics = {
-                "result_file": str(result.relative_to(root)),
-                "result_sha256": harness.sha256_file(result),
-                "index_name": "index-a",
-                "task_config": task_config,
-                "task_config_sha256": harness.canonical_sha256(task_config),
-            }
+            def write_successful_result() -> None:
+                harness.write_json(result, {
+                    "run_id": "custom-fixture",
+                    "results": [{
+                        "label": ":)",
+                        "task_config": task_config,
+                        "metrics": {
+                            "inserted_count": 50_000,
+                            "insert_duration": 1.0,
+                            "optimize_duration": 2.0,
+                            "load_duration": 3.0,
+                        },
+                    }],
+                })
+
+            write_successful_result()
+            metrics = harness.load_metrics_from_result(
+                result, "index-a", "PerformanceCustomDataset", root
+            )
             manifest["harness"]["case_type"] = "PerformanceCustomDataset"
             manifest["vdbbench"] = [{"load_metrics": metrics}]
             manifest["lifecycle"]["dataset"]["sha256"] = harness.sha256_file(dataset_file)
@@ -1597,16 +1635,15 @@ class LifecycleValidatorTest(unittest.TestCase):
                     self.assertFalse(malformed["analyzable"], malformed)
                     self.assertTrue(any("results must be a list" in error for error in malformed["errors"]), malformed)
 
-            result.write_text(json.dumps({"results": [{"task_config": task_config}]}), encoding="utf-8")
-            metrics["result_sha256"] = harness.sha256_file(result)
-            manifest["lifecycle"]["task_config_binding"]["result_sha256"] = metrics["result_sha256"]
-
             task_config["case_config"]["custom_case"]["dataset_config"]["dim"] = 769
-            metrics["task_config_sha256"] = harness.canonical_sha256(task_config)
-            manifest["lifecycle"]["task_config_binding"]["task_config_sha256"] = metrics["task_config_sha256"]
-            result.write_text(json.dumps({"results": [{"task_config": task_config}]}), encoding="utf-8")
-            metrics["result_sha256"] = harness.sha256_file(result)
-            manifest["lifecycle"]["task_config_binding"]["result_sha256"] = metrics["result_sha256"]
+            write_successful_result()
+            metrics = harness.load_metrics_from_result(
+                result, "index-a", "PerformanceCustomDataset", root
+            )
+            manifest["vdbbench"] = [{"load_metrics": metrics}]
+            manifest["lifecycle"]["task_config_binding"] = {
+                key: metrics[key] for key in ("result_file", "result_sha256", "task_config_sha256")
+            }
             harness.write_json(root / "manifest.json", manifest)
 
             rejected = harness.validate_lifecycle_artifact(root)
