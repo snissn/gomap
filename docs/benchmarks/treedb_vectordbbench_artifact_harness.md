@@ -185,11 +185,14 @@ identity, asset-generation, and status field types; missing future index
 evidence remains a completion error.
 Any present route snapshot is likewise structurally validated as an object
 with typed route-proof fields, while a route that has not yet been emitted is
-only missing completion evidence. Once `route_verify` is emitted, all five
-index/route fields plus positive `requested_top_k` and `result_count` are
-structurally required. Completion requires the cold-reopened query to return
-exactly `requested_top_k` well-formed result objects; empty, short, or malformed
-responses fail closed.
+only missing completion evidence. Once `route_verify` is emitted, its route
+fields plus positive service generation, `requested_top_k`, and `result_count`
+are structurally required. Completion requires the cold-reopened query to
+return exactly `requested_top_k` well-formed result objects. The validator
+parses the checksum-bound raw response and requires its no-document status,
+route, fallback status, reopened service generation, and result count to match
+the embedded event; empty, short, malformed, or contradictory responses fail
+closed.
 
 Lifecycle validation requires the pinned Go toolchain for pprof and trace
 profiles, and Linux `perf` for perf-data profiles. A missing native decoder is

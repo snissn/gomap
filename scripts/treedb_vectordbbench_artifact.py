@@ -1978,7 +1978,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     isinstance(generation, bool) or not isinstance(generation, int)
                 ):
                     errors.append(f"{prefix} state.route.index_asset_generation must be an integer")
-                for key in ("requested_top_k", "result_count"):
+                for key in ("service_generation", "requested_top_k", "result_count"):
                     value = route.get(key)
                     if key in route and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
                         errors.append(f"{prefix} state.route.{key} must be a positive integer")
@@ -1988,7 +1988,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             else:
                 for key in (
                     "name", "fallback_reason", "optimized", "index_identity", "index_asset_generation",
-                    "requested_top_k", "result_count",
+                    "service_generation", "requested_top_k", "result_count",
                 ):
                     if key not in route:
                         errors.append(f"{prefix} state.route is missing required field {key}")
@@ -2184,12 +2184,76 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         and not isinstance(route_generation, bool)
         and isinstance(route_generation, int)
         and route_generation == index_reference[1]
+        and isinstance(route.get("service_generation"), int)
+        and not isinstance(route.get("service_generation"), bool)
+        and route.get("service_generation") > 0
         and isinstance(route.get("requested_top_k"), int)
         and not isinstance(route.get("requested_top_k"), bool)
         and route.get("requested_top_k") > 0
         and route.get("result_count") == route.get("requested_top_k")
     ):
         completion_errors.append("optimized route proof failed or used a stale index asset generation")
+
+    if status == "completed" and manifest.get("lifecycle_route_proof") == "lifecycle_route_response.json":
+        try:
+            raw_route_response = _strict_json_loads(
+                (root / "lifecycle_route_response.json").read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, ValueError) as exc:
+            errors.append(f"cannot parse lifecycle route response: {exc}")
+        else:
+            if not isinstance(raw_route_response, dict):
+                errors.append("lifecycle route response must be an object")
+            else:
+                raw_index = raw_route_response.get("index")
+                raw_diagnostics = raw_route_response.get("diagnostics")
+                raw_results = raw_route_response.get("results")
+                valid_diagnostics = (
+                    isinstance(raw_diagnostics, dict)
+                    and isinstance(raw_diagnostics.get("route"), str)
+                    and bool(raw_diagnostics.get("route"))
+                    and isinstance(raw_diagnostics.get("fallback_reason"), str)
+                    and bool(raw_diagnostics.get("fallback_reason"))
+                )
+                valid_results = (
+                    isinstance(raw_results, list)
+                    and all(
+                        isinstance(result, dict)
+                        and isinstance(result.get("id"), str)
+                        and bool(result.get("id"))
+                        for result in raw_results
+                    )
+                )
+                if not isinstance(raw_index, dict):
+                    errors.append("lifecycle route response index must be an object")
+                if not valid_diagnostics:
+                    errors.append("lifecycle route response diagnostics must name route and fallback status")
+                if not valid_results:
+                    errors.append("lifecycle route response results must be a list of identified result objects")
+                if raw_route_response.get("no_documents") is not True:
+                    errors.append("lifecycle route response must prove no-document search")
+                if isinstance(raw_index, dict) and valid_diagnostics and valid_results:
+                    raw_generation = raw_index.get("generation")
+                    if (
+                        isinstance(raw_generation, bool)
+                        or not isinstance(raw_generation, int)
+                        or raw_generation <= 0
+                        or raw_generation != route.get("service_generation")
+                    ):
+                        errors.append("lifecycle route response index generation does not match route_verify")
+                    raw_summary = proof_summary(
+                        "lifecycle", "lifecycle", raw_route_response,
+                        {"top_k": route.get("requested_top_k")},
+                    )
+                    if raw_summary["route"] != route.get("name"):
+                        errors.append("lifecycle route response route does not match route_verify")
+                    if raw_summary["fallback_reason"] != route.get("fallback_reason"):
+                        errors.append("lifecycle route response fallback status does not match route_verify")
+                    if (
+                        len(raw_results) != route.get("requested_top_k")
+                        or len(raw_results) != route.get("result_count")
+                    ):
+                        errors.append("lifecycle route response result count does not match route_verify")
 
     profiles = lifecycle.get("profiles")
     if not isinstance(profiles, list):
@@ -2818,6 +2882,7 @@ def run_loaded_route_proof(
         "optimized": summary["route"] == expected_route and summary["fallback_reason"] == "none",
         "index_identity": index_identity,
         "index_asset_generation": asset_generation,
+        "service_generation": service_generation,
         "requested_top_k": request["top_k"],
         "result_count": len(results),
     }

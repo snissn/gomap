@@ -107,7 +107,12 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
     profile.parent.mkdir(parents=True)
     profile.write_bytes(valid_pprof_fixture())
     lifecycle_route_response = root / "lifecycle_route_response.json"
-    lifecycle_route_response.write_text("{}\n", encoding="utf-8")
+    harness.write_json(lifecycle_route_response, {
+        "index": {"generation": 7},
+        "results": [{"id": "1"}, {"id": "2"}],
+        "no_documents": True,
+        "diagnostics": {"route": "exact_hnsw_search_pack_v1", "fallback_reason": "none"},
+    })
     stages = [
         "startup", "reset", "load_start", "load_end", "drain_checkpoint",
         "optimize_start", "optimize_end", "cache_prime", "cache_warm",
@@ -143,6 +148,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
                 "optimized": True,
                 "index_identity": "index-a",
                 "index_asset_generation": 7,
+                "service_generation": 7,
                 "requested_top_k": 2,
                 "result_count": 2,
             }
@@ -1004,6 +1010,46 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertTrue(any("vdbbench+lifecycle" in error for error in got["errors"]), got)
         self.assertTrue(any("independent route_proof.json" in error for error in got["errors"]), got)
 
+    def test_lifecycle_route_response_must_match_route_verify(self) -> None:
+        mutations = (
+            (lambda response: response["diagnostics"].__setitem__("fallback_reason", "exact_scan"), "fallback"),
+            (lambda response: response["diagnostics"].pop("fallback_reason"), "diagnostics"),
+            (lambda response: response.__setitem__("no_documents", False), "no-document"),
+            (lambda response: response.__setitem__("results", ["bad"]), "results"),
+            (lambda response: response.__setitem__("results", []), "result count"),
+            (lambda response: response.__setitem__("results", [{"id": "1"}]), "result count"),
+            (lambda response: response["index"].__setitem__("generation", 8), "generation"),
+            (lambda response: response["diagnostics"].__setitem__("route", "quantized_rerank"), "route"),
+        )
+        for mutation, expected in mutations:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                response_path = root / "lifecycle_route_response.json"
+                response = json.loads(response_path.read_text(encoding="utf-8"))
+                mutation(response)
+                harness.write_json(response_path, response)
+                manifest["lifecycle"]["raw_artifacts"][1]["sha256"] = harness.sha256_file(response_path)
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["analyzable"], got)
+                self.assertTrue(any(expected in error for error in got["errors"]), got)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            response_path = root / "lifecycle_route_response.json"
+            response_path.write_text("{", encoding="utf-8")
+            manifest["lifecycle"]["raw_artifacts"][1]["sha256"] = harness.sha256_file(response_path)
+            harness.write_json(root / "manifest.json", manifest)
+
+            malformed = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(malformed["analyzable"], malformed)
+        self.assertTrue(any("cannot parse lifecycle route response" in error for error in malformed["errors"]), malformed)
+
     def test_manifest_vdbbench_must_be_a_list(self) -> None:
         for invalid in (None, {"row": "exact"}):
             with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as tmp:
@@ -1342,12 +1388,13 @@ class LifecycleValidatorTest(unittest.TestCase):
             (12, lambda state: state["route"].__setitem__("optimized", 1), "route.optimized"),
             (12, lambda state: state["route"].__setitem__("index_identity", 7), "route.index_identity"),
             (12, lambda state: state["route"].__setitem__("index_asset_generation", 7.0), "route.index_asset_generation"),
+            (12, lambda state: state["route"].__setitem__("service_generation", 7.0), "route.service_generation"),
             (12, lambda state: state["route"].__setitem__("requested_top_k", "2"), "route.requested_top_k"),
             (12, lambda state: state["route"].__setitem__("result_count", []), "route.result_count"),
         ]
         for field in (
             "name", "fallback_reason", "optimized", "index_identity", "index_asset_generation",
-            "requested_top_k", "result_count",
+            "service_generation", "requested_top_k", "result_count",
         ):
             cases.append((12, lambda state, key=field: state["route"].pop(key), f"required field {field}"))
         for event_position, mutation, expected in cases:
@@ -1965,6 +2012,11 @@ class LifecycleValidatorTest(unittest.TestCase):
                     root = Path(tmp)
                     manifest, events = lifecycle_fixture(root)
                     events[12]["state"]["route"]["name"] = route_name
+                    response_path = root / "lifecycle_route_response.json"
+                    response = json.loads(response_path.read_text(encoding="utf-8"))
+                    response["diagnostics"]["route"] = route_name
+                    harness.write_json(response_path, response)
+                    manifest["lifecycle"]["raw_artifacts"][1]["sha256"] = harness.sha256_file(response_path)
                     rewrite_lifecycle_fixture(root, manifest, events)
 
                     got = harness.validate_lifecycle_artifact(root)
