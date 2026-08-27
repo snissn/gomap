@@ -405,7 +405,8 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         def snapshot(*, status: str = "yellow", optimizer: object = "ok",
                      running: list[object] | None = None,
                      summary: dict[str, int] | None = None,
-                     available: bool = True) -> dict[str, object]:
+                     available: bool = True, elapsed: float = 99,
+                     indexed: int = 1) -> dict[str, object]:
             detail = {
                 "running": running or [],
                 "summary": summary or {
@@ -414,8 +415,9 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
                 },
             }
             return {
+                "elapsed_seconds": elapsed,
                 "status": status, "optimizer_status": optimizer,
-                "indexed_vectors_count": 1, "segments_count": 1,
+                "indexed_vectors_count": indexed, "segments_count": 1,
                 "optimizations": (
                     {"available": True, "detail": detail}
                     if available else {"available": False, "reason": "not exposed"}
@@ -423,7 +425,10 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
             }
 
         cases = {
-            "active progress": ([snapshot(running=[{"progress": 0.25}])], []),
+            "active progress": ([
+                snapshot(running=[{"progress": 0.25}], elapsed=95, indexed=1),
+                snapshot(running=[{"progress": 0.50}], elapsed=99, indexed=2),
+            ], []),
             "queued/idle": ([snapshot(
                 status="grey", summary={"queued_optimizations": 1},
             )], []),
@@ -440,6 +445,46 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
                 self.assertEqual(
                     runner.readiness_disposition(snapshots, logs), expected,
                 )
+
+    def test_readiness_progress_must_change_near_deadline(self) -> None:
+        def snapshot(elapsed: float, indexed: int) -> dict[str, object]:
+            return {
+                "elapsed_seconds": elapsed,
+                "status": "yellow", "optimizer_status": "ok",
+                "points_count": 100, "indexed_vectors_count": indexed,
+                "segments_count": 2,
+                "optimizations": {
+                    "available": True,
+                    "detail": {
+                        "summary": {
+                            "queued_optimizations": 1, "queued_points": 100 - indexed,
+                            "queued_segments": 1, "idle_segments": 0,
+                        },
+                        "running": [{"operation_id": 7}],
+                    },
+                },
+            }
+
+        early_progress_then_stall = [
+            snapshot(0, 0), snapshot(20, 50),
+            snapshot(91, 50), snapshot(99, 50),
+        ]
+        recent_progress = [
+            snapshot(0, 0), snapshot(20, 50),
+            snapshot(91, 50), snapshot(99, 75),
+        ]
+        self.assertEqual(
+            runner.readiness_disposition(
+                early_progress_then_stall, [], deadline_seconds=100,
+            ),
+            "queued/idle",
+        )
+        self.assertEqual(
+            runner.readiness_disposition(
+                recent_progress, [], deadline_seconds=100,
+            ),
+            "active progress",
+        )
 
     def test_grey_is_rejected_and_missing_optimization_monitoring_is_explicit(self) -> None:
         manifest, shared = tiny_manifest(), SharedQdrant()

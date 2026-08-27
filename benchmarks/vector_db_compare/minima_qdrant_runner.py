@@ -655,7 +655,8 @@ def optimizer_is_ok(value: Any) -> bool:
 
 
 def readiness_disposition(snapshots: list[dict[str, Any]],
-                          server_logs: list[dict[str, Any]]) -> str:
+                          server_logs: list[dict[str, Any]],
+                          deadline_seconds: float | None = None) -> str:
     diagnostic_text = json.dumps([
         {
             "optimizer_status": row.get("optimizer_status"),
@@ -676,37 +677,49 @@ def readiness_disposition(snapshots: list[dict[str, Any]],
     ):
         return "optimizer error"
 
-    optimization_details = [
-        row["optimizations"].get("detail")
-        for row in snapshots
-        if row.get("optimizations", {}).get("available")
-        and isinstance(row["optimizations"].get("detail"), dict)
+    if deadline_seconds is None:
+        deadline_seconds = float(latest.get("elapsed_seconds", 0) or 0)
+    progress_window = min(60.0, max(0.0, deadline_seconds) * 0.1)
+    cutoff = max(0.0, deadline_seconds - progress_window)
+    recent = [
+        row for row in snapshots
+        if isinstance(row.get("elapsed_seconds"), (int, float))
+        and row["elapsed_seconds"] >= cutoff
+        and row.get("collection_error") is None
     ]
-    if any(detail.get("running") for detail in optimization_details):
-        return "active progress"
-    progress = [
-        (
+
+    def progress_signature(row: dict[str, Any]) -> tuple[Any, ...]:
+        detail = row.get("optimizations", {}).get("detail", {})
+        return (
+            row.get("points_count"),
             row.get("indexed_vectors_count"),
             row.get("segments_count"),
-            json.dumps(row.get("optimizations", {}).get("detail", {}).get("summary"),
-                       sort_keys=True, default=str),
+            json.dumps(detail.get("summary"), sort_keys=True, default=str),
+            json.dumps(detail.get("running"), sort_keys=True, default=str),
         )
-        for row in snapshots
-        if row.get("collection_error") is None
-    ]
-    if len(progress) > 1 and any(value != progress[0] for value in progress[1:]):
+
+    if len(recent) > 1 and any(
+        progress_signature(current) != progress_signature(previous)
+        for previous, current in zip(recent, recent[1:])
+    ):
         return "active progress"
-    if optimization_details:
-        latest_detail = optimization_details[-1]
-        summary = latest_detail.get("summary") or {}
-        if (
-            latest_detail.get("queued")
-            or any(int(summary.get(key, 0) or 0) > 0 for key in (
-                "queued_optimizations", "queued_points", "queued_segments", "idle_segments",
-            ))
-        ):
-            return "queued/idle"
-    if latest.get("status") == "grey":
+
+    latest_optimization = latest.get("optimizations", {})
+    latest_detail = (
+        latest_optimization.get("detail", {})
+        if latest_optimization.get("available")
+        and isinstance(latest_optimization.get("detail"), dict)
+        else {}
+    )
+    summary = latest_detail.get("summary") or {}
+    if (
+        latest_detail.get("running")
+        or latest_detail.get("queued")
+        or any(int(summary.get(key, 0) or 0) > 0 for key in (
+            "queued_optimizations", "queued_points", "queued_segments", "idle_segments",
+        ))
+        or latest.get("status") == "grey"
+    ):
         return "queued/idle"
     return "unknown"
 
@@ -1253,7 +1266,10 @@ class QdrantMinimaRunner:
             session["outcome"] = outcome
             session["disposition"] = (
                 "ready" if outcome == "ready"
-                else readiness_disposition(session["snapshots"], session["server_log_samples"])
+                else readiness_disposition(
+                    session["snapshots"], session["server_log_samples"],
+                    self.optimizer_timeout,
+                )
             )
 
         while time.monotonic() < deadline:
