@@ -286,6 +286,16 @@ class HostContextTest(unittest.TestCase):
                 mock.patch.object(harness.os, "sysconf", side_effect=(4096, 1000)):
             self.assertEqual(harness.memory_bytes(), 4_096_000)
 
+    def test_physical_cpu_count_uses_sysctl_without_logical_fallback(self) -> None:
+        with mock.patch.object(Path, "read_text", side_effect=OSError("no proc")), \
+                mock.patch.object(harness, "command_output", return_value="8"):
+            self.assertEqual(harness.physical_cpu_count(), 8)
+        with mock.patch.object(Path, "read_text", side_effect=OSError("no proc")), \
+                mock.patch.object(harness, "command_output", return_value="unavailable"), \
+                mock.patch.object(harness.os, "cpu_count", return_value=32) as logical_count:
+            self.assertIsNone(harness.physical_cpu_count())
+        logical_count.assert_not_called()
+
     def test_storage_context_uses_structured_findmnt_evidence(self) -> None:
         payload = json.dumps({"filesystems": [{
             "source": "/dev/nvme0n1p1", "fstype": "ext4", "target": "/mnt/fast4tb", "size": 4096,
@@ -331,7 +341,7 @@ class HostContextTest(unittest.TestCase):
             root = Path(tmp) / "artifact"
             dataset = Path(tmp) / "train.parquet"
             dataset.write_bytes(b"dataset")
-            context = {"host": {"memory_bytes": 1024, "storage": {}}}
+            context = {"host": {"memory_bytes": 1024, "physical_cpu_count": 1, "storage": {}}}
             stderr = io.StringIO()
             with mock.patch.object(harness, "collect_context", return_value=context), \
                     mock.patch.object(harness, "build_service") as build, \
@@ -347,6 +357,27 @@ class HostContextTest(unittest.TestCase):
         self.assertIn("benchmark storage identity is unavailable", stderr.getvalue())
         build.assert_not_called()
 
+    def test_lifecycle_fails_before_build_when_physical_cpu_count_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "artifact"
+            dataset = Path(tmp) / "train.parquet"
+            dataset.write_bytes(b"dataset")
+            context = {"host": {"memory_bytes": 1024, "physical_cpu_count": None}}
+            stderr = io.StringIO()
+            with mock.patch.object(harness, "collect_context", return_value=context), \
+                    mock.patch.object(harness, "build_service") as build, \
+                    contextlib.redirect_stderr(stderr):
+                exit_code = harness.main([
+                    "--out", str(root), "--run-vdbbench", "--rows", "exact",
+                    "--case-type", "PerformanceCustomDataset", "--lifecycle",
+                    "--lifecycle-dataset-file", str(dataset),
+                    "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
+                ])
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("positive physical CPU count is unavailable", stderr.getvalue())
+        build.assert_not_called()
+
     def test_lifecycle_fails_before_build_when_source_is_dirty(self) -> None:
         storage = {
             "path": "/tmp", "method": "findmnt", "device": "/dev/x", "filesystem": "xfs",
@@ -358,7 +389,7 @@ class HostContextTest(unittest.TestCase):
                 dataset = Path(tmp) / "train.parquet"
                 dataset.write_bytes(b"dataset")
                 context = {
-                    "host": {"memory_bytes": 1024, "storage": storage},
+                    "host": {"memory_bytes": 1024, "physical_cpu_count": 1, "storage": storage},
                     "gomap": {"commit": "1" * 40, "dirty": dirty_source == "gomap"},
                     "vectordbbench": {"commit": "2" * 40, "dirty": dirty_source == "vectordbbench"},
                 }
@@ -427,6 +458,25 @@ class SmokeShapeTest(unittest.TestCase):
                     "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
                     "--skip-search-serial", "--skip-search-concurrent",
                 ])
+
+    def test_lifecycle_rejects_search_controls_in_extra_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = Path(tmp) / "train.parquet"
+            dataset.write_bytes(b"dataset")
+            base = [
+                "--run-vdbbench", "--rows", "exact", "--case-type", "PerformanceCustomDataset",
+                "--lifecycle", "--lifecycle-dataset-file", str(dataset),
+                "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
+            ]
+            for control in ("--skip-search-serial", "--skip-search-concurrent", "--skip-search-serial=true"):
+                with self.subTest(control=control), contextlib.redirect_stderr(io.StringIO()), \
+                        self.assertRaises(SystemExit):
+                    harness.parse_args([*base, f"--vdbbench-extra-args={control}"])
+
+            args = harness.parse_args([*base, "--skip-search-serial"])
+
+        self.assertTrue(args.skip_search_serial)
+        self.assertFalse(args.skip_search_concurrent)
 
 
 class VDBBenchBatchTest(unittest.TestCase):

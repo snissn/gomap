@@ -240,7 +240,7 @@ def cpu_brand() -> str:
     return platform.processor() or "unknown"
 
 
-def physical_cpu_count() -> int:
+def physical_cpu_count() -> int | None:
     pairs: set[tuple[str, str]] = set()
     physical = core = None
     with contextlib.suppress(OSError):
@@ -252,7 +252,12 @@ def physical_cpu_count() -> int:
             elif not line and physical is not None and core is not None:
                 pairs.add((physical, core))
                 physical = core = None
-    return len(pairs) or (os.cpu_count() or 1)
+    if pairs:
+        return len(pairs)
+    value = command_output(["sysctl", "-n", "hw.physicalcpu"])
+    if value.isascii() and value.isdigit() and int(value) > 0:
+        return int(value)
+    return None
 
 
 def memory_bytes() -> int | None:
@@ -3061,6 +3066,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             parser.error("lifecycle completion currently requires command_wal_durable")
         if args.skip_search_serial and args.skip_search_concurrent:
             parser.error("lifecycle requires at least one VDBBench search phase")
+        try:
+            extra_args = shlex.split(args.vdbbench_extra_args)
+        except ValueError as exc:
+            parser.error(f"invalid vdbbench-extra-args: {exc}")
+        search_controls = {"--skip-search-serial", "--skip-search-concurrent"}
+        if any(argument.partition("=")[0] in search_controls for argument in extra_args):
+            parser.error("lifecycle search controls must use the dedicated harness flags")
         if not args.lifecycle_dataset_file:
             parser.error("lifecycle requires --lifecycle-dataset-file")
         if args.case_type != "PerformanceCustomDataset":
@@ -3146,11 +3158,16 @@ def main(argv: list[str]) -> int:
     state = HarnessState(root=args.out)
     context = collect_context(gomap_root, args.vectordbbench_dir, args.out)
     if args.lifecycle:
-        total_memory = context.get("host", {}).get("memory_bytes")
+        host = context.get("host", {})
+        total_memory = host.get("memory_bytes")
         if isinstance(total_memory, bool) or not isinstance(total_memory, int) or total_memory <= 0:
             print("harness failed before start; error=positive host memory size is unavailable", file=sys.stderr)
             return 2
-        if not valid_storage_context(context.get("host", {}).get("storage")):
+        physical_cpus = host.get("physical_cpu_count")
+        if isinstance(physical_cpus, bool) or not isinstance(physical_cpus, int) or physical_cpus <= 0:
+            print("harness failed before start; error=positive physical CPU count is unavailable", file=sys.stderr)
+            return 2
+        if not valid_storage_context(host.get("storage")):
             print("harness failed before start; error=benchmark storage identity is unavailable", file=sys.stderr)
             return 2
         sources = (context.get("gomap"), context.get("vectordbbench"))

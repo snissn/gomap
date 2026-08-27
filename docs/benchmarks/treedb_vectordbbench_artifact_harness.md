@@ -96,7 +96,9 @@ The lifecycle declaration binds the exact clean gomap and VectorDBBench
 commits, service-binary SHA-256, effective service/harness configuration,
 dataset checksum/dimensions/count, CPU topology, memory, storage, lifecycle
 JSONL, raw artifacts, and every profile window. The minimum effective
-configuration keeps at least one VDBBench search phase enabled. Before building
+configuration keeps at least one VDBBench search phase enabled; search-phase
+controls are accepted only through the dedicated harness flags, never
+`--vdbbench-extra-args`. Before building
 the service, lifecycle mode requires both captured source identities to contain
 a valid commit and `dirty == false`.
 It includes a canonical public service profile, case type,
@@ -122,6 +124,10 @@ resolved benchmark path, and positive byte capacity. Linux uses structured
 platform `stat` filesystem type. Lifecycle mode stops before building the
 service if neither path provides complete evidence. `manifest.vdbbench` is
 always a list, including when it is empty.
+Physical CPU count comes from `/proc/cpuinfo` socket/core identities or the
+platform `hw.physicalcpu` sysctl. Lifecycle mode stops before build when neither
+source reports a positive physical-core count; it never substitutes logical
+CPU count.
 Lifecycle capture requires `PerformanceCustomDataset` so it can bind the
 unique canonical result file and task-config checksum, verifies its size and
 dimension against the lifecycle declaration, resolves the exact one-file
