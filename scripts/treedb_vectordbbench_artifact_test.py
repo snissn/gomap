@@ -19,17 +19,27 @@ import treedb_vectordbbench_artifact as harness
 
 
 @functools.cache
-def valid_pprof_fixture() -> bytes:
-    goroot = subprocess.run(
+def go_root() -> Path:
+    return Path(subprocess.run(
         ("go", "env", "GOROOT"),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         timeout=10,
         check=True,
-    ).stdout.strip()
-    path = Path(goroot) / "src/cmd/compile/internal/test/testdata/pgo/inline/inline_hot.pprof"
-    return path.read_bytes()
+    ).stdout.strip())
+
+
+@functools.cache
+def valid_pprof_fixture() -> bytes:
+    return (go_root() / "src/cmd/compile/internal/test/testdata/pgo/inline/inline_hot.pprof").read_bytes()
+
+
+@functools.cache
+def valid_trace_fixture() -> bytes:
+    return (
+        go_root() / "src/internal/trace/internal/tracev1/testdata/user_task_region_1_19_good"
+    ).read_bytes()
 
 
 def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
@@ -471,6 +481,21 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertEqual(got["last_stage"], "load_end")
         self.assertTrue(any("result_status" in item for item in got["completion_errors"]))
 
+    def test_partial_fixture_rejects_impossible_known_stage_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            manifest["lifecycle"]["result_status"] = "partial"
+            manifest["lifecycle"]["profiles"] = []
+            events[1]["stage"], events[2]["stage"] = events[2]["stage"], events[1]["stage"]
+            rewrite_lifecycle_fixture(root, manifest, events[:3])
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"])
+        self.assertFalse(got["complete"])
+        self.assertIn("known lifecycle stages are out of order", got["errors"])
+
     def test_cli_fails_closed_unless_analyzable_partial_is_explicitly_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -751,6 +776,36 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertTrue(got["analyzable"])
         self.assertFalse(got["complete"])
         self.assertTrue(any("at least one profile" in item for item in got["completion_errors"]), got)
+
+    def test_trace_profile_requires_native_decoder_acceptance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _ = lifecycle_fixture(root)
+            trace = root / "profiles" / "build.trace.out"
+            trace.write_bytes(valid_trace_fixture())
+            checksum = harness.sha256_file(trace)
+            manifest["lifecycle"]["raw_artifacts"] = [{"path": "profiles/build.trace.out", "sha256": checksum}]
+            manifest["lifecycle"]["profiles"] = [{
+                "path": "profiles/build.trace.out",
+                "sha256": checksum,
+                "kind": "trace",
+                "before_sequence": 5,
+                "after_sequence": 6,
+            }]
+            harness.write_json(root / "manifest.json", manifest)
+
+            valid = harness.validate_lifecycle_artifact(root)
+
+            trace.write_bytes(b"go 1.26 trace\x00\x00\x00")
+            checksum = harness.sha256_file(trace)
+            manifest["lifecycle"]["raw_artifacts"][0]["sha256"] = checksum
+            manifest["lifecycle"]["profiles"][0]["sha256"] = checksum
+            harness.write_json(root / "manifest.json", manifest)
+            header_only = harness.validate_lifecycle_artifact(root)
+
+        self.assertTrue(valid["complete"], valid)
+        self.assertFalse(header_only["analyzable"])
+        self.assertTrue(any("content does not match" in item for item in header_only["errors"]), header_only)
 
     def test_rows_wal_and_counters_must_be_monotonic(self) -> None:
         mutations = (

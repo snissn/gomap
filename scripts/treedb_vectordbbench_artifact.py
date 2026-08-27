@@ -833,7 +833,21 @@ def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
         except (OSError, EOFError, zlib.error, subprocess.TimeoutExpired):
             return False
     if kind == "trace":
-        return path.suffix == ".out" and re.match(rb"go 1\.[0-9]+ trace\x00\x00\x00", data) is not None
+        header = re.match(rb"go 1\.[0-9]+ trace\x00\x00\x00", data)
+        if path.suffix != ".out" or header is None or len(data) <= header.end():
+            return False
+        try:
+            decoded = subprocess.run(
+                ("go", "tool", "trace", "-d=parsed", str(path)),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=False,
+            )
+            return decoded.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
     if kind == "perf":
         return path.suffix == ".data" and data.startswith(b"PERFILE2")
     return False
@@ -1093,10 +1107,13 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     for stage in LIFECYCLE_STAGES:
         if stage not in stage_events:
             completion_errors.append(f"missing required stage {stage}")
-    if all(stage in stage_events for stage in LIFECYCLE_STAGES):
-        positions = [events.index(stage_events[stage]) for stage in LIFECYCLE_STAGES]
-        if positions != sorted(positions):
-            completion_errors.append("required lifecycle stages are out of order")
+    stage_order = [
+        LIFECYCLE_STAGES.index(event.get("stage"))
+        for event in events
+        if event.get("stage") in LIFECYCLE_STAGES
+    ]
+    if stage_order != sorted(stage_order):
+        errors.append("known lifecycle stages are out of order")
 
     status = lifecycle.get("result_status")
     report["result_status"] = status

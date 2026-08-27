@@ -77,10 +77,11 @@ result's task-config dataset shape into this artifact. Profile entries name exis
 before/after event sequences and use the same checksum as their raw-artifact
 entry. Supported profile kinds are `cpu`, `heap`, `allocs`, `block`, and `mutex`
 as non-empty gzip-compressed `.pprof` files that the native `go tool pprof`
-decoder accepts, Go `trace` as a `.out` file with a Go trace header, and Linux
-`perf` as a `.data` file with a perf-data header. Profile validation is an
-offline correctness gate and invokes the native decoder once per pprof. The
-optimized index identity and durable `asset_generation` must survive
+decoder accepts, Go `trace` as a `.out` file that the native trace decoder
+accepts, and Linux `perf` as a `.data` file with a perf-data header. Profile
+validation is an offline correctness gate and invokes the native decoder once
+per pprof or trace. The optimized index identity and durable `asset_generation`
+must survive
 close and cold reopen. H2 maps `asset_generation` to the vector-maintenance
 root ID, not the service's reopen-local generation counter. The artifact-owned
 database identity and server `commit_seq` must also match across close/reopen,
