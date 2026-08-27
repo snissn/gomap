@@ -46,7 +46,7 @@ it does not introduce a second runner. An integrated lifecycle artifact adds a
 `manifest.lifecycle` object with schema
 `treedb-vectordbbench-lifecycle/v1` and a checksum-bound `lifecycle.jsonl`.
 Each JSONL event uses `treedb-vectordbbench-lifecycle-event/v1`, an increasing
-sequence and UTC timestamp, and a state snapshot containing distinct
+sequence and lexical RFC3339 timestamp with timezone, and a state snapshot containing distinct
 `client_sent`, `server_accepted`, `server_durable`, and `reopened` row counts.
 WAL frontier/total-written counters and the selected cumulative product
 counters must also remain monotonic. Every event must repeat the same non-empty
@@ -85,7 +85,8 @@ must be non-empty, match `service.data_dir`, and resolve to the artifact-owned
 `treedb-data` directory. Standard case names (for
 example, `Performance768D1M`) must match the lifecycle dataset dimensions and
 vector count. Integer diagnostic flags must also parse within the 64-bit Go
-service's signed `flag.Int` range. `PerformanceCustomDataset` cannot complete until H2 binds its
+service's signed `flag.Int` range. A nonempty effective `pprof` address must
+parse as a loopback-only host and port. `PerformanceCustomDataset` cannot complete until H2 binds its
 selected result's task-config dataset shape into this artifact. Profile entries
 name existing before/after event sequences and use the same checksum as their
 raw-artifact entry. Supported profile kinds are `cpu`, `heap`, `allocs`,

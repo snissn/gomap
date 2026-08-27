@@ -994,6 +994,38 @@ class LifecycleValidatorTest(unittest.TestCase):
 
                 self.assertTrue(got["complete"], got)
 
+    def test_service_pprof_address_matches_loopback_listener_contract(self) -> None:
+        valid = ("", "127.0.0.1:6060", "localhost:6060", "[::1]:6060")
+        invalid = (
+            "localhost", "127.0.0.1", ":6060", "0.0.0.0:6060", "[::]:6060",
+            "192.0.2.1:6060", "example.com:6060",
+        )
+        for address in valid:
+            with self.subTest(pprof=address):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    manifest["service"]["command"].append(f"-pprof={address}")
+                    manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertTrue(got["complete"], got)
+        for address in invalid:
+            with self.subTest(pprof=address):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    manifest["service"]["command"].append(f"-pprof={address}")
+                    manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["analyzable"], got)
+                self.assertTrue(any("service.command" in item for item in got["errors"]), got)
+
     def test_service_command_executable_matches_declared_binary_path(self) -> None:
         cases = (
             ("missing-path", lambda row: row["service"]["binary"].pop("path"), "binary.path"),
@@ -1580,6 +1612,35 @@ class LifecycleValidatorTest(unittest.TestCase):
 
         self.assertFalse(got["analyzable"], got)
         self.assertTrue(any("RFC3339 timestamp" in item for item in got["errors"]), got)
+
+    def test_timestamp_requires_lexical_rfc3339(self) -> None:
+        malformed = (
+            "2026-W35-4T00:00:13Z",
+            "20260827T000013Z",
+            "2026-08-27 00:00:13Z",
+        )
+        for timestamp in malformed:
+            with self.subTest(timestamp=timestamp), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, events = lifecycle_fixture(root)
+                events[-1]["timestamp"] = timestamp
+                rewrite_lifecycle_fixture(root, manifest, events)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["analyzable"], got)
+                self.assertTrue(any("RFC3339 timestamp" in item for item in got["errors"]), got)
+
+        for timestamp in (
+            "2026-08-27T00:00:13Z",
+            "2026-08-27T00:00:13.500Z",
+            "2026-08-27T00:00:13+00:00",
+            "2026-08-26T14:00:13-10:00",
+        ):
+            with self.subTest(valid_timestamp=timestamp):
+                errors = []
+                self.assertIsNotNone(harness._utc_timestamp(timestamp, "timestamp", errors))
+                self.assertEqual(errors, [])
 
     def test_rows_wal_and_counters_must_be_monotonic(self) -> None:
         mutations = (

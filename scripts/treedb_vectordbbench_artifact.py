@@ -14,6 +14,7 @@ import contextlib
 import datetime as _dt
 import gzip
 import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -802,7 +803,10 @@ def _object(value: Any, label: str, errors: list[str]) -> dict[str, Any]:
 
 
 def _utc_timestamp(value: Any, label: str, errors: list[str]) -> _dt.datetime | None:
-    if not isinstance(value, str):
+    if not isinstance(value, str) or re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+        value,
+    ) is None:
         errors.append(f"{label} must be an RFC3339 timestamp")
         return None
     try:
@@ -868,6 +872,28 @@ def _valid_go_int64(value: str) -> bool:
     if negative:
         number = -number
     return -(1 << 63) <= number < (1 << 63)
+
+
+def _valid_pprof_listen_address(value: str) -> bool:
+    if not value:
+        return True
+    if value.startswith("["):
+        closing = value.find("]")
+        if closing < 0 or value[closing + 1:closing + 2] != ":":
+            return False
+        host = value[1:closing]
+        if ":" in value[closing + 2:]:
+            return False
+    else:
+        if value.count(":") != 1:
+            return False
+        host, _ = value.rsplit(":", 1)
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _pprof_metadata(path: Path) -> bytes | None:
@@ -1107,6 +1133,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         errors.append("manifest.service.profile must name a canonical public profile")
     service_command = service.get("command")
     effective_dir = None
+    effective_pprof = None
     if (
         not isinstance(service_command, list)
         or not service_command
@@ -1119,6 +1146,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         }
         profile_values = []
         effective_dir = "/tmp/treedb-document-service"
+        effective_pprof = ""
         invalid_command = False
         parsing_flags = True
         position = 1
@@ -1159,9 +1187,13 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 profile_values.append(value)
             elif name == "dir":
                 effective_dir = value
+            elif name == "pprof":
+                effective_pprof = value
         if (
             invalid_command
             or not effective_dir
+            or effective_pprof is None
+            or not _valid_pprof_listen_address(effective_pprof)
             or len(profile_values) != 1
             or profile_values[0] != service.get("profile")
         ):
