@@ -100,6 +100,21 @@ def valid_perf_fixture() -> bytes:
 
 def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
     data_dir = root / "treedb-data"
+    dataset_path = root / "train.parquet"
+    dataset_path.write_bytes(b"fixture dataset\n")
+    task_config = {
+        "db_config": {"index_name": "index-a"},
+        "case_config": {"custom_case": {"dataset_config": {
+            "size": "50000",
+            "dim": "768",
+            "dir": str(root),
+            "file_count": "1",
+            "use_shuffled": False,
+        }}},
+    }
+    task_config_sha256 = harness.canonical_sha256(task_config)
+    result_path = root / "vdbbench-result.json"
+    harness.write_json(result_path, {"results": [{"task_config": task_config}]})
     service_binary = root / "bin" / "treedb-document-service"
     service_binary.parent.mkdir(parents=True)
     service_binary.write_bytes(b"fixture treedb document service\n")
@@ -295,7 +310,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         "harness": {
             "mode": "vdbbench+lifecycle",
             "rows": "exact",
-            "case_type": "Performance768D50K",
+            "case_type": "PerformanceCustomDataset",
             "k": 2,
             "num_per_batch": 500,
             "num_concurrency": "32",
@@ -304,7 +319,13 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "rerank_candidates": 32,
             "quantized_index_name": "embedding_scalar_u8",
         },
-        "vdbbench": [],
+        "vdbbench": [{"load_metrics": {
+            "result_file": "vdbbench-result.json",
+            "result_sha256": harness.sha256_file(result_path),
+            "task_config_sha256": task_config_sha256,
+            "index_name": "index-a",
+            "task_config": task_config,
+        }}],
         "route_proof": None,
         "lifecycle_count_proof": "lifecycle_count_response.json",
         "lifecycle_route_proof": "lifecycle_route_response.json",
@@ -315,7 +336,17 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         "file": "lifecycle.jsonl",
         "sha256": harness.sha256_file(lifecycle_path),
         "expected_rows": 50_000,
-        "dataset": {"name": "cohere-50k", "sha256": "4" * 64, "dimensions": 768, "vectors": 50_000},
+        "dataset": {
+            "name": "cohere-50k",
+            "sha256": harness.sha256_file(dataset_path),
+            "dimensions": 768,
+            "vectors": 50_000,
+        },
+        "task_config_binding": {
+            "result_file": "vdbbench-result.json",
+            "result_sha256": harness.sha256_file(result_path),
+            "task_config_sha256": task_config_sha256,
+        },
         "identity": {
             "gomap_commit": "1" * 40,
             "vectordbbench_commit": "2" * 40,
@@ -1428,6 +1459,33 @@ class LifecycleValidatorTest(unittest.TestCase):
 
             self.assertFalse(got["analyzable"], got)
             self.assertTrue(any("manifest.vdbbench must be a list" in item for item in got["errors"]), got)
+
+    def test_bound_index_name_must_match_canonical_task_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            manifest["vdbbench"][0]["load_metrics"]["index_name"] = "other-index"
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("canonical task_config" in error for error in got["errors"]), got)
+
+    def test_completed_standard_case_without_dataset_binding_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            manifest["harness"]["case_type"] = "Performance768D50K"
+            manifest["vdbbench"] = []
+            manifest["lifecycle"].pop("task_config_binding")
+            manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("PerformanceCustomDataset" in error for error in got["errors"]), got)
 
     def test_manifest_storage_requires_meaningful_identity_and_capacity(self) -> None:
         invalid_storage = (
@@ -2684,7 +2742,6 @@ class LifecycleValidatorTest(unittest.TestCase):
             ("Performance768D1M", "vector count"),
             ("Performance1536D50K", "dimensions"),
             ("Performance50K", "positive dimensions"),
-            ("PerformanceCustomDataset", "task_config dataset shape"),
         ):
             with self.subTest(case_type=case_type):
                 with tempfile.TemporaryDirectory() as tmp:

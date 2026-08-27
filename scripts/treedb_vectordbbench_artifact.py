@@ -1847,6 +1847,12 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 if not isinstance(task_config, dict) or canonical_sha256(task_config) != binding.get("task_config_sha256"):
                     errors.append("lifecycle task_config binding checksum does not match canonical task_config")
                 else:
+                    task_db_config = task_config.get("db_config")
+                    if (
+                        not isinstance(task_db_config, dict)
+                        or task_db_config.get("index_name") != selected_index_name
+                    ):
+                        errors.append("bound manifest index_name does not match canonical task_config")
                     try:
                         custom_vectors, custom_dimensions = custom_task_config_shape(task_config)
                         selected_dataset = custom_task_config_dataset_file(task_config)
@@ -1881,6 +1887,10 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                         if len(result_configs) != 1 or result_configs[0] != selected.get("task_config"):
                             errors.append("task_config result does not contain the uniquely bound manifest task_config")
     else:
+        if lifecycle.get("result_status") == "completed":
+            errors.append(
+                "completed lifecycle requires PerformanceCustomDataset checksum-bound task_config evidence"
+            )
         try:
             case_vectors = case_vector_count(case_type)
             case_dimensions = case_vector_dimensions(case_type)
