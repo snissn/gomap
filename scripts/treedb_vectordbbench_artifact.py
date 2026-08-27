@@ -941,6 +941,25 @@ def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
                 data_size = int.from_bytes(header[48:56], byteorder)
                 if data_size < 8:
                     return False
+                source.seek(data_offset)
+                remaining = data_size
+                saw_sample = False
+                while remaining:
+                    if remaining < 8:
+                        return False
+                    event_header = source.read(8)
+                    if len(event_header) != 8:
+                        return False
+                    event_type = int.from_bytes(event_header[:4], byteorder)
+                    event_size = int.from_bytes(event_header[6:8], byteorder)
+                    if event_size < 8 or event_size > remaining:
+                        return False
+                    if event_type == 9 and event_size > 8:  # PERF_RECORD_SAMPLE
+                        saw_sample = True
+                    source.seek(event_size - 8, os.SEEK_CUR)
+                    remaining -= event_size
+                if not saw_sample:
+                    return False
             decoded = subprocess.run(
                 ("perf", "script", "-i", str(path)),
                 stdin=subprocess.DEVNULL,

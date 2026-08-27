@@ -891,6 +891,8 @@ class LifecycleValidatorTest(unittest.TestCase):
         zero_size_record[48:56] = (24).to_bytes(8, "little")
         trailing_garbage = bytearray(valid_payload + b"junk")
         trailing_garbage[48:56] = (20).to_bytes(8, "little")
+        no_sample = bytearray(valid_payload)
+        no_sample[184:188] = (1).to_bytes(4, "little")
 
         def validate(payload: bytes, native: int | BaseException) -> dict:
             with tempfile.TemporaryDirectory() as tmp:
@@ -922,8 +924,9 @@ class LifecycleValidatorTest(unittest.TestCase):
             ("native-accepted", valid_payload, 0, True),
             ("native-rejected", valid_payload, 1, False),
             ("missing-perf", valid_payload, FileNotFoundError("perf"), False),
-            ("sample-then-zero-size-record", bytes(zero_size_record), 1, False),
-            ("sample-then-trailing-garbage", bytes(trailing_garbage), 1, False),
+            ("no-sample", bytes(no_sample), 0, False),
+            ("sample-then-zero-size-record", bytes(zero_size_record), 0, False),
+            ("sample-then-trailing-garbage", bytes(trailing_garbage), 0, False),
             ("header-only", b"PERFILE2", AssertionError("native decoder called"), False),
             ("truncated-data", valid_payload[:-1], AssertionError("native decoder called"), False),
             (
