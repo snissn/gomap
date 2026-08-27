@@ -1855,6 +1855,35 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     or declared_row.strip().lower() != configured_rows[0]
                 ):
                     errors.append("bound manifest VDBBench row does not match lifecycle harness rows")
+                recorded_command = selected_row_record.get("command")
+                try:
+                    command_tokens = shlex.split(recorded_command) if isinstance(recorded_command, str) else []
+                except ValueError:
+                    command_tokens = []
+                expected_subcommand = {
+                    "exact": "treedbcolumngraphexact",
+                    "scalar": "treedbscalaru8rerank",
+                }.get(configured_rows[0]) if len(configured_rows) == 1 else None
+                module_positions = [
+                    position for position in range(len(command_tokens) - 1)
+                    if command_tokens[position:position + 2]
+                    == ["-m", "vectordb_bench.cli.vectordbbench"]
+                ]
+                forbidden_flags = {
+                    "--dry-run", "--skip-load", "--skip-search-serial", "--skip-search-concurrent",
+                }
+                if (
+                    expected_subcommand is None
+                    or len(module_positions) != 1
+                    or module_positions[0] + 2 >= len(command_tokens)
+                    or command_tokens[module_positions[0] + 2] != expected_subcommand
+                    or any(
+                        token in forbidden_flags
+                        or any(token.startswith(f"{flag}=") for flag in forbidden_flags)
+                        for token in command_tokens
+                    )
+                ):
+                    errors.append("bound manifest VDBBench command does not match the lifecycle row")
                 selected_index_name = selected.get("index_name")
                 if not isinstance(selected_index_name, str) or not selected_index_name:
                     errors.append("bound manifest VDBBench result index_name must be a non-empty string")

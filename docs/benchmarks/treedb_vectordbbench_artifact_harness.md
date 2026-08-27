@@ -137,7 +137,8 @@ the service, lifecycle mode requires both captured source identities to contain
 a valid commit and `dirty == false`.
 Completion also requires a real VDBBench execution (`vdbbench_dry_run=false`)
 and binds the single checksum-selected VDBBench row to the normalized route in
-`harness.rows`.
+`harness.rows`. Its recorded command must invoke the corresponding TreeDB
+adapter subcommand and may not contain dry-run or load/search skip flags.
 It includes a canonical public service profile, case type,
 the exact non-empty service argv using only the document service's defined
 flags and with one matching `profile` selector before Go flag parsing

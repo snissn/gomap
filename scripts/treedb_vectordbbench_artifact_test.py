@@ -340,7 +340,14 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "quantized_index_name": "embedding_scalar_u8",
             "vdbbench_dry_run": False,
         },
-        "vdbbench": [{"row": "exact", "load_metrics": load_metrics}],
+        "vdbbench": [{
+            "row": "exact",
+            "command": (
+                "python -m vectordb_bench.cli.vectordbbench treedbcolumngraphexact "
+                "--base-url http://127.0.0.1:9876"
+            ),
+            "load_metrics": load_metrics,
+        }],
         "route_proof": None,
         "lifecycle_count_proof": "lifecycle_count_response.json",
         "lifecycle_route_proof": "lifecycle_route_response.json",
@@ -1334,6 +1341,30 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["analyzable"], got)
         self.assertTrue(any("VDBBench row" in error for error in got["errors"]), got)
 
+    def test_bound_vdbbench_command_must_match_lifecycle_row(self) -> None:
+        commands = (
+            "python -m vectordb_bench.cli.vectordbbench treedbscalaru8rerank",
+            (
+                "python -m vectordb_bench.cli.vectordbbench treedbcolumngraphexact "
+                "--dry-run"
+            ),
+            (
+                "python -m vectordb_bench.cli.vectordbbench treedbcolumngraphexact "
+                "--skip-search-concurrent=true"
+            ),
+        )
+        for command in commands:
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                manifest["vdbbench"][0]["command"] = command
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any("VDBBench command" in error for error in got["errors"]), got)
+
     def test_lifecycle_route_response_must_match_route_verify(self) -> None:
         mutations = (
             (lambda response: response["diagnostics"].__setitem__("fallback_reason", "exact_scan"), "fallback"),
@@ -1460,6 +1491,9 @@ class LifecycleValidatorTest(unittest.TestCase):
             manifest, events = lifecycle_fixture(root)
             manifest["harness"].update(rows=" Scalar ", k=4, rerank_candidates=1)
             manifest["vdbbench"][0]["row"] = "scalar"
+            manifest["vdbbench"][0]["command"] = (
+                "python -m vectordb_bench.cli.vectordbbench treedbscalaru8rerank"
+            )
             events[12]["state"]["route"]["name"] = "quantized_rerank"
             events[12]["state"]["route"]["requested_top_k"] = 4
             events[12]["state"]["route"]["result_count"] = 4
@@ -1671,7 +1705,11 @@ class LifecycleValidatorTest(unittest.TestCase):
                 result, "index-a", "PerformanceCustomDataset", root
             )
             manifest["harness"]["case_type"] = "PerformanceCustomDataset"
-            manifest["vdbbench"] = [{"row": "exact", "load_metrics": metrics}]
+            manifest["vdbbench"] = [{
+                "row": "exact",
+                "command": "python -m vectordb_bench.cli.vectordbbench treedbcolumngraphexact",
+                "load_metrics": metrics,
+            }]
             manifest["lifecycle"]["dataset"]["sha256"] = harness.sha256_file(dataset_file)
             manifest["lifecycle"]["task_config_binding"] = {
                 key: metrics[key] for key in ("result_file", "result_sha256", "task_config_sha256")
@@ -1741,7 +1779,11 @@ class LifecycleValidatorTest(unittest.TestCase):
             metrics = harness.load_metrics_from_result(
                 result, "index-a", "PerformanceCustomDataset", root
             )
-            manifest["vdbbench"] = [{"row": "exact", "load_metrics": metrics}]
+            manifest["vdbbench"] = [{
+                "row": "exact",
+                "command": "python -m vectordb_bench.cli.vectordbbench treedbcolumngraphexact",
+                "load_metrics": metrics,
+            }]
             manifest["lifecycle"]["task_config_binding"] = {
                 key: metrics[key] for key in ("result_file", "result_sha256", "task_config_sha256")
             }
@@ -3077,6 +3119,9 @@ class LifecycleValidatorTest(unittest.TestCase):
                     if route_name == "quantized_rerank":
                         manifest["harness"]["rows"] = "scalar"
                         manifest["vdbbench"][0]["row"] = "scalar"
+                        manifest["vdbbench"][0]["command"] = (
+                            "python -m vectordb_bench.cli.vectordbbench treedbscalaru8rerank"
+                        )
                         response["query_mode"] = "quantized_rerank"
                         response["quantized_index_name"] = manifest["harness"]["quantized_index_name"]
                         response["quantized_rerank_candidates"] = manifest["harness"]["rerank_candidates"]
