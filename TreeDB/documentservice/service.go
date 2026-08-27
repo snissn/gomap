@@ -2219,7 +2219,7 @@ func mapVectorIndexSearchError(operation string, err error) error {
 		return wrapServiceError(CodeSnapshotMismatch, operation+" could not establish matching search and document visibility", err)
 	}
 	if errors.Is(err, collections.ErrVectorIndexSearchUnavailable) || errors.Is(err, collections.ErrIndexNotFound) {
-		return wrapServiceError(CodeIndexUnavailable, operation+" failed closed", err)
+		return wrapServiceError(CodeIndexUnavailable, operation+" failed closed: "+err.Error(), err)
 	}
 	if errors.Is(err, backenddb.ErrClosed) {
 		return wrapServiceError(CodeIndexUnavailable, "TreeDB backend is closed", err)

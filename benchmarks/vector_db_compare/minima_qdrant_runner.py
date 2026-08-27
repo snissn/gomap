@@ -49,7 +49,7 @@ PRODUCTION_HNSW_CONFIG = {
 PRODUCTION_OPTIMIZERS_CONFIG = {
     "deleted_threshold": 0.2, "vacuum_min_vector_number": 1000,
     "default_segment_number": 0, "indexing_threshold": 10000,
-    "flush_interval_sec": 5,
+    "flush_interval_sec": 5, "max_optimization_threads": 1,
 }
 INITIAL_UPLOAD_HNSW_CONFIG = {**PRODUCTION_HNSW_CONFIG, "m": 0}
 INITIAL_UPLOAD_OPTIMIZERS_CONFIG = {**PRODUCTION_OPTIMIZERS_CONFIG, "indexing_threshold": 0}

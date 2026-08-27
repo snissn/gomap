@@ -15,6 +15,14 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
+func TestVectorIndexUnavailablePreservesDiagnosticCause(t *testing.T) {
+	cause := fmt.Errorf("%w: stale document coverage", collections.ErrVectorIndexSearchUnavailable)
+	err := mapVectorIndexSearchError("native ann vector search", cause)
+	if ErrorCodeOf(err) != CodeIndexUnavailable || !strings.Contains(err.Error(), "stale document coverage") {
+		t.Fatalf("err=%v code=%s", err, ErrorCodeOf(err))
+	}
+}
+
 func TestServiceNilMutationReceiverFailsClosed(t *testing.T) {
 	var svc *Service
 	ctx := context.Background()
