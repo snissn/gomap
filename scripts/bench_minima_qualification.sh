@@ -5,7 +5,9 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
 MODE=${MODE:-representative}
-RUN_DIR=${RUN_DIR:-/tmp/gomap_minima_qualification_$(date +%Y%m%d_%H%M%S)_${RANDOM}_$$}
+if [[ -z "${RUN_DIR:-}" ]]; then
+	RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gomap_minima_qualification_XXXXXXXXXX")
+fi
 MANIFEST_PATH=${MANIFEST_PATH:-$RUN_DIR/minima_manifest.json}
 TREEDB_EVIDENCE=${TREEDB_EVIDENCE:-$RUN_DIR/treedb_backend.json}
 QDRANT_EVIDENCE=${QDRANT_EVIDENCE:-$RUN_DIR/qdrant_backend.json}
@@ -30,6 +32,7 @@ small)
 	go build -o "$RUN_DIR/bin/treedb-document-service" ./cmd/treedb-document-service
 	go build -o "$RUN_DIR/bin/treedb-rag-benchmark" ./TreeDB/cmd/treedb_rag_benchmark
 	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -dump-minima-manifest "$MANIFEST_PATH"
+	treedb_status=0
 	PYTHONPATH=clients/python/treedb_client/src "$PYTHON" \
 		benchmarks/vector_db_compare/minima_treedb_runner.py \
 		--small \
@@ -41,10 +44,11 @@ small)
 		--collection "$TREEDB_COLLECTION" \
 		--profile "$TREEDB_PROFILE" \
 		--operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
-		--ef-search "$TREEDB_EF_SEARCH"
+		--ef-search "$TREEDB_EF_SEARCH" ||
+		treedb_status=$?
 	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -validate-minima-artifact "$TREEDB_EVIDENCE"
 	printf 'small manifest: %s\nvalidated partial TreeDB evidence: %s\n' "$MANIFEST_PATH" "$TREEDB_EVIDENCE"
-	exit 0
+	exit "$treedb_status"
 	;;
 *)
 	printf 'unsupported MODE=%s (use small or representative)\n' "$MODE" >&2

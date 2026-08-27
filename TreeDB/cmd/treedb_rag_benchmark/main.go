@@ -35,8 +35,8 @@ func main() {
 	cfg.Workload = strings.TrimSpace(*workload)
 	switch cfg.Workload {
 	case "application":
-		if *dumpMinima != "" {
-			fmt.Fprintln(os.Stderr, "treedb_rag_benchmark: -dump-minima-manifest requires -workload=minima")
+		if hasMinimaFlag(*dumpMinima, *validateMinima, *minimaTree, *minimaQdrant, *minimaOutput, *minimaReport) {
+			fmt.Fprintln(os.Stderr, "treedb_rag_benchmark: Minima flags require -workload=minima")
 			os.Exit(2)
 		}
 	case "minima":
@@ -115,4 +115,13 @@ func main() {
 	fmt.Printf("fixture SHA-256: %s\n", report.Provenance.FixtureSHA256)
 	fmt.Printf("semantic vectors SHA-256: %s\n", report.Provenance.SemanticVectorSHA256)
 	fmt.Printf("wrote %s\nwrote %s\nwrote %s\n", jsonPath, markdownPath, manifestPath)
+}
+
+func hasMinimaFlag(values ...string) bool {
+	for _, value := range values {
+		if value != "" {
+			return true
+		}
+	}
+	return false
 }

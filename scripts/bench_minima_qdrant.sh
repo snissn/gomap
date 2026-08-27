@@ -4,7 +4,9 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
-RUN_DIR="${RUN_DIR:-/tmp/gomap_minima_qdrant_$(date +%Y%m%d_%H%M%S)_${RANDOM}_$$}"
+if [[ -z "${RUN_DIR:-}" ]]; then
+	RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gomap_minima_qdrant_XXXXXXXXXX")
+fi
 PYTHON="${PYTHON:-python3}"
 VENV="${VENV:-$RUN_DIR/venv}"
 MANIFEST_PATH="${MANIFEST_PATH:-$RUN_DIR/minima_manifest.json}"
@@ -29,7 +31,7 @@ DEPLOYMENT=""
 
 cleanup() {
 	if [[ -s "$QDRANT_PID_FILE" ]]; then
-		QDRANT_PID=$(cat "$QDRANT_PID_FILE")
+		IFS= read -r QDRANT_PID <"$QDRANT_PID_FILE"
 	fi
 	if [[ -n "$QDRANT_PID" ]]; then
 		kill "$QDRANT_PID" >/dev/null 2>&1 || true
@@ -96,7 +98,12 @@ elif [[ -n "$QDRANT_BIN" ]]; then
 		"$QDRANT_BIN" >"$RUN_DIR/qdrant.log" 2>&1 &
 	QDRANT_PID=$!
 	QDRANT_SERVER_PID="$QDRANT_PID"
-	printf '%s\n' "$QDRANT_PID" >"$QDRANT_PID_FILE"
+	QDRANT_PROCESS_IDENTITY=$(ps -o lstart= -o command= -p "$QDRANT_PID" 2>/dev/null || true)
+	if [[ -z "$QDRANT_PROCESS_IDENTITY" ]]; then
+		echo "standalone Qdrant exited before its process identity could be recorded" >&2
+		exit 1
+	fi
+	printf '%s\n%s\n' "$QDRANT_PID" "$QDRANT_PROCESS_IDENTITY" >"$QDRANT_PID_FILE"
 else
 	if [[ ! "$QDRANT_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]; then
 		echo "QDRANT_IMAGE must be digest-pinned, got: $QDRANT_IMAGE" >&2

@@ -261,6 +261,8 @@ class TreeDBClient:
     ) -> FilterDocumentsResponse:
         """List documents matching a server-side filter in document-ID order."""
 
+        if after_id is not None and not cursor_page:
+            raise InvalidRequestError("invalid_request", "after_id requires cursor_page=True")
         request: dict[str, Any] = {"limit": limit, "offset": offset, "return_embedding": return_embedding}
         if after_id is not None:
             request["after_id"] = str(after_id)

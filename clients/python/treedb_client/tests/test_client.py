@@ -738,6 +738,8 @@ class TreeDBClientTests(unittest.TestCase):
             client.search_vector_index("docs", ["not-a-number"], 1, query_embedding_encoding="f32_le_b64")
         with self.assertRaisesRegex(InvalidRequestError, "query_embedding"):
             client.search_vector_index("docs", ["not-a-number"], 1, query_embedding_encoding="json")
+        with self.assertRaisesRegex(InvalidRequestError, "after_id requires cursor_page=True"):
+            client.filter_documents("docs", after_id="cursor")
 
     def test_keyword_search_serializes_request_and_parses_response(self) -> None:
         route = "/v1/indexes/docs/search/keyword"

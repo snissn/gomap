@@ -233,7 +233,7 @@ type DenseVectorSearchResponse struct {
 	Candidates                       int                                `json:"candidates"`
 	NativeBasePlusLiveDelta          bool                               `json:"native_base_plus_live_delta"`
 	ScalarFilterMembershipSource     string                             `json:"scalar_filter_membership_source"`
-	ScalarFilterPlan                 collections.NativeScalarFilterPlan `json:"scalar_filter_plan,omitempty"`
+	ScalarFilterPlan                 collections.NativeScalarFilterPlan `json:"scalar_filter_plan"`
 	ScalarFilterProbeIDs             uint64                             `json:"scalar_filter_probe_ids"`
 	ScalarFilterProbeTruncated       uint64                             `json:"scalar_filter_probe_truncated"`
 	ScalarFilterCandidates           uint64                             `json:"scalar_filter_candidates"`

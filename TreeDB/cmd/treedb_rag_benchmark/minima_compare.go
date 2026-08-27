@@ -151,66 +151,85 @@ type minimaRawBackendEvidence struct {
 	NativeRouteResponses      map[string]json.RawMessage              `json:"native_route_responses,omitempty"`
 }
 
-var minimaPayloadEvidenceCache struct {
-	once sync.Once
+type minimaPayloadEvidence struct {
 	hash string
 	rows int
 	err  error
 }
 
+var minimaPayloadEvidenceCache struct {
+	sync.Mutex
+	values map[string]minimaPayloadEvidence
+}
+
 func minimaExpectedPayloadEvidence(manifest *minimaManifest) (string, int, error) {
-	minimaPayloadEvidenceCache.once.Do(func() {
-		deleted := make(map[string]bool)
-		overrides := make(map[string]minimaGeneratedDocument)
-		additions := make(map[string]minimaGeneratedDocument)
-		for _, operation := range manifest.Operations {
-			switch operation.Effect {
-			case "delete":
-				for _, id := range operation.IDs {
-					deleted[id] = true
-				}
-			case "update":
-				for _, document := range operation.Documents {
-					overrides[document.ID] = document
-				}
-			case "insert":
-				for _, document := range operation.Documents {
-					additions[document.ID] = document
-				}
+	key, err := minimaDigest(manifest)
+	if err != nil {
+		return "", 0, fmt.Errorf("digest Minima payload manifest: %w", err)
+	}
+	minimaPayloadEvidenceCache.Lock()
+	cached, ok := minimaPayloadEvidenceCache.values[key]
+	minimaPayloadEvidenceCache.Unlock()
+	if ok {
+		return cached.hash, cached.rows, cached.err
+	}
+
+	result := minimaPayloadEvidence{}
+	deleted := make(map[string]bool)
+	overrides := make(map[string]minimaGeneratedDocument)
+	additions := make(map[string]minimaGeneratedDocument)
+	for _, operation := range manifest.Operations {
+		switch operation.Effect {
+		case "delete":
+			for _, id := range operation.IDs {
+				deleted[id] = true
+			}
+		case "update":
+			for _, document := range operation.Documents {
+				overrides[document.ID] = document
+			}
+		case "insert":
+			for _, document := range operation.Documents {
+				additions[document.ID] = document
 			}
 		}
-		var xor, total [sha256.Size]byte
-		add := func(document minimaGeneratedDocument) {
-			digest := sha256.New()
-			for _, value := range []string{document.ID, document.Content, document.UserID, document.FPath} {
-				_, _ = digest.Write([]byte(value))
-				_, _ = digest.Write([]byte{0})
-			}
-			sum := digest.Sum(nil)
-			carry := 0
-			for i := len(total) - 1; i >= 0; i-- {
-				xor[i] ^= sum[i]
-				value := int(total[i]) + int(sum[i]) + carry
-				total[i], carry = byte(value), value>>8
-			}
-			minimaPayloadEvidenceCache.rows++
+	}
+	var xor, total [sha256.Size]byte
+	add := func(document minimaGeneratedDocument) {
+		digest := sha256.New()
+		for _, value := range []string{document.ID, document.Content, document.UserID, document.FPath} {
+			_, _ = digest.Write([]byte(value))
+			_, _ = digest.Write([]byte{0})
 		}
-		for _, spec := range manifest.Corpora {
-			for ordinal := 0; ordinal < spec.CorpusRows; ordinal++ {
-				document, err := minimaDocumentAt(spec, ordinal)
-				if err != nil {
-					minimaPayloadEvidenceCache.err = err
-					return
-				}
-				if deleted[document.ID] {
-					continue
-				}
-				if replacement, ok := overrides[document.ID]; ok {
-					document = replacement
-				}
-				add(document)
-			}
+		sum := digest.Sum(nil)
+		carry := 0
+		for i := len(total) - 1; i >= 0; i-- {
+			xor[i] ^= sum[i]
+			value := int(total[i]) + int(sum[i]) + carry
+			total[i], carry = byte(value), value>>8
 		}
+		result.rows++
+	}
+	for _, spec := range manifest.Corpora {
+		for ordinal := 0; ordinal < spec.CorpusRows; ordinal++ {
+			document, documentErr := minimaDocumentAt(spec, ordinal)
+			if documentErr != nil {
+				result.err = documentErr
+				break
+			}
+			if deleted[document.ID] {
+				continue
+			}
+			if replacement, exists := overrides[document.ID]; exists {
+				document = replacement
+			}
+			add(document)
+		}
+		if result.err != nil {
+			break
+		}
+	}
+	if result.err == nil {
 		ids := make([]string, 0, len(additions))
 		for id := range additions {
 			if !deleted[id] {
@@ -222,11 +241,22 @@ func minimaExpectedPayloadEvidence(manifest *minimaManifest) (string, int, error
 			add(additions[id])
 		}
 		value := fmt.Sprintf("minima-committed-payload-v1:%d:%s:%s",
-			minimaPayloadEvidenceCache.rows, hex.EncodeToString(xor[:]), hex.EncodeToString(total[:]))
+			result.rows, hex.EncodeToString(xor[:]), hex.EncodeToString(total[:]))
 		sum := sha256.Sum256([]byte(value))
-		minimaPayloadEvidenceCache.hash = hex.EncodeToString(sum[:])
-	})
-	return minimaPayloadEvidenceCache.hash, minimaPayloadEvidenceCache.rows, minimaPayloadEvidenceCache.err
+		result.hash = hex.EncodeToString(sum[:])
+	}
+
+	minimaPayloadEvidenceCache.Lock()
+	if minimaPayloadEvidenceCache.values == nil {
+		minimaPayloadEvidenceCache.values = make(map[string]minimaPayloadEvidence)
+	}
+	if existing, exists := minimaPayloadEvidenceCache.values[key]; exists {
+		result = existing
+	} else {
+		minimaPayloadEvidenceCache.values[key] = result
+	}
+	minimaPayloadEvidenceCache.Unlock()
+	return result.hash, result.rows, result.err
 }
 
 func readMinimaArtifact(path string) (minimaArtifact, error) {

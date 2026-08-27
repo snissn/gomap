@@ -83,8 +83,8 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 		"minima/mixed_broad_narrow/replacement/000003",
 		"minima/mixed_broad_narrow/replacement/000004",
 	}
-	if minimaDigest(queries["small"].FinalOracleIDs) != minimaDigest(smallFinal) ||
-		minimaDigest(queries["mixed_broad_narrow"].FinalOracleIDs) != minimaDigest(mixedFinal) ||
+	if mustMinimaDigest(queries["small"].FinalOracleIDs) != mustMinimaDigest(smallFinal) ||
+		mustMinimaDigest(queries["mixed_broad_narrow"].FinalOracleIDs) != mustMinimaDigest(mixedFinal) ||
 		queries["mixed_broad_narrow"].InitialOracleIDs[0] != "minima/mixed_broad_narrow/010020" {
 		t.Fatal("initial/final operation-derived oracles drifted")
 	}
@@ -108,8 +108,8 @@ func TestMinimaOraclesCoverSharedCollection(t *testing.T) {
 		ids, scores, matches := minimaGlobalOracle(manifest.Corpora, scenario)
 		query := queries[scenario.Name]
 		if matches != scenario.EligibleRows ||
-			minimaDigest(ids) != minimaDigest(query.InitialOracleIDs) ||
-			minimaDigest(scores) != minimaDigest(query.InitialOracleScores) {
+			mustMinimaDigest(ids) != mustMinimaDigest(query.InitialOracleIDs) ||
+			mustMinimaDigest(scores) != mustMinimaDigest(query.InitialOracleScores) {
 			t.Fatalf("%s global oracle rows=%d want %d", scenario.Name, matches, scenario.EligibleRows)
 		}
 	}
@@ -138,7 +138,7 @@ func TestMinimaGeneratorRowsAreFrozen(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := minimaDigest(document); got != test.want {
+		if got := mustMinimaDigest(document); got != test.want {
 			t.Errorf("%s/%d row hash=%s want %s", test.scenario, test.ordinal, got, test.want)
 		}
 	}
@@ -167,7 +167,7 @@ func TestMinimaPayloadStateHashExcludesVectorsButOraclesDoNot(t *testing.T) {
 	mutated := manifest
 	mutated.Operations[7].Documents[0].Vector = make([]float64, minimaDimension)
 	mutated.Operations[7].Documents[0].Vector[1] = 1
-	mutated.OperationSHA256 = minimaDigest(mutated.Operations)
+	mutated.OperationSHA256 = mustMinimaDigest(mutated.Operations)
 	stateHash, err := minimaExpectedStateHash(&mutated)
 	if err != nil {
 		t.Fatal(err)
@@ -181,12 +181,47 @@ func TestMinimaPayloadStateHashExcludesVectorsButOraclesDoNot(t *testing.T) {
 		t.Fatal(err)
 	}
 	finalIDs, finalScores := minimaFinalOracleFromState(minimaScenarioMap(&mutated)["small"], applied)
-	if minimaDigest(finalIDs) == minimaDigest(baselineQuery.FinalOracleIDs) && minimaDigest(finalScores) == minimaDigest(baselineQuery.FinalOracleScores) {
+	if mustMinimaDigest(finalIDs) == mustMinimaDigest(baselineQuery.FinalOracleIDs) && mustMinimaDigest(finalScores) == mustMinimaDigest(baselineQuery.FinalOracleScores) {
 		t.Fatal("vector mutation escaped final retrieval oracle")
 	}
 	mutated.ExpectedStateSHA256 = stateHash
 	if err := validateMinimaManifest(&mutated); err == nil {
 		t.Fatal("strict manifest validator accepted vector-only mutation")
+	}
+}
+
+func TestMinimaDigestRejectsUnsupportedJSONValues(t *testing.T) {
+	if _, err := minimaDigest(math.NaN()); err == nil {
+		t.Fatal("Minima digest accepted NaN")
+	}
+}
+
+func TestMinimaPayloadEvidenceCacheIsManifestKeyed(t *testing.T) {
+	one := minimaManifest{Corpora: []minimaScenarioSpec{{Name: "cache-one", CorpusRows: 1, Filter: "user_id"}}}
+	two := minimaManifest{Corpora: []minimaScenarioSpec{{Name: "cache-two", CorpusRows: 2, Filter: "user_id"}}}
+	oneHash, oneRows, err := minimaExpectedPayloadEvidence(&one)
+	if err != nil {
+		t.Fatal(err)
+	}
+	twoHash, twoRows, err := minimaExpectedPayloadEvidence(&two)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oneRows != 1 || twoRows != 2 || oneHash == twoHash {
+		t.Fatalf("manifest-keyed payload evidence one=(%s,%d) two=(%s,%d)", oneHash, oneRows, twoHash, twoRows)
+	}
+}
+
+func TestApplicationModeDetectsEveryMinimaFlag(t *testing.T) {
+	if hasMinimaFlag("", "", "", "", "", "") {
+		t.Fatal("empty Minima flags were reported as set")
+	}
+	for index := range 6 {
+		values := make([]string, 6)
+		values[index] = "set"
+		if !hasMinimaFlag(values...) {
+			t.Fatalf("Minima flag %d was ignored", index)
+		}
 	}
 }
 
@@ -201,53 +236,56 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		{"post-operation state hash mismatch", func(a *minimaArtifact) { a.Manifest.ExpectedStateSHA256 = "bad" }},
 		{"cross-scenario tenant collision", func(a *minimaArtifact) {
 			a.Manifest.Corpora[7].UserID = a.Manifest.Corpora[0].UserID
-			a.Manifest.CorpusSHA256 = minimaDigest(a.Manifest.Corpora)
+			a.Manifest.CorpusSHA256 = mustMinimaDigest(a.Manifest.Corpora)
 		}},
 		{"cross-scenario default namespace collision", func(a *minimaArtifact) {
 			a.Manifest.Corpora[7].Name = a.Manifest.Corpora[0].Name
-			a.Manifest.CorpusSHA256 = minimaDigest(a.Manifest.Corpora)
+			a.Manifest.CorpusSHA256 = mustMinimaDigest(a.Manifest.Corpora)
 		}},
 		{"concrete insert range mismatch", func(a *minimaArtifact) {
 			a.Manifest.Operations[1].InsertRanges[0].Rows--
-			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+			a.Manifest.OperationSHA256 = mustMinimaDigest(a.Manifest.Operations)
 		}},
 		{"missing timed reader plan", func(a *minimaArtifact) {
 			a.Manifest.Operations[3].TimedPlan = nil
-			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+			a.Manifest.OperationSHA256 = mustMinimaDigest(a.Manifest.Operations)
 		}},
 		{"truncated timed query plan", func(a *minimaArtifact) {
 			a.Manifest.Operations[3].TimedPlan.QueryCount = 16
-			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+			a.Manifest.OperationSHA256 = mustMinimaDigest(a.Manifest.Operations)
 		}},
 		{"timed barrier mismatch", func(a *minimaArtifact) {
 			a.Manifest.Operations[3].TimedPlan.Rounds[0].StartBarrier = "writer_first"
-			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+			a.Manifest.OperationSHA256 = mustMinimaDigest(a.Manifest.Operations)
 		}},
 		{"missing concurrent delete plan", func(a *minimaArtifact) {
 			a.Manifest.Operations[4].ConcurrentPlan = nil
-			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+			a.Manifest.OperationSHA256 = mustMinimaDigest(a.Manifest.Operations)
 		}},
 		{"concurrent replacement reader assignment mismatch", func(a *minimaArtifact) {
 			a.Manifest.Operations[5].ConcurrentPlan.ReaderAssignments[3].Reader = 2
-			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+			a.Manifest.OperationSHA256 = mustMinimaDigest(a.Manifest.Operations)
 		}},
 		{"concurrent replacement barrier mismatch", func(a *minimaArtifact) {
 			a.Manifest.Operations[5].ConcurrentPlan.EndBarrier = "mutation_finished_before_readers"
-			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+			a.Manifest.OperationSHA256 = mustMinimaDigest(a.Manifest.Operations)
 		}},
 		{"replacement payload mismatch", func(a *minimaArtifact) {
 			a.Manifest.Operations[5].Documents[0].Content = "doctored"
-			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+			a.Manifest.OperationSHA256 = mustMinimaDigest(a.Manifest.Operations)
 		}},
 		{"update input mismatch", func(a *minimaArtifact) {
 			a.Manifest.Operations[7].Documents[0].Content = "doctored"
-			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+			a.Manifest.OperationSHA256 = mustMinimaDigest(a.Manifest.Operations)
 		}},
 		{"delete input mismatch", func(a *minimaArtifact) {
 			a.Manifest.Operations[9].IDs[0] = "doctored"
-			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+			a.Manifest.OperationSHA256 = mustMinimaDigest(a.Manifest.Operations)
 		}},
 		{"backend manifest mismatch", func(a *minimaArtifact) { minimaTestBackend(a, "qdrant").Manifest.OperationSHA256 = "bad" }},
+		{"invalid qdrant route", func(a *minimaArtifact) {
+			minimaTestRow(a, "qdrant", "small").Route.DeclaredScalarFiltering = false
+		}},
 		{"cross-user leakage", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Correctness.CrossUserResults = 1 }},
 		{"stale insert", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Correctness.StaleInsertIDs = 1 }},
 		{"stale update", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Correctness.StaleUpdateIDs = 1 }},

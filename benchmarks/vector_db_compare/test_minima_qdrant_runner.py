@@ -135,7 +135,7 @@ class FakeClient:
 
     def scroll(self, *, limit: int, offset: str | None, **_: object) -> tuple[list[Model], str | None]:
         keys = sorted(self.shared.points)
-        start = keys.index(offset) if offset in keys else 0
+        start = 0 if offset is None else keys.index(offset)
         selected = keys[start:start + limit]
         rows = [Model(payload=self.shared.points[key].payload, vector=self.shared.points[key].vector) for key in selected]
         next_offset = keys[start + limit] if start + limit < len(keys) else None
@@ -149,7 +149,7 @@ def reader_schedule(names: list[str]) -> list[dict[str, object]]:
     return [{"ordinal": ordinal, "actor": "reader", "scenario": name, "query_ordinal": ordinal} for ordinal, name in enumerate(names)]
 
 
-def tiny_manifest() -> dict[str, object]:
+def tiny_manifest(reader_concurrency: int = 1) -> dict[str, object]:
     definitions = [
         ("small", 8, 0, 4, "user_id", "small-user", "", 0, 0, 0, 0),
         ("all_match", 6, 0, 6, "user_id", "all-user", "", 0, 0, 0, 0),
@@ -177,8 +177,8 @@ def tiny_manifest() -> dict[str, object]:
     config = {
         "collection": "minima", "vector_field": "embedding", "content_field": "content", "dimension": 8,
         "metric": "cosine", "scalar_fields": ["user_id", "fpath"], "top_k": 5, "batch_size": 3,
-        "reader_concurrency": 1, "writer_concurrency": 1, "warmup_queries": len(corpora),
-        "timed_queries": len(corpora), "lookup_limit": 4096, "order_tolerance": 0,
+        "reader_concurrency": reader_concurrency, "writer_concurrency": 1, "warmup_queries": len(corpora),
+        "timed_queries": len(corpora) * reader_concurrency, "lookup_limit": 4096, "order_tolerance": 0,
         "score_tolerance": 0.000001, "ordering": "manifest_ordinal_serial; timed_search_round_robin",
         "completion_boundary": "successful_mutation_response_before_visibility_probe",
         "timing_boundary": "storage_calls_only; embeddings_and_llm_excluded; fetch_and_decode_separate",
@@ -200,10 +200,11 @@ def tiny_manifest() -> dict[str, object]:
     timed_plan = {
         "query_count": config["timed_queries"], "scenario_order": [row["name"] for row in corpora],
         "reader_concurrency": config["reader_concurrency"], "writer_concurrency": config["writer_concurrency"],
-        "assignment": "round=ordinal/1;reader=ordinal%1;scenario=scenario_order[ordinal%8]",
+        "assignment": f"round=ordinal/{reader_concurrency};reader=ordinal%{reader_concurrency};scenario=scenario_order[ordinal%8]",
         "rounds": [
             {
-                "ordinal": ordinal, "query_start": ordinal, "query_count": 1, "insert_range": insertion,
+                "ordinal": ordinal, "query_start": ordinal * reader_concurrency,
+                "query_count": reader_concurrency, "insert_range": insertion,
                 "start_barrier": "round_start_readers_and_writer",
                 "end_barrier": "round_end_queries_and_insert_complete",
             }
@@ -213,7 +214,10 @@ def tiny_manifest() -> dict[str, object]:
     def mutation_plan(mutation: str) -> dict[str, object]:
         return {
             "mutation": mutation, "reader_concurrency": config["reader_concurrency"],
-            "reader_assignments": [{"reader": 0, "query_ordinal": 0, "scenario": "mixed_broad_narrow"}],
+            "reader_assignments": [
+                {"reader": reader, "query_ordinal": reader, "scenario": "mixed_broad_narrow"}
+                for reader in range(reader_concurrency)
+            ],
             "start_barrier": "reindex_start_all_readers_and_writer",
             "end_barrier": "reindex_end_all_readers_and_mutation_complete",
         }
@@ -502,6 +506,46 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertTrue(all(row["reopen_ids"] == row["actual_ids"] for row in artifact["scenarios"]))
         self.assertTrue(shared.query_filters)
 
+    def test_fake_qdrant_multi_reader_plan_records_every_reader(self) -> None:
+        manifest, shared = tiny_manifest(2), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.run()
+        artifact = workload.artifact()
+        workload.close()
+
+        operations = artifact["backends"][0]["operations"]
+        timed_trace = operations["timed_execution_trace"]
+        for round_value in timed_trace["rounds"]:
+            readers = {
+                row["reader"]
+                for row in timed_trace["queries"]
+                if row["round"] == round_value["ordinal"]
+            }
+            self.assertEqual(readers, {0, 1})
+        for operation in operations["reindex_execution_trace"]["operations"]:
+            self.assertEqual({row["reader"] for row in operation["reader_queries"]}, {0, 1})
+
+    def test_actual_scroll_rejects_nonadvancing_cursor(self) -> None:
+        manifest, shared = tiny_manifest(), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.run()
+        original_scroll = workload.client.scroll
+
+        def stuck_scroll(**kwargs: object) -> tuple[list[Model], str | None]:
+            rows, next_offset = original_scroll(**kwargs)
+            offset = kwargs["offset"]
+            return rows, offset if offset is not None else next_offset
+
+        with mock.patch.object(workload.client, "scroll", side_effect=stuck_scroll):
+            with self.assertRaisesRegex(RuntimeError, "cursor did not advance"):
+                workload.actual_scroll()
+        workload.close()
+
+    def test_fake_scroll_rejects_unknown_cursor(self) -> None:
+        client = FakeClient(SharedQdrant())
+        with self.assertRaises(ValueError):
+            client.scroll(limit=1, offset="missing")
+
     def test_close_rejects_missing_restart_hook(self) -> None:
         manifest, shared = tiny_manifest(), SharedQdrant()
         workload = new_runner(manifest, shared)
@@ -622,12 +666,15 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
             hook.write_text("#!/usr/bin/env bash\nprintf '2\\n'\n", encoding="utf-8")
             hook.chmod(0o755)
             environment = dict(os.environ)
-            environment.pop("QDRANT_STORAGE_PATH", None)
+            for key in list(environment):
+                if key.startswith("QDRANT_"):
+                    environment.pop(key)
+            environment.pop("RUN_DIR", None)
             environment.update({
                 "QDRANT_URL": "http://127.0.0.1:1",
                 "QDRANT_RESTART_HOOK": str(hook),
                 "QDRANT_SERVER_PID": "1",
-                "RUN_DIR": str(Path(directory) / "run"),
+                "TMPDIR": directory,
             })
             script = Path(__file__).resolve().parents[2] / "scripts" / "bench_minima_qdrant.sh"
             result = subprocess.run(
@@ -636,6 +683,7 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 2)
             self.assertIn("authoritative QDRANT_STORAGE_PATH", result.stderr)
+            self.assertEqual(len(list(Path(directory).glob("gomap_minima_qdrant_*"))), 1)
 
 
     def test_reads_after_writer_completion_fail_overlap_contracts(self) -> None:

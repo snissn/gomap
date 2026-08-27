@@ -20,6 +20,16 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 )
 
+func TestDenseVectorSearchResponseAlwaysSerializesScalarFilterPlan(t *testing.T) {
+	raw, err := json.Marshal(DenseVectorSearchResponse{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"scalar_filter_plan":""`)) {
+		t.Fatalf("response JSON=%s want scalar_filter_plan", raw)
+	}
+}
+
 func TestHTTPMalformedJSONKeywordHybridAndErrorPayloads(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()

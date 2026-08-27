@@ -221,14 +221,14 @@ func buildMinimaManifest() minimaManifest {
 		{Ordinal: 15, Name: "final_manifest_and_oracle_comparison", Target: "all", Effect: "none", Schedule: minimaReaderSchedule(corpora, len(corpora))},
 	}
 	manifest := minimaManifest{Schema: minimaManifestSchema, Config: defaultMinimaWorkloadConfig(), Corpora: corpora, Queries: queries, Operations: operations}
-	manifest.CorpusSHA256 = minimaDigest(corpora)
-	manifest.OperationSHA256 = minimaDigest(operations)
+	manifest.CorpusSHA256 = mustMinimaDigest(corpora)
+	manifest.OperationSHA256 = mustMinimaDigest(operations)
 	applied, _ := minimaApplyOperations(&manifest)
-	manifest.ExpectedStateSHA256 = minimaDigest(applied.Summary)
+	manifest.ExpectedStateSHA256 = mustMinimaDigest(applied.Summary)
 	for i, corpus := range corpora {
 		manifest.Queries[i].FinalOracleIDs, manifest.Queries[i].FinalOracleScores = minimaFinalOracleFromState(corpus, applied)
 	}
-	manifest.QuerySHA256 = minimaDigest(manifest.Queries)
+	manifest.QuerySHA256 = mustMinimaDigest(manifest.Queries)
 	return manifest
 }
 func minimaInsertRanges(corpora []minimaScenarioSpec, batchSize int) ([]minimaInsertRange, []minimaInsertRange) {
@@ -383,7 +383,7 @@ func minimaExpectedStateHash(manifest *minimaManifest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return minimaDigest(applied.Summary), nil
+	return minimaDigest(applied.Summary)
 }
 
 type minimaPayloadCorpusSpec struct {
@@ -415,7 +415,7 @@ func minimaPayloadCorpusDigest(corpora []minimaScenarioSpec) string {
 			PayloadGenerator: minimaPayloadGenerator,
 		}
 	}
-	return minimaDigest(payload)
+	return mustMinimaDigest(payload)
 }
 
 func minimaStateDocuments(documents []minimaGeneratedDocument) []minimaStateDocument {
@@ -426,9 +426,20 @@ func minimaStateDocuments(documents []minimaGeneratedDocument) []minimaStateDocu
 	return out
 }
 
-func minimaDigest(value any) string {
-	raw, _ := json.Marshal(value)
-	return artifactHash("", raw).SHA256
+func minimaDigest(value any) (string, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("marshal Minima digest input: %w", err)
+	}
+	return artifactHash("", raw).SHA256, nil
+}
+
+func mustMinimaDigest(value any) string {
+	digest, err := minimaDigest(value)
+	if err != nil {
+		panic(err)
+	}
+	return digest
 }
 
 type minimaScoredDocument struct {
@@ -584,7 +595,19 @@ func validateMinimaManifest(manifest *minimaManifest) error {
 	if manifest == nil || manifest.Schema != minimaManifestSchema {
 		return fmt.Errorf("minima manifest: missing schema")
 	}
-	if manifest.CorpusSHA256 != minimaDigest(manifest.Corpora) || manifest.QuerySHA256 != minimaDigest(manifest.Queries) || manifest.OperationSHA256 != minimaDigest(manifest.Operations) {
+	corpusHash, err := minimaDigest(manifest.Corpora)
+	if err != nil {
+		return fmt.Errorf("minima manifest: corpus hash: %w", err)
+	}
+	queryHash, err := minimaDigest(manifest.Queries)
+	if err != nil {
+		return fmt.Errorf("minima manifest: query hash: %w", err)
+	}
+	operationHash, err := minimaDigest(manifest.Operations)
+	if err != nil {
+		return fmt.Errorf("minima manifest: operation hash: %w", err)
+	}
+	if manifest.CorpusSHA256 != corpusHash || manifest.QuerySHA256 != queryHash || manifest.OperationSHA256 != operationHash {
 		return fmt.Errorf("minima manifest: corpus/query/operation hash mismatch")
 	}
 	if err := validateMinimaScalarNamespaces(manifest); err != nil {
@@ -597,11 +620,19 @@ func validateMinimaManifest(manifest *minimaManifest) error {
 		return err
 	}
 	stateHash, err := minimaExpectedStateHash(manifest)
-	if err != nil || manifest.ExpectedStateSHA256 != stateHash {
-		return fmt.Errorf("minima manifest: post-operation state hash mismatch: %v", err)
+	if err != nil {
+		return fmt.Errorf("minima manifest: compute post-operation state hash: %w", err)
+	}
+	if manifest.ExpectedStateSHA256 != stateHash {
+		return fmt.Errorf("minima manifest: post-operation state hash mismatch")
 	}
 	frozen := buildMinimaManifest()
-	if manifest.CorpusSHA256 != frozen.CorpusSHA256 || manifest.QuerySHA256 != frozen.QuerySHA256 || manifest.OperationSHA256 != frozen.OperationSHA256 || manifest.ExpectedStateSHA256 != frozen.ExpectedStateSHA256 || minimaDigest(manifest.Config) != minimaDigest(frozen.Config) {
+	configHash, err := minimaDigest(manifest.Config)
+	if err != nil {
+		return fmt.Errorf("minima manifest: config hash: %w", err)
+	}
+	frozenConfigHash := mustMinimaDigest(frozen.Config)
+	if manifest.CorpusSHA256 != frozen.CorpusSHA256 || manifest.QuerySHA256 != frozen.QuerySHA256 || manifest.OperationSHA256 != frozen.OperationSHA256 || manifest.ExpectedStateSHA256 != frozen.ExpectedStateSHA256 || configHash != frozenConfigHash {
 		return fmt.Errorf("minima manifest: not the frozen workload")
 	}
 	if len(manifest.Corpora) != len(manifest.Queries) {
@@ -622,11 +653,15 @@ func validateMinimaManifest(manifest *minimaManifest) error {
 		query := manifest.Queries[i]
 		initialIDs, initialScores, globalMatches := minimaGlobalOracle(manifest.Corpora, corpus)
 		finalIDs, finalScores := minimaFinalOracleFromState(corpus, applied)
+		actualOracleHash, err := minimaDigest([]any{
+			query.InitialOracleIDs, query.InitialOracleScores, query.FinalOracleIDs, query.FinalOracleScores,
+		})
+		if err != nil {
+			return fmt.Errorf("minima manifest: hash oracle for %s: %w", corpus.Name, err)
+		}
+		expectedOracleHash := mustMinimaDigest([]any{initialIDs, initialScores, finalIDs, finalScores})
 		if query.Scenario != corpus.Name ||
-			minimaDigest(query.InitialOracleIDs) != minimaDigest(initialIDs) ||
-			minimaDigest(query.InitialOracleScores) != minimaDigest(initialScores) ||
-			minimaDigest(query.FinalOracleIDs) != minimaDigest(finalIDs) ||
-			minimaDigest(query.FinalOracleScores) != minimaDigest(finalScores) ||
+			actualOracleHash != expectedOracleHash ||
 			globalMatches != corpus.EligibleRows ||
 			len(query.Vector) != manifest.Config.Dimension {
 			return fmt.Errorf("minima manifest: exact initial/final oracle mismatch for %s", corpus.Name)
@@ -1302,10 +1337,16 @@ func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScena
 	if row.CorpusRows != spec.CorpusRows || row.ExpectedMatches != spec.EligibleRows || row.Selectivity != spec.Selectivity {
 		return fmt.Errorf("missing or incorrect selectivity/cardinality")
 	}
-	if minimaDigest(row.InitialOracleIDs) != minimaDigest(query.InitialOracleIDs) ||
-		minimaDigest(row.InitialOracleScores) != minimaDigest(query.InitialOracleScores) ||
-		minimaDigest(row.FinalOracleIDs) != minimaDigest(query.FinalOracleIDs) ||
-		minimaDigest(row.FinalOracleScores) != minimaDigest(query.FinalOracleScores) ||
+	declaredOracleHash, err := minimaDigest([]any{
+		row.InitialOracleIDs, row.InitialOracleScores, row.FinalOracleIDs, row.FinalOracleScores,
+	})
+	if err != nil {
+		return fmt.Errorf("hash declared oracle evidence: %w", err)
+	}
+	expectedOracleHash := mustMinimaDigest([]any{
+		query.InitialOracleIDs, query.InitialOracleScores, query.FinalOracleIDs, query.FinalOracleScores,
+	})
+	if declaredOracleHash != expectedOracleHash ||
 		row.OrderTolerance != minimaOrderTolerance || row.ScoreTolerance != minimaScoreTolerance {
 		return fmt.Errorf("missing exact initial/final oracle evidence")
 	}
@@ -1314,18 +1355,29 @@ func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScena
 		query.InitialOracleIDs, query.InitialOracleScores,
 		row.OrderTolerance, row.ScoreTolerance,
 	)
-	if err != nil || initialRecall != 1 || initialOverlap != 1 {
-		return fmt.Errorf("initial actual results do not match initial oracle: %v", err)
+	if err != nil {
+		return fmt.Errorf("validate initial actual results: %w", err)
+	}
+	if initialRecall != 1 || initialOverlap != 1 {
+		return fmt.Errorf("initial actual results do not match initial oracle")
 	}
 	recall, overlap, err := validateMinimaRanking(
 		row.ActualIDs, row.ActualScores,
 		query.FinalOracleIDs, query.FinalOracleScores,
 		row.OrderTolerance, row.ScoreTolerance,
 	)
-	if err != nil || !finiteFraction(row.Recall) || !finiteFraction(row.Overlap) || math.Abs(row.Recall-recall) > 1e-12 || math.Abs(row.Overlap-overlap) > 1e-12 {
-		return fmt.Errorf("reported recall/overlap does not match final actual IDs: %v", err)
+	if err != nil {
+		return fmt.Errorf("validate final actual results: %w", err)
 	}
-	if !row.ReopenParity || minimaDigest(row.ReopenIDs) != minimaDigest(row.ActualIDs) {
+	if !finiteFraction(row.Recall) || !finiteFraction(row.Overlap) || math.Abs(row.Recall-recall) > 1e-12 || math.Abs(row.Overlap-overlap) > 1e-12 {
+		return fmt.Errorf("reported recall/overlap does not match final actual IDs")
+	}
+	reopenHash, err := minimaDigest(row.ReopenIDs)
+	if err != nil {
+		return fmt.Errorf("hash reopen IDs: %w", err)
+	}
+	actualHash := mustMinimaDigest(row.ActualIDs)
+	if !row.ReopenParity || reopenHash != actualHash {
 		return fmt.Errorf("missing per-scenario final reopen evidence")
 	}
 	if row.Errors != 0 || row.Timeouts != 0 {

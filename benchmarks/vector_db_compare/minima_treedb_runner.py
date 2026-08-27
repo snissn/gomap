@@ -133,6 +133,8 @@ class ThreadLocalClients:
         for client in clients:
             client.close()
         self.local = threading.local()
+        # Closing the aggregate client owns the current service stop; restart_controller
+        # creates the replacement service used for reopen verification.
         self.controller.stop()
 
 

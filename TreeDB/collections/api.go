@@ -9112,7 +9112,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		unlockAdmission := c.lockVectorIndexPublicationAdmission()
 		defer unlockAdmission()
 		publishStart := time.Now()
-		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, c.bufferedIndexedRootPublishPreflight(work.pin.Pager(), work.meta, work.rootNames, work.rootBaseIDs), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, c.bufferedIndexedRootPublishPreflight(work.pin.Pager(), work.baseSystemRoot, work.baseCommitSeq, work.meta, work.rootNames, work.rootBaseIDs), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
 		})
 		publishElapsed := collectionObservedElapsedSince(publishStart)
@@ -9140,7 +9140,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	unlockAdmission := c.lockVectorIndexPublicationAdmission()
 	defer unlockAdmission()
 	publishStart := time.Now()
-	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, c.bufferedIndexedRootPublishPreflight(work.pin.Pager(), work.meta, work.rootNames, work.rootBaseIDs), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, c.bufferedIndexedRootPublishPreflight(work.pin.Pager(), work.baseSystemRoot, work.baseCommitSeq, work.meta, work.rootNames, work.rootBaseIDs), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
 	})
 	publishElapsed := collectionObservedElapsedSince(publishStart)
@@ -9682,7 +9682,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 		baseRootIDs[rootName] = baseRoot
 		rootOverlays[rootName] = append([]uint64(nil), catalog.overlayRootIDs(rootName)...)
 	}
-	preflight := c.bufferedIndexedRootPublishPreflight(pin.Pager(), meta, rootNames, baseRootIDs)
+	preflight := c.bufferedIndexedRootPublishPreflight(pin.Pager(), baseSystemRoot, baseCommitSeq, meta, rootNames, baseRootIDs)
 	publishRootRuns, cleanupPointerizedRuns, err := pointerizeCollectionRootRunMapValues(c.db, meta, flushUnit.rootRuns)
 	if err != nil {
 		return err
@@ -9825,7 +9825,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	return nil
 }
 
-func (c *Collection) bufferedIndexedRootPublishPreflight(expectedPager *pager.Pager, meta CollectionMeta, rootNames []string, baseRootIDs map[string]uint64) backenddb.OrderedRootGroupPreflight {
+func (c *Collection) bufferedIndexedRootPublishPreflight(expectedPager *pager.Pager, expectedSystemRoot, expectedCommitSeq uint64, meta CollectionMeta, rootNames []string, baseRootIDs map[string]uint64) backenddb.OrderedRootGroupPreflight {
 	return func() error {
 		snap := c.db.AcquireSnapshot()
 		if snap == nil {
@@ -9834,6 +9834,9 @@ func (c *Collection) bufferedIndexedRootPublishPreflight(expectedPager *pager.Pa
 		defer func() { _ = snap.Close() }()
 		if snap.Pager() != expectedPager {
 			return errBufferedRootBaseMismatch(meta.Name, collectionPrimaryRootName(meta.Name))
+		}
+		if snapshotSystemRoot(snap) == expectedSystemRoot && snapshotCommitSeq(snap) == expectedCommitSeq {
+			return nil
 		}
 		catalog, err := loadCollectionCatalog(snap, meta.Name)
 		if err != nil {

@@ -1437,6 +1437,7 @@ class QdrantMinimaRunner:
         accumulator, offset = StateAccumulator(), None
         mismatches, maximum_delta = 0, 0.0
         while True:
+            previous_offset = offset
             rows, offset = self.client.scroll(collection_name=self.collection, limit=self.config["batch_size"], offset=offset,
                 with_payload=True, with_vectors=[self.config["vector_field"]], timeout=self.operation_timeout)
             for row in rows:
@@ -1455,6 +1456,8 @@ class QdrantMinimaRunner:
                 deltas = [abs(left - right) for left, right in zip(actual, expected, strict=True)]
                 maximum_delta = max(maximum_delta, max(deltas, default=0.0))
                 mismatches += int(any(delta > self.config["score_tolerance"] for delta in deltas))
+            if offset is not None and (offset == previous_offset or not rows):
+                raise RuntimeError("Qdrant scroll cursor did not advance")
             if offset is None:
                 return accumulator.hexdigest(), accumulator.count, {
                     "algorithm": "streaming per-record normalized-float32 full-vector comparison",
