@@ -32,7 +32,9 @@ class FakeClient:
         return SimpleNamespace(upserted=len(documents), ids=[row["id"] for row in documents])
 
     def delete_by_filter(self, *_args: object, **_kwargs: object) -> object:
-        return SimpleNamespace(deleted=1)
+        deleted = len(self.documents)
+        self.documents.clear()
+        return SimpleNamespace(deleted=deleted)
 
     def count_documents(self, *_args: object, **_kwargs: object) -> object:
         return SimpleNamespace(count=len(self.documents))
