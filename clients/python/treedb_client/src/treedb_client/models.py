@@ -714,6 +714,52 @@ class ResetIndexResponse:
 
 
 @dataclass(frozen=True)
+class ColumnGraphBuildTiming:
+    total_nanos: int = 0
+    snapshot_nanos: int = 0
+    row_extraction_nanos: int = 0
+    adjacency_build_nanos: int = 0
+    locality_remap_nanos: int = 0
+    asset_preparation_nanos: int = 0
+    inv_norm_preparation_nanos: int = 0
+    adjacency_state_preparation_nanos: int = 0
+    row_ref_preparation_nanos: int = 0
+    document_id_preparation_nanos: int = 0
+    quantized_preparation_nanos: int = 0
+    search_pack_preparation_nanos: int = 0
+    manifest_finalization_nanos: int = 0
+    file_sync_nanos: int = 0
+    file_sync_count: int = 0
+    namespace_sync_nanos: int = 0
+    namespace_sync_count: int = 0
+    publication_nanos: int = 0
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ColumnGraphBuildTiming":
+        data = _as_mapping(data, "column graph build timing")
+        return cls(
+            total_nanos=_as_optional_int_default(data.get("total_nanos"), "column graph build timing.total_nanos"),
+            snapshot_nanos=_as_optional_int_default(data.get("snapshot_nanos"), "column graph build timing.snapshot_nanos"),
+            row_extraction_nanos=_as_optional_int_default(data.get("row_extraction_nanos"), "column graph build timing.row_extraction_nanos"),
+            adjacency_build_nanos=_as_optional_int_default(data.get("adjacency_build_nanos"), "column graph build timing.adjacency_build_nanos"),
+            locality_remap_nanos=_as_optional_int_default(data.get("locality_remap_nanos"), "column graph build timing.locality_remap_nanos"),
+            asset_preparation_nanos=_as_optional_int_default(data.get("asset_preparation_nanos"), "column graph build timing.asset_preparation_nanos"),
+            inv_norm_preparation_nanos=_as_optional_int_default(data.get("inv_norm_preparation_nanos"), "column graph build timing.inv_norm_preparation_nanos"),
+            adjacency_state_preparation_nanos=_as_optional_int_default(data.get("adjacency_state_preparation_nanos"), "column graph build timing.adjacency_state_preparation_nanos"),
+            row_ref_preparation_nanos=_as_optional_int_default(data.get("row_ref_preparation_nanos"), "column graph build timing.row_ref_preparation_nanos"),
+            document_id_preparation_nanos=_as_optional_int_default(data.get("document_id_preparation_nanos"), "column graph build timing.document_id_preparation_nanos"),
+            quantized_preparation_nanos=_as_optional_int_default(data.get("quantized_preparation_nanos"), "column graph build timing.quantized_preparation_nanos"),
+            search_pack_preparation_nanos=_as_optional_int_default(data.get("search_pack_preparation_nanos"), "column graph build timing.search_pack_preparation_nanos"),
+            manifest_finalization_nanos=_as_optional_int_default(data.get("manifest_finalization_nanos"), "column graph build timing.manifest_finalization_nanos"),
+            file_sync_nanos=_as_optional_int_default(data.get("file_sync_nanos"), "column graph build timing.file_sync_nanos"),
+            file_sync_count=_as_optional_int_default(data.get("file_sync_count"), "column graph build timing.file_sync_count"),
+            namespace_sync_nanos=_as_optional_int_default(data.get("namespace_sync_nanos"), "column graph build timing.namespace_sync_nanos"),
+            namespace_sync_count=_as_optional_int_default(data.get("namespace_sync_count"), "column graph build timing.namespace_sync_count"),
+            publication_nanos=_as_optional_int_default(data.get("publication_nanos"), "column graph build timing.publication_nanos"),
+        )
+
+
+@dataclass(frozen=True)
 class VectorIndexMaintenanceStatus:
     name: str = ""
     strategy: str = ""
@@ -725,6 +771,7 @@ class VectorIndexMaintenanceStatus:
     native_root_loaded: bool = False
     native_root_bytes: int = 0
     duration_nanos: int = 0
+    column_graph_build: ColumnGraphBuildTiming = field(default_factory=ColumnGraphBuildTiming)
     extra: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -741,6 +788,7 @@ class VectorIndexMaintenanceStatus:
             "native_root_loaded",
             "native_root_bytes",
             "duration_nanos",
+            "column_graph_build",
         ]
         return cls(
             name=_as_optional_str_default(data.get("name"), "maintenance status.name"),
@@ -757,7 +805,28 @@ class VectorIndexMaintenanceStatus:
                 data.get("native_root_bytes"), "maintenance status.native_root_bytes"
             ),
             duration_nanos=_as_optional_int_default(data.get("duration_nanos"), "maintenance status.duration_nanos"),
+            column_graph_build=ColumnGraphBuildTiming.from_dict(data.get("column_graph_build", {})),
             extra=_copy_extra(data, allowed),
+        )
+
+
+@dataclass(frozen=True)
+class OptimizeIndexTiming:
+    total_nanos: int = 0
+    cache_invalidate_nanos: int = 0
+    rebuild_nanos: int = 0
+    cache_prime_nanos: int = 0
+    cache_warm_nanos: int = 0
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "OptimizeIndexTiming":
+        data = _as_mapping(data, "optimize index timing")
+        return cls(
+            total_nanos=_as_optional_int_default(data.get("total_nanos"), "optimize timing.total_nanos"),
+            cache_invalidate_nanos=_as_optional_int_default(data.get("cache_invalidate_nanos"), "optimize timing.cache_invalidate_nanos"),
+            rebuild_nanos=_as_optional_int_default(data.get("rebuild_nanos"), "optimize timing.rebuild_nanos"),
+            cache_prime_nanos=_as_optional_int_default(data.get("cache_prime_nanos"), "optimize timing.cache_prime_nanos"),
+            cache_warm_nanos=_as_optional_int_default(data.get("cache_warm_nanos"), "optimize timing.cache_warm_nanos"),
         )
 
 
@@ -766,6 +835,7 @@ class OptimizeIndexResponse:
     index: IndexInfo
     vector_index_name: str
     status: VectorIndexMaintenanceStatus
+    timing: OptimizeIndexTiming = field(default_factory=OptimizeIndexTiming)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "OptimizeIndexResponse":
@@ -774,6 +844,7 @@ class OptimizeIndexResponse:
             index=IndexInfo.from_dict(data["index"]),
             vector_index_name=_as_str(data["vector_index_name"], "optimize response.vector_index_name"),
             status=VectorIndexMaintenanceStatus.from_dict(data.get("status", {})),
+            timing=OptimizeIndexTiming.from_dict(data.get("timing", {})),
         )
 
 

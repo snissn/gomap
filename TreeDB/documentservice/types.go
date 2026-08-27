@@ -299,12 +299,46 @@ type VectorIndexMaintenanceStatus struct {
 	NativeRootLoaded bool                            `json:"native_root_loaded,omitempty"`
 	NativeRootBytes  int64                           `json:"native_root_bytes,omitempty"`
 	DurationNanos    int64                           `json:"duration_nanos,omitempty"`
+	ColumnGraphBuild ColumnGraphBuildTiming          `json:"column_graph_build,omitempty"`
+}
+
+// ColumnGraphBuildTiming exposes completed column_graph rebuild stages.
+// Asset preparation and publication overlap; file and namespace sync are
+// nested producer durations. Zero fields mean the strategy did not execute it.
+type ColumnGraphBuildTiming struct {
+	TotalNanos                     int64  `json:"total_nanos,omitempty"`
+	SnapshotNanos                  int64  `json:"snapshot_nanos,omitempty"`
+	RowExtractionNanos             int64  `json:"row_extraction_nanos,omitempty"`
+	AdjacencyBuildNanos            int64  `json:"adjacency_build_nanos,omitempty"`
+	LocalityRemapNanos             int64  `json:"locality_remap_nanos,omitempty"`
+	AssetPreparationNanos          int64  `json:"asset_preparation_nanos,omitempty"`
+	InvNormPreparationNanos        int64  `json:"inv_norm_preparation_nanos,omitempty"`
+	AdjacencyStatePreparationNanos int64  `json:"adjacency_state_preparation_nanos,omitempty"`
+	RowRefPreparationNanos         int64  `json:"row_ref_preparation_nanos,omitempty"`
+	DocumentIDPreparationNanos     int64  `json:"document_id_preparation_nanos,omitempty"`
+	QuantizedPreparationNanos      int64  `json:"quantized_preparation_nanos,omitempty"`
+	SearchPackPreparationNanos     int64  `json:"search_pack_preparation_nanos,omitempty"`
+	ManifestFinalizationNanos      int64  `json:"manifest_finalization_nanos,omitempty"`
+	FileSyncNanos                  int64  `json:"file_sync_nanos,omitempty"`
+	FileSyncCount                  uint64 `json:"file_sync_count,omitempty"`
+	NamespaceSyncNanos             int64  `json:"namespace_sync_nanos,omitempty"`
+	NamespaceSyncCount             uint64 `json:"namespace_sync_count,omitempty"`
+	PublicationNanos               int64  `json:"publication_nanos,omitempty"`
+}
+
+type OptimizeIndexTiming struct {
+	TotalNanos           int64 `json:"total_nanos,omitempty"`
+	CacheInvalidateNanos int64 `json:"cache_invalidate_nanos,omitempty"`
+	RebuildNanos         int64 `json:"rebuild_nanos,omitempty"`
+	CachePrimeNanos      int64 `json:"cache_prime_nanos,omitempty"`
+	CacheWarmNanos       int64 `json:"cache_warm_nanos,omitempty"`
 }
 
 type OptimizeIndexResponse struct {
 	Index           IndexInfo                    `json:"index"`
 	VectorIndexName string                       `json:"vector_index_name"`
 	Status          VectorIndexMaintenanceStatus `json:"status"`
+	Timing          OptimizeIndexTiming          `json:"timing"`
 }
 
 // BenchmarkVectorQueryMode selects the no-document vector-index benchmark score

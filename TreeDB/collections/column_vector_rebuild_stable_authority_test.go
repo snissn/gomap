@@ -431,8 +431,12 @@ func TestColumnVectorGraphRebuildStableAuthorityHookFailureReleasesPins(t *testi
 		return injected
 	})
 	defer restore()
-	if _, err := col.RebuildVectorIndex(def.Name); !errors.Is(err, injected) {
+	status, err := col.RebuildVectorIndex(def.Name)
+	if !errors.Is(err, injected) {
 		t.Fatalf("RebuildVectorIndex error=%v want injected", err)
+	}
+	if !reflect.DeepEqual(status, VectorIndexStatus{}) {
+		t.Fatalf("RebuildVectorIndex status=%+v want empty on failed build", status)
 	}
 	if got := registry.ActivePins(); got != baselinePins {
 		t.Fatalf("active pins after failed preparation=%d want baseline=%d", got, baselinePins)
