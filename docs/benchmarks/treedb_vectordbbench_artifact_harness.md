@@ -81,7 +81,8 @@ concurrency, batch size, `m`, and `ef_construction`. The argv is part
 of the effective-configuration checksum, and its executable must equal the
 path of the SHA-256-bound service binary. Standard case names (for
 example, `Performance768D1M`) must match the lifecycle dataset dimensions and
-vector count. `PerformanceCustomDataset` cannot complete until H2 binds its
+vector count. Integer diagnostic flags must also parse within the 64-bit Go
+service's signed `flag.Int` range. `PerformanceCustomDataset` cannot complete until H2 binds its
 selected result's task-config dataset shape into this artifact. Profile entries
 name existing before/after event sequences and use the same checksum as their
 raw-artifact entry. Supported profile kinds are `cpu`, `heap`, `allocs`,

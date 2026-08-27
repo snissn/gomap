@@ -978,6 +978,34 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertFalse(got["analyzable"], got)
                 self.assertTrue(any(expected in item for item in got["errors"]), got)
 
+    def test_service_integer_flags_use_go_int64_syntax_and_bounds(self) -> None:
+        for value in ("nope", "9223372036854775808", "-9223372036854775809"):
+            with self.subTest(invalid=value):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    manifest["service"]["command"][-2:-2] = ["-block-profile-rate", value]
+                    manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["analyzable"], got)
+                self.assertTrue(any("invalid flags" in item for item in got["errors"]), got)
+
+        for value in ("42", "+0x2a", "-0o10", "0b10_10", "077"):
+            with self.subTest(valid=value):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    manifest["service"]["command"][-2:-2] = ["--mutex-profile-fraction=" + value]
+                    manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertTrue(got["complete"], got)
+
     def test_concurrency_tokens_are_bounded_ascii_decimals(self) -> None:
         for concurrency in ("²", "9" * 5000):
             with self.subTest(concurrency=concurrency[:10]):

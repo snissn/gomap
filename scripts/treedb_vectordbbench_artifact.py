@@ -835,6 +835,38 @@ def _strict_json_loads(value: str) -> Any:
     return json.loads(value, parse_constant=reject_constant, object_pairs_hook=reject_duplicate_keys)
 
 
+def _valid_go_int64(value: str) -> bool:
+    unsigned = value
+    negative = False
+    if unsigned.startswith(("+", "-")):
+        negative = unsigned[0] == "-"
+        unsigned = unsigned[1:]
+    if not unsigned:
+        return False
+    base = 10
+    digits = unsigned
+    prefixed = False
+    if unsigned.startswith(("0b", "0B")):
+        base, digits, prefixed = 2, unsigned[2:], True
+    elif unsigned.startswith(("0o", "0O")):
+        base, digits, prefixed = 8, unsigned[2:], True
+    elif unsigned.startswith(("0x", "0X")):
+        base, digits, prefixed = 16, unsigned[2:], True
+    elif len(unsigned) > 1 and unsigned.startswith("0"):
+        base, digits, prefixed = 8, unsigned[1:], True
+    if prefixed and digits.startswith("_"):
+        digits = digits[1:]
+    if not digits or digits.startswith("_") or digits.endswith("_") or "__" in digits:
+        return False
+    allowed = {2: r"[01_]+", 8: r"[0-7_]+", 10: r"[0-9_]+", 16: r"[0-9a-fA-F_]+"}
+    if re.fullmatch(allowed[base], digits) is None:
+        return False
+    number = int(digits.replace("_", ""), base)
+    if negative:
+        number = -number
+    return -(1 << 63) <= number < (1 << 63)
+
+
 def _pprof_metadata(path: Path) -> bytes | None:
     try:
         process = subprocess.Popen(
@@ -1116,6 +1148,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             else:
                 invalid_command = True
                 break
+            if name in {"block-profile-rate", "mutex-profile-fraction"} and not _valid_go_int64(value):
+                invalid_command = True
             if name == "profile":
                 profile_values.append(value)
         if (
