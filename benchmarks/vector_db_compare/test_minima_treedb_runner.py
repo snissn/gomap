@@ -25,6 +25,16 @@ class FakeClient:
         self.call = (*args, kwargs)
         return self.response
 
+    def upsert_documents(self, _index: str, documents: list[dict[str, object]],
+                         **_kwargs: object) -> object:
+        return SimpleNamespace(upserted=len(documents), ids=[row["id"] for row in documents])
+
+    def delete_by_filter(self, *_args: object, **_kwargs: object) -> object:
+        return SimpleNamespace(deleted=1)
+
+    def count_documents(self, *_args: object, **_kwargs: object) -> object:
+        return SimpleNamespace(count=0)
+
 
 def write_health_service(binary: Path) -> None:
     binary.write_text(f"""#!{sys.executable}
@@ -72,7 +82,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload = object.__new__(runner.TreeDBMinimaRunner)
         workload.client = FakeClient(response)
         workload.collection = "owned"
-        workload.config = {"top_k": 5}
+        workload.config = {"top_k": 5, "batch_size": 3}
         workload.ef_search = 64
         workload.specs = {"mixed": {"name": "mixed", "filter": "user_id+fpath", "user_id": "u", "fpath": "/a"}}
         workload.queries = {"mixed": {"vector": [1.0, 0.0]}}
@@ -117,6 +127,23 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             "id": "d", "content": "c", "embedding": [1.0, 0.0],
             "meta": {"user_id": "u", "fpath": "/a"},
         })
+
+    def test_mutation_overrides_forward_writer_start_callbacks(self) -> None:
+        workload = self.workload(self.response())
+        starts: list[str] = []
+        document = {"id": "d", "content": "c", "vector": [1.0, 0.0], "user_id": "u", "fpath": "/a"}
+        workload.upsert(
+            "replacement_insert", "mixed", [document],
+            on_writer_start=lambda: starts.append("upsert"),
+        )
+        workload.delete_filter(
+            {
+                "name": "delete_by_user_id_and_fpath", "target": "mixed",
+                "filter": {"user_id": "u", "fpath": "/a"},
+            },
+            on_writer_start=lambda: starts.append("delete"),
+        )
+        self.assertEqual(starts, ["upsert", "delete"])
 
 
     def test_service_log_evidence_is_bounded_and_keeps_path(self) -> None:

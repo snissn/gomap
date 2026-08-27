@@ -1209,6 +1209,7 @@ class QdrantMinimaRunner:
                 end_barrier = threading.Barrier(readers + 1)
                 insertion = round_value["insert_range"]
                 writer_interval: dict[str, int] = {}
+                writer_started = threading.Event()
 
                 def write_round() -> None:
                     start_barrier.wait()
@@ -1219,7 +1220,8 @@ class QdrantMinimaRunner:
                             for value in range(insertion["start"], insertion["start"] + insertion["rows"])
                         ]
                         sample_start = len(self.evidence.samples)
-                        self.upsert(operation["name"], spec["name"], documents)
+                        self.upsert(operation["name"], spec["name"], documents,
+                                    on_writer_start=writer_started.set)
                         samples = [
                             row for row in self.evidence.samples[sample_start:]
                             if row["operation"] == operation["name"] and row["category"] == "writer"
@@ -1237,12 +1239,15 @@ class QdrantMinimaRunner:
                             raise RuntimeError(f"batch insert left {missing} IDs invisible")
                     except BaseException:
                         end_barrier.abort()
+                        writer_started.set()
                         raise
                     end_barrier.wait()
 
                 def read_round(worker: int) -> None:
                     start_barrier.wait()
                     try:
+                        if not writer_started.wait(self.operation_timeout) or end_barrier.broken:
+                            raise RuntimeError("timed writer did not start")
                         begin = round_value["query_start"] + worker
                         end = round_value["query_start"] + round_value["query_count"]
                         for query_ordinal in range(begin, end, readers):

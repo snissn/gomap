@@ -557,6 +557,45 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         ))
         workload.close()
 
+
+    def test_timed_multi_reader_waits_for_actual_writer_start(self) -> None:
+        manifest, shared = tiny_manifest(2), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.connect()
+        workload.create_owned_collection()
+        workload.insert_ranges(
+            manifest["operations"][1]["name"], manifest["operations"][1]["insert_ranges"], False,
+        )
+        original_upsert_method = workload.upsert
+        original_client_upsert = FakeClient.upsert
+
+        def delayed_upsert(operation: str, scenario: str, documents: list[dict[str, object]],
+                           wait_ready: bool = True,
+                           on_writer_start: Callable[[], None] | None = None) -> None:
+            time.sleep(0.05)
+            original_upsert_method(
+                operation, scenario, documents, wait_ready=wait_ready, on_writer_start=on_writer_start,
+            )
+
+        def slow_client_upsert(client: FakeClient, **kwargs: object) -> None:
+            time.sleep(0.02)
+            original_client_upsert(client, **kwargs)
+
+        workload.upsert = delayed_upsert
+        with mock.patch.object(FakeClient, "upsert", slow_client_upsert):
+            workload.run_timed_overlap(manifest["operations"][3])
+        trace = workload.operations["timed_execution_trace"]
+        for round_value in trace["rounds"]:
+            queries = [row for row in trace["queries"] if row["round"] == round_value["ordinal"]]
+            self.assertEqual({row["reader"] for row in queries}, {0, 1})
+            self.assertTrue(all(
+                runner.intervals_overlap(
+                    row["started_monotonic_ns"], row["ended_monotonic_ns"],
+                    round_value["writer_started_monotonic_ns"], round_value["writer_ended_monotonic_ns"],
+                )
+                for row in queries
+            ))
+        workload.close()
     def test_actual_scroll_rejects_nonadvancing_cursor(self) -> None:
         manifest, shared = tiny_manifest(), SharedQdrant()
         workload = new_runner(manifest, shared)

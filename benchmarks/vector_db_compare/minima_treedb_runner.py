@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import argparse
 import json
 import os
@@ -197,12 +198,13 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             if count != expected_count:
                 raise RuntimeError(f"TreeDB visible document count={count}, expected={expected_count}")
 
-    def upsert(self, operation: str, scenario: str, documents: list[dict[str, Any]], wait_ready: bool = True) -> None:
+    def upsert(self, operation: str, scenario: str, documents: list[dict[str, Any]], wait_ready: bool = True,
+               on_writer_start: Callable[[], None] | None = None) -> None:
         assert self.client is not None
         for start in range(0, len(documents), self.config["batch_size"]):
             batch = [service_document(row) for row in documents[start:start + self.config["batch_size"]]]
             response = self.evidence.call(operation, "writer", scenario, lambda batch=batch: self.client.upsert_documents(
-                self.collection, batch, defer_vector_index_rebuild=True))
+                self.collection, batch, defer_vector_index_rebuild=True), on_start=on_writer_start)
             if response.upserted != len(batch) or response.ids != [row["id"] for row in batch]:
                 raise RuntimeError("TreeDB upsert completion did not cover the submitted batch")
     def search(self, operation: str, scenario: str, interval: dict[str, int] | None = None) -> tuple[list[str], list[float]]:
@@ -242,11 +244,13 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             rows.extend(SimpleNamespace(payload={"id": row.id, "content": row.content, **row.meta}) for row in result.documents)
         return rows
 
-    def delete_filter(self, operation: dict[str, Any]) -> None:
+    def delete_filter(self, operation: dict[str, Any],
+                      on_writer_start: Callable[[], None] | None = None) -> None:
         assert self.client is not None
         name, scenario = operation["name"], operation["target"]
         filt = scalar_filter({**self.specs[scenario], **operation["filter"]})
-        self.evidence.call(name, "writer", scenario, lambda: self.client.delete_by_filter(self.collection, filt))
+        self.evidence.call(name, "writer", scenario, lambda: self.client.delete_by_filter(
+            self.collection, filt), on_start=on_writer_start)
         remaining = self.evidence.call(name, "fetch", scenario, lambda: self.client.count_documents(self.collection, filt)).count
         self.evidence.stale_delete[scenario] += remaining
         if remaining:
