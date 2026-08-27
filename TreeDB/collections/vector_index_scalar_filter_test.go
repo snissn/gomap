@@ -908,6 +908,28 @@ func TestNativeScalarANNReusesSearchBufferScratch(t *testing.T) {
 	}
 }
 
+func TestNativeScalarVectorAlignedPlanServesPublishedGenerationDuringNewerProbe(t *testing.T) {
+	idx, query := newNativeScalarExecutorBenchmarkIndex(t, 2, 32)
+	view := idx.searchView.Load()
+	plan := &nativeScalarFilterExecution{
+		identity:         NativeScalarFilterPlanVectorAligned,
+		sourceGeneration: view.sourceDocumentGeneration + 1,
+	}
+	var buffer VectorIndexSearchBuffer
+	results, state, _, err := idx.searchGraphOnlyWithNativeScalarFilterBuffer(query, 10, 16, plan, &buffer)
+	if err != nil {
+		t.Fatalf("vector-aligned search with newer probe generation: %v", err)
+	}
+	if len(results) != 10 || state.sourceDocumentGeneration != view.sourceDocumentGeneration {
+		t.Fatalf("results=%d state generation=%d want 10 results from generation %d", len(results), state.sourceDocumentGeneration, view.sourceDocumentGeneration)
+	}
+
+	plan.identity = NativeScalarFilterPlanCompleteFinite
+	if _, _, _, err := idx.searchGraphOnlyWithNativeScalarFilterBuffer(query, 10, 16, plan, &buffer); !errors.Is(err, ErrHybridSearchStaleIndex) {
+		t.Fatalf("finite plan generation mismatch err=%v want ErrHybridSearchStaleIndex", err)
+	}
+}
+
 func BenchmarkNativeScalarRowCachedRuntimes(b *testing.B) {
 	d, col, def := newNativeScalarTestCollection(b, []IndexDefinition{
 		{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString},

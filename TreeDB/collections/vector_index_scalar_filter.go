@@ -651,7 +651,13 @@ func (idx *VectorIndex) searchGraphOnlyWithNativeScalarFilterBuffer(query []floa
 	if plan == nil {
 		return nil, state, nativeScalarSearchWork{}, fmt.Errorf("%w: native scalar plan is unavailable", ErrHybridSearchUnsupported)
 	}
-	if plan.sourceGeneration != state.sourceDocumentGeneration {
+	// Vector-aligned plans evaluate clauses against scalar columns captured in
+	// the immutable graph view. Their bounded lookup probe selects the route
+	// and supplies diagnostics only, so a newer probe remains valid while an
+	// in-flight mutation continues serving the prior published view. Exact and
+	// mixed plans carry finite IDs from the probe and remain generation-bound.
+	if plan.sourceGeneration != state.sourceDocumentGeneration &&
+		plan.identity != NativeScalarFilterPlanVectorAligned {
 		return nil, state, nativeScalarSearchWork{}, fmt.Errorf("%w: native scalar probe generation %d does not match vector generation %d", ErrHybridSearchStaleIndex, plan.sourceGeneration, state.sourceDocumentGeneration)
 	}
 	results, work, err := view.searchWithNativeScalarFilterBuffer(query, topK, efSearch, plan, buffer)
