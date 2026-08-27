@@ -350,13 +350,13 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 	c.meta = catalog.meta
 	c.rememberCatalog(snap, catalog)
 	candidate.invalidateSourceDocumentRoots()
-	c.RegisterVectorIndex(candidate)
+	c.registerVectorIndexCurrentCatalog(candidate)
 	rollback := func() {
 		if c.registeredVectorIndex(def.Name) != candidate {
 			return
 		}
 		if current != nil {
-			c.RegisterVectorIndex(current)
+			c.registerVectorIndexCurrentCatalog(current)
 		} else {
 			c.UnregisterVectorIndex(def.Name)
 		}

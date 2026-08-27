@@ -550,6 +550,52 @@ func TestIngestChunkedDocumentsRejectsVectorIndexOnPeerHandle(t *testing.T) {
 	}
 }
 
+func TestIngestChunkedDocumentsRejectsStaleNativeRegistrationAfterPeerDrop(t *testing.T) {
+	_, _, owner := openChunkingTestCollection(t)
+	peer, err := owner.manager.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open schema peer: %v", err)
+	}
+	col := owner
+	def := VectorIndexDefinition{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4,
+	}
+	if _, err := owner.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index: %v", err)
+	}
+	index := owner.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("created vector index runtime is not registered")
+	}
+	if _, err := peer.DropVectorIndex(def.Name); err != nil {
+		t.Fatalf("drop vector index through peer: %v", err)
+	}
+	if !collectionMetaDeclaresNativeVectorIndex(owner.meta, def.Name) {
+		t.Fatal("owner metadata unexpectedly refreshed before stale registration")
+	}
+
+	owner.RegisterVectorIndex(index)
+	if got := col.registeredAdHocVectorIndexCount(); got != 1 {
+		t.Fatalf("stale native registration ad-hoc count=%d want 1", got)
+	}
+	owner.writeDomain.nativeVectorIndexesMu.RLock()
+	_, registeredNative := owner.writeDomain.nativeVectorIndexes[def.Name]
+	owner.writeDomain.nativeVectorIndexesMu.RUnlock()
+	if registeredNative {
+		t.Fatal("stale native registration re-entered the shared native registry")
+	}
+
+	_, err = col.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("stale-native"), Fields: map[string]any{"body": "text only"}}},
+		fixedWindowCfg(8, 1),
+		ChunkedIngestOptions{},
+	)
+	if !errors.Is(err, errBatchChunkIngestVectorIndexed) {
+		t.Fatalf("stale native registration error=%v, want text-only rejection", err)
+	}
+	owner.UnregisterVectorIndex(def.Name)
+}
+
 func TestIngestChunkedDocumentsBlocksVectorRegistrationThroughPublication(t *testing.T) {
 	_, d, col := openChunkingTestCollection(t)
 	peer, err := NewCollectionManager(d).OpenCollection("docs")

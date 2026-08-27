@@ -861,6 +861,15 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	if c == nil || index == nil {
 		return
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	if _, err := c.refreshNativeVectorIndexDeclaration(index.name); err != nil {
+		return
+	}
+	c.registerVectorIndexCurrentCatalog(index)
+}
+
+func (c *Collection) registerVectorIndexCurrentCatalog(index *VectorIndex) {
 	def, declaredNative := findVectorIndex(c.meta.VectorIndexes, index.name)
 	sharedNative := declaredNative && vectorIndexDefinitionUsesNativeRuntime(def) && c.writeDomain != nil
 	coord := c.collectionSchemaCoordinator()

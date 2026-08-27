@@ -4091,7 +4091,7 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 				return nil, err
 			}
 		} else {
-			c.RegisterVectorIndex(runtime)
+			c.registerVectorIndexCurrentCatalog(runtime)
 		}
 	}
 	return newMeta.copy(), nil
