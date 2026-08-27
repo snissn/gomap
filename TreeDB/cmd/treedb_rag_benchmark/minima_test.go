@@ -30,7 +30,7 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 		timed.Assignment != "round=ordinal/128;reader=ordinal%4;scenario=scenario_order[ordinal%8]" {
 		t.Fatalf("timed repeat plan drifted: %+v", timed)
 	}
-	if got, want := minimaTimedExecutionDigest(minimaExpectedTimedExecution(timed)), "84b8eb10e5f86c558264d00e8cae2c6844683aff2b8bca1d76cafe6b06890ea4"; got != want {
+	if got, want := minimaTimedExecutionDigest(minimaExpectedTimedExecution(&manifest)), "84b8eb10e5f86c558264d00e8cae2c6844683aff2b8bca1d76cafe6b06890ea4"; got != want {
 		t.Fatalf("timed execution hash=%s want %s", got, want)
 	}
 	for i, round := range timed.Rounds {
@@ -358,6 +358,24 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			operations.TimedExecutionTrace.Queries[0].EndedMonotonicNS = 0
 			operations.TimedExecutionSHA256 = minimaTimedExecutionDigest(operations.TimedExecutionTrace)
 		}},
+		{"missing timed query result", func(a *minimaArtifact) {
+			minimaTestBackend(a, "treedb").Operations.TimedExecutionTrace.Queries[0].ResultCaptured = false
+		}},
+		{"empty timed query result", func(a *minimaArtifact) {
+			query := &minimaTestBackend(a, "treedb").Operations.TimedExecutionTrace.Queries[0]
+			query.ActualIDs = nil
+			query.ActualScores = nil
+		}},
+		{"stale timed query result", func(a *minimaArtifact) {
+			query := &minimaTestBackend(a, "treedb").Operations.TimedExecutionTrace.Queries[0]
+			query.ActualIDs = append([]string(nil), query.ActualIDs...)
+			query.ActualIDs[0] = "stale"
+		}},
+		{"wrong timed query score", func(a *minimaArtifact) {
+			query := &minimaTestBackend(a, "treedb").Operations.TimedExecutionTrace.Queries[0]
+			query.ActualScores = append([]float64(nil), query.ActualScores...)
+			query.ActualScores[0]++
+		}},
 		{"correct assertions with incomplete raw reindex trace", func(a *minimaArtifact) {
 			operations := &minimaTestBackend(a, "treedb").Operations
 			operations.ReindexExecutionTrace.Operations[0].ReaderQueries =
@@ -474,7 +492,7 @@ func validMinimaArtifact() minimaArtifact {
 	manifest := buildMinimaManifest()
 	hashes := minimaManifestHashes{CorpusSHA256: manifest.CorpusSHA256, QuerySHA256: manifest.QuerySHA256, OperationSHA256: manifest.OperationSHA256}
 	timed := manifest.Operations[3].TimedPlan
-	timedTrace := minimaExpectedTimedExecution(timed)
+	timedTrace := minimaExpectedTimedExecution(&manifest)
 	reindexTrace := minimaExpectedReindexExecution(&manifest)
 	operations := minimaOperationEvidence{
 		ManifestOrdered: true, BatchInsertDuringSearch: true, ReindexDeleteReplace: true,

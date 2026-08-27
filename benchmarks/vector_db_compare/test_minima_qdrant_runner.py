@@ -6,6 +6,7 @@ import copy
 import os
 import subprocess
 import threading
+import socket
 import time
 import sys
 import tempfile
@@ -261,7 +262,8 @@ def new_runner(manifest: dict[str, object], shared: SharedQdrant, allow_drop: bo
         collection="tiny", allow_drop=allow_drop, operation_timeout=1, optimizer_timeout=0.1,
         poll_interval=0, server_version="1.19.0", deployment="standalone", image="", storage_path=None,
         server_pid=1, restart_server=shared.restart, restart_identity="fake owned server",
-        process_identity=lambda pid: f"fake-process-{pid}")
+        process_identity=lambda pid: f"fake-process-{pid}",
+        process_running=lambda _pid: False, process_owns_endpoint=lambda _pid, _url: True)
 
 
 class MinimaQdrantRunnerTest(unittest.TestCase):
@@ -455,6 +457,14 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
                     )
                     for row in queries
                 ))
+        query_specs = {row["scenario"]: row for row in manifest["queries"]}
+        for row in trace["queries"]:
+            query = query_specs[row["scenario"]]
+            self.assertTrue(row["result_captured"])
+            self.assertTrue(workload.results_match(
+                (row["actual_ids"], row["actual_scores"]),
+                (query["initial_oracle_ids"], query["initial_oracle_scores"]),
+            ))
         reindex_trace = operations["reindex_execution_trace"]
         self.assertEqual(operations["reindex_operations_executed"], 2)
         self.assertEqual(operations["reindex_execution_sha256"], runner.reindex_trace_digest(reindex_trace))
@@ -466,7 +476,7 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
             for operation in reindex_trace["operations"]
             for row in operation["reader_queries"]
         ))
-        queries = {row["scenario"]: row for row in manifest["queries"]}
+        queries = query_specs
         for operation in reindex_trace["operations"]:
             for row in operation["reader_queries"]:
                 query = queries[row["scenario"]]
@@ -505,6 +515,73 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         workload.restart_server = lambda: workload.server_pid
         with self.assertRaisesRegex(RuntimeError, "original PID"):
             workload.restart_backend()
+    def test_restart_rejects_live_original_pid(self) -> None:
+        manifest, shared = tiny_manifest(), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.process_running = lambda _pid: True
+        with self.assertRaisesRegex(RuntimeError, "still running"):
+            workload.restart_backend()
+
+    def test_restart_rejects_pid_not_owning_endpoint(self) -> None:
+        manifest, shared = tiny_manifest(), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.process_owns_endpoint = lambda _pid, _url: False
+        with self.assertRaisesRegex(RuntimeError, "does not own"):
+            workload.restart_backend()
+
+    def test_process_owner_proof_binds_pid_to_listener(self) -> None:
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            self.assertTrue(runner.server_process_running(os.getpid()))
+            self.assertTrue(runner.server_process_owns_endpoint(
+                os.getpid(), f"http://127.0.0.1:{port}",
+            ))
+
+    def test_main_writes_artifact_when_run_and_close_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            hook = root / "restart"
+            hook.write_text("#!/bin/sh\n", encoding="utf-8")
+            hook.chmod(0o755)
+            output = root / "artifact.json"
+            args = SimpleNamespace(
+                server_pid=1, storage_path=root, manifest=root / "manifest.json",
+                url="http://127.0.0.1:6333", api_key="", restart_hook=hook,
+                collection="test", allow_drop=False, operation_timeout=1,
+                optimizer_timeout=1, poll_interval=0, deployment="external", image="",
+                output=output,
+            )
+
+            class FailingRunner:
+                def __init__(self, *_args: object, **_kwargs: object) -> None:
+                    self.evidence = SimpleNamespace(failures=[])
+
+                def run(self) -> None:
+                    raise ValueError("workload failed")
+
+                def close(self) -> None:
+                    raise RuntimeError("close failed")
+
+                def artifact(self) -> dict[str, object]:
+                    return {"failures": self.evidence.failures}
+
+            qdrant_module = SimpleNamespace(QdrantClient=object, models=object)
+            with (
+                mock.patch.object(runner, "parse_args", return_value=args),
+                mock.patch.object(runner, "load_manifest", return_value={}),
+                mock.patch.object(runner.importlib.metadata, "version", return_value=runner.CLIENT_VERSION),
+                mock.patch.object(runner, "server_info", return_value={"version": runner.SERVER_VERSION}),
+                mock.patch.object(runner, "QdrantMinimaRunner", FailingRunner),
+                mock.patch.dict(sys.modules, {"qdrant_client": qdrant_module}),
+            ):
+                self.assertEqual(runner.main(), 1)
+            artifact = runner.json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(artifact["failures"], [
+                "ValueError: workload failed",
+                "RuntimeError: close failed",
+            ])
 
     def test_qdrant_evidence_inputs_require_pid_and_storage(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -545,13 +622,17 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
                 workload.connect()
                 workload.create_owned_collection()
                 shared.writer_completed.clear()
-                original_search = workload.search
-
-                def late_search(operation: str, scenario: str, interval: dict[str, int] | None = None):
+                def late_search(_operation: str, scenario: str, interval: dict[str, int] | None = None):
                     if not shared.writer_completed.wait(1):
                         raise RuntimeError("writer did not complete")
                     time.sleep(0.01)
-                    return original_search(operation, scenario, interval)
+                    if interval is not None:
+                        interval["started_monotonic_ns"] = time.monotonic_ns()
+                        interval["ended_monotonic_ns"] = interval["started_monotonic_ns"] + 1
+                    query = next(row for row in manifest["queries"] if row["scenario"] == scenario)
+                    if method_name == "run_timed_overlap":
+                        return query["initial_oracle_ids"], query["initial_oracle_scores"]
+                    return [], []
 
                 workload.search = late_search
                 with self.assertRaisesRegex(RuntimeError, "overlap contract failed"):

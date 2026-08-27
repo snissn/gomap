@@ -770,12 +770,15 @@ func validateMinimaConcurrentMutationPlans(manifest *minimaManifest) error {
 }
 
 type minimaTimedQueryObservation struct {
-	Ordinal            int    `json:"ordinal"`
-	Round              int    `json:"round"`
-	Reader             int    `json:"reader"`
-	Scenario           string `json:"scenario"`
-	StartedMonotonicNS int64  `json:"started_monotonic_ns"`
-	EndedMonotonicNS   int64  `json:"ended_monotonic_ns"`
+	Ordinal            int       `json:"ordinal"`
+	Round              int       `json:"round"`
+	Reader             int       `json:"reader"`
+	Scenario           string    `json:"scenario"`
+	StartedMonotonicNS int64     `json:"started_monotonic_ns"`
+	EndedMonotonicNS   int64     `json:"ended_monotonic_ns"`
+	ResultCaptured     bool      `json:"result_captured"`
+	ActualIDs          []string  `json:"actual_ids"`
+	ActualScores       []float64 `json:"actual_scores"`
 }
 
 type minimaObservedTimedRound struct {
@@ -794,7 +797,9 @@ type minimaTimedExecutionTrace struct {
 	Rounds  []minimaObservedTimedRound    `json:"rounds"`
 }
 
-func minimaExpectedTimedExecution(plan *minimaTimedReaderPlan) minimaTimedExecutionTrace {
+func minimaExpectedTimedExecution(manifest *minimaManifest) minimaTimedExecutionTrace {
+	plan := manifest.Operations[3].TimedPlan
+	queries := minimaQueryMap(manifest)
 	var trace minimaTimedExecutionTrace
 	for _, round := range plan.Rounds {
 		base := int64(round.Ordinal+1) * 1_000_000
@@ -811,10 +816,12 @@ func minimaExpectedTimedExecution(plan *minimaTimedReaderPlan) minimaTimedExecut
 		}
 		base := int64(plan.Rounds[roundIndex].Ordinal+1) * 1_000_000
 		started := base + 200 + int64(ordinal-plan.Rounds[roundIndex].QueryStart)*2
+		scenario := plan.ScenarioOrder[ordinal%len(plan.ScenarioOrder)]
+		query := queries[scenario]
 		trace.Queries = append(trace.Queries, minimaTimedQueryObservation{
 			Ordinal: ordinal, Round: roundIndex, Reader: ordinal % plan.ReaderConcurrency,
-			Scenario:           plan.ScenarioOrder[ordinal%len(plan.ScenarioOrder)],
-			StartedMonotonicNS: started, EndedMonotonicNS: started + 1,
+			Scenario: scenario, StartedMonotonicNS: started, EndedMonotonicNS: started + 1,
+			ResultCaptured: true, ActualIDs: query.InitialOracleIDs, ActualScores: query.InitialOracleScores,
 		})
 	}
 	return trace
@@ -845,7 +852,9 @@ func minimaIntervalsOverlap(firstStart, firstEnd, secondStart, secondEnd int64) 
 		firstStart < secondEnd && secondStart < firstEnd
 }
 
-func validateMinimaObservedTimedExecution(observed minimaTimedExecutionTrace, plan *minimaTimedReaderPlan) error {
+func validateMinimaObservedTimedExecution(observed minimaTimedExecutionTrace, manifest *minimaManifest) error {
+	plan := manifest.Operations[3].TimedPlan
+	queries := minimaQueryMap(manifest)
 	if len(observed.Rounds) != len(plan.Rounds) || len(observed.Queries) != plan.QueryCount {
 		return fmt.Errorf("timed trace cardinality mismatch")
 	}
@@ -860,7 +869,7 @@ func validateMinimaObservedTimedExecution(observed minimaTimedExecutionTrace, pl
 		}
 		overlap[round] = make([]bool, plan.ReaderConcurrency)
 	}
-	expected := minimaExpectedTimedExecution(plan)
+	expected := minimaExpectedTimedExecution(manifest)
 	seenQueries := make([]bool, plan.QueryCount)
 	for _, query := range observed.Queries {
 		if query.Ordinal < 0 || query.Ordinal >= plan.QueryCount || seenQueries[query.Ordinal] {
@@ -870,6 +879,17 @@ func validateMinimaObservedTimedExecution(observed minimaTimedExecutionTrace, pl
 		if query.Round != assignment.Round || query.Reader != assignment.Reader ||
 			query.Scenario != assignment.Scenario || !minimaValidInterval(query.StartedMonotonicNS, query.EndedMonotonicNS) {
 			return fmt.Errorf("timed query %d assignment/interval mismatch", query.Ordinal)
+		}
+		oracle, ok := queries[query.Scenario]
+		if !ok || !query.ResultCaptured {
+			return fmt.Errorf("timed query %d result was not captured", query.Ordinal)
+		}
+		if _, _, err := validateMinimaRanking(
+			query.ActualIDs, query.ActualScores,
+			oracle.InitialOracleIDs, oracle.InitialOracleScores,
+			manifest.Config.OrderTolerance, manifest.Config.ScoreTolerance,
+		); err != nil {
+			return fmt.Errorf("timed query %d does not match its frozen oracle: %w", query.Ordinal, err)
 		}
 		writer := observed.Rounds[query.Round]
 		if minimaIntervalsOverlap(
@@ -1238,7 +1258,7 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 			backend.Operations.ReindexExecutionSHA256 != observedReindexDigest {
 			return fmt.Errorf("minima artifact: %s missing or incomplete observed operation execution evidence", backend.Name)
 		}
-		if err := validateMinimaObservedTimedExecution(observedTimedTrace, timedPlan); err != nil {
+		if err := validateMinimaObservedTimedExecution(observedTimedTrace, &artifact.Manifest); err != nil {
 			return fmt.Errorf("minima artifact: %s: %w", backend.Name, err)
 		}
 		if err := validateMinimaObservedReindexExecution(observedReindexTrace, &artifact.Manifest); err != nil {

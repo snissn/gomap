@@ -16,6 +16,7 @@ import importlib.metadata
 import json
 import math
 import os
+import socket
 import platform
 import stat
 import struct
@@ -24,6 +25,7 @@ import sys
 import threading
 import time
 import urllib.request
+import urllib.parse
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -739,6 +741,75 @@ def server_process_identity(pid: int) -> str:
     if not identity:
         raise RuntimeError(f"cannot capture server process identity for PID {pid}")
     return identity
+def server_process_running(pid: int) -> bool:
+    if type(pid) is not int or pid <= 0:
+        return False
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            check=False, capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    state = result.stdout.strip()
+    return result.returncode == 0 and bool(state) and not state.startswith("Z")
+
+
+def server_process_owns_endpoint(pid: int, url: str) -> bool:
+    if type(pid) is not int or pid <= 0:
+        return False
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in ("http", "https") or parsed.hostname is None:
+        return False
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        endpoint_addresses = {row[4][0] for row in socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)}
+        local_addresses = {"127.0.0.1", "::1", "0.0.0.0", "::"}
+        for name in (socket.gethostname(), socket.getfqdn()):
+            try:
+                local_addresses.update(row[4][0] for row in socket.getaddrinfo(name, None))
+            except OSError:
+                pass
+    except (OSError, ValueError):
+        return False
+    if endpoint_addresses.isdisjoint(local_addresses):
+        return False
+    if sys.platform.startswith("linux"):
+        try:
+            socket_inodes = {
+                target[8:-1]
+                for fd in (Path("/proc") / str(pid) / "fd").iterdir()
+                if (target := os.readlink(fd)).startswith("socket:[") and target.endswith("]")
+            }
+            for name in ("tcp", "tcp6"):
+                table = Path("/proc") / str(pid) / "net" / name
+                for line in table.read_text(encoding="ascii").splitlines()[1:]:
+                    fields = line.split()
+                    if (
+                        len(fields) > 9
+                        and fields[3] == "0A"
+                        and int(fields[1].rsplit(":", 1)[1], 16) == port
+                        and fields[9] in socket_inodes
+                    ):
+                        return True
+        except (OSError, ValueError):
+            return False
+        return False
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["lsof", "-nP", "-a", "-p", str(pid), f"-iTCP:{port}", "-sTCP:LISTEN", "-Fn"],
+                check=False, capture_output=True, text=True, timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return result.returncode == 0 and any(
+            line.startswith("n") and line[1:].split(" ", 1)[0].rsplit(":", 1)[-1] == str(port)
+            for line in result.stdout.splitlines()
+        )
+    return False
+
+
 
 
 
@@ -851,6 +922,8 @@ class QdrantMinimaRunner:
                  storage_path: Path | None, server_pid: int | None,
                  restart_server: Callable[[], int] | None = None, restart_identity: str = "",
                  process_identity: Callable[[int], str] = server_process_identity,
+                 process_running: Callable[[int], bool] = server_process_running,
+                 process_owns_endpoint: Callable[[int, str], bool] = server_process_owns_endpoint,
                  resource_server_name: str = "Qdrant") -> None:
         self.manifest, self.config = manifest, manifest["config"]
         self.specs, self.queries = scenario_map(manifest), {row["scenario"]: row for row in manifest["queries"]}
@@ -865,6 +938,7 @@ class QdrantMinimaRunner:
         self.server_version, self.deployment, self.image, self.storage_path = server_version, deployment, image, storage_path
         self.server_pid, self.resource_server_name = server_pid, resource_server_name
         self.restart_server, self.restart_identity, self.process_identity = restart_server, restart_identity, process_identity
+        self.process_running, self.process_owns_endpoint = process_running, process_owns_endpoint
         self.client: Any | None = None
         self.evidence = Evidence(manifest)
         self.operations = {
@@ -911,6 +985,10 @@ class QdrantMinimaRunner:
             raise RuntimeError("backend restart hook must return the restarted Qdrant server PID")
         if new_pid == old_pid:
             raise RuntimeError("backend restart hook returned the original PID; restart is unproven")
+        if self.process_running(old_pid):
+            raise RuntimeError(f"original backend PID {old_pid} is still running after restart hook")
+        if not self.process_owns_endpoint(new_pid, self.url):
+            raise RuntimeError(f"restarted backend PID {new_pid} does not own the configured endpoint")
         new_process_identity = self.process_identity(new_pid)
         self.restart_boundary = {
             "hook_identity": self.restart_identity,
@@ -1148,10 +1226,17 @@ class QdrantMinimaRunner:
                         for query_ordinal in range(begin, end, readers):
                             scenario = plan["scenario_order"][query_ordinal % len(plan["scenario_order"])]
                             interval: dict[str, int] = {}
-                            self.search(operation["name"], scenario, interval)
+                            ids, scores = self.search(operation["name"], scenario, interval)
+                            query = self.queries[scenario]
+                            if not self.results_match(
+                                (ids, scores),
+                                (query["initial_oracle_ids"], query["initial_oracle_scores"]),
+                            ):
+                                raise RuntimeError(f"timed query {query_ordinal} does not match its frozen oracle")
                             query_observations[query_ordinal] = {
                                 "ordinal": query_ordinal, "round": round_value["ordinal"],
                                 "reader": worker, "scenario": scenario, **interval,
+                                "result_captured": True, "actual_ids": ids, "actual_scores": scores,
                             }
                     except BaseException:
                         end_barrier.abort()
@@ -1619,9 +1704,14 @@ def main() -> int:
         runner.evidence.failures.append(f"{type(exc).__name__}: {exc}")
         exit_code = 1
     finally:
-        runner.close()
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(runner.artifact(), indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
+        try:
+            runner.close()
+        except BaseException as exc:
+            runner.evidence.failures.append(f"{type(exc).__name__}: {exc}")
+            exit_code = 1
+        finally:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps(runner.artifact(), indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
     return exit_code
 
 
