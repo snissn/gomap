@@ -1105,7 +1105,18 @@ def _strict_json_loads(value: str) -> Any:
             result[key] = item
         return result
 
-    return json.loads(value, parse_constant=reject_constant, object_pairs_hook=reject_duplicate_keys)
+    def finite_float(number: str) -> float:
+        parsed = float(number)
+        if not math.isfinite(parsed):
+            raise ValueError(f"non-finite JSON number {number}")
+        return parsed
+
+    return json.loads(
+        value,
+        parse_constant=reject_constant,
+        parse_float=finite_float,
+        object_pairs_hook=reject_duplicate_keys,
+    )
 
 
 class LifecycleJournal:
@@ -1795,6 +1806,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             and service_command[0] != binary_path
         ):
             errors.append("manifest.service.command[0] must match manifest.service.binary.path")
+    bound_index_name: str | None = None
     case_type = harness.get("case_type")
     if not isinstance(case_type, str) or not case_type.strip():
         errors.append("manifest.harness.case_type must be non-empty")
@@ -1822,6 +1834,11 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 errors.append("lifecycle task_config binding does not select one manifest VDBBench result")
             else:
                 selected = matches[0]
+                selected_index_name = selected.get("index_name")
+                if not isinstance(selected_index_name, str) or not selected_index_name:
+                    errors.append("bound manifest VDBBench result index_name must be a non-empty string")
+                else:
+                    bound_index_name = selected_index_name
                 task_config = selected.get("task_config")
                 if not isinstance(task_config, dict) or canonical_sha256(task_config) != binding.get("task_config_sha256"):
                     errors.append("lifecycle task_config binding checksum does not match canonical task_config")
@@ -2211,15 +2228,18 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         if adapter is not None:
             optimize_response = adapter["optimize_response"]
             optimize_index = optimize_response.get("index")
-            optimize_index_name = (
+            response_index_name = (
                 optimize_index.get("name") if isinstance(optimize_index, dict) else None
             )
-            if not isinstance(optimize_index_name, str) or not optimize_index_name:
+            expected_index_name = bound_index_name or response_index_name
+            if not isinstance(response_index_name, str) or not response_index_name:
                 errors.append("adapter optimize response index name must be a non-empty string")
+            elif case_type == "PerformanceCustomDataset" and response_index_name != bound_index_name:
+                errors.append("adapter optimize response index name does not match bound VDBBench result")
             else:
                 try:
                     raw_identity, raw_generation, _ = lifecycle_ready_asset(
-                        optimize_response, optimize_index_name
+                        optimize_response, expected_index_name
                     )
                 except RuntimeError as exc:
                     errors.append(f"adapter optimize response does not prove a ready index: {exc}")

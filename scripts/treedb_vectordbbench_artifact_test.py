@@ -1215,6 +1215,12 @@ class LifecycleValidatorTest(unittest.TestCase):
             (lambda response: response["stats"].__setitem__("document_bytes", 1), "guardrails"),
             (lambda response: response["stats"].__setitem__("document_output_bytes", 1), "guardrails"),
             (
+                lambda response: response["stats"].__setitem__(
+                    "search_route_hnsw_search_pack", 1e309
+                ),
+                "non-finite",
+            ),
+            (
                 lambda response: response["diagnostics"].__setitem__(
                     "no_document_guardrails_ok", False
                 ),
@@ -1292,16 +1298,20 @@ class LifecycleValidatorTest(unittest.TestCase):
             dataset_dir.mkdir()
             dataset_file = dataset_dir / "train.parquet"
             dataset_file.write_bytes(b"cohere vectors")
-            task_config = {"case_config": {"custom_case": {"dataset_config": {
-                "dir": str(dataset_dir), "size": 50000, "dim": 768,
-                "file_count": "1", "use_shuffled": False,
-            }}}}
+            task_config = {
+                "db_config": {"index_name": "index-a"},
+                "case_config": {"custom_case": {"dataset_config": {
+                    "dir": str(dataset_dir), "size": 50000, "dim": 768,
+                    "file_count": "1", "use_shuffled": False,
+                }}},
+            }
             result = root / "vdbbench-results" / "result.json"
             result.parent.mkdir()
             result.write_text(json.dumps({"results": [{"task_config": task_config}]}), encoding="utf-8")
             metrics = {
                 "result_file": str(result.relative_to(root)),
                 "result_sha256": harness.sha256_file(result),
+                "index_name": "index-a",
                 "task_config": task_config,
                 "task_config_sha256": harness.canonical_sha256(task_config),
             }
@@ -1316,6 +1326,48 @@ class LifecycleValidatorTest(unittest.TestCase):
 
             got = harness.validate_lifecycle_artifact(root)
             self.assertTrue(got["complete"], got)
+
+            sidecar = root / "adapter-lifecycle.jsonl"
+            records = [json.loads(line) for line in sidecar.read_text(encoding="utf-8").splitlines()]
+            records[-3]["response"]["index"]["name"] = "other"
+            sidecar.write_text(
+                "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            sidecar_artifact = next(
+                artifact for artifact in manifest["lifecycle"]["raw_artifacts"]
+                if artifact["path"] == "adapter-lifecycle.jsonl"
+            )
+            sidecar_artifact["sha256"] = harness.sha256_file(sidecar)
+            for event in _events:
+                index = event["state"].get("index")
+                if isinstance(index, dict):
+                    index["identity"] = "other:vector_hnsw"
+                route = event["state"].get("route")
+                if isinstance(route, dict):
+                    route["index_identity"] = "other:vector_hnsw"
+            rewrite_lifecycle_fixture(root, manifest, _events)
+
+            renamed = harness.validate_lifecycle_artifact(root)
+            self.assertFalse(renamed["analyzable"], renamed)
+            self.assertTrue(
+                any("bound VDBBench result" in error for error in renamed["errors"]), renamed
+            )
+
+            records[-3]["response"]["index"]["name"] = "index-a"
+            sidecar.write_text(
+                "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            sidecar_artifact["sha256"] = harness.sha256_file(sidecar)
+            for event in _events:
+                index = event["state"].get("index")
+                if isinstance(index, dict):
+                    index["identity"] = "index-a:vector_hnsw"
+                route = event["state"].get("route")
+                if isinstance(route, dict):
+                    route["index_identity"] = "index-a:vector_hnsw"
+            rewrite_lifecycle_fixture(root, manifest, _events)
 
             for malformed_results in (None, {"task_config": task_config}):
                 with self.subTest(malformed_results=malformed_results):
