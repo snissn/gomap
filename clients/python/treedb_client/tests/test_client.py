@@ -593,7 +593,8 @@ class TreeDBClientTests(unittest.TestCase):
                 {
                     "index": SAMPLE_INDEX,
                     "vector_index_name": "embedding",
-                    "status": {"name": "embedding", "strategy": "column_graph", "state": "column_graph_loaded", "loaded": True},
+                    "status": {"name": "embedding", "strategy": "column_graph", "state": "column_graph_loaded", "loaded": True, "column_graph_build": {"total_nanos": 11}},
+                    "timing": {"total_nanos": 13, "cache_warm_nanos": 2},
                 },
                 0,
             ),
@@ -660,6 +661,9 @@ class TreeDBClientTests(unittest.TestCase):
 
             self.assertTrue(reset.created)
             self.assertTrue(optimize.status.loaded)
+            self.assertEqual(optimize.status.column_graph_build.total_nanos, 11)
+            self.assertEqual(optimize.timing.total_nanos, 13)
+            self.assertEqual(optimize.timing.cache_warm_nanos, 2)
             b64_search = client.search_vector_index(
                 "bench",
                 [1, 0],

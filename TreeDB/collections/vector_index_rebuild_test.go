@@ -253,6 +253,13 @@ func TestColumnGraphRebuildVectorIndexPublishesEmptyPhysicalManifestV2A(t *testi
 		t.Fatalf("RebuildVectorIndex empty collection: %v", err)
 	}
 	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+	timing := status.ColumnGraphBuild
+	if timing.Total == 0 || timing.Snapshot == 0 || timing.RowExtraction == 0 || timing.AssetPreparation == 0 || timing.ManifestFinalization == 0 || timing.Publication == 0 {
+		t.Fatalf("empty rebuild timing=%+v want completed stages", timing)
+	}
+	if timing.AdjacencyBuild != 0 || timing.LocalityRemap != 0 || timing.QuantizedPreparation != 0 || timing.Total < timing.Snapshot+timing.RowExtraction+timing.Publication || timing.Publication < timing.AssetPreparation {
+		t.Fatalf("empty rebuild timing=%+v has invalid reconciliation", timing)
+	}
 	status, err = col.RebuildVectorIndex(def.Name)
 	if err != nil {
 		t.Fatalf("second RebuildVectorIndex empty collection: %v", err)
@@ -285,6 +292,27 @@ func TestColumnGraphRebuildVectorIndexPublishesEmptyPhysicalManifestV2A(t *testi
 	assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, graph.AssetRef)
 	for _, asset := range columnVectorIndexStateAdjacencyAssetsByLayer1987(t, state) {
 		assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, asset.Ref)
+	}
+}
+
+func TestColumnGraphBuildTimingReconcilesCoarseClockV2A(t *testing.T) {
+	timing := ColumnGraphBuildTiming{
+		Total:                     100,
+		Snapshot:                  1,
+		RowExtraction:             1,
+		AssetPreparation:          100,
+		InvNormPreparation:        1,
+		AdjacencyStatePreparation: 60,
+		RowRefPreparation:         1,
+		DocumentIDPreparation:     30,
+		QuantizedPreparation:      1,
+		SearchPackPreparation:     40,
+		ManifestFinalization:      1,
+		Publication:               100,
+	}
+	reconcileColumnGraphBuildTiming(&timing)
+	if timing.AssetPreparation != 134 || timing.Publication != 134 || timing.Total != 136 {
+		t.Fatalf("reconciled coarse-clock timing=%+v want asset/publication/total=134/134/136", timing)
 	}
 }
 

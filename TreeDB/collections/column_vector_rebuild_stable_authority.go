@@ -18,6 +18,8 @@ type columnVectorGraphStableResourceAccumulator struct {
 	segments       uint64
 	contentSyncs   uint64
 	namespaceSyncs uint64
+	fileSync       time.Duration
+	namespaceSync  time.Duration
 }
 
 func newColumnVectorGraphStableResourceAccumulator(registry *rootpublication.IdentityPinRegistry) (*columnVectorGraphStableResourceAccumulator, error) {
@@ -61,8 +63,10 @@ func (authority *columnVectorGraphStableResourceAccumulator) closeAppender(appen
 		return errors.New("collections: column vector rebuild segment closed without stable resources")
 	}
 	var namespaceSyncs uint64
+	var namespaceSync time.Duration
 	for _, stats := range resources.Stats(time.Now()) {
 		namespaceSyncs += stats.NamespaceSyncs
+		namespaceSync += stats.NamespaceSyncDuration
 	}
 	if err := authority.builder.Merge(resources); err != nil {
 		resources.Release()
@@ -71,6 +75,8 @@ func (authority *columnVectorGraphStableResourceAccumulator) closeAppender(appen
 	authority.segments++
 	authority.contentSyncs += uint64(appender.closeStats.FileSyncCount)
 	authority.namespaceSyncs += namespaceSyncs
+	authority.fileSync += appender.closeStats.FileSync
+	authority.namespaceSync += namespaceSync
 	return nil
 }
 
