@@ -156,6 +156,10 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         },
         "service": {
             "profile": "command_wal_durable",
+            "command": [
+                "/tmp/treedb-document-service", "-dir", "/tmp/treedb-data",
+                "-addr", "127.0.0.1:9876", "-profile", "command_wal_durable",
+            ],
             "binary": {"sha256": "3" * 64},
         },
         "harness": {
@@ -646,6 +650,34 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["complete"])
         self.assertIn("known lifecycle stages are out of order", got["errors"])
 
+    def test_present_database_snapshot_is_structural_but_absent_future_stage_is_not(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            manifest["lifecycle"]["result_status"] = "partial"
+            manifest["lifecycle"]["profiles"] = []
+            rewrite_lifecycle_fixture(root, manifest, events[:4])
+
+            early = harness.validate_lifecycle_artifact(root)
+
+        self.assertTrue(early["analyzable"], early)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            manifest["lifecycle"]["result_status"] = "partial"
+            manifest["lifecycle"]["profiles"] = []
+            events[9]["state"]["database"]["commit_seq"] = "50000"
+            rewrite_lifecycle_fixture(root, manifest, events[:10])
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                exit_code = harness.main(["--validate-lifecycle", str(root), "--allow-partial"])
+            malformed = json.loads(output.getvalue())
+
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(malformed["analyzable"], malformed)
+        self.assertTrue(any("database.commit_seq" in item for item in malformed["errors"]), malformed)
+
     def test_cli_fails_closed_unless_analyzable_partial_is_explicitly_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -828,6 +860,42 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertFalse(got["analyzable"])
                 self.assertTrue(any(expected in item for item in got["errors"]), got)
 
+    def test_service_command_is_exactly_bound_to_the_declared_profile(self) -> None:
+        mutations = (
+            ("absent", lambda row: row["service"].pop("command")),
+            ("not-argv", lambda row: row["service"].__setitem__("command", "treedb-document-service")),
+            ("empty-argv", lambda row: row["service"].__setitem__("command", [])),
+            ("non-string-argument", lambda row: row["service"]["command"].append(7)),
+            ("missing-selector", lambda row: row["service"].__setitem__("command", ["treedb-document-service"])),
+            ("inline-selector", lambda row: row["service"]["command"].__setitem__(slice(-2, None), ["-profile=command_wal_durable"])),
+            ("declared-command-mismatch", lambda row: row["service"].__setitem__("profile", "command_wal_relaxed")),
+            ("duplicate-selector", lambda row: row["service"]["command"].extend(["-profile", "command_wal_durable"])),
+        )
+        for label, mutation in mutations:
+            with self.subTest(command=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    mutation(manifest)
+                    manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["analyzable"], got)
+                self.assertTrue(any("manifest.service.command" in item for item in got["errors"]), got)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _ = lifecycle_fixture(root)
+            manifest["service"]["command"][0] = "/different/treedb-document-service"
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("config_sha256 does not match" in item for item in got["errors"]), got)
+
     def test_concurrency_tokens_are_bounded_ascii_decimals(self) -> None:
         for concurrency in ("²", "9" * 5000):
             with self.subTest(concurrency=concurrency[:10]):
@@ -897,6 +965,23 @@ class LifecycleValidatorTest(unittest.TestCase):
                     f"stage {stage} rows.client_sent must be zero" in item
                     for item in got["completion_errors"]
                 ), got)
+
+    def test_reopened_rows_must_remain_zero_through_graceful_close(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            for event in events[8:]:
+                event["state"]["rows"]["reopened"] = 50_000
+            rewrite_lifecycle_fixture(root, manifest, events)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertTrue(got["analyzable"], got)
+        self.assertFalse(got["complete"], got)
+        self.assertTrue(
+            any("stage cache_warm rows.reopened must remain zero" in item for item in got["completion_errors"]),
+            got,
+        )
 
     def test_teardown_must_be_the_terminal_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1266,6 +1351,7 @@ class LifecycleValidatorTest(unittest.TestCase):
                     root = Path(tmp)
                     manifest, events = lifecycle_fixture(root)
                     manifest["service"]["profile"] = profile
+                    manifest["service"]["command"][-1] = profile
                     manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
                     for event in events:
                         event["state"]["wal"] = {"frontier": 0, "bytes_written_total": 0}

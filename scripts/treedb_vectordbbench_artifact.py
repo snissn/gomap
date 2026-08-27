@@ -760,6 +760,7 @@ def lifecycle_config_sha256(manifest: dict[str, Any]) -> str:
     service = manifest.get("service")
     return canonical_sha256({
         "service_profile": service.get("profile") if isinstance(service, dict) else None,
+        "service_command": service.get("command") if isinstance(service, dict) else None,
         "harness": manifest.get("harness"),
     })
 
@@ -1055,6 +1056,23 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     harness = _object(manifest.get("harness"), "manifest.harness", errors)
     if service.get("profile") not in ("command_wal_durable", "command_wal_relaxed", "no_wal_fast"):
         errors.append("manifest.service.profile must name a canonical public profile")
+    service_command = service.get("command")
+    if (
+        not isinstance(service_command, list)
+        or not service_command
+        or any(not isinstance(argument, str) or not argument for argument in service_command)
+    ):
+        errors.append("manifest.service.command must be a non-empty argv list of strings")
+    else:
+        profile_positions = [position for position, argument in enumerate(service_command) if argument == "-profile"]
+        inline_profile = any(argument.startswith("-profile=") for argument in service_command)
+        if (
+            inline_profile
+            or len(profile_positions) != 1
+            or profile_positions[0] + 1 >= len(service_command)
+            or service_command[profile_positions[0] + 1] != service.get("profile")
+        ):
+            errors.append("manifest.service.command must contain exactly one matching '-profile <profile>' selector")
     case_type = harness.get("case_type")
     if not isinstance(case_type, str) or not case_type.strip():
         errors.append("manifest.harness.case_type must be non-empty")
@@ -1324,6 +1342,14 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             for key in keys:
                 if rows.get(key) != expected_rows:
                     completion_errors.append(f"stage {stage} rows.{key} does not equal expected_rows")
+        for event in events:
+            stage = event.get("stage")
+            state = event.get("state")
+            rows = state.get("rows") if isinstance(state, dict) else None
+            if isinstance(rows, dict) and rows.get("reopened") != 0:
+                completion_errors.append(f"stage {stage} rows.reopened must remain zero before cold reopen")
+            if stage == "graceful_close":
+                break
 
     index_reference: tuple[str, int] | None = None
     for stage in ("optimize_end", "cache_prime", "cache_warm", "graceful_close", "cold_open_ready", "exact_verify", "route_verify"):
@@ -1351,22 +1377,29 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             if current[1] != index_reference[1]:
                 completion_errors.append(f"index asset generation changed at stage {stage}")
 
-    close_state = (stage_events.get("graceful_close") or {}).get("state")
-    reopen_state = (stage_events.get("cold_open_ready") or {}).get("state")
-    close_db = close_state.get("database") if isinstance(close_state, dict) else {}
-    reopen_db = reopen_state.get("database") if isinstance(reopen_state, dict) else {}
-    if not isinstance(close_db, dict):
-        close_db = {}
-    if not isinstance(reopen_db, dict):
-        reopen_db = {}
-    if not isinstance(close_db.get("identity"), str) or not close_db.get("identity"):
-        completion_errors.append("graceful_close database.identity is missing")
-    elif reopen_db.get("identity") != close_db.get("identity"):
-        completion_errors.append("cold reopen database.identity does not match graceful close")
-    close_commit = _nonnegative_int(close_db.get("commit_seq"), "graceful_close database.commit_seq", completion_errors)
-    reopen_commit = _nonnegative_int(reopen_db.get("commit_seq"), "cold_open_ready database.commit_seq", completion_errors)
-    if close_commit is not None and reopen_commit is not None and reopen_commit != close_commit:
-        completion_errors.append("cold reopen database.commit_seq does not match graceful close")
+    database_snapshots: dict[str, tuple[str | None, int | None]] = {}
+    for stage in ("graceful_close", "cold_open_ready"):
+        event = stage_events.get(stage)
+        if event is None:
+            continue
+        state = event.get("state")
+        database = state.get("database") if isinstance(state, dict) else None
+        if not isinstance(database, dict):
+            errors.append(f"stage {stage} database must be an object")
+            continue
+        database_identity = database.get("identity")
+        if not isinstance(database_identity, str) or not database_identity:
+            errors.append(f"stage {stage} database.identity must be non-empty")
+            database_identity = None
+        commit = _nonnegative_int(database.get("commit_seq"), f"stage {stage} database.commit_seq", errors)
+        database_snapshots[stage] = (database_identity, commit)
+    close_database = database_snapshots.get("graceful_close")
+    reopen_database = database_snapshots.get("cold_open_ready")
+    if close_database is not None and reopen_database is not None:
+        if close_database[0] is not None and reopen_database[0] != close_database[0]:
+            completion_errors.append("cold reopen database.identity does not match graceful close")
+        if close_database[1] is not None and reopen_database[1] is not None and reopen_database[1] != close_database[1]:
+            completion_errors.append("cold reopen database.commit_seq does not match graceful close")
 
     route_state = (stage_events.get("route_verify") or {}).get("state")
     route = route_state.get("route") if isinstance(route_state, dict) else {}

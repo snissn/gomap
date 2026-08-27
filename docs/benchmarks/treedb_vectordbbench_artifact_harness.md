@@ -66,14 +66,17 @@ all four row counts. `teardown` must be the final event and must retain the
 exact expected row counts. The command-WAL profiles must also report positive
 WAL frontier and cumulative bytes at `load_end` after accepted rows and at
 `drain_checkpoint` after durable rows; `no_wal_fast` and partial streams are
-exempt from this completion proof.
+exempt from this completion proof. Reopened rows remain zero through
+`graceful_close` and become populated only after the cold-reopen boundary.
 
 The lifecycle declaration binds the exact clean gomap and VectorDBBench
 commits, service-binary SHA-256, effective service/harness configuration,
 dataset checksum/dimensions/count, CPU topology, memory, storage, lifecycle
 JSONL, raw artifacts, and every profile window. The minimum effective
 configuration includes a canonical public service profile, case type,
-concurrency, batch size, `m`, and `ef_construction`. Standard case names (for
+the exact non-empty service argv with one matching `-profile <profile>`
+selector, concurrency, batch size, `m`, and `ef_construction`. The argv is part
+of the effective-configuration checksum. Standard case names (for
 example, `Performance768D1M`) must match the lifecycle dataset dimensions and
 vector count. `PerformanceCustomDataset` cannot complete until H2 binds its
 selected result's task-config dataset shape into this artifact. Profile entries
@@ -98,6 +101,11 @@ fallback through either `exact_hnsw_search_pack_v1` or `quantized_rerank`.
 through `cold_open_ready`; client, accepted/durable, and reopened counts are
 never substituted for one another, and a completed lifecycle requires strictly
 positive `T_ready`.
+
+When `graceful_close` or `cold_open_ready` is present, its database snapshot
+must contain a non-empty string identity and non-negative integer commit
+sequence. A partial stream that has not reached those stages remains
+analyzable; a present malformed snapshot does not.
 
 Lifecycle validation requires the pinned Go toolchain for pprof and trace
 profiles, and Linux `perf` for perf-data profiles. A missing native decoder is
