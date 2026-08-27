@@ -430,6 +430,29 @@ class HostContextTest(unittest.TestCase):
         self.assertIn("positive host memory size is unavailable", stderr.getvalue())
         build.assert_not_called()
 
+    def test_lifecycle_requires_loopback_host_but_normal_mode_is_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = Path(tmp) / "train.parquet"
+            dataset.write_bytes(b"dataset")
+            lifecycle = [
+                "--run-vdbbench", "--rows", "exact", "--lifecycle",
+                "--case-type", "PerformanceCustomDataset",
+                "--lifecycle-dataset-file", str(dataset),
+                "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
+                "--port", "7120",
+            ]
+            with mock.patch.object(harness, "find_free_port", return_value=7121):
+                for host in ("127.0.0.1", "::1", "localhost"):
+                    with self.subTest(host=host):
+                        args = harness.parse_args([*lifecycle, "--host", host])
+                        self.assertTrue(harness.loopback_host(args.host))
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    harness.parse_args([*lifecycle, "--host", "192.168.1.20"])
+
+            normal = harness.parse_args(["--host", "192.168.1.20", "--port", "7120"])
+
+        self.assertEqual(normal.host, "192.168.1.20")
+
 
 class SmokeShapeTest(unittest.TestCase):
     def test_campaign_shape_is_valid_and_deterministic(self) -> None:
@@ -760,6 +783,72 @@ class HarnessOrderTest(unittest.TestCase):
             failure_path.index("terminate_process_group("),
             failure_path.index("finalize_partial_lifecycle("),
         )
+
+    def test_lifecycle_keyboard_interrupt_writes_analyzable_manifest_and_stops_service(self) -> None:
+        storage = {
+            "path": "/tmp", "method": "findmnt", "device": "/dev/x", "filesystem": "xfs",
+            "mount": "/tmp", "capacity_bytes": 1024,
+        }
+        context = {
+            "host": {
+                "memory_bytes": 1024, "logical_cpu_count": 1,
+                "physical_cpu_count": 1, "storage": storage,
+            },
+            "gomap": {"commit": "1" * 40, "dirty": False},
+            "vectordbbench": {"commit": "2" * 40, "dirty": False},
+        }
+
+        class Sampler:
+            def __init__(self, *_args, **_kwargs):
+                self.samples = [{"timestamp_ns": time.time_ns(), "snapshot": {}}]
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+            def at(self, _timestamp_ns):
+                return {}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "artifact"
+            dataset = Path(tmp) / "train.parquet"
+            binary = Path(tmp) / "treedb-document-service"
+            dataset.write_bytes(b"dataset")
+            binary.write_bytes(b"binary")
+            binary.chmod(0o700)
+            proc = mock.Mock(returncode=None)
+
+            def start(_state, *, service_bin, data_dir, host, port, profile, pprof_addr, **_kwargs):
+                command = [
+                    str(service_bin), "-dir", str(data_dir), "-addr", harness.host_port(host, port),
+                    "-profile", profile, "-pprof", pprof_addr,
+                ]
+                return proc, {}, command
+
+            with mock.patch.object(harness, "collect_context", return_value=context), \
+                    mock.patch.object(harness, "build_service", return_value=binary), \
+                    mock.patch.object(harness, "start_service", side_effect=start), \
+                    mock.patch.object(harness, "DiagnosticsSampler", Sampler), \
+                    mock.patch.object(harness, "run_vdbbench_tests", side_effect=KeyboardInterrupt), \
+                    mock.patch.object(harness, "terminate_process_group") as terminate, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                exit_code = harness.main([
+                    "--out", str(root), "--run-vdbbench", "--rows", "exact", "--lifecycle",
+                    "--case-type", "PerformanceCustomDataset", "--run-tests", "required",
+                    "--lifecycle-dataset-file", str(dataset),
+                    "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
+                ])
+
+            report = harness.validate_lifecycle_artifact(root)
+            manifest = json.loads((root / "manifest.json").read_text())
+
+        self.assertEqual(exit_code, 130)
+        self.assertEqual(manifest["lifecycle"]["result_status"], "interrupted")
+        self.assertTrue(report["analyzable"], report)
+        self.assertFalse(report["complete"])
+        terminate.assert_called_once_with(proc, graceful_timeout=300.0)
 
     def test_route_proof_can_be_skipped_for_measurement_only_runs(self) -> None:
         args = harness.parse_args(["--run-vdbbench", "--skip-route-proof"])

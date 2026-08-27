@@ -395,8 +395,22 @@ def collect_context(
     }
 
 
+def loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def host_port(host: str, port: int) -> str:
+    return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+
+
 def find_free_port(host: str) -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
         sock.bind((host, 0))
         return int(sock.getsockname()[1])
 
@@ -505,7 +519,8 @@ def start_service(
     append_log: bool = False,
 ) -> tuple[subprocess.Popen[str], dict[str, Any], list[str]]:
     service_log = state.root / "service.log"
-    cmd = [str(service_bin), "-dir", str(data_dir), "-addr", f"{host}:{port}", "-profile", profile]
+    address = host_port(host, port)
+    cmd = [str(service_bin), "-dir", str(data_dir), "-addr", address, "-profile", profile]
     if pprof_addr:
         cmd.extend(["-pprof", pprof_addr])
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -520,7 +535,7 @@ def start_service(
     )
     state.service_pid = proc.pid
     try:
-        health = wait_health(f"http://{host}:{port}", health_timeout)
+        health = wait_health(f"http://{address}", health_timeout)
     except Exception:
         terminate_process_group(proc)
         log_fh.close()
@@ -1322,12 +1337,7 @@ def _valid_pprof_listen_address(value: str) -> bool:
         host, port = value.rsplit(":", 1)
     if "%" in host or re.fullmatch(r"[0-9]{1,5}", port) is None or not 1 <= int(port) <= 65535:
         return False
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
+    return loopback_host(host)
 
 
 def _pprof_metadata(path: Path) -> bytes | None:
@@ -2597,12 +2607,18 @@ def initialize_lifecycle_capture(
 
 
 def finalize_partial_lifecycle(
-    state: HarnessState, args: argparse.Namespace, sampler: DiagnosticsSampler | None
+    state: HarnessState,
+    args: argparse.Namespace,
+    sampler: DiagnosticsSampler | None,
+    *,
+    result_status: str = "partial",
 ) -> None:
     """Retain only sidecar boundaries that are structurally present after failure."""
     if state.lifecycle is None:
         return
-    state.lifecycle["result_status"] = "partial"
+    if result_status not in {"partial", "interrupted"}:
+        raise ValueError(f"unsupported incomplete lifecycle status {result_status!r}")
+    state.lifecycle["result_status"] = result_status
     if sampler is not None:
         sampler.stop()
         state.diagnostics = list(sampler.samples)
@@ -2896,7 +2912,7 @@ def complete_lifecycle(
         port=args.port,
         profile=args.profile,
         health_timeout=args.health_timeout,
-        pprof_addr=f"{args.host}:{args.pprof_port}",
+        pprof_addr=host_port(args.host, args.pprof_port),
         append_log=True,
     )
     try:
@@ -3175,6 +3191,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             parser.error("lifecycle requires exactly one real, load-enabled VDBBench row")
         if args.profile != "command_wal_durable":
             parser.error("lifecycle completion currently requires command_wal_durable")
+        if not loopback_host(args.host):
+            parser.error("lifecycle host must be a loopback address")
         if args.skip_search_serial and args.skip_search_concurrent:
             parser.error("lifecycle requires at least one VDBBench search phase")
         try:
@@ -3204,9 +3222,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("lifecycle dataset file must exist and be a regular file")
     if args.port == 0:
         args.port = find_free_port(args.host)
-    args.base_url = f"http://{args.host}:{args.port}"
+    args.base_url = f"http://{host_port(args.host, args.port)}"
     args.pprof_port = find_free_port(args.host) if args.lifecycle else 0
-    args.diagnostics_url = f"http://{args.host}:{args.pprof_port}" if args.lifecycle else ""
+    args.diagnostics_url = f"http://{host_port(args.host, args.pprof_port)}" if args.lifecycle else ""
     if not args.index_prefix:
         stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         args.index_prefix = f"treedb_vdbbench_{stamp}_{os.getpid()}"
@@ -3306,7 +3324,7 @@ def main(argv: list[str]) -> int:
             port=args.port,
             profile=args.profile,
             health_timeout=args.health_timeout,
-            pprof_addr=f"{args.host}:{args.pprof_port}" if args.lifecycle else "",
+            pprof_addr=host_port(args.host, args.pprof_port) if args.lifecycle else "",
         )
         state.lifecycle_started_ns = time.time_ns()
         state.health = health
@@ -3360,6 +3378,19 @@ def main(argv: list[str]) -> int:
         if not args.skip_route_proof:
             print(f"route_proof={args.out / 'route_proof.json'}")
         return 0
+    except KeyboardInterrupt:
+        if not args.lifecycle:
+            raise
+        if service_proc is not None:
+            terminate_process_group(service_proc, graceful_timeout=args.service_close_timeout)
+            service_proc = None
+        with contextlib.suppress(Exception):
+            finalize_partial_lifecycle(state, args, sampler, result_status="interrupted")
+            sampler = None
+        with contextlib.suppress(Exception):
+            write_manifest(state, args=args, context=context, service_command=service_command)
+        print(f"harness interrupted; artifact_root={args.out}", file=sys.stderr)
+        return 130
     except Exception as exc:  # noqa: BLE001 - write failure artifact before exiting
         error = {"error": str(exc), "traceback": traceback.format_exc(), "generated_at": iso_now()}
         write_json(args.out / "harness_error.json", error)
