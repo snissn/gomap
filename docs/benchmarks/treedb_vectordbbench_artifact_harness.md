@@ -79,7 +79,9 @@ flags and with one matching `profile` selector before Go flag parsing
 terminates at `--` or a positional argument,
 concurrency, batch size, `m`, and `ef_construction`. The argv is part
 of the effective-configuration checksum, and its executable must equal the
-path of the SHA-256-bound service binary. Standard case names (for
+path of a readable, executable local file whose current bytes match both
+recorded service-binary SHA-256 fields. The effective last `dir` flag value
+must be non-empty. Standard case names (for
 example, `Performance768D1M`) must match the lifecycle dataset dimensions and
 vector count. Integer diagnostic flags must also parse within the 64-bit Go
 service's signed `flag.Int` range. `PerformanceCustomDataset` cannot complete until H2 binds its
@@ -114,6 +116,9 @@ analyzable; a present malformed snapshot does not.
 The same fail-closed rule applies to a present index snapshot's object and
 identity, asset-generation, and status field types; missing future index
 evidence remains a completion error.
+Any present route snapshot is likewise structurally validated as an object
+with typed route-proof fields, while a route that has not yet been emitted is
+only missing completion evidence.
 
 Lifecycle validation requires the pinned Go toolchain for pprof and trace
 profiles, and Linux `perf` for perf-data profiles. A missing native decoder is

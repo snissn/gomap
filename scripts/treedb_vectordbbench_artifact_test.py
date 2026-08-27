@@ -94,6 +94,11 @@ def valid_perf_fixture() -> bytes:
 
 
 def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
+    service_binary = root / "bin" / "treedb-document-service"
+    service_binary.parent.mkdir(parents=True)
+    service_binary.write_bytes(b"fixture treedb document service\n")
+    service_binary.chmod(0o755)
+    service_binary_sha256 = harness.sha256_file(service_binary)
     profile = root / "profiles" / "build.cpu.pprof"
     profile.parent.mkdir(parents=True)
     profile.write_bytes(valid_pprof_fixture())
@@ -157,10 +162,10 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         "service": {
             "profile": "command_wal_durable",
             "command": [
-                "/tmp/treedb-document-service", "-dir", "/tmp/treedb-data",
+                str(service_binary), "-dir", "/tmp/treedb-data",
                 "-addr", "127.0.0.1:9876", "-profile", "command_wal_durable",
             ],
-            "binary": {"path": "/tmp/treedb-document-service", "sha256": "3" * 64},
+            "binary": {"path": str(service_binary), "sha256": service_binary_sha256},
         },
         "harness": {
             "case_type": "Performance768D50K",
@@ -180,7 +185,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         "identity": {
             "gomap_commit": "1" * 40,
             "vectordbbench_commit": "2" * 40,
-            "service_binary_sha256": "3" * 64,
+            "service_binary_sha256": service_binary_sha256,
             "config_sha256": harness.lifecycle_config_sha256(manifest),
         },
         "raw_artifacts": [{"path": "profiles/build.cpu.pprof", "sha256": harness.sha256_file(profile)}],
@@ -704,6 +709,33 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertTrue(any(expected in item for item in got["errors"]), got)
                 self.assertEqual(exit_code, 1)
 
+    def test_present_route_snapshot_types_are_structural_in_partial_artifacts(self) -> None:
+        cases = (
+            (3, lambda state: state.__setitem__("route", []), "route must be an object"),
+            (12, lambda state: state["route"].__setitem__("name", 7), "route.name"),
+            (12, lambda state: state["route"].__setitem__("fallback_reason", []), "route.fallback_reason"),
+            (12, lambda state: state["route"].__setitem__("optimized", 1), "route.optimized"),
+            (12, lambda state: state["route"].__setitem__("index_identity", 7), "route.index_identity"),
+            (12, lambda state: state["route"].__setitem__("index_asset_generation", 7.0), "route.index_asset_generation"),
+        )
+        for event_position, mutation, expected in cases:
+            with self.subTest(stage_position=event_position, expected=expected):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, events = lifecycle_fixture(root)
+                    manifest["lifecycle"]["result_status"] = "partial"
+                    manifest["lifecycle"]["profiles"] = []
+                    mutation(events[event_position]["state"])
+                    rewrite_lifecycle_fixture(root, manifest, events[:event_position + 1])
+
+                    got = harness.validate_lifecycle_artifact(root)
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        exit_code = harness.main(["--validate-lifecycle", str(root), "--allow-partial"])
+
+                self.assertFalse(got["analyzable"], got)
+                self.assertTrue(any(expected in item for item in got["errors"]), got)
+                self.assertEqual(exit_code, 1)
+
     def test_cli_fails_closed_unless_analyzable_partial_is_explicitly_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -898,6 +930,7 @@ class LifecycleValidatorTest(unittest.TestCase):
             ("unknown-flag", lambda row: row["service"]["command"].append("-bogus")),
             ("unknown-double-dash-flag", lambda row: row["service"]["command"].append("--bogus")),
             ("unknown-inline-flag", lambda row: row["service"]["command"].append("-bogus=value")),
+            ("empty-effective-dir", lambda row: row["service"]["command"].append("-dir=")),
             (
                 "selector-after-positional",
                 lambda row: row["service"]["command"].__setitem__(
@@ -977,6 +1010,32 @@ class LifecycleValidatorTest(unittest.TestCase):
 
                 self.assertFalse(got["analyzable"], got)
                 self.assertTrue(any(expected in item for item in got["errors"]), got)
+
+    def test_service_binary_must_remain_an_executable_with_matching_bytes(self) -> None:
+        def missing(path: Path) -> None:
+            path.unlink()
+
+        def non_file(path: Path) -> None:
+            path.unlink()
+            path.mkdir()
+
+        cases = (
+            ("missing", missing),
+            ("non-file", non_file),
+            ("unreadable", lambda path: path.chmod(0)),
+            ("changed", lambda path: path.write_bytes(b"different service binary\n")),
+        )
+        for label, mutation in cases:
+            with self.subTest(binary=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    mutation(Path(manifest["service"]["binary"]["path"]))
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["analyzable"], got)
+                self.assertTrue(any("service binary" in item for item in got["errors"]), got)
 
     def test_service_integer_flags_use_go_int64_syntax_and_bounds(self) -> None:
         for value in ("nope", "9223372036854775808", "-9223372036854775809", "9" * 5000):

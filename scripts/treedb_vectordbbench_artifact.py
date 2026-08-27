@@ -1117,6 +1117,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             "addr", "dir", "profile", "pprof", "block-profile-rate", "mutex-profile-fraction",
         }
         profile_values = []
+        effective_dir = "/tmp/treedb-document-service"
         invalid_command = False
         parsing_flags = True
         position = 1
@@ -1155,22 +1156,39 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 invalid_command = True
             if name == "profile":
                 profile_values.append(value)
+            elif name == "dir":
+                effective_dir = value
         if (
             invalid_command
+            or not effective_dir
             or len(profile_values) != 1
             or profile_values[0] != service.get("profile")
         ):
             errors.append("manifest.service.command has invalid flags or does not select exactly one matching profile")
     binary_path = binary.get("path")
+    binary_digest = None
     if not isinstance(binary_path, str) or not binary_path:
         errors.append("manifest.service.binary.path must be a non-empty string")
-    elif (
-        isinstance(service_command, list)
-        and service_command
-        and isinstance(service_command[0], str)
-        and service_command[0] != binary_path
-    ):
-        errors.append("manifest.service.command[0] must match manifest.service.binary.path")
+    else:
+        try:
+            declared_binary = Path(binary_path)
+            if not declared_binary.is_absolute():
+                raise ValueError("path is not absolute")
+            resolved_binary = declared_binary.resolve(strict=True)
+            if not resolved_binary.is_file():
+                raise ValueError("path is not a regular file")
+            if not os.access(resolved_binary, os.R_OK | os.X_OK):
+                raise PermissionError("path is not readable and executable")
+            binary_digest = sha256_file(resolved_binary)
+        except (OSError, RuntimeError, ValueError) as exc:
+            errors.append(f"manifest service binary is unavailable or invalid: {exc}")
+        if (
+            isinstance(service_command, list)
+            and service_command
+            and isinstance(service_command[0], str)
+            and service_command[0] != binary_path
+        ):
+            errors.append("manifest.service.command[0] must match manifest.service.binary.path")
     case_type = harness.get("case_type")
     if not isinstance(case_type, str) or not case_type.strip():
         errors.append("manifest.harness.case_type must be non-empty")
@@ -1223,6 +1241,11 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             errors.append(f"lifecycle identity {name} is missing or invalid")
         elif actual_valid and declared != actual:
             errors.append(f"lifecycle identity {name} does not match manifest")
+    if binary_digest is not None:
+        if binary.get("sha256") != binary_digest:
+            errors.append("manifest service binary SHA-256 does not match current binary bytes")
+        if identity.get("service_binary_sha256") != binary_digest:
+            errors.append("lifecycle identity service_binary_sha256 does not match current binary bytes")
     if gomap.get("dirty") is not False or vectordbbench.get("dirty") is not False:
         errors.append("gomap and VectorDBBench checkouts must be clean")
     config_sha256 = lifecycle_config_sha256(manifest)
@@ -1349,6 +1372,21 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     errors.append(f"{prefix} state.index.asset_generation must be an integer")
                 if "status" in index and not isinstance(index.get("status"), str):
                     errors.append(f"{prefix} state.index.status must be a string")
+        if "route" in state:
+            route = state.get("route")
+            if not isinstance(route, dict):
+                errors.append(f"{prefix} state.route must be an object")
+            else:
+                for key in ("name", "fallback_reason", "index_identity"):
+                    if key in route and not isinstance(route.get(key), str):
+                        errors.append(f"{prefix} state.route.{key} must be a string")
+                if "optimized" in route and not isinstance(route.get("optimized"), bool):
+                    errors.append(f"{prefix} state.route.optimized must be a boolean")
+                generation = route.get("index_asset_generation")
+                if "index_asset_generation" in route and (
+                    isinstance(generation, bool) or not isinstance(generation, int)
+                ):
+                    errors.append(f"{prefix} state.route.index_asset_generation must be an integer")
         rows = state.get("rows")
         wal = state.get("wal")
         counters = state.get("counters")
