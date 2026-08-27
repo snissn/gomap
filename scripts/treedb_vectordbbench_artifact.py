@@ -594,6 +594,22 @@ def route_response_stats(response: dict[str, Any]) -> dict[str, Any] | None:
     return stats if isinstance(stats, dict) else None
 
 
+def no_document_guardrails(response: dict[str, Any]) -> bool:
+    stats = route_response_stats(response)
+    diagnostics = response.get("diagnostics")
+    return (
+        isinstance(stats, dict)
+        and isinstance(diagnostics, dict)
+        and diagnostics.get("no_document_guardrails_ok") is True
+        and all(
+            isinstance(stats.get(key, 0), int)
+            and not isinstance(stats.get(key, 0), bool)
+            and stats.get(key, 0) == 0
+            for key in ("documents_fetched", "document_bytes")
+        )
+    )
+
+
 def identified_route_results(value: Any, expected_count: int) -> bool:
     return (
         isinstance(value, list)
@@ -2193,10 +2209,15 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 except (OSError, UnicodeError, ValueError) as exc:
                     errors.append(f"cannot parse lifecycle load milestones: {exc}")
                 else:
-                    if milestone_document != lifecycle_load_milestone_document(adapter["records"]):
-                        errors.append(
-                            "lifecycle load milestones do not match the adapter lifecycle sidecar"
-                        )
+                    try:
+                        expected_milestones = lifecycle_load_milestone_document(adapter["records"])
+                    except ValueError as exc:
+                        errors.append(f"cannot reconstruct lifecycle load milestones: {exc}")
+                    else:
+                        if milestone_document != expected_milestones:
+                            errors.append(
+                                "lifecycle load milestones do not match the adapter lifecycle sidecar"
+                            )
             for position, boundary in enumerate(LIFECYCLE_DIAGNOSTIC_BOUNDARIES):
                 boundary_ns = adapter[f"{boundary}_ns"]
                 event_timestamp = (stage_events.get(boundary) or {}).get("_timestamp")
@@ -2444,6 +2465,10 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     errors.append("lifecycle route response stats must be an object when present")
                 if raw_route_response.get("no_documents") is not True:
                     errors.append("lifecycle route response must prove no-document search")
+                if not no_document_guardrails(raw_route_response):
+                    errors.append(
+                        "lifecycle route response must prove zero-fetch no-document guardrails"
+                    )
                 if isinstance(raw_index, dict) and valid_diagnostics and valid_results and raw_stats is not None:
                     raw_generation = raw_index.get("generation")
                     if (
@@ -2886,12 +2911,18 @@ def lifecycle_load_milestone_document(records: list[dict[str, Any]]) -> dict[str
         accepted += record["server_accepted"]
         sent += record["client_sent"]
         elapsed = max(0, record["timestamp_ns"] - load_start) / 1_000_000_000
+        try:
+            accepted_rate = accepted / elapsed if elapsed > 0 else None
+        except OverflowError as exc:
+            raise ValueError("adapter lifecycle counts exceed the supported finite milestone rate") from exc
+        if accepted_rate is not None and not math.isfinite(accepted_rate):
+            raise ValueError("adapter lifecycle counts exceed the supported finite milestone rate")
         milestones.append({
             "timestamp_ns": record["timestamp_ns"],
             "client_sent_cumulative": sent,
             "server_accepted_cumulative": accepted,
             "elapsed_seconds": elapsed,
-            "accepted_vectors_per_second_cumulative": accepted / elapsed if elapsed > 0 else None,
+            "accepted_vectors_per_second_cumulative": accepted_rate,
         })
     return {
         "schema_version": "treedb-vectordbbench-load-milestones/v1",
@@ -3122,6 +3153,8 @@ def run_loaded_route_proof(
         )
     if route_response_stats(response) is None:
         raise RuntimeError("cold-reopen route proof stats must be an object when present")
+    if not no_document_guardrails(response):
+        raise RuntimeError("cold-reopen route proof did not prove zero-fetch no-document guardrails")
     summary = proof_summary(row, index_name, response, request)
     route = {
         "name": summary["route"],

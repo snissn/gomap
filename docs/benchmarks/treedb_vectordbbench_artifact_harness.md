@@ -207,8 +207,11 @@ are structurally required. Completion requires the cold-reopened query to
 return exactly `requested_top_k` well-formed result objects. The validator
 parses the checksum-bound raw response and requires its no-document status,
 route, fallback status, reopened service generation, and result count to match
-the embedded event; empty, short, malformed, or contradictory responses fail
-closed.
+the embedded event. The raw response must also carry the service-emitted
+`no_document_guardrails_ok: true` diagnostic and exact zero
+`documents_fetched` and `document_bytes` counters (the service's Go JSON
+encoding omits those counters when zero); empty, short, malformed, or
+contradictory responses fail closed.
 
 Lifecycle validation requires the pinned Go toolchain for pprof and trace
 profiles, and Linux `perf` for perf-data profiles. A missing native decoder is

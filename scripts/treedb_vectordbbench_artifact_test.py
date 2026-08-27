@@ -113,7 +113,13 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         "index": {"generation": 7},
         "results": [{"id": "1"}, {"id": "2"}],
         "no_documents": True,
-        "diagnostics": {"route": "exact_hnsw_search_pack_v1", "fallback_reason": "none"},
+        "stats": {"search_route_hnsw_search_pack": 1},
+        "diagnostics": {
+            "route": "exact_hnsw_search_pack_v1",
+            "fallback_reason": "none",
+            "no_document_guardrails_ok": True,
+            "exact_hnsw_search_pack_no_doc_route": True,
+        },
     })
     stages = [
         "startup", "reset", "load_start", "load_end", "drain_checkpoint",
@@ -1160,6 +1166,14 @@ class LifecycleValidatorTest(unittest.TestCase):
             (lambda response: response.__setitem__("results", [{"id": "1"}]), "result count"),
             (lambda response: response.__setitem__("stats", []), "stats"),
             (lambda response: response.__setitem__("stats", "malformed"), "stats"),
+            (lambda response: response["stats"].__setitem__("documents_fetched", 1), "guardrails"),
+            (lambda response: response["stats"].__setitem__("document_bytes", 1), "guardrails"),
+            (
+                lambda response: response["diagnostics"].__setitem__(
+                    "no_document_guardrails_ok", False
+                ),
+                "guardrails",
+            ),
             (lambda response: response["index"].__setitem__("generation", 8), "generation"),
             (lambda response: response["diagnostics"].__setitem__("route", "quantized_rerank"), "route"),
         )
@@ -1439,6 +1453,51 @@ class LifecycleValidatorTest(unittest.TestCase):
 
             self.assertFalse(got["analyzable"], got)
             self.assertTrue(any(expected in error for error in got["errors"]), got)
+
+    def test_completed_fixture_rejects_unbounded_milestone_counts_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _ = lifecycle_fixture(root)
+            sidecar = root / "adapter-lifecycle.jsonl"
+            records = [json.loads(line) for line in sidecar.read_text(encoding="utf-8").splitlines()]
+            batch = next(record for record in records if record["event"] == "batch_accepted")
+            batch["client_sent"] = 10**309
+            batch["server_accepted"] = 10**309
+            sidecar.write_text(
+                "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            next(
+                artifact for artifact in manifest["lifecycle"]["raw_artifacts"]
+                if artifact["path"] == "adapter-lifecycle.jsonl"
+            )["sha256"] = harness.sha256_file(sidecar)
+            harness.write_json(root / "manifest.json", manifest)
+
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                exit_code = harness.main([
+                    "--validate-lifecycle", str(root), "--allow-partial",
+                ])
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any(
+            "cannot reconstruct lifecycle load milestones" in error for error in got["errors"]
+        ), got)
+
+    def test_milestone_builder_rejects_unbounded_counts(self) -> None:
+        records = [
+            {"event": "load_start", "timestamp_ns": 1},
+            {
+                "event": "batch_accepted",
+                "timestamp_ns": 1_000_000_001,
+                "client_sent": 10**309,
+                "server_accepted": 10**309,
+            },
+        ]
+
+        with self.assertRaisesRegex(ValueError, "supported finite milestone rate"):
+            harness.lifecycle_load_milestone_document(records)
 
     def test_completed_fixture_rejects_samples_at_or_after_later_boundaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2961,7 +3020,13 @@ class LifecycleIntegrationTest(unittest.TestCase):
                     "index": {"generation": 7},
                     "no_documents": True,
                     "results": [{"id": "1"}, {"id": "2"}],
-                    "diagnostics": {"route": "exact_hnsw_search_pack_v1", "fallback_reason": "none"},
+                    "stats": {"search_route_hnsw_search_pack": 1},
+                    "diagnostics": {
+                        "route": "exact_hnsw_search_pack_v1",
+                        "fallback_reason": "none",
+                        "no_document_guardrails_ok": True,
+                        "exact_hnsw_search_pack_no_doc_route": True,
+                    },
                 },
             ])
 
@@ -2992,7 +3057,13 @@ class LifecycleIntegrationTest(unittest.TestCase):
             "index": {"generation": 7},
             "no_documents": True,
             "results": [{"id": "1"}, {"id": "2"}],
-            "diagnostics": {"route": "exact_hnsw_search_pack_v1", "fallback_reason": "none"},
+            "stats": {"search_route_hnsw_search_pack": 1},
+            "diagnostics": {
+                "route": "exact_hnsw_search_pack_v1",
+                "fallback_reason": "none",
+                "no_document_guardrails_ok": True,
+                "exact_hnsw_search_pack_no_doc_route": True,
+            },
         }
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3030,6 +3101,27 @@ class LifecycleIntegrationTest(unittest.TestCase):
                 responses = iter([{"index": {"generation": 7}}, response])
                 with mock.patch.object(harness, "http_json", side_effect=lambda *_args, **_kwargs: next(responses)), \
                         self.assertRaisesRegex(RuntimeError, "stats must be an object"):
+                    harness.run_loaded_route_proof(
+                        state, args, "cohere", "cohere:vector_hnsw", 7, 7
+                    )
+
+        guardrail_mutations = (
+            lambda response: response["stats"].__setitem__("documents_fetched", 1),
+            lambda response: response["stats"].__setitem__("document_bytes", 1),
+            lambda response: response["diagnostics"].__setitem__(
+                "no_document_guardrails_ok", False
+            ),
+        )
+        for mutation in guardrail_mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                args, state, _sampler, _proc = self._complete_fixture(root)
+                response = json.loads(json.dumps(valid_response))
+                mutation(response)
+                responses = iter([{"index": {"generation": 7}}, response])
+                with mock.patch.object(
+                    harness, "http_json", side_effect=lambda *_args, **_kwargs: next(responses)
+                ), self.assertRaisesRegex(RuntimeError, "zero-fetch no-document guardrails"):
                     harness.run_loaded_route_proof(
                         state, args, "cohere", "cohere:vector_hnsw", 7, 7
                     )
