@@ -49,9 +49,9 @@ Each JSONL event uses `treedb-vectordbbench-lifecycle-event/v1`, an increasing
 sequence and UTC timestamp, and a state snapshot containing distinct
 `client_sent`, `server_accepted`, `server_durable`, and `reopened` row counts.
 WAL frontier/total-written counters and the selected cumulative product
-counters must also remain monotonic. Every event must repeat the same cumulative
-counter key set. `lifecycle.jsonl` must contain exactly one JSON object per line
-and no blank lines.
+counters must also remain monotonic. Every event must repeat the same non-empty
+cumulative counter key set. `lifecycle.jsonl` must contain exactly one JSON
+object per line and no blank lines.
 
 The strict gate requires these ordered markers:
 
@@ -72,7 +72,10 @@ JSONL, raw artifacts, and every profile window. The minimum effective
 configuration includes service profile, case type, concurrency, batch size,
 `m`, and `ef_construction`. Profile entries name existing
 before/after event sequences and use the same checksum as their raw-artifact
-entry. The optimized index identity and durable `asset_generation` must survive
+entry. Supported profile kinds are `cpu`, `heap`, `allocs`, `block`, and `mutex`
+as non-empty gzip-compressed `.pprof` files, Go `trace` as a `.out` file with a
+Go trace header, and Linux `perf` as a `.data` file with a perf-data header. The
+optimized index identity and durable `asset_generation` must survive
 close and cold reopen. H2 maps `asset_generation` to the vector-maintenance
 root ID, not the service's reopen-local generation counter. The artifact-owned
 database identity and server `commit_seq` must also match across close/reopen,

@@ -38,6 +38,7 @@ ROUTE_PROOF_SCHEMA = "treedb-vectordbbench-route-proof/v2"
 LIFECYCLE_SCHEMA = "treedb-vectordbbench-lifecycle/v1"
 LIFECYCLE_EVENT_SCHEMA = "treedb-vectordbbench-lifecycle-event/v1"
 LIFECYCLE_VALIDATION_SCHEMA = "treedb-vectordbbench-lifecycle-validation/v1"
+PPROF_PROFILE_KINDS = frozenset({"cpu", "heap", "allocs", "block", "mutex"})
 LIFECYCLE_STAGES = (
     "startup",
     "reset",
@@ -805,6 +806,18 @@ def _utc_timestamp(value: Any, label: str, errors: list[str]) -> _dt.datetime | 
     return parsed.astimezone(_dt.timezone.utc)
 
 
+def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
+    if not isinstance(kind, str):
+        return False
+    if kind in PPROF_PROFILE_KINDS:
+        return path.suffix == ".pprof" and data.startswith(b"\x1f\x8b\x08")
+    if kind == "trace":
+        return path.suffix == ".out" and re.match(rb"go 1\.[0-9]+ trace\x00\x00\x00", data) is not None
+    if kind == "perf":
+        return path.suffix == ".data" and data.startswith(b"PERFILE2")
+    return False
+
+
 def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     """Validate a lifecycle extension of the existing artifact-v1 envelope."""
     root = root.resolve()
@@ -1035,6 +1048,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         reopened = validated.get("rows.reopened")
         if None not in (sent, accepted, durable, reopened) and not (reopened <= durable <= accepted <= sent):
             errors.append(f"{prefix} row counts violate reopened <= durable <= accepted <= sent")
+    if counter_keys == set():
+        completion_errors.append("completed lifecycle requires a non-empty cumulative counter key set")
 
     for stage in LIFECYCLE_STAGES:
         if stage not in stage_events:
@@ -1161,6 +1176,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         relative = profile.get("path")
         before = profile.get("before_sequence")
         after = profile.get("after_sequence")
+        kind = profile.get("kind")
         if (
             not isinstance(relative, str)
             or relative not in raw_by_path
@@ -1174,8 +1190,16 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             or before >= after
         ):
             errors.append(f"profile state association {position} is invalid")
-        if not isinstance(profile.get("kind"), str) or not profile.get("kind"):
-            errors.append(f"profile {position} kind must be non-empty")
+        profile_path = _artifact_file(root, relative, f"profile {position}", errors)
+        if profile_path is not None:
+            try:
+                with profile_path.open("rb") as source:
+                    profile_data = source.read(64)
+            except OSError as exc:
+                errors.append(f"cannot read profile {position}: {exc}")
+            else:
+                if not _valid_profile_payload(kind, profile_path, profile_data):
+                    errors.append(f"profile {position} content does not match a supported kind")
 
     if all(stage in stage_events for stage in ("load_start", "load_end", "drain_checkpoint", "optimize_end", "graceful_close", "cold_open_ready")):
         boundaries = [
@@ -1493,6 +1517,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--allow-partial", action="store_true", help="return success for an analyzable partial lifecycle validation")
     parser.add_argument("--self-test", action="store_true", help="run route-proof summarizer self-test and exit")
     args = parser.parse_args(argv)
+    if args.self_test and args.validate_lifecycle:
+        parser.error("self-test and validate-lifecycle are mutually exclusive")
     if args.allow_partial and not args.validate_lifecycle:
         parser.error("allow-partial requires --validate-lifecycle")
     if args.validate_lifecycle:

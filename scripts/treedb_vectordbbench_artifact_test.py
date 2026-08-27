@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import gzip
 import io
 import inspect
 import json
@@ -18,7 +19,7 @@ import treedb_vectordbbench_artifact as harness
 def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
     profile = root / "profiles" / "build.cpu.pprof"
     profile.parent.mkdir(parents=True)
-    profile.write_bytes(b"profile")
+    profile.write_bytes(gzip.compress(b"\x48\x01", mtime=0))
     stages = [
         "startup", "reset", "load_start", "load_end", "drain_checkpoint",
         "optimize_start", "optimize_end", "cache_prime", "cache_warm",
@@ -472,6 +473,10 @@ class LifecycleValidatorTest(unittest.TestCase):
 
         self.assertEqual(missing_manifest, 1)
 
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            harness.main(["--self-test", "--validate-lifecycle", "/missing"])
+        self.assertEqual(raised.exception.code, 2)
+
     def test_complete_gate_rejects_missing_or_out_of_order_stage(self) -> None:
         for mutation, expected in (
             (lambda rows: rows.pop(5), "missing required stage optimize_start"),
@@ -629,6 +634,37 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["analyzable"])
         self.assertTrue(any("checksum mismatch" in item for item in got["errors"]), got)
 
+        for label in ("empty", "relabeled-jsonl"):
+            with self.subTest(profile_payload=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    profile = root / "profiles" / "build.cpu.pprof"
+                    payload = b"" if label == "empty" else (root / "lifecycle.jsonl").read_bytes()
+                    profile.write_bytes(payload)
+                    checksum = harness.sha256_file(profile)
+                    manifest["lifecycle"]["raw_artifacts"][0]["sha256"] = checksum
+                    manifest["lifecycle"]["profiles"][0]["sha256"] = checksum
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["complete"])
+                self.assertTrue(any("content does not match" in item for item in got["errors"]), got)
+
+        for kind in ("text", []):
+            with self.subTest(profile_kind=kind):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    manifest["lifecycle"]["profiles"][0]["kind"] = kind
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["complete"])
+                self.assertTrue(any("content does not match" in item for item in got["errors"]), got)
+
         for malformed in (999, []):
             with self.subTest(after_sequence=malformed):
                 with tempfile.TemporaryDirectory() as tmp:
@@ -672,6 +708,20 @@ class LifecycleValidatorTest(unittest.TestCase):
 
                 self.assertFalse(got["complete"])
                 self.assertTrue(any(expected in item for item in got["errors"]), got)
+
+    def test_completed_lifecycle_requires_nonempty_counters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            for event in events:
+                event["state"]["counters"] = {}
+            rewrite_lifecycle_fixture(root, manifest, events)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertTrue(got["analyzable"])
+        self.assertFalse(got["complete"])
+        self.assertTrue(any("non-empty cumulative counter" in item for item in got["completion_errors"]), got)
 
 
 class ManifestFileListTest(unittest.TestCase):
