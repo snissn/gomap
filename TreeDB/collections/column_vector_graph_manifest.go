@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -104,6 +105,8 @@ type columnVectorGraphPreparedPhysicalAsset struct {
 	stableSegments       uint64
 	stableContentSyncs   uint64
 	stableNamespaceSyncs uint64
+	stableFileSync       time.Duration
+	stableNamespaceSync  time.Duration
 }
 
 func columnVectorGraphManifestHasPhysicalAsset(snapshot columnVectorGraphManifestSnapshot) bool {
