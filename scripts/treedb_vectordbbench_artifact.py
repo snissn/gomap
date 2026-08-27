@@ -3043,6 +3043,8 @@ def run_loaded_route_proof(
     expected_service_generation: int | None = None,
 ) -> dict[str, Any]:
     opened = http_json("GET", index_url(args.base_url, index_name))
+    if not isinstance(opened, dict):
+        raise RuntimeError("cold-reopened index response must be an object")
     info = opened.get("index")
     if not isinstance(info, dict):
         raise RuntimeError("cold-reopened index response is missing index metadata")
@@ -3073,6 +3075,27 @@ def run_loaded_route_proof(
         )
     response = http_json("POST", index_url(args.base_url, index_name, "/search/vector-index"), request)
     write_json(state.root / "lifecycle_route_response.json", response)
+    if not isinstance(response, dict):
+        raise RuntimeError("cold-reopen route proof response must be an object")
+    response_index = response.get("index")
+    diagnostics = response.get("diagnostics")
+    if (
+        not isinstance(response_index, dict)
+        or isinstance(response_index.get("generation"), bool)
+        or not isinstance(response_index.get("generation"), int)
+        or response_index.get("generation") != service_generation
+    ):
+        raise RuntimeError("cold-reopen route proof response index generation is missing or stale")
+    if (
+        not isinstance(diagnostics, dict)
+        or not isinstance(diagnostics.get("route"), str)
+        or not diagnostics.get("route")
+        or not isinstance(diagnostics.get("fallback_reason"), str)
+        or not diagnostics.get("fallback_reason")
+    ):
+        raise RuntimeError("cold-reopen route proof diagnostics must name route and fallback status")
+    if response.get("no_documents") is not True:
+        raise RuntimeError("cold-reopen route proof must prove no-document search")
     results = response.get("results")
     if not identified_route_results(results, request["top_k"]):
         raise RuntimeError(
@@ -3092,7 +3115,7 @@ def run_loaded_route_proof(
         "requested_top_k": request["top_k"],
         "result_count": len(results),
     }
-    if not route["optimized"] or not response.get("no_documents"):
+    if not route["optimized"]:
         raise RuntimeError(f"cold-reopen route proof failed: {route}")
     return route
 

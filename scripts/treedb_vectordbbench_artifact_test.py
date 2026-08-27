@@ -2916,6 +2916,7 @@ class LifecycleIntegrationTest(unittest.TestCase):
                 {"count": 50000},
                 {"index": {"generation": 7}},
                 {
+                    "index": {"generation": 7},
                     "no_documents": True,
                     "results": [{"id": "1"}, {"id": "2"}],
                     "diagnostics": {"route": "exact_hnsw_search_pack_v1", "fallback_reason": "none"},
@@ -2946,6 +2947,7 @@ class LifecycleIntegrationTest(unittest.TestCase):
 
     def test_loaded_route_proof_requires_exact_requested_results(self) -> None:
         valid_response = {
+            "index": {"generation": 7},
             "no_documents": True,
             "results": [{"id": "1"}, {"id": "2"}],
             "diagnostics": {"route": "exact_hnsw_search_pack_v1", "fallback_reason": "none"},
@@ -2989,6 +2991,33 @@ class LifecycleIntegrationTest(unittest.TestCase):
                     harness.run_loaded_route_proof(
                         state, args, "cohere", "cohere:vector_hnsw", 7, 7
                     )
+
+        malformed = (
+            ([], "route proof response must be an object"),
+            (dict(valid_response, index=[]), "index generation"),
+            (dict(valid_response, index={"generation": 8}), "index generation"),
+            (dict(valid_response, diagnostics=[]), "diagnostics"),
+            (dict(valid_response, no_documents="true"), "no-document"),
+        )
+        for response, expected in malformed:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                args, state, _sampler, _proc = self._complete_fixture(root)
+                responses = iter([{"index": {"generation": 7}}, response])
+                with mock.patch.object(harness, "http_json", side_effect=lambda *_args, **_kwargs: next(responses)), \
+                        self.assertRaisesRegex(RuntimeError, expected):
+                    harness.run_loaded_route_proof(
+                        state, args, "cohere", "cohere:vector_hnsw", 7, 7
+                    )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args, state, _sampler, _proc = self._complete_fixture(root)
+            with mock.patch.object(harness, "http_json", return_value=[]), \
+                    self.assertRaisesRegex(RuntimeError, "index response must be an object"):
+                harness.run_loaded_route_proof(
+                    state, args, "cohere", "cohere:vector_hnsw", 7, 7
+                )
 
     def test_column_graph_ready_asset_uses_index_generation_not_root_id(self) -> None:
         optimize = {
