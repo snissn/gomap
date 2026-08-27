@@ -5,7 +5,7 @@
   "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
   "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
   "peak_rss_scope": "fresh_process_per_mode",
-  "peak_rss_pid": 49179,
+  "peak_rss_pid": 9710,
   "source_documents": 100000,
   "generated_chunks": 0,
   "indexed_live_rows": 100000,
@@ -22,13 +22,13 @@
     "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
   },
   "tombstone_debt": 0,
-  "source_docs_per_second": 87883.85235622132,
+  "source_docs_per_second": 105718.18655226144,
   "chunks_per_second": 0,
-  "indexed_rows_per_second": 87883.85235622132,
-  "wall_seconds": 1.137865459,
+  "indexed_rows_per_second": 105718.18655226144,
+  "wall_seconds": 0.945911042,
   "cpu_seconds": {
     "state": "observed",
-    "value": 1.405298
+    "value": 1.235235
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -40,11 +40,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 6314183
+    "value": 6314186
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 434978816
+    "value": 475611136
   },
   "stages": {
     "analyzer": {
@@ -53,7 +53,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.08096025
+      "value": 0.039167625
     },
     "posting_builder": {
       "state": "unavailable",
@@ -61,7 +61,7 @@
     },
     "reopen_validation": {
       "state": "observed",
-      "value": 0.102064791
+      "value": 0.098769
     },
     "root_mutation": {
       "state": "unavailable",
@@ -76,9 +76,9 @@
     "physical_index_page_bytes": 37224448,
     "physical_value_log_bytes": 0,
     "physical_wal_bytes": 0,
-    "physical_other_bytes": 374,
-    "physical_total_bytes": 37224822,
-    "physical_total_wal_excluded_bytes": 37224822,
+    "physical_other_bytes": 373,
+    "physical_total_bytes": 37224821,
+    "physical_total_wal_excluded_bytes": 37224821,
     "other_paths": [
       "LOCK",
       "format.json",
