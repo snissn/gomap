@@ -1707,6 +1707,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     if lifecycle.get("result_status") == "completed" and harness.get("vdbbench_dry_run") is not False:
         completion_errors.append("completed lifecycle requires vdbbench_dry_run=false")
     service_command = service.get("command")
+    effective_addr = None
     effective_dir = None
     effective_pprof = None
     if (
@@ -1720,6 +1721,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             "addr", "dir", "profile", "pprof", "block-profile-rate", "mutex-profile-fraction",
         }
         profile_values = []
+        effective_addr = "127.0.0.1:9876"
         effective_dir = "/tmp/treedb-document-service"
         effective_pprof = ""
         invalid_command = False
@@ -1760,6 +1762,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 invalid_command = True
             if name == "profile":
                 profile_values.append(value)
+            elif name == "addr":
+                effective_addr = value
             elif name == "dir":
                 effective_dir = value
             elif name == "pprof":
@@ -1773,6 +1777,14 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             or profile_values[0] != service.get("profile")
         ):
             errors.append("manifest.service.command has invalid flags or does not select exactly one matching profile")
+    base_url = service.get("base_url")
+    if (
+        not isinstance(base_url, str)
+        or not base_url
+        or effective_addr is None
+        or base_url != f"http://{effective_addr}"
+    ):
+        errors.append("manifest.service.base_url must match the effective service -addr")
     declared_data_dir = service.get("data_dir")
     if not isinstance(declared_data_dir, str) or not declared_data_dir:
         errors.append("manifest.service.data_dir must be a non-empty absolute path")
