@@ -250,7 +250,7 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntent(replay *b
 		status.BytesDisk = bytesDisk
 		idx.setNativePersistent(true)
 		idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
-		c.RegisterVectorIndex(idx)
+		c.registerVectorIndexCurrentCatalog(idx)
 	}
 	publicationMu.Unlock()
 	_ = iter.Close()

@@ -2860,6 +2860,61 @@ func TestRegisterNativeVectorIndexDoesNotHoldAdHocRegistryLock(t *testing.T) {
 	col.UnregisterVectorIndex(def.Name)
 }
 
+func TestVectorIndexRebuildAcquiresSchemaBeforeMutation(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	index, err := newVectorIndex(col, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	col.RegisterVectorIndex(index)
+
+	mutation := col.lockMutation()
+	rebuildStarted := make(chan struct{})
+	rebuilt := make(chan error, 1)
+	go func() {
+		close(rebuildStarted)
+		rebuilt <- index.Rebuild()
+	}()
+	<-rebuildStarted
+	select {
+	case err := <-rebuilt:
+		mutation.Unlock()
+		t.Fatalf("rebuild completed while mutation lock was held: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	coord := col.collectionSchemaCoordinator()
+	schemaWriteAcquired := coord.schemaMu.TryLock()
+	if schemaWriteAcquired {
+		coord.schemaMu.Unlock()
+	}
+	mutation.Unlock()
+	select {
+	case err := <-rebuilt:
+		if err != nil {
+			t.Fatalf("rebuild after mutation release: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("rebuild remained blocked after mutation release")
+	}
+	if schemaWriteAcquired {
+		t.Fatal("rebuild waited for the mutation lock without first holding the schema read lock")
+	}
+}
+
 func TestCollectionVectorIndexNativeRootMaintainsUpdatedDocument(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

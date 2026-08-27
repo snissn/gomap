@@ -5177,6 +5177,11 @@ func (idx *VectorIndex) Rebuild() error {
 	if c == nil {
 		return errCollectionNil
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	if _, err := c.refreshNativeVectorIndexDeclaration(idx.name); err != nil {
+		return err
+	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if c.vectorIndexRuntimeIsStale(idx) {
@@ -5234,7 +5239,7 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.requireFullNativeSnapshotLocked()
 	idx.publishSearchViewLocked(true)
 	idx.mu.Unlock()
-	c.RegisterVectorIndex(idx)
+	c.registerVectorIndexCurrentCatalog(idx)
 	if c.manager != nil && idx.needsNativeAutoPersist() {
 		c.manager.registerCollectionHandle(c)
 	}
