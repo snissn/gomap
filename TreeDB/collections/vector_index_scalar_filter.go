@@ -16,6 +16,12 @@ const (
 	// same-host crossover measurement across dimension and concurrency.
 	nativeScalarExactSafetyCap = 512
 	nativeScalarANNVisitFactor = 16
+	// Broad vector-aligned filters inspect at most the same 4,096 immutable
+	// scalar rows as the route-selection probe, spread deterministically across
+	// the graph. At most 32 matching rows become graph entries; all vector
+	// scoring, including entries, remains inside the ANN visit-factor budget.
+	nativeScalarANNSeedProbeLimit = nativeScalarProbeLimit
+	nativeScalarANNSeedLimit      = 32
 )
 
 // NativeScalarFilterPlan identifies the bounded declared-scalar execution route.
@@ -629,9 +635,12 @@ func populateNativeScalarColumnsFromSecondaryIndexes(idx *VectorIndex, snap *bac
 }
 
 type nativeScalarSearchWork struct {
-	visited   int
-	admitted  int
-	underfill bool
+	visited         int
+	scored          int
+	eligibleSeeds   int
+	seedRowsVisited int
+	admitted        int
+	underfill       bool
 }
 
 func (p *nativeScalarFilterExecution) exact() bool {
@@ -737,7 +746,14 @@ func (view *vectorIndexSearchView) searchWithNativeScalarFilterBuffer(query []fl
 		return nil, baseWork, err
 	}
 	merged, err := mergeVectorIndexViewResults(base, delta, topK, buffer)
-	work := nativeScalarSearchWork{visited: baseWork.visited + deltaWork.visited, admitted: len(merged), underfill: len(merged) < topK}
+	work := nativeScalarSearchWork{
+		visited:         baseWork.visited + deltaWork.visited,
+		scored:          baseWork.scored + deltaWork.scored,
+		eligibleSeeds:   baseWork.eligibleSeeds + deltaWork.eligibleSeeds,
+		seedRowsVisited: baseWork.seedRowsVisited + deltaWork.seedRowsVisited,
+		admitted:        len(merged),
+		underfill:       len(merged) < topK,
+	}
 	return merged, work, err
 }
 
@@ -761,8 +777,9 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 			if node.deleted || !plan.matches(columns, nodeID, node.documentID) {
 				continue
 			}
-			distance := runtimeIndex.distanceToNodeWithPreparedQueryLocked(query, queryNorm, prepared, nodeID)
 			work.visited++
+			distance := runtimeIndex.distanceToNodeWithPreparedQueryLocked(query, queryNorm, prepared, nodeID)
+			work.scored++
 			if !math.IsInf(float64(distance), 1) {
 				candidates = append(candidates, vectorIndexCandidate{nodeID: nodeID, distance: distance})
 			}
@@ -779,7 +796,7 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 		scratch.out = candidates
 	} else {
 		var err error
-		candidates, work.visited, err = runtimeIndex.searchNativeScalarCandidatesLocked(query, queryNorm, prepared, topK, efSearch, columns, plan, scratch)
+		candidates, work, err = runtimeIndex.searchNativeScalarCandidatesLocked(query, queryNorm, prepared, topK, efSearch, columns, plan, scratch)
 		if err != nil {
 			return nil, work, err
 		}
@@ -817,12 +834,13 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 	return *results, work, nil
 }
 
-func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, columns map[string]vectorIndexScalarColumn, plan *nativeScalarFilterExecution, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, int, error) {
+func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, columns map[string]vectorIndexScalarColumn, plan *nativeScalarFilterExecution, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, nativeScalarSearchWork, error) {
+	work := nativeScalarSearchWork{}
 	if idx.entry < 0 || len(idx.nodes) == 0 || topK <= 0 {
-		return nil, 0, nil
+		return nil, work, nil
 	}
 	if scratch == nil {
-		return nil, 0, errors.New("collections: native scalar search scratch is nil")
+		return nil, work, errors.New("collections: native scalar search scratch is nil")
 	}
 	limit := efSearch
 	if limit <= 0 {
@@ -833,27 +851,79 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 	if limit <= math.MaxInt/nativeScalarANNVisitFactor {
 		explorationLimit = minInt(explorationLimit, limit*nativeScalarANNVisitFactor)
 	}
-	entryPoint := idx.entry
-	for layer := idx.maxLevel; layer > 0; layer-- {
-		entryPoint = idx.greedyNearestAtLayerLocked(query, queryNorm, prepared, entryPoint, layer)
-	}
-	entryDistance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNorm, prepared, entryPoint)
-	if math.IsInf(float64(entryDistance), 1) {
-		return nil, 0, nil
-	}
 	scratch.explorationLimit = explorationLimit
 	visited, mark := scratch.nextVisitedEpoch(len(idx.nodes))
-	visited[entryPoint] = mark
 	queue := scratch.queue[:0]
-	entryCandidate := vectorIndexCandidate{nodeID: entryPoint, distance: entryDistance}
-	queue.push(entryCandidate)
 	navigation := scratch.best[:0]
-	navigation.pushBounded(entryCandidate, explorationLimit)
 	eligible := scratch.liveBest[:0]
-	if !idx.nodes[entryPoint].deleted && plan.matches(columns, entryPoint, idx.nodes[entryPoint].documentID) {
-		eligible.pushBounded(entryCandidate, topK)
+
+	seedEligibleRegion := plan.identity == NativeScalarFilterPlanVectorAligned
+	if seedEligibleRegion {
+		probeRows := minInt(len(idx.nodes), nativeScalarANNSeedProbeLimit)
+		seedBuckets := minInt(probeRows, nativeScalarANNSeedLimit)
+		// Preserve at least three quarters of the total score budget for the
+		// ordinary entry and graph navigation. Tiny ef/top-k searches must not
+		// spend their entire frontier on scalar-derived entries.
+		seedScoreLimit := minInt(nativeScalarANNSeedLimit, explorationLimit/4)
+		for bucket := 0; bucket < seedBuckets && work.scored < seedScoreLimit; bucket++ {
+			start := bucket * probeRows / seedBuckets
+			end := (bucket + 1) * probeRows / seedBuckets
+			for probe := start; probe < end; probe++ {
+				// Integer stratification visits every row for small graphs and
+				// evenly covers the full immutable ordinal space for large graphs.
+				nodeID := int(uint64(probe) * uint64(len(idx.nodes)) / uint64(probeRows))
+				work.seedRowsVisited++
+				node := &idx.nodes[nodeID]
+				if node.deleted || !plan.matches(columns, nodeID, node.documentID) {
+					continue
+				}
+				visited[nodeID] = mark
+				distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNorm, prepared, nodeID)
+				work.scored++
+				if math.IsInf(float64(distance), 1) {
+					continue
+				}
+				candidate := vectorIndexCandidate{nodeID: nodeID, distance: distance}
+				queue.push(candidate)
+				navigation.pushBounded(candidate, explorationLimit)
+				eligible.pushBounded(candidate, topK)
+				work.eligibleSeeds++
+				break
+			}
+		}
 	}
-	scored := 1
+
+	// Keep the ordinary HNSW entry beside the eligible-region samples. This
+	// preserves the established global route and handles selective filters
+	// whose entry happens to match without mistaking one row for an all-match
+	// predicate.
+	entryPoint := idx.entry
+	if seedEligibleRegion {
+		upperLimit := maxInt(0, explorationLimit-1)
+		for layer := idx.maxLevel; layer > 0 && work.scored < upperLimit; layer-- {
+			entryPoint = idx.greedyNearestAtLayerBoundedLocked(query, queryNorm, prepared, entryPoint, layer, upperLimit, &work.scored)
+		}
+	} else {
+		// Preserve the established finite and mixed routes.
+		for layer := idx.maxLevel; layer > 0; layer-- {
+			entryPoint = idx.greedyNearestAtLayerLocked(query, queryNorm, prepared, entryPoint, layer)
+		}
+	}
+	if work.scored < explorationLimit && visited[entryPoint] != mark {
+		entryDistance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNorm, prepared, entryPoint)
+		work.scored++
+		if !math.IsInf(float64(entryDistance), 1) {
+			visited[entryPoint] = mark
+			entryCandidate := vectorIndexCandidate{nodeID: entryPoint, distance: entryDistance}
+			queue.push(entryCandidate)
+			navigation.pushBounded(entryCandidate, explorationLimit)
+			node := &idx.nodes[entryPoint]
+			if !node.deleted && plan.matches(columns, entryPoint, node.documentID) {
+				eligible.pushBounded(entryCandidate, topK)
+			}
+		}
+	}
+
 search:
 	for len(queue) > 0 {
 		current := queue.pop()
@@ -865,12 +935,12 @@ search:
 			if nodeID < 0 || nodeID >= len(idx.nodes) || visited[nodeID] == mark {
 				continue
 			}
-			if scored >= explorationLimit {
+			if work.scored >= explorationLimit {
 				break search
 			}
 			visited[nodeID] = mark
 			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNorm, prepared, nodeID)
-			scored++
+			work.scored++
 			if math.IsInf(float64(distance), 1) {
 				continue
 			}
@@ -885,7 +955,8 @@ search:
 			}
 		}
 	}
-	scratch.explored = scored
+	work.visited = work.seedRowsVisited + work.scored
+	scratch.explored = work.scored
 	scratch.queue = queue[:0]
 	scratch.best = navigation[:0]
 	scratch.liveBest = eligible[:0]
@@ -893,5 +964,5 @@ search:
 	out = append(out, eligible...)
 	scratch.out = out
 	sortVectorIndexCandidates(out)
-	return out, scored, nil
+	return out, work, nil
 }

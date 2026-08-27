@@ -601,6 +601,8 @@ type VectorIndexSearchStats struct {
 	ScalarFilterRefinedCandidateIDs  uint64                 `json:"scalar_filter_refined_candidate_ids,omitempty"`
 	ScalarFilterVisited              uint64                 `json:"scalar_filter_visited,omitempty"`
 	ScalarFilterScored               uint64                 `json:"scalar_filter_scored,omitempty"`
+	ScalarFilterSeedRowsVisited      uint64                 `json:"scalar_filter_seed_rows_visited,omitempty"`
+	ScalarFilterEligibleSeeds        uint64                 `json:"scalar_filter_eligible_seeds,omitempty"`
 	ScalarFilterAdmitted             uint64                 `json:"scalar_filter_admitted,omitempty"`
 	ScalarFilterUnderfill            uint64                 `json:"scalar_filter_underfill,omitempty"`
 	ScalarFilterExactScoring         uint64                 `json:"scalar_filter_exact_scoring,omitempty"`
@@ -734,6 +736,9 @@ type VectorIndexSearchDiagnostics struct {
 	ScalarFilterProbeTruncated    uint64                                `json:"scalar_filter_probe_truncated,omitempty"`
 	ScalarFilterCandidateIDs      uint64                                `json:"scalar_filter_candidate_ids,omitempty"`
 	ScalarFilterVisited           uint64                                `json:"scalar_filter_visited,omitempty"`
+	ScalarFilterScored            uint64                                `json:"scalar_filter_scored,omitempty"`
+	ScalarFilterSeedRowsVisited   uint64                                `json:"scalar_filter_seed_rows_visited,omitempty"`
+	ScalarFilterEligibleSeeds     uint64                                `json:"scalar_filter_eligible_seeds,omitempty"`
 	ScalarFilterAdmitted          uint64                                `json:"scalar_filter_admitted,omitempty"`
 	ScalarFilterUnderfill         bool                                  `json:"scalar_filter_underfill,omitempty"`
 	ScalarFilterExactScoring      bool                                  `json:"scalar_filter_exact_scoring,omitempty"`
@@ -776,6 +781,9 @@ func (s VectorIndexSearchStats) Diagnostics() VectorIndexSearchDiagnostics {
 		ScalarFilterProbeTruncated:    s.ScalarFilterProbeTruncated,
 		ScalarFilterCandidateIDs:      s.ScalarFilterCandidateIDs,
 		ScalarFilterVisited:           s.ScalarFilterVisited,
+		ScalarFilterScored:            s.ScalarFilterScored,
+		ScalarFilterSeedRowsVisited:   s.ScalarFilterSeedRowsVisited,
+		ScalarFilterEligibleSeeds:     s.ScalarFilterEligibleSeeds,
 		ScalarFilterAdmitted:          s.ScalarFilterAdmitted,
 		ScalarFilterUnderfill:         s.ScalarFilterUnderfill > 0,
 		ScalarFilterExactScoring:      s.ScalarFilterExactScoring > 0,
@@ -1501,12 +1509,14 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 				response.Stats.ScalarFilterPlan = scalarPlan.identity
 				response.Stats.ScalarFilterProbeIDs = scalarPlan.probeIDs
 				response.Stats.ScalarFilterProbeTruncated = scalarPlan.probeTruncated
-				response.Stats.ScalarFilterCandidates = uint64(scalarWork.visited)
+				response.Stats.ScalarFilterCandidates = uint64(scalarWork.scored)
 				response.Stats.ScalarFilterCandidateIDs = scalarPlan.candidateIDs
 				response.Stats.ScalarFilterRetainedCandidateIDs = scalarPlan.retainedCandidateIDs
 				response.Stats.ScalarFilterRefinedCandidateIDs = scalarPlan.refinedCandidateIDs
 				response.Stats.ScalarFilterVisited = uint64(scalarWork.visited)
-				response.Stats.ScalarFilterScored = uint64(scalarWork.visited)
+				response.Stats.ScalarFilterScored = uint64(scalarWork.scored)
+				response.Stats.ScalarFilterSeedRowsVisited = uint64(scalarWork.seedRowsVisited)
+				response.Stats.ScalarFilterEligibleSeeds = uint64(scalarWork.eligibleSeeds)
 				response.Stats.ScalarFilterAdmitted = uint64(scalarWork.admitted)
 				if scalarWork.underfill {
 					response.Stats.ScalarFilterUnderfill = 1
