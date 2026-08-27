@@ -99,6 +99,7 @@ func (idx *VectorIndex) acknowledgeSearchViewStateLocked() {
 }
 
 func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
+	forceFull = forceFull || idx.searchViewForceFull
 	previous := idx.searchView.Load()
 	next := idx.searchViewSpare.Swap(nil)
 	if next != nil && !next.mu.TryLock() {
@@ -203,6 +204,7 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	if idx.liveDelta != nil {
 		clear(idx.liveDelta.searchViewDirty)
 	}
+	idx.searchViewForceFull = false
 	idx.acknowledgeSearchViewStateLocked()
 	idx.searchViewCurrent.Store(true)
 }
@@ -276,8 +278,18 @@ func (idx *VectorIndex) acquireSearchView() *vectorIndexSearchView {
 			break
 		}
 		if !idx.sourceDocumentRootsValid || !idx.searchViewAcknowledged {
+			view := idx.searchView.Load()
+			if view == nil {
+				idx.mu.Unlock()
+				return nil
+			}
+			if view.mu.TryRLock() {
+				idx.mu.Unlock()
+				return view
+			}
 			idx.mu.Unlock()
-			return nil
+			runtime.Gosched()
+			continue
 		}
 		if idx.searchViewAcknowledgedMutationSeq == idx.mutationSeq &&
 			idx.searchViewAcknowledgedGeneration == idx.sourceDocumentGeneration {

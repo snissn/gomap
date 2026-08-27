@@ -369,6 +369,7 @@ type VectorIndex struct {
 	searchViewCurrent    atomic.Bool
 	searchViewDirty      map[int]struct{}
 	trackSearchViewDirty bool
+	searchViewForceFull  bool
 	frozenPrefixBatches  uint64
 	liveDelta            *VectorIndex
 	scalarDefinitions    []IndexDefinition

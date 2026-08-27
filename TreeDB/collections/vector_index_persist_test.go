@@ -2066,9 +2066,14 @@ func TestNativeVectorCoverageNoopDoesNotRepublish(t *testing.T) {
 		t.Fatalf("insert seed: %v", err)
 	}
 	index := c.registeredVectorIndex(def.Name)
-	if index == nil || index.searchView.Load() == nil {
-		t.Fatal("seed insert did not publish native search view")
+	if index == nil {
+		t.Fatal("seed insert did not register native vector index")
 	}
+	view := index.acquireSearchView()
+	if view == nil {
+		t.Fatal("first acquisition did not publish native search view")
+	}
+	index.releaseSearchView(view)
 	before := index.searchView.Load()
 	if ids, err := c.InsertBatch(nil, nil); err != nil || len(ids) != 0 {
 		t.Fatalf("empty insert ids=%q err=%v", ids, err)
@@ -4673,14 +4678,14 @@ func TestCollectionVectorIndexNativeRootReopenMaintainsLoadedGraphOnWrite(t *tes
 		t.Fatal("write did not retain the loaded persisted vector index")
 	}
 	staleView := loadedBeforeSearch.searchView.Load()
-	if staleView == nil {
-		t.Fatal("persisted index load did not retain its immutable snapshot")
-	}
 	loadedBeforeSearch.mu.RLock()
 	staleMutation := loadedBeforeSearch.mutationSeq
 	loadedBeforeSearch.mu.RUnlock()
-	if staleView.mutationSeq == staleMutation {
+	if staleView != nil && staleView.mutationSeq == staleMutation {
 		t.Fatalf("acknowledged reopen write published mutation %d before acquisition", staleMutation)
+	}
+	if loadedBeforeSearch.searchViewCurrent.Load() {
+		t.Fatal("acknowledged reopen write left the immutable view marked current")
 	}
 	if err := reopenedCol.Flush(); err != nil {
 		t.Fatalf("flush reopened vector write: %v", err)
@@ -4701,8 +4706,11 @@ func TestCollectionVectorIndexNativeRootReopenMaintainsLoadedGraphOnWrite(t *tes
 	if published == nil {
 		t.Fatal("post-reopen acquisition did not publish an immutable view")
 	}
-	if published == staleView || published.mutationSeq != staleMutation {
-		t.Fatalf("post-reopen acquisition view=%p stale=%p mutation=%d want %d", published, staleView, published.mutationSeq, staleMutation)
+	if staleView != nil && published == staleView {
+		t.Fatalf("post-reopen acquisition retained stale view %p", staleView)
+	}
+	if published.mutationSeq != staleMutation {
+		t.Fatalf("post-reopen acquisition mutation=%d want %d", published.mutationSeq, staleMutation)
 	}
 	if _, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true}); err != nil {
 		t.Fatalf("repeat search maintained vector index: %v", err)
