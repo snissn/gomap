@@ -63,6 +63,12 @@ startup -> reset -> load_start -> load_end -> drain_checkpoint
 -> graceful_close -> cold_open_ready -> exact_verify -> route_verify -> teardown
 ```
 
+The TreeDB adapter emits `cache_prime` only after serial search completes and
+`cache_warm` only after concurrent search completes. The runner synchronously
+samples and acknowledges both boundaries, so their timestamps and state are
+not aliases of `optimize_end`. Lifecycle mode therefore requires both search
+phases; ordinary VectorDBBench runs retain their default phase ordering.
+
 The integrated runner creates `startup` and a `partial` lifecycle declaration
 after the service health gate but before invoking VDBBench. Here `startup`
 means the beginning of lifecycle observation, not the operating-system process

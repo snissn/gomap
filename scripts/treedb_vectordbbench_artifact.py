@@ -100,7 +100,9 @@ VDBBENCH_OWNED_OPTIONS = frozenset({
     "--skip-search-serial",
     "--timeout",
 })
-LIFECYCLE_DIAGNOSTIC_BOUNDARIES = ("load_end", "optimize_start", "optimize_end")
+LIFECYCLE_DIAGNOSTIC_BOUNDARIES = (
+    "load_end", "optimize_start", "optimize_end", "cache_prime", "cache_warm",
+)
 
 
 def iso_now() -> str:
@@ -1258,26 +1260,25 @@ def read_adapter_lifecycle_sidecar(path: Path) -> dict[str, Any]:
     """Read the adapter's complete boundary stream, rejecting partial evidence."""
     records = read_adapter_lifecycle_records(path)
     events = [record.get("event") for record in records]
-    if len(records) < 6 or events[:2] != ["reset", "load_start"] or events[-3:] != [
-        "load_end",
-        "optimize_start",
-        "optimize_end",
-    ]:
+    tail = ["load_end", "optimize_start", "optimize_end", "cache_prime", "cache_warm"]
+    if len(records) < 8 or events[:2] != ["reset", "load_start"] or events[-5:] != tail:
         raise ValueError("adapter lifecycle sidecar is missing required ordered boundaries")
-    batches = records[2:-3]
+    batches = records[2:-5]
     if not batches or any(record.get("event") != "batch_accepted" for record in batches):
         raise ValueError("adapter lifecycle sidecar must contain only accepted batches between load boundaries")
     reset_ns = records[0]["timestamp_ns"]
     load_start_ns = records[1]["timestamp_ns"]
-    load_end_ns = records[-3]["timestamp_ns"]
-    optimize_start_ns = records[-2]["timestamp_ns"]
-    optimize_end_ns = records[-1]["timestamp_ns"]
-    if not reset_ns <= load_start_ns <= load_end_ns <= optimize_start_ns <= optimize_end_ns:
+    load_end_ns = records[-5]["timestamp_ns"]
+    optimize_start_ns = records[-4]["timestamp_ns"]
+    optimize_end_ns = records[-3]["timestamp_ns"]
+    cache_prime_ns = records[-2]["timestamp_ns"]
+    cache_warm_ns = records[-1]["timestamp_ns"]
+    if not reset_ns <= load_start_ns <= load_end_ns <= optimize_start_ns <= optimize_end_ns < cache_prime_ns < cache_warm_ns:
         raise ValueError("adapter lifecycle boundary timestamps are out of order")
     if any(not load_start_ns <= record["timestamp_ns"] <= load_end_ns for record in batches):
         raise ValueError("adapter lifecycle batch timestamp falls outside the load boundaries")
     reset_response = records[0].get("response")
-    optimize_response = records[-1].get("response")
+    optimize_response = records[-3].get("response")
     if not isinstance(reset_response, dict) or not isinstance(optimize_response, dict):
         raise ValueError("adapter lifecycle reset and optimize responses must be objects")
     client_sent = 0
@@ -1307,6 +1308,8 @@ def read_adapter_lifecycle_sidecar(path: Path) -> dict[str, Any]:
         "load_end_ns": load_end_ns,
         "optimize_start_ns": optimize_start_ns,
         "optimize_end_ns": optimize_end_ns,
+        "cache_prime_ns": cache_prime_ns,
+        "cache_warm_ns": cache_warm_ns,
         "optimize_response": optimize_response,
     }
 
@@ -2767,20 +2770,37 @@ def finalize_partial_lifecycle(
                 sent += batch_sent
                 accepted += batch_accepted
             continue
-        stage = event if event in {"reset", "load_start", "load_end", "optimize_start"} else None
+        stage = event if event in {
+            "reset", "load_start", "load_end", "optimize_start", "optimize_end", "cache_prime", "cache_warm",
+        } else None
         if stage is None or stage in existing:
             continue
         rows = lifecycle_rows()
-        if stage in {"load_end", "optimize_start"}:
+        if stage in {"load_end", "optimize_start", "optimize_end", "cache_prime", "cache_warm"}:
             rows = lifecycle_rows(sent, accepted, accepted)
-        if sampler is not None and stage in {"load_end", "optimize_start"}:
+        if sampler is not None and stage in LIFECYCLE_DIAGNOSTIC_BOUNDARIES:
             try:
                 snapshot = boundary_diagnostics_snapshot(stage, record["timestamp_ns"], sampler)
             except ValueError:
                 snapshot = sampler.at(record["timestamp_ns"])
         else:
             snapshot = sampler.at(record["timestamp_ns"]) if sampler is not None else {}
-        journal.append(stage, builder.build(snapshot, rows), timestamp=iso_from_ns(record["timestamp_ns"]))
+        index = None
+        if stage in {"optimize_end", "cache_prime", "cache_warm"}:
+            optimize = next(
+                (item.get("response") for item in records if item.get("event") == "optimize_end"), None
+            )
+            if not isinstance(optimize, dict):
+                break
+            try:
+                identity, generation, _ = lifecycle_ready_asset(optimize, lifecycle_index_name(args))
+            except (AttributeError, KeyError, RuntimeError, TypeError, ValueError):
+                break
+            index = {"identity": identity, "asset_generation": generation, "status": "ready"}
+        journal.append(
+            stage, builder.build(snapshot, rows, index=index),
+            timestamp=iso_from_ns(record["timestamp_ns"]),
+        )
         existing.add(stage)
 
 
@@ -2968,6 +2988,12 @@ def complete_lifecycle(
     optimize_end_snapshot = boundary_diagnostics_snapshot(
         "optimize_end", adapter["optimize_end_ns"], sampler
     )
+    cache_prime_snapshot = boundary_diagnostics_snapshot(
+        "cache_prime", adapter["cache_prime_ns"], sampler
+    )
+    cache_warm_snapshot = boundary_diagnostics_snapshot(
+        "cache_warm", adapter["cache_warm_ns"], sampler
+    )
     journal.append(
         "reset",
         builder.build(sampler.at(adapter["reset_ns"]), zero),
@@ -3004,8 +3030,14 @@ def complete_lifecycle(
         "optimize_end", builder.build(optimize_end_snapshot, loaded, index=index_state),
         timestamp=iso_from_ns(adapter["optimize_end_ns"]),
     )
-    journal.append("cache_prime", builder.build(optimize_end_snapshot, loaded, index=index_state), timestamp=iso_from_ns(adapter["optimize_end_ns"]))
-    journal.append("cache_warm", builder.build(optimize_end_snapshot, loaded, index=index_state), timestamp=iso_from_ns(adapter["optimize_end_ns"]))
+    journal.append(
+        "cache_prime", builder.build(cache_prime_snapshot, loaded, index=index_state),
+        timestamp=iso_from_ns(adapter["cache_prime_ns"]),
+    )
+    journal.append(
+        "cache_warm", builder.build(cache_warm_snapshot, loaded, index=index_state),
+        timestamp=iso_from_ns(adapter["cache_warm_ns"]),
+    )
 
     profile_path = state.root / "profiles" / "optimize.heap.pprof"
     fetch_file(f"{args.diagnostics_url}/debug/pprof/heap?gc=1", profile_path)
@@ -3332,8 +3364,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             parser.error("lifecycle completion currently requires command_wal_durable")
         if not loopback_host(args.host):
             parser.error("lifecycle host must be a loopback address")
-        if args.skip_search_serial and args.skip_search_concurrent:
-            parser.error("lifecycle requires at least one VDBBench search phase")
+        if args.skip_search_serial or args.skip_search_concurrent:
+            parser.error("lifecycle requires serial and concurrent VDBBench search phases")
         try:
             extra_args = shlex.split(args.vdbbench_extra_args)
         except ValueError as exc:

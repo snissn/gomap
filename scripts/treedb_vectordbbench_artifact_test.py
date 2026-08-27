@@ -519,10 +519,10 @@ class SmokeShapeTest(unittest.TestCase):
                         self.assertRaises(SystemExit):
                     harness.parse_args([*base, f"--vdbbench-extra-args={argument}"])
 
-            args = harness.parse_args([*base, "--skip-search-serial"])
-
-        self.assertTrue(args.skip_search_serial)
-        self.assertFalse(args.skip_search_concurrent)
+            for option in ("--skip-search-serial", "--skip-search-concurrent"):
+                with self.subTest(option=option), contextlib.redirect_stderr(io.StringIO()), \
+                        self.assertRaises(SystemExit):
+                    harness.parse_args([*base, option])
 
     def test_lifecycle_preserves_adapter_specific_extra_args(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -706,6 +706,12 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
                 records.append({"event": "optimize_end", "timestamp_ns": 8, "response": {}})
                 write_records()
                 wait_for_ack("optimize_end", 8)
+                records.append({"event": "cache_prime", "timestamp_ns": 10})
+                write_records()
+                wait_for_ack("cache_prime", 10)
+                records.append({"event": "cache_warm", "timestamp_ns": 12})
+                write_records()
+                wait_for_ack("cache_warm", 12)
                 return mock.Mock(command_string="vdbbench exact", exit_code=0)
 
             with mock.patch.object(harness, "run_command", side_effect=run), \
@@ -723,9 +729,9 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
             acknowledgement = json.loads((root / "lifecycle-boundary-diagnostics.json").read_text())
 
         self.assertEqual(acknowledgement, {
-            "boundary": "optimize_end",
-            "boundary_timestamp_ns": 8,
-            "sample_timestamp_ns": 9,
+            "boundary": "cache_warm",
+            "boundary_timestamp_ns": 12,
+            "sample_timestamp_ns": 13,
         })
 
     def test_canonical_result_records_separated_durations_and_checksum(self) -> None:
@@ -2459,28 +2465,24 @@ class LifecycleIntegrationTest(unittest.TestCase):
             },
             "collections": {},
         }
+        boundary_snapshots = {
+            boundary: {**snapshot, "phase": boundary}
+            for boundary in harness.LIFECYCLE_DIAGNOSTIC_BOUNDARIES
+        }
 
         class Sampler:
-            samples = [
-                {"timestamp_ns": 1, "snapshot": snapshot},
+            samples = [{"timestamp_ns": 1, "snapshot": snapshot}] + [
                 {
-                    "timestamp_ns": 5,
-                    "snapshot": snapshot,
-                    "boundary": "load_end",
-                    "boundary_timestamp_ns": 5,
-                },
-                {
-                    "timestamp_ns": 6,
-                    "snapshot": snapshot,
-                    "boundary": "optimize_start",
-                    "boundary_timestamp_ns": 6,
-                },
-                {
-                    "timestamp_ns": 7,
-                    "snapshot": snapshot,
-                    "boundary": "optimize_end",
-                    "boundary_timestamp_ns": 7,
-                },
+                    "timestamp_ns": timestamp_ns,
+                    "snapshot": boundary_snapshots[boundary],
+                    "boundary": boundary,
+                    "boundary_timestamp_ns": timestamp_ns,
+                }
+                for boundary, timestamp_ns in zip(
+                    harness.LIFECYCLE_DIAGNOSTIC_BOUNDARIES,
+                    (5, 6, 7, 1_000_000_008, 2_000_000_009),
+                    strict=True,
+                )
             ]
 
             def stop(self):
@@ -2490,7 +2492,7 @@ class LifecycleIntegrationTest(unittest.TestCase):
                 return snapshot
 
             def sample(self):
-                record = {"timestamp_ns": 8, "snapshot": snapshot}
+                record = {"timestamp_ns": 3_000_000_010, "snapshot": snapshot}
                 self.samples.append(record)
                 return record
 
@@ -2522,14 +2524,16 @@ class LifecycleIntegrationTest(unittest.TestCase):
                     },
                 },
             },
+            {"event": "cache_prime", "timestamp_ns": 1_000_000_008},
+            {"event": "cache_warm", "timestamp_ns": 2_000_000_009},
         ]
         (root / "adapter-lifecycle.jsonl").write_text(
             "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
         )
         harness.write_json(root / "lifecycle-boundary-diagnostics.json", {
-            "boundary": "optimize_end",
-            "boundary_timestamp_ns": 7,
-            "sample_timestamp_ns": 7,
+            "boundary": "cache_warm",
+            "boundary_timestamp_ns": 2_000_000_009,
+            "sample_timestamp_ns": 2_000_000_009,
         })
         proc = mock.Mock(returncode=None)
         return args, state, Sampler(), proc
@@ -2540,6 +2544,8 @@ class LifecycleIntegrationTest(unittest.TestCase):
             "load_end": {"phase": "loaded"},
             "optimize_start": {"phase": "build-started"},
             "optimize_end": {"phase": "build-finished"},
+            "cache_prime": {"phase": "serial-finished"},
+            "cache_warm": {"phase": "concurrent-finished"},
         }
 
         class Sampler:
@@ -2551,12 +2557,12 @@ class LifecycleIntegrationTest(unittest.TestCase):
                     "boundary_timestamp_ns": timestamp_ns,
                 }
                 for boundary, timestamp_ns in zip(
-                    harness.LIFECYCLE_DIAGNOSTIC_BOUNDARIES, (4, 6, 8), strict=True
+                    harness.LIFECYCLE_DIAGNOSTIC_BOUNDARIES, (4, 6, 8, 10, 12), strict=True
                 )
             ]
 
         for boundary, timestamp_ns in zip(
-            harness.LIFECYCLE_DIAGNOSTIC_BOUNDARIES, (4, 6, 8), strict=True
+            harness.LIFECYCLE_DIAGNOSTIC_BOUNDARIES, (4, 6, 8, 10, 12), strict=True
         ):
             with self.subTest(boundary=boundary):
                 got = harness.boundary_diagnostics_snapshot(boundary, timestamp_ns, Sampler())
@@ -2616,6 +2622,8 @@ class LifecycleIntegrationTest(unittest.TestCase):
         self.assertEqual((profile["before_sequence"], profile["after_sequence"]), (8, 9))
         self.assertEqual(events[8]["stage"], "cache_warm")
         self.assertEqual(events[9]["stage"], "graceful_close")
+        self.assertLess(events[6]["timestamp"], events[7]["timestamp"])
+        self.assertLess(events[7]["timestamp"], events[8]["timestamp"])
 
     def test_loaded_route_proof_requires_exact_requested_results(self) -> None:
         valid_response = {
@@ -2740,6 +2748,8 @@ class LifecycleIntegrationTest(unittest.TestCase):
                     "timestamp_ns": 7,
                     "response": {"index": {"name": "cohere", "generation": 7}, "status": {"root_id": 9}},
                 },
+                {"event": "cache_prime", "timestamp_ns": 8},
+                {"event": "cache_warm", "timestamp_ns": 9},
             )
             path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
 
@@ -2749,6 +2759,8 @@ class LifecycleIntegrationTest(unittest.TestCase):
         self.assertEqual(got["server_accepted"], 5)
         self.assertEqual(got["load_start_ns"], 2)
         self.assertEqual(got["load_end_ns"], 5)
+        self.assertEqual(got["cache_prime_ns"], 8)
+        self.assertEqual(got["cache_warm_ns"], 9)
         self.assertEqual(got["optimize_response"]["status"]["root_id"], 9)
 
     def test_adapter_lifecycle_sidecar_rejects_partial_or_missing_boundaries(self) -> None:
@@ -2761,6 +2773,31 @@ class LifecycleIntegrationTest(unittest.TestCase):
                     {"event": "load_start", "timestamp_ns": 2},
                     {"event": "batch_accepted", "timestamp_ns": 3, "client_sent": 1, "server_accepted": 1},
                     {"event": "load_end", "timestamp_ns": 4},
+                )
+            ),
+            "missing cache warm": "".join(
+                json.dumps(record) + "\n"
+                for record in (
+                    {"event": "reset", "timestamp_ns": 1, "response": {}},
+                    {"event": "load_start", "timestamp_ns": 2},
+                    {"event": "batch_accepted", "timestamp_ns": 3, "client_sent": 1, "server_accepted": 1},
+                    {"event": "load_end", "timestamp_ns": 4},
+                    {"event": "optimize_start", "timestamp_ns": 5},
+                    {"event": "optimize_end", "timestamp_ns": 6, "response": {}},
+                    {"event": "cache_prime", "timestamp_ns": 7},
+                )
+            ),
+            "malformed cache order": "".join(
+                json.dumps(record) + "\n"
+                for record in (
+                    {"event": "reset", "timestamp_ns": 1, "response": {}},
+                    {"event": "load_start", "timestamp_ns": 2},
+                    {"event": "batch_accepted", "timestamp_ns": 3, "client_sent": 1, "server_accepted": 1},
+                    {"event": "load_end", "timestamp_ns": 4},
+                    {"event": "optimize_start", "timestamp_ns": 5},
+                    {"event": "optimize_end", "timestamp_ns": 6, "response": {}},
+                    {"event": "cache_warm", "timestamp_ns": 7},
+                    {"event": "cache_prime", "timestamp_ns": 8},
                 )
             ),
         }
@@ -2781,6 +2818,8 @@ class LifecycleIntegrationTest(unittest.TestCase):
                 {"event": "load_end", "timestamp_ns": 4},
                 {"event": "optimize_start", "timestamp_ns": 5},
                 {"event": "optimize_end", "timestamp_ns": 6, "response": {}},
+                {"event": "cache_prime", "timestamp_ns": 7},
+                {"event": "cache_warm", "timestamp_ns": 8},
             )
             path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
 
@@ -2804,7 +2843,10 @@ class LifecycleIntegrationTest(unittest.TestCase):
             ]
 
         self.assertEqual(state.lifecycle["result_status"], "partial")
-        self.assertEqual(stages, ["startup", "reset", "load_start", "load_end", "optimize_start"])
+        self.assertEqual(stages, [
+            "startup", "reset", "load_start", "load_end", "optimize_start",
+            "optimize_end", "cache_prime",
+        ])
 
     def test_partial_lifecycle_falls_back_when_exact_boundary_sample_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2823,7 +2865,10 @@ class LifecycleIntegrationTest(unittest.TestCase):
                 for line in (root / "lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
             ]
 
-        self.assertEqual(stages, ["startup", "reset", "load_start", "load_end", "optimize_start"])
+        self.assertEqual(stages, [
+            "startup", "reset", "load_start", "load_end", "optimize_start",
+            "optimize_end", "cache_prime",
+        ])
 
     def test_complete_lifecycle_still_requires_exact_boundary_samples(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
