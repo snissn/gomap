@@ -1029,16 +1029,28 @@ def _utc_timestamp(value: Any, label: str, errors: list[str]) -> _dt.datetime | 
         return None
 
 
+_UTC_EPOCH = _dt.datetime(1970, 1, 1, tzinfo=_dt.timezone.utc)
+
+
+def _datetime_from_ns(value: int) -> _dt.datetime:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError("nanosecond timestamp must be an integer")
+    seconds, nanoseconds = divmod(value, 1_000_000_000)
+    try:
+        return _UTC_EPOCH + _dt.timedelta(
+            seconds=seconds, microseconds=nanoseconds // 1_000
+        )
+    except OverflowError as exc:
+        raise ValueError("nanosecond timestamp is outside the supported UTC datetime range") from exc
+
+
 def _utc_datetime_from_ns(value: Any, label: str, errors: list[str]) -> _dt.datetime | None:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         errors.append(f"{label} must be a positive integer")
         return None
-    seconds, nanoseconds = divmod(value, 1_000_000_000)
     try:
-        return _dt.datetime.fromtimestamp(seconds, _dt.timezone.utc) + _dt.timedelta(
-            microseconds=nanoseconds // 1_000
-        )
-    except (OverflowError, OSError, ValueError):
+        return _datetime_from_ns(value)
+    except ValueError:
         errors.append(f"{label} is outside the supported UTC datetime range")
         return None
 
@@ -2714,9 +2726,7 @@ def run_vdbbench_rows(
 
 
 def iso_from_ns(timestamp_ns: int) -> str:
-    return _dt.datetime.fromtimestamp(timestamp_ns / 1_000_000_000, _dt.timezone.utc).isoformat().replace(
-        "+00:00", "Z"
-    )
+    return _datetime_from_ns(timestamp_ns).isoformat().replace("+00:00", "Z")
 
 
 def snapshot_int(snapshot: dict[str, Any], section: str, key: str) -> int:

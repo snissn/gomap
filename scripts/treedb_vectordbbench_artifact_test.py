@@ -299,6 +299,31 @@ class RouteProofSummaryTest(unittest.TestCase):
     def test_iso_now_is_utc(self) -> None:
         self.assertTrue(harness.iso_now().endswith("Z"))
 
+    def test_nanosecond_timestamps_use_one_integer_safe_microsecond_policy(self) -> None:
+        second = 1_777_000_000_000_000_000
+        for timestamp_ns, expected in (
+            (second + 123_456_789, "2026-04-24T03:06:40.123456Z"),
+            (second + 999_999_999, "2026-04-24T03:06:40.999999Z"),
+            (second + 1_000_000_000, "2026-04-24T03:06:41Z"),
+        ):
+            with self.subTest(timestamp_ns=timestamp_ns):
+                self.assertEqual(harness.iso_from_ns(timestamp_ns), expected)
+                self.assertEqual(
+                    harness._utc_timestamp(expected, "timestamp", []),
+                    harness._datetime_from_ns(timestamp_ns),
+                )
+
+    def test_nanosecond_timestamp_supported_extrema_and_overflow(self) -> None:
+        minimum_ns = -62_135_596_800_000_000_000
+        maximum_ns = 253_402_300_800_000_000_000 - 1
+        self.assertEqual(harness.iso_from_ns(minimum_ns), "0001-01-01T00:00:00Z")
+        self.assertEqual(harness.iso_from_ns(maximum_ns), "9999-12-31T23:59:59.999999Z")
+        for timestamp_ns in (minimum_ns - 1, maximum_ns + 1):
+            with self.subTest(timestamp_ns=timestamp_ns), self.assertRaisesRegex(
+                ValueError, "outside the supported UTC datetime range"
+            ):
+                harness.iso_from_ns(timestamp_ns)
+
     def test_cpu_brand_is_recorded(self) -> None:
         self.assertTrue(harness.cpu_brand())
 
@@ -1366,6 +1391,47 @@ class LifecycleValidatorTest(unittest.TestCase):
             len(harness.LIFECYCLE_DIAGNOSTIC_BOUNDARIES) - 1,
             got,
         )
+
+    def test_completed_fixture_uses_emitter_microsecond_policy_for_boundary_ns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            sidecar = root / "adapter-lifecycle.jsonl"
+            sidecar_records = [
+                json.loads(line) for line in sidecar.read_text(encoding="utf-8").splitlines()
+            ]
+            load_end = next(record for record in sidecar_records if record["event"] == "load_end")
+            load_end["timestamp_ns"] += 123_456_789
+            next(event for event in events if event["stage"] == "load_end")["timestamp"] = (
+                harness.iso_from_ns(load_end["timestamp_ns"])
+            )
+            sidecar.write_text(
+                "".join(json.dumps(record, sort_keys=True) + "\n" for record in sidecar_records),
+                encoding="utf-8",
+            )
+            diagnostics = root / "diagnostics.jsonl"
+            diagnostics_records = [
+                json.loads(line) for line in diagnostics.read_text(encoding="utf-8").splitlines()
+            ]
+            load_sample = next(
+                record for record in diagnostics_records if record.get("boundary") == "load_end"
+            )
+            load_sample["boundary_timestamp_ns"] = load_end["timestamp_ns"]
+            load_sample["timestamp_ns"] = load_end["timestamp_ns"]
+            diagnostics.write_text(
+                "".join(json.dumps(record, sort_keys=True) + "\n" for record in diagnostics_records),
+                encoding="utf-8",
+            )
+            for artifact in manifest["lifecycle"]["raw_artifacts"]:
+                if artifact["path"] == "adapter-lifecycle.jsonl":
+                    artifact["sha256"] = harness.sha256_file(sidecar)
+                elif artifact["path"] == "diagnostics.jsonl":
+                    artifact["sha256"] = harness.sha256_file(diagnostics)
+            rewrite_lifecycle_fixture(root, manifest, events)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertTrue(got["complete"], got)
 
     def test_raw_evidence_timestamp_range_errors_are_structured(self) -> None:
         for timestamp_ns in (10**30, -(10**30)):

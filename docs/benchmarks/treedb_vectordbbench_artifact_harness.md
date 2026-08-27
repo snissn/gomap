@@ -73,7 +73,9 @@ Completed validation checksum-binds and cross-checks `adapter-lifecycle.jsonl`,
 load/build/search boundary timestamps must match their lifecycle stages and
 exact tagged diagnostics samples. Each sample must occur at or after its own
 boundary and before the next boundary; the final acknowledgement proves the
-`cache_warm` sample. Partial artifacts may omit boundaries not yet reached.
+`cache_warm` sample. Nanosecond boundary values and emitted RFC3339 lifecycle
+timestamps share one integer conversion that truncates sub-microsecond digits.
+Partial artifacts may omit boundaries not yet reached.
 
 The integrated runner creates `startup` and a `partial` lifecycle declaration
 after the service health gate but before invoking VDBBench. Here `startup`
