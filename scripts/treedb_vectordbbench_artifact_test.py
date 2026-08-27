@@ -532,6 +532,63 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertEqual(got["last_stage"], "load_end")
         self.assertTrue(any("result_status" in item for item in got["completion_errors"]))
 
+    def test_result_status_must_be_a_string_without_cli_traceback(self) -> None:
+        for status, use_cli in (([], False), ({}, True)):
+            with self.subTest(status=status, cli=use_cli):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    manifest["lifecycle"]["result_status"] = status
+                    harness.write_json(root / "manifest.json", manifest)
+                    if use_cli:
+                        output = io.StringIO()
+                        with contextlib.redirect_stdout(output):
+                            exit_code = harness.main([
+                                "--validate-lifecycle", str(root), "--allow-partial",
+                            ])
+                        got = json.loads(output.getvalue())
+                        self.assertEqual(exit_code, 1)
+                    else:
+                        got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["analyzable"], got)
+                self.assertTrue(any("result_status must be" in item for item in got["errors"]), got)
+
+    def test_nonfinite_json_is_structurally_invalid_in_complete_and_partial_artifacts(self) -> None:
+        cases = (
+            ("complete-manifest-nan", "manifest", float("nan"), "completed", False),
+            ("complete-event-infinity", "event", float("inf"), "completed", False),
+            ("partial-event-negative-infinity", "event", float("-inf"), "partial", True),
+        )
+        for label, location, value, status, use_cli in cases:
+            with self.subTest(case=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, events = lifecycle_fixture(root)
+                    manifest["lifecycle"]["result_status"] = status
+                    if location == "manifest":
+                        manifest["ignored_nonfinite"] = value
+                        harness.write_json(root / "manifest.json", manifest)
+                    else:
+                        events[0]["ignored_nonfinite"] = value
+                        if status == "partial":
+                            manifest["lifecycle"]["profiles"] = []
+                            events = events[:4]
+                        rewrite_lifecycle_fixture(root, manifest, events)
+                    if use_cli:
+                        output = io.StringIO()
+                        with contextlib.redirect_stdout(output):
+                            exit_code = harness.main([
+                                "--validate-lifecycle", str(root), "--allow-partial",
+                            ])
+                        got = json.loads(output.getvalue())
+                        self.assertEqual(exit_code, 1)
+                    else:
+                        got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["analyzable"], got)
+                self.assertTrue(any("non-finite JSON number" in item for item in got["errors"]), got)
+
     def test_partial_fixture_rejects_impossible_known_stage_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

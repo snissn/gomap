@@ -818,6 +818,13 @@ def _utc_timestamp(value: Any, label: str, errors: list[str]) -> _dt.datetime | 
         return None
 
 
+def _strict_json_loads(value: str) -> Any:
+    def reject_constant(constant: str) -> None:
+        raise ValueError(f"non-finite JSON number {constant}")
+
+    return json.loads(value, parse_constant=reject_constant)
+
+
 def _pprof_metadata(path: Path) -> bytes | None:
     try:
         process = subprocess.Popen(
@@ -998,8 +1005,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     }
     manifest_path = root / "manifest.json"
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        manifest = _strict_json_loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
         errors.append(f"cannot read manifest.json: {exc}")
         return report
     if not isinstance(manifest, dict):
@@ -1121,8 +1128,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     errors.append(f"lifecycle JSONL line {line_number} is blank")
                     continue
                 try:
-                    event = json.loads(raw_line)
-                except json.JSONDecodeError as exc:
+                    event = _strict_json_loads(raw_line)
+                except ValueError as exc:
                     errors.append(f"lifecycle JSONL line {line_number} is invalid: {exc}")
                     continue
                 if not isinstance(event, dict):
@@ -1245,7 +1252,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
 
     status = lifecycle.get("result_status")
     report["result_status"] = status
-    if status not in {"completed", "partial", "interrupted"}:
+    if not isinstance(status, str) or status not in {"completed", "partial", "interrupted"}:
         errors.append("lifecycle.result_status must be completed, partial, or interrupted")
     if status != "completed":
         completion_errors.append(f"result_status is {status!r}, not 'completed'")
