@@ -9,15 +9,20 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
 )
 
 const (
-	minimaResourceRSSSemantics  = "sum of positive per-process end-minus-baseline RSS growth; endpoint delta, not peak RSS"
-	minimaResourceCPUSemantics  = "sum of positive per-process end-minus-baseline CPU seconds"
-	minimaResourceDiskSemantics = "sum of positive per-process-segment end-minus-baseline durable storage bytes"
+	minimaResourceRSSSemantics            = "sum of positive per-process end-minus-baseline RSS growth; endpoint delta, not peak RSS"
+	minimaResourceCPUSemantics            = "sum of positive per-process end-minus-baseline CPU seconds"
+	minimaResourceDiskSemantics           = "sum of positive per-process-segment end-minus-baseline durable storage bytes"
+	minimaQdrantInitialHNSWConfig         = `{"m":0,"ef_construct":100,"full_scan_threshold":10000,"max_indexing_threads":0,"on_disk":false}`
+	minimaQdrantInitialOptimizerConfig    = `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":0,"flush_interval_sec":5}`
+	minimaQdrantProductionHNSWConfig      = `{"m":16,"ef_construct":100,"full_scan_threshold":10000,"max_indexing_threads":0,"on_disk":false}`
+	minimaQdrantProductionOptimizerConfig = `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":10000,"flush_interval_sec":5}`
 )
 
 type minimaRawTimedOverlapRound struct {
@@ -139,16 +144,61 @@ type minimaRawNativeRouteResponse struct {
 	VisibilityRetries    int    `json:"visibility_retries"`
 }
 
+type minimaRawQdrantConfigurationTransition struct {
+	Boundary                string          `json:"boundary"`
+	Attempted               bool            `json:"attempted"`
+	Completed               bool            `json:"completed"`
+	Error                   string          `json:"error,omitempty"`
+	InitialUploadHNSW       json.RawMessage `json:"initial_upload_hnsw"`
+	InitialUploadOptimizers json.RawMessage `json:"initial_upload_optimizers"`
+	ProductionHNSW          json.RawMessage `json:"production_hnsw"`
+	ProductionOptimizers    json.RawMessage `json:"production_optimizers"`
+}
+
+type minimaRawQdrantOptimizationSnapshot struct {
+	Available bool            `json:"available"`
+	Detail    json.RawMessage `json:"detail"`
+}
+
+type minimaRawQdrantReadinessSnapshot struct {
+	Status              string                              `json:"status"`
+	OptimizerStatus     json.RawMessage                     `json:"optimizer_status"`
+	PointsCount         *int                                `json:"points_count"`
+	IndexedVectorsCount *int                                `json:"indexed_vectors_count"`
+	SegmentsCount       *int                                `json:"segments_count"`
+	PayloadSchema       map[string]json.RawMessage          `json:"payload_schema"`
+	Config              json.RawMessage                     `json:"config"`
+	Optimizations       minimaRawQdrantOptimizationSnapshot `json:"optimizations"`
+	ExactPointsCount    *int                                `json:"exact_points_count"`
+}
+
+type minimaRawQdrantReadinessSession struct {
+	Phase               string                             `json:"phase"`
+	DeadlineSeconds     float64                            `json:"deadline_seconds"`
+	ExpectedPointsCount *int                               `json:"expected_points_count"`
+	Snapshots           []minimaRawQdrantReadinessSnapshot `json:"snapshots"`
+	ResourceSamples     []json.RawMessage                  `json:"resource_samples"`
+	Outcome             string                             `json:"outcome"`
+	Disposition         string                             `json:"disposition"`
+}
+
+type minimaRawQdrantReadiness struct {
+	Sessions                  []minimaRawQdrantReadinessSession `json:"sessions"`
+	LatestNonReadyDisposition string                            `json:"latest_non_ready_disposition"`
+}
+
 type minimaRawBackendEvidence struct {
-	PhaseLatencyDistributions map[string]minimaRawLatencyDistribution `json:"phase_latency_distributions,omitempty"`
-	Events                    []json.RawMessage                       `json:"events,omitempty"`
-	TimedOverlap              minimaRawTimedOverlap                   `json:"timed_overlap"`
-	FinalScrollState          minimaRawFinalState                     `json:"final_scroll_state"`
-	ResourceMeasurement       minimaRawResourceMeasurement            `json:"resource_measurement"`
-	RestartBoundary           minimaRawRestartBoundary                `json:"restart_boundary"`
-	ServiceLog                minimaRawServiceLog                     `json:"service_log,omitempty"`
-	ResourceAvailability      map[string]map[string]string            `json:"resource_availability,omitempty"`
-	NativeRouteResponses      map[string]json.RawMessage              `json:"native_route_responses,omitempty"`
+	PhaseLatencyDistributions         map[string]minimaRawLatencyDistribution `json:"phase_latency_distributions,omitempty"`
+	Events                            []json.RawMessage                       `json:"events,omitempty"`
+	TimedOverlap                      minimaRawTimedOverlap                   `json:"timed_overlap"`
+	FinalScrollState                  minimaRawFinalState                     `json:"final_scroll_state"`
+	ResourceMeasurement               minimaRawResourceMeasurement            `json:"resource_measurement"`
+	RestartBoundary                   minimaRawRestartBoundary                `json:"restart_boundary"`
+	ServiceLog                        minimaRawServiceLog                     `json:"service_log,omitempty"`
+	ResourceAvailability              map[string]map[string]string            `json:"resource_availability,omitempty"`
+	NativeRouteResponses              map[string]json.RawMessage              `json:"native_route_responses,omitempty"`
+	CollectionConfigurationTransition *minimaRawQdrantConfigurationTransition `json:"collection_configuration_transition,omitempty"`
+	Readiness                         *minimaRawQdrantReadiness               `json:"readiness,omitempty"`
 }
 
 type minimaPayloadEvidence struct {
@@ -410,7 +460,139 @@ func validateMinimaResourceMeasurement(backend string, resource minimaRawResourc
 	}
 	return nil
 }
+func minimaRawJSONMatchesConfiguration(raw json.RawMessage, encoded string) bool {
+	if len(raw) == 0 || encoded == "" {
+		return false
+	}
+	var actual, expected any
+	if json.Unmarshal(raw, &actual) != nil || json.Unmarshal([]byte(encoded), &expected) != nil {
+		return false
+	}
+	return reflect.DeepEqual(actual, expected)
+}
 
+func minimaJSONContainsExpected(actual, expected any) bool {
+	expectedMap, ok := expected.(map[string]any)
+	if !ok {
+		return reflect.DeepEqual(actual, expected)
+	}
+	actualMap, ok := actual.(map[string]any)
+	if !ok {
+		return false
+	}
+	for key, expectedValue := range expectedMap {
+		actualValue, exists := actualMap[key]
+		if !exists || !minimaJSONContainsExpected(actualValue, expectedValue) {
+			return false
+		}
+	}
+	return true
+}
+
+func minimaQdrantCollectionConfigMatches(raw json.RawMessage, hnsw, optimizer string) bool {
+	var config struct {
+		HNSW      json.RawMessage `json:"hnsw_config"`
+		Optimizer json.RawMessage `json:"optimizer_config"`
+	}
+	var actualHNSW, actualOptimizer, expectedHNSW, expectedOptimizer any
+	return json.Unmarshal(raw, &config) == nil &&
+		json.Unmarshal(config.HNSW, &actualHNSW) == nil &&
+		json.Unmarshal(config.Optimizer, &actualOptimizer) == nil &&
+		json.Unmarshal([]byte(hnsw), &expectedHNSW) == nil &&
+		json.Unmarshal([]byte(optimizer), &expectedOptimizer) == nil &&
+		minimaJSONContainsExpected(actualHNSW, expectedHNSW) &&
+		minimaJSONContainsExpected(actualOptimizer, expectedOptimizer)
+}
+
+func minimaQdrantOptimizerReady(raw json.RawMessage) bool {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text == "ok"
+	}
+	var status struct {
+		OK *bool `json:"ok"`
+	}
+	return json.Unmarshal(raw, &status) == nil && status.OK != nil && *status.OK
+}
+
+func validateMinimaQdrantReadiness(raw minimaRawBackendEvidence, backend minimaBackendEvidence, expectedSessions int) error {
+	if raw.CollectionConfigurationTransition == nil || raw.Readiness == nil {
+		return fmt.Errorf("minima artifact: Qdrant transition/readiness evidence is missing")
+	}
+	transition := *raw.CollectionConfigurationTransition
+	if transition.Boundary != "initial_batch_insert_to_warmup_search" ||
+		!transition.Attempted || !transition.Completed || transition.Error != "" {
+		return fmt.Errorf("minima artifact: Qdrant production configuration transition is incomplete")
+	}
+	for _, check := range []struct {
+		raw      json.RawMessage
+		key      string
+		expected string
+	}{
+		{transition.InitialUploadHNSW, "initial_upload_hnsw", minimaQdrantInitialHNSWConfig},
+		{transition.InitialUploadOptimizers, "initial_upload_optimizers", minimaQdrantInitialOptimizerConfig},
+		{transition.ProductionHNSW, "production_hnsw", minimaQdrantProductionHNSWConfig},
+		{transition.ProductionOptimizers, "production_optimizers", minimaQdrantProductionOptimizerConfig},
+	} {
+		if !minimaRawJSONMatchesConfiguration(check.raw, check.expected) ||
+			!minimaRawJSONMatchesConfiguration(check.raw, backend.Configuration[check.key]) {
+			return fmt.Errorf("minima artifact: Qdrant configuration transition disagrees with %s", check.key)
+		}
+	}
+	if !minimaQdrantCollectionConfigMatches(
+		json.RawMessage(backend.Configuration["effective_collection"]),
+		minimaQdrantProductionHNSWConfig, minimaQdrantProductionOptimizerConfig,
+	) {
+		return fmt.Errorf("minima artifact: Qdrant effective production configuration is unproven")
+	}
+	readiness := raw.Readiness
+	if len(readiness.Sessions) != expectedSessions || readiness.LatestNonReadyDisposition != "none" ||
+		readiness.Sessions[0].Phase != "initial_upload_collection_created" ||
+		readiness.Sessions[1].Phase != "initial_load_to_query" ||
+		readiness.Sessions[0].ExpectedPointsCount == nil ||
+		*readiness.Sessions[0].ExpectedPointsCount != 0 ||
+		readiness.Sessions[1].ExpectedPointsCount == nil ||
+		*readiness.Sessions[1].ExpectedPointsCount <= 0 {
+		return fmt.Errorf("minima artifact: Qdrant readiness sessions are incomplete")
+	}
+	for ordinal, session := range readiness.Sessions {
+		if session.Phase == "" || !finiteNonnegative(session.DeadlineSeconds) ||
+			session.DeadlineSeconds == 0 || session.Outcome != "ready" ||
+			session.Disposition != "ready" || len(session.Snapshots) == 0 ||
+			len(session.ResourceSamples) == 0 {
+			return fmt.Errorf("minima artifact: Qdrant readiness session %d is incomplete", ordinal)
+		}
+		snapshot := session.Snapshots[len(session.Snapshots)-1]
+		if snapshot.Status != "green" || !minimaQdrantOptimizerReady(snapshot.OptimizerStatus) ||
+			snapshot.PointsCount == nil || *snapshot.PointsCount < 0 ||
+			snapshot.IndexedVectorsCount == nil || *snapshot.IndexedVectorsCount < 0 ||
+			snapshot.SegmentsCount == nil || *snapshot.SegmentsCount <= 0 ||
+			snapshot.PayloadSchema["user_id"] == nil || snapshot.PayloadSchema["fpath"] == nil ||
+			!snapshot.Optimizations.Available || len(snapshot.Optimizations.Detail) == 0 {
+			return fmt.Errorf("minima artifact: Qdrant readiness session %d final snapshot is incomplete", ordinal)
+		}
+		if session.ExpectedPointsCount != nil &&
+			(snapshot.ExactPointsCount == nil || *snapshot.ExactPointsCount != *session.ExpectedPointsCount) {
+			return fmt.Errorf("minima artifact: Qdrant readiness session %d exact point count mismatch", ordinal)
+		}
+		wantHNSW, wantOptimizer := minimaQdrantProductionHNSWConfig, minimaQdrantProductionOptimizerConfig
+		if ordinal == 0 {
+			wantHNSW, wantOptimizer = minimaQdrantInitialHNSWConfig, minimaQdrantInitialOptimizerConfig
+		}
+		if !minimaQdrantCollectionConfigMatches(snapshot.Config, wantHNSW, wantOptimizer) {
+			return fmt.Errorf("minima artifact: Qdrant readiness session %d configuration mismatch", ordinal)
+		}
+		var detail struct {
+			Summary map[string]any    `json:"summary"`
+			Running []json.RawMessage `json:"running"`
+		}
+		if json.Unmarshal(snapshot.Optimizations.Detail, &detail) != nil ||
+			detail.Summary == nil || detail.Running == nil {
+			return fmt.Errorf("minima artifact: Qdrant readiness session %d optimizer detail is incomplete", ordinal)
+		}
+	}
+	return nil
+}
 func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]minimaBackendEvidence) error {
 	if len(artifact.RawEvidence) != len(backends) {
 		return fmt.Errorf("minima artifact: requires one namespaced raw evidence object per backend")
@@ -473,6 +655,11 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			}
 			if len(raw.NativeRouteResponses) != len(artifact.Manifest.Corpora) {
 				return fmt.Errorf("minima artifact: TreeDB raw route responses are incomplete")
+			}
+		}
+		if name == "qdrant" {
+			if err := validateMinimaQdrantReadiness(raw, backend, len(timedPlan.Rounds)+7); err != nil {
+				return err
 			}
 		}
 		resource := raw.ResourceMeasurement
