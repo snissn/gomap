@@ -1243,6 +1243,12 @@ class LifecycleValidatorTest(unittest.TestCase):
                 "non-finite",
             ),
             (
+                lambda response: response["stats"].__setitem__(
+                    "search_route_hnsw_search_pack", "9" * 5_000
+                ),
+                "supported integer range",
+            ),
+            (
                 lambda response: response["diagnostics"].__setitem__(
                     "no_document_guardrails_ok", False
                 ),
@@ -1317,12 +1323,15 @@ class LifecycleValidatorTest(unittest.TestCase):
             manifest, events = lifecycle_fixture(root)
             manifest["harness"].update(rows=" Scalar ", k=4, rerank_candidates=1)
             events[12]["state"]["route"]["name"] = "quantized_rerank"
+            events[12]["state"]["route"]["requested_top_k"] = 4
+            events[12]["state"]["route"]["result_count"] = 4
             response_path = root / "lifecycle_route_response.json"
             response = json.loads(response_path.read_text(encoding="utf-8"))
             response.update({
                 "query_mode": "quantized_rerank",
                 "quantized_index_name": manifest["harness"]["quantized_index_name"],
                 "quantized_rerank_candidates": 4,
+                "results": [{"id": str(value)} for value in range(1, 5)],
             })
             response["diagnostics"]["route"] = "quantized_rerank"
             harness.write_json(response_path, response)
@@ -1336,6 +1345,19 @@ class LifecycleValidatorTest(unittest.TestCase):
             got = harness.validate_lifecycle_artifact(root)
 
         self.assertTrue(got["complete"], got)
+
+    def test_route_requested_top_k_must_match_harness_k(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            manifest["harness"]["k"] = 4
+            manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("requested_top_k" in error for error in got["errors"]), got)
 
     def test_manifest_vdbbench_must_be_a_list(self) -> None:
         for invalid in (None, {"row": "exact"}):

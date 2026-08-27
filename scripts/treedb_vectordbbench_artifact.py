@@ -579,7 +579,10 @@ def int_field(mapping: dict[str, Any], key: str) -> int:
     if isinstance(value, (int, float)):
         return int(value)
     if isinstance(value, str) and value.isdigit():
-        return int(value)
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise ValueError(f"{key} is outside the supported integer range") from exc
     return 0
 
 
@@ -2582,20 +2585,32 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                         or (bound_index_name is not None and raw_index_name != bound_index_name)
                     ):
                         errors.append("lifecycle route response index identity does not match route_verify")
-                    raw_summary = proof_summary(
-                        "lifecycle", "lifecycle", raw_route_response,
-                        {"top_k": route.get("requested_top_k")},
-                    )
-                    if raw_summary["route"] != route.get("name"):
-                        errors.append("lifecycle route response route does not match route_verify")
-                    if raw_summary["fallback_reason"] != route.get("fallback_reason"):
-                        errors.append("lifecycle route response fallback status does not match route_verify")
+                    try:
+                        raw_summary = proof_summary(
+                            "lifecycle", "lifecycle", raw_route_response,
+                            {"top_k": route.get("requested_top_k")},
+                        )
+                    except ValueError as exc:
+                        errors.append(f"lifecycle route response stats are invalid: {exc}")
+                    else:
+                        if raw_summary["route"] != route.get("name"):
+                            errors.append("lifecycle route response route does not match route_verify")
+                        if raw_summary["fallback_reason"] != route.get("fallback_reason"):
+                            errors.append("lifecycle route response fallback status does not match route_verify")
                     selected_rows = (
                         [row.strip().lower() for row in harness.get("rows", "").split(",") if row.strip()]
                         if isinstance(harness.get("rows"), str)
                         else []
                     )
                     selected_row = selected_rows[0] if len(selected_rows) == 1 else None
+                    harness_k = harness.get("k")
+                    if (
+                        isinstance(harness_k, bool)
+                        or not isinstance(harness_k, int)
+                        or harness_k <= 0
+                        or route.get("requested_top_k") != min(harness_k, expected_rows)
+                    ):
+                        errors.append("lifecycle route requested_top_k does not match harness k and expected rows")
                     expected_query_mode = "exact"
                     expected_quantized_index: str | None = None
                     expected_rerank_candidates = 0
@@ -2603,7 +2618,6 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                         expected_query_mode = "quantized_rerank"
                         expected_quantized_index = harness.get("quantized_index_name")
                         rerank_candidates = harness.get("rerank_candidates")
-                        harness_k = harness.get("k")
                         if (
                             not isinstance(expected_quantized_index, str)
                             or not expected_quantized_index
