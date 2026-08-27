@@ -838,7 +838,9 @@ func (c *Collection) loadLegacyVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 	status.Epoch = manifest.Epoch
 	status.BytesDisk = vectorIndexSnapshotBytes(manifestData, manifest.Files)
 	index.recordLoadedSnapshot(status.Epoch, status.BytesDisk)
-	c.RegisterVectorIndex(index)
+	if err := c.RegisterVectorIndex(index); err != nil {
+		return nil, status, err
+	}
 	return index, status, nil
 }
 

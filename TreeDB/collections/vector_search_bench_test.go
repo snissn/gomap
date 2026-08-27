@@ -536,7 +536,10 @@ func BenchmarkCollectionVectorIndexIncrementalWrite(b *testing.B) {
 			_ = d.Close()
 			b.Fatalf("new vector index: %v", err)
 		}
-		col.RegisterVectorIndex(index)
+		if err := col.RegisterVectorIndex(index); err != nil {
+			_ = d.Close()
+			b.Fatalf("register vector index: %v", err)
+		}
 		b.StartTimer()
 		vectorBenchmarkInsertBatches(b, col, ids, documents, 512)
 		b.StopTimer()

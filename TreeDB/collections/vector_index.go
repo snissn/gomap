@@ -688,7 +688,9 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 				return nil, err
 			}
 		} else {
-			c.RegisterVectorIndex(index)
+			if err := c.RegisterVectorIndex(index); err != nil {
+				return nil, err
+			}
 		}
 		if c.manager != nil && index.needsNativeAutoPersist() {
 			c.manager.registerCollectionHandle(c)
@@ -883,16 +885,20 @@ func parseVectorIndexEncoding(value string) (VectorIndexEncoding, error) {
 
 // RegisterVectorIndex attaches an in-memory vector index to this collection so
 // successful collection inserts, updates, and deletes keep the index in sync.
-func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
-	if c == nil || index == nil {
-		return
+func (c *Collection) RegisterVectorIndex(index *VectorIndex) error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if index == nil {
+		return errors.New("collections: vector index is nil")
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	if _, err := c.refreshNativeVectorIndexDeclaration(index.name); err != nil {
-		return
+		return err
 	}
 	c.registerVectorIndexCurrentCatalog(index)
+	return nil
 }
 
 func (c *Collection) registerVectorIndexCurrentCatalog(index *VectorIndex) {

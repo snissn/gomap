@@ -495,7 +495,9 @@ func TestIngestChunkedDocumentsRejectsRegisteredVectorIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create ad-hoc vector index: %v", err)
 	}
-	col.RegisterVectorIndex(index)
+	if err := col.RegisterVectorIndex(index); err != nil {
+		t.Fatalf("register vector index: %v", err)
+	}
 	flushCalled := false
 	restoreFlushHook := setCollectionSchemaMutationFlushHookForTest(func() { flushCalled = true })
 	defer restoreFlushHook()
@@ -528,7 +530,9 @@ func TestIngestChunkedDocumentsRejectsVectorIndexOnPeerHandle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create peer ad-hoc vector index: %v", err)
 	}
-	peer.RegisterVectorIndex(index)
+	if err := peer.RegisterVectorIndex(index); err != nil {
+		t.Fatalf("register peer vector index: %v", err)
+	}
 	if got := col.registeredAdHocVectorIndexCount(); got != 1 {
 		t.Fatalf("collection-wide ad-hoc vector count=%d want 1", got)
 	}
@@ -574,7 +578,9 @@ func TestIngestChunkedDocumentsRejectsStaleNativeRegistrationAfterPeerDrop(t *te
 		t.Fatal("owner metadata unexpectedly refreshed before stale registration")
 	}
 
-	owner.RegisterVectorIndex(index)
+	if err := owner.RegisterVectorIndex(index); err != nil {
+		t.Fatalf("register stale native vector index: %v", err)
+	}
 	if got := col.registeredAdHocVectorIndexCount(); got != 1 {
 		t.Fatalf("stale native registration ad-hoc count=%d want 1", got)
 	}
@@ -609,17 +615,16 @@ func TestIngestChunkedDocumentsBlocksVectorRegistrationThroughPublication(t *tes
 		t.Fatalf("create ad-hoc vector index: %v", err)
 	}
 	attempted := make(chan struct{})
-	registered := make(chan struct{})
+	registered := make(chan error, 1)
 	hooks := &chunkedIngestHooks{afterBatchScan: func() {
 		go func() {
 			close(attempted)
-			peer.RegisterVectorIndex(index)
-			close(registered)
+			registered <- peer.RegisterVectorIndex(index)
 		}()
 		<-attempted
 		select {
-		case <-registered:
-			t.Fatal("vector registration completed before chunk publication")
+		case err := <-registered:
+			t.Fatalf("vector registration completed before chunk publication: %v", err)
 		case <-time.After(20 * time.Millisecond):
 		}
 	}}
@@ -631,7 +636,10 @@ func TestIngestChunkedDocumentsBlocksVectorRegistrationThroughPublication(t *tes
 		t.Fatalf("chunk ingest: %v", err)
 	}
 	select {
-	case <-registered:
+	case err := <-registered:
+		if err != nil {
+			t.Fatalf("register vector index: %v", err)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("vector registration remained blocked after chunk publication")
 	}
@@ -677,14 +685,13 @@ func TestIngestChunkedDocumentsHoldsVectorAdmissionBeforeMutation(t *testing.T) 
 		t.Fatal("ingestion did not reach the admission-protected flush")
 	}
 
-	registered := make(chan struct{})
+	registered := make(chan error, 1)
 	go func() {
-		peer.RegisterVectorIndex(index)
-		close(registered)
+		registered <- peer.RegisterVectorIndex(index)
 	}()
 	select {
-	case <-registered:
-		t.Fatal("vector registration completed while ingestion held admission")
+	case err := <-registered:
+		t.Fatalf("vector registration completed while ingestion held admission: %v", err)
 	case <-time.After(20 * time.Millisecond):
 	}
 	mutation.Unlock()
@@ -698,7 +705,10 @@ func TestIngestChunkedDocumentsHoldsVectorAdmissionBeforeMutation(t *testing.T) 
 		t.Fatal("ingestion remained blocked after mutation release")
 	}
 	select {
-	case <-registered:
+	case err := <-registered:
+		if err != nil {
+			t.Fatalf("register vector index: %v", err)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("vector registration remained blocked after ingestion")
 	}

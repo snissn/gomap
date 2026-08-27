@@ -2796,7 +2796,9 @@ func TestDeclaredNativeVectorIndexesLoadedNoDeclaredAdHocIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new vector index: %v", err)
 	}
-	col.RegisterVectorIndex(index)
+	if err := col.RegisterVectorIndex(index); err != nil {
+		t.Fatalf("register vector index: %v", err)
+	}
 	if !col.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
 		t.Fatal("ad-hoc registered vector index forced native catalog load with no declared vector indexes")
 	}
@@ -2835,14 +2837,13 @@ func TestRegisterNativeVectorIndexDoesNotHoldAdHocRegistryLock(t *testing.T) {
 			col.writeDomain.nativeVectorIndexesMu.Unlock()
 		}
 	}()
-	registered := make(chan struct{})
+	registered := make(chan error, 1)
 	go func() {
-		col.RegisterVectorIndex(index)
-		close(registered)
+		registered <- col.RegisterVectorIndex(index)
 	}()
 	select {
-	case <-registered:
-		t.Fatal("native registration completed while native registry was locked")
+	case err := <-registered:
+		t.Fatalf("native registration completed while native registry was locked: %v", err)
 	case <-time.After(20 * time.Millisecond):
 	}
 	if !col.vectorIndexesMu.TryLock() {
@@ -2853,7 +2854,10 @@ func TestRegisterNativeVectorIndexDoesNotHoldAdHocRegistryLock(t *testing.T) {
 	col.writeDomain.nativeVectorIndexesMu.Unlock()
 	nativeLocked = false
 	select {
-	case <-registered:
+	case err := <-registered:
+		if err != nil {
+			t.Fatalf("register native vector index: %v", err)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("native registration remained blocked after native registry release")
 	}
