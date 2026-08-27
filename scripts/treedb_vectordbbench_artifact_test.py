@@ -243,12 +243,12 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
     adapter_records = [
         {"event": "reset", "timestamp_ns": boundary_ns["load_end"] - 3_000_000_000, "response": {}},
         {"event": "load_start", "timestamp_ns": boundary_ns["load_end"] - 2_000_000_000},
-        {
+        *[{
             "event": "batch_accepted",
-            "timestamp_ns": boundary_ns["load_end"] - 1_000_000_000,
-            "client_sent": 50_000,
-            "server_accepted": 50_000,
-        },
+            "timestamp_ns": boundary_ns["load_end"] - 1_000_000_000 + batch,
+            "client_sent": 500,
+            "server_accepted": 500,
+        } for batch in range(100)],
         {"event": "load_end", "timestamp_ns": boundary_ns["load_end"]},
         {"event": "optimize_start", "timestamp_ns": boundary_ns["optimize_start"]},
         {
@@ -1470,6 +1470,20 @@ class LifecycleValidatorTest(unittest.TestCase):
 
             self.assertFalse(got["analyzable"], got)
             self.assertTrue(any("num_per_batch" in error for error in got["errors"]), got)
+
+    def test_declared_batch_size_must_match_adapter_batch_distribution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            manifest["harness"]["num_per_batch"] = 999
+            manifest["vdbbench"][0]["num_per_batch"] = 999
+            manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("batch sizes" in error for error in got["errors"]), got)
 
     def test_bound_vdbbench_command_options_must_match_manifest_exactly_once(self) -> None:
         options = (
@@ -2993,6 +3007,23 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertFalse(got["analyzable"], got)
                 self.assertTrue(any("service.command" in item for item in got["errors"]), got)
 
+    def test_service_address_must_be_loopback(self) -> None:
+        for address in ("0.0.0.0:9876", "192.0.2.1:9876", "example.com:9876"):
+            with self.subTest(address=address), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _ = lifecycle_fixture(root)
+                command = manifest["service"]["command"]
+                command[command.index("-addr") + 1] = address
+                manifest["service"]["base_url"] = f"http://{address}"
+                set_fixture_vdbbench_command(manifest, "exact")
+                manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any("service.command" in item for item in got["errors"]), got)
+
     def test_service_command_executable_matches_declared_binary_path(self) -> None:
         cases = (
             ("missing-path", lambda row: row["service"]["binary"].pop("path"), "binary.path"),
@@ -3427,6 +3458,32 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertTrue(companion_only["analyzable"], companion_only)
         self.assertFalse(companion_only["complete"], companion_only)
         self.assertTrue(any("canonical optimize heap" in item for item in companion_only["completion_errors"]), companion_only)
+
+    def test_canonical_heap_profile_sequences_must_name_the_documented_stages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            for event in events:
+                if event["stage"] in {
+                    "cache_prime", "cache_warm", "graceful_close", "cold_open_ready",
+                    "exact_verify", "route_verify", "teardown",
+                }:
+                    event["sequence"] += 1
+            lifecycle_path = root / "lifecycle.jsonl"
+            lifecycle_path.write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in events),
+                encoding="utf-8",
+            )
+            manifest["lifecycle"]["sha256"] = harness.sha256_file(lifecycle_path)
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertTrue(got["analyzable"], got)
+        self.assertFalse(got["complete"], got)
+        self.assertTrue(
+            any("canonical optimize heap" in item for item in got["completion_errors"]), got
+        )
 
     def test_pprof_profile_requires_at_least_one_actual_sample(self) -> None:
         metadata = b"\n".join((

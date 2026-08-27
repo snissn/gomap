@@ -1386,6 +1386,7 @@ def read_adapter_lifecycle_sidecar(path: Path) -> dict[str, Any]:
         server_accepted += accepted
     return {
         "records": records,
+        "batch_sizes": [record["client_sent"] for record in batches],
         "client_sent": client_sent,
         "server_accepted": server_accepted,
         "reset_response": reset_response,
@@ -1770,6 +1771,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 effective_pprof = value
         if (
             invalid_command
+            or not effective_addr
+            or not _valid_pprof_listen_address(effective_addr)
             or not effective_dir
             or effective_pprof is None
             or not _valid_pprof_listen_address(effective_pprof)
@@ -2452,6 +2455,30 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     errors.append(
                         f"adapter lifecycle cumulative {key} does not match final rows.{key}"
                     )
+            declared_batch_size = harness.get("num_per_batch")
+            if (
+                isinstance(declared_batch_size, bool)
+                or not isinstance(declared_batch_size, int)
+                or declared_batch_size <= 0
+                or not isinstance(expected_rows, int)
+            ):
+                errors.append("adapter lifecycle batch distribution requires a positive declared num_per_batch")
+            else:
+                full_batches, remainder = divmod(expected_rows, declared_batch_size)
+                batch_sizes = adapter["batch_sizes"]
+                expected_batch_count = full_batches + (1 if remainder else 0)
+                distribution_matches = (
+                    len(batch_sizes) == expected_batch_count
+                    and sum(size == declared_batch_size for size in batch_sizes) == full_batches
+                    and (
+                        (not remainder and all(size == declared_batch_size for size in batch_sizes))
+                        or (remainder > 0 and sum(size == remainder for size in batch_sizes) == 1)
+                    )
+                )
+                if not distribution_matches:
+                    errors.append(
+                        "adapter lifecycle batch sizes do not match manifest.harness.num_per_batch"
+                    )
             if "lifecycle_load_milestones.json" in raw_by_path:
                 try:
                     milestone_document = _strict_json_loads(
@@ -2889,6 +2916,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         and profile.get("kind") == "heap"
         and profile.get("before_sequence") == 8
         and profile.get("after_sequence") == 9
+        and sequence_events.get(profile.get("before_sequence"), {}).get("stage") == "cache_warm"
+        and sequence_events.get(profile.get("after_sequence"), {}).get("stage") == "graceful_close"
     ]
     if status == "completed" and len(canonical_heap_profiles) != 1:
         completion_errors.append(
