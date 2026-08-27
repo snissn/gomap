@@ -1661,12 +1661,16 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     else:
                         if result_digest != binding.get("result_sha256"):
                             errors.append("task_config result checksum does not match lifecycle binding")
+                        result_rows = result_document.get("results") if isinstance(result_document, dict) else None
+                        if not isinstance(result_rows, list):
+                            errors.append("task_config result results must be a list")
+                            result_rows = []
                         result_configs = [
                             item.get("task_config")
-                            for item in result_document.get("results", [])
+                            for item in result_rows
                             if isinstance(item, dict) and isinstance(item.get("task_config"), dict)
                             and canonical_sha256(item["task_config"]) == binding.get("task_config_sha256")
-                        ] if isinstance(result_document, dict) else []
+                        ]
                         if len(result_configs) != 1 or result_configs[0] != selected.get("task_config"):
                             errors.append("task_config result does not contain the uniquely bound manifest task_config")
     else:
@@ -3055,6 +3059,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             parser.error("lifecycle requires exactly one real, load-enabled VDBBench row")
         if args.profile != "command_wal_durable":
             parser.error("lifecycle completion currently requires command_wal_durable")
+        if args.skip_search_serial and args.skip_search_concurrent:
+            parser.error("lifecycle requires at least one VDBBench search phase")
         if not args.lifecycle_dataset_file:
             parser.error("lifecycle requires --lifecycle-dataset-file")
         if args.case_type != "PerformanceCustomDataset":
@@ -3146,6 +3152,16 @@ def main(argv: list[str]) -> int:
             return 2
         if not valid_storage_context(context.get("host", {}).get("storage")):
             print("harness failed before start; error=benchmark storage identity is unavailable", file=sys.stderr)
+            return 2
+        sources = (context.get("gomap"), context.get("vectordbbench"))
+        if any(
+            not isinstance(source, dict)
+            or source.get("dirty") is not False
+            or not isinstance(source.get("commit"), str)
+            or re.fullmatch(r"[0-9a-f]{40}", source["commit"]) is None
+            for source in sources
+        ):
+            print("harness failed before start; error=clean source commit identity is unavailable", file=sys.stderr)
             return 2
     service_proc: subprocess.Popen[str] | None = None
     service_command: list[str] | None = None

@@ -96,7 +96,10 @@ The lifecycle declaration binds the exact clean gomap and VectorDBBench
 commits, service-binary SHA-256, effective service/harness configuration,
 dataset checksum/dimensions/count, CPU topology, memory, storage, lifecycle
 JSONL, raw artifacts, and every profile window. The minimum effective
-configuration includes a canonical public service profile, case type,
+configuration keeps at least one VDBBench search phase enabled. Before building
+the service, lifecycle mode requires both captured source identities to contain
+a valid commit and `dirty == false`.
+It includes a canonical public service profile, case type,
 the exact non-empty service argv using only the document service's defined
 flags and with one matching `profile` selector before Go flag parsing
 terminates at `--` or a positional argument,

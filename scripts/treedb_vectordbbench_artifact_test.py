@@ -347,6 +347,36 @@ class HostContextTest(unittest.TestCase):
         self.assertIn("benchmark storage identity is unavailable", stderr.getvalue())
         build.assert_not_called()
 
+    def test_lifecycle_fails_before_build_when_source_is_dirty(self) -> None:
+        storage = {
+            "path": "/tmp", "method": "findmnt", "device": "/dev/x", "filesystem": "xfs",
+            "mount": "/tmp", "capacity_bytes": 1024,
+        }
+        for dirty_source in ("gomap", "vectordbbench"):
+            with self.subTest(dirty_source=dirty_source), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "artifact"
+                dataset = Path(tmp) / "train.parquet"
+                dataset.write_bytes(b"dataset")
+                context = {
+                    "host": {"memory_bytes": 1024, "storage": storage},
+                    "gomap": {"commit": "1" * 40, "dirty": dirty_source == "gomap"},
+                    "vectordbbench": {"commit": "2" * 40, "dirty": dirty_source == "vectordbbench"},
+                }
+                stderr = io.StringIO()
+                with mock.patch.object(harness, "collect_context", return_value=context), \
+                        mock.patch.object(harness, "build_service") as build, \
+                        contextlib.redirect_stderr(stderr):
+                    exit_code = harness.main([
+                        "--out", str(root), "--run-vdbbench", "--rows", "exact",
+                        "--case-type", "PerformanceCustomDataset", "--lifecycle",
+                        "--lifecycle-dataset-file", str(dataset),
+                        "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
+                    ])
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("clean source commit identity is unavailable", stderr.getvalue())
+            build.assert_not_called()
+
     def test_lifecycle_fails_before_build_when_memory_size_is_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "artifact"
@@ -385,6 +415,18 @@ class SmokeShapeTest(unittest.TestCase):
     def test_parse_args_rejects_invalid_shape_before_service_start(self) -> None:
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             harness.parse_args(["--smoke-documents", "256", "--smoke-top-k", "100", "--rerank-candidates", "32"])
+
+    def test_lifecycle_requires_a_vdbbench_search_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = Path(tmp) / "train.parquet"
+            dataset.write_bytes(b"dataset")
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                harness.parse_args([
+                    "--run-vdbbench", "--rows", "exact", "--case-type", "PerformanceCustomDataset",
+                    "--lifecycle", "--lifecycle-dataset-file", str(dataset),
+                    "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
+                    "--skip-search-serial", "--skip-search-concurrent",
+                ])
 
 
 class VDBBenchBatchTest(unittest.TestCase):
@@ -689,6 +731,22 @@ class LifecycleValidatorTest(unittest.TestCase):
 
             got = harness.validate_lifecycle_artifact(root)
             self.assertTrue(got["complete"], got)
+
+            for malformed_results in (None, {"task_config": task_config}):
+                with self.subTest(malformed_results=malformed_results):
+                    result.write_text(json.dumps({"results": malformed_results}), encoding="utf-8")
+                    metrics["result_sha256"] = harness.sha256_file(result)
+                    manifest["lifecycle"]["task_config_binding"]["result_sha256"] = metrics["result_sha256"]
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    malformed = harness.validate_lifecycle_artifact(root)
+
+                    self.assertFalse(malformed["analyzable"], malformed)
+                    self.assertTrue(any("results must be a list" in error for error in malformed["errors"]), malformed)
+
+            result.write_text(json.dumps({"results": [{"task_config": task_config}]}), encoding="utf-8")
+            metrics["result_sha256"] = harness.sha256_file(result)
+            manifest["lifecycle"]["task_config_binding"]["result_sha256"] = metrics["result_sha256"]
 
             task_config["case_config"]["custom_case"]["dataset_config"]["dim"] = 769
             metrics["task_config_sha256"] = harness.canonical_sha256(task_config)
