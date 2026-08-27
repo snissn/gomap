@@ -4540,7 +4540,7 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	}
 	if indexed || len(catalog.meta.VectorIndexes) > 0 || len(catalog.meta.TextIndexes) > 0 || plannerOptions.documentFormat != DocumentFormatJSON {
 		domain.mu.Unlock()
-		return c.insertOneViaBatch(id, document)
+		return c.insertOneViaBatchSchemaLocked(id, document)
 	}
 	if domain.table == nil {
 		domain.table = newCollectionRunTable(0)
@@ -10121,7 +10121,7 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 	c.meta = catalog.meta
 	if len(c.meta.Indexes) > 0 || len(c.meta.VectorIndexes) > 0 || len(c.meta.TextIndexes) > 0 {
 		_ = snap.Close()
-		return c.insertOneViaBatch(id, document)
+		return c.insertOneViaBatchSchemaLocked(id, document)
 	}
 	plannerOptions, err := collectionPlannerOptionsForDB(c.db, c.meta)
 	if err != nil {
@@ -10130,7 +10130,7 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 	}
 	if plannerOptions.documentFormat != DocumentFormatJSON {
 		_ = snap.Close()
-		return c.insertOneViaBatch(id, document)
+		return c.insertOneViaBatchSchemaLocked(id, document)
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	baseSystemRoot := snapshotSystemRoot(snap)
@@ -10186,8 +10186,14 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 	return resultID, nil
 }
 
-func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
-	ids, err := c.InsertBatch([][]byte{id}, [][]byte{document})
+func (c *Collection) insertOneViaBatchSchemaLocked(id, document []byte) ([]byte, error) {
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
+	ids, err := c.insertBatchSchemaLocked([][]byte{id}, [][]byte{document}, false, nil)
+	if err == nil {
+		err = commitAmbiguousError("InsertBatch vector index maintenance", c.notifyVectorIndexesUpsert(ids))
+	}
+	err = c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 	if err != nil {
 		if errors.Is(err, ErrCommitAmbiguous) && len(ids) == 1 {
 			return ids[0], err
