@@ -1,6 +1,6 @@
 # TreeDB VectorDBBench Artifact Harness
 
-Issues: `snissn/gomap#2599`, `#4181`, `#4193`. Parent tracker: `#2598`.
+Issues: `snissn/gomap#2599`, `#4181`, `#4193`, `#4380`. Parent tracker: `#2598`.
 
 This harness creates a repeatable TreeDB VectorDBBench artifact root. It starts
 `treedb-document-service` with a fresh artifact-owned data directory, captures
@@ -38,6 +38,55 @@ Expected primary files:
 The harness requires `--out` to be new or empty, then creates a fresh
 `treedb-data` directory under that artifact root. It does not truncate durable
 collections or modify WAL/storage semantics.
+
+## Lifecycle completion contract
+
+Issue #4380 extends the existing `treedb-vectordbbench-artifact/v1` manifest;
+it does not introduce a second runner. An integrated lifecycle artifact adds a
+`manifest.lifecycle` object with schema
+`treedb-vectordbbench-lifecycle/v1` and a checksum-bound `lifecycle.jsonl`.
+Each JSONL event uses `treedb-vectordbbench-lifecycle-event/v1`, an increasing
+sequence and UTC timestamp, and a state snapshot containing distinct
+`client_sent`, `server_accepted`, `server_durable`, and `reopened` row counts.
+WAL frontier/total-written counters and the selected cumulative product
+counters must also remain monotonic.
+
+The strict gate requires these ordered markers:
+
+```text
+startup -> reset -> load_start -> load_end -> drain_checkpoint
+-> optimize_start -> optimize_end -> cache_prime -> cache_warm
+-> graceful_close -> cold_open_ready -> exact_verify -> route_verify -> teardown
+```
+
+The lifecycle declaration binds the exact clean gomap and VectorDBBench
+commits, service-binary SHA-256, effective service/harness configuration,
+dataset checksum/dimensions/count, CPU topology, memory, storage, lifecycle
+JSONL, raw artifacts, and every profile window. The minimum effective
+configuration includes service profile, case type, concurrency, batch size,
+`m`, and `ef_construction`. Profile entries name existing
+before/after event sequences and use the same checksum as their raw-artifact
+entry. The optimized index identity and durable `asset_generation` must survive
+close and cold reopen. H2 maps `asset_generation` to the vector-maintenance
+root ID, not the service's reopen-local generation counter. The artifact-owned
+database identity and server `commit_seq` must also match across close/reopen,
+and route proof must use the same index identity and asset generation without
+fallback. `T_ready` is reconstructed from `load_start`
+through `cold_open_ready`; client, accepted/durable, and reopened counts are
+never substituted for one another.
+
+Validate a completed artifact with:
+
+```sh
+python3 scripts/treedb_vectordbbench_artifact.py \
+  --validate-lifecycle "$OUT"
+```
+
+The command exits nonzero for partial, interrupted, stale, mismatched, or
+corrupt artifacts. `--allow-partial` returns success only when a partial or
+interrupted artifact is structurally analyzable; its JSON result still has
+`complete: false`. H2 owns emitting these fields and lifecycle events. Existing
+smoke-only artifact-v1 output remains unchanged until that integration lands.
 
 ## Route-proof sidecar contract
 

@@ -15,6 +15,112 @@ from pathlib import Path
 import treedb_vectordbbench_artifact as harness
 
 
+def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
+    profile = root / "profiles" / "build.cpu.pprof"
+    profile.parent.mkdir(parents=True)
+    profile.write_bytes(b"profile")
+    stages = [
+        "startup", "reset", "load_start", "load_end", "drain_checkpoint",
+        "optimize_start", "optimize_end", "cache_prime", "cache_warm",
+        "graceful_close", "cold_open_ready", "exact_verify", "route_verify", "teardown",
+    ]
+    events = []
+    for sequence, stage in enumerate(stages):
+        loaded = sequence >= 3
+        durable = sequence >= 4
+        reopened = sequence >= 11
+        state = {
+            "rows": {
+                "client_sent": 50_000 if loaded else 0,
+                "server_accepted": 50_000 if loaded else 0,
+                "server_durable": 50_000 if durable else 0,
+                "reopened": 50_000 if reopened else 0,
+            },
+            "wal": {"frontier": sequence, "bytes_written_total": sequence * 100},
+            "counters": {
+                "writes": 50_000 if loaded else 0,
+                "checkpoints": 1 if durable else 0,
+                "builds": 1 if sequence >= 6 else 0,
+            },
+        }
+        if sequence >= 6:
+            state["index"] = {"identity": "index-a", "asset_generation": 7, "status": "ready"}
+        if sequence >= 9:
+            state["database"] = {"identity": "database-a", "commit_seq": 50_000}
+        if stage == "route_verify":
+            state["route"] = {
+                "name": "exact_hnsw_search_pack_v1",
+                "fallback_reason": "none",
+                "optimized": True,
+                "index_identity": "index-a",
+                "index_asset_generation": 7,
+            }
+        events.append({
+            "schema_version": harness.LIFECYCLE_EVENT_SCHEMA,
+            "sequence": sequence,
+            "stage": stage,
+            "timestamp": f"2026-08-27T00:00:{sequence:02d}Z",
+            "state": state,
+        })
+    lifecycle_path = root / "lifecycle.jsonl"
+    lifecycle_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in events), encoding="utf-8")
+    manifest = {
+        "schema_version": harness.ARTIFACT_SCHEMA,
+        "context": {
+            "gomap": {"commit": "1" * 40, "dirty": False},
+            "vectordbbench": {"commit": "2" * 40, "dirty": False},
+            "host": {
+                "logical_cpu_count": 16,
+                "physical_cpu_count": 8,
+                "memory_bytes": 64 * 1024**3,
+                "storage": {"kind": "local-nvme", "filesystem": "xfs"},
+            },
+        },
+        "service": {
+            "profile": "command_wal_durable",
+            "binary": {"sha256": "3" * 64},
+        },
+        "harness": {
+            "case_type": "Performance768D50K",
+            "num_per_batch": 500,
+            "num_concurrency": "32",
+            "m": 16,
+            "ef_construction": 128,
+        },
+    }
+    manifest["lifecycle"] = {
+        "schema_version": harness.LIFECYCLE_SCHEMA,
+        "result_status": "completed",
+        "file": "lifecycle.jsonl",
+        "sha256": harness.sha256_file(lifecycle_path),
+        "expected_rows": 50_000,
+        "dataset": {"name": "cohere-50k", "sha256": "4" * 64, "dimensions": 768, "vectors": 50_000},
+        "identity": {
+            "gomap_commit": "1" * 40,
+            "vectordbbench_commit": "2" * 40,
+            "service_binary_sha256": "3" * 64,
+            "config_sha256": harness.lifecycle_config_sha256(manifest),
+        },
+        "raw_artifacts": [{"path": "profiles/build.cpu.pprof", "sha256": harness.sha256_file(profile)}],
+        "profiles": [{
+            "path": "profiles/build.cpu.pprof",
+            "sha256": harness.sha256_file(profile),
+            "kind": "cpu",
+            "before_sequence": 5,
+            "after_sequence": 6,
+        }],
+    }
+    harness.write_json(root / "manifest.json", manifest)
+    return manifest, events
+
+
+def rewrite_lifecycle_fixture(root: Path, manifest: dict, events: list[dict]) -> None:
+    lifecycle_path = root / "lifecycle.jsonl"
+    lifecycle_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in events), encoding="utf-8")
+    manifest["lifecycle"]["sha256"] = harness.sha256_file(lifecycle_path)
+    harness.write_json(root / "manifest.json", manifest)
+
+
 class RouteProofSummaryTest(unittest.TestCase):
     def test_iso_now_is_utc(self) -> None:
         self.assertTrue(harness.iso_now().endswith("Z"))
@@ -297,6 +403,211 @@ class HarnessOrderTest(unittest.TestCase):
         for argv in invalid:
             with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 harness.parse_args(argv)
+
+
+class LifecycleValidatorTest(unittest.TestCase):
+    def test_complete_fixture_passes_and_reconstructs_t_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lifecycle_fixture(root)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertTrue(got["analyzable"])
+        self.assertTrue(got["complete"])
+        self.assertEqual(got["last_stage"], "teardown")
+        self.assertEqual(got["counts"], {
+            "client_sent": 50_000,
+            "server_accepted": 50_000,
+            "server_durable": 50_000,
+            "reopened": 50_000,
+        })
+        self.assertEqual(got["t_ready_seconds"], 8.0)
+
+    def test_interrupted_fixture_is_analyzable_but_never_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            manifest["lifecycle"]["result_status"] = "interrupted"
+            manifest["lifecycle"]["profiles"] = []
+            rewrite_lifecycle_fixture(root, manifest, events[:4])
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertTrue(got["analyzable"])
+        self.assertFalse(got["complete"])
+        self.assertEqual(got["last_stage"], "load_end")
+        self.assertTrue(any("result_status" in item for item in got["completion_errors"]))
+
+    def test_cli_fails_closed_unless_analyzable_partial_is_explicitly_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            manifest["lifecycle"]["result_status"] = "partial"
+            manifest["lifecycle"]["profiles"] = []
+            rewrite_lifecycle_fixture(root, manifest, events[:4])
+            with contextlib.redirect_stdout(io.StringIO()):
+                strict = harness.main(["--validate-lifecycle", str(root)])
+                analyzable = harness.main(["--validate-lifecycle", str(root), "--allow-partial"])
+
+        self.assertEqual(strict, 1)
+        self.assertEqual(analyzable, 0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            events.pop(5)
+            rewrite_lifecycle_fixture(root, manifest, events)
+            with contextlib.redirect_stdout(io.StringIO()):
+                malformed_complete = harness.main([
+                    "--validate-lifecycle", str(root), "--allow-partial",
+                ])
+
+        self.assertEqual(malformed_complete, 1)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with contextlib.redirect_stdout(io.StringIO()):
+                missing_manifest = harness.main([
+                    "--validate-lifecycle", tmp, "--allow-partial",
+                ])
+
+        self.assertEqual(missing_manifest, 1)
+
+    def test_complete_gate_rejects_missing_or_out_of_order_stage(self) -> None:
+        for mutation, expected in (
+            (lambda rows: rows.pop(5), "missing required stage optimize_start"),
+            (lambda rows: rows.__setitem__(slice(5, 7), [rows[6], rows[5]]), "sequence must increase"),
+        ):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, events = lifecycle_fixture(root)
+                mutation(events)
+                rewrite_lifecycle_fixture(root, manifest, events)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["complete"])
+            self.assertTrue(any(expected in item for item in got["errors"] + got["completion_errors"]), got)
+
+    def test_identity_and_config_must_match_manifest(self) -> None:
+        for key, value, expected in (
+            ("gomap_commit", "f" * 40, "gomap_commit does not match"),
+            ("config_sha256", "f" * 64, "config_sha256 does not match"),
+        ):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _ = lifecycle_fixture(root)
+                manifest["lifecycle"]["identity"][key] = value
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["complete"])
+            self.assertTrue(any(expected in item for item in got["errors"]), got)
+
+    def test_effective_service_and_harness_config_must_be_present(self) -> None:
+        mutations = (
+            (lambda row: row["service"].__setitem__("profile", ""), "service.profile"),
+            (lambda row: row["harness"].__setitem__("case_type", ""), "harness.case_type"),
+            (lambda row: row["harness"].__setitem__("num_concurrency", ""), "harness.num_concurrency"),
+            (lambda row: row["harness"].__setitem__("num_per_batch", 0), "harness.num_per_batch"),
+            (lambda row: row["harness"].__setitem__("m", None), "harness.m"),
+            (lambda row: row["harness"].__setitem__("ef_construction", -1), "harness.ef_construction"),
+        )
+        for mutation, expected in mutations:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _ = lifecycle_fixture(root)
+                mutation(manifest)
+                manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"])
+            self.assertTrue(any(expected in item for item in got["errors"]), got)
+
+    def test_stale_index_generation_or_fallback_route_fails_closed(self) -> None:
+        def stale_identity(rows: list[dict]) -> None:
+            rows[10]["state"]["index"]["identity"] = "stale-index"
+
+        def stale_generation(rows: list[dict]) -> None:
+            rows[11]["state"]["index"]["asset_generation"] = 8
+
+        def fallback_route(rows: list[dict]) -> None:
+            rows[12]["state"]["route"]["fallback_reason"] = "exact_scan"
+
+        def stale_route_identity(rows: list[dict]) -> None:
+            rows[12]["state"]["route"]["index_identity"] = "stale-index"
+
+        for mutation, expected in (
+            (stale_identity, "index identity changed"),
+            (stale_generation, "index asset generation changed"),
+            (stale_route_identity, "optimized route proof failed"),
+            (fallback_route, "optimized route proof failed"),
+        ):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, events = lifecycle_fixture(root)
+                mutation(events)
+                rewrite_lifecycle_fixture(root, manifest, events)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["complete"])
+            self.assertTrue(any(expected in item for item in got["completion_errors"]), got)
+
+    def test_raw_checksum_and_profile_association_are_verified(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lifecycle_fixture(root)
+            (root / "profiles" / "build.cpu.pprof").write_bytes(b"corrupt")
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"])
+        self.assertTrue(any("checksum mismatch" in item for item in got["errors"]), got)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _ = lifecycle_fixture(root)
+            manifest["lifecycle"]["profiles"][0]["after_sequence"] = 999
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["complete"])
+        self.assertTrue(any("profile state association" in item for item in got["errors"]), got)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _ = lifecycle_fixture(root)
+            manifest["lifecycle"]["profiles"] = []
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertTrue(got["analyzable"])
+        self.assertFalse(got["complete"])
+        self.assertTrue(any("at least one profile" in item for item in got["completion_errors"]), got)
+
+    def test_rows_wal_and_counters_must_be_monotonic(self) -> None:
+        mutations = (
+            (lambda rows: rows[5]["state"]["rows"].__setitem__("server_durable", 0), "rows.server_durable decreased"),
+            (lambda rows: rows[5]["state"]["wal"].__setitem__("frontier", 0), "wal.frontier decreased"),
+            (lambda rows: rows[7]["state"]["counters"].__setitem__("builds", 0), "counters.builds decreased"),
+        )
+        for mutation, expected in mutations:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, events = lifecycle_fixture(root)
+                mutation(events)
+                rewrite_lifecycle_fixture(root, manifest, events)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["complete"])
+            self.assertTrue(any(expected in item for item in got["errors"]), got)
 
 
 class ManifestFileListTest(unittest.TestCase):
