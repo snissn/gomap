@@ -939,7 +939,10 @@ def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
                     return False
                 source.seek(data_offset)
                 remaining = data_size
-                while remaining >= 8:
+                saw_sample = False
+                while remaining:
+                    if remaining < 8:
+                        return False
                     event_header = source.read(8)
                     if len(event_header) != 8:
                         return False
@@ -948,9 +951,10 @@ def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
                     if event_size < 8 or event_size > remaining:
                         return False
                     if event_type == 9 and event_size > 8:  # PERF_RECORD_SAMPLE
-                        return True
+                        saw_sample = True
                     source.seek(event_size - 8, os.SEEK_CUR)
                     remaining -= event_size
+                return saw_sample
         except OSError:
             return False
         return False
@@ -977,7 +981,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     manifest_path = root / "manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         errors.append(f"cannot read manifest.json: {exc}")
         return report
     if not isinstance(manifest, dict):

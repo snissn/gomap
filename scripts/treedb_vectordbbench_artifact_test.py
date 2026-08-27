@@ -565,6 +565,19 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertFalse(got["complete"])
                 self.assertTrue(any(expected in item for item in got["errors"] + got["completion_errors"]), got)
 
+    def test_invalid_utf8_manifest_fails_closed_without_cli_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "manifest.json").write_bytes(b"\xff")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                exit_code = harness.main(["--validate-lifecycle", str(root), "--allow-partial"])
+            report = json.loads(output.getvalue())
+
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(report["analyzable"])
+        self.assertTrue(any("cannot read manifest.json" in item for item in report["errors"]), report)
+
     def test_identity_and_config_must_match_manifest(self) -> None:
         for key, value, expected in (
             ("gomap_commit", "f" * 40, "gomap_commit does not match"),
@@ -855,10 +868,16 @@ class LifecycleValidatorTest(unittest.TestCase):
 
     def test_perf_profile_requires_bounded_sections_and_sample_data(self) -> None:
         valid_payload = valid_perf_fixture()
+        zero_size_record = bytearray(valid_payload + b"\x00" * 8)
+        zero_size_record[48:56] = (24).to_bytes(8, "little")
+        trailing_garbage = bytearray(valid_payload + b"junk")
+        trailing_garbage[48:56] = (20).to_bytes(8, "little")
         invalid_payloads = {
             "header-only": b"PERFILE2",
             "truncated-data": valid_payload[:-1],
             "data-overlaps-header": valid_payload[:40] + (1).to_bytes(8, "little") + valid_payload[48:],
+            "sample-then-zero-size-record": bytes(zero_size_record),
+            "sample-then-trailing-garbage": bytes(trailing_garbage),
         }
         for label, payload in {"valid": valid_payload, **invalid_payloads}.items():
             with self.subTest(payload=label):
