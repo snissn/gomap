@@ -1738,13 +1738,13 @@ func (db *DB) Close() error {
 		return nil
 	}
 	db.bgVac.deferredVectorBuildClosed.Store(true)
-	db.bgVac.endDeferredVectorBuild()
 	db.bgVac.Stop()
 	// A service finalizer also owns runMu while draining, checkpointing,
 	// vacuuming, rebuilding, and publishing. Wait for an in-flight owner before
 	// closing storage; new finalizers fail the closed gate on either side of the
 	// lock acquisition.
 	db.bgVac.runMu.Lock()
+	db.bgVac.endDeferredVectorBuild()
 	db.bgVac.runMu.Unlock()
 	var err error
 	if db.cached != nil || db.backend != nil {

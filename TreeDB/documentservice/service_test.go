@@ -251,8 +251,8 @@ func TestServiceDeferredVectorBuildFailedFinalizeReopensDurableAndStale(t *testi
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := svc.OptimizeIndex(canceled, "docs", OptimizeIndexRequest{}); err == nil {
-		t.Fatal("canceled OptimizeIndex succeeded")
+	if _, err := svc.OptimizeIndex(canceled, "docs", OptimizeIndexRequest{}); !errors.Is(err, context.Canceled) || ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("canceled OptimizeIndex err=%v code=%s", err, ErrorCodeOf(err))
 	}
 	if err := svc.Close(); err != nil {
 		t.Fatalf("service close: %v", err)

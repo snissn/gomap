@@ -895,6 +895,9 @@ func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeI
 		if errors.As(err, &serviceErr) {
 			return OptimizeIndexResponse{}, err
 		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return OptimizeIndexResponse{}, wrapServiceError(CodeIndexUnavailable, "request context is no longer available", err)
+		}
 		return OptimizeIndexResponse{}, mapCollectionMaintenanceError("finalize deferred vector build", err)
 	}
 	if err := ctx.Err(); err != nil {

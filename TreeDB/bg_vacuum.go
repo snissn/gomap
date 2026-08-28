@@ -20,7 +20,11 @@ func backgroundIndexVacuumShouldReport(err error) bool {
 		!errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) &&
 		!errors.Is(err, rootpublication.ErrResourcePinned) &&
 		!errors.Is(err, backenddb.ErrVacuumUnsupported) &&
-		!errors.Is(err, context.Canceled)
+		!backgroundIndexVacuumContextEnded(err)
+}
+
+func backgroundIndexVacuumContextEnded(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 const (
@@ -239,9 +243,6 @@ func (c *DeferredVectorBuildMaintenance) Finalize(ctx context.Context, index str
 		return errors.New("treedb: deferred vector-build owner changed before finalization")
 	}
 	if matching {
-		if !c.db.bgVac.deferredVectorBuildEpoch.CompareAndSwap(epoch, nil) {
-			return errors.New("treedb: deferred vector-build owner changed during finalization")
-		}
 		if len(epoch.reservations) != 0 {
 			return errors.New("treedb: deferred vector-build insert is still pending")
 		}
@@ -266,6 +267,9 @@ func (c *DeferredVectorBuildMaintenance) Finalize(ctx context.Context, index str
 			return err
 		}
 	}
+	if matching && !c.db.bgVac.deferredVectorBuildEpoch.CompareAndSwap(epoch, nil) {
+		return errors.New("treedb: deferred vector-build owner changed during finalization")
+	}
 	c.db.bgVac.deferredVectorBuildDebt.Store(false)
 	return nil
 }
@@ -273,6 +277,8 @@ func (c *DeferredVectorBuildMaintenance) Finalize(ctx context.Context, index str
 // End restores ordinary automatic-maintenance policy.
 func (c *DeferredVectorBuildMaintenance) End() {
 	if c != nil && c.db != nil {
+		c.db.bgVac.runMu.Lock()
+		defer c.db.bgVac.runMu.Unlock()
 		c.db.bgVac.endDeferredVectorBuild()
 	}
 }
@@ -675,7 +681,7 @@ func (w *bgIndexVacuumWorker) runOnceContextLocked(ctx context.Context, db *DB, 
 		}
 		return nil
 	}
-	if w.deferredVectorBuildActive(now) {
+	if !force && w.deferredVectorBuildActive(now) {
 		w.backlogConsecutiveSkips.Store(0)
 		w.foregroundConsecutiveSkips.Store(0)
 		w.deferredVectorBuildSkips.Add(1)
@@ -734,7 +740,7 @@ func (w *bgIndexVacuumWorker) runOnceContextLocked(ctx context.Context, db *DB, 
 	w.probes.Add(1)
 	w.recordProbeDuration(time.Since(probeStarted))
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
+		if backgroundIndexVacuumContextEnded(err) {
 			w.retryProbe = false
 			w.lastOutcome.Store(backgroundIndexVacuumOutcomeCanceled)
 			w.finishRun(now, err.Error())
@@ -831,7 +837,7 @@ func (w *bgIndexVacuumWorker) recordVacuumError(err error) {
 		w.unsupportedTotal.Add(1)
 		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomeUnsupported)
-	case errors.Is(err, context.Canceled):
+	case backgroundIndexVacuumContextEnded(err):
 		w.retryProbe = false
 		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomeCanceled)

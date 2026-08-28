@@ -642,6 +642,7 @@ func TestDeferredVectorBuildMaintenanceFinalizeDebtAndFailureSemantics(t *testin
 		coalescedDebt    bool
 		physicalDebt     bool
 		vacuumErr        error
+		buildErr         error
 		wantErr          bool
 		wantProbes       uint64
 		wantVacuums      uint64
@@ -653,6 +654,7 @@ func TestDeferredVectorBuildMaintenanceFinalizeDebtAndFailureSemantics(t *testin
 		{name: "successful eligible vacuum consumes debt", coalescedDebt: true, physicalDebt: true, wantProbes: 1, wantVacuums: 1, wantBuild: true},
 		{name: "unsupported vacuum is skipped and build still completes", coalescedDebt: true, physicalDebt: true, vacuumErr: errVacuumUnsupported, wantProbes: 1, wantVacuums: 1, wantBuild: true},
 		{name: "vacuum failure prevents build and retains debt", coalescedDebt: true, physicalDebt: true, vacuumErr: errors.New("injected vacuum failure"), wantErr: true, wantProbes: 1, wantVacuums: 1, wantDebtRetained: true},
+		{name: "build failure retains owner for retry", buildErr: errors.New("injected build failure"), wantErr: true, wantBuild: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -674,15 +676,17 @@ func TestDeferredVectorBuildMaintenanceFinalizeDebtAndFailureSemantics(t *testin
 				return backenddb.IndexVacuumTriggerReport{}, nil
 			})
 			defer restoreProbe()
+			vacuumErr := tt.vacuumErr
 			restoreVacuum := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
 				vacuums.Add(1)
-				return backenddb.VacuumOnlineStats{}, tt.vacuumErr
+				return backenddb.VacuumOnlineStats{}, vacuumErr
 			})
 			defer restoreVacuum()
 			built := false
+			buildErr := tt.buildErr
 			err := control.Finalize(context.Background(), "docs", 1, nil, func() error {
 				built = true
-				return nil
+				return buildErr
 			})
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Finalize error=%v wantErr=%t", err, tt.wantErr)
@@ -691,10 +695,37 @@ func TestDeferredVectorBuildMaintenanceFinalizeDebtAndFailureSemantics(t *testin
 				t.Fatalf("probes=%d vacuums=%d built=%t want %d/%d/%t", probes.Load(), vacuums.Load(), built, tt.wantProbes, tt.wantVacuums, tt.wantBuild)
 			}
 			stats := d.bgVac.Stats()
-			if stats.DeferredVectorBuildActive || stats.DeferredVectorBuildDebt != tt.wantDebtRetained {
-				t.Fatalf("post-finalize stats=%+v want active=false debt=%t", stats, tt.wantDebtRetained)
+			if stats.DeferredVectorBuildActive != tt.wantErr || stats.DeferredVectorBuildDebt != tt.wantDebtRetained {
+				t.Fatalf("post-finalize stats=%+v want active=%t debt=%t", stats, tt.wantErr, tt.wantDebtRetained)
+			}
+			if tt.wantErr {
+				vacuumErr = nil
+				buildErr = nil
+				if err := control.Finalize(context.Background(), "docs", 1, nil, func() error { return nil }); err != nil {
+					t.Fatalf("Finalize retry: %v", err)
+				}
+				if stats := d.bgVac.Stats(); stats.DeferredVectorBuildActive || stats.DeferredVectorBuildDebt {
+					t.Fatalf("Finalize retry left state: %+v", stats)
+				}
 			}
 		})
+	}
+}
+
+func TestDeferredVectorBuildForcedDeadlineIsNotStickyBackgroundFailure(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	restoreProbe := setBackgroundIndexVacuumTriggerReportHookForTest(func(*DB, context.Context) (backenddb.IndexVacuumTriggerReport, error) {
+		return backenddb.IndexVacuumTriggerReport{}, context.DeadlineExceeded
+	})
+	defer restoreProbe()
+	if err := d.bgVac.runOnceContextLocked(context.Background(), d, true); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("forced vacuum error=%v want deadline exceeded", err)
+	}
+	if err := d.backgroundError(); err != nil {
+		t.Fatalf("caller deadline became sticky background error: %v", err)
+	}
+	if got := d.bgVac.permanentFailuresTotal.Load(); got != 0 {
+		t.Fatalf("permanent failures=%d want 0", got)
 	}
 }
 
@@ -708,6 +739,7 @@ func TestDeferredVectorBuildMaintenanceFinalizeRejectsPendingAndCompetingOwner(t
 	if err := control.Finalize(context.Background(), "docs", 1, func() error { drained = true; return nil }, nil); err == nil || drained {
 		t.Fatalf("pending Finalize err=%v drained=%t want fail before drain", err, drained)
 	}
+	control.End()
 	epochID := control.AdmitInsert(context.Background(), "other", 2)
 	if epochID == 0 || !control.CommitInsert(epochID) {
 		t.Fatal("begin competing owner")
