@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -219,6 +220,160 @@ func TestServiceDeferredVectorBuildMaintenanceDoesNotSpanManagers(t *testing.T) 
 	}
 	if got := stats()["treedb.bg_vacuum.deferred_vector_build.active"]; got != "false" {
 		t.Fatalf("owning service left epoch active=%q", got)
+	}
+}
+
+func TestServiceDeferredColumnGraphInsertAdmissionIsSharedAndLifecycleIsBarrier(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.BackgroundIndexVacuumInterval = -1
+	backend, cleanup, _, maintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+	svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{
+		Name:      "docs",
+		Dimension: 2,
+		Metric:    MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{
+			Strategy: collections.VectorIndexStrategyColumnGraph,
+		},
+	}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.OptimizeIndex(ctx, "docs", OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("OptimizeIndex: %v", err)
+	}
+	svc.benchmarkSearchCacheMu.RLock()
+	cachedCollection := svc.benchmarkSearchCache["docs"].collection
+	svc.benchmarkSearchCacheMu.RUnlock()
+	if cachedCollection == nil {
+		t.Fatal("OptimizeIndex did not prime the prepared search cache")
+	}
+
+	firstAtCommit := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var firstHook atomic.Bool
+	svc.deferredMaintenanceBeforeCommit = func() {
+		if firstHook.CompareAndSwap(false, true) {
+			close(firstAtCommit)
+			<-releaseFirst
+		}
+	}
+	request := func(id string) UpsertDocumentsRequest {
+		return UpsertDocumentsRequest{
+			Documents:               []Document{{ID: id, Embedding: []float32{1, 0}}},
+			DeferVectorIndexRebuild: true,
+		}
+	}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpsertDocuments(ctx, "docs", request("first"))
+		firstDone <- err
+	}()
+	select {
+	case <-firstAtCommit:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first deferred insert did not reach pre-commit hook")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpsertDocuments(ctx, "docs", request("second"))
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second deferred insert: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second deferred insert could not pass a paused independent insert")
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{IDs: []string{"second"}})
+		deleteDone <- err
+	}()
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("delete crossed an admitted deferred insert: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first deferred insert: %v", err)
+	}
+	if got := cachedCollection.LastInsertStats().Documents; got != 0 {
+		t.Fatalf("shared inserts reused cached diagnostics handle: Documents=%d want 0", got)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteDocuments: %v", err)
+	}
+	count, err := svc.CountDocuments(ctx, "docs", CountDocumentsRequest{})
+	if err != nil || count.Count != 1 {
+		t.Fatalf("CountDocuments=%+v err=%v want 1", count, err)
+	}
+
+	firstAtCommit = make(chan struct{})
+	releaseFirst = make(chan struct{})
+	firstHook.Store(false)
+	svc.deferredMaintenanceBeforeCommit = func() {
+		if firstHook.CompareAndSwap(false, true) {
+			close(firstAtCommit)
+			<-releaseFirst
+		}
+	}
+	firstDone = make(chan error, 1)
+	go func() {
+		_, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{
+			Documents:               []Document{{ID: "collision", Content: "first", Embedding: []float32{1, 0}}},
+			DeferVectorIndexRebuild: true,
+		})
+		firstDone <- err
+	}()
+	select {
+	case <-firstAtCommit:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first collision insert did not reach pre-commit hook")
+	}
+	updateDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{
+			Documents:               []Document{{ID: "collision", Content: "second", Embedding: []float32{0, 1}}},
+			DeferVectorIndexRebuild: true,
+		})
+		updateDone <- err
+	}()
+	select {
+	case err := <-updateDone:
+		t.Fatalf("colliding upsert crossed the insert-only shared boundary: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first collision insert: %v", err)
+	}
+	if err := <-updateDone; err != nil {
+		t.Fatalf("colliding upsert retry: %v", err)
+	}
+	svc.deferredMaintenanceBeforeCommit = nil
+	filtered, err := svc.FilterDocuments(ctx, "docs", FilterDocumentsRequest{Limit: 10})
+	if err != nil {
+		t.Fatalf("FilterDocuments: %v", err)
+	}
+	found := false
+	for _, document := range filtered.Documents {
+		if document.ID == "collision" {
+			found = document.Content == "second"
+		}
+	}
+	if !found {
+		t.Fatalf("collision document was not exclusively updated: %+v", filtered.Documents)
 	}
 }
 
