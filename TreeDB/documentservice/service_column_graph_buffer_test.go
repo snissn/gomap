@@ -56,7 +56,11 @@ func TestServiceColumnGraphBufferedInsertCrashRecovery(t *testing.T) {
 	}
 	defer db.Close()
 	svc := New(collections.NewCollectionManager(db))
-	defer svc.Close()
+	defer func() {
+		if err := svc.Close(); err != nil {
+			t.Errorf("close service: %v", err)
+		}
+	}()
 	result, err := svc.SearchKeyword(context.Background(), "docs", KeywordSearchRequest{Query: "durable", TopK: 2})
 	if err != nil {
 		t.Fatalf("SearchKeyword after crash recovery: %v", err)
@@ -207,7 +211,11 @@ func TestServiceColumnGraphLegacyAsyncMetadataUsesForegroundThreshold(t *testing
 	}
 	defer db.Close()
 	svc = New(collections.NewCollectionManager(db))
-	defer svc.Close()
+	defer func() {
+		if err := svc.Close(); err != nil {
+			t.Errorf("close service: %v", err)
+		}
+	}()
 	result, err := svc.SearchKeyword(context.Background(), "docs", KeywordSearchRequest{Query: "durable", TopK: 1})
 	if err != nil {
 		t.Fatalf("SearchKeyword after reopen: %v", err)
