@@ -3172,6 +3172,23 @@ class LifecycleValidatorTest(unittest.TestCase):
             self.assertFalse(got["analyzable"], got)
             self.assertTrue(any("service.command" in item for item in got["errors"]), got)
 
+    def test_service_and_pprof_listeners_must_use_distinct_ports(self) -> None:
+        for pprof_address in ("127.0.0.1:9876", "localhost:9876", "[::1]:9876"):
+            with self.subTest(pprof=pprof_address), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _ = lifecycle_fixture(root)
+                command = manifest["service"]["command"]
+                command[command.index("-pprof") + 1] = pprof_address
+                manifest["lifecycle"]["identity"]["config_sha256"] = (
+                    harness.lifecycle_config_sha256(manifest)
+                )
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any("service.command" in item for item in got["errors"]), got)
+
     def test_service_address_must_be_loopback(self) -> None:
         for address in ("0.0.0.0:9876", "192.0.2.1:9876", "example.com:9876"):
             with self.subTest(address=address), tempfile.TemporaryDirectory() as tmp:
