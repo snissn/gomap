@@ -434,9 +434,11 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
 		} else if collections.IsDuplicateKeyError(err) {
 			if deferredMaintenanceEpoch != 0 {
+				startPhase(&upsertStats.MaintenanceNanos)
 				if err := s.deferredVectorBuildMaintenance.EndContext(ctx); err != nil {
 					return UpsertDocumentsResponse{}, err
 				}
+				startPhase(&upsertStats.InsertNanos)
 				deferredMaintenanceEpoch = 0
 				deferredMaintenanceCommitRejected = true
 				deferVectorIndexRebuild = false
