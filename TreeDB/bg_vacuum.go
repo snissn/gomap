@@ -172,7 +172,7 @@ type deferredVectorBuildEpoch struct {
 	id           uint64
 	index        string
 	generation   uint64
-	pending      bool
+	reservations []uint64
 	lastActivity int64
 }
 
@@ -195,8 +195,8 @@ func (c *DeferredVectorBuildMaintenance) AdmitInsert(index string, generation ui
 
 // CommitInsert marks a successfully published reservation idle. A reservation
 // invalidated by manual maintenance, close, or another owner cannot reappear.
-func (c *DeferredVectorBuildMaintenance) CommitInsert(epochID uint64) bool {
-	return c != nil && c.db != nil && c.db.bgVac.commitDeferredVectorBuild(epochID)
+func (c *DeferredVectorBuildMaintenance) CommitInsert(reservationID uint64) bool {
+	return c != nil && c.db != nil && c.db.bgVac.commitDeferredVectorBuild(reservationID)
 }
 
 // End restores ordinary automatic-maintenance policy.
@@ -214,11 +214,12 @@ func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(index string, generation 
 	for {
 		current := w.deferredVectorBuildEpoch.Load()
 		if current == nil {
+			reservationID := w.deferredVectorBuildNextID.Add(1)
 			next := &deferredVectorBuildEpoch{
-				id:           w.deferredVectorBuildNextID.Add(1),
+				id:           reservationID,
 				index:        index,
 				generation:   generation,
-				pending:      true,
+				reservations: []uint64{reservationID},
 				lastActivity: time.Now().UnixNano(),
 			}
 			if w.deferredVectorBuildEpoch.CompareAndSwap(nil, next) {
@@ -226,7 +227,7 @@ func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(index string, generation 
 					w.deferredVectorBuildEpoch.CompareAndSwap(next, nil)
 					return 0
 				}
-				return next.id
+				return reservationID
 			}
 			continue
 		}
@@ -236,32 +237,48 @@ func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(index string, generation 
 			}
 			continue
 		}
+		reservationID := w.deferredVectorBuildNextID.Add(1)
+		reservations := append([]uint64(nil), current.reservations...)
+		reservations = append(reservations, reservationID)
 		next := &deferredVectorBuildEpoch{
 			id:           current.id,
 			index:        index,
 			generation:   generation,
-			pending:      true,
+			reservations: reservations,
 			lastActivity: time.Now().UnixNano(),
 		}
 		if w.deferredVectorBuildEpoch.CompareAndSwap(current, next) {
-			return next.id
+			return reservationID
 		}
 	}
 }
 
-func (w *bgIndexVacuumWorker) commitDeferredVectorBuild(epochID uint64) bool {
-	if epochID == 0 || w.deferredVectorBuildClosed.Load() {
+func (w *bgIndexVacuumWorker) commitDeferredVectorBuild(reservationID uint64) bool {
+	if reservationID == 0 || w.deferredVectorBuildClosed.Load() {
 		return false
 	}
 	for {
 		current := w.deferredVectorBuildEpoch.Load()
-		if current == nil || current.id != epochID {
+		if current == nil {
 			return false
 		}
+		reservationIndex := -1
+		for i, id := range current.reservations {
+			if id == reservationID {
+				reservationIndex = i
+				break
+			}
+		}
+		if reservationIndex < 0 {
+			return false
+		}
+		reservations := append([]uint64(nil), current.reservations[:reservationIndex]...)
+		reservations = append(reservations, current.reservations[reservationIndex+1:]...)
 		next := &deferredVectorBuildEpoch{
 			id:           current.id,
 			index:        current.index,
 			generation:   current.generation,
+			reservations: reservations,
 			lastActivity: time.Now().UnixNano(),
 		}
 		if w.deferredVectorBuildEpoch.CompareAndSwap(current, next) {
@@ -284,7 +301,7 @@ func (w *bgIndexVacuumWorker) deferredVectorBuildActive(now time.Time) bool {
 		if epoch == nil {
 			return false
 		}
-		if epoch.pending {
+		if len(epoch.reservations) != 0 {
 			return true
 		}
 		interval := w.interval

@@ -30,18 +30,19 @@ type Service struct {
 	manager *collections.CollectionManager
 	writeMu sync.Mutex
 
-	benchmarkSearchCacheMu         sync.RWMutex
-	benchmarkSearchCache           map[string]*serviceBenchmarkSearchCacheEntry
-	benchmarkSearchBufferPool      sync.Pool
-	denseVectorNativeAfterSearch   func(int, collections.VectorIndexSearchResponse) error
-	vectorPartitionOperations      *vectorpartition.OperationsV1
-	diagnosticsEnabled             atomic.Bool
-	diagnosticsMu                  sync.Mutex
-	diagnosticsActive              atomic.Pointer[diagnosticsActiveIndex]
-	diagnosticsCompleted           sync.Map // map[string]*diagnosticsCompletedInsert
-	diagnosticsBeforeActivePublish func()
-	deferredVectorBuildMaintenance *treedb.DeferredVectorBuildMaintenance
-	closed                         bool
+	benchmarkSearchCacheMu          sync.RWMutex
+	benchmarkSearchCache            map[string]*serviceBenchmarkSearchCacheEntry
+	benchmarkSearchBufferPool       sync.Pool
+	denseVectorNativeAfterSearch    func(int, collections.VectorIndexSearchResponse) error
+	vectorPartitionOperations       *vectorpartition.OperationsV1
+	diagnosticsEnabled              atomic.Bool
+	diagnosticsMu                   sync.Mutex
+	diagnosticsActive               atomic.Pointer[diagnosticsActiveIndex]
+	diagnosticsCompleted            sync.Map // map[string]*diagnosticsCompletedInsert
+	diagnosticsBeforeActivePublish  func()
+	deferredVectorBuildMaintenance  *treedb.DeferredVectorBuildMaintenance
+	deferredMaintenanceBeforeCommit func()
+	closed                          bool
 }
 
 // RegisterVectorPartitionOperationsV1 installs the optional default-off
@@ -390,6 +391,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			if deferredMaintenanceEpoch != 0 {
 				s.deferredVectorBuildMaintenance.End()
 				deferredMaintenanceEpoch = 0
+				deferVectorIndexRebuild = false
 			}
 			// Upsert is a service contract, while Collection.InsertBatch is an
 			// insert-only primitive. If another request inserts one of these IDs
@@ -427,6 +429,15 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			updated++
 		}
 	}
+	if deferredMaintenanceEpoch != 0 {
+		if s.deferredMaintenanceBeforeCommit != nil {
+			s.deferredMaintenanceBeforeCommit()
+		}
+		if !s.deferredVectorBuildMaintenance.CommitInsert(deferredMaintenanceEpoch) {
+			deferredMaintenanceEpoch = 0
+			deferVectorIndexRebuild = false
+		}
+	}
 	var rebuildErr error
 	if inserted > 0 && updated == 0 && !deferVectorIndexRebuild {
 		rebuildErr = rebuildServiceVectorIndex(ctx, col)
@@ -438,9 +449,6 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	}
 	if rebuildErr != nil {
 		return UpsertDocumentsResponse{}, rebuildErr
-	}
-	if deferredMaintenanceEpoch != 0 {
-		s.deferredVectorBuildMaintenance.CommitInsert(deferredMaintenanceEpoch)
 	}
 	deferredMaintenanceSucceeded = true
 	return UpsertDocumentsResponse{Index: info, Upserted: len(prepared), Inserted: inserted, Updated: updated, IDs: ids, CompactEmbeddings: compactEmbeddings}, nil

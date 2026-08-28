@@ -43,7 +43,7 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	t.Cleanup(func() { _ = cleanup() })
 	svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
 	ctx := context.Background()
-	for _, name := range []string{"docs", "other", "generation"} {
+	for _, name := range []string{"docs", "other", "generation", "commitfail"} {
 		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine}); err != nil {
 			t.Fatalf("CreateIndex(%s): %v", name, err)
 		}
@@ -139,6 +139,12 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	// A failed finalization attempt must still restore ordinary maintenance.
 	_, _ = svc.OptimizeIndex(ctx, "docs", OptimizeIndexRequest{})
 	assertActive(false)
+
+	svc.deferredMaintenanceBeforeCommit = maintenance.End
+	deferInsert("commitfail", "commit-fallback")
+	svc.deferredMaintenanceBeforeCommit = nil
+	assertActive(false)
+	assertCleanGraph("commitfail", 1)
 
 	deferInsert("docs", "f")
 	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "normal", Embedding: []float32{1, 0}}}}); err != nil {

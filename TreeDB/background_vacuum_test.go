@@ -632,9 +632,41 @@ func TestDeferredVectorBuildMaintenanceCloseAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("close reopened database: %v", err)
+		}
+	})
 	if reopened.bgVac.Stats().DeferredVectorBuildActive {
 		t.Fatal("reopen restored process-local deferred epoch")
+	}
+}
+
+func TestDeferredVectorBuildMaintenanceTracksConcurrentReservations(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.bgVac.interval = time.Millisecond
+	control := &DeferredVectorBuildMaintenance{db: d}
+	first := control.AdmitInsert("docs", 1)
+	second := control.AdmitInsert("docs", 1)
+	if first == 0 || second == 0 || first == second {
+		t.Fatalf("reservations=%d,%d want distinct nonzero tokens", first, second)
+	}
+	if !control.CommitInsert(first) {
+		t.Fatal("commit first reservation")
+	}
+	epoch := d.bgVac.deferredVectorBuildEpoch.Load()
+	d.bgVac.deferredVectorBuildEpoch.Store(&deferredVectorBuildEpoch{
+		id:           epoch.id,
+		index:        epoch.index,
+		generation:   epoch.generation,
+		reservations: append([]uint64(nil), epoch.reservations...),
+		lastActivity: time.Now().Add(-3 * time.Millisecond).UnixNano(),
+	})
+	if !d.bgVac.deferredVectorBuildActive(time.Now()) {
+		t.Fatal("first commit expired an outstanding reservation")
+	}
+	if !control.CommitInsert(second) || control.CommitInsert(second) {
+		t.Fatal("second reservation commit was not exactly once")
 	}
 }
 
