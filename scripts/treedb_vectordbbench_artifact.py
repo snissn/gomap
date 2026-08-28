@@ -3195,6 +3195,14 @@ def load_metrics_from_result(path: Path, index_name: str, case_type: str, artifa
     task_config = matches[0].get("task_config") or {}
     vectors, vector_source = result_vector_count(task_config, case_type)
     throughput_vectors, throughput_source = throughput_vector_count(metrics, vectors)
+    try:
+        insert_vectors_per_second = throughput_vectors / insert
+    except OverflowError as exc:
+        raise ValueError(
+            f"canonical VDBBench result {path} has unrepresentable insert throughput"
+        ) from exc
+    if not math.isfinite(insert_vectors_per_second):
+        raise ValueError(f"canonical VDBBench result {path} has unrepresentable insert throughput")
     return {
         "result_file": str(path.relative_to(artifact_root)),
         "result_sha256": sha256_file(path),
@@ -3209,7 +3217,7 @@ def load_metrics_from_result(path: Path, index_name: str, case_type: str, artifa
         "insert_duration_seconds": insert,
         "offline_optimize_duration_seconds": optimize,
         "total_load_duration_seconds": load,
-        "insert_vectors_per_second": throughput_vectors / insert,
+        "insert_vectors_per_second": insert_vectors_per_second,
         "task_config": task_config,
         "task_config_sha256": hashlib.sha256(
             json.dumps(task_config, sort_keys=True, separators=(",", ":")).encode("utf-8")

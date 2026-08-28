@@ -1080,6 +1080,29 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "insert_duration"):
                 harness.load_metrics_from_result(path, "idx", "Performance1536D50K", root)
 
+    def test_canonical_result_fails_closed_when_throughput_overflows_float(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "result_test.json"
+            path.write_text(json.dumps({"results": [{
+                "label": ":)",
+                "metrics": {
+                    "insert_duration": 2.0,
+                    "optimize_duration": 3.0,
+                    "load_duration": 5.0,
+                    "inserted_count": 0,
+                },
+                "task_config": {
+                    "db_config": {"index_name": "idx"},
+                    "case_config": {"custom_case": {"dataset_config": {"size": 10**400}}},
+                },
+            }]}), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "unrepresentable insert throughput"):
+                harness.load_metrics_from_result(
+                    path, "idx", "PerformanceCustomDataset", root,
+                )
+
     def test_canonical_result_fails_closed_when_total_is_inconsistent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
