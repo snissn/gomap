@@ -1702,7 +1702,7 @@ func (db *DB) closeMaintenance() error {
 		if logEnabled {
 			log.Printf("treedb: close compact index start")
 		}
-		if e := db.CompactIndex(); e != nil {
+		if e := db.compactIndex(true); e != nil {
 			err = errors.Join(err, e)
 		}
 		if logEnabled {
@@ -1715,7 +1715,7 @@ func (db *DB) closeMaintenance() error {
 			log.Printf("treedb: close vacuum index online start timeout=%s", timeout)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		if e := db.VacuumIndexOnline(ctx); e != nil {
+		if e := db.vacuumIndexOnline(ctx, true); e != nil {
 			if errors.Is(e, errVacuumUnsupported) {
 				if logEnabled {
 					log.Printf("treedb: close vacuum index online skipped: %v", e)
@@ -2529,6 +2529,10 @@ func (db *DB) checkpointCachedForPublicCommandWAL() error {
 // In cached mode it first drains the caching layer so the backend reflects all
 // buffered writes before rebuilding.
 func (db *DB) CompactIndex() error {
+	return db.compactIndex(false)
+}
+
+func (db *DB) compactIndex(allowClosing bool) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
@@ -2537,6 +2541,9 @@ func (db *DB) CompactIndex() error {
 	}
 	db.bgVac.runMu.Lock()
 	defer db.bgVac.runMu.Unlock()
+	if db.bgVac.deferredVectorBuildClosed.Load() && !allowClosing {
+		return ErrClosed
+	}
 	db.bgVac.endDeferredVectorBuild()
 
 	if db.cached != nil {
@@ -2555,6 +2562,10 @@ func (db *DB) CompactIndex() error {
 // a short writer pause. Disk space from the old index is reclaimed once any old
 // snapshots/iterators drain.
 func (db *DB) VacuumIndexOnline(ctx context.Context) error {
+	return db.vacuumIndexOnline(ctx, false)
+}
+
+func (db *DB) vacuumIndexOnline(ctx context.Context, allowClosing bool) error {
 	if db == nil {
 		return ErrClosed
 	}
@@ -2569,6 +2580,9 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		return err
 	}
 	defer db.bgVac.runMu.Unlock()
+	if db.bgVac.deferredVectorBuildClosed.Load() && !allowClosing {
+		return ErrClosed
+	}
 	db.bgVac.endDeferredVectorBuild()
 	_, err := db.vacuumIndexOnlineStats(ctx)
 	if err == nil {

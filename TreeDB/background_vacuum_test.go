@@ -803,6 +803,41 @@ func TestDeferredVectorBuildMaintenanceCloseWaitsForFinalizer(t *testing.T) {
 	}
 }
 
+func TestCloseRejectsQueuedManualMaintenance(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.bgVac.runMu.Lock()
+	compactDone := make(chan error, 1)
+	go func() { compactDone <- d.CompactIndex() }()
+	time.Sleep(20 * time.Millisecond)
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- d.Close() }()
+	for !d.bgVac.deferredVectorBuildClosed.Load() {
+		time.Sleep(time.Millisecond)
+	}
+	d.bgVac.runMu.Unlock()
+	if err := <-compactDone; !errors.Is(err, ErrClosed) {
+		t.Fatalf("queued CompactIndex error=%v want ErrClosed", err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestCompactStorageMaintenanceWaitHonorsContext(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.maintenance.mu.Lock()
+	defer d.maintenance.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := d.CompactStorage(ctx, CompactStorageOptions{}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CompactStorage error=%v want deadline exceeded", err)
+	}
+	if !d.bgVac.runMu.TryLock() {
+		t.Fatal("CompactStorage retained run lock after cancellation")
+	}
+	d.bgVac.runMu.Unlock()
+}
+
 func TestDeferredVectorBuildMaintenanceFailsBackOnAmbiguityAndManualVacuum(t *testing.T) {
 	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
 	control := &DeferredVectorBuildMaintenance{db: d}
