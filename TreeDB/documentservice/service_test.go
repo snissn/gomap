@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -30,6 +31,88 @@ func TestServiceNilMutationReceiverFailsClosed(t *testing.T) {
 	if _, err := svc.OptimizeIndex(ctx, "docs", OptimizeIndexRequest{}); ErrorCodeOf(err) != CodeIndexUnavailable {
 		t.Fatalf("OptimizeIndex err=%v code=%s", err, ErrorCodeOf(err))
 	}
+}
+
+func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.BackgroundIndexVacuumInterval = -1
+	backend, cleanup, stats, maintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+	svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	ctx := context.Background()
+	for _, name := range []string{"docs", "other"} {
+		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine}); err != nil {
+			t.Fatalf("CreateIndex(%s): %v", name, err)
+		}
+	}
+	deferInsert := func(index, id string) {
+		t.Helper()
+		if _, err := svc.UpsertDocuments(ctx, index, UpsertDocumentsRequest{
+			Documents:               []Document{{ID: id, Embedding: []float32{1, 0}}},
+			DeferVectorIndexRebuild: true,
+		}); err != nil {
+			t.Fatalf("deferred upsert %s/%s: %v", index, id, err)
+		}
+	}
+	assertActive := func(want bool) {
+		t.Helper()
+		if got := stats()["treedb.bg_vacuum.deferred_vector_build.active"]; got != fmt.Sprint(want) {
+			t.Fatalf("deferred epoch active=%q want %t; stats=%v", got, want, stats())
+		}
+	}
+
+	deferInsert("docs", "a")
+	assertActive(true)
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{
+		Documents:               []Document{{ID: "bad", Embedding: []float32{1}}},
+		DeferVectorIndexRebuild: true,
+	}); err == nil {
+		t.Fatal("malformed deferred upsert succeeded")
+	}
+	assertActive(false)
+
+	deferInsert("docs", "a2")
+	assertActive(true)
+	deferInsert("other", "b")
+	assertActive(false)
+
+	deferInsert("docs", "c")
+	assertActive(true)
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "c", Embedding: []float32{0, 1}}}, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatalf("deferred update: %v", err)
+	}
+	assertActive(false)
+
+	deferInsert("docs", "d")
+	if _, err := svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{IDs: []string{"d"}}); err != nil {
+		t.Fatalf("DeleteDocuments: %v", err)
+	}
+	assertActive(false)
+
+	deferInsert("docs", "e")
+	// A failed finalization attempt must still restore ordinary maintenance.
+	_, _ = svc.OptimizeIndex(ctx, "docs", OptimizeIndexRequest{})
+	assertActive(false)
+
+	deferInsert("docs", "f")
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "normal", Embedding: []float32{1, 0}}}}); err != nil {
+		t.Fatalf("non-deferred UpsertDocuments: %v", err)
+	}
+	assertActive(false)
+
+	deferInsert("docs", "g")
+	// Reset support is independent of the fail-back transition being tested.
+	_, _ = svc.ResetIndex(ctx, "docs", ResetIndexRequest{DropOld: true})
+	assertActive(false)
+
+	deferInsert("docs", "h")
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	assertActive(false)
 }
 
 func TestServiceSchemaValidationAndUnsupportedFilterErrors(t *testing.T) {

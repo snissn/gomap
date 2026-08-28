@@ -42,6 +42,7 @@ const (
 	backgroundIndexVacuumOutcomeNone                               = "none"
 	backgroundIndexVacuumOutcomeBacklogSkip                        = "backlog_skip"
 	backgroundIndexVacuumOutcomeForegroundSkip                     = "foreground_skip"
+	backgroundIndexVacuumOutcomeDeferredVectorBuildSkip            = "deferred_vector_build_skip"
 	backgroundIndexVacuumOutcomeUnchanged                          = "unchanged"
 	backgroundIndexVacuumOutcomeNoDebt                             = "no_debt"
 	backgroundIndexVacuumOutcomeRetry                              = "retry"
@@ -141,6 +142,13 @@ type bgIndexVacuumWorker struct {
 	foregroundConsecutiveSkips atomic.Uint64
 	foregroundSkips            atomic.Uint64
 	foregroundForcedRuns       atomic.Uint64
+	deferredVectorBuildEpoch   atomic.Pointer[deferredVectorBuildEpoch]
+	deferredVectorBuildNextID  atomic.Uint64
+	deferredVectorBuildClosed  atomic.Bool
+	deferredVectorBuildDebt    atomic.Bool
+	deferredVectorBuildSkips   atomic.Uint64
+	deferredVectorBuildDebtSet atomic.Uint64
+	deferredVectorBuildExpired atomic.Uint64
 
 	lastFreelistReclaimablePages atomic.Uint64
 	lastFreelistReclaimableRatio atomic.Uint64
@@ -156,6 +164,138 @@ type bgIndexVacuumWorker struct {
 	lastProbeValid                  bool
 	retryProbe                      bool
 	unsupported                     bool
+}
+
+type deferredVectorBuildEpoch struct {
+	id           uint64
+	index        string
+	generation   uint64
+	pending      bool
+	lastActivity int64
+}
+
+// DeferredVectorBuildMaintenance is the narrow engine control used by the
+// document service's explicit deferred-build load lifecycle.
+type DeferredVectorBuildMaintenance struct {
+	db *DB
+}
+
+// AdmitInsert reserves an insert-only deferred request in the current epoch.
+// A competing owner ends the epoch and returns zero.
+func (c *DeferredVectorBuildMaintenance) AdmitInsert(index string, generation uint64) uint64 {
+	if c == nil || c.db == nil {
+		return 0
+	}
+	return c.db.bgVac.admitDeferredVectorBuild(index, generation)
+}
+
+// CommitInsert marks a successfully published reservation idle. A reservation
+// invalidated by manual maintenance, close, or another owner cannot reappear.
+func (c *DeferredVectorBuildMaintenance) CommitInsert(epochID uint64) bool {
+	return c != nil && c.db != nil && c.db.bgVac.commitDeferredVectorBuild(epochID)
+}
+
+// End restores ordinary automatic-maintenance policy.
+func (c *DeferredVectorBuildMaintenance) End() {
+	if c != nil && c.db != nil {
+		c.db.bgVac.endDeferredVectorBuild()
+	}
+}
+
+func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(index string, generation uint64) uint64 {
+	if index == "" || generation == 0 || w.deferredVectorBuildClosed.Load() {
+		w.endDeferredVectorBuild()
+		return 0
+	}
+	for {
+		current := w.deferredVectorBuildEpoch.Load()
+		if current == nil {
+			next := &deferredVectorBuildEpoch{
+				id:           w.deferredVectorBuildNextID.Add(1),
+				index:        index,
+				generation:   generation,
+				pending:      true,
+				lastActivity: time.Now().UnixNano(),
+			}
+			if w.deferredVectorBuildEpoch.CompareAndSwap(nil, next) {
+				if w.deferredVectorBuildClosed.Load() {
+					w.deferredVectorBuildEpoch.CompareAndSwap(next, nil)
+					return 0
+				}
+				return next.id
+			}
+			continue
+		}
+		if current.index != index || current.generation != generation {
+			if w.deferredVectorBuildEpoch.CompareAndSwap(current, nil) {
+				return 0
+			}
+			continue
+		}
+		next := &deferredVectorBuildEpoch{
+			id:           current.id,
+			index:        index,
+			generation:   generation,
+			pending:      true,
+			lastActivity: time.Now().UnixNano(),
+		}
+		if w.deferredVectorBuildEpoch.CompareAndSwap(current, next) {
+			return next.id
+		}
+	}
+}
+
+func (w *bgIndexVacuumWorker) commitDeferredVectorBuild(epochID uint64) bool {
+	if epochID == 0 || w.deferredVectorBuildClosed.Load() {
+		return false
+	}
+	for {
+		current := w.deferredVectorBuildEpoch.Load()
+		if current == nil || current.id != epochID {
+			return false
+		}
+		next := &deferredVectorBuildEpoch{
+			id:           current.id,
+			index:        current.index,
+			generation:   current.generation,
+			lastActivity: time.Now().UnixNano(),
+		}
+		if w.deferredVectorBuildEpoch.CompareAndSwap(current, next) {
+			if w.deferredVectorBuildClosed.Load() {
+				w.deferredVectorBuildEpoch.CompareAndSwap(next, nil)
+				return false
+			}
+			return true
+		}
+	}
+}
+
+func (w *bgIndexVacuumWorker) endDeferredVectorBuild() {
+	w.deferredVectorBuildEpoch.Store(nil)
+}
+
+func (w *bgIndexVacuumWorker) deferredVectorBuildActive(now time.Time) bool {
+	for {
+		epoch := w.deferredVectorBuildEpoch.Load()
+		if epoch == nil {
+			return false
+		}
+		if epoch.pending {
+			return true
+		}
+		interval := w.interval
+		if interval <= 0 {
+			interval = 30 * time.Second
+		}
+		if elapsed := now.UnixNano() - epoch.lastActivity; elapsed >= 0 && time.Duration(elapsed) > 2*interval {
+			if w.deferredVectorBuildEpoch.CompareAndSwap(epoch, nil) {
+				w.deferredVectorBuildExpired.Add(1)
+				return false
+			}
+			continue
+		}
+		return true
+	}
 }
 
 var bgIndexVacuumBacklogBytesHook struct {
@@ -393,7 +533,17 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 	if !ok || db.backend.IsClosing() {
 		return
 	}
-
+	if w.deferredVectorBuildActive(now) {
+		w.backlogConsecutiveSkips.Store(0)
+		w.foregroundConsecutiveSkips.Store(0)
+		w.deferredVectorBuildSkips.Add(1)
+		if w.deferredVectorBuildDebt.CompareAndSwap(false, true) {
+			w.deferredVectorBuildDebtSet.Add(1)
+		}
+		w.lastOutcome.Store(backgroundIndexVacuumOutcomeDeferredVectorBuildSkip)
+		w.finishRun(time.Now(), "")
+		return
+	}
 	forcedAfterBacklog := false
 	backlogBytes := backgroundIndexVacuumBacklogBytes(db)
 	w.lastBacklogBytes.Store(backlogBytes)
@@ -473,6 +623,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 	reason := w.triggerReason(rep)
 	w.lastDebtReason.Store(reason)
 	if reason == backgroundIndexVacuumDebtReasonNone {
+		w.deferredVectorBuildDebt.Store(false)
 		w.retryProbe = false
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomeNoDebt)
 		w.finishRun(now, "")
@@ -505,6 +656,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 	w.lastOutcome.Store(backgroundIndexVacuumOutcomeSuccess)
 	w.lastErr.Store("")
 	w.vacuums.Add(1)
+	w.deferredVectorBuildDebt.Store(false)
 	w.finishRun(now, "")
 	w.lastVacuumUnix.Store(now.Unix())
 }
@@ -702,6 +854,15 @@ type bgIndexVacuumStats struct {
 	ForegroundConsecutiveSkips uint64
 	ForegroundSkips            uint64
 	ForegroundForcedRuns       uint64
+	DeferredVectorBuildActive  bool
+	DeferredVectorBuildEpochID uint64
+	DeferredVectorBuildIndex   string
+	DeferredVectorBuildGen     uint64
+	DeferredVectorBuildLastNs  int64
+	DeferredVectorBuildDebt    bool
+	DeferredVectorBuildSkips   uint64
+	DeferredVectorBuildDebtSet uint64
+	DeferredVectorBuildExpired uint64
 
 	LastRunUnix     int64
 	LastVacuumUnix  int64
@@ -755,6 +916,10 @@ func (w *bgIndexVacuumWorker) Stats() bgIndexVacuumStats {
 		ForegroundConsecutiveSkips:   w.foregroundConsecutiveSkips.Load(),
 		ForegroundSkips:              w.foregroundSkips.Load(),
 		ForegroundForcedRuns:         w.foregroundForcedRuns.Load(),
+		DeferredVectorBuildDebt:      w.deferredVectorBuildDebt.Load(),
+		DeferredVectorBuildSkips:     w.deferredVectorBuildSkips.Load(),
+		DeferredVectorBuildDebtSet:   w.deferredVectorBuildDebtSet.Load(),
+		DeferredVectorBuildExpired:   w.deferredVectorBuildExpired.Load(),
 		LastRunUnix:                  w.lastRunUnix.Load(),
 		LastVacuumUnix:               w.lastVacuumUnix.Load(),
 		LastSpanRatio:                w.lastSpanRatio.Load(),
@@ -769,6 +934,13 @@ func (w *bgIndexVacuumWorker) Stats() bgIndexVacuumStats {
 		LastFreelistReclaimableRatio: w.lastFreelistReclaimableRatio.Load(),
 		LastCollectionRootPages:      w.lastCollectionRootPages.Load(),
 		LastCollectionRootSpanRatio:  w.lastCollectionRootSpanRatio.Load(),
+	}
+	if epoch := w.deferredVectorBuildEpoch.Load(); epoch != nil {
+		out.DeferredVectorBuildActive = true
+		out.DeferredVectorBuildEpochID = epoch.id
+		out.DeferredVectorBuildIndex = epoch.index
+		out.DeferredVectorBuildGen = epoch.generation
+		out.DeferredVectorBuildLastNs = epoch.lastActivity
 	}
 	if v := w.lastErr.Load(); v != nil {
 		out.LastErr, _ = v.(string)
@@ -833,6 +1005,15 @@ func bgIndexVacuumStatsInto(out map[string]string, w *bgIndexVacuumWorker) {
 	out["treedb.bg_vacuum.foreground_skips_consecutive"] = fmt.Sprintf("%d", stats.ForegroundConsecutiveSkips)
 	out["treedb.bg_vacuum.foreground_skips_total"] = fmt.Sprintf("%d", stats.ForegroundSkips)
 	out["treedb.bg_vacuum.foreground_forced_runs"] = fmt.Sprintf("%d", stats.ForegroundForcedRuns)
+	out["treedb.bg_vacuum.deferred_vector_build.active"] = fmt.Sprintf("%t", stats.DeferredVectorBuildActive)
+	out["treedb.bg_vacuum.deferred_vector_build.epoch_id"] = fmt.Sprintf("%d", stats.DeferredVectorBuildEpochID)
+	out["treedb.bg_vacuum.deferred_vector_build.index"] = stats.DeferredVectorBuildIndex
+	out["treedb.bg_vacuum.deferred_vector_build.generation"] = fmt.Sprintf("%d", stats.DeferredVectorBuildGen)
+	out["treedb.bg_vacuum.deferred_vector_build.last_activity_unix_nano"] = fmt.Sprintf("%d", stats.DeferredVectorBuildLastNs)
+	out["treedb.bg_vacuum.deferred_vector_build.debt"] = fmt.Sprintf("%t", stats.DeferredVectorBuildDebt)
+	out["treedb.bg_vacuum.deferred_vector_build.skips_total"] = fmt.Sprintf("%d", stats.DeferredVectorBuildSkips)
+	out["treedb.bg_vacuum.deferred_vector_build.debt_coalesced_total"] = fmt.Sprintf("%d", stats.DeferredVectorBuildDebtSet)
+	out["treedb.bg_vacuum.deferred_vector_build.expired_total"] = fmt.Sprintf("%d", stats.DeferredVectorBuildExpired)
 	out["treedb.bg_vacuum.last_run_unix"] = fmt.Sprintf("%d", stats.LastRunUnix)
 	out["treedb.bg_vacuum.last_vacuum_unix"] = fmt.Sprintf("%d", stats.LastVacuumUnix)
 	out["treedb.bg_vacuum.last_span_ratio_ppm"] = fmt.Sprintf("%d", stats.LastSpanRatio)
