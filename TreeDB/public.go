@@ -2575,6 +2575,9 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, allowClosing bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if runtime.GOOS == "windows" {
+		return errVacuumUnsupported
+	}
 	if err := lockFullScanMaintenanceContext(ctx, &db.bgVac.runMu); err != nil {
 		return err
 	}
