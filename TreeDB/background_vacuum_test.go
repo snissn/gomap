@@ -777,6 +777,22 @@ func TestDeferredVectorBuildMaintenanceAbortPreservesCompetingReservation(t *tes
 	}
 }
 
+func TestDeferredVectorBuildMaintenanceScopesDoNotJoin(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	first := (&DeferredVectorBuildMaintenance{db: d}).Scoped()
+	second := (&DeferredVectorBuildMaintenance{db: d}).Scoped()
+	reservation := first.AdmitInsert(context.Background(), "docs", 1)
+	if reservation == 0 || !first.CommitInsert(reservation) {
+		t.Fatal("begin first scoped epoch")
+	}
+	if reservation := second.AdmitInsert(context.Background(), "docs", 1); reservation != 0 {
+		t.Fatal("second scope joined first scope's epoch")
+	}
+	if d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("competing scope did not fail back to ordinary maintenance")
+	}
+}
+
 func TestDeferredVectorBuildMaintenanceManualWrappersInvalidateEpoch(t *testing.T) {
 	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
 	control := &DeferredVectorBuildMaintenance{db: d}
@@ -789,17 +805,23 @@ func TestDeferredVectorBuildMaintenanceManualWrappersInvalidateEpoch(t *testing.
 		return epochID
 	}
 
-	epochID := begin()
+	begin()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := d.CompactStorage(ctx, CompactStorageOptions{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("CompactStorage error=%v want canceled", err)
 	}
-	if control.CommitInsert(epochID) {
-		t.Fatal("CompactStorage did not invalidate epoch before failing")
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("canceled CompactStorage invalidated epoch without owning maintenance")
+	}
+	if err := d.VacuumIndexOnline(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("VacuumIndexOnline error=%v want canceled", err)
+	}
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("canceled VacuumIndexOnline invalidated epoch without owning maintenance")
 	}
 
-	epochID = begin()
+	epochID := begin()
 	_ = d.CompactIndex()
 	if control.CommitInsert(epochID) {
 		t.Fatal("CompactIndex did not invalidate epoch")
@@ -908,9 +930,11 @@ func TestDeferredVectorBuildMaintenanceFailsBackOnAmbiguityAndManualVacuum(t *te
 	if err := d.VacuumIndexOnline(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("manual vacuum error=%v want canceled", err)
 	}
-	if d.bgVac.Stats().DeferredVectorBuildActive {
-		t.Fatal("manual vacuum did not restore ordinary maintenance policy")
+	if !control.CommitInsert(staleEpochID) || !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("canceled manual vacuum invalidated deferred maintenance")
 	}
+	staleEpochID = control.AdmitInsert(context.Background(), "docs", 1)
+	_ = d.VacuumIndexOnline(context.Background())
 	if control.CommitInsert(staleEpochID) || d.bgVac.Stats().DeferredVectorBuildActive {
 		t.Fatal("stale insert commit resurrected epoch after manual vacuum")
 	}

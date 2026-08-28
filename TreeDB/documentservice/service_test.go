@@ -176,6 +176,37 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	assertActive(false)
 }
 
+func TestServiceDeferredVectorBuildMaintenanceDoesNotSpanManagers(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.BackgroundIndexVacuumInterval = -1
+	backend, cleanup, stats, maintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+	first := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	second := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	ctx := context.Background()
+	if _, err := first.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: MetricCosine}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	request := func(id string) UpsertDocumentsRequest {
+		return UpsertDocumentsRequest{Documents: []Document{{ID: id, Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}
+	}
+	if _, err := first.UpsertDocuments(ctx, "docs", request("first")); err != nil {
+		t.Fatalf("first deferred upsert: %v", err)
+	}
+	if got := stats()["treedb.bg_vacuum.deferred_vector_build.active"]; got != "true" {
+		t.Fatalf("first service epoch active=%q want true", got)
+	}
+	if _, err := second.UpsertDocuments(ctx, "docs", request("second")); err != nil {
+		t.Fatalf("second deferred upsert: %v", err)
+	}
+	if got := stats()["treedb.bg_vacuum.deferred_vector_build.active"]; got != "false" {
+		t.Fatalf("separate manager joined deferred epoch: active=%q", got)
+	}
+}
+
 func TestServiceDeferredVectorBuildOptimizeCheckpointCrashReopen(t *testing.T) {
 	const helper = "TREEDB_DEFERRED_OPTIMIZE_CRASH_HELPER"
 	dir := os.Getenv(helper)

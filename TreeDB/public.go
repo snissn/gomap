@@ -2573,7 +2573,6 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, allowClosing bool) error {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		db.bgVac.endDeferredVectorBuild()
 		return err
 	}
 	if err := lockFullScanMaintenanceContext(ctx, &db.bgVac.runMu); err != nil {

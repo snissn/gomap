@@ -174,6 +174,7 @@ type bgIndexVacuumWorker struct {
 
 type deferredVectorBuildEpoch struct {
 	id           uint64
+	owner        uint64
 	index        string
 	generation   uint64
 	reservations []uint64
@@ -183,7 +184,16 @@ type deferredVectorBuildEpoch struct {
 // DeferredVectorBuildMaintenance is the narrow engine control used by the
 // document service's explicit deferred-build load lifecycle.
 type DeferredVectorBuildMaintenance struct {
-	db *DB
+	db    *DB
+	owner uint64
+}
+
+// Scoped returns an independent deferred-build owner for one service.
+func (c *DeferredVectorBuildMaintenance) Scoped() *DeferredVectorBuildMaintenance {
+	if c == nil || c.db == nil {
+		return nil
+	}
+	return &DeferredVectorBuildMaintenance{db: c.db, owner: c.db.bgVac.deferredVectorBuildNextID.Add(1)}
 }
 
 // AdmitInsert reserves an insert-only deferred request in the current epoch.
@@ -199,7 +209,7 @@ func (c *DeferredVectorBuildMaintenance) AdmitInsert(ctx context.Context, index 
 		return 0
 	}
 	defer c.db.bgVac.runMu.Unlock()
-	return c.db.bgVac.admitDeferredVectorBuild(index, generation)
+	return c.db.bgVac.admitDeferredVectorBuild(c.owner, index, generation)
 }
 
 // CommitInsert marks a successfully published reservation idle. A reservation
@@ -238,7 +248,7 @@ func (c *DeferredVectorBuildMaintenance) Finalize(ctx context.Context, index str
 	}
 
 	epoch := c.db.bgVac.deferredVectorBuildEpoch.Load()
-	matching := epoch != nil && epoch.index == index && epoch.generation == generation
+	matching := epoch != nil && epoch.owner == c.owner && epoch.index == index && epoch.generation == generation
 	if epoch != nil && !matching {
 		return errors.New("treedb: deferred vector-build owner changed before finalization")
 	}
@@ -283,7 +293,7 @@ func (c *DeferredVectorBuildMaintenance) End() {
 	}
 }
 
-func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(index string, generation uint64) uint64 {
+func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(owner uint64, index string, generation uint64) uint64 {
 	if index == "" || generation == 0 || w.deferredVectorBuildClosed.Load() {
 		w.endDeferredVectorBuild()
 		return 0
@@ -294,6 +304,7 @@ func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(index string, generation 
 			reservationID := w.deferredVectorBuildNextID.Add(1)
 			next := &deferredVectorBuildEpoch{
 				id:           reservationID,
+				owner:        owner,
 				index:        index,
 				generation:   generation,
 				reservations: []uint64{reservationID},
@@ -308,7 +319,7 @@ func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(index string, generation 
 			}
 			continue
 		}
-		if current.index != index || current.generation != generation {
+		if current.owner != owner || current.index != index || current.generation != generation {
 			if w.deferredVectorBuildEpoch.CompareAndSwap(current, nil) {
 				return 0
 			}
@@ -319,6 +330,7 @@ func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(index string, generation 
 		reservations = append(reservations, reservationID)
 		next := &deferredVectorBuildEpoch{
 			id:           current.id,
+			owner:        current.owner,
 			index:        index,
 			generation:   generation,
 			reservations: reservations,
@@ -353,6 +365,7 @@ func (w *bgIndexVacuumWorker) commitDeferredVectorBuild(reservationID uint64) bo
 		reservations = append(reservations, current.reservations[reservationIndex+1:]...)
 		next := &deferredVectorBuildEpoch{
 			id:           current.id,
+			owner:        current.owner,
 			index:        current.index,
 			generation:   current.generation,
 			reservations: reservations,
@@ -397,6 +410,7 @@ func (w *bgIndexVacuumWorker) abortDeferredVectorBuild(reservationID uint64) {
 		reservations = append(reservations, current.reservations[reservationIndex+1:]...)
 		next := &deferredVectorBuildEpoch{
 			id:           current.id,
+			owner:        current.owner,
 			index:        current.index,
 			generation:   current.generation,
 			reservations: reservations,

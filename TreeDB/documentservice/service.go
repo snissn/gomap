@@ -95,7 +95,7 @@ func New(manager *collections.CollectionManager) *Service {
 func NewWithDeferredVectorBuildMaintenance(manager *collections.CollectionManager, maintenance *treedb.DeferredVectorBuildMaintenance) *Service {
 	return &Service{
 		manager:                        manager,
-		deferredVectorBuildMaintenance: maintenance,
+		deferredVectorBuildMaintenance: maintenance.Scoped(),
 		benchmarkSearchBufferPool: sync.Pool{New: func() any {
 			return &collections.VectorIndexSearchBuffer{}
 		}},

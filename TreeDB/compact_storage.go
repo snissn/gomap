@@ -124,7 +124,6 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		db.bgVac.endDeferredVectorBuild()
 		return out, err
 	}
 	if err := lockFullScanMaintenanceContext(ctx, &db.bgVac.runMu); err != nil {
