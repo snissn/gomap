@@ -645,7 +645,7 @@ func TestIngestChunkedDocumentsBlocksVectorRegistrationThroughPublication(t *tes
 	}
 }
 
-func TestRegisterVectorIndexRejectsBuildStaleAcrossChunkPublication(t *testing.T) {
+func TestBuiltVectorIndexRegistrationRejectsStaleChunkPublication(t *testing.T) {
 	_, _, col := openChunkingTestCollection(t)
 	if _, err := col.Insert([]byte("before"), []byte(`{"embedding":[1,0]}`)); err != nil {
 		t.Fatalf("insert vector source: %v", err)
@@ -663,7 +663,7 @@ func TestRegisterVectorIndexRejectsBuildStaleAcrossChunkPublication(t *testing.T
 	); err != nil {
 		t.Fatalf("chunk publication: %v", err)
 	}
-	if err := col.RegisterVectorIndex(index); !errors.Is(err, ErrConcurrentMutation) {
+	if err := col.registerBuiltVectorIndex(index); !errors.Is(err, ErrConcurrentMutation) {
 		t.Fatalf("register stale vector build error=%v, want %v", err, ErrConcurrentMutation)
 	}
 	if got := col.registeredAdHocVectorIndexCount(); got != 0 {

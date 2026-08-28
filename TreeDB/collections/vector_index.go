@@ -695,7 +695,7 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 				return nil, err
 			}
 		} else {
-			if err := c.RegisterVectorIndex(index); err != nil {
+			if err := c.registerBuiltVectorIndex(index); err != nil {
 				return nil, err
 			}
 		}
@@ -899,6 +899,16 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) error {
 	if index == nil {
 		return errors.New("collections: vector index is nil")
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	if _, err := c.refreshNativeVectorIndexDeclaration(index.name); err != nil {
+		return err
+	}
+	c.registerVectorIndexCurrentCatalog(index)
+	return nil
+}
+
+func (c *Collection) registerBuiltVectorIndex(index *VectorIndex) error {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	if _, err := c.refreshNativeVectorIndexDeclaration(index.name); err != nil {
