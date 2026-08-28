@@ -95,12 +95,19 @@ type VacuumOnlineStats struct {
 	OlderRootDurableResourceDescriptors     uint64
 	OlderRootDurableResourceBytes           uint64
 	OlderRootExactCandidateScans            uint64
+	OlderRootProjections                    uint64
+	OlderRootProjectionFallbacks            uint64
+	OlderRootProjectionFallbackReason       string
 	OlderRootReusedNonValueLogDescriptors   uint64
 	OlderRootUniqueExternalSegments         uint64
 	DurableResourceCaptureDuration          time.Duration
 	DurableResourceCaptures                 uint64
 	DurableResourceDescriptors              uint64
 	DurableResourceBytes                    uint64
+	DurableResourceExactCandidateScans      uint64
+	DurableResourceProjections              uint64
+	DurableResourceProjectionFallbacks      uint64
+	DurableResourceProjectionFallbackReason string
 	OlderRootRebuiltPages                   uint64
 	ReplacementPagerPages                   uint64
 	ExactCandidateScan                      bool
@@ -653,6 +660,11 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		runStats.OlderRootDurableResourceDescriptors += resourceWork.Descriptors
 		runStats.OlderRootDurableResourceBytes += resourceWork.Bytes
 		runStats.OlderRootExactCandidateScans += resourceWork.ExactCandidateScans
+		runStats.OlderRootProjections += resourceWork.Projections
+		runStats.OlderRootProjectionFallbacks += resourceWork.ProjectionFallbacks
+		if resourceWork.ProjectionFallbackReason != "" {
+			runStats.OlderRootProjectionFallbackReason = resourceWork.ProjectionFallbackReason
+		}
 		runStats.OlderRootReusedNonValueLogDescriptors += resourceWork.ReusedNonValueLogDescriptors
 		runStats.OlderRootUniqueExternalSegments += resourceWork.UniqueScannedExternalSegments
 		runStats.OlderRootRebuiltPages += uint64(len(recordingAlloc.pages))
@@ -798,6 +810,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 	}
 
 	// Online catch-up: replay recorded keys in bounded passes.
+	rebuiltExternalClosureChanged := false
 	for pass := 0; pass < vacuumCatchupPassesMax; pass++ {
 		if err := ctx.Err(); err != nil {
 			cleanupNewPager()
@@ -813,6 +826,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			cleanupNewPager()
 			return err
 		}
+		rebuiltExternalClosureChanged = rebuiltExternalClosureChanged || db.indexOuterLeavesInValueLog
 		if err := freeVacuumRetired(newAlloc, retired); err != nil {
 			cleanupNewPager()
 			return err
@@ -842,6 +856,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		if err != nil {
 			return err
 		}
+		rebuiltExternalClosureChanged = rebuiltExternalClosureChanged || db.indexOuterLeavesInValueLog
 		if err := freeVacuumRetired(newAlloc, retired); err != nil {
 			return err
 		}
@@ -1047,6 +1062,11 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 					runStats.OlderRootDurableResourceDescriptors += resourceWork.Descriptors
 					runStats.OlderRootDurableResourceBytes += resourceWork.Bytes
 					runStats.OlderRootExactCandidateScans += resourceWork.ExactCandidateScans
+					runStats.OlderRootProjections += resourceWork.Projections
+					runStats.OlderRootProjectionFallbacks += resourceWork.ProjectionFallbacks
+					if resourceWork.ProjectionFallbackReason != "" {
+						runStats.OlderRootProjectionFallbackReason = resourceWork.ProjectionFallbackReason
+					}
 					runStats.OlderRootReusedNonValueLogDescriptors += resourceWork.ReusedNonValueLogDescriptors
 					runStats.OlderRootUniqueExternalSegments += resourceWork.UniqueScannedExternalSegments
 					runStats.OlderRootRebuiltPages += uint64(len(recordingAlloc.pages))
@@ -1204,8 +1224,22 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			cleanupNewPager()
 			return ErrRecoveryRequired
 		}
-		var sourceResources *rootpublication.StableResourceSet
+		var (
+			sourceResources     *rootpublication.StableResourceSet
+			sourceIndex         *indexGen
+			sourceIndexID       uint64
+			sourceIndexIdentity rootpublication.StableIdentity
+			sourceExact         bool
+		)
 		if recoverableRoots != nil {
+			// The production path only reuses the visible-root closure after the
+			// cutover fence revalidates the captured RecoverableRootSet against the
+			// exact current state token and durable frontier. Any write that lands
+			// after capture changes that visible root, makes the set stale, and
+			// forces a deferred recapture before we can reach this point. Replay can
+			// still create new physical outer-leaf bytes while reconstructing that
+			// logical frontier, so the projection gate below forces an exact scan
+			// whenever such a delta was applied.
 			visibleRoot := RecoverableRoot{
 				CommitSeq:         recoverableRoots.visible.CommitSeq,
 				UserRootPageID:    recoverableRoots.visible.RootPageID,
@@ -1213,12 +1247,19 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 				AppliedCommandLSN: recoverableRoots.visible.AppliedCommandLSN,
 				MaxEntryRevision:  uint64(recoverableRoots.visible.MaxEntryRevision),
 			}
-			sourceResources = recoverableRoots.resourcesForRoot(visibleRoot)
+			sourceResources, sourceIndexID, sourceIndexIdentity, sourceExact = recoverableRoots.resourcesForRootExact(visibleRoot)
+			sourceIndex = recoverableRoots.idx
 		} else {
 			sourceResources = db.durableRoot.slotResources[db.durableRoot.slot]
 		}
 		durableCaptureStarted := time.Now()
-		durableResources, resourceWork, err := db.captureRebuiltIndexDurableResourcesWithWorkV1(newPager, nextMeta, sourceResources)
+		projectionBlockedReason := ""
+		if rebuiltExternalClosureChanged {
+			projectionBlockedReason = rebuiltDurableResourceFallbackOuterLeafDelta
+		}
+		durableResources, resourceWork, err := db.captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
+			sourceResources, sourceExact, projectionBlockedReason, sourceIndex, sourceIndexID, sourceIndexIdentity, newPager, nextMeta,
+		)
 		runStats.DurableResourceCaptureDuration += time.Since(durableCaptureStarted)
 		if err != nil {
 			unlockCutover(false)
@@ -1228,6 +1269,17 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		runStats.DurableResourceCaptures++
 		pendingDiagnosticResources = durableResources
 		runStats.ExactCandidateScan = resourceWork.ExactCandidateScan
+		if resourceWork.ExactCandidateScan {
+			runStats.DurableResourceExactCandidateScans++
+		}
+		if resourceWork.Projected {
+			runStats.DurableResourceProjections++
+		} else {
+			runStats.DurableResourceProjectionFallbacks++
+			if resourceWork.ProjectionFallbackReason != "" {
+				runStats.DurableResourceProjectionFallbackReason = resourceWork.ProjectionFallbackReason
+			}
+		}
 		runStats.ReusedNonValueLogDescriptors += resourceWork.ReusedNonValueLogDescriptors
 		runStats.UniqueExternalSegments += resourceWork.UniqueScannedExternalSegments
 		// The gate keeps all ordinary writers outside the old-generation
@@ -1502,6 +1554,9 @@ type rebuiltRecoverableRootWorkV1 struct {
 	Descriptors                   uint64
 	Bytes                         uint64
 	ExactCandidateScans           uint64
+	Projections                   uint64
+	ProjectionFallbacks           uint64
+	ProjectionFallbackReason      string
 	ReusedNonValueLogDescriptors  uint64
 	UniqueScannedExternalSegments uint64
 }
@@ -1580,14 +1635,30 @@ func (db *DB) rebuildRecoverableRootV1(ctx context.Context, roots *RecoverableRo
 		MaxEntryRevision: root.MaxEntryRevision,
 	}
 	captureStarted := time.Now()
-	resources, resourceWork, err := db.captureRebuiltIndexDurableResourcesWithWorkV1(newPager, meta, roots.resourcesForRoot(root))
+	if err := ctx.Err(); err != nil {
+		return rebuiltDurableRootV1{}, work, err
+	}
+	sourceResources, sourceIndexID, sourceIndexIdentity, sourceExact := roots.resourcesForRootExact(root)
+	resources, resourceWork, err := db.captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
+		sourceResources, sourceExact, "", snapshot.idx, sourceIndexID, sourceIndexIdentity, newPager, meta,
+	)
+	if err == nil {
+		err = ctx.Err()
+	}
 	work.CaptureDuration = time.Since(captureStarted)
 	if err != nil {
+		resources.Release()
 		return rebuiltDurableRootV1{}, work, err
 	}
 	work.Descriptors, work.Bytes = vacuumDurableResourceSummary(resources)
 	if resourceWork.ExactCandidateScan {
 		work.ExactCandidateScans = 1
+	}
+	if resourceWork.Projected {
+		work.Projections = 1
+	} else {
+		work.ProjectionFallbacks = 1
+		work.ProjectionFallbackReason = resourceWork.ProjectionFallbackReason
 	}
 	work.ReusedNonValueLogDescriptors = resourceWork.ReusedNonValueLogDescriptors
 	work.UniqueScannedExternalSegments = resourceWork.UniqueScannedExternalSegments
