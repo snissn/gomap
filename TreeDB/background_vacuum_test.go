@@ -463,7 +463,7 @@ func TestBackgroundIndexVacuumDeferredVectorBuildCoalescesHotTicks(t *testing.T)
 	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
 	seedBackgroundVacuumUserPages(t, d, 64)
 	control := &DeferredVectorBuildMaintenance{db: d}
-	epochID := control.AdmitInsert("docs", 1)
+	epochID := control.AdmitInsert(context.Background(), "docs", 1)
 	if epochID == 0 {
 		t.Fatal("admit deferred vector-build epoch")
 	}
@@ -527,7 +527,7 @@ func TestDeferredVectorBuildAdmissionWaitsForRunningVacuum(t *testing.T) {
 	}()
 	<-vacuumStarted
 	admitted := make(chan uint64, 1)
-	go func() { admitted <- control.AdmitInsert("docs", 1) }()
+	go func() { admitted <- control.AdmitInsert(context.Background(), "docs", 1) }()
 	select {
 	case <-admitted:
 		t.Fatal("deferred admission overlapped an in-flight vacuum")
@@ -540,28 +540,55 @@ func TestDeferredVectorBuildAdmissionWaitsForRunningVacuum(t *testing.T) {
 	}
 }
 
+func TestDeferredVectorBuildAdmissionHonorsCancellationWhileVacuumOwnsLock(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	control := &DeferredVectorBuildMaintenance{db: d}
+	d.bgVac.runMu.Lock()
+	defer d.bgVac.runMu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	admitted := make(chan uint64, 1)
+	go func() { admitted <- control.AdmitInsert(ctx, "docs", 1) }()
+	select {
+	case <-admitted:
+		t.Fatal("admission did not wait for maintenance ownership")
+	case <-time.After(20 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case reservationID := <-admitted:
+		if reservationID != 0 {
+			t.Fatalf("canceled reservation=%d want 0", reservationID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled admission did not return")
+	}
+	if d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("canceled admission published an epoch")
+	}
+}
+
 func TestDeferredVectorBuildMaintenanceFailsBackOnAmbiguityAndManualVacuum(t *testing.T) {
 	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
 	control := &DeferredVectorBuildMaintenance{db: d}
-	epochID := control.AdmitInsert("docs", 1)
+	epochID := control.AdmitInsert(context.Background(), "docs", 1)
 	if epochID == 0 || !control.CommitInsert(epochID) {
 		t.Fatal("begin docs generation 1")
 	}
-	if control.AdmitInsert("other", 1) != 0 || d.bgVac.Stats().DeferredVectorBuildActive {
+	if control.AdmitInsert(context.Background(), "other", 1) != 0 || d.bgVac.Stats().DeferredVectorBuildActive {
 		t.Fatal("competing index did not end epoch and fail admission")
 	}
-	epochID = control.AdmitInsert("docs", 1)
+	epochID = control.AdmitInsert(context.Background(), "docs", 1)
 	if epochID == 0 || !control.CommitInsert(epochID) {
 		t.Fatal("restart docs generation 1")
 	}
-	if control.AdmitInsert("docs", 2) != 0 || d.bgVac.Stats().DeferredVectorBuildActive {
+	if control.AdmitInsert(context.Background(), "docs", 2) != 0 || d.bgVac.Stats().DeferredVectorBuildActive {
 		t.Fatal("generation mismatch did not end epoch and fail admission")
 	}
-	epochID = control.AdmitInsert("docs", 1)
+	epochID = control.AdmitInsert(context.Background(), "docs", 1)
 	if epochID == 0 || !control.CommitInsert(epochID) {
 		t.Fatal("restart before manual vacuum")
 	}
-	staleEpochID := control.AdmitInsert("docs", 1)
+	staleEpochID := control.AdmitInsert(context.Background(), "docs", 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := d.VacuumIndexOnline(ctx); !errors.Is(err, context.Canceled) {
@@ -580,7 +607,7 @@ func TestBackgroundIndexVacuumDeferredVectorBuildAbandonmentRestoresPolicy(t *te
 	d.bgVac.interval = time.Millisecond
 	d.bgVac.spanRatioPPM = 1
 	control := &DeferredVectorBuildMaintenance{db: d}
-	epochID := control.AdmitInsert("docs", 1)
+	epochID := control.AdmitInsert(context.Background(), "docs", 1)
 	if epochID == 0 || !control.CommitInsert(epochID) {
 		t.Fatal("begin epoch")
 	}
@@ -617,7 +644,7 @@ func TestDeferredVectorBuildMaintenanceCloseAndReopen(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	control := &DeferredVectorBuildMaintenance{db: d}
-	epochID := control.AdmitInsert("docs", 1)
+	epochID := control.AdmitInsert(context.Background(), "docs", 1)
 	if epochID == 0 || !control.CommitInsert(epochID) {
 		t.Fatal("begin epoch")
 	}
@@ -646,8 +673,8 @@ func TestDeferredVectorBuildMaintenanceTracksConcurrentReservations(t *testing.T
 	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
 	d.bgVac.interval = time.Millisecond
 	control := &DeferredVectorBuildMaintenance{db: d}
-	first := control.AdmitInsert("docs", 1)
-	second := control.AdmitInsert("docs", 1)
+	first := control.AdmitInsert(context.Background(), "docs", 1)
+	second := control.AdmitInsert(context.Background(), "docs", 1)
 	if first == 0 || second == 0 || first == second {
 		t.Fatalf("reservations=%d,%d want distinct nonzero tokens", first, second)
 	}
@@ -684,7 +711,7 @@ func TestDeferredVectorBuildMaintenanceConcurrentWorkerAndLifecycle(t *testing.T
 		go func() {
 			defer wg.Done()
 			for range 100 {
-				epochID := control.AdmitInsert("docs", 1)
+				epochID := control.AdmitInsert(context.Background(), "docs", 1)
 				control.CommitInsert(epochID)
 			}
 		}()
@@ -1484,7 +1511,7 @@ func BenchmarkBackgroundIndexVacuumBacklog(b *testing.B) {
 func BenchmarkBackgroundIndexVacuumDeferredVectorBuild(b *testing.B) {
 	d := openBackgroundVacuumTestDB(b, Options{BackgroundIndexVacuumInterval: -1})
 	control := &DeferredVectorBuildMaintenance{db: d}
-	epochID := control.AdmitInsert("docs", 1)
+	epochID := control.AdmitInsert(context.Background(), "docs", 1)
 	if epochID == 0 || !control.CommitInsert(epochID) {
 		b.Fatal("begin deferred vector-build epoch")
 	}

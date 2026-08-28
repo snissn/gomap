@@ -368,7 +368,10 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	deferVectorIndexRebuild := req.DeferVectorIndexRebuild
 	if s.deferredVectorBuildMaintenance != nil {
 		if deferVectorIndexRebuild && len(insertIDs) > 0 && len(updates) == 0 {
-			deferredMaintenanceEpoch = s.deferredVectorBuildMaintenance.AdmitInsert(index, info.Generation)
+			deferredMaintenanceEpoch = s.deferredVectorBuildMaintenance.AdmitInsert(ctx, index, info.Generation)
+			if err := ctxErr(ctx); err != nil {
+				return UpsertDocumentsResponse{}, err
+			}
 			if deferredMaintenanceEpoch == 0 {
 				deferVectorIndexRebuild = false
 			}

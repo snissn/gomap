@@ -184,11 +184,16 @@ type DeferredVectorBuildMaintenance struct {
 
 // AdmitInsert reserves an insert-only deferred request in the current epoch.
 // A competing owner ends the epoch and returns zero.
-func (c *DeferredVectorBuildMaintenance) AdmitInsert(index string, generation uint64) uint64 {
+func (c *DeferredVectorBuildMaintenance) AdmitInsert(ctx context.Context, index string, generation uint64) uint64 {
 	if c == nil || c.db == nil {
 		return 0
 	}
-	c.db.bgVac.runMu.Lock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if lockFullScanMaintenanceContext(ctx, &c.db.bgVac.runMu) != nil {
+		return 0
+	}
 	defer c.db.bgVac.runMu.Unlock()
 	return c.db.bgVac.admitDeferredVectorBuild(index, generation)
 }

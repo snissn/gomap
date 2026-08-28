@@ -98,7 +98,7 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndex(generation): %v", err)
 	}
-	competingGenerationEpoch := maintenance.AdmitInsert("generation", generationInfo.Generation+1)
+	competingGenerationEpoch := maintenance.AdmitInsert(context.Background(), "generation", generationInfo.Generation+1)
 	if competingGenerationEpoch == 0 || !maintenance.CommitInsert(competingGenerationEpoch) {
 		t.Fatal("establish competing-generation owner")
 	}
