@@ -445,7 +445,7 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 	}
 	deleted, err := col.DeleteBatch(deleteIDs)
 	if err != nil {
-		return DeleteDocumentsResponse{}, wrapServiceError(CodeInternal, "delete documents failed", err)
+		return DeleteDocumentsResponse{}, wrapServiceError(CodeInternal, "delete documents failed: "+err.Error(), err)
 	}
 	if deleted > 0 {
 		if err := s.finishVectorMutation(index, col, info); err != nil {
