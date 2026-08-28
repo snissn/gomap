@@ -151,11 +151,80 @@ func TestServiceColumnGraphCoalescesLegacyAsyncMetadata(t *testing.T) {
 	}
 	defer db.Close()
 	manager := collections.NewCollectionManager(db)
-	_, err = manager.CreateCollection(&collections.CollectionMeta{
+	col := createLegacyAsyncColumnGraphCollection(t, manager, 0)
+	if !col.Meta().Options.BufferedIndexedAsyncFlush {
+		t.Fatal("legacy metadata did not retain the historical async default")
+	}
+
+	svc := New(manager)
+	for _, doc := range []Document{
+		{ID: "a", Content: "alpha first", Embedding: []float32{1, 0}},
+		{ID: "b", Content: "alpha second", Embedding: []float32{0, 1}},
+	} {
+		if _, err := svc.UpsertDocuments(context.Background(), "docs", UpsertDocumentsRequest{
+			Documents:               []Document{doc},
+			DeferVectorIndexRebuild: true,
+		}); err != nil {
+			t.Fatalf("UpsertDocuments(%s): %v", doc.ID, err)
+		}
+	}
+	if stats := manager.StatsSnapshot(); stats.PendingRootRuns == 0 || stats.IndexedFlushCalls != 0 {
+		t.Fatalf("legacy writes were not coalesced: %+v", stats)
+	}
+}
+
+func TestServiceColumnGraphLegacyAsyncMetadataUsesForegroundThreshold(t *testing.T) {
+	dir := t.TempDir()
+	db, err := backenddb.Open(testBackendOptions(dir))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	manager := collections.NewCollectionManager(db)
+	createLegacyAsyncColumnGraphCollection(t, manager, 1)
+	svc := New(manager)
+	if _, err := svc.UpsertDocuments(context.Background(), "docs", UpsertDocumentsRequest{
+		Documents:               []Document{{ID: "a", Content: "durable alpha", Embedding: []float32{1, 0}}},
+		DeferVectorIndexRebuild: true,
+	}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	if err := manager.FlushAll(); err != nil {
+		t.Fatalf("FlushAll: %v", err)
+	}
+	if stats := manager.StatsSnapshot(); stats.IndexedAsyncFlushScheduled != 0 || stats.IndexedAsyncFlushErrors != 0 || stats.IndexedFlushDocs != 1 {
+		t.Fatalf("legacy async stats=%+v, want one foreground flush", stats)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("close service: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	db, err = backenddb.Open(testBackendOptions(dir))
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer db.Close()
+	svc = New(collections.NewCollectionManager(db))
+	defer svc.Close()
+	result, err := svc.SearchKeyword(context.Background(), "docs", KeywordSearchRequest{Query: "durable", TopK: 1})
+	if err != nil {
+		t.Fatalf("SearchKeyword after reopen: %v", err)
+	}
+	if got := documentIDs(result.Documents); !reflect.DeepEqual(got, []string{"a"}) {
+		t.Fatalf("SearchKeyword after reopen ids=%v want [a]", got)
+	}
+}
+
+func createLegacyAsyncColumnGraphCollection(t *testing.T, manager *collections.CollectionManager, maxDocuments int) *collections.Collection {
+	t.Helper()
+	_, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: "docs",
 		Options: collections.CollectionOptions{
-			DocumentFormat: collections.DocumentFormatJSON,
-			ColumnStore:    serviceColumnStoreConfig(2),
+			DocumentFormat:                   collections.DocumentFormatJSON,
+			ColumnStore:                      serviceColumnStoreConfig(2),
+			BufferedIndexedWriteMaxDocuments: maxDocuments,
 		},
 		VectorIndexes: []collections.VectorIndexDefinition{{
 			Name:             defaultVectorIndexName,
@@ -180,23 +249,5 @@ func TestServiceColumnGraphCoalescesLegacyAsyncMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
-	if !col.Meta().Options.BufferedIndexedAsyncFlush {
-		t.Fatal("legacy metadata did not retain the historical async default")
-	}
-
-	svc := New(manager)
-	for _, doc := range []Document{
-		{ID: "a", Content: "alpha first", Embedding: []float32{1, 0}},
-		{ID: "b", Content: "alpha second", Embedding: []float32{0, 1}},
-	} {
-		if _, err := svc.UpsertDocuments(context.Background(), "docs", UpsertDocumentsRequest{
-			Documents:               []Document{doc},
-			DeferVectorIndexRebuild: true,
-		}); err != nil {
-			t.Fatalf("UpsertDocuments(%s): %v", doc.ID, err)
-		}
-	}
-	if stats := manager.StatsSnapshot(); stats.PendingRootRuns == 0 || stats.IndexedFlushCalls != 0 {
-		t.Fatalf("legacy writes were not coalesced: %+v", stats)
-	}
+	return col
 }

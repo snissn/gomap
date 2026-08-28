@@ -5302,6 +5302,15 @@ func isDefaultIndexedWriteMemtableMaxDocuments(opts CollectionOptions) bool {
 		opts.BufferedIndexedWriteMaxDocuments == DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
 }
 
+func foregroundIndexedWriteOptionsForColumnDocuments(opts CollectionOptions, columnDocuments []columnWriteDocument) CollectionOptions {
+	if len(columnDocuments) == 0 || !opts.BufferedIndexedAsyncFlush {
+		return opts
+	}
+	opts.BufferedIndexedAsyncFlush = false
+	opts.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
+	return opts
+}
+
 func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan, commandWALStageIntent *backenddb.CommandWALIntent, rawStageLocked bool, releaseCommandWALRawStage func()) (elapsed time.Duration, err error) {
 	domain := c.writeDomain
 	if domain == nil {
@@ -5318,6 +5327,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		}
 		columnDocuments = columnWriteDocumentsFromCommitLog(docs)
 	}
+	writeOptions := foregroundIndexedWriteOptionsForColumnDocuments(catalog.meta.Options, columnDocuments)
 	var unlockCommandWALRawStage func()
 	if releaseCommandWALRawStage == nil {
 		releaseCommandWALRawStage = func() {
@@ -5414,7 +5424,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	if plan.directBufferedInsert != nil {
 		return c.bufferDirectIndexedInsertPlanLocked(domain, catalog, plan, columnDocuments, commandWALLSN, releaseCommandWALRawStage)
 	}
-	autoFlushEnabled := bufferedIndexedAutoFlushEnabled(catalog.meta.Options)
+	autoFlushEnabled := bufferedIndexedAutoFlushEnabled(writeOptions)
 	freezeMutableIndexedRunMapsLocked(domain)
 	var checkpoint bufferedIndexedCheckpoint
 	if autoFlushEnabled {
@@ -5502,15 +5512,15 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		}
 		releaseCommandWALRawStage()
 	}
-	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, catalog.meta.Options)
+	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, writeOptions)
 	if err != nil {
 		if autoFlushEnabled {
 			rollbackBufferedIndexedDomain(domain, checkpoint)
 		}
 		return 0, err
 	}
-	if shouldFlushBufferedIndexedWrites(domain, catalog.meta.Options) {
-		flushElapsed, _, _, err := c.flushBufferedIndexedAfterThresholdLocked(domain, catalog.meta.Options)
+	if shouldFlushBufferedIndexedWrites(domain, writeOptions) {
+		flushElapsed, _, _, err := c.flushBufferedIndexedAfterThresholdLocked(domain, writeOptions)
 		if err != nil {
 			rollbackBufferedIndexedDomain(domain, checkpoint)
 			return 0, err
@@ -5546,9 +5556,10 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 		domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex)
 	}
 	ensureBufferedPrimaryRunIndexLocked(domain, len(plan.primaryKeys))
+	writeOptions := foregroundIndexedWriteOptionsForColumnDocuments(catalog.meta.Options, columnDocuments)
 
 	addedRootRuns := estimateAccumulatedRootRunsForNamesLocked(domain, direct.rootNames)
-	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, catalog.meta.Options, len(plan.resultIDs), direct.stagedBytes, addedRootRuns)
+	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, writeOptions, len(plan.resultIDs), direct.stagedBytes, addedRootRuns)
 	var preAppendFreezeTables []memtable.Table
 	if shouldAutoFlushAfterAdding {
 		preAppendFreezeTables = detachMutableIndexedRunTablesLocked(domain)
@@ -5715,7 +5726,7 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 		}
 	}
 
-	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, catalog.meta.Options)
+	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, writeOptions)
 	if err != nil {
 		if rollbackOnError {
 			rollbackBufferedIndexedDomain(domain, checkpoint)
@@ -5723,9 +5734,9 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 		}
 		return 0, err
 	}
-	if shouldFlushBufferedIndexedWrites(domain, catalog.meta.Options) {
+	if shouldFlushBufferedIndexedWrites(domain, writeOptions) {
 		_ = freezePreAppendTables()
-		flushElapsed, _, _, err := c.flushBufferedIndexedAfterThresholdLocked(domain, catalog.meta.Options)
+		flushElapsed, _, _, err := c.flushBufferedIndexedAfterThresholdLocked(domain, writeOptions)
 		if err != nil {
 			if rollbackOnError {
 				rollbackBufferedIndexedDomain(domain, checkpoint)
