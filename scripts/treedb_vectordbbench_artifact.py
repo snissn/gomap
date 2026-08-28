@@ -2143,12 +2143,16 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         if value == 0:
             errors.append(f"manifest.harness.{key} must be positive")
     client_timeout = harness.get("client_timeout")
-    if (
-        isinstance(client_timeout, bool)
-        or not isinstance(client_timeout, (int, float))
-        or not math.isfinite(client_timeout)
-        or client_timeout <= 0
-    ):
+    try:
+        finite_client_timeout = (
+            not isinstance(client_timeout, bool)
+            and isinstance(client_timeout, (int, float))
+            and math.isfinite(float(client_timeout))
+            and client_timeout > 0
+        )
+    except (OverflowError, ValueError):
+        finite_client_timeout = False
+    if not finite_client_timeout:
         errors.append("manifest.harness.client_timeout must be a positive finite number")
     if not isinstance(harness.get("db_label"), str) or not harness["db_label"]:
         errors.append("manifest.harness.db_label must be a non-empty string")

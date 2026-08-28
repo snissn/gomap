@@ -1555,6 +1555,28 @@ class LifecycleValidatorTest(unittest.TestCase):
             self.assertFalse(got["analyzable"], got)
             self.assertTrue(any(key in error for error in got["errors"]), got)
 
+    def test_client_timeout_overflow_is_structured_cli_rejection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            oversized = 10 ** 400
+            manifest["harness"]["client_timeout"] = oversized
+            command = list(manifest["commands"][0]["command"])
+            command[command.index("--timeout") + 1] = str(oversized)
+            set_fixture_vdbbench_command_tokens(manifest, command)
+            manifest["lifecycle"]["identity"]["config_sha256"] = (
+                harness.lifecycle_config_sha256(manifest)
+            )
+            harness.write_json(root / "manifest.json", manifest)
+
+            report = harness.validate_lifecycle_artifact(root)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                exit_code = harness.main(["--validate-lifecycle", str(root), "--allow-partial"])
+
+        self.assertFalse(report["analyzable"], report)
+        self.assertTrue(any("client_timeout" in error for error in report["errors"]), report)
+        self.assertEqual(exit_code, 1)
+
     def test_authoritative_vdbbench_command_cwd_matches_recorded_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
