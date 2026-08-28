@@ -161,6 +161,14 @@ func TestServiceColumnGraphCoalescesLegacyAsyncMetadata(t *testing.T) {
 	}
 
 	svc := New(manager)
+	if _, err := svc.CreateIndex(context.Background(), CreateIndexRequest{
+		Name:               "docs",
+		Dimension:          2,
+		Metric:             MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph},
+	}); err != nil {
+		t.Fatalf("idempotent CreateIndex with legacy async metadata: %v", err)
+	}
 	for _, doc := range []Document{
 		{ID: "a", Content: "alpha first", Embedding: []float32{1, 0}},
 		{ID: "b", Content: "alpha second", Embedding: []float32{0, 1}},

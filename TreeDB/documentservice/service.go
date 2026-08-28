@@ -242,6 +242,18 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 		}
 		meta.Indexes = indexes
 	}
+	if vectorOptions.strategy == collections.VectorIndexStrategyColumnGraph {
+		existing, openErr := s.manager.OpenCollection(req.Name)
+		switch {
+		case openErr == nil:
+			existingOptions := existing.Meta().Options
+			meta.Options.DisableBufferedIndexedAsyncFlush = existingOptions.DisableBufferedIndexedAsyncFlush
+			meta.Options.BufferedIndexedAsyncFlush = existingOptions.BufferedIndexedAsyncFlush
+			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = existingOptions.BufferedIndexedAsyncFlushMaxQueuedUnits
+		case !errors.Is(openErr, collections.ErrCollectionNotFound):
+			return IndexInfo{}, wrapServiceError(CodeInternal, "open existing index before create failed", openErr)
+		}
+	}
 	created, alreadyExisted, err := s.manager.CreateCollectionWithPreparedCommandWALIntentStatus(*meta, nil)
 	if err != nil {
 		if strings.Contains(err.Error(), "incompatible") {
