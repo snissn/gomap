@@ -23,6 +23,45 @@ func TestVectorIndexUnavailablePreservesDiagnosticCause(t *testing.T) {
 	}
 }
 
+func TestCollectMatchingIDsUsesDeclaredScalarEqualityConjunction(t *testing.T) {
+	ctx := context.Background()
+	svc, db := newTestService(t)
+	defer db.Close()
+	create := CreateIndexRequest{
+		Name:      "scalar_delete",
+		Dimension: 2,
+		Metric:    MetricCosine,
+		ScalarFields: []ScalarFieldDeclaration{
+			{Field: "meta.user_id", ValueType: ScalarFieldString},
+			{Field: "meta.fpath", ValueType: ScalarFieldString},
+		},
+	}
+	info, err := svc.CreateIndex(ctx, create)
+	if err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	documents := []Document{
+		{ID: "a", Embedding: []float32{1, 0}, Meta: map[string]any{"user_id": "shared", "fpath": "/target"}},
+		{ID: "b", Embedding: []float32{1, 0}, Meta: map[string]any{"user_id": "shared", "fpath": "/other"}},
+		{ID: "c", Embedding: []float32{1, 0}, Meta: map[string]any{"user_id": "other", "fpath": "/target"}},
+	}
+	if _, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{Documents: documents}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	col, _, err := svc.openIndex(ctx, create.Name, 0)
+	if err != nil {
+		t.Fatalf("openIndex: %v", err)
+	}
+	filter := &Filter{Operator: "AND", Conditions: []Filter{
+		{Field: "meta.user_id", Operator: "==", Value: "shared"},
+		{Field: "meta.fpath", Operator: "==", Value: "/target"},
+	}}
+	ids, indexed, err := collectMatchingIDsFromScalarIndexes(ctx, col, filter, newScalarSchema(info.ScalarFields))
+	if err != nil || !indexed || !reflect.DeepEqual(ids, []string{"a"}) {
+		t.Fatalf("ids=%v indexed=%v err=%v", ids, indexed, err)
+	}
+}
+
 func TestServiceNilMutationReceiverFailsClosed(t *testing.T) {
 	var svc *Service
 	ctx := context.Background()
