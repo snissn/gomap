@@ -5,7 +5,7 @@
   "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
   "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
   "peak_rss_scope": "fresh_process_per_mode",
-  "peak_rss_pid": 56875,
+  "peak_rss_pid": 632,
   "source_documents": 100000,
   "generated_chunks": 300000,
   "indexed_live_rows": 400000,
@@ -22,13 +22,13 @@
     "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
   },
   "tombstone_debt": 0,
-  "source_docs_per_second": 2680.441287613044,
-  "chunks_per_second": 8041.323862839133,
-  "indexed_rows_per_second": 10721.765150452176,
-  "wall_seconds": 37.307289834,
+  "source_docs_per_second": 2478.068077847983,
+  "chunks_per_second": 7434.204233543949,
+  "indexed_rows_per_second": 9912.272311391933,
+  "wall_seconds": 40.354016459,
   "cpu_seconds": {
     "state": "observed",
-    "value": 30.009561
+    "value": 27.712123000000002
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -40,11 +40,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 39304229
+    "value": 39245432
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 446054400
+    "value": 428228608
   },
   "stages": {
     "analyzer": {
@@ -53,7 +53,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.029475292
+      "value": 0.0411775
     },
     "posting_builder": {
       "state": "unavailable",
@@ -61,7 +61,7 @@
     },
     "reopen_validation": {
       "state": "observed",
-      "value": 0.945587709
+      "value": 0.899210417
     },
     "root_mutation": {
       "state": "unavailable",
@@ -73,12 +73,12 @@
     }
   },
   "storage": {
-    "physical_index_page_bytes": 288096256,
+    "physical_index_page_bytes": 272367616,
     "physical_value_log_bytes": 0,
     "physical_wal_bytes": 0,
-    "physical_other_bytes": 374,
-    "physical_total_bytes": 288096630,
-    "physical_total_wal_excluded_bytes": 288096630,
+    "physical_other_bytes": 372,
+    "physical_total_bytes": 272367988,
+    "physical_total_wal_excluded_bytes": 272367988,
     "other_paths": [
       "LOCK",
       "format.json",

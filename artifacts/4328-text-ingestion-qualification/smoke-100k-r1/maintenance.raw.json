@@ -5,7 +5,7 @@
   "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
   "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
   "peak_rss_scope": "fresh_process_per_mode",
-  "peak_rss_pid": 56843,
+  "peak_rss_pid": 569,
   "source_documents": 100000,
   "generated_chunks": 0,
   "indexed_live_rows": 50000,
@@ -22,13 +22,13 @@
     "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
   },
   "tombstone_debt": 50000,
-  "source_docs_per_second": 35342.667037175626,
+  "source_docs_per_second": 60434.72055485011,
   "chunks_per_second": 0,
-  "indexed_rows_per_second": 17671.333518587813,
-  "wall_seconds": 2.82944125,
+  "indexed_rows_per_second": 30217.360277425054,
+  "wall_seconds": 1.654677958,
   "cpu_seconds": {
     "state": "observed",
-    "value": 2.783305
+    "value": 1.9255509999999998
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -40,11 +40,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 8724844
+    "value": 8724857
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 458358784
+    "value": 438861824
   },
   "stages": {
     "analyzer": {
@@ -53,7 +53,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.012975417
+      "value": 0.041074375
     },
     "posting_builder": {
       "state": "unavailable",
@@ -61,7 +61,7 @@
     },
     "reopen_validation": {
       "state": "observed",
-      "value": 0.167541333
+      "value": 0.130343875
     },
     "root_mutation": {
       "state": "unavailable",
@@ -76,9 +76,9 @@
     "physical_index_page_bytes": 49020928,
     "physical_value_log_bytes": 0,
     "physical_wal_bytes": 0,
-    "physical_other_bytes": 374,
-    "physical_total_bytes": 49021302,
-    "physical_total_wal_excluded_bytes": 49021302,
+    "physical_other_bytes": 372,
+    "physical_total_bytes": 49021300,
+    "physical_total_wal_excluded_bytes": 49021300,
     "other_paths": [
       "LOCK",
       "format.json",
