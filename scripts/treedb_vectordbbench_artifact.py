@@ -1929,6 +1929,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     valid_launcher = direct_launcher or command_tokens[:module_position] == uv_prefix
                 forbidden_flags = {
                     "--dry-run", "--skip-load", "--skip-search-serial", "--skip-search-concurrent",
+                    "--help", "-h", "--version",
                 }
                 if (
                     expected_subcommand is None

@@ -1533,6 +1533,23 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["analyzable"], got)
         self.assertTrue(any("terminate option parsing" in error for error in got["errors"]), got)
 
+    def test_bound_vdbbench_command_rejects_eager_exit_flags(self) -> None:
+        for flag in ("--help", "-h", "--version"):
+            with self.subTest(flag=flag), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                command = [*manifest["commands"][0]["command"], flag]
+                set_fixture_vdbbench_command_tokens(manifest, command)
+                manifest["lifecycle"]["identity"]["config_sha256"] = (
+                    harness.lifecycle_config_sha256(manifest)
+                )
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any("VDBBench command" in error for error in got["errors"]), got)
+
     def test_bound_vdbbench_typed_options_reject_unproducible_values(self) -> None:
         for key, option in (
             ("client_timeout", "--timeout"),
