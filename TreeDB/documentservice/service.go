@@ -39,6 +39,7 @@ type Service struct {
 	diagnosticsMu                   sync.Mutex
 	diagnosticsActive               atomic.Pointer[diagnosticsActiveIndex]
 	diagnosticsCompleted            sync.Map // map[string]*diagnosticsCompletedInsert
+	diagnosticsUpsert               UpsertDiagnosticsStats
 	diagnosticsBeforeActivePublish  func()
 	deferredMaintenanceBeforeCommit func()
 	deferredVectorBuildMaintenance  *treedb.DeferredVectorBuildMaintenance
@@ -319,15 +320,51 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	if s == nil {
 		return UpsertDocumentsResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
 	}
+	diagnostics := s.diagnosticsEnabled.Load()
+	var lockWaitStarted time.Time
+	if diagnostics {
+		lockWaitStarted = time.Now()
+	}
 	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
+	var lockHoldStarted time.Time
+	upsertStats := UpsertDiagnosticsStats{Requests: 1}
+	var phaseStarted time.Time
+	var phaseNanos *uint64
+	startPhase := func(nanos *uint64) {
+		if !diagnostics {
+			return
+		}
+		if phaseNanos != nil {
+			*phaseNanos += diagnosticsElapsedNanos(phaseStarted)
+		}
+		phaseStarted = time.Now()
+		phaseNanos = nanos
+	}
+	if diagnostics {
+		upsertStats.LockWaitNanos = diagnosticsElapsedNanos(lockWaitStarted)
+		lockHoldStarted = time.Now()
+	}
+	defer func() {
+		if diagnostics {
+			if phaseNanos != nil {
+				*phaseNanos += diagnosticsElapsedNanos(phaseStarted)
+			}
+			upsertStats.LockHoldNanos = diagnosticsElapsedNanos(lockHoldStarted)
+		}
+		s.writeMu.Unlock()
+		if diagnostics {
+			s.addDiagnosticsUpsert(upsertStats)
+		}
+	}()
 	deferredMaintenanceEpoch := uint64(0)
 	defer func() {
 		if deferredMaintenanceEpoch != 0 && s.deferredVectorBuildMaintenance != nil {
+			startPhase(&upsertStats.FinalizeNanos)
 			s.deferredVectorBuildMaintenance.AbortInsert(deferredMaintenanceEpoch)
 		}
 	}()
 
+	startPhase(&upsertStats.OpenNanos)
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
@@ -335,6 +372,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	if len(req.Documents) == 0 {
 		return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "documents must not be empty")
 	}
+	startPhase(&upsertStats.PrepareNanos)
 	prepared, err := prepareDocumentsForWrite(req.Documents, info)
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
@@ -346,6 +384,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	insertDocs := make([][]byte, 0, len(prepared))
 	inserts := make([]preparedDocument, 0, len(prepared))
 	updates := make([]preparedDocument, 0)
+	startPhase(&upsertStats.ReadPreflightNanos)
 	for _, doc := range prepared {
 		if err := ctxErr(ctx); err != nil {
 			return UpsertDocumentsResponse{}, err
@@ -366,6 +405,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 		updates = append(updates, doc)
 	}
+	startPhase(&upsertStats.MaintenanceNanos)
 	deferredMaintenanceCommitRejected := false
 	deferVectorIndexRebuild := req.DeferVectorIndexRebuild
 	if s.deferredVectorBuildMaintenance != nil {
@@ -390,15 +430,18 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	}
 	inserted := 0
 	updated := 0
+	startPhase(&upsertStats.InsertNanos)
 	if len(insertIDs) > 0 {
 		if _, err := col.InsertBatch(insertIDs, insertDocs); err == nil {
 			inserted = len(insertIDs)
 			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
 		} else if collections.IsDuplicateKeyError(err) {
 			if deferredMaintenanceEpoch != 0 {
+				startPhase(&upsertStats.MaintenanceNanos)
 				if err := s.deferredVectorBuildMaintenance.EndContext(ctx); err != nil {
 					return UpsertDocumentsResponse{}, err
 				}
+				startPhase(&upsertStats.InsertNanos)
 				deferredMaintenanceEpoch = 0
 				deferredMaintenanceCommitRejected = true
 				deferVectorIndexRebuild = false
@@ -425,6 +468,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "insert documents failed", err)
 		}
 	}
+	startPhase(&upsertStats.UpdateNanos)
 	for _, doc := range updates {
 		wasInserted, wasUpdated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc, false, func() {
 			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
@@ -439,6 +483,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			updated++
 		}
 	}
+	startPhase(&upsertStats.FinalizeNanos)
 	if deferredMaintenanceEpoch != 0 {
 		if s.deferredMaintenanceBeforeCommit != nil {
 			s.deferredMaintenanceBeforeCommit()
