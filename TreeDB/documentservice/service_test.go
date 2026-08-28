@@ -243,6 +243,15 @@ func TestServiceDeferredColumnGraphInsertAdmissionIsSharedAndLifecycleIsBarrier(
 	}); err != nil {
 		t.Fatalf("CreateIndex: %v", err)
 	}
+	if _, err := svc.OptimizeIndex(ctx, "docs", OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("OptimizeIndex: %v", err)
+	}
+	svc.benchmarkSearchCacheMu.RLock()
+	cachedCollection := svc.benchmarkSearchCache["docs"].collection
+	svc.benchmarkSearchCacheMu.RUnlock()
+	if cachedCollection == nil {
+		t.Fatal("OptimizeIndex did not prime the prepared search cache")
+	}
 
 	firstAtCommit := make(chan struct{})
 	releaseFirst := make(chan struct{})
@@ -298,6 +307,9 @@ func TestServiceDeferredColumnGraphInsertAdmissionIsSharedAndLifecycleIsBarrier(
 	close(releaseFirst)
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first deferred insert: %v", err)
+	}
+	if got := cachedCollection.LastInsertStats().Documents; got != 0 {
+		t.Fatalf("shared inserts reused cached diagnostics handle: Documents=%d want 0", got)
 	}
 	if err := <-deleteDone; err != nil {
 		t.Fatalf("DeleteDocuments: %v", err)

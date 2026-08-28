@@ -388,6 +388,14 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
 	}
+	if sharedCandidate {
+		// Concurrent writers need request-local LastInsertStats; the prepared
+		// search cache intentionally reuses one Collection handle.
+		col, err = s.manager.OpenCollection(index)
+		if err != nil {
+			return UpsertDocumentsResponse{}, serviceErrorFromCollectionOpen(err, index)
+		}
+	}
 	if sharedCandidate && info.VectorStrategy != collections.VectorIndexStrategyColumnGraph {
 		release()
 		return s.upsertDocuments(ctx, index, req, false, diagnostics, upsertStats)
