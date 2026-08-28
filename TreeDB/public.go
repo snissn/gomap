@@ -2543,6 +2543,9 @@ func (db *DB) CompactIndex() error {
 // a short writer pause. Disk space from the old index is reclaimed once any old
 // snapshots/iterators drain.
 func (db *DB) VacuumIndexOnline(ctx context.Context) error {
+	if db == nil {
+		return ErrClosed
+	}
 	db.bgVac.endDeferredVectorBuild()
 	_, err := db.vacuumIndexOnlineStats(ctx)
 	if err == nil {
