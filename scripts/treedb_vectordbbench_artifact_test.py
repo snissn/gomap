@@ -3173,12 +3173,19 @@ class LifecycleValidatorTest(unittest.TestCase):
             self.assertTrue(any("service.command" in item for item in got["errors"]), got)
 
     def test_service_and_pprof_listeners_must_use_distinct_ports(self) -> None:
-        for pprof_address in ("127.0.0.1:9876", "localhost:9876", "[::1]:9876"):
-            with self.subTest(pprof=pprof_address), tempfile.TemporaryDirectory() as tmp:
+        for service_address, pprof_address in (
+            ("127.0.0.1:9876", "127.0.0.1:9876"),
+            ("127.0.0.1:9876", "localhost:9876"),
+            ("127.0.0.1:9876", "[::1]:9876"),
+            ("127.0.0.1:09876", "localhost:9876"),
+        ):
+            with self.subTest(addr=service_address, pprof=pprof_address), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 manifest, _ = lifecycle_fixture(root)
                 command = manifest["service"]["command"]
+                command[command.index("-addr") + 1] = service_address
                 command[command.index("-pprof") + 1] = pprof_address
+                manifest["service"]["base_url"] = f"http://{service_address}"
                 manifest["lifecycle"]["identity"]["config_sha256"] = (
                     harness.lifecycle_config_sha256(manifest)
                 )

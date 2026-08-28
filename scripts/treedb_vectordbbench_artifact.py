@@ -1801,7 +1801,10 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             or effective_pprof is None
             or not _valid_pprof_listen_address(effective_pprof)
             or (lifecycle.get("result_status") == "completed" and not effective_pprof)
-            or (effective_pprof and effective_addr.rsplit(":", 1)[1] == effective_pprof.rsplit(":", 1)[1])
+            or (
+                effective_pprof
+                and int(effective_addr.rsplit(":", 1)[1]) == int(effective_pprof.rsplit(":", 1)[1])
+            )
             or len(profile_values) != 1
             or profile_values[0] != service.get("profile")
         ):
