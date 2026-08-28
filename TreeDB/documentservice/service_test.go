@@ -43,7 +43,7 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	t.Cleanup(func() { _ = cleanup() })
 	svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
 	ctx := context.Background()
-	for _, name := range []string{"docs", "other"} {
+	for _, name := range []string{"docs", "other", "generation"} {
 		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine}); err != nil {
 			t.Fatalf("CreateIndex(%s): %v", name, err)
 		}
@@ -63,6 +63,20 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 			t.Fatalf("deferred epoch active=%q want %t; stats=%v", got, want, stats())
 		}
 	}
+	assertCleanGraph := func(index string, wantLive int) {
+		t.Helper()
+		col, _, err := svc.openIndex(ctx, index, 0)
+		if err != nil {
+			t.Fatalf("open %s: %v", index, err)
+		}
+		status, err := col.VectorIndexStatus(defaultVectorIndexName)
+		if err != nil {
+			t.Fatalf("vector status %s: %v", index, err)
+		}
+		if !status.Loaded || status.RebuildNeeded || status.Stats.RebuildNeeded || status.Stats.SnapshotDirty || status.Stats.LiveDocs != wantLive {
+			t.Fatalf("vector status %s=%+v want clean graph with %d live docs", index, status, wantLive)
+		}
+	}
 
 	deferInsert("docs", "a")
 	assertActive(true)
@@ -78,6 +92,19 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	assertActive(true)
 	deferInsert("other", "b")
 	assertActive(false)
+	assertCleanGraph("other", 1)
+
+	generationInfo, err := svc.OpenIndex(ctx, "generation")
+	if err != nil {
+		t.Fatalf("OpenIndex(generation): %v", err)
+	}
+	competingGenerationEpoch := maintenance.AdmitInsert("generation", generationInfo.Generation+1)
+	if competingGenerationEpoch == 0 || !maintenance.CommitInsert(competingGenerationEpoch) {
+		t.Fatal("establish competing-generation owner")
+	}
+	deferInsert("generation", "generation-fallback")
+	assertActive(false)
+	assertCleanGraph("generation", 1)
 
 	deferInsert("docs", "c")
 	assertActive(true)
@@ -89,6 +116,22 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	deferInsert("docs", "d")
 	if _, err := svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{IDs: []string{"d"}}); err != nil {
 		t.Fatalf("DeleteDocuments: %v", err)
+	}
+	assertActive(false)
+
+	deferInsert("docs", "missing-delete-guard")
+	if _, err := svc.DeleteDocuments(ctx, "missing", DeleteDocumentsRequest{IDs: []string{"missing"}}); ErrorCodeOf(err) != CodeIndexNotFound {
+		t.Fatalf("missing-index DeleteDocuments err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	assertActive(false)
+
+	deferInsert("docs", "stale-delete-guard")
+	docsInfo, err := svc.OpenIndex(ctx, "docs")
+	if err != nil {
+		t.Fatalf("OpenIndex(docs): %v", err)
+	}
+	if _, err := svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{IDs: []string{"stale-delete-guard"}, ExpectedGeneration: docsInfo.Generation + 1}); ErrorCodeOf(err) != CodeIndexStale {
+		t.Fatalf("stale-generation DeleteDocuments err=%v code=%s", err, ErrorCodeOf(err))
 	}
 	assertActive(false)
 

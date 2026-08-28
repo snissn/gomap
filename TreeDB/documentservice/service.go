@@ -364,14 +364,18 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		updates = append(updates, doc)
 	}
 	deferredMaintenanceEpoch := uint64(0)
+	deferVectorIndexRebuild := req.DeferVectorIndexRebuild
 	if s.deferredVectorBuildMaintenance != nil {
-		if req.DeferVectorIndexRebuild && len(insertIDs) > 0 && len(updates) == 0 {
+		if deferVectorIndexRebuild && len(insertIDs) > 0 && len(updates) == 0 {
 			deferredMaintenanceEpoch = s.deferredVectorBuildMaintenance.AdmitInsert(index, info.Generation)
+			if deferredMaintenanceEpoch == 0 {
+				deferVectorIndexRebuild = false
+			}
 		} else {
 			s.deferredVectorBuildMaintenance.End()
 		}
 	}
-	if len(insertIDs) > 0 && len(updates) == 0 && !req.DeferVectorIndexRebuild {
+	if len(insertIDs) > 0 && len(updates) == 0 && !deferVectorIndexRebuild {
 		if err := preflightServiceVectorAutoRebuildSupported(info); err != nil {
 			return UpsertDocumentsResponse{}, err
 		}
@@ -424,7 +428,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 	}
 	var rebuildErr error
-	if inserted > 0 && updated == 0 && !req.DeferVectorIndexRebuild {
+	if inserted > 0 && updated == 0 && !deferVectorIndexRebuild {
 		rebuildErr = rebuildServiceVectorIndex(ctx, col)
 	}
 	if inserted+updated > 0 {
@@ -449,6 +453,9 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if s.deferredVectorBuildMaintenance != nil {
+		s.deferredVectorBuildMaintenance.End()
+	}
 
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
@@ -457,10 +464,6 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 	if len(req.IDs) > 0 && req.Filter != nil {
 		return DeleteDocumentsResponse{}, serviceError(CodeInvalidRequest, "delete accepts either ids or filter, not both")
 	}
-	if s.deferredVectorBuildMaintenance != nil {
-		s.deferredVectorBuildMaintenance.End()
-	}
-
 	var ids []string
 	if len(req.IDs) > 0 {
 		ids, err = validateDocumentIDs(req.IDs)

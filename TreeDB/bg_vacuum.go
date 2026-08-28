@@ -145,6 +145,8 @@ type bgIndexVacuumWorker struct {
 	deferredVectorBuildEpoch   atomic.Pointer[deferredVectorBuildEpoch]
 	deferredVectorBuildNextID  atomic.Uint64
 	deferredVectorBuildClosed  atomic.Bool
+	// deferredVectorBuildDebt records coalesced scheduling debt only. It does
+	// not assert that a physical vacuum is required after the epoch ends.
 	deferredVectorBuildDebt    atomic.Bool
 	deferredVectorBuildSkips   atomic.Uint64
 	deferredVectorBuildDebtSet atomic.Uint64
@@ -855,10 +857,6 @@ type bgIndexVacuumStats struct {
 	ForegroundSkips            uint64
 	ForegroundForcedRuns       uint64
 	DeferredVectorBuildActive  bool
-	DeferredVectorBuildEpochID uint64
-	DeferredVectorBuildIndex   string
-	DeferredVectorBuildGen     uint64
-	DeferredVectorBuildLastNs  int64
 	DeferredVectorBuildDebt    bool
 	DeferredVectorBuildSkips   uint64
 	DeferredVectorBuildDebtSet uint64
@@ -937,10 +935,6 @@ func (w *bgIndexVacuumWorker) Stats() bgIndexVacuumStats {
 	}
 	if epoch := w.deferredVectorBuildEpoch.Load(); epoch != nil {
 		out.DeferredVectorBuildActive = true
-		out.DeferredVectorBuildEpochID = epoch.id
-		out.DeferredVectorBuildIndex = epoch.index
-		out.DeferredVectorBuildGen = epoch.generation
-		out.DeferredVectorBuildLastNs = epoch.lastActivity
 	}
 	if v := w.lastErr.Load(); v != nil {
 		out.LastErr, _ = v.(string)
@@ -1006,10 +1000,6 @@ func bgIndexVacuumStatsInto(out map[string]string, w *bgIndexVacuumWorker) {
 	out["treedb.bg_vacuum.foreground_skips_total"] = fmt.Sprintf("%d", stats.ForegroundSkips)
 	out["treedb.bg_vacuum.foreground_forced_runs"] = fmt.Sprintf("%d", stats.ForegroundForcedRuns)
 	out["treedb.bg_vacuum.deferred_vector_build.active"] = fmt.Sprintf("%t", stats.DeferredVectorBuildActive)
-	out["treedb.bg_vacuum.deferred_vector_build.epoch_id"] = fmt.Sprintf("%d", stats.DeferredVectorBuildEpochID)
-	out["treedb.bg_vacuum.deferred_vector_build.index"] = stats.DeferredVectorBuildIndex
-	out["treedb.bg_vacuum.deferred_vector_build.generation"] = fmt.Sprintf("%d", stats.DeferredVectorBuildGen)
-	out["treedb.bg_vacuum.deferred_vector_build.last_activity_unix_nano"] = fmt.Sprintf("%d", stats.DeferredVectorBuildLastNs)
 	out["treedb.bg_vacuum.deferred_vector_build.debt"] = fmt.Sprintf("%t", stats.DeferredVectorBuildDebt)
 	out["treedb.bg_vacuum.deferred_vector_build.skips_total"] = fmt.Sprintf("%d", stats.DeferredVectorBuildSkips)
 	out["treedb.bg_vacuum.deferred_vector_build.debt_coalesced_total"] = fmt.Sprintf("%d", stats.DeferredVectorBuildDebtSet)
