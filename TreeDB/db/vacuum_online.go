@@ -95,6 +95,9 @@ type VacuumOnlineStats struct {
 	OlderRootDurableResourceDescriptors     uint64
 	OlderRootDurableResourceBytes           uint64
 	OlderRootExactCandidateScans            uint64
+	OlderRootProjections                    uint64
+	OlderRootProjectionFallbacks            uint64
+	OlderRootProjectionFallbackReason       string
 	OlderRootReusedNonValueLogDescriptors   uint64
 	OlderRootUniqueExternalSegments         uint64
 	DurableResourceCaptureDuration          time.Duration
@@ -653,6 +656,11 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		runStats.OlderRootDurableResourceDescriptors += resourceWork.Descriptors
 		runStats.OlderRootDurableResourceBytes += resourceWork.Bytes
 		runStats.OlderRootExactCandidateScans += resourceWork.ExactCandidateScans
+		runStats.OlderRootProjections += resourceWork.Projections
+		runStats.OlderRootProjectionFallbacks += resourceWork.ProjectionFallbacks
+		if resourceWork.ProjectionFallbackReason != "" {
+			runStats.OlderRootProjectionFallbackReason = resourceWork.ProjectionFallbackReason
+		}
 		runStats.OlderRootReusedNonValueLogDescriptors += resourceWork.ReusedNonValueLogDescriptors
 		runStats.OlderRootUniqueExternalSegments += resourceWork.UniqueScannedExternalSegments
 		runStats.OlderRootRebuiltPages += uint64(len(recordingAlloc.pages))
@@ -1047,6 +1055,11 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 					runStats.OlderRootDurableResourceDescriptors += resourceWork.Descriptors
 					runStats.OlderRootDurableResourceBytes += resourceWork.Bytes
 					runStats.OlderRootExactCandidateScans += resourceWork.ExactCandidateScans
+					runStats.OlderRootProjections += resourceWork.Projections
+					runStats.OlderRootProjectionFallbacks += resourceWork.ProjectionFallbacks
+					if resourceWork.ProjectionFallbackReason != "" {
+						runStats.OlderRootProjectionFallbackReason = resourceWork.ProjectionFallbackReason
+					}
 					runStats.OlderRootReusedNonValueLogDescriptors += resourceWork.ReusedNonValueLogDescriptors
 					runStats.OlderRootUniqueExternalSegments += resourceWork.UniqueScannedExternalSegments
 					runStats.OlderRootRebuiltPages += uint64(len(recordingAlloc.pages))
@@ -1502,6 +1515,9 @@ type rebuiltRecoverableRootWorkV1 struct {
 	Descriptors                   uint64
 	Bytes                         uint64
 	ExactCandidateScans           uint64
+	Projections                   uint64
+	ProjectionFallbacks           uint64
+	ProjectionFallbackReason      string
 	ReusedNonValueLogDescriptors  uint64
 	UniqueScannedExternalSegments uint64
 }
@@ -1580,14 +1596,73 @@ func (db *DB) rebuildRecoverableRootV1(ctx context.Context, roots *RecoverableRo
 		MaxEntryRevision: root.MaxEntryRevision,
 	}
 	captureStarted := time.Now()
-	resources, resourceWork, err := db.captureRebuiltIndexDurableResourcesWithWorkV1(newPager, meta, roots.resourcesForRoot(root))
+	if err := ctx.Err(); err != nil {
+		return rebuiltDurableRootV1{}, work, err
+	}
+	sourceResources, sourceIndexID, sourceIndexIdentity, sourceExact := roots.resourcesForRootExact(root)
+	var resources *rootpublication.StableResourceSet
+	var resourceWork rebuiltDurableResourceWorkV1
+	if sourceExact {
+		var oldIdentity, newIdentity rootpublication.StableIdentity
+		oldIdentityErr := snapshot.idx.pager.WithStableResourceFile(func(file *os.File) error {
+			var identityErr error
+			oldIdentity, identityErr = rootpublication.StableIdentityFromFile(file)
+			return identityErr
+		})
+		newIdentityErr := newPager.WithStableResourceFile(func(file *os.File) error {
+			var identityErr error
+			newIdentity, identityErr = rootpublication.StableIdentityFromFile(file)
+			return identityErr
+		})
+		switch {
+		case oldIdentityErr != nil || newIdentityErr != nil:
+			resourceWork.ProjectionFallbackReason = rebuiltDurableResourceFallbackIdentity
+		case rootpublication.SamePhysicalIdentity(oldIdentity, newIdentity):
+			return rebuiltDurableRootV1{}, work, fmt.Errorf("vacuum: rebuilt index aliases source index: %w", rootpublication.ErrResourceConflict)
+		case sourceIndexID != snapshot.idx.id || !rootpublication.SamePhysicalIdentity(sourceIndexIdentity, oldIdentity):
+			resourceWork.ProjectionFallbackReason = rebuiltDurableResourceFallbackIdentity
+		case !rebuiltOlderRootIndexAuthorityV1(sourceResources, oldIdentity, snapshot.idx.id):
+			resourceWork.ProjectionFallbackReason = rebuiltDurableResourceFallbackIdentity
+		default:
+			var projected bool
+			resources, projected, err = projectRebuiltOlderRootDurableResourcesV1(sourceResources)
+			if err != nil {
+				return rebuiltDurableRootV1{}, work, err
+			}
+			if projected {
+				resourceWork.Projected = true
+			} else {
+				resourceWork.ProjectionFallbackReason = rebuiltDurableResourceFallbackPolicy
+			}
+		}
+	} else {
+		resourceWork.ProjectionFallbackReason = rebuiltDurableResourceFallbackMissingSource
+	}
+	if !resourceWork.Projected {
+		fallbackReason := resourceWork.ProjectionFallbackReason
+		resources, resourceWork, err = db.captureRebuiltIndexDurableResourcesWithWorkV1(newPager, meta, sourceResources)
+		if fallbackReason == "" {
+			fallbackReason = rebuiltDurableResourceFallbackPolicy
+		}
+		resourceWork.ProjectionFallbackReason = fallbackReason
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
 	work.CaptureDuration = time.Since(captureStarted)
 	if err != nil {
+		resources.Release()
 		return rebuiltDurableRootV1{}, work, err
 	}
 	work.Descriptors, work.Bytes = vacuumDurableResourceSummary(resources)
 	if resourceWork.ExactCandidateScan {
 		work.ExactCandidateScans = 1
+	}
+	if resourceWork.Projected {
+		work.Projections = 1
+	} else {
+		work.ProjectionFallbacks = 1
+		work.ProjectionFallbackReason = resourceWork.ProjectionFallbackReason
 	}
 	work.ReusedNonValueLogDescriptors = resourceWork.ReusedNonValueLogDescriptors
 	work.UniqueScannedExternalSegments = resourceWork.UniqueScannedExternalSegments

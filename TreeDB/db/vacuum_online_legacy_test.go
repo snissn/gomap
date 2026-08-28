@@ -52,7 +52,7 @@ func TestVacuumIndexOnlineUsesProductionRecoverableRootSetFence(t *testing.T) {
 	if stats.AttemptID == 0 || !stats.WorkCompleted || stats.RecoverableSetCaptureAttempts != 1 || stats.RecoverableSetCaptures != 1 || stats.RecoverableRoots < 2 {
 		t.Fatalf("vacuum stats=%+v want completed production recoverable-root snapshot", stats)
 	}
-	if stats.TotalDuration < stats.RecoverableSetCaptureDuration || stats.RecoverableSetCaptureDuration <= 0 || stats.OlderRootRebuilds != 1 || stats.OlderRootDurableResourceCaptures != 1 || stats.OlderRootDurableResourceCaptureDuration <= 0 || stats.OlderRootExactCandidateScans != 1 || stats.DurableResourceCaptures != 1 || !stats.ExactCandidateScan {
+	if stats.TotalDuration < stats.RecoverableSetCaptureDuration || stats.RecoverableSetCaptureDuration <= 0 || stats.OlderRootRebuilds != 1 || stats.OlderRootDurableResourceCaptures != 1 || stats.OlderRootDurableResourceCaptureDuration <= 0 || stats.OlderRootExactCandidateScans != 0 || stats.OlderRootProjections != 1 || stats.OlderRootProjectionFallbacks != 0 || stats.OlderRootProjectionFallbackReason != "" || stats.DurableResourceCaptures != 1 || !stats.ExactCandidateScan {
 		t.Fatalf("vacuum attribution=%+v want capture, older rebuild, and durable-resource capture", stats)
 	}
 	if stats.ReplacementPagerPages == 0 || stats.ReplacementPagerPages != newIndex.pager.PageCount() {
@@ -510,21 +510,33 @@ func TestVacuumIndexOnlinePreservesTwoRecoverySelectablePointerClosures(t *testi
 		t.Fatal(err)
 	}
 	values := [][]byte{bytes.Repeat([]byte("older-"), 32), bytes.Repeat([]byte("newer-"), 32)}
-	pointers := appendPointersInNewSegment(t, dir, 0, 71, 710_000, len(values), func(index int) []byte { return values[index] })
+	olderPointer := appendPointersInNewSegment(t, dir, 0, 71, 710_000, 1, func(int) []byte { return values[0] })[0]
+	newerPointer := appendPointersInNewSegment(t, dir, 0, 72, 720_000, 1, func(int) []byte { return values[1] })[0]
 	if err := database.RefreshValueLogSet(); err != nil {
 		t.Fatal(err)
 	}
-	for index, key := range []string{"older", "newer"} {
-		batch := database.NewBatch().(*Batch)
-		if err := batch.SetPointer([]byte(key), pointers[index]); err != nil {
-			t.Fatal(err)
-		}
-		if err := batch.WriteSync(); err != nil {
-			t.Fatal(err)
-		}
-		if err := batch.Close(); err != nil {
-			t.Fatal(err)
-		}
+	olderBatch := database.NewBatch().(*Batch)
+	if err := olderBatch.SetPointer([]byte("older"), olderPointer); err != nil {
+		t.Fatal(err)
+	}
+	if err := olderBatch.WriteSync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := olderBatch.Close(); err != nil {
+		t.Fatal(err)
+	}
+	newerBatch := database.NewBatch().(*Batch)
+	if err := newerBatch.Delete([]byte("older")); err != nil {
+		t.Fatal(err)
+	}
+	if err := newerBatch.SetPointer([]byte("newer"), newerPointer); err != nil {
+		t.Fatal(err)
+	}
+	if err := newerBatch.WriteSync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := newerBatch.Close(); err != nil {
+		t.Fatal(err)
 	}
 	before := database.durableRoot.slotCommit
 	if before[0] == 0 || before[1] == 0 || before[0] == before[1] {
@@ -533,9 +545,13 @@ func TestVacuumIndexOnlinePreservesTwoRecoverySelectablePointerClosures(t *testi
 	if err := database.VacuumIndexOnline(context.Background()); err != nil {
 		t.Fatalf("VacuumIndexOnline: %v", err)
 	}
+	stats := database.vacuumOnlineStatsSnapshot()
+	if stats.OlderRootProjections != 1 || stats.OlderRootProjectionFallbacks != 0 || stats.OlderRootExactCandidateScans != 0 {
+		t.Fatalf("older-root projection stats=%+v, want one projection and zero fallback/full scans", stats)
+	}
 	after := database.durableRoot.slotCommit
 	if after[0] == 0 || after[1] == 0 || after[0] == after[1] {
-		t.Fatalf("replacement slot commits=%v, want two distinct recovery generations", after)
+		t.Fatalf("replacement slot commits=%v stats=%+v, want two distinct recovery generations", after, stats)
 	}
 	if got := database.stableIndexCaptures.Load(); got != 0 {
 		t.Fatalf("stable index captures after replacement=%d, want 0", got)
@@ -552,12 +568,14 @@ func TestVacuumIndexOnlinePreservesTwoRecoverySelectablePointerClosures(t *testi
 	if err != nil {
 		t.Fatalf("reopen newest replacement slot: %v", err)
 	}
-	for index, key := range []string{"older", "newer"} {
-		got, getErr := reopened.Get([]byte(key))
-		if getErr != nil || !bytes.Equal(got, values[index]) {
-			_ = reopened.Close()
-			t.Fatalf("newest Get(%q)=(%q,%v), want pointer-backed value", key, got, getErr)
-		}
+	got, getErr := reopened.Get([]byte("newer"))
+	if getErr != nil || !bytes.Equal(got, values[1]) {
+		_ = reopened.Close()
+		t.Fatalf("newest Get(newer)=(%q,%v), want pointer-backed value", got, getErr)
+	}
+	if got, getErr := reopened.Get([]byte("older")); getErr != nil && !errors.Is(getErr, tree.ErrKeyNotFound) || len(got) != 0 {
+		_ = reopened.Close()
+		t.Fatalf("newest Get(older)=(%q,%v), want absent", got, getErr)
 	}
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
@@ -591,7 +609,7 @@ func TestVacuumIndexOnlinePreservesTwoRecoverySelectablePointerClosures(t *testi
 		t.Fatalf("reopen fallback replacement slot: %v", err)
 	}
 	defer func() { _ = fallback.Close() }()
-	got, err := fallback.Get([]byte("older"))
+	got, err = fallback.Get([]byte("older"))
 	if err != nil || !bytes.Equal(got, values[0]) {
 		t.Fatalf("fallback older value=(%q,%v), want pointer-backed value", got, err)
 	}
