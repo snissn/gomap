@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,6 +47,13 @@ func TestPublicVacuumIndexOnlineHighDebtShrinkAndReopen(t *testing.T) {
 	defer reopened.Close()
 	if got, err := reopened.Get([]byte("public-vacuum/post")); err != nil || !bytes.Equal(got, []byte("post-vacuum")) {
 		t.Fatalf("post-vacuum value after reopen=%q err=%v", got, err)
+	}
+}
+
+func TestPublicVacuumIndexOnlineNilReceiverReturnsErrClosed(t *testing.T) {
+	var d *DB
+	if err := d.VacuumIndexOnline(context.Background()); !errors.Is(err, ErrClosed) {
+		t.Fatalf("VacuumIndexOnline nil receiver error=%v want ErrClosed", err)
 	}
 }
 

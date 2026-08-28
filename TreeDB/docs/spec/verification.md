@@ -1410,6 +1410,11 @@ latter forces value-log pointers, crashes after covered command-WAL cleanup,
 replays the fresh post-cut segment, and verifies both values again after
 `ValueLogGC`.
 
+Deferred document-vector finalization is covered by
+`TestServiceDeferredVectorBuildOptimizeCheckpointCrashReopen`, which exits
+without close after successful Optimize and verifies the document and clean
+query-ready vector generation on reopen.
+
 ## 12. Collections Document Formats
 
 Invariant:

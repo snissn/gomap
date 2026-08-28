@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
@@ -29,17 +30,20 @@ type Service struct {
 	manager *collections.CollectionManager
 	writeMu sync.Mutex
 
-	benchmarkSearchCacheMu         sync.RWMutex
-	benchmarkSearchCache           map[string]*serviceBenchmarkSearchCacheEntry
-	benchmarkSearchBufferPool      sync.Pool
-	denseVectorNativeAfterSearch   func(int, collections.VectorIndexSearchResponse) error
-	vectorPartitionOperations      *vectorpartition.OperationsV1
-	diagnosticsEnabled             atomic.Bool
-	diagnosticsMu                  sync.Mutex
-	diagnosticsActive              atomic.Pointer[diagnosticsActiveIndex]
-	diagnosticsCompleted           sync.Map // map[string]*diagnosticsCompletedInsert
-	diagnosticsBeforeActivePublish func()
-	closed                         bool
+	benchmarkSearchCacheMu          sync.RWMutex
+	benchmarkSearchCache            map[string]*serviceBenchmarkSearchCacheEntry
+	benchmarkSearchBufferPool       sync.Pool
+	denseVectorNativeAfterSearch    func(int, collections.VectorIndexSearchResponse) error
+	vectorPartitionOperations       *vectorpartition.OperationsV1
+	diagnosticsEnabled              atomic.Bool
+	diagnosticsMu                   sync.Mutex
+	diagnosticsActive               atomic.Pointer[diagnosticsActiveIndex]
+	diagnosticsCompleted            sync.Map // map[string]*diagnosticsCompletedInsert
+	diagnosticsUpsert               UpsertDiagnosticsStats
+	diagnosticsBeforeActivePublish  func()
+	deferredMaintenanceBeforeCommit func()
+	deferredVectorBuildMaintenance  *treedb.DeferredVectorBuildMaintenance
+	closed                          bool
 }
 
 // RegisterVectorPartitionOperationsV1 installs the optional default-off
@@ -84,8 +88,15 @@ func (e *serviceBenchmarkSearchCacheEntry) matches(name string) bool {
 
 // New returns a document/search service backed by manager.
 func New(manager *collections.CollectionManager) *Service {
+	return NewWithDeferredVectorBuildMaintenance(manager, nil)
+}
+
+// NewWithDeferredVectorBuildMaintenance wires the explicit deferred-build
+// lifecycle to TreeDB's automatic index-maintenance worker.
+func NewWithDeferredVectorBuildMaintenance(manager *collections.CollectionManager, maintenance *treedb.DeferredVectorBuildMaintenance) *Service {
 	return &Service{
-		manager: manager,
+		manager:                        manager,
+		deferredVectorBuildMaintenance: maintenance.Scoped(),
 		benchmarkSearchBufferPool: sync.Pool{New: func() any {
 			return &collections.VectorIndexSearchBuffer{}
 		}},
@@ -98,6 +109,11 @@ func New(manager *collections.CollectionManager) *Service {
 func (s *Service) Close() error {
 	if s == nil {
 		return nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if s.deferredVectorBuildMaintenance != nil {
+		s.deferredVectorBuildMaintenance.End()
 	}
 	var entries []*serviceBenchmarkSearchCacheEntry
 	s.benchmarkSearchCacheMu.Lock()
@@ -146,6 +162,11 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if s.deferredVectorBuildMaintenance != nil {
+		if err := s.deferredVectorBuildMaintenance.EndContext(ctx); err != nil {
+			return IndexInfo{}, err
+		}
+	}
 	return s.createIndexLocked(ctx, req)
 }
 
@@ -299,9 +320,51 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	if s == nil {
 		return UpsertDocumentsResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
 	}
+	diagnostics := s.diagnosticsEnabled.Load()
+	var lockWaitStarted time.Time
+	if diagnostics {
+		lockWaitStarted = time.Now()
+	}
 	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
+	var lockHoldStarted time.Time
+	upsertStats := UpsertDiagnosticsStats{Requests: 1}
+	var phaseStarted time.Time
+	var phaseNanos *uint64
+	startPhase := func(nanos *uint64) {
+		if !diagnostics {
+			return
+		}
+		if phaseNanos != nil {
+			*phaseNanos += diagnosticsElapsedNanos(phaseStarted)
+		}
+		phaseStarted = time.Now()
+		phaseNanos = nanos
+	}
+	if diagnostics {
+		upsertStats.LockWaitNanos = diagnosticsElapsedNanos(lockWaitStarted)
+		lockHoldStarted = time.Now()
+	}
+	defer func() {
+		if diagnostics {
+			if phaseNanos != nil {
+				*phaseNanos += diagnosticsElapsedNanos(phaseStarted)
+			}
+			upsertStats.LockHoldNanos = diagnosticsElapsedNanos(lockHoldStarted)
+		}
+		s.writeMu.Unlock()
+		if diagnostics {
+			s.addDiagnosticsUpsert(upsertStats)
+		}
+	}()
+	deferredMaintenanceEpoch := uint64(0)
+	defer func() {
+		if deferredMaintenanceEpoch != 0 && s.deferredVectorBuildMaintenance != nil {
+			startPhase(&upsertStats.FinalizeNanos)
+			s.deferredVectorBuildMaintenance.AbortInsert(deferredMaintenanceEpoch)
+		}
+	}()
 
+	startPhase(&upsertStats.OpenNanos)
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
@@ -309,6 +372,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	if len(req.Documents) == 0 {
 		return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "documents must not be empty")
 	}
+	startPhase(&upsertStats.PrepareNanos)
 	prepared, err := prepareDocumentsForWrite(req.Documents, info)
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
@@ -320,6 +384,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	insertDocs := make([][]byte, 0, len(prepared))
 	inserts := make([]preparedDocument, 0, len(prepared))
 	updates := make([]preparedDocument, 0)
+	startPhase(&upsertStats.ReadPreflightNanos)
 	for _, doc := range prepared {
 		if err := ctxErr(ctx); err != nil {
 			return UpsertDocumentsResponse{}, err
@@ -340,18 +405,47 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 		updates = append(updates, doc)
 	}
-	if len(insertIDs) > 0 && len(updates) == 0 && !req.DeferVectorIndexRebuild {
+	startPhase(&upsertStats.MaintenanceNanos)
+	deferredMaintenanceCommitRejected := false
+	deferVectorIndexRebuild := req.DeferVectorIndexRebuild
+	if s.deferredVectorBuildMaintenance != nil {
+		if deferVectorIndexRebuild && len(insertIDs) > 0 && len(updates) == 0 {
+			deferredMaintenanceEpoch = s.deferredVectorBuildMaintenance.AdmitInsert(ctx, index, info.Generation)
+			if err := ctxErr(ctx); err != nil {
+				return UpsertDocumentsResponse{}, err
+			}
+			if deferredMaintenanceEpoch == 0 {
+				deferVectorIndexRebuild = false
+			}
+		} else {
+			if err := s.deferredVectorBuildMaintenance.EndContext(ctx); err != nil {
+				return UpsertDocumentsResponse{}, err
+			}
+		}
+	}
+	if len(insertIDs) > 0 && len(updates) == 0 && !deferVectorIndexRebuild {
 		if err := preflightServiceVectorAutoRebuildSupported(info); err != nil {
 			return UpsertDocumentsResponse{}, err
 		}
 	}
 	inserted := 0
 	updated := 0
+	startPhase(&upsertStats.InsertNanos)
 	if len(insertIDs) > 0 {
 		if _, err := col.InsertBatch(insertIDs, insertDocs); err == nil {
 			inserted = len(insertIDs)
 			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
 		} else if collections.IsDuplicateKeyError(err) {
+			if deferredMaintenanceEpoch != 0 {
+				startPhase(&upsertStats.MaintenanceNanos)
+				if err := s.deferredVectorBuildMaintenance.EndContext(ctx); err != nil {
+					return UpsertDocumentsResponse{}, err
+				}
+				startPhase(&upsertStats.InsertNanos)
+				deferredMaintenanceEpoch = 0
+				deferredMaintenanceCommitRejected = true
+				deferVectorIndexRebuild = false
+			}
 			// Upsert is a service contract, while Collection.InsertBatch is an
 			// insert-only primitive. If another request inserts one of these IDs
 			// between the read preflight and InsertBatch, fall back per item to
@@ -374,6 +468,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "insert documents failed", err)
 		}
 	}
+	startPhase(&upsertStats.UpdateNanos)
 	for _, doc := range updates {
 		wasInserted, wasUpdated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc, false, func() {
 			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
@@ -388,9 +483,32 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			updated++
 		}
 	}
+	startPhase(&upsertStats.FinalizeNanos)
+	if deferredMaintenanceEpoch != 0 {
+		if s.deferredMaintenanceBeforeCommit != nil {
+			s.deferredMaintenanceBeforeCommit()
+		}
+		if !s.deferredVectorBuildMaintenance.CommitInsert(deferredMaintenanceEpoch) {
+			// A manual maintenance operation, competing owner, close, or expiry
+			// invalidated this reservation after the insert was accepted. The
+			// durable documents remain authoritative, but this request must use
+			// ordinary rebuild semantics rather than report deferred success.
+			deferredMaintenanceEpoch = 0
+			deferredMaintenanceCommitRejected = true
+			deferVectorIndexRebuild = false
+		} else {
+			deferredMaintenanceEpoch = 0
+		}
+	}
 	var rebuildErr error
-	if inserted > 0 && updated == 0 && !req.DeferVectorIndexRebuild {
-		rebuildErr = rebuildServiceVectorIndex(ctx, col)
+	if inserted > 0 && updated == 0 && !deferVectorIndexRebuild {
+		if deferredMaintenanceCommitRejected {
+			rebuildErr = s.deferredVectorBuildMaintenance.Finalize(ctx, index, info.Generation, s.manager.FlushAll, func() error {
+				return rebuildServiceVectorIndex(ctx, col)
+			})
+		} else {
+			rebuildErr = rebuildServiceVectorIndex(ctx, col)
+		}
 	}
 	if inserted+updated > 0 {
 		if err := s.finishVectorMutation(index, col, info); err != nil && rebuildErr == nil {
@@ -410,6 +528,11 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if s.deferredVectorBuildMaintenance != nil {
+		if err := s.deferredVectorBuildMaintenance.EndContext(ctx); err != nil {
+			return DeleteDocumentsResponse{}, err
+		}
+	}
 
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
@@ -418,7 +541,6 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 	if len(req.IDs) > 0 && req.Filter != nil {
 		return DeleteDocumentsResponse{}, serviceError(CodeInvalidRequest, "delete accepts either ids or filter, not both")
 	}
-
 	var ids []string
 	if len(req.IDs) > 0 {
 		ids, err = validateDocumentIDs(req.IDs)
@@ -702,6 +824,11 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if s.deferredVectorBuildMaintenance != nil {
+		if err := s.deferredVectorBuildMaintenance.EndContext(ctx); err != nil {
+			return ResetIndexResponse{}, err
+		}
+	}
 
 	existingCol, existingInfo, err := s.openIndex(ctx, index, 0)
 	if err != nil {
@@ -765,9 +892,11 @@ func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeI
 	if s == nil {
 		return OptimizeIndexResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
 		return OptimizeIndexResponse{}, err
@@ -780,32 +909,54 @@ func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeI
 		return OptimizeIndexResponse{}, serviceErrorf(CodeInvalidRequest, "unsupported vector_index_name %q", req.VectorIndexName)
 	}
 
-	invalidateStarted := time.Now()
-	if err := s.invalidateBenchmarkSearchCache(index); err != nil {
-		return OptimizeIndexResponse{}, wrapServiceError(CodeInternal, "invalidate benchmark vector search cache before optimize failed", err)
-	}
-	timing.CacheInvalidateNanos = time.Since(invalidateStarted).Nanoseconds()
-	rebuildStarted := time.Now()
-	status, err := col.RebuildVectorIndex(vectorIndexName)
-	if err != nil {
-		return OptimizeIndexResponse{}, mapCollectionMaintenanceError("optimize vector index", err)
-	}
-	timing.RebuildNanos = time.Since(rebuildStarted).Nanoseconds()
-	maintenance := vectorIndexMaintenanceStatus(status)
-	if info.Capabilities.NoDocumentVectorSearch && maintenance.Loaded && !maintenance.RebuildNeeded {
-		primeStarted := time.Now()
-		if err := s.primeBenchmarkSearchCache(index, col, info); err != nil {
-			return OptimizeIndexResponse{}, wrapServiceError(CodeInternal, "prime benchmark vector search cache after optimize failed", err)
+	var maintenance VectorIndexMaintenanceStatus
+	build := func() error {
+		invalidateStarted := time.Now()
+		if err := s.invalidateBenchmarkSearchCache(index); err != nil {
+			return wrapServiceError(CodeInternal, "invalidate benchmark vector search cache before optimize failed", err)
 		}
-		timing.CachePrimeNanos = time.Since(primeStarted).Nanoseconds()
-		if info.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
-			warmStarted := time.Now()
-			if err := s.warmBenchmarkSearchCache(ctx, index, info, vectorIndexName); err != nil {
-				_ = s.invalidateBenchmarkSearchCache(index)
-				return OptimizeIndexResponse{}, err
+		timing.CacheInvalidateNanos = time.Since(invalidateStarted).Nanoseconds()
+		rebuildStarted := time.Now()
+		status, err := col.RebuildVectorIndex(vectorIndexName)
+		if err != nil {
+			return mapCollectionMaintenanceError("optimize vector index", err)
+		}
+		timing.RebuildNanos = time.Since(rebuildStarted).Nanoseconds()
+		maintenance = vectorIndexMaintenanceStatus(status)
+		if info.Capabilities.NoDocumentVectorSearch && maintenance.Loaded && !maintenance.RebuildNeeded {
+			primeStarted := time.Now()
+			if err := s.primeBenchmarkSearchCache(index, col, info); err != nil {
+				return wrapServiceError(CodeInternal, "prime benchmark vector search cache after optimize failed", err)
 			}
-			timing.CacheWarmNanos = time.Since(warmStarted).Nanoseconds()
+			timing.CachePrimeNanos = time.Since(primeStarted).Nanoseconds()
+			if info.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
+				warmStarted := time.Now()
+				if err := s.warmBenchmarkSearchCache(ctx, index, info, vectorIndexName); err != nil {
+					_ = s.invalidateBenchmarkSearchCache(index)
+					return err
+				}
+				timing.CacheWarmNanos = time.Since(warmStarted).Nanoseconds()
+			}
 		}
+		return ctx.Err()
+	}
+	if s.deferredVectorBuildMaintenance != nil {
+		err = s.deferredVectorBuildMaintenance.Finalize(ctx, index, info.Generation, s.manager.FlushAll, build)
+	} else {
+		_, err = s.manager.SyncForStandaloneWriteConcern()
+		if err == nil {
+			err = build()
+		}
+	}
+	if err != nil {
+		var serviceErr *Error
+		if errors.As(err, &serviceErr) {
+			return OptimizeIndexResponse{}, err
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return OptimizeIndexResponse{}, wrapServiceError(CodeIndexUnavailable, "request context is no longer available", err)
+		}
+		return OptimizeIndexResponse{}, mapCollectionMaintenanceError("finalize deferred vector build", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return OptimizeIndexResponse{}, err

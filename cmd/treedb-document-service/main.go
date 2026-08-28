@@ -51,12 +51,12 @@ func main() {
 	if *mutexProfileFraction > 0 {
 		runtime.SetMutexProfileFraction(*mutexProfileFraction)
 	}
-	database, cleanup, databaseStats, err := treedb.OpenBackendWithCachedLeafLogStats(opts)
+	database, cleanup, databaseStats, deferredMaintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
 	if err != nil {
 		log.Fatalf("Failed to open TreeDB: %v", err)
 	}
 	manager := collections.NewCollectionManager(database)
-	service := documentservice.New(manager)
+	service := documentservice.NewWithDeferredVectorBuildMaintenance(manager, deferredMaintenance)
 	appServer := &http.Server{Addr: *addr, Handler: documentservice.NewHandler(service), ReadHeaderTimeout: 5 * time.Second}
 	var diagnosticsServer *http.Server
 	var shutdownMu sync.Mutex
