@@ -1236,10 +1236,10 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			// cutover fence revalidates the captured RecoverableRootSet against the
 			// exact current state token and durable frontier. Any write that lands
 			// after capture changes that visible root, makes the set stale, and
-			// forces a deferred recapture before we can reach this point. The final
-			// tail replay therefore brings the rebuilt pager up to the same logical
-			// frontier already described by this exact visible closure; it is not an
-			// additional mutation beyond it.
+			// forces a deferred recapture before we can reach this point. Replay can
+			// still create new physical outer-leaf bytes while reconstructing that
+			// logical frontier, so the projection gate below forces an exact scan
+			// whenever such a delta was applied.
 			visibleRoot := RecoverableRoot{
 				CommitSeq:         recoverableRoots.visible.CommitSeq,
 				UserRootPageID:    recoverableRoots.visible.RootPageID,
