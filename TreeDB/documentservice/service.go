@@ -350,9 +350,11 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 				*phaseNanos += diagnosticsElapsedNanos(phaseStarted)
 			}
 			upsertStats.LockHoldNanos = diagnosticsElapsedNanos(lockHoldStarted)
-			s.addDiagnosticsUpsert(upsertStats)
 		}
 		s.writeMu.Unlock()
+		if diagnostics {
+			s.addDiagnosticsUpsert(upsertStats)
+		}
 	}()
 	deferredMaintenanceEpoch := uint64(0)
 	defer func() {
