@@ -2135,10 +2135,36 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         valid_concurrency = False
     if not valid_concurrency:
         errors.append("manifest.harness.num_concurrency must contain positive integers")
-    for key in ("num_per_batch", "m", "ef_construction"):
+    for key in (
+        "num_per_batch", "k", "concurrency_duration", "m", "ef_construction",
+        "ef_search", "rerank_candidates",
+    ):
         value = _nonnegative_int(harness.get(key), f"manifest.harness.{key}", errors)
         if value == 0:
             errors.append(f"manifest.harness.{key} must be positive")
+    client_timeout = harness.get("client_timeout")
+    if (
+        isinstance(client_timeout, bool)
+        or not isinstance(client_timeout, (int, float))
+        or not math.isfinite(client_timeout)
+        or client_timeout <= 0
+    ):
+        errors.append("manifest.harness.client_timeout must be a positive finite number")
+    if not isinstance(harness.get("db_label"), str) or not harness["db_label"]:
+        errors.append("manifest.harness.db_label must be a non-empty string")
+    harness_rows = (
+        [row.strip().lower() for row in harness.get("rows", "").split(",") if row.strip()]
+        if isinstance(harness.get("rows"), str)
+        else []
+    )
+    if (
+        harness_rows == ["scalar"]
+        and (
+            not isinstance(harness.get("quantized_index_name"), str)
+            or not harness["quantized_index_name"]
+        )
+    ):
+        errors.append("manifest.harness.quantized_index_name must be a non-empty string")
     identities = (
         ("gomap_commit", gomap.get("commit"), 40),
         ("vectordbbench_commit", vectordbbench.get("commit"), 40),
