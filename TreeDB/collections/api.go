@@ -11140,6 +11140,20 @@ func (c *Collection) insertBatchOnceWithLockState(
 				resetCollectionRunTables(plan.runs)
 				return nil, err
 			}
+			if columnStoreWriteEnabled(meta) {
+				prepared, err := prepareColumnWritePublishInputBeforeCommandWAL(columnWritePublishInput{
+					meta:      meta,
+					operation: ColumnPublishOperationInsert,
+					documents: columnWriteDocumentsFromCommitLog(docs),
+					rows:      len(docs),
+				})
+				if err != nil {
+					closePlanningSnapshot()
+					resetCollectionRunTables(plan.runs)
+					return nil, err
+				}
+				plan.stats.ColumnPublishDocumentExtraction += prepared.documentExtraction
+			}
 			bufferedCommandWALIntent, err = c.newCollectionInsertCommandWALIntent(docs, nil)
 			if err != nil {
 				closePlanningSnapshot()

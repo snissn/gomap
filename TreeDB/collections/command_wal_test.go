@@ -2408,6 +2408,69 @@ func TestCollectionCommandWALBSONOrderedV2BufferedInsertBatchReopen(t *testing.T
 	}
 }
 
+func TestCollectionCommandWALBufferedColumnInsertRejectsBeforeWAL(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		Durability:             backenddb.DurabilityDurable,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	columnStore := testColumnStoreConfig(nil)
+	columnStore.RetainedPayload = ColumnRetainedPayloadFull
+	columnStore.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingJSON
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{
+			DocumentFormat:                   DocumentFormatJSON,
+			ColumnStore:                      columnStore,
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 100_000,
+		},
+		Indexes: []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+		TextIndexes: []TextIndexDefinition{{
+			Name:           "kind_text",
+			Fields:         []TextIndexField{{Field: "kind"}},
+			Analyzer:       TextAnalyzerSimple,
+			StorePositions: true,
+		}},
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	beforeFrames := countCollectionCommandWALFrames(t, dir)
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("bad")}, [][]byte{[]byte(`{"time_us":"wrong","kind":"like","did":"d1"}`)}); !errors.Is(err, ErrColumnDeclaredValueUnsupported) {
+		_ = d.Close()
+		t.Fatalf("InsertBatch error=%v, want ErrColumnDeclaredValueUnsupported", err)
+	}
+	if got := countCollectionCommandWALFrames(t, dir); got != beforeFrames {
+		_ = d.Close()
+		t.Fatalf("command WAL frames=%d want unchanged %d", got, beforeFrames)
+	}
+	assertColumnStoreWriteDomainEmptyM10B(t, col)
+	assertColumnStoreDocumentMissingM10B(t, col, "bad")
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	d = openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err = NewCollectionManager(d).OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	assertColumnStoreDocumentMissingM10B(t, col, "bad")
+}
+
 func TestCollectionCommandWALUpdateByIDPreflightReplansStaleIndexedPlan(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
