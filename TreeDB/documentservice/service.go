@@ -357,6 +357,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	deferredMaintenanceEpoch := uint64(0)
 	defer func() {
 		if deferredMaintenanceEpoch != 0 && s.deferredVectorBuildMaintenance != nil {
+			startPhase(&upsertStats.FinalizeNanos)
 			s.deferredVectorBuildMaintenance.AbortInsert(deferredMaintenanceEpoch)
 		}
 	}()
