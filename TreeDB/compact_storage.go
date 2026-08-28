@@ -120,7 +120,24 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	if db.backend == nil {
 		return out, ErrClosed
 	}
-	_, finishMaintenance := db.beginFullScanMaintenance("compact-storage")
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
+	if err := lockFullScanMaintenanceContext(ctx, &db.bgVac.runMu); err != nil {
+		return out, err
+	}
+	defer db.bgVac.runMu.Unlock()
+	if db.bgVac.deferredVectorBuildClosed.Load() {
+		return out, ErrClosed
+	}
+	_, finishMaintenance, err := db.beginFullScanMaintenanceContext(ctx, "compact-storage")
+	if err != nil {
+		return out, err
+	}
+	db.bgVac.endDeferredVectorBuild()
 	success := false
 	defer func() { finishMaintenance(success) }()
 
@@ -161,6 +178,7 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		stats.ValueLogRewrite.SourceBytesReclaimed += reclaimStats.ObservedSourceBytesDeleted
 	}
 	success = true
+	db.bgVac.deferredVectorBuildDebt.Store(false)
 	return CompactStorageStats(stats), nil
 }
 

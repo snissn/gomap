@@ -88,13 +88,20 @@ func OpenBackendWithCachedLeafLog(opts Options) (*db.DB, func() error, error) {
 // only this narrow callback. The callback is live-only: callers must stop
 // invoking it before calling cleanup.
 func OpenBackendWithCachedLeafLogStats(opts Options) (*db.DB, func() error, func() map[string]string, error) {
+	backend, cleanup, stats, _, err := OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+	return backend, cleanup, stats, err
+}
+
+// OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance adds the
+// narrow deferred-build maintenance control used by the document service.
+func OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts Options) (*db.DB, func() error, func() map[string]string, *DeferredVectorBuildMaintenance, error) {
 	database, err := Open(opts)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	if database.backend == nil {
 		_ = database.Close()
-		return nil, nil, nil, db.ErrClosed
+		return nil, nil, nil, nil, db.ErrClosed
 	}
-	return database.backend, database.Close, database.Stats, nil
+	return database.backend, database.Close, database.Stats, &DeferredVectorBuildMaintenance{db: database}, nil
 }

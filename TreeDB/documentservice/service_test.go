@@ -5,12 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"os/exec"
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -76,6 +80,502 @@ func TestServiceNilMutationReceiverFailsClosed(t *testing.T) {
 	}
 	if _, err := svc.OptimizeIndex(ctx, "docs", OptimizeIndexRequest{}); ErrorCodeOf(err) != CodeIndexUnavailable {
 		t.Fatalf("OptimizeIndex err=%v code=%s", err, ErrorCodeOf(err))
+	}
+}
+
+func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.BackgroundIndexVacuumInterval = -1
+	backend, cleanup, stats, maintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+	svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	ctx := context.Background()
+	for _, name := range []string{"docs", "other", "generation", "commitfail", "rejected", "optimized"} {
+		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine}); err != nil {
+			t.Fatalf("CreateIndex(%s): %v", name, err)
+		}
+	}
+	deferInsert := func(index, id string) {
+		t.Helper()
+		if _, err := svc.UpsertDocuments(ctx, index, UpsertDocumentsRequest{
+			Documents:               []Document{{ID: id, Embedding: []float32{1, 0}}},
+			DeferVectorIndexRebuild: true,
+		}); err != nil {
+			t.Fatalf("deferred upsert %s/%s: %v", index, id, err)
+		}
+	}
+	assertActive := func(want bool) {
+		t.Helper()
+		if got := stats()["treedb.bg_vacuum.deferred_vector_build.active"]; got != fmt.Sprint(want) {
+			t.Fatalf("deferred epoch active=%q want %t; stats=%v", got, want, stats())
+		}
+	}
+	assertCleanGraph := func(index string, wantLive int) {
+		t.Helper()
+		col, _, err := svc.openIndex(ctx, index, 0)
+		if err != nil {
+			t.Fatalf("open %s: %v", index, err)
+		}
+		status, err := col.VectorIndexStatus(defaultVectorIndexName)
+		if err != nil {
+			t.Fatalf("vector status %s: %v", index, err)
+		}
+		if !status.Loaded || status.RebuildNeeded || status.Stats.RebuildNeeded || status.Stats.SnapshotDirty || status.Stats.LiveDocs != wantLive {
+			t.Fatalf("vector status %s=%+v want clean graph with %d live docs", index, status, wantLive)
+		}
+	}
+
+	deferInsert("docs", "a")
+	assertActive(true)
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := svc.CreateIndex(canceled, CreateIndexRequest{Name: "canceled", Dimension: 2, Metric: MetricCosine}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled CreateIndex error=%v want context.Canceled", err)
+	}
+	assertActive(true)
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{
+		Documents:               []Document{{ID: "bad", Embedding: []float32{1}}},
+		DeferVectorIndexRebuild: true,
+	}); err == nil {
+		t.Fatal("malformed deferred upsert succeeded")
+	}
+	assertActive(true)
+
+	deferInsert("docs", "a2")
+	assertActive(true)
+	deferInsert("other", "b")
+	assertActive(false)
+	assertCleanGraph("other", 1)
+
+	generationInfo, err := svc.OpenIndex(ctx, "generation")
+	if err != nil {
+		t.Fatalf("OpenIndex(generation): %v", err)
+	}
+	competingGenerationEpoch := svc.deferredVectorBuildMaintenance.AdmitInsert(context.Background(), "generation", generationInfo.Generation+1)
+	if competingGenerationEpoch == 0 || !svc.deferredVectorBuildMaintenance.CommitInsert(competingGenerationEpoch) {
+		t.Fatal("establish competing-generation owner")
+	}
+	deferInsert("generation", "generation-fallback")
+	assertActive(false)
+	assertCleanGraph("generation", 1)
+
+	// Invalidation after admission but before commit must fall back to the
+	// ordinary rebuild policy, never return a deferred success with a dirty graph.
+	svc.deferredMaintenanceBeforeCommit = svc.deferredVectorBuildMaintenance.End
+	deferInsert("rejected", "commit-rejected")
+	svc.deferredMaintenanceBeforeCommit = nil
+	assertActive(false)
+	assertCleanGraph("rejected", 1)
+
+	deferInsert("docs", "c")
+	assertActive(true)
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "c", Embedding: []float32{0, 1}}}, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatalf("deferred update: %v", err)
+	}
+	assertActive(false)
+
+	deferInsert("docs", "d")
+	if _, err := svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{IDs: []string{"d"}}); err != nil {
+		t.Fatalf("DeleteDocuments: %v", err)
+	}
+	assertActive(false)
+
+	deferInsert("docs", "missing-delete-guard")
+	if _, err := svc.DeleteDocuments(ctx, "missing", DeleteDocumentsRequest{IDs: []string{"missing"}}); ErrorCodeOf(err) != CodeIndexNotFound {
+		t.Fatalf("missing-index DeleteDocuments err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	assertActive(false)
+
+	deferInsert("docs", "stale-delete-guard")
+	docsInfo, err := svc.OpenIndex(ctx, "docs")
+	if err != nil {
+		t.Fatalf("OpenIndex(docs): %v", err)
+	}
+	if _, err := svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{IDs: []string{"stale-delete-guard"}, ExpectedGeneration: docsInfo.Generation + 1}); ErrorCodeOf(err) != CodeIndexStale {
+		t.Fatalf("stale-generation DeleteDocuments err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	assertActive(false)
+
+	deferInsert("optimized", "e")
+	if _, err := svc.OptimizeIndex(nil, "optimized", OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("OptimizeIndex deferred finalizer: %v", err)
+	}
+	assertActive(false)
+	assertCleanGraph("optimized", 1)
+
+	svc.deferredMaintenanceBeforeCommit = svc.deferredVectorBuildMaintenance.End
+	deferInsert("commitfail", "commit-fallback")
+	svc.deferredMaintenanceBeforeCommit = nil
+	assertActive(false)
+	assertCleanGraph("commitfail", 1)
+
+	deferInsert("docs", "f")
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "normal", Embedding: []float32{1, 0}}}}); err != nil {
+		t.Fatalf("non-deferred UpsertDocuments: %v", err)
+	}
+	assertActive(false)
+
+	deferInsert("docs", "g")
+	// Reset support is independent of the fail-back transition being tested.
+	_, _ = svc.ResetIndex(ctx, "docs", ResetIndexRequest{DropOld: true})
+	assertActive(false)
+
+	deferInsert("docs", "h")
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	assertActive(false)
+}
+
+func TestServiceDeferredVectorBuildMaintenanceDoesNotSpanManagers(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.BackgroundIndexVacuumInterval = -1
+	backend, cleanup, stats, maintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+	first := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	second := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	ctx := context.Background()
+	if _, err := first.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: MetricCosine}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	request := func(id string) UpsertDocumentsRequest {
+		return UpsertDocumentsRequest{Documents: []Document{{ID: id, Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}
+	}
+	if _, err := first.UpsertDocuments(ctx, "docs", request("first")); err != nil {
+		t.Fatalf("first deferred upsert: %v", err)
+	}
+	if got := stats()["treedb.bg_vacuum.deferred_vector_build.active"]; got != "true" {
+		t.Fatalf("first service epoch active=%q want true", got)
+	}
+	if _, err := second.UpsertDocuments(ctx, "docs", request("second")); err != nil {
+		t.Fatalf("second deferred upsert: %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("close second service: %v", err)
+	}
+	if got := stats()["treedb.bg_vacuum.deferred_vector_build.active"]; got != "true" {
+		t.Fatalf("separate manager cleared first service epoch: active=%q", got)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first service: %v", err)
+	}
+	if got := stats()["treedb.bg_vacuum.deferred_vector_build.active"]; got != "false" {
+		t.Fatalf("owning service left epoch active=%q", got)
+	}
+}
+
+func TestServiceDeferredColumnGraphInsertAdmissionIsSharedAndLifecycleIsBarrier(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.BackgroundIndexVacuumInterval = -1
+	backend, cleanup, _, maintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+	svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{
+		Name:      "docs",
+		Dimension: 2,
+		Metric:    MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{
+			Strategy: collections.VectorIndexStrategyColumnGraph,
+		},
+	}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.OptimizeIndex(ctx, "docs", OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("OptimizeIndex: %v", err)
+	}
+	svc.benchmarkSearchCacheMu.RLock()
+	cachedCollection := svc.benchmarkSearchCache["docs"].collection
+	svc.benchmarkSearchCacheMu.RUnlock()
+	if cachedCollection == nil {
+		t.Fatal("OptimizeIndex did not prime the prepared search cache")
+	}
+
+	firstAtCommit := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var firstHook atomic.Bool
+	svc.deferredMaintenanceBeforeCommit = func() {
+		if firstHook.CompareAndSwap(false, true) {
+			close(firstAtCommit)
+			<-releaseFirst
+		}
+	}
+	request := func(id string) UpsertDocumentsRequest {
+		return UpsertDocumentsRequest{
+			Documents:               []Document{{ID: id, Embedding: []float32{1, 0}}},
+			DeferVectorIndexRebuild: true,
+		}
+	}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpsertDocuments(ctx, "docs", request("first"))
+		firstDone <- err
+	}()
+	select {
+	case <-firstAtCommit:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first deferred insert did not reach pre-commit hook")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpsertDocuments(ctx, "docs", request("second"))
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second deferred insert: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second deferred insert could not pass a paused independent insert")
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{IDs: []string{"second"}})
+		deleteDone <- err
+	}()
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("delete crossed an admitted deferred insert: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first deferred insert: %v", err)
+	}
+	if got := cachedCollection.LastInsertStats().Documents; got != 0 {
+		t.Fatalf("shared inserts reused cached diagnostics handle: Documents=%d want 0", got)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteDocuments: %v", err)
+	}
+	count, err := svc.CountDocuments(ctx, "docs", CountDocumentsRequest{})
+	if err != nil || count.Count != 1 {
+		t.Fatalf("CountDocuments=%+v err=%v want 1", count, err)
+	}
+
+	firstAtCommit = make(chan struct{})
+	releaseFirst = make(chan struct{})
+	firstHook.Store(false)
+	svc.deferredMaintenanceBeforeCommit = func() {
+		if firstHook.CompareAndSwap(false, true) {
+			close(firstAtCommit)
+			<-releaseFirst
+		}
+	}
+	firstDone = make(chan error, 1)
+	go func() {
+		_, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{
+			Documents:               []Document{{ID: "collision", Content: "first", Embedding: []float32{1, 0}}},
+			DeferVectorIndexRebuild: true,
+		})
+		firstDone <- err
+	}()
+	select {
+	case <-firstAtCommit:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first collision insert did not reach pre-commit hook")
+	}
+	updateDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{
+			Documents:               []Document{{ID: "collision", Content: "second", Embedding: []float32{0, 1}}},
+			DeferVectorIndexRebuild: true,
+		})
+		updateDone <- err
+	}()
+	select {
+	case err := <-updateDone:
+		t.Fatalf("colliding upsert crossed the insert-only shared boundary: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first collision insert: %v", err)
+	}
+	if err := <-updateDone; err != nil {
+		t.Fatalf("colliding upsert retry: %v", err)
+	}
+	svc.deferredMaintenanceBeforeCommit = nil
+	filtered, err := svc.FilterDocuments(ctx, "docs", FilterDocumentsRequest{Limit: 10})
+	if err != nil {
+		t.Fatalf("FilterDocuments: %v", err)
+	}
+	found := false
+	for _, document := range filtered.Documents {
+		if document.ID == "collision" {
+			found = document.Content == "second"
+		}
+	}
+	if !found {
+		t.Fatalf("collision document was not exclusively updated: %+v", filtered.Documents)
+	}
+}
+
+func TestServiceDeferredVectorBuildOptimizeCheckpointCrashReopen(t *testing.T) {
+	const helper = "TREEDB_DEFERRED_OPTIMIZE_CRASH_HELPER"
+	dir := os.Getenv(helper)
+	if dir != "" {
+		opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+		opts.BackgroundIndexVacuumInterval = -1
+		backend, _, _, maintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+		if err != nil {
+			t.Fatalf("open helper: %v", err)
+		}
+		svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+		ctx := context.Background()
+		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: MetricCosine}); err != nil {
+			t.Fatalf("create helper index: %v", err)
+		}
+		if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "durable", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
+			t.Fatalf("deferred helper upsert: %v", err)
+		}
+		if _, err := svc.OptimizeIndex(ctx, "docs", OptimizeIndexRequest{}); err != nil {
+			t.Fatalf("optimize helper index: %v", err)
+		}
+		os.Exit(0)
+	}
+
+	dir = t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestServiceDeferredVectorBuildOptimizeCheckpointCrashReopen$")
+	cmd.Env = append(os.Environ(), helper+"="+dir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("crash helper: %v\n%s", err, output)
+	}
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts.BackgroundIndexVacuumInterval = -1
+	backend, cleanup, _, maintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+	svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	col, _, err := svc.openIndex(context.Background(), "docs", 0)
+	if err != nil {
+		t.Fatalf("open optimized index after crash: %v", err)
+	}
+	if got, err := col.Get([]byte("durable")); err != nil || got == nil {
+		t.Fatalf("get after crash got=%v err=%v", got, err)
+	}
+	status, err := col.VectorIndexStatus(defaultVectorIndexName)
+	if err != nil || !status.Loaded || status.RebuildNeeded || status.Stats.RebuildNeeded || status.Stats.SnapshotDirty {
+		t.Fatalf("vector status after crash=%+v err=%v", status, err)
+	}
+}
+
+func TestServiceStandardOptimizeCheckpointCrashReopen(t *testing.T) {
+	const helper = "TREEDB_STANDARD_OPTIMIZE_CRASH_HELPER"
+	dir := os.Getenv(helper)
+	if dir != "" {
+		db, err := backenddb.Open(testBackendOptions(dir))
+		if err != nil {
+			t.Fatalf("open helper: %v", err)
+		}
+		svc := New(collections.NewCollectionManager(db))
+		ctx := context.Background()
+		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: MetricCosine}); err != nil {
+			t.Fatalf("create helper index: %v", err)
+		}
+		if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "durable", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
+			t.Fatalf("deferred helper upsert: %v", err)
+		}
+		if _, err := svc.OptimizeIndex(ctx, "docs", OptimizeIndexRequest{}); err != nil {
+			t.Fatalf("optimize helper index: %v", err)
+		}
+		os.Exit(0)
+	}
+
+	dir = t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestServiceStandardOptimizeCheckpointCrashReopen$")
+	cmd.Env = append(os.Environ(), helper+"="+dir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("crash helper: %v\n%s", err, output)
+	}
+	db, err := backenddb.Open(testBackendOptions(dir))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db.Close()
+	svc := New(collections.NewCollectionManager(db))
+	col, _, err := svc.openIndex(context.Background(), "docs", 0)
+	if err != nil {
+		t.Fatalf("open optimized index after crash: %v", err)
+	}
+	if got, err := col.Get([]byte("durable")); err != nil || got == nil {
+		t.Fatalf("get after crash got=%v err=%v", got, err)
+	}
+	status, err := col.VectorIndexStatus(defaultVectorIndexName)
+	if err != nil || !status.Loaded || status.RebuildNeeded || status.Stats.RebuildNeeded || status.Stats.SnapshotDirty {
+		t.Fatalf("vector status after crash=%+v err=%v", status, err)
+	}
+}
+
+func TestServiceDeferredVectorBuildFailedFinalizeReopensDurableAndStale(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts.BackgroundIndexVacuumInterval = -1
+	backend, cleanup, _, maintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: MetricCosine}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "prior", Embedding: []float32{1, 0}}}}); err != nil {
+		t.Fatalf("seed prior graph: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{
+		Documents:               []Document{{ID: "deferred", Embedding: []float32{0, 1}}},
+		DeferVectorIndexRebuild: true,
+	}); err != nil {
+		t.Fatalf("deferred upsert: %v", err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := svc.OptimizeIndex(canceled, "docs", OptimizeIndexRequest{}); !errors.Is(err, context.Canceled) || ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("canceled OptimizeIndex err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("service close: %v", err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopenedBackend, reopenedCleanup, _, reopenedMaintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = reopenedCleanup() })
+	reopened := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(reopenedBackend), reopenedMaintenance)
+	count, err := reopened.CountDocuments(ctx, "docs", CountDocumentsRequest{})
+	if err != nil || count.Count != 2 {
+		t.Fatalf("reopen count=%+v err=%v want 2 durable documents", count, err)
+	}
+	col, _, err := reopened.openIndex(ctx, "docs", 0)
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	status, err := col.VectorIndexStatus(defaultVectorIndexName)
+	if err != nil {
+		t.Fatalf("reopen vector status: %v", err)
+	}
+	if status.Loaded || !status.RebuildNeeded {
+		t.Fatalf("reopen vector status=%+v want fail-closed rebuild-needed status", status)
 	}
 }
 

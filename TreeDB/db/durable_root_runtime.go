@@ -987,8 +987,114 @@ func (db *DB) captureRebuiltIndexDurableResourcesFromV1(p *pager.Pager, meta pag
 // stable outer-leaf record identity.
 type rebuiltDurableResourceWorkV1 struct {
 	ExactCandidateScan            bool
+	Projected                     bool
+	ProjectionFallbackReason      string
 	ReusedNonValueLogDescriptors  uint64
 	UniqueScannedExternalSegments uint64
+}
+
+const (
+	rebuiltDurableResourceFallbackMissingSource  = "missing-exact-source"
+	rebuiltDurableResourceFallbackPolicy         = "unsupported-source-policy"
+	rebuiltDurableResourceFallbackIdentity       = "unresolved-index-identity"
+	rebuiltDurableResourceFallbackOuterLeafDelta = "replayed-outer-leaf-delta"
+)
+
+// projectRebuiltOlderRootDurableResourcesV1 retains the exact external
+// closure of an unchanged recovery-selectable root. Index pages, durable meta,
+// and dependency-manifest pages are rebuilt and synced by the adjacent
+// replacement-index transaction, so an inherited index token is deliberately
+// excluded here.
+func projectRebuiltOlderRootDurableResourcesV1(source *rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, bool, error) {
+	if source == nil {
+		return nil, true, nil
+	}
+	manifest, _, err := source.DependencyManifestV1()
+	if err != nil {
+		return nil, false, nil
+	}
+	for _, entry := range manifest.Entries() {
+		for _, field := range entry.Reachability {
+			policy, ok := rootpublication.StableResourcePolicyFor(field)
+			if !ok || !policy.Registerable || policy.Kind != entry.Kind {
+				return nil, false, nil
+			}
+		}
+	}
+	projected, err := rootpublication.CloneStableResourceSetExcludingKinds(source, rootpublication.ResourceIndex)
+	if err != nil {
+		return nil, false, err
+	}
+	return projected, true, nil
+}
+
+func rebuiltOlderRootIndexAuthorityV1(source *rootpublication.StableResourceSet, identity rootpublication.StableIdentity, generation uint64) bool {
+	for _, descriptor := range source.Descriptors() {
+		if descriptor.Kind() != rootpublication.ResourceIndex {
+			continue
+		}
+		if _, ok := descriptor.Namespace(); !ok || descriptor.Generation() != generation || !rootpublication.SamePhysicalIdentity(descriptor.Identity(), identity) {
+			return false
+		}
+	}
+	return true
+}
+
+func (db *DB) captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
+	source *rootpublication.StableResourceSet,
+	sourceExact bool,
+	projectionBlockedReason string,
+	sourceIndex *indexGen,
+	sourceIndexID uint64,
+	sourceIndexIdentity rootpublication.StableIdentity,
+	rebuiltPager *pager.Pager,
+	meta page.MetaPageBody,
+) (*rootpublication.StableResourceSet, rebuiltDurableResourceWorkV1, error) {
+	var work rebuiltDurableResourceWorkV1
+	if projectionBlockedReason != "" {
+		work.ProjectionFallbackReason = projectionBlockedReason
+	} else if sourceExact && sourceIndex != nil && sourceIndex.pager != nil {
+		var oldIdentity, newIdentity rootpublication.StableIdentity
+		oldIdentityErr := sourceIndex.pager.WithStableResourceFile(func(file *os.File) error {
+			var identityErr error
+			oldIdentity, identityErr = rootpublication.StableIdentityFromFile(file)
+			return identityErr
+		})
+		newIdentityErr := rebuiltPager.WithStableResourceFile(func(file *os.File) error {
+			var identityErr error
+			newIdentity, identityErr = rootpublication.StableIdentityFromFile(file)
+			return identityErr
+		})
+		switch {
+		case oldIdentityErr != nil || newIdentityErr != nil:
+			work.ProjectionFallbackReason = rebuiltDurableResourceFallbackIdentity
+		case rootpublication.SamePhysicalIdentity(oldIdentity, newIdentity):
+			return nil, work, fmt.Errorf("vacuum: rebuilt index aliases source index: %w", rootpublication.ErrResourceConflict)
+		case sourceIndexID != sourceIndex.id || !rootpublication.SamePhysicalIdentity(sourceIndexIdentity, oldIdentity):
+			work.ProjectionFallbackReason = rebuiltDurableResourceFallbackIdentity
+		case !rebuiltOlderRootIndexAuthorityV1(source, oldIdentity, sourceIndex.id):
+			work.ProjectionFallbackReason = rebuiltDurableResourceFallbackIdentity
+		default:
+			projected, supported, err := projectRebuiltOlderRootDurableResourcesV1(source)
+			if err != nil {
+				return nil, work, err
+			}
+			if supported {
+				work.Projected = true
+				return projected, work, nil
+			}
+			work.ProjectionFallbackReason = rebuiltDurableResourceFallbackPolicy
+		}
+	} else {
+		work.ProjectionFallbackReason = rebuiltDurableResourceFallbackMissingSource
+	}
+	fallbackReason := work.ProjectionFallbackReason
+	resources, exactWork, err := db.captureRebuiltIndexDurableResourcesWithWorkV1(rebuiltPager, meta, source)
+	if fallbackReason == "" {
+		fallbackReason = rebuiltDurableResourceFallbackPolicy
+	}
+	exactWork.ProjectionFallbackReason = fallbackReason
+	return resources, exactWork, err
 }
 
 func (db *DB) captureRebuiltIndexDurableResourcesWithWorkV1(p *pager.Pager, meta page.MetaPageBody, source *rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, rebuiltDurableResourceWorkV1, error) {
