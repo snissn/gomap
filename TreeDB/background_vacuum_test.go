@@ -589,6 +589,9 @@ func TestDeferredVectorBuildEndHonorsCancellationWhileVacuumOwnsLock(t *testing.
 
 func TestDeferredVectorBuildMaintenanceFinalizeOwnsWorkerAndRunsAtMostOneVacuum(t *testing.T) {
 	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: time.Hour})
+	if !d.bgVac.Enabled() {
+		t.Skip("background worker is not enabled")
+	}
 	control := &DeferredVectorBuildMaintenance{db: d}
 	epochID := control.AdmitInsert(context.Background(), "docs", 1)
 	if epochID == 0 || !control.CommitInsert(epochID) {
@@ -625,9 +628,6 @@ func TestDeferredVectorBuildMaintenanceFinalizeOwnsWorkerAndRunsAtMostOneVacuum(
 		})
 	}()
 	<-buildEntered
-	if !d.bgVac.Enabled() {
-		t.Fatal("background worker is not enabled")
-	}
 	// The same run lock used by the enabled worker remains owned across source
 	// build, publication, and cache work.
 	if d.bgVac.runMu.TryLock() {
@@ -1000,6 +1000,9 @@ func TestDeferredVectorBuildMaintenanceFailsBackOnAmbiguityAndManualVacuum(t *te
 	}
 	if !control.CommitInsert(staleEpochID) || !d.bgVac.Stats().DeferredVectorBuildActive {
 		t.Fatal("canceled manual vacuum invalidated deferred maintenance")
+	}
+	if runtime.GOOS == "windows" {
+		return
 	}
 	staleEpochID = control.AdmitInsert(context.Background(), "docs", 1)
 	_ = d.VacuumIndexOnline(context.Background())

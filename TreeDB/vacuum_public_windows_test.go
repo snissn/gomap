@@ -43,7 +43,7 @@ func TestVacuumIndexOnlineUnsupportedDoesNotCheckpointCachedWrites(t *testing.T)
 }
 
 func TestCompactIndexRemainsSupported(t *testing.T) {
-	database, err := Open(Options{Dir: t.TempDir(), BackgroundIndexVacuumInterval: -1})
+	database, err := Open(OptionsFor(ProfileNoWALFast, t.TempDir()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
