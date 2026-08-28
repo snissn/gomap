@@ -90,6 +90,8 @@ type RecoverableRootSet struct {
 	systemRootEpoch     uint64
 	resources           []*rootpublication.StableResourceSet
 	rootResources       map[recoverableRootKey]*rootpublication.StableResourceSet
+	rootResourceIndexID uint64
+	rootResourceIndex   rootpublication.StableIdentity
 	identityPinRegistry *rootpublication.IdentityPinRegistry
 
 	mu           sync.Mutex
@@ -163,6 +165,14 @@ func (db *DB) captureRecoverableRootSetWithMaintenanceLockHeldMode(ctx context.C
 }
 
 func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSet, bool, error) {
+	var rootResourceIndex rootpublication.StableIdentity
+	if err := stable.idx.pager.WithStableResourceFile(func(file *os.File) error {
+		var identityErr error
+		rootResourceIndex, identityErr = rootpublication.StableIdentityFromFile(file)
+		return identityErr
+	}); err != nil {
+		return nil, false, err
+	}
 	var coordinator *rootpublication.Coordinator
 	if db.rootPublication != nil {
 		coordinator = db.rootPublication.coordinator
@@ -335,22 +345,23 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 		coordinator: coordinator, coordinatorEpoch: coordinatorView.Epoch,
 		idx: stable.idx, stableSnapshot: stable, oldestRegistryID: oldestRegistryID,
 		systemRootEpoch: systemRootEpoch, resources: resources, rootResources: rootResources,
+		rootResourceIndexID: stable.idx.id, rootResourceIndex: rootResourceIndex,
 		identityPinRegistry: db.StableResourceIdentityPinRegistry(),
 		identityPins:        make(map[rootpublication.StableIdentity]recoverableIdentityPin),
 	}, false, nil
 }
 
 func (set *RecoverableRootSet) resourcesForRoot(root RecoverableRoot) *rootpublication.StableResourceSet {
-	resources, _ := set.resourcesForRootExact(root)
+	resources, _, _, _ := set.resourcesForRootExact(root)
 	return resources
 }
 
-func (set *RecoverableRootSet) resourcesForRootExact(root RecoverableRoot) (*rootpublication.StableResourceSet, bool) {
+func (set *RecoverableRootSet) resourcesForRootExact(root RecoverableRoot) (*rootpublication.StableResourceSet, uint64, rootpublication.StableIdentity, bool) {
 	if set == nil || set.released.Load() {
-		return nil, false
+		return nil, 0, rootpublication.StableIdentity{}, false
 	}
 	resources, ok := set.rootResources[recoverableRootIdentity(root)]
-	return resources, ok
+	return resources, set.rootResourceIndexID, set.rootResourceIndex, ok
 }
 
 func cloneRecoverableResourceUnion(sources ...*rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, error) {

@@ -1599,7 +1599,7 @@ func (db *DB) rebuildRecoverableRootV1(ctx context.Context, roots *RecoverableRo
 	if err := ctx.Err(); err != nil {
 		return rebuiltDurableRootV1{}, work, err
 	}
-	sourceResources, sourceExact := roots.resourcesForRootExact(root)
+	sourceResources, sourceIndexID, sourceIndexIdentity, sourceExact := roots.resourcesForRootExact(root)
 	var resources *rootpublication.StableResourceSet
 	var resourceWork rebuiltDurableResourceWorkV1
 	if sourceExact {
@@ -1619,6 +1619,8 @@ func (db *DB) rebuildRecoverableRootV1(ctx context.Context, roots *RecoverableRo
 			resourceWork.ProjectionFallbackReason = rebuiltDurableResourceFallbackIdentity
 		case rootpublication.SamePhysicalIdentity(oldIdentity, newIdentity):
 			return rebuiltDurableRootV1{}, work, fmt.Errorf("vacuum: rebuilt index aliases source index: %w", rootpublication.ErrResourceConflict)
+		case sourceIndexID != snapshot.idx.id || !rootpublication.SamePhysicalIdentity(sourceIndexIdentity, oldIdentity):
+			resourceWork.ProjectionFallbackReason = rebuiltDurableResourceFallbackIdentity
 		case !rebuiltOlderRootIndexAuthorityV1(sourceResources, oldIdentity, snapshot.idx.id):
 			resourceWork.ProjectionFallbackReason = rebuiltDurableResourceFallbackIdentity
 		default:

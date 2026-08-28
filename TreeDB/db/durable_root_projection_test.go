@@ -302,58 +302,105 @@ func TestRebuiltOlderRootIndexAuthorityRequiresExactNamespaceGenerationAndIdenti
 	}
 }
 
-func TestVacuumIndexOnlineMissingOlderRootClosureFallsBackToExactScan(t *testing.T) {
+func TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
 	}
-	dir := t.TempDir()
-	database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true, ValueLog: ValueLogOptions{PointerThreshold: 1}})
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name           string
+		mutate         func(*RecoverableRootSet, recoverableRootKey)
+		wantProjection uint64
+		wantReason     string
+	}{
+		{name: "exact-binding", wantProjection: 1},
+		{name: "generation-mismatch", mutate: func(roots *RecoverableRootSet, _ recoverableRootKey) {
+			roots.rootResourceIndexID++
+		}, wantReason: rebuiltDurableResourceFallbackIdentity},
+		{name: "ambiguous-identity", mutate: func(roots *RecoverableRootSet, _ recoverableRootKey) {
+			roots.rootResourceIndex = rootpublication.StableIdentity{}
+		}, wantReason: rebuiltDurableResourceFallbackIdentity},
+		{name: "missing-root-closure", mutate: func(roots *RecoverableRootSet, key recoverableRootKey) {
+			delete(roots.rootResources, key)
+		}, wantReason: rebuiltDurableResourceFallbackMissingSource},
 	}
-	defer database.Close()
-	pointer := appendPointersInNewSegment(t, dir, 0, 84, 840_000, 1, func(int) []byte {
-		return bytes.Repeat([]byte("v"), 512)
-	})[0]
-	if err := database.RefreshValueLogSet(); err != nil {
-		t.Fatal(err)
-	}
-	batch := database.NewBatch().(*Batch)
-	if err := batch.SetPointer([]byte("older"), pointer); err != nil {
-		t.Fatal(err)
-	}
-	if err := batch.WriteSync(); err != nil {
-		t.Fatal(err)
-	}
-	if err := batch.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if publication := database.rootPublication; publication != nil && publication.coordinator != nil {
-		if err := publication.coordinator.Drain(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true, ValueLog: ValueLogOptions{PointerThreshold: 1}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			pointer := appendPointersInNewSegment(t, dir, 0, 84, 840_000, 1, func(int) []byte {
+				return bytes.Repeat([]byte("v"), 512)
+			})[0]
+			if err := database.RefreshValueLogSet(); err != nil {
+				t.Fatal(err)
+			}
+			batch := database.NewBatch().(*Batch)
+			if err := batch.SetPointer([]byte("older"), pointer); err != nil {
+				t.Fatal(err)
+			}
+			if err := batch.WriteSync(); err != nil {
+				t.Fatal(err)
+			}
+			if err := batch.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.SetSync([]byte("newer"), []byte("v")); err != nil {
+				t.Fatal(err)
+			}
+			if publication := database.rootPublication; publication != nil && publication.coordinator != nil {
+				if err := publication.coordinator.Drain(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	database.maintenanceMu.Lock()
-	roots, err := database.captureRecoverableRootSetWithMaintenanceLockHeld(context.Background())
-	if err != nil {
-		database.maintenanceMu.Unlock()
-		t.Fatal(err)
-	}
-	olderRecord := roots.durable.slotRecord[roots.durable.slot^1]
-	delete(roots.rootResources, recoverableRootIdentity(RecoverableRoot{
-		CommitSeq: olderRecord.CommitSeq, UserRootPageID: olderRecord.UserRootPageID,
-		SystemRootPageID: olderRecord.SystemRootPageID, AppliedCommandLSN: olderRecord.AppliedCommandLSN,
-		MaxEntryRevision: olderRecord.MaxEntryRevision,
-	}))
-	var stats VacuumOnlineStats
-	err = database.vacuumIndexOnlineRebuildV1(context.Background(), false, nil, roots, nil, time.Now(), &stats)
-	database.maintenanceMu.Unlock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stats.OlderRootProjections != 0 || stats.OlderRootProjectionFallbacks != 1 || stats.OlderRootProjectionFallbackReason != rebuiltDurableResourceFallbackMissingSource || stats.OlderRootExactCandidateScans != 1 {
-		t.Fatalf("fallback stats=%+v, want one visible missing-source exact scan", stats)
+			database.maintenanceMu.Lock()
+			roots, err := database.captureRecoverableRootSetWithMaintenanceLockHeld(context.Background())
+			if err != nil {
+				database.maintenanceMu.Unlock()
+				t.Fatal(err)
+			}
+			defer roots.Release()
+			olderRecord := roots.durable.slotRecord[roots.durable.slot^1]
+			key := recoverableRootIdentity(RecoverableRoot{
+				CommitSeq: olderRecord.CommitSeq, UserRootPageID: olderRecord.UserRootPageID,
+				SystemRootPageID: olderRecord.SystemRootPageID, AppliedCommandLSN: olderRecord.AppliedCommandLSN,
+				MaxEntryRevision: olderRecord.MaxEntryRevision,
+			})
+			source, ok := roots.rootResources[key]
+			if !ok || source == nil {
+				database.maintenanceMu.Unlock()
+				t.Fatal("older root has no captured exact closure")
+			}
+			var valueLog, index bool
+			for _, descriptor := range source.Descriptors() {
+				valueLog = valueLog || descriptor.Kind() == rootpublication.ResourceValueLog
+				index = index || descriptor.Kind() == rootpublication.ResourceIndex
+			}
+			if !valueLog || index {
+				database.maintenanceMu.Unlock()
+				t.Fatalf("older closure kinds=%+v, want external value-log dependency and no index descriptor", source.Descriptors())
+			}
+			if test.mutate != nil {
+				test.mutate(roots, key)
+			}
+			var stats VacuumOnlineStats
+			err = database.vacuumIndexOnlineRebuildV1(context.Background(), false, nil, roots, nil, time.Now(), &stats)
+			database.maintenanceMu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantFallback := uint64(0)
+			wantScan := uint64(0)
+			if test.wantReason != "" {
+				wantFallback, wantScan = 1, 1
+			}
+			if stats.OlderRootProjections != test.wantProjection || stats.OlderRootProjectionFallbacks != wantFallback || stats.OlderRootProjectionFallbackReason != test.wantReason || stats.OlderRootExactCandidateScans != wantScan {
+				t.Fatalf("binding stats=%+v, want projection=%d fallback=%d reason=%q exact-scan=%d", stats, test.wantProjection, wantFallback, test.wantReason, wantScan)
+			}
+		})
 	}
 }
 
