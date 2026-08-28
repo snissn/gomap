@@ -135,7 +135,9 @@ configuration keeps at least one VDBBench search phase enabled. Every option
 owned by the harness command is accepted only through its dedicated harness
 argument, never `--vdbbench-extra-args`. Before building
 the service, lifecycle mode requires both captured source identities to contain
-a valid commit and `dirty == false`.
+a valid commit and `dirty == false`. Completed evidence also binds the recorded
+storage path to the artifact root and the authoritative VDBBench command working
+directory to the recorded VDBBench checkout.
 Completion also requires a real VDBBench execution (`vdbbench_dry_run=false`)
 and binds the single checksum-selected VDBBench row to the normalized route in
 `harness.rows`. Its recorded command must invoke the corresponding TreeDB

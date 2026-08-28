@@ -1696,6 +1696,19 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     context = _object(manifest.get("context"), "manifest.context", errors)
     gomap = _object(context.get("gomap"), "manifest.context.gomap", errors)
     vectordbbench = _object(context.get("vectordbbench"), "manifest.context.vectordbbench", errors)
+    vectordbbench_root = None
+    vectordbbench_path = vectordbbench.get("path")
+    if not isinstance(vectordbbench_path, str) or not vectordbbench_path:
+        if lifecycle.get("result_status") == "completed":
+            errors.append("manifest.context.vectordbbench.path must be a non-empty path")
+    else:
+        try:
+            declared_vectordbbench_root = Path(vectordbbench_path)
+            if not declared_vectordbbench_root.is_absolute():
+                raise ValueError("path must be absolute")
+            vectordbbench_root = declared_vectordbbench_root.resolve(strict=False)
+        except (OSError, ValueError) as exc:
+            errors.append(f"manifest.context.vectordbbench.path is invalid: {exc}")
     service = _object(manifest.get("service"), "manifest.service", errors)
     binary = _object(service.get("binary"), "manifest.service.binary", errors)
     identity = _object(lifecycle.get("identity"), "lifecycle.identity", errors)
@@ -1949,6 +1962,19 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     command_exit = command_record.get("exit_code")
                     if isinstance(command_exit, bool) or not isinstance(command_exit, int) or command_exit != 0:
                         errors.append("authoritative VDBBench command execution must record exit_code=0")
+                    command_cwd = command_record.get("cwd")
+                    try:
+                        resolved_command_cwd = (
+                            Path(command_cwd).resolve(strict=False)
+                            if isinstance(command_cwd, str) and command_cwd
+                            else None
+                        )
+                    except (OSError, ValueError):
+                        resolved_command_cwd = None
+                    if resolved_command_cwd is None or resolved_command_cwd != vectordbbench_root:
+                        errors.append(
+                            "authoritative VDBBench command cwd must match manifest.context.vectordbbench.path"
+                        )
 
                 selected_index_name = selected.get("index_name")
                 expected_command_values = {
@@ -2144,8 +2170,17 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         value = _nonnegative_int(host.get(key), f"manifest context.host.{key}", errors)
         if value == 0:
             errors.append(f"manifest context.host.{key} must be positive")
-    if not valid_storage_context(host.get("storage")):
+    storage = host.get("storage")
+    if not valid_storage_context(storage):
         errors.append("manifest context.host.storage must contain method, device, filesystem, mount, and positive capacity")
+    else:
+        try:
+            storage_path = Path(storage["path"]).resolve(strict=False)
+        except (OSError, ValueError) as exc:
+            errors.append(f"manifest context.host.storage.path is invalid: {exc}")
+        else:
+            if lifecycle.get("result_status") == "completed" and storage_path != root:
+                errors.append("manifest context.host.storage.path must match the artifact root")
 
     lifecycle_path = _artifact_file(root, lifecycle.get("file"), "lifecycle", errors)
     events: list[dict[str, Any]] = []

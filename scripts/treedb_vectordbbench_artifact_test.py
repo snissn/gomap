@@ -136,6 +136,8 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
     service_binary.write_bytes(b"fixture treedb document service\n")
     service_binary.chmod(0o755)
     service_binary_sha256 = harness.sha256_file(service_binary)
+    vectordbbench_root = root / "vectordbbench"
+    vectordbbench_root.mkdir()
     vdbbench_command = [
         "python", "-m", "vectordb_bench.cli.vectordbbench",
         "treedbcolumngraphexact",
@@ -319,7 +321,9 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         "schema_version": harness.ARTIFACT_SCHEMA,
         "context": {
             "gomap": {"commit": "1" * 40, "dirty": False},
-            "vectordbbench": {"commit": "2" * 40, "dirty": False},
+            "vectordbbench": {
+                "path": str(vectordbbench_root), "commit": "2" * 40, "dirty": False,
+            },
             "host": {
                 "logical_cpu_count": 16,
                 "physical_cpu_count": 8,
@@ -373,7 +377,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "name": "vdbbench_exact",
             "command": vdbbench_command,
             "command_string": vdbbench_command_string,
-            "cwd": str(root),
+            "cwd": str(vectordbbench_root),
             "started_at": "2026-08-27T00:00:00Z",
             "finished_at": "2026-08-27T00:00:03Z",
             "duration_seconds": 3.0,
@@ -1528,6 +1532,38 @@ class LifecycleValidatorTest(unittest.TestCase):
 
         self.assertFalse(got["analyzable"], got)
         self.assertTrue(any("terminate option parsing" in error for error in got["errors"]), got)
+
+    def test_authoritative_vdbbench_command_cwd_matches_recorded_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            other_checkout = root / "other-vectordbbench"
+            other_checkout.mkdir()
+            manifest["commands"][0]["cwd"] = str(other_checkout)
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("command cwd" in error for error in got["errors"]), got)
+
+    def test_storage_evidence_path_matches_artifact_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            unrelated_storage = root / "other-storage"
+            unrelated_storage.mkdir()
+            manifest["context"]["host"]["storage"].update({
+                "path": str(unrelated_storage),
+                "mount": str(unrelated_storage),
+                "device": "/dev/other",
+            })
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("storage.path" in error for error in got["errors"]), got)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
