@@ -273,6 +273,53 @@ func TestServiceDeferredVectorBuildOptimizeCheckpointCrashReopen(t *testing.T) {
 	}
 }
 
+func TestServiceStandardOptimizeCheckpointCrashReopen(t *testing.T) {
+	const helper = "TREEDB_STANDARD_OPTIMIZE_CRASH_HELPER"
+	dir := os.Getenv(helper)
+	if dir != "" {
+		db, err := backenddb.Open(testBackendOptions(dir))
+		if err != nil {
+			t.Fatalf("open helper: %v", err)
+		}
+		svc := New(collections.NewCollectionManager(db))
+		ctx := context.Background()
+		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: MetricCosine}); err != nil {
+			t.Fatalf("create helper index: %v", err)
+		}
+		if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "durable", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
+			t.Fatalf("deferred helper upsert: %v", err)
+		}
+		if _, err := svc.OptimizeIndex(ctx, "docs", OptimizeIndexRequest{}); err != nil {
+			t.Fatalf("optimize helper index: %v", err)
+		}
+		os.Exit(0)
+	}
+
+	dir = t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestServiceStandardOptimizeCheckpointCrashReopen$")
+	cmd.Env = append(os.Environ(), helper+"="+dir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("crash helper: %v\n%s", err, output)
+	}
+	db, err := backenddb.Open(testBackendOptions(dir))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db.Close()
+	svc := New(collections.NewCollectionManager(db))
+	col, _, err := svc.openIndex(context.Background(), "docs", 0)
+	if err != nil {
+		t.Fatalf("open optimized index after crash: %v", err)
+	}
+	if got, err := col.Get([]byte("durable")); err != nil || got == nil {
+		t.Fatalf("get after crash got=%v err=%v", got, err)
+	}
+	status, err := col.VectorIndexStatus(defaultVectorIndexName)
+	if err != nil || !status.Loaded || status.RebuildNeeded || status.Stats.RebuildNeeded || status.Stats.SnapshotDirty {
+		t.Fatalf("vector status after crash=%+v err=%v", status, err)
+	}
+}
+
 func TestServiceDeferredVectorBuildFailedFinalizeReopensDurableAndStale(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)

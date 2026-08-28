@@ -898,7 +898,10 @@ func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeI
 	if s.deferredVectorBuildMaintenance != nil {
 		err = s.deferredVectorBuildMaintenance.Finalize(ctx, index, info.Generation, s.manager.FlushAll, build)
 	} else {
-		err = build()
+		_, err = s.manager.SyncForStandaloneWriteConcern()
+		if err == nil {
+			err = build()
+		}
 	}
 	if err != nil {
 		var serviceErr *Error

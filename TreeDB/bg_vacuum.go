@@ -307,7 +307,10 @@ func (c *DeferredVectorBuildMaintenance) End() {
 }
 
 func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(owner uint64, index string, generation uint64) uint64 {
-	if index == "" || generation == 0 || w.deferredVectorBuildClosed.Load() {
+	if index == "" || generation == 0 {
+		return 0
+	}
+	if w.deferredVectorBuildClosed.Load() {
 		w.endDeferredVectorBuild()
 		return 0
 	}

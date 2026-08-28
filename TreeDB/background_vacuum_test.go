@@ -772,6 +772,24 @@ func TestDeferredVectorBuildMaintenanceFinalizeRejectsPendingAndCompetingOwner(t
 	}
 }
 
+func TestDeferredVectorBuildInvalidAdmissionDoesNotCrossOwners(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	root := &DeferredVectorBuildMaintenance{db: d}
+	owner := root.Scoped()
+	other := root.Scoped()
+	reservation := owner.AdmitInsert(context.Background(), "docs", 1)
+	if reservation == 0 || !owner.CommitInsert(reservation) {
+		t.Fatal("begin deferred maintenance")
+	}
+	if got := other.AdmitInsert(context.Background(), "", 0); got != 0 {
+		t.Fatalf("invalid admission=%d want 0", got)
+	}
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("invalid competing admission cleared the owning epoch")
+	}
+	owner.End()
+}
+
 func TestDeferredVectorBuildMaintenanceAbortPreservesCompetingReservation(t *testing.T) {
 	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
 	control := &DeferredVectorBuildMaintenance{db: d}
