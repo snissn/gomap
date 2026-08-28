@@ -20,7 +20,11 @@ func backgroundIndexVacuumShouldReport(err error) bool {
 		!errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) &&
 		!errors.Is(err, rootpublication.ErrResourcePinned) &&
 		!errors.Is(err, backenddb.ErrVacuumUnsupported) &&
-		!errors.Is(err, context.Canceled)
+		!backgroundIndexVacuumContextEnded(err)
+}
+
+func backgroundIndexVacuumContextEnded(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 const (
@@ -169,9 +173,10 @@ type bgIndexVacuumWorker struct {
 }
 
 type deferredVectorBuildEpoch struct {
-	id           uint64
+	owner        uint64
 	index        string
 	generation   uint64
+	accepted     bool
 	reservations []uint64
 	lastActivity int64
 }
@@ -179,7 +184,16 @@ type deferredVectorBuildEpoch struct {
 // DeferredVectorBuildMaintenance is the narrow engine control used by the
 // document service's explicit deferred-build load lifecycle.
 type DeferredVectorBuildMaintenance struct {
-	db *DB
+	db    *DB
+	owner uint64
+}
+
+// Scoped returns an independent deferred-build owner for one service.
+func (c *DeferredVectorBuildMaintenance) Scoped() *DeferredVectorBuildMaintenance {
+	if c == nil || c.db == nil {
+		return nil
+	}
+	return &DeferredVectorBuildMaintenance{db: c.db, owner: c.db.bgVac.deferredVectorBuildNextID.Add(1)}
 }
 
 // AdmitInsert reserves an insert-only deferred request in the current epoch.
@@ -195,7 +209,7 @@ func (c *DeferredVectorBuildMaintenance) AdmitInsert(ctx context.Context, index 
 		return 0
 	}
 	defer c.db.bgVac.runMu.Unlock()
-	return c.db.bgVac.admitDeferredVectorBuild(index, generation)
+	return c.db.bgVac.admitDeferredVectorBuild(c.owner, index, generation)
 }
 
 // CommitInsert marks a successfully published reservation idle. A reservation
@@ -204,15 +218,101 @@ func (c *DeferredVectorBuildMaintenance) CommitInsert(reservationID uint64) bool
 	return c != nil && c.db != nil && c.db.bgVac.commitDeferredVectorBuild(reservationID)
 }
 
-// End restores ordinary automatic-maintenance policy.
-func (c *DeferredVectorBuildMaintenance) End() {
+// AbortInsert releases only the caller's reservation. It cannot end an epoch
+// owned by another request that raced with the failed insert.
+func (c *DeferredVectorBuildMaintenance) AbortInsert(reservationID uint64) {
 	if c != nil && c.db != nil {
-		c.db.bgVac.endDeferredVectorBuild()
+		c.db.bgVac.abortDeferredVectorBuild(reservationID)
 	}
 }
 
-func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(index string, generation uint64) uint64 {
-	if index == "" || generation == 0 || w.deferredVectorBuildClosed.Load() {
+// Finalize closes a matching deferred epoch, drains accepted collection work,
+// checkpoints it, runs at most one debt-qualified vacuum, then builds and
+// publishes the query-ready vector assets while excluding the periodic worker.
+func (c *DeferredVectorBuildMaintenance) Finalize(ctx context.Context, index string, generation uint64, drain, build func() error) error {
+	if c == nil || c.db == nil {
+		return ErrClosed
+	}
+	if c.db.bgVac.deferredVectorBuildClosed.Load() {
+		return ErrClosed
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := lockFullScanMaintenanceContext(ctx, &c.db.bgVac.runMu); err != nil {
+		return err
+	}
+	defer c.db.bgVac.runMu.Unlock()
+	if c.db.bgVac.deferredVectorBuildClosed.Load() {
+		return ErrClosed
+	}
+
+	epoch := c.db.bgVac.deferredVectorBuildEpoch.Load()
+	matching := epoch != nil && epoch.owner == c.owner && epoch.index == index && epoch.generation == generation
+	if epoch != nil && !matching {
+		return errors.New("treedb: deferred vector-build owner changed before finalization")
+	}
+	if matching {
+		if len(epoch.reservations) != 0 {
+			return errors.New("treedb: deferred vector-build insert is still pending")
+		}
+	}
+	if drain != nil {
+		if err := drain(); err != nil {
+			return err
+		}
+	}
+	if err := c.db.Checkpoint(); err != nil {
+		return err
+	}
+	if matching {
+		if c.db.bgVac.deferredVectorBuildDebt.Load() {
+			if err := c.db.bgVac.runOnceContextLocked(ctx, c.db, true); err != nil && !errors.Is(err, errVacuumUnsupported) {
+				return err
+			}
+		}
+	}
+	if build != nil {
+		if err := build(); err != nil {
+			return err
+		}
+	}
+	if matching {
+		if !c.db.bgVac.deferredVectorBuildEpoch.CompareAndSwap(epoch, nil) {
+			return errors.New("treedb: deferred vector-build owner changed during finalization")
+		}
+		c.db.bgVac.deferredVectorBuildDebt.Store(false)
+	}
+	return nil
+}
+
+// EndContext restores ordinary automatic-maintenance policy while honoring a
+// request canceled behind another maintenance owner.
+func (c *DeferredVectorBuildMaintenance) EndContext(ctx context.Context) error {
+	if c == nil || c.db == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := lockFullScanMaintenanceContext(ctx, &c.db.bgVac.runMu); err != nil {
+		return err
+	}
+	defer c.db.bgVac.runMu.Unlock()
+	c.db.bgVac.endDeferredVectorBuildOwner(c.owner)
+	return nil
+}
+
+// End restores ordinary automatic-maintenance policy.
+func (c *DeferredVectorBuildMaintenance) End() {
+	_ = c.EndContext(context.Background())
+}
+
+func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(owner uint64, index string, generation uint64) uint64 {
+	if index == "" || generation == 0 {
+		return 0
+	}
+	if w.deferredVectorBuildClosed.Load() {
 		w.endDeferredVectorBuild()
 		return 0
 	}
@@ -221,7 +321,7 @@ func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(index string, generation 
 		if current == nil {
 			reservationID := w.deferredVectorBuildNextID.Add(1)
 			next := &deferredVectorBuildEpoch{
-				id:           reservationID,
+				owner:        owner,
 				index:        index,
 				generation:   generation,
 				reservations: []uint64{reservationID},
@@ -236,6 +336,9 @@ func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(index string, generation 
 			}
 			continue
 		}
+		if current.owner != owner {
+			return 0
+		}
 		if current.index != index || current.generation != generation {
 			if w.deferredVectorBuildEpoch.CompareAndSwap(current, nil) {
 				return 0
@@ -246,9 +349,10 @@ func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(index string, generation 
 		reservations := append([]uint64(nil), current.reservations...)
 		reservations = append(reservations, reservationID)
 		next := &deferredVectorBuildEpoch{
-			id:           current.id,
+			owner:        current.owner,
 			index:        index,
 			generation:   generation,
+			accepted:     current.accepted,
 			reservations: reservations,
 			lastActivity: time.Now().UnixNano(),
 		}
@@ -280,9 +384,10 @@ func (w *bgIndexVacuumWorker) commitDeferredVectorBuild(reservationID uint64) bo
 		reservations := append([]uint64(nil), current.reservations[:reservationIndex]...)
 		reservations = append(reservations, current.reservations[reservationIndex+1:]...)
 		next := &deferredVectorBuildEpoch{
-			id:           current.id,
+			owner:        current.owner,
 			index:        current.index,
 			generation:   current.generation,
+			accepted:     true,
 			reservations: reservations,
 			lastActivity: time.Now().UnixNano(),
 		}
@@ -296,8 +401,61 @@ func (w *bgIndexVacuumWorker) commitDeferredVectorBuild(reservationID uint64) bo
 	}
 }
 
+func (w *bgIndexVacuumWorker) abortDeferredVectorBuild(reservationID uint64) {
+	if reservationID == 0 {
+		return
+	}
+	for {
+		current := w.deferredVectorBuildEpoch.Load()
+		if current == nil {
+			return
+		}
+		reservationIndex := -1
+		for i, id := range current.reservations {
+			if id == reservationID {
+				reservationIndex = i
+				break
+			}
+		}
+		if reservationIndex < 0 {
+			return
+		}
+		if len(current.reservations) == 1 && !current.accepted {
+			if w.deferredVectorBuildEpoch.CompareAndSwap(current, nil) {
+				return
+			}
+			continue
+		}
+		reservations := append([]uint64(nil), current.reservations[:reservationIndex]...)
+		reservations = append(reservations, current.reservations[reservationIndex+1:]...)
+		next := &deferredVectorBuildEpoch{
+			owner:        current.owner,
+			index:        current.index,
+			generation:   current.generation,
+			accepted:     current.accepted,
+			reservations: reservations,
+			lastActivity: current.lastActivity,
+		}
+		if w.deferredVectorBuildEpoch.CompareAndSwap(current, next) {
+			return
+		}
+	}
+}
+
 func (w *bgIndexVacuumWorker) endDeferredVectorBuild() {
 	w.deferredVectorBuildEpoch.Store(nil)
+}
+
+func (w *bgIndexVacuumWorker) endDeferredVectorBuildOwner(owner uint64) {
+	for {
+		current := w.deferredVectorBuildEpoch.Load()
+		if current == nil || current.owner != owner {
+			return
+		}
+		if w.deferredVectorBuildEpoch.CompareAndSwap(current, nil) {
+			return
+		}
+	}
 }
 
 func (w *bgIndexVacuumWorker) deferredVectorBuildActive(now time.Time) bool {
@@ -550,16 +708,26 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 
 	w.runMu.Lock()
 	defer w.runMu.Unlock()
+	_ = w.runOnceContextLocked(ctx, db, false)
+}
+
+func (w *bgIndexVacuumWorker) runOnceContextLocked(ctx context.Context, db *DB, force bool) error {
 	if w.unsupported {
-		return
+		if force {
+			return errVacuumUnsupported
+		}
+		return nil
 	}
 
 	now := time.Now()
 	state, ok := db.backend.StateToken()
 	if !ok || db.backend.IsClosing() {
-		return
+		if force {
+			return ErrClosed
+		}
+		return nil
 	}
-	if w.deferredVectorBuildActive(now) {
+	if !force && w.deferredVectorBuildActive(now) {
 		w.backlogConsecutiveSkips.Store(0)
 		w.foregroundConsecutiveSkips.Store(0)
 		w.deferredVectorBuildSkips.Add(1)
@@ -568,12 +736,12 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		}
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomeDeferredVectorBuildSkip)
 		w.finishRun(time.Now(), "")
-		return
+		return nil
 	}
 	forcedAfterBacklog := false
 	backlogBytes := backgroundIndexVacuumBacklogBytes(db)
 	w.lastBacklogBytes.Store(backlogBytes)
-	if backlogBytes > 0 {
+	if !force && backlogBytes > 0 {
 		consecutive := w.backlogConsecutiveSkips.Load()
 		if consecutive < uint64(w.maxBacklogSkipThreshold()) {
 			consecutive++
@@ -582,7 +750,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 			w.foregroundConsecutiveSkips.Store(0)
 			w.lastOutcome.Store(backgroundIndexVacuumOutcomeBacklogSkip)
 			w.finishRun(now, "")
-			return
+			return nil
 		}
 		forcedAfterBacklog = true
 		w.backlogForcedRuns.Add(1)
@@ -591,14 +759,14 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		w.backlogConsecutiveSkips.Store(0)
 	}
 	forcedAfterForeground := false
-	if !forcedAfterBacklog && !backgroundIndexVacuumForegroundWriteQuiet(db) {
+	if !force && !forcedAfterBacklog && !backgroundIndexVacuumForegroundWriteQuiet(db) {
 		consecutive := w.foregroundConsecutiveSkips.Load()
 		if consecutive < uint64(w.maxBacklogSkipThreshold()) {
 			w.foregroundConsecutiveSkips.Store(consecutive + 1)
 			w.foregroundSkips.Add(1)
 			w.lastOutcome.Store(backgroundIndexVacuumOutcomeForegroundSkip)
 			w.finishRun(now, "")
-			return
+			return nil
 		}
 		forcedAfterForeground = true
 		w.foregroundForcedRuns.Add(1)
@@ -607,10 +775,10 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		w.foregroundConsecutiveSkips.Store(0)
 	}
 
-	if !forcedAfterBacklog && !forcedAfterForeground && w.lastProbeValid && !w.retryProbe && state.CommitSeq == w.lastProbeCommitSeq && !w.freelistDebtChangedSinceLastProbe(db) {
+	if !force && !forcedAfterBacklog && !forcedAfterForeground && w.lastProbeValid && !w.retryProbe && state.CommitSeq == w.lastProbeCommitSeq && !w.freelistDebtChangedSinceLastProbe(db) {
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomeUnchanged)
 		w.finishRun(now, "")
-		return
+		return nil
 	}
 
 	probeStarted := time.Now()
@@ -618,11 +786,11 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 	w.probes.Add(1)
 	w.recordProbeDuration(time.Since(probeStarted))
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
+		if backgroundIndexVacuumContextEnded(err) {
 			w.retryProbe = false
 			w.lastOutcome.Store(backgroundIndexVacuumOutcomeCanceled)
 			w.finishRun(now, err.Error())
-			return
+			return err
 		}
 		w.retryProbe = false
 		w.lastProbeCommitSeq = state.CommitSeq
@@ -636,7 +804,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomePermanentFailure)
 		w.finishRun(now, err.Error())
 		db.reportError(err)
-		return
+		return err
 	}
 
 	w.lastProbeCommitSeq = rep.CommitSeq
@@ -653,7 +821,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		w.retryProbe = false
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomeNoDebt)
 		w.finishRun(now, "")
-		return
+		return nil
 	}
 
 	w.vacuumAttempts.Add(1)
@@ -675,7 +843,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		if backgroundIndexVacuumShouldReport(err) {
 			db.reportError(err)
 		}
-		return
+		return err
 	}
 	w.retryProbe = false
 	w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
@@ -685,6 +853,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 	w.deferredVectorBuildDebt.Store(false)
 	w.finishRun(now, "")
 	w.lastVacuumUnix.Store(now.Unix())
+	return nil
 }
 
 func (w *bgIndexVacuumWorker) recordProbeDuration(d time.Duration) {
@@ -714,7 +883,7 @@ func (w *bgIndexVacuumWorker) recordVacuumError(err error) {
 		w.unsupportedTotal.Add(1)
 		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomeUnsupported)
-	case errors.Is(err, context.Canceled):
+	case backgroundIndexVacuumContextEnded(err):
 		w.retryProbe = false
 		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomeCanceled)

@@ -567,6 +567,410 @@ func TestDeferredVectorBuildAdmissionHonorsCancellationWhileVacuumOwnsLock(t *te
 	}
 }
 
+func TestDeferredVectorBuildEndHonorsCancellationWhileVacuumOwnsLock(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	control := (&DeferredVectorBuildMaintenance{db: d}).Scoped()
+	reservation := control.AdmitInsert(context.Background(), "docs", 1)
+	if reservation == 0 || !control.CommitInsert(reservation) {
+		t.Fatal("begin deferred maintenance")
+	}
+	d.bgVac.runMu.Lock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := control.EndContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("EndContext error=%v want context.Canceled", err)
+	}
+	d.bgVac.runMu.Unlock()
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("canceled end cleared the deferred epoch")
+	}
+	control.End()
+}
+
+func TestDeferredVectorBuildMaintenanceFinalizeOwnsWorkerAndRunsAtMostOneVacuum(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: time.Hour})
+	if !d.bgVac.Enabled() {
+		t.Skip("background worker is not enabled")
+	}
+	control := &DeferredVectorBuildMaintenance{db: d}
+	epochID := control.AdmitInsert(context.Background(), "docs", 1)
+	if epochID == 0 || !control.CommitInsert(epochID) {
+		t.Fatal("begin deferred vector-build epoch")
+	}
+	// One hot tick establishes coalesced scheduling debt without probing.
+	d.bgVac.runOnce(d)
+
+	var probes, vacuums atomic.Uint64
+	var finalizerBuilt atomic.Bool
+	restoreProbe := setBackgroundIndexVacuumTriggerReportHookForTest(func(*DB, context.Context) (backenddb.IndexVacuumTriggerReport, error) {
+		probes.Add(1)
+		if finalizerBuilt.Load() {
+			return backenddb.IndexVacuumTriggerReport{}, nil
+		}
+		return backenddb.IndexVacuumTriggerReport{UserPages: 1, UserSpanRatioPPM: 2_000_000}, nil
+	})
+	defer restoreProbe()
+	restoreVacuum := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
+		vacuums.Add(1)
+		return backenddb.VacuumOnlineStats{WorkCompleted: true}, nil
+	})
+	defer restoreVacuum()
+
+	buildEntered := make(chan struct{})
+	releaseBuild := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- control.Finalize(context.Background(), "docs", 1, nil, func() error {
+			close(buildEntered)
+			<-releaseBuild
+			finalizerBuilt.Store(true)
+			return nil
+		})
+	}()
+	<-buildEntered
+	// The same run lock used by the enabled worker remains owned across source
+	// build, publication, and cache work.
+	if d.bgVac.runMu.TryLock() {
+		d.bgVac.runMu.Unlock()
+		t.Fatal("worker run lock was available during finalizer build")
+	}
+	workerDone := make(chan struct{})
+	go func() {
+		d.bgVac.runOnce(d)
+		close(workerDone)
+	}()
+	if got := probes.Load(); got != 1 {
+		t.Fatalf("probes during finalizer build=%d want 1", got)
+	}
+	close(releaseBuild)
+	if err := <-done; err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	<-workerDone
+	if probes.Load() < 1 || vacuums.Load() != 1 {
+		t.Fatalf("finalizer probes=%d vacuums=%d want one debt-qualified vacuum", probes.Load(), vacuums.Load())
+	}
+	stats := d.bgVac.Stats()
+	if stats.DeferredVectorBuildActive || stats.DeferredVectorBuildDebt {
+		t.Fatalf("finalizer left active/debt state: %+v", stats)
+	}
+}
+
+func TestDeferredVectorBuildMaintenanceFinalizeDebtAndFailureSemantics(t *testing.T) {
+	tests := []struct {
+		name             string
+		coalescedDebt    bool
+		physicalDebt     bool
+		vacuumErr        error
+		buildErr         error
+		wantErr          bool
+		wantProbes       uint64
+		wantVacuums      uint64
+		wantBuild        bool
+		wantDebtRetained bool
+		clearEpoch       bool
+	}{
+		{name: "no scheduling debt does not probe", wantBuild: true},
+		{name: "coalesced debt without physical debt is discharged by the successful probe", coalescedDebt: true, wantProbes: 1, wantBuild: true},
+		{name: "successful eligible vacuum consumes debt", coalescedDebt: true, physicalDebt: true, wantProbes: 1, wantVacuums: 1, wantBuild: true},
+		{name: "unsupported vacuum is skipped and build still completes", coalescedDebt: true, physicalDebt: true, vacuumErr: errVacuumUnsupported, wantProbes: 1, wantVacuums: 1, wantBuild: true},
+		{name: "vacuum failure prevents build and retains debt", coalescedDebt: true, physicalDebt: true, vacuumErr: errors.New("injected vacuum failure"), wantErr: true, wantProbes: 1, wantVacuums: 1, wantDebtRetained: true},
+		{name: "build failure retains owner for retry", buildErr: errors.New("injected build failure"), wantErr: true, wantBuild: true},
+		{name: "missing owner preserves unserviced debt", coalescedDebt: true, clearEpoch: true, wantBuild: true, wantDebtRetained: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+			control := &DeferredVectorBuildMaintenance{db: d}
+			epochID := control.AdmitInsert(context.Background(), "docs", 1)
+			if epochID == 0 || !control.CommitInsert(epochID) {
+				t.Fatal("begin deferred vector-build epoch")
+			}
+			if tt.coalescedDebt {
+				d.bgVac.runOnce(d)
+			}
+			if tt.clearEpoch {
+				control.End()
+			}
+			var probes, vacuums atomic.Uint64
+			restoreProbe := setBackgroundIndexVacuumTriggerReportHookForTest(func(*DB, context.Context) (backenddb.IndexVacuumTriggerReport, error) {
+				probes.Add(1)
+				if tt.physicalDebt {
+					return backenddb.IndexVacuumTriggerReport{UserPages: 1, UserSpanRatioPPM: 2_000_000}, nil
+				}
+				return backenddb.IndexVacuumTriggerReport{}, nil
+			})
+			defer restoreProbe()
+			vacuumErr := tt.vacuumErr
+			restoreVacuum := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
+				vacuums.Add(1)
+				return backenddb.VacuumOnlineStats{}, vacuumErr
+			})
+			defer restoreVacuum()
+			built := false
+			buildErr := tt.buildErr
+			err := control.Finalize(context.Background(), "docs", 1, nil, func() error {
+				built = true
+				return buildErr
+			})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Finalize error=%v wantErr=%t", err, tt.wantErr)
+			}
+			if probes.Load() != tt.wantProbes || vacuums.Load() != tt.wantVacuums || built != tt.wantBuild {
+				t.Fatalf("probes=%d vacuums=%d built=%t want %d/%d/%t", probes.Load(), vacuums.Load(), built, tt.wantProbes, tt.wantVacuums, tt.wantBuild)
+			}
+			stats := d.bgVac.Stats()
+			if stats.DeferredVectorBuildActive != tt.wantErr || stats.DeferredVectorBuildDebt != tt.wantDebtRetained {
+				t.Fatalf("post-finalize stats=%+v want active=%t debt=%t", stats, tt.wantErr, tt.wantDebtRetained)
+			}
+			if tt.wantErr {
+				vacuumErr = nil
+				buildErr = nil
+				if err := control.Finalize(context.Background(), "docs", 1, nil, func() error { return nil }); err != nil {
+					t.Fatalf("Finalize retry: %v", err)
+				}
+				if stats := d.bgVac.Stats(); stats.DeferredVectorBuildActive || stats.DeferredVectorBuildDebt {
+					t.Fatalf("Finalize retry left state: %+v", stats)
+				}
+			}
+		})
+	}
+}
+
+func TestDeferredVectorBuildForcedDeadlineIsNotStickyBackgroundFailure(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	restoreProbe := setBackgroundIndexVacuumTriggerReportHookForTest(func(*DB, context.Context) (backenddb.IndexVacuumTriggerReport, error) {
+		return backenddb.IndexVacuumTriggerReport{}, context.DeadlineExceeded
+	})
+	defer restoreProbe()
+	if err := d.bgVac.runOnceContextLocked(context.Background(), d, true); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("forced vacuum error=%v want deadline exceeded", err)
+	}
+	if err := d.backgroundError(); err != nil {
+		t.Fatalf("caller deadline became sticky background error: %v", err)
+	}
+	if got := d.bgVac.permanentFailuresTotal.Load(); got != 0 {
+		t.Fatalf("permanent failures=%d want 0", got)
+	}
+}
+
+func TestDeferredVectorBuildMaintenanceFinalizeRejectsPendingAndCompetingOwner(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	control := &DeferredVectorBuildMaintenance{db: d}
+	if epochID := control.AdmitInsert(context.Background(), "docs", 1); epochID == 0 {
+		t.Fatal("admit pending insert")
+	}
+	drained := false
+	if err := control.Finalize(context.Background(), "docs", 1, func() error { drained = true; return nil }, nil); err == nil || drained {
+		t.Fatalf("pending Finalize err=%v drained=%t want fail before drain", err, drained)
+	}
+	control.End()
+	epochID := control.AdmitInsert(context.Background(), "other", 2)
+	if epochID == 0 || !control.CommitInsert(epochID) {
+		t.Fatal("begin competing owner")
+	}
+	if err := control.Finalize(context.Background(), "docs", 1, nil, nil); err == nil {
+		t.Fatal("competing-owner Finalize succeeded")
+	}
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("competing-owner Finalize cleared the live owner")
+	}
+}
+
+func TestDeferredVectorBuildInvalidAdmissionDoesNotCrossOwners(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	root := &DeferredVectorBuildMaintenance{db: d}
+	owner := root.Scoped()
+	other := root.Scoped()
+	reservation := owner.AdmitInsert(context.Background(), "docs", 1)
+	if reservation == 0 || !owner.CommitInsert(reservation) {
+		t.Fatal("begin deferred maintenance")
+	}
+	if got := other.AdmitInsert(context.Background(), "", 0); got != 0 {
+		t.Fatalf("invalid admission=%d want 0", got)
+	}
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("invalid competing admission cleared the owning epoch")
+	}
+	owner.End()
+}
+
+func TestDeferredVectorBuildMaintenanceAbortPreservesCompetingReservation(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	control := &DeferredVectorBuildMaintenance{db: d}
+	first := control.AdmitInsert(context.Background(), "docs", 1)
+	second := control.AdmitInsert(context.Background(), "docs", 1)
+	if first == 0 || second == 0 {
+		t.Fatal("admit reservations")
+	}
+	control.AbortInsert(first)
+	if !control.CommitInsert(second) || control.CommitInsert(first) {
+		t.Fatal("abort removed a competing reservation")
+	}
+	joined := control.AdmitInsert(context.Background(), "docs", 1)
+	if joined == 0 {
+		t.Fatal("join idle epoch")
+	}
+	control.AbortInsert(joined)
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("aborting a joined reservation removed prior deferred work")
+	}
+	if err := control.Finalize(context.Background(), "docs", 1, nil, nil); err != nil {
+		t.Fatalf("finalize preserved epoch: %v", err)
+	}
+}
+
+func TestDeferredVectorBuildMaintenanceAbortRemovesAllFailedEpoch(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	control := &DeferredVectorBuildMaintenance{db: d}
+	first := control.AdmitInsert(context.Background(), "docs", 1)
+	second := control.AdmitInsert(context.Background(), "docs", 1)
+	control.AbortInsert(first)
+	control.AbortInsert(second)
+	if d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("all-failed reservations left deferred maintenance active")
+	}
+}
+
+func TestDeferredVectorBuildMaintenanceScopesDoNotJoin(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	first := (&DeferredVectorBuildMaintenance{db: d}).Scoped()
+	second := (&DeferredVectorBuildMaintenance{db: d}).Scoped()
+	reservation := first.AdmitInsert(context.Background(), "docs", 1)
+	if reservation == 0 || !first.CommitInsert(reservation) {
+		t.Fatal("begin first scoped epoch")
+	}
+	if reservation := second.AdmitInsert(context.Background(), "docs", 1); reservation != 0 {
+		t.Fatal("second scope joined first scope's epoch")
+	}
+	second.End()
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("competing scope cleared the first scope's epoch")
+	}
+	first.End()
+	if d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("owning scope did not end its epoch")
+	}
+}
+
+func TestDeferredVectorBuildMaintenanceManualWrappersInvalidateEpoch(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	control := &DeferredVectorBuildMaintenance{db: d}
+	begin := func() uint64 {
+		t.Helper()
+		epochID := control.AdmitInsert(context.Background(), "docs", 1)
+		if epochID == 0 || !control.CommitInsert(epochID) {
+			t.Fatal("begin epoch")
+		}
+		return epochID
+	}
+
+	begin()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := d.CompactStorage(ctx, CompactStorageOptions{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CompactStorage error=%v want canceled", err)
+	}
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("canceled CompactStorage invalidated epoch without owning maintenance")
+	}
+	if err := d.VacuumIndexOnline(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("VacuumIndexOnline error=%v want canceled", err)
+	}
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("canceled VacuumIndexOnline invalidated epoch without owning maintenance")
+	}
+
+	epochID := begin()
+	_ = d.CompactIndex()
+	if control.CommitInsert(epochID) {
+		t.Fatal("CompactIndex did not invalidate epoch")
+	}
+}
+
+func TestDeferredVectorBuildMaintenanceCloseWaitsForFinalizer(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), BackgroundIndexVacuumInterval: -1})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	control := &DeferredVectorBuildMaintenance{db: d}
+	epochID := control.AdmitInsert(context.Background(), "docs", 1)
+	if epochID == 0 || !control.CommitInsert(epochID) {
+		t.Fatal("begin epoch")
+	}
+	buildEntered := make(chan struct{})
+	releaseBuild := make(chan struct{})
+	finalizeDone := make(chan error, 1)
+	go func() {
+		finalizeDone <- control.Finalize(context.Background(), "docs", 1, nil, func() error {
+			close(buildEntered)
+			<-releaseBuild
+			return nil
+		})
+	}()
+	<-buildEntered
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- d.Close() }()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned during finalizer: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseBuild)
+	if err := <-finalizeDone; err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := control.Finalize(context.Background(), "docs", 1, nil, nil); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Finalize after Close error=%v want ErrClosed", err)
+	}
+}
+
+func TestCloseRejectsQueuedManualMaintenance(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.bgVac.runMu.Lock()
+	compactDone := make(chan error, 1)
+	go func() { compactDone <- d.CompactIndex() }()
+	time.Sleep(20 * time.Millisecond)
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- d.Close() }()
+	for !d.bgVac.deferredVectorBuildClosed.Load() {
+		time.Sleep(time.Millisecond)
+	}
+	d.bgVac.runMu.Unlock()
+	if err := <-compactDone; !errors.Is(err, ErrClosed) {
+		t.Fatalf("queued CompactIndex error=%v want ErrClosed", err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestCompactStorageMaintenanceWaitHonorsContext(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	control := &DeferredVectorBuildMaintenance{db: d}
+	reservation := control.AdmitInsert(context.Background(), "docs", 1)
+	if reservation == 0 || !control.CommitInsert(reservation) {
+		t.Fatal("begin deferred maintenance")
+	}
+	d.maintenance.mu.Lock()
+	defer d.maintenance.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := d.CompactStorage(ctx, CompactStorageOptions{}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CompactStorage error=%v want deadline exceeded", err)
+	}
+	if !d.bgVac.runMu.TryLock() {
+		t.Fatal("CompactStorage retained run lock after cancellation")
+	}
+	d.bgVac.runMu.Unlock()
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("CompactStorage invalidated epoch before full-scan admission")
+	}
+}
+
 func TestDeferredVectorBuildMaintenanceFailsBackOnAmbiguityAndManualVacuum(t *testing.T) {
 	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
 	control := &DeferredVectorBuildMaintenance{db: d}
@@ -594,9 +998,14 @@ func TestDeferredVectorBuildMaintenanceFailsBackOnAmbiguityAndManualVacuum(t *te
 	if err := d.VacuumIndexOnline(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("manual vacuum error=%v want canceled", err)
 	}
-	if d.bgVac.Stats().DeferredVectorBuildActive {
-		t.Fatal("manual vacuum did not restore ordinary maintenance policy")
+	if !control.CommitInsert(staleEpochID) || !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("canceled manual vacuum invalidated deferred maintenance")
 	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	staleEpochID = control.AdmitInsert(context.Background(), "docs", 1)
+	_ = d.VacuumIndexOnline(context.Background())
 	if control.CommitInsert(staleEpochID) || d.bgVac.Stats().DeferredVectorBuildActive {
 		t.Fatal("stale insert commit resurrected epoch after manual vacuum")
 	}
@@ -613,9 +1022,10 @@ func TestBackgroundIndexVacuumDeferredVectorBuildAbandonmentRestoresPolicy(t *te
 	}
 	epoch := d.bgVac.deferredVectorBuildEpoch.Load()
 	d.bgVac.deferredVectorBuildEpoch.Store(&deferredVectorBuildEpoch{
-		id:           epoch.id,
+		owner:        epoch.owner,
 		index:        epoch.index,
 		generation:   epoch.generation,
+		accepted:     epoch.accepted,
 		lastActivity: time.Now().Add(-3 * time.Millisecond).UnixNano(),
 	})
 
@@ -683,9 +1093,10 @@ func TestDeferredVectorBuildMaintenanceTracksConcurrentReservations(t *testing.T
 	}
 	epoch := d.bgVac.deferredVectorBuildEpoch.Load()
 	d.bgVac.deferredVectorBuildEpoch.Store(&deferredVectorBuildEpoch{
-		id:           epoch.id,
+		owner:        epoch.owner,
 		index:        epoch.index,
 		generation:   epoch.generation,
+		accepted:     epoch.accepted,
 		reservations: append([]uint64(nil), epoch.reservations...),
 		lastActivity: time.Now().Add(-3 * time.Millisecond).UnixNano(),
 	})

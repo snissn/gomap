@@ -1702,7 +1702,7 @@ func (db *DB) closeMaintenance() error {
 		if logEnabled {
 			log.Printf("treedb: close compact index start")
 		}
-		if e := db.CompactIndex(); e != nil {
+		if e := db.compactIndex(true); e != nil {
 			err = errors.Join(err, e)
 		}
 		if logEnabled {
@@ -1715,7 +1715,7 @@ func (db *DB) closeMaintenance() error {
 			log.Printf("treedb: close vacuum index online start timeout=%s", timeout)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		if e := db.VacuumIndexOnline(ctx); e != nil {
+		if e := db.vacuumIndexOnline(ctx, true); e != nil {
 			if errors.Is(e, errVacuumUnsupported) {
 				if logEnabled {
 					log.Printf("treedb: close vacuum index online skipped: %v", e)
@@ -1738,8 +1738,14 @@ func (db *DB) Close() error {
 		return nil
 	}
 	db.bgVac.deferredVectorBuildClosed.Store(true)
-	db.bgVac.endDeferredVectorBuild()
 	db.bgVac.Stop()
+	// A service finalizer also owns runMu while draining, checkpointing,
+	// vacuuming, rebuilding, and publishing. Wait for an in-flight owner before
+	// closing storage; new finalizers fail the closed gate on either side of the
+	// lock acquisition.
+	db.bgVac.runMu.Lock()
+	db.bgVac.endDeferredVectorBuild()
+	db.bgVac.runMu.Unlock()
 	var err error
 	if db.cached != nil || db.backend != nil {
 		if e := db.closeMaintenance(); e != nil {
@@ -2523,27 +2529,60 @@ func (db *DB) checkpointCachedForPublicCommandWAL() error {
 // In cached mode it first drains the caching layer so the backend reflects all
 // buffered writes before rebuilding.
 func (db *DB) CompactIndex() error {
+	return db.compactIndex(false)
+}
+
+func (db *DB) compactIndex(allowClosing bool) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
 	if db.backend == nil {
 		return ErrClosed
 	}
+	db.bgVac.runMu.Lock()
+	defer db.bgVac.runMu.Unlock()
+	if db.bgVac.deferredVectorBuildClosed.Load() && !allowClosing {
+		return ErrClosed
+	}
+	db.bgVac.endDeferredVectorBuild()
 
 	if db.cached != nil {
 		if err := db.cached.Drain(); err != nil {
 			return err
 		}
 	}
-	err := db.backend.CompactIndex()
-	return db.reconcileCachedBackendMaintenance(err)
+	err := db.reconcileCachedBackendMaintenance(db.backend.CompactIndex())
+	if err == nil {
+		db.bgVac.deferredVectorBuildDebt.Store(false)
+	}
+	return err
 }
 
 // VacuumIndexOnline rebuilds the user index into a new file and swaps it in with
 // a short writer pause. Disk space from the old index is reclaimed once any old
 // snapshots/iterators drain.
 func (db *DB) VacuumIndexOnline(ctx context.Context) error {
+	return db.vacuumIndexOnline(ctx, false)
+}
+
+func (db *DB) vacuumIndexOnline(ctx context.Context, allowClosing bool) error {
 	if db == nil {
+		return ErrClosed
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		return errVacuumUnsupported
+	}
+	if err := lockFullScanMaintenanceContext(ctx, &db.bgVac.runMu); err != nil {
+		return err
+	}
+	defer db.bgVac.runMu.Unlock()
+	if db.bgVac.deferredVectorBuildClosed.Load() && !allowClosing {
 		return ErrClosed
 	}
 	db.bgVac.endDeferredVectorBuild()
