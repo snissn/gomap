@@ -188,6 +188,8 @@ func (c *DeferredVectorBuildMaintenance) AdmitInsert(index string, generation ui
 	if c == nil || c.db == nil {
 		return 0
 	}
+	c.db.bgVac.runMu.Lock()
+	defer c.db.bgVac.runMu.Unlock()
 	return c.db.bgVac.admitDeferredVectorBuild(index, generation)
 }
 

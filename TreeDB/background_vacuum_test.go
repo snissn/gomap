@@ -503,6 +503,43 @@ func TestBackgroundIndexVacuumDeferredVectorBuildCoalescesHotTicks(t *testing.T)
 	}
 }
 
+func TestDeferredVectorBuildAdmissionWaitsForRunningVacuum(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.bgVac.spanRatioPPM = 1
+	control := &DeferredVectorBuildMaintenance{db: d}
+	restoreProbe := setBackgroundIndexVacuumTriggerReportHookForTest(func(*DB, context.Context) (backenddb.IndexVacuumTriggerReport, error) {
+		return backenddb.IndexVacuumTriggerReport{UserPages: 1, UserSpanRatioPPM: 2_000_000}, nil
+	})
+	defer restoreProbe()
+	vacuumStarted := make(chan struct{})
+	releaseVacuum := make(chan struct{})
+	restoreVacuum := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
+		close(vacuumStarted)
+		<-releaseVacuum
+		return backenddb.VacuumOnlineStats{}, nil
+	})
+	defer restoreVacuum()
+
+	vacuumDone := make(chan struct{})
+	go func() {
+		d.bgVac.runOnce(d)
+		close(vacuumDone)
+	}()
+	<-vacuumStarted
+	admitted := make(chan uint64, 1)
+	go func() { admitted <- control.AdmitInsert("docs", 1) }()
+	select {
+	case <-admitted:
+		t.Fatal("deferred admission overlapped an in-flight vacuum")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseVacuum)
+	<-vacuumDone
+	if epochID := <-admitted; epochID == 0 {
+		t.Fatal("deferred admission failed after vacuum completed")
+	}
+}
+
 func TestDeferredVectorBuildMaintenanceFailsBackOnAmbiguityAndManualVacuum(t *testing.T) {
 	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
 	control := &DeferredVectorBuildMaintenance{db: d}
