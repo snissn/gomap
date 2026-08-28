@@ -100,8 +100,8 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndex(generation): %v", err)
 	}
-	competingGenerationEpoch := maintenance.AdmitInsert(context.Background(), "generation", generationInfo.Generation+1)
-	if competingGenerationEpoch == 0 || !maintenance.CommitInsert(competingGenerationEpoch) {
+	competingGenerationEpoch := svc.deferredVectorBuildMaintenance.AdmitInsert(context.Background(), "generation", generationInfo.Generation+1)
+	if competingGenerationEpoch == 0 || !svc.deferredVectorBuildMaintenance.CommitInsert(competingGenerationEpoch) {
 		t.Fatal("establish competing-generation owner")
 	}
 	deferInsert("generation", "generation-fallback")
@@ -110,7 +110,7 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 
 	// Invalidation after admission but before commit must fall back to the
 	// ordinary rebuild policy, never return a deferred success with a dirty graph.
-	svc.deferredMaintenanceBeforeCommit = maintenance.End
+	svc.deferredMaintenanceBeforeCommit = svc.deferredVectorBuildMaintenance.End
 	deferInsert("rejected", "commit-rejected")
 	svc.deferredMaintenanceBeforeCommit = nil
 	assertActive(false)
@@ -152,7 +152,7 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	assertActive(false)
 	assertCleanGraph("optimized", 1)
 
-	svc.deferredMaintenanceBeforeCommit = maintenance.End
+	svc.deferredMaintenanceBeforeCommit = svc.deferredVectorBuildMaintenance.End
 	deferInsert("commitfail", "commit-fallback")
 	svc.deferredMaintenanceBeforeCommit = nil
 	assertActive(false)
@@ -202,8 +202,17 @@ func TestServiceDeferredVectorBuildMaintenanceDoesNotSpanManagers(t *testing.T) 
 	if _, err := second.UpsertDocuments(ctx, "docs", request("second")); err != nil {
 		t.Fatalf("second deferred upsert: %v", err)
 	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("close second service: %v", err)
+	}
+	if got := stats()["treedb.bg_vacuum.deferred_vector_build.active"]; got != "true" {
+		t.Fatalf("separate manager cleared first service epoch: active=%q", got)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first service: %v", err)
+	}
 	if got := stats()["treedb.bg_vacuum.deferred_vector_build.active"]; got != "false" {
-		t.Fatalf("separate manager joined deferred epoch: active=%q", got)
+		t.Fatalf("owning service left epoch active=%q", got)
 	}
 }
 

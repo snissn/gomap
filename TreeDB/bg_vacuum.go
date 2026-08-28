@@ -289,7 +289,7 @@ func (c *DeferredVectorBuildMaintenance) End() {
 	if c != nil && c.db != nil {
 		c.db.bgVac.runMu.Lock()
 		defer c.db.bgVac.runMu.Unlock()
-		c.db.bgVac.endDeferredVectorBuild()
+		c.db.bgVac.endDeferredVectorBuildOwner(c.owner)
 	}
 }
 
@@ -318,7 +318,10 @@ func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(owner uint64, index strin
 			}
 			continue
 		}
-		if current.owner != owner || current.index != index || current.generation != generation {
+		if current.owner != owner {
+			return 0
+		}
+		if current.index != index || current.generation != generation {
 			if w.deferredVectorBuildEpoch.CompareAndSwap(current, nil) {
 				return 0
 			}
@@ -423,6 +426,18 @@ func (w *bgIndexVacuumWorker) abortDeferredVectorBuild(reservationID uint64) {
 
 func (w *bgIndexVacuumWorker) endDeferredVectorBuild() {
 	w.deferredVectorBuildEpoch.Store(nil)
+}
+
+func (w *bgIndexVacuumWorker) endDeferredVectorBuildOwner(owner uint64) {
+	for {
+		current := w.deferredVectorBuildEpoch.Load()
+		if current == nil || current.owner != owner {
+			return
+		}
+		if w.deferredVectorBuildEpoch.CompareAndSwap(current, nil) {
+			return
+		}
+	}
 }
 
 func (w *bgIndexVacuumWorker) deferredVectorBuildActive(now time.Time) bool {

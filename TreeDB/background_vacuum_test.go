@@ -800,8 +800,13 @@ func TestDeferredVectorBuildMaintenanceScopesDoNotJoin(t *testing.T) {
 	if reservation := second.AdmitInsert(context.Background(), "docs", 1); reservation != 0 {
 		t.Fatal("second scope joined first scope's epoch")
 	}
+	second.End()
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("competing scope cleared the first scope's epoch")
+	}
+	first.End()
 	if d.bgVac.Stats().DeferredVectorBuildActive {
-		t.Fatal("competing scope did not fail back to ordinary maintenance")
+		t.Fatal("owning scope did not end its epoch")
 	}
 }
 
@@ -902,6 +907,11 @@ func TestCloseRejectsQueuedManualMaintenance(t *testing.T) {
 
 func TestCompactStorageMaintenanceWaitHonorsContext(t *testing.T) {
 	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	control := &DeferredVectorBuildMaintenance{db: d}
+	reservation := control.AdmitInsert(context.Background(), "docs", 1)
+	if reservation == 0 || !control.CommitInsert(reservation) {
+		t.Fatal("begin deferred maintenance")
+	}
 	d.maintenance.mu.Lock()
 	defer d.maintenance.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
@@ -913,6 +923,9 @@ func TestCompactStorageMaintenanceWaitHonorsContext(t *testing.T) {
 		t.Fatal("CompactStorage retained run lock after cancellation")
 	}
 	d.bgVac.runMu.Unlock()
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("CompactStorage invalidated epoch before full-scan admission")
+	}
 }
 
 func TestDeferredVectorBuildMaintenanceFailsBackOnAmbiguityAndManualVacuum(t *testing.T) {
