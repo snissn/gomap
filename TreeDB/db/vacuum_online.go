@@ -810,6 +810,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 	}
 
 	// Online catch-up: replay recorded keys in bounded passes.
+	rebuiltExternalClosureChanged := false
 	for pass := 0; pass < vacuumCatchupPassesMax; pass++ {
 		if err := ctx.Err(); err != nil {
 			cleanupNewPager()
@@ -825,6 +826,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			cleanupNewPager()
 			return err
 		}
+		rebuiltExternalClosureChanged = rebuiltExternalClosureChanged || db.indexOuterLeavesInValueLog
 		if err := freeVacuumRetired(newAlloc, retired); err != nil {
 			cleanupNewPager()
 			return err
@@ -854,6 +856,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		if err != nil {
 			return err
 		}
+		rebuiltExternalClosureChanged = rebuiltExternalClosureChanged || db.indexOuterLeavesInValueLog
 		if err := freeVacuumRetired(newAlloc, retired); err != nil {
 			return err
 		}
@@ -1250,8 +1253,12 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			sourceResources = db.durableRoot.slotResources[db.durableRoot.slot]
 		}
 		durableCaptureStarted := time.Now()
+		projectionBlockedReason := ""
+		if rebuiltExternalClosureChanged {
+			projectionBlockedReason = rebuiltDurableResourceFallbackOuterLeafDelta
+		}
 		durableResources, resourceWork, err := db.captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
-			sourceResources, sourceExact, sourceIndex, sourceIndexID, sourceIndexIdentity, newPager, nextMeta,
+			sourceResources, sourceExact, projectionBlockedReason, sourceIndex, sourceIndexID, sourceIndexIdentity, newPager, nextMeta,
 		)
 		runStats.DurableResourceCaptureDuration += time.Since(durableCaptureStarted)
 		if err != nil {
@@ -1632,52 +1639,9 @@ func (db *DB) rebuildRecoverableRootV1(ctx context.Context, roots *RecoverableRo
 		return rebuiltDurableRootV1{}, work, err
 	}
 	sourceResources, sourceIndexID, sourceIndexIdentity, sourceExact := roots.resourcesForRootExact(root)
-	var resources *rootpublication.StableResourceSet
-	var resourceWork rebuiltDurableResourceWorkV1
-	if sourceExact {
-		var oldIdentity, newIdentity rootpublication.StableIdentity
-		oldIdentityErr := snapshot.idx.pager.WithStableResourceFile(func(file *os.File) error {
-			var identityErr error
-			oldIdentity, identityErr = rootpublication.StableIdentityFromFile(file)
-			return identityErr
-		})
-		newIdentityErr := newPager.WithStableResourceFile(func(file *os.File) error {
-			var identityErr error
-			newIdentity, identityErr = rootpublication.StableIdentityFromFile(file)
-			return identityErr
-		})
-		switch {
-		case oldIdentityErr != nil || newIdentityErr != nil:
-			resourceWork.ProjectionFallbackReason = rebuiltDurableResourceFallbackIdentity
-		case rootpublication.SamePhysicalIdentity(oldIdentity, newIdentity):
-			return rebuiltDurableRootV1{}, work, fmt.Errorf("vacuum: rebuilt index aliases source index: %w", rootpublication.ErrResourceConflict)
-		case sourceIndexID != snapshot.idx.id || !rootpublication.SamePhysicalIdentity(sourceIndexIdentity, oldIdentity):
-			resourceWork.ProjectionFallbackReason = rebuiltDurableResourceFallbackIdentity
-		case !rebuiltOlderRootIndexAuthorityV1(sourceResources, oldIdentity, snapshot.idx.id):
-			resourceWork.ProjectionFallbackReason = rebuiltDurableResourceFallbackIdentity
-		default:
-			var projected bool
-			resources, projected, err = projectRebuiltOlderRootDurableResourcesV1(sourceResources)
-			if err != nil {
-				return rebuiltDurableRootV1{}, work, err
-			}
-			if projected {
-				resourceWork.Projected = true
-			} else {
-				resourceWork.ProjectionFallbackReason = rebuiltDurableResourceFallbackPolicy
-			}
-		}
-	} else {
-		resourceWork.ProjectionFallbackReason = rebuiltDurableResourceFallbackMissingSource
-	}
-	if !resourceWork.Projected {
-		fallbackReason := resourceWork.ProjectionFallbackReason
-		resources, resourceWork, err = db.captureRebuiltIndexDurableResourcesWithWorkV1(newPager, meta, sourceResources)
-		if fallbackReason == "" {
-			fallbackReason = rebuiltDurableResourceFallbackPolicy
-		}
-		resourceWork.ProjectionFallbackReason = fallbackReason
-	}
+	resources, resourceWork, err := db.captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
+		sourceResources, sourceExact, "", snapshot.idx, sourceIndexID, sourceIndexIdentity, newPager, meta,
+	)
 	if err == nil {
 		err = ctx.Err()
 	}

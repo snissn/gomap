@@ -598,8 +598,8 @@ func TestVacuumIndexOnlineRecapturesVisibleClosureBeforeCurrentRootProjection(t 
 	if stats.DeferredCutovers == 0 {
 		t.Fatalf("stats=%+v, want deferred cutover after stale visible closure", stats)
 	}
-	if stats.ExactCandidateScan || stats.DurableResourceProjections != 1 || stats.DurableResourceProjectionFallbacks != 0 || stats.DurableResourceProjectionFallbackReason != "" {
-		t.Fatalf("stats=%+v, want recaptured current-root projection and zero fallbacks/full scans", stats)
+	if !stats.ExactCandidateScan || stats.DurableResourceProjections != 0 || stats.DurableResourceProjectionFallbacks != 1 || stats.DurableResourceProjectionFallbackReason != rebuiltDurableResourceFallbackOuterLeafDelta {
+		t.Fatalf("stats=%+v, want exact fallback after replayed outer-leaf delta", stats)
 	}
 	afterLeafPath, afterLeafFileID := currentLeafSegmentOrFatal(t, leafLog)
 	if afterLeafPath == "" || afterLeafFileID == 0 {
@@ -640,6 +640,61 @@ func TestVacuumIndexOnlineRecapturesVisibleClosureBeforeCurrentRootProjection(t 
 	}
 	if got, err := reopened.Get([]byte("tail-0511")); err != nil || !bytes.Equal(got, bytes.Repeat([]byte("b"), 32)) {
 		t.Fatalf("reopen Get(tail-0511)=(%q,%v), want post-recapture leaf-log value", got, err)
+	}
+}
+
+func TestVacuumIndexOnlineFallsBackAfterSameSegmentOuterLeafReplay(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	dir := t.TempDir()
+	opts := Options{Dir: dir, DisableBackgroundPrune: true, IndexOuterLeavesInValueLog: true}
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawLeafLog, err := NewStandaloneLeafPageLog(dir, StandaloneLeafPageLogOptions{MaxSegmentBytes: 1 << 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafLog := rawLeafLog.(*rewriteWriter)
+	database.SetLeafPageLog(rawLeafLog)
+	writeLeafGenerationKeys(t, database, "seed", 128, 'a')
+	_, beforeFileID := currentLeafSegmentOrFatal(t, leafLog)
+
+	var hookErr error
+	testHookVacuumAfterBaseSnapshot = func() {
+		testHookVacuumAfterBaseSnapshot = nil
+		hookErr = database.SetSync([]byte("replayed"), bytes.Repeat([]byte("r"), 64))
+	}
+	t.Cleanup(func() { testHookVacuumAfterBaseSnapshot = nil })
+	if err := database.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if hookErr != nil {
+		t.Fatal(hookErr)
+	}
+	_, afterFileID := currentLeafSegmentOrFatal(t, leafLog)
+	if afterFileID != beforeFileID {
+		t.Fatalf("leaf log rotated from %d to %d; test requires same-segment frontier growth", beforeFileID, afterFileID)
+	}
+	stats := database.VacuumOnlineStats()
+	if !stats.ExactCandidateScan || stats.DurableResourceProjectionFallbackReason != rebuiltDurableResourceFallbackOuterLeafDelta {
+		t.Fatalf("stats=%+v, want exact fallback after same-segment replay", stats)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawLeafLog.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if got, err := reopened.Get([]byte("replayed")); err != nil || !bytes.Equal(got, bytes.Repeat([]byte("r"), 64)) {
+		t.Fatalf("reopen Get(replayed)=(%q,%v)", got, err)
 	}
 }
 

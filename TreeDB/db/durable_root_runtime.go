@@ -994,9 +994,10 @@ type rebuiltDurableResourceWorkV1 struct {
 }
 
 const (
-	rebuiltDurableResourceFallbackMissingSource = "missing-exact-source"
-	rebuiltDurableResourceFallbackPolicy        = "unsupported-source-policy"
-	rebuiltDurableResourceFallbackIdentity      = "unresolved-index-identity"
+	rebuiltDurableResourceFallbackMissingSource  = "missing-exact-source"
+	rebuiltDurableResourceFallbackPolicy         = "unsupported-source-policy"
+	rebuiltDurableResourceFallbackIdentity       = "unresolved-index-identity"
+	rebuiltDurableResourceFallbackOuterLeafDelta = "replayed-outer-leaf-delta"
 )
 
 // projectRebuiltOlderRootDurableResourcesV1 retains the exact external
@@ -1042,6 +1043,7 @@ func rebuiltOlderRootIndexAuthorityV1(source *rootpublication.StableResourceSet,
 func (db *DB) captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
 	source *rootpublication.StableResourceSet,
 	sourceExact bool,
+	projectionBlockedReason string,
 	sourceIndex *indexGen,
 	sourceIndexID uint64,
 	sourceIndexIdentity rootpublication.StableIdentity,
@@ -1049,7 +1051,9 @@ func (db *DB) captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
 	meta page.MetaPageBody,
 ) (*rootpublication.StableResourceSet, rebuiltDurableResourceWorkV1, error) {
 	var work rebuiltDurableResourceWorkV1
-	if sourceExact && sourceIndex != nil && sourceIndex.pager != nil {
+	if projectionBlockedReason != "" {
+		work.ProjectionFallbackReason = projectionBlockedReason
+	} else if sourceExact && sourceIndex != nil && sourceIndex.pager != nil {
 		var oldIdentity, newIdentity rootpublication.StableIdentity
 		oldIdentityErr := sourceIndex.pager.WithStableResourceFile(func(file *os.File) error {
 			var identityErr error
