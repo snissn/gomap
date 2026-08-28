@@ -381,7 +381,7 @@ func (w *bgIndexVacuumWorker) abortDeferredVectorBuild(reservationID uint64) {
 		if reservationIndex < 0 {
 			return
 		}
-		if len(current.reservations) == 1 {
+		if len(current.reservations) == 1 && current.id == reservationID {
 			if w.deferredVectorBuildEpoch.CompareAndSwap(current, nil) {
 				return
 			}

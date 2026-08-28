@@ -732,6 +732,17 @@ func TestDeferredVectorBuildMaintenanceAbortPreservesCompetingReservation(t *tes
 	if !control.CommitInsert(second) || control.CommitInsert(first) {
 		t.Fatal("abort removed a competing reservation")
 	}
+	joined := control.AdmitInsert(context.Background(), "docs", 1)
+	if joined == 0 {
+		t.Fatal("join idle epoch")
+	}
+	control.AbortInsert(joined)
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("aborting a joined reservation removed prior deferred work")
+	}
+	if err := control.Finalize(context.Background(), "docs", 1, nil, nil); err != nil {
+		t.Fatalf("finalize preserved epoch: %v", err)
+	}
 }
 
 func TestDeferredVectorBuildMaintenanceManualWrappersInvalidateEpoch(t *testing.T) {
