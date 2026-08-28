@@ -1662,13 +1662,23 @@ func collectMatchingIDsFromScalarIndexes(ctx context.Context, col *collections.C
 		}
 		if candidates == nil {
 			candidates = make(map[string]struct{}, len(ids))
-			for _, id := range ids {
+			for i, id := range ids {
+				if i&1023 == 0 {
+					if err := ctxErr(ctx); err != nil {
+						return nil, true, err
+					}
+				}
 				candidates[string(id)] = struct{}{}
 			}
 			continue
 		}
 		matches := make(map[string]struct{}, min(len(candidates), len(ids)))
-		for _, id := range ids {
+		for i, id := range ids {
+			if i&1023 == 0 {
+				if err := ctxErr(ctx); err != nil {
+					return nil, true, err
+				}
+			}
 			key := string(id)
 			if _, ok := candidates[key]; ok {
 				matches[key] = struct{}{}
@@ -1680,7 +1690,13 @@ func collectMatchingIDsFromScalarIndexes(ctx context.Context, col *collections.C
 	for id := range candidates {
 		out = append(out, id)
 	}
+	if err := ctxErr(ctx); err != nil {
+		return nil, true, err
+	}
 	sort.Strings(out)
+	if err := ctxErr(ctx); err != nil {
+		return nil, true, err
+	}
 	return out, true, nil
 }
 

@@ -1299,6 +1299,10 @@ func (c *Collection) searchVectorIndexOneShot(opts VectorIndexSearchOptions) (Ve
 // manifest identity; steady-state searches reuse that prepared state and
 // caller-owned result buffer instead of opening a VectorIndexSearcher per call.
 func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, error) {
+	return c.searchVectorIndexWithBuffer(opts, buffer, false)
+}
+
+func (c *Collection) searchVectorIndexWithBuffer(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, coverageLocked bool) (VectorIndexSearchResponse, error) {
 	if err := validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
 		return VectorIndexSearchResponse{}, err
 	}
@@ -1312,7 +1316,7 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 	}
 	def, found, catalogCurrent := c.cachedVectorIndexDefinitionForCurrentState(opts.IndexName)
 	if found && catalogCurrent && vectorIndexDefinitionUsesNativeRuntime(def) {
-		return c.searchNativeRuntimeVectorIndexWithBuffer(def, opts, buffer)
+		return c.searchNativeRuntimeVectorIndexWithBufferCoverage(def, opts, buffer, coverageLocked)
 	}
 	if err := c.flushBufferedWrites(); err != nil {
 		buffer.Reset()
@@ -1338,7 +1342,7 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 		def, found = findVectorIndex(catalog.meta.VectorIndexes, opts.IndexName)
 	}
 	if found && vectorIndexDefinitionUsesNativeRuntime(def) {
-		return c.searchNativeRuntimeVectorIndexWithBuffer(def, opts, buffer)
+		return c.searchNativeRuntimeVectorIndexWithBufferCoverage(def, opts, buffer, coverageLocked)
 	}
 	if opts.DeclaredScalarFilter != nil {
 		buffer.Reset()
@@ -1419,6 +1423,10 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 }
 
 func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDefinition, opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, error) {
+	return c.searchNativeRuntimeVectorIndexWithBufferCoverage(def, opts, buffer, false)
+}
+
+func (c *Collection) searchNativeRuntimeVectorIndexWithBufferCoverage(def VectorIndexDefinition, opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, coverageLocked bool) (VectorIndexSearchResponse, error) {
 	response := VectorIndexSearchResponse{
 		IndexName: def.Name,
 		Strategy:  def.Strategy,
@@ -1457,7 +1465,7 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 		return response, fmt.Errorf("%w: native_runtime vector index %q does not support quantized query modes", ErrVectorIndexSearchUnavailable, def.Name)
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		index, load, err := c.loadNativeRuntimeVectorIndexForSearch(def)
+		index, load, err := c.loadNativeRuntimeVectorIndexForSearch(def, coverageLocked)
 		if err != nil {
 			buffer.Reset()
 			response.Status.ExactFallbackReason = load.ExactFallbackReason
@@ -1545,7 +1553,7 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 	return response, fmt.Errorf("%w: native_runtime vector index %q changed during search validation", ErrVectorIndexSearchUnavailable, def.Name)
 }
 
-func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition) (*VectorIndex, VectorIndexLoadStatus, error) {
+func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition, coverageLocked bool) (*VectorIndex, VectorIndexLoadStatus, error) {
 	if index := c.registeredVectorIndex(def.Name); index != nil {
 		if status, ok := c.publishedNativeSearchLoadStatusDuringMutation(def, index); ok {
 			return index, status, nil
@@ -1556,12 +1564,17 @@ func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefini
 				if status, ok := c.publishedNativeSearchLoadStatusDuringMutation(def, index); ok {
 					return index, status, nil
 				}
-				unlockCoverage := c.lockVectorIndexCoveragePersistence()
+				var unlockCoverage func()
+				if !coverageLocked {
+					unlockCoverage = c.lockVectorIndexCoveragePersistence()
+				}
 				current := c.registeredVectorIndex(def.Name)
 				if current != nil {
 					validated, status, err = c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, current)
 				}
-				unlockCoverage()
+				if unlockCoverage != nil {
+					unlockCoverage()
+				}
 				if current != nil {
 					return validated, status, err
 				}

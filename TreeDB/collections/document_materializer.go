@@ -272,7 +272,7 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 func (c *Collection) SearchVectorIndexWithBufferReadView(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, *CollectionReadView, error) {
 	unlock := c.lockVectorIndexCoveragePersistence()
 	defer unlock()
-	response, err := c.SearchVectorIndexWithBuffer(opts, buffer)
+	response, err := c.searchVectorIndexWithBuffer(opts, buffer, true)
 	if err != nil {
 		return response, nil, err
 	}

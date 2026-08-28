@@ -5176,6 +5176,16 @@ func TestNativeRuntimeSearchVisibilityTokenValidatesBoundedDocumentReadView(t *t
 		}
 		t.Fatalf("stale read view=%v err=%v want snapshot mismatch", stale, err)
 	}
+	combined, combinedView, err := col.SearchVectorIndexWithBufferReadView(opts, &buffer)
+	if err != nil {
+		t.Fatalf("SearchVectorIndexWithBufferReadView with stale registered index: %v", err)
+	}
+	if combined.visibility.runtime == nil {
+		t.Fatal("combined search did not carry an opaque visibility token")
+	}
+	if err := combinedView.Close(); err != nil {
+		t.Fatalf("close combined read view: %v", err)
+	}
 	updated, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
 	if err != nil {
 		t.Fatalf("updated SearchVectorIndexWithBuffer: %v", err)
