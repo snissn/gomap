@@ -12570,7 +12570,12 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	}
 	defer func() { _ = snap.Close() }()
 	defer func() { resetCollectionTables(deltaTables) }()
-	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(c.meta.Name, rootNames, deltaTables, baseRootIDs, policies)
+	publishDeltaTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, c.meta, rootNames, deltaTables)
+	if err != nil {
+		return 0, err
+	}
+	defer cleanupPointerized()
+	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(c.meta.Name, rootNames, publishDeltaTables, baseRootIDs, policies)
 	if err != nil {
 		return 0, err
 	}
@@ -12858,7 +12863,12 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, predicate func(curren
 	defer func() {
 		resetCollectionTables(deltaTables)
 	}()
-	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(c.meta.Name, rootNames, deltaTables, baseRootIDs, policies)
+	publishDeltaTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, c.meta, rootNames, deltaTables)
+	if err != nil {
+		return false, err
+	}
+	defer cleanupPointerized()
+	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(c.meta.Name, rootNames, publishDeltaTables, baseRootIDs, policies)
 	if err != nil {
 		return false, err
 	}

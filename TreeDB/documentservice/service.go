@@ -627,7 +627,7 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 		if err := req.Filter.Validate(); err != nil {
 			return DeleteDocumentsResponse{}, err
 		}
-		ids, err = s.collectMatchingIDs(ctx, col, req.Filter)
+		ids, err = s.collectMatchingIDs(ctx, col, req.Filter, info.ScalarFields)
 		if err != nil {
 			return DeleteDocumentsResponse{}, err
 		}
@@ -643,7 +643,7 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 	}
 	deleted, err := col.DeleteBatch(deleteIDs)
 	if err != nil {
-		return DeleteDocumentsResponse{}, wrapServiceError(CodeInternal, "delete documents failed", err)
+		return DeleteDocumentsResponse{}, wrapServiceError(CodeInternal, "delete documents failed: "+err.Error(), err)
 	}
 	if deleted > 0 {
 		if err := s.finishVectorMutation(index, col, info); err != nil {
@@ -933,7 +933,7 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 		return ResetIndexResponse{}, err
 	}
 
-	ids, err := s.collectMatchingIDs(ctx, existingCol, nil)
+	ids, err := s.collectMatchingIDs(ctx, existingCol, nil, nil)
 	if err != nil {
 		return ResetIndexResponse{}, err
 	}
@@ -1821,7 +1821,10 @@ func validateDocumentIDs(ids []string) ([]string, error) {
 	return out, nil
 }
 
-func (s *Service) collectMatchingIDs(ctx context.Context, col *collections.Collection, filter *Filter) ([]string, error) {
+func (s *Service) collectMatchingIDs(ctx context.Context, col *collections.Collection, filter *Filter, scalarFields []ScalarFieldInfo) ([]string, error) {
+	if ids, indexed, err := collectMatchingIDsFromScalarIndexes(ctx, col, filter, newScalarSchema(scalarFields)); indexed || err != nil {
+		return ids, err
+	}
 	var ids []string
 	err := s.scanDocuments(ctx, col, func(doc Document) error {
 		ok, err := matchFilter(filter, doc)
@@ -1832,6 +1835,96 @@ func (s *Service) collectMatchingIDs(ctx context.Context, col *collections.Colle
 		return nil
 	})
 	return ids, err
+}
+
+func collectMatchingIDsFromScalarIndexes(ctx context.Context, col *collections.Collection, filter *Filter, schema scalarSchema) ([]string, bool, error) {
+	if filter == nil {
+		return nil, false, nil
+	}
+	var predicates []compiledScalarPredicate
+	var collect func(*Filter) (bool, error)
+	collect = func(node *Filter) (bool, error) {
+		op, err := normalizeFilterOperator(node.Operator)
+		if err != nil {
+			return false, err
+		}
+		if op == filterOpAND {
+			for i := range node.Conditions {
+				ok, err := collect(&node.Conditions[i])
+				if err != nil || !ok {
+					return ok, err
+				}
+			}
+			return true, nil
+		}
+		if op != filterOpEQ {
+			return false, nil
+		}
+		resolved, ok := schema.lookup(strings.TrimSpace(node.Field))
+		if !ok {
+			return false, nil
+		}
+		value, err := convertScalarFilterValue(resolved, node.Value)
+		if err != nil {
+			return false, err
+		}
+		predicates = append(predicates, compiledScalarPredicate{
+			filter: collections.HybridScalarFilter{IndexName: resolved.indexName, Value: value},
+			field:  resolved.field,
+		})
+		return true, nil
+	}
+	indexed, err := collect(filter)
+	if err != nil || !indexed || len(predicates) == 0 {
+		return nil, indexed, err
+	}
+	var candidates map[string]struct{}
+	for _, predicate := range predicates {
+		if err := ctxErr(ctx); err != nil {
+			return nil, true, err
+		}
+		ids, err := col.FindByIndexValue(predicate.filter.IndexName, predicate.filter.Value)
+		if err != nil {
+			return nil, true, mapDocumentScanError(err)
+		}
+		if candidates == nil {
+			candidates = make(map[string]struct{}, len(ids))
+			for i, id := range ids {
+				if i&1023 == 0 {
+					if err := ctxErr(ctx); err != nil {
+						return nil, true, err
+					}
+				}
+				candidates[string(id)] = struct{}{}
+			}
+			continue
+		}
+		matches := make(map[string]struct{}, min(len(candidates), len(ids)))
+		for i, id := range ids {
+			if i&1023 == 0 {
+				if err := ctxErr(ctx); err != nil {
+					return nil, true, err
+				}
+			}
+			key := string(id)
+			if _, ok := candidates[key]; ok {
+				matches[key] = struct{}{}
+			}
+		}
+		candidates = matches
+	}
+	out := make([]string, 0, len(candidates))
+	for id := range candidates {
+		out = append(out, id)
+	}
+	if err := ctxErr(ctx); err != nil {
+		return nil, true, err
+	}
+	sort.Strings(out)
+	if err := ctxErr(ctx); err != nil {
+		return nil, true, err
+	}
+	return out, true, nil
 }
 
 func (s *Service) scanDocuments(ctx context.Context, col *collections.Collection, fn func(Document) error) error {
@@ -2446,7 +2539,7 @@ func mapVectorIndexSearchError(operation string, err error) error {
 		return wrapServiceError(CodeSnapshotMismatch, operation+" could not establish matching search and document visibility", err)
 	}
 	if errors.Is(err, collections.ErrVectorIndexSearchUnavailable) || errors.Is(err, collections.ErrIndexNotFound) {
-		return wrapServiceError(CodeIndexUnavailable, operation+" failed closed", err)
+		return wrapServiceError(CodeIndexUnavailable, operation+" failed closed: "+err.Error(), err)
 	}
 	if errors.Is(err, backenddb.ErrClosed) {
 		return wrapServiceError(CodeIndexUnavailable, "TreeDB backend is closed", err)

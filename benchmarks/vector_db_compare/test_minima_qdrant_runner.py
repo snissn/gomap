@@ -309,6 +309,18 @@ def new_runner(manifest: dict[str, object], shared: SharedQdrant, allow_drop: bo
 
 
 class MinimaQdrantRunnerTest(unittest.TestCase):
+    def test_concurrent_future_errors_prefer_root_cause_over_broken_barrier(self) -> None:
+        broken = mock.Mock()
+        broken.result.side_effect = threading.BrokenBarrierError()
+        root = mock.Mock()
+        root.result.side_effect = RuntimeError("root cause")
+
+        with self.assertRaisesRegex(RuntimeError, "root cause"):
+            runner.await_concurrent_futures([broken, root])
+
+        broken.result.assert_called_once_with()
+        root.result.assert_called_once_with()
+
     def test_manifest_reconstruction_and_hash_rejection(self) -> None:
         manifest = tiny_manifest()
         self.assertIs(runner.validate_manifest(manifest, require_frozen=False), manifest)
@@ -721,6 +733,7 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertEqual(len(shared.clients), 2)
         self.assertTrue(all(client.closed for client in shared.clients))
         self.assertEqual(shared.restart_count, 1)
+        self.assertEqual(shared.events.count("restore_production_configuration"), 2)
         raw = artifact["backend_raw_evidence"]["qdrant"]
         self.assertEqual(raw["restart_boundary"]["old_pid"], 1)
         self.assertEqual(raw["restart_boundary"]["new_pid"], 2)

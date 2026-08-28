@@ -49,7 +49,7 @@ PRODUCTION_HNSW_CONFIG = {
 PRODUCTION_OPTIMIZERS_CONFIG = {
     "deleted_threshold": 0.2, "vacuum_min_vector_number": 1000,
     "default_segment_number": 0, "indexing_threshold": 10000,
-    "flush_interval_sec": 5,
+    "flush_interval_sec": 5, "max_optimization_threads": 1,
 }
 INITIAL_UPLOAD_HNSW_CONFIG = {**PRODUCTION_HNSW_CONFIG, "m": 0}
 INITIAL_UPLOAD_OPTIMIZERS_CONFIG = {**PRODUCTION_OPTIMIZERS_CONFIG, "indexing_threshold": 0}
@@ -359,6 +359,20 @@ def intervals_overlap(first_start: int, first_end: int, second_start: int, secon
         and first_start < second_end
         and second_start < first_end
     )
+
+
+def await_concurrent_futures(futures: Iterable[Any]) -> None:
+    errors: list[BaseException] = []
+    for future in futures:
+        try:
+            future.result()
+        except BaseException as exc:
+            errors.append(exc)
+    for error in errors:
+        if not isinstance(error, threading.BrokenBarrierError):
+            raise error
+    if errors:
+        raise errors[0]
 
 
 def timed_trace_digest(trace: dict[str, list[dict[str, Any]]]) -> str:
@@ -1025,6 +1039,8 @@ def final_documents(manifest: dict[str, Any]) -> Iterable[dict[str, Any]]:
 
 
 class QdrantMinimaRunner:
+    restart_requires_configuration_reassertion = True
+
     def __init__(self, manifest: dict[str, Any], *, client_factory: Callable[[], Any], models: Any, url: str,
                  collection: str, allow_drop: bool, operation_timeout: int, optimizer_timeout: float,
                  poll_interval: float, server_version: str, deployment: str, image: str,
@@ -1224,6 +1240,19 @@ class QdrantMinimaRunner:
             self.configuration_transition["error"] = f"{type(exc).__name__}: {exc}"
             raise
         self.configuration_transition["completed"] = True
+
+
+    def reassert_production_configuration_after_restart(self) -> None:
+        assert self.client is not None
+        self.client.update_collection(
+            collection_name=self.collection,
+            hnsw_config=self.models.HnswConfigDiff(**PRODUCTION_HNSW_CONFIG),
+            optimizers_config=self.models.OptimizersConfigDiff(**PRODUCTION_OPTIMIZERS_CONFIG),
+            timeout=self.operation_timeout,
+        )
+        self.configuration_transition["restart_reassertions"] = (
+            self.configuration_transition.get("restart_reassertions", 0) + 1
+        )
 
     def initial_load_to_query_boundary(self) -> None:
         self.restore_production_configuration()
@@ -1600,9 +1629,7 @@ class QdrantMinimaRunner:
 
                 writer = pool.submit(write_round)
                 reader_futures = [pool.submit(read_round, worker) for worker in range(readers)]
-                writer.result()
-                for future in reader_futures:
-                    future.result()
+                await_concurrent_futures([writer, *reader_futures])
 
                 round_observation = {
                     "ordinal": round_value["ordinal"], "query_start": round_value["query_start"],
@@ -1727,9 +1754,7 @@ class QdrantMinimaRunner:
                 pool.submit(read_during_mutation, assignment)
                 for assignment in plan["reader_assignments"]
             ]
-            writer.result()
-            for future in reader_futures:
-                future.result()
+            await_concurrent_futures([writer, *reader_futures])
 
         reader_queries = [row for row in observations if row is not None]
         observed = {
@@ -1866,6 +1891,8 @@ class QdrantMinimaRunner:
                 for scenario in self.specs:
                     self.evidence.reopen[scenario] = self.search("post_reopen_parity", scenario)
             elif name == "idempotent_ensure_after_reopen":
+                if self.restart_requires_configuration_reassertion:
+                    self.evidence.call(name, "writer", "all", self.reassert_production_configuration_after_restart)
                 self.evidence.call(name, "fetch", "all", self.ensure_compatible)
                 self.evidence.call(name, "fetch", "all", self.wait_ready)
             elif name == "final_manifest_and_oracle_comparison":

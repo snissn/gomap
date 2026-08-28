@@ -601,6 +601,8 @@ type VectorIndexSearchStats struct {
 	ScalarFilterRefinedCandidateIDs  uint64                 `json:"scalar_filter_refined_candidate_ids,omitempty"`
 	ScalarFilterVisited              uint64                 `json:"scalar_filter_visited,omitempty"`
 	ScalarFilterScored               uint64                 `json:"scalar_filter_scored,omitempty"`
+	ScalarFilterSeedRowsVisited      uint64                 `json:"scalar_filter_seed_rows_visited,omitempty"`
+	ScalarFilterEligibleSeeds        uint64                 `json:"scalar_filter_eligible_seeds,omitempty"`
 	ScalarFilterAdmitted             uint64                 `json:"scalar_filter_admitted,omitempty"`
 	ScalarFilterUnderfill            uint64                 `json:"scalar_filter_underfill,omitempty"`
 	ScalarFilterExactScoring         uint64                 `json:"scalar_filter_exact_scoring,omitempty"`
@@ -734,6 +736,9 @@ type VectorIndexSearchDiagnostics struct {
 	ScalarFilterProbeTruncated    uint64                                `json:"scalar_filter_probe_truncated,omitempty"`
 	ScalarFilterCandidateIDs      uint64                                `json:"scalar_filter_candidate_ids,omitempty"`
 	ScalarFilterVisited           uint64                                `json:"scalar_filter_visited,omitempty"`
+	ScalarFilterScored            uint64                                `json:"scalar_filter_scored,omitempty"`
+	ScalarFilterSeedRowsVisited   uint64                                `json:"scalar_filter_seed_rows_visited,omitempty"`
+	ScalarFilterEligibleSeeds     uint64                                `json:"scalar_filter_eligible_seeds,omitempty"`
 	ScalarFilterAdmitted          uint64                                `json:"scalar_filter_admitted,omitempty"`
 	ScalarFilterUnderfill         bool                                  `json:"scalar_filter_underfill,omitempty"`
 	ScalarFilterExactScoring      bool                                  `json:"scalar_filter_exact_scoring,omitempty"`
@@ -776,6 +781,9 @@ func (s VectorIndexSearchStats) Diagnostics() VectorIndexSearchDiagnostics {
 		ScalarFilterProbeTruncated:    s.ScalarFilterProbeTruncated,
 		ScalarFilterCandidateIDs:      s.ScalarFilterCandidateIDs,
 		ScalarFilterVisited:           s.ScalarFilterVisited,
+		ScalarFilterScored:            s.ScalarFilterScored,
+		ScalarFilterSeedRowsVisited:   s.ScalarFilterSeedRowsVisited,
+		ScalarFilterEligibleSeeds:     s.ScalarFilterEligibleSeeds,
 		ScalarFilterAdmitted:          s.ScalarFilterAdmitted,
 		ScalarFilterUnderfill:         s.ScalarFilterUnderfill > 0,
 		ScalarFilterExactScoring:      s.ScalarFilterExactScoring > 0,
@@ -1291,6 +1299,10 @@ func (c *Collection) searchVectorIndexOneShot(opts VectorIndexSearchOptions) (Ve
 // manifest identity; steady-state searches reuse that prepared state and
 // caller-owned result buffer instead of opening a VectorIndexSearcher per call.
 func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, error) {
+	return c.searchVectorIndexWithBuffer(opts, buffer, false)
+}
+
+func (c *Collection) searchVectorIndexWithBuffer(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, coverageLocked bool) (VectorIndexSearchResponse, error) {
 	if err := validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
 		return VectorIndexSearchResponse{}, err
 	}
@@ -1304,7 +1316,7 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 	}
 	def, found, catalogCurrent := c.cachedVectorIndexDefinitionForCurrentState(opts.IndexName)
 	if found && catalogCurrent && vectorIndexDefinitionUsesNativeRuntime(def) {
-		return c.searchNativeRuntimeVectorIndexWithBuffer(def, opts, buffer)
+		return c.searchNativeRuntimeVectorIndexWithBufferCoverage(def, opts, buffer, coverageLocked)
 	}
 	if err := c.flushBufferedWrites(); err != nil {
 		buffer.Reset()
@@ -1330,7 +1342,7 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 		def, found = findVectorIndex(catalog.meta.VectorIndexes, opts.IndexName)
 	}
 	if found && vectorIndexDefinitionUsesNativeRuntime(def) {
-		return c.searchNativeRuntimeVectorIndexWithBuffer(def, opts, buffer)
+		return c.searchNativeRuntimeVectorIndexWithBufferCoverage(def, opts, buffer, coverageLocked)
 	}
 	if opts.DeclaredScalarFilter != nil {
 		buffer.Reset()
@@ -1411,6 +1423,10 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 }
 
 func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDefinition, opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, error) {
+	return c.searchNativeRuntimeVectorIndexWithBufferCoverage(def, opts, buffer, false)
+}
+
+func (c *Collection) searchNativeRuntimeVectorIndexWithBufferCoverage(def VectorIndexDefinition, opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, coverageLocked bool) (VectorIndexSearchResponse, error) {
 	response := VectorIndexSearchResponse{
 		IndexName: def.Name,
 		Strategy:  def.Strategy,
@@ -1449,7 +1465,7 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 		return response, fmt.Errorf("%w: native_runtime vector index %q does not support quantized query modes", ErrVectorIndexSearchUnavailable, def.Name)
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		index, load, err := c.loadNativeRuntimeVectorIndexForSearch(def)
+		index, load, err := c.loadNativeRuntimeVectorIndexForSearch(def, coverageLocked)
 		if err != nil {
 			buffer.Reset()
 			response.Status.ExactFallbackReason = load.ExactFallbackReason
@@ -1501,12 +1517,14 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 				response.Stats.ScalarFilterPlan = scalarPlan.identity
 				response.Stats.ScalarFilterProbeIDs = scalarPlan.probeIDs
 				response.Stats.ScalarFilterProbeTruncated = scalarPlan.probeTruncated
-				response.Stats.ScalarFilterCandidates = uint64(scalarWork.visited)
+				response.Stats.ScalarFilterCandidates = uint64(scalarWork.scored)
 				response.Stats.ScalarFilterCandidateIDs = scalarPlan.candidateIDs
 				response.Stats.ScalarFilterRetainedCandidateIDs = scalarPlan.retainedCandidateIDs
 				response.Stats.ScalarFilterRefinedCandidateIDs = scalarPlan.refinedCandidateIDs
 				response.Stats.ScalarFilterVisited = uint64(scalarWork.visited)
-				response.Stats.ScalarFilterScored = uint64(scalarWork.visited)
+				response.Stats.ScalarFilterScored = uint64(scalarWork.scored)
+				response.Stats.ScalarFilterSeedRowsVisited = uint64(scalarWork.seedRowsVisited)
+				response.Stats.ScalarFilterEligibleSeeds = uint64(scalarWork.eligibleSeeds)
 				response.Stats.ScalarFilterAdmitted = uint64(scalarWork.admitted)
 				if scalarWork.underfill {
 					response.Stats.ScalarFilterUnderfill = 1
@@ -1535,7 +1553,7 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 	return response, fmt.Errorf("%w: native_runtime vector index %q changed during search validation", ErrVectorIndexSearchUnavailable, def.Name)
 }
 
-func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition) (*VectorIndex, VectorIndexLoadStatus, error) {
+func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition, coverageLocked bool) (*VectorIndex, VectorIndexLoadStatus, error) {
 	if index := c.registeredVectorIndex(def.Name); index != nil {
 		if status, ok := c.publishedNativeSearchLoadStatusDuringMutation(def, index); ok {
 			return index, status, nil
@@ -1546,12 +1564,17 @@ func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefini
 				if status, ok := c.publishedNativeSearchLoadStatusDuringMutation(def, index); ok {
 					return index, status, nil
 				}
-				unlockCoverage := c.lockVectorIndexCoveragePersistence()
+				var unlockCoverage func()
+				if !coverageLocked {
+					unlockCoverage = c.lockVectorIndexCoveragePersistence()
+				}
 				current := c.registeredVectorIndex(def.Name)
 				if current != nil {
 					validated, status, err = c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, current)
 				}
-				unlockCoverage()
+				if unlockCoverage != nil {
+					unlockCoverage()
+				}
 				if current != nil {
 					return validated, status, err
 				}
