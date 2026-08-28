@@ -733,6 +733,7 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertEqual(len(shared.clients), 2)
         self.assertTrue(all(client.closed for client in shared.clients))
         self.assertEqual(shared.restart_count, 1)
+        self.assertEqual(shared.events.count("restore_production_configuration"), 2)
         raw = artifact["backend_raw_evidence"]["qdrant"]
         self.assertEqual(raw["restart_boundary"]["old_pid"], 1)
         self.assertEqual(raw["restart_boundary"]["new_pid"], 2)

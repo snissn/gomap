@@ -1239,6 +1239,19 @@ class QdrantMinimaRunner:
             raise
         self.configuration_transition["completed"] = True
 
+
+    def reassert_production_configuration_after_restart(self) -> None:
+        assert self.client is not None
+        self.client.update_collection(
+            collection_name=self.collection,
+            hnsw_config=self.models.HnswConfigDiff(**PRODUCTION_HNSW_CONFIG),
+            optimizers_config=self.models.OptimizersConfigDiff(**PRODUCTION_OPTIMIZERS_CONFIG),
+            timeout=self.operation_timeout,
+        )
+        self.configuration_transition["restart_reassertions"] = (
+            self.configuration_transition.get("restart_reassertions", 0) + 1
+        )
+
     def initial_load_to_query_boundary(self) -> None:
         self.restore_production_configuration()
 
@@ -1876,6 +1889,7 @@ class QdrantMinimaRunner:
                 for scenario in self.specs:
                     self.evidence.reopen[scenario] = self.search("post_reopen_parity", scenario)
             elif name == "idempotent_ensure_after_reopen":
+                self.evidence.call(name, "writer", "all", self.reassert_production_configuration_after_restart)
                 self.evidence.call(name, "fetch", "all", self.ensure_compatible)
                 self.evidence.call(name, "fetch", "all", self.wait_ready)
             elif name == "final_manifest_and_oracle_comparison":
