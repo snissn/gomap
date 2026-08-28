@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -404,6 +405,244 @@ func TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure(t *testing.T) {
 	}
 }
 
+func TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	tests := []struct {
+		name         string
+		mutate       func(*RecoverableRootSet, recoverableRootKey)
+		wantScan     bool
+		wantFallback string
+	}{
+		{name: "exact-binding"},
+		{name: "generation-mismatch", mutate: func(roots *RecoverableRootSet, _ recoverableRootKey) {
+			roots.rootResourceIndexID++
+		}, wantScan: true, wantFallback: rebuiltDurableResourceFallbackIdentity},
+		{name: "ambiguous-identity", mutate: func(roots *RecoverableRootSet, _ recoverableRootKey) {
+			roots.rootResourceIndex = rootpublication.StableIdentity{}
+		}, wantScan: true, wantFallback: rebuiltDurableResourceFallbackIdentity},
+		{name: "missing-root-closure", mutate: func(roots *RecoverableRootSet, key recoverableRootKey) {
+			delete(roots.rootResources, key)
+		}, wantScan: true, wantFallback: rebuiltDurableResourceFallbackMissingSource},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			database, err := Open(Options{
+				Dir:                        dir,
+				DisableBackgroundPrune:     true,
+				IndexOuterLeavesInValueLog: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			leafLog, err := NewStandaloneLeafPageLog(dir, StandaloneLeafPageLogOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			database.SetLeafPageLog(leafLog)
+			defer leafLog.Close()
+			writeLeafGenerationKeys(t, database, "current-projection", 256, 'c')
+			pointer := appendPointersInNewSegment(t, dir, 0, 86, 860_000, 1, func(int) []byte {
+				return bytes.Repeat([]byte("v"), 512)
+			})[0]
+			if err := database.RefreshValueLogSet(); err != nil {
+				t.Fatal(err)
+			}
+			batch := database.NewBatch().(*Batch)
+			if err := batch.SetPointer([]byte("pointer"), pointer); err != nil {
+				t.Fatal(err)
+			}
+			if err := batch.WriteSync(); err != nil {
+				t.Fatal(err)
+			}
+			if err := batch.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			database.maintenanceMu.Lock()
+			roots, err := database.captureRecoverableRootSetWithMaintenanceLockHeld(context.Background())
+			if err != nil {
+				database.maintenanceMu.Unlock()
+				t.Fatal(err)
+			}
+			defer roots.Release()
+			visibleRoot := RecoverableRoot{
+				CommitSeq:         roots.visible.CommitSeq,
+				UserRootPageID:    roots.visible.RootPageID,
+				SystemRootPageID:  roots.visible.SystemRootPageID,
+				AppliedCommandLSN: roots.visible.AppliedCommandLSN,
+				MaxEntryRevision:  uint64(roots.visible.MaxEntryRevision),
+			}
+			key := recoverableRootIdentity(visibleRoot)
+			source, ok := roots.rootResources[key]
+			if !ok || source == nil {
+				database.maintenanceMu.Unlock()
+				t.Fatal("visible root has no captured exact closure")
+			}
+			var valueLog, outerLeaf bool
+			for _, descriptor := range source.Descriptors() {
+				valueLog = valueLog || descriptor.Kind() == rootpublication.ResourceValueLog
+				outerLeaf = outerLeaf || descriptor.Kind() == rootpublication.ResourceOuterLeafLog
+			}
+			if !valueLog || !outerLeaf {
+				database.maintenanceMu.Unlock()
+				t.Fatalf("visible closure kinds=%+v, want value-log and outer-leaf dependencies", source.Descriptors())
+			}
+			if test.mutate != nil {
+				test.mutate(roots, key)
+			}
+			var stats VacuumOnlineStats
+			err = database.vacuumIndexOnlineRebuildV1(context.Background(), false, nil, roots, nil, time.Now(), &stats)
+			database.maintenanceMu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stats.ExactCandidateScan != test.wantScan {
+				t.Fatalf("current-root stats=%+v, want exact-scan=%t", stats, test.wantScan)
+			}
+			if got := stats.DurableResourceProjectionFallbackReason; got != test.wantFallback {
+				t.Fatalf("current-root stats=%+v, want fallback reason %q", stats, test.wantFallback)
+			}
+			if !test.wantScan && stats.DurableResourceProjections != 1 {
+				t.Fatalf("current-root stats=%+v, want one projection", stats)
+			}
+			if test.wantScan && stats.DurableResourceProjectionFallbacks != 1 {
+				t.Fatalf("current-root stats=%+v, want one projection fallback", stats)
+			}
+		})
+	}
+}
+
+func TestVacuumIndexOnlineRecapturesVisibleClosureBeforeCurrentRootProjection(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+	}
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	rawLeafLog, err := NewStandaloneLeafPageLog(dir, StandaloneLeafPageLogOptions{MaxSegmentBytes: 8 << 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafLog, ok := rawLeafLog.(*rewriteWriter)
+	if !ok {
+		t.Fatalf("leaf log type=%T, want *rewriteWriter", rawLeafLog)
+	}
+	database.SetLeafPageLog(rawLeafLog)
+	defer func() { _ = rawLeafLog.Close() }()
+
+	writeLeafGenerationKeys(t, database, "seed", 1024, 'a')
+	if err := database.SetSync([]byte("seed-overwrite"), bytes.Repeat([]byte("o"), 32)); err != nil {
+		t.Fatal(err)
+	}
+	beforeLeafPath, beforeLeafFileID := currentLeafSegmentOrFatal(t, leafLog)
+	if beforeLeafPath == "" || beforeLeafFileID == 0 {
+		t.Fatalf("before leaf segment=(%q,%d), want non-zero segment", beforeLeafPath, beforeLeafFileID)
+	}
+
+	var (
+		hookErr      error
+		tailValue    = bytes.Repeat([]byte("tail-value-"), 32)
+		rangeMissing []byte
+		once         sync.Once
+	)
+	testHookVacuumAfterBaseSnapshot = func() {
+		once.Do(func() {
+			tailPtr := appendPointersInNewSegment(t, dir, 0, 88, 880_000, 1, func(int) []byte { return tailValue })[0]
+			if err := database.RefreshValueLogSet(); err != nil {
+				hookErr = err
+				return
+			}
+			writeLeafGenerationKeyRange(t, database, "tail", 0, 512, 'b')
+			mutation := database.NewBatch().(*Batch)
+			defer func() { _ = mutation.Close() }()
+			if err := mutation.DeleteRange([]byte("seed-0200"), []byte("seed-0240")); err != nil {
+				hookErr = err
+				return
+			}
+			if err := mutation.Set([]byte("seed-overwrite"), bytes.Repeat([]byte("n"), 32)); err != nil {
+				hookErr = err
+				return
+			}
+			if err := mutation.SetPointer([]byte("tail-pointer"), tailPtr); err != nil {
+				hookErr = err
+				return
+			}
+			if err := mutation.WriteSync(); err != nil {
+				hookErr = err
+				return
+			}
+			rangeMissing = leafGenerationKey("seed", 220)
+		})
+	}
+	t.Cleanup(func() { testHookVacuumAfterBaseSnapshot = nil })
+
+	if err := database.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if hookErr != nil {
+		t.Fatalf("concurrent tail mutation: %v", hookErr)
+	}
+	stats := database.VacuumOnlineStats()
+	if stats.DeferredCutovers == 0 {
+		t.Fatalf("stats=%+v, want deferred cutover after stale visible closure", stats)
+	}
+	if stats.ExactCandidateScan || stats.DurableResourceProjections != 1 || stats.DurableResourceProjectionFallbacks != 0 || stats.DurableResourceProjectionFallbackReason != "" {
+		t.Fatalf("stats=%+v, want recaptured current-root projection and zero fallbacks/full scans", stats)
+	}
+	afterLeafPath, afterLeafFileID := currentLeafSegmentOrFatal(t, leafLog)
+	if afterLeafPath == "" || afterLeafFileID == 0 {
+		t.Fatalf("after leaf segment=(%q,%d), want non-zero segment", afterLeafPath, afterLeafFileID)
+	}
+	if beforeLeafFileID == afterLeafFileID {
+		t.Fatalf("leaf log file id before=%d after=%d, want rotation during stale-root replay proof", beforeLeafFileID, afterLeafFileID)
+	}
+	if got, err := database.Get([]byte("tail-pointer")); err != nil || !bytes.Equal(got, tailValue) {
+		t.Fatalf("Get(tail-pointer)=(%q,%v), want tail pointer value", got, err)
+	}
+	if got, err := database.Get([]byte("seed-overwrite")); err != nil || !bytes.Equal(got, bytes.Repeat([]byte("n"), 32)) {
+		t.Fatalf("Get(seed-overwrite)=(%q,%v), want overwritten value", got, err)
+	}
+	if has, err := database.Has(rangeMissing); err != nil || has {
+		t.Fatalf("Has(%q)=(%v,%v), want deleted key missing", rangeMissing, has, err)
+	}
+	if got, err := database.Get([]byte("tail-0511")); err != nil || !bytes.Equal(got, bytes.Repeat([]byte("b"), 32)) {
+		t.Fatalf("Get(tail-0511)=(%q,%v), want post-recapture leaf-log value", got, err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if got, err := reopened.Get([]byte("tail-pointer")); err != nil || !bytes.Equal(got, tailValue) {
+		t.Fatalf("reopen Get(tail-pointer)=(%q,%v), want tail pointer value", got, err)
+	}
+	if got, err := reopened.Get([]byte("seed-overwrite")); err != nil || !bytes.Equal(got, bytes.Repeat([]byte("n"), 32)) {
+		t.Fatalf("reopen Get(seed-overwrite)=(%q,%v), want overwritten value", got, err)
+	}
+	if has, err := reopened.Has(rangeMissing); err != nil || has {
+		t.Fatalf("reopen Has(%q)=(%v,%v), want deleted key missing", rangeMissing, has, err)
+	}
+	if got, err := reopened.Get([]byte("tail-0511")); err != nil || !bytes.Equal(got, bytes.Repeat([]byte("b"), 32)) {
+		t.Fatalf("reopen Get(tail-0511)=(%q,%v), want post-recapture leaf-log value", got, err)
+	}
+}
+
 func BenchmarkRebuiltOlderRootDurableResourceCaptureV1(b *testing.B) {
 	dir := b.TempDir()
 	database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
@@ -509,4 +748,65 @@ func BenchmarkVacuumIndexOnlineOlderRootProjectionOuterLeavesProduction(b *testi
 	b.StopTimer()
 	b.ReportMetric(float64(total.Nanoseconds())/float64(b.N), "vacuum-total-ns/op")
 	b.ReportMetric(float64(olderCapture.Nanoseconds())/float64(b.N), "older-capture-ns/op")
+}
+
+func BenchmarkVacuumIndexOnlineCurrentRootProjectionOuterLeavesProduction(b *testing.B) {
+	dir := b.TempDir()
+	database, err := Open(Options{
+		Dir: dir, DisableBackgroundPrune: true, IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression: true, IndexColumnarLeaves: true, IndexPackedValuePtr: true,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	database.SetLeafPageLog(leafLog)
+	defer leafLog.Close()
+	defer database.Close()
+	batch := database.NewBatch().(*Batch)
+	for i := 0; i < 100_000; i++ {
+		if err := batch.Set([]byte(fmt.Sprintf("outer/%06d", i)), bytes.Repeat([]byte("v"), 32)); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := batch.WriteSync(); err != nil {
+		b.Fatal(err)
+	}
+	if err := batch.Close(); err != nil {
+		b.Fatal(err)
+	}
+	pointer := appendPointersInNewSegmentBench(b, dir, 0, 87, 870_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("p"), 512)
+	})[0]
+	if err := database.RefreshValueLogSet(); err != nil {
+		b.Fatal(err)
+	}
+	pointerBatch := database.NewBatch().(*Batch)
+	if err := pointerBatch.SetPointer([]byte("pointer"), pointer); err != nil {
+		b.Fatal(err)
+	}
+	if err := pointerBatch.WriteSync(); err != nil {
+		b.Fatal(err)
+	}
+	if err := pointerBatch.Close(); err != nil {
+		b.Fatal(err)
+	}
+	var total, currentCapture time.Duration
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := database.VacuumIndexOnline(context.Background()); err != nil {
+			b.Fatal(err)
+		}
+		stats := database.VacuumOnlineStats()
+		if stats.ExactCandidateScan || stats.DurableResourceProjections != 1 || stats.DurableResourceProjectionFallbacks != 0 || stats.DurableResourceProjectionFallbackReason != "" {
+			b.Fatalf("projection stats=%+v, want current-root projection and zero exact scans/fallbacks", stats)
+		}
+		total += stats.TotalDuration
+		currentCapture += stats.DurableResourceCaptureDuration
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(total.Nanoseconds())/float64(b.N), "vacuum-total-ns/op")
+	b.ReportMetric(float64(currentCapture.Nanoseconds())/float64(b.N), "current-capture-ns/op")
 }

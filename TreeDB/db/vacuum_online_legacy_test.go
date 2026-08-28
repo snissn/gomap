@@ -52,7 +52,7 @@ func TestVacuumIndexOnlineUsesProductionRecoverableRootSetFence(t *testing.T) {
 	if stats.AttemptID == 0 || !stats.WorkCompleted || stats.RecoverableSetCaptureAttempts != 1 || stats.RecoverableSetCaptures != 1 || stats.RecoverableRoots < 2 {
 		t.Fatalf("vacuum stats=%+v want completed production recoverable-root snapshot", stats)
 	}
-	if stats.TotalDuration < stats.RecoverableSetCaptureDuration || stats.RecoverableSetCaptureDuration <= 0 || stats.OlderRootRebuilds != 1 || stats.OlderRootDurableResourceCaptures != 1 || stats.OlderRootDurableResourceCaptureDuration <= 0 || stats.OlderRootExactCandidateScans != 0 || stats.OlderRootProjections != 1 || stats.OlderRootProjectionFallbacks != 0 || stats.OlderRootProjectionFallbackReason != "" || stats.DurableResourceCaptures != 1 || !stats.ExactCandidateScan {
+	if stats.TotalDuration < stats.RecoverableSetCaptureDuration || stats.RecoverableSetCaptureDuration <= 0 || stats.OlderRootRebuilds != 1 || stats.OlderRootDurableResourceCaptures != 1 || stats.OlderRootDurableResourceCaptureDuration <= 0 || stats.OlderRootExactCandidateScans != 0 || stats.OlderRootProjections != 1 || stats.OlderRootProjectionFallbacks != 0 || stats.OlderRootProjectionFallbackReason != "" || stats.DurableResourceCaptures != 1 || stats.ExactCandidateScan {
 		t.Fatalf("vacuum attribution=%+v want capture, older rebuild, and durable-resource capture", stats)
 	}
 	if stats.ReplacementPagerPages == 0 || stats.ReplacementPagerPages != newIndex.pager.PageCount() {
@@ -546,8 +546,8 @@ func TestVacuumIndexOnlinePreservesTwoRecoverySelectablePointerClosures(t *testi
 		t.Fatalf("VacuumIndexOnline: %v", err)
 	}
 	stats := database.vacuumOnlineStatsSnapshot()
-	if stats.OlderRootProjections != 1 || stats.OlderRootProjectionFallbacks != 0 || stats.OlderRootExactCandidateScans != 0 {
-		t.Fatalf("older-root projection stats=%+v, want one projection and zero fallback/full scans", stats)
+	if stats.OlderRootProjections != 1 || stats.OlderRootProjectionFallbacks != 0 || stats.OlderRootExactCandidateScans != 0 || stats.ExactCandidateScan {
+		t.Fatalf("projection stats=%+v, want projected older+current roots and zero fallback/full scans", stats)
 	}
 	after := database.durableRoot.slotCommit
 	if after[0] == 0 || after[1] == 0 || after[0] == after[1] {
