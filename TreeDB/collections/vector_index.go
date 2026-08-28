@@ -916,6 +916,9 @@ func (c *Collection) registerBuiltVectorIndex(index *VectorIndex) error {
 		coord.adHocVectorAdmissionMu.Lock()
 		defer coord.adHocVectorAdmissionMu.Unlock()
 	}
+	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
+		return err
+	}
 	if _, err := c.refreshNativeVectorIndexDeclaration(index.name); err != nil {
 		return err
 	}

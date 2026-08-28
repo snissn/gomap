@@ -724,6 +724,56 @@ func TestBuiltVectorIndexRegistrationWaitsForOrdinaryWriter(t *testing.T) {
 	}
 }
 
+func TestBuiltVectorIndexRegistrationRejectsBufferedPeerWrite(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	manager := NewCollectionManager(d)
+	if _, err := manager.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := manager.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	peer, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("before"), []byte(`{"embedding":[1,0]}`)); err != nil {
+		t.Fatalf("insert vector source: %v", err)
+	}
+	index, err := col.buildVectorIndex(VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	}, false)
+	if err != nil {
+		t.Fatalf("build unregistered vector index: %v", err)
+	}
+	if _, err := peer.Insert([]byte("after"), []byte(`{"embedding":[0,1]}`)); err != nil {
+		t.Fatalf("buffer peer insert: %v", err)
+	}
+	peer.writeDomain.mu.Lock()
+	hasBufferedPrimary := hasBufferedPrimaryWritesLocked(peer.writeDomain, peer.collectionName())
+	peer.writeDomain.mu.Unlock()
+	if !hasBufferedPrimary {
+		t.Fatal("test setup did not retain a buffered peer write")
+	}
+	if err := col.registerBuiltVectorIndex(index); !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("register stale vector build error=%v, want %v", err, ErrConcurrentMutation)
+	}
+	if got := col.registeredAdHocVectorIndexCount(); got != 0 {
+		t.Fatalf("registered ad-hoc vector count=%d want 0", got)
+	}
+	peer.writeDomain.mu.Lock()
+	hasBufferedPrimary = hasBufferedPrimaryWritesLocked(peer.writeDomain, peer.collectionName())
+	peer.writeDomain.mu.Unlock()
+	if hasBufferedPrimary {
+		t.Fatal("registration did not publish the buffered peer write before validation")
+	}
+}
+
 func TestIngestChunkedDocumentsHoldsVectorAdmissionBeforeMutation(t *testing.T) {
 	_, d, col := openChunkingTestCollection(t)
 	peer, err := NewCollectionManager(d).OpenCollection("docs")
