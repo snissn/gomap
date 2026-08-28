@@ -223,7 +223,7 @@ func (s *Service) searchDenseVectorNative(ctx context.Context, col *collections.
 		if err := ctxErr(ctx); err != nil {
 			return DenseVectorSearchResponse{}, err
 		}
-		search, err := col.SearchVectorIndexWithBuffer(collections.VectorIndexSearchOptions{
+		search, view, err := col.SearchVectorIndexWithBufferReadView(collections.VectorIndexSearchOptions{
 			IndexName:            defaultVectorIndexName,
 			Query:                req.QueryEmbedding,
 			QueryMode:            collections.VectorIndexQueryModeExact,
@@ -233,23 +233,21 @@ func (s *Service) searchDenseVectorNative(ctx context.Context, col *collections.
 			DeclaredScalarFilter: scalarFilter,
 		}, buffer)
 		if err != nil {
-			return DenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search", err)
-		}
-		if err := validateDenseNativeVectorSearchRoute(search); err != nil {
-			return DenseVectorSearchResponse{}, err
-		}
-		if s.denseVectorNativeAfterSearch != nil {
-			if err := s.denseVectorNativeAfterSearch(attempt, search); err != nil {
-				return DenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search hook", err)
-			}
-		}
-		view, err := col.OpenCollectionReadViewForVectorIndexSearch(search)
-		if err != nil {
 			if errors.Is(err, collections.ErrVectorIndexSnapshotMismatch) {
 				buffer.Reset()
 				continue
 			}
-			return DenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann document read view", err)
+			return DenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search", err)
+		}
+		if err := validateDenseNativeVectorSearchRoute(search); err != nil {
+			_ = view.Close()
+			return DenseVectorSearchResponse{}, err
+		}
+		if s.denseVectorNativeAfterSearch != nil {
+			if err := s.denseVectorNativeAfterSearch(attempt, search); err != nil {
+				_ = view.Close()
+				return DenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search hook", err)
+			}
 		}
 		fetched, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(search.Results, serviceDocumentFetchOptions(req.ReturnEmbedding))
 		closeErr := view.Close()
