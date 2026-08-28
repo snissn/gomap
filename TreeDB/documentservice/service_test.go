@@ -82,6 +82,12 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 
 	deferInsert("docs", "a")
 	assertActive(true)
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := svc.CreateIndex(canceled, CreateIndexRequest{Name: "canceled", Dimension: 2, Metric: MetricCosine}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled CreateIndex error=%v want context.Canceled", err)
+	}
+	assertActive(true)
 	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{
 		Documents:               []Document{{ID: "bad", Embedding: []float32{1}}},
 		DeferVectorIndexRebuild: true,

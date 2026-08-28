@@ -162,7 +162,9 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if s.deferredVectorBuildMaintenance != nil {
-		s.deferredVectorBuildMaintenance.End()
+		if err := s.deferredVectorBuildMaintenance.EndContext(ctx); err != nil {
+			return IndexInfo{}, err
+		}
 	}
 	return s.createIndexLocked(ctx, req)
 }
@@ -376,7 +378,9 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 				deferVectorIndexRebuild = false
 			}
 		} else {
-			s.deferredVectorBuildMaintenance.End()
+			if err := s.deferredVectorBuildMaintenance.EndContext(ctx); err != nil {
+				return UpsertDocumentsResponse{}, err
+			}
 		}
 	}
 	if len(insertIDs) > 0 && len(updates) == 0 && !deferVectorIndexRebuild {
@@ -392,7 +396,9 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
 		} else if collections.IsDuplicateKeyError(err) {
 			if deferredMaintenanceEpoch != 0 {
-				s.deferredVectorBuildMaintenance.End()
+				if err := s.deferredVectorBuildMaintenance.EndContext(ctx); err != nil {
+					return UpsertDocumentsResponse{}, err
+				}
 				deferredMaintenanceEpoch = 0
 				deferredMaintenanceCommitRejected = true
 				deferVectorIndexRebuild = false
@@ -478,7 +484,9 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if s.deferredVectorBuildMaintenance != nil {
-		s.deferredVectorBuildMaintenance.End()
+		if err := s.deferredVectorBuildMaintenance.EndContext(ctx); err != nil {
+			return DeleteDocumentsResponse{}, err
+		}
 	}
 
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
@@ -772,7 +780,9 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if s.deferredVectorBuildMaintenance != nil {
-		s.deferredVectorBuildMaintenance.End()
+		if err := s.deferredVectorBuildMaintenance.EndContext(ctx); err != nil {
+			return ResetIndexResponse{}, err
+		}
 	}
 
 	existingCol, existingInfo, err := s.openIndex(ctx, index, 0)

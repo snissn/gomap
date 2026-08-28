@@ -284,13 +284,26 @@ func (c *DeferredVectorBuildMaintenance) Finalize(ctx context.Context, index str
 	return nil
 }
 
+// EndContext restores ordinary automatic-maintenance policy while honoring a
+// request canceled behind another maintenance owner.
+func (c *DeferredVectorBuildMaintenance) EndContext(ctx context.Context) error {
+	if c == nil || c.db == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := lockFullScanMaintenanceContext(ctx, &c.db.bgVac.runMu); err != nil {
+		return err
+	}
+	defer c.db.bgVac.runMu.Unlock()
+	c.db.bgVac.endDeferredVectorBuildOwner(c.owner)
+	return nil
+}
+
 // End restores ordinary automatic-maintenance policy.
 func (c *DeferredVectorBuildMaintenance) End() {
-	if c != nil && c.db != nil {
-		c.db.bgVac.runMu.Lock()
-		defer c.db.bgVac.runMu.Unlock()
-		c.db.bgVac.endDeferredVectorBuildOwner(c.owner)
-	}
+	_ = c.EndContext(context.Background())
 }
 
 func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(owner uint64, index string, generation uint64) uint64 {

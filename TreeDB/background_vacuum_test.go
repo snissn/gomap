@@ -567,6 +567,26 @@ func TestDeferredVectorBuildAdmissionHonorsCancellationWhileVacuumOwnsLock(t *te
 	}
 }
 
+func TestDeferredVectorBuildEndHonorsCancellationWhileVacuumOwnsLock(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	control := (&DeferredVectorBuildMaintenance{db: d}).Scoped()
+	reservation := control.AdmitInsert(context.Background(), "docs", 1)
+	if reservation == 0 || !control.CommitInsert(reservation) {
+		t.Fatal("begin deferred maintenance")
+	}
+	d.bgVac.runMu.Lock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := control.EndContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("EndContext error=%v want context.Canceled", err)
+	}
+	d.bgVac.runMu.Unlock()
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("canceled end cleared the deferred epoch")
+	}
+	control.End()
+}
+
 func TestDeferredVectorBuildMaintenanceFinalizeOwnsWorkerAndRunsAtMostOneVacuum(t *testing.T) {
 	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: time.Hour})
 	control := &DeferredVectorBuildMaintenance{db: d}
