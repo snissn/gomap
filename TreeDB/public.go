@@ -2544,9 +2544,6 @@ func (db *DB) compactIndex(allowClosing bool) error {
 	if db.bgVac.deferredVectorBuildClosed.Load() && !allowClosing {
 		return ErrClosed
 	}
-	if runtime.GOOS == "windows" {
-		return errVacuumUnsupported
-	}
 	db.bgVac.endDeferredVectorBuild()
 
 	if db.cached != nil {

@@ -41,3 +41,20 @@ func TestVacuumIndexOnlineUnsupportedDoesNotCheckpointCachedWrites(t *testing.T)
 		t.Fatal("unsupported vacuum invalidated deferred maintenance")
 	}
 }
+
+func TestCompactIndexRemainsSupported(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir(), BackgroundIndexVacuumInterval: -1})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+	if err := database.Set([]byte("key"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := database.CompactIndex(); err != nil {
+		t.Fatalf("CompactIndex: %v", err)
+	}
+	if value, err := database.Get([]byte("key")); err != nil || string(value) != "value" {
+		t.Fatalf("Get after CompactIndex value=%q err=%v", value, err)
+	}
+}
