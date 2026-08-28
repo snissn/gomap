@@ -3,6 +3,7 @@ package documentservice
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 )
@@ -10,11 +11,53 @@ import (
 // DiagnosticsSnapshot is the bounded, operator-only service snapshot exposed
 // by the optional diagnostics listener. It contains no document or vector data.
 type DiagnosticsSnapshot struct {
-	ContractVersion string                `json:"contract_version"`
-	ServiceClosed   bool                  `json:"service_closed"`
-	Database        map[string]string     `json:"database,omitempty"`
-	Collections     map[string]string     `json:"collections,omitempty"`
-	LastOpened      *LastOpenedIndexStats `json:"last_opened_index,omitempty"`
+	ContractVersion string                 `json:"contract_version"`
+	ServiceClosed   bool                   `json:"service_closed"`
+	Database        map[string]string      `json:"database,omitempty"`
+	Collections     map[string]string      `json:"collections,omitempty"`
+	LastOpened      *LastOpenedIndexStats  `json:"last_opened_index,omitempty"`
+	Upsert          UpsertDiagnosticsStats `json:"upsert"`
+}
+
+// UpsertDiagnosticsStats attributes the service-owned portion of document
+// upserts. Collection publication subphases remain in LastOpened.Insert.
+type UpsertDiagnosticsStats struct {
+	Requests           uint64 `json:"requests"`
+	LockWaitNanos      uint64 `json:"lock_wait_nanos"`
+	LockHoldNanos      uint64 `json:"lock_hold_nanos"`
+	OpenNanos          uint64 `json:"open_nanos"`
+	PrepareNanos       uint64 `json:"prepare_nanos"`
+	ReadPreflightNanos uint64 `json:"read_preflight_nanos"`
+	InsertNanos        uint64 `json:"insert_nanos"`
+	UpdateNanos        uint64 `json:"update_nanos"`
+	FinalizeNanos      uint64 `json:"finalize_nanos"`
+}
+
+func diagnosticsElapsedNanos(start time.Time) uint64 {
+	if elapsed := time.Since(start).Nanoseconds(); elapsed > 0 {
+		return uint64(elapsed)
+	}
+	return 1
+}
+
+func (s *Service) addDiagnosticsUpsert(stats UpsertDiagnosticsStats) {
+	s.diagnosticsMu.Lock()
+	defer s.diagnosticsMu.Unlock()
+	s.diagnosticsUpsert.Requests += stats.Requests
+	s.diagnosticsUpsert.LockWaitNanos += stats.LockWaitNanos
+	s.diagnosticsUpsert.LockHoldNanos += stats.LockHoldNanos
+	s.diagnosticsUpsert.OpenNanos += stats.OpenNanos
+	s.diagnosticsUpsert.PrepareNanos += stats.PrepareNanos
+	s.diagnosticsUpsert.ReadPreflightNanos += stats.ReadPreflightNanos
+	s.diagnosticsUpsert.InsertNanos += stats.InsertNanos
+	s.diagnosticsUpsert.UpdateNanos += stats.UpdateNanos
+	s.diagnosticsUpsert.FinalizeNanos += stats.FinalizeNanos
+}
+
+func (s *Service) snapshotDiagnosticsUpsert() UpsertDiagnosticsStats {
+	s.diagnosticsMu.Lock()
+	defer s.diagnosticsMu.Unlock()
+	return s.diagnosticsUpsert
 }
 
 // LastOpenedIndexStats identifies the most recently opened service index and its
@@ -50,6 +93,7 @@ func (s *Service) DiagnosticsSnapshot(databaseStats func() map[string]string) Di
 	if active := s.diagnosticsActive.Load(); active != nil {
 		out.LastOpened = &LastOpenedIndexStats{Name: active.name, Generation: active.info.Generation, Insert: cloneDiagnosticsInsertStats(active.insert)}
 	}
+	out.Upsert = s.snapshotDiagnosticsUpsert()
 	return out
 }
 
