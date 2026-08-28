@@ -4374,6 +4374,11 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if len(c.meta.Indexes) == 0 && len(c.meta.VectorIndexes) == 0 && len(c.meta.TextIndexes) == 0 && !c.db.CommandWALEnabled() {
 		unlockSchema := c.lockCollectionSchemaRead()
 		defer unlockSchema()
+		unlockCoverage := c.lockVectorIndexCoverageMutation()
+		defer unlockCoverage()
+		if c.registeredAdHocVectorIndexCount() > 0 {
+			return c.insertOneViaBatchWithCoverageLocked(id, document)
+		}
 		if c.hasBufferedNoIndexBSONPrimaryOverlayOrRootRuns() {
 			if err := c.withMutationLock(func() error {
 				return c.flushBufferedWrites()
@@ -4581,7 +4586,7 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	}
 	if indexed || len(catalog.meta.VectorIndexes) > 0 || len(catalog.meta.TextIndexes) > 0 || plannerOptions.documentFormat != DocumentFormatJSON {
 		domain.mu.Unlock()
-		return c.insertOneViaBatchSchemaLocked(id, document)
+		return c.insertOneViaBatchWithCoverageLocked(id, document)
 	}
 	if domain.table == nil {
 		domain.table = newCollectionRunTable(0)
@@ -10306,6 +10311,10 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 func (c *Collection) insertOneViaBatchSchemaLocked(id, document []byte) ([]byte, error) {
 	unlockCoverage := c.lockVectorIndexCoverageMutation()
 	defer unlockCoverage()
+	return c.insertOneViaBatchWithCoverageLocked(id, document)
+}
+
+func (c *Collection) insertOneViaBatchWithCoverageLocked(id, document []byte) ([]byte, error) {
 	ids, err := c.insertBatchSchemaLocked([][]byte{id}, [][]byte{document}, false, nil)
 	if err == nil {
 		err = commitAmbiguousError("InsertBatch vector index maintenance", c.notifyVectorIndexesUpsert(ids))

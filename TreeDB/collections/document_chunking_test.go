@@ -671,6 +671,59 @@ func TestBuiltVectorIndexRegistrationRejectsStaleChunkPublication(t *testing.T) 
 	}
 }
 
+func TestBuiltVectorIndexRegistrationWaitsForOrdinaryWriter(t *testing.T) {
+	_, _, col := openChunkingTestCollection(t)
+	if _, err := col.Insert([]byte("before"), []byte(`{"embedding":[1,0]}`)); err != nil {
+		t.Fatalf("insert vector source: %v", err)
+	}
+	index, err := col.buildVectorIndex(VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	}, false)
+	if err != nil {
+		t.Fatalf("build unregistered vector index: %v", err)
+	}
+
+	writerEntered := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		unlockSchema := col.lockCollectionSchemaRead()
+		unlockCoverage := col.lockVectorIndexCoverageMutation()
+		close(writerEntered)
+		<-releaseWriter
+		_, err := col.insertBatchSchemaLocked(
+			[][]byte{[]byte("after")},
+			[][]byte{[]byte(`{"body":"ordinary write"}`)},
+			false,
+			nil,
+		)
+		unlockCoverage()
+		unlockSchema()
+		writerDone <- err
+	}()
+	<-writerEntered
+
+	registered := make(chan error, 1)
+	go func() {
+		registered <- col.registerBuiltVectorIndex(index)
+	}()
+	select {
+	case err := <-registered:
+		t.Fatalf("registration returned before ordinary publication: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseWriter)
+	if err := <-writerDone; err != nil {
+		t.Fatalf("ordinary insert: %v", err)
+	}
+	if err := <-registered; !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("register stale vector build error=%v, want %v", err, ErrConcurrentMutation)
+	}
+	if got := col.registeredAdHocVectorIndexCount(); got != 0 {
+		t.Fatalf("registered ad-hoc vector count=%d want 0", got)
+	}
+}
+
 func TestIngestChunkedDocumentsHoldsVectorAdmissionBeforeMutation(t *testing.T) {
 	_, d, col := openChunkingTestCollection(t)
 	peer, err := NewCollectionManager(d).OpenCollection("docs")

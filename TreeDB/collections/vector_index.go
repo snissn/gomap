@@ -911,15 +911,20 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) error {
 func (c *Collection) registerBuiltVectorIndex(index *VectorIndex) error {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
+	coord := c.collectionSchemaCoordinator()
+	if coord != nil {
+		coord.adHocVectorAdmissionMu.Lock()
+		defer coord.adHocVectorAdmissionMu.Unlock()
+	}
 	if _, err := c.refreshNativeVectorIndexDeclaration(index.name); err != nil {
 		return err
 	}
 	def, declaredNative := findVectorIndex(c.meta.VectorIndexes, index.name)
 	if declaredNative && vectorIndexDefinitionUsesNativeRuntime(def) && c.writeDomain != nil {
-		c.registerVectorIndexCurrentCatalog(index)
+		c.registerVectorIndexCurrentCatalogWithAdHocAdmissionLocked(index)
 		return nil
 	}
-	return c.registerAdHocVectorIndexCurrentCatalog(index)
+	return c.registerAdHocVectorIndexCurrentCatalogWithAdmissionLocked(index)
 }
 
 func (c *Collection) registerAdHocVectorIndexCurrentCatalog(index *VectorIndex) error {
@@ -928,6 +933,10 @@ func (c *Collection) registerAdHocVectorIndexCurrentCatalog(index *VectorIndex) 
 		coord.adHocVectorAdmissionMu.Lock()
 		defer coord.adHocVectorAdmissionMu.Unlock()
 	}
+	return c.registerAdHocVectorIndexCurrentCatalogWithAdmissionLocked(index)
+}
+
+func (c *Collection) registerAdHocVectorIndexCurrentCatalogWithAdmissionLocked(index *VectorIndex) error {
 	if sourceGeneration, valid := index.sourceDocumentCoverage(); valid {
 		currentGeneration, err := c.currentVectorIndexDocumentGeneration()
 		if err != nil {
@@ -1473,6 +1482,7 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 		return func() {}
 	}
 	domain := c.writeDomain
+	unlockAdHocAdmission := c.lockAdHocVectorAdmissionRead()
 	admissionMu := c.nativeVectorAdmissionMutex()
 	coord := domain.schemaCoordinator
 	var hasMaintainedVectorIndexes bool
@@ -1519,6 +1529,7 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 	domain.nativeVectorSearchActive.Store(hasMaintainedVectorIndexes && baselineCurrent)
 	domain.nativeVectorActiveMu.Unlock()
 	return func() {
+		defer unlockAdHocAdmission()
 		domain.mu.RLock()
 		domain.nativeVectorActiveMu.Lock()
 		domain.nativeVectorActive--
