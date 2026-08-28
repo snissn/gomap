@@ -275,6 +275,8 @@ class ThreadLocalClients:
 
 
 class TreeDBMinimaRunner(common.QdrantMinimaRunner):
+    restart_requires_configuration_reassertion = False
+
     def __init__(self, manifest: dict[str, Any], *, controller: ServiceController, collection: str,
                  operation_timeout: float, ef_search: int, diagnostics_dir: Path | None = None,
                  diagnostic_slow_seconds: float = 30, diagnostic_profile_seconds: int = 5,

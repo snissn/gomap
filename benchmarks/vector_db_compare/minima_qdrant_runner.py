@@ -1039,6 +1039,8 @@ def final_documents(manifest: dict[str, Any]) -> Iterable[dict[str, Any]]:
 
 
 class QdrantMinimaRunner:
+    restart_requires_configuration_reassertion = True
+
     def __init__(self, manifest: dict[str, Any], *, client_factory: Callable[[], Any], models: Any, url: str,
                  collection: str, allow_drop: bool, operation_timeout: int, optimizer_timeout: float,
                  poll_interval: float, server_version: str, deployment: str, image: str,
@@ -1889,7 +1891,8 @@ class QdrantMinimaRunner:
                 for scenario in self.specs:
                     self.evidence.reopen[scenario] = self.search("post_reopen_parity", scenario)
             elif name == "idempotent_ensure_after_reopen":
-                self.evidence.call(name, "writer", "all", self.reassert_production_configuration_after_restart)
+                if self.restart_requires_configuration_reassertion:
+                    self.evidence.call(name, "writer", "all", self.reassert_production_configuration_after_restart)
                 self.evidence.call(name, "fetch", "all", self.ensure_compatible)
                 self.evidence.call(name, "fetch", "all", self.wait_ready)
             elif name == "final_manifest_and_oracle_comparison":
