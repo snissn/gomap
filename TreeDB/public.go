@@ -1740,6 +1740,12 @@ func (db *DB) Close() error {
 	db.bgVac.deferredVectorBuildClosed.Store(true)
 	db.bgVac.endDeferredVectorBuild()
 	db.bgVac.Stop()
+	// A service finalizer also owns runMu while draining, checkpointing,
+	// vacuuming, rebuilding, and publishing. Wait for an in-flight owner before
+	// closing storage; new finalizers fail the closed gate on either side of the
+	// lock acquisition.
+	db.bgVac.runMu.Lock()
+	db.bgVac.runMu.Unlock()
 	var err error
 	if db.cached != nil || db.backend != nil {
 		if e := db.closeMaintenance(); e != nil {
@@ -2529,14 +2535,20 @@ func (db *DB) CompactIndex() error {
 	if db.backend == nil {
 		return ErrClosed
 	}
+	db.bgVac.endDeferredVectorBuild()
+	db.bgVac.runMu.Lock()
+	defer db.bgVac.runMu.Unlock()
 
 	if db.cached != nil {
 		if err := db.cached.Drain(); err != nil {
 			return err
 		}
 	}
-	err := db.backend.CompactIndex()
-	return db.reconcileCachedBackendMaintenance(err)
+	err := db.reconcileCachedBackendMaintenance(db.backend.CompactIndex())
+	if err == nil {
+		db.bgVac.deferredVectorBuildDebt.Store(false)
+	}
+	return err
 }
 
 // VacuumIndexOnline rebuilds the user index into a new file and swaps it in with
@@ -2547,6 +2559,13 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		return ErrClosed
 	}
 	db.bgVac.endDeferredVectorBuild()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := lockFullScanMaintenanceContext(ctx, &db.bgVac.runMu); err != nil {
+		return err
+	}
+	defer db.bgVac.runMu.Unlock()
 	_, err := db.vacuumIndexOnlineStats(ctx)
 	if err == nil {
 		db.bgVac.deferredVectorBuildDebt.Store(false)

@@ -204,6 +204,63 @@ func (c *DeferredVectorBuildMaintenance) CommitInsert(reservationID uint64) bool
 	return c != nil && c.db != nil && c.db.bgVac.commitDeferredVectorBuild(reservationID)
 }
 
+// Finalize closes a matching deferred epoch, drains accepted collection work,
+// checkpoints it, runs at most one debt-qualified vacuum, then builds and
+// publishes the query-ready vector assets while excluding the periodic worker.
+func (c *DeferredVectorBuildMaintenance) Finalize(ctx context.Context, index string, generation uint64, drain, build func() error) error {
+	if c == nil || c.db == nil {
+		return ErrClosed
+	}
+	if c.db.bgVac.deferredVectorBuildClosed.Load() {
+		return ErrClosed
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := lockFullScanMaintenanceContext(ctx, &c.db.bgVac.runMu); err != nil {
+		return err
+	}
+	defer c.db.bgVac.runMu.Unlock()
+	if c.db.bgVac.deferredVectorBuildClosed.Load() {
+		return ErrClosed
+	}
+
+	epoch := c.db.bgVac.deferredVectorBuildEpoch.Load()
+	matching := epoch != nil && epoch.index == index && epoch.generation == generation
+	if epoch != nil && !matching {
+		c.db.bgVac.endDeferredVectorBuild()
+		return errors.New("treedb: deferred vector-build owner changed before finalization")
+	}
+	if matching {
+		if !c.db.bgVac.deferredVectorBuildEpoch.CompareAndSwap(epoch, nil) {
+			c.db.bgVac.endDeferredVectorBuild()
+			return errors.New("treedb: deferred vector-build owner changed during finalization")
+		}
+		if len(epoch.reservations) != 0 {
+			return errors.New("treedb: deferred vector-build insert is still pending")
+		}
+	}
+	if drain != nil {
+		if err := drain(); err != nil {
+			return err
+		}
+	}
+	if err := c.db.Checkpoint(); err != nil {
+		return err
+	}
+	if matching {
+		if c.db.bgVac.deferredVectorBuildDebt.Load() {
+			if err := c.db.bgVac.runOnceContextLocked(ctx, c.db, true); err != nil {
+				return err
+			}
+		}
+	}
+	if build != nil {
+		return build()
+	}
+	return nil
+}
+
 // End restores ordinary automatic-maintenance policy.
 func (c *DeferredVectorBuildMaintenance) End() {
 	if c != nil && c.db != nil {
@@ -550,14 +607,24 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 
 	w.runMu.Lock()
 	defer w.runMu.Unlock()
+	_ = w.runOnceContextLocked(ctx, db, false)
+}
+
+func (w *bgIndexVacuumWorker) runOnceContextLocked(ctx context.Context, db *DB, force bool) error {
 	if w.unsupported {
-		return
+		if force {
+			return errVacuumUnsupported
+		}
+		return nil
 	}
 
 	now := time.Now()
 	state, ok := db.backend.StateToken()
 	if !ok || db.backend.IsClosing() {
-		return
+		if force {
+			return ErrClosed
+		}
+		return nil
 	}
 	if w.deferredVectorBuildActive(now) {
 		w.backlogConsecutiveSkips.Store(0)
@@ -568,12 +635,12 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		}
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomeDeferredVectorBuildSkip)
 		w.finishRun(time.Now(), "")
-		return
+		return nil
 	}
 	forcedAfterBacklog := false
 	backlogBytes := backgroundIndexVacuumBacklogBytes(db)
 	w.lastBacklogBytes.Store(backlogBytes)
-	if backlogBytes > 0 {
+	if !force && backlogBytes > 0 {
 		consecutive := w.backlogConsecutiveSkips.Load()
 		if consecutive < uint64(w.maxBacklogSkipThreshold()) {
 			consecutive++
@@ -582,7 +649,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 			w.foregroundConsecutiveSkips.Store(0)
 			w.lastOutcome.Store(backgroundIndexVacuumOutcomeBacklogSkip)
 			w.finishRun(now, "")
-			return
+			return nil
 		}
 		forcedAfterBacklog = true
 		w.backlogForcedRuns.Add(1)
@@ -591,14 +658,14 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		w.backlogConsecutiveSkips.Store(0)
 	}
 	forcedAfterForeground := false
-	if !forcedAfterBacklog && !backgroundIndexVacuumForegroundWriteQuiet(db) {
+	if !force && !forcedAfterBacklog && !backgroundIndexVacuumForegroundWriteQuiet(db) {
 		consecutive := w.foregroundConsecutiveSkips.Load()
 		if consecutive < uint64(w.maxBacklogSkipThreshold()) {
 			w.foregroundConsecutiveSkips.Store(consecutive + 1)
 			w.foregroundSkips.Add(1)
 			w.lastOutcome.Store(backgroundIndexVacuumOutcomeForegroundSkip)
 			w.finishRun(now, "")
-			return
+			return nil
 		}
 		forcedAfterForeground = true
 		w.foregroundForcedRuns.Add(1)
@@ -607,10 +674,10 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		w.foregroundConsecutiveSkips.Store(0)
 	}
 
-	if !forcedAfterBacklog && !forcedAfterForeground && w.lastProbeValid && !w.retryProbe && state.CommitSeq == w.lastProbeCommitSeq && !w.freelistDebtChangedSinceLastProbe(db) {
+	if !force && !forcedAfterBacklog && !forcedAfterForeground && w.lastProbeValid && !w.retryProbe && state.CommitSeq == w.lastProbeCommitSeq && !w.freelistDebtChangedSinceLastProbe(db) {
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomeUnchanged)
 		w.finishRun(now, "")
-		return
+		return nil
 	}
 
 	probeStarted := time.Now()
@@ -622,7 +689,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 			w.retryProbe = false
 			w.lastOutcome.Store(backgroundIndexVacuumOutcomeCanceled)
 			w.finishRun(now, err.Error())
-			return
+			return err
 		}
 		w.retryProbe = false
 		w.lastProbeCommitSeq = state.CommitSeq
@@ -636,7 +703,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomePermanentFailure)
 		w.finishRun(now, err.Error())
 		db.reportError(err)
-		return
+		return err
 	}
 
 	w.lastProbeCommitSeq = rep.CommitSeq
@@ -653,7 +720,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		w.retryProbe = false
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomeNoDebt)
 		w.finishRun(now, "")
-		return
+		return nil
 	}
 
 	w.vacuumAttempts.Add(1)
@@ -675,7 +742,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		if backgroundIndexVacuumShouldReport(err) {
 			db.reportError(err)
 		}
-		return
+		return err
 	}
 	w.retryProbe = false
 	w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
@@ -685,6 +752,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 	w.deferredVectorBuildDebt.Store(false)
 	w.finishRun(now, "")
 	w.lastVacuumUnix.Store(now.Unix())
+	return nil
 }
 
 func (w *bgIndexVacuumWorker) recordProbeDuration(d time.Duration) {

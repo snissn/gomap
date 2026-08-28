@@ -43,7 +43,7 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	t.Cleanup(func() { _ = cleanup() })
 	svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
 	ctx := context.Background()
-	for _, name := range []string{"docs", "other", "generation", "commitfail"} {
+	for _, name := range []string{"docs", "other", "generation", "commitfail", "rejected", "optimized"} {
 		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine}); err != nil {
 			t.Fatalf("CreateIndex(%s): %v", name, err)
 		}
@@ -106,6 +106,14 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	assertActive(false)
 	assertCleanGraph("generation", 1)
 
+	// Invalidation after admission but before commit must fall back to the
+	// ordinary rebuild policy, never return a deferred success with a dirty graph.
+	svc.deferredMaintenanceBeforeCommit = maintenance.End
+	deferInsert("rejected", "commit-rejected")
+	svc.deferredMaintenanceBeforeCommit = nil
+	assertActive(false)
+	assertCleanGraph("rejected", 1)
+
 	deferInsert("docs", "c")
 	assertActive(true)
 	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "c", Embedding: []float32{0, 1}}}, DeferVectorIndexRebuild: true}); err != nil {
@@ -135,10 +143,12 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	}
 	assertActive(false)
 
-	deferInsert("docs", "e")
-	// A failed finalization attempt must still restore ordinary maintenance.
-	_, _ = svc.OptimizeIndex(ctx, "docs", OptimizeIndexRequest{})
+	deferInsert("optimized", "e")
+	if _, err := svc.OptimizeIndex(ctx, "optimized", OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("OptimizeIndex deferred finalizer: %v", err)
+	}
 	assertActive(false)
+	assertCleanGraph("optimized", 1)
 
 	svc.deferredMaintenanceBeforeCommit = maintenance.End
 	deferInsert("commitfail", "commit-fallback")
@@ -162,6 +172,63 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	assertActive(false)
+}
+
+func TestServiceDeferredVectorBuildFailedFinalizeReopensDurableAndStale(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts.BackgroundIndexVacuumInterval = -1
+	backend, cleanup, _, maintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: MetricCosine}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "prior", Embedding: []float32{1, 0}}}}); err != nil {
+		t.Fatalf("seed prior graph: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{
+		Documents:               []Document{{ID: "deferred", Embedding: []float32{0, 1}}},
+		DeferVectorIndexRebuild: true,
+	}); err != nil {
+		t.Fatalf("deferred upsert: %v", err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := svc.OptimizeIndex(canceled, "docs", OptimizeIndexRequest{}); err == nil {
+		t.Fatal("canceled OptimizeIndex succeeded")
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("service close: %v", err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopenedBackend, reopenedCleanup, _, reopenedMaintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = reopenedCleanup() })
+	reopened := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(reopenedBackend), reopenedMaintenance)
+	count, err := reopened.CountDocuments(ctx, "docs", CountDocumentsRequest{})
+	if err != nil || count.Count != 2 {
+		t.Fatalf("reopen count=%+v err=%v want 2 durable documents", count, err)
+	}
+	col, _, err := reopened.openIndex(ctx, "docs", 0)
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	status, err := col.VectorIndexStatus(defaultVectorIndexName)
+	if err != nil {
+		t.Fatalf("reopen vector status: %v", err)
+	}
+	if status.Loaded || !status.RebuildNeeded {
+		t.Fatalf("reopen vector status=%+v want fail-closed rebuild-needed status", status)
+	}
 }
 
 func TestServiceSchemaValidationAndUnsupportedFilterErrors(t *testing.T) {
