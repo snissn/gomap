@@ -144,7 +144,7 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	assertActive(false)
 
 	deferInsert("optimized", "e")
-	if _, err := svc.OptimizeIndex(ctx, "optimized", OptimizeIndexRequest{}); err != nil {
+	if _, err := svc.OptimizeIndex(nil, "optimized", OptimizeIndexRequest{}); err != nil {
 		t.Fatalf("OptimizeIndex deferred finalizer: %v", err)
 	}
 	assertActive(false)

@@ -837,6 +837,9 @@ func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeI
 	if s == nil {
 		return OptimizeIndexResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
