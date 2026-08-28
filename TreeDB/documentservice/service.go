@@ -328,12 +328,27 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	s.writeMu.Lock()
 	var lockHoldStarted time.Time
 	upsertStats := UpsertDiagnosticsStats{Requests: 1}
+	var phaseStarted time.Time
+	var phaseNanos *uint64
+	startPhase := func(nanos *uint64) {
+		if !diagnostics {
+			return
+		}
+		if phaseNanos != nil {
+			*phaseNanos += diagnosticsElapsedNanos(phaseStarted)
+		}
+		phaseStarted = time.Now()
+		phaseNanos = nanos
+	}
 	if diagnostics {
 		upsertStats.LockWaitNanos = diagnosticsElapsedNanos(lockWaitStarted)
 		lockHoldStarted = time.Now()
 	}
 	defer func() {
 		if diagnostics {
+			if phaseNanos != nil {
+				*phaseNanos += diagnosticsElapsedNanos(phaseStarted)
+			}
 			upsertStats.LockHoldNanos = diagnosticsElapsedNanos(lockHoldStarted)
 			s.addDiagnosticsUpsert(upsertStats)
 		}
@@ -346,27 +361,16 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 	}()
 
-	var phaseStarted time.Time
-	if diagnostics {
-		phaseStarted = time.Now()
-	}
+	startPhase(&upsertStats.OpenNanos)
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
-	if diagnostics {
-		upsertStats.OpenNanos += diagnosticsElapsedNanos(phaseStarted)
-	}
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
 	}
 	if len(req.Documents) == 0 {
 		return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "documents must not be empty")
 	}
-	if diagnostics {
-		phaseStarted = time.Now()
-	}
+	startPhase(&upsertStats.PrepareNanos)
 	prepared, err := prepareDocumentsForWrite(req.Documents, info)
-	if diagnostics {
-		upsertStats.PrepareNanos += diagnosticsElapsedNanos(phaseStarted)
-	}
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
 	}
@@ -377,9 +381,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	insertDocs := make([][]byte, 0, len(prepared))
 	inserts := make([]preparedDocument, 0, len(prepared))
 	updates := make([]preparedDocument, 0)
-	if diagnostics {
-		phaseStarted = time.Now()
-	}
+	startPhase(&upsertStats.ReadPreflightNanos)
 	for _, doc := range prepared {
 		if err := ctxErr(ctx); err != nil {
 			return UpsertDocumentsResponse{}, err
@@ -400,9 +402,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 		updates = append(updates, doc)
 	}
-	if diagnostics {
-		upsertStats.ReadPreflightNanos += diagnosticsElapsedNanos(phaseStarted)
-	}
+	startPhase(&upsertStats.MaintenanceNanos)
 	deferredMaintenanceCommitRejected := false
 	deferVectorIndexRebuild := req.DeferVectorIndexRebuild
 	if s.deferredVectorBuildMaintenance != nil {
@@ -427,9 +427,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	}
 	inserted := 0
 	updated := 0
-	if diagnostics {
-		phaseStarted = time.Now()
-	}
+	startPhase(&upsertStats.InsertNanos)
 	if len(insertIDs) > 0 {
 		if _, err := col.InsertBatch(insertIDs, insertDocs); err == nil {
 			inserted = len(insertIDs)
@@ -465,12 +463,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "insert documents failed", err)
 		}
 	}
-	if diagnostics {
-		upsertStats.InsertNanos += diagnosticsElapsedNanos(phaseStarted)
-	}
-	if diagnostics {
-		phaseStarted = time.Now()
-	}
+	startPhase(&upsertStats.UpdateNanos)
 	for _, doc := range updates {
 		wasInserted, wasUpdated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc, false, func() {
 			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
@@ -485,12 +478,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			updated++
 		}
 	}
-	if diagnostics {
-		upsertStats.UpdateNanos += diagnosticsElapsedNanos(phaseStarted)
-	}
-	if diagnostics {
-		phaseStarted = time.Now()
-	}
+	startPhase(&upsertStats.FinalizeNanos)
 	if deferredMaintenanceEpoch != 0 {
 		if s.deferredMaintenanceBeforeCommit != nil {
 			s.deferredMaintenanceBeforeCommit()
@@ -524,9 +512,6 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	}
 	if rebuildErr != nil {
 		return UpsertDocumentsResponse{}, rebuildErr
-	}
-	if diagnostics {
-		upsertStats.FinalizeNanos += diagnosticsElapsedNanos(phaseStarted)
 	}
 	return UpsertDocumentsResponse{Index: info, Upserted: len(prepared), Inserted: inserted, Updated: updated, IDs: ids, CompactEmbeddings: compactEmbeddings}, nil
 }

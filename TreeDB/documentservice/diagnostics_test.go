@@ -34,7 +34,7 @@ func TestDiagnosticsHandlerSnapshotIsReadOnlyAndBounded(t *testing.T) {
 	if snapshot.Database["treedb.commit_seq"] != "7" || snapshot.LastOpened == nil || snapshot.LastOpened.Name != "docs" || snapshot.LastOpened.Insert.Documents != 1 {
 		t.Fatalf("snapshot=%+v", snapshot)
 	}
-	if snapshot.Upsert.Requests != 1 || snapshot.Upsert.LockHoldNanos == 0 || snapshot.Upsert.OpenNanos == 0 || snapshot.Upsert.PrepareNanos == 0 || snapshot.Upsert.ReadPreflightNanos == 0 || snapshot.Upsert.InsertNanos == 0 || snapshot.Upsert.FinalizeNanos == 0 {
+	if snapshot.Upsert.Requests != 1 || snapshot.Upsert.LockHoldNanos == 0 || snapshot.Upsert.OpenNanos == 0 || snapshot.Upsert.PrepareNanos == 0 || snapshot.Upsert.ReadPreflightNanos == 0 || snapshot.Upsert.MaintenanceNanos == 0 || snapshot.Upsert.InsertNanos == 0 || snapshot.Upsert.FinalizeNanos == 0 {
 		t.Fatalf("upsert attribution=%+v", snapshot.Upsert)
 	}
 	if got, err := svc.CountDocuments(ctx, "docs", CountDocumentsRequest{}); err != nil || got.Count != 1 {
@@ -66,6 +66,14 @@ func TestDiagnosticsUpsertAttributionIsOptIn(t *testing.T) {
 	}
 	if got := svc.DiagnosticsSnapshot(nil).Upsert.Requests; got != 1 {
 		t.Fatalf("enabled diagnostics recorded %d upserts, want 1", got)
+	}
+	before := svc.DiagnosticsSnapshot(nil).Upsert
+	if _, err := svc.UpsertDocuments(ctx, "missing", UpsertDocumentsRequest{Documents: []Document{{ID: "failed", Embedding: []float32{1, 0}}}}); err == nil {
+		t.Fatal("UpsertDocuments missing index succeeded")
+	}
+	after := svc.DiagnosticsSnapshot(nil).Upsert
+	if after.Requests != before.Requests+1 || after.OpenNanos <= before.OpenNanos {
+		t.Fatalf("failed upsert attribution before=%+v after=%+v", before, after)
 	}
 }
 

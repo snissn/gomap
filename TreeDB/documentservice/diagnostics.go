@@ -28,6 +28,7 @@ type UpsertDiagnosticsStats struct {
 	OpenNanos          uint64 `json:"open_nanos"`
 	PrepareNanos       uint64 `json:"prepare_nanos"`
 	ReadPreflightNanos uint64 `json:"read_preflight_nanos"`
+	MaintenanceNanos   uint64 `json:"maintenance_nanos"`
 	InsertNanos        uint64 `json:"insert_nanos"`
 	UpdateNanos        uint64 `json:"update_nanos"`
 	FinalizeNanos      uint64 `json:"finalize_nanos"`
@@ -49,6 +50,7 @@ func (s *Service) addDiagnosticsUpsert(stats UpsertDiagnosticsStats) {
 	s.diagnosticsUpsert.OpenNanos += stats.OpenNanos
 	s.diagnosticsUpsert.PrepareNanos += stats.PrepareNanos
 	s.diagnosticsUpsert.ReadPreflightNanos += stats.ReadPreflightNanos
+	s.diagnosticsUpsert.MaintenanceNanos += stats.MaintenanceNanos
 	s.diagnosticsUpsert.InsertNanos += stats.InsertNanos
 	s.diagnosticsUpsert.UpdateNanos += stats.UpdateNanos
 	s.diagnosticsUpsert.FinalizeNanos += stats.FinalizeNanos
