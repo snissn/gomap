@@ -204,6 +204,14 @@ func (c *DeferredVectorBuildMaintenance) CommitInsert(reservationID uint64) bool
 	return c != nil && c.db != nil && c.db.bgVac.commitDeferredVectorBuild(reservationID)
 }
 
+// AbortInsert releases only the caller's reservation. It cannot end an epoch
+// owned by another request that raced with the failed insert.
+func (c *DeferredVectorBuildMaintenance) AbortInsert(reservationID uint64) {
+	if c != nil && c.db != nil {
+		c.db.bgVac.abortDeferredVectorBuild(reservationID)
+	}
+}
+
 // Finalize closes a matching deferred epoch, drains accepted collection work,
 // checkpoints it, runs at most one debt-qualified vacuum, then builds and
 // publishes the query-ready vector assets while excluding the periodic worker.
@@ -228,12 +236,10 @@ func (c *DeferredVectorBuildMaintenance) Finalize(ctx context.Context, index str
 	epoch := c.db.bgVac.deferredVectorBuildEpoch.Load()
 	matching := epoch != nil && epoch.index == index && epoch.generation == generation
 	if epoch != nil && !matching {
-		c.db.bgVac.endDeferredVectorBuild()
 		return errors.New("treedb: deferred vector-build owner changed before finalization")
 	}
 	if matching {
 		if !c.db.bgVac.deferredVectorBuildEpoch.CompareAndSwap(epoch, nil) {
-			c.db.bgVac.endDeferredVectorBuild()
 			return errors.New("treedb: deferred vector-build owner changed during finalization")
 		}
 		if len(epoch.reservations) != 0 {
@@ -352,6 +358,46 @@ func (w *bgIndexVacuumWorker) commitDeferredVectorBuild(reservationID uint64) bo
 				return false
 			}
 			return true
+		}
+	}
+}
+
+func (w *bgIndexVacuumWorker) abortDeferredVectorBuild(reservationID uint64) {
+	if reservationID == 0 {
+		return
+	}
+	for {
+		current := w.deferredVectorBuildEpoch.Load()
+		if current == nil {
+			return
+		}
+		reservationIndex := -1
+		for i, id := range current.reservations {
+			if id == reservationID {
+				reservationIndex = i
+				break
+			}
+		}
+		if reservationIndex < 0 {
+			return
+		}
+		if len(current.reservations) == 1 {
+			if w.deferredVectorBuildEpoch.CompareAndSwap(current, nil) {
+				return
+			}
+			continue
+		}
+		reservations := append([]uint64(nil), current.reservations[:reservationIndex]...)
+		reservations = append(reservations, current.reservations[reservationIndex+1:]...)
+		next := &deferredVectorBuildEpoch{
+			id:           current.id,
+			index:        current.index,
+			generation:   current.generation,
+			reservations: reservations,
+			lastActivity: current.lastActivity,
+		}
+		if w.deferredVectorBuildEpoch.CompareAndSwap(current, next) {
+			return
 		}
 	}
 }

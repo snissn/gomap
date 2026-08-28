@@ -715,6 +715,23 @@ func TestDeferredVectorBuildMaintenanceFinalizeRejectsPendingAndCompetingOwner(t
 	if err := control.Finalize(context.Background(), "docs", 1, nil, nil); err == nil {
 		t.Fatal("competing-owner Finalize succeeded")
 	}
+	if !d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("competing-owner Finalize cleared the live owner")
+	}
+}
+
+func TestDeferredVectorBuildMaintenanceAbortPreservesCompetingReservation(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	control := &DeferredVectorBuildMaintenance{db: d}
+	first := control.AdmitInsert(context.Background(), "docs", 1)
+	second := control.AdmitInsert(context.Background(), "docs", 1)
+	if first == 0 || second == 0 {
+		t.Fatal("admit reservations")
+	}
+	control.AbortInsert(first)
+	if !control.CommitInsert(second) || control.CommitInsert(first) {
+		t.Fatal("abort removed a competing reservation")
+	}
 }
 
 func TestDeferredVectorBuildMaintenanceManualWrappersInvalidateEpoch(t *testing.T) {

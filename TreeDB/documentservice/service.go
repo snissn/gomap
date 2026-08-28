@@ -319,10 +319,10 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	deferredMaintenanceSucceeded := false
+	deferredMaintenanceEpoch := uint64(0)
 	defer func() {
-		if !deferredMaintenanceSucceeded && s.deferredVectorBuildMaintenance != nil {
-			s.deferredVectorBuildMaintenance.End()
+		if deferredMaintenanceEpoch != 0 && s.deferredVectorBuildMaintenance != nil {
+			s.deferredVectorBuildMaintenance.AbortInsert(deferredMaintenanceEpoch)
 		}
 	}()
 
@@ -364,7 +364,6 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 		updates = append(updates, doc)
 	}
-	deferredMaintenanceEpoch := uint64(0)
 	deferredMaintenanceCommitRejected := false
 	deferVectorIndexRebuild := req.DeferVectorIndexRebuild
 	if s.deferredVectorBuildMaintenance != nil {
@@ -446,6 +445,8 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			deferredMaintenanceEpoch = 0
 			deferredMaintenanceCommitRejected = true
 			deferVectorIndexRebuild = false
+		} else {
+			deferredMaintenanceEpoch = 0
 		}
 	}
 	var rebuildErr error
@@ -466,7 +467,6 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	if rebuildErr != nil {
 		return UpsertDocumentsResponse{}, rebuildErr
 	}
-	deferredMaintenanceSucceeded = true
 	return UpsertDocumentsResponse{Index: info, Upserted: len(prepared), Inserted: inserted, Updated: updated, IDs: ids, CompactEmbeddings: compactEmbeddings}, nil
 }
 
@@ -839,12 +839,6 @@ func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeI
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if s.deferredVectorBuildMaintenance != nil {
-		// Every early return restores ordinary worker policy. Finalize also
-		// closes a matching epoch while holding the worker's existing run lock.
-		defer s.deferredVectorBuildMaintenance.End()
-	}
-
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
 		return OptimizeIndexResponse{}, err

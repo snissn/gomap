@@ -86,7 +86,7 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	}); err == nil {
 		t.Fatal("malformed deferred upsert succeeded")
 	}
-	assertActive(false)
+	assertActive(true)
 
 	deferInsert("docs", "a2")
 	assertActive(true)
