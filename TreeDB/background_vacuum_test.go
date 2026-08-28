@@ -668,6 +668,7 @@ func TestDeferredVectorBuildMaintenanceFinalizeDebtAndFailureSemantics(t *testin
 		wantVacuums      uint64
 		wantBuild        bool
 		wantDebtRetained bool
+		clearEpoch       bool
 	}{
 		{name: "no scheduling debt does not probe", wantBuild: true},
 		{name: "coalesced debt without physical debt is discharged by the successful probe", coalescedDebt: true, wantProbes: 1, wantBuild: true},
@@ -675,6 +676,7 @@ func TestDeferredVectorBuildMaintenanceFinalizeDebtAndFailureSemantics(t *testin
 		{name: "unsupported vacuum is skipped and build still completes", coalescedDebt: true, physicalDebt: true, vacuumErr: errVacuumUnsupported, wantProbes: 1, wantVacuums: 1, wantBuild: true},
 		{name: "vacuum failure prevents build and retains debt", coalescedDebt: true, physicalDebt: true, vacuumErr: errors.New("injected vacuum failure"), wantErr: true, wantProbes: 1, wantVacuums: 1, wantDebtRetained: true},
 		{name: "build failure retains owner for retry", buildErr: errors.New("injected build failure"), wantErr: true, wantBuild: true},
+		{name: "missing owner preserves unserviced debt", coalescedDebt: true, clearEpoch: true, wantBuild: true, wantDebtRetained: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -686,6 +688,9 @@ func TestDeferredVectorBuildMaintenanceFinalizeDebtAndFailureSemantics(t *testin
 			}
 			if tt.coalescedDebt {
 				d.bgVac.runOnce(d)
+			}
+			if tt.clearEpoch {
+				control.End()
 			}
 			var probes, vacuums atomic.Uint64
 			restoreProbe := setBackgroundIndexVacuumTriggerReportHookForTest(func(*DB, context.Context) (backenddb.IndexVacuumTriggerReport, error) {

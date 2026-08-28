@@ -277,10 +277,12 @@ func (c *DeferredVectorBuildMaintenance) Finalize(ctx context.Context, index str
 			return err
 		}
 	}
-	if matching && !c.db.bgVac.deferredVectorBuildEpoch.CompareAndSwap(epoch, nil) {
-		return errors.New("treedb: deferred vector-build owner changed during finalization")
+	if matching {
+		if !c.db.bgVac.deferredVectorBuildEpoch.CompareAndSwap(epoch, nil) {
+			return errors.New("treedb: deferred vector-build owner changed during finalization")
+		}
+		c.db.bgVac.deferredVectorBuildDebt.Store(false)
 	}
-	c.db.bgVac.deferredVectorBuildDebt.Store(false)
 	return nil
 }
 
