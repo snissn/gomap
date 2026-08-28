@@ -28,7 +28,7 @@ SERVICE_LOG_TAIL_BYTES = 64 << 10
 DIAGNOSTICS_STATS_PATH = "/debug/treedb/stats"
 DIAGNOSTIC_CAPTURE_BYTES = 32 << 20
 DIAGNOSTIC_STATS_BYTES = 4 << 20
-STATE_SCROLL_PAGE_SIZE = 65536
+STATE_SCROLL_PAGE_SIZE = 8192
 DIAGNOSTIC_PROFILE_ENDPOINTS = {
     "cpu": ("/debug/pprof/profile", "cpu.pprof"),
     "goroutine": ("/debug/pprof/goroutine?debug=2", "goroutine.txt"),
