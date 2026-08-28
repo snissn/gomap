@@ -341,10 +341,16 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 }
 
 func (set *RecoverableRootSet) resourcesForRoot(root RecoverableRoot) *rootpublication.StableResourceSet {
+	resources, _ := set.resourcesForRootExact(root)
+	return resources
+}
+
+func (set *RecoverableRootSet) resourcesForRootExact(root RecoverableRoot) (*rootpublication.StableResourceSet, bool) {
 	if set == nil || set.released.Load() {
-		return nil
+		return nil, false
 	}
-	return set.rootResources[recoverableRootIdentity(root)]
+	resources, ok := set.rootResources[recoverableRootIdentity(root)]
+	return resources, ok
 }
 
 func cloneRecoverableResourceUnion(sources ...*rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, error) {
