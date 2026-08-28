@@ -250,14 +250,17 @@ func (c *DeferredVectorBuildMaintenance) Finalize(ctx context.Context, index str
 	}
 	if matching {
 		if c.db.bgVac.deferredVectorBuildDebt.Load() {
-			if err := c.db.bgVac.runOnceContextLocked(ctx, c.db, true); err != nil {
+			if err := c.db.bgVac.runOnceContextLocked(ctx, c.db, true); err != nil && !errors.Is(err, errVacuumUnsupported) {
 				return err
 			}
 		}
 	}
 	if build != nil {
-		return build()
+		if err := build(); err != nil {
+			return err
+		}
 	}
+	c.db.bgVac.deferredVectorBuildDebt.Store(false)
 	return nil
 }
 

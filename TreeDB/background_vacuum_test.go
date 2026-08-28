@@ -642,6 +642,7 @@ func TestDeferredVectorBuildMaintenanceFinalizeDebtAndFailureSemantics(t *testin
 		coalescedDebt    bool
 		physicalDebt     bool
 		vacuumErr        error
+		wantErr          bool
 		wantProbes       uint64
 		wantVacuums      uint64
 		wantBuild        bool
@@ -650,7 +651,8 @@ func TestDeferredVectorBuildMaintenanceFinalizeDebtAndFailureSemantics(t *testin
 		{name: "no scheduling debt does not probe", wantBuild: true},
 		{name: "coalesced debt without physical debt is discharged by the successful probe", coalescedDebt: true, wantProbes: 1, wantBuild: true},
 		{name: "successful eligible vacuum consumes debt", coalescedDebt: true, physicalDebt: true, wantProbes: 1, wantVacuums: 1, wantBuild: true},
-		{name: "vacuum failure prevents build and retains debt", coalescedDebt: true, physicalDebt: true, vacuumErr: errors.New("injected vacuum failure"), wantProbes: 1, wantVacuums: 1, wantDebtRetained: true},
+		{name: "unsupported vacuum is skipped and build still completes", coalescedDebt: true, physicalDebt: true, vacuumErr: errVacuumUnsupported, wantProbes: 1, wantVacuums: 1, wantBuild: true},
+		{name: "vacuum failure prevents build and retains debt", coalescedDebt: true, physicalDebt: true, vacuumErr: errors.New("injected vacuum failure"), wantErr: true, wantProbes: 1, wantVacuums: 1, wantDebtRetained: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -682,8 +684,8 @@ func TestDeferredVectorBuildMaintenanceFinalizeDebtAndFailureSemantics(t *testin
 				built = true
 				return nil
 			})
-			if (err == nil) == (tt.vacuumErr != nil) {
-				t.Fatalf("Finalize error=%v vacuumErr=%v", err, tt.vacuumErr)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Finalize error=%v wantErr=%t", err, tt.wantErr)
 			}
 			if probes.Load() != tt.wantProbes || vacuums.Load() != tt.wantVacuums || built != tt.wantBuild {
 				t.Fatalf("probes=%d vacuums=%d built=%t want %d/%d/%t", probes.Load(), vacuums.Load(), built, tt.wantProbes, tt.wantVacuums, tt.wantBuild)

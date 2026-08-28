@@ -2535,9 +2535,9 @@ func (db *DB) CompactIndex() error {
 	if db.backend == nil {
 		return ErrClosed
 	}
-	db.bgVac.endDeferredVectorBuild()
 	db.bgVac.runMu.Lock()
 	defer db.bgVac.runMu.Unlock()
+	db.bgVac.endDeferredVectorBuild()
 
 	if db.cached != nil {
 		if err := db.cached.Drain(); err != nil {
@@ -2558,14 +2558,18 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if db == nil {
 		return ErrClosed
 	}
-	db.bgVac.endDeferredVectorBuild()
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		db.bgVac.endDeferredVectorBuild()
+		return err
 	}
 	if err := lockFullScanMaintenanceContext(ctx, &db.bgVac.runMu); err != nil {
 		return err
 	}
 	defer db.bgVac.runMu.Unlock()
+	db.bgVac.endDeferredVectorBuild()
 	_, err := db.vacuumIndexOnlineStats(ctx)
 	if err == nil {
 		db.bgVac.deferredVectorBuildDebt.Store(false)
