@@ -923,9 +923,8 @@ func (c *Collection) registerBuiltVectorIndex(index *VectorIndex) error {
 		return err
 	}
 	def, declaredNative := findVectorIndex(c.meta.VectorIndexes, index.name)
-	if declaredNative && vectorIndexDefinitionUsesNativeRuntime(def) && c.writeDomain != nil {
-		c.registerVectorIndexCurrentCatalogWithAdHocAdmissionLocked(index)
-		return nil
+	if declaredNative && vectorIndexDefinitionUsesNativeRuntime(def) {
+		return ErrConcurrentMutation
 	}
 	return c.registerAdHocVectorIndexCurrentCatalogWithAdmissionLocked(index)
 }
@@ -5240,6 +5239,11 @@ func (idx *VectorIndex) Rebuild() error {
 	if _, err := c.refreshNativeVectorIndexDeclaration(idx.name); err != nil {
 		return err
 	}
+	coord := c.collectionSchemaCoordinator()
+	if coord != nil {
+		coord.adHocVectorAdmissionMu.Lock()
+		defer coord.adHocVectorAdmissionMu.Unlock()
+	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	runVectorIndexRebuildAfterLockHookForTest()
@@ -5298,7 +5302,7 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.requireFullNativeSnapshotLocked()
 	idx.publishSearchViewLocked(true)
 	idx.mu.Unlock()
-	c.registerVectorIndexCurrentCatalog(idx)
+	c.registerVectorIndexCurrentCatalogWithAdHocAdmissionLocked(idx)
 	if c.manager != nil && idx.needsNativeAutoPersist() {
 		c.manager.registerCollectionHandle(c)
 	}

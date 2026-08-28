@@ -182,6 +182,76 @@ func TestVectorIndexRebuildDoesNotDeadlockQueuedSchemaWriter(t *testing.T) {
 	}
 }
 
+func TestVectorIndexRebuildAcquiresAdmissionBeforeMutation(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.Insert([]byte("a"), []byte(`{"embedding":[1,0]}`)); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4,
+	})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	peer, err := NewCollectionManager(d).OpenCollection(col.collectionName())
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+
+	mutation := col.lockMutation()
+	mutationLocked := true
+	defer func() {
+		if mutationLocked {
+			mutation.Unlock()
+		}
+	}()
+	rebuilt := make(chan error, 1)
+	go func() { rebuilt <- index.Rebuild() }()
+	coord := col.collectionSchemaCoordinator()
+	waitForLockState(t, func() bool {
+		if coord.adHocVectorAdmissionMu.TryRLock() {
+			coord.adHocVectorAdmissionMu.RUnlock()
+			return false
+		}
+		return true
+	}, "vector rebuild to acquire ad-hoc admission")
+
+	inserted := make(chan error, 1)
+	go func() {
+		_, err := peer.Insert([]byte("b"), []byte(`{"embedding":[0,1]}`))
+		inserted <- err
+	}()
+	select {
+	case err := <-inserted:
+		t.Fatalf("insert passed rebuild admission before mutation release: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	mutation.Unlock()
+	mutationLocked = false
+	select {
+	case err := <-rebuilt:
+		if err != nil {
+			t.Fatalf("rebuild: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("rebuild deadlocked against ordinary writer")
+	}
+	select {
+	case err := <-inserted:
+		if err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ordinary writer remained blocked after rebuild")
+	}
+}
+
 func waitForLockState(t *testing.T, ready func() bool, description string) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)

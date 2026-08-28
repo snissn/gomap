@@ -774,6 +774,34 @@ func TestBuiltVectorIndexRegistrationRejectsBufferedPeerWrite(t *testing.T) {
 	}
 }
 
+func TestBuiltVectorIndexRegistrationRejectsChangedNativeDeclaration(t *testing.T) {
+	_, d, col := openChunkingTestCollection(t)
+	peer, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("before"), []byte(`{"embedding":[1,0]}`)); err != nil {
+		t.Fatalf("insert vector source: %v", err)
+	}
+	index, err := col.buildVectorIndex(VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	}, false)
+	if err != nil {
+		t.Fatalf("build unregistered vector index: %v", err)
+	}
+	if _, err := peer.CreateVectorIndex(VectorIndexDefinition{
+		Name: "embedding", Field: "other_embedding", Metric: VectorMetricCosine, Dimensions: 3,
+	}); err != nil {
+		t.Fatalf("create conflicting native declaration: %v", err)
+	}
+	if err := col.registerBuiltVectorIndex(index); !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("register vector build after native declaration error=%v, want %v", err, ErrConcurrentMutation)
+	}
+	if got := col.registeredAdHocVectorIndexCount(); got != 0 {
+		t.Fatalf("registered ad-hoc vector count=%d want 0", got)
+	}
+}
+
 func TestIngestChunkedDocumentsHoldsVectorAdmissionBeforeMutation(t *testing.T) {
 	_, d, col := openChunkingTestCollection(t)
 	peer, err := NewCollectionManager(d).OpenCollection("docs")

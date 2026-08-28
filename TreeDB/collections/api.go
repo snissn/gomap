@@ -255,9 +255,10 @@ func commandWALBufferedInsertCommitAmbiguous(err error) error {
 // UpdateBatchItem describes one document update in a batch. DocumentID must be
 // non-empty and unique within the batch. Update receives the current stored
 // document bytes and returns the replacement document bytes in the same format
-// expected by Update. If Update returns changed=true, replacement must be a
-// complete valid stored document for the collection format; returning
-// replacement=nil, changed=false is the supported no-op form.
+// expected by Update. It runs inside the collection mutation boundary and must
+// not call methods on the same collection. If Update returns changed=true,
+// replacement must be a complete valid stored document for the collection
+// format; returning replacement=nil, changed=false is the supported no-op form.
 type UpdateBatchItem struct {
 	DocumentID []byte
 	Update     func(current []byte) (replacement []byte, changed bool, err error)
@@ -12097,10 +12098,11 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 }
 
 // DeleteDocumentIf removes a document only when predicate accepts its current
-// stored value. The predicate runs inside the collection mutation boundary;
-// false leaves the document unchanged and an error is returned before commit.
-// It may be retried after a retriable publish failure, so it must be side-effect
-// free and safe to invoke more than once.
+// stored value. The predicate runs inside the collection mutation boundary and
+// must not call methods on the same collection. False leaves the document
+// unchanged and an error is returned before commit. The predicate may be
+// retried after a retriable publish failure, so it must be side-effect free and
+// safe to invoke more than once.
 func (c *Collection) DeleteDocumentIf(documentID []byte, predicate func(current []byte) (bool, error)) (bool, error) {
 	if predicate == nil {
 		return false, errors.New("collections: delete predicate is nil")
@@ -12885,8 +12887,8 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // Callback panics are recovered and returned as errors in both direct and
 // combined execution. When the collection write domain combines concurrent
 // updates, update may run on an internal combiner goroutine. The callback must
-// not rely on caller goroutine behavior such as recover, runtime.Goexit, or
-// testing.T.Fatal.
+// not call methods on the same collection or rely on caller goroutine behavior
+// such as recover, runtime.Goexit, or testing.T.Fatal.
 //
 // Under the collection WAL target contract, WAL-on success is process-crash
 // recoverable for update operations that publish before returning. Direct-
