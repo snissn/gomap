@@ -173,10 +173,10 @@ type bgIndexVacuumWorker struct {
 }
 
 type deferredVectorBuildEpoch struct {
-	id           uint64
 	owner        uint64
 	index        string
 	generation   uint64
+	accepted     bool
 	reservations []uint64
 	lastActivity int64
 }
@@ -303,7 +303,6 @@ func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(owner uint64, index strin
 		if current == nil {
 			reservationID := w.deferredVectorBuildNextID.Add(1)
 			next := &deferredVectorBuildEpoch{
-				id:           reservationID,
 				owner:        owner,
 				index:        index,
 				generation:   generation,
@@ -329,10 +328,10 @@ func (w *bgIndexVacuumWorker) admitDeferredVectorBuild(owner uint64, index strin
 		reservations := append([]uint64(nil), current.reservations...)
 		reservations = append(reservations, reservationID)
 		next := &deferredVectorBuildEpoch{
-			id:           current.id,
 			owner:        current.owner,
 			index:        index,
 			generation:   generation,
+			accepted:     current.accepted,
 			reservations: reservations,
 			lastActivity: time.Now().UnixNano(),
 		}
@@ -364,10 +363,10 @@ func (w *bgIndexVacuumWorker) commitDeferredVectorBuild(reservationID uint64) bo
 		reservations := append([]uint64(nil), current.reservations[:reservationIndex]...)
 		reservations = append(reservations, current.reservations[reservationIndex+1:]...)
 		next := &deferredVectorBuildEpoch{
-			id:           current.id,
 			owner:        current.owner,
 			index:        current.index,
 			generation:   current.generation,
+			accepted:     true,
 			reservations: reservations,
 			lastActivity: time.Now().UnixNano(),
 		}
@@ -400,7 +399,7 @@ func (w *bgIndexVacuumWorker) abortDeferredVectorBuild(reservationID uint64) {
 		if reservationIndex < 0 {
 			return
 		}
-		if len(current.reservations) == 1 && current.id == reservationID {
+		if len(current.reservations) == 1 && !current.accepted {
 			if w.deferredVectorBuildEpoch.CompareAndSwap(current, nil) {
 				return
 			}
@@ -409,10 +408,10 @@ func (w *bgIndexVacuumWorker) abortDeferredVectorBuild(reservationID uint64) {
 		reservations := append([]uint64(nil), current.reservations[:reservationIndex]...)
 		reservations = append(reservations, current.reservations[reservationIndex+1:]...)
 		next := &deferredVectorBuildEpoch{
-			id:           current.id,
 			owner:        current.owner,
 			index:        current.index,
 			generation:   current.generation,
+			accepted:     current.accepted,
 			reservations: reservations,
 			lastActivity: current.lastActivity,
 		}

@@ -777,6 +777,18 @@ func TestDeferredVectorBuildMaintenanceAbortPreservesCompetingReservation(t *tes
 	}
 }
 
+func TestDeferredVectorBuildMaintenanceAbortRemovesAllFailedEpoch(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	control := &DeferredVectorBuildMaintenance{db: d}
+	first := control.AdmitInsert(context.Background(), "docs", 1)
+	second := control.AdmitInsert(context.Background(), "docs", 1)
+	control.AbortInsert(first)
+	control.AbortInsert(second)
+	if d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("all-failed reservations left deferred maintenance active")
+	}
+}
+
 func TestDeferredVectorBuildMaintenanceScopesDoNotJoin(t *testing.T) {
 	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
 	first := (&DeferredVectorBuildMaintenance{db: d}).Scoped()
@@ -951,9 +963,10 @@ func TestBackgroundIndexVacuumDeferredVectorBuildAbandonmentRestoresPolicy(t *te
 	}
 	epoch := d.bgVac.deferredVectorBuildEpoch.Load()
 	d.bgVac.deferredVectorBuildEpoch.Store(&deferredVectorBuildEpoch{
-		id:           epoch.id,
+		owner:        epoch.owner,
 		index:        epoch.index,
 		generation:   epoch.generation,
+		accepted:     epoch.accepted,
 		lastActivity: time.Now().Add(-3 * time.Millisecond).UnixNano(),
 	})
 
@@ -1021,9 +1034,10 @@ func TestDeferredVectorBuildMaintenanceTracksConcurrentReservations(t *testing.T
 	}
 	epoch := d.bgVac.deferredVectorBuildEpoch.Load()
 	d.bgVac.deferredVectorBuildEpoch.Store(&deferredVectorBuildEpoch{
-		id:           epoch.id,
+		owner:        epoch.owner,
 		index:        epoch.index,
 		generation:   epoch.generation,
+		accepted:     epoch.accepted,
 		reservations: append([]uint64(nil), epoch.reservations...),
 		lastActivity: time.Now().Add(-3 * time.Millisecond).UnixNano(),
 	})
