@@ -2515,6 +2515,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                         optimize_response, expected_index_name,
                         expected_m=harness.get("m"),
                         expected_ef_construction=harness.get("ef_construction"),
+                        require_column_graph=True,
                     )
                 except RuntimeError as exc:
                     errors.append(f"adapter optimize response does not prove a ready index: {exc}")
@@ -3743,6 +3744,7 @@ def lifecycle_ready_asset(
     *,
     expected_m: int | None = None,
     expected_ef_construction: int | None = None,
+    require_column_graph: bool = False,
 ) -> tuple[str, int, int | None]:
     index_info = optimize.get("index")
     status = optimize.get("status")
@@ -3750,6 +3752,8 @@ def lifecycle_ready_asset(
         raise RuntimeError("optimize response is missing index/status evidence")
     vector_index_name = optimize.get("vector_index_name")
     strategy = index_info.get("vector_strategy")
+    if require_column_graph and strategy != "column_graph":
+        raise RuntimeError("completed lifecycle requires a durable column graph asset")
     if (
         index_info.get("name") != index_name
         or not isinstance(vector_index_name, str)
@@ -3824,6 +3828,7 @@ def complete_lifecycle(
         optimize, index_name,
         expected_m=args.m,
         expected_ef_construction=args.ef_construction,
+        require_column_graph=True,
     )
     index_state = {"identity": index_identity, "asset_generation": asset_generation, "status": "ready"}
     builder = LifecycleStateBuilder()

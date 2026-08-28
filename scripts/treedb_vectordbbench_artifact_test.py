@@ -4342,6 +4342,32 @@ class LifecycleIntegrationTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "durable column graph"):
             harness.lifecycle_ready_asset(optimize, "cohere")
 
+    def test_completed_lifecycle_rejects_native_runtime_route_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            sidecar = root / "adapter-lifecycle.jsonl"
+            records = [json.loads(line) for line in sidecar.read_text(encoding="utf-8").splitlines()]
+            optimize = records[-3]["response"]
+            optimize["index"]["vector_strategy"] = "native_runtime"
+            optimize["status"].update({
+                "strategy": "native_runtime", "state": "native_runtime", "root_id": 7,
+            })
+            sidecar.write_text(
+                "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            next(
+                artifact for artifact in manifest["lifecycle"]["raw_artifacts"]
+                if artifact["path"] == "adapter-lifecycle.jsonl"
+            )["sha256"] = harness.sha256_file(sidecar)
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("column graph" in error for error in got["errors"]), got)
+
     def test_native_ready_asset_uses_positive_root_id(self) -> None:
         optimize = {
             "index": {"name": "cohere", "generation": 7, "vector_strategy": "native_runtime"},

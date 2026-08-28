@@ -195,7 +195,9 @@ samples. Profile validation is an offline correctness gate and invokes the
 corresponding native decoder once per profile. The optimized index identity and durable `asset_generation`
 must survive close and cold reopen. For a `column_graph`, H2 uses the positive index generation paired
 with `column_graph_loaded` and requires the cold-reopened index to report that same generation. For a
-`native_runtime` index, H2 uses its positive vector-maintenance root ID. The artifact-owned
+`native_runtime` index, partial capture may identify its positive vector-maintenance root ID, but it
+cannot qualify a completed no-document route proof; completed lifecycle evidence requires a durable
+`column_graph`. The artifact-owned
 database identity and server `commit_seq` must also match across close/reopen,
 and route proof must use the same index identity and asset generation without
 fallback through either `exact_hnsw_search_pack_v1` or `quantized_rerank`. The
