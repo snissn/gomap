@@ -1737,6 +1737,8 @@ func (db *DB) Close() error {
 	if db == nil {
 		return nil
 	}
+	db.bgVac.deferredVectorBuildClosed.Store(true)
+	db.bgVac.endDeferredVectorBuild()
 	db.bgVac.Stop()
 	var err error
 	if db.cached != nil || db.backend != nil {
@@ -2541,7 +2543,14 @@ func (db *DB) CompactIndex() error {
 // a short writer pause. Disk space from the old index is reclaimed once any old
 // snapshots/iterators drain.
 func (db *DB) VacuumIndexOnline(ctx context.Context) error {
+	if db == nil {
+		return ErrClosed
+	}
+	db.bgVac.endDeferredVectorBuild()
 	_, err := db.vacuumIndexOnlineStats(ctx)
+	if err == nil {
+		db.bgVac.deferredVectorBuildDebt.Store(false)
+	}
 	return err
 }
 

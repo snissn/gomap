@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
@@ -29,17 +30,19 @@ type Service struct {
 	manager *collections.CollectionManager
 	writeMu sync.Mutex
 
-	benchmarkSearchCacheMu         sync.RWMutex
-	benchmarkSearchCache           map[string]*serviceBenchmarkSearchCacheEntry
-	benchmarkSearchBufferPool      sync.Pool
-	denseVectorNativeAfterSearch   func(int, collections.VectorIndexSearchResponse) error
-	vectorPartitionOperations      *vectorpartition.OperationsV1
-	diagnosticsEnabled             atomic.Bool
-	diagnosticsMu                  sync.Mutex
-	diagnosticsActive              atomic.Pointer[diagnosticsActiveIndex]
-	diagnosticsCompleted           sync.Map // map[string]*diagnosticsCompletedInsert
-	diagnosticsBeforeActivePublish func()
-	closed                         bool
+	benchmarkSearchCacheMu          sync.RWMutex
+	benchmarkSearchCache            map[string]*serviceBenchmarkSearchCacheEntry
+	benchmarkSearchBufferPool       sync.Pool
+	denseVectorNativeAfterSearch    func(int, collections.VectorIndexSearchResponse) error
+	vectorPartitionOperations       *vectorpartition.OperationsV1
+	diagnosticsEnabled              atomic.Bool
+	diagnosticsMu                   sync.Mutex
+	diagnosticsActive               atomic.Pointer[diagnosticsActiveIndex]
+	diagnosticsCompleted            sync.Map // map[string]*diagnosticsCompletedInsert
+	diagnosticsBeforeActivePublish  func()
+	deferredVectorBuildMaintenance  *treedb.DeferredVectorBuildMaintenance
+	deferredMaintenanceBeforeCommit func()
+	closed                          bool
 }
 
 // RegisterVectorPartitionOperationsV1 installs the optional default-off
@@ -84,8 +87,15 @@ func (e *serviceBenchmarkSearchCacheEntry) matches(name string) bool {
 
 // New returns a document/search service backed by manager.
 func New(manager *collections.CollectionManager) *Service {
+	return NewWithDeferredVectorBuildMaintenance(manager, nil)
+}
+
+// NewWithDeferredVectorBuildMaintenance wires the explicit deferred-build
+// lifecycle to TreeDB's automatic index-maintenance worker.
+func NewWithDeferredVectorBuildMaintenance(manager *collections.CollectionManager, maintenance *treedb.DeferredVectorBuildMaintenance) *Service {
 	return &Service{
-		manager: manager,
+		manager:                        manager,
+		deferredVectorBuildMaintenance: maintenance,
 		benchmarkSearchBufferPool: sync.Pool{New: func() any {
 			return &collections.VectorIndexSearchBuffer{}
 		}},
@@ -98,6 +108,11 @@ func New(manager *collections.CollectionManager) *Service {
 func (s *Service) Close() error {
 	if s == nil {
 		return nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if s.deferredVectorBuildMaintenance != nil {
+		s.deferredVectorBuildMaintenance.End()
 	}
 	var entries []*serviceBenchmarkSearchCacheEntry
 	s.benchmarkSearchCacheMu.Lock()
@@ -146,6 +161,9 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if s.deferredVectorBuildMaintenance != nil {
+		s.deferredVectorBuildMaintenance.End()
+	}
 	return s.createIndexLocked(ctx, req)
 }
 
@@ -301,6 +319,12 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	deferredMaintenanceSucceeded := false
+	defer func() {
+		if !deferredMaintenanceSucceeded && s.deferredVectorBuildMaintenance != nil {
+			s.deferredVectorBuildMaintenance.End()
+		}
+	}()
 
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
@@ -340,7 +364,22 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 		updates = append(updates, doc)
 	}
-	if len(insertIDs) > 0 && len(updates) == 0 && !req.DeferVectorIndexRebuild {
+	deferredMaintenanceEpoch := uint64(0)
+	deferVectorIndexRebuild := req.DeferVectorIndexRebuild
+	if s.deferredVectorBuildMaintenance != nil {
+		if deferVectorIndexRebuild && len(insertIDs) > 0 && len(updates) == 0 {
+			deferredMaintenanceEpoch = s.deferredVectorBuildMaintenance.AdmitInsert(ctx, index, info.Generation)
+			if err := ctxErr(ctx); err != nil {
+				return UpsertDocumentsResponse{}, err
+			}
+			if deferredMaintenanceEpoch == 0 {
+				deferVectorIndexRebuild = false
+			}
+		} else {
+			s.deferredVectorBuildMaintenance.End()
+		}
+	}
+	if len(insertIDs) > 0 && len(updates) == 0 && !deferVectorIndexRebuild {
 		if err := preflightServiceVectorAutoRebuildSupported(info); err != nil {
 			return UpsertDocumentsResponse{}, err
 		}
@@ -352,6 +391,11 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			inserted = len(insertIDs)
 			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
 		} else if collections.IsDuplicateKeyError(err) {
+			if deferredMaintenanceEpoch != 0 {
+				s.deferredVectorBuildMaintenance.End()
+				deferredMaintenanceEpoch = 0
+				deferVectorIndexRebuild = false
+			}
 			// Upsert is a service contract, while Collection.InsertBatch is an
 			// insert-only primitive. If another request inserts one of these IDs
 			// between the read preflight and InsertBatch, fall back per item to
@@ -388,8 +432,17 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			updated++
 		}
 	}
+	if deferredMaintenanceEpoch != 0 {
+		if s.deferredMaintenanceBeforeCommit != nil {
+			s.deferredMaintenanceBeforeCommit()
+		}
+		if !s.deferredVectorBuildMaintenance.CommitInsert(deferredMaintenanceEpoch) {
+			deferredMaintenanceEpoch = 0
+			deferVectorIndexRebuild = false
+		}
+	}
 	var rebuildErr error
-	if inserted > 0 && updated == 0 && !req.DeferVectorIndexRebuild {
+	if inserted > 0 && updated == 0 && !deferVectorIndexRebuild {
 		rebuildErr = rebuildServiceVectorIndex(ctx, col)
 	}
 	if inserted+updated > 0 {
@@ -400,6 +453,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	if rebuildErr != nil {
 		return UpsertDocumentsResponse{}, rebuildErr
 	}
+	deferredMaintenanceSucceeded = true
 	return UpsertDocumentsResponse{Index: info, Upserted: len(prepared), Inserted: inserted, Updated: updated, IDs: ids, CompactEmbeddings: compactEmbeddings}, nil
 }
 
@@ -410,6 +464,9 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if s.deferredVectorBuildMaintenance != nil {
+		s.deferredVectorBuildMaintenance.End()
+	}
 
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
@@ -418,7 +475,6 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 	if len(req.IDs) > 0 && req.Filter != nil {
 		return DeleteDocumentsResponse{}, serviceError(CodeInvalidRequest, "delete accepts either ids or filter, not both")
 	}
-
 	var ids []string
 	if len(req.IDs) > 0 {
 		ids, err = validateDocumentIDs(req.IDs)
@@ -702,6 +758,9 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if s.deferredVectorBuildMaintenance != nil {
+		s.deferredVectorBuildMaintenance.End()
+	}
 
 	existingCol, existingInfo, err := s.openIndex(ctx, index, 0)
 	if err != nil {
@@ -767,6 +826,9 @@ func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeI
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if s.deferredVectorBuildMaintenance != nil {
+		s.deferredVectorBuildMaintenance.End()
+	}
 
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
