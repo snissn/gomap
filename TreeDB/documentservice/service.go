@@ -28,7 +28,7 @@ var errStopDocumentCursorPage = errors.New("documentservice: cursor page complet
 // Service maps the document/search contract onto TreeDB collections.
 type Service struct {
 	manager *collections.CollectionManager
-	writeMu sync.Mutex
+	writeMu sync.RWMutex
 
 	benchmarkSearchCacheMu          sync.RWMutex
 	benchmarkSearchCache            map[string]*serviceBenchmarkSearchCacheEntry
@@ -321,13 +321,26 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		return UpsertDocumentsResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
 	}
 	diagnostics := s.diagnosticsEnabled.Load()
+	upsertStats := UpsertDiagnosticsStats{Requests: 1}
+	response, err := s.upsertDocuments(ctx, index, req, req.DeferVectorIndexRebuild, diagnostics, &upsertStats)
+	if diagnostics {
+		s.addDiagnosticsUpsert(upsertStats)
+	}
+	return response, err
+}
+
+func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertDocumentsRequest, sharedCandidate, diagnostics bool, upsertStats *UpsertDiagnosticsStats) (UpsertDocumentsResponse, error) {
 	var lockWaitStarted time.Time
 	if diagnostics {
 		lockWaitStarted = time.Now()
 	}
-	s.writeMu.Lock()
+	if sharedCandidate {
+		s.writeMu.RLock()
+	} else {
+		s.writeMu.Lock()
+	}
+	locked := true
 	var lockHoldStarted time.Time
-	upsertStats := UpsertDiagnosticsStats{Requests: 1}
 	var phaseStarted time.Time
 	var phaseNanos *uint64
 	startPhase := func(nanos *uint64) {
@@ -341,21 +354,27 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		phaseNanos = nanos
 	}
 	if diagnostics {
-		upsertStats.LockWaitNanos = diagnosticsElapsedNanos(lockWaitStarted)
+		upsertStats.LockWaitNanos += diagnosticsElapsedNanos(lockWaitStarted)
 		lockHoldStarted = time.Now()
 	}
-	defer func() {
+	release := func() {
+		if !locked {
+			return
+		}
 		if diagnostics {
 			if phaseNanos != nil {
 				*phaseNanos += diagnosticsElapsedNanos(phaseStarted)
 			}
-			upsertStats.LockHoldNanos = diagnosticsElapsedNanos(lockHoldStarted)
+			upsertStats.LockHoldNanos += diagnosticsElapsedNanos(lockHoldStarted)
 		}
-		s.writeMu.Unlock()
-		if diagnostics {
-			s.addDiagnosticsUpsert(upsertStats)
+		if sharedCandidate {
+			s.writeMu.RUnlock()
+		} else {
+			s.writeMu.Unlock()
 		}
-	}()
+		locked = false
+	}
+	defer release()
 	deferredMaintenanceEpoch := uint64(0)
 	defer func() {
 		if deferredMaintenanceEpoch != 0 && s.deferredVectorBuildMaintenance != nil {
@@ -368,6 +387,10 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
+	}
+	if sharedCandidate && info.VectorStrategy != collections.VectorIndexStrategyColumnGraph {
+		release()
+		return s.upsertDocuments(ctx, index, req, false, diagnostics, upsertStats)
 	}
 	if len(req.Documents) == 0 {
 		return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "documents must not be empty")
@@ -405,6 +428,10 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 		updates = append(updates, doc)
 	}
+	if sharedCandidate && len(updates) != 0 {
+		release()
+		return s.upsertDocuments(ctx, index, req, false, diagnostics, upsertStats)
+	}
 	startPhase(&upsertStats.MaintenanceNanos)
 	deferredMaintenanceCommitRejected := false
 	deferVectorIndexRebuild := req.DeferVectorIndexRebuild
@@ -436,6 +463,15 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			inserted = len(insertIDs)
 			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
 		} else if collections.IsDuplicateKeyError(err) {
+			if sharedCandidate {
+				if deferredMaintenanceEpoch != 0 && s.deferredVectorBuildMaintenance != nil {
+					startPhase(&upsertStats.FinalizeNanos)
+					s.deferredVectorBuildMaintenance.AbortInsert(deferredMaintenanceEpoch)
+					deferredMaintenanceEpoch = 0
+				}
+				release()
+				return s.upsertDocuments(ctx, index, req, false, diagnostics, upsertStats)
+			}
 			if deferredMaintenanceEpoch != 0 {
 				startPhase(&upsertStats.MaintenanceNanos)
 				if err := s.deferredVectorBuildMaintenance.EndContext(ctx); err != nil {
@@ -496,6 +532,25 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			deferredMaintenanceEpoch = 0
 			deferredMaintenanceCommitRejected = true
 			deferVectorIndexRebuild = false
+			if sharedCandidate {
+				release()
+				phaseNanos = nil
+				if diagnostics {
+					lockWaitStarted = time.Now()
+				}
+				s.writeMu.Lock()
+				sharedCandidate = false
+				locked = true
+				if diagnostics {
+					upsertStats.LockWaitNanos += diagnosticsElapsedNanos(lockWaitStarted)
+					lockHoldStarted = time.Now()
+				}
+				col, info, err = s.openIndex(ctx, index, req.ExpectedGeneration)
+				if err != nil {
+					return UpsertDocumentsResponse{}, err
+				}
+				startPhase(&upsertStats.FinalizeNanos)
+			}
 		} else {
 			deferredMaintenanceEpoch = 0
 		}
