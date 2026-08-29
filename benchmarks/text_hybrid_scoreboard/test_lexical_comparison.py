@@ -99,7 +99,7 @@ class LexicalComparisonTest(unittest.TestCase):
         elif engine_id == "bleve":
             config.update(tie_break="score,id", scoring_contract="native_directional", weighted_field_materialization="title repeated 3x then body for non-phrase native scoring", phrase_fields=["title", "body"], phrase_scoring="native TF-IDF title boost 3, body boost 1")
         else:
-            config.update(tie_break="score,id", scoring_contract="native_directional", weighted_field_materialization="title repeated 3x then body for non-phrase native scoring", phrase_fields=["title", "body"], phrase_scoring="native bm25 title weight 3, body weight 1")
+            config.update(tie_break="score,id", scoring_contract="native_directional", source_table="docs", fts_content_mode="contentless", generated_weighted_field_storage="FTS index only", weighted_field_materialization="title repeated 3x then body for non-phrase native scoring", phrase_fields=["title", "body"], phrase_scoring="native bm25 title weight 3, body weight 1")
         return {
             "schema_version": RESULT_SCHEMA, "status": "ok",
             "engine": {"id": engine_id, "family": "test", "name": engine_id, "version": "candidate-commit" if engine_id == "treedb_text_v2" else "pinned"},
@@ -251,6 +251,19 @@ class LexicalComparisonTest(unittest.TestCase):
                 artifact = self.artifact()
                 mutate(artifact)
                 with self.assertRaises(ValidationError):
+                    validate_result(artifact, self.manifest, self.expected, self.eligible, self.corpus_ids)
+
+    def test_validator_rejects_sqlite_storage_contract_drift(self) -> None:
+        mutations = {
+            "source table": lambda config: config.update(source_table="generated_content"),
+            "FTS content mode": lambda config: config.update(fts_content_mode="contentful"),
+            "generated field storage": lambda config: config.update(generated_weighted_field_storage="persisted"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                artifact = self.artifact("sqlite_fts5")
+                mutate(artifact["config"])
+                with self.assertRaisesRegex(ValidationError, "SQLite"):
                     validate_result(artifact, self.manifest, self.expected, self.eligible, self.corpus_ids)
 
     def test_directional_rows_reject_filter_leakage_and_truncation(self) -> None:

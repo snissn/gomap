@@ -335,6 +335,9 @@ def validate_result(artifact: dict[str, Any], manifest: dict[str, Any], expected
         _require(artifact["config"].get("phrase_fields") == ["title", "body"] and artifact["config"].get("phrase_scoring") == "native TF-IDF title boost 3, body boost 1", f"{prefix}: Bleve phrase scoring disclosure mismatch")
     elif engine_id == "sqlite_fts5":
         _require(artifact["config"].get("weighted_field_materialization") == "title repeated 3x then body for non-phrase native scoring", f"{prefix}: SQLite weighted-field config mismatch")
+        _require(artifact["config"].get("source_table") == "docs", f"{prefix}: SQLite source-table contract mismatch")
+        _require(artifact["config"].get("fts_content_mode") == "contentless", f"{prefix}: SQLite FTS content mode mismatch")
+        _require(artifact["config"].get("generated_weighted_field_storage") == "FTS index only", f"{prefix}: SQLite generated-field storage contract mismatch")
         _require(artifact["config"].get("phrase_fields") == ["title", "body"] and artifact["config"].get("phrase_scoring") == "native bm25 title weight 3, body weight 1", f"{prefix}: SQLite phrase scoring disclosure mismatch")
     _validate_environment(artifact.get("environment"), manifest, prefix)
     build = artifact.get("build", {})
