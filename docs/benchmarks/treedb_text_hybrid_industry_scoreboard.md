@@ -66,7 +66,7 @@ The frozen contract is:
   `k1=1.2`, `b=0.75`, per-field average-length normalization, union-document
   term IDF, and one saturation step after weighted field-TF combination;
 - top-K 10 with score-descending/document-ID-ascending ties;
-- two warmups and 20 retained raw latency samples per query per repetition;
+- 100 warmups and 20 retained raw latency samples per query per repetition;
 - warm in-process cache state only after the built index is closed and reopened;
 - common term, rare term, AND, OR, exact phrase, and scalar-filtered term cases.
 
@@ -123,8 +123,8 @@ It also records the output filesystem's decimal POSIX `st_dev`. Each adapter
 records corpus, index, and result `st_dev` values in the same representation;
 validation compares all four identities and the exact memory value to runner
 context rather than trusting adapter booleans. Go adapters run with
-`GOMAXPROCS=1`; Lucene runs
-with `-XX:ActiveProcessorCount=1`.
+`GOMAXPROCS=1`; Lucene runs with `-XX:ActiveProcessorCount=1` and a
+`SerialMergeScheduler`.
 
 The validator rejects any artifact whose recorded contract, filesystem policy,
 memory-limit policy, query/process concurrency, or CPU parallelism differs from
