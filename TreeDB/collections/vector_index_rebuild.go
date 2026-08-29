@@ -1469,9 +1469,6 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 	}
 	stageStarted = time.Now()
 	preparedSearchPack, err := writeColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir, cfg, def, graph, manifest.Generation, searchPackPartID, rows, authority)
-	if timing != nil {
-		timing.SearchPackPreparation = collectionObservedElapsedSince(stageStarted)
-	}
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
@@ -1482,6 +1479,9 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 	}
 	if err := validateColumnHNSWSearchPackPreparedAsset(assetRootDir, preparedSearchPack, graph, def); err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+	}
+	if timing != nil {
+		timing.SearchPackPreparation = collectionObservedElapsedSince(stageStarted)
 	}
 	stageStarted = time.Now()
 	raw, err := encodeColumnVectorGraphManifestRecord(graph)
