@@ -136,7 +136,30 @@
             }
           },
           "timed_out": {"type": "boolean"}
-        }
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"status": {"const": "ok"}}, "required": ["status"]},
+            "then": {
+              "properties": {"equivalent": {"const": true}},
+              "required": ["samples_nanos", "result_ids", "result_digest", "reopen_result_ids", "reopen_result_digest", "route", "timed_out"]
+            }
+          },
+          {
+            "if": {"properties": {"status": {"const": "directional"}}, "required": ["status"]},
+            "then": {
+              "properties": {"equivalent": {"const": false}},
+              "required": ["non_equivalent_reason", "samples_nanos", "result_ids", "result_digest", "reopen_result_ids", "reopen_result_digest", "route", "timed_out"]
+            }
+          },
+          {
+            "if": {"properties": {"status": {"const": "unsupported"}}, "required": ["status"]},
+            "then": {
+              "properties": {"equivalent": {"const": false}},
+              "required": ["unsupported_reason"]
+            }
+          }
+        ]
       }
     }
   },
