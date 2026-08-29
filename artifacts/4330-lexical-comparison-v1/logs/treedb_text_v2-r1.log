@@ -1,8 +1,0 @@
-command=go run ./benchmarks/text_hybrid_scoreboard/treedb_adapter --manifest /Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/benchmarks/text_hybrid_scoreboard/lexical_manifest.json --corpus /Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/corpus.tsv --out /Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/raw/treedb_text_v2-r1.json --repetition 1 --db /Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/indexes/treedb_text_v2-r1
-cwd=/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison
-started_unix=1788012681.42927
-returncode=0
-
-[stdout]
-
-[stderr]

@@ -24,7 +24,10 @@ python3 benchmarks/text_hybrid_scoreboard/run_lexical_comparison.py \
 
 The runner rejects fewer than three retained repetitions and a dirty checkout.
 It records the exact commit, source tree, TreeDB subtree, comparator-harness
-subtree, and dirty state; the TreeDB raw artifacts are bound to that commit.
+subtree, and byte-level tracked diff state before execution, then recomputes
+all five after the last adapter and rejects any drift before consolidation.
+Generated ignored output does not affect that check; TreeDB raw artifacts are
+bound to the unchanged commit.
 `--allow-dirty` is development-smoke-only and marks the consolidated report
 ineligible for retained qualification. The runner prepares pinned external
 dependencies, then runs engines serially in this order: TreeDB text-v2, Apache
@@ -100,11 +103,13 @@ fallback, or partial output also aborts rather than producing a row.
 
 The manifest freezes one query at a time, one engine process at a time, runtime
 CPU parallelism of one, monotonic wall-clock latency, process-scoped build CPU,
-and process-lifetime peak RSS. The runner detects the inherited address-space
-limit without changing it and passes the detected policy to every adapter.
-It also records the output filesystem device. Each adapter records corpus,
-index, and result filesystem identities and fails validation unless all three
-are the output filesystem. Go adapters run with `GOMAXPROCS=1`; Lucene runs
+and process-lifetime peak RSS. The runner detects the exact inherited
+address-space limit without changing it and passes that value to every adapter.
+It also records the output filesystem's decimal POSIX `st_dev`. Each adapter
+records corpus, index, and result `st_dev` values in the same representation;
+validation compares all four identities and the exact memory value to runner
+context rather than trusting adapter booleans. Go adapters run with
+`GOMAXPROCS=1`; Lucene runs
 with `-XX:ActiveProcessorCount=1`.
 
 The validator rejects any artifact whose recorded contract, filesystem policy,

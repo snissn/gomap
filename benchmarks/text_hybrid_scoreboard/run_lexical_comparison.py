@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -48,7 +49,8 @@ def git_value(*args: str) -> str:
 
 
 def source_snapshot(allow_dirty: bool) -> dict[str, Any]:
-    modified = bool(git_value("status", "--porcelain"))
+    tracked_diff = git_value("diff", "--binary", "HEAD", "--")
+    modified = bool(tracked_diff)
     if modified and not allow_dirty:
         raise RuntimeError("retained lexical comparison requires a clean checkout; use --allow-dirty only for development smoke")
     return {
@@ -56,6 +58,7 @@ def source_snapshot(allow_dirty: bool) -> dict[str, Any]:
         "tree_oid": git_value("rev-parse", "HEAD^{tree}"),
         "treedb_subtree_oid": git_value("rev-parse", "HEAD:TreeDB"),
         "harness_subtree_oid": git_value("rev-parse", "HEAD:benchmarks/text_hybrid_scoreboard"),
+        "tracked_diff_sha256": hashlib.sha256(tracked_diff.encode()).hexdigest(),
         "vcs_modified": modified,
         "qualification_eligible": not modified,
     }
@@ -200,6 +203,10 @@ def main() -> int:
                 raise RuntimeError(f"{engine_id} repetition {repetition} produced no result artifact")
             artifact_paths.append(raw)
 
+    source_after_run = source_snapshot(args.allow_dirty)
+    if source_after_run != source:
+        raise RuntimeError("source checkout drifted during lexical comparison; artifacts are rejected")
+    source["post_run_reverified"] = True
     artifacts = [json.loads(path.read_text(encoding="utf-8")) for path in artifact_paths]
     context = {
         "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

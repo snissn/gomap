@@ -241,13 +241,12 @@ def _validate_environment(environment: Any, manifest: dict[str, Any], prefix: st
     _require(environment.get("contract") == manifest["environment"], f"{prefix}: environment contract mismatch")
     filesystem = environment.get("filesystem", {})
     _require(filesystem.get("same_filesystem") is True, f"{prefix}: filesystem identity policy not enforced")
-    _require(bool(filesystem.get("runner_device_id")), f"{prefix}: runner filesystem identity missing")
-    stores = [filesystem.get(key) for key in ("corpus_store_id", "index_store_id", "result_store_id")]
-    _require(all(stores) and len(set(stores)) == 1, f"{prefix}: corpus/index/result filesystem mismatch")
+    identities = [filesystem.get(key) for key in ("runner_device_id", "corpus_store_id", "index_store_id", "result_store_id")]
+    _require(all(isinstance(identity, str) and identity.isdigit() for identity in identities) and len(set(identities)) == 1, f"{prefix}: runner/corpus/index/result POSIX st_dev mismatch")
     memory = environment.get("memory", {})
     _require(bool(memory.get("detection_source")) and memory.get("matches_runner_detected") is True, f"{prefix}: memory-limit detection proof missing")
     _require(memory.get("adapter_changed_limit") is False, f"{prefix}: adapter changed the inherited memory limit")
-    _require(bool(memory.get("detected_address_space_limit")), f"{prefix}: detected memory limit missing")
+    _require(isinstance(memory.get("detected_address_space_limit"), str) and (memory["detected_address_space_limit"] == "unlimited" or memory["detected_address_space_limit"].isdigit()), f"{prefix}: detected memory limit missing or not exact")
     execution = environment.get("execution", {})
     _require(execution.get("query_concurrency") == 1, f"{prefix}: query concurrency mismatch")
     _require(execution.get("engine_process_concurrency") == 1, f"{prefix}: engine process concurrency mismatch")
@@ -319,7 +318,20 @@ def validate_result(artifact: dict[str, Any], manifest: dict[str, Any], expected
         _require(isinstance(samples, list) and len(samples) == measured, f"{case_prefix}: raw sample count mismatch")
         _require(all(isinstance(value, int) and value >= 0 for value in samples), f"{case_prefix}: invalid latency sample")
         route = case.get("route", {})
-        _require(route.get("intended") is True and bool(route.get("name")), f"{case_prefix}: intended-route proof missing")
+        proof = route.get("proof")
+        _require(route.get("intended") is True and bool(route.get("name")) and isinstance(proof, (dict, list)) and bool(proof), f"{case_prefix}: intended-route proof missing")
+        if engine_id == "treedb_text_v2":
+            _require(isinstance(proof, dict) and type(proof.get("fail_closed")) is int and proof["fail_closed"] == 0 and proof.get("documents_fetched") == 0, f"{case_prefix}: TreeDB text-v2 fail-closed/score-only proof invalid")
+            if query["semantic"] == "term_scalar":
+                _require(route["name"] == "text_v2_blockmax_scalar_prefilter" and proof.get("scalar_filter_strategy") == "prefilter" and type(proof.get("text_index_epoch")) is int and proof["text_index_epoch"] >= 0 and type(proof.get("text_candidates")) is int and proof["text_candidates"] >= manifest["execution"]["top_k"], f"{case_prefix}: TreeDB scalar-prefilter route proof invalid")
+            else:
+                _require(proof.get("index_version") == "v2" and isinstance(proof.get("active_roots"), list) and bool(proof["active_roots"]) and type(proof.get("postings_scanned")) is int and proof["postings_scanned"] > 0, f"{case_prefix}: TreeDB text-v2 index route proof invalid")
+        elif engine_id == "lucene":
+            _require(isinstance(proof, dict) and bool(proof.get("query_class")) and isinstance(proof.get("reader_documents"), int), f"{case_prefix}: Lucene route proof invalid")
+        elif engine_id == "bleve":
+            _require(isinstance(proof, dict) and bool(proof.get("index_type")) and bool(proof.get("query_type")), f"{case_prefix}: Bleve route proof invalid")
+        elif engine_id == "sqlite_fts5":
+            _require(isinstance(proof, list), f"{case_prefix}: SQLite FTS5 query-plan proof invalid")
         _require(route.get("fallback") is False, f"{case_prefix}: silent fallback")
         _require(case.get("timed_out") is False, f"{case_prefix}: silent timeout")
 
@@ -336,6 +348,7 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
     _require(all(source.get(key) for key in ("commit", "tree_oid", "treedb_subtree_oid", "harness_subtree_oid")), "source provenance is incomplete")
     _require(isinstance(source.get("vcs_modified"), bool), "source dirty state is missing")
     _require(source.get("qualification_eligible") is (not source["vcs_modified"]), "source qualification state is inconsistent")
+    _require(bool(source.get("tracked_diff_sha256")) and source.get("post_run_reverified") is True, "source end-of-run recheck proof is missing")
     expected = reference_results(manifest, documents)
     _require(context.get("environment_contract") == manifest["environment"], "runner environment contract mismatch")
     enforced = context.get("enforced_execution", {})
@@ -344,7 +357,11 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
     corpus_ids = {doc["id"] for doc in documents}
     for artifact in artifacts:
         validate_result(artifact, manifest, expected, corpus_ids)
-        if artifact["engine"]["id"] == "treedb_text_v2":
+        if artifact.get("status") == "ok":
+            environment = artifact["environment"]
+            _require(environment["filesystem"]["runner_device_id"] == context["runner_filesystem_device_id"], f"{artifact['engine']['id']}: artifact/runner filesystem identity mismatch")
+            _require(environment["memory"]["detected_address_space_limit"] == context["detected_address_space_limit"], f"{artifact['engine']['id']}: artifact/runner memory limit mismatch")
+        if artifact.get("status") == "ok" and artifact["engine"]["id"] == "treedb_text_v2":
             _require(artifact["engine"]["version"] == source["commit"], "TreeDB artifact is not bound to the source commit")
     grouped: dict[str, list[dict[str, Any]]] = {}
     for artifact in artifacts:

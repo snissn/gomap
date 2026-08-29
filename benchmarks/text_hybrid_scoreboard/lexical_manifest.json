@@ -18,7 +18,7 @@
     "external_weighted_field": "title tokens repeated exactly 3 times followed by body tokens; frozen corpus keeps title/body lengths equal per document so this is algebraically identical to the pinned BM25F field normalization"
   },
   "environment": {
-    "filesystem_identity_policy": "corpus, index, and result artifact must resolve to the runner output filesystem",
+    "filesystem_identity_policy": "runner output, corpus, index, and result artifact must have the same decimal POSIX st_dev identity",
     "memory_limit_policy": "inherit one detected host address-space limit; adapters do not raise or lower it",
     "query_concurrency": 1,
     "engine_process_concurrency": 1,

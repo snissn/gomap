@@ -39,12 +39,14 @@ class LexicalComparisonTest(unittest.TestCase):
                 "tree_oid": "candidate-tree",
                 "treedb_subtree_oid": "treedb-tree",
                 "harness_subtree_oid": "harness-tree",
+                "tracked_diff_sha256": "tracked-diff-digest",
+                "post_run_reverified": True,
                 "vcs_modified": modified,
                 "qualification_eligible": not modified,
             },
             "environment_contract": copy.deepcopy(self.manifest["environment"]),
             "detected_address_space_limit": "unlimited",
-            "runner_filesystem_device_id": "dev1",
+            "runner_filesystem_device_id": "1",
             "enforced_execution": {"query_concurrency": 1, "engine_process_concurrency": 1, "runtime_cpu_parallelism": 1},
         }
 
@@ -53,12 +55,21 @@ class LexicalComparisonTest(unittest.TestCase):
         cases = []
         for query in self.manifest["queries"]:
             ids = self.expected[query["id"]]
+            if engine_id == "treedb_text_v2":
+                route_proof = ({"text_index_epoch": 0, "scalar_filter_strategy": "prefilter", "text_candidates": 10, "documents_fetched": 0, "fail_closed": 0} if query["semantic"] == "term_scalar" else {"index_version": "v2", "active_roots": ["lexical"], "postings_scanned": 10, "documents_fetched": 0, "fail_closed": 0})
+            else:
+                route_proof = {
+                    "lucene": {"query_class": "TermQuery", "reader_documents": 10_000},
+                    "bleve": {"index_type": "scorch", "query_type": query["semantic"]},
+                    "sqlite_fts5": [[0, 0, 0, "SCAN docs_fts VIRTUAL TABLE INDEX 0:M1"]],
+                }[engine_id]
+            route_name = "text_v2_blockmax_scalar_prefilter" if engine_id == "treedb_text_v2" and query["semantic"] == "term_scalar" else "test_inverted_index"
             cases.append({
                 "id": query["id"], "status": "ok", "equivalent": True,
                 "samples_nanos": [100] * self.manifest["execution"]["measured_queries_per_case"],
                 "result_ids": ids, "result_digest": result_digest(ids),
                 "reopen_result_ids": ids, "reopen_result_digest": result_digest(ids),
-                "route": {"intended": True, "name": "test_inverted_index", "fallback": False},
+                "route": {"intended": True, "name": route_name, "fallback": False, "proof": copy.deepcopy(route_proof)},
                 "timed_out": False,
             })
         return {
@@ -69,7 +80,7 @@ class LexicalComparisonTest(unittest.TestCase):
             "command": ["adapter"], "versions": {"adapter": "pinned"}, "config": ({"top_k": 10, "weights": {"title": 3, "body": 1}, "bm25f": {"k1": 1.2, "b": 0.75}, "stable_setting": "base"} if engine_id == "treedb_text_v2" else {"top_k": 10, "tie_break": "score,id", "weighted_field_materialization": "title repeated 3x then body", "stable_setting": "base"}),
             "environment": {
                 "contract": copy.deepcopy(self.manifest["environment"]),
-                "filesystem": {"runner_device_id": "dev1", "corpus_store_id": "dev1", "index_store_id": "dev1", "result_store_id": "dev1", "same_filesystem": True},
+                "filesystem": {"runner_device_id": "1", "corpus_store_id": "1", "index_store_id": "1", "result_store_id": "1", "same_filesystem": True},
                 "memory": {"detected_address_space_limit": "unlimited", "detection_source": "runner_rlimit", "matches_runner_detected": True, "adapter_changed_limit": False},
                 "execution": {"query_concurrency": 1, "engine_process_concurrency": 1, "runtime_cpu_parallelism": 1},
             },
@@ -112,6 +123,10 @@ class LexicalComparisonTest(unittest.TestCase):
             "leakage": lambda a: a["cases"][0].update(result_ids=["not-in-corpus"]),
             "fallback": lambda a: a["cases"][0]["route"].update(fallback=True),
             "route": lambda a: a["cases"][0]["route"].update(intended=False),
+            "missing route proof": lambda a: a["cases"][0]["route"].pop("proof"),
+            "empty route proof": lambda a: a["cases"][0]["route"].update(proof={}),
+            "invalid ordinary TreeDB proof": lambda a: a["cases"][0]["route"]["proof"].update(postings_scanned=0),
+            "invalid scalar TreeDB proof": lambda a: a["cases"][5]["route"]["proof"].update(scalar_filter_strategy="fallback"),
             "reopen": lambda a: a["reopen"].update(verified=False),
             "timeout": lambda a: a["cases"][0].update(timed_out=True),
             "untyped resource": lambda a: a["build"].update(peak_rss=None),
@@ -164,9 +179,21 @@ class LexicalComparisonTest(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "concurrency"):
             validate_result(artifact, self.manifest, self.expected, self.corpus_ids)
         artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
-        artifacts[1]["environment"]["memory"]["detected_address_space_limit"] = "1073741824"
+        artifacts[1]["environment"]["memory"]["runtime_specific_limit"] = "different"
         with self.assertRaisesRegex(ValidationError, "environment differs"):
             consolidate(artifacts, self.manifest, self.documents, 3, self.context())
+
+    def test_consolidation_binds_artifact_resources_to_runner_context(self) -> None:
+        mutations = {
+            "filesystem": lambda artifact: artifact["environment"]["filesystem"].update(runner_device_id="2", corpus_store_id="2", index_store_id="2", result_store_id="2"),
+            "memory": lambda artifact: artifact["environment"]["memory"].update(detected_address_space_limit="1073741824"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
+                mutate(artifacts[0])
+                with self.assertRaises(ValidationError):
+                    consolidate(artifacts, self.manifest, self.documents, 3, self.context())
 
     def test_consolidated_builds_retain_typed_cpu_and_rss_per_repetition(self) -> None:
         artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
@@ -182,6 +209,10 @@ class LexicalComparisonTest(unittest.TestCase):
         report = consolidate(artifacts, self.manifest, self.documents, 3, self.context(modified=True))
         self.assertFalse(report["qualification_eligible"])
         self.assertFalse(any(row["headline_eligible"] for row in report["headline_rows"]))
+        context = self.context()
+        context["source"]["post_run_reverified"] = False
+        with self.assertRaisesRegex(ValidationError, "end-of-run recheck"):
+            consolidate(artifacts, self.manifest, self.documents, 3, context)
 
 
 if __name__ == "__main__":

@@ -128,7 +128,7 @@ func main() {
 			samples = append(samples, time.Since(start).Nanoseconds())
 			must(err)
 		}
-		cases = append(cases, caseResult{ID: query.ID, Status: "ok", Equivalent: true, Samples: samples, IDs: ids, Digest: digestIDs(ids), Route: map[string]any{"intended": true, "name": "bleve_scorch_inverted_index", "fallback": false, "proof": map[string]any{"index_type": index.Name(), "query_type": query.Semantic}}, TimedOut: false})
+		cases = append(cases, caseResult{ID: query.ID, Status: "ok", Equivalent: true, Samples: samples, IDs: ids, Digest: digestIDs(ids), Route: map[string]any{"intended": true, "name": "bleve_scorch_inverted_index", "fallback": false, "proof": map[string]any{"index_type": "scorch", "index_name": index.Name(), "query_type": query.Semantic}}, TimedOut: false})
 	}
 	must(index.Close())
 	index, err = bleve.Open(*indexPath)

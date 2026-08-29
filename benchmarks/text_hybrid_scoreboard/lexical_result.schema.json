@@ -41,10 +41,10 @@
           "type": "object",
           "required": ["runner_device_id", "corpus_store_id", "index_store_id", "result_store_id", "same_filesystem"],
           "properties": {
-            "runner_device_id": {"type": "string", "minLength": 1},
-            "corpus_store_id": {"type": "string", "minLength": 1},
-            "index_store_id": {"type": "string", "minLength": 1},
-            "result_store_id": {"type": "string", "minLength": 1},
+            "runner_device_id": {"type": "string", "pattern": "^[0-9]+$"},
+            "corpus_store_id": {"type": "string", "pattern": "^[0-9]+$"},
+            "index_store_id": {"type": "string", "pattern": "^[0-9]+$"},
+            "result_store_id": {"type": "string", "pattern": "^[0-9]+$"},
             "same_filesystem": {"const": true}
           }
         },
@@ -52,7 +52,7 @@
           "type": "object",
           "required": ["detected_address_space_limit", "detection_source", "matches_runner_detected", "adapter_changed_limit"],
           "properties": {
-            "detected_address_space_limit": {"type": "string", "minLength": 1},
+            "detected_address_space_limit": {"type": "string", "pattern": "^(unlimited|[0-9]+)$"},
             "detection_source": {"type": "string", "minLength": 1},
             "matches_runner_detected": {"const": true},
             "adapter_changed_limit": {"const": false}
@@ -126,12 +126,12 @@
           "reopen_result_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "route": {
             "type": "object",
-            "required": ["intended", "name", "fallback"],
+            "required": ["intended", "name", "fallback", "proof"],
             "properties": {
               "intended": {"type": "boolean"},
               "name": {"type": "string"},
               "fallback": {"type": "boolean"},
-              "proof": {}
+              "proof": {"oneOf": [{"type": "object", "minProperties": 1}, {"type": "array", "minItems": 1}]}
             }
           },
           "timed_out": {"type": "boolean"}

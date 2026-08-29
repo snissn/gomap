@@ -181,7 +181,7 @@ public final class LuceneAdapter {
         "corpus_store_id", corpusStore,
         "index_store_id", indexStore,
         "result_store_id", resultStore,
-        "same_filesystem", corpusStore.equals(indexStore) && indexStore.equals(resultStore));
+        "same_filesystem", runnerDevice.equals(corpusStore) && corpusStore.equals(indexStore) && indexStore.equals(resultStore));
     Map<String, Object> memory = Map.of(
         "detected_address_space_limit", System.getenv("LEXICAL_ADDRESS_SPACE_LIMIT"),
         "detection_source", "runner_rlimit",
@@ -197,8 +197,7 @@ public final class LuceneAdapter {
   }
 
   private static String fileStoreID(Path path) throws IOException {
-    var store = Files.getFileStore(path);
-    return store.name() + "|" + store.type();
+    return String.valueOf(Files.getAttribute(path, "unix:dev"));
   }
 
   private static byte[] canonicalManifest(byte[] raw) throws IOException { Object value = JSON.readValue(raw, new TypeReference<Object>() {}); byte[] encoded = JSON.writeValueAsBytes(value); byte[] withNewline = java.util.Arrays.copyOf(encoded, encoded.length + 1); withNewline[encoded.length] = '\n'; return withNewline; }
