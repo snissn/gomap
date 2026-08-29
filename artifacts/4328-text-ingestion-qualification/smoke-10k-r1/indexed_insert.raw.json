@@ -5,7 +5,7 @@
   "fixture_sha256": "97ce4ac018a895dd104e46515e262fddc1e5122304c5457cfc0004d7e8a5fd5b",
   "ids_sha256": "db7c5648ac2f57fb58f0899bc96fede009dd5df2c706faecca621b90b8296c2f",
   "peak_rss_scope": "fresh_process_per_mode",
-  "peak_rss_pid": 74673,
+  "peak_rss_pid": 82629,
   "source_documents": 10000,
   "generated_chunks": 0,
   "indexed_live_rows": 10000,
@@ -22,13 +22,13 @@
     "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
   },
   "tombstone_debt": 0,
-  "source_docs_per_second": 51261.655977859555,
+  "source_docs_per_second": 59753.51662441724,
   "chunks_per_second": 0,
-  "indexed_rows_per_second": 51261.655977859555,
-  "wall_seconds": 0.195077584,
+  "indexed_rows_per_second": 59753.51662441724,
+  "wall_seconds": 0.167354167,
   "cpu_seconds": {
     "state": "observed",
-    "value": 0.155836
+    "value": 0.181475
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -40,11 +40,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 634037
+    "value": 634058
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 76201984
+    "value": 70270976
   },
   "stages": {
     "analyzer": {
@@ -53,7 +53,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.012639375
+      "value": 0.00921675
     },
     "posting_builder": {
       "state": "unavailable",
@@ -61,7 +61,7 @@
     },
     "reopen_validation": {
       "state": "observed",
-      "value": 0.028042208
+      "value": 0.023425167
     },
     "root_mutation": {
       "state": "unavailable",
