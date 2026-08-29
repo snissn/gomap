@@ -486,7 +486,21 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		}},
 		{"missing TreeDB phase resource boundary", func(a *minimaArtifact) {
 			raw := a.RawEvidence["treedb"]
-			raw.PhaseAttribution.Phases[0].ResourceEnd.Captured = false
+			raw.PhaseAttribution.Phases[0].ResourceSegments[0].End.Captured = false
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"cross-PID unsplit TreeDB phase resource boundary", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution.Phases[0].ResourceSegments[0].End.PID++
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"cross-PID unsplit TreeDB restart resources", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			restart := raw.PhaseAttribution.Phases[5].ResourceSegments
+			raw.PhaseAttribution.Phases[5].ResourceSegments = []minimaRawPhaseResourceSegment{{
+				Start: restart[0].Start,
+				End:   restart[1].End,
+			}}
 			a.RawEvidence["treedb"] = raw
 		}},
 		{"qualification-only TreeDB phase classified as production", func(a *minimaArtifact) {
@@ -800,6 +814,18 @@ func validMinimaArtifact() minimaArtifact {
 	return artifact
 }
 
+func minimaTestRestartBoundary() minimaRawRestartBoundary {
+	return minimaRawRestartBoundary{
+		HookIdentity:       "test restart hook",
+		OldPID:             100,
+		NewPID:             101,
+		OldProcessIdentity: "old process",
+		NewProcessIdentity: "new process",
+		PIDChanged:         true,
+		Verified:           true,
+	}
+}
+
 func minimaTestPhaseAttribution() minimaRawPhaseAttribution {
 	names := []string{
 		"initial_durable_load",
@@ -811,7 +837,17 @@ func minimaTestPhaseAttribution() minimaRawPhaseAttribution {
 		"post_reopen",
 		"final_state_scroll_artifact_work",
 	}
-	resource := minimaRawResourceSnapshot{Captured: true, RSSBytes: 100, CPUSeconds: 1, DiskBytes: 1000}
+	oldResource := minimaRawPhaseResourceEndpoint{
+		Captured: true, RSSBytes: 100, CPUSeconds: 1, DiskBytes: 1000,
+		PID: 100, ProcessIdentity: "old process",
+	}
+	newResource := minimaRawPhaseResourceEndpoint{
+		Captured: true, RSSBytes: 200, CPUSeconds: 2, DiskBytes: 1000,
+		PID: 101, ProcessIdentity: "new process",
+	}
+	newBaseline := newResource
+	newBaseline.RSSBytes = 0
+	newBaseline.CPUSeconds = 0
 	phases := make([]minimaRawPhaseBoundary, len(names))
 	for ordinal, name := range names {
 		start := int64(1000 + ordinal*110)
@@ -819,10 +855,21 @@ func minimaTestPhaseAttribution() minimaRawPhaseAttribution {
 		if ordinal == len(names)-1 {
 			classification = "qualification_only"
 		}
+		resource := oldResource
+		if ordinal > 5 {
+			resource = newResource
+		}
+		segments := []minimaRawPhaseResourceSegment{{Start: resource, End: resource}}
+		if ordinal == 5 {
+			segments = []minimaRawPhaseResourceSegment{
+				{Start: oldResource, End: oldResource},
+				{Start: newBaseline, End: newResource},
+			}
+		}
 		phases[ordinal] = minimaRawPhaseBoundary{
 			Name: name, Classification: classification, StartNanos: start, EndNanos: start + 100,
 			DurationNanos: 100, SampleCount: 1, SampleDurationNanos: 50,
-			ResourceStart: resource, ResourceEnd: resource,
+			ResourceSegments: segments,
 		}
 	}
 	return minimaRawPhaseAttribution{
@@ -980,13 +1027,13 @@ func TestMinimaPhaseUnattributedBound(t *testing.T) {
 	attribution.TotalEndNanos = attribution.TotalStartNanos + total
 	attribution.TotalDurationNanos = total
 	attribution.UnattributedNanos = minimaPhaseUnattributedLimit(total)
-	if err := validateMinimaTreeDBPhaseAttribution(attribution); err != nil {
+	if err := validateMinimaTreeDBPhaseAttribution(attribution, minimaTestRestartBoundary()); err != nil {
 		t.Fatalf("boundary attribution rejected: %v", err)
 	}
 	attribution.TotalEndNanos++
 	attribution.TotalDurationNanos++
 	attribution.UnattributedNanos++
-	if err := validateMinimaTreeDBPhaseAttribution(attribution); err == nil {
+	if err := validateMinimaTreeDBPhaseAttribution(attribution, minimaTestRestartBoundary()); err == nil {
 		t.Fatal("over-limit unattributed overhead was accepted")
 	}
 }

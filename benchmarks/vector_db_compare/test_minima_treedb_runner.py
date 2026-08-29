@@ -163,6 +163,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload._phase_attribution = None
         workload.controller = SimpleNamespace(pid=123)
         workload.storage_path = Path("/data")
+        workload.process_identity = lambda pid: f"process-{pid}"
         workload.resource_server_name = "TreeDB"
         events: list[str] = []
         ticks = iter((500, 700, 710))
@@ -186,8 +187,40 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertEqual(initial["start_nanos"], workload._phase_total_start)
         self.assertEqual(initial["start_nanos"] - 100, 400)
         self.assertEqual(initial["duration_nanos"], 200)
-        self.assertIs(initial["resource_start"], baseline)
-        self.assertIs(initial["resource_end"], end)
+        self.assertEqual(initial["resource_segments"][0]["start"]["pid"], 123)
+        self.assertEqual(initial["resource_segments"][0]["end"]["pid"], 123)
+
+    def test_restart_phase_splits_old_and_new_process_resources(self) -> None:
+        old_start = {
+            "captured": True, "rss_bytes": 10, "cpu_seconds": 1.0, "disk_bytes": 100,
+            "pid": 100, "process_identity": "old-process",
+        }
+        old_end = {
+            "captured": True, "rss_bytes": 12, "cpu_seconds": 2.0, "disk_bytes": 120,
+            "pid": 100, "process_identity": "old-process",
+        }
+        new_end = {"captured": True, "rss_bytes": 20, "cpu_seconds": 3.0, "disk_bytes": 140}
+        workload = object.__new__(runner.TreeDBMinimaRunner)
+        workload._phase_total_start = 100
+        workload._phase_start = 100
+        workload._phase_name = "restart_open_readiness"
+        workload._phase_resource_start = old_start
+        workload._phase_restart_old_end = old_end
+        workload._phase_boundaries = []
+        workload.controller = SimpleNamespace(pid=101)
+        workload.storage_path = Path("/data")
+        workload.resource_server_name = "TreeDB"
+        workload.process_identity = lambda pid: "new-process" if pid == 101 else "old-process"
+        with mock.patch.object(runner.time, "monotonic_ns", side_effect=(200, 210)), \
+             mock.patch.object(common, "server_resource_usage", return_value=new_end):
+            workload.phase_transition("post_reopen")
+        segments = workload._phase_boundaries[0]["resource_segments"]
+        self.assertEqual([segment["start"]["pid"] for segment in segments], [100, 101])
+        self.assertEqual([segment["end"]["pid"] for segment in segments], [100, 101])
+        self.assertEqual(segments[1]["start"]["cpu_seconds"], 0.0)
+        self.assertEqual(segments[1]["start"]["rss_bytes"], 0)
+        self.assertEqual(segments[1]["start"]["disk_bytes"], old_end["disk_bytes"])
+        self.assertEqual(segments[1]["end"]["cpu_seconds"], 3.0)
 
     def resume_workload(self, directory: Path, *, present_ids: set[str], count: int) -> runner.TreeDBMinimaRunner:
         workload = self.workload(
@@ -694,8 +727,10 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload._phase_boundaries = []
         workload._phase_attribution = None
         workload._phase_resource_start = baseline
+        workload._phase_restart_old_end = None
         workload.storage_path = Path("/tmp/data")
         workload.resource_server_name = "TreeDB"
+        workload.process_identity = lambda pid: f"process-{pid}"
         workload.evidence = SimpleNamespace(samples=[])
         workload.url = "http://127.0.0.1:1"
         workload.collection = "owned"

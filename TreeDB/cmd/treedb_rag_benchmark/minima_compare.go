@@ -96,16 +96,30 @@ type minimaRawLatencyDistribution struct {
 	MaximumNanos int64 `json:"maximum_nanos"`
 }
 
+type minimaRawPhaseResourceEndpoint struct {
+	Captured        bool              `json:"captured"`
+	RSSBytes        int64             `json:"rss_bytes"`
+	CPUSeconds      float64           `json:"cpu_seconds"`
+	DiskBytes       int64             `json:"disk_bytes"`
+	Availability    map[string]string `json:"availability,omitempty"`
+	PID             int               `json:"pid"`
+	ProcessIdentity string            `json:"process_identity"`
+}
+
+type minimaRawPhaseResourceSegment struct {
+	Start minimaRawPhaseResourceEndpoint `json:"start"`
+	End   minimaRawPhaseResourceEndpoint `json:"end"`
+}
+
 type minimaRawPhaseBoundary struct {
-	Name                string                    `json:"name"`
-	Classification      string                    `json:"classification"`
-	StartNanos          int64                     `json:"start_nanos"`
-	EndNanos            int64                     `json:"end_nanos"`
-	DurationNanos       int64                     `json:"duration_nanos"`
-	SampleCount         int                       `json:"sample_count"`
-	SampleDurationNanos int64                     `json:"sample_duration_nanos"`
-	ResourceStart       minimaRawResourceSnapshot `json:"resource_start"`
-	ResourceEnd         minimaRawResourceSnapshot `json:"resource_end"`
+	Name                string                          `json:"name"`
+	Classification      string                          `json:"classification"`
+	StartNanos          int64                           `json:"start_nanos"`
+	EndNanos            int64                           `json:"end_nanos"`
+	DurationNanos       int64                           `json:"duration_nanos"`
+	SampleCount         int                             `json:"sample_count"`
+	SampleDurationNanos int64                           `json:"sample_duration_nanos"`
+	ResourceSegments    []minimaRawPhaseResourceSegment `json:"resource_segments"`
 }
 
 type minimaRawPhaseAttribution struct {
@@ -498,7 +512,7 @@ func minimaPhaseUnattributedLimit(totalDurationNanos int64) int64 {
 	return max(minimaPhaseUnattributedAbsoluteNanos, totalDurationNanos/100)
 }
 
-func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution) error {
+func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution, restart minimaRawRestartBoundary) error {
 	if value.Clock != "time.monotonic_ns" ||
 		value.UnattributedRule != minimaPhaseUnattributedRule ||
 		value.TotalStartNanos <= 0 ||
@@ -510,8 +524,12 @@ func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution) error
 	cursor, attributed := value.TotalStartNanos, int64(0)
 	for ordinal, phase := range value.Phases {
 		classification := "production_path"
+		expectedSegments := 1
 		if ordinal == len(value.Phases)-1 {
 			classification = "qualification_only"
+		}
+		if ordinal == 5 {
+			expectedSegments = 2
 		}
 		if phase.Name != minimaTreeDBPhaseNames[ordinal] ||
 			phase.Classification != classification ||
@@ -522,16 +540,31 @@ func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution) error
 			phase.SampleCount < 0 ||
 			(ordinal != 5 && phase.SampleCount == 0) ||
 			phase.SampleDurationNanos < 0 ||
-			!phase.ResourceStart.Captured ||
-			!phase.ResourceEnd.Captured ||
-			phase.ResourceStart.RSSBytes < 0 ||
-			phase.ResourceEnd.RSSBytes < 0 ||
-			!finiteNonnegative(phase.ResourceStart.CPUSeconds) ||
-			!finiteNonnegative(phase.ResourceEnd.CPUSeconds) ||
-			phase.ResourceStart.DiskBytes < 0 ||
-			phase.ResourceEnd.DiskBytes < 0 ||
+			len(phase.ResourceSegments) != expectedSegments ||
 			phase.DurationNanos > value.TotalDurationNanos-attributed {
 			return fmt.Errorf("minima artifact: TreeDB phase %d is missing or invalid", ordinal)
+		}
+		for _, segment := range phase.ResourceSegments {
+			start, end := segment.Start, segment.End
+			if !start.Captured || !end.Captured ||
+				start.PID <= 0 || end.PID != start.PID ||
+				start.ProcessIdentity == "" || end.ProcessIdentity != start.ProcessIdentity ||
+				start.RSSBytes < 0 || end.RSSBytes < 0 ||
+				!finiteNonnegative(start.CPUSeconds) || !finiteNonnegative(end.CPUSeconds) ||
+				start.DiskBytes < 0 || end.DiskBytes < 0 {
+				return fmt.Errorf("minima artifact: TreeDB phase %d resource identity is invalid", ordinal)
+			}
+		}
+		if ordinal == 5 {
+			old, fresh := phase.ResourceSegments[0], phase.ResourceSegments[1]
+			if !restart.Verified || !restart.PIDChanged ||
+				old.Start.PID != restart.OldPID || old.Start.ProcessIdentity != restart.OldProcessIdentity ||
+				fresh.Start.PID != restart.NewPID || fresh.Start.ProcessIdentity != restart.NewProcessIdentity ||
+				old.Start.PID == fresh.Start.PID ||
+				fresh.Start.RSSBytes != 0 || fresh.Start.CPUSeconds != 0 ||
+				fresh.Start.DiskBytes != old.End.DiskBytes {
+				return errors.New("minima artifact: TreeDB restart phase resource split is invalid")
+			}
 		}
 		attributed += phase.DurationNanos
 		cursor = phase.EndNanos
@@ -792,7 +825,7 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			if err := validateMinimaTreeDBProvenance(backend); err != nil {
 				return err
 			}
-			if err := validateMinimaTreeDBPhaseAttribution(raw.PhaseAttribution); err != nil {
+			if err := validateMinimaTreeDBPhaseAttribution(raw.PhaseAttribution, raw.RestartBoundary); err != nil {
 				return err
 			}
 		}

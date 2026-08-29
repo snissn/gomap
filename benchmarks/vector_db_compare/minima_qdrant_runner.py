@@ -1080,6 +1080,7 @@ class QdrantMinimaRunner:
         self.completed_resource_segments: list[dict[str, Any]] = []
         self.restart_boundary: dict[str, Any] = {}
         self.restart_origin: tuple[int, str] | None = None
+        self.restart_origin_resource_end: dict[str, Any] | None = None
         self.state_scroll: dict[str, Any] = {}
         self.effective_collection: dict[str, Any] = {}
         self.overlap_evidence: dict[str, Any] = {}
@@ -1113,9 +1114,11 @@ class QdrantMinimaRunner:
             raise RuntimeError("close/reopen requires the original backend server PID")
         old_process_identity = self.process_identity(old_pid)
         if self.resource_baseline is not None:
+            self.restart_origin_resource_end = server_resource_usage(
+                old_pid, self.storage_path, self.resource_server_name,
+            )
             self.completed_resource_segments.append(
-                resource_delta(self.resource_baseline, server_resource_usage(
-                    old_pid, self.storage_path, self.resource_server_name))
+                resource_delta(self.resource_baseline, self.restart_origin_resource_end)
             )
         self.restart_origin = (old_pid, old_process_identity)
 

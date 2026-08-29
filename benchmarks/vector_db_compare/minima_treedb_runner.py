@@ -324,6 +324,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         self._phase_resource_start: dict[str, Any] | None = None
         self._phase_boundaries: list[dict[str, Any]] = []
         self._phase_attribution: dict[str, Any] | None = None
+        self._phase_restart_old_end: dict[str, Any] | None = None
         self.controller = controller
         self.source_commit = repository_commit()
         self.runner_sha256 = file_sha256(Path(__file__).resolve())
@@ -366,12 +367,30 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             raise RuntimeError("TreeDB service controller restarted without a PID")
         return self.controller.pid
 
+    def _phase_resource_snapshot(self) -> dict[str, Any]:
+        pid = self.controller.pid
+        if type(pid) is not int or pid <= 0:
+            raise RuntimeError("TreeDB phase resource snapshot requires a live service PID")
+        snapshot = common.server_resource_usage(pid, self.storage_path, self.resource_server_name)
+        snapshot["pid"] = pid
+        snapshot["process_identity"] = self.process_identity(pid)
+        return snapshot
+
+    def capture_restart_origin(self) -> None:
+        super().capture_restart_origin()
+        if self.restart_origin is None or self.restart_origin_resource_end is None:
+            raise RuntimeError("TreeDB restart resource origin is unavailable")
+        old_pid, old_identity = self.restart_origin
+        self._phase_restart_old_end = {
+            **self.restart_origin_resource_end,
+            "pid": old_pid,
+            "process_identity": old_identity,
+        }
+
     def begin_phase_attribution(self) -> None:
         if self._phase_start is not None:
             raise RuntimeError("TreeDB phase attribution already started")
-        self._phase_resource_start = common.server_resource_usage(
-            self.controller.pid, self.storage_path, self.resource_server_name,
-        )
+        self._phase_resource_start = self._phase_resource_snapshot()
         phase_start = time.monotonic_ns()
         self._phase_total_start = phase_start
         self._phase_start = phase_start
@@ -383,18 +402,30 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         if self._phase_start is None or self._phase_name is None or self._phase_resource_start is None:
             raise RuntimeError("TreeDB phase attribution was not started")
         phase_end = time.monotonic_ns()
-        resource_end = common.server_resource_usage(
-            self.controller.pid, self.storage_path, self.resource_server_name,
-        )
+        resource_end = self._phase_resource_snapshot()
         next_start = time.monotonic_ns()
+        resource_segments = [{"start": self._phase_resource_start, "end": resource_end}]
+        if self._phase_name == "restart_open_readiness":
+            old_end = self._phase_restart_old_end
+            if old_end is None:
+                raise RuntimeError("TreeDB restart phase is missing the old-process resource endpoint")
+            new_start = {
+                **resource_end,
+                "rss_bytes": 0,
+                "cpu_seconds": 0.0,
+                "disk_bytes": old_end["disk_bytes"],
+            }
+            resource_segments = [
+                {"start": self._phase_resource_start, "end": old_end},
+                {"start": new_start, "end": resource_end},
+            ]
         self._phase_boundaries.append({
             "name": self._phase_name,
             "classification": PHASE_CLASSIFICATIONS[self._phase_name],
             "start_nanos": self._phase_start,
             "end_nanos": phase_end,
             "duration_nanos": phase_end - self._phase_start,
-            "resource_start": self._phase_resource_start,
-            "resource_end": resource_end,
+            "resource_segments": resource_segments,
         })
         self._phase_name, self._phase_start = name, next_start
         self._phase_resource_start = resource_end
@@ -407,9 +438,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         assert self._phase_name is not None and self._phase_resource_start is not None
         assert self._phase_total_start is not None
         phase_end = time.monotonic_ns()
-        resource_end = common.server_resource_usage(
-            self.controller.pid, self.storage_path, self.resource_server_name,
-        )
+        resource_end = self._phase_resource_snapshot()
         end = time.monotonic_ns()
         self._phase_boundaries.append({
             "name": self._phase_name,
@@ -417,8 +446,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             "start_nanos": self._phase_start,
             "end_nanos": phase_end,
             "duration_nanos": phase_end - self._phase_start,
-            "resource_start": self._phase_resource_start,
-            "resource_end": resource_end,
+            "resource_segments": [{"start": self._phase_resource_start, "end": resource_end}],
         })
         for phase in self._phase_boundaries:
             samples = [
