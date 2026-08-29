@@ -527,6 +527,11 @@ func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution, resta
 		return errors.New("minima artifact: TreeDB phase attribution envelope is incomplete")
 	}
 	cursor, attributed := value.TotalStartNanos, int64(0)
+	type processKey struct {
+		PID      int
+		Identity string
+	}
+	lastProcessCPU := make(map[processKey]float64)
 	for ordinal, phase := range value.Phases {
 		classification := "production_path"
 		expectedSegments := 1
@@ -562,6 +567,11 @@ func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution, resta
 				start.DiskBytes < 0 || end.DiskBytes < 0 {
 				return fmt.Errorf("minima artifact: TreeDB phase %d resource identity is invalid", ordinal)
 			}
+			process := processKey{PID: start.PID, Identity: start.ProcessIdentity}
+			if previous, ok := lastProcessCPU[process]; ok && start.CPUSeconds < previous {
+				return fmt.Errorf("minima artifact: TreeDB phase %d cumulative CPU resets within one process", ordinal)
+			}
+			lastProcessCPU[process] = end.CPUSeconds
 		}
 		if ordinal < 5 {
 			resource := phase.ResourceSegments[0].Start
