@@ -754,12 +754,8 @@ func validMinimaArtifact() minimaArtifact {
 			PhaseLatencyDistributions: map[string]minimaRawLatencyDistribution{
 				"search": {Count: 1, TotalNanos: 7, MinimumNanos: 7, P50Nanos: 7, P95Nanos: 7, P99Nanos: 7, MaximumNanos: 7},
 			},
-			Events: []json.RawMessage{json.RawMessage(`{"operation":"test"}`)},
-			RestartBoundary: minimaRawRestartBoundary{
-				HookIdentity: "test restart hook", OldPID: 100, NewPID: 101,
-				OldProcessIdentity: "old process", NewProcessIdentity: "new process",
-				PIDChanged: true, Verified: true,
-			},
+			Events:              []json.RawMessage{json.RawMessage(`{"operation":"test"}`)},
+			RestartBoundary:     minimaTestRestartBoundary(),
 			ResourceMeasurement: backendResource,
 			ResourceAvailability: map[string]map[string]string{
 				"baseline": {"rss_bytes": "test"},
@@ -910,13 +906,14 @@ func minimaTestPhaseAttribution() minimaRawPhaseAttribution {
 		"post_reopen",
 		"final_state_scroll_artifact_work",
 	}
+	restart := minimaTestRestartBoundary()
 	oldResource := minimaRawPhaseResourceEndpoint{
 		Captured: true, RSSBytes: 100, CPUSeconds: 1, DiskBytes: 1000,
-		PID: 100, ProcessIdentity: "old process",
+		PID: restart.OldPID, ProcessIdentity: restart.OldProcessIdentity,
 	}
 	newResource := minimaRawPhaseResourceEndpoint{
 		Captured: true, RSSBytes: 200, CPUSeconds: 2, DiskBytes: 1000,
-		PID: 101, ProcessIdentity: "new process",
+		PID: restart.NewPID, ProcessIdentity: restart.NewProcessIdentity,
 	}
 	newBaseline := newResource
 	newBaseline.RSSBytes = 0
@@ -1130,9 +1127,12 @@ func TestMinimaPhaseIncompleteMarkerRoundTrip(t *testing.T) {
 }
 
 func TestMinimaPhaseUnattributedBound(t *testing.T) {
-	const total = int64(6_000_000_000_000)
-	if got := minimaPhaseUnattributedLimit(total); got != 60_000_000_000 {
-		t.Fatalf("unattributed boundary=%d", got)
+	const total = int64(7_000_000_000_000)
+	if got := minimaPhaseUnattributedLimit(1_000_000_000_000); got != minimaPhaseUnattributedAbsoluteNanos {
+		t.Fatalf("absolute unattributed boundary=%d", got)
+	}
+	if got := minimaPhaseUnattributedLimit(total); got != 70_000_000_000 {
+		t.Fatalf("proportional unattributed boundary=%d", got)
 	}
 	attribution := minimaTestPhaseAttribution()
 	attributed := total - minimaPhaseUnattributedLimit(total)

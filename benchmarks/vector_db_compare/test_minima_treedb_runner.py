@@ -1001,7 +1001,9 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload._phase_attribution = None
         workload._phase_resource_start = baseline
         workload._phase_restart_old_end = None
-        workload.storage_path = Path("/tmp/data")
+        storage = tempfile.TemporaryDirectory()
+        self.addCleanup(storage.cleanup)
+        workload.storage_path = Path(storage.name)
         workload.resource_server_name = "TreeDB"
         workload.process_identity = lambda pid: f"process-{pid}"
         workload.evidence = SimpleNamespace(samples=[])
@@ -1052,8 +1054,10 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             }},
         }
         with mock.patch.object(common.QdrantMinimaRunner, "artifact", return_value=base_artifact), \
-             mock.patch.object(common, "server_resource_usage", return_value=baseline):
+             mock.patch.object(common, "server_process_resource_usage", return_value=baseline), \
+             mock.patch.object(common, "disk_bytes", return_value=1100) as disk_bytes:
             artifact = workload.artifact()
+        disk_bytes.assert_called_once_with(workload.storage_path)
         configuration = artifact["backends"][0]["configuration"]
         self.assertEqual(configuration["scalar_fields"], "meta.user_id,meta.fpath")
         self.assertEqual(json.loads(configuration["effective_collection"]), workload.effective_collection)

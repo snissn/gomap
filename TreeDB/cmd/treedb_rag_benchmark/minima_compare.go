@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,6 +42,8 @@ var minimaTreeDBPhaseNames = []string{
 	"post_reopen",
 	"final_state_scroll_artifact_work",
 }
+
+var minimaTreeDBRestartOrdinal = slices.Index(minimaTreeDBPhaseNames, "restart_open_readiness")
 
 type minimaRawTimedOverlapRound struct {
 	Ordinal                   int   `json:"ordinal"`
@@ -526,6 +529,9 @@ func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution, resta
 		len(value.Phases) != len(minimaTreeDBPhaseNames) {
 		return errors.New("minima artifact: TreeDB phase attribution envelope is incomplete")
 	}
+	if minimaTreeDBRestartOrdinal < 0 {
+		return errors.New("minima artifact: TreeDB restart phase name is undeclared")
+	}
 	cursor, attributed := value.TotalStartNanos, int64(0)
 	type processKey struct {
 		PID      int
@@ -538,7 +544,7 @@ func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution, resta
 		if ordinal == len(value.Phases)-1 {
 			classification = "qualification_only"
 		}
-		if ordinal == 5 {
+		if ordinal == minimaTreeDBRestartOrdinal {
 			expectedSegments = 2
 		}
 		if phase.Name != minimaTreeDBPhaseNames[ordinal] ||
@@ -548,7 +554,7 @@ func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution, resta
 			phase.EndNanos > value.TotalEndNanos ||
 			phase.DurationNanos != phase.EndNanos-phase.StartNanos ||
 			phase.SampleCount < 0 ||
-			(ordinal != 5 && phase.SampleCount == 0) ||
+			(ordinal != minimaTreeDBRestartOrdinal && phase.SampleCount == 0) ||
 			phase.SampleDurationNanos < 0 ||
 			(phase.ResourceEvidenceComplete != nil && !*phase.ResourceEvidenceComplete) ||
 			phase.IncompleteReason != "" ||
@@ -573,18 +579,18 @@ func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution, resta
 			}
 			lastProcessCPU[process] = end.CPUSeconds
 		}
-		if ordinal < 5 {
+		if ordinal < minimaTreeDBRestartOrdinal {
 			resource := phase.ResourceSegments[0].Start
 			if resource.PID != restart.OldPID || resource.ProcessIdentity != restart.OldProcessIdentity {
 				return fmt.Errorf("minima artifact: TreeDB pre-restart phase %d has the wrong process identity", ordinal)
 			}
-		} else if ordinal > 5 {
+		} else if ordinal > minimaTreeDBRestartOrdinal {
 			resource := phase.ResourceSegments[0].Start
 			if resource.PID != restart.NewPID || resource.ProcessIdentity != restart.NewProcessIdentity {
 				return fmt.Errorf("minima artifact: TreeDB post-restart phase %d has the wrong process identity", ordinal)
 			}
 		}
-		if ordinal == 5 {
+		if ordinal == minimaTreeDBRestartOrdinal {
 			old, fresh := phase.ResourceSegments[0], phase.ResourceSegments[1]
 			if !restart.Verified || !restart.PIDChanged ||
 				old.Start.PID != restart.OldPID || old.Start.ProcessIdentity != restart.OldProcessIdentity ||
@@ -666,11 +672,13 @@ func validateMinimaTreeDBResourceReconciliation(
 	phase minimaRawPhaseAttribution,
 	resource minimaRawResourceMeasurement,
 ) error {
-	if len(resource.Segments) != 2 || len(phase.Phases) <= 5 ||
-		len(phase.Phases[5].ResourceSegments) != 2 {
+	if minimaTreeDBRestartOrdinal < 0 ||
+		len(resource.Segments) != 2 ||
+		len(phase.Phases) <= minimaTreeDBRestartOrdinal ||
+		len(phase.Phases[minimaTreeDBRestartOrdinal].ResourceSegments) != 2 {
 		return errors.New("minima artifact: TreeDB phase and aggregate process segments are incomplete")
 	}
-	restart := phase.Phases[5].ResourceSegments
+	restart := phase.Phases[minimaTreeDBRestartOrdinal].ResourceSegments
 	if !minimaPhaseResourceMatchesSnapshot(restart[0].End, resource.Segments[0].End) ||
 		!minimaPhaseResourceMatchesSnapshot(restart[1].Start, resource.Segments[1].Baseline) {
 		return errors.New("minima artifact: TreeDB phase and aggregate restart resources disagree")
