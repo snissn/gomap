@@ -497,6 +497,10 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
                 reasons = sorted({case.get("unsupported_reason", "unsupported") for case in cases})
                 ledger.append({"engine": engine, "case": query["id"], "status": "unsupported", "detail": "; ".join(reasons)})
                 continue
+            result_ids = cases[0]["result_ids"]
+            result_digest_value = cases[0]["result_digest"]
+            _require(all(case["result_ids"] == result_ids for case in cases), f"{engine_id} case {query['id']}: result IDs differ across repetitions")
+            _require(all(case["result_digest"] == result_digest_value for case in cases), f"{engine_id} case {query['id']}: result digest differs across repetitions")
             samples = [sample for case in cases for sample in case["samples_nanos"]]
             row = {
                 "engine": engine,
@@ -506,8 +510,8 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
                 "p95_nanos": percentile(samples, 0.95),
                 "p99_nanos": percentile(samples, 0.99),
                 "raw_samples_nanos": samples,
-                "result_ids": cases[0]["result_ids"],
-                "result_digest": cases[0]["result_digest"],
+                "result_ids": result_ids,
+                "result_digest": result_digest_value,
             }
             if statuses == {"directional"}:
                 reasons = sorted({case["non_equivalent_reason"] for case in cases})

@@ -64,7 +64,7 @@ def query_text(query: dict[str, Any]) -> str:
     return f"weighted_text : ({expression})"
 
 
-def execute(conn: sqlite3.Connection, query: dict[str, Any], top_k: int) -> list[str]:
+def query_statement(query: dict[str, Any], top_k: int) -> tuple[str, list[Any]]:
     sql = "SELECT id FROM docs_fts WHERE docs_fts MATCH ?"
     params: list[Any] = [query_text(query)]
     if query.get("filter"):
@@ -73,6 +73,11 @@ def execute(conn: sqlite3.Connection, query: dict[str, Any], top_k: int) -> list
     weights = "0.0, 0.0, 3.0, 1.0, 0.0" if query["semantic"] == "phrase" else "0.0, 1.0, 0.0, 0.0, 0.0"
     sql += f" ORDER BY bm25(docs_fts, {weights}), id LIMIT ?"
     params.append(top_k)
+    return sql, params
+
+
+def execute(conn: sqlite3.Connection, query: dict[str, Any], top_k: int) -> list[str]:
+    sql, params = query_statement(query, top_k)
     return [row[0] for row in conn.execute(sql, params)]
 
 
@@ -138,7 +143,8 @@ def main() -> int:
             start = time.perf_counter_ns()
             ids = execute(conn, query, top_k)
             samples.append(time.perf_counter_ns() - start)
-        plan = list(conn.execute("EXPLAIN QUERY PLAN SELECT id FROM docs_fts WHERE docs_fts MATCH ?", (query_text(query),)))
+        sql, params = query_statement(query, top_k)
+        plan = list(conn.execute("EXPLAIN QUERY PLAN " + sql, params))
         route_proven = any("VIRTUAL TABLE INDEX" in str(row).upper() for row in plan)
         cases.append({
             "id": query["id"], "status": "directional", "equivalent": False,

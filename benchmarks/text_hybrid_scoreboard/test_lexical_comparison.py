@@ -317,6 +317,15 @@ class LexicalComparisonTest(unittest.TestCase):
                 with self.assertRaises(ValidationError):
                     consolidate(artifacts, self.manifest, self.documents, 3, self.context())
 
+    def test_consolidation_rejects_directional_result_drift(self) -> None:
+        artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "lucene", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
+        changed = artifacts[7]["cases"][0]
+        changed["result_ids"] = changed["reopen_result_ids"] = list(reversed(changed["result_ids"]))
+        changed["result_digest"] = changed["reopen_result_digest"] = result_digest(changed["result_ids"])
+        artifacts[7]["reopen"]["result_digest"] = result_digest(case.get("reopen_result_digest", "") for case in artifacts[7]["cases"])
+        with self.assertRaisesRegex(ValidationError, "result IDs differ across repetitions"):
+            consolidate(artifacts, self.manifest, self.documents, 3, self.context())
+
     def test_environment_policy_and_cross_repetition_detection_are_fail_closed(self) -> None:
         artifact = self.artifact()
         artifact["environment"]["execution"]["query_concurrency"] = 2
