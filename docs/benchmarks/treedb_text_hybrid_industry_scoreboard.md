@@ -15,7 +15,7 @@ Run the lexical comparison directly when hybrid rows are not needed:
 
 ```sh
 RUN_DIR=/tmp/gomap_lexical_compare_$(date +%Y%m%d_%H%M%S)
-python3 benchmarks/text_hybrid_scoreboard/run_lexical_comparison.py \
+python3 -s benchmarks/text_hybrid_scoreboard/run_lexical_comparison.py \
   --manifest benchmarks/text_hybrid_scoreboard/lexical_manifest.json \
   --out-dir "$RUN_DIR" \
   --go-bin "${GO_BIN:-go}" \
