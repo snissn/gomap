@@ -371,12 +371,16 @@ type VectorIndex struct {
 	trackSearchViewDirty bool
 	searchViewForceFull  bool
 	frozenPrefixBatches  uint64
-	liveDelta            *VectorIndex
-	scalarDefinitions    []IndexDefinition
-	scalarRuntimes       []indexRuntime
-	scalarColumns        map[string]vectorIndexScalarColumn
-	liveDeltaEnabled     atomic.Bool
-	liveDeltaCutovers    uint64
+	// Frozen-prefix counters are private construction evidence used by focused
+	// tests and benchmarks.
+	frozenPrefixReciprocalPrunes     uint64
+	frozenPrefixReciprocalPruneEdges uint64
+	liveDelta                        *VectorIndex
+	scalarDefinitions                []IndexDefinition
+	scalarRuntimes                   []indexRuntime
+	scalarColumns                    map[string]vectorIndexScalarColumn
+	liveDeltaEnabled                 atomic.Bool
+	liveDeltaCutovers                uint64
 	// constructionWorkers is a private benchmark seam; zero preserves the
 	// production worker choice.
 	constructionWorkers int
@@ -2017,6 +2021,23 @@ type vectorIndexFrozenPrefixInsert struct {
 	neighbors  [][]int
 }
 
+type vectorIndexFrozenPrefixReciprocalLink struct {
+	fromNodeID int
+	toNodeID   int
+	layer      int
+}
+
+type vectorIndexFrozenPrefixReciprocalGroup struct {
+	start int
+	end   int
+}
+
+type vectorIndexFrozenPrefixCommitScratch struct {
+	links  []vectorIndexFrozenPrefixReciprocalLink
+	groups []vectorIndexFrozenPrefixReciprocalGroup
+	pruned []bool
+}
+
 func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors [][]float32) error {
 	if err := idx.validateVectorBatch(documentIDs, vectors); err != nil {
 		return err
@@ -2033,6 +2054,7 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 		}
 		return nil
 	}
+	var commitScratch vectorIndexFrozenPrefixCommitScratch
 	for start := 0; start < len(documentIDs); {
 		if idx.entry < 0 {
 			if err := idx.insertVectorLocked(documentIDs[start], vectors[start]); err != nil {
@@ -2072,9 +2094,7 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 				return fmt.Errorf("collections: vector batch row %d: %w", start+row, err)
 			}
 		}
-		for i := range plans {
-			idx.commitFrozenPrefixInsertLocked(plans[i])
-		}
+		idx.commitFrozenPrefixBatchLocked(plans, &commitScratch)
 		idx.frozenPrefixBatches++
 		start = end
 	}
@@ -2107,7 +2127,7 @@ func (idx *VectorIndex) validateVectorBatch(documentIDs [][]byte, vectors [][]fl
 }
 
 func (idx *VectorIndex) canPlanFrozenPrefixBatchLocked(documentIDs [][]byte) bool {
-	if !idx.nativePersistent || idx.encoding != VectorIndexEncodingFloat32 || idx.metric != VectorMetricCosine || len(documentIDs) < 2 || idx.m < len(documentIDs) || idx.constructionTrace != nil || idx.layer0ConstructionPolicy != nil || idx.qualityPostfillCandidates != nil {
+	if (!idx.nativePersistent && !idx.parallelReciprocalLinks) || idx.encoding != VectorIndexEncodingFloat32 || idx.metric != VectorMetricCosine || len(documentIDs) < 2 || idx.m < len(documentIDs) || idx.constructionTrace != nil || idx.layer0ConstructionPolicy != nil || idx.qualityPostfillCandidates != nil {
 		return false
 	}
 	for i, documentID := range documentIDs {
@@ -2146,21 +2166,107 @@ func (idx *VectorIndex) planFrozenPrefixInsertLocked(documentID []byte, vector [
 	return plan, nil
 }
 
-func (idx *VectorIndex) commitFrozenPrefixInsertLocked(plan vectorIndexFrozenPrefixInsert) {
-	nodeID := len(idx.nodes)
-	idx.nodes = append(idx.nodes, idx.newVectorIndexNodePrepared(plan.documentID, plan.vector, plan.level, nil, 0))
-	idx.markGraphChangedLocked()
-	idx.markVectorNodeDirtyLocked(nodeID)
-	idx.markVectorDocDirtyLocked(plan.documentID)
-	idx.currentNode[string(plan.documentID)] = nodeID
-	for layer := len(plan.neighbors) - 1; layer >= 0; layer-- {
-		idx.linkSelectedNeighborsLocked(nodeID, plan.neighbors[layer], layer)
+func (idx *VectorIndex) commitFrozenPrefixBatchLocked(plans []vectorIndexFrozenPrefixInsert, scratch *vectorIndexFrozenPrefixCommitScratch) {
+	links := scratch.links[:0]
+	for i := range plans {
+		plan := plans[i]
+		nodeID := len(idx.nodes)
+		idx.nodes = append(idx.nodes, idx.newVectorIndexNodePrepared(plan.documentID, plan.vector, plan.level, nil, 0))
+		idx.markGraphChangedLocked()
+		idx.markVectorNodeDirtyLocked(nodeID)
+		idx.markVectorDocDirtyLocked(plan.documentID)
+		idx.currentNode[string(plan.documentID)] = nodeID
+		for layer := len(plan.neighbors) - 1; layer >= 0; layer-- {
+			for _, neighborID := range plan.neighbors[layer] {
+				idx.linkLayerLocked(nodeID, neighborID, layer, true)
+				links = append(links, vectorIndexFrozenPrefixReciprocalLink{fromNodeID: neighborID, toNodeID: nodeID, layer: layer})
+			}
+		}
+		if plan.level > idx.maxLevel {
+			idx.entry = nodeID
+			idx.maxLevel = plan.level
+			idx.markVectorMetaDirtyLocked()
+		}
 	}
-	if plan.level > idx.maxLevel {
-		idx.entry = nodeID
-		idx.maxLevel = plan.level
-		idx.markVectorMetaDirtyLocked()
+
+	slices.SortStableFunc(links, func(left, right vectorIndexFrozenPrefixReciprocalLink) int {
+		if left.fromNodeID != right.fromNodeID {
+			return left.fromNodeID - right.fromNodeID
+		}
+		return left.layer - right.layer
+	})
+	groups := scratch.groups[:0]
+	for start := 0; start < len(links); {
+		end := start + 1
+		for end < len(links) && links[end].fromNodeID == links[start].fromNodeID && links[end].layer == links[start].layer {
+			end++
+		}
+		groups = append(groups, vectorIndexFrozenPrefixReciprocalGroup{start: start, end: end})
+		start = end
 	}
+	if cap(scratch.pruned) < len(groups) {
+		scratch.pruned = make([]bool, len(groups))
+	} else {
+		scratch.pruned = scratch.pruned[:len(groups)]
+		clear(scratch.pruned)
+	}
+	pruned := scratch.pruned
+	workers := idx.constructionWorkerCount(vectorIndexReciprocalLinkWorkerCount(len(groups)))
+	var wg sync.WaitGroup
+	for worker := 1; worker < workers; worker++ {
+		wg.Go(func() {
+			for group := worker; group < len(groups); group += workers {
+				pruned[group] = idx.linkFrozenPrefixReciprocalGroupLocked(links[groups[group].start:groups[group].end])
+			}
+		})
+	}
+	for group := 0; group < len(groups); group += workers {
+		pruned[group] = idx.linkFrozenPrefixReciprocalGroupLocked(links[groups[group].start:groups[group].end])
+	}
+	wg.Wait()
+	for group := range groups {
+		idx.markVectorNodeDirtyLocked(links[groups[group].start].fromNodeID)
+		if pruned[group] {
+			idx.frozenPrefixReciprocalPrunes++
+			idx.frozenPrefixReciprocalPruneEdges += uint64(groups[group].end - groups[group].start)
+		}
+	}
+	scratch.links = links
+	scratch.groups = groups
+}
+
+func (idx *VectorIndex) linkFrozenPrefixReciprocalGroupLocked(links []vectorIndexFrozenPrefixReciprocalLink) bool {
+	if len(links) == 0 {
+		return false
+	}
+	fromNodeID, layer := links[0].fromNodeID, links[0].layer
+	if fromNodeID < 0 || fromNodeID >= len(idx.nodes) || layer < 0 || layer > idx.nodes[fromNodeID].level {
+		return false
+	}
+	neighbors := idx.nodes[fromNodeID].neighbors[layer]
+	for _, link := range links {
+		duplicate := false
+		for _, existing := range neighbors {
+			if existing.nodeID == link.toNodeID {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		distance, ok := normalizeVectorIndexEdgeDistance(idx.distanceBetweenNodesLocked(fromNodeID, link.toNodeID))
+		if ok {
+			neighbors = append(neighbors, vectorIndexNeighbor{nodeID: link.toNodeID, distance: distance})
+		}
+	}
+	limit := idx.maxNeighborsForLayer(layer)
+	pruned := len(neighbors) > limit
+	if pruned {
+		neighbors = idx.pruneLayerNeighborsLocked(fromNodeID, neighbors, limit)
+	}
+	idx.nodes[fromNodeID].neighbors[layer] = neighbors
+	return pruned
 }
 
 func (idx *VectorIndex) linkSelectedNeighborsLocked(nodeID int, neighbors []int, layer int) {

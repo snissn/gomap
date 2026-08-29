@@ -801,10 +801,8 @@ func buildColumnVectorGraphAdjacencyV1(rows []columnVectorGraphAssetRow, def Vec
 	index.parallelReciprocalLinks = parallelReciprocalLinks
 	index.mu.Lock()
 	defer index.mu.Unlock()
-	for i := range rows {
-		if err := index.insertVectorLocked(rows[i].ID, rows[i].Vector); err != nil {
-			return fmt.Errorf("collections: build column vector graph row[%d]: %w", i, err)
-		}
+	if err := insertColumnVectorGraphRowsLocked(index, rows); err != nil {
+		return err
 	}
 	if policy != nil && policy.qualityPostfill {
 		if err := index.applyQualityPostfillLocked(trace, def.M*2); err != nil {
@@ -878,6 +876,18 @@ func buildColumnVectorGraphAdjacencyV1(rows []columnVectorGraphAssetRow, def Vec
 	}
 	if timing != nil {
 		timing.LocalityRemap = collectionObservedElapsedSince(localityStarted)
+	}
+	return nil
+}
+
+func insertColumnVectorGraphRowsLocked(index *VectorIndex, rows []columnVectorGraphAssetRow) error {
+	ids := make([][]byte, len(rows))
+	vectors := make([][]float32, len(rows))
+	for i := range rows {
+		ids[i], vectors[i] = rows[i].ID, rows[i].Vector
+	}
+	if err := index.insertVectorBatchLocked(ids, vectors); err != nil {
+		return fmt.Errorf("collections: build column vector graph: %w", err)
 	}
 	return nil
 }
