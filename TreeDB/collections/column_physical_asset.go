@@ -37,8 +37,10 @@ const (
 var ErrColumnDeclaredValueUnsupported = errors.New("collections: unsupported column declared value")
 
 type columnWriteDocument struct {
-	ID       []byte
-	Document []byte
+	ID                  []byte
+	Document            []byte
+	declaredValues      []columnDeclaredValue
+	declaredValuesReady bool
 }
 
 type columnDeclaredValue struct {
