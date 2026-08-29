@@ -183,43 +183,49 @@ class ServiceController:
             raise
 
     def stop(self) -> None:
-        if self.process is not None:
-            process = self.process
-            if process.poll() is None:
-                pid = process.pid
-                latest_process = common.server_process_resource_usage(pid, "TreeDB")
-                process.terminate()
-                deadline = time.monotonic() + self.shutdown_timeout
-                exited = False
-                while not exited:
-                    sample = common.server_process_resource_usage(pid, "TreeDB")
-                    if sample["captured"]:
-                        latest_process = sample
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        break
-                    try:
-                        process.wait(timeout=min(0.05, remaining))
-                        exited = True
-                    except subprocess.TimeoutExpired:
-                        exited = process.poll() is not None
-                if not exited:
-                    process.kill()
-                    process.wait(timeout=min(5, self.shutdown_timeout))
-                disk_available = self.data_dir.exists()
-                self.last_shutdown_resource_end = {
-                    **latest_process,
-                    "captured": latest_process["captured"] and disk_available,
-                    "disk_bytes": common.disk_bytes(self.data_dir),
-                    "availability": {
-                        **latest_process["availability"],
-                        "disk_bytes": str(self.data_dir) if disk_available else "unavailable",
-                    },
-                }
+        try:
+            timed_out = False
+            if self.process is not None:
+                process = self.process
+                if process.poll() is None:
+                    pid = process.pid
+                    latest_process = common.server_process_resource_usage(pid, "TreeDB")
+                    process.terminate()
+                    deadline = time.monotonic() + self.shutdown_timeout
+                    exited = False
+                    while not exited:
+                        sample = common.server_process_resource_usage(pid, "TreeDB")
+                        if sample["captured"]:
+                            latest_process = sample
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        try:
+                            process.wait(timeout=min(0.05, remaining))
+                            exited = True
+                        except subprocess.TimeoutExpired:
+                            exited = process.poll() is not None
+                    if not exited:
+                        process.kill()
+                        process.wait(timeout=min(5, self.shutdown_timeout))
+                        timed_out = True
+                    disk_available = self.data_dir.exists()
+                    self.last_shutdown_resource_end = {
+                        **latest_process,
+                        "captured": latest_process["captured"] and disk_available,
+                        "disk_bytes": common.disk_bytes(self.data_dir),
+                        "availability": {
+                            **latest_process["availability"],
+                            "disk_bytes": str(self.data_dir) if disk_available else "unavailable",
+                        },
+                    }
+            if timed_out:
+                raise TimeoutError(f"TreeDB graceful shutdown exceeded {self.shutdown_timeout}s")
+        finally:
             self.process = None
-        if self.log_file is not None:
-            self.log_file.close()
-            self.log_file = None
+            if self.log_file is not None:
+                self.log_file.close()
+                self.log_file = None
 
     def log_evidence(self) -> dict[str, Any]:
         tail = b""

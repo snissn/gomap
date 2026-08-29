@@ -651,6 +651,48 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         process.kill.assert_not_called()
         self.assertTrue(all(call.kwargs["timeout"] <= 0.05 for call in process.wait.call_args_list))
 
+    def test_shutdown_deadline_kills_reaps_cleans_and_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory) / "data"
+            data_dir.mkdir()
+            controller = runner.ServiceController(
+                Path("/service"), "http://127.0.0.1:17120", data_dir,
+                "command_wal_durable", 3600, 120,
+            )
+            process = mock.MagicMock(pid=56)
+            process.poll.return_value = None
+            process.wait.return_value = 0
+            log_file = mock.MagicMock()
+            controller.process = process
+            controller.log_file = log_file
+            usage = {
+                "captured": True,
+                "rss_bytes": 120,
+                "cpu_seconds": 3.0,
+                "availability": {
+                    "rss_bytes": "test", "cpu_seconds": "test",
+                    "bytes_per_op": "unavailable", "allocs_per_op": "unavailable",
+                    "measurement_error": "",
+                },
+            }
+            continuation = mock.Mock()
+            with mock.patch.object(
+                common, "server_process_resource_usage", return_value=usage,
+            ), mock.patch.object(common, "disk_bytes", return_value=150), \
+                 mock.patch.object(runner.time, "monotonic", side_effect=[0, 121]):
+                with self.assertRaisesRegex(TimeoutError, "graceful shutdown exceeded 120s"):
+                    controller.stop()
+                    continuation()
+
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
+        process.wait.assert_called_once_with(timeout=5)
+        continuation.assert_not_called()
+        self.assertEqual(controller.last_shutdown_resource_end["disk_bytes"], 150)
+        self.assertIsNone(controller.process)
+        self.assertIsNone(controller.log_file)
+        log_file.close.assert_called_once_with()
+
     def test_default_cli_preserves_frozen_timeout_and_disables_diagnostics(self) -> None:
         argv = [
             "minima_treedb_runner.py", "--manifest", "manifest.json", "--output", "output.json",
