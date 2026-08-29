@@ -29,7 +29,7 @@ const (
 	requiredSourceChunkBatchSize       = 32_768
 	requiredMaintenanceUpdateBatchSize = 10_000
 	requiredHybridMaxPostingsScanned   = requiredScaleRows * 4
-	scaleRelevanceOracleVersion        = "generator_predicate/v2"
+	scaleRelevanceOracleVersion        = "generator_predicate/v3"
 	harnessGitPath                     = "cmd/treedb_text_hybrid_scale"
 	treeDBGitPath                      = "TreeDB"
 )
@@ -100,7 +100,7 @@ func frozenQuerySetSHA256() string {
 }
 
 func frozenRelevanceSHA256() string {
-	return digestString("relevance/v2|oracle=generator_predicate/v2|ids=doc-%09d|text_common_and_or_phrase=ordinal%2==0|text_rare=ordinal%997==0|hybrid_unfiltered=ordinal%2==0|scalar_rare=ordinal%16==0|scalar_broad=ordinal%4==0&&ordinal%16!=0|precision_at_k=1|unique_in_range")
+	return digestString("relevance/v3|oracle=generator_predicate/v3|ids=doc-%09d|text_common_and_or_phrase=ordinal%2==0|text_rare=ordinal%997==0|hybrid_unfiltered=ordinal%2==0|scalar_rare=ordinal%16==0|scalar_broad=ordinal%4==0&&ordinal%16!=0|maintenance_live_set=exclude_[updates,updates+deletes)|precision_at_k=1|unique_in_range")
 }
 
 func digestString(value string) string {
@@ -735,6 +735,24 @@ func evaluateHybridQueryQuality(name string, rows, topK int, results []collectio
 		ids[i] = results[i].ID
 	}
 	return evaluateScaleQueryQuality(name, rows, topK, ids)
+}
+func evaluateMaintenanceTextQuality(rows, topK, updates, deletes int, results []collections.TextSearchResult) scaleQueryQuality {
+	quality := evaluateTextQueryQuality(queryRowTextCommon, rows, topK, results)
+	if !quality.OK {
+		return quality
+	}
+	deletedEnd := minInt(updates+deletes, rows)
+	for i, result := range results {
+		ordinal, _ := scaleResultOrdinal(result.DocumentID, rows)
+		if ordinal >= updates && ordinal < deletedEnd {
+			quality.Relevant = i
+			quality.Precision = float64(i) / float64(len(results))
+			quality.OK = false
+			quality.Failure = fmt.Sprintf("generator relevance oracle rejected deleted maintenance result %q in [%d,%d)", result.DocumentID, updates, deletedEnd)
+			return quality
+		}
+	}
+	return quality
 }
 
 func evaluateScaleQueryQuality(name string, rows, topK int, ids [][]byte) scaleQueryQuality {

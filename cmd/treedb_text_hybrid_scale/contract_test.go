@@ -30,6 +30,14 @@ func TestGeneratorRelevanceOracle4329(t *testing.T) {
 	if got := evaluateHybridQueryQuality(queryRowHybridTextScalarBroad, requiredScaleRows, 2, broad); !got.OK {
 		t.Fatalf("broad scalar oracle=%+v want accepted tenant-common refund ordinals", got)
 	}
+	maintenanceLive := []collections.TextSearchResult{{DocumentID: scaleDocID(0)}, {DocumentID: scaleDocID(2)}}
+	if got := evaluateMaintenanceTextQuality(requiredScaleRows, 2, 10_000, 5_000, maintenanceLive); !got.OK {
+		t.Fatalf("maintenance oracle=%+v want live results accepted", got)
+	}
+	maintenanceDeleted := []collections.TextSearchResult{{DocumentID: scaleDocID(0)}, {DocumentID: scaleDocID(10_000)}}
+	if got := evaluateMaintenanceTextQuality(requiredScaleRows, 2, 10_000, 5_000, maintenanceDeleted); got.OK || got.Precision != 0.5 || !strings.Contains(got.Failure, "deleted maintenance result") {
+		t.Fatalf("maintenance oracle=%+v want stale deleted result rejected", got)
+	}
 	for name, ids := range map[string][][]byte{
 		"irrelevant":   {scaleDocID(1)},
 		"duplicate":    {scaleDocID(0), scaleDocID(0)},

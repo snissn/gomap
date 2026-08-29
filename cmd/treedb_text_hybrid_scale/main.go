@@ -2225,7 +2225,7 @@ func runMaintenanceProbe(cfg config) (maintenanceReport, error) {
 		maintenance.PostconditionFailure = firstNonEmpty(guard.Failure, "post-rewrite search returned no results")
 	}
 	maintenance.BeforeResultsSHA256 = hashTextResults(probe.Results)
-	beforeQuality := evaluateTextQueryQuality(queryRowTextCommon, cfg.rows, cfg.topK, probe.Results)
+	beforeQuality := evaluateMaintenanceTextQuality(cfg.rows, cfg.topK, updates, deletes, probe.Results)
 	if !beforeQuality.OK {
 		maintenance.PostconditionOK = false
 		maintenance.PostconditionFailure = beforeQuality.Failure
@@ -2247,7 +2247,7 @@ func runMaintenanceProbe(cfg config) (maintenanceReport, error) {
 		return maintenanceReport{}, fmt.Errorf("maintenance query after reopen: %w", err)
 	}
 	maintenance.AfterResultsSHA256 = hashTextResults(after.Results)
-	afterQuality := evaluateTextQueryQuality(queryRowTextCommon, cfg.rows, cfg.topK, after.Results)
+	afterQuality := evaluateMaintenanceTextQuality(cfg.rows, cfg.topK, updates, deletes, after.Results)
 	if !afterQuality.OK {
 		maintenance.PostconditionOK = false
 		maintenance.PostconditionFailure = afterQuality.Failure
