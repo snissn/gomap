@@ -1,0 +1,35 @@
+{
+  "schema_version": "treedb_lexical_manifest/v1",
+  "corpus": {
+    "document_count": 10000,
+    "format": "utf-8 TSV: id, title, body, tenant; LF terminated",
+    "generator": "lexical_common.py/frozen_corpus_v1",
+    "sha256": "f0956e2758bdc3fc0fe0b2deea88170e72c00ce26c394c7189b4f15c93133130"
+  },
+  "analysis": {
+    "normalization": "Unicode NFKC then lowercase",
+    "tokenization": "contiguous ASCII letters or digits",
+    "stopwords": [],
+    "fields": [
+      {"name": "title", "weight": 3.0},
+      {"name": "body", "weight": 1.0}
+    ],
+    "bm25": {"k1": 1.2, "b": 0.75}
+  },
+  "execution": {
+    "top_k": 10,
+    "tie_break": "score descending, UTF-8 document ID ascending",
+    "warmup_queries_per_case": 2,
+    "measured_queries_per_case": 20,
+    "retained_repetitions": 3,
+    "cache_state": "warm in-process index; every retained repetition rebuilds, checkpoints, closes, and reopens its own index"
+  },
+  "queries": [
+    {"id": "common", "semantic": "term", "terms": ["common"], "equivalence": "exact"},
+    {"id": "rare", "semantic": "term", "terms": ["rare"], "equivalence": "exact"},
+    {"id": "and", "semantic": "and", "terms": ["alpha", "beta"], "equivalence": "exact"},
+    {"id": "or", "semantic": "or", "terms": ["gamma", "delta"], "equivalence": "exact"},
+    {"id": "phrase", "semantic": "phrase", "terms": ["quick", "fox"], "slop": 0, "equivalence": "exact"},
+    {"id": "scalar_filtered", "semantic": "term_scalar", "terms": ["tenantterm"], "filter": {"field": "tenant", "equals": "tenant-rare"}, "equivalence": "exact"}
+  ]
+}
