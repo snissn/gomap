@@ -558,6 +558,7 @@ func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution, resta
 				start.ProcessIdentity == "" || end.ProcessIdentity != start.ProcessIdentity ||
 				start.RSSBytes < 0 || end.RSSBytes < 0 ||
 				!finiteNonnegative(start.CPUSeconds) || !finiteNonnegative(end.CPUSeconds) ||
+				end.CPUSeconds < start.CPUSeconds ||
 				start.DiskBytes < 0 || end.DiskBytes < 0 {
 				return fmt.Errorf("minima artifact: TreeDB phase %d resource identity is invalid", ordinal)
 			}

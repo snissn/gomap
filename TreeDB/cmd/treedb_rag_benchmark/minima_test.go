@@ -489,6 +489,11 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.PhaseAttribution.Phases[0].ResourceSegments[0].End.Captured = false
 			a.RawEvidence["treedb"] = raw
 		}},
+		{"TreeDB phase cumulative CPU decreases within one process", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution.Phases[0].ResourceSegments[0].End.CPUSeconds = 0.5
+			a.RawEvidence["treedb"] = raw
+		}},
 		{"completed TreeDB phase marked resource-incomplete", func(a *minimaArtifact) {
 			raw := a.RawEvidence["treedb"]
 			complete := false
