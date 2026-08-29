@@ -17,6 +17,7 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/vectorops"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -359,6 +360,7 @@ type VectorIndex struct {
 	mu                   sync.RWMutex
 	nativePublicationMu  sync.RWMutex
 	nodes                []vectorIndexNode
+	vectorRows           []float32
 	currentNode          map[string]int
 	entry                int
 	maxLevel             int
@@ -375,6 +377,7 @@ type VectorIndex struct {
 	// tests and benchmarks.
 	frozenPrefixReciprocalPrunes     uint64
 	frozenPrefixReciprocalPruneEdges uint64
+	frozenPrefixIndexedDotBatches    uint64
 	liveDelta                        *VectorIndex
 	scalarDefinitions                []IndexDefinition
 	scalarRuntimes                   []indexRuntime
@@ -2036,6 +2039,13 @@ type vectorIndexFrozenPrefixCommitScratch struct {
 	links  []vectorIndexFrozenPrefixReciprocalLink
 	groups []vectorIndexFrozenPrefixReciprocalGroup
 	pruned []bool
+	dots   []vectorIndexFrozenPrefixDiversityScratch
+}
+
+type vectorIndexFrozenPrefixDiversityScratch struct {
+	rowIDs         []uint32
+	dots           []float32
+	indexedBatches uint64
 }
 
 func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors [][]float32) error {
@@ -2094,11 +2104,43 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 				return fmt.Errorf("collections: vector batch row %d: %w", start+row, err)
 			}
 		}
+		idx.prepareFrozenPrefixVectorRowsLocked(len(documentIDs) - start)
 		idx.commitFrozenPrefixBatchLocked(plans, &commitScratch)
 		idx.frozenPrefixBatches++
 		start = end
 	}
 	return nil
+}
+
+func (idx *VectorIndex) prepareFrozenPrefixVectorRowsLocked(additional int) {
+	if idx.vectorRows != nil || idx.encoding != VectorIndexEncodingFloat32 || idx.metric != VectorMetricCosine || idx.dimensions <= 0 || additional <= 0 {
+		return
+	}
+	rows := make([]float32, 0, (len(idx.nodes)+additional)*idx.dimensions)
+	for nodeID := range idx.nodes {
+		if len(idx.nodes[nodeID].vector) != idx.dimensions {
+			return
+		}
+		rows = append(rows, idx.nodes[nodeID].vector...)
+	}
+	idx.vectorRows = rows
+	for nodeID := range idx.nodes {
+		start := nodeID * idx.dimensions
+		idx.nodes[nodeID].vector = idx.vectorRows[start : start+idx.dimensions]
+	}
+}
+
+func (idx *VectorIndex) appendFrozenPrefixVectorRowLocked(vector []float32) []float32 {
+	start := len(idx.vectorRows)
+	rebind := len(idx.vectorRows)+len(vector) > cap(idx.vectorRows)
+	idx.vectorRows = append(idx.vectorRows, vector...)
+	if rebind {
+		for nodeID := range idx.nodes {
+			offset := nodeID * idx.dimensions
+			idx.nodes[nodeID].vector = idx.vectorRows[offset : offset+idx.dimensions]
+		}
+	}
+	return idx.vectorRows[start : start+idx.dimensions]
 }
 
 func (idx *VectorIndex) validateVectorBatch(documentIDs [][]byte, vectors [][]float32) error {
@@ -2212,18 +2254,34 @@ func (idx *VectorIndex) commitFrozenPrefixBatchLocked(plans []vectorIndexFrozenP
 	}
 	pruned := scratch.pruned
 	workers := idx.constructionWorkerCount(vectorIndexReciprocalLinkWorkerCount(len(groups)))
+	if cap(scratch.dots) < workers {
+		scratch.dots = make([]vectorIndexFrozenPrefixDiversityScratch, workers)
+	} else {
+		scratch.dots = scratch.dots[:workers]
+	}
+	for worker := range scratch.dots {
+		scratch.dots[worker].indexedBatches = 0
+	}
+	var nextGroup atomic.Int64
+	runGroup := func(worker int) {
+		for {
+			group := int(nextGroup.Add(1) - 1)
+			if group >= len(groups) {
+				return
+			}
+			pruned[group] = idx.linkFrozenPrefixReciprocalGroupLocked(links[groups[group].start:groups[group].end], &scratch.dots[worker])
+		}
+	}
 	var wg sync.WaitGroup
 	for worker := 1; worker < workers; worker++ {
-		wg.Go(func() {
-			for group := worker; group < len(groups); group += workers {
-				pruned[group] = idx.linkFrozenPrefixReciprocalGroupLocked(links[groups[group].start:groups[group].end])
-			}
-		})
+		worker := worker
+		wg.Go(func() { runGroup(worker) })
 	}
-	for group := 0; group < len(groups); group += workers {
-		pruned[group] = idx.linkFrozenPrefixReciprocalGroupLocked(links[groups[group].start:groups[group].end])
-	}
+	runGroup(0)
 	wg.Wait()
+	for worker := range scratch.dots {
+		idx.frozenPrefixIndexedDotBatches += scratch.dots[worker].indexedBatches
+	}
 	for group := range groups {
 		idx.markVectorNodeDirtyLocked(links[groups[group].start].fromNodeID)
 		if pruned[group] {
@@ -2235,7 +2293,7 @@ func (idx *VectorIndex) commitFrozenPrefixBatchLocked(plans []vectorIndexFrozenP
 	scratch.groups = groups
 }
 
-func (idx *VectorIndex) linkFrozenPrefixReciprocalGroupLocked(links []vectorIndexFrozenPrefixReciprocalLink) bool {
+func (idx *VectorIndex) linkFrozenPrefixReciprocalGroupLocked(links []vectorIndexFrozenPrefixReciprocalLink, dotScratch *vectorIndexFrozenPrefixDiversityScratch) bool {
 	if len(links) == 0 {
 		return false
 	}
@@ -2263,7 +2321,7 @@ func (idx *VectorIndex) linkFrozenPrefixReciprocalGroupLocked(links []vectorInde
 	limit := idx.maxNeighborsForLayer(layer)
 	pruned := len(neighbors) > limit
 	if pruned {
-		neighbors = idx.pruneLayerNeighborsLocked(fromNodeID, neighbors, limit)
+		neighbors = idx.pruneLayerNeighborsWithFrozenPrefixScratchLocked(neighbors, limit, dotScratch)
 	}
 	idx.nodes[fromNodeID].neighbors[layer] = neighbors
 	return pruned
@@ -2388,7 +2446,11 @@ func (idx *VectorIndex) newVectorIndexNodePrepared(documentID []byte, vector []f
 		node.quantized = quantized
 		node.quantScale = quantScale
 	default:
-		node.vector = append([]float32(nil), vector...)
+		if idx.vectorRows != nil && len(vector) == idx.dimensions {
+			node.vector = idx.appendFrozenPrefixVectorRowLocked(vector)
+		} else {
+			node.vector = append([]float32(nil), vector...)
+		}
 	}
 	node.cacheVectorNorms()
 	return node
@@ -2842,6 +2904,10 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int, markDir
 }
 
 func (idx *VectorIndex) pruneLayerNeighborsLocked(_ int, neighbors []vectorIndexNeighbor, limit int) []vectorIndexNeighbor {
+	return idx.pruneLayerNeighborsWithFrozenPrefixScratchLocked(neighbors, limit, nil)
+}
+
+func (idx *VectorIndex) pruneLayerNeighborsWithFrozenPrefixScratchLocked(neighbors []vectorIndexNeighbor, limit int, dotScratch *vectorIndexFrozenPrefixDiversityScratch) []vectorIndexNeighbor {
 	if limit <= 0 || len(neighbors) == 0 {
 		return nil
 	}
@@ -2864,7 +2930,7 @@ func (idx *VectorIndex) pruneLayerNeighborsLocked(_ int, neighbors []vectorIndex
 		}
 		scored = append(scored, vectorIndexCandidate{nodeID: neighborID, distance: distance})
 	}
-	scored, _ = idx.selectDiverseCandidatesWithAccountingLocked(scored, limit)
+	scored, _ = idx.selectDiverseCandidatesWithFrozenPrefixScratchLocked(scored, limit, dotScratch)
 	out := neighbors[:0]
 	for _, candidate := range scored {
 		out = append(out, vectorIndexNeighbor{nodeID: candidate.nodeID, distance: candidate.distance})
@@ -4018,7 +4084,11 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 }
 
 func (idx *VectorIndex) selectDiverseCandidatesWithAccountingLocked(candidates []vectorIndexCandidate, limit int) ([]vectorIndexCandidate, int) {
-	selected, diversitySelected, _, _, _ := idx.selectDiverseCandidatesWithDetailsLocked(candidates, limit, false, true, false)
+	return idx.selectDiverseCandidatesWithFrozenPrefixScratchLocked(candidates, limit, nil)
+}
+
+func (idx *VectorIndex) selectDiverseCandidatesWithFrozenPrefixScratchLocked(candidates []vectorIndexCandidate, limit int, dotScratch *vectorIndexFrozenPrefixDiversityScratch) ([]vectorIndexCandidate, int) {
+	selected, diversitySelected, _, _, _ := idx.selectDiverseCandidatesWithDetailsAndFrozenPrefixScratchLocked(candidates, limit, false, true, false, dotScratch)
 	return selected, diversitySelected
 }
 
@@ -4030,6 +4100,10 @@ func (idx *VectorIndex) selectDiverseCandidatesWithOriginsLocked(candidates []ve
 }
 
 func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []vectorIndexCandidate, limit int, includeOrigins, backfillEnabled, captureQualityPostfill bool) ([]vectorIndexCandidate, int, int, map[int]bool, []vectorIndexCandidate) {
+	return idx.selectDiverseCandidatesWithDetailsAndFrozenPrefixScratchLocked(candidates, limit, includeOrigins, backfillEnabled, captureQualityPostfill, nil)
+}
+
+func (idx *VectorIndex) selectDiverseCandidatesWithDetailsAndFrozenPrefixScratchLocked(candidates []vectorIndexCandidate, limit int, includeOrigins, backfillEnabled, captureQualityPostfill bool, dotScratch *vectorIndexFrozenPrefixDiversityScratch) ([]vectorIndexCandidate, int, int, map[int]bool, []vectorIndexCandidate) {
 	if limit <= 0 || len(candidates) == 0 {
 		return nil, 0, 0, nil, nil
 	}
@@ -4074,7 +4148,7 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []ve
 			rejected = append(rejected, candidate)
 			continue
 		}
-		if idx.vectorIndexCandidateIsDiverseLocked(candidate, selected) {
+		if idx.vectorIndexCandidateIsDiverseWithFrozenPrefixScratchLocked(candidate, selected, dotScratch) {
 			selected = append(selected, candidate)
 		} else {
 			rejected = append(rejected, candidate)
@@ -4359,9 +4433,23 @@ func vectorIndexRobustPruneOccludesV1(alphaSquared, chosenToCandidate, sourceToC
 }
 
 func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorIndexCandidate, selected []vectorIndexCandidate) bool {
+	return idx.vectorIndexCandidateIsDiverseWithFrozenPrefixScratchLocked(candidate, selected, nil)
+}
+
+func (idx *VectorIndex) vectorIndexCandidateIsDiverseWithFrozenPrefixScratchLocked(candidate vectorIndexCandidate, selected []vectorIndexCandidate, dotScratch *vectorIndexFrozenPrefixDiversityScratch) bool {
 	if idx.metric == VectorMetricCosine && candidate.nodeID >= 0 && candidate.nodeID < len(idx.nodes) {
 		candidateNode := &idx.nodes[candidate.nodeID]
 		if len(candidateNode.vector) > 0 && candidateNode.cachedInvNorm != 0 {
+			if idx.frozenPrefixIndexedDotRowsReadyLocked(candidateNode, selected, dotScratch) {
+				for i, existing := range selected {
+					distance := float32(1 - float64(dotScratch.dots[i])*float64(candidateNode.cachedInvNorm)*float64(idx.nodes[existing.nodeID].cachedInvNorm))
+					if distance < candidate.distance {
+						return false
+					}
+				}
+				dotScratch.indexedBatches++
+				return true
+			}
 			for _, existing := range selected {
 				distance := idx.distanceBetweenFloat32CosineCandidateAndNodeLocked(candidateNode, existing.nodeID)
 				if math.IsInf(float64(distance), 1) {
@@ -4384,6 +4472,30 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorInde
 		}
 	}
 	return true
+}
+
+func (idx *VectorIndex) frozenPrefixIndexedDotRowsReadyLocked(candidate *vectorIndexNode, selected []vectorIndexCandidate, scratch *vectorIndexFrozenPrefixDiversityScratch) bool {
+	if scratch == nil || !vectorops.DotFloat32IndexedOptimizedEligible(len(selected), idx.dimensions) || len(candidate.vector) != idx.dimensions || len(idx.vectorRows) != len(idx.nodes)*idx.dimensions {
+		return false
+	}
+	if cap(scratch.rowIDs) < len(selected) {
+		scratch.rowIDs = make([]uint32, len(selected))
+	} else {
+		scratch.rowIDs = scratch.rowIDs[:len(selected)]
+	}
+	if cap(scratch.dots) < len(selected) {
+		scratch.dots = make([]float32, len(selected))
+	} else {
+		scratch.dots = scratch.dots[:len(selected)]
+	}
+	for i, existing := range selected {
+		if existing.nodeID < 0 || uint64(existing.nodeID) > uint64(^uint32(0)) || existing.nodeID >= len(idx.nodes) || idx.nodes[existing.nodeID].cachedInvNorm == 0 || !safeFloat32DotProductForCosine(candidate.normSquared, idx.nodes[existing.nodeID].normSquared) {
+			return false
+		}
+		scratch.rowIDs[i] = uint32(existing.nodeID)
+	}
+	status := vectorops.DotFloat32IndexedPrevalidated(scratch.dots, idx.vectorRows, candidate.vector, scratch.rowIDs, idx.dimensions)
+	return !status.Invalid && status.Optimized && status.Rows == len(selected)
 }
 
 func (idx *VectorIndex) distanceBetweenFloat32CosineCandidateAndNodeLocked(candidate *vectorIndexNode, existingNodeID int) float32 {
@@ -5272,6 +5384,7 @@ func (idx *VectorIndex) Rebuild() error {
 
 	idx.mu.Lock()
 	idx.liveDelta = nil
+	idx.vectorRows = nil
 	idx.nodes = nodes
 	idx.currentNode = currentNode
 	idx.scalarDefinitions = scalarDefinitions
