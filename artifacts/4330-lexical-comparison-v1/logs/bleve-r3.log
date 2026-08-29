@@ -1,0 +1,8 @@
+command=go run . --manifest /Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/benchmarks/text_hybrid_scoreboard/lexical_manifest.json --corpus /Users/michaelseiler/orca/workspaces/gomap/4330-retained-v1/corpus.tsv --out /Users/michaelseiler/orca/workspaces/gomap/4330-retained-v1/raw/bleve-r3.json --repetition 3 --index /Users/michaelseiler/orca/workspaces/gomap/4330-retained-v1/indexes/bleve-r3
+cwd=/Users/michaelseiler/orca/workspaces/gomap/4330-retained-v1/dependency_work/bleve_adapter
+started_unix=1788010777.6268108
+returncode=0
+
+[stdout]
+
+[stderr]
