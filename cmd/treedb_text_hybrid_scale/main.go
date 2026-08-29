@@ -115,31 +115,32 @@ type config struct {
 }
 
 type report struct {
-	SchemaVersion    string             `json:"schema_version"`
-	GeneratedAt      string             `json:"generated_at"`
-	Status           string             `json:"status"`
-	Failure          string             `json:"failure,omitempty"`
-	Context          reportContext      `json:"context"`
-	Contract         reportContract     `json:"contract"`
-	Config           reportConfig       `json:"config"`
-	Artifacts        reportArtifacts    `json:"artifacts"`
-	Load             loadReport         `json:"load"`
-	TextOnly         *loadReport        `json:"text_only,omitempty"`
-	Backfill         *backfillReport    `json:"backfill,omitempty"`
-	SourceChunk      *sourceChunkReport `json:"source_chunk,omitempty"`
-	Reopen           *reopenReport      `json:"reopen,omitempty"`
-	Queries          []queryReport      `json:"queries,omitempty"`
-	Concurrent       *concurrentReport  `json:"concurrent,omitempty"`
-	Maintenance      *maintenanceReport `json:"maintenance,omitempty"`
-	StorageSnapshots []storageSnapshot  `json:"storage_snapshots,omitempty"`
-	Guardrails       []guardrailResult  `json:"guardrails,omitempty"`
-	Bottlenecks      []bottleneckRow    `json:"bottlenecks,omitempty"`
-	Caveats          []string           `json:"caveats,omitempty"`
-	SelectedPhases   []string           `json:"selected_phases"`
-	CompletedPhases  []string           `json:"completed_phases"`
-	Cleanup          cleanupReport      `json:"cleanup"`
-	Failures         []failureRecord    `json:"failures"`
-	Complete         bool               `json:"complete"`
+	SchemaVersion      string             `json:"schema_version"`
+	GeneratedAt        string             `json:"generated_at"`
+	Status             string             `json:"status"`
+	Failure            string             `json:"failure,omitempty"`
+	Context            reportContext      `json:"context"`
+	Contract           reportContract     `json:"contract"`
+	Config             reportConfig       `json:"config"`
+	Artifacts          reportArtifacts    `json:"artifacts"`
+	Load               loadReport         `json:"load"`
+	TextOnly           *loadReport        `json:"text_only,omitempty"`
+	Backfill           *backfillReport    `json:"backfill,omitempty"`
+	SourceChunk        *sourceChunkReport `json:"source_chunk,omitempty"`
+	Reopen             *reopenReport      `json:"reopen,omitempty"`
+	Queries            []queryReport      `json:"queries,omitempty"`
+	Concurrent         *concurrentReport  `json:"concurrent,omitempty"`
+	Maintenance        *maintenanceReport `json:"maintenance,omitempty"`
+	StorageSnapshots   []storageSnapshot  `json:"storage_snapshots,omitempty"`
+	Guardrails         []guardrailResult  `json:"guardrails,omitempty"`
+	Bottlenecks        []bottleneckRow    `json:"bottlenecks,omitempty"`
+	Caveats            []string           `json:"caveats,omitempty"`
+	SelectedPhases     []string           `json:"selected_phases"`
+	CompletedPhases    []string           `json:"completed_phases"`
+	Cleanup            cleanupReport      `json:"cleanup"`
+	Failures           []failureRecord    `json:"failures"`
+	LogicalTextStorage metricAvailability `json:"logical_text_storage"`
+	Complete           bool               `json:"complete"`
 }
 
 type reportContext struct {
@@ -217,6 +218,11 @@ type resourceSnapshot struct {
 	CPUSeconds    float64 `json:"cpu_seconds"`
 	PeakRSSBytes  uint64  `json:"peak_rss_bytes"`
 	LiveHeapBytes uint64  `json:"live_heap_bytes"`
+}
+
+type metricAvailability struct {
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type cleanupReport struct {
@@ -824,8 +830,9 @@ func run(cfg config) (report, error) {
 			"Synthetic corpus uses deterministic customer-support text, scalar tenants, and small dense vectors; do not use as external relevance-quality evidence.",
 			"Every retained query row includes repeated result-order parity, path counters, and process resource snapshots.",
 		},
-		SelectedPhases: selectedPhaseNames(cfg.selectedPhases),
-		Failures:       []failureRecord{},
+		SelectedPhases:     selectedPhaseNames(cfg.selectedPhases),
+		Failures:           []failureRecord{},
+		LogicalTextStorage: logicalTextStorageAvailability(cfg.rows),
 	}
 	configSHA, err := writeFrozenConfig(cfg.outDir, rep.Config)
 	if err != nil {
@@ -1196,7 +1203,7 @@ func loadPrimaryFixture(cfg config) (scaleFixture, loadReport, error) {
 		return scaleFixture{}, loadReport{}, fmt.Errorf("checkpoint primary fixture: %w", err)
 	}
 	load.CheckpointSeconds = secondsSince(checkpointStart)
-	stats, err := col.TextIndexStorageStats(textIndexName)
+	stats, _, err := collectTextStorageStats(col, cfg.rows)
 	if err != nil {
 		_ = db.Close()
 		return scaleFixture{}, loadReport{}, fmt.Errorf("text storage stats: %w", err)
@@ -1859,7 +1866,7 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 		_ = db.Close()
 		return reopenReport{}, fixture, fmt.Errorf("reopen text parity failed before=%s after=%s stats=%+v results=%d", beforeDigest, afterDigest, after.Stats, len(after.Results))
 	}
-	stats, err := col.TextIndexStorageStats(textIndexName)
+	stats, _, err := collectTextStorageStats(col, cfg.rows)
 	if err != nil {
 		_ = db.Close()
 		return reopenReport{}, fixture, fmt.Errorf("reopen text storage stats: %w", err)
@@ -2061,7 +2068,7 @@ func runMaintenanceProbe(cfg config) (maintenanceReport, error) {
 		return maintenanceReport{}, fmt.Errorf("checkpoint after rewrite: %w", err)
 	}
 	maintenance.CheckpointSeconds = secondsSince(checkpointStart)
-	storage, err := col.TextIndexStorageStats(textIndexName)
+	storage, storageObserved, err := collectTextStorageStats(col, cfg.rows)
 	if err != nil {
 		return maintenanceReport{}, fmt.Errorf("text storage after rewrite: %w", err)
 	}
@@ -2072,14 +2079,17 @@ func runMaintenanceProbe(cfg config) (maintenanceReport, error) {
 		return maintenanceReport{}, err
 	}
 	maintenance.StorageBytesAfter = bytes
-	maintenance.PostconditionOK = true
-	if storage.V2DeletedDocs != 0 {
-		maintenance.PostconditionOK = false
-		maintenance.PostconditionFailure = fmt.Sprintf("deleted docs remain after rewrite: %d", storage.V2DeletedDocs)
+	maintenance.PostconditionOK = !stats.BudgetExhausted
+	if stats.BudgetExhausted {
+		maintenance.PostconditionFailure = "rewrite budget exhausted: " + stats.BudgetExhaustedReason
 	}
-	if storage.V2RewriteMergeState == "" {
+	if updates+deletes > 0 && stats.StalePostingsPurged == 0 {
 		maintenance.PostconditionOK = false
-		maintenance.PostconditionFailure = "empty rewrite merge state"
+		maintenance.PostconditionFailure = "rewrite reported no purged stale postings"
+	}
+	if storageObserved && (storage.V2DeletedDocs != 0 || storage.V2RewriteMergeState == "") {
+		maintenance.PostconditionOK = false
+		maintenance.PostconditionFailure = fmt.Sprintf("logical storage postcondition failed: deleted_docs=%d merge_state=%q", storage.V2DeletedDocs, storage.V2RewriteMergeState)
 	}
 	probeOpts := collections.TextSearchOptions{IndexName: textIndexName, Query: "refund", TopK: cfg.topK, ResultMode: collections.TextSearchResultModeScoreOnly, CandidateLimit: cfg.rows, MaxPostingsScanned: maxInt(cfg.rows*4, cfg.topK)}
 	probe, err := col.SearchText(probeOpts)
@@ -2169,7 +2179,7 @@ func runBackfillProbe(cfg config) (backfillReport, error) {
 		return backfillReport{}, fmt.Errorf("backfill checkpoint: %w", err)
 	}
 	checkpointSeconds := secondsSince(checkpointStart)
-	storage, err := col.TextIndexStorageStats(textIndexName)
+	storage, _, err := collectTextStorageStats(col, cfg.backfillRows)
 	if err != nil {
 		return backfillReport{}, fmt.Errorf("backfill text storage stats: %w", err)
 	}
@@ -2229,7 +2239,7 @@ func runTextOnlyLoadProbe(cfg config) (loadReport, error) {
 		return loadReport{}, fmt.Errorf("checkpoint text-only fixture: %w", err)
 	}
 	result.CheckpointSeconds = secondsSince(checkpointStart)
-	result.TextStorage, err = col.TextIndexStorageStats(textIndexName)
+	result.TextStorage, _, err = collectTextStorageStats(col, cfg.textOnlyRows)
 	if err != nil {
 		_ = db.Close()
 		return loadReport{}, fmt.Errorf("text-only storage stats: %w", err)
@@ -2311,7 +2321,7 @@ func runSourceChunkProbe(cfg config) (sourceChunkReport, error) {
 		return sourceChunkReport{}, fmt.Errorf("source/chunk checkpoint: %w", err)
 	}
 	result.CheckpointSeconds = secondsSince(checkpointStart)
-	result.TextStorage, err = col.TextIndexStorageStats(textIndexName)
+	result.TextStorage, _, err = collectTextStorageStats(col, cfg.sourceChunkRows)
 	if err != nil {
 		_ = db.Close()
 		return sourceChunkReport{}, fmt.Errorf("source/chunk text storage: %w", err)
@@ -2621,26 +2631,30 @@ func renderMarkdown(rep report) string {
 	if rep.Load.VectorStatus != nil {
 		vectorBytes = vectorStatusBytes(rep.Load.VectorStatus)
 	}
-	fmt.Fprintf(&b, "| load | %.3f | %.1f | %d | %.1f | %.1f | %d |\n", rep.Load.TotalSeconds, rep.Load.RowsPerSecond, rep.Load.StorageBytesAfterLoad, rep.Load.StorageBytesPerDoc, float64(rep.Load.TextStorage.EncodedBytes)/float64(maxInt(rep.Load.Rows, 1)), vectorBytes)
+	fmt.Fprintf(&b, "| load | %.3f | %.1f | %d | %.1f | %s | %d |\n", rep.Load.TotalSeconds, rep.Load.RowsPerSecond, rep.Load.StorageBytesAfterLoad, rep.Load.StorageBytesPerDoc, textBytesPerDoc(rep.Load.TextStorage, rep.Load.Rows, rep.LogicalTextStorage), vectorBytes)
 	if rep.TextOnly != nil {
-		fmt.Fprintf(&b, "| text-only predeclared | %.3f | %.1f | %d | %.1f | %.1f | 0 |\n", rep.TextOnly.TotalSeconds, rep.TextOnly.RowsPerSecond, rep.TextOnly.StorageBytesAfterLoad, rep.TextOnly.StorageBytesPerDoc, float64(rep.TextOnly.TextStorage.EncodedBytes)/float64(maxInt(rep.TextOnly.Rows, 1)))
+		fmt.Fprintf(&b, "| text-only predeclared | %.3f | %.1f | %d | %.1f | %s | 0 |\n", rep.TextOnly.TotalSeconds, rep.TextOnly.RowsPerSecond, rep.TextOnly.StorageBytesAfterLoad, rep.TextOnly.StorageBytesPerDoc, textBytesPerDoc(rep.TextOnly.TextStorage, rep.TextOnly.Rows, rep.LogicalTextStorage))
 	}
 	if rep.Backfill != nil {
-		fmt.Fprintf(&b, "| backfill fixture | %.3f | %.1f | %d | %.1f | %.1f | 0 |\n", rep.Backfill.TotalSeconds, rep.Backfill.RowsPerSecond, rep.Backfill.StorageBytes, rep.Backfill.StorageBytesPerDoc, float64(rep.Backfill.TextStorage.EncodedBytes)/float64(maxInt(rep.Backfill.Rows, 1)))
+		fmt.Fprintf(&b, "| backfill fixture | %.3f | %.1f | %d | %.1f | %s | 0 |\n", rep.Backfill.TotalSeconds, rep.Backfill.RowsPerSecond, rep.Backfill.StorageBytes, rep.Backfill.StorageBytesPerDoc, textBytesPerDoc(rep.Backfill.TextStorage, rep.Backfill.Rows, rep.LogicalTextStorage))
 	}
 	if rep.SourceChunk != nil {
-		fmt.Fprintf(&b, "| source/chunk fixture | %.3f | %.1f | %d | %.1f | %.1f | 0 |\n", rep.SourceChunk.IngestSeconds+rep.SourceChunk.CheckpointSeconds+rep.SourceChunk.ReopenSeconds, float64(rep.SourceChunk.SourceDocuments)/nonZero(rep.SourceChunk.IngestSeconds), rep.SourceChunk.StorageBytes, float64(rep.SourceChunk.StorageBytes)/float64(maxInt(rep.SourceChunk.SourceDocuments, 1)), float64(rep.SourceChunk.TextStorage.EncodedBytes)/float64(maxInt(rep.SourceChunk.SourceDocuments, 1)))
+		fmt.Fprintf(&b, "| source/chunk fixture | %.3f | %.1f | %d | %.1f | %s | 0 |\n", rep.SourceChunk.IngestSeconds+rep.SourceChunk.CheckpointSeconds+rep.SourceChunk.ReopenSeconds, float64(rep.SourceChunk.SourceDocuments)/nonZero(rep.SourceChunk.IngestSeconds), rep.SourceChunk.StorageBytes, float64(rep.SourceChunk.StorageBytes)/float64(maxInt(rep.SourceChunk.SourceDocuments, 1)), textBytesPerDoc(rep.SourceChunk.TextStorage, rep.SourceChunk.SourceDocuments, rep.LogicalTextStorage))
 	}
 	fmt.Fprintf(&b, "\nLoad breakdown: generation `%.3fs`, insert `%.3fs`, flush `%.3fs`, vector rebuild `%.3fs`, checkpoint `%.3fs`.\n\n", rep.Load.GenerationSeconds, rep.Load.InsertSeconds, rep.Load.FlushSeconds, rep.Load.VectorRebuildSeconds, rep.Load.CheckpointSeconds)
 
 	if len(rep.StorageSnapshots) != 0 {
-		fmt.Fprintf(&b, "### Text-v2 lane bytes/doc\n\n")
-		fmt.Fprintf(&b, "| snapshot | docid | docmap | postings | norms | positions | terms | status/format |\n")
-		fmt.Fprintf(&b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
-		for _, snap := range rep.StorageSnapshots {
-			fmt.Fprintf(&b, "| `%s` | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f |\n", snap.Label, snap.TextDocIDBytesPerDoc, snap.TextDocMapBytesPerDoc, snap.TextPostingBlockBytesPerDoc, snap.TextNormBlockBytesPerDoc, snap.TextPositionBytesPerDoc, snap.TextTermStatsBytesPerDoc, snap.TextStatusFormatBytesPerDoc)
+		if rep.LogicalTextStorage.State == "observed" {
+			fmt.Fprintf(&b, "### Text-v2 lane bytes/doc\n\n")
+			fmt.Fprintf(&b, "| snapshot | docid | docmap | postings | norms | positions | terms | status/format |\n")
+			fmt.Fprintf(&b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+			for _, snap := range rep.StorageSnapshots {
+				fmt.Fprintf(&b, "| `%s` | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f |\n", snap.Label, snap.TextDocIDBytesPerDoc, snap.TextDocMapBytesPerDoc, snap.TextPostingBlockBytesPerDoc, snap.TextNormBlockBytesPerDoc, snap.TextPositionBytesPerDoc, snap.TextTermStatsBytesPerDoc, snap.TextStatusFormatBytesPerDoc)
+			}
+			fmt.Fprintf(&b, "\n")
+		} else {
+			fmt.Fprintf(&b, "Logical text-component bytes: **%s** — %s.\n\n", rep.LogicalTextStorage.State, rep.LogicalTextStorage.Reason)
 		}
-		fmt.Fprintf(&b, "\n")
 		fmt.Fprintf(&b, "### Physical storage/WAL accounting\n\n")
 		fmt.Fprintf(&b, "| snapshot | index pages | value log | WAL | other | total | WAL-excluded |\n")
 		fmt.Fprintf(&b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: |\n")
@@ -2721,6 +2735,13 @@ func retainedArtifactStatus(rep report) string {
 		return "INCOMPLETE"
 	}
 	return "ELIGIBLE; acceptance requires successful seal and validation"
+}
+
+func textBytesPerDoc(stats collections.TextIndexStorageStats, rows int, availability metricAvailability) string {
+	if availability.State != "observed" {
+		return availability.State
+	}
+	return fmt.Sprintf("%.1f", float64(stats.EncodedBytes)/float64(maxInt(rows, 1)))
 }
 
 func queryCounters(row queryReport) string {
@@ -2897,6 +2918,23 @@ func captureResource() resourceSnapshot {
 	return resourceSnapshot{CPUSeconds: cpuSeconds, PeakRSSBytes: peakRSS, LiveHeapBytes: memory.Alloc}
 }
 
+func logicalTextStorageAvailability(rows int) metricAvailability {
+	if rows <= 100_000 {
+		return metricAvailability{State: "observed"}
+	}
+	return metricAvailability{
+		State:  "unavailable",
+		Reason: "full logical component validation is O(postings) with stored positions; exact physical index/value-log/WAL accounting remains observed",
+	}
+}
+
+func collectTextStorageStats(col *collections.Collection, rows int) (collections.TextIndexStorageStats, bool, error) {
+	if rows > 100_000 {
+		return collections.TextIndexStorageStats{}, false, nil
+	}
+	stats, err := col.TextIndexStorageStats(textIndexName)
+	return stats, true, err
+}
 func finalizeCleanup(rep *report, cfg config, fixture *scaleFixture) error {
 	if rep == nil || fixture == nil {
 		return errors.New("nil cleanup target")

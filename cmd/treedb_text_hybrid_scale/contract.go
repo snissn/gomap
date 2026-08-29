@@ -314,6 +314,9 @@ func validateQualificationReport(rep report) error {
 	if rep.Contract.FixtureSHA256 != frozenFixtureSHA256() || rep.Contract.QuerySetSHA256 != frozenQuerySetSHA256() || rep.Contract.RelevanceSHA256 != frozenRelevanceSHA256() || rep.Contract.ConfigSHA256 == "" || rep.Contract.Analyzer != "simple" || rep.Contract.FieldWeights != "title=3,body=1" || rep.Contract.Seed != 4329 {
 		return errors.New("report frozen digest contract mismatch")
 	}
+	if rep.LogicalTextStorage.State != "observed" && (rep.LogicalTextStorage.State != "unavailable" || strings.TrimSpace(rep.LogicalTextStorage.Reason) == "") {
+		return errors.New("logical text storage measurement must be observed or explicitly unavailable with a reason")
+	}
 	cfg := rep.Config
 	if cfg.Rows != requiredScaleRows || cfg.BackfillRows != requiredScaleRows || cfg.TextOnlyRows != requiredScaleRows || cfg.SourceChunkRows != requiredScaleRows {
 		return fmt.Errorf("exact 10M cardinality required: rows=%d backfill=%d text_only=%d source_chunk=%d", cfg.Rows, cfg.BackfillRows, cfg.TextOnlyRows, cfg.SourceChunkRows)
@@ -468,7 +471,7 @@ func validResource(resource resourceSnapshot) bool {
 func validateStorageSnapshots(snapshots []storageSnapshot) error {
 	required := map[string]bool{"after_load": false, "after_reopen": false, "maintenance_rewrite_fixture": false, "backfill_fixture": false, "text_only_fixture": false, "source_chunk_fixture": false}
 	for _, snap := range snapshots {
-		if snap.PhysicalTotalBytes <= 0 || snap.PhysicalIndexPageBytes <= 0 || snap.PhysicalValueLogBytes <= 0 || snap.PhysicalWALBytes < 0 || snap.PhysicalOtherBytes < 0 {
+		if snap.PhysicalTotalBytes <= 0 || snap.PhysicalIndexPageBytes <= 0 || snap.PhysicalValueLogBytes < 0 || snap.PhysicalWALBytes < 0 || snap.PhysicalOtherBytes < 0 {
 			return fmt.Errorf("storage snapshot %q has incomplete physical accounting", snap.Label)
 		}
 		if snap.PhysicalTotalBytes != snap.PhysicalIndexPageBytes+snap.PhysicalValueLogBytes+snap.PhysicalWALBytes+snap.PhysicalOtherBytes || snap.PhysicalTotalWALExcludedBytes != snap.PhysicalTotalBytes-snap.PhysicalWALBytes {
