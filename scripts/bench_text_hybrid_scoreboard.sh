@@ -13,21 +13,38 @@ DOCS_10K="${DOCS_10K:-10000}"
 DIMS="${DIMS:-16}"
 M="${M:-8}"
 RUN_100K="${RUN_100K:-false}"
-RUN_SQLITE_FTS5="${RUN_SQLITE_FTS5:-true}"
-SQLITE_FTS5_QUERIES="${SQLITE_FTS5_QUERIES:-1000}"
-SQLITE_FTS5_DOCS="${SQLITE_FTS5_DOCS:-$DOCS_10K}"
+LEXICAL_REPETITIONS="${LEXICAL_REPETITIONS:-3}"
+LEXICAL_TIMEOUT_SECONDS="${LEXICAL_TIMEOUT_SECONDS:-900}"
+RUN_LEXICAL_COMPARISON="${RUN_LEXICAL_COMPARISON:-true}"
+LEXICAL_ALLOW_DIRTY="${LEXICAL_ALLOW_DIRTY:-false}"
+LEXICAL_RAN=false
 TEXT_100K_BENCHTIME="${TEXT_100K_BENCHTIME:-1x}"
 TEXT_100K_COUNT="${TEXT_100K_COUNT:-1}"
 
-mkdir -p "$RUN_DIR"
+if [[ "$RUN_LEXICAL_COMPARISON" == "true" || "$RUN_LEXICAL_COMPARISON" == "1" || "$RUN_LEXICAL_COMPARISON" == "yes" ]]; then
+  echo "==> pinned same-corpus TreeDB/Lucene/Bleve/SQLite lexical comparison"
+  LEXICAL_ARGS=(
+    --manifest benchmarks/text_hybrid_scoreboard/lexical_manifest.json
+    --out-dir "$RUN_DIR/lexical"
+    --repetitions "$LEXICAL_REPETITIONS"
+    --timeout-seconds "$LEXICAL_TIMEOUT_SECONDS"
+    --go-bin "$GO_BIN"
+  )
+  if [[ "$LEXICAL_ALLOW_DIRTY" == "true" || "$LEXICAL_ALLOW_DIRTY" == "1" || "$LEXICAL_ALLOW_DIRTY" == "yes" ]]; then
+    LEXICAL_ARGS+=(--allow-dirty)
+  fi
+  "$PYTHON" -E -s benchmarks/text_hybrid_scoreboard/run_lexical_comparison.py "${LEXICAL_ARGS[@]}"
+  LEXICAL_RAN=true
+fi
 
+mkdir -p "$RUN_DIR"
 {
   echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "repo=$ROOT"
   echo "branch=$(git branch --show-current 2>/dev/null || true)"
   echo "commit=$(git rev-parse HEAD 2>/dev/null || true)"
-  echo "go=$($GO_BIN version 2>/dev/null || true)"
-  echo "python=$($PYTHON --version 2>&1 || true)"
+  echo "go=$("$GO_BIN" version 2>/dev/null || true)"
+  echo "python=$("$PYTHON" --version 2>&1 || true)"
   echo "uname=$(uname -a 2>/dev/null || true)"
   echo "cpu=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)"
   echo "ncpu=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || true)"
@@ -104,19 +121,6 @@ SCOREBOARD_ARGS=(
   -command "treedb_text_blockmax_10k=GOWORK=off TREEDB_TEXT_V2_BLOCKMAX_DOCS=$DOCS_10K $GO_BIN test ./TreeDB/collections -run '^$' -bench '^BenchmarkTextV2BlockMaxCommonTerm2628/(blockmax_common_topk|exhaustive_common_topk)$' -benchmem -benchtime=$BENCHTIME -count=$COUNT"
 )
 
-if [[ "$RUN_SQLITE_FTS5" == "true" || "$RUN_SQLITE_FTS5" == "1" || "$RUN_SQLITE_FTS5" == "yes" ]]; then
-  SQLITE_JSON="$RUN_DIR/sqlite_fts5_10k.json"
-  echo "==> SQLite FTS5 text baseline"
-  "$PYTHON" benchmarks/text_hybrid_scoreboard/sqlite_fts5_bench.py \
-    --docs "$SQLITE_FTS5_DOCS" \
-    --queries "$SQLITE_FTS5_QUERIES" \
-    --top-k 10 \
-    --out "$SQLITE_JSON"
-  SCOREBOARD_ARGS+=(
-    -external "sqlite_fts5_10k=$SQLITE_JSON"
-    -command "sqlite_fts5_10k=$PYTHON benchmarks/text_hybrid_scoreboard/sqlite_fts5_bench.py --docs $SQLITE_FTS5_DOCS --queries $SQLITE_FTS5_QUERIES --top-k 10 --out $SQLITE_JSON"
-  )
-fi
 
 if [[ "$RUN_100K" == "true" || "$RUN_100K" == "1" || "$RUN_100K" == "yes" ]]; then
   TEXT_BLOCKMAX_100K="$RUN_DIR/treedb_text_blockmax_100k.txt"
@@ -140,11 +144,14 @@ else
 fi
 
 SCOREBOARD_ARGS+=(
-  -unavailable "Lucene=not run by the default local harness; use a pinned Lucene/JMH or OpenSearch run with the same corpus/query contract before making Lucene parity claims"
-  -unavailable "Tantivy=not run by the default local harness; requires a Rust/Tantivy harness pinned to this corpus and query set"
-  -unavailable "Bleve=not run by the default local harness; requires adding or invoking a Bleve-specific runner outside TreeDB production code"
+  -unavailable "Tantivy lexical=not measured by this harness; no Tantivy adapter or retained evidence is included"
   -unavailable "Qdrant/Weaviate/Milvus/OpenSearch hybrid=not run by the default smoke harness; use service-specific durable deployments or documented local proxies before citing industry hybrid parity"
 )
+if [[ "$LEXICAL_RAN" == "true" ]]; then
+  SCOREBOARD_ARGS+=(
+    -caveat "Pinned lexical engine evidence is reported separately in $RUN_DIR/lexical/lexical_comparison.json and .md; unsupported rows never enter that report's headline matrix."
+  )
+fi
 
 "$GO_BIN" run ./cmd/treedb_text_hybrid_scoreboard "${SCOREBOARD_ARGS[@]}"
 
@@ -159,9 +166,18 @@ Primary artifacts:
 - TreeDB $DOCS_10K-doc index/search raw: \`$INDEX_10K\`
 - TreeDB $DOCS_10K-doc hybrid executor raw: \`$HYBRID_10K\`
 - TreeDB $DOCS_10K-doc text blockmax raw: \`$TEXT_BLOCKMAX_10K\`
+EOF_README
+if [[ "$LEXICAL_RAN" == "true" ]]; then
+  cat >> "$RUN_DIR/README.md" <<EOF_LEXICAL
+- lexical comparison: \`$RUN_DIR/lexical/lexical_comparison.md\`
+- lexical comparison JSON: \`$RUN_DIR/lexical/lexical_comparison.json\`
+EOF_LEXICAL
+fi
+cat >> "$RUN_DIR/README.md" <<EOF_README
 
-Set \`RUN_100K=true\` for the heavier 100k text blockmax rows. Set
-\`RUN_SQLITE_FTS5=false\` to skip the local SQLite FTS5 embedded text baseline.
+Set \`RUN_100K=true\` for the heavier 100k text blockmax rows.
+Set \`RUN_LEXICAL_COMPARISON=false\` only when reproducing the legacy hybrid-only matrix.
+Set \`LEXICAL_ALLOW_DIRTY=true\` only for development smoke; dirty lexical reports are ineligible for retained evidence.
 EOF_README
 
 echo "scoreboard: $RUN_DIR/scoreboard.md"

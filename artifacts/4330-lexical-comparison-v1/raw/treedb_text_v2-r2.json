@@ -1,0 +1,558 @@
+{
+  "build": {
+    "checkpointed": true,
+    "cpu": {
+      "status": "ok",
+      "unit": "nanoseconds",
+      "value": 120262000
+    },
+    "docs_per_second": 49456.7688294481,
+    "elapsed_nanos": 202196792,
+    "peak_rss": {
+      "status": "ok",
+      "unit": "bytes",
+      "value": 92241920
+    }
+  },
+  "cases": [
+    {
+      "equivalent": true,
+      "id": "common",
+      "reopen_result_digest": "32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40",
+      "reopen_result_ids": [
+        "doc-000000",
+        "doc-000001",
+        "doc-000002",
+        "doc-000003",
+        "doc-000004",
+        "doc-000005",
+        "doc-000006",
+        "doc-000007",
+        "doc-000009",
+        "doc-000008"
+      ],
+      "result_digest": "32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40",
+      "result_ids": [
+        "doc-000000",
+        "doc-000001",
+        "doc-000002",
+        "doc-000003",
+        "doc-000004",
+        "doc-000005",
+        "doc-000006",
+        "doc-000007",
+        "doc-000009",
+        "doc-000008"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "blockmax_single_term",
+        "proof": {
+          "active_roots": [
+            "docs/text-v2-docid/lexical",
+            "docs/text-v2-docmap/lexical",
+            "docs/text-v2-terms/lexical",
+            "docs/text-v2-posting-blocks/lexical",
+            "docs/text-v2-norm-blocks/lexical",
+            "docs/text-v2-positions/lexical",
+            "docs/text-v2-generations/lexical"
+          ],
+          "documents_fetched": 0,
+          "fail_closed": 0,
+          "index_version": "v2",
+          "postings_scanned": 128
+        }
+      },
+      "samples_nanos": [
+        241417,
+        240417,
+        240750,
+        239125,
+        239500,
+        239625,
+        257166,
+        263292,
+        289709,
+        290500,
+        270042,
+        250584,
+        244959,
+        243750,
+        248667,
+        237250,
+        249333,
+        239500,
+        442666,
+        457750
+      ],
+      "status": "ok",
+      "timed_out": false
+    },
+    {
+      "equivalent": true,
+      "id": "rare",
+      "reopen_result_digest": "d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0",
+      "reopen_result_ids": [
+        "doc-000010",
+        "doc-000011",
+        "doc-000012",
+        "doc-000013",
+        "doc-000014",
+        "doc-000015",
+        "doc-000016",
+        "doc-000017",
+        "doc-000018",
+        "doc-000019"
+      ],
+      "result_digest": "d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0",
+      "result_ids": [
+        "doc-000010",
+        "doc-000011",
+        "doc-000012",
+        "doc-000013",
+        "doc-000014",
+        "doc-000015",
+        "doc-000016",
+        "doc-000017",
+        "doc-000018",
+        "doc-000019"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "blockmax_single_term",
+        "proof": {
+          "active_roots": [
+            "docs/text-v2-docid/lexical",
+            "docs/text-v2-docmap/lexical",
+            "docs/text-v2-terms/lexical",
+            "docs/text-v2-posting-blocks/lexical",
+            "docs/text-v2-norm-blocks/lexical",
+            "docs/text-v2-positions/lexical",
+            "docs/text-v2-generations/lexical"
+          ],
+          "documents_fetched": 0,
+          "fail_closed": 0,
+          "index_version": "v2",
+          "postings_scanned": 10
+        }
+      },
+      "samples_nanos": [
+        23125,
+        18625,
+        26000,
+        19291,
+        25917,
+        18584,
+        29667,
+        19708,
+        19333,
+        19041,
+        836375,
+        17208,
+        13833,
+        11792,
+        12750,
+        11708,
+        12167,
+        11959,
+        12292,
+        11875
+      ],
+      "status": "ok",
+      "timed_out": false
+    },
+    {
+      "equivalent": true,
+      "id": "and",
+      "reopen_result_digest": "ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d",
+      "reopen_result_ids": [
+        "doc-000020",
+        "doc-000021",
+        "doc-000022",
+        "doc-000023",
+        "doc-000024",
+        "doc-000025",
+        "doc-000026",
+        "doc-000027",
+        "doc-000028",
+        "doc-000029"
+      ],
+      "result_digest": "ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d",
+      "result_ids": [
+        "doc-000020",
+        "doc-000021",
+        "doc-000022",
+        "doc-000023",
+        "doc-000024",
+        "doc-000025",
+        "doc-000026",
+        "doc-000027",
+        "doc-000028",
+        "doc-000029"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "blockmax_and",
+        "proof": {
+          "active_roots": [
+            "docs/text-v2-docid/lexical",
+            "docs/text-v2-docmap/lexical",
+            "docs/text-v2-terms/lexical",
+            "docs/text-v2-posting-blocks/lexical",
+            "docs/text-v2-norm-blocks/lexical",
+            "docs/text-v2-positions/lexical",
+            "docs/text-v2-generations/lexical"
+          ],
+          "documents_fetched": 0,
+          "fail_closed": 0,
+          "index_version": "v2",
+          "postings_scanned": 40
+        }
+      },
+      "samples_nanos": [
+        14625,
+        14875,
+        28541,
+        15333,
+        15083,
+        15458,
+        14292,
+        15125,
+        15917,
+        14459,
+        14625,
+        15125,
+        15333,
+        14750,
+        15125,
+        15083,
+        14667,
+        15375,
+        15250,
+        15333
+      ],
+      "status": "ok",
+      "timed_out": false
+    },
+    {
+      "equivalent": true,
+      "id": "or",
+      "reopen_result_digest": "d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8",
+      "reopen_result_ids": [
+        "doc-000070",
+        "doc-000071",
+        "doc-000072",
+        "doc-000073",
+        "doc-000074",
+        "doc-000075",
+        "doc-000076",
+        "doc-000077",
+        "doc-000078",
+        "doc-000079"
+      ],
+      "result_digest": "d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8",
+      "result_ids": [
+        "doc-000070",
+        "doc-000071",
+        "doc-000072",
+        "doc-000073",
+        "doc-000074",
+        "doc-000075",
+        "doc-000076",
+        "doc-000077",
+        "doc-000078",
+        "doc-000079"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "blockmax_or_wand",
+        "proof": {
+          "active_roots": [
+            "docs/text-v2-docid/lexical",
+            "docs/text-v2-docmap/lexical",
+            "docs/text-v2-terms/lexical",
+            "docs/text-v2-posting-blocks/lexical",
+            "docs/text-v2-norm-blocks/lexical",
+            "docs/text-v2-positions/lexical",
+            "docs/text-v2-generations/lexical"
+          ],
+          "documents_fetched": 0,
+          "fail_closed": 0,
+          "index_version": "v2",
+          "postings_scanned": 40
+        }
+      },
+      "samples_nanos": [
+        18083,
+        18167,
+        18541,
+        19208,
+        19167,
+        18209,
+        18375,
+        19125,
+        19708,
+        18416,
+        18667,
+        17833,
+        19375,
+        18583,
+        18708,
+        16833,
+        18708,
+        19583,
+        19083,
+        18583
+      ],
+      "status": "ok",
+      "timed_out": false
+    },
+    {
+      "equivalent": true,
+      "id": "phrase",
+      "reopen_result_digest": "8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696",
+      "reopen_result_ids": [
+        "doc-000090",
+        "doc-000091",
+        "doc-000092",
+        "doc-000093",
+        "doc-000094",
+        "doc-000095",
+        "doc-000096",
+        "doc-000097",
+        "doc-000098",
+        "doc-000099"
+      ],
+      "result_digest": "8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696",
+      "result_ids": [
+        "doc-000090",
+        "doc-000091",
+        "doc-000092",
+        "doc-000093",
+        "doc-000094",
+        "doc-000095",
+        "doc-000096",
+        "doc-000097",
+        "doc-000098",
+        "doc-000099"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "phrase_validation",
+        "proof": {
+          "active_roots": [
+            "docs/text-v2-docid/lexical",
+            "docs/text-v2-docmap/lexical",
+            "docs/text-v2-terms/lexical",
+            "docs/text-v2-posting-blocks/lexical",
+            "docs/text-v2-norm-blocks/lexical",
+            "docs/text-v2-positions/lexical",
+            "docs/text-v2-generations/lexical"
+          ],
+          "documents_fetched": 0,
+          "fail_closed": 0,
+          "index_version": "v2",
+          "postings_scanned": 40
+        }
+      },
+      "samples_nanos": [
+        51250,
+        51417,
+        60500,
+        61750,
+        50375,
+        61459,
+        51625,
+        60750,
+        74291,
+        73625,
+        50166,
+        52208,
+        50542,
+        69125,
+        50792,
+        57250,
+        57875,
+        50167,
+        58666,
+        51542
+      ],
+      "status": "ok",
+      "timed_out": false
+    },
+    {
+      "equivalent": true,
+      "id": "scalar_filtered",
+      "reopen_result_digest": "efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0",
+      "reopen_result_ids": [
+        "doc-000100",
+        "doc-000101",
+        "doc-000102",
+        "doc-000103",
+        "doc-000104",
+        "doc-000105",
+        "doc-000106",
+        "doc-000107",
+        "doc-000108",
+        "doc-000109"
+      ],
+      "result_digest": "efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0",
+      "result_ids": [
+        "doc-000100",
+        "doc-000101",
+        "doc-000102",
+        "doc-000103",
+        "doc-000104",
+        "doc-000105",
+        "doc-000106",
+        "doc-000107",
+        "doc-000108",
+        "doc-000109"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "text_v2_blockmax_scalar_prefilter",
+        "proof": {
+          "documents_fetched": 0,
+          "fail_closed": 0,
+          "scalar_filter_strategy": "prefilter",
+          "text_candidates": 10,
+          "text_index_epoch": 0
+        }
+      },
+      "samples_nanos": [
+        35000,
+        34292,
+        38916,
+        90083,
+        315750,
+        246125,
+        294208,
+        107208,
+        42708,
+        39708,
+        35958,
+        36292,
+        33750,
+        34375,
+        42750,
+        42083,
+        76833,
+        306917,
+        253209,
+        292291
+      ],
+      "status": "ok",
+      "timed_out": false
+    }
+  ],
+  "command": [
+    "$HOME/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.darwin-arm64/bin/go",
+    "run",
+    "./benchmarks/text_hybrid_scoreboard/treedb_adapter",
+    "--manifest",
+    "$REPO/benchmarks/text_hybrid_scoreboard/lexical_manifest.json",
+    "--corpus",
+    "$RUN/corpus.tsv",
+    "--out",
+    "$RUN/raw/treedb_text_v2-r2.json",
+    "--repetition",
+    "2",
+    "--db",
+    "$RUN/indexes/treedb_text_v2-r2"
+  ],
+  "config": {
+    "analyzer": "simple",
+    "bm25f": {
+      "b": 0.75,
+      "k1": 1.2
+    },
+    "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close",
+    "candidate_limit": 10000,
+    "index_version": "v2",
+    "max_postings_scanned": 80000,
+    "result_mode": "score_only",
+    "route_proof": "one untimed explained query per case",
+    "scoring_contract": "pinned_bm25f",
+    "store_positions": true,
+    "stored_source_fields": [
+      "id",
+      "title",
+      "body",
+      "tenant"
+    ],
+    "timed_explain": false,
+    "top_k": 10,
+    "weights": {
+      "body": 1,
+      "title": 3
+    },
+    "working_directory": "$REPO"
+  },
+  "corpus": {
+    "document_count": 10000,
+    "sha256": "fe5b9d106a099d5c29d3327a8424b7f6d57f248b8802225b2d7bb3719062a227"
+  },
+  "engine": {
+    "family": "treedb",
+    "id": "treedb_text_v2",
+    "name": "TreeDB text-v2",
+    "version": "d036bd777300521243cdf4aab1ce8993739d3359"
+  },
+  "environment": {
+    "contract": {
+      "build_cpu_metric": "process CPU nanoseconds",
+      "engine_process_concurrency": 1,
+      "filesystem_identity_policy": "runner output, corpus, index, and result artifact must have the same decimal POSIX st_dev identity",
+      "latency_clock": "monotonic wall clock",
+      "memory_limit_policy": "inherit one detected host address-space limit; adapters do not raise or lower it",
+      "peak_rss_metric": "process lifetime peak resident bytes when the runtime exposes it; otherwise typed unsupported",
+      "query_concurrency": 1,
+      "resource_scope": "single adapter process per retained repetition",
+      "runtime_cpu_parallelism": 1
+    },
+    "execution": {
+      "engine_process_concurrency": 1,
+      "query_concurrency": 1,
+      "runtime_cpu_parallelism": 1
+    },
+    "filesystem": {
+      "corpus_store_id": "16777232",
+      "index_store_id": "16777232",
+      "result_store_id": "16777232",
+      "runner_device_id": "16777232",
+      "same_filesystem": true
+    },
+    "memory": {
+      "adapter_changed_limit": false,
+      "detected_address_space_limit": "unlimited",
+      "detection_source": "runner_rlimit",
+      "matches_runner_detected": true
+    }
+  },
+  "manifest_sha256": "a268cb2e59f4a63d8bcc7a0047fe85fe2195bef62a536f9b54bcae6f4b568d8f",
+  "reopen": {
+    "performed": true,
+    "result_digest": "61b4e26f72eacfb5c7f8d1ecbdffc6b0ef69a7b17daa24b6a7ec60b29561b4b0",
+    "verified": true
+  },
+  "repetition": 2,
+  "schema_version": "treedb_lexical_result/v1",
+  "status": "ok",
+  "storage": {
+    "durable_bytes": 6553974,
+    "transient_bytes": 0,
+    "wal_bytes": 0
+  },
+  "versions": {
+    "go": "go1.26.0",
+    "module": "d036bd777300521243cdf4aab1ce8993739d3359",
+    "platform": "darwin/arm64"
+  }
+}
