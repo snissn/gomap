@@ -1251,6 +1251,45 @@ func TestMinimaBatchCorrelationContract(t *testing.T) {
 	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, duplicate, true, "http://127.0.0.1/debug"); err == nil {
 		t.Fatal("completed diagnostic correlations duplicated one batch identity")
 	}
+	failedComplete := artifact.RawEvidence["treedb"]
+	failedCompleteContract := *failedComplete.UpsertBatchCorrelationContract
+	failedComplete.UpsertBatchCorrelationContract = &failedCompleteContract
+	failedComplete.Diagnostics = json.RawMessage(`{"enabled":true}`)
+	expectedIdentities := minimaExpectedBatchCorrelationIdentities(artifact.Manifest)
+	failedComplete.UpsertBatchCorrelations = make([]json.RawMessage, 0, len(expectedIdentities))
+	for identity := range expectedIdentities {
+		correlation := map[string]any{
+			"sequence":        len(failedComplete.UpsertBatchCorrelations),
+			"operation":       identity.Operation,
+			"scenario":        identity.Scenario,
+			"batch_start":     identity.BatchStart,
+			"rows":            identity.Rows,
+			"outcome":         "completed",
+			"stats_retention": "compact_completed",
+			"profile_capture": map[string]any{"status": "not_triggered"},
+		}
+		if len(failedComplete.UpsertBatchCorrelations) == 0 {
+			correlation["outcome"] = "failed"
+			correlation["capture_reason"] = "slow"
+			correlation["stats_retention"] = "full_diagnostic"
+			correlation["before_stats"] = map[string]any{"status": "captured"}
+			correlation["after_stats"] = map[string]any{"status": "captured"}
+			correlation["profile_capture"] = map[string]any{"status": "captured"}
+		}
+		encoded, err := json.Marshal(correlation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		failedComplete.UpsertBatchCorrelations = append(failedComplete.UpsertBatchCorrelations, encoded)
+	}
+	failedComplete.UpsertBatchCorrelationContract.RecordCount = len(expectedIdentities)
+	failedComplete.UpsertBatchCorrelationContract.CompactCompletedRecords = len(expectedIdentities) - 1
+	failedComplete.UpsertBatchCorrelationContract.FullDiagnosticRecords = 1
+	if err := validateMinimaTreeDBBatchCorrelations(
+		artifact.Manifest, failedComplete, true, "http://127.0.0.1/debug",
+	); err == nil {
+		t.Fatal("completed diagnostic correlations accepted a failed batch")
+	}
 	raw.UpsertBatchCorrelations[0] = json.RawMessage(
 		`{"sequence":0,"operation":"test","scenario":"test","batch_start":0,"rows":1,"outcome":"completed","stats_retention":"compact_completed","capture_reason":"slow","profile_capture":{"status":"not_triggered"}}`,
 	)
@@ -1289,6 +1328,12 @@ func TestMinimaBatchCorrelationContract(t *testing.T) {
 	)
 	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false, "http://127.0.0.1/debug"); err == nil {
 		t.Fatal("full diagnostic batch correlation with null stats was accepted")
+	}
+	raw.UpsertBatchCorrelations[0] = json.RawMessage(
+		`{"sequence":0,"operation":"test","scenario":"test","batch_start":0,"rows":1,"outcome":"timeout","stats_retention":"full_diagnostic","capture_reason":"failed","before_stats":{"wide":true},"after_stats":{"wide":true},"profile_capture":{"status":"captured"}}`,
+	)
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false, "http://127.0.0.1/debug"); err == nil {
+		t.Fatal("partial diagnostic batch outcome contradicted its capture reason")
 	}
 }
 

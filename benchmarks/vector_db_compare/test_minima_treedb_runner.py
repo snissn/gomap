@@ -535,6 +535,24 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.diagnostics_dir = Path("diagnostics")
         with self.assertRaisesRegex(RuntimeError, "identity/cardinality"):
             workload._batch_correlation_contract()
+        workload.batch_correlations = [
+            {
+                **duplicate,
+                "sequence": index,
+                "batch_start": index,
+            }
+            for index in range(10)
+        ]
+        workload.batch_correlations[0].update({
+            "outcome": "failed",
+            "capture_reason": "slow",
+            "stats_retention": "full_diagnostic",
+            "before_stats": {"status": "captured"},
+            "after_stats": {"status": "captured"},
+            "profile_capture": {"status": "captured"},
+        })
+        with self.assertRaisesRegex(RuntimeError, "failed outcome"):
+            workload._batch_correlation_contract()
         invalid_diagnostic = {
             "sequence": 0,
             "operation": "initial_batch_insert",
@@ -555,6 +573,11 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         invalid_diagnostic["before_stats"] = {"status": "captured"}
         invalid_diagnostic["after_stats"] = {"status": "captured"}
         with self.assertRaisesRegex(RuntimeError, "stats retention"):
+            workload._batch_correlation_contract()
+        invalid_diagnostic["profile_capture"] = {"status": "captured"}
+        invalid_diagnostic["capture_reason"] = "failed"
+        invalid_diagnostic["outcome"] = "timeout"
+        with self.assertRaisesRegex(RuntimeError, "outcome and capture reason"):
             workload._batch_correlation_contract()
 
     def test_slow_completed_upsert_retains_full_stats_and_profile_manifest(self) -> None:

@@ -853,6 +853,13 @@ func validateMinimaTreeDBBatchCorrelations(
 		}
 		sequences[*correlation.Sequence] = struct{}{}
 		identities[identity] = struct{}{}
+		if completed && correlation.Outcome != "completed" {
+			return errors.New("minima artifact: completed TreeDB batch correlation contains a failed outcome")
+		}
+		if correlation.CaptureReason == "failed" && correlation.Outcome != "failed" ||
+			correlation.CaptureReason == "timeout" && correlation.Outcome != "timeout" {
+			return errors.New("minima artifact: TreeDB batch outcome and capture reason disagree")
+		}
 		switch correlation.StatsRetention {
 		case "compact_completed":
 			if correlation.Outcome != "completed" || correlation.CaptureReason != "" ||

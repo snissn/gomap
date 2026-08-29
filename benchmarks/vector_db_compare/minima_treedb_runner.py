@@ -767,6 +767,9 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 raise RuntimeError("TreeDB batch correlation identity/cardinality is invalid")
             observed_sequences.add(sequence)
             observed_identities.add(identity)
+            outcome = correlation.get("outcome")
+            if completed and outcome != "completed":
+                raise RuntimeError("completed TreeDB batch correlations contain a failed outcome")
             if correlation.get("stats_retention") == "compact_completed":
                 if correlation.get("outcome") != "completed" or correlation.get("capture_reason") or \
                         correlation.get("profile_capture", {}).get("status") != "not_triggered" or \
@@ -778,6 +781,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             profile_status = correlation.get("profile_capture", {}).get("status")
             diagnostic = correlation.get("capture_reason") in ("slow", "failed", "timeout") and \
                 profile_status in ("captured", "failed", "in_progress")
+            capture_reason = correlation.get("capture_reason")
+            if capture_reason == "failed" and outcome != "failed" or \
+                    capture_reason == "timeout" and outcome != "timeout":
+                raise RuntimeError("TreeDB batch correlation outcome and capture reason disagree")
             if correlation.get("stats_retention") != "full_diagnostic" or not diagnostic or \
                     not isinstance(correlation.get("before_stats"), dict) or \
                     not isinstance(correlation.get("after_stats"), dict):
