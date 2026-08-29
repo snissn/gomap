@@ -565,6 +565,32 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.ResourceMeasurement.RSSBytes++
 			a.RawEvidence["treedb"] = raw
 		}},
+		{"TreeDB phase restart old endpoint contradicts aggregate", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			segment := &raw.ResourceMeasurement.Segments[0]
+			segment.End.CPUSeconds = 1.25
+			segment.CPUSeconds = 0.25
+			raw.ResourceMeasurement.CPUSeconds = 2.75
+			a.RawEvidence["treedb"] = raw
+			for index := range a.Scenarios {
+				if a.Scenarios[index].Backend == "treedb" {
+					a.Scenarios[index].Resource.CPUSeconds = 2.75
+				}
+			}
+		}},
+		{"TreeDB phase restart new baseline contradicts aggregate", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			segment := &raw.ResourceMeasurement.Segments[1]
+			segment.Baseline.DiskBytes = 900
+			segment.DiskBytes = 200
+			raw.ResourceMeasurement.DiskBytes = 200
+			a.RawEvidence["treedb"] = raw
+			for index := range a.Scenarios {
+				if a.Scenarios[index].Backend == "treedb" {
+					a.Scenarios[index].Resource.DiskBytes = 200
+				}
+			}
+		}},
 		{"synthetic zero allocations marked unavailable", func(a *minimaArtifact) {
 			zero := 0.0
 			minimaTestRow(a, "qdrant", "small").Resource.BytesPerOp = &zero
@@ -692,6 +718,10 @@ func validMinimaArtifact() minimaArtifact {
 	resource := minimaTestResourceMeasurement()
 	rawEvidence := make(map[string]minimaRawBackendEvidence, len(backends))
 	for _, backend := range backends {
+		backendResource := resource
+		if backend.Name == "treedb" {
+			backendResource = minimaTestTreeDBResourceMeasurement()
+		}
 		rounds := make([]minimaRawTimedOverlapRound, len(timed.Rounds))
 		for ordinal, round := range timed.Rounds {
 			readers := make([]int, timed.ReaderConcurrency)
@@ -730,7 +760,7 @@ func validMinimaArtifact() minimaArtifact {
 				OldProcessIdentity: "old process", NewProcessIdentity: "new process",
 				PIDChanged: true, Verified: true,
 			},
-			ResourceMeasurement: resource,
+			ResourceMeasurement: backendResource,
 			ResourceAvailability: map[string]map[string]string{
 				"baseline": {"rss_bytes": "test"},
 				"end":      {"rss_bytes": "test"},
@@ -793,6 +823,10 @@ func validMinimaArtifact() minimaArtifact {
 		Backends: backends, Recommendation: "ready_direct", RawEvidence: rawEvidence,
 	}
 	for _, backend := range backends {
+		backendResource := resource
+		if backend.Name == "treedb" {
+			backendResource = minimaTestTreeDBResourceMeasurement()
+		}
 		for _, spec := range manifest.Corpora {
 			query := queries[spec.Name]
 			zeroMismatch, zeroRetry := 0, 0
@@ -837,7 +871,7 @@ func validMinimaArtifact() minimaArtifact {
 				Timing: minimaTimingEvidence{Captured: true},
 				Resource: minimaResourceEvidence{
 					Captured: true, AllocationAvailability: "unavailable",
-					RSSBytes: resource.RSSBytes, CPUSeconds: resource.CPUSeconds, DiskBytes: resource.DiskBytes,
+					RSSBytes: backendResource.RSSBytes, CPUSeconds: backendResource.CPUSeconds, DiskBytes: backendResource.DiskBytes,
 				},
 			})
 			if backend.Name == "treedb" {
@@ -961,6 +995,28 @@ func minimaTestResourceMeasurement() minimaRawResourceMeasurement {
 		},
 		Segments: []minimaRawResourceSegment{segment},
 		Baseline: &baseline,
+		End:      &end,
+	}
+}
+
+func minimaTestTreeDBResourceMeasurement() minimaRawResourceMeasurement {
+	old := minimaRawResourceSnapshot{Captured: true, RSSBytes: 100, CPUSeconds: 1, DiskBytes: 1000}
+	fresh := minimaRawResourceSnapshot{Captured: true, RSSBytes: 0, CPUSeconds: 0, DiskBytes: 1000}
+	end := minimaRawResourceSnapshot{Captured: true, RSSBytes: 125, CPUSeconds: 2.5, DiskBytes: 1100}
+	segments := []minimaRawResourceSegment{
+		{Captured: true, Baseline: old, End: old},
+		{
+			Captured: true, RSSBytes: 125, CPUSeconds: 2.5, DiskBytes: 100,
+			Baseline: fresh, End: end,
+		},
+	}
+	return minimaRawResourceMeasurement{
+		Captured: true, RSSBytes: 125, CPUSeconds: 2.5, DiskBytes: 100,
+		Semantics: minimaRawResourceSemantics{
+			RSSBytes: minimaResourceRSSSemantics, CPUSeconds: minimaResourceCPUSemantics, DiskBytes: minimaResourceDiskSemantics,
+		},
+		Segments: segments,
+		Baseline: &old,
 		End:      &end,
 	}
 }

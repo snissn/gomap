@@ -655,6 +655,29 @@ func validateMinimaResourceMeasurement(backend string, resource minimaRawResourc
 	}
 	return nil
 }
+func minimaPhaseResourceMatchesSnapshot(phase minimaRawPhaseResourceEndpoint, aggregate minimaRawResourceSnapshot) bool {
+	return phase.Captured == aggregate.Captured &&
+		phase.RSSBytes == aggregate.RSSBytes &&
+		phase.CPUSeconds == aggregate.CPUSeconds &&
+		phase.DiskBytes == aggregate.DiskBytes
+}
+
+func validateMinimaTreeDBResourceReconciliation(
+	phase minimaRawPhaseAttribution,
+	resource minimaRawResourceMeasurement,
+) error {
+	if len(resource.Segments) != 2 || len(phase.Phases) <= 5 ||
+		len(phase.Phases[5].ResourceSegments) != 2 {
+		return errors.New("minima artifact: TreeDB phase and aggregate process segments are incomplete")
+	}
+	restart := phase.Phases[5].ResourceSegments
+	if !minimaPhaseResourceMatchesSnapshot(restart[0].End, resource.Segments[0].End) ||
+		!minimaPhaseResourceMatchesSnapshot(restart[1].Start, resource.Segments[1].Baseline) {
+		return errors.New("minima artifact: TreeDB phase and aggregate restart resources disagree")
+	}
+	return nil
+}
+
 func minimaRawJSONMatchesConfiguration(raw json.RawMessage, encoded string) bool {
 	if len(raw) == 0 || encoded == "" {
 		return false
@@ -866,6 +889,11 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 		resource := raw.ResourceMeasurement
 		if err := validateMinimaResourceMeasurement(name, resource); err != nil {
 			return err
+		}
+		if name == "treedb" {
+			if err := validateMinimaTreeDBResourceReconciliation(raw.PhaseAttribution, resource); err != nil {
+				return err
+			}
 		}
 		for _, row := range artifact.Scenarios {
 			if row.Backend != name {
