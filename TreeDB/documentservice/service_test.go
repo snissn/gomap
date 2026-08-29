@@ -1188,6 +1188,17 @@ func TestServicePersistenceReopenDocumentsAndEmbeddings(t *testing.T) {
 	}
 	defer reopened.Close()
 	reopenedSvc := New(collections.NewCollectionManager(reopened))
+	var scans atomic.Int64
+	reopenedSvc.documentScanBefore = func() { scans.Add(1) }
+	filtered, err := reopenedSvc.FilterDocuments(ctx, "docs", FilterDocumentsRequest{
+		Filter:          &Filter{Field: "id", Operator: "==", Value: "persist"},
+		Limit:           1,
+		ReturnEmbedding: true,
+	})
+	if err != nil || scans.Load() != 0 || filtered.MatchedCount != 1 || len(filtered.Documents) != 1 ||
+		filtered.Documents[0].ID != "persist" || !reflect.DeepEqual(filtered.Documents[0].Embedding, []float32{1, 0}) {
+		t.Fatalf("reopened exact-ID filter=%+v scans=%d err=%v", filtered, scans.Load(), err)
+	}
 	count, err := reopenedSvc.CountDocuments(ctx, "docs", CountDocumentsRequest{})
 	if err != nil || count.Count != 1 {
 		t.Fatalf("reopened count=%+v err=%v", count, err)
@@ -2250,6 +2261,219 @@ func TestServiceFilterDocumentsCursorPagesWithoutRescanningPrefix(t *testing.T) 
 		t.Fatalf("huge-limit cursor page=%+v err=%v", huge, err)
 	}
 }
+
+func TestServiceFilterDocumentsExactIDDirectPath(t *testing.T) {
+	ctx := context.Background()
+	svc, db := newTestService(t)
+	defer db.Close()
+	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "exact_id", Dimension: 2, Metric: MetricCosine})
+	if err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	documents := []Document{
+		{ID: "a", Content: "first", Embedding: []float32{1, 0}},
+		{ID: "target", Content: "selected", Embedding: []float32{0, 1}, Meta: map[string]any{"kind": "wanted"}},
+		{ID: "z", Content: "last", Embedding: []float32{1, 0}},
+	}
+	if _, err := svc.UpsertDocuments(ctx, info.Name, UpsertDocumentsRequest{Documents: documents}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	var scans atomic.Int64
+	svc.documentScanBefore = func() { scans.Add(1) }
+	exact := &Filter{Field: " id ", Operator: " == ", Value: "target"}
+	assertNoScan := func(name string, req FilterDocumentsRequest) FilterDocumentsResponse {
+		t.Helper()
+		before := scans.Load()
+		got, err := svc.FilterDocuments(ctx, info.Name, req)
+		if err != nil {
+			t.Fatalf("%s: FilterDocuments: %v", name, err)
+		}
+		if after := scans.Load(); after != before {
+			t.Fatalf("%s: document scans changed from %d to %d", name, before, after)
+		}
+		return got
+	}
+
+	got := assertNoScan("hit", FilterDocumentsRequest{Filter: exact, Limit: 1})
+	if got.MatchedCount != 1 || got.Truncated || len(got.Documents) != 1 ||
+		got.Documents[0].ID != "target" || got.Documents[0].Content != "selected" || got.Documents[0].Embedding != nil {
+		t.Fatalf("hit=%+v", got)
+	}
+	got = assertNoScan("unlimited", FilterDocumentsRequest{Filter: exact})
+	if got.MatchedCount != 1 || got.Truncated || len(got.Documents) != 1 || got.Documents[0].ID != "target" {
+		t.Fatalf("unlimited hit=%+v", got)
+	}
+	got = assertNoScan("embedding", FilterDocumentsRequest{Filter: exact, Limit: 1, ReturnEmbedding: true})
+	if len(got.Documents) != 1 || !reflect.DeepEqual(got.Documents[0].Embedding, []float32{0, 1}) {
+		t.Fatalf("embedding hit=%+v", got)
+	}
+	got = assertNoScan("offset", FilterDocumentsRequest{Filter: exact, Limit: 1, Offset: 1})
+	if got.MatchedCount != 1 || got.Truncated || got.Documents == nil || len(got.Documents) != 0 {
+		t.Fatalf("offset hit=%+v", got)
+	}
+	miss := &Filter{Field: "id", Operator: "==", Value: "missing"}
+	got = assertNoScan("miss", FilterDocumentsRequest{Filter: miss, Limit: 1})
+	if got.MatchedCount != 0 || got.Truncated || got.Documents == nil || len(got.Documents) != 0 {
+		t.Fatalf("miss=%+v", got)
+	}
+	emptyID := &Filter{Field: "id", Operator: "==", Value: ""}
+	got = assertNoScan("empty ID", FilterDocumentsRequest{Filter: emptyID, Limit: 1})
+	if got.MatchedCount != 0 || got.Truncated || got.Documents == nil || len(got.Documents) != 0 {
+		t.Fatalf("empty-ID miss=%+v", got)
+	}
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	before := scans.Load()
+	if _, err := svc.FilterDocuments(canceled, info.Name, FilterDocumentsRequest{Filter: exact, Limit: 1}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled exact-ID filter err=%v", err)
+	}
+	if scans.Load() != before {
+		t.Fatal("canceled exact-ID filter scanned documents")
+	}
+	if _, err := svc.FilterDocuments(ctx, info.Name, FilterDocumentsRequest{
+		ExpectedGeneration: info.Generation + 1, Filter: exact, Limit: 1,
+	}); ErrorCodeOf(err) != CodeIndexStale {
+		t.Fatalf("stale exact-ID filter err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if scans.Load() != before {
+		t.Fatal("stale exact-ID filter scanned documents")
+	}
+	if _, err := svc.FilterDocuments(ctx, info.Name, FilterDocumentsRequest{
+		Filter: &Filter{Field: "id", Operator: "and", Value: "target"}, Limit: 1,
+	}); ErrorCodeOf(err) != CodeInvalidRequest {
+		t.Fatalf("malformed filter err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if scans.Load() != before {
+		t.Fatal("malformed filter scanned documents")
+	}
+
+	fallbacks := []struct {
+		name   string
+		filter *Filter
+	}{
+		{name: "non-string", filter: &Filter{Field: "id", Operator: "==", Value: 1}},
+		{name: "non-equality", filter: &Filter{Field: "id", Operator: "!=", Value: "target"}},
+		{name: "composite", filter: &Filter{Operator: "and", Conditions: []Filter{
+			{Field: "id", Operator: "==", Value: "target"},
+			{Field: "meta.kind", Operator: "==", Value: "wanted"},
+		}}},
+	}
+	for _, tc := range fallbacks {
+		before := scans.Load()
+		if _, err := svc.FilterDocuments(ctx, info.Name, FilterDocumentsRequest{Filter: tc.filter, Limit: 1}); err != nil {
+			t.Fatalf("%s fallback: %v", tc.name, err)
+		}
+		if after := scans.Load(); after != before+1 {
+			t.Fatalf("%s fallback scans=%d want %d", tc.name, after, before+1)
+		}
+	}
+}
+func TestServiceFilterDocumentsExactIDClosedBackendFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	svc, db := newTestService(t)
+	const name = "exact_id_closed"
+	if _, err := svc.manager.CreateCollection(&collections.CollectionMeta{
+		Name:    name,
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := svc.manager.OpenCollection(name)
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.Insert([]byte("target"), []byte(`{"id":"target","embedding":[1,0],"meta":{}}`)); err != nil {
+		t.Fatalf("insert target: %v", err)
+	}
+	info := IndexInfo{Name: name, Generation: 1}
+	if err := svc.primeBenchmarkSearchCache(name, col, info); err != nil {
+		t.Fatalf("primeBenchmarkSearchCache: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close backend: %v", err)
+	}
+	var scans atomic.Int64
+	svc.documentScanBefore = func() { scans.Add(1) }
+	for _, id := range []string{"", "target"} {
+		_, err := svc.FilterDocuments(ctx, name, FilterDocumentsRequest{
+			Filter: &Filter{Field: "id", Operator: "==", Value: id},
+			Limit:  1,
+		})
+		if ErrorCodeOf(err) != CodeIndexUnavailable {
+			t.Fatalf("closed backend id=%q err=%v code=%s", id, err, ErrorCodeOf(err))
+		}
+	}
+	if scans.Load() != 0 {
+		t.Fatalf("closed backend exact-ID filters scanned %d times", scans.Load())
+	}
+}
+
+func BenchmarkServiceFilterDocumentsExactID(b *testing.B) {
+	ctx := context.Background()
+	svc, db := newTestService(b)
+	defer db.Close()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "exact_id_bench", Dimension: 2, Metric: MetricCosine}); err != nil {
+		b.Fatalf("CreateIndex: %v", err)
+	}
+	const documentCount = 5000
+	documents := make([]Document, documentCount)
+	for i := range documents {
+		documents[i] = Document{
+			ID:        fmt.Sprintf("doc-%06d", i),
+			Content:   "benchmark payload",
+			Embedding: []float32{1, 0},
+			Meta:      map[string]any{"ordinal": i},
+		}
+	}
+	if _, err := svc.UpsertDocuments(ctx, "exact_id_bench", UpsertDocumentsRequest{Documents: documents}); err != nil {
+		b.Fatalf("UpsertDocuments: %v", err)
+	}
+	col, _, err := svc.openIndex(ctx, "exact_id_bench", 0)
+	if err != nil {
+		b.Fatalf("openIndex: %v", err)
+	}
+	hitID := documents[len(documents)-1].ID
+	for _, tc := range []struct {
+		name      string
+		id        string
+		wantCount int
+	}{
+		{name: "hit", id: hitID, wantCount: 1},
+		{name: "miss", id: "missing", wantCount: 0},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			req := FilterDocumentsRequest{
+				Filter: &Filter{Field: "id", Operator: "==", Value: tc.id},
+				Limit:  1,
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				got, err := svc.FilterDocuments(ctx, "exact_id_bench", req)
+				if err != nil || got.MatchedCount != tc.wantCount || len(got.Documents) != tc.wantCount {
+					b.Fatalf("FilterDocuments=%+v err=%v", got, err)
+				}
+			}
+		})
+	}
+	b.Run("get-materialize-hit", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			raw, err := col.Get([]byte(hitID))
+			if err != nil {
+				b.Fatalf("Get: %v", err)
+			}
+			jsonDoc, err := col.StoredDocumentJSON(raw)
+			if err != nil {
+				b.Fatalf("StoredDocumentJSON: %v", err)
+			}
+			if _, err := decodeStoredDocument([]byte(hitID), jsonDoc); err != nil {
+				b.Fatalf("decodeStoredDocument: %v", err)
+			}
+		}
+	})
+}
+
 func testBackendOptions(dir string) backenddb.Options {
 	return backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true}
 }

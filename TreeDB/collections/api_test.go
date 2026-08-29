@@ -3884,6 +3884,33 @@ func TestCollectionSingleInsertBufferedNoIndexReadsBeforeFlush(t *testing.T) {
 	}
 }
 
+func TestCollectionCheckReadableRejectsClosedBackendWithBufferedDocument(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := newCollectionManager(d, collectionManagerOptions{})
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte(" "), []byte(`{"sentinel":true}`)); err != nil {
+		t.Fatalf("insert buffered sentinel: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	if got, err := col.Get([]byte(" ")); err != nil || got == nil {
+		t.Fatalf("buffered sentinel after close got=%q err=%v", got, err)
+	}
+	if err := col.CheckReadable(); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("CheckReadable err=%v want backend closed", err)
+	}
+}
+
 func TestCollectionGetIntoReusesCallerBuffer(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

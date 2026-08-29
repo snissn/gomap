@@ -42,6 +42,7 @@ type Service struct {
 	diagnosticsUpsert               UpsertDiagnosticsStats
 	diagnosticsBeforeActivePublish  func()
 	deferredMaintenanceBeforeCommit func()
+	documentScanBefore              func()
 	deferredVectorBuildMaintenance  *treedb.DeferredVectorBuildMaintenance
 	closed                          bool
 }
@@ -755,6 +756,25 @@ func (s *Service) FilterDocuments(ctx context.Context, index string, req FilterD
 			NextAfterID: nextAfterID, Exhausted: !hasMore,
 		}, nil
 	}
+	if id, ok := exactDocumentIDFilter(req.Filter); ok {
+		doc, found, err := s.getStoredDocument(ctx, col, id)
+		if err != nil {
+			return FilterDocumentsResponse{}, err
+		}
+		docs := []Document{}
+		matched := 0
+		if found {
+			matched = 1
+			if req.Offset == 0 {
+				if !req.ReturnEmbedding {
+					doc.Embedding = nil
+				}
+				docs = append(docs, doc)
+			}
+		}
+		truncated := req.Limit > 0 && matched > req.Offset+len(docs)
+		return FilterDocumentsResponse{Index: info, Documents: docs, MatchedCount: matched, Truncated: truncated}, nil
+	}
 	var docs []Document
 	matched := 0
 	err = s.scanDocuments(ctx, col, func(doc Document) error {
@@ -783,6 +803,18 @@ func (s *Service) FilterDocuments(ctx context.Context, index string, req FilterD
 		docs = []Document{}
 	}
 	return FilterDocumentsResponse{Index: info, Documents: docs, MatchedCount: matched, Truncated: truncated}, nil
+}
+
+func exactDocumentIDFilter(filter *Filter) (string, bool) {
+	if filter == nil || strings.TrimSpace(filter.Field) != "id" || len(filter.Conditions) != 0 {
+		return "", false
+	}
+	op, err := normalizeFilterOperator(filter.Operator)
+	if err != nil || op != filterOpEQ {
+		return "", false
+	}
+	id, ok := filter.Value.(string)
+	return id, ok
 }
 
 // SearchDenseVector scores QueryEmbedding over the index. Route=ann uses a
@@ -1932,12 +1964,60 @@ func (s *Service) scanDocuments(ctx context.Context, col *collections.Collection
 	return err
 }
 
+func (s *Service) getStoredDocument(ctx context.Context, col *collections.Collection, id string) (Document, bool, error) {
+	if err := ctxErr(ctx); err != nil {
+		return Document{}, false, err
+	}
+	if col == nil {
+		return Document{}, false, serviceError(CodeIndexUnavailable, "index collection is unavailable")
+	}
+	if err := col.CheckReadable(); err != nil {
+		return Document{}, false, mapDocumentLookupError(err)
+	}
+	if err := ctxErr(ctx); err != nil {
+		return Document{}, false, err
+	}
+	if id == "" {
+		return Document{}, false, nil
+	}
+	raw, err := col.Get([]byte(id))
+	if err != nil {
+		return Document{}, false, mapDocumentLookupError(err)
+	}
+	if err := ctxErr(ctx); err != nil {
+		return Document{}, false, err
+	}
+	if raw == nil {
+		return Document{}, false, nil
+	}
+	materializer, err := col.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		return Document{}, false, wrapServiceError(CodeIndexUnavailable, "document materializer unavailable", err)
+	}
+	defer func() { _ = materializer.Close() }()
+	jsonDoc, err := materializer.StoredDocumentJSON(raw)
+	if err != nil {
+		return Document{}, false, wrapServiceError(CodeInternal, "stored document materialization failed", err)
+	}
+	if err := ctxErr(ctx); err != nil {
+		return Document{}, false, err
+	}
+	doc, err := decodeStoredDocument([]byte(id), jsonDoc)
+	if err != nil {
+		return Document{}, false, err
+	}
+	return doc, true, nil
+}
+
 func (s *Service) scanDocumentsAfter(ctx context.Context, col *collections.Collection, afterID string, maxDocuments int, fn func(Document) error) (bool, error) {
 	if err := ctxErr(ctx); err != nil {
 		return false, err
 	}
 	if col == nil {
 		return false, serviceError(CodeIndexUnavailable, "index collection is unavailable")
+	}
+	if s.documentScanBefore != nil {
+		s.documentScanBefore()
 	}
 	materializer, err := col.NewStoredDocumentJSONMaterializer()
 	if err != nil {
@@ -1965,6 +2045,20 @@ func (s *Service) scanDocumentsAfter(ctx context.Context, col *collections.Colle
 		return truncated, err
 	}
 	return truncated, mapDocumentScanError(err)
+}
+
+func mapDocumentLookupError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var serviceErr *Error
+	if errors.As(err, &serviceErr) {
+		return err
+	}
+	if errors.Is(err, backenddb.ErrClosed) {
+		return wrapServiceError(CodeIndexUnavailable, "TreeDB backend is closed", err)
+	}
+	return wrapServiceError(CodeInternal, "document scan failed", err)
 }
 
 func mapDocumentScanError(err error) error {
