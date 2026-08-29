@@ -65,13 +65,13 @@ def query_text(query: dict[str, Any]) -> str:
 
 
 def query_statement(query: dict[str, Any], top_k: int) -> tuple[str, list[Any]]:
-    sql = "SELECT id FROM docs_fts WHERE docs_fts MATCH ?"
+    sql = "SELECT docs.id FROM docs_fts JOIN docs ON docs.rowid = docs_fts.rowid WHERE docs_fts MATCH ?"
     params: list[Any] = [query_text(query)]
     if query.get("filter"):
-        sql += " AND tenant = ?"
+        sql += " AND docs.tenant = ?"
         params.append(query["filter"]["equals"])
-    weights = "0.0, 0.0, 3.0, 1.0, 0.0" if query["semantic"] == "phrase" else "0.0, 1.0, 0.0, 0.0, 0.0"
-    sql += f" ORDER BY bm25(docs_fts, {weights}), id LIMIT ?"
+    weights = "0.0, 3.0, 1.0" if query["semantic"] == "phrase" else "1.0, 0.0, 0.0"
+    sql += f" ORDER BY bm25(docs_fts, {weights}), docs.id LIMIT ?"
     params.append(top_k)
     return sql, params
 
@@ -106,7 +106,8 @@ def main() -> int:
         conn.execute("PRAGMA threads=0")
         sqlite_threads = int(conn.execute("PRAGMA threads").fetchone()[0])
         effective_sqlite_parallelism = 1 + max(sqlite_threads, 0)
-        conn.execute("CREATE VIRTUAL TABLE docs_fts USING fts5(id UNINDEXED, weighted_text, title, body, tenant UNINDEXED, tokenize='unicode61 remove_diacritics 2')")
+        conn.execute("CREATE TABLE docs (rowid INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, title TEXT NOT NULL, body TEXT NOT NULL, tenant TEXT NOT NULL)")
+        conn.execute("CREATE VIRTUAL TABLE docs_fts USING fts5(weighted_text, title, body, content='', tokenize='unicode61 remove_diacritics 2')")
     except sqlite3.Error as exc:
         write(out, {
             "schema_version": RESULT_SCHEMA,
@@ -119,9 +120,11 @@ def main() -> int:
         })
         return 0
 
-    rows = [(doc_id, " ".join((title, title, title, body)), title, body, tenant) for doc_id, title, body, tenant in source_rows]
+    source_records = [(rowid, doc_id, title, body, tenant) for rowid, (doc_id, title, body, tenant) in enumerate(source_rows, start=1)]
+    index_records = [(rowid, " ".join((title, title, title, body)), title, body) for rowid, _, title, body, _ in source_records]
     with conn:
-        conn.executemany("INSERT INTO docs_fts(id, weighted_text, title, body, tenant) VALUES (?, ?, ?, ?, ?)", rows)
+        conn.executemany("INSERT INTO docs(rowid, id, title, body, tenant) VALUES (?, ?, ?, ?, ?)", source_records)
+        conn.executemany("INSERT INTO docs_fts(rowid, weighted_text, title, body) VALUES (?, ?, ?, ?)", index_records)
     conn.execute("INSERT INTO docs_fts(docs_fts) VALUES ('optimize')")
     conn.commit()
     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -186,12 +189,12 @@ def main() -> int:
     payload = {
         "schema_version": RESULT_SCHEMA, "status": "ok", "engine": ENGINE,
         "repetition": args.repetition, "manifest_sha256": manifest_digest,
-        "corpus": {"document_count": len(rows), "sha256": hashlib.sha256(corpus_payload).hexdigest()},
+        "corpus": {"document_count": len(source_records), "sha256": hashlib.sha256(corpus_payload).hexdigest()},
         "command": command,
         "versions": {"python": sys.version.replace("\n", " "), "sqlite": sqlite3.sqlite_version, "platform": platform.platform()},
-        "config": {"working_directory": os.getcwd(), "tokenizer": "unicode61 remove_diacritics 2", "weighted_field_materialization": "title repeated 3x then body for non-phrase native scoring", "phrase_fields": ["title", "body"], "phrase_scoring": "native bm25 title weight 3, body weight 1", "scoring_contract": "native_directional", "stored_source_fields": ["id", "title", "body", "tenant"], "journal_mode": "WAL", "synchronous": "FULL", "sqlite_auxiliary_threads": sqlite_threads, "top_k": top_k, "tie_break": "score,id", "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close"},
+        "config": {"working_directory": os.getcwd(), "tokenizer": "unicode61 remove_diacritics 2", "source_table": "docs", "fts_content_mode": "contentless", "weighted_field_materialization": "title repeated 3x then body for non-phrase native scoring", "generated_weighted_field_storage": "FTS index only", "phrase_fields": ["title", "body"], "phrase_scoring": "native bm25 title weight 3, body weight 1", "scoring_contract": "native_directional", "stored_source_fields": ["id", "title", "body", "tenant"], "journal_mode": "WAL", "synchronous": "FULL", "sqlite_auxiliary_threads": sqlite_threads, "top_k": top_k, "tie_break": "score,id", "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close"},
         "environment": environment,
-        "build": {"elapsed_nanos": build_elapsed, "docs_per_second": len(rows) * 1e9 / build_elapsed, "cpu": {"status": "ok", "value": build_cpu, "unit": "nanoseconds"}, "peak_rss": {"status": "ok", "value": peak_rss_bytes(), "unit": "bytes"}, "checkpointed": True},
+        "build": {"elapsed_nanos": build_elapsed, "docs_per_second": len(source_records) * 1e9 / build_elapsed, "cpu": {"status": "ok", "value": build_cpu, "unit": "nanoseconds"}, "peak_rss": {"status": "ok", "value": peak_rss_bytes(), "unit": "bytes"}, "checkpointed": True},
         "storage": {"durable_bytes": durable, "wal_bytes": wal, "transient_bytes": transient},
         "reopen": {"performed": True, "query_connection_reopened": True, "durability_connection_reopened": True, "verified": all(case["result_ids"] == case["reopen_result_ids"] for case in cases), "result_digest": result_digest(case["reopen_result_digest"] for case in cases)},
         "cases": cases,
