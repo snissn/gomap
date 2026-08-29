@@ -74,6 +74,10 @@ TREE_OID=$(git rev-parse HEAD^{tree})
 TREEDB_SUBTREE_OID=$(git rev-parse "$TREE_OID:TreeDB")
 HARNESS_SUBTREE_OID=$(git rev-parse "$TREE_OID:cmd/treedb_text_hybrid_scale")
 BASE_SHA=$(git merge-base HEAD origin/main 2>/dev/null || true)
+VCS_MODIFIED=true
+if [[ -z "$(git status --porcelain)" ]]; then
+  VCS_MODIFIED=false
+fi
 
 {
   echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -95,7 +99,17 @@ BASE_SHA=$(git merge-base HEAD origin/main 2>/dev/null || true)
 
 build_binary() {
   mkdir -p "$RUN_DIR/bin"
-  env GOWORK=off "$GO_BIN" build -trimpath -o "$BIN" ./cmd/treedb_text_hybrid_scale 2>&1 | tee "$RUN_DIR/build.log"
+  local ldflags="-X main.buildCommit=$COMMIT -X main.buildTreeOID=$TREE_OID -X main.buildTreeDBSubtree=$TREEDB_SUBTREE_OID -X main.buildHarnessSubtree=$HARNESS_SUBTREE_OID -X main.buildVCSModified=$VCS_MODIFIED"
+  env GOWORK=off "$GO_BIN" build -buildvcs=true -trimpath -ldflags "$ldflags" -o "$BIN" ./cmd/treedb_text_hybrid_scale 2>&1 | tee "$RUN_DIR/build.log"
+  local binary_version
+  binary_version=$("$GO_BIN" version -m "$BIN")
+  printf '%s\n' "$binary_version" > "$RUN_DIR/binary.version.txt"
+  for expected in "main.buildCommit=$COMMIT" "main.buildTreeOID=$TREE_OID" "main.buildTreeDBSubtree=$TREEDB_SUBTREE_OID" "main.buildHarnessSubtree=$HARNESS_SUBTREE_OID" "main.buildVCSModified=$VCS_MODIFIED"; do
+    if [[ "$binary_version" != *"$expected"* ]]; then
+      echo "built binary lacks required provenance setting: $expected" >&2
+      exit 2
+    fi
+  done
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$BIN" | cut -d' ' -f1 > "$RUN_DIR/binary.sha256"
   else

@@ -52,6 +52,14 @@ const (
 	queryRowHybridTextVecScalarFetch = "hybrid_text_vector_scalar_top_k_fetch"
 )
 
+var (
+	buildCommit         string
+	buildTreeOID        string
+	buildTreeDBSubtree  string
+	buildHarnessSubtree string
+	buildVCSModified    string
+)
+
 type queryRowClass struct {
 	hybrid         bool
 	vectorRequired bool
@@ -2813,14 +2821,14 @@ func captureContext(cfg config) reportContext {
 	if executable != "" {
 		binarySHA, _ = digestFile(executable)
 	}
-	treeOID := strings.TrimSpace(runCmd("git", "rev-parse", "--verify", revision+"^{tree}"))
+	treeOID := firstNonEmpty(buildTreeOID, strings.TrimSpace(runCmd("git", "rev-parse", "--verify", revision+"^{tree}")))
 	return reportContext{
 		RepoRoot:          strings.TrimSpace(runCmd("git", "rev-parse", "--show-toplevel")),
 		Branch:            strings.TrimSpace(runCmd("git", "branch", "--show-current")),
 		Commit:            revision,
 		TreeOID:           treeOID,
-		TreeDBSubtreeOID:  strings.TrimSpace(runCmd("git", "rev-parse", "--verify", treeOID+":"+treeDBGitPath)),
-		HarnessSubtreeOID: strings.TrimSpace(runCmd("git", "rev-parse", "--verify", treeOID+":"+harnessGitPath)),
+		TreeDBSubtreeOID:  firstNonEmpty(buildTreeDBSubtree, strings.TrimSpace(runCmd("git", "rev-parse", "--verify", treeOID+":"+treeDBGitPath))),
+		HarnessSubtreeOID: firstNonEmpty(buildHarnessSubtree, strings.TrimSpace(runCmd("git", "rev-parse", "--verify", treeOID+":"+harnessGitPath))),
 		BinarySHA256:      binarySHA,
 		BaseRef:           cfg.baseRef,
 		BaseSHA:           cfg.baseSHA,
@@ -2846,6 +2854,16 @@ func invocationProvenance(executable string, info *debug.BuildInfo) (binaryState
 		binaryState = "unknown (os.Executable unavailable)"
 	} else {
 		binaryState = "executable=" + executable
+	}
+	if buildCommit != "" && buildVCSModified != "" {
+		switch buildVCSModified {
+		case "false":
+			return fmt.Sprintf("%s; vcs_revision=%s; vcs_modified=false; source=linker", binaryState, buildCommit), buildCommit, true, "clean (embedded linker metadata)"
+		case "true":
+			return fmt.Sprintf("%s; vcs_revision=%s; vcs_modified=true; source=linker", binaryState, buildCommit), buildCommit, false, "dirty (embedded linker metadata)"
+		default:
+			return fmt.Sprintf("%s; vcs_revision=%s; vcs_modified=%s; source=linker", binaryState, buildCommit, buildVCSModified), buildCommit, false, "unknown (unrecognized embedded linker metadata)"
+		}
 	}
 	if info == nil {
 		return binaryState + "; build metadata unavailable", "", false, "unknown (build metadata unavailable)"
