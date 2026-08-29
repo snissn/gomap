@@ -204,8 +204,8 @@ provenance. Its selected `GO_BIN` is passed through dependency setup and both Go
 adapter commands.
 
 The tracked `artifacts/4330-lexical-comparison-v1/` run was measured from
-reviewed source commit `586a57b148dd78817f3ef137e0f74abca22fabcc` and
-retained at evidence commit `138a22674`. It includes the corrected
+reviewed source commit `5ef056a7c4a5f38f54844105e7c266ab51de5804` and
+retained at evidence commit `d69cb4700`. It includes the corrected
 query-reopen, build-boundary, steady-state warmup, serial Lucene execution,
 exact/directional scoring classification, phrase eligibility, ignored-input
 provenance, source-complete storage, WAL classification, untimed route proof,
