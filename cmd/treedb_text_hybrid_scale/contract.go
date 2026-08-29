@@ -19,12 +19,13 @@ import (
 )
 
 const (
-	retainedSchemaVersion = "treedb_text_hybrid_scale_retained/v1"
-	retainedManifestName  = "artifact_manifest.json"
-	frozenConfigName      = "frozen_config.json"
-	requiredScaleRows     = 10_000_000
-	harnessGitPath        = "cmd/treedb_text_hybrid_scale"
-	treeDBGitPath         = "TreeDB"
+	retainedSchemaVersion        = "treedb_text_hybrid_scale_retained/v1"
+	retainedManifestName         = "artifact_manifest.json"
+	frozenConfigName             = "frozen_config.json"
+	requiredScaleRows            = 10_000_000
+	requiredSourceChunkBatchSize = 32_768
+	harnessGitPath               = "cmd/treedb_text_hybrid_scale"
+	treeDBGitPath                = "TreeDB"
 )
 
 var requiredRawEvidence = []string{
@@ -318,8 +319,8 @@ func validateQualificationReport(rep report) error {
 		return errors.New("logical text storage measurement must be observed or explicitly unavailable with a reason")
 	}
 	cfg := rep.Config
-	if cfg.Rows != requiredScaleRows || cfg.BackfillRows != requiredScaleRows || cfg.TextOnlyRows != requiredScaleRows || cfg.SourceChunkRows != requiredScaleRows {
-		return fmt.Errorf("exact 10M cardinality required: rows=%d backfill=%d text_only=%d source_chunk=%d", cfg.Rows, cfg.BackfillRows, cfg.TextOnlyRows, cfg.SourceChunkRows)
+	if cfg.Rows != requiredScaleRows || cfg.BackfillRows != requiredScaleRows || cfg.TextOnlyRows != requiredScaleRows || cfg.SourceChunkRows != requiredScaleRows || cfg.SourceChunkBatchSize != requiredSourceChunkBatchSize {
+		return fmt.Errorf("exact 10M cardinality and source/chunk batch contract required: rows=%d backfill=%d text_only=%d source_chunk=%d source_chunk_batch=%d", cfg.Rows, cfg.BackfillRows, cfg.TextOnlyRows, cfg.SourceChunkRows, cfg.SourceChunkBatchSize)
 	}
 	if cfg.PhaseSelector != "all" || !cfg.IncludeVector || !cfg.RunBackfill || !cfg.RunTextOnly || !cfg.RunSourceChunk || !cfg.RunReopen || !cfg.RunConcurrent || !cfg.RunRewrite {
 		return errors.New("complete all-phase text/hybrid/lifecycle matrix is required")
@@ -340,8 +341,9 @@ func validateQualificationReport(rep report) error {
 	if rep.Backfill == nil || rep.Backfill.Status != "passed" || rep.Backfill.Mode != "text_only_post_load_backfill" || rep.Backfill.Rows != requiredScaleRows || rep.Backfill.BackfillSeconds <= 0 || rep.Backfill.CheckpointSeconds <= 0 || !validResource(rep.Backfill.Resource) {
 		return errors.New("post-load backfill row incomplete")
 	}
-	if rep.SourceChunk == nil || rep.SourceChunk.Status != "passed" || rep.SourceChunk.SourceDocuments != requiredScaleRows || rep.SourceChunk.GeneratedChunks < requiredScaleRows || rep.SourceChunk.CheckpointSeconds <= 0 || !rep.SourceChunk.ReopenParityOK || !validResource(rep.SourceChunk.Resource) {
-		return errors.New("application-shaped source/chunk row incomplete")
+	expectedSourceChunkCalls := (requiredScaleRows + requiredSourceChunkBatchSize - 1) / requiredSourceChunkBatchSize
+	if rep.SourceChunk == nil || rep.SourceChunk.Status != "passed" || rep.SourceChunk.SourceDocuments != requiredScaleRows || rep.SourceChunk.BatchSize != requiredSourceChunkBatchSize || rep.SourceChunk.BatchCalls != expectedSourceChunkCalls || rep.SourceChunk.GeneratedChunks < requiredScaleRows || rep.SourceChunk.CheckpointSeconds <= 0 || !rep.SourceChunk.ReopenParityOK || !validResource(rep.SourceChunk.Resource) {
+		return errors.New("application-shaped source/chunk row incomplete: source/chunk batch contract mismatch")
 	}
 	if rep.Reopen == nil || rep.Reopen.Status != "passed" || !rep.Reopen.CountOK || !rep.Reopen.QueryParityOK || rep.Reopen.BeforeResultsSHA256 == "" || rep.Reopen.BeforeResultsSHA256 != rep.Reopen.AfterResultsSHA256 || rep.Reopen.StorageBytes <= 0 || !validResource(rep.Reopen.Resource) {
 		return errors.New("checkpoint/close/reopen/count/query parity row incomplete")

@@ -179,30 +179,31 @@ type reportContract struct {
 }
 
 type reportConfig struct {
-	Rows               int    `json:"rows"`
-	BatchSize          int    `json:"batch_size"`
-	Dims               int    `json:"dims"`
-	M                  int    `json:"m"`
-	EfConstruction     int    `json:"ef_construction"`
-	EfSearch           int    `json:"ef_search"`
-	TopK               int    `json:"top_k"`
-	CandidateLimit     int    `json:"candidate_limit"`
-	Queries            int    `json:"queries"`
-	Readers            int    `json:"readers"`
-	IncludeVector      bool   `json:"include_vector"`
-	RunBackfill        bool   `json:"run_backfill"`
-	BackfillRows       int    `json:"backfill_rows,omitempty"`
-	RunTextOnly        bool   `json:"run_text_only"`
-	TextOnlyRows       int    `json:"text_only_rows,omitempty"`
-	RunSourceChunk     bool   `json:"run_source_chunk"`
-	SourceChunkRows    int    `json:"source_chunk_rows,omitempty"`
-	RunReopen          bool   `json:"run_reopen"`
-	RunConcurrent      bool   `json:"run_concurrent"`
-	ConcurrentWrites   int    `json:"concurrent_writes,omitempty"`
-	RunRewrite         bool   `json:"run_rewrite"`
-	MaintenanceUpdates int    `json:"maintenance_updates,omitempty"`
-	MaintenanceDeletes int    `json:"maintenance_deletes,omitempty"`
-	PhaseSelector      string `json:"phase_selector"`
+	Rows                 int    `json:"rows"`
+	BatchSize            int    `json:"batch_size"`
+	Dims                 int    `json:"dims"`
+	M                    int    `json:"m"`
+	EfConstruction       int    `json:"ef_construction"`
+	EfSearch             int    `json:"ef_search"`
+	TopK                 int    `json:"top_k"`
+	CandidateLimit       int    `json:"candidate_limit"`
+	Queries              int    `json:"queries"`
+	Readers              int    `json:"readers"`
+	IncludeVector        bool   `json:"include_vector"`
+	RunBackfill          bool   `json:"run_backfill"`
+	BackfillRows         int    `json:"backfill_rows,omitempty"`
+	RunTextOnly          bool   `json:"run_text_only"`
+	TextOnlyRows         int    `json:"text_only_rows,omitempty"`
+	RunSourceChunk       bool   `json:"run_source_chunk"`
+	SourceChunkRows      int    `json:"source_chunk_rows,omitempty"`
+	SourceChunkBatchSize int    `json:"source_chunk_batch_size,omitempty"`
+	RunReopen            bool   `json:"run_reopen"`
+	RunConcurrent        bool   `json:"run_concurrent"`
+	ConcurrentWrites     int    `json:"concurrent_writes,omitempty"`
+	RunRewrite           bool   `json:"run_rewrite"`
+	MaintenanceUpdates   int    `json:"maintenance_updates,omitempty"`
+	MaintenanceDeletes   int    `json:"maintenance_deletes,omitempty"`
+	PhaseSelector        string `json:"phase_selector"`
 }
 
 type reportArtifacts struct {
@@ -276,6 +277,7 @@ type sourceChunkReport struct {
 	SourceDocuments     int                               `json:"source_documents"`
 	GeneratedChunks     int                               `json:"generated_chunks"`
 	BatchCalls          int                               `json:"batch_calls"`
+	BatchSize           int                               `json:"batch_size"`
 	IngestSeconds       float64                           `json:"ingest_seconds"`
 	CheckpointSeconds   float64                           `json:"checkpoint_seconds"`
 	ReopenSeconds       float64                           `json:"reopen_seconds"`
@@ -814,7 +816,7 @@ func run(cfg config) (report, error) {
 			Readers: cfg.readers, IncludeVector: cfg.includeVector,
 			RunBackfill: cfg.runBackfill, BackfillRows: cfg.backfillRows,
 			RunTextOnly: cfg.runTextOnly, TextOnlyRows: cfg.textOnlyRows,
-			RunSourceChunk: cfg.runSourceChunk, SourceChunkRows: cfg.sourceChunkRows,
+			RunSourceChunk: cfg.runSourceChunk, SourceChunkRows: cfg.sourceChunkRows, SourceChunkBatchSize: cfg.batchSize,
 			RunReopen: cfg.runReopen, RunConcurrent: cfg.runConcurrent,
 			ConcurrentWrites: cfg.concurrentWrites, RunRewrite: cfg.runRewrite,
 			MaintenanceUpdates: cfg.maintenanceUpdates, MaintenanceDeletes: cfg.maintenanceDeletes,
@@ -2295,7 +2297,7 @@ func runSourceChunkProbe(cfg config) (sourceChunkReport, error) {
 		_ = db.Close()
 		return sourceChunkReport{}, fmt.Errorf("open source/chunk collection: %w", err)
 	}
-	result := sourceChunkReport{SourceDocuments: cfg.sourceChunkRows}
+	result := sourceChunkReport{SourceDocuments: cfg.sourceChunkRows, BatchSize: cfg.batchSize}
 	start := time.Now()
 	chunkCfg := chunking.Config{Strategy: chunking.StrategyFixedWindow, SizeUnit: chunking.SizeUnitRunes, Size: 32, Overlap: 0}
 	for offset := 0; offset < cfg.sourceChunkRows; offset += cfg.batchSize {
@@ -2674,6 +2676,9 @@ func renderMarkdown(rep report) string {
 			fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %d | %d | %d |\n", snap.Label, snap.PhysicalIndexPageBytes, snap.PhysicalValueLogBytes, snap.PhysicalWALBytes, snap.PhysicalOtherBytes, snap.PhysicalTotalBytes, snap.PhysicalTotalWALExcludedBytes)
 		}
 		fmt.Fprintf(&b, "\n")
+	}
+	if rep.SourceChunk != nil {
+		fmt.Fprintf(&b, "Source/chunk atomic batch size `%d`; observed batch calls `%d`.\n\n", rep.SourceChunk.BatchSize, rep.SourceChunk.BatchCalls)
 	}
 
 	if len(rep.Queries) != 0 {
