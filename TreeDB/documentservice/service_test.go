@@ -2369,6 +2369,38 @@ func TestServiceFilterDocumentsExactIDDirectPath(t *testing.T) {
 		}
 	}
 }
+func TestServiceFilterDocumentsExactIDClosedBackendFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	svc, db := newTestService(t)
+	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "exact_id_closed", Dimension: 2, Metric: MetricCosine})
+	if err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, info.Name, UpsertDocumentsRequest{
+		Documents: []Document{{ID: "target", Embedding: []float32{1, 0}}},
+	}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	col, _, err := svc.openIndex(ctx, info.Name, 0)
+	if err != nil {
+		t.Fatalf("openIndex: %v", err)
+	}
+	if err := svc.primeBenchmarkSearchCache(info.Name, col, info); err != nil {
+		t.Fatalf("primeBenchmarkSearchCache: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close backend: %v", err)
+	}
+	for _, id := range []string{"", "target"} {
+		_, err := svc.FilterDocuments(ctx, info.Name, FilterDocumentsRequest{
+			Filter: &Filter{Field: "id", Operator: "==", Value: id},
+			Limit:  1,
+		})
+		if ErrorCodeOf(err) != CodeIndexUnavailable {
+			t.Fatalf("closed backend id=%q err=%v code=%s", id, err, ErrorCodeOf(err))
+		}
+	}
+}
 
 func BenchmarkServiceFilterDocumentsExactID(b *testing.B) {
 	ctx := context.Background()

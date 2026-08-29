@@ -1971,15 +1971,21 @@ func (s *Service) getStoredDocument(ctx context.Context, col *collections.Collec
 	if col == nil {
 		return Document{}, false, serviceError(CodeIndexUnavailable, "index collection is unavailable")
 	}
-	if id == "" {
-		return Document{}, false, nil
+	lookupID := id
+	if lookupID == "" {
+		// Collection.Get rejects empty keys before checking backend liveness.
+		// Service writes reject this whitespace-only probe key.
+		lookupID = " "
 	}
-	raw, err := col.Get([]byte(id))
+	raw, err := col.Get([]byte(lookupID))
 	if err != nil {
 		return Document{}, false, mapDocumentLookupError(err)
 	}
 	if err := ctxErr(ctx); err != nil {
 		return Document{}, false, err
+	}
+	if id == "" {
+		return Document{}, false, nil
 	}
 	if raw == nil {
 		return Document{}, false, nil
