@@ -904,6 +904,12 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) error {
 	if _, err := c.refreshNativeVectorIndexDeclaration(index.name); err != nil {
 		return err
 	}
+	def, declaredNative := findVectorIndex(c.meta.VectorIndexes, index.name)
+	if declaredNative && vectorIndexDefinitionUsesNativeRuntime(def) {
+		if reason := index.validateNativeSnapshotDefinition(def); reason != "" {
+			return fmt.Errorf("collections: vector index %q does not match collection metadata: %s", index.name, reason)
+		}
+	}
 	c.registerVectorIndexCurrentCatalog(index)
 	return nil
 }

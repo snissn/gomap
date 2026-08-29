@@ -802,6 +802,31 @@ func TestBuiltVectorIndexRegistrationRejectsChangedNativeDeclaration(t *testing.
 	}
 }
 
+func TestRegisterVectorIndexRejectsChangedNativeDeclaration(t *testing.T) {
+	_, d, col := openChunkingTestCollection(t)
+	peer, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+	index, err := newVectorIndex(col, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("create ad-hoc vector index: %v", err)
+	}
+	if _, err := peer.CreateVectorIndex(VectorIndexDefinition{
+		Name: "embedding", Field: "other_embedding", Metric: VectorMetricCosine, Dimensions: 3,
+	}); err != nil {
+		t.Fatalf("create conflicting native declaration: %v", err)
+	}
+	if err := col.RegisterVectorIndex(index); err == nil {
+		t.Fatal("register incompatible vector runtime succeeded")
+	}
+	if got := col.registeredVectorIndex("embedding"); got != nil {
+		t.Fatalf("registered incompatible vector runtime=%p want nil", got)
+	}
+}
+
 func TestIngestChunkedDocumentsHoldsVectorAdmissionBeforeMutation(t *testing.T) {
 	_, d, col := openChunkingTestCollection(t)
 	peer, err := NewCollectionManager(d).OpenCollection("docs")
