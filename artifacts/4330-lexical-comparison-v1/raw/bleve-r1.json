@@ -1,0 +1,489 @@
+{
+  "build": {
+    "checkpointed": true,
+    "cpu": {
+      "status": "ok",
+      "unit": "nanoseconds",
+      "value": 305006000
+    },
+    "docs_per_second": 29221.790835535012,
+    "elapsed_nanos": 342210375,
+    "peak_rss": {
+      "status": "ok",
+      "unit": "bytes",
+      "value": 238796800
+    }
+  },
+  "cases": [
+    {
+      "id": "common",
+      "status": "ok",
+      "equivalent": true,
+      "samples_nanos": [
+        333750,
+        345209,
+        336459,
+        351000,
+        338375,
+        337875,
+        340791,
+        339917,
+        354084,
+        338667,
+        348250,
+        340042,
+        351666,
+        344459,
+        339792,
+        337958,
+        343708,
+        345916,
+        339000,
+        342458
+      ],
+      "result_ids": [
+        "doc-000000",
+        "doc-000001",
+        "doc-000002",
+        "doc-000003",
+        "doc-000004",
+        "doc-000005",
+        "doc-000006",
+        "doc-000007",
+        "doc-000009",
+        "doc-000008"
+      ],
+      "result_digest": "32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40",
+      "reopen_result_ids": [
+        "doc-000000",
+        "doc-000001",
+        "doc-000002",
+        "doc-000003",
+        "doc-000004",
+        "doc-000005",
+        "doc-000006",
+        "doc-000007",
+        "doc-000009",
+        "doc-000008"
+      ],
+      "reopen_result_digest": "32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40",
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "bleve_scorch_inverted_index",
+        "proof": {
+          "index_name": "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/indexes/bleve-r1",
+          "index_type": "scorch",
+          "query_type": "term"
+        }
+      },
+      "timed_out": false
+    },
+    {
+      "id": "rare",
+      "status": "ok",
+      "equivalent": true,
+      "samples_nanos": [
+        3000,
+        2833,
+        2750,
+        2542,
+        2584,
+        2584,
+        2500,
+        2959,
+        5792,
+        3208,
+        2833,
+        2791,
+        2500,
+        2583,
+        2500,
+        6292,
+        2875,
+        15333,
+        2666,
+        2792
+      ],
+      "result_ids": [
+        "doc-000010",
+        "doc-000011",
+        "doc-000012",
+        "doc-000013",
+        "doc-000014",
+        "doc-000015",
+        "doc-000016",
+        "doc-000017",
+        "doc-000018",
+        "doc-000019"
+      ],
+      "result_digest": "d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0",
+      "reopen_result_ids": [
+        "doc-000010",
+        "doc-000011",
+        "doc-000012",
+        "doc-000013",
+        "doc-000014",
+        "doc-000015",
+        "doc-000016",
+        "doc-000017",
+        "doc-000018",
+        "doc-000019"
+      ],
+      "reopen_result_digest": "d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0",
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "bleve_scorch_inverted_index",
+        "proof": {
+          "index_name": "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/indexes/bleve-r1",
+          "index_type": "scorch",
+          "query_type": "term"
+        }
+      },
+      "timed_out": false
+    },
+    {
+      "id": "and",
+      "status": "ok",
+      "equivalent": true,
+      "samples_nanos": [
+        5291,
+        5042,
+        4792,
+        4666,
+        4792,
+        5166,
+        4917,
+        5041,
+        22625,
+        4750,
+        5125,
+        5167,
+        4583,
+        5291,
+        4750,
+        5333,
+        5417,
+        4833,
+        5125,
+        5459
+      ],
+      "result_ids": [
+        "doc-000020",
+        "doc-000021",
+        "doc-000022",
+        "doc-000023",
+        "doc-000024",
+        "doc-000025",
+        "doc-000026",
+        "doc-000027",
+        "doc-000028",
+        "doc-000029"
+      ],
+      "result_digest": "ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d",
+      "reopen_result_ids": [
+        "doc-000020",
+        "doc-000021",
+        "doc-000022",
+        "doc-000023",
+        "doc-000024",
+        "doc-000025",
+        "doc-000026",
+        "doc-000027",
+        "doc-000028",
+        "doc-000029"
+      ],
+      "reopen_result_digest": "ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d",
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "bleve_scorch_inverted_index",
+        "proof": {
+          "index_name": "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/indexes/bleve-r1",
+          "index_type": "scorch",
+          "query_type": "and"
+        }
+      },
+      "timed_out": false
+    },
+    {
+      "id": "or",
+      "status": "ok",
+      "equivalent": true,
+      "samples_nanos": [
+        7583,
+        8083,
+        7625,
+        8042,
+        6916,
+        7417,
+        7042,
+        7208,
+        7041,
+        7292,
+        7000,
+        6500,
+        20583,
+        7000,
+        7166,
+        6875,
+        7667,
+        10459,
+        7833,
+        6791
+      ],
+      "result_ids": [
+        "doc-000070",
+        "doc-000071",
+        "doc-000072",
+        "doc-000073",
+        "doc-000074",
+        "doc-000075",
+        "doc-000076",
+        "doc-000077",
+        "doc-000078",
+        "doc-000079"
+      ],
+      "result_digest": "d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8",
+      "reopen_result_ids": [
+        "doc-000070",
+        "doc-000071",
+        "doc-000072",
+        "doc-000073",
+        "doc-000074",
+        "doc-000075",
+        "doc-000076",
+        "doc-000077",
+        "doc-000078",
+        "doc-000079"
+      ],
+      "reopen_result_digest": "d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8",
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "bleve_scorch_inverted_index",
+        "proof": {
+          "index_name": "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/indexes/bleve-r1",
+          "index_type": "scorch",
+          "query_type": "or"
+        }
+      },
+      "timed_out": false
+    },
+    {
+      "id": "phrase",
+      "status": "ok",
+      "equivalent": true,
+      "samples_nanos": [
+        30291,
+        31208,
+        17958,
+        22083,
+        22333,
+        17250,
+        17791,
+        18333,
+        17167,
+        32542,
+        25000,
+        16500,
+        15708,
+        18500,
+        21666,
+        16083,
+        17833,
+        16333,
+        16000,
+        20167
+      ],
+      "result_ids": [
+        "doc-000080",
+        "doc-000081",
+        "doc-000082",
+        "doc-000083",
+        "doc-000084",
+        "doc-000085",
+        "doc-000086",
+        "doc-000087",
+        "doc-000088",
+        "doc-000089"
+      ],
+      "result_digest": "3f12e436d210de561f67fb0131f637b024ed2bce2d328478c4d7bded8a2fff34",
+      "reopen_result_ids": [
+        "doc-000080",
+        "doc-000081",
+        "doc-000082",
+        "doc-000083",
+        "doc-000084",
+        "doc-000085",
+        "doc-000086",
+        "doc-000087",
+        "doc-000088",
+        "doc-000089"
+      ],
+      "reopen_result_digest": "3f12e436d210de561f67fb0131f637b024ed2bce2d328478c4d7bded8a2fff34",
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "bleve_scorch_inverted_index",
+        "proof": {
+          "index_name": "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/indexes/bleve-r1",
+          "index_type": "scorch",
+          "query_type": "phrase"
+        }
+      },
+      "timed_out": false
+    },
+    {
+      "id": "scalar_filtered",
+      "status": "ok",
+      "equivalent": true,
+      "samples_nanos": [
+        5125,
+        4750,
+        5250,
+        4541,
+        5792,
+        5334,
+        5000,
+        4583,
+        4917,
+        4917,
+        5208,
+        4958,
+        4916,
+        4709,
+        5000,
+        4667,
+        5250,
+        4917,
+        4708,
+        4625
+      ],
+      "result_ids": [
+        "doc-000100",
+        "doc-000101",
+        "doc-000102",
+        "doc-000103",
+        "doc-000104",
+        "doc-000105",
+        "doc-000106",
+        "doc-000107",
+        "doc-000108",
+        "doc-000109"
+      ],
+      "result_digest": "efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0",
+      "reopen_result_ids": [
+        "doc-000100",
+        "doc-000101",
+        "doc-000102",
+        "doc-000103",
+        "doc-000104",
+        "doc-000105",
+        "doc-000106",
+        "doc-000107",
+        "doc-000108",
+        "doc-000109"
+      ],
+      "reopen_result_digest": "efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0",
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "bleve_scorch_inverted_index",
+        "proof": {
+          "index_name": "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/indexes/bleve-r1",
+          "index_type": "scorch",
+          "query_type": "term_scalar"
+        }
+      },
+      "timed_out": false
+    }
+  ],
+  "command": [
+    "go",
+    "run",
+    ".",
+    "--manifest",
+    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/benchmarks/text_hybrid_scoreboard/lexical_manifest.json",
+    "--corpus",
+    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/corpus.tsv",
+    "--out",
+    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/raw/bleve-r1.json",
+    "--repetition",
+    "1",
+    "--index",
+    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/indexes/bleve-r1"
+  ],
+  "config": {
+    "analyzer": "standard",
+    "index_type": "scorch",
+    "store_fields": false,
+    "tenant_analyzer": "keyword",
+    "term_vectors": true,
+    "tie_break": "score,id",
+    "top_k": 10,
+    "weighted_field_materialization": "title repeated 3x then body",
+    "working_directory": "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/dependency_work/bleve_adapter"
+  },
+  "corpus": {
+    "document_count": 10000,
+    "sha256": "7e31d754a2c94b1fa6e4d1cf6d75d2f0df595fc8a9cdf80eb12a3d0b7650485e"
+  },
+  "engine": {
+    "family": "embedded_library",
+    "id": "bleve",
+    "name": "Bleve",
+    "version": "v2.4.4"
+  },
+  "environment": {
+    "contract": {
+      "build_cpu_metric": "process CPU nanoseconds",
+      "engine_process_concurrency": 1,
+      "filesystem_identity_policy": "runner output, corpus, index, and result artifact must have the same decimal POSIX st_dev identity",
+      "latency_clock": "monotonic wall clock",
+      "memory_limit_policy": "inherit one detected host address-space limit; adapters do not raise or lower it",
+      "peak_rss_metric": "process lifetime peak resident bytes when the runtime exposes it; otherwise typed unsupported",
+      "query_concurrency": 1,
+      "resource_scope": "single adapter process per retained repetition",
+      "runtime_cpu_parallelism": 1
+    },
+    "execution": {
+      "engine_process_concurrency": 1,
+      "query_concurrency": 1,
+      "runtime_cpu_parallelism": 1
+    },
+    "filesystem": {
+      "corpus_store_id": "16777232",
+      "index_store_id": "16777232",
+      "result_store_id": "16777232",
+      "runner_device_id": "16777232",
+      "same_filesystem": true
+    },
+    "memory": {
+      "adapter_changed_limit": false,
+      "detected_address_space_limit": "unlimited",
+      "detection_source": "runner_rlimit",
+      "matches_runner_detected": true
+    }
+  },
+  "manifest_sha256": "12bcce9db9564c4d6b31206ce00bf16289fb9fd5d6f479eec8510e7dc8203728",
+  "reopen": {
+    "performed": true,
+    "result_digest": "7f1c5f4d82dd304d1ba15353dbd06241b866db05c4236fe1b9daa3faf57de29c",
+    "verified": true
+  },
+  "repetition": 1,
+  "schema_version": "treedb_lexical_result/v1",
+  "status": "ok",
+  "storage": {
+    "durable_bytes": 7354589,
+    "transient_bytes": 0,
+    "wal_bytes": 0
+  },
+  "versions": {
+    "bleve": "v2.4.4",
+    "go": "go1.26.0",
+    "platform": "darwin/arm64"
+  }
+}
