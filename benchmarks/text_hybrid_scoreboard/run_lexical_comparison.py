@@ -54,6 +54,10 @@ def normalize_executable(value: str, initial_cwd: Path) -> str:
         expanded = initial_cwd / expanded
     return str(expanded.resolve())
 
+def require_isolated_parent(no_user_site: int) -> None:
+    if not no_user_site:
+        raise RuntimeError("retained lexical comparison must be launched with Python -s")
+
 def git_bytes(*args: str) -> bytes:
     result = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, check=False)
     if result.returncode != 0:
@@ -265,6 +269,7 @@ def adapter_command(engine_id: str, repetition: int, out_dir: Path, manifest: Pa
 
 def main() -> int:
     args = parse_args()
+    require_isolated_parent(sys.flags.no_user_site)
     args.go_bin = normalize_executable(args.go_bin, Path.cwd())
     args.manifest = args.manifest.resolve()
     args.out_dir = args.out_dir.resolve()

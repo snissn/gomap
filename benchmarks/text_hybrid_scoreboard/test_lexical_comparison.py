@@ -203,6 +203,11 @@ class LexicalComparisonTest(unittest.TestCase):
             subprocess.run([sys.executable, str(root / "adapter.py")], cwd=root, env=environment, check=True)
             self.assertFalse((root / "__pycache__").exists())
 
+    def test_parent_runner_requires_user_site_isolation(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "Python -s"):
+            lexical_runner.require_isolated_parent(0)
+        lexical_runner.require_isolated_parent(1)
+
     def test_selected_go_binary_reaches_setup_and_adapter_commands(self) -> None:
         selected = "/toolchains/go 1.26/bin/go"
         with tempfile.TemporaryDirectory() as temporary:
