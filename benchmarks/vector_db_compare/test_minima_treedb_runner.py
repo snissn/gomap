@@ -151,9 +151,13 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             self.assertEqual(runner.repository_commit(), commit)
         self.assertEqual(run.call_count, 2)
 
-    def test_initial_load_phase_excludes_setup_and_aligns_resource_boundary(self) -> None:
-        baseline = {"captured": True, "rss_bytes": 10, "cpu_seconds": 1.0, "disk_bytes": 100}
-        end = {"captured": True, "rss_bytes": 20, "cpu_seconds": 2.0, "disk_bytes": 200}
+    def test_phase_boundaries_exclude_slow_disk_sampling_and_align_cpu_with_wall(self) -> None:
+        process_samples = iter((
+            {"captured": True, "rss_bytes": 10, "cpu_seconds": 1.0, "availability": {}},
+            {"captured": True, "rss_bytes": 20, "cpu_seconds": 2.0, "availability": {}},
+            {"captured": True, "rss_bytes": 30, "cpu_seconds": 3.0, "availability": {}},
+        ))
+        disk_samples = iter((100, 200))
         workload = object.__new__(runner.TreeDBMinimaRunner)
         workload._phase_total_start = None
         workload._phase_start = None
@@ -162,33 +166,43 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload._phase_boundaries = []
         workload._phase_attribution = None
         workload.controller = SimpleNamespace(pid=123)
-        workload.storage_path = Path("/data")
+        workload.storage_path = Path(".")
         workload.process_identity = lambda pid: f"process-{pid}"
         workload.resource_server_name = "TreeDB"
         events: list[str] = []
         ticks = iter((500, 700, 710))
-        resources = iter((baseline, end))
 
         def monotonic_ns() -> int:
             events.append("wall")
             return next(ticks)
 
-        def resource_usage(*_args: object) -> dict[str, object]:
-            events.append("resource")
-            return next(resources)
+        def process_usage(*_args: object) -> dict[str, object]:
+            events.append("process")
+            return next(process_samples)
+
+        def disk_usage(*_args: object) -> int:
+            events.append("disk")
+            return next(disk_samples)
 
         with mock.patch.object(runner.time, "monotonic_ns", side_effect=monotonic_ns), \
-             mock.patch.object(common, "server_resource_usage", side_effect=resource_usage):
+             mock.patch.object(common, "server_process_resource_usage", side_effect=process_usage), \
+             mock.patch.object(common, "disk_bytes", side_effect=disk_usage):
             workload.begin_phase_attribution()
             workload.phase_transition("warmup_search")
 
         initial = workload._phase_boundaries[0]
+        self.assertEqual(events, [
+            "disk", "process", "wall",
+            "wall", "process", "disk", "process", "wall",
+        ])
         self.assertEqual(workload._phase_total_start, 500)
         self.assertEqual(initial["start_nanos"], workload._phase_total_start)
         self.assertEqual(initial["start_nanos"] - 100, 400)
         self.assertEqual(initial["duration_nanos"], 200)
-        self.assertEqual(initial["resource_segments"][0]["start"]["pid"], 123)
-        self.assertEqual(initial["resource_segments"][0]["end"]["pid"], 123)
+        self.assertEqual(initial["resource_segments"][0]["start"]["cpu_seconds"], 1.0)
+        self.assertEqual(initial["resource_segments"][0]["end"]["cpu_seconds"], 2.0)
+        self.assertEqual(workload._phase_resource_start["cpu_seconds"], 3.0)
+        self.assertEqual(workload._phase_resource_start["disk_bytes"], 200)
 
     def test_restart_phase_splits_old_and_new_process_resources(self) -> None:
         old_start = {
@@ -199,7 +213,10 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             "captured": True, "rss_bytes": 12, "cpu_seconds": 2.0, "disk_bytes": 120,
             "pid": 100, "process_identity": "old-process",
         }
-        new_end = {"captured": True, "rss_bytes": 20, "cpu_seconds": 3.0, "disk_bytes": 140}
+        new_end = {
+            "captured": True, "rss_bytes": 20, "cpu_seconds": 3.0,
+            "availability": {},
+        }
         workload = object.__new__(runner.TreeDBMinimaRunner)
         workload._phase_total_start = 100
         workload._phase_start = 100
@@ -212,7 +229,8 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.resource_server_name = "TreeDB"
         workload.process_identity = lambda pid: "new-process" if pid == 101 else "old-process"
         with mock.patch.object(runner.time, "monotonic_ns", side_effect=(200, 210)), \
-             mock.patch.object(common, "server_resource_usage", return_value=new_end):
+             mock.patch.object(common, "server_process_resource_usage", return_value=new_end), \
+             mock.patch.object(common, "disk_bytes", return_value=140):
             workload.phase_transition("post_reopen")
         segments = workload._phase_boundaries[0]["resource_segments"]
         self.assertEqual([segment["start"]["pid"] for segment in segments], [100, 101])
@@ -756,6 +774,64 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertEqual(phase["incomplete_reason"], "graceful_shutdown_failed_before_reopen")
         self.assertEqual(len(phase["resource_segments"]), 1)
         self.assertEqual(phase["resource_segments"][0]["end"]["pid"], 100)
+
+    def test_main_unexpected_service_exit_writes_nonqualifying_partial_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "partial.json"
+            phase_start = {
+                "captured": True, "rss_bytes": 100, "cpu_seconds": 2.0, "disk_bytes": 140,
+                "availability": {}, "pid": 100, "process_identity": "old-process",
+            }
+            workload = object.__new__(runner.TreeDBMinimaRunner)
+            workload.controller = SimpleNamespace(pid=None, last_shutdown_resource_end=None)
+            workload._phase_total_start = 100
+            workload._phase_start = 200
+            workload._phase_name = "timed_search_write_overlap"
+            workload._phase_resource_start = phase_start
+            workload._phase_boundaries = []
+            workload._phase_attribution = None
+            workload._phase_restart_old_end = None
+            workload._controller_restart_origin = None
+            workload.evidence = SimpleNamespace(failures=[], samples=[])
+
+            def fail_run() -> None:
+                raise RuntimeError("TreeDB service exited unexpectedly")
+
+            workload.run = fail_run
+            workload.close = lambda: None
+            workload.artifact = lambda: {
+                "state": "partial",
+                "passing": False,
+                "failures": list(workload.evidence.failures),
+                "phase_attribution": workload._finish_phase_attribution(),
+            }
+            args = SimpleNamespace(
+                manifest=root / "manifest.json", output=output, service_bin=root / "service",
+                url="http://127.0.0.1:17120", data_dir=root / "data",
+                profile="command_wal_durable", startup_timeout=3600,
+                operation_timeout=120, collection="owned", ef_search=128, small=False,
+                diagnostics_dir=None, diagnostics_url="http://127.0.0.1:17121",
+                diagnostic_slow_seconds=30, diagnostic_profile_seconds=5,
+                diagnostic_capture_timeout=10, diagnostic_resume_scenario=None,
+                diagnostic_resume_start=None,
+            )
+            with mock.patch.object(runner, "parse_args", return_value=args), \
+                 mock.patch.object(common, "load_manifest", return_value={}), \
+                 mock.patch.object(runner, "TreeDBMinimaRunner", return_value=workload), \
+                 mock.patch.object(runner.time, "monotonic_ns", side_effect=[300, 310]):
+                self.assertEqual(runner.main(), 1)
+            artifact = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            artifact["failures"],
+            ["RuntimeError: TreeDB service exited unexpectedly"],
+        )
+        phase = artifact["phase_attribution"]["phases"][-1]
+        self.assertFalse(phase["resource_evidence_complete"])
+        self.assertEqual(phase["incomplete_reason"], "service_unavailable_before_phase_endpoint")
+        self.assertEqual(phase["resource_segments"][0]["start"], phase_start)
+        self.assertEqual(phase["resource_segments"][0]["end"], phase_start)
 
     def test_default_cli_preserves_frozen_timeout_and_disables_diagnostics(self) -> None:
         argv = [

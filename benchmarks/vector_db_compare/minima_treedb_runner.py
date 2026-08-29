@@ -430,15 +430,37 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             "disk_bytes": self.restart_origin_resource_end["disk_bytes"],
         }
 
-    def _phase_resource_snapshot(self) -> dict[str, Any]:
+    def _phase_process_snapshot(self) -> dict[str, Any]:
         pid = self.controller.pid
         if type(pid) is not int or pid <= 0:
             raise RuntimeError("TreeDB phase resource snapshot requires a live service PID")
-        snapshot = common.server_resource_usage(pid, self.storage_path, self.resource_server_name)
+        identity = self.process_identity(pid)
+        snapshot = common.server_process_resource_usage(pid, self.resource_server_name)
         snapshot["pid"] = pid
-        snapshot["process_identity"] = self.process_identity(pid)
+        snapshot["process_identity"] = identity
         return snapshot
 
+    def _phase_disk_snapshot(self) -> dict[str, Any]:
+        available = self.storage_path is not None and self.storage_path.exists()
+        return {
+            "captured": available,
+            "disk_bytes": common.disk_bytes(self.storage_path),
+            "availability": {
+                "disk_bytes": str(self.storage_path) if available else "unavailable",
+            },
+        }
+
+    @staticmethod
+    def _phase_resource_endpoint(process: dict[str, Any], disk: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **process,
+            "captured": process["captured"] and disk["captured"],
+            "disk_bytes": disk["disk_bytes"],
+            "availability": {
+                **process["availability"],
+                **disk["availability"],
+            },
+        }
     def capture_restart_origin(self) -> None:
         old_pid = self.server_pid
         if type(old_pid) is not int or old_pid <= 0:
@@ -452,7 +474,9 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
     def begin_phase_attribution(self) -> None:
         if self._phase_start is not None:
             raise RuntimeError("TreeDB phase attribution already started")
-        self._phase_resource_start = self._phase_resource_snapshot()
+        disk = self._phase_disk_snapshot()
+        process = self._phase_process_snapshot()
+        self._phase_resource_start = self._phase_resource_endpoint(process, disk)
         phase_start = time.monotonic_ns()
         self._phase_total_start = phase_start
         self._phase_start = phase_start
@@ -464,7 +488,11 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         if self._phase_start is None or self._phase_name is None or self._phase_resource_start is None:
             raise RuntimeError("TreeDB phase attribution was not started")
         phase_end = time.monotonic_ns()
-        resource_end = self._phase_resource_snapshot()
+        end_process = self._phase_process_snapshot()
+        disk = self._phase_disk_snapshot()
+        resource_end = self._phase_resource_endpoint(end_process, disk)
+        next_process = self._phase_process_snapshot()
+        next_resource_start = self._phase_resource_endpoint(next_process, disk)
         next_start = time.monotonic_ns()
         resource_segments = [{"start": self._phase_resource_start, "end": resource_end}]
         if self._phase_name == "restart_open_readiness":
@@ -490,7 +518,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             "resource_segments": resource_segments,
         })
         self._phase_name, self._phase_start = name, next_start
-        self._phase_resource_start = resource_end
+        self._phase_resource_start = next_resource_start
 
     def _finish_phase_attribution(self) -> dict[str, Any]:
         if self._phase_attribution is not None:
@@ -508,21 +536,33 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             "duration_nanos": phase_end - self._phase_start,
         }
         shutdown_end = getattr(self.controller, "last_shutdown_resource_end", None)
-        if (self._phase_name == "restart_open_readiness" and self.controller.pid is None and
-                shutdown_end is not None and self._controller_restart_origin is not None):
-            old_pid, old_identity = self._controller_restart_origin
-            old_end = {**shutdown_end, "pid": old_pid, "process_identity": old_identity}
-            self._phase_restart_old_end = old_end
-            boundary.update({
-                "resource_segments": [{"start": self._phase_resource_start, "end": old_end}],
-                "resource_evidence_complete": False,
-                "incomplete_reason": "graceful_shutdown_failed_before_reopen",
-            })
+        incomplete_reason = ""
+        if self.controller.pid is None:
+            endpoint = self._phase_resource_start
+            incomplete_reason = "service_unavailable_before_phase_endpoint"
+            if (self._phase_name == "restart_open_readiness" and shutdown_end is not None and
+                    self._controller_restart_origin is not None):
+                old_pid, old_identity = self._controller_restart_origin
+                endpoint = {**shutdown_end, "pid": old_pid, "process_identity": old_identity}
+                self._phase_restart_old_end = endpoint
+                incomplete_reason = "graceful_shutdown_failed_before_reopen"
         else:
-            boundary["resource_segments"] = [{
-                "start": self._phase_resource_start,
-                "end": self._phase_resource_snapshot(),
-            }]
+            try:
+                end_process = self._phase_process_snapshot()
+                disk = self._phase_disk_snapshot()
+                endpoint = self._phase_resource_endpoint(end_process, disk)
+                if not endpoint["captured"]:
+                    incomplete_reason = "resource_endpoint_unavailable"
+            except BaseException:
+                endpoint = self._phase_resource_start
+                incomplete_reason = "resource_endpoint_unavailable"
+        boundary["resource_segments"] = [{
+            "start": self._phase_resource_start,
+            "end": endpoint,
+        }]
+        if incomplete_reason:
+            boundary["resource_evidence_complete"] = False
+            boundary["incomplete_reason"] = incomplete_reason
         end = time.monotonic_ns()
         self._phase_boundaries.append(boundary)
         for phase in self._phase_boundaries:
