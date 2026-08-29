@@ -708,26 +708,71 @@ func validateMinimaTreeDBResourceReconciliation(
 	}
 	return nil
 }
-func minimaMaximumBatchCorrelationRecords(manifest minimaManifest) int {
-	batchSize := manifest.Config.BatchSize
-	if batchSize <= 0 {
-		return 0
+
+type minimaBatchCorrelationIdentity struct {
+	Operation  string
+	Scenario   string
+	BatchStart int
+	Rows       int
+}
+
+func minimaDocumentBatchStart(target string, documents []minimaGeneratedDocument, localStart int) int {
+	prefix := "minima/" + target + "/"
+	first := -1
+	for index, document := range documents {
+		if !strings.HasPrefix(document.ID, prefix) {
+			return localStart
+		}
+		ordinal, err := strconv.Atoi(strings.TrimPrefix(document.ID, prefix))
+		if err != nil {
+			return localStart
+		}
+		if index == 0 {
+			first = ordinal
+		} else if ordinal != first+index {
+			return localStart
+		}
 	}
-	maximum := 0
+	return first
+}
+
+func minimaExpectedBatchCorrelationIdentities(manifest minimaManifest) map[minimaBatchCorrelationIdentity]struct{} {
+	batchSize := manifest.Config.BatchSize
+	identities := make(map[minimaBatchCorrelationIdentity]struct{})
+	if batchSize <= 0 {
+		return identities
+	}
 	for _, operation := range manifest.Operations {
 		for _, insertion := range operation.InsertRanges {
-			maximum += (insertion.Rows + batchSize - 1) / batchSize
+			for start := insertion.Start; start < insertion.Start+insertion.Rows; start += batchSize {
+				rows := min(batchSize, insertion.Start+insertion.Rows-start)
+				identities[minimaBatchCorrelationIdentity{
+					Operation: operation.Name, Scenario: insertion.Scenario, BatchStart: start, Rows: rows,
+				}] = struct{}{}
+			}
 		}
 		if (operation.Effect == "insert" || operation.Effect == "update") && len(operation.Documents) != 0 {
-			maximum += (len(operation.Documents) + batchSize - 1) / batchSize
+			for localStart := 0; localStart < len(operation.Documents); localStart += batchSize {
+				end := min(localStart+batchSize, len(operation.Documents))
+				documents := operation.Documents[localStart:end]
+				batchStart := minimaDocumentBatchStart(operation.Target, documents, localStart)
+				identities[minimaBatchCorrelationIdentity{
+					Operation: operation.Name, Scenario: operation.Target, BatchStart: batchStart, Rows: len(documents),
+				}] = struct{}{}
+			}
 		}
 	}
-	return maximum
+	return identities
+}
+
+func minimaMaximumBatchCorrelationRecords(manifest minimaManifest) int {
+	return len(minimaExpectedBatchCorrelationIdentities(manifest))
 }
 
 func validateMinimaTreeDBBatchCorrelations(manifest minimaManifest, raw minimaRawBackendEvidence, completed bool) error {
 	contract := raw.UpsertBatchCorrelationContract
-	expectedMaximum := minimaMaximumBatchCorrelationRecords(manifest)
+	expectedIdentities := minimaExpectedBatchCorrelationIdentities(manifest)
+	expectedMaximum := len(expectedIdentities)
 	if contract == nil ||
 		contract.Schema != minimaBatchCorrelationSchema ||
 		contract.RecordCount != len(raw.UpsertBatchCorrelations) ||
@@ -738,6 +783,7 @@ func validateMinimaTreeDBBatchCorrelations(manifest minimaManifest, raw minimaRa
 		!reflect.DeepEqual(contract.FullStatsRetention, []string{"failed", "timeout", "slow", "profile_captured"}) {
 		return errors.New("minima artifact: TreeDB batch correlation cardinality contract is invalid")
 	}
+	diagnosticsEnabled := false
 	if completed {
 		var diagnostics struct {
 			Enabled bool `json:"enabled"`
@@ -748,14 +794,22 @@ func validateMinimaTreeDBBatchCorrelations(manifest minimaManifest, raw minimaRa
 		expectedRecords := 0
 		if diagnostics.Enabled {
 			expectedRecords = expectedMaximum
+			diagnosticsEnabled = true
 		}
 		if contract.RecordCount != expectedRecords {
 			return errors.New("minima artifact: completed TreeDB batch correlations are incomplete")
 		}
 	}
 	compact, full := 0, 0
+	sequences := make(map[int]struct{}, len(raw.UpsertBatchCorrelations))
+	identities := make(map[minimaBatchCorrelationIdentity]struct{}, len(raw.UpsertBatchCorrelations))
 	for _, encoded := range raw.UpsertBatchCorrelations {
 		var correlation struct {
+			Sequence       *int            `json:"sequence"`
+			Operation      string          `json:"operation"`
+			Scenario       string          `json:"scenario"`
+			BatchStart     *int            `json:"batch_start"`
+			Rows           *int            `json:"rows"`
 			Outcome        string          `json:"outcome"`
 			StatsRetention string          `json:"stats_retention"`
 			CaptureReason  string          `json:"capture_reason"`
@@ -768,6 +822,24 @@ func validateMinimaTreeDBBatchCorrelations(manifest minimaManifest, raw minimaRa
 		if err := json.Unmarshal(encoded, &correlation); err != nil {
 			return fmt.Errorf("minima artifact: decode TreeDB batch correlation: %w", err)
 		}
+		if correlation.Sequence == nil || *correlation.Sequence < 0 ||
+			correlation.Operation == "" || correlation.Scenario == "" ||
+			correlation.BatchStart == nil || *correlation.BatchStart < 0 ||
+			correlation.Rows == nil || *correlation.Rows <= 0 {
+			return errors.New("minima artifact: TreeDB batch correlation identity is incomplete")
+		}
+		identity := minimaBatchCorrelationIdentity{
+			Operation: correlation.Operation, Scenario: correlation.Scenario,
+			BatchStart: *correlation.BatchStart, Rows: *correlation.Rows,
+		}
+		if _, duplicate := sequences[*correlation.Sequence]; duplicate {
+			return errors.New("minima artifact: TreeDB batch correlation sequence is duplicated")
+		}
+		if _, duplicate := identities[identity]; duplicate {
+			return errors.New("minima artifact: TreeDB batch correlation identity is duplicated")
+		}
+		sequences[*correlation.Sequence] = struct{}{}
+		identities[identity] = struct{}{}
 		switch correlation.StatsRetention {
 		case "compact_completed":
 			if correlation.Outcome != "completed" || correlation.CaptureReason != "" ||
@@ -787,6 +859,14 @@ func validateMinimaTreeDBBatchCorrelations(manifest minimaManifest, raw minimaRa
 		default:
 			return errors.New("minima artifact: TreeDB batch correlation retention is undeclared")
 		}
+	}
+	for sequence := range raw.UpsertBatchCorrelations {
+		if _, ok := sequences[sequence]; !ok {
+			return errors.New("minima artifact: TreeDB batch correlation sequence is incomplete")
+		}
+	}
+	if completed && diagnosticsEnabled && !reflect.DeepEqual(identities, expectedIdentities) {
+		return errors.New("minima artifact: completed TreeDB batch identities do not cover the frozen manifest")
 	}
 	if compact != contract.CompactCompletedRecords || full != contract.FullDiagnosticRecords {
 		return errors.New("minima artifact: TreeDB batch correlation retention counts disagree")
