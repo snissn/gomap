@@ -814,7 +814,7 @@ func exactDocumentIDFilter(filter *Filter) (string, bool) {
 		return "", false
 	}
 	id, ok := filter.Value.(string)
-	return id, ok && id != ""
+	return id, ok
 }
 
 // SearchDenseVector scores QueryEmbedding over the index. Route=ann uses a
@@ -1970,6 +1970,9 @@ func (s *Service) getStoredDocument(ctx context.Context, col *collections.Collec
 	}
 	if col == nil {
 		return Document{}, false, serviceError(CodeIndexUnavailable, "index collection is unavailable")
+	}
+	if id == "" {
+		return Document{}, false, nil
 	}
 	raw, err := col.Get([]byte(id))
 	if err != nil {

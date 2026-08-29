@@ -2316,6 +2316,11 @@ func TestServiceFilterDocumentsExactIDDirectPath(t *testing.T) {
 	if got.MatchedCount != 0 || got.Truncated || got.Documents == nil || len(got.Documents) != 0 {
 		t.Fatalf("miss=%+v", got)
 	}
+	emptyID := &Filter{Field: "id", Operator: "==", Value: ""}
+	got = assertNoScan("empty ID", FilterDocumentsRequest{Filter: emptyID, Limit: 1})
+	if got.MatchedCount != 0 || got.Truncated || got.Documents == nil || len(got.Documents) != 0 {
+		t.Fatalf("empty-ID miss=%+v", got)
+	}
 
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
