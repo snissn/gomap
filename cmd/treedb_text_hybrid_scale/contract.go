@@ -450,6 +450,14 @@ func validateQueryMatrix(rows []queryReport, cfg reportConfig) error {
 			if row.CandidateBudget != wantCandidateBudget || stats.TextCandidatesRequested != uint64(wantCandidateBudget) {
 				return fmt.Errorf("query row %q candidate budget provenance row=%d stats=%d want=%d", name, row.CandidateBudget, stats.TextCandidatesRequested, wantCandidateBudget)
 			}
+			class := queryRowClasses[name]
+			if class.vectorRequired {
+				if stats.VectorCandidatesRequested != uint64(cfg.CandidateLimit) || stats.VectorCandidateBudgetEffective == 0 || stats.VectorCandidatesReturned == 0 {
+					return fmt.Errorf("query row %q vector candidate provenance requested=%d effective=%d returned=%d want requested=%d and nonzero effective/returned", name, stats.VectorCandidatesRequested, stats.VectorCandidateBudgetEffective, stats.VectorCandidatesReturned, cfg.CandidateLimit)
+				}
+			} else if stats.VectorCandidatesRequested != 0 || stats.VectorCandidateBudgetEffective != 0 || stats.VectorCandidatesReturned != 0 {
+				return fmt.Errorf("query row %q unexpectedly reports vector candidate work", name)
+			}
 			if fetch {
 				if stats.DocumentsFetched != uint64(row.Results) {
 					return fmt.Errorf("query row %q final fetch count mismatch", name)

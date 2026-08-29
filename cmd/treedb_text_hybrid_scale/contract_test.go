@@ -30,6 +30,10 @@ func TestQualificationValidatorRejectsEveryNorthStarGap4329(t *testing.T) {
 		{"unbound row postings ceiling", "postings budget", func(r *report) { queryByName4329(r, queryRowHybridText).PostingsBudget-- }},
 		{"unbound row candidate budget", "candidate budget provenance", func(r *report) { queryByName4329(r, queryRowHybridText).CandidateBudget-- }},
 		{"unbound stats candidate budget", "candidate budget provenance", func(r *report) { queryByName4329(r, queryRowHybridText).HybridStats.TextCandidatesRequested-- }},
+		{"missing vector candidate provenance", "vector candidate provenance", func(r *report) {
+			queryByName4329(r, queryRowHybridTextVecScalar).HybridStats.VectorCandidatesReturned = 0
+		}},
+		{"unexpected vector work", "unexpectedly reports vector candidate work", func(r *report) { queryByName4329(r, queryRowHybridText).HybridStats.VectorCandidatesRequested = 1 }},
 		{"dirty provenance", "clean commit/tree/harness/binary provenance", func(r *report) { r.Context.VCSClean = false }},
 		{"config digest", "frozen digest contract", func(r *report) { r.Contract.QuerySetSHA256 = "wrong" }},
 		{"failed row", "incomplete or failed", func(r *report) { r.Queries[0].Status = "failed" }},
@@ -157,7 +161,7 @@ func validQualificationReport4329() report {
 				stats.CandidateBudgetPolicy = collections.HybridCandidateBudgetPolicyAdaptiveRRF
 			}
 			if name == queryRowHybridTextVector || name == queryRowHybridTextVecScalar || name == queryRowHybridTextVecCollapse2 || name == queryRowHybridTextVecScalarFetch {
-				stats.VectorCandidatesRequested, stats.VectorCandidateBudgetEffective = uint64(cfg.CandidateLimit), 10
+				stats.VectorCandidatesRequested, stats.VectorCandidateBudgetEffective, stats.VectorCandidatesReturned = uint64(cfg.CandidateLimit), 10, 10
 			}
 			if name == queryRowHybridTextScalar || name == queryRowHybridTextScalarBroad || name == queryRowHybridTextVecScalar || name == queryRowHybridTextVecScalarFetch {
 				stats.ScalarFilterLookups, stats.ScalarFilterFinalIDs = 1, 10
