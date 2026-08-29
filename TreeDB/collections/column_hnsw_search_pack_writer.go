@@ -7,7 +7,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"slices"
 
 	internalcrc "github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
@@ -388,15 +387,30 @@ func validateColumnHNSWSearchPackAssetPayloadDirectFile(path string, ref ColumnA
 		return err
 	}
 	headerSize := columnHNSWSearchPackHeaderSize
-	switch hnswPackU16(prefix, columnHNSWSearchPackHeaderVersionOffset) {
+	version := hnswPackU16(prefix, columnHNSWSearchPackHeaderVersionOffset)
+	switch version {
 	case columnHNSWSearchPackVersionV1:
 	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3:
 		headerSize = columnHNSWSearchPackHeaderSizeV2
 		if err := readColumnHNSWSearchPackFileAt(file, ref.Offset+columnHNSWSearchPackHeaderSize, prefix[columnHNSWSearchPackHeaderSize:headerSize]); err != nil {
 			return err
 		}
+	default:
+		return fmt.Errorf("collections: unsupported hnsw_search_pack_v1 version=%d", version)
+	}
+	layers := hnswPackU32(prefix, columnHNSWSearchPackHeaderAdjacencyLayerCount)
+	if layers > columnHNSWSearchPackMaxLayersDefault {
+		return fmt.Errorf("collections: hnsw search pack layer count=%d exceeds cap", layers)
+	}
+	sectionCount := hnswPackU32(prefix, columnHNSWSearchPackHeaderSectionCountOffset)
+	expectedSectionCount := uint32(8 + 2*layers)
+	if version == columnHNSWSearchPackVersionV3 {
+		expectedSectionCount += 2
 	}
 	directoryLength := hnswPackU64(prefix, columnHNSWSearchPackHeaderDirectoryLengthOffset)
+	if sectionCount != expectedSectionCount || directoryLength != uint64(sectionCount)*columnHNSWSearchPackSectionEntrySize {
+		return fmt.Errorf("collections: hnsw search pack directory count=%d length=%d is invalid", sectionCount, directoryLength)
+	}
 	if directoryLength > uint64(ref.Length-int64(headerSize)) || directoryLength > uint64(math.MaxInt-headerSize) {
 		return fmt.Errorf("collections: hnsw search pack directory length=%d outside asset", directoryLength)
 	}
@@ -703,16 +717,29 @@ func validateColumnHNSWSearchPackDirectAuxiliaryNavigation(file *os.File, baseOf
 			next[ordinal]++
 		}
 	}
-	actualOffsetBytes := make([]byte, auxiliaryOffsets.Length)
-	actualNeighborBytes := make([]byte, auxiliaryNeighbors.Length)
-	if err := readColumnHNSWSearchPackFileAt(file, baseOffset+int64(auxiliaryOffsets.Offset), actualOffsetBytes); err != nil {
-		return err
+	for index := 0; index < len(expectedOffsets); {
+		count := min(len(expectedOffsets)-index, len(buffer)/8)
+		if err := readColumnHNSWSearchPackFileAt(file, baseOffset+int64(auxiliaryOffsets.Offset)+int64(index*8), buffer[:count*8]); err != nil {
+			return err
+		}
+		for i := 0; i < count; i++ {
+			if binary.LittleEndian.Uint64(buffer[i*8:]) != expectedOffsets[index+i] {
+				return errors.New("collections: hnsw_search_pack_v1 auxiliary navigation mismatch")
+			}
+		}
+		index += count
 	}
-	if err := readColumnHNSWSearchPackFileAt(file, baseOffset+int64(auxiliaryNeighbors.Offset), actualNeighborBytes); err != nil {
-		return err
-	}
-	if !slices.Equal(decodeUint64SliceLE(actualOffsetBytes), expectedOffsets) || !slices.Equal(decodeUint32SliceLE(actualNeighborBytes), expectedNeighbors) {
-		return errors.New("collections: hnsw_search_pack_v1 auxiliary navigation mismatch")
+	for index := 0; index < len(expectedNeighbors); {
+		count := min(len(expectedNeighbors)-index, len(buffer)/4)
+		if err := readColumnHNSWSearchPackFileAt(file, baseOffset+int64(auxiliaryNeighbors.Offset)+int64(index*4), buffer[:count*4]); err != nil {
+			return err
+		}
+		for i := 0; i < count; i++ {
+			if binary.LittleEndian.Uint32(buffer[i*4:]) != expectedNeighbors[index+i] {
+				return errors.New("collections: hnsw_search_pack_v1 auxiliary navigation mismatch")
+			}
+		}
+		index += count
 	}
 	return nil
 }

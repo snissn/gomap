@@ -562,8 +562,9 @@ func writeColumnHNSWSearchPackRowsWithBackpatch(w io.Writer, backpatch func([]by
 	version := plan.version
 	headerSize := plan.headerSize
 	directoryLength := plan.directoryLength
+	scratch := make([]byte, 1<<20)
 	emitSection := func(dst io.Writer, s columnHNSWSearchPackSection) error {
-		return writeColumnHNSWSearchPackStreamSection(dst, s, input, rows)
+		return writeColumnHNSWSearchPackStreamSection(dst, scratch, s, input, rows)
 	}
 	if _, err := writeColumnAssetSegmentZeroPadding(w, int(dataOffset)); err != nil {
 		return 0, err
@@ -704,10 +705,10 @@ func writeColumnHNSWSearchPackStreamAll(w io.Writer, p []byte) error {
 	return nil
 }
 
-func writeColumnHNSWSearchPackStreamSection(w io.Writer, s columnHNSWSearchPackSection, input columnHNSWSearchPackBuildInput, rows []columnVectorGraphAssetRow) error {
+func writeColumnHNSWSearchPackStreamSection(w io.Writer, scratch []byte, s columnHNSWSearchPackSection, input columnHNSWSearchPackBuildInput, rows []columnVectorGraphAssetRow) error {
 	if s.Kind == columnHNSWSearchPackSectionNormalizedVectors {
 		const chunkRows = 16
-		buf := make([]byte, chunkRows*input.VectorStride*4)
+		buf := scratch[:chunkRows*input.VectorStride*4]
 		for start := 0; start < len(rows); start += chunkRows {
 			end := min(start+chunkRows, len(rows))
 			part := buf[:(end-start)*input.VectorStride*4]
@@ -740,8 +741,7 @@ func writeColumnHNSWSearchPackStreamSection(w io.Writer, s columnHNSWSearchPackS
 		}
 		return nil
 	}
-	const chunkBytes = 1 << 20
-	buf := make([]byte, chunkBytes)
+	buf := scratch
 	writeUint16 := func(values []uint16) error {
 		for start := 0; start < len(values); {
 			count := min(len(values)-start, len(buf)/2)

@@ -273,6 +273,14 @@ func TestColumnHNSWSearchPackPreparedAssetValidationDirectFile4429(t *testing.T)
 	if err := validateColumnHNSWSearchPackAssetPayloadDirectFile(path, ref, graph, def); err == nil {
 		t.Fatal("corrupt directory passed direct-file validation")
 	}
+	corrupt = append([]byte(nil), raw...)
+	putHNSWPackU64(corrupt, columnHNSWSearchPackHeaderDirectoryLengthOffset, math.MaxUint64)
+	corruptRef := ref
+	corruptRef.Checksum = page.Checksum(corrupt)
+	writeColumnVectorGraphAssetRawForTest2041(t, rootDir, ref, corrupt)
+	if err := validateColumnHNSWSearchPackAssetPayloadDirectFile(path, corruptRef, graph, def); err == nil {
+		t.Fatal("uncapped directory length passed direct-file validation")
+	}
 	writeColumnVectorGraphAssetRawForTest2041(t, rootDir, ref, raw)
 	graph.BaseManifestChecksum++
 	if err := validateColumnHNSWSearchPackAssetPayloadDirectFile(path, ref, graph, def); err == nil {
