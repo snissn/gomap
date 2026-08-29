@@ -205,7 +205,7 @@ def setup_engine(engine_id: str, out_dir: Path, timeout: int, go_bin: str) -> tu
         cwd = isolated_project(engine_id, out_dir)
     else:
         return True, [], ""
-    command_environment = {"GOWORK": "off", "GOENV": "off"} if engine_id == "bleve" else {}
+    command_environment = {"GOWORK": "off", "GOENV": "off"} if engine_id == "bleve" else {"MAVEN_SKIP_RC": "1"} if engine_id == "lucene" else {}
     result = run_command(command, cwd, timeout, out_dir / "logs" / f"{engine_id}-setup.log", command_environment)
     return result.returncode == 0, command, result.stderr
 
@@ -255,7 +255,7 @@ def adapter_command(engine_id: str, repetition: int, out_dir: Path, manifest: Pa
         return [go_bin, "run", "./benchmarks/text_hybrid_scoreboard/treedb_adapter", *common, "--db", str(index)], ROOT, {"GOWORK": "off", "GOENV": "off", "GOMAP_SOURCE_REVISION": source_revision, "LEXICAL_GO_EXECUTABLE": go_bin}
     if engine_id == "lucene":
         exec_args = shlex.join([*common, "--index", str(index)])
-        return ["mvn", "-q", "compile", "exec:java", f"-Dexec.args={exec_args}"], isolated_project(engine_id, out_dir), {}
+        return ["mvn", "-q", "compile", "exec:java", f"-Dexec.args={exec_args}"], isolated_project(engine_id, out_dir), {"MAVEN_SKIP_RC": "1"}
     if engine_id == "bleve":
         return [go_bin, "run", ".", *common, "--index", str(index)], isolated_project(engine_id, out_dir), {"GOWORK": "off", "GOENV": "off", "LEXICAL_GO_EXECUTABLE": go_bin}
     if engine_id == "sqlite_fts5":
