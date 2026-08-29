@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -23,10 +24,12 @@ const (
 	retainedManifestName               = "artifact_manifest.json"
 	frozenConfigName                   = "frozen_config.json"
 	requiredScaleRows                  = 10_000_000
+	requiredTopK                       = 10
 	requiredHybridCandidateLimit       = 655_360
 	requiredSourceChunkBatchSize       = 32_768
 	requiredMaintenanceUpdateBatchSize = 10_000
 	requiredHybridMaxPostingsScanned   = requiredScaleRows * 4
+	scaleRelevanceOracleVersion        = "generator_predicate/v2"
 	harnessGitPath                     = "cmd/treedb_text_hybrid_scale"
 	treeDBGitPath                      = "TreeDB"
 )
@@ -97,7 +100,7 @@ func frozenQuerySetSHA256() string {
 }
 
 func frozenRelevanceSHA256() string {
-	return digestString("relevance/v1|repeat_result_order_sha256|scalar_ids_checked_against_generator|reopen_and_maintenance_digest_parity")
+	return digestString("relevance/v2|oracle=generator_predicate/v2|ids=doc-%09d|text_common_and_or_phrase=ordinal%2==0|text_rare=ordinal%997==0|hybrid_unfiltered=ordinal%2==0|scalar_rare=ordinal%16==0|scalar_broad=ordinal%4==0&&ordinal%16!=0|precision_at_k=1|unique_in_range")
 }
 
 func digestString(value string) string {
@@ -331,6 +334,9 @@ func validateQualificationReport(rep report) error {
 	if cfg.CandidateLimit != requiredHybridCandidateLimit {
 		return fmt.Errorf("hybrid candidate limit=%d want frozen %d", cfg.CandidateLimit, requiredHybridCandidateLimit)
 	}
+	if cfg.TopK != requiredTopK {
+		return fmt.Errorf("top-k=%d want frozen %d", cfg.TopK, requiredTopK)
+	}
 	if cfg.PhaseSelector != "all" || !cfg.IncludeVector || !cfg.RunBackfill || !cfg.RunTextOnly || !cfg.RunSourceChunk || !cfg.RunReopen || !cfg.RunConcurrent || !cfg.RunRewrite {
 		return errors.New("complete all-phase text/hybrid/lifecycle matrix is required")
 	}
@@ -354,8 +360,8 @@ func validateQualificationReport(rep report) error {
 	if rep.SourceChunk == nil || rep.SourceChunk.Status != "passed" || rep.SourceChunk.SourceDocuments != requiredScaleRows || rep.SourceChunk.BatchSize != requiredSourceChunkBatchSize || rep.SourceChunk.BatchCalls != expectedSourceChunkCalls || rep.SourceChunk.GeneratedChunks < requiredScaleRows || rep.SourceChunk.CheckpointSeconds <= 0 || !rep.SourceChunk.ReopenParityOK || !validResource(rep.SourceChunk.Resource) {
 		return errors.New("application-shaped source/chunk row incomplete: source/chunk batch contract mismatch")
 	}
-	if rep.Reopen == nil || rep.Reopen.Status != "passed" || !rep.Reopen.CountOK || !rep.Reopen.QueryParityOK || rep.Reopen.BeforeResultsSHA256 == "" || rep.Reopen.BeforeResultsSHA256 != rep.Reopen.AfterResultsSHA256 || rep.Reopen.StorageBytes <= 0 || !validResource(rep.Reopen.Resource) {
-		return errors.New("checkpoint/close/reopen/count/query parity row incomplete")
+	if rep.Reopen == nil || rep.Reopen.Status != "passed" || !rep.Reopen.CountOK || !rep.Reopen.QueryParityOK || rep.Reopen.BeforeResultsSHA256 == "" || rep.Reopen.BeforeResultsSHA256 != rep.Reopen.AfterResultsSHA256 || rep.Reopen.StorageBytes <= 0 || rep.Reopen.OracleVersion != scaleRelevanceOracleVersion || !rep.Reopen.QualityOracleOK || rep.Reopen.TextPrecisionAtK != 1 || rep.Reopen.HybridPrecisionAtK != 1 || !validResource(rep.Reopen.Resource) {
+		return errors.New("checkpoint/close/reopen/count/query parity or generator relevance oracle incomplete")
 	}
 	if rep.Concurrent == nil || rep.Concurrent.Status != "passed" || !rep.Concurrent.GuardrailOK || len(rep.Concurrent.Errors) != 0 || rep.Concurrent.Queries < cfg.Readers || rep.Concurrent.Writes < 1 || !validResource(rep.Concurrent.Resource) {
 		return errors.New("concurrency sanity row incomplete")
@@ -364,8 +370,8 @@ func validateQualificationReport(rep report) error {
 		return errors.New("mutation/rewrite/checkpoint/reopen parity or maintenance update batch contract incomplete")
 	}
 	expectedMaintenanceUpdateCalls := (rep.Maintenance.Updates + rep.Maintenance.UpdateBatchSize - 1) / rep.Maintenance.UpdateBatchSize
-	if rep.Maintenance.Status != "passed" || rep.Maintenance.Updates < 10_000 || rep.Maintenance.UpdateBatchSize != requiredMaintenanceUpdateBatchSize || rep.Maintenance.UpdateBatchCalls != expectedMaintenanceUpdateCalls || rep.Maintenance.Deletes < 5_000 || rep.Maintenance.RewriteSeconds <= 0 || rep.Maintenance.CheckpointSeconds <= 0 || !rep.Maintenance.PostconditionOK || !rep.Maintenance.ReopenParityOK || rep.Maintenance.BeforeResultsSHA256 == "" || rep.Maintenance.BeforeResultsSHA256 != rep.Maintenance.AfterResultsSHA256 || !validResource(rep.Maintenance.Resource) {
-		return errors.New("mutation/rewrite/checkpoint/reopen parity or maintenance update batch contract incomplete")
+	if rep.Maintenance.Status != "passed" || rep.Maintenance.Updates < 10_000 || rep.Maintenance.UpdateBatchSize != requiredMaintenanceUpdateBatchSize || rep.Maintenance.UpdateBatchCalls != expectedMaintenanceUpdateCalls || rep.Maintenance.Deletes < 5_000 || rep.Maintenance.RewriteSeconds <= 0 || rep.Maintenance.CheckpointSeconds <= 0 || !rep.Maintenance.PostconditionOK || !rep.Maintenance.ReopenParityOK || rep.Maintenance.BeforeResultsSHA256 == "" || rep.Maintenance.BeforeResultsSHA256 != rep.Maintenance.AfterResultsSHA256 || rep.Maintenance.OracleVersion != scaleRelevanceOracleVersion || !rep.Maintenance.QualityOracleOK || rep.Maintenance.BeforePrecisionAtK != 1 || rep.Maintenance.AfterPrecisionAtK != 1 || !validResource(rep.Maintenance.Resource) {
+		return errors.New("mutation/rewrite/checkpoint/reopen parity, generator relevance oracle, or maintenance update batch contract incomplete")
 	}
 	if err := validateStorageSnapshots(rep); err != nil {
 		return err
@@ -422,7 +428,7 @@ func validateQueryMatrix(rows []queryReport, cfg reportConfig) error {
 				return fmt.Errorf("query row %q postings budget=%d want %d", name, row.PostingsBudget, cfg.HybridMaxPostingsScanned)
 			}
 		}
-		if row.Status != "passed" || row.Failure != "" || !row.GuardrailOK || !row.CorrectnessOK || !row.IsolationOK || row.Rows != requiredScaleRows || row.Samples != cfg.Queries || len(row.RawLatencyNS) != cfg.Queries || row.Results < 1 || row.ResultsSHA256 == "" || !validResource(row.Resource) {
+		if row.Status != "passed" || row.Failure != "" || !row.GuardrailOK || !row.CorrectnessOK || !row.IsolationOK || row.Rows != requiredScaleRows || row.TopK != cfg.TopK || row.Results != cfg.TopK || row.Samples != cfg.Queries || len(row.RawLatencyNS) != cfg.Queries || row.ResultsSHA256 == "" || !validResource(row.Resource) {
 			return fmt.Errorf("query row %q is incomplete or failed", name)
 		}
 		fetch := name == queryRowTextCommonFetch || name == queryRowHybridTextVecScalarFetch
@@ -437,6 +443,9 @@ func validateQueryMatrix(rows []queryReport, cfg reportConfig) error {
 			} else if row.TextStats.DocumentsFetched != 0 {
 				return fmt.Errorf("query row %q fetched documents on no-doc path", name)
 			}
+		}
+		if row.OracleVersion != scaleRelevanceOracleVersion || !row.QualityOracleOK || row.RelevantResults != row.Results || row.PrecisionAtK != 1 {
+			return fmt.Errorf("query row %q generator relevance oracle incomplete: version=%q relevant=%d results=%d precision=%g ok=%v", name, row.OracleVersion, row.RelevantResults, row.Results, row.PrecisionAtK, row.QualityOracleOK)
 		}
 		if row.HybridStats != nil {
 			stats := row.HybridStats
@@ -647,6 +656,7 @@ func validateRawEvidenceBindings(dir string, manifest retainedManifest, cfg repo
 		fmt.Sprintf("-backfill-rows %d", cfg.BackfillRows),
 		fmt.Sprintf("-text-only-rows %d", cfg.TextOnlyRows),
 		fmt.Sprintf("-candidate-limit %d", cfg.CandidateLimit),
+		fmt.Sprintf("-top-k %d", cfg.TopK),
 		fmt.Sprintf("-source-chunk-rows %d", cfg.SourceChunkRows),
 		fmt.Sprintf("-queries %d", cfg.Queries),
 		fmt.Sprintf("-hybrid-max-postings-scanned %d", cfg.HybridMaxPostingsScanned),
@@ -702,4 +712,112 @@ func hashHybridResults(results []collections.HybridSearchResult) string {
 		_, _ = fmt.Fprintf(h, "%x\x00%d\x00%.17g\n", result.ID, result.Rank, result.FusedScore)
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+type scaleQueryQuality struct {
+	Relevant  int
+	Precision float64
+	OK        bool
+	Failure   string
+}
+
+func evaluateTextQueryQuality(name string, rows, topK int, results []collections.TextSearchResult) scaleQueryQuality {
+	ids := make([][]byte, len(results))
+	for i := range results {
+		ids[i] = results[i].DocumentID
+	}
+	return evaluateScaleQueryQuality(name, rows, topK, ids)
+}
+
+func evaluateHybridQueryQuality(name string, rows, topK int, results []collections.HybridSearchResult) scaleQueryQuality {
+	ids := make([][]byte, len(results))
+	for i := range results {
+		ids[i] = results[i].ID
+	}
+	return evaluateScaleQueryQuality(name, rows, topK, ids)
+}
+
+func evaluateScaleQueryQuality(name string, rows, topK int, ids [][]byte) scaleQueryQuality {
+	quality := scaleQueryQuality{}
+	expected := expectedScaleQueryResults(name, rows, topK)
+	if expected <= 0 || len(ids) != expected {
+		quality.Failure = fmt.Sprintf("generator relevance oracle result count=%d want=%d for requested top-k=%d", len(ids), expected, topK)
+		return quality
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		key := string(id)
+		if _, duplicate := seen[key]; duplicate {
+			quality.Failure = fmt.Sprintf("generator relevance oracle found duplicate result %q", key)
+			return quality
+		}
+		seen[key] = struct{}{}
+		ordinal, ok := scaleResultOrdinal(id, rows)
+		if !ok || !scaleQueryRelevant(name, ordinal) {
+			quality.Precision = float64(quality.Relevant) / float64(expected)
+			quality.Failure = fmt.Sprintf("generator relevance oracle rejected result %q for row %q", key, name)
+			return quality
+		}
+		quality.Relevant++
+	}
+	quality.Precision = float64(quality.Relevant) / float64(expected)
+	quality.OK = quality.Relevant == expected && quality.Precision == 1
+	if !quality.OK {
+		quality.Failure = fmt.Sprintf("generator relevance oracle precision=%g relevant=%d results=%d", quality.Precision, quality.Relevant, len(ids))
+	}
+	return quality
+}
+func scaleResultOrdinal(id []byte, rows int) (int, bool) {
+	if len(id) != len("doc-000000000") || !bytes.HasPrefix(id, []byte("doc-")) {
+		return 0, false
+	}
+	ordinal, err := strconv.Atoi(string(id[len("doc-"):]))
+	if err != nil || ordinal < 0 || ordinal >= rows || !bytes.Equal(id, scaleDocID(ordinal)) {
+		return 0, false
+	}
+	return ordinal, true
+}
+
+func expectedScaleQueryResults(name string, rows, topK int) int {
+	if rows <= 0 || topK <= 0 {
+		return 0
+	}
+	available := 0
+	switch name {
+	case queryRowTextRare:
+		available = (rows + 996) / 997
+	case queryRowHybridTextScalar, queryRowHybridTextVecScalar, queryRowHybridTextVecScalarFetch:
+		available = (rows + 15) / 16
+	case queryRowHybridTextScalarBroad:
+		available = (rows / 16) * 3
+		remainder := rows % 16
+		for _, ordinal := range []int{4, 8, 12} {
+			if ordinal < remainder {
+				available++
+			}
+		}
+	case queryRowTextCommon, queryRowTextMultiTermAND, queryRowTextMultiTermOR, queryRowTextPhrase, queryRowTextCommonFetch,
+		queryRowHybridText, queryRowHybridTextVector, queryRowHybridTextVecCollapse2:
+		available = (rows + 1) / 2
+	}
+	if available < topK {
+		return available
+	}
+	return topK
+}
+
+func scaleQueryRelevant(name string, ordinal int) bool {
+	switch name {
+	case queryRowTextRare:
+		return ordinal%997 == 0
+	case queryRowHybridTextScalar, queryRowHybridTextVecScalar, queryRowHybridTextVecScalarFetch:
+		return ordinal%16 == 0
+	case queryRowHybridTextScalarBroad:
+		return ordinal%4 == 0 && ordinal%16 != 0
+	case queryRowTextCommon, queryRowTextMultiTermAND, queryRowTextMultiTermOR, queryRowTextPhrase, queryRowTextCommonFetch,
+		queryRowHybridText, queryRowHybridTextVector, queryRowHybridTextVecCollapse2:
+		return ordinal%2 == 0
+	default:
+		return false
+	}
 }

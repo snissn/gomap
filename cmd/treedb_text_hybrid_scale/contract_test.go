@@ -17,6 +17,36 @@ func TestQualificationValidatorAcceptsCompleteFrozenMatrix4329(t *testing.T) {
 	}
 }
 
+func TestGeneratorRelevanceOracle4329(t *testing.T) {
+	text := []collections.TextSearchResult{{DocumentID: scaleDocID(0)}, {DocumentID: scaleDocID(2)}}
+	if got := evaluateTextQueryQuality(queryRowTextCommon, requiredScaleRows, 2, text); !got.OK || got.Relevant != 2 || got.Precision != 1 {
+		t.Fatalf("common oracle=%+v want precision 1", got)
+	}
+	rare := []collections.TextSearchResult{{DocumentID: scaleDocID(997)}, {DocumentID: scaleDocID(1_994)}}
+	if got := evaluateTextQueryQuality(queryRowTextRare, requiredScaleRows, 2, rare); !got.OK {
+		t.Fatalf("rare oracle=%+v want accepted generator ordinals", got)
+	}
+	broad := []collections.HybridSearchResult{{ID: scaleDocID(4)}, {ID: scaleDocID(20)}}
+	if got := evaluateHybridQueryQuality(queryRowHybridTextScalarBroad, requiredScaleRows, 2, broad); !got.OK {
+		t.Fatalf("broad scalar oracle=%+v want accepted tenant-common refund ordinals", got)
+	}
+	for name, ids := range map[string][][]byte{
+		"irrelevant":   {scaleDocID(1)},
+		"duplicate":    {scaleDocID(0), scaleDocID(0)},
+		"out_of_range": {scaleDocID(requiredScaleRows)},
+		"malformed":    {[]byte("doc-not-valid")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := evaluateScaleQueryQuality(queryRowTextCommon, requiredScaleRows, len(ids), ids); got.OK || got.Failure == "" {
+				t.Fatalf("oracle=%+v want rejection", got)
+			}
+		})
+	}
+	if got := evaluateScaleQueryQuality(queryRowTextCommon, requiredScaleRows, 2, [][]byte{scaleDocID(0)}); got.OK || got.Precision != 0 {
+		t.Fatalf("truncated oracle=%+v want top-k denominator rejection", got)
+	}
+}
+
 func TestQualificationValidatorRejectsEveryNorthStarGap4329(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -26,6 +56,8 @@ func TestQualificationValidatorRejectsEveryNorthStarGap4329(t *testing.T) {
 		{"missing row", "query row cardinality", func(r *report) { r.Queries = r.Queries[:len(r.Queries)-1] }},
 		{"wrong scale", "exact 10M cardinality", func(r *report) { r.Config.Rows = 1_000_000 }},
 		{"wrong candidate limit", "hybrid candidate limit", func(r *report) { r.Config.CandidateLimit-- }},
+		{"truncated top-k", "incomplete or failed", func(r *report) { r.Queries[0].Results-- }},
+		{"wrong top-k", "top-k", func(r *report) { r.Config.TopK-- }},
 		{"wrong postings ceiling", "hybrid postings ceiling", func(r *report) { r.Config.HybridMaxPostingsScanned-- }},
 		{"unbound row postings ceiling", "postings budget", func(r *report) { queryByName4329(r, queryRowHybridText).PostingsBudget-- }},
 		{"unbound row candidate budget", "candidate budget provenance", func(r *report) { queryByName4329(r, queryRowHybridText).CandidateBudget-- }},
@@ -37,6 +69,7 @@ func TestQualificationValidatorRejectsEveryNorthStarGap4329(t *testing.T) {
 		{"wrong candidate policy", "candidate budget policy", func(r *report) {
 			queryByName4329(r, queryRowHybridTextVecScalar).HybridStats.CandidateBudgetPolicy = collections.HybridCandidateBudgetPolicyAdaptiveRRF
 		}},
+		{"missing relevance oracle", "generator relevance oracle", func(r *report) { queryByName4329(r, queryRowHybridTextVecScalar).QualityOracleOK = false }},
 		{"dirty provenance", "clean commit/tree/harness/binary provenance", func(r *report) { r.Context.VCSClean = false }},
 		{"config digest", "frozen digest contract", func(r *report) { r.Contract.QuerySetSHA256 = "wrong" }},
 		{"failed row", "incomplete or failed", func(r *report) { r.Queries[0].Status = "failed" }},
@@ -60,8 +93,10 @@ func TestQualificationValidatorRejectsEveryNorthStarGap4329(t *testing.T) {
 		{"phase accounting", "phase accounting mismatch", func(r *report) { r.Load.TextStorage.EncodedBytes++ }},
 		{"missing storage row", "missing storage snapshot", func(r *report) { r.StorageSnapshots = r.StorageSnapshots[:4] }},
 		{"false reopen", "reopen/count/query parity", func(r *report) { r.Reopen.QueryParityOK = false }},
+		{"missing reopen relevance oracle", "generator relevance oracle", func(r *report) { r.Reopen.QualityOracleOK = false }},
 		{"maintenance mutation", "mutation/rewrite/checkpoint/reopen parity", func(r *report) { r.Maintenance.Updates = 9_999 }},
 		{"maintenance parity", "mutation/rewrite/checkpoint/reopen parity", func(r *report) { r.Maintenance.AfterResultsSHA256 = "different" }},
+		{"missing maintenance relevance oracle", "generator relevance oracle", func(r *report) { r.Maintenance.AfterPrecisionAtK = 0 }},
 		{"concurrency", "concurrency sanity", func(r *report) { r.Concurrent.Errors = []string{"race-safe probe failed"} }},
 		{"source chunk", "source/chunk row", func(r *report) { r.SourceChunk.ReopenParityOK = false }},
 		{"cleanup", "cleanup status", func(r *report) { r.Cleanup.Status = "unknown" }},
@@ -133,6 +168,7 @@ func validQualificationReport4329() report {
 			Name: name, Status: "passed", Rows: requiredScaleRows, TopK: 10,
 			CandidateBudget: cfg.CandidateLimit, Samples: cfg.Queries, Results: 10,
 			ResultsSHA256: digestString(name), CorrectnessOK: true, IsolationOK: true,
+			OracleVersion: scaleRelevanceOracleVersion, RelevantResults: 10, PrecisionAtK: 1, QualityOracleOK: true,
 			RawLatencyNS: []int64{1, 2, 3}, GuardrailOK: true, Resource: resource,
 		}
 		if strings.HasPrefix(name, "text_") {
@@ -216,9 +252,9 @@ func validQualificationReport4329() report {
 		TextOnly:           &loadReport{Status: "passed", Mode: "text_only_predeclared", Rows: requiredScaleRows, Batches: 1, CheckpointSeconds: 1, TextStorage: accounting("text_only_fixture"), StorageBytesAfterLoad: 1, Resource: resource},
 		Backfill:           &backfillReport{Status: "passed", Mode: "text_only_post_load_backfill", Rows: requiredScaleRows, BackfillSeconds: 1, CheckpointSeconds: 1, TextStorage: accounting("backfill_fixture"), Resource: resource},
 		SourceChunk:        &sourceChunkReport{Status: "passed", SourceDocuments: requiredScaleRows, GeneratedChunks: 4 * requiredScaleRows, BatchSize: requiredSourceChunkBatchSize, BatchCalls: (requiredScaleRows + requiredSourceChunkBatchSize - 1) / requiredSourceChunkBatchSize, CheckpointSeconds: 1, ReopenParityOK: true, TextStorage: accounting("source_chunk_fixture"), Resource: resource},
-		Reopen:             &reopenReport{Status: "passed", CountOK: true, QueryParityOK: true, BeforeResultsSHA256: "same", AfterResultsSHA256: "same", TextStorage: accounting("after_reopen"), StorageBytes: 1, Resource: resource},
+		Reopen:             &reopenReport{Status: "passed", CountOK: true, QueryParityOK: true, BeforeResultsSHA256: "same", AfterResultsSHA256: "same", TextStorage: accounting("after_reopen"), StorageBytes: 1, OracleVersion: scaleRelevanceOracleVersion, TextPrecisionAtK: 1, HybridPrecisionAtK: 1, QualityOracleOK: true, Resource: resource},
 		Concurrent:         &concurrentReport{Status: "passed", Readers: 4, Queries: 4, Writes: 1, GuardrailOK: true, Resource: resource},
-		Maintenance:        &maintenanceReport{Status: "passed", Updates: 10_000, UpdateBatchSize: requiredMaintenanceUpdateBatchSize, UpdateBatchCalls: 1, Deletes: 5_000, RewriteSeconds: 1, CheckpointSeconds: 1, TextStorageAfter: accounting("maintenance_rewrite_fixture"), PostconditionOK: true, ReopenParityOK: true, BeforeResultsSHA256: "same", AfterResultsSHA256: "same", Resource: resource},
+		Maintenance:        &maintenanceReport{Status: "passed", Updates: 10_000, UpdateBatchSize: requiredMaintenanceUpdateBatchSize, UpdateBatchCalls: 1, Deletes: 5_000, RewriteSeconds: 1, CheckpointSeconds: 1, TextStorageAfter: accounting("maintenance_rewrite_fixture"), PostconditionOK: true, ReopenParityOK: true, BeforeResultsSHA256: "same", AfterResultsSHA256: "same", OracleVersion: scaleRelevanceOracleVersion, BeforePrecisionAtK: 1, AfterPrecisionAtK: 1, QualityOracleOK: true, Resource: resource},
 		Queries:            queries,
 		StorageSnapshots:   []storageSnapshot{storage("after_load"), storage("after_reopen"), storage("maintenance_rewrite_fixture"), storage("backfill_fixture"), storage("text_only_fixture"), storage("source_chunk_fixture")},
 		SelectedPhases:     phases, CompletedPhases: append([]string(nil), phases...),
@@ -283,7 +319,7 @@ func writeRetainedFixture4329(t *testing.T) string {
 			payload = []byte(fmt.Sprintf("commit=%s\ntree_oid=%s\ntreedb_subtree_oid=%s\nharness_subtree_oid=%s\n", rep.Context.Commit, rep.Context.TreeOID, rep.Context.TreeDBSubtreeOID, rep.Context.HarnessSubtreeOID))
 		}
 		if name == "command.txt" {
-			payload = []byte(fmt.Sprintf("treedb_text_hybrid_scale -rows %d -backfill-rows %d -text-only-rows %d -source-chunk-rows %d -queries %d -candidate-limit %d -hybrid-max-postings-scanned %d -run-text-only=true -run-source-chunk=true -phases all -keep-db=false\n", rep.Config.Rows, rep.Config.BackfillRows, rep.Config.TextOnlyRows, rep.Config.SourceChunkRows, rep.Config.Queries, rep.Config.CandidateLimit, rep.Config.HybridMaxPostingsScanned))
+			payload = []byte(fmt.Sprintf("treedb_text_hybrid_scale -rows %d -backfill-rows %d -text-only-rows %d -source-chunk-rows %d -queries %d -top-k %d -candidate-limit %d -hybrid-max-postings-scanned %d -run-text-only=true -run-source-chunk=true -phases all -keep-db=false\n", rep.Config.Rows, rep.Config.BackfillRows, rep.Config.TextOnlyRows, rep.Config.SourceChunkRows, rep.Config.Queries, rep.Config.TopK, rep.Config.CandidateLimit, rep.Config.HybridMaxPostingsScanned))
 		}
 		if name == "resources.txt" {
 			payload = []byte("1 maximum resident set size\n")

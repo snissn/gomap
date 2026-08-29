@@ -317,6 +317,10 @@ type reopenReport struct {
 	BeforeResultsSHA256   string                                 `json:"before_results_sha256"`
 	AfterResultsSHA256    string                                 `json:"after_results_sha256"`
 	QueryParityOK         bool                                   `json:"query_parity_ok"`
+	OracleVersion         string                                 `json:"oracle_version"`
+	TextPrecisionAtK      float64                                `json:"text_precision_at_k"`
+	HybridPrecisionAtK    float64                                `json:"hybrid_precision_at_k"`
+	QualityOracleOK       bool                                   `json:"quality_oracle_ok"`
 	Resource              resourceSnapshot                       `json:"resource"`
 }
 
@@ -335,6 +339,10 @@ type queryReport struct {
 	Samples          int                            `json:"samples"`
 	Results          int                            `json:"results"`
 	ResultsSHA256    string                         `json:"results_sha256"`
+	OracleVersion    string                         `json:"oracle_version"`
+	RelevantResults  int                            `json:"relevant_results"`
+	PrecisionAtK     float64                        `json:"precision_at_k"`
+	QualityOracleOK  bool                           `json:"quality_oracle_ok"`
 	CorrectnessOK    bool                           `json:"correctness_ok"`
 	IsolationOK      bool                           `json:"isolation_ok"`
 	Latency          latencySummary                 `json:"latency"`
@@ -401,6 +409,10 @@ type maintenanceReport struct {
 	BeforeResultsSHA256  string                                 `json:"before_results_sha256"`
 	AfterResultsSHA256   string                                 `json:"after_results_sha256"`
 	ReopenParityOK       bool                                   `json:"reopen_parity_ok"`
+	OracleVersion        string                                 `json:"oracle_version"`
+	BeforePrecisionAtK   float64                                `json:"before_precision_at_k"`
+	AfterPrecisionAtK    float64                                `json:"after_precision_at_k"`
+	QualityOracleOK      bool                                   `json:"quality_oracle_ok"`
 	Resource             resourceSnapshot                       `json:"resource"`
 }
 
@@ -1568,13 +1580,20 @@ func runTextQueryRow(col *collections.Collection, cfg config, name, shape string
 	if allowFetch {
 		boundary = "warm bounded final top-k document fetch"
 	}
-	return queryReport{
+	quality := evaluateTextQueryQuality(name, cfg.rows, cfg.topK, last.Results)
+	row := queryReport{
 		Name: name, Status: "passed", Modality: "text", QueryShape: shape, Boundary: boundary,
 		Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.rows, Samples: len(durations),
-		Results: len(last.Results), ResultsSHA256: expectedDigest, CorrectnessOK: true, IsolationOK: true,
+		Results: len(last.Results), ResultsSHA256: expectedDigest, CorrectnessOK: quality.OK, IsolationOK: true,
+		OracleVersion: scaleRelevanceOracleVersion, RelevantResults: quality.Relevant, PrecisionAtK: quality.Precision, QualityOracleOK: quality.OK,
 		Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), TextStats: &stats,
 		GuardrailOK: guard.OK, GuardrailFailure: guard.Failure, Resource: captureResource(),
-	}, guard, nil
+	}
+	if !quality.OK {
+		row.Status, row.Failure, row.GuardrailOK = "failed", quality.Failure, false
+		guard = guardrailResult{Name: name, OK: false, Failure: quality.Failure}
+	}
+	return row, guard, nil
 }
 
 func failedTextQueryRow(cfg config, name, shape string, response collections.TextSearchResponse, durations []int64, err error) queryReport {
@@ -1647,18 +1666,24 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	if allowFetch {
 		boundary = "warm hybrid candidate generation/fusion plus bounded final top-k fetch"
 	}
+	quality := evaluateHybridQueryQuality(name, cfg.rows, cfg.topK, last.Results)
 	row := queryReport{
 		Name: name, Status: "passed", Modality: "hybrid", QueryShape: shape, Boundary: boundary,
 		Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: int(stats.TextCandidatesRequested),
 		PostingsBudget: cfg.hybridMaxPostingsScanned,
 		CollapseCap:    opts.MaxChunksPerParent, Samples: len(durations), Results: len(last.Results),
-		ResultsSHA256: expectedDigest, CorrectnessOK: true, IsolationOK: hybridIsolationOK(last.Results, opts.ScalarFilter),
+		ResultsSHA256: expectedDigest, CorrectnessOK: quality.OK, IsolationOK: hybridIsolationOK(last.Results, opts.ScalarFilter),
+		OracleVersion: scaleRelevanceOracleVersion, RelevantResults: quality.Relevant, PrecisionAtK: quality.Precision, QualityOracleOK: quality.OK,
 		Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats,
 		GuardrailOK: guard.OK, GuardrailFailure: guard.Failure, Resource: captureResource(),
 	}
 	if !row.IsolationOK {
 		row.Status, row.Failure, row.GuardrailOK = "failed", "scalar isolation leakage", false
 		guard = guardrailResult{Name: name, OK: false, Failure: row.Failure}
+	}
+	if !row.QualityOracleOK {
+		row.Status, row.Failure, row.GuardrailOK = "failed", quality.Failure, false
+		guard = guardrailResult{Name: name, OK: false, Failure: quality.Failure}
 	}
 	return withAllocationSummary(row, cfg, allocations), guard, nil
 }
@@ -1901,6 +1926,10 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 		return reopenReport{}, fixture, fmt.Errorf("pre-reopen text probe: results=%d err=%v", len(before.Results), err)
 	}
 	beforeDigest := hashTextResults(before.Results)
+	beforeQuality := evaluateTextQueryQuality(queryRowTextCommon, cfg.rows, cfg.topK, before.Results)
+	if !beforeQuality.OK {
+		return reopenReport{}, fixture, errors.New(beforeQuality.Failure)
+	}
 	closeStart := time.Now()
 	if err := fixture.db.Close(); err != nil {
 		return reopenReport{}, fixture, fmt.Errorf("close for reopen: %w", err)
@@ -1931,12 +1960,19 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 		_ = db.Close()
 		return reopenReport{}, fixture, fmt.Errorf("reopen text parity failed before=%s after=%s stats=%+v results=%d", beforeDigest, afterDigest, after.Stats, len(after.Results))
 	}
+	afterQuality := evaluateTextQueryQuality(queryRowTextCommon, cfg.rows, cfg.topK, after.Results)
+	if !afterQuality.OK {
+		_ = db.Close()
+		return reopenReport{}, fixture, errors.New(afterQuality.Failure)
+	}
 	stats, _, err := collectTextStorageStats(col, cfg.rows)
 	if err != nil {
 		_ = db.Close()
 		return reopenReport{}, fixture, fmt.Errorf("reopen text storage stats: %w", err)
 	}
 	var vectorStatus *collections.VectorIndexStatus
+	hybridPrecision := 0.0
+	qualityOK := beforeQuality.OK && afterQuality.OK
 	if cfg.includeVector {
 		status, err := col.VectorIndexStatus(vectorIndexName)
 		if err != nil {
@@ -1957,6 +1993,13 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 			_ = db.Close()
 			return reopenReport{}, fixture, fmt.Errorf("reopen hybrid vector guardrail failed stats=%+v results=%d err=%v", vectorProbe.Stats, len(vectorProbe.Results), err)
 		}
+		vectorQuality := evaluateHybridQueryQuality(queryRowHybridTextVector, cfg.rows, cfg.topK, vectorProbe.Results)
+		if !vectorQuality.OK {
+			_ = db.Close()
+			return reopenReport{}, fixture, errors.New(vectorQuality.Failure)
+		}
+		hybridPrecision = vectorQuality.Precision
+		qualityOK = qualityOK && vectorQuality.OK
 	}
 	bytes, err := dirSize(fixture.dir)
 	if err != nil {
@@ -1972,6 +2015,8 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 		LiveRows: stats.V2LiveDocuments, CountOK: stats.V2LiveDocuments == uint64(cfg.rows),
 		BeforeResultsSHA256: beforeDigest, AfterResultsSHA256: afterDigest,
 		QueryParityOK: beforeDigest == afterDigest, Resource: captureResource(),
+		OracleVersion: scaleRelevanceOracleVersion, TextPrecisionAtK: afterQuality.Precision,
+		HybridPrecisionAtK: hybridPrecision, QualityOracleOK: qualityOK,
 	}, fixture, nil
 }
 
@@ -2180,6 +2225,11 @@ func runMaintenanceProbe(cfg config) (maintenanceReport, error) {
 		maintenance.PostconditionFailure = firstNonEmpty(guard.Failure, "post-rewrite search returned no results")
 	}
 	maintenance.BeforeResultsSHA256 = hashTextResults(probe.Results)
+	beforeQuality := evaluateTextQueryQuality(queryRowTextCommon, cfg.rows, cfg.topK, probe.Results)
+	if !beforeQuality.OK {
+		maintenance.PostconditionOK = false
+		maintenance.PostconditionFailure = beforeQuality.Failure
+	}
 	if err := db.Close(); err != nil {
 		return maintenanceReport{}, fmt.Errorf("close maintenance fixture: %w", err)
 	}
@@ -2197,6 +2247,15 @@ func runMaintenanceProbe(cfg config) (maintenanceReport, error) {
 		return maintenanceReport{}, fmt.Errorf("maintenance query after reopen: %w", err)
 	}
 	maintenance.AfterResultsSHA256 = hashTextResults(after.Results)
+	afterQuality := evaluateTextQueryQuality(queryRowTextCommon, cfg.rows, cfg.topK, after.Results)
+	if !afterQuality.OK {
+		maintenance.PostconditionOK = false
+		maintenance.PostconditionFailure = afterQuality.Failure
+	}
+	maintenance.OracleVersion = scaleRelevanceOracleVersion
+	maintenance.BeforePrecisionAtK = beforeQuality.Precision
+	maintenance.AfterPrecisionAtK = afterQuality.Precision
+	maintenance.QualityOracleOK = beforeQuality.OK && afterQuality.OK
 	maintenance.ReopenParityOK = maintenance.BeforeResultsSHA256 != "" && maintenance.BeforeResultsSHA256 == maintenance.AfterResultsSHA256
 	if !maintenance.ReopenParityOK {
 		maintenance.PostconditionOK = false
@@ -2741,17 +2800,17 @@ func renderMarkdown(rep report) string {
 
 	if len(rep.Queries) != 0 {
 		fmt.Fprintf(&b, "## Retrieval latency\n\n")
-		fmt.Fprintf(&b, "| row | status | modality | boundary | p50 | p95 | p99 | mean | ops/sec | results | result digest | guardrail | key counters |\n")
-		fmt.Fprintf(&b, "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |\n")
+		fmt.Fprintf(&b, "| row | status | modality | boundary | p50 | p95 | p99 | mean | ops/sec | results | precision@K | oracle | result digest | guardrail | key counters |\n")
+		fmt.Fprintf(&b, "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |\n")
 		for _, row := range rep.Queries {
-			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %s | %.1f | %d | `%s` | %s | %s |\n", row.Name, row.Status, row.Modality, markdownTable(row.Boundary), formatNS(row.Latency.P50NS), formatNS(row.Latency.P95NS), formatNS(row.Latency.P99NS), formatNS(int64(row.Latency.MeanNS)), row.OpsPerSec, row.Results, row.ResultsSHA256, guardrailLabel(row.GuardrailOK, row.GuardrailFailure), markdownTable(queryCounters(row)))
+			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %s | %.1f | %d | %.3f | `%s` | `%s` | %s | %s |\n", row.Name, row.Status, row.Modality, markdownTable(row.Boundary), formatNS(row.Latency.P50NS), formatNS(row.Latency.P95NS), formatNS(row.Latency.P99NS), formatNS(int64(row.Latency.MeanNS)), row.OpsPerSec, row.Results, row.PrecisionAtK, row.OracleVersion, row.ResultsSHA256, guardrailLabel(row.GuardrailOK, row.GuardrailFailure), markdownTable(queryCounters(row)))
 		}
 		fmt.Fprintf(&b, "\n")
 	}
 
 	if rep.Reopen != nil {
 		fmt.Fprintf(&b, "## Reopen\n\n")
-		fmt.Fprintf(&b, "Close `%.3fs`, open `%.3fs`, open collection `%.3fs`, probe `%.3fs`, total `%.3fs`; count `%d/%d` parity `%v`; query parity `%v` (`%s`).\n\n", rep.Reopen.CloseSeconds, rep.Reopen.OpenSeconds, rep.Reopen.OpenCollectionSeconds, rep.Reopen.ProbeSeconds, rep.Reopen.TotalSeconds, rep.Reopen.LiveRows, rep.Reopen.ExpectedRows, rep.Reopen.CountOK, rep.Reopen.QueryParityOK, rep.Reopen.AfterResultsSHA256)
+		fmt.Fprintf(&b, "Close `%.3fs`, open `%.3fs`, open collection `%.3fs`, probe `%.3fs`, total `%.3fs`; count `%d/%d` parity `%v`; query parity `%v` (`%s`); text precision@K `%.3f`, hybrid precision@K `%.3f`, oracle `%s`/`%v`.\n\n", rep.Reopen.CloseSeconds, rep.Reopen.OpenSeconds, rep.Reopen.OpenCollectionSeconds, rep.Reopen.ProbeSeconds, rep.Reopen.TotalSeconds, rep.Reopen.LiveRows, rep.Reopen.ExpectedRows, rep.Reopen.CountOK, rep.Reopen.QueryParityOK, rep.Reopen.AfterResultsSHA256, rep.Reopen.TextPrecisionAtK, rep.Reopen.HybridPrecisionAtK, rep.Reopen.OracleVersion, rep.Reopen.QualityOracleOK)
 	}
 	if rep.Concurrent != nil {
 		fmt.Fprintf(&b, "## Concurrent serving/write sanity\n\n")
@@ -2759,7 +2818,7 @@ func renderMarkdown(rep report) string {
 	}
 	if rep.Maintenance != nil {
 		fmt.Fprintf(&b, "## Maintenance/rewrite\n\n")
-		fmt.Fprintf(&b, "Updates `%d` in `%d` atomic batch call(s) of at most `%d` documents in `%.3fs`, deletes `%d` in `%.3fs`, rewrite `%.3fs`, checkpoint `%.3fs`. Rewrite read `%d` blocks, wrote `%d`, deleted `%d`, purged stale postings `%d`; postcondition %s; checkpoint/reopen query parity `%v`.\n\n", rep.Maintenance.Updates, rep.Maintenance.UpdateBatchCalls, rep.Maintenance.UpdateBatchSize, rep.Maintenance.UpdateSeconds, rep.Maintenance.Deletes, rep.Maintenance.DeleteSeconds, rep.Maintenance.RewriteSeconds, rep.Maintenance.CheckpointSeconds, rep.Maintenance.Stats.PostingBlocksRead, rep.Maintenance.Stats.PostingBlocksWritten, rep.Maintenance.Stats.PostingBlocksDeleted, rep.Maintenance.Stats.StalePostingsPurged, guardrailLabel(rep.Maintenance.PostconditionOK, rep.Maintenance.PostconditionFailure), rep.Maintenance.ReopenParityOK)
+		fmt.Fprintf(&b, "Updates `%d` in `%d` atomic batch call(s) of at most `%d` documents in `%.3fs`, deletes `%d` in `%.3fs`, rewrite `%.3fs`, checkpoint `%.3fs`. Rewrite read `%d` blocks, wrote `%d`, deleted `%d`, purged stale postings `%d`; postcondition %s; checkpoint/reopen query parity `%v`; pre/post-reopen precision@K `%.3f`/`%.3f`, oracle `%s`/`%v`.\n\n", rep.Maintenance.Updates, rep.Maintenance.UpdateBatchCalls, rep.Maintenance.UpdateBatchSize, rep.Maintenance.UpdateSeconds, rep.Maintenance.Deletes, rep.Maintenance.DeleteSeconds, rep.Maintenance.RewriteSeconds, rep.Maintenance.CheckpointSeconds, rep.Maintenance.Stats.PostingBlocksRead, rep.Maintenance.Stats.PostingBlocksWritten, rep.Maintenance.Stats.PostingBlocksDeleted, rep.Maintenance.Stats.StalePostingsPurged, guardrailLabel(rep.Maintenance.PostconditionOK, rep.Maintenance.PostconditionFailure), rep.Maintenance.ReopenParityOK, rep.Maintenance.BeforePrecisionAtK, rep.Maintenance.AfterPrecisionAtK, rep.Maintenance.OracleVersion, rep.Maintenance.QualityOracleOK)
 	}
 	if len(rep.Bottlenecks) != 0 {
 		fmt.Fprintf(&b, "## Ranked bottlenecks / follow-ups\n\n")
