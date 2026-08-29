@@ -471,6 +471,21 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.PhaseAttribution = nil
 			a.RawEvidence["treedb"] = raw
 		}},
+		{"missing TreeDB batch correlation contract", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.UpsertBatchCorrelationContract = nil
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"inflated TreeDB batch correlation cardinality bound", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.UpsertBatchCorrelationContract.MaximumRecordCount++
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"completed diagnostics-enabled TreeDB evidence omits batch correlations", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.Diagnostics = json.RawMessage(`{"enabled":true}`)
+			a.RawEvidence["treedb"] = raw
+		}},
 		{"missing TreeDB phase boundary", func(a *minimaArtifact) {
 			raw := a.RawEvidence["treedb"]
 			raw.PhaseAttribution.Phases = raw.PhaseAttribution.Phases[1:]
@@ -784,6 +799,13 @@ func validMinimaArtifact() minimaArtifact {
 			evidence := rawEvidence[backend.Name]
 			phaseAttribution := minimaTestPhaseAttribution()
 			evidence.PhaseAttribution = &phaseAttribution
+			evidence.UpsertBatchCorrelationContract = &minimaRawBatchCorrelationContract{
+				Schema:                minimaBatchCorrelationSchema,
+				MaximumRecordCount:    minimaMaximumBatchCorrelationRecords(manifest),
+				CompactRecordMaxBytes: minimaCompactBatchCorrelationMaxBytes,
+				FullStatsRetention:    []string{"failed", "timeout", "slow", "profile_captured"},
+			}
+			evidence.Diagnostics = json.RawMessage(`{"enabled":false}`)
 			evidence.ServiceLog = minimaRawServiceLog{
 				Path: "/tmp/treedb-service.log", Tail: "TreeDB Document Service listening", MaxTailBytes: 64 << 10,
 			}
@@ -1185,6 +1207,136 @@ func TestMinimaPhaseUnattributedBound(t *testing.T) {
 	}
 }
 
+func TestMinimaBatchCorrelationContract(t *testing.T) {
+	artifact := validMinimaArtifact()
+	raw := artifact.RawEvidence["treedb"]
+	omitted := raw
+	omitted.Diagnostics = json.RawMessage(`{"enabled":true}`)
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, omitted, true, "http://127.0.0.1/debug"); err == nil {
+		t.Fatal("completed diagnostics-enabled artifact omitted batch correlations")
+	}
+	stripped := raw
+	strippedContract := *stripped.UpsertBatchCorrelationContract
+	stripped.UpsertBatchCorrelationContract = &strippedContract
+	stripped.Diagnostics = json.RawMessage(`{"enabled":false}`)
+	stripped.UpsertBatchCorrelations = nil
+	stripped.UpsertBatchCorrelationContract.RecordCount = 0
+	stripped.UpsertBatchCorrelationContract.CompactCompletedRecords = 0
+	stripped.UpsertBatchCorrelationContract.FullDiagnosticRecords = 0
+	if err := validateMinimaTreeDBBatchCorrelations(
+		artifact.Manifest, stripped, true, "http://127.0.0.1/debug",
+	); err == nil {
+		t.Fatal("completed artifact contradicted the configured diagnostics mode")
+	}
+	raw.UpsertBatchCorrelations = []json.RawMessage{json.RawMessage(
+		`{"sequence":0,"operation":"test","scenario":"test","batch_start":0,"rows":1,"outcome":"completed","stats_retention":"compact_completed","profile_capture":{"status":"not_triggered"}}`,
+	)}
+	raw.UpsertBatchCorrelationContract.RecordCount = 1
+	raw.UpsertBatchCorrelationContract.CompactCompletedRecords = 1
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false, "http://127.0.0.1/debug"); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := artifact.RawEvidence["treedb"]
+	duplicateContract := *duplicate.UpsertBatchCorrelationContract
+	duplicate.UpsertBatchCorrelationContract = &duplicateContract
+	duplicate.Diagnostics = json.RawMessage(`{"enabled":true}`)
+	duplicate.UpsertBatchCorrelations = make(
+		[]json.RawMessage, duplicate.UpsertBatchCorrelationContract.MaximumRecordCount,
+	)
+	for index := range duplicate.UpsertBatchCorrelations {
+		duplicate.UpsertBatchCorrelations[index] = raw.UpsertBatchCorrelations[0]
+	}
+	duplicate.UpsertBatchCorrelationContract.RecordCount = len(duplicate.UpsertBatchCorrelations)
+	duplicate.UpsertBatchCorrelationContract.CompactCompletedRecords = len(duplicate.UpsertBatchCorrelations)
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, duplicate, true, "http://127.0.0.1/debug"); err == nil {
+		t.Fatal("completed diagnostic correlations duplicated one batch identity")
+	}
+	failedComplete := artifact.RawEvidence["treedb"]
+	failedCompleteContract := *failedComplete.UpsertBatchCorrelationContract
+	failedComplete.UpsertBatchCorrelationContract = &failedCompleteContract
+	failedComplete.Diagnostics = json.RawMessage(`{"enabled":true}`)
+	expectedIdentities := minimaExpectedBatchCorrelationIdentities(artifact.Manifest)
+	failedComplete.UpsertBatchCorrelations = make([]json.RawMessage, 0, len(expectedIdentities))
+	for identity := range expectedIdentities {
+		correlation := map[string]any{
+			"sequence":        len(failedComplete.UpsertBatchCorrelations),
+			"operation":       identity.Operation,
+			"scenario":        identity.Scenario,
+			"batch_start":     identity.BatchStart,
+			"rows":            identity.Rows,
+			"outcome":         "completed",
+			"stats_retention": "compact_completed",
+			"profile_capture": map[string]any{"status": "not_triggered"},
+		}
+		if len(failedComplete.UpsertBatchCorrelations) == 0 {
+			correlation["outcome"] = "failed"
+			correlation["capture_reason"] = "slow"
+			correlation["stats_retention"] = "full_diagnostic"
+			correlation["before_stats"] = map[string]any{"status": "captured"}
+			correlation["after_stats"] = map[string]any{"status": "captured"}
+			correlation["profile_capture"] = map[string]any{"status": "captured"}
+		}
+		encoded, err := json.Marshal(correlation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		failedComplete.UpsertBatchCorrelations = append(failedComplete.UpsertBatchCorrelations, encoded)
+	}
+	failedComplete.UpsertBatchCorrelationContract.RecordCount = len(expectedIdentities)
+	failedComplete.UpsertBatchCorrelationContract.CompactCompletedRecords = len(expectedIdentities) - 1
+	failedComplete.UpsertBatchCorrelationContract.FullDiagnosticRecords = 1
+	if err := validateMinimaTreeDBBatchCorrelations(
+		artifact.Manifest, failedComplete, true, "http://127.0.0.1/debug",
+	); err == nil {
+		t.Fatal("completed diagnostic correlations accepted a failed batch")
+	}
+	raw.UpsertBatchCorrelations[0] = json.RawMessage(
+		`{"sequence":0,"operation":"test","scenario":"test","batch_start":0,"rows":1,"outcome":"completed","stats_retention":"compact_completed","capture_reason":"slow","profile_capture":{"status":"not_triggered"}}`,
+	)
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false, "http://127.0.0.1/debug"); err == nil {
+		t.Fatal("compact batch correlation declared a diagnostic capture reason")
+	}
+	raw.UpsertBatchCorrelations[0] = json.RawMessage(
+		strings.Repeat(" ", minimaCompactBatchCorrelationMaxBytes+1) +
+			`{"sequence":0,"operation":"test","scenario":"test","batch_start":0,"rows":1,"outcome":"completed","stats_retention":"compact_completed","profile_capture":{"status":"not_triggered"}}`,
+	)
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false, "http://127.0.0.1/debug"); err == nil {
+		t.Fatal("oversized raw compact batch correlation was accepted")
+	}
+	raw.UpsertBatchCorrelations[0] = json.RawMessage(
+		`{"sequence":0,"operation":"test","scenario":"test","batch_start":0,"rows":1,"outcome":"completed","stats_retention":"compact_completed","before_stats":{"wide":true},"profile_capture":{"status":"not_triggered"}}`,
+	)
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false, "http://127.0.0.1/debug"); err == nil {
+		t.Fatal("compact batch correlation retained full stats")
+	}
+	raw.UpsertBatchCorrelations[0] = json.RawMessage(
+		`{"sequence":0,"operation":"test","scenario":"test","batch_start":0,"rows":1,"outcome":"completed","stats_retention":"full_diagnostic","capture_reason":"slow","before_stats":{"wide":true},"after_stats":{"wide":true},"profile_capture":{"status":"captured"}}`,
+	)
+	raw.UpsertBatchCorrelationContract.CompactCompletedRecords = 0
+	raw.UpsertBatchCorrelationContract.FullDiagnosticRecords = 1
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false, "http://127.0.0.1/debug"); err != nil {
+		t.Fatal(err)
+	}
+	raw.UpsertBatchCorrelations[0] = json.RawMessage(
+		`{"sequence":0,"operation":"test","scenario":"test","batch_start":0,"rows":1,"outcome":"completed","stats_retention":"full_diagnostic","capture_reason":"slow","before_stats":{"wide":true},"after_stats":{"wide":true},"profile_capture":{}}`,
+	)
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false, "http://127.0.0.1/debug"); err == nil {
+		t.Fatal("full diagnostic batch correlation without an explicit profile status was accepted")
+	}
+	raw.UpsertBatchCorrelations[0] = json.RawMessage(
+		`{"sequence":0,"operation":"test","scenario":"test","batch_start":0,"rows":1,"outcome":"completed","stats_retention":"full_diagnostic","capture_reason":"slow","before_stats":null,"after_stats":null,"profile_capture":{"status":"captured"}}`,
+	)
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false, "http://127.0.0.1/debug"); err == nil {
+		t.Fatal("full diagnostic batch correlation with null stats was accepted")
+	}
+	raw.UpsertBatchCorrelations[0] = json.RawMessage(
+		`{"sequence":0,"operation":"test","scenario":"test","batch_start":0,"rows":1,"outcome":"timeout","stats_retention":"full_diagnostic","capture_reason":"failed","before_stats":{"wide":true},"after_stats":{"wide":true},"profile_capture":{"status":"captured"}}`,
+	)
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false, "http://127.0.0.1/debug"); err == nil {
+		t.Fatal("partial diagnostic batch outcome contradicted its capture reason")
+	}
+}
+
 func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	tree, qdrant := minimaPartialBackendEvidence(t)
 	if qdrant.RawEvidence["qdrant"].PhaseAttribution != nil {
@@ -1226,6 +1378,9 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	if combined.RawEvidence["qdrant"].PhaseAttribution != nil {
 		t.Fatal("combined Qdrant raw evidence gained TreeDB phase attribution")
 	}
+	if combined.RawEvidence["treedb"].UpsertBatchCorrelationContract == nil {
+		t.Fatal("combined TreeDB raw evidence dropped batch correlation contract")
+	}
 	var wire struct {
 		RawEvidence map[string]map[string]json.RawMessage `json:"backend_raw_evidence"`
 	}
@@ -1238,6 +1393,12 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	}
 	if _, leaked := treeRaw["readiness"]; leaked {
 		t.Fatal("combined TreeDB raw evidence leaked Qdrant readiness")
+	}
+	if _, ok := treeRaw["upsert_batch_correlation_contract"]; !ok {
+		t.Fatal("combined TreeDB raw evidence dropped batch correlation contract")
+	}
+	if _, leaked := qdrantRaw["upsert_batch_correlation_contract"]; leaked {
+		t.Fatal("combined Qdrant raw evidence gained TreeDB batch correlation contract")
 	}
 	if _, leaked := qdrantRaw["phase_attribution"]; leaked {
 		t.Fatal("combined Qdrant raw evidence serialized TreeDB phase attribution")
