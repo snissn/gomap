@@ -198,10 +198,6 @@ func TestVectorIndexRebuildAcquiresAdmissionBeforeMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build vector index: %v", err)
 	}
-	peer, err := NewCollectionManager(d).OpenCollection(col.collectionName())
-	if err != nil {
-		t.Fatalf("open peer collection: %v", err)
-	}
 
 	mutation := col.lockMutation()
 	mutationLocked := true
@@ -223,7 +219,7 @@ func TestVectorIndexRebuildAcquiresAdmissionBeforeMutation(t *testing.T) {
 
 	inserted := make(chan error, 1)
 	go func() {
-		_, err := peer.Insert([]byte("b"), []byte(`{"embedding":[0,1]}`))
+		_, err := col.Insert([]byte("b"), []byte(`{"embedding":[0,1]}`))
 		inserted <- err
 	}()
 	select {

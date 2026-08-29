@@ -899,7 +899,7 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) error {
 	if index == nil {
 		return errors.New("collections: vector index is nil")
 	}
-	unlockSchema := c.lockCollectionSchemaRead()
+	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
 	if _, err := c.refreshNativeVectorIndexDeclaration(index.name); err != nil {
 		return err
@@ -915,7 +915,7 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) error {
 }
 
 func (c *Collection) registerBuiltVectorIndex(index *VectorIndex) error {
-	unlockSchema := c.lockCollectionSchemaRead()
+	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
 	coord := c.collectionSchemaCoordinator()
 	if coord != nil {
@@ -5240,7 +5240,7 @@ func (idx *VectorIndex) Rebuild() error {
 	if c == nil {
 		return errCollectionNil
 	}
-	unlockSchema := c.lockCollectionSchemaRead()
+	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
 	if _, err := c.refreshNativeVectorIndexDeclaration(idx.name); err != nil {
 		return err

@@ -4366,6 +4366,8 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
 		return nil, err
 	}
@@ -4373,8 +4375,6 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 		return nil, err
 	}
 	if len(c.meta.Indexes) == 0 && len(c.meta.VectorIndexes) == 0 && len(c.meta.TextIndexes) == 0 && !c.db.CommandWALEnabled() {
-		unlockSchema := c.lockCollectionSchemaRead()
-		defer unlockSchema()
 		unlockCoverage := c.lockVectorIndexCoverageMutation()
 		defer unlockCoverage()
 		if c.registeredAdHocVectorIndexCount() > 0 {
@@ -4389,17 +4389,7 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 		}
 		return c.insertOneNoIndexBuffered(id, document)
 	}
-	ids, err := c.InsertBatch([][]byte{id}, [][]byte{document})
-	if err != nil {
-		if errors.Is(err, ErrCommitAmbiguous) && len(ids) == 1 {
-			return ids[0], err
-		}
-		return nil, err
-	}
-	if len(ids) != 1 {
-		return nil, errors.New("collections: insert returned no document id")
-	}
-	return ids[0], nil
+	return c.insertOneViaBatchSchemaLocked(id, document)
 }
 
 // Flush publishes buffered collection-local writes for visibility and drains
