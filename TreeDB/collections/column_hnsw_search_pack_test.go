@@ -96,7 +96,17 @@ func TestColumnHNSWSearchPackStreamedRowsMatchOracle4427(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		input columnHNSWSearchPackBuildInput
-	}{{name: "v1", input: testColumnHNSWSearchPackInput2312()}, {name: "v3", input: testColumnHNSWSearchPackAuxiliaryInput4106()}} {
+		rows  []columnVectorGraphAssetRow
+	}{
+		{name: "v1", input: testColumnHNSWSearchPackInput2312(), rows: rows},
+		{name: "v3", input: testColumnHNSWSearchPackAuxiliaryInput4106(), rows: rows},
+		{name: "empty-high-stride", input: columnHNSWSearchPackBuildInput{
+			Rows: 0, Dimensions: 20_000, VectorStride: 20_000,
+			M: 16, EfConstruction: 128, EfSearch: 64, EntryOrdinal: -1, MaxLayer: -1,
+			BaseIdentity:      testColumnHNSWSearchPackInput2312().BaseIdentity,
+			DocumentIDOffsets: []uint64{0},
+		}},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			want, err := encodeColumnHNSWSearchPack(tc.input)
 			if err != nil {
@@ -108,7 +118,7 @@ func TestColumnHNSWSearchPackStreamedRowsMatchOracle4427(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = file.Close() }()
-			written, err := writeColumnHNSWSearchPackRowsWithBackpatch(file, func(p []byte) error { _, err := file.WriteAt(p, 0); return err }, tc.input, rows)
+			written, err := writeColumnHNSWSearchPackRowsWithBackpatch(file, func(p []byte) error { _, err := file.WriteAt(p, 0); return err }, tc.input, tc.rows)
 			if err != nil {
 				t.Fatal(err)
 			}
