@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -16,6 +17,8 @@ import (
 // chunkingScanMaxDocuments is the fail-closed cap for one parent# prefix.
 const chunkingScanMaxDocuments = math.MaxInt32
 
+var errBatchChunkIngestVectorIndexed = errors.New("collections: batch chunk ingest is text-only and does not support vector-indexed collections")
+
 // ChunkedIngestOptions tunes IngestChunkedDocument.
 type ChunkedIngestOptions struct {
 	// TextField names the parent document field holding the text to chunk.
@@ -25,7 +28,8 @@ type ChunkedIngestOptions struct {
 }
 
 type chunkedIngestHooks struct {
-	afterDelete func()
+	afterDelete    func()
+	afterBatchScan func()
 }
 
 func (o ChunkedIngestOptions) textField() string {
@@ -87,6 +91,12 @@ func chunkPlanDocs(children []chunkChild) [][]byte {
 
 // chunkedIngestPlan is the validated, mutation-free output of buildChunkPlan.
 type chunkedIngestPlan struct {
+	children []chunkChild
+}
+
+type chunkedDocumentBatchPlan struct {
+	parentID []byte
+	parent   []byte
 	children []chunkChild
 }
 
@@ -313,6 +323,195 @@ func (c *Collection) IngestChunkedDocument(parentID []byte, parentDocument []byt
 	return result, nil
 }
 
+// IngestChunkedDocuments stores a batch of text-only source documents through
+// one durable collection-root publication. It is the batch counterpart to
+// IngestChunkedDocument: child IDs remain deterministic (<parentID>#<ordinal>)
+// and results retain source input order.
+//
+// The complete batch — IDs (including duplicates), source document encoding,
+// text-field and metadata validation, and every child plan — validates before
+// the collection mutates. A successful call atomically replaces every supplied
+// parent and its children as one normal durable storage publication. If that
+// publication reports an ambiguous commit, callers must retry the complete
+// batch; it converges to the same parent/child IDs. Bounded callers may use one
+// call as their atomicity unit.
+//
+// This deliberately has no embedding or vector-index configuration: it is the
+// narrow public seam for pure text chunk ingestion and rejects collections
+// with vector indexes before mutation. It uses SourceDocument so callers share
+// the source-document metadata encoding contract with IngestSources.
+func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunking.Config, opts ChunkedIngestOptions) ([]ChunkedIngestResult, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	if len(sources) == 0 {
+		return nil, nil
+	}
+
+	plans := make([]chunkedDocumentBatchPlan, len(sources))
+	seen := make(map[string]struct{}, len(sources))
+	for i, source := range sources {
+		if err := chunking.ValidateParentID(string(source.ID)); err != nil {
+			return nil, fmt.Errorf("collections: chunked ingest batch source %d (%q): %w", i, source.ID, err)
+		}
+		key := string(source.ID)
+		if _, duplicate := seen[key]; duplicate {
+			return nil, fmt.Errorf("collections: chunked ingest batch has duplicate parent ID %q at source %d", source.ID, i)
+		}
+		seen[key] = struct{}{}
+		parent, err := buildIngestParentDocument(source)
+		if err != nil {
+			return nil, fmt.Errorf("collections: chunked ingest batch source %d (%q): %w", i, source.ID, err)
+		}
+		plan, err := c.buildChunkPlan(source.ID, parent, cfg, opts)
+		if err != nil {
+			return nil, fmt.Errorf("collections: chunked ingest batch source %d (%q): %w", i, source.ID, err)
+		}
+		plans[i] = chunkedDocumentBatchPlan{parentID: bytes.Clone(source.ID), parent: parent, children: plan.children}
+	}
+
+	parentIDs := make([][]byte, len(plans))
+	for i := range plans {
+		parentIDs[i] = plans[i].parentID
+	}
+	lifecycleLocks, err := c.lockChunkParentLifecycles(context.Background(), parentIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer lifecycleLocks.releaseAll()
+	unlockSchema := c.lockCollectionSchemaWrite()
+	defer unlockSchema()
+	unlockAdHocAdmission := c.lockAdHocVectorAdmissionRead()
+	defer unlockAdHocAdmission()
+	unlockNativeAdmission := c.lockNativeVectorAdmissionWrite()
+	defer unlockNativeAdmission()
+	if c.registeredAdHocVectorIndexCount() > 0 {
+		return nil, errBatchChunkIngestVectorIndexed
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(snap, c.collectionName())
+	_ = snap.Close()
+	if err != nil {
+		return nil, fmt.Errorf("collections: load chunked ingest catalog: %w", err)
+	}
+	if catalog == nil {
+		return nil, errCollectionNotFound
+	}
+	if len(catalog.meta.VectorIndexes) > 0 {
+		return nil, errBatchChunkIngestVectorIndexed
+	}
+	if err := c.flushCollectionWriteDomainsWithVectorAdmissionLocked(); err != nil {
+		return nil, fmt.Errorf("collections: publish chunk write domains before batch replacement: %w", err)
+	}
+	replaced, err := c.replaceChunkedDocumentBatchLocked(plans, opts.hooks)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]ChunkedIngestResult, len(plans))
+	for i, plan := range plans {
+		childIDs := make([][]byte, len(plan.children))
+		for j, child := range plan.children {
+			childIDs[j] = bytes.Clone(child.id)
+		}
+		results[i] = ChunkedIngestResult{
+			parentID: bytes.Clone(plan.parentID),
+			ChildIDs: childIDs,
+			Replaced: replaced[i],
+		}
+	}
+	return results, nil
+}
+
+// replaceChunkedDocumentBatchLocked discovers stale children from the same
+// snapshot used to plan each publication attempt. The caller holds the
+// collection schema write lock from the authoritative vector-index preflight
+// through peer-domain flush and publication, so another handle cannot hide a
+// buffered write from the snapshot or publish one between the scan and
+// replacement.
+func (c *Collection) replaceChunkedDocumentBatchLocked(plans []chunkedDocumentBatchPlan, hooks *chunkedIngestHooks) ([]int, error) {
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, err
+	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	c.vectorIndexesMu.RLock()
+	defer c.vectorIndexesMu.RUnlock()
+	if len(c.vectorIndexes) > 0 {
+		return nil, errBatchChunkIngestVectorIndexed
+	}
+	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
+		return nil, fmt.Errorf("collections: publish chunk write domains before batch replacement: %w", err)
+	}
+
+	insertIDs := make([][]byte, 0, len(plans)*2)
+	insertDocs := make([][]byte, 0, len(plans)*2)
+	for _, plan := range plans {
+		for _, child := range plan.children {
+			insertIDs = append(insertIDs, child.id)
+			insertDocs = append(insertDocs, child.document)
+		}
+		insertIDs = append(insertIDs, plan.parentID)
+		insertDocs = append(insertDocs, plan.parent)
+	}
+
+	var replaced []int
+	hookCalled := false
+
+	var lastErr error
+	for attempt := range maxCollectionMutationRetries {
+		attemptReplaced := make([]int, len(plans))
+		deletePlanner := func(snap *backenddb.Snapshot, catalog *collectionCatalog) ([][]byte, error) {
+			if len(catalog.meta.VectorIndexes) > 0 {
+				return nil, errBatchChunkIngestVectorIndexed
+			}
+			attemptDeleteIDs := make([][]byte, 0, len(plans)*2)
+			for i, plan := range plans {
+				oldChildren, _, err := c.chunkChildrenAtSnapshot(plan.parentID, snap, catalog)
+				if err != nil {
+					return nil, err
+				}
+				attemptReplaced[i] = len(oldChildren)
+				attemptDeleteIDs = append(attemptDeleteIDs, oldChildren...)
+				attemptDeleteIDs = append(attemptDeleteIDs, plan.parentID)
+			}
+			if !hookCalled && hooks != nil && hooks.afterBatchScan != nil {
+				hookCalled = true
+				hooks.afterBatchScan()
+			}
+			return attemptDeleteIDs, nil
+		}
+		plan, err := c.buildSourceReplacementPlan(nil, insertIDs, insertDocs, deletePlanner, nil, nil)
+		if err != nil {
+			if isRetriableCollectionMutationError(err) {
+				lastErr = err
+				waitBeforeCollectionMutationRetry(attempt)
+				continue
+			}
+			return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", err)
+		}
+		replaced = attemptReplaced
+		publishErr := c.publishSourceReplacementPlan(plan, nil)
+		plan.close()
+		if isRetriableCollectionMutationError(publishErr) {
+			lastErr = publishErr
+			waitBeforeCollectionMutationRetry(attempt)
+			continue
+		}
+		if publishErr != nil {
+			return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", publishErr)
+		}
+		return replaced, nil
+	}
+	return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", collectionMutationRetryExhausted(lastErr))
+}
+
 func (c *Collection) upsertParentDocument(parentID []byte, parentDocument []byte) error {
 	current, err := c.Get(parentID)
 	if err != nil {
@@ -373,6 +572,16 @@ func (c *Collection) ChunkChildrenWithStats(parentID []byte) ([][]byte, ChunkChi
 }
 
 func (c *Collection) chunkChildrenUnlocked(parentID []byte) ([][]byte, ChunkChildrenScanStats, error) {
+	return c.chunkChildrenWithScanner(parentID, c.scanChunkDocumentsByParentPrefix)
+}
+
+func (c *Collection) chunkChildrenAtSnapshot(parentID []byte, snap *backenddb.Snapshot, catalog *collectionCatalog) ([][]byte, ChunkChildrenScanStats, error) {
+	return c.chunkChildrenWithScanner(parentID, func(prefix []byte, maxDocuments int, fn func(DocumentRecord) (bool, error)) (bool, ChunkChildrenScanStats, error) {
+		return c.scanChunkDocumentsByParentPrefixAtSnapshot(snap, catalog, prefix, maxDocuments, fn)
+	})
+}
+
+func (c *Collection) chunkChildrenWithScanner(parentID []byte, scan func([]byte, int, func(DocumentRecord) (bool, error)) (bool, ChunkChildrenScanStats, error)) ([][]byte, ChunkChildrenScanStats, error) {
 	prefix := append(append([]byte(nil), parentID...), '#')
 	ordinals := map[int][]byte{}
 	inspect := func(record DocumentRecord) (bool, error) {
@@ -396,7 +605,7 @@ func (c *Collection) chunkChildrenUnlocked(parentID []byte) ([][]byte, ChunkChil
 		ordinals[meta.Ordinal] = bytes.Clone(id)
 		return true, nil
 	}
-	truncated, stats, err := c.scanChunkDocumentsByParentPrefix(prefix, chunkingScanMaxDocuments, inspect)
+	truncated, stats, err := scan(prefix, chunkingScanMaxDocuments, inspect)
 	if err != nil {
 		return nil, stats, err
 	}
@@ -442,6 +651,17 @@ func (c *Collection) scanChunkDocumentsByParentPrefix(prefix []byte, maxDocument
 	}
 	if catalog == nil {
 		return false, stats, errCollectionNotFound
+	}
+	return c.scanChunkDocumentsByParentPrefixAtSnapshot(snap, catalog, prefix, maxDocuments, fn)
+}
+
+func (c *Collection) scanChunkDocumentsByParentPrefixAtSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, prefix []byte, maxDocuments int, fn func(DocumentRecord) (bool, error)) (bool, ChunkChildrenScanStats, error) {
+	var stats ChunkChildrenScanStats
+	if snap == nil || catalog == nil {
+		return false, stats, fmt.Errorf("collections: chunk child snapshot and catalog are required")
+	}
+	if len(prefix) == 0 || maxDocuments <= 0 || fn == nil {
+		return false, stats, fmt.Errorf("collections: chunk child prefix, positive bound, and callback are required")
 	}
 	it, err := collectionIteratorAtCatalogRoot(
 		snap,
