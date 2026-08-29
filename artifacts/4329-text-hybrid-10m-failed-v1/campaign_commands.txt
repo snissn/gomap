@@ -1,0 +1,6 @@
+Build once from the clean candidate and run the identical final shape through this runner:
+RUN_DIR=/Users/michaelseiler/orca/workspaces/gomap/4329-final-10m-v1 RUN_SMOKE=false RUN_1M=false RUN_10M=true APPROVE_10M=true PHASES=all KEEP_DB=false scripts/bench_text_hybrid_scale.sh
+Resolved direct command (the runner also captures command, binary/config hashes, context, logs, resources, status, cleanup, and validation):
+/Users/michaelseiler/orca/workspaces/gomap/4329-final-10m-v1/bin/treedb_text_hybrid_scale -out-dir /Users/michaelseiler/orca/workspaces/gomap/4329-final-10m-v1/scale_10m -rows 10000000 -batch-size 32768 -dims 16 -m 8 -ef-construction 128 -ef-search 128 -top-k 10 -candidate-limit 655360 -queries 3 -readers 4 -backfill-rows 10000000 -text-only-rows 10000000 -run-text-only=true -source-chunk-rows 10000000 -run-source-chunk=true -maintenance-updates 10000 -maintenance-deletes 5000 -keep-db=false -phases all -base-ref origin/main -base-sha 8fe678f057913d2af729b5ccf832f40713ea3b3c 
+/Users/michaelseiler/orca/workspaces/gomap/4329-final-10m-v1/bin/treedb_text_hybrid_scale -seal-artifact /Users/michaelseiler/orca/workspaces/gomap/4329-final-10m-v1/scale_10m
+/Users/michaelseiler/orca/workspaces/gomap/4329-final-10m-v1/bin/treedb_text_hybrid_scale -validate-artifact /Users/michaelseiler/orca/workspaces/gomap/4329-final-10m-v1/scale_10m

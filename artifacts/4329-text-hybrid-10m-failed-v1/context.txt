@@ -1,0 +1,15 @@
+timestamp=2026-08-29T10:19:55Z
+repo=/Users/michaelseiler/orca/workspaces/gomap/4329-10m-soak
+branch=codex/4329-10m-soak
+commit=c1c644ead34839570bcdcdac6ee4747cbbbaca6e
+tree_oid=fb8f32dac0889e22fee0bb9070a9f9c56d8939d1
+treedb_subtree_oid=848d455b64cdd13ba7d76e66a2934f32734eff40
+harness_subtree_oid=15a76c34bc05ca39d55f9bb003faa6054974bb6b
+base_ref=origin/main
+base_sha=8fe678f057913d2af729b5ccf832f40713ea3b3c
+go=go version go1.26.0 darwin/arm64
+uname=Darwin Michaels-Laptop.local 25.2.0 Darwin Kernel Version 25.2.0: Tue Nov 18 21:03:25 PST 2025; root:xnu-12377.61.12~1/RELEASE_ARM64_T8122 arm64
+cpu=Apple M3
+ncpu=8
+uptime= 0:19  up 2 days,  3:58, 7 users, load averages: 3.30 3.17 2.95
+filesystem=/dev/disk3s5   460Gi   381Gi    40Gi    91%    6.8M  424M    2%   /System/Volumes/Data

@@ -1,11 +1,11 @@
-# TreeDB text-v2/hybrid scale harness runbook (#2731)
+# TreeDB text-v2/hybrid scale harness runbook
 
-This runbook is the #2731 capture contract for 1M-10M TreeDB text-v2 and
-text+vector hybrid scale validation. The harness is intentionally B-tree-native:
-it uses collection text-v2 indexes, optional column-graph vectors, scalar indexes,
-normal TreeDB checkpoint/reopen, text-index rewrite, and ordinary storage cleanup.
-It does not introduce an external IR sidecar, standalone text assets, or a
-separate text-block GC path.
+This runbook defines the current #4329 capture contract for 1M-10M TreeDB
+text-v2 and text+vector hybrid scale validation. The harness is intentionally
+B-tree-native: it uses collection text-v2 indexes, optional column-graph vectors,
+scalar indexes, normal TreeDB checkpoint/reopen, text-index rewrite, and ordinary
+storage cleanup. It does not introduce an external IR sidecar, standalone text
+assets, or a separate text-block GC path.
 
 The default script run is a bounded smoke. Full 10M runs can take multiple hours
 and tens of GB; **do not start a 10M run without explicit coordinator approval**.
@@ -90,19 +90,17 @@ without completing the failed phase or report.
 
 ### Selected 10M matrix (approval gated)
 
-The script writes `$RUN_DIR/10m_selected_matrix_commands.md` on every run. A
-10M selected row is gated twice: `RUN_10M=true` asks for the row, and
-`APPROVE_10M=true` confirms explicit coordinator approval.
+The script writes `$RUN_DIR/campaign_commands.txt` on every run. A 10M
+qualification is gated twice: `RUN_10M=true` asks for the row, and
+`APPROVE_10M=true` confirms explicit coordinator approval. Qualification also
+requires a clean checkout, `PHASES=all`, `KEEP_DB=false`, 10M rows in every
+ingestion lane, three query repetitions, batch size 32,768, candidate limit
+655,360, 10,000 maintenance updates, and 5,000 deletes.
 
 ```sh
 RUN_DIR=/tmp/gomap_text_hybrid_scale_10m_$(date +%Y%m%d_%H%M%S) \
-RUN_SMOKE=false RUN_10M=true APPROVE_10M=true \
-TEN_M_ROWS=10000000 TEN_M_QUERIES=10 TEN_M_BATCH_SIZE=32768 \
-TEN_M_BACKFILL_ROWS=1000000 \
-TEN_M_MAINTENANCE_UPDATES=10000 TEN_M_MAINTENANCE_DELETES=5000 \
-TEN_M_CANDIDATE_LIMIT=655360 \
-DIMS=16 M=8 EF_CONSTRUCTION=128 EF_SEARCH=128 \
-TOP_K=10 READERS=4 \
+RUN_SMOKE=false RUN_1M=false RUN_10M=true APPROVE_10M=true \
+PHASES=all KEEP_DB=false \
 scripts/bench_text_hybrid_scale.sh
 ```
 
@@ -170,35 +168,37 @@ without changing the requested-budget guardrail. Smaller candidate budgets are
 still useful as diagnostic fail-closed probes, but do not cite them as passing
 1M hybrid rows if guardrails fail.
 
-By default, the primary, backfill, and maintenance DB directories are removed at
-successful process exit. Set `KEEP_DB=true` only when you need to inspect storage
-contents after the run; then remove the artifact directory manually, for example:
-
-```sh
-rm -rf /tmp/gomap_text_hybrid_scale_1m_YYYYmmdd_HHMMSS
-```
+With `KEEP_DB=false`, each independent fixture is removed immediately after its
+last required phase and accounting snapshot. This bounds peak disk usage: the
+primary DB is removed after query/reopen/concurrency, followed by each
+maintenance, backfill, text-only, and source/chunk fixture after its own phase.
+The final cleanup record must still list all five paths exactly. Set
+`KEEP_DB=true` only for a non-qualifying forensic run that intentionally retains
+all fixture directories.
 
 ## Artifacts and schema
 
 `cmd/treedb_text_hybrid_scale` writes schema
-`treedb_text_hybrid_scale/v2`. Version 2 adds selected/completed phase state,
-atomic partial-report evidence, invocation/VCS provenance, and raw per-query
-latency samples with row-boundary/query-shape provenance so each retrieval claim
-can be inspected independently rather than inferred only from percentiles.
+`treedb_text_hybrid_scale/v3`. Version 3 adds a fail-closed exact-10M
+qualification contract, raw component storage accounting, all-lane phase and
+cleanup validation, immutable source/binary provenance, deterministic artifact
+sealing, and explicit source/chunk and maintenance batch shapes.
 
 Primary artifacts:
 
 - `$RUN_DIR/context.txt` — branch, commit, base SHA, Go version, host context,
-  and disk context captured by the wrapper script.
-- `$RUN_DIR/scale_*/command.txt` — exact command for each scale row.
-- `$RUN_DIR/scale_*/run.log` — stdout/stderr for the row.
-- `$RUN_DIR/scale_*/scale_report.json` — machine-readable report.
-- `$RUN_DIR/scale_*/scale_report.md` — human-readable report.
-- `$RUN_DIR/10m_selected_matrix_commands.md` — reproducible gated 10M commands.
-- `$RUN_DIR/go_bench_*/*.txt` — optional `go test -benchmem` output.
-- `context.command` — labeled `process_argv`; under `go run` its first element
-  is Go's temporary executable, so use the wrapper's `command.txt` as the
-  reproducible caller command.
+  and disk context captured by the wrapper script;
+- `$RUN_DIR/binary.provenance.json` and `binary.version.txt` — linked source
+  identities attested by executing the built binary, plus Go build metadata;
+- `$RUN_DIR/campaign_commands.txt` — gated reproduction commands;
+- `$RUN_DIR/scale_*/command.txt` — exact command for each scale row;
+- `$RUN_DIR/scale_*/run.log` and `run_status.json` — process output and exit
+  disposition;
+- `$RUN_DIR/scale_*/scale_report.json` and `scale_report.md` — machine-readable
+  and compact reports;
+- `$RUN_DIR/scale_*/resources.txt` — process resource capture;
+- `$RUN_DIR/scale_*/artifact_manifest.json`, `seal.log`, and `validation.log` —
+  successful exact-10M retained-artifact integrity and validation evidence.
 
 The JSON/Markdown report includes:
 

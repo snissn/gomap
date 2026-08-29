@@ -1,0 +1,27 @@
+{
+  "kind": "post_run_external_cleanup_observation",
+  "observed_at": "2026-08-29T13:00:24.562895+00:00",
+  "note": "Coordinator observation after the failed candidate exited; not part of the candidate-authored report or retained-artifact validator.",
+  "paths": [
+    {
+      "path": "/Users/michaelseiler/orca/workspaces/gomap/4329-final-10m-v1/scale_10m/primary_db",
+      "exists": false
+    },
+    {
+      "path": "/Users/michaelseiler/orca/workspaces/gomap/4329-final-10m-v1/scale_10m/maintenance_db",
+      "exists": false
+    },
+    {
+      "path": "/Users/michaelseiler/orca/workspaces/gomap/4329-final-10m-v1/scale_10m/backfill_db",
+      "exists": false
+    },
+    {
+      "path": "/Users/michaelseiler/orca/workspaces/gomap/4329-final-10m-v1/scale_10m/text_only_db",
+      "exists": false
+    },
+    {
+      "path": "/Users/michaelseiler/orca/workspaces/gomap/4329-final-10m-v1/scale_10m/source_chunk_db",
+      "exists": false
+    }
+  ]
+}

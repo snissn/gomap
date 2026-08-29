@@ -1,0 +1,1 @@
+{"status":"failed","exit_code":1,"failures":[{"phase":"scale_10m","status":"failed","error":"command exit 1"}]}
