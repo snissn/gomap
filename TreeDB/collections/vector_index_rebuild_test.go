@@ -1105,11 +1105,11 @@ func TestColumnGraphRebuildVectorIndexAdjacencyValidatesAllDimsBeforeScoringV2A(
 
 func TestColumnVectorGraphOfflineBuildCoalescesFrozenPrefixPruning4419And4421(t *testing.T) {
 	rows := make([]columnVectorGraphAssetRow, 192)
-	vectors := vectorIndexReciprocalParityRows4257(len(rows), 16, false)
+	vectors := vectorIndexReciprocalParityRows4257(len(rows), 64, false)
 	for i := range rows {
 		rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("doc-%04d", i)), Vector: vectors[i]}
 	}
-	def := columnGraphRebuildVectorIndexDefinitionV2A(16, 16)
+	def := columnGraphRebuildVectorIndexDefinitionV2A(64, 16)
 	build := func(workers int, trace *vectorIndexConstructionTraceV1, policy *vectorIndexLayer0ConstructionPolicyV1) *VectorIndex {
 		t.Helper()
 		index, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
@@ -1132,6 +1132,20 @@ func TestColumnVectorGraphOfflineBuildCoalescesFrozenPrefixPruning4419And4421(t 
 	}
 	if want.frozenPrefixReciprocalPrunes == 0 || want.frozenPrefixReciprocalPruneEdges <= want.frozenPrefixReciprocalPrunes {
 		t.Fatalf("reciprocal prune coalescing was not exercised: prunes=%d edges=%d", want.frozenPrefixReciprocalPrunes, want.frozenPrefixReciprocalPruneEdges)
+	}
+	if want.frozenPrefixIndexedDotBatches == 0 {
+		t.Fatal("ordinary offline build did not use indexed frozen-prefix diversity dots")
+	}
+	if len(want.vectorRows) != len(want.nodes)*64 {
+		t.Fatalf("row store has %d floats for %d x 64 nodes", len(want.vectorRows), len(want.nodes))
+	}
+	for nodeID := range want.nodes {
+		if &want.nodes[nodeID].vector[0] != &want.vectorRows[nodeID*64] {
+			t.Fatalf("node %d is not bound to its authoritative row", nodeID)
+		}
+	}
+	if cloned := cloneVectorIndexNodes(want.nodes); &cloned[0].vector[0] == &want.nodes[0].vector[0] {
+		t.Fatal("clone retained row-store ownership")
 	}
 	wantTopology := snapshotVectorIndexTopology4257(want)
 	for _, workers := range []int{2, 4} {
