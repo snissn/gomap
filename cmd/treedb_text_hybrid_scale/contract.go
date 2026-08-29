@@ -484,6 +484,14 @@ func validateStorageSnapshots(rep report) error {
 		"text_only_fixture":           uint64(rep.Config.TextOnlyRows),
 		"source_chunk_fixture":        uint64(rep.SourceChunk.SourceDocuments + rep.SourceChunk.GeneratedChunks),
 	}
+	expectedDenominator := map[string]uint64{
+		"after_load":                  uint64(rep.Config.Rows),
+		"after_reopen":                uint64(rep.Config.Rows),
+		"maintenance_rewrite_fixture": uint64(rep.Config.Rows - rep.Maintenance.Deletes),
+		"backfill_fixture":            uint64(rep.Config.BackfillRows),
+		"text_only_fixture":           uint64(rep.Config.TextOnlyRows),
+		"source_chunk_fixture":        uint64(rep.SourceChunk.SourceDocuments),
+	}
 	found := make(map[string]bool, len(required))
 	for _, snap := range rep.StorageSnapshots {
 		if snap.PhysicalTotalBytes <= 0 || snap.PhysicalIndexPageBytes <= 0 || snap.PhysicalValueLogBytes < 0 || snap.PhysicalWALBytes < 0 || snap.PhysicalOtherBytes < 0 {
@@ -497,8 +505,8 @@ func validateStorageSnapshots(rep report) error {
 			continue
 		}
 		laneBytes := snap.TextDocIDBytes + snap.TextDocMapBytes + snap.TextPostingBlockBytes + snap.TextNormBlockBytes + snap.TextPositionBytes + snap.TextTermStatsBytes + snap.TextStatusFormatBytes
-		if snap.TextEncodedBytes == 0 || snap.TextEncodedBytes != laneBytes || snap.V2PostingBlocks == 0 || snap.V2LiveDocuments != expectedLive || snap.V2DeletedDocs != 0 {
-			return fmt.Errorf("storage snapshot %q logical text accounting mismatch: encoded=%d lane_bytes=%d posting_blocks=%d live=%d want_live=%d deleted=%d", snap.Label, snap.TextEncodedBytes, laneBytes, snap.V2PostingBlocks, snap.V2LiveDocuments, expectedLive, snap.V2DeletedDocs)
+		if snap.TextEncodedBytes == 0 || snap.TextEncodedBytes != laneBytes || snap.DocumentDenominator != expectedDenominator[snap.Label] || snap.V2PostingBlocks == 0 || snap.V2LiveDocuments != expectedLive || snap.V2DeletedDocs != 0 {
+			return fmt.Errorf("storage snapshot %q logical text accounting mismatch: encoded=%d lane_bytes=%d denominator=%d want_denominator=%d posting_blocks=%d live=%d want_live=%d deleted=%d", snap.Label, snap.TextEncodedBytes, laneBytes, snap.DocumentDenominator, expectedDenominator[snap.Label], snap.V2PostingBlocks, snap.V2LiveDocuments, expectedLive, snap.V2DeletedDocs)
 		}
 		var accounting collections.TextIndexStorageAccounting
 		switch snap.Label {

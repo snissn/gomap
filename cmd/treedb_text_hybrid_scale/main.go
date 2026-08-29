@@ -396,7 +396,6 @@ type maintenanceReport struct {
 type storageSnapshot struct {
 	Label                         string   `json:"label"`
 	Bytes                         int64    `json:"bytes"`
-	BytesPerDoc                   float64  `json:"bytes_per_doc,omitempty"`
 	PhysicalIndexPageBytes        int64    `json:"physical_index_page_bytes"`
 	PhysicalValueLogBytes         int64    `json:"physical_value_log_bytes"`
 	PhysicalWALBytes              int64    `json:"physical_wal_bytes"`
@@ -405,6 +404,7 @@ type storageSnapshot struct {
 	PhysicalTotalWALExcludedBytes int64    `json:"physical_total_wal_excluded_bytes"`
 	OtherPaths                    []string `json:"other_paths,omitempty"`
 	TextEncodedBytes              uint64   `json:"text_encoded_bytes,omitempty"`
+	DocumentDenominator           uint64   `json:"document_denominator"`
 	TextDocIDBytes                uint64   `json:"text_docid_bytes,omitempty"`
 	TextDocMapBytes               uint64   `json:"text_docmap_bytes,omitempty"`
 	TextPostingBlockBytes         uint64   `json:"text_posting_block_bytes,omitempty"`
@@ -412,14 +412,6 @@ type storageSnapshot struct {
 	TextPositionBytes             uint64   `json:"text_position_bytes,omitempty"`
 	TextTermStatsBytes            uint64   `json:"text_term_stats_bytes,omitempty"`
 	TextStatusFormatBytes         uint64   `json:"text_status_format_bytes,omitempty"`
-	TextBytesPerDoc               float64  `json:"text_bytes_per_doc,omitempty"`
-	TextDocIDBytesPerDoc          float64  `json:"text_docid_bytes_per_doc,omitempty"`
-	TextDocMapBytesPerDoc         float64  `json:"text_docmap_bytes_per_doc,omitempty"`
-	TextPostingBlockBytesPerDoc   float64  `json:"text_posting_block_bytes_per_doc,omitempty"`
-	TextNormBlockBytesPerDoc      float64  `json:"text_norm_block_bytes_per_doc,omitempty"`
-	TextPositionBytesPerDoc       float64  `json:"text_position_bytes_per_doc,omitempty"`
-	TextTermStatsBytesPerDoc      float64  `json:"text_term_stats_bytes_per_doc,omitempty"`
-	TextStatusFormatBytesPerDoc   float64  `json:"text_status_format_bytes_per_doc,omitempty"`
 	V2PostingBlocks               uint64   `json:"v2_posting_blocks,omitempty"`
 	V2LiveDocuments               uint64   `json:"v2_live_documents,omitempty"`
 	V2DeletedDocs                 uint64   `json:"v2_deleted_docs,omitempty"`
@@ -2521,7 +2513,7 @@ func rankBottlenecks(rep report) []bottleneckRow {
 
 func storageSnapshotFromText(label string, docs int, dir string, stats collections.TextIndexStorageAccounting, vectorStatus *collections.VectorIndexStatus) storageSnapshot {
 	snap := storageSnapshot{
-		Label: label, TextEncodedBytes: stats.EncodedBytes,
+		Label: label, TextEncodedBytes: stats.EncodedBytes, DocumentDenominator: uint64(maxInt(docs, 1)),
 		TextDocIDBytes: stats.V2DocIDBytes, TextDocMapBytes: stats.V2DocMapBytes, TextPostingBlockBytes: stats.V2PostingBlockBytes,
 		TextNormBlockBytes: stats.V2NormBlockBytes, TextPositionBytes: stats.V2PositionBytes, TextTermStatsBytes: stats.V2TermStatsBytes, TextStatusFormatBytes: stats.V2StatusFormatBytes,
 		V2PostingBlocks: stats.V2PostingBlocks, V2LiveDocuments: stats.V2LiveDocuments, V2DeletedDocs: stats.V2DeletedDocs,
@@ -2536,18 +2528,6 @@ func storageSnapshotFromText(label string, docs int, dir string, stats collectio
 		snap.PhysicalTotalWALExcludedBytes = physical.PhysicalTotalWALExcludedBytes
 		snap.OtherPaths = physical.OtherPaths
 		snap.Bytes = physical.PhysicalTotalBytes
-	}
-	if docs > 0 {
-		docsDivisor := float64(docs)
-		snap.BytesPerDoc = float64(snap.Bytes) / docsDivisor
-		snap.TextBytesPerDoc = float64(stats.EncodedBytes) / docsDivisor
-		snap.TextDocIDBytesPerDoc = float64(stats.V2DocIDBytes) / docsDivisor
-		snap.TextDocMapBytesPerDoc = float64(stats.V2DocMapBytes) / docsDivisor
-		snap.TextPostingBlockBytesPerDoc = float64(stats.V2PostingBlockBytes) / docsDivisor
-		snap.TextNormBlockBytesPerDoc = float64(stats.V2NormBlockBytes) / docsDivisor
-		snap.TextPositionBytesPerDoc = float64(stats.V2PositionBytes) / docsDivisor
-		snap.TextTermStatsBytesPerDoc = float64(stats.V2TermStatsBytes) / docsDivisor
-		snap.TextStatusFormatBytesPerDoc = float64(stats.V2StatusFormatBytes) / docsDivisor
 	}
 	if vectorStatus != nil {
 		snap.VectorNativeBytes = vectorStatusBytes(vectorStatus)
@@ -2679,7 +2659,7 @@ func renderMarkdown(rep report) string {
 			fmt.Fprintf(&b, "| snapshot | docid | docmap | postings | norms | positions | terms | status/format |\n")
 			fmt.Fprintf(&b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 			for _, snap := range rep.StorageSnapshots {
-				fmt.Fprintf(&b, "| `%s` | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f |\n", snap.Label, snap.TextDocIDBytesPerDoc, snap.TextDocMapBytesPerDoc, snap.TextPostingBlockBytesPerDoc, snap.TextNormBlockBytesPerDoc, snap.TextPositionBytesPerDoc, snap.TextTermStatsBytesPerDoc, snap.TextStatusFormatBytesPerDoc)
+				fmt.Fprintf(&b, "| `%s` | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f |\n", snap.Label, bytesPerDoc(snap.TextDocIDBytes, snap.DocumentDenominator), bytesPerDoc(snap.TextDocMapBytes, snap.DocumentDenominator), bytesPerDoc(snap.TextPostingBlockBytes, snap.DocumentDenominator), bytesPerDoc(snap.TextNormBlockBytes, snap.DocumentDenominator), bytesPerDoc(snap.TextPositionBytes, snap.DocumentDenominator), bytesPerDoc(snap.TextTermStatsBytes, snap.DocumentDenominator), bytesPerDoc(snap.TextStatusFormatBytes, snap.DocumentDenominator))
 			}
 			fmt.Fprintf(&b, "\n")
 		} else {
@@ -2775,6 +2755,10 @@ func textBytesPerDoc(stats collections.TextIndexStorageAccounting, rows int, ava
 		return availability.State
 	}
 	return fmt.Sprintf("%.1f", float64(stats.EncodedBytes)/float64(maxInt(rows, 1)))
+}
+
+func bytesPerDoc(bytes, documents uint64) float64 {
+	return float64(bytes) / float64(maxInt(int(documents), 1))
 }
 
 func queryCounters(row queryReport) string {

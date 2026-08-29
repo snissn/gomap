@@ -44,6 +44,7 @@ func TestQualificationValidatorRejectsEveryNorthStarGap4329(t *testing.T) {
 		{"logical bytes", "logical text accounting mismatch", func(r *report) { r.StorageSnapshots[0].TextEncodedBytes = 0 }},
 		{"logical lane sum", "logical text accounting mismatch", func(r *report) { r.StorageSnapshots[0].TextDocIDBytes++ }},
 		{"logical live count", "logical text accounting mismatch", func(r *report) { r.StorageSnapshots[0].V2LiveDocuments-- }},
+		{"logical denominator", "logical text accounting mismatch", func(r *report) { r.StorageSnapshots[0].DocumentDenominator++ }},
 		{"phase accounting", "phase accounting mismatch", func(r *report) { r.Load.TextStorage.EncodedBytes++ }},
 		{"missing storage row", "missing storage snapshot", func(r *report) { r.StorageSnapshots = r.StorageSnapshots[:4] }},
 		{"false reopen", "reopen/count/query parity", func(r *report) { r.Reopen.QueryParityOK = false }},
@@ -164,16 +165,17 @@ func validQualificationReport4329() report {
 	}
 	storage := func(label string) storageSnapshot {
 		liveDocuments := uint64(requiredScaleRows)
+		documentDenominator := uint64(requiredScaleRows)
 		switch label {
 		case "maintenance_rewrite_fixture":
 			liveDocuments -= 5_000
+			documentDenominator -= 5_000
 		case "source_chunk_fixture":
 			liveDocuments = 5 * requiredScaleRows
 		}
 		return storageSnapshot{
-			Label: label, PhysicalIndexPageBytes: 100, PhysicalValueLogBytes: 200, PhysicalWALBytes: 10, PhysicalOtherBytes: 5, PhysicalTotalBytes: 315, PhysicalTotalWALExcludedBytes: 305,
+			Label: label, DocumentDenominator: documentDenominator, PhysicalIndexPageBytes: 100, PhysicalValueLogBytes: 200, PhysicalWALBytes: 10, PhysicalOtherBytes: 5, PhysicalTotalBytes: 315, PhysicalTotalWALExcludedBytes: 305,
 			TextEncodedBytes: 700, TextDocIDBytes: 100, TextDocMapBytes: 100, TextPostingBlockBytes: 100, TextNormBlockBytes: 100, TextPositionBytes: 100, TextTermStatsBytes: 100, TextStatusFormatBytes: 100,
-			TextBytesPerDoc: 70, TextDocIDBytesPerDoc: 10, TextDocMapBytesPerDoc: 10, TextPostingBlockBytesPerDoc: 10, TextNormBlockBytesPerDoc: 10, TextPositionBytesPerDoc: 10, TextTermStatsBytesPerDoc: 10, TextStatusFormatBytesPerDoc: 10,
 			V2PostingBlocks: 1, V2LiveDocuments: liveDocuments,
 		}
 	}
