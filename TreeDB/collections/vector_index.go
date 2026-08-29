@@ -383,27 +383,29 @@ type VectorIndex struct {
 	rebuildDeletedRatio float64
 	schemaGeneration    uint64
 
-	mu                   sync.RWMutex
-	nativePublicationMu  sync.RWMutex
-	nodes                []vectorIndexNode
-	vectorRows           []float32
-	currentNode          map[string]int
-	entry                int
-	maxLevel             int
-	insertScratch        vectorIndexSearchScratch
-	searchScratch        sync.Pool
-	searchView           atomic.Pointer[vectorIndexSearchView]
-	searchViewSpare      atomic.Pointer[vectorIndexSearchView]
-	searchViewCurrent    atomic.Bool
-	searchViewDirty      map[int]struct{}
-	trackSearchViewDirty bool
-	searchViewForceFull  bool
-	frozenPrefixBatches  uint64
+	mu                    sync.RWMutex
+	nativePublicationMu   sync.RWMutex
+	nodes                 []vectorIndexNode
+	vectorRows            []float32
+	constructionRowsFixed bool
+	currentNode           map[string]int
+	entry                 int
+	maxLevel              int
+	insertScratch         vectorIndexSearchScratch
+	searchScratch         sync.Pool
+	searchView            atomic.Pointer[vectorIndexSearchView]
+	searchViewSpare       atomic.Pointer[vectorIndexSearchView]
+	searchViewCurrent     atomic.Bool
+	searchViewDirty       map[int]struct{}
+	trackSearchViewDirty  bool
+	searchViewForceFull   bool
+	frozenPrefixBatches   uint64
 	// Frozen-prefix counters are private construction evidence used by focused
 	// tests and benchmarks.
 	frozenPrefixReciprocalPrunes     uint64
 	frozenPrefixReciprocalPruneEdges uint64
 	frozenPrefixIndexedDotBatches    uint64
+	frozenPrefixHeapRowStores        uint64
 	liveDelta                        *VectorIndex
 	scalarDefinitions                []IndexDefinition
 	scalarRuntimes                   []indexRuntime
@@ -2238,6 +2240,7 @@ func (idx *VectorIndex) prepareFrozenPrefixVectorRowsLocked(additional int) {
 		rows = append(rows, idx.nodes[nodeID].vector...)
 	}
 	idx.vectorRows = rows
+	idx.frozenPrefixHeapRowStores++
 	for nodeID := range idx.nodes {
 		start := nodeID * idx.dimensions
 		idx.nodes[nodeID].vector = idx.vectorRows[start : start+idx.dimensions]
@@ -2245,6 +2248,11 @@ func (idx *VectorIndex) prepareFrozenPrefixVectorRowsLocked(additional int) {
 }
 
 func (idx *VectorIndex) appendFrozenPrefixVectorRowLocked(vector []float32) []float32 {
+	if idx.constructionRowsFixed {
+		start := len(idx.vectorRows)
+		idx.vectorRows = idx.vectorRows[:start+len(vector)]
+		return idx.vectorRows[start:]
+	}
 	start := len(idx.vectorRows)
 	rebind := len(idx.vectorRows)+len(vector) > cap(idx.vectorRows)
 	idx.vectorRows = append(idx.vectorRows, vector...)
@@ -2255,6 +2263,15 @@ func (idx *VectorIndex) appendFrozenPrefixVectorRowLocked(vector []float32) []fl
 		}
 	}
 	return idx.vectorRows[start : start+idx.dimensions]
+}
+
+func (idx *VectorIndex) bindFixedConstructionRowsLocked(rows []float32, rowCount int) error {
+	if idx == nil || idx.dimensions <= 0 || rowCount <= 0 || len(idx.nodes) != 0 || idx.vectorRows != nil || rowCount > int(^uint(0)>>1)/idx.dimensions || len(rows) != rowCount*idx.dimensions {
+		return errors.New("collections: invalid fixed vector construction rows")
+	}
+	idx.vectorRows = rows[:0:len(rows)]
+	idx.constructionRowsFixed = true
+	return nil
 }
 
 func (idx *VectorIndex) validateVectorBatch(documentIDs [][]byte, vectors [][]float32) error {
