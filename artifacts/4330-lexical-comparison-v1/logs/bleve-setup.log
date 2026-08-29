@@ -1,0 +1,8 @@
+command=go mod tidy
+cwd=/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/dependency_work/bleve_adapter
+started_unix=1788014029.315552
+returncode=0
+
+[stdout]
+
+[stderr]

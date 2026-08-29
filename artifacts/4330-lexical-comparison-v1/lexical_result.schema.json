@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/snissn/gomap/benchmarks/text_hybrid_scoreboard/treedb_lexical_result-v1.schema.json",
+  "title": "TreeDB same-corpus lexical engine result v1",
+  "type": "object",
+  "required": ["schema_version", "status", "engine", "repetition", "manifest_sha256", "cases"],
+  "properties": {
+    "schema_version": {"const": "treedb_lexical_result/v1"},
+    "status": {"enum": ["ok", "unavailable"]},
+    "engine": {
+      "type": "object",
+      "required": ["id", "family", "name", "version"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "family": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "repetition": {"type": "integer", "minimum": 1},
+    "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "corpus": {
+      "type": "object",
+      "required": ["document_count", "sha256"],
+      "properties": {
+        "document_count": {"type": "integer", "minimum": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "command": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "versions": {"type": "object", "minProperties": 1},
+    "config": {"type": "object", "minProperties": 1},
+    "environment": {
+      "type": "object",
+      "required": ["contract", "filesystem", "memory", "execution"],
+      "properties": {
+        "contract": {"type": "object", "minProperties": 1},
+        "filesystem": {
+          "type": "object",
+          "required": ["runner_device_id", "corpus_store_id", "index_store_id", "result_store_id", "same_filesystem"],
+          "properties": {
+            "runner_device_id": {"type": "string", "pattern": "^[0-9]+$"},
+            "corpus_store_id": {"type": "string", "pattern": "^[0-9]+$"},
+            "index_store_id": {"type": "string", "pattern": "^[0-9]+$"},
+            "result_store_id": {"type": "string", "pattern": "^[0-9]+$"},
+            "same_filesystem": {"const": true}
+          }
+        },
+        "memory": {
+          "type": "object",
+          "required": ["detected_address_space_limit", "detection_source", "matches_runner_detected", "adapter_changed_limit"],
+          "properties": {
+            "detected_address_space_limit": {"type": "string", "pattern": "^(unlimited|[0-9]+)$"},
+            "detection_source": {"type": "string", "minLength": 1},
+            "matches_runner_detected": {"const": true},
+            "adapter_changed_limit": {"const": false}
+          }
+        },
+        "execution": {
+          "type": "object",
+          "required": ["query_concurrency", "engine_process_concurrency", "runtime_cpu_parallelism"],
+          "properties": {
+            "query_concurrency": {"const": 1},
+            "engine_process_concurrency": {"const": 1},
+            "runtime_cpu_parallelism": {"const": 1}
+          }
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "required": ["elapsed_nanos", "docs_per_second", "cpu", "peak_rss", "checkpointed"],
+      "properties": {
+        "elapsed_nanos": {"type": "integer", "minimum": 0},
+        "docs_per_second": {"type": "number", "minimum": 0},
+        "cpu": {"$ref": "#/$defs/resource"},
+        "peak_rss": {"$ref": "#/$defs/resource"},
+        "checkpointed": {"const": true}
+      }
+    },
+    "storage": {
+      "type": "object",
+      "required": ["durable_bytes", "wal_bytes", "transient_bytes"],
+      "properties": {
+        "durable_bytes": {"type": "integer", "minimum": 0},
+        "wal_bytes": {"type": "integer", "minimum": 0},
+        "transient_bytes": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "reopen": {
+      "type": "object",
+      "required": ["performed", "verified", "result_digest"],
+      "properties": {
+        "performed": {"const": true},
+        "verified": {"type": "boolean"},
+        "result_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "unavailable": {
+      "type": "object",
+      "required": ["kind", "reason", "setup_command", "stderr"],
+      "properties": {
+        "kind": {"enum": ["missing_runtime", "dependency_setup_failed", "feature_unavailable"]},
+        "reason": {"type": "string", "minLength": 1},
+        "setup_command": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "stderr": {"type": "string"}
+      }
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "status", "equivalent"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "status": {"enum": ["ok", "unsupported"]},
+          "equivalent": {"type": "boolean"},
+          "unsupported_reason": {"type": "string", "minLength": 1},
+          "samples_nanos": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+          "result_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "result_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "reopen_result_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "reopen_result_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "route": {
+            "type": "object",
+            "required": ["intended", "name", "fallback", "proof"],
+            "properties": {
+              "intended": {"type": "boolean"},
+              "name": {"type": "string"},
+              "fallback": {"type": "boolean"},
+              "proof": {"oneOf": [{"type": "object", "minProperties": 1}, {"type": "array", "minItems": 1}]}
+            }
+          },
+          "timed_out": {"type": "boolean"}
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "ok"}}},
+      "then": {"required": ["corpus", "command", "versions", "config", "environment", "build", "storage", "reopen"]}
+    },
+    {
+      "if": {"properties": {"status": {"const": "unavailable"}}},
+      "then": {"required": ["unavailable"], "properties": {"cases": {"maxItems": 0}}}
+    }
+  ],
+  "$defs": {
+    "resource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["status", "value", "unit"],
+          "properties": {
+            "status": {"const": "ok"},
+            "value": {"type": "integer", "minimum": 0},
+            "unit": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["status", "reason"],
+          "properties": {
+            "status": {"const": "unsupported"},
+            "reason": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    }
+  }
+}
