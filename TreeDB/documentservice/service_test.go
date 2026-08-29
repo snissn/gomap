@@ -2383,6 +2383,9 @@ func TestServiceFilterDocumentsExactIDClosedBackendFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
+	if _, err := col.Insert([]byte("target"), []byte(`{"id":"target","embedding":[1,0],"meta":{}}`)); err != nil {
+		t.Fatalf("insert target: %v", err)
+	}
 	info := IndexInfo{Name: name, Generation: 1}
 	if err := svc.primeBenchmarkSearchCache(name, col, info); err != nil {
 		t.Fatalf("primeBenchmarkSearchCache: %v", err)
