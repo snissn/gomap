@@ -556,10 +556,26 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             except BaseException:
                 endpoint = self._phase_resource_start
                 incomplete_reason = "resource_endpoint_unavailable"
-        boundary["resource_segments"] = [{
+        resource_segments = [{
             "start": self._phase_resource_start,
             "end": endpoint,
         }]
+        if self._phase_name == "restart_open_readiness" and self._phase_restart_old_end is not None:
+            old_end = self._phase_restart_old_end
+            if endpoint.get("pid") != old_end["pid"]:
+                new_start = {
+                    **endpoint,
+                    "rss_bytes": 0,
+                    "cpu_seconds": 0.0,
+                    "disk_bytes": old_end["disk_bytes"],
+                }
+                resource_segments = [
+                    {"start": self._phase_resource_start, "end": old_end},
+                    {"start": new_start, "end": endpoint},
+                ]
+            if not incomplete_reason:
+                incomplete_reason = "restart_verification_failed_after_reopen"
+        boundary["resource_segments"] = resource_segments
         if incomplete_reason:
             boundary["resource_evidence_complete"] = False
             boundary["incomplete_reason"] = incomplete_reason

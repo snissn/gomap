@@ -775,6 +775,47 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertEqual(len(phase["resource_segments"]), 1)
         self.assertEqual(phase["resource_segments"][0]["end"]["pid"], 100)
 
+    def test_restart_verification_failure_preserves_process_segment_split(self) -> None:
+        old_start = {
+            "captured": True, "rss_bytes": 100, "cpu_seconds": 2.0, "disk_bytes": 140,
+            "availability": {}, "pid": 100, "process_identity": "old-process",
+        }
+        old_end = {
+            "captured": True, "rss_bytes": 120, "cpu_seconds": 3.0, "disk_bytes": 150,
+            "availability": {}, "pid": 100, "process_identity": "old-process",
+        }
+        new_process = {
+            "captured": True, "rss_bytes": 80, "cpu_seconds": 0.5,
+            "availability": {}, "pid": 101, "process_identity": "new-process",
+        }
+        workload = object.__new__(runner.TreeDBMinimaRunner)
+        workload.controller = SimpleNamespace(pid=101, last_shutdown_resource_end=old_end)
+        workload._phase_total_start = 100
+        workload._phase_start = 200
+        workload._phase_name = "restart_open_readiness"
+        workload._phase_resource_start = old_start
+        workload._phase_boundaries = []
+        workload._phase_attribution = None
+        workload._phase_restart_old_end = old_end
+        workload._controller_restart_origin = (100, "old-process")
+        workload.evidence = SimpleNamespace(samples=[])
+
+        with mock.patch.object(workload, "_phase_process_snapshot", return_value=new_process), \
+             mock.patch.object(workload, "_phase_disk_snapshot", return_value={
+                 "captured": True, "disk_bytes": 160, "availability": {},
+             }), mock.patch.object(runner.time, "monotonic_ns", side_effect=[300, 310]):
+            phase = workload._finish_phase_attribution()["phases"][-1]
+
+        self.assertFalse(phase["resource_evidence_complete"])
+        self.assertEqual(phase["incomplete_reason"], "restart_verification_failed_after_reopen")
+        self.assertEqual(len(phase["resource_segments"]), 2)
+        self.assertEqual(phase["resource_segments"][0], {"start": old_start, "end": old_end})
+        self.assertEqual(phase["resource_segments"][1]["start"], {
+            "captured": True, "rss_bytes": 0, "cpu_seconds": 0.0, "disk_bytes": 150,
+            "availability": {}, "pid": 101, "process_identity": "new-process",
+        })
+        self.assertEqual(phase["resource_segments"][1]["end"]["pid"], 101)
+
     def test_main_unexpected_service_exit_writes_nonqualifying_partial_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
