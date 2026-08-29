@@ -18,6 +18,7 @@ RUN_DIR=/tmp/gomap_lexical_compare_$(date +%Y%m%d_%H%M%S)
 python3 benchmarks/text_hybrid_scoreboard/run_lexical_comparison.py \
   --manifest benchmarks/text_hybrid_scoreboard/lexical_manifest.json \
   --out-dir "$RUN_DIR" \
+  --go-bin "${GO_BIN:-go}" \
   --repetitions 3 \
   --timeout-seconds 900
 ```
@@ -196,6 +197,11 @@ A direct run writes:
 The combined script places these under `$RUN_DIR/lexical/`; its pre-existing
 hybrid artifacts remain `$RUN_DIR/scoreboard.json`, `$RUN_DIR/scoreboard.md`,
 TreeDB Go benchmark logs, and `$RUN_DIR/context.txt`.
+
+The wrapper runs the lexical source snapshot before writing sibling context or
+hybrid artifacts, so an in-repository `RUN_DIR` cannot dirty retained lexical
+provenance. Its selected `GO_BIN` is passed through dependency setup and both Go
+adapter commands.
 
 The tracked `artifacts/4330-lexical-comparison-v1/` run was measured from
 reviewed source commit `2df3cfc4b8168d05b9f75c02580f4f049fe98d4d` and first

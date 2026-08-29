@@ -38,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=HERE / "lexical_manifest.json")
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--go-bin", default=os.environ.get("GO_BIN", "go"))
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--timeout-seconds", type=int, default=900)
     parser.add_argument("--keep-indexes", action="store_true")
@@ -134,11 +135,11 @@ def write_unavailable_set(out_dir: Path, engine_id: str, repetitions: int, manif
     return paths
 
 
-def missing_runtime(engine_id: str) -> tuple[str, list[str]] | None:
+def missing_runtime(engine_id: str, go_bin: str) -> tuple[str, list[str]] | None:
     requirements = {
-        "treedb_text_v2": ("go",),
+        "treedb_text_v2": (go_bin,),
         "lucene": ("java", "mvn"),
-        "bleve": ("go",),
+        "bleve": (go_bin,),
         "sqlite_fts5": (sys.executable,),
     }[engine_id]
     missing = [runtime for runtime in requirements if not (Path(runtime).exists() if os.path.sep in runtime else shutil.which(runtime))]
@@ -157,12 +158,12 @@ def prepare_engine_project(engine_id: str, out_dir: Path) -> None:
     shutil.copytree(HERE / f"{engine_id}_adapter", destination)
 
 
-def setup_engine(engine_id: str, out_dir: Path, timeout: int) -> tuple[bool, list[str], str]:
+def setup_engine(engine_id: str, out_dir: Path, timeout: int, go_bin: str) -> tuple[bool, list[str], str]:
     if engine_id == "lucene":
         command = ["mvn", "-q", "-DskipTests", "dependency:go-offline"]
         cwd = isolated_project(engine_id, out_dir)
     elif engine_id == "bleve":
-        command = ["go", "mod", "download"]
+        command = [go_bin, "mod", "download"]
         cwd = isolated_project(engine_id, out_dir)
     else:
         return True, [], ""
@@ -207,12 +208,12 @@ def benchmark_environment(out_dir: Path, manifest: dict[str, Any]) -> dict[str, 
     }
 
 
-def adapter_command(engine_id: str, repetition: int, out_dir: Path, manifest: Path, corpus: Path, source_revision: str) -> tuple[list[str], Path, dict[str, str]]:
+def adapter_command(engine_id: str, repetition: int, out_dir: Path, manifest: Path, corpus: Path, source_revision: str, go_bin: str) -> tuple[list[str], Path, dict[str, str]]:
     raw = out_dir / "raw" / f"{engine_id}-r{repetition}.json"
     index = out_dir / "indexes" / f"{engine_id}-r{repetition}"
     common = ["--manifest", str(manifest), "--corpus", str(corpus), "--out", str(raw), "--repetition", str(repetition)]
     if engine_id == "treedb_text_v2":
-        return ["go", "run", "./benchmarks/text_hybrid_scoreboard/treedb_adapter", *common, "--db", str(index)], ROOT, {"GOWORK": "off", "GOMAP_SOURCE_REVISION": source_revision}
+        return [go_bin, "run", "./benchmarks/text_hybrid_scoreboard/treedb_adapter", *common, "--db", str(index)], ROOT, {"GOWORK": "off", "GOMAP_SOURCE_REVISION": source_revision}
     if engine_id == "lucene":
         exec_args = shlex.join([*common, "--index", str(index)])
         return ["mvn", "-q", "compile", "exec:java", f"-Dexec.args={exec_args}"], isolated_project(engine_id, out_dir), {}
@@ -240,14 +241,14 @@ def main() -> int:
     setup_ledger: list[dict[str, Any]] = []
 
     for engine_id in ENGINE_ORDER:
-        missing = missing_runtime(engine_id)
+        missing = missing_runtime(engine_id, args.go_bin)
         if missing:
             reason, setup = missing
             artifact_paths.extend(write_unavailable_set(args.out_dir, engine_id, args.repetitions, manifest_digest, "missing_runtime", reason, setup))
             setup_ledger.append({"engine": engine_id, "status": "unavailable", "command": setup, "reason": reason})
             continue
         prepare_engine_project(engine_id, args.out_dir)
-        setup_ok, setup_command, setup_stderr = setup_engine(engine_id, args.out_dir, args.timeout_seconds)
+        setup_ok, setup_command, setup_stderr = setup_engine(engine_id, args.out_dir, args.timeout_seconds, args.go_bin)
         if not setup_ok:
             reason = f"pinned dependency setup failed for {engine_id}; see logs/{engine_id}-setup.log"
             artifact_paths.extend(write_unavailable_set(args.out_dir, engine_id, args.repetitions, manifest_digest, "dependency_setup_failed", reason, setup_command, setup_stderr))
@@ -255,7 +256,7 @@ def main() -> int:
             continue
         setup_ledger.append({"engine": engine_id, "status": "ready", "command": setup_command})
         for repetition in range(1, args.repetitions + 1):
-            command, cwd, env = adapter_command(engine_id, repetition, args.out_dir, args.manifest.resolve(), corpus.resolve(), source["commit"])
+            command, cwd, env = adapter_command(engine_id, repetition, args.out_dir, args.manifest.resolve(), corpus.resolve(), source["commit"], args.go_bin)
             env.update(enforced_environment)
             raw = args.out_dir / "raw" / f"{engine_id}-r{repetition}.json"
             result = run_command(command, cwd, args.timeout_seconds, args.out_dir / "logs" / f"{engine_id}-r{repetition}.log", env)

@@ -21,21 +21,6 @@ LEXICAL_RAN=false
 TEXT_100K_BENCHTIME="${TEXT_100K_BENCHTIME:-1x}"
 TEXT_100K_COUNT="${TEXT_100K_COUNT:-1}"
 
-mkdir -p "$RUN_DIR"
-
-{
-  echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  echo "repo=$ROOT"
-  echo "branch=$(git branch --show-current 2>/dev/null || true)"
-  echo "commit=$(git rev-parse HEAD 2>/dev/null || true)"
-  echo "go=$($GO_BIN version 2>/dev/null || true)"
-  echo "python=$($PYTHON --version 2>&1 || true)"
-  echo "uname=$(uname -a 2>/dev/null || true)"
-  echo "cpu=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)"
-  echo "ncpu=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || true)"
-  echo "uptime=$(uptime 2>/dev/null || true)"
-} | tee "$RUN_DIR/context.txt"
-
 if [[ "$RUN_LEXICAL_COMPARISON" == "true" || "$RUN_LEXICAL_COMPARISON" == "1" || "$RUN_LEXICAL_COMPARISON" == "yes" ]]; then
   echo "==> pinned same-corpus TreeDB/Lucene/Bleve/SQLite lexical comparison"
   LEXICAL_ARGS=(
@@ -43,6 +28,7 @@ if [[ "$RUN_LEXICAL_COMPARISON" == "true" || "$RUN_LEXICAL_COMPARISON" == "1" ||
     --out-dir "$RUN_DIR/lexical"
     --repetitions "$LEXICAL_REPETITIONS"
     --timeout-seconds "$LEXICAL_TIMEOUT_SECONDS"
+    --go-bin "$GO_BIN"
   )
   if [[ "$LEXICAL_ALLOW_DIRTY" == "true" || "$LEXICAL_ALLOW_DIRTY" == "1" || "$LEXICAL_ALLOW_DIRTY" == "yes" ]]; then
     LEXICAL_ARGS+=(--allow-dirty)
@@ -50,6 +36,20 @@ if [[ "$RUN_LEXICAL_COMPARISON" == "true" || "$RUN_LEXICAL_COMPARISON" == "1" ||
   "$PYTHON" benchmarks/text_hybrid_scoreboard/run_lexical_comparison.py "${LEXICAL_ARGS[@]}"
   LEXICAL_RAN=true
 fi
+
+mkdir -p "$RUN_DIR"
+{
+  echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "repo=$ROOT"
+  echo "branch=$(git branch --show-current 2>/dev/null || true)"
+  echo "commit=$(git rev-parse HEAD 2>/dev/null || true)"
+  echo "go=$("$GO_BIN" version 2>/dev/null || true)"
+  echo "python=$("$PYTHON" --version 2>&1 || true)"
+  echo "uname=$(uname -a 2>/dev/null || true)"
+  echo "cpu=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)"
+  echo "ncpu=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || true)"
+  echo "uptime=$(uptime 2>/dev/null || true)"
+} | tee "$RUN_DIR/context.txt"
 
 run_go_bench() {
   local label="$1"

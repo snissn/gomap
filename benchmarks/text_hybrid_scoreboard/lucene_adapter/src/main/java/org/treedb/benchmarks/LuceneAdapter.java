@@ -131,7 +131,7 @@ public final class LuceneAdapter {
       }
     }
 
-    String execArgs = String.join(" ", argv);
+    String execArgs = java.util.Arrays.stream(argv).map(LuceneAdapter::shellQuote).collect(java.util.stream.Collectors.joining(" "));
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("schema_version", RESULT_SCHEMA); payload.put("status", "ok");
     payload.put("engine", Map.of("id", "lucene", "family", "lucene_family", "name", "Apache Lucene", "version", LUCENE_VERSION));
@@ -218,6 +218,11 @@ public final class LuceneAdapter {
     return String.valueOf(Files.getAttribute(path, "unix:dev"));
   }
 
+
+  private static String shellQuote(String value) {
+    if (value.matches("[A-Za-z0-9_@%+=:,./-]+")) return value;
+    return "'" + value.replace("'", "'\"'\"'") + "'";
+  }
   private static byte[] canonicalManifest(byte[] raw) throws IOException { Object value = JSON.readValue(raw, new TypeReference<Object>() {}); byte[] encoded = JSON.writeValueAsBytes(value); byte[] withNewline = java.util.Arrays.copyOf(encoded, encoded.length + 1); withNewline[encoded.length] = '\n'; return withNewline; }
   private static String digestIDs(List<String> ids) throws Exception { return sha256((String.join("\n", ids) + (ids.isEmpty() ? "" : "\n")).getBytes(StandardCharsets.UTF_8)); }
   private static String digestCaseResults(List<Map<String, Object>> cases) throws Exception { List<String> values = new ArrayList<>(); for (Map<String, Object> item : cases) values.add((String)item.get("reopen_result_digest")); return digestIDs(values); }

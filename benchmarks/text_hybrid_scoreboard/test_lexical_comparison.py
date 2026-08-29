@@ -192,6 +192,18 @@ class LexicalComparisonTest(unittest.TestCase):
             subprocess.run([sys.executable, str(root / "adapter.py")], cwd=root, env=environment, check=True)
             self.assertFalse((root / "__pycache__").exists())
 
+    def test_selected_go_binary_reaches_setup_and_adapter_commands(self) -> None:
+        selected = "/toolchains/go 1.26/bin/go"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            completed = subprocess.CompletedProcess([], 0, "", "")
+            with patch.object(lexical_runner, "run_command", return_value=completed):
+                setup_ok, setup_command, _ = lexical_runner.setup_engine("bleve", root, 1, selected)
+            self.assertTrue(setup_ok)
+            self.assertEqual(setup_command[0], selected)
+            command, _, _ = lexical_runner.adapter_command("treedb_text_v2", 1, root, HERE / "lexical_manifest.json", root / "corpus.tsv", "source", selected)
+        self.assertEqual(command[0], selected)
+
     def test_reference_interprets_every_manifest_shape(self) -> None:
         self.assertEqual(self.expected["common"], [f"doc-{i:06d}" for i in (0, 1, 2, 3, 4, 5, 6, 7, 9, 8)])
         self.assertEqual(self.expected["rare"], [f"doc-{i:06d}" for i in range(10, 20)])
