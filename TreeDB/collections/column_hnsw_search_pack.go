@@ -6,9 +6,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"slices"
 
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -541,6 +543,256 @@ func encodeColumnHNSWSearchPackRows(input columnHNSWSearchPackBuildInput, rows [
 		sections[i] = plans[i].section
 	}
 	return finishColumnHNSWSearchPack(raw, input, sections, version, headerSize, directoryOffset, directoryLength, dataOffset), nil
+}
+
+// writeColumnHNSWSearchPackRows writes the row-backed pack without retaining
+// the final pack bytes. encodeColumnHNSWSearchPackRows remains the byte oracle.
+func writeColumnHNSWSearchPackRows(w io.Writer, input columnHNSWSearchPackBuildInput, rows []columnVectorGraphAssetRow) (int64, error) {
+	return writeColumnHNSWSearchPackRowsWithBackpatch(w, nil, input, rows)
+}
+
+func writeColumnHNSWSearchPackRowsWithBackpatch(w io.Writer, backpatch func([]byte) error, input columnHNSWSearchPackBuildInput, rows []columnVectorGraphAssetRow) (int64, error) {
+	if len(rows) != input.Rows || len(input.NormalizedVectors) != 0 {
+		return 0, errors.New("collections: hnsw search pack streamed row input is invalid")
+	}
+	if err := validateColumnHNSWSearchPackBuildInputWithoutVectors(input); err != nil {
+		return 0, err
+	}
+	sectionCount := 8 + 2*len(input.AdjacencyLayers)
+	if input.HasAuxiliaryNavigation {
+		sectionCount += 2
+	}
+	headerSize, version := columnHNSWSearchPackHeaderSize, columnHNSWSearchPackVersionV1
+	if input.MembershipDigest != ([sha256.Size]byte{}) {
+		headerSize, version = columnHNSWSearchPackHeaderSizeV2, columnHNSWSearchPackVersionV2
+	}
+	if input.HasAuxiliaryNavigation {
+		version = columnHNSWSearchPackVersionV3
+	}
+	directoryLength := sectionCount * columnHNSWSearchPackSectionEntrySize
+	dataOffset, ok := alignColumnHNSWSearchPackUint64(uint64(headerSize+directoryLength), uint64(columnHNSWSearchPackAlignment))
+	if !ok || dataOffset > uint64(math.MaxInt) {
+		return 0, errors.New("collections: hnsw search pack directory length overflow")
+	}
+	sections := make([]columnHNSWSearchPackSection, 0, sectionCount)
+	cursor := dataOffset
+	add := func(kind columnHNSWSearchPackSectionKind, index uint16, alignment uint32, count, width int) error {
+		if count < 0 || (count != 0 && width > math.MaxInt/count) {
+			return fmt.Errorf("collections: hnsw search pack section %s length overflow", kind)
+		}
+		offset, ok := alignColumnHNSWSearchPackUint64(cursor, uint64(alignment))
+		length := uint64(count * width)
+		if !ok || offset > uint64(math.MaxInt) || length > uint64(math.MaxInt)-offset {
+			return fmt.Errorf("collections: hnsw search pack section %s length overflow", kind)
+		}
+		sections = append(sections, columnHNSWSearchPackSection{Kind: kind, Index: index, Alignment: alignment, Offset: offset, Length: length, Count: uint64(count)})
+		cursor = offset + length
+		return nil
+	}
+	if err := add(columnHNSWSearchPackSectionNormalizedVectors, 0, columnHNSWSearchPackVectorSectionAlignment, input.Rows*input.VectorStride, 4); err != nil {
+		return 0, err
+	}
+	if err := add(columnHNSWSearchPackSectionLevels, 0, columnHNSWSearchPackAlignment, len(input.Levels), 2); err != nil {
+		return 0, err
+	}
+	for i, layer := range input.AdjacencyLayers {
+		if err := add(columnHNSWSearchPackSectionAdjacencyOffsets, uint16(i), columnHNSWSearchPackAlignment, len(layer.Offsets), 8); err != nil {
+			return 0, err
+		}
+		if err := add(columnHNSWSearchPackSectionAdjacencyNeighbors, uint16(i), columnHNSWSearchPackAlignment, len(layer.Neighbors), 4); err != nil {
+			return 0, err
+		}
+	}
+	if input.HasAuxiliaryNavigation {
+		if err := add(columnHNSWSearchPackSectionAuxiliaryOffsets, 0, columnHNSWSearchPackAlignment, len(input.AuxiliaryNavigation.Offsets), 8); err != nil {
+			return 0, err
+		}
+		if err := add(columnHNSWSearchPackSectionAuxiliaryNeighbors, 0, columnHNSWSearchPackAlignment, len(input.AuxiliaryNavigation.Neighbors), 4); err != nil {
+			return 0, err
+		}
+	}
+	for _, v := range [][]int64{input.RowRefGenerations, input.RowRefPartIDs, input.RowRefRowIndexes, input.RowRefAppliedCommandLSN} {
+		if err := add(columnHNSWSearchPackSectionRowRefGeneration+columnHNSWSearchPackSectionKind(len(sections)-sectionCount+0), 0, columnHNSWSearchPackAlignment, len(v), 8); err != nil {
+			return 0, err
+		}
+	}
+	// Correct the four consecutive row-reference kinds after layout creation.
+	base := len(sections) - 4
+	sections[base].Kind, sections[base+1].Kind, sections[base+2].Kind, sections[base+3].Kind = columnHNSWSearchPackSectionRowRefGeneration, columnHNSWSearchPackSectionRowRefPartID, columnHNSWSearchPackSectionRowRefRowIndex, columnHNSWSearchPackSectionRowRefAppliedLSN
+	if err := add(columnHNSWSearchPackSectionDocumentIDOffsets, 0, columnHNSWSearchPackAlignment, len(input.DocumentIDOffsets), 8); err != nil {
+		return 0, err
+	}
+	if err := add(columnHNSWSearchPackSectionDocumentIDBytes, 0, columnHNSWSearchPackAlignment, len(input.DocumentIDBytes), 1); err != nil {
+		return 0, err
+	}
+	emitSection := func(dst io.Writer, s columnHNSWSearchPackSection) error {
+		return writeColumnHNSWSearchPackStreamSection(dst, s, input, rows)
+	}
+	if backpatch == nil {
+		for i := range sections {
+			sum := columnHNSWSearchPackStreamChecksum{}
+			if err := emitSection(&sum, sections[i]); err != nil {
+				return 0, err
+			}
+			sections[i].Checksum = sum.sum
+		}
+		prefix := make([]byte, int(dataOffset))
+		finishColumnHNSWSearchPack(prefix, input, sections, version, headerSize, headerSize, directoryLength, dataOffset)
+		putHNSWPackU64(prefix, columnHNSWSearchPackHeaderTotalLengthOffset, cursor)
+		putHNSWPackU64(prefix, columnHNSWSearchPackHeaderDataLengthOffset, cursor-dataOffset)
+		if err := writeColumnHNSWSearchPackStreamAll(w, prefix); err != nil {
+			return 0, err
+		}
+		written := int64(len(prefix))
+		for _, s := range sections {
+			if gap := int64(s.Offset) - written; gap > 0 {
+				if _, err := writeColumnAssetSegmentZeroPadding(w, int(gap)); err != nil {
+					return written, err
+				}
+				written += gap
+			}
+			if err := emitSection(w, s); err != nil {
+				return written, err
+			}
+			written += int64(s.Length)
+		}
+		return written, nil
+	}
+	if _, err := writeColumnAssetSegmentZeroPadding(w, int(dataOffset)); err != nil {
+		return 0, err
+	}
+	written := int64(dataOffset)
+	for i := range sections {
+		s := &sections[i]
+		if gap := int64(s.Offset) - written; gap > 0 {
+			if _, err := writeColumnAssetSegmentZeroPadding(w, int(gap)); err != nil {
+				return written, err
+			}
+			written += gap
+		}
+		sum := columnHNSWSearchPackStreamChecksum{}
+		if err := emitSection(io.MultiWriter(w, &sum), *s); err != nil {
+			return written, err
+		}
+		s.Checksum = sum.sum
+		written += int64(s.Length)
+	}
+	prefix := make([]byte, int(dataOffset))
+	finishColumnHNSWSearchPack(prefix, input, sections, version, headerSize, headerSize, directoryLength, dataOffset)
+	putHNSWPackU64(prefix, columnHNSWSearchPackHeaderTotalLengthOffset, cursor)
+	putHNSWPackU64(prefix, columnHNSWSearchPackHeaderDataLengthOffset, cursor-dataOffset)
+	if err := backpatch(prefix); err != nil {
+		return written, err
+	}
+	return written, nil
+}
+
+type columnHNSWSearchPackStreamChecksum struct{ sum uint32 }
+
+func (w *columnHNSWSearchPackStreamChecksum) Write(p []byte) (int, error) {
+	w.sum = crc.Update(w.sum, p)
+	return len(p), nil
+}
+
+func writeColumnHNSWSearchPackStreamAll(w io.Writer, p []byte) error {
+	for len(p) > 0 {
+		n, err := w.Write(p)
+		if n > 0 {
+			p = p[n:]
+		}
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
+}
+
+func writeColumnHNSWSearchPackStreamSection(w io.Writer, s columnHNSWSearchPackSection, input columnHNSWSearchPackBuildInput, rows []columnVectorGraphAssetRow) error {
+	if s.Kind == columnHNSWSearchPackSectionNormalizedVectors {
+		const chunkRows = 16
+		buf := make([]byte, chunkRows*input.VectorStride*4)
+		for start := 0; start < len(rows); start += chunkRows {
+			end := min(start+chunkRows, len(rows))
+			part := buf[:(end-start)*input.VectorStride*4]
+			clear(part)
+			for ordinal := start; ordinal < end; ordinal++ {
+				row := rows[ordinal]
+				if len(row.Vector) != input.Dimensions {
+					return fmt.Errorf("collections: hnsw search pack row[%d] vector dims=%d want %d", ordinal, len(row.Vector), input.Dimensions)
+				}
+				inv := row.InvNorm
+				if inv <= 0 || math.IsNaN(float64(inv)) || math.IsInf(float64(inv), 0) {
+					var err error
+					inv, err = columnVectorGraphInvNorm(row.Vector)
+					if err != nil {
+						return fmt.Errorf("collections: hnsw search pack row[%d] inverse norm: %w", ordinal, err)
+					}
+				}
+				base := (ordinal - start) * input.VectorStride * 4
+				for dim, value := range row.Vector {
+					normalized := value * inv
+					if math.IsNaN(float64(normalized)) || math.IsInf(float64(normalized), 0) {
+						return fmt.Errorf("collections: hnsw search pack row[%d] normalized vector[%d] is not finite", ordinal, dim)
+					}
+					binary.LittleEndian.PutUint32(part[base+dim*4:], math.Float32bits(normalized))
+				}
+			}
+			if err := writeColumnHNSWSearchPackStreamAll(w, part); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	buf := make([]byte, int(s.Length))
+	switch s.Kind {
+	case columnHNSWSearchPackSectionLevels:
+		for i, v := range input.Levels {
+			binary.LittleEndian.PutUint16(buf[i*2:], v)
+		}
+	case columnHNSWSearchPackSectionAdjacencyOffsets:
+		for i, v := range input.AdjacencyLayers[s.Index].Offsets {
+			binary.LittleEndian.PutUint64(buf[i*8:], v)
+		}
+	case columnHNSWSearchPackSectionAdjacencyNeighbors:
+		for i, v := range input.AdjacencyLayers[s.Index].Neighbors {
+			binary.LittleEndian.PutUint32(buf[i*4:], v)
+		}
+	case columnHNSWSearchPackSectionAuxiliaryOffsets:
+		for i, v := range input.AuxiliaryNavigation.Offsets {
+			binary.LittleEndian.PutUint64(buf[i*8:], v)
+		}
+	case columnHNSWSearchPackSectionAuxiliaryNeighbors:
+		for i, v := range input.AuxiliaryNavigation.Neighbors {
+			binary.LittleEndian.PutUint32(buf[i*4:], v)
+		}
+	case columnHNSWSearchPackSectionRowRefGeneration, columnHNSWSearchPackSectionRowRefPartID, columnHNSWSearchPackSectionRowRefRowIndex, columnHNSWSearchPackSectionRowRefAppliedLSN:
+		var values []int64
+		switch s.Kind {
+		case columnHNSWSearchPackSectionRowRefGeneration:
+			values = input.RowRefGenerations
+		case columnHNSWSearchPackSectionRowRefPartID:
+			values = input.RowRefPartIDs
+		case columnHNSWSearchPackSectionRowRefRowIndex:
+			values = input.RowRefRowIndexes
+		default:
+			values = input.RowRefAppliedCommandLSN
+		}
+		for i, v := range values {
+			binary.LittleEndian.PutUint64(buf[i*8:], uint64(v))
+		}
+	case columnHNSWSearchPackSectionDocumentIDOffsets:
+		for i, v := range input.DocumentIDOffsets {
+			binary.LittleEndian.PutUint64(buf[i*8:], v)
+		}
+	case columnHNSWSearchPackSectionDocumentIDBytes:
+		copy(buf, input.DocumentIDBytes)
+	default:
+		return fmt.Errorf("collections: unsupported hnsw search pack streamed section %s", s.Kind)
+	}
+	return writeColumnHNSWSearchPackStreamAll(w, buf)
 }
 
 func decodeColumnHNSWSearchPack(raw []byte, opts columnHNSWSearchPackDecodeOptions) (columnHNSWSearchPack, error) {
