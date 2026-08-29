@@ -83,6 +83,27 @@ type TextIndexStorageStats struct {
 	V2StatusFormatBytes uint64
 }
 
+// TextIndexStorageAccounting reports exact encoded byte totals and status
+// cardinalities without validating every posting and position payload.
+type TextIndexStorageAccounting struct {
+	Documents           uint64
+	EncodedBytes        uint64
+	Version             TextIndexVersion
+	V2PostingBlocks     uint64
+	V2NextOrdinal       uint64
+	V2LiveDocuments     uint64
+	V2DeletedDocs       uint64
+	V2RootGeneration    uint64
+	V2StatsGeneration   uint64
+	V2DocIDBytes        uint64
+	V2DocMapBytes       uint64
+	V2PostingBlockBytes uint64
+	V2NormBlockBytes    uint64
+	V2PositionBytes     uint64
+	V2TermStatsBytes    uint64
+	V2StatusFormatBytes uint64
+}
+
 type createTextIndexBackfillPlan struct {
 	rootNames   []string
 	baseRootIDs map[string]uint64
@@ -987,6 +1008,82 @@ func inspectTextIndexStorage(snap *backenddb.Snapshot, catalog *collectionCatalo
 		return stats, err
 	}
 	return stats, nil
+}
+
+func accountTextIndexStorage(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition) (TextIndexStorageAccounting, error) {
+	if def.Version != TextIndexVersionV2 {
+		stats, err := inspectTextIndexStorage(snap, catalog, def)
+		return TextIndexStorageAccounting{Documents: stats.Documents, EncodedBytes: stats.EncodedBytes, Version: stats.Version}, err
+	}
+	stats := TextIndexStorageAccounting{Version: TextIndexVersionV2}
+	status, ok, err := readTextV2StatusAtRoot(snap, catalog, collectionTextV2GenerationsRootName(catalog.meta.Name, def.Name))
+	if err != nil {
+		return stats, err
+	}
+	if !ok {
+		return stats, errMalformedTextStorage("missing text-v2 status record for collection %q index %q", catalog.meta.Name, def.Name)
+	}
+	stats.Documents = status.LiveDocuments
+	stats.V2NextOrdinal = status.NextOrdinal
+	stats.V2LiveDocuments = status.LiveDocuments
+	stats.V2DeletedDocs = status.DeletedDocuments
+	stats.V2RootGeneration = status.RootGeneration
+	stats.V2StatsGeneration = status.StatsGeneration
+	for _, rootName := range collectionTextV2RootNames(catalog.meta.Name, def.Name) {
+		family, ok := textV2RootFamilyForName(catalog.meta.Name, def.Name, rootName)
+		if !ok {
+			return stats, errMalformedTextStorage("unknown text-v2 root %q", rootName)
+		}
+		it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
+		if errors.Is(err, tree.ErrKeyNotFound) || it == nil {
+			return stats, errMalformedTextStorage("missing text-v2 root %q", rootName)
+		}
+		if err != nil {
+			return stats, err
+		}
+		for it.Valid() {
+			if !it.IsDeleted() {
+				key := it.UnsafeKey()
+				addTextV2AccountingLaneBytes(&stats, family, key, it.UnsafeValue())
+				if family == textV2RootFamilyPostingBlocks && !textV2KeyIsKind(key, textV2KeyKindFormat) {
+					stats.V2PostingBlocks++
+				}
+			}
+			it.Next()
+		}
+		iterErr := it.Error()
+		closeErr := it.Close()
+		if iterErr != nil {
+			return stats, iterErr
+		}
+		if closeErr != nil {
+			return stats, closeErr
+		}
+	}
+	return stats, nil
+}
+
+func addTextV2AccountingLaneBytes(stats *TextIndexStorageAccounting, family textV2RootFamily, key, value []byte) {
+	bytesWritten := uint64(len(key) + len(value))
+	stats.EncodedBytes += bytesWritten
+	if textV2KeyIsKind(key, textV2KeyKindFormat) || textV2KeyIsKind(key, textV2KeyKindStatus) {
+		stats.V2StatusFormatBytes += bytesWritten
+		return
+	}
+	switch family {
+	case textV2RootFamilyDocID:
+		stats.V2DocIDBytes += bytesWritten
+	case textV2RootFamilyDocMap:
+		stats.V2DocMapBytes += bytesWritten
+	case textV2RootFamilyTerms:
+		stats.V2TermStatsBytes += bytesWritten
+	case textV2RootFamilyPostingBlocks:
+		stats.V2PostingBlockBytes += bytesWritten
+	case textV2RootFamilyNormBlocks:
+		stats.V2NormBlockBytes += bytesWritten
+	case textV2RootFamilyPositions:
+		stats.V2PositionBytes += bytesWritten
+	}
 }
 
 func inspectTextPostingsRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, stats *TextIndexStorageStats) error {

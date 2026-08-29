@@ -179,31 +179,32 @@ type reportContract struct {
 }
 
 type reportConfig struct {
-	Rows                 int    `json:"rows"`
-	BatchSize            int    `json:"batch_size"`
-	Dims                 int    `json:"dims"`
-	M                    int    `json:"m"`
-	EfConstruction       int    `json:"ef_construction"`
-	EfSearch             int    `json:"ef_search"`
-	TopK                 int    `json:"top_k"`
-	CandidateLimit       int    `json:"candidate_limit"`
-	Queries              int    `json:"queries"`
-	Readers              int    `json:"readers"`
-	IncludeVector        bool   `json:"include_vector"`
-	RunBackfill          bool   `json:"run_backfill"`
-	BackfillRows         int    `json:"backfill_rows,omitempty"`
-	RunTextOnly          bool   `json:"run_text_only"`
-	TextOnlyRows         int    `json:"text_only_rows,omitempty"`
-	RunSourceChunk       bool   `json:"run_source_chunk"`
-	SourceChunkRows      int    `json:"source_chunk_rows,omitempty"`
-	SourceChunkBatchSize int    `json:"source_chunk_batch_size,omitempty"`
-	RunReopen            bool   `json:"run_reopen"`
-	RunConcurrent        bool   `json:"run_concurrent"`
-	ConcurrentWrites     int    `json:"concurrent_writes,omitempty"`
-	RunRewrite           bool   `json:"run_rewrite"`
-	MaintenanceUpdates   int    `json:"maintenance_updates,omitempty"`
-	MaintenanceDeletes   int    `json:"maintenance_deletes,omitempty"`
-	PhaseSelector        string `json:"phase_selector"`
+	Rows                       int    `json:"rows"`
+	BatchSize                  int    `json:"batch_size"`
+	Dims                       int    `json:"dims"`
+	M                          int    `json:"m"`
+	EfConstruction             int    `json:"ef_construction"`
+	EfSearch                   int    `json:"ef_search"`
+	TopK                       int    `json:"top_k"`
+	CandidateLimit             int    `json:"candidate_limit"`
+	Queries                    int    `json:"queries"`
+	Readers                    int    `json:"readers"`
+	IncludeVector              bool   `json:"include_vector"`
+	RunBackfill                bool   `json:"run_backfill"`
+	BackfillRows               int    `json:"backfill_rows,omitempty"`
+	RunTextOnly                bool   `json:"run_text_only"`
+	TextOnlyRows               int    `json:"text_only_rows,omitempty"`
+	RunSourceChunk             bool   `json:"run_source_chunk"`
+	SourceChunkRows            int    `json:"source_chunk_rows,omitempty"`
+	SourceChunkBatchSize       int    `json:"source_chunk_batch_size,omitempty"`
+	RunReopen                  bool   `json:"run_reopen"`
+	RunConcurrent              bool   `json:"run_concurrent"`
+	ConcurrentWrites           int    `json:"concurrent_writes,omitempty"`
+	RunRewrite                 bool   `json:"run_rewrite"`
+	MaintenanceUpdates         int    `json:"maintenance_updates,omitempty"`
+	MaintenanceUpdateBatchSize int    `json:"maintenance_update_batch_size,omitempty"`
+	MaintenanceDeletes         int    `json:"maintenance_deletes,omitempty"`
+	PhaseSelector              string `json:"phase_selector"`
 }
 
 type reportArtifacts struct {
@@ -233,80 +234,80 @@ type cleanupReport struct {
 }
 
 type loadReport struct {
-	Status                string                            `json:"status"`
-	Failure               string                            `json:"failure,omitempty"`
-	Mode                  string                            `json:"mode"`
-	Rows                  int                               `json:"rows"`
-	Batches               int                               `json:"batches"`
-	GenerationSeconds     float64                           `json:"generation_seconds"`
-	InsertSeconds         float64                           `json:"insert_seconds"`
-	FlushSeconds          float64                           `json:"flush_seconds"`
-	VectorRebuildSeconds  float64                           `json:"vector_rebuild_seconds,omitempty"`
-	CheckpointSeconds     float64                           `json:"checkpoint_seconds"`
-	TotalSeconds          float64                           `json:"total_seconds"`
-	RowsPerSecond         float64                           `json:"rows_per_second"`
-	TextStorage           collections.TextIndexStorageStats `json:"text_storage"`
-	VectorStatus          *collections.VectorIndexStatus    `json:"vector_status,omitempty"`
-	StorageBytesAfterLoad int64                             `json:"storage_bytes_after_load"`
-	StorageBytesPerDoc    float64                           `json:"storage_bytes_per_doc"`
-	Resource              resourceSnapshot                  `json:"resource"`
+	Status                string                                 `json:"status"`
+	Failure               string                                 `json:"failure,omitempty"`
+	Mode                  string                                 `json:"mode"`
+	Rows                  int                                    `json:"rows"`
+	Batches               int                                    `json:"batches"`
+	GenerationSeconds     float64                                `json:"generation_seconds"`
+	InsertSeconds         float64                                `json:"insert_seconds"`
+	FlushSeconds          float64                                `json:"flush_seconds"`
+	VectorRebuildSeconds  float64                                `json:"vector_rebuild_seconds,omitempty"`
+	CheckpointSeconds     float64                                `json:"checkpoint_seconds"`
+	TotalSeconds          float64                                `json:"total_seconds"`
+	RowsPerSecond         float64                                `json:"rows_per_second"`
+	TextStorage           collections.TextIndexStorageAccounting `json:"text_storage"`
+	VectorStatus          *collections.VectorIndexStatus         `json:"vector_status,omitempty"`
+	StorageBytesAfterLoad int64                                  `json:"storage_bytes_after_load"`
+	StorageBytesPerDoc    float64                                `json:"storage_bytes_per_doc"`
+	Resource              resourceSnapshot                       `json:"resource"`
 }
 
 type backfillReport struct {
-	Status             string                             `json:"status"`
-	Failure            string                             `json:"failure,omitempty"`
-	Mode               string                             `json:"mode"`
-	Rows               int                                `json:"rows"`
-	GenerationSeconds  float64                            `json:"generation_seconds"`
-	InsertSeconds      float64                            `json:"insert_seconds"`
-	FlushSeconds       float64                            `json:"flush_seconds"`
-	BackfillSeconds    float64                            `json:"backfill_seconds"`
-	CheckpointSeconds  float64                            `json:"checkpoint_seconds"`
-	TotalSeconds       float64                            `json:"total_seconds"`
-	RowsPerSecond      float64                            `json:"rows_per_second"`
-	Stats              collections.TextIndexBackfillStats `json:"stats"`
-	TextStorage        collections.TextIndexStorageStats  `json:"text_storage"`
-	StorageBytes       int64                              `json:"storage_bytes"`
-	StorageBytesPerDoc float64                            `json:"storage_bytes_per_doc"`
-	Resource           resourceSnapshot                   `json:"resource"`
+	Status             string                                 `json:"status"`
+	Failure            string                                 `json:"failure,omitempty"`
+	Mode               string                                 `json:"mode"`
+	Rows               int                                    `json:"rows"`
+	GenerationSeconds  float64                                `json:"generation_seconds"`
+	InsertSeconds      float64                                `json:"insert_seconds"`
+	FlushSeconds       float64                                `json:"flush_seconds"`
+	BackfillSeconds    float64                                `json:"backfill_seconds"`
+	CheckpointSeconds  float64                                `json:"checkpoint_seconds"`
+	TotalSeconds       float64                                `json:"total_seconds"`
+	RowsPerSecond      float64                                `json:"rows_per_second"`
+	Stats              collections.TextIndexBackfillStats     `json:"stats"`
+	TextStorage        collections.TextIndexStorageAccounting `json:"text_storage"`
+	StorageBytes       int64                                  `json:"storage_bytes"`
+	StorageBytesPerDoc float64                                `json:"storage_bytes_per_doc"`
+	Resource           resourceSnapshot                       `json:"resource"`
 }
 
 type sourceChunkReport struct {
-	Status              string                            `json:"status"`
-	Failure             string                            `json:"failure,omitempty"`
-	SourceDocuments     int                               `json:"source_documents"`
-	GeneratedChunks     int                               `json:"generated_chunks"`
-	BatchCalls          int                               `json:"batch_calls"`
-	BatchSize           int                               `json:"batch_size"`
-	IngestSeconds       float64                           `json:"ingest_seconds"`
-	CheckpointSeconds   float64                           `json:"checkpoint_seconds"`
-	ReopenSeconds       float64                           `json:"reopen_seconds"`
-	BeforeResultsSHA256 string                            `json:"before_results_sha256"`
-	AfterResultsSHA256  string                            `json:"after_results_sha256"`
-	ReopenParityOK      bool                              `json:"reopen_parity_ok"`
-	StorageBytes        int64                             `json:"storage_bytes"`
-	TextStorage         collections.TextIndexStorageStats `json:"text_storage"`
-	Resource            resourceSnapshot                  `json:"resource"`
+	Status              string                                 `json:"status"`
+	Failure             string                                 `json:"failure,omitempty"`
+	SourceDocuments     int                                    `json:"source_documents"`
+	GeneratedChunks     int                                    `json:"generated_chunks"`
+	BatchCalls          int                                    `json:"batch_calls"`
+	BatchSize           int                                    `json:"batch_size"`
+	IngestSeconds       float64                                `json:"ingest_seconds"`
+	CheckpointSeconds   float64                                `json:"checkpoint_seconds"`
+	ReopenSeconds       float64                                `json:"reopen_seconds"`
+	BeforeResultsSHA256 string                                 `json:"before_results_sha256"`
+	AfterResultsSHA256  string                                 `json:"after_results_sha256"`
+	ReopenParityOK      bool                                   `json:"reopen_parity_ok"`
+	StorageBytes        int64                                  `json:"storage_bytes"`
+	TextStorage         collections.TextIndexStorageAccounting `json:"text_storage"`
+	Resource            resourceSnapshot                       `json:"resource"`
 }
 
 type reopenReport struct {
-	Status                string                            `json:"status"`
-	Failure               string                            `json:"failure,omitempty"`
-	CloseSeconds          float64                           `json:"close_seconds"`
-	OpenSeconds           float64                           `json:"open_seconds"`
-	OpenCollectionSeconds float64                           `json:"open_collection_seconds"`
-	ProbeSeconds          float64                           `json:"probe_seconds"`
-	TotalSeconds          float64                           `json:"total_seconds"`
-	TextStorage           collections.TextIndexStorageStats `json:"text_storage"`
-	VectorStatus          *collections.VectorIndexStatus    `json:"vector_status,omitempty"`
-	StorageBytes          int64                             `json:"storage_bytes"`
-	ExpectedRows          int                               `json:"expected_rows"`
-	LiveRows              uint64                            `json:"live_rows"`
-	CountOK               bool                              `json:"count_ok"`
-	BeforeResultsSHA256   string                            `json:"before_results_sha256"`
-	AfterResultsSHA256    string                            `json:"after_results_sha256"`
-	QueryParityOK         bool                              `json:"query_parity_ok"`
-	Resource              resourceSnapshot                  `json:"resource"`
+	Status                string                                 `json:"status"`
+	Failure               string                                 `json:"failure,omitempty"`
+	CloseSeconds          float64                                `json:"close_seconds"`
+	OpenSeconds           float64                                `json:"open_seconds"`
+	OpenCollectionSeconds float64                                `json:"open_collection_seconds"`
+	ProbeSeconds          float64                                `json:"probe_seconds"`
+	TotalSeconds          float64                                `json:"total_seconds"`
+	TextStorage           collections.TextIndexStorageAccounting `json:"text_storage"`
+	VectorStatus          *collections.VectorIndexStatus         `json:"vector_status,omitempty"`
+	StorageBytes          int64                                  `json:"storage_bytes"`
+	ExpectedRows          int                                    `json:"expected_rows"`
+	LiveRows              uint64                                 `json:"live_rows"`
+	CountOK               bool                                   `json:"count_ok"`
+	BeforeResultsSHA256   string                                 `json:"before_results_sha256"`
+	AfterResultsSHA256    string                                 `json:"after_results_sha256"`
+	QueryParityOK         bool                                   `json:"query_parity_ok"`
+	Resource              resourceSnapshot                       `json:"resource"`
 }
 
 type queryReport struct {
@@ -371,23 +372,25 @@ type concurrentReport struct {
 }
 
 type maintenanceReport struct {
-	Status               string                            `json:"status"`
-	Failure              string                            `json:"failure,omitempty"`
-	Updates              int                               `json:"updates"`
-	Deletes              int                               `json:"deletes"`
-	UpdateSeconds        float64                           `json:"update_seconds"`
-	DeleteSeconds        float64                           `json:"delete_seconds"`
-	RewriteSeconds       float64                           `json:"rewrite_seconds"`
-	CheckpointSeconds    float64                           `json:"checkpoint_seconds"`
-	Stats                collections.TextIndexRewriteStats `json:"stats"`
-	TextStorageAfter     collections.TextIndexStorageStats `json:"text_storage_after"`
-	StorageBytesAfter    int64                             `json:"storage_bytes_after"`
-	PostconditionOK      bool                              `json:"postcondition_ok"`
-	PostconditionFailure string                            `json:"postcondition_failure,omitempty"`
-	BeforeResultsSHA256  string                            `json:"before_results_sha256"`
-	AfterResultsSHA256   string                            `json:"after_results_sha256"`
-	ReopenParityOK       bool                              `json:"reopen_parity_ok"`
-	Resource             resourceSnapshot                  `json:"resource"`
+	Status               string                                 `json:"status"`
+	Failure              string                                 `json:"failure,omitempty"`
+	Updates              int                                    `json:"updates"`
+	UpdateBatchSize      int                                    `json:"update_batch_size"`
+	UpdateBatchCalls     int                                    `json:"update_batch_calls"`
+	Deletes              int                                    `json:"deletes"`
+	UpdateSeconds        float64                                `json:"update_seconds"`
+	DeleteSeconds        float64                                `json:"delete_seconds"`
+	RewriteSeconds       float64                                `json:"rewrite_seconds"`
+	CheckpointSeconds    float64                                `json:"checkpoint_seconds"`
+	Stats                collections.TextIndexRewriteStats      `json:"stats"`
+	TextStorageAfter     collections.TextIndexStorageAccounting `json:"text_storage_after"`
+	StorageBytesAfter    int64                                  `json:"storage_bytes_after"`
+	PostconditionOK      bool                                   `json:"postcondition_ok"`
+	PostconditionFailure string                                 `json:"postcondition_failure,omitempty"`
+	BeforeResultsSHA256  string                                 `json:"before_results_sha256"`
+	AfterResultsSHA256   string                                 `json:"after_results_sha256"`
+	ReopenParityOK       bool                                   `json:"reopen_parity_ok"`
+	Resource             resourceSnapshot                       `json:"resource"`
 }
 
 type storageSnapshot struct {
@@ -402,6 +405,13 @@ type storageSnapshot struct {
 	PhysicalTotalWALExcludedBytes int64    `json:"physical_total_wal_excluded_bytes"`
 	OtherPaths                    []string `json:"other_paths,omitempty"`
 	TextEncodedBytes              uint64   `json:"text_encoded_bytes,omitempty"`
+	TextDocIDBytes                uint64   `json:"text_docid_bytes,omitempty"`
+	TextDocMapBytes               uint64   `json:"text_docmap_bytes,omitempty"`
+	TextPostingBlockBytes         uint64   `json:"text_posting_block_bytes,omitempty"`
+	TextNormBlockBytes            uint64   `json:"text_norm_block_bytes,omitempty"`
+	TextPositionBytes             uint64   `json:"text_position_bytes,omitempty"`
+	TextTermStatsBytes            uint64   `json:"text_term_stats_bytes,omitempty"`
+	TextStatusFormatBytes         uint64   `json:"text_status_format_bytes,omitempty"`
 	TextBytesPerDoc               float64  `json:"text_bytes_per_doc,omitempty"`
 	TextDocIDBytesPerDoc          float64  `json:"text_docid_bytes_per_doc,omitempty"`
 	TextDocMapBytesPerDoc         float64  `json:"text_docmap_bytes_per_doc,omitempty"`
@@ -819,7 +829,7 @@ func run(cfg config) (report, error) {
 			RunSourceChunk: cfg.runSourceChunk, SourceChunkRows: cfg.sourceChunkRows, SourceChunkBatchSize: cfg.batchSize,
 			RunReopen: cfg.runReopen, RunConcurrent: cfg.runConcurrent,
 			ConcurrentWrites: cfg.concurrentWrites, RunRewrite: cfg.runRewrite,
-			MaintenanceUpdates: cfg.maintenanceUpdates, MaintenanceDeletes: cfg.maintenanceDeletes,
+			MaintenanceUpdates: cfg.maintenanceUpdates, MaintenanceUpdateBatchSize: minInt(cfg.batchSize, cfg.maintenanceUpdates), MaintenanceDeletes: cfg.maintenanceDeletes,
 			PhaseSelector: cfg.phases,
 		},
 		Artifacts: reportArtifacts{
@@ -833,7 +843,7 @@ func run(cfg config) (report, error) {
 		},
 		SelectedPhases:     selectedPhaseNames(cfg.selectedPhases),
 		Failures:           []failureRecord{},
-		LogicalTextStorage: logicalTextStorageAvailability(cfg.rows),
+		LogicalTextStorage: metricAvailability{State: "observed"},
 	}
 	configSHA, err := writeFrozenConfig(cfg.outDir, rep.Config)
 	if err != nil {
@@ -2027,7 +2037,7 @@ func runMaintenanceProbe(cfg config) (maintenanceReport, error) {
 
 	updates := minInt(cfg.maintenanceUpdates, cfg.rows)
 	deletes := minInt(cfg.maintenanceDeletes, maxInt(cfg.rows-updates, 0))
-	maintenance := maintenanceReport{Updates: updates, Deletes: deletes}
+	maintenance := maintenanceReport{Updates: updates, Deletes: deletes, UpdateBatchSize: minInt(cfg.batchSize, updates)}
 	updateStart := time.Now()
 	for offset := 0; offset < updates; offset += cfg.batchSize {
 		count := minInt(cfg.batchSize, updates-offset)
@@ -2054,6 +2064,7 @@ func runMaintenanceProbe(cfg config) (maintenanceReport, error) {
 				return maintenanceReport{}, fmt.Errorf("maintenance update %s matched=%v modified=%v", items[i].DocumentID, result.Matched, result.Modified)
 			}
 		}
+		maintenance.UpdateBatchCalls++
 	}
 	maintenance.UpdateSeconds = secondsSince(updateStart)
 	deleteStart := time.Now()
@@ -2101,9 +2112,9 @@ func runMaintenanceProbe(cfg config) (maintenanceReport, error) {
 		maintenance.PostconditionOK = false
 		maintenance.PostconditionFailure = "rewrite reported no purged stale postings"
 	}
-	if storageObserved && (storage.V2DeletedDocs != 0 || storage.V2RewriteMergeState == "") {
+	if storageObserved && storage.V2DeletedDocs != 0 {
 		maintenance.PostconditionOK = false
-		maintenance.PostconditionFailure = fmt.Sprintf("logical storage postcondition failed: deleted_docs=%d merge_state=%q", storage.V2DeletedDocs, storage.V2RewriteMergeState)
+		maintenance.PostconditionFailure = fmt.Sprintf("logical storage postcondition failed: deleted_docs=%d", storage.V2DeletedDocs)
 	}
 	probeOpts := collections.TextSearchOptions{IndexName: textIndexName, Query: "refund", TopK: cfg.topK, ResultMode: collections.TextSearchResultModeScoreOnly, CandidateLimit: cfg.rows, MaxPostingsScanned: maxInt(cfg.rows*4, cfg.topK)}
 	probe, err := col.SearchText(probeOpts)
@@ -2508,8 +2519,13 @@ func rankBottlenecks(rep report) []bottleneckRow {
 	return out
 }
 
-func storageSnapshotFromText(label string, docs int, dir string, stats collections.TextIndexStorageStats, vectorStatus *collections.VectorIndexStatus) storageSnapshot {
-	snap := storageSnapshot{Label: label, TextEncodedBytes: stats.EncodedBytes, V2PostingBlocks: stats.V2PostingBlocks, V2LiveDocuments: stats.V2LiveDocuments, V2DeletedDocs: stats.V2DeletedDocs}
+func storageSnapshotFromText(label string, docs int, dir string, stats collections.TextIndexStorageAccounting, vectorStatus *collections.VectorIndexStatus) storageSnapshot {
+	snap := storageSnapshot{
+		Label: label, TextEncodedBytes: stats.EncodedBytes,
+		TextDocIDBytes: stats.V2DocIDBytes, TextDocMapBytes: stats.V2DocMapBytes, TextPostingBlockBytes: stats.V2PostingBlockBytes,
+		TextNormBlockBytes: stats.V2NormBlockBytes, TextPositionBytes: stats.V2PositionBytes, TextTermStatsBytes: stats.V2TermStatsBytes, TextStatusFormatBytes: stats.V2StatusFormatBytes,
+		V2PostingBlocks: stats.V2PostingBlocks, V2LiveDocuments: stats.V2LiveDocuments, V2DeletedDocs: stats.V2DeletedDocs,
+	}
 	physical, err := observePhysicalStorage(dir)
 	if err == nil {
 		snap.PhysicalIndexPageBytes = physical.PhysicalIndexPageBytes
@@ -2701,7 +2717,7 @@ func renderMarkdown(rep report) string {
 	}
 	if rep.Maintenance != nil {
 		fmt.Fprintf(&b, "## Maintenance/rewrite\n\n")
-		fmt.Fprintf(&b, "Updates `%d` in `%.3fs`, deletes `%d` in `%.3fs`, rewrite `%.3fs`, checkpoint `%.3fs`. Rewrite read `%d` blocks, wrote `%d`, deleted `%d`, purged stale postings `%d`; postcondition %s; checkpoint/reopen query parity `%v`.\n\n", rep.Maintenance.Updates, rep.Maintenance.UpdateSeconds, rep.Maintenance.Deletes, rep.Maintenance.DeleteSeconds, rep.Maintenance.RewriteSeconds, rep.Maintenance.CheckpointSeconds, rep.Maintenance.Stats.PostingBlocksRead, rep.Maintenance.Stats.PostingBlocksWritten, rep.Maintenance.Stats.PostingBlocksDeleted, rep.Maintenance.Stats.StalePostingsPurged, guardrailLabel(rep.Maintenance.PostconditionOK, rep.Maintenance.PostconditionFailure), rep.Maintenance.ReopenParityOK)
+		fmt.Fprintf(&b, "Updates `%d` in `%d` atomic batch call(s) of at most `%d` documents in `%.3fs`, deletes `%d` in `%.3fs`, rewrite `%.3fs`, checkpoint `%.3fs`. Rewrite read `%d` blocks, wrote `%d`, deleted `%d`, purged stale postings `%d`; postcondition %s; checkpoint/reopen query parity `%v`.\n\n", rep.Maintenance.Updates, rep.Maintenance.UpdateBatchCalls, rep.Maintenance.UpdateBatchSize, rep.Maintenance.UpdateSeconds, rep.Maintenance.Deletes, rep.Maintenance.DeleteSeconds, rep.Maintenance.RewriteSeconds, rep.Maintenance.CheckpointSeconds, rep.Maintenance.Stats.PostingBlocksRead, rep.Maintenance.Stats.PostingBlocksWritten, rep.Maintenance.Stats.PostingBlocksDeleted, rep.Maintenance.Stats.StalePostingsPurged, guardrailLabel(rep.Maintenance.PostconditionOK, rep.Maintenance.PostconditionFailure), rep.Maintenance.ReopenParityOK)
 	}
 	if len(rep.Bottlenecks) != 0 {
 		fmt.Fprintf(&b, "## Ranked bottlenecks / follow-ups\n\n")
@@ -2754,7 +2770,7 @@ func retainedArtifactStatus(rep report) string {
 	return "ELIGIBLE; acceptance requires successful seal and validation"
 }
 
-func textBytesPerDoc(stats collections.TextIndexStorageStats, rows int, availability metricAvailability) string {
+func textBytesPerDoc(stats collections.TextIndexStorageAccounting, rows int, availability metricAvailability) string {
 	if availability.State != "observed" {
 		return availability.State
 	}
@@ -2935,21 +2951,8 @@ func captureResource() resourceSnapshot {
 	return resourceSnapshot{CPUSeconds: cpuSeconds, PeakRSSBytes: peakRSS, LiveHeapBytes: memory.Alloc}
 }
 
-func logicalTextStorageAvailability(rows int) metricAvailability {
-	if rows <= 100_000 {
-		return metricAvailability{State: "observed"}
-	}
-	return metricAvailability{
-		State:  "unavailable",
-		Reason: "full logical component validation is O(postings) with stored positions; exact physical index/value-log/WAL accounting remains observed",
-	}
-}
-
-func collectTextStorageStats(col *collections.Collection, rows int) (collections.TextIndexStorageStats, bool, error) {
-	if rows > 100_000 {
-		return collections.TextIndexStorageStats{}, false, nil
-	}
-	stats, err := col.TextIndexStorageStats(textIndexName)
+func collectTextStorageStats(col *collections.Collection, _ int) (collections.TextIndexStorageAccounting, bool, error) {
+	stats, err := col.TextIndexStorageAccounting(textIndexName)
 	return stats, true, err
 }
 func finalizeCleanup(rep *report, cfg config, fixture *scaleFixture) error {

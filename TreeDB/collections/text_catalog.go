@@ -365,6 +365,39 @@ func (c *Collection) TextIndexStorageStats(indexName string) (TextIndexStorageSt
 	return inspectTextIndexStorage(snap, catalog, def)
 }
 
+// TextIndexStorageAccounting returns exact encoded byte totals for each durable
+// text-index lane. Unlike TextIndexStorageStats, it does not decode and validate
+// every posting or position entry, so it is suitable for large-scale accounting.
+func (c *Collection) TextIndexStorageAccounting(indexName string) (TextIndexStorageAccounting, error) {
+	var stats TextIndexStorageAccounting
+	if err := ValidateIndexName(indexName); err != nil {
+		return stats, err
+	}
+	if c == nil {
+		return stats, errCollectionNil
+	}
+	if c.db == nil {
+		return stats, errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return stats, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return stats, err
+	}
+	if catalog == nil {
+		return stats, errCollectionNotFound
+	}
+	def, ok := findTextIndex(catalog.meta.TextIndexes, indexName)
+	if !ok {
+		return stats, ErrIndexNotFound
+	}
+	return accountTextIndexStorage(snap, catalog, def)
+}
+
 func addTextIndexToCollectionMeta(meta CollectionMeta, def TextIndexDefinition) (CollectionMeta, TextIndexDefinition, error) {
 	if _, ok := findIndex(meta.Indexes, def.Name); ok {
 		return CollectionMeta{}, TextIndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)

@@ -35,9 +35,15 @@ func TestQualificationValidatorRejectsEveryNorthStarGap4329(t *testing.T) {
 		{"missing path counter", "block-max path", func(r *report) { r.Queries[0].TextStats.TextPostingBlocksSkipped = 0 }},
 		{"scalar isolation", "incomplete or failed", func(r *report) { queryByName4329(r, queryRowHybridTextScalar).IsolationOK = false }},
 		{"resource", "load/build/resource", func(r *report) { r.Load.Resource.PeakRSSBytes = 0 }},
-		{"logical storage availability", "logical text storage measurement", func(r *report) { r.LogicalTextStorage = metricAvailability{State: "unavailable"} }},
+		{"logical storage availability", "logical text storage measurement", func(r *report) {
+			r.LogicalTextStorage = metricAvailability{State: "unavailable", Reason: "scan omitted"}
+		}},
 		{"source chunk batch contract", "source/chunk batch contract", func(r *report) { r.SourceChunk.BatchCalls-- }},
+		{"maintenance batch contract", "maintenance update batch contract", func(r *report) { r.Maintenance.UpdateBatchCalls = 2 }},
 		{"WAL accounting", "WAL/total accounting mismatch", func(r *report) { r.StorageSnapshots[0].PhysicalTotalWALExcludedBytes++ }},
+		{"logical bytes", "logical text accounting mismatch", func(r *report) { r.StorageSnapshots[0].TextEncodedBytes = 0 }},
+		{"logical lane sum", "logical text accounting mismatch", func(r *report) { r.StorageSnapshots[0].TextDocIDBytes++ }},
+		{"logical live count", "logical text accounting mismatch", func(r *report) { r.StorageSnapshots[0].V2LiveDocuments-- }},
 		{"missing storage row", "missing storage snapshot", func(r *report) { r.StorageSnapshots = r.StorageSnapshots[:4] }},
 		{"false reopen", "reopen/count/query parity", func(r *report) { r.Reopen.QueryParityOK = false }},
 		{"maintenance mutation", "mutation/rewrite/checkpoint/reopen parity", func(r *report) { r.Maintenance.Updates = 9_999 }},
@@ -104,7 +110,7 @@ func validQualificationReport4329() report {
 		Queries: 3, Readers: 4, IncludeVector: true, RunBackfill: true,
 		BackfillRows: requiredScaleRows, RunTextOnly: true, TextOnlyRows: requiredScaleRows, RunSourceChunk: true, SourceChunkRows: requiredScaleRows, SourceChunkBatchSize: requiredSourceChunkBatchSize,
 		RunReopen: true, RunConcurrent: true, ConcurrentWrites: 1024, RunRewrite: true,
-		MaintenanceUpdates: 10_000, MaintenanceDeletes: 5_000, PhaseSelector: "all",
+		MaintenanceUpdates: 10_000, MaintenanceUpdateBatchSize: requiredMaintenanceUpdateBatchSize, MaintenanceDeletes: 5_000, PhaseSelector: "all",
 	}
 	textStats := collections.TextSearchStats{TextPostingBlocksVisited: 10, TextPostingBlocksSkipped: 2}
 	queries := make([]queryReport, 0, len(requiredQueryRows))
@@ -156,7 +162,19 @@ func validQualificationReport4329() report {
 		queries = append(queries, row)
 	}
 	storage := func(label string) storageSnapshot {
-		return storageSnapshot{Label: label, PhysicalIndexPageBytes: 100, PhysicalValueLogBytes: 200, PhysicalWALBytes: 10, PhysicalOtherBytes: 5, PhysicalTotalBytes: 315, PhysicalTotalWALExcludedBytes: 305}
+		liveDocuments := uint64(requiredScaleRows)
+		switch label {
+		case "maintenance_rewrite_fixture":
+			liveDocuments -= 5_000
+		case "source_chunk_fixture":
+			liveDocuments = 5 * requiredScaleRows
+		}
+		return storageSnapshot{
+			Label: label, PhysicalIndexPageBytes: 100, PhysicalValueLogBytes: 200, PhysicalWALBytes: 10, PhysicalOtherBytes: 5, PhysicalTotalBytes: 315, PhysicalTotalWALExcludedBytes: 305,
+			TextEncodedBytes: 700, TextDocIDBytes: 100, TextDocMapBytes: 100, TextPostingBlockBytes: 100, TextNormBlockBytes: 100, TextPositionBytes: 100, TextTermStatsBytes: 100, TextStatusFormatBytes: 100,
+			TextBytesPerDoc: 70, TextDocIDBytesPerDoc: 10, TextDocMapBytesPerDoc: 10, TextPostingBlockBytesPerDoc: 10, TextNormBlockBytesPerDoc: 10, TextPositionBytesPerDoc: 10, TextTermStatsBytesPerDoc: 10, TextStatusFormatBytesPerDoc: 10,
+			V2PostingBlocks: 1, V2LiveDocuments: liveDocuments,
+		}
 	}
 	phases := []string{"load", "queries", "reopen", "concurrent", "maintenance", "backfill", "text_only", "source_chunk"}
 	return report{
@@ -164,15 +182,15 @@ func validQualificationReport4329() report {
 		Context:            reportContext{VCSClean: true, Commit: "commit", TreeOID: "tree", TreeDBSubtreeOID: "treedb", HarnessSubtreeOID: "harness", BinarySHA256: "binary"},
 		Contract:           reportContract{ConfigSHA256: "config", FixtureSHA256: frozenFixtureSHA256(), QuerySetSHA256: frozenQuerySetSHA256(), RelevanceSHA256: frozenRelevanceSHA256(), Analyzer: "simple", FieldWeights: "title=3,body=1", Seed: 4329},
 		Config:             cfg,
-		LogicalTextStorage: metricAvailability{State: "unavailable", Reason: "full logical component scan intentionally excluded"},
+		LogicalTextStorage: metricAvailability{State: "observed"},
 		Artifacts:          reportArtifacts{OutDir: "/tmp/scale-4329", DBDir: "/tmp/scale-4329/primary_db"},
 		Load:               loadReport{Status: "passed", Mode: "mixed_text_vector", Rows: requiredScaleRows, Batches: 1, CheckpointSeconds: 1, StorageBytesAfterLoad: 1, Resource: resource},
 		TextOnly:           &loadReport{Status: "passed", Mode: "text_only_predeclared", Rows: requiredScaleRows, Batches: 1, CheckpointSeconds: 1, StorageBytesAfterLoad: 1, Resource: resource},
 		Backfill:           &backfillReport{Status: "passed", Mode: "text_only_post_load_backfill", Rows: requiredScaleRows, BackfillSeconds: 1, CheckpointSeconds: 1, Resource: resource},
-		SourceChunk:        &sourceChunkReport{Status: "passed", SourceDocuments: requiredScaleRows, GeneratedChunks: requiredScaleRows, BatchSize: requiredSourceChunkBatchSize, BatchCalls: (requiredScaleRows + requiredSourceChunkBatchSize - 1) / requiredSourceChunkBatchSize, CheckpointSeconds: 1, ReopenParityOK: true, Resource: resource},
+		SourceChunk:        &sourceChunkReport{Status: "passed", SourceDocuments: requiredScaleRows, GeneratedChunks: 4 * requiredScaleRows, BatchSize: requiredSourceChunkBatchSize, BatchCalls: (requiredScaleRows + requiredSourceChunkBatchSize - 1) / requiredSourceChunkBatchSize, CheckpointSeconds: 1, ReopenParityOK: true, Resource: resource},
 		Reopen:             &reopenReport{Status: "passed", CountOK: true, QueryParityOK: true, BeforeResultsSHA256: "same", AfterResultsSHA256: "same", StorageBytes: 1, Resource: resource},
 		Concurrent:         &concurrentReport{Status: "passed", Readers: 4, Queries: 4, Writes: 1, GuardrailOK: true, Resource: resource},
-		Maintenance:        &maintenanceReport{Status: "passed", Updates: 10_000, Deletes: 5_000, RewriteSeconds: 1, CheckpointSeconds: 1, PostconditionOK: true, ReopenParityOK: true, BeforeResultsSHA256: "same", AfterResultsSHA256: "same", Resource: resource},
+		Maintenance:        &maintenanceReport{Status: "passed", Updates: 10_000, UpdateBatchSize: requiredMaintenanceUpdateBatchSize, UpdateBatchCalls: 1, Deletes: 5_000, RewriteSeconds: 1, CheckpointSeconds: 1, PostconditionOK: true, ReopenParityOK: true, BeforeResultsSHA256: "same", AfterResultsSHA256: "same", Resource: resource},
 		Queries:            queries,
 		StorageSnapshots:   []storageSnapshot{storage("after_load"), storage("after_reopen"), storage("maintenance_rewrite_fixture"), storage("backfill_fixture"), storage("text_only_fixture"), storage("source_chunk_fixture")},
 		SelectedPhases:     phases, CompletedPhases: append([]string(nil), phases...),

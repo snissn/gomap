@@ -219,6 +219,13 @@ func TestCollectionCreateTextV2IndexBackfillsOrdinalsNormsStatsAndReopens2624(t 
 	if stats.Version != TextIndexVersionV2 || stats.Documents != 3 || stats.V2LiveDocuments != 3 || stats.V2DeletedDocs != 0 || stats.V2NextOrdinal != 4 || stats.V2DocIDEntries != 3 || stats.V2TermStats == 0 {
 		t.Fatalf("stats=%+v want v2 docs/stats", stats)
 	}
+	accounting, err := col.TextIndexStorageAccounting("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStorageAccounting: %v", err)
+	}
+	if accounting.Version != stats.Version || accounting.Documents != stats.Documents || accounting.V2LiveDocuments != stats.V2LiveDocuments || accounting.V2DeletedDocs != stats.V2DeletedDocs || accounting.V2PostingBlocks != stats.V2PostingBlocks || accounting.EncodedBytes != stats.EncodedBytes || accounting.V2DocIDBytes != stats.V2DocIDBytes || accounting.V2DocMapBytes != stats.V2DocMapBytes || accounting.V2TermStatsBytes != stats.V2TermStatsBytes || accounting.V2PostingBlockBytes != stats.V2PostingBlockBytes || accounting.V2NormBlockBytes != stats.V2NormBlockBytes || accounting.V2PositionBytes != stats.V2PositionBytes || accounting.V2StatusFormatBytes != stats.V2StatusFormatBytes {
+		t.Fatalf("accounting=%+v want exact byte/cardinality fields from %+v", accounting, stats)
+	}
 	withTextCatalog(t, d, "docs", func(snap *backenddb.Snapshot, catalog *collectionCatalog) {
 		d1 := textV2DocIDRootValue(t, snap, catalog, "docs", "lexical", []byte("d1"))
 		d2 := textV2DocIDRootValue(t, snap, catalog, "docs", "lexical", []byte("d2"))

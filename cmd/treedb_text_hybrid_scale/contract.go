@@ -19,13 +19,14 @@ import (
 )
 
 const (
-	retainedSchemaVersion        = "treedb_text_hybrid_scale_retained/v1"
-	retainedManifestName         = "artifact_manifest.json"
-	frozenConfigName             = "frozen_config.json"
-	requiredScaleRows            = 10_000_000
-	requiredSourceChunkBatchSize = 32_768
-	harnessGitPath               = "cmd/treedb_text_hybrid_scale"
-	treeDBGitPath                = "TreeDB"
+	retainedSchemaVersion              = "treedb_text_hybrid_scale_retained/v1"
+	retainedManifestName               = "artifact_manifest.json"
+	frozenConfigName                   = "frozen_config.json"
+	requiredScaleRows                  = 10_000_000
+	requiredSourceChunkBatchSize       = 32_768
+	requiredMaintenanceUpdateBatchSize = 10_000
+	harnessGitPath                     = "cmd/treedb_text_hybrid_scale"
+	treeDBGitPath                      = "TreeDB"
 )
 
 var requiredRawEvidence = []string{
@@ -315,8 +316,8 @@ func validateQualificationReport(rep report) error {
 	if rep.Contract.FixtureSHA256 != frozenFixtureSHA256() || rep.Contract.QuerySetSHA256 != frozenQuerySetSHA256() || rep.Contract.RelevanceSHA256 != frozenRelevanceSHA256() || rep.Contract.ConfigSHA256 == "" || rep.Contract.Analyzer != "simple" || rep.Contract.FieldWeights != "title=3,body=1" || rep.Contract.Seed != 4329 {
 		return errors.New("report frozen digest contract mismatch")
 	}
-	if rep.LogicalTextStorage.State != "observed" && (rep.LogicalTextStorage.State != "unavailable" || strings.TrimSpace(rep.LogicalTextStorage.Reason) == "") {
-		return errors.New("logical text storage measurement must be observed or explicitly unavailable with a reason")
+	if rep.LogicalTextStorage.State != "observed" || rep.LogicalTextStorage.Reason != "" {
+		return errors.New("logical text storage measurement must be observed for qualification")
 	}
 	cfg := rep.Config
 	if cfg.Rows != requiredScaleRows || cfg.BackfillRows != requiredScaleRows || cfg.TextOnlyRows != requiredScaleRows || cfg.SourceChunkRows != requiredScaleRows || cfg.SourceChunkBatchSize != requiredSourceChunkBatchSize {
@@ -325,8 +326,8 @@ func validateQualificationReport(rep report) error {
 	if cfg.PhaseSelector != "all" || !cfg.IncludeVector || !cfg.RunBackfill || !cfg.RunTextOnly || !cfg.RunSourceChunk || !cfg.RunReopen || !cfg.RunConcurrent || !cfg.RunRewrite {
 		return errors.New("complete all-phase text/hybrid/lifecycle matrix is required")
 	}
-	if cfg.Queries < 3 || cfg.MaintenanceUpdates < 10_000 || cfg.MaintenanceDeletes < 5_000 || cfg.Readers < 2 || cfg.ConcurrentWrites < 1 {
-		return errors.New("query repetitions, lifecycle mutations, and concurrency do not meet the frozen minimum")
+	if cfg.Queries < 3 || cfg.MaintenanceUpdates < 10_000 || cfg.MaintenanceUpdateBatchSize != requiredMaintenanceUpdateBatchSize || cfg.MaintenanceDeletes < 5_000 || cfg.Readers < 2 || cfg.ConcurrentWrites < 1 {
+		return errors.New("query repetitions, lifecycle mutations, maintenance update batch contract, and concurrency do not meet the frozen minimum")
 	}
 	wantPhases := []string{"load", "queries", "reopen", "concurrent", "maintenance", "backfill", "text_only", "source_chunk"}
 	if !sameStrings(rep.SelectedPhases, wantPhases) || !sameStrings(rep.CompletedPhases, wantPhases) {
@@ -351,10 +352,14 @@ func validateQualificationReport(rep report) error {
 	if rep.Concurrent == nil || rep.Concurrent.Status != "passed" || !rep.Concurrent.GuardrailOK || len(rep.Concurrent.Errors) != 0 || rep.Concurrent.Queries < cfg.Readers || rep.Concurrent.Writes < 1 || !validResource(rep.Concurrent.Resource) {
 		return errors.New("concurrency sanity row incomplete")
 	}
-	if rep.Maintenance == nil || rep.Maintenance.Status != "passed" || rep.Maintenance.Updates < 10_000 || rep.Maintenance.Deletes < 5_000 || rep.Maintenance.RewriteSeconds <= 0 || rep.Maintenance.CheckpointSeconds <= 0 || !rep.Maintenance.PostconditionOK || !rep.Maintenance.ReopenParityOK || rep.Maintenance.BeforeResultsSHA256 == "" || rep.Maintenance.BeforeResultsSHA256 != rep.Maintenance.AfterResultsSHA256 || !validResource(rep.Maintenance.Resource) {
-		return errors.New("mutation/rewrite/checkpoint/reopen parity row incomplete")
+	if rep.Maintenance == nil || rep.Maintenance.UpdateBatchSize <= 0 {
+		return errors.New("mutation/rewrite/checkpoint/reopen parity or maintenance update batch contract incomplete")
 	}
-	if err := validateStorageSnapshots(rep.StorageSnapshots); err != nil {
+	expectedMaintenanceUpdateCalls := (rep.Maintenance.Updates + rep.Maintenance.UpdateBatchSize - 1) / rep.Maintenance.UpdateBatchSize
+	if rep.Maintenance.Status != "passed" || rep.Maintenance.Updates < 10_000 || rep.Maintenance.UpdateBatchSize != requiredMaintenanceUpdateBatchSize || rep.Maintenance.UpdateBatchCalls != expectedMaintenanceUpdateCalls || rep.Maintenance.Deletes < 5_000 || rep.Maintenance.RewriteSeconds <= 0 || rep.Maintenance.CheckpointSeconds <= 0 || !rep.Maintenance.PostconditionOK || !rep.Maintenance.ReopenParityOK || rep.Maintenance.BeforeResultsSHA256 == "" || rep.Maintenance.BeforeResultsSHA256 != rep.Maintenance.AfterResultsSHA256 || !validResource(rep.Maintenance.Resource) {
+		return errors.New("mutation/rewrite/checkpoint/reopen parity or maintenance update batch contract incomplete")
+	}
+	if err := validateStorageSnapshots(rep); err != nil {
 		return err
 	}
 	if err := validateQueryMatrix(rep.Queries, cfg); err != nil {
@@ -470,21 +475,35 @@ func validResource(resource resourceSnapshot) bool {
 	return resource.CPUSeconds > 0 && resource.PeakRSSBytes > 0 && resource.LiveHeapBytes > 0
 }
 
-func validateStorageSnapshots(snapshots []storageSnapshot) error {
-	required := map[string]bool{"after_load": false, "after_reopen": false, "maintenance_rewrite_fixture": false, "backfill_fixture": false, "text_only_fixture": false, "source_chunk_fixture": false}
-	for _, snap := range snapshots {
+func validateStorageSnapshots(rep report) error {
+	required := map[string]uint64{
+		"after_load":                  uint64(rep.Config.Rows),
+		"after_reopen":                uint64(rep.Config.Rows),
+		"maintenance_rewrite_fixture": uint64(rep.Config.Rows - rep.Maintenance.Deletes),
+		"backfill_fixture":            uint64(rep.Config.BackfillRows),
+		"text_only_fixture":           uint64(rep.Config.TextOnlyRows),
+		"source_chunk_fixture":        uint64(rep.SourceChunk.SourceDocuments + rep.SourceChunk.GeneratedChunks),
+	}
+	found := make(map[string]bool, len(required))
+	for _, snap := range rep.StorageSnapshots {
 		if snap.PhysicalTotalBytes <= 0 || snap.PhysicalIndexPageBytes <= 0 || snap.PhysicalValueLogBytes < 0 || snap.PhysicalWALBytes < 0 || snap.PhysicalOtherBytes < 0 {
 			return fmt.Errorf("storage snapshot %q has incomplete physical accounting", snap.Label)
 		}
 		if snap.PhysicalTotalBytes != snap.PhysicalIndexPageBytes+snap.PhysicalValueLogBytes+snap.PhysicalWALBytes+snap.PhysicalOtherBytes || snap.PhysicalTotalWALExcludedBytes != snap.PhysicalTotalBytes-snap.PhysicalWALBytes {
 			return fmt.Errorf("storage snapshot %q WAL/total accounting mismatch", snap.Label)
 		}
-		if _, ok := required[snap.Label]; ok {
-			required[snap.Label] = true
+		expectedLive, requiredRow := required[snap.Label]
+		if !requiredRow {
+			continue
 		}
+		laneBytes := snap.TextDocIDBytes + snap.TextDocMapBytes + snap.TextPostingBlockBytes + snap.TextNormBlockBytes + snap.TextPositionBytes + snap.TextTermStatsBytes + snap.TextStatusFormatBytes
+		if snap.TextEncodedBytes == 0 || snap.TextEncodedBytes != laneBytes || snap.V2PostingBlocks == 0 || snap.V2LiveDocuments != expectedLive || snap.V2DeletedDocs != 0 {
+			return fmt.Errorf("storage snapshot %q logical text accounting mismatch: encoded=%d lane_bytes=%d posting_blocks=%d live=%d want_live=%d deleted=%d", snap.Label, snap.TextEncodedBytes, laneBytes, snap.V2PostingBlocks, snap.V2LiveDocuments, expectedLive, snap.V2DeletedDocs)
+		}
+		found[snap.Label] = true
 	}
-	for label, found := range required {
-		if !found {
+	for label := range required {
+		if !found[label] {
 			return fmt.Errorf("missing storage snapshot %q", label)
 		}
 	}
