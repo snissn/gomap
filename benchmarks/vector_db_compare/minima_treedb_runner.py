@@ -32,6 +32,7 @@ DIAGNOSTIC_STATS_BYTES = 4 << 20
 STATE_SCROLL_PAGE_SIZE = 8192
 PHASE_UNATTRIBUTED_RULE = (
     "total_duration_nanos = sum(phase.duration_nanos) + unattributed_nanos; "
+    "unattributed_nanos <= max(60000000000, total_duration_nanos / 100); "
     "unattributed covers only runner bookkeeping between declared boundaries"
 )
 PHASE_CLASSIFICATIONS = {
@@ -317,7 +318,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                  operation_timeout: float, ef_search: int, diagnostics_dir: Path | None = None,
                  diagnostic_slow_seconds: float = 30, diagnostic_profile_seconds: int = 5,
                  diagnostic_capture_timeout: float = 10) -> None:
-        self._phase_total_start = time.monotonic_ns()
+        self._phase_total_start: int | None = None
         self._phase_start: int | None = None
         self._phase_name: str | None = None
         self._phase_resource_start: dict[str, Any] | None = None
@@ -371,7 +372,9 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         self._phase_resource_start = common.server_resource_usage(
             self.controller.pid, self.storage_path, self.resource_server_name,
         )
-        self._phase_start = time.monotonic_ns()
+        phase_start = time.monotonic_ns()
+        self._phase_total_start = phase_start
+        self._phase_start = phase_start
         self._phase_name = "initial_durable_load"
 
     def phase_transition(self, name: str) -> None:
@@ -402,6 +405,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         if self._phase_start is None:
             self.begin_phase_attribution()
         assert self._phase_name is not None and self._phase_resource_start is not None
+        assert self._phase_total_start is not None
         phase_end = time.monotonic_ns()
         resource_end = common.server_resource_usage(
             self.controller.pid, self.storage_path, self.resource_server_name,

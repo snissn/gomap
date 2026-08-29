@@ -215,11 +215,11 @@ func TestMinimaPayloadEvidenceCacheIsManifestKeyed(t *testing.T) {
 }
 
 func TestApplicationModeDetectsEveryMinimaFlag(t *testing.T) {
-	if hasMinimaFlag("", "", "", "", "", "") {
+	if hasMinimaFlag("", "", "", "", "", "", "") {
 		t.Fatal("empty Minima flags were reported as set")
 	}
-	for index := range 6 {
-		values := make([]string, 6)
+	for index := range 7 {
+		values := make([]string, 7)
 		values[index] = "set"
 		if !hasMinimaFlag(values...) {
 			t.Fatalf("Minima flag %d was ignored", index)
@@ -474,6 +474,14 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		{"non-reconciling TreeDB phase total", func(a *minimaArtifact) {
 			raw := a.RawEvidence["treedb"]
 			raw.PhaseAttribution.UnattributedNanos++
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"excessive TreeDB unattributed overhead", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			extra := int64(61_000_000_000)
+			raw.PhaseAttribution.TotalEndNanos += extra
+			raw.PhaseAttribution.TotalDurationNanos += extra
+			raw.PhaseAttribution.UnattributedNanos += extra
 			a.RawEvidence["treedb"] = raw
 		}},
 		{"missing TreeDB phase resource boundary", func(a *minimaArtifact) {
@@ -937,6 +945,52 @@ func minimaPartialBackendEvidence(t *testing.T) (minimaArtifact, minimaArtifact)
 	return tree, qdrant
 }
 
+func TestMinimaExpectedCommitBinding(t *testing.T) {
+	artifact := validMinimaArtifact()
+	expected := strings.Repeat("a", 40)
+	if err := validateMinimaExpectedCommit(&artifact, expected, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateMinimaExpectedCommit(&artifact, strings.Repeat("b", 40), true); err == nil {
+		t.Fatal("wrong merged commit was accepted")
+	}
+	if err := validateMinimaExpectedCommit(&artifact, "", true); err == nil {
+		t.Fatal("missing required merged commit was accepted")
+	}
+}
+
+func TestMinimaPhaseUnattributedBound(t *testing.T) {
+	const total = int64(6_000_000_000_000)
+	if got := minimaPhaseUnattributedLimit(total); got != 60_000_000_000 {
+		t.Fatalf("unattributed boundary=%d", got)
+	}
+	attribution := minimaTestPhaseAttribution()
+	attributed := total - minimaPhaseUnattributedLimit(total)
+	cursor := attribution.TotalStartNanos
+	for index := range attribution.Phases {
+		duration := attributed / int64(len(attribution.Phases))
+		if index == len(attribution.Phases)-1 {
+			duration = attributed - (cursor - attribution.TotalStartNanos)
+		}
+		attribution.Phases[index].StartNanos = cursor
+		attribution.Phases[index].EndNanos = cursor + duration
+		attribution.Phases[index].DurationNanos = duration
+		cursor += duration
+	}
+	attribution.TotalEndNanos = attribution.TotalStartNanos + total
+	attribution.TotalDurationNanos = total
+	attribution.UnattributedNanos = minimaPhaseUnattributedLimit(total)
+	if err := validateMinimaTreeDBPhaseAttribution(attribution); err != nil {
+		t.Fatalf("boundary attribution rejected: %v", err)
+	}
+	attribution.TotalEndNanos++
+	attribution.TotalDurationNanos++
+	attribution.UnattributedNanos++
+	if err := validateMinimaTreeDBPhaseAttribution(attribution); err == nil {
+		t.Fatal("over-limit unattributed overhead was accepted")
+	}
+}
+
 func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	tree, qdrant := minimaPartialBackendEvidence(t)
 	dir := t.TempDir()
@@ -951,7 +1005,7 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 		}
 	}
 	out, report := filepath.Join(dir, "qualification.json"), filepath.Join(dir, "report.md")
-	if err := compareMinimaEvidence(treePath, qdrantPath, out, report, "ready_with_alpha_limitations"); err != nil {
+	if err := compareMinimaEvidence(treePath, qdrantPath, out, report, "ready_with_alpha_limitations", strings.Repeat("a", 40)); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(out)
@@ -1014,7 +1068,7 @@ func TestMinimaComparatorWritesPartialOracleFailureAndReturnsError(t *testing.T)
 		}
 	}
 	out, report := filepath.Join(dir, "qualification.json"), filepath.Join(dir, "report.md")
-	if err := compareMinimaEvidence(treePath, qdrantPath, out, report, "ready_with_alpha_limitations"); err == nil {
+	if err := compareMinimaEvidence(treePath, qdrantPath, out, report, "ready_with_alpha_limitations", strings.Repeat("a", 40)); err == nil {
 		t.Fatal("partial oracle failure returned success")
 	}
 	raw, err := os.ReadFile(out)

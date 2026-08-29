@@ -29,6 +29,7 @@ TREEDB_DIAGNOSTIC_RESUME_SCENARIO=${TREEDB_DIAGNOSTIC_RESUME_SCENARIO:-}
 TREEDB_DIAGNOSTIC_RESUME_START=${TREEDB_DIAGNOSTIC_RESUME_START:-}
 RECOMMENDATION=${RECOMMENDATION:-ready_with_alpha_limitations}
 PYTHON=${PYTHON:-python3}
+EXPECTED_COMMIT=""
 
 treedb_diagnostic_args=()
 if [[ -n "$TREEDB_DIAGNOSTICS_DIR" ]]; then
@@ -45,6 +46,16 @@ mkdir -p "$RUN_DIR/bin"
 
 case "$MODE" in
 representative)
+	EXPECTED_COMMIT=${MINIMA_EXPECTED_COMMIT:-$(git rev-parse origin/main)}
+	HEAD_COMMIT=$(git rev-parse HEAD)
+	if [[ ! "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+		printf 'representative Minima expected commit must be a full 40-hex SHA, got %q\n' "$EXPECTED_COMMIT" >&2
+		exit 2
+	fi
+	if [[ "$HEAD_COMMIT" != "$EXPECTED_COMMIT" ]]; then
+		printf 'representative Minima checkout HEAD %s does not match frozen target %s\n' "$HEAD_COMMIT" "$EXPECTED_COMMIT" >&2
+		exit 2
+	fi
 	;;
 diagnostic-resume)
 	if [[ -z "$TREEDB_DIAGNOSTICS_DIR" || -z "$TREEDB_DIAGNOSTIC_RESUME_SCENARIO" || -z "$TREEDB_DIAGNOSTIC_RESUME_START" ]]; then
@@ -136,7 +147,8 @@ if [[ -f "$TREEDB_EVIDENCE" && -f "$QDRANT_EVIDENCE" ]]; then
 		-minima-qdrant-evidence "$QDRANT_EVIDENCE" \
 		-minima-output "$OUTPUT_PATH" \
 		-minima-report "$REPORT_PATH" \
-		-minima-recommendation "$RECOMMENDATION" ||
+		-minima-recommendation "$RECOMMENDATION" \
+		-minima-expected-commit "$EXPECTED_COMMIT" ||
 		comparator_status=$?
 else
 	comparator_status=2

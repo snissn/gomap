@@ -26,7 +26,10 @@ const (
 	minimaQdrantProductionOptimizerConfig = `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":10000,"flush_interval_sec":5}`
 )
 
-const minimaPhaseUnattributedRule = "total_duration_nanos = sum(phase.duration_nanos) + unattributed_nanos; unattributed covers only runner bookkeeping between declared boundaries"
+const (
+	minimaPhaseUnattributedRule          = "total_duration_nanos = sum(phase.duration_nanos) + unattributed_nanos; unattributed_nanos <= max(60000000000, total_duration_nanos / 100); unattributed covers only runner bookkeeping between declared boundaries"
+	minimaPhaseUnattributedAbsoluteNanos = int64(60_000_000_000)
+)
 
 var minimaTreeDBPhaseNames = []string{
 	"initial_durable_load",
@@ -471,6 +474,29 @@ func validateMinimaTreeDBProvenance(backend minimaBackendEvidence) error {
 	}
 	return nil
 }
+func validateMinimaExpectedCommit(artifact *minimaArtifact, expected string, required bool) error {
+	if expected == "" && !required {
+		return nil
+	}
+	if !minimaExactHex(expected, 20) {
+		return errors.New("minima artifact: expected merged commit must be a full 40-hex SHA")
+	}
+	for _, backend := range artifact.Backends {
+		if backend.Name != "treedb" {
+			continue
+		}
+		if backend.Configuration["product_commit"] != expected ||
+			backend.Configuration["harness_commit"] != expected {
+			return errors.New("minima artifact: TreeDB product/harness commits do not match the expected merged commit")
+		}
+		return nil
+	}
+	return errors.New("minima artifact: expected merged commit requires TreeDB evidence")
+}
+
+func minimaPhaseUnattributedLimit(totalDurationNanos int64) int64 {
+	return max(minimaPhaseUnattributedAbsoluteNanos, totalDurationNanos/100)
+}
 
 func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution) error {
 	if value.Clock != "time.monotonic_ns" ||
@@ -513,6 +539,9 @@ func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution) error
 	if attributed > value.TotalDurationNanos ||
 		value.UnattributedNanos != value.TotalDurationNanos-attributed {
 		return errors.New("minima artifact: TreeDB phase totals do not reconcile")
+	}
+	if value.UnattributedNanos > minimaPhaseUnattributedLimit(value.TotalDurationNanos) {
+		return errors.New("minima artifact: TreeDB unattributed phase overhead exceeds its bound")
 	}
 	return nil
 }
@@ -834,7 +863,7 @@ func writeMinimaComparisonArtifacts(artifact minimaArtifact, jsonPath, reportPat
 	return os.WriteFile(reportPath, []byte(report.String()), 0o644)
 }
 
-func compareMinimaEvidence(treedbPath, qdrantPath, jsonPath, reportPath, recommendation string) error {
+func compareMinimaEvidence(treedbPath, qdrantPath, jsonPath, reportPath, recommendation, expectedCommit string) error {
 	treedb, err := readMinimaBackendEvidence(treedbPath, "treedb")
 	if err != nil {
 		return err
@@ -845,6 +874,9 @@ func compareMinimaEvidence(treedbPath, qdrantPath, jsonPath, reportPath, recomme
 	}
 	combined := combineMinimaEvidence(treedb, qdrant, recommendation)
 	validationErr := validateMinimaArtifact(&combined)
+	if validationErr == nil {
+		validationErr = validateMinimaExpectedCommit(&combined, expectedCommit, true)
+	}
 	if validationErr != nil {
 		combined.State, combined.Passing, combined.Recommendation = "partial", false, "not_evaluated"
 		combined.Failures = append(combined.Failures, "fail-closed validator: "+validationErr.Error())

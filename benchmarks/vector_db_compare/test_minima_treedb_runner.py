@@ -155,7 +155,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         baseline = {"captured": True, "rss_bytes": 10, "cpu_seconds": 1.0, "disk_bytes": 100}
         end = {"captured": True, "rss_bytes": 20, "cpu_seconds": 2.0, "disk_bytes": 200}
         workload = object.__new__(runner.TreeDBMinimaRunner)
-        workload._phase_total_start = 100
+        workload._phase_total_start = None
         workload._phase_start = None
         workload._phase_name = None
         workload._phase_resource_start = None
@@ -182,8 +182,9 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             workload.phase_transition("warmup_search")
 
         initial = workload._phase_boundaries[0]
-        self.assertEqual(events, ["resource", "wall", "wall", "resource", "wall"])
-        self.assertEqual(initial["start_nanos"] - workload._phase_total_start, 400)
+        self.assertEqual(workload._phase_total_start, 500)
+        self.assertEqual(initial["start_nanos"], workload._phase_total_start)
+        self.assertEqual(initial["start_nanos"] - 100, 400)
         self.assertEqual(initial["duration_nanos"], 200)
         self.assertIs(initial["resource_start"], baseline)
         self.assertIs(initial["resource_end"], end)
