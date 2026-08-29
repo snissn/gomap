@@ -470,7 +470,7 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
         "engines_partial": sorted(partial),
         "qualification_eligible": source["qualification_eligible"],
         "builds": builds,
-        "headline_rows": rows,
+        "headline_rows": rows if source["qualification_eligible"] else [],
         "equivalence_ledger": ledger,
     }
 

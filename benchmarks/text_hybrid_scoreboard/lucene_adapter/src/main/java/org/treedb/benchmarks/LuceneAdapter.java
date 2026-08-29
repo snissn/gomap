@@ -66,7 +66,7 @@ public final class LuceneAdapter {
     Files.createDirectories(outPath.getParent());
     Files.createDirectories(indexPath);
 
-    long cpuBefore = processCpuNanos();
+    Optional<Duration> cpuBefore = ProcessHandle.current().info().totalCpuDuration();
     long buildStart = System.nanoTime();
     try (FSDirectory directory = FSDirectory.open(indexPath)) {
       IndexWriterConfig config = new IndexWriterConfig(new StandardAnalyzer());
@@ -88,7 +88,10 @@ public final class LuceneAdapter {
       }
     }
     long buildElapsed = System.nanoTime() - buildStart;
-    long buildCpu = processCpuNanos() - cpuBefore;
+    Optional<Duration> cpuAfter = ProcessHandle.current().info().totalCpuDuration();
+    Map<String, Object> buildCpu = cpuBefore.isPresent() && cpuAfter.isPresent()
+        ? Map.of("status", "ok", "value", cpuAfter.get().minus(cpuBefore.get()).toNanos(), "unit", "nanoseconds")
+        : Map.of("status", "unsupported", "reason", "ProcessHandle totalCpuDuration is unavailable");
     long durableBytes = directoryBytes(indexPath);
 
     int topK = manifest.at("/execution/top_k").asInt();
@@ -137,7 +140,7 @@ public final class LuceneAdapter {
     payload.put("versions", Map.of("lucene", Version.LATEST.toString(), "java", System.getProperty("java.version"), "vm", System.getProperty("java.vm.name"), "platform", System.getProperty("os.name") + "/" + System.getProperty("os.arch")));
     payload.put("config", Map.ofEntries(Map.entry("working_directory", System.getProperty("user.dir")), Map.entry("analyzer", "StandardAnalyzer"), Map.entry("similarity", "BM25(k1=1.2,b=0.75)"), Map.entry("weighted_field_materialization", "title repeated 3x then body for non-phrase scoring only"), Map.entry("phrase_fields", List.of("title", "body")), Map.entry("phrase_field_weights", Map.of("title", 3, "body", 1)), Map.entry("top_k", topK), Map.entry("tie_break", "score,id"), Map.entry("compound_file", false), Map.entry("stored_fields", List.of("id")), Map.entry("build_timing_boundary", "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close")));
     payload.put("environment", environmentEvidence(manifest, corpusPath, indexPath, outPath));
-    payload.put("build", mapOfNullable("elapsed_nanos", buildElapsed, "docs_per_second", documents.size() * 1e9 / buildElapsed, "cpu", Map.of("status", "ok", "value", buildCpu, "unit", "nanoseconds"), "peak_rss", Map.of("status", "unsupported", "reason", "Standard Java process APIs do not expose process-lifetime peak RSS"), "checkpointed", true));
+    payload.put("build", mapOfNullable("elapsed_nanos", buildElapsed, "docs_per_second", documents.size() * 1e9 / buildElapsed, "cpu", buildCpu, "peak_rss", Map.of("status", "unsupported", "reason", "Standard Java process APIs do not expose process-lifetime peak RSS"), "checkpointed", true));
     payload.put("storage", Map.of("durable_bytes", durableBytes, "wal_bytes", 0, "transient_bytes", 0));
     payload.put("reopen", Map.of("performed", true, "verified", reopenVerified, "result_digest", digestCaseResults(cases)));
     payload.put("cases", cases);
@@ -207,7 +210,6 @@ public final class LuceneAdapter {
   private static String digestCaseResults(List<Map<String, Object>> cases) throws Exception { List<String> values = new ArrayList<>(); for (Map<String, Object> item : cases) values.add((String)item.get("reopen_result_digest")); return digestIDs(values); }
   private static String sha256(byte[] value) throws Exception { return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value)); }
   private static long directoryBytes(Path root) throws IOException { try (var paths = Files.walk(root)) { return paths.filter(Files::isRegularFile).mapToLong(path -> { try { return Files.size(path); } catch (IOException e) { throw new RuntimeException(e); } }).sum(); } }
-  private static long processCpuNanos() { Optional<Duration> duration = ProcessHandle.current().info().totalCpuDuration(); return duration.map(Duration::toNanos).orElse(0L); }
   private static void deleteTree(Path path) throws IOException { if (!Files.exists(path)) return; try (var paths = Files.walk(path)) { paths.sorted(java.util.Comparator.reverseOrder()).forEach(item -> { try { Files.delete(item); } catch (IOException e) { throw new RuntimeException(e); } }); } }
   private static Map<String, Object> mapOfNullable(Object... values) { Map<String, Object> result = new LinkedHashMap<>(); for (int i = 0; i < values.length; i += 2) result.put((String)values[i], values[i + 1]); return result; }
   private static Map<String, String> parseArgs(String[] args) { if (args.length % 2 != 0) throw new IllegalArgumentException("arguments must be name/value pairs"); Map<String, String> result = new LinkedHashMap<>(); for (int i = 0; i < args.length; i += 2) result.put(args[i], args[i + 1]); return result; }

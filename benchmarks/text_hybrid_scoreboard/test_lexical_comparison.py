@@ -196,6 +196,13 @@ class LexicalComparisonTest(unittest.TestCase):
         self.assertIn("bleve", report["engines_partial"])
         self.assertNotIn("bleve", report["engines_completed"])
 
+    def test_dirty_source_never_enters_headline(self) -> None:
+        artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "lucene", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
+        context = self.context(modified=True)
+        report = consolidate(artifacts, self.manifest, self.documents, 3, context)
+        self.assertEqual(report["headline_rows"], [])
+        self.assertFalse(report["qualification_eligible"])
+
     def test_consolidation_requires_treedb_and_two_external_engines(self) -> None:
         artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "sqlite_fts5") for repetition in range(1, 4)]
         with self.assertRaisesRegex(ValidationError, "at least two"):
