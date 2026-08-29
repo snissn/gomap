@@ -740,28 +740,75 @@ func writeColumnHNSWSearchPackStreamSection(w io.Writer, s columnHNSWSearchPackS
 		}
 		return nil
 	}
-	buf := make([]byte, int(s.Length))
+	const chunkBytes = 64 << 10
+	buf := make([]byte, chunkBytes)
+	writeUint16 := func(values []uint16) error {
+		for start := 0; start < len(values); {
+			count := min(len(values)-start, len(buf)/2)
+			part := buf[:count*2]
+			for i, v := range values[start : start+count] {
+				binary.LittleEndian.PutUint16(part[i*2:], v)
+			}
+			if err := writeColumnHNSWSearchPackStreamAll(w, part); err != nil {
+				return err
+			}
+			start += count
+		}
+		return nil
+	}
+	writeUint32 := func(values []uint32) error {
+		for start := 0; start < len(values); {
+			count := min(len(values)-start, len(buf)/4)
+			part := buf[:count*4]
+			for i, v := range values[start : start+count] {
+				binary.LittleEndian.PutUint32(part[i*4:], v)
+			}
+			if err := writeColumnHNSWSearchPackStreamAll(w, part); err != nil {
+				return err
+			}
+			start += count
+		}
+		return nil
+	}
+	writeUint64 := func(values []uint64) error {
+		for start := 0; start < len(values); {
+			count := min(len(values)-start, len(buf)/8)
+			part := buf[:count*8]
+			for i, v := range values[start : start+count] {
+				binary.LittleEndian.PutUint64(part[i*8:], v)
+			}
+			if err := writeColumnHNSWSearchPackStreamAll(w, part); err != nil {
+				return err
+			}
+			start += count
+		}
+		return nil
+	}
+	writeInt64 := func(values []int64) error {
+		for start := 0; start < len(values); {
+			count := min(len(values)-start, len(buf)/8)
+			part := buf[:count*8]
+			for i, v := range values[start : start+count] {
+				binary.LittleEndian.PutUint64(part[i*8:], uint64(v))
+			}
+			if err := writeColumnHNSWSearchPackStreamAll(w, part); err != nil {
+				return err
+			}
+			start += count
+		}
+		return nil
+	}
 	switch s.Kind {
 	case columnHNSWSearchPackSectionLevels:
-		for i, v := range input.Levels {
-			binary.LittleEndian.PutUint16(buf[i*2:], v)
-		}
+		return writeUint16(input.Levels)
 	case columnHNSWSearchPackSectionAdjacencyOffsets:
-		for i, v := range input.AdjacencyLayers[s.Index].Offsets {
-			binary.LittleEndian.PutUint64(buf[i*8:], v)
-		}
+		return writeUint64(input.AdjacencyLayers[s.Index].Offsets)
 	case columnHNSWSearchPackSectionAdjacencyNeighbors:
-		for i, v := range input.AdjacencyLayers[s.Index].Neighbors {
-			binary.LittleEndian.PutUint32(buf[i*4:], v)
-		}
+		return writeUint32(input.AdjacencyLayers[s.Index].Neighbors)
 	case columnHNSWSearchPackSectionAuxiliaryOffsets:
-		for i, v := range input.AuxiliaryNavigation.Offsets {
-			binary.LittleEndian.PutUint64(buf[i*8:], v)
-		}
+		return writeUint64(input.AuxiliaryNavigation.Offsets)
 	case columnHNSWSearchPackSectionAuxiliaryNeighbors:
-		for i, v := range input.AuxiliaryNavigation.Neighbors {
-			binary.LittleEndian.PutUint32(buf[i*4:], v)
-		}
+		return writeUint32(input.AuxiliaryNavigation.Neighbors)
 	case columnHNSWSearchPackSectionRowRefGeneration, columnHNSWSearchPackSectionRowRefPartID, columnHNSWSearchPackSectionRowRefRowIndex, columnHNSWSearchPackSectionRowRefAppliedLSN:
 		var values []int64
 		switch s.Kind {
@@ -774,19 +821,19 @@ func writeColumnHNSWSearchPackStreamSection(w io.Writer, s columnHNSWSearchPackS
 		default:
 			values = input.RowRefAppliedCommandLSN
 		}
-		for i, v := range values {
-			binary.LittleEndian.PutUint64(buf[i*8:], uint64(v))
-		}
+		return writeInt64(values)
 	case columnHNSWSearchPackSectionDocumentIDOffsets:
-		for i, v := range input.DocumentIDOffsets {
-			binary.LittleEndian.PutUint64(buf[i*8:], v)
-		}
+		return writeUint64(input.DocumentIDOffsets)
 	case columnHNSWSearchPackSectionDocumentIDBytes:
-		copy(buf, input.DocumentIDBytes)
+		for start := 0; start < len(input.DocumentIDBytes); start += len(buf) {
+			if err := writeColumnHNSWSearchPackStreamAll(w, input.DocumentIDBytes[start:min(start+len(buf), len(input.DocumentIDBytes))]); err != nil {
+				return err
+			}
+		}
+		return nil
 	default:
 		return fmt.Errorf("collections: unsupported hnsw search pack streamed section %s", s.Kind)
 	}
-	return writeColumnHNSWSearchPackStreamAll(w, buf)
 }
 
 func decodeColumnHNSWSearchPack(raw []byte, opts columnHNSWSearchPackDecodeOptions) (columnHNSWSearchPack, error) {

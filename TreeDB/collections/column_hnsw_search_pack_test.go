@@ -92,31 +92,34 @@ func TestColumnHNSWSearchPackRowEncodingMatchesMaterializedBytes4420(t *testing.
 }
 
 func TestColumnHNSWSearchPackStreamedRowsMatchOracle4427(t *testing.T) {
-	input := testColumnHNSWSearchPackInput2312()
 	rows := []columnVectorGraphAssetRow{{Vector: []float32{1, 0, 0}, InvNorm: 1}, {Vector: []float32{0, 2, 0}, InvNorm: .5}, {Vector: []float32{0, 0, 4}, InvNorm: .25}}
-	want, err := encodeColumnHNSWSearchPack(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	input.NormalizedVectors = nil
-	file, err := os.CreateTemp(t.TempDir(), "hnsw-pack-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = file.Close() }()
-	written, err := writeColumnHNSWSearchPackRowsWithBackpatch(file, func(p []byte) error { _, err := file.WriteAt(p, 0); return err }, input, rows)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gotRaw := make([]byte, written)
-	if _, err := file.ReadAt(gotRaw, 0); err != nil {
-		t.Fatal(err)
-	}
-	if written != int64(len(want)) {
-		t.Fatalf("stream bytes=%d want=%d", written, len(want))
-	}
-	if !bytes.Equal(gotRaw, want) {
-		t.Fatal("backpatched streamed pack differs from oracle")
+	for _, tc := range []struct {
+		name  string
+		input columnHNSWSearchPackBuildInput
+	}{{name: "v1", input: testColumnHNSWSearchPackInput2312()}, {name: "v3", input: testColumnHNSWSearchPackAuxiliaryInput4106()}} {
+		t.Run(tc.name, func(t *testing.T) {
+			want, err := encodeColumnHNSWSearchPack(tc.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.input.NormalizedVectors = nil
+			file, err := os.CreateTemp(t.TempDir(), "hnsw-pack-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = file.Close() }()
+			written, err := writeColumnHNSWSearchPackRowsWithBackpatch(file, func(p []byte) error { _, err := file.WriteAt(p, 0); return err }, tc.input, rows)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotRaw := make([]byte, written)
+			if _, err := file.ReadAt(gotRaw, 0); err != nil {
+				t.Fatal(err)
+			}
+			if written != int64(len(want)) || !bytes.Equal(gotRaw, want) {
+				t.Fatal("backpatched streamed pack differs from oracle")
+			}
+		})
 	}
 }
 
