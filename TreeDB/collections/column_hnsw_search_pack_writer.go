@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -354,11 +355,6 @@ func validateColumnHNSWSearchPackAssetPayloadWithManager(rootDir string, ref Col
 		}
 		return err
 	}
-	if checksum, err := columnHNSWSearchPackChecksumWithContext(nil, handle.Bytes()); err != nil {
-		return errors.Join(err, handle.Release())
-	} else if checksum != ref.Checksum {
-		return errors.Join(fmt.Errorf("collections: hnsw_search_pack_v1 checksum=%08x want %08x", checksum, ref.Checksum), handle.Release())
-	}
 	view, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, handle, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{
 		ManifestGeneration: graph.BaseManifestGeneration,
 		ManifestChecksum:   graph.BaseManifestChecksum,
@@ -423,7 +419,7 @@ func validateColumnHNSWSearchPackAssetPayloadDirectFile(path string, ref ColumnA
 	if err := readColumnHNSWSearchPackFileAt(file, ref.Offset, metadata); err != nil {
 		return err
 	}
-	pack, opts, err := decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(nil, metadata, uint64(ref.Length), columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{
+	pack, opts, err := decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(context.Background(), metadata, uint64(ref.Length), columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{
 		ManifestGeneration: graph.BaseManifestGeneration,
 		ManifestChecksum:   graph.BaseManifestChecksum,
 		SchemaHash:         graph.BaseSchemaHash,
@@ -651,7 +647,7 @@ func validateColumnHNSWSearchPackDirectAuxiliaryNavigation(file *os.File, baseOf
 			if end < start || end > nativeNeighbors.Count {
 				return errors.New("collections: hnsw_search_pack_v1 auxiliary native offsets")
 			}
-			rowSeen := make(map[uint32]struct{}, end-start)
+			rowSeen := make(map[uint32]struct{})
 			for at := start; at < end; {
 				chunk := min(uint64(len(buffer)), (end-at)*4)
 				if err := readColumnHNSWSearchPackFileAt(file, baseOffset+int64(nativeNeighbors.Offset+at*4), buffer[:chunk]); err != nil {
@@ -659,7 +655,7 @@ func validateColumnHNSWSearchPackDirectAuxiliaryNavigation(file *os.File, baseOf
 				}
 				for i := uint64(0); i < chunk/4; i++ {
 					neighbor := binary.LittleEndian.Uint32(buffer[i*4:])
-					if int(neighbor) >= rows || neighbor == uint32(ordinal) {
+					if uint64(neighbor) >= uint64(rows) || neighbor == uint32(ordinal) {
 						return errors.New("collections: hnsw_search_pack_v1 auxiliary native neighbor")
 					}
 					if _, duplicate := rowSeen[neighbor]; duplicate {

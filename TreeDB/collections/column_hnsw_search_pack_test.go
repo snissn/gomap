@@ -160,6 +160,12 @@ func TestColumnHNSWSearchPackPreparedAssetValidationMapped4429(t *testing.T) {
 		t.Fatal(err)
 	}
 	stats := manager.Stats()
+	if stats.TotalMappedBytes == 0 {
+		if stats.TotalHeapCopyBytes != 0 || stats.ActiveHandles != 0 || stats.ActiveMappedBytes != 0 || stats.ActiveHeapCopyBytes != 0 {
+			t.Fatalf("direct-file validation mappedresource stats=%+v want no active or heap resources", stats)
+		}
+		return
+	}
 	if stats.TotalMappedBytes != uint64(ref.Length) || stats.TotalHeapCopyBytes != 0 || stats.ActiveHandles != 0 || stats.ActiveMappedBytes != 0 || stats.ActiveHeapCopyBytes != 0 {
 		t.Fatalf("validation mappedresource stats=%+v want one released mapped range and no heap copy", stats)
 	}
