@@ -458,6 +458,13 @@ func validateQueryMatrix(rows []queryReport, cfg reportConfig) error {
 			} else if stats.VectorCandidatesRequested != 0 || stats.VectorCandidateBudgetEffective != 0 || stats.VectorCandidatesReturned != 0 {
 				return fmt.Errorf("query row %q unexpectedly reports vector candidate work", name)
 			}
+			wantPolicy := collections.HybridCandidateBudgetPolicyFixed
+			if name == queryRowHybridText {
+				wantPolicy = collections.HybridCandidateBudgetPolicyAdaptiveRRF
+			}
+			if stats.CandidateBudgetPolicy != wantPolicy || stats.CandidateBudgetIterations == 0 {
+				return fmt.Errorf("query row %q candidate budget policy=%q iterations=%d want policy=%q and nonzero iterations", name, stats.CandidateBudgetPolicy, stats.CandidateBudgetIterations, wantPolicy)
+			}
 			if fetch {
 				if stats.DocumentsFetched != uint64(row.Results) {
 					return fmt.Errorf("query row %q final fetch count mismatch", name)

@@ -34,6 +34,9 @@ func TestQualificationValidatorRejectsEveryNorthStarGap4329(t *testing.T) {
 			queryByName4329(r, queryRowHybridTextVecScalar).HybridStats.VectorCandidatesReturned = 0
 		}},
 		{"unexpected vector work", "unexpectedly reports vector candidate work", func(r *report) { queryByName4329(r, queryRowHybridText).HybridStats.VectorCandidatesRequested = 1 }},
+		{"wrong candidate policy", "candidate budget policy", func(r *report) {
+			queryByName4329(r, queryRowHybridTextVecScalar).HybridStats.CandidateBudgetPolicy = collections.HybridCandidateBudgetPolicyAdaptiveRRF
+		}},
 		{"dirty provenance", "clean commit/tree/harness/binary provenance", func(r *report) { r.Context.VCSClean = false }},
 		{"config digest", "frozen digest contract", func(r *report) { r.Contract.QuerySetSHA256 = "wrong" }},
 		{"failed row", "incomplete or failed", func(r *report) { r.Queries[0].Status = "failed" }},
