@@ -879,12 +879,15 @@ func run(cfg config) (report, error) {
 		return report{}, err
 	}
 	defer func() {
-		if fixture.db != nil {
-			_ = fixture.db.Close()
+		if rep.Cleanup.Status != "" {
+			return
 		}
-		if !cfg.keepDB && fixture.cleanup != nil {
-			fixture.cleanup()
+		if cleanupErr := finalizeCleanup(&rep, cfg, &fixture); cleanupErr != nil {
+			rep.Status = "failed"
+			rep.Failure = cleanupErr.Error()
+			rep.Failures = append(rep.Failures, failureRecord{Phase: "cleanup", Status: "failed", Error: cleanupErr.Error()})
 		}
+		_ = persistIncompleteReport(&rep)
 	}()
 	rep.Load = load
 	rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("after_load", cfg.rows, dbDir, load.TextStorage, load.VectorStatus))
@@ -897,6 +900,9 @@ func run(cfg config) (report, error) {
 		rep.Queries = append(rep.Queries, queries...)
 		rep.Guardrails = append(rep.Guardrails, guards...)
 		if queryErr != nil {
+			rep.Status = "failed"
+			rep.Failure = queryErr.Error()
+			rep.Failures = append(rep.Failures, failureRecord{Phase: "queries", Status: "failed", Error: queryErr.Error()})
 			if err := persistIncompleteReport(&rep); err != nil {
 				return rep, err
 			}

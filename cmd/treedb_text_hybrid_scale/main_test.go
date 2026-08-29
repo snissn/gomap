@@ -238,6 +238,15 @@ func TestStrictQueryFailurePersistsPartialEvidence4327(t *testing.T) {
 	if persisted.Complete || strings.Join(persisted.CompletedPhases, ",") != "load" || len(persisted.Queries) != len(rep.Queries) || len(persisted.Guardrails) != len(rep.Guardrails) {
 		t.Fatalf("persisted strict evidence incomplete/lost: %+v", persisted)
 	}
+	if persisted.Status != "failed" || persisted.Failure == "" || len(persisted.Failures) != 1 || persisted.Failures[0].Phase != "queries" {
+		t.Fatalf("persisted strict failure status is incomplete: %+v", persisted)
+	}
+	if persisted.Cleanup.Status != "passed" || persisted.Cleanup.DBKept || len(persisted.Cleanup.RemovedPaths) != 5 || len(persisted.Cleanup.Errors) != 0 {
+		t.Fatalf("persisted strict cleanup evidence is incomplete: %+v", persisted.Cleanup)
+	}
+	if _, statErr := os.Lstat(rep.Artifacts.DBDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("strict failure primary fixture still exists: %v", statErr)
+	}
 	markdown, readErr := os.ReadFile(rep.Artifacts.Markdown)
 	if readErr != nil || !strings.Contains(string(markdown), "INCOMPLETE (partial evidence; not a completed qualification)") || !strings.Contains(string(markdown), failed.Name) || !strings.Contains(string(markdown), failed.GuardrailFailure) {
 		t.Fatalf("markdown did not preserve strict query evidence: err=%v content=%s", readErr, markdown)
