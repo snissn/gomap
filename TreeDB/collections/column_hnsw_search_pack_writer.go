@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"slices"
 
 	internalcrc "github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
@@ -403,7 +404,7 @@ func validateColumnHNSWSearchPackAssetPayloadDirectFile(path string, ref ColumnA
 	if err := readColumnHNSWSearchPackFileAt(file, ref.Offset, metadata); err != nil {
 		return err
 	}
-	pack, _, err := decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(nil, metadata, uint64(ref.Length), columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{
+	pack, opts, err := decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(nil, metadata, uint64(ref.Length), columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{
 		ManifestGeneration: graph.BaseManifestGeneration,
 		ManifestChecksum:   graph.BaseManifestChecksum,
 		SchemaHash:         graph.BaseSchemaHash,
@@ -423,7 +424,7 @@ func validateColumnHNSWSearchPackAssetPayloadDirectFile(path string, ref ColumnA
 			return fmt.Errorf("collections: hnsw_search_pack_v1 section %s[%d] checksum=%08x want %08x", section.Kind, section.Index, checksum, section.Checksum)
 		}
 	}
-	if err := validateColumnHNSWSearchPackDirectFileSections(file, ref.Offset, pack, graph); err != nil {
+	if err := validateColumnHNSWSearchPackDirectFileSections(file, ref.Offset, pack, opts, graph); err != nil {
 		return err
 	}
 	return validateColumnHNSWSearchPackPreparedView(&columnHNSWSearchPackPreparedView{Header: pack.Header, Sections: pack.Sections}, graph, def)
@@ -431,7 +432,7 @@ func validateColumnHNSWSearchPackAssetPayloadDirectFile(path string, ref ColumnA
 
 // validateColumnHNSWSearchPackDirectFileSections mirrors the content checks in
 // prepareSectionViews without retaining corpus-sized sections in memory.
-func validateColumnHNSWSearchPackDirectFileSections(file *os.File, baseOffset int64, pack columnHNSWSearchPack, graph columnVectorGraphManifestSnapshot) error {
+func validateColumnHNSWSearchPackDirectFileSections(file *os.File, baseOffset int64, pack columnHNSWSearchPack, opts columnHNSWSearchPackDecodeOptions, graph columnVectorGraphManifestSnapshot) error {
 	rows := uint64(pack.Header.Rows)
 	vectorCount, ok := checkedHNSWPackMulOK(rows, uint64(pack.Header.VectorStride))
 	if !ok {
@@ -460,7 +461,7 @@ func validateColumnHNSWSearchPackDirectFileSections(file *os.File, baseOffset in
 		if err != nil {
 			return err
 		}
-		if neighbors.Length%4 != 0 || neighbors.Count != neighbors.Length/4 || neighbors.Count > (columnHNSWSearchPackDecodeOptions{}).withDefaults().MaxNeighbors {
+		if neighbors.Length%4 != 0 || neighbors.Count != neighbors.Length/4 || neighbors.Count > opts.MaxNeighbors || neighbors.Count > uint64(math.MaxInt) {
 			return fmt.Errorf("collections: hnsw_search_pack_v1 adjacency layer=%d neighbors length/count mismatch", layer)
 		}
 		if err := validateColumnHNSWSearchPackDirectAdjacency(file, baseOffset, layer, rows, offsets, neighbors); err != nil {
@@ -480,10 +481,10 @@ func validateColumnHNSWSearchPackDirectFileSections(file *os.File, baseOffset in
 		if rows > 1 {
 			maxNeighbors = (rows - 1) * 2
 		}
-		if neighbors.Length%4 != 0 || neighbors.Count != neighbors.Length/4 || neighbors.Count > maxNeighbors {
+		if neighbors.Length%4 != 0 || neighbors.Count != neighbors.Length/4 || neighbors.Count > maxNeighbors || neighbors.Count > opts.MaxNeighbors || neighbors.Count > uint64(math.MaxInt) {
 			return errors.New("collections: hnsw_search_pack_v1 auxiliary neighbors shape")
 		}
-		if err := validateColumnHNSWSearchPackDirectAdjacency(file, baseOffset, -1, rows, offsets, neighbors); err != nil {
+		if err := validateColumnHNSWSearchPackDirectAuxiliaryNavigation(file, baseOffset, pack, levels, offsets, neighbors); err != nil {
 			return err
 		}
 	}
@@ -504,7 +505,7 @@ func validateColumnHNSWSearchPackDirectFileSections(file *os.File, baseOffset in
 	if err != nil {
 		return err
 	}
-	if docBytes.Count != docBytes.Length || docBytes.Length > (columnHNSWSearchPackDecodeOptions{}).withDefaults().MaxDocumentIDBytes {
+	if docBytes.Count != docBytes.Length || docBytes.Length > opts.MaxDocumentIDBytes || docBytes.Length > uint64(math.MaxInt) {
 		return errors.New("collections: hnsw_search_pack_v1 document_id_bytes length/count mismatch")
 	}
 	return validateColumnHNSWSearchPackDirectDocumentOffsets(file, baseOffset+int64(docOffsets.Offset), docOffsets.Length, rows, docBytes.Length)
@@ -586,6 +587,135 @@ func validateColumnHNSWSearchPackDirectAdjacency(file *os.File, baseOffset int64
 	return nil
 }
 
+func validateColumnHNSWSearchPackDirectAuxiliaryNavigation(file *os.File, baseOffset int64, pack columnHNSWSearchPack, levelsSection, auxiliaryOffsets, auxiliaryNeighbors columnHNSWSearchPackSection) error {
+	rows := pack.Header.Rows
+	if rows == 0 {
+		return validateColumnHNSWSearchPackDirectAdjacency(file, baseOffset, -1, 0, auxiliaryOffsets, auxiliaryNeighbors)
+	}
+	nativeOffsets, err := columnHNSWSearchPackRequireSection(pack.Sections, columnHNSWSearchPackSectionAdjacencyOffsets, 0, uint64(rows)+1, 8)
+	if err != nil {
+		return err
+	}
+	nativeNeighbors, err := columnHNSWSearchPackFindSection(pack.Sections, columnHNSWSearchPackSectionAdjacencyNeighbors, 0)
+	if err != nil {
+		return err
+	}
+	if nativeNeighbors.Length%4 != 0 || nativeNeighbors.Count != nativeNeighbors.Length/4 {
+		return errors.New("collections: hnsw_search_pack_v1 auxiliary native neighbor shape")
+	}
+	levelBytes := make([]byte, levelsSection.Length)
+	offsetBytes := make([]byte, nativeOffsets.Length)
+	if err := readColumnHNSWSearchPackFileAt(file, baseOffset+int64(levelsSection.Offset), levelBytes); err != nil {
+		return err
+	}
+	if err := readColumnHNSWSearchPackFileAt(file, baseOffset+int64(nativeOffsets.Offset), offsetBytes); err != nil {
+		return err
+	}
+	levels := decodeUint16SliceLE(levelBytes)
+	offsets := decodeUint64SliceLE(offsetBytes)
+	if len(levels) != rows || len(offsets) != rows+1 || offsets[0] != 0 || offsets[rows] != nativeNeighbors.Count {
+		return errors.New("collections: hnsw_search_pack_v1 auxiliary native offsets")
+	}
+	seen := make([]bool, rows)
+	rootsForRow := make([]uint32, rows)
+	roots := make([]uint32, 0, 1)
+	queue := make([]int, 0, rows)
+	buffer := make([]byte, 64<<10)
+	for root := pack.Header.EntryOrdinal; ; {
+		roots = append(roots, uint32(root))
+		queue = append(queue[:0], root)
+		seen[root] = true
+		rootsForRow[root] = uint32(root)
+		for head := 0; head < len(queue); head++ {
+			ordinal := queue[head]
+			start, end := offsets[ordinal], offsets[ordinal+1]
+			if end < start || end > nativeNeighbors.Count {
+				return errors.New("collections: hnsw_search_pack_v1 auxiliary native offsets")
+			}
+			rowSeen := make(map[uint32]struct{}, end-start)
+			for at := start; at < end; {
+				chunk := min(uint64(len(buffer)), (end-at)*4)
+				if err := readColumnHNSWSearchPackFileAt(file, baseOffset+int64(nativeNeighbors.Offset+at*4), buffer[:chunk]); err != nil {
+					return err
+				}
+				for i := uint64(0); i < chunk/4; i++ {
+					neighbor := binary.LittleEndian.Uint32(buffer[i*4:])
+					if int(neighbor) >= rows || neighbor == uint32(ordinal) {
+						return errors.New("collections: hnsw_search_pack_v1 auxiliary native neighbor")
+					}
+					if _, duplicate := rowSeen[neighbor]; duplicate {
+						return errors.New("collections: hnsw_search_pack_v1 auxiliary duplicate native neighbor")
+					}
+					rowSeen[neighbor] = struct{}{}
+					if !seen[neighbor] {
+						seen[neighbor] = true
+						rootsForRow[neighbor] = uint32(root)
+						queue = append(queue, int(neighbor))
+					}
+				}
+				at += chunk / 4
+			}
+		}
+		next := -1
+		for candidate, visited := range seen {
+			if !visited {
+				next = candidate
+				break
+			}
+		}
+		if next < 0 {
+			break
+		}
+		root = next
+	}
+	degrees := make([]uint8, rows)
+	for child := 1; child < len(roots); child++ {
+		parent := (child - 1) / vectorPartitionLocalNavigationBranchV1
+		degrees[roots[parent]]++
+		degrees[roots[child]]++
+	}
+	for ordinal, level := range levels {
+		if level > 0 && rootsForRow[ordinal] != uint32(ordinal) {
+			degrees[ordinal]++
+		}
+		if degrees[ordinal] > vectorPartitionLocalNavigationBranchV1+1 {
+			return errors.New("collections: hnsw_search_pack_v1 auxiliary degree")
+		}
+	}
+	expectedOffsets := make([]uint64, rows+1)
+	for ordinal, degree := range degrees {
+		expectedOffsets[ordinal+1] = expectedOffsets[ordinal] + uint64(degree)
+	}
+	expectedNeighbors := make([]uint32, expectedOffsets[rows])
+	next := append([]uint64(nil), expectedOffsets[:rows]...)
+	for child := 1; child < len(roots); child++ {
+		parent := (child - 1) / vectorPartitionLocalNavigationBranchV1
+		left, right := roots[parent], roots[child]
+		expectedNeighbors[next[left]] = right
+		next[left]++
+		expectedNeighbors[next[right]] = left
+		next[right]++
+	}
+	for ordinal, level := range levels {
+		root := rootsForRow[ordinal]
+		if level > 0 && root != uint32(ordinal) {
+			expectedNeighbors[next[ordinal]] = root
+			next[ordinal]++
+		}
+	}
+	actualOffsetBytes := make([]byte, auxiliaryOffsets.Length)
+	actualNeighborBytes := make([]byte, auxiliaryNeighbors.Length)
+	if err := readColumnHNSWSearchPackFileAt(file, baseOffset+int64(auxiliaryOffsets.Offset), actualOffsetBytes); err != nil {
+		return err
+	}
+	if err := readColumnHNSWSearchPackFileAt(file, baseOffset+int64(auxiliaryNeighbors.Offset), actualNeighborBytes); err != nil {
+		return err
+	}
+	if !slices.Equal(decodeUint64SliceLE(actualOffsetBytes), expectedOffsets) || !slices.Equal(decodeUint32SliceLE(actualNeighborBytes), expectedNeighbors) {
+		return errors.New("collections: hnsw_search_pack_v1 auxiliary navigation mismatch")
+	}
+	return nil
+}
 func validateColumnHNSWSearchPackDirectRowRef(file *os.File, offset int64, length uint64, kind columnHNSWSearchPackSectionKind, baseGeneration uint64) error {
 	buffer := make([]byte, 64<<10)
 	for index := uint64(0); length > 0; {
