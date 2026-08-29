@@ -725,7 +725,7 @@ func minimaMaximumBatchCorrelationRecords(manifest minimaManifest) int {
 	return maximum
 }
 
-func validateMinimaTreeDBBatchCorrelations(manifest minimaManifest, raw minimaRawBackendEvidence) error {
+func validateMinimaTreeDBBatchCorrelations(manifest minimaManifest, raw minimaRawBackendEvidence, completed bool) error {
 	contract := raw.UpsertBatchCorrelationContract
 	expectedMaximum := minimaMaximumBatchCorrelationRecords(manifest)
 	if contract == nil ||
@@ -737,6 +737,21 @@ func validateMinimaTreeDBBatchCorrelations(manifest minimaManifest, raw minimaRa
 		contract.CompactRecordMaxBytes != minimaCompactBatchCorrelationMaxBytes ||
 		!reflect.DeepEqual(contract.FullStatsRetention, []string{"failed", "timeout", "slow", "profile_captured"}) {
 		return errors.New("minima artifact: TreeDB batch correlation cardinality contract is invalid")
+	}
+	if completed {
+		var diagnostics struct {
+			Enabled bool `json:"enabled"`
+		}
+		if len(raw.Diagnostics) == 0 || json.Unmarshal(raw.Diagnostics, &diagnostics) != nil {
+			return errors.New("minima artifact: completed TreeDB diagnostics declaration is missing")
+		}
+		expectedRecords := 0
+		if diagnostics.Enabled {
+			expectedRecords = expectedMaximum
+		}
+		if contract.RecordCount != expectedRecords {
+			return errors.New("minima artifact: completed TreeDB batch correlations are incomplete")
+		}
 	}
 	compact, full := 0, 0
 	for _, encoded := range raw.UpsertBatchCorrelations {
@@ -992,7 +1007,7 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			if err := validateMinimaTreeDBPhaseAttribution(*raw.PhaseAttribution, raw.RestartBoundary); err != nil {
 				return err
 			}
-			if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw); err != nil {
+			if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, true); err != nil {
 				return err
 			}
 		}

@@ -492,6 +492,22 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             runner.COMPACT_BATCH_CORRELATION_MAX_BYTES * len(correlations),
         )
 
+
+    def test_completed_diagnostics_require_manifest_batch_cardinality(self) -> None:
+        workload = object.__new__(runner.TreeDBMinimaRunner)
+        workload.batch_correlations = []
+        workload._batch_correlation_max_records = 10
+        workload.operations = {"manifest_ordered": True}
+        workload.diagnostics_dir = Path("diagnostics")
+        with self.assertRaisesRegex(RuntimeError, "does not match"):
+            workload._batch_correlation_contract()
+
+        workload.operations["manifest_ordered"] = False
+        self.assertEqual(workload._batch_correlation_contract()["record_count"], 0)
+        workload.operations["manifest_ordered"] = True
+        workload.diagnostics_dir = None
+        self.assertEqual(workload._batch_correlation_contract()["record_count"], 0)
+
     def test_slow_completed_upsert_retains_full_stats_and_profile_manifest(self) -> None:
         workload = self.workload(self.response(), diagnostics_dir=Path("diagnostics"))
         workload.diagnostic_slow_seconds = 0.001

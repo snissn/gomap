@@ -481,6 +481,11 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.UpsertBatchCorrelationContract.MaximumRecordCount++
 			a.RawEvidence["treedb"] = raw
 		}},
+		{"completed diagnostics-enabled TreeDB evidence omits batch correlations", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.Diagnostics = json.RawMessage(`{"enabled":true}`)
+			a.RawEvidence["treedb"] = raw
+		}},
 		{"missing TreeDB phase boundary", func(a *minimaArtifact) {
 			raw := a.RawEvidence["treedb"]
 			raw.PhaseAttribution.Phases = raw.PhaseAttribution.Phases[1:]
@@ -800,6 +805,7 @@ func validMinimaArtifact() minimaArtifact {
 				CompactRecordMaxBytes: minimaCompactBatchCorrelationMaxBytes,
 				FullStatsRetention:    []string{"failed", "timeout", "slow", "profile_captured"},
 			}
+			evidence.Diagnostics = json.RawMessage(`{"enabled":false}`)
 			evidence.ServiceLog = minimaRawServiceLog{
 				Path: "/tmp/treedb-service.log", Tail: "TreeDB Document Service listening", MaxTailBytes: 64 << 10,
 			}
@@ -1204,18 +1210,23 @@ func TestMinimaPhaseUnattributedBound(t *testing.T) {
 func TestMinimaBatchCorrelationContract(t *testing.T) {
 	artifact := validMinimaArtifact()
 	raw := artifact.RawEvidence["treedb"]
+	omitted := raw
+	omitted.Diagnostics = json.RawMessage(`{"enabled":true}`)
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, omitted, true); err == nil {
+		t.Fatal("completed diagnostics-enabled artifact omitted batch correlations")
+	}
 	raw.UpsertBatchCorrelations = []json.RawMessage{json.RawMessage(
 		`{"sequence":0,"outcome":"completed","stats_retention":"compact_completed","profile_capture":{"status":"not_triggered"}}`,
 	)}
 	raw.UpsertBatchCorrelationContract.RecordCount = 1
 	raw.UpsertBatchCorrelationContract.CompactCompletedRecords = 1
-	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw); err != nil {
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false); err != nil {
 		t.Fatal(err)
 	}
 	raw.UpsertBatchCorrelations[0] = json.RawMessage(
 		`{"outcome":"completed","stats_retention":"compact_completed","before_stats":{"wide":true},"profile_capture":{"status":"not_triggered"}}`,
 	)
-	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw); err == nil {
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false); err == nil {
 		t.Fatal("compact batch correlation retained full stats")
 	}
 	raw.UpsertBatchCorrelations[0] = json.RawMessage(
@@ -1223,7 +1234,7 @@ func TestMinimaBatchCorrelationContract(t *testing.T) {
 	)
 	raw.UpsertBatchCorrelationContract.CompactCompletedRecords = 0
 	raw.UpsertBatchCorrelationContract.FullDiagnosticRecords = 1
-	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw); err != nil {
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false); err != nil {
 		t.Fatal(err)
 	}
 }

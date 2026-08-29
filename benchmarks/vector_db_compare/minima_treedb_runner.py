@@ -730,6 +730,13 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
     def _batch_correlation_contract(self) -> dict[str, Any]:
         if len(self.batch_correlations) > self._batch_correlation_max_records:
             raise RuntimeError("TreeDB batch correlation count exceeds the frozen manifest bound")
+        completed = getattr(self, "operations", {}).get("manifest_ordered", False)
+        if completed:
+            expected_records = self._batch_correlation_max_records if self.diagnostics_dir is not None else 0
+            if len(self.batch_correlations) != expected_records:
+                raise RuntimeError(
+                    "completed TreeDB batch correlation count does not match the diagnostics contract"
+                )
         compact_records = 0
         full_records = 0
         for correlation in self.batch_correlations:
