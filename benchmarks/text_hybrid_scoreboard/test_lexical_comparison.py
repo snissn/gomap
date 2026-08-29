@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -159,7 +161,18 @@ class LexicalComparisonTest(unittest.TestCase):
             environment = lexical_runner.benchmark_environment(Path(temporary), self.manifest)
         self.assertEqual(environment["MAVEN_OPTS"], lexical_runner.LUCENE_JVM_EXECUTION)
         self.assertEqual(environment["LEXICAL_JVM_EXECUTION"], lexical_runner.LUCENE_JVM_EXECUTION)
+        self.assertEqual(environment["PYTHONDONTWRITEBYTECODE"], "1")
         self.assertNotIn("-Xmx1g", environment["MAVEN_OPTS"])
+
+    def test_adapter_environment_suppresses_child_bytecode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "fixture_module.py").write_text("VALUE = 1\n", encoding="utf-8")
+            (root / "adapter.py").write_text("import fixture_module\n", encoding="utf-8")
+            environment = os.environ.copy()
+            environment.update(lexical_runner.benchmark_environment(root, self.manifest))
+            subprocess.run([sys.executable, str(root / "adapter.py")], cwd=root, env=environment, check=True)
+            self.assertFalse((root / "__pycache__").exists())
 
     def test_reference_interprets_every_manifest_shape(self) -> None:
         self.assertEqual(self.expected["common"], [f"doc-{i:06d}" for i in (0, 1, 2, 3, 4, 5, 6, 7, 9, 8)])
