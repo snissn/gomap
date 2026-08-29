@@ -208,16 +208,19 @@ class LexicalComparisonTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             completed = subprocess.CompletedProcess([], 0, "", "")
-            with patch.object(lexical_runner, "run_command", return_value=completed):
+            with patch.object(lexical_runner, "run_command", return_value=completed) as run:
                 setup_ok, setup_command, _ = lexical_runner.setup_engine("bleve", root, 1, selected)
             self.assertTrue(setup_ok)
             self.assertEqual(setup_command[0], selected)
+            self.assertEqual(run.call_args.args[4], {"GOWORK": "off", "GOENV": "off"})
             treedb_command, _, treedb_env = lexical_runner.adapter_command("treedb_text_v2", 1, root, HERE / "lexical_manifest.json", root / "corpus.tsv", "source", selected)
             bleve_command, _, bleve_env = lexical_runner.adapter_command("bleve", 1, root, HERE / "lexical_manifest.json", root / "corpus.tsv", "source", selected)
         self.assertEqual(treedb_command[0], selected)
         self.assertEqual(bleve_command[0], selected)
         self.assertEqual(treedb_env["LEXICAL_GO_EXECUTABLE"], selected)
         self.assertEqual(bleve_env["LEXICAL_GO_EXECUTABLE"], selected)
+        self.assertEqual(treedb_env["GOENV"], "off")
+        self.assertEqual(bleve_env["GOENV"], "off")
         self.assertEqual(lexical_runner.normalize_executable("./sdk/go/bin/go", Path("/workspace")), "/workspace/sdk/go/bin/go")
         self.assertEqual(lexical_runner.normalize_executable("go", Path("/workspace")), "go")
 

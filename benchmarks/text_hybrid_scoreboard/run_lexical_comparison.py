@@ -205,7 +205,8 @@ def setup_engine(engine_id: str, out_dir: Path, timeout: int, go_bin: str) -> tu
         cwd = isolated_project(engine_id, out_dir)
     else:
         return True, [], ""
-    result = run_command(command, cwd, timeout, out_dir / "logs" / f"{engine_id}-setup.log", {"GOWORK": "off"})
+    command_environment = {"GOWORK": "off", "GOENV": "off"} if engine_id == "bleve" else {}
+    result = run_command(command, cwd, timeout, out_dir / "logs" / f"{engine_id}-setup.log", command_environment)
     return result.returncode == 0, command, result.stderr
 
 
@@ -251,12 +252,12 @@ def adapter_command(engine_id: str, repetition: int, out_dir: Path, manifest: Pa
     index = out_dir / "indexes" / f"{engine_id}-r{repetition}"
     common = ["--manifest", str(manifest), "--corpus", str(corpus), "--out", str(raw), "--repetition", str(repetition)]
     if engine_id == "treedb_text_v2":
-        return [go_bin, "run", "./benchmarks/text_hybrid_scoreboard/treedb_adapter", *common, "--db", str(index)], ROOT, {"GOWORK": "off", "GOMAP_SOURCE_REVISION": source_revision, "LEXICAL_GO_EXECUTABLE": go_bin}
+        return [go_bin, "run", "./benchmarks/text_hybrid_scoreboard/treedb_adapter", *common, "--db", str(index)], ROOT, {"GOWORK": "off", "GOENV": "off", "GOMAP_SOURCE_REVISION": source_revision, "LEXICAL_GO_EXECUTABLE": go_bin}
     if engine_id == "lucene":
         exec_args = shlex.join([*common, "--index", str(index)])
         return ["mvn", "-q", "compile", "exec:java", f"-Dexec.args={exec_args}"], isolated_project(engine_id, out_dir), {}
     if engine_id == "bleve":
-        return [go_bin, "run", ".", *common, "--index", str(index)], isolated_project(engine_id, out_dir), {"GOWORK": "off", "LEXICAL_GO_EXECUTABLE": go_bin}
+        return [go_bin, "run", ".", *common, "--index", str(index)], isolated_project(engine_id, out_dir), {"GOWORK": "off", "GOENV": "off", "LEXICAL_GO_EXECUTABLE": go_bin}
     if engine_id == "sqlite_fts5":
         return [sys.executable, str(HERE / "sqlite_fts5_bench.py"), *common, "--db", str(index.with_suffix(".sqlite3"))], ROOT, {}
     raise AssertionError(engine_id)
