@@ -22,9 +22,9 @@ const (
 	minimaResourceCPUSemantics            = "sum of positive per-process end-minus-baseline CPU seconds"
 	minimaResourceDiskSemantics           = "sum of positive per-process-segment end-minus-baseline durable storage bytes"
 	minimaQdrantInitialHNSWConfig         = `{"m":0,"ef_construct":100,"full_scan_threshold":10000,"max_indexing_threads":0,"on_disk":false}`
-	minimaQdrantInitialOptimizerConfig    = `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":0,"flush_interval_sec":5}`
+	minimaQdrantInitialOptimizerConfig    = `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":0,"flush_interval_sec":5,"max_optimization_threads":1}`
 	minimaQdrantProductionHNSWConfig      = `{"m":16,"ef_construct":100,"full_scan_threshold":10000,"max_indexing_threads":0,"on_disk":false}`
-	minimaQdrantProductionOptimizerConfig = `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":10000,"flush_interval_sec":5}`
+	minimaQdrantProductionOptimizerConfig = `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":10000,"flush_interval_sec":5,"max_optimization_threads":1}`
 )
 
 const (
@@ -911,6 +911,17 @@ func minimaRawJSONMatchesConfiguration(raw json.RawMessage, encoded string) bool
 	return reflect.DeepEqual(actual, expected)
 }
 
+func minimaRawJSONContainsConfiguration(raw json.RawMessage, encoded string) bool {
+	if len(raw) == 0 || encoded == "" {
+		return false
+	}
+	var actual, expected any
+	if json.Unmarshal(raw, &actual) != nil || json.Unmarshal([]byte(encoded), &expected) != nil {
+		return false
+	}
+	return minimaJSONContainsExpected(actual, expected)
+}
+
 func minimaJSONContainsExpected(actual, expected any) bool {
 	expectedMap, ok := expected.(map[string]any)
 	if !ok {
@@ -930,6 +941,15 @@ func minimaJSONContainsExpected(actual, expected any) bool {
 }
 
 func minimaQdrantCollectionConfigMatches(raw json.RawMessage, hnsw, optimizer string) bool {
+	var envelope struct {
+		Config json.RawMessage `json:"config"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return false
+	}
+	if len(envelope.Config) != 0 {
+		raw = envelope.Config
+	}
 	var config struct {
 		HNSW      json.RawMessage `json:"hnsw_config"`
 		Optimizer json.RawMessage `json:"optimizer_config"`
@@ -974,7 +994,7 @@ func validateMinimaQdrantReadiness(raw minimaRawBackendEvidence, backend minimaB
 		{transition.ProductionHNSW, "production_hnsw", minimaQdrantProductionHNSWConfig},
 		{transition.ProductionOptimizers, "production_optimizers", minimaQdrantProductionOptimizerConfig},
 	} {
-		if !minimaRawJSONMatchesConfiguration(check.raw, check.expected) ||
+		if !minimaRawJSONContainsConfiguration(check.raw, check.expected) ||
 			!minimaRawJSONMatchesConfiguration(check.raw, backend.Configuration[check.key]) {
 			return fmt.Errorf("minima artifact: Qdrant configuration transition disagrees with %s", check.key)
 		}
