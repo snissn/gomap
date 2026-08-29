@@ -2,7 +2,7 @@
 
 ## Decision
 
-The exact 10M campaign is **blocked**. The mixed text/vector load completed, but the frozen retrieval matrix failed closed at `hybrid_text_scalar_rare_no_docs` because the accepted fixed 655,360 candidate bound was insufficient at 10M. The artifact is incomplete and must not be cited as passing 10M evidence. Issue #4329 remains open and continues to block the final #4326 comparator.
+The exact 10M campaign is **blocked**. The mixed text/vector load completed, but the frozen retrieval matrix failed closed at `hybrid_text_scalar_rare_no_docs` after scanning exactly 1,048,576 postings: hybrid candidate generation left `MaxPostingsScanned` unset, so `textSearchDefaultMaxPostingsScan` (`1 << 20`) applied at 10M. The artifact is incomplete and must not be cited as passing 10M evidence. Issue #4329 remains open and continues to block the final #4326 comparator.
 
 Retained raw evidence: [`artifacts/4329-text-hybrid-10m-failed-v1`](../../artifacts/4329-text-hybrid-10m-failed-v1/README.md).
 
@@ -52,9 +52,9 @@ The exact process ran for 9,435.07 seconds before exiting. `/usr/bin/time -l` re
 | phrase | 323.179s | PASS | 10,000,000 postings scanned; 5,000,000 candidates scored |
 | common top-k fetch | 784.199ms | PASS | exactly 10 documents fetched; no fallback/fail-closed |
 | hybrid text-only | 686.938ms | PASS | adaptive text budget 10/655,360; zero documents fetched |
-| hybrid text+scalar rare | n/a | **FAIL CLOSED** | scalar prefilter 625,000; fixed text budget 655,360 exhausted; `exact_bound_insufficient` |
+| hybrid text+scalar rare | n/a | **FAIL CLOSED** | 1,048,576 postings scanned; 65,536 candidates scored; scalar prefilter 625,000; `fail_closed=1` |
 
-The failure occurred during warm-up, before timed samples. TreeDB returned an explicit index-unavailable error and incremented `fail_closed`; the harness did not convert the failure into a latency result.
+The failure occurred during warm-up, before timed samples. The 655,360 candidate budget did not exhaust: only 65,536 candidates were scored. The direct bound was the unscaled default postings ceiling (`textSearchDefaultMaxPostingsScan = 1 << 20`) selected because hybrid candidate generation left `MaxPostingsScanned` unset. `exact_bound_insufficient` is the planner stop/fallback label, not the direct fail-closed cause. TreeDB returned an explicit index-unavailable error; the harness did not convert the failure into a latency result.
 
 ## Completeness and cleanup
 
@@ -64,4 +64,4 @@ The candidate report was written before the failure-cleanup persistence fix and 
 
 ## Required next owner
 
-A follow-up must resolve or deliberately revise the 10M scalar-hybrid exact-bound contract, then rerun the full frozen matrix. Any budget change is a new prospectively frozen campaign, not a reinterpretation of this failed execution. The owner must also disposition the 10.1x normalized load-throughput regression, 85x vector-rebuild elapsed scaling, and 323-second phrase p95 before #4329 can close.
+A follow-up must explicitly scale/wire the 10M hybrid postings ceiling or deliberately revise that contract, then rerun the full frozen matrix. Any limit change is a new prospectively frozen campaign, not a reinterpretation of this failed execution. The owner must also disposition the 10.1x normalized load-throughput regression, 85x vector-rebuild elapsed scaling, and 323-second phrase p95 before #4329 can close.

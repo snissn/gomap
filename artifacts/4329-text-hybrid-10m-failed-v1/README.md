@@ -14,7 +14,7 @@ This directory retains the first exact 10M candidate execution from PR #4435. It
 
 ## Result
 
-The exact 10M load completed in 8,566.689 seconds. The query matrix then failed on the warm-up for `hybrid_text_scalar_rare_no_docs`: the fixed 655,360 text-candidate bound was insufficient, so TreeDB correctly failed closed with `exact_bound_insufficient`. Only the `load` phase completed. The required reopen, concurrency, maintenance, backfill, text-only, and source/chunk phases did not run.
+The exact 10M load completed in 8,566.689 seconds. The query matrix then failed on the warm-up for `hybrid_text_scalar_rare_no_docs` after exactly 1,048,576 postings were scanned. Hybrid candidate generation left `MaxPostingsScanned` unset, so `textSearchDefaultMaxPostingsScan` (`1 << 20`) applied. Only 65,536 of the requested 655,360 candidates were scored; the candidate budget did not exhaust. `exact_bound_insufficient` is the planner stop/fallback label, not the direct fail-closed cause. Only the `load` phase completed. The required reopen, concurrency, maintenance, backfill, text-only, and source/chunk phases did not run.
 
 The candidate-authored report predates the failure-cleanup persistence fix and therefore has a blank cleanup row. The process defer removed the fixture paths. `post_run_cleanup_observation.json` records a clearly labeled external observation that all five paths were absent after process exit; it is not part of the candidate-authored report or validator seal.
 
