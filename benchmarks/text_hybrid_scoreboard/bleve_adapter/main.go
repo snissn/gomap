@@ -57,10 +57,10 @@ type caseResult struct {
 	Samples           []int64        `json:"samples_nanos,omitempty"`
 	IDs               []string       `json:"result_ids,omitempty"`
 	Digest            string         `json:"result_digest,omitempty"`
-	ReopenIDs          []string       `json:"reopen_result_ids,omitempty"`
-	ReopenDigest       string         `json:"reopen_result_digest,omitempty"`
-	Route              map[string]any `json:"route,omitempty"`
-	TimedOut           bool           `json:"timed_out"`
+	ReopenIDs         []string       `json:"reopen_result_ids,omitempty"`
+	ReopenDigest      string         `json:"reopen_result_digest,omitempty"`
+	Route             map[string]any `json:"route,omitempty"`
+	TimedOut          bool           `json:"timed_out"`
 }
 
 func main() {
