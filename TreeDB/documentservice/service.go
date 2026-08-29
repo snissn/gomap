@@ -2058,7 +2058,7 @@ func mapDocumentLookupError(err error) error {
 	if errors.Is(err, backenddb.ErrClosed) {
 		return wrapServiceError(CodeIndexUnavailable, "TreeDB backend is closed", err)
 	}
-	return wrapServiceError(CodeInternal, "document lookup failed", err)
+	return wrapServiceError(CodeInternal, "document scan failed", err)
 }
 
 func mapDocumentScanError(err error) error {
