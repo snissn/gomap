@@ -68,6 +68,11 @@ var nativeVectorIndexBeforeAutoPersistSaveHookForTest struct {
 	fn func(string)
 }
 
+var vectorIndexRebuildAfterLockHookForTest struct {
+	mu sync.Mutex
+	fn func()
+}
+
 func setNativeVectorIndexBeforeInstallHookForTest(fn func(string)) func() {
 	nativeVectorIndexBeforeInstallHookForTest.mu.Lock()
 	previous := nativeVectorIndexBeforeInstallHookForTest.fn
@@ -107,6 +112,27 @@ func runNativeVectorIndexBeforeAutoPersistSaveHookForTest(name string) {
 	nativeVectorIndexBeforeAutoPersistSaveHookForTest.mu.Unlock()
 	if fn != nil {
 		fn(name)
+	}
+}
+
+func setVectorIndexRebuildAfterLockHookForTest(fn func()) func() {
+	vectorIndexRebuildAfterLockHookForTest.mu.Lock()
+	previous := vectorIndexRebuildAfterLockHookForTest.fn
+	vectorIndexRebuildAfterLockHookForTest.fn = fn
+	vectorIndexRebuildAfterLockHookForTest.mu.Unlock()
+	return func() {
+		vectorIndexRebuildAfterLockHookForTest.mu.Lock()
+		vectorIndexRebuildAfterLockHookForTest.fn = previous
+		vectorIndexRebuildAfterLockHookForTest.mu.Unlock()
+	}
+}
+
+func runVectorIndexRebuildAfterLockHookForTest() {
+	vectorIndexRebuildAfterLockHookForTest.mu.Lock()
+	fn := vectorIndexRebuildAfterLockHookForTest.fn
+	vectorIndexRebuildAfterLockHookForTest.mu.Unlock()
+	if fn != nil {
+		fn()
 	}
 }
 
@@ -676,7 +702,9 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 				return nil, err
 			}
 		} else {
-			c.RegisterVectorIndex(index)
+			if err := c.registerBuiltVectorIndex(index); err != nil {
+				return nil, err
+			}
 		}
 		if c.manager != nil && index.needsNativeAutoPersist() {
 			c.manager.registerCollectionHandle(c)
@@ -871,31 +899,109 @@ func parseVectorIndexEncoding(value string) (VectorIndexEncoding, error) {
 
 // RegisterVectorIndex attaches an in-memory vector index to this collection so
 // successful collection inserts, updates, and deletes keep the index in sync.
-func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
-	if c == nil || index == nil {
-		return
+func (c *Collection) RegisterVectorIndex(index *VectorIndex) error {
+	if c == nil {
+		return errCollectionNil
 	}
+	if index == nil {
+		return errors.New("collections: vector index is nil")
+	}
+	unlockSchema := c.lockCollectionSchemaWrite()
+	defer unlockSchema()
+	if _, err := c.refreshNativeVectorIndexDeclaration(index.name); err != nil {
+		return err
+	}
+	def, declaredNative := findVectorIndex(c.meta.VectorIndexes, index.name)
+	if declaredNative && vectorIndexDefinitionUsesNativeRuntime(def) {
+		if reason := index.validateNativeSnapshotDefinition(def); reason != "" {
+			return fmt.Errorf("collections: vector index %q does not match collection metadata: %s", index.name, reason)
+		}
+	}
+	c.registerVectorIndexCurrentCatalog(index)
+	return nil
+}
+
+func (c *Collection) registerBuiltVectorIndex(index *VectorIndex) error {
+	unlockSchema := c.lockCollectionSchemaWrite()
+	defer unlockSchema()
+	coord := c.collectionSchemaCoordinator()
+	if coord != nil {
+		coord.adHocVectorAdmissionMu.Lock()
+		defer coord.adHocVectorAdmissionMu.Unlock()
+	}
+	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
+		return err
+	}
+	if _, err := c.refreshNativeVectorIndexDeclaration(index.name); err != nil {
+		return err
+	}
+	def, declaredNative := findVectorIndex(c.meta.VectorIndexes, index.name)
+	if declaredNative && vectorIndexDefinitionUsesNativeRuntime(def) {
+		return ErrConcurrentMutation
+	}
+	return c.registerAdHocVectorIndexCurrentCatalogWithAdmissionLocked(index)
+}
+
+func (c *Collection) registerAdHocVectorIndexCurrentCatalog(index *VectorIndex) error {
+	coord := c.collectionSchemaCoordinator()
+	if coord != nil {
+		coord.adHocVectorAdmissionMu.Lock()
+		defer coord.adHocVectorAdmissionMu.Unlock()
+	}
+	return c.registerAdHocVectorIndexCurrentCatalogWithAdmissionLocked(index)
+}
+
+func (c *Collection) registerAdHocVectorIndexCurrentCatalogWithAdmissionLocked(index *VectorIndex) error {
+	if sourceGeneration, valid := index.sourceDocumentCoverage(); valid {
+		currentGeneration, err := c.currentVectorIndexDocumentGeneration()
+		if err != nil {
+			return err
+		}
+		if currentGeneration != sourceGeneration {
+			return ErrConcurrentMutation
+		}
+	}
+	c.registerVectorIndexCurrentCatalogWithAdHocAdmissionLocked(index)
+	return nil
+}
+
+func (c *Collection) registerVectorIndexCurrentCatalog(index *VectorIndex) {
+	def, declaredNative := findVectorIndex(c.meta.VectorIndexes, index.name)
+	sharedNative := declaredNative && vectorIndexDefinitionUsesNativeRuntime(def) && c.writeDomain != nil
+	coord := c.collectionSchemaCoordinator()
+	if !sharedNative && coord != nil {
+		coord.adHocVectorAdmissionMu.Lock()
+		defer coord.adHocVectorAdmissionMu.Unlock()
+	}
+	c.registerVectorIndexCurrentCatalogWithAdHocAdmissionLocked(index)
+}
+
+func (c *Collection) registerVectorIndexCurrentCatalogWithAdHocAdmissionLocked(index *VectorIndex) {
+	def, declaredNative := findVectorIndex(c.meta.VectorIndexes, index.name)
+	sharedNative := declaredNative && vectorIndexDefinitionUsesNativeRuntime(def) && c.writeDomain != nil
+	coord := c.collectionSchemaCoordinator()
 	if index.searchView.Load() == nil && index.hasValidSourceDocumentRoots() {
 		index.publishSearchView()
 	}
 	index.collection = c
-	if def, ok := findVectorIndex(c.meta.VectorIndexes, index.name); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
+	if sharedNative {
 		index.recordNativeDefinition(def)
-		if c.writeDomain != nil {
-			c.writeDomain.nativeVectorIndexesMu.Lock()
-			if c.writeDomain.nativeVectorIndexes == nil {
-				c.writeDomain.nativeVectorIndexes = make(map[string]*VectorIndex)
-			}
-			c.writeDomain.nativeVectorIndexes[index.name] = index
-			c.writeDomain.nativeVectorIndexesMu.Unlock()
-			return
+		c.writeDomain.nativeVectorIndexesMu.Lock()
+		if c.writeDomain.nativeVectorIndexes == nil {
+			c.writeDomain.nativeVectorIndexes = make(map[string]*VectorIndex)
 		}
+		c.writeDomain.nativeVectorIndexes[index.name] = index
+		c.writeDomain.nativeVectorIndexesMu.Unlock()
+		return
 	}
-	index.setNativePersistent(false)
 	c.vectorIndexesMu.Lock()
 	defer c.vectorIndexesMu.Unlock()
+	index.setNativePersistent(false)
 	if c.vectorIndexes == nil {
 		c.vectorIndexes = make(map[string]*VectorIndex)
+	}
+	if _, exists := c.vectorIndexes[index.name]; !exists && coord != nil {
+		coord.adHocVectorIndexes.Add(1)
 	}
 	c.vectorIndexes[index.name] = index
 }
@@ -969,8 +1075,14 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 		c.writeDomain.nativeVectorIndexesMu.Unlock()
 	}
 	c.vectorIndexesMu.Lock()
+	_, removedAdHoc := c.vectorIndexes[name]
 	delete(c.vectorIndexes, name)
 	c.vectorIndexesMu.Unlock()
+	if removedAdHoc {
+		if coord := c.collectionSchemaCoordinator(); coord != nil {
+			coord.adHocVectorIndexes.Add(-1)
+		}
+	}
 	if !c.hasNativePersistentVectorIndex() && c.manager != nil && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionQueryReadyGenerationCache() {
 		c.manager.unregisterCollectionHandle(c)
 	}
@@ -1385,6 +1497,7 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 		return func() {}
 	}
 	domain := c.writeDomain
+	unlockAdHocAdmission := c.lockAdHocVectorAdmissionRead()
 	admissionMu := c.nativeVectorAdmissionMutex()
 	coord := domain.schemaCoordinator
 	var hasMaintainedVectorIndexes bool
@@ -1431,6 +1544,7 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 	domain.nativeVectorSearchActive.Store(hasMaintainedVectorIndexes && baselineCurrent)
 	domain.nativeVectorActiveMu.Unlock()
 	return func() {
+		defer unlockAdHocAdmission()
 		domain.mu.RLock()
 		domain.nativeVectorActiveMu.Lock()
 		domain.nativeVectorActive--
@@ -5344,8 +5458,19 @@ func (idx *VectorIndex) Rebuild() error {
 	if c == nil {
 		return errCollectionNil
 	}
+	unlockSchema := c.lockCollectionSchemaWrite()
+	defer unlockSchema()
+	if _, err := c.refreshNativeVectorIndexDeclaration(idx.name); err != nil {
+		return err
+	}
+	coord := c.collectionSchemaCoordinator()
+	if coord != nil {
+		coord.adHocVectorAdmissionMu.Lock()
+		defer coord.adHocVectorAdmissionMu.Unlock()
+	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
+	runVectorIndexRebuildAfterLockHookForTest()
 	if c.vectorIndexRuntimeIsStale(idx) {
 		return fmt.Errorf("%w: %q", errVectorIndexStaleRuntime, idx.name)
 	}
@@ -5402,7 +5527,7 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.requireFullNativeSnapshotLocked()
 	idx.publishSearchViewLocked(true)
 	idx.mu.Unlock()
-	c.RegisterVectorIndex(idx)
+	c.registerVectorIndexCurrentCatalogWithAdHocAdmissionLocked(idx)
 	if c.manager != nil && idx.needsNativeAutoPersist() {
 		c.manager.registerCollectionHandle(c)
 	}

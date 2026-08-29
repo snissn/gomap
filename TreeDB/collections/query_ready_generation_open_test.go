@@ -295,7 +295,9 @@ func TestCollectionQueryReadyGenerationCacheKeepsManagerRegistrationAcrossVector
 			if err != nil {
 				return err
 			}
-			c.RegisterVectorIndex(index)
+			if err := c.RegisterVectorIndex(index); err != nil {
+				return err
+			}
 			c.UnregisterVectorIndex(index.name)
 			return nil
 		}},
