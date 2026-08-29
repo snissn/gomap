@@ -31,7 +31,7 @@
   "execution": {
     "top_k": 10,
     "tie_break": "score descending, UTF-8 document ID ascending",
-    "warmup_queries_per_case": 2,
+    "warmup_queries_per_case": 100,
     "measured_queries_per_case": 20,
     "retained_repetitions": 3,
     "cache_state": "warm in-process index; every retained repetition rebuilds, checkpoints, closes, and reopens its own index",
