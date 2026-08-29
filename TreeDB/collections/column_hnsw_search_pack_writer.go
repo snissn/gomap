@@ -26,6 +26,21 @@ func prepareColumnHNSWSearchPackAsset(assetRootDir string, cfg ColumnStoreConfig
 }
 
 func prepareColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, generation, partID uint64, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator) (columnHNSWSearchPackPreparedAsset, error) {
+	prepared, err := writeColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir, cfg, def, graph, generation, partID, rows, authority)
+	if err != nil {
+		return columnHNSWSearchPackPreparedAsset{}, err
+	}
+	if err := validateColumnHNSWSearchPackPreparedAsset(assetRootDir, prepared, graph, def); err != nil {
+		return columnHNSWSearchPackPreparedAsset{}, err
+	}
+	return prepared, nil
+}
+
+// writeColumnHNSWSearchPackAssetWithStableAuthority emits and closes the
+// durable pack without mapping it for validation. Rebuild uses this concrete
+// seam to release its borrowed typed-vector source before validation maps the
+// new pack.
+func writeColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, generation, partID uint64, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator) (columnHNSWSearchPackPreparedAsset, error) {
 	if assetRootDir == "" {
 		return columnHNSWSearchPackPreparedAsset{}, errors.New("collections: hnsw search pack requires asset root dir")
 	}
@@ -72,9 +87,6 @@ func prepareColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir string, cf
 		Bytes:      ref.Length,
 		Rows:       len(rows),
 		SchemaHash: cfg.SchemaHash,
-	}
-	if err := validateColumnHNSWSearchPackPreparedAsset(assetRootDir, prepared, graph, def); err != nil {
-		return columnHNSWSearchPackPreparedAsset{}, err
 	}
 	return prepared, nil
 }

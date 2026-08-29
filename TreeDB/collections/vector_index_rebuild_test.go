@@ -116,11 +116,12 @@ func TestColumnGraphRebuildVectorIndexUsesTypedColumnRows4254(t *testing.T) {
 		_ = snap.Close()
 		t.Fatalf("decodeColumnManifestSnapshotForScan: %v", err)
 	}
-	typedRows, usedTypedColumns, err := col.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap, catalog, cfg, records, manifest, def)
+	typedRows, typedSource, usedTypedColumns, err := col.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap, catalog, cfg, records, manifest, def)
 	if err != nil || !usedTypedColumns {
 		_ = snap.Close()
 		t.Fatalf("typed rebuild rows used=%v err=%v", usedTypedColumns, err)
 	}
+	defer func() { _ = typedSource.Close() }()
 	canonicalRows, err := col.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
 	if err == nil {
 		err = col.assignColumnVectorGraphRowRefsFromBaseManifest(catalog.meta.Name, cfg, records, manifest.Generation, canonicalRows)
@@ -139,6 +140,20 @@ func TestColumnGraphRebuildVectorIndexUsesTypedColumnRows4254(t *testing.T) {
 		if string(typedRows[i].ID) != string(canonicalRows[i].ID) || !slices.Equal(typedRows[i].Vector, canonicalRows[i].Vector) || typedRows[i].InvNorm != canonicalRows[i].InvNorm || !slices.Equal(typedRef.DocumentID, canonicalRef.DocumentID) || typedRef.Generation != canonicalRef.Generation || typedRef.PartID != canonicalRef.PartID || typedRef.RowIndex != canonicalRef.RowIndex || typedRef.AppliedCommandLSN != canonicalRef.AppliedCommandLSN {
 			t.Fatalf("row[%d] typed=%+v canonical=%+v want exact source/row-ref parity", i, typedRows[i], canonicalRows[i])
 		}
+		var part *columnVectorGraphTypedColumnVectorPart
+		for _, candidate := range typedSource.parts {
+			if candidate.generation == typedRef.Generation {
+				part = candidate
+				break
+			}
+		}
+		if part == nil {
+			t.Fatalf("row[%d] has no typed-column source part", i)
+		}
+		start := typedRef.RowIndex * def.Dimensions
+		if len(typedRows[i].Vector) == 0 || &typedRows[i].Vector[0] != &part.values[start] {
+			t.Fatalf("row[%d] vector is not borrowed from its typed-column mapping", i)
+		}
 	}
 	called := false
 	restore := setColumnVectorGraphCanonicalRowsTestHook(func() { called = true })
@@ -148,6 +163,12 @@ func TestColumnGraphRebuildVectorIndexUsesTypedColumnRows4254(t *testing.T) {
 	}
 	if called {
 		t.Fatal("RebuildVectorIndex selected canonical JSON extraction despite certified typed columns")
+	}
+	if err := typedSource.Close(); err != nil {
+		t.Fatalf("typed source close: %v", err)
+	}
+	if !typedSource.closed {
+		t.Fatal("typed rebuild source remained live after close")
 	}
 }
 
