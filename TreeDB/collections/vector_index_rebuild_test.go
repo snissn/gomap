@@ -21,6 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/vectorops"
 )
 
 var columnGraphRebuildBenchSinkV2A VectorIndexStatus
@@ -1133,7 +1134,7 @@ func TestColumnVectorGraphOfflineBuildCoalescesFrozenPrefixPruning4419And4421(t 
 	if want.frozenPrefixReciprocalPrunes == 0 || want.frozenPrefixReciprocalPruneEdges <= want.frozenPrefixReciprocalPrunes {
 		t.Fatalf("reciprocal prune coalescing was not exercised: prunes=%d edges=%d", want.frozenPrefixReciprocalPrunes, want.frozenPrefixReciprocalPruneEdges)
 	}
-	if want.frozenPrefixIndexedDotBatches == 0 {
+	if vectorops.DotFloat32IndexedOptimizedEligible(2, 64) && want.frozenPrefixIndexedDotBatches == 0 {
 		t.Fatal("ordinary offline build did not use indexed frozen-prefix diversity dots")
 	}
 	if len(want.vectorRows) != len(want.nodes)*64 {

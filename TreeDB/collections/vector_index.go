@@ -4475,7 +4475,7 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseWithFrozenPrefixScratchLock
 }
 
 func (idx *VectorIndex) frozenPrefixIndexedDotRowsReadyLocked(candidate *vectorIndexNode, selected []vectorIndexCandidate, scratch *vectorIndexFrozenPrefixDiversityScratch) bool {
-	if scratch == nil || len(selected) < 2 || idx.dimensions < 1 || len(candidate.vector) != idx.dimensions || len(idx.vectorRows) != len(idx.nodes)*idx.dimensions {
+	if scratch == nil || !vectorops.DotFloat32IndexedOptimizedEligible(len(selected), idx.dimensions) || len(candidate.vector) != idx.dimensions || len(idx.vectorRows) != len(idx.nodes)*idx.dimensions {
 		return false
 	}
 	if cap(scratch.rowIDs) < len(selected) {
