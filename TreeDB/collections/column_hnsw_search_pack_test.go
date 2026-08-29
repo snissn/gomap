@@ -161,6 +161,13 @@ func TestColumnHNSWSearchPackPreparedAssetValidationMapped4429(t *testing.T) {
 		t.Fatal("corrupt pack passed mapped validation")
 	}
 	writeColumnVectorGraphAssetRawForTest2041(t, rootDir, ref, raw)
+	corrupt = append([]byte(nil), raw...)
+	corrupt[hnswPackU64(corrupt, columnHNSWSearchPackHeaderDataOffsetOffset)-1] ^= 1
+	writeColumnVectorGraphAssetRawForTest2041(t, rootDir, ref, corrupt)
+	if err := validateColumnHNSWSearchPackAssetPayload(rootDir, ref, ref.Length, graph, def); err == nil {
+		t.Fatal("padding corruption passed mapped validation")
+	}
+	writeColumnVectorGraphAssetRawForTest2041(t, rootDir, ref, raw)
 	path, err := columnAssetSegmentPath(rootDir, ref)
 	if err != nil {
 		t.Fatal(err)

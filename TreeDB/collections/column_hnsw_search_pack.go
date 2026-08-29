@@ -707,8 +707,12 @@ func writeColumnHNSWSearchPackStreamAll(w io.Writer, p []byte) error {
 
 func writeColumnHNSWSearchPackStreamSection(w io.Writer, scratch []byte, s columnHNSWSearchPackSection, input columnHNSWSearchPackBuildInput, rows []columnVectorGraphAssetRow) error {
 	if s.Kind == columnHNSWSearchPackSectionNormalizedVectors {
-		const chunkRows = 16
-		buf := scratch[:chunkRows*input.VectorStride*4]
+		if len(rows) == 0 {
+			return nil
+		}
+		bytesPerRow := input.VectorStride * 4
+		chunkRows := max(1, len(scratch)/bytesPerRow)
+		buf := scratch[:chunkRows*bytesPerRow]
 		for start := 0; start < len(rows); start += chunkRows {
 			end := min(start+chunkRows, len(rows))
 			part := buf[:(end-start)*input.VectorStride*4]

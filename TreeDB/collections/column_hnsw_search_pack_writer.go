@@ -354,6 +354,11 @@ func validateColumnHNSWSearchPackAssetPayloadWithManager(rootDir string, ref Col
 		}
 		return err
 	}
+	if checksum, err := columnHNSWSearchPackChecksumWithContext(nil, handle.Bytes()); err != nil {
+		return errors.Join(err, handle.Release())
+	} else if checksum != ref.Checksum {
+		return errors.Join(fmt.Errorf("collections: hnsw_search_pack_v1 checksum=%08x want %08x", checksum, ref.Checksum), handle.Release())
+	}
 	view, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, handle, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{
 		ManifestGeneration: graph.BaseManifestGeneration,
 		ManifestChecksum:   graph.BaseManifestChecksum,
