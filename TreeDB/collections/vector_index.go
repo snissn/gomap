@@ -444,10 +444,212 @@ type VectorIndex struct {
 	// constructionTrace is an offline-only nullable sink installed by the
 	// partition-pack diagnostic builder. Normal collection indexes never set it.
 	constructionTrace        *vectorIndexConstructionTraceV1
+	decisionObserver         *vectorIndexConstructionDecisionObserverV1
 	layer0ConstructionPolicy *vectorIndexLayer0ConstructionPolicyV1
 	// qualityPostfillCandidates belongs to the temporary builder, never to the
 	// evidence sink: graph construction must be identical with tracing off.
 	qualityPostfillCandidates map[int]map[int]struct{}
+}
+
+const vectorIndexConstructionDecisionPairSlots = 4096
+
+const (
+	vectorIndexConstructionDecisionPlanning = iota
+	vectorIndexConstructionDecisionReciprocal
+	vectorIndexConstructionDecisionPhaseCount
+)
+
+// vectorIndexConstructionDecisionObserverV1 is an offline-only, bounded sink
+// for the production frozen-prefix constructor. It retains aggregates and
+// hashes, never corpus-sized events.
+type vectorIndexConstructionDecisionObserverV1 struct {
+	phases [vectorIndexConstructionDecisionPhaseCount]vectorIndexConstructionDecisionPhaseV1
+}
+
+type vectorIndexConstructionDecisionPhaseV1 struct {
+	digestXOR, digestSum                                  atomic.Uint64
+	decisions, accepted, rejected                         atomic.Uint64
+	scalarRows, indexedRows, rowDimensions                atomic.Uint64
+	uniqueRowPairs, repeatedRowPairs, rowPairReplacements atomic.Uint64
+	wallNanos                                             atomic.Uint64
+	saturated                                             atomic.Bool
+	candidateCount, selectedCount, earlyExit, groupSize   [16]atomic.Uint64
+	pruneSurvivors                                        [16]atomic.Uint64
+	rowPairs                                              [vectorIndexConstructionDecisionPairSlots]atomic.Uint64
+}
+
+type vectorIndexConstructionDecisionContextV1 struct {
+	observer   *vectorIndexConstructionDecisionObserverV1
+	phase      int
+	source     int
+	layer      int
+	dimensions int
+}
+
+type vectorIndexConstructionDecisionPhaseSnapshotV1 struct {
+	DigestXOR, DigestSum                                             uint64
+	Decisions, Accepted, Rejected                                    uint64
+	ScalarRows, IndexedRows, RowDimensions                           uint64
+	UniqueRowPairs, RepeatedRowPairs, RowPairReplacements, WallNanos uint64
+	Saturated                                                        bool
+	CandidateCount, SelectedCount, EarlyExit, GroupSize              [16]uint64
+	PruneSurvivors                                                   [16]uint64
+}
+
+func (observer *vectorIndexConstructionDecisionObserverV1) snapshot() [vectorIndexConstructionDecisionPhaseCount]vectorIndexConstructionDecisionPhaseSnapshotV1 {
+	var out [vectorIndexConstructionDecisionPhaseCount]vectorIndexConstructionDecisionPhaseSnapshotV1
+	if observer == nil {
+		return out
+	}
+	for phase := range observer.phases {
+		source := &observer.phases[phase]
+		target := &out[phase]
+		target.DigestXOR, target.DigestSum = source.digestXOR.Load(), source.digestSum.Load()
+		target.Decisions, target.Accepted, target.Rejected = source.decisions.Load(), source.accepted.Load(), source.rejected.Load()
+		target.ScalarRows, target.IndexedRows, target.RowDimensions = source.scalarRows.Load(), source.indexedRows.Load(), source.rowDimensions.Load()
+		target.UniqueRowPairs, target.RepeatedRowPairs, target.RowPairReplacements, target.WallNanos = source.uniqueRowPairs.Load(), source.repeatedRowPairs.Load(), source.rowPairReplacements.Load(), source.wallNanos.Load()
+		target.Saturated = source.saturated.Load()
+		for bucket := range target.CandidateCount {
+			target.CandidateCount[bucket] = source.candidateCount[bucket].Load()
+			target.SelectedCount[bucket] = source.selectedCount[bucket].Load()
+			target.EarlyExit[bucket] = source.earlyExit[bucket].Load()
+			target.GroupSize[bucket] = source.groupSize[bucket].Load()
+			target.PruneSurvivors[bucket] = source.pruneSurvivors[bucket].Load()
+		}
+	}
+	return out
+}
+
+func vectorIndexConstructionDecisionHashV1(hash, value uint64) uint64 {
+	hash ^= value + 0x9e3779b97f4a7c15 + hash<<6 + hash>>2
+	return hash
+}
+
+func vectorIndexConstructionDecisionMixV1(value uint64) uint64 {
+	value ^= value >> 30
+	value *= 0xbf58476d1ce4e5b9
+	value ^= value >> 27
+	value *= 0x94d049bb133111eb
+	return value ^ value>>31
+}
+
+func vectorIndexConstructionDecisionBucketV1(value int) int {
+	bucket := 0
+	for value > 1 && bucket < 15 {
+		value = (value + 1) >> 1
+		bucket++
+	}
+	return bucket
+}
+
+func vectorIndexConstructionDecisionAddV1(counter *atomic.Uint64, delta uint64, saturated *atomic.Bool) {
+	for {
+		current := counter.Load()
+		if current == ^uint64(0) {
+			saturated.Store(true)
+			return
+		}
+		next := current + delta
+		if next < current {
+			next = ^uint64(0)
+			saturated.Store(true)
+		}
+		if counter.CompareAndSwap(current, next) {
+			return
+		}
+	}
+}
+
+func vectorIndexConstructionDecisionXORV1(counter *atomic.Uint64, value uint64) {
+	for {
+		current := counter.Load()
+		if counter.CompareAndSwap(current, current^value) {
+			return
+		}
+	}
+}
+
+func (context *vectorIndexConstructionDecisionContextV1) phaseStats() *vectorIndexConstructionDecisionPhaseV1 {
+	if context == nil || context.observer == nil || context.phase < 0 || context.phase >= len(context.observer.phases) {
+		return nil
+	}
+	return &context.observer.phases[context.phase]
+}
+
+func (context *vectorIndexConstructionDecisionContextV1) recordRowFrom(source, nodeID int, indexed bool) {
+	stats := context.phaseStats()
+	if stats == nil {
+		return
+	}
+	rows := &stats.scalarRows
+	if indexed {
+		rows = &stats.indexedRows
+	}
+	vectorIndexConstructionDecisionAddV1(rows, 1, &stats.saturated)
+	vectorIndexConstructionDecisionAddV1(&stats.rowDimensions, uint64(context.dimensions), &stats.saturated)
+	pair := vectorIndexConstructionDecisionMixV1(uint64(source + 1))
+	pair = vectorIndexConstructionDecisionHashV1(pair, uint64(nodeID+1)) | 1
+	seen := stats.rowPairs[pair&(vectorIndexConstructionDecisionPairSlots-1)].Swap(pair)
+	switch seen {
+	case 0:
+		vectorIndexConstructionDecisionAddV1(&stats.uniqueRowPairs, 1, &stats.saturated)
+	case pair:
+		vectorIndexConstructionDecisionAddV1(&stats.repeatedRowPairs, 1, &stats.saturated)
+	default:
+		vectorIndexConstructionDecisionAddV1(&stats.rowPairReplacements, 1, &stats.saturated)
+	}
+}
+
+func (context *vectorIndexConstructionDecisionContextV1) recordRow(nodeID int, indexed bool) {
+	context.recordRowFrom(context.source, nodeID, indexed)
+}
+
+func (context *vectorIndexConstructionDecisionContextV1) recordEarlyExit(position int, accepted bool) {
+	stats := context.phaseStats()
+	if stats == nil {
+		return
+	}
+	vectorIndexConstructionDecisionAddV1(&stats.earlyExit[vectorIndexConstructionDecisionBucketV1(position)], 1, &stats.saturated)
+	if accepted {
+		vectorIndexConstructionDecisionAddV1(&stats.accepted, 1, &stats.saturated)
+	} else {
+		vectorIndexConstructionDecisionAddV1(&stats.rejected, 1, &stats.saturated)
+	}
+
+}
+
+func (context *vectorIndexConstructionDecisionContextV1) recordDecision(orderedHash uint64, candidates, selected int, selectedIDs []vectorIndexCandidate) {
+	stats := context.phaseStats()
+	if stats == nil {
+		return
+	}
+	hash := vectorIndexConstructionDecisionHashV1(orderedHash, uint64(selected))
+	for _, candidate := range selectedIDs {
+		hash = vectorIndexConstructionDecisionHashV1(hash, uint64(candidate.nodeID+1))
+	}
+	hash = vectorIndexConstructionDecisionMixV1(hash)
+	vectorIndexConstructionDecisionXORV1(&stats.digestXOR, hash)
+	stats.digestSum.Add(hash)
+	vectorIndexConstructionDecisionAddV1(&stats.decisions, 1, &stats.saturated)
+	vectorIndexConstructionDecisionAddV1(&stats.candidateCount[vectorIndexConstructionDecisionBucketV1(candidates)], 1, &stats.saturated)
+	vectorIndexConstructionDecisionAddV1(&stats.selectedCount[vectorIndexConstructionDecisionBucketV1(selected)], 1, &stats.saturated)
+}
+
+func (context *vectorIndexConstructionDecisionContextV1) recordGroup(groupSize, candidates, survivors int) {
+	stats := context.phaseStats()
+	if stats == nil {
+		return
+	}
+	vectorIndexConstructionDecisionAddV1(&stats.groupSize[vectorIndexConstructionDecisionBucketV1(groupSize)], 1, &stats.saturated)
+	vectorIndexConstructionDecisionAddV1(&stats.candidateCount[vectorIndexConstructionDecisionBucketV1(candidates)], 1, &stats.saturated)
+	vectorIndexConstructionDecisionAddV1(&stats.pruneSurvivors[vectorIndexConstructionDecisionBucketV1(survivors)], 1, &stats.saturated)
+}
+
+func (context *vectorIndexConstructionDecisionContextV1) recordWall(elapsed time.Duration) {
+	stats := context.phaseStats()
+	if stats != nil && elapsed > 0 {
+		vectorIndexConstructionDecisionAddV1(&stats.wallNanos, uint64(elapsed), &stats.saturated)
+	}
 }
 
 // vectorIndexLayer0ConstructionPolicyV1 is an offline-only experiment seam.
@@ -2207,12 +2409,12 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 		for worker := 1; worker < workers; worker++ {
 			wg.Go(func() {
 				for plan := worker; plan < len(plans); plan += workers {
-					plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(documentIDs[start+plan], vectors[start+plan], entry, maxLevel)
+					plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan)
 				}
 			})
 		}
 		for plan := 0; plan < len(plans); plan += workers {
-			plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(documentIDs[start+plan], vectors[start+plan], entry, maxLevel)
+			plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan)
 		}
 		wg.Wait()
 		for row, err := range errs {
@@ -2316,7 +2518,15 @@ func (idx *VectorIndex) canPlanFrozenPrefixBatchLocked(documentIDs [][]byte) boo
 	return true
 }
 
-func (idx *VectorIndex) planFrozenPrefixInsertLocked(documentID []byte, vector []float32, entry, maxLevel int) (vectorIndexFrozenPrefixInsert, error) {
+func (idx *VectorIndex) planFrozenPrefixInsertLocked(documentID []byte, vector []float32, entry, maxLevel, sourceNodeID int) (vectorIndexFrozenPrefixInsert, error) {
+	observer := idx.decisionObserver
+	started := time.Time{}
+	if observer != nil {
+		started = time.Now()
+		defer func() {
+			(&vectorIndexConstructionDecisionContextV1{observer: observer, phase: vectorIndexConstructionDecisionPlanning}).recordWall(time.Since(started))
+		}()
+	}
 	plan := vectorIndexFrozenPrefixInsert{documentID: documentID, vector: vector, level: idx.levelForDocumentID(documentID)}
 	norm := vectorNormSquared(vector)
 	prepared, err := prepareFloat32CosineQuery(vector, norm)
@@ -2330,8 +2540,14 @@ func (idx *VectorIndex) planFrozenPrefixInsertLocked(documentID []byte, vector [
 	defer idx.putSearchScratch(scratch)
 	plan.neighbors = make([][]int, minInt(plan.level, maxLevel)+1)
 	for layer := len(plan.neighbors) - 1; layer >= 0; layer-- {
-		candidates := idx.searchLayerWithScratchLocked(vector, norm, &prepared, entry, idx.efConstruction, layer, scratch)
-		plan.neighbors[layer] = idx.selectLayerNeighborsLocked(vector, norm, &prepared, candidates, layer, idx.maxNeighborsForLayer(layer), -1)
+		if observer == nil {
+			candidates := idx.searchLayerWithScratchLocked(vector, norm, &prepared, entry, idx.efConstruction, layer, scratch)
+			plan.neighbors[layer] = idx.selectLayerNeighborsLocked(vector, norm, &prepared, candidates, layer, idx.maxNeighborsForLayer(layer), -1)
+		} else {
+			context := &vectorIndexConstructionDecisionContextV1{observer: observer, phase: vectorIndexConstructionDecisionPlanning, source: sourceNodeID, layer: layer, dimensions: idx.dimensions}
+			candidates := idx.searchLayerWithScratchObservedLocked(vector, norm, &prepared, entry, idx.efConstruction, layer, scratch, context)
+			plan.neighbors[layer] = idx.selectLayerNeighborsObservedLocked(vector, norm, &prepared, candidates, layer, idx.maxNeighborsForLayer(layer), -1, context)
+		}
 		if len(plan.neighbors[layer]) > 0 {
 			entry = plan.neighbors[layer][0]
 		}
@@ -2429,6 +2645,13 @@ func (idx *VectorIndex) linkFrozenPrefixReciprocalGroupLocked(links []vectorInde
 		return false
 	}
 	fromNodeID, layer := links[0].fromNodeID, links[0].layer
+	observer := idx.decisionObserver
+	var context *vectorIndexConstructionDecisionContextV1
+	if observer != nil {
+		context = &vectorIndexConstructionDecisionContextV1{observer: observer, phase: vectorIndexConstructionDecisionReciprocal, source: fromNodeID, layer: layer, dimensions: idx.dimensions}
+		started := time.Now()
+		defer func() { context.recordWall(time.Since(started)) }()
+	}
 	if fromNodeID < 0 || fromNodeID >= len(idx.nodes) || layer < 0 || layer > idx.nodes[fromNodeID].level {
 		return false
 	}
@@ -2450,9 +2673,17 @@ func (idx *VectorIndex) linkFrozenPrefixReciprocalGroupLocked(links []vectorInde
 		}
 	}
 	limit := idx.maxNeighborsForLayer(layer)
-	pruned := len(neighbors) > limit
+	candidateCount := len(neighbors)
+	pruned := candidateCount > limit
 	if pruned {
-		neighbors = idx.pruneLayerNeighborsWithFrozenPrefixScratchLocked(neighbors, limit, dotScratch)
+		if context == nil {
+			neighbors = idx.pruneLayerNeighborsWithFrozenPrefixScratchLocked(neighbors, limit, dotScratch)
+		} else {
+			neighbors = idx.pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked(neighbors, limit, dotScratch, context)
+		}
+	}
+	if context != nil {
+		context.recordGroup(len(links), candidateCount, len(neighbors))
 	}
 	idx.nodes[fromNodeID].neighbors[layer] = neighbors
 	return pruned
@@ -3039,6 +3270,10 @@ func (idx *VectorIndex) pruneLayerNeighborsLocked(_ int, neighbors []vectorIndex
 }
 
 func (idx *VectorIndex) pruneLayerNeighborsWithFrozenPrefixScratchLocked(neighbors []vectorIndexNeighbor, limit int, dotScratch *vectorIndexFrozenPrefixDiversityScratch) []vectorIndexNeighbor {
+	return idx.pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked(neighbors, limit, dotScratch, nil)
+}
+
+func (idx *VectorIndex) pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked(neighbors []vectorIndexNeighbor, limit int, dotScratch *vectorIndexFrozenPrefixDiversityScratch, context *vectorIndexConstructionDecisionContextV1) []vectorIndexNeighbor {
 	if limit <= 0 || len(neighbors) == 0 {
 		return nil
 	}
@@ -3061,7 +3296,7 @@ func (idx *VectorIndex) pruneLayerNeighborsWithFrozenPrefixScratchLocked(neighbo
 		}
 		scored = append(scored, vectorIndexCandidate{nodeID: neighborID, distance: distance})
 	}
-	scored, _ = idx.selectDiverseCandidatesWithFrozenPrefixScratchLocked(scored, limit, dotScratch)
+	scored, _, _, _, _ = idx.selectDiverseCandidatesWithDetailsAndFrozenPrefixScratchObservedLocked(scored, limit, false, true, false, dotScratch, context)
 	out := neighbors[:0]
 	for _, candidate := range scored {
 		out = append(out, vectorIndexNeighbor{nodeID: candidate.nodeID, distance: candidate.distance})
@@ -4026,13 +4261,24 @@ func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormS
 	return idx.searchLayerWithScratchModeLocked(query, queryNormSquared, prepared, entryPoint, limit, limit, layer, scratch, false)
 }
 
+func (idx *VectorIndex) searchLayerWithScratchObservedLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit int, layer int, scratch *vectorIndexSearchScratch, context *vectorIndexConstructionDecisionContextV1) []vectorIndexCandidate {
+	return idx.searchLayerWithScratchModeObservedLocked(query, queryNormSquared, prepared, entryPoint, limit, limit, layer, scratch, false, context)
+}
+
 func (idx *VectorIndex) searchLayerCurrentWithScratchLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit, explorationLimit int, layer int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
 	return idx.searchLayerWithScratchModeLocked(query, queryNormSquared, prepared, entryPoint, limit, explorationLimit, layer, scratch, true)
 }
 
 func (idx *VectorIndex) searchLayerWithScratchModeLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit, explorationLimit int, layer int, scratch *vectorIndexSearchScratch, currentOnly bool) []vectorIndexCandidate {
+	return idx.searchLayerWithScratchModeObservedLocked(query, queryNormSquared, prepared, entryPoint, limit, explorationLimit, layer, scratch, currentOnly, nil)
+}
+
+func (idx *VectorIndex) searchLayerWithScratchModeObservedLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit, explorationLimit int, layer int, scratch *vectorIndexSearchScratch, currentOnly bool, context *vectorIndexConstructionDecisionContextV1) []vectorIndexCandidate {
 	if entryPoint < 0 || entryPoint >= len(idx.nodes) || limit <= 0 {
 		return nil
+	}
+	if context != nil {
+		context.recordRow(entryPoint, false)
 	}
 	entryDistance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, entryPoint)
 	if math.IsInf(float64(entryDistance), 1) {
@@ -4072,6 +4318,9 @@ search:
 				break search
 			}
 			visited[neighborID] = mark
+			if context != nil {
+				context.recordRow(neighborID, false)
+			}
 			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighborID)
 			scratch.explored++
 			if math.IsInf(float64(distance), 1) {
@@ -4114,6 +4363,10 @@ func (idx *VectorIndex) layerNeighborsLocked(nodeID int, layer int) []vectorInde
 }
 
 func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormSquared float64, prepared *preparedFloat32CosineQuery, candidates []vectorIndexCandidate, layer, limit, excludeNodeID int) []int {
+	return idx.selectLayerNeighborsObservedLocked(vector, vectorNormSquared, prepared, candidates, layer, limit, excludeNodeID, nil)
+}
+
+func (idx *VectorIndex) selectLayerNeighborsObservedLocked(vector []float32, vectorNormSquared float64, prepared *preparedFloat32CosineQuery, candidates []vectorIndexCandidate, layer, limit, excludeNodeID int, context *vectorIndexConstructionDecisionContextV1) []int {
 	if limit <= 0 {
 		return nil
 	}
@@ -4183,7 +4436,7 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 		// this allocation.
 		constructionCandidates = append([]vectorIndexCandidate(nil), scored...)
 	}
-	scored, diversitySelected, _, diversity, _ = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, trace != nil, backfill, false)
+	scored, diversitySelected, _, diversity, _ = idx.selectDiverseCandidatesWithDetailsAndFrozenPrefixScratchObservedLocked(scored, limit, trace != nil, backfill, false, nil, context)
 	if capturePostfill {
 		idx.captureQualityPostfillCandidatesLocked(excludeNodeID, constructionCandidates)
 	}
@@ -4235,16 +4488,36 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []ve
 }
 
 func (idx *VectorIndex) selectDiverseCandidatesWithDetailsAndFrozenPrefixScratchLocked(candidates []vectorIndexCandidate, limit int, includeOrigins, backfillEnabled, captureQualityPostfill bool, dotScratch *vectorIndexFrozenPrefixDiversityScratch) ([]vectorIndexCandidate, int, int, map[int]bool, []vectorIndexCandidate) {
+	return idx.selectDiverseCandidatesWithDetailsAndFrozenPrefixScratchObservedLocked(candidates, limit, includeOrigins, backfillEnabled, captureQualityPostfill, dotScratch, nil)
+}
+
+func (idx *VectorIndex) selectDiverseCandidatesWithDetailsAndFrozenPrefixScratchObservedLocked(candidates []vectorIndexCandidate, limit int, includeOrigins, backfillEnabled, captureQualityPostfill bool, dotScratch *vectorIndexFrozenPrefixDiversityScratch, context *vectorIndexConstructionDecisionContextV1) ([]vectorIndexCandidate, int, int, map[int]bool, []vectorIndexCandidate) {
 	if limit <= 0 || len(candidates) == 0 {
 		return nil, 0, 0, nil, nil
 	}
 	idx.sortVectorIndexCandidatesByDistanceLocked(candidates)
+	orderedHash := uint64(0x4461)
+	if context != nil {
+		orderedHash = vectorIndexConstructionDecisionHashV1(orderedHash, uint64(context.phase+1))
+		orderedHash = vectorIndexConstructionDecisionHashV1(orderedHash, uint64(context.source+1))
+		orderedHash = vectorIndexConstructionDecisionHashV1(orderedHash, uint64(context.layer+1))
+		for _, candidate := range candidates {
+			orderedHash = vectorIndexConstructionDecisionHashV1(orderedHash, uint64(candidate.nodeID+1))
+			orderedHash = vectorIndexConstructionDecisionHashV1(orderedHash, uint64(math.Float32bits(candidate.distance)))
+		}
+	}
+	recordDecision := func(selected []vectorIndexCandidate) {
+		if context != nil {
+			context.recordDecision(orderedHash, len(candidates), len(selected), selected)
+		}
+	}
 	// Backfill-on preserves the historical degree-filling fast path.  The
 	// backfill-off construction policies instead need to run the diversity
 	// predicate even below their selection cap: a small candidate set can still
 	// contain mutually redundant neighbors, and those rejected candidates are
 	// the causal pool for the later offline refinements.
 	if len(candidates) <= limit && backfillEnabled {
+		recordDecision(candidates)
 		if !includeOrigins {
 			return candidates, len(candidates), 0, nil, nil
 		}
@@ -4255,6 +4528,7 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsAndFrozenPrefixScratch
 		return candidates, len(candidates), 0, diversity, nil
 	}
 	if idx.metric == VectorMetricInnerProduct {
+		recordDecision(candidates[:limit])
 		if !includeOrigins {
 			return candidates[:limit], limit, 0, nil, nil
 		}
@@ -4276,12 +4550,15 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsAndFrozenPrefixScratch
 	}
 	for _, candidate := range candidates {
 		if len(selected) >= limit {
+			orderedHash = vectorIndexConstructionDecisionHashV1(orderedHash, uint64(candidate.nodeID+1)<<1)
 			rejected = append(rejected, candidate)
 			continue
 		}
-		if idx.vectorIndexCandidateIsDiverseWithFrozenPrefixScratchLocked(candidate, selected, dotScratch) {
+		if idx.vectorIndexCandidateIsDiverseWithFrozenPrefixScratchObservedLocked(candidate, selected, dotScratch, context) {
+			orderedHash = vectorIndexConstructionDecisionHashV1(orderedHash, uint64(candidate.nodeID+1)<<1|1)
 			selected = append(selected, candidate)
 		} else {
+			orderedHash = vectorIndexConstructionDecisionHashV1(orderedHash, uint64(candidate.nodeID+1)<<1)
 			rejected = append(rejected, candidate)
 		}
 	}
@@ -4295,6 +4572,7 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsAndFrozenPrefixScratch
 	}
 	if !backfillEnabled {
 		out = append(out, selected...)
+		recordDecision(out)
 		if captureQualityPostfill {
 			return out, len(selected), 0, diversity, append([]vectorIndexCandidate(nil), rejected...)
 		}
@@ -4303,6 +4581,7 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsAndFrozenPrefixScratch
 	backfill := minInt(limit-len(selected), len(rejected))
 	if backfill == 0 {
 		out = append(out, selected...)
+		recordDecision(out)
 		return out, len(selected), 0, diversity, nil
 	}
 	selectedPos := 0
@@ -4318,6 +4597,7 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsAndFrozenPrefixScratch
 	}
 	out = append(out, selected[selectedPos:]...)
 	out = append(out, rejected[rejectedPos:backfill]...)
+	recordDecision(out)
 	return out, len(selected), 0, diversity, nil
 }
 
@@ -4568,39 +4848,72 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorInde
 }
 
 func (idx *VectorIndex) vectorIndexCandidateIsDiverseWithFrozenPrefixScratchLocked(candidate vectorIndexCandidate, selected []vectorIndexCandidate, dotScratch *vectorIndexFrozenPrefixDiversityScratch) bool {
+	return idx.vectorIndexCandidateIsDiverseWithFrozenPrefixScratchObservedLocked(candidate, selected, dotScratch, nil)
+}
+
+func (idx *VectorIndex) vectorIndexCandidateIsDiverseWithFrozenPrefixScratchObservedLocked(candidate vectorIndexCandidate, selected []vectorIndexCandidate, dotScratch *vectorIndexFrozenPrefixDiversityScratch, context *vectorIndexConstructionDecisionContextV1) bool {
 	if idx.metric == VectorMetricCosine && candidate.nodeID >= 0 && candidate.nodeID < len(idx.nodes) {
 		candidateNode := &idx.nodes[candidate.nodeID]
 		if len(candidateNode.vector) > 0 && candidateNode.cachedInvNorm != 0 {
 			if idx.frozenPrefixIndexedDotRowsReadyLocked(candidateNode, selected, dotScratch) {
+				if context != nil {
+					for i := range selected {
+						context.recordRowFrom(candidate.nodeID, selected[i].nodeID, true)
+					}
+				}
 				for i, existing := range selected {
 					distance := float32(1 - float64(dotScratch.dots[i])*float64(candidateNode.cachedInvNorm)*float64(idx.nodes[existing.nodeID].cachedInvNorm))
 					if distance < candidate.distance {
+						if context != nil {
+							context.recordEarlyExit(i+1, false)
+						}
 						return false
 					}
 				}
 				dotScratch.indexedBatches++
+				if context != nil {
+					context.recordEarlyExit(len(selected), true)
+				}
 				return true
 			}
-			for _, existing := range selected {
+			for position, existing := range selected {
+				if context != nil {
+					context.recordRowFrom(candidate.nodeID, existing.nodeID, false)
+				}
 				distance := idx.distanceBetweenFloat32CosineCandidateAndNodeLocked(candidateNode, existing.nodeID)
 				if math.IsInf(float64(distance), 1) {
 					continue
 				}
 				if distance < candidate.distance {
+					if context != nil {
+						context.recordEarlyExit(position+1, false)
+					}
 					return false
 				}
+			}
+			if context != nil {
+				context.recordEarlyExit(len(selected), true)
 			}
 			return true
 		}
 	}
-	for _, existing := range selected {
+	for position, existing := range selected {
+		if context != nil {
+			context.recordRowFrom(candidate.nodeID, existing.nodeID, false)
+		}
 		distance, ok := idx.distanceBetweenNodesFastLocked(candidate.nodeID, existing.nodeID)
 		if !ok {
 			distance = idx.distanceBetweenNodesLocked(candidate.nodeID, existing.nodeID)
 		}
 		if distance < candidate.distance {
+			if context != nil {
+				context.recordEarlyExit(position+1, false)
+			}
 			return false
 		}
+	}
+	if context != nil {
+		context.recordEarlyExit(len(selected), true)
 	}
 	return true
 }
