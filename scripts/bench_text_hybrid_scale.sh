@@ -131,6 +131,7 @@ build_scale_command() {
     -ef-search "$EF_SEARCH"
     -top-k "$TOP_K"
     -candidate-limit "$candidate_limit"
+    -hybrid-max-postings-scanned "$((rows * 4))"
     -queries "$queries"
     -readers "$READERS"
     -backfill-rows "$rows"

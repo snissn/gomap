@@ -25,6 +25,7 @@ const (
 	requiredScaleRows                  = 10_000_000
 	requiredSourceChunkBatchSize       = 32_768
 	requiredMaintenanceUpdateBatchSize = 10_000
+	requiredHybridMaxPostingsScanned   = requiredScaleRows * 4
 	harnessGitPath                     = "cmd/treedb_text_hybrid_scale"
 	treeDBGitPath                      = "TreeDB"
 )
@@ -323,6 +324,9 @@ func validateQualificationReport(rep report) error {
 	if cfg.Rows != requiredScaleRows || cfg.BackfillRows != requiredScaleRows || cfg.TextOnlyRows != requiredScaleRows || cfg.SourceChunkRows != requiredScaleRows || cfg.SourceChunkBatchSize != requiredSourceChunkBatchSize {
 		return fmt.Errorf("exact 10M cardinality and source/chunk batch contract required: rows=%d backfill=%d text_only=%d source_chunk=%d source_chunk_batch=%d", cfg.Rows, cfg.BackfillRows, cfg.TextOnlyRows, cfg.SourceChunkRows, cfg.SourceChunkBatchSize)
 	}
+	if cfg.HybridMaxPostingsScanned != requiredHybridMaxPostingsScanned {
+		return fmt.Errorf("hybrid postings ceiling=%d want prospectively frozen %d", cfg.HybridMaxPostingsScanned, requiredHybridMaxPostingsScanned)
+	}
 	if cfg.PhaseSelector != "all" || !cfg.IncludeVector || !cfg.RunBackfill || !cfg.RunTextOnly || !cfg.RunSourceChunk || !cfg.RunReopen || !cfg.RunConcurrent || !cfg.RunRewrite {
 		return errors.New("complete all-phase text/hybrid/lifecycle matrix is required")
 	}
@@ -406,8 +410,13 @@ func validateQueryMatrix(rows []queryReport, cfg reportConfig) error {
 			if row.Modality != "text" || row.TextStats == nil || row.HybridStats != nil {
 				return fmt.Errorf("query row %q has invalid text modality evidence", name)
 			}
-		} else if row.Modality != "hybrid" || row.HybridStats == nil || row.TextStats != nil {
-			return fmt.Errorf("query row %q has invalid hybrid modality evidence", name)
+		} else {
+			if row.Modality != "hybrid" || row.HybridStats == nil || row.TextStats != nil {
+				return fmt.Errorf("query row %q has invalid hybrid modality evidence", name)
+			}
+			if row.PostingsBudget != cfg.HybridMaxPostingsScanned {
+				return fmt.Errorf("query row %q postings budget=%d want %d", name, row.PostingsBudget, cfg.HybridMaxPostingsScanned)
+			}
 		}
 		if row.Status != "passed" || row.Failure != "" || !row.GuardrailOK || !row.CorrectnessOK || !row.IsolationOK || row.Rows != requiredScaleRows || row.Samples != cfg.Queries || len(row.RawLatencyNS) != cfg.Queries || row.Results < 1 || row.ResultsSHA256 == "" || !validResource(row.Resource) {
 			return fmt.Errorf("query row %q is incomplete or failed", name)
@@ -613,6 +622,7 @@ func validateRawEvidenceBindings(dir string, manifest retainedManifest, cfg repo
 		fmt.Sprintf("-text-only-rows %d", cfg.TextOnlyRows),
 		fmt.Sprintf("-source-chunk-rows %d", cfg.SourceChunkRows),
 		fmt.Sprintf("-queries %d", cfg.Queries),
+		fmt.Sprintf("-hybrid-max-postings-scanned %d", cfg.HybridMaxPostingsScanned),
 		"-run-text-only=true", "-run-source-chunk=true", "-phases all", "-keep-db=false",
 	} {
 		if !strings.Contains(command, fragment) {

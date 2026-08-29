@@ -25,6 +25,8 @@ func TestQualificationValidatorRejectsEveryNorthStarGap4329(t *testing.T) {
 	}{
 		{"missing row", "query row cardinality", func(r *report) { r.Queries = r.Queries[:len(r.Queries)-1] }},
 		{"wrong scale", "exact 10M cardinality", func(r *report) { r.Config.Rows = 1_000_000 }},
+		{"wrong postings ceiling", "hybrid postings ceiling", func(r *report) { r.Config.HybridMaxPostingsScanned-- }},
+		{"unbound row postings ceiling", "postings budget", func(r *report) { queryByName4329(r, queryRowHybridText).PostingsBudget-- }},
 		{"dirty provenance", "clean commit/tree/harness/binary provenance", func(r *report) { r.Context.VCSClean = false }},
 		{"config digest", "frozen digest contract", func(r *report) { r.Contract.QuerySetSHA256 = "wrong" }},
 		{"failed row", "incomplete or failed", func(r *report) { r.Queries[0].Status = "failed" }},
@@ -109,7 +111,7 @@ func validQualificationReport4329() report {
 	cfg := reportConfig{
 		Rows: requiredScaleRows, BatchSize: 32_768, Dims: 16, M: 8,
 		EfConstruction: 128, EfSearch: 128, TopK: 10, CandidateLimit: 655_360,
-		Queries: 3, Readers: 4, IncludeVector: true, RunBackfill: true,
+		HybridMaxPostingsScanned: requiredHybridMaxPostingsScanned, Queries: 3, Readers: 4, IncludeVector: true, RunBackfill: true,
 		BackfillRows: requiredScaleRows, RunTextOnly: true, TextOnlyRows: requiredScaleRows, RunSourceChunk: true, SourceChunkRows: requiredScaleRows, SourceChunkBatchSize: requiredSourceChunkBatchSize,
 		RunReopen: true, RunConcurrent: true, ConcurrentWrites: 1024, RunRewrite: true,
 		MaintenanceUpdates: 10_000, MaintenanceUpdateBatchSize: requiredMaintenanceUpdateBatchSize, MaintenanceDeletes: 5_000, PhaseSelector: "all",
@@ -138,6 +140,7 @@ func validQualificationReport4329() report {
 			row.TextStats = &stats
 		} else {
 			row.Modality = "hybrid"
+			row.PostingsBudget = cfg.HybridMaxPostingsScanned
 			stats := collections.HybridSearchStats{
 				TextCandidatesRequested: 64, TextCandidateBudgetEffective: 10,
 				TextCandidatesReturned: 10, CandidatesFused: 10,
@@ -267,7 +270,7 @@ func writeRetainedFixture4329(t *testing.T) string {
 			payload = []byte(fmt.Sprintf("commit=%s\ntree_oid=%s\ntreedb_subtree_oid=%s\nharness_subtree_oid=%s\n", rep.Context.Commit, rep.Context.TreeOID, rep.Context.TreeDBSubtreeOID, rep.Context.HarnessSubtreeOID))
 		}
 		if name == "command.txt" {
-			payload = []byte(fmt.Sprintf("treedb_text_hybrid_scale -rows %d -backfill-rows %d -text-only-rows %d -source-chunk-rows %d -queries %d -run-text-only=true -run-source-chunk=true -phases all -keep-db=false\n", rep.Config.Rows, rep.Config.BackfillRows, rep.Config.TextOnlyRows, rep.Config.SourceChunkRows, rep.Config.Queries))
+			payload = []byte(fmt.Sprintf("treedb_text_hybrid_scale -rows %d -backfill-rows %d -text-only-rows %d -source-chunk-rows %d -queries %d -hybrid-max-postings-scanned %d -run-text-only=true -run-source-chunk=true -phases all -keep-db=false\n", rep.Config.Rows, rep.Config.BackfillRows, rep.Config.TextOnlyRows, rep.Config.SourceChunkRows, rep.Config.Queries, rep.Config.HybridMaxPostingsScanned))
 		}
 		if name == "resources.txt" {
 			payload = []byte("1 maximum resident set size\n")

@@ -122,9 +122,10 @@ const (
 // contract fixes only the candidate budget and source naming consumed by hybrid
 // planning and fusion.
 type HybridTextQuery struct {
-	IndexName      string `json:"index_name"`
-	Query          string `json:"query"`
-	CandidateLimit int    `json:"candidate_limit,omitempty"`
+	IndexName          string `json:"index_name"`
+	Query              string `json:"query"`
+	CandidateLimit     int    `json:"candidate_limit,omitempty"`
+	MaxPostingsScanned int    `json:"max_postings_scanned,omitempty"`
 	// IncludeTextMatches opts into compact field/term attribution on text-source
 	// candidates. The default hybrid candidate path is score-only so candidate
 	// generation does not allocate match details for non-final candidates.

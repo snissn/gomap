@@ -70,21 +70,25 @@ func TestSearchHybridTextCandidatesNoDocumentsStableIDs2503(t *testing.T) {
 	}
 }
 
-func TestHybridTextCandidatePostingsBudgetScalesWithCandidateBudget4329(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		scanBudget int
-		want       int
-	}{
-		{name: "minimum", scanBudget: 1, want: 4 * hybridTextCandidateDefaultScanCandidateLimit},
-		{name: "ten_million_campaign", scanBudget: 655_360, want: 167_772_160},
-		{name: "saturates", scanBudget: maxCollectionInt, want: maxCollectionInt},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := hybridTextCandidateMaxPostingsScanned(tc.scanBudget); got != tc.want {
-				t.Fatalf("hybridTextCandidateMaxPostingsScanned(%d)=%d want %d", tc.scanBudget, got, tc.want)
-			}
-		})
+func TestSearchHybridTextCandidatesExplicitPostingsBudget4329(t *testing.T) {
+	d := openTextTestDB(t)
+	defer func() { _ = d.Close() }()
+	col := createTextSearchM4Collection(t, d, []TextIndexField{{Field: "body"}})
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("d1"), []byte("d2")},
+		[][]byte{[]byte(`{"body":"refund"}`), []byte(`{"body":"refund"}`)},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	base := HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 2}
+	if got, err := col.SearchHybridTextCandidates(base); err != nil || len(got.Candidates) != 2 {
+		t.Fatalf("default postings contract response=%+v err=%v want two candidates", got, err)
+	}
+	base.MaxPostingsScanned = 1
+	got, err := col.SearchHybridTextCandidates(base)
+	if !errors.Is(err, ErrHybridSearchIndexUnavailable) || got.Stats.FailClosed != 1 || got.Stats.TextPostingsScanned == 0 {
+		t.Fatalf("explicit postings ceiling response=%+v err=%v want fail-closed bounded work", got, err)
 	}
 }
 

@@ -84,41 +84,42 @@ var queryRowClasses = map[string]queryRowClass{
 }
 
 type config struct {
-	outDir              string
-	dbDir               string
-	keepDB              bool
-	rows                int
-	batchSize           int
-	dims                int
-	m                   int
-	efConstruction      int
-	efSearch            int
-	topK                int
-	candidateLimit      int
-	queries             int
-	readers             int
-	includeVector       bool
-	runBackfill         bool
-	backfillRows        int
-	runTextOnly         bool
-	textOnlyRows        int
-	runSourceChunk      bool
-	sourceChunkRows     int
-	runReopen           bool
-	runConcurrent       bool
-	concurrentWrites    int
-	runRewrite          bool
-	maintenanceUpdates  int
-	maintenanceDeletes  int
-	allowGuardrailFails bool
-	baseRef             string
-	baseSHA             string
-	phases              string
-	selectedPhases      map[string]bool
-	queryRows           map[string]bool
-	cpuProfile          string
-	allocProfile        string
-	allocBaseProfile    string
+	outDir                   string
+	dbDir                    string
+	keepDB                   bool
+	rows                     int
+	batchSize                int
+	dims                     int
+	m                        int
+	efConstruction           int
+	efSearch                 int
+	topK                     int
+	candidateLimit           int
+	hybridMaxPostingsScanned int
+	queries                  int
+	readers                  int
+	includeVector            bool
+	runBackfill              bool
+	backfillRows             int
+	runTextOnly              bool
+	textOnlyRows             int
+	runSourceChunk           bool
+	sourceChunkRows          int
+	runReopen                bool
+	runConcurrent            bool
+	concurrentWrites         int
+	runRewrite               bool
+	maintenanceUpdates       int
+	maintenanceDeletes       int
+	allowGuardrailFails      bool
+	baseRef                  string
+	baseSHA                  string
+	phases                   string
+	selectedPhases           map[string]bool
+	queryRows                map[string]bool
+	cpuProfile               string
+	allocProfile             string
+	allocBaseProfile         string
 }
 
 type report struct {
@@ -195,6 +196,7 @@ type reportConfig struct {
 	EfSearch                   int    `json:"ef_search"`
 	TopK                       int    `json:"top_k"`
 	CandidateLimit             int    `json:"candidate_limit"`
+	HybridMaxPostingsScanned   int    `json:"hybrid_max_postings_scanned"`
 	Queries                    int    `json:"queries"`
 	Readers                    int    `json:"readers"`
 	IncludeVector              bool   `json:"include_vector"`
@@ -328,6 +330,7 @@ type queryReport struct {
 	Rows             int                            `json:"rows"`
 	TopK             int                            `json:"top_k"`
 	CandidateBudget  int                            `json:"candidate_budget"`
+	PostingsBudget   int                            `json:"postings_budget,omitempty"`
 	CollapseCap      int                            `json:"collapse_cap"`
 	Samples          int                            `json:"samples"`
 	Results          int                            `json:"results"`
@@ -514,6 +517,7 @@ func parseFlags(args []string) (config, error) {
 	fs.IntVar(&cfg.efSearch, "ef-search", 128, "Vector ef_search for hybrid rows")
 	fs.IntVar(&cfg.topK, "top-k", 10, "TopK for retrieval rows")
 	fs.IntVar(&cfg.candidateLimit, "candidate-limit", 64, "Candidate budget per hybrid source")
+	fs.IntVar(&cfg.hybridMaxPostingsScanned, "hybrid-max-postings-scanned", 0, "Explicit finite postings ceiling for each hybrid lexical candidate query; defaults to rows*4")
 	fs.IntVar(&cfg.queries, "queries", 50, "Timed query samples per retrieval row")
 	fs.IntVar(&cfg.readers, "readers", 4, "Concurrent readers for the serving sanity row")
 	fs.BoolVar(&cfg.includeVector, "include-vector", true, "Build a column_graph vector index and run vector/hybrid rows")
@@ -548,6 +552,12 @@ func parseFlags(args []string) (config, error) {
 	}
 	if cfg.batchSize <= 0 {
 		return config{}, fmt.Errorf("-batch-size must be positive")
+	}
+	if cfg.hybridMaxPostingsScanned == 0 {
+		cfg.hybridMaxPostingsScanned = maxInt(cfg.rows*4, cfg.topK)
+	}
+	if cfg.hybridMaxPostingsScanned < cfg.topK {
+		return config{}, fmt.Errorf("-hybrid-max-postings-scanned must be at least -top-k")
 	}
 	if cfg.dims < 3 {
 		return config{}, fmt.Errorf("-dims must be at least 3")
@@ -840,7 +850,8 @@ func run(cfg config) (report, error) {
 			Rows: cfg.rows, BatchSize: cfg.batchSize, Dims: cfg.dims, M: cfg.m,
 			EfConstruction: cfg.efConstruction, EfSearch: cfg.efSearch,
 			TopK: cfg.topK, CandidateLimit: cfg.candidateLimit, Queries: cfg.queries,
-			Readers: cfg.readers, IncludeVector: cfg.includeVector,
+			HybridMaxPostingsScanned: cfg.hybridMaxPostingsScanned,
+			Readers:                  cfg.readers, IncludeVector: cfg.includeVector,
 			RunBackfill: cfg.runBackfill, BackfillRows: cfg.backfillRows,
 			RunTextOnly: cfg.runTextOnly, TextOnlyRows: cfg.textOnlyRows,
 			RunSourceChunk: cfg.runSourceChunk, SourceChunkRows: cfg.sourceChunkRows, SourceChunkBatchSize: cfg.batchSize,
@@ -1459,10 +1470,10 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 		}
 	}
 	text := func() *collections.HybridTextQuery {
-		return &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit}
+		return &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit, MaxPostingsScanned: cfg.hybridMaxPostingsScanned}
 	}
 	broadText := func() *collections.HybridTextQuery {
-		return &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.rows}
+		return &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.rows, MaxPostingsScanned: cfg.hybridMaxPostingsScanned}
 	}
 	vector := func() *collections.HybridVectorQuery {
 		return &collections.HybridVectorQuery{IndexName: vectorIndexName, Query: queryVector(cfg.dims), CandidateLimit: cfg.candidateLimit, EfSearch: cfg.efSearch, QueryMode: collections.VectorIndexQueryModeExact}
@@ -1639,7 +1650,8 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	row := queryReport{
 		Name: name, Status: "passed", Modality: "hybrid", QueryShape: shape, Boundary: boundary,
 		Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit,
-		CollapseCap: opts.MaxChunksPerParent, Samples: len(durations), Results: len(last.Results),
+		PostingsBudget: cfg.hybridMaxPostingsScanned,
+		CollapseCap:    opts.MaxChunksPerParent, Samples: len(durations), Results: len(last.Results),
 		ResultsSHA256: expectedDigest, CorrectnessOK: true, IsolationOK: hybridIsolationOK(last.Results, opts.ScalarFilter),
 		Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats,
 		GuardrailOK: guard.OK, GuardrailFailure: guard.Failure, Resource: captureResource(),
@@ -1820,7 +1832,7 @@ func failedHybridQueryRow(cfg config, name, shape string, response collections.H
 	stats := response.Stats
 	guard := hybridFailureGuard(name, response.Stats, err)
 	lat := summarizeLatency(durations)
-	return queryReport{Name: name, Status: "failed", Failure: err.Error(), Modality: "hybrid", QueryShape: shape, Boundary: "warm hybrid search", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(response.Results), ResultsSHA256: hashHybridResults(response.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure, Resource: captureResource()}
+	return queryReport{Name: name, Status: "failed", Failure: err.Error(), Modality: "hybrid", QueryShape: shape, Boundary: "warm hybrid search", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, PostingsBudget: cfg.hybridMaxPostingsScanned, Samples: len(durations), Results: len(response.Results), ResultsSHA256: hashHybridResults(response.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure, Resource: captureResource()}
 }
 
 func hybridFailureGuard(name string, stats collections.HybridSearchStats, err error) guardrailResult {
