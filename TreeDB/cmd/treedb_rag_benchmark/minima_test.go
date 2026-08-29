@@ -665,12 +665,26 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.CollectionConfigurationTransition.ProductionHNSW = json.RawMessage(`{"m":32}`)
 			a.RawEvidence["qdrant"] = raw
 		}},
+		{"Qdrant enriched transition disagrees with configuration copy", func(a *minimaArtifact) {
+			raw := a.RawEvidence["qdrant"]
+			raw.CollectionConfigurationTransition.InitialUploadOptimizers = json.RawMessage(
+				`{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":0,"flush_interval_sec":5,"max_optimization_threads":1}`,
+			)
+			a.RawEvidence["qdrant"] = raw
+		}},
 		{"non-ready Qdrant session", func(a *minimaArtifact) {
 			raw := a.RawEvidence["qdrant"]
 			raw.Readiness.Sessions[0].Outcome = "timeout"
 			a.RawEvidence["qdrant"] = raw
 		}},
-		{"Qdrant transition and configuration jointly doctored", func(a *minimaArtifact) {
+		{"Qdrant transition and configuration omit required field", func(a *minimaArtifact) {
+			doctored := `{"ef_construct":100,"full_scan_threshold":10000,"max_indexing_threads":0,"on_disk":false}`
+			raw := a.RawEvidence["qdrant"]
+			raw.CollectionConfigurationTransition.ProductionHNSW = json.RawMessage(doctored)
+			a.RawEvidence["qdrant"] = raw
+			minimaTestBackend(a, "qdrant").Configuration["production_hnsw"] = doctored
+		}},
+		{"Qdrant transition and configuration have wrong required field", func(a *minimaArtifact) {
 			doctored := `{"m":0,"ef_construct":100,"full_scan_threshold":10000,"max_indexing_threads":0,"on_disk":false}`
 			raw := a.RawEvidence["qdrant"]
 			raw.CollectionConfigurationTransition.ProductionHNSW = json.RawMessage(doctored)
@@ -712,6 +726,23 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 				t.Fatal("doctored Minima artifact accepted")
 			}
 		})
+	}
+}
+
+func TestMinimaContractAcceptsEnrichedQdrantTransitionConfiguration(t *testing.T) {
+	artifact := validMinimaArtifact()
+	initial := `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":0,"flush_interval_sec":5,"max_optimization_threads":1}`
+	production := `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":10000,"flush_interval_sec":5,"max_optimization_threads":1}`
+	raw := artifact.RawEvidence["qdrant"]
+	raw.CollectionConfigurationTransition.InitialUploadOptimizers = json.RawMessage(initial)
+	raw.CollectionConfigurationTransition.ProductionOptimizers = json.RawMessage(production)
+	artifact.RawEvidence["qdrant"] = raw
+	backend := minimaTestBackend(&artifact, "qdrant")
+	backend.Configuration["initial_upload_optimizers"] = initial
+	backend.Configuration["production_optimizers"] = production
+
+	if err := validateMinimaArtifact(&artifact); err != nil {
+		t.Fatalf("enriched Qdrant transition configuration rejected: %v", err)
 	}
 }
 
@@ -779,7 +810,7 @@ func validMinimaArtifact() minimaArtifact {
 			"effective":           "test",
 			"initial_upload_hnsw": minimaQdrantInitialHNSWConfig, "initial_upload_optimizers": minimaQdrantInitialOptimizerConfig,
 			"production_hnsw": minimaQdrantProductionHNSWConfig, "production_optimizers": minimaQdrantProductionOptimizerConfig,
-			"effective_collection": fmt.Sprintf(`{"hnsw_config":%s,"optimizer_config":%s}`, minimaQdrantProductionHNSWConfig, minimaQdrantProductionOptimizerConfig),
+			"effective_collection": fmt.Sprintf(`{"config":{"hnsw_config":%s,"optimizer_config":%s}}`, minimaQdrantProductionHNSWConfig, minimaQdrantProductionOptimizerConfig),
 		}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
 	}
 	queries := minimaQueryMap(&manifest)

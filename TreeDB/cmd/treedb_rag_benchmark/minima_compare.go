@@ -911,6 +911,17 @@ func minimaRawJSONMatchesConfiguration(raw json.RawMessage, encoded string) bool
 	return reflect.DeepEqual(actual, expected)
 }
 
+func minimaRawJSONContainsConfiguration(raw json.RawMessage, encoded string) bool {
+	if len(raw) == 0 || encoded == "" {
+		return false
+	}
+	var actual, expected any
+	if json.Unmarshal(raw, &actual) != nil || json.Unmarshal([]byte(encoded), &expected) != nil {
+		return false
+	}
+	return minimaJSONContainsExpected(actual, expected)
+}
+
 func minimaJSONContainsExpected(actual, expected any) bool {
 	expectedMap, ok := expected.(map[string]any)
 	if !ok {
@@ -930,6 +941,15 @@ func minimaJSONContainsExpected(actual, expected any) bool {
 }
 
 func minimaQdrantCollectionConfigMatches(raw json.RawMessage, hnsw, optimizer string) bool {
+	var envelope struct {
+		Config json.RawMessage `json:"config"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return false
+	}
+	if len(envelope.Config) != 0 {
+		raw = envelope.Config
+	}
 	var config struct {
 		HNSW      json.RawMessage `json:"hnsw_config"`
 		Optimizer json.RawMessage `json:"optimizer_config"`
@@ -974,7 +994,7 @@ func validateMinimaQdrantReadiness(raw minimaRawBackendEvidence, backend minimaB
 		{transition.ProductionHNSW, "production_hnsw", minimaQdrantProductionHNSWConfig},
 		{transition.ProductionOptimizers, "production_optimizers", minimaQdrantProductionOptimizerConfig},
 	} {
-		if !minimaRawJSONMatchesConfiguration(check.raw, check.expected) ||
+		if !minimaRawJSONContainsConfiguration(check.raw, check.expected) ||
 			!minimaRawJSONMatchesConfiguration(check.raw, backend.Configuration[check.key]) {
 			return fmt.Errorf("minima artifact: Qdrant configuration transition disagrees with %s", check.key)
 		}
