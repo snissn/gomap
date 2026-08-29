@@ -75,6 +75,11 @@ var columnVectorGraphRebuildBeforeBuildTestHook struct {
 	hook func()
 }
 
+var columnVectorGraphConstructionMatrixBoundTestHook struct {
+	sync.RWMutex
+	hook func(*VectorIndex)
+}
+
 func setColumnVectorGraphCanonicalRowsTestHook(hook func()) func() {
 	columnVectorGraphCanonicalRowsTestHook.Lock()
 	previous := columnVectorGraphCanonicalRowsTestHook.hook
@@ -117,6 +122,27 @@ func runColumnVectorGraphRebuildBeforeBuildTestHook() {
 	}
 }
 
+func setColumnVectorGraphConstructionMatrixBoundTestHook(hook func(*VectorIndex)) func() {
+	columnVectorGraphConstructionMatrixBoundTestHook.Lock()
+	previous := columnVectorGraphConstructionMatrixBoundTestHook.hook
+	columnVectorGraphConstructionMatrixBoundTestHook.hook = hook
+	columnVectorGraphConstructionMatrixBoundTestHook.Unlock()
+	return func() {
+		columnVectorGraphConstructionMatrixBoundTestHook.Lock()
+		columnVectorGraphConstructionMatrixBoundTestHook.hook = previous
+		columnVectorGraphConstructionMatrixBoundTestHook.Unlock()
+	}
+}
+
+func runColumnVectorGraphConstructionMatrixBoundTestHook(index *VectorIndex) {
+	columnVectorGraphConstructionMatrixBoundTestHook.RLock()
+	hook := columnVectorGraphConstructionMatrixBoundTestHook.hook
+	columnVectorGraphConstructionMatrixBoundTestHook.RUnlock()
+	if hook != nil {
+		hook(index)
+	}
+}
+
 func takeColumnVectorGraphDurablePublication(prepared *columnVectorGraphPreparedPhysicalAsset, records []columnManifestRecord, activeGeneration uint64, namespace string) (*rootpublication.StableResourceSet, rootpublication.StableLogicalObligationRequirements, error) {
 	if err := runColumnVectorGraphStablePublishTestHook(prepared); err != nil {
 		return nil, rootpublication.StableLogicalObligationRequirements{}, err
@@ -151,7 +177,7 @@ func reconcileColumnGraphBuildTiming(timing *ColumnGraphBuildTiming) {
 	timing.Total = max(timing.Total, timing.Snapshot+timing.RowExtraction+timing.AdjacencyBuild+timing.LocalityRemap+timing.Publication)
 }
 
-func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
+func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay *backenddb.CommandWALIntent) (status VectorIndexStatus, err error) {
 	started := time.Now()
 	var timing ColumnGraphBuildTiming
 	if err := ValidateIndexName(name); err != nil {
@@ -263,9 +289,28 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		}
 	}
 	timing.RowExtraction = collectionObservedElapsedSince(rowsStarted)
+	var constructionMatrix *columnVectorGraphConstructionMatrix
+	if typedSource != nil && len(rows) > 0 && mappedresource.NativeLittleEndian() {
+		constructionMatrix, err = stageColumnVectorGraphConstructionMatrix(c.db.ColumnAssetRootDir(), rows, def.Dimensions)
+		if err != nil {
+			if !errors.Is(err, mappedresource.ErrMmapUnsupported) {
+				return VectorIndexStatus{}, err
+			}
+			// Platforms without mmap retain the prior heap-owned builder. The
+			// qualified Linux path fails closed on every ordinary mmap error.
+			constructionMatrix = nil
+			err = nil
+		} else {
+			defer func() { err = errors.Join(err, constructionMatrix.Close()) }()
+			if err := typedSource.Close(); err != nil {
+				return VectorIndexStatus{}, err
+			}
+			typedSource = nil
+		}
+	}
 	runColumnVectorGraphRebuildBeforeBuildTestHook()
 
-	if err := buildColumnVectorGraphAdjacencyTimed(rows, def, &timing); err != nil {
+	if err := buildColumnVectorGraphAdjacencyTimedWithConstructionMatrix(rows, def, constructionMatrix, &timing); err != nil {
 		return VectorIndexStatus{}, err
 	}
 	rootNames := []string{rootName}
@@ -345,7 +390,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
-	status, err := c.columnGraphVectorIndexStatus(def.Name)
+	status, err = c.columnGraphVectorIndexStatus(def.Name)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
@@ -771,6 +816,13 @@ func buildColumnVectorGraphAdjacencyTimed(rows []columnVectorGraphAssetRow, def 
 	return buildColumnVectorGraphAdjacencyV1(rows, def, nil, true, nil, true, timing)
 }
 
+func buildColumnVectorGraphAdjacencyTimedWithConstructionMatrix(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, matrix *columnVectorGraphConstructionMatrix, timing *ColumnGraphBuildTiming) error {
+	if matrix == nil {
+		return buildColumnVectorGraphAdjacencyTimed(rows, def, timing)
+	}
+	return buildColumnVectorGraphAdjacencyV1WithFixedRows(rows, def, nil, true, nil, true, timing, matrix.values)
+}
+
 func buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1) error {
 	return buildColumnVectorGraphAdjacencyWithConstructionTraceFinalV1(rows, def, trace, true)
 }
@@ -787,6 +839,10 @@ func buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(rows []columnVector
 }
 
 func buildColumnVectorGraphAdjacencyV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool, policy *vectorIndexLayer0ConstructionPolicyV1, parallelReciprocalLinks bool, timing *ColumnGraphBuildTiming) error {
+	return buildColumnVectorGraphAdjacencyV1WithFixedRows(rows, def, trace, recordFinal, policy, parallelReciprocalLinks, timing, nil)
+}
+
+func buildColumnVectorGraphAdjacencyV1WithFixedRows(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool, policy *vectorIndexLayer0ConstructionPolicyV1, parallelReciprocalLinks bool, timing *ColumnGraphBuildTiming, fixedRows []float32) error {
 	if uint64(len(rows)) > maxColumnVectorGraphAdjacencyOrdinal {
 		return fmt.Errorf("collections: column vector graph row count=%d exceeds uint32 adjacency encoding", len(rows))
 	}
@@ -812,8 +868,22 @@ func buildColumnVectorGraphAdjacencyV1(rows []columnVectorGraphAssetRow, def Vec
 	index.parallelReciprocalLinks = parallelReciprocalLinks
 	index.mu.Lock()
 	defer index.mu.Unlock()
+	if fixedRows != nil {
+		if err := index.bindFixedConstructionRowsLocked(fixedRows, len(rows)); err != nil {
+			return err
+		}
+		for i := range rows {
+			start := i * def.Dimensions
+			if len(rows[i].Vector) != def.Dimensions || &rows[i].Vector[0] != &fixedRows[start] {
+				return fmt.Errorf("collections: column graph construction matrix row[%d] is not in insertion order", i)
+			}
+		}
+	}
 	if err := insertColumnVectorGraphRowsLocked(index, rows); err != nil {
 		return err
+	}
+	if fixedRows != nil {
+		runColumnVectorGraphConstructionMatrixBoundTestHook(index)
 	}
 	if policy != nil && policy.qualityPostfill {
 		if err := index.applyQualityPostfillLocked(trace, def.M*2); err != nil {
