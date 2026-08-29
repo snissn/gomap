@@ -44,6 +44,7 @@ func TestQualificationValidatorRejectsEveryNorthStarGap4329(t *testing.T) {
 		{"logical bytes", "logical text accounting mismatch", func(r *report) { r.StorageSnapshots[0].TextEncodedBytes = 0 }},
 		{"logical lane sum", "logical text accounting mismatch", func(r *report) { r.StorageSnapshots[0].TextDocIDBytes++ }},
 		{"logical live count", "logical text accounting mismatch", func(r *report) { r.StorageSnapshots[0].V2LiveDocuments-- }},
+		{"phase accounting", "phase accounting mismatch", func(r *report) { r.Load.TextStorage.EncodedBytes++ }},
 		{"missing storage row", "missing storage snapshot", func(r *report) { r.StorageSnapshots = r.StorageSnapshots[:4] }},
 		{"false reopen", "reopen/count/query parity", func(r *report) { r.Reopen.QueryParityOK = false }},
 		{"maintenance mutation", "mutation/rewrite/checkpoint/reopen parity", func(r *report) { r.Maintenance.Updates = 9_999 }},
@@ -176,6 +177,15 @@ func validQualificationReport4329() report {
 			V2PostingBlocks: 1, V2LiveDocuments: liveDocuments,
 		}
 	}
+	accounting := func(label string) collections.TextIndexStorageAccounting {
+		snapshot := storage(label)
+		return collections.TextIndexStorageAccounting{
+			Documents: snapshot.V2LiveDocuments, EncodedBytes: snapshot.TextEncodedBytes, Version: collections.TextIndexVersionV2,
+			V2PostingBlocks: snapshot.V2PostingBlocks, V2LiveDocuments: snapshot.V2LiveDocuments, V2DeletedDocs: snapshot.V2DeletedDocs,
+			V2DocIDBytes: snapshot.TextDocIDBytes, V2DocMapBytes: snapshot.TextDocMapBytes, V2PostingBlockBytes: snapshot.TextPostingBlockBytes,
+			V2NormBlockBytes: snapshot.TextNormBlockBytes, V2PositionBytes: snapshot.TextPositionBytes, V2TermStatsBytes: snapshot.TextTermStatsBytes, V2StatusFormatBytes: snapshot.TextStatusFormatBytes,
+		}
+	}
 	phases := []string{"load", "queries", "reopen", "concurrent", "maintenance", "backfill", "text_only", "source_chunk"}
 	return report{
 		SchemaVersion: scaleSchemaVersion, Status: "passed", Complete: true,
@@ -184,13 +194,13 @@ func validQualificationReport4329() report {
 		Config:             cfg,
 		LogicalTextStorage: metricAvailability{State: "observed"},
 		Artifacts:          reportArtifacts{OutDir: "/tmp/scale-4329", DBDir: "/tmp/scale-4329/primary_db"},
-		Load:               loadReport{Status: "passed", Mode: "mixed_text_vector", Rows: requiredScaleRows, Batches: 1, CheckpointSeconds: 1, StorageBytesAfterLoad: 1, Resource: resource},
-		TextOnly:           &loadReport{Status: "passed", Mode: "text_only_predeclared", Rows: requiredScaleRows, Batches: 1, CheckpointSeconds: 1, StorageBytesAfterLoad: 1, Resource: resource},
-		Backfill:           &backfillReport{Status: "passed", Mode: "text_only_post_load_backfill", Rows: requiredScaleRows, BackfillSeconds: 1, CheckpointSeconds: 1, Resource: resource},
-		SourceChunk:        &sourceChunkReport{Status: "passed", SourceDocuments: requiredScaleRows, GeneratedChunks: 4 * requiredScaleRows, BatchSize: requiredSourceChunkBatchSize, BatchCalls: (requiredScaleRows + requiredSourceChunkBatchSize - 1) / requiredSourceChunkBatchSize, CheckpointSeconds: 1, ReopenParityOK: true, Resource: resource},
-		Reopen:             &reopenReport{Status: "passed", CountOK: true, QueryParityOK: true, BeforeResultsSHA256: "same", AfterResultsSHA256: "same", StorageBytes: 1, Resource: resource},
+		Load:               loadReport{Status: "passed", Mode: "mixed_text_vector", Rows: requiredScaleRows, Batches: 1, CheckpointSeconds: 1, TextStorage: accounting("after_load"), StorageBytesAfterLoad: 1, Resource: resource},
+		TextOnly:           &loadReport{Status: "passed", Mode: "text_only_predeclared", Rows: requiredScaleRows, Batches: 1, CheckpointSeconds: 1, TextStorage: accounting("text_only_fixture"), StorageBytesAfterLoad: 1, Resource: resource},
+		Backfill:           &backfillReport{Status: "passed", Mode: "text_only_post_load_backfill", Rows: requiredScaleRows, BackfillSeconds: 1, CheckpointSeconds: 1, TextStorage: accounting("backfill_fixture"), Resource: resource},
+		SourceChunk:        &sourceChunkReport{Status: "passed", SourceDocuments: requiredScaleRows, GeneratedChunks: 4 * requiredScaleRows, BatchSize: requiredSourceChunkBatchSize, BatchCalls: (requiredScaleRows + requiredSourceChunkBatchSize - 1) / requiredSourceChunkBatchSize, CheckpointSeconds: 1, ReopenParityOK: true, TextStorage: accounting("source_chunk_fixture"), Resource: resource},
+		Reopen:             &reopenReport{Status: "passed", CountOK: true, QueryParityOK: true, BeforeResultsSHA256: "same", AfterResultsSHA256: "same", TextStorage: accounting("after_reopen"), StorageBytes: 1, Resource: resource},
 		Concurrent:         &concurrentReport{Status: "passed", Readers: 4, Queries: 4, Writes: 1, GuardrailOK: true, Resource: resource},
-		Maintenance:        &maintenanceReport{Status: "passed", Updates: 10_000, UpdateBatchSize: requiredMaintenanceUpdateBatchSize, UpdateBatchCalls: 1, Deletes: 5_000, RewriteSeconds: 1, CheckpointSeconds: 1, PostconditionOK: true, ReopenParityOK: true, BeforeResultsSHA256: "same", AfterResultsSHA256: "same", Resource: resource},
+		Maintenance:        &maintenanceReport{Status: "passed", Updates: 10_000, UpdateBatchSize: requiredMaintenanceUpdateBatchSize, UpdateBatchCalls: 1, Deletes: 5_000, RewriteSeconds: 1, CheckpointSeconds: 1, TextStorageAfter: accounting("maintenance_rewrite_fixture"), PostconditionOK: true, ReopenParityOK: true, BeforeResultsSHA256: "same", AfterResultsSHA256: "same", Resource: resource},
 		Queries:            queries,
 		StorageSnapshots:   []storageSnapshot{storage("after_load"), storage("after_reopen"), storage("maintenance_rewrite_fixture"), storage("backfill_fixture"), storage("text_only_fixture"), storage("source_chunk_fixture")},
 		SelectedPhases:     phases, CompletedPhases: append([]string(nil), phases...),

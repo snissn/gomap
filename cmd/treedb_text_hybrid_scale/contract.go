@@ -500,6 +500,24 @@ func validateStorageSnapshots(rep report) error {
 		if snap.TextEncodedBytes == 0 || snap.TextEncodedBytes != laneBytes || snap.V2PostingBlocks == 0 || snap.V2LiveDocuments != expectedLive || snap.V2DeletedDocs != 0 {
 			return fmt.Errorf("storage snapshot %q logical text accounting mismatch: encoded=%d lane_bytes=%d posting_blocks=%d live=%d want_live=%d deleted=%d", snap.Label, snap.TextEncodedBytes, laneBytes, snap.V2PostingBlocks, snap.V2LiveDocuments, expectedLive, snap.V2DeletedDocs)
 		}
+		var accounting collections.TextIndexStorageAccounting
+		switch snap.Label {
+		case "after_load":
+			accounting = rep.Load.TextStorage
+		case "after_reopen":
+			accounting = rep.Reopen.TextStorage
+		case "maintenance_rewrite_fixture":
+			accounting = rep.Maintenance.TextStorageAfter
+		case "backfill_fixture":
+			accounting = rep.Backfill.TextStorage
+		case "text_only_fixture":
+			accounting = rep.TextOnly.TextStorage
+		case "source_chunk_fixture":
+			accounting = rep.SourceChunk.TextStorage
+		}
+		if !storageAccountingMatchesSnapshot(accounting, snap) {
+			return fmt.Errorf("storage snapshot %q phase accounting mismatch", snap.Label)
+		}
 		found[snap.Label] = true
 	}
 	for label := range required {
@@ -508,6 +526,20 @@ func validateStorageSnapshots(rep report) error {
 		}
 	}
 	return nil
+}
+
+func storageAccountingMatchesSnapshot(accounting collections.TextIndexStorageAccounting, snap storageSnapshot) bool {
+	return accounting.EncodedBytes == snap.TextEncodedBytes &&
+		accounting.V2DocIDBytes == snap.TextDocIDBytes &&
+		accounting.V2DocMapBytes == snap.TextDocMapBytes &&
+		accounting.V2PostingBlockBytes == snap.TextPostingBlockBytes &&
+		accounting.V2NormBlockBytes == snap.TextNormBlockBytes &&
+		accounting.V2PositionBytes == snap.TextPositionBytes &&
+		accounting.V2TermStatsBytes == snap.TextTermStatsBytes &&
+		accounting.V2StatusFormatBytes == snap.TextStatusFormatBytes &&
+		accounting.V2PostingBlocks == snap.V2PostingBlocks &&
+		accounting.V2LiveDocuments == snap.V2LiveDocuments &&
+		accounting.V2DeletedDocs == snap.V2DeletedDocs
 }
 
 func verifyGitIdentity(manifest retainedManifest) error {
