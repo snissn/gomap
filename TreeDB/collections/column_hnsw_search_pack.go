@@ -740,7 +740,7 @@ func writeColumnHNSWSearchPackStreamSection(w io.Writer, s columnHNSWSearchPackS
 		}
 		return nil
 	}
-	const chunkBytes = 64 << 10
+	const chunkBytes = 1 << 20
 	buf := make([]byte, chunkBytes)
 	writeUint16 := func(values []uint16) error {
 		for start := 0; start < len(values); {
