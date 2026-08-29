@@ -188,11 +188,11 @@ hybrid artifacts remain `$RUN_DIR/scoreboard.json`, `$RUN_DIR/scoreboard.md`,
 TreeDB Go benchmark logs, and `$RUN_DIR/context.txt`.
 
 The tracked `artifacts/4330-lexical-comparison-v1/` run was measured from
-reviewed source commit `18770a0f0908fcb8405238de7285695d7d156c3c` and first
-retained at evidence commit `907d3147a`. It includes the corrected
-query-reopen, build-boundary, phrase-position, non-scoring-filter,
-process-lifetime RSS, typed CPU, dirty-headline exclusion, and
-path-sanitization contracts.
+reviewed source commit `662bfdd484b951f4b34469f2ef7dedbcc8abcae6` and first
+retained at evidence commit `52a65d3da`. It includes the corrected
+query-reopen, build-boundary, steady-state warmup, serial Lucene execution,
+phrase-position, non-scoring-filter, process-lifetime RSS, typed CPU,
+dirty-headline exclusion, and path-sanitization contracts.
 
 The old single-query SQLite `--docs/--queries/--query` path and static
 Lucene/Bleve unavailable placeholders are intentionally removed. They did not
