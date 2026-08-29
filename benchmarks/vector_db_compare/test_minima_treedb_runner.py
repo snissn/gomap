@@ -899,6 +899,38 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         process.kill.assert_not_called()
         self.assertTrue(all(call.kwargs["timeout"] <= 0.05 for call in process.wait.call_args_list))
 
+    def test_shutdown_retains_positive_rss_when_terminal_cpu_is_equal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory) / "data"
+            data_dir.mkdir()
+            controller = runner.ServiceController(
+                Path("/service"), "http://127.0.0.1:17120", data_dir,
+                "command_wal_durable", 3600, 120,
+            )
+            process = mock.MagicMock(pid=55)
+            process.poll.return_value = None
+            process.wait.return_value = 0
+            controller.process = process
+            valid = {
+                "captured": True,
+                "rss_bytes": 120,
+                "cpu_seconds": 3.0,
+                "availability": {
+                    "rss_bytes": "test", "cpu_seconds": "test",
+                    "bytes_per_op": "unavailable", "allocs_per_op": "unavailable",
+                    "measurement_error": "",
+                },
+            }
+            zero_rss = {**valid, "rss_bytes": 0}
+            with mock.patch.object(
+                common, "server_process_resource_usage",
+                side_effect=[valid, zero_rss],
+            ), mock.patch.object(common, "disk_bytes", return_value=140):
+                controller.stop()
+
+        self.assertEqual(controller.last_shutdown_resource_end["rss_bytes"], 120)
+        self.assertEqual(controller.last_shutdown_resource_end["cpu_seconds"], 3.0)
+
     def test_shutdown_deadline_kills_reaps_cleans_and_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             data_dir = Path(directory) / "data"
