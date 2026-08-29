@@ -4,14 +4,14 @@
     "cpu": {
       "status": "ok",
       "unit": "nanoseconds",
-      "value": 63506000
+      "value": 49332000
     },
-    "docs_per_second": 32601.825419891706,
-    "elapsed_nanos": 306731291,
+    "docs_per_second": 155454.71070290293,
+    "elapsed_nanos": 64327417,
     "peak_rss": {
       "status": "ok",
       "unit": "bytes",
-      "value": 53264384
+      "value": 53460992
     }
   },
   "cases": [
@@ -51,13 +51,19 @@
         "name": "sqlite_fts5_virtual_table_match_bm25",
         "proof": [
           [
-            4,
+            5,
             0,
             156,
-            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M5"
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
           ],
           [
-            20,
+            10,
+            0,
+            45,
+            "SEARCH docs USING INTEGER PRIMARY KEY (rowid=?)"
+          ],
+          [
+            24,
             0,
             0,
             "USE TEMP B-TREE FOR ORDER BY"
@@ -65,26 +71,26 @@
         ]
       },
       "samples_nanos": [
-        4224750,
-        4254084,
-        4511792,
-        5749292,
-        4411667,
-        4227333,
-        4255750,
-        4252292,
-        5565916,
-        4520917,
-        4477875,
-        4390208,
-        4377792,
-        5599875,
-        4421000,
-        4652166,
-        5891834,
-        6034708,
-        4370250,
-        5547083
+        2218167,
+        2200208,
+        2137875,
+        2136875,
+        2213625,
+        2213875,
+        2225583,
+        2263500,
+        2289709,
+        2239042,
+        2245792,
+        2208750,
+        2196750,
+        2170875,
+        2175250,
+        2177750,
+        2203167,
+        2206542,
+        2223542,
+        2317084
       ],
       "status": "directional",
       "timed_out": false
@@ -125,13 +131,19 @@
         "name": "sqlite_fts5_virtual_table_match_bm25",
         "proof": [
           [
-            4,
+            5,
             0,
             156,
-            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M5"
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
           ],
           [
-            20,
+            10,
+            0,
+            45,
+            "SEARCH docs USING INTEGER PRIMARY KEY (rowid=?)"
+          ],
+          [
+            24,
             0,
             0,
             "USE TEMP B-TREE FOR ORDER BY"
@@ -139,26 +151,26 @@
         ]
       },
       "samples_nanos": [
-        19792,
-        19834,
-        19834,
-        19458,
-        19500,
-        19291,
-        19375,
-        19542,
-        19583,
-        19500,
-        19375,
-        19375,
-        19500,
-        19208,
-        19458,
-        19333,
-        19250,
-        19417,
-        19750,
-        19584
+        20709,
+        20125,
+        20334,
+        20125,
+        20250,
+        20042,
+        27250,
+        22459,
+        21041,
+        20750,
+        20625,
+        20250,
+        20208,
+        20000,
+        20083,
+        20125,
+        20291,
+        20958,
+        20500,
+        20000
       ],
       "status": "directional",
       "timed_out": false
@@ -199,13 +211,19 @@
         "name": "sqlite_fts5_virtual_table_match_bm25",
         "proof": [
           [
-            4,
+            5,
             0,
             156,
-            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M5"
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
           ],
           [
-            20,
+            10,
+            0,
+            45,
+            "SEARCH docs USING INTEGER PRIMARY KEY (rowid=?)"
+          ],
+          [
+            24,
             0,
             0,
             "USE TEMP B-TREE FOR ORDER BY"
@@ -213,26 +231,26 @@
         ]
       },
       "samples_nanos": [
-        23917,
-        23833,
-        23791,
-        23625,
-        23792,
-        23959,
-        23792,
-        23834,
-        23208,
-        23458,
-        23167,
-        22958,
-        22917,
-        22833,
-        22875,
-        22750,
-        22708,
-        22792,
-        22583,
-        22750
+        24834,
+        24334,
+        25666,
+        24417,
+        24500,
+        25042,
+        24334,
+        24000,
+        24417,
+        24291,
+        24500,
+        24166,
+        24333,
+        24208,
+        24542,
+        24167,
+        24417,
+        24375,
+        24167,
+        24125
       ],
       "status": "directional",
       "timed_out": false
@@ -273,13 +291,19 @@
         "name": "sqlite_fts5_virtual_table_match_bm25",
         "proof": [
           [
-            4,
+            5,
             0,
             156,
-            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M5"
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
           ],
           [
-            20,
+            10,
+            0,
+            45,
+            "SEARCH docs USING INTEGER PRIMARY KEY (rowid=?)"
+          ],
+          [
+            24,
             0,
             0,
             "USE TEMP B-TREE FOR ORDER BY"
@@ -287,26 +311,26 @@
         ]
       },
       "samples_nanos": [
-        39875,
-        39667,
-        39917,
-        39750,
-        39792,
-        39625,
-        39500,
-        39667,
-        39417,
-        40125,
-        39625,
-        39750,
-        40042,
-        39083,
-        38375,
-        38083,
-        38291,
-        38333,
-        37917,
-        38250
+        35500,
+        35000,
+        35125,
+        34292,
+        34375,
+        34416,
+        34375,
+        34250,
+        34250,
+        34042,
+        34209,
+        51542,
+        38042,
+        36500,
+        35667,
+        34958,
+        35250,
+        33334,
+        34000,
+        34208
       ],
       "status": "directional",
       "timed_out": false
@@ -347,13 +371,19 @@
         "name": "sqlite_fts5_virtual_table_match_bm25",
         "proof": [
           [
-            4,
+            5,
             0,
             156,
-            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M5"
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
           ],
           [
-            20,
+            10,
+            0,
+            45,
+            "SEARCH docs USING INTEGER PRIMARY KEY (rowid=?)"
+          ],
+          [
+            24,
             0,
             0,
             "USE TEMP B-TREE FOR ORDER BY"
@@ -361,26 +391,26 @@
         ]
       },
       "samples_nanos": [
-        30125,
-        30083,
-        30209,
-        30208,
-        29958,
-        30084,
-        29958,
-        30083,
-        30000,
-        30458,
-        29792,
-        29875,
-        30166,
         29834,
-        30125,
-        30875,
-        33708,
-        40833,
-        79625,
-        45625
+        29792,
+        36375,
+        30458,
+        29875,
+        29584,
+        29541,
+        29500,
+        29542,
+        29500,
+        39792,
+        32500,
+        30667,
+        29916,
+        30000,
+        29667,
+        29750,
+        38791,
+        30708,
+        30084
       ],
       "status": "directional",
       "timed_out": false
@@ -421,13 +451,19 @@
         "name": "sqlite_fts5_virtual_table_match_bm25",
         "proof": [
           [
-            4,
+            5,
             0,
             156,
-            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M5"
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
           ],
           [
-            22,
+            10,
+            0,
+            45,
+            "SEARCH docs USING INTEGER PRIMARY KEY (rowid=?)"
+          ],
+          [
+            26,
             0,
             0,
             "USE TEMP B-TREE FOR ORDER BY"
@@ -435,26 +471,26 @@
         ]
       },
       "samples_nanos": [
-        27083,
-        29417,
-        26875,
-        27041,
-        27292,
-        27125,
-        26833,
-        26875,
-        26750,
-        27125,
-        27000,
-        27666,
-        26750,
-        27166,
-        26875,
-        27125,
-        26708,
-        26833,
-        26958,
-        27000
+        23417,
+        23459,
+        23125,
+        23291,
+        23542,
+        23333,
+        23250,
+        23208,
+        23042,
+        23125,
+        23042,
+        23125,
+        23084,
+        23000,
+        22917,
+        23084,
+        22917,
+        23083,
+        23959,
+        23042
       ],
       "status": "directional",
       "timed_out": false
@@ -476,6 +512,8 @@
   ],
   "config": {
     "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close",
+    "fts_content_mode": "contentless",
+    "generated_weighted_field_storage": "FTS index only",
     "journal_mode": "WAL",
     "phrase_fields": [
       "title",
@@ -483,6 +521,7 @@
     ],
     "phrase_scoring": "native bm25 title weight 3, body weight 1",
     "scoring_contract": "native_directional",
+    "source_table": "docs",
     "sqlite_auxiliary_threads": 0,
     "stored_source_fields": [
       "id",
@@ -550,7 +589,7 @@
   "schema_version": "treedb_lexical_result/v1",
   "status": "ok",
   "storage": {
-    "durable_bytes": 9252864,
+    "durable_bytes": 3915776,
     "transient_bytes": 0,
     "wal_bytes": 0
   },

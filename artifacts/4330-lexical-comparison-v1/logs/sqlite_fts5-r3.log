@@ -1,6 +1,6 @@
 command=/opt/homebrew/opt/python@3.14/bin/python3.14 $REPO/benchmarks/text_hybrid_scoreboard/sqlite_fts5_bench.py --manifest $REPO/benchmarks/text_hybrid_scoreboard/lexical_manifest.json --corpus $RUN/corpus.tsv --out $RUN/raw/sqlite_fts5-r3.json --repetition 3 --db $RUN/indexes/sqlite_fts5-r3.sqlite3
 cwd=$REPO
-started_unix=1788026732.37695
+started_unix=1788027278.217983
 returncode=0
 
 [stdout]
