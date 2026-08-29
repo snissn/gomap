@@ -100,12 +100,13 @@ class LexicalComparisonTest(unittest.TestCase):
             config.update(tie_break="score,id", scoring_contract="native_directional", weighted_field_materialization="title repeated 3x then body for non-phrase native scoring", phrase_fields=["title", "body"], phrase_scoring="native TF-IDF title boost 3, body boost 1")
         else:
             config.update(tie_break="score,id", scoring_contract="native_directional", source_table="docs", fts_content_mode="contentless", generated_weighted_field_storage="FTS index only", weighted_field_materialization="title repeated 3x then body for non-phrase native scoring", phrase_fields=["title", "body"], phrase_scoring="native bm25 title weight 3, body weight 1")
+        command = ["python", "-E", "-s", "-B", "sqlite_fts5_bench.py"] if engine_id == "sqlite_fts5" else ["adapter"]
         return {
             "schema_version": RESULT_SCHEMA, "status": "ok",
             "engine": {"id": engine_id, "family": "test", "name": engine_id, "version": "candidate-commit" if engine_id == "treedb_text_v2" else "pinned"},
             "repetition": repetition, "manifest_sha256": manifest_sha256(self.manifest),
             "corpus": {"document_count": 10_000, "sha256": self.manifest["corpus"]["sha256"]},
-            "command": ["adapter"], "versions": {"adapter": "pinned"}, "config": config,
+            "command": command, "versions": {"adapter": "pinned"}, "config": config,
             "environment": {
                 "contract": copy.deepcopy(self.manifest["environment"]),
                 "filesystem": {"runner_device_id": "1", "corpus_store_id": "1", "index_store_id": "1", "result_store_id": "1", "same_filesystem": True},
@@ -294,6 +295,10 @@ class LexicalComparisonTest(unittest.TestCase):
                 mutate(artifact["config"])
                 with self.assertRaisesRegex(ValidationError, "SQLite"):
                     validate_result(artifact, self.manifest, self.expected, self.eligible, self.corpus_ids)
+        artifact = self.artifact("sqlite_fts5")
+        artifact["command"] = ["python", "sqlite_fts5_bench.py"]
+        with self.assertRaisesRegex(ValidationError, "Python isolation command"):
+            validate_result(artifact, self.manifest, self.expected, self.eligible, self.corpus_ids)
 
     def test_directional_rows_reject_filter_leakage_and_truncation(self) -> None:
         leaked = self.artifact("sqlite_fts5")

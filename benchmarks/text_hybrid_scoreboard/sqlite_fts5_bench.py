@@ -87,7 +87,7 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     manifest = load_manifest(manifest_path)
     manifest_digest = manifest_sha256(manifest)
-    command = [sys.executable, *sys.argv]
+    command = [sys.executable, "-E", "-s", "-B", *sys.argv]
     for suffix in ("", "-wal", "-shm"):
         try:
             Path(str(db_path) + suffix).unlink()

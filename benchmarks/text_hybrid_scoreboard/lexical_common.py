@@ -338,6 +338,7 @@ def validate_result(artifact: dict[str, Any], manifest: dict[str, Any], expected
         _require(artifact["config"].get("source_table") == "docs", f"{prefix}: SQLite source-table contract mismatch")
         _require(artifact["config"].get("fts_content_mode") == "contentless", f"{prefix}: SQLite FTS content mode mismatch")
         _require(artifact["config"].get("generated_weighted_field_storage") == "FTS index only", f"{prefix}: SQLite generated-field storage contract mismatch")
+        _require(artifact["command"][1:4] == ["-E", "-s", "-B"] and len(artifact["command"]) > 4 and Path(artifact["command"][4]).name == "sqlite_fts5_bench.py", f"{prefix}: SQLite Python isolation command mismatch")
         _require(artifact["config"].get("phrase_fields") == ["title", "body"] and artifact["config"].get("phrase_scoring") == "native bm25 title weight 3, body weight 1", f"{prefix}: SQLite phrase scoring disclosure mismatch")
     _validate_environment(artifact.get("environment"), manifest, prefix)
     build = artifact.get("build", {})
