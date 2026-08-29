@@ -169,6 +169,7 @@ class LexicalComparisonTest(unittest.TestCase):
     def test_typed_unsupported_is_accepted_but_not_headline_eligible(self) -> None:
         artifact = self.artifact()
         artifact["cases"][4] = {"id": "phrase", "status": "unsupported", "equivalent": False, "unsupported_reason": "positions disabled"}
+        artifact["reopen"]["result_digest"] = result_digest(case.get("reopen_result_digest", "") for case in artifact["cases"])
         validate_result(artifact, self.manifest, self.expected, self.corpus_ids)
         artifacts = []
         for engine in ("treedb_text_v2", "lucene", "bleve", "sqlite_fts5"):
@@ -176,6 +177,7 @@ class LexicalComparisonTest(unittest.TestCase):
                 candidate = self.artifact(engine, repetition)
                 if engine == "bleve":
                     candidate["cases"][4] = copy.deepcopy(artifact["cases"][4])
+                    candidate["reopen"]["result_digest"] = result_digest(case.get("reopen_result_digest", "") for case in candidate["cases"])
                 artifacts.append(candidate)
         report = consolidate(artifacts, self.manifest, self.documents, 3, self.context())
         self.assertFalse(any(row["engine"]["id"] == "bleve" and row["case"] == "phrase" for row in report["headline_rows"]))
