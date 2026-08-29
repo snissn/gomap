@@ -70,8 +70,15 @@ def file_sha256(path: Path) -> str:
 
 
 def repository_commit() -> str:
+    root = Path(__file__).resolve().parents[2]
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"], cwd=root,
+        check=True, capture_output=True, text=True,
+    )
+    if status.stdout:
+        raise RuntimeError("TreeDB Minima runner requires a clean source checkout")
     result = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[2],
+        ["git", "rev-parse", "HEAD"], cwd=root,
         check=True, capture_output=True, text=True,
     )
     commit = result.stdout.strip()

@@ -129,6 +129,28 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         }
         values.update(changes)
         return SimpleNamespace(**values)
+
+    def test_repository_commit_requires_clean_staged_unstaged_and_untracked_state(self) -> None:
+        for porcelain in ("M  staged.py\n", " M unstaged.py\n", "?? untracked.py\n"):
+            with self.subTest(porcelain=porcelain), \
+                 mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(stdout=porcelain)) as run:
+                with self.assertRaisesRegex(RuntimeError, "clean source checkout"):
+                    runner.repository_commit()
+                run.assert_called_once_with(
+                    ["git", "status", "--porcelain", "--untracked-files=all"],
+                    cwd=Path(runner.__file__).resolve().parents[2],
+                    check=True, capture_output=True, text=True,
+                )
+
+    def test_repository_commit_binds_head_after_clean_status(self) -> None:
+        commit = "a" * 40
+        with mock.patch.object(
+            runner.subprocess, "run",
+            side_effect=[SimpleNamespace(stdout=""), SimpleNamespace(stdout=commit + "\n")],
+        ) as run:
+            self.assertEqual(runner.repository_commit(), commit)
+        self.assertEqual(run.call_count, 2)
+
     def resume_workload(self, directory: Path, *, present_ids: set[str], count: int) -> runner.TreeDBMinimaRunner:
         workload = self.workload(
             self.response(), diagnostics_dir=directory,
