@@ -450,6 +450,23 @@ type scaleFixture struct {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "-print-build-provenance" {
+		payload, err := json.Marshal(struct {
+			Commit         string `json:"commit"`
+			TreeOID        string `json:"tree_oid"`
+			TreeDBSubtree  string `json:"treedb_subtree_oid"`
+			HarnessSubtree string `json:"harness_subtree_oid"`
+			VCSModified    string `json:"vcs_modified"`
+		}{
+			Commit: buildCommit, TreeOID: buildTreeOID, TreeDBSubtree: buildTreeDBSubtree, HarnessSubtree: buildHarnessSubtree, VCSModified: buildVCSModified,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "treedb_text_hybrid_scale: build provenance: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(payload))
+		return
+	}
 	if len(os.Args) == 3 && os.Args[1] == "-seal-artifact" {
 		if err := sealRetainedArtifact(os.Args[2]); err != nil {
 			fmt.Fprintf(os.Stderr, "treedb_text_hybrid_scale: seal artifact: %v\n", err)

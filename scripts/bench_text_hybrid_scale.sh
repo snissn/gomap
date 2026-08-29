@@ -101,11 +101,13 @@ build_binary() {
   mkdir -p "$RUN_DIR/bin"
   local ldflags="-X main.buildCommit=$COMMIT -X main.buildTreeOID=$TREE_OID -X main.buildTreeDBSubtree=$TREEDB_SUBTREE_OID -X main.buildHarnessSubtree=$HARNESS_SUBTREE_OID -X main.buildVCSModified=$VCS_MODIFIED"
   env GOWORK=off "$GO_BIN" build -buildvcs=true -trimpath -ldflags "$ldflags" -o "$BIN" ./cmd/treedb_text_hybrid_scale 2>&1 | tee "$RUN_DIR/build.log"
-  local binary_version
+  local binary_version binary_provenance
   binary_version=$("$GO_BIN" version -m "$BIN")
   printf '%s\n' "$binary_version" > "$RUN_DIR/binary.version.txt"
-  for expected in "main.buildCommit=$COMMIT" "main.buildTreeOID=$TREE_OID" "main.buildTreeDBSubtree=$TREEDB_SUBTREE_OID" "main.buildHarnessSubtree=$HARNESS_SUBTREE_OID" "main.buildVCSModified=$VCS_MODIFIED"; do
-    if [[ "$binary_version" != *"$expected"* ]]; then
+  binary_provenance=$("$BIN" -print-build-provenance)
+  printf '%s\n' "$binary_provenance" > "$RUN_DIR/binary.provenance.json"
+  for expected in "\"commit\":\"$COMMIT\"" "\"tree_oid\":\"$TREE_OID\"" "\"treedb_subtree_oid\":\"$TREEDB_SUBTREE_OID\"" "\"harness_subtree_oid\":\"$HARNESS_SUBTREE_OID\"" "\"vcs_modified\":\"$VCS_MODIFIED\""; do
+    if [[ "$binary_provenance" != *"$expected"* ]]; then
       echo "built binary lacks required provenance setting: $expected" >&2
       exit 2
     fi
