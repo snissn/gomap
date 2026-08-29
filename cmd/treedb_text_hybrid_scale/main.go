@@ -320,6 +320,8 @@ type reopenReport struct {
 	OracleVersion         string                                 `json:"oracle_version"`
 	TextPrecisionAtK      float64                                `json:"text_precision_at_k"`
 	HybridPrecisionAtK    float64                                `json:"hybrid_precision_at_k"`
+	HybridPostingsBudget  int                                    `json:"hybrid_postings_budget"`
+	HybridStats           *collections.HybridSearchStats         `json:"hybrid_stats,omitempty"`
 	QualityOracleOK       bool                                   `json:"quality_oracle_ok"`
 	Resource              resourceSnapshot                       `json:"resource"`
 }
@@ -1973,6 +1975,7 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 	var vectorStatus *collections.VectorIndexStatus
 	hybridPrecision := 0.0
 	qualityOK := beforeQuality.OK && afterQuality.OK
+	var reopenHybridStats *collections.HybridSearchStats
 	if cfg.includeVector {
 		status, err := col.VectorIndexStatus(vectorIndexName)
 		if err != nil {
@@ -1986,7 +1989,7 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 		}
 		vectorProbe, err := col.SearchHybrid(collections.HybridSearchOptions{
 			TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly,
-			Text:   &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit},
+			Text:   &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit, MaxPostingsScanned: cfg.hybridMaxPostingsScanned},
 			Vector: &collections.HybridVectorQuery{IndexName: vectorIndexName, Query: queryVector(cfg.dims), CandidateLimit: cfg.candidateLimit, EfSearch: cfg.efSearch, QueryMode: collections.VectorIndexQueryModeExact},
 		})
 		if err != nil || len(vectorProbe.Results) == 0 || !hybridGuardrail("reopen_hybrid_vector_probe", vectorProbe.Stats).OK {
@@ -1999,6 +2002,7 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 			return reopenReport{}, fixture, errors.New(vectorQuality.Failure)
 		}
 		hybridPrecision = vectorQuality.Precision
+		reopenHybridStats = &vectorProbe.Stats
 		qualityOK = qualityOK && vectorQuality.OK
 	}
 	bytes, err := dirSize(fixture.dir)
@@ -2017,6 +2021,7 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 		QueryParityOK: beforeDigest == afterDigest, Resource: captureResource(),
 		OracleVersion: scaleRelevanceOracleVersion, TextPrecisionAtK: afterQuality.Precision,
 		HybridPrecisionAtK: hybridPrecision, QualityOracleOK: qualityOK,
+		HybridPostingsBudget: cfg.hybridMaxPostingsScanned, HybridStats: reopenHybridStats,
 	}, fixture, nil
 }
 
@@ -2811,6 +2816,9 @@ func renderMarkdown(rep report) string {
 	if rep.Reopen != nil {
 		fmt.Fprintf(&b, "## Reopen\n\n")
 		fmt.Fprintf(&b, "Close `%.3fs`, open `%.3fs`, open collection `%.3fs`, probe `%.3fs`, total `%.3fs`; count `%d/%d` parity `%v`; query parity `%v` (`%s`); text precision@K `%.3f`, hybrid precision@K `%.3f`, oracle `%s`/`%v`.\n\n", rep.Reopen.CloseSeconds, rep.Reopen.OpenSeconds, rep.Reopen.OpenCollectionSeconds, rep.Reopen.ProbeSeconds, rep.Reopen.TotalSeconds, rep.Reopen.LiveRows, rep.Reopen.ExpectedRows, rep.Reopen.CountOK, rep.Reopen.QueryParityOK, rep.Reopen.AfterResultsSHA256, rep.Reopen.TextPrecisionAtK, rep.Reopen.HybridPrecisionAtK, rep.Reopen.OracleVersion, rep.Reopen.QualityOracleOK)
+		if rep.Reopen.HybridStats != nil {
+			fmt.Fprintf(&b, "Reopen hybrid route: postings `%d/%d`; text candidates requested/effective/returned `%d/%d/%d`; vector candidates requested/effective/returned `%d/%d/%d`; fail-closed `%d`, full-scan fallbacks `%d`.\n\n", rep.Reopen.HybridStats.TextPostingsScanned, rep.Reopen.HybridPostingsBudget, rep.Reopen.HybridStats.TextCandidatesRequested, rep.Reopen.HybridStats.TextCandidateBudgetEffective, rep.Reopen.HybridStats.TextCandidatesReturned, rep.Reopen.HybridStats.VectorCandidatesRequested, rep.Reopen.HybridStats.VectorCandidateBudgetEffective, rep.Reopen.HybridStats.VectorCandidatesReturned, rep.Reopen.HybridStats.FailClosed, rep.Reopen.HybridStats.FullDocumentScanFallbacks)
+		}
 	}
 	if rep.Concurrent != nil {
 		fmt.Fprintf(&b, "## Concurrent serving/write sanity\n\n")

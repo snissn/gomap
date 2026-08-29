@@ -29,6 +29,7 @@ const (
 	requiredSourceChunkBatchSize       = 32_768
 	requiredMaintenanceUpdateBatchSize = 10_000
 	requiredHybridMaxPostingsScanned   = requiredScaleRows * 4
+	unscaledDefaultPostingsCeiling     = 1 << 20
 	scaleRelevanceOracleVersion        = "generator_predicate/v3"
 	harnessGitPath                     = "cmd/treedb_text_hybrid_scale"
 	treeDBGitPath                      = "TreeDB"
@@ -360,8 +361,8 @@ func validateQualificationReport(rep report) error {
 	if rep.SourceChunk == nil || rep.SourceChunk.Status != "passed" || rep.SourceChunk.SourceDocuments != requiredScaleRows || rep.SourceChunk.BatchSize != requiredSourceChunkBatchSize || rep.SourceChunk.BatchCalls != expectedSourceChunkCalls || rep.SourceChunk.GeneratedChunks < requiredScaleRows || rep.SourceChunk.CheckpointSeconds <= 0 || !rep.SourceChunk.ReopenParityOK || !validResource(rep.SourceChunk.Resource) {
 		return errors.New("application-shaped source/chunk row incomplete: source/chunk batch contract mismatch")
 	}
-	if rep.Reopen == nil || rep.Reopen.Status != "passed" || !rep.Reopen.CountOK || !rep.Reopen.QueryParityOK || rep.Reopen.BeforeResultsSHA256 == "" || rep.Reopen.BeforeResultsSHA256 != rep.Reopen.AfterResultsSHA256 || rep.Reopen.StorageBytes <= 0 || rep.Reopen.OracleVersion != scaleRelevanceOracleVersion || !rep.Reopen.QualityOracleOK || rep.Reopen.TextPrecisionAtK != 1 || rep.Reopen.HybridPrecisionAtK != 1 || !validResource(rep.Reopen.Resource) {
-		return errors.New("checkpoint/close/reopen/count/query parity or generator relevance oracle incomplete")
+	if rep.Reopen == nil || rep.Reopen.Status != "passed" || !rep.Reopen.CountOK || !rep.Reopen.QueryParityOK || rep.Reopen.BeforeResultsSHA256 == "" || rep.Reopen.BeforeResultsSHA256 != rep.Reopen.AfterResultsSHA256 || rep.Reopen.StorageBytes <= 0 || rep.Reopen.OracleVersion != scaleRelevanceOracleVersion || !rep.Reopen.QualityOracleOK || rep.Reopen.TextPrecisionAtK != 1 || rep.Reopen.HybridPrecisionAtK != 1 || rep.Reopen.HybridPostingsBudget != requiredHybridMaxPostingsScanned || rep.Reopen.HybridStats == nil || rep.Reopen.HybridStats.TextCandidatesRequested != requiredHybridCandidateLimit || rep.Reopen.HybridStats.TextCandidateBudgetEffective != requiredHybridCandidateLimit || rep.Reopen.HybridStats.TextCandidatesReturned == 0 || rep.Reopen.HybridStats.TextPostingsScanned <= unscaledDefaultPostingsCeiling || rep.Reopen.HybridStats.TextPostingsScanned > uint64(requiredHybridMaxPostingsScanned) || rep.Reopen.HybridStats.VectorCandidatesRequested != requiredHybridCandidateLimit || rep.Reopen.HybridStats.VectorCandidateBudgetEffective != requiredHybridCandidateLimit || rep.Reopen.HybridStats.VectorCandidatesReturned == 0 || rep.Reopen.HybridStats.FullDocumentScanFallbacks != 0 || rep.Reopen.HybridStats.FailClosed != 0 || !validResource(rep.Reopen.Resource) {
+		return errors.New("checkpoint/close/reopen/count/query parity, explicit hybrid postings route, or generator relevance oracle incomplete")
 	}
 	if rep.Concurrent == nil || rep.Concurrent.Status != "passed" || !rep.Concurrent.GuardrailOK || len(rep.Concurrent.Errors) != 0 || rep.Concurrent.Queries < cfg.Readers || rep.Concurrent.Writes < 1 || !validResource(rep.Concurrent.Resource) {
 		return errors.New("concurrency sanity row incomplete")
