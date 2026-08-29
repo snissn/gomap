@@ -8,7 +8,7 @@ import (
 )
 
 func mmapFile(file *os.File) ([]byte, error) {
-	return nil, fmt.Errorf("mappedresource: mmap unsupported on this platform")
+	return nil, fmt.Errorf("%w on this platform", ErrMmapUnsupported)
 }
 
 func munmapFile(data []byte) error {

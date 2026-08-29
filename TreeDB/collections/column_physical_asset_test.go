@@ -3056,6 +3056,17 @@ func TestColumnAssetSegmentPayloadWriteRejectsNoProgressM15C(t *testing.T) {
 	}
 }
 
+func TestColumnAssetChecksumWriterRejectsOverflow4427(t *testing.T) {
+	var dst bytes.Buffer
+	w := &columnAssetChecksumWriter{dst: &dst, limit: 3}
+	if n, err := w.Write([]byte("four")); !errors.Is(err, io.ErrShortWrite) || n != 0 {
+		t.Fatalf("overflow write n=%d err=%v want 0/io.ErrShortWrite", n, err)
+	}
+	if dst.Len() != 0 || w.written != 0 {
+		t.Fatalf("overflow wrote dst=%d tracked=%d", dst.Len(), w.written)
+	}
+}
+
 func TestColumnDeclaredExtractionJSONBenchShapeM12A(t *testing.T) {
 	cfg := &ColumnStoreConfig{
 		Enabled: true,

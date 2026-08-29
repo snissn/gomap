@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -1254,7 +1255,7 @@ func newColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig
 		unlockLock:     true,
 		created:        true,
 	}
-	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_EXCL|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		appender.releaseLock()
 		return nil, err
@@ -1589,6 +1590,152 @@ func (a *columnPhysicalAssetSegmentAppender) appendKindWithAlignment(payload []b
 	}
 	a.recordStableRef(ref)
 	return ref, nil
+}
+
+type columnAssetReservedPayload struct {
+	writer *columnAssetChecksumWriter
+	file   *os.File
+	start  int64
+	length int64
+}
+
+func (p *columnAssetReservedPayload) Write(b []byte) (int, error) { return p.writer.Write(b) }
+
+func (p *columnAssetReservedPayload) Backpatch(offset int64, b []byte) error {
+	if p == nil || offset < 0 || offset > p.length-int64(len(b)) {
+		return io.ErrShortWrite
+	}
+	for len(b) > 0 {
+		n, err := p.file.WriteAt(b, p.start+offset)
+		if n > 0 {
+			b = b[n:]
+		}
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
+}
+
+func (a *columnPhysicalAssetSegmentAppender) appendKindWithReservedPayload(length int64, kind ColumnAssetKind, generation, partID uint64, alignment int64, emit func(*columnAssetReservedPayload) error) (ColumnAssetRef, error) {
+	if a == nil || a.file == nil || a.failed {
+		return ColumnAssetRef{}, errors.New("collections: column physical asset appender is unavailable")
+	}
+	if length <= 0 || emit == nil || generation == 0 || partID == 0 {
+		return ColumnAssetRef{}, errors.New("collections: column physical asset reserved append is invalid")
+	}
+	if a.stableRegistry != nil {
+		if _, _, _, err := stableColumnAssetResourceClassification(kind); err != nil {
+			return ColumnAssetRef{}, err
+		}
+	}
+	if padding := columnAssetSegmentPrefixPadding(a.offset, alignment); padding > 0 {
+		n, err := writeColumnAssetSegmentZeroPadding(a.file, padding)
+		a.offset += int64(n)
+		if err != nil || n != padding {
+			a.failed = true
+			if err == nil {
+				err = io.ErrShortWrite
+			}
+			return ColumnAssetRef{}, err
+		}
+	}
+	start := a.offset
+	reservedFile, err := a.openReservedPayloadFile()
+	if err != nil {
+		a.failed = true
+		return ColumnAssetRef{}, err
+	}
+	payload := &columnAssetReservedPayload{writer: &columnAssetChecksumWriter{dst: a.file, limit: length}, file: reservedFile, start: start, length: length}
+	if err := emit(payload); err != nil || payload.writer.written != length {
+		_ = reservedFile.Close()
+		a.offset += payload.writer.written
+		a.failed = true
+		if err == nil {
+			err = io.ErrShortWrite
+		}
+		return ColumnAssetRef{}, err
+	}
+	checksum, err := checksumColumnAssetSegmentRange(reservedFile, start, length)
+	closeReservedErr := reservedFile.Close()
+	if err == nil {
+		err = closeReservedErr
+	}
+	if err != nil {
+		a.offset += payload.writer.written
+		a.failed = true
+		return ColumnAssetRef{}, err
+	}
+	a.offset += payload.writer.written
+	ref := ColumnAssetRef{Kind: kind, Namespace: a.cfg.AssetManager.Namespace, Generation: generation, PartID: partID, FileID: a.fileID, Offset: start, Length: length, Checksum: checksum}
+	a.recordStableRef(ref)
+	return ref, nil
+}
+
+func (a *columnPhysicalAssetSegmentAppender) openReservedPayloadFile() (*os.File, error) {
+	if a.stableParent != nil && a.stableChildName != "" {
+		file, err := rootpublication.OpenStableChildFile(a.stableParent, a.stableChildName, os.O_RDWR, 0o600)
+		if err != nil {
+			return nil, err
+		}
+		identity, err := rootpublication.StableIdentityFromFile(file)
+		if err == nil && !rootpublication.SamePhysicalIdentity(identity, a.stableChildIdentity) {
+			err = fmt.Errorf("%w: stable reserved payload child identity changed", rootpublication.ErrResourceConflict)
+		}
+		if err != nil {
+			return nil, errors.Join(err, file.Close())
+		}
+		return file, nil
+	}
+	return os.OpenFile(a.assetPath, os.O_RDWR, 0o600)
+}
+
+func checksumColumnAssetSegmentRange(file *os.File, offset, length int64) (uint32, error) {
+	if file == nil || offset < 0 || length <= 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	buf := make([]byte, 64<<10)
+	var sum uint32
+	for read := int64(0); read < length; {
+		n := int64(len(buf))
+		if n > length-read {
+			n = length - read
+		}
+		got, err := file.ReadAt(buf[:n], offset+read)
+		if got > 0 {
+			sum = crc.Update(sum, buf[:got])
+			read += int64(got)
+		}
+		if err != nil && !(err == io.EOF && read == length) {
+			return 0, err
+		}
+		if got == 0 {
+			return 0, io.ErrUnexpectedEOF
+		}
+	}
+	return sum, nil
+}
+
+type columnAssetChecksumWriter struct {
+	dst      io.Writer
+	limit    int64
+	written  int64
+	checksum uint32
+}
+
+func (w *columnAssetChecksumWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > w.limit-w.written {
+		return 0, io.ErrShortWrite
+	}
+	n, err := writeColumnAssetSegmentPayload(w.dst, p)
+	if n > 0 {
+		w.written += int64(n)
+		w.checksum = crc.Update(w.checksum, p[:n])
+	}
+	return n, err
 }
 
 func (a *columnPhysicalAssetSegmentAppender) appendKinds(items []columnPhysicalAssetAppendItem) ([]ColumnAssetRef, error) {
