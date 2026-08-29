@@ -1265,6 +1265,18 @@ func TestMinimaBatchCorrelationContract(t *testing.T) {
 	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false); err != nil {
 		t.Fatal(err)
 	}
+	raw.UpsertBatchCorrelations[0] = json.RawMessage(
+		`{"sequence":0,"operation":"test","scenario":"test","batch_start":0,"rows":1,"outcome":"completed","stats_retention":"full_diagnostic","capture_reason":"slow","before_stats":{"wide":true},"after_stats":{"wide":true},"profile_capture":{}}`,
+	)
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false); err == nil {
+		t.Fatal("full diagnostic batch correlation without an explicit profile status was accepted")
+	}
+	raw.UpsertBatchCorrelations[0] = json.RawMessage(
+		`{"sequence":0,"operation":"test","scenario":"test","batch_start":0,"rows":1,"outcome":"completed","stats_retention":"full_diagnostic","capture_reason":"slow","before_stats":null,"after_stats":null,"profile_capture":{"status":"captured"}}`,
+	)
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false); err == nil {
+		t.Fatal("full diagnostic batch correlation with null stats was accepted")
+	}
 }
 
 func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {

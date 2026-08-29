@@ -775,13 +775,12 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 self._compact_completed_batch_correlation(correlation)
                 compact_records += 1
                 continue
-            diagnostic = (
-                correlation.get("outcome") in ("failed", "timeout") or
-                correlation.get("capture_reason") == "slow" or
-                correlation.get("profile_capture", {}).get("status") != "not_triggered"
-            )
+            profile_status = correlation.get("profile_capture", {}).get("status")
+            diagnostic = correlation.get("capture_reason") in ("slow", "failed", "timeout") and \
+                profile_status in ("captured", "failed", "in_progress")
             if correlation.get("stats_retention") != "full_diagnostic" or not diagnostic or \
-                    "before_stats" not in correlation or "after_stats" not in correlation:
+                    not isinstance(correlation.get("before_stats"), dict) or \
+                    not isinstance(correlation.get("after_stats"), dict):
                 raise RuntimeError("TreeDB diagnostic batch correlation stats retention is invalid")
             full_records += 1
         if completed and self.diagnostics_dir is not None:
@@ -856,10 +855,17 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 directory = self._capture_directory(correlation)
                 correlation["profile_capture"] = {"status": "in_progress", "directory": str(directory)}
                 try:
-                    correlation["profile_capture"] = self.controller.capture_profiles(
+                    profile_capture = self.controller.capture_profiles(
                         directory, profile_seconds=self.diagnostic_profile_seconds,
                         capture_timeout=self.diagnostic_capture_timeout,
                     )
+                    if profile_capture.get("status") not in ("captured", "failed"):
+                        capture_statuses = {
+                            evidence.get("status")
+                            for evidence in profile_capture.get("captures", {}).values()
+                        }
+                        profile_capture["status"] = "captured" if "captured" in capture_statuses else "failed"
+                    correlation["profile_capture"] = profile_capture
                 except BaseException as exc:
                     correlation["profile_capture"] = {
                         "status": "failed", "directory": str(directory),

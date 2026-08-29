@@ -768,6 +768,10 @@ func minimaExpectedBatchCorrelationIdentities(manifest minimaManifest) map[minim
 func minimaMaximumBatchCorrelationRecords(manifest minimaManifest) int {
 	return len(minimaExpectedBatchCorrelationIdentities(manifest))
 }
+func minimaJSONObject(raw json.RawMessage) bool {
+	var object map[string]json.RawMessage
+	return json.Unmarshal(raw, &object) == nil && object != nil
+}
 
 func validateMinimaTreeDBBatchCorrelations(manifest minimaManifest, raw minimaRawBackendEvidence, completed bool) error {
 	contract := raw.UpsertBatchCorrelationContract
@@ -850,9 +854,15 @@ func validateMinimaTreeDBBatchCorrelations(manifest minimaManifest, raw minimaRa
 			}
 			compact++
 		case "full_diagnostic":
-			diagnostic := correlation.Outcome == "failed" || correlation.Outcome == "timeout" ||
-				correlation.CaptureReason == "slow" || correlation.ProfileCapture.Status != "not_triggered"
-			if !diagnostic || len(correlation.BeforeStats) == 0 || len(correlation.AfterStats) == 0 {
+			recognizedReason := correlation.CaptureReason == "slow" ||
+				correlation.CaptureReason == "failed" ||
+				correlation.CaptureReason == "timeout"
+			recognizedProfile := correlation.ProfileCapture.Status == "captured" ||
+				correlation.ProfileCapture.Status == "failed" ||
+				correlation.ProfileCapture.Status == "in_progress"
+			if !recognizedReason || !recognizedProfile ||
+				!minimaJSONObject(correlation.BeforeStats) ||
+				!minimaJSONObject(correlation.AfterStats) {
 				return errors.New("minima artifact: full TreeDB batch correlation lacks diagnostic evidence")
 			}
 			full++
