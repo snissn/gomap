@@ -70,6 +70,24 @@ func TestSearchHybridTextCandidatesNoDocumentsStableIDs2503(t *testing.T) {
 	}
 }
 
+func TestHybridTextCandidatePostingsBudgetScalesWithCandidateBudget4329(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		scanBudget int
+		want       int
+	}{
+		{name: "minimum", scanBudget: 1, want: 4 * hybridTextCandidateDefaultScanCandidateLimit},
+		{name: "ten_million_campaign", scanBudget: 655_360, want: 167_772_160},
+		{name: "saturates", scanBudget: maxCollectionInt, want: maxCollectionInt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hybridTextCandidateMaxPostingsScanned(tc.scanBudget); got != tc.want {
+				t.Fatalf("hybridTextCandidateMaxPostingsScanned(%d)=%d want %d", tc.scanBudget, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSearchHybridTextCandidatesUnsupportedAndUnavailableFailClosed2503(t *testing.T) {
 	d := openTextTestDB(t)
 	defer func() { _ = d.Close() }()

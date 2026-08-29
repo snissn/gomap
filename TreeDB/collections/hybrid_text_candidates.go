@@ -53,6 +53,7 @@ func (c *Collection) searchHybridTextCandidatesWithScanBudget(query HybridTextQu
 		Query:                    query.Query,
 		TopK:                     requested,
 		CandidateLimit:           hybridTextCandidateScanCandidateLimit(scanBudget),
+		MaxPostingsScanned:       hybridTextCandidateMaxPostingsScanned(scanBudget),
 		IncludeDocuments:         false,
 		textV2AllowedDocumentIDs: allowSet,
 	}, resultMode)
@@ -87,6 +88,14 @@ func hybridTextCandidateScanCandidateLimit(requested int) int {
 		limit = hybridTextCandidateDefaultScanCandidateLimit
 	}
 	return limit
+}
+
+func hybridTextCandidateMaxPostingsScanned(scanBudget int) int {
+	limit := hybridTextCandidateScanCandidateLimit(scanBudget)
+	if limit > maxCollectionInt/4 {
+		return maxCollectionInt
+	}
+	return limit * 4
 }
 
 func hybridTextCandidatesFromSearchResponse(requested int, textIndexName string, textResponse TextSearchResponse) (HybridCandidateResponse, error) {
