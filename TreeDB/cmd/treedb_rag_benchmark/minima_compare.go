@@ -483,7 +483,10 @@ func validateMinimaTreeDBProvenance(backend minimaBackendEvidence) error {
 	}
 	operationTimeout, operationErr := strconv.ParseFloat(configuration["operation_timeout_seconds"], 64)
 	startupTimeout, startupErr := strconv.ParseFloat(configuration["startup_reopen_timeout_seconds"], 64)
-	if operationErr != nil || operationTimeout != 120 || startupErr != nil || startupTimeout <= 0 || !finiteNonnegative(startupTimeout) {
+	shutdownTimeout, shutdownErr := strconv.ParseFloat(configuration["shutdown_timeout_seconds"], 64)
+	if operationErr != nil || operationTimeout != 120 ||
+		startupErr != nil || startupTimeout <= 0 || !finiteNonnegative(startupTimeout) ||
+		shutdownErr != nil || shutdownTimeout != operationTimeout {
 		return errors.New("minima artifact: TreeDB timeout provenance is invalid")
 	}
 	return nil
@@ -553,6 +556,17 @@ func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution, resta
 				!finiteNonnegative(start.CPUSeconds) || !finiteNonnegative(end.CPUSeconds) ||
 				start.DiskBytes < 0 || end.DiskBytes < 0 {
 				return fmt.Errorf("minima artifact: TreeDB phase %d resource identity is invalid", ordinal)
+			}
+		}
+		if ordinal < 5 {
+			resource := phase.ResourceSegments[0].Start
+			if resource.PID != restart.OldPID || resource.ProcessIdentity != restart.OldProcessIdentity {
+				return fmt.Errorf("minima artifact: TreeDB pre-restart phase %d has the wrong process identity", ordinal)
+			}
+		} else if ordinal > 5 {
+			resource := phase.ResourceSegments[0].Start
+			if resource.PID != restart.NewPID || resource.ProcessIdentity != restart.NewProcessIdentity {
+				return fmt.Errorf("minima artifact: TreeDB post-restart phase %d has the wrong process identity", ordinal)
 			}
 		}
 		if ordinal == 5 {

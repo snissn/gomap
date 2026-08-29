@@ -494,6 +494,20 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.PhaseAttribution.Phases[0].ResourceSegments[0].End.PID++
 			a.RawEvidence["treedb"] = raw
 		}},
+		{"self-consistent pre-restart phase uses an unbound process", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			segment := &raw.PhaseAttribution.Phases[0].ResourceSegments[0]
+			segment.Start.PID, segment.End.PID = 999, 999
+			segment.Start.ProcessIdentity, segment.End.ProcessIdentity = "doctored", "doctored"
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"self-consistent post-restart phase uses an unbound process", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			segment := &raw.PhaseAttribution.Phases[6].ResourceSegments[0]
+			segment.Start.PID, segment.End.PID = 999, 999
+			segment.Start.ProcessIdentity, segment.End.ProcessIdentity = "doctored", "doctored"
+			a.RawEvidence["treedb"] = raw
+		}},
 		{"cross-PID unsplit TreeDB restart resources", func(a *minimaArtifact) {
 			raw := a.RawEvidence["treedb"]
 			restart := raw.PhaseAttribution.Phases[5].ResourceSegments
@@ -510,6 +524,9 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		}},
 		{"missing TreeDB product provenance", func(a *minimaArtifact) {
 			minimaTestBackend(a, "treedb").Configuration["product_commit"] = ""
+		}},
+		{"TreeDB shutdown timeout diverges from operation bound", func(a *minimaArtifact) {
+			minimaTestBackend(a, "treedb").Configuration["shutdown_timeout_seconds"] = "3600"
 		}},
 		{"raw resource disagrees with summary", func(a *minimaArtifact) {
 			raw := a.RawEvidence["qdrant"]
@@ -636,7 +653,7 @@ func validMinimaArtifact() minimaArtifact {
 		{Name: "treedb", ServerVersion: "test", ClientVersion: "test", Durability: "wal_sync", Configuration: map[string]string{
 			"effective": "test", "product_commit": strings.Repeat("a", 40), "harness_commit": strings.Repeat("a", 40),
 			"service_binary_sha256": strings.Repeat("b", 64), "runner_sha256": strings.Repeat("c", 64),
-			"operation_timeout_seconds": "120", "startup_reopen_timeout_seconds": "3600",
+			"operation_timeout_seconds": "120", "startup_reopen_timeout_seconds": "3600", "shutdown_timeout_seconds": "120",
 		}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
 		{Name: "qdrant", ServerVersion: "test", ClientVersion: "test", Durability: "wal", Configuration: map[string]string{
 			"effective":           "test",

@@ -222,6 +222,51 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertEqual(segments[1]["start"]["disk_bytes"], old_end["disk_bytes"])
         self.assertEqual(segments[1]["end"]["cpu_seconds"], 3.0)
 
+    def test_restart_controller_uses_shutdown_endpoint_for_phase_and_aggregate(self) -> None:
+        baseline = {"captured": True, "rss_bytes": 10, "cpu_seconds": 1.0, "disk_bytes": 100}
+        shutdown_end = {"captured": True, "rss_bytes": 15, "cpu_seconds": 3.0, "disk_bytes": 140}
+
+        class Controller:
+            pid = 100
+            last_shutdown_resource_end = shutdown_end
+
+            def start(self) -> None:
+                self.pid = 101
+
+        workload = object.__new__(runner.TreeDBMinimaRunner)
+        workload.controller = Controller()
+        workload.restart_origin = (100, "old-process")
+        workload._controller_restart_origin = (100, "old-process")
+        workload.restart_origin_resource_end = None
+        workload.resource_baseline = baseline
+        workload.completed_resource_segments = []
+        workload._phase_restart_old_end = None
+
+        self.assertEqual(workload.restart_controller(), 101)
+        self.assertEqual(workload._phase_restart_old_end["pid"], 100)
+        self.assertEqual(workload._phase_restart_old_end["process_identity"], "old-process")
+        self.assertIs(workload.restart_origin_resource_end, shutdown_end)
+        segment = workload.completed_resource_segments[0]
+        self.assertEqual(segment["cpu_seconds"], 2.0)
+        self.assertEqual(segment["disk_bytes"], 40)
+
+    def test_restart_aggregate_uses_process_lifetime_baseline(self) -> None:
+        old_end = {"captured": True, "rss_bytes": 15, "cpu_seconds": 3.0, "disk_bytes": 140}
+        new_end = {"captured": True, "rss_bytes": 20, "cpu_seconds": 1.5, "disk_bytes": 160}
+        workload = object.__new__(runner.TreeDBMinimaRunner)
+        workload.restart_origin_resource_end = old_end
+        workload.resource_baseline = None
+
+        def base_restart() -> None:
+            workload.resource_baseline = new_end
+
+        with mock.patch.object(common.QdrantMinimaRunner, "restart_backend", side_effect=base_restart):
+            workload.restart_backend()
+        self.assertEqual(workload.resource_baseline["rss_bytes"], 0)
+        self.assertEqual(workload.resource_baseline["cpu_seconds"], 0.0)
+        self.assertEqual(workload.resource_baseline["disk_bytes"], old_end["disk_bytes"])
+
+
     def resume_workload(self, directory: Path, *, present_ids: set[str], count: int) -> runner.TreeDBMinimaRunner:
         workload = self.workload(
             self.response(), diagnostics_dir=directory,
@@ -441,7 +486,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
     def test_diagnostic_reads_and_profile_captures_are_bounded_and_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = runner.ServiceController(
-                Path("/bin/false"), "http://127.0.0.1:1", Path(directory) / "data", "test", 1,
+                Path("/bin/false"), "http://127.0.0.1:1", Path(directory) / "data", "test", 1, 1,
                 diagnostics_url="http://127.0.0.1:2",
             )
             with mock.patch.object(runner.urllib.request, "urlopen", return_value=io.BytesIO(b"12345")):
@@ -520,7 +565,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             controller = runner.ServiceController(
-                Path("/service"), "http://127.0.0.1:17120", root / "data", "command_wal_durable", 1,
+                Path("/service"), "http://127.0.0.1:17120", root / "data", "command_wal_durable", 1, 1,
                 diagnostics_url="http://127.0.0.1:17121", block_profile_rate=7,
                 mutex_profile_fraction=11,
             )
@@ -550,7 +595,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             controller.log_file = None
 
             default = runner.ServiceController(
-                Path("/service"), "http://127.0.0.1:17120", root / "default", "command_wal_durable", 1,
+                Path("/service"), "http://127.0.0.1:17120", root / "default", "command_wal_durable", 1, 1,
             )
             process = mock.MagicMock(pid=43)
             process.poll.return_value = None
@@ -562,6 +607,49 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             assert default.log_file is not None
             default.log_file.close()
             default.log_file = None
+
+    def test_shutdown_timeout_is_separate_and_retains_last_live_resources(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory) / "data"
+            data_dir.mkdir()
+            controller = runner.ServiceController(
+                Path("/service"), "http://127.0.0.1:17120", data_dir,
+                "command_wal_durable", 3600, 120,
+            )
+            process = mock.MagicMock(pid=55)
+            process.poll.return_value = None
+            process.wait.side_effect = [
+                runner.subprocess.TimeoutExpired("service", 0.05),
+                0,
+            ]
+            controller.process = process
+
+            def usage(rss: int, cpu: float) -> dict[str, object]:
+                return {
+                    "captured": True,
+                    "rss_bytes": rss,
+                    "cpu_seconds": cpu,
+                    "availability": {
+                        "rss_bytes": "test", "cpu_seconds": "test",
+                        "bytes_per_op": "unavailable", "allocs_per_op": "unavailable",
+                        "measurement_error": "",
+                    },
+                }
+
+            with mock.patch.object(
+                common, "server_process_resource_usage",
+                side_effect=[usage(100, 1.0), usage(110, 2.0), usage(120, 3.0)],
+            ), mock.patch.object(common, "disk_bytes", return_value=140):
+                controller.stop()
+
+        self.assertEqual(controller.startup_timeout, 3600)
+        self.assertEqual(controller.shutdown_timeout, 120)
+        self.assertEqual(controller.last_shutdown_resource_end["rss_bytes"], 120)
+        self.assertEqual(controller.last_shutdown_resource_end["cpu_seconds"], 3.0)
+        self.assertEqual(controller.last_shutdown_resource_end["disk_bytes"], 140)
+        process.terminate.assert_called_once_with()
+        process.kill.assert_not_called()
+        self.assertTrue(all(call.kwargs["timeout"] <= 0.05 for call in process.wait.call_args_list))
 
     def test_default_cli_preserves_frozen_timeout_and_disables_diagnostics(self) -> None:
         argv = [
@@ -585,7 +673,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
     def test_service_log_evidence_is_bounded_and_keeps_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = runner.ServiceController(
-                Path("/bin/false"), "http://127.0.0.1:1", Path(directory) / "data", "test", 1,
+                Path("/bin/false"), "http://127.0.0.1:1", Path(directory) / "data", "test", 1, 1,
             )
             controller.log_path.write_bytes(b"x" * (runner.SERVICE_LOG_TAIL_BYTES + 10) + b"root cause\n")
             evidence = controller.log_evidence()
@@ -603,7 +691,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 port = listener.getsockname()[1]
             data_dir = root / "data"
             controller = runner.ServiceController(
-                binary, f"http://127.0.0.1:{port}", data_dir, "test", 2,
+                binary, f"http://127.0.0.1:{port}", data_dir, "test", 2, 1,
             )
             original_stop = controller.stop
 
@@ -676,6 +764,8 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 with self.assertRaises(IsADirectoryError):
                     runner.main()
             controller = controllers[0]
+            self.assertEqual(controller.startup_timeout, 2)
+            self.assertEqual(controller.shutdown_timeout, 1)
             child_pid = int((data_dir / "pid").read_text(encoding="utf-8"))
             self.assertIsNone(controller.process)
             self.assertIsNone(controller.log_file)
@@ -715,7 +805,8 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.resource_evidence = lambda: resource
         workload.controller = SimpleNamespace(
             profile="test", binary=Path("/bin/false"), log_path=Path("/tmp/service.log"),
-            diagnostics_url=None, block_profile_rate=1, mutex_profile_fraction=1, timeout=3600, pid=123,
+            diagnostics_url=None, block_profile_rate=1, mutex_profile_fraction=1,
+            startup_timeout=3600, shutdown_timeout=120, pid=123,
             log_evidence=lambda: {"path": "/tmp/service.log", "tail": "test", "max_tail_bytes": 64 << 10},
         )
         workload.source_commit = "a" * 40
@@ -792,6 +883,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertNotIn("readiness", raw)
         self.assertEqual(configuration["operation_timeout_seconds"], "120")
         self.assertEqual(configuration["startup_reopen_timeout_seconds"], "3600")
+        self.assertEqual(configuration["shutdown_timeout_seconds"], "120")
         self.assertEqual(configuration["product_commit"], "a" * 40)
         self.assertEqual(raw["phase_attribution"]["phases"][0]["classification"], "production_path")
         self.assertEqual(artifact["scenarios"][0]["route"]["candidate_ids"], 5)

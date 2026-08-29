@@ -803,7 +803,7 @@ def cpu_time_seconds(value: str) -> float:
     return float(days) * 86400 + hours * 3600 + minutes * 60 + seconds
 
 
-def server_resource_usage(pid: int | None, storage_path: Path | None, server_name: str) -> dict[str, Any]:
+def server_process_resource_usage(pid: int | None, server_name: str) -> dict[str, Any]:
     rss: int | None = None
     cpu: float | None = None
     error = ""
@@ -819,21 +819,33 @@ def server_resource_usage(pid: int | None, storage_path: Path | None, server_nam
             rss, cpu = int(fields[0]) * 1024, cpu_time_seconds(fields[1])
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             error = f"{type(exc).__name__}: {exc}"
-    disk_available = storage_path is not None and storage_path.exists()
-    captured = rss is not None and cpu is not None and disk_available
     return {
-        "captured": captured,
+        "captured": rss is not None and cpu is not None,
         "rss_bytes": rss or 0,
         "cpu_seconds": cpu or 0.0,
-        "disk_bytes": disk_bytes(storage_path),
         "availability": {
             "rss_bytes": f"{server_name} server PID {pid}" if rss is not None else "unavailable",
             "cpu_seconds": f"{server_name} server PID {pid}" if cpu is not None else "unavailable",
-            "disk_bytes": str(storage_path) if disk_available else "unavailable",
             "bytes_per_op": "unavailable", "allocs_per_op": "unavailable",
             "measurement_error": error,
         },
     }
+
+
+def server_resource_usage(pid: int | None, storage_path: Path | None, server_name: str) -> dict[str, Any]:
+    process = server_process_resource_usage(pid, server_name)
+    disk_available = storage_path is not None and storage_path.exists()
+    return {
+        **process,
+        "captured": process["captured"] and disk_available,
+        "disk_bytes": disk_bytes(storage_path),
+        "availability": {
+            **process["availability"],
+            "disk_bytes": str(storage_path) if disk_available else "unavailable",
+        },
+    }
+
+
 def server_process_identity(pid: int) -> str:
     if type(pid) is not int or pid <= 0:
         raise RuntimeError("server process identity requires a positive PID")

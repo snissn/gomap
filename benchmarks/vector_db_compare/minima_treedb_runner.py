@@ -89,10 +89,12 @@ def repository_commit() -> str:
 
 
 class ServiceController:
-    def __init__(self, binary: Path, url: str, data_dir: Path, profile: str, timeout: float, *,
+    def __init__(self, binary: Path, url: str, data_dir: Path, profile: str,
+                 startup_timeout: float, shutdown_timeout: float, *,
                  diagnostics_url: str | None = None, block_profile_rate: int = 1,
                  mutex_profile_fraction: int = 1, diagnostics_timeout: float = 2) -> None:
-        self.binary, self.url, self.data_dir, self.profile, self.timeout = binary, url.rstrip("/"), data_dir, profile, timeout
+        self.binary, self.url, self.data_dir, self.profile = binary, url.rstrip("/"), data_dir, profile
+        self.startup_timeout, self.shutdown_timeout = startup_timeout, shutdown_timeout
         self.diagnostics_url = diagnostics_url.rstrip("/") if diagnostics_url else None
         self.block_profile_rate = block_profile_rate
         self.mutex_profile_fraction = mutex_profile_fraction
@@ -100,6 +102,7 @@ class ServiceController:
         self.process: subprocess.Popen[str] | None = None
         self.log_path = data_dir.parent / "treedb-document-service.log"
         self.log_file: Any | None = None
+        self.last_shutdown_resource_end: dict[str, Any] | None = None
 
     @property
     def pid(self) -> int | None:
@@ -139,6 +142,7 @@ class ServiceController:
     def start(self) -> None:
         if self.pid is not None:
             return
+        self.last_shutdown_resource_end = None
         self.data_dir.mkdir(parents=True, exist_ok=True)
         address = self._listen_address(self.url, "service")
         argv = [str(self.binary), "-addr", address, "-dir", str(self.data_dir), "-profile", self.profile]
@@ -154,7 +158,7 @@ class ServiceController:
             self.process = subprocess.Popen(
                 argv, stdout=self.log_file, stderr=subprocess.STDOUT, text=True,
             )
-            deadline, last = time.monotonic() + self.timeout, ""
+            deadline, last = time.monotonic() + self.startup_timeout, ""
             while time.monotonic() < deadline:
                 if self.process.poll() is not None:
                     raise RuntimeError(f"TreeDB service exited during startup; log tail: {self.log_evidence()['tail']}")
@@ -170,7 +174,7 @@ class ServiceController:
                 except BaseException as exc:
                     last = repr(exc)
                 time.sleep(0.05)
-            raise TimeoutError(f"TreeDB service readiness exceeded {self.timeout}s: {last}")
+            raise TimeoutError(f"TreeDB service readiness exceeded {self.startup_timeout}s: {last}")
         except BaseException:
             try:
                 self.stop()
@@ -180,13 +184,38 @@ class ServiceController:
 
     def stop(self) -> None:
         if self.process is not None:
-            if self.process.poll() is None:
-                self.process.terminate()
-                try:
-                    self.process.wait(timeout=self.timeout)
-                except subprocess.TimeoutExpired:
-                    self.process.kill()
-                    self.process.wait(timeout=self.timeout)
+            process = self.process
+            if process.poll() is None:
+                pid = process.pid
+                latest_process = common.server_process_resource_usage(pid, "TreeDB")
+                process.terminate()
+                deadline = time.monotonic() + self.shutdown_timeout
+                exited = False
+                while not exited:
+                    sample = common.server_process_resource_usage(pid, "TreeDB")
+                    if sample["captured"]:
+                        latest_process = sample
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        process.wait(timeout=min(0.05, remaining))
+                        exited = True
+                    except subprocess.TimeoutExpired:
+                        exited = process.poll() is not None
+                if not exited:
+                    process.kill()
+                    process.wait(timeout=min(5, self.shutdown_timeout))
+                disk_available = self.data_dir.exists()
+                self.last_shutdown_resource_end = {
+                    **latest_process,
+                    "captured": latest_process["captured"] and disk_available,
+                    "disk_bytes": common.disk_bytes(self.data_dir),
+                    "availability": {
+                        **latest_process["availability"],
+                        "disk_bytes": str(self.data_dir) if disk_available else "unavailable",
+                    },
+                }
             self.process = None
         if self.log_file is not None:
             self.log_file.close()
@@ -325,6 +354,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         self._phase_boundaries: list[dict[str, Any]] = []
         self._phase_attribution: dict[str, Any] | None = None
         self._phase_restart_old_end: dict[str, Any] | None = None
+        self._controller_restart_origin: tuple[int, str] | None = None
         self.controller = controller
         self.source_commit = repository_commit()
         self.runner_sha256 = file_sha256(Path(__file__).resolve())
@@ -362,10 +392,37 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             raise ValueError("diagnostics_dir requires an enabled controller diagnostics URL")
 
     def restart_controller(self) -> int:
+        if self._controller_restart_origin is None:
+            raise RuntimeError("TreeDB restart resource origin is unavailable")
+        old_pid, old_identity = self._controller_restart_origin
+        shutdown_end = self.controller.last_shutdown_resource_end
+        if shutdown_end is None or not shutdown_end["captured"]:
+            raise RuntimeError("TreeDB graceful shutdown resource endpoint is unavailable")
+        self.restart_origin_resource_end = shutdown_end
+        self._phase_restart_old_end = {
+            **shutdown_end,
+            "pid": old_pid,
+            "process_identity": old_identity,
+        }
+        if self.resource_baseline is not None:
+            self.completed_resource_segments.append(
+                common.resource_delta(self.resource_baseline, shutdown_end)
+            )
         self.controller.start()
         if self.controller.pid is None:
             raise RuntimeError("TreeDB service controller restarted without a PID")
         return self.controller.pid
+
+    def restart_backend(self) -> None:
+        super().restart_backend()
+        if self.resource_baseline is None or self.restart_origin_resource_end is None:
+            raise RuntimeError("TreeDB restarted resource baseline is unavailable")
+        self.resource_baseline = {
+            **self.resource_baseline,
+            "rss_bytes": 0,
+            "cpu_seconds": 0.0,
+            "disk_bytes": self.restart_origin_resource_end["disk_bytes"],
+        }
 
     def _phase_resource_snapshot(self) -> dict[str, Any]:
         pid = self.controller.pid
@@ -377,15 +434,14 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         return snapshot
 
     def capture_restart_origin(self) -> None:
-        super().capture_restart_origin()
-        if self.restart_origin is None or self.restart_origin_resource_end is None:
-            raise RuntimeError("TreeDB restart resource origin is unavailable")
-        old_pid, old_identity = self.restart_origin
-        self._phase_restart_old_end = {
-            **self.restart_origin_resource_end,
-            "pid": old_pid,
-            "process_identity": old_identity,
-        }
+        old_pid = self.server_pid
+        if type(old_pid) is not int or old_pid <= 0:
+            raise RuntimeError("close/reopen requires the original TreeDB server PID")
+        origin = (old_pid, self.process_identity(old_pid))
+        self.restart_origin = origin
+        self._controller_restart_origin = origin
+        self.restart_origin_resource_end = None
+        self._phase_restart_old_end = None
 
     def begin_phase_attribution(self) -> None:
         if self._phase_start is not None:
@@ -968,7 +1024,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                               "runner_sha256": self.runner_sha256,
                               "product_commit": self.source_commit, "harness_commit": self.source_commit,
                               "operation_timeout_seconds": str(self.operation_timeout_seconds),
-                              "startup_reopen_timeout_seconds": str(self.controller.timeout),
+                              "startup_reopen_timeout_seconds": str(self.controller.startup_timeout),
+                              "shutdown_timeout_seconds": str(self.controller.shutdown_timeout),
                               "service_log_path": str(self.controller.log_path),
                               "diagnostics_url": self.controller.diagnostics_url or "disabled",
                               "block_profile_rate": str(self.controller.block_profile_rate) if self.controller.diagnostics_url else "0",
@@ -1081,7 +1138,8 @@ def main() -> int:
     manifest = common.load_manifest(args.manifest)
     diagnostics_dir = args.diagnostics_dir.resolve() if args.diagnostics_dir is not None else None
     controller = ServiceController(
-        args.service_bin.resolve(), args.url, args.data_dir.resolve(), args.profile, args.startup_timeout,
+        args.service_bin.resolve(), args.url, args.data_dir.resolve(), args.profile,
+        args.startup_timeout, args.operation_timeout,
         diagnostics_url=args.diagnostics_url if diagnostics_dir is not None else None,
     )
     runner = TreeDBMinimaRunner(
