@@ -34,9 +34,8 @@ const (
 	tenantIndexName = "tenant"
 	regionIndexName = "region"
 
-	rareTextTerm          = "raretoken2731"
-	rareTenant            = "tenant-rare-06pct"
-	sourceChunkBatchLimit = 256
+	rareTextTerm = "raretoken2731"
+	rareTenant   = "tenant-rare-06pct"
 
 	queryRowTextCommon               = "text_common_score_only"
 	queryRowTextRare                 = "text_rare_score_only"
@@ -2299,8 +2298,8 @@ func runSourceChunkProbe(cfg config) (sourceChunkReport, error) {
 	result := sourceChunkReport{SourceDocuments: cfg.sourceChunkRows}
 	start := time.Now()
 	chunkCfg := chunking.Config{Strategy: chunking.StrategyFixedWindow, SizeUnit: chunking.SizeUnitRunes, Size: 32, Overlap: 0}
-	for offset := 0; offset < cfg.sourceChunkRows; offset += sourceChunkBatchLimit {
-		count := minInt(sourceChunkBatchLimit, cfg.sourceChunkRows-offset)
+	for offset := 0; offset < cfg.sourceChunkRows; offset += cfg.batchSize {
+		count := minInt(cfg.batchSize, cfg.sourceChunkRows-offset)
 		sources := make([]collections.SourceDocument, count)
 		for i := range count {
 			ordinal := offset + i
