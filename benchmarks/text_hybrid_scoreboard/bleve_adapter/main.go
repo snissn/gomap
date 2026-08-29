@@ -165,7 +165,11 @@ func main() {
 	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &finalUsage)
 
 	manifestSum, corpusSum := sha256.Sum256(canonicalJSON(manifestRaw)), sha256.Sum256(corpusRaw)
-	command := append([]string{"go", "run", "."}, os.Args[1:]...)
+	goExecutable := os.Getenv("LEXICAL_GO_EXECUTABLE")
+	if goExecutable == "" {
+		goExecutable = "go"
+	}
+	command := append([]string{goExecutable, "run", "."}, os.Args[1:]...)
 	workingDirectory, err := os.Getwd()
 	must(err)
 	environment := environmentEvidence(spec.Environment, *corpusPath, *indexPath, *outPath)

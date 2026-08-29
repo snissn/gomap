@@ -175,7 +175,11 @@ func main() {
 	manifestCanonical := canonicalJSON(manifestRaw)
 	manifestDigest := sha256.Sum256(manifestCanonical)
 	corpusDigest := sha256.Sum256(corpusRaw)
-	command := append([]string{"go", "run", "./benchmarks/text_hybrid_scoreboard/treedb_adapter"}, os.Args[1:]...)
+	goExecutable := os.Getenv("LEXICAL_GO_EXECUTABLE")
+	if goExecutable == "" {
+		goExecutable = "go"
+	}
+	command := append([]string{goExecutable, "run", "./benchmarks/text_hybrid_scoreboard/treedb_adapter"}, os.Args[1:]...)
 	workingDirectory, err := os.Getwd()
 	must(err)
 	environment := environmentEvidence(spec.Environment, *corpusPath, *dbDir, *outPath)

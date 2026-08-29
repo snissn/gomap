@@ -213,12 +213,12 @@ def adapter_command(engine_id: str, repetition: int, out_dir: Path, manifest: Pa
     index = out_dir / "indexes" / f"{engine_id}-r{repetition}"
     common = ["--manifest", str(manifest), "--corpus", str(corpus), "--out", str(raw), "--repetition", str(repetition)]
     if engine_id == "treedb_text_v2":
-        return [go_bin, "run", "./benchmarks/text_hybrid_scoreboard/treedb_adapter", *common, "--db", str(index)], ROOT, {"GOWORK": "off", "GOMAP_SOURCE_REVISION": source_revision}
+        return [go_bin, "run", "./benchmarks/text_hybrid_scoreboard/treedb_adapter", *common, "--db", str(index)], ROOT, {"GOWORK": "off", "GOMAP_SOURCE_REVISION": source_revision, "LEXICAL_GO_EXECUTABLE": go_bin}
     if engine_id == "lucene":
         exec_args = shlex.join([*common, "--index", str(index)])
         return ["mvn", "-q", "compile", "exec:java", f"-Dexec.args={exec_args}"], isolated_project(engine_id, out_dir), {}
     if engine_id == "bleve":
-        return [go_bin, "run", ".", *common, "--index", str(index)], isolated_project(engine_id, out_dir), {"GOWORK": "off"}
+        return [go_bin, "run", ".", *common, "--index", str(index)], isolated_project(engine_id, out_dir), {"GOWORK": "off", "LEXICAL_GO_EXECUTABLE": go_bin}
     if engine_id == "sqlite_fts5":
         return [sys.executable, str(HERE / "sqlite_fts5_bench.py"), *common, "--db", str(index.with_suffix(".sqlite3"))], ROOT, {}
     raise AssertionError(engine_id)
