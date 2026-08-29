@@ -856,7 +856,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             default.log_file.close()
             default.log_file = None
 
-    def test_shutdown_timeout_is_separate_and_retains_last_live_resources(self) -> None:
+    def test_shutdown_retains_last_live_resources_when_terminal_sample_regresses(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             data_dir = Path(directory) / "data"
             data_dir.mkdir()
@@ -886,7 +886,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
 
             with mock.patch.object(
                 common, "server_process_resource_usage",
-                side_effect=[usage(100, 1.0), usage(110, 2.0), usage(120, 3.0)],
+                side_effect=[usage(100, 1.0), usage(120, 3.0), usage(0, 0.0)],
             ), mock.patch.object(common, "disk_bytes", return_value=140):
                 controller.stop()
 
