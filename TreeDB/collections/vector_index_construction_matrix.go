@@ -16,7 +16,6 @@ const columnVectorGraphConstructionMatrixPattern = ".column-graph-construction-*
 var errColumnVectorGraphConstructionMatrixShape = errors.New("collections: column graph construction matrix shape mismatch")
 
 type columnVectorGraphConstructionMatrix struct {
-	path   string
 	handle *mappedresource.Handle
 	values []float32
 	closed bool
@@ -89,7 +88,10 @@ func stageColumnVectorGraphConstructionMatrix(root string, rows []columnVectorGr
 	if err != nil {
 		return nil, errors.Join(err, handle.Release())
 	}
-	matrix := &columnVectorGraphConstructionMatrix{path: path, handle: handle, values: values}
+	if err := os.Remove(path); err != nil {
+		return nil, errors.Join(err, handle.Release())
+	}
+	matrix := &columnVectorGraphConstructionMatrix{handle: handle, values: values}
 	for i := range rows {
 		start := i * dimensions
 		rows[i].Vector = values[start : start+dimensions]
@@ -103,5 +105,5 @@ func (m *columnVectorGraphConstructionMatrix) Close() error {
 	}
 	m.closed = true
 	m.values = nil
-	return errors.Join(m.handle.Release(), os.Remove(m.path))
+	return m.handle.Release()
 }

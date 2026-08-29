@@ -290,7 +290,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	}
 	timing.RowExtraction = collectionObservedElapsedSince(rowsStarted)
 	var constructionMatrix *columnVectorGraphConstructionMatrix
-	if typedSource != nil && len(rows) > 0 {
+	if typedSource != nil && len(rows) > 0 && mappedresource.NativeLittleEndian() {
 		constructionMatrix, err = stageColumnVectorGraphConstructionMatrix(c.db.ColumnAssetRootDir(), rows, def.Dimensions)
 		if err != nil {
 			if !errors.Is(err, mappedresource.ErrMmapUnsupported) {

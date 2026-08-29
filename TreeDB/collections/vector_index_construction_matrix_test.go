@@ -32,6 +32,9 @@ func TestColumnGraphRebuildConstructionMatrixLifecycle4438(t *testing.T) {
 	bound := false
 	restore := setColumnVectorGraphConstructionMatrixBoundTestHook(func(index *VectorIndex) {
 		bound = true
+		if matches, err := filepath.Glob(filepath.Join(d.ColumnAssetRootDir(), columnVectorGraphConstructionMatrixPattern)); err != nil || len(matches) != 0 {
+			t.Fatalf("live construction matrix remains linked matches=%v err=%v", matches, err)
+		}
 		if !index.constructionRowsFixed || index.frozenPrefixHeapRowStores != 0 || index.frozenPrefixBatches == 0 || len(index.vectorRows) != len(rows)*dimensions {
 			t.Fatalf("construction index fixed=%t heap_stores=%d batches=%d row_floats=%d", index.constructionRowsFixed, index.frozenPrefixHeapRowStores, index.frozenPrefixBatches, len(index.vectorRows))
 		}
