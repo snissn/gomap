@@ -775,7 +775,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertEqual(len(phase["resource_segments"]), 1)
         self.assertEqual(phase["resource_segments"][0]["end"]["pid"], 100)
 
-    def test_restart_verification_failure_preserves_process_segment_split(self) -> None:
+    def test_restart_verification_failure_splits_reused_pid_identity(self) -> None:
         old_start = {
             "captured": True, "rss_bytes": 100, "cpu_seconds": 2.0, "disk_bytes": 140,
             "availability": {}, "pid": 100, "process_identity": "old-process",
@@ -786,10 +786,10 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         }
         new_process = {
             "captured": True, "rss_bytes": 80, "cpu_seconds": 0.5,
-            "availability": {}, "pid": 101, "process_identity": "new-process",
+            "availability": {}, "pid": 100, "process_identity": "new-process",
         }
         workload = object.__new__(runner.TreeDBMinimaRunner)
-        workload.controller = SimpleNamespace(pid=101, last_shutdown_resource_end=old_end)
+        workload.controller = SimpleNamespace(pid=100, last_shutdown_resource_end=old_end)
         workload._phase_total_start = 100
         workload._phase_start = 200
         workload._phase_name = "restart_open_readiness"
@@ -812,9 +812,9 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertEqual(phase["resource_segments"][0], {"start": old_start, "end": old_end})
         self.assertEqual(phase["resource_segments"][1]["start"], {
             "captured": True, "rss_bytes": 0, "cpu_seconds": 0.0, "disk_bytes": 150,
-            "availability": {}, "pid": 101, "process_identity": "new-process",
+            "availability": {}, "pid": 100, "process_identity": "new-process",
         })
-        self.assertEqual(phase["resource_segments"][1]["end"]["pid"], 101)
+        self.assertEqual(phase["resource_segments"][1]["end"]["process_identity"], "new-process")
 
     def test_main_unexpected_service_exit_writes_nonqualifying_partial_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -562,7 +562,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         }]
         if self._phase_name == "restart_open_readiness" and self._phase_restart_old_end is not None:
             old_end = self._phase_restart_old_end
-            if endpoint.get("pid") != old_end["pid"]:
+            if (
+                endpoint.get("pid"),
+                endpoint.get("process_identity"),
+            ) != (old_end["pid"], old_end["process_identity"]):
                 new_start = {
                     **endpoint,
                     "rss_bytes": 0,
