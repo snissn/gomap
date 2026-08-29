@@ -164,6 +164,11 @@ class LexicalComparisonTest(unittest.TestCase):
                 records = lexical_runner.untracked_source_identity(root / "run")
             self.assertEqual([record["path"] for record in records], ["ignored.go"])
 
+    def test_hidden_tracked_paths_rejects_index_flags(self) -> None:
+        listed = b"H ordinary.py\x00h assumed.py\x00S skipped.py\x00"
+        with patch.object(lexical_runner, "git_bytes", return_value=listed):
+            self.assertEqual(lexical_runner.hidden_tracked_paths(), ["assumed.py", "skipped.py"])
+
     def test_retained_logs_replace_host_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             out_dir = Path(temporary)
@@ -181,6 +186,12 @@ class LexicalComparisonTest(unittest.TestCase):
         self.assertEqual(environment["LEXICAL_JVM_EXECUTION"], lexical_runner.LUCENE_JVM_EXECUTION)
         self.assertEqual(environment["PYTHONDONTWRITEBYTECODE"], "1")
         self.assertNotIn("-Xmx1g", environment["MAVEN_OPTS"])
+
+    def test_child_environment_drops_unrecorded_toolchain_overrides(self) -> None:
+        inherited = {"PATH": "/tools", "HOME": "/home/bench", "GOFLAGS": "-race", "JAVA_TOOL_OPTIONS": "-Xmx4g", "PYTHONPATH": "/override"}
+        with patch.dict(os.environ, inherited, clear=True):
+            environment = lexical_runner.child_environment({"GOWORK": "off"})
+        self.assertEqual(environment, {"PATH": "/tools", "HOME": "/home/bench", "GOWORK": "off"})
 
     def test_adapter_environment_suppresses_child_bytecode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

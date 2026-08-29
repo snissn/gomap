@@ -98,8 +98,25 @@ def untracked_source_identity(out_dir: Path) -> list[dict[str, Any]]:
         records.append({"path": relative.as_posix(), "kind": kind, "sha256": hashlib.sha256(content).hexdigest()})
     return records
 
+def hidden_tracked_paths() -> list[str]:
+    records = git_bytes("ls-files", "-v", "-z").split(b"\0")
+    hidden: list[str] = []
+    for record in records:
+        if not record:
+            continue
+        tag, separator, encoded_path = record.partition(b" ")
+        if not separator or len(tag) != 1:
+            raise RuntimeError("malformed git ls-files -v output")
+        marker = chr(tag[0])
+        if marker == "S" or marker.islower():
+            hidden.append(os.fsdecode(encoded_path))
+    return sorted(hidden)
+
 
 def source_snapshot(allow_dirty: bool, out_dir: Path) -> dict[str, Any]:
+    hidden_paths = hidden_tracked_paths()
+    if hidden_paths:
+        raise RuntimeError(f"tracked source paths use assume-unchanged/skip-worktree flags: {', '.join(hidden_paths)}")
     tracked_diff = git_bytes("diff", "--binary", "HEAD", "--")
     untracked_sources = untracked_source_identity(out_dir)
     modified = bool(tracked_diff or untracked_sources)
@@ -116,11 +133,23 @@ def source_snapshot(allow_dirty: bool, out_dir: Path) -> dict[str, Any]:
         "qualification_eligible": not modified,
     }
 
+CHILD_ENVIRONMENT_KEYS = (
+    "APPDATA", "COMSPEC", "GOCACHE", "GOMODCACHE", "GOROOT", "GOTOOLCHAIN",
+    "HOME", "HTTPS_PROXY", "HTTP_PROXY", "JAVA_HOME", "LANG", "LC_ALL",
+    "LOCALAPPDATA", "M2_HOME", "NO_PROXY", "PATH", "PATHEXT", "SSL_CERT_DIR",
+    "SSL_CERT_FILE", "SystemRoot", "TEMP", "TMP", "TMPDIR", "USERPROFILE", "WINDIR",
+)
+
+
+def child_environment(overrides: dict[str, str] | None = None) -> dict[str, str]:
+    environment = {key: os.environ[key] for key in CHILD_ENVIRONMENT_KEYS if key in os.environ}
+    if overrides:
+        environment.update(overrides)
+    return environment
+
 
 def run_command(command: list[str], cwd: Path, timeout: int, log_path: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    merged_env = os.environ.copy()
-    if env:
-        merged_env.update(env)
+    merged_env = child_environment(env)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.time()
     try:
