@@ -45,6 +45,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-dirty", action="store_true", help="development smoke only; marks the report ineligible for retained evidence")
     return parser.parse_args()
 
+def normalize_executable(value: str, initial_cwd: Path) -> str:
+    expanded = Path(value).expanduser()
+    has_path_component = expanded.is_absolute() or os.sep in value or (os.altsep is not None and os.altsep in value)
+    if not has_path_component:
+        return value
+    if not expanded.is_absolute():
+        expanded = initial_cwd / expanded
+    return str(expanded.resolve())
+
 def git_bytes(*args: str) -> bytes:
     result = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, check=False)
     if result.returncode != 0:
@@ -226,6 +235,7 @@ def adapter_command(engine_id: str, repetition: int, out_dir: Path, manifest: Pa
 
 def main() -> int:
     args = parse_args()
+    args.go_bin = normalize_executable(args.go_bin, Path.cwd())
     args.manifest = args.manifest.resolve()
     args.out_dir = args.out_dir.resolve()
     if args.repetitions < 3:

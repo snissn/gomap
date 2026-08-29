@@ -207,6 +207,8 @@ class LexicalComparisonTest(unittest.TestCase):
         self.assertEqual(bleve_command[0], selected)
         self.assertEqual(treedb_env["LEXICAL_GO_EXECUTABLE"], selected)
         self.assertEqual(bleve_env["LEXICAL_GO_EXECUTABLE"], selected)
+        self.assertEqual(lexical_runner.normalize_executable("./sdk/go/bin/go", Path("/workspace")), "/workspace/sdk/go/bin/go")
+        self.assertEqual(lexical_runner.normalize_executable("go", Path("/workspace")), "go")
 
     def test_reference_interprets_every_manifest_shape(self) -> None:
         self.assertEqual(self.expected["common"], [f"doc-{i:06d}" for i in (0, 1, 2, 3, 4, 5, 6, 7, 9, 8)])
