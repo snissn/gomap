@@ -81,9 +81,9 @@ public final class LuceneAdapter {
           doc.add(new StringField("id", source.id(), Field.Store.YES));
           doc.add(new SortedDocValuesField("id_sort", new BytesRef(source.id())));
           doc.add(new TextField("weighted_text", String.join(" ", source.title(), source.title(), source.title(), source.body()), Field.Store.NO));
-          doc.add(new TextField("title", source.title(), Field.Store.NO));
-          doc.add(new TextField("body", source.body(), Field.Store.NO));
-          doc.add(new StringField("tenant", source.tenant(), Field.Store.NO));
+          doc.add(new TextField("title", source.title(), Field.Store.YES));
+          doc.add(new TextField("body", source.body(), Field.Store.YES));
+          doc.add(new StringField("tenant", source.tenant(), Field.Store.YES));
           writer.addDocument(doc);
         }
         writer.commit();
@@ -140,7 +140,7 @@ public final class LuceneAdapter {
     payload.put("corpus", Map.of("document_count", documents.size(), "sha256", sha256(corpusRaw)));
     payload.put("command", List.of("mvn", "-q", "compile", "exec:java", "-Dexec.args=" + execArgs));
     payload.put("versions", Map.of("lucene", Version.LATEST.toString(), "java", System.getProperty("java.version"), "vm", System.getProperty("java.vm.name"), "platform", System.getProperty("os.name") + "/" + System.getProperty("os.arch")));
-    payload.put("config", Map.ofEntries(Map.entry("working_directory", System.getProperty("user.dir")), Map.entry("analyzer", "StandardAnalyzer"), Map.entry("similarity", "BM25(k1=1.2,b=0.75)"), Map.entry("weighted_field_materialization", "title repeated 3x then body for non-phrase scoring only"), Map.entry("phrase_fields", List.of("title", "body")), Map.entry("phrase_field_weights", Map.of("title", 3, "body", 1)), Map.entry("top_k", topK), Map.entry("tie_break", "score,id"), Map.entry("compound_file", false), Map.entry("merge_scheduler", "SerialMergeScheduler"), Map.entry("jvm_execution", System.getenv("LEXICAL_JVM_EXECUTION")), Map.entry("stored_fields", List.of("id")), Map.entry("build_timing_boundary", "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close")));
+    payload.put("config", Map.ofEntries(Map.entry("working_directory", System.getProperty("user.dir")), Map.entry("analyzer", "StandardAnalyzer"), Map.entry("similarity", "BM25(k1=1.2,b=0.75)"), Map.entry("weighted_field_materialization", "title repeated 3x then body for non-phrase scoring only"), Map.entry("phrase_fields", List.of("title", "body")), Map.entry("phrase_field_weights", Map.of("title", 3, "body", 1)), Map.entry("stored_source_fields", List.of("id", "title", "body", "tenant")), Map.entry("top_k", topK), Map.entry("tie_break", "score,id"), Map.entry("compound_file", false), Map.entry("merge_scheduler", "SerialMergeScheduler"), Map.entry("jvm_execution", System.getenv("LEXICAL_JVM_EXECUTION")), Map.entry("build_timing_boundary", "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close")));
     payload.put("environment", environmentEvidence(manifest, corpusPath, indexPath, outPath));
     payload.put("build", mapOfNullable("elapsed_nanos", buildElapsed, "docs_per_second", documents.size() * 1e9 / buildElapsed, "cpu", buildCpu, "peak_rss", Map.of("status", "unsupported", "reason", "Standard Java process APIs do not expose process-lifetime peak RSS"), "checkpointed", true));
     payload.put("storage", Map.of("durable_bytes", durableBytes, "wal_bytes", 0, "transient_bytes", 0));

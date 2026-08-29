@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import tempfile
 import unittest
@@ -77,12 +78,14 @@ class LexicalComparisonTest(unittest.TestCase):
                 "route": {"intended": True, "name": route_name, "fallback": False, "proof": copy.deepcopy(route_proof)},
                 "timed_out": False,
             })
+        config = ({"top_k": 10, "weights": {"title": 3, "body": 1}, "bm25f": {"k1": 1.2, "b": 0.75}, "stable_setting": "base", "build_timing_boundary": self.manifest["execution"]["build_timing_boundary"]} if engine_id == "treedb_text_v2" else {"top_k": 10, "tie_break": "score,id", "weighted_field_materialization": "title repeated 3x then body for non-phrase scoring only", "phrase_fields": ["title", "body"], "phrase_field_weights": {"title": 3, "body": 1}, "stable_setting": "base", "build_timing_boundary": self.manifest["execution"]["build_timing_boundary"]})
+        config["stored_source_fields"] = ["id", "title", "body", "tenant"]
         return {
             "schema_version": RESULT_SCHEMA, "status": "ok",
             "engine": {"id": engine_id, "family": "test", "name": engine_id, "version": "candidate-commit" if engine_id == "treedb_text_v2" else "pinned"},
             "repetition": repetition, "manifest_sha256": manifest_sha256(self.manifest),
             "corpus": {"document_count": 10_000, "sha256": self.manifest["corpus"]["sha256"]},
-            "command": ["adapter"], "versions": {"adapter": "pinned"}, "config": ({"top_k": 10, "weights": {"title": 3, "body": 1}, "bm25f": {"k1": 1.2, "b": 0.75}, "stable_setting": "base", "build_timing_boundary": self.manifest["execution"]["build_timing_boundary"]} if engine_id == "treedb_text_v2" else {"top_k": 10, "tie_break": "score,id", "weighted_field_materialization": "title repeated 3x then body for non-phrase scoring only", "phrase_fields": ["title", "body"], "phrase_field_weights": {"title": 3, "body": 1}, "stable_setting": "base", "build_timing_boundary": self.manifest["execution"]["build_timing_boundary"]}),
+            "command": ["adapter"], "versions": {"adapter": "pinned"}, "config": config,
             "environment": {
                 "contract": copy.deepcopy(self.manifest["environment"]),
                 "filesystem": {"runner_device_id": "1", "corpus_store_id": "1", "index_store_id": "1", "result_store_id": "1", "same_filesystem": True},
@@ -100,6 +103,15 @@ class LexicalComparisonTest(unittest.TestCase):
         self.assertEqual(sha256_bytes(payload), self.manifest["corpus"]["sha256"])
         self.assertEqual(normalize("ＲＥＦＵＮＤ Policy"), "refund policy")
         self.assertEqual(tokenize("Refund—POLICY_42"), ["refund", "policy", "42"])
+
+    def test_manifest_rejects_scoring_drift_from_adapter_contract(self) -> None:
+        mutated = copy.deepcopy(self.manifest)
+        mutated["analysis"]["bm25f"]["k1"] = 2.0
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "manifest.json"
+            path.write_text(json.dumps(mutated), encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, "adapter-bound frozen scoring contract"):
+                load_manifest(path)
 
     def test_untracked_source_identity_excludes_only_exact_output_subtree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -122,6 +134,15 @@ class LexicalComparisonTest(unittest.TestCase):
             with patch.object(lexical_runner, "ROOT", root), patch.object(lexical_runner, "git_bytes", return_value=b"run/raw.json\x00"):
                 removed = lexical_runner.untracked_source_identity(out_dir)
             self.assertEqual(removed, [])
+
+    def test_untracked_source_identity_includes_ignored_build_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ignored = root / "ignored.go"
+            ignored.write_text("package ignored", encoding="utf-8")
+            with patch.object(lexical_runner, "ROOT", root), patch.object(lexical_runner, "git_bytes", side_effect=[b"", b"ignored.go\x00"]):
+                records = lexical_runner.untracked_source_identity(root / "run")
+            self.assertEqual([record["path"] for record in records], ["ignored.go"])
 
     def test_retained_logs_replace_host_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

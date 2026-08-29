@@ -97,14 +97,14 @@ func main() {
 	tenant := bleve.NewTextFieldMapping()
 	title := bleve.NewTextFieldMapping()
 	title.Analyzer = "standard"
-	title.Store = false
+	title.Store = true
 	title.IncludeTermVectors = true
 	body := bleve.NewTextFieldMapping()
 	body.Analyzer = "standard"
-	body.Store = false
+	body.Store = true
 	body.IncludeTermVectors = true
 	tenant.Analyzer = "keyword"
-	tenant.Store = false
+	tenant.Store = true
 	tenant.IncludeTermVectors = false
 	docMapping.AddFieldMappingsAt("weighted_text", weightedText)
 	docMapping.AddFieldMappingsAt("title", title)
@@ -172,7 +172,7 @@ func main() {
 		"schema_version": resultSchema, "status": "ok", "engine": map[string]string{"id": "bleve", "family": "embedded_library", "name": "Bleve", "version": bleveVersion},
 		"repetition": *repetition, "manifest_sha256": hex.EncodeToString(manifestSum[:]), "corpus": map[string]any{"document_count": len(docs), "sha256": hex.EncodeToString(corpusSum[:])},
 		"command": command, "versions": map[string]string{"bleve": bleveVersion, "go": runtime.Version(), "platform": runtime.GOOS + "/" + runtime.GOARCH},
-		"config":      map[string]any{"working_directory": workingDirectory, "index_type": "scorch", "analyzer": "standard", "tenant_analyzer": "keyword", "weighted_field_materialization": "title repeated 3x then body for non-phrase scoring only", "phrase_fields": []string{"title", "body"}, "phrase_field_weights": map[string]float64{"title": 3, "body": 1}, "top_k": spec.Execution.TopK, "tie_break": "score,id", "store_fields": false, "term_vectors": true, "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close"},
+		"config":      map[string]any{"working_directory": workingDirectory, "index_type": "scorch", "analyzer": "standard", "tenant_analyzer": "keyword", "weighted_field_materialization": "title repeated 3x then body for non-phrase scoring only", "phrase_fields": []string{"title", "body"}, "phrase_field_weights": map[string]float64{"title": 3, "body": 1}, "stored_source_fields": []string{"id", "title", "body", "tenant"}, "top_k": spec.Execution.TopK, "tie_break": "score,id", "term_vectors": true, "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close"},
 		"environment": environment,
 		"build":       map[string]any{"elapsed_nanos": buildElapsed.Nanoseconds(), "docs_per_second": float64(len(docs)) / buildElapsed.Seconds(), "cpu": map[string]any{"status": "ok", "value": cpuNanos(after) - cpuNanos(before), "unit": "nanoseconds"}, "peak_rss": map[string]any{"status": "ok", "value": peakRSSBytes(finalUsage), "unit": "bytes"}, "checkpointed": true},
 		"storage":     map[string]int64{"durable_bytes": durable, "wal_bytes": 0, "transient_bytes": 0},

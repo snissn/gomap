@@ -148,6 +148,8 @@ accepted engine artifact contains:
   evidence; an unavailable runtime metric is `status=unsupported` with a reason,
   never a bare null;
 - checkpointed durable bytes separately from WAL and transient bytes;
+- every durable-footprint row includes the full logical `id`, `title`, `body`,
+  and `tenant` source fields; generated weighted fields remain index-only;
 - raw query samples and consolidated p50/p95/p99;
 - ordered result IDs and digests before and after reopen;
 - intended-route proof and explicit no-fallback/no-timeout state;

@@ -33,6 +33,16 @@ def load_manifest(path: Path) -> dict[str, Any]:
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != MANIFEST_SCHEMA:
         raise ValidationError(f"manifest schema must be {MANIFEST_SCHEMA}")
+    frozen_analysis = {
+        "normalization": "Unicode NFKC then lowercase",
+        "tokenization": "contiguous ASCII letters or digits",
+        "stopwords": [],
+        "fields": [{"name": "title", "weight": 3.0}, {"name": "body", "weight": 1.0}],
+        "bm25f": {"k1": 1.2, "b": 0.75, "idf": "ln(1 + (N - df + 0.5) / (df + 0.5))", "field_length": "tf / (1 - b + b * length / average_field_length)", "combination": "sum(field_weight * normalized_field_tf), then one BM25 saturation per term"},
+        "external_weighted_field": "non-phrase scoring uses title tokens repeated exactly 3 times followed by body tokens; frozen corpus keeps title/body lengths equal per document so this is algebraically identical to pinned BM25F; phrase matching uses separate title/body position streams with weights 3:1 and never crosses fields or title copies",
+    }
+    if manifest.get("analysis") != frozen_analysis:
+        raise ValidationError("manifest analysis must match the adapter-bound frozen scoring contract")
     query_ids = [query.get("id") for query in manifest.get("queries", [])]
     if len(query_ids) != len(set(query_ids)) or not query_ids:
         raise ValidationError("manifest query IDs must be non-empty and unique")
@@ -285,6 +295,7 @@ def validate_result(artifact: dict[str, Any], manifest: dict[str, Any], expected
     _require(isinstance(artifact.get("versions"), dict) and bool(artifact["versions"]), f"{prefix}: versions missing")
     _require(isinstance(artifact.get("config"), dict) and bool(artifact["config"]), f"{prefix}: configuration missing")
     _require(artifact["config"].get("top_k") == manifest["execution"]["top_k"], f"{prefix}: top-K config mismatch")
+    _require(artifact["config"].get("stored_source_fields") == ["id", "title", "body", "tenant"], f"{prefix}: durable footprint omits logical source fields")
     _require(artifact["config"].get("build_timing_boundary") == manifest["execution"]["build_timing_boundary"], f"{prefix}: build timing boundary mismatch")
     _require(artifact["config"].get("tie_break") == "score,id" or engine_id == "treedb_text_v2", f"{prefix}: tie-break config mismatch")
     if engine_id == "treedb_text_v2":

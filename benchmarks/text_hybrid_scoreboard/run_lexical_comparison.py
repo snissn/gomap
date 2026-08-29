@@ -54,7 +54,10 @@ def git_value(*args: str) -> str:
 
 
 def untracked_source_identity(out_dir: Path) -> list[dict[str, Any]]:
-    raw_paths = git_bytes("ls-files", "--others", "--exclude-standard", "-z")
+    raw_paths = b"".join((
+        git_bytes("ls-files", "--others", "--exclude-standard", "-z"),
+        git_bytes("ls-files", "--others", "--ignored", "--exclude-standard", "-z"),
+    ))
     out_resolved = out_dir.resolve()
     try:
         out_relative = out_resolved.relative_to(ROOT.resolve())
@@ -63,7 +66,7 @@ def untracked_source_identity(out_dir: Path) -> list[dict[str, Any]]:
     if out_relative == Path("."):
         raise RuntimeError("lexical comparison output directory cannot be the repository root")
     records = []
-    for encoded in sorted(path for path in raw_paths.split(b"\0") if path):
+    for encoded in sorted(set(path for path in raw_paths.split(b"\0") if path)):
         relative = Path(os.fsdecode(encoded))
         if out_relative is not None and (relative == out_relative or out_relative in relative.parents):
             continue
