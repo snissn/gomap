@@ -2277,7 +2277,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 			return nil, nil, fmt.Errorf("retained variant partition %d exact pack bytes: %w", in.PartitionID, err)
 		}
 		graph := columnVectorGraphManifestSnapshot{IndexName: buildDef.Name, Field: buildDef.Field, Metric: buildDef.Metric, Encoding: buildDef.Encoding, Dimensions: buildDef.Dimensions, M: buildDef.M, EfConstruction: buildDef.EfConstruction, EfSearch: buildDef.EfSearch, BaseManifestGeneration: manifest.SourceGeneration, BaseManifestChecksum: manifest.SourceChecksum, BaseSchemaHash: manifest.SourceSchemaHash, GraphSchemaHash: cfg.SchemaHash, RowCount: len(rows)}
-		pack, err := buildColumnHNSWSearchPackInput(buildDef, graph, rows)
+		pack, err := buildColumnHNSWSearchPackInputWithoutVectors(buildDef, graph, rows)
 		if err != nil {
 			return nil, nil, fmt.Errorf("retained variant partition %d pack input: %w", in.PartitionID, err)
 		}
@@ -2289,7 +2289,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 			pack.HasAuxiliaryNavigation = true
 			pack.AuxiliaryNavigation = columnHNSWSearchPackLayerInput{Offsets: auxiliary.Offsets, Neighbors: auxiliary.Neighbors}
 		}
-		raw, err := encodeColumnHNSWSearchPack(pack)
+		raw, err := encodeColumnHNSWSearchPackRows(pack, rows)
 		if err != nil {
 			return nil, nil, fmt.Errorf("retained variant partition %d encode pack: %w", in.PartitionID, err)
 		}
