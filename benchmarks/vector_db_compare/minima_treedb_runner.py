@@ -731,7 +731,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         correlation.pop("before_stats", None)
         correlation.pop("after_stats", None)
         correlation["stats_retention"] = "compact_completed"
-        encoded_bytes = len(json.dumps(correlation, separators=(",", ":"), allow_nan=False).encode())
+        encoded = json.dumps(correlation, indent=2, sort_keys=True, allow_nan=False)
+        encoded_bytes = len(encoded.replace("\n", "\n        ").encode())
         if encoded_bytes > COMPACT_BATCH_CORRELATION_MAX_BYTES:
             raise RuntimeError(
                 f"compact TreeDB batch correlation exceeds {COMPACT_BATCH_CORRELATION_MAX_BYTES} bytes"

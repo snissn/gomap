@@ -517,6 +517,20 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "cannot be compacted"):
             runner.TreeDBMinimaRunner._compact_completed_batch_correlation(captured)
         self.assertIn("before_stats", captured)
+        near_limit = {
+            "sequence": 0,
+            "operation": "initial_batch_insert",
+            "scenario": "large",
+            "batch_start": 0,
+            "rows": 1,
+            "outcome": "completed",
+            "profile_capture": {"status": "not_triggered"},
+            "before_public_count": {"status": "failed", "error": "x" * 1617},
+        }
+        minified = json.dumps(near_limit, separators=(",", ":"), allow_nan=False)
+        self.assertLessEqual(len(minified.encode()), runner.COMPACT_BATCH_CORRELATION_MAX_BYTES)
+        with self.assertRaisesRegex(RuntimeError, "exceeds"):
+            runner.TreeDBMinimaRunner._compact_completed_batch_correlation(near_limit)
         duplicate = {
             "sequence": 0,
             "operation": "initial_batch_insert",
