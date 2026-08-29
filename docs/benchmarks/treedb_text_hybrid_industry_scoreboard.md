@@ -190,9 +190,10 @@ hybrid artifacts remain `$RUN_DIR/scoreboard.json`, `$RUN_DIR/scoreboard.md`,
 TreeDB Go benchmark logs, and `$RUN_DIR/context.txt`.
 
 The tracked `artifacts/4330-lexical-comparison-v1/` run was measured from
-reviewed source commit `662bfdd484b951f4b34469f2ef7dedbcc8abcae6` and first
-retained at evidence commit `52a65d3da`. It includes the corrected
+reviewed source commit `0bc76c31e42cac294f2686550104f73d07dd25a9` and first
+retained at evidence commit `652813607`. It includes the corrected
 query-reopen, build-boundary, steady-state warmup, serial Lucene execution,
+adapter-bound scoring, ignored-input provenance, source-complete storage,
 phrase-position, non-scoring-filter, process-lifetime RSS, typed CPU,
 dirty-headline exclusion, and path-sanitization contracts.
 
