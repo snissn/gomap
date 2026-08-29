@@ -507,6 +507,16 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.operations["manifest_ordered"] = True
         workload.diagnostics_dir = None
         self.assertEqual(workload._batch_correlation_contract()["record_count"], 0)
+        captured = {
+            "outcome": "completed",
+            "capture_reason": "slow",
+            "before_stats": {"wide": True},
+            "after_stats": {"wide": True},
+            "profile_capture": {"status": "not_triggered"},
+        }
+        with self.assertRaisesRegex(RuntimeError, "cannot be compacted"):
+            runner.TreeDBMinimaRunner._compact_completed_batch_correlation(captured)
+        self.assertIn("before_stats", captured)
 
     def test_slow_completed_upsert_retains_full_stats_and_profile_manifest(self) -> None:
         workload = self.workload(self.response(), diagnostics_dir=Path("diagnostics"))

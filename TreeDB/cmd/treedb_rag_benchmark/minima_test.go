@@ -1224,6 +1224,19 @@ func TestMinimaBatchCorrelationContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw.UpsertBatchCorrelations[0] = json.RawMessage(
+		`{"outcome":"completed","stats_retention":"compact_completed","capture_reason":"slow","profile_capture":{"status":"not_triggered"}}`,
+	)
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false); err == nil {
+		t.Fatal("compact batch correlation declared a diagnostic capture reason")
+	}
+	raw.UpsertBatchCorrelations[0] = json.RawMessage(
+		strings.Repeat(" ", minimaCompactBatchCorrelationMaxBytes+1) +
+			`{"outcome":"completed","stats_retention":"compact_completed","profile_capture":{"status":"not_triggered"}}`,
+	)
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false); err == nil {
+		t.Fatal("oversized raw compact batch correlation was accepted")
+	}
+	raw.UpsertBatchCorrelations[0] = json.RawMessage(
 		`{"outcome":"completed","stats_retention":"compact_completed","before_stats":{"wide":true},"profile_capture":{"status":"not_triggered"}}`,
 	)
 	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, false); err == nil {

@@ -718,6 +718,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
 
     @staticmethod
     def _compact_completed_batch_correlation(correlation: dict[str, Any]) -> None:
+        if correlation.get("capture_reason"):
+            raise RuntimeError("captured TreeDB batch correlation cannot be compacted")
         correlation.pop("before_stats", None)
         correlation.pop("after_stats", None)
         correlation["stats_retention"] = "compact_completed"
@@ -741,7 +743,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         full_records = 0
         for correlation in self.batch_correlations:
             if correlation.get("stats_retention") == "compact_completed":
-                if correlation.get("outcome") != "completed" or \
+                if correlation.get("outcome") != "completed" or correlation.get("capture_reason") or \
                         correlation.get("profile_capture", {}).get("status") != "not_triggered" or \
                         "before_stats" in correlation or "after_stats" in correlation:
                     raise RuntimeError("compact TreeDB batch correlation retained diagnostic evidence")

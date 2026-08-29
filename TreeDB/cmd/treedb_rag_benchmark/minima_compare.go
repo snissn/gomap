@@ -770,18 +770,10 @@ func validateMinimaTreeDBBatchCorrelations(manifest minimaManifest, raw minimaRa
 		}
 		switch correlation.StatsRetention {
 		case "compact_completed":
-			var decoded any
-			if err := json.Unmarshal(encoded, &decoded); err != nil {
-				return fmt.Errorf("minima artifact: decode compact TreeDB batch correlation: %w", err)
-			}
-			canonical, err := json.Marshal(decoded)
-			if err != nil {
-				return fmt.Errorf("minima artifact: encode compact TreeDB batch correlation: %w", err)
-			}
-			if correlation.Outcome != "completed" ||
+			if correlation.Outcome != "completed" || correlation.CaptureReason != "" ||
 				len(correlation.BeforeStats) != 0 || len(correlation.AfterStats) != 0 ||
 				correlation.ProfileCapture.Status != "not_triggered" ||
-				len(canonical) > minimaCompactBatchCorrelationMaxBytes {
+				len(encoded) > minimaCompactBatchCorrelationMaxBytes {
 				return errors.New("minima artifact: compact TreeDB batch correlation is invalid")
 			}
 			compact++
