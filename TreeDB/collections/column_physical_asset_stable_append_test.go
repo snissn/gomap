@@ -53,6 +53,66 @@ func stableColumnAppendTestPath(t *testing.T, rootDir string, cfg ColumnStoreCon
 	return path
 }
 
+func TestColumnPhysicalAssetReservedPayloadStableOpenRejectsReplacement4429(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable column append requires exact relative namespace support")
+	}
+	rootDir := t.TempDir()
+	cfg := stableColumnAppendTestConfig("stable-reserved-replacement")
+	appender, err := newColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir, cfg, 4429, rootpublication.NewIdentityPinRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = appender.abort()
+		}
+	}()
+
+	orphanName := appender.stableChildName + ".orphan"
+	if err := rootpublication.RenameStableChildFile(appender.stableParent, appender.stableChildName, orphanName); err != nil {
+		t.Fatal(err)
+	}
+	replacement := []byte("replacement-must-remain-untouched")
+	file, err := rootpublication.OpenStableChildFile(appender.stableParent, appender.stableChildName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write(replacement); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	emitted := false
+	if _, err := appender.appendKindWithReservedPayload(8, ColumnAssetKindTCS1HNSWSearchPack, 1, 1, 8, func(*columnAssetReservedPayload) error {
+		emitted = true
+		return nil
+	}); !errors.Is(err, rootpublication.ErrResourceConflict) {
+		t.Fatalf("reserved append error=%v want stable child conflict", err)
+	}
+	if emitted || !appender.failed || len(appender.stableRefs) != 0 {
+		t.Fatalf("reserved append emitted=%t failed=%t refs=%v want no emission, failed, no refs", emitted, appender.failed, appender.stableRefs)
+	}
+	got, err := os.ReadFile(appender.assetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, replacement) {
+		t.Fatalf("replacement changed: got=%q want=%q", got, replacement)
+	}
+	if err := appender.abort(); err != nil {
+		t.Fatal(err)
+	}
+	closed = true
+	if appender.file != nil || appender.stableParent != nil {
+		t.Fatalf("failed reserved append retained handles file=%v parent=%v", appender.file, appender.stableParent)
+	}
+}
+
 func TestAppendColumnPhysicalAssetsWithStableResourcesValidationFailureRestoresAlignedAppendStart(t *testing.T) {
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		t.Skip("stable column append requires exact relative namespace support")

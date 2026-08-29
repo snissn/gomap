@@ -1677,7 +1677,18 @@ func (a *columnPhysicalAssetSegmentAppender) appendKindWithReservedPayload(lengt
 
 func (a *columnPhysicalAssetSegmentAppender) openReservedPayloadFile() (*os.File, error) {
 	if a.stableParent != nil && a.stableChildName != "" {
-		return rootpublication.OpenStableChildFile(a.stableParent, a.stableChildName, os.O_RDWR, 0o600)
+		file, err := rootpublication.OpenStableChildFile(a.stableParent, a.stableChildName, os.O_RDWR, 0o600)
+		if err != nil {
+			return nil, err
+		}
+		identity, err := rootpublication.StableIdentityFromFile(file)
+		if err == nil && !rootpublication.SamePhysicalIdentity(identity, a.stableChildIdentity) {
+			err = fmt.Errorf("%w: stable reserved payload child identity changed", rootpublication.ErrResourceConflict)
+		}
+		if err != nil {
+			return nil, errors.Join(err, file.Close())
+		}
+		return file, nil
 	}
 	return os.OpenFile(a.assetPath, os.O_RDWR, 0o600)
 }
