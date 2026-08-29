@@ -226,6 +226,9 @@ class LexicalComparisonTest(unittest.TestCase):
         self.assertEqual(bleve_env["GOENV"], "off")
         _, _, lucene_env = lexical_runner.adapter_command("lucene", 1, root, HERE / "lexical_manifest.json", root / "corpus.tsv", "source", selected)
         self.assertEqual(lucene_env["MAVEN_SKIP_RC"], "1")
+        sqlite_command, _, sqlite_env = lexical_runner.adapter_command("sqlite_fts5", 1, root, HERE / "lexical_manifest.json", root / "corpus.tsv", "source", selected)
+        self.assertEqual(sqlite_command[1], "-s")
+        self.assertEqual(sqlite_env["PYTHONNOUSERSITE"], "1")
         self.assertEqual(lexical_runner.normalize_executable("./sdk/go/bin/go", Path("/workspace")), "/workspace/sdk/go/bin/go")
         self.assertEqual(lexical_runner.normalize_executable("go", Path("/workspace")), "go")
 

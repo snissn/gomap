@@ -259,7 +259,7 @@ def adapter_command(engine_id: str, repetition: int, out_dir: Path, manifest: Pa
     if engine_id == "bleve":
         return [go_bin, "run", ".", *common, "--index", str(index)], isolated_project(engine_id, out_dir), {"GOWORK": "off", "GOENV": "off", "LEXICAL_GO_EXECUTABLE": go_bin}
     if engine_id == "sqlite_fts5":
-        return [sys.executable, str(HERE / "sqlite_fts5_bench.py"), *common, "--db", str(index.with_suffix(".sqlite3"))], ROOT, {}
+        return [sys.executable, "-s", str(HERE / "sqlite_fts5_bench.py"), *common, "--db", str(index.with_suffix(".sqlite3"))], ROOT, {"PYTHONNOUSERSITE": "1"}
     raise AssertionError(engine_id)
 
 
