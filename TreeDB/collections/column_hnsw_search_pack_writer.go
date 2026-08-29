@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 
+	internalcrc "github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
@@ -346,6 +348,9 @@ func validateColumnHNSWSearchPackAssetPayloadWithManager(rootDir string, ref Col
 		ResourcePath:   path,
 	})
 	if err != nil {
+		if errors.Is(err, mappedresource.ErrMmapUnsupported) {
+			return validateColumnHNSWSearchPackAssetPayloadDirectFile(path, ref, graph, def)
+		}
 		return err
 	}
 	view, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, handle, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{
@@ -358,6 +363,105 @@ func validateColumnHNSWSearchPackAssetPayloadWithManager(rootDir string, ref Col
 	}
 	validateErr := validateColumnHNSWSearchPackPreparedView(view, graph, def)
 	return errors.Join(validateErr, view.Close())
+}
+
+// validateColumnHNSWSearchPackAssetPayloadDirectFile is the bounded fallback
+// for platforms which explicitly cannot mmap. It reads only the fixed header
+// and directory, then streams checksums over the referenced file range.
+func validateColumnHNSWSearchPackAssetPayloadDirectFile(path string, ref ColumnAssetRef, graph columnVectorGraphManifestSnapshot, def VectorIndexDefinition) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if ref.Offset < 0 || ref.Length < columnHNSWSearchPackHeaderSize || ref.Offset > info.Size() || ref.Length > info.Size()-ref.Offset {
+		return fmt.Errorf("collections: hnsw search pack file range offset=%d length=%d outside size=%d", ref.Offset, ref.Length, info.Size())
+	}
+	prefix := make([]byte, columnHNSWSearchPackHeaderSizeV2)
+	if err := readColumnHNSWSearchPackFileAt(file, ref.Offset, prefix[:columnHNSWSearchPackHeaderSize]); err != nil {
+		return err
+	}
+	headerSize := columnHNSWSearchPackHeaderSize
+	switch hnswPackU16(prefix, columnHNSWSearchPackHeaderVersionOffset) {
+	case columnHNSWSearchPackVersionV1:
+	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3:
+		headerSize = columnHNSWSearchPackHeaderSizeV2
+		if err := readColumnHNSWSearchPackFileAt(file, ref.Offset+columnHNSWSearchPackHeaderSize, prefix[columnHNSWSearchPackHeaderSize:headerSize]); err != nil {
+			return err
+		}
+	}
+	directoryLength := hnswPackU64(prefix, columnHNSWSearchPackHeaderDirectoryLengthOffset)
+	if directoryLength > uint64(ref.Length-int64(headerSize)) || directoryLength > uint64(math.MaxInt-headerSize) {
+		return fmt.Errorf("collections: hnsw search pack directory length=%d outside asset", directoryLength)
+	}
+	metadata := make([]byte, headerSize+int(directoryLength))
+	if err := readColumnHNSWSearchPackFileAt(file, ref.Offset, metadata); err != nil {
+		return err
+	}
+	pack, _, err := decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(nil, metadata, uint64(ref.Length), columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{
+		ManifestGeneration: graph.BaseManifestGeneration,
+		ManifestChecksum:   graph.BaseManifestChecksum,
+		SchemaHash:         graph.BaseSchemaHash,
+	}}, false)
+	if err != nil {
+		return err
+	}
+	if checksum, err := columnHNSWSearchPackFileRangeChecksum(file, ref.Offset, ref.Length); err != nil {
+		return err
+	} else if checksum != uint32(ref.Checksum) {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 checksum=%08x want %08x", checksum, uint32(ref.Checksum))
+	}
+	for _, section := range pack.Sections {
+		if checksum, err := columnHNSWSearchPackFileRangeChecksum(file, ref.Offset+int64(section.Offset), int64(section.Length)); err != nil {
+			return err
+		} else if checksum != section.Checksum {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 section %s[%d] checksum=%08x want %08x", section.Kind, section.Index, checksum, section.Checksum)
+		}
+	}
+	return validateColumnHNSWSearchPackPreparedView(&columnHNSWSearchPackPreparedView{Header: pack.Header, Sections: pack.Sections}, graph, def)
+}
+
+func readColumnHNSWSearchPackFileAt(file *os.File, offset int64, dst []byte) error {
+	for len(dst) > 0 {
+		n, err := file.ReadAt(dst, offset)
+		offset += int64(n)
+		dst = dst[n:]
+		if err != nil {
+			if err == io.EOF && len(dst) == 0 {
+				return nil
+			}
+			return err
+		}
+		if n == 0 {
+			return io.ErrUnexpectedEOF
+		}
+	}
+	return nil
+}
+
+func columnHNSWSearchPackFileRangeChecksum(file *os.File, offset, length int64) (uint32, error) {
+	if offset < 0 || length < 0 {
+		return 0, errors.New("collections: negative hnsw search pack checksum range")
+	}
+	var checksum uint32
+	buffer := make([]byte, 64<<10)
+	for length > 0 {
+		chunk := int64(len(buffer))
+		if length < chunk {
+			chunk = length
+		}
+		if err := readColumnHNSWSearchPackFileAt(file, offset, buffer[:chunk]); err != nil {
+			return 0, err
+		}
+		checksum = internalcrc.Update(checksum, buffer[:chunk])
+		offset += chunk
+		length -= chunk
+	}
+	return checksum, nil
 }
 
 func validateColumnHNSWSearchPackPreparedView(pack *columnHNSWSearchPackPreparedView, graph columnVectorGraphManifestSnapshot, def VectorIndexDefinition) error {

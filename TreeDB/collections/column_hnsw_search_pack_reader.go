@@ -232,6 +232,14 @@ func decodeColumnHNSWSearchPackEnvelope(raw []byte, opts columnHNSWSearchPackDec
 }
 
 func decodeColumnHNSWSearchPackEnvelopeWithContext(ctx context.Context, raw []byte, opts columnHNSWSearchPackDecodeOptions) (columnHNSWSearchPack, columnHNSWSearchPackDecodeOptions, error) {
+	return decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx, raw, uint64(len(raw)), opts, true)
+}
+
+// decodeColumnHNSWSearchPackEnvelopeMetadataWithContext decodes the bounded
+// header/directory prefix used by the direct-file validator. Full decodes keep
+// validating section payload checksums here; the direct-file path streams them
+// from disk instead.
+func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, raw []byte, totalLength uint64, opts columnHNSWSearchPackDecodeOptions, validatePayloadChecksums bool) (columnHNSWSearchPack, columnHNSWSearchPackDecodeOptions, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -266,9 +274,8 @@ func decodeColumnHNSWSearchPackEnvelopeWithContext(ctx context.Context, raw []by
 	if flags := hnswPackU16(raw, columnHNSWSearchPackHeaderFlagsOffset); flags != 0 {
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 unsupported flags=0x%x", flags)
 	}
-	totalLength := hnswPackU64(raw, columnHNSWSearchPackHeaderTotalLengthOffset)
-	if totalLength != uint64(len(raw)) {
-		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 length=%d want header total_length=%d", len(raw), totalLength)
+	if got := hnswPackU64(raw, columnHNSWSearchPackHeaderTotalLengthOffset); got != totalLength {
+		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 length=%d want header total_length=%d", totalLength, got)
 	}
 	rows64 := hnswPackU64(raw, columnHNSWSearchPackHeaderRowsOffset)
 	dims32 := hnswPackU32(raw, columnHNSWSearchPackHeaderDimensionsOffset)
@@ -385,8 +392,20 @@ func decodeColumnHNSWSearchPackEnvelopeWithContext(ctx context.Context, raw []by
 		}
 		sections[i] = section
 	}
-	if err := validateColumnHNSWSearchPackSectionDirectoryWithContext(ctx, raw, sections, dataOffset); err != nil {
+	if err := validateColumnHNSWSearchPackSectionDirectoryLayoutWithContext(ctx, totalLength, sections, dataOffset); err != nil {
 		return columnHNSWSearchPack{}, opts, err
+	}
+	if validatePayloadChecksums {
+		for _, section := range sections {
+			payload := raw[section.Offset : section.Offset+section.Length]
+			checksum, err := columnHNSWSearchPackChecksumWithContext(ctx, payload)
+			if err != nil {
+				return columnHNSWSearchPack{}, opts, err
+			}
+			if checksum != section.Checksum {
+				return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 section %s[%d] checksum=%08x want %08x", section.Kind, section.Index, checksum, section.Checksum)
+			}
+		}
 	}
 	pack := columnHNSWSearchPack{
 		Header: columnHNSWSearchPackHeader{
@@ -440,6 +459,23 @@ func columnHNSWSearchPackChecksumWithContext(ctx context.Context, raw []byte) (u
 }
 
 func validateColumnHNSWSearchPackSectionDirectoryWithContext(ctx context.Context, raw []byte, sections []columnHNSWSearchPackSection, dataOffset uint64) error {
+	if err := validateColumnHNSWSearchPackSectionDirectoryLayoutWithContext(ctx, uint64(len(raw)), sections, dataOffset); err != nil {
+		return err
+	}
+	for _, section := range sections {
+		payload := raw[section.Offset : section.Offset+section.Length]
+		checksum, err := columnHNSWSearchPackChecksumWithContext(ctx, payload)
+		if err != nil {
+			return err
+		}
+		if checksum != section.Checksum {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 section %s[%d] checksum=%08x want %08x", section.Kind, section.Index, checksum, section.Checksum)
+		}
+	}
+	return nil
+}
+
+func validateColumnHNSWSearchPackSectionDirectoryLayoutWithContext(ctx context.Context, totalLength uint64, sections []columnHNSWSearchPackSection, dataOffset uint64) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -460,8 +496,8 @@ func validateColumnHNSWSearchPackSectionDirectoryWithContext(ctx context.Context
 		if !columnHNSWSearchPackKnownSection(section.Kind) {
 			return fmt.Errorf("collections: hnsw_search_pack_v1 unknown section kind=%d", section.Kind)
 		}
-		if section.Offset < dataOffset || section.Offset > uint64(len(raw)) || section.Length > uint64(len(raw))-section.Offset {
-			return fmt.Errorf("collections: hnsw_search_pack_v1 section %s[%d] bounds offset=%d length=%d total=%d", section.Kind, section.Index, section.Offset, section.Length, len(raw))
+		if section.Offset < dataOffset || section.Offset > totalLength || section.Length > totalLength-section.Offset {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 section %s[%d] bounds offset=%d length=%d total=%d", section.Kind, section.Index, section.Offset, section.Length, totalLength)
 		}
 		if section.Offset%uint64(section.Alignment) != 0 {
 			return fmt.Errorf("collections: hnsw_search_pack_v1 section %s[%d] offset=%d is not aligned to %d", section.Kind, section.Index, section.Offset, section.Alignment)
@@ -474,14 +510,6 @@ func validateColumnHNSWSearchPackSectionDirectoryWithContext(ctx context.Context
 			return fmt.Errorf("collections: hnsw_search_pack_v1 duplicate section %s[%d]", section.Kind, section.Index)
 		}
 		seen[key] = struct{}{}
-		payload := raw[section.Offset : section.Offset+section.Length]
-		checksum, err := columnHNSWSearchPackChecksumWithContext(ctx, payload)
-		if err != nil {
-			return err
-		}
-		if checksum != section.Checksum {
-			return fmt.Errorf("collections: hnsw_search_pack_v1 section %s[%d] checksum=%08x want %08x", section.Kind, section.Index, checksum, section.Checksum)
-		}
 		ranges = append(ranges, columnHNSWSearchPackSectionRange{start: section.Offset, end: section.Offset + section.Length, section: section})
 	}
 	slices.SortFunc(ranges, func(a, b columnHNSWSearchPackSectionRange) int {

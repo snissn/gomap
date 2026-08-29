@@ -164,6 +164,51 @@ func TestColumnHNSWSearchPackPreparedAssetValidationMapped4429(t *testing.T) {
 	}
 }
 
+func TestColumnHNSWSearchPackPreparedAssetValidationDirectFile4429(t *testing.T) {
+	input := testColumnHNSWSearchPackInput2312()
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootDir := t.TempDir()
+	cfg := ColumnStoreConfig{Enabled: true, AssetManager: &ColumnAssetManagerConfig{Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "hnsw-direct-validation-4429"}}
+	appender, err := newColumnPhysicalAssetSegmentAppender(rootDir, cfg, 4429)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := appender.appendKindWithAlignment(raw, ColumnAssetKindTCS1HNSWSearchPack, input.BaseIdentity.ManifestGeneration, 77, int64(columnHNSWSearchPackAlignment))
+	if closeErr := appender.close(); err != nil || closeErr != nil {
+		t.Fatalf("append/close hnsw pack err=%v close=%v", err, closeErr)
+	}
+	path, err := columnAssetSegmentPath(rootDir, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := columnVectorGraphManifestSnapshot{RowCount: input.Rows, BaseManifestGeneration: input.BaseIdentity.ManifestGeneration, BaseManifestChecksum: input.BaseIdentity.ManifestChecksum, BaseSchemaHash: input.BaseIdentity.SchemaHash}
+	def := VectorIndexDefinition{Dimensions: input.Dimensions, M: input.M, EfConstruction: input.EfConstruction, EfSearch: input.EfSearch}
+	if err := validateColumnHNSWSearchPackAssetPayloadDirectFile(path, ref, graph, def); err != nil {
+		t.Fatal(err)
+	}
+
+	corrupt := append([]byte(nil), raw...)
+	corrupt[len(corrupt)/2] ^= 1
+	writeColumnVectorGraphAssetRawForTest2041(t, rootDir, ref, corrupt)
+	if err := validateColumnHNSWSearchPackAssetPayloadDirectFile(path, ref, graph, def); err == nil {
+		t.Fatal("corrupt payload passed direct-file validation")
+	}
+	corrupt = append([]byte(nil), raw...)
+	corrupt[columnHNSWSearchPackHeaderSize] ^= 1
+	writeColumnVectorGraphAssetRawForTest2041(t, rootDir, ref, corrupt)
+	if err := validateColumnHNSWSearchPackAssetPayloadDirectFile(path, ref, graph, def); err == nil {
+		t.Fatal("corrupt directory passed direct-file validation")
+	}
+	writeColumnVectorGraphAssetRawForTest2041(t, rootDir, ref, raw)
+	graph.BaseManifestChecksum++
+	if err := validateColumnHNSWSearchPackAssetPayloadDirectFile(path, ref, graph, def); err == nil {
+		t.Fatal("base identity mismatch passed direct-file validation")
+	}
+}
+
 func TestColumnHNSWSearchPackRowEncodingRejectsInvalidVectors4420(t *testing.T) {
 	input := testColumnHNSWSearchPackInput2312()
 	input.NormalizedVectors = nil
