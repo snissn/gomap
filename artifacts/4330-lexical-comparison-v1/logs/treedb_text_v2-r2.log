@@ -1,6 +1,6 @@
 command=go run ./benchmarks/text_hybrid_scoreboard/treedb_adapter --manifest $REPO/benchmarks/text_hybrid_scoreboard/lexical_manifest.json --corpus $RUN/corpus.tsv --out $RUN/raw/treedb_text_v2-r2.json --repetition 2 --db $RUN/indexes/treedb_text_v2-r2
 cwd=$REPO
-started_unix=1788022175.9585779
+started_unix=1788023270.787828
 returncode=0
 
 [stdout]

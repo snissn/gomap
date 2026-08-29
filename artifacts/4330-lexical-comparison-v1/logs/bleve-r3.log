@@ -1,6 +1,6 @@
 command=go run . --manifest $REPO/benchmarks/text_hybrid_scoreboard/lexical_manifest.json --corpus $RUN/corpus.tsv --out $RUN/raw/bleve-r3.json --repetition 3 --index $RUN/indexes/bleve-r3
 cwd=$RUN/dependency_work/bleve_adapter
-started_unix=1788022197.59314
+started_unix=1788023295.600395
 returncode=0
 
 [stdout]
