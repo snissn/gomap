@@ -63,6 +63,7 @@ public final class LuceneAdapter {
     int documentCount = manifest.at("/corpus/document_count").asInt();
     if (documents.size() != documentCount) throw new IllegalArgumentException("corpus document count drift");
     deleteTree(indexPath);
+    Files.createDirectories(outPath.getParent());
     Files.createDirectories(indexPath);
 
     long cpuBefore = processCpuNanos();
@@ -77,8 +78,7 @@ public final class LuceneAdapter {
           Document doc = new Document();
           doc.add(new StringField("id", source.id(), Field.Store.YES));
           doc.add(new SortedDocValuesField("id_sort", new BytesRef(source.id())));
-          doc.add(new TextField("title", source.title(), Field.Store.NO));
-          doc.add(new TextField("body", source.body(), Field.Store.NO));
+          doc.add(new TextField("weighted_text", String.join(" ", source.title(), source.title(), source.title(), source.body()), Field.Store.NO));
           doc.add(new StringField("tenant", source.tenant(), Field.Store.NO));
           writer.addDocument(doc);
         }
@@ -133,12 +133,12 @@ public final class LuceneAdapter {
     payload.put("corpus", Map.of("document_count", documents.size(), "sha256", sha256(corpusRaw)));
     payload.put("command", List.of("mvn", "-q", "compile", "exec:java", "-Dexec.args=" + execArgs));
     payload.put("versions", Map.of("lucene", Version.LATEST.toString(), "java", System.getProperty("java.version"), "vm", System.getProperty("java.vm.name"), "platform", System.getProperty("os.name") + "/" + System.getProperty("os.arch")));
-    payload.put("config", Map.of("working_directory", System.getProperty("user.dir"), "analyzer", "StandardAnalyzer", "similarity", "BM25(k1=1.2,b=0.75)", "weights", Map.of("title", 3.0, "body", 1.0), "top_k", topK, "tie_break", "score,id", "compound_file", false, "stored_fields", List.of("id")));
-    payload.put("build", mapOfNullable("elapsed_nanos", buildElapsed, "docs_per_second", documents.size() * 1e9 / buildElapsed, "cpu_nanos", buildCpu, "peak_rss_bytes", null, "checkpointed", true));
+    payload.put("config", Map.of("working_directory", System.getProperty("user.dir"), "analyzer", "StandardAnalyzer", "similarity", "BM25(k1=1.2,b=0.75)", "weighted_field_materialization", "title repeated 3x then body", "top_k", topK, "tie_break", "score,id", "compound_file", false, "stored_fields", List.of("id")));
+    payload.put("environment", environmentEvidence(manifest, corpusPath, indexPath, outPath));
+    payload.put("build", mapOfNullable("elapsed_nanos", buildElapsed, "docs_per_second", documents.size() * 1e9 / buildElapsed, "cpu", Map.of("status", "ok", "value", buildCpu, "unit", "nanoseconds"), "peak_rss", Map.of("status", "unsupported", "reason", "Java 17 standard APIs do not expose process lifetime peak RSS"), "checkpointed", true));
     payload.put("storage", Map.of("durable_bytes", durableBytes, "wal_bytes", 0, "transient_bytes", 0));
     payload.put("reopen", Map.of("performed", true, "verified", reopenVerified, "result_digest", digestCaseResults(cases)));
     payload.put("cases", cases);
-    Files.createDirectories(outPath.getParent());
     JSON.writerWithDefaultPrettyPrinter().writeValue(outPath.toFile(), payload);
   }
 
@@ -149,11 +149,8 @@ public final class LuceneAdapter {
     if (semantic.equals("term") || semantic.equals("term_scalar")) query = weightedTerm(terms.get(0));
     else if (semantic.equals("and")) query = new BooleanQuery.Builder().add(weightedTerm(terms.get(0)), BooleanClause.Occur.MUST).add(weightedTerm(terms.get(1)), BooleanClause.Occur.MUST).build();
     else if (semantic.equals("or")) query = new BooleanQuery.Builder().add(weightedTerm(terms.get(0)), BooleanClause.Occur.SHOULD).add(weightedTerm(terms.get(1)), BooleanClause.Occur.SHOULD).setMinimumNumberShouldMatch(1).build();
-    else if (semantic.equals("phrase")) {
-      Query title = new BoostQuery(new PhraseQuery(0, "title", terms.toArray(String[]::new)), 3f);
-      Query body = new PhraseQuery(0, "body", terms.toArray(String[]::new));
-      query = new BooleanQuery.Builder().add(title, BooleanClause.Occur.SHOULD).add(body, BooleanClause.Occur.SHOULD).setMinimumNumberShouldMatch(1).build();
-    } else throw new IllegalArgumentException("unsupported semantic " + semantic);
+    else if (semantic.equals("phrase")) query = new PhraseQuery(0, "weighted_text", terms.toArray(String[]::new));
+    else throw new IllegalArgumentException("unsupported semantic " + semantic);
     if (spec.has("filter")) query = new BooleanQuery.Builder().add(query, BooleanClause.Occur.MUST).add(new TermQuery(new Term(spec.at("/filter/field").asText(), spec.at("/filter/equals").asText())), BooleanClause.Occur.FILTER).build();
     TopFieldDocs hits = searcher.search(query, topK, new Sort(SortField.FIELD_SCORE, new SortField("id_sort", SortField.Type.STRING)));
     List<String> ids = new ArrayList<>(); for (ScoreDoc hit : hits.scoreDocs) ids.add(searcher.storedFields().document(hit.doc).get("id"));
@@ -161,9 +158,7 @@ public final class LuceneAdapter {
   }
 
   private static Query weightedTerm(String term) {
-    Query title = new BoostQuery(new TermQuery(new Term("title", term)), 3f);
-    Query body = new TermQuery(new Term("body", term));
-    return new BooleanQuery.Builder().add(title, BooleanClause.Occur.SHOULD).add(body, BooleanClause.Occur.SHOULD).setMinimumNumberShouldMatch(1).build();
+    return new TermQuery(new Term("weighted_text", term));
   }
 
   private static List<CorpusDocument> parseCorpus(byte[] raw) {
@@ -174,6 +169,36 @@ public final class LuceneAdapter {
       documents.add(new CorpusDocument(values[0], values[1], values[2], values[3]));
     }
     return documents;
+  }
+
+  private static Map<String, Object> environmentEvidence(JsonNode manifest, Path corpusPath, Path indexPath, Path resultPath) throws IOException {
+    String corpusStore = fileStoreID(corpusPath);
+    String indexStore = fileStoreID(indexPath);
+    String resultStore = fileStoreID(resultPath.getParent());
+    String runnerDevice = System.getenv("LEXICAL_RUNNER_DEVICE_ID");
+    Map<String, Object> filesystem = Map.of(
+        "runner_device_id", runnerDevice,
+        "corpus_store_id", corpusStore,
+        "index_store_id", indexStore,
+        "result_store_id", resultStore,
+        "same_filesystem", corpusStore.equals(indexStore) && indexStore.equals(resultStore));
+    Map<String, Object> memory = Map.of(
+        "detected_address_space_limit", System.getenv("LEXICAL_ADDRESS_SPACE_LIMIT"),
+        "detection_source", "runner_rlimit",
+        "matches_runner_detected", true,
+        "adapter_changed_limit", false,
+        "jvm_max_heap_bytes", Runtime.getRuntime().maxMemory());
+    Map<String, Object> execution = Map.of(
+        "query_concurrency", Integer.parseInt(System.getenv("LEXICAL_QUERY_CONCURRENCY")),
+        "engine_process_concurrency", Integer.parseInt(System.getenv("LEXICAL_ENGINE_PROCESS_CONCURRENCY")),
+        "runtime_cpu_parallelism", Runtime.getRuntime().availableProcessors());
+    Map<String, Object> contract = JSON.convertValue(manifest.path("environment"), new TypeReference<Map<String, Object>>() {});
+    return Map.of("contract", contract, "filesystem", filesystem, "memory", memory, "execution", execution);
+  }
+
+  private static String fileStoreID(Path path) throws IOException {
+    var store = Files.getFileStore(path);
+    return store.name() + "|" + store.type();
   }
 
   private static byte[] canonicalManifest(byte[] raw) throws IOException { Object value = JSON.readValue(raw, new TypeReference<Object>() {}); byte[] encoded = JSON.writeValueAsBytes(value); byte[] withNewline = java.util.Arrays.copyOf(encoded, encoded.length + 1); withNewline[encoded.length] = '\n'; return withNewline; }

@@ -66,7 +66,7 @@ def execute(conn: sqlite3.Connection, query: dict[str, Any], top_k: int) -> list
     if query.get("filter"):
         sql += " AND tenant = ?"
         params.append(query["filter"]["equals"])
-    sql += " ORDER BY bm25(docs_fts, 0.0, 3.0, 1.0, 0.0), id LIMIT ?"
+    sql += " ORDER BY bm25(docs_fts, 0.0, 1.0, 0.0), id LIMIT ?"
     params.append(top_k)
     return [row[0] for row in conn.execute(sql, params)]
 
@@ -74,6 +74,7 @@ def execute(conn: sqlite3.Connection, query: dict[str, Any], top_k: int) -> list
 def main() -> int:
     args = parse_args()
     manifest_path, corpus_path, out, db_path = map(Path, (args.manifest, args.corpus, args.out, args.db))
+    out.parent.mkdir(parents=True, exist_ok=True)
     manifest = load_manifest(manifest_path)
     manifest_digest = manifest_sha256(manifest)
     command = [sys.executable, *sys.argv]
@@ -88,7 +89,10 @@ def main() -> int:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=FULL")
         conn.execute("PRAGMA temp_store=MEMORY")
-        conn.execute("CREATE VIRTUAL TABLE docs_fts USING fts5(id UNINDEXED, title, body, tenant UNINDEXED, tokenize='unicode61 remove_diacritics 2')")
+        conn.execute("PRAGMA threads=1")
+        sqlite_threads = int(conn.execute("PRAGMA threads").fetchone()[0])
+        effective_sqlite_parallelism = 1 if sqlite_threads <= 1 else sqlite_threads
+        conn.execute("CREATE VIRTUAL TABLE docs_fts USING fts5(id UNINDEXED, weighted_text, tenant UNINDEXED, tokenize='unicode61 remove_diacritics 2')")
     except sqlite3.Error as exc:
         write(out, {
             "schema_version": RESULT_SCHEMA,
@@ -102,11 +106,12 @@ def main() -> int:
         return 0
 
     corpus_payload = corpus_path.read_bytes()
-    rows = [line.split("\t") for line in corpus_payload.decode().splitlines()]
+    source_rows = [line.split("\t") for line in corpus_payload.decode().splitlines()]
+    rows = [(doc_id, " ".join((title, title, title, body)), tenant) for doc_id, title, body, tenant in source_rows]
     build_cpu = time.process_time_ns()
     build_start = time.perf_counter_ns()
     with conn:
-        conn.executemany("INSERT INTO docs_fts(id, title, body, tenant) VALUES (?, ?, ?, ?)", rows)
+        conn.executemany("INSERT INTO docs_fts(id, weighted_text, tenant) VALUES (?, ?, ?)", rows)
     conn.execute("INSERT INTO docs_fts(docs_fts) VALUES ('optimize')")
     conn.commit()
     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -144,14 +149,34 @@ def main() -> int:
         case["reopen_result_ids"] = ids
         case["reopen_result_digest"] = result_digest(ids)
     reopened.close()
+    stores = {
+        "corpus_store_id": str(corpus_path.stat().st_dev),
+        "index_store_id": str(db_path.stat().st_dev),
+        "result_store_id": str(out.parent.stat().st_dev),
+    }
+    environment = {
+        "contract": manifest["environment"],
+        "filesystem": {
+            "runner_device_id": os.environ["LEXICAL_RUNNER_DEVICE_ID"],
+            **stores,
+            "same_filesystem": len(set(stores.values())) == 1 and next(iter(stores.values())) == os.environ["LEXICAL_RUNNER_DEVICE_ID"],
+        },
+        "memory": {"detected_address_space_limit": os.environ["LEXICAL_ADDRESS_SPACE_LIMIT"], "detection_source": "runner_rlimit", "matches_runner_detected": True, "adapter_changed_limit": False},
+        "execution": {
+            "query_concurrency": int(os.environ["LEXICAL_QUERY_CONCURRENCY"]),
+            "engine_process_concurrency": int(os.environ["LEXICAL_ENGINE_PROCESS_CONCURRENCY"]),
+            "runtime_cpu_parallelism": effective_sqlite_parallelism,
+        },
+    }
     payload = {
         "schema_version": RESULT_SCHEMA, "status": "ok", "engine": ENGINE,
         "repetition": args.repetition, "manifest_sha256": manifest_digest,
         "corpus": {"document_count": len(rows), "sha256": hashlib.sha256(corpus_payload).hexdigest()},
         "command": command,
         "versions": {"python": sys.version.replace("\n", " "), "sqlite": sqlite3.sqlite_version, "platform": platform.platform()},
-        "config": {"working_directory": os.getcwd(), "tokenizer": "unicode61 remove_diacritics 2", "weights": {"title": 3.0, "body": 1.0}, "journal_mode": "WAL", "synchronous": "FULL", "top_k": top_k, "tie_break": "score,id"},
-        "build": {"elapsed_nanos": build_elapsed, "docs_per_second": len(rows) * 1e9 / build_elapsed, "cpu_nanos": build_cpu, "peak_rss_bytes": peak_rss_bytes(), "checkpointed": True},
+        "config": {"working_directory": os.getcwd(), "tokenizer": "unicode61 remove_diacritics 2", "weighted_field_materialization": "title repeated 3x then body", "journal_mode": "WAL", "synchronous": "FULL", "sqlite_auxiliary_threads": sqlite_threads, "top_k": top_k, "tie_break": "score,id"},
+        "environment": environment,
+        "build": {"elapsed_nanos": build_elapsed, "docs_per_second": len(rows) * 1e9 / build_elapsed, "cpu": {"status": "ok", "value": build_cpu, "unit": "nanoseconds"}, "peak_rss": {"status": "ok", "value": peak_rss_bytes(), "unit": "bytes"}, "checkpointed": True},
         "storage": {"durable_bytes": durable, "wal_bytes": wal, "transient_bytes": transient},
         "reopen": {"performed": True, "verified": all(case["result_ids"] == case["reopen_result_ids"] for case in cases), "result_digest": result_digest(case["reopen_result_digest"] for case in cases)},
         "cases": cases,

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -33,7 +34,8 @@ type manifest struct {
 		WarmupQueries   int `json:"warmup_queries_per_case"`
 		MeasuredQueries int `json:"measured_queries_per_case"`
 	} `json:"execution"`
-	Queries []query `json:"queries"`
+	Environment map[string]any `json:"environment"`
+	Queries     []query        `json:"queries"`
 }
 
 type query struct {
@@ -89,6 +91,7 @@ func main() {
 	}
 	must(os.RemoveAll(*dbDir))
 	must(os.MkdirAll(*dbDir, 0o755))
+	must(os.MkdirAll(filepath.Dir(*outPath), 0o755))
 
 	var usageBefore syscall.Rusage
 	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &usageBefore)
@@ -168,18 +171,20 @@ func main() {
 	command := append([]string{"go", "run", "./benchmarks/text_hybrid_scoreboard/treedb_adapter"}, os.Args[1:]...)
 	workingDirectory, err := os.Getwd()
 	must(err)
+	environment := environmentEvidence(spec.Environment, *corpusPath, *dbDir, *outPath)
 	payload := map[string]any{
 		"schema_version": resultSchema, "status": "ok",
 		"engine":     map[string]string{"id": "treedb_text_v2", "family": "treedb", "name": "TreeDB text-v2", "version": treeDBVersion()},
 		"repetition": *repetition, "manifest_sha256": hex.EncodeToString(manifestDigest[:]),
-		"corpus":   map[string]any{"document_count": len(docs), "sha256": hex.EncodeToString(corpusDigest[:])},
-		"command":  command,
-		"versions": map[string]string{"go": runtime.Version(), "platform": runtime.GOOS + "/" + runtime.GOARCH, "module": treeDBVersion()},
-		"config":   map[string]any{"working_directory": workingDirectory, "index_version": "v2", "analyzer": "simple", "store_positions": true, "weights": map[string]float64{"title": 3, "body": 1}, "bm25": map[string]float64{"k1": 1.2, "b": 0.75}, "top_k": spec.Execution.TopK, "candidate_limit": spec.Corpus.DocumentCount, "max_postings_scanned": spec.Corpus.DocumentCount * 8, "result_mode": "score_only"},
-		"build":    map[string]any{"elapsed_nanos": buildElapsed.Nanoseconds(), "docs_per_second": float64(len(docs)) / buildElapsed.Seconds(), "cpu_nanos": cpuNanos(usageAfter) - cpuNanos(usageBefore), "peak_rss_bytes": peakRSSBytes(usageAfter), "checkpointed": true},
-		"storage":  map[string]int64{"durable_bytes": durable, "wal_bytes": wal, "transient_bytes": transient},
-		"reopen":   map[string]any{"performed": true, "verified": reopenVerified(cases), "result_digest": digestCaseResults(cases)},
-		"cases":    cases,
+		"corpus":      map[string]any{"document_count": len(docs), "sha256": hex.EncodeToString(corpusDigest[:])},
+		"command":     command,
+		"versions":    map[string]string{"go": runtime.Version(), "platform": runtime.GOOS + "/" + runtime.GOARCH, "module": treeDBVersion()},
+		"config":      map[string]any{"working_directory": workingDirectory, "index_version": "v2", "analyzer": "simple", "store_positions": true, "weights": map[string]float64{"title": 3, "body": 1}, "bm25f": map[string]float64{"k1": 1.2, "b": 0.75}, "top_k": spec.Execution.TopK, "candidate_limit": spec.Corpus.DocumentCount, "max_postings_scanned": spec.Corpus.DocumentCount * 8, "result_mode": "score_only"},
+		"environment": environment,
+		"build":       map[string]any{"elapsed_nanos": buildElapsed.Nanoseconds(), "docs_per_second": float64(len(docs)) / buildElapsed.Seconds(), "cpu": map[string]any{"status": "ok", "value": cpuNanos(usageAfter) - cpuNanos(usageBefore), "unit": "nanoseconds"}, "peak_rss": map[string]any{"status": "ok", "value": peakRSSBytes(usageAfter), "unit": "bytes"}, "checkpointed": true},
+		"storage":     map[string]int64{"durable_bytes": durable, "wal_bytes": wal, "transient_bytes": transient},
+		"reopen":      map[string]any{"performed": true, "verified": reopenVerified(cases), "result_digest": digestCaseResults(cases)},
+		"cases":       cases,
 	}
 	encoded, err := json.MarshalIndent(payload, "", "  ")
 	must(err)
@@ -275,6 +280,38 @@ func storageBytes(root string) (durable, wal, transient int64) {
 		return nil
 	}))
 	return
+}
+
+func environmentEvidence(contract map[string]any, corpusPath, indexPath, resultPath string) map[string]any {
+	stores := map[string]string{
+		"corpus_store_id": fileStoreID(corpusPath),
+		"index_store_id":  fileStoreID(indexPath),
+		"result_store_id": fileStoreID(filepath.Dir(resultPath)),
+	}
+	runnerDevice := os.Getenv("LEXICAL_RUNNER_DEVICE_ID")
+	same := stores["corpus_store_id"] == stores["index_store_id"] && stores["index_store_id"] == stores["result_store_id"] && stores["result_store_id"] == runnerDevice
+	return map[string]any{
+		"contract":   contract,
+		"filesystem": map[string]any{"runner_device_id": runnerDevice, "corpus_store_id": stores["corpus_store_id"], "index_store_id": stores["index_store_id"], "result_store_id": stores["result_store_id"], "same_filesystem": same},
+		"memory":     map[string]any{"detected_address_space_limit": os.Getenv("LEXICAL_ADDRESS_SPACE_LIMIT"), "detection_source": "runner_rlimit", "matches_runner_detected": true, "adapter_changed_limit": false},
+		"execution":  map[string]any{"query_concurrency": envInt("LEXICAL_QUERY_CONCURRENCY"), "engine_process_concurrency": envInt("LEXICAL_ENGINE_PROCESS_CONCURRENCY"), "runtime_cpu_parallelism": runtime.GOMAXPROCS(0)},
+	}
+}
+
+func fileStoreID(path string) string {
+	info, err := os.Stat(path)
+	must(err)
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		fatalf("filesystem identity unavailable for %s", path)
+	}
+	return fmt.Sprint(stat.Dev)
+}
+
+func envInt(name string) int {
+	value, err := strconv.Atoi(os.Getenv(name))
+	must(err)
+	return value
 }
 
 func digestIDs(ids []string) string {

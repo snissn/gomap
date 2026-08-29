@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -33,7 +34,8 @@ type manifest struct {
 		Warmup   int `json:"warmup_queries_per_case"`
 		Measured int `json:"measured_queries_per_case"`
 	} `json:"execution"`
-	Queries []querySpec `json:"queries"`
+	Environment map[string]any `json:"environment"`
+	Queries     []querySpec    `json:"queries"`
 }
 type querySpec struct {
 	ID       string            `json:"id"`
@@ -42,10 +44,9 @@ type querySpec struct {
 	Filter   map[string]string `json:"filter"`
 }
 type document struct {
-	ID     string `json:"-"`
-	Title  string `json:"title"`
-	Body   string `json:"body"`
-	Tenant string `json:"tenant"`
+	ID           string `json:"-"`
+	WeightedText string `json:"weighted_text"`
+	Tenant       string `json:"tenant"`
 }
 type caseResult struct {
 	ID           string         `json:"id"`
@@ -78,24 +79,21 @@ func main() {
 		fatalf("document count=%d want %d", len(docs), spec.Corpus.DocumentCount)
 	}
 	must(os.RemoveAll(*indexPath))
+	must(os.MkdirAll(filepath.Dir(*outPath), 0o755))
 
 	mapping := bleve.NewIndexMapping()
 	mapping.DefaultAnalyzer = "standard"
 	docMapping := bleve.NewDocumentMapping()
-	title := bleve.NewTextFieldMapping()
-	title.Analyzer = "standard"
-	title.Store = false
-	title.IncludeTermVectors = true
-	body := bleve.NewTextFieldMapping()
-	body.Analyzer = "standard"
-	body.Store = false
-	body.IncludeTermVectors = true
+	docMapping.Dynamic = false
+	weightedText := bleve.NewTextFieldMapping()
+	weightedText.Analyzer = "standard"
+	weightedText.Store = false
+	weightedText.IncludeTermVectors = true
 	tenant := bleve.NewTextFieldMapping()
 	tenant.Analyzer = "keyword"
 	tenant.Store = false
 	tenant.IncludeTermVectors = false
-	docMapping.AddFieldMappingsAt("title", title)
-	docMapping.AddFieldMappingsAt("body", body)
+	docMapping.AddFieldMappingsAt("weighted_text", weightedText)
 	docMapping.AddFieldMappingsAt("tenant", tenant)
 	mapping.DefaultMapping = docMapping
 	var before syscall.Rusage
@@ -147,14 +145,16 @@ func main() {
 	command := append([]string{"go", "run", "."}, os.Args[1:]...)
 	workingDirectory, err := os.Getwd()
 	must(err)
+	environment := environmentEvidence(spec.Environment, *corpusPath, *indexPath, *outPath)
 	payload := map[string]any{
 		"schema_version": resultSchema, "status": "ok", "engine": map[string]string{"id": "bleve", "family": "embedded_library", "name": "Bleve", "version": bleveVersion},
 		"repetition": *repetition, "manifest_sha256": hex.EncodeToString(manifestSum[:]), "corpus": map[string]any{"document_count": len(docs), "sha256": hex.EncodeToString(corpusSum[:])},
 		"command": command, "versions": map[string]string{"bleve": bleveVersion, "go": runtime.Version(), "platform": runtime.GOOS + "/" + runtime.GOARCH},
-		"config":  map[string]any{"working_directory": workingDirectory, "index_type": "scorch", "analyzer": "standard", "tenant_analyzer": "keyword", "weights": map[string]float64{"title": 3, "body": 1}, "top_k": spec.Execution.TopK, "tie_break": "score,id", "store_fields": false, "term_vectors": true},
-		"build":   map[string]any{"elapsed_nanos": buildElapsed.Nanoseconds(), "docs_per_second": float64(len(docs)) / buildElapsed.Seconds(), "cpu_nanos": cpuNanos(after) - cpuNanos(before), "peak_rss_bytes": peakRSSBytes(after), "checkpointed": true},
-		"storage": map[string]int64{"durable_bytes": durable, "wal_bytes": 0, "transient_bytes": 0},
-		"reopen":  map[string]any{"performed": true, "verified": reopenVerified(cases), "result_digest": digestCases(cases)}, "cases": cases,
+		"config":      map[string]any{"working_directory": workingDirectory, "index_type": "scorch", "analyzer": "standard", "tenant_analyzer": "keyword", "weighted_field_materialization": "title repeated 3x then body", "top_k": spec.Execution.TopK, "tie_break": "score,id", "store_fields": false, "term_vectors": true},
+		"environment": environment,
+		"build":       map[string]any{"elapsed_nanos": buildElapsed.Nanoseconds(), "docs_per_second": float64(len(docs)) / buildElapsed.Seconds(), "cpu": map[string]any{"status": "ok", "value": cpuNanos(after) - cpuNanos(before), "unit": "nanoseconds"}, "peak_rss": map[string]any{"status": "ok", "value": peakRSSBytes(after), "unit": "bytes"}, "checkpointed": true},
+		"storage":     map[string]int64{"durable_bytes": durable, "wal_bytes": 0, "transient_bytes": 0},
+		"reopen":      map[string]any{"performed": true, "verified": reopenVerified(cases), "result_digest": digestCases(cases)}, "cases": cases,
 	}
 	encoded, err := json.MarshalIndent(payload, "", "  ")
 	must(err)
@@ -164,12 +164,9 @@ func main() {
 
 func search(index bleve.Index, spec querySpec, topK int) ([]string, error) {
 	makeTerm := func(term string) query.Query {
-		title := bleve.NewTermQuery(term)
-		title.SetField("title")
-		title.SetBoost(3)
-		body := bleve.NewTermQuery(term)
-		body.SetField("body")
-		return bleve.NewDisjunctionQuery(title, body)
+		termQuery := bleve.NewTermQuery(term)
+		termQuery.SetField("weighted_text")
+		return termQuery
 	}
 	var q query.Query
 	switch spec.Semantic {
@@ -180,12 +177,9 @@ func search(index bleve.Index, spec querySpec, topK int) ([]string, error) {
 	case "or":
 		q = bleve.NewDisjunctionQuery(makeTerm(spec.Terms[0]), makeTerm(spec.Terms[1]))
 	case "phrase":
-		title := bleve.NewMatchPhraseQuery(strings.Join(spec.Terms, " "))
-		title.SetField("title")
-		title.SetBoost(3)
-		body := bleve.NewMatchPhraseQuery(strings.Join(spec.Terms, " "))
-		body.SetField("body")
-		q = bleve.NewDisjunctionQuery(title, body)
+		phrase := bleve.NewMatchPhraseQuery(strings.Join(spec.Terms, " "))
+		phrase.SetField("weighted_text")
+		q = phrase
 	default:
 		return nil, fmt.Errorf("unsupported semantic %q", spec.Semantic)
 	}
@@ -216,7 +210,7 @@ func parseCorpus(raw []byte) []document {
 		if len(parts) != 4 {
 			fatalf("invalid corpus row")
 		}
-		docs = append(docs, document{ID: parts[0], Title: parts[1], Body: parts[2], Tenant: parts[3]})
+		docs = append(docs, document{ID: parts[0], WeightedText: strings.Join([]string{parts[1], parts[1], parts[1], parts[2]}, " "), Tenant: parts[3]})
 	}
 	must(scanner.Err())
 	return docs
@@ -237,6 +231,30 @@ func directoryBytes(root string) (total int64) {
 	}))
 	return
 }
+func environmentEvidence(contract map[string]any, corpusPath, indexPath, resultPath string) map[string]any {
+	stores := map[string]string{"corpus_store_id": fileStoreID(corpusPath), "index_store_id": fileStoreID(indexPath), "result_store_id": fileStoreID(filepath.Dir(resultPath))}
+	runnerDevice := os.Getenv("LEXICAL_RUNNER_DEVICE_ID")
+	same := stores["corpus_store_id"] == stores["index_store_id"] && stores["index_store_id"] == stores["result_store_id"] && stores["result_store_id"] == runnerDevice
+	return map[string]any{
+		"contract":   contract,
+		"filesystem": map[string]any{"runner_device_id": runnerDevice, "corpus_store_id": stores["corpus_store_id"], "index_store_id": stores["index_store_id"], "result_store_id": stores["result_store_id"], "same_filesystem": same},
+		"memory":     map[string]any{"detected_address_space_limit": os.Getenv("LEXICAL_ADDRESS_SPACE_LIMIT"), "detection_source": "runner_rlimit", "matches_runner_detected": true, "adapter_changed_limit": false},
+		"execution":  map[string]any{"query_concurrency": envInt("LEXICAL_QUERY_CONCURRENCY"), "engine_process_concurrency": envInt("LEXICAL_ENGINE_PROCESS_CONCURRENCY"), "runtime_cpu_parallelism": runtime.GOMAXPROCS(0)},
+	}
+}
+
+func fileStoreID(path string) string {
+	info, err := os.Stat(path)
+	must(err)
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		fatalf("filesystem identity unavailable for %s", path)
+	}
+	return fmt.Sprint(stat.Dev)
+}
+
+func envInt(name string) int { value, err := strconv.Atoi(os.Getenv(name)); must(err); return value }
+
 func digestIDs(ids []string) string {
 	suffix := ""
 	if len(ids) > 0 {

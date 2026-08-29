@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import platform
+import resource
 import shlex
 import shutil
 import subprocess
@@ -123,6 +124,24 @@ def setup_engine(engine_id: str, out_dir: Path, timeout: int) -> tuple[bool, lis
     return result.returncode == 0, command, result.stderr
 
 
+def detected_address_space_limit() -> str:
+    soft, _ = resource.getrlimit(resource.RLIMIT_AS)
+    return "unlimited" if soft == resource.RLIM_INFINITY else str(soft)
+
+
+def benchmark_environment(out_dir: Path, manifest: dict[str, Any]) -> dict[str, str]:
+    contract = manifest["environment"]
+    return {
+        "LEXICAL_RUNNER_DEVICE_ID": str(out_dir.stat().st_dev),
+        "LEXICAL_ADDRESS_SPACE_LIMIT": detected_address_space_limit(),
+        "LEXICAL_QUERY_CONCURRENCY": str(contract["query_concurrency"]),
+        "LEXICAL_ENGINE_PROCESS_CONCURRENCY": str(contract["engine_process_concurrency"]),
+        "LEXICAL_RUNTIME_CPU_PARALLELISM": str(contract["runtime_cpu_parallelism"]),
+        "GOMAXPROCS": str(contract["runtime_cpu_parallelism"]),
+        "MAVEN_OPTS": (os.environ.get("MAVEN_OPTS", "") + f" -XX:ActiveProcessorCount={contract['runtime_cpu_parallelism']}").strip(),
+    }
+
+
 def adapter_command(engine_id: str, repetition: int, out_dir: Path, manifest: Path, corpus: Path, source_revision: str) -> tuple[list[str], Path, dict[str, str]]:
     raw = out_dir / "raw" / f"{engine_id}-r{repetition}.json"
     index = out_dir / "indexes" / f"{engine_id}-r{repetition}"
@@ -151,6 +170,7 @@ def main() -> int:
     manifest_digest = manifest_sha256(manifest)
     corpus = args.out_dir / "corpus.tsv"
     write_frozen_corpus(manifest, corpus)
+    enforced_environment = benchmark_environment(args.out_dir, manifest)
     artifact_paths: list[Path] = []
     setup_ledger: list[dict[str, Any]] = []
 
@@ -171,6 +191,7 @@ def main() -> int:
         setup_ledger.append({"engine": engine_id, "status": "ready", "command": setup_command})
         for repetition in range(1, args.repetitions + 1):
             command, cwd, env = adapter_command(engine_id, repetition, args.out_dir, args.manifest.resolve(), corpus.resolve(), source["commit"])
+            env.update(enforced_environment)
             raw = args.out_dir / "raw" / f"{engine_id}-r{repetition}.json"
             result = run_command(command, cwd, args.timeout_seconds, args.out_dir / "logs" / f"{engine_id}-r{repetition}.log", env)
             if result.returncode != 0:
@@ -185,6 +206,16 @@ def main() -> int:
         "host": platform.node(), "platform": platform.platform(), "python": sys.version.replace("\n", " "),
         "runner_command": [sys.executable, *sys.argv], "serial_engine_order": list(ENGINE_ORDER), "setup_ledger": setup_ledger,
         "source": source,
+        "environment_contract": manifest["environment"],
+        "detected_address_space_limit": enforced_environment["LEXICAL_ADDRESS_SPACE_LIMIT"],
+        "runner_filesystem_device_id": enforced_environment["LEXICAL_RUNNER_DEVICE_ID"],
+        "enforced_execution": {
+            "query_concurrency": int(enforced_environment["LEXICAL_QUERY_CONCURRENCY"]),
+            "engine_process_concurrency": int(enforced_environment["LEXICAL_ENGINE_PROCESS_CONCURRENCY"]),
+            "runtime_cpu_parallelism": int(enforced_environment["LEXICAL_RUNTIME_CPU_PARALLELISM"]),
+            "go_gomaxprocs": int(enforced_environment["GOMAXPROCS"]),
+            "java_active_processor_count": int(enforced_environment["LEXICAL_RUNTIME_CPU_PARALLELISM"]),
+        },
     }
     from lexical_common import read_corpus
     report = consolidate(artifacts, manifest, read_corpus(corpus), args.repetitions, context)

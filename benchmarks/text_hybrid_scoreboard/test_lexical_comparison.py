@@ -41,7 +41,11 @@ class LexicalComparisonTest(unittest.TestCase):
                 "harness_subtree_oid": "harness-tree",
                 "vcs_modified": modified,
                 "qualification_eligible": not modified,
-            }
+            },
+            "environment_contract": copy.deepcopy(self.manifest["environment"]),
+            "detected_address_space_limit": "unlimited",
+            "runner_filesystem_device_id": "dev1",
+            "enforced_execution": {"query_concurrency": 1, "engine_process_concurrency": 1, "runtime_cpu_parallelism": 1},
         }
 
 
@@ -62,8 +66,14 @@ class LexicalComparisonTest(unittest.TestCase):
             "engine": {"id": engine_id, "family": "test", "name": engine_id, "version": "candidate-commit" if engine_id == "treedb_text_v2" else "pinned"},
             "repetition": repetition, "manifest_sha256": manifest_sha256(self.manifest),
             "corpus": {"document_count": 10_000, "sha256": self.manifest["corpus"]["sha256"]},
-            "command": ["adapter"], "versions": {"adapter": "pinned"}, "config": {"top_k": 10},
-            "build": {"elapsed_nanos": 1, "docs_per_second": 1.0, "cpu_nanos": 1, "peak_rss_bytes": None, "checkpointed": True},
+            "command": ["adapter"], "versions": {"adapter": "pinned"}, "config": ({"top_k": 10, "weights": {"title": 3, "body": 1}, "bm25f": {"k1": 1.2, "b": 0.75}, "stable_setting": "base"} if engine_id == "treedb_text_v2" else {"top_k": 10, "tie_break": "score,id", "weighted_field_materialization": "title repeated 3x then body", "stable_setting": "base"}),
+            "environment": {
+                "contract": copy.deepcopy(self.manifest["environment"]),
+                "filesystem": {"runner_device_id": "dev1", "corpus_store_id": "dev1", "index_store_id": "dev1", "result_store_id": "dev1", "same_filesystem": True},
+                "memory": {"detected_address_space_limit": "unlimited", "detection_source": "runner_rlimit", "matches_runner_detected": True, "adapter_changed_limit": False},
+                "execution": {"query_concurrency": 1, "engine_process_concurrency": 1, "runtime_cpu_parallelism": 1},
+            },
+            "build": {"elapsed_nanos": 1, "docs_per_second": 1.0, "cpu": {"status": "ok", "value": 1, "unit": "nanoseconds"}, "peak_rss": {"status": "unsupported", "reason": "test runtime has no RSS API"}, "checkpointed": True},
             "storage": {"durable_bytes": 1, "wal_bytes": 0, "transient_bytes": 0},
             "reopen": {"performed": True, "verified": True, "result_digest": "proof"},
             "cases": cases,
@@ -76,12 +86,22 @@ class LexicalComparisonTest(unittest.TestCase):
         self.assertEqual(tokenize("Refund—POLICY_42"), ["refund", "policy", "42"])
 
     def test_reference_interprets_every_manifest_shape(self) -> None:
-        self.assertEqual(self.expected["common"], [f"doc-{i:06d}" for i in range(10)])
-        self.assertEqual(self.expected["rare"], [f"doc-{i:06d}" for i in range(10)])
+        self.assertEqual(self.expected["common"], [f"doc-{i:06d}" for i in (0, 1, 2, 3, 4, 5, 6, 7, 9, 8)])
+        self.assertEqual(self.expected["rare"], [f"doc-{i:06d}" for i in range(10, 20)])
         self.assertEqual(self.expected["and"], [f"doc-{i:06d}" for i in range(20, 30)])
         self.assertEqual(self.expected["or"], [f"doc-{i:06d}" for i in range(70, 80)])
         self.assertEqual(self.expected["phrase"], [f"doc-{i:06d}" for i in range(80, 90)])
         self.assertEqual(self.expected["scalar_filtered"], [f"doc-{i:06d}" for i in range(100, 110)])
+
+    def test_common_ranking_depends_on_weight_tf_and_length_normalization(self) -> None:
+        ranked = self.expected["common"]
+        self.assertLess(ranked.index("doc-000000"), ranked.index("doc-000001"))
+        self.assertLess(ranked.index("doc-000006"), ranked.index("doc-000007"))
+        equal_weights = reference_results(self.manifest, self.documents, weight_overrides={"title": 1.0}, verify_evidence=False)["common"]
+        self.assertLess(equal_weights.index("doc-000007"), equal_weights.index("doc-000006"))
+        no_length_normalization = reference_results(self.manifest, self.documents, b_override=0.0, verify_evidence=False)["common"]
+        self.assertLess(ranked.index("doc-000009"), ranked.index("doc-000008"))
+        self.assertLess(no_length_normalization.index("doc-000008"), no_length_normalization.index("doc-000009"))
 
     def test_validator_rejects_drift_mismatch_leakage_and_missing_proof(self) -> None:
         mutations = {
@@ -94,6 +114,9 @@ class LexicalComparisonTest(unittest.TestCase):
             "route": lambda a: a["cases"][0]["route"].update(intended=False),
             "reopen": lambda a: a["reopen"].update(verified=False),
             "timeout": lambda a: a["cases"][0].update(timed_out=True),
+            "untyped resource": lambda a: a["build"].update(peak_rss=None),
+            "filesystem mismatch": lambda a: a["environment"]["filesystem"].update(same_filesystem=False),
+            "manifest environment mismatch": lambda a: a["environment"]["contract"].update(query_concurrency=2),
         }
         for name, mutate in mutations.items():
             with self.subTest(name=name):
@@ -121,6 +144,38 @@ class LexicalComparisonTest(unittest.TestCase):
         artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "sqlite_fts5") for repetition in range(1, 4)]
         with self.assertRaisesRegex(ValidationError, "at least two"):
             consolidate(artifacts, self.manifest, self.documents, 3, self.context())
+
+    def test_consolidation_rejects_repetition_metadata_drift(self) -> None:
+        mutations = {
+            "engine metadata": lambda artifact: artifact["engine"].update(name="different"),
+            "versions": lambda artifact: artifact["versions"].update(adapter="different"),
+            "benchmark config": lambda artifact: artifact["config"].update(stable_setting="different"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
+                mutate(artifacts[1])
+                with self.assertRaises(ValidationError):
+                    consolidate(artifacts, self.manifest, self.documents, 3, self.context())
+
+    def test_environment_policy_and_cross_repetition_detection_are_fail_closed(self) -> None:
+        artifact = self.artifact()
+        artifact["environment"]["execution"]["query_concurrency"] = 2
+        with self.assertRaisesRegex(ValidationError, "concurrency"):
+            validate_result(artifact, self.manifest, self.expected, self.corpus_ids)
+        artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
+        artifacts[1]["environment"]["memory"]["detected_address_space_limit"] = "1073741824"
+        with self.assertRaisesRegex(ValidationError, "environment differs"):
+            consolidate(artifacts, self.manifest, self.documents, 3, self.context())
+
+    def test_consolidated_builds_retain_typed_cpu_and_rss_per_repetition(self) -> None:
+        artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
+        report = consolidate(artifacts, self.manifest, self.documents, 3, self.context())
+        for build in report["builds"]:
+            self.assertEqual(len(build["cpu"]), 3)
+            self.assertEqual(len(build["peak_rss"]), 3)
+            self.assertEqual(build["environment"]["execution"]["query_concurrency"], 1)
+            self.assertTrue(all(resource["status"] in {"ok", "unsupported"} for resource in build["cpu"] + build["peak_rss"]))
 
     def test_dirty_source_is_explicitly_ineligible(self) -> None:
         artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "bleve", "sqlite_fts5") for repetition in range(1, 4)]

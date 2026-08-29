@@ -52,32 +52,51 @@ def tokenize(text: str) -> list[str]:
 
 
 def frozen_document(index: int) -> tuple[str, str, str, str]:
-    terms: list[str] = []
-    if index < 5000:
-        terms.append("common")
-    if index < 10:
-        terms.append("rare")
+    length = 12
+    title: list[str] = []
+    body: list[str] = []
+    probes = {
+        0: (4, ["common"] * 4, ["common"] * 4),
+        1: (4, ["common"] * 4, ["common"]),
+        2: (4, ["common"] * 3, ["common"]),
+        3: (4, ["common"] * 2, ["common"]),
+        4: (4, ["common"], ["common"] * 2),
+        5: (4, ["common"], ["common"]),
+        6: (4, ["common"], []),
+        7: (4, [], ["common"] * 2),
+        8: (12, [], ["common"]),
+        9: (4, [], ["common"]),
+    }
+    if index in probes:
+        length, title, body = probes[index]
+    elif index < 5000:
+        body.append("common")
+    if 10 <= index < 20:
+        body.append("rare")
     if 20 <= index < 30:
-        terms.extend(("alpha", "beta"))
+        body.extend(("alpha", "beta"))
     elif 30 <= index < 40:
-        terms.append("alpha")
+        body.append("alpha")
     elif 40 <= index < 50:
-        terms.append("beta")
+        body.append("beta")
     if 50 <= index < 60:
-        terms.append("gamma")
+        body.append("gamma")
     elif 60 <= index < 70:
-        terms.append("delta")
+        body.append("delta")
     elif 70 <= index < 80:
-        terms.extend(("gamma", "delta"))
+        body.extend(("gamma", "delta"))
     if 80 <= index < 90:
-        terms.extend(("quick", "fox"))
+        body.extend(("quick", "fox"))
     elif 90 <= index < 100:
-        terms.extend(("quick", "bridge", "fox"))
+        body.extend(("quick", "bridge", "fox"))
     if 100 <= index < 120:
-        terms.append("tenantterm")
-    terms.extend(["filler"] * (12 - len(terms)))
+        body.append("tenantterm")
+    if len(title) > length or len(body) > length:
+        raise ValidationError(f"frozen corpus document {index} exceeds its field length")
+    title.extend(["titlefill"] * (length - len(title)))
+    body.extend(["bodyfill"] * (length - len(body)))
     tenant = "tenant-rare" if 100 <= index < 110 else "tenant-broad"
-    return f"doc-{index:06d}", "catalog entry", " ".join(terms), tenant
+    return f"doc-{index:06d}", " ".join(title), " ".join(body), tenant
 
 
 def corpus_bytes(document_count: int) -> bytes:
@@ -110,29 +129,47 @@ def result_digest(ids: Iterable[str]) -> str:
     return sha256_bytes(("\n".join(values) + ("\n" if values else "")).encode())
 
 
-def reference_results(manifest: dict[str, Any], documents: list[dict[str, str]]) -> dict[str, list[str]]:
+def reference_results(
+    manifest: dict[str, Any],
+    documents: list[dict[str, str]],
+    *,
+    weight_overrides: dict[str, float] | None = None,
+    b_override: float | None = None,
+    verify_evidence: bool = True,
+) -> dict[str, list[str]]:
     weights = {field["name"]: float(field["weight"]) for field in manifest["analysis"]["fields"]}
+    if weight_overrides:
+        weights.update(weight_overrides)
+    bm25f = manifest["analysis"]["bm25f"]
+    k1 = float(bm25f["k1"])
+    b = float(bm25f["b"]) if b_override is None else b_override
     top_k = int(manifest["execution"]["top_k"])
-    tokenized = {
-        doc["id"]: {field: tokenize(doc[field]) for field in weights}
-        for doc in documents
+    tokenized = {doc["id"]: {field: tokenize(doc[field]) for field in weights} for doc in documents}
+    average_lengths = {
+        field: sum(len(fields[field]) for fields in tokenized.values()) / len(documents)
+        for field in weights
     }
     results: dict[str, list[str]] = {}
+    corpus_size = len(documents)
     for query in manifest["queries"]:
         terms = [normalize(term) for term in query["terms"]]
+        document_frequency = {
+            term: sum(any(term in fields[field] for field in weights) for fields in tokenized.values())
+            for term in terms
+        }
         ranked: list[tuple[float, str]] = []
         for doc in documents:
             if query.get("filter") and doc[query["filter"]["field"]] != query["filter"]["equals"]:
                 continue
             fields = tokenized[doc["id"]]
-            counts = [sum(tokens.count(term) for tokens in fields.values()) for term in terms]
+            counts = {term: sum(fields[field].count(term) for field in weights) for term in terms}
             semantic = query["semantic"]
             if semantic in ("term", "term_scalar"):
-                matched = counts[0] > 0
+                matched = counts[terms[0]] > 0
             elif semantic == "and":
-                matched = all(counts)
+                matched = all(counts[term] for term in terms)
             elif semantic == "or":
-                matched = any(counts)
+                matched = any(counts[term] for term in terms)
             elif semantic == "phrase":
                 matched = any(
                     any(tokens[i : i + len(terms)] == terms for i in range(len(tokens) - len(terms) + 1))
@@ -142,10 +179,27 @@ def reference_results(manifest: dict[str, Any], documents: list[dict[str, str]])
                 raise ValidationError(f"unknown query semantic {semantic!r}")
             if not matched:
                 continue
-            score = sum(weights[field] * sum(tokens.count(term) for term in terms) for field, tokens in fields.items())
+            score = 0.0
+            for term in terms:
+                df = document_frequency[term]
+                if not df or not counts[term]:
+                    continue
+                idf = math.log(1 + (corpus_size - df + 0.5) / (df + 0.5))
+                combined_tf = 0.0
+                for field, weight in weights.items():
+                    field_tf = fields[field].count(term)
+                    if not field_tf:
+                        continue
+                    denominator = 1 - b + b * len(fields[field]) / average_lengths[field]
+                    combined_tf += weight * field_tf / denominator
+                score += idf * (combined_tf * (k1 + 1)) / (combined_tf + k1)
             ranked.append((-score, doc["id"]))
         ranked.sort()
-        results[query["id"]] = [doc_id for _, doc_id in ranked[:top_k]]
+        ids = [doc_id for _, doc_id in ranked[:top_k]]
+        evidence = query.get("ranking_evidence", {}).get("expected_top_k")
+        if verify_evidence and evidence is not None and ids != evidence:
+            raise ValidationError(f"query {query['id']}: frozen BM25F ranking evidence drift")
+        results[query["id"]] = ids
     return results
 
 
@@ -171,6 +225,35 @@ def _require(condition: bool, message: str) -> None:
         raise ValidationError(message)
 
 
+def _validate_resource(resource: Any, name: str, prefix: str) -> None:
+    _require(isinstance(resource, dict), f"{prefix}: {name} resource evidence missing")
+    status = resource.get("status")
+    _require(status in {"ok", "unsupported"}, f"{prefix}: {name} resource status is untyped")
+    if status == "ok":
+        _require(isinstance(resource.get("value"), int) and resource["value"] >= 0, f"{prefix}: {name} resource value invalid")
+        _require(bool(resource.get("unit")), f"{prefix}: {name} resource unit missing")
+    else:
+        _require(bool(resource.get("reason")), f"{prefix}: {name} unsupported reason missing")
+
+
+def _validate_environment(environment: Any, manifest: dict[str, Any], prefix: str) -> None:
+    _require(isinstance(environment, dict), f"{prefix}: environment evidence missing")
+    _require(environment.get("contract") == manifest["environment"], f"{prefix}: environment contract mismatch")
+    filesystem = environment.get("filesystem", {})
+    _require(filesystem.get("same_filesystem") is True, f"{prefix}: filesystem identity policy not enforced")
+    _require(bool(filesystem.get("runner_device_id")), f"{prefix}: runner filesystem identity missing")
+    stores = [filesystem.get(key) for key in ("corpus_store_id", "index_store_id", "result_store_id")]
+    _require(all(stores) and len(set(stores)) == 1, f"{prefix}: corpus/index/result filesystem mismatch")
+    memory = environment.get("memory", {})
+    _require(bool(memory.get("detection_source")) and memory.get("matches_runner_detected") is True, f"{prefix}: memory-limit detection proof missing")
+    _require(memory.get("adapter_changed_limit") is False, f"{prefix}: adapter changed the inherited memory limit")
+    _require(bool(memory.get("detected_address_space_limit")), f"{prefix}: detected memory limit missing")
+    execution = environment.get("execution", {})
+    _require(execution.get("query_concurrency") == 1, f"{prefix}: query concurrency mismatch")
+    _require(execution.get("engine_process_concurrency") == 1, f"{prefix}: engine process concurrency mismatch")
+    _require(execution.get("runtime_cpu_parallelism") == 1, f"{prefix}: runtime CPU parallelism mismatch")
+
+
 def validate_result(artifact: dict[str, Any], manifest: dict[str, Any], expected: dict[str, list[str]], corpus_ids: set[str]) -> None:
     engine_id = artifact.get("engine", {}).get("id", "<missing>")
     prefix = f"{engine_id} repetition {artifact.get('repetition', '?')}"
@@ -193,9 +276,18 @@ def validate_result(artifact: dict[str, Any], manifest: dict[str, Any], expected
     _require(isinstance(artifact.get("command"), list) and bool(artifact["command"]), f"{prefix}: exact command missing")
     _require(isinstance(artifact.get("versions"), dict) and bool(artifact["versions"]), f"{prefix}: versions missing")
     _require(isinstance(artifact.get("config"), dict) and bool(artifact["config"]), f"{prefix}: configuration missing")
+    _require(artifact["config"].get("top_k") == manifest["execution"]["top_k"], f"{prefix}: top-K config mismatch")
+    _require(artifact["config"].get("tie_break") == "score,id" or engine_id == "treedb_text_v2", f"{prefix}: tie-break config mismatch")
+    if engine_id == "treedb_text_v2":
+        _require(artifact["config"].get("weights") == {"title": 3, "body": 1} and artifact["config"].get("bm25f") == {"k1": 1.2, "b": 0.75}, f"{prefix}: TreeDB BM25F config mismatch")
+    else:
+        _require(artifact["config"].get("weighted_field_materialization") == "title repeated 3x then body", f"{prefix}: external weighted-field config mismatch")
+    _validate_environment(artifact.get("environment"), manifest, prefix)
     build = artifact.get("build", {})
     _require(build.get("checkpointed") is True, f"{prefix}: build was not checkpointed")
-    _require(all(key in build for key in ("elapsed_nanos", "docs_per_second", "cpu_nanos", "peak_rss_bytes")), f"{prefix}: build/resource fields missing")
+    _require(all(key in build for key in ("elapsed_nanos", "docs_per_second", "cpu", "peak_rss")), f"{prefix}: build/resource fields missing")
+    _validate_resource(build.get("cpu"), "build CPU", prefix)
+    _validate_resource(build.get("peak_rss"), "peak RSS", prefix)
     storage = artifact.get("storage", {})
     _require(all(key in storage for key in ("durable_bytes", "wal_bytes", "transient_bytes")), f"{prefix}: storage classes missing")
     reopen = artifact.get("reopen", {})
@@ -245,6 +337,10 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
     _require(isinstance(source.get("vcs_modified"), bool), "source dirty state is missing")
     _require(source.get("qualification_eligible") is (not source["vcs_modified"]), "source qualification state is inconsistent")
     expected = reference_results(manifest, documents)
+    _require(context.get("environment_contract") == manifest["environment"], "runner environment contract mismatch")
+    enforced = context.get("enforced_execution", {})
+    _require(enforced.get("query_concurrency") == 1 and enforced.get("engine_process_concurrency") == 1 and enforced.get("runtime_cpu_parallelism") == 1, "runner execution policy mismatch")
+    _require(bool(context.get("detected_address_space_limit")) and bool(context.get("runner_filesystem_device_id")), "runner detected resource policy is incomplete")
     corpus_ids = {doc["id"] for doc in documents}
     for artifact in artifacts:
         validate_result(artifact, manifest, expected, corpus_ids)
@@ -266,10 +362,19 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
             _require(len(unavailable) == repetitions, f"{engine_id}: expected {repetitions} unavailable repetition records")
             _require([item["repetition"] for item in unavailable] == list(range(1, repetitions + 1)), f"{engine_id}: unavailable repetition sequence is incomplete")
             first = unavailable[0]
+            for item in unavailable[1:]:
+                _require(item["engine"] == first["engine"], f"{engine_id}: unavailable engine metadata differs across repetitions")
+                _require(item["unavailable"] == first["unavailable"], f"{engine_id}: unavailable classification differs across repetitions")
             ledger.append({"engine": first["engine"], "status": "unavailable", "detail": first["unavailable"]})
             continue
         _require(len(available) == repetitions, f"{engine_id}: expected {repetitions} retained repetitions")
         _require([item["repetition"] for item in available] == list(range(1, repetitions + 1)), f"{engine_id}: retained repetition sequence is incomplete")
+        baseline = available[0]
+        for item in available[1:]:
+            _require(item["engine"] == baseline["engine"], f"{engine_id}: engine metadata differs across repetitions")
+            _require(item["versions"] == baseline["versions"], f"{engine_id}: versions differ across repetitions")
+            _require(item["config"] == baseline["config"], f"{engine_id}: benchmark config differs across repetitions")
+            _require(item["environment"] == baseline["environment"], f"{engine_id}: detected/enforced environment differs across repetitions")
         if any(all(next(case for case in item["cases"] if case["id"] == query["id"])["status"] == "ok" for item in available) for query in manifest["queries"]):
             completed.add(engine_id)
         engine = available[0]["engine"]
@@ -277,12 +382,15 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
             "engine": engine,
             "elapsed_nanos": [item["build"]["elapsed_nanos"] for item in available],
             "docs_per_second": [item["build"]["docs_per_second"] for item in available],
+            "cpu": [item["build"]["cpu"] for item in available],
+            "peak_rss": [item["build"]["peak_rss"] for item in available],
             "durable_bytes": [item["storage"]["durable_bytes"] for item in available],
             "wal_bytes": [item["storage"]["wal_bytes"] for item in available],
             "transient_bytes": [item["storage"]["transient_bytes"] for item in available],
             "commands": [item["command"] for item in available],
             "versions": available[0]["versions"],
             "config": available[0]["config"],
+            "environment": available[0]["environment"],
         })
         for query in manifest["queries"]:
             cases = [next(case for case in item["cases"] if case["id"] == query["id"]) for item in available]
@@ -323,6 +431,16 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
     }
 
 
+def format_resources(resources: list[dict[str, Any]], divisor: float, suffix: str) -> str:
+    values = []
+    for resource in resources:
+        if resource["status"] == "ok":
+            values.append(f"{resource['value'] / divisor:.3f} {suffix}")
+        else:
+            values.append(f"unsupported: {resource['reason']}")
+    return ", ".join(values)
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     lines = [
         "# Same-corpus lexical comparison",
@@ -340,11 +458,13 @@ def render_markdown(report: dict[str, Any]) -> str:
     ]
     for row in report["headline_rows"]:
         lines.append(f"| {row['engine']['name']} | {row['case']} | {row['p50_nanos'] / 1e6:.3f} ms | {row['p95_nanos'] / 1e6:.3f} ms | {row['p99_nanos'] / 1e6:.3f} ms | `{row['result_digest']}` |")
-    lines.extend(["", "## Build and checkpointed storage", "", "| engine | build repetitions (s) | docs/s | durable bytes | WAL bytes | transient bytes |", "| --- | --- | --- | --- | --- | --- |"]) 
+    lines.extend(["", "## Build resources and checkpointed storage", "", "| engine | build repetitions (s) | docs/s | CPU per repetition | peak RSS per repetition | durable bytes | WAL bytes | transient bytes |", "| --- | --- | --- | --- | --- | --- | --- | --- |"])
     for build in report["builds"]:
         elapsed = ", ".join(f"{value / 1e9:.3f}" for value in build["elapsed_nanos"])
         throughput = ", ".join(f"{value:.1f}" for value in build["docs_per_second"])
-        lines.append(f"| {build['engine']['name']} | {elapsed} | {throughput} | {build['durable_bytes']} | {build['wal_bytes']} | {build['transient_bytes']} |")
+        cpu = format_resources(build["cpu"], 1e9, "s")
+        rss = format_resources(build["peak_rss"], 1024 * 1024, "MiB")
+        lines.append(f"| {build['engine']['name']} | {elapsed} | {throughput} | {cpu} | {rss} | {build['durable_bytes']} | {build['wal_bytes']} | {build['transient_bytes']} |")
     lines.extend(["", "## Equivalence and availability ledger", "", "| engine | case | status | detail |", "| --- | --- | --- | --- |"])
     for item in report["equivalence_ledger"]:
         detail = item["detail"]
@@ -359,6 +479,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines.append("")
         lines.append(f"- Versions: `{json.dumps(build['versions'], sort_keys=True)}`")
         lines.append(f"- Configuration: `{json.dumps(build['config'], sort_keys=True)}`")
+        lines.append(f"- Environment: `{json.dumps(build['environment'], sort_keys=True)}`")
         for command in build["commands"]:
             lines.append(f"- Command: `{' '.join(command)}`")
         lines.append("")

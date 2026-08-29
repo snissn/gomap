@@ -55,25 +55,36 @@ The frozen contract is:
 - 10,000 deterministic documents with `id`, `title`, `body`, and `tenant`;
 - Unicode NFKC plus lowercase normalization and contiguous ASCII alphanumeric
   tokens, with no stopwords;
-- `title` weight 3, `body` weight 1, BM25 `k1=1.2`, `b=0.75`;
+- `title` weight 3, `body` weight 1, and the TreeDB BM25F formula with
+  `k1=1.2`, `b=0.75`, per-field average-length normalization, union-document
+  term IDF, and one saturation step after weighted field-TF combination;
 - top-K 10 with score-descending/document-ID-ascending ties;
 - two warmups and 20 retained raw latency samples per query per repetition;
 - warm in-process cache state after build and reopen;
 - common term, rare term, AND, OR, exact phrase, and scalar-filtered term cases.
 
-The fixture intentionally makes the expected top-K IDs stable across the
-explicit analyzers and BM25 implementations. This validates execution and
-result equivalence; it does not claim that engine scores are numerically
-identical or that the synthetic fixture measures production relevance.
+The common-term top-K is an explicit scoring probe. Its checked expected order
+depends on title-vs-body `3:1` weights, unequal term frequencies, and unequal
+field lengths. Tests show that `1:1` weights or `b=0` changes the order, while
+same-field/same-length pairs prove term-frequency ordering. The reference
+interpreter implements the pinned BM25F equation rather than a token-count
+proxy.
+
+For engines without native BM25F, adapters index one frozen comparison field:
+title tokens repeated exactly three times, followed by body tokens. The corpus
+keeps title and body lengths equal within each document, so the synthetic
+field's weighted TF and length denominator are algebraically identical to the
+pinned BM25F combination. This validates ordered IDs, not numeric score parity
+or production relevance.
 
 ## Pinned engines and setup
 
 | engine | pin | analyzer/index configuration | setup command |
 | --- | --- | --- | --- |
-| TreeDB | checked-out root module/commit | accepted text-v2, simple analyzer, stored positions, score-only, no document fetch | root Go module |
-| Apache Lucene | `org.apache.lucene:lucene-core:9.12.1`, `lucene-analysis-common:9.12.1` | `StandardAnalyzer`, `BM25Similarity(1.2,0.75)`, FSDirectory | `cd benchmarks/text_hybrid_scoreboard/lucene_adapter && mvn -q -DskipTests dependency:go-offline` |
-| Bleve | `github.com/blevesearch/bleve/v2 v2.4.4` | standard analyzer, keyword tenant, Scorch | `cd benchmarks/text_hybrid_scoreboard/bleve_adapter && GOWORK=off go mod tidy` |
-| SQLite FTS5 | Python stdlib SQLite build, exact Python/SQLite versions captured per artifact | `unicode61 remove_diacritics 2`, `bm25(0,3,1,0)`, WAL + FULL synchronous | no downloaded dependency |
+| TreeDB | checked-out root module/commit | accepted text-v2 BM25F, simple analyzer, stored positions, score-only, no document fetch | root Go module |
+| Apache Lucene | `org.apache.lucene:lucene-core:9.12.1`, `lucene-analysis-common:9.12.1` | `StandardAnalyzer`, weighted comparison field, `BM25Similarity(1.2,0.75)`, FSDirectory | `cd benchmarks/text_hybrid_scoreboard/lucene_adapter && mvn -q -DskipTests dependency:go-offline` |
+| Bleve | `github.com/blevesearch/bleve/v2 v2.4.4` | standard analyzer, weighted comparison field, keyword tenant, Scorch | `cd benchmarks/text_hybrid_scoreboard/bleve_adapter && GOWORK=off go mod tidy` |
+| SQLite FTS5 | Python stdlib SQLite build, exact Python/SQLite versions captured per artifact | weighted comparison field, `unicode61 remove_diacritics 2`, `bm25()`, WAL + FULL synchronous | no downloaded dependency |
 
 The Lucene Maven project and Bleve Go module are copied into isolated dependency
 workspaces under the run directory; neither changes the checkout or root Go
@@ -85,6 +96,23 @@ setup command, reason, and bounded stderr. An adapter execution error after
 successful setup is not relabeled as unavailable and aborts the run. Timeout,
 fallback, or partial output also aborts rather than producing a row.
 
+## Host and execution policy
+
+The manifest freezes one query at a time, one engine process at a time, runtime
+CPU parallelism of one, monotonic wall-clock latency, process-scoped build CPU,
+and process-lifetime peak RSS. The runner detects the inherited address-space
+limit without changing it and passes the detected policy to every adapter.
+It also records the output filesystem device. Each adapter records corpus,
+index, and result filesystem identities and fails validation unless all three
+are the output filesystem. Go adapters run with `GOMAXPROCS=1`; Lucene runs
+with `-XX:ActiveProcessorCount=1`.
+
+The validator rejects any artifact whose recorded contract, filesystem policy,
+memory-limit policy, query/process concurrency, or CPU parallelism differs from
+the manifest. Consolidation also rejects changes in detected environment,
+engine identity, engine/runtime versions, or benchmark configuration between
+retained repetitions.
+
 ## Shared result and validation contract
 
 Each repetition emits `treedb_lexical_result/v1`, formally described by
@@ -92,20 +120,24 @@ Each repetition emits `treedb_lexical_result/v1`, formally described by
 
 - exact command, engine/runtime versions, and complete analyzer/index config;
 - manifest and corpus digests plus document count;
-- build elapsed time, throughput, CPU time, and peak RSS where the runtime can
-  report it;
+- build elapsed time and throughput plus typed per-repetition CPU and peak-RSS
+  evidence; an unavailable runtime metric is `status=unsupported` with a reason,
+  never a bare null;
 - checkpointed durable bytes separately from WAL and transient bytes;
 - raw query samples and consolidated p50/p95/p99;
 - ordered result IDs and digests before and after reopen;
 - intended-route proof and explicit no-fallback/no-timeout state;
+- frozen/detected filesystem, memory-limit, concurrency, and resource settings;
 - typed per-case `unsupported` rows where a semantic is genuinely unavailable.
 
 `lexical_common.validate_result` deterministically rejects document count or
 content drift, missing/extra query cases, duplicates, IDs outside the corpus,
 reference ID/order mismatch, digest mismatch, missing reopen proof, missing
-intended-route evidence, fallback, timeout, malformed unavailable rows, and
-sample-count drift. Unsupported rows stay in the equivalence ledger and never
-enter the headline matrix.
+intended-route evidence, fallback, timeout, malformed resource/unavailable
+rows, environment-policy mismatch, and sample-count drift. Consolidation also
+rejects per-repetition engine/version/config/environment drift. Unsupported
+semantic rows stay in the equivalence ledger and never enter the headline
+matrix.
 
 Consolidation emits `treedb_lexical_comparison/v1` and fails unless an accepted
 TreeDB text-v2 row and accepted equivalent rows from at least two external
@@ -151,7 +183,9 @@ cd benchmarks/text_hybrid_scoreboard/lucene_adapter \
   && mvn -q -DskipTests compile
 ```
 
-Then run the retained command at the top of this document. There are no timing
-threshold tests; correctness is established by manifest interpretation,
-normalization, exact result validation, typed unsupported handling, route proof,
-and reopen proof.
+Then run the retained command at the top of this document from a clean checkout;
+use `--allow-dirty` only for the coordinator's pre-commit smoke. There are no
+timing threshold tests. Correctness is established by BM25F manifest
+interpretation, normalization, ordered result validation, typed
+unsupported/resource handling, environment and repetition-metadata rejection,
+route proof, and reopen proof.

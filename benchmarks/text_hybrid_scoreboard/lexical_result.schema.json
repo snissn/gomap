@@ -32,14 +32,51 @@
     "command": {"type": "array", "minItems": 1, "items": {"type": "string"}},
     "versions": {"type": "object", "minProperties": 1},
     "config": {"type": "object", "minProperties": 1},
+    "environment": {
+      "type": "object",
+      "required": ["contract", "filesystem", "memory", "execution"],
+      "properties": {
+        "contract": {"type": "object", "minProperties": 1},
+        "filesystem": {
+          "type": "object",
+          "required": ["runner_device_id", "corpus_store_id", "index_store_id", "result_store_id", "same_filesystem"],
+          "properties": {
+            "runner_device_id": {"type": "string", "minLength": 1},
+            "corpus_store_id": {"type": "string", "minLength": 1},
+            "index_store_id": {"type": "string", "minLength": 1},
+            "result_store_id": {"type": "string", "minLength": 1},
+            "same_filesystem": {"const": true}
+          }
+        },
+        "memory": {
+          "type": "object",
+          "required": ["detected_address_space_limit", "detection_source", "matches_runner_detected", "adapter_changed_limit"],
+          "properties": {
+            "detected_address_space_limit": {"type": "string", "minLength": 1},
+            "detection_source": {"type": "string", "minLength": 1},
+            "matches_runner_detected": {"const": true},
+            "adapter_changed_limit": {"const": false}
+          }
+        },
+        "execution": {
+          "type": "object",
+          "required": ["query_concurrency", "engine_process_concurrency", "runtime_cpu_parallelism"],
+          "properties": {
+            "query_concurrency": {"const": 1},
+            "engine_process_concurrency": {"const": 1},
+            "runtime_cpu_parallelism": {"const": 1}
+          }
+        }
+      }
+    },
     "build": {
       "type": "object",
-      "required": ["elapsed_nanos", "docs_per_second", "cpu_nanos", "peak_rss_bytes", "checkpointed"],
+      "required": ["elapsed_nanos", "docs_per_second", "cpu", "peak_rss", "checkpointed"],
       "properties": {
         "elapsed_nanos": {"type": "integer", "minimum": 0},
         "docs_per_second": {"type": "number", "minimum": 0},
-        "cpu_nanos": {"type": ["integer", "null"], "minimum": 0},
-        "peak_rss_bytes": {"type": ["integer", "null"], "minimum": 0},
+        "cpu": {"$ref": "#/$defs/resource"},
+        "peak_rss": {"$ref": "#/$defs/resource"},
         "checkpointed": {"const": true}
       }
     },
@@ -105,11 +142,34 @@
   "allOf": [
     {
       "if": {"properties": {"status": {"const": "ok"}}},
-      "then": {"required": ["corpus", "command", "versions", "config", "build", "storage", "reopen"]}
+      "then": {"required": ["corpus", "command", "versions", "config", "environment", "build", "storage", "reopen"]}
     },
     {
       "if": {"properties": {"status": {"const": "unavailable"}}},
       "then": {"required": ["unavailable"], "properties": {"cases": {"maxItems": 0}}}
     }
-  ]
+  ],
+  "$defs": {
+    "resource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["status", "value", "unit"],
+          "properties": {
+            "status": {"const": "ok"},
+            "value": {"type": "integer", "minimum": 0},
+            "unit": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["status", "reason"],
+          "properties": {
+            "status": {"const": "unsupported"},
+            "reason": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    }
+  }
 }
