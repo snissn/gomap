@@ -36,10 +36,11 @@ func prepareColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir string, cf
 	if err != nil {
 		return columnHNSWSearchPackPreparedAsset{}, err
 	}
-	length, err := columnHNSWSearchPackStreamLength(input)
+	plan, err := planColumnHNSWSearchPackStream(input)
 	if err != nil {
 		return columnHNSWSearchPackPreparedAsset{}, err
 	}
+	length := int64(plan.totalLength)
 	appender, err := newColumnVectorGraphAssetAppender(assetRootDir, cfg, authority)
 	if err != nil {
 		return columnHNSWSearchPackPreparedAsset{}, err
@@ -70,66 +71,6 @@ func prepareColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir string, cf
 		return columnHNSWSearchPackPreparedAsset{}, err
 	}
 	return prepared, nil
-}
-
-func columnHNSWSearchPackStreamLength(input columnHNSWSearchPackBuildInput) (int64, error) {
-	if err := validateColumnHNSWSearchPackBuildInputWithoutVectors(input); err != nil {
-		return 0, err
-	}
-	sections := 8 + 2*len(input.AdjacencyLayers)
-	if input.HasAuxiliaryNavigation {
-		sections += 2
-	}
-	header := columnHNSWSearchPackHeaderSize
-	if input.MembershipDigest != ([32]byte{}) {
-		header = columnHNSWSearchPackHeaderSizeV2
-	}
-	cursor, ok := alignColumnHNSWSearchPackUint64(uint64(header+sections*columnHNSWSearchPackSectionEntrySize), uint64(columnHNSWSearchPackAlignment))
-	if !ok {
-		return 0, errors.New("collections: hnsw search pack directory length overflow")
-	}
-	add := func(count, width int, alignment uint32) error {
-		off, ok := alignColumnHNSWSearchPackUint64(cursor, uint64(alignment))
-		if count < 0 || !ok || uint64(count) > (uint64(math.MaxInt)-off)/uint64(width) {
-			return errors.New("collections: hnsw search pack length overflow")
-		}
-		cursor = off + uint64(count*width)
-		return nil
-	}
-	if err := add(input.Rows*input.VectorStride, 4, columnHNSWSearchPackVectorSectionAlignment); err != nil {
-		return 0, err
-	}
-	if err := add(len(input.Levels), 2, columnHNSWSearchPackAlignment); err != nil {
-		return 0, err
-	}
-	for _, layer := range input.AdjacencyLayers {
-		if err := add(len(layer.Offsets), 8, columnHNSWSearchPackAlignment); err != nil {
-			return 0, err
-		}
-		if err := add(len(layer.Neighbors), 4, columnHNSWSearchPackAlignment); err != nil {
-			return 0, err
-		}
-	}
-	if input.HasAuxiliaryNavigation {
-		if err := add(len(input.AuxiliaryNavigation.Offsets), 8, columnHNSWSearchPackAlignment); err != nil {
-			return 0, err
-		}
-		if err := add(len(input.AuxiliaryNavigation.Neighbors), 4, columnHNSWSearchPackAlignment); err != nil {
-			return 0, err
-		}
-	}
-	for _, v := range [][]int64{input.RowRefGenerations, input.RowRefPartIDs, input.RowRefRowIndexes, input.RowRefAppliedCommandLSN} {
-		if err := add(len(v), 8, columnHNSWSearchPackAlignment); err != nil {
-			return 0, err
-		}
-	}
-	if err := add(len(input.DocumentIDOffsets), 8, columnHNSWSearchPackAlignment); err != nil {
-		return 0, err
-	}
-	if err := add(len(input.DocumentIDBytes), 1, columnHNSWSearchPackAlignment); err != nil {
-		return 0, err
-	}
-	return int64(cursor), nil
 }
 
 func buildColumnHNSWSearchPackInputWithoutVectors(def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, rows []columnVectorGraphAssetRow) (columnHNSWSearchPackBuildInput, error) {

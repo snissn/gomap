@@ -1255,7 +1255,7 @@ func newColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig
 		unlockLock:     true,
 		created:        true,
 	}
-	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_EXCL|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		appender.releaseLock()
 		return nil, err
@@ -1497,14 +1497,14 @@ func initializeColumnPhysicalAssetSegmentAppenderStableOpen(appender *columnPhys
 }
 
 func openColumnAssetSegmentAppendFile(assetPath string) (*os.File, bool, bool, error) {
-	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_EXCL|os.O_RDWR|os.O_APPEND, 0o600)
 	if err == nil {
 		return file, true, true, nil
 	}
 	if !errors.Is(err, os.ErrExist) {
 		return nil, false, false, err
 	}
-	file, err = os.OpenFile(assetPath, os.O_RDWR, 0o600)
+	file, err = os.OpenFile(assetPath, os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, false, false, err
 	}
@@ -1513,14 +1513,14 @@ func openColumnAssetSegmentAppendFile(assetPath string) (*os.File, bool, bool, e
 
 func openColumnAssetSegmentAppendFileAt(parent *os.File, assetPath string) (*os.File, bool, bool, error) {
 	name := filepath.Base(assetPath)
-	file, err := rootpublication.OpenStableChildFile(parent, name, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	file, err := rootpublication.OpenStableChildFile(parent, name, os.O_CREATE|os.O_EXCL|os.O_RDWR|os.O_APPEND, 0o600)
 	if err == nil {
 		return file, true, true, nil
 	}
 	if !errors.Is(err, os.ErrExist) {
 		return nil, false, false, err
 	}
-	file, err = rootpublication.OpenStableChildFile(parent, name, os.O_RDWR, 0o600)
+	file, err = rootpublication.OpenStableChildFile(parent, name, os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, false, false, err
 	}
@@ -1592,53 +1592,6 @@ func (a *columnPhysicalAssetSegmentAppender) appendKindWithAlignment(payload []b
 	return ref, nil
 }
 
-// appendKindWithKnownLength emits one existing-format asset without requiring
-// its complete payload to be retained by the caller.
-func (a *columnPhysicalAssetSegmentAppender) appendKindWithKnownLength(length int64, kind ColumnAssetKind, generation, partID uint64, alignment int64, emit func(io.Writer) error) (ColumnAssetRef, error) {
-	if a == nil || a.file == nil {
-		return ColumnAssetRef{}, errors.New("collections: nil column physical asset appender")
-	}
-	if a.failed {
-		return ColumnAssetRef{}, errors.New("collections: column physical asset appender is failed")
-	}
-	if length <= 0 || emit == nil {
-		return ColumnAssetRef{}, errors.New("collections: column physical asset streamed payload is empty")
-	}
-	if generation == 0 || partID == 0 {
-		return ColumnAssetRef{}, errors.New("collections: column physical asset append requires generation and part_id")
-	}
-	if a.stableRegistry != nil {
-		if _, _, _, err := stableColumnAssetResourceClassification(kind); err != nil {
-			return ColumnAssetRef{}, err
-		}
-	}
-	padding := columnAssetSegmentPrefixPadding(a.offset, alignment)
-	if padding > 0 {
-		written, err := writeColumnAssetSegmentZeroPadding(a.file, padding)
-		a.offset += int64(written)
-		if err != nil || written != padding {
-			a.failed = true
-			if err == nil {
-				err = io.ErrShortWrite
-			}
-			return ColumnAssetRef{}, err
-		}
-	}
-	writer := &columnAssetChecksumWriter{dst: a.file, limit: length}
-	if err := emit(writer); err != nil || writer.written != length {
-		a.offset += writer.written
-		a.failed = true
-		if err == nil {
-			err = io.ErrShortWrite
-		}
-		return ColumnAssetRef{}, err
-	}
-	a.offset += writer.written
-	ref := ColumnAssetRef{Kind: kind, Namespace: a.cfg.AssetManager.Namespace, Generation: generation, PartID: partID, FileID: a.fileID, Offset: a.offset - length, Length: length, Checksum: writer.checksum}
-	a.recordStableRef(ref)
-	return ref, nil
-}
-
 type columnAssetReservedPayload struct {
 	writer *columnAssetChecksumWriter
 	file   *os.File
@@ -1691,8 +1644,14 @@ func (a *columnPhysicalAssetSegmentAppender) appendKindWithReservedPayload(lengt
 		}
 	}
 	start := a.offset
-	payload := &columnAssetReservedPayload{writer: &columnAssetChecksumWriter{dst: a.file, limit: length}, file: a.file, start: start, length: length}
+	reservedFile, err := a.openReservedPayloadFile()
+	if err != nil {
+		a.failed = true
+		return ColumnAssetRef{}, err
+	}
+	payload := &columnAssetReservedPayload{writer: &columnAssetChecksumWriter{dst: a.file, limit: length}, file: reservedFile, start: start, length: length}
 	if err := emit(payload); err != nil || payload.writer.written != length {
+		_ = reservedFile.Close()
 		a.offset += payload.writer.written
 		a.failed = true
 		if err == nil {
@@ -1700,7 +1659,11 @@ func (a *columnPhysicalAssetSegmentAppender) appendKindWithReservedPayload(lengt
 		}
 		return ColumnAssetRef{}, err
 	}
-	checksum, err := checksumColumnAssetSegmentRange(a.file, start, length)
+	checksum, err := checksumColumnAssetSegmentRange(reservedFile, start, length)
+	closeReservedErr := reservedFile.Close()
+	if err == nil {
+		err = closeReservedErr
+	}
 	if err != nil {
 		a.offset += payload.writer.written
 		a.failed = true
@@ -1710,6 +1673,13 @@ func (a *columnPhysicalAssetSegmentAppender) appendKindWithReservedPayload(lengt
 	ref := ColumnAssetRef{Kind: kind, Namespace: a.cfg.AssetManager.Namespace, Generation: generation, PartID: partID, FileID: a.fileID, Offset: start, Length: length, Checksum: checksum}
 	a.recordStableRef(ref)
 	return ref, nil
+}
+
+func (a *columnPhysicalAssetSegmentAppender) openReservedPayloadFile() (*os.File, error) {
+	if a.stableParent != nil && a.stableChildName != "" {
+		return rootpublication.OpenStableChildFile(a.stableParent, a.stableChildName, os.O_RDWR, 0o600)
+	}
+	return os.OpenFile(a.assetPath, os.O_RDWR, 0o600)
 }
 
 func checksumColumnAssetSegmentRange(file *os.File, offset, length int64) (uint32, error) {

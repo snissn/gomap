@@ -99,26 +99,21 @@ func TestColumnHNSWSearchPackStreamedRowsMatchOracle4427(t *testing.T) {
 		t.Fatal(err)
 	}
 	input.NormalizedVectors = nil
-	var got bytes.Buffer
-	written, err := writeColumnHNSWSearchPackRows(&got, input, rows)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if written != int64(len(want)) || !bytes.Equal(got.Bytes(), want) {
-		t.Fatalf("stream bytes=%d want=%d equal=%t", written, len(want), bytes.Equal(got.Bytes(), want))
-	}
 	file, err := os.CreateTemp(t.TempDir(), "hnsw-pack-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = file.Close() }()
-	written, err = writeColumnHNSWSearchPackRowsWithBackpatch(file, func(p []byte) error { _, err := file.WriteAt(p, 0); return err }, input, rows)
+	written, err := writeColumnHNSWSearchPackRowsWithBackpatch(file, func(p []byte) error { _, err := file.WriteAt(p, 0); return err }, input, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
 	gotRaw := make([]byte, written)
 	if _, err := file.ReadAt(gotRaw, 0); err != nil {
 		t.Fatal(err)
+	}
+	if written != int64(len(want)) {
+		t.Fatalf("stream bytes=%d want=%d", written, len(want))
 	}
 	if !bytes.Equal(gotRaw, want) {
 		t.Fatal("backpatched streamed pack differs from oracle")
@@ -1781,6 +1776,16 @@ func BenchmarkColumnHNSWSearchPackEncoding4420(b *testing.B) {
 		}
 	})
 	b.Run("direct", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			raw, err := encodeColumnHNSWSearchPackRows(input, rows)
+			if err != nil {
+				b.Fatal(err)
+			}
+			runtime.KeepAlive(raw)
+		}
+	})
+	b.Run("stream", func(b *testing.B) {
 		file, err := os.CreateTemp(b.TempDir(), "hnsw-pack-")
 		if err != nil {
 			b.Fatal(err)
