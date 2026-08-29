@@ -466,6 +466,11 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.TimedOverlap.Rounds[0].OverlappingReaders = raw.TimedOverlap.Rounds[0].OverlappingReaders[:3]
 			a.RawEvidence["treedb"] = raw
 		}},
+		{"missing TreeDB phase attribution", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution = nil
+			a.RawEvidence["treedb"] = raw
+		}},
 		{"missing TreeDB phase boundary", func(a *minimaArtifact) {
 			raw := a.RawEvidence["treedb"]
 			raw.PhaseAttribution.Phases = raw.PhaseAttribution.Phases[1:]
@@ -761,10 +766,11 @@ func validMinimaArtifact() minimaArtifact {
 				"baseline": {"rss_bytes": "test"},
 				"end":      {"rss_bytes": "test"},
 			},
-			PhaseAttribution: minimaTestPhaseAttribution(),
 		}
 		if backend.Name == "treedb" {
 			evidence := rawEvidence[backend.Name]
+			phaseAttribution := minimaTestPhaseAttribution()
+			evidence.PhaseAttribution = &phaseAttribution
 			evidence.ServiceLog = minimaRawServiceLog{
 				Path: "/tmp/treedb-service.log", Tail: "TreeDB Document Service listening", MaxTailBytes: 64 << 10,
 			}
@@ -1163,6 +1169,9 @@ func TestMinimaPhaseUnattributedBound(t *testing.T) {
 
 func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	tree, qdrant := minimaPartialBackendEvidence(t)
+	if qdrant.RawEvidence["qdrant"].PhaseAttribution != nil {
+		t.Fatal("Qdrant input fixture unexpectedly contains TreeDB phase attribution")
+	}
 	dir := t.TempDir()
 	treePath, qdrantPath := filepath.Join(dir, "tree.json"), filepath.Join(dir, "qdrant.json")
 	for path, artifact := range map[string]minimaArtifact{treePath: tree, qdrantPath: qdrant} {
@@ -1196,6 +1205,9 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 		combined.RawEvidence["qdrant"].ResourceAvailability["end"]["rss_bytes"] != "test" {
 		t.Fatal("combined artifact dropped typed backend raw evidence fields")
 	}
+	if combined.RawEvidence["qdrant"].PhaseAttribution != nil {
+		t.Fatal("combined Qdrant raw evidence gained TreeDB phase attribution")
+	}
 	var wire struct {
 		RawEvidence map[string]map[string]json.RawMessage `json:"backend_raw_evidence"`
 	}
@@ -1208,6 +1220,9 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	}
 	if _, leaked := treeRaw["readiness"]; leaked {
 		t.Fatal("combined TreeDB raw evidence leaked Qdrant readiness")
+	}
+	if _, leaked := qdrantRaw["phase_attribution"]; leaked {
+		t.Fatal("combined Qdrant raw evidence serialized TreeDB phase attribution")
 	}
 	if _, ok := qdrantRaw["collection_configuration_transition"]; !ok {
 		t.Fatal("combined Qdrant raw evidence dropped configuration transition")

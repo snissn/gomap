@@ -1258,7 +1258,10 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 			if err := validateMinimaTreeDBProvenance(artifact.Backends[0]); err != nil {
 				return err
 			}
-			if err := validateMinimaTreeDBPhaseAttribution(raw.PhaseAttribution, raw.RestartBoundary); err != nil {
+			if raw.PhaseAttribution == nil {
+				return fmt.Errorf("minima artifact: TreeDB phase attribution is missing")
+			}
+			if err := validateMinimaTreeDBPhaseAttribution(*raw.PhaseAttribution, raw.RestartBoundary); err != nil {
 				return err
 			}
 		}

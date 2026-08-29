@@ -257,7 +257,7 @@ type minimaRawBackendEvidence struct {
 	NativeRouteResponses              map[string]json.RawMessage              `json:"native_route_responses,omitempty"`
 	CollectionConfigurationTransition *minimaRawQdrantConfigurationTransition `json:"collection_configuration_transition,omitempty"`
 	Readiness                         *minimaRawQdrantReadiness               `json:"readiness,omitempty"`
-	PhaseAttribution                  minimaRawPhaseAttribution               `json:"phase_attribution,omitempty"`
+	PhaseAttribution                  *minimaRawPhaseAttribution              `json:"phase_attribution,omitempty"`
 }
 
 type minimaPayloadEvidence struct {
@@ -885,7 +885,10 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			if err := validateMinimaTreeDBProvenance(backend); err != nil {
 				return err
 			}
-			if err := validateMinimaTreeDBPhaseAttribution(raw.PhaseAttribution, raw.RestartBoundary); err != nil {
+			if raw.PhaseAttribution == nil {
+				return errors.New("minima artifact: TreeDB phase attribution is missing")
+			}
+			if err := validateMinimaTreeDBPhaseAttribution(*raw.PhaseAttribution, raw.RestartBoundary); err != nil {
 				return err
 			}
 		}
@@ -899,7 +902,7 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			return err
 		}
 		if name == "treedb" {
-			if err := validateMinimaTreeDBResourceReconciliation(raw.PhaseAttribution, resource); err != nil {
+			if err := validateMinimaTreeDBResourceReconciliation(*raw.PhaseAttribution, resource); err != nil {
 				return err
 			}
 		}
