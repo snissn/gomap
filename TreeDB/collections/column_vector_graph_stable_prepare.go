@@ -236,12 +236,15 @@ func (c *Collection) PrepareVectorIndexStableClosure(name string) (*ColumnVector
 	if manifest.AppliedCommandLSN == 0 {
 		return nil, errors.New("collections: stable vector prepared closure requires non-zero manifest AppliedCommandLSN")
 	}
-	rows, usedTypedColumns, err := c.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap, catalog, *cfg, records, manifest, def)
+	rows, typedSource, usedTypedColumns, err := c.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap, catalog, *cfg, records, manifest, def)
 	if err == nil && !usedTypedColumns {
 		rows, err = c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
 	}
 	if err != nil {
 		return nil, err
+	}
+	if typedSource != nil {
+		defer func() { _ = typedSource.Close() }()
 	}
 	if !usedTypedColumns {
 		if err := c.assignColumnVectorGraphRowRefsFromBaseManifest(baseMeta.Name, *cfg, records, manifest.Generation, rows); err != nil {
@@ -264,9 +267,9 @@ func (c *Collection) PrepareVectorIndexStableClosure(name string) (*ColumnVector
 	if err := buildColumnVectorGraphAdjacency(rows, def); err != nil {
 		return nil, err
 	}
-	prepared, _, _, err := prepareColumnVectorGraphRebuildManifestForPublication(
+	prepared, _, _, err := prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource(
 		baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records,
-		manifest.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(),
+		manifest.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), typedSource, nil,
 	)
 	if err != nil {
 		return nil, err
