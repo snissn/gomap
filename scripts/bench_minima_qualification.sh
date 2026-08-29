@@ -19,6 +19,7 @@ TREEDB_COLLECTION=${TREEDB_COLLECTION:-gomap_minima_${RANDOM}_$$}
 TREEDB_PROFILE=${TREEDB_PROFILE:-command_wal_durable}
 TREEDB_EF_SEARCH=${TREEDB_EF_SEARCH:-128}
 TREEDB_OPERATION_TIMEOUT=${TREEDB_OPERATION_TIMEOUT:-120}
+TREEDB_STARTUP_TIMEOUT=${TREEDB_STARTUP_TIMEOUT:-3600}
 TREEDB_DIAGNOSTICS_DIR=${TREEDB_DIAGNOSTICS_DIR:-}
 TREEDB_DIAGNOSTICS_URL=${TREEDB_DIAGNOSTICS_URL:-http://127.0.0.1:17121}
 TREEDB_DIAGNOSTIC_SLOW_SECONDS=${TREEDB_DIAGNOSTIC_SLOW_SECONDS:-30}
@@ -72,6 +73,7 @@ small)
 		--collection "$TREEDB_COLLECTION" \
 		--profile "$TREEDB_PROFILE" \
 		--operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
+		--startup-timeout "$TREEDB_STARTUP_TIMEOUT" \
 		--ef-search "$TREEDB_EF_SEARCH" \
 		${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"} ||
 		treedb_status=$?
@@ -104,6 +106,7 @@ PYTHONPATH=clients/python/treedb_client/src "$PYTHON" \
 	--profile "$TREEDB_PROFILE" \
 	--ef-search "$TREEDB_EF_SEARCH" \
 	--operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
+	--startup-timeout "$TREEDB_STARTUP_TIMEOUT" \
 	${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"} ||
 	treedb_status=$?
 

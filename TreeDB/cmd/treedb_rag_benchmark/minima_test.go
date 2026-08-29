@@ -465,6 +465,29 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.TimedOverlap.Rounds[0].OverlappingReaders = raw.TimedOverlap.Rounds[0].OverlappingReaders[:3]
 			a.RawEvidence["treedb"] = raw
 		}},
+		{"missing TreeDB phase boundary", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution.Phases = raw.PhaseAttribution.Phases[1:]
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"non-reconciling TreeDB phase total", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution.UnattributedNanos++
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"missing TreeDB phase resource boundary", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution.Phases[0].ResourceEnd.Captured = false
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"qualification-only TreeDB phase classified as production", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution.Phases[len(raw.PhaseAttribution.Phases)-1].Classification = "production_path"
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"missing TreeDB product provenance", func(a *minimaArtifact) {
+			minimaTestBackend(a, "treedb").Configuration["product_commit"] = ""
+		}},
 		{"raw resource disagrees with summary", func(a *minimaArtifact) {
 			raw := a.RawEvidence["qdrant"]
 			raw.ResourceMeasurement.DiskBytes = 1
@@ -587,7 +610,11 @@ func validMinimaArtifact() minimaArtifact {
 		ReindexExecutionSHA256:    minimaReindexExecutionDigest(reindexTrace), ReindexExecutionTrace: reindexTrace,
 	}
 	backends := []minimaBackendEvidence{
-		{Name: "treedb", ServerVersion: "test", ClientVersion: "test", Durability: "wal_sync", Configuration: map[string]string{"effective": "test"}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
+		{Name: "treedb", ServerVersion: "test", ClientVersion: "test", Durability: "wal_sync", Configuration: map[string]string{
+			"effective": "test", "product_commit": strings.Repeat("a", 40), "harness_commit": strings.Repeat("a", 40),
+			"service_binary_sha256": strings.Repeat("b", 64), "runner_sha256": strings.Repeat("c", 64),
+			"operation_timeout_seconds": "120", "startup_reopen_timeout_seconds": "3600",
+		}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
 		{Name: "qdrant", ServerVersion: "test", ClientVersion: "test", Durability: "wal", Configuration: map[string]string{
 			"effective":           "test",
 			"initial_upload_hnsw": minimaQdrantInitialHNSWConfig, "initial_upload_optimizers": minimaQdrantInitialOptimizerConfig,
@@ -646,6 +673,7 @@ func validMinimaArtifact() minimaArtifact {
 				"baseline": {"rss_bytes": "test"},
 				"end":      {"rss_bytes": "test"},
 			},
+			PhaseAttribution: minimaTestPhaseAttribution(),
 		}
 		if backend.Name == "treedb" {
 			evidence := rawEvidence[backend.Name]
@@ -763,6 +791,38 @@ func validMinimaArtifact() minimaArtifact {
 	return artifact
 }
 
+func minimaTestPhaseAttribution() minimaRawPhaseAttribution {
+	names := []string{
+		"initial_durable_load",
+		"warmup_search",
+		"timed_search_write_overlap",
+		"lifecycle_mutations",
+		"pre_close_queries",
+		"restart_open_readiness",
+		"post_reopen",
+		"final_state_scroll_artifact_work",
+	}
+	resource := minimaRawResourceSnapshot{Captured: true, RSSBytes: 100, CPUSeconds: 1, DiskBytes: 1000}
+	phases := make([]minimaRawPhaseBoundary, len(names))
+	for ordinal, name := range names {
+		start := int64(1000 + ordinal*110)
+		classification := "production_path"
+		if ordinal == len(names)-1 {
+			classification = "qualification_only"
+		}
+		phases[ordinal] = minimaRawPhaseBoundary{
+			Name: name, Classification: classification, StartNanos: start, EndNanos: start + 100,
+			DurationNanos: 100, SampleCount: 1, SampleDurationNanos: 50,
+			ResourceStart: resource, ResourceEnd: resource,
+		}
+	}
+	return minimaRawPhaseAttribution{
+		Clock: "time.monotonic_ns", TotalStartNanos: 1000, TotalEndNanos: 1870,
+		TotalDurationNanos: 870, UnattributedNanos: 70,
+		UnattributedRule: minimaPhaseUnattributedRule, Phases: phases,
+	}
+}
+
 func minimaTestInt(value int) *int {
 	return &value
 }
@@ -789,7 +849,7 @@ func minimaTestNativeRouteResponse(route minimaRouteEvidence, visibility minimaV
 }
 
 func minimaTestEnvironment() map[string]string {
-	return map[string]string{"os": "test", "arch": "test", "cpu": "test", "memory": "test"}
+	return map[string]string{"os": "test", "arch": "test", "cpu": "test", "memory": "test", "host": "test-host"}
 }
 
 func minimaTestResourceMeasurement() minimaRawResourceMeasurement {

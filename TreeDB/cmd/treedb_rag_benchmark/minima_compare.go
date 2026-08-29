@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -24,6 +25,19 @@ const (
 	minimaQdrantProductionHNSWConfig      = `{"m":16,"ef_construct":100,"full_scan_threshold":10000,"max_indexing_threads":0,"on_disk":false}`
 	minimaQdrantProductionOptimizerConfig = `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":10000,"flush_interval_sec":5}`
 )
+
+const minimaPhaseUnattributedRule = "total_duration_nanos = sum(phase.duration_nanos) + unattributed_nanos; unattributed covers only runner bookkeeping between declared boundaries"
+
+var minimaTreeDBPhaseNames = []string{
+	"initial_durable_load",
+	"warmup_search",
+	"timed_search_write_overlap",
+	"lifecycle_mutations",
+	"pre_close_queries",
+	"restart_open_readiness",
+	"post_reopen",
+	"final_state_scroll_artifact_work",
+}
 
 type minimaRawTimedOverlapRound struct {
 	Ordinal                   int   `json:"ordinal"`
@@ -77,6 +91,28 @@ type minimaRawLatencyDistribution struct {
 	P95Nanos     int64 `json:"p95_nanos"`
 	P99Nanos     int64 `json:"p99_nanos"`
 	MaximumNanos int64 `json:"maximum_nanos"`
+}
+
+type minimaRawPhaseBoundary struct {
+	Name                string                    `json:"name"`
+	Classification      string                    `json:"classification"`
+	StartNanos          int64                     `json:"start_nanos"`
+	EndNanos            int64                     `json:"end_nanos"`
+	DurationNanos       int64                     `json:"duration_nanos"`
+	SampleCount         int                       `json:"sample_count"`
+	SampleDurationNanos int64                     `json:"sample_duration_nanos"`
+	ResourceStart       minimaRawResourceSnapshot `json:"resource_start"`
+	ResourceEnd         minimaRawResourceSnapshot `json:"resource_end"`
+}
+
+type minimaRawPhaseAttribution struct {
+	Clock              string                   `json:"clock"`
+	TotalStartNanos    int64                    `json:"total_start_nanos"`
+	TotalEndNanos      int64                    `json:"total_end_nanos"`
+	TotalDurationNanos int64                    `json:"total_duration_nanos"`
+	UnattributedNanos  int64                    `json:"unattributed_nanos"`
+	UnattributedRule   string                   `json:"unattributed_rule"`
+	Phases             []minimaRawPhaseBoundary `json:"phases"`
 }
 
 type minimaRawResourceSnapshot struct {
@@ -199,6 +235,7 @@ type minimaRawBackendEvidence struct {
 	NativeRouteResponses              map[string]json.RawMessage              `json:"native_route_responses,omitempty"`
 	CollectionConfigurationTransition *minimaRawQdrantConfigurationTransition `json:"collection_configuration_transition,omitempty"`
 	Readiness                         *minimaRawQdrantReadiness               `json:"readiness,omitempty"`
+	PhaseAttribution                  minimaRawPhaseAttribution               `json:"phase_attribution,omitempty"`
 }
 
 type minimaPayloadEvidence struct {
@@ -409,6 +446,73 @@ func validateMinimaNativeRouteResponse(raw map[string]json.RawMessage, row minim
 		route.VisibilityMismatches != *row.Visibility.MismatchCount ||
 		route.VisibilityRetries != *row.Visibility.RetryCount {
 		return fmt.Errorf("minima artifact: TreeDB raw route response disagrees with summary for %s", row.Scenario)
+	}
+	return nil
+}
+
+func minimaExactHex(value string, bytes int) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == bytes
+}
+
+func validateMinimaTreeDBProvenance(backend minimaBackendEvidence) error {
+	configuration := backend.Configuration
+	if !minimaExactHex(configuration["product_commit"], 20) ||
+		configuration["harness_commit"] != configuration["product_commit"] ||
+		!minimaExactHex(configuration["service_binary_sha256"], sha256.Size) ||
+		!minimaExactHex(configuration["runner_sha256"], sha256.Size) ||
+		backend.Environment["host"] == "" {
+		return errors.New("minima artifact: TreeDB product/harness/binary/host provenance is incomplete")
+	}
+	operationTimeout, operationErr := strconv.ParseFloat(configuration["operation_timeout_seconds"], 64)
+	startupTimeout, startupErr := strconv.ParseFloat(configuration["startup_reopen_timeout_seconds"], 64)
+	if operationErr != nil || operationTimeout != 120 || startupErr != nil || startupTimeout <= 0 || !finiteNonnegative(startupTimeout) {
+		return errors.New("minima artifact: TreeDB timeout provenance is invalid")
+	}
+	return nil
+}
+
+func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution) error {
+	if value.Clock != "time.monotonic_ns" ||
+		value.UnattributedRule != minimaPhaseUnattributedRule ||
+		value.TotalStartNanos <= 0 ||
+		value.TotalEndNanos <= value.TotalStartNanos ||
+		value.TotalDurationNanos != value.TotalEndNanos-value.TotalStartNanos ||
+		len(value.Phases) != len(minimaTreeDBPhaseNames) {
+		return errors.New("minima artifact: TreeDB phase attribution envelope is incomplete")
+	}
+	cursor, attributed := value.TotalStartNanos, int64(0)
+	for ordinal, phase := range value.Phases {
+		classification := "production_path"
+		if ordinal == len(value.Phases)-1 {
+			classification = "qualification_only"
+		}
+		if phase.Name != minimaTreeDBPhaseNames[ordinal] ||
+			phase.Classification != classification ||
+			phase.StartNanos < cursor ||
+			phase.EndNanos <= phase.StartNanos ||
+			phase.EndNanos > value.TotalEndNanos ||
+			phase.DurationNanos != phase.EndNanos-phase.StartNanos ||
+			phase.SampleCount < 0 ||
+			(ordinal != 5 && phase.SampleCount == 0) ||
+			phase.SampleDurationNanos < 0 ||
+			!phase.ResourceStart.Captured ||
+			!phase.ResourceEnd.Captured ||
+			phase.ResourceStart.RSSBytes < 0 ||
+			phase.ResourceEnd.RSSBytes < 0 ||
+			!finiteNonnegative(phase.ResourceStart.CPUSeconds) ||
+			!finiteNonnegative(phase.ResourceEnd.CPUSeconds) ||
+			phase.ResourceStart.DiskBytes < 0 ||
+			phase.ResourceEnd.DiskBytes < 0 ||
+			phase.DurationNanos > value.TotalDurationNanos-attributed {
+			return fmt.Errorf("minima artifact: TreeDB phase %d is missing or invalid", ordinal)
+		}
+		attributed += phase.DurationNanos
+		cursor = phase.EndNanos
+	}
+	if attributed > value.TotalDurationNanos ||
+		value.UnattributedNanos != value.TotalDurationNanos-attributed {
+		return errors.New("minima artifact: TreeDB phase totals do not reconcile")
 	}
 	return nil
 }
@@ -655,6 +759,12 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			}
 			if len(raw.NativeRouteResponses) != len(artifact.Manifest.Corpora) {
 				return fmt.Errorf("minima artifact: TreeDB raw route responses are incomplete")
+			}
+			if err := validateMinimaTreeDBProvenance(backend); err != nil {
+				return err
+			}
+			if err := validateMinimaTreeDBPhaseAttribution(raw.PhaseAttribution); err != nil {
+				return err
 			}
 		}
 		if name == "qdrant" {

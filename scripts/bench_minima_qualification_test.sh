@@ -62,6 +62,9 @@ chmod +x "$FAKE_BIN/go"
 cat >"$FAKE_BIN/python" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "${FAKE_PYTHON_ARGS:-}" ]]; then
+	printf '%s\n' "$@" >"$FAKE_PYTHON_ARGS"
+fi
 output=""
 while (($#)); do
 	if [[ "$1" == --output ]]; then
@@ -84,6 +87,7 @@ chmod +x "$REPO/scripts/bench_minima_qdrant.sh"
 
 set +e
 output=$(PATH="$FAKE_BIN:$PATH" PYTHON="$FAKE_BIN/python" QDRANT_BIN=/bin/true RUN_DIR="$RUN_DIR" \
+	TREEDB_STARTUP_TIMEOUT=987 FAKE_PYTHON_ARGS="$TMP/treedb-args" \
 	"$REPO/scripts/bench_minima_qualification.sh" 2>&1)
 status=$?
 set -e
@@ -97,6 +101,10 @@ fi
 [[ "$output" == *"qualification failed: TreeDB=0 Qdrant=0 comparator=7"* ]]
 [[ "$output" == *"qualification artifact: $RUN_DIR/minima_qualification.json"* ]]
 [[ "$output" == *"report: $RUN_DIR/minima_qualification.md"* ]]
+grep -qx -- '--operation-timeout' "$TMP/treedb-args"
+grep -qx -- '120' "$TMP/treedb-args"
+grep -qx -- '--startup-timeout' "$TMP/treedb-args"
+grep -qx -- '987' "$TMP/treedb-args"
 
 set +e
 small_output=$(PATH="$FAKE_BIN:$PATH" PYTHON="$FAKE_BIN/python" MODE=small \

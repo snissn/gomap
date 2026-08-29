@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
@@ -29,6 +30,20 @@ DIAGNOSTICS_STATS_PATH = "/debug/treedb/stats"
 DIAGNOSTIC_CAPTURE_BYTES = 32 << 20
 DIAGNOSTIC_STATS_BYTES = 4 << 20
 STATE_SCROLL_PAGE_SIZE = 8192
+PHASE_UNATTRIBUTED_RULE = (
+    "total_duration_nanos = sum(phase.duration_nanos) + unattributed_nanos; "
+    "unattributed covers only runner bookkeeping between declared boundaries"
+)
+PHASE_CLASSIFICATIONS = {
+    "initial_durable_load": "production_path",
+    "warmup_search": "production_path",
+    "timed_search_write_overlap": "production_path",
+    "lifecycle_mutations": "production_path",
+    "pre_close_queries": "production_path",
+    "restart_open_readiness": "production_path",
+    "post_reopen": "production_path",
+    "final_state_scroll_artifact_work": "qualification_only",
+}
 DIAGNOSTIC_PROFILE_ENDPOINTS = {
     "cpu": ("/debug/pprof/profile", "cpu.pprof"),
     "goroutine": ("/debug/pprof/goroutine?debug=2", "goroutine.txt"),
@@ -49,6 +64,20 @@ def scalar_filter(spec: dict[str, Any]) -> dict[str, Any]:
 def service_document(document: dict[str, Any]) -> dict[str, Any]:
     return {"id": document["id"], "content": document["content"], "embedding": document["vector"],
             "meta": {"user_id": document["user_id"], "fpath": document["fpath"]}}
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def repository_commit() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[2],
+        check=True, capture_output=True, text=True,
+    )
+    commit = result.stdout.strip()
+    if len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit):
+        raise RuntimeError("TreeDB Minima runner could not bind an exact source commit")
+    return commit
 
 
 class ServiceController:
@@ -281,8 +310,19 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                  operation_timeout: float, ef_search: int, diagnostics_dir: Path | None = None,
                  diagnostic_slow_seconds: float = 30, diagnostic_profile_seconds: int = 5,
                  diagnostic_capture_timeout: float = 10) -> None:
+        self._phase_total_start = self._phase_start = time.monotonic_ns()
+        self._phase_name = "initial_durable_load"
+        self._phase_boundaries: list[dict[str, Any]] = []
+        self._phase_attribution: dict[str, Any] | None = None
         self.controller = controller
+        self.source_commit = repository_commit()
+        self.runner_sha256 = file_sha256(Path(__file__).resolve())
+        self.service_binary_sha256 = file_sha256(controller.binary.resolve())
+        self.operation_timeout_seconds = operation_timeout
         controller.start()
+        self._phase_resource_start = common.server_resource_usage(
+            controller.pid, controller.data_dir, "TreeDB",
+        )
         clients = ThreadLocalClients(controller.url, operation_timeout, controller)
         super().__init__(manifest, client_factory=lambda: clients, models=None, url=controller.url,
                          collection=collection, allow_drop=False, operation_timeout=int(operation_timeout),
@@ -312,11 +352,69 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                     self._expected_insert_batches[(operation["name"], insertion["scenario"], start)] = expected_rows
         if diagnostics_dir is not None and controller.diagnostics_url is None:
             raise ValueError("diagnostics_dir requires an enabled controller diagnostics URL")
+
     def restart_controller(self) -> int:
         self.controller.start()
         if self.controller.pid is None:
             raise RuntimeError("TreeDB service controller restarted without a PID")
         return self.controller.pid
+
+    def phase_transition(self, name: str) -> None:
+        if name not in PHASE_CLASSIFICATIONS:
+            raise RuntimeError(f"unknown TreeDB attribution phase {name!r}")
+        phase_end = time.monotonic_ns()
+        resource_end = common.server_resource_usage(
+            self.controller.pid, self.storage_path, self.resource_server_name,
+        )
+        next_start = time.monotonic_ns()
+        self._phase_boundaries.append({
+            "name": self._phase_name,
+            "classification": PHASE_CLASSIFICATIONS[self._phase_name],
+            "start_nanos": self._phase_start,
+            "end_nanos": phase_end,
+            "duration_nanos": phase_end - self._phase_start,
+            "resource_start": self._phase_resource_start,
+            "resource_end": resource_end,
+        })
+        self._phase_name, self._phase_start = name, next_start
+        self._phase_resource_start = resource_end
+
+    def _finish_phase_attribution(self) -> dict[str, Any]:
+        if self._phase_attribution is not None:
+            return self._phase_attribution
+        phase_end = time.monotonic_ns()
+        resource_end = common.server_resource_usage(
+            self.controller.pid, self.storage_path, self.resource_server_name,
+        )
+        end = time.monotonic_ns()
+        self._phase_boundaries.append({
+            "name": self._phase_name,
+            "classification": PHASE_CLASSIFICATIONS[self._phase_name],
+            "start_nanos": self._phase_start,
+            "end_nanos": phase_end,
+            "duration_nanos": phase_end - self._phase_start,
+            "resource_start": self._phase_resource_start,
+            "resource_end": resource_end,
+        })
+        for phase in self._phase_boundaries:
+            samples = [
+                sample for sample in self.evidence.samples
+                if sample["start_nanos"] >= phase["start_nanos"] and sample["end_nanos"] <= phase["end_nanos"]
+            ]
+            phase["sample_count"] = len(samples)
+            phase["sample_duration_nanos"] = sum(sample["duration_nanos"] for sample in samples)
+        total = end - self._phase_total_start
+        attributed = sum(phase["duration_nanos"] for phase in self._phase_boundaries)
+        self._phase_attribution = {
+            "clock": "time.monotonic_ns",
+            "total_start_nanos": self._phase_total_start,
+            "total_end_nanos": end,
+            "total_duration_nanos": total,
+            "unattributed_nanos": total - attributed,
+            "unattributed_rule": PHASE_UNATTRIBUTED_RULE,
+            "phases": self._phase_boundaries,
+        }
+        return self._phase_attribution
 
 
     def connect(self) -> None:
@@ -798,6 +896,14 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         artifact = super().artifact()
         resource = self.resource_evidence()
         backend = artifact["backends"][0]
+        environment = {
+            "os": platform.system() + " " + platform.release(),
+            "arch": platform.machine() or "unavailable",
+            "cpu": platform.processor() or "unavailable",
+            "memory": common.memory_bytes(),
+            "python": platform.python_version(),
+            "host": platform.node() or "unavailable",
+        }
         backend.update({
             "name": "treedb", "server_version": SERVICE_CONTRACT, "client_version": CLIENT_VERSION,
             "durability": f"TreeDB {self.controller.profile}; owned service restart on the same data directory",
@@ -805,15 +911,18 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                               "metric": self.config["metric"], "scalar_fields": "meta.user_id,meta.fpath",
                               "vector_strategy": "native_runtime", "ef_search": str(self.ef_search),
                               "profile": self.controller.profile, "service_binary": str(self.controller.binary),
+                              "service_binary_sha256": self.service_binary_sha256,
+                              "runner_sha256": self.runner_sha256,
+                              "product_commit": self.source_commit, "harness_commit": self.source_commit,
+                              "operation_timeout_seconds": str(self.operation_timeout_seconds),
+                              "startup_reopen_timeout_seconds": str(self.controller.timeout),
                               "service_log_path": str(self.controller.log_path),
                               "diagnostics_url": self.controller.diagnostics_url or "disabled",
                               "block_profile_rate": str(self.controller.block_profile_rate) if self.controller.diagnostics_url else "0",
                               "mutex_profile_fraction": str(self.controller.mutex_profile_fraction) if self.controller.diagnostics_url else "0",
                               "effective_collection": json.dumps(
                                   self.effective_collection, sort_keys=True, separators=(",", ":"))},
-            "environment": {"os": platform.system() + " " + platform.release(), "arch": platform.machine() or "unavailable",
-                            "cpu": platform.processor() or "unavailable", "memory": common.memory_bytes(),
-                            "python": platform.python_version()},
+            "environment": environment,
         })
         for row in artifact["scenarios"]:
             row["backend"] = "treedb"
@@ -874,6 +983,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             "baseline": resource["baseline"]["availability"],
             "end": resource["end"]["availability"],
         }
+        # Include artifact construction and a representative full encoding in the
+        # qualification-only final phase; the final write and Go validator are outside the runner span.
+        json.dumps(artifact, sort_keys=True, allow_nan=False)
+        raw["phase_attribution"] = self._finish_phase_attribution()
         return artifact
 
 

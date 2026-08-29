@@ -622,9 +622,21 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.resource_evidence = lambda: resource
         workload.controller = SimpleNamespace(
             profile="test", binary=Path("/bin/false"), log_path=Path("/tmp/service.log"),
-            diagnostics_url=None, block_profile_rate=1, mutex_profile_fraction=1,
+            diagnostics_url=None, block_profile_rate=1, mutex_profile_fraction=1, timeout=3600, pid=123,
             log_evidence=lambda: {"path": "/tmp/service.log", "tail": "test", "max_tail_bytes": 64 << 10},
         )
+        workload.source_commit = "a" * 40
+        workload.runner_sha256 = "b" * 64
+        workload.service_binary_sha256 = "c" * 64
+        workload.operation_timeout_seconds = 120
+        workload._phase_total_start = workload._phase_start = runner.time.monotonic_ns()
+        workload._phase_name = "initial_durable_load"
+        workload._phase_boundaries = []
+        workload._phase_attribution = None
+        workload._phase_resource_start = baseline
+        workload.storage_path = Path("/tmp/data")
+        workload.resource_server_name = "TreeDB"
+        workload.evidence = SimpleNamespace(samples=[])
         workload.url = "http://127.0.0.1:1"
         workload.collection = "owned"
         workload.config = {"dimension": 8, "metric": "cosine"}
@@ -671,7 +683,8 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 "readiness": {"sessions": []},
             }},
         }
-        with mock.patch.object(common.QdrantMinimaRunner, "artifact", return_value=base_artifact):
+        with mock.patch.object(common.QdrantMinimaRunner, "artifact", return_value=base_artifact), \
+             mock.patch.object(common, "server_resource_usage", return_value=baseline):
             artifact = workload.artifact()
         configuration = artifact["backends"][0]["configuration"]
         self.assertEqual(configuration["scalar_fields"], "meta.user_id,meta.fpath")
@@ -682,6 +695,10 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertNotIn("initial_upload_hnsw", configuration)
         self.assertNotIn("collection_configuration_transition", raw)
         self.assertNotIn("readiness", raw)
+        self.assertEqual(configuration["operation_timeout_seconds"], "120")
+        self.assertEqual(configuration["startup_reopen_timeout_seconds"], "3600")
+        self.assertEqual(configuration["product_commit"], "a" * 40)
+        self.assertEqual(raw["phase_attribution"]["phases"][0]["classification"], "production_path")
         self.assertEqual(artifact["scenarios"][0]["route"]["candidate_ids"], 5)
         self.assertEqual(artifact["scenarios"][0]["route"]["visited_candidates"], 41)
         self.assertEqual(raw["native_route_responses"]["small"]["candidates"], 41)

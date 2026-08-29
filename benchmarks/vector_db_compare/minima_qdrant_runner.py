@@ -1101,6 +1101,9 @@ class QdrantMinimaRunner:
     def connect(self) -> None:
         self.client = self.client_factory()
 
+    def phase_transition(self, _name: str) -> None:
+        pass
+
     def capture_restart_origin(self) -> None:
         old_pid = self.server_pid
         if type(old_pid) is not int or old_pid <= 0:
@@ -1843,6 +1846,15 @@ class QdrantMinimaRunner:
             if operation["ordinal"] != ordinal or operation["name"] != OPERATION_NAMES[ordinal]:
                 raise RuntimeError("operation stream changed after validation")
             name = operation["name"]
+            phase = {
+                "warmup_search": "warmup_search",
+                "timed_search_with_batch_insert": "timed_search_write_overlap",
+                "reindex_delete_by_user_and_fpath_while_reading": "lifecycle_mutations",
+                "reopen": "post_reopen",
+                "final_manifest_and_oracle_comparison": "final_state_scroll_artifact_work",
+            }.get(name)
+            if phase is not None:
+                self.phase_transition(phase)
             if name == "ensure_compatible_collection":
                 self.connect()
                 self.evidence.call(name, "writer", "all", self.create_owned_collection)
@@ -1879,8 +1891,10 @@ class QdrantMinimaRunner:
                 self.operations["explicit_delete_visible"] = True
             elif name == "close":
                 assert self.client is not None
+                self.phase_transition("pre_close_queries")
                 for scenario in self.specs:
                     self.evidence.preclose[scenario] = self.search("preclose_reopen_baseline", scenario)
+                self.phase_transition("restart_open_readiness")
                 self.capture_restart_origin()
                 self.client.close()
                 self.client = None
