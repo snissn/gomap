@@ -4,21 +4,21 @@ Validator-accepted retained evidence for TreeDB text-v2, Apache Lucene 9.12.1, B
 
 ## Identity
 
-- source commit: `4dba389e1a72a02744d0e5eb02edc4a203911e06`
-- source tree: `c09e332dd1f2c7de13af542ca733d011acf9a11f`
-- TreeDB subtree: `4f8d7ad883a41991739cdf35896305c3185422f0`
-- comparator harness subtree: `d9493c935a3ff1d5a228098a20fb094fc91d7540`
+- source commit: `a856d1c972cbfd70dd57dae69327983368887a88`
+- source tree: `2d7087704c223984cf4dfd196263db5f106215b1`
+- TreeDB subtree: `0f6b09c0cee1990959f473571e64e30ac1a816fe`
+- comparator harness subtree: `b4006713eb724c92c98380c78f16277b84881407`
 - tracked-diff SHA-256 before and after run: `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
 - untracked nonignored sources before and after run: none
-- manifest SHA-256: `12bcce9db9564c4d6b31206ce00bf16289fb9fd5d6f479eec8510e7dc8203728`
-- corpus SHA-256: `7e31d754a2c94b1fa6e4d1cf6d75d2f0df595fc8a9cdf80eb12a3d0b7650485e`
+- manifest SHA-256: `a2a69522bb3b0533bcc9030bc48286e4e727262a9a361605fd53c41ca86cf8d1`
+- corpus SHA-256: `fe5b9d106a099d5c29d3327a8424b7f6d57f248b8802225b2d7bb3719062a227`
 - source dirty: false
 - post-run source identity reverified: true
 - qualification eligible: true
 
 ## Contract and result
 
-Each engine completed three serial build/checkpoint/reopen repetitions and 20 retained samples for common, rare, AND, OR, exact phrase, and scalar-filtered cases. The validator accepted exact ordered result agreement, corpus/document counts, scoring-sensitive title-weight/term-frequency/length-normalization probes, concrete engine-specific route proof, reopen parity, exact runner-bound filesystem/memory/concurrency conditions, and no fallback/timeout. The runner reverified HEAD, tree/subtree OIDs, tracked diff, and nonignored untracked source identities after every adapter completed. All four engines completed all six equivalent cases.
+TreeDB, Lucene, and SQLite completed three serial build/checkpoint/query-reopen/durability-reopen repetitions and 20 retained samples for common, rare, AND, OR, exact phrase, and scalar-filtered cases. Bleve completed the five exactly equivalent lexical cases; its scalar-filtered row is typed unsupported because Bleve v2.4.4 cannot express the tenant predicate as a non-scoring filter. The validator accepted exact ordered result agreement, corpus/document counts, scoring-sensitive title-weight/term-frequency/length-normalization probes, adversarial phrase-position probes, concrete engine-specific route proof, reopen parity, exact runner-bound filesystem/memory/concurrency conditions, and no fallback/timeout. The runner reverified HEAD, tree/subtree OIDs, tracked diff, and nonignored untracked source identities after every adapter completed.
 
 The headline is bounded to this synthetic fixture and host. It does not establish general relevance quality, production-cache behavior, or broad industry parity. Use `lexical_comparison.md` for the compact matrix and `lexical_comparison.json` for raw consolidated samples, commands, versions, configs, CPU/RSS evidence, storage classes, source identity, and equivalence ledger.
 

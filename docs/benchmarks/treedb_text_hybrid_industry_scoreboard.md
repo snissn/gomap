@@ -185,10 +185,10 @@ The combined script places these under `$RUN_DIR/lexical/`; its pre-existing
 hybrid artifacts remain `$RUN_DIR/scoreboard.json`, `$RUN_DIR/scoreboard.md`,
 TreeDB Go benchmark logs, and `$RUN_DIR/context.txt`.
 
-The tracked `artifacts/4330-lexical-comparison-v1/` run predates the query
-reopen, build-boundary, phrase-position, filter, and RSS fairness fixes. It is
-invalid for retained comparison and must not be cited; regenerate only after
-the source changes pass focused review.
+The tracked `artifacts/4330-lexical-comparison-v1/` run was regenerated at
+source commit `a856d1c972cbfd70dd57dae69327983368887a88` after focused source review.
+It includes the corrected query-reopen, build-boundary, phrase-position,
+non-scoring-filter, process-lifetime RSS, and path-sanitization contracts.
 
 The old single-query SQLite `--docs/--queries/--query` path and static
 Lucene/Bleve unavailable placeholders are intentionally removed. They did not

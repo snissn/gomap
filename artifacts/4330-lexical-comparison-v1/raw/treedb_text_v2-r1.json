@@ -4,56 +4,21 @@
     "cpu": {
       "status": "ok",
       "unit": "nanoseconds",
-      "value": 100384000
+      "value": 116053000
     },
-    "docs_per_second": 76685.32822022149,
-    "elapsed_nanos": 130403041,
+    "docs_per_second": 43513.57610955681,
+    "elapsed_nanos": 229813334,
     "peak_rss": {
       "status": "ok",
       "unit": "bytes",
-      "value": 69861376
+      "value": 76070912
     }
   },
   "cases": [
     {
-      "id": "common",
-      "status": "ok",
       "equivalent": true,
-      "samples_nanos": [
-        246708,
-        279750,
-        221500,
-        218708,
-        221708,
-        224667,
-        222458,
-        227000,
-        293917,
-        234416,
-        274375,
-        271833,
-        247125,
-        244334,
-        234500,
-        226667,
-        222750,
-        513667,
-        481000,
-        1115083
-      ],
-      "result_ids": [
-        "doc-000000",
-        "doc-000001",
-        "doc-000002",
-        "doc-000003",
-        "doc-000004",
-        "doc-000005",
-        "doc-000006",
-        "doc-000007",
-        "doc-000009",
-        "doc-000008"
-      ],
-      "result_digest": "32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40",
+      "id": "common",
+      "reopen_result_digest": "32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40",
       "reopen_result_ids": [
         "doc-000000",
         "doc-000001",
@@ -66,7 +31,19 @@
         "doc-000009",
         "doc-000008"
       ],
-      "reopen_result_digest": "32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40",
+      "result_digest": "32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40",
+      "result_ids": [
+        "doc-000000",
+        "doc-000001",
+        "doc-000002",
+        "doc-000003",
+        "doc-000004",
+        "doc-000005",
+        "doc-000006",
+        "doc-000007",
+        "doc-000009",
+        "doc-000008"
+      ],
       "route": {
         "fallback": false,
         "intended": true,
@@ -87,47 +64,35 @@
           "postings_scanned": 128
         }
       },
+      "samples_nanos": [
+        242541,
+        257125,
+        305416,
+        248166,
+        240208,
+        265250,
+        242041,
+        247542,
+        287042,
+        237791,
+        331333,
+        275917,
+        254125,
+        244417,
+        330959,
+        545292,
+        480792,
+        472416,
+        469250,
+        476625
+      ],
+      "status": "ok",
       "timed_out": false
     },
     {
-      "id": "rare",
-      "status": "ok",
       "equivalent": true,
-      "samples_nanos": [
-        25875,
-        23958,
-        24500,
-        23291,
-        21333,
-        23958,
-        22458,
-        25417,
-        24208,
-        22250,
-        24417,
-        23209,
-        23959,
-        21542,
-        21250,
-        24875,
-        21375,
-        22708,
-        21667,
-        22958
-      ],
-      "result_ids": [
-        "doc-000010",
-        "doc-000011",
-        "doc-000012",
-        "doc-000013",
-        "doc-000014",
-        "doc-000015",
-        "doc-000016",
-        "doc-000017",
-        "doc-000018",
-        "doc-000019"
-      ],
-      "result_digest": "d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0",
+      "id": "rare",
+      "reopen_result_digest": "d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0",
       "reopen_result_ids": [
         "doc-000010",
         "doc-000011",
@@ -140,7 +105,19 @@
         "doc-000018",
         "doc-000019"
       ],
-      "reopen_result_digest": "d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0",
+      "result_digest": "d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0",
+      "result_ids": [
+        "doc-000010",
+        "doc-000011",
+        "doc-000012",
+        "doc-000013",
+        "doc-000014",
+        "doc-000015",
+        "doc-000016",
+        "doc-000017",
+        "doc-000018",
+        "doc-000019"
+      ],
       "route": {
         "fallback": false,
         "intended": true,
@@ -161,47 +138,35 @@
           "postings_scanned": 10
         }
       },
+      "samples_nanos": [
+        21000,
+        27833,
+        21833,
+        20792,
+        28125,
+        22333,
+        25666,
+        22541,
+        27083,
+        20167,
+        27959,
+        20334,
+        27500,
+        19833,
+        26875,
+        19583,
+        20291,
+        28000,
+        24625,
+        29458
+      ],
+      "status": "ok",
       "timed_out": false
     },
     {
-      "id": "and",
-      "status": "ok",
       "equivalent": true,
-      "samples_nanos": [
-        31958,
-        32166,
-        31167,
-        30500,
-        30084,
-        30875,
-        30750,
-        30666,
-        32500,
-        29958,
-        32500,
-        31750,
-        32542,
-        32209,
-        32209,
-        31000,
-        31625,
-        32792,
-        31584,
-        33084
-      ],
-      "result_ids": [
-        "doc-000020",
-        "doc-000021",
-        "doc-000022",
-        "doc-000023",
-        "doc-000024",
-        "doc-000025",
-        "doc-000026",
-        "doc-000027",
-        "doc-000028",
-        "doc-000029"
-      ],
-      "result_digest": "ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d",
+      "id": "and",
+      "reopen_result_digest": "ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d",
       "reopen_result_ids": [
         "doc-000020",
         "doc-000021",
@@ -214,7 +179,19 @@
         "doc-000028",
         "doc-000029"
       ],
-      "reopen_result_digest": "ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d",
+      "result_digest": "ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d",
+      "result_ids": [
+        "doc-000020",
+        "doc-000021",
+        "doc-000022",
+        "doc-000023",
+        "doc-000024",
+        "doc-000025",
+        "doc-000026",
+        "doc-000027",
+        "doc-000028",
+        "doc-000029"
+      ],
       "route": {
         "fallback": false,
         "intended": true,
@@ -235,47 +212,35 @@
           "postings_scanned": 40
         }
       },
+      "samples_nanos": [
+        28208,
+        38583,
+        28625,
+        29625,
+        38833,
+        26958,
+        32500,
+        25667,
+        32792,
+        33791,
+        25250,
+        33208,
+        34250,
+        30875,
+        30125,
+        34584,
+        34917,
+        27750,
+        34042,
+        27167
+      ],
+      "status": "ok",
       "timed_out": false
     },
     {
-      "id": "or",
-      "status": "ok",
       "equivalent": true,
-      "samples_nanos": [
-        36750,
-        37000,
-        36333,
-        36458,
-        35833,
-        34875,
-        34625,
-        34291,
-        34333,
-        35834,
-        34917,
-        34750,
-        34291,
-        35042,
-        34709,
-        34334,
-        34333,
-        36708,
-        34416,
-        35250
-      ],
-      "result_ids": [
-        "doc-000070",
-        "doc-000071",
-        "doc-000072",
-        "doc-000073",
-        "doc-000074",
-        "doc-000075",
-        "doc-000076",
-        "doc-000077",
-        "doc-000078",
-        "doc-000079"
-      ],
-      "result_digest": "d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8",
+      "id": "or",
+      "reopen_result_digest": "d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8",
       "reopen_result_ids": [
         "doc-000070",
         "doc-000071",
@@ -288,7 +253,19 @@
         "doc-000078",
         "doc-000079"
       ],
-      "reopen_result_digest": "d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8",
+      "result_digest": "d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8",
+      "result_ids": [
+        "doc-000070",
+        "doc-000071",
+        "doc-000072",
+        "doc-000073",
+        "doc-000074",
+        "doc-000075",
+        "doc-000076",
+        "doc-000077",
+        "doc-000078",
+        "doc-000079"
+      ],
       "route": {
         "fallback": false,
         "intended": true,
@@ -309,60 +286,60 @@
           "postings_scanned": 40
         }
       },
+      "samples_nanos": [
+        48625,
+        29750,
+        31083,
+        1963416,
+        30292,
+        22209,
+        20125,
+        19666,
+        19417,
+        19292,
+        26458,
+        19166,
+        19417,
+        18584,
+        18500,
+        20041,
+        20333,
+        18833,
+        20625,
+        18833
+      ],
+      "status": "ok",
       "timed_out": false
     },
     {
-      "id": "phrase",
-      "status": "ok",
       "equivalent": true,
-      "samples_nanos": [
-        62250,
-        58917,
-        58833,
-        57750,
-        57917,
-        58500,
-        59709,
-        51167,
-        51292,
-        51875,
-        51542,
-        50584,
-        51542,
-        52458,
-        51583,
-        53042,
-        54667,
-        55250,
-        50916,
-        54792
-      ],
-      "result_ids": [
-        "doc-000080",
-        "doc-000081",
-        "doc-000082",
-        "doc-000083",
-        "doc-000084",
-        "doc-000085",
-        "doc-000086",
-        "doc-000087",
-        "doc-000088",
-        "doc-000089"
-      ],
-      "result_digest": "3f12e436d210de561f67fb0131f637b024ed2bce2d328478c4d7bded8a2fff34",
+      "id": "phrase",
+      "reopen_result_digest": "8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696",
       "reopen_result_ids": [
-        "doc-000080",
-        "doc-000081",
-        "doc-000082",
-        "doc-000083",
-        "doc-000084",
-        "doc-000085",
-        "doc-000086",
-        "doc-000087",
-        "doc-000088",
-        "doc-000089"
+        "doc-000090",
+        "doc-000091",
+        "doc-000092",
+        "doc-000093",
+        "doc-000094",
+        "doc-000095",
+        "doc-000096",
+        "doc-000097",
+        "doc-000098",
+        "doc-000099"
       ],
-      "reopen_result_digest": "3f12e436d210de561f67fb0131f637b024ed2bce2d328478c4d7bded8a2fff34",
+      "result_digest": "8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696",
+      "result_ids": [
+        "doc-000090",
+        "doc-000091",
+        "doc-000092",
+        "doc-000093",
+        "doc-000094",
+        "doc-000095",
+        "doc-000096",
+        "doc-000097",
+        "doc-000098",
+        "doc-000099"
+      ],
       "route": {
         "fallback": false,
         "intended": true,
@@ -383,47 +360,35 @@
           "postings_scanned": 40
         }
       },
+      "samples_nanos": [
+        38208,
+        37833,
+        37833,
+        39042,
+        38584,
+        37750,
+        37000,
+        37000,
+        262000,
+        39125,
+        37917,
+        38916,
+        37292,
+        37334,
+        37625,
+        38125,
+        37458,
+        36416,
+        35958,
+        37667
+      ],
+      "status": "ok",
       "timed_out": false
     },
     {
-      "id": "scalar_filtered",
-      "status": "ok",
       "equivalent": true,
-      "samples_nanos": [
-        49375,
-        29917,
-        68542,
-        64166,
-        76500,
-        37500,
-        32333,
-        36167,
-        71584,
-        277750,
-        204583,
-        198750,
-        256708,
-        90041,
-        53708,
-        28625,
-        31375,
-        32791,
-        32334,
-        143291
-      ],
-      "result_ids": [
-        "doc-000100",
-        "doc-000101",
-        "doc-000102",
-        "doc-000103",
-        "doc-000104",
-        "doc-000105",
-        "doc-000106",
-        "doc-000107",
-        "doc-000108",
-        "doc-000109"
-      ],
-      "result_digest": "efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0",
+      "id": "scalar_filtered",
+      "reopen_result_digest": "efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0",
       "reopen_result_ids": [
         "doc-000100",
         "doc-000101",
@@ -436,7 +401,19 @@
         "doc-000108",
         "doc-000109"
       ],
-      "reopen_result_digest": "efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0",
+      "result_digest": "efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0",
+      "result_ids": [
+        "doc-000100",
+        "doc-000101",
+        "doc-000102",
+        "doc-000103",
+        "doc-000104",
+        "doc-000105",
+        "doc-000106",
+        "doc-000107",
+        "doc-000108",
+        "doc-000109"
+      ],
       "route": {
         "fallback": false,
         "intended": true,
@@ -449,6 +426,29 @@
           "text_index_epoch": 0
         }
       },
+      "samples_nanos": [
+        36250,
+        85167,
+        169917,
+        91791,
+        41625,
+        34166,
+        86542,
+        406125,
+        302792,
+        304958,
+        182125,
+        618667,
+        67625,
+        37792,
+        38792,
+        38292,
+        70792,
+        35291,
+        36625,
+        131083
+      ],
+      "status": "ok",
       "timed_out": false
     }
   ],
@@ -457,15 +457,15 @@
     "run",
     "./benchmarks/text_hybrid_scoreboard/treedb_adapter",
     "--manifest",
-    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/benchmarks/text_hybrid_scoreboard/lexical_manifest.json",
+    "$REPO/benchmarks/text_hybrid_scoreboard/lexical_manifest.json",
     "--corpus",
-    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/corpus.tsv",
+    "$RUN/corpus.tsv",
     "--out",
-    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/raw/treedb_text_v2-r1.json",
+    "$RUN/raw/treedb_text_v2-r1.json",
     "--repetition",
     "1",
     "--db",
-    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/indexes/treedb_text_v2-r1"
+    "$RUN/indexes/treedb_text_v2-r1"
   ],
   "config": {
     "analyzer": "simple",
@@ -473,27 +473,30 @@
       "b": 0.75,
       "k1": 1.2
     },
+    "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close",
     "candidate_limit": 10000,
     "index_version": "v2",
     "max_postings_scanned": 80000,
     "result_mode": "score_only",
+    "route_proof": "one untimed explained query per case",
     "store_positions": true,
+    "timed_explain": false,
     "top_k": 10,
     "weights": {
       "body": 1,
       "title": 3
     },
-    "working_directory": "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison"
+    "working_directory": "$REPO"
   },
   "corpus": {
     "document_count": 10000,
-    "sha256": "7e31d754a2c94b1fa6e4d1cf6d75d2f0df595fc8a9cdf80eb12a3d0b7650485e"
+    "sha256": "fe5b9d106a099d5c29d3327a8424b7f6d57f248b8802225b2d7bb3719062a227"
   },
   "engine": {
     "family": "treedb",
     "id": "treedb_text_v2",
     "name": "TreeDB text-v2",
-    "version": "4dba389e1a72a02744d0e5eb02edc4a203911e06"
+    "version": "a856d1c972cbfd70dd57dae69327983368887a88"
   },
   "environment": {
     "contract": {
@@ -526,10 +529,10 @@
       "matches_runner_detected": true
     }
   },
-  "manifest_sha256": "12bcce9db9564c4d6b31206ce00bf16289fb9fd5d6f479eec8510e7dc8203728",
+  "manifest_sha256": "a2a69522bb3b0533bcc9030bc48286e4e727262a9a361605fd53c41ca86cf8d1",
   "reopen": {
     "performed": true,
-    "result_digest": "7f1c5f4d82dd304d1ba15353dbd06241b866db05c4236fe1b9daa3faf57de29c",
+    "result_digest": "61b4e26f72eacfb5c7f8d1ecbdffc6b0ef69a7b17daa24b6a7ec60b29561b4b0",
     "verified": true
   },
   "repetition": 1,
@@ -542,7 +545,7 @@
   },
   "versions": {
     "go": "go1.26.0",
-    "module": "4dba389e1a72a02744d0e5eb02edc4a203911e06",
+    "module": "a856d1c972cbfd70dd57dae69327983368887a88",
     "platform": "darwin/arm64"
   }
 }

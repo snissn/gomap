@@ -4,14 +4,14 @@
     "cpu": {
       "status": "ok",
       "unit": "nanoseconds",
-      "value": 34012000
+      "value": 58712000
     },
-    "docs_per_second": 276996.1638524272,
-    "elapsed_nanos": 36101583,
+    "docs_per_second": 129430.08104186866,
+    "elapsed_nanos": 77261792,
     "peak_rss": {
       "status": "ok",
       "unit": "bytes",
-      "value": 49053696
+      "value": 50708480
     }
   },
   "cases": [
@@ -53,31 +53,31 @@
             2,
             0,
             156,
-            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M5"
           ]
         ]
       },
       "samples_nanos": [
-        3906834,
-        3874667,
-        3905958,
-        3927833,
-        3921208,
-        3886125,
-        3866000,
-        3892167,
-        3888166,
-        3849334,
-        3849917,
-        3923958,
-        3983209,
-        3896584,
-        3827167,
-        3839750,
-        3826083,
-        3862792,
-        3847708,
-        3826750
+        4213584,
+        4280917,
+        4247542,
+        4297750,
+        4442709,
+        4338709,
+        4250166,
+        4183208,
+        4041625,
+        4224541,
+        4191125,
+        4252125,
+        4488459,
+        4414458,
+        4486167,
+        4498125,
+        4469750,
+        4383458,
+        4363667,
+        4258583
       ],
       "status": "ok",
       "timed_out": false
@@ -120,31 +120,31 @@
             2,
             0,
             156,
-            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M5"
           ]
         ]
       },
       "samples_nanos": [
-        19583,
-        19708,
-        18584,
-        19417,
-        18250,
-        19458,
-        18166,
-        19125,
-        18041,
-        19000,
-        18125,
-        19209,
-        17917,
-        19333,
-        17833,
-        18917,
-        17833,
-        19084,
-        21167,
-        19000
+        21708,
+        21458,
+        20541,
+        20500,
+        20209,
+        20333,
+        20500,
+        20250,
+        20083,
+        19958,
+        19875,
+        22333,
+        20167,
+        20083,
+        20125,
+        19875,
+        20083,
+        19958,
+        19791,
+        19667
       ],
       "status": "ok",
       "timed_out": false
@@ -187,31 +187,31 @@
             2,
             0,
             156,
-            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M5"
           ]
         ]
       },
       "samples_nanos": [
-        21917,
+        23750,
+        23750,
+        24000,
+        28875,
+        23583,
+        23416,
+        27458,
+        25417,
         24375,
-        21833,
-        22916,
-        21375,
-        22917,
-        21584,
-        23083,
-        21458,
-        22750,
-        21209,
-        22833,
-        21333,
-        22458,
-        21292,
-        22583,
-        21375,
-        22709,
-        21209,
-        23000
+        24500,
+        24667,
+        24417,
+        24541,
+        24333,
+        24500,
+        24792,
+        24416,
+        24292,
+        23666,
+        23958
       ],
       "status": "ok",
       "timed_out": false
@@ -254,31 +254,31 @@
             2,
             0,
             156,
-            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M5"
           ]
         ]
       },
       "samples_nanos": [
-        36459,
-        39875,
-        36375,
-        39792,
-        36042,
-        39500,
-        36042,
-        39458,
-        36250,
+        39834,
         39250,
-        36125,
-        39458,
-        36416,
-        39417,
-        36000,
-        39167,
-        35916,
+        39750,
+        39083,
+        40084,
+        39083,
+        39125,
+        39667,
+        39667,
         39416,
-        36000,
-        39416
+        39333,
+        38875,
+        39458,
+        38958,
+        39250,
+        39083,
+        38917,
+        44917,
+        40541,
+        40750
       ],
       "status": "ok",
       "timed_out": false
@@ -286,31 +286,31 @@
     {
       "equivalent": true,
       "id": "phrase",
-      "reopen_result_digest": "3f12e436d210de561f67fb0131f637b024ed2bce2d328478c4d7bded8a2fff34",
+      "reopen_result_digest": "8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696",
       "reopen_result_ids": [
-        "doc-000080",
-        "doc-000081",
-        "doc-000082",
-        "doc-000083",
-        "doc-000084",
-        "doc-000085",
-        "doc-000086",
-        "doc-000087",
-        "doc-000088",
-        "doc-000089"
+        "doc-000090",
+        "doc-000091",
+        "doc-000092",
+        "doc-000093",
+        "doc-000094",
+        "doc-000095",
+        "doc-000096",
+        "doc-000097",
+        "doc-000098",
+        "doc-000099"
       ],
-      "result_digest": "3f12e436d210de561f67fb0131f637b024ed2bce2d328478c4d7bded8a2fff34",
+      "result_digest": "8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696",
       "result_ids": [
-        "doc-000080",
-        "doc-000081",
-        "doc-000082",
-        "doc-000083",
-        "doc-000084",
-        "doc-000085",
-        "doc-000086",
-        "doc-000087",
-        "doc-000088",
-        "doc-000089"
+        "doc-000090",
+        "doc-000091",
+        "doc-000092",
+        "doc-000093",
+        "doc-000094",
+        "doc-000095",
+        "doc-000096",
+        "doc-000097",
+        "doc-000098",
+        "doc-000099"
       ],
       "route": {
         "fallback": false,
@@ -321,31 +321,31 @@
             2,
             0,
             156,
-            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M5"
           ]
         ]
       },
       "samples_nanos": [
-        21959,
-        23042,
-        21792,
-        22750,
-        21416,
-        23125,
-        21583,
-        22708,
-        21542,
-        22583,
-        21666,
-        22542,
-        21500,
-        22625,
-        21500,
-        22500,
-        21417,
-        22541,
-        21375,
-        22625
+        31583,
+        31125,
+        30958,
+        30958,
+        31209,
+        30125,
+        29916,
+        29458,
+        29500,
+        29458,
+        29667,
+        29333,
+        29541,
+        30083,
+        29750,
+        29417,
+        29708,
+        29625,
+        29708,
+        29541
       ],
       "status": "ok",
       "timed_out": false
@@ -388,31 +388,31 @@
             2,
             0,
             156,
-            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M5"
           ]
         ]
       },
       "samples_nanos": [
-        26250,
-        25750,
-        28042,
-        25625,
-        26083,
         25709,
-        25791,
-        25958,
-        25375,
-        26000,
-        25625,
-        25375,
-        25500,
-        25333,
-        25416,
-        25583,
-        25625,
         25417,
-        25459,
-        25458
+        25166,
+        24875,
+        28750,
+        26708,
+        25792,
+        26166,
+        25792,
+        25791,
+        26208,
+        25833,
+        25708,
+        25375,
+        25833,
+        24958,
+        25125,
+        24542,
+        24583,
+        24500
       ],
       "status": "ok",
       "timed_out": false
@@ -420,31 +420,40 @@
   ],
   "command": [
     "/opt/homebrew/opt/python@3.14/bin/python3.14",
-    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/benchmarks/text_hybrid_scoreboard/sqlite_fts5_bench.py",
+    "$REPO/benchmarks/text_hybrid_scoreboard/sqlite_fts5_bench.py",
     "--manifest",
-    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/benchmarks/text_hybrid_scoreboard/lexical_manifest.json",
+    "$REPO/benchmarks/text_hybrid_scoreboard/lexical_manifest.json",
     "--corpus",
-    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/corpus.tsv",
+    "$RUN/corpus.tsv",
     "--out",
-    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/raw/sqlite_fts5-r1.json",
+    "$RUN/raw/sqlite_fts5-r1.json",
     "--repetition",
     "1",
     "--db",
-    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/indexes/sqlite_fts5-r1.sqlite3"
+    "$RUN/indexes/sqlite_fts5-r1.sqlite3"
   ],
   "config": {
+    "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close",
     "journal_mode": "WAL",
-    "sqlite_auxiliary_threads": 1,
+    "phrase_field_weights": {
+      "body": 1,
+      "title": 3
+    },
+    "phrase_fields": [
+      "title",
+      "body"
+    ],
+    "sqlite_auxiliary_threads": 0,
     "synchronous": "FULL",
     "tie_break": "score,id",
     "tokenizer": "unicode61 remove_diacritics 2",
     "top_k": 10,
-    "weighted_field_materialization": "title repeated 3x then body",
-    "working_directory": "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison"
+    "weighted_field_materialization": "title repeated 3x then body for non-phrase scoring only",
+    "working_directory": "$REPO"
   },
   "corpus": {
     "document_count": 10000,
-    "sha256": "7e31d754a2c94b1fa6e4d1cf6d75d2f0df595fc8a9cdf80eb12a3d0b7650485e"
+    "sha256": "fe5b9d106a099d5c29d3327a8424b7f6d57f248b8802225b2d7bb3719062a227"
   },
   "engine": {
     "family": "embedded_sql",
@@ -483,17 +492,19 @@
       "matches_runner_detected": true
     }
   },
-  "manifest_sha256": "12bcce9db9564c4d6b31206ce00bf16289fb9fd5d6f479eec8510e7dc8203728",
+  "manifest_sha256": "a2a69522bb3b0533bcc9030bc48286e4e727262a9a361605fd53c41ca86cf8d1",
   "reopen": {
+    "durability_connection_reopened": true,
     "performed": true,
-    "result_digest": "7f1c5f4d82dd304d1ba15353dbd06241b866db05c4236fe1b9daa3faf57de29c",
+    "query_connection_reopened": true,
+    "result_digest": "61b4e26f72eacfb5c7f8d1ecbdffc6b0ef69a7b17daa24b6a7ec60b29561b4b0",
     "verified": true
   },
   "repetition": 1,
   "schema_version": "treedb_lexical_result/v1",
   "status": "ok",
   "storage": {
-    "durable_bytes": 5861376,
+    "durable_bytes": 9252864,
     "transient_bytes": 0,
     "wal_bytes": 0
   },
