@@ -540,12 +540,15 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         if self.controller.pid is None:
             endpoint = self._phase_resource_start
             incomplete_reason = "service_unavailable_before_phase_endpoint"
-            if (self._phase_name == "restart_open_readiness" and shutdown_end is not None and
-                    self._controller_restart_origin is not None):
-                old_pid, old_identity = self._controller_restart_origin
-                endpoint = {**shutdown_end, "pid": old_pid, "process_identity": old_identity}
-                self._phase_restart_old_end = endpoint
-                incomplete_reason = "graceful_shutdown_failed_before_reopen"
+            if self._phase_name == "restart_open_readiness":
+                if self._phase_restart_old_end is not None:
+                    endpoint = self._phase_restart_old_end
+                    incomplete_reason = "replacement_service_unavailable_after_shutdown"
+                elif shutdown_end is not None and self._controller_restart_origin is not None:
+                    old_pid, old_identity = self._controller_restart_origin
+                    endpoint = {**shutdown_end, "pid": old_pid, "process_identity": old_identity}
+                    self._phase_restart_old_end = endpoint
+                    incomplete_reason = "graceful_shutdown_failed_before_reopen"
         else:
             try:
                 end_process = self._phase_process_snapshot()
