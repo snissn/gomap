@@ -715,6 +715,45 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 	}
 }
 
+func TestMinimaProbeIDsUseAggregateLookupLimit(t *testing.T) {
+	artifact := validMinimaArtifact()
+	if got := *minimaTestRow(&artifact, "treedb", "mixed_broad_narrow").Route.ProbeIDs; got != minimaLookupLimit+5 {
+		t.Fatalf("mixed probe IDs=%d want %d", got, minimaLookupLimit+5)
+	}
+	if err := validateMinimaArtifact(&artifact); err != nil {
+		t.Fatalf("valid mixed aggregate rejected: %v", err)
+	}
+
+	specs := minimaScenarioMap(&artifact.Manifest)
+	queries := minimaQueryMap(&artifact.Manifest)
+	tests := []struct {
+		name, scenario, filter, wantError string
+		probe                             int
+	}{
+		{name: "mixed 4101", scenario: "mixed_broad_narrow", probe: 4101},
+		{name: "mixed 8193", scenario: "mixed_broad_narrow", probe: 8193, wantError: "probe exceeds aggregate lookup limit"},
+		{name: "single 4097", scenario: "small", probe: 4097, wantError: "probe exceeds aggregate lookup limit"},
+		{name: "unknown shape", scenario: "small", filter: "unknown", wantError: `unknown filter shape "unknown"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			row := *minimaTestRow(&artifact, "treedb", test.scenario)
+			row.Route.ProbeIDs = minimaTestInt(test.probe)
+			spec := specs[test.scenario]
+			if test.filter != "" {
+				spec.Filter = test.filter
+			}
+			err := validateMinimaScenarioEvidence(row, spec, queries[test.scenario])
+			if test.wantError == "" && err != nil {
+				t.Fatalf("probe validation failed: %v", err)
+			}
+			if test.wantError != "" && (err == nil || !strings.Contains(err.Error(), test.wantError)) {
+				t.Fatalf("probe validation error=%v want %q", err, test.wantError)
+			}
+		})
+	}
+}
+
 func validMinimaArtifact() minimaArtifact {
 	manifest := buildMinimaManifest()
 	hashes := minimaManifestHashes{CorpusSHA256: manifest.CorpusSHA256, QuerySHA256: manifest.QuerySHA256, OperationSHA256: manifest.OperationSHA256}
@@ -893,6 +932,7 @@ func validMinimaArtifact() minimaArtifact {
 					route.Plan = "mixed_refined"
 					route.RetainedCandidateIDs = minimaTestInt(spec.NarrowRows)
 					route.RefinedCandidateIDs = minimaTestInt(spec.EligibleRows)
+					route.ProbeIDs = minimaTestInt(minimaLookupLimit + 5)
 				}
 			}
 			visibility := minimaVisibilityEvidence{GenerationConsistent: true, MismatchCount: &zeroMismatch, RetryCount: &zeroRetry}
