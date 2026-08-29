@@ -112,14 +112,16 @@ type minimaRawPhaseResourceSegment struct {
 }
 
 type minimaRawPhaseBoundary struct {
-	Name                string                          `json:"name"`
-	Classification      string                          `json:"classification"`
-	StartNanos          int64                           `json:"start_nanos"`
-	EndNanos            int64                           `json:"end_nanos"`
-	DurationNanos       int64                           `json:"duration_nanos"`
-	SampleCount         int                             `json:"sample_count"`
-	SampleDurationNanos int64                           `json:"sample_duration_nanos"`
-	ResourceSegments    []minimaRawPhaseResourceSegment `json:"resource_segments"`
+	Name                     string                          `json:"name"`
+	Classification           string                          `json:"classification"`
+	StartNanos               int64                           `json:"start_nanos"`
+	EndNanos                 int64                           `json:"end_nanos"`
+	DurationNanos            int64                           `json:"duration_nanos"`
+	SampleCount              int                             `json:"sample_count"`
+	SampleDurationNanos      int64                           `json:"sample_duration_nanos"`
+	ResourceSegments         []minimaRawPhaseResourceSegment `json:"resource_segments"`
+	ResourceEvidenceComplete *bool                           `json:"resource_evidence_complete,omitempty"`
+	IncompleteReason         string                          `json:"incomplete_reason,omitempty"`
 }
 
 type minimaRawPhaseAttribution struct {
@@ -543,6 +545,8 @@ func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution, resta
 			phase.SampleCount < 0 ||
 			(ordinal != 5 && phase.SampleCount == 0) ||
 			phase.SampleDurationNanos < 0 ||
+			(phase.ResourceEvidenceComplete != nil && !*phase.ResourceEvidenceComplete) ||
+			phase.IncompleteReason != "" ||
 			len(phase.ResourceSegments) != expectedSegments ||
 			phase.DurationNanos > value.TotalDurationNanos-attributed {
 			return fmt.Errorf("minima artifact: TreeDB phase %d is missing or invalid", ordinal)

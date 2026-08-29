@@ -489,6 +489,17 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.PhaseAttribution.Phases[0].ResourceSegments[0].End.Captured = false
 			a.RawEvidence["treedb"] = raw
 		}},
+		{"completed TreeDB phase marked resource-incomplete", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			complete := false
+			raw.PhaseAttribution.Phases[0].ResourceEvidenceComplete = &complete
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"completed TreeDB phase carries an incomplete reason", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution.Phases[0].IncompleteReason = "shutdown failed"
+			a.RawEvidence["treedb"] = raw
+		}},
 		{"cross-PID unsplit TreeDB phase resource boundary", func(a *minimaArtifact) {
 			raw := a.RawEvidence["treedb"]
 			raw.PhaseAttribution.Phases[0].ResourceSegments[0].End.PID++
@@ -1020,6 +1031,34 @@ func TestMinimaExpectedCommitBinding(t *testing.T) {
 	}
 	if err := validateMinimaExpectedCommit(&artifact, "", true); err == nil {
 		t.Fatal("missing required merged commit was accepted")
+	}
+}
+
+func TestMinimaPhaseIncompleteMarkerRoundTrip(t *testing.T) {
+	complete := false
+	input := minimaRawPhaseBoundary{
+		Name:                     "restart_open_readiness",
+		ResourceEvidenceComplete: &complete,
+		IncompleteReason:         "graceful_shutdown_failed_before_reopen",
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded minimaRawPhaseBoundary
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.ResourceEvidenceComplete == nil || *decoded.ResourceEvidenceComplete ||
+		decoded.IncompleteReason != input.IncompleteReason {
+		t.Fatalf("incomplete phase marker was not preserved: %+v", decoded)
+	}
+	rewritten, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != string(rewritten) {
+		t.Fatalf("incomplete phase marker changed during round trip: %s != %s", encoded, rewritten)
 	}
 }
 
