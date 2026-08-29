@@ -21,11 +21,12 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/collections/chunking"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 const (
-	scaleSchemaVersion = "treedb_text_hybrid_scale/v2"
+	scaleSchemaVersion = "treedb_text_hybrid_scale/v3"
 
 	collectionName  = "docs"
 	textIndexName   = "lexical"
@@ -33,17 +34,23 @@ const (
 	tenantIndexName = "tenant"
 	regionIndexName = "region"
 
-	rareTextTerm = "raretoken2731"
-	rareTenant   = "tenant-rare-06pct"
+	rareTextTerm          = "raretoken2731"
+	rareTenant            = "tenant-rare-06pct"
+	sourceChunkBatchLimit = 256
 
-	queryRowTextCommon          = "text_common_score_only"
-	queryRowTextRare            = "text_rare_score_only"
-	queryRowTextMultiTermAND    = "text_multi_term_and_score_only"
-	queryRowTextMultiTermOR     = "text_multi_term_or_score_only"
-	queryRowHybridText          = "hybrid_text_only_no_docs"
-	queryRowHybridTextScalar    = "hybrid_text_scalar_no_docs"
-	queryRowHybridTextVector    = "hybrid_text_vector_no_docs"
-	queryRowHybridTextVecScalar = "hybrid_text_vector_scalar_no_docs"
+	queryRowTextCommon               = "text_common_score_only"
+	queryRowTextRare                 = "text_rare_score_only"
+	queryRowTextMultiTermAND         = "text_multi_term_and_score_only"
+	queryRowTextMultiTermOR          = "text_multi_term_or_score_only"
+	queryRowTextPhrase               = "text_phrase_score_only"
+	queryRowTextCommonFetch          = "text_common_top_k_fetch"
+	queryRowHybridText               = "hybrid_text_only_no_docs"
+	queryRowHybridTextScalar         = "hybrid_text_scalar_rare_no_docs"
+	queryRowHybridTextScalarBroad    = "hybrid_text_scalar_broad_no_docs"
+	queryRowHybridTextVector         = "hybrid_text_vector_no_docs"
+	queryRowHybridTextVecScalar      = "hybrid_text_vector_scalar_no_docs"
+	queryRowHybridTextVecCollapse2   = "hybrid_text_vector_collapse_cap2_no_docs"
+	queryRowHybridTextVecScalarFetch = "hybrid_text_vector_scalar_top_k_fetch"
 )
 
 type queryRowClass struct {
@@ -54,14 +61,19 @@ type queryRowClass struct {
 // queryRowClasses is the public -query-rows contract and classifies every row
 // emitted by runQueryMatrix.
 var queryRowClasses = map[string]queryRowClass{
-	queryRowTextCommon:          {},
-	queryRowTextRare:            {},
-	queryRowTextMultiTermAND:    {},
-	queryRowTextMultiTermOR:     {},
-	queryRowHybridText:          {hybrid: true},
-	queryRowHybridTextScalar:    {hybrid: true},
-	queryRowHybridTextVector:    {hybrid: true, vectorRequired: true},
-	queryRowHybridTextVecScalar: {hybrid: true, vectorRequired: true},
+	queryRowTextCommon:               {},
+	queryRowTextRare:                 {},
+	queryRowTextMultiTermAND:         {},
+	queryRowTextMultiTermOR:          {},
+	queryRowTextPhrase:               {},
+	queryRowTextCommonFetch:          {},
+	queryRowHybridText:               {hybrid: true},
+	queryRowHybridTextScalar:         {hybrid: true},
+	queryRowHybridTextScalarBroad:    {hybrid: true},
+	queryRowHybridTextVector:         {hybrid: true, vectorRequired: true},
+	queryRowHybridTextVecScalar:      {hybrid: true, vectorRequired: true},
+	queryRowHybridTextVecCollapse2:   {hybrid: true, vectorRequired: true},
+	queryRowHybridTextVecScalarFetch: {hybrid: true, vectorRequired: true},
 }
 
 type config struct {
@@ -81,6 +93,10 @@ type config struct {
 	includeVector       bool
 	runBackfill         bool
 	backfillRows        int
+	runTextOnly         bool
+	textOnlyRows        int
+	runSourceChunk      bool
+	sourceChunkRows     int
 	runReopen           bool
 	runConcurrent       bool
 	concurrentWrites    int
@@ -101,11 +117,16 @@ type config struct {
 type report struct {
 	SchemaVersion    string             `json:"schema_version"`
 	GeneratedAt      string             `json:"generated_at"`
+	Status           string             `json:"status"`
+	Failure          string             `json:"failure,omitempty"`
 	Context          reportContext      `json:"context"`
+	Contract         reportContract     `json:"contract"`
 	Config           reportConfig       `json:"config"`
 	Artifacts        reportArtifacts    `json:"artifacts"`
 	Load             loadReport         `json:"load"`
+	TextOnly         *loadReport        `json:"text_only,omitempty"`
 	Backfill         *backfillReport    `json:"backfill,omitempty"`
+	SourceChunk      *sourceChunkReport `json:"source_chunk,omitempty"`
 	Reopen           *reopenReport      `json:"reopen,omitempty"`
 	Queries          []queryReport      `json:"queries,omitempty"`
 	Concurrent       *concurrentReport  `json:"concurrent,omitempty"`
@@ -116,29 +137,45 @@ type report struct {
 	Caveats          []string           `json:"caveats,omitempty"`
 	SelectedPhases   []string           `json:"selected_phases"`
 	CompletedPhases  []string           `json:"completed_phases"`
+	Cleanup          cleanupReport      `json:"cleanup"`
+	Failures         []failureRecord    `json:"failures"`
 	Complete         bool               `json:"complete"`
 }
 
 type reportContext struct {
-	RepoRoot    string `json:"repo_root,omitempty"`
-	Branch      string `json:"branch,omitempty"`
-	Commit      string `json:"commit,omitempty"`
-	BaseRef     string `json:"base_ref,omitempty"`
-	BaseSHA     string `json:"base_sha,omitempty"`
-	Go          string `json:"go,omitempty"`
-	OS          string `json:"os,omitempty"`
-	Arch        string `json:"arch,omitempty"`
-	CPU         string `json:"cpu,omitempty"`
-	NCPU        int    `json:"ncpu"`
-	Uptime      string `json:"uptime,omitempty"`
-	Command     string `json:"command,omitempty"`
-	VCSClean    bool   `json:"vcs_clean"`
-	VCSStatus   string `json:"vcs_status,omitempty"`
-	BinaryState string `json:"binary_state,omitempty"`
-	Corpus      string `json:"corpus,omitempty"`
-	Cache       string `json:"cache,omitempty"`
-	Durability  string `json:"durability,omitempty"`
-	NoisePolicy string `json:"noise_policy,omitempty"`
+	RepoRoot          string `json:"repo_root,omitempty"`
+	Branch            string `json:"branch,omitempty"`
+	Commit            string `json:"commit,omitempty"`
+	TreeOID           string `json:"tree_oid,omitempty"`
+	TreeDBSubtreeOID  string `json:"treedb_subtree_oid,omitempty"`
+	HarnessSubtreeOID string `json:"harness_subtree_oid,omitempty"`
+	BinarySHA256      string `json:"binary_sha256,omitempty"`
+	BaseRef           string `json:"base_ref,omitempty"`
+	BaseSHA           string `json:"base_sha,omitempty"`
+	Go                string `json:"go,omitempty"`
+	OS                string `json:"os,omitempty"`
+	Arch              string `json:"arch,omitempty"`
+	CPU               string `json:"cpu,omitempty"`
+	NCPU              int    `json:"ncpu"`
+	Uptime            string `json:"uptime,omitempty"`
+	Command           string `json:"command,omitempty"`
+	VCSClean          bool   `json:"vcs_clean"`
+	VCSStatus         string `json:"vcs_status,omitempty"`
+	BinaryState       string `json:"binary_state,omitempty"`
+	Corpus            string `json:"corpus,omitempty"`
+	Cache             string `json:"cache,omitempty"`
+	Durability        string `json:"durability,omitempty"`
+	NoisePolicy       string `json:"noise_policy,omitempty"`
+}
+
+type reportContract struct {
+	ConfigSHA256    string `json:"config_sha256"`
+	FixtureSHA256   string `json:"fixture_sha256"`
+	QuerySetSHA256  string `json:"query_set_sha256"`
+	RelevanceSHA256 string `json:"relevance_sha256"`
+	Analyzer        string `json:"analyzer"`
+	FieldWeights    string `json:"field_weights"`
+	Seed            int    `json:"seed"`
 }
 
 type reportConfig struct {
@@ -155,6 +192,10 @@ type reportConfig struct {
 	IncludeVector      bool   `json:"include_vector"`
 	RunBackfill        bool   `json:"run_backfill"`
 	BackfillRows       int    `json:"backfill_rows,omitempty"`
+	RunTextOnly        bool   `json:"run_text_only"`
+	TextOnlyRows       int    `json:"text_only_rows,omitempty"`
+	RunSourceChunk     bool   `json:"run_source_chunk"`
+	SourceChunkRows    int    `json:"source_chunk_rows,omitempty"`
 	RunReopen          bool   `json:"run_reopen"`
 	RunConcurrent      bool   `json:"run_concurrent"`
 	ConcurrentWrites   int    `json:"concurrent_writes,omitempty"`
@@ -172,7 +213,23 @@ type reportArtifacts struct {
 	Markdown   string `json:"markdown"`
 }
 
+type resourceSnapshot struct {
+	CPUSeconds    float64 `json:"cpu_seconds"`
+	PeakRSSBytes  uint64  `json:"peak_rss_bytes"`
+	LiveHeapBytes uint64  `json:"live_heap_bytes"`
+}
+
+type cleanupReport struct {
+	Status       string   `json:"status"`
+	DBKept       bool     `json:"db_kept"`
+	RemovedPaths []string `json:"removed_paths"`
+	Errors       []string `json:"errors"`
+}
+
 type loadReport struct {
+	Status                string                            `json:"status"`
+	Failure               string                            `json:"failure,omitempty"`
+	Mode                  string                            `json:"mode"`
 	Rows                  int                               `json:"rows"`
 	Batches               int                               `json:"batches"`
 	GenerationSeconds     float64                           `json:"generation_seconds"`
@@ -186,9 +243,13 @@ type loadReport struct {
 	VectorStatus          *collections.VectorIndexStatus    `json:"vector_status,omitempty"`
 	StorageBytesAfterLoad int64                             `json:"storage_bytes_after_load"`
 	StorageBytesPerDoc    float64                           `json:"storage_bytes_per_doc"`
+	Resource              resourceSnapshot                  `json:"resource"`
 }
 
 type backfillReport struct {
+	Status             string                             `json:"status"`
+	Failure            string                             `json:"failure,omitempty"`
+	Mode               string                             `json:"mode"`
 	Rows               int                                `json:"rows"`
 	GenerationSeconds  float64                            `json:"generation_seconds"`
 	InsertSeconds      float64                            `json:"insert_seconds"`
@@ -201,9 +262,29 @@ type backfillReport struct {
 	TextStorage        collections.TextIndexStorageStats  `json:"text_storage"`
 	StorageBytes       int64                              `json:"storage_bytes"`
 	StorageBytesPerDoc float64                            `json:"storage_bytes_per_doc"`
+	Resource           resourceSnapshot                   `json:"resource"`
+}
+
+type sourceChunkReport struct {
+	Status              string                            `json:"status"`
+	Failure             string                            `json:"failure,omitempty"`
+	SourceDocuments     int                               `json:"source_documents"`
+	GeneratedChunks     int                               `json:"generated_chunks"`
+	BatchCalls          int                               `json:"batch_calls"`
+	IngestSeconds       float64                           `json:"ingest_seconds"`
+	CheckpointSeconds   float64                           `json:"checkpoint_seconds"`
+	ReopenSeconds       float64                           `json:"reopen_seconds"`
+	BeforeResultsSHA256 string                            `json:"before_results_sha256"`
+	AfterResultsSHA256  string                            `json:"after_results_sha256"`
+	ReopenParityOK      bool                              `json:"reopen_parity_ok"`
+	StorageBytes        int64                             `json:"storage_bytes"`
+	TextStorage         collections.TextIndexStorageStats `json:"text_storage"`
+	Resource            resourceSnapshot                  `json:"resource"`
 }
 
 type reopenReport struct {
+	Status                string                            `json:"status"`
+	Failure               string                            `json:"failure,omitempty"`
 	CloseSeconds          float64                           `json:"close_seconds"`
 	OpenSeconds           float64                           `json:"open_seconds"`
 	OpenCollectionSeconds float64                           `json:"open_collection_seconds"`
@@ -212,20 +293,33 @@ type reopenReport struct {
 	TextStorage           collections.TextIndexStorageStats `json:"text_storage"`
 	VectorStatus          *collections.VectorIndexStatus    `json:"vector_status,omitempty"`
 	StorageBytes          int64                             `json:"storage_bytes"`
+	ExpectedRows          int                               `json:"expected_rows"`
+	LiveRows              uint64                            `json:"live_rows"`
+	CountOK               bool                              `json:"count_ok"`
+	BeforeResultsSHA256   string                            `json:"before_results_sha256"`
+	AfterResultsSHA256    string                            `json:"after_results_sha256"`
+	QueryParityOK         bool                              `json:"query_parity_ok"`
+	Resource              resourceSnapshot                  `json:"resource"`
 }
 
 type queryReport struct {
 	Name             string                         `json:"name"`
+	Status           string                         `json:"status"`
+	Failure          string                         `json:"failure,omitempty"`
 	Modality         string                         `json:"modality"`
 	QueryShape       string                         `json:"query_shape"`
 	Boundary         string                         `json:"boundary"`
 	Rows             int                            `json:"rows"`
 	TopK             int                            `json:"top_k"`
 	CandidateBudget  int                            `json:"candidate_budget"`
+	CollapseCap      int                            `json:"collapse_cap"`
 	Samples          int                            `json:"samples"`
 	Results          int                            `json:"results"`
+	ResultsSHA256    string                         `json:"results_sha256"`
+	CorrectnessOK    bool                           `json:"correctness_ok"`
+	IsolationOK      bool                           `json:"isolation_ok"`
 	Latency          latencySummary                 `json:"latency"`
-	RawLatencyNS     []int64                        `json:"raw_latency_ns,omitempty"`
+	RawLatencyNS     []int64                        `json:"raw_latency_ns"`
 	OpsPerSec        float64                        `json:"ops_per_sec"`
 	AllocBytes       uint64                         `json:"allocation_bytes,omitempty"`
 	AllocObjects     uint64                         `json:"allocation_objects,omitempty"`
@@ -235,6 +329,7 @@ type queryReport struct {
 	HybridStats      *collections.HybridSearchStats `json:"hybrid_stats,omitempty"`
 	GuardrailOK      bool                           `json:"guardrail_ok"`
 	GuardrailFailure string                         `json:"guardrail_failure,omitempty"`
+	Resource         resourceSnapshot               `json:"resource"`
 }
 
 type latencySummary struct {
@@ -252,6 +347,8 @@ type allocationSummary struct {
 }
 
 type concurrentReport struct {
+	Status              string                       `json:"status"`
+	Failure             string                       `json:"failure,omitempty"`
 	Readers             int                          `json:"readers"`
 	Queries             int                          `json:"queries"`
 	Writes              int                          `json:"writes"`
@@ -263,9 +360,12 @@ type concurrentReport struct {
 	LastTextStats       *collections.TextSearchStats `json:"last_text_stats,omitempty"`
 	GuardrailOK         bool                         `json:"guardrail_ok"`
 	GuardrailFailure    string                       `json:"guardrail_failure,omitempty"`
+	Resource            resourceSnapshot             `json:"resource"`
 }
 
 type maintenanceReport struct {
+	Status               string                            `json:"status"`
+	Failure              string                            `json:"failure,omitempty"`
 	Updates              int                               `json:"updates"`
 	Deletes              int                               `json:"deletes"`
 	UpdateSeconds        float64                           `json:"update_seconds"`
@@ -277,25 +377,36 @@ type maintenanceReport struct {
 	StorageBytesAfter    int64                             `json:"storage_bytes_after"`
 	PostconditionOK      bool                              `json:"postcondition_ok"`
 	PostconditionFailure string                            `json:"postcondition_failure,omitempty"`
+	BeforeResultsSHA256  string                            `json:"before_results_sha256"`
+	AfterResultsSHA256   string                            `json:"after_results_sha256"`
+	ReopenParityOK       bool                              `json:"reopen_parity_ok"`
+	Resource             resourceSnapshot                  `json:"resource"`
 }
 
 type storageSnapshot struct {
-	Label                       string  `json:"label"`
-	Bytes                       int64   `json:"bytes"`
-	BytesPerDoc                 float64 `json:"bytes_per_doc,omitempty"`
-	TextEncodedBytes            uint64  `json:"text_encoded_bytes,omitempty"`
-	TextBytesPerDoc             float64 `json:"text_bytes_per_doc,omitempty"`
-	TextDocIDBytesPerDoc        float64 `json:"text_docid_bytes_per_doc,omitempty"`
-	TextDocMapBytesPerDoc       float64 `json:"text_docmap_bytes_per_doc,omitempty"`
-	TextPostingBlockBytesPerDoc float64 `json:"text_posting_block_bytes_per_doc,omitempty"`
-	TextNormBlockBytesPerDoc    float64 `json:"text_norm_block_bytes_per_doc,omitempty"`
-	TextPositionBytesPerDoc     float64 `json:"text_position_bytes_per_doc,omitempty"`
-	TextTermStatsBytesPerDoc    float64 `json:"text_term_stats_bytes_per_doc,omitempty"`
-	TextStatusFormatBytesPerDoc float64 `json:"text_status_format_bytes_per_doc,omitempty"`
-	V2PostingBlocks             uint64  `json:"v2_posting_blocks,omitempty"`
-	V2LiveDocuments             uint64  `json:"v2_live_documents,omitempty"`
-	V2DeletedDocs               uint64  `json:"v2_deleted_docs,omitempty"`
-	VectorNativeBytes           int64   `json:"vector_native_bytes,omitempty"`
+	Label                         string   `json:"label"`
+	Bytes                         int64    `json:"bytes"`
+	BytesPerDoc                   float64  `json:"bytes_per_doc,omitempty"`
+	PhysicalIndexPageBytes        int64    `json:"physical_index_page_bytes"`
+	PhysicalValueLogBytes         int64    `json:"physical_value_log_bytes"`
+	PhysicalWALBytes              int64    `json:"physical_wal_bytes"`
+	PhysicalOtherBytes            int64    `json:"physical_other_bytes"`
+	PhysicalTotalBytes            int64    `json:"physical_total_bytes"`
+	PhysicalTotalWALExcludedBytes int64    `json:"physical_total_wal_excluded_bytes"`
+	OtherPaths                    []string `json:"other_paths,omitempty"`
+	TextEncodedBytes              uint64   `json:"text_encoded_bytes,omitempty"`
+	TextBytesPerDoc               float64  `json:"text_bytes_per_doc,omitempty"`
+	TextDocIDBytesPerDoc          float64  `json:"text_docid_bytes_per_doc,omitempty"`
+	TextDocMapBytesPerDoc         float64  `json:"text_docmap_bytes_per_doc,omitempty"`
+	TextPostingBlockBytesPerDoc   float64  `json:"text_posting_block_bytes_per_doc,omitempty"`
+	TextNormBlockBytesPerDoc      float64  `json:"text_norm_block_bytes_per_doc,omitempty"`
+	TextPositionBytesPerDoc       float64  `json:"text_position_bytes_per_doc,omitempty"`
+	TextTermStatsBytesPerDoc      float64  `json:"text_term_stats_bytes_per_doc,omitempty"`
+	TextStatusFormatBytesPerDoc   float64  `json:"text_status_format_bytes_per_doc,omitempty"`
+	V2PostingBlocks               uint64   `json:"v2_posting_blocks,omitempty"`
+	V2LiveDocuments               uint64   `json:"v2_live_documents,omitempty"`
+	V2DeletedDocs                 uint64   `json:"v2_deleted_docs,omitempty"`
+	VectorNativeBytes             int64    `json:"vector_native_bytes,omitempty"`
 }
 
 type guardrailResult struct {
@@ -322,6 +433,22 @@ type scaleFixture struct {
 }
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "-seal-artifact" {
+		if err := sealRetainedArtifact(os.Args[2]); err != nil {
+			fmt.Fprintf(os.Stderr, "treedb_text_hybrid_scale: seal artifact: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("sealed valid TreeDB 10M text/hybrid artifact")
+		return
+	}
+	if len(os.Args) == 3 && os.Args[1] == "-validate-artifact" {
+		if err := validateRetainedArtifact(os.Args[2]); err != nil {
+			fmt.Fprintf(os.Stderr, "treedb_text_hybrid_scale: invalid retained artifact: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("valid TreeDB 10M text/hybrid artifact")
+		return
+	}
 	cfg, err := parseFlags(os.Args[1:])
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -358,6 +485,10 @@ func parseFlags(args []string) (config, error) {
 	fs.BoolVar(&cfg.includeVector, "include-vector", true, "Build a column_graph vector index and run vector/hybrid rows")
 	fs.BoolVar(&cfg.runBackfill, "run-backfill", true, "Run a separate text-v2 CreateTextIndex backfill fixture")
 	fs.IntVar(&cfg.backfillRows, "backfill-rows", 0, "Rows in the separate backfill fixture; defaults to -rows")
+	fs.BoolVar(&cfg.runTextOnly, "run-text-only", true, "Run a separate predeclared text-only indexed ingestion fixture")
+	fs.IntVar(&cfg.textOnlyRows, "text-only-rows", 0, "Rows in the predeclared text-only fixture; defaults to -rows")
+	fs.BoolVar(&cfg.runSourceChunk, "run-source-chunk", true, "Run a separate accepted text-only source/chunk ingestion fixture")
+	fs.IntVar(&cfg.sourceChunkRows, "source-chunk-rows", 0, "Source documents in the source/chunk fixture; defaults to -rows")
 	fs.BoolVar(&cfg.runReopen, "run-reopen", true, "Close/reopen the primary fixture and run a durability probe")
 	fs.BoolVar(&cfg.runConcurrent, "run-concurrent", true, "Run concurrent text serving while a bounded writer mutates the index")
 	fs.IntVar(&cfg.concurrentWrites, "concurrent-writes", 0, "Concurrent writer inserts; defaults to min(rows/100,1024)")
@@ -408,8 +539,8 @@ func parseFlags(args []string) (config, error) {
 	if cfg.readers <= 0 {
 		return config{}, fmt.Errorf("-readers must be positive")
 	}
-	if cfg.backfillRows < 0 {
-		return config{}, fmt.Errorf("-backfill-rows cannot be negative")
+	if cfg.backfillRows < 0 || cfg.textOnlyRows < 0 || cfg.sourceChunkRows < 0 {
+		return config{}, fmt.Errorf("-backfill-rows/-text-only-rows/-source-chunk-rows cannot be negative")
 	}
 	if cfg.concurrentWrites < 0 || cfg.maintenanceUpdates < 0 || cfg.maintenanceDeletes < 0 {
 		return config{}, fmt.Errorf("write/update/delete counts cannot be negative")
@@ -531,6 +662,8 @@ func parseFlags(args []string) (config, error) {
 		}{
 			{name: "maintenance", dir: filepath.Join(outDir, "maintenance_db")},
 			{name: "backfill", dir: filepath.Join(outDir, "backfill_db")},
+			{name: "text-only", dir: filepath.Join(outDir, "text_only_db")},
+			{name: "source-chunk", dir: filepath.Join(outDir, "source_chunk_db")},
 		} {
 			reservedDir, err := resolvePathSymlinks(reserved.dir)
 			if err != nil {
@@ -561,6 +694,12 @@ func parseFlags(args []string) (config, error) {
 	if cfg.backfillRows <= 0 {
 		cfg.backfillRows = cfg.rows
 	}
+	if cfg.textOnlyRows <= 0 {
+		cfg.textOnlyRows = cfg.rows
+	}
+	if cfg.sourceChunkRows <= 0 {
+		cfg.sourceChunkRows = cfg.rows
+	}
 	if cfg.concurrentWrites <= 0 {
 		cfg.concurrentWrites = minInt(maxInt(cfg.rows/100, 1), 1024)
 	}
@@ -578,7 +717,7 @@ func parsePhaseSelector(raw string) (map[string]bool, error) {
 	for _, phase := range strings.Split(raw, ",") {
 		switch strings.TrimSpace(phase) {
 		case "all":
-			for _, name := range []string{"load", "queries", "reopen", "concurrent", "maintenance", "backfill"} {
+			for _, name := range []string{"load", "queries", "reopen", "concurrent", "maintenance", "backfill", "text_only", "source_chunk"} {
 				selected[name] = true
 			}
 		case "retrieval":
@@ -605,11 +744,17 @@ func normalizeSelectedPhases(selected map[string]bool, cfg config) map[string]bo
 	if !cfg.runBackfill {
 		delete(selected, "backfill")
 	}
+	if !cfg.runTextOnly {
+		delete(selected, "text_only")
+	}
+	if !cfg.runSourceChunk {
+		delete(selected, "source_chunk")
+	}
 	return selected
 }
 
 func selectedPhaseNames(selected map[string]bool) []string {
-	all := []string{"load", "queries", "reopen", "concurrent", "maintenance", "backfill"}
+	all := []string{"load", "queries", "reopen", "concurrent", "maintenance", "backfill", "text_only", "source_chunk"}
 	var names []string
 	for _, phase := range all {
 		if selected[phase] {
@@ -650,31 +795,43 @@ func run(cfg config) (report, error) {
 	rep := report{
 		SchemaVersion: scaleSchemaVersion,
 		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+		Status:        "running",
 		Context:       captureContext(cfg),
+		Contract: reportContract{
+			FixtureSHA256: frozenFixtureSHA256(), QuerySetSHA256: frozenQuerySetSHA256(),
+			RelevanceSHA256: frozenRelevanceSHA256(), Analyzer: "simple",
+			FieldWeights: "title=3,body=1", Seed: 4329,
+		},
 		Config: reportConfig{
 			Rows: cfg.rows, BatchSize: cfg.batchSize, Dims: cfg.dims, M: cfg.m,
 			EfConstruction: cfg.efConstruction, EfSearch: cfg.efSearch,
 			TopK: cfg.topK, CandidateLimit: cfg.candidateLimit, Queries: cfg.queries,
 			Readers: cfg.readers, IncludeVector: cfg.includeVector,
 			RunBackfill: cfg.runBackfill, BackfillRows: cfg.backfillRows,
+			RunTextOnly: cfg.runTextOnly, TextOnlyRows: cfg.textOnlyRows,
+			RunSourceChunk: cfg.runSourceChunk, SourceChunkRows: cfg.sourceChunkRows,
 			RunReopen: cfg.runReopen, RunConcurrent: cfg.runConcurrent,
 			ConcurrentWrites: cfg.concurrentWrites, RunRewrite: cfg.runRewrite,
 			MaintenanceUpdates: cfg.maintenanceUpdates, MaintenanceDeletes: cfg.maintenanceDeletes,
 			PhaseSelector: cfg.phases,
 		},
 		Artifacts: reportArtifacts{
-			OutDir:     cfg.outDir,
-			DBDir:      dbDir,
-			DBKept:     cfg.keepDB,
+			OutDir: cfg.outDir, DBDir: dbDir, DBKept: cfg.keepDB,
 			JSONReport: filepath.Join(cfg.outDir, "scale_report.json"),
 			Markdown:   filepath.Join(cfg.outDir, "scale_report.md"),
 		},
 		Caveats: []string{
-			"Synthetic corpus uses deterministic customer-support text, scalar tenants, and small dense vectors; do not use as relevance-quality evidence.",
-			"Retrieval rows time warm in-process queries after fixture load/reopen; B/op and allocs/op should be captured with the companion Go benchmark commands when making allocation claims.",
+			"Synthetic corpus uses deterministic customer-support text, scalar tenants, and small dense vectors; do not use as external relevance-quality evidence.",
+			"Every retained query row includes repeated result-order parity, path counters, and process resource snapshots.",
 		},
 		SelectedPhases: selectedPhaseNames(cfg.selectedPhases),
+		Failures:       []failureRecord{},
 	}
+	configSHA, err := writeFrozenConfig(cfg.outDir, rep.Config)
+	if err != nil {
+		return report{}, fmt.Errorf("write frozen config: %w", err)
+	}
+	rep.Contract.ConfigSHA256 = configSHA
 	if !cfg.includeVector {
 		rep.Caveats = append(rep.Caveats, "Vector/hybrid rows were skipped because -include-vector=false.")
 	}
@@ -695,7 +852,7 @@ func run(cfg config) (report, error) {
 		}
 	}()
 	rep.Load = load
-	rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("after_load", cfg.rows, load.StorageBytesAfterLoad, load.TextStorage, load.VectorStatus))
+	rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("after_load", cfg.rows, dbDir, load.TextStorage, load.VectorStatus))
 	if err := completePhase(&rep, "load"); err != nil {
 		return rep, err
 	}
@@ -729,7 +886,7 @@ func run(cfg config) (report, error) {
 		}
 		fixture = reopenedFixture
 		rep.Reopen = &reopen
-		rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("after_reopen", cfg.rows, reopen.StorageBytes, reopen.TextStorage, reopen.VectorStatus))
+		rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("after_reopen", cfg.rows, dbDir, reopen.TextStorage, reopen.VectorStatus))
 		if err := completePhase(&rep, "reopen"); err != nil {
 			return rep, err
 		}
@@ -753,7 +910,7 @@ func run(cfg config) (report, error) {
 			return report{}, err
 		}
 		rep.Maintenance = &maintenance
-		rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("maintenance_rewrite_fixture", maxInt(cfg.rows-maintenance.Deletes, 1), maintenance.StorageBytesAfter, maintenance.TextStorageAfter, nil))
+		rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("maintenance_rewrite_fixture", maxInt(cfg.rows-maintenance.Deletes, 1), filepath.Join(cfg.outDir, "maintenance_db"), maintenance.TextStorageAfter, nil))
 		guard := guardrailResult{Name: "maintenance_rewrite_postconditions", OK: maintenance.PostconditionOK, Failure: maintenance.PostconditionFailure}
 		rep.Guardrails = append(rep.Guardrails, guard)
 		if err := completeGuardedPhase(&rep, "maintenance", []guardrailResult{guard}, cfg.allowGuardrailFails); err != nil {
@@ -767,13 +924,52 @@ func run(cfg config) (report, error) {
 			return report{}, err
 		}
 		rep.Backfill = &backfill
-		rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("backfill_fixture", cfg.backfillRows, backfill.StorageBytes, backfill.TextStorage, nil))
+		rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("backfill_fixture", cfg.backfillRows, filepath.Join(cfg.outDir, "backfill_db"), backfill.TextStorage, nil))
 		if err := completePhase(&rep, "backfill"); err != nil {
 			return rep, err
 		}
 	}
 
+	if cfg.selectedPhases["text_only"] && cfg.runTextOnly {
+		textOnly, err := runTextOnlyLoadProbe(cfg)
+		if err != nil {
+			return rep, err
+		}
+		rep.TextOnly = &textOnly
+		rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("text_only_fixture", cfg.textOnlyRows, filepath.Join(cfg.outDir, "text_only_db"), textOnly.TextStorage, nil))
+		if err := completePhase(&rep, "text_only"); err != nil {
+			return rep, err
+		}
+	}
+
+	if cfg.selectedPhases["source_chunk"] && cfg.runSourceChunk {
+		sourceChunk, err := runSourceChunkProbe(cfg)
+		if err != nil {
+			return rep, err
+		}
+		rep.SourceChunk = &sourceChunk
+		rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("source_chunk_fixture", cfg.sourceChunkRows, filepath.Join(cfg.outDir, "source_chunk_db"), sourceChunk.TextStorage, nil))
+		if err := completePhase(&rep, "source_chunk"); err != nil {
+			return rep, err
+		}
+	}
+
+	if err := finalizeCleanup(&rep, cfg, &fixture); err != nil {
+		rep.Status = "failed"
+		rep.Failure = err.Error()
+		rep.Failures = append(rep.Failures, failureRecord{Phase: "cleanup", Status: "failed", Error: err.Error()})
+		_ = persistIncompleteReport(&rep)
+		return rep, err
+	}
 	rep.Complete = len(rep.CompletedPhases) == len(rep.SelectedPhases)
+	if !rep.Complete {
+		err := fmt.Errorf("campaign incomplete: completed=%v selected=%v", rep.CompletedPhases, rep.SelectedPhases)
+		rep.Status, rep.Failure = "failed", err.Error()
+		rep.Failures = append(rep.Failures, failureRecord{Phase: "campaign", Status: "failed", Error: err.Error()})
+		_ = persistIncompleteReport(&rep)
+		return rep, err
+	}
+	rep.Status = "passed"
 	rep.Bottlenecks = rankBottlenecks(rep)
 	if err := writeReports(rep); err != nil {
 		return report{}, err
@@ -819,7 +1015,7 @@ func completePhase(rep *report, phase string) error {
 		}
 	}
 	rep.CompletedPhases = append(rep.CompletedPhases, phase)
-	rep.Complete = len(rep.CompletedPhases) == len(rep.SelectedPhases)
+	rep.Complete = false
 	rep.Bottlenecks = rankBottlenecks(*rep)
 	return writeReports(*rep)
 }
@@ -955,7 +1151,7 @@ func loadPrimaryFixture(cfg config) (scaleFixture, loadReport, error) {
 		fixture.vectorDef = meta.VectorIndexes[0]
 	}
 
-	load := loadReport{Rows: cfg.rows}
+	load := loadReport{Mode: "mixed_text_vector", Rows: cfg.rows}
 	var genElapsed, insertElapsed time.Duration
 	for offset := 0; offset < cfg.rows; offset += cfg.batchSize {
 		count := minInt(cfg.batchSize, cfg.rows-offset)
@@ -1015,6 +1211,8 @@ func loadPrimaryFixture(cfg config) (scaleFixture, loadReport, error) {
 	load.StorageBytesPerDoc = float64(bytes) / float64(cfg.rows)
 	load.TotalSeconds = time.Since(start).Seconds()
 	load.RowsPerSecond = float64(cfg.rows) / nonZero(load.TotalSeconds)
+	load.Status = "passed"
+	load.Resource = captureResource()
 	return fixture, load, nil
 }
 
@@ -1040,7 +1238,7 @@ func textDefinition() collections.TextIndexDefinition {
 		Name:           textIndexName,
 		Version:        collections.TextIndexVersionV2,
 		Fields:         []collections.TextIndexField{{Field: "title", Weight: 3}, {Field: "body"}},
-		StorePositions: false,
+		StorePositions: true,
 		StoreOffsets:   false,
 	}
 }
@@ -1178,76 +1376,81 @@ func queryVector(dims int) []float32 {
 }
 
 func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []guardrailResult, error) {
-	rows := []queryReport{}
-	guards := []guardrailResult{}
+	var rows []queryReport
+	var guards []guardrailResult
 	textCases := []struct {
-		name     string
-		query    string
-		operator collections.TextSearchOperator
-		shape    string
+		name, shape string
+		opts        collections.TextSearchOptions
 	}{
-		{name: queryRowTextCommon, query: "refund", shape: "common single-term BM25F block-max top-k"},
-		{name: queryRowTextRare, query: rareTextTerm, shape: "rare single-term BM25F top-k"},
-		{name: queryRowTextMultiTermAND, query: "refund AND policy", operator: collections.TextSearchOperatorAND, shape: "multi-term AND exact BM25F"},
-		{name: queryRowTextMultiTermOR, query: "refund policy", operator: collections.TextSearchOperatorOR, shape: "multi-term OR current exact BM25F path"},
+		{queryRowTextCommon, "common single-term BM25F block-max top-k", collections.TextSearchOptions{Query: "refund"}},
+		{queryRowTextRare, "rare single-term BM25F top-k", collections.TextSearchOptions{Query: rareTextTerm}},
+		{queryRowTextMultiTermAND, "multi-term AND exact BM25F", collections.TextSearchOptions{Query: "refund AND policy", Operator: collections.TextSearchOperatorAND}},
+		{queryRowTextMultiTermOR, "multi-term OR exact BM25F WAND", collections.TextSearchOptions{Query: "refund policy", Operator: collections.TextSearchOperatorOR}},
+		{queryRowTextPhrase, "exact phrase over text-v2 positions", collections.TextSearchOptions{Phrase: &collections.TextSearchPhraseQuery{Query: "refund policy"}}},
+		{queryRowTextCommonFetch, "common single-term bounded final top-k fetch", collections.TextSearchOptions{Query: "refund", IncludeDocuments: true}},
 	}
 	for _, tc := range textCases {
 		if !selectedQueryRow(cfg, tc.name) {
 			continue
 		}
-		report, guard, err := runTextQueryRow(col, cfg, tc.name, tc.query, tc.operator, tc.shape)
-		rows = append(rows, report)
-		guards = append(guards, guard)
+		tc.opts.IndexName, tc.opts.TopK = textIndexName, cfg.topK
+		tc.opts.ResultMode, tc.opts.CandidateLimit = collections.TextSearchResultModeScoreOnly, cfg.rows
+		tc.opts.MaxPostingsScanned = maxInt(cfg.rows*4, cfg.topK)
+		row, guard, err := runTextQueryRow(col, cfg, tc.name, tc.shape, tc.opts)
+		rows, guards = append(rows, row), append(guards, guard)
 		if err != nil {
 			return rows, guards, err
 		}
 	}
-
+	text := func() *collections.HybridTextQuery {
+		return &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit}
+	}
+	broadText := func() *collections.HybridTextQuery {
+		return &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.rows}
+	}
+	vector := func() *collections.HybridVectorQuery {
+		return &collections.HybridVectorQuery{IndexName: vectorIndexName, Query: queryVector(cfg.dims), CandidateLimit: cfg.candidateLimit, EfSearch: cfg.efSearch, QueryMode: collections.VectorIndexQueryModeExact}
+	}
+	rare := func() *collections.HybridScalarFilter {
+		return &collections.HybridScalarFilter{IndexName: tenantIndexName, Value: rareTenant}
+	}
+	broad := func() *collections.HybridScalarFilter {
+		return &collections.HybridScalarFilter{IndexName: tenantIndexName, Value: "tenant-common"}
+	}
 	hybridCases := []struct {
-		name  string
-		shape string
-		opts  collections.HybridSearchOptions
+		name, shape string
+		opts        collections.HybridSearchOptions
 	}{
-		{
-			name:  queryRowHybridText,
-			shape: "hybrid executor text source only, score-only result mode",
-			opts:  collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit}},
-		},
-		{
-			name:  queryRowHybridTextScalar,
-			shape: "hybrid executor text source plus scalar prefilter, score-only result mode",
-			opts:  collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit}, ScalarFilter: &collections.HybridScalarFilter{IndexName: tenantIndexName, Value: rareTenant}},
-		},
+		{queryRowHybridText, "hybrid executor text-only accepted adaptive budget", collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: text()}},
+		{queryRowHybridTextScalar, "hybrid text plus rare scalar prefilter", collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: text(), ScalarFilter: rare()}},
+		{queryRowHybridTextScalarBroad, "hybrid text plus broad scalar prefilter", collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: broadText(), ScalarFilter: broad()}},
 	}
 	if cfg.includeVector {
 		hybridCases = append(hybridCases,
 			struct {
-				name  string
-				shape string
-				opts  collections.HybridSearchOptions
-			}{
-				name:  queryRowHybridTextVector,
-				shape: "text+vector RRF, score-only result mode",
-				opts:  collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit}, Vector: &collections.HybridVectorQuery{IndexName: vectorIndexName, Query: queryVector(cfg.dims), CandidateLimit: cfg.candidateLimit, EfSearch: cfg.efSearch, QueryMode: collections.VectorIndexQueryModeExact}},
-			},
+				name, shape string
+				opts        collections.HybridSearchOptions
+			}{queryRowHybridTextVector, "text+vector fixed candidate budgets, collapse disabled", collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: text(), Vector: vector()}},
 			struct {
-				name  string
-				shape string
-				opts  collections.HybridSearchOptions
-			}{
-				name:  queryRowHybridTextVecScalar,
-				shape: "text+vector RRF with scalar prefilter, score-only result mode",
-				opts:  collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit}, Vector: &collections.HybridVectorQuery{IndexName: vectorIndexName, Query: queryVector(cfg.dims), CandidateLimit: cfg.candidateLimit, EfSearch: cfg.efSearch, QueryMode: collections.VectorIndexQueryModeExact}, ScalarFilter: &collections.HybridScalarFilter{IndexName: tenantIndexName, Value: rareTenant}},
-			},
+				name, shape string
+				opts        collections.HybridSearchOptions
+			}{queryRowHybridTextVecScalar, "text+vector+scalar fixed candidate budgets", collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: text(), Vector: vector(), ScalarFilter: rare()}},
+			struct {
+				name, shape string
+				opts        collections.HybridSearchOptions
+			}{queryRowHybridTextVecCollapse2, "text+vector parent collapse cap=2", collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: text(), Vector: vector(), MaxChunksPerParent: 2}},
+			struct {
+				name, shape string
+				opts        collections.HybridSearchOptions
+			}{queryRowHybridTextVecScalarFetch, "text+vector+scalar bounded final top-k fetch", collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeFull, Text: text(), Vector: vector(), ScalarFilter: rare()}},
 		)
 	}
 	for _, tc := range hybridCases {
 		if !selectedQueryRow(cfg, tc.name) {
 			continue
 		}
-		report, guard, err := runHybridQueryRow(col, cfg, tc.name, tc.shape, tc.opts)
-		rows = append(rows, report)
-		guards = append(guards, guard)
+		row, guard, err := runHybridQueryRow(col, cfg, tc.name, tc.shape, tc.opts)
+		rows, guards = append(rows, row), append(guards, guard)
 		if err != nil {
 			return rows, guards, err
 		}
@@ -1259,55 +1462,51 @@ func selectedQueryRow(cfg config, name string) bool {
 	return len(cfg.queryRows) == 0 || cfg.queryRows[name]
 }
 
-func runTextQueryRow(col *collections.Collection, cfg config, name, query string, operator collections.TextSearchOperator, shape string) (queryReport, guardrailResult, error) {
-	opts := collections.TextSearchOptions{IndexName: textIndexName, Query: query, Operator: operator, TopK: cfg.topK, ResultMode: collections.TextSearchResultModeScoreOnly, CandidateLimit: cfg.rows, MaxPostingsScanned: maxInt(cfg.rows*4, cfg.topK)}
+func runTextQueryRow(col *collections.Collection, cfg config, name, shape string, opts collections.TextSearchOptions) (queryReport, guardrailResult, error) {
+	allowFetch := opts.IncludeDocuments
 	warm, err := col.SearchText(opts)
-	if err != nil {
+	if err != nil || len(warm.Results) == 0 {
+		if err == nil {
+			err = errors.New("returned no results")
+		}
 		queryErr := fmt.Errorf("warm %s: %w", name, err)
 		row := failedTextQueryRow(cfg, name, shape, warm, nil, queryErr)
 		guard := textFailureGuard(name, warm.Stats, queryErr)
-		if cfg.allowGuardrailFails {
-			return row, guard, nil
-		}
 		return row, guard, queryErr
 	}
-	if len(warm.Results) == 0 {
-		queryErr := fmt.Errorf("warm %s returned no results", name)
-		row := failedTextQueryRow(cfg, name, shape, warm, nil, queryErr)
-		guard := textFailureGuard(name, warm.Stats, queryErr)
-		if cfg.allowGuardrailFails {
-			return row, guard, nil
-		}
-		return row, guard, queryErr
-	}
-	guard := textGuardrail(name, warm.Stats)
+	expectedDigest := hashTextResults(warm.Results)
+	guard := textQueryGuardrail(name, warm.Stats, allowFetch, len(warm.Results))
 	durations := make([]int64, 0, cfg.queries)
 	var last collections.TextSearchResponse
-	for i := 0; i < cfg.queries; i++ {
+	for i := range cfg.queries {
 		start := time.Now()
 		got, err := col.SearchText(opts)
 		elapsed := time.Since(start).Nanoseconds()
+		if err == nil && hashTextResults(got.Results) != expectedDigest {
+			err = errors.New("result/order digest changed across repetitions")
+		}
 		if err != nil {
 			queryErr := fmt.Errorf("%s query %d: %w", name, i, err)
 			row := failedTextQueryRow(cfg, name, shape, got, durations, queryErr)
-			guard := textFailureGuard(name, got.Stats, queryErr)
-			if cfg.allowGuardrailFails {
-				return row, guard, nil
-			}
-			return row, guard, queryErr
+			failed := textFailureGuard(name, got.Stats, queryErr)
+			return row, failed, queryErr
 		}
-		durations = append(durations, elapsed)
-		last = got
-		if g := textGuardrail(name, got.Stats); !g.OK {
+		durations, last = append(durations, elapsed), got
+		if g := textQueryGuardrail(name, got.Stats, allowFetch, len(got.Results)); !g.OK {
 			guard = g
 		}
 	}
-	lat := summarizeLatency(durations)
-	stats := last.Stats
+	lat, stats := summarizeLatency(durations), last.Stats
+	boundary := "warm no-document text-v2 score-only search"
+	if allowFetch {
+		boundary = "warm bounded final top-k document fetch"
+	}
 	return queryReport{
-		Name: name, Modality: "text", QueryShape: shape, Boundary: "warm no-document text-v2 score-only search", Rows: cfg.rows,
-		TopK: cfg.topK, CandidateBudget: cfg.rows, Samples: len(durations), Results: len(last.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS),
-		TextStats: &stats, GuardrailOK: guard.OK, GuardrailFailure: guard.Failure,
+		Name: name, Status: "passed", Modality: "text", QueryShape: shape, Boundary: boundary,
+		Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.rows, Samples: len(durations),
+		Results: len(last.Results), ResultsSHA256: expectedDigest, CorrectnessOK: true, IsolationOK: true,
+		Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), TextStats: &stats,
+		GuardrailOK: guard.OK, GuardrailFailure: guard.Failure, Resource: captureResource(),
 	}, guard, nil
 }
 
@@ -1315,7 +1514,7 @@ func failedTextQueryRow(cfg config, name, shape string, response collections.Tex
 	stats := response.Stats
 	guard := textFailureGuard(name, response.Stats, err)
 	lat := summarizeLatency(durations)
-	return queryReport{Name: name, Modality: "text", QueryShape: shape, Boundary: "warm no-document text-v2 score-only search", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.rows, Samples: len(durations), Results: len(response.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), TextStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure}
+	return queryReport{Name: name, Status: "failed", Failure: err.Error(), Modality: "text", QueryShape: shape, Boundary: "warm text-v2 search", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.rows, Samples: len(durations), Results: len(response.Results), ResultsSHA256: hashTextResults(response.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), TextStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure, Resource: captureResource()}
 }
 
 func textFailureGuard(name string, stats collections.TextSearchStats, err error) guardrailResult {
@@ -1329,22 +1528,40 @@ func textFailureGuard(name string, stats collections.TextSearchStats, err error)
 	return guard
 }
 
+func textQueryGuardrail(name string, stats collections.TextSearchStats, allowFetch bool, results int) guardrailResult {
+	guard := textGuardrail(name, stats)
+	if allowFetch {
+		var failures []string
+		if stats.DocumentsFetched != uint64(results) {
+			failures = append(failures, fmt.Sprintf("docs_fetched=%d want=%d", stats.DocumentsFetched, results))
+		}
+		if stats.FullDocumentScanFallbacks != 0 {
+			failures = append(failures, fmt.Sprintf("full_doc_fallbacks=%d", stats.FullDocumentScanFallbacks))
+		}
+		if stats.FailClosed != 0 {
+			failures = append(failures, fmt.Sprintf("fail_closed=%d", stats.FailClosed))
+		}
+		return guardrailFromFailures(name, failures)
+	}
+	return guard
+}
+
 func runHybridQueryRow(col *collections.Collection, cfg config, name, shape string, opts collections.HybridSearchOptions) (queryReport, guardrailResult, error) {
+	allowFetch := opts.IncludeDocuments || opts.ResultMode == collections.HybridResultModeFull
 	warm, err := col.SearchHybrid(opts)
 	if err != nil {
-		warmErr := fmt.Errorf("warm %s: %w", name, err)
-		return failedHybridWarmup(cfg, name, shape, warm, warmErr)
+		return failedHybridWarmup(cfg, name, shape, warm, fmt.Errorf("warm %s: %w", name, err))
 	}
 	if len(warm.Results) == 0 {
-		warmErr := fmt.Errorf("warm %s returned no results", name)
-		return failedHybridWarmup(cfg, name, shape, warm, warmErr)
+		return failedHybridWarmup(cfg, name, shape, warm, fmt.Errorf("warm %s returned no results", name))
 	}
-	guard := hybridGuardrail(name, warm.Stats)
+	expectedDigest := hashHybridResults(warm.Results)
+	guard := hybridQueryGuardrail(name, warm.Stats, allowFetch, len(warm.Results))
 	stopProfile, err := startQueryProfiles(cfg)
 	if err != nil {
 		return failedHybridProfileSetup(cfg, name, shape, warm, err)
 	}
-	durations, last, guard, allocations, sampleErr := runProfiledHybridSamples(col, cfg, name, opts, guard)
+	durations, last, guard, allocations, sampleErr := runProfiledHybridSamples(col, cfg, name, opts, guard, expectedDigest, allowFetch)
 	profileErr := stopProfile()
 	if profileErr != nil {
 		profileErr = fmt.Errorf("write %s profile: %w", name, profileErr)
@@ -1356,33 +1573,43 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	if sampleErr != nil {
 		row := withAllocationSummary(failedHybridQueryRow(cfg, name, shape, last, durations, sampleErr), cfg, allocations)
 		guard = hybridFailureGuard(name, last.Stats, sampleErr)
-		if cfg.allowGuardrailFails {
-			return row, guard, nil
-		}
 		return row, guard, sampleErr
 	}
-	lat := summarizeLatency(durations)
-	stats := last.Stats
+	lat, stats := summarizeLatency(durations), last.Stats
+	boundary := "warm no-document hybrid candidate generation/fusion"
+	if allowFetch {
+		boundary = "warm hybrid candidate generation/fusion plus bounded final top-k fetch"
+	}
 	row := queryReport{
-		Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows,
-		TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(last.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS),
-		HybridStats: &stats, GuardrailOK: guard.OK, GuardrailFailure: guard.Failure,
+		Name: name, Status: "passed", Modality: "hybrid", QueryShape: shape, Boundary: boundary,
+		Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit,
+		CollapseCap: opts.MaxChunksPerParent, Samples: len(durations), Results: len(last.Results),
+		ResultsSHA256: expectedDigest, CorrectnessOK: true, IsolationOK: hybridIsolationOK(last.Results, opts.ScalarFilter),
+		Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats,
+		GuardrailOK: guard.OK, GuardrailFailure: guard.Failure, Resource: captureResource(),
+	}
+	if !row.IsolationOK {
+		row.Status, row.Failure, row.GuardrailOK = "failed", "scalar isolation leakage", false
+		guard = guardrailResult{Name: name, OK: false, Failure: row.Failure}
 	}
 	return withAllocationSummary(row, cfg, allocations), guard, nil
 }
 
-func runProfiledHybridSamples(col *collections.Collection, cfg config, name string, opts collections.HybridSearchOptions, guard guardrailResult) ([]int64, collections.HybridSearchResponse, guardrailResult, allocationSummary, error) {
+func runProfiledHybridSamples(col *collections.Collection, cfg config, name string, opts collections.HybridSearchOptions, guard guardrailResult, expectedDigest string, allowFetch bool) ([]int64, collections.HybridSearchResponse, guardrailResult, allocationSummary, error) {
 	durations := make([]int64, 0, cfg.queries)
 	var before, after runtime.MemStats
 	if cfg.allocProfile != "" {
 		runtime.ReadMemStats(&before)
 	}
 	var last collections.HybridSearchResponse
-	for i := 0; i < cfg.queries; i++ {
+	for i := range cfg.queries {
 		start := time.Now()
 		got, err := col.SearchHybrid(opts)
 		elapsed := time.Since(start).Nanoseconds()
 		last = got
+		if err == nil && hashHybridResults(got.Results) != expectedDigest {
+			err = errors.New("result/order digest changed across repetitions")
+		}
 		if err != nil {
 			allocations := allocationSummary{}
 			if cfg.allocProfile != "" {
@@ -1392,7 +1619,7 @@ func runProfiledHybridSamples(col *collections.Collection, cfg config, name stri
 			return durations, last, guard, allocations, fmt.Errorf("%s query %d: %w", name, i, err)
 		}
 		durations = append(durations, elapsed)
-		if g := hybridGuardrail(name, got.Stats); !g.OK {
+		if g := hybridQueryGuardrail(name, got.Stats, allowFetch, len(got.Results)); !g.OK {
 			guard = g
 		}
 	}
@@ -1537,7 +1764,7 @@ func failedHybridQueryRow(cfg config, name, shape string, response collections.H
 	stats := response.Stats
 	guard := hybridFailureGuard(name, response.Stats, err)
 	lat := summarizeLatency(durations)
-	return queryReport{Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(response.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure}
+	return queryReport{Name: name, Status: "failed", Failure: err.Error(), Modality: "hybrid", QueryShape: shape, Boundary: "warm hybrid search", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(response.Results), ResultsSHA256: hashHybridResults(response.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure, Resource: captureResource()}
 }
 
 func hybridFailureGuard(name string, stats collections.HybridSearchStats, err error) guardrailResult {
@@ -1551,8 +1778,57 @@ func hybridFailureGuard(name string, stats collections.HybridSearchStats, err er
 	return guard
 }
 
+func hybridQueryGuardrail(name string, stats collections.HybridSearchStats, allowFetch bool, results int) guardrailResult {
+	if !allowFetch {
+		return hybridGuardrail(name, stats)
+	}
+	var failures []string
+	if stats.DocumentsFetched != uint64(results) {
+		failures = append(failures, fmt.Sprintf("docs_fetched=%d want=%d", stats.DocumentsFetched, results))
+	}
+	if stats.FullDocumentScanFallbacks != 0 {
+		failures = append(failures, fmt.Sprintf("full_doc_fallbacks=%d", stats.FullDocumentScanFallbacks))
+	}
+	if stats.FailClosed != 0 {
+		failures = append(failures, fmt.Sprintf("fail_closed=%d", stats.FailClosed))
+	}
+	return guardrailFromFailures(name, failures)
+}
+
+func hybridIsolationOK(results []collections.HybridSearchResult, filter *collections.HybridScalarFilter) bool {
+	if filter == nil || filter.IndexName != tenantIndexName {
+		return true
+	}
+	for _, result := range results {
+		raw := strings.TrimPrefix(string(result.ID), "doc-")
+		ordinal, err := strconv.Atoi(raw)
+		if err != nil {
+			return false
+		}
+		switch filter.Value {
+		case rareTenant:
+			if ordinal%16 != 0 {
+				return false
+			}
+		case "tenant-common":
+			if ordinal%16 == 0 || ordinal%4 == 2 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixture, error) {
 	startTotal := time.Now()
+	opts := collections.TextSearchOptions{IndexName: textIndexName, Query: "refund", TopK: cfg.topK, ResultMode: collections.TextSearchResultModeScoreOnly, CandidateLimit: cfg.rows, MaxPostingsScanned: maxInt(cfg.rows*4, cfg.topK)}
+	before, err := fixture.col.SearchText(opts)
+	if err != nil || len(before.Results) == 0 {
+		return reopenReport{}, fixture, fmt.Errorf("pre-reopen text probe: results=%d err=%v", len(before.Results), err)
+	}
+	beforeDigest := hashTextResults(before.Results)
 	closeStart := time.Now()
 	if err := fixture.db.Close(); err != nil {
 		return reopenReport{}, fixture, fmt.Errorf("close for reopen: %w", err)
@@ -1573,14 +1849,15 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 	}
 	openCollectionSeconds := secondsSince(openColStart)
 	probeStart := time.Now()
-	resp, err := col.SearchText(collections.TextSearchOptions{IndexName: textIndexName, Query: "refund", TopK: cfg.topK, ResultMode: collections.TextSearchResultModeScoreOnly, CandidateLimit: cfg.rows, MaxPostingsScanned: maxInt(cfg.rows*4, cfg.topK)})
+	after, err := col.SearchText(opts)
 	if err != nil {
 		_ = db.Close()
 		return reopenReport{}, fixture, fmt.Errorf("reopen text probe: %w", err)
 	}
-	if len(resp.Results) == 0 || !textGuardrail("reopen_text_probe", resp.Stats).OK {
+	afterDigest := hashTextResults(after.Results)
+	if len(after.Results) == 0 || !textGuardrail("reopen_text_probe", after.Stats).OK || beforeDigest != afterDigest {
 		_ = db.Close()
-		return reopenReport{}, fixture, fmt.Errorf("reopen text probe failed guardrail stats=%+v results=%d", resp.Stats, len(resp.Results))
+		return reopenReport{}, fixture, fmt.Errorf("reopen text parity failed before=%s after=%s stats=%+v results=%d", beforeDigest, afterDigest, after.Stats, len(after.Results))
 	}
 	stats, err := col.TextIndexStorageStats(textIndexName)
 	if err != nil {
@@ -1600,29 +1877,30 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 			return reopenReport{}, fixture, fmt.Errorf("reopen vector status not serveable: state=%s loaded=%v rebuild_needed=%v", status.State, status.Loaded, status.RebuildNeeded)
 		}
 		vectorProbe, err := col.SearchHybrid(collections.HybridSearchOptions{
-			TopK:       cfg.topK,
-			ResultMode: collections.HybridResultModeScoreOnly,
-			Text:       &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit},
-			Vector:     &collections.HybridVectorQuery{IndexName: vectorIndexName, Query: queryVector(cfg.dims), CandidateLimit: cfg.candidateLimit, EfSearch: cfg.efSearch, QueryMode: collections.VectorIndexQueryModeExact},
+			TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly,
+			Text:   &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit},
+			Vector: &collections.HybridVectorQuery{IndexName: vectorIndexName, Query: queryVector(cfg.dims), CandidateLimit: cfg.candidateLimit, EfSearch: cfg.efSearch, QueryMode: collections.VectorIndexQueryModeExact},
 		})
-		if err != nil {
+		if err != nil || len(vectorProbe.Results) == 0 || !hybridGuardrail("reopen_hybrid_vector_probe", vectorProbe.Stats).OK {
 			_ = db.Close()
-			return reopenReport{}, fixture, fmt.Errorf("reopen hybrid vector guardrail probe: %w", err)
-		}
-		if len(vectorProbe.Results) == 0 || !hybridGuardrail("reopen_hybrid_vector_probe", vectorProbe.Stats).OK {
-			_ = db.Close()
-			return reopenReport{}, fixture, fmt.Errorf("reopen hybrid vector guardrail failed stats=%+v results=%d", vectorProbe.Stats, len(vectorProbe.Results))
+			return reopenReport{}, fixture, fmt.Errorf("reopen hybrid vector guardrail failed stats=%+v results=%d err=%v", vectorProbe.Stats, len(vectorProbe.Results), err)
 		}
 	}
-	probeSeconds := secondsSince(probeStart)
 	bytes, err := dirSize(fixture.dir)
 	if err != nil {
 		_ = db.Close()
 		return reopenReport{}, fixture, err
 	}
-	fixture.db = db
-	fixture.col = col
-	return reopenReport{CloseSeconds: closeSeconds, OpenSeconds: openSeconds, OpenCollectionSeconds: openCollectionSeconds, ProbeSeconds: probeSeconds, TotalSeconds: time.Since(startTotal).Seconds(), TextStorage: stats, VectorStatus: vectorStatus, StorageBytes: bytes}, fixture, nil
+	fixture.db, fixture.col = db, col
+	return reopenReport{
+		Status: "passed", CloseSeconds: closeSeconds, OpenSeconds: openSeconds,
+		OpenCollectionSeconds: openCollectionSeconds, ProbeSeconds: secondsSince(probeStart),
+		TotalSeconds: time.Since(startTotal).Seconds(), TextStorage: stats,
+		VectorStatus: vectorStatus, StorageBytes: bytes, ExpectedRows: cfg.rows,
+		LiveRows: stats.V2LiveDocuments, CountOK: stats.V2LiveDocuments == uint64(cfg.rows),
+		BeforeResultsSHA256: beforeDigest, AfterResultsSHA256: afterDigest,
+		QueryParityOK: beforeDigest == afterDigest, Resource: captureResource(),
+	}, fixture, nil
 }
 
 func runConcurrentProbe(col *collections.Collection, cfg config) (concurrentReport, guardrailResult, error) {
@@ -1699,16 +1977,17 @@ func runConcurrentProbe(col *collections.Collection, cfg config) (concurrentRepo
 		guard.Failure = strings.Join(errs, "; ")
 	}
 	elapsed := time.Since(start).Seconds()
-	return concurrentReport{Readers: cfg.readers, Queries: totalQueries, Writes: cfg.concurrentWrites, SearchLatency: lat, ThroughputOpsPerSec: float64(totalQueries) / nonZero(elapsed), WriterSeconds: writerSeconds, TotalSeconds: elapsed, Errors: errs, LastTextStats: lastStats, GuardrailOK: guard.OK, GuardrailFailure: guard.Failure}, guard, nil
+	status := "passed"
+	if len(errs) != 0 {
+		status = "failed"
+	}
+	return concurrentReport{Status: status, Failure: guard.Failure, Readers: cfg.readers, Queries: totalQueries, Writes: cfg.concurrentWrites, SearchLatency: lat, ThroughputOpsPerSec: float64(totalQueries) / nonZero(elapsed), WriterSeconds: writerSeconds, TotalSeconds: elapsed, Errors: errs, LastTextStats: lastStats, GuardrailOK: guard.OK, GuardrailFailure: guard.Failure, Resource: captureResource()}, guard, nil
 }
 
 func runMaintenanceProbe(cfg config) (maintenanceReport, error) {
 	dir := filepath.Join(cfg.outDir, "maintenance_db")
 	if err := prepareEmptyDir(dir); err != nil {
 		return maintenanceReport{}, err
-	}
-	if !cfg.keepDB {
-		defer os.RemoveAll(dir)
 	}
 	db, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {
@@ -1802,18 +2081,43 @@ func runMaintenanceProbe(cfg config) (maintenanceReport, error) {
 		maintenance.PostconditionOK = false
 		maintenance.PostconditionFailure = "empty rewrite merge state"
 	}
-	probe, err := col.SearchText(collections.TextSearchOptions{IndexName: textIndexName, Query: "refund", TopK: cfg.topK, ResultMode: collections.TextSearchResultModeScoreOnly, CandidateLimit: cfg.rows, MaxPostingsScanned: maxInt(cfg.rows*4, cfg.topK)})
+	probeOpts := collections.TextSearchOptions{IndexName: textIndexName, Query: "refund", TopK: cfg.topK, ResultMode: collections.TextSearchResultModeScoreOnly, CandidateLimit: cfg.rows, MaxPostingsScanned: maxInt(cfg.rows*4, cfg.topK)}
+	probe, err := col.SearchText(probeOpts)
 	if err != nil {
 		maintenance.PostconditionOK = false
 		maintenance.PostconditionFailure = "post-rewrite search failed: " + err.Error()
 	} else if guard := textGuardrail("post_rewrite_text_probe", probe.Stats); !guard.OK || len(probe.Results) == 0 {
 		maintenance.PostconditionOK = false
-		if guard.Failure != "" {
-			maintenance.PostconditionFailure = guard.Failure
-		} else {
-			maintenance.PostconditionFailure = "post-rewrite search returned no results"
-		}
+		maintenance.PostconditionFailure = firstNonEmpty(guard.Failure, "post-rewrite search returned no results")
 	}
+	maintenance.BeforeResultsSHA256 = hashTextResults(probe.Results)
+	if err := db.Close(); err != nil {
+		return maintenanceReport{}, fmt.Errorf("close maintenance fixture: %w", err)
+	}
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		return maintenanceReport{}, fmt.Errorf("reopen maintenance fixture: %w", err)
+	}
+	defer reopened.Close()
+	reopenedCol, err := collections.NewCollectionManager(reopened).OpenCollection(collectionName)
+	if err != nil {
+		return maintenanceReport{}, fmt.Errorf("open maintenance collection after reopen: %w", err)
+	}
+	after, err := reopenedCol.SearchText(probeOpts)
+	if err != nil {
+		return maintenanceReport{}, fmt.Errorf("maintenance query after reopen: %w", err)
+	}
+	maintenance.AfterResultsSHA256 = hashTextResults(after.Results)
+	maintenance.ReopenParityOK = maintenance.BeforeResultsSHA256 != "" && maintenance.BeforeResultsSHA256 == maintenance.AfterResultsSHA256
+	if !maintenance.ReopenParityOK {
+		maintenance.PostconditionOK = false
+		maintenance.PostconditionFailure = "post-rewrite query changed after checkpoint/reopen"
+	}
+	maintenance.Status = "passed"
+	if !maintenance.PostconditionOK {
+		maintenance.Status, maintenance.Failure = "failed", maintenance.PostconditionFailure
+	}
+	maintenance.Resource = captureResource()
 	return maintenance, nil
 }
 
@@ -1821,9 +2125,6 @@ func runBackfillProbe(cfg config) (backfillReport, error) {
 	dir := filepath.Join(cfg.outDir, "backfill_db")
 	if err := prepareEmptyDir(dir); err != nil {
 		return backfillReport{}, err
-	}
-	if !cfg.keepDB {
-		defer os.RemoveAll(dir)
 	}
 	start := time.Now()
 	db, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
@@ -1877,7 +2178,185 @@ func runBackfillProbe(cfg config) (backfillReport, error) {
 		return backfillReport{}, err
 	}
 	total := time.Since(start).Seconds()
-	return backfillReport{Rows: cfg.backfillRows, GenerationSeconds: genElapsed.Seconds(), InsertSeconds: insertElapsed.Seconds(), FlushSeconds: flushSeconds, BackfillSeconds: backfillSeconds, CheckpointSeconds: checkpointSeconds, TotalSeconds: total, RowsPerSecond: float64(cfg.backfillRows) / nonZero(total), Stats: stats, TextStorage: storage, StorageBytes: bytes, StorageBytesPerDoc: float64(bytes) / float64(cfg.backfillRows)}, nil
+	return backfillReport{Status: "passed", Mode: "text_only_post_load_backfill", Rows: cfg.backfillRows, GenerationSeconds: genElapsed.Seconds(), InsertSeconds: insertElapsed.Seconds(), FlushSeconds: flushSeconds, BackfillSeconds: backfillSeconds, CheckpointSeconds: checkpointSeconds, TotalSeconds: total, RowsPerSecond: float64(cfg.backfillRows) / nonZero(total), Stats: stats, TextStorage: storage, StorageBytes: bytes, StorageBytesPerDoc: float64(bytes) / float64(cfg.backfillRows), Resource: captureResource()}, nil
+}
+
+func runTextOnlyLoadProbe(cfg config) (loadReport, error) {
+	dir := filepath.Join(cfg.outDir, "text_only_db")
+	if err := prepareEmptyDir(dir); err != nil {
+		return loadReport{}, err
+	}
+	start := time.Now()
+	db, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		return loadReport{}, fmt.Errorf("open text-only db: %w", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	meta := primaryCollectionMeta(config{dims: cfg.dims, includeVector: false})
+	if _, err := mgr.CreateCollection(meta); err != nil {
+		_ = db.Close()
+		return loadReport{}, fmt.Errorf("create text-only collection: %w", err)
+	}
+	col, err := mgr.OpenCollection(collectionName)
+	if err != nil {
+		_ = db.Close()
+		return loadReport{}, fmt.Errorf("open text-only collection: %w", err)
+	}
+	result := loadReport{Mode: "text_only_predeclared", Rows: cfg.textOnlyRows}
+	var generation, insertion time.Duration
+	for offset := 0; offset < cfg.textOnlyRows; offset += cfg.batchSize {
+		count := minInt(cfg.batchSize, cfg.textOnlyRows-offset)
+		generationStart := time.Now()
+		ids, docs := makeScaleBatch(offset, count, cfg.dims, "text-only")
+		generation += time.Since(generationStart)
+		insertStart := time.Now()
+		if _, err := col.InsertBatch(ids, docs); err != nil {
+			_ = db.Close()
+			return loadReport{}, fmt.Errorf("text-only insert batch offset %d: %w", offset, err)
+		}
+		insertion += time.Since(insertStart)
+		result.Batches++
+	}
+	flushStart := time.Now()
+	if err := col.Flush(); err != nil {
+		_ = db.Close()
+		return loadReport{}, fmt.Errorf("flush text-only fixture: %w", err)
+	}
+	result.FlushSeconds = secondsSince(flushStart)
+	checkpointStart := time.Now()
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		return loadReport{}, fmt.Errorf("checkpoint text-only fixture: %w", err)
+	}
+	result.CheckpointSeconds = secondsSince(checkpointStart)
+	result.TextStorage, err = col.TextIndexStorageStats(textIndexName)
+	if err != nil {
+		_ = db.Close()
+		return loadReport{}, fmt.Errorf("text-only storage stats: %w", err)
+	}
+	if err := db.Close(); err != nil {
+		return loadReport{}, fmt.Errorf("close text-only fixture: %w", err)
+	}
+	result.StorageBytesAfterLoad, err = dirSize(dir)
+	if err != nil {
+		return loadReport{}, err
+	}
+	result.GenerationSeconds, result.InsertSeconds = generation.Seconds(), insertion.Seconds()
+	result.TotalSeconds = time.Since(start).Seconds()
+	result.RowsPerSecond = float64(cfg.textOnlyRows) / nonZero(result.TotalSeconds)
+	result.StorageBytesPerDoc = float64(result.StorageBytesAfterLoad) / float64(cfg.textOnlyRows)
+	result.Status, result.Resource = "passed", captureResource()
+	return result, nil
+}
+
+func runSourceChunkProbe(cfg config) (sourceChunkReport, error) {
+	dir := filepath.Join(cfg.outDir, "source_chunk_db")
+	if err := prepareEmptyDir(dir); err != nil {
+		return sourceChunkReport{}, err
+	}
+	db, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		return sourceChunkReport{}, fmt.Errorf("open source/chunk db: %w", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	meta := &collections.CollectionMeta{
+		Name: collectionName, Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON},
+		Indexes:     []collections.IndexDefinition{{Name: tenantIndexName, Field: "meta.tenant", ValueType: collections.IndexValueString}},
+		TextIndexes: []collections.TextIndexDefinition{textDefinition()},
+	}
+	if _, err := mgr.CreateCollection(meta); err != nil {
+		_ = db.Close()
+		return sourceChunkReport{}, fmt.Errorf("create source/chunk collection: %w", err)
+	}
+	col, err := mgr.OpenCollection(collectionName)
+	if err != nil {
+		_ = db.Close()
+		return sourceChunkReport{}, fmt.Errorf("open source/chunk collection: %w", err)
+	}
+	result := sourceChunkReport{SourceDocuments: cfg.sourceChunkRows}
+	start := time.Now()
+	chunkCfg := chunking.Config{Strategy: chunking.StrategyFixedWindow, SizeUnit: chunking.SizeUnitRunes, Size: 32, Overlap: 0}
+	for offset := 0; offset < cfg.sourceChunkRows; offset += sourceChunkBatchLimit {
+		count := minInt(sourceChunkBatchLimit, cfg.sourceChunkRows-offset)
+		sources := make([]collections.SourceDocument, count)
+		for i := range count {
+			ordinal := offset + i
+			sources[i] = collections.SourceDocument{
+				ID: []byte(fmt.Sprintf("source-%09d", ordinal)),
+				Fields: map[string]any{
+					"title": "refund policy",
+					"body":  fmt.Sprintf("refund policy customer credit source %09d application shaped chunk ingestion retained evidence", ordinal),
+				},
+				Meta: map[string]any{"tenant": "tenant-common"},
+			}
+		}
+		rows, err := col.IngestChunkedDocuments(sources, chunkCfg, collections.ChunkedIngestOptions{})
+		if err != nil {
+			_ = db.Close()
+			return sourceChunkReport{}, fmt.Errorf("source/chunk batch offset %d: %w", offset, err)
+		}
+		if len(rows) != count {
+			_ = db.Close()
+			return sourceChunkReport{}, fmt.Errorf("source/chunk batch offset %d returned %d rows want %d", offset, len(rows), count)
+		}
+		result.BatchCalls++
+		for _, row := range rows {
+			result.GeneratedChunks += len(row.ChildIDs)
+		}
+	}
+	result.IngestSeconds = secondsSince(start)
+	checkpointStart := time.Now()
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		return sourceChunkReport{}, fmt.Errorf("source/chunk checkpoint: %w", err)
+	}
+	result.CheckpointSeconds = secondsSince(checkpointStart)
+	result.TextStorage, err = col.TextIndexStorageStats(textIndexName)
+	if err != nil {
+		_ = db.Close()
+		return sourceChunkReport{}, fmt.Errorf("source/chunk text storage: %w", err)
+	}
+	probeOpts := collections.TextSearchOptions{IndexName: textIndexName, Query: "refund policy", Operator: collections.TextSearchOperatorAND, TopK: cfg.topK, ResultMode: collections.TextSearchResultModeScoreOnly, CandidateLimit: maxInt(result.GeneratedChunks, cfg.sourceChunkRows), MaxPostingsScanned: maxInt(result.GeneratedChunks*4, cfg.topK)}
+	before, err := col.SearchText(probeOpts)
+	if err != nil || len(before.Results) == 0 || !textGuardrail("source_chunk_before_reopen", before.Stats).OK {
+		_ = db.Close()
+		return sourceChunkReport{}, fmt.Errorf("source/chunk pre-reopen probe failed results=%d err=%v", len(before.Results), err)
+	}
+	result.BeforeResultsSHA256 = hashTextResults(before.Results)
+	if err := db.Close(); err != nil {
+		return sourceChunkReport{}, fmt.Errorf("close source/chunk db: %w", err)
+	}
+	reopenStart := time.Now()
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		return sourceChunkReport{}, fmt.Errorf("reopen source/chunk db: %w", err)
+	}
+	reopenedCol, err := collections.NewCollectionManager(reopened).OpenCollection(collectionName)
+	if err != nil {
+		_ = reopened.Close()
+		return sourceChunkReport{}, fmt.Errorf("open source/chunk collection after reopen: %w", err)
+	}
+	after, err := reopenedCol.SearchText(probeOpts)
+	if err != nil {
+		_ = reopened.Close()
+		return sourceChunkReport{}, fmt.Errorf("source/chunk post-reopen probe: %w", err)
+	}
+	result.ReopenSeconds = secondsSince(reopenStart)
+	result.AfterResultsSHA256 = hashTextResults(after.Results)
+	result.ReopenParityOK = result.BeforeResultsSHA256 != "" && result.BeforeResultsSHA256 == result.AfterResultsSHA256
+	if !result.ReopenParityOK {
+		_ = reopened.Close()
+		return sourceChunkReport{}, errors.New("source/chunk result order changed after reopen")
+	}
+	if err := reopened.Close(); err != nil {
+		return sourceChunkReport{}, fmt.Errorf("close reopened source/chunk db: %w", err)
+	}
+	result.StorageBytes, err = dirSize(dir)
+	if err != nil {
+		return sourceChunkReport{}, err
+	}
+	result.Status, result.Resource = "passed", captureResource()
+	return result, nil
 }
 
 func textGuardrail(name string, stats collections.TextSearchStats) guardrailResult {
@@ -2005,11 +2484,22 @@ func rankBottlenecks(rep report) []bottleneckRow {
 	return out
 }
 
-func storageSnapshotFromText(label string, docs int, bytes int64, stats collections.TextIndexStorageStats, vectorStatus *collections.VectorIndexStatus) storageSnapshot {
-	snap := storageSnapshot{Label: label, Bytes: bytes, TextEncodedBytes: stats.EncodedBytes, V2PostingBlocks: stats.V2PostingBlocks, V2LiveDocuments: stats.V2LiveDocuments, V2DeletedDocs: stats.V2DeletedDocs}
+func storageSnapshotFromText(label string, docs int, dir string, stats collections.TextIndexStorageStats, vectorStatus *collections.VectorIndexStatus) storageSnapshot {
+	snap := storageSnapshot{Label: label, TextEncodedBytes: stats.EncodedBytes, V2PostingBlocks: stats.V2PostingBlocks, V2LiveDocuments: stats.V2LiveDocuments, V2DeletedDocs: stats.V2DeletedDocs}
+	physical, err := observePhysicalStorage(dir)
+	if err == nil {
+		snap.PhysicalIndexPageBytes = physical.PhysicalIndexPageBytes
+		snap.PhysicalValueLogBytes = physical.PhysicalValueLogBytes
+		snap.PhysicalWALBytes = physical.PhysicalWALBytes
+		snap.PhysicalOtherBytes = physical.PhysicalOtherBytes
+		snap.PhysicalTotalBytes = physical.PhysicalTotalBytes
+		snap.PhysicalTotalWALExcludedBytes = physical.PhysicalTotalWALExcludedBytes
+		snap.OtherPaths = physical.OtherPaths
+		snap.Bytes = physical.PhysicalTotalBytes
+	}
 	if docs > 0 {
 		docsDivisor := float64(docs)
-		snap.BytesPerDoc = float64(bytes) / docsDivisor
+		snap.BytesPerDoc = float64(snap.Bytes) / docsDivisor
 		snap.TextBytesPerDoc = float64(stats.EncodedBytes) / docsDivisor
 		snap.TextDocIDBytesPerDoc = float64(stats.V2DocIDBytes) / docsDivisor
 		snap.TextDocMapBytesPerDoc = float64(stats.V2DocMapBytes) / docsDivisor
@@ -2023,6 +2513,47 @@ func storageSnapshotFromText(label string, docs int, bytes int64, stats collecti
 		snap.VectorNativeBytes = vectorStatusBytes(vectorStatus)
 	}
 	return snap
+}
+
+func observePhysicalStorage(dir string) (storageSnapshot, error) {
+	var result storageSnapshot
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !entry.Type().IsRegular() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		size := info.Size()
+		switch {
+		case rel == "value_vlog" || strings.HasPrefix(rel, "value_vlog/") || rel == "leaf_vlog" || strings.HasPrefix(rel, "leaf_vlog/") || rel == "maindb/value_vlog" || strings.HasPrefix(rel, "maindb/value_vlog/") || rel == "maindb/leaf_vlog" || strings.HasPrefix(rel, "maindb/leaf_vlog/"):
+			result.PhysicalValueLogBytes += size
+		case rel == "wal" || strings.HasPrefix(rel, "wal/") || rel == "maindb/wal" || strings.HasPrefix(rel, "maindb/wal/"):
+			result.PhysicalWALBytes += size
+		case rel == "index.db" || strings.HasSuffix(rel, "/index.db"):
+			result.PhysicalIndexPageBytes += size
+		default:
+			result.PhysicalOtherBytes += size
+			result.OtherPaths = append(result.OtherPaths, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		return storageSnapshot{}, fmt.Errorf("walk physical storage %q: %w", dir, err)
+	}
+	sort.Strings(result.OtherPaths)
+	result.PhysicalTotalBytes = result.PhysicalIndexPageBytes + result.PhysicalValueLogBytes + result.PhysicalWALBytes + result.PhysicalOtherBytes
+	result.PhysicalTotalWALExcludedBytes = result.PhysicalTotalBytes - result.PhysicalWALBytes
+	return result, nil
 }
 
 func vectorStatusBytes(status *collections.VectorIndexStatus) int64 {
@@ -2075,10 +2606,12 @@ func renderMarkdown(rep report) string {
 	fmt.Fprintf(&b, "# TreeDB text-v2/hybrid scale report\n\n")
 	fmt.Fprintf(&b, "- schema: `%s`\n", rep.SchemaVersion)
 	fmt.Fprintf(&b, "- generated: `%s`\n", rep.GeneratedAt)
-	fmt.Fprintf(&b, "- branch/commit: `%s` / `%s`\n", rep.Context.Branch, rep.Context.Commit)
+	fmt.Fprintf(&b, "- commit/tree: `%s` / `%s`\n", rep.Context.Commit, rep.Context.TreeOID)
+	fmt.Fprintf(&b, "- TreeDB/harness/binary: `%s` / `%s` / `%s`\n", rep.Context.TreeDBSubtreeOID, rep.Context.HarnessSubtreeOID, rep.Context.BinarySHA256)
+	fmt.Fprintf(&b, "- frozen config/fixture/query/relevance: `%s` / `%s` / `%s` / `%s`\n", rep.Contract.ConfigSHA256, rep.Contract.FixtureSHA256, rep.Contract.QuerySetSHA256, rep.Contract.RelevanceSHA256)
 	fmt.Fprintf(&b, "- base: `%s` / `%s`\n", rep.Context.BaseRef, rep.Context.BaseSHA)
 	fmt.Fprintf(&b, "- rows: `%d`, dims: `%d`, batch: `%d`, queries/row: `%d`\n", rep.Config.Rows, rep.Config.Dims, rep.Config.BatchSize, rep.Config.Queries)
-	fmt.Fprintf(&b, "- phases: selected `%s`; completed `%s`; status **%s**\n", strings.Join(rep.SelectedPhases, ","), strings.Join(rep.CompletedPhases, ","), reportStatus(rep.Complete))
+	fmt.Fprintf(&b, "- phases: selected `%s`; completed `%s`; report status `%s`; phase execution **%s**; retained 10M artifact **%s**\n", strings.Join(rep.SelectedPhases, ","), strings.Join(rep.CompletedPhases, ","), rep.Status, reportStatus(rep.Complete), retainedArtifactStatus(rep))
 	fmt.Fprintf(&b, "- db dir: `%s` (kept=%v)\n\n", rep.Artifacts.DBDir, rep.Artifacts.DBKept)
 
 	fmt.Fprintf(&b, "## Load/storage\n\n")
@@ -2089,8 +2622,14 @@ func renderMarkdown(rep report) string {
 		vectorBytes = vectorStatusBytes(rep.Load.VectorStatus)
 	}
 	fmt.Fprintf(&b, "| load | %.3f | %.1f | %d | %.1f | %.1f | %d |\n", rep.Load.TotalSeconds, rep.Load.RowsPerSecond, rep.Load.StorageBytesAfterLoad, rep.Load.StorageBytesPerDoc, float64(rep.Load.TextStorage.EncodedBytes)/float64(maxInt(rep.Load.Rows, 1)), vectorBytes)
+	if rep.TextOnly != nil {
+		fmt.Fprintf(&b, "| text-only predeclared | %.3f | %.1f | %d | %.1f | %.1f | 0 |\n", rep.TextOnly.TotalSeconds, rep.TextOnly.RowsPerSecond, rep.TextOnly.StorageBytesAfterLoad, rep.TextOnly.StorageBytesPerDoc, float64(rep.TextOnly.TextStorage.EncodedBytes)/float64(maxInt(rep.TextOnly.Rows, 1)))
+	}
 	if rep.Backfill != nil {
 		fmt.Fprintf(&b, "| backfill fixture | %.3f | %.1f | %d | %.1f | %.1f | 0 |\n", rep.Backfill.TotalSeconds, rep.Backfill.RowsPerSecond, rep.Backfill.StorageBytes, rep.Backfill.StorageBytesPerDoc, float64(rep.Backfill.TextStorage.EncodedBytes)/float64(maxInt(rep.Backfill.Rows, 1)))
+	}
+	if rep.SourceChunk != nil {
+		fmt.Fprintf(&b, "| source/chunk fixture | %.3f | %.1f | %d | %.1f | %.1f | 0 |\n", rep.SourceChunk.IngestSeconds+rep.SourceChunk.CheckpointSeconds+rep.SourceChunk.ReopenSeconds, float64(rep.SourceChunk.SourceDocuments)/nonZero(rep.SourceChunk.IngestSeconds), rep.SourceChunk.StorageBytes, float64(rep.SourceChunk.StorageBytes)/float64(maxInt(rep.SourceChunk.SourceDocuments, 1)), float64(rep.SourceChunk.TextStorage.EncodedBytes)/float64(maxInt(rep.SourceChunk.SourceDocuments, 1)))
 	}
 	fmt.Fprintf(&b, "\nLoad breakdown: generation `%.3fs`, insert `%.3fs`, flush `%.3fs`, vector rebuild `%.3fs`, checkpoint `%.3fs`.\n\n", rep.Load.GenerationSeconds, rep.Load.InsertSeconds, rep.Load.FlushSeconds, rep.Load.VectorRebuildSeconds, rep.Load.CheckpointSeconds)
 
@@ -2102,21 +2641,28 @@ func renderMarkdown(rep report) string {
 			fmt.Fprintf(&b, "| `%s` | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f |\n", snap.Label, snap.TextDocIDBytesPerDoc, snap.TextDocMapBytesPerDoc, snap.TextPostingBlockBytesPerDoc, snap.TextNormBlockBytesPerDoc, snap.TextPositionBytesPerDoc, snap.TextTermStatsBytesPerDoc, snap.TextStatusFormatBytesPerDoc)
 		}
 		fmt.Fprintf(&b, "\n")
+		fmt.Fprintf(&b, "### Physical storage/WAL accounting\n\n")
+		fmt.Fprintf(&b, "| snapshot | index pages | value log | WAL | other | total | WAL-excluded |\n")
+		fmt.Fprintf(&b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+		for _, snap := range rep.StorageSnapshots {
+			fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %d | %d | %d |\n", snap.Label, snap.PhysicalIndexPageBytes, snap.PhysicalValueLogBytes, snap.PhysicalWALBytes, snap.PhysicalOtherBytes, snap.PhysicalTotalBytes, snap.PhysicalTotalWALExcludedBytes)
+		}
+		fmt.Fprintf(&b, "\n")
 	}
 
 	if len(rep.Queries) != 0 {
 		fmt.Fprintf(&b, "## Retrieval latency\n\n")
-		fmt.Fprintf(&b, "| row | modality | boundary | p50 | p95 | p99 | mean | ops/sec | results | guardrail | key counters |\n")
-		fmt.Fprintf(&b, "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |\n")
+		fmt.Fprintf(&b, "| row | status | modality | boundary | p50 | p95 | p99 | mean | ops/sec | results | result digest | guardrail | key counters |\n")
+		fmt.Fprintf(&b, "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |\n")
 		for _, row := range rep.Queries {
-			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %.1f | %d | %s | %s |\n", row.Name, row.Modality, markdownTable(row.Boundary), formatNS(row.Latency.P50NS), formatNS(row.Latency.P95NS), formatNS(row.Latency.P99NS), formatNS(int64(row.Latency.MeanNS)), row.OpsPerSec, row.Results, guardrailLabel(row.GuardrailOK, row.GuardrailFailure), markdownTable(queryCounters(row)))
+			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %s | %.1f | %d | `%s` | %s | %s |\n", row.Name, row.Status, row.Modality, markdownTable(row.Boundary), formatNS(row.Latency.P50NS), formatNS(row.Latency.P95NS), formatNS(row.Latency.P99NS), formatNS(int64(row.Latency.MeanNS)), row.OpsPerSec, row.Results, row.ResultsSHA256, guardrailLabel(row.GuardrailOK, row.GuardrailFailure), markdownTable(queryCounters(row)))
 		}
 		fmt.Fprintf(&b, "\n")
 	}
 
 	if rep.Reopen != nil {
 		fmt.Fprintf(&b, "## Reopen\n\n")
-		fmt.Fprintf(&b, "Close `%.3fs`, open `%.3fs`, open collection `%.3fs`, probe `%.3fs`, total `%.3fs`.\n\n", rep.Reopen.CloseSeconds, rep.Reopen.OpenSeconds, rep.Reopen.OpenCollectionSeconds, rep.Reopen.ProbeSeconds, rep.Reopen.TotalSeconds)
+		fmt.Fprintf(&b, "Close `%.3fs`, open `%.3fs`, open collection `%.3fs`, probe `%.3fs`, total `%.3fs`; count `%d/%d` parity `%v`; query parity `%v` (`%s`).\n\n", rep.Reopen.CloseSeconds, rep.Reopen.OpenSeconds, rep.Reopen.OpenCollectionSeconds, rep.Reopen.ProbeSeconds, rep.Reopen.TotalSeconds, rep.Reopen.LiveRows, rep.Reopen.ExpectedRows, rep.Reopen.CountOK, rep.Reopen.QueryParityOK, rep.Reopen.AfterResultsSHA256)
 	}
 	if rep.Concurrent != nil {
 		fmt.Fprintf(&b, "## Concurrent serving/write sanity\n\n")
@@ -2124,7 +2670,7 @@ func renderMarkdown(rep report) string {
 	}
 	if rep.Maintenance != nil {
 		fmt.Fprintf(&b, "## Maintenance/rewrite\n\n")
-		fmt.Fprintf(&b, "Updates `%d` in `%.3fs`, deletes `%d` in `%.3fs`, rewrite `%.3fs`, checkpoint `%.3fs`. Rewrite read `%d` blocks, wrote `%d`, deleted `%d`, purged stale postings `%d`; postcondition %s.\n\n", rep.Maintenance.Updates, rep.Maintenance.UpdateSeconds, rep.Maintenance.Deletes, rep.Maintenance.DeleteSeconds, rep.Maintenance.RewriteSeconds, rep.Maintenance.CheckpointSeconds, rep.Maintenance.Stats.PostingBlocksRead, rep.Maintenance.Stats.PostingBlocksWritten, rep.Maintenance.Stats.PostingBlocksDeleted, rep.Maintenance.Stats.StalePostingsPurged, guardrailLabel(rep.Maintenance.PostconditionOK, rep.Maintenance.PostconditionFailure))
+		fmt.Fprintf(&b, "Updates `%d` in `%.3fs`, deletes `%d` in `%.3fs`, rewrite `%.3fs`, checkpoint `%.3fs`. Rewrite read `%d` blocks, wrote `%d`, deleted `%d`, purged stale postings `%d`; postcondition %s; checkpoint/reopen query parity `%v`.\n\n", rep.Maintenance.Updates, rep.Maintenance.UpdateSeconds, rep.Maintenance.Deletes, rep.Maintenance.DeleteSeconds, rep.Maintenance.RewriteSeconds, rep.Maintenance.CheckpointSeconds, rep.Maintenance.Stats.PostingBlocksRead, rep.Maintenance.Stats.PostingBlocksWritten, rep.Maintenance.Stats.PostingBlocksDeleted, rep.Maintenance.Stats.StalePostingsPurged, guardrailLabel(rep.Maintenance.PostconditionOK, rep.Maintenance.PostconditionFailure), rep.Maintenance.ReopenParityOK)
 	}
 	if len(rep.Bottlenecks) != 0 {
 		fmt.Fprintf(&b, "## Ranked bottlenecks / follow-ups\n\n")
@@ -2147,6 +2693,16 @@ func renderMarkdown(rep report) string {
 			fmt.Fprintf(&b, "- %s\n", caveat)
 		}
 	}
+	fmt.Fprintf(&b, "## Cleanup/failure record\n\n")
+	fmt.Fprintf(&b, "- cleanup: `%s`; kept=%v; removed `%s`; errors `%s`\n", rep.Cleanup.Status, rep.Cleanup.DBKept, strings.Join(rep.Cleanup.RemovedPaths, ","), strings.Join(rep.Cleanup.Errors, "; "))
+	if len(rep.Failures) == 0 {
+		fmt.Fprintf(&b, "- failed/interrupted rows: none\n\n")
+	} else {
+		for _, failure := range rep.Failures {
+			fmt.Fprintf(&b, "- `%s` `%s`: %s\n", failure.Phase, failure.Status, failure.Error)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
 	return b.String()
 }
 
@@ -2155,6 +2711,16 @@ func reportStatus(complete bool) string {
 		return "COMPLETE"
 	}
 	return "INCOMPLETE (partial evidence; not a completed qualification)"
+}
+
+func retainedArtifactStatus(rep report) string {
+	if rep.Config.Rows != requiredScaleRows {
+		return "NOT ELIGIBLE (requires exact 10M)"
+	}
+	if !rep.Complete {
+		return "INCOMPLETE"
+	}
+	return "ELIGIBLE; acceptance requires successful seal and validation"
 }
 
 func queryCounters(row queryReport) string {
@@ -2205,27 +2771,35 @@ func captureContext(cfg config) reportContext {
 	}
 	buildInfo, _ := debug.ReadBuildInfo()
 	binaryState, revision, vcsClean, vcsStatus := invocationProvenance(executable, buildInfo)
+	binarySHA := ""
+	if executable != "" {
+		binarySHA, _ = digestFile(executable)
+	}
+	treeOID := strings.TrimSpace(runCmd("git", "rev-parse", "--verify", revision+"^{tree}"))
 	return reportContext{
-		// Repository and branch are intentionally left unset: this process may be
-		// a standalone binary invoked outside a checkout. VCS provenance comes
-		// only from the invoked binary's embedded build metadata.
-		Commit:      revision,
-		BaseRef:     cfg.baseRef,
-		BaseSHA:     cfg.baseSHA,
-		Go:          runtime.Version(),
-		OS:          runtime.GOOS,
-		Arch:        runtime.GOARCH,
-		CPU:         cpuLabel(),
-		NCPU:        runtime.NumCPU(),
-		Uptime:      strings.TrimSpace(runCmd("uptime")),
-		Command:     "process_argv=" + strings.Join(os.Args, " "),
-		VCSClean:    vcsClean,
-		VCSStatus:   vcsStatus,
-		BinaryState: binaryState,
-		Corpus:      "deterministic synthetic customer-support corpus v1",
-		Cache:       "warm in-process retrieval after fixture load/reopen",
-		Durability:  "TreeDB default durability; checkpoint after load",
-		NoisePolicy: "warmup excluded; raw per-query samples summarized in-process; no null rows accepted",
+		RepoRoot:          strings.TrimSpace(runCmd("git", "rev-parse", "--show-toplevel")),
+		Branch:            strings.TrimSpace(runCmd("git", "branch", "--show-current")),
+		Commit:            revision,
+		TreeOID:           treeOID,
+		TreeDBSubtreeOID:  strings.TrimSpace(runCmd("git", "rev-parse", "--verify", treeOID+":"+treeDBGitPath)),
+		HarnessSubtreeOID: strings.TrimSpace(runCmd("git", "rev-parse", "--verify", treeOID+":"+harnessGitPath)),
+		BinarySHA256:      binarySHA,
+		BaseRef:           cfg.baseRef,
+		BaseSHA:           cfg.baseSHA,
+		Go:                runtime.Version(),
+		OS:                runtime.GOOS,
+		Arch:              runtime.GOARCH,
+		CPU:               cpuLabel(),
+		NCPU:              runtime.NumCPU(),
+		Uptime:            strings.TrimSpace(runCmd("uptime")),
+		Command:           "process_argv=" + strings.Join(os.Args, " "),
+		VCSClean:          vcsClean,
+		VCSStatus:         vcsStatus,
+		BinaryState:       binaryState,
+		Corpus:            "deterministic synthetic customer-support corpus v2; seed=4329",
+		Cache:             "one untimed warmup per row; timed repetitions in-process",
+		Durability:        "TreeDB default durability; command WAL for mixed vector fixture; checkpoint before every close",
+		NoisePolicy:       "warmup excluded; raw per-query samples retained; result order must repeat exactly; no failed/null rows accepted",
 	}
 }
 
@@ -2314,6 +2888,56 @@ func dirSize(root string) (int64, error) {
 		return 0, fmt.Errorf("walk storage dir %q: %w", root, err)
 	}
 	return total, nil
+}
+
+func captureResource() resourceSnapshot {
+	cpuSeconds, peakRSS, _ := processUsage()
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	return resourceSnapshot{CPUSeconds: cpuSeconds, PeakRSSBytes: peakRSS, LiveHeapBytes: memory.Alloc}
+}
+
+func finalizeCleanup(rep *report, cfg config, fixture *scaleFixture) error {
+	if rep == nil || fixture == nil {
+		return errors.New("nil cleanup target")
+	}
+	rep.Cleanup.Errors = []string{}
+	rep.Cleanup.RemovedPaths = []string{}
+	if fixture.db != nil {
+		if err := fixture.db.Close(); err != nil {
+			rep.Cleanup.Errors = append(rep.Cleanup.Errors, "close primary db: "+err.Error())
+		}
+		fixture.db = nil
+	}
+	rep.Cleanup.DBKept = cfg.keepDB
+	if cfg.keepDB {
+		rep.Cleanup.Status = "retained"
+		return nil
+	}
+	paths := []string{
+		cfg.dbDir,
+		filepath.Join(cfg.outDir, "maintenance_db"),
+		filepath.Join(cfg.outDir, "backfill_db"),
+		filepath.Join(cfg.outDir, "text_only_db"),
+		filepath.Join(cfg.outDir, "source_chunk_db"),
+	}
+	for _, path := range paths {
+		if err := os.RemoveAll(path); err != nil {
+			rep.Cleanup.Errors = append(rep.Cleanup.Errors, fmt.Sprintf("remove %s: %v", path, err))
+			continue
+		}
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			rep.Cleanup.Errors = append(rep.Cleanup.Errors, fmt.Sprintf("cleanup path still exists: %s", path))
+			continue
+		}
+		rep.Cleanup.RemovedPaths = append(rep.Cleanup.RemovedPaths, path)
+	}
+	if len(rep.Cleanup.Errors) != 0 {
+		rep.Cleanup.Status = "failed"
+		return errors.New(strings.Join(rep.Cleanup.Errors, "; "))
+	}
+	rep.Cleanup.Status = "passed"
+	return nil
 }
 
 func secondsSince(start time.Time) float64 { return time.Since(start).Seconds() }

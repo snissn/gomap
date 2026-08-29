@@ -6,128 +6,106 @@ cd "$ROOT"
 
 RUN_DIR="${RUN_DIR:-/tmp/gomap_text_hybrid_scale_$(date +%Y%m%d_%H%M%S)}"
 GO_BIN="${GO_BIN:-go}"
+BIN="$RUN_DIR/bin/treedb_text_hybrid_scale"
 SMOKE_ROWS="${SMOKE_ROWS:-10000}"
-SMOKE_QUERIES="${SMOKE_QUERIES:-20}"
+SMOKE_QUERIES="${SMOKE_QUERIES:-3}"
 SMOKE_BATCH_SIZE="${SMOKE_BATCH_SIZE:-4096}"
+ONE_M_ROWS="${ONE_M_ROWS:-1000000}"
+ONE_M_QUERIES="${ONE_M_QUERIES:-3}"
+ONE_M_BATCH_SIZE="${ONE_M_BATCH_SIZE:-16384}"
+TEN_M_ROWS="${TEN_M_ROWS:-10000000}"
+TEN_M_QUERIES="${TEN_M_QUERIES:-3}"
+TEN_M_BATCH_SIZE="${TEN_M_BATCH_SIZE:-32768}"
 DIMS="${DIMS:-16}"
 M="${M:-8}"
 EF_CONSTRUCTION="${EF_CONSTRUCTION:-128}"
 EF_SEARCH="${EF_SEARCH:-128}"
 TOP_K="${TOP_K:-10}"
-CANDIDATE_LIMIT="${CANDIDATE_LIMIT:-64}"
-SMOKE_CANDIDATE_LIMIT="${SMOKE_CANDIDATE_LIMIT:-$CANDIDATE_LIMIT}"
+SMOKE_CANDIDATE_LIMIT="${SMOKE_CANDIDATE_LIMIT:-64}"
 ONE_M_CANDIDATE_LIMIT="${ONE_M_CANDIDATE_LIMIT:-65536}"
 TEN_M_CANDIDATE_LIMIT="${TEN_M_CANDIDATE_LIMIT:-655360}"
 READERS="${READERS:-4}"
-RUN_SMOKE="${RUN_SMOKE:-true}"
-RUN_1M="${RUN_1M:-false}"
-ONE_M_ROWS="${ONE_M_ROWS:-1000000}"
-ONE_M_QUERIES="${ONE_M_QUERIES:-25}"
-ONE_M_BATCH_SIZE="${ONE_M_BATCH_SIZE:-16384}"
-ONE_M_BACKFILL_ROWS="${ONE_M_BACKFILL_ROWS:-100000}"
+SMOKE_MAINTENANCE_UPDATES="${SMOKE_MAINTENANCE_UPDATES:-100}"
+SMOKE_MAINTENANCE_DELETES="${SMOKE_MAINTENANCE_DELETES:-50}"
 ONE_M_MAINTENANCE_UPDATES="${ONE_M_MAINTENANCE_UPDATES:-10000}"
 ONE_M_MAINTENANCE_DELETES="${ONE_M_MAINTENANCE_DELETES:-5000}"
-RUN_10M="${RUN_10M:-false}"
-APPROVE_10M="${APPROVE_10M:-false}"
-TEN_M_ROWS="${TEN_M_ROWS:-10000000}"
-TEN_M_QUERIES="${TEN_M_QUERIES:-10}"
-TEN_M_BATCH_SIZE="${TEN_M_BATCH_SIZE:-32768}"
-TEN_M_BACKFILL_ROWS="${TEN_M_BACKFILL_ROWS:-1000000}"
 TEN_M_MAINTENANCE_UPDATES="${TEN_M_MAINTENANCE_UPDATES:-10000}"
 TEN_M_MAINTENANCE_DELETES="${TEN_M_MAINTENANCE_DELETES:-5000}"
+RUN_SMOKE="${RUN_SMOKE:-true}"
+RUN_1M="${RUN_1M:-false}"
+RUN_10M="${RUN_10M:-false}"
+APPROVE_10M="${APPROVE_10M:-false}"
 KEEP_DB="${KEEP_DB:-false}"
-RUN_GO_BENCH="${RUN_GO_BENCH:-false}"
-GO_BENCH_ROWS="${GO_BENCH_ROWS:-$SMOKE_ROWS}"
-GO_BENCHTIME="${GO_BENCHTIME:-1x}"
-GO_COUNT="${GO_COUNT:-1}"
-# `retrieval` is the bounded #4327 qualification: load, query matrix, and
-# close/reopen parity only. The default remains the full historical campaign.
 PHASES="${PHASES:-all}"
 RETRIEVAL_REPETITIONS="${RETRIEVAL_REPETITIONS:-1}"
+
+is_true() {
+  [[ "$1" == "true" || "$1" == "1" || "$1" == "yes" ]]
+}
 
 if ! [[ "$RETRIEVAL_REPETITIONS" =~ ^[1-9][0-9]*$ ]]; then
   echo "RETRIEVAL_REPETITIONS must be a positive integer" >&2
   exit 2
 fi
-
 if (( RETRIEVAL_REPETITIONS > 1 )) && [[ "$PHASES" != "retrieval" ]]; then
   echo "RETRIEVAL_REPETITIONS>1 requires PHASES=retrieval; refusing to repeat a non-retrieval campaign" >&2
   exit 2
 fi
+if is_true "$RUN_10M" && [[ "$TEN_M_ROWS" != "10000000" ]]; then
+  echo "TEN_M_ROWS must be exactly 10000000" >&2
+  exit 2
+fi
+if is_true "$RUN_10M" && [[ "$PHASES" != "all" ]]; then
+  echo "the retained 10M campaign requires PHASES=all" >&2
+  exit 2
+fi
+if is_true "$RUN_10M" && [[ "$KEEP_DB" != "false" && "$KEEP_DB" != "0" && "$KEEP_DB" != "no" ]]; then
+  echo "the retained 10M campaign requires KEEP_DB=false so cleanup is measurable" >&2
+  exit 2
+fi
+if is_true "$RUN_10M" && is_true "$APPROVE_10M" && [[ -n "$(git status --porcelain)" ]]; then
+  echo "the retained 10M campaign requires a clean checkout before the binary is built" >&2
+  exit 2
+fi
 
 mkdir -p "$RUN_DIR"
+COMMIT=$(git rev-parse HEAD)
+TREE_OID=$(git rev-parse HEAD^{tree})
+TREEDB_SUBTREE_OID=$(git rev-parse "$TREE_OID:TreeDB")
+HARNESS_SUBTREE_OID=$(git rev-parse "$TREE_OID:cmd/treedb_text_hybrid_scale")
+BASE_SHA=$(git merge-base HEAD origin/main 2>/dev/null || true)
 
 {
   echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "repo=$ROOT"
-  echo "branch=$(git branch --show-current 2>/dev/null || true)"
-  echo "commit=$(git rev-parse HEAD 2>/dev/null || true)"
+  echo "branch=$(git branch --show-current)"
+  echo "commit=$COMMIT"
+  echo "tree_oid=$TREE_OID"
+  echo "treedb_subtree_oid=$TREEDB_SUBTREE_OID"
+  echo "harness_subtree_oid=$HARNESS_SUBTREE_OID"
   echo "base_ref=origin/main"
-  echo "base_sha=$(git merge-base HEAD origin/main 2>/dev/null || true)"
+  echo "base_sha=$BASE_SHA"
   echo "go=$($GO_BIN version 2>/dev/null || true)"
-  echo "uname=$(uname -a 2>/dev/null || true)"
+  echo "uname=$(uname -a)"
   echo "cpu=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)"
-  echo "ncpu=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || true)"
+  echo "ncpu=$(sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
   echo "uptime=$(uptime 2>/dev/null || true)"
-  echo "disk_free=$(df -h "$RUN_DIR" 2>/dev/null | tail -1 || true)"
-} | tee "$RUN_DIR/context.txt"
+  echo "filesystem=$(df -h "$RUN_DIR" 2>/dev/null | tail -1 || true)"
+} > "$RUN_DIR/context.txt"
 
-write_10m_plan() {
-  cat > "$RUN_DIR/10m_selected_matrix_commands.md" <<EOF_PLAN
-# TreeDB text-v2/hybrid 10M selected-matrix commands
-
-Full 10M runs are intentionally not started by default. They can take multiple
-hours and tens of GB depending on storage profile, vector rebuild, backfill, and
-rewrite settings. Run only after explicit coordinator approval. This command keeps
-strict guardrails; if current bounded text/hybrid candidate generation fails
-closed on common-term rows, treat that as scale evidence and a follow-up input,
-not as a passing latency row.
-
-Primary selected 10M text/hybrid/load/reopen/concurrent row:
-
-\`\`\`sh
-RUN_DIR=$RUN_DIR RUN_10M=true APPROVE_10M=true PHASES=$PHASES \\
-TEN_M_ROWS=$TEN_M_ROWS TEN_M_QUERIES=$TEN_M_QUERIES TEN_M_BATCH_SIZE=$TEN_M_BATCH_SIZE \\
-TEN_M_CANDIDATE_LIMIT=$TEN_M_CANDIDATE_LIMIT \\
-TEN_M_BACKFILL_ROWS=$TEN_M_BACKFILL_ROWS TEN_M_MAINTENANCE_UPDATES=$TEN_M_MAINTENANCE_UPDATES TEN_M_MAINTENANCE_DELETES=$TEN_M_MAINTENANCE_DELETES \\
-scripts/bench_text_hybrid_scale.sh
-\`\`\`
-
-Direct command equivalent:
-
-\`\`\`sh
-GOWORK=off $GO_BIN run ./cmd/treedb_text_hybrid_scale \\
-  -out-dir "$RUN_DIR/scale_10m_selected" \\
-  -rows $TEN_M_ROWS -batch-size $TEN_M_BATCH_SIZE -dims $DIMS -m $M \\
-  -ef-construction $EF_CONSTRUCTION -ef-search $EF_SEARCH \\
-  -top-k $TOP_K -candidate-limit $TEN_M_CANDIDATE_LIMIT -queries $TEN_M_QUERIES \\
-  -readers $READERS -backfill-rows $TEN_M_BACKFILL_ROWS \\
-  -maintenance-updates $TEN_M_MAINTENANCE_UPDATES -maintenance-deletes $TEN_M_MAINTENANCE_DELETES \\
-  -keep-db=$KEEP_DB -phases "$PHASES" -base-ref origin/main -base-sha "$(git merge-base HEAD origin/main 2>/dev/null || true)"
-\`\`\`
-
-For allocation evidence on selected Go benchmark rows, run with an explicit row
-count and be prepared for long setup time:
-
-\`\`\`sh
-RUN_GO_BENCH=true GO_BENCH_ROWS=$TEN_M_ROWS GO_BENCHTIME=1x GO_COUNT=1 \\
-RUN_SMOKE=false RUN_10M=false RUN_DIR=$RUN_DIR scripts/bench_text_hybrid_scale.sh
-\`\`\`
-EOF_PLAN
+build_binary() {
+  mkdir -p "$RUN_DIR/bin"
+  env GOWORK=off "$GO_BIN" build -trimpath -o "$BIN" ./cmd/treedb_text_hybrid_scale 2>&1 | tee "$RUN_DIR/build.log"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$BIN" | cut -d' ' -f1 > "$RUN_DIR/binary.sha256"
+  else
+    shasum -a 256 "$BIN" | cut -d' ' -f1 > "$RUN_DIR/binary.sha256"
+  fi
 }
 
-run_scale() {
-  local label="$1"
-  local rows="$2"
-  local queries="$3"
-  local batch_size="$4"
-  local backfill_rows="$5"
-  local maintenance_updates="$6"
-  local maintenance_deletes="$7"
-  local candidate_limit="$8"
-  local out="$RUN_DIR/$label"
-  mkdir -p "$out"
-  local cmd=(env GOWORK=off "$GO_BIN" run ./cmd/treedb_text_hybrid_scale
+build_scale_command() {
+  local out="$1" rows="$2" queries="$3" batch_size="$4" candidate_limit="$5" updates="$6" deletes="$7"
+  SCALE_CMD=("$BIN"
     -out-dir "$out"
     -rows "$rows"
     -batch-size "$batch_size"
@@ -139,83 +117,103 @@ run_scale() {
     -candidate-limit "$candidate_limit"
     -queries "$queries"
     -readers "$READERS"
-    -backfill-rows "$backfill_rows"
-    -maintenance-updates "$maintenance_updates"
-    -maintenance-deletes "$maintenance_deletes"
+    -backfill-rows "$rows"
+    -text-only-rows "$rows"
+    -run-text-only=true
+    -source-chunk-rows "$rows"
+    -run-source-chunk=true
+    -maintenance-updates "$updates"
+    -maintenance-deletes "$deletes"
     -keep-db="$KEEP_DB"
     -phases "$PHASES"
     -base-ref origin/main
-    -base-sha "$(git merge-base HEAD origin/main 2>/dev/null || true)")
-  printf '%q ' "${cmd[@]}" > "$out/command.txt"
-  echo >> "$out/command.txt"
-  echo "==> scale $label rows=$rows queries=$queries candidate_limit=$candidate_limit"
-  "${cmd[@]}" 2>&1 | tee "$out/run.log"
+    -base-sha "$BASE_SHA")
 }
 
-run_go_benchmarks() {
-  local rows="$GO_BENCH_ROWS"
-  local out="$RUN_DIR/go_bench_${rows}"
+CURRENT_OUT=""
+CURRENT_PHASE=""
+record_interruption() {
+  local signal="$1"
+  if [[ -n "$CURRENT_OUT" ]]; then
+    printf '{"status":"interrupted","exit_code":130,"failures":[{"phase":"%s","status":"interrupted","error":"signal %s"}]}\n' "$CURRENT_PHASE" "$signal" > "$CURRENT_OUT/run_status.json"
+  fi
+  exit 130
+}
+trap 'record_interruption INT' INT
+trap 'record_interruption TERM' TERM
+
+run_scale() {
+  local label="$1" rows="$2" queries="$3" batch_size="$4" candidate_limit="$5" updates="$6" deletes="$7"
+  local out="$RUN_DIR/$label"
   mkdir -p "$out"
-  echo "==> Go benchmark allocation rows docs=$rows"
-  env GOWORK=off TREEDB_TEXT_V2_SEARCH_DOCS="$rows" "$GO_BIN" test ./TreeDB/collections \
-    -run '^$' \
-    -bench "^BenchmarkTextV2ScoreSearchScale2627/docs_${rows}/(score_only_common_no_docs|rare_no_docs|multi_term_and_no_docs)$" \
-    -benchmem -benchtime="$GO_BENCHTIME" -count="$GO_COUNT" 2>&1 | tee "$out/text_score_search.txt"
-  env GOWORK=off TREEDB_TEXT_V2_BLOCKMAX_DOCS="$rows" "$GO_BIN" test ./TreeDB/collections \
-    -run '^$' \
-    -bench '^BenchmarkTextV2BlockMaxCommonTerm2628/blockmax_common_topk$' \
-    -benchmem -benchtime="$GO_BENCHTIME" -count="$GO_COUNT" 2>&1 | tee "$out/text_blockmax.txt"
-  env GOWORK=off TREEDB_HYBRID_BENCH_DOCS="$rows" TREEDB_HYBRID_BENCH_DIMS="$DIMS" TREEDB_HYBRID_BENCH_M="$M" "$GO_BIN" test ./TreeDB/collections \
-    -run '^$' \
-    -bench '^BenchmarkSearchHybridCloseout2506/mode_(text_only_no_docs|vector_only_no_docs|hybrid_no_docs)/topK_10/candidates_64/filter_(none_100pct|rare_06pct)$' \
-    -benchmem -benchtime="$GO_BENCHTIME" -count="$GO_COUNT" 2>&1 | tee "$out/hybrid_closeout.txt"
+  cp "$RUN_DIR/context.txt" "$out/context.txt"
+  cp "$RUN_DIR/binary.sha256" "$out/binary.sha256"
+  build_scale_command "$out" "$rows" "$queries" "$batch_size" "$candidate_limit" "$updates" "$deletes"
+  printf '%q ' "${SCALE_CMD[@]}" > "$out/command.txt"
+  echo >> "$out/command.txt"
+  printf '{"status":"running","exit_code":-1,"failures":[]}\n' > "$out/run_status.json"
+  CURRENT_OUT="$out"
+  CURRENT_PHASE="$label"
+  echo "==> $label rows=$rows queries=$queries candidate_limit=$candidate_limit"
+  set +e
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    /usr/bin/time -l -o "$out/resources.txt" "${SCALE_CMD[@]}" 2>&1 | tee "$out/run.log"
+  else
+    /usr/bin/time -v -o "$out/resources.txt" "${SCALE_CMD[@]}" 2>&1 | tee "$out/run.log"
+  fi
+  local status=${PIPESTATUS[0]}
+  set -e
+  if (( status == 0 )); then
+    printf '{"status":"complete","exit_code":0,"failures":[]}\n' > "$out/run_status.json"
+  else
+    printf '{"status":"failed","exit_code":%d,"failures":[{"phase":"%s","status":"failed","error":"command exit %d"}]}\n' "$status" "$label" "$status" > "$out/run_status.json"
+  fi
+  CURRENT_OUT=""
+  CURRENT_PHASE=""
+  return "$status"
 }
 
-write_10m_plan
+write_campaign_commands() {
+  local out="$RUN_DIR/scale_10m"
+  local selected_phases="$PHASES"
+  PHASES=all
+  build_scale_command "$out" "$TEN_M_ROWS" "$TEN_M_QUERIES" "$TEN_M_BATCH_SIZE" "$TEN_M_CANDIDATE_LIMIT" "$TEN_M_MAINTENANCE_UPDATES" "$TEN_M_MAINTENANCE_DELETES"
+  PHASES="$selected_phases"
+  {
+    echo "Build once from the clean candidate and run the identical final shape through this runner:"
+    printf 'RUN_DIR=%q RUN_SMOKE=false RUN_1M=false RUN_10M=true APPROVE_10M=true PHASES=all KEEP_DB=false %q\n' "$RUN_DIR" "scripts/bench_text_hybrid_scale.sh"
+    echo "Resolved direct command (the runner also captures command, binary/config hashes, context, logs, resources, status, cleanup, and validation):"
+    printf '%q ' "${SCALE_CMD[@]}"
+    echo
+    printf '%q -seal-artifact %q\n' "$BIN" "$out"
+    printf '%q -validate-artifact %q\n' "$BIN" "$out"
+  } > "$RUN_DIR/campaign_commands.txt"
+}
 
-if [[ "$RUN_SMOKE" == "true" || "$RUN_SMOKE" == "1" || "$RUN_SMOKE" == "yes" ]]; then
-  run_scale "scale_smoke_${SMOKE_ROWS}" "$SMOKE_ROWS" "$SMOKE_QUERIES" "$SMOKE_BATCH_SIZE" "$SMOKE_ROWS" "$(( SMOKE_ROWS / 100 > 0 ? SMOKE_ROWS / 100 : 1 ))" "$(( SMOKE_ROWS / 200 > 0 ? SMOKE_ROWS / 200 : 1 ))" "$SMOKE_CANDIDATE_LIMIT"
+if is_true "$RUN_SMOKE" || is_true "$RUN_1M" || is_true "$RUN_10M"; then
+  build_binary
+fi
+write_campaign_commands
+
+if is_true "$RUN_SMOKE"; then
+  run_scale "scale_smoke_${SMOKE_ROWS}" "$SMOKE_ROWS" "$SMOKE_QUERIES" "$SMOKE_BATCH_SIZE" "$SMOKE_CANDIDATE_LIMIT" "$SMOKE_MAINTENANCE_UPDATES" "$SMOKE_MAINTENANCE_DELETES"
 fi
 
-if [[ "$RUN_1M" == "true" || "$RUN_1M" == "1" || "$RUN_1M" == "yes" ]]; then
-  for ((rep = 1; rep <= RETRIEVAL_REPETITIONS; rep++)); do
-    run_scale "scale_1m_rep${rep}" "$ONE_M_ROWS" "$ONE_M_QUERIES" "$ONE_M_BATCH_SIZE" "$ONE_M_BACKFILL_ROWS" "$ONE_M_MAINTENANCE_UPDATES" "$ONE_M_MAINTENANCE_DELETES" "$ONE_M_CANDIDATE_LIMIT"
+if is_true "$RUN_1M"; then
+  for rep in $(seq 1 "$RETRIEVAL_REPETITIONS"); do
+    run_scale "scale_1m_rep${rep}" "$ONE_M_ROWS" "$ONE_M_QUERIES" "$ONE_M_BATCH_SIZE" "$ONE_M_CANDIDATE_LIMIT" "$ONE_M_MAINTENANCE_UPDATES" "$ONE_M_MAINTENANCE_DELETES"
   done
 fi
 
-if [[ "$RUN_10M" == "true" || "$RUN_10M" == "1" || "$RUN_10M" == "yes" ]]; then
-  if [[ "$APPROVE_10M" != "true" && "$APPROVE_10M" != "1" && "$APPROVE_10M" != "yes" ]]; then
-    cat > "$RUN_DIR/10m_not_run.md" <<EOF_SKIP
-# 10M run not started
-
-RUN_10M was requested, but APPROVE_10M was not true. This protects against
-surprise multi-hour/tens-of-GB local jobs. See 10m_selected_matrix_commands.md.
-EOF_SKIP
-    echo "10M run skipped: set APPROVE_10M=true only after coordinator approval."
-  else
-    run_scale "scale_10m_selected" "$TEN_M_ROWS" "$TEN_M_QUERIES" "$TEN_M_BATCH_SIZE" "$TEN_M_BACKFILL_ROWS" "$TEN_M_MAINTENANCE_UPDATES" "$TEN_M_MAINTENANCE_DELETES" "$TEN_M_CANDIDATE_LIMIT"
+if is_true "$RUN_10M"; then
+  if ! is_true "$APPROVE_10M"; then
+    printf '{"status":"not_started","reason":"APPROVE_10M is not true"}\n' > "$RUN_DIR/10m_not_started.json"
+    echo "10M run not started: set APPROVE_10M=true only after smoke/preflight qualification." >&2
+    exit 2
   fi
+  run_scale "scale_10m" "$TEN_M_ROWS" "$TEN_M_QUERIES" "$TEN_M_BATCH_SIZE" "$TEN_M_CANDIDATE_LIMIT" "$TEN_M_MAINTENANCE_UPDATES" "$TEN_M_MAINTENANCE_DELETES"
+  "$BIN" -seal-artifact "$RUN_DIR/scale_10m" | tee "$RUN_DIR/scale_10m/seal.log"
+  "$BIN" -validate-artifact "$RUN_DIR/scale_10m" | tee "$RUN_DIR/scale_10m/validation.log"
 fi
-
-if [[ "$RUN_GO_BENCH" == "true" || "$RUN_GO_BENCH" == "1" || "$RUN_GO_BENCH" == "yes" ]]; then
-  run_go_benchmarks
-fi
-
-cat > "$RUN_DIR/README.md" <<EOF_README
-# TreeDB text-v2/hybrid scale run
-
-Context: \`$RUN_DIR/context.txt\`
-
-Primary artifacts:
-
-- smoke/current scale reports under \`$RUN_DIR/scale_*/*scale_report.md\`
-- JSON reports under \`$RUN_DIR/scale_*/*scale_report.json\`
-- selected phase selector: \`$PHASES\` (use \`PHASES=retrieval\` for bounded #4327 retrieval qualification)
-- exact 10M command plan: \`$RUN_DIR/10m_selected_matrix_commands.md\`
-- optional Go benchmark logs under \`$RUN_DIR/go_bench_*\`
-
-Full 10M runs are gated by \`RUN_10M=true APPROVE_10M=true\` and should only be
-started after explicit coordinator approval.
-EOF_README
 
 echo "scale run artifacts: $RUN_DIR"

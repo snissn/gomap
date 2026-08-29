@@ -77,6 +77,13 @@ func TestScaleCommandSmokeReport2731(t *testing.T) {
 	if _, err := os.Stat(markdownPath); err != nil {
 		t.Fatalf("missing markdown report: %v", err)
 	}
+	markdown, err := os.ReadFile(markdownPath)
+	if err != nil {
+		t.Fatalf("read markdown report: %v", err)
+	}
+	if !strings.Contains(string(markdown), "retained 10M artifact **NOT ELIGIBLE (requires exact 10M)**") {
+		t.Fatalf("small smoke was presented as retained qualification: %s", markdown)
+	}
 	payload, err := os.ReadFile(jsonPath)
 	if err != nil {
 		t.Fatalf("read json report: %v", err)
@@ -108,7 +115,7 @@ func TestRetrievalPhaseSelectorSkipsUnrelatedPhases2731(t *testing.T) {
 		}
 	}
 	all, err := parsePhaseSelector("all,retrieval")
-	if err != nil || strings.Join(selectedPhaseNames(all), ",") != "load,queries,reopen,concurrent,maintenance,backfill" {
+	if err != nil || strings.Join(selectedPhaseNames(all), ",") != "load,queries,reopen,concurrent,maintenance,backfill,text_only,source_chunk" {
 		t.Fatalf("parsePhaseSelector(all,retrieval) phases=%v err=%v", selectedPhaseNames(all), err)
 	}
 	for _, phases := range []string{"all,typo", "typo,all"} {
@@ -166,13 +173,13 @@ func TestPartialReportIsAtomicallyLabeledIncomplete2731(t *testing.T) {
 	}
 }
 
-func TestCaptureContextUsesInvocationProvenance4327(t *testing.T) {
+func TestCaptureContextBindsBinaryAndEmbeddedCommit4329(t *testing.T) {
 	ctx := captureContext(config{baseRef: "origin/main"})
-	if ctx.VCSStatus == "" || ctx.BinaryState == "" || !strings.HasPrefix(ctx.Command, "process_argv=") || ctx.Corpus == "" || ctx.Cache == "" || ctx.Durability == "" || ctx.NoisePolicy == "" {
+	if ctx.VCSStatus == "" || ctx.BinaryState == "" || ctx.BinarySHA256 == "" || !strings.HasPrefix(ctx.Command, "process_argv=") || ctx.Corpus == "" || ctx.Cache == "" || ctx.Durability == "" || ctx.NoisePolicy == "" {
 		t.Fatalf("missing or mislabeled provenance: %+v", ctx)
 	}
-	if ctx.RepoRoot != "" || ctx.Branch != "" || ctx.Commit != "" {
-		t.Fatalf("context used ambient checkout state: %+v", ctx)
+	if ctx.Commit != "" && (ctx.TreeOID == "" || ctx.TreeDBSubtreeOID == "" || ctx.HarnessSubtreeOID == "") {
+		t.Fatalf("embedded commit was not bound to tree/subtrees: %+v", ctx)
 	}
 }
 
@@ -208,10 +215,10 @@ func TestStrictQueryFailurePersistsPartialEvidence4327(t *testing.T) {
 	if rep.Complete || strings.Join(rep.CompletedPhases, ",") != "load" {
 		t.Fatalf("strict failure qualified report: %+v", rep)
 	}
-	if len(rep.Queries) != 5 || len(rep.Guardrails) != 5 {
-		t.Fatalf("partial query evidence rows/guards=%d/%d want 5/5", len(rep.Queries), len(rep.Guardrails))
+	if len(rep.Queries) != 7 || len(rep.Guardrails) != 7 {
+		t.Fatalf("partial query evidence rows/guards=%d/%d want 7/7", len(rep.Queries), len(rep.Guardrails))
 	}
-	for _, row := range rep.Queries[:4] {
+	for _, row := range rep.Queries[:6] {
 		if len(row.RawLatencyNS) != cfg.queries {
 			t.Fatalf("prior row %q lost raw samples=%d want %d", row.Name, len(row.RawLatencyNS), cfg.queries)
 		}
@@ -751,29 +758,29 @@ func TestAllocationProfileFocusesTimedHybridStack4327(t *testing.T) {
 	}
 }
 
-func TestTenMPlanPropagatesPhaseSelector4327(t *testing.T) {
+func TestTenMCommandsFreezeCompleteFinalShape4329(t *testing.T) {
 	runDir := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "scripts/bench_text_hybrid_scale.sh")
 	cmd.Dir = filepath.Join("..", "..")
-	cmd.Env = append(os.Environ(), "RUN_DIR="+runDir, "RUN_SMOKE=false", "RUN_1M=false", "RUN_10M=false", "RUN_GO_BENCH=false", "PHASES=retrieval", "GO_BIN=true")
+	cmd.Env = append(os.Environ(), "RUN_DIR="+runDir, "RUN_SMOKE=false", "RUN_1M=false", "RUN_10M=false", "GO_BIN=true")
 	output, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
-		t.Fatalf("generate 10M plan timed out: %v\n%s", ctx.Err(), output)
+		t.Fatalf("generate 10M commands timed out: %v\n%s", ctx.Err(), output)
 	}
 	if err != nil {
-		t.Fatalf("generate 10M plan: %v\n%s", err, output)
+		t.Fatalf("generate 10M commands: %v\n%s", err, output)
 	}
-	plan, err := os.ReadFile(filepath.Join(runDir, "10m_selected_matrix_commands.md"))
+	commands, err := os.ReadFile(filepath.Join(runDir, "campaign_commands.txt"))
 	if err != nil {
-		t.Fatalf("read generated plan: %v", err)
+		t.Fatalf("read generated commands: %v", err)
 	}
-	if got := strings.Count(string(plan), "-phases \"retrieval\""); got != 1 {
-		t.Fatalf("direct command phase selector count=%d plan:\n%s", got, plan)
-	}
-	if got := strings.Count(string(plan), "PHASES=retrieval"); got != 1 {
-		t.Fatalf("wrapper command phase selector count=%d plan:\n%s", got, plan)
+	text := string(commands)
+	for _, required := range []string{"RUN_10M=true", "APPROVE_10M=true", "PHASES=all", "-rows 10000000", "-backfill-rows 10000000", "-text-only-rows 10000000", "-run-text-only=true", "-source-chunk-rows 10000000", "-run-source-chunk=true", "-seal-artifact", "-validate-artifact"} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("commands missing %q:\n%s", required, text)
+		}
 	}
 }
 
@@ -820,8 +827,8 @@ func TestRetrievalRepetitionsRejectNonpositive4327(t *testing.T) {
 			if err == nil || !strings.Contains(string(output), "RETRIEVAL_REPETITIONS must be a positive integer") {
 				t.Fatalf("expected nonpositive repetition rejection, err=%v output=%s", err, output)
 			}
-			if _, err := os.Stat(filepath.Join(runDir, "10m_selected_matrix_commands.md")); !os.IsNotExist(err) {
-				t.Fatalf("nonpositive repetition count wrote a plan, err=%v", err)
+			if _, err := os.Stat(filepath.Join(runDir, "campaign_commands.txt")); !os.IsNotExist(err) {
+				t.Fatalf("nonpositive repetition count wrote campaign commands, err=%v", err)
 			}
 		})
 	}
@@ -831,16 +838,16 @@ func TestScaleCommandFlagValidation2731(t *testing.T) {
 	if _, err := parseFlags([]string{"-out-dir", t.TempDir(), "-rows", "0"}); err == nil {
 		t.Fatal("parseFlags accepted zero rows")
 	}
-	for _, flagName := range []string{"-backfill-rows", "-concurrent-writes", "-maintenance-updates", "-maintenance-deletes"} {
+	for _, flagName := range []string{"-backfill-rows", "-text-only-rows", "-source-chunk-rows", "-concurrent-writes", "-maintenance-updates", "-maintenance-deletes"} {
 		if _, err := parseFlags([]string{"-out-dir", t.TempDir(), "-rows", "10", flagName, "-1"}); err == nil {
 			t.Fatalf("parseFlags accepted negative %s", flagName)
 		}
 	}
-	cfg, err := parseFlags([]string{"-out-dir", t.TempDir(), "-rows", "10", "-include-vector=false", "-run-backfill=false", "-run-rewrite=false", "-run-concurrent=false", "-run-reopen=false"})
+	cfg, err := parseFlags([]string{"-out-dir", t.TempDir(), "-rows", "10", "-include-vector=false", "-run-backfill=false", "-run-text-only=false", "-run-source-chunk=false", "-run-rewrite=false", "-run-concurrent=false", "-run-reopen=false"})
 	if err != nil {
 		t.Fatalf("parseFlags valid args: %v", err)
 	}
-	if cfg.includeVector || cfg.runBackfill || cfg.runRewrite || cfg.runConcurrent || cfg.runReopen {
+	if cfg.includeVector || cfg.runBackfill || cfg.runTextOnly || cfg.runSourceChunk || cfg.runRewrite || cfg.runConcurrent || cfg.runReopen {
 		t.Fatalf("bool flags not parsed: %+v", cfg)
 	}
 	wantSelected := []string{"load", "queries"}
