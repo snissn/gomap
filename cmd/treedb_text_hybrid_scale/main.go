@@ -2028,17 +2028,30 @@ func runMaintenanceProbe(cfg config) (maintenanceReport, error) {
 	deletes := minInt(cfg.maintenanceDeletes, maxInt(cfg.rows-updates, 0))
 	maintenance := maintenanceReport{Updates: updates, Deletes: deletes}
 	updateStart := time.Now()
-	for i := 0; i < updates; i++ {
-		id := scaleDocID(i)
-		replacement := scaleDocument(i, cfg.dims, "maintenance-updated")
-		updated, changed, err := col.Update(id, func([]byte) ([]byte, bool, error) {
-			return replacement, true, nil
-		})
-		if err != nil {
-			return maintenanceReport{}, fmt.Errorf("maintenance update %s: %w", id, err)
+	for offset := 0; offset < updates; offset += cfg.batchSize {
+		count := minInt(cfg.batchSize, updates-offset)
+		items := make([]collections.UpdateBatchItem, count)
+		for i := range count {
+			row := offset + i
+			replacement := scaleDocument(row, cfg.dims, "maintenance-updated")
+			items[i] = collections.UpdateBatchItem{
+				DocumentID: scaleDocID(row),
+				Update: func([]byte) ([]byte, bool, error) {
+					return replacement, true, nil
+				},
+			}
 		}
-		if !updated || !changed {
-			return maintenanceReport{}, fmt.Errorf("maintenance update %s updated=%v changed=%v", id, updated, changed)
+		results, err := col.UpdateBatch(items)
+		if err != nil {
+			return maintenanceReport{}, fmt.Errorf("maintenance update batch offset %d: %w", offset, err)
+		}
+		if len(results) != count {
+			return maintenanceReport{}, fmt.Errorf("maintenance update batch offset %d results=%d want %d", offset, len(results), count)
+		}
+		for i, result := range results {
+			if !result.Matched || !result.Modified {
+				return maintenanceReport{}, fmt.Errorf("maintenance update %s matched=%v modified=%v", items[i].DocumentID, result.Matched, result.Modified)
+			}
 		}
 	}
 	maintenance.UpdateSeconds = secondsSince(updateStart)
