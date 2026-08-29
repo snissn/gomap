@@ -1706,6 +1706,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		idx.efSearch = snapshot.Meta.EfSearch
 		idx.rebuildDeletedRatio = snapshot.Meta.RebuildDeletedRatio
 		idx.nodes = nil
+		idx.vectorRows = nil
 		idx.currentNode = make(map[string]int)
 		idx.entry = -1
 		idx.maxLevel = -1
@@ -1828,6 +1829,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	idx.efSearch = snapshot.Meta.EfSearch
 	idx.rebuildDeletedRatio = snapshot.Meta.RebuildDeletedRatio
 	idx.nodes = nodes
+	idx.vectorRows = nil
 	idx.currentNode = current
 	idx.entry = entry
 	idx.maxLevel = idx.maxLiveLevelLocked()

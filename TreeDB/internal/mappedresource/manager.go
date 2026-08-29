@@ -24,6 +24,10 @@ type DenyReason string
 type FallbackReason string
 type ValidationMode string
 
+// ErrMmapUnsupported identifies platforms without an mmap implementation. It
+// deliberately does not cover ordinary mmap failures, which must fail closed.
+var ErrMmapUnsupported = errors.New("mappedresource: mmap unsupported")
+
 const (
 	DenyInvalidKey      DenyReason = "invalid_key"
 	DenyInvalidScope    DenyReason = "invalid_scope"
