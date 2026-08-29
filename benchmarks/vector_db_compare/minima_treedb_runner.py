@@ -500,16 +500,31 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         assert self._phase_name is not None and self._phase_resource_start is not None
         assert self._phase_total_start is not None
         phase_end = time.monotonic_ns()
-        resource_end = self._phase_resource_snapshot()
-        end = time.monotonic_ns()
-        self._phase_boundaries.append({
+        boundary = {
             "name": self._phase_name,
             "classification": PHASE_CLASSIFICATIONS[self._phase_name],
             "start_nanos": self._phase_start,
             "end_nanos": phase_end,
             "duration_nanos": phase_end - self._phase_start,
-            "resource_segments": [{"start": self._phase_resource_start, "end": resource_end}],
-        })
+        }
+        shutdown_end = getattr(self.controller, "last_shutdown_resource_end", None)
+        if (self._phase_name == "restart_open_readiness" and self.controller.pid is None and
+                shutdown_end is not None and self._controller_restart_origin is not None):
+            old_pid, old_identity = self._controller_restart_origin
+            old_end = {**shutdown_end, "pid": old_pid, "process_identity": old_identity}
+            self._phase_restart_old_end = old_end
+            boundary.update({
+                "resource_segments": [{"start": self._phase_resource_start, "end": old_end}],
+                "resource_evidence_complete": False,
+                "incomplete_reason": "graceful_shutdown_failed_before_reopen",
+            })
+        else:
+            boundary["resource_segments"] = [{
+                "start": self._phase_resource_start,
+                "end": self._phase_resource_snapshot(),
+            }]
+        end = time.monotonic_ns()
+        self._phase_boundaries.append(boundary)
         for phase in self._phase_boundaries:
             samples = [
                 sample for sample in self.evidence.samples

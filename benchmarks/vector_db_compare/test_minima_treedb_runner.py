@@ -693,6 +693,70 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertIsNone(controller.log_file)
         log_file.close.assert_called_once_with()
 
+    def test_main_shutdown_timeout_writes_nonqualifying_partial_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "partial.json"
+            shutdown_end = {
+                "captured": True, "rss_bytes": 120, "cpu_seconds": 3.0, "disk_bytes": 150,
+                "availability": {
+                    "rss_bytes": "test", "cpu_seconds": "test", "disk_bytes": "test",
+                },
+            }
+            workload = object.__new__(runner.TreeDBMinimaRunner)
+            workload.controller = SimpleNamespace(
+                pid=None, last_shutdown_resource_end=shutdown_end,
+            )
+            workload._phase_total_start = 100
+            workload._phase_start = 200
+            workload._phase_name = "restart_open_readiness"
+            workload._phase_resource_start = {
+                **shutdown_end, "pid": 100, "process_identity": "old-process",
+            }
+            workload._phase_boundaries = []
+            workload._phase_attribution = None
+            workload._phase_restart_old_end = None
+            workload._controller_restart_origin = (100, "old-process")
+            workload.evidence = SimpleNamespace(failures=[], samples=[])
+
+            def fail_run() -> None:
+                raise TimeoutError("TreeDB graceful shutdown exceeded 120s")
+
+            workload.run = fail_run
+            workload.close = lambda: None
+            workload.artifact = lambda: {
+                "state": "partial",
+                "passing": False,
+                "failures": list(workload.evidence.failures),
+                "phase_attribution": workload._finish_phase_attribution(),
+            }
+            args = SimpleNamespace(
+                manifest=root / "manifest.json", output=output, service_bin=root / "service",
+                url="http://127.0.0.1:17120", data_dir=root / "data",
+                profile="command_wal_durable", startup_timeout=3600,
+                operation_timeout=120, collection="owned", ef_search=128, small=False,
+                diagnostics_dir=None, diagnostics_url="http://127.0.0.1:17121",
+                diagnostic_slow_seconds=30, diagnostic_profile_seconds=5,
+                diagnostic_capture_timeout=10, diagnostic_resume_scenario=None,
+                diagnostic_resume_start=None,
+            )
+            with mock.patch.object(runner, "parse_args", return_value=args), \
+                 mock.patch.object(common, "load_manifest", return_value={}), \
+                 mock.patch.object(runner, "TreeDBMinimaRunner", return_value=workload), \
+                 mock.patch.object(runner.time, "monotonic_ns", side_effect=[300, 310]):
+                self.assertEqual(runner.main(), 1)
+
+            artifact = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(
+            artifact["failures"],
+            ["TimeoutError: TreeDB graceful shutdown exceeded 120s"],
+        )
+        phase = artifact["phase_attribution"]["phases"][-1]
+        self.assertFalse(phase["resource_evidence_complete"])
+        self.assertEqual(phase["incomplete_reason"], "graceful_shutdown_failed_before_reopen")
+        self.assertEqual(len(phase["resource_segments"]), 1)
+        self.assertEqual(phase["resource_segments"][0]["end"]["pid"], 100)
+
     def test_default_cli_preserves_frozen_timeout_and_disables_diagnostics(self) -> None:
         argv = [
             "minima_treedb_runner.py", "--manifest", "manifest.json", "--output", "output.json",
