@@ -481,6 +481,8 @@ func validateMinimaTreeDBProvenance(backend minimaBackendEvidence) error {
 	configuration := backend.Configuration
 	if !minimaExactHex(configuration["product_commit"], 20) ||
 		configuration["harness_commit"] != configuration["product_commit"] ||
+		configuration["service_binary_vcs_revision"] != configuration["product_commit"] ||
+		configuration["service_binary_vcs_modified"] != "false" ||
 		!minimaExactHex(configuration["service_binary_sha256"], sha256.Size) ||
 		!minimaExactHex(configuration["runner_sha256"], sha256.Size) ||
 		backend.Environment["host"] == "" {
@@ -508,8 +510,10 @@ func validateMinimaExpectedCommit(artifact *minimaArtifact, expected string, req
 			continue
 		}
 		if backend.Configuration["product_commit"] != expected ||
-			backend.Configuration["harness_commit"] != expected {
-			return errors.New("minima artifact: TreeDB product/harness commits do not match the expected merged commit")
+			backend.Configuration["harness_commit"] != expected ||
+			backend.Configuration["service_binary_vcs_revision"] != expected ||
+			backend.Configuration["service_binary_vcs_modified"] != "false" {
+			return errors.New("minima artifact: TreeDB product/harness/binary commits do not match the expected merged commit")
 		}
 		return nil
 	}

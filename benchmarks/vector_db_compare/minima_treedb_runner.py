@@ -87,6 +87,32 @@ def repository_commit() -> str:
         raise RuntimeError("TreeDB Minima runner could not bind an exact source commit")
     return commit
 
+def service_binary_build_provenance(binary: Path, expected_commit: str) -> tuple[str, str]:
+    try:
+        result = subprocess.run(
+            ["go", "version", "-m", str(binary)],
+            check=False, capture_output=True, text=True,
+        )
+    except OSError as exc:
+        raise RuntimeError("TreeDB Minima runner could not inspect service binary Go build metadata") from exc
+    if result.returncode != 0:
+        raise RuntimeError("TreeDB Minima runner could not inspect service binary Go build metadata")
+    settings: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        fields = line.strip().split("\t")
+        if len(fields) != 2 or fields[0] != "build" or "=" not in fields[1]:
+            continue
+        key, value = fields[1].split("=", 1)
+        settings[key] = value
+    revision, modified = settings.get("vcs.revision", ""), settings.get("vcs.modified", "")
+    if len(revision) != 40 or any(character not in "0123456789abcdef" for character in revision):
+        raise RuntimeError("TreeDB Minima service binary is missing an exact vcs.revision")
+    if revision != expected_commit:
+        raise RuntimeError("TreeDB Minima service binary vcs.revision does not match the source checkout")
+    if modified != "false":
+        raise RuntimeError("TreeDB Minima service binary must record vcs.modified=false")
+    return revision, modified
+
 
 class ServiceController:
     def __init__(self, binary: Path, url: str, data_dir: Path, profile: str,
@@ -363,6 +389,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         self._controller_restart_origin: tuple[int, str] | None = None
         self.controller = controller
         self.source_commit = repository_commit()
+        self.service_binary_vcs_revision, self.service_binary_vcs_modified = \
+            service_binary_build_provenance(controller.binary.resolve(), self.source_commit)
         self.runner_sha256 = file_sha256(Path(__file__).resolve())
         self.service_binary_sha256 = file_sha256(controller.binary.resolve())
         self.operation_timeout_seconds = operation_timeout
@@ -1104,6 +1132,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                               "vector_strategy": "native_runtime", "ef_search": str(self.ef_search),
                               "profile": self.controller.profile, "service_binary": str(self.controller.binary),
                               "service_binary_sha256": self.service_binary_sha256,
+                              "service_binary_vcs_revision": self.service_binary_vcs_revision,
+                              "service_binary_vcs_modified": self.service_binary_vcs_modified,
                               "runner_sha256": self.runner_sha256,
                               "product_commit": self.source_commit, "harness_commit": self.source_commit,
                               "operation_timeout_seconds": str(self.operation_timeout_seconds),

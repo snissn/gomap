@@ -151,6 +151,49 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             self.assertEqual(runner.repository_commit(), commit)
         self.assertEqual(run.call_count, 2)
 
+    def test_service_binary_build_provenance_accepts_clean_matching_binary(self) -> None:
+        commit = "a" * 40
+        output = (
+            "service: go1.25.5\n"
+            "\tpath\tgithub.com/snissn/gomap/cmd/treedb-document-service\n"
+            f"\tbuild\tvcs.revision={commit}\n"
+            "\tbuild\tvcs.modified=false\n"
+        )
+        with mock.patch.object(
+            runner.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout=output, stderr=""),
+        ) as run:
+            self.assertEqual(
+                runner.service_binary_build_provenance(Path("service"), commit),
+                (commit, "false"),
+            )
+        run.assert_called_once_with(
+            ["go", "version", "-m", "service"],
+            check=False, capture_output=True, text=True,
+        )
+
+    def test_service_binary_build_provenance_rejects_stale_dirty_and_missing_metadata(self) -> None:
+        commit = "a" * 40
+        cases = (
+            ("stale revision", "b" * 40, "false", "does not match"),
+            ("dirty build", commit, "true", "vcs.modified=false"),
+            ("missing revision", None, "false", "missing an exact vcs.revision"),
+            ("missing modified status", commit, None, "vcs.modified=false"),
+        )
+        for name, revision, modified, error in cases:
+            settings = []
+            if revision is not None:
+                settings.append(f"\tbuild\tvcs.revision={revision}")
+            if modified is not None:
+                settings.append(f"\tbuild\tvcs.modified={modified}")
+            output = "service: go1.25.5\n" + "\n".join(settings) + "\n"
+            with self.subTest(name=name), mock.patch.object(
+                runner.subprocess, "run",
+                return_value=SimpleNamespace(returncode=0, stdout=output, stderr=""),
+            ):
+                with self.assertRaisesRegex(RuntimeError, error):
+                    runner.service_binary_build_provenance(Path("service"), commit)
+
     def test_phase_boundaries_exclude_slow_disk_sampling_and_align_cpu_with_wall(self) -> None:
         process_samples = iter((
             {"captured": True, "rss_bytes": 10, "cpu_seconds": 1.0, "availability": {}},
@@ -1073,6 +1116,8 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.source_commit = "a" * 40
         workload.runner_sha256 = "b" * 64
         workload.service_binary_sha256 = "c" * 64
+        workload.service_binary_vcs_revision = "a" * 40
+        workload.service_binary_vcs_modified = "false"
         workload.operation_timeout_seconds = 120
         workload._phase_total_start = workload._phase_start = runner.time.monotonic_ns()
         workload._phase_name = "initial_durable_load"
@@ -1150,6 +1195,8 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertEqual(configuration["startup_reopen_timeout_seconds"], "3600")
         self.assertEqual(configuration["shutdown_timeout_seconds"], "120")
         self.assertEqual(configuration["product_commit"], "a" * 40)
+        self.assertEqual(configuration["service_binary_vcs_revision"], "a" * 40)
+        self.assertEqual(configuration["service_binary_vcs_modified"], "false")
         self.assertEqual(raw["phase_attribution"]["phases"][0]["classification"], "production_path")
         self.assertEqual(artifact["scenarios"][0]["route"]["candidate_ids"], 5)
         self.assertEqual(artifact["scenarios"][0]["route"]["visited_candidates"], 41)

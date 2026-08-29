@@ -552,6 +552,18 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		{"missing TreeDB product provenance", func(a *minimaArtifact) {
 			minimaTestBackend(a, "treedb").Configuration["product_commit"] = ""
 		}},
+		{"stale TreeDB service binary revision", func(a *minimaArtifact) {
+			minimaTestBackend(a, "treedb").Configuration["service_binary_vcs_revision"] = strings.Repeat("d", 40)
+		}},
+		{"dirty TreeDB service binary provenance", func(a *minimaArtifact) {
+			minimaTestBackend(a, "treedb").Configuration["service_binary_vcs_modified"] = "true"
+		}},
+		{"missing TreeDB service binary revision", func(a *minimaArtifact) {
+			delete(minimaTestBackend(a, "treedb").Configuration, "service_binary_vcs_revision")
+		}},
+		{"missing TreeDB service binary modified status", func(a *minimaArtifact) {
+			delete(minimaTestBackend(a, "treedb").Configuration, "service_binary_vcs_modified")
+		}},
 		{"TreeDB shutdown timeout diverges from operation bound", func(a *minimaArtifact) {
 			minimaTestBackend(a, "treedb").Configuration["shutdown_timeout_seconds"] = "3600"
 		}},
@@ -706,6 +718,7 @@ func validMinimaArtifact() minimaArtifact {
 		{Name: "treedb", ServerVersion: "test", ClientVersion: "test", Durability: "wal_sync", Configuration: map[string]string{
 			"effective": "test", "product_commit": strings.Repeat("a", 40), "harness_commit": strings.Repeat("a", 40),
 			"service_binary_sha256": strings.Repeat("b", 64), "runner_sha256": strings.Repeat("c", 64),
+			"service_binary_vcs_revision": strings.Repeat("a", 40), "service_binary_vcs_modified": "false",
 			"operation_timeout_seconds": "120", "startup_reopen_timeout_seconds": "3600", "shutdown_timeout_seconds": "120",
 		}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
 		{Name: "qdrant", ServerVersion: "test", ClientVersion: "test", Durability: "wal", Configuration: map[string]string{
@@ -1098,6 +1111,11 @@ func TestMinimaExpectedCommitBinding(t *testing.T) {
 	}
 	if err := validateMinimaExpectedCommit(&artifact, strings.Repeat("b", 40), true); err == nil {
 		t.Fatal("wrong merged commit was accepted")
+	}
+	binaryMismatch := validMinimaArtifact()
+	minimaTestBackend(&binaryMismatch, "treedb").Configuration["service_binary_vcs_revision"] = strings.Repeat("b", 40)
+	if err := validateMinimaExpectedCommit(&binaryMismatch, expected, true); err == nil {
+		t.Fatal("wrong service binary commit was accepted")
 	}
 	if err := validateMinimaExpectedCommit(&artifact, "", true); err == nil {
 		t.Fatal("missing required merged commit was accepted")
