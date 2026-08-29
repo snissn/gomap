@@ -44,21 +44,23 @@ type querySpec struct {
 	Filter   map[string]string `json:"filter"`
 }
 type document struct {
-	ID           string `json:"-"`
-	WeightedText string `json:"weighted_text"`
-	Tenant       string `json:"tenant"`
+	ID     string
+	Title  string
+	Body   string
+	Tenant string
 }
 type caseResult struct {
-	ID           string         `json:"id"`
-	Status       string         `json:"status"`
-	Equivalent   bool           `json:"equivalent"`
-	Samples      []int64        `json:"samples_nanos"`
-	IDs          []string       `json:"result_ids"`
-	Digest       string         `json:"result_digest"`
-	ReopenIDs    []string       `json:"reopen_result_ids"`
-	ReopenDigest string         `json:"reopen_result_digest"`
-	Route        map[string]any `json:"route"`
-	TimedOut     bool           `json:"timed_out"`
+	ID                string         `json:"id"`
+	Status            string         `json:"status"`
+	Equivalent        bool           `json:"equivalent"`
+	UnsupportedReason string         `json:"unsupported_reason,omitempty"`
+	Samples           []int64        `json:"samples_nanos,omitempty"`
+	IDs               []string       `json:"result_ids,omitempty"`
+	Digest            string         `json:"result_digest,omitempty"`
+	ReopenIDs          []string       `json:"reopen_result_ids,omitempty"`
+	ReopenDigest       string         `json:"reopen_result_digest,omitempty"`
+	Route              map[string]any `json:"route,omitempty"`
+	TimedOut           bool           `json:"timed_out"`
 }
 
 func main() {
@@ -81,6 +83,9 @@ func main() {
 	must(os.RemoveAll(*indexPath))
 	must(os.MkdirAll(filepath.Dir(*outPath), 0o755))
 
+	var before syscall.Rusage
+	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &before)
+	buildStart := time.Now()
 	mapping := bleve.NewIndexMapping()
 	mapping.DefaultAnalyzer = "standard"
 	docMapping := bleve.NewDocumentMapping()
@@ -90,20 +95,28 @@ func main() {
 	weightedText.Store = false
 	weightedText.IncludeTermVectors = true
 	tenant := bleve.NewTextFieldMapping()
+	title := bleve.NewTextFieldMapping()
+	title.Analyzer = "standard"
+	title.Store = false
+	title.IncludeTermVectors = true
+	body := bleve.NewTextFieldMapping()
+	body.Analyzer = "standard"
+	body.Store = false
+	body.IncludeTermVectors = true
 	tenant.Analyzer = "keyword"
 	tenant.Store = false
 	tenant.IncludeTermVectors = false
 	docMapping.AddFieldMappingsAt("weighted_text", weightedText)
+	docMapping.AddFieldMappingsAt("title", title)
+	docMapping.AddFieldMappingsAt("body", body)
 	docMapping.AddFieldMappingsAt("tenant", tenant)
 	mapping.DefaultMapping = docMapping
-	var before syscall.Rusage
-	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &before)
-	buildStart := time.Now()
 	index, err := bleve.New(*indexPath, mapping)
 	must(err)
 	batch := index.NewBatch()
 	for _, doc := range docs {
-		must(batch.Index(doc.ID, doc))
+		indexed := map[string]string{"weighted_text": strings.Join([]string{doc.Title, doc.Title, doc.Title, doc.Body}, " "), "title": doc.Title, "body": doc.Body, "tenant": doc.Tenant}
+		must(batch.Index(doc.ID, indexed))
 	}
 	must(index.Batch(batch))
 	must(index.Close())
@@ -116,6 +129,10 @@ func main() {
 	must(err)
 	cases := make([]caseResult, 0, len(spec.Queries))
 	for _, query := range spec.Queries {
+		if query.Semantic == "term_scalar" {
+			cases = append(cases, caseResult{ID: query.ID, Status: "unsupported", Equivalent: false, UnsupportedReason: "Bleve v2.4.4 exposes the tenant predicate only as a scoring Boolean clause; exact non-scoring scalar-filter semantics unavailable"})
+			continue
+		}
 		for range spec.Execution.Warmup {
 			_, err = search(index, query, spec.Execution.TopK)
 			must(err)
@@ -134,12 +151,17 @@ func main() {
 	index, err = bleve.Open(*indexPath)
 	must(err)
 	for i, query := range spec.Queries {
+		if cases[i].Status == "unsupported" {
+			continue
+		}
 		ids, searchErr := search(index, query, spec.Execution.TopK)
 		must(searchErr)
 		cases[i].ReopenIDs = ids
 		cases[i].ReopenDigest = digestIDs(ids)
 	}
 	must(index.Close())
+	var finalUsage syscall.Rusage
+	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &finalUsage)
 
 	manifestSum, corpusSum := sha256.Sum256(canonicalJSON(manifestRaw)), sha256.Sum256(corpusRaw)
 	command := append([]string{"go", "run", "."}, os.Args[1:]...)
@@ -150,9 +172,9 @@ func main() {
 		"schema_version": resultSchema, "status": "ok", "engine": map[string]string{"id": "bleve", "family": "embedded_library", "name": "Bleve", "version": bleveVersion},
 		"repetition": *repetition, "manifest_sha256": hex.EncodeToString(manifestSum[:]), "corpus": map[string]any{"document_count": len(docs), "sha256": hex.EncodeToString(corpusSum[:])},
 		"command": command, "versions": map[string]string{"bleve": bleveVersion, "go": runtime.Version(), "platform": runtime.GOOS + "/" + runtime.GOARCH},
-		"config":      map[string]any{"working_directory": workingDirectory, "index_type": "scorch", "analyzer": "standard", "tenant_analyzer": "keyword", "weighted_field_materialization": "title repeated 3x then body", "top_k": spec.Execution.TopK, "tie_break": "score,id", "store_fields": false, "term_vectors": true},
+		"config":      map[string]any{"working_directory": workingDirectory, "index_type": "scorch", "analyzer": "standard", "tenant_analyzer": "keyword", "weighted_field_materialization": "title repeated 3x then body for non-phrase scoring only", "phrase_fields": []string{"title", "body"}, "phrase_field_weights": map[string]float64{"title": 3, "body": 1}, "top_k": spec.Execution.TopK, "tie_break": "score,id", "store_fields": false, "term_vectors": true, "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close"},
 		"environment": environment,
-		"build":       map[string]any{"elapsed_nanos": buildElapsed.Nanoseconds(), "docs_per_second": float64(len(docs)) / buildElapsed.Seconds(), "cpu": map[string]any{"status": "ok", "value": cpuNanos(after) - cpuNanos(before), "unit": "nanoseconds"}, "peak_rss": map[string]any{"status": "ok", "value": peakRSSBytes(after), "unit": "bytes"}, "checkpointed": true},
+		"build":       map[string]any{"elapsed_nanos": buildElapsed.Nanoseconds(), "docs_per_second": float64(len(docs)) / buildElapsed.Seconds(), "cpu": map[string]any{"status": "ok", "value": cpuNanos(after) - cpuNanos(before), "unit": "nanoseconds"}, "peak_rss": map[string]any{"status": "ok", "value": peakRSSBytes(finalUsage), "unit": "bytes"}, "checkpointed": true},
 		"storage":     map[string]int64{"durable_bytes": durable, "wal_bytes": 0, "transient_bytes": 0},
 		"reopen":      map[string]any{"performed": true, "verified": reopenVerified(cases), "result_digest": digestCases(cases)}, "cases": cases,
 	}
@@ -170,23 +192,24 @@ func search(index bleve.Index, spec querySpec, topK int) ([]string, error) {
 	}
 	var q query.Query
 	switch spec.Semantic {
-	case "term", "term_scalar":
+	case "term":
 		q = makeTerm(spec.Terms[0])
 	case "and":
 		q = bleve.NewConjunctionQuery(makeTerm(spec.Terms[0]), makeTerm(spec.Terms[1]))
 	case "or":
 		q = bleve.NewDisjunctionQuery(makeTerm(spec.Terms[0]), makeTerm(spec.Terms[1]))
 	case "phrase":
-		phrase := bleve.NewMatchPhraseQuery(strings.Join(spec.Terms, " "))
-		phrase.SetField("weighted_text")
-		q = phrase
+		titlePhrase := bleve.NewMatchPhraseQuery(strings.Join(spec.Terms, " "))
+		titlePhrase.SetField("title")
+		titlePhrase.SetBoost(3)
+		bodyPhrase := bleve.NewMatchPhraseQuery(strings.Join(spec.Terms, " "))
+		bodyPhrase.SetField("body")
+		q = bleve.NewDisjunctionQuery(titlePhrase, bodyPhrase)
 	default:
 		return nil, fmt.Errorf("unsupported semantic %q", spec.Semantic)
 	}
-	if spec.Filter != nil {
-		tenant := bleve.NewTermQuery(spec.Filter["equals"])
-		tenant.SetField(spec.Filter["field"])
-		q = bleve.NewConjunctionQuery(q, tenant)
+	if len(spec.Filter) != 0 {
+		return nil, fmt.Errorf("non-scoring scalar filter unsupported by Bleve adapter")
 	}
 	request := bleve.NewSearchRequestOptions(q, topK, 0, false)
 	request.SortBy([]string{"-_score", "_id"})
@@ -210,7 +233,7 @@ func parseCorpus(raw []byte) []document {
 		if len(parts) != 4 {
 			fatalf("invalid corpus row")
 		}
-		docs = append(docs, document{ID: parts[0], WeightedText: strings.Join([]string{parts[1], parts[1], parts[1], parts[2]}, " "), Tenant: parts[3]})
+		docs = append(docs, document{ID: parts[0], Title: parts[1], Body: parts[2], Tenant: parts[3]})
 	}
 	must(scanner.Err())
 	return docs
@@ -272,6 +295,9 @@ func digestCases(cases []caseResult) string {
 }
 func reopenVerified(cases []caseResult) bool {
 	for _, item := range cases {
+		if item.Status == "unsupported" {
+			continue
+		}
 		if item.Digest != item.ReopenDigest {
 			return false
 		}

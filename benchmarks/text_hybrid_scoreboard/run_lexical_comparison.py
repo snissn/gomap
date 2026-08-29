@@ -105,6 +105,7 @@ def run_command(command: list[str], cwd: Path, timeout: int, log_path: Path, env
     merged_env = os.environ.copy()
     if env:
         merged_env.update(env)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.time()
     try:
         result = subprocess.run(command, cwd=cwd, env=merged_env, text=True, capture_output=True, timeout=timeout, check=False)
@@ -113,7 +114,6 @@ def run_command(command: list[str], cwd: Path, timeout: int, log_path: Path, env
         text = f"command={shlex.join(command)}\ncwd={cwd}\nstarted_unix={started}\ntimeout_seconds={timeout}\n\n[stdout]\n{exc.stdout or ''}\n[stderr]\n{exc.stderr or ''}"
         log_path.write_text(text, encoding="utf-8")
         raise RuntimeError(f"timed out without fallback: {shlex.join(command)}") from exc
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text(text, encoding="utf-8")
     return result
 
@@ -156,12 +156,24 @@ def setup_engine(engine_id: str, out_dir: Path, timeout: int) -> tuple[bool, lis
         command = ["mvn", "-q", "-DskipTests", "dependency:go-offline"]
         cwd = isolated_project(engine_id, out_dir)
     elif engine_id == "bleve":
-        command = ["go", "mod", "tidy"]
+        command = ["go", "mod", "download"]
         cwd = isolated_project(engine_id, out_dir)
     else:
         return True, [], ""
     result = run_command(command, cwd, timeout, out_dir / "logs" / f"{engine_id}-setup.log", {"GOWORK": "off"})
     return result.returncode == 0, command, result.stderr
+
+
+def sanitize_paths(value: Any, replacements: list[tuple[str, str]]) -> Any:
+    if isinstance(value, str):
+        for source, token in replacements:
+            value = value.replace(source, token)
+        return value
+    if isinstance(value, list):
+        return [sanitize_paths(item, replacements) for item in value]
+    if isinstance(value, dict):
+        return {key: sanitize_paths(item, replacements) for key, item in value.items()}
+    return value
 
 
 def detected_address_space_limit() -> str:
@@ -244,11 +256,16 @@ def main() -> int:
     if source_after_run != source:
         raise RuntimeError("source checkout drifted during lexical comparison; artifacts are rejected")
     source["post_run_reverified"] = True
-    artifacts = [json.loads(path.read_text(encoding="utf-8")) for path in artifact_paths]
+    replacements = sorted(((str(args.out_dir), "$RUN"), (str(ROOT), "$REPO"), (str(Path.home()), "$HOME")), key=lambda item: len(item[0]), reverse=True)
+    artifacts = []
+    for path in artifact_paths:
+        artifact = sanitize_paths(json.loads(path.read_text(encoding="utf-8")), replacements)
+        path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        artifacts.append(artifact)
     context = {
         "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "host": platform.node(), "platform": platform.platform(), "python": sys.version.replace("\n", " "),
-        "runner_command": [sys.executable, *sys.argv], "serial_engine_order": list(ENGINE_ORDER), "setup_ledger": setup_ledger,
+        "runner_command": sanitize_paths([sys.executable, *sys.argv], replacements), "serial_engine_order": list(ENGINE_ORDER), "setup_ledger": sanitize_paths(setup_ledger, replacements),
         "source": source,
         "environment_contract": manifest["environment"],
         "detected_address_space_limit": enforced_environment["LEXICAL_ADDRESS_SPACE_LIMIT"],

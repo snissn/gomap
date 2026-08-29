@@ -85,10 +85,13 @@ def frozen_document(index: int) -> tuple[str, str, str, str]:
         body.append("delta")
     elif 70 <= index < 80:
         body.extend(("gamma", "delta"))
-    if 80 <= index < 90:
-        body.extend(("quick", "fox"))
+    if 80 <= index < 85:
+        title = ["titlefill"] * 11 + ["quick"]
+        body = ["fox"]
+    elif 85 <= index < 90:
+        title = ["fox"] + ["titlefill"] * 10 + ["quick"]
     elif 90 <= index < 100:
-        body.extend(("quick", "bridge", "fox"))
+        body.extend(("quick", "fox"))
     if 100 <= index < 120:
         body.append("tenantterm")
     if len(title) > length or len(body) > length:
@@ -251,12 +254,18 @@ def _validate_environment(environment: Any, manifest: dict[str, Any], prefix: st
     _require(execution.get("query_concurrency") == 1, f"{prefix}: query concurrency mismatch")
     _require(execution.get("engine_process_concurrency") == 1, f"{prefix}: engine process concurrency mismatch")
     _require(execution.get("runtime_cpu_parallelism") == 1, f"{prefix}: runtime CPU parallelism mismatch")
+def _is_sha256(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
 def validate_result(artifact: dict[str, Any], manifest: dict[str, Any], expected: dict[str, list[str]], corpus_ids: set[str]) -> None:
+    _require(artifact.get("schema_version") == RESULT_SCHEMA, "result schema version mismatch")
+    _require(type(artifact.get("repetition")) is int and artifact["repetition"] >= 1, "result repetition is invalid")
+    _require(_is_sha256(artifact.get("manifest_sha256")), "manifest digest is malformed")
     engine_id = artifact.get("engine", {}).get("id", "<missing>")
     prefix = f"{engine_id} repetition {artifact.get('repetition', '?')}"
-    _require(engine_id != "<missing>" and bool(artifact.get("engine", {}).get("name")) and bool(artifact.get("engine", {}).get("version")), f"{prefix}: engine identity/version missing")
+    engine = artifact.get("engine", {})
+    _require(engine_id != "<missing>" and all(isinstance(engine.get(key), str) and bool(engine[key]) for key in ("family", "name", "version")), f"{prefix}: engine identity/version missing")
     _require(isinstance(artifact.get("repetition"), int) and artifact["repetition"] > 0, f"{prefix}: invalid repetition")
     _require(artifact.get("schema_version") == RESULT_SCHEMA, f"{prefix}: wrong result schema")
     _require(artifact.get("manifest_sha256") == manifest_sha256(manifest), f"{prefix}: manifest drift")
@@ -272,29 +281,37 @@ def validate_result(artifact: dict[str, Any], manifest: dict[str, Any], expected
     corpus = artifact.get("corpus", {})
     _require(corpus.get("sha256") == manifest["corpus"]["sha256"], f"{prefix}: corpus content drift")
     _require(corpus.get("document_count") == manifest["corpus"]["document_count"], f"{prefix}: document count drift")
-    _require(isinstance(artifact.get("command"), list) and bool(artifact["command"]), f"{prefix}: exact command missing")
+    _require(isinstance(artifact.get("command"), list) and bool(artifact["command"]) and all(isinstance(value, str) for value in artifact["command"]), f"{prefix}: exact command missing or malformed")
     _require(isinstance(artifact.get("versions"), dict) and bool(artifact["versions"]), f"{prefix}: versions missing")
     _require(isinstance(artifact.get("config"), dict) and bool(artifact["config"]), f"{prefix}: configuration missing")
     _require(artifact["config"].get("top_k") == manifest["execution"]["top_k"], f"{prefix}: top-K config mismatch")
+    _require(artifact["config"].get("build_timing_boundary") == manifest["execution"]["build_timing_boundary"], f"{prefix}: build timing boundary mismatch")
     _require(artifact["config"].get("tie_break") == "score,id" or engine_id == "treedb_text_v2", f"{prefix}: tie-break config mismatch")
     if engine_id == "treedb_text_v2":
         _require(artifact["config"].get("weights") == {"title": 3, "body": 1} and artifact["config"].get("bm25f") == {"k1": 1.2, "b": 0.75}, f"{prefix}: TreeDB BM25F config mismatch")
     else:
-        _require(artifact["config"].get("weighted_field_materialization") == "title repeated 3x then body", f"{prefix}: external weighted-field config mismatch")
+        _require(artifact["config"].get("weighted_field_materialization") == "title repeated 3x then body for non-phrase scoring only", f"{prefix}: external weighted-field config mismatch")
+        _require(artifact["config"].get("phrase_fields") == ["title", "body"] and artifact["config"].get("phrase_field_weights") == {"title": 3, "body": 1}, f"{prefix}: external phrase-field config mismatch")
     _validate_environment(artifact.get("environment"), manifest, prefix)
     build = artifact.get("build", {})
     _require(build.get("checkpointed") is True, f"{prefix}: build was not checkpointed")
     _require(all(key in build for key in ("elapsed_nanos", "docs_per_second", "cpu", "peak_rss")), f"{prefix}: build/resource fields missing")
+    _require(type(build.get("elapsed_nanos")) is int and build["elapsed_nanos"] >= 0 and isinstance(build.get("docs_per_second"), (int, float)) and build["docs_per_second"] >= 0, f"{prefix}: build metrics malformed")
     _validate_resource(build.get("cpu"), "build CPU", prefix)
     _validate_resource(build.get("peak_rss"), "peak RSS", prefix)
     storage = artifact.get("storage", {})
     _require(all(key in storage for key in ("durable_bytes", "wal_bytes", "transient_bytes")), f"{prefix}: storage classes missing")
+    _require(all(type(storage[key]) is int and storage[key] >= 0 for key in ("durable_bytes", "wal_bytes", "transient_bytes")), f"{prefix}: storage values malformed")
     reopen = artifact.get("reopen", {})
-    _require(reopen.get("performed") is True and reopen.get("verified") is True and bool(reopen.get("result_digest")), f"{prefix}: reopen proof missing")
+    _require(reopen.get("performed") is True and reopen.get("verified") is True and _is_sha256(reopen.get("result_digest")), f"{prefix}: reopen proof missing or malformed")
+    if engine_id == "sqlite_fts5":
+        _require(reopen.get("query_connection_reopened") is True and reopen.get("durability_connection_reopened") is True, f"{prefix}: SQLite query/durability reopen separation missing")
     cases = artifact.get("cases", [])
+    _require(isinstance(cases, list) and all(isinstance(case, dict) for case in cases), f"{prefix}: cases must be an object array")
     by_id = {case.get("id"): case for case in cases}
     _require(len(by_id) == len(cases), f"{prefix}: duplicate case IDs")
     _require(set(by_id) == set(expected), f"{prefix}: cases do not match manifest")
+    _require(reopen["result_digest"] == result_digest(case.get("reopen_result_digest", "") for case in cases), f"{prefix}: consolidated reopen digest mismatch")
     measured = int(manifest["execution"]["measured_queries_per_case"])
     for query in manifest["queries"]:
         case = by_id[query["id"]]
@@ -374,6 +391,7 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
     ledger = []
     rows = []
     builds = []
+    partial: set[str] = set()
     for engine_id, engine_artifacts in sorted(grouped.items()):
         engine_artifacts.sort(key=lambda item: item["repetition"])
         available = [item for item in engine_artifacts if item["status"] == "ok"]
@@ -396,8 +414,11 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
             _require(item["versions"] == baseline["versions"], f"{engine_id}: versions differ across repetitions")
             _require(item["config"] == baseline["config"], f"{engine_id}: benchmark config differs across repetitions")
             _require(item["environment"] == baseline["environment"], f"{engine_id}: detected/enforced environment differs across repetitions")
-        if any(all(next(case for case in item["cases"] if case["id"] == query["id"])["status"] == "ok" for item in available) for query in manifest["queries"]):
+        accepted_cases = [query["id"] for query in manifest["queries"] if all(next(case for case in item["cases"] if case["id"] == query["id"])["status"] == "ok" for item in available)]
+        if len(accepted_cases) == len(manifest["queries"]):
             completed.add(engine_id)
+        elif accepted_cases:
+            partial.add(engine_id)
         engine = available[0]["engine"]
         builds.append({
             "engine": engine,
@@ -416,6 +437,7 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
         for query in manifest["queries"]:
             cases = [next(case for case in item["cases"] if case["id"] == query["id"]) for item in available]
             statuses = {case["status"] for case in cases}
+            _require(len(statuses) == 1, f"{engine_id} case {query['id']}: status differs across repetitions")
             if statuses != {"ok"}:
                 reasons = sorted({case.get("unsupported_reason", "unsupported") for case in cases})
                 ledger.append({"engine": engine, "case": query["id"], "status": "unsupported", "detail": "; ".join(reasons)})
@@ -445,6 +467,7 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
         "context": context,
         "reference_results": expected,
         "engines_completed": sorted(completed),
+        "engines_partial": sorted(partial),
         "qualification_eligible": source["qualification_eligible"],
         "builds": builds,
         "headline_rows": rows,
@@ -470,6 +493,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         f"Source: `{report['context']['source']['commit']}` / tree `{report['context']['source']['tree_oid']}`; retained qualification eligible: **{str(report['qualification_eligible']).upper()}**.",
         "",
+        f"Completed engines: `{', '.join(report['engines_completed'])}`; partial engines: `{', '.join(report['engines_partial']) or 'none'}`.",
+        "",
         "Only exact, validator-accepted rows enter the headline table. Times are warm single-query latency on one host; they are not timing assertions.",
         "",
         "## Headline query latency",
@@ -479,13 +504,16 @@ def render_markdown(report: dict[str, Any]) -> str:
     ]
     for row in report["headline_rows"]:
         lines.append(f"| {row['engine']['name']} | {row['case']} | {row['p50_nanos'] / 1e6:.3f} ms | {row['p95_nanos'] / 1e6:.3f} ms | {row['p99_nanos'] / 1e6:.3f} ms | `{row['result_digest']}` |")
-    lines.extend(["", "## Build resources and checkpointed storage", "", "| engine | build repetitions (s) | docs/s | CPU per repetition | peak RSS per repetition | durable bytes | WAL bytes | transient bytes |", "| --- | --- | --- | --- | --- | --- | --- | --- |"])
+    lines.extend(["", "## Build resources and checkpointed storage", "", "| engine | build repetitions (s) | docs/s | CPU per repetition | peak RSS per repetition | durable bytes per repetition | WAL bytes per repetition | transient bytes per repetition |", "| --- | --- | --- | --- | --- | --- | --- | --- |"])
     for build in report["builds"]:
         elapsed = ", ".join(f"{value / 1e9:.3f}" for value in build["elapsed_nanos"])
         throughput = ", ".join(f"{value:.1f}" for value in build["docs_per_second"])
         cpu = format_resources(build["cpu"], 1e9, "s")
         rss = format_resources(build["peak_rss"], 1024 * 1024, "MiB")
-        lines.append(f"| {build['engine']['name']} | {elapsed} | {throughput} | {cpu} | {rss} | {build['durable_bytes']} | {build['wal_bytes']} | {build['transient_bytes']} |")
+        durable = ", ".join(str(value) for value in build["durable_bytes"])
+        wal = ", ".join(str(value) for value in build["wal_bytes"])
+        transient = ", ".join(str(value) for value in build["transient_bytes"])
+        lines.append(f"| {build['engine']['name']} | {elapsed} | {throughput} | {cpu} | {rss} | {durable} | {wal} | {transient} |")
     lines.extend(["", "## Equivalence and availability ledger", "", "| engine | case | status | detail |", "| --- | --- | --- | --- |"])
     for item in report["equivalence_ledger"]:
         detail = item["detail"]

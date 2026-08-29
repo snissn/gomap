@@ -46,6 +46,8 @@ RUN_DIR=/tmp/gomap_text_hybrid_scoreboard_$(date +%Y%m%d_%H%M%S) \
 
 Set `RUN_LEXICAL_COMPARISON=false` only to reproduce the legacy hybrid-only
 matrix. `LEXICAL_REPETITIONS` defaults to `3` and cannot be less than `3`.
+`LEXICAL_ALLOW_DIRTY=true` passes the development-only dirty override through
+the combined script; its lexical report is never retained-qualification eligible.
 
 ## Frozen logical corpus and queries
 
@@ -65,7 +67,7 @@ The frozen contract is:
   term IDF, and one saturation step after weighted field-TF combination;
 - top-K 10 with score-descending/document-ID-ascending ties;
 - two warmups and 20 retained raw latency samples per query per repetition;
-- warm in-process cache state after build and reopen;
+- warm in-process cache state only after the built index is closed and reopened;
 - common term, rare term, AND, OR, exact phrase, and scalar-filtered term cases.
 
 The common-term top-K is an explicit scoring probe. Its checked expected order
@@ -75,21 +77,26 @@ same-field/same-length pairs prove term-frequency ordering. The reference
 interpreter implements the pinned BM25F equation rather than a token-count
 proxy.
 
-For engines without native BM25F, adapters index one frozen comparison field:
-title tokens repeated exactly three times, followed by body tokens. The corpus
-keeps title and body lengths equal within each document, so the synthetic
-field's weighted TF and length denominator are algebraically identical to the
-pinned BM25F combination. This validates ordered IDs, not numeric score parity
-or production relevance.
+For engines without native BM25F, non-phrase queries use one frozen comparison
+field: title tokens repeated exactly three times, followed by body tokens. The
+corpus keeps title and body lengths equal within each document, so that field's
+weighted TF and length denominator are algebraically identical to the pinned
+BM25F combination. Phrase queries instead use separate title and body position
+streams with weights `3:1`; adversarial documents contain cross-field and
+title-copy-boundary adjacency and must not match. This validates ordered IDs,
+not numeric score parity or production relevance.
 
 ## Pinned engines and setup
 
 | engine | pin | analyzer/index configuration | setup command |
 | --- | --- | --- | --- |
 | TreeDB | checked-out root module/commit | accepted text-v2 BM25F, simple analyzer, stored positions, score-only, no document fetch | root Go module |
-| Apache Lucene | `org.apache.lucene:lucene-core:9.12.1`, `lucene-analysis-common:9.12.1` | `StandardAnalyzer`, weighted comparison field, `BM25Similarity(1.2,0.75)`, FSDirectory | `cd benchmarks/text_hybrid_scoreboard/lucene_adapter && mvn -q -DskipTests dependency:go-offline` |
-| Bleve | `github.com/blevesearch/bleve/v2 v2.4.4` | standard analyzer, weighted comparison field, keyword tenant, Scorch | `cd benchmarks/text_hybrid_scoreboard/bleve_adapter && GOWORK=off go mod tidy` |
-| SQLite FTS5 | Python stdlib SQLite build, exact Python/SQLite versions captured per artifact | weighted comparison field, `unicode61 remove_diacritics 2`, `bm25()`, WAL + FULL synchronous | no downloaded dependency |
+| Apache Lucene | `org.apache.lucene:lucene-core:9.12.1`, `lucene-analysis-common:9.12.1` | `StandardAnalyzer`, weighted non-phrase field plus real title/body phrase fields, `BM25Similarity(1.2,0.75)`, FSDirectory | `cd benchmarks/text_hybrid_scoreboard/lucene_adapter && mvn -q -DskipTests dependency:go-offline` |
+| Bleve | `github.com/blevesearch/bleve/v2 v2.4.4` | standard analyzer, weighted non-phrase field plus real title/body phrase fields, Scorch; scalar-filtered case typed unsupported because v2.4.4 lacks a non-scoring predicate | `cd benchmarks/text_hybrid_scoreboard/bleve_adapter && GOWORK=off go mod download` |
+| SQLite FTS5 | Python stdlib SQLite build, exact Python/SQLite versions captured per artifact | weighted non-phrase field plus real title/body phrase columns, `unicode61 remove_diacritics 2`, `bm25()`, WAL + FULL synchronous | no downloaded dependency |
+
+Tantivy is explicitly not measured: this harness contains no Tantivy adapter
+or retained Tantivy evidence.
 
 The Lucene Maven project and Bleve Go module are copied into isolated dependency
 workspaces under the run directory; neither changes the checkout or root Go
@@ -105,7 +112,12 @@ fallback, or partial output also aborts rather than producing a row.
 
 The manifest freezes one query at a time, one engine process at a time, runtime
 CPU parallelism of one, monotonic wall-clock latency, process-scoped build CPU,
-and process-lifetime peak RSS. The runner detects the exact inherited
+and process-lifetime peak RSS. Every build timer starts after frozen TSV
+parsing but before engine document materialization/index setup and ends after
+checkpoint and close. TreeDB and Bleve sample peak RSS only after the full
+query and durability-reopen workload. SQLite uses zero auxiliary workers,
+closes the build connection before any warmup, and uses a second, separate
+reopen for durability proof. The runner detects the exact inherited
 address-space limit without changing it and passes that value to every adapter.
 It also records the output filesystem's decimal POSIX `st_dev`. Each adapter
 records corpus, index, and result `st_dev` values in the same representation;
@@ -123,7 +135,10 @@ retained repetitions.
 ## Shared result and validation contract
 
 Each repetition emits `treedb_lexical_result/v1`, formally described by
-`benchmarks/text_hybrid_scoreboard/lexical_result.schema.json`. An accepted engine artifact contains:
+`benchmarks/text_hybrid_scoreboard/lexical_result.schema.json`. The
+dependency-free strict typed validator enforces every retained
+schema-observable field, type, digest, route, and cross-field invariant. An
+accepted engine artifact contains:
 
 - exact command, engine/runtime versions, and complete analyzer/index config;
 - manifest and corpus digests plus document count;
@@ -137,14 +152,16 @@ Each repetition emits `treedb_lexical_result/v1`, formally described by
 - frozen/detected filesystem, memory-limit, concurrency, and resource settings;
 - typed per-case `unsupported` rows where a semantic is genuinely unavailable.
 
-`lexical_common.validate_result` deterministically rejects document count or
-content drift, missing/extra query cases, duplicates, IDs outside the corpus,
-reference ID/order mismatch, digest mismatch, missing reopen proof, missing
-intended-route evidence, fallback, timeout, malformed resource/unavailable
-rows, environment-policy mismatch, and sample-count drift. Consolidation also
-rejects per-repetition engine/version/config/environment drift. Unsupported
-semantic rows stay in the equivalence ledger and never enter the headline
-matrix.
+`lexical_common.validate_result` deterministically rejects malformed schema
+fields or digests, document count or content drift, missing/extra query cases,
+duplicates, IDs outside the corpus, reference ID/order mismatch, missing reopen
+proof, missing intended-route evidence, fallback, timeout, malformed
+resource/unavailable rows, environment-policy mismatch, and sample-count drift.
+Consolidation also rejects per-repetition engine/version/config/environment
+drift and reports fully completed separately from partial engines. Unsupported
+semantic rows and dirty-source rows stay in the equivalence ledger and never
+enter the headline matrix. Raw and consolidated artifacts replace repository,
+run-directory, and home prefixes with `$REPO`, `$RUN`, and `$HOME`.
 
 Consolidation emits `treedb_lexical_comparison/v1` and fails unless an accepted
 TreeDB text-v2 row and accepted equivalent rows from at least two external
@@ -168,10 +185,15 @@ The combined script places these under `$RUN_DIR/lexical/`; its pre-existing
 hybrid artifacts remain `$RUN_DIR/scoreboard.json`, `$RUN_DIR/scoreboard.md`,
 TreeDB Go benchmark logs, and `$RUN_DIR/context.txt`.
 
+The tracked `artifacts/4330-lexical-comparison-v1/` run predates the query
+reopen, build-boundary, phrase-position, filter, and RSS fairness fixes. It is
+invalid for retained comparison and must not be cited; regenerate only after
+the source changes pass focused review.
+
 The old single-query SQLite `--docs/--queries/--query` path and static
-Lucene/Tantivy/Bleve unavailable placeholders are intentionally removed. They
-did not share a corpus or query manifest and must not be compared to the #4330
-rows.
+Lucene/Bleve unavailable placeholders are intentionally removed. They did not
+share a corpus or query manifest and must not be compared to the #4330 rows;
+Tantivy remains explicitly disclosed as not measured.
 
 ## Focused checks
 
@@ -184,6 +206,7 @@ python3 benchmarks/text_hybrid_scoreboard/test_lexical_comparison.py
 GOWORK=off go test ./benchmarks/text_hybrid_scoreboard/treedb_adapter
 
 cd benchmarks/text_hybrid_scoreboard/bleve_adapter \
+  && GOWORK=off go mod download \
   && GOWORK=off go test ./...
 
 cd benchmarks/text_hybrid_scoreboard/lucene_adapter \

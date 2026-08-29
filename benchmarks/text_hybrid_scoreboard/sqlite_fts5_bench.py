@@ -49,15 +49,19 @@ def file_size(path: Path) -> int:
 
 def query_text(query: dict[str, Any]) -> str:
     terms = query["terms"]
-    if query["semantic"] in ("term", "term_scalar"):
-        return terms[0]
-    if query["semantic"] == "and":
-        return " AND ".join(terms)
-    if query["semantic"] == "or":
-        return " OR ".join(terms)
-    if query["semantic"] == "phrase":
-        return '"' + " ".join(terms) + '"'
-    raise ValueError(f"unsupported semantic {query['semantic']}")
+    semantic = query["semantic"]
+    if semantic in ("term", "term_scalar"):
+        expression = terms[0]
+    elif semantic == "and":
+        expression = " AND ".join(terms)
+    elif semantic == "or":
+        expression = " OR ".join(terms)
+    elif semantic == "phrase":
+        phrase = '"' + " ".join(terms) + '"'
+        return f"title : {phrase} OR body : {phrase}"
+    else:
+        raise ValueError(f"unsupported semantic {semantic}")
+    return f"weighted_text : ({expression})"
 
 
 def execute(conn: sqlite3.Connection, query: dict[str, Any], top_k: int) -> list[str]:
@@ -66,7 +70,8 @@ def execute(conn: sqlite3.Connection, query: dict[str, Any], top_k: int) -> list
     if query.get("filter"):
         sql += " AND tenant = ?"
         params.append(query["filter"]["equals"])
-    sql += " ORDER BY bm25(docs_fts, 0.0, 1.0, 0.0), id LIMIT ?"
+    weights = "0.0, 0.0, 3.0, 1.0, 0.0" if query["semantic"] == "phrase" else "0.0, 1.0, 0.0, 0.0, 0.0"
+    sql += f" ORDER BY bm25(docs_fts, {weights}), id LIMIT ?"
     params.append(top_k)
     return [row[0] for row in conn.execute(sql, params)]
 
@@ -84,15 +89,19 @@ def main() -> int:
         except FileNotFoundError:
             pass
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    corpus_payload = corpus_path.read_bytes()
+    source_rows = [line.split("\t") for line in corpus_payload.decode().splitlines()]
+    build_cpu = time.process_time_ns()
+    build_start = time.perf_counter_ns()
     try:
         conn = sqlite3.connect(db_path)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=FULL")
         conn.execute("PRAGMA temp_store=MEMORY")
-        conn.execute("PRAGMA threads=1")
+        conn.execute("PRAGMA threads=0")
         sqlite_threads = int(conn.execute("PRAGMA threads").fetchone()[0])
-        effective_sqlite_parallelism = 1 if sqlite_threads <= 1 else sqlite_threads
-        conn.execute("CREATE VIRTUAL TABLE docs_fts USING fts5(id UNINDEXED, weighted_text, tenant UNINDEXED, tokenize='unicode61 remove_diacritics 2')")
+        effective_sqlite_parallelism = 1 + max(sqlite_threads, 0)
+        conn.execute("CREATE VIRTUAL TABLE docs_fts USING fts5(id UNINDEXED, weighted_text, title, body, tenant UNINDEXED, tokenize='unicode61 remove_diacritics 2')")
     except sqlite3.Error as exc:
         write(out, {
             "schema_version": RESULT_SCHEMA,
@@ -105,18 +114,17 @@ def main() -> int:
         })
         return 0
 
-    corpus_payload = corpus_path.read_bytes()
-    source_rows = [line.split("\t") for line in corpus_payload.decode().splitlines()]
-    rows = [(doc_id, " ".join((title, title, title, body)), tenant) for doc_id, title, body, tenant in source_rows]
-    build_cpu = time.process_time_ns()
-    build_start = time.perf_counter_ns()
+    rows = [(doc_id, " ".join((title, title, title, body)), title, body, tenant) for doc_id, title, body, tenant in source_rows]
     with conn:
-        conn.executemany("INSERT INTO docs_fts(id, weighted_text, tenant) VALUES (?, ?, ?)", rows)
+        conn.executemany("INSERT INTO docs_fts(id, weighted_text, title, body, tenant) VALUES (?, ?, ?, ?, ?)", rows)
     conn.execute("INSERT INTO docs_fts(docs_fts) VALUES ('optimize')")
     conn.commit()
     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.close()
     build_elapsed = time.perf_counter_ns() - build_start
     build_cpu = time.process_time_ns() - build_cpu
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA threads=0")
     top_k = int(manifest["execution"]["top_k"])
     warmups = int(manifest["execution"]["warmup_queries_per_case"])
     measured = int(manifest["execution"]["measured_queries_per_case"])
@@ -138,17 +146,17 @@ def main() -> int:
             "route": {"intended": route_proven, "name": "sqlite_fts5_virtual_table_match_bm25", "fallback": False, "proof": plan},
             "timed_out": False,
         })
-    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     conn.close()
     durable = file_size(db_path)
     wal = file_size(Path(str(db_path) + "-wal"))
     transient = file_size(Path(str(db_path) + "-shm"))
-    reopened = sqlite3.connect(db_path)
+    durability_reopened = sqlite3.connect(db_path)
+    durability_reopened.execute("PRAGMA threads=0")
     for case, query in zip(cases, manifest["queries"], strict=True):
-        ids = execute(reopened, query, top_k)
+        ids = execute(durability_reopened, query, top_k)
         case["reopen_result_ids"] = ids
         case["reopen_result_digest"] = result_digest(ids)
-    reopened.close()
+    durability_reopened.close()
     stores = {
         "corpus_store_id": str(corpus_path.stat().st_dev),
         "index_store_id": str(db_path.stat().st_dev),
@@ -174,11 +182,11 @@ def main() -> int:
         "corpus": {"document_count": len(rows), "sha256": hashlib.sha256(corpus_payload).hexdigest()},
         "command": command,
         "versions": {"python": sys.version.replace("\n", " "), "sqlite": sqlite3.sqlite_version, "platform": platform.platform()},
-        "config": {"working_directory": os.getcwd(), "tokenizer": "unicode61 remove_diacritics 2", "weighted_field_materialization": "title repeated 3x then body", "journal_mode": "WAL", "synchronous": "FULL", "sqlite_auxiliary_threads": sqlite_threads, "top_k": top_k, "tie_break": "score,id"},
+        "config": {"working_directory": os.getcwd(), "tokenizer": "unicode61 remove_diacritics 2", "weighted_field_materialization": "title repeated 3x then body for non-phrase scoring only", "phrase_fields": ["title", "body"], "phrase_field_weights": {"title": 3, "body": 1}, "journal_mode": "WAL", "synchronous": "FULL", "sqlite_auxiliary_threads": sqlite_threads, "top_k": top_k, "tie_break": "score,id", "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close"},
         "environment": environment,
         "build": {"elapsed_nanos": build_elapsed, "docs_per_second": len(rows) * 1e9 / build_elapsed, "cpu": {"status": "ok", "value": build_cpu, "unit": "nanoseconds"}, "peak_rss": {"status": "ok", "value": peak_rss_bytes(), "unit": "bytes"}, "checkpointed": True},
         "storage": {"durable_bytes": durable, "wal_bytes": wal, "transient_bytes": transient},
-        "reopen": {"performed": True, "verified": all(case["result_ids"] == case["reopen_result_ids"] for case in cases), "result_digest": result_digest(case["reopen_result_digest"] for case in cases)},
+        "reopen": {"performed": True, "query_connection_reopened": True, "durability_connection_reopened": True, "verified": all(case["result_ids"] == case["reopen_result_ids"] for case in cases), "result_digest": result_digest(case["reopen_result_digest"] for case in cases)},
         "cases": cases,
     }
     write(out, payload)

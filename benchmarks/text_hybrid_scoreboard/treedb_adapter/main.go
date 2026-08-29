@@ -135,20 +135,25 @@ func main() {
 	cases := make([]caseResult, 0, len(spec.Queries))
 	for _, q := range spec.Queries {
 		for range spec.Execution.WarmupQueries {
-			_, err = execute(col, q, spec)
+			_, err = execute(col, q, spec, false)
 			must(err)
 		}
 		var last runResult
 		samples := make([]int64, 0, spec.Execution.MeasuredQueries)
 		for range spec.Execution.MeasuredQueries {
 			start := time.Now()
-			last, err = execute(col, q, spec)
+			last, err = execute(col, q, spec, false)
 			samples = append(samples, time.Since(start).Nanoseconds())
 			must(err)
 		}
+		proof, proofErr := execute(col, q, spec, true)
+		must(proofErr)
+		if !equalIDs(last.IDs, proof.IDs) {
+			fatalf("untimed route-proof query changed results for %s", q.ID)
+		}
 		cases = append(cases, caseResult{
 			ID: q.ID, Status: "ok", Equivalent: true, SamplesNanos: samples,
-			ResultIDs: last.IDs, ResultDigest: digestIDs(last.IDs), Route: last.Route, TimedOut: false,
+			ResultIDs: last.IDs, ResultDigest: digestIDs(last.IDs), Route: proof.Route, TimedOut: false,
 		})
 	}
 	must(db.Close())
@@ -158,12 +163,14 @@ func main() {
 	col, err = collections.NewCollectionManager(db).OpenCollection("docs")
 	must(err)
 	for i, q := range spec.Queries {
-		reopened, runErr := execute(col, q, spec)
+		reopened, runErr := execute(col, q, spec, false)
 		must(runErr)
 		cases[i].ReopenResultIDs = reopened.IDs
 		cases[i].ReopenResultDigest = digestIDs(reopened.IDs)
 	}
 	must(db.Close())
+	var usageFinal syscall.Rusage
+	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &usageFinal)
 
 	manifestCanonical := canonicalJSON(manifestRaw)
 	manifestDigest := sha256.Sum256(manifestCanonical)
@@ -179,9 +186,9 @@ func main() {
 		"corpus":      map[string]any{"document_count": len(docs), "sha256": hex.EncodeToString(corpusDigest[:])},
 		"command":     command,
 		"versions":    map[string]string{"go": runtime.Version(), "platform": runtime.GOOS + "/" + runtime.GOARCH, "module": treeDBVersion()},
-		"config":      map[string]any{"working_directory": workingDirectory, "index_version": "v2", "analyzer": "simple", "store_positions": true, "weights": map[string]float64{"title": 3, "body": 1}, "bm25f": map[string]float64{"k1": 1.2, "b": 0.75}, "top_k": spec.Execution.TopK, "candidate_limit": spec.Corpus.DocumentCount, "max_postings_scanned": spec.Corpus.DocumentCount * 8, "result_mode": "score_only"},
+		"config":      map[string]any{"working_directory": workingDirectory, "index_version": "v2", "analyzer": "simple", "store_positions": true, "weights": map[string]float64{"title": 3, "body": 1}, "bm25f": map[string]float64{"k1": 1.2, "b": 0.75}, "top_k": spec.Execution.TopK, "candidate_limit": spec.Corpus.DocumentCount, "max_postings_scanned": spec.Corpus.DocumentCount * 8, "result_mode": "score_only", "timed_explain": false, "route_proof": "one untimed explained query per case", "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close"},
 		"environment": environment,
-		"build":       map[string]any{"elapsed_nanos": buildElapsed.Nanoseconds(), "docs_per_second": float64(len(docs)) / buildElapsed.Seconds(), "cpu": map[string]any{"status": "ok", "value": cpuNanos(usageAfter) - cpuNanos(usageBefore), "unit": "nanoseconds"}, "peak_rss": map[string]any{"status": "ok", "value": peakRSSBytes(usageAfter), "unit": "bytes"}, "checkpointed": true},
+		"build":       map[string]any{"elapsed_nanos": buildElapsed.Nanoseconds(), "docs_per_second": float64(len(docs)) / buildElapsed.Seconds(), "cpu": map[string]any{"status": "ok", "value": cpuNanos(usageAfter) - cpuNanos(usageBefore), "unit": "nanoseconds"}, "peak_rss": map[string]any{"status": "ok", "value": peakRSSBytes(usageFinal), "unit": "bytes"}, "checkpointed": true},
 		"storage":     map[string]int64{"durable_bytes": durable, "wal_bytes": wal, "transient_bytes": transient},
 		"reopen":      map[string]any{"performed": true, "verified": reopenVerified(cases), "result_digest": digestCaseResults(cases)},
 		"cases":       cases,
@@ -192,7 +199,7 @@ func main() {
 	must(os.WriteFile(*outPath, append(encoded, '\n'), 0o644))
 }
 
-func execute(col *collections.Collection, q query, spec manifest) (runResult, error) {
+func execute(col *collections.Collection, q query, spec manifest, explain bool) (runResult, error) {
 	if q.Semantic == "term_scalar" {
 		response, err := col.SearchHybrid(collections.HybridSearchOptions{
 			TopK:         spec.Execution.TopK,
@@ -211,7 +218,7 @@ func execute(col *collections.Collection, q query, spec manifest) (runResult, er
 		}
 		return runResult{IDs: ids, Route: route}, err
 	}
-	opts := collections.TextSearchOptions{IndexName: "lexical", Query: strings.Join(q.Terms, " "), TopK: spec.Execution.TopK, CandidateLimit: spec.Corpus.DocumentCount, MaxPostingsScanned: spec.Corpus.DocumentCount * 8, ResultMode: collections.TextSearchResultModeScoreOnly, Explain: true}
+	opts := collections.TextSearchOptions{IndexName: "lexical", Query: strings.Join(q.Terms, " "), TopK: spec.Execution.TopK, CandidateLimit: spec.Corpus.DocumentCount, MaxPostingsScanned: spec.Corpus.DocumentCount * 8, ResultMode: collections.TextSearchResultModeScoreOnly, Explain: explain}
 	switch q.Semantic {
 	case "and":
 		opts.Operator = collections.TextSearchOperatorAND
@@ -239,6 +246,18 @@ func execute(col *collections.Collection, q query, spec manifest) (runResult, er
 		"proof": map[string]any{"index_version": version, "active_roots": activeRoots, "documents_fetched": response.Stats.DocumentsFetched, "fail_closed": response.Stats.FailClosed, "postings_scanned": response.Stats.TextPostingsScanned},
 	}
 	return runResult{IDs: ids, Route: route}, err
+}
+
+func equalIDs(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func parseCorpus(raw []byte) []document {

@@ -79,6 +79,8 @@ public final class LuceneAdapter {
           doc.add(new StringField("id", source.id(), Field.Store.YES));
           doc.add(new SortedDocValuesField("id_sort", new BytesRef(source.id())));
           doc.add(new TextField("weighted_text", String.join(" ", source.title(), source.title(), source.title(), source.body()), Field.Store.NO));
+          doc.add(new TextField("title", source.title(), Field.Store.NO));
+          doc.add(new TextField("body", source.body(), Field.Store.NO));
           doc.add(new StringField("tenant", source.tenant(), Field.Store.NO));
           writer.addDocument(doc);
         }
@@ -133,9 +135,9 @@ public final class LuceneAdapter {
     payload.put("corpus", Map.of("document_count", documents.size(), "sha256", sha256(corpusRaw)));
     payload.put("command", List.of("mvn", "-q", "compile", "exec:java", "-Dexec.args=" + execArgs));
     payload.put("versions", Map.of("lucene", Version.LATEST.toString(), "java", System.getProperty("java.version"), "vm", System.getProperty("java.vm.name"), "platform", System.getProperty("os.name") + "/" + System.getProperty("os.arch")));
-    payload.put("config", Map.of("working_directory", System.getProperty("user.dir"), "analyzer", "StandardAnalyzer", "similarity", "BM25(k1=1.2,b=0.75)", "weighted_field_materialization", "title repeated 3x then body", "top_k", topK, "tie_break", "score,id", "compound_file", false, "stored_fields", List.of("id")));
+    payload.put("config", Map.ofEntries(Map.entry("working_directory", System.getProperty("user.dir")), Map.entry("analyzer", "StandardAnalyzer"), Map.entry("similarity", "BM25(k1=1.2,b=0.75)"), Map.entry("weighted_field_materialization", "title repeated 3x then body for non-phrase scoring only"), Map.entry("phrase_fields", List.of("title", "body")), Map.entry("phrase_field_weights", Map.of("title", 3, "body", 1)), Map.entry("top_k", topK), Map.entry("tie_break", "score,id"), Map.entry("compound_file", false), Map.entry("stored_fields", List.of("id")), Map.entry("build_timing_boundary", "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close")));
     payload.put("environment", environmentEvidence(manifest, corpusPath, indexPath, outPath));
-    payload.put("build", mapOfNullable("elapsed_nanos", buildElapsed, "docs_per_second", documents.size() * 1e9 / buildElapsed, "cpu", Map.of("status", "ok", "value", buildCpu, "unit", "nanoseconds"), "peak_rss", Map.of("status", "unsupported", "reason", "Java 17 standard APIs do not expose process lifetime peak RSS"), "checkpointed", true));
+    payload.put("build", mapOfNullable("elapsed_nanos", buildElapsed, "docs_per_second", documents.size() * 1e9 / buildElapsed, "cpu", Map.of("status", "ok", "value", buildCpu, "unit", "nanoseconds"), "peak_rss", Map.of("status", "unsupported", "reason", "Standard Java process APIs do not expose process-lifetime peak RSS"), "checkpointed", true));
     payload.put("storage", Map.of("durable_bytes", durableBytes, "wal_bytes", 0, "transient_bytes", 0));
     payload.put("reopen", Map.of("performed", true, "verified", reopenVerified, "result_digest", digestCaseResults(cases)));
     payload.put("cases", cases);
@@ -149,9 +151,9 @@ public final class LuceneAdapter {
     if (semantic.equals("term") || semantic.equals("term_scalar")) query = weightedTerm(terms.get(0));
     else if (semantic.equals("and")) query = new BooleanQuery.Builder().add(weightedTerm(terms.get(0)), BooleanClause.Occur.MUST).add(weightedTerm(terms.get(1)), BooleanClause.Occur.MUST).build();
     else if (semantic.equals("or")) query = new BooleanQuery.Builder().add(weightedTerm(terms.get(0)), BooleanClause.Occur.SHOULD).add(weightedTerm(terms.get(1)), BooleanClause.Occur.SHOULD).setMinimumNumberShouldMatch(1).build();
-    else if (semantic.equals("phrase")) query = new PhraseQuery(0, "weighted_text", terms.toArray(String[]::new));
+    else if (semantic.equals("phrase")) query = new BooleanQuery.Builder().add(new BoostQuery(new PhraseQuery(0, "title", terms.toArray(String[]::new)), 3.0f), BooleanClause.Occur.SHOULD).add(new PhraseQuery(0, "body", terms.toArray(String[]::new)), BooleanClause.Occur.SHOULD).setMinimumNumberShouldMatch(1).build();
     else throw new IllegalArgumentException("unsupported semantic " + semantic);
-    if (spec.has("filter")) query = new BooleanQuery.Builder().add(query, BooleanClause.Occur.MUST).add(new TermQuery(new Term(spec.at("/filter/field").asText(), spec.at("/filter/equals").asText())), BooleanClause.Occur.FILTER).build();
+    if (spec.hasNonNull("filter") && spec.path("filter").isObject() && !spec.path("filter").isEmpty()) query = new BooleanQuery.Builder().add(query, BooleanClause.Occur.MUST).add(new TermQuery(new Term(spec.at("/filter/field").asText(), spec.at("/filter/equals").asText())), BooleanClause.Occur.FILTER).build();
     TopFieldDocs hits = searcher.search(query, topK, new Sort(SortField.FIELD_SCORE, new SortField("id_sort", SortField.Type.STRING)));
     List<String> ids = new ArrayList<>(); for (ScoreDoc hit : hits.scoreDocs) ids.add(searcher.storedFields().document(hit.doc).get("id"));
     return new SearchRun(ids, query.getClass().getSimpleName());

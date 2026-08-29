@@ -16,6 +16,8 @@ RUN_100K="${RUN_100K:-false}"
 LEXICAL_REPETITIONS="${LEXICAL_REPETITIONS:-3}"
 LEXICAL_TIMEOUT_SECONDS="${LEXICAL_TIMEOUT_SECONDS:-900}"
 RUN_LEXICAL_COMPARISON="${RUN_LEXICAL_COMPARISON:-true}"
+LEXICAL_ALLOW_DIRTY="${LEXICAL_ALLOW_DIRTY:-false}"
+LEXICAL_RAN=false
 TEXT_100K_BENCHTIME="${TEXT_100K_BENCHTIME:-1x}"
 TEXT_100K_COUNT="${TEXT_100K_COUNT:-1}"
 
@@ -36,11 +38,17 @@ mkdir -p "$RUN_DIR"
 
 if [[ "$RUN_LEXICAL_COMPARISON" == "true" || "$RUN_LEXICAL_COMPARISON" == "1" || "$RUN_LEXICAL_COMPARISON" == "yes" ]]; then
   echo "==> pinned same-corpus TreeDB/Lucene/Bleve/SQLite lexical comparison"
-  "$PYTHON" benchmarks/text_hybrid_scoreboard/run_lexical_comparison.py \
-    --manifest benchmarks/text_hybrid_scoreboard/lexical_manifest.json \
-    --out-dir "$RUN_DIR/lexical" \
-    --repetitions "$LEXICAL_REPETITIONS" \
+  LEXICAL_ARGS=(
+    --manifest benchmarks/text_hybrid_scoreboard/lexical_manifest.json
+    --out-dir "$RUN_DIR/lexical"
+    --repetitions "$LEXICAL_REPETITIONS"
     --timeout-seconds "$LEXICAL_TIMEOUT_SECONDS"
+  )
+  if [[ "$LEXICAL_ALLOW_DIRTY" == "true" || "$LEXICAL_ALLOW_DIRTY" == "1" || "$LEXICAL_ALLOW_DIRTY" == "yes" ]]; then
+    LEXICAL_ARGS+=(--allow-dirty)
+  fi
+  "$PYTHON" benchmarks/text_hybrid_scoreboard/run_lexical_comparison.py "${LEXICAL_ARGS[@]}"
+  LEXICAL_RAN=true
 fi
 
 run_go_bench() {
@@ -136,9 +144,14 @@ else
 fi
 
 SCOREBOARD_ARGS+=(
-  -caveat "Pinned lexical engine evidence is reported separately in $RUN_DIR/lexical/lexical_comparison.json and .md; unsupported rows never enter that report's headline matrix."
+  -unavailable "Tantivy lexical=not measured by this harness; no Tantivy adapter or retained evidence is included"
   -unavailable "Qdrant/Weaviate/Milvus/OpenSearch hybrid=not run by the default smoke harness; use service-specific durable deployments or documented local proxies before citing industry hybrid parity"
 )
+if [[ "$LEXICAL_RAN" == "true" ]]; then
+  SCOREBOARD_ARGS+=(
+    -caveat "Pinned lexical engine evidence is reported separately in $RUN_DIR/lexical/lexical_comparison.json and .md; unsupported rows never enter that report's headline matrix."
+  )
+fi
 
 "$GO_BIN" run ./cmd/treedb_text_hybrid_scoreboard "${SCOREBOARD_ARGS[@]}"
 
@@ -150,14 +163,21 @@ Primary artifacts:
 - scoreboard: \`$RUN_DIR/scoreboard.md\`
 - scoreboard JSON: \`$RUN_DIR/scoreboard.json\`
 - context: \`$RUN_DIR/context.txt\`
-- lexical comparison: \`$RUN_DIR/lexical/lexical_comparison.md\`
-- lexical comparison JSON: \`$RUN_DIR/lexical/lexical_comparison.json\`
 - TreeDB $DOCS_10K-doc index/search raw: \`$INDEX_10K\`
 - TreeDB $DOCS_10K-doc hybrid executor raw: \`$HYBRID_10K\`
 - TreeDB $DOCS_10K-doc text blockmax raw: \`$TEXT_BLOCKMAX_10K\`
+EOF_README
+if [[ "$LEXICAL_RAN" == "true" ]]; then
+  cat >> "$RUN_DIR/README.md" <<EOF_LEXICAL
+- lexical comparison: \`$RUN_DIR/lexical/lexical_comparison.md\`
+- lexical comparison JSON: \`$RUN_DIR/lexical/lexical_comparison.json\`
+EOF_LEXICAL
+fi
+cat >> "$RUN_DIR/README.md" <<EOF_README
 
 Set \`RUN_100K=true\` for the heavier 100k text blockmax rows.
 Set \`RUN_LEXICAL_COMPARISON=false\` only when reproducing the legacy hybrid-only matrix.
+Set \`LEXICAL_ALLOW_DIRTY=true\` only for development smoke; dirty lexical reports are ineligible for retained evidence.
 EOF_README
 
 echo "scoreboard: $RUN_DIR/scoreboard.md"

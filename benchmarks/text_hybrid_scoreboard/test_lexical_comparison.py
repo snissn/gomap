@@ -81,7 +81,7 @@ class LexicalComparisonTest(unittest.TestCase):
             "engine": {"id": engine_id, "family": "test", "name": engine_id, "version": "candidate-commit" if engine_id == "treedb_text_v2" else "pinned"},
             "repetition": repetition, "manifest_sha256": manifest_sha256(self.manifest),
             "corpus": {"document_count": 10_000, "sha256": self.manifest["corpus"]["sha256"]},
-            "command": ["adapter"], "versions": {"adapter": "pinned"}, "config": ({"top_k": 10, "weights": {"title": 3, "body": 1}, "bm25f": {"k1": 1.2, "b": 0.75}, "stable_setting": "base"} if engine_id == "treedb_text_v2" else {"top_k": 10, "tie_break": "score,id", "weighted_field_materialization": "title repeated 3x then body", "stable_setting": "base"}),
+            "command": ["adapter"], "versions": {"adapter": "pinned"}, "config": ({"top_k": 10, "weights": {"title": 3, "body": 1}, "bm25f": {"k1": 1.2, "b": 0.75}, "stable_setting": "base", "build_timing_boundary": self.manifest["execution"]["build_timing_boundary"]} if engine_id == "treedb_text_v2" else {"top_k": 10, "tie_break": "score,id", "weighted_field_materialization": "title repeated 3x then body for non-phrase scoring only", "phrase_fields": ["title", "body"], "phrase_field_weights": {"title": 3, "body": 1}, "stable_setting": "base", "build_timing_boundary": self.manifest["execution"]["build_timing_boundary"]}),
             "environment": {
                 "contract": copy.deepcopy(self.manifest["environment"]),
                 "filesystem": {"runner_device_id": "1", "corpus_store_id": "1", "index_store_id": "1", "result_store_id": "1", "same_filesystem": True},
@@ -90,7 +90,7 @@ class LexicalComparisonTest(unittest.TestCase):
             },
             "build": {"elapsed_nanos": 1, "docs_per_second": 1.0, "cpu": {"status": "ok", "value": 1, "unit": "nanoseconds"}, "peak_rss": {"status": "unsupported", "reason": "test runtime has no RSS API"}, "checkpointed": True},
             "storage": {"durable_bytes": 1, "wal_bytes": 0, "transient_bytes": 0},
-            "reopen": {"performed": True, "verified": True, "result_digest": "proof"},
+            "reopen": {"performed": True, "verified": True, "result_digest": result_digest(case["reopen_result_digest"] for case in cases)} | ({"query_connection_reopened": True, "durability_connection_reopened": True} if engine_id == "sqlite_fts5" else {}),
             "cases": cases,
         }
 
@@ -126,7 +126,7 @@ class LexicalComparisonTest(unittest.TestCase):
         self.assertEqual(self.expected["rare"], [f"doc-{i:06d}" for i in range(10, 20)])
         self.assertEqual(self.expected["and"], [f"doc-{i:06d}" for i in range(20, 30)])
         self.assertEqual(self.expected["or"], [f"doc-{i:06d}" for i in range(70, 80)])
-        self.assertEqual(self.expected["phrase"], [f"doc-{i:06d}" for i in range(80, 90)])
+        self.assertEqual(self.expected["phrase"], [f"doc-{i:06d}" for i in range(90, 100)])
         self.assertEqual(self.expected["scalar_filtered"], [f"doc-{i:06d}" for i in range(100, 110)])
 
     def test_common_ranking_depends_on_weight_tf_and_length_normalization(self) -> None:
@@ -154,6 +154,7 @@ class LexicalComparisonTest(unittest.TestCase):
             "invalid scalar TreeDB proof": lambda a: a["cases"][5]["route"]["proof"].update(scalar_filter_strategy="fallback"),
             "reopen": lambda a: a["reopen"].update(verified=False),
             "timeout": lambda a: a["cases"][0].update(timed_out=True),
+            "malformed reopen digest": lambda a: a["reopen"].update(result_digest="proof"),
             "untyped resource": lambda a: a["build"].update(peak_rss=None),
             "filesystem mismatch": lambda a: a["environment"]["filesystem"].update(same_filesystem=False),
             "manifest environment mismatch": lambda a: a["environment"]["contract"].update(query_concurrency=2),
@@ -170,7 +171,7 @@ class LexicalComparisonTest(unittest.TestCase):
         artifact["cases"][4] = {"id": "phrase", "status": "unsupported", "equivalent": False, "unsupported_reason": "positions disabled"}
         validate_result(artifact, self.manifest, self.expected, self.corpus_ids)
         artifacts = []
-        for engine in ("treedb_text_v2", "bleve", "sqlite_fts5"):
+        for engine in ("treedb_text_v2", "lucene", "bleve", "sqlite_fts5"):
             for repetition in range(1, 4):
                 candidate = self.artifact(engine, repetition)
                 if engine == "bleve":
@@ -179,6 +180,8 @@ class LexicalComparisonTest(unittest.TestCase):
         report = consolidate(artifacts, self.manifest, self.documents, 3, self.context())
         self.assertFalse(any(row["engine"]["id"] == "bleve" and row["case"] == "phrase" for row in report["headline_rows"]))
         self.assertTrue(any(item["engine"]["id"] == "bleve" and item.get("case") == "phrase" and item["status"] == "unsupported" for item in report["equivalence_ledger"]))
+        self.assertIn("bleve", report["engines_partial"])
+        self.assertNotIn("bleve", report["engines_completed"])
 
     def test_consolidation_requires_treedb_and_two_external_engines(self) -> None:
         artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "sqlite_fts5") for repetition in range(1, 4)]
