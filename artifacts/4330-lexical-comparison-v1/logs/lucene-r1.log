@@ -1,12 +1,12 @@
 command=mvn -q compile exec:java '-Dexec.args=--manifest $REPO/benchmarks/text_hybrid_scoreboard/lexical_manifest.json --corpus $RUN/corpus.tsv --out $RUN/raw/lucene-r1.json --repetition 1 --index $RUN/indexes/lucene-r1'
 cwd=$RUN/dependency_work/lucene_adapter
-started_unix=1788024636.526687
+started_unix=1788025515.0154428
 returncode=0
 
 [stdout]
 
 [stderr]
-Aug 29, 2026 7:30:40 AM org.apache.lucene.store.MemorySegmentIndexInputProvider <init>
+Aug 29, 2026 7:45:18 AM org.apache.lucene.store.MemorySegmentIndexInputProvider <init>
 INFO: Using MemorySegmentIndexInput and native madvise support with Java 21 or later; to disable start with -Dorg.apache.lucene.store.MMapDirectory.enableMemorySegments=false
-Aug 29, 2026 7:30:40 AM org.apache.lucene.internal.vectorization.VectorizationProvider lookup
+Aug 29, 2026 7:45:18 AM org.apache.lucene.internal.vectorization.VectorizationProvider lookup
 WARNING: You are running with Java 23 or later. To make full use of the Vector API, please update Apache Lucene.
