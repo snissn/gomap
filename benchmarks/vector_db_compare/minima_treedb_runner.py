@@ -223,7 +223,13 @@ class ServiceController:
                     exited = False
                     while not exited:
                         sample = common.server_process_resource_usage(pid, "TreeDB")
-                        if sample["captured"]:
+                        if sample["captured"] and (
+                            not latest_process["captured"]
+                            or (
+                                sample["cpu_seconds"] >= latest_process["cpu_seconds"]
+                                and (sample["rss_bytes"] > 0 or latest_process["rss_bytes"] == 0)
+                            )
+                        ):
                             latest_process = sample
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
