@@ -17,6 +17,8 @@ import stat
 import time
 from pathlib import Path
 from typing import Any
+sys.dont_write_bytecode = True
+
 
 from lexical_common import consolidate, load_manifest, manifest_sha256, render_markdown, unavailable_result, write_frozen_corpus
 
