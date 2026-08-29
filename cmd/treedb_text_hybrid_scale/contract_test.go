@@ -25,8 +25,11 @@ func TestQualificationValidatorRejectsEveryNorthStarGap4329(t *testing.T) {
 	}{
 		{"missing row", "query row cardinality", func(r *report) { r.Queries = r.Queries[:len(r.Queries)-1] }},
 		{"wrong scale", "exact 10M cardinality", func(r *report) { r.Config.Rows = 1_000_000 }},
+		{"wrong candidate limit", "hybrid candidate limit", func(r *report) { r.Config.CandidateLimit-- }},
 		{"wrong postings ceiling", "hybrid postings ceiling", func(r *report) { r.Config.HybridMaxPostingsScanned-- }},
 		{"unbound row postings ceiling", "postings budget", func(r *report) { queryByName4329(r, queryRowHybridText).PostingsBudget-- }},
+		{"unbound row candidate budget", "candidate budget provenance", func(r *report) { queryByName4329(r, queryRowHybridText).CandidateBudget-- }},
+		{"unbound stats candidate budget", "candidate budget provenance", func(r *report) { queryByName4329(r, queryRowHybridText).HybridStats.TextCandidatesRequested-- }},
 		{"dirty provenance", "clean commit/tree/harness/binary provenance", func(r *report) { r.Context.VCSClean = false }},
 		{"config digest", "frozen digest contract", func(r *report) { r.Contract.QuerySetSHA256 = "wrong" }},
 		{"failed row", "incomplete or failed", func(r *report) { r.Queries[0].Status = "failed" }},
@@ -141,8 +144,11 @@ func validQualificationReport4329() report {
 		} else {
 			row.Modality = "hybrid"
 			row.PostingsBudget = cfg.HybridMaxPostingsScanned
+			if name == queryRowHybridTextScalarBroad {
+				row.CandidateBudget = cfg.Rows
+			}
 			stats := collections.HybridSearchStats{
-				TextCandidatesRequested: 64, TextCandidateBudgetEffective: 10,
+				TextCandidatesRequested: uint64(row.CandidateBudget), TextCandidateBudgetEffective: 10,
 				TextCandidatesReturned: 10, CandidatesFused: 10,
 				CandidateBudgetPolicy:     collections.HybridCandidateBudgetPolicyFixed,
 				CandidateBudgetIterations: 1,
@@ -151,7 +157,7 @@ func validQualificationReport4329() report {
 				stats.CandidateBudgetPolicy = collections.HybridCandidateBudgetPolicyAdaptiveRRF
 			}
 			if name == queryRowHybridTextVector || name == queryRowHybridTextVecScalar || name == queryRowHybridTextVecCollapse2 || name == queryRowHybridTextVecScalarFetch {
-				stats.VectorCandidatesRequested, stats.VectorCandidateBudgetEffective = 64, 10
+				stats.VectorCandidatesRequested, stats.VectorCandidateBudgetEffective = uint64(cfg.CandidateLimit), 10
 			}
 			if name == queryRowHybridTextScalar || name == queryRowHybridTextScalarBroad || name == queryRowHybridTextVecScalar || name == queryRowHybridTextVecScalarFetch {
 				stats.ScalarFilterLookups, stats.ScalarFilterFinalIDs = 1, 10
@@ -270,7 +276,7 @@ func writeRetainedFixture4329(t *testing.T) string {
 			payload = []byte(fmt.Sprintf("commit=%s\ntree_oid=%s\ntreedb_subtree_oid=%s\nharness_subtree_oid=%s\n", rep.Context.Commit, rep.Context.TreeOID, rep.Context.TreeDBSubtreeOID, rep.Context.HarnessSubtreeOID))
 		}
 		if name == "command.txt" {
-			payload = []byte(fmt.Sprintf("treedb_text_hybrid_scale -rows %d -backfill-rows %d -text-only-rows %d -source-chunk-rows %d -queries %d -hybrid-max-postings-scanned %d -run-text-only=true -run-source-chunk=true -phases all -keep-db=false\n", rep.Config.Rows, rep.Config.BackfillRows, rep.Config.TextOnlyRows, rep.Config.SourceChunkRows, rep.Config.Queries, rep.Config.HybridMaxPostingsScanned))
+			payload = []byte(fmt.Sprintf("treedb_text_hybrid_scale -rows %d -backfill-rows %d -text-only-rows %d -source-chunk-rows %d -queries %d -candidate-limit %d -hybrid-max-postings-scanned %d -run-text-only=true -run-source-chunk=true -phases all -keep-db=false\n", rep.Config.Rows, rep.Config.BackfillRows, rep.Config.TextOnlyRows, rep.Config.SourceChunkRows, rep.Config.Queries, rep.Config.CandidateLimit, rep.Config.HybridMaxPostingsScanned))
 		}
 		if name == "resources.txt" {
 			payload = []byte("1 maximum resident set size\n")

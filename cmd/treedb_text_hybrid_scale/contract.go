@@ -23,6 +23,7 @@ const (
 	retainedManifestName               = "artifact_manifest.json"
 	frozenConfigName                   = "frozen_config.json"
 	requiredScaleRows                  = 10_000_000
+	requiredHybridCandidateLimit       = 655_360
 	requiredSourceChunkBatchSize       = 32_768
 	requiredMaintenanceUpdateBatchSize = 10_000
 	requiredHybridMaxPostingsScanned   = requiredScaleRows * 4
@@ -327,6 +328,9 @@ func validateQualificationReport(rep report) error {
 	if cfg.HybridMaxPostingsScanned != requiredHybridMaxPostingsScanned {
 		return fmt.Errorf("hybrid postings ceiling=%d want prospectively frozen %d", cfg.HybridMaxPostingsScanned, requiredHybridMaxPostingsScanned)
 	}
+	if cfg.CandidateLimit != requiredHybridCandidateLimit {
+		return fmt.Errorf("hybrid candidate limit=%d want frozen %d", cfg.CandidateLimit, requiredHybridCandidateLimit)
+	}
 	if cfg.PhaseSelector != "all" || !cfg.IncludeVector || !cfg.RunBackfill || !cfg.RunTextOnly || !cfg.RunSourceChunk || !cfg.RunReopen || !cfg.RunConcurrent || !cfg.RunRewrite {
 		return errors.New("complete all-phase text/hybrid/lifecycle matrix is required")
 	}
@@ -438,6 +442,13 @@ func validateQueryMatrix(rows []queryReport, cfg reportConfig) error {
 			stats := row.HybridStats
 			if stats.FullDocumentScanFallbacks != 0 || stats.FailClosed != 0 || stats.TextCandidatesRequested == 0 || stats.TextCandidateBudgetEffective == 0 || stats.CandidatesFused == 0 {
 				return fmt.Errorf("query row %q has incomplete candidate/path counters", name)
+			}
+			wantCandidateBudget := cfg.CandidateLimit
+			if name == queryRowHybridTextScalarBroad {
+				wantCandidateBudget = cfg.Rows
+			}
+			if row.CandidateBudget != wantCandidateBudget || stats.TextCandidatesRequested != uint64(wantCandidateBudget) {
+				return fmt.Errorf("query row %q candidate budget provenance row=%d stats=%d want=%d", name, row.CandidateBudget, stats.TextCandidatesRequested, wantCandidateBudget)
 			}
 			if fetch {
 				if stats.DocumentsFetched != uint64(row.Results) {
@@ -620,6 +631,7 @@ func validateRawEvidenceBindings(dir string, manifest retainedManifest, cfg repo
 		fmt.Sprintf("-rows %d", cfg.Rows),
 		fmt.Sprintf("-backfill-rows %d", cfg.BackfillRows),
 		fmt.Sprintf("-text-only-rows %d", cfg.TextOnlyRows),
+		fmt.Sprintf("-candidate-limit %d", cfg.CandidateLimit),
 		fmt.Sprintf("-source-chunk-rows %d", cfg.SourceChunkRows),
 		fmt.Sprintf("-queries %d", cfg.Queries),
 		fmt.Sprintf("-hybrid-max-postings-scanned %d", cfg.HybridMaxPostingsScanned),

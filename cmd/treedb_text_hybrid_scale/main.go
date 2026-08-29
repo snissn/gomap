@@ -1649,7 +1649,7 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	}
 	row := queryReport{
 		Name: name, Status: "passed", Modality: "hybrid", QueryShape: shape, Boundary: boundary,
-		Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit,
+		Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: int(stats.TextCandidatesRequested),
 		PostingsBudget: cfg.hybridMaxPostingsScanned,
 		CollapseCap:    opts.MaxChunksPerParent, Samples: len(durations), Results: len(last.Results),
 		ResultsSHA256: expectedDigest, CorrectnessOK: true, IsolationOK: hybridIsolationOK(last.Results, opts.ScalarFilter),
@@ -1832,7 +1832,11 @@ func failedHybridQueryRow(cfg config, name, shape string, response collections.H
 	stats := response.Stats
 	guard := hybridFailureGuard(name, response.Stats, err)
 	lat := summarizeLatency(durations)
-	return queryReport{Name: name, Status: "failed", Failure: err.Error(), Modality: "hybrid", QueryShape: shape, Boundary: "warm hybrid search", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, PostingsBudget: cfg.hybridMaxPostingsScanned, Samples: len(durations), Results: len(response.Results), ResultsSHA256: hashHybridResults(response.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure, Resource: captureResource()}
+	candidateBudget := cfg.candidateLimit
+	if name == queryRowHybridTextScalarBroad {
+		candidateBudget = cfg.rows
+	}
+	return queryReport{Name: name, Status: "failed", Failure: err.Error(), Modality: "hybrid", QueryShape: shape, Boundary: "warm hybrid search", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: candidateBudget, PostingsBudget: cfg.hybridMaxPostingsScanned, Samples: len(durations), Results: len(response.Results), ResultsSHA256: hashHybridResults(response.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure, Resource: captureResource()}
 }
 
 func hybridFailureGuard(name string, stats collections.HybridSearchStats, err error) guardrailResult {
