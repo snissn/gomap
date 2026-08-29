@@ -201,8 +201,10 @@ class LexicalComparisonTest(unittest.TestCase):
                 setup_ok, setup_command, _ = lexical_runner.setup_engine("bleve", root, 1, selected)
             self.assertTrue(setup_ok)
             self.assertEqual(setup_command[0], selected)
-            command, _, _ = lexical_runner.adapter_command("treedb_text_v2", 1, root, HERE / "lexical_manifest.json", root / "corpus.tsv", "source", selected)
-        self.assertEqual(command[0], selected)
+            treedb_command, _, _ = lexical_runner.adapter_command("treedb_text_v2", 1, root, HERE / "lexical_manifest.json", root / "corpus.tsv", "source", selected)
+            bleve_command, _, _ = lexical_runner.adapter_command("bleve", 1, root, HERE / "lexical_manifest.json", root / "corpus.tsv", "source", selected)
+        self.assertEqual(treedb_command[0], selected)
+        self.assertEqual(bleve_command[0], selected)
 
     def test_reference_interprets_every_manifest_shape(self) -> None:
         self.assertEqual(self.expected["common"], [f"doc-{i:06d}" for i in (0, 1, 2, 3, 4, 5, 6, 7, 9, 8)])
