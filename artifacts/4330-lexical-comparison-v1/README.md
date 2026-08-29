@@ -4,13 +4,13 @@ Validator-accepted retained evidence for TreeDB text-v2, Apache Lucene 9.12.1, B
 
 ## Identity
 
-- source commit: `0bc76c31e42cac294f2686550104f73d07dd25a9`
-- source tree: `becbb79eb17a537c781d7150131908b05c7988b4`
+- source commit: `2df3cfc4b8168d05b9f75c02580f4f049fe98d4d`
+- source tree: `e6d0d775c45a4e8aee0f005e554b125d04b4cc32`
 - TreeDB subtree: `670740f244cf42afffbe517c3a514da6895decfd`
-- comparator harness subtree: `0079e1e10afed4590d941b306994e6b2ab75a32f`
+- comparator harness subtree: `ff7b19c87b5e696ff7bfe6ffc97224aba8f8ae48`
 - tracked-diff SHA-256 before and after run: `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
 - untracked sources, including ignored inputs, before and after run: none
-- manifest SHA-256: `4552fed21bd0afc563c3f3492773c08227b5efbc3adb4b50d55e5fb3aff990a9`
+- manifest SHA-256: `a268cb2e59f4a63d8bcc7a0047fe85fe2195bef62a536f9b54bcae6f4b568d8f`
 - corpus SHA-256: `fe5b9d106a099d5c29d3327a8424b7f6d57f248b8802225b2d7bb3719062a227`
 - source dirty: false
 - post-run source identity reverified: true
@@ -18,7 +18,7 @@ Validator-accepted retained evidence for TreeDB text-v2, Apache Lucene 9.12.1, B
 
 ## Contract and result
 
-TreeDB, Lucene, and SQLite completed three serial build/checkpoint/query-reopen/durability-reopen repetitions and 20 retained samples for common, rare, AND, OR, exact phrase, and scalar-filtered cases. Bleve completed the five exactly equivalent lexical cases; its scalar-filtered row is typed unsupported because Bleve v2.4.4 cannot express the tenant predicate as a non-scoring filter. The validator accepted exact ordered result agreement, corpus/document counts, scoring-sensitive title-weight/term-frequency/length-normalization probes, adversarial phrase-position probes, concrete engine-specific route proof, reopen parity, exact runner-bound filesystem/memory/concurrency conditions, and no fallback/timeout. The runner reverified HEAD, tree/subtree OIDs, tracked diff, and ordinary plus ignored untracked source identities after every adapter completed.
+TreeDB and Lucene completed six pinned-scoring, exact headline cases across three serial build/checkpoint/query-reopen/durability-reopen repetitions with 20 retained samples per case. Bleve retained five native-TF-IDF rows as directional context and typed its scalar-filtered row unsupported; SQLite retained all six native-FTS5-scoring rows as directional context. The validator accepted exact-row ordered reference agreement, directional predicate/filter/phrase eligibility and complete top-K cardinality, corpus/document counts, scoring-sensitive probes, concrete engine-specific route proof, reopen parity, exact runner-bound filesystem/memory/concurrency conditions, and no fallback/timeout. The runner reverified HEAD, tree/subtree OIDs, tracked diff, and ordinary plus ignored untracked source identities after every adapter completed.
 
 Every durable-footprint row includes the complete logical `id`, `title`,
 `body`, and `tenant` source fields; generated weighted fields remain

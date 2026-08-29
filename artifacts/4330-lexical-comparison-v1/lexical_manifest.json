@@ -15,7 +15,7 @@
       {"name": "body", "weight": 1.0}
     ],
     "bm25f": {"k1": 1.2, "b": 0.75, "idf": "ln(1 + (N - df + 0.5) / (df + 0.5))", "field_length": "tf / (1 - b + b * length / average_field_length)", "combination": "sum(field_weight * normalized_field_tf), then one BM25 saturation per term"},
-    "external_weighted_field": "non-phrase scoring uses title tokens repeated exactly 3 times followed by body tokens; frozen corpus keeps title/body lengths equal per document so this is algebraically identical to pinned BM25F; phrase matching uses separate title/body position streams with weights 3:1 and never crosses fields or title copies"
+    "external_weighted_field": "title tokens repeated exactly 3 times followed by body tokens; frozen equal field lengths make Lucene weighted-term scoring algebraically identical to pinned BM25F; Lucene phrase eligibility is a non-scoring title/body phrase OR filter over those weighted term scores; Bleve and SQLite retain their separately disclosed native directional scoring"
   },
   "environment": {
     "filesystem_identity_policy": "runner output, corpus, index, and result artifact must have the same decimal POSIX st_dev identity",

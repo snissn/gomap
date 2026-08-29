@@ -1,6 +1,6 @@
 command=mvn -q -DskipTests dependency:go-offline
 cwd=$RUN/dependency_work/lucene_adapter
-started_unix=1788023271.642051
+started_unix=1788024634.82817
 returncode=0
 
 [stdout]
