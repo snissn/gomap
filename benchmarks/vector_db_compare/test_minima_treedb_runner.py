@@ -115,6 +115,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload._diagnostic_lock = runner.threading.Lock()
         workload._expected_rows = 0
         workload._expected_insert_batches = {}
+        workload._batch_correlation_max_records = 10_000
         workload.controller = SimpleNamespace(
             stats_snapshot=lambda: {"status": "disabled"},
             capture_profiles=lambda *_args, **_kwargs: {"status": "captured"},
@@ -415,7 +416,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertEqual(starts, ["upsert", "delete"])
         self.assertEqual(workload.batch_correlations, [])
         workload.controller.stats_snapshot.assert_not_called()
-    def test_diagnostic_upsert_correlates_batch_and_snapshots(self) -> None:
+    def test_diagnostic_upsert_compacts_completed_batch_stats(self) -> None:
         workload = self.workload(self.response(), diagnostics_dir=Path("diagnostics"))
         snapshots = iter(({"status": "captured", "snapshot": {"stage": "before"}},
                           {"status": "captured", "snapshot": {"stage": "after"}}))
@@ -433,10 +434,92 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
              correlation["batch_start"], correlation["rows"], correlation["accumulated_expected_rows"]),
             ("initial_batch_insert", "mixed", 1, 3, 3, 6),
         )
-        self.assertEqual(correlation["before_stats"]["snapshot"]["stage"], "before")
-        self.assertEqual(correlation["after_stats"]["snapshot"]["stage"], "after")
+        self.assertNotIn("before_stats", correlation)
+        self.assertNotIn("after_stats", correlation)
+        self.assertEqual(correlation["stats_retention"], "compact_completed")
         self.assertEqual(correlation["outcome"], "completed")
         self.assertEqual(correlation["profile_capture"], {"status": "not_triggered"})
+
+    def test_high_cardinality_completed_correlations_are_width_independent(self) -> None:
+        wide_stats = {
+            "status": "captured",
+            "snapshot": {f"metric_{index}": index for index in range(2_000)},
+        }
+        correlations = []
+        for sequence in range(10_000):
+            correlation = {
+                "sequence": sequence,
+                "operation": "initial_batch_insert",
+                "scenario": "large",
+                "batch_ordinal": sequence,
+                "batch_start": sequence * 256,
+                "rows": 256,
+                "accumulated_expected_rows_before": sequence * 256,
+                "accumulated_expected_rows": (sequence + 1) * 256,
+                "accumulated_rows_source": "frozen_manifest",
+                "before_stats": wide_stats,
+                "after_stats": wide_stats,
+                "outcome": "completed",
+                "profile_capture": {"status": "not_triggered"},
+                "started_monotonic_ns": sequence * 10,
+                "ended_monotonic_ns": sequence * 10 + 5,
+                "duration_nanos": 5,
+            }
+            runner.TreeDBMinimaRunner._compact_completed_batch_correlation(correlation)
+            correlations.append(correlation)
+        workload = object.__new__(runner.TreeDBMinimaRunner)
+        workload.batch_correlations = correlations
+        workload._batch_correlation_max_records = 10_000
+        contract = workload._batch_correlation_contract()
+        artifact = {"backend_raw_evidence": {"treedb": {
+            "upsert_batch_correlations": correlations,
+            "upsert_batch_correlation_contract": contract,
+        }}}
+        encoded = json.dumps(artifact, separators=(",", ":")).encode()
+        self.assertTrue(all(
+            "before_stats" not in correlation and "after_stats" not in correlation
+            for correlation in correlations
+        ))
+        self.assertEqual(contract["record_count"], 10_000)
+        self.assertEqual(contract["compact_completed_records"], 10_000)
+        self.assertEqual(contract["full_diagnostic_records"], 0)
+        self.assertLessEqual(
+            max(len(json.dumps(correlation, separators=(",", ":")).encode()) for correlation in correlations),
+            runner.COMPACT_BATCH_CORRELATION_MAX_BYTES,
+        )
+        self.assertLess(
+            len(encoded),
+            runner.COMPACT_BATCH_CORRELATION_MAX_BYTES * len(correlations),
+        )
+
+    def test_slow_completed_upsert_retains_full_stats_and_profile_manifest(self) -> None:
+        workload = self.workload(self.response(), diagnostics_dir=Path("diagnostics"))
+        workload.diagnostic_slow_seconds = 0.001
+        workload._expected_insert_batches[("initial_batch_insert", "mixed", 0)] = 1
+        workload.controller.stats_snapshot = mock.Mock(side_effect=[
+            {"status": "captured", "snapshot": {"stage": "before"}},
+            {"status": "captured", "snapshot": {"stage": "after"}},
+        ])
+        workload.controller.capture_profiles = mock.Mock(return_value={
+            "status": "captured", "manifest": {"status": "captured", "path": "profiles.json"},
+        })
+        upsert_documents = workload.client.upsert_documents
+
+        def slow_upsert(*args: object, **kwargs: object) -> object:
+            runner.time.sleep(0.02)
+            return upsert_documents(*args, **kwargs)
+
+        workload.client.upsert_documents = slow_upsert
+        document = {"id": "minima/mixed/000000", "content": "c", "vector": [1.0, 0.0],
+                    "user_id": "u", "fpath": "/a"}
+        workload.upsert("initial_batch_insert", "mixed", [document])
+        correlation = workload.batch_correlations[0]
+        self.assertEqual(correlation["stats_retention"], "full_diagnostic")
+        self.assertEqual(correlation["before_stats"]["snapshot"]["stage"], "before")
+        self.assertEqual(correlation["after_stats"]["snapshot"]["stage"], "after")
+        self.assertEqual(correlation["capture_reason"], "slow")
+        self.assertEqual(correlation["profile_capture"]["manifest"]["path"], "profiles.json")
+
     def test_completed_upsert_stops_slow_watcher_before_after_stats(self) -> None:
         workload = self.workload(self.response(), diagnostics_dir=Path("diagnostics"))
         workload.diagnostic_slow_seconds = 0.01
@@ -525,6 +608,8 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             self.assertEqual(correlation["outcome"], "timeout")
             self.assertIn("TimeoutError", correlation["error"])
             self.assertEqual(correlation["after_stats"]["status"], "failed")
+            self.assertEqual(correlation["stats_retention"], "full_diagnostic")
+            self.assertEqual(correlation["before_stats"]["snapshot"]["phase"], "before")
             self.assertEqual(correlation["capture_reason"], "timeout")
             self.assertEqual(correlation["profile_capture"]["captures"]["cpu"]["status"], "failed")
 
@@ -1145,6 +1230,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             "vector_strategy": "native_runtime",
         }
         workload.batch_correlations = []
+        workload._batch_correlation_max_records = 10
         workload.diagnostic_resume = None
         workload.diagnostics_dir = None
         workload.diagnostic_slow_seconds = 30
@@ -1188,6 +1274,16 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         raw = artifact["backend_raw_evidence"]["treedb"]
         self.assertEqual(raw["resource_measurement"], resource)
         self.assertEqual(raw["resource_availability"]["measurement"], common.RESOURCE_SEMANTICS)
+        self.assertEqual(raw["upsert_batch_correlations"], [])
+        self.assertEqual(raw["upsert_batch_correlation_contract"], {
+            "schema": runner.BATCH_CORRELATION_SCHEMA,
+            "record_count": 0,
+            "maximum_record_count": 10,
+            "compact_completed_records": 0,
+            "full_diagnostic_records": 0,
+            "compact_record_max_bytes": runner.COMPACT_BATCH_CORRELATION_MAX_BYTES,
+            "full_stats_retention": ["failed", "timeout", "slow", "profile_captured"],
+        })
         self.assertNotIn("initial_upload_hnsw", configuration)
         self.assertNotIn("collection_configuration_transition", raw)
         self.assertNotIn("readiness", raw)

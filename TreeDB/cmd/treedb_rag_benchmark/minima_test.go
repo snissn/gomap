@@ -471,6 +471,16 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.PhaseAttribution = nil
 			a.RawEvidence["treedb"] = raw
 		}},
+		{"missing TreeDB batch correlation contract", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.UpsertBatchCorrelationContract = nil
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"inflated TreeDB batch correlation cardinality bound", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.UpsertBatchCorrelationContract.MaximumRecordCount++
+			a.RawEvidence["treedb"] = raw
+		}},
 		{"missing TreeDB phase boundary", func(a *minimaArtifact) {
 			raw := a.RawEvidence["treedb"]
 			raw.PhaseAttribution.Phases = raw.PhaseAttribution.Phases[1:]
@@ -784,6 +794,12 @@ func validMinimaArtifact() minimaArtifact {
 			evidence := rawEvidence[backend.Name]
 			phaseAttribution := minimaTestPhaseAttribution()
 			evidence.PhaseAttribution = &phaseAttribution
+			evidence.UpsertBatchCorrelationContract = &minimaRawBatchCorrelationContract{
+				Schema:                minimaBatchCorrelationSchema,
+				MaximumRecordCount:    minimaMaximumBatchCorrelationRecords(manifest),
+				CompactRecordMaxBytes: minimaCompactBatchCorrelationMaxBytes,
+				FullStatsRetention:    []string{"failed", "timeout", "slow", "profile_captured"},
+			}
 			evidence.ServiceLog = minimaRawServiceLog{
 				Path: "/tmp/treedb-service.log", Tail: "TreeDB Document Service listening", MaxTailBytes: 64 << 10,
 			}
@@ -1185,6 +1201,33 @@ func TestMinimaPhaseUnattributedBound(t *testing.T) {
 	}
 }
 
+func TestMinimaBatchCorrelationContract(t *testing.T) {
+	artifact := validMinimaArtifact()
+	raw := artifact.RawEvidence["treedb"]
+	raw.UpsertBatchCorrelations = []json.RawMessage{json.RawMessage(
+		`{"sequence":0,"outcome":"completed","stats_retention":"compact_completed","profile_capture":{"status":"not_triggered"}}`,
+	)}
+	raw.UpsertBatchCorrelationContract.RecordCount = 1
+	raw.UpsertBatchCorrelationContract.CompactCompletedRecords = 1
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw); err != nil {
+		t.Fatal(err)
+	}
+	raw.UpsertBatchCorrelations[0] = json.RawMessage(
+		`{"outcome":"completed","stats_retention":"compact_completed","before_stats":{"wide":true},"profile_capture":{"status":"not_triggered"}}`,
+	)
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw); err == nil {
+		t.Fatal("compact batch correlation retained full stats")
+	}
+	raw.UpsertBatchCorrelations[0] = json.RawMessage(
+		`{"outcome":"completed","stats_retention":"full_diagnostic","capture_reason":"slow","before_stats":{"wide":true},"after_stats":{"wide":true},"profile_capture":{"status":"captured"}}`,
+	)
+	raw.UpsertBatchCorrelationContract.CompactCompletedRecords = 0
+	raw.UpsertBatchCorrelationContract.FullDiagnosticRecords = 1
+	if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	tree, qdrant := minimaPartialBackendEvidence(t)
 	if qdrant.RawEvidence["qdrant"].PhaseAttribution != nil {
@@ -1226,6 +1269,9 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	if combined.RawEvidence["qdrant"].PhaseAttribution != nil {
 		t.Fatal("combined Qdrant raw evidence gained TreeDB phase attribution")
 	}
+	if combined.RawEvidence["treedb"].UpsertBatchCorrelationContract == nil {
+		t.Fatal("combined TreeDB raw evidence dropped batch correlation contract")
+	}
 	var wire struct {
 		RawEvidence map[string]map[string]json.RawMessage `json:"backend_raw_evidence"`
 	}
@@ -1238,6 +1284,12 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	}
 	if _, leaked := treeRaw["readiness"]; leaked {
 		t.Fatal("combined TreeDB raw evidence leaked Qdrant readiness")
+	}
+	if _, ok := treeRaw["upsert_batch_correlation_contract"]; !ok {
+		t.Fatal("combined TreeDB raw evidence dropped batch correlation contract")
+	}
+	if _, leaked := qdrantRaw["upsert_batch_correlation_contract"]; leaked {
+		t.Fatal("combined Qdrant raw evidence gained TreeDB batch correlation contract")
 	}
 	if _, leaked := qdrantRaw["phase_attribution"]; leaked {
 		t.Fatal("combined Qdrant raw evidence serialized TreeDB phase attribution")

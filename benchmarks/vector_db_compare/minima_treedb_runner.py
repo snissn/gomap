@@ -30,6 +30,8 @@ DIAGNOSTICS_STATS_PATH = "/debug/treedb/stats"
 DIAGNOSTIC_CAPTURE_BYTES = 32 << 20
 DIAGNOSTIC_STATS_BYTES = 4 << 20
 STATE_SCROLL_PAGE_SIZE = 8192
+COMPACT_BATCH_CORRELATION_MAX_BYTES = 2048
+BATCH_CORRELATION_SCHEMA = "treedb-minima-upsert-batch-correlations/v1"
 PHASE_UNATTRIBUTED_RULE = (
     "total_duration_nanos = sum(phase.duration_nanos) + unattributed_nanos; "
     "unattributed_nanos <= max(60000000000, total_duration_nanos / 100); "
@@ -415,13 +417,18 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         self._expected_rows = 0
         self._expected_insert_batches: dict[tuple[str, str, int], int] = {}
         expected_rows = 0
+        self._batch_correlation_max_records = 0
         for operation in manifest["operations"]:
-            if operation["name"] not in ("initial_batch_insert", "timed_search_with_batch_insert"):
-                continue
             for insertion in operation.get("insert_ranges", []):
                 for start in range(insertion["start"], insertion["start"] + insertion["rows"], self.config["batch_size"]):
-                    expected_rows += min(self.config["batch_size"], insertion["start"] + insertion["rows"] - start)
-                    self._expected_insert_batches[(operation["name"], insertion["scenario"], start)] = expected_rows
+                    self._batch_correlation_max_records += 1
+                    if operation["name"] in ("initial_batch_insert", "timed_search_with_batch_insert"):
+                        expected_rows += min(self.config["batch_size"], insertion["start"] + insertion["rows"] - start)
+                        self._expected_insert_batches[(operation["name"], insertion["scenario"], start)] = expected_rows
+            if operation.get("effect") in ("insert", "update") and operation.get("documents"):
+                self._batch_correlation_max_records += (
+                    len(operation["documents"]) + self.config["batch_size"] - 1
+                ) // self.config["batch_size"]
         if diagnostics_dir is not None and controller.diagnostics_url is None:
             raise ValueError("diagnostics_dir requires an enabled controller diagnostics URL")
 
@@ -708,6 +715,51 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             return {"status": "captured", "rows": self.client.count_documents(self.collection).count}
         except BaseException as exc:
             return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+
+    @staticmethod
+    def _compact_completed_batch_correlation(correlation: dict[str, Any]) -> None:
+        correlation.pop("before_stats", None)
+        correlation.pop("after_stats", None)
+        correlation["stats_retention"] = "compact_completed"
+        encoded_bytes = len(json.dumps(correlation, separators=(",", ":"), allow_nan=False).encode())
+        if encoded_bytes > COMPACT_BATCH_CORRELATION_MAX_BYTES:
+            raise RuntimeError(
+                f"compact TreeDB batch correlation exceeds {COMPACT_BATCH_CORRELATION_MAX_BYTES} bytes"
+            )
+
+    def _batch_correlation_contract(self) -> dict[str, Any]:
+        if len(self.batch_correlations) > self._batch_correlation_max_records:
+            raise RuntimeError("TreeDB batch correlation count exceeds the frozen manifest bound")
+        compact_records = 0
+        full_records = 0
+        for correlation in self.batch_correlations:
+            if correlation.get("stats_retention") == "compact_completed":
+                if correlation.get("outcome") != "completed" or \
+                        correlation.get("profile_capture", {}).get("status") != "not_triggered" or \
+                        "before_stats" in correlation or "after_stats" in correlation:
+                    raise RuntimeError("compact TreeDB batch correlation retained diagnostic evidence")
+                self._compact_completed_batch_correlation(correlation)
+                compact_records += 1
+                continue
+            diagnostic = (
+                correlation.get("outcome") in ("failed", "timeout") or
+                correlation.get("capture_reason") == "slow" or
+                correlation.get("profile_capture", {}).get("status") != "not_triggered"
+            )
+            if correlation.get("stats_retention") != "full_diagnostic" or not diagnostic or \
+                    "before_stats" not in correlation or "after_stats" not in correlation:
+                raise RuntimeError("TreeDB diagnostic batch correlation stats retention is invalid")
+            full_records += 1
+        return {
+            "schema": BATCH_CORRELATION_SCHEMA,
+            "record_count": len(self.batch_correlations),
+            "maximum_record_count": self._batch_correlation_max_records,
+            "compact_completed_records": compact_records,
+            "full_diagnostic_records": full_records,
+            "compact_record_max_bytes": COMPACT_BATCH_CORRELATION_MAX_BYTES,
+            "full_stats_retention": ["failed", "timeout", "slow", "profile_captured"],
+        }
+
     def upsert(self, operation: str, scenario: str, documents: list[dict[str, Any]], wait_ready: bool = True,
                on_writer_start: Callable[[], None] | None = None) -> None:
         assert self.client is not None
@@ -832,6 +884,15 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                             "status": "failed",
                             "error": "diagnostic capture exceeded its bounded join interval",
                         }
+                retain_full_stats = (
+                    correlation["outcome"] != "completed" or
+                    capture_started.is_set() or
+                    correlation["profile_capture"].get("status") != "not_triggered"
+                )
+                if retain_full_stats:
+                    correlation["stats_retention"] = "full_diagnostic"
+                else:
+                    self._compact_completed_batch_correlation(correlation)
 
     def _preflight_batch_ids(self, ids: list[str]) -> list[str]:
         assert self.client is not None
@@ -1192,6 +1253,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         raw["resource_measurement"] = resource
         raw["service_log"] = self.controller.log_evidence()
         raw["upsert_batch_correlations"] = self.batch_correlations
+        raw["upsert_batch_correlation_contract"] = self._batch_correlation_contract()
         raw["diagnostic_resume"] = self.diagnostic_resume
         raw["diagnostics"] = {
             "enabled": self.diagnostics_dir is not None,

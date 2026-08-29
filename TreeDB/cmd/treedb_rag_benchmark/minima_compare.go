@@ -28,6 +28,11 @@ const (
 )
 
 const (
+	minimaBatchCorrelationSchema          = "treedb-minima-upsert-batch-correlations/v1"
+	minimaCompactBatchCorrelationMaxBytes = 2048
+)
+
+const (
 	minimaPhaseUnattributedRule          = "total_duration_nanos = sum(phase.duration_nanos) + unattributed_nanos; unattributed_nanos <= max(60000000000, total_duration_nanos / 100); unattributed covers only runner bookkeeping between declared boundaries"
 	minimaPhaseUnattributedAbsoluteNanos = int64(60_000_000_000)
 )
@@ -245,6 +250,15 @@ type minimaRawQdrantReadiness struct {
 	LatestNonReadyDisposition string                            `json:"latest_non_ready_disposition"`
 }
 
+type minimaRawBatchCorrelationContract struct {
+	Schema                  string   `json:"schema"`
+	RecordCount             int      `json:"record_count"`
+	MaximumRecordCount      int      `json:"maximum_record_count"`
+	CompactCompletedRecords int      `json:"compact_completed_records"`
+	FullDiagnosticRecords   int      `json:"full_diagnostic_records"`
+	CompactRecordMaxBytes   int      `json:"compact_record_max_bytes"`
+	FullStatsRetention      []string `json:"full_stats_retention"`
+}
 type minimaRawBackendEvidence struct {
 	PhaseLatencyDistributions         map[string]minimaRawLatencyDistribution `json:"phase_latency_distributions,omitempty"`
 	Events                            []json.RawMessage                       `json:"events,omitempty"`
@@ -258,6 +272,10 @@ type minimaRawBackendEvidence struct {
 	CollectionConfigurationTransition *minimaRawQdrantConfigurationTransition `json:"collection_configuration_transition,omitempty"`
 	Readiness                         *minimaRawQdrantReadiness               `json:"readiness,omitempty"`
 	PhaseAttribution                  *minimaRawPhaseAttribution              `json:"phase_attribution,omitempty"`
+	UpsertBatchCorrelations           []json.RawMessage                       `json:"upsert_batch_correlations,omitempty"`
+	UpsertBatchCorrelationContract    *minimaRawBatchCorrelationContract      `json:"upsert_batch_correlation_contract,omitempty"`
+	DiagnosticResume                  json.RawMessage                         `json:"diagnostic_resume,omitempty"`
+	Diagnostics                       json.RawMessage                         `json:"diagnostics,omitempty"`
 }
 
 type minimaPayloadEvidence struct {
@@ -680,12 +698,91 @@ func validateMinimaTreeDBResourceReconciliation(
 		len(resource.Segments) != 2 ||
 		len(phase.Phases) <= minimaTreeDBRestartOrdinal ||
 		len(phase.Phases[minimaTreeDBRestartOrdinal].ResourceSegments) != 2 {
+
 		return errors.New("minima artifact: TreeDB phase and aggregate process segments are incomplete")
 	}
 	restart := phase.Phases[minimaTreeDBRestartOrdinal].ResourceSegments
 	if !minimaPhaseResourceMatchesSnapshot(restart[0].End, resource.Segments[0].End) ||
 		!minimaPhaseResourceMatchesSnapshot(restart[1].Start, resource.Segments[1].Baseline) {
 		return errors.New("minima artifact: TreeDB phase and aggregate restart resources disagree")
+	}
+	return nil
+}
+func minimaMaximumBatchCorrelationRecords(manifest minimaManifest) int {
+	batchSize := manifest.Config.BatchSize
+	if batchSize <= 0 {
+		return 0
+	}
+	maximum := 0
+	for _, operation := range manifest.Operations {
+		for _, insertion := range operation.InsertRanges {
+			maximum += (insertion.Rows + batchSize - 1) / batchSize
+		}
+		if (operation.Effect == "insert" || operation.Effect == "update") && len(operation.Documents) != 0 {
+			maximum += (len(operation.Documents) + batchSize - 1) / batchSize
+		}
+	}
+	return maximum
+}
+
+func validateMinimaTreeDBBatchCorrelations(manifest minimaManifest, raw minimaRawBackendEvidence) error {
+	contract := raw.UpsertBatchCorrelationContract
+	expectedMaximum := minimaMaximumBatchCorrelationRecords(manifest)
+	if contract == nil ||
+		contract.Schema != minimaBatchCorrelationSchema ||
+		contract.RecordCount != len(raw.UpsertBatchCorrelations) ||
+		contract.MaximumRecordCount != expectedMaximum ||
+		contract.RecordCount > contract.MaximumRecordCount ||
+		contract.CompactCompletedRecords+contract.FullDiagnosticRecords != contract.RecordCount ||
+		contract.CompactRecordMaxBytes != minimaCompactBatchCorrelationMaxBytes ||
+		!reflect.DeepEqual(contract.FullStatsRetention, []string{"failed", "timeout", "slow", "profile_captured"}) {
+		return errors.New("minima artifact: TreeDB batch correlation cardinality contract is invalid")
+	}
+	compact, full := 0, 0
+	for _, encoded := range raw.UpsertBatchCorrelations {
+		var correlation struct {
+			Outcome        string          `json:"outcome"`
+			StatsRetention string          `json:"stats_retention"`
+			CaptureReason  string          `json:"capture_reason"`
+			BeforeStats    json.RawMessage `json:"before_stats"`
+			AfterStats     json.RawMessage `json:"after_stats"`
+			ProfileCapture struct {
+				Status string `json:"status"`
+			} `json:"profile_capture"`
+		}
+		if err := json.Unmarshal(encoded, &correlation); err != nil {
+			return fmt.Errorf("minima artifact: decode TreeDB batch correlation: %w", err)
+		}
+		switch correlation.StatsRetention {
+		case "compact_completed":
+			var decoded any
+			if err := json.Unmarshal(encoded, &decoded); err != nil {
+				return fmt.Errorf("minima artifact: decode compact TreeDB batch correlation: %w", err)
+			}
+			canonical, err := json.Marshal(decoded)
+			if err != nil {
+				return fmt.Errorf("minima artifact: encode compact TreeDB batch correlation: %w", err)
+			}
+			if correlation.Outcome != "completed" ||
+				len(correlation.BeforeStats) != 0 || len(correlation.AfterStats) != 0 ||
+				correlation.ProfileCapture.Status != "not_triggered" ||
+				len(canonical) > minimaCompactBatchCorrelationMaxBytes {
+				return errors.New("minima artifact: compact TreeDB batch correlation is invalid")
+			}
+			compact++
+		case "full_diagnostic":
+			diagnostic := correlation.Outcome == "failed" || correlation.Outcome == "timeout" ||
+				correlation.CaptureReason == "slow" || correlation.ProfileCapture.Status != "not_triggered"
+			if !diagnostic || len(correlation.BeforeStats) == 0 || len(correlation.AfterStats) == 0 {
+				return errors.New("minima artifact: full TreeDB batch correlation lacks diagnostic evidence")
+			}
+			full++
+		default:
+			return errors.New("minima artifact: TreeDB batch correlation retention is undeclared")
+		}
+	}
+	if compact != contract.CompactCompletedRecords || full != contract.FullDiagnosticRecords {
+		return errors.New("minima artifact: TreeDB batch correlation retention counts disagree")
 	}
 	return nil
 }
@@ -893,6 +990,9 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 				return errors.New("minima artifact: TreeDB phase attribution is missing")
 			}
 			if err := validateMinimaTreeDBPhaseAttribution(*raw.PhaseAttribution, raw.RestartBoundary); err != nil {
+				return err
+			}
+			if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw); err != nil {
 				return err
 			}
 		}
