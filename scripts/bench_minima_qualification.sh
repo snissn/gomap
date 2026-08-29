@@ -74,7 +74,7 @@ diagnostic-resume)
 	;;
 small)
 	printf '%s\n' 'MODE=small runs the real TreeDB small-scenario lifecycle and emits nonpassing partial evidence.' >&2
-	go build -o "$RUN_DIR/bin/treedb-document-service" ./cmd/treedb-document-service
+	go build -o "$RUN_DIR/bin/treedb-document-service" -buildvcs=true ./cmd/treedb-document-service
 	go build -o "$RUN_DIR/bin/treedb-rag-benchmark" ./TreeDB/cmd/treedb_rag_benchmark
 	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -dump-minima-manifest "$MANIFEST_PATH"
 	treedb_status=0
@@ -106,7 +106,7 @@ esac
 # The representative workload is frozen at 500,000 rows per representative
 # scenario and 1,024 timed queries. Changing those values requires a new
 # preflight manifest and hashes rather than an environment-only override.
-go build -o "$RUN_DIR/bin/treedb-document-service" ./cmd/treedb-document-service
+go build -o "$RUN_DIR/bin/treedb-document-service" -buildvcs=true ./cmd/treedb-document-service
 go build -o "$RUN_DIR/bin/treedb-rag-benchmark" ./TreeDB/cmd/treedb_rag_benchmark
 "$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -dump-minima-manifest "$MANIFEST_PATH"
 
