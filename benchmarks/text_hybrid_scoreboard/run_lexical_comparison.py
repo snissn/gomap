@@ -54,9 +54,9 @@ def normalize_executable(value: str, initial_cwd: Path) -> str:
         expanded = initial_cwd / expanded
     return str(expanded.resolve())
 
-def require_isolated_parent(no_user_site: int) -> None:
-    if not no_user_site:
-        raise RuntimeError("retained lexical comparison must be launched with Python -s")
+def require_isolated_parent(no_user_site: int, ignore_environment: int) -> None:
+    if not no_user_site or not ignore_environment:
+        raise RuntimeError("retained lexical comparison must be launched with Python -E -s")
 
 def git_bytes(*args: str) -> bytes:
     result = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, check=False)
@@ -263,13 +263,13 @@ def adapter_command(engine_id: str, repetition: int, out_dir: Path, manifest: Pa
     if engine_id == "bleve":
         return [go_bin, "run", ".", *common, "--index", str(index)], isolated_project(engine_id, out_dir), {"GOWORK": "off", "GOENV": "off", "LEXICAL_GO_EXECUTABLE": go_bin}
     if engine_id == "sqlite_fts5":
-        return [sys.executable, "-s", str(HERE / "sqlite_fts5_bench.py"), *common, "--db", str(index.with_suffix(".sqlite3"))], ROOT, {"PYTHONNOUSERSITE": "1"}
+        return [sys.executable, "-E", "-s", "-B", str(HERE / "sqlite_fts5_bench.py"), *common, "--db", str(index.with_suffix(".sqlite3"))], ROOT, {"PYTHONNOUSERSITE": "1"}
     raise AssertionError(engine_id)
 
 
 def main() -> int:
     args = parse_args()
-    require_isolated_parent(sys.flags.no_user_site)
+    require_isolated_parent(sys.flags.no_user_site, sys.flags.ignore_environment)
     args.go_bin = normalize_executable(args.go_bin, Path.cwd())
     args.manifest = args.manifest.resolve()
     args.out_dir = args.out_dir.resolve()

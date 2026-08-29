@@ -33,7 +33,7 @@ if [[ "$RUN_LEXICAL_COMPARISON" == "true" || "$RUN_LEXICAL_COMPARISON" == "1" ||
   if [[ "$LEXICAL_ALLOW_DIRTY" == "true" || "$LEXICAL_ALLOW_DIRTY" == "1" || "$LEXICAL_ALLOW_DIRTY" == "yes" ]]; then
     LEXICAL_ARGS+=(--allow-dirty)
   fi
-  "$PYTHON" -s benchmarks/text_hybrid_scoreboard/run_lexical_comparison.py "${LEXICAL_ARGS[@]}"
+  "$PYTHON" -E -s benchmarks/text_hybrid_scoreboard/run_lexical_comparison.py "${LEXICAL_ARGS[@]}"
   LEXICAL_RAN=true
 fi
 

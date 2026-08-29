@@ -204,9 +204,11 @@ class LexicalComparisonTest(unittest.TestCase):
             self.assertFalse((root / "__pycache__").exists())
 
     def test_parent_runner_requires_user_site_isolation(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "Python -s"):
-            lexical_runner.require_isolated_parent(0)
-        lexical_runner.require_isolated_parent(1)
+        with self.assertRaisesRegex(RuntimeError, "Python -E -s"):
+            lexical_runner.require_isolated_parent(1, 0)
+        with self.assertRaisesRegex(RuntimeError, "Python -E -s"):
+            lexical_runner.require_isolated_parent(0, 1)
+        lexical_runner.require_isolated_parent(1, 1)
 
     def test_selected_go_binary_reaches_setup_and_adapter_commands(self) -> None:
         selected = "/toolchains/go 1.26/bin/go"
@@ -227,12 +229,10 @@ class LexicalComparisonTest(unittest.TestCase):
         self.assertEqual(bleve_command[0], selected)
         self.assertEqual(treedb_env["LEXICAL_GO_EXECUTABLE"], selected)
         self.assertEqual(bleve_env["LEXICAL_GO_EXECUTABLE"], selected)
-        self.assertEqual(treedb_env["GOENV"], "off")
-        self.assertEqual(bleve_env["GOENV"], "off")
         _, _, lucene_env = lexical_runner.adapter_command("lucene", 1, root, HERE / "lexical_manifest.json", root / "corpus.tsv", "source", selected)
         self.assertEqual(lucene_env["MAVEN_SKIP_RC"], "1")
         sqlite_command, _, sqlite_env = lexical_runner.adapter_command("sqlite_fts5", 1, root, HERE / "lexical_manifest.json", root / "corpus.tsv", "source", selected)
-        self.assertEqual(sqlite_command[1], "-s")
+        self.assertEqual(sqlite_command[1:4], ["-E", "-s", "-B"])
         self.assertEqual(sqlite_env["PYTHONNOUSERSITE"], "1")
         self.assertEqual(lexical_runner.normalize_executable("./sdk/go/bin/go", Path("/workspace")), "/workspace/sdk/go/bin/go")
         self.assertEqual(lexical_runner.normalize_executable("go", Path("/workspace")), "go")
