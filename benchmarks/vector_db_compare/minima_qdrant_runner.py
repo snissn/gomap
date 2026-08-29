@@ -1101,6 +1101,9 @@ class QdrantMinimaRunner:
     def connect(self) -> None:
         self.client = self.client_factory()
 
+    def begin_phase_attribution(self) -> None:
+        pass
+
     def phase_transition(self, _name: str) -> None:
         pass
 
@@ -1846,6 +1849,8 @@ class QdrantMinimaRunner:
             if operation["ordinal"] != ordinal or operation["name"] != OPERATION_NAMES[ordinal]:
                 raise RuntimeError("operation stream changed after validation")
             name = operation["name"]
+            if name == "initial_batch_insert":
+                self.begin_phase_attribution()
             phase = {
                 "warmup_search": "warmup_search",
                 "timed_search_with_batch_insert": "timed_search_write_overlap",

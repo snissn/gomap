@@ -317,8 +317,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                  operation_timeout: float, ef_search: int, diagnostics_dir: Path | None = None,
                  diagnostic_slow_seconds: float = 30, diagnostic_profile_seconds: int = 5,
                  diagnostic_capture_timeout: float = 10) -> None:
-        self._phase_total_start = self._phase_start = time.monotonic_ns()
-        self._phase_name = "initial_durable_load"
+        self._phase_total_start = time.monotonic_ns()
+        self._phase_start: int | None = None
+        self._phase_name: str | None = None
+        self._phase_resource_start: dict[str, Any] | None = None
         self._phase_boundaries: list[dict[str, Any]] = []
         self._phase_attribution: dict[str, Any] | None = None
         self.controller = controller
@@ -327,9 +329,6 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         self.service_binary_sha256 = file_sha256(controller.binary.resolve())
         self.operation_timeout_seconds = operation_timeout
         controller.start()
-        self._phase_resource_start = common.server_resource_usage(
-            controller.pid, controller.data_dir, "TreeDB",
-        )
         clients = ThreadLocalClients(controller.url, operation_timeout, controller)
         super().__init__(manifest, client_factory=lambda: clients, models=None, url=controller.url,
                          collection=collection, allow_drop=False, operation_timeout=int(operation_timeout),
@@ -366,9 +365,20 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             raise RuntimeError("TreeDB service controller restarted without a PID")
         return self.controller.pid
 
+    def begin_phase_attribution(self) -> None:
+        if self._phase_start is not None:
+            raise RuntimeError("TreeDB phase attribution already started")
+        self._phase_resource_start = common.server_resource_usage(
+            self.controller.pid, self.storage_path, self.resource_server_name,
+        )
+        self._phase_start = time.monotonic_ns()
+        self._phase_name = "initial_durable_load"
+
     def phase_transition(self, name: str) -> None:
         if name not in PHASE_CLASSIFICATIONS:
             raise RuntimeError(f"unknown TreeDB attribution phase {name!r}")
+        if self._phase_start is None or self._phase_name is None or self._phase_resource_start is None:
+            raise RuntimeError("TreeDB phase attribution was not started")
         phase_end = time.monotonic_ns()
         resource_end = common.server_resource_usage(
             self.controller.pid, self.storage_path, self.resource_server_name,
@@ -389,6 +399,9 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
     def _finish_phase_attribution(self) -> dict[str, Any]:
         if self._phase_attribution is not None:
             return self._phase_attribution
+        if self._phase_start is None:
+            self.begin_phase_attribution()
+        assert self._phase_name is not None and self._phase_resource_start is not None
         phase_end = time.monotonic_ns()
         resource_end = common.server_resource_usage(
             self.controller.pid, self.storage_path, self.resource_server_name,
@@ -865,6 +878,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             self.controller.pid, self.storage_path, self.resource_server_name)
         self.connect()
         self.create_owned_collection()
+        self.begin_phase_attribution()
         spec = self.specs["small"]
         documents = [common.generated_document(spec, ordinal) for ordinal in range(spec["corpus_rows"])]
         self.upsert("small_initial_batch_insert", "small", documents)

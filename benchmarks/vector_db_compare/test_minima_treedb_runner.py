@@ -151,6 +151,43 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             self.assertEqual(runner.repository_commit(), commit)
         self.assertEqual(run.call_count, 2)
 
+    def test_initial_load_phase_excludes_setup_and_aligns_resource_boundary(self) -> None:
+        baseline = {"captured": True, "rss_bytes": 10, "cpu_seconds": 1.0, "disk_bytes": 100}
+        end = {"captured": True, "rss_bytes": 20, "cpu_seconds": 2.0, "disk_bytes": 200}
+        workload = object.__new__(runner.TreeDBMinimaRunner)
+        workload._phase_total_start = 100
+        workload._phase_start = None
+        workload._phase_name = None
+        workload._phase_resource_start = None
+        workload._phase_boundaries = []
+        workload._phase_attribution = None
+        workload.controller = SimpleNamespace(pid=123)
+        workload.storage_path = Path("/data")
+        workload.resource_server_name = "TreeDB"
+        events: list[str] = []
+        ticks = iter((500, 700, 710))
+        resources = iter((baseline, end))
+
+        def monotonic_ns() -> int:
+            events.append("wall")
+            return next(ticks)
+
+        def resource_usage(*_args: object) -> dict[str, object]:
+            events.append("resource")
+            return next(resources)
+
+        with mock.patch.object(runner.time, "monotonic_ns", side_effect=monotonic_ns), \
+             mock.patch.object(common, "server_resource_usage", side_effect=resource_usage):
+            workload.begin_phase_attribution()
+            workload.phase_transition("warmup_search")
+
+        initial = workload._phase_boundaries[0]
+        self.assertEqual(events, ["resource", "wall", "wall", "resource", "wall"])
+        self.assertEqual(initial["start_nanos"] - workload._phase_total_start, 400)
+        self.assertEqual(initial["duration_nanos"], 200)
+        self.assertIs(initial["resource_start"], baseline)
+        self.assertIs(initial["resource_end"], end)
+
     def resume_workload(self, directory: Path, *, present_ids: set[str], count: int) -> runner.TreeDBMinimaRunner:
         workload = self.workload(
             self.response(), diagnostics_dir=directory,
