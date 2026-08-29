@@ -2372,33 +2372,37 @@ func TestServiceFilterDocumentsExactIDDirectPath(t *testing.T) {
 func TestServiceFilterDocumentsExactIDClosedBackendFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	svc, db := newTestService(t)
-	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "exact_id_closed", Dimension: 2, Metric: MetricCosine})
-	if err != nil {
-		t.Fatalf("CreateIndex: %v", err)
-	}
-	if _, err := svc.UpsertDocuments(ctx, info.Name, UpsertDocumentsRequest{
-		Documents: []Document{{ID: "target", Embedding: []float32{1, 0}}},
+	const name = "exact_id_closed"
+	if _, err := svc.manager.CreateCollection(&collections.CollectionMeta{
+		Name:    name,
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON},
 	}); err != nil {
-		t.Fatalf("UpsertDocuments: %v", err)
+		t.Fatalf("CreateCollection: %v", err)
 	}
-	col, _, err := svc.openIndex(ctx, info.Name, 0)
+	col, err := svc.manager.OpenCollection(name)
 	if err != nil {
-		t.Fatalf("openIndex: %v", err)
+		t.Fatalf("OpenCollection: %v", err)
 	}
-	if err := svc.primeBenchmarkSearchCache(info.Name, col, info); err != nil {
+	info := IndexInfo{Name: name, Generation: 1}
+	if err := svc.primeBenchmarkSearchCache(name, col, info); err != nil {
 		t.Fatalf("primeBenchmarkSearchCache: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close backend: %v", err)
 	}
+	var scans atomic.Int64
+	svc.documentScanBefore = func() { scans.Add(1) }
 	for _, id := range []string{"", "target"} {
-		_, err := svc.FilterDocuments(ctx, info.Name, FilterDocumentsRequest{
+		_, err := svc.FilterDocuments(ctx, name, FilterDocumentsRequest{
 			Filter: &Filter{Field: "id", Operator: "==", Value: id},
 			Limit:  1,
 		})
 		if ErrorCodeOf(err) != CodeIndexUnavailable {
 			t.Fatalf("closed backend id=%q err=%v code=%s", id, err, ErrorCodeOf(err))
 		}
+	}
+	if scans.Load() != 0 {
+		t.Fatalf("closed backend exact-ID filters scanned %d times", scans.Load())
 	}
 }
 

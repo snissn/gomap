@@ -20608,6 +20608,22 @@ func rejectReplaceUniqueConflictsOrdered(snap *backenddb.Snapshot, catalog *coll
 	return nil
 }
 
+// CheckReadable verifies that the collection backend can acquire a read
+// snapshot without inspecting collection data.
+func (c *Collection) CheckReadable() error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if c.db == nil {
+		return errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return backenddb.ErrClosed
+	}
+	return snap.Close()
+}
+
 // Get returns an owned copy of the document for documentID.
 //
 // Missing documents return (nil, nil), matching the existing collection API.
