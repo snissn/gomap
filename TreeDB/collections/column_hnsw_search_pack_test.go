@@ -158,10 +158,78 @@ func TestColumnHNSWSearchPackPreparedAssetValidationMapped4429(t *testing.T) {
 		t.Fatal("corrupt pack passed mapped validation")
 	}
 	writeColumnVectorGraphAssetRawForTest2041(t, rootDir, ref, raw)
+	path, err := columnAssetSegmentPath(rootDir, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		section columnHNSWSearchPackSection
+		mutate  func([]byte, columnHNSWSearchPackSection)
+	}{
+		{
+			name:    "nonfinite-vector",
+			section: mustColumnHNSWSearchPackSectionForTest4429(t, pack.Sections, columnHNSWSearchPackSectionNormalizedVectors, 0),
+			mutate: func(raw []byte, section columnHNSWSearchPackSection) {
+				binary.LittleEndian.PutUint32(raw[section.Offset:], math.Float32bits(float32(math.NaN())))
+			},
+		},
+		{
+			name:    "nonmonotonic-adjacency",
+			section: mustColumnHNSWSearchPackSectionForTest4429(t, pack.Sections, columnHNSWSearchPackSectionAdjacencyOffsets, 0),
+			mutate: func(raw []byte, section columnHNSWSearchPackSection) {
+				binary.LittleEndian.PutUint64(raw[section.Offset+8:], math.MaxUint64)
+			},
+		},
+		{
+			name:    "empty-document-id",
+			section: mustColumnHNSWSearchPackSectionForTest4429(t, pack.Sections, columnHNSWSearchPackSectionDocumentIDOffsets, 0),
+			mutate: func(raw []byte, section columnHNSWSearchPackSection) {
+				binary.LittleEndian.PutUint64(raw[section.Offset+8:], 0)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			corrupt := append([]byte(nil), raw...)
+			tc.mutate(corrupt, tc.section)
+			corruptRef := rewriteColumnHNSWSearchPackChecksumsForTest4429(t, corrupt, ref, pack.Sections)
+			writeColumnVectorGraphAssetRawForTest2041(t, rootDir, ref, corrupt)
+			if err := validateColumnHNSWSearchPackAssetPayloadDirectFile(path, corruptRef, graph, def); err == nil {
+				t.Fatal("semantic corruption passed direct-file validation")
+			}
+		})
+	}
+	writeColumnVectorGraphAssetRawForTest2041(t, rootDir, ref, raw)
 	graph.BaseManifestChecksum++
 	if err := validateColumnHNSWSearchPackAssetPayload(rootDir, ref, ref.Length, graph, def); err == nil {
 		t.Fatal("base identity mismatch passed mapped validation")
 	}
+}
+
+func mustColumnHNSWSearchPackSectionForTest4429(t *testing.T, sections []columnHNSWSearchPackSection, kind columnHNSWSearchPackSectionKind, index uint16) columnHNSWSearchPackSection {
+	t.Helper()
+	section, err := columnHNSWSearchPackFindSection(sections, kind, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return section
+}
+
+func rewriteColumnHNSWSearchPackChecksumsForTest4429(t *testing.T, raw []byte, ref ColumnAssetRef, sections []columnHNSWSearchPackSection) ColumnAssetRef {
+	t.Helper()
+	directoryOffset := hnswPackU64(raw, columnHNSWSearchPackHeaderDirectoryOffsetOffset)
+	directoryLength := hnswPackU64(raw, columnHNSWSearchPackHeaderDirectoryLengthOffset)
+	for i, section := range sections {
+		checksum := page.Checksum(raw[section.Offset : section.Offset+section.Length])
+		putHNSWPackU32(raw[directoryOffset+uint64(i*columnHNSWSearchPackSectionEntrySize)+columnHNSWSearchPackEntryChecksumOffset:], 0, checksum)
+	}
+	putHNSWPackU32(raw, columnHNSWSearchPackHeaderDirectoryChecksumOffset, page.Checksum(raw[directoryOffset:directoryOffset+directoryLength]))
+	ref.Checksum = page.Checksum(raw)
+	return ref
 }
 
 func TestColumnHNSWSearchPackPreparedAssetValidationDirectFile4429(t *testing.T) {
