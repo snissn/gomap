@@ -19,6 +19,7 @@ TREEDB_COLLECTION=${TREEDB_COLLECTION:-gomap_minima_${RANDOM}_$$}
 TREEDB_PROFILE=${TREEDB_PROFILE:-command_wal_durable}
 TREEDB_EF_SEARCH=${TREEDB_EF_SEARCH:-128}
 TREEDB_OPERATION_TIMEOUT=${TREEDB_OPERATION_TIMEOUT:-120}
+TREEDB_STARTUP_TIMEOUT=${TREEDB_STARTUP_TIMEOUT:-3600}
 TREEDB_DIAGNOSTICS_DIR=${TREEDB_DIAGNOSTICS_DIR:-}
 TREEDB_DIAGNOSTICS_URL=${TREEDB_DIAGNOSTICS_URL:-http://127.0.0.1:17121}
 TREEDB_DIAGNOSTIC_SLOW_SECONDS=${TREEDB_DIAGNOSTIC_SLOW_SECONDS:-30}
@@ -28,6 +29,12 @@ TREEDB_DIAGNOSTIC_RESUME_SCENARIO=${TREEDB_DIAGNOSTIC_RESUME_SCENARIO:-}
 TREEDB_DIAGNOSTIC_RESUME_START=${TREEDB_DIAGNOSTIC_RESUME_START:-}
 RECOMMENDATION=${RECOMMENDATION:-ready_with_alpha_limitations}
 PYTHON=${PYTHON:-python3}
+EXPECTED_COMMIT=""
+if [[ "$TREEDB_OPERATION_TIMEOUT" != "120" ]]; then
+	printf 'TREEDB_OPERATION_TIMEOUT must be exactly 120 for Minima validation, got %q\n' \
+		"$TREEDB_OPERATION_TIMEOUT" >&2
+	exit 2
+fi
 
 treedb_diagnostic_args=()
 if [[ -n "$TREEDB_DIAGNOSTICS_DIR" ]]; then
@@ -44,6 +51,16 @@ mkdir -p "$RUN_DIR/bin"
 
 case "$MODE" in
 representative)
+	EXPECTED_COMMIT=${MINIMA_EXPECTED_COMMIT:-$(git rev-parse origin/main)}
+	HEAD_COMMIT=$(git rev-parse HEAD)
+	if [[ ! "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+		printf 'representative Minima expected commit must be a full 40-hex SHA, got %q\n' "$EXPECTED_COMMIT" >&2
+		exit 2
+	fi
+	if [[ "$HEAD_COMMIT" != "$EXPECTED_COMMIT" ]]; then
+		printf 'representative Minima checkout HEAD %s does not match frozen target %s\n' "$HEAD_COMMIT" "$EXPECTED_COMMIT" >&2
+		exit 2
+	fi
 	;;
 diagnostic-resume)
 	if [[ -z "$TREEDB_DIAGNOSTICS_DIR" || -z "$TREEDB_DIAGNOSTIC_RESUME_SCENARIO" || -z "$TREEDB_DIAGNOSTIC_RESUME_START" ]]; then
@@ -57,7 +74,7 @@ diagnostic-resume)
 	;;
 small)
 	printf '%s\n' 'MODE=small runs the real TreeDB small-scenario lifecycle and emits nonpassing partial evidence.' >&2
-	go build -o "$RUN_DIR/bin/treedb-document-service" ./cmd/treedb-document-service
+	go build -o "$RUN_DIR/bin/treedb-document-service" -buildvcs=true ./cmd/treedb-document-service
 	go build -o "$RUN_DIR/bin/treedb-rag-benchmark" ./TreeDB/cmd/treedb_rag_benchmark
 	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -dump-minima-manifest "$MANIFEST_PATH"
 	treedb_status=0
@@ -72,6 +89,7 @@ small)
 		--collection "$TREEDB_COLLECTION" \
 		--profile "$TREEDB_PROFILE" \
 		--operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
+		--startup-timeout "$TREEDB_STARTUP_TIMEOUT" \
 		--ef-search "$TREEDB_EF_SEARCH" \
 		${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"} ||
 		treedb_status=$?
@@ -88,7 +106,7 @@ esac
 # The representative workload is frozen at 500,000 rows per representative
 # scenario and 1,024 timed queries. Changing those values requires a new
 # preflight manifest and hashes rather than an environment-only override.
-go build -o "$RUN_DIR/bin/treedb-document-service" ./cmd/treedb-document-service
+go build -o "$RUN_DIR/bin/treedb-document-service" -buildvcs=true ./cmd/treedb-document-service
 go build -o "$RUN_DIR/bin/treedb-rag-benchmark" ./TreeDB/cmd/treedb_rag_benchmark
 "$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -dump-minima-manifest "$MANIFEST_PATH"
 
@@ -104,6 +122,7 @@ PYTHONPATH=clients/python/treedb_client/src "$PYTHON" \
 	--profile "$TREEDB_PROFILE" \
 	--ef-search "$TREEDB_EF_SEARCH" \
 	--operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
+	--startup-timeout "$TREEDB_STARTUP_TIMEOUT" \
 	${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"} ||
 	treedb_status=$?
 
@@ -133,7 +152,8 @@ if [[ -f "$TREEDB_EVIDENCE" && -f "$QDRANT_EVIDENCE" ]]; then
 		-minima-qdrant-evidence "$QDRANT_EVIDENCE" \
 		-minima-output "$OUTPUT_PATH" \
 		-minima-report "$REPORT_PATH" \
-		-minima-recommendation "$RECOMMENDATION" ||
+		-minima-recommendation "$RECOMMENDATION" \
+		-minima-expected-commit "$EXPECTED_COMMIT" ||
 		comparator_status=$?
 else
 	comparator_status=2

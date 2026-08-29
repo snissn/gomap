@@ -29,13 +29,14 @@ func main() {
 		minimaOutput         = flag.String("minima-output", "", "single validated Minima comparison JSON artifact")
 		minimaReport         = flag.String("minima-report", "", "concise Minima comparison markdown report")
 		minimaRecommendation = flag.String("minima-recommendation", "ready_with_alpha_limitations", "readiness recommendation for a clean validated comparison")
+		minimaExpectedCommit = flag.String("minima-expected-commit", "", "full expected merged commit for completed TreeDB/final Minima evidence")
 		cellWorker           = flag.Bool("cell-worker", false, "serve long-lived JSON-line cell requests for per-cell interleaving")
 	)
 	flag.Parse()
 	cfg.Workload = strings.TrimSpace(*workload)
 	switch cfg.Workload {
 	case "application":
-		if hasMinimaFlag(*dumpMinima, *validateMinima, *minimaTree, *minimaQdrant, *minimaOutput, *minimaReport) {
+		if hasMinimaFlag(*dumpMinima, *validateMinima, *minimaTree, *minimaQdrant, *minimaOutput, *minimaReport, *minimaExpectedCommit) {
 			fmt.Fprintln(os.Stderr, "treedb_rag_benchmark: Minima flags require -workload=minima")
 			os.Exit(2)
 		}
@@ -53,6 +54,13 @@ func main() {
 			if err == nil {
 				err = validateMinimaArtifact(&artifact)
 			}
+			if err == nil {
+				required := artifact.State != "partial"
+				for _, backend := range artifact.Backends {
+					required = required || backend.Name == "treedb" && backend.Operations.ManifestOrdered
+				}
+				err = validateMinimaExpectedCommit(&artifact, strings.TrimSpace(*minimaExpectedCommit), required)
+			}
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "treedb_rag_benchmark: validate Minima artifact: %v\n", err)
 				os.Exit(1)
@@ -64,7 +72,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "treedb_rag_benchmark: Minima execution requires both backend evidence paths, -minima-output, and -minima-report")
 			os.Exit(2)
 		}
-		if err := compareMinimaEvidence(*minimaTree, *minimaQdrant, *minimaOutput, *minimaReport, *minimaRecommendation); err != nil {
+		if err := compareMinimaEvidence(*minimaTree, *minimaQdrant, *minimaOutput, *minimaReport, *minimaRecommendation, strings.TrimSpace(*minimaExpectedCommit)); err != nil {
 			fmt.Fprintf(os.Stderr, "treedb_rag_benchmark: Minima comparison failed closed: %v\n", err)
 			os.Exit(1)
 		}

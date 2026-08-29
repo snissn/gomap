@@ -1249,6 +1249,22 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 		if artifact.Passing || artifact.Recommendation != "not_evaluated" {
 			return fmt.Errorf("minima artifact: partial run marked passing or recommended")
 		}
+		if len(artifact.Backends) == 1 && artifact.Backends[0].Name == "treedb" &&
+			artifact.Backends[0].Operations.ManifestOrdered {
+			raw, ok := artifact.RawEvidence["treedb"]
+			if !ok {
+				return fmt.Errorf("minima artifact: completed TreeDB partial evidence is missing raw evidence")
+			}
+			if err := validateMinimaTreeDBProvenance(artifact.Backends[0]); err != nil {
+				return err
+			}
+			if raw.PhaseAttribution == nil {
+				return fmt.Errorf("minima artifact: TreeDB phase attribution is missing")
+			}
+			if err := validateMinimaTreeDBPhaseAttribution(*raw.PhaseAttribution, raw.RestartBoundary); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	if artifact.State != "pass" || !artifact.Passing || len(artifact.Failures) != 0 {

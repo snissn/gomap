@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -214,11 +215,11 @@ func TestMinimaPayloadEvidenceCacheIsManifestKeyed(t *testing.T) {
 }
 
 func TestApplicationModeDetectsEveryMinimaFlag(t *testing.T) {
-	if hasMinimaFlag("", "", "", "", "", "") {
+	if hasMinimaFlag("", "", "", "", "", "", "") {
 		t.Fatal("empty Minima flags were reported as set")
 	}
-	for index := range 6 {
-		values := make([]string, 6)
+	for index := range 7 {
+		values := make([]string, 7)
 		values[index] = "set"
 		if !hasMinimaFlag(values...) {
 			t.Fatalf("Minima flag %d was ignored", index)
@@ -465,6 +466,107 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.TimedOverlap.Rounds[0].OverlappingReaders = raw.TimedOverlap.Rounds[0].OverlappingReaders[:3]
 			a.RawEvidence["treedb"] = raw
 		}},
+		{"missing TreeDB phase attribution", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution = nil
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"missing TreeDB phase boundary", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution.Phases = raw.PhaseAttribution.Phases[1:]
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"non-reconciling TreeDB phase total", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution.UnattributedNanos++
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"excessive TreeDB unattributed overhead", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			extra := int64(61_000_000_000)
+			raw.PhaseAttribution.TotalEndNanos += extra
+			raw.PhaseAttribution.TotalDurationNanos += extra
+			raw.PhaseAttribution.UnattributedNanos += extra
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"missing TreeDB phase resource boundary", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution.Phases[0].ResourceSegments[0].End.Captured = false
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"TreeDB phase cumulative CPU decreases within one process", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution.Phases[0].ResourceSegments[0].End.CPUSeconds = 0.5
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"TreeDB cumulative CPU resets between adjacent phases", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			segment := &raw.PhaseAttribution.Phases[1].ResourceSegments[0]
+			segment.Start.CPUSeconds, segment.End.CPUSeconds = 0.5, 0.5
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"completed TreeDB phase marked resource-incomplete", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			complete := false
+			raw.PhaseAttribution.Phases[0].ResourceEvidenceComplete = &complete
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"completed TreeDB phase carries an incomplete reason", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution.Phases[0].IncompleteReason = "shutdown failed"
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"cross-PID unsplit TreeDB phase resource boundary", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution.Phases[0].ResourceSegments[0].End.PID++
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"self-consistent pre-restart phase uses an unbound process", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			segment := &raw.PhaseAttribution.Phases[0].ResourceSegments[0]
+			segment.Start.PID, segment.End.PID = 999, 999
+			segment.Start.ProcessIdentity, segment.End.ProcessIdentity = "doctored", "doctored"
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"self-consistent post-restart phase uses an unbound process", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			segment := &raw.PhaseAttribution.Phases[6].ResourceSegments[0]
+			segment.Start.PID, segment.End.PID = 999, 999
+			segment.Start.ProcessIdentity, segment.End.ProcessIdentity = "doctored", "doctored"
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"cross-PID unsplit TreeDB restart resources", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			restart := raw.PhaseAttribution.Phases[5].ResourceSegments
+			raw.PhaseAttribution.Phases[5].ResourceSegments = []minimaRawPhaseResourceSegment{{
+				Start: restart[0].Start,
+				End:   restart[1].End,
+			}}
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"qualification-only TreeDB phase classified as production", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.PhaseAttribution.Phases[len(raw.PhaseAttribution.Phases)-1].Classification = "production_path"
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"missing TreeDB product provenance", func(a *minimaArtifact) {
+			minimaTestBackend(a, "treedb").Configuration["product_commit"] = ""
+		}},
+		{"stale TreeDB service binary revision", func(a *minimaArtifact) {
+			minimaTestBackend(a, "treedb").Configuration["service_binary_vcs_revision"] = strings.Repeat("d", 40)
+		}},
+		{"dirty TreeDB service binary provenance", func(a *minimaArtifact) {
+			minimaTestBackend(a, "treedb").Configuration["service_binary_vcs_modified"] = "true"
+		}},
+		{"missing TreeDB service binary revision", func(a *minimaArtifact) {
+			delete(minimaTestBackend(a, "treedb").Configuration, "service_binary_vcs_revision")
+		}},
+		{"missing TreeDB service binary modified status", func(a *minimaArtifact) {
+			delete(minimaTestBackend(a, "treedb").Configuration, "service_binary_vcs_modified")
+		}},
+		{"TreeDB shutdown timeout diverges from operation bound", func(a *minimaArtifact) {
+			minimaTestBackend(a, "treedb").Configuration["shutdown_timeout_seconds"] = "3600"
+		}},
 		{"raw resource disagrees with summary", func(a *minimaArtifact) {
 			raw := a.RawEvidence["qdrant"]
 			raw.ResourceMeasurement.DiskBytes = 1
@@ -479,6 +581,32 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw := a.RawEvidence["treedb"]
 			raw.ResourceMeasurement.RSSBytes++
 			a.RawEvidence["treedb"] = raw
+		}},
+		{"TreeDB phase restart old endpoint contradicts aggregate", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			segment := &raw.ResourceMeasurement.Segments[0]
+			segment.End.CPUSeconds = 1.25
+			segment.CPUSeconds = 0.25
+			raw.ResourceMeasurement.CPUSeconds = 2.75
+			a.RawEvidence["treedb"] = raw
+			for index := range a.Scenarios {
+				if a.Scenarios[index].Backend == "treedb" {
+					a.Scenarios[index].Resource.CPUSeconds = 2.75
+				}
+			}
+		}},
+		{"TreeDB phase restart new baseline contradicts aggregate", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			segment := &raw.ResourceMeasurement.Segments[1]
+			segment.Baseline.DiskBytes = 900
+			segment.DiskBytes = 200
+			raw.ResourceMeasurement.DiskBytes = 200
+			a.RawEvidence["treedb"] = raw
+			for index := range a.Scenarios {
+				if a.Scenarios[index].Backend == "treedb" {
+					a.Scenarios[index].Resource.DiskBytes = 200
+				}
+			}
 		}},
 		{"synthetic zero allocations marked unavailable", func(a *minimaArtifact) {
 			zero := 0.0
@@ -587,7 +715,12 @@ func validMinimaArtifact() minimaArtifact {
 		ReindexExecutionSHA256:    minimaReindexExecutionDigest(reindexTrace), ReindexExecutionTrace: reindexTrace,
 	}
 	backends := []minimaBackendEvidence{
-		{Name: "treedb", ServerVersion: "test", ClientVersion: "test", Durability: "wal_sync", Configuration: map[string]string{"effective": "test"}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
+		{Name: "treedb", ServerVersion: "test", ClientVersion: "test", Durability: "wal_sync", Configuration: map[string]string{
+			"effective": "test", "product_commit": strings.Repeat("a", 40), "harness_commit": strings.Repeat("a", 40),
+			"service_binary_sha256": strings.Repeat("b", 64), "runner_sha256": strings.Repeat("c", 64),
+			"service_binary_vcs_revision": strings.Repeat("a", 40), "service_binary_vcs_modified": "false",
+			"operation_timeout_seconds": "120", "startup_reopen_timeout_seconds": "3600", "shutdown_timeout_seconds": "120",
+		}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
 		{Name: "qdrant", ServerVersion: "test", ClientVersion: "test", Durability: "wal", Configuration: map[string]string{
 			"effective":           "test",
 			"initial_upload_hnsw": minimaQdrantInitialHNSWConfig, "initial_upload_optimizers": minimaQdrantInitialOptimizerConfig,
@@ -603,6 +736,10 @@ func validMinimaArtifact() minimaArtifact {
 	resource := minimaTestResourceMeasurement()
 	rawEvidence := make(map[string]minimaRawBackendEvidence, len(backends))
 	for _, backend := range backends {
+		backendResource := resource
+		if backend.Name == "treedb" {
+			backendResource = minimaTestTreeDBResourceMeasurement()
+		}
 		rounds := make([]minimaRawTimedOverlapRound, len(timed.Rounds))
 		for ordinal, round := range timed.Rounds {
 			readers := make([]int, timed.ReaderConcurrency)
@@ -635,13 +772,9 @@ func validMinimaArtifact() minimaArtifact {
 			PhaseLatencyDistributions: map[string]minimaRawLatencyDistribution{
 				"search": {Count: 1, TotalNanos: 7, MinimumNanos: 7, P50Nanos: 7, P95Nanos: 7, P99Nanos: 7, MaximumNanos: 7},
 			},
-			Events: []json.RawMessage{json.RawMessage(`{"operation":"test"}`)},
-			RestartBoundary: minimaRawRestartBoundary{
-				HookIdentity: "test restart hook", OldPID: 100, NewPID: 101,
-				OldProcessIdentity: "old process", NewProcessIdentity: "new process",
-				PIDChanged: true, Verified: true,
-			},
-			ResourceMeasurement: resource,
+			Events:              []json.RawMessage{json.RawMessage(`{"operation":"test"}`)},
+			RestartBoundary:     minimaTestRestartBoundary(),
+			ResourceMeasurement: backendResource,
 			ResourceAvailability: map[string]map[string]string{
 				"baseline": {"rss_bytes": "test"},
 				"end":      {"rss_bytes": "test"},
@@ -649,6 +782,8 @@ func validMinimaArtifact() minimaArtifact {
 		}
 		if backend.Name == "treedb" {
 			evidence := rawEvidence[backend.Name]
+			phaseAttribution := minimaTestPhaseAttribution()
+			evidence.PhaseAttribution = &phaseAttribution
 			evidence.ServiceLog = minimaRawServiceLog{
 				Path: "/tmp/treedb-service.log", Tail: "TreeDB Document Service listening", MaxTailBytes: 64 << 10,
 			}
@@ -703,6 +838,10 @@ func validMinimaArtifact() minimaArtifact {
 		Backends: backends, Recommendation: "ready_direct", RawEvidence: rawEvidence,
 	}
 	for _, backend := range backends {
+		backendResource := resource
+		if backend.Name == "treedb" {
+			backendResource = minimaTestTreeDBResourceMeasurement()
+		}
 		for _, spec := range manifest.Corpora {
 			query := queries[spec.Name]
 			zeroMismatch, zeroRetry := 0, 0
@@ -747,7 +886,7 @@ func validMinimaArtifact() minimaArtifact {
 				Timing: minimaTimingEvidence{Captured: true},
 				Resource: minimaResourceEvidence{
 					Captured: true, AllocationAvailability: "unavailable",
-					RSSBytes: resource.RSSBytes, CPUSeconds: resource.CPUSeconds, DiskBytes: resource.DiskBytes,
+					RSSBytes: backendResource.RSSBytes, CPUSeconds: backendResource.CPUSeconds, DiskBytes: backendResource.DiskBytes,
 				},
 			})
 			if backend.Name == "treedb" {
@@ -761,6 +900,72 @@ func validMinimaArtifact() minimaArtifact {
 		}
 	}
 	return artifact
+}
+
+func minimaTestRestartBoundary() minimaRawRestartBoundary {
+	return minimaRawRestartBoundary{
+		HookIdentity:       "test restart hook",
+		OldPID:             100,
+		NewPID:             101,
+		OldProcessIdentity: "old process",
+		NewProcessIdentity: "new process",
+		PIDChanged:         true,
+		Verified:           true,
+	}
+}
+
+func minimaTestPhaseAttribution() minimaRawPhaseAttribution {
+	names := []string{
+		"initial_durable_load",
+		"warmup_search",
+		"timed_search_write_overlap",
+		"lifecycle_mutations",
+		"pre_close_queries",
+		"restart_open_readiness",
+		"post_reopen",
+		"final_state_scroll_artifact_work",
+	}
+	restart := minimaTestRestartBoundary()
+	oldResource := minimaRawPhaseResourceEndpoint{
+		Captured: true, RSSBytes: 100, CPUSeconds: 1, DiskBytes: 1000,
+		PID: restart.OldPID, ProcessIdentity: restart.OldProcessIdentity,
+	}
+	newResource := minimaRawPhaseResourceEndpoint{
+		Captured: true, RSSBytes: 200, CPUSeconds: 2, DiskBytes: 1000,
+		PID: restart.NewPID, ProcessIdentity: restart.NewProcessIdentity,
+	}
+	newBaseline := newResource
+	newBaseline.RSSBytes = 0
+	newBaseline.CPUSeconds = 0
+	phases := make([]minimaRawPhaseBoundary, len(names))
+	for ordinal, name := range names {
+		start := int64(1000 + ordinal*110)
+		classification := "production_path"
+		if ordinal == len(names)-1 {
+			classification = "qualification_only"
+		}
+		resource := oldResource
+		if ordinal > 5 {
+			resource = newResource
+		}
+		segments := []minimaRawPhaseResourceSegment{{Start: resource, End: resource}}
+		if ordinal == 5 {
+			segments = []minimaRawPhaseResourceSegment{
+				{Start: oldResource, End: oldResource},
+				{Start: newBaseline, End: newResource},
+			}
+		}
+		phases[ordinal] = minimaRawPhaseBoundary{
+			Name: name, Classification: classification, StartNanos: start, EndNanos: start + 100,
+			DurationNanos: 100, SampleCount: 1, SampleDurationNanos: 50,
+			ResourceSegments: segments,
+		}
+	}
+	return minimaRawPhaseAttribution{
+		Clock: "time.monotonic_ns", TotalStartNanos: 1000, TotalEndNanos: 1870,
+		TotalDurationNanos: 870, UnattributedNanos: 70,
+		UnattributedRule: minimaPhaseUnattributedRule, Phases: phases,
+	}
 }
 
 func minimaTestInt(value int) *int {
@@ -789,7 +994,7 @@ func minimaTestNativeRouteResponse(route minimaRouteEvidence, visibility minimaV
 }
 
 func minimaTestEnvironment() map[string]string {
-	return map[string]string{"os": "test", "arch": "test", "cpu": "test", "memory": "test"}
+	return map[string]string{"os": "test", "arch": "test", "cpu": "test", "memory": "test", "host": "test-host"}
 }
 
 func minimaTestResourceMeasurement() minimaRawResourceMeasurement {
@@ -806,6 +1011,28 @@ func minimaTestResourceMeasurement() minimaRawResourceMeasurement {
 		},
 		Segments: []minimaRawResourceSegment{segment},
 		Baseline: &baseline,
+		End:      &end,
+	}
+}
+
+func minimaTestTreeDBResourceMeasurement() minimaRawResourceMeasurement {
+	old := minimaRawResourceSnapshot{Captured: true, RSSBytes: 100, CPUSeconds: 1, DiskBytes: 1000}
+	fresh := minimaRawResourceSnapshot{Captured: true, RSSBytes: 0, CPUSeconds: 0, DiskBytes: 1000}
+	end := minimaRawResourceSnapshot{Captured: true, RSSBytes: 125, CPUSeconds: 2.5, DiskBytes: 1100}
+	segments := []minimaRawResourceSegment{
+		{Captured: true, Baseline: old, End: old},
+		{
+			Captured: true, RSSBytes: 125, CPUSeconds: 2.5, DiskBytes: 100,
+			Baseline: fresh, End: end,
+		},
+	}
+	return minimaRawResourceMeasurement{
+		Captured: true, RSSBytes: 125, CPUSeconds: 2.5, DiskBytes: 100,
+		Semantics: minimaRawResourceSemantics{
+			RSSBytes: minimaResourceRSSSemantics, CPUSeconds: minimaResourceCPUSemantics, DiskBytes: minimaResourceDiskSemantics,
+		},
+		Segments: segments,
+		Baseline: &old,
 		End:      &end,
 	}
 }
@@ -876,8 +1103,93 @@ func minimaPartialBackendEvidence(t *testing.T) (minimaArtifact, minimaArtifact)
 	return tree, qdrant
 }
 
+func TestMinimaExpectedCommitBinding(t *testing.T) {
+	artifact := validMinimaArtifact()
+	expected := strings.Repeat("a", 40)
+	if err := validateMinimaExpectedCommit(&artifact, expected, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateMinimaExpectedCommit(&artifact, strings.Repeat("b", 40), true); err == nil {
+		t.Fatal("wrong merged commit was accepted")
+	}
+	binaryMismatch := validMinimaArtifact()
+	minimaTestBackend(&binaryMismatch, "treedb").Configuration["service_binary_vcs_revision"] = strings.Repeat("b", 40)
+	if err := validateMinimaExpectedCommit(&binaryMismatch, expected, true); err == nil {
+		t.Fatal("wrong service binary commit was accepted")
+	}
+	if err := validateMinimaExpectedCommit(&artifact, "", true); err == nil {
+		t.Fatal("missing required merged commit was accepted")
+	}
+}
+
+func TestMinimaPhaseIncompleteMarkerRoundTrip(t *testing.T) {
+	complete := false
+	input := minimaRawPhaseBoundary{
+		Name:                     "restart_open_readiness",
+		ResourceEvidenceComplete: &complete,
+		IncompleteReason:         "graceful_shutdown_failed_before_reopen",
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded minimaRawPhaseBoundary
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.ResourceEvidenceComplete == nil || *decoded.ResourceEvidenceComplete ||
+		decoded.IncompleteReason != input.IncompleteReason {
+		t.Fatalf("incomplete phase marker was not preserved: %+v", decoded)
+	}
+	rewritten, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != string(rewritten) {
+		t.Fatalf("incomplete phase marker changed during round trip: %s != %s", encoded, rewritten)
+	}
+}
+
+func TestMinimaPhaseUnattributedBound(t *testing.T) {
+	const total = int64(7_000_000_000_000)
+	if got := minimaPhaseUnattributedLimit(1_000_000_000_000); got != minimaPhaseUnattributedAbsoluteNanos {
+		t.Fatalf("absolute unattributed boundary=%d", got)
+	}
+	if got := minimaPhaseUnattributedLimit(total); got != 70_000_000_000 {
+		t.Fatalf("proportional unattributed boundary=%d", got)
+	}
+	attribution := minimaTestPhaseAttribution()
+	attributed := total - minimaPhaseUnattributedLimit(total)
+	cursor := attribution.TotalStartNanos
+	for index := range attribution.Phases {
+		duration := attributed / int64(len(attribution.Phases))
+		if index == len(attribution.Phases)-1 {
+			duration = attributed - (cursor - attribution.TotalStartNanos)
+		}
+		attribution.Phases[index].StartNanos = cursor
+		attribution.Phases[index].EndNanos = cursor + duration
+		attribution.Phases[index].DurationNanos = duration
+		cursor += duration
+	}
+	attribution.TotalEndNanos = attribution.TotalStartNanos + total
+	attribution.TotalDurationNanos = total
+	attribution.UnattributedNanos = minimaPhaseUnattributedLimit(total)
+	if err := validateMinimaTreeDBPhaseAttribution(attribution, minimaTestRestartBoundary()); err != nil {
+		t.Fatalf("boundary attribution rejected: %v", err)
+	}
+	attribution.TotalEndNanos++
+	attribution.TotalDurationNanos++
+	attribution.UnattributedNanos++
+	if err := validateMinimaTreeDBPhaseAttribution(attribution, minimaTestRestartBoundary()); err == nil {
+		t.Fatal("over-limit unattributed overhead was accepted")
+	}
+}
+
 func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	tree, qdrant := minimaPartialBackendEvidence(t)
+	if qdrant.RawEvidence["qdrant"].PhaseAttribution != nil {
+		t.Fatal("Qdrant input fixture unexpectedly contains TreeDB phase attribution")
+	}
 	dir := t.TempDir()
 	treePath, qdrantPath := filepath.Join(dir, "tree.json"), filepath.Join(dir, "qdrant.json")
 	for path, artifact := range map[string]minimaArtifact{treePath: tree, qdrantPath: qdrant} {
@@ -890,7 +1202,7 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 		}
 	}
 	out, report := filepath.Join(dir, "qualification.json"), filepath.Join(dir, "report.md")
-	if err := compareMinimaEvidence(treePath, qdrantPath, out, report, "ready_with_alpha_limitations"); err != nil {
+	if err := compareMinimaEvidence(treePath, qdrantPath, out, report, "ready_with_alpha_limitations", strings.Repeat("a", 40)); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(out)
@@ -911,6 +1223,9 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 		combined.RawEvidence["qdrant"].ResourceAvailability["end"]["rss_bytes"] != "test" {
 		t.Fatal("combined artifact dropped typed backend raw evidence fields")
 	}
+	if combined.RawEvidence["qdrant"].PhaseAttribution != nil {
+		t.Fatal("combined Qdrant raw evidence gained TreeDB phase attribution")
+	}
 	var wire struct {
 		RawEvidence map[string]map[string]json.RawMessage `json:"backend_raw_evidence"`
 	}
@@ -923,6 +1238,9 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	}
 	if _, leaked := treeRaw["readiness"]; leaked {
 		t.Fatal("combined TreeDB raw evidence leaked Qdrant readiness")
+	}
+	if _, leaked := qdrantRaw["phase_attribution"]; leaked {
+		t.Fatal("combined Qdrant raw evidence serialized TreeDB phase attribution")
 	}
 	if _, ok := qdrantRaw["collection_configuration_transition"]; !ok {
 		t.Fatal("combined Qdrant raw evidence dropped configuration transition")
@@ -953,7 +1271,7 @@ func TestMinimaComparatorWritesPartialOracleFailureAndReturnsError(t *testing.T)
 		}
 	}
 	out, report := filepath.Join(dir, "qualification.json"), filepath.Join(dir, "report.md")
-	if err := compareMinimaEvidence(treePath, qdrantPath, out, report, "ready_with_alpha_limitations"); err == nil {
+	if err := compareMinimaEvidence(treePath, qdrantPath, out, report, "ready_with_alpha_limitations", strings.Repeat("a", 40)); err == nil {
 		t.Fatal("partial oracle failure returned success")
 	}
 	raw, err := os.ReadFile(out)

@@ -803,7 +803,7 @@ def cpu_time_seconds(value: str) -> float:
     return float(days) * 86400 + hours * 3600 + minutes * 60 + seconds
 
 
-def server_resource_usage(pid: int | None, storage_path: Path | None, server_name: str) -> dict[str, Any]:
+def server_process_resource_usage(pid: int | None, server_name: str) -> dict[str, Any]:
     rss: int | None = None
     cpu: float | None = None
     error = ""
@@ -819,21 +819,33 @@ def server_resource_usage(pid: int | None, storage_path: Path | None, server_nam
             rss, cpu = int(fields[0]) * 1024, cpu_time_seconds(fields[1])
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             error = f"{type(exc).__name__}: {exc}"
-    disk_available = storage_path is not None and storage_path.exists()
-    captured = rss is not None and cpu is not None and disk_available
     return {
-        "captured": captured,
+        "captured": rss is not None and cpu is not None,
         "rss_bytes": rss or 0,
         "cpu_seconds": cpu or 0.0,
-        "disk_bytes": disk_bytes(storage_path),
         "availability": {
             "rss_bytes": f"{server_name} server PID {pid}" if rss is not None else "unavailable",
             "cpu_seconds": f"{server_name} server PID {pid}" if cpu is not None else "unavailable",
-            "disk_bytes": str(storage_path) if disk_available else "unavailable",
             "bytes_per_op": "unavailable", "allocs_per_op": "unavailable",
             "measurement_error": error,
         },
     }
+
+
+def server_resource_usage(pid: int | None, storage_path: Path | None, server_name: str) -> dict[str, Any]:
+    process = server_process_resource_usage(pid, server_name)
+    disk_available = storage_path is not None and storage_path.exists()
+    return {
+        **process,
+        "captured": process["captured"] and disk_available,
+        "disk_bytes": disk_bytes(storage_path),
+        "availability": {
+            **process["availability"],
+            "disk_bytes": str(storage_path) if disk_available else "unavailable",
+        },
+    }
+
+
 def server_process_identity(pid: int) -> str:
     if type(pid) is not int or pid <= 0:
         raise RuntimeError("server process identity requires a positive PID")
@@ -1080,6 +1092,7 @@ class QdrantMinimaRunner:
         self.completed_resource_segments: list[dict[str, Any]] = []
         self.restart_boundary: dict[str, Any] = {}
         self.restart_origin: tuple[int, str] | None = None
+        self.restart_origin_resource_end: dict[str, Any] | None = None
         self.state_scroll: dict[str, Any] = {}
         self.effective_collection: dict[str, Any] = {}
         self.overlap_evidence: dict[str, Any] = {}
@@ -1101,15 +1114,23 @@ class QdrantMinimaRunner:
     def connect(self) -> None:
         self.client = self.client_factory()
 
+    def begin_phase_attribution(self) -> None:
+        pass
+
+    def phase_transition(self, _name: str) -> None:
+        pass
+
     def capture_restart_origin(self) -> None:
         old_pid = self.server_pid
         if type(old_pid) is not int or old_pid <= 0:
             raise RuntimeError("close/reopen requires the original backend server PID")
         old_process_identity = self.process_identity(old_pid)
         if self.resource_baseline is not None:
+            self.restart_origin_resource_end = server_resource_usage(
+                old_pid, self.storage_path, self.resource_server_name,
+            )
             self.completed_resource_segments.append(
-                resource_delta(self.resource_baseline, server_resource_usage(
-                    old_pid, self.storage_path, self.resource_server_name))
+                resource_delta(self.resource_baseline, self.restart_origin_resource_end)
             )
         self.restart_origin = (old_pid, old_process_identity)
 
@@ -1843,6 +1864,17 @@ class QdrantMinimaRunner:
             if operation["ordinal"] != ordinal or operation["name"] != OPERATION_NAMES[ordinal]:
                 raise RuntimeError("operation stream changed after validation")
             name = operation["name"]
+            if name == "initial_batch_insert":
+                self.begin_phase_attribution()
+            phase = {
+                "warmup_search": "warmup_search",
+                "timed_search_with_batch_insert": "timed_search_write_overlap",
+                "reindex_delete_by_user_and_fpath_while_reading": "lifecycle_mutations",
+                "reopen": "post_reopen",
+                "final_manifest_and_oracle_comparison": "final_state_scroll_artifact_work",
+            }.get(name)
+            if phase is not None:
+                self.phase_transition(phase)
             if name == "ensure_compatible_collection":
                 self.connect()
                 self.evidence.call(name, "writer", "all", self.create_owned_collection)
@@ -1879,8 +1911,10 @@ class QdrantMinimaRunner:
                 self.operations["explicit_delete_visible"] = True
             elif name == "close":
                 assert self.client is not None
+                self.phase_transition("pre_close_queries")
                 for scenario in self.specs:
                     self.evidence.preclose[scenario] = self.search("preclose_reopen_baseline", scenario)
+                self.phase_transition("restart_open_readiness")
                 self.capture_restart_origin()
                 self.client.close()
                 self.client = None

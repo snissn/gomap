@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
@@ -29,6 +30,21 @@ DIAGNOSTICS_STATS_PATH = "/debug/treedb/stats"
 DIAGNOSTIC_CAPTURE_BYTES = 32 << 20
 DIAGNOSTIC_STATS_BYTES = 4 << 20
 STATE_SCROLL_PAGE_SIZE = 8192
+PHASE_UNATTRIBUTED_RULE = (
+    "total_duration_nanos = sum(phase.duration_nanos) + unattributed_nanos; "
+    "unattributed_nanos <= max(60000000000, total_duration_nanos / 100); "
+    "unattributed covers only runner bookkeeping between declared boundaries"
+)
+PHASE_CLASSIFICATIONS = {
+    "initial_durable_load": "production_path",
+    "warmup_search": "production_path",
+    "timed_search_write_overlap": "production_path",
+    "lifecycle_mutations": "production_path",
+    "pre_close_queries": "production_path",
+    "restart_open_readiness": "production_path",
+    "post_reopen": "production_path",
+    "final_state_scroll_artifact_work": "qualification_only",
+}
 DIAGNOSTIC_PROFILE_ENDPOINTS = {
     "cpu": ("/debug/pprof/profile", "cpu.pprof"),
     "goroutine": ("/debug/pprof/goroutine?debug=2", "goroutine.txt"),
@@ -50,12 +66,61 @@ def service_document(document: dict[str, Any]) -> dict[str, Any]:
     return {"id": document["id"], "content": document["content"], "embedding": document["vector"],
             "meta": {"user_id": document["user_id"], "fpath": document["fpath"]}}
 
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def repository_commit() -> str:
+    root = Path(__file__).resolve().parents[2]
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"], cwd=root,
+        check=True, capture_output=True, text=True,
+    )
+    if status.stdout:
+        raise RuntimeError("TreeDB Minima runner requires a clean source checkout")
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root,
+        check=True, capture_output=True, text=True,
+    )
+    commit = result.stdout.strip()
+    if len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit):
+        raise RuntimeError("TreeDB Minima runner could not bind an exact source commit")
+    return commit
+
+def service_binary_build_provenance(binary: Path, expected_commit: str) -> tuple[str, str]:
+    try:
+        result = subprocess.run(
+            ["go", "version", "-m", str(binary)],
+            check=False, capture_output=True, text=True,
+        )
+    except OSError as exc:
+        raise RuntimeError("TreeDB Minima runner could not inspect service binary Go build metadata") from exc
+    if result.returncode != 0:
+        raise RuntimeError("TreeDB Minima runner could not inspect service binary Go build metadata")
+    settings: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        fields = line.strip().split("\t")
+        if len(fields) != 2 or fields[0] != "build" or "=" not in fields[1]:
+            continue
+        key, value = fields[1].split("=", 1)
+        settings[key] = value
+    revision, modified = settings.get("vcs.revision", ""), settings.get("vcs.modified", "")
+    if len(revision) != 40 or any(character not in "0123456789abcdef" for character in revision):
+        raise RuntimeError("TreeDB Minima service binary is missing an exact vcs.revision")
+    if revision != expected_commit:
+        raise RuntimeError("TreeDB Minima service binary vcs.revision does not match the source checkout")
+    if modified != "false":
+        raise RuntimeError("TreeDB Minima service binary must record vcs.modified=false")
+    return revision, modified
+
 
 class ServiceController:
-    def __init__(self, binary: Path, url: str, data_dir: Path, profile: str, timeout: float, *,
+    def __init__(self, binary: Path, url: str, data_dir: Path, profile: str,
+                 startup_timeout: float, shutdown_timeout: float, *,
                  diagnostics_url: str | None = None, block_profile_rate: int = 1,
                  mutex_profile_fraction: int = 1, diagnostics_timeout: float = 2) -> None:
-        self.binary, self.url, self.data_dir, self.profile, self.timeout = binary, url.rstrip("/"), data_dir, profile, timeout
+        self.binary, self.url, self.data_dir, self.profile = binary, url.rstrip("/"), data_dir, profile
+        self.startup_timeout, self.shutdown_timeout = startup_timeout, shutdown_timeout
         self.diagnostics_url = diagnostics_url.rstrip("/") if diagnostics_url else None
         self.block_profile_rate = block_profile_rate
         self.mutex_profile_fraction = mutex_profile_fraction
@@ -63,6 +128,7 @@ class ServiceController:
         self.process: subprocess.Popen[str] | None = None
         self.log_path = data_dir.parent / "treedb-document-service.log"
         self.log_file: Any | None = None
+        self.last_shutdown_resource_end: dict[str, Any] | None = None
 
     @property
     def pid(self) -> int | None:
@@ -102,6 +168,7 @@ class ServiceController:
     def start(self) -> None:
         if self.pid is not None:
             return
+        self.last_shutdown_resource_end = None
         self.data_dir.mkdir(parents=True, exist_ok=True)
         address = self._listen_address(self.url, "service")
         argv = [str(self.binary), "-addr", address, "-dir", str(self.data_dir), "-profile", self.profile]
@@ -117,7 +184,7 @@ class ServiceController:
             self.process = subprocess.Popen(
                 argv, stdout=self.log_file, stderr=subprocess.STDOUT, text=True,
             )
-            deadline, last = time.monotonic() + self.timeout, ""
+            deadline, last = time.monotonic() + self.startup_timeout, ""
             while time.monotonic() < deadline:
                 if self.process.poll() is not None:
                     raise RuntimeError(f"TreeDB service exited during startup; log tail: {self.log_evidence()['tail']}")
@@ -133,7 +200,7 @@ class ServiceController:
                 except BaseException as exc:
                     last = repr(exc)
                 time.sleep(0.05)
-            raise TimeoutError(f"TreeDB service readiness exceeded {self.timeout}s: {last}")
+            raise TimeoutError(f"TreeDB service readiness exceeded {self.startup_timeout}s: {last}")
         except BaseException:
             try:
                 self.stop()
@@ -142,18 +209,49 @@ class ServiceController:
             raise
 
     def stop(self) -> None:
-        if self.process is not None:
-            if self.process.poll() is None:
-                self.process.terminate()
-                try:
-                    self.process.wait(timeout=self.timeout)
-                except subprocess.TimeoutExpired:
-                    self.process.kill()
-                    self.process.wait(timeout=self.timeout)
+        try:
+            timed_out = False
+            if self.process is not None:
+                process = self.process
+                if process.poll() is None:
+                    pid = process.pid
+                    latest_process = common.server_process_resource_usage(pid, "TreeDB")
+                    process.terminate()
+                    deadline = time.monotonic() + self.shutdown_timeout
+                    exited = False
+                    while not exited:
+                        sample = common.server_process_resource_usage(pid, "TreeDB")
+                        if sample["captured"]:
+                            latest_process = sample
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        try:
+                            process.wait(timeout=min(0.05, remaining))
+                            exited = True
+                        except subprocess.TimeoutExpired:
+                            exited = process.poll() is not None
+                    if not exited:
+                        process.kill()
+                        process.wait(timeout=min(5, self.shutdown_timeout))
+                        timed_out = True
+                    disk_available = self.data_dir.exists()
+                    self.last_shutdown_resource_end = {
+                        **latest_process,
+                        "captured": latest_process["captured"] and disk_available,
+                        "disk_bytes": common.disk_bytes(self.data_dir),
+                        "availability": {
+                            **latest_process["availability"],
+                            "disk_bytes": str(self.data_dir) if disk_available else "unavailable",
+                        },
+                    }
+            if timed_out:
+                raise TimeoutError(f"TreeDB graceful shutdown exceeded {self.shutdown_timeout}s")
+        finally:
             self.process = None
-        if self.log_file is not None:
-            self.log_file.close()
-            self.log_file = None
+            if self.log_file is not None:
+                self.log_file.close()
+                self.log_file = None
 
     def log_evidence(self) -> dict[str, Any]:
         tail = b""
@@ -281,7 +379,21 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                  operation_timeout: float, ef_search: int, diagnostics_dir: Path | None = None,
                  diagnostic_slow_seconds: float = 30, diagnostic_profile_seconds: int = 5,
                  diagnostic_capture_timeout: float = 10) -> None:
+        self._phase_total_start: int | None = None
+        self._phase_start: int | None = None
+        self._phase_name: str | None = None
+        self._phase_resource_start: dict[str, Any] | None = None
+        self._phase_boundaries: list[dict[str, Any]] = []
+        self._phase_attribution: dict[str, Any] | None = None
+        self._phase_restart_old_end: dict[str, Any] | None = None
+        self._controller_restart_origin: tuple[int, str] | None = None
         self.controller = controller
+        self.source_commit = repository_commit()
+        self.service_binary_vcs_revision, self.service_binary_vcs_modified = \
+            service_binary_build_provenance(controller.binary.resolve(), self.source_commit)
+        self.runner_sha256 = file_sha256(Path(__file__).resolve())
+        self.service_binary_sha256 = file_sha256(controller.binary.resolve())
+        self.operation_timeout_seconds = operation_timeout
         controller.start()
         clients = ThreadLocalClients(controller.url, operation_timeout, controller)
         super().__init__(manifest, client_factory=lambda: clients, models=None, url=controller.url,
@@ -312,11 +424,216 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                     self._expected_insert_batches[(operation["name"], insertion["scenario"], start)] = expected_rows
         if diagnostics_dir is not None and controller.diagnostics_url is None:
             raise ValueError("diagnostics_dir requires an enabled controller diagnostics URL")
+
     def restart_controller(self) -> int:
+        if self._controller_restart_origin is None:
+            raise RuntimeError("TreeDB restart resource origin is unavailable")
+        old_pid, old_identity = self._controller_restart_origin
+        shutdown_end = self.controller.last_shutdown_resource_end
+        if shutdown_end is None or not shutdown_end["captured"]:
+            raise RuntimeError("TreeDB graceful shutdown resource endpoint is unavailable")
+        self.restart_origin_resource_end = shutdown_end
+        self._phase_restart_old_end = {
+            **shutdown_end,
+            "pid": old_pid,
+            "process_identity": old_identity,
+        }
+        if self.resource_baseline is not None:
+            self.completed_resource_segments.append(
+                common.resource_delta(self.resource_baseline, shutdown_end)
+            )
         self.controller.start()
         if self.controller.pid is None:
             raise RuntimeError("TreeDB service controller restarted without a PID")
         return self.controller.pid
+
+    def restart_backend(self) -> None:
+        super().restart_backend()
+        if self.resource_baseline is None or self.restart_origin_resource_end is None:
+            raise RuntimeError("TreeDB restarted resource baseline is unavailable")
+        self.resource_baseline = {
+            **self.resource_baseline,
+            "rss_bytes": 0,
+            "cpu_seconds": 0.0,
+            "disk_bytes": self.restart_origin_resource_end["disk_bytes"],
+        }
+
+    def _phase_process_snapshot(self) -> dict[str, Any]:
+        pid = self.controller.pid
+        if type(pid) is not int or pid <= 0:
+            raise RuntimeError("TreeDB phase resource snapshot requires a live service PID")
+        identity = self.process_identity(pid)
+        snapshot = common.server_process_resource_usage(pid, self.resource_server_name)
+        snapshot["pid"] = pid
+        snapshot["process_identity"] = identity
+        return snapshot
+
+    def _phase_disk_snapshot(self) -> dict[str, Any]:
+        available = self.storage_path is not None and self.storage_path.exists()
+        return {
+            "captured": available,
+            "disk_bytes": common.disk_bytes(self.storage_path),
+            "availability": {
+                "disk_bytes": str(self.storage_path) if available else "unavailable",
+            },
+        }
+
+    @staticmethod
+    def _phase_resource_endpoint(process: dict[str, Any], disk: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **process,
+            "captured": process["captured"] and disk["captured"],
+            "disk_bytes": disk["disk_bytes"],
+            "availability": {
+                **process["availability"],
+                **disk["availability"],
+            },
+        }
+    def capture_restart_origin(self) -> None:
+        old_pid = self.server_pid
+        if type(old_pid) is not int or old_pid <= 0:
+            raise RuntimeError("close/reopen requires the original TreeDB server PID")
+        origin = (old_pid, self.process_identity(old_pid))
+        self.restart_origin = origin
+        self._controller_restart_origin = origin
+        self.restart_origin_resource_end = None
+        self._phase_restart_old_end = None
+
+    def begin_phase_attribution(self) -> None:
+        if self._phase_start is not None:
+            raise RuntimeError("TreeDB phase attribution already started")
+        disk = self._phase_disk_snapshot()
+        process = self._phase_process_snapshot()
+        self._phase_resource_start = self._phase_resource_endpoint(process, disk)
+        phase_start = time.monotonic_ns()
+        self._phase_total_start = phase_start
+        self._phase_start = phase_start
+        self._phase_name = "initial_durable_load"
+
+    def phase_transition(self, name: str) -> None:
+        if name not in PHASE_CLASSIFICATIONS:
+            raise RuntimeError(f"unknown TreeDB attribution phase {name!r}")
+        if self._phase_start is None or self._phase_name is None or self._phase_resource_start is None:
+            raise RuntimeError("TreeDB phase attribution was not started")
+        phase_end = time.monotonic_ns()
+        end_process = self._phase_process_snapshot()
+        disk = self._phase_disk_snapshot()
+        resource_end = self._phase_resource_endpoint(end_process, disk)
+        next_process = self._phase_process_snapshot()
+        next_resource_start = self._phase_resource_endpoint(next_process, disk)
+        next_start = time.monotonic_ns()
+        resource_segments = [{"start": self._phase_resource_start, "end": resource_end}]
+        if self._phase_name == "restart_open_readiness":
+            old_end = self._phase_restart_old_end
+            if old_end is None:
+                raise RuntimeError("TreeDB restart phase is missing the old-process resource endpoint")
+            new_start = {
+                **resource_end,
+                "rss_bytes": 0,
+                "cpu_seconds": 0.0,
+                "disk_bytes": old_end["disk_bytes"],
+            }
+            resource_segments = [
+                {"start": self._phase_resource_start, "end": old_end},
+                {"start": new_start, "end": resource_end},
+            ]
+        self._phase_boundaries.append({
+            "name": self._phase_name,
+            "classification": PHASE_CLASSIFICATIONS[self._phase_name],
+            "start_nanos": self._phase_start,
+            "end_nanos": phase_end,
+            "duration_nanos": phase_end - self._phase_start,
+            "resource_segments": resource_segments,
+        })
+        self._phase_name, self._phase_start = name, next_start
+        self._phase_resource_start = next_resource_start
+
+    def _finish_phase_attribution(self) -> dict[str, Any]:
+        if self._phase_attribution is not None:
+            return self._phase_attribution
+        if self._phase_start is None:
+            self.begin_phase_attribution()
+        assert self._phase_name is not None and self._phase_resource_start is not None
+        assert self._phase_total_start is not None
+        phase_end = time.monotonic_ns()
+        boundary = {
+            "name": self._phase_name,
+            "classification": PHASE_CLASSIFICATIONS[self._phase_name],
+            "start_nanos": self._phase_start,
+            "end_nanos": phase_end,
+            "duration_nanos": phase_end - self._phase_start,
+        }
+        shutdown_end = getattr(self.controller, "last_shutdown_resource_end", None)
+        incomplete_reason = ""
+        if self.controller.pid is None:
+            endpoint = self._phase_resource_start
+            incomplete_reason = "service_unavailable_before_phase_endpoint"
+            if self._phase_name == "restart_open_readiness":
+                if self._phase_restart_old_end is not None:
+                    endpoint = self._phase_restart_old_end
+                    incomplete_reason = "replacement_service_unavailable_after_shutdown"
+                elif shutdown_end is not None and self._controller_restart_origin is not None:
+                    old_pid, old_identity = self._controller_restart_origin
+                    endpoint = {**shutdown_end, "pid": old_pid, "process_identity": old_identity}
+                    self._phase_restart_old_end = endpoint
+                    incomplete_reason = "graceful_shutdown_failed_before_reopen"
+        else:
+            try:
+                end_process = self._phase_process_snapshot()
+                disk = self._phase_disk_snapshot()
+                endpoint = self._phase_resource_endpoint(end_process, disk)
+                if not endpoint["captured"]:
+                    incomplete_reason = "resource_endpoint_unavailable"
+            except BaseException:
+                endpoint = self._phase_resource_start
+                incomplete_reason = "resource_endpoint_unavailable"
+        resource_segments = [{
+            "start": self._phase_resource_start,
+            "end": endpoint,
+        }]
+        if self._phase_name == "restart_open_readiness" and self._phase_restart_old_end is not None:
+            old_end = self._phase_restart_old_end
+            if (
+                endpoint.get("pid"),
+                endpoint.get("process_identity"),
+            ) != (old_end["pid"], old_end["process_identity"]):
+                new_start = {
+                    **endpoint,
+                    "rss_bytes": 0,
+                    "cpu_seconds": 0.0,
+                    "disk_bytes": old_end["disk_bytes"],
+                }
+                resource_segments = [
+                    {"start": self._phase_resource_start, "end": old_end},
+                    {"start": new_start, "end": endpoint},
+                ]
+            if not incomplete_reason:
+                incomplete_reason = "restart_verification_failed_after_reopen"
+        boundary["resource_segments"] = resource_segments
+        if incomplete_reason:
+            boundary["resource_evidence_complete"] = False
+            boundary["incomplete_reason"] = incomplete_reason
+        end = time.monotonic_ns()
+        self._phase_boundaries.append(boundary)
+        for phase in self._phase_boundaries:
+            samples = [
+                sample for sample in self.evidence.samples
+                if sample["start_nanos"] >= phase["start_nanos"] and sample["end_nanos"] <= phase["end_nanos"]
+            ]
+            phase["sample_count"] = len(samples)
+            phase["sample_duration_nanos"] = sum(sample["duration_nanos"] for sample in samples)
+        total = end - self._phase_total_start
+        attributed = sum(phase["duration_nanos"] for phase in self._phase_boundaries)
+        self._phase_attribution = {
+            "clock": "time.monotonic_ns",
+            "total_start_nanos": self._phase_total_start,
+            "total_end_nanos": end,
+            "total_duration_nanos": total,
+            "unattributed_nanos": total - attributed,
+            "unattributed_rule": PHASE_UNATTRIBUTED_RULE,
+            "phases": self._phase_boundaries,
+        }
+        return self._phase_attribution
 
 
     def connect(self) -> None:
@@ -760,6 +1077,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             self.controller.pid, self.storage_path, self.resource_server_name)
         self.connect()
         self.create_owned_collection()
+        self.begin_phase_attribution()
         spec = self.specs["small"]
         documents = [common.generated_document(spec, ordinal) for ordinal in range(spec["corpus_rows"])]
         self.upsert("small_initial_batch_insert", "small", documents)
@@ -798,6 +1116,14 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         artifact = super().artifact()
         resource = self.resource_evidence()
         backend = artifact["backends"][0]
+        environment = {
+            "os": platform.system() + " " + platform.release(),
+            "arch": platform.machine() or "unavailable",
+            "cpu": platform.processor() or "unavailable",
+            "memory": common.memory_bytes(),
+            "python": platform.python_version(),
+            "host": platform.node() or "unavailable",
+        }
         backend.update({
             "name": "treedb", "server_version": SERVICE_CONTRACT, "client_version": CLIENT_VERSION,
             "durability": f"TreeDB {self.controller.profile}; owned service restart on the same data directory",
@@ -805,15 +1131,21 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                               "metric": self.config["metric"], "scalar_fields": "meta.user_id,meta.fpath",
                               "vector_strategy": "native_runtime", "ef_search": str(self.ef_search),
                               "profile": self.controller.profile, "service_binary": str(self.controller.binary),
+                              "service_binary_sha256": self.service_binary_sha256,
+                              "service_binary_vcs_revision": self.service_binary_vcs_revision,
+                              "service_binary_vcs_modified": self.service_binary_vcs_modified,
+                              "runner_sha256": self.runner_sha256,
+                              "product_commit": self.source_commit, "harness_commit": self.source_commit,
+                              "operation_timeout_seconds": str(self.operation_timeout_seconds),
+                              "startup_reopen_timeout_seconds": str(self.controller.startup_timeout),
+                              "shutdown_timeout_seconds": str(self.controller.shutdown_timeout),
                               "service_log_path": str(self.controller.log_path),
                               "diagnostics_url": self.controller.diagnostics_url or "disabled",
                               "block_profile_rate": str(self.controller.block_profile_rate) if self.controller.diagnostics_url else "0",
                               "mutex_profile_fraction": str(self.controller.mutex_profile_fraction) if self.controller.diagnostics_url else "0",
                               "effective_collection": json.dumps(
                                   self.effective_collection, sort_keys=True, separators=(",", ":"))},
-            "environment": {"os": platform.system() + " " + platform.release(), "arch": platform.machine() or "unavailable",
-                            "cpu": platform.processor() or "unavailable", "memory": common.memory_bytes(),
-                            "python": platform.python_version()},
+            "environment": environment,
         })
         for row in artifact["scenarios"]:
             row["backend"] = "treedb"
@@ -874,6 +1206,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             "baseline": resource["baseline"]["availability"],
             "end": resource["end"]["availability"],
         }
+        # Include artifact construction and a representative full encoding in the
+        # qualification-only final phase; the final write and Go validator are outside the runner span.
+        json.dumps(artifact, sort_keys=True, allow_nan=False)
+        raw["phase_attribution"] = self._finish_phase_attribution()
         return artifact
 
 
@@ -915,7 +1251,8 @@ def main() -> int:
     manifest = common.load_manifest(args.manifest)
     diagnostics_dir = args.diagnostics_dir.resolve() if args.diagnostics_dir is not None else None
     controller = ServiceController(
-        args.service_bin.resolve(), args.url, args.data_dir.resolve(), args.profile, args.startup_timeout,
+        args.service_bin.resolve(), args.url, args.data_dir.resolve(), args.profile,
+        args.startup_timeout, args.operation_timeout,
         diagnostics_url=args.diagnostics_url if diagnostics_dir is not None else None,
     )
     runner = TreeDBMinimaRunner(
