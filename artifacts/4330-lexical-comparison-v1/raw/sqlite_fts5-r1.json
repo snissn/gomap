@@ -1,0 +1,505 @@
+{
+  "build": {
+    "checkpointed": true,
+    "cpu": {
+      "status": "ok",
+      "unit": "nanoseconds",
+      "value": 34674000
+    },
+    "docs_per_second": 271867.4917845042,
+    "elapsed_nanos": 36782625,
+    "peak_rss": {
+      "status": "ok",
+      "unit": "bytes",
+      "value": 48693248
+    }
+  },
+  "cases": [
+    {
+      "equivalent": true,
+      "id": "common",
+      "reopen_result_digest": "32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40",
+      "reopen_result_ids": [
+        "doc-000000",
+        "doc-000001",
+        "doc-000002",
+        "doc-000003",
+        "doc-000004",
+        "doc-000005",
+        "doc-000006",
+        "doc-000007",
+        "doc-000009",
+        "doc-000008"
+      ],
+      "result_digest": "32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40",
+      "result_ids": [
+        "doc-000000",
+        "doc-000001",
+        "doc-000002",
+        "doc-000003",
+        "doc-000004",
+        "doc-000005",
+        "doc-000006",
+        "doc-000007",
+        "doc-000009",
+        "doc-000008"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "sqlite_fts5_virtual_table_match_bm25",
+        "proof": [
+          [
+            2,
+            0,
+            156,
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+          ]
+        ]
+      },
+      "samples_nanos": [
+        4052875,
+        3935166,
+        3920833,
+        3954584,
+        3911542,
+        3886458,
+        3901334,
+        3986041,
+        3922750,
+        3933041,
+        3923625,
+        3868500,
+        3879875,
+        3893750,
+        3860250,
+        3889875,
+        3889458,
+        4103209,
+        4017125,
+        3952541
+      ],
+      "status": "ok",
+      "timed_out": false
+    },
+    {
+      "equivalent": true,
+      "id": "rare",
+      "reopen_result_digest": "d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0",
+      "reopen_result_ids": [
+        "doc-000010",
+        "doc-000011",
+        "doc-000012",
+        "doc-000013",
+        "doc-000014",
+        "doc-000015",
+        "doc-000016",
+        "doc-000017",
+        "doc-000018",
+        "doc-000019"
+      ],
+      "result_digest": "d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0",
+      "result_ids": [
+        "doc-000010",
+        "doc-000011",
+        "doc-000012",
+        "doc-000013",
+        "doc-000014",
+        "doc-000015",
+        "doc-000016",
+        "doc-000017",
+        "doc-000018",
+        "doc-000019"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "sqlite_fts5_virtual_table_match_bm25",
+        "proof": [
+          [
+            2,
+            0,
+            156,
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+          ]
+        ]
+      },
+      "samples_nanos": [
+        21292,
+        20500,
+        19750,
+        23125,
+        19458,
+        19416,
+        18583,
+        19083,
+        18125,
+        19083,
+        18000,
+        19292,
+        18125,
+        19000,
+        18000,
+        19125,
+        17917,
+        19125,
+        25959,
+        19167
+      ],
+      "status": "ok",
+      "timed_out": false
+    },
+    {
+      "equivalent": true,
+      "id": "and",
+      "reopen_result_digest": "ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d",
+      "reopen_result_ids": [
+        "doc-000020",
+        "doc-000021",
+        "doc-000022",
+        "doc-000023",
+        "doc-000024",
+        "doc-000025",
+        "doc-000026",
+        "doc-000027",
+        "doc-000028",
+        "doc-000029"
+      ],
+      "result_digest": "ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d",
+      "result_ids": [
+        "doc-000020",
+        "doc-000021",
+        "doc-000022",
+        "doc-000023",
+        "doc-000024",
+        "doc-000025",
+        "doc-000026",
+        "doc-000027",
+        "doc-000028",
+        "doc-000029"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "sqlite_fts5_virtual_table_match_bm25",
+        "proof": [
+          [
+            2,
+            0,
+            156,
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+          ]
+        ]
+      },
+      "samples_nanos": [
+        21875,
+        23000,
+        21708,
+        22458,
+        21417,
+        22750,
+        21500,
+        23833,
+        21500,
+        22667,
+        21292,
+        22541,
+        21292,
+        22292,
+        21375,
+        22334,
+        21334,
+        22791,
+        21208,
+        23500
+      ],
+      "status": "ok",
+      "timed_out": false
+    },
+    {
+      "equivalent": true,
+      "id": "or",
+      "reopen_result_digest": "d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8",
+      "reopen_result_ids": [
+        "doc-000070",
+        "doc-000071",
+        "doc-000072",
+        "doc-000073",
+        "doc-000074",
+        "doc-000075",
+        "doc-000076",
+        "doc-000077",
+        "doc-000078",
+        "doc-000079"
+      ],
+      "result_digest": "d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8",
+      "result_ids": [
+        "doc-000070",
+        "doc-000071",
+        "doc-000072",
+        "doc-000073",
+        "doc-000074",
+        "doc-000075",
+        "doc-000076",
+        "doc-000077",
+        "doc-000078",
+        "doc-000079"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "sqlite_fts5_virtual_table_match_bm25",
+        "proof": [
+          [
+            2,
+            0,
+            156,
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+          ]
+        ]
+      },
+      "samples_nanos": [
+        36417,
+        39750,
+        36459,
+        39750,
+        36125,
+        39583,
+        36250,
+        44417,
+        41750,
+        42542,
+        36042,
+        39500,
+        36375,
+        39709,
+        36250,
+        39709,
+        36000,
+        39292,
+        36208,
+        39542
+      ],
+      "status": "ok",
+      "timed_out": false
+    },
+    {
+      "equivalent": true,
+      "id": "phrase",
+      "reopen_result_digest": "3f12e436d210de561f67fb0131f637b024ed2bce2d328478c4d7bded8a2fff34",
+      "reopen_result_ids": [
+        "doc-000080",
+        "doc-000081",
+        "doc-000082",
+        "doc-000083",
+        "doc-000084",
+        "doc-000085",
+        "doc-000086",
+        "doc-000087",
+        "doc-000088",
+        "doc-000089"
+      ],
+      "result_digest": "3f12e436d210de561f67fb0131f637b024ed2bce2d328478c4d7bded8a2fff34",
+      "result_ids": [
+        "doc-000080",
+        "doc-000081",
+        "doc-000082",
+        "doc-000083",
+        "doc-000084",
+        "doc-000085",
+        "doc-000086",
+        "doc-000087",
+        "doc-000088",
+        "doc-000089"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "sqlite_fts5_virtual_table_match_bm25",
+        "proof": [
+          [
+            2,
+            0,
+            156,
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+          ]
+        ]
+      },
+      "samples_nanos": [
+        21792,
+        23167,
+        21750,
+        22750,
+        21459,
+        23083,
+        21208,
+        22541,
+        21416,
+        22708,
+        21375,
+        22500,
+        21375,
+        22625,
+        21375,
+        22542,
+        21250,
+        22541,
+        21333,
+        22416
+      ],
+      "status": "ok",
+      "timed_out": false
+    },
+    {
+      "equivalent": true,
+      "id": "scalar_filtered",
+      "reopen_result_digest": "efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0",
+      "reopen_result_ids": [
+        "doc-000100",
+        "doc-000101",
+        "doc-000102",
+        "doc-000103",
+        "doc-000104",
+        "doc-000105",
+        "doc-000106",
+        "doc-000107",
+        "doc-000108",
+        "doc-000109"
+      ],
+      "result_digest": "efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0",
+      "result_ids": [
+        "doc-000100",
+        "doc-000101",
+        "doc-000102",
+        "doc-000103",
+        "doc-000104",
+        "doc-000105",
+        "doc-000106",
+        "doc-000107",
+        "doc-000108",
+        "doc-000109"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "sqlite_fts5_virtual_table_match_bm25",
+        "proof": [
+          [
+            2,
+            0,
+            156,
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+          ]
+        ]
+      },
+      "samples_nanos": [
+        26166,
+        25958,
+        30125,
+        25625,
+        25708,
+        25500,
+        25666,
+        25875,
+        25459,
+        25375,
+        25291,
+        25375,
+        25250,
+        25375,
+        25334,
+        25667,
+        25416,
+        25417,
+        25375,
+        25417
+      ],
+      "status": "ok",
+      "timed_out": false
+    }
+  ],
+  "command": [
+    "/opt/homebrew/opt/python@3.14/bin/python3.14",
+    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/benchmarks/text_hybrid_scoreboard/sqlite_fts5_bench.py",
+    "--manifest",
+    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/benchmarks/text_hybrid_scoreboard/lexical_manifest.json",
+    "--corpus",
+    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/corpus.tsv",
+    "--out",
+    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/raw/sqlite_fts5-r1.json",
+    "--repetition",
+    "1",
+    "--db",
+    "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/indexes/sqlite_fts5-r1.sqlite3"
+  ],
+  "config": {
+    "journal_mode": "WAL",
+    "sqlite_auxiliary_threads": 1,
+    "synchronous": "FULL",
+    "tie_break": "score,id",
+    "tokenizer": "unicode61 remove_diacritics 2",
+    "top_k": 10,
+    "weighted_field_materialization": "title repeated 3x then body",
+    "working_directory": "/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison"
+  },
+  "corpus": {
+    "document_count": 10000,
+    "sha256": "7e31d754a2c94b1fa6e4d1cf6d75d2f0df595fc8a9cdf80eb12a3d0b7650485e"
+  },
+  "engine": {
+    "family": "embedded_sql",
+    "id": "sqlite_fts5",
+    "name": "SQLite FTS5",
+    "version": "3.53.2"
+  },
+  "environment": {
+    "contract": {
+      "build_cpu_metric": "process CPU nanoseconds",
+      "engine_process_concurrency": 1,
+      "filesystem_identity_policy": "corpus, index, and result artifact must resolve to the runner output filesystem",
+      "latency_clock": "monotonic wall clock",
+      "memory_limit_policy": "inherit one detected host address-space limit; adapters do not raise or lower it",
+      "peak_rss_metric": "process lifetime peak resident bytes when the runtime exposes it; otherwise typed unsupported",
+      "query_concurrency": 1,
+      "resource_scope": "single adapter process per retained repetition",
+      "runtime_cpu_parallelism": 1
+    },
+    "execution": {
+      "engine_process_concurrency": 1,
+      "query_concurrency": 1,
+      "runtime_cpu_parallelism": 1
+    },
+    "filesystem": {
+      "corpus_store_id": "16777232",
+      "index_store_id": "16777232",
+      "result_store_id": "16777232",
+      "runner_device_id": "16777232",
+      "same_filesystem": true
+    },
+    "memory": {
+      "adapter_changed_limit": false,
+      "detected_address_space_limit": "unlimited",
+      "detection_source": "runner_rlimit",
+      "matches_runner_detected": true
+    }
+  },
+  "manifest_sha256": "02d2cdbf4fa1899638bec595e31f36ebf9ba0facc08df19c56898eab9b02f3a6",
+  "reopen": {
+    "performed": true,
+    "result_digest": "7f1c5f4d82dd304d1ba15353dbd06241b866db05c4236fe1b9daa3faf57de29c",
+    "verified": true
+  },
+  "repetition": 1,
+  "schema_version": "treedb_lexical_result/v1",
+  "status": "ok",
+  "storage": {
+    "durable_bytes": 5861376,
+    "transient_bytes": 0,
+    "wal_bytes": 0
+  },
+  "versions": {
+    "platform": "Darwin-25.2.0-arm64-arm-64bit-Mach-O",
+    "python": "3.14.6 (main, Jun 10 2026, 10:03:53) [Clang 21.0.0 (clang-2100.0.123.102)]",
+    "sqlite": "3.53.2"
+  }
+}
