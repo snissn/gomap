@@ -31,11 +31,11 @@ func prepareColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir string, cf
 	if graph.RowCount != len(rows) {
 		return columnHNSWSearchPackPreparedAsset{}, fmt.Errorf("collections: hnsw search pack rows=%d want graph row_count=%d", len(rows), graph.RowCount)
 	}
-	input, err := buildColumnHNSWSearchPackInput(def, graph, rows)
+	input, err := buildColumnHNSWSearchPackInputWithoutVectors(def, graph, rows)
 	if err != nil {
 		return columnHNSWSearchPackPreparedAsset{}, err
 	}
-	raw, err := encodeColumnHNSWSearchPack(input)
+	raw, err := encodeColumnHNSWSearchPackRows(input, rows)
 	if err != nil {
 		return columnHNSWSearchPackPreparedAsset{}, err
 	}
@@ -65,7 +65,7 @@ func prepareColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir string, cf
 	return prepared, nil
 }
 
-func buildColumnHNSWSearchPackInput(def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, rows []columnVectorGraphAssetRow) (columnHNSWSearchPackBuildInput, error) {
+func buildColumnHNSWSearchPackInputWithoutVectors(def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, rows []columnVectorGraphAssetRow) (columnHNSWSearchPackBuildInput, error) {
 	if def.Metric != VectorMetricCosine {
 		return columnHNSWSearchPackBuildInput{}, fmt.Errorf("collections: hnsw search pack supports only metric %q, got %q", VectorMetricCosine, def.Metric)
 	}
@@ -79,10 +79,6 @@ func buildColumnHNSWSearchPackInput(def VectorIndexDefinition, graph columnVecto
 		return columnHNSWSearchPackBuildInput{}, fmt.Errorf("collections: hnsw search pack graph/definition mismatch for index %q", def.Name)
 	}
 	stride, err := columnHNSWSearchPackVectorStrideForDimensions(def.Dimensions)
-	if err != nil {
-		return columnHNSWSearchPackBuildInput{}, err
-	}
-	vectors, err := buildColumnHNSWSearchPackNormalizedVectors(rows, def.Dimensions, stride)
 	if err != nil {
 		return columnHNSWSearchPackBuildInput{}, err
 	}
@@ -118,7 +114,6 @@ func buildColumnHNSWSearchPackInput(def VectorIndexDefinition, graph columnVecto
 			ManifestChecksum:   graph.BaseManifestChecksum,
 			SchemaHash:         graph.BaseSchemaHash,
 		},
-		NormalizedVectors:       vectors,
 		Levels:                  levels,
 		AdjacencyLayers:         layers,
 		RowRefGenerations:       rowRefGenerations,

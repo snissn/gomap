@@ -647,12 +647,12 @@ func buildVectorPartitionRouterPackV1(manifest VectorPartitionManifestV1, model 
 		GraphSchemaHash:        manifest.SourceSchemaHash,
 		RowCount:               len(rows),
 	}
-	input, err := buildColumnHNSWSearchPackInput(def, graph, rows)
+	input, err := buildColumnHNSWSearchPackInputWithoutVectors(def, graph, rows)
 	if err != nil {
 		return nil, err
 	}
 	input.MembershipDigest = vectorPartitionRouterFinalMembershipDigestV1(manifest)
-	return encodeColumnHNSWSearchPack(input)
+	return encodeColumnHNSWSearchPackRows(input, rows)
 }
 
 // vectorPartitionRouterFinalMembershipDigestV1 binds a router asset to the

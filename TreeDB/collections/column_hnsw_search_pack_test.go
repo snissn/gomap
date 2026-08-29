@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -51,6 +52,56 @@ func TestColumnHNSWSearchPackRoundTrip2312(t *testing.T) {
 		if got := page.Checksum(payload); got != section.Checksum {
 			t.Fatalf("section %s[%d] checksum=%08x want %08x", section.Kind, section.Index, got, section.Checksum)
 		}
+	}
+}
+
+func TestColumnHNSWSearchPackRowEncodingMatchesMaterializedBytes4420(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{Vector: []float32{1, 0, 0}, InvNorm: 1},
+		{Vector: []float32{0, 2, 0}, InvNorm: 0.5},
+		{Vector: []float32{0, 0, 4}, InvNorm: 0.25},
+	}
+	for _, tc := range []struct {
+		name  string
+		input columnHNSWSearchPackBuildInput
+	}{
+		{name: "v1", input: testColumnHNSWSearchPackInput2312()},
+		{name: "v2", input: func() columnHNSWSearchPackBuildInput {
+			input := testColumnHNSWSearchPackInput2312()
+			input.MembershipDigest[0] = 1
+			return input
+		}()},
+		{name: "v3", input: testColumnHNSWSearchPackAuxiliaryInput4106()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want, err := encodeColumnHNSWSearchPack(tc.input)
+			if err != nil {
+				t.Fatalf("encode materialized: %v", err)
+			}
+			tc.input.NormalizedVectors = nil
+			got, err := encodeColumnHNSWSearchPackRows(tc.input, rows)
+			if err != nil {
+				t.Fatalf("encode rows: %v", err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("row-backed pack differs from materialized pack")
+			}
+		})
+	}
+}
+
+func TestColumnHNSWSearchPackRowEncodingRejectsInvalidVectors4420(t *testing.T) {
+	input := testColumnHNSWSearchPackInput2312()
+	input.NormalizedVectors = nil
+	rows := []columnVectorGraphAssetRow{{Vector: []float32{1, 0, 0}, InvNorm: 1}, {Vector: []float32{0, 1}, InvNorm: 1}, {Vector: []float32{0, 0, 1}, InvNorm: 1}}
+	if _, err := encodeColumnHNSWSearchPackRows(input, rows); err == nil || !strings.Contains(err.Error(), "vector dims") {
+		t.Fatalf("dimension error=%v", err)
+	}
+	rows[1].Vector = []float32{0, 1, 0}
+	rows[1].InvNorm = float32(math.Inf(1))
+	rows[1].Vector[0] = float32(math.Inf(1))
+	if _, err := encodeColumnHNSWSearchPackRows(input, rows); err == nil || !strings.Contains(err.Error(), "inverse norm") {
+		t.Fatalf("non-finite error=%v", err)
 	}
 }
 
@@ -1645,6 +1696,65 @@ func BenchmarkColumnHNSWSearchPackRebuildStorage2313(b *testing.B) {
 	if status.Stats.BytesDisk >= packAsset.AssetBytes {
 		b.ReportMetric(float64(status.Stats.BytesDisk-packAsset.AssetBytes), "index_without_hnsw_search_pack_B/op")
 	}
+}
+
+func BenchmarkColumnHNSWSearchPackEncoding4420(b *testing.B) {
+	const rowsCount, dimensions = 100_000, 768
+	vectors := make([]float32, rowsCount*dimensions)
+	rows := make([]columnVectorGraphAssetRow, rowsCount)
+	for ordinal := range rows {
+		vectors[ordinal*dimensions] = 1
+		rows[ordinal] = columnVectorGraphAssetRow{Vector: vectors[ordinal*dimensions : (ordinal+1)*dimensions], InvNorm: 1}
+	}
+	input := columnHNSWSearchPackBuildInput{
+		Rows: rowsCount, Dimensions: dimensions, VectorStride: dimensions,
+		M: 16, EfConstruction: 128, EfSearch: 128, EntryOrdinal: 0, MaxLayer: 0,
+		BaseIdentity:            columnHNSWSearchPackBaseIdentity{ManifestGeneration: 1, ManifestChecksum: 1, SchemaHash: 1},
+		Levels:                  make([]uint16, rowsCount),
+		AdjacencyLayers:         []columnHNSWSearchPackLayerInput{{Offsets: make([]uint64, rowsCount+1)}},
+		RowRefGenerations:       make([]int64, rowsCount),
+		RowRefPartIDs:           make([]int64, rowsCount),
+		RowRefRowIndexes:        make([]int64, rowsCount),
+		RowRefAppliedCommandLSN: make([]int64, rowsCount),
+		DocumentIDOffsets:       make([]uint64, rowsCount+1),
+		DocumentIDBytes:         make([]byte, rowsCount),
+	}
+	for ordinal := range rowsCount {
+		input.RowRefGenerations[ordinal] = 1
+		input.RowRefPartIDs[ordinal] = 1
+		input.RowRefRowIndexes[ordinal] = int64(ordinal)
+		input.RowRefAppliedCommandLSN[ordinal] = 1
+		input.DocumentIDOffsets[ordinal] = uint64(ordinal)
+		input.DocumentIDBytes[ordinal] = 'x'
+	}
+	input.DocumentIDOffsets[rowsCount] = rowsCount
+	b.SetBytes(rowsCount * dimensions * 4)
+	b.Run("materialized", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			candidate := input
+			var err error
+			candidate.NormalizedVectors, err = buildColumnHNSWSearchPackNormalizedVectors(rows, dimensions, dimensions)
+			if err != nil {
+				b.Fatal(err)
+			}
+			raw, err := encodeColumnHNSWSearchPack(candidate)
+			if err != nil {
+				b.Fatal(err)
+			}
+			runtime.KeepAlive(raw)
+		}
+	})
+	b.Run("direct", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			raw, err := encodeColumnHNSWSearchPackRows(input, rows)
+			if err != nil {
+				b.Fatal(err)
+			}
+			runtime.KeepAlive(raw)
+		}
+	})
 }
 
 type columnHNSWSearchPackRebuildBenchParams2313 struct {
