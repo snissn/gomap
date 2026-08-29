@@ -28,7 +28,7 @@ var errStopDocumentCursorPage = errors.New("documentservice: cursor page complet
 // Service maps the document/search contract onto TreeDB collections.
 type Service struct {
 	manager *collections.CollectionManager
-	writeMu sync.Mutex
+	writeMu sync.RWMutex
 
 	benchmarkSearchCacheMu          sync.RWMutex
 	benchmarkSearchCache            map[string]*serviceBenchmarkSearchCacheEntry
@@ -205,6 +205,7 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 	options := collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}
 	if vectorOptions.strategy == collections.VectorIndexStrategyColumnGraph {
 		options.ColumnStore = serviceColumnStoreConfig(req.Dimension)
+		options.DisableBufferedIndexedAsyncFlush = true
 	}
 	meta := &collections.CollectionMeta{
 		Name:    req.Name,
@@ -240,6 +241,18 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 			}
 		}
 		meta.Indexes = indexes
+	}
+	if vectorOptions.strategy == collections.VectorIndexStrategyColumnGraph {
+		existing, openErr := s.manager.OpenCollection(req.Name)
+		switch {
+		case openErr == nil:
+			existingOptions := existing.Meta().Options
+			meta.Options.DisableBufferedIndexedAsyncFlush = existingOptions.DisableBufferedIndexedAsyncFlush
+			meta.Options.BufferedIndexedAsyncFlush = existingOptions.BufferedIndexedAsyncFlush
+			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = existingOptions.BufferedIndexedAsyncFlushMaxQueuedUnits
+		case !errors.Is(openErr, collections.ErrCollectionNotFound):
+			return IndexInfo{}, wrapServiceError(CodeInternal, "open existing index before create failed", openErr)
+		}
 	}
 	created, alreadyExisted, err := s.manager.CreateCollectionWithPreparedCommandWALIntentStatus(*meta, nil)
 	if err != nil {
@@ -321,13 +334,26 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		return UpsertDocumentsResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
 	}
 	diagnostics := s.diagnosticsEnabled.Load()
+	upsertStats := UpsertDiagnosticsStats{Requests: 1}
+	response, err := s.upsertDocuments(ctx, index, req, req.DeferVectorIndexRebuild, diagnostics, &upsertStats)
+	if diagnostics {
+		s.addDiagnosticsUpsert(upsertStats)
+	}
+	return response, err
+}
+
+func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertDocumentsRequest, sharedCandidate, diagnostics bool, upsertStats *UpsertDiagnosticsStats) (UpsertDocumentsResponse, error) {
 	var lockWaitStarted time.Time
 	if diagnostics {
 		lockWaitStarted = time.Now()
 	}
-	s.writeMu.Lock()
+	if sharedCandidate {
+		s.writeMu.RLock()
+	} else {
+		s.writeMu.Lock()
+	}
+	locked := true
 	var lockHoldStarted time.Time
-	upsertStats := UpsertDiagnosticsStats{Requests: 1}
 	var phaseStarted time.Time
 	var phaseNanos *uint64
 	startPhase := func(nanos *uint64) {
@@ -341,21 +367,27 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		phaseNanos = nanos
 	}
 	if diagnostics {
-		upsertStats.LockWaitNanos = diagnosticsElapsedNanos(lockWaitStarted)
+		upsertStats.LockWaitNanos += diagnosticsElapsedNanos(lockWaitStarted)
 		lockHoldStarted = time.Now()
 	}
-	defer func() {
+	release := func() {
+		if !locked {
+			return
+		}
 		if diagnostics {
 			if phaseNanos != nil {
 				*phaseNanos += diagnosticsElapsedNanos(phaseStarted)
 			}
-			upsertStats.LockHoldNanos = diagnosticsElapsedNanos(lockHoldStarted)
+			upsertStats.LockHoldNanos += diagnosticsElapsedNanos(lockHoldStarted)
 		}
-		s.writeMu.Unlock()
-		if diagnostics {
-			s.addDiagnosticsUpsert(upsertStats)
+		if sharedCandidate {
+			s.writeMu.RUnlock()
+		} else {
+			s.writeMu.Unlock()
 		}
-	}()
+		locked = false
+	}
+	defer release()
 	deferredMaintenanceEpoch := uint64(0)
 	defer func() {
 		if deferredMaintenanceEpoch != 0 && s.deferredVectorBuildMaintenance != nil {
@@ -368,6 +400,18 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
+	}
+	if sharedCandidate {
+		// Concurrent writers need request-local LastInsertStats; the prepared
+		// search cache intentionally reuses one Collection handle.
+		col, err = s.manager.OpenCollection(index)
+		if err != nil {
+			return UpsertDocumentsResponse{}, serviceErrorFromCollectionOpen(err, index)
+		}
+	}
+	if sharedCandidate && info.VectorStrategy != collections.VectorIndexStrategyColumnGraph {
+		release()
+		return s.upsertDocuments(ctx, index, req, false, diagnostics, upsertStats)
 	}
 	if len(req.Documents) == 0 {
 		return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "documents must not be empty")
@@ -405,6 +449,10 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 		updates = append(updates, doc)
 	}
+	if sharedCandidate && len(updates) != 0 {
+		release()
+		return s.upsertDocuments(ctx, index, req, false, diagnostics, upsertStats)
+	}
 	startPhase(&upsertStats.MaintenanceNanos)
 	deferredMaintenanceCommitRejected := false
 	deferVectorIndexRebuild := req.DeferVectorIndexRebuild
@@ -436,6 +484,15 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			inserted = len(insertIDs)
 			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
 		} else if collections.IsDuplicateKeyError(err) {
+			if sharedCandidate {
+				if deferredMaintenanceEpoch != 0 && s.deferredVectorBuildMaintenance != nil {
+					startPhase(&upsertStats.FinalizeNanos)
+					s.deferredVectorBuildMaintenance.AbortInsert(deferredMaintenanceEpoch)
+					deferredMaintenanceEpoch = 0
+				}
+				release()
+				return s.upsertDocuments(ctx, index, req, false, diagnostics, upsertStats)
+			}
 			if deferredMaintenanceEpoch != 0 {
 				startPhase(&upsertStats.MaintenanceNanos)
 				if err := s.deferredVectorBuildMaintenance.EndContext(ctx); err != nil {
@@ -496,6 +553,25 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			deferredMaintenanceEpoch = 0
 			deferredMaintenanceCommitRejected = true
 			deferVectorIndexRebuild = false
+			if sharedCandidate {
+				release()
+				phaseNanos = nil
+				if diagnostics {
+					lockWaitStarted = time.Now()
+				}
+				s.writeMu.Lock()
+				sharedCandidate = false
+				locked = true
+				if diagnostics {
+					upsertStats.LockWaitNanos += diagnosticsElapsedNanos(lockWaitStarted)
+					lockHoldStarted = time.Now()
+				}
+				col, info, err = s.openIndex(ctx, index, req.ExpectedGeneration)
+				if err != nil {
+					return UpsertDocumentsResponse{}, err
+				}
+				startPhase(&upsertStats.FinalizeNanos)
+			}
 		} else {
 			deferredMaintenanceEpoch = 0
 		}
@@ -551,7 +627,7 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 		if err := req.Filter.Validate(); err != nil {
 			return DeleteDocumentsResponse{}, err
 		}
-		ids, err = s.collectMatchingIDs(ctx, col, req.Filter)
+		ids, err = s.collectMatchingIDs(ctx, col, req.Filter, info.ScalarFields)
 		if err != nil {
 			return DeleteDocumentsResponse{}, err
 		}
@@ -567,7 +643,7 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 	}
 	deleted, err := col.DeleteBatch(deleteIDs)
 	if err != nil {
-		return DeleteDocumentsResponse{}, wrapServiceError(CodeInternal, "delete documents failed", err)
+		return DeleteDocumentsResponse{}, wrapServiceError(CodeInternal, "delete documents failed: "+err.Error(), err)
 	}
 	if deleted > 0 {
 		if err := s.finishVectorMutation(index, col, info); err != nil {
@@ -857,7 +933,7 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 		return ResetIndexResponse{}, err
 	}
 
-	ids, err := s.collectMatchingIDs(ctx, existingCol, nil)
+	ids, err := s.collectMatchingIDs(ctx, existingCol, nil, nil)
 	if err != nil {
 		return ResetIndexResponse{}, err
 	}
@@ -1745,7 +1821,10 @@ func validateDocumentIDs(ids []string) ([]string, error) {
 	return out, nil
 }
 
-func (s *Service) collectMatchingIDs(ctx context.Context, col *collections.Collection, filter *Filter) ([]string, error) {
+func (s *Service) collectMatchingIDs(ctx context.Context, col *collections.Collection, filter *Filter, scalarFields []ScalarFieldInfo) ([]string, error) {
+	if ids, indexed, err := collectMatchingIDsFromScalarIndexes(ctx, col, filter, newScalarSchema(scalarFields)); indexed || err != nil {
+		return ids, err
+	}
 	var ids []string
 	err := s.scanDocuments(ctx, col, func(doc Document) error {
 		ok, err := matchFilter(filter, doc)
@@ -1756,6 +1835,96 @@ func (s *Service) collectMatchingIDs(ctx context.Context, col *collections.Colle
 		return nil
 	})
 	return ids, err
+}
+
+func collectMatchingIDsFromScalarIndexes(ctx context.Context, col *collections.Collection, filter *Filter, schema scalarSchema) ([]string, bool, error) {
+	if filter == nil {
+		return nil, false, nil
+	}
+	var predicates []compiledScalarPredicate
+	var collect func(*Filter) (bool, error)
+	collect = func(node *Filter) (bool, error) {
+		op, err := normalizeFilterOperator(node.Operator)
+		if err != nil {
+			return false, err
+		}
+		if op == filterOpAND {
+			for i := range node.Conditions {
+				ok, err := collect(&node.Conditions[i])
+				if err != nil || !ok {
+					return ok, err
+				}
+			}
+			return true, nil
+		}
+		if op != filterOpEQ {
+			return false, nil
+		}
+		resolved, ok := schema.lookup(strings.TrimSpace(node.Field))
+		if !ok {
+			return false, nil
+		}
+		value, err := convertScalarFilterValue(resolved, node.Value)
+		if err != nil {
+			return false, err
+		}
+		predicates = append(predicates, compiledScalarPredicate{
+			filter: collections.HybridScalarFilter{IndexName: resolved.indexName, Value: value},
+			field:  resolved.field,
+		})
+		return true, nil
+	}
+	indexed, err := collect(filter)
+	if err != nil || !indexed || len(predicates) == 0 {
+		return nil, indexed, err
+	}
+	var candidates map[string]struct{}
+	for _, predicate := range predicates {
+		if err := ctxErr(ctx); err != nil {
+			return nil, true, err
+		}
+		ids, err := col.FindByIndexValue(predicate.filter.IndexName, predicate.filter.Value)
+		if err != nil {
+			return nil, true, mapDocumentScanError(err)
+		}
+		if candidates == nil {
+			candidates = make(map[string]struct{}, len(ids))
+			for i, id := range ids {
+				if i&1023 == 0 {
+					if err := ctxErr(ctx); err != nil {
+						return nil, true, err
+					}
+				}
+				candidates[string(id)] = struct{}{}
+			}
+			continue
+		}
+		matches := make(map[string]struct{}, min(len(candidates), len(ids)))
+		for i, id := range ids {
+			if i&1023 == 0 {
+				if err := ctxErr(ctx); err != nil {
+					return nil, true, err
+				}
+			}
+			key := string(id)
+			if _, ok := candidates[key]; ok {
+				matches[key] = struct{}{}
+			}
+		}
+		candidates = matches
+	}
+	out := make([]string, 0, len(candidates))
+	for id := range candidates {
+		out = append(out, id)
+	}
+	if err := ctxErr(ctx); err != nil {
+		return nil, true, err
+	}
+	sort.Strings(out)
+	if err := ctxErr(ctx); err != nil {
+		return nil, true, err
+	}
+	return out, true, nil
 }
 
 func (s *Service) scanDocuments(ctx context.Context, col *collections.Collection, fn func(Document) error) error {
@@ -2370,7 +2539,7 @@ func mapVectorIndexSearchError(operation string, err error) error {
 		return wrapServiceError(CodeSnapshotMismatch, operation+" could not establish matching search and document visibility", err)
 	}
 	if errors.Is(err, collections.ErrVectorIndexSearchUnavailable) || errors.Is(err, collections.ErrIndexNotFound) {
-		return wrapServiceError(CodeIndexUnavailable, operation+" failed closed", err)
+		return wrapServiceError(CodeIndexUnavailable, operation+" failed closed: "+err.Error(), err)
 	}
 	if errors.Is(err, backenddb.ErrClosed) {
 		return wrapServiceError(CodeIndexUnavailable, "TreeDB backend is closed", err)

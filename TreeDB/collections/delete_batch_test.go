@@ -2,6 +2,7 @@ package collections
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -53,6 +54,46 @@ func TestCollectionDeleteBatchDeletesPrimaryAndSecondary(t *testing.T) {
 	}
 	if len(ids) != 0 {
 		t.Fatalf("ada index ids=%q want none", ids)
+	}
+}
+
+func TestCollectionDeleteBatchPointerizesLargeSecondaryPostingUpdate(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "documents",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatJSON},
+		Indexes: []IndexDefinition{{Name: "tenant", Field: "tenant", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("documents")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	const rows = 3750
+	ids := make([][]byte, rows)
+	docs := make([][]byte, rows)
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("doc-%06d", i))
+		docs[i] = []byte(`{"tenant":"shared"}`)
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if deleted, err := col.DeleteBatch(ids[:5]); err != nil || deleted != 5 {
+		t.Fatalf("DeleteBatch deleted=%d err=%v", deleted, err)
+	}
+	got, err := col.FindByIndexValue("tenant", "shared")
+	if err != nil || len(got) != rows-5 {
+		t.Fatalf("FindByIndexValue rows=%d err=%v want=%d", len(got), err, rows-5)
 	}
 }
 

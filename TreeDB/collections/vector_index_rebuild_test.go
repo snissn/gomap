@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -1099,6 +1100,93 @@ func TestColumnGraphRebuildVectorIndexAdjacencyValidatesAllDimsBeforeScoringV2A(
 	err := buildColumnVectorGraphAdjacency(rows, def)
 	if err == nil || !strings.Contains(err.Error(), "row[1] vector dims=1 want 3") {
 		t.Fatalf("buildColumnVectorGraphAdjacency error=%v, want row[1] dimension failure", err)
+	}
+}
+
+func TestColumnVectorGraphOfflineBuildCoalescesFrozenPrefixPruning4419And4421(t *testing.T) {
+	rows := make([]columnVectorGraphAssetRow, 192)
+	vectors := vectorIndexReciprocalParityRows4257(len(rows), 16, false)
+	for i := range rows {
+		rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("doc-%04d", i)), Vector: vectors[i]}
+	}
+	def := columnGraphRebuildVectorIndexDefinitionV2A(16, 16)
+	build := func(workers int, trace *vectorIndexConstructionTraceV1, policy *vectorIndexLayer0ConstructionPolicyV1) *VectorIndex {
+		t.Helper()
+		index, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
+		if err != nil {
+			t.Fatal(err)
+		}
+		index.parallelReciprocalLinks = true
+		index.constructionWorkers = workers
+		index.constructionTrace = trace
+		index.layer0ConstructionPolicy = policy
+		if err := insertColumnVectorGraphRowsLocked(index, rows); err != nil {
+			t.Fatal(err)
+		}
+		return index
+	}
+
+	want := build(1, nil, nil)
+	if want.frozenPrefixBatches == 0 {
+		t.Fatal("ordinary offline build did not use frozen-prefix construction")
+	}
+	if want.frozenPrefixReciprocalPrunes == 0 || want.frozenPrefixReciprocalPruneEdges <= want.frozenPrefixReciprocalPrunes {
+		t.Fatalf("reciprocal prune coalescing was not exercised: prunes=%d edges=%d", want.frozenPrefixReciprocalPrunes, want.frozenPrefixReciprocalPruneEdges)
+	}
+	wantTopology := snapshotVectorIndexTopology4257(want)
+	for _, workers := range []int{2, 4} {
+		got := build(workers, nil, nil)
+		if topology := snapshotVectorIndexTopology4257(got); !reflect.DeepEqual(topology, wantTopology) {
+			t.Fatalf("worker budget %d changed offline frozen-prefix topology", workers)
+		}
+		if got.frozenPrefixReciprocalPrunes != want.frozenPrefixReciprocalPrunes || got.frozenPrefixReciprocalPruneEdges != want.frozenPrefixReciprocalPruneEdges {
+			t.Fatalf("worker budget %d changed coalescing: prunes=%d/%d edges=%d/%d", workers, got.frozenPrefixReciprocalPrunes, want.frozenPrefixReciprocalPrunes, got.frozenPrefixReciprocalPruneEdges, want.frozenPrefixReciprocalPruneEdges)
+		}
+	}
+	if batches := build(0, &vectorIndexConstructionTraceV1{}, nil).frozenPrefixBatches; batches != 0 {
+		t.Fatalf("traced build used %d frozen-prefix batches", batches)
+	}
+	if batches := build(0, nil, &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2}).frozenPrefixBatches; batches != 0 {
+		t.Fatalf("policy build used %d frozen-prefix batches", batches)
+	}
+}
+
+func BenchmarkColumnVectorGraphOfflineFrozenPrefix4419(b *testing.B) {
+	const dimensions = 768
+	rowsCount := 10_000
+	if os.Getenv("TREEDB_BENCH_100K") != "" {
+		rowsCount = 100_000
+	}
+	vectors := vectorIndexReciprocalParityRows4257(rowsCount, dimensions, false)
+	rows := make([]columnVectorGraphAssetRow, len(vectors))
+	for i := range rows {
+		rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("doc-%05d", i)), Vector: vectors[i]}
+	}
+	def := columnGraphRebuildVectorIndexDefinitionV2A(dimensions, 16)
+	for _, candidate := range []bool{false, true} {
+		b.Run(fmt.Sprintf("candidate=%v", candidate), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				index, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
+				if err != nil {
+					b.Fatal(err)
+				}
+				index.parallelReciprocalLinks = true
+				if candidate {
+					err = insertColumnVectorGraphRowsLocked(index, rows)
+				} else {
+					for i := range rows {
+						if err = index.insertVectorLocked(rows[i].ID, rows[i].Vector); err != nil {
+							break
+						}
+					}
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+				runtime.KeepAlive(index)
+			}
+		})
 	}
 }
 

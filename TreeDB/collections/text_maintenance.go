@@ -881,6 +881,25 @@ func appendTextIndexInsertPlanDeltas(snap *backenddb.Snapshot, catalog *collecti
 	if len(mutations) == 0 {
 		return nil
 	}
+	return appendTextIndexInsertMutationDeltas(snap, catalog, opts, mutations, plan)
+}
+
+func appendTextIndexInsertDocumentsDeltas(snap *backenddb.Snapshot, catalog *collectionCatalog, opts collectionOptions, documents []columnWriteDocument, plan *insertBatchPlan) error {
+	mutations := make([]textDocumentMutation, 0, len(documents))
+	for _, document := range documents {
+		mutations = append(mutations, textDocumentMutation{
+			documentID:  document.ID,
+			newDocument: document.Document,
+			setNew:      true,
+		})
+	}
+	return appendTextIndexInsertMutationDeltas(snap, catalog, opts, mutations, plan)
+}
+
+func appendTextIndexInsertMutationDeltas(snap *backenddb.Snapshot, catalog *collectionCatalog, opts collectionOptions, mutations []textDocumentMutation, plan *insertBatchPlan) error {
+	if plan == nil || len(mutations) == 0 {
+		return nil
+	}
 	rootNames := make([]string, 0, len(catalog.meta.TextIndexes)*3)
 	baseRootIDs := make(map[string]uint64, len(catalog.meta.TextIndexes)*3)
 	policies := make([]backenddb.OrderedRootStoragePolicy, 0, len(catalog.meta.TextIndexes)*3)

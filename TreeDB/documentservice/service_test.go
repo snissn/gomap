@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,53 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
+
+func TestVectorIndexUnavailablePreservesDiagnosticCause(t *testing.T) {
+	cause := fmt.Errorf("%w: stale document coverage", collections.ErrVectorIndexSearchUnavailable)
+	err := mapVectorIndexSearchError("native ann vector search", cause)
+	if ErrorCodeOf(err) != CodeIndexUnavailable || !strings.Contains(err.Error(), "stale document coverage") {
+		t.Fatalf("err=%v code=%s", err, ErrorCodeOf(err))
+	}
+}
+
+func TestCollectMatchingIDsUsesDeclaredScalarEqualityConjunction(t *testing.T) {
+	ctx := context.Background()
+	svc, db := newTestService(t)
+	defer db.Close()
+	create := CreateIndexRequest{
+		Name:      "scalar_delete",
+		Dimension: 2,
+		Metric:    MetricCosine,
+		ScalarFields: []ScalarFieldDeclaration{
+			{Field: "meta.user_id", ValueType: ScalarFieldString},
+			{Field: "meta.fpath", ValueType: ScalarFieldString},
+		},
+	}
+	info, err := svc.CreateIndex(ctx, create)
+	if err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	documents := []Document{
+		{ID: "a", Embedding: []float32{1, 0}, Meta: map[string]any{"user_id": "shared", "fpath": "/target"}},
+		{ID: "b", Embedding: []float32{1, 0}, Meta: map[string]any{"user_id": "shared", "fpath": "/other"}},
+		{ID: "c", Embedding: []float32{1, 0}, Meta: map[string]any{"user_id": "other", "fpath": "/target"}},
+	}
+	if _, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{Documents: documents}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	col, _, err := svc.openIndex(ctx, create.Name, 0)
+	if err != nil {
+		t.Fatalf("openIndex: %v", err)
+	}
+	filter := &Filter{Operator: "AND", Conditions: []Filter{
+		{Field: "meta.user_id", Operator: "==", Value: "shared"},
+		{Field: "meta.fpath", Operator: "==", Value: "/target"},
+	}}
+	ids, indexed, err := collectMatchingIDsFromScalarIndexes(ctx, col, filter, newScalarSchema(info.ScalarFields))
+	if err != nil || !indexed || !reflect.DeepEqual(ids, []string{"a"}) {
+		t.Fatalf("ids=%v indexed=%v err=%v", ids, indexed, err)
+	}
+}
 
 func TestServiceNilMutationReceiverFailsClosed(t *testing.T) {
 	var svc *Service
@@ -219,6 +267,160 @@ func TestServiceDeferredVectorBuildMaintenanceDoesNotSpanManagers(t *testing.T) 
 	}
 	if got := stats()["treedb.bg_vacuum.deferred_vector_build.active"]; got != "false" {
 		t.Fatalf("owning service left epoch active=%q", got)
+	}
+}
+
+func TestServiceDeferredColumnGraphInsertAdmissionIsSharedAndLifecycleIsBarrier(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.BackgroundIndexVacuumInterval = -1
+	backend, cleanup, _, maintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+	svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{
+		Name:      "docs",
+		Dimension: 2,
+		Metric:    MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{
+			Strategy: collections.VectorIndexStrategyColumnGraph,
+		},
+	}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.OptimizeIndex(ctx, "docs", OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("OptimizeIndex: %v", err)
+	}
+	svc.benchmarkSearchCacheMu.RLock()
+	cachedCollection := svc.benchmarkSearchCache["docs"].collection
+	svc.benchmarkSearchCacheMu.RUnlock()
+	if cachedCollection == nil {
+		t.Fatal("OptimizeIndex did not prime the prepared search cache")
+	}
+
+	firstAtCommit := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var firstHook atomic.Bool
+	svc.deferredMaintenanceBeforeCommit = func() {
+		if firstHook.CompareAndSwap(false, true) {
+			close(firstAtCommit)
+			<-releaseFirst
+		}
+	}
+	request := func(id string) UpsertDocumentsRequest {
+		return UpsertDocumentsRequest{
+			Documents:               []Document{{ID: id, Embedding: []float32{1, 0}}},
+			DeferVectorIndexRebuild: true,
+		}
+	}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpsertDocuments(ctx, "docs", request("first"))
+		firstDone <- err
+	}()
+	select {
+	case <-firstAtCommit:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first deferred insert did not reach pre-commit hook")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpsertDocuments(ctx, "docs", request("second"))
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second deferred insert: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second deferred insert could not pass a paused independent insert")
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{IDs: []string{"second"}})
+		deleteDone <- err
+	}()
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("delete crossed an admitted deferred insert: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first deferred insert: %v", err)
+	}
+	if got := cachedCollection.LastInsertStats().Documents; got != 0 {
+		t.Fatalf("shared inserts reused cached diagnostics handle: Documents=%d want 0", got)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteDocuments: %v", err)
+	}
+	count, err := svc.CountDocuments(ctx, "docs", CountDocumentsRequest{})
+	if err != nil || count.Count != 1 {
+		t.Fatalf("CountDocuments=%+v err=%v want 1", count, err)
+	}
+
+	firstAtCommit = make(chan struct{})
+	releaseFirst = make(chan struct{})
+	firstHook.Store(false)
+	svc.deferredMaintenanceBeforeCommit = func() {
+		if firstHook.CompareAndSwap(false, true) {
+			close(firstAtCommit)
+			<-releaseFirst
+		}
+	}
+	firstDone = make(chan error, 1)
+	go func() {
+		_, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{
+			Documents:               []Document{{ID: "collision", Content: "first", Embedding: []float32{1, 0}}},
+			DeferVectorIndexRebuild: true,
+		})
+		firstDone <- err
+	}()
+	select {
+	case <-firstAtCommit:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first collision insert did not reach pre-commit hook")
+	}
+	updateDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{
+			Documents:               []Document{{ID: "collision", Content: "second", Embedding: []float32{0, 1}}},
+			DeferVectorIndexRebuild: true,
+		})
+		updateDone <- err
+	}()
+	select {
+	case err := <-updateDone:
+		t.Fatalf("colliding upsert crossed the insert-only shared boundary: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first collision insert: %v", err)
+	}
+	if err := <-updateDone; err != nil {
+		t.Fatalf("colliding upsert retry: %v", err)
+	}
+	svc.deferredMaintenanceBeforeCommit = nil
+	filtered, err := svc.FilterDocuments(ctx, "docs", FilterDocumentsRequest{Limit: 10})
+	if err != nil {
+		t.Fatalf("FilterDocuments: %v", err)
+	}
+	found := false
+	for _, document := range filtered.Documents {
+		if document.ID == "collision" {
+			found = document.Content == "second"
+		}
+	}
+	if !found {
+		t.Fatalf("collision document was not exclusively updated: %+v", filtered.Documents)
 	}
 }
 
@@ -1535,12 +1737,12 @@ func TestServiceDenseNativeRuntimeOrdinaryRouteLifecycleAndReopen(t *testing.T) 
 	}
 }
 
-func TestServiceDenseNativeRuntimeVisibilityMismatchRetriesAndFailsExplicitly(t *testing.T) {
+func TestServiceDenseNativeRuntimeSearchMaterializesOneStableSnapshot(t *testing.T) {
 	ctx := context.Background()
 	svc, db := newTestService(t)
 	defer db.Close()
 	create := CreateIndexRequest{
-		Name:               "native_retry",
+		Name:               "native_snapshot",
 		Dimension:          2,
 		Metric:             MetricCosine,
 		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
@@ -1574,39 +1776,29 @@ func TestServiceDenseNativeRuntimeVisibilityMismatchRetriesAndFailsExplicitly(t 
 	svc.denseVectorNativeAfterSearch = func(attempt int, search collections.VectorIndexSearchResponse) error {
 		hookCalls++
 		diagnostics := search.Diagnostics()
-		if diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime ||
+		if attempt != 0 || diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime ||
 			!diagnostics.LiveANN.Enabled || diagnostics.LiveANN.ExactFallbacks != 0 ||
 			diagnostics.LiveANN.FullRebuilds != 0 || search.Stats.SearchRouteNativeRuntime != 1 {
 			return fmt.Errorf("unexpected native attempt=%d response=%+v diagnostics=%+v", attempt, search, diagnostics)
 		}
-		if attempt != 0 {
-			return nil
-		}
 		return replace(Document{ID: "a", Content: "v1", Embedding: []float32{0, 1}})
 	}
 	got, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, ReturnEmbedding: true})
-	if err != nil || hookCalls != 2 || len(got.Documents) != 1 ||
-		got.Documents[0].Content != "v1" ||
-		!reflect.DeepEqual(got.Documents[0].Embedding, []float32{0, 1}) ||
-		got.Documents[0].Score == nil || math.Abs(*got.Documents[0].Score) > 1e-9 ||
-		got.VisibilityMismatchCount != 1 || got.VisibilityRetryCount != 1 ||
+	if err != nil || hookCalls != 1 || len(got.Documents) != 1 ||
+		got.Documents[0].Content != "v0" ||
+		!reflect.DeepEqual(got.Documents[0].Embedding, []float32{1, 0}) ||
+		got.Documents[0].Score == nil || math.Abs(*got.Documents[0].Score-1) > 1e-9 ||
+		got.VisibilityMismatchCount != 0 || got.VisibilityRetryCount != 0 ||
 		!got.NativeBasePlusLiveDelta || got.ExactFallbacks != 0 ||
 		got.DocumentMaterializationRows != 1 {
-		t.Fatalf("retry success response=%+v err=%v hookCalls=%d", got, err, hookCalls)
+		t.Fatalf("stable snapshot response=%+v err=%v hookCalls=%d", got, err, hookCalls)
 	}
 
-	hookCalls = 0
-	svc.denseVectorNativeAfterSearch = func(attempt int, search collections.VectorIndexSearchResponse) error {
-		hookCalls++
-		vector := []float32{1, 0}
-		if attempt%2 != 0 {
-			vector = []float32{0, 1}
-		}
-		return replace(Document{ID: "a", Content: fmt.Sprintf("unstable-%d", attempt), Embedding: vector})
-	}
-	_, err = svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1})
-	if ErrorCodeOf(err) != CodeSnapshotMismatch || hookCalls != denseVectorNativeSnapshotAttempts {
-		t.Fatalf("persistent mismatch err=%v code=%s hookCalls=%d want code=%s attempts=%d", err, ErrorCodeOf(err), hookCalls, CodeSnapshotMismatch, denseVectorNativeSnapshotAttempts)
+	svc.denseVectorNativeAfterSearch = nil
+	updated, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{0, 1}, TopK: 1, ReturnEmbedding: true})
+	if err != nil || len(updated.Documents) != 1 || updated.Documents[0].Content != "v1" ||
+		!reflect.DeepEqual(updated.Documents[0].Embedding, []float32{0, 1}) {
+		t.Fatalf("updated response=%+v err=%v", updated, err)
 	}
 }
 
