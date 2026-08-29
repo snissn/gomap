@@ -910,31 +910,31 @@ func decodeRetainedSemanticStreamTestObject(t testing.TB, raw []byte) map[string
 	return obj
 }
 
-func TestPrepareColumnWritePublishInputUsesPreparedDeclaredRows(t *testing.T) {
+func TestPrepareColumnWritePublishInputUsesPreparedDocuments(t *testing.T) {
 	cfg := &ColumnStoreConfig{
 		Enabled: true,
 		Columns: []ColumnStoreColumn{
 			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64},
 		},
 	}
-	preparedRows := []columnDeclaredRow{{
-		ID: []byte("doc-1"),
-		Values: []columnDeclaredValue{{
+	documents := []columnWriteDocument{{
+		ID:       []byte("doc-1"),
+		Document: []byte(`not-json`),
+		declaredValues: []columnDeclaredValue{{
 			Type:    ColumnStoreValueInt64,
 			Present: true,
 			Int64:   42,
 		}},
+		declaredValuesReady: true,
 	}}
 	input, err := prepareColumnWritePublishInputBeforeCommandWAL(columnWritePublishInput{
 		meta: CollectionMeta{Options: CollectionOptions{
 			DocumentFormat: DocumentFormatJSON,
 			ColumnStore:    cfg,
 		}},
-		operation:         ColumnPublishOperationInsert,
-		documents:         []columnWriteDocument{{ID: []byte("doc-1"), Document: []byte(`not-json`)}},
-		rows:              1,
-		declaredRows:      preparedRows,
-		declaredRowsReady: true,
+		operation: ColumnPublishOperationInsert,
+		documents: documents,
+		rows:      1,
 	})
 	if err != nil {
 		t.Fatalf("prepare with declared rows ready: %v", err)

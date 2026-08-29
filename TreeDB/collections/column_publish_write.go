@@ -569,6 +569,24 @@ func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInpu
 		if len(input.documents) != input.rows {
 			return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset %s documents=%d rows=%d", input.operation, len(input.documents), input.rows)
 		}
+		preparedDocuments := 0
+		for i := range input.documents {
+			if input.documents[i].declaredValuesReady {
+				preparedDocuments++
+			}
+		}
+		if preparedDocuments != 0 {
+			if preparedDocuments != len(input.documents) {
+				return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset %s partially prepared documents=%d rows=%d", input.operation, preparedDocuments, input.rows)
+			}
+			preparedRows := make([]columnDeclaredRow, len(input.documents))
+			for i := range input.documents {
+				preparedRows[i] = columnDeclaredRow{ID: input.documents[i].ID, Values: input.documents[i].declaredValues}
+			}
+			input.declaredRows = preparedRows
+			input.declaredRowsReady = true
+			return input, nil
+		}
 		if normalizedDocumentFormat(input.meta.Options.DocumentFormat) != DocumentFormatJSON {
 			return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset %s requires JSON document format in M12A, got %q", input.operation, input.meta.Options.DocumentFormat)
 		}

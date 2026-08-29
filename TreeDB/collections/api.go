@@ -5317,21 +5317,18 @@ func foregroundIndexedWriteOptionsForColumnDocuments(opts CollectionOptions, col
 	return opts
 }
 
-func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan, commandWALStageIntent *backenddb.CommandWALIntent, rawStageLocked bool, releaseCommandWALRawStage func()) (elapsed time.Duration, err error) {
+func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan, columnDocuments []columnWriteDocument, commandWALStageIntent *backenddb.CommandWALIntent, rawStageLocked bool, releaseCommandWALRawStage func()) (elapsed time.Duration, err error) {
 	domain := c.writeDomain
 	if domain == nil {
 		return 0, errors.New("collections: missing write domain")
 	}
-	var columnDocuments []columnWriteDocument
 	if columnStoreWriteEnabled(catalog.meta) {
 		if commandWALStageIntent == nil {
 			return 0, fmt.Errorf("%w: buffered typed-column insert requires command WAL intent", backenddb.ErrCommandWALContextMissingFrame)
 		}
-		docs, err := collectionDocumentsFromInsertPlan(plan, collectionPrimaryRootName(catalog.meta.Name))
-		if err != nil {
-			return 0, err
+		if len(columnDocuments) != len(plan.resultIDs) {
+			return 0, fmt.Errorf("collections: buffered typed-column insert documents=%d rows=%d", len(columnDocuments), len(plan.resultIDs))
 		}
-		columnDocuments = columnWriteDocumentsFromCommitLog(docs)
 	}
 	writeOptions := foregroundIndexedWriteOptionsForColumnDocuments(catalog.meta.Options, columnDocuments)
 	var unlockCommandWALRawStage func()
@@ -10857,7 +10854,7 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 	updateInsertBatchBaseRootIDs(rootNames, baseRootIDs, currentCatalog)
 	pinCommitSeq := snapshotCommitSeq(pin)
 	pinSystemRoot := snapshotSystemRoot(pin)
-	bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, nil, false, nil)
+	bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, nil, nil, false, nil)
 	_ = pin.Close()
 	if err != nil {
 		resetCollectionRunTables(plan.runs)
@@ -11167,6 +11164,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			return nil, err
 		}
 		var bufferedCommandWALIntent *backenddb.CommandWALIntent
+		var columnDocuments []columnWriteDocument
 		if commandWALBufferedMode {
 			docs, err := collectionDocumentsFromInsertPlan(plan, collectionPrimaryRootName(meta.Name))
 			if err != nil {
@@ -11175,16 +11173,26 @@ func (c *Collection) insertBatchOnceWithLockState(
 				return nil, err
 			}
 			if columnStoreWriteEnabled(meta) {
+				columnDocuments = columnWriteDocumentsFromCommitLog(docs)
 				prepared, err := prepareColumnWritePublishInputBeforeCommandWAL(columnWritePublishInput{
 					meta:      meta,
 					operation: ColumnPublishOperationInsert,
-					documents: columnWriteDocumentsFromCommitLog(docs),
+					documents: columnDocuments,
 					rows:      len(docs),
 				})
 				if err != nil {
 					closePlanningSnapshot()
 					resetCollectionRunTables(plan.runs)
 					return nil, err
+				}
+				for i := range columnDocuments {
+					if !bytes.Equal(columnDocuments[i].ID, prepared.declaredRows[i].ID) {
+						closePlanningSnapshot()
+						resetCollectionRunTables(plan.runs)
+						return nil, fmt.Errorf("collections: prepared declared row %d id mismatch", i)
+					}
+					columnDocuments[i].declaredValues = prepared.declaredRows[i].Values
+					columnDocuments[i].declaredValuesReady = true
 				}
 				plan.stats.ColumnPublishDocumentExtraction += prepared.documentExtraction
 			}
@@ -11226,7 +11234,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			}
 			defer unlockCommandWALStage()
 		}
-		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, bufferedCommandWALIntent, bufferedCommandWALIntent != nil && c.db != nil, releaseCommandWALRawStage)
+		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, columnDocuments, bufferedCommandWALIntent, bufferedCommandWALIntent != nil && c.db != nil, releaseCommandWALRawStage)
 		_ = pin.Close()
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
