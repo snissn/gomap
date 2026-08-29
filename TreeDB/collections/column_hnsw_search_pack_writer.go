@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
 type columnHNSWSearchPackPreparedAsset struct {
@@ -310,20 +312,57 @@ func validateColumnHNSWSearchPackStateAssetIfPresentWithMode(rootDir string, cfg
 }
 
 func validateColumnHNSWSearchPackAssetPayload(rootDir string, ref ColumnAssetRef, bytes int64, graph columnVectorGraphManifestSnapshot, def VectorIndexDefinition) error {
-	raw, err := readColumnPhysicalAssetFromManager(rootDir, ref)
+	return validateColumnHNSWSearchPackAssetPayloadWithManager(rootDir, ref, bytes, graph, def, mappedresource.NewManager())
+}
+
+func validateColumnHNSWSearchPackAssetPayloadWithManager(rootDir string, ref ColumnAssetRef, bytes int64, graph columnVectorGraphManifestSnapshot, def VectorIndexDefinition, manager *mappedresource.Manager) error {
+	if manager == nil {
+		return errors.New("collections: hnsw search pack validation requires mapped resource manager")
+	}
+	path, err := columnAssetSegmentPath(rootDir, ref)
 	if err != nil {
 		return err
 	}
-	if int64(len(raw)) != bytes || int64(len(raw)) != ref.Length {
-		return fmt.Errorf("collections: hnsw search pack bytes=%d manifest=%d ref=%d", len(raw), bytes, ref.Length)
+	if bytes != ref.Length {
+		return fmt.Errorf("collections: hnsw search pack bytes=%d ref=%d", bytes, ref.Length)
 	}
-	pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{
+	key := columnHNSWSearchPackMappedResourceKey(columnVectorIndexStateAssetSnapshot{
+		Role:    columnVectorIndexStateAssetRoleHNSWSearchPack,
+		AssetID: columnVectorIndexStateHNSWSearchPackAssetID,
+		Ref:     ref,
+	})
+	handle, err := manager.AcquireFileRange(key, mappedresource.Scope{
+		Kind:       mappedresource.ScopePreparedSearch,
+		ID:         "hnsw_search_pack_v1/post_publish_validate",
+		Namespace:  ref.Namespace,
+		Generation: graph.BaseManifestGeneration,
+		Reason:     "hnsw_search_pack_v1 post-publication validation",
+	}, path, mappedresource.AcquireOptions{
+		Reason:         "hnsw_search_pack_v1 post-publication validation",
+		ValidationMode: mappedresource.ValidationVerify,
+		PreferMapped:   true,
+		AllowHeapCopy:  false,
+		ResourceRoot:   rootDir,
+		ResourcePath:   path,
+	})
+	if err != nil {
+		return err
+	}
+	view, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, handle, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{
 		ManifestGeneration: graph.BaseManifestGeneration,
 		ManifestChecksum:   graph.BaseManifestChecksum,
 		SchemaHash:         graph.BaseSchemaHash,
 	}})
 	if err != nil {
-		return err
+		return errors.Join(err, handle.Release())
+	}
+	validateErr := validateColumnHNSWSearchPackPreparedView(view, graph, def)
+	return errors.Join(validateErr, view.Close())
+}
+
+func validateColumnHNSWSearchPackPreparedView(pack *columnHNSWSearchPackPreparedView, graph columnVectorGraphManifestSnapshot, def VectorIndexDefinition) error {
+	if pack == nil {
+		return errors.New("collections: hnsw search pack prepared view is nil")
 	}
 	if pack.Header.Rows != graph.RowCount || pack.Header.Dimensions != def.Dimensions || pack.Header.M != def.M || pack.Header.EfConstruction != def.EfConstruction || pack.Header.EfSearch != def.EfSearch {
 		return fmt.Errorf("collections: hnsw_search_pack_v1 header rows/dims/M/ef=(%d,%d,%d,%d,%d) want (%d,%d,%d,%d,%d)", pack.Header.Rows, pack.Header.Dimensions, pack.Header.M, pack.Header.EfConstruction, pack.Header.EfSearch, graph.RowCount, def.Dimensions, def.M, def.EfConstruction, def.EfSearch)

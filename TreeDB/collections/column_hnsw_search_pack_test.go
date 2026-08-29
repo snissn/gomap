@@ -120,6 +120,50 @@ func TestColumnHNSWSearchPackStreamedRowsMatchOracle4427(t *testing.T) {
 	}
 }
 
+func TestColumnHNSWSearchPackPreparedAssetValidationMapped4429(t *testing.T) {
+	input := testColumnHNSWSearchPackInput2312()
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootDir := t.TempDir()
+	cfg := ColumnStoreConfig{Enabled: true, AssetManager: &ColumnAssetManagerConfig{Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "hnsw-validation-4429"}}
+	appender, err := newColumnPhysicalAssetSegmentAppender(rootDir, cfg, 4429)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := appender.appendKindWithAlignment(raw, ColumnAssetKindTCS1HNSWSearchPack, input.BaseIdentity.ManifestGeneration, 77, int64(columnHNSWSearchPackAlignment))
+	closeErr := appender.close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("append/close hnsw pack err=%v close=%v", err, closeErr)
+	}
+	graph := columnVectorGraphManifestSnapshot{
+		RowCount: input.Rows, BaseManifestGeneration: input.BaseIdentity.ManifestGeneration,
+		BaseManifestChecksum: input.BaseIdentity.ManifestChecksum, BaseSchemaHash: input.BaseIdentity.SchemaHash,
+	}
+	def := VectorIndexDefinition{Dimensions: input.Dimensions, M: input.M, EfConstruction: input.EfConstruction, EfSearch: input.EfSearch}
+	manager := mappedresource.NewManager()
+	if err := validateColumnHNSWSearchPackAssetPayloadWithManager(rootDir, ref, ref.Length, graph, def, manager); err != nil {
+		t.Fatal(err)
+	}
+	stats := manager.Stats()
+	if stats.TotalMappedBytes != uint64(ref.Length) || stats.TotalHeapCopyBytes != 0 || stats.ActiveHandles != 0 || stats.ActiveMappedBytes != 0 || stats.ActiveHeapCopyBytes != 0 {
+		t.Fatalf("validation mappedresource stats=%+v want one released mapped range and no heap copy", stats)
+	}
+
+	corrupt := append([]byte(nil), raw...)
+	corrupt[len(corrupt)/2] ^= 1
+	writeColumnVectorGraphAssetRawForTest2041(t, rootDir, ref, corrupt)
+	if err := validateColumnHNSWSearchPackAssetPayload(rootDir, ref, ref.Length, graph, def); err == nil {
+		t.Fatal("corrupt pack passed mapped validation")
+	}
+	writeColumnVectorGraphAssetRawForTest2041(t, rootDir, ref, raw)
+	graph.BaseManifestChecksum++
+	if err := validateColumnHNSWSearchPackAssetPayload(rootDir, ref, ref.Length, graph, def); err == nil {
+		t.Fatal("base identity mismatch passed mapped validation")
+	}
+}
+
 func TestColumnHNSWSearchPackRowEncodingRejectsInvalidVectors4420(t *testing.T) {
 	input := testColumnHNSWSearchPackInput2312()
 	input.NormalizedVectors = nil
@@ -2015,6 +2059,60 @@ func BenchmarkColumnHNSWSearchPackDecodeValidate2312(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		if _, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: base}); err != nil {
 			b.Fatalf("decodeColumnHNSWSearchPack: %v", err)
+		}
+	}
+}
+
+func BenchmarkColumnHNSWSearchPackPreparedAssetValidation4429(b *testing.B) {
+	const rowsCount, dimensions = 100_000, 768
+	vectors := make([]float32, rowsCount*dimensions)
+	input := columnHNSWSearchPackBuildInput{
+		Rows: rowsCount, Dimensions: dimensions, VectorStride: dimensions,
+		M: 16, EfConstruction: 128, EfSearch: 128, EntryOrdinal: 0, MaxLayer: 0,
+		BaseIdentity:            columnHNSWSearchPackBaseIdentity{ManifestGeneration: 1, ManifestChecksum: 1, SchemaHash: 1},
+		NormalizedVectors:       vectors,
+		Levels:                  make([]uint16, rowsCount),
+		AdjacencyLayers:         []columnHNSWSearchPackLayerInput{{Offsets: make([]uint64, rowsCount+1)}},
+		RowRefGenerations:       make([]int64, rowsCount),
+		RowRefPartIDs:           make([]int64, rowsCount),
+		RowRefRowIndexes:        make([]int64, rowsCount),
+		RowRefAppliedCommandLSN: make([]int64, rowsCount),
+		DocumentIDOffsets:       make([]uint64, rowsCount+1),
+		DocumentIDBytes:         make([]byte, rowsCount),
+	}
+	for ordinal := range rowsCount {
+		vectors[ordinal*dimensions] = 1
+		input.RowRefGenerations[ordinal] = 1
+		input.RowRefPartIDs[ordinal] = 1
+		input.RowRefRowIndexes[ordinal] = int64(ordinal)
+		input.RowRefAppliedCommandLSN[ordinal] = 1
+		input.DocumentIDOffsets[ordinal] = uint64(ordinal)
+		input.DocumentIDBytes[ordinal] = 'x'
+	}
+	input.DocumentIDOffsets[rowsCount] = rowsCount
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		b.Fatal(err)
+	}
+	rootDir := b.TempDir()
+	cfg := ColumnStoreConfig{Enabled: true, AssetManager: &ColumnAssetManagerConfig{Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "hnsw-validation-bench-4429"}}
+	appender, err := newColumnPhysicalAssetSegmentAppender(rootDir, cfg, 4429)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ref, err := appender.appendKindWithAlignment(raw, ColumnAssetKindTCS1HNSWSearchPack, input.BaseIdentity.ManifestGeneration, 77, int64(columnHNSWSearchPackAlignment))
+	closeErr := appender.close()
+	if err != nil || closeErr != nil {
+		b.Fatalf("append/close hnsw pack err=%v close=%v", err, closeErr)
+	}
+	graph := columnVectorGraphManifestSnapshot{RowCount: input.Rows, BaseManifestGeneration: input.BaseIdentity.ManifestGeneration, BaseManifestChecksum: input.BaseIdentity.ManifestChecksum, BaseSchemaHash: input.BaseIdentity.SchemaHash}
+	def := VectorIndexDefinition{Dimensions: input.Dimensions, M: input.M, EfConstruction: input.EfConstruction, EfSearch: input.EfSearch}
+	b.SetBytes(ref.Length)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := validateColumnHNSWSearchPackAssetPayload(rootDir, ref, ref.Length, graph, def); err != nil {
+			b.Fatal(err)
 		}
 	}
 }
