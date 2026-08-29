@@ -1,8 +1,0 @@
-command=/opt/homebrew/opt/python@3.14/bin/python3.14 /Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/benchmarks/text_hybrid_scoreboard/sqlite_fts5_bench.py --manifest /Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/benchmarks/text_hybrid_scoreboard/lexical_manifest.json --corpus /Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/corpus.tsv --out /Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/raw/sqlite_fts5-r1.json --repetition 1 --db /Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison/artifacts/4330-lexical-comparison-v1/indexes/sqlite_fts5-r1.sqlite3
-cwd=/Users/michaelseiler/orca/workspaces/gomap/4330-lexical-comparison
-started_unix=1788013558.9994519
-returncode=0
-
-[stdout]
-
-[stderr]

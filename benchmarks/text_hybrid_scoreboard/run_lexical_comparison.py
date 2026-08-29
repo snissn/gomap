@@ -13,6 +13,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import stat
 import time
 from pathlib import Path
 from typing import Any
@@ -40,17 +41,52 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-dirty", action="store_true", help="development smoke only; marks the report ineligible for retained evidence")
     return parser.parse_args()
 
+def git_bytes(*args: str) -> bytes:
+    result = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.decode(errors='replace').strip()}")
+    return result.stdout
+
 
 def git_value(*args: str) -> str:
-    result = subprocess.run(["git", *args], cwd=ROOT, text=True, capture_output=True, check=False)
-    if result.returncode != 0:
-        raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
-    return result.stdout.strip()
+    return git_bytes(*args).decode().strip()
 
 
-def source_snapshot(allow_dirty: bool) -> dict[str, Any]:
-    tracked_diff = git_value("diff", "--binary", "HEAD", "--")
-    modified = bool(tracked_diff)
+def untracked_source_identity(out_dir: Path) -> list[dict[str, Any]]:
+    raw_paths = git_bytes("ls-files", "--others", "--exclude-standard", "-z")
+    out_resolved = out_dir.resolve()
+    try:
+        out_relative = out_resolved.relative_to(ROOT.resolve())
+    except ValueError:
+        out_relative = None
+    if out_relative == Path("."):
+        raise RuntimeError("lexical comparison output directory cannot be the repository root")
+    records = []
+    for encoded in sorted(path for path in raw_paths.split(b"\0") if path):
+        relative = Path(os.fsdecode(encoded))
+        if out_relative is not None and (relative == out_relative or out_relative in relative.parents):
+            continue
+        candidate = ROOT / relative
+        try:
+            mode = candidate.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                content = os.fsencode(os.readlink(candidate))
+                kind = "symlink"
+            elif stat.S_ISREG(mode):
+                content = candidate.read_bytes()
+                kind = "file"
+            else:
+                raise RuntimeError(f"untracked source path is not a regular file or symlink: {relative}")
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"untracked source path changed during snapshot: {relative}") from exc
+        records.append({"path": relative.as_posix(), "kind": kind, "sha256": hashlib.sha256(content).hexdigest()})
+    return records
+
+
+def source_snapshot(allow_dirty: bool, out_dir: Path) -> dict[str, Any]:
+    tracked_diff = git_bytes("diff", "--binary", "HEAD", "--")
+    untracked_sources = untracked_source_identity(out_dir)
+    modified = bool(tracked_diff or untracked_sources)
     if modified and not allow_dirty:
         raise RuntimeError("retained lexical comparison requires a clean checkout; use --allow-dirty only for development smoke")
     return {
@@ -58,7 +94,8 @@ def source_snapshot(allow_dirty: bool) -> dict[str, Any]:
         "tree_oid": git_value("rev-parse", "HEAD^{tree}"),
         "treedb_subtree_oid": git_value("rev-parse", "HEAD:TreeDB"),
         "harness_subtree_oid": git_value("rev-parse", "HEAD:benchmarks/text_hybrid_scoreboard"),
-        "tracked_diff_sha256": hashlib.sha256(tracked_diff.encode()).hexdigest(),
+        "tracked_diff_sha256": hashlib.sha256(tracked_diff).hexdigest(),
+        "untracked_sources": untracked_sources,
         "vcs_modified": modified,
         "qualification_eligible": not modified,
     }
@@ -167,7 +204,7 @@ def main() -> int:
     args.out_dir = args.out_dir.resolve()
     if args.repetitions < 3:
         raise SystemExit("--repetitions must be at least 3 for retained comparison evidence")
-    source = source_snapshot(args.allow_dirty)
+    source = source_snapshot(args.allow_dirty, args.out_dir)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     manifest = load_manifest(args.manifest)
     manifest_digest = manifest_sha256(manifest)
@@ -203,7 +240,7 @@ def main() -> int:
                 raise RuntimeError(f"{engine_id} repetition {repetition} produced no result artifact")
             artifact_paths.append(raw)
 
-    source_after_run = source_snapshot(args.allow_dirty)
+    source_after_run = source_snapshot(args.allow_dirty, args.out_dir)
     if source_after_run != source:
         raise RuntimeError("source checkout drifted during lexical comparison; artifacts are rejected")
     source["post_run_reverified"] = True

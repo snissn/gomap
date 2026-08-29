@@ -24,10 +24,12 @@ python3 benchmarks/text_hybrid_scoreboard/run_lexical_comparison.py \
 
 The runner rejects fewer than three retained repetitions and a dirty checkout.
 It records the exact commit, source tree, TreeDB subtree, comparator-harness
-subtree, and byte-level tracked diff state before execution, then recomputes
-all five after the last adapter and rejects any drift before consolidation.
-Generated ignored output does not affect that check; TreeDB raw artifacts are
-bound to the unchanged commit.
+subtree, byte-level tracked diff, and every untracked source path,
+kind, and content digest before execution. It recomputes all source identities
+after the last adapter and rejects additions, changes, removals, or tracked
+drift before consolidation. Only the exact generated output subtree is
+excluded when it is inside the repository; TreeDB raw artifacts are bound to
+the unchanged commit.
 `--allow-dirty` is development-smoke-only and marks the consolidated report
 ineligible for retained qualification. The runner prepares pinned external
 dependencies, then runs engines serially in this order: TreeDB text-v2, Apache

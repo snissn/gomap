@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from lexical_common import (
     RESULT_SCHEMA,
@@ -21,6 +23,7 @@ from lexical_common import (
     tokenize,
     validate_result,
 )
+import run_lexical_comparison as lexical_runner
 
 HERE = Path(__file__).resolve().parent
 
@@ -39,7 +42,8 @@ class LexicalComparisonTest(unittest.TestCase):
                 "tree_oid": "candidate-tree",
                 "treedb_subtree_oid": "treedb-tree",
                 "harness_subtree_oid": "harness-tree",
-                "tracked_diff_sha256": "tracked-diff-digest",
+                "tracked_diff_sha256": "d" * 64 if modified else sha256_bytes(b""),
+                "untracked_sources": [],
                 "post_run_reverified": True,
                 "vcs_modified": modified,
                 "qualification_eligible": not modified,
@@ -96,6 +100,27 @@ class LexicalComparisonTest(unittest.TestCase):
         self.assertEqual(normalize("ＲＥＦＵＮＤ Policy"), "refund policy")
         self.assertEqual(tokenize("Refund—POLICY_42"), ["refund", "policy", "42"])
 
+    def test_untracked_source_identity_excludes_only_exact_output_subtree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            out_dir = root / "run"
+            out_dir.mkdir()
+            source = root / "adapter.py"
+            generated = out_dir / "raw.json"
+            source.write_text("first", encoding="utf-8")
+            generated.write_text("generated", encoding="utf-8")
+            listed = b"adapter.py\x00run/raw.json\x00"
+            with patch.object(lexical_runner, "ROOT", root), patch.object(lexical_runner, "git_bytes", return_value=listed):
+                first = lexical_runner.untracked_source_identity(out_dir)
+            self.assertEqual([item["path"] for item in first], ["adapter.py"])
+            source.write_text("second", encoding="utf-8")
+            with patch.object(lexical_runner, "ROOT", root), patch.object(lexical_runner, "git_bytes", return_value=listed):
+                changed = lexical_runner.untracked_source_identity(out_dir)
+            self.assertNotEqual(first, changed)
+            source.unlink()
+            with patch.object(lexical_runner, "ROOT", root), patch.object(lexical_runner, "git_bytes", return_value=b"run/raw.json\x00"):
+                removed = lexical_runner.untracked_source_identity(out_dir)
+            self.assertEqual(removed, [])
     def test_reference_interprets_every_manifest_shape(self) -> None:
         self.assertEqual(self.expected["common"], [f"doc-{i:06d}" for i in (0, 1, 2, 3, 4, 5, 6, 7, 9, 8)])
         self.assertEqual(self.expected["rare"], [f"doc-{i:06d}" for i in range(10, 20)])
