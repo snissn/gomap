@@ -141,7 +141,8 @@ def main() -> int:
         plan = list(conn.execute("EXPLAIN QUERY PLAN SELECT id FROM docs_fts WHERE docs_fts MATCH ?", (query_text(query),)))
         route_proven = any("VIRTUAL TABLE INDEX" in str(row).upper() for row in plan)
         cases.append({
-            "id": query["id"], "status": "ok", "equivalent": True,
+            "id": query["id"], "status": "directional", "equivalent": False,
+            "non_equivalent_reason": "SQLite FTS5 native bm25() IDF and floor do not implement the pinned BM25F formula",
             "samples_nanos": samples, "result_ids": ids, "result_digest": result_digest(ids),
             "route": {"intended": route_proven, "name": "sqlite_fts5_virtual_table_match_bm25", "fallback": False, "proof": plan},
             "timed_out": False,
@@ -182,7 +183,7 @@ def main() -> int:
         "corpus": {"document_count": len(rows), "sha256": hashlib.sha256(corpus_payload).hexdigest()},
         "command": command,
         "versions": {"python": sys.version.replace("\n", " "), "sqlite": sqlite3.sqlite_version, "platform": platform.platform()},
-        "config": {"working_directory": os.getcwd(), "tokenizer": "unicode61 remove_diacritics 2", "weighted_field_materialization": "title repeated 3x then body for non-phrase scoring only", "phrase_fields": ["title", "body"], "phrase_field_weights": {"title": 3, "body": 1}, "stored_source_fields": ["id", "title", "body", "tenant"], "journal_mode": "WAL", "synchronous": "FULL", "sqlite_auxiliary_threads": sqlite_threads, "top_k": top_k, "tie_break": "score,id", "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close"},
+        "config": {"working_directory": os.getcwd(), "tokenizer": "unicode61 remove_diacritics 2", "weighted_field_materialization": "title repeated 3x then body for non-phrase native scoring", "phrase_fields": ["title", "body"], "phrase_scoring": "native bm25 title weight 3, body weight 1", "scoring_contract": "native_directional", "stored_source_fields": ["id", "title", "body", "tenant"], "journal_mode": "WAL", "synchronous": "FULL", "sqlite_auxiliary_threads": sqlite_threads, "top_k": top_k, "tie_break": "score,id", "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close"},
         "environment": environment,
         "build": {"elapsed_nanos": build_elapsed, "docs_per_second": len(rows) * 1e9 / build_elapsed, "cpu": {"status": "ok", "value": build_cpu, "unit": "nanoseconds"}, "peak_rss": {"status": "ok", "value": peak_rss_bytes(), "unit": "bytes"}, "checkpointed": True},
         "storage": {"durable_bytes": durable, "wal_bytes": wal, "transient_bytes": transient},

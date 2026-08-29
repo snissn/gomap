@@ -186,7 +186,7 @@ func main() {
 		"corpus":      map[string]any{"document_count": len(docs), "sha256": hex.EncodeToString(corpusDigest[:])},
 		"command":     command,
 		"versions":    map[string]string{"go": runtime.Version(), "platform": runtime.GOOS + "/" + runtime.GOARCH, "module": treeDBVersion()},
-		"config":      map[string]any{"working_directory": workingDirectory, "index_version": "v2", "analyzer": "simple", "store_positions": true, "weights": map[string]float64{"title": 3, "body": 1}, "bm25f": map[string]float64{"k1": 1.2, "b": 0.75}, "stored_source_fields": []string{"id", "title", "body", "tenant"}, "top_k": spec.Execution.TopK, "candidate_limit": spec.Corpus.DocumentCount, "max_postings_scanned": spec.Corpus.DocumentCount * 8, "result_mode": "score_only", "timed_explain": false, "route_proof": "one untimed explained query per case", "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close"},
+		"config":      map[string]any{"working_directory": workingDirectory, "index_version": "v2", "analyzer": "simple", "store_positions": true, "weights": map[string]float64{"title": 3, "body": 1}, "bm25f": map[string]float64{"k1": 1.2, "b": 0.75}, "scoring_contract": "pinned_bm25f", "stored_source_fields": []string{"id", "title", "body", "tenant"}, "top_k": spec.Execution.TopK, "candidate_limit": spec.Corpus.DocumentCount, "max_postings_scanned": spec.Corpus.DocumentCount * 8, "result_mode": "score_only", "timed_explain": false, "route_proof": "one untimed explained query per case", "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close"},
 		"environment": environment,
 		"build":       map[string]any{"elapsed_nanos": buildElapsed.Nanoseconds(), "docs_per_second": float64(len(docs)) / buildElapsed.Seconds(), "cpu": map[string]any{"status": "ok", "value": cpuNanos(usageAfter) - cpuNanos(usageBefore), "unit": "nanoseconds"}, "peak_rss": map[string]any{"status": "ok", "value": peakRSSBytes(usageFinal), "unit": "bytes"}, "checkpointed": true},
 		"storage":     map[string]int64{"durable_bytes": durable, "wal_bytes": wal, "transient_bytes": transient},
@@ -211,10 +211,13 @@ func execute(col *collections.Collection, q query, spec manifest, explain bool) 
 		for i, result := range response.Results {
 			ids[i] = string(result.ID)
 		}
-		route := map[string]any{
-			"intended": err == nil && response.Stats.FullDocumentScanFallbacks == 0 && response.Stats.FailClosed == 0,
-			"name":     "text_v2_blockmax_scalar_prefilter", "fallback": response.Stats.FullDocumentScanFallbacks != 0,
-			"proof": map[string]any{"text_index_epoch": response.Snapshot.TextIndexEpoch, "scalar_filter_strategy": response.Plan.ScalarFilterStrategy, "text_candidates": response.Stats.TextCandidatesReturned, "documents_fetched": response.Stats.DocumentsFetched, "fail_closed": response.Stats.FailClosed},
+		var route map[string]any
+		if explain {
+			route = map[string]any{
+				"intended": err == nil && response.Stats.FullDocumentScanFallbacks == 0 && response.Stats.FailClosed == 0,
+				"name":     "text_v2_blockmax_scalar_prefilter", "fallback": response.Stats.FullDocumentScanFallbacks != 0,
+				"proof": map[string]any{"text_index_epoch": response.Snapshot.TextIndexEpoch, "scalar_filter_strategy": response.Plan.ScalarFilterStrategy, "text_candidates": response.Stats.TextCandidatesReturned, "documents_fetched": response.Stats.DocumentsFetched, "fail_closed": response.Stats.FailClosed},
+			}
 		}
 		return runResult{IDs: ids, Route: route}, err
 	}
@@ -233,17 +236,20 @@ func execute(col *collections.Collection, q query, spec manifest, explain bool) 
 	for i, result := range response.Results {
 		ids[i] = string(result.DocumentID)
 	}
-	path, version := "", ""
-	var activeRoots []string
-	if response.Explain != nil {
-		path = string(response.Explain.Serving.Path)
-		version = string(response.Explain.IndexVersion)
-		activeRoots = response.Explain.Snapshot.ActiveRootNames
-	}
-	route := map[string]any{
-		"intended": err == nil && version == string(collections.TextIndexVersionV2) && path != "" && response.Stats.FullDocumentScanFallbacks == 0 && response.Stats.FailClosed == 0,
-		"name":     path, "fallback": response.Stats.FullDocumentScanFallbacks != 0,
-		"proof": map[string]any{"index_version": version, "active_roots": activeRoots, "documents_fetched": response.Stats.DocumentsFetched, "fail_closed": response.Stats.FailClosed, "postings_scanned": response.Stats.TextPostingsScanned},
+	var route map[string]any
+	if explain {
+		path, version := "", ""
+		var activeRoots []string
+		if response.Explain != nil {
+			path = string(response.Explain.Serving.Path)
+			version = string(response.Explain.IndexVersion)
+			activeRoots = response.Explain.Snapshot.ActiveRootNames
+		}
+		route = map[string]any{
+			"intended": err == nil && version == string(collections.TextIndexVersionV2) && path != "" && response.Stats.FullDocumentScanFallbacks == 0 && response.Stats.FailClosed == 0,
+			"name":     path, "fallback": response.Stats.FullDocumentScanFallbacks != 0,
+			"proof": map[string]any{"index_version": version, "active_roots": activeRoots, "documents_fetched": response.Stats.DocumentsFetched, "fail_closed": response.Stats.FailClosed, "postings_scanned": response.Stats.TextPostingsScanned},
+		}
 	}
 	return runResult{IDs: ids, Route: route}, err
 }
@@ -287,9 +293,14 @@ func storageBytes(root string) (durable, wal, transient int64) {
 		if err != nil {
 			return err
 		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
 		name := strings.ToLower(entry.Name())
+		topLevel := strings.Split(filepath.ToSlash(relative), "/")[0]
 		switch {
-		case strings.Contains(name, "wal"):
+		case strings.EqualFold(topLevel, "wal"):
 			wal += info.Size()
 		case strings.Contains(name, "tmp"), strings.HasSuffix(name, ".lock"):
 			transient += info.Size()

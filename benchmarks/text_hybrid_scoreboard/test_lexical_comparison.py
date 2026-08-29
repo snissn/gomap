@@ -17,6 +17,7 @@ from lexical_common import (
     ValidationError,
     consolidate,
     corpus_bytes,
+    eligible_result_ids,
     load_manifest,
     manifest_sha256,
     normalize,
@@ -38,6 +39,7 @@ class LexicalComparisonTest(unittest.TestCase):
         cls.manifest = load_manifest(HERE / "lexical_manifest.json")
         cls.documents = [dict(zip(("id", "title", "body", "tenant"), line.split("\t"), strict=True)) for line in corpus_bytes(10_000).decode().splitlines()]
         cls.expected = reference_results(cls.manifest, cls.documents)
+        cls.eligible = eligible_result_ids(cls.manifest, cls.documents)
         cls.corpus_ids = {doc["id"] for doc in cls.documents}
     def context(self, modified: bool = False) -> dict:
         return {
@@ -80,8 +82,24 @@ class LexicalComparisonTest(unittest.TestCase):
                 "route": {"intended": True, "name": route_name, "fallback": False, "proof": copy.deepcopy(route_proof)},
                 "timed_out": False,
             })
-        config = ({"top_k": 10, "weights": {"title": 3, "body": 1}, "bm25f": {"k1": 1.2, "b": 0.75}, "stable_setting": "base", "build_timing_boundary": self.manifest["execution"]["build_timing_boundary"]} if engine_id == "treedb_text_v2" else {"top_k": 10, "tie_break": "score,id", "weighted_field_materialization": "title repeated 3x then body for non-phrase scoring only", "phrase_fields": ["title", "body"], "phrase_field_weights": {"title": 3, "body": 1}, "stable_setting": "base", "build_timing_boundary": self.manifest["execution"]["build_timing_boundary"]})
-        config["stored_source_fields"] = ["id", "title", "body", "tenant"]
+        if engine_id in {"bleve", "sqlite_fts5"}:
+            for query, case in zip(self.manifest["queries"], cases, strict=True):
+                if engine_id == "bleve" and query["semantic"] == "term_scalar":
+                    case.clear()
+                    case.update({"id": query["id"], "status": "unsupported", "equivalent": False, "unsupported_reason": "non-scoring scalar filter unavailable"})
+                    continue
+                case["status"] = "directional"
+                case["equivalent"] = False
+                case["non_equivalent_reason"] = "native scorer differs from pinned BM25F"
+        config = {"top_k": 10, "stable_setting": "base", "build_timing_boundary": self.manifest["execution"]["build_timing_boundary"], "stored_source_fields": ["id", "title", "body", "tenant"]}
+        if engine_id == "treedb_text_v2":
+            config.update(weights={"title": 3, "body": 1}, bm25f={"k1": 1.2, "b": 0.75}, scoring_contract="pinned_bm25f")
+        elif engine_id == "lucene":
+            config.update(tie_break="score,id", scoring_contract="pinned_bm25f", weighted_field_materialization="title repeated 3x then body for term scoring, including phrase-qualified rows", phrase_filter_fields=["title", "body"], phrase_scoring="weighted terms scored; title/body phrase OR applied as FILTER")
+        elif engine_id == "bleve":
+            config.update(tie_break="score,id", scoring_contract="native_directional", weighted_field_materialization="title repeated 3x then body for non-phrase native scoring", phrase_fields=["title", "body"], phrase_scoring="native TF-IDF title boost 3, body boost 1")
+        else:
+            config.update(tie_break="score,id", scoring_contract="native_directional", weighted_field_materialization="title repeated 3x then body for non-phrase native scoring", phrase_fields=["title", "body"], phrase_scoring="native bm25 title weight 3, body weight 1")
         return {
             "schema_version": RESULT_SCHEMA, "status": "ok",
             "engine": {"id": engine_id, "family": "test", "name": engine_id, "version": "candidate-commit" if engine_id == "treedb_text_v2" else "pinned"},
@@ -96,7 +114,7 @@ class LexicalComparisonTest(unittest.TestCase):
             },
             "build": {"elapsed_nanos": 1, "docs_per_second": 1.0, "cpu": {"status": "ok", "value": 1, "unit": "nanoseconds"}, "peak_rss": {"status": "unsupported", "reason": "test runtime has no RSS API"}, "checkpointed": True},
             "storage": {"durable_bytes": 1, "wal_bytes": 0, "transient_bytes": 0},
-            "reopen": {"performed": True, "verified": True, "result_digest": result_digest(case["reopen_result_digest"] for case in cases)} | ({"query_connection_reopened": True, "durability_connection_reopened": True} if engine_id == "sqlite_fts5" else {}),
+            "reopen": {"performed": True, "verified": True, "result_digest": result_digest(case.get("reopen_result_digest", "") for case in cases)} | ({"query_connection_reopened": True, "durability_connection_reopened": True} if engine_id == "sqlite_fts5" else {}),
             "cases": cases,
         }
 
@@ -217,13 +235,30 @@ class LexicalComparisonTest(unittest.TestCase):
                 artifact = self.artifact()
                 mutate(artifact)
                 with self.assertRaises(ValidationError):
-                    validate_result(artifact, self.manifest, self.expected, self.corpus_ids)
+                    validate_result(artifact, self.manifest, self.expected, self.eligible, self.corpus_ids)
+
+    def test_directional_rows_reject_filter_leakage_and_truncation(self) -> None:
+        leaked = self.artifact("sqlite_fts5")
+        scalar = leaked["cases"][-1]
+        scalar["result_ids"] = scalar["reopen_result_ids"] = [f"doc-{index:06d}" for index in range(10)]
+        scalar["result_digest"] = scalar["reopen_result_digest"] = result_digest(scalar["result_ids"])
+        leaked["reopen"]["result_digest"] = result_digest(case.get("reopen_result_digest", "") for case in leaked["cases"])
+        with self.assertRaisesRegex(ValidationError, "eligibility"):
+            validate_result(leaked, self.manifest, self.expected, self.eligible, self.corpus_ids)
+
+        truncated = self.artifact("sqlite_fts5")
+        common = truncated["cases"][0]
+        common["result_ids"] = common["reopen_result_ids"] = common["result_ids"][:-1]
+        common["result_digest"] = common["reopen_result_digest"] = result_digest(common["result_ids"])
+        truncated["reopen"]["result_digest"] = result_digest(case.get("reopen_result_digest", "") for case in truncated["cases"])
+        with self.assertRaisesRegex(ValidationError, "truncated"):
+            validate_result(truncated, self.manifest, self.expected, self.eligible, self.corpus_ids)
 
     def test_typed_unsupported_is_accepted_but_not_headline_eligible(self) -> None:
         artifact = self.artifact()
         artifact["cases"][4] = {"id": "phrase", "status": "unsupported", "equivalent": False, "unsupported_reason": "positions disabled"}
         artifact["reopen"]["result_digest"] = result_digest(case.get("reopen_result_digest", "") for case in artifact["cases"])
-        validate_result(artifact, self.manifest, self.expected, self.corpus_ids)
+        validate_result(artifact, self.manifest, self.expected, self.eligible, self.corpus_ids)
         artifacts = []
         for engine in ("treedb_text_v2", "lucene", "bleve", "sqlite_fts5"):
             for repetition in range(1, 4):
@@ -235,6 +270,9 @@ class LexicalComparisonTest(unittest.TestCase):
         report = consolidate(artifacts, self.manifest, self.documents, 3, self.context())
         self.assertFalse(any(row["engine"]["id"] == "bleve" and row["case"] == "phrase" for row in report["headline_rows"]))
         self.assertTrue(any(item["engine"]["id"] == "bleve" and item.get("case") == "phrase" and item["status"] == "unsupported" for item in report["equivalence_ledger"]))
+        self.assertTrue(all(row["engine"]["id"] in {"treedb_text_v2", "lucene"} for row in report["headline_rows"]))
+        self.assertTrue(any(row["engine"]["id"] == "bleve" for row in report["directional_rows"]))
+        self.assertTrue(any(row["engine"]["id"] == "sqlite_fts5" for row in report["directional_rows"]))
         self.assertIn("bleve", report["engines_partial"])
         self.assertNotIn("bleve", report["engines_completed"])
 
@@ -246,7 +284,7 @@ class LexicalComparisonTest(unittest.TestCase):
         self.assertFalse(report["qualification_eligible"])
 
     def test_consolidation_requires_treedb_and_two_external_engines(self) -> None:
-        artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "sqlite_fts5") for repetition in range(1, 4)]
+        artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "lucene") for repetition in range(1, 4)]
         with self.assertRaisesRegex(ValidationError, "at least two"):
             consolidate(artifacts, self.manifest, self.documents, 3, self.context())
 
@@ -258,7 +296,7 @@ class LexicalComparisonTest(unittest.TestCase):
         }
         for name, mutate in mutations.items():
             with self.subTest(name=name):
-                artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
+                artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "lucene", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
                 mutate(artifacts[1])
                 with self.assertRaises(ValidationError):
                     consolidate(artifacts, self.manifest, self.documents, 3, self.context())
@@ -267,8 +305,8 @@ class LexicalComparisonTest(unittest.TestCase):
         artifact = self.artifact()
         artifact["environment"]["execution"]["query_concurrency"] = 2
         with self.assertRaisesRegex(ValidationError, "concurrency"):
-            validate_result(artifact, self.manifest, self.expected, self.corpus_ids)
-        artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
+            validate_result(artifact, self.manifest, self.expected, self.eligible, self.corpus_ids)
+        artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "lucene", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
         artifacts[1]["environment"]["memory"]["runtime_specific_limit"] = "different"
         with self.assertRaisesRegex(ValidationError, "environment differs"):
             consolidate(artifacts, self.manifest, self.documents, 3, self.context())
@@ -280,13 +318,13 @@ class LexicalComparisonTest(unittest.TestCase):
         }
         for name, mutate in mutations.items():
             with self.subTest(name=name):
-                artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
+                artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "lucene", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
                 mutate(artifacts[0])
                 with self.assertRaises(ValidationError):
                     consolidate(artifacts, self.manifest, self.documents, 3, self.context())
 
     def test_consolidated_builds_retain_typed_cpu_and_rss_per_repetition(self) -> None:
-        artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
+        artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "lucene", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
         report = consolidate(artifacts, self.manifest, self.documents, 3, self.context())
         for build in report["builds"]:
             self.assertEqual(len(build["cpu"]), 3)
@@ -295,7 +333,7 @@ class LexicalComparisonTest(unittest.TestCase):
             self.assertTrue(all(resource["status"] in {"ok", "unsupported"} for resource in build["cpu"] + build["peak_rss"]))
 
     def test_dirty_source_is_explicitly_ineligible(self) -> None:
-        artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
+        artifacts = [self.artifact(engine, repetition) for engine in ("treedb_text_v2", "lucene", "bleve", "sqlite_fts5") for repetition in range(1, 4)]
         report = consolidate(artifacts, self.manifest, self.documents, 3, self.context(modified=True))
         self.assertFalse(report["qualification_eligible"])
         self.assertFalse(any(row["headline_eligible"] for row in report["headline_rows"]))

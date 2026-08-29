@@ -116,8 +116,9 @@
         "required": ["id", "status", "equivalent"],
         "properties": {
           "id": {"type": "string", "minLength": 1},
-          "status": {"enum": ["ok", "unsupported"]},
+          "status": {"enum": ["ok", "directional", "unsupported"]},
           "equivalent": {"type": "boolean"},
+          "non_equivalent_reason": {"type": "string", "minLength": 1},
           "unsupported_reason": {"type": "string", "minLength": 1},
           "samples_nanos": {"type": "array", "items": {"type": "integer", "minimum": 0}},
           "result_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},

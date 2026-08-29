@@ -77,14 +77,19 @@ same-field/same-length pairs prove term-frequency ordering. The reference
 interpreter implements the pinned BM25F equation rather than a token-count
 proxy.
 
-For engines without native BM25F, non-phrase queries use one frozen comparison
-field: title tokens repeated exactly three times, followed by body tokens. The
-corpus keeps title and body lengths equal within each document, so that field's
-weighted TF and length denominator are algebraically identical to the pinned
-BM25F combination. Phrase queries instead use separate title and body position
-streams with weights `3:1`; adversarial documents contain cross-field and
-title-copy-boundary adjacency and must not match. This validates ordered IDs,
-not numeric score parity or production relevance.
+Lucene queries score one frozen comparison field: title tokens repeated exactly
+three times, followed by body tokens. Equal title/body lengths make its
+weighted TF and length denominator algebraically identical to the pinned BM25F
+combination, and Lucene's pinned BM25 similarity uses the same IDF equation.
+For phrase rows, a non-scoring title/body phrase OR filter establishes
+eligibility while the weighted comparison-field terms provide the score.
+Adversarial documents contain cross-field and title-copy-boundary adjacency and
+must not match.
+
+Bleve's native TF-IDF scorer and SQLite FTS5's native `bm25()` IDF/floor differ
+from the pinned formula. Their measured query rows are directional context,
+never exact headline parity, even when this fixture produces the same ordered
+IDs.
 
 ## Pinned engines and setup
 
@@ -92,8 +97,8 @@ not numeric score parity or production relevance.
 | --- | --- | --- | --- |
 | TreeDB | checked-out root module/commit | accepted text-v2 BM25F, simple analyzer, stored positions, score-only, no document fetch | root Go module |
 | Apache Lucene | `org.apache.lucene:lucene-core:9.12.1`, `lucene-analysis-common:9.12.1` | `StandardAnalyzer`, weighted non-phrase field plus real title/body phrase fields, `BM25Similarity(1.2,0.75)`, FSDirectory | `cd benchmarks/text_hybrid_scoreboard/lucene_adapter && mvn -q -DskipTests dependency:go-offline` |
-| Bleve | `github.com/blevesearch/bleve/v2 v2.4.4` | standard analyzer, weighted non-phrase field plus real title/body phrase fields, Scorch; scalar-filtered case typed unsupported because v2.4.4 lacks a non-scoring predicate | `cd benchmarks/text_hybrid_scoreboard/bleve_adapter && GOWORK=off go mod download` |
-| SQLite FTS5 | Python stdlib SQLite build, exact Python/SQLite versions captured per artifact | weighted non-phrase field plus real title/body phrase columns, `unicode61 remove_diacritics 2`, `bm25()`, WAL + FULL synchronous | no downloaded dependency |
+| Bleve | `github.com/blevesearch/bleve/v2 v2.4.4` | standard analyzer, weighted non-phrase field plus real title/body phrase fields, Scorch; native TF-IDF query rows are directional and scalar filtering is typed unsupported | `cd benchmarks/text_hybrid_scoreboard/bleve_adapter && GOWORK=off go mod download` |
+| SQLite FTS5 | Python stdlib SQLite build, exact Python/SQLite versions captured per artifact | weighted non-phrase field plus real title/body phrase columns, `unicode61 remove_diacritics 2`, native `bm25()` rows retained only as directional context, WAL + FULL synchronous | no downloaded dependency |
 
 Tantivy is explicitly not measured: this harness contains no Tantivy adapter
 or retained Tantivy evidence.
@@ -154,22 +159,25 @@ accepted engine artifact contains:
 - ordered result IDs and digests before and after reopen;
 - intended-route proof and explicit no-fallback/no-timeout state;
 - frozen/detected filesystem, memory-limit, concurrency, and resource settings;
+- typed per-case `directional` rows for measured native scoring with a different
+  formula; and
 - typed per-case `unsupported` rows where a semantic is genuinely unavailable.
 
 `lexical_common.validate_result` deterministically rejects malformed schema
 fields or digests, document count or content drift, missing/extra query cases,
-duplicates, IDs outside the corpus, reference ID/order mismatch, missing reopen
-proof, missing intended-route evidence, fallback, timeout, malformed
-resource/unavailable rows, environment-policy mismatch, and sample-count drift.
-Consolidation also rejects per-repetition engine/version/config/environment
-drift and reports fully completed separately from partial engines. Unsupported
-semantic rows and dirty-source rows stay in the equivalence ledger and never
-enter the headline matrix. Raw and consolidated artifacts replace repository,
-run-directory, and home prefixes with `$REPO`, `$RUN`, and `$HOME`.
+duplicates, IDs outside the corpus, exact-row reference ID/order mismatch,
+directional-row predicate/filter/phrase ineligibility or top-K truncation,
+missing reopen proof, missing intended-route evidence, fallback, timeout,
+malformed resource/disposition rows, environment-policy mismatch, and
+sample-count drift. Consolidation also rejects per-repetition
+engine/version/config/environment drift and reports fully equivalent separately
+from partial engines. Directional, unsupported, and dirty-source rows never
+enter the exact headline matrix. Raw and consolidated artifacts replace
+repository, run-directory, and home prefixes with `$REPO`, `$RUN`, and `$HOME`.
 
-Consolidation emits `treedb_lexical_comparison/v1` and fails unless an accepted
-TreeDB text-v2 row and accepted equivalent rows from at least two external
-engines survive all retained repetitions.
+Consolidation emits `treedb_lexical_comparison/v1` and fails unless TreeDB and
+at least one external engine complete the pinned scoring contract, while at
+least two external engines retain measured build/storage or query rows.
 
 ## Artifacts
 
@@ -222,7 +230,8 @@ cd benchmarks/text_hybrid_scoreboard/lucene_adapter \
 
 Then run the retained command at the top of this document from a clean checkout;
 use `--allow-dirty` only for the coordinator's pre-commit smoke. There are no
-timing threshold tests. Correctness is established by BM25F manifest
-interpretation, normalization, ordered result validation, typed
-unsupported/resource handling, environment and repetition-metadata rejection,
-route proof, and reopen proof.
+timing threshold tests. Correctness is established by adapter-bound BM25F
+manifest interpretation, normalization, exact-row ordered result validation,
+directional/unsupported/resource classification, environment and
+repetition-metadata rejection, route proof, reopen proof, and WAL storage
+classification.

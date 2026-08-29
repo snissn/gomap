@@ -39,7 +39,7 @@ def load_manifest(path: Path) -> dict[str, Any]:
         "stopwords": [],
         "fields": [{"name": "title", "weight": 3.0}, {"name": "body", "weight": 1.0}],
         "bm25f": {"k1": 1.2, "b": 0.75, "idf": "ln(1 + (N - df + 0.5) / (df + 0.5))", "field_length": "tf / (1 - b + b * length / average_field_length)", "combination": "sum(field_weight * normalized_field_tf), then one BM25 saturation per term"},
-        "external_weighted_field": "non-phrase scoring uses title tokens repeated exactly 3 times followed by body tokens; frozen corpus keeps title/body lengths equal per document so this is algebraically identical to pinned BM25F; phrase matching uses separate title/body position streams with weights 3:1 and never crosses fields or title copies",
+        "external_weighted_field": "title tokens repeated exactly 3 times followed by body tokens; frozen equal field lengths make Lucene weighted-term scoring algebraically identical to pinned BM25F; Lucene phrase eligibility is a non-scoring title/body phrase OR filter over those weighted term scores; Bleve and SQLite retain their separately disclosed native directional scoring",
     }
     if manifest.get("analysis") != frozen_analysis:
         raise ValidationError("manifest analysis must match the adapter-bound frozen scoring contract")
@@ -140,6 +140,30 @@ def read_corpus(path: Path) -> list[dict[str, str]]:
 def result_digest(ids: Iterable[str]) -> str:
     values = list(ids)
     return sha256_bytes(("\n".join(values) + ("\n" if values else "")).encode())
+
+
+def eligible_result_ids(manifest: dict[str, Any], documents: list[dict[str, str]]) -> dict[str, set[str]]:
+    eligible: dict[str, set[str]] = {}
+    for query in manifest["queries"]:
+        terms = [normalize(term) for term in query["terms"]]
+        matches: set[str] = set()
+        for document in documents:
+            if query.get("filter") and document[query["filter"]["field"]] != query["filter"]["equals"]:
+                continue
+            fields = {name: tokenize(document[name]) for name in ("title", "body")}
+            combined = fields["title"] + fields["body"]
+            semantic = query["semantic"]
+            if semantic == "phrase":
+                width = len(terms)
+                matched = any(any(tokens[offset:offset + width] == terms for offset in range(len(tokens) - width + 1)) for tokens in fields.values())
+            elif semantic == "and":
+                matched = all(term in combined for term in terms)
+            else:
+                matched = any(term in combined for term in terms)
+            if matched:
+                matches.add(document["id"])
+        eligible[query["id"]] = matches
+    return eligible
 
 
 def reference_results(
@@ -268,7 +292,7 @@ def _is_sha256(value: Any) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
-def validate_result(artifact: dict[str, Any], manifest: dict[str, Any], expected: dict[str, list[str]], corpus_ids: set[str]) -> None:
+def validate_result(artifact: dict[str, Any], manifest: dict[str, Any], expected: dict[str, list[str]], eligible: dict[str, set[str]], corpus_ids: set[str]) -> None:
     _require(artifact.get("schema_version") == RESULT_SCHEMA, "result schema version mismatch")
     _require(type(artifact.get("repetition")) is int and artifact["repetition"] >= 1, "result repetition is invalid")
     _require(_is_sha256(artifact.get("manifest_sha256")), "manifest digest is malformed")
@@ -296,13 +320,22 @@ def validate_result(artifact: dict[str, Any], manifest: dict[str, Any], expected
     _require(isinstance(artifact.get("config"), dict) and bool(artifact["config"]), f"{prefix}: configuration missing")
     _require(artifact["config"].get("top_k") == manifest["execution"]["top_k"], f"{prefix}: top-K config mismatch")
     _require(artifact["config"].get("stored_source_fields") == ["id", "title", "body", "tenant"], f"{prefix}: durable footprint omits logical source fields")
+    expected_scoring_contract = "pinned_bm25f" if engine_id in {"treedb_text_v2", "lucene"} else "native_directional"
+    _require(artifact["config"].get("scoring_contract") == expected_scoring_contract, f"{prefix}: scoring equivalence classification mismatch")
     _require(artifact["config"].get("build_timing_boundary") == manifest["execution"]["build_timing_boundary"], f"{prefix}: build timing boundary mismatch")
     _require(artifact["config"].get("tie_break") == "score,id" or engine_id == "treedb_text_v2", f"{prefix}: tie-break config mismatch")
     if engine_id == "treedb_text_v2":
         _require(artifact["config"].get("weights") == {"title": 3, "body": 1} and artifact["config"].get("bm25f") == {"k1": 1.2, "b": 0.75}, f"{prefix}: TreeDB BM25F config mismatch")
-    else:
-        _require(artifact["config"].get("weighted_field_materialization") == "title repeated 3x then body for non-phrase scoring only", f"{prefix}: external weighted-field config mismatch")
-        _require(artifact["config"].get("phrase_fields") == ["title", "body"] and artifact["config"].get("phrase_field_weights") == {"title": 3, "body": 1}, f"{prefix}: external phrase-field config mismatch")
+    elif engine_id == "lucene":
+        _require(artifact["config"].get("weighted_field_materialization") == "title repeated 3x then body for term scoring, including phrase-qualified rows", f"{prefix}: Lucene weighted-field config mismatch")
+        _require(artifact["config"].get("phrase_filter_fields") == ["title", "body"], f"{prefix}: Lucene phrase-filter fields mismatch")
+        _require(artifact["config"].get("phrase_scoring") == "weighted terms scored; title/body phrase OR applied as FILTER", f"{prefix}: Lucene phrase scoring/filter contract mismatch")
+    elif engine_id == "bleve":
+        _require(artifact["config"].get("weighted_field_materialization") == "title repeated 3x then body for non-phrase native scoring", f"{prefix}: Bleve weighted-field config mismatch")
+        _require(artifact["config"].get("phrase_fields") == ["title", "body"] and artifact["config"].get("phrase_scoring") == "native TF-IDF title boost 3, body boost 1", f"{prefix}: Bleve phrase scoring disclosure mismatch")
+    elif engine_id == "sqlite_fts5":
+        _require(artifact["config"].get("weighted_field_materialization") == "title repeated 3x then body for non-phrase native scoring", f"{prefix}: SQLite weighted-field config mismatch")
+        _require(artifact["config"].get("phrase_fields") == ["title", "body"] and artifact["config"].get("phrase_scoring") == "native bm25 title weight 3, body weight 1", f"{prefix}: SQLite phrase scoring disclosure mismatch")
     _validate_environment(artifact.get("environment"), manifest, prefix)
     build = artifact.get("build", {})
     _require(build.get("checkpointed") is True, f"{prefix}: build was not checkpointed")
@@ -332,13 +365,17 @@ def validate_result(artifact: dict[str, Any], manifest: dict[str, Any], expected
             _require(case.get("equivalent") is False, f"{case_prefix}: unsupported row marked equivalent")
             _require(not case.get("result_ids") and not case.get("samples_nanos"), f"{case_prefix}: unsupported row contains measured results")
             continue
-        _require(case.get("status") == "ok", f"{case_prefix}: invalid status")
-        _require(case.get("equivalent") is True, f"{case_prefix}: equivalent row not marked equivalent")
+        _require(case.get("status") in {"ok", "directional"}, f"{case_prefix}: invalid status")
+        directional = case["status"] == "directional"
+        _require(case.get("equivalent") is (not directional), f"{case_prefix}: equivalence classification mismatch")
+        if directional:
+            _require(bool(case.get("non_equivalent_reason")), f"{case_prefix}: non-equivalent reason missing")
         ids = case.get("result_ids")
         _require(isinstance(ids, list), f"{case_prefix}: result IDs missing")
         _require(len(ids) == len(set(ids)), f"{case_prefix}: duplicate result IDs")
         _require(set(ids) <= corpus_ids, f"{case_prefix}: result leakage outside corpus")
-        _require(ids == expected[query["id"]], f"{case_prefix}: reference result/order mismatch")
+        if not directional:
+            _require(ids == expected[query["id"]], f"{case_prefix}: reference result/order mismatch")
         _require(case.get("result_digest") == result_digest(ids), f"{case_prefix}: result digest mismatch")
         _require(case.get("reopen_result_ids") == ids, f"{case_prefix}: reopen result mismatch")
         _require(case.get("reopen_result_digest") == case.get("result_digest"), f"{case_prefix}: reopen digest mismatch")
@@ -346,6 +383,10 @@ def validate_result(artifact: dict[str, Any], manifest: dict[str, Any], expected
         _require(isinstance(samples, list) and len(samples) == measured, f"{case_prefix}: raw sample count mismatch")
         _require(all(isinstance(value, int) and value >= 0 for value in samples), f"{case_prefix}: invalid latency sample")
         route = case.get("route", {})
+        if directional:
+            universe = eligible[query["id"]]
+            _require(set(ids) <= universe, f"{case_prefix}: directional row violates query/filter eligibility")
+            _require(len(ids) == min(manifest["execution"]["top_k"], len(universe)), f"{case_prefix}: directional row is truncated")
         proof = route.get("proof")
         _require(route.get("intended") is True and bool(route.get("name")) and isinstance(proof, (dict, list)) and bool(proof), f"{case_prefix}: intended-route proof missing")
         if engine_id == "treedb_text_v2":
@@ -385,10 +426,11 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
     _require(context.get("environment_contract") == manifest["environment"], "runner environment contract mismatch")
     enforced = context.get("enforced_execution", {})
     _require(enforced.get("query_concurrency") == 1 and enforced.get("engine_process_concurrency") == 1 and enforced.get("runtime_cpu_parallelism") == 1, "runner execution policy mismatch")
+    eligible = eligible_result_ids(manifest, documents)
     _require(bool(context.get("detected_address_space_limit")) and bool(context.get("runner_filesystem_device_id")), "runner detected resource policy is incomplete")
     corpus_ids = {doc["id"] for doc in documents}
     for artifact in artifacts:
-        validate_result(artifact, manifest, expected, corpus_ids)
+        validate_result(artifact, manifest, expected, eligible, corpus_ids)
         if artifact.get("status") == "ok":
             environment = artifact["environment"]
             _require(environment["filesystem"]["runner_device_id"] == context["runner_filesystem_device_id"], f"{artifact['engine']['id']}: artifact/runner filesystem identity mismatch")
@@ -401,6 +443,7 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
     completed: set[str] = set()
     ledger = []
     rows = []
+    directional_rows = []
     builds = []
     partial: set[str] = set()
     for engine_id, engine_artifacts in sorted(grouped.items()):
@@ -426,9 +469,10 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
             _require(item["config"] == baseline["config"], f"{engine_id}: benchmark config differs across repetitions")
             _require(item["environment"] == baseline["environment"], f"{engine_id}: detected/enforced environment differs across repetitions")
         accepted_cases = [query["id"] for query in manifest["queries"] if all(next(case for case in item["cases"] if case["id"] == query["id"])["status"] == "ok" for item in available)]
+        retained_cases = [query["id"] for query in manifest["queries"] if all(next(case for case in item["cases"] if case["id"] == query["id"])["status"] in {"ok", "directional"} for item in available)]
         if len(accepted_cases) == len(manifest["queries"]):
             completed.add(engine_id)
-        elif accepted_cases:
+        elif retained_cases:
             partial.add(engine_id)
         engine = available[0]["engine"]
         builds.append({
@@ -449,27 +493,37 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
             cases = [next(case for case in item["cases"] if case["id"] == query["id"]) for item in available]
             statuses = {case["status"] for case in cases}
             _require(len(statuses) == 1, f"{engine_id} case {query['id']}: status differs across repetitions")
-            if statuses != {"ok"}:
+            if statuses == {"unsupported"}:
                 reasons = sorted({case.get("unsupported_reason", "unsupported") for case in cases})
                 ledger.append({"engine": engine, "case": query["id"], "status": "unsupported", "detail": "; ".join(reasons)})
                 continue
             samples = [sample for case in cases for sample in case["samples_nanos"]]
-            rows.append({
+            row = {
                 "engine": engine,
                 "case": query["id"],
                 "semantic": query["semantic"],
-                "headline_eligible": source["qualification_eligible"],
                 "p50_nanos": percentile(samples, 0.50),
                 "p95_nanos": percentile(samples, 0.95),
                 "p99_nanos": percentile(samples, 0.99),
                 "raw_samples_nanos": samples,
                 "result_ids": cases[0]["result_ids"],
                 "result_digest": cases[0]["result_digest"],
-            })
-            ledger.append({"engine": engine, "case": query["id"], "status": "equivalent", "detail": "reference IDs and order match; reopen and intended route proven"})
+            }
+            if statuses == {"directional"}:
+                reasons = sorted({case["non_equivalent_reason"] for case in cases})
+                row["non_equivalent_reason"] = "; ".join(reasons)
+                directional_rows.append(row)
+                ledger.append({"engine": engine, "case": query["id"], "status": "directional", "detail": row["non_equivalent_reason"]})
+                continue
+            _require(statuses == {"ok"}, f"{engine_id} case {query['id']}: invalid retained status")
+            row["headline_eligible"] = source["qualification_eligible"]
+            rows.append(row)
+            ledger.append({"engine": engine, "case": query["id"], "status": "equivalent", "detail": "pinned scoring semantics, reference IDs/order, reopen, and intended route proven"})
     _require("treedb_text_v2" in completed, "consolidation requires a complete accepted TreeDB text-v2 engine")
-    external = completed - {"treedb_text_v2"}
-    _require(len(external) >= 2, "consolidation requires at least two complete accepted external engines")
+    external_completed = completed - {"treedb_text_v2"}
+    available_external = {build["engine"]["id"] for build in builds} - {"treedb_text_v2"}
+    _require(external_completed, "consolidation requires at least one complete semantically equivalent external engine")
+    _require(len(available_external) >= 2, "consolidation requires retained rows from at least two external engines")
     return {
         "schema_version": COMPARISON_SCHEMA,
         "manifest_sha256": manifest_sha256(manifest),
@@ -482,6 +536,7 @@ def consolidate(artifacts: list[dict[str, Any]], manifest: dict[str, Any], docum
         "qualification_eligible": source["qualification_eligible"],
         "builds": builds,
         "headline_rows": rows if source["qualification_eligible"] else [],
+        "directional_rows": directional_rows,
         "equivalence_ledger": ledger,
     }
 
@@ -506,7 +561,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         f"Completed engines: `{', '.join(report['engines_completed'])}`; partial engines: `{', '.join(report['engines_partial']) or 'none'}`.",
         "",
-        "Only exact, validator-accepted rows enter the headline table. Times are warm single-query latency on one host; they are not timing assertions.",
+        "Only pinned-scoring, validator-accepted rows enter the headline table. Native-scoring rows with different formulas are retained separately as directional context. Times are warm single-query latency on one host; they are not timing assertions.",
         "",
         "## Headline query latency",
         "",
@@ -515,6 +570,10 @@ def render_markdown(report: dict[str, Any]) -> str:
     ]
     for row in report["headline_rows"]:
         lines.append(f"| {row['engine']['name']} | {row['case']} | {row['p50_nanos'] / 1e6:.3f} ms | {row['p95_nanos'] / 1e6:.3f} ms | {row['p99_nanos'] / 1e6:.3f} ms | `{row['result_digest']}` |")
+    lines.extend(["", "## Directional native-scoring latency (not semantically equivalent)", "", "| engine | case | p50 | p95 | p99 | disposition |", "| --- | --- | ---: | ---: | ---: | --- |"])
+    for row in report["directional_rows"]:
+        reason = row["non_equivalent_reason"].replace("|", "\\|")
+        lines.append(f"| {row['engine']['name']} | {row['case']} | {row['p50_nanos'] / 1e6:.3f} ms | {row['p95_nanos'] / 1e6:.3f} ms | {row['p99_nanos'] / 1e6:.3f} ms | {reason} |")
     lines.extend(["", "## Build resources and checkpointed storage", "", "| engine | build repetitions (s) | docs/s | CPU per repetition | peak RSS per repetition | durable bytes per repetition | WAL bytes per repetition | transient bytes per repetition |", "| --- | --- | --- | --- | --- | --- | --- | --- |"])
     for build in report["builds"]:
         elapsed = ", ".join(f"{value / 1e9:.3f}" for value in build["elapsed_nanos"])

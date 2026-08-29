@@ -50,17 +50,18 @@ type document struct {
 	Tenant string
 }
 type caseResult struct {
-	ID                string         `json:"id"`
-	Status            string         `json:"status"`
-	Equivalent        bool           `json:"equivalent"`
-	UnsupportedReason string         `json:"unsupported_reason,omitempty"`
-	Samples           []int64        `json:"samples_nanos,omitempty"`
-	IDs               []string       `json:"result_ids,omitempty"`
-	Digest            string         `json:"result_digest,omitempty"`
-	ReopenIDs         []string       `json:"reopen_result_ids,omitempty"`
-	ReopenDigest      string         `json:"reopen_result_digest,omitempty"`
-	Route             map[string]any `json:"route,omitempty"`
-	TimedOut          bool           `json:"timed_out"`
+	ID                  string         `json:"id"`
+	Status              string         `json:"status"`
+	Equivalent          bool           `json:"equivalent"`
+	NonEquivalentReason string         `json:"non_equivalent_reason,omitempty"`
+	UnsupportedReason   string         `json:"unsupported_reason,omitempty"`
+	Samples             []int64        `json:"samples_nanos,omitempty"`
+	IDs                 []string       `json:"result_ids,omitempty"`
+	Digest              string         `json:"result_digest,omitempty"`
+	ReopenIDs           []string       `json:"reopen_result_ids,omitempty"`
+	ReopenDigest        string         `json:"reopen_result_digest,omitempty"`
+	Route               map[string]any `json:"route,omitempty"`
+	TimedOut            bool           `json:"timed_out"`
 }
 
 func main() {
@@ -145,7 +146,7 @@ func main() {
 			samples = append(samples, time.Since(start).Nanoseconds())
 			must(err)
 		}
-		cases = append(cases, caseResult{ID: query.ID, Status: "ok", Equivalent: true, Samples: samples, IDs: ids, Digest: digestIDs(ids), Route: map[string]any{"intended": true, "name": "bleve_scorch_inverted_index", "fallback": false, "proof": map[string]any{"index_type": "scorch", "index_name": index.Name(), "query_type": query.Semantic}}, TimedOut: false})
+		cases = append(cases, caseResult{ID: query.ID, Status: "directional", Equivalent: false, NonEquivalentReason: "Bleve v2.4.4 native TF-IDF scorer does not implement the pinned BM25F formula", Samples: samples, IDs: ids, Digest: digestIDs(ids), Route: map[string]any{"intended": true, "name": "bleve_scorch_inverted_index", "fallback": false, "proof": map[string]any{"index_type": "scorch", "index_name": index.Name(), "query_type": query.Semantic}}, TimedOut: false})
 	}
 	must(index.Close())
 	index, err = bleve.Open(*indexPath)
@@ -172,7 +173,7 @@ func main() {
 		"schema_version": resultSchema, "status": "ok", "engine": map[string]string{"id": "bleve", "family": "embedded_library", "name": "Bleve", "version": bleveVersion},
 		"repetition": *repetition, "manifest_sha256": hex.EncodeToString(manifestSum[:]), "corpus": map[string]any{"document_count": len(docs), "sha256": hex.EncodeToString(corpusSum[:])},
 		"command": command, "versions": map[string]string{"bleve": bleveVersion, "go": runtime.Version(), "platform": runtime.GOOS + "/" + runtime.GOARCH},
-		"config":      map[string]any{"working_directory": workingDirectory, "index_type": "scorch", "analyzer": "standard", "tenant_analyzer": "keyword", "weighted_field_materialization": "title repeated 3x then body for non-phrase scoring only", "phrase_fields": []string{"title", "body"}, "phrase_field_weights": map[string]float64{"title": 3, "body": 1}, "stored_source_fields": []string{"id", "title", "body", "tenant"}, "top_k": spec.Execution.TopK, "tie_break": "score,id", "term_vectors": true, "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close"},
+		"config":      map[string]any{"working_directory": workingDirectory, "index_type": "scorch", "analyzer": "standard", "tenant_analyzer": "keyword", "weighted_field_materialization": "title repeated 3x then body for non-phrase native scoring", "phrase_fields": []string{"title", "body"}, "phrase_scoring": "native TF-IDF title boost 3, body boost 1", "scoring_contract": "native_directional", "stored_source_fields": []string{"id", "title", "body", "tenant"}, "top_k": spec.Execution.TopK, "tie_break": "score,id", "term_vectors": true, "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close"},
 		"environment": environment,
 		"build":       map[string]any{"elapsed_nanos": buildElapsed.Nanoseconds(), "docs_per_second": float64(len(docs)) / buildElapsed.Seconds(), "cpu": map[string]any{"status": "ok", "value": cpuNanos(after) - cpuNanos(before), "unit": "nanoseconds"}, "peak_rss": map[string]any{"status": "ok", "value": peakRSSBytes(finalUsage), "unit": "bytes"}, "checkpointed": true},
 		"storage":     map[string]int64{"durable_bytes": durable, "wal_bytes": 0, "transient_bytes": 0},
