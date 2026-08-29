@@ -773,7 +773,12 @@ func minimaJSONObject(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &object) == nil && object != nil
 }
 
-func validateMinimaTreeDBBatchCorrelations(manifest minimaManifest, raw minimaRawBackendEvidence, completed bool) error {
+func validateMinimaTreeDBBatchCorrelations(
+	manifest minimaManifest,
+	raw minimaRawBackendEvidence,
+	completed bool,
+	diagnosticsURL string,
+) error {
 	contract := raw.UpsertBatchCorrelationContract
 	expectedIdentities := minimaExpectedBatchCorrelationIdentities(manifest)
 	expectedMaximum := len(expectedIdentities)
@@ -794,6 +799,10 @@ func validateMinimaTreeDBBatchCorrelations(manifest minimaManifest, raw minimaRa
 		}
 		if len(raw.Diagnostics) == 0 || json.Unmarshal(raw.Diagnostics, &diagnostics) != nil {
 			return errors.New("minima artifact: completed TreeDB diagnostics declaration is missing")
+		}
+		configurationEnabled := diagnosticsURL != "" && diagnosticsURL != "disabled"
+		if diagnostics.Enabled != configurationEnabled {
+			return errors.New("minima artifact: TreeDB diagnostics declaration disagrees with configuration")
 		}
 		expectedRecords := 0
 		if diagnostics.Enabled {
@@ -1089,7 +1098,9 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			if err := validateMinimaTreeDBPhaseAttribution(*raw.PhaseAttribution, raw.RestartBoundary); err != nil {
 				return err
 			}
-			if err := validateMinimaTreeDBBatchCorrelations(artifact.Manifest, raw, true); err != nil {
+			if err := validateMinimaTreeDBBatchCorrelations(
+				artifact.Manifest, raw, true, backend.Configuration["diagnostics_url"],
+			); err != nil {
 				return err
 			}
 		}
