@@ -1,6 +1,6 @@
 command=$HOME/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.darwin-arm64/bin/go run . --manifest $REPO/benchmarks/text_hybrid_scoreboard/lexical_manifest.json --corpus $RUN/corpus.tsv --out $RUN/raw/bleve-r1.json --repetition 1 --index $RUN/indexes/bleve-r1
 cwd=$RUN/dependency_work/bleve_adapter
-started_unix=1788027272.521019
+started_unix=1788028016.116501
 returncode=0
 
 [stdout]

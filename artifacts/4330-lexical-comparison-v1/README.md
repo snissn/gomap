@@ -4,10 +4,10 @@ Validator-accepted retained evidence for TreeDB text-v2, Apache Lucene 9.12.1, B
 
 ## Identity
 
-- source commit: `5ef056a7c4a5f38f54844105e7c266ab51de5804`
-- source tree: `d8a6ae2ec2717b5dea960f4a1ef168dc42a97372`
+- source commit: `2a4ad65bc23922ece1787b67a4fa12114a02789a`
+- source tree: `a0f28c839c4718d19b37fa78fb4f3f52853bdd9f`
 - TreeDB subtree: `670740f244cf42afffbe517c3a514da6895decfd`
-- comparator harness subtree: `5cc05876f604bb22ac7fb92453b2e8dd22a14f7e`
+- comparator harness subtree: `7813002cccf7b9724c69ccbd1c9d3b69968d1d24`
 - tracked-diff SHA-256 before and after run: `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
 - untracked sources, including ignored inputs, before and after run: none
 - manifest SHA-256: `a268cb2e59f4a63d8bcc7a0047fe85fe2195bef62a536f9b54bcae6f4b568d8f`
