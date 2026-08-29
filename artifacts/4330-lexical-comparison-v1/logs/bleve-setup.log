@@ -1,6 +1,6 @@
 command=go mod download
 cwd=$RUN/dependency_work/bleve_adapter
-started_unix=1788018936.615909
+started_unix=1788019359.339673
 returncode=0
 
 [stdout]

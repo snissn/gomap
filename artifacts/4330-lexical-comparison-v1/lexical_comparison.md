@@ -2,7 +2,7 @@
 
 Schema: `treedb_lexical_comparison/v1`. Manifest: `a2a69522bb3b0533bcc9030bc48286e4e727262a9a361605fd53c41ca86cf8d1`. Corpus: `10000` documents, `fe5b9d106a099d5c29d3327a8424b7f6d57f248b8802225b2d7bb3719062a227`.
 
-Source: `a856d1c972cbfd70dd57dae69327983368887a88` / tree `2d7087704c223984cf4dfd196263db5f106215b1`; retained qualification eligible: **TRUE**.
+Source: `c0441ebe7707dce131ecbaf24b355bccad80bb14` / tree `7d84084670710f72f49ad5a9171ff2a054c0f7b9`; retained qualification eligible: **TRUE**.
 
 Completed engines: `lucene, sqlite_fts5, treedb_text_v2`; partial engines: `bleve`.
 
@@ -12,38 +12,38 @@ Only exact, validator-accepted rows enter the headline table. Times are warm sin
 
 | engine | case | p50 | p95 | p99 | result digest |
 | --- | --- | ---: | ---: | ---: | --- |
-| Bleve | common | 1.222 ms | 1.276 ms | 34.307 ms | `32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40` |
-| Bleve | rare | 0.006 ms | 0.011 ms | 0.021 ms | `d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0` |
-| Bleve | and | 0.012 ms | 0.015 ms | 0.017 ms | `ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d` |
-| Bleve | or | 0.019 ms | 0.022 ms | 0.027 ms | `d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8` |
-| Bleve | phrase | 0.041 ms | 0.045 ms | 0.051 ms | `8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696` |
-| Apache Lucene | common | 0.857 ms | 2.208 ms | 3.407 ms | `32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40` |
-| Apache Lucene | rare | 0.388 ms | 0.487 ms | 0.621 ms | `d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0` |
-| Apache Lucene | and | 0.378 ms | 0.479 ms | 1.383 ms | `ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d` |
-| Apache Lucene | or | 0.404 ms | 0.620 ms | 1.258 ms | `d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8` |
-| Apache Lucene | phrase | 0.335 ms | 0.827 ms | 1.374 ms | `8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696` |
-| Apache Lucene | scalar_filtered | 0.198 ms | 0.350 ms | 1.098 ms | `efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0` |
-| SQLite FTS5 | common | 4.364 ms | 4.582 ms | 4.885 ms | `32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40` |
-| SQLite FTS5 | rare | 0.020 ms | 0.022 ms | 0.023 ms | `d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0` |
-| SQLite FTS5 | and | 0.024 ms | 0.027 ms | 0.029 ms | `ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d` |
-| SQLite FTS5 | or | 0.040 ms | 0.041 ms | 0.045 ms | `d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8` |
-| SQLite FTS5 | phrase | 0.030 ms | 0.031 ms | 0.032 ms | `8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696` |
-| SQLite FTS5 | scalar_filtered | 0.025 ms | 0.026 ms | 0.029 ms | `efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0` |
-| TreeDB text-v2 | common | 0.248 ms | 0.472 ms | 0.545 ms | `32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40` |
-| TreeDB text-v2 | rare | 0.014 ms | 0.028 ms | 0.029 ms | `d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0` |
-| TreeDB text-v2 | and | 0.018 ms | 0.039 ms | 0.080 ms | `ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d` |
-| TreeDB text-v2 | or | 0.023 ms | 0.049 ms | 1.963 ms | `d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8` |
-| TreeDB text-v2 | phrase | 0.051 ms | 0.067 ms | 0.262 ms | `8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696` |
-| TreeDB text-v2 | scalar_filtered | 0.091 ms | 0.305 ms | 1.132 ms | `efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0` |
+| Bleve | common | 0.354 ms | 0.797 ms | 0.808 ms | `32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40` |
+| Bleve | rare | 0.005 ms | 0.026 ms | 0.066 ms | `d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0` |
+| Bleve | and | 0.008 ms | 0.024 ms | 0.028 ms | `ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d` |
+| Bleve | or | 0.009 ms | 0.025 ms | 0.035 ms | `d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8` |
+| Bleve | phrase | 0.024 ms | 0.048 ms | 0.069 ms | `8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696` |
+| Apache Lucene | common | 0.858 ms | 2.506 ms | 3.443 ms | `32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40` |
+| Apache Lucene | rare | 0.386 ms | 0.453 ms | 0.794 ms | `d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0` |
+| Apache Lucene | and | 0.426 ms | 0.478 ms | 1.294 ms | `ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d` |
+| Apache Lucene | or | 0.409 ms | 0.511 ms | 1.376 ms | `d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8` |
+| Apache Lucene | phrase | 0.503 ms | 0.572 ms | 1.762 ms | `8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696` |
+| Apache Lucene | scalar_filtered | 0.278 ms | 0.370 ms | 0.417 ms | `efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0` |
+| SQLite FTS5 | common | 4.691 ms | 5.012 ms | 5.538 ms | `32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40` |
+| SQLite FTS5 | rare | 0.022 ms | 0.024 ms | 0.024 ms | `d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0` |
+| SQLite FTS5 | and | 0.026 ms | 0.027 ms | 0.033 ms | `ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d` |
+| SQLite FTS5 | or | 0.043 ms | 0.045 ms | 0.046 ms | `d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8` |
+| SQLite FTS5 | phrase | 0.033 ms | 0.034 ms | 0.035 ms | `8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696` |
+| SQLite FTS5 | scalar_filtered | 0.028 ms | 0.029 ms | 0.029 ms | `efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0` |
+| TreeDB text-v2 | common | 0.291 ms | 0.530 ms | 0.585 ms | `32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40` |
+| TreeDB text-v2 | rare | 0.021 ms | 0.035 ms | 0.059 ms | `d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0` |
+| TreeDB text-v2 | and | 0.018 ms | 0.038 ms | 0.194 ms | `ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d` |
+| TreeDB text-v2 | or | 0.020 ms | 0.051 ms | 0.063 ms | `d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8` |
+| TreeDB text-v2 | phrase | 0.039 ms | 0.064 ms | 0.088 ms | `8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696` |
+| TreeDB text-v2 | scalar_filtered | 0.092 ms | 0.342 ms | 1.588 ms | `efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0` |
 
 ## Build resources and checkpointed storage
 
 | engine | build repetitions (s) | docs/s | CPU per repetition | peak RSS per repetition | durable bytes per repetition | WAL bytes per repetition | transient bytes per repetition |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Bleve | 0.670, 0.622, 0.608 | 14927.3, 16086.2, 16458.1 | 0.560 s, 0.544 s, 0.552 s | 330.984 MiB, 337.719 MiB, 330.188 MiB | 9962689, 9962568, 9962784 | 0, 0, 0 | 0, 0, 0 |
-| Apache Lucene | 0.389, 0.304, 0.309 | 25732.4, 32861.6, 32328.8 | 0.730 s, 0.668 s, 0.699 s | unsupported: Standard Java process APIs do not expose process-lifetime peak RSS, unsupported: Standard Java process APIs do not expose process-lifetime peak RSS, unsupported: Standard Java process APIs do not expose process-lifetime peak RSS | 310455, 310455, 310455 | 0, 0, 0 | 0, 0, 0 |
-| SQLite FTS5 | 0.077, 0.127, 0.099 | 129430.1, 78486.1, 101212.1 | 0.059 s, 0.063 s, 0.064 s | 48.359 MiB, 48.375 MiB, 48.156 MiB | 9252864, 9252864, 9252864 | 0, 0, 0 | 0, 0, 0 |
-| TreeDB text-v2 | 0.230, 0.164, 0.162 | 43513.6, 60879.4, 61680.4 | 0.116 s, 0.115 s, 0.117 s | 72.547 MiB, 77.672 MiB, 77.297 MiB | 6553974, 6553974, 6553974 | 0, 0, 0 | 0, 0, 0 |
+| Bleve | 0.602, 0.619, 0.625 | 16614.6, 16152.3, 15989.3 | 0.562 s, 0.591 s, 0.597 s | 318.344 MiB, 327.172 MiB, 331.406 MiB | 9962495, 9963028, 9962749 | 0, 0, 0 | 0, 0, 0 |
+| Apache Lucene | 0.395, 0.349, 0.377 | 25331.1, 28613.4, 26547.4 | 0.790 s, 0.800 s, 0.771 s | unsupported: Standard Java process APIs do not expose process-lifetime peak RSS, unsupported: Standard Java process APIs do not expose process-lifetime peak RSS, unsupported: Standard Java process APIs do not expose process-lifetime peak RSS | 310455, 310455, 310455 | 0, 0, 0 | 0, 0, 0 |
+| SQLite FTS5 | 0.101, 0.106, 0.117 | 99285.4, 94672.8, 85367.3 | 0.064 s, 0.066 s, 0.068 s | 48.297 MiB, 48.438 MiB, 48.156 MiB | 9252864, 9252864, 9252864 | 0, 0, 0 | 0, 0, 0 |
+| TreeDB text-v2 | 0.183, 0.150, 0.147 | 54509.9, 66646.7, 67796.6 | 0.123 s, 0.121 s, 0.118 s | 79.375 MiB, 79.453 MiB, 79.359 MiB | 6553974, 6553974, 6553974 | 0, 0, 0 | 0, 0, 0 |
 
 ## Equivalence and availability ledger
 
@@ -105,7 +105,7 @@ Only exact, validator-accepted rows enter the headline table. Times are warm sin
 
 ### TreeDB text-v2
 
-- Versions: `{"go": "go1.26.0", "module": "a856d1c972cbfd70dd57dae69327983368887a88", "platform": "darwin/arm64"}`
+- Versions: `{"go": "go1.26.0", "module": "c0441ebe7707dce131ecbaf24b355bccad80bb14", "platform": "darwin/arm64"}`
 - Configuration: `{"analyzer": "simple", "bm25f": {"b": 0.75, "k1": 1.2}, "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close", "candidate_limit": 10000, "index_version": "v2", "max_postings_scanned": 80000, "result_mode": "score_only", "route_proof": "one untimed explained query per case", "store_positions": true, "timed_explain": false, "top_k": 10, "weights": {"body": 1, "title": 3}, "working_directory": "$REPO"}`
 - Environment: `{"contract": {"build_cpu_metric": "process CPU nanoseconds", "engine_process_concurrency": 1, "filesystem_identity_policy": "runner output, corpus, index, and result artifact must have the same decimal POSIX st_dev identity", "latency_clock": "monotonic wall clock", "memory_limit_policy": "inherit one detected host address-space limit; adapters do not raise or lower it", "peak_rss_metric": "process lifetime peak resident bytes when the runtime exposes it; otherwise typed unsupported", "query_concurrency": 1, "resource_scope": "single adapter process per retained repetition", "runtime_cpu_parallelism": 1}, "execution": {"engine_process_concurrency": 1, "query_concurrency": 1, "runtime_cpu_parallelism": 1}, "filesystem": {"corpus_store_id": "16777232", "index_store_id": "16777232", "result_store_id": "16777232", "runner_device_id": "16777232", "same_filesystem": true}, "memory": {"adapter_changed_limit": false, "detected_address_space_limit": "unlimited", "detection_source": "runner_rlimit", "matches_runner_detected": true}}`
 - Command: `go run ./benchmarks/text_hybrid_scoreboard/treedb_adapter --manifest $REPO/benchmarks/text_hybrid_scoreboard/lexical_manifest.json --corpus $RUN/corpus.tsv --out $RUN/raw/treedb_text_v2-r1.json --repetition 1 --db $RUN/indexes/treedb_text_v2-r1`
