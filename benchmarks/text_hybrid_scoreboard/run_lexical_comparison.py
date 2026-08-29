@@ -23,6 +23,7 @@ from lexical_common import consolidate, load_manifest, manifest_sha256, render_m
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 ENGINE_ORDER = ("treedb_text_v2", "lucene", "bleve", "sqlite_fts5")
+LUCENE_JVM_EXECUTION = "-XX:ActiveProcessorCount=1 -XX:+UseSerialGC -XX:-TieredCompilation -XX:CICompilerCount=1 -Xbatch"
 ENGINE_META = {
     "treedb_text_v2": {"id": "treedb_text_v2", "family": "treedb", "name": "TreeDB text-v2", "version": "root module"},
     "lucene": {"id": "lucene", "family": "lucene_family", "name": "Apache Lucene", "version": "9.12.1"},
@@ -194,8 +195,9 @@ def benchmark_environment(out_dir: Path, manifest: dict[str, Any]) -> dict[str, 
         "LEXICAL_QUERY_CONCURRENCY": str(contract["query_concurrency"]),
         "LEXICAL_ENGINE_PROCESS_CONCURRENCY": str(contract["engine_process_concurrency"]),
         "LEXICAL_RUNTIME_CPU_PARALLELISM": str(contract["runtime_cpu_parallelism"]),
+        "LEXICAL_JVM_EXECUTION": LUCENE_JVM_EXECUTION,
         "GOMAXPROCS": str(contract["runtime_cpu_parallelism"]),
-        "MAVEN_OPTS": (os.environ.get("MAVEN_OPTS", "") + f" -XX:ActiveProcessorCount={contract['runtime_cpu_parallelism']}").strip(),
+        "MAVEN_OPTS": LUCENE_JVM_EXECUTION,
     }
 
 

@@ -123,8 +123,10 @@ It also records the output filesystem's decimal POSIX `st_dev`. Each adapter
 records corpus, index, and result `st_dev` values in the same representation;
 validation compares all four identities and the exact memory value to runner
 context rather than trusting adapter booleans. Go adapters run with
-`GOMAXPROCS=1`; Lucene runs with `-XX:ActiveProcessorCount=1` and a
-`SerialMergeScheduler`.
+`GOMAXPROCS=1`; Lucene uses a `SerialMergeScheduler` with
+`-XX:ActiveProcessorCount=1`, `-XX:+UseSerialGC`,
+`-XX:-TieredCompilation`, `-XX:CICompilerCount=1`, and `-Xbatch` so merging,
+garbage collection, and JIT compilation do not create parallel build work.
 
 The validator rejects any artifact whose recorded contract, filesystem policy,
 memory-limit policy, query/process concurrency, or CPU parallelism differs from

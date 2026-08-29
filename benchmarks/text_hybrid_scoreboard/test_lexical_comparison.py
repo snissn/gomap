@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -131,6 +132,13 @@ class LexicalComparisonTest(unittest.TestCase):
             retained.write_text("cwd=/private/work/repo\nout=/private/work/run/raw.json\n", encoding="utf-8")
             lexical_runner.sanitize_retained_logs(out_dir, [("/private/work/run", "$RUN"), ("/private/work/repo", "$REPO")])
             self.assertEqual(retained.read_text(encoding="utf-8"), "cwd=$REPO\nout=$RUN/raw.json\n")
+
+    def test_lucene_jvm_execution_is_frozen_not_inherited(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {"MAVEN_OPTS": "-Xmx1g"}):
+            environment = lexical_runner.benchmark_environment(Path(temporary), self.manifest)
+        self.assertEqual(environment["MAVEN_OPTS"], lexical_runner.LUCENE_JVM_EXECUTION)
+        self.assertEqual(environment["LEXICAL_JVM_EXECUTION"], lexical_runner.LUCENE_JVM_EXECUTION)
+        self.assertNotIn("-Xmx1g", environment["MAVEN_OPTS"])
 
     def test_reference_interprets_every_manifest_shape(self) -> None:
         self.assertEqual(self.expected["common"], [f"doc-{i:06d}" for i in (0, 1, 2, 3, 4, 5, 6, 7, 9, 8)])
