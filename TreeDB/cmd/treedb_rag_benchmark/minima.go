@@ -1405,6 +1405,15 @@ func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScena
 	if row.Route.Identity == "" {
 		return fmt.Errorf("missing route identity")
 	}
+	lookupCount := 0
+	switch spec.Filter {
+	case "user_id":
+		lookupCount = 1
+	case "user_id+fpath":
+		lookupCount = 2
+	default:
+		return fmt.Errorf("unknown filter shape %q", spec.Filter)
+	}
 	if row.Backend == "treedb" {
 		routeCounters := []*int{
 			row.Route.FullDocumentScanFallbacks, row.Route.ScalarFilterUnbounded, row.Route.ProbeIDs,
@@ -1429,8 +1438,8 @@ func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScena
 		if *row.Route.ScalarFilterUnbounded != 0 {
 			return fmt.Errorf("scalar_filter_unbounded cardinality-only failure")
 		}
-		if *row.Route.ProbeIDs > minimaLookupLimit {
-			return fmt.Errorf("probe exceeds lookup limit")
+		if *row.Route.ProbeIDs > minimaLookupLimit*lookupCount {
+			return fmt.Errorf("probe exceeds aggregate lookup limit")
 		}
 		if *row.Route.AllowedIDMaterializationRows >= spec.CorpusRows && spec.CorpusRows > 0 {
 			return fmt.Errorf("collection-sized allowed-ID materialization")
