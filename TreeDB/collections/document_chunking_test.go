@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -201,6 +203,877 @@ func TestIngestChunkedDocumentCreatesLinkedChildren(t *testing.T) {
 		if string(raw) != string(wantRaw) {
 			t.Fatalf("metadata-free child %q bytes=%s want %s", id, raw, wantRaw)
 		}
+	}
+}
+
+func TestIngestChunkedDocumentsValidatesAndPublishesOneTextGeneration(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	cfg := fixedWindowCfg(12, 0)
+	before, err := col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("stats before: %v", err)
+	}
+	duplicate := []SourceDocument{
+		{ID: []byte("new"), Fields: map[string]any{"body": "must not be written"}},
+		{ID: []byte("new"), Fields: map[string]any{"body": "also invalid batch"}},
+	}
+	if _, err := col.IngestChunkedDocuments(duplicate, cfg, ChunkedIngestOptions{}); err == nil || !strings.Contains(err.Error(), "duplicate parent ID") {
+		t.Fatalf("duplicate batch error=%v", err)
+	}
+	if got, err := col.Get([]byte("new")); err != nil || got != nil {
+		t.Fatalf("invalid batch mutated collection: document=%s err=%v", got, err)
+	}
+	afterInvalid, err := col.TextIndexStorageStats("lexical")
+	if err != nil || afterInvalid.V2RootGeneration != before.V2RootGeneration {
+		t.Fatalf("invalid batch changed text generation: before=%+v after=%+v err=%v", before, afterInvalid, err)
+	}
+
+	sources := []SourceDocument{
+		{ID: []byte("second"), Fields: map[string]any{"body": strings.Repeat("batchbeta ", 5)}},
+		{ID: []byte("first"), Fields: map[string]any{"body": strings.Repeat("batchalpha ", 10)}},
+	}
+	results, err := col.IngestChunkedDocuments(sources, cfg, ChunkedIngestOptions{})
+	if err != nil {
+		t.Fatalf("IngestChunkedDocuments: %v", err)
+	}
+	if len(results) != len(sources) {
+		t.Fatalf("results=%d want %d", len(results), len(sources))
+	}
+	for i, result := range results {
+		if string(result.ParentID()) != string(sources[i].ID) || len(result.ChildIDs) == 0 {
+			t.Fatalf("result %d=%+v want input parent %q and children", i, result, sources[i].ID)
+		}
+		for ordinal, id := range result.ChildIDs {
+			if want := chunking.ChildDocumentID(string(sources[i].ID), ordinal); string(id) != want {
+				t.Fatalf("result %d child %d=%q want %q", i, ordinal, id, want)
+			}
+		}
+	}
+	after, err := col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("stats after: %v", err)
+	}
+	if got := after.V2RootGeneration - before.V2RootGeneration; got != 1 {
+		t.Fatalf("batch text generations=%d want one durable batch publication (before=%d after=%d)", got, before.V2RootGeneration, after.V2RootGeneration)
+	}
+
+	// The batch path must produce the same live text IDs as the parent plus its
+	// deterministic children, and score-only execution must not fetch documents.
+	search, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "batchalpha", TopK: 100, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil {
+		t.Fatalf("SearchText: %v", err)
+	}
+	if search.Stats.DocumentsFetched != 0 {
+		t.Fatalf("score-only fetched %d documents", search.Stats.DocumentsFetched)
+	}
+	got := make([]string, 0, len(search.Results))
+	for _, result := range search.Results {
+		got = append(got, string(result.DocumentID))
+	}
+	sort.Strings(got)
+	// The fixed-width fixture puts the complete token only in ordinal zero;
+	// the parent and that child are the exact expected lexical hits.
+	want := []string{"first", string(results[1].ChildIDs[0])}
+	sort.Strings(want)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("exact batch text IDs=%v want %v", got, want)
+	}
+
+	oldChildren := append([][]byte(nil), results[1].ChildIDs...)
+	replacement, err := col.IngestChunkedDocuments([]SourceDocument{{ID: []byte("first"), Fields: map[string]any{"body": "batchfresh"}}}, cfg, ChunkedIngestOptions{})
+	if err != nil {
+		t.Fatalf("replacement batch: %v", err)
+	}
+	if len(replacement) != 1 || replacement[0].Replaced != len(oldChildren) || len(replacement[0].ChildIDs) != 1 {
+		t.Fatalf("replacement=%+v old children=%d", replacement, len(oldChildren))
+	}
+	for _, id := range oldChildren[1:] {
+		if raw, err := col.Get(id); err != nil || raw != nil {
+			t.Fatalf("stale child %q remains after replacement: %s err=%v", id, raw, err)
+		}
+	}
+	oldSearch, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "batchalpha", TopK: 100, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil || len(oldSearch.Results) != 0 || oldSearch.Stats.DocumentsFetched != 0 {
+		t.Fatalf("stale text search results=%+v err=%v", oldSearch, err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	d2, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = d2.Close() }()
+	col2, err := NewCollectionManager(d2).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open after reopen: %v", err)
+	}
+	fresh, err := col2.SearchText(TextSearchOptions{IndexName: "lexical", Query: "batchfresh", TopK: 100, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil || fresh.Stats.DocumentsFetched != 0 || len(fresh.Results) != 2 {
+		t.Fatalf("reopened fresh score-only results=%+v err=%v", fresh, err)
+	}
+}
+
+func TestIngestChunkedDocumentsScansUnderCollectionMutationLock(t *testing.T) {
+	_, _, col := openChunkingTestCollection(t)
+	cfg := fixedWindowCfg(8, 1)
+	seed, err := col.IngestChunkedDocuments(
+		[]SourceDocument{
+			{ID: []byte("locked-scan-a"), Fields: map[string]any{"body": strings.Repeat("stale child a ", 8)}},
+			{ID: []byte("locked-scan-b"), Fields: map[string]any{"body": strings.Repeat("stale child b ", 8)}},
+		},
+		cfg,
+		ChunkedIngestOptions{},
+	)
+	if err != nil {
+		t.Fatalf("seed batch: %v", err)
+	}
+	if len(seed) != 2 || len(seed[0].ChildIDs) < 2 || len(seed[1].ChildIDs) < 2 {
+		t.Fatalf("seed result=%+v, want multiple stale children for both parents", seed)
+	}
+
+	mutationLockedDuringScan := false
+	hooks := &chunkedIngestHooks{afterBatchScan: func() {
+		unlock, locked := col.tryLockMutation()
+		if locked {
+			unlock.Unlock()
+			return
+		}
+		mutationLockedDuringScan = true
+	}}
+	replacement, err := col.IngestChunkedDocuments(
+		[]SourceDocument{
+			{ID: []byte("locked-scan-a"), Fields: map[string]any{"body": "fresh a"}},
+			{ID: []byte("locked-scan-b"), Fields: map[string]any{"body": "fresh b"}},
+		},
+		cfg,
+		ChunkedIngestOptions{hooks: hooks},
+	)
+	if err != nil {
+		t.Fatalf("replacement batch: %v", err)
+	}
+	if !mutationLockedDuringScan {
+		t.Fatal("stale-child scan ran outside the ordinary collection mutation lock")
+	}
+	if len(replacement) != 2 ||
+		replacement[0].Replaced != len(seed[0].ChildIDs) ||
+		replacement[1].Replaced != len(seed[1].ChildIDs) {
+		t.Fatalf("replacement=%+v want replaced=[%d %d]", replacement, len(seed[0].ChildIDs), len(seed[1].ChildIDs))
+	}
+}
+
+func TestIngestChunkedDocumentsSerializesPeerBufferedWritesAcrossReplacement(t *testing.T) {
+	_, d, first := openChunkingTestCollection(t)
+	second, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open second collection handle: %v", err)
+	}
+	cfg := fixedWindowCfg(8, 1)
+	if _, err := first.DropTextIndex("lexical"); err != nil {
+		t.Fatalf("drop text index: %v", err)
+	}
+	seed, err := first.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("cross-manager"), Fields: map[string]any{"body": strings.Repeat("seed child ", 8)}}},
+		cfg,
+		ChunkedIngestOptions{},
+	)
+	if err != nil || len(seed) != 1 || len(seed[0].ChildIDs) < 2 {
+		t.Fatalf("seed batch=%+v err=%v", seed, err)
+	}
+
+	lateOrdinal := len(seed[0].ChildIDs)
+	lateID := []byte(fmt.Sprintf("cross-manager#%d", lateOrdinal))
+	lateDocument, err := json.Marshal(map[string]any{
+		"body":                    "late child",
+		chunking.MetaFieldParent:  "cross-manager",
+		chunking.MetaFieldOrdinal: lateOrdinal,
+		chunking.MetaFieldKind:    chunking.KindChunk,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.InsertBatch([][]byte{lateID}, [][]byte{lateDocument}); err != nil {
+		t.Fatalf("stage cross-manager insert: %v", err)
+	}
+	second.writeDomain.mu.Lock()
+	bufferedPeerWrite := second.writeDomain.count > 0 && hasBufferedIndexedRootRuns(second.writeDomain)
+	second.writeDomain.mu.Unlock()
+	if !bufferedPeerWrite {
+		t.Fatal("cross-manager insert did not remain buffered for the replacement preflight")
+	}
+
+	schemaWriteLockedDuringScan := false
+	hooks := &chunkedIngestHooks{afterBatchScan: func() {
+		coord := second.collectionSchemaCoordinator()
+		if coord != nil && !coord.schemaMu.TryRLock() {
+			schemaWriteLockedDuringScan = true
+			return
+		}
+		if coord != nil {
+			coord.schemaMu.RUnlock()
+		}
+	}}
+	replacement, err := first.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("cross-manager"), Fields: map[string]any{"body": "replacement"}}},
+		cfg,
+		ChunkedIngestOptions{hooks: hooks},
+	)
+	if err != nil {
+		t.Fatalf("replacement batch: %v", err)
+	}
+	if !schemaWriteLockedDuringScan {
+		t.Fatal("peer collection writes were not excluded across stale-child scan and publication")
+	}
+	if len(replacement) != 1 || replacement[0].Replaced != len(seed[0].ChildIDs)+1 {
+		t.Fatalf("replacement=%+v want replaced=%d", replacement, len(seed[0].ChildIDs)+1)
+	}
+	if err := second.Flush(); err != nil {
+		t.Fatalf("flush second handle: %v", err)
+	}
+	if got, err := first.Get(lateID); err != nil || got != nil {
+		t.Fatalf("buffered late stale child survived replacement: %s err=%v", got, err)
+	}
+}
+
+func TestIngestChunkedDocumentsRejectsVectorIndexedCollection(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "vector-docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 3,
+		}},
+	}); err != nil {
+		t.Fatalf("create vector collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("vector-docs")
+	if err != nil {
+		t.Fatalf("open vector collection: %v", err)
+	}
+	_, err = col.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("vector-source"), Fields: map[string]any{"body": "text only"}}},
+		fixedWindowCfg(8, 1),
+		ChunkedIngestOptions{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "text-only") {
+		t.Fatalf("vector-indexed batch error=%v, want text-only rejection", err)
+	}
+	if got, err := col.Get([]byte("vector-source")); err != nil || got != nil {
+		t.Fatalf("vector source mutated before rejection: %s err=%v", got, err)
+	}
+}
+
+func TestIngestChunkedDocumentsRejectsRegisteredVectorIndex(t *testing.T) {
+	_, _, col := openChunkingTestCollection(t)
+	index, err := newVectorIndex(col, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("create ad-hoc vector index: %v", err)
+	}
+	if err := col.RegisterVectorIndex(index); err != nil {
+		t.Fatalf("register vector index: %v", err)
+	}
+	flushCalled := false
+	restoreFlushHook := setCollectionSchemaMutationFlushHookForTest(func() { flushCalled = true })
+	defer restoreFlushHook()
+
+	_, err = col.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("registered-vector-source"), Fields: map[string]any{"body": "text only"}}},
+		fixedWindowCfg(8, 1),
+		ChunkedIngestOptions{},
+	)
+	if !errors.Is(err, errBatchChunkIngestVectorIndexed) {
+		t.Fatalf("registered vector index error=%v, want text-only rejection", err)
+	}
+	if flushCalled {
+		t.Fatal("registered vector rejection flushed collection write domains")
+	}
+	if got, err := col.Get([]byte("registered-vector-source")); err != nil || got != nil {
+		t.Fatalf("registered vector source mutated before rejection: %s err=%v", got, err)
+	}
+}
+
+func TestIngestChunkedDocumentsRejectsVectorIndexOnPeerHandle(t *testing.T) {
+	_, d, col := openChunkingTestCollection(t)
+	peer, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+	index, err := newVectorIndex(peer, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("create peer ad-hoc vector index: %v", err)
+	}
+	if err := peer.RegisterVectorIndex(index); err != nil {
+		t.Fatalf("register peer vector index: %v", err)
+	}
+	if got := col.registeredAdHocVectorIndexCount(); got != 1 {
+		t.Fatalf("collection-wide ad-hoc vector count=%d want 1", got)
+	}
+
+	_, err = col.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("peer-vector-source"), Fields: map[string]any{"body": "text only"}}},
+		fixedWindowCfg(8, 1),
+		ChunkedIngestOptions{},
+	)
+	if !errors.Is(err, errBatchChunkIngestVectorIndexed) {
+		t.Fatalf("peer vector index error=%v, want text-only rejection", err)
+	}
+	if got, err := col.Get([]byte("peer-vector-source")); err != nil || got != nil {
+		t.Fatalf("peer vector source mutated before rejection: %s err=%v", got, err)
+	}
+	peer.UnregisterVectorIndex("embedding")
+	if got := col.registeredAdHocVectorIndexCount(); got != 0 {
+		t.Fatalf("collection-wide ad-hoc vector count after unregister=%d want 0", got)
+	}
+}
+
+func TestIngestChunkedDocumentsRejectsStaleNativeRegistrationAfterPeerDrop(t *testing.T) {
+	_, _, owner := openChunkingTestCollection(t)
+	peer, err := owner.manager.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open schema peer: %v", err)
+	}
+	col := owner
+	def := VectorIndexDefinition{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4,
+	}
+	if _, err := owner.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index: %v", err)
+	}
+	index := owner.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("created vector index runtime is not registered")
+	}
+	if _, err := peer.DropVectorIndex(def.Name); err != nil {
+		t.Fatalf("drop vector index through peer: %v", err)
+	}
+	if !collectionMetaDeclaresNativeVectorIndex(owner.meta, def.Name) {
+		t.Fatal("owner metadata unexpectedly refreshed before stale registration")
+	}
+
+	if err := owner.RegisterVectorIndex(index); err != nil {
+		t.Fatalf("register stale native vector index: %v", err)
+	}
+	if got := col.registeredAdHocVectorIndexCount(); got != 1 {
+		t.Fatalf("stale native registration ad-hoc count=%d want 1", got)
+	}
+	owner.writeDomain.nativeVectorIndexesMu.RLock()
+	_, registeredNative := owner.writeDomain.nativeVectorIndexes[def.Name]
+	owner.writeDomain.nativeVectorIndexesMu.RUnlock()
+	if registeredNative {
+		t.Fatal("stale native registration re-entered the shared native registry")
+	}
+
+	_, err = col.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("stale-native"), Fields: map[string]any{"body": "text only"}}},
+		fixedWindowCfg(8, 1),
+		ChunkedIngestOptions{},
+	)
+	if !errors.Is(err, errBatchChunkIngestVectorIndexed) {
+		t.Fatalf("stale native registration error=%v, want text-only rejection", err)
+	}
+	owner.UnregisterVectorIndex(def.Name)
+}
+
+func TestIngestChunkedDocumentsBlocksVectorRegistrationThroughPublication(t *testing.T) {
+	_, d, col := openChunkingTestCollection(t)
+	peer, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+	index, err := newVectorIndex(peer, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("create ad-hoc vector index: %v", err)
+	}
+	attempted := make(chan struct{})
+	registered := make(chan error, 1)
+	hooks := &chunkedIngestHooks{afterBatchScan: func() {
+		go func() {
+			close(attempted)
+			registered <- peer.RegisterVectorIndex(index)
+		}()
+		<-attempted
+		select {
+		case err := <-registered:
+			t.Fatalf("vector registration completed before chunk publication: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}}
+	if _, err := col.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("registration-race"), Fields: map[string]any{"body": "text only"}}},
+		fixedWindowCfg(8, 1),
+		ChunkedIngestOptions{hooks: hooks},
+	); err != nil {
+		t.Fatalf("chunk ingest: %v", err)
+	}
+	select {
+	case err := <-registered:
+		if err != nil {
+			t.Fatalf("register vector index: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("vector registration remained blocked after chunk publication")
+	}
+}
+
+func TestBuiltVectorIndexRegistrationRejectsStaleChunkPublication(t *testing.T) {
+	_, _, col := openChunkingTestCollection(t)
+	if _, err := col.Insert([]byte("before"), []byte(`{"embedding":[1,0]}`)); err != nil {
+		t.Fatalf("insert vector source: %v", err)
+	}
+	index, err := col.buildVectorIndex(VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	}, false)
+	if err != nil {
+		t.Fatalf("build unregistered vector index: %v", err)
+	}
+	if _, err := col.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("after"), Fields: map[string]any{"body": "new text"}}},
+		fixedWindowCfg(8, 1),
+		ChunkedIngestOptions{},
+	); err != nil {
+		t.Fatalf("chunk publication: %v", err)
+	}
+	if err := col.registerBuiltVectorIndex(index); !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("register stale vector build error=%v, want %v", err, ErrConcurrentMutation)
+	}
+	if got := col.registeredAdHocVectorIndexCount(); got != 0 {
+		t.Fatalf("registered ad-hoc vector count=%d want 0", got)
+	}
+}
+
+func TestBuiltVectorIndexRegistrationWaitsForOrdinaryWriter(t *testing.T) {
+	_, _, col := openChunkingTestCollection(t)
+	if _, err := col.Insert([]byte("before"), []byte(`{"embedding":[1,0]}`)); err != nil {
+		t.Fatalf("insert vector source: %v", err)
+	}
+	index, err := col.buildVectorIndex(VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	}, false)
+	if err != nil {
+		t.Fatalf("build unregistered vector index: %v", err)
+	}
+
+	writerEntered := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		unlockSchema := col.lockCollectionSchemaRead()
+		unlockCoverage := col.lockVectorIndexCoverageMutation()
+		close(writerEntered)
+		<-releaseWriter
+		_, err := col.insertBatchSchemaLocked(
+			[][]byte{[]byte("after")},
+			[][]byte{[]byte(`{"body":"ordinary write"}`)},
+			false,
+			nil,
+		)
+		unlockCoverage()
+		unlockSchema()
+		writerDone <- err
+	}()
+	<-writerEntered
+
+	registered := make(chan error, 1)
+	go func() {
+		registered <- col.registerBuiltVectorIndex(index)
+	}()
+	select {
+	case err := <-registered:
+		t.Fatalf("registration returned before ordinary publication: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseWriter)
+	if err := <-writerDone; err != nil {
+		t.Fatalf("ordinary insert: %v", err)
+	}
+	if err := <-registered; !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("register stale vector build error=%v, want %v", err, ErrConcurrentMutation)
+	}
+	if got := col.registeredAdHocVectorIndexCount(); got != 0 {
+		t.Fatalf("registered ad-hoc vector count=%d want 0", got)
+	}
+}
+
+func TestBuiltVectorIndexRegistrationRejectsBufferedPeerWrite(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	manager := NewCollectionManager(d)
+	if _, err := manager.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := manager.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	peer, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("before"), []byte(`{"embedding":[1,0]}`)); err != nil {
+		t.Fatalf("insert vector source: %v", err)
+	}
+	index, err := col.buildVectorIndex(VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	}, false)
+	if err != nil {
+		t.Fatalf("build unregistered vector index: %v", err)
+	}
+	if _, err := peer.Insert([]byte("after"), []byte(`{"embedding":[0,1]}`)); err != nil {
+		t.Fatalf("buffer peer insert: %v", err)
+	}
+	peer.writeDomain.mu.Lock()
+	hasBufferedPrimary := hasBufferedPrimaryWritesLocked(peer.writeDomain, peer.collectionName())
+	peer.writeDomain.mu.Unlock()
+	if !hasBufferedPrimary {
+		t.Fatal("test setup did not retain a buffered peer write")
+	}
+	if err := col.registerBuiltVectorIndex(index); !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("register stale vector build error=%v, want %v", err, ErrConcurrentMutation)
+	}
+	if got := col.registeredAdHocVectorIndexCount(); got != 0 {
+		t.Fatalf("registered ad-hoc vector count=%d want 0", got)
+	}
+	peer.writeDomain.mu.Lock()
+	hasBufferedPrimary = hasBufferedPrimaryWritesLocked(peer.writeDomain, peer.collectionName())
+	peer.writeDomain.mu.Unlock()
+	if hasBufferedPrimary {
+		t.Fatal("registration did not publish the buffered peer write before validation")
+	}
+}
+
+func TestBuiltVectorIndexRegistrationRejectsChangedNativeDeclaration(t *testing.T) {
+	_, d, col := openChunkingTestCollection(t)
+	peer, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("before"), []byte(`{"embedding":[1,0]}`)); err != nil {
+		t.Fatalf("insert vector source: %v", err)
+	}
+	index, err := col.buildVectorIndex(VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	}, false)
+	if err != nil {
+		t.Fatalf("build unregistered vector index: %v", err)
+	}
+	if _, err := peer.CreateVectorIndex(VectorIndexDefinition{
+		Name: "embedding", Field: "other_embedding", Metric: VectorMetricCosine, Dimensions: 3,
+	}); err != nil {
+		t.Fatalf("create conflicting native declaration: %v", err)
+	}
+	if err := col.registerBuiltVectorIndex(index); !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("register vector build after native declaration error=%v, want %v", err, ErrConcurrentMutation)
+	}
+	if got := col.registeredAdHocVectorIndexCount(); got != 0 {
+		t.Fatalf("registered ad-hoc vector count=%d want 0", got)
+	}
+}
+
+func TestRegisterVectorIndexRejectsChangedNativeDeclaration(t *testing.T) {
+	_, d, col := openChunkingTestCollection(t)
+	peer, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+	index, err := newVectorIndex(col, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("create ad-hoc vector index: %v", err)
+	}
+	if _, err := peer.CreateVectorIndex(VectorIndexDefinition{
+		Name: "embedding", Field: "other_embedding", Metric: VectorMetricCosine, Dimensions: 3,
+	}); err != nil {
+		t.Fatalf("create conflicting native declaration: %v", err)
+	}
+	if err := col.RegisterVectorIndex(index); err == nil {
+		t.Fatal("register incompatible vector runtime succeeded")
+	}
+	if got := col.registeredVectorIndex("embedding"); got != nil {
+		t.Fatalf("registered incompatible vector runtime=%p want nil", got)
+	}
+}
+
+func TestIngestChunkedDocumentsHoldsVectorAdmissionBeforeMutation(t *testing.T) {
+	_, d, col := openChunkingTestCollection(t)
+	peer, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+	index, err := newVectorIndex(peer, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("create ad-hoc vector index: %v", err)
+	}
+	mutation := col.lockMutation()
+	released := false
+	defer func() {
+		if !released {
+			mutation.Unlock()
+		}
+	}()
+	admissionHeld := make(chan struct{})
+	var hookOnce sync.Once
+	restoreFlushHook := setCollectionSchemaMutationFlushHookForTest(func() {
+		hookOnce.Do(func() { close(admissionHeld) })
+	})
+	defer restoreFlushHook()
+	ingested := make(chan error, 1)
+	go func() {
+		_, err := col.IngestChunkedDocuments(
+			[]SourceDocument{{ID: []byte("lock-order"), Fields: map[string]any{"body": "text only"}}},
+			fixedWindowCfg(8, 1),
+			ChunkedIngestOptions{},
+		)
+		ingested <- err
+	}()
+	select {
+	case <-admissionHeld:
+	case <-time.After(time.Second):
+		t.Fatal("ingestion did not reach the admission-protected flush")
+	}
+
+	registered := make(chan error, 1)
+	go func() {
+		registered <- peer.RegisterVectorIndex(index)
+	}()
+	select {
+	case err := <-registered:
+		t.Fatalf("vector registration completed while ingestion held admission: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	mutation.Unlock()
+	released = true
+	select {
+	case err := <-ingested:
+		if err != nil {
+			t.Fatalf("ingest: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ingestion remained blocked after mutation release")
+	}
+	select {
+	case err := <-registered:
+		if err != nil {
+			t.Fatalf("register vector index: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("vector registration remained blocked after ingestion")
+	}
+}
+
+func TestInsertBatchAcquiresSchemaBeforeNativeVectorAdmission(t *testing.T) {
+	_, d, col := openChunkingTestCollection(t)
+	peer, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+	admission := col.nativeVectorAdmissionMutex()
+	admission.Lock()
+	admissionLocked := true
+	defer func() {
+		if admissionLocked {
+			admission.Unlock()
+		}
+	}()
+
+	inserted := make(chan error, 1)
+	go func() {
+		_, err := peer.InsertBatch(
+			[][]byte{[]byte("schema-first")},
+			[][]byte{[]byte(`{"body":"text only"}`)},
+		)
+		inserted <- err
+	}()
+
+	coord := col.collectionSchemaCoordinator()
+	deadline := time.Now().Add(time.Second)
+	for coord.schemaMu.TryLock() {
+		coord.schemaMu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("InsertBatch did not acquire the schema read lock before vector admission")
+		}
+		runtime.Gosched()
+	}
+
+	admission.Unlock()
+	admissionLocked = false
+	select {
+	case err := <-inserted:
+		if err != nil {
+			t.Fatalf("InsertBatch: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("InsertBatch remained blocked after vector admission release")
+	}
+}
+
+func TestSchemaOperationsAcquireSchemaBeforeNativeVectorAdmission(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Collection) error
+	}{
+		{
+			name: "create index",
+			run: func(c *Collection) error {
+				_, err := c.CreateIndex(IndexDefinition{
+					Name: "by_body", Field: "body", ValueType: IndexValueString,
+				})
+				return err
+			},
+		},
+		{
+			name: "compact root overlays",
+			run: func(c *Collection) error {
+				_, err := c.CompactRootOverlays(t.Context())
+				return err
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			t.Cleanup(func() { _ = d.Close() })
+			manager := NewCollectionManager(d)
+			if _, err := manager.CreateCollection(&CollectionMeta{Name: "schema-order"}); err != nil {
+				t.Fatalf("create collection: %v", err)
+			}
+			col, err := manager.OpenCollection("schema-order")
+			if err != nil {
+				t.Fatalf("open collection: %v", err)
+			}
+			peer, err := NewCollectionManager(d).OpenCollection("schema-order")
+			if err != nil {
+				t.Fatalf("open peer collection: %v", err)
+			}
+			if _, err := peer.InsertBatch(
+				[][]byte{[]byte("buffered-schema-writer")},
+				[][]byte{[]byte(`{"body":"text only"}`)},
+			); err != nil {
+				t.Fatalf("buffer peer write: %v", err)
+			}
+			peer.writeDomain.mu.Lock()
+			hasBufferedPrimary := hasBufferedPrimaryWritesLocked(peer.writeDomain, peer.collectionName())
+			peer.writeDomain.mu.Unlock()
+			if !hasBufferedPrimary {
+				t.Fatal("test setup did not retain a buffered primary write")
+			}
+
+			admission := col.nativeVectorAdmissionMutex()
+			admission.Lock()
+			admissionLocked := true
+			defer func() {
+				if admissionLocked {
+					admission.Unlock()
+				}
+			}()
+
+			done := make(chan error, 1)
+			go func() { done <- tc.run(peer) }()
+
+			coord := col.collectionSchemaCoordinator()
+			deadline := time.Now().Add(time.Second)
+			for coord.schemaMu.TryRLock() {
+				coord.schemaMu.RUnlock()
+				if time.Now().After(deadline) {
+					t.Fatalf("%s did not acquire the schema write lock before vector admission", tc.name)
+				}
+				runtime.Gosched()
+			}
+
+			admission.Unlock()
+			admissionLocked = false
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("%s: %v", tc.name, err)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("%s remained blocked after vector admission release", tc.name)
+			}
+		})
+	}
+}
+
+func TestIngestChunkedDocumentsBlocksNativeVectorCreationBeforeFlush(t *testing.T) {
+	_, d, first := openChunkingTestCollection(t)
+	second, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open second collection handle: %v", err)
+	}
+	attempted := make(chan struct{})
+	created := make(chan error, 1)
+	var hookOnce sync.Once
+	restoreFlushHook := setCollectionSchemaMutationFlushHookForTest(func() {
+		hookOnce.Do(func() {
+			go func() {
+				close(attempted)
+				_, err := second.CreateVectorIndex(VectorIndexDefinition{
+					Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 3,
+				})
+				created <- err
+			}()
+			<-attempted
+			select {
+			case err := <-created:
+				t.Fatalf("native vector creation completed before chunk flush: %v", err)
+			case <-time.After(20 * time.Millisecond):
+			}
+		})
+	})
+	defer restoreFlushHook()
+
+	if _, err := first.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("native-vector-race"), Fields: map[string]any{"body": "text only"}}},
+		fixedWindowCfg(8, 1),
+		ChunkedIngestOptions{},
+	); err != nil {
+		t.Fatalf("chunk ingest: %v", err)
+	}
+	select {
+	case err := <-created:
+		if err != nil {
+			t.Fatalf("create native vector index: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("native vector creation remained blocked after chunk publication")
 	}
 }
 

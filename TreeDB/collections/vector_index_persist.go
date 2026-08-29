@@ -250,7 +250,7 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntent(replay *b
 		status.BytesDisk = bytesDisk
 		idx.setNativePersistent(true)
 		idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
-		c.RegisterVectorIndex(idx)
+		c.registerVectorIndexCurrentCatalog(idx)
 	}
 	publicationMu.Unlock()
 	_ = iter.Close()
@@ -350,13 +350,13 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 	c.meta = catalog.meta
 	c.rememberCatalog(snap, catalog)
 	candidate.invalidateSourceDocumentRoots()
-	c.RegisterVectorIndex(candidate)
+	c.registerVectorIndexCurrentCatalog(candidate)
 	rollback := func() {
 		if c.registeredVectorIndex(def.Name) != candidate {
 			return
 		}
 		if current != nil {
-			c.RegisterVectorIndex(current)
+			c.registerVectorIndexCurrentCatalog(current)
 		} else {
 			c.UnregisterVectorIndex(def.Name)
 		}
@@ -838,7 +838,9 @@ func (c *Collection) loadLegacyVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 	status.Epoch = manifest.Epoch
 	status.BytesDisk = vectorIndexSnapshotBytes(manifestData, manifest.Files)
 	index.recordLoadedSnapshot(status.Epoch, status.BytesDisk)
-	c.RegisterVectorIndex(index)
+	if err := c.RegisterVectorIndex(index); err != nil {
+		return nil, status, err
+	}
 	return index, status, nil
 }
 

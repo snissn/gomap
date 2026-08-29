@@ -2801,7 +2801,9 @@ func TestDeclaredNativeVectorIndexesLoadedNoDeclaredAdHocIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new vector index: %v", err)
 	}
-	col.RegisterVectorIndex(index)
+	if err := col.RegisterVectorIndex(index); err != nil {
+		t.Fatalf("register vector index: %v", err)
+	}
 	if !col.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
 		t.Fatal("ad-hoc registered vector index forced native catalog load with no declared vector indexes")
 	}
@@ -2809,6 +2811,62 @@ func TestDeclaredNativeVectorIndexesLoadedNoDeclaredAdHocIndex(t *testing.T) {
 	if col.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
 		t.Fatal("native-persistent runtime index without declaration should require reconciliation")
 	}
+}
+
+func TestRegisterNativeVectorIndexDoesNotHoldAdHocRegistryLock(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	def := VectorIndexDefinition{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4,
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	index, err := newVectorIndex(col, vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+
+	col.writeDomain.nativeVectorIndexesMu.Lock()
+	nativeLocked := true
+	defer func() {
+		if nativeLocked {
+			col.writeDomain.nativeVectorIndexesMu.Unlock()
+		}
+	}()
+	registered := make(chan error, 1)
+	go func() {
+		registered <- col.RegisterVectorIndex(index)
+	}()
+	select {
+	case err := <-registered:
+		t.Fatalf("native registration completed while native registry was locked: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if !col.vectorIndexesMu.TryLock() {
+		t.Fatal("native registration held the ad-hoc registry lock while waiting for the native registry")
+	}
+	col.vectorIndexesMu.Unlock()
+
+	col.writeDomain.nativeVectorIndexesMu.Unlock()
+	nativeLocked = false
+	select {
+	case err := <-registered:
+		if err != nil {
+			t.Fatalf("register native vector index: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("native registration remained blocked after native registry release")
+	}
+	col.UnregisterVectorIndex(def.Name)
 }
 
 func TestCollectionVectorIndexNativeRootMaintainsUpdatedDocument(t *testing.T) {

@@ -158,11 +158,15 @@ func TestCollectionRegisterVectorIndexDoesNotRetainCleanHandle(t *testing.T) {
 		t.Fatalf("new second vector index: %v", err)
 	}
 
-	col.RegisterVectorIndex(first)
+	if err := col.RegisterVectorIndex(first); err != nil {
+		t.Fatalf("register first vector index: %v", err)
+	}
 	if got := collectionManagerHandleCount(mgr); got != 0 {
 		t.Fatalf("RegisterVectorIndex retained %d clean handles want 0", got)
 	}
-	col.RegisterVectorIndex(second)
+	if err := col.RegisterVectorIndex(second); err != nil {
+		t.Fatalf("register second vector index: %v", err)
+	}
 	if got := collectionManagerHandleCount(mgr); got != 0 {
 		t.Fatalf("second RegisterVectorIndex retained %d clean handles want 0", got)
 	}
@@ -173,6 +177,36 @@ func TestCollectionRegisterVectorIndexDoesNotRetainCleanHandle(t *testing.T) {
 	col.UnregisterVectorIndex("summary_embedding")
 	if got := collectionManagerHandleCount(mgr); got != 0 {
 		t.Fatalf("last UnregisterVectorIndex left %d tracked handles want 0", got)
+	}
+}
+
+func TestCollectionRegisterVectorIndexReportsCatalogRefreshFailure(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	index, err := newVectorIndex(col, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	if err := col.RegisterVectorIndex(index); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("register after close error=%v want ErrClosed", err)
+	}
+	if got := col.registeredVectorIndex(index.name); got != nil {
+		t.Fatalf("failed registration published runtime %p", got)
 	}
 }
 
@@ -218,8 +252,12 @@ func TestCollectionUnregisterNativeVectorIndexReleasesHandleWithAdHocRemaining(t
 		t.Fatalf("new ad hoc vector index: %v", err)
 	}
 
-	col.RegisterVectorIndex(nativeIndex)
-	col.RegisterVectorIndex(adHocIndex)
+	if err := col.RegisterVectorIndex(nativeIndex); err != nil {
+		t.Fatalf("register native vector index: %v", err)
+	}
+	if err := col.RegisterVectorIndex(adHocIndex); err != nil {
+		t.Fatalf("register ad hoc vector index: %v", err)
+	}
 	mgr.registerCollectionHandle(col)
 	if got := collectionManagerHandleCount(mgr); got != 1 {
 		t.Fatalf("registered handles=%d want 1", got)
@@ -254,7 +292,9 @@ func TestCollectionAdHocVectorIndexWritesDoNotRetainManagerHandle(t *testing.T) 
 	if err != nil {
 		t.Fatalf("new vector index: %v", err)
 	}
-	col.RegisterVectorIndex(index)
+	if err := col.RegisterVectorIndex(index); err != nil {
+		t.Fatalf("register vector index: %v", err)
+	}
 
 	if _, err := col.Insert([]byte("a"), []byte(`{"embedding":[1,0]}`)); err != nil {
 		t.Fatalf("insert: %v", err)
@@ -300,8 +340,12 @@ func TestCollectionDeclaredNativeVectorIndexesLoadedRejectsExtraNativeRuntime(t 
 	if err != nil {
 		t.Fatalf("new stale index: %v", err)
 	}
-	col.RegisterVectorIndex(declared)
-	col.RegisterVectorIndex(stale)
+	if err := col.RegisterVectorIndex(declared); err != nil {
+		t.Fatalf("register declared vector index: %v", err)
+	}
+	if err := col.RegisterVectorIndex(stale); err != nil {
+		t.Fatalf("register stale vector index: %v", err)
+	}
 	stale.setNativePersistent(true)
 
 	if col.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
@@ -3734,7 +3778,9 @@ func TestCollectionNativewireInsertBatchNoResultIDsUpdatesVectorIndex(t *testing
 	if err != nil {
 		t.Fatalf("new vector index: %v", err)
 	}
-	col.RegisterVectorIndex(index)
+	if err := col.RegisterVectorIndex(index); err != nil {
+		t.Fatalf("register vector index: %v", err)
+	}
 
 	inputID := []byte("a")
 	if err := col.NativewireInsertBatchNoResultIDs(
