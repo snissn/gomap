@@ -22,9 +22,9 @@ const (
 	minimaResourceCPUSemantics            = "sum of positive per-process end-minus-baseline CPU seconds"
 	minimaResourceDiskSemantics           = "sum of positive per-process-segment end-minus-baseline durable storage bytes"
 	minimaQdrantInitialHNSWConfig         = `{"m":0,"ef_construct":100,"full_scan_threshold":10000,"max_indexing_threads":0,"on_disk":false}`
-	minimaQdrantInitialOptimizerConfig    = `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":0,"flush_interval_sec":5}`
+	minimaQdrantInitialOptimizerConfig    = `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":0,"flush_interval_sec":5,"max_optimization_threads":1}`
 	minimaQdrantProductionHNSWConfig      = `{"m":16,"ef_construct":100,"full_scan_threshold":10000,"max_indexing_threads":0,"on_disk":false}`
-	minimaQdrantProductionOptimizerConfig = `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":10000,"flush_interval_sec":5}`
+	minimaQdrantProductionOptimizerConfig = `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":10000,"flush_interval_sec":5,"max_optimization_threads":1}`
 )
 
 const (

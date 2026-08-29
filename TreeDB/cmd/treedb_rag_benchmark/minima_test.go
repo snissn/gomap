@@ -668,7 +668,7 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		{"Qdrant enriched transition disagrees with configuration copy", func(a *minimaArtifact) {
 			raw := a.RawEvidence["qdrant"]
 			raw.CollectionConfigurationTransition.InitialUploadOptimizers = json.RawMessage(
-				`{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":0,"flush_interval_sec":5,"max_optimization_threads":1}`,
+				`{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":0,"flush_interval_sec":5,"max_optimization_threads":1,"max_segment_size":null}`,
 			)
 			a.RawEvidence["qdrant"] = raw
 		}},
@@ -690,6 +690,13 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.CollectionConfigurationTransition.ProductionHNSW = json.RawMessage(doctored)
 			a.RawEvidence["qdrant"] = raw
 			minimaTestBackend(a, "qdrant").Configuration["production_hnsw"] = doctored
+		}},
+		{"Qdrant transition and configuration have wrong optimization threads", func(a *minimaArtifact) {
+			doctored := `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":10000,"flush_interval_sec":5,"max_optimization_threads":2}`
+			raw := a.RawEvidence["qdrant"]
+			raw.CollectionConfigurationTransition.ProductionOptimizers = json.RawMessage(doctored)
+			a.RawEvidence["qdrant"] = raw
+			minimaTestBackend(a, "qdrant").Configuration["production_optimizers"] = doctored
 		}},
 		{"Qdrant effective configuration mismatch", func(a *minimaArtifact) {
 			minimaTestBackend(a, "qdrant").Configuration["effective_collection"] = `{"hnsw_config":{},"optimizer_config":{}}`
@@ -731,8 +738,8 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 
 func TestMinimaContractAcceptsEnrichedQdrantTransitionConfiguration(t *testing.T) {
 	artifact := validMinimaArtifact()
-	initial := `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":0,"flush_interval_sec":5,"max_optimization_threads":1}`
-	production := `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":10000,"flush_interval_sec":5,"max_optimization_threads":1}`
+	initial := `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":0,"flush_interval_sec":5,"max_optimization_threads":1,"max_segment_size":null}`
+	production := `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":10000,"flush_interval_sec":5,"max_optimization_threads":1,"max_segment_size":null}`
 	raw := artifact.RawEvidence["qdrant"]
 	raw.CollectionConfigurationTransition.InitialUploadOptimizers = json.RawMessage(initial)
 	raw.CollectionConfigurationTransition.ProductionOptimizers = json.RawMessage(production)
