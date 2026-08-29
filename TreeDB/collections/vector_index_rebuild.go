@@ -247,12 +247,15 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	}
 	timing.Snapshot = collectionObservedElapsedSince(snapshotStarted)
 	rowsStarted := time.Now()
-	rows, usedTypedColumns, err := c.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap, catalog, *cfg, records, manifest, def)
+	rows, typedSource, usedTypedColumns, err := c.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap, catalog, *cfg, records, manifest, def)
 	if err == nil && !usedTypedColumns {
 		rows, err = c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
 	}
 	if err != nil {
 		return VectorIndexStatus{}, err
+	}
+	if typedSource != nil {
+		defer func() { _ = typedSource.Close() }()
 	}
 	if !usedTypedColumns {
 		if err := c.assignColumnVectorGraphRowRefsFromBaseManifest(baseMeta.Name, *cfg, records, manifest.Generation, rows); err != nil {
@@ -281,7 +284,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 			var deltaRecords []columnManifestRecord
 			var nextIdentity ColumnManifestIdentity
 			prepareStarted := time.Now()
-			preparedAsset, preparedRecords, preparedIdentity, prepareErr := prepareColumnVectorGraphRebuildManifestForPublicationTimed(baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), &timing)
+			preparedAsset, preparedRecords, preparedIdentity, prepareErr := prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource(baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), typedSource, &timing)
 			timing.AssetPreparation = collectionObservedElapsedSince(prepareStarted)
 			if prepareErr != nil {
 				return nil, prepareErr
@@ -398,81 +401,86 @@ func (c *Collection) rebuildNativeVectorIndexPrepared(def VectorIndexDefinition,
 // source fast path for the currently certified publication shape. It retains
 // manifest validation at its caller and falls back only for shapes the typed
 // lifecycle explicitly does not support; bad or mismatched assets fail closed.
-func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, cfg ColumnStoreConfig, records []columnManifestRecord, manifest columnManifestSnapshot, def VectorIndexDefinition) ([]columnVectorGraphAssetRow, bool, error) {
+func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, cfg ColumnStoreConfig, records []columnManifestRecord, manifest columnManifestSnapshot, def VectorIndexDefinition) ([]columnVectorGraphAssetRow, *columnVectorGraphTypedColumnVectorSource, bool, error) {
 	if snap == nil {
-		return nil, false, backenddb.ErrClosed
+		return nil, nil, false, backenddb.ErrClosed
 	}
 	if catalog == nil {
-		return nil, false, errCollectionNotFound
+		return nil, nil, false, errCollectionNotFound
 	}
 	field, adapterColumn, ok, err := columnVectorGraphTypedColumnVectorField(cfg, def.Field, def.Dimensions)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if !ok {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 	physicalRefs, mutationParts, err := columnManifestAssetRefsFromRecordsForScan(records, manifest.Generation, cfg.AssetManager.Namespace)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if mutationParts != 0 {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 	typedRefs, err := typedColumnPartRefsByGenerationFromManifestRecords(records, cfg.AssetManager.Namespace)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if len(typedRefs) == 0 {
 		if manifest.RowCount == 0 {
-			return nil, false, nil
+			return nil, nil, false, nil
 		}
-		return nil, false, errors.New("collections: column_graph rebuild missing typed_column_part refs")
+		return nil, nil, false, errors.New("collections: column_graph rebuild missing typed_column_part refs")
 	}
 	if typedColumnRefsHaveSortKey(typedRefs) {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 	physicalRowsByGeneration, physicalPartByGeneration, err := columnVectorGraphTypedColumnPhysicalRowsByGenerationFromRefs(physicalRefs)
 	if errors.Is(err, errColumnVectorGraphTypedColumnMultipartDeferred) {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	physicalLocations, scannedRowsByGeneration, err := c.columnVectorGraphTypedColumnPhysicalLocations(catalog.meta.Name, cfg, physicalRefs)
 	if errors.Is(err, errColumnVectorGraphTypedColumnMultipartDeferred) {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	for generation, rows := range scannedRowsByGeneration {
 		if physicalRowsByGeneration[generation] != rows {
-			return nil, false, fmt.Errorf("collections: column_graph rebuild physical row count generation=%d scanned=%d manifest=%d", generation, rows, physicalRowsByGeneration[generation])
+			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild physical row count generation=%d scanned=%d manifest=%d", generation, rows, physicalRowsByGeneration[generation])
 		}
 	}
 
 	source := &columnVectorGraphTypedColumnVectorSource{field: field, column: adapterColumn, dims: def.Dimensions, manager: mappedresource.NewManager()}
-	defer func() { _ = source.Close() }()
+	success := false
+	defer func() {
+		if !success {
+			_ = source.Close()
+		}
+	}()
 	parts := make(map[uint64]*columnVectorGraphTypedColumnVectorPart, len(typedRefs))
 	for generation, typedRef := range typedRefs {
 		physicalRows, exists := physicalRowsByGeneration[generation]
 		if !exists {
-			return nil, false, fmt.Errorf("collections: column_graph rebuild typed_column_part generation=%d has no physical rows", generation)
+			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild typed_column_part generation=%d has no physical rows", generation)
 		}
 		part, _, loadErr := c.loadColumnVectorGraphTypedColumnVectorPart(catalog.meta.Name, cfg, typedRef, physicalRows, field, adapterColumn, source.manager)
 		if loadErr != nil {
-			return nil, false, fmt.Errorf("collections: column_graph rebuild load typed_column_part generation=%d: %w", generation, loadErr)
+			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild load typed_column_part generation=%d: %w", generation, loadErr)
 		}
 		source.parts = append(source.parts, part)
 		parts[generation] = part
 	}
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), nil, nil, false)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if it == nil {
-		return nil, true, nil
+		return nil, source, true, nil
 	}
 	defer func() { _ = it.Close() }()
 	rows := make([]columnVectorGraphAssetRow, 0, len(physicalLocations))
@@ -484,24 +492,24 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 		id := bytes.Clone(it.UnsafeKey())
 		location, exists := physicalLocations[string(id)]
 		if !exists {
-			return nil, false, fmt.Errorf("collections: column_graph rebuild missing physical row for document id %q", string(id))
+			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild missing physical row for document id %q", string(id))
 		}
 		if physicalPartByGeneration[location.generation] != location.partID {
-			return nil, false, fmt.Errorf("collections: column_graph rebuild physical row document id %q generation=%d part mismatch", string(id), location.generation)
+			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild physical row document id %q generation=%d part mismatch", string(id), location.generation)
 		}
 		part := parts[location.generation]
 		if part == nil || location.rowIndex < 0 || location.rowIndex >= part.rows {
-			return nil, false, fmt.Errorf("collections: column_graph rebuild typed row document id %q generation=%d row_index=%d unavailable", string(id), location.generation, location.rowIndex)
+			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild typed row document id %q generation=%d row_index=%d unavailable", string(id), location.generation, location.rowIndex)
 		}
 		start := location.rowIndex * def.Dimensions
 		end := start + def.Dimensions
 		if start < 0 || end < start || end > len(part.values) {
-			return nil, false, fmt.Errorf("collections: column_graph rebuild typed row document id %q vector bounds", string(id))
+			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild typed row document id %q vector bounds", string(id))
 		}
-		vector := append([]float32(nil), part.values[start:end]...)
+		vector := part.values[start:end]
 		invNorm, normErr := columnVectorGraphInvNorm(vector)
 		if normErr != nil {
-			return nil, false, fmt.Errorf("collections: column_graph rebuild document id %q: %w", string(id), normErr)
+			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild document id %q: %w", string(id), normErr)
 		}
 		baseRowRef := DocumentRowRef{
 			Generation:        location.generation,
@@ -510,18 +518,19 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 			AppliedCommandLSN: location.appliedCommandLSN,
 		}
 		if err := validateColumnVectorGraphRowRefForState(len(rows), baseRowRef, manifest.Generation); err != nil {
-			return nil, false, err
+			return nil, nil, false, err
 		}
 		rows = append(rows, columnVectorGraphAssetRow{ID: id, Vector: vector, InvNorm: invNorm, BaseRowRef: baseRowRef})
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if len(rows) != len(physicalLocations) {
-		return nil, false, fmt.Errorf("collections: column_graph rebuild physical rows=%d primary documents=%d", len(physicalLocations), len(rows))
+		return nil, nil, false, fmt.Errorf("collections: column_graph rebuild physical rows=%d primary documents=%d", len(physicalLocations), len(rows))
 	}
-	return rows, true, nil
+	success = true
+	return rows, source, true, nil
 }
 
 func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name string, catalog *collectionCatalog, baseMeta CollectionMeta, def VectorIndexDefinition, cfg ColumnStoreConfig, baseCommitSeq, baseSystemRoot uint64, rootName string, replay *backenddb.CommandWALIntent, started time.Time, timing *ColumnGraphBuildTiming) (VectorIndexStatus, error) {
@@ -1326,12 +1335,19 @@ func prepareColumnVectorGraphRebuildManifestForPublication(collection string, cf
 }
 
 func prepareColumnVectorGraphRebuildManifestForPublicationTimed(collection string, cfg ColumnStoreConfig, activeVectorIndexes []VectorIndexDefinition, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, appliedCommandLSN uint64, rows []columnVectorGraphAssetRow, assetRootDir string, registry *rootpublication.IdentityPinRegistry, timing *ColumnGraphBuildTiming) (columnVectorGraphPreparedPhysicalAsset, []columnManifestRecord, ColumnManifestIdentity, error) {
+	return prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource(collection, cfg, activeVectorIndexes, def, manifest, records, appliedCommandLSN, rows, assetRootDir, registry, nil, timing)
+}
+
+// prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource
+// keeps a rebuild-local typed source alive while rows are consumed, then closes
+// it after pack emission and before the pack validation mapping is acquired.
+func prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource(collection string, cfg ColumnStoreConfig, activeVectorIndexes []VectorIndexDefinition, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, appliedCommandLSN uint64, rows []columnVectorGraphAssetRow, assetRootDir string, registry *rootpublication.IdentityPinRegistry, typedSource *columnVectorGraphTypedColumnVectorSource, timing *ColumnGraphBuildTiming) (columnVectorGraphPreparedPhysicalAsset, []columnManifestRecord, ColumnManifestIdentity, error) {
 	if ordinaryColumnStableAuthorityEnabled() {
 		authority, err := newColumnVectorGraphStableResourceAccumulator(registry)
 		if err != nil {
 			return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 		}
-		prepared, nextRecords, identity, err := prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection, cfg, activeVectorIndexes, def, manifest, records, appliedCommandLSN, rows, assetRootDir, authority, timing)
+		prepared, nextRecords, identity, err := prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection, cfg, activeVectorIndexes, def, manifest, records, appliedCommandLSN, rows, assetRootDir, authority, typedSource, timing)
 		if err != nil {
 			authority.abandon()
 			prepared.releaseStableResources()
@@ -1339,14 +1355,14 @@ func prepareColumnVectorGraphRebuildManifestForPublicationTimed(collection strin
 		}
 		return prepared, nextRecords, identity, nil
 	}
-	return prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection, cfg, activeVectorIndexes, def, manifest, records, appliedCommandLSN, rows, assetRootDir, nil, timing)
+	return prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection, cfg, activeVectorIndexes, def, manifest, records, appliedCommandLSN, rows, assetRootDir, nil, typedSource, timing)
 }
 
 func prepareColumnVectorGraphRebuildManifestWithAuthority(collection string, cfg ColumnStoreConfig, activeVectorIndexes []VectorIndexDefinition, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, appliedCommandLSN uint64, rows []columnVectorGraphAssetRow, assetRootDir string, authority *columnVectorGraphStableResourceAccumulator) (columnVectorGraphPreparedPhysicalAsset, []columnManifestRecord, ColumnManifestIdentity, error) {
-	return prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection, cfg, activeVectorIndexes, def, manifest, records, appliedCommandLSN, rows, assetRootDir, authority, nil)
+	return prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection, cfg, activeVectorIndexes, def, manifest, records, appliedCommandLSN, rows, assetRootDir, authority, nil, nil)
 }
 
-func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string, cfg ColumnStoreConfig, activeVectorIndexes []VectorIndexDefinition, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, appliedCommandLSN uint64, rows []columnVectorGraphAssetRow, assetRootDir string, authority *columnVectorGraphStableResourceAccumulator, timing *ColumnGraphBuildTiming) (columnVectorGraphPreparedPhysicalAsset, []columnManifestRecord, ColumnManifestIdentity, error) {
+func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string, cfg ColumnStoreConfig, activeVectorIndexes []VectorIndexDefinition, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, appliedCommandLSN uint64, rows []columnVectorGraphAssetRow, assetRootDir string, authority *columnVectorGraphStableResourceAccumulator, typedSource *columnVectorGraphTypedColumnVectorSource, timing *ColumnGraphBuildTiming) (columnVectorGraphPreparedPhysicalAsset, []columnManifestRecord, ColumnManifestIdentity, error) {
 	if appliedCommandLSN == 0 {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, errors.New("collections: column_graph rebuild requires non-zero AppliedCommandLSN")
 	}
@@ -1454,12 +1470,20 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 		searchPackPartID = nextColumnVectorGraphPartIDAfter(searchPackPartID, preparedQuantizedAssets[len(preparedQuantizedAssets)-1].Ref.PartID)
 	}
 	stageStarted = time.Now()
-	preparedSearchPack, err := prepareColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir, cfg, def, graph, manifest.Generation, searchPackPartID, rows, authority)
-	if timing != nil {
-		timing.SearchPackPreparation = collectionObservedElapsedSince(stageStarted)
-	}
+	preparedSearchPack, err := writeColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir, cfg, def, graph, manifest.Generation, searchPackPartID, rows, authority)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+	}
+	if typedSource != nil {
+		if err := typedSource.Close(); err != nil {
+			return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+		}
+	}
+	if err := validateColumnHNSWSearchPackPreparedAsset(assetRootDir, preparedSearchPack, graph, def); err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+	}
+	if timing != nil {
+		timing.SearchPackPreparation = collectionObservedElapsedSince(stageStarted)
 	}
 	stageStarted = time.Now()
 	raw, err := encodeColumnVectorGraphManifestRecord(graph)

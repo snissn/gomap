@@ -360,6 +360,9 @@ func (c *Collection) columnVectorGraphTypedColumnPhysicalLocations(collection st
 	if err != nil {
 		return nil, nil, err
 	}
+	// The scan only retains row locations.  View each physical image directly so
+	// a large insert part is never copied into the rebuild heap.
+	readCache.returnViews = true
 	defer func() { _ = readCache.close() }()
 	locations := make(map[string]columnVectorGraphTypedColumnPhysicalLocation)
 	rowsByGeneration := make(map[uint64]int)
@@ -412,6 +415,9 @@ func (c *Collection) loadColumnVectorGraphTypedColumnVectorPart(collection strin
 	if err != nil {
 		return nil, 0, err
 	}
+	// Parsing consumes this image before the cache closes; the vector section is
+	// acquired separately below and remains owned by the source manager.
+	readCache.returnViews = true
 	defer func() { _ = readCache.close() }()
 	raw, err := readCache.read(typedRef.Ref, nil)
 	if err != nil {
