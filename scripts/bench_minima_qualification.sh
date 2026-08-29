@@ -30,6 +30,11 @@ TREEDB_DIAGNOSTIC_RESUME_START=${TREEDB_DIAGNOSTIC_RESUME_START:-}
 RECOMMENDATION=${RECOMMENDATION:-ready_with_alpha_limitations}
 PYTHON=${PYTHON:-python3}
 EXPECTED_COMMIT=""
+if [[ "$TREEDB_OPERATION_TIMEOUT" != "120" ]]; then
+	printf 'TREEDB_OPERATION_TIMEOUT must be exactly 120 for Minima validation, got %q\n' \
+		"$TREEDB_OPERATION_TIMEOUT" >&2
+	exit 2
+fi
 
 treedb_diagnostic_args=()
 if [[ -n "$TREEDB_DIAGNOSTICS_DIR" ]]; then

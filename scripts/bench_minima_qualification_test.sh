@@ -21,6 +21,9 @@ cp "$ROOT/scripts/bench_minima_qualification.sh" "$REPO/scripts/"
 cat >"$FAKE_BIN/go" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "${FAKE_GO_INVOKED:-}" ]]; then
+	printf 'invoked\n' >"$FAKE_GO_INVOKED"
+fi
 [[ "$1" == build && "$2" == -o ]]
 out=$3
 mkdir -p "$(dirname "$out")"
@@ -120,6 +123,22 @@ grep -qx -- '120' "$TMP/treedb-args"
 grep -qx -- '--startup-timeout' "$TMP/treedb-args"
 grep -qx -- '987' "$TMP/treedb-args"
 [[ "$(<"$TMP/expected-commit")" == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]]
+
+for mode in representative small diagnostic-resume; do
+	build_marker="$TMP/override-$mode-build"
+	python_marker="$TMP/override-$mode-python"
+	set +e
+	override_output=$(PATH="$FAKE_BIN:$PATH" PYTHON="$FAKE_BIN/python" MODE="$mode" \
+		TREEDB_OPERATION_TIMEOUT=121 RUN_DIR="$TMP/override-$mode" \
+		FAKE_GO_INVOKED="$build_marker" FAKE_PYTHON_ARGS="$python_marker" \
+		"$REPO/scripts/bench_minima_qualification.sh" 2>&1)
+	override_status=$?
+	set -e
+	[[ "$override_status" == 2 ]]
+	[[ "$override_output" == *"TREEDB_OPERATION_TIMEOUT must be exactly 120"* ]]
+	[[ ! -e "$build_marker" ]]
+	[[ ! -e "$python_marker" ]]
+done
 
 set +e
 mismatch_output=$(PATH="$FAKE_BIN:$PATH" MINIMA_EXPECTED_COMMIT=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
