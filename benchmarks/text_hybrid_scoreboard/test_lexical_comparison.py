@@ -121,6 +121,17 @@ class LexicalComparisonTest(unittest.TestCase):
             with patch.object(lexical_runner, "ROOT", root), patch.object(lexical_runner, "git_bytes", return_value=b"run/raw.json\x00"):
                 removed = lexical_runner.untracked_source_identity(out_dir)
             self.assertEqual(removed, [])
+
+    def test_retained_logs_replace_host_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            out_dir = Path(temporary)
+            logs = out_dir / "logs"
+            logs.mkdir()
+            retained = logs / "engine-r1.log"
+            retained.write_text("cwd=/private/work/repo\nout=/private/work/run/raw.json\n", encoding="utf-8")
+            lexical_runner.sanitize_retained_logs(out_dir, [("/private/work/run", "$RUN"), ("/private/work/repo", "$REPO")])
+            self.assertEqual(retained.read_text(encoding="utf-8"), "cwd=$REPO\nout=$RUN/raw.json\n")
+
     def test_reference_interprets_every_manifest_shape(self) -> None:
         self.assertEqual(self.expected["common"], [f"doc-{i:06d}" for i in (0, 1, 2, 3, 4, 5, 6, 7, 9, 8)])
         self.assertEqual(self.expected["rare"], [f"doc-{i:06d}" for i in range(10, 20)])

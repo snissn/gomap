@@ -175,6 +175,11 @@ def sanitize_paths(value: Any, replacements: list[tuple[str, str]]) -> Any:
         return {key: sanitize_paths(item, replacements) for key, item in value.items()}
     return value
 
+def sanitize_retained_logs(out_dir: Path, replacements: list[tuple[str, str]]) -> None:
+    for path in sorted((out_dir / "logs").glob("*.log")):
+        path.write_text(sanitize_paths(path.read_text(encoding="utf-8"), replacements), encoding="utf-8")
+
+
 
 def detected_address_space_limit() -> str:
     soft, _ = resource.getrlimit(resource.RLIMIT_AS)
@@ -257,6 +262,7 @@ def main() -> int:
         raise RuntimeError("source checkout drifted during lexical comparison; artifacts are rejected")
     source["post_run_reverified"] = True
     replacements = sorted(((str(args.out_dir), "$RUN"), (str(ROOT), "$REPO"), (str(Path.home()), "$HOME")), key=lambda item: len(item[0]), reverse=True)
+    sanitize_retained_logs(args.out_dir, replacements)
     artifacts = []
     for path in artifact_paths:
         artifact = sanitize_paths(json.loads(path.read_text(encoding="utf-8")), replacements)
