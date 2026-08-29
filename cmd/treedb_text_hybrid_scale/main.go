@@ -938,6 +938,9 @@ func run(cfg config) (report, error) {
 			return rep, err
 		}
 	}
+	if err := stagePrimaryCleanup(&rep, cfg, &fixture); err != nil {
+		return rep, err
+	}
 
 	if cfg.selectedPhases["maintenance"] && cfg.runRewrite {
 		maintenance, err := runMaintenanceProbe(cfg)
@@ -949,6 +952,9 @@ func run(cfg config) (report, error) {
 		guard := guardrailResult{Name: "maintenance_rewrite_postconditions", OK: maintenance.PostconditionOK, Failure: maintenance.PostconditionFailure}
 		rep.Guardrails = append(rep.Guardrails, guard)
 		if err := completeGuardedPhase(&rep, "maintenance", []guardrailResult{guard}, cfg.allowGuardrailFails); err != nil {
+			return rep, err
+		}
+		if err := stageFixtureCleanup(&rep, cfg, filepath.Join(cfg.outDir, "maintenance_db")); err != nil {
 			return rep, err
 		}
 	}
@@ -963,6 +969,9 @@ func run(cfg config) (report, error) {
 		if err := completePhase(&rep, "backfill"); err != nil {
 			return rep, err
 		}
+		if err := stageFixtureCleanup(&rep, cfg, filepath.Join(cfg.outDir, "backfill_db")); err != nil {
+			return rep, err
+		}
 	}
 
 	if cfg.selectedPhases["text_only"] && cfg.runTextOnly {
@@ -975,6 +984,9 @@ func run(cfg config) (report, error) {
 		if err := completePhase(&rep, "text_only"); err != nil {
 			return rep, err
 		}
+		if err := stageFixtureCleanup(&rep, cfg, filepath.Join(cfg.outDir, "text_only_db")); err != nil {
+			return rep, err
+		}
 	}
 
 	if cfg.selectedPhases["source_chunk"] && cfg.runSourceChunk {
@@ -985,6 +997,9 @@ func run(cfg config) (report, error) {
 		rep.SourceChunk = &sourceChunk
 		rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("source_chunk_fixture", cfg.sourceChunkRows, filepath.Join(cfg.outDir, "source_chunk_db"), sourceChunk.TextStorage, nil))
 		if err := completePhase(&rep, "source_chunk"); err != nil {
+			return rep, err
+		}
+		if err := stageFixtureCleanup(&rep, cfg, filepath.Join(cfg.outDir, "source_chunk_db")); err != nil {
 			return rep, err
 		}
 	}
@@ -2974,12 +2989,58 @@ func collectTextStorageStats(col *collections.Collection, _ int) (collections.Te
 	stats, err := col.TextIndexStorageAccounting(textIndexName)
 	return stats, true, err
 }
+func stagePrimaryCleanup(rep *report, cfg config, fixture *scaleFixture) error {
+	if cfg.keepDB {
+		return nil
+	}
+	if fixture.db != nil {
+		if err := fixture.db.Close(); err != nil {
+			rep.Cleanup.Errors = append(rep.Cleanup.Errors, "close primary db: "+err.Error())
+			return err
+		}
+		fixture.db = nil
+	}
+	fixture.cleanup = nil
+	return removeFixturePath(rep, cfg.dbDir)
+}
+
+func stageFixtureCleanup(rep *report, cfg config, path string) error {
+	if cfg.keepDB {
+		return nil
+	}
+	return removeFixturePath(rep, path)
+}
+
+func removeFixturePath(rep *report, path string) error {
+	if err := os.RemoveAll(path); err != nil {
+		err = fmt.Errorf("remove %s: %w", path, err)
+		rep.Cleanup.Errors = append(rep.Cleanup.Errors, err.Error())
+		return err
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		err = fmt.Errorf("cleanup path still exists: %s", path)
+		rep.Cleanup.Errors = append(rep.Cleanup.Errors, err.Error())
+		return err
+	}
+	for _, removed := range rep.Cleanup.RemovedPaths {
+		if removed == path {
+			return nil
+		}
+	}
+	rep.Cleanup.RemovedPaths = append(rep.Cleanup.RemovedPaths, path)
+	return nil
+}
+
 func finalizeCleanup(rep *report, cfg config, fixture *scaleFixture) error {
 	if rep == nil || fixture == nil {
 		return errors.New("nil cleanup target")
 	}
-	rep.Cleanup.Errors = []string{}
-	rep.Cleanup.RemovedPaths = []string{}
+	if rep.Cleanup.Errors == nil {
+		rep.Cleanup.Errors = []string{}
+	}
+	if rep.Cleanup.RemovedPaths == nil {
+		rep.Cleanup.RemovedPaths = []string{}
+	}
 	if fixture.db != nil {
 		if err := fixture.db.Close(); err != nil {
 			rep.Cleanup.Errors = append(rep.Cleanup.Errors, "close primary db: "+err.Error())
@@ -2999,15 +3060,9 @@ func finalizeCleanup(rep *report, cfg config, fixture *scaleFixture) error {
 		filepath.Join(cfg.outDir, "source_chunk_db"),
 	}
 	for _, path := range paths {
-		if err := os.RemoveAll(path); err != nil {
-			rep.Cleanup.Errors = append(rep.Cleanup.Errors, fmt.Sprintf("remove %s: %v", path, err))
+		if err := removeFixturePath(rep, path); err != nil {
 			continue
 		}
-		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-			rep.Cleanup.Errors = append(rep.Cleanup.Errors, fmt.Sprintf("cleanup path still exists: %s", path))
-			continue
-		}
-		rep.Cleanup.RemovedPaths = append(rep.Cleanup.RemovedPaths, path)
 	}
 	if len(rep.Cleanup.Errors) != 0 {
 		rep.Cleanup.Status = "failed"
