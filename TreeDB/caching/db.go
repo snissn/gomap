@@ -21071,6 +21071,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	rewriteQueueBeforeSegments := 0
 	rewriteQueueBeforeLiveBytes := int64(0)
 	rewriteQueueBeforeLiveKnown := true
+	parkedForCheckpoint := false
 	db.debugVlogMaintf(
 		"maintenance_active_acquire source=%s run_gc=%t bypass_quiet=%t skip_checkpoint=%t checkpoint_pending=%t deferred_pending=%t",
 		activeSource,
@@ -21121,9 +21122,11 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		// If a deferred confirmation/age wake became due while this pass held the
 		// scheduler active, requeue it immediately on exit instead of relying on
 		// the original retry goroutine to still be alive.
-		db.scheduleDueVlogGenerationDeferredMaintenance(opts.automatic)
-		db.schedulePendingVlogGenerationRewriteQueue()
-		db.schedulePendingVlogGenerationCheckpointKick()
+		if !parkedForCheckpoint {
+			db.scheduleDueVlogGenerationDeferredMaintenance(opts.automatic)
+			db.schedulePendingVlogGenerationRewriteQueue()
+			db.schedulePendingVlogGenerationCheckpointKick()
+		}
 		if rewriteQueueSnapshotCaptured {
 			afterQueue, afterErr := db.currentVlogGenerationRewriteQueue()
 			afterSegments := 0
@@ -21155,6 +21158,15 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			)
 		}
 	}()
+	// Automatic checkpoint maintenance already owns the durability boundary.
+	// If its age wake collides with that checkpoint, leave the due deadline
+	// intact and let checkpoint completion wake it once. Reading rewrite state
+	// here would only feed the same still-due deadline back into the runner.
+	if opts.skipCheckpoint && vlogGenerationIsAgeBlockedSource(opts) && db.checkpointing.Load() {
+		parkedForCheckpoint = true
+		db.vlogGenerationMaintenanceSkipCheckpointing.Add(1)
+		return
+	}
 	now := time.Now()
 	quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
 	leafPackAdmission := db.foregroundLeafPackAdmission(now)
@@ -23293,6 +23305,10 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint(automatic bool) 
 		}
 		db.checkpointMu.Unlock()
 		if db.closing.Load() {
+			return
+		}
+		if due, _ := db.vlogGenerationRewriteAgeBlockedDueMode(time.Now()); due {
+			db.scheduleDueVlogGenerationDeferredMaintenance(automatic)
 			return
 		}
 		rewriteRunsBefore := db.vlogGenerationRewriteRuns.Load()
