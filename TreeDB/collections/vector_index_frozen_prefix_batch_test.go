@@ -235,6 +235,51 @@ func TestVectorIndexFrozenPrefixWorkerBudgetsPreserveTopology4300(t *testing.T) 
 	}
 }
 
+func TestVectorIndexFrozenPrefixReciprocalScratchDoesNotAliasNodes4514(t *testing.T) {
+	rows := vectorIndexReciprocalParityRows4257(192, 16, false)
+	withoutScratch := buildVectorIndexFrozenPrefixBatch4297(t, rows)
+	withScratch := buildVectorIndexFrozenPrefixBatch4297(t, rows)
+	link := func(index *VectorIndex) vectorIndexFrozenPrefixReciprocalLink {
+		t.Helper()
+		for from, node := range index.nodes {
+			if len(node.neighbors) == 0 || len(node.neighbors[0]) != index.maxNeighborsForLayer(0) {
+				continue
+			}
+			for to := range index.nodes {
+				if to == from {
+					continue
+				}
+				found := false
+				for _, neighbor := range node.neighbors[0] {
+					if neighbor.nodeID == to {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return vectorIndexFrozenPrefixReciprocalLink{fromNodeID: from, toNodeID: to}
+				}
+			}
+		}
+		t.Fatal("no full reciprocal group candidate")
+		return vectorIndexFrozenPrefixReciprocalLink{}
+	}
+	reciprocal := link(withScratch)
+	withoutScratch.linkFrozenPrefixReciprocalGroupLocked([]vectorIndexFrozenPrefixReciprocalLink{reciprocal}, nil)
+	scratch := vectorIndexFrozenPrefixDiversityScratch{}
+	withScratch.linkFrozenPrefixReciprocalGroupLocked([]vectorIndexFrozenPrefixReciprocalLink{reciprocal}, &scratch)
+	if got, want := snapshotVectorIndexTopology4257(withScratch), snapshotVectorIndexTopology4257(withoutScratch); !reflect.DeepEqual(got, want) {
+		t.Fatal("reciprocal scratch changed topology")
+	}
+	neighbors := withScratch.nodes[reciprocal.fromNodeID].neighbors[0]
+	if len(neighbors) == 0 || len(scratch.neighbors) == 0 {
+		t.Fatal("reciprocal scratch was not exercised")
+	}
+	if &neighbors[0] == &scratch.neighbors[0] {
+		t.Fatal("node adjacency aliases reciprocal scratch")
+	}
+}
+
 func BenchmarkVectorIndexFrozenPrefixBatch4297(b *testing.B) {
 	const dimensions = 768
 	rows := vectorIndexReciprocalParityRows4257(10_000, dimensions, false)
