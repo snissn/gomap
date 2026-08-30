@@ -9602,6 +9602,7 @@ type DB struct {
 	vlogGenerationRewriteQueueRunning                            atomic.Bool
 	vlogGenerationRewriteStageWakeObservedNS                     atomic.Int64
 	vlogGenerationRewriteAgeBlockedAutomatic                     atomic.Bool
+	vlogGenerationRewriteStageAutomatic                          atomic.Bool
 	vlogGenerationMaintenancePendingMu                           sync.Mutex
 	vlogGenerationRewriteQueueMu                                 sync.Mutex
 	vlogGenerationCheckpointKickActive                           atomic.Bool
@@ -20186,16 +20187,22 @@ func (db *DB) clearVlogGenerationRewriteAgeBlockedUntil() {
 	db.vlogGenerationRewriteAgeBlockedAutomatic.Store(false)
 }
 
-func (db *DB) clearVlogGenerationRewriteStageConfirmation() {
+func (db *DB) clearVlogGenerationRewriteStageConfirmation(clearAutomatic bool) {
 	if db == nil {
 		return
 	}
 	db.vlogGenerationRewriteStageWakeObservedNS.Store(0)
+	if clearAutomatic {
+		db.vlogGenerationRewriteStageAutomatic.Store(false)
+	}
 }
 
 func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 	if db == nil || observedAt <= 0 || db.closing.Load() {
 		return
+	}
+	if db.vlogGenerationMaintenanceAutomatic.Load() {
+		db.vlogGenerationRewriteStageAutomatic.Store(true)
 	}
 	if envBool(envDisableVlogGenerationLoop) {
 		return
@@ -20506,6 +20513,7 @@ func (db *DB) scheduleDueVlogGenerationDeferredMaintenance(automatic bool) {
 	}
 	now := time.Now()
 	if db.vlogGenerationRewriteAgeBlockedDue(now) {
+		automatic = automatic || db.vlogGenerationRewriteAgeBlockedAutomatic.Load()
 		db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
 			bypassQuiet:           true,
 			skipRetainedPruneWait: true,
@@ -20523,6 +20531,7 @@ func (db *DB) scheduleDueVlogGenerationDeferredMaintenance(automatic bool) {
 	if now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteStageConfirmDelay)) {
 		return
 	}
+	automatic = automatic || db.vlogGenerationRewriteStageAutomatic.Load()
 	db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
 		bypassQuiet:           true,
 		skipRetainedPruneWait: true,

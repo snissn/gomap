@@ -155,7 +155,7 @@ func forceRewriteStageConfirmDue(t *testing.T, db *DB) {
 	// arm the background confirmation wake here; that introduces a race where the
 	// goroutine can consume staged debt before the test's direct maintenance call,
 	// which has been flaky on slower Windows runners.
-	db.clearVlogGenerationRewriteStageConfirmation()
+	db.clearVlogGenerationRewriteStageConfirmation(false)
 }
 
 func holdVlogGenerationDeferredMaintenanceRunnerForTest(t *testing.T, db *DB) {
@@ -8336,6 +8336,86 @@ func TestVlogGenerationAutomaticExitScheduledDueWorkPreservesMaintenanceBoundary
 	}
 	if checkpoints, vacuums := boundary.boundaryCalls(); checkpoints != 0 || vacuums != 0 {
 		t.Fatalf("automatic exit-scheduled due boundaries: checkpoints=%d vacuums=%d, want 0/0", checkpoints, vacuums)
+	}
+}
+
+func TestVlogGenerationAutomaticPhaseResumeDueWorkPreservesMaintenanceBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		phase MaintenancePhase
+		seed  func(*DB) error
+	}{
+		{
+			name:  "restore_age",
+			phase: MaintenancePhaseRestore,
+			seed: func(db *DB) error {
+				db.setVlogGenerationRewriteAgeBlockedUntil(time.Now().Add(-time.Second), true)
+				return nil
+			},
+		},
+		{
+			name:  "catch_up_stage",
+			phase: MaintenancePhaseCatchUp,
+			seed: func(db *DB) error {
+				db.vlogGenerationMaintenanceAutomatic.Store(true)
+				defer db.vlogGenerationMaintenanceAutomatic.Store(false)
+				return db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{{
+					FileID:     11,
+					BytesTotal: 128,
+					BytesLive:  64,
+					BytesStale: 64,
+					StaleRatio: 0.5,
+				}}, true, time.Now().Add(-vlogGenerationRewriteStageConfirmDelay).UnixNano())
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			disableVlogGenerationLoop(t)
+			dir := t.TempDir()
+			backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+			if err != nil {
+				t.Fatalf("open backend: %v", err)
+			}
+			recorder := &rewriteBudgetRecordingBackend{
+				DB: backend,
+				planResponse: backenddb.ValueLogRewritePlan{
+					SourceFileIDs:     []uint32{11},
+					SelectedBytesLive: 64,
+				},
+				rewriteResponse: backenddb.ValueLogRewriteStats{
+					BytesBefore:   vlogGenerationVacuumTriggerRewriteBytes,
+					BytesAfter:    32,
+					RecordsCopied: 1,
+				},
+			}
+			boundary := &queuedRewriteBoundaryBackend{BackendDB: backend, recorder: recorder}
+			db, cleanup := openRewriteQueueTestDB(t, dir, boundary)
+			t.Cleanup(cleanup)
+			skipRetainedPrune(db)
+			forceVlogMaintenanceIdle(db)
+			db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+			db.SetMaintenancePhase(tc.phase)
+			if err := tc.seed(db); err != nil {
+				t.Fatalf("seed automatic due work: %v", err)
+			}
+
+			boundary.resetBoundaryCalls()
+			db.SetMaintenancePhase(MaintenancePhaseSteady)
+			deadline := time.Now().Add(2 * schedulerTestWait(t))
+			for {
+				if _, calls := recorder.recordedRewrite(); calls == 1 {
+					break
+				}
+				if time.Now().After(deadline) {
+					_, calls := recorder.recordedRewrite()
+					t.Fatalf("automatic phase-resumed due work did not rewrite: calls=%d", calls)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if checkpoints, vacuums := boundary.boundaryCalls(); checkpoints != 0 || vacuums != 0 {
+				t.Fatalf("automatic phase-resumed boundaries: checkpoints=%d vacuums=%d, want 0/0", checkpoints, vacuums)
+			}
+		})
 	}
 }
 

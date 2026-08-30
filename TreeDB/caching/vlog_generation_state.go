@@ -517,7 +517,7 @@ func (db *DB) loadVlogGenerationRewriteQueueLocked() error {
 	if stagePending && stageObservedAt > 0 {
 		db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
 	} else {
-		db.clearVlogGenerationRewriteStageConfirmation()
+		db.clearVlogGenerationRewriteStageConfirmation(true)
 	}
 	return nil
 }
@@ -544,7 +544,7 @@ func (db *DB) setVlogGenerationRewriteQueue(ids []uint32) error {
 	db.vlogGenerationRewriteHistory = nextHistory
 	db.vlogGenerationRewriteStagePending = false
 	db.vlogGenerationRewriteStageObservedUnixNano = 0
-	db.clearVlogGenerationRewriteStageConfirmation()
+	db.clearVlogGenerationRewriteStageConfirmation(true)
 	return nil
 }
 
@@ -588,7 +588,7 @@ func (db *DB) setVlogGenerationRewriteLedgerWithStage(segments []backenddb.Value
 	if stagePending && stageObservedAt > 0 {
 		db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
 	} else {
-		db.clearVlogGenerationRewriteStageConfirmation()
+		db.clearVlogGenerationRewriteStageConfirmation(true)
 	}
 	return nil
 }
@@ -617,7 +617,7 @@ func (db *DB) setVlogGenerationRewriteChunkLedgerWithStage(chunks []backenddb.Va
 	if stagePending && stageObservedAt > 0 {
 		db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
 	} else {
-		db.clearVlogGenerationRewriteStageConfirmation()
+		db.clearVlogGenerationRewriteStageConfirmation(true)
 	}
 	return nil
 }
@@ -713,7 +713,7 @@ func (db *DB) clearVlogGenerationRewriteStage() error {
 	}
 	db.vlogGenerationRewriteStagePending = false
 	db.vlogGenerationRewriteStageObservedUnixNano = 0
-	db.clearVlogGenerationRewriteStageConfirmation()
+	db.clearVlogGenerationRewriteStageConfirmation(true)
 	return nil
 }
 
@@ -757,7 +757,7 @@ func (db *DB) pruneVlogGenerationRewriteLedgerNonPositiveLive() ([]uint32, int, 
 		if stagePending && stageObservedAt > 0 {
 			db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
 		} else {
-			db.clearVlogGenerationRewriteStageConfirmation()
+			db.clearVlogGenerationRewriteStageConfirmation(true)
 		}
 		return append([]uint32(nil), filteredIDs...), dropped, nil
 	}
@@ -796,7 +796,7 @@ func (db *DB) pruneVlogGenerationRewriteLedgerNonPositiveLive() ([]uint32, int, 
 	if stagePending && stageObservedAt > 0 {
 		db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
 	} else {
-		db.clearVlogGenerationRewriteStageConfirmation()
+		db.clearVlogGenerationRewriteStageConfirmation(true)
 	}
 	return append([]uint32(nil), filteredIDs...), dropped, nil
 }
@@ -1388,7 +1388,7 @@ func (db *DB) consumeVlogGenerationRewriteChunkLedger(processed []backenddb.Valu
 	if stagePending && stageObservedAt > 0 {
 		db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
 	} else {
-		db.clearVlogGenerationRewriteStageConfirmation()
+		db.clearVlogGenerationRewriteStageConfirmation(true)
 	}
 	return nil
 }
@@ -1483,7 +1483,7 @@ func (db *DB) consumeVlogGenerationRewriteQueueChunk(processed []uint32) error {
 	if stagePending && stageObservedAt > 0 {
 		db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
 	} else {
-		db.clearVlogGenerationRewriteStageConfirmation()
+		db.clearVlogGenerationRewriteStageConfirmation(true)
 	}
 	return nil
 }
