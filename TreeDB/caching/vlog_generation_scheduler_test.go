@@ -9829,13 +9829,13 @@ func TestVlogGenerationRewritePlan_OneShotReadBlipDoesNotCancelLongPlan(t *testi
 	}
 	t.Cleanup(func() { _ = backend.Close() })
 
-	timed := &timedRewritePlannerBackend{
+	blocking := &blockingRewritePlannerBackend{
 		DB:        backend,
 		planStart: make(chan struct{}),
-		planDelay: vlogGenerationRewritePlanResumeGrace + foregroundReadStampMaxAge,
+		planBlock: make(chan struct{}),
 	}
 
-	db, err := Open(dir, timed, Options{
+	db, err := Open(dir, blocking, Options{
 		AllowUnsafe:                      true,
 		DisableWAL:                       true,
 		JournalLanes:                     1,
@@ -9871,19 +9871,30 @@ func TestVlogGenerationRewritePlan_OneShotReadBlipDoesNotCancelLongPlan(t *testi
 
 	wait := schedulerTestWait(t)
 	select {
-	case <-timed.planStart:
+	case <-blocking.planStart:
 	case <-time.After(wait):
 		t.Fatalf("rewrite plan did not start")
 	}
 
 	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
+	staleAndBeyondGrace := vlogGenerationRewritePlanResumeGrace
+	if staleAndBeyondGrace < foregroundReadStampMaxAge {
+		staleAndBeyondGrace = foregroundReadStampMaxAge
+	}
+	staleAndBeyondGrace += foregroundMaintenancePollInterval()
 	select {
 	case <-doneMaintenance:
-	case <-time.After(2 * wait):
-		t.Fatalf("long rewrite plan did not complete after one-shot read blip")
+		t.Fatalf("rewrite plan canceled after a one-shot read blip")
+	case <-time.After(staleAndBeyondGrace):
+	}
+	blocking.unblockPlan()
+	select {
+	case <-doneMaintenance:
+	case <-time.After(wait):
+		t.Fatalf("long rewrite plan did not complete after one-shot read blip became stale")
 	}
 
-	completed, canceled := timed.recordedPlanOutcomes()
+	completed, canceled := blocking.recordedPlanOutcomes()
 	if completed != 1 || canceled != 0 {
 		t.Fatalf("plan outcomes completed=%d canceled=%d want completed=1 canceled=0", completed, canceled)
 	}
