@@ -253,31 +253,34 @@ func runVectorPartitionHCBridgeV1(args []string, stdout io.Writer) error {
 	server := newHCBridgeServerV1(b, timeout)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	serveDone := make(chan struct{})
-	shutdownDone := make(chan error, 1)
-	go func() {
-		select {
-		case <-ctx.Done():
-			shutdown, cancel := context.WithTimeout(context.Background(), timeout)
-			defer cancel()
-			shutdownDone <- server.Shutdown(shutdown)
-		case <-serveDone:
-		}
-	}()
 	_, _ = fmt.Fprintf(stdout, "hc_bridge=%s endpoint=%s clients=%d\n", ln.Addr(), endpoint, maxClients)
-	err = server.Serve(ln)
-	close(serveDone)
-	if ctx.Err() != nil {
-		if shutdownErr := <-shutdownDone; shutdownErr != nil {
-			return shutdownErr
-		}
-	}
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
-	}
-	return err
+	return serveHCBridgeV1(ctx, server, ln, timeout)
 }
 
 func newHCBridgeServerV1(handler http.Handler, timeout time.Duration) *http.Server {
 	return &http.Server{Handler: handler, ReadHeaderTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout + hcBridgeResponseGraceV1, IdleTimeout: timeout}
+}
+
+func serveHCBridgeV1(ctx context.Context, server *http.Server, listener net.Listener, timeout time.Duration) error {
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+	select {
+	case err := <-serveDone:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		shutdownErr := server.Shutdown(shutdownCtx)
+		cancel()
+		serveErr := <-serveDone
+		if shutdownErr != nil {
+			return shutdownErr
+		}
+		if errors.Is(serveErr, http.ErrServerClosed) {
+			return nil
+		}
+		return serveErr
+	}
 }

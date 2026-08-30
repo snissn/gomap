@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -190,5 +191,43 @@ func TestHCBridgeServerReservesTimeoutResponseGraceV1(t *testing.T) {
 	server := newHCBridgeServerV1(http.NotFoundHandler(), 5*time.Millisecond)
 	if server.WriteTimeout <= server.ReadTimeout || server.WriteTimeout-server.ReadTimeout != hcBridgeResponseGraceV1 {
 		t.Fatalf("server timeouts read=%s write=%s", server.ReadTimeout, server.WriteTimeout)
+	}
+}
+
+func TestHCBridgeShutdownWaitsForInflightHandlerV1(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	server := newHCBridgeServerV1(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		_, _ = w.Write([]byte("ok"))
+	}), time.Second)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- serveHCBridgeV1(ctx, server, listener, time.Second) }()
+	clientDone := make(chan error, 1)
+	go func() {
+		response, err := http.Get("http://" + listener.Addr().String())
+		if response != nil {
+			response.Body.Close()
+		}
+		clientDone <- err
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-serveDone:
+		t.Fatalf("shutdown returned before handler drain: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-serveDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-clientDone; err != nil {
+		t.Fatal(err)
 	}
 }
