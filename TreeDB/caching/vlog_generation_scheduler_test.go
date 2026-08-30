@@ -8087,6 +8087,19 @@ func TestCheckpoint_AutomaticKickDoesNotForceBackendCheckpoint(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationAutomaticCheckpointKickPreservesQueuedFollowup(t *testing.T) {
+	db := &DB{}
+	db.queueVlogGenerationRewriteQueue(true)
+
+	opts := db.vlogGenerationRewriteQueueOptions()
+	if !opts.automatic || !opts.skipCheckpoint {
+		t.Fatalf("automatic queued follow-up options=%+v, want automatic covered-prefix maintenance", opts)
+	}
+	if db.vlogGenerationRewriteQueuePendingAutomatic.Load() {
+		t.Fatal("queued automatic provenance was not consumed")
+	}
+}
+
 func TestCheckpoint_KickHotDebtOnlySkipsFreshPlanDuringRecentForegroundActivity(t *testing.T) {
 	disableVlogGenerationLoop(t)
 
