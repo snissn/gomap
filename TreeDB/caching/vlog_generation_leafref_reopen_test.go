@@ -1438,7 +1438,7 @@ func testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t *testing.T, disab
 				t.Fatalf("rewrite round %d: %v", round, err)
 			}
 			rewriteRounds++
-			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore))
+			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore), false)
 			return nil
 		})
 		if err != nil {
@@ -1723,7 +1723,7 @@ func TestCachedManualMaintenanceDirectPointersRemainReopenable_WALOn(t *testing.
 				return fmt.Errorf("rewrite round %d: %w", round, err)
 			}
 			rewriteRounds++
-			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore))
+			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore), false)
 			return nil
 		})
 		if err != nil {

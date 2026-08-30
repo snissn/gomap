@@ -517,7 +517,7 @@ func (db *DB) loadVlogGenerationRewriteQueueLocked() error {
 	if stagePending && stageObservedAt > 0 {
 		db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
 	} else {
-		db.clearVlogGenerationRewriteStageConfirmation()
+		db.clearVlogGenerationRewriteStageConfirmation(true)
 	}
 	return nil
 }
@@ -544,7 +544,7 @@ func (db *DB) setVlogGenerationRewriteQueue(ids []uint32) error {
 	db.vlogGenerationRewriteHistory = nextHistory
 	db.vlogGenerationRewriteStagePending = false
 	db.vlogGenerationRewriteStageObservedUnixNano = 0
-	db.clearVlogGenerationRewriteStageConfirmation()
+	db.clearVlogGenerationRewriteStageConfirmation(true)
 	return nil
 }
 
@@ -588,7 +588,7 @@ func (db *DB) setVlogGenerationRewriteLedgerWithStage(segments []backenddb.Value
 	if stagePending && stageObservedAt > 0 {
 		db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
 	} else {
-		db.clearVlogGenerationRewriteStageConfirmation()
+		db.clearVlogGenerationRewriteStageConfirmation(true)
 	}
 	return nil
 }
@@ -617,7 +617,7 @@ func (db *DB) setVlogGenerationRewriteChunkLedgerWithStage(chunks []backenddb.Va
 	if stagePending && stageObservedAt > 0 {
 		db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
 	} else {
-		db.clearVlogGenerationRewriteStageConfirmation()
+		db.clearVlogGenerationRewriteStageConfirmation(true)
 	}
 	return nil
 }
@@ -685,15 +685,23 @@ func (db *DB) currentVlogGenerationRewriteEligible(now time.Time) ([]uint32, []b
 }
 
 func (db *DB) currentVlogGenerationRewriteStage() (bool, int64, error) {
+	pending, observedAt, _, err := db.currentVlogGenerationRewriteStageMode()
+	return pending, observedAt, err
+}
+
+func (db *DB) currentVlogGenerationRewriteStageMode() (bool, int64, bool, error) {
 	if db == nil {
-		return false, 0, nil
+		return false, 0, false, nil
 	}
 	db.vlogGenerationRewriteQueueMu.Lock()
 	defer db.vlogGenerationRewriteQueueMu.Unlock()
 	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
-		return false, 0, err
+		return false, 0, false, err
 	}
-	return db.vlogGenerationRewriteStagePending, db.vlogGenerationRewriteStageObservedUnixNano, nil
+	if hook := db.testStageConfirmStateReadHook; hook != nil {
+		hook()
+	}
+	return db.vlogGenerationRewriteStagePending, db.vlogGenerationRewriteStageObservedUnixNano, db.vlogGenerationRewriteStageAutomatic.Load(), nil
 }
 
 func (db *DB) clearVlogGenerationRewriteStage() error {
@@ -713,7 +721,7 @@ func (db *DB) clearVlogGenerationRewriteStage() error {
 	}
 	db.vlogGenerationRewriteStagePending = false
 	db.vlogGenerationRewriteStageObservedUnixNano = 0
-	db.clearVlogGenerationRewriteStageConfirmation()
+	db.clearVlogGenerationRewriteStageConfirmation(true)
 	return nil
 }
 
@@ -757,7 +765,7 @@ func (db *DB) pruneVlogGenerationRewriteLedgerNonPositiveLive() ([]uint32, int, 
 		if stagePending && stageObservedAt > 0 {
 			db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
 		} else {
-			db.clearVlogGenerationRewriteStageConfirmation()
+			db.clearVlogGenerationRewriteStageConfirmation(true)
 		}
 		return append([]uint32(nil), filteredIDs...), dropped, nil
 	}
@@ -796,7 +804,7 @@ func (db *DB) pruneVlogGenerationRewriteLedgerNonPositiveLive() ([]uint32, int, 
 	if stagePending && stageObservedAt > 0 {
 		db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
 	} else {
-		db.clearVlogGenerationRewriteStageConfirmation()
+		db.clearVlogGenerationRewriteStageConfirmation(true)
 	}
 	return append([]uint32(nil), filteredIDs...), dropped, nil
 }
@@ -1388,7 +1396,7 @@ func (db *DB) consumeVlogGenerationRewriteChunkLedger(processed []backenddb.Valu
 	if stagePending && stageObservedAt > 0 {
 		db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
 	} else {
-		db.clearVlogGenerationRewriteStageConfirmation()
+		db.clearVlogGenerationRewriteStageConfirmation(true)
 	}
 	return nil
 }
@@ -1483,7 +1491,7 @@ func (db *DB) consumeVlogGenerationRewriteQueueChunk(processed []uint32) error {
 	if stagePending && stageObservedAt > 0 {
 		db.scheduleVlogGenerationRewriteStageConfirmation(stageObservedAt)
 	} else {
-		db.clearVlogGenerationRewriteStageConfirmation()
+		db.clearVlogGenerationRewriteStageConfirmation(true)
 	}
 	return nil
 }

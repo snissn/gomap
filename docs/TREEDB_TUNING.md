@@ -242,18 +242,24 @@ Mitigations:
 
 ### Cached-mode auto checkpointing (cached wrapper)
 
-TreeDB cached mode uses a journal for crash recovery, but (like many engines) the default
+TreeDB cached mode uses recovery logging, but (like many engines) the default
 `Set`/`Batch.Write` path does not force an `fsync` per operation.
 
-To keep the redo journal and side logs bounded in long-running workloads,
-TreeDB enables a periodic cached-mode checkpoint by default:
+To bound reclaimable redo-journal and side-log pressure in long-running
+workloads, TreeDB enables periodic cached-mode auto maintenance by default:
 
-- `Options.BackgroundCheckpointInterval` (default 30s): periodic checkpoint cadence
-- `Options.BackgroundCheckpointIdleDuration` (default 2s): opportunistic checkpoint after write-idle
-- `Options.MaxWALBytes` (default 2 GiB): safety cap that can trigger checkpointing early
-  based on cached journal/value-log segment bytes (legacy name: WAL).
+- `Options.BackgroundCheckpointInterval` (default 30s): periodic auto-maintenance cadence
+- `Options.BackgroundCheckpointIdleDuration` (default 2s): opportunistic auto maintenance after write-idle
+- `Options.MaxWALBytes` (default 2 GiB): safety cap that can trigger maintenance early.
+  External command-WAL mode counts command-WAL segment bytes; other cached
+  modes use reclaimable cached journal/value-log pressure (legacy name: WAL).
 
-A checkpoint:
+In external command-WAL mode, automatic passes rotate and clean only the
+recovery-covered command-WAL prefix without publishing the current visible
+frontier. Legacy or otherwise unwired backends fall back to a full checkpoint.
+Uncovered segments can remain until a later durable frontier covers them.
+
+An explicit `Checkpoint`, sync, or close:
 - blocks writers briefly,
 - records pending checkpoint debt and kicks the background drainer when that is
   safe for the durability mode,

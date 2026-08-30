@@ -26,7 +26,7 @@ func TestVlogGenerationCheckpointKick_SkipsWhenWALOn(t *testing.T) {
 	defer db.Close()
 
 	db.testSkipVlogCheckpointKick = false
-	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint(false)
 
 	if got := db.vlogGenerationCheckpointKickRuns.Load(); got != 0 {
 		t.Fatalf("checkpoint kick runs=%d want 0", got)

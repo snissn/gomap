@@ -356,11 +356,14 @@ after the collection WAL gate, not current behavior.
 
 - `Options.FlushThreshold` + `Options.MaxQueuedMemtables` (throughput vs. backlog/memory)
 - Adaptive backpressure: `SlowdownBacklogSeconds`, `StopBacklogSeconds`, `MaxBacklogBytes`
-- Cached-mode auto checkpointing: `BackgroundCheckpointInterval`, `BackgroundCheckpointIdleDuration`
-- Command-WAL bounded growth: `CommandWALSegmentTargetBytes` rotates active
+- Cached-mode auto maintenance: `BackgroundCheckpointInterval`,
+  `BackgroundCheckpointIdleDuration`, and `MaxWALBytes` bound reclaimable WAL
+  pressure. External command-WAL passes clean only recovery-covered prefixes;
+  legacy/unwired backends use a full checkpoint, as do explicit barriers.
+- Command-WAL-bounded growth: `CommandWALSegmentTargetBytes` rotates active
   command-WAL segments independently from `WALMaxSegmentBytes`, which remains a
   per-frame safety cap; `MaxWALBytes` triggers command-WAL-aware auto
-  checkpoints in command-WAL cached mode.
+  maintenance in command-WAL cached mode.
 - Background pruning: `PruneInterval`, `PruneMaxPages`, `PruneMaxDuration`
 - Optional flush build parallelism: `FlushBuildConcurrency`
 - Auto-admitted span-native flush apply workers: `FlushApplyConcurrency` defaults to detected physical cores capped by `GOMAXPROCS` and 8 under `FlushAdmissionPolicyAuto` (falling back to `min(GOMAXPROCS, 8)` when physical cores are unknown); default journal/value-log lanes stay coalescing-safe, and `FlushAdmissionPolicyOff`, `FlushAdmissionPolicyExplicit`, explicit `FlushApplyConcurrency`, and explicit `JournalLanes` remain available for c4/c8/c16/lane experiments

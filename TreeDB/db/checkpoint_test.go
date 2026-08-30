@@ -2,8 +2,13 @@ package db
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -77,6 +82,208 @@ func TestCheckpointSyncBoundaryDoesNotAdvanceCommitSeq(t *testing.T) {
 	}
 	if !bytes.Equal(got, []byte("v")) {
 		t.Fatalf("Get after reopen=%q want %q", got, []byte("v"))
+	}
+}
+
+func TestMaintainCommandWALCoveredPrefixWithoutCommandWALFallsBackToCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	var checkpoints atomic.Uint64
+	d.testCheckpointAfterPoisonPreflightHook = func() { checkpoints.Add(1) }
+
+	b := d.NewBatch()
+	if err := b.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close batch: %v", err)
+	}
+	if err := d.MaintainCommandWALCoveredPrefix(); err != nil {
+		t.Fatalf("MaintainCommandWALCoveredPrefix: %v", err)
+	}
+	if got := checkpoints.Load(); got != 1 {
+		t.Fatalf("checkpoint calls=%d want 1", got)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	got, err := reopened.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get after reopen: %v", err)
+	}
+	if !bytes.Equal(got, []byte("v")) {
+		t.Fatalf("Get after reopen=%q want %q", got, []byte("v"))
+	}
+}
+
+func TestMaintainCommandWALCoveredPrefixPinsTeardown(t *testing.T) {
+	d, err := Open(Options{
+		Dir:                    t.TempDir(),
+		CommandWAL:             true,
+		Durability:             DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	maintained := make(chan error, 1)
+	d.teardownMu.Lock()
+	go func() { maintained <- d.MaintainCommandWALCoveredPrefix() }()
+	select {
+	case err := <-maintained:
+		d.teardownMu.Unlock()
+		t.Fatalf("covered-prefix maintenance bypassed teardown admission: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	d.teardownMu.Unlock()
+	if err := <-maintained; err != nil {
+		t.Fatalf("MaintainCommandWALCoveredPrefix: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestMaintainCommandWALCoveredPrefixAcquiresMaintenanceBeforeTeardown(t *testing.T) {
+	d, err := Open(Options{
+		Dir:                    t.TempDir(),
+		CommandWAL:             true,
+		Durability:             DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	called := false
+	d.testStorageMaintenanceAfterLockHook = func(operation string) error {
+		called = true
+		if operation != "command-wal-covered-prefix" {
+			return fmt.Errorf("maintenance operation=%q", operation)
+		}
+		if !d.teardownMu.TryLock() {
+			return errors.New("teardown lock held before maintenance admission")
+		}
+		d.teardownMu.Unlock()
+		return nil
+	}
+	if err := d.MaintainCommandWALCoveredPrefix(); err != nil {
+		t.Fatalf("MaintainCommandWALCoveredPrefix: %v", err)
+	}
+	if !called {
+		t.Fatal("maintenance admission hook was not called")
+	}
+}
+
+func TestMaintainCommandWALCoveredPrefixSnapshotsRootPublicationUnderDBMu(t *testing.T) {
+	d, err := Open(Options{
+		Dir:                    t.TempDir(),
+		CommandWAL:             true,
+		Durability:             DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	// Online vacuum swaps rootPublication while holding db.mu. The capability
+	// snapshot must use that same lock rather than racing the replacement.
+	d.mu.Lock()
+	maintained := make(chan error, 1)
+	go func() { maintained <- d.MaintainCommandWALCoveredPrefix() }()
+	select {
+	case err := <-maintained:
+		d.mu.Unlock()
+		t.Fatalf("covered-prefix maintenance bypassed root-publication snapshot: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	d.mu.Unlock()
+	if err := <-maintained; err != nil {
+		t.Fatalf("MaintainCommandWALCoveredPrefix: %v", err)
+	}
+}
+
+func TestMaintainCommandWALCoveredPrefixRetriesClosedSegmentsAfterCoverageAdvance(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir:                          dir,
+		CommandWAL:                   true,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWALSegmentTargetBytes: 1,
+		DisableBackgroundPrune:       true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := d.Set([]byte("covered-prefix"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := d.MaintainCommandWALCoveredPrefix(); err != nil {
+		t.Fatalf("first MaintainCommandWALCoveredPrefix: %v", err)
+	}
+	if d.commandWALClosedBytes.Load() <= 0 {
+		t.Fatalf("closed command WAL bytes=%d, want retained rotated segment", d.commandWALClosedBytes.Load())
+	}
+
+	state := d.State()
+	if state == nil || state.AppliedCommandLSN == 0 {
+		t.Fatalf("state after first maintenance=%+v, want applied command WAL coverage", state)
+	}
+	if err := d.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, state.AppliedCommandLSN, nil, true); err != nil {
+		t.Fatalf("advance durable root coverage: %v", err)
+	}
+	if err := d.rootPublication.coordinator.WaitThrough(context.Background(), d.State().CommitSeq); err != nil {
+		t.Fatalf("wait durable root coverage: %v", err)
+	}
+	if err := d.RefreshCommandWALCheckpointFallback(); err != nil {
+		t.Fatalf("advance fallback durable root coverage without WAL append: %v", err)
+	}
+	proof, err := d.captureDurableWALCleanupProofV1()
+	if err != nil {
+		t.Fatalf("capture cleanup proof after coverage advance: %v", err)
+	}
+	if proof.cleanupThrough < state.AppliedCommandLSN || proof.rootCount != 2 {
+		t.Fatalf("coverage proof: through=%d roots=%d, want two roots through %d", proof.cleanupThrough, proof.rootCount, state.AppliedCommandLSN)
+	}
+	if err := d.MaintainCommandWALCoveredPrefix(); err != nil {
+		t.Fatalf("second MaintainCommandWALCoveredPrefix: %v", err)
+	}
+	if d.commandWALClosedBytes.Load() != 0 {
+		t.Fatalf("closed command WAL bytes=%d, want covered segment removed without new append", d.commandWALClosedBytes.Load())
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(Options{Dir: dir, CommandWAL: true, Durability: DurabilityWALOnRelaxed, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	got, err := reopened.Get([]byte("covered-prefix"))
+	if err != nil {
+		t.Fatalf("Get after reopen: %v", err)
+	}
+	if !bytes.Equal(got, []byte("value")) {
+		t.Fatalf("Get after reopen=%q want value", got)
+	}
+	if entries, err := os.ReadDir(WALDirPath(dir)); err != nil || len(entries) == 0 {
+		t.Fatalf("command WAL after cleanup entries=%v err=%v, want active successor", entries, err)
 	}
 }
 

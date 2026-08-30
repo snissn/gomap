@@ -1483,16 +1483,17 @@ type Options struct {
 	// distant, keeping the tree clustered. Set to true to maximize write speed.
 	DisablePiggybackCompaction bool
 
-	// BackgroundCheckpointInterval enables periodic durable checkpoints in cached
-	// mode. A checkpoint creates a backend sync boundary and trims
-	// cached-mode WAL segments to keep `wal/` growth bounded.
+	// BackgroundCheckpointInterval enables periodic automatic WAL maintenance in
+	// cached mode. External command-WAL mode trims only segments covered by
+	// recovery-selectable durable roots; legacy or otherwise unwired modes use a
+	// full checkpoint.
 	//
 	// Semantics:
 	// - `0` uses a default.
 	// - `<0` disables the periodic interval trigger.
 	BackgroundCheckpointInterval time.Duration
-	// BackgroundCheckpointIdleDuration triggers an opportunistic checkpoint after
-	// a period of write-idleness in cached mode.
+	// BackgroundCheckpointIdleDuration triggers the same automatic WAL maintenance
+	// after a period of write-idleness in cached mode.
 	//
 	// Semantics:
 	// - `0` uses a default.
@@ -1517,10 +1518,10 @@ type Options struct {
 	// collection-root span debt thresholds are met (0 uses conservative defaults).
 	BackgroundIndexVacuumCollectionRootSpanRatioPPM uint32
 	BackgroundIndexVacuumCollectionRootPages        uint64
-	// MaxWALBytes triggers an immediate checkpoint in cached mode when the sum of
-	// WAL segment sizes exceeds this many bytes (0 uses a default; <0 disables the
-	// size trigger). This is an operational safety cap; it does not make each
-	// individual write durable (use *Sync APIs for that).
+	// MaxWALBytes triggers immediate automatic WAL maintenance in cached mode when
+	// reclaimable WAL bytes exceed this many bytes (0 uses a default; <0 disables
+	// the size trigger). External command-WAL maintenance does not publish the
+	// visible root frontier or make each write durable (use *Sync APIs for that).
 	MaxWALBytes int64
 }
 
@@ -3853,6 +3854,62 @@ func (db *DB) commitManualRootAttempt(newRootID uint64, basis StateToken, condit
 // visible with relaxed durability and now need those writes durable on disk.
 func (db *DB) Checkpoint() error {
 	return db.checkpoint(false)
+}
+
+// MaintainCommandWALCoveredPrefix rotates the physical command-WAL prefix and
+// removes only segments already covered by recovery-selectable durable roots.
+// Automatic cache maintenance uses this instead of Checkpoint so deferred root
+// publication remains under the existing coordinator's debt policy.
+func (db *DB) MaintainCommandWALCoveredPrefix() error {
+	if db == nil {
+		return ErrClosed
+	}
+	// Storage maintenance takes maintenanceMu before teardownMu. Preserve that
+	// order so leaf-generation GC cannot deadlock this cleanup path.
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+	if db.closing.Load() {
+		return ErrClosed
+	}
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	if hook := db.testStorageMaintenanceAfterLockHook; hook != nil {
+		if err := hook("command-wal-covered-prefix"); err != nil {
+			return err
+		}
+	}
+	// Keep the runtime and journal alive from the capability check through
+	// rotation and cleanup. Close takes this lock exclusively before tearing
+	// either resource down.
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	// Online vacuum replaces the runtime under db.mu. Snapshot it there before
+	// deciding whether covered-prefix maintenance is available; teardownMu keeps
+	// the DB runtime and journal alive through this pass.
+	db.mu.RLock()
+	hasRootPublication := db.rootPublication != nil && db.rootPublication.coordinator != nil
+	db.mu.RUnlock()
+	if !db.commandWAL || db.commandJournal == nil || !hasRootPublication {
+		return db.checkpoint(true)
+	}
+
+	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	rotated, advanced, err := db.closeCommandWALCheckpointPrefix()
+	unlockCommandWALPublish()
+	if err != nil {
+		return err
+	}
+	// A durable root can advance between automatic passes without another
+	// command-WAL append. Recheck already-closed segments in that case; the
+	// closed-byte counter avoids a cleanup scan for a truly idle journal.
+	if !rotated && !advanced && db.commandWALClosedBytes.Load() <= 0 {
+		return nil
+	}
+	return db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(true)
 }
 
 // checkpoint runs with maintenanceAlreadyHeld only for an enclosing backend

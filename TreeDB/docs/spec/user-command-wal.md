@@ -502,8 +502,13 @@ separate from `WALMaxSegmentBytes`, which remains a per-frame safety cap. A
 checkpoint boundary should rotate a non-empty active command-WAL segment before
 publishing `AppliedLSN`, then clean only segments whose max LSN is covered by
 the durable checkpointed state. In cached command-WAL mode, `MaxWALBytes`
-participates in the same auto-checkpoint pressure loop using total command-WAL
-segment bytes instead of the disabled legacy cached redo journal.
+participates in the auto-maintenance pressure loop using command-WAL segment
+bytes instead of the disabled legacy cached redo journal. In external
+command-WAL mode those automatic passes rotate and clean only the
+recovery-covered prefix without publishing the visible frontier; uncovered
+segments remain for a later durable frontier. Legacy or unwired backends fall
+back to a full checkpoint, and explicit `Checkpoint`, sync, and close remain
+full durable barriers.
 
 The V1 implementation target is an in-page-marked meta-page field named
 `AppliedCommandLSN`. It must be selected by the same meta-page choice as the
