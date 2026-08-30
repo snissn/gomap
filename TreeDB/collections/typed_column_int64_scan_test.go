@@ -40,6 +40,39 @@ func typedColumnInt64HostLittleEndianForTest() bool {
 	return *(*byte)(unsafe.Pointer(&value)) == 1
 }
 
+func TestTypedColumnInt64PreparedForegroundLifetimeIdleAndRun(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{10, 20, 30})
+
+	begins, ends, active := 0, 0, 0
+	unregister := d.RegisterForegroundReadObserver(func() {}, func() func() {
+		begins++
+		active++
+		return func() {
+			ends++
+			active--
+		}
+	})
+	defer unregister()
+
+	session, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+	if session.view.snapshot != nil || active != 0 || begins != ends {
+		t.Fatalf("prepared int64 snapshot=%p foreground begin/end/active=%d/%d/%d want nil balanced idle", session.view.snapshot, begins, ends, active)
+	}
+	before := begins
+	if _, err := session.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if active != 0 || begins != ends || begins != before+1 {
+		t.Fatalf("foreground begin/end/active after int64 Run=%d/%d/%d want one balanced operation", begins, ends, active)
+	}
+}
+
 func TestTypedColumnInt64ScanEqualityPredicate(t *testing.T) {
 	d, col := setupTypedColumnInt64ScanCollection(t)
 	defer func() { _ = d.Close() }()
