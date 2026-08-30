@@ -69,6 +69,10 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	if db.backend == nil {
 		return out, ErrClosed
 	}
+	mode, err := normalizeValueLogGCMode(opts.Mode)
+	if err != nil {
+		return out, err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -86,11 +90,6 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	db.endDeferredVectorBuild()
 	success := false
 	defer func() { finishMaintenance(success) }()
-
-	mode, err := normalizeValueLogGCMode(opts.Mode)
-	if err != nil {
-		return out, err
-	}
 
 	backendOpts := treedbdb.ValueLogGCOptions{DryRun: opts.DryRun}
 	if db.cached != nil {

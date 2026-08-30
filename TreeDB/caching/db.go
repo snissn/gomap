@@ -13876,6 +13876,9 @@ func (db *DB) leafGenerationPackMaintenanceContext(timeout time.Duration) (conte
 func (db *DB) vlogGenerationRewritePlanContext(timeout time.Duration, opts vlogGenerationMaintenanceOptions) (context.Context, context.CancelFunc) {
 	// Keep planner calls quiet-window-gated, but tolerate short foreground
 	// activity resumes so sub-second plan scans can complete.
+	if opts.deferredVectorFinalize {
+		return db.vlogGenerationMaintenanceContext(timeout, opts)
+	}
 	if opts.bypassQuiet {
 		if timeout > 0 {
 			return context.WithTimeout(context.Background(), timeout)
@@ -20697,6 +20700,10 @@ func (db *DB) FinalizeDeferredVectorBuildMaintenance(ctx context.Context) error 
 		runErr = ctx.Err()
 	}
 	if runErr == nil && !acquired && db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		paused, _ := vlogGenerationMaintenancePausedByFile()
+		if paused || db.suppressBackgroundVlogGenerationForMaintenancePhase() {
+			return nil
+		}
 		runErr = errors.New("cachingdb: deferred vector-build value-log maintenance was not admitted")
 	}
 	if runErr != nil {
@@ -22433,7 +22440,11 @@ planned:
 			var ctx context.Context
 			var cancel context.CancelFunc
 			if len(processedRewriteIDs) > 0 {
-				ctx, cancel = context.WithTimeout(context.Background(), vlogGenerationRewriteBoundedExecTimeout)
+				if opts.deferredVectorFinalize {
+					ctx, cancel = db.vlogGenerationMaintenanceContext(vlogGenerationRewriteBoundedExecTimeout, opts)
+				} else {
+					ctx, cancel = context.WithTimeout(context.Background(), vlogGenerationRewriteBoundedExecTimeout)
+				}
 			} else {
 				ctx, cancel = db.vlogGenerationMaintenanceContext(2*time.Minute, opts)
 			}
@@ -22537,7 +22548,13 @@ planned:
 					}
 				}
 				runGC := func(phase string) (backenddb.ValueLogGCStats, error) {
-					gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					var gcCtx context.Context
+					var gcCancel context.CancelFunc
+					if opts.deferredVectorFinalize {
+						gcCtx, gcCancel = db.vlogGenerationMaintenanceContext(30*time.Second, opts)
+					} else {
+						gcCtx, gcCancel = context.WithTimeout(context.Background(), 30*time.Second)
+					}
 					gcStart := time.Now()
 					gcAttempted = true
 					gcStats, gcErr := gcer.ValueLogGC(gcCtx, gcOpts)

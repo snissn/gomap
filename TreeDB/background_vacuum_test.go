@@ -932,6 +932,10 @@ func TestDeferredVectorBuildMaintenanceManualWrappersInvalidateEpoch(t *testing.
 		t.Fatalf("ValueLogGC error=%v want canceled", err)
 	}
 	assertActive("canceled ValueLogGC")
+	if _, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{Mode: ValueLogGCMode("invalid")}); err == nil {
+		t.Fatal("ValueLogGC invalid mode succeeded")
+	}
+	assertActive("invalid-mode ValueLogGC")
 
 	epochID := begin()
 	_ = d.CompactIndex()
