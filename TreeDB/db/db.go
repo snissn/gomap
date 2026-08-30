@@ -3834,9 +3834,9 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 	// deciding whether covered-prefix maintenance is available; teardownMu keeps
 	// the DB runtime and journal alive through this pass.
 	db.mu.RLock()
-	runtime := db.rootPublication
+	hasRootPublication := db.rootPublication != nil && db.rootPublication.coordinator != nil
 	db.mu.RUnlock()
-	if !db.commandWAL || db.commandJournal == nil || runtime == nil || runtime.coordinator == nil {
+	if !db.commandWAL || db.commandJournal == nil || !hasRootPublication {
 		return db.Checkpoint()
 	}
 
