@@ -32,7 +32,7 @@ const (
 	defaultVectorRecallBatchCells             = 1 << 20
 	defaultVectorIndexLiveDeltaRows           = 128 << 10
 	maxVectorIndexEagerNeighborCap            = 64
-	minVectorIndexParallelReciprocalNeighbors = 4
+	minVectorIndexParallelReciprocalNeighbors = 17
 )
 
 const (
