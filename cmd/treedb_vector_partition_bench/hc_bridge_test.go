@@ -210,13 +210,17 @@ func TestHCBridgeShutdownWaitsForInflightHandlerV1(t *testing.T) {
 	go func() { serveDone <- serveHCBridgeV1(ctx, server, listener, time.Second) }()
 	clientDone := make(chan error, 1)
 	go func() {
-		response, err := http.Get("http://" + listener.Addr().String())
+		response, err := (&http.Client{Timeout: time.Second}).Get("http://" + listener.Addr().String())
 		if response != nil {
 			response.Body.Close()
 		}
 		clientDone <- err
 	}()
-	<-started
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not start")
+	}
 	cancel()
 	select {
 	case err := <-serveDone:
@@ -224,10 +228,20 @@ func TestHCBridgeShutdownWaitsForInflightHandlerV1(t *testing.T) {
 	default:
 	}
 	close(release)
-	if err := <-serveDone; err != nil {
-		t.Fatal(err)
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not join")
 	}
-	if err := <-clientDone; err != nil {
-		t.Fatal(err)
+	select {
+	case err := <-clientDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("client did not finish")
 	}
 }
