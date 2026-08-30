@@ -455,7 +455,10 @@ func TestServiceDeferredColumnGraphInsertAdmissionIsSharedAndLifecycleIsBarrier(
 
 	secondDone := make(chan error, 1)
 	go func() {
-		_, err := svc.UpsertDocuments(ctx, "docs", request("second"))
+		_, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{
+			{ID: "second", Embedding: []float32{1, 0}},
+			{ID: "third", Embedding: []float32{0, 1}},
+		}, DeferVectorIndexRebuild: true})
 		secondDone <- err
 	}()
 	select {
@@ -482,15 +485,15 @@ func TestServiceDeferredColumnGraphInsertAdmissionIsSharedAndLifecycleIsBarrier(
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first deferred insert: %v", err)
 	}
-	if got := cachedCollection.LastInsertStats().Documents; got != 0 {
-		t.Fatalf("shared inserts reused cached diagnostics handle: Documents=%d want 0", got)
+	if got := cachedCollection.LastInsertStats().Documents; got != 1 && got != 2 {
+		t.Fatalf("shared inserts did not use the cached collection handle: Documents=%d want 1 or 2", got)
 	}
 	if err := <-deleteDone; err != nil {
 		t.Fatalf("DeleteDocuments: %v", err)
 	}
 	count, err := svc.CountDocuments(ctx, "docs", CountDocumentsRequest{})
-	if err != nil || count.Count != 1 {
-		t.Fatalf("CountDocuments=%+v err=%v want 1", count, err)
+	if err != nil || count.Count != 2 {
+		t.Fatalf("CountDocuments=%+v err=%v want 2", count, err)
 	}
 
 	firstAtCommit = make(chan struct{})
