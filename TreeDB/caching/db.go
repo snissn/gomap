@@ -20159,7 +20159,9 @@ func (db *DB) setVlogGenerationRewriteAgeBlockedUntil(deadline time.Time, automa
 	}
 	until := deadline.UnixNano()
 	db.vlogGenerationRewriteAgeBlockedUntilNS.Store(until)
-	db.vlogGenerationRewriteAgeBlockedAutomatic.Store(automatic)
+	if automatic {
+		db.vlogGenerationRewriteAgeBlockedAutomatic.Store(true)
+	}
 	if !db.vlogGenerationRewriteAgeBlockedWakeRunning.CompareAndSwap(false, true) {
 		return
 	}

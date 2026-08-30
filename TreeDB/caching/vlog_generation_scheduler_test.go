@@ -7857,7 +7857,7 @@ func TestVlogGenerationRewritePlan_AgeBlockedRetrySchedulesWakeup(t *testing.T) 
 	}
 }
 
-func TestVlogGenerationRewritePlan_AgeBlockedRetryReschedulesEarlierDeadline(t *testing.T) {
+func TestVlogGenerationRewritePlan_AgeBlockedRetryReschedulesEarlierDeadlineAndPreservesAutomaticBoundary(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
 	dir := t.TempDir()
@@ -7878,12 +7878,14 @@ func TestVlogGenerationRewritePlan_AgeBlockedRetryReschedulesEarlierDeadline(t *
 			RecordsCopied: 1,
 		},
 	}
+	boundary := &queuedRewriteBoundaryBackend{BackendDB: backend, recorder: recorder}
 
-	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	db, cleanup := openRewriteQueueTestDB(t, dir, boundary)
 	t.Cleanup(cleanup)
 	forceVlogMaintenanceIdle(db)
 
-	db.setVlogGenerationRewriteAgeBlockedUntil(time.Now().Add(2*time.Second), false)
+	boundary.resetBoundaryCalls()
+	db.setVlogGenerationRewriteAgeBlockedUntil(time.Now().Add(2*time.Second), true)
 	time.Sleep(20 * time.Millisecond)
 	start := time.Now()
 	db.setVlogGenerationRewriteAgeBlockedUntil(time.Now().Add(30*time.Millisecond), false)
@@ -7893,6 +7895,9 @@ func TestVlogGenerationRewritePlan_AgeBlockedRetryReschedulesEarlierDeadline(t *
 		if _, calls := recorder.recordedRewrite(); calls > 0 {
 			if waited := time.Since(start); waited > 500*time.Millisecond {
 				t.Fatalf("age-blocked retry honored shortened deadline too late: waited=%s", waited)
+			}
+			if checkpoints, vacuums := boundary.boundaryCalls(); checkpoints != 0 || vacuums != 0 {
+				t.Fatalf("automatic age-blocked retry boundaries: checkpoints=%d vacuums=%d, want 0/0", checkpoints, vacuums)
 			}
 			return
 		}
