@@ -36,6 +36,7 @@ type OperationsCountersV1 struct {
 	Failures, Requests, RPCs, Retries, Redirects, Candidates, Edges uint64
 	SnapshotPins, ReadProofs, GenerationPins, PartitionOpens        uint64
 	SelectedPartitions, SelectedGroups                              uint64
+	HNSWServedPartitions, ExactScanPartitions                       uint64
 	QueryBytes, RequestBytes, CandidateBytes, ResponseBytes         uint64
 }
 
@@ -190,6 +191,8 @@ func (o *OperationsV1) searchV1(ctx context.Context, request SearchRequestV1, se
 		o.counts.PartitionOpens += response.Counters.PartitionOpens
 		o.counts.SelectedPartitions += response.Counters.SelectedPartitions
 		o.counts.SelectedGroups += response.Counters.SelectedGroups
+		o.counts.HNSWServedPartitions += response.Counters.HNSWServedPartitions
+		o.counts.ExactScanPartitions += response.Counters.ExactScanPartitions
 		o.counts.QueryBytes += response.Counters.QueryBytes
 		o.counts.RequestBytes += response.Counters.RequestBytes
 		o.counts.CandidateBytes += response.Counters.CandidateBytes

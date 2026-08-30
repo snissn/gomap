@@ -579,13 +579,13 @@ func decodeVectorPartitionSearchResponseV1(src []byte, maxNeighbors int, limits 
 			response.Neighbors[i] = public.NeighborV1{ID: r.string(), Score: r.float32()}
 		}
 	}
-	var counters [16]uint64
+	var counters [18]uint64
 	for i := range counters {
 		counters[i] = r.u64()
 	}
 	response.Counters = public.SearchCountersV1{
 		SelectedPartitions: counters[0], SelectedGroups: counters[1], Requests: counters[2], RPCs: counters[3], Retries: counters[4], Redirects: counters[5], Candidates: counters[6], Edges: counters[7],
-		SnapshotPins: counters[8], ReadProofs: counters[9], GenerationPins: counters[10], PartitionOpens: counters[11], QueryBytes: counters[12], RequestBytes: counters[13], CandidateBytes: counters[14], ResponseBytes: counters[15],
+		SnapshotPins: counters[8], ReadProofs: counters[9], GenerationPins: counters[10], PartitionOpens: counters[11], QueryBytes: counters[12], RequestBytes: counters[13], CandidateBytes: counters[14], ResponseBytes: counters[15], HNSWServedPartitions: counters[16], ExactScanPartitions: counters[17],
 	}
 	var timings [20]time.Duration
 	for i := range timings {
@@ -662,8 +662,8 @@ func decodeVectorPartitionStatusV1(src []byte) (VectorPartitionStatusV1, error) 
 	return status, r.done()
 }
 
-func vectorPartitionCountersV1(c public.SearchCountersV1) [16]uint64 {
-	return [16]uint64{c.SelectedPartitions, c.SelectedGroups, c.Requests, c.RPCs, c.Retries, c.Redirects, c.Candidates, c.Edges, c.SnapshotPins, c.ReadProofs, c.GenerationPins, c.PartitionOpens, c.QueryBytes, c.RequestBytes, c.CandidateBytes, c.ResponseBytes}
+func vectorPartitionCountersV1(c public.SearchCountersV1) [18]uint64 {
+	return [18]uint64{c.SelectedPartitions, c.SelectedGroups, c.Requests, c.RPCs, c.Retries, c.Redirects, c.Candidates, c.Edges, c.SnapshotPins, c.ReadProofs, c.GenerationPins, c.PartitionOpens, c.QueryBytes, c.RequestBytes, c.CandidateBytes, c.ResponseBytes, c.HNSWServedPartitions, c.ExactScanPartitions}
 }
 
 func vectorPartitionTimingsV1(t public.SearchTimingV1) ([20]uint64, error) {

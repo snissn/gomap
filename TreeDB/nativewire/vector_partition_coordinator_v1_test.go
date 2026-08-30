@@ -2098,6 +2098,21 @@ func TestVectorPartitionCoordinatorResponseCountersTrackShardMaximaV1(t *testing
 	}
 }
 
+func TestVectorPartitionCoordinatorResponseCountersTrackServedRoutesV1(t *testing.T) {
+	response := VectorPartitionShardSearchResponseV1{Partials: []VectorPartitionShardSearchPartialV1{
+		{SearchRoute: collections.VectorPartitionSearchRouteHNSWSearchPackV1},
+		{SearchRoute: collections.VectorPartitionSearchRouteExactFP32ScanV1},
+		{SearchRoute: collections.VectorPartitionSearchRouteHNSWSearchPackV1},
+	}}
+	var counters VectorPartitionCoordinatorCountersV1
+	if !accumulateVectorPartitionCoordinatorResponseCountersV1(&counters, response) || counters.HNSWServedPartitions != 2 || counters.ExactScanPartitions != 1 {
+		t.Fatalf("route counters=%+v", counters)
+	}
+	if accumulateVectorPartitionCoordinatorResponseCountersV1(&counters, VectorPartitionShardSearchResponseV1{Partials: []VectorPartitionShardSearchPartialV1{{SearchRoute: "unknown"}}}) {
+		t.Fatal("unknown route accepted")
+	}
+}
+
 func TestVectorPartitionCoordinatorTimingAggregationRejectsOverflowV1(t *testing.T) {
 	tests := []struct {
 		name   string

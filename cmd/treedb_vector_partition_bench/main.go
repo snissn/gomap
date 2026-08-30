@@ -520,6 +520,9 @@ func run(args []string, stdout io.Writer) error {
 	if len(args) > 0 && args[0] == "system-search" {
 		return runVectorPartitionSystemSearchV1(args[1:], stdout)
 	}
+	if len(args) > 0 && (args[0] == "hc-bridge" || args[0] == "system-hc-bridge") {
+		return runVectorPartitionHCBridgeV1(args[1:], stdout)
+	}
 	if len(args) > 0 && args[0] == "system-bench" {
 		return runVectorPartitionSystemBenchV1(args[1:], stdout)
 	}
