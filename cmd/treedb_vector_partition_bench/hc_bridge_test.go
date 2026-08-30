@@ -185,3 +185,10 @@ func TestHCBridgeSearchDoesNotIssueStatusRPCV1(t *testing.T) {
 		t.Fatalf("status=%d calls=%+v", w.Code, client.calls)
 	}
 }
+
+func TestHCBridgeServerReservesTimeoutResponseGraceV1(t *testing.T) {
+	server := newHCBridgeServerV1(http.NotFoundHandler(), 5*time.Millisecond)
+	if server.WriteTimeout <= server.ReadTimeout || server.WriteTimeout-server.ReadTimeout != hcBridgeResponseGraceV1 {
+		t.Fatalf("server timeouts read=%s write=%s", server.ReadTimeout, server.WriteTimeout)
+	}
+}

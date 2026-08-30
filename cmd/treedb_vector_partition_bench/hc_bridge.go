@@ -19,6 +19,7 @@ import (
 )
 
 const hcBridgeVersionV1 = 1
+const hcBridgeResponseGraceV1 = time.Second
 
 type hcBridgeClientV1 interface {
 	callContext(context.Context, vectorPartitionOperationsWireRequestV1) (vectorPartitionOperationsWireResponseV1, error)
@@ -249,19 +250,34 @@ func runVectorPartitionHCBridgeV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Handler: b, ReadHeaderTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout, IdleTimeout: timeout}
+	server := newHCBridgeServerV1(b, timeout)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	serveDone := make(chan struct{})
+	shutdownDone := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		_ = server.Shutdown(shutdown)
+		select {
+		case <-ctx.Done():
+			shutdown, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			shutdownDone <- server.Shutdown(shutdown)
+		case <-serveDone:
+		}
 	}()
 	_, _ = fmt.Fprintf(stdout, "hc_bridge=%s endpoint=%s clients=%d\n", ln.Addr(), endpoint, maxClients)
 	err = server.Serve(ln)
+	close(serveDone)
+	if ctx.Err() != nil {
+		if shutdownErr := <-shutdownDone; shutdownErr != nil {
+			return shutdownErr
+		}
+	}
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
+}
+
+func newHCBridgeServerV1(handler http.Handler, timeout time.Duration) *http.Server {
+	return &http.Server{Handler: handler, ReadHeaderTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout + hcBridgeResponseGraceV1, IdleTimeout: timeout}
 }
