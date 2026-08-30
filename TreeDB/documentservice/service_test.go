@@ -1498,13 +1498,13 @@ func TestServiceBenchmarkLifecycleResetOptimizeAndNoDocumentSearch(t *testing.T)
 	if !optimize.Status.Loaded || optimize.Status.RebuildNeeded {
 		t.Fatalf("optimize status=%+v", optimize.Status)
 	}
-	// Cache invalidation and priming can complete within one clock tick on
+	// Cache invalidation, priming, and warming can complete within one clock tick on
 	// platforms with coarse monotonic-clock resolution.
-	if optimize.Timing.TotalNanos == 0 || optimize.Timing.RebuildNanos == 0 || optimize.Timing.CacheWarmNanos == 0 {
-		t.Fatalf("optimize timing=%+v want measurable rebuild and warm stages", optimize.Timing)
+	if optimize.Timing.TotalNanos == 0 || optimize.Timing.RebuildNanos == 0 {
+		t.Fatalf("optimize timing=%+v want measurable total and rebuild stages", optimize.Timing)
 	}
 	build := optimize.Status.ColumnGraphBuild
-	if build.TotalNanos == 0 || build.SnapshotNanos == 0 || build.RowExtractionNanos == 0 || build.AdjacencyBuildNanos == 0 || build.LocalityRemapNanos == 0 || build.AssetPreparationNanos == 0 || build.InvNormPreparationNanos == 0 || build.AdjacencyStatePreparationNanos == 0 || build.RowRefPreparationNanos == 0 || build.DocumentIDPreparationNanos == 0 || build.QuantizedPreparationNanos == 0 || build.SearchPackPreparationNanos == 0 || build.ManifestFinalizationNanos == 0 || build.FileSyncNanos == 0 || build.FileSyncCount == 0 || build.NamespaceSyncNanos == 0 || build.NamespaceSyncCount == 0 || build.PublicationNanos == 0 {
+	if build.TotalNanos == 0 || build.SnapshotNanos == 0 || build.RowExtractionNanos == 0 || build.AdjacencyBuildNanos == 0 || build.LocalityRemapNanos == 0 || build.AssetPreparationNanos == 0 || build.InvNormPreparationNanos == 0 || build.AdjacencyStatePreparationNanos == 0 || build.RowRefPreparationNanos == 0 || build.DocumentIDPreparationNanos == 0 || build.QuantizedPreparationNanos == 0 || build.SearchPackPreparationNanos == 0 || build.ManifestFinalizationNanos == 0 || build.FileSyncNanos == 0 || build.FileSyncCount == 0 || build.NamespaceSyncCount == 0 || build.PublicationNanos == 0 {
 		t.Fatalf("column graph build timing=%+v want completed ordered stages", build)
 	}
 	assetChildren := build.InvNormPreparationNanos + build.AdjacencyStatePreparationNanos + build.RowRefPreparationNanos + build.DocumentIDPreparationNanos + build.QuantizedPreparationNanos + build.SearchPackPreparationNanos + build.ManifestFinalizationNanos

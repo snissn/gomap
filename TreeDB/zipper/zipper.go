@@ -1399,13 +1399,25 @@ func (z *Zipper) newPooledLeafBuilder(data []byte, ops []batch.Entry) *node.Buil
 	return z.newPooledBuilderForType(data, page.PageTypeLeaf, ops)
 }
 
+// newPooledLeafBuilderWithEntryRevisions reuses the enclosing leaf's already
+// determined revision encoding when a split starts another builder.
+func (z *Zipper) newPooledLeafBuilderWithEntryRevisions(data []byte, ops []batch.Entry, entryRevisions bool) *node.Builder {
+	b := leafBuilderPool.Get().(*node.Builder)
+	b.ResetWithOptions(data, page.PageTypeLeaf, z.leafBuilderOptionsWithEntryRevisions(ops, entryRevisions))
+	return b
+}
+
 func (z *Zipper) leafBuilderOptions(ops []batch.Entry) node.BuilderOptions {
+	return z.leafBuilderOptionsWithEntryRevisions(ops, batchHasEntryRevisions(ops))
+}
+
+func (z *Zipper) leafBuilderOptionsWithEntryRevisions(ops []batch.Entry, entryRevisions bool) node.BuilderOptions {
 	base := node.BuilderOptions{
 		LeafPrefixCompression: z != nil && z.leafPrefixCompression,
 		LeafColumnar:          z != nil && z.indexColumnarLeaves,
 		PackedValuePtr:        z != nil && z.indexPackedValuePtr,
 		InternalBaseDelta:     z != nil && z.indexInternalBaseDelta,
-		EntryRevisions:        batchHasEntryRevisions(ops),
+		EntryRevisions:        entryRevisions,
 	}
 	if z == nil || !z.adaptiveLeafEncoding {
 		return base
@@ -2741,11 +2753,8 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			if insertedFromBatch && startIdx > 0 {
 				startIdx--
 			}
-			splitBuilder := z.newPooledLeafBuilder(sdata, ops[startIdx:])
+			splitBuilder := z.newPooledLeafBuilderWithEntryRevisions(sdata, ops[startIdx:], targetEntryRevisions)
 			splitBuilder.SetPageID(sid)
-			if targetEntryRevisions {
-				z.enableLeafBuilderEntryRevisions(splitBuilder, ops[startIdx:])
-			}
 
 			// Record split
 			// Use the full first key of the right node as the parent separator.
