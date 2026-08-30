@@ -985,26 +985,17 @@ func TestDeferredVectorBuildVlogMaintenanceFinalizeConsumesSnapshotAndPreservesN
 	if !db.deferredVectorBuildVlogMaintenanceDebt.Load() {
 		t.Fatal("finalizing request did not latch follow-up debt")
 	}
-	db.EndDeferredVectorBuildMaintenance(true)
-	if !db.deferredVectorBuildVlogMaintenanceDebt.Load() {
-		t.Fatal("release cleared debt raised after the finalization snapshot")
-	}
 	before = db.vlogGenerationMaintenanceAcquired.Load()
-	if acquired := db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
-		bypassQuiet:           true,
-		skipRetainedPruneWait: true,
-		skipCheckpoint:        true,
-		automatic:             true,
-		rewriteDebtDrain:      true,
-		debugSource:           "test_deferred_vector_followup",
-	}); !acquired {
-		t.Fatal("ordinary scheduler did not acquire the follow-up debt pass")
+	db.EndDeferredVectorBuildMaintenance(true)
+	deadline := time.Now().Add(schedulerTestWait(t))
+	for db.vlogGenerationMaintenanceAcquired.Load() == before && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
 	}
 	if got := db.vlogGenerationMaintenanceAcquired.Load() - before; got != 1 {
-		t.Fatalf("ordinary follow-up acquisitions=%d want 1", got)
+		t.Fatalf("scheduled follow-up acquisitions=%d want 1", got)
 	}
 	if db.deferredVectorBuildVlogMaintenanceDebt.Load() {
-		t.Fatal("ordinary scheduler did not consume follow-up debt")
+		t.Fatal("scheduled follow-up did not consume preserved debt")
 	}
 }
 
@@ -1173,6 +1164,29 @@ func TestDeferredVectorBuildVlogMaintenanceFinalizePropagatesCancellation(t *tes
 			t.Fatal("post-rewrite GC backend did not observe cancellation")
 		}
 	})
+}
+
+func TestDeferredVectorBuildVlogMaintenanceFinalizeRetainsPlannerDeadlineDebt(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{DB: backend, planErr: context.DeadlineExceeded}
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	if !db.BeginDeferredVectorBuildMaintenance() {
+		t.Fatal("begin deferred vector-build value-log maintenance suppression")
+	}
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
+	if err := db.FinalizeDeferredVectorBuildMaintenance(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("finalize error=%v want deadline exceeded", err)
+	}
+	if !db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		t.Fatal("planner deadline lost admitted debt")
+	}
+	db.EndDeferredVectorBuildMaintenance(false)
 }
 
 func testDeferredVectorBuildVlogMaintenanceCancellation(t *testing.T, db *DB, entered <-chan struct{}, release func()) {

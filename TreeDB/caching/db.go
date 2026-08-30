@@ -19897,6 +19897,10 @@ func isVlogGenerationPlannerCanceled(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
+func isVlogGenerationPlannerCancellationBenign(err error, opts vlogGenerationMaintenanceOptions) bool {
+	return !opts.deferredVectorFinalize && isVlogGenerationPlannerCanceled(err)
+}
+
 func atomicValueString(v *atomic.Value) string {
 	if v == nil {
 		return ""
@@ -20640,7 +20644,21 @@ func (db *DB) coalesceDeferredVectorBuildVlogMaintenance() bool {
 	if db.deferredVectorBuildVlogMaintenanceDebt.CompareAndSwap(false, true) {
 		db.deferredVectorBuildVlogMaintenanceDebtSet.Add(1)
 	}
+	// End may race between the state read and debt latch. In that case the
+	// coalesced caller has already returned, so hand the debt to the existing
+	// checkpoint-kick scheduler here as well as from End.
+	db.scheduleDeferredVectorBuildVlogMaintenanceDebt(false)
 	return true
+}
+
+func (db *DB) scheduleDeferredVectorBuildVlogMaintenanceDebt(automatic bool) {
+	if db == nil || db.closing.Load() ||
+		db.deferredVectorBuildVlogMaintenanceState.Load() != deferredVectorBuildVlogMaintenanceInactive ||
+		!db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		return
+	}
+	db.queueVlogGenerationCheckpointKick(automatic)
+	db.schedulePendingVlogGenerationCheckpointKick()
 }
 
 // FinalizeDeferredVectorBuildMaintenance consumes at most one coalesced
@@ -20721,12 +20739,13 @@ func (db *DB) FinalizeDeferredVectorBuildMaintenance(ctx context.Context) error 
 
 // EndDeferredVectorBuildMaintenance restores ordinary automatic scheduling.
 // Finalize consumes its admitted debt snapshot; any later, failed, or abandoned
-// debt remains latched until a normal scheduler pass observes it.
-func (db *DB) EndDeferredVectorBuildMaintenance(_ bool) {
+// debt is handed to the existing checkpoint-kick scheduler on release.
+func (db *DB) EndDeferredVectorBuildMaintenance(serviced bool) {
 	if db == nil {
 		return
 	}
 	db.deferredVectorBuildVlogMaintenanceState.Store(deferredVectorBuildVlogMaintenanceInactive)
+	db.scheduleDeferredVectorBuildVlogMaintenanceDebt(serviced)
 }
 
 func (db *DB) reportVlogGenerationMaintenanceError(opts vlogGenerationMaintenanceOptions, err error) {
@@ -21710,12 +21729,12 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			updatePlanTimestamp := false
 			if err != nil {
 				db.clearVlogGenerationRewriteAgeBlockedUntil()
-				if isVlogGenerationPlannerCanceled(err) {
+				if isVlogGenerationPlannerCancellationBenign(err, opts) {
 					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 					shouldRewrite = false
 					haveRewriteChunkPlan = false
 				}
-				if !isVlogGenerationPlannerCanceled(err) {
+				if !isVlogGenerationPlannerCancellationBenign(err, opts) {
 					updatePlanTimestamp = true
 					db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: generational rewrite chunk plan: %w", err))
 				}
@@ -21817,12 +21836,12 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			updatePlanTimestamp := false
 			if err != nil {
 				db.clearVlogGenerationRewriteAgeBlockedUntil()
-				if isVlogGenerationPlannerCanceled(err) {
+				if isVlogGenerationPlannerCancellationBenign(err, opts) {
 					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 					shouldRewrite = false
 					haveRewritePlan = false
 				}
-				if !isVlogGenerationPlannerCanceled(err) {
+				if !isVlogGenerationPlannerCancellationBenign(err, opts) {
 					updatePlanTimestamp = true
 					db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
 				}
@@ -21968,14 +21987,14 @@ planned:
 				db.observeVlogGenerationRewritePlanOutcomeWithDuration(plan, err, planDur)
 				if err != nil {
 					db.clearVlogGenerationRewriteAgeBlockedUntil()
-					if isVlogGenerationPlannerCanceled(err) {
+					if isVlogGenerationPlannerCancellationBenign(err, opts) {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 						// Foreground activity resumed while planning. Skip rewrite
 						// this cycle, but still allow GC to run below.
 						shouldRewrite = false
 						haveRewritePlan = false
 					}
-					if !isVlogGenerationPlannerCanceled(err) {
+					if !isVlogGenerationPlannerCancellationBenign(err, opts) {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
 						db.vlogGenerationRemapFailures.Add(1)
 						db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
