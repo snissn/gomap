@@ -10498,12 +10498,12 @@ func TestForegroundMaintenanceContextResumeGrace_ActiveReaderAtDeadlineEndsBefor
 		closeCh:                         make(chan struct{}),
 		testForegroundMaintenancePollCh: make(chan time.Time),
 	}
+	endRead := db.beginRawForegroundRead()
+	readStartedAt := time.Now()
+	defer endRead()
+
 	ctx, cancel := db.foregroundMaintenanceContextWithResumeGrace(0, resumeGrace)
 	defer cancel()
-
-	readStartedAt := time.Now()
-	endRead := db.beginRawForegroundRead()
-	defer endRead()
 	cutoff := time.Unix(0, db.foregroundMaintenanceGraceDeadlineUnixNano.Load())
 	if !readStartedAt.Before(cutoff) {
 		t.Fatalf("foreground read started at %v, not before grace cutoff %v", readStartedAt, cutoff)
