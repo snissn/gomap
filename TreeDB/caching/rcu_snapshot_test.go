@@ -607,6 +607,7 @@ func TestDB_GetRecordsForegroundGraceCrossing(t *testing.T) {
 	defer cdb.Close()
 
 	cdb.foregroundMaintenanceGraceState.Store(2)
+	cdb.activeForegroundIterators.publishGrace(2)
 	done := make(chan error, 1)
 	go func() {
 		_, err := cdb.Get([]byte("k"))
@@ -616,6 +617,9 @@ func TestDB_GetRecordsForegroundGraceCrossing(t *testing.T) {
 	case <-backend.started:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Get did not reach backend")
+	}
+	if transitioned, active := cdb.activeForegroundIterators.transitionGrace(2); !transitioned || active != 1 {
+		t.Fatalf("grace boundary: transitioned=%v active=%d want true,1", transitioned, active)
 	}
 	cdb.foregroundMaintenanceGraceState.Store(3)
 	close(backend.release)

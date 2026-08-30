@@ -333,7 +333,8 @@ func TestWrapForegroundIterator_AvoidsDoubleWrapAndCloseIsIdempotent(t *testing.
 	if got := db.activeForegroundIterators.Load(); got != 1 {
 		t.Fatalf("activeForegroundIterators after second wrap=%d want=1", got)
 	}
-	db.foregroundMaintenanceGraceState.Store(1)
+	db.foregroundMaintenanceGraceState.Store(3)
+	db.activeForegroundIterators.publishGrace(3)
 	if err := wrappedAgain.Close(); err != nil {
 		t.Fatalf("close wrapped iterator: %v", err)
 	}
@@ -349,6 +350,34 @@ func TestWrapForegroundIterator_AvoidsDoubleWrapAndCloseIsIdempotent(t *testing.
 	}
 	if got := db.foregroundMaintenanceGraceActivity.Load(); got != 1 {
 		t.Fatalf("foreground grace activity after second close=%d want=1", got)
+	}
+}
+func TestForegroundReaderStateBoundaryOrdering(t *testing.T) {
+	db := &DB{}
+	db.activeForegroundIterators.Store(1)
+	db.activeForegroundIterators.publishGrace(2)
+	db.foregroundMaintenanceGraceState.Store(2)
+
+	db.endForegroundRead()
+	transitioned, active := db.activeForegroundIterators.transitionGrace(2)
+	if !transitioned || active != 0 {
+		t.Fatalf("completion before boundary: transitioned=%v active=%d want true,0", transitioned, active)
+	}
+	if got := db.foregroundMaintenanceGraceActivity.Load(); got != 0 {
+		t.Fatalf("completion before boundary activity=%d want=0", got)
+	}
+
+	db.activeForegroundIterators.Store(1)
+	db.activeForegroundIterators.publishGrace(4)
+	db.foregroundMaintenanceGraceState.Store(4)
+	transitioned, active = db.activeForegroundIterators.transitionGrace(4)
+	if !transitioned || active != 1 {
+		t.Fatalf("boundary before completion: transitioned=%v active=%d want true,1", transitioned, active)
+	}
+	db.foregroundMaintenanceGraceState.Store(5)
+	db.endForegroundRead()
+	if got := db.foregroundMaintenanceGraceActivity.Load(); got != 1 {
+		t.Fatalf("completion after boundary activity=%d want=1", got)
 	}
 }
 
