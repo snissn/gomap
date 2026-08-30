@@ -1002,6 +1002,101 @@ func TestZipperInsertSplit(t *testing.T) {
 	// We can't easily check content without parsing, but ID check passed.
 }
 
+func TestZipperSplitPreservesLeafRevisionEncoding(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		outerLeafLog     bool
+		hasEarlyRevision bool
+	}{
+		{name: "pager_legacy", outerLeafLog: false},
+		{name: "pager_mixed_revisions", outerLeafLog: false, hasEarlyRevision: true},
+		{name: "outer_leaf_log_legacy", outerLeafLog: true},
+		{name: "outer_leaf_log_mixed_revisions", outerLeafLog: true, hasEarlyRevision: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+
+			z := New(p, &MockAllocator{p: p})
+			var leafLog *memoryLeafPageStore
+			if tc.outerLeafLog {
+				z.SetOuterLeavesInValueLog(true)
+				leafLog = newMemoryLeafPageStore(z)
+				z.SetLeafPageLog(leafLog)
+				z.SetLeafPageReader(leafLog)
+			}
+			rootID, err := p.Alloc(1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rootData, err := p.Get(rootID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := node.NewNode(rootData)
+			root.SetPageID(rootID)
+			root.SetType(page.PageTypeLeaf)
+			root.UpdateChecksum()
+
+			b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+			defer b.Close()
+			for i := 0; i < 200; i++ {
+				key := []byte(fmt.Sprintf("key-%03d", i))
+				if tc.hasEarlyRevision && i == 0 {
+					if err := b.SetWithRevision(key, []byte("value"), 1); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := b.Set(key, []byte("value")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			newRootID, _, _, err := z.Apply(rootID, b)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if tc.outerLeafLog {
+				if len(leafLog.pages) < 2 {
+					t.Fatalf("leaf-log pages=%d, want split", len(leafLog.pages))
+				}
+				for _, data := range leafLog.pages {
+					leaf := node.NewNodeView(data)
+					if got := leaf.LeafEntryRevisionsEnabled(); got != tc.hasEarlyRevision {
+						t.Fatalf("leaf revision flag=%v, want %v", got, tc.hasEarlyRevision)
+					}
+				}
+				return
+			}
+
+			rootData, err = p.Get(newRootID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root = node.NewNode(rootData)
+			if root.Type() != page.PageTypeInternal || root.Count() < 2 {
+				t.Fatalf("root type/count=%v/%d, want split internal root", root.Type(), root.Count())
+			}
+			for i := uint16(0); i < root.Count(); i++ {
+				ref, err := root.GetInternalChildRef(i)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data, err := p.Get(ref.Page)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := node.NewNode(data).LeafEntryRevisionsEnabled(); got != tc.hasEarlyRevision {
+					t.Fatalf("leaf %d revision flag=%v, want %v", i, got, tc.hasEarlyRevision)
+				}
+			}
+		})
+	}
+}
+
 func TestZipperUpdates(t *testing.T) {
 	// Setup same as above...
 	dir := t.TempDir()
