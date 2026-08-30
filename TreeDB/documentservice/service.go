@@ -421,7 +421,9 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 	insertDocs := make([][]byte, 0, len(prepared))
 	inserts := make([]preparedDocument, 0, len(prepared))
 	updates := make([]preparedDocument, 0)
-	startPhase(&upsertStats.ReadPreflightNanos)
+	if !sharedCandidate {
+		startPhase(&upsertStats.ReadPreflightNanos)
+	}
 	for _, doc := range prepared {
 		if err := ctxErr(ctx); err != nil {
 			return UpsertDocumentsResponse{}, err
@@ -429,6 +431,15 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 		ids = append(ids, doc.id)
 		if doc.compactEmbedding {
 			compactEmbeddings++
+		}
+		if sharedCandidate {
+			// Atomic InsertBatch is the existence check for the shared deferred
+			// column-graph path. A duplicate releases this admission and reruns
+			// the established exclusive replace-or-insert path below.
+			insertIDs = append(insertIDs, []byte(doc.id))
+			insertDocs = append(insertDocs, doc.raw)
+			inserts = append(inserts, doc)
+			continue
 		}
 		current, err := col.Get([]byte(doc.id))
 		if err != nil {
@@ -441,10 +452,6 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 			continue
 		}
 		updates = append(updates, doc)
-	}
-	if sharedCandidate && len(updates) != 0 {
-		release()
-		return s.upsertDocuments(ctx, index, req, false, diagnostics, upsertStats)
 	}
 	startPhase(&upsertStats.MaintenanceNanos)
 	deferredMaintenanceCommitRejected := false
