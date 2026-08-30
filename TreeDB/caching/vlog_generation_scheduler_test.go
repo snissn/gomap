@@ -7906,6 +7906,48 @@ func TestVlogGenerationRewritePlan_AgeBlockedRetryReschedulesEarlierDeadlineAndP
 	t.Fatalf("expected shortened age-blocked deadline to trigger deferred retry")
 }
 
+func TestVlogGenerationRewritePlan_AgeBlockedWakeRevalidatesAfterConcurrentClear(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	db, cleanup := openRewriteQueueTestDB(t, dir, backend)
+	t.Cleanup(cleanup)
+	holdVlogGenerationDeferredMaintenanceRunnerForTest(t, db)
+
+	stateRead := make(chan struct{})
+	releaseStateRead := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseStateRead) }) })
+	db.testAgeBlockedStateReadHook = func() {
+		close(stateRead)
+		<-releaseStateRead
+	}
+	db.setVlogGenerationRewriteAgeBlockedUntil(time.Now(), true)
+
+	select {
+	case <-stateRead:
+	case <-time.After(schedulerTestWait(t)):
+		t.Fatal("age-blocked wake did not reach state revalidation")
+	}
+	db.clearVlogGenerationRewriteAgeBlockedUntil()
+	releaseOnce.Do(func() { close(releaseStateRead) })
+
+	deadline := time.Now().Add(schedulerTestWait(t))
+	for db.vlogGenerationRewriteAgeBlockedWakeRunning.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("age-blocked wake did not exit after concurrent clear")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if db.vlogGenerationDeferredMaintenancePending.Load() {
+		t.Fatal("cleared age-blocked generation queued stale deferred maintenance")
+	}
+}
+
 func TestVlogGenerationRewrite_IneffectiveBackoffSkipsImmediateGenericRetry(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

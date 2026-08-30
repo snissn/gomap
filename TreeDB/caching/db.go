@@ -9607,6 +9607,7 @@ type DB struct {
 	vlogGenerationRewriteQueueRunning                            atomic.Bool
 	vlogGenerationRewriteStageWakeObservedNS                     atomic.Int64
 	vlogGenerationRewriteAgeBlockedAutomatic                     atomic.Bool
+	vlogGenerationRewriteAgeBlockedMu                            sync.Mutex
 	vlogGenerationRewriteStageAutomatic                          atomic.Bool
 	vlogGenerationMaintenancePendingMu                           sync.Mutex
 	vlogGenerationRewriteQueueMu                                 sync.Mutex
@@ -9783,6 +9784,7 @@ type DB struct {
 	testSkipRetainedPrune               bool
 	testSkipVlogCheckpointKick          bool
 	testSkipCheckpointAutoVacuum        bool
+	testAgeBlockedStateReadHook         func()
 }
 
 const (
@@ -20158,10 +20160,12 @@ func (db *DB) setVlogGenerationRewriteAgeBlockedUntil(deadline time.Time, automa
 		return
 	}
 	until := deadline.UnixNano()
+	db.vlogGenerationRewriteAgeBlockedMu.Lock()
 	db.vlogGenerationRewriteAgeBlockedUntilNS.Store(until)
 	if automatic {
 		db.vlogGenerationRewriteAgeBlockedAutomatic.Store(true)
 	}
+	db.vlogGenerationRewriteAgeBlockedMu.Unlock()
 	if !db.vlogGenerationRewriteAgeBlockedWakeRunning.CompareAndSwap(false, true) {
 		return
 	}
@@ -20199,10 +20203,16 @@ func (db *DB) setVlogGenerationRewriteAgeBlockedUntil(deadline time.Time, automa
 			if db.closing.Load() {
 				return
 			}
+			if hook := db.testAgeBlockedStateReadHook; hook != nil {
+				hook()
+			}
+			db.vlogGenerationRewriteAgeBlockedMu.Lock()
 			if db.vlogGenerationRewriteAgeBlockedUntilNS.Load() != expectedUntil {
+				db.vlogGenerationRewriteAgeBlockedMu.Unlock()
 				continue
 			}
 			automatic := db.vlogGenerationRewriteAgeBlockedAutomatic.Load()
+			db.vlogGenerationRewriteAgeBlockedMu.Unlock()
 			db.debugVlogMaintf(
 				"rewrite_plan age_blocked_retry_due retry_after_ms=%d",
 				delay.Milliseconds(),
@@ -20224,8 +20234,10 @@ func (db *DB) clearVlogGenerationRewriteAgeBlockedUntil() {
 	if db == nil {
 		return
 	}
+	db.vlogGenerationRewriteAgeBlockedMu.Lock()
 	db.vlogGenerationRewriteAgeBlockedUntilNS.Store(0)
 	db.vlogGenerationRewriteAgeBlockedAutomatic.Store(false)
+	db.vlogGenerationRewriteAgeBlockedMu.Unlock()
 }
 
 func (db *DB) clearVlogGenerationRewriteStageConfirmation(clearAutomatic bool) {
