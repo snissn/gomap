@@ -606,6 +606,13 @@ type VectorIndexSearchStats struct {
 	ScalarFilterAdmitted             uint64                 `json:"scalar_filter_admitted,omitempty"`
 	ScalarFilterUnderfill            uint64                 `json:"scalar_filter_underfill,omitempty"`
 	ScalarFilterExactScoring         uint64                 `json:"scalar_filter_exact_scoring,omitempty"`
+	ScalarFilterPlanCacheHits               uint64                 `json:"scalar_filter_plan_cache_hits,omitempty"`
+	ScalarFilterPlanCacheMisses             uint64                 `json:"scalar_filter_plan_cache_misses,omitempty"`
+	ScalarFilterPlanCacheInvalidations      uint64                 `json:"scalar_filter_plan_cache_invalidations,omitempty"`
+	ScalarFilterPlanCacheGenerationBypasses uint64                 `json:"scalar_filter_plan_cache_generation_bypasses,omitempty"`
+	ScalarFilterPlanCacheEvictions          uint64                 `json:"scalar_filter_plan_cache_evictions,omitempty"`
+	ScalarFilterPlanCacheEntries            uint64                 `json:"scalar_filter_plan_cache_entries,omitempty"`
+	ScalarFilterPlanCacheRetainedBytes      uint64                 `json:"scalar_filter_plan_cache_retained_bytes,omitempty"`
 }
 
 type vectorIndexSearchVisibility struct {
@@ -742,6 +749,13 @@ type VectorIndexSearchDiagnostics struct {
 	ScalarFilterAdmitted          uint64                                `json:"scalar_filter_admitted,omitempty"`
 	ScalarFilterUnderfill         bool                                  `json:"scalar_filter_underfill,omitempty"`
 	ScalarFilterExactScoring      bool                                  `json:"scalar_filter_exact_scoring,omitempty"`
+	ScalarFilterPlanCacheHits               uint64                                `json:"scalar_filter_plan_cache_hits,omitempty"`
+	ScalarFilterPlanCacheMisses             uint64                                `json:"scalar_filter_plan_cache_misses,omitempty"`
+	ScalarFilterPlanCacheInvalidations      uint64                                `json:"scalar_filter_plan_cache_invalidations,omitempty"`
+	ScalarFilterPlanCacheGenerationBypasses uint64                                `json:"scalar_filter_plan_cache_generation_bypasses,omitempty"`
+	ScalarFilterPlanCacheEvictions          uint64                                `json:"scalar_filter_plan_cache_evictions,omitempty"`
+	ScalarFilterPlanCacheEntries            uint64                                `json:"scalar_filter_plan_cache_entries,omitempty"`
+	ScalarFilterPlanCacheRetainedBytes      uint64                                `json:"scalar_filter_plan_cache_retained_bytes,omitempty"`
 }
 
 // VectorIndexSearchLiveANNDiagnostics proves that the selected query stayed on
@@ -787,6 +801,13 @@ func (s VectorIndexSearchStats) Diagnostics() VectorIndexSearchDiagnostics {
 		ScalarFilterAdmitted:          s.ScalarFilterAdmitted,
 		ScalarFilterUnderfill:         s.ScalarFilterUnderfill > 0,
 		ScalarFilterExactScoring:      s.ScalarFilterExactScoring > 0,
+		ScalarFilterPlanCacheHits:               s.ScalarFilterPlanCacheHits,
+		ScalarFilterPlanCacheMisses:             s.ScalarFilterPlanCacheMisses,
+		ScalarFilterPlanCacheInvalidations:      s.ScalarFilterPlanCacheInvalidations,
+		ScalarFilterPlanCacheGenerationBypasses: s.ScalarFilterPlanCacheGenerationBypasses,
+		ScalarFilterPlanCacheEvictions:          s.ScalarFilterPlanCacheEvictions,
+		ScalarFilterPlanCacheEntries:            s.ScalarFilterPlanCacheEntries,
+		ScalarFilterPlanCacheRetainedBytes:      s.ScalarFilterPlanCacheRetainedBytes,
 		LiveANN: VectorIndexSearchLiveANNDiagnostics{
 			Enabled:      s.SearchRouteNativeRuntime > 0,
 			FullRebuilds: s.NativeRuntimeFullRebuilds,
@@ -1477,8 +1498,9 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBufferCoverage(def Vector
 			return response, fmt.Errorf("%w: native_runtime vector index %q is not loaded: %s", ErrVectorIndexSearchUnavailable, def.Name, load.ExactFallbackReason)
 		}
 		var scalarPlan *nativeScalarFilterExecution
+		var scalarPlanCache nativeScalarPlanCacheStats
 		if opts.DeclaredScalarFilter != nil {
-			scalarPlan, err = c.planNativeScalarFilter(opts.DeclaredScalarFilter)
+			scalarPlan, scalarPlanCache, err = c.planNativeScalarFilter(opts.DeclaredScalarFilter, index, def)
 			if err != nil {
 				buffer.Reset()
 				return response, err
@@ -1532,6 +1554,13 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBufferCoverage(def Vector
 				if scalarPlan.exact() {
 					response.Stats.ScalarFilterExactScoring = 1
 				}
+				response.Stats.ScalarFilterPlanCacheHits = scalarPlanCache.hits
+				response.Stats.ScalarFilterPlanCacheMisses = scalarPlanCache.misses
+				response.Stats.ScalarFilterPlanCacheInvalidations = scalarPlanCache.invalidations
+				response.Stats.ScalarFilterPlanCacheGenerationBypasses = scalarPlanCache.generationBypasses
+				response.Stats.ScalarFilterPlanCacheEvictions = scalarPlanCache.evictions
+				response.Stats.ScalarFilterPlanCacheEntries = scalarPlanCache.entries
+				response.Stats.ScalarFilterPlanCacheRetainedBytes = scalarPlanCache.retainedBytes
 			}
 			response.visibility = vectorIndexSearchVisibility{
 				runtime:                  index,

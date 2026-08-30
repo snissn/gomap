@@ -437,6 +437,11 @@ type Collection struct {
 	vectorPreparedSearchMisses uint64
 	vectorPreparedSearchWaits  uint64
 	vectorPreparedSearchBuilds uint64
+	nativeScalarPlanCacheMu       sync.Mutex
+	nativeScalarPlanCache         map[nativeScalarPlanCacheKey]nativeScalarPlanCacheEntry
+	nativeScalarPlanCacheOrder    []nativeScalarPlanCacheKey
+	nativeScalarPlanCacheBytes    uint64
+
 
 	vectorBufferedSearchMu            sync.Mutex
 	vectorBufferedSearch              map[collectionVectorIndexPreparedSearchCacheSlot]*collectionVectorIndexPreparedSearchCacheEntry

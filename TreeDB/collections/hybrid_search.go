@@ -326,6 +326,13 @@ type HybridSearchStats struct {
 	ScalarFilterVisited            uint64                          `json:"scalar_filter_visited,omitempty"`
 	ScalarFilterUnderfill          uint64                          `json:"scalar_filter_underfill,omitempty"`
 	ScalarFilterExactScoring       uint64                          `json:"scalar_filter_exact_scoring,omitempty"`
+	ScalarFilterPlanCacheHits        uint64                          `json:"scalar_filter_plan_cache_hits,omitempty"`
+	ScalarFilterPlanCacheMisses      uint64                          `json:"scalar_filter_plan_cache_misses,omitempty"`
+	ScalarFilterPlanCacheInvalidations uint64                        `json:"scalar_filter_plan_cache_invalidations,omitempty"`
+	ScalarFilterPlanCacheGenerationBypasses uint64                   `json:"scalar_filter_plan_cache_generation_bypasses,omitempty"`
+	ScalarFilterPlanCacheEvictions   uint64                          `json:"scalar_filter_plan_cache_evictions,omitempty"`
+	ScalarFilterPlanCacheEntries     uint64                          `json:"scalar_filter_plan_cache_entries,omitempty"`
+	ScalarFilterPlanCacheRetainedBytes uint64                        `json:"scalar_filter_plan_cache_retained_bytes,omitempty"`
 	CandidatesFused                uint64                          `json:"candidates_fused,omitempty"`
 	CandidatesAfterFusion          uint64                          `json:"candidates_after_fusion,omitempty"`
 	FusionTextOnly                 uint64                          `json:"fusion_text_only,omitempty"`

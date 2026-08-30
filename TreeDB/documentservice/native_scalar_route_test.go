@@ -55,6 +55,10 @@ func TestServiceNativeScalarDenseAndVectorOnlyHybridParity(t *testing.T) {
 		dense.ScalarFilterScored != 2 ||
 		dense.ScalarFilterAdmitted != 2 ||
 		!dense.ScalarFilterExactScoring ||
+		dense.ScalarFilterPlanCacheMisses != 1 ||
+		dense.ScalarFilterPlanCacheHits != 0 ||
+		dense.ScalarFilterPlanCacheEntries == 0 ||
+		dense.ScalarFilterPlanCacheRetainedBytes == 0 ||
 		dense.ScalarFilterUnbounded != 0 ||
 		dense.ExactFallbacks != 0 ||
 		dense.FullDocumentScanFallbacks != 0 ||
@@ -72,6 +76,8 @@ func TestServiceNativeScalarDenseAndVectorOnlyHybridParity(t *testing.T) {
 	if hybrid.Stats.ScalarFilterPlan != dense.ScalarFilterPlan ||
 		hybrid.Stats.ScalarFilterExactScoring != 1 ||
 		!dense.ScalarFilterExactScoring ||
+		hybrid.Stats.ScalarFilterPlanCacheHits != 1 ||
+		hybrid.Stats.ScalarFilterPlanCacheMisses != 0 ||
 		len(hybrid.Documents) != len(dense.Documents) {
 		t.Fatalf("dense=%+v hybrid=%+v", dense, hybrid)
 	}

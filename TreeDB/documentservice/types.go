@@ -245,6 +245,13 @@ type DenseVectorSearchResponse struct {
 	ScalarFilterAdmitted             uint64                             `json:"scalar_filter_admitted"`
 	ScalarFilterExactScoring         bool                               `json:"scalar_filter_exact_scoring"`
 	ScalarFilterUnderfill            bool                               `json:"scalar_filter_underfill"`
+	ScalarFilterPlanCacheHits        uint64                             `json:"scalar_filter_plan_cache_hits"`
+	ScalarFilterPlanCacheMisses      uint64                             `json:"scalar_filter_plan_cache_misses"`
+	ScalarFilterPlanCacheInvalidations uint64                           `json:"scalar_filter_plan_cache_invalidations"`
+	ScalarFilterPlanCacheGenerationBypasses uint64                      `json:"scalar_filter_plan_cache_generation_bypasses"`
+	ScalarFilterPlanCacheEvictions   uint64                             `json:"scalar_filter_plan_cache_evictions"`
+	ScalarFilterPlanCacheEntries     uint64                             `json:"scalar_filter_plan_cache_entries"`
+	ScalarFilterPlanCacheRetainedBytes uint64                           `json:"scalar_filter_plan_cache_retained_bytes"`
 	ScalarFilterUnbounded            uint64                             `json:"scalar_filter_unbounded"`
 	ExactFallbacks                   uint64                             `json:"exact_fallbacks"`
 	FullDocumentScanFallbacks        uint64                             `json:"full_document_scan_fallbacks"`
