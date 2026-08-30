@@ -2361,6 +2361,7 @@ type vectorIndexFrozenPrefixCommitScratch struct {
 }
 
 type vectorIndexFrozenPrefixDiversityScratch struct {
+	neighbors      []vectorIndexNeighbor
 	rowIDs         []uint32
 	dots           []float32
 	indexedBatches uint64
@@ -2660,9 +2661,13 @@ func (idx *VectorIndex) linkFrozenPrefixReciprocalGroupLocked(links []vectorInde
 		return false
 	}
 	neighbors := idx.nodes[fromNodeID].neighbors[layer]
+	candidates := neighbors
+	if dotScratch != nil {
+		candidates = append(dotScratch.neighbors[:0], neighbors...)
+	}
 	for _, link := range links {
 		duplicate := false
-		for _, existing := range neighbors {
+		for _, existing := range candidates {
 			if existing.nodeID == link.toNodeID {
 				duplicate = true
 				break
@@ -2673,18 +2678,24 @@ func (idx *VectorIndex) linkFrozenPrefixReciprocalGroupLocked(links []vectorInde
 		}
 		distance, ok := normalizeVectorIndexEdgeDistance(idx.distanceBetweenNodesLocked(fromNodeID, link.toNodeID))
 		if ok {
-			neighbors = append(neighbors, vectorIndexNeighbor{nodeID: link.toNodeID, distance: distance})
+			candidates = append(candidates, vectorIndexNeighbor{nodeID: link.toNodeID, distance: distance})
 		}
 	}
 	limit := idx.maxNeighborsForLayer(layer)
-	candidateCount := len(neighbors)
+	candidateCount := len(candidates)
 	pruned := candidateCount > limit
 	if pruned {
 		if context == nil {
-			neighbors = idx.pruneLayerNeighborsWithFrozenPrefixScratchLocked(neighbors, limit, dotScratch)
+			candidates = idx.pruneLayerNeighborsWithFrozenPrefixScratchLocked(candidates, limit, dotScratch)
 		} else {
-			neighbors = idx.pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked(neighbors, limit, dotScratch, context)
+			candidates = idx.pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked(candidates, limit, dotScratch, context)
 		}
+	}
+	if dotScratch != nil {
+		dotScratch.neighbors = candidates
+		neighbors = append(neighbors[:0], candidates...)
+	} else {
+		neighbors = candidates
 	}
 	if context != nil {
 		context.recordGroup(len(links), candidateCount, len(neighbors))
