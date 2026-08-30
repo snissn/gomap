@@ -11,6 +11,11 @@ import (
 
 func TestInsertBatchWithStatsValidatedFloat32ProjectionOwnsAndPublishesVectors(t *testing.T) {
 	dir, d, col := openValidatedFloat32ProjectionCollection(t, 3)
+	defer func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	}()
 	vectors := [][]float32{{1, 0, 0}, {0, 1, 0}}
 	ids := [][]byte{[]byte("a"), []byte("b")}
 	documents := validatedFloat32ProjectionDocuments(t, ids, vectors)
@@ -29,7 +34,7 @@ func TestInsertBatchWithStatsValidatedFloat32ProjectionOwnsAndPublishesVectors(t
 		validatedFloat32ProjectionDocuments(t, [][]byte{[]byte("fallback")}, [][]float32{{0, 0, 1}}),
 	); err != nil {
 		t.Fatalf("ordinary InsertBatchWithStats: %v", err)
-	} else if fallback.ColumnPublishValidatedFloat32ProjectionRows != 0 || fallback.ColumnPublishDocumentExtraction == 0 {
+	} else if fallback.ColumnPublishValidatedFloat32ProjectionRows != 0 || fallback.ColumnPublishRows != 1 {
 		t.Fatalf("ordinary insert stats=%+v want parser fallback", fallback)
 	}
 	if _, _, err := col.InsertBatchWithStatsValidatedFloat32Projection(
@@ -59,6 +64,7 @@ func TestInsertBatchWithStatsValidatedFloat32ProjectionOwnsAndPublishesVectors(t
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	d = nil
 
 	reopened := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopened.Close() }()
