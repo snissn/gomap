@@ -21,7 +21,7 @@ class UnifiedBenchSuitesHeadroomContractTests(unittest.TestCase):
 
     def test_bigkeys_has_an_independent_bounded_job(self) -> None:
         self.assertIn("name: bigkeys_guard (linux)", self.bigkeys)
-        self.assertRegex(self.bigkeys, r"(?m)^    timeout-minutes: 25$")
+        self.assertRegex(self.bigkeys, r"(?m)^    timeout-minutes: 35$")
         self.assertRegex(self.suites, r"(?m)^    timeout-minutes: 20$")
         self.assertNotIn("Suite: bigkeys_guard", self.suites)
         self.assertNotIn(
@@ -39,7 +39,7 @@ class UnifiedBenchSuitesHeadroomContractTests(unittest.TestCase):
             self.suites,
         )
         self.assertIn(
-            "run: ./bin/unified-bench -suite bigkeys_guard -keys 1000000 -seed 1 -progress=false -max-wall 20m -max-rss-mb 4096",
+            "run: ./bin/unified-bench -suite bigkeys_guard -keys 1000000 -seed 1 -progress=false -max-wall 30m -max-rss-mb 4096",
             self.bigkeys,
         )
 
