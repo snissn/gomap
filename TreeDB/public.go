@@ -1744,7 +1744,7 @@ func (db *DB) Close() error {
 	// closing storage; new finalizers fail the closed gate on either side of the
 	// lock acquisition.
 	db.bgVac.runMu.Lock()
-	db.bgVac.endDeferredVectorBuild()
+	db.endDeferredVectorBuild()
 	db.bgVac.runMu.Unlock()
 	var err error
 	if db.cached != nil || db.backend != nil {
@@ -2544,7 +2544,7 @@ func (db *DB) compactIndex(allowClosing bool) error {
 	if db.bgVac.deferredVectorBuildClosed.Load() && !allowClosing {
 		return ErrClosed
 	}
-	db.bgVac.endDeferredVectorBuild()
+	db.endDeferredVectorBuild()
 
 	if db.cached != nil {
 		if err := db.cached.Drain(); err != nil {
@@ -2585,7 +2585,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, allowClosing bool) error {
 	if db.bgVac.deferredVectorBuildClosed.Load() && !allowClosing {
 		return ErrClosed
 	}
-	db.bgVac.endDeferredVectorBuild()
+	db.endDeferredVectorBuild()
 	_, err := db.vacuumIndexOnlineStats(ctx)
 	if err == nil {
 		db.bgVac.deferredVectorBuildDebt.Store(false)

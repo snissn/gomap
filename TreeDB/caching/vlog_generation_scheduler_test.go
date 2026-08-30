@@ -886,6 +886,342 @@ func TestMaybeRunVlogGenerationMaintenanceWithOptions_TracksCollision(t *testing
 	}
 }
 
+func TestDeferredVectorBuildVlogMaintenanceCoalescesBeforeSchedulerAdmission(t *testing.T) {
+	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	if !db.BeginDeferredVectorBuildMaintenance() {
+		t.Fatal("begin deferred vector-build value-log maintenance suppression")
+	}
+	for range 10 {
+		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
+	}
+	if got := db.vlogGenerationMaintenanceAttempts.Load(); got != 0 {
+		t.Fatalf("scheduler attempts=%d want 0", got)
+	}
+	if got := db.vlogGenerationMaintenanceAcquired.Load(); got != 0 {
+		t.Fatalf("scheduler acquisitions=%d want 0", got)
+	}
+	if got := db.deferredVectorBuildVlogMaintenanceSkips.Load(); got != 10 {
+		t.Fatalf("deferred skips=%d want 10", got)
+	}
+	if got := db.deferredVectorBuildVlogMaintenanceDebtSet.Load(); got != 1 {
+		t.Fatalf("deferred debt sets=%d want 1", got)
+	}
+	if !db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		t.Fatal("suppressed attempts did not retain coalesced debt")
+	}
+	db.EndDeferredVectorBuildMaintenance(false)
+}
+
+func TestDeferredVectorBuildVlogMaintenanceBeginWaitsForAdmittedPass(t *testing.T) {
+	db := &DB{}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	db.vlogGenerationMaintenanceActive.Store(true)
+	first := make(chan bool, 1)
+	second := make(chan bool, 1)
+	go func() { first <- db.BeginDeferredVectorBuildMaintenance() }()
+	go func() { second <- db.BeginDeferredVectorBuildMaintenance() }()
+	select {
+	case <-first:
+		t.Fatal("first begin returned while maintenance remained active")
+	case <-second:
+		t.Fatal("second begin returned while maintenance remained active")
+	case <-time.After(20 * time.Millisecond):
+	}
+	db.checkpointMu.Lock()
+	db.vlogGenerationMaintenanceActive.Store(false)
+	db.checkpointCond.Broadcast()
+	db.checkpointMu.Unlock()
+	if !<-first || !<-second {
+		t.Fatal("begin failed after the admitted pass released")
+	}
+	db.EndDeferredVectorBuildMaintenance(false)
+}
+
+func TestDeferredVectorBuildVlogMaintenanceFinalizeConsumesSnapshotAndPreservesNewDebt(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	db, err := Open(dir, backend, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("open cache: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if !db.BeginDeferredVectorBuildMaintenance() {
+		t.Fatal("begin deferred vector-build value-log maintenance suppression")
+	}
+	for range 10 {
+		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
+	}
+	before := db.vlogGenerationMaintenanceAcquired.Load()
+	if err := db.FinalizeDeferredVectorBuildMaintenance(context.Background()); err != nil {
+		t.Fatalf("finalize deferred value-log maintenance: %v", err)
+	}
+	if got := db.vlogGenerationMaintenanceAcquired.Load() - before; got > 1 {
+		t.Fatalf("finalization acquisitions=%d want at most 1", got)
+	}
+	if db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		t.Fatal("successful finalization retained coalesced debt")
+	}
+
+	// A request arriving after the finalization pass but before the outer vector
+	// build releases suppression belongs to a later ordinary scheduler pass.
+	skipsBefore := db.deferredVectorBuildVlogMaintenanceSkips.Load()
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
+	if got := db.deferredVectorBuildVlogMaintenanceSkips.Load() - skipsBefore; got != 1 {
+		t.Fatalf("finalizing skips=%d want 1", got)
+	}
+	if !db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		t.Fatal("finalizing request did not latch follow-up debt")
+	}
+	before = db.vlogGenerationMaintenanceAcquired.Load()
+	db.EndDeferredVectorBuildMaintenance(true)
+	deadline := time.Now().Add(schedulerTestWait(t))
+	for db.vlogGenerationMaintenanceAcquired.Load() == before && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := db.vlogGenerationMaintenanceAcquired.Load() - before; got != 1 {
+		t.Fatalf("scheduled follow-up acquisitions=%d want 1", got)
+	}
+	if db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		t.Fatal("scheduled follow-up did not consume preserved debt")
+	}
+}
+
+func TestDeferredVectorBuildVlogMaintenanceFinalizeFailsClosedWithoutAdmission(t *testing.T) {
+	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	if !db.BeginDeferredVectorBuildMaintenance() {
+		t.Fatal("begin deferred vector-build value-log maintenance suppression")
+	}
+	db.deferredVectorBuildVlogMaintenanceDebt.Store(true)
+	db.vlogGenerationMaintenanceActive.Store(true)
+	// A nil condition emulates an invalid scheduler ownership handoff without
+	// blocking the test. Finalization must not mistake the collision for success.
+	db.checkpointCond = nil
+	if err := db.FinalizeDeferredVectorBuildMaintenance(context.Background()); err == nil {
+		t.Fatal("finalization succeeded without acquiring its debt pass")
+	}
+	if !db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		t.Fatal("failed finalization lost coalesced debt")
+	}
+	db.vlogGenerationMaintenanceActive.Store(false)
+	db.EndDeferredVectorBuildMaintenance(false)
+}
+
+func TestDeferredVectorBuildVlogMaintenanceFinalizeRetainsAdministrativeDebt(t *testing.T) {
+	t.Run("pause file", func(t *testing.T) {
+		pauseFile := filepath.Join(t.TempDir(), "vlog-maintenance.pause")
+		if err := os.WriteFile(pauseFile, []byte("pause"), 0o600); err != nil {
+			t.Fatalf("write pause file: %v", err)
+		}
+		t.Setenv(envVlogGenerationMaintenancePauseFile, pauseFile)
+		testDeferredVectorBuildVlogMaintenanceAdministrativeDebt(t, nil)
+	})
+	t.Run("restore phase", func(t *testing.T) {
+		testDeferredVectorBuildVlogMaintenanceAdministrativeDebt(t, func(db *DB) {
+			db.SetMaintenancePhase(MaintenancePhaseRestore)
+		})
+	})
+}
+
+func testDeferredVectorBuildVlogMaintenanceAdministrativeDebt(t *testing.T, configure func(*DB)) {
+	t.Helper()
+	db := &DB{
+		valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
+		closeCh:                  make(chan struct{}),
+	}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	if configure != nil {
+		configure(db)
+	}
+	if !db.BeginDeferredVectorBuildMaintenance() {
+		t.Fatal("begin deferred vector-build value-log maintenance suppression")
+	}
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
+	if err := db.FinalizeDeferredVectorBuildMaintenance(context.Background()); err != nil {
+		t.Fatalf("administratively ineligible finalization: %v", err)
+	}
+	if !db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		t.Fatal("administratively ineligible finalization lost debt")
+	}
+	if got := db.deferredVectorBuildVlogMaintenanceFailures.Load(); got != 0 {
+		t.Fatalf("administrative finalization failures=%d want 0", got)
+	}
+	db.EndDeferredVectorBuildMaintenance(false)
+}
+
+func TestDeferredVectorBuildVlogMaintenanceFinalizePropagatesCancellation(t *testing.T) {
+	t.Run("planner", func(t *testing.T) {
+		prepareDirectSchedulerTest(t)
+		dir := t.TempDir()
+		backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+		if err != nil {
+			t.Fatalf("open backend: %v", err)
+		}
+		blocking := &blockingRewritePlannerBackend{
+			DB:        backend,
+			planStart: make(chan struct{}),
+			planBlock: make(chan struct{}),
+		}
+		db, cleanup := openRewriteQueueTestDB(t, dir, blocking)
+		t.Cleanup(cleanup)
+		testDeferredVectorBuildVlogMaintenanceCancellation(t, db, blocking.planStart, blocking.unblockPlan)
+		completed, canceled := blocking.recordedPlanOutcomes()
+		if completed != 0 || canceled != 1 {
+			t.Fatalf("planner outcomes completed=%d canceled=%d want 0/1", completed, canceled)
+		}
+	})
+
+	t.Run("selected rewrite", func(t *testing.T) {
+		prepareDirectSchedulerTest(t)
+		dir := t.TempDir()
+		backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+		if err != nil {
+			t.Fatalf("open backend: %v", err)
+		}
+		blocking := &blockingRewriteOnlineBackend{
+			DB:             backend,
+			planResponse:   backenddb.ValueLogRewritePlan{SourceFileIDs: []uint32{11}, SelectedBytesLive: 64},
+			rewriteEntered: make(chan struct{}),
+			rewriteRelease: make(chan struct{}),
+		}
+		db, cleanup := openRewriteQueueTestDB(t, dir, blocking)
+		t.Cleanup(cleanup)
+		db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+		var releaseOnce sync.Once
+		testDeferredVectorBuildVlogMaintenanceCancellation(t, db, blocking.rewriteEntered, func() {
+			releaseOnce.Do(func() { close(blocking.rewriteRelease) })
+		})
+		if got := blocking.recordedRewriteCalls(); got != 1 {
+			t.Fatalf("rewrite calls=%d want 1", got)
+		}
+	})
+
+	t.Run("post-rewrite gc", func(t *testing.T) {
+		prepareDirectSchedulerTest(t)
+		dir := t.TempDir()
+		backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+		if err != nil {
+			t.Fatalf("open backend: %v", err)
+		}
+		gcEntered := make(chan struct{})
+		gcRelease := make(chan struct{})
+		gcCanceled := make(chan struct{})
+		var enterOnce, releaseOnce, canceledOnce sync.Once
+		recorder := &rewriteBudgetRecordingBackend{
+			DB: backend,
+			planResponse: backenddb.ValueLogRewritePlan{
+				SourceFileIDs:      []uint32{11},
+				SelectedBytesTotal: 128,
+				SelectedBytesLive:  64,
+				SelectedBytesStale: 64,
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{{
+					FileID: 11, BytesTotal: 128, BytesLive: 64, BytesStale: 64, StaleRatio: 0.5,
+				}},
+			},
+			rewriteResponse: backenddb.ValueLogRewriteStats{
+				BytesBefore:                64,
+				BytesAfter:                 32,
+				RecordsCopied:              1,
+				SourceSegmentsRequested:    1,
+				SourceSegmentsUnreferenced: 1,
+				SourceBytesRequested:       64,
+				SourceBytesUnreferenced:    64,
+				SourceFileIDsUnreferenced:  []uint32{11},
+			},
+			gcFn: func(ctx context.Context, _ backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error) {
+				enterOnce.Do(func() { close(gcEntered) })
+				select {
+				case <-ctx.Done():
+					canceledOnce.Do(func() { close(gcCanceled) })
+					return backenddb.ValueLogGCStats{}, ctx.Err()
+				case <-gcRelease:
+					return backenddb.ValueLogGCStats{}, nil
+				}
+			},
+		}
+		db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+		t.Cleanup(cleanup)
+		db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+		testDeferredVectorBuildVlogMaintenanceCancellation(t, db, gcEntered, func() {
+			releaseOnce.Do(func() { close(gcRelease) })
+		})
+		select {
+		case <-gcCanceled:
+		default:
+			t.Fatal("post-rewrite GC backend did not observe cancellation")
+		}
+	})
+}
+
+func TestDeferredVectorBuildVlogMaintenanceFinalizeRetainsPlannerDeadlineDebt(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{DB: backend, planErr: context.DeadlineExceeded}
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	if !db.BeginDeferredVectorBuildMaintenance() {
+		t.Fatal("begin deferred vector-build value-log maintenance suppression")
+	}
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
+	if err := db.FinalizeDeferredVectorBuildMaintenance(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("finalize error=%v want deadline exceeded", err)
+	}
+	if !db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		t.Fatal("planner deadline lost admitted debt")
+	}
+	db.EndDeferredVectorBuildMaintenance(false)
+}
+
+func testDeferredVectorBuildVlogMaintenanceCancellation(t *testing.T, db *DB, entered <-chan struct{}, release func()) {
+	t.Helper()
+	t.Cleanup(release)
+	if !db.BeginDeferredVectorBuildMaintenance() {
+		t.Fatal("begin deferred vector-build value-log maintenance suppression")
+	}
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- db.FinalizeDeferredVectorBuildMaintenance(ctx) }()
+	select {
+	case <-entered:
+	case err := <-done:
+		t.Fatalf("finalization ended before backend call: %v", err)
+	case <-time.After(schedulerTestWait(t)):
+		t.Fatal("finalization backend call did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("finalize error=%v want canceled", err)
+		}
+	case <-time.After(schedulerTestWait(t)):
+		t.Fatal("finalization backend call did not observe cancellation")
+	}
+	if !db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		t.Fatal("canceled finalization lost admitted debt")
+	}
+	db.EndDeferredVectorBuildMaintenance(false)
+}
+
 func TestShouldRunVlogGenerationIndexVacuum_TracksSkipReasons(t *testing.T) {
 	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
 	now := time.Now()
