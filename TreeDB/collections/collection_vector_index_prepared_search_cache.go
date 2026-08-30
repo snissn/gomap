@@ -709,6 +709,11 @@ func (p *collectionVectorIndexPreparedSearch) SearchOwnedNoDocuments(opts Vector
 	if p == nil {
 		return response, errors.New("collections: nil collection vector index prepared search")
 	}
+	endForegroundRead := noCollectionForegroundReadEnd
+	if p.collection != nil {
+		endForegroundRead = p.collection.db.BeginForegroundRead()
+	}
+	defer endForegroundRead()
 	var localScratch columnVectorGraphNativeSearchScratch
 	if scratch == nil {
 		scratch = &localScratch
@@ -718,6 +723,9 @@ func (p *collectionVectorIndexPreparedSearch) SearchOwnedNoDocuments(opts Vector
 	if p.closed || p.pack == nil {
 		response.Stats = VectorIndexSearchStats{HNSWSearchPackClosed: 1, HNSWSearchPackFallbacks: 1}
 		return response, errColumnHNSWSearchPackPreparedViewClosed
+	}
+	if p.searchStartedForTest != nil {
+		p.searchStartedForTest()
 	}
 	status := p.pack.fastStatus(p.packStatus)
 	if status != columnHNSWSearchPackPreparedStatusDirect && status != columnHNSWSearchPackPreparedStatusHeap {
