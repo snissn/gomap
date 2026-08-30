@@ -104,6 +104,50 @@ func TestServiceDeferredColumnGraphLoadPrimesAndReusesCachedHandle(t *testing.T)
 	}
 }
 
+func TestServiceDeferredColumnGraphOptimisticUpsertFallsBackForExistingDocuments(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	svc.DiagnosticsHandler(nil)
+	createBenchmarkColumnGraphIndex(t, svc, "optimistic_upsert")
+
+	unique, err := svc.UpsertDocuments(ctx, "optimistic_upsert", UpsertDocumentsRequest{Documents: []Document{
+		{ID: "existing", Content: "first", Embedding: []float32{1, 0}},
+		{ID: "unique", Content: "second", Embedding: []float32{0, 1}},
+	}, DeferVectorIndexRebuild: true})
+	if err != nil {
+		t.Fatalf("unique deferred upsert: %v", err)
+	}
+	if unique.Inserted != 2 || unique.Updated != 0 || unique.Upserted != 2 {
+		t.Fatalf("unique response=%+v want two inserts", unique)
+	}
+	if stats := svc.DiagnosticsSnapshot(nil).Upsert; stats.ReadPreflightNanos != 0 || stats.InsertNanos == 0 {
+		t.Fatalf("unique deferred diagnostics=%+v want no read preflight and one insert batch", stats)
+	}
+
+	mixed, err := svc.UpsertDocuments(ctx, "optimistic_upsert", UpsertDocumentsRequest{Documents: []Document{
+		{ID: "existing", Content: "replacement", Embedding: []float32{0, 1}},
+		{ID: "new", Content: "third", Embedding: []float32{1, 0}},
+	}, DeferVectorIndexRebuild: true})
+	if err != nil {
+		t.Fatalf("mixed deferred upsert: %v", err)
+	}
+	if mixed.Inserted != 1 || mixed.Updated != 1 || mixed.Upserted != 2 {
+		t.Fatalf("mixed response=%+v want one insert and one update", mixed)
+	}
+	listed, err := svc.FilterDocuments(ctx, "optimistic_upsert", FilterDocumentsRequest{Limit: 10})
+	if err != nil {
+		t.Fatalf("FilterDocuments: %v", err)
+	}
+	contents := make(map[string]string, len(listed.Documents))
+	for _, doc := range listed.Documents {
+		contents[doc.ID] = doc.Content
+	}
+	if len(contents) != 3 || contents["existing"] != "replacement" || contents["unique"] != "second" || contents["new"] != "third" {
+		t.Fatalf("documents after fallback=%+v", listed.Documents)
+	}
+}
+
 func TestServiceBenchmarkVectorSearchCacheConcurrentReuse(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
