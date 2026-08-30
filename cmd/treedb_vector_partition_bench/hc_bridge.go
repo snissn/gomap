@@ -26,10 +26,13 @@ type hcBridgeClientV1 interface {
 }
 
 type hcBridgeV1 struct {
-	clients chan hcBridgeClientV1
-	timeout time.Duration
-	maxBody int64
+	clients          chan *hcBridgeSlotV1
+	redial           func(context.Context) (hcBridgeClientV1, error)
+	nodeConfigSHA256 string
+	timeout          time.Duration
+	maxBody          int64
 }
+type hcBridgeSlotV1 struct{ client hcBridgeClientV1 }
 
 type hcBridgeSearchRequestV1 struct {
 	Version    int       `json:"version"`
@@ -50,16 +53,31 @@ func newHCBridgeV1(endpoint string, maxClients int, maxBody int64, timeout time.
 	if endpoint == "" || maxClients < 1 || maxClients > 256 || maxBody < 1 || maxBody > 16<<20 || timeout <= 0 || timeout > time.Minute {
 		return nil, errors.New("invalid hc bridge bounds")
 	}
-	b := &hcBridgeV1{clients: make(chan hcBridgeClientV1, maxClients), timeout: timeout, maxBody: maxBody}
+	b := &hcBridgeV1{clients: make(chan *hcBridgeSlotV1, maxClients), timeout: timeout, maxBody: maxBody}
+	b.redial = func(ctx context.Context) (hcBridgeClientV1, error) {
+		client, err := dialVectorPartitionOperationsV1(ctx, endpoint)
+		if err != nil {
+			return nil, err
+		}
+		response, err := client.callContext(ctx, vectorPartitionOperationsWireRequestV1{SchemaVersion: hcBridgeVersionV1, Operation: "status"})
+		if err != nil || response.NodeConfigSHA256 == "" || (b.nodeConfigSHA256 != "" && response.NodeConfigSHA256 != b.nodeConfigSHA256) {
+			_ = client.Close()
+			return nil, errors.New("hc bridge nativewire identity preflight failed")
+		}
+		if b.nodeConfigSHA256 == "" {
+			b.nodeConfigSHA256 = response.NodeConfigSHA256
+		}
+		return client, nil
+	}
 	for range maxClients {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		client, err := dialVectorPartitionOperationsV1(ctx, endpoint)
+		client, err := b.redial(ctx)
 		cancel()
 		if err != nil {
 			b.Close()
 			return nil, err
 		}
-		b.clients <- client
+		b.clients <- &hcBridgeSlotV1{client: client}
 	}
 	return b, nil
 }
@@ -70,7 +88,10 @@ func (b *hcBridgeV1) Close() error {
 	}
 	var err error
 	for len(b.clients) > 0 {
-		err = errors.Join(err, (<-b.clients).Close())
+		slot := <-b.clients
+		if slot.client != nil {
+			err = errors.Join(err, slot.client.Close())
+		}
 	}
 	return err
 }
@@ -80,9 +101,21 @@ func (b *hcBridgeV1) call(ctx context.Context, request vectorPartitionOperations
 		return vectorPartitionOperationsWireResponseV1{}, io.ErrClosedPipe
 	}
 	select {
-	case client := <-b.clients:
-		defer func() { b.clients <- client }()
-		return client.callContext(ctx, request)
+	case slot := <-b.clients:
+		defer func() { b.clients <- slot }()
+		if slot.client == nil {
+			var err error
+			slot.client, err = b.redial(ctx)
+			if err != nil {
+				return vectorPartitionOperationsWireResponseV1{}, err
+			}
+		}
+		response, err := slot.client.callContext(ctx, request)
+		if err != nil {
+			_ = slot.client.Close()
+			slot.client = nil
+		}
+		return response, err
 	case <-ctx.Done():
 		return vectorPartitionOperationsWireResponseV1{}, ctx.Err()
 	}
@@ -108,6 +141,7 @@ func (b *hcBridgeV1) status(w http.ResponseWriter, r *http.Request) {
 		hcBridgeWriteErrorV1(w, hcBridgeStatusV1(err), "unavailable")
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		Version          int                      `json:"version"`
 		Route            string                   `json:"route"`
@@ -148,17 +182,8 @@ func (b *hcBridgeV1) search(w http.ResponseWriter, r *http.Request) {
 		}
 		ids[i] = n
 	}
-	status, err := b.call(ctx, vectorPartitionOperationsWireRequestV1{SchemaVersion: hcBridgeVersionV1, Operation: "status"})
-	if err != nil || status.Health == nil || status.NodeConfigSHA256 == "" {
-		hcBridgeWriteErrorV1(w, http.StatusBadGateway, "missing_status_identity")
-		return
-	}
-	if len(response.Search.Neighbors) != request.TopK || response.Search.Counters.SelectedPartitions > uint64(request.Probes) || response.Search.Counters.HNSWServedPartitions+response.Search.Counters.ExactScanPartitions != response.Search.Counters.SelectedPartitions {
+	if len(response.Search.Neighbors) != request.TopK || response.Search.Counters.SelectedPartitions != uint64(request.Probes) || response.Search.Counters.SelectedPartitions == 0 || response.Search.Counters.HNSWServedPartitions > response.Search.Counters.SelectedPartitions || response.Search.Counters.ExactScanPartitions != response.Search.Counters.SelectedPartitions-response.Search.Counters.HNSWServedPartitions {
 		hcBridgeWriteErrorV1(w, http.StatusBadGateway, "incomplete_route_proof")
-		return
-	}
-	if status.Health.Generation.Index != request.Index || status.Health.Generation.Generation != request.Generation || !status.Health.Ready || status.Health.State != public.GenerationActiveV1 {
-		hcBridgeWriteErrorV1(w, http.StatusBadGateway, "status_identity_mismatch")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -171,7 +196,7 @@ func (b *hcBridgeV1) search(w http.ResponseWriter, r *http.Request) {
 		IDs              []uint64                `json:"ids"`
 		Scores           []float32               `json:"scores"`
 		Counters         public.SearchCountersV1 `json:"counters"`
-	}{hcBridgeVersionV1, nativewire.VectorPartitionRouteV1, status.NodeConfigSHA256, request.Index, request.Generation, ids, hcBridgeScoresV1(response.Search.Neighbors), response.Search.Counters})
+	}{hcBridgeVersionV1, nativewire.VectorPartitionRouteV1, b.nodeConfigSHA256, request.Index, request.Generation, ids, hcBridgeScoresV1(response.Search.Neighbors), response.Search.Counters})
 }
 
 func hcBridgeScoresV1(neighbors []public.NeighborV1) []float32 {

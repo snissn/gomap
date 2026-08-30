@@ -28,8 +28,7 @@ func TestHCBridgeRejectsNonLoopbackV1(t *testing.T) {
 }
 
 func TestHCBridgeStatusAndSearchIdentityV1(t *testing.T) {
-	b := &hcBridgeV1{clients: make(chan hcBridgeClientV1, 1), timeout: time.Second, maxBody: 1024}
-	b.clients <- &hcBridgeFakeClientV1{search: public.SearchResponseV1{Generation: public.GenerationIDV1{Index: "idx", Generation: 7}, Neighbors: []public.NeighborV1{{ID: "doc-000042", Score: .5}}, Counters: public.SearchCountersV1{SelectedPartitions: 1, HNSWServedPartitions: 1}}}
+	b := hcBridgeTestV1(&hcBridgeFakeClientV1{search: public.SearchResponseV1{Generation: public.GenerationIDV1{Index: "idx", Generation: 7}, Neighbors: []public.NeighborV1{{ID: "doc-000042", Score: .5}}, Counters: public.SearchCountersV1{SelectedPartitions: 1, HNSWServedPartitions: 1}}})
 	for _, tc := range []struct {
 		method, path, body string
 		want               int
@@ -44,8 +43,7 @@ func TestHCBridgeStatusAndSearchIdentityV1(t *testing.T) {
 }
 
 func TestHCBridgeRejectsNonCanonicalNeighborIDV1(t *testing.T) {
-	b := &hcBridgeV1{clients: make(chan hcBridgeClientV1, 1), timeout: time.Second, maxBody: 1024}
-	b.clients <- &hcBridgeFakeClientV1{search: public.SearchResponseV1{Generation: public.GenerationIDV1{Index: "idx", Generation: 7}, Neighbors: []public.NeighborV1{{ID: "42"}}}}
+	b := hcBridgeTestV1(&hcBridgeFakeClientV1{search: public.SearchResponseV1{Generation: public.GenerationIDV1{Index: "idx", Generation: 7}, Neighbors: []public.NeighborV1{{ID: "42"}}}})
 	r := httptest.NewRequest(http.MethodPost, "/v1/search", strings.NewReader(`{"version":1,"index":"idx","generation":7,"query":[1],"top_k":1,"probes":1,"ef_search":1}`))
 	w := httptest.NewRecorder()
 	b.ServeHTTP(w, r)
@@ -55,11 +53,18 @@ func TestHCBridgeRejectsNonCanonicalNeighborIDV1(t *testing.T) {
 }
 
 func TestHCBridgeStatusPoolAcquireHonorsConfiguredDeadlineV1(t *testing.T) {
-	b := &hcBridgeV1{clients: make(chan hcBridgeClientV1), timeout: 5 * time.Millisecond, maxBody: 1024}
+	b := &hcBridgeV1{clients: make(chan *hcBridgeSlotV1), timeout: 5 * time.Millisecond, maxBody: 1024}
 	started := time.Now()
 	w := httptest.NewRecorder()
 	b.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/status", nil))
 	if w.Code != http.StatusGatewayTimeout || time.Since(started) > time.Second {
 		t.Fatalf("status=%d elapsed=%s", w.Code, time.Since(started))
 	}
+}
+
+func hcBridgeTestV1(client hcBridgeClientV1) *hcBridgeV1 {
+	b := &hcBridgeV1{clients: make(chan *hcBridgeSlotV1, 1), timeout: time.Second, maxBody: 1024, nodeConfigSHA256: "node"}
+	b.clients <- &hcBridgeSlotV1{client: client}
+	b.redial = func(context.Context) (hcBridgeClientV1, error) { return client, nil }
+	return b
 }
