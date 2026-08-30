@@ -10431,7 +10431,8 @@ func TestVlogGenerationRewritePlan_OneShotReadBlipDoesNotCancelLongPlan(t *testi
 		t.Fatalf("rewrite plan did not start")
 	}
 
-	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
+	endRead := db.beginRawForegroundRead()
+	endRead()
 	staleAndBeyondGrace := vlogGenerationRewritePlanResumeGrace
 	if staleAndBeyondGrace < foregroundReadStampMaxAge {
 		staleAndBeyondGrace = foregroundReadStampMaxAge
@@ -10456,6 +10457,72 @@ func TestVlogGenerationRewritePlan_OneShotReadBlipDoesNotCancelLongPlan(t *testi
 	if got := db.vlogGenerationRewritePlanCanceled.Load(); got != 0 {
 		t.Fatalf("plan canceled=%d want=0", got)
 	}
+}
+
+func TestForegroundMaintenanceContextResumeGrace_WriteBoundaryOrdering(t *testing.T) {
+	waitForBoundary := func(db *DB) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for db.foregroundMaintenanceGraceState.Load()&1 == 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("grace boundary was not published")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	t.Run("write_inside_grace_is_absorbed", func(t *testing.T) {
+		db := &DB{closeCh: make(chan struct{})}
+		ctx, cancel := db.foregroundMaintenanceContextWithResumeGrace(2*time.Second, 50*time.Millisecond)
+		defer cancel()
+		db.noteWrite()
+		waitForBoundary(db)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("inside-grace write canceled maintenance: %v", ctx.Err())
+		case <-time.After(2 * foregroundMaintenancePollInterval()):
+		}
+	})
+
+	t.Run("write_after_deadline_cancels_with_delayed_boundary", func(t *testing.T) {
+		db := &DB{closeCh: make(chan struct{})}
+		ctx, cancel := db.foregroundMaintenanceContextWithResumeGrace(2*time.Second, 50*time.Millisecond)
+		defer cancel()
+		db.foregroundMaintenanceGraceMu.Lock()
+		time.Sleep(75 * time.Millisecond)
+		db.foregroundMaintenanceGraceMu.Unlock()
+		db.noteWrite()
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * foregroundMaintenancePollInterval()):
+			t.Fatal("post-boundary write did not cancel maintenance")
+		}
+	})
+	t.Run("read_after_deadline_cancels_with_delayed_boundary", func(t *testing.T) {
+		db := &DB{closeCh: make(chan struct{})}
+		ctx, cancel := db.foregroundMaintenanceContextWithResumeGrace(2*time.Second, 50*time.Millisecond)
+		defer cancel()
+		db.beginForegroundRead()
+		db.foregroundMaintenanceGraceMu.Lock()
+		time.Sleep(75 * time.Millisecond)
+		ended := make(chan struct{})
+		go func() {
+			db.endForegroundRead()
+			close(ended)
+		}()
+		db.foregroundMaintenanceGraceMu.Unlock()
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * foregroundMaintenancePollInterval()):
+			t.Fatal("post-boundary read did not cancel maintenance")
+		}
+		select {
+		case <-ended:
+		case <-time.After(2 * foregroundMaintenancePollInterval()):
+			t.Fatal("post-boundary read did not finish")
+		}
+	})
+
 }
 
 func TestVlogGenerationRewritePlan_CancelBackoffSkipsImmediateRetry(t *testing.T) {

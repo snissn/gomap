@@ -193,7 +193,8 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 		}
 	}
 	defer recordSelection()
-	db.noteRead()
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
