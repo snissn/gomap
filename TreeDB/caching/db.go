@@ -7334,7 +7334,7 @@ func (db *DB) waitForRetainedValueLogPruneQuietOrForce(quietWindow time.Duration
 	}
 }
 
-func (db *DB) queueRetainedPruneObservedSourceIDs(ids []uint32) {
+func (db *DB) queueRetainedPruneObservedSourceIDs(ids []uint32, automatic bool) {
 	if db == nil || len(ids) == 0 {
 		return
 	}
@@ -7348,22 +7348,27 @@ func (db *DB) queueRetainedPruneObservedSourceIDs(ids []uint32) {
 		}
 		db.retainedPruneObservedSourceIDs[id] = struct{}{}
 	}
+	if automatic {
+		db.retainedPruneObservedAutomatic = true
+	}
 	db.retainedPruneObservedMu.Unlock()
 }
 
-func (db *DB) takeRetainedPruneObservedSourceIDs() map[uint32]struct{} {
+func (db *DB) takeRetainedPruneObservedSourceIDs() (map[uint32]struct{}, bool) {
 	if db == nil {
-		return nil
+		return nil, false
 	}
 	db.retainedPruneObservedMu.Lock()
 	if len(db.retainedPruneObservedSourceIDs) == 0 {
 		db.retainedPruneObservedMu.Unlock()
-		return nil
+		return nil, false
 	}
 	out := db.retainedPruneObservedSourceIDs
+	automatic := db.retainedPruneObservedAutomatic
 	db.retainedPruneObservedSourceIDs = nil
+	db.retainedPruneObservedAutomatic = false
 	db.retainedPruneObservedMu.Unlock()
-	return out
+	return out, automatic
 }
 
 func (db *DB) retainedPruneObservedSourcePending() bool {
@@ -7704,7 +7709,7 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 			db.retainedValueLogPruneForcedRuns.Add(1)
 		}
 		db.retainedValueLogPruneLastUnixNano.Store(now.UnixNano())
-		observedSourceIDs := db.takeRetainedPruneObservedSourceIDs()
+		observedSourceIDs, automatic := db.takeRetainedPruneObservedSourceIDs()
 		db.observeRetainedValueLogPruneStart(effectiveForce, len(observedSourceIDs), false, now)
 		pruneStats := db.pruneRetainedValueLogsWithObservedContextOptions(pruneCtx, effectiveForce, observedSourceIDs, retainedValueLogPruneRunOptions{
 			fullLiveIDScanBudget: db.retainedPruneBackgroundFullLiveIDScanBudget(),
@@ -7715,7 +7720,7 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 			// When a retained prune processes rewrite-observed source segments,
 			// queue a near-term maintenance pass so GC can re-check reclaim state.
 			db.queueVlogGenerationObservedSourceGCIDs(observedSourceIDs)
-			db.vlogGenerationCheckpointKickPending.Store(true)
+			db.queueVlogGenerationCheckpointKick(automatic)
 		}
 	}()
 }
@@ -9370,6 +9375,7 @@ type DB struct {
 	retainedPruneFullLiveIDScanBudget                            time.Duration
 	retainedPruneObservedMu                                      sync.Mutex
 	retainedPruneObservedSourceIDs                               map[uint32]struct{}
+	retainedPruneObservedAutomatic                               bool
 	vlogGenerationObservedGCMu                                   sync.Mutex
 	vlogGenerationObservedGCSourceIDs                            map[uint32]struct{}
 	vlogGenerationObservedGCQueuedBatches                        atomic.Uint64
@@ -9509,6 +9515,7 @@ type DB struct {
 	vlogGenerationChurnBytes                                     atomic.Uint64
 	vlogGenerationSchedulerState                                 atomic.Uint32
 	vlogGenerationMaintenanceActive                              atomic.Bool
+	vlogGenerationMaintenanceAutomatic                           atomic.Bool
 	vlogGenerationMaintenanceAttempts                            atomic.Uint64
 	vlogGenerationMaintenanceAcquired                            atomic.Uint64
 	vlogGenerationMaintenanceCollisions                          atomic.Uint64
@@ -9594,6 +9601,7 @@ type DB struct {
 	vlogGenerationRewriteQueuePendingAutomatic                   atomic.Bool
 	vlogGenerationRewriteQueueRunning                            atomic.Bool
 	vlogGenerationRewriteStageWakeObservedNS                     atomic.Int64
+	vlogGenerationRewriteAgeBlockedAutomatic                     atomic.Bool
 	vlogGenerationMaintenancePendingMu                           sync.Mutex
 	vlogGenerationRewriteQueueMu                                 sync.Mutex
 	vlogGenerationCheckpointKickActive                           atomic.Bool
@@ -20105,12 +20113,13 @@ func shouldDeferVlogGenerationRewritePlanForAge(plan backenddb.ValueLogRewritePl
 	return plan.BytesStale > 0
 }
 
-func (db *DB) setVlogGenerationRewriteAgeBlockedUntil(deadline time.Time) {
+func (db *DB) setVlogGenerationRewriteAgeBlockedUntil(deadline time.Time, automatic bool) {
 	if db == nil {
 		return
 	}
 	until := deadline.UnixNano()
 	db.vlogGenerationRewriteAgeBlockedUntilNS.Store(until)
+	db.vlogGenerationRewriteAgeBlockedAutomatic.Store(automatic)
 	if !db.vlogGenerationRewriteAgeBlockedWakeRunning.CompareAndSwap(false, true) {
 		return
 	}
@@ -20151,6 +20160,7 @@ func (db *DB) setVlogGenerationRewriteAgeBlockedUntil(deadline time.Time) {
 			if db.vlogGenerationRewriteAgeBlockedUntilNS.Load() != expectedUntil {
 				continue
 			}
+			automatic := db.vlogGenerationRewriteAgeBlockedAutomatic.Load()
 			db.debugVlogMaintf(
 				"rewrite_plan age_blocked_retry_due retry_after_ms=%d",
 				delay.Milliseconds(),
@@ -20158,7 +20168,8 @@ func (db *DB) setVlogGenerationRewriteAgeBlockedUntil(deadline time.Time) {
 			db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
 				bypassQuiet:           true,
 				skipRetainedPruneWait: true,
-				skipCheckpoint:        false,
+				skipCheckpoint:        automatic,
+				automatic:             automatic,
 				rewriteDebtDrain:      true,
 				debugSource:           "rewrite_age_blocked",
 			})
@@ -20172,6 +20183,7 @@ func (db *DB) clearVlogGenerationRewriteAgeBlockedUntil() {
 		return
 	}
 	db.vlogGenerationRewriteAgeBlockedUntilNS.Store(0)
+	db.vlogGenerationRewriteAgeBlockedAutomatic.Store(false)
 }
 
 func (db *DB) clearVlogGenerationRewriteStageConfirmation() {
@@ -20192,13 +20204,14 @@ func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 		return
 	}
 	db.vlogGenerationRewriteStageWakeObservedNS.Store(observedAt)
+	automatic := db.vlogGenerationMaintenanceAutomatic.Load()
 	dueAt := time.Unix(0, observedAt).Add(vlogGenerationRewriteStageConfirmDelay)
 	delay := time.Until(dueAt)
 	if delay < 0 {
 		delay = 0
 	}
 	db.wg.Add(1)
-	go func(expectedObservedAt int64, wait time.Duration) {
+	go func(expectedObservedAt int64, wait time.Duration, automatic bool) {
 		defer db.wg.Done()
 		if wait > 0 {
 			timer := time.NewTimer(wait)
@@ -20229,11 +20242,12 @@ func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 		db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
 			bypassQuiet:           true,
 			skipRetainedPruneWait: true,
-			skipCheckpoint:        false,
+			skipCheckpoint:        automatic,
+			automatic:             automatic,
 			rewriteDebtDrain:      true,
 			debugSource:           "rewrite_stage_confirm",
 		})
-	}(observedAt, delay)
+	}(observedAt, delay, automatic)
 }
 
 func (db *DB) vlogGenerationRewriteAgeBlockedDue(now time.Time) bool {
@@ -20727,6 +20741,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		return
 	}
 	acquired = true
+	db.vlogGenerationMaintenanceAutomatic.Store(opts.automatic)
 	db.vlogGenerationMaintenanceAcquired.Add(1)
 	rewriteRunsBefore := db.vlogGenerationRewriteRuns.Load()
 	gcRunsBefore := db.vlogGenerationGCRuns.Load()
@@ -20752,6 +20767,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		db.vlogGenerationDeferredMaintenancePending.Load(),
 	)
 	defer func() {
+		db.vlogGenerationMaintenanceAutomatic.Store(false)
 		passDur := time.Since(activeStart)
 		db.debugVlogMaintf(
 			"maintenance_active_release source=%s dur_ms=%d checkpoint_pending=%t deferred_pending=%t",
@@ -21219,7 +21235,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 						return
 					}
 				}
-				db.setVlogGenerationRewriteAgeBlockedUntil(now.Add(chunkPlan.AgeBlockedMinRemainingAge))
+				db.setVlogGenerationRewriteAgeBlockedUntil(now.Add(chunkPlan.AgeBlockedMinRemainingAge), opts.automatic)
 				db.debugVlogMaintf(
 					"rewrite_chunk_plan stale_ratio_trigger age_blocked chunks=%d stale_bytes=%d retry_after_ms=%d min_age_ms=%d",
 					chunkPlan.AgeBlockedChunks,
@@ -21324,7 +21340,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 						return
 					}
 				}
-				db.setVlogGenerationRewriteAgeBlockedUntil(now.Add(plan.AgeBlockedMinRemainingAge))
+				db.setVlogGenerationRewriteAgeBlockedUntil(now.Add(plan.AgeBlockedMinRemainingAge), opts.automatic)
 				db.debugVlogMaintf(
 					"rewrite_plan stale_ratio_trigger age_blocked segments=%d stale_bytes=%d retry_after_ms=%d min_age_ms=%d",
 					plan.AgeBlockedSegments,
@@ -21459,7 +21475,7 @@ planned:
 				}
 				if len(plan.SourceFileIDs) == 0 {
 					if shouldDeferVlogGenerationRewritePlanForAge(plan, db.valueLogRewriteMinSegmentAge) {
-						db.setVlogGenerationRewriteAgeBlockedUntil(now.Add(plan.AgeBlockedMinRemainingAge))
+						db.setVlogGenerationRewriteAgeBlockedUntil(now.Add(plan.AgeBlockedMinRemainingAge), opts.automatic)
 						db.debugVlogMaintf(
 							"rewrite_plan pre_rewrite age_blocked segments=%d stale_bytes=%d retry_after_ms=%d min_age_ms=%d",
 							plan.AgeBlockedSegments,
@@ -22114,7 +22130,7 @@ planned:
 						gcStats = gcStatsAfterPrune
 					} else {
 						if assumeUnreferencedObserved && len(observedRewriteSourceIDs) > 0 {
-							db.queueRetainedPruneObservedSourceIDs(observedRewriteSourceIDs)
+							db.queueRetainedPruneObservedSourceIDs(observedRewriteSourceIDs, opts.automatic)
 						}
 						// A prune is already in flight. Ensure a follow-up attempt stays queued.
 						db.scheduleRetainedValueLogPruneForce()
@@ -22139,7 +22155,7 @@ planned:
 					// processed stale payload in-pass. Kick an eager retained prune so
 					// lifecycle pins can drain without waiting for byte-pressure gates.
 					if assumeUnreferencedObserved && len(observedRewriteSourceIDs) > 0 {
-						db.queueRetainedPruneObservedSourceIDs(observedRewriteSourceIDs)
+						db.queueRetainedPruneObservedSourceIDs(observedRewriteSourceIDs, opts.automatic)
 					}
 					db.scheduleRetainedValueLogPruneForce()
 				}
@@ -22715,7 +22731,7 @@ planned:
 			// When GC classifies all reclaim blockers as retained-path protection,
 			// trigger an eager retained prune pass to release stale lifecycle pins.
 			if forceObservedSourceGC {
-				db.queueRetainedPruneObservedSourceIDs(observedSourceGCIDs)
+				db.queueRetainedPruneObservedSourceIDs(observedSourceGCIDs, opts.automatic)
 			}
 			db.scheduleRetainedValueLogPruneForce()
 		}
@@ -22730,7 +22746,7 @@ planned:
 				gcStats.ObservedSourceSegmentsProtectedRetained,
 				gcStats.ObservedSourceSegmentsEligible,
 			)
-			db.queueRetainedPruneObservedSourceIDs(observedSourceGCIDs)
+			db.queueRetainedPruneObservedSourceIDs(observedSourceGCIDs, opts.automatic)
 			db.scheduleRetainedValueLogPruneForce()
 			queuedIDs, droppedIDs := db.retryVlogGenerationObservedSourceGCList(observedSourceGCIDs)
 			if queuedIDs > 0 {

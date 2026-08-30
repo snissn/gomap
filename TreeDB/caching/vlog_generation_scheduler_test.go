@@ -7881,10 +7881,10 @@ func TestVlogGenerationRewritePlan_AgeBlockedRetryReschedulesEarlierDeadline(t *
 	t.Cleanup(cleanup)
 	forceVlogMaintenanceIdle(db)
 
-	db.setVlogGenerationRewriteAgeBlockedUntil(time.Now().Add(2 * time.Second))
+	db.setVlogGenerationRewriteAgeBlockedUntil(time.Now().Add(2*time.Second), false)
 	time.Sleep(20 * time.Millisecond)
 	start := time.Now()
-	db.setVlogGenerationRewriteAgeBlockedUntil(time.Now().Add(30 * time.Millisecond))
+	db.setVlogGenerationRewriteAgeBlockedUntil(time.Now().Add(30*time.Millisecond), false)
 
 	deadline := time.Now().Add(750 * time.Millisecond)
 	for time.Now().Before(deadline) {
@@ -8209,6 +8209,131 @@ func TestVlogGenerationAutomaticCheckpointKickPreservesQueuedFollowup(t *testing
 	}
 	if checkpoints, vacuums := boundary.boundaryCalls(); checkpoints == 0 || vacuums != 1 {
 		t.Fatalf("explicit queued follow-up boundaries: checkpoints=%d vacuums=%d, want checkpoint and one vacuum", checkpoints, vacuums)
+	}
+}
+
+func TestVlogGenerationAutomaticDelayedWakesPreserveMaintenanceBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wake func(*DB) error
+	}{
+		{
+			name: "age_blocked",
+			wake: func(db *DB) error {
+				db.setVlogGenerationRewriteAgeBlockedUntil(time.Now(), true)
+				return nil
+			},
+		},
+		{
+			name: "stage_confirmation",
+			wake: func(db *DB) error {
+				db.vlogGenerationMaintenanceAutomatic.Store(true)
+				defer db.vlogGenerationMaintenanceAutomatic.Store(false)
+				return db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{{
+					FileID:     11,
+					BytesTotal: 128,
+					BytesLive:  64,
+					BytesStale: 64,
+					StaleRatio: 0.5,
+				}}, true, time.Now().Add(-vlogGenerationRewriteStageConfirmDelay).UnixNano())
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+			if err != nil {
+				t.Fatalf("open backend: %v", err)
+			}
+			recorder := &rewriteBudgetRecordingBackend{
+				DB: backend,
+				planResponse: backenddb.ValueLogRewritePlan{
+					SourceFileIDs:     []uint32{11},
+					SelectedBytesLive: 64,
+				},
+				rewriteResponse: backenddb.ValueLogRewriteStats{
+					BytesBefore:   vlogGenerationVacuumTriggerRewriteBytes,
+					BytesAfter:    32,
+					RecordsCopied: 1,
+				},
+			}
+			boundary := &queuedRewriteBoundaryBackend{BackendDB: backend, recorder: recorder}
+			db, cleanup := openRewriteQueueTestDB(t, dir, boundary)
+			t.Cleanup(cleanup)
+			skipRetainedPrune(db)
+			forceVlogMaintenanceIdle(db)
+			db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+			boundary.resetBoundaryCalls()
+			if err := tc.wake(db); err != nil {
+				t.Fatalf("schedule delayed wake: %v", err)
+			}
+
+			deadline := time.Now().Add(2 * schedulerTestWait(t))
+			for {
+				if _, calls := recorder.recordedRewrite(); calls == 1 {
+					break
+				}
+				if time.Now().After(deadline) {
+					_, calls := recorder.recordedRewrite()
+					t.Fatalf("automatic delayed wake did not rewrite: calls=%d", calls)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if checkpoints, vacuums := boundary.boundaryCalls(); checkpoints != 0 || vacuums != 0 {
+				t.Fatalf("automatic delayed wake boundaries: checkpoints=%d vacuums=%d, want 0/0", checkpoints, vacuums)
+			}
+		})
+	}
+}
+
+func TestVlogGenerationAutomaticRetainedPruneFollowupPreservesMaintenanceBoundary(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11},
+			SelectedBytesLive: 64,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   vlogGenerationVacuumTriggerRewriteBytes,
+			BytesAfter:    32,
+			RecordsCopied: 1,
+		},
+	}
+	boundary := &queuedRewriteBoundaryBackend{BackendDB: backend, recorder: recorder}
+	db, cleanup := openRewriteQueueTestDB(t, dir, boundary)
+	t.Cleanup(cleanup)
+	forceVlogMaintenanceIdle(db)
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	_, fileID := seedRetainedPruneSegment(t, db, 701, 2<<30)
+	db.queueRetainedPruneObservedSourceIDs([]uint32{fileID}, true)
+	boundary.resetBoundaryCalls()
+	db.scheduleRetainedValueLogPruneForce()
+
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for !db.vlogGenerationCheckpointKickPending.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("automatic retained-prune follow-up did not queue checkpoint maintenance")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	db.schedulePendingVlogGenerationCheckpointKick()
+	for {
+		if _, calls := recorder.recordedRewrite(); calls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, calls := recorder.recordedRewrite()
+			t.Fatalf("automatic retained-prune follow-up did not rewrite: calls=%d", calls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if checkpoints, vacuums := boundary.boundaryCalls(); checkpoints != 0 || vacuums != 0 {
+		t.Fatalf("automatic retained-prune boundaries: checkpoints=%d vacuums=%d, want 0/0", checkpoints, vacuums)
 	}
 }
 
