@@ -238,6 +238,66 @@ func TestCollectionReadViewFetchDocumentsByIDColumnReconstructionParity(t *testi
 	}
 }
 
+func TestCollectionReadViewForegroundLifetimeIdleAndOperations(t *testing.T) {
+	d, col := newDocumentMaterializerTestCollection(t)
+	defer func() { _ = d.Close() }()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("e1")},
+		[][]byte{[]byte(`{"row_id":1,"kind":"alpha","score":1.5,"payload":"retained-a"}`)},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	begins, ends, active := 0, 0, 0
+	unregister := d.RegisterForegroundReadObserver(func() {}, func() func() {
+		begins++
+		active++
+		return func() {
+			ends++
+			active--
+		}
+	})
+	defer unregister()
+
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	assertOperation := func(name string, previousBegins int) {
+		t.Helper()
+		if active != 0 || begins != ends || begins != previousBegins+1 {
+			t.Fatalf("%s foreground begin/end/active=%d/%d/%d want one additional balanced operation", name, begins, ends, active)
+		}
+	}
+	if active != 0 || begins != ends {
+		t.Fatalf("foreground begin/end/active after open=%d/%d/%d want balanced idle", begins, ends, active)
+	}
+
+	before := begins
+	fetched, err := view.FetchDocumentsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID: %v", err)
+	}
+	assertOperation("FetchDocumentsByID", before)
+
+	before = begins
+	lookup, err := view.LookupDocumentRowRefsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("LookupDocumentRowRefsByID: %v", err)
+	}
+	assertOperation("LookupDocumentRowRefsByID", before)
+	if len(lookup.Results) != 1 || !lookup.Results[0].Found || len(fetched.Results) != 1 || !fetched.Results[0].Found {
+		t.Fatalf("fetch=%+v lookup=%+v want found e1", fetched.Results, lookup.Results)
+	}
+
+	before = begins
+	if _, err := view.FetchDocumentsByRowRef([]DocumentRowRef{lookup.Results[0].RowRef}, DocumentFetchOptions{}); err != nil {
+		t.Fatalf("FetchDocumentsByRowRef: %v", err)
+	}
+	assertOperation("FetchDocumentsByRowRef", before)
+}
+
 func TestCollectionReadViewReusesMappedAssetViewsAcrossFetches(t *testing.T) {
 	d, col := newDocumentMaterializerTestCollection(t)
 	defer func() { _ = d.Close() }()
