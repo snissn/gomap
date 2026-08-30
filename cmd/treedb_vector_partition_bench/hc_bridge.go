@@ -14,13 +14,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/nativewire"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 const hcBridgeVersionV1 = 1
 
 type hcBridgeClientV1 interface {
-	call(vectorPartitionOperationsWireRequestV1) (vectorPartitionOperationsWireResponseV1, error)
+	callContext(context.Context, vectorPartitionOperationsWireRequestV1) (vectorPartitionOperationsWireResponseV1, error)
 	Close() error
 }
 
@@ -81,7 +82,7 @@ func (b *hcBridgeV1) call(ctx context.Context, request vectorPartitionOperations
 	select {
 	case client := <-b.clients:
 		defer func() { b.clients <- client }()
-		return client.call(request)
+		return client.callContext(ctx, request)
 	case <-ctx.Done():
 		return vectorPartitionOperationsWireResponseV1{}, ctx.Err()
 	}
@@ -100,7 +101,9 @@ func (b *hcBridgeV1) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *hcBridgeV1) status(w http.ResponseWriter, r *http.Request) {
-	response, err := b.call(r.Context(), vectorPartitionOperationsWireRequestV1{SchemaVersion: hcBridgeVersionV1, Operation: "status"})
+	ctx, cancel := context.WithTimeout(r.Context(), b.timeout)
+	defer cancel()
+	response, err := b.call(ctx, vectorPartitionOperationsWireRequestV1{SchemaVersion: hcBridgeVersionV1, Operation: "status"})
 	if err != nil || response.Health == nil {
 		hcBridgeWriteErrorV1(w, hcBridgeStatusV1(err), "unavailable")
 		return
@@ -113,13 +116,13 @@ func (b *hcBridgeV1) status(w http.ResponseWriter, r *http.Request) {
 		State            public.GenerationStateV1 `json:"state"`
 		Index            string                   `json:"index"`
 		Generation       uint64                   `json:"generation"`
-	}{hcBridgeVersionV1, "treedb.nativewire.vector_search_v1", response.NodeConfigSHA256, response.Health.Ready, response.Health.State, response.Health.Generation.Index, response.Health.Generation.Generation})
+	}{hcBridgeVersionV1, nativewire.VectorPartitionRouteV1, response.NodeConfigSHA256, response.Health.Ready, response.Health.State, response.Health.Generation.Index, response.Health.Generation.Generation})
 }
 
 func (b *hcBridgeV1) search(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	var request hcBridgeSearchRequestV1
-	decoder := json.NewDecoder(io.LimitReader(r.Body, b.maxBody+1))
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, b.maxBody))
 	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF || request.Version != hcBridgeVersionV1 || request.Index == "" || request.Generation == 0 || len(request.Query) == 0 || request.TopK < 1 || request.Probes < 1 || request.EfSearch < 1 {
 		hcBridgeWriteErrorV1(w, http.StatusBadRequest, "invalid_request")
 		return
@@ -150,6 +153,15 @@ func (b *hcBridgeV1) search(w http.ResponseWriter, r *http.Request) {
 		hcBridgeWriteErrorV1(w, http.StatusBadGateway, "missing_status_identity")
 		return
 	}
+	if len(response.Search.Neighbors) != request.TopK || response.Search.Counters.SelectedPartitions > uint64(request.Probes) || response.Search.Counters.HNSWServedPartitions+response.Search.Counters.ExactScanPartitions != response.Search.Counters.SelectedPartitions {
+		hcBridgeWriteErrorV1(w, http.StatusBadGateway, "incomplete_route_proof")
+		return
+	}
+	if status.Health.Generation.Index != request.Index || status.Health.Generation.Generation != request.Generation || !status.Health.Ready || status.Health.State != public.GenerationActiveV1 {
+		hcBridgeWriteErrorV1(w, http.StatusBadGateway, "status_identity_mismatch")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		Version          int                     `json:"version"`
 		Route            string                  `json:"route"`
@@ -159,7 +171,7 @@ func (b *hcBridgeV1) search(w http.ResponseWriter, r *http.Request) {
 		IDs              []uint64                `json:"ids"`
 		Scores           []float32               `json:"scores"`
 		Counters         public.SearchCountersV1 `json:"counters"`
-	}{hcBridgeVersionV1, "treedb.nativewire.vector_search_v1", status.NodeConfigSHA256, request.Index, request.Generation, ids, hcBridgeScoresV1(response.Search.Neighbors), response.Search.Counters})
+	}{hcBridgeVersionV1, nativewire.VectorPartitionRouteV1, status.NodeConfigSHA256, request.Index, request.Generation, ids, hcBridgeScoresV1(response.Search.Neighbors), response.Search.Counters})
 }
 
 func hcBridgeScoresV1(neighbors []public.NeighborV1) []float32 {
@@ -212,7 +224,7 @@ func runVectorPartitionHCBridgeV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Handler: b, ReadHeaderTimeout: timeout}
+	server := &http.Server{Handler: b, ReadHeaderTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout, IdleTimeout: timeout}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
