@@ -3822,7 +3822,7 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 	if err := db.commandWALPoisonedError(); err != nil {
 		return err
 	}
-	if db.rootPublication == nil || db.rootPublication.coordinator == nil {
+	if !db.commandWAL || db.commandJournal == nil || db.rootPublication == nil || db.rootPublication.coordinator == nil {
 		return db.Checkpoint()
 	}
 

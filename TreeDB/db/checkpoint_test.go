@@ -80,6 +80,49 @@ func TestCheckpointSyncBoundaryDoesNotAdvanceCommitSeq(t *testing.T) {
 	}
 }
 
+func TestMaintainCommandWALCoveredPrefixWithoutCommandWALFallsBackToCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	var checkpoints atomic.Uint64
+	d.testCheckpointAfterPoisonPreflightHook = func() { checkpoints.Add(1) }
+
+	b := d.NewBatch()
+	if err := b.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close batch: %v", err)
+	}
+	if err := d.MaintainCommandWALCoveredPrefix(); err != nil {
+		t.Fatalf("MaintainCommandWALCoveredPrefix: %v", err)
+	}
+	if got := checkpoints.Load(); got != 1 {
+		t.Fatalf("checkpoint calls=%d want 1", got)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	got, err := reopened.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get after reopen: %v", err)
+	}
+	if !bytes.Equal(got, []byte("v")) {
+		t.Fatalf("Get after reopen=%q want %q", got, []byte("v"))
+	}
+}
+
 func TestEmptyBatchWriteSyncWaitsExistingDurableFrontierWithoutInventingDependencies(t *testing.T) {
 	d, err := Open(Options{
 		Dir:       t.TempDir(),

@@ -23977,8 +23977,8 @@ func parseCheckpointFragUint(report map[string]string, key string) (uint64, bool
 	return v, true
 }
 
-func (db *DB) maybeVacuumSparseIndexOnCheckpoint() error {
-	if db == nil || !db.disableJournal {
+func (db *DB) maybeVacuumSparseIndexOnCheckpoint(automatic bool) error {
+	if automatic || db == nil || !db.disableJournal {
 		return nil
 	}
 	// When outer leaves already live in the value log, checkpoint-time online
@@ -24392,7 +24392,7 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 			return err
 		}
 		db.checkpointNoopSkips.Add(1)
-		if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
+		if err := db.maybeVacuumSparseIndexOnCheckpoint(automatic); err != nil {
 			return err
 		}
 		db.checkValueLogRetention()
@@ -24439,7 +24439,7 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 				}
 			}
 			db.checkpointNoopSkips.Add(1)
-			if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
+			if err := db.maybeVacuumSparseIndexOnCheckpoint(automatic); err != nil {
 				return err
 			}
 			db.checkValueLogRetention()
@@ -24722,7 +24722,7 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 	recordCheckpointStageSince(&db.checkpointStageWALCleanup, walCleanupStart)
 
 	postMaintenanceStart := time.Now()
-	if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
+	if err := db.maybeVacuumSparseIndexOnCheckpoint(automatic); err != nil {
 		recordCheckpointStageSince(&db.checkpointStagePostMaintenance, postMaintenanceStart)
 		return err
 	}

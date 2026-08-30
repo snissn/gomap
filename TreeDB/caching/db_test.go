@@ -50,6 +50,7 @@ type MockBackend struct {
 	fragReport                   map[string]string
 	fragErr                      error
 	vacuumErr                    error
+	vacuumCalls                  int
 	rootPublicationBuildGroups   int
 	rootPublicationGroupBatches  int
 	rootPublicationGroupFinals   int
@@ -128,9 +129,10 @@ func (m *MockBackend) FragmentationReport() (map[string]string, error) {
 }
 
 func (m *MockBackend) VacuumIndexOnline(ctx context.Context) error {
-	m.mu.RLock()
+	m.mu.Lock()
+	m.vacuumCalls++
 	err := m.vacuumErr
-	m.mu.RUnlock()
+	m.mu.Unlock()
 	return err
 }
 
@@ -1422,11 +1424,44 @@ func TestCheckpoint_IgnoresUnsupportedSparseVacuum(t *testing.T) {
 	}
 	db.checkpointRuns.Store(checkpointSparseIndexCheckEveryNoops)
 
-	if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
+	if err := db.maybeVacuumSparseIndexOnCheckpoint(false); err != nil {
 		t.Fatalf("maybeVacuumSparseIndexOnCheckpoint: %v", err)
 	}
 	if got := db.checkpointAutoVacuumRuns.Load(); got != 0 {
 		t.Fatalf("checkpointAutoVacuumRuns=%d want 0", got)
+	}
+}
+
+func TestCheckpoint_AutomaticSkipsSparseVacuum(t *testing.T) {
+	want := errors.New("vacuum called")
+	backend := NewMockBackend()
+	backend.fragReport = map[string]string{
+		"treedb.user.pages":                 strconv.FormatUint(checkpointSparseIndexMinPages, 10),
+		"treedb.user.internal_fill_ppm_p50": strconv.FormatUint(checkpointSparseIndexMaxInternalFillP50PPM-1, 10),
+		"treedb.user.internal_fill_ppm_avg": strconv.FormatUint(checkpointSparseIndexMaxInternalFillAvgPPM-1, 10),
+	}
+	backend.vacuumErr = want
+
+	db := &DB{backend: backend, disableJournal: true}
+	db.checkpointRuns.Store(checkpointSparseIndexCheckEveryNoops)
+	if err := db.maybeVacuumSparseIndexOnCheckpoint(true); err != nil {
+		t.Fatalf("automatic sparse vacuum: %v", err)
+	}
+	backend.mu.RLock()
+	calls := backend.vacuumCalls
+	backend.mu.RUnlock()
+	if calls != 0 {
+		t.Fatalf("automatic sparse vacuum calls=%d want 0", calls)
+	}
+
+	if err := db.maybeVacuumSparseIndexOnCheckpoint(false); !errors.Is(err, want) {
+		t.Fatalf("explicit sparse vacuum err=%v want %v", err, want)
+	}
+	backend.mu.RLock()
+	calls = backend.vacuumCalls
+	backend.mu.RUnlock()
+	if calls != 1 {
+		t.Fatalf("explicit sparse vacuum calls=%d want 1", calls)
 	}
 }
 
