@@ -427,6 +427,7 @@ type nativeScalarPlanCacheKey struct {
 	vectorIndex       *VectorIndex
 	sourceGeneration  uint64
 	vectorGeneration  uint64
+	vectorMutationSeq uint64
 	vectorSchema      string
 	scalarSchema      string
 	filterIdentity    string
@@ -434,6 +435,15 @@ type nativeScalarPlanCacheKey struct {
 	exactSafetyCap    int
 	annSeedProbeLimit int
 	annSeedLimit      int
+}
+
+func (idx *VectorIndex) nativeScalarPlanCacheGeneration() (uint64, uint64, bool) {
+	if idx == nil {
+		return 0, 0, false
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.sourceDocumentGeneration, idx.mutationSeq, idx.sourceDocumentRootsValid
 }
 
 type nativeScalarPlanCacheEntry struct {
@@ -567,6 +577,7 @@ func nativeScalarPlanCacheKeyStale(cached, current nativeScalarPlanCacheKey) boo
 	return cached.vectorIndex == current.vectorIndex &&
 		(cached.sourceGeneration != current.sourceGeneration ||
 			cached.vectorGeneration != current.vectorGeneration ||
+			cached.vectorMutationSeq != current.vectorMutationSeq ||
 			cached.vectorSchema != current.vectorSchema ||
 			cached.scalarSchema != current.scalarSchema)
 }
@@ -764,11 +775,12 @@ func (c *Collection) planNativeScalarFilter(filter *HybridScalarFilter, index *V
 		plan.clauses = append(plan.clauses, clause)
 	}
 
-	vectorGeneration, vectorGenerationValid := index.sourceDocumentCoverage()
+	vectorGeneration, vectorMutationSeq, vectorGenerationValid := index.nativeScalarPlanCacheGeneration()
 	cacheKey := nativeScalarPlanCacheKey{
 		vectorIndex:       index,
 		sourceGeneration:  generation,
 		vectorGeneration:  vectorGeneration,
+		vectorMutationSeq: vectorMutationSeq,
 		vectorSchema:      nativeScalarVectorSchemaIdentity(vectorDef),
 		scalarSchema:      nativeScalarSchemaIdentity(view.catalog.meta.Indexes),
 		filterIdentity:    nativeScalarFilterIdentity(plan.clauses),

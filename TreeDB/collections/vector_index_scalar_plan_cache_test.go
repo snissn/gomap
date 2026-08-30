@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestNativeScalarPlanCacheWarmHitAndGenerationPublicationInvalidation(t *testing.T) {
+func TestNativeScalarPlanCacheWarmHitAndMutationGenerationPublicationInvalidation(t *testing.T) {
 	d, col, def := newNativeScalarTestCollection(t, []IndexDefinition{{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString}})
 	defer func() { _ = d.Close() }()
 	if _, err := col.InsertBatch([][]byte{[]byte("alpha")}, [][]byte{[]byte(`{"embedding":[1,0],"tenant":"alpha"}`)}); err != nil {
@@ -25,11 +25,21 @@ func TestNativeScalarPlanCacheWarmHitAndGenerationPublicationInvalidation(t *tes
 	if len(warm.Results) != 1 || string(warm.Results[0].ID) != "alpha" || warm.Stats.ScalarFilterPlanCacheHits != 1 || warm.Stats.ScalarFilterPlanCacheMisses != 0 {
 		t.Fatalf("warm results=%+v stats=%+v", warm.Results, warm.Stats)
 	}
+	if _, err := col.InsertBatch([][]byte{[]byte("alpha-2")}, [][]byte{[]byte(`{"embedding":[1,0],"tenant":"alpha"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	mutated := searchNativeScalarTest(t, col, def, filter, 2)
+	if len(mutated.Results) != 2 || mutated.Stats.ScalarFilterPlanCacheHits != 0 || mutated.Stats.ScalarFilterPlanCacheInvalidations+mutated.Stats.ScalarFilterPlanCacheGenerationBypasses == 0 {
+		t.Fatalf("mutated results=%+v stats=%+v", mutated.Results, mutated.Stats)
+	}
 	if replaced, err := col.Replace([]byte("alpha"), []byte(`{"embedding":[1,0],"tenant":"beta"}`)); err != nil || !replaced {
 		t.Fatalf("replace=%v err=%v", replaced, err)
 	}
-	updated := searchNativeScalarTest(t, col, def, filter, 1)
-	if len(updated.Results) != 0 || updated.Stats.ScalarFilterPlanCacheHits != 0 || updated.Stats.ScalarFilterPlanCacheInvalidations+updated.Stats.ScalarFilterPlanCacheGenerationBypasses == 0 {
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush replacement publication: %v", err)
+	}
+	updated := searchNativeScalarTest(t, col, def, filter, 2)
+	if len(updated.Results) != 1 || string(updated.Results[0].ID) != "alpha-2" || updated.Stats.ScalarFilterPlanCacheHits != 0 || updated.Stats.ScalarFilterPlanCacheInvalidations+updated.Stats.ScalarFilterPlanCacheGenerationBypasses == 0 {
 		t.Fatalf("updated results=%+v stats=%+v", updated.Results, updated.Stats)
 	}
 	beta := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "tenant_idx", Value: "beta"}, 1)
@@ -110,6 +120,9 @@ func TestNativeScalarPlanCacheKeySeparatesFilterLimitsSchemaAndIndexIdentity(t *
 	generation.sourceGeneration++
 	generation.vectorGeneration++
 	variants["generation"] = generation
+	mutation := base
+	mutation.vectorMutationSeq++
+	variants["mutation"] = mutation
 
 	for name, variant := range variants {
 		t.Run(name, func(t *testing.T) {
