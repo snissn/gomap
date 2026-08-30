@@ -411,32 +411,37 @@ type collectionManagerOptions struct {
 }
 
 type Collection struct {
-	db                         *backenddb.DB
-	manager                    *CollectionManager
-	writeDomain                *collectionWriteDomain
-	commandWALRawPublishLocked bool
-	name                       string
-	meta                       CollectionMeta
-	catalogMu                  sync.RWMutex
-	catalogCommitSeq           uint64
-	catalogSystemRoot          uint64
-	catalog                    *collectionCatalog
-	insertStatsMu              sync.RWMutex
-	lastInsertStats            CollectionInsertStats
-	updateStatsMu              sync.RWMutex
-	lastUpdateStats            CollectionUpdateStats
-	documentScanStatsMu        sync.RWMutex
-	lastDocumentScanStats      CollectionDocumentScanStats
-	vectorIndexLoadMu          sync.Mutex
-	vectorIndexMutationMu      sync.Mutex
-	vectorIndexesMu            sync.RWMutex
-	vectorIndexes              map[string]*VectorIndex
-	vectorPreparedSearchMu     sync.Mutex
-	vectorPreparedSearch       map[string]*columnVectorGraphSharedPreparedSearchCacheEntry
-	vectorPreparedSearchHits   uint64
-	vectorPreparedSearchMisses uint64
-	vectorPreparedSearchWaits  uint64
-	vectorPreparedSearchBuilds uint64
+	db                          *backenddb.DB
+	manager                     *CollectionManager
+	writeDomain                 *collectionWriteDomain
+	commandWALRawPublishLocked  bool
+	name                        string
+	meta                        CollectionMeta
+	catalogMu                   sync.RWMutex
+	catalogCommitSeq            uint64
+	catalogSystemRoot           uint64
+	catalog                     *collectionCatalog
+	insertStatsMu               sync.RWMutex
+	lastInsertStats             CollectionInsertStats
+	updateStatsMu               sync.RWMutex
+	lastUpdateStats             CollectionUpdateStats
+	documentScanStatsMu         sync.RWMutex
+	lastDocumentScanStats       CollectionDocumentScanStats
+	vectorIndexLoadMu           sync.Mutex
+	vectorIndexMutationMu       sync.Mutex
+	vectorIndexesMu             sync.RWMutex
+	vectorIndexes               map[string]*VectorIndex
+	vectorPreparedSearchMu      sync.Mutex
+	vectorPreparedSearch        map[string]*columnVectorGraphSharedPreparedSearchCacheEntry
+	vectorPreparedSearchHits    uint64
+	vectorPreparedSearchMisses  uint64
+	vectorPreparedSearchWaits   uint64
+	vectorPreparedSearchBuilds  uint64
+	nativeScalarPlanCacheMu     sync.Mutex
+	nativeScalarPlanCache       map[nativeScalarPlanCacheKey]nativeScalarPlanCacheEntry
+	nativeScalarPlanCacheEpochs map[*VectorIndex]nativeScalarPlanCacheEpochState
+	nativeScalarPlanCacheOrder  []nativeScalarPlanCacheKey
+	nativeScalarPlanCacheBytes  uint64
 
 	vectorBufferedSearchMu            sync.Mutex
 	vectorBufferedSearch              map[collectionVectorIndexPreparedSearchCacheSlot]*collectionVectorIndexPreparedSearchCacheEntry
