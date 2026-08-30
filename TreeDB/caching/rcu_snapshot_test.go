@@ -606,7 +606,7 @@ func TestDB_GetRecordsForegroundGraceCrossing(t *testing.T) {
 	}
 	defer cdb.Close()
 
-	cdb.foregroundMaintenanceGraceDeadlineUnixNano.Store(time.Now().Add(50 * time.Millisecond).UnixNano())
+	cdb.foregroundMaintenanceGraceState.Store(2)
 	done := make(chan error, 1)
 	go func() {
 		_, err := cdb.Get([]byte("k"))
@@ -617,8 +617,7 @@ func TestDB_GetRecordsForegroundGraceCrossing(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Get did not reach backend")
 	}
-
-	time.Sleep(75 * time.Millisecond)
+	cdb.foregroundMaintenanceGraceState.Store(3)
 	close(backend.release)
 	select {
 	case err := <-done:
