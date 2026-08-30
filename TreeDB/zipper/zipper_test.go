@@ -1004,14 +1004,14 @@ func TestZipperInsertSplit(t *testing.T) {
 
 func TestZipperSplitPreservesLeafRevisionEncoding(t *testing.T) {
 	for _, tc := range []struct {
-		name          string
-		outerLeafLog  bool
-		withRevisions bool
+		name             string
+		outerLeafLog     bool
+		hasEarlyRevision bool
 	}{
 		{name: "pager_legacy", outerLeafLog: false},
-		{name: "pager_revisions", outerLeafLog: false, withRevisions: true},
+		{name: "pager_mixed_revisions", outerLeafLog: false, hasEarlyRevision: true},
 		{name: "outer_leaf_log_legacy", outerLeafLog: true},
-		{name: "outer_leaf_log_revisions", outerLeafLog: true, withRevisions: true},
+		{name: "outer_leaf_log_mixed_revisions", outerLeafLog: true, hasEarlyRevision: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -1046,8 +1046,8 @@ func TestZipperSplitPreservesLeafRevisionEncoding(t *testing.T) {
 			defer b.Close()
 			for i := 0; i < 200; i++ {
 				key := []byte(fmt.Sprintf("key-%03d", i))
-				if tc.withRevisions {
-					if err := b.SetWithRevision(key, []byte("value"), page.EntryRevision(i+1)); err != nil {
+				if tc.hasEarlyRevision && i == 0 {
+					if err := b.SetWithRevision(key, []byte("value"), 1); err != nil {
 						t.Fatal(err)
 					}
 				} else if err := b.Set(key, []byte("value")); err != nil {
@@ -1065,8 +1065,8 @@ func TestZipperSplitPreservesLeafRevisionEncoding(t *testing.T) {
 				}
 				for _, data := range leafLog.pages {
 					leaf := node.NewNodeView(data)
-					if got := leaf.LeafEntryRevisionsEnabled(); got != tc.withRevisions {
-						t.Fatalf("leaf revision flag=%v, want %v", got, tc.withRevisions)
+					if got := leaf.LeafEntryRevisionsEnabled(); got != tc.hasEarlyRevision {
+						t.Fatalf("leaf revision flag=%v, want %v", got, tc.hasEarlyRevision)
 					}
 				}
 				return
@@ -1089,8 +1089,8 @@ func TestZipperSplitPreservesLeafRevisionEncoding(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if got := node.NewNode(data).LeafEntryRevisionsEnabled(); got != tc.withRevisions {
-					t.Fatalf("leaf %d revision flag=%v, want %v", i, got, tc.withRevisions)
+				if got := node.NewNode(data).LeafEntryRevisionsEnabled(); got != tc.hasEarlyRevision {
+					t.Fatalf("leaf %d revision flag=%v, want %v", i, got, tc.hasEarlyRevision)
 				}
 			}
 		})
