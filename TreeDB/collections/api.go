@@ -19356,6 +19356,9 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLockState(snap *backenddb.
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}
+	if c != nil && c.db != nil {
+		c.db.NotifyForegroundRead()
+	}
 	systemRoot := snapshotSystemRoot(snap)
 	commitSeq := snapshotCommitSeq(snap)
 
@@ -20748,6 +20751,7 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 		return dst[:0], false, errors.New("collections: document id cannot be empty")
 	}
 	if value, buffered, found := c.getBufferedDocumentInto(documentID, dst); buffered {
+		c.db.NotifyForegroundRead()
 		return value, found, nil
 	}
 	snap := c.db.AcquireSnapshot()

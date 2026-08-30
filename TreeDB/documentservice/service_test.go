@@ -83,6 +83,45 @@ func TestServiceNilMutationReceiverFailsClosed(t *testing.T) {
 	}
 }
 
+func TestServiceRawBackendReadAdvancesCachedForegroundActivity(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.BackgroundIndexVacuumInterval = -1
+	backend, cleanup, stats, maintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+	svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: MetricCosine}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+
+	const key = "treedb.cache.vlog_generation.maintenance.foreground_last_read_unix_nano"
+	readTimestamp := func() int64 {
+		t.Helper()
+		var timestamp int64
+		if _, err := fmt.Sscan(stats()[key], &timestamp); err != nil {
+			t.Fatalf("parse %s: %v", key, err)
+		}
+		return timestamp
+	}
+	before := readTimestamp()
+	for range 2 * 64 {
+		count, err := svc.CountDocuments(ctx, "docs", CountDocumentsRequest{})
+		if err != nil {
+			t.Fatalf("CountDocuments: %v", err)
+		}
+		if count.Count != 0 {
+			t.Fatalf("CountDocuments count=%d want 0", count.Count)
+		}
+		if after := readTimestamp(); after > before {
+			return
+		}
+	}
+	t.Fatalf("raw document-service reads did not advance cached foreground activity from %d", before)
+}
+
 func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
 	opts.BackgroundIndexVacuumInterval = -1

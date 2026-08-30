@@ -8129,6 +8129,10 @@ type logicalOrderedRootObserverRegistrar interface {
 	RegisterLogicalOrderedRootPublicationObserver(func()) func()
 }
 
+type foregroundReadObserverRegistrar interface {
+	RegisterForegroundReadObserver(func()) func()
+}
+
 func backendPublicationReady(backend BackendDB) error {
 	if checker, ok := backend.(backendPublicationReadinessChecker); ok {
 		return checker.CheckCommandWALPublishReady()
@@ -8868,6 +8872,7 @@ type DB struct {
 	// Level 1 (Disk)
 	backend                              BackendDB
 	unregisterLogicalOrderedRootObserver func()
+	unregisterForegroundReadObserver      func()
 	dictStore                            DictStore
 	templateStore                        template.Store
 
@@ -12966,6 +12971,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if registrar, ok := backend.(logicalOrderedRootObserverRegistrar); ok {
 		db.unregisterLogicalOrderedRootObserver = registrar.RegisterLogicalOrderedRootPublicationObserver(db.noteWrite)
 	}
+	if registrar, ok := backend.(foregroundReadObserverRegistrar); ok {
+		db.unregisterForegroundReadObserver = registrar.RegisterForegroundReadObserver(db.noteRead)
+	}
 
 	// Start background flusher
 	db.wg.Add(1)
@@ -13646,7 +13654,7 @@ func (db *DB) vlogGenerationRewritePlanContext(timeout time.Duration, opts vlogG
 			timeout = budget
 		}
 	}
-	return db.foregroundVlogMaintenanceContextWithResumeGrace(timeout, vlogGenerationRewritePlanResumeGrace)
+	return db.foregroundMaintenanceContextWithResumeGrace(timeout, vlogGenerationRewritePlanResumeGrace)
 }
 
 func (db *DB) noteWrite() {
@@ -25155,6 +25163,10 @@ func (db *DB) Close() error {
 	db.closing.Store(true)
 	if unregister := db.unregisterLogicalOrderedRootObserver; unregister != nil {
 		db.unregisterLogicalOrderedRootObserver = nil
+		unregister()
+	}
+	if unregister := db.unregisterForegroundReadObserver; unregister != nil {
+		db.unregisterForegroundReadObserver = nil
 		unregister()
 	}
 	db.cancelActiveRetainedValueLogPrune()

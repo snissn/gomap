@@ -372,6 +372,9 @@ type DB struct {
 	logicalOrderedRootObserverMu                                sync.Mutex
 	logicalOrderedRootObserverID                                uint64
 	logicalOrderedRootObserver                                  func()
+	foregroundReadObserverMu                                    sync.Mutex
+	foregroundReadObserverID                                    uint64
+	foregroundReadObserver                                      atomic.Pointer[foregroundReadObserver]
 	orderedRootSpanNativeCandidateOps                           atomic.Uint64
 	orderedRootSpanNativeCandidateSpans                         atomic.Uint64
 	orderedRootSpanNativeEligibleOps                            atomic.Uint64

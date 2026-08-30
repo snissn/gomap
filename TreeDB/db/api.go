@@ -31,6 +31,51 @@ var getManyEmptyValue = []byte{}
 // found=false and value=nil.
 type GetManyViewFunc = tree.GetManyViewFunc
 
+type foregroundReadObserver struct {
+	id     uint64
+	notify func()
+}
+
+// RegisterForegroundReadObserver installs the cached layer's observer for
+// logical collection reads routed through this raw backend. The returned
+// function removes this exact registration.
+func (db *DB) RegisterForegroundReadObserver(observer func()) func() {
+	if db == nil || observer == nil {
+		return func() {}
+	}
+	db.foregroundReadObserverMu.Lock()
+	db.foregroundReadObserverID++
+	registration := &foregroundReadObserver{
+		id:     db.foregroundReadObserverID,
+		notify: observer,
+	}
+	db.foregroundReadObserver.Store(registration)
+	db.foregroundReadObserverMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			db.foregroundReadObserverMu.Lock()
+			if current := db.foregroundReadObserver.Load(); current != nil && current.id == registration.id {
+				db.foregroundReadObserver.Store(nil)
+			}
+			db.foregroundReadObserverMu.Unlock()
+		})
+	}
+}
+
+// NotifyForegroundRead forwards one logical collection read to the cached
+// scheduler without classifying backend-internal maintenance scans as
+// foreground work.
+func (db *DB) NotifyForegroundRead() {
+	if db == nil {
+		return
+	}
+	if observer := db.foregroundReadObserver.Load(); observer != nil {
+		observer.notify()
+	}
+}
+
 func getManyArenaCap(keyCount int) int {
 	if keyCount <= 0 {
 		return 0
