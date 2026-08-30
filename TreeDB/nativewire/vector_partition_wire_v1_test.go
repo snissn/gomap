@@ -50,6 +50,7 @@ func TestVectorPartitionWireV1RoundTrip(t *testing.T) {
 		Counters: public.SearchCountersV1{
 			SelectedPartitions: 1, SelectedGroups: 2, Requests: 3, RPCs: 4, Retries: 5, Redirects: 6, Candidates: 7, Edges: 8,
 			SnapshotPins: 9, ReadProofs: 10, GenerationPins: 11, PartitionOpens: 12, QueryBytes: 13, RequestBytes: 14, CandidateBytes: 15, ResponseBytes: 16,
+			HNSWServedPartitions: 17, ExactScanPartitions: 18,
 		},
 		Timing: public.SearchTimingV1{
 			Admission: 1, OperationsHealth: 2, ServiceAdapter: 3, PublicAdapter: 4, RouterOpen: 5, RouterSearch: 6, Placement: 7,

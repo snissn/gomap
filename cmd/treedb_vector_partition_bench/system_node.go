@@ -1034,6 +1034,15 @@ func (c *vectorPartitionOperationsTCPClientV1) call(request vectorPartitionOpera
 }
 
 func (c *vectorPartitionOperationsTCPClientV1) callWithTiming(request vectorPartitionOperationsWireRequestV1) (response vectorPartitionOperationsWireResponseV1, timing vectorPartitionSystemFrameTimingV1, err error) {
+	return c.callWithTimingContext(context.Background(), request)
+}
+
+func (c *vectorPartitionOperationsTCPClientV1) callContext(ctx context.Context, request vectorPartitionOperationsWireRequestV1) (vectorPartitionOperationsWireResponseV1, error) {
+	response, _, err := c.callWithTimingContext(ctx, request)
+	return response, err
+}
+
+func (c *vectorPartitionOperationsTCPClientV1) callWithTimingContext(ctx context.Context, request vectorPartitionOperationsWireRequestV1) (response vectorPartitionOperationsWireResponseV1, timing vectorPartitionSystemFrameTimingV1, err error) {
 	if c == nil || c.client == nil || c.conn == nil {
 		return response, timing, io.ErrClosedPipe
 	}
@@ -1041,10 +1050,16 @@ func (c *vectorPartitionOperationsTCPClientV1) callWithTiming(request vectorPart
 		return response, timing, errors.New("unsupported system search protocol")
 	}
 	deadline := time.Now().Add(30 * time.Second)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
+		deadline = callerDeadline
+	}
 	if !request.Search.Deadline.IsZero() && request.Search.Deadline.Before(deadline) {
 		deadline = request.Search.Deadline
 	}
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	c.conn.begin()
 	defer func() { timing = c.conn.finish(time.Now()) }()
