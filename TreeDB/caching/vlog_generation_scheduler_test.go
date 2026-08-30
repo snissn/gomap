@@ -8056,6 +8056,15 @@ func TestCheckpoint_KickHotDebtOnlyGuardCanBeDisabled(t *testing.T) {
 	}
 }
 
+func TestCheckpoint_AutomaticKickDoesNotForceBackendCheckpoint(t *testing.T) {
+	if opts := vlogGenerationCheckpointKickOptions(true); !opts.skipCheckpoint {
+		t.Fatal("automatic checkpoint kick must reuse the completed covered-prefix boundary")
+	}
+	if opts := vlogGenerationCheckpointKickOptions(false); opts.skipCheckpoint {
+		t.Fatal("explicit checkpoint kick must retain its full checkpoint boundary")
+	}
+}
+
 func TestCheckpoint_KickHotDebtOnlySkipsFreshPlanDuringRecentForegroundActivity(t *testing.T) {
 	disableVlogGenerationLoop(t)
 
@@ -8083,7 +8092,7 @@ func TestCheckpoint_KickHotDebtOnlySkipsFreshPlanDuringRecentForegroundActivity(
 	db.lastForegroundWriteUnixNano.Store(hot)
 	db.lastForegroundReadUnixNano.Store(hot)
 
-	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint(false)
 
 	time.Sleep(150 * time.Millisecond)
 	if _, calls := recorder.recordedPlan(); calls != 0 {
@@ -8134,7 +8143,7 @@ func TestCheckpoint_KickHotDebtOnlySkipsFreshPlanWhenQueuedDebtCooling(t *testin
 	db.lastForegroundWriteUnixNano.Store(hot)
 	db.lastForegroundReadUnixNano.Store(hot)
 
-	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint(false)
 
 	time.Sleep(150 * time.Millisecond)
 	if _, calls := recorder.recordedPlan(); calls != 0 {
@@ -8178,7 +8187,7 @@ func TestCheckpoint_KickHotDebtOnlyWakeRunsAfterForegroundQuiets(t *testing.T) {
 	hot := time.Now().UnixNano()
 	db.lastForegroundWriteUnixNano.Store(hot)
 	db.lastForegroundReadUnixNano.Store(hot)
-	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint(false)
 
 	time.Sleep(150 * time.Millisecond)
 	if _, calls := recorder.recordedPlan(); calls != 0 {
@@ -8418,7 +8427,7 @@ func TestCheckpoint_KickSelfDrainsMaintenanceCollision(t *testing.T) {
 		close(release)
 	}()
 
-	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint(false)
 
 	deadline := time.Now().Add(2 * schedulerTestWait(t))
 	for {
@@ -8849,7 +8858,7 @@ func TestCheckpoint_KickSkipsWhenMaintenancePhaseNonSteady(t *testing.T) {
 	forceVlogMaintenanceIdle(db)
 
 	db.SetMaintenancePhase(MaintenancePhaseCatchUp)
-	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint(false)
 	deadline := time.Now().Add(2 * schedulerTestWait(t))
 	for time.Now().Before(deadline) {
 		if _, calls := recorder.recordedRewrite(); calls != 0 {
@@ -8865,7 +8874,7 @@ func TestCheckpoint_KickSkipsWhenMaintenancePhaseNonSteady(t *testing.T) {
 	}
 
 	db.SetMaintenancePhase(MaintenancePhaseSteady)
-	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint(false)
 	deadline = time.Now().Add(2 * schedulerTestWait(t))
 	for {
 		if _, calls := recorder.recordedRewrite(); calls >= 1 {

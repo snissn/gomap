@@ -3813,7 +3813,15 @@ func (db *DB) Checkpoint() error {
 // Automatic cache maintenance uses this instead of Checkpoint so deferred root
 // publication remains under the existing coordinator's debt policy.
 func (db *DB) MaintainCommandWALCoveredPrefix() error {
-	if db == nil || db.closing.Load() {
+	if db == nil {
+		return ErrClosed
+	}
+	// Keep the runtime and journal alive from the capability check through
+	// rotation and cleanup. Close takes this lock exclusively before tearing
+	// either resource down.
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	if db.closing.Load() {
 		return ErrClosed
 	}
 	if db.readOnly {

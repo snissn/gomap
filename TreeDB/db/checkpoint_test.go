@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -120,6 +121,35 @@ func TestMaintainCommandWALCoveredPrefixWithoutCommandWALFallsBackToCheckpoint(t
 	}
 	if !bytes.Equal(got, []byte("v")) {
 		t.Fatalf("Get after reopen=%q want %q", got, []byte("v"))
+	}
+}
+
+func TestMaintainCommandWALCoveredPrefixPinsTeardown(t *testing.T) {
+	d, err := Open(Options{
+		Dir:                    t.TempDir(),
+		CommandWAL:             true,
+		Durability:             DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	maintained := make(chan error, 1)
+	d.teardownMu.Lock()
+	go func() { maintained <- d.MaintainCommandWALCoveredPrefix() }()
+	select {
+	case err := <-maintained:
+		d.teardownMu.Unlock()
+		t.Fatalf("covered-prefix maintenance bypassed teardown admission: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	d.teardownMu.Unlock()
+	if err := <-maintained; err != nil {
+		t.Fatalf("MaintainCommandWALCoveredPrefix: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
 

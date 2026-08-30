@@ -20443,7 +20443,7 @@ func (db *DB) scheduleDueVlogGenerationDeferredMaintenance() {
 	})
 }
 
-func (db *DB) scheduleVlogGenerationCheckpointKickHotNoDebtWake() {
+func (db *DB) scheduleVlogGenerationCheckpointKickHotNoDebtWake(automatic bool) {
 	if db == nil || db.closing.Load() {
 		return
 	}
@@ -20464,7 +20464,7 @@ func (db *DB) scheduleVlogGenerationCheckpointKickHotNoDebtWake() {
 			return
 		}
 		db.vlogGenerationCheckpointKickHotNoDebtWakeRuns.Add(1)
-		db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+		db.maybeKickVlogGenerationMaintenanceAfterCheckpoint(automatic)
 	}()
 }
 
@@ -22771,7 +22771,7 @@ func (db *DB) suppressBackgroundVlogGenerationForMaintenancePhase() bool {
 	}
 }
 
-func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
+func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint(automatic bool) {
 	if db == nil || db.closing.Load() {
 		if db != nil {
 			db.debugVlogMaintf("checkpoint_kick_skip reason=closing")
@@ -22833,7 +22833,7 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 		deferredDue := db.vlogGenerationDeferredMaintenanceDue(now)
 		if !quiet && rewriteQueueEligibleLen == 0 && !deferredDue {
 			db.vlogGenerationCheckpointKickSkippedHotNoDebt.Add(1)
-			db.scheduleVlogGenerationCheckpointKickHotNoDebtWake()
+			db.scheduleVlogGenerationCheckpointKickHotNoDebtWake(automatic)
 			db.debugVlogMaintf(
 				"checkpoint_kick_skip reason=foreground_hot_no_debt quiet=%t queue_len=%d eligible_queue_len=%d checkpoint_pending=%t deferred_pending=%t deferred_due=%t hot_no_debt_wake_running=%t",
 				quiet,
@@ -22895,16 +22895,7 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 		}
 		rewriteRunsBefore := db.vlogGenerationRewriteRuns.Load()
 		gcRunsBefore := db.vlogGenerationGCRuns.Load()
-		db.runVlogGenerationCheckpointKickRetries(vlogGenerationMaintenanceOptions{
-			bypassQuiet:           true,
-			skipRetainedPruneWait: true,
-			// Checkpoint-triggered maintenance still needs a fresh serialized
-			// backend view before iterator-based rewrite/GC scans run. Re-entering
-			// Checkpoint here is safe: the just-finished caller has already cleared
-			// checkpointing, and the kick-active guard prevents recursive kicks.
-			skipCheckpoint:   false,
-			rewriteDebtDrain: true,
-		})
+		db.runVlogGenerationCheckpointKickRetries(vlogGenerationCheckpointKickOptions(automatic))
 		if db.vlogGenerationRewriteRuns.Load() > rewriteRunsBefore {
 			db.vlogGenerationCheckpointKickRewriteRuns.Add(1)
 		}
@@ -22920,6 +22911,18 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 			db.vlogGenerationCheckpointKickPending.Load(),
 		)
 	}()
+}
+
+func vlogGenerationCheckpointKickOptions(automatic bool) vlogGenerationMaintenanceOptions {
+	return vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		// Automatic checkpoint maintenance already established its covered
+		// backend prefix. Reuse that view instead of publishing the visible
+		// frontier through a second full checkpoint.
+		skipCheckpoint:   automatic,
+		rewriteDebtDrain: true,
+	}
 }
 
 func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
@@ -24727,7 +24730,7 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 		return err
 	}
 	db.checkValueLogRetention()
-	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint(automatic)
 	db.scheduleRetainedValueLogPrune()
 	db.trimRetainedArenasAfterFlush(true)
 	recordCheckpointStageSince(&db.checkpointStagePostMaintenance, postMaintenanceStart)
