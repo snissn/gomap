@@ -8872,7 +8872,7 @@ type DB struct {
 	// Level 1 (Disk)
 	backend                              BackendDB
 	unregisterLogicalOrderedRootObserver func()
-	unregisterForegroundReadObserver      func()
+	unregisterForegroundReadObserver     func()
 	dictStore                            DictStore
 	templateStore                        template.Store
 
