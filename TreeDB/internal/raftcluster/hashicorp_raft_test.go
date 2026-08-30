@@ -694,8 +694,7 @@ func testHashicorpRaftProviderLeaderCrashRestartCatchUp(t *testing.T, waitForBac
 		}
 		controlledLeader.submitter = newHashicorpRaftDBSubmitter(t, controlledLeader, collectionCountCatalogVersion(controlledLeader, 7))
 		target := hraft.ServerAddress(peerAddress(t, backoffNode.cfg, backoffNode.id))
-		controlledLeader.raftTransport.resetAppendFailures(target)
-		cluster.disconnectNode(t, backoffNode.id)
+		controlledLeader.raftTransport.failAppendEntries(target, hashicorpRaftTestRestartBackoffFailureCount)
 
 		thirdCtx, thirdCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer thirdCancel()
@@ -707,7 +706,6 @@ func testHashicorpRaftProviderLeaderCrashRestartCatchUp(t *testing.T, waitForBac
 			t.Fatalf("controlled leader SubmitCommandEntryV1 during restart backoff: %v", err)
 		}
 		cluster.waitRestartBackoff(t, controlledLeader.id, backoffNode.id, third.CommittedEntry.EntryID())
-		cluster.connectAllTransports(t)
 		cluster.waitRestartCatchUp(t, backoffNode.id, third.CommittedEntry.EntryID())
 		finalEntry = third.CommittedEntry.EntryID()
 	}
@@ -979,11 +977,6 @@ const (
 	// succeeding AppendEntries round trip, but only for restart catch-up.
 	hashicorpRaftTestRestartCatchUpTimeout = 10_240*time.Millisecond + hashicorpRaftTestCoordinationTimeout
 
-	// The controlled generation starts after a successful replication resets
-	// upstream failure state. Give that disconnected setup phase two catch-up
-	// windows; the post-reconnect correctness bound stays unchanged.
-	hashicorpRaftTestRestartBackoffSetupTimeout = 2 * hashicorpRaftTestRestartCatchUpTimeout
-
 	// After eleven failed ordinary AppendEntries RPCs, HashiCorp Raft's next
 	// retry is in its upstream generation that sleeps for more than five
 	// seconds. This is a fixed regression seam, not a reimplementation of
@@ -992,23 +985,64 @@ const (
 )
 
 // countingAppendEntriesTransport is a test-only controlled fault seam. It
-// leaves InmemTransport behavior intact while exposing failed ordinary
-// replication to a disconnected peer.
+// leaves InmemTransport behavior intact while injecting failed ordinary
+// replication to a live peer.
 type countingAppendEntriesTransport struct {
 	*hraft.InmemTransport
 
 	mu       sync.Mutex
 	failures map[hraft.ServerAddress]uint64
+	faults   map[hraft.ServerAddress]uint64
+}
+
+type controlledAppendEntriesPipeline struct {
+	hraft.AppendPipeline
+	transport *countingAppendEntriesTransport
+	target    hraft.ServerAddress
+}
+
+func (p controlledAppendEntriesPipeline) AppendEntries(args *hraft.AppendEntriesRequest, resp *hraft.AppendEntriesResponse) (hraft.AppendFuture, error) {
+	if len(args.Entries) != 0 && p.transport.appendFaulted(p.target) {
+		// Stop a pipeline created before the fault was armed. HashiCorp Raft
+		// then retries through ordinary replication, where the injected error
+		// increments its private failure generation.
+		return nil, errors.New("controlled AppendEntries pipeline failure")
+	}
+	return p.AppendPipeline.AppendEntries(args, resp)
 }
 
 func newCountingAppendEntriesTransport(transport *hraft.InmemTransport) *countingAppendEntriesTransport {
 	return &countingAppendEntriesTransport{
 		InmemTransport: transport,
 		failures:       make(map[hraft.ServerAddress]uint64),
+		faults:         make(map[hraft.ServerAddress]uint64),
 	}
 }
 
+func (t *countingAppendEntriesTransport) AppendEntriesPipeline(id hraft.ServerID, target hraft.ServerAddress) (hraft.AppendPipeline, error) {
+	if t.appendFaulted(target) {
+		// Standard replication owns the upstream failure counter; bypass the
+		// pipeline while an ordinary-RPC fault is armed.
+		return nil, hraft.ErrPipelineReplicationNotSupported
+	}
+	pipeline, err := t.InmemTransport.AppendEntriesPipeline(id, target)
+	if err != nil {
+		return nil, err
+	}
+	return controlledAppendEntriesPipeline{AppendPipeline: pipeline, transport: t, target: target}, nil
+}
+
 func (t *countingAppendEntriesTransport) AppendEntries(id hraft.ServerID, target hraft.ServerAddress, args *hraft.AppendEntriesRequest, resp *hraft.AppendEntriesResponse) error {
+	if len(args.Entries) != 0 {
+		t.mu.Lock()
+		if t.faults[target] != 0 {
+			t.faults[target]--
+			t.failures[target]++
+			t.mu.Unlock()
+			return errors.New("controlled AppendEntries failure")
+		}
+		t.mu.Unlock()
+	}
 	err := t.InmemTransport.AppendEntries(id, target, args, resp)
 	if err != nil && len(args.Entries) != 0 {
 		t.mu.Lock()
@@ -1024,10 +1058,17 @@ func (t *countingAppendEntriesTransport) appendFailures(target hraft.ServerAddre
 	return t.failures[target]
 }
 
-func (t *countingAppendEntriesTransport) resetAppendFailures(target hraft.ServerAddress) {
+func (t *countingAppendEntriesTransport) appendFaulted(target hraft.ServerAddress) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.faults[target] != 0
+}
+
+func (t *countingAppendEntriesTransport) failAppendEntries(target hraft.ServerAddress, count uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.failures[target] = 0
+	t.faults[target] = count
 }
 
 func newHashicorpRaftDBCluster(tb testing.TB) *hashicorpRaftTestCluster {
@@ -1535,14 +1576,14 @@ func (c *hashicorpRaftTestCluster) waitRestartBackoff(tb testing.TB, leaderID, r
 		tb.Fatalf("restart backoff seam missing configured peer %q", restartedID)
 	}
 	started := time.Now()
-	deadline := started.Add(hashicorpRaftTestRestartBackoffSetupTimeout)
+	deadline := started.Add(hashicorpRaftTestRestartCatchUpTimeout)
 	for time.Now().Before(deadline) {
-		if transport.appendFailures(target) >= hashicorpRaftTestRestartBackoffFailureCount {
+		if transport.appendFailures(target) == hashicorpRaftTestRestartBackoffFailureCount {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	tb.Fatalf("restart backoff seam timed out: phase=pre-reconnect-backoff elapsed=%s leader_id=%q restarted_id=%q target=%d/%d ordinary_append_failures=%d want_at_least=%d configured_peers=%s nodes=%s", time.Since(started), leaderID, restartedID, id.Term, id.Index, transport.appendFailures(target), hashicorpRaftTestRestartBackoffFailureCount, c.configuredPeers(restartedID), c.restartCatchUpFrontier())
+	tb.Fatalf("restart backoff seam timed out: phase=pre-reconnect-backoff elapsed=%s leader_id=%q restarted_id=%q target=%d/%d injected_ordinary_append_failures=%d want=%d configured_peers=%s nodes=%s", time.Since(started), leaderID, restartedID, id.Term, id.Index, transport.appendFailures(target), hashicorpRaftTestRestartBackoffFailureCount, c.configuredPeers(restartedID), c.restartCatchUpFrontier())
 }
 
 func (c *hashicorpRaftTestCluster) configuredPeers(nodeID NodeID) string {
