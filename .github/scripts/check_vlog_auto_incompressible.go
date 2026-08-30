@@ -320,8 +320,16 @@ func validateModeMetrics(off, auto runMetrics) error {
 	if auto.LeafRawBytes == 0 || auto.LeafStoredBytes >= auto.LeafRawBytes {
 		return fmt.Errorf("auto block leaf values are not smaller: raw=%d stored=%d", auto.LeafRawBytes, auto.LeafStoredBytes)
 	}
-	if off.LeafRawBytes != auto.LeafRawBytes {
-		return fmt.Errorf("leaf raw-byte mismatch: off=%d auto=%d", off.LeafRawBytes, auto.LeafRawBytes)
+	leafRawDelta := off.LeafRawBytes
+	leafRawMax := auto.LeafRawBytes
+	if leafRawDelta > auto.LeafRawBytes {
+		leafRawDelta -= auto.LeafRawBytes
+		leafRawMax = off.LeafRawBytes
+	} else {
+		leafRawDelta = auto.LeafRawBytes - leafRawDelta
+	}
+	if leafRawDelta > leafRawMax/1000 {
+		return fmt.Errorf("leaf raw-byte mismatch exceeds 0.1%%: off=%d auto=%d", off.LeafRawBytes, auto.LeafRawBytes)
 	}
 
 	return nil

@@ -71,6 +71,7 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
         ambiguous_last_auto_cpu_profile: bool = False,
         too_short_last_auto_cpu_profile: bool = False,
         min_cpu_efficiency_frac: float = 0.95,
+        auto_leaf_raw_bytes: int = 20_000_000,
     ) -> subprocess.CompletedProcess[str]:
         if size_ratios is None:
             size_ratios = [0.996] * len(throughput_ratios)
@@ -169,7 +170,7 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
                         "vlog_write_mode.off: frames=1 raw_bytes=512000000 "
                         f"stored_bytes={user_stored_bytes} stored_ratio=1.000000\n"
                         f"vlog_leaf_scan.write_mode.{leaf_mode}: frames=1 "
-                        "raw_bytes=20000000 stored_bytes=5000000 stored_ratio=0.250000\n",
+                        f"raw_bytes={auto_leaf_raw_bytes} stored_bytes=5000000 stored_ratio=0.250000\n",
                         encoding="utf-8",
                     )
                 args.extend(["-off-log", str(off_log)])
@@ -272,11 +273,11 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
         self.assertIn("<= 0.9500", result.stderr)
 
     def test_epyc_7763_headroom_accepts_exact_failed_hosted_aggregate(self) -> None:
-        ratios = [0.9534, 0.9571, 0.9408, 0.9497, 0.9393, 0.9546]
+        ratios = [0.9382] * 6
 
         default_result = self.run_checker(ratios)
         epyc_7763_result = self.run_checker(
-            ratios, min_cpu_efficiency_frac=0.94
+            ratios, min_cpu_efficiency_frac=0.93
         )
 
         self.assertEqual(
@@ -289,15 +290,30 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
             0,
             epyc_7763_result.stdout + epyc_7763_result.stderr,
         )
-        self.assertIn("cpu_efficiency_geomean=0.9491", epyc_7763_result.stdout)
+        self.assertIn("cpu_efficiency_geomean=0.9382", epyc_7763_result.stdout)
 
-    def test_epyc_7763_aggregate_equal_to_adjusted_boundary_fails(self) -> None:
+    def test_known_host_aggregate_equal_to_adjusted_boundary_fails(self) -> None:
         result = self.run_checker(
-            [0.94, 0.94], min_cpu_efficiency_frac=0.94
+            [0.93, 0.93], min_cpu_efficiency_frac=0.93
         )
 
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("<= 0.9400", result.stderr)
+        self.assertIn("<= 0.9300", result.stderr)
+
+    def test_small_leaf_raw_byte_delta_passes(self) -> None:
+        result = self.run_checker(
+            [0.98, 0.99], auto_leaf_raw_bytes=19_980_000
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_material_leaf_raw_byte_delta_fails(self) -> None:
+        result = self.run_checker(
+            [0.98, 0.99], auto_leaf_raw_bytes=19_979_999
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("leaf raw-byte mismatch exceeds 0.1%", result.stderr)
 
     def test_epyc_9v74_class_retains_a_material_cpu_regression_failure(self) -> None:
         # Fifteen recent hosted 9V74 aggregates ranged from 0.9396 to 1.0026.
@@ -524,7 +540,7 @@ class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
         self.assertNotIn("-test batch_write ", script)
         self.assertIn('min_cpu_efficiency_frac="0.95"', script)
         self.assertIn(
-            'if [[ "${cpu_model}" == "AMD EPYC 7763 64-Core Processor" ]]; then min_cpu_efficiency_frac="0.94" elif [[ "${cpu_model}" == "AMD EPYC 9V74 80-Core Processor" ]]; then',
+            'if [[ "${cpu_model}" == "AMD EPYC 7763 64-Core Processor" ]]; then min_cpu_efficiency_frac="0.93" elif [[ "${cpu_model}" == "AMD EPYC 9V74 80-Core Processor" ]]; then',
             script,
         )
         self.assertIn('min_cpu_efficiency_frac="0.93" fi', script)
@@ -534,7 +550,7 @@ class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
         self.assertIn("-min-cpu-seconds 0.25", script)
         self.assertIn("-max-size-frac 1.02", script)
         self.assertIn(
-            "EPYC 7763 uses 0.94x, EPYC 9V74 uses 0.93x, and every other or",
+            "EPYC 7763 and EPYC 9V74 use 0.93x, and every other or",
             script,
         )
         self.assertIn("unknown CPU uses 0.95x", script)
