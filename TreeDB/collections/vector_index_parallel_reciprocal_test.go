@@ -68,7 +68,7 @@ func TestVectorIndexNativeParallelReciprocalLinksPreserveDirtyNodes4243(t *testi
 func TestVectorIndexReciprocalLinkWorkersAreBounded4257(t *testing.T) {
 	previous := runtime.GOMAXPROCS(8)
 	t.Cleanup(func() { runtime.GOMAXPROCS(previous) })
-	for _, tc := range []struct{ neighbors, workers int }{{0, 1}, {1, 1}, {2, 1}, {3, 1}, {4, 4}, {20, 8}} {
+	for _, tc := range []struct{ neighbors, workers int }{{0, 1}, {1, 1}, {2, 1}, {3, 1}, {16, 1}, {17, 8}, {20, 8}} {
 		if got := vectorIndexReciprocalLinkWorkerCount(tc.neighbors); got != tc.workers {
 			t.Fatalf("neighbors=%d workers=%d want %d", tc.neighbors, got, tc.workers)
 		}
