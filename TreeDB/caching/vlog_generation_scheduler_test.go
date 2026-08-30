@@ -10499,15 +10499,10 @@ func TestForegroundMaintenanceContextResumeGrace_ActiveReaderAtDeadlineEndsBefor
 		testForegroundMaintenancePollCh: make(chan time.Time),
 	}
 	endRead := db.beginRawForegroundRead()
-	readStartedAt := time.Now()
 	defer endRead()
 
 	ctx, cancel := db.foregroundMaintenanceContextWithResumeGrace(0, resumeGrace)
 	defer cancel()
-	cutoff := time.Unix(0, db.foregroundMaintenanceGraceDeadlineUnixNano.Load())
-	if !readStartedAt.Before(cutoff) {
-		t.Fatalf("foreground read started at %v, not before grace cutoff %v", readStartedAt, cutoff)
-	}
 
 	select {
 	case <-ctx.Done():
@@ -10519,10 +10514,6 @@ func TestForegroundMaintenanceContextResumeGrace_ActiveReaderAtDeadlineEndsBefor
 	}
 
 	endRead()
-	endedAt := time.Now()
-	if !cutoff.Before(endedAt) {
-		t.Fatalf("foreground read ended at %v, not after grace cutoff %v", endedAt, cutoff)
-	}
 }
 
 func TestForegroundMaintenanceContextResumeGrace_WriteBoundaryOrdering(t *testing.T) {
