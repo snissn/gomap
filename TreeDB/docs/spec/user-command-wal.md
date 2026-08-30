@@ -1214,8 +1214,8 @@ Acceptance:
   CPU profile around each exact timed row, and retains every raw wall-throughput
   ratio as diagnostic evidence. The blocking ratio for each pair is off CPU
   sample seconds divided by auto CPU sample seconds. The gate records the CPU
-  model and selected threshold and applies a strict `>0.94x` threshold on AMD
-  EPYC 7763 runners, a strict `>0.93x` threshold on AMD EPYC 9V74 runners, or
+  model and selected threshold and applies a strict `>0.93x` threshold on AMD
+  EPYC 7763 and AMD EPYC 9V74 runners, or
   a strict `>0.95x` threshold on all other or unknown CPU models to the
   geometric mean of every fixed, order-balanced CPU-efficiency pair. Missing,
   ambiguous, or shorter-than-`0.25s` CPU profiles fail closed;

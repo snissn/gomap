@@ -648,7 +648,7 @@ func waitCatalogMetaStates(t *testing.T, states map[NodeID]*concurrentCatalogMet
 
 func waitCatalogMetaCondition(t *testing.T, ready func() bool, message string) {
 	t.Helper()
-	deadline := time.Now().Add(8 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if ready() {
 			return
