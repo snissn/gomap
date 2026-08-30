@@ -13526,10 +13526,15 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 		graceActivity         uint64
 	)
 	if resumeGrace > 0 {
-		graceDeadlineUnixNano = time.Now().Add(resumeGrace).UnixNano()
+		graceDeadline := time.Now().Add(resumeGrace)
+		graceDeadlineUnixNano = graceDeadline.UnixNano()
 		graceActivity = db.foregroundMaintenanceGraceActivity.Load()
 		db.foregroundMaintenanceGraceDeadlineUnixNano.Store(graceDeadlineUnixNano)
-		graceTimer = time.NewTimer(resumeGrace)
+		remaining := time.Until(graceDeadline)
+		if remaining < 0 {
+			remaining = 0
+		}
+		graceTimer = time.NewTimer(remaining)
 		graceC = graceTimer.C
 	}
 	go func(lastActivity int64, graceActivity uint64) {
