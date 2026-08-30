@@ -7948,6 +7948,81 @@ func TestVlogGenerationRewritePlan_AgeBlockedWakeRevalidatesAfterConcurrentClear
 	}
 }
 
+func TestCurrentVlogGenerationRewriteStageModeSamplesModeBeforeConcurrentClear(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	db, cleanup := openRewriteQueueTestDB(t, dir, backend)
+	t.Cleanup(cleanup)
+
+	stateRead := make(chan struct{})
+	releaseStateRead := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseStateRead) }) })
+	db.testStageConfirmStateReadHook = func() {
+		close(stateRead)
+		<-releaseStateRead
+	}
+	observedAt := time.Now().UnixNano()
+	db.vlogGenerationMaintenanceAutomatic.Store(true)
+	err = db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{{
+		FileID:     11,
+		BytesTotal: 128,
+		BytesLive:  64,
+		BytesStale: 64,
+		StaleRatio: 0.5,
+	}}, true, observedAt)
+	db.vlogGenerationMaintenanceAutomatic.Store(false)
+	if err != nil {
+		t.Fatalf("seed rewrite stage: %v", err)
+	}
+	type stageModeResult struct {
+		pending    bool
+		observedAt int64
+		automatic  bool
+		err        error
+	}
+	resultCh := make(chan stageModeResult, 1)
+	go func() {
+		pending, gotObservedAt, automatic, err := db.currentVlogGenerationRewriteStageMode()
+		resultCh <- stageModeResult{pending, gotObservedAt, automatic, err}
+	}()
+
+	select {
+	case <-stateRead:
+	case <-time.After(schedulerTestWait(t)):
+		t.Fatal("stage mode read did not reach ownership barrier")
+	}
+	clearDone := make(chan error, 1)
+	go func() { clearDone <- db.clearVlogGenerationRewriteStage() }()
+	releaseOnce.Do(func() { close(releaseStateRead) })
+	result := <-resultCh
+	if result.err != nil {
+		t.Fatalf("read rewrite stage mode: %v", result.err)
+	}
+	if !result.pending || result.observedAt != observedAt || !result.automatic {
+		t.Fatalf("stage mode=(%t, %d, %t), want true/%d/true", result.pending, result.observedAt, result.automatic, observedAt)
+	}
+	if err := <-clearDone; err != nil {
+		t.Fatalf("clear rewrite stage: %v", err)
+	}
+}
+
+func TestTakeVlogGenerationDeferredMaintenanceClearsOrphanedAutomaticMode(t *testing.T) {
+	db := &DB{}
+	db.vlogGenerationDeferredMaintenanceAutomatic.Store(true)
+	if pending, automatic := db.takeVlogGenerationDeferredMaintenance(); pending || automatic {
+		t.Fatalf("take orphaned mode=(%t, %t), want false/false", pending, automatic)
+	}
+	if db.vlogGenerationDeferredMaintenanceAutomatic.Load() {
+		t.Fatal("orphaned automatic mode remained armed without pending work")
+	}
+}
+
 func TestVlogGenerationRewrite_IneffectiveBackoffSkipsImmediateGenericRetry(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

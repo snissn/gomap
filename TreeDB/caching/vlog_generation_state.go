@@ -685,15 +685,23 @@ func (db *DB) currentVlogGenerationRewriteEligible(now time.Time) ([]uint32, []b
 }
 
 func (db *DB) currentVlogGenerationRewriteStage() (bool, int64, error) {
+	pending, observedAt, _, err := db.currentVlogGenerationRewriteStageMode()
+	return pending, observedAt, err
+}
+
+func (db *DB) currentVlogGenerationRewriteStageMode() (bool, int64, bool, error) {
 	if db == nil {
-		return false, 0, nil
+		return false, 0, false, nil
 	}
 	db.vlogGenerationRewriteQueueMu.Lock()
 	defer db.vlogGenerationRewriteQueueMu.Unlock()
 	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
-		return false, 0, err
+		return false, 0, false, err
 	}
-	return db.vlogGenerationRewriteStagePending, db.vlogGenerationRewriteStageObservedUnixNano, nil
+	if hook := db.testStageConfirmStateReadHook; hook != nil {
+		hook()
+	}
+	return db.vlogGenerationRewriteStagePending, db.vlogGenerationRewriteStageObservedUnixNano, db.vlogGenerationRewriteStageAutomatic.Load(), nil
 }
 
 func (db *DB) clearVlogGenerationRewriteStage() error {

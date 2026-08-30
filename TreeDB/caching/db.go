@@ -9785,6 +9785,7 @@ type DB struct {
 	testSkipVlogCheckpointKick          bool
 	testSkipCheckpointAutoVacuum        bool
 	testAgeBlockedStateReadHook         func()
+	testStageConfirmStateReadHook       func()
 }
 
 const (
@@ -20290,7 +20291,7 @@ func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 		if db.vlogGenerationRewriteStageWakeObservedNS.Load() != expectedObservedAt {
 			return
 		}
-		stagePending, stageObservedAt, err := db.currentVlogGenerationRewriteStage()
+		stagePending, stageObservedAt, automatic, err := db.currentVlogGenerationRewriteStageMode()
 		if err != nil || !stagePending || stageObservedAt != expectedObservedAt {
 			return
 		}
@@ -20298,7 +20299,6 @@ func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 			"rewrite_plan stage_confirm_due observed_age_ms=%d",
 			time.Since(time.Unix(0, expectedObservedAt)).Milliseconds(),
 		)
-		automatic := db.vlogGenerationRewriteStageAutomatic.Load()
 		db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
 			bypassQuiet:           true,
 			skipRetainedPruneWait: true,
@@ -20311,11 +20311,18 @@ func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 }
 
 func (db *DB) vlogGenerationRewriteAgeBlockedDue(now time.Time) bool {
+	due, _ := db.vlogGenerationRewriteAgeBlockedDueMode(now)
+	return due
+}
+
+func (db *DB) vlogGenerationRewriteAgeBlockedDueMode(now time.Time) (bool, bool) {
 	if db == nil {
-		return false
+		return false, false
 	}
+	db.vlogGenerationRewriteAgeBlockedMu.Lock()
+	defer db.vlogGenerationRewriteAgeBlockedMu.Unlock()
 	until := db.vlogGenerationRewriteAgeBlockedUntilNS.Load()
-	return until > 0 && !now.Before(time.Unix(0, until))
+	return until > 0 && !now.Before(time.Unix(0, until)), db.vlogGenerationRewriteAgeBlockedAutomatic.Load()
 }
 
 type vlogGenerationMaintenanceOptions struct {
@@ -20395,9 +20402,6 @@ func (db *DB) schedulePendingVlogGenerationCheckpointKick() {
 	}
 	if db.vlogGenerationDeferredMaintenanceDue(time.Now()) {
 		automatic := db.vlogGenerationDeferredMaintenanceAutomatic.Load() || db.vlogGenerationCheckpointKickPendingAutomatic.Load()
-		if automatic {
-			db.vlogGenerationDeferredMaintenanceAutomatic.Store(true)
-		}
 		db.scheduleDueVlogGenerationDeferredMaintenance(automatic)
 		return
 	}
@@ -20473,9 +20477,6 @@ func (db *DB) schedulePendingVlogGenerationRewriteQueue() {
 	}
 	if db.vlogGenerationDeferredMaintenanceDue(time.Now()) {
 		automatic := db.vlogGenerationDeferredMaintenanceAutomatic.Load() || db.vlogGenerationRewriteQueuePendingAutomatic.Load()
-		if automatic {
-			db.vlogGenerationDeferredMaintenanceAutomatic.Store(true)
-		}
 		db.scheduleDueVlogGenerationDeferredMaintenance(automatic)
 		return
 	}
@@ -20555,6 +20556,7 @@ func (db *DB) takeVlogGenerationDeferredMaintenance() (bool, bool) {
 	db.vlogGenerationMaintenancePendingMu.Lock()
 	defer db.vlogGenerationMaintenancePendingMu.Unlock()
 	if !db.vlogGenerationDeferredMaintenancePending.CompareAndSwap(true, false) {
+		db.vlogGenerationDeferredMaintenanceAutomatic.Store(false)
 		return false, false
 	}
 	return true, db.vlogGenerationDeferredMaintenanceAutomatic.Swap(false)
@@ -20565,8 +20567,8 @@ func (db *DB) scheduleDueVlogGenerationDeferredMaintenance(automatic bool) {
 		return
 	}
 	now := time.Now()
-	if db.vlogGenerationRewriteAgeBlockedDue(now) {
-		automatic = automatic || db.vlogGenerationRewriteAgeBlockedAutomatic.Load()
+	if due, ageAutomatic := db.vlogGenerationRewriteAgeBlockedDueMode(now); due {
+		automatic = automatic || ageAutomatic
 		db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
 			bypassQuiet:           true,
 			skipRetainedPruneWait: true,
@@ -20577,14 +20579,14 @@ func (db *DB) scheduleDueVlogGenerationDeferredMaintenance(automatic bool) {
 		})
 		return
 	}
-	stagePending, stageObservedAt, err := db.currentVlogGenerationRewriteStage()
+	stagePending, stageObservedAt, stageAutomatic, err := db.currentVlogGenerationRewriteStageMode()
 	if err != nil || !stagePending || stageObservedAt <= 0 {
 		return
 	}
 	if now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteStageConfirmDelay)) {
 		return
 	}
-	automatic = automatic || db.vlogGenerationRewriteStageAutomatic.Load()
+	automatic = automatic || stageAutomatic
 	db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
 		bypassQuiet:           true,
 		skipRetainedPruneWait: true,
