@@ -24210,7 +24210,7 @@ func (db *DB) waitForActiveCheckpointContext(ctx context.Context) error {
 }
 
 func (db *DB) backendCheckpointBoundary(automatic bool) error {
-	if automatic {
+	if automatic && db.externalCommandWAL {
 		return backendAutomaticMaintenanceBoundary(db.backend)
 	}
 	return backendSyncBoundary(db.backend)

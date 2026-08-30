@@ -476,7 +476,13 @@ When WAL is enabled, public `treedb.Open` defaults to:
 - `BackgroundCheckpointIdleDuration = 2s`
 - `MaxWALBytes = 2 GiB`
 
-These bound uncheckpointed log growth in long-running workloads.
+Automatic interval, idle, and size passes are maintenance triggers. In external
+command-WAL mode they rotate and clean only the recovery-covered command-WAL
+prefix; they do not publish the current visible root frontier. Legacy or
+otherwise unwired backends fall back to a full checkpoint. Explicit
+`Checkpoint`, sync, and close remain full durable barriers. The triggers bound
+reclaimable WAL pressure, but uncovered segments may remain until a later
+durable frontier covers them.
 
 ## 8. Profiles and Intent Bundles
 

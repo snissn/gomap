@@ -94,6 +94,34 @@ func TestBackendAutomaticMaintenanceBoundaryDoesNotForceCheckpoint(t *testing.T)
 	}
 }
 
+func TestCachingDBBackendCheckpointBoundaryUsesCoveredPrefixOnlyForExternalCommandWAL(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		automatic            bool
+		externalCommandWAL   bool
+		wantCheckpoints      int
+		wantCoveredPrefixOps int
+	}{
+		{name: "automatic legacy", automatic: true, wantCheckpoints: 1},
+		{name: "automatic external command WAL", automatic: true, externalCommandWAL: true, wantCoveredPrefixOps: 1},
+		{name: "explicit external command WAL", externalCommandWAL: true, wantCheckpoints: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &checkpointBoundaryBackend{}
+			db := &DB{backend: backend, externalCommandWAL: tc.externalCommandWAL}
+			if err := db.backendCheckpointBoundary(tc.automatic); err != nil {
+				t.Fatalf("backendCheckpointBoundary: %v", err)
+			}
+			if got := backend.calls; got != tc.wantCheckpoints {
+				t.Fatalf("checkpoint calls=%d want %d", got, tc.wantCheckpoints)
+			}
+			if got := backend.maintenanceCalls; got != tc.wantCoveredPrefixOps {
+				t.Fatalf("covered-prefix calls=%d want %d", got, tc.wantCoveredPrefixOps)
+			}
+		})
+	}
+}
+
 func TestBackendAutomaticMaintenanceBoundaryRetainsStaleCleanupProof(t *testing.T) {
 	backend := &checkpointBoundaryBackend{maintenanceErr: backenddb.ErrDurableWALCleanupProofStale}
 
