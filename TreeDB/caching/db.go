@@ -20561,6 +20561,12 @@ type vlogGenerationMaintenanceOptions struct {
 	debugSource           string
 }
 
+func (opts vlogGenerationMaintenanceOptions) withPendingMode(automatic bool) vlogGenerationMaintenanceOptions {
+	opts.automatic = automatic
+	opts.skipCheckpoint = automatic
+	return opts
+}
+
 func vlogGenerationMaintenanceDebugSource(opts vlogGenerationMaintenanceOptions) string {
 	if opts.debugSource != "" {
 		return opts.debugSource
@@ -20687,14 +20693,13 @@ func (db *DB) startVlogGenerationRewriteQueueMaintenance(opts vlogGenerationMain
 			if !pending {
 				return
 			}
-			opts.automatic = opts.automatic || automatic
-			opts.skipCheckpoint = opts.skipCheckpoint || opts.automatic
+			runOpts := opts.withPendingMode(automatic)
 			rewriteQueue, _, qerr := db.currentVlogGenerationRewriteEligible(time.Now())
 			stagePending, _, serr := db.currentVlogGenerationRewriteStage()
 			if qerr == nil && serr == nil && (len(rewriteQueue) == 0 || stagePending) {
 				continue
 			}
-			db.runVlogGenerationMaintenanceRetries(opts, vlogGenerationDeferredRetryWindow, true)
+			db.runVlogGenerationMaintenanceRetries(runOpts, vlogGenerationDeferredRetryWindow, true)
 		}
 	}()
 }
@@ -20765,9 +20770,8 @@ func (db *DB) startVlogGenerationDeferredMaintenance(opts vlogGenerationMaintena
 			if !pending {
 				return
 			}
-			opts.automatic = opts.automatic || automatic
-			opts.skipCheckpoint = opts.skipCheckpoint || opts.automatic
-			db.runVlogGenerationMaintenanceRetries(opts, vlogGenerationDeferredRetryWindow, true)
+			runOpts := opts.withPendingMode(automatic)
+			db.runVlogGenerationMaintenanceRetries(runOpts, vlogGenerationDeferredRetryWindow, true)
 		}
 	}()
 }

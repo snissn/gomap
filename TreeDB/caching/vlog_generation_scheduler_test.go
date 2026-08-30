@@ -8040,6 +8040,20 @@ func TestSnapshotVlogGenerationPendingAutomaticModesRequiresPendingWork(t *testi
 	}
 }
 
+func TestVlogGenerationMaintenanceOptionsWithPendingModeResetsEachItem(t *testing.T) {
+	automatic := (vlogGenerationMaintenanceOptions{debugSource: "pending"}).withPendingMode(true)
+	if !automatic.automatic || !automatic.skipCheckpoint {
+		t.Fatalf("automatic pending mode=%+v, want automatic boundary", automatic)
+	}
+	manual := automatic.withPendingMode(false)
+	if manual.automatic || manual.skipCheckpoint {
+		t.Fatalf("manual pending mode=%+v, want full boundary", manual)
+	}
+	if manual.debugSource != "pending" {
+		t.Fatalf("pending mode reset lost base options: %+v", manual)
+	}
+}
+
 func TestVlogGenerationRewrite_IneffectiveBackoffSkipsImmediateGenericRetry(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
