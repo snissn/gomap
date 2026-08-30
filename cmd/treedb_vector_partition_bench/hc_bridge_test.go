@@ -23,6 +23,25 @@ func (c *hcBridgeFakeClientV1) callContext(_ context.Context, r vectorPartitionO
 }
 func (*hcBridgeFakeClientV1) Close() error { return nil }
 
+type hcBridgeCountingClientV1 struct {
+	search public.SearchResponseV1
+	err    error
+	calls  []string
+	closes int
+}
+
+func (c *hcBridgeCountingClientV1) callContext(_ context.Context, r vectorPartitionOperationsWireRequestV1) (vectorPartitionOperationsWireResponseV1, error) {
+	c.calls = append(c.calls, r.Operation)
+	if c.err != nil {
+		return vectorPartitionOperationsWireResponseV1{}, c.err
+	}
+	if r.Operation == "status" {
+		return vectorPartitionOperationsWireResponseV1{NodeConfigSHA256: "node", Health: &public.OperationsHealthV1{Ready: true, State: public.GenerationActiveV1, Generation: public.GenerationIDV1{Index: "idx", Generation: 7}}}, nil
+	}
+	return vectorPartitionOperationsWireResponseV1{Search: &c.search}, nil
+}
+func (c *hcBridgeCountingClientV1) Close() error { c.closes++; return nil }
+
 func TestHCBridgeRejectsNonLoopbackV1(t *testing.T) {
 	if err := runVectorPartitionHCBridgeV1([]string{"-listen", "0.0.0.0:0", "-endpoint", "127.0.0.1:1"}, nil); err == nil {
 		t.Fatal("non-loopback accepted")
@@ -137,4 +156,32 @@ func hcBridgeTestV1(client hcBridgeClientV1) *hcBridgeV1 {
 	b.clients <- &hcBridgeSlotV1{client: client}
 	b.redial = func(context.Context) (hcBridgeClientV1, error) { return client, nil }
 	return b
+}
+
+func TestHCBridgeRetiresFailedSlotThenRedialsV1(t *testing.T) {
+	failed := &hcBridgeCountingClientV1{err: errors.New("transport failed")}
+	recovered := &hcBridgeCountingClientV1{}
+	b := hcBridgeTestV1(failed)
+	redials := 0
+	b.redial = func(context.Context) (hcBridgeClientV1, error) { redials++; return recovered, nil }
+	request := vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "status"}
+	if _, err := b.call(context.Background(), request); err == nil {
+		t.Fatal("failed client accepted")
+	}
+	if _, err := b.call(context.Background(), request); err != nil {
+		t.Fatalf("redial recovery: %v", err)
+	}
+	if len(failed.calls) != 1 || failed.closes != 1 || redials != 1 || len(recovered.calls) != 1 {
+		t.Fatalf("failed=%+v closes=%d redials=%d recovered=%+v", failed.calls, failed.closes, redials, recovered.calls)
+	}
+}
+
+func TestHCBridgeSearchDoesNotIssueStatusRPCV1(t *testing.T) {
+	client := &hcBridgeCountingClientV1{search: public.SearchResponseV1{Generation: public.GenerationIDV1{Index: "idx", Generation: 7}, Neighbors: []public.NeighborV1{{ID: "doc-000042"}}, Counters: public.SearchCountersV1{SelectedPartitions: 1, HNSWServedPartitions: 1}}}
+	b := hcBridgeTestV1(client)
+	w := httptest.NewRecorder()
+	b.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/search", strings.NewReader(`{"version":1,"index":"idx","generation":7,"query":[1],"top_k":1,"probes":1,"ef_search":1}`)))
+	if w.Code != http.StatusOK || len(client.calls) != 1 || client.calls[0] != "search" {
+		t.Fatalf("status=%d calls=%+v", w.Code, client.calls)
+	}
 }
