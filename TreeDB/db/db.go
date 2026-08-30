@@ -1480,17 +1480,17 @@ type Options struct {
 	// distant, keeping the tree clustered. Set to true to maximize write speed.
 	DisablePiggybackCompaction bool
 
-	// BackgroundCheckpointInterval enables periodic automatic covered-prefix
-	// maintenance in cached mode. It trims command-WAL segments already covered
-	// by recovery-selectable durable roots; backends without that maintenance seam
-	// fall back to a full checkpoint.
+	// BackgroundCheckpointInterval enables periodic automatic WAL maintenance in
+	// cached mode. External command-WAL mode trims only segments covered by
+	// recovery-selectable durable roots; legacy or otherwise unwired modes use a
+	// full checkpoint.
 	//
 	// Semantics:
 	// - `0` uses a default.
 	// - `<0` disables the periodic interval trigger.
 	BackgroundCheckpointInterval time.Duration
-	// BackgroundCheckpointIdleDuration triggers opportunistic covered-prefix
-	// maintenance after a period of write-idleness in cached mode.
+	// BackgroundCheckpointIdleDuration triggers the same automatic WAL maintenance
+	// after a period of write-idleness in cached mode.
 	//
 	// Semantics:
 	// - `0` uses a default.
@@ -1515,9 +1515,9 @@ type Options struct {
 	// collection-root span debt thresholds are met (0 uses conservative defaults).
 	BackgroundIndexVacuumCollectionRootSpanRatioPPM uint32
 	BackgroundIndexVacuumCollectionRootPages        uint64
-	// MaxWALBytes triggers immediate covered-prefix maintenance in cached mode when
+	// MaxWALBytes triggers immediate automatic WAL maintenance in cached mode when
 	// reclaimable WAL bytes exceed this many bytes (0 uses a default; <0 disables
-	// the size trigger). This is an operational safety cap; it does not publish the
+	// the size trigger). External command-WAL maintenance does not publish the
 	// visible root frontier or make each write durable (use *Sync APIs for that).
 	MaxWALBytes int64
 }

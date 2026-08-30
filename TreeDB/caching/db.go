@@ -13233,10 +13233,10 @@ func (db *DB) startProcessMemorySampler() {
 	}()
 }
 
-// StartAutoCheckpoint enables a background loop that periodically maintains
-// the recovery-covered command-WAL prefix and trims cached-mode WAL segments.
-// When idleInterval > 0, it also runs after a period of write-idleness. Backends
-// without covered-prefix maintenance fall back to a full checkpoint.
+// StartAutoCheckpoint enables a background loop that trims cached-mode WAL
+// segments. With an external command WAL it maintains only the recovery-covered
+// prefix; legacy or otherwise unwired modes use a full checkpoint. When
+// idleInterval > 0, the loop also runs after a period of write-idleness.
 //
 // interval > 0 enables periodic passes. maxWALBytes is a safety cap: if > 0,
 // the loop will attempt maintenance when the effective WAL bytes exceed this
