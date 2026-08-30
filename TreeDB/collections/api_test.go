@@ -1572,13 +1572,14 @@ func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open collection: %v", err)
 	}
-	if _, err := col.InsertBatch(
+	_, requestStats, err := col.InsertBatchWithStats(
 		[][]byte{[]byte("u1"), []byte("u2")},
 		[][]byte{
 			[]byte(`{"email":"ada@example.com","city":"hnl"}`),
 			[]byte(`{"email":"grace@example.com","city":"sfo"}`),
 		},
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("insert batch: %v", err)
 	}
 
@@ -1606,6 +1607,10 @@ func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
 	if got := again.SecondaryRuns[0].IndexName; got == "mutated" {
 		t.Fatal("LastInsertStats did not return an owned secondary-run slice")
 	}
+	requestStats.SecondaryRuns[0].IndexName = "request-mutated"
+	if got := col.LastInsertStats().SecondaryRuns[0].IndexName; got == "request-mutated" {
+		t.Fatal("InsertBatchWithStats result shares its secondary-run slice with LastInsertStats")
+	}
 	if ids, err := col.InsertBatch(nil, nil); err != nil {
 		t.Fatalf("empty insert batch: %v", err)
 	} else if ids != nil {
@@ -1623,6 +1628,55 @@ func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
 	}
 	if got := len(empty.SecondaryRuns); got != 0 {
 		t.Fatalf("empty stats secondary runs=%d want 0", got)
+	}
+}
+
+func TestCollectionInsertBatchWithStatsOwnsConcurrentResults(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users", Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	type result struct {
+		stats CollectionInsertStats
+		err   error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	for _, batch := range [][][]byte{
+		{[]byte(`{"email":"one@example.com"}`)},
+		{[]byte(`{"email":"two@example.com"}`), []byte(`{"email":"three@example.com"}`)},
+	} {
+		batch := batch
+		go func() {
+			<-start
+			ids := make([][]byte, len(batch))
+			for i := range ids {
+				ids[i] = []byte(fmt.Sprintf("u-%d-%d", len(batch), i))
+			}
+			_, stats, err := col.InsertBatchWithStats(ids, batch)
+			results <- result{stats: stats, err: err}
+		}()
+	}
+	close(start)
+	seen := map[int]bool{}
+	for range 2 {
+		got := <-results
+		if got.err != nil {
+			t.Fatalf("InsertBatchWithStats: %v", got.err)
+		}
+		seen[got.stats.Documents] = true
+	}
+	if !seen[1] || !seen[2] {
+		t.Fatalf("request stats documents=%v want distinct 1 and 2", seen)
 	}
 }
 

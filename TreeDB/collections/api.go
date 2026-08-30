@@ -4753,10 +4753,10 @@ func (c *Collection) bufferNoIndexInsertBatch(
 		return nil, true, fmt.Errorf("collections: caller-provided batch ids length mismatch ids=%d documents=%d", len(ids), len(documents))
 	}
 	if len(documents) == 0 {
-		c.setLastInsertStats(CollectionInsertStats{
+		c.recordInsertBatchStats(CollectionInsertStats{
 			Documents: 0,
 			Indexes:   len(catalog.meta.Indexes),
-		})
+		}, execOpts)
 		return nil, true, nil
 	}
 	resultIDs, err := cloneBatchDocumentIDs(ids)
@@ -4845,11 +4845,11 @@ func (c *Collection) bufferNoIndexInsertBatch(
 	domain.count += len(entries)
 	domain.writeGeneration++
 	domain.notePrimaryWriteKeysLocked(resultIDs, domain.writeGeneration)
-	c.setLastInsertStats(CollectionInsertStats{
+	c.recordInsertBatchStats(CollectionInsertStats{
 		Documents: len(entries),
 		Indexes:   0,
 		Runs:      1,
-	})
+	}, execOpts)
 	return maybeInsertBatchResultIDs(resultIDs, execOpts), true, nil
 }
 
@@ -10447,6 +10447,26 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	return resultIDs, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
+// InsertBatchWithStats adds a batch of documents and returns request-owned
+// stats from its successful insert attempt. LastInsertStats remains available
+// for legacy callers, but is not safe for attributing concurrent requests.
+func (c *Collection) InsertBatchWithStats(ids, documents [][]byte) ([][]byte, CollectionInsertStats, error) {
+	return c.insertBatchWithStats(ids, documents)
+}
+
+func (c *Collection) insertBatchWithStats(ids, documents [][]byte) ([][]byte, CollectionInsertStats, error) {
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
+	var stats CollectionInsertStats
+	resultIDs, err := c.insertBatchWithCommandWALIntentSchemaLocked(ids, documents, false, nil, nil, insertBatchExecutionOptions{returnResultIDs: true, insertStats: &stats})
+	if err == nil {
+		err = commitAmbiguousError("InsertBatch vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
+	}
+	return resultIDs, stats, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
+}
+
 // InsertBatchWithTemplateV1Encoder inserts template-v1 documents and teaches
 // encoder any numeric template IDs resolved by the successful insert. Later
 // EncodeDocument calls on the same encoder can then emit compact TD1D stored
@@ -10659,6 +10679,14 @@ func (c *Collection) insertBatchSchemaLocked(ids, documents [][]byte, trustedVal
 
 type insertBatchExecutionOptions struct {
 	returnResultIDs bool
+	insertStats     *CollectionInsertStats
+}
+
+func (c *Collection) recordInsertBatchStats(stats CollectionInsertStats, execOpts insertBatchExecutionOptions) {
+	c.setLastInsertStatsOwned(stats)
+	if execOpts.insertStats != nil {
+		*execOpts.insertStats = cloneCollectionInsertStats(stats)
+	}
 }
 
 func (c *Collection) insertBatchWithCommandWALIntent(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent, execOpts insertBatchExecutionOptions) ([][]byte, error) {
@@ -10833,7 +10861,7 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 	plan.stats.BufferedIndexedBatches = 1
 	if !insertBatchPlanHasRootWork(plan) {
 		closePlanningSnapshot()
-		c.setLastInsertStatsOwned(plan.stats.CollectionInsertStats)
+		c.recordInsertBatchStats(plan.stats.CollectionInsertStats, execOpts)
 		return maybeInsertBatchResultIDs(plan.resultIDs, execOpts), nil, true
 	}
 	resultIDs, err := cloneInsertBatchResultIDs(plan.resultIDs, execOpts)
@@ -10880,7 +10908,7 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 		return nil, err, true
 	}
 	plan.stats.Publish += bufferFlushElapsed
-	c.setLastInsertStatsOwned(plan.stats.CollectionInsertStats)
+	c.recordInsertBatchStats(plan.stats.CollectionInsertStats, execOpts)
 	return resultIDs, nil, true
 }
 
@@ -10902,10 +10930,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 	defer unlockIfLocked()
 
 	if len(documents) == 0 {
-		c.setLastInsertStats(CollectionInsertStats{
+		c.recordInsertBatchStats(CollectionInsertStats{
 			Documents: 0,
 			Indexes:   len(c.meta.Indexes),
-		})
+		}, execOpts)
 		return nil, nil
 	}
 	skipInitialNoIndexFlush := false
@@ -11169,7 +11197,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	if !insertBatchPlanHasRootWork(plan) {
 		closePlanningSnapshot()
 		templateEncoder.learnTemplateV1Templates(c, plan.templateLearned)
-		c.setLastInsertStatsOwned(plan.stats.CollectionInsertStats)
+		c.recordInsertBatchStats(plan.stats.CollectionInsertStats, execOpts)
 		return maybeInsertBatchResultIDs(plan.resultIDs, execOpts), nil
 	}
 
@@ -11261,7 +11289,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 		plan.stats.Publish += bufferFlushElapsed
 		templateEncoder.learnTemplateV1Templates(c, plan.templateLearned)
-		c.setLastInsertStatsOwned(plan.stats.CollectionInsertStats)
+		c.recordInsertBatchStats(plan.stats.CollectionInsertStats, execOpts)
 		return resultIDs, nil
 	}
 	if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
@@ -11399,7 +11427,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	templateEncoder.learnTemplateV1Templates(c, plan.templateLearned)
-	c.setLastInsertStatsOwned(plan.stats.CollectionInsertStats)
+	c.recordInsertBatchStats(plan.stats.CollectionInsertStats, execOpts)
 	return maybeInsertBatchResultIDs(plan.resultIDs, execOpts), nil
 }
 
@@ -12159,7 +12187,7 @@ func (c *Collection) insertBatchNoIndex(
 		c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 		c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 		c.replacePrimaryDocumentCacheAfterInsert(newSystemRoot, publishMeta, entries)
-		c.setLastInsertStats(stats)
+		c.recordInsertBatchStats(stats, execOpts)
 		return maybeInsertBatchResultIDs(resultIDs, execOpts), nil
 	}
 
@@ -12198,7 +12226,7 @@ func (c *Collection) insertBatchNoIndex(
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	c.replacePrimaryDocumentCacheAfterInsert(newSystemRoot, c.meta, entries)
-	c.setLastInsertStats(stats)
+	c.recordInsertBatchStats(stats, execOpts)
 	return maybeInsertBatchResultIDs(resultIDs, execOpts), nil
 }
 

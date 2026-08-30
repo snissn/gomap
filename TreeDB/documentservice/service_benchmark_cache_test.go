@@ -58,8 +58,8 @@ func TestServiceBenchmarkVectorSearchCacheWarmOnOptimizeAndReuse(t *testing.T) {
 		{ID: "a", Content: "alpha", Embedding: []float32{1, 0}},
 		{ID: "b", Content: "beta", Embedding: []float32{0, 1}},
 	})
-	if got := svc.benchmarkSearchCacheSizeForTest(); got != 0 {
-		t.Fatalf("cache size before optimize=%d want 0", got)
+	if got := svc.benchmarkSearchCacheSizeForTest(); got != 1 {
+		t.Fatalf("cache size before optimize=%d want 1", got)
 	}
 	if _, err := svc.OptimizeIndex(ctx, "bench_cache", OptimizeIndexRequest{}); err != nil {
 		t.Fatalf("OptimizeIndex: %v", err)
@@ -82,6 +82,26 @@ func TestServiceBenchmarkVectorSearchCacheWarmOnOptimizeAndReuse(t *testing.T) {
 		t.Fatalf("SearchBenchmarkVector second: %v", err)
 	}
 	assertBenchmarkCacheHit(t, second, "second search")
+}
+
+func TestServiceDeferredColumnGraphLoadPrimesAndReusesCachedHandle(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	createBenchmarkColumnGraphIndex(t, svc, "deferred_load")
+	loadBenchmarkDocsDeferred(t, svc, "deferred_load", []Document{{ID: "a", Embedding: []float32{1, 0}}})
+	svc.benchmarkSearchCacheMu.RLock()
+	first := svc.benchmarkSearchCache["deferred_load"]
+	svc.benchmarkSearchCacheMu.RUnlock()
+	if first == nil || first.collection == nil {
+		t.Fatal("first deferred load did not prime the service-owned collection handle")
+	}
+	loadBenchmarkDocsDeferred(t, svc, "deferred_load", []Document{{ID: "b", Embedding: []float32{0, 1}}})
+	svc.benchmarkSearchCacheMu.RLock()
+	second := svc.benchmarkSearchCache["deferred_load"]
+	svc.benchmarkSearchCacheMu.RUnlock()
+	if second == nil || second.collection != first.collection {
+		t.Fatalf("second deferred load replaced cached collection: first=%p second=%p", first.collection, second.collection)
+	}
 }
 
 func TestServiceBenchmarkVectorSearchCacheConcurrentReuse(t *testing.T) {
