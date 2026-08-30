@@ -19075,8 +19075,6 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 	beforeReclaimable := reclaimableBytes
 	start := time.Now()
 	err := db.checkpointContext(context.Background(), true)
-	criticalSectionDur := time.Since(start)
-	db.checkpointStageAutoCriticalSection.record(criticalSectionDur)
 	// The durability cut is complete and checkpointContext has released cache
 	// writer admission. Consume at most one coalesced cleanup request before
 	// sampling WAL relief and re-arming the size trigger.
@@ -25049,10 +25047,14 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 		}
 	}
 
+	criticalSectionStart := time.Now()
 	db.resetCheckpointFlushAllLastStats()
 
 	defer func() { // This defer runs when db.Checkpoint() returns
 		db.checkpointMu.Lock()
+		if automatic {
+			db.checkpointStageAutoCriticalSection.record(time.Since(criticalSectionStart))
+		}
 		db.checkpointPostFrontierAdmission.Store(false)
 		db.checkpointWriteCutoverActive.Store(false)
 		db.checkpointing.Store(false)

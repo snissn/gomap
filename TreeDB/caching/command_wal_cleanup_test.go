@@ -175,11 +175,34 @@ func TestAutoCheckpointCoveredPrefixCleanupRunsAfterWriterAdmissionRelease(t *te
 		t.Fatalf("seed write: %v", err)
 	}
 
+	// Hold flushMu until the automatic checkpoint reaches its pre-admission
+	// wait. This wall belongs to the whole worker pass, not to writer admission.
+	database.flushMu.Lock()
+	flushMuHeld := true
+	defer func() {
+		if flushMuHeld {
+			database.flushMu.Unlock()
+		}
+	}()
 	done := make(chan struct{})
 	go func() {
 		database.maybeAutoCheckpoint(0, autoCheckpointModeForce)
 		close(done)
 	}()
+	deadline := time.After(withRaceTimeout(2 * time.Second))
+	for database.checkpointFlushPreemptRequests.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("automatic checkpoint did not reach pre-admission flush wait")
+		default:
+			runtimeGosched()
+		}
+	}
+	preAdmissionHoldStart := time.Now()
+	time.Sleep(25 * time.Millisecond)
+	preAdmissionHold := time.Since(preAdmissionHoldStart)
+	database.flushMu.Unlock()
+	flushMuHeld = false
 	select {
 	case <-backend.cleanupStarted:
 	case <-time.After(withRaceTimeout(2 * time.Second)):
@@ -188,6 +211,8 @@ func TestAutoCheckpointCoveredPrefixCleanupRunsAfterWriterAdmissionRelease(t *te
 	if database.checkpointing.Load() {
 		t.Fatal("post-release cleanup still owns cache checkpoint admission")
 	}
+	postReleaseHoldStart := time.Now()
+	time.Sleep(25 * time.Millisecond)
 
 	writeDone := make(chan error, 1)
 	go func() { writeDone <- writePoint("post-cut") }()
@@ -203,14 +228,17 @@ func TestAutoCheckpointCoveredPrefixCleanupRunsAfterWriterAdmissionRelease(t *te
 	// later debt bit; the completing pass must not clear it.
 	database.requestCommandWALCleanup()
 	database.requestCommandWALCleanup()
+	postReleaseHold := time.Since(postReleaseHoldStart)
 	close(releaseCleanup)
 	select {
 	case <-done:
 	case <-time.After(withRaceTimeout(2 * time.Second)):
 		t.Fatal("automatic checkpoint did not finish after cleanup release")
 	}
-	if total, critical := database.autoCheckpointLastDurNanos.Load(), int64(database.checkpointStageAutoCriticalSection.maxNs.Load()); total <= critical {
-		t.Fatalf("automatic checkpoint duration=%d want whole worker pass greater than critical section=%d", total, critical)
+	total, critical := database.autoCheckpointLastDurNanos.Load(), int64(database.checkpointStageAutoCriticalSection.maxNs.Load())
+	wantExcluded := preAdmissionHold + postReleaseHold - 5*time.Millisecond
+	if excluded := time.Duration(total - critical); excluded < wantExcluded {
+		t.Fatalf("automatic checkpoint duration=%d critical section=%d excluded=%s want at least held pre-admission+post-release wall %s", total, critical, excluded, wantExcluded)
 	}
 	if !database.commandWALCleanupPending.Load() {
 		t.Fatal("cleanup completion dropped debt requested while the pass was active")
