@@ -260,7 +260,11 @@ func runVectorPartitionHCBridgeV1(args []string, stdout io.Writer) error {
 func newHCBridgeServerV1(handler http.Handler, timeout time.Duration) *http.Server {
 	// WriteTimeout starts with headers, while search spends one bounded phase
 	// decoding the body before starting its separately bounded native operation.
-	return &http.Server{Handler: handler, ReadHeaderTimeout: timeout, ReadTimeout: timeout, WriteTimeout: 2*timeout + hcBridgeResponseGraceV1, IdleTimeout: timeout}
+	return &http.Server{Handler: handler, ReadHeaderTimeout: timeout, ReadTimeout: timeout, WriteTimeout: hcBridgeFullRequestBudgetV1(timeout), IdleTimeout: timeout}
+}
+
+func hcBridgeFullRequestBudgetV1(timeout time.Duration) time.Duration {
+	return 2*timeout + hcBridgeResponseGraceV1
 }
 
 func serveHCBridgeV1(ctx context.Context, server *http.Server, listener net.Listener, timeout time.Duration) error {
@@ -273,7 +277,7 @@ func serveHCBridgeV1(ctx context.Context, server *http.Server, listener net.List
 		}
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), hcBridgeFullRequestBudgetV1(timeout))
 		shutdownErr := server.Shutdown(shutdownCtx)
 		cancel()
 		serveErr := <-serveDone
