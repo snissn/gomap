@@ -1045,6 +1045,9 @@ func TestSearchVectorIndexWithBufferQuantizedOnlyAndRerank2415(t *testing.T) {
 	assertCollectionBufferedQuantizedRouteStats2415(t, emptyRerank.Stats, columnVectorGraphNativeSearchQueryModeQuantizedRerank, emptyRerankOpts, def.Dimensions)
 
 	if !collectionsRaceEnabled {
+		if !enterIsolatedVectorAllocationGate(t, "search-vector-index-with-buffer-quantized-rerank") {
+			return
+		}
 		quantizedOnlyAllocs := testing.AllocsPerRun(100, func() {
 			got, err := col.SearchVectorIndexWithBuffer(quantizedOnlyOpts, &buffer)
 			if err != nil || len(got.Results) != quantizedOnlyOpts.TopK {
