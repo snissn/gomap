@@ -1069,11 +1069,24 @@ func TestTemplateV1MaterializerOwnsBufferedTemplateRuns(t *testing.T) {
 	if bufferedTemplateRuns == 0 {
 		t.Fatal("expected buffered template run before creating materializer")
 	}
+	begins, ends, active := 0, 0, 0
+	unregister := d.RegisterForegroundReadObserver(func() {}, func() func() {
+		begins++
+		active++
+		return func() {
+			ends++
+			active--
+		}
+	})
+	defer unregister()
 	materializer, err := col.NewStoredDocumentJSONMaterializer()
 	if err != nil {
 		t.Fatalf("new materializer: %v", err)
 	}
 	defer func() { _ = materializer.Close() }()
+	if active != 0 || begins != ends {
+		t.Fatalf("foreground begin/end/active after materializer construction=%d/%d/%d want balanced idle", begins, ends, active)
+	}
 
 	stored, err := col.Get([]byte("u1"))
 	if err != nil {
@@ -1083,12 +1096,16 @@ func TestTemplateV1MaterializerOwnsBufferedTemplateRuns(t *testing.T) {
 		t.Fatalf("flush buffered template run: %v", err)
 	}
 
+	beginsBeforeMaterialize := begins
 	jsonDoc, err := materializer.StoredDocumentJSON(stored)
 	if err != nil {
 		t.Fatalf("materialize after buffered run release: %v", err)
 	}
 	if !bytes.Contains(jsonDoc, []byte(`"email":"ada@example.com"`)) || !bytes.Contains(jsonDoc, []byte(`"city":"hnl"`)) {
 		t.Fatalf("materialized json=%s", jsonDoc)
+	}
+	if active != 0 || begins != ends || begins != beginsBeforeMaterialize+1 {
+		t.Fatalf("foreground begin/end/active after materialize=%d/%d/%d want one balanced operation", begins, ends, active)
 	}
 }
 
