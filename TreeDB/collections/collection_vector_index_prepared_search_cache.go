@@ -39,6 +39,7 @@ type collectionVectorIndexPreparedSearch struct {
 
 	key                string
 	family             collectionVectorIndexPreparedSearchFamily
+	collection         *Collection
 	indexName          string
 	quantizedIndexName string
 	dimensions         int
@@ -46,9 +47,10 @@ type collectionVectorIndexPreparedSearch struct {
 	systemRoot         uint64
 	response           VectorIndexSearchResponse
 
-	pack       *columnHNSWSearchPackPreparedView
-	packStatus columnHNSWSearchPackPreparedStatus
-	searcher   *VectorIndexSearcher
+	pack                 *columnHNSWSearchPackPreparedView
+	packStatus           columnHNSWSearchPackPreparedStatus
+	searcher             *VectorIndexSearcher
+	searchStartedForTest func()
 
 	quantizedReadersMu        sync.Mutex
 	quantizedReaders          []*columnVectorGraphPhysicalRowReader
@@ -91,6 +93,8 @@ func (s collectionVectorIndexPreparedSearchAcquireStats) apply(stats *VectorInde
 	stats.HNSWSearchPackCacheWaits += s.HNSWSearchPackCacheWaits
 	stats.HNSWSearchPackCacheBuilds += s.HNSWSearchPackCacheBuilds
 }
+
+var noCollectionForegroundReadEnd = func() {}
 
 var collectionVectorIndexPreparedSearchBuildHookForTest struct {
 	mu sync.Mutex
@@ -388,6 +392,7 @@ func (c *Collection) openCollectionVectorIndexPreparedExactSearch(opts VectorInd
 	return &collectionVectorIndexPreparedSearch{
 		key:        key,
 		family:     collectionVectorIndexPreparedSearchFamilyExactHNSWPack,
+		collection: c,
 		indexName:  def.Name,
 		dimensions: def.Dimensions,
 		commitSeq:  snapshotCommitSeq(snap),
@@ -528,11 +533,13 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		catalog:    reader.catalog,
 		routeStats: routeStats,
 	}
+	snap.DetachForegroundRead()
 	closeSnapOnErr = false
 	closeReaderOnErr = false
 	return &collectionVectorIndexPreparedSearch{
 		key:                       key,
 		family:                    collectionVectorIndexPreparedSearchFamilyQuantized,
+		collection:                c,
 		indexName:                 def.Name,
 		quantizedIndexName:        opts.QuantizedIndexName,
 		dimensions:                def.Dimensions,
@@ -702,6 +709,11 @@ func (p *collectionVectorIndexPreparedSearch) SearchOwnedNoDocuments(opts Vector
 	if p == nil {
 		return response, errors.New("collections: nil collection vector index prepared search")
 	}
+	endForegroundRead := noCollectionForegroundReadEnd
+	if p.collection != nil {
+		endForegroundRead = p.collection.db.BeginForegroundRead()
+	}
+	defer endForegroundRead()
 	var localScratch columnVectorGraphNativeSearchScratch
 	if scratch == nil {
 		scratch = &localScratch
@@ -711,6 +723,9 @@ func (p *collectionVectorIndexPreparedSearch) SearchOwnedNoDocuments(opts Vector
 	if p.closed || p.pack == nil {
 		response.Stats = VectorIndexSearchStats{HNSWSearchPackClosed: 1, HNSWSearchPackFallbacks: 1}
 		return response, errColumnHNSWSearchPackPreparedViewClosed
+	}
+	if p.searchStartedForTest != nil {
+		p.searchStartedForTest()
 	}
 	status := p.pack.fastStatus(p.packStatus)
 	if status != columnHNSWSearchPackPreparedStatusDirect && status != columnHNSWSearchPackPreparedStatusHeap {
@@ -746,12 +761,20 @@ func (p *collectionVectorIndexPreparedSearch) SearchWithBuffer(opts VectorIndexS
 		clear(previousResults)
 		return response, errors.New("collections: nil collection vector index prepared search")
 	}
+	endForegroundRead := noCollectionForegroundReadEnd
+	if p.collection != nil {
+		endForegroundRead = p.collection.db.BeginForegroundRead()
+	}
+	defer endForegroundRead()
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.closed || p.pack == nil {
 		clear(previousResults)
 		response.Stats = VectorIndexSearchStats{HNSWSearchPackClosed: 1, HNSWSearchPackFallbacks: 1}
 		return response, errColumnHNSWSearchPackPreparedViewClosed
+	}
+	if p.searchStartedForTest != nil {
+		p.searchStartedForTest()
 	}
 	status := p.pack.fastStatus(p.packStatus)
 	if status != columnHNSWSearchPackPreparedStatusDirect && status != columnHNSWSearchPackPreparedStatusHeap {
@@ -791,6 +814,11 @@ func (p *collectionVectorIndexPreparedSearch) SearchQuantizedWithBuffer(opts Vec
 		return VectorIndexSearchResponse{}, errors.New("collections: nil collection vector index prepared quantized search")
 	}
 	response := p.responseForSearch()
+	endForegroundRead := noCollectionForegroundReadEnd
+	if p.collection != nil {
+		endForegroundRead = p.collection.db.BeginForegroundRead()
+	}
+	defer endForegroundRead()
 	queryMode, _ := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
 	statsMode, statsModeErr := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
 	if statsModeErr != nil {
@@ -805,6 +833,9 @@ func (p *collectionVectorIndexPreparedSearch) SearchQuantizedWithBuffer(opts Vec
 		response.Stats.QuantizedAssetUnavailable = 1
 		response.Stats.QuantizedAssetClosed = 1
 		return response, fmt.Errorf("%w: vector index %q collection buffered quantized prepared state is closed", ErrVectorIndexSearchUnavailable, p.indexName)
+	}
+	if p.searchStartedForTest != nil {
+		p.searchStartedForTest()
 	}
 	reader, readerIndex, checkoutStats, checkoutErr := p.checkoutCollectionVectorIndexPreparedQuantizedReader(opts, queryMode)
 	if checkoutErr != nil {

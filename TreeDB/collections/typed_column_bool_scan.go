@@ -35,21 +35,22 @@ type TypedColumnBoolPredicateAggregateResult struct {
 }
 
 type TypedColumnBoolPredicateAggregateSession struct {
-	view               columnPhysicalScanSnapshotView
-	closeView          func()
-	req                TypedColumnBoolPredicateAggregateRequest
-	fields             []TypedStorageField
-	aggregateColumn    typedColumnAdapterColumn
-	schemaHash         uint64
-	refsByGeneration   map[uint64]columnManifestAssetRefForScan
-	validatedRefs      map[ColumnAssetRef]struct{}
-	preparedState      *typedColumnPreparedScanState
-	aggregateScratch   typedColumnInt64PredicateAggregateScanScratch
-	readCache          columnPhysicalAssetReadCache
-	resourceManager    *mappedresource.Manager
-	resolver           *typedColumnLatestRowResolver
-	prepareDiagnostics TypedColumnInt64PredicateScanDiagnostics
-	closed             bool
+	view                columnPhysicalScanSnapshotView
+	closeView           func()
+	req                 TypedColumnBoolPredicateAggregateRequest
+	fields              []TypedStorageField
+	aggregateColumn     typedColumnAdapterColumn
+	schemaHash          uint64
+	refsByGeneration    map[uint64]columnManifestAssetRefForScan
+	validatedRefs       map[ColumnAssetRef]struct{}
+	preparedState       *typedColumnPreparedScanState
+	aggregateScratch    typedColumnInt64PredicateAggregateScanScratch
+	readCache           columnPhysicalAssetReadCache
+	resourceManager     *mappedresource.Manager
+	resolver            *typedColumnLatestRowResolver
+	prepareDiagnostics  TypedColumnInt64PredicateScanDiagnostics
+	beginForegroundRead func() func()
+	closed              bool
 }
 
 type TypedColumnBoolPredicateAggregateSessionDiagnostics = TypedColumnInt64PredicateAggregateSessionDiagnostics
@@ -127,6 +128,10 @@ func (c *Collection) PrepareTypedColumnBoolPredicateAggregate(req TypedColumnBoo
 	session, _, err := c.prepareTypedColumnBoolPredicateAggregateSessionFromView(view, closeView, req)
 	if err != nil {
 		return nil, err
+	}
+	if session.view.snapshot != nil {
+		session.view.snapshot.DetachForegroundRead()
+		session.view.snapshot = nil
 	}
 	release = false
 	return session, nil
@@ -255,6 +260,7 @@ func (c *Collection) prepareTypedColumnBoolPredicateAggregateSessionFromView(vie
 	}
 
 	session := &TypedColumnBoolPredicateAggregateSession{view: view, closeView: closeView, req: req, fields: fields, aggregateColumn: aggregateColumn, schemaHash: cfg.SchemaHash, refsByGeneration: refsByGeneration, validatedRefs: make(map[ColumnAssetRef]struct{}, len(refsByGeneration)), readCache: readCache, resourceManager: mgr}
+	session.beginForegroundRead = c.db.BeginForegroundRead
 	if session.useTargetedAggregateRanges() {
 		if err := session.prepareTargetedAggregateState(); err != nil {
 			if session.preparedState != nil {
@@ -449,6 +455,7 @@ func (s *TypedColumnBoolPredicateAggregateSession) Close() error {
 	s.refsByGeneration = nil
 	s.validatedRefs = nil
 	s.resolver = nil
+	s.beginForegroundRead = nil
 	s.view = columnPhysicalScanSnapshotView{}
 	var closeErr error
 	if err := s.readCache.close(); err != nil {
@@ -473,6 +480,14 @@ func (s *TypedColumnBoolPredicateAggregateSession) Diagnostics() TypedColumnBool
 }
 
 func (s *TypedColumnBoolPredicateAggregateSession) Run() (TypedColumnBoolPredicateAggregateResult, error) {
+	if s == nil || s.closed {
+		return s.run(time.Now(), TypedColumnInt64PredicateScanDiagnostics{})
+	}
+	endForegroundRead := noCollectionForegroundReadEnd
+	if s.beginForegroundRead != nil {
+		endForegroundRead = s.beginForegroundRead()
+	}
+	defer endForegroundRead()
 	return s.run(time.Now(), TypedColumnInt64PredicateScanDiagnostics{})
 }
 
