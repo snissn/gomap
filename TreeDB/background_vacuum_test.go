@@ -894,6 +894,24 @@ func TestDeferredVectorBuildMaintenanceManualWrappersInvalidateEpoch(t *testing.
 		}
 		return epochID
 	}
+	assertActive := func(op string) {
+		t.Helper()
+		if !d.bgVac.Stats().DeferredVectorBuildActive {
+			t.Fatalf("%s invalidated epoch without owning maintenance", op)
+		}
+		if got := d.cached.Stats()["treedb.cache.vlog_generation.deferred_vector_build.active"]; got != "true" {
+			t.Fatalf("%s left value-log suppression=%q want true", op, got)
+		}
+	}
+	assertReleased := func(op string, epochID uint64) {
+		t.Helper()
+		if control.CommitInsert(epochID) || d.bgVac.Stats().DeferredVectorBuildActive {
+			t.Fatalf("%s did not invalidate epoch", op)
+		}
+		if got := d.cached.Stats()["treedb.cache.vlog_generation.deferred_vector_build.active"]; got != "false" {
+			t.Fatalf("%s left value-log suppression=%q want false", op, got)
+		}
+	}
 
 	begin()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -901,24 +919,35 @@ func TestDeferredVectorBuildMaintenanceManualWrappersInvalidateEpoch(t *testing.
 	if _, err := d.CompactStorage(ctx, CompactStorageOptions{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("CompactStorage error=%v want canceled", err)
 	}
-	if !d.bgVac.Stats().DeferredVectorBuildActive {
-		t.Fatal("canceled CompactStorage invalidated epoch without owning maintenance")
-	}
+	assertActive("canceled CompactStorage")
 	if err := d.VacuumIndexOnline(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("VacuumIndexOnline error=%v want canceled", err)
 	}
-	if !d.bgVac.Stats().DeferredVectorBuildActive {
-		t.Fatal("canceled VacuumIndexOnline invalidated epoch without owning maintenance")
+	assertActive("canceled VacuumIndexOnline")
+	if _, err := d.ValueLogRewriteOnline(ctx, ValueLogRewriteOnlineOptions{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ValueLogRewriteOnline error=%v want canceled", err)
 	}
+	assertActive("canceled ValueLogRewriteOnline")
+	if _, err := d.ValueLogGC(ctx, ValueLogGCOptions{DryRun: true, Mode: ValueLogGCModeOnline}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ValueLogGC error=%v want canceled", err)
+	}
+	assertActive("canceled ValueLogGC")
 
 	epochID := begin()
 	_ = d.CompactIndex()
-	if control.CommitInsert(epochID) {
-		t.Fatal("CompactIndex did not invalidate epoch")
+	assertReleased("CompactIndex", epochID)
+
+	epochID = begin()
+	if _, err := d.ValueLogRewriteOnline(nil, ValueLogRewriteOnlineOptions{}); err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
 	}
-	if got := d.cached.Stats()["treedb.cache.vlog_generation.deferred_vector_build.active"]; got != "false" {
-		t.Fatalf("CompactIndex left value-log suppression=%q want false", got)
+	assertReleased("ValueLogRewriteOnline", epochID)
+
+	epochID = begin()
+	if _, err := d.ValueLogGC(nil, ValueLogGCOptions{DryRun: true, Mode: ValueLogGCModeOnline}); err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
 	}
+	assertReleased("ValueLogGC", epochID)
 }
 
 func TestDeferredVectorBuildMaintenanceCloseWaitsForFinalizer(t *testing.T) {

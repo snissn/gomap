@@ -86,7 +86,21 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if db.backend == nil {
 		return ValueLogRewriteStats{}, ErrClosed
 	}
-	_, finishMaintenance := db.beginFullScanMaintenance("rewrite")
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := lockFullScanMaintenanceContext(ctx, &db.bgVac.runMu); err != nil {
+		return ValueLogRewriteStats{}, err
+	}
+	defer db.bgVac.runMu.Unlock()
+	if db.bgVac.deferredVectorBuildClosed.Load() || db.backend == nil {
+		return ValueLogRewriteStats{}, ErrClosed
+	}
+	_, finishMaintenance, err := db.beginFullScanMaintenanceContext(ctx, "rewrite")
+	if err != nil {
+		return ValueLogRewriteStats{}, err
+	}
+	db.endDeferredVectorBuild()
 	success := false
 	defer func() { finishMaintenance(success) }()
 
