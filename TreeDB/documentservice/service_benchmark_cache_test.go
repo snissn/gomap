@@ -124,6 +124,10 @@ func TestServiceDeferredColumnGraphOptimisticUpsertFallsBackForExistingDocuments
 	if stats := svc.DiagnosticsSnapshot(nil).Upsert; stats.ReadPreflightNanos != 0 || stats.InsertNanos == 0 {
 		t.Fatalf("unique deferred diagnostics=%+v want no read preflight and one insert batch", stats)
 	}
+	insertStats := svc.DiagnosticsSnapshot(nil).LastOpened
+	if insertStats == nil || insertStats.Insert.ColumnPublishValidatedFloat32ProjectionRows != 2 || insertStats.Insert.ColumnPublishDocumentExtraction != 0 {
+		t.Fatalf("unique deferred insert stats=%+v want two validated projection rows and zero document extraction", insertStats)
+	}
 
 	mixed, err := svc.UpsertDocuments(ctx, "optimistic_upsert", UpsertDocumentsRequest{Documents: []Document{
 		{ID: "existing", Content: "replacement", Embedding: []float32{0, 1}},
@@ -135,16 +139,21 @@ func TestServiceDeferredColumnGraphOptimisticUpsertFallsBackForExistingDocuments
 	if mixed.Inserted != 1 || mixed.Updated != 1 || mixed.Upserted != 2 {
 		t.Fatalf("mixed response=%+v want one insert and one update", mixed)
 	}
-	listed, err := svc.FilterDocuments(ctx, "optimistic_upsert", FilterDocumentsRequest{Limit: 10})
+	listed, err := svc.FilterDocuments(ctx, "optimistic_upsert", FilterDocumentsRequest{Limit: 10, ReturnEmbedding: true})
 	if err != nil {
 		t.Fatalf("FilterDocuments: %v", err)
 	}
 	contents := make(map[string]string, len(listed.Documents))
+	embeddings := make(map[string][]float32, len(listed.Documents))
 	for _, doc := range listed.Documents {
 		contents[doc.ID] = doc.Content
+		embeddings[doc.ID] = doc.Embedding
 	}
 	if len(contents) != 3 || contents["existing"] != "replacement" || contents["unique"] != "second" || contents["new"] != "third" {
 		t.Fatalf("documents after fallback=%+v", listed.Documents)
+	}
+	if got := embeddings["unique"]; len(got) != 2 || got[0] != 0 || got[1] != 1 {
+		t.Fatalf("unique embedding=%v want [0 1]", got)
 	}
 }
 

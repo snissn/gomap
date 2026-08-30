@@ -721,6 +721,7 @@ type CollectionInsertStats struct {
 	ColumnPublishFinalizeDurabilityWait            time.Duration
 	ColumnPublishPostFinalize                      time.Duration
 	ColumnPublishDocumentExtraction                time.Duration
+	ColumnPublishValidatedFloat32ProjectionRows    int
 	ColumnPublishDeclaredColumnEncoding            time.Duration
 	ColumnPublishAssetPreparation                  time.Duration
 	ColumnPublishRowAssetPreparation               time.Duration
@@ -10454,6 +10455,31 @@ func (c *Collection) InsertBatchWithStats(ids, documents [][]byte) ([][]byte, Co
 	return c.insertBatchWithStats(ids, documents)
 }
 
+// InsertBatchWithStatsValidatedFloat32Projection inserts canonical JSON
+// documents while carrying one caller-validated float32 vector column into the
+// existing column-store write plan. The collection still owns duplicate,
+// command-WAL, schema, and publication validation.
+func (c *Collection) InsertBatchWithStatsValidatedFloat32Projection(ids, documents [][]byte, column string, metric VectorMetric, vectors [][]float32) ([][]byte, CollectionInsertStats, error) {
+	projection, err := newTrustedFloat32Projection(ids, documents, column, metric, vectors)
+	if err != nil {
+		return nil, CollectionInsertStats{}, err
+	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
+	var stats CollectionInsertStats
+	resultIDs, err := c.insertBatchWithCommandWALIntentSchemaLocked(ids, documents, false, nil, nil, insertBatchExecutionOptions{
+		returnResultIDs:          true,
+		insertStats:              &stats,
+		trustedFloat32Projection: projection,
+	})
+	if err == nil {
+		err = commitAmbiguousError("InsertBatchWithStatsValidatedFloat32Projection vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
+	}
+	return resultIDs, stats, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
+}
+
 func (c *Collection) insertBatchWithStats(ids, documents [][]byte) ([][]byte, CollectionInsertStats, error) {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
@@ -10678,8 +10704,9 @@ func (c *Collection) insertBatchSchemaLocked(ids, documents [][]byte, trustedVal
 }
 
 type insertBatchExecutionOptions struct {
-	returnResultIDs bool
-	insertStats     *CollectionInsertStats
+	returnResultIDs          bool
+	insertStats              *CollectionInsertStats
+	trustedFloat32Projection *trustedFloat32Projection
 }
 
 func (c *Collection) recordInsertBatchStats(stats CollectionInsertStats, execOpts insertBatchExecutionOptions) {
@@ -10989,6 +11016,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	meta := catalog.meta
 	c.meta = meta
+	if err := validateTrustedFloat32ProjectionMeta(meta, execOpts.trustedFloat32Projection); err != nil {
+		closePlanningSnapshot()
+		return nil, err
+	}
 	if err := c.requireColumnStoreCommandWAL(meta, commandWALIntent); err != nil {
 		closePlanningSnapshot()
 		return nil, err
@@ -11221,6 +11252,14 @@ func (c *Collection) insertBatchOnceWithLockState(
 			}
 			if columnStoreWriteEnabled(meta) {
 				columnDocuments = columnWriteDocumentsFromCommitLog(docs)
+				if err := applyTrustedFloat32Projection(ids, columnDocuments, execOpts.trustedFloat32Projection); err != nil {
+					closePlanningSnapshot()
+					resetCollectionRunTables(plan.runs)
+					return nil, err
+				}
+				if execOpts.trustedFloat32Projection != nil {
+					plan.stats.ColumnPublishValidatedFloat32ProjectionRows += len(columnDocuments)
+				}
 				prepared, err := prepareColumnWritePublishInputBeforeCommandWAL(columnWritePublishInput{
 					meta:      meta,
 					operation: ColumnPublishOperationInsert,
@@ -11376,6 +11415,13 @@ func (c *Collection) insertBatchOnceWithLockState(
 	var publishMeta CollectionMeta
 	var publishRootNames []string
 	if columnStoreWriteEnabled(meta) {
+		columnDocuments := columnWriteDocumentsFromCommitLog(commandWALDocuments)
+		if err := applyTrustedFloat32Projection(ids, columnDocuments, execOpts.trustedFloat32Projection); err != nil {
+			return nil, err
+		}
+		if execOpts.trustedFloat32Projection != nil {
+			plan.stats.ColumnPublishValidatedFloat32ProjectionRows += len(columnDocuments)
+		}
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaGroupMaybeColumn(ordered, columnWritePublishInput{
 				meta:             meta,
@@ -11387,7 +11433,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 				commandWALIntent: commandWALIntent,
 				rawPublishLocked: true,
 				operation:        ColumnPublishOperationInsert,
-				documents:        columnWriteDocumentsFromCommitLog(commandWALDocuments),
+				documents:        columnDocuments,
 				rows:             len(plan.resultIDs),
 				insertStats:      &plan.stats.CollectionInsertStats,
 			})
@@ -11925,6 +11971,15 @@ func (c *Collection) insertBatchNoIndex(
 		}
 	}
 	stats.DuplicateDocumentPreflight = time.Since(phaseStart)
+	var columnDocuments []columnWriteDocument
+	if execOpts.trustedFloat32Projection != nil {
+		columnDocuments = columnWriteDocumentsFromNoIndexEntries(entries)
+		if err := applyTrustedFloat32Projection(ids, columnDocuments, execOpts.trustedFloat32Projection); err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+		stats.ColumnPublishValidatedFloat32ProjectionRows = len(columnDocuments)
+	}
 	baseRoot := catalog.rootID(rootName)
 	if commandWALIntent == nil && c.commandWALActive(nil) {
 		commandWALIntent, err = c.newCollectionInsertCommandWALIntent(collectionDocumentsFromNoIndexEntries(entries), nil)
@@ -12143,6 +12198,9 @@ func (c *Collection) insertBatchNoIndex(
 		return current, nil
 	}
 	if columnStoreWriteEnabled(c.meta) {
+		if columnDocuments == nil {
+			columnDocuments = columnWriteDocumentsFromNoIndexEntries(entries)
+		}
 		var publishMeta CollectionMeta
 		var publishRootNames []string
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
@@ -12165,7 +12223,7 @@ func (c *Collection) insertBatchNoIndex(
 				commandWALIntent:  commandWALIntent,
 				rawPublishLocked:  true,
 				operation:         ColumnPublishOperationInsert,
-				documents:         columnWriteDocumentsFromNoIndexEntries(entries),
+				documents:         columnDocuments,
 				rows:              len(entries),
 				declaredRows:      retainedDeclaredRows,
 				declaredRowsReady: retainedDeclaredRowsReady,

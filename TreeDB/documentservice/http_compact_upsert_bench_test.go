@@ -4,8 +4,29 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"testing"
 )
+
+func TestHTTPCompactDeferredColumnGraphUsesValidatedFloat32Projection(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	svc.DiagnosticsHandler(nil)
+	createBenchmarkColumnGraphIndex(t, svc, "compact_projection")
+	handler := NewHandler(svc)
+	var response UpsertDocumentsResponse
+	postJSON(t, handler, "/v1/indexes/compact_projection/documents/upsert", UpsertDocumentsRequest{
+		Documents:               []Document{{ID: "compact", EmbeddingF32LEBase64: encodeFloat32LEBase64ForTest([]float32{1, 0})}},
+		DeferVectorIndexRebuild: true,
+	}, http.StatusOK, &response)
+	if response.CompactEmbeddings != 1 || response.Inserted != 1 {
+		t.Fatalf("response=%+v want one compact insert", response)
+	}
+	insertStats := svc.DiagnosticsSnapshot(nil).LastOpened
+	if insertStats == nil || insertStats.Insert.ColumnPublishValidatedFloat32ProjectionRows != 1 || insertStats.Insert.ColumnPublishDocumentExtraction != 0 {
+		t.Fatalf("compact insert stats=%+v want one validated projection row and zero document extraction", insertStats)
+	}
+}
 
 func BenchmarkHTTPUpsertDecodePrepareNumericVsCompact(b *testing.B) {
 	const (
