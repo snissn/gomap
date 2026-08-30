@@ -9272,7 +9272,7 @@ type DB struct {
 	lastForegroundReadUnixNano                                   atomic.Int64
 	foregroundReadStampCounter                                   atomic.Uint32
 	activeForegroundIterators                                    atomic.Int64
-	foregroundMaintenanceGraceMu                                 sync.Mutex
+	foregroundMaintenanceGraceMu                                 sync.RWMutex
 	foregroundMaintenanceGraceSequence                           atomic.Uint64
 	foregroundMaintenanceGraceState                              atomic.Uint64
 	foregroundMaintenanceGraceActivity                           atomic.Uint64
@@ -13801,14 +13801,10 @@ func (db *DB) endForegroundRead() {
 	if db == nil {
 		return
 	}
-	if db.foregroundMaintenanceGraceState.Load() != 0 {
-		db.foregroundMaintenanceGraceMu.Lock()
-		db.noteForegroundMaintenanceGraceActivity()
-		db.activeForegroundIterators.Add(-1)
-		db.foregroundMaintenanceGraceMu.Unlock()
-		return
-	}
+	db.foregroundMaintenanceGraceMu.RLock()
+	db.noteForegroundMaintenanceGraceActivity()
 	db.activeForegroundIterators.Add(-1)
+	db.foregroundMaintenanceGraceMu.RUnlock()
 }
 
 func (db *DB) beginRawForegroundRead() func() {
