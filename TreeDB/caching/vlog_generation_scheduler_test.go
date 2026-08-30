@@ -9929,11 +9929,13 @@ func TestForegroundMaintenanceContextResumeGrace_WriteBoundaryOrdering(t *testin
 		}
 	})
 
-	t.Run("write_after_boundary_cancels", func(t *testing.T) {
+	t.Run("write_after_deadline_cancels_with_delayed_boundary", func(t *testing.T) {
 		db := &DB{closeCh: make(chan struct{})}
 		ctx, cancel := db.foregroundMaintenanceContextWithResumeGrace(2*time.Second, 50*time.Millisecond)
 		defer cancel()
-		waitForBoundary(db)
+		db.foregroundMaintenanceGraceMu.Lock()
+		time.Sleep(75 * time.Millisecond)
+		db.foregroundMaintenanceGraceMu.Unlock()
 		db.noteWrite()
 		select {
 		case <-ctx.Done():

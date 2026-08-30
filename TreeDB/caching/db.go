@@ -9276,6 +9276,9 @@ type DB struct {
 	foregroundMaintenanceGraceSequence                           atomic.Uint64
 	foregroundMaintenanceGraceState                              atomic.Uint64
 	foregroundMaintenanceGraceActivity                           atomic.Uint64
+	foregroundMaintenanceGraceDeadlineUnixNano                   int64
+	foregroundMaintenanceGraceCancel                             context.CancelFunc
+	foregroundMaintenanceGraceCancelValue                        uint64
 	retainedPruneLastStartUnixNano                               atomic.Int64
 	retainedValueLogPruneLastUnixNano                            atomic.Int64
 	retainedValueLogPruneLastStatus                              atomic.Uint32
@@ -13526,18 +13529,32 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 		graceC        <-chan struct{}
 		graceValue    uint64
 		graceActivity uint64
+		graceDeadline time.Time
 	)
 	if resumeGrace > 0 {
 		db.foregroundMaintenanceGraceMu.Lock()
 		graceActivity = db.foregroundMaintenanceGraceActivity.Load()
 		graceValue = db.foregroundMaintenanceGraceSequence.Add(1) << 1
 		db.foregroundMaintenanceGraceState.Store(graceValue)
+		graceDeadline = time.Now().Add(resumeGrace)
+		db.foregroundMaintenanceGraceDeadlineUnixNano = graceDeadline.UnixNano()
+		db.foregroundMaintenanceGraceCancel = cancel
+		db.foregroundMaintenanceGraceCancelValue = graceValue
 		db.foregroundMaintenanceGraceMu.Unlock()
 		boundary := make(chan struct{}, 1)
 		graceC = boundary
-		graceTimer = time.AfterFunc(resumeGrace, func() {
+		remaining := time.Until(graceDeadline)
+		if remaining < 0 {
+			remaining = 0
+		}
+		graceTimer = time.AfterFunc(remaining, func() {
 			db.foregroundMaintenanceGraceMu.Lock()
 			transitioned := db.foregroundMaintenanceGraceState.CompareAndSwap(graceValue, graceValue|1)
+			shouldCancel := transitioned && (db.activeForegroundIterators.Load() > 0 ||
+				db.foregroundMaintenanceGraceActivity.Load() != graceActivity)
+			if shouldCancel {
+				cancel()
+			}
 			db.foregroundMaintenanceGraceMu.Unlock()
 			if transitioned {
 				boundary <- struct{}{}
@@ -13551,8 +13568,15 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 			defer graceTimer.Stop()
 			defer func() {
 				db.foregroundMaintenanceGraceMu.Lock()
-				db.foregroundMaintenanceGraceState.CompareAndSwap(graceValue|1, 0)
-				db.foregroundMaintenanceGraceState.CompareAndSwap(graceValue, 0)
+				cleared := db.foregroundMaintenanceGraceState.CompareAndSwap(graceValue|1, 0)
+				if !cleared {
+					cleared = db.foregroundMaintenanceGraceState.CompareAndSwap(graceValue, 0)
+				}
+				if cleared && db.foregroundMaintenanceGraceCancelValue == graceValue {
+					db.foregroundMaintenanceGraceDeadlineUnixNano = 0
+					db.foregroundMaintenanceGraceCancel = nil
+					db.foregroundMaintenanceGraceCancelValue = 0
+				}
 				db.foregroundMaintenanceGraceMu.Unlock()
 			}()
 		}
@@ -13709,9 +13733,17 @@ func (db *DB) vlogGenerationRewritePlanContext(timeout time.Duration, opts vlogG
 	return db.foregroundMaintenanceContextWithResumeGrace(timeout, vlogGenerationRewritePlanResumeGrace)
 }
 
-func (db *DB) noteForegroundMaintenanceGraceActivity() {
-	if db.foregroundMaintenanceGraceState.Load()&1 != 0 {
-		db.foregroundMaintenanceGraceActivity.Add(1)
+func (db *DB) noteForegroundMaintenanceGraceActivityLocked(now int64) {
+	state := db.foregroundMaintenanceGraceState.Load()
+	if state == 0 {
+		return
+	}
+	if state&1 == 0 && (db.foregroundMaintenanceGraceDeadlineUnixNano <= 0 || now < db.foregroundMaintenanceGraceDeadlineUnixNano) {
+		return
+	}
+	db.foregroundMaintenanceGraceActivity.Add(1)
+	if db.foregroundMaintenanceGraceCancelValue == state&^uint64(1) && db.foregroundMaintenanceGraceCancel != nil {
+		db.foregroundMaintenanceGraceCancel()
 	}
 }
 
@@ -13720,14 +13752,14 @@ func (db *DB) noteWrite() {
 		return
 	}
 	graceActive := db.foregroundMaintenanceGraceState.Load() != 0
+	now := time.Now().UnixNano()
 	if graceActive {
 		db.foregroundMaintenanceGraceMu.RLock()
-	}
-	now := time.Now().UnixNano()
-	db.lastForegroundWriteUnixNano.Store(now)
-	db.noteForegroundMaintenanceGraceActivity()
-	if graceActive {
+		db.lastForegroundWriteUnixNano.Store(now)
+		db.noteForegroundMaintenanceGraceActivityLocked(now)
 		db.foregroundMaintenanceGraceMu.RUnlock()
+	} else {
+		db.lastForegroundWriteUnixNano.Store(now)
 	}
 	if !db.autoCheckpointOn.Load() {
 		return
@@ -13785,12 +13817,12 @@ func (db *DB) noteRead() {
 		return
 	}
 	graceActive := db.foregroundMaintenanceGraceState.Load() != 0
+	now := time.Now().UnixNano()
 	if graceActive {
 		db.foregroundMaintenanceGraceMu.RLock()
 		defer db.foregroundMaintenanceGraceMu.RUnlock()
+		db.noteForegroundMaintenanceGraceActivityLocked(now)
 	}
-	now := time.Now().UnixNano()
-	db.noteForegroundMaintenanceGraceActivity()
 	last := db.lastForegroundReadUnixNano.Load()
 	if last > 0 && now-last < int64(foregroundReadStampMaxAge) {
 		n := db.foregroundReadStampCounter.Add(1)
@@ -13814,7 +13846,7 @@ func (db *DB) endForegroundRead() {
 		return
 	}
 	db.foregroundMaintenanceGraceMu.RLock()
-	db.noteForegroundMaintenanceGraceActivity()
+	db.noteForegroundMaintenanceGraceActivityLocked(time.Now().UnixNano())
 	db.activeForegroundIterators.Add(-1)
 	db.foregroundMaintenanceGraceMu.RUnlock()
 }
