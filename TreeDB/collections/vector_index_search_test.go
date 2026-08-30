@@ -1249,6 +1249,9 @@ func TestPreparedColumnPhysicalQueryForegroundLifetimeIdleAndRun(t *testing.T) {
 		t.Fatalf("PrepareColumnPhysicalQuery: %v", err)
 	}
 	defer func() { _ = runner.Close() }()
+	if runner.view.snapshot != nil {
+		t.Fatal("prepared runner retained detached snapshot pointer")
+	}
 	if active != 0 || begins != ends {
 		t.Fatalf("foreground begin/end/active after prepare=%d/%d/%d want balanced idle", begins, ends, active)
 	}

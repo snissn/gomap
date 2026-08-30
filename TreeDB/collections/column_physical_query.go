@@ -554,6 +554,7 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 	}
 	if view.snapshot != nil {
 		view.snapshot.DetachForegroundRead()
+		view.snapshot = nil
 	}
 	release = false
 	return &ColumnPhysicalQueryRunner{
