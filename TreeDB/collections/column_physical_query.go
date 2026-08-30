@@ -552,6 +552,10 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 	if err != nil {
 		return nil, errors.Join(err, readCache.close())
 	}
+	if view.snapshot != nil {
+		view.snapshot.DetachForegroundRead()
+		view.snapshot = nil
+	}
 	release = false
 	return &ColumnPhysicalQueryRunner{
 		collection:   c,
@@ -613,6 +617,11 @@ func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
 	if r == nil || r.closed {
 		return ColumnPhysicalQueryResult{}, errors.New("collections: prepared physical column query runner is closed")
 	}
+	endForegroundRead := noCollectionForegroundReadEnd
+	if r.collection != nil && r.collection.db != nil {
+		endForegroundRead = r.collection.db.BeginForegroundRead()
+	}
+	defer endForegroundRead()
 	if r.typedColumn != nil {
 		return r.typedColumn.run(r.view, r.req)
 	}

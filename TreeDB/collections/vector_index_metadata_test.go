@@ -292,6 +292,49 @@ func TestNativeRuntimeVectorIndexStatusClosedDBReturnsErrClosedV2A(t *testing.T)
 	}
 }
 
+func TestNativeRuntimeVectorIndexStatusMarksSnapshotForegroundRead(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding_graph",
+			Field:      "embedding",
+			Dimensions: 3,
+			Strategy:   VectorIndexStrategyNativeRuntime,
+		}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	begins, ends, active := 0, 0, 0
+	unregister := d.RegisterForegroundReadObserver(func() {}, func() func() {
+		begins++
+		active++
+		return func() {
+			ends++
+			active--
+		}
+	})
+	defer unregister()
+
+	if _, err := col.VectorIndexStatus("embedding_graph"); err != nil {
+		t.Fatalf("VectorIndexStatus: %v", err)
+	}
+	if begins != 1 || ends != 1 || active != 0 {
+		t.Fatalf("foreground begin/end/active=%d/%d/%d want 1/1/0", begins, ends, active)
+	}
+}
+
 func TestScalarIndexMutationPreservesVectorIndexMetadataV2A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

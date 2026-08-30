@@ -515,9 +515,10 @@ type collectionRootOverlayCompactionResult struct {
 // StoredDocumentJSONMaterializer reuses any resources needed to materialize
 // stored collection documents as JSON.
 type StoredDocumentJSONMaterializer struct {
-	documentFormat   DocumentFormat
-	templateResolver templateV1Resolver
-	closeFn          func() error
+	documentFormat      DocumentFormat
+	templateResolver    templateV1Resolver
+	closeFn             func() error
+	beginForegroundRead func() func()
 }
 
 // Close releases resources held by the materializer.
@@ -527,6 +528,7 @@ func (m *StoredDocumentJSONMaterializer) Close() error {
 	}
 	closeFn := m.closeFn
 	m.closeFn = nil
+	m.beginForegroundRead = nil
 	return closeFn()
 }
 
@@ -544,6 +546,11 @@ func (m *StoredDocumentJSONMaterializer) StoredDocumentJSON(document []byte) ([]
 	if m == nil {
 		return nil, errCollectionNil
 	}
+	endForegroundRead := noCollectionForegroundReadEnd
+	if m.beginForegroundRead != nil {
+		endForegroundRead = m.beginForegroundRead()
+	}
+	defer endForegroundRead()
 	switch m.documentFormat {
 	case DocumentFormatJSON:
 		return bytes.Clone(document), nil
@@ -3630,6 +3637,9 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 				return nil, err
 			}
 		}
+		if commandWALIntent == nil {
+			m.db.NotifyForegroundRead()
+		}
 		return collection, nil
 	}
 	schemaCoord := collectionSchemaCoordinatorForDBCollection(m.db, name)
@@ -3640,6 +3650,9 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
+	}
+	if commandWALIntent == nil {
+		snap.MarkForegroundRead()
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := loadCollectionCatalog(snap, name)
@@ -3769,6 +3782,7 @@ func (m *CollectionManager) ListCollectionsBounded(maxCollections int) ([]Collec
 	if snap == nil {
 		return nil, false, backenddb.ErrClosed
 	}
+	snap.MarkForegroundRead()
 	defer func() { _ = snap.Close() }()
 	state, ok := snap.StateToken()
 	if !ok || state.SystemRootPageID == 0 {
@@ -19361,6 +19375,7 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLockState(snap *backenddb.
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}
+	snap.MarkForegroundRead()
 	systemRoot := snapshotSystemRoot(snap)
 	commitSeq := snapshotCommitSeq(snap)
 
@@ -20710,10 +20725,12 @@ func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMat
 				return nil, err
 			}
 		}
+		snap.DetachForegroundRead()
 		closeOnErr = false
 		return &StoredDocumentJSONMaterializer{
-			documentFormat:   documentFormat,
-			templateResolver: plannerOptions.templateResolver,
+			documentFormat:      documentFormat,
+			templateResolver:    plannerOptions.templateResolver,
+			beginForegroundRead: c.db.BeginForegroundRead,
 			closeFn: func() error {
 				resetCollectionTables(bufferedTemplateRuns)
 				return snap.Close()
@@ -20753,6 +20770,7 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 		return dst[:0], false, errors.New("collections: document id cannot be empty")
 	}
 	if value, buffered, found := c.getBufferedDocumentInto(documentID, dst); buffered {
+		c.db.NotifyForegroundRead()
 		return value, found, nil
 	}
 	snap := c.db.AcquireSnapshot()

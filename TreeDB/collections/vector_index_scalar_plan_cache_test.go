@@ -48,6 +48,46 @@ func TestNativeScalarPlanCacheWarmHitAndMutationGenerationPublicationInvalidatio
 	}
 }
 
+func TestNativeScalarPlanCacheWarmSearchMarksForegroundRead(t *testing.T) {
+	d, col, def := newNativeScalarTestCollection(t, []IndexDefinition{{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString}})
+	defer func() { _ = d.Close() }()
+	if _, err := col.InsertBatch([][]byte{[]byte("alpha")}, [][]byte{[]byte(`{"embedding":[1,0],"tenant":"alpha"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+
+	begins, ends, active := 0, 0, 0
+	unregister := d.RegisterForegroundReadObserver(func() {}, func() func() {
+		begins++
+		active++
+		return func() {
+			ends++
+			active--
+		}
+	})
+	defer unregister()
+
+	filter := HybridScalarFilter{IndexName: "tenant_idx", Value: "alpha"}
+	cold := searchNativeScalarTest(t, col, def, filter, 1)
+	if cold.Stats.ScalarFilterPlanCacheMisses != 1 {
+		t.Fatalf("cold cache stats=%+v want miss", cold.Stats)
+	}
+	if active != 0 || begins != ends {
+		t.Fatalf("foreground begin/end/active after cold search=%d/%d/%d want balanced idle", begins, ends, active)
+	}
+	beginsAfterCold := begins
+
+	warm := searchNativeScalarTest(t, col, def, filter, 1)
+	if warm.Stats.ScalarFilterPlanCacheHits != 1 {
+		t.Fatalf("warm cache stats=%+v want hit", warm.Stats)
+	}
+	if active != 0 || begins != ends || begins <= beginsAfterCold {
+		t.Fatalf("foreground begin/end/active after warm search=%d/%d/%d want additional balanced operation", begins, ends, active)
+	}
+}
+
 func TestNativeScalarPlanCacheConcurrentReuseClonesMutationOwnedState(t *testing.T) {
 	col := &Collection{}
 	index := &VectorIndex{}
