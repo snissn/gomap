@@ -1165,6 +1165,12 @@ type jsonKV struct {
 	Encoding string `json:"encoding,omitempty"`
 }
 
+type jsonKVImport struct {
+	Key      *string `json:"key"`
+	Val      *string `json:"val"`
+	Encoding string  `json:"encoding,omitempty"`
+}
+
 func runScanJSONL(dir string, args []string) {
 	fs := flag.NewFlagSet("scan-jsonl", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
@@ -1179,6 +1185,10 @@ func runScanJSONL(dir string, args []string) {
 	omitEncoding := fs.Bool("omit-encoding", false, "Omit encoding field in JSON output")
 	_ = fs.Parse(args)
 
+	enc, err := validateScanJSONLEncoding(*encoding, *omitEncoding)
+	if err != nil {
+		fatalf("invalid scan-jsonl options: %v", err)
+	}
 	startKey, endKey := parseRange(*start, *end, *prefix, *hexInput)
 	if !*allowValues {
 		fatalf("scan-jsonl requires -allow-values to print values; use keys to dump keys only")
@@ -1192,7 +1202,7 @@ func runScanJSONL(dir string, args []string) {
 		fatalf("Iterator error: %v", err)
 	}
 	defer func() { _ = it.Close() }()
-	if _, err := scanJSONL(it, *encoding, *omitEncoding, *limit, os.Stdout); err != nil {
+	if _, err := scanJSONL(it, enc, *omitEncoding, *limit, os.Stdout); err != nil {
 		fatalf("output error: %v", err)
 	}
 }
@@ -1286,12 +1296,24 @@ func importJSONL(db *treedb.DB, reader io.Reader, inputEncoding string, batchSiz
 				}
 				continue
 			}
-			var rec jsonKV
+			var rec jsonKVImport
 			if err := json.Unmarshal(line, &rec); err != nil {
 				if batch != nil {
 					_ = batch.Close()
 				}
 				return count, fmt.Errorf("line %d: %w", lineNum, err)
+			}
+			if rec.Key == nil {
+				if batch != nil {
+					_ = batch.Close()
+				}
+				return count, fmt.Errorf("line %d: missing required field %q", lineNum, "key")
+			}
+			if rec.Val == nil {
+				if batch != nil {
+					_ = batch.Close()
+				}
+				return count, fmt.Errorf("line %d: missing required field %q", lineNum, "val")
 			}
 			enc, err := resolveJSONLEncoding(inputEncoding, rec.Encoding)
 			if err != nil {
@@ -1300,14 +1322,14 @@ func importJSONL(db *treedb.DB, reader io.Reader, inputEncoding string, batchSiz
 				}
 				return count, fmt.Errorf("line %d: %w", lineNum, err)
 			}
-			key, err := decodeJSONLValue(rec.Key, enc)
+			key, err := decodeJSONLValue(*rec.Key, enc)
 			if err != nil {
 				if batch != nil {
 					_ = batch.Close()
 				}
 				return count, fmt.Errorf("line %d: %w", lineNum, err)
 			}
-			val, err := decodeJSONLValue(rec.Val, enc)
+			val, err := decodeJSONLValue(*rec.Val, enc)
 			if err != nil {
 				if batch != nil {
 					_ = batch.Close()
@@ -1367,6 +1389,17 @@ func resolveJSONLEncoding(inputEncoding string, recordEncoding string) (string, 
 	default:
 		return "", fmt.Errorf("unsupported encoding %q", enc)
 	}
+}
+
+func validateScanJSONLEncoding(encoding string, omitEncoding bool) (string, error) {
+	enc, err := resolveJSONLEncoding(encoding, "")
+	if err != nil {
+		return "", err
+	}
+	if omitEncoding && enc != "string" {
+		return "", fmt.Errorf("-omit-encoding requires -encoding string (or raw)")
+	}
+	return enc, nil
 }
 
 func decodeJSONLValue(value string, encoding string) ([]byte, error) {
@@ -1533,7 +1566,10 @@ func parseRange(start, end, prefix string, hexInput bool) ([]byte, []byte) {
 
 func parseInputBytes(s string, hexInput bool) ([]byte, error) {
 	if hexInput {
-		return hex.DecodeString(strings.TrimPrefix(s, "0x"))
+		if len(s) >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') {
+			s = s[2:]
+		}
+		return hex.DecodeString(s)
 	}
 	return []byte(s), nil
 }
