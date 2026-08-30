@@ -302,14 +302,14 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
 
     def test_small_leaf_raw_byte_delta_passes(self) -> None:
         result = self.run_checker(
-            [0.98, 0.99], auto_leaf_raw_bytes=19_998_000
+            [0.98, 0.99], auto_leaf_raw_bytes=19_980_000
         )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_material_leaf_raw_byte_delta_fails(self) -> None:
         result = self.run_checker(
-            [0.98, 0.99], auto_leaf_raw_bytes=19_000_000
+            [0.98, 0.99], auto_leaf_raw_bytes=19_979_999
         )
 
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
