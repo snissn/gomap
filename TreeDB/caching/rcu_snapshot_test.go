@@ -594,6 +594,64 @@ func TestDB_BatchWriteBypassRetainsMemtableViewLease(t *testing.T) {
 	}
 }
 
+func TestDB_GetRecordsForegroundGraceCrossing(t *testing.T) {
+	backend := &blockingPointReadBackend{
+		noAllocBackend: &noAllocBackend{},
+		started:        make(chan struct{}),
+		release:        make(chan struct{}),
+	}
+	cdb, err := Open(t.TempDir(), backend, Options{DisableWAL: true, AllowUnsafe: true})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer cdb.Close()
+
+	cdb.foregroundMaintenanceGraceState.Store(2)
+	cdb.activeForegroundIterators.publishGrace(2)
+	done := make(chan error, 1)
+	go func() {
+		_, err := cdb.Get([]byte("k"))
+		done <- err
+	}()
+	select {
+	case <-backend.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Get did not reach backend")
+	}
+	if transitioned, active := cdb.activeForegroundIterators.transitionGrace(2); !transitioned || active != 1 {
+		t.Fatalf("grace boundary: transitioned=%v active=%d want true,1", transitioned, active)
+	}
+	cdb.foregroundMaintenanceGraceState.Store(3)
+	cdb.foregroundMaintenanceGraceDeadlineUnixNano.Store(time.Now().Add(-time.Second).UnixNano())
+	close(backend.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Get blocked after backend release")
+	}
+	if got := cdb.foregroundMaintenanceGraceActivity.Load(); got != 1 {
+		t.Fatalf("grace-crossing activity=%d want=1", got)
+	}
+	if got := cdb.activeForegroundIterators.Load(); got != 0 {
+		t.Fatalf("active foreground reads=%d want=0", got)
+	}
+}
+
+type blockingPointReadBackend struct {
+	*noAllocBackend
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingPointReadBackend) Get([]byte) ([]byte, error) {
+	close(b.started)
+	<-b.release
+	return nil, nil
+}
+
 type blockingGetMemtable struct {
 	memtable.Table
 	started chan struct{}

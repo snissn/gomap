@@ -333,15 +333,64 @@ func TestWrapForegroundIterator_AvoidsDoubleWrapAndCloseIsIdempotent(t *testing.
 	if got := db.activeForegroundIterators.Load(); got != 1 {
 		t.Fatalf("activeForegroundIterators after second wrap=%d want=1", got)
 	}
+	db.foregroundMaintenanceGraceState.Store(3)
+	db.activeForegroundIterators.publishGrace(3)
+	db.foregroundMaintenanceGraceDeadlineUnixNano.Store(time.Now().Add(-time.Second).UnixNano())
 	if err := wrappedAgain.Close(); err != nil {
 		t.Fatalf("close wrapped iterator: %v", err)
 	}
 	if got := db.activeForegroundIterators.Load(); got != 0 {
 		t.Fatalf("activeForegroundIterators after close=%d want=0", got)
 	}
+	if got := db.foregroundMaintenanceGraceActivity.Load(); got != 1 {
+		t.Fatalf("foreground grace activity after close=%d want=1", got)
+	}
 	_ = wrappedAgain.Close()
 	if got := db.activeForegroundIterators.Load(); got != 0 {
 		t.Fatalf("activeForegroundIterators after second close=%d want=0", got)
+	}
+	if got := db.foregroundMaintenanceGraceActivity.Load(); got != 1 {
+		t.Fatalf("foreground grace activity after second close=%d want=1", got)
+	}
+}
+func TestForegroundReaderStateBoundaryOrdering(t *testing.T) {
+	db := &DB{}
+	initializing := &foregroundReaderState{}
+	initializing.Store(1)
+	initializing.publishGrace(2)
+	if initializing.endIfNoGrace() {
+		t.Fatal("reader end bypassed a published grace during initialization")
+	}
+	if got := initializing.Load(); got != 1 {
+		t.Fatalf("initializing grace reader count=%d want=1", got)
+	}
+
+	db.activeForegroundIterators.Store(1)
+	db.activeForegroundIterators.publishGrace(2)
+	db.foregroundMaintenanceGraceState.Store(2)
+	db.foregroundMaintenanceGraceDeadlineUnixNano.Store(time.Now().Add(time.Second).UnixNano())
+
+	db.endForegroundRead()
+	transitioned, active := db.activeForegroundIterators.transitionGrace(2)
+	if !transitioned || active != 0 {
+		t.Fatalf("completion before boundary: transitioned=%v active=%d want true,0", transitioned, active)
+	}
+	if got := db.foregroundMaintenanceGraceActivity.Load(); got != 0 {
+		t.Fatalf("completion before boundary activity=%d want=0", got)
+	}
+
+	db.activeForegroundIterators.Store(1)
+	db.activeForegroundIterators.publishGrace(4)
+	db.foregroundMaintenanceGraceState.Store(4)
+	transitioned, active = db.activeForegroundIterators.transitionGrace(4)
+	if !transitioned || active != 1 {
+		t.Fatalf("boundary before completion: transitioned=%v active=%d want true,1", transitioned, active)
+	}
+	db.foregroundMaintenanceGraceState.Store(5)
+	db.foregroundMaintenanceGraceDeadlineUnixNano.Store(time.Now().Add(-time.Second).UnixNano())
+	db.endForegroundRead()
+	if got := db.foregroundMaintenanceGraceActivity.Load(); got != 1 {
+		t.Fatalf("completion after boundary activity=%d want=1", got)
 	}
 }
 

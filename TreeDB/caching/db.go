@@ -8644,6 +8644,109 @@ type deferredRetiredMemtablesHold struct {
 	sinceUnixNano int64
 }
 
+const foregroundReaderCountMask = uint64(1<<32 - 1)
+
+// foregroundReaderState combines the active-reader count with the current
+// grace epoch so completion and the grace boundary have one atomic ordering.
+type foregroundReaderState struct {
+	value atomic.Uint64
+}
+
+func (s *foregroundReaderState) Load() int64 {
+	return int64(uint32(s.value.Load()))
+}
+
+func (s *foregroundReaderState) Store(count int64) {
+	for {
+		current := s.value.Load()
+		next := current&^foregroundReaderCountMask | uint64(uint32(count))
+		if s.value.CompareAndSwap(current, next) {
+			return
+		}
+	}
+}
+
+func (s *foregroundReaderState) Add(delta int64) int64 {
+	for {
+		current := s.value.Load()
+		count := int64(uint32(current)) + delta
+		if count < 0 || count > int64(^uint32(0)) {
+			panic("caching: invalid foreground reader count")
+		}
+		next := current&^foregroundReaderCountMask | uint64(uint32(count))
+		if s.value.CompareAndSwap(current, next) {
+			return count
+		}
+	}
+}
+
+func (s *foregroundReaderState) publishGrace(grace uint32) {
+	for {
+		current := s.value.Load()
+		next := uint64(grace)<<32 | current&foregroundReaderCountMask
+		if s.value.CompareAndSwap(current, next) {
+			return
+		}
+	}
+}
+
+func (s *foregroundReaderState) transitionGrace(grace uint32) (bool, int64) {
+	for {
+		current := s.value.Load()
+		count := int64(uint32(current))
+		if uint32(current>>32) != grace {
+			return false, count
+		}
+		next := uint64(grace|1)<<32 | current&foregroundReaderCountMask
+		if s.value.CompareAndSwap(current, next) {
+			return true, count
+		}
+	}
+}
+
+func (s *foregroundReaderState) clearGrace(grace uint32) bool {
+	for {
+		current := s.value.Load()
+		if uint32(current>>32) != grace {
+			return false
+		}
+		next := current & foregroundReaderCountMask
+		if s.value.CompareAndSwap(current, next) {
+			return true
+		}
+	}
+}
+func (s *foregroundReaderState) endIfNoGrace() bool {
+	for {
+		current := s.value.Load()
+		if uint32(current>>32) != 0 {
+			return false
+		}
+		count := uint32(current)
+		if count == 0 {
+			panic("caching: foreground reader count underflow")
+		}
+		next := uint64(count - 1)
+		if s.value.CompareAndSwap(current, next) {
+			return true
+		}
+	}
+}
+
+func (s *foregroundReaderState) end() uint32 {
+	for {
+		current := s.value.Load()
+		count := uint32(current)
+		if count == 0 {
+			panic("caching: foreground reader count underflow")
+		}
+		next := current&^foregroundReaderCountMask | uint64(count-1)
+		if s.value.CompareAndSwap(current, next) {
+			return uint32(current >> 32)
+		}
+	}
+}
+
 type DB struct {
 	writeWaitForCheckpointActive atomic.Int64
 
@@ -9271,7 +9374,14 @@ type DB struct {
 	lastForegroundWriteUnixNano                                  atomic.Int64
 	lastForegroundReadUnixNano                                   atomic.Int64
 	foregroundReadStampCounter                                   atomic.Uint32
-	activeForegroundIterators                                    atomic.Int64
+	activeForegroundIterators                                    foregroundReaderState
+	foregroundMaintenanceGraceMu                                 sync.RWMutex
+	foregroundMaintenanceGraceSequence                           atomic.Uint32
+	foregroundMaintenanceGraceState                              atomic.Uint32
+	foregroundMaintenanceGraceActivity                           atomic.Uint64
+	foregroundMaintenanceGraceDeadlineUnixNano                   atomic.Int64
+	foregroundMaintenanceGraceCancel                             context.CancelFunc
+	foregroundMaintenanceGraceCancelValue                        uint32
 	retainedPruneLastStartUnixNano                               atomic.Int64
 	retainedValueLogPruneLastUnixNano                            atomic.Int64
 	retainedValueLogPruneLastStatus                              atomic.Uint32
@@ -13453,16 +13563,6 @@ func (db *DB) foregroundActivityResumedSince(lastActivity int64) bool {
 	return db.lastForegroundActivityUnixNano() > lastActivity
 }
 
-func (db *DB) foregroundActivityRecentlyResumedSince(lastActivity int64, now time.Time) bool {
-	if !db.foregroundActivityResumedSince(lastActivity) {
-		return false
-	}
-	if db.activeForegroundIterators.Load() > 0 {
-		return true
-	}
-	return !db.foregroundActivityQuietFor(now, foregroundReadStampMaxAge, foregroundReadStampMaxAge)
-}
-
 func (db *DB) foregroundVlogMaintenanceResumedSince(lastWrite int64) bool {
 	if db == nil {
 		return false
@@ -13527,10 +13627,70 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 		ctx, cancel = context.WithCancel(context.Background())
 	}
 	lastActivity := db.lastForegroundActivityUnixNano()
-	startedAt := time.Now()
-	go func(lastActivity int64) {
+	var (
+		graceTimer    *time.Timer
+		graceC        <-chan struct{}
+		graceValue    uint32
+		graceActivity uint64
+		graceDeadline time.Time
+	)
+	if resumeGrace > 0 {
+		db.foregroundMaintenanceGraceMu.Lock()
+		graceActivity = db.foregroundMaintenanceGraceActivity.Load()
+		graceValue = db.foregroundMaintenanceGraceSequence.Add(1) << 1
+		db.activeForegroundIterators.publishGrace(graceValue)
+		db.foregroundMaintenanceGraceState.Store(graceValue)
+		graceDeadline = time.Now().Add(resumeGrace)
+		db.foregroundMaintenanceGraceDeadlineUnixNano.Store(graceDeadline.UnixNano())
+		db.foregroundMaintenanceGraceCancel = cancel
+		db.foregroundMaintenanceGraceCancelValue = graceValue
+		db.foregroundMaintenanceGraceMu.Unlock()
+		boundary := make(chan struct{}, 1)
+		graceC = boundary
+		remaining := time.Until(graceDeadline)
+		if remaining < 0 {
+			remaining = 0
+		}
+		graceTimer = time.AfterFunc(remaining, func() {
+			db.foregroundMaintenanceGraceMu.Lock()
+			transitioned, activeReaders := db.activeForegroundIterators.transitionGrace(graceValue)
+			if transitioned {
+				db.foregroundMaintenanceGraceState.CompareAndSwap(graceValue, graceValue|1)
+			}
+			shouldCancel := transitioned && (activeReaders > 0 ||
+				db.foregroundMaintenanceGraceActivity.Load() != graceActivity)
+			if shouldCancel {
+				cancel()
+			}
+			db.foregroundMaintenanceGraceMu.Unlock()
+			if transitioned {
+				boundary <- struct{}{}
+			}
+		})
+	}
+	go func(lastActivity int64, graceActivity uint64) {
 		ticker := time.NewTicker(foregroundMaintenancePollInterval())
 		defer ticker.Stop()
+		if graceTimer != nil {
+			defer graceTimer.Stop()
+			defer func() {
+				db.foregroundMaintenanceGraceMu.Lock()
+				cleared := db.foregroundMaintenanceGraceState.CompareAndSwap(graceValue|1, 0)
+				if !cleared {
+					cleared = db.foregroundMaintenanceGraceState.CompareAndSwap(graceValue, 0)
+				}
+				if cleared && db.foregroundMaintenanceGraceCancelValue == graceValue {
+					if !db.activeForegroundIterators.clearGrace(graceValue | 1) {
+						db.activeForegroundIterators.clearGrace(graceValue)
+					}
+					db.foregroundMaintenanceGraceDeadlineUnixNano.Store(0)
+					db.foregroundMaintenanceGraceCancel = nil
+					db.foregroundMaintenanceGraceCancelValue = 0
+				}
+				db.foregroundMaintenanceGraceMu.Unlock()
+			}()
+		}
+		graceElapsed := resumeGrace <= 0
 		for {
 			select {
 			case <-ctx.Done():
@@ -13538,7 +13698,18 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 			case <-db.closeCh:
 				cancel()
 				return
-			case now := <-ticker.C:
+			case <-graceC:
+				graceC = nil
+				graceElapsed = true
+				if db.activeForegroundIterators.Load() > 0 ||
+					db.foregroundMaintenanceGraceActivity.Load() != graceActivity {
+					cancel()
+					return
+				}
+			case <-ticker.C:
+				if !graceElapsed {
+					continue
+				}
 				if resumeGrace <= 0 {
 					if db.foregroundActivityResumedSince(lastActivity) {
 						cancel()
@@ -13546,16 +13717,14 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 					}
 					continue
 				}
-				if now.Sub(startedAt) < resumeGrace {
-					continue
-				}
-				if db.foregroundActivityRecentlyResumedSince(lastActivity, now) {
+				if db.activeForegroundIterators.Load() > 0 ||
+					db.foregroundMaintenanceGraceActivity.Load() != graceActivity {
 					cancel()
 					return
 				}
 			}
 		}
-	}(lastActivity)
+	}(lastActivity, graceActivity)
 	return ctx, cancel
 }
 
@@ -13674,11 +13843,42 @@ func (db *DB) vlogGenerationRewritePlanContext(timeout time.Duration, opts vlogG
 	return db.foregroundMaintenanceContextWithResumeGrace(timeout, vlogGenerationRewritePlanResumeGrace)
 }
 
+func (db *DB) noteForegroundMaintenanceGraceActivityLocked(now int64) {
+	state := db.foregroundMaintenanceGraceState.Load()
+	if state == 0 {
+		return
+	}
+	deadline := db.foregroundMaintenanceGraceDeadlineUnixNano.Load()
+	if deadline <= 0 || now < deadline {
+		return
+	}
+	db.foregroundMaintenanceGraceActivity.Add(1)
+	if db.foregroundMaintenanceGraceCancelValue == state&^uint32(1) && db.foregroundMaintenanceGraceCancel != nil {
+		db.foregroundMaintenanceGraceCancel()
+	}
+}
+
+func (db *DB) noteForegroundMaintenanceGraceActivity(now int64) {
+	state := db.foregroundMaintenanceGraceState.Load()
+	if state == 0 {
+		return
+	}
+	deadline := db.foregroundMaintenanceGraceDeadlineUnixNano.Load()
+	if deadline > 0 && now < deadline {
+		return
+	}
+	db.foregroundMaintenanceGraceMu.RLock()
+	db.noteForegroundMaintenanceGraceActivityLocked(now)
+	db.foregroundMaintenanceGraceMu.RUnlock()
+}
+
 func (db *DB) noteWrite() {
 	if db == nil {
 		return
 	}
-	db.lastForegroundWriteUnixNano.Store(time.Now().UnixNano())
+	now := time.Now().UnixNano()
+	db.lastForegroundWriteUnixNano.Store(now)
+	db.noteForegroundMaintenanceGraceActivity(now)
 	if !db.autoCheckpointOn.Load() {
 		return
 	}
@@ -13735,6 +13935,7 @@ func (db *DB) noteRead() {
 		return
 	}
 	now := time.Now().UnixNano()
+	db.noteForegroundMaintenanceGraceActivity(now)
 	last := db.lastForegroundReadUnixNano.Load()
 	if last > 0 && now-last < int64(foregroundReadStampMaxAge) {
 		n := db.foregroundReadStampCounter.Add(1)
@@ -13745,17 +13946,43 @@ func (db *DB) noteRead() {
 	db.lastForegroundReadUnixNano.Store(now)
 }
 
+func (db *DB) beginForegroundRead() {
+	if db == nil {
+		return
+	}
+	db.activeForegroundIterators.Add(1)
+	db.noteRead()
+}
+
+func (db *DB) endForegroundRead() {
+	if db == nil {
+		return
+	}
+	if db.activeForegroundIterators.endIfNoGrace() {
+		return
+	}
+	db.foregroundMaintenanceGraceMu.RLock()
+	completedAt := time.Now().UnixNano()
+	grace := db.activeForegroundIterators.end()
+	deadline := db.foregroundMaintenanceGraceDeadlineUnixNano.Load()
+	if grace != 0 && deadline > 0 && completedAt >= deadline &&
+		grace == db.foregroundMaintenanceGraceState.Load() {
+		db.foregroundMaintenanceGraceActivity.Add(1)
+		if db.foregroundMaintenanceGraceCancelValue == grace&^1 && db.foregroundMaintenanceGraceCancel != nil {
+			db.foregroundMaintenanceGraceCancel()
+		}
+	}
+	db.foregroundMaintenanceGraceMu.RUnlock()
+}
+
 func (db *DB) beginRawForegroundRead() func() {
 	if db == nil {
 		return func() {}
 	}
-	db.noteRead()
-	db.activeForegroundIterators.Add(1)
+	db.beginForegroundRead()
 	var once sync.Once
 	return func() {
-		once.Do(func() {
-			db.activeForegroundIterators.Add(-1)
-		})
+		once.Do(db.endForegroundRead)
 	}
 }
 
@@ -29704,7 +29931,8 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
 	key = normalizeRawKVPointKey(key)
-	db.noteRead()
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 	view := db.retainMemtableView()
 	bypass := db.canBypassMemtableRead(view, key)
 	if view != nil {
@@ -29779,7 +30007,8 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	if len(keys) == 0 {
 		return make([][]byte, 0), nil
 	}
-	db.noteRead()
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 
 	// Fast path: no mutable/queued state and all touched mutable shards are
 	// observably empty, so we can delegate to backend single-snapshot GetMany.
@@ -29884,7 +30113,8 @@ func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 	if len(keys) == 0 {
 		return nil
 	}
-	db.noteRead()
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 
 	view := db.retainMemtableView()
 	bypass := db.canBypassMemtableReadMany(view, keys)
@@ -29947,6 +30177,8 @@ func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	key = normalizeRawKVPointKey(key)
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 	// 1. Memtable
 	out, found, err := db.getMemtableAppend(key, dst)
 	if err != nil {
@@ -29965,7 +30197,8 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 
 func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {
 	key = normalizeRawKVPointKey(key)
-	db.noteRead()
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 	out, revision, found, err := db.getMemtableAppendWithRevision(key, dst)
 	if err != nil {
 		return dst, revision, err
@@ -29986,7 +30219,8 @@ func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, e
 
 func (db *DB) Has(key []byte) (bool, error) {
 	key = normalizeRawKVPointKey(key)
-	db.noteRead()
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 	view := db.retainMemtableView()
 	if view != nil {
 		defer db.releaseMemtableView(view)
@@ -30019,6 +30253,8 @@ func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
 	if len(keys) == 0 {
 		return out, nil
 	}
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 	provider, ok := db.backend.(backendSnapshotProvider)
 	if !ok {
 		for i, key := range keys {
@@ -32921,12 +33157,15 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	if iteratorDebug {
 		db.iteratorCallsTotal.Add(1)
 	}
-	db.noteRead()
+	db.beginForegroundRead()
+	transferForegroundRead := func(it merging.Iterator) merging.Iterator {
+		return db.wrapForegroundIteratorLease(it)
+	}
 	if err := db.ensureBackendRange(); err != nil {
-		return nil, err
+		return db.foregroundIteratorError(err)
 	}
 	if err := db.flushValueLogForBackendRead(); err != nil {
-		return nil, err
+		return db.foregroundIteratorError(err)
 	}
 
 	var view *memtableView
@@ -32955,7 +33194,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		// if/when writes resume.
 		if err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
 			db.mu.Unlock()
-			return nil, err
+			return db.foregroundIteratorError(err)
 		}
 		if iteratorDebug {
 			db.iteratorSnapshotRotationsTotal.Add(1)
@@ -32989,12 +33228,12 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 				db.observeIteratorShape(0, sourcesUsed)
 				it = &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}
 			}
-			return db.wrapForegroundIterator(it)
+			return transferForegroundRead(it)
 		}
 		if rootDomainSnapshotHasPublishedState(iteratorSnap) {
 			diskIter, ok, err := db.livePublishedRootIterator(iteratorSnap, start, end, false)
 			if err != nil {
-				return nil, err
+				return db.foregroundIteratorError(err)
 			}
 			if !ok || diskIter == nil {
 				out := merging.Iterator(&emptyIterator{start: start, end: end})
@@ -33009,13 +33248,13 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		if start == nil && end == nil && backendRangeKnown && backendRange.valid {
 			diskIter, err := db.backend.Iterator(nil, nil)
 			if err != nil {
-				return nil, err
+				return db.foregroundIteratorError(err)
 			}
 			return decorate(diskIter, 1), nil
 		}
 		diskIter, err := db.backend.Iterator(start, end)
 		if err != nil {
-			return nil, err
+			return db.foregroundIteratorError(err)
 		}
 		return decorate(diskIter, 1), nil
 	}
@@ -33057,7 +33296,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			leasedView := view
 			view = nil
 			releaseView = false
-			return db.wrapForegroundIterator(&leasedMergingIterator{
+			return transferForegroundRead(&leasedMergingIterator{
 				Iterator: it,
 				release: func() {
 					db.releaseMemtableView(leasedView)
@@ -33069,7 +33308,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			view = nil
 			releaseView = false
 		}
-		return db.wrapForegroundIterator(it)
+		return transferForegroundRead(it)
 	}
 
 	// Fast path for full scans: if the in-memory key ranges are disjoint from the
@@ -33080,7 +33319,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		if backendRangeKnown && len(queue) == 0 && backendRange.valid {
 			diskIter, err := db.backend.Iterator(nil, nil)
 			if err != nil {
-				return nil, err
+				return db.foregroundIteratorError(err)
 			}
 			return decorateIterator(diskIter, 1), nil
 		}
@@ -33135,7 +33374,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 					_ = sources[i].Iter.Close()
 				}
 			}
-			return nil, err
+			return db.foregroundIteratorError(err)
 		}
 		if ok && diskIter != nil {
 			diskIter = newRangeSpanFilteringIterator(diskIter, appendNewerRangeSpansForSource(nil, queueRangeSpans, -1), db)
@@ -33208,10 +33447,25 @@ func (it *foregroundTrackedIterator) Close() error {
 	it.closeOnce.Do(func() {
 		it.closeErr = it.Iterator.Close()
 		if it.db != nil {
-			it.db.activeForegroundIterators.Add(-1)
+			it.db.endForegroundRead()
 		}
 	})
 	return it.closeErr
+}
+
+func (db *DB) foregroundIteratorError(err error) (merging.Iterator, error) {
+	db.endForegroundRead()
+	return nil, err
+}
+
+func (db *DB) wrapForegroundIteratorLease(it merging.Iterator) merging.Iterator {
+	if db == nil || it == nil {
+		return it
+	}
+	if tracked, ok := it.(*foregroundTrackedIterator); ok {
+		return tracked
+	}
+	return &foregroundTrackedIterator{Iterator: it, db: db}
 }
 
 func (db *DB) wrapForegroundIterator(it merging.Iterator) merging.Iterator {
@@ -33221,8 +33475,8 @@ func (db *DB) wrapForegroundIterator(it merging.Iterator) merging.Iterator {
 	if tracked, ok := it.(*foregroundTrackedIterator); ok {
 		return tracked
 	}
-	db.activeForegroundIterators.Add(1)
-	return &foregroundTrackedIterator{Iterator: it, db: db}
+	db.beginForegroundRead()
+	return db.wrapForegroundIteratorLease(it)
 }
 
 type concatUnsafeIterator struct {
@@ -33356,9 +33610,12 @@ func (it *concatUnsafeIterator) Error() error {
 func (it *concatUnsafeIterator) Domain() (start, end []byte) { return nil, nil }
 
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
-	db.noteRead()
+	db.beginForegroundRead()
+	transferForegroundRead := func(it merging.Iterator) merging.Iterator {
+		return db.wrapForegroundIteratorLease(it)
+	}
 	if err := db.flushValueLogForBackendRead(); err != nil {
-		return nil, err
+		return db.foregroundIteratorError(err)
 	}
 
 	var view *memtableView
@@ -33382,7 +33639,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	if rotate {
 		if err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
 			db.mu.Unlock()
-			return nil, err
+			return db.foregroundIteratorError(err)
 		}
 	}
 
@@ -33399,7 +33656,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	db.mu.Unlock()
 
 	if err := db.ensureBackendRange(); err != nil {
-		return nil, err
+		return db.foregroundIteratorError(err)
 	}
 	db.mu.RLock()
 	backendRangeKnown := db.backendRangeKnown
@@ -33416,12 +33673,12 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 			if iteratorDebugEnabled.Load() {
 				it = &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}
 			}
-			return db.wrapForegroundIterator(it)
+			return transferForegroundRead(it)
 		}
 		if rootDomainSnapshotHasPublishedState(iteratorSnap) {
 			diskIter, ok, err := db.livePublishedRootIterator(iteratorSnap, start, end, true)
 			if err != nil {
-				return nil, err
+				return db.foregroundIteratorError(err)
 			}
 			if !ok || diskIter == nil {
 				out := merging.Iterator(&emptyIterator{start: start, end: end})
@@ -33436,13 +33693,13 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		if start == nil && end == nil && backendRangeKnown && backendRange.valid {
 			diskIter, err := db.backend.ReverseIterator(nil, nil)
 			if err != nil {
-				return nil, err
+				return db.foregroundIteratorError(err)
 			}
 			return decorate(diskIter, 1), nil
 		}
 		diskIter, err := db.backend.ReverseIterator(start, end)
 		if err != nil {
-			return nil, err
+			return db.foregroundIteratorError(err)
 		}
 		return decorate(diskIter, 1), nil
 	}
@@ -33483,7 +33740,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 			leasedView := view
 			view = nil
 			releaseView = false
-			return db.wrapForegroundIterator(&leasedMergingIterator{
+			return transferForegroundRead(&leasedMergingIterator{
 				Iterator: it,
 				release: func() {
 					db.releaseMemtableView(leasedView)
@@ -33495,7 +33752,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 			view = nil
 			releaseView = false
 		}
-		return db.wrapForegroundIterator(it)
+		return transferForegroundRead(it)
 	}
 
 	var sources []merging.IteratorSource
@@ -33544,7 +33801,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 					_ = sources[i].Iter.Close()
 				}
 			}
-			return nil, err
+			return db.foregroundIteratorError(err)
 		}
 
 		if ok && diskIter != nil {
