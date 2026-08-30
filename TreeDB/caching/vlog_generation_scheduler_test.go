@@ -9876,7 +9876,10 @@ func TestVlogGenerationRewritePlan_OneShotReadBlipDoesNotCancelLongPlan(t *testi
 		t.Fatalf("rewrite plan did not start")
 	}
 
-	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
+	// Model a completed one-shot read late enough inside the grace that its
+	// timestamp is still fresh at the first post-grace poll. The grace boundary,
+	// not timestamp staleness, must absorb it.
+	db.lastForegroundReadUnixNano.Store(time.Now().Add(vlogGenerationRewritePlanResumeGrace / 2).UnixNano())
 	staleAndBeyondGrace := vlogGenerationRewritePlanResumeGrace
 	if staleAndBeyondGrace < foregroundReadStampMaxAge {
 		staleAndBeyondGrace = foregroundReadStampMaxAge

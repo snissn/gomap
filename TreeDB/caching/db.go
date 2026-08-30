@@ -13453,16 +13453,6 @@ func (db *DB) foregroundActivityResumedSince(lastActivity int64) bool {
 	return db.lastForegroundActivityUnixNano() > lastActivity
 }
 
-func (db *DB) foregroundActivityRecentlyResumedSince(lastActivity int64, now time.Time) bool {
-	if !db.foregroundActivityResumedSince(lastActivity) {
-		return false
-	}
-	if db.activeForegroundIterators.Load() > 0 {
-		return true
-	}
-	return !db.foregroundActivityQuietFor(now, foregroundReadStampMaxAge, foregroundReadStampMaxAge)
-}
-
 func (db *DB) foregroundVlogMaintenanceResumedSince(lastWrite int64) bool {
 	if db == nil {
 		return false
@@ -13528,7 +13518,8 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 	}
 	lastActivity := db.lastForegroundActivityUnixNano()
 	startedAt := time.Now()
-	go func(lastActivity int64) {
+	resumeCutoff := startedAt.Add(resumeGrace).UnixNano()
+	go func(lastActivity, resumeCutoff int64) {
 		ticker := time.NewTicker(foregroundMaintenancePollInterval())
 		defer ticker.Stop()
 		for {
@@ -13549,13 +13540,16 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 				if now.Sub(startedAt) < resumeGrace {
 					continue
 				}
-				if db.foregroundActivityRecentlyResumedSince(lastActivity, now) {
+				// Activity that starts and finishes inside the grace is absorbed.
+				// A read still active at the boundary, or any activity beginning
+				// after the boundary, cancels the maintenance plan.
+				if db.activeForegroundIterators.Load() > 0 || db.lastForegroundActivityUnixNano() > resumeCutoff {
 					cancel()
 					return
 				}
 			}
 		}
-	}(lastActivity)
+	}(lastActivity, resumeCutoff)
 	return ctx, cancel
 }
 
