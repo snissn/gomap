@@ -18792,8 +18792,8 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 		}
 		// Avoid repeatedly checkpointing when WAL bytes cannot be reduced (e.g.
 		// value-log segments retained for pointers). Rearm once reclaimable bytes
-		// drop below maxWALBytes/2; a successful pass with enough reclaimable
-		// bytes also re-arms so later write notifications can retry.
+		// drop below maxWALBytes/2; every successful size pass also re-arms so a
+		// later threshold crossing can trigger another pass.
 		if !db.autoCheckpointSizeArmed.CompareAndSwap(true, false) {
 			return
 		}
@@ -18825,7 +18825,7 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 		}
 		return
 	}
-	if mode == autoCheckpointModeSize && maxWALBytes > 0 && afterReclaimable >= maxWALBytes {
+	if mode == autoCheckpointModeSize && maxWALBytes > 0 {
 		db.autoCheckpointSizeArmed.CompareAndSwap(false, true)
 	}
 
@@ -20252,14 +20252,13 @@ func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 		return
 	}
 	db.vlogGenerationRewriteStageWakeObservedNS.Store(observedAt)
-	automatic := db.vlogGenerationMaintenanceAutomatic.Load()
 	dueAt := time.Unix(0, observedAt).Add(vlogGenerationRewriteStageConfirmDelay)
 	delay := time.Until(dueAt)
 	if delay < 0 {
 		delay = 0
 	}
 	db.wg.Add(1)
-	go func(expectedObservedAt int64, wait time.Duration, automatic bool) {
+	go func(expectedObservedAt int64, wait time.Duration) {
 		defer db.wg.Done()
 		if wait > 0 {
 			timer := time.NewTimer(wait)
@@ -20287,6 +20286,7 @@ func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 			"rewrite_plan stage_confirm_due observed_age_ms=%d",
 			time.Since(time.Unix(0, expectedObservedAt)).Milliseconds(),
 		)
+		automatic := db.vlogGenerationRewriteStageAutomatic.Load()
 		db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
 			bypassQuiet:           true,
 			skipRetainedPruneWait: true,
@@ -20295,7 +20295,7 @@ func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 			rewriteDebtDrain:      true,
 			debugSource:           "rewrite_stage_confirm",
 		})
-	}(observedAt, delay, automatic)
+	}(observedAt, delay)
 }
 
 func (db *DB) vlogGenerationRewriteAgeBlockedDue(now time.Time) bool {

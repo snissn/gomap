@@ -1062,6 +1062,35 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_RearmsAfterSuccessfulNoRelief(t *t
 	}
 }
 
+func TestCachingDB_AutoCheckpoint_SizeTrigger_RearmsAfterSuccessfulPartialRelief(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const maxWALBytes int64 = 1024
+	pressureReads := 0
+	db.SetAutoCheckpointWALBytesHook(func() int64 {
+		pressureReads++
+		if pressureReads <= 2 {
+			return maxWALBytes
+		}
+		return 3 * maxWALBytes / 4
+	})
+	db.autoCheckpointSizeArmed.Store(true)
+	db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeSize)
+	if !db.autoCheckpointSizeArmed.Load() {
+		t.Fatal("successful partial-relief size checkpoint left gate disarmed")
+	}
+
+	db.SetAutoCheckpointWALBytesHook(func() int64 { return maxWALBytes })
+	db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeSize)
+	if got := db.autoCheckpointCount.Load(); got != 2 {
+		t.Fatalf("size passes after partial relief=%d want 2", got)
+	}
+}
+
 func TestCachingDB_AutoCheckpoint_SizeTrigger_SeedsExistingWAL(t *testing.T) {
 	dir := t.TempDir()
 	walDir := filepath.Join(dir, "wal")

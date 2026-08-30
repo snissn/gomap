@@ -8245,6 +8245,25 @@ func TestVlogGenerationAutomaticDelayedWakesPreserveMaintenanceBoundary(t *testi
 				}}, true, time.Now().Add(-vlogGenerationRewriteStageConfirmDelay).UnixNano())
 			},
 		},
+		{
+			name: "stage_confirmation_upgrade",
+			wake: func(db *DB) error {
+				observedAt := time.Now().Add(-vlogGenerationRewriteStageConfirmDelay + 100*time.Millisecond).UnixNano()
+				if err := db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{{
+					FileID:     11,
+					BytesTotal: 128,
+					BytesLive:  64,
+					BytesStale: 64,
+					StaleRatio: 0.5,
+				}}, true, observedAt); err != nil {
+					return err
+				}
+				db.vlogGenerationMaintenanceAutomatic.Store(true)
+				defer db.vlogGenerationMaintenanceAutomatic.Store(false)
+				db.scheduleVlogGenerationRewriteStageConfirmation(observedAt)
+				return nil
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
