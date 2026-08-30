@@ -9272,6 +9272,7 @@ type DB struct {
 	lastForegroundReadUnixNano                                   atomic.Int64
 	foregroundReadStampCounter                                   atomic.Uint32
 	activeForegroundIterators                                    atomic.Int64
+	foregroundMaintenanceGraceMu                                 sync.Mutex
 	foregroundMaintenanceGraceSequence                           atomic.Uint64
 	foregroundMaintenanceGraceState                              atomic.Uint64
 	foregroundMaintenanceGraceActivity                           atomic.Uint64
@@ -13527,13 +13528,18 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 		graceActivity uint64
 	)
 	if resumeGrace > 0 {
+		db.foregroundMaintenanceGraceMu.Lock()
 		graceActivity = db.foregroundMaintenanceGraceActivity.Load()
 		graceValue = db.foregroundMaintenanceGraceSequence.Add(1) << 1
 		db.foregroundMaintenanceGraceState.Store(graceValue)
+		db.foregroundMaintenanceGraceMu.Unlock()
 		boundary := make(chan struct{}, 1)
 		graceC = boundary
 		graceTimer = time.AfterFunc(resumeGrace, func() {
-			if db.foregroundMaintenanceGraceState.CompareAndSwap(graceValue, graceValue|1) {
+			db.foregroundMaintenanceGraceMu.Lock()
+			transitioned := db.foregroundMaintenanceGraceState.CompareAndSwap(graceValue, graceValue|1)
+			db.foregroundMaintenanceGraceMu.Unlock()
+			if transitioned {
 				boundary <- struct{}{}
 			}
 		})
@@ -13544,8 +13550,10 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 		if graceTimer != nil {
 			defer graceTimer.Stop()
 			defer func() {
+				db.foregroundMaintenanceGraceMu.Lock()
 				db.foregroundMaintenanceGraceState.CompareAndSwap(graceValue|1, 0)
 				db.foregroundMaintenanceGraceState.CompareAndSwap(graceValue, 0)
+				db.foregroundMaintenanceGraceMu.Unlock()
 			}()
 		}
 		graceElapsed := resumeGrace <= 0
@@ -13785,15 +13793,21 @@ func (db *DB) beginForegroundRead() {
 	if db == nil {
 		return
 	}
-	db.noteRead()
 	db.activeForegroundIterators.Add(1)
+	db.noteRead()
 }
 
 func (db *DB) endForegroundRead() {
 	if db == nil {
 		return
 	}
-	db.noteForegroundMaintenanceGraceActivity()
+	if db.foregroundMaintenanceGraceState.Load() != 0 {
+		db.foregroundMaintenanceGraceMu.Lock()
+		db.noteForegroundMaintenanceGraceActivity()
+		db.activeForegroundIterators.Add(-1)
+		db.foregroundMaintenanceGraceMu.Unlock()
+		return
+	}
 	db.activeForegroundIterators.Add(-1)
 }
 
