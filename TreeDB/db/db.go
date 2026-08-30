@@ -3864,11 +3864,10 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 	if db == nil {
 		return ErrClosed
 	}
-	// Keep the runtime and journal alive from the capability check through
-	// rotation and cleanup. Close takes this lock exclusively before tearing
-	// either resource down.
-	db.teardownMu.RLock()
-	defer db.teardownMu.RUnlock()
+	// Storage maintenance takes maintenanceMu before teardownMu. Preserve that
+	// order so leaf-generation GC cannot deadlock this cleanup path.
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
 	if db.closing.Load() {
 		return ErrClosed
 	}
@@ -3878,6 +3877,16 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 	if err := db.commandWALPoisonedError(); err != nil {
 		return err
 	}
+	if hook := db.testStorageMaintenanceAfterLockHook; hook != nil {
+		if err := hook("command-wal-covered-prefix"); err != nil {
+			return err
+		}
+	}
+	// Keep the runtime and journal alive from the capability check through
+	// rotation and cleanup. Close takes this lock exclusively before tearing
+	// either resource down.
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 	// Online vacuum replaces the runtime under db.mu. Snapshot it there before
 	// deciding whether covered-prefix maintenance is available; teardownMu keeps
 	// the DB runtime and journal alive through this pass.
@@ -3885,7 +3894,7 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 	hasRootPublication := db.rootPublication != nil && db.rootPublication.coordinator != nil
 	db.mu.RUnlock()
 	if !db.commandWAL || db.commandJournal == nil || !hasRootPublication {
-		return db.Checkpoint()
+		return db.checkpoint(true)
 	}
 
 	unlockCommandWALPublish := db.lockCommandWALRawPublish()
@@ -3900,7 +3909,7 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 	if !rotated && !advanced && db.commandWALClosedBytes.Load() <= 0 {
 		return nil
 	}
-	return db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(false)
+	return db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(true)
 }
 
 // checkpoint runs with maintenanceAlreadyHeld only for an enclosing backend

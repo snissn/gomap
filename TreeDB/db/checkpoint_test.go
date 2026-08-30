@@ -3,6 +3,8 @@ package db
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -152,6 +154,38 @@ func TestMaintainCommandWALCoveredPrefixPinsTeardown(t *testing.T) {
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestMaintainCommandWALCoveredPrefixAcquiresMaintenanceBeforeTeardown(t *testing.T) {
+	d, err := Open(Options{
+		Dir:                    t.TempDir(),
+		CommandWAL:             true,
+		Durability:             DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	called := false
+	d.testStorageMaintenanceAfterLockHook = func(operation string) error {
+		called = true
+		if operation != "command-wal-covered-prefix" {
+			return fmt.Errorf("maintenance operation=%q", operation)
+		}
+		if !d.teardownMu.TryLock() {
+			return errors.New("teardown lock held before maintenance admission")
+		}
+		d.teardownMu.Unlock()
+		return nil
+	}
+	if err := d.MaintainCommandWALCoveredPrefix(); err != nil {
+		t.Fatalf("MaintainCommandWALCoveredPrefix: %v", err)
+	}
+	if !called {
+		t.Fatal("maintenance admission hook was not called")
 	}
 }
 
