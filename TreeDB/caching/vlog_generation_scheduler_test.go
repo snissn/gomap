@@ -10005,6 +10005,7 @@ func TestVlogGenerationRewritePlan_CancelsForResumedReadsAndRetriesAfterQuiet(t 
 
 	const initialTokens = int64(1024)
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(initialTokens)
+	initialConsumed := db.vlogGenerationRewriteBudgetConsumed.Load()
 	forceVlogMaintenanceIdle(db)
 
 	doneMaintenance := make(chan struct{})
@@ -10039,6 +10040,9 @@ func TestVlogGenerationRewritePlan_CancelsForResumedReadsAndRetriesAfterQuiet(t 
 	if got := db.vlogGenerationRewriteBudgetTokensBytes.Load(); got != initialTokens {
 		t.Fatalf("tokens after canceled plan=%d want=%d", got, initialTokens)
 	}
+	if got := db.vlogGenerationRewriteBudgetConsumed.Load(); got != initialConsumed {
+		t.Fatalf("consumed budget after canceled plan=%d want=%d", got, initialConsumed)
+	}
 	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
 		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)
 	}
@@ -10061,8 +10065,8 @@ func TestVlogGenerationRewritePlan_CancelsForResumedReadsAndRetriesAfterQuiet(t 
 	if got := blocking.recordedRewriteCalls(); got != 1 {
 		t.Fatalf("rewrite calls after quiet retry=%d want=1", got)
 	}
-	if got := db.vlogGenerationRewriteBudgetTokensBytes.Load(); got != initialTokens-64 {
-		t.Fatalf("tokens after quiet retry=%d want=%d", got, initialTokens-64)
+	if got := db.vlogGenerationRewriteBudgetConsumed.Load(); got != initialConsumed+64 {
+		t.Fatalf("consumed budget after quiet retry=%d want=%d", got, initialConsumed+64)
 	}
 }
 
