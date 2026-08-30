@@ -1489,8 +1489,8 @@ type Options struct {
 	// - `0` uses a default.
 	// - `<0` disables the periodic interval trigger.
 	BackgroundCheckpointInterval time.Duration
-	// BackgroundCheckpointIdleDuration triggers an opportunistic checkpoint after
-	// a period of write-idleness in cached mode.
+	// BackgroundCheckpointIdleDuration triggers opportunistic covered-prefix
+	// maintenance after a period of write-idleness in cached mode.
 	//
 	// Semantics:
 	// - `0` uses a default.
@@ -1515,10 +1515,10 @@ type Options struct {
 	// collection-root span debt thresholds are met (0 uses conservative defaults).
 	BackgroundIndexVacuumCollectionRootSpanRatioPPM uint32
 	BackgroundIndexVacuumCollectionRootPages        uint64
-	// MaxWALBytes triggers an immediate checkpoint in cached mode when the sum of
-	// WAL segment sizes exceeds this many bytes (0 uses a default; <0 disables the
-	// size trigger). This is an operational safety cap; it does not make each
-	// individual write durable (use *Sync APIs for that).
+	// MaxWALBytes triggers immediate covered-prefix maintenance in cached mode when
+	// reclaimable WAL bytes exceed this many bytes (0 uses a default; <0 disables
+	// the size trigger). This is an operational safety cap; it does not publish the
+	// visible root frontier or make each write durable (use *Sync APIs for that).
 	MaxWALBytes int64
 }
 

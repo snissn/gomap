@@ -13238,8 +13238,8 @@ func (db *DB) startProcessMemorySampler() {
 // When idleInterval > 0, it also runs after a period of write-idleness. Backends
 // without covered-prefix maintenance fall back to a full checkpoint.
 //
-// interval > 0 enables periodic checkpoints. maxWALBytes is a safety cap: if > 0,
-// the loop will attempt to checkpoint when the effective WAL bytes exceed this
+// interval > 0 enables periodic passes. maxWALBytes is a safety cap: if > 0,
+// the loop will attempt maintenance when the effective WAL bytes exceed this
 // cap. maxWALBytes <= 0 disables the size trigger.
 func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
 	if db == nil {
