@@ -147,6 +147,7 @@ func (b *VectorPartitionPublicBackendV1) publicSearchResponseV1(request public.S
 	adapterStarted := time.Now()
 	result := public.SearchResponseV1{Generation: request.Generation, Counters: public.SearchCountersV1{
 		SelectedPartitions: response.Counters.SelectedPartitions, SelectedGroups: response.Counters.SelectedGroups,
+		HNSWServedPartitions: response.Counters.HNSWServedPartitions, ExactScanPartitions: response.Counters.ExactScanPartitions,
 		Requests: response.Counters.Requests, RPCs: response.Counters.RPCs, Retries: response.Counters.Retries, Redirects: response.Counters.Redirects,
 		Candidates: response.Counters.Candidates, Edges: response.Counters.Edges,
 		SnapshotPins: response.Counters.SnapshotPins, ReadProofs: response.Counters.ReadProofs, GenerationPins: response.Counters.GenerationPins, PartitionOpens: response.Counters.PartitionOpens,

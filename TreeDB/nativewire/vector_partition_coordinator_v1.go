@@ -221,6 +221,7 @@ type VectorPartitionCoordinatorNeighborV1 struct {
 
 type VectorPartitionCoordinatorCountersV1 struct {
 	SelectedPartitions, SelectedGroups                       uint64
+	HNSWServedPartitions, ExactScanPartitions                uint64
 	Requests, RPCs, Retries, Redirects                       uint64
 	SnapshotPins, ReadProofs, GenerationPins, PartitionOpens uint64
 	Cancellations, Failures                                  uint64
@@ -1029,8 +1030,27 @@ func accumulateVectorPartitionCoordinatorResponseCountersV1(
 	readProofs, readProofsOK := addUint64V1(counters.ReadProofs, response.ReadProofs)
 	generationPins, generationPinsOK := addUint64V1(counters.GenerationPins, response.GenerationPins)
 	partitionOpens, partitionOpensOK := addUint64V1(counters.PartitionOpens, response.PartitionOpens)
+	var hnswPartitions, exactPartitions uint64
+	for _, partial := range response.Partials {
+		switch partial.SearchRoute {
+		case collections.VectorPartitionSearchRouteHNSWSearchPackV1:
+			if hnswPartitions == math.MaxUint64 {
+				return false
+			}
+			hnswPartitions++
+		case collections.VectorPartitionSearchRouteExactFP32ScanV1:
+			if exactPartitions == math.MaxUint64 {
+				return false
+			}
+			exactPartitions++
+		default:
+			return false
+		}
+	}
+	hnswTotal, hnswOK := addUint64V1(counters.HNSWServedPartitions, hnswPartitions)
+	exactTotal, exactOK := addUint64V1(counters.ExactScanPartitions, exactPartitions)
 	candidateBytes, candidateBytesOK := mulUint64V1(response.Candidates, 64)
-	if !responseBytesOK || !candidatesOK || !edgesOK || !readProofsOK || !generationPinsOK || !partitionOpensOK || !candidateBytesOK {
+	if !responseBytesOK || !candidatesOK || !edgesOK || !readProofsOK || !generationPinsOK || !partitionOpensOK || !hnswOK || !exactOK || !candidateBytesOK {
 		return false
 	}
 	shardCandidateBytes := candidateBytes
@@ -1044,6 +1064,8 @@ func accumulateVectorPartitionCoordinatorResponseCountersV1(
 	counters.ReadProofs = readProofs
 	counters.GenerationPins = generationPins
 	counters.PartitionOpens = partitionOpens
+	counters.HNSWServedPartitions = hnswTotal
+	counters.ExactScanPartitions = exactTotal
 	counters.CandidateBytes = candidateBytes
 	counters.MaxShardResponseBytes = max(counters.MaxShardResponseBytes, response.ResponseBytes)
 	counters.MaxShardCandidateBytes = max(counters.MaxShardCandidateBytes, shardCandidateBytes)

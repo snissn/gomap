@@ -442,6 +442,7 @@ func publicNeighborsFromCoordinatorTestV1(neighbors []VectorPartitionCoordinator
 func publicCountersFromCoordinatorTestV1(counters VectorPartitionCoordinatorCountersV1) public.SearchCountersV1 {
 	return public.SearchCountersV1{
 		SelectedPartitions: counters.SelectedPartitions, SelectedGroups: counters.SelectedGroups,
+		HNSWServedPartitions: counters.HNSWServedPartitions, ExactScanPartitions: counters.ExactScanPartitions,
 		Requests: counters.Requests, RPCs: counters.RPCs, Retries: counters.Retries, Redirects: counters.Redirects,
 		Candidates: counters.Candidates, Edges: counters.Edges,
 		QueryBytes: counters.QueryBytes, RequestBytes: counters.RequestBytes, CandidateBytes: counters.CandidateBytes, ResponseBytes: counters.ResponseBytes,
