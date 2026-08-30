@@ -137,7 +137,7 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	if err != nil {
 		return out, err
 	}
-	db.bgVac.endDeferredVectorBuild()
+	db.endDeferredVectorBuild()
 	success := false
 	defer func() { finishMaintenance(success) }()
 

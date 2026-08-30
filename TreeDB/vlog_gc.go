@@ -69,14 +69,27 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	if db.backend == nil {
 		return out, ErrClosed
 	}
-	_, finishMaintenance := db.beginFullScanMaintenance("gc")
-	success := false
-	defer func() { finishMaintenance(success) }()
-
 	mode, err := normalizeValueLogGCMode(opts.Mode)
 	if err != nil {
 		return out, err
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := lockFullScanMaintenanceContext(ctx, &db.bgVac.runMu); err != nil {
+		return out, err
+	}
+	defer db.bgVac.runMu.Unlock()
+	if db.bgVac.deferredVectorBuildClosed.Load() || db.backend == nil {
+		return out, ErrClosed
+	}
+	_, finishMaintenance, err := db.beginFullScanMaintenanceContext(ctx, "gc")
+	if err != nil {
+		return out, err
+	}
+	db.endDeferredVectorBuild()
+	success := false
+	defer func() { finishMaintenance(success) }()
 
 	backendOpts := treedbdb.ValueLogGCOptions{DryRun: opts.DryRun}
 	if db.cached != nil {
