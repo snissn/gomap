@@ -20334,10 +20334,11 @@ func (db *DB) schedulePendingVlogGenerationCheckpointKick() {
 		return
 	}
 	if db.vlogGenerationDeferredMaintenanceDue(time.Now()) {
-		if db.vlogGenerationCheckpointKickPendingAutomatic.Load() {
+		automatic := db.vlogGenerationDeferredMaintenanceAutomatic.Load() || db.vlogGenerationCheckpointKickPendingAutomatic.Load()
+		if automatic {
 			db.vlogGenerationDeferredMaintenanceAutomatic.Store(true)
 		}
-		db.scheduleDueVlogGenerationDeferredMaintenance()
+		db.scheduleDueVlogGenerationDeferredMaintenance(automatic)
 		return
 	}
 	pending, automatic := db.takeVlogGenerationCheckpointKick()
@@ -20411,10 +20412,11 @@ func (db *DB) schedulePendingVlogGenerationRewriteQueue() {
 		return
 	}
 	if db.vlogGenerationDeferredMaintenanceDue(time.Now()) {
-		if db.vlogGenerationRewriteQueuePendingAutomatic.Load() {
+		automatic := db.vlogGenerationDeferredMaintenanceAutomatic.Load() || db.vlogGenerationRewriteQueuePendingAutomatic.Load()
+		if automatic {
 			db.vlogGenerationDeferredMaintenanceAutomatic.Store(true)
 		}
-		db.scheduleDueVlogGenerationDeferredMaintenance()
+		db.scheduleDueVlogGenerationDeferredMaintenance(automatic)
 		return
 	}
 	if !db.vlogGenerationRewriteQueuePending.Load() {
@@ -20498,7 +20500,7 @@ func (db *DB) takeVlogGenerationDeferredMaintenance() (bool, bool) {
 	return true, db.vlogGenerationDeferredMaintenanceAutomatic.Swap(false)
 }
 
-func (db *DB) scheduleDueVlogGenerationDeferredMaintenance() {
+func (db *DB) scheduleDueVlogGenerationDeferredMaintenance(automatic bool) {
 	if db == nil || db.closing.Load() {
 		return
 	}
@@ -20507,7 +20509,8 @@ func (db *DB) scheduleDueVlogGenerationDeferredMaintenance() {
 		db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
 			bypassQuiet:           true,
 			skipRetainedPruneWait: true,
-			skipCheckpoint:        false,
+			skipCheckpoint:        automatic,
+			automatic:             automatic,
 			rewriteDebtDrain:      true,
 			debugSource:           "rewrite_age_blocked_exit",
 		})
@@ -20523,7 +20526,8 @@ func (db *DB) scheduleDueVlogGenerationDeferredMaintenance() {
 	db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
 		bypassQuiet:           true,
 		skipRetainedPruneWait: true,
-		skipCheckpoint:        false,
+		skipCheckpoint:        automatic,
+		automatic:             automatic,
 		rewriteDebtDrain:      true,
 		debugSource:           "rewrite_stage_confirm_exit",
 	})
@@ -20807,7 +20811,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		// If a deferred confirmation/age wake became due while this pass held the
 		// scheduler active, requeue it immediately on exit instead of relying on
 		// the original retry goroutine to still be alive.
-		db.scheduleDueVlogGenerationDeferredMaintenance()
+		db.scheduleDueVlogGenerationDeferredMaintenance(opts.automatic)
 		db.schedulePendingVlogGenerationRewriteQueue()
 		db.schedulePendingVlogGenerationCheckpointKick()
 		if rewriteQueueSnapshotCaptured {
@@ -22845,7 +22849,7 @@ func (db *DB) SetMaintenancePhase(phase MaintenancePhase) {
 	db.debugVlogMaintf("maintenance_phase_change from=%s to=%s", maintenancePhaseString(uint32(prev)), maintenancePhaseString(uint32(phase)))
 	if phase == MaintenancePhaseSteady {
 		db.maybeArmWALOnVlogGenerationLoopForSteadyPhase()
-		db.scheduleDueVlogGenerationDeferredMaintenance()
+		db.scheduleDueVlogGenerationDeferredMaintenance(false)
 		db.schedulePendingVlogGenerationCheckpointKick()
 	}
 }

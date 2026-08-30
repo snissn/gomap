@@ -4164,7 +4164,7 @@ func TestVlogGenerationMaintenance_SchedulesDueStageConfirmationOnExit(t *testin
 		t.Fatalf("seed staged rewrite ledger: %v", err)
 	}
 
-	db.scheduleDueVlogGenerationDeferredMaintenance()
+	db.scheduleDueVlogGenerationDeferredMaintenance(false)
 
 	deadline := time.Now().Add(2 * schedulerTestWait(t))
 	for {
@@ -7270,7 +7270,7 @@ func TestVlogGenerationRewritePlan_StagePendingStillConfirmsWhenBudgetEmpty(t *t
 	db.vlogGenerationLastRewriteUnixNano.Store(0)
 	forceRewriteStageConfirmDue(t, db)
 	forceVlogMaintenanceIdle(db)
-	db.scheduleDueVlogGenerationDeferredMaintenance()
+	db.scheduleDueVlogGenerationDeferredMaintenance(false)
 
 	deadline := time.Now().Add(2 * schedulerTestWait(t))
 	for {
@@ -7743,7 +7743,7 @@ func TestVlogGenerationRewritePlan_AgeBlockedRetryRunsWhenDue(t *testing.T) {
 	db.vlogGenerationRewriteAgeBlockedUntilNS.Store(time.Now().Add(-time.Second).UnixNano())
 	db.vlogGenerationLastRewritePlanUnixNano.Store(time.Now().UnixNano())
 	forceVlogMaintenanceIdle(db)
-	db.scheduleDueVlogGenerationDeferredMaintenance()
+	db.scheduleDueVlogGenerationDeferredMaintenance(false)
 
 	deadline := time.Now().Add(2 * schedulerTestWait(t))
 	for {
@@ -8283,6 +8283,59 @@ func TestVlogGenerationAutomaticDelayedWakesPreserveMaintenanceBoundary(t *testi
 				t.Fatalf("automatic delayed wake boundaries: checkpoints=%d vacuums=%d, want 0/0", checkpoints, vacuums)
 			}
 		})
+	}
+}
+
+func TestVlogGenerationAutomaticExitScheduledDueWorkPreservesMaintenanceBoundary(t *testing.T) {
+	disableVlogGenerationLoop(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11},
+			SelectedBytesLive: 64,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   vlogGenerationVacuumTriggerRewriteBytes,
+			BytesAfter:    32,
+			RecordsCopied: 1,
+		},
+	}
+	boundary := &queuedRewriteBoundaryBackend{BackendDB: backend, recorder: recorder}
+	db, cleanup := openRewriteQueueTestDB(t, dir, boundary)
+	t.Cleanup(cleanup)
+	skipRetainedPrune(db)
+	forceVlogMaintenanceIdle(db)
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	// Bypass the timer wake so only the active pass's defer schedules this due
+	// work. Its global provenance is cleared before that defer runs.
+	db.vlogGenerationRewriteAgeBlockedUntilNS.Store(time.Now().Add(-time.Second).UnixNano())
+	db.vlogGenerationRewriteAgeBlockedAutomatic.Store(false)
+
+	boundary.resetBoundaryCalls()
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
+		automatic:      true,
+		skipCheckpoint: true,
+	})
+
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if _, calls := recorder.recordedRewrite(); calls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, calls := recorder.recordedRewrite()
+			t.Fatalf("automatic exit-scheduled due work did not rewrite: calls=%d", calls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if checkpoints, vacuums := boundary.boundaryCalls(); checkpoints != 0 || vacuums != 0 {
+		t.Fatalf("automatic exit-scheduled due boundaries: checkpoints=%d vacuums=%d, want 0/0", checkpoints, vacuums)
 	}
 }
 
