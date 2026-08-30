@@ -419,6 +419,7 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 	compactEmbeddings := 0
 	insertIDs := make([][]byte, 0, len(prepared))
 	insertDocs := make([][]byte, 0, len(prepared))
+	insertEmbeddings := make([][]float32, 0, len(prepared))
 	inserts := make([]preparedDocument, 0, len(prepared))
 	updates := make([]preparedDocument, 0)
 	if !sharedCandidate {
@@ -438,6 +439,7 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 			// the established exclusive replace-or-insert path below.
 			insertIDs = append(insertIDs, []byte(doc.id))
 			insertDocs = append(insertDocs, doc.raw)
+			insertEmbeddings = append(insertEmbeddings, doc.embedding)
 			inserts = append(inserts, doc)
 			continue
 		}
@@ -480,7 +482,17 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 	updated := 0
 	startPhase(&upsertStats.InsertNanos)
 	if len(insertIDs) > 0 {
-		if _, insertStats, err := col.InsertBatchWithStats(insertIDs, insertDocs); err == nil {
+		insert := col.InsertBatchWithStats
+		if sharedCandidate && deferVectorIndexRebuild && info.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
+			collectionMetric, err := metricToCollection(info.Metric)
+			if err != nil {
+				return UpsertDocumentsResponse{}, err
+			}
+			insert = func(ids, documents [][]byte) ([][]byte, collections.CollectionInsertStats, error) {
+				return col.InsertBatchWithStatsValidatedFloat32Projection(ids, documents, defaultEmbeddingField, collectionMetric, insertEmbeddings)
+			}
+		}
+		if _, insertStats, err := insert(insertIDs, insertDocs); err == nil {
 			inserted = len(insertIDs)
 			s.publishDiagnosticsInsert(index, info, insertStats)
 		} else if collections.IsDuplicateKeyError(err) {
@@ -1769,6 +1781,7 @@ func serviceColumnStoreConfig(dimension int) *collections.ColumnStoreConfig {
 type preparedDocument struct {
 	id               string
 	raw              []byte
+	embedding        []float32
 	compactEmbedding bool
 }
 
@@ -1844,7 +1857,7 @@ func prepareDocumentsForWrite(documents []Document, info IndexInfo) ([]preparedD
 		if err != nil {
 			return nil, wrapServiceError(CodeInvalidRequest, fmt.Sprintf("documents[%d] is not JSON-serializable", i), err)
 		}
-		prepared[i] = preparedDocument{id: id, raw: raw, compactEmbedding: compactEmbedding}
+		prepared[i] = preparedDocument{id: id, raw: raw, embedding: stored.Embedding, compactEmbedding: compactEmbedding}
 	}
 	return prepared, nil
 }

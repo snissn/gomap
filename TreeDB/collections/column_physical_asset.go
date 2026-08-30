@@ -43,6 +43,109 @@ type columnWriteDocument struct {
 	declaredValuesReady bool
 }
 
+type trustedFloat32Projection struct {
+	column  string
+	metric  VectorMetric
+	vectors [][]float32
+}
+
+func newTrustedFloat32Projection(ids, documents [][]byte, column string, metric VectorMetric, vectors [][]float32) (*trustedFloat32Projection, error) {
+	if column == "" {
+		return nil, errors.New("collections: validated float32 projection column is required")
+	}
+	metric, err := normalizeVectorMetric(metric)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) != len(documents) || len(vectors) != len(documents) {
+		return nil, fmt.Errorf("collections: validated float32 projection ids=%d documents=%d vectors=%d", len(ids), len(documents), len(vectors))
+	}
+	owned := make([][]float32, len(vectors))
+	for row := range vectors {
+		if len(vectors[row]) == 0 {
+			return nil, fmt.Errorf("collections: validated float32 projection row %d is empty", row)
+		}
+		owned[row] = append([]float32(nil), vectors[row]...)
+		if err := validateFloat32Vector(owned[row]); err != nil {
+			return nil, fmt.Errorf("collections: validated float32 projection row %d: %w", row, err)
+		}
+		if metric == VectorMetricCosine && vectorNormSquared(owned[row]) == 0 {
+			return nil, fmt.Errorf("collections: validated float32 projection row %d has zero magnitude for cosine metric", row)
+		}
+	}
+	return &trustedFloat32Projection{column: column, metric: metric, vectors: owned}, nil
+}
+
+func validateTrustedFloat32ProjectionMeta(meta CollectionMeta, projection *trustedFloat32Projection) error {
+	if projection == nil {
+		return nil
+	}
+	if normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON {
+		return fmt.Errorf("collections: validated float32 projection requires JSON document format, got %q", meta.Options.DocumentFormat)
+	}
+	cfg := meta.Options.ColumnStore
+	if !columnStoreWriteEnabled(meta) || len(cfg.Columns) != 1 {
+		return errors.New("collections: validated float32 projection requires exactly one enabled column")
+	}
+	if cfg.RetainedPayload != ColumnRetainedPayloadFull || columnRetainedPayloadEffectiveEncoding(cfg) != ColumnRetainedPayloadEncodingJSON {
+		return errors.New("collections: validated float32 projection requires full JSON retained payload")
+	}
+	column := cfg.Columns[0]
+	owner, err := columnStoreColumnOwner(column)
+	if err != nil {
+		return err
+	}
+	if column.Name != projection.column || column.Path != projection.column || column.ValueType != ColumnStoreValueFloat32Vector || owner != TypedStorageOwnerColumnPart || column.Nullable || column.VectorDims <= 0 {
+		return fmt.Errorf("collections: validated float32 projection does not match configured column %q", projection.column)
+	}
+	if len(meta.VectorIndexes) != 1 {
+		return fmt.Errorf("collections: validated float32 projection requires exactly one vector index, got %d", len(meta.VectorIndexes))
+	}
+	def, err := normalizeVectorIndexDefinition(meta.VectorIndexes[0])
+	if err != nil {
+		return fmt.Errorf("collections: validated float32 projection vector index: %w", err)
+	}
+	if def.Strategy != VectorIndexStrategyColumnGraph || def.Field != projection.column || def.Dimensions != column.VectorDims || def.Metric != projection.metric {
+		return fmt.Errorf("collections: validated float32 projection column %q has no matching column_graph index", projection.column)
+	}
+	for row := range projection.vectors {
+		if len(projection.vectors[row]) != column.VectorDims {
+			return fmt.Errorf("collections: validated float32 projection row %d dimensions=%d want %d", row, len(projection.vectors[row]), column.VectorDims)
+		}
+	}
+	return nil
+}
+
+func applyTrustedFloat32Projection(ids [][]byte, documents []columnWriteDocument, projection *trustedFloat32Projection) error {
+	if projection == nil {
+		return nil
+	}
+	if len(ids) != len(documents) || len(projection.vectors) != len(documents) {
+		return fmt.Errorf("collections: validated float32 projection ids=%d documents=%d vectors=%d", len(ids), len(documents), len(projection.vectors))
+	}
+	vectorsByID := make(map[string][]float32, len(ids))
+	for row := range ids {
+		key := string(ids[row])
+		if _, exists := vectorsByID[key]; exists {
+			return fmt.Errorf("collections: validated float32 projection duplicate id at row %d", row)
+		}
+		vectorsByID[key] = projection.vectors[row]
+	}
+	for row := range documents {
+		vector, ok := vectorsByID[string(documents[row].ID)]
+		if !ok {
+			return fmt.Errorf("collections: validated float32 projection document row %d id mismatch", row)
+		}
+		documents[row].declaredValues = []columnDeclaredValue{{
+			Type:          ColumnStoreValueFloat32Vector,
+			Present:       true,
+			Float32Vector: vector,
+		}}
+		documents[row].declaredValuesReady = true
+	}
+	return nil
+}
+
 type columnDeclaredValue struct {
 	Type ColumnStoreValueType
 	// Present distinguishes an omitted nullable JSON path from an explicit null.
