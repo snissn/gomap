@@ -3615,6 +3615,9 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 	if err := ValidateCollectionName(name); err != nil {
 		return nil, err
 	}
+	if commandWALIntent == nil {
+		m.db.NotifyForegroundRead()
+	}
 	coveredCommandWALIntent := commandWALIntent != nil && commandWALIntent.AssignedLSN() != 0
 	if collection, ok := m.openCollectionFromWriteDomainCache(name); ok {
 		if m.db.IsClosing() {
@@ -3760,6 +3763,7 @@ func (m *CollectionManager) ListCollectionsBounded(maxCollections int) ([]Collec
 	if m.db == nil {
 		return nil, false, errCollectionDBNil
 	}
+	m.db.NotifyForegroundRead()
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, false, backenddb.ErrClosed

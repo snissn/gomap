@@ -13453,6 +13453,16 @@ func (db *DB) foregroundActivityResumedSince(lastActivity int64) bool {
 	return db.lastForegroundActivityUnixNano() > lastActivity
 }
 
+func (db *DB) foregroundActivityRecentlyResumedSince(lastActivity int64, now time.Time) bool {
+	if !db.foregroundActivityResumedSince(lastActivity) {
+		return false
+	}
+	if db.activeForegroundIterators.Load() > 0 {
+		return true
+	}
+	return !db.foregroundActivityQuietFor(now, foregroundReadStampMaxAge, foregroundReadStampMaxAge)
+}
+
 func (db *DB) foregroundVlogMaintenanceResumedSince(lastWrite int64) bool {
 	if db == nil {
 		return false
@@ -13528,11 +13538,18 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 			case <-db.closeCh:
 				cancel()
 				return
-			case <-ticker.C:
-				if resumeGrace > 0 && time.Since(startedAt) < resumeGrace {
+			case now := <-ticker.C:
+				if resumeGrace <= 0 {
+					if db.foregroundActivityResumedSince(lastActivity) {
+						cancel()
+						return
+					}
 					continue
 				}
-				if db.foregroundActivityResumedSince(lastActivity) {
+				if now.Sub(startedAt) < resumeGrace {
+					continue
+				}
+				if db.foregroundActivityRecentlyResumedSince(lastActivity, now) {
 					cancel()
 					return
 				}

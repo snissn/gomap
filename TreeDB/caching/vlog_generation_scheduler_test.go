@@ -9684,13 +9684,32 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.
 		t.Fatalf("rewrite plan did not start")
 	}
 
-	db.lastForegroundWriteUnixNano.Store(time.Now().UnixNano())
+	stopWrites := make(chan struct{})
+	writesStopped := make(chan struct{})
+	go func() {
+		defer close(writesStopped)
+		ticker := time.NewTicker(foregroundReadStampMaxAge / 4)
+		defer ticker.Stop()
+		db.lastForegroundWriteUnixNano.Store(time.Now().UnixNano())
+		for {
+			select {
+			case <-stopWrites:
+				return
+			case <-db.closeCh:
+				return
+			case now := <-ticker.C:
+				db.lastForegroundWriteUnixNano.Store(now.UnixNano())
+			}
+		}
+	}()
 
 	select {
 	case <-doneMaintenance:
 	case <-time.After(wait):
 		t.Fatalf("maintenance did not cancel after foreground writes resumed")
 	}
+	close(stopWrites)
+	<-writesStopped
 
 	if got := db.vlogGenerationLastRewritePlanUnixNano.Load(); got != 0 {
 		t.Fatalf("last rewrite plan timestamp=%d want=0 after cancellation", got)
@@ -9796,6 +9815,80 @@ func TestVlogGenerationRewritePlan_GraceAllowsShortPlanDuringForegroundResume(t 
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty"]; got != "1" {
 		t.Fatalf("plan empty=%q want 1", got)
+	}
+}
+
+func TestVlogGenerationRewritePlan_OneShotReadBlipDoesNotCancelLongPlan(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+
+	timed := &timedRewritePlannerBackend{
+		DB:        backend,
+		planStart: make(chan struct{}),
+		planDelay: vlogGenerationRewritePlanResumeGrace + foregroundReadStampMaxAge,
+	}
+
+	db, err := Open(dir, timed, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("k1"), make([]byte, 4096)); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	forceVlogMaintenanceIdle(db)
+
+	doneMaintenance := make(chan struct{})
+	go func() {
+		db.maybeRunVlogGenerationMaintenance(false)
+		close(doneMaintenance)
+	}()
+
+	wait := schedulerTestWait(t)
+	select {
+	case <-timed.planStart:
+	case <-time.After(wait):
+		t.Fatalf("rewrite plan did not start")
+	}
+
+	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
+	select {
+	case <-doneMaintenance:
+	case <-time.After(2 * wait):
+		t.Fatalf("long rewrite plan did not complete after one-shot read blip")
+	}
+
+	completed, canceled := timed.recordedPlanOutcomes()
+	if completed != 1 || canceled != 0 {
+		t.Fatalf("plan outcomes completed=%d canceled=%d want completed=1 canceled=0", completed, canceled)
+	}
+	if got := db.vlogGenerationRewritePlanCanceled.Load(); got != 0 {
+		t.Fatalf("plan canceled=%d want=0", got)
 	}
 }
 
@@ -10021,7 +10114,24 @@ func TestVlogGenerationRewritePlan_CancelsForResumedReadsAndRetriesAfterQuiet(t 
 		t.Fatalf("rewrite plan did not start")
 	}
 
-	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
+	stopReads := make(chan struct{})
+	readsStopped := make(chan struct{})
+	go func() {
+		defer close(readsStopped)
+		ticker := time.NewTicker(foregroundReadStampMaxAge / 4)
+		defer ticker.Stop()
+		db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
+		for {
+			select {
+			case <-stopReads:
+				return
+			case <-db.closeCh:
+				return
+			case now := <-ticker.C:
+				db.lastForegroundReadUnixNano.Store(now.UnixNano())
+			}
+		}
+	}()
 	select {
 	case <-doneMaintenance:
 		t.Fatalf("rewrite plan canceled before resume grace elapsed")
@@ -10032,6 +10142,8 @@ func TestVlogGenerationRewritePlan_CancelsForResumedReadsAndRetriesAfterQuiet(t 
 	case <-time.After(wait):
 		t.Fatalf("rewrite plan did not cancel after foreground reads remained resumed through grace")
 	}
+	close(stopReads)
+	<-readsStopped
 
 	completed, canceled := blocking.recordedPlanOutcomes()
 	if completed != 0 || canceled != 1 {

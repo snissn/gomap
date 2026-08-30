@@ -83,7 +83,7 @@ func TestServiceNilMutationReceiverFailsClosed(t *testing.T) {
 	}
 }
 
-func TestServiceRawBackendReadAdvancesCachedForegroundActivity(t *testing.T) {
+func TestServiceRawBackendReadsAdvanceCachedForegroundActivity(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
 	opts.BackgroundIndexVacuumInterval = -1
 	backend, cleanup, stats, maintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
@@ -91,7 +91,8 @@ func TestServiceRawBackendReadAdvancesCachedForegroundActivity(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = cleanup() })
-	svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	manager := collections.NewCollectionManager(backend)
+	svc := NewWithDeferredVectorBuildMaintenance(manager, maintenance)
 	ctx := context.Background()
 	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: MetricCosine}); err != nil {
 		t.Fatalf("CreateIndex: %v", err)
@@ -106,20 +107,38 @@ func TestServiceRawBackendReadAdvancesCachedForegroundActivity(t *testing.T) {
 		}
 		return timestamp
 	}
-	before := readTimestamp()
-	for range 2 * 64 {
-		count, err := svc.CountDocuments(ctx, "docs", CountDocumentsRequest{})
-		if err != nil {
-			t.Fatalf("CountDocuments: %v", err)
+	assertAdvances := func(name string, read func() error) {
+		t.Helper()
+		before := readTimestamp()
+		for range 2 * 64 {
+			if err := read(); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if after := readTimestamp(); after > before {
+				return
+			}
 		}
-		if count.Count != 0 {
-			t.Fatalf("CountDocuments count=%d want 0", count.Count)
-		}
-		if after := readTimestamp(); after > before {
-			return
-		}
+		t.Fatalf("%s did not advance cached foreground activity from %d", name, before)
 	}
-	t.Fatalf("raw document-service reads did not advance cached foreground activity from %d", before)
+
+	assertAdvances("document-service count", func() error {
+		count, err := svc.CountDocuments(ctx, "docs", CountDocumentsRequest{})
+		if err == nil && count.Count != 0 {
+			return fmt.Errorf("count=%d want 0", count.Count)
+		}
+		return err
+	})
+	if _, err := manager.OpenCollection("docs"); err != nil {
+		t.Fatalf("warm cached collection open: %v", err)
+	}
+	assertAdvances("cached collection open", func() error {
+		_, err := manager.OpenCollection("docs")
+		return err
+	})
+	assertAdvances("bounded collection list", func() error {
+		_, _, err := manager.ListCollectionsBounded(1)
+		return err
+	})
 }
 
 func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
