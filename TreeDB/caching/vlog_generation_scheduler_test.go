@@ -7648,6 +7648,181 @@ func TestDeferredMaintenanceRetry_RetriesWithoutCheckpointPendingUntilAcquired(t
 	}
 }
 
+func TestVlogGenerationRewriteAgeBlocked_ParksDuringAutomaticCheckpoint(t *testing.T) {
+	disableVlogGenerationLoop(t)
+	t.Setenv(envDisableVlogGenerationCheckpointKick, "0")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs: []uint32{11},
+			SelectedSegments: []backenddb.ValueLogRewritePlanSegment{{
+				FileID:     11,
+				BytesTotal: 64 << 20,
+				BytesLive:  8 << 20,
+				BytesStale: 56 << 20,
+				StaleRatio: 0.875,
+			}},
+			SegmentsTotal:      4,
+			SegmentsSelected:   1,
+			BytesTotal:         256 << 20,
+			BytesLive:          192 << 20,
+			BytesStale:         64 << 20,
+			SelectedBytesTotal: 64 << 20,
+			SelectedBytesLive:  8 << 20,
+			SelectedBytesStale: 56 << 20,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    8 << 20,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	skipRetainedPrune(db)
+	forceVlogMaintenanceIdle(db)
+	db.testSkipVlogCheckpointKick = false
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(64 << 20)
+
+	attemptsBefore := db.vlogGenerationMaintenanceAttempts.Load()
+	acquiredBefore := db.vlogGenerationMaintenanceAcquired.Load()
+	db.checkpointing.Store(true)
+	db.setVlogGenerationRewriteAgeBlockedUntil(time.Now().Add(-time.Second), true)
+
+	deadline := time.Now().Add(schedulerTestWait(t))
+	for db.vlogGenerationMaintenanceAcquired.Load() == acquiredBefore {
+		if time.Now().After(deadline) {
+			t.Fatal("age-blocked wake did not collide with active checkpoint")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// Leave the checkpoint active across many old retry-loop opportunities. The
+	// automatic age wake must remain parked without touching the planner.
+	time.Sleep(100 * time.Millisecond)
+	parkedAttempts := db.vlogGenerationMaintenanceAttempts.Load() - attemptsBefore
+	parkedAcquired := db.vlogGenerationMaintenanceAcquired.Load() - acquiredBefore
+	_, parkedPlanCalls := recorder.recordedPlan()
+	_, parkedRewriteCalls := recorder.recordedRewrite()
+
+	// The real checkpoint completion path starts its kick while checkpointing is
+	// still set, then releases the waiter through checkpointCond.
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint(true)
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(false)
+	db.checkpointCond.Broadcast()
+	db.checkpointMu.Unlock()
+
+	deadline = time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		_, rewriteCalls := recorder.recordedRewrite()
+		if rewriteCalls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, planCalls := recorder.recordedPlan()
+			t.Fatalf("parked age wake did not run once after checkpoint: planCalls=%d rewriteCalls=%d", planCalls, rewriteCalls)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	if parkedAttempts != 1 || parkedAcquired != 1 {
+		t.Fatalf("parked checkpoint collision attempts/acquired=%d/%d want 1/1", parkedAttempts, parkedAcquired)
+	}
+	if parkedPlanCalls != 0 || parkedRewriteCalls != 0 {
+		t.Fatalf("parked checkpoint collision planner/rewrite calls=%d/%d want 0/0", parkedPlanCalls, parkedRewriteCalls)
+	}
+	if got := db.vlogGenerationMaintenanceAcquired.Load() - acquiredBefore; got != 2 {
+		t.Fatalf("total maintenance acquisitions=%d want 2 (collision + post-checkpoint age pass)", got)
+	}
+	if _, calls := recorder.recordedPlan(); calls != 1 {
+		t.Fatalf("post-checkpoint plan calls=%d want 1", calls)
+	}
+	if until := db.vlogGenerationRewriteAgeBlockedUntilNS.Load(); until != 0 {
+		t.Fatalf("age-blocked deadline=%d want cleared after rewrite", until)
+	}
+
+	// A checkpoint that exits without its normal completion kick must not orphan
+	// the parked deadline. The next periodic pass observes that due work and
+	// hands it back to the age-specific deferred route.
+	deadline = time.Now().Add(schedulerTestWait(t))
+	for db.vlogGenerationRewriteAgeBlockedWakeRunning.Load() || db.vlogGenerationDeferredMaintenanceRunning.Load() || db.vlogGenerationMaintenanceActive.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("first age wake did not become idle")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	attemptsBefore = db.vlogGenerationMaintenanceAttempts.Load()
+	acquiredBefore = db.vlogGenerationMaintenanceAcquired.Load()
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(64 << 20)
+	db.vlogGenerationLastRewriteUnixNano.Store(0)
+	db.checkpointing.Store(true)
+	db.setVlogGenerationRewriteAgeBlockedUntil(time.Now().Add(-time.Second), true)
+	deadline = time.Now().Add(schedulerTestWait(t))
+	for db.vlogGenerationMaintenanceAcquired.Load() == acquiredBefore {
+		if time.Now().After(deadline) {
+			t.Fatal("second age-blocked wake did not collide with active checkpoint")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for db.vlogGenerationMaintenanceActive.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("second parked age wake did not release scheduler")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(false)
+	db.checkpointCond.Broadcast()
+	db.checkpointMu.Unlock()
+	for db.vlogGenerationDeferredMaintenanceRunning.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("parked deferred runner did not exit before periodic fallback")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !db.maybeRunPeriodicVlogGenerationMaintenance(false) {
+		t.Fatal("periodic fallback did not observe parked due deadline")
+	}
+	deadline = time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		_, rewriteCalls := recorder.recordedRewrite()
+		if rewriteCalls == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, planCalls := recorder.recordedPlan()
+			t.Fatalf("periodic fallback did not run parked age wake: planCalls=%d rewriteCalls=%d attempts=%d acquired=%d due=%t pending=%t running=%t active=%t",
+				planCalls,
+				rewriteCalls,
+				db.vlogGenerationMaintenanceAttempts.Load()-attemptsBefore,
+				db.vlogGenerationMaintenanceAcquired.Load()-acquiredBefore,
+				db.vlogGenerationRewriteAgeBlockedDue(time.Now()),
+				db.vlogGenerationDeferredMaintenancePending.Load(),
+				db.vlogGenerationDeferredMaintenanceRunning.Load(),
+				db.vlogGenerationMaintenanceActive.Load(),
+			)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := db.vlogGenerationMaintenanceAttempts.Load() - attemptsBefore; got != 3 {
+		t.Fatalf("failed-checkpoint fallback attempts=%d want 3 (collision + periodic handoff + age pass)", got)
+	}
+	if got := db.vlogGenerationMaintenanceAcquired.Load() - acquiredBefore; got != 3 {
+		t.Fatalf("failed-checkpoint fallback acquisitions=%d want 3 (collision + periodic handoff + age pass)", got)
+	}
+	if _, calls := recorder.recordedPlan(); calls != 2 {
+		t.Fatalf("plan calls after periodic fallback=%d want 2 total", calls)
+	}
+}
+
 func TestVlogGenerationRewritePlan_AgeBlockedRetryRunsWhenDue(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
