@@ -258,7 +258,9 @@ func runVectorPartitionHCBridgeV1(args []string, stdout io.Writer) error {
 }
 
 func newHCBridgeServerV1(handler http.Handler, timeout time.Duration) *http.Server {
-	return &http.Server{Handler: handler, ReadHeaderTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout + hcBridgeResponseGraceV1, IdleTimeout: timeout}
+	// WriteTimeout starts with headers, while search spends one bounded phase
+	// decoding the body before starting its separately bounded native operation.
+	return &http.Server{Handler: handler, ReadHeaderTimeout: timeout, ReadTimeout: timeout, WriteTimeout: 2*timeout + hcBridgeResponseGraceV1, IdleTimeout: timeout}
 }
 
 func serveHCBridgeV1(ctx context.Context, server *http.Server, listener net.Listener, timeout time.Duration) error {
