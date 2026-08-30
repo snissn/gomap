@@ -675,7 +675,7 @@ func TestDeferredVectorBuildMaintenanceFinalizeDebtAndFailureSemantics(t *testin
 		{name: "successful eligible vacuum consumes debt", coalescedDebt: true, physicalDebt: true, wantProbes: 1, wantVacuums: 1, wantBuild: true},
 		{name: "unsupported vacuum is skipped and build still completes", coalescedDebt: true, physicalDebt: true, vacuumErr: errVacuumUnsupported, wantProbes: 1, wantVacuums: 1, wantBuild: true},
 		{name: "vacuum failure prevents build and retains debt", coalescedDebt: true, physicalDebt: true, vacuumErr: errors.New("injected vacuum failure"), wantErr: true, wantProbes: 1, wantVacuums: 1, wantDebtRetained: true},
-		{name: "build failure retains owner for retry", buildErr: errors.New("injected build failure"), wantErr: true, wantBuild: true},
+		{name: "build failure fails closed for ordinary retry", buildErr: errors.New("injected build failure"), wantErr: true, wantBuild: true},
 		{name: "missing owner preserves unserviced debt", coalescedDebt: true, clearEpoch: true, wantBuild: true, wantDebtRetained: true},
 	}
 	for _, tt := range tests {
@@ -720,12 +720,15 @@ func TestDeferredVectorBuildMaintenanceFinalizeDebtAndFailureSemantics(t *testin
 				t.Fatalf("probes=%d vacuums=%d built=%t want %d/%d/%t", probes.Load(), vacuums.Load(), built, tt.wantProbes, tt.wantVacuums, tt.wantBuild)
 			}
 			stats := d.bgVac.Stats()
-			if stats.DeferredVectorBuildActive != tt.wantErr || stats.DeferredVectorBuildDebt != tt.wantDebtRetained {
-				t.Fatalf("post-finalize stats=%+v want active=%t debt=%t", stats, tt.wantErr, tt.wantDebtRetained)
+			if stats.DeferredVectorBuildActive || stats.DeferredVectorBuildDebt != tt.wantDebtRetained {
+				t.Fatalf("post-finalize stats=%+v want active=false debt=%t", stats, tt.wantDebtRetained)
 			}
 			if tt.wantErr {
 				vacuumErr = nil
 				buildErr = nil
+				if tt.wantDebtRetained {
+					d.bgVac.runOnce(d)
+				}
 				if err := control.Finalize(context.Background(), "docs", 1, nil, func() error { return nil }); err != nil {
 					t.Fatalf("Finalize retry: %v", err)
 				}
@@ -832,6 +835,33 @@ func TestDeferredVectorBuildMaintenanceAbortRemovesAllFailedEpoch(t *testing.T) 
 	}
 }
 
+func TestDeferredVectorBuildVlogMaintenanceStartsOnCommitAndReleasesOnFailBack(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	control := &DeferredVectorBuildMaintenance{db: d}
+	reservation := control.AdmitInsert(context.Background(), "docs", 1)
+	if reservation == 0 {
+		t.Fatal("admit deferred insert")
+	}
+	if got := d.cached.Stats()["treedb.cache.vlog_generation.deferred_vector_build.active"]; got != "false" {
+		t.Fatalf("suppression before commit=%q want false", got)
+	}
+	if !control.CommitInsert(reservation) {
+		t.Fatal("commit deferred insert")
+	}
+	if got := d.cached.Stats()["treedb.cache.vlog_generation.deferred_vector_build.active"]; got != "true" {
+		t.Fatalf("suppression after commit=%q want true", got)
+	}
+	if got := control.AdmitInsert(context.Background(), "other", 1); got != 0 {
+		t.Fatalf("competing-index admission=%d want 0", got)
+	}
+	if d.bgVac.Stats().DeferredVectorBuildActive {
+		t.Fatal("competing index retained vector epoch")
+	}
+	if got := d.cached.Stats()["treedb.cache.vlog_generation.deferred_vector_build.active"]; got != "false" {
+		t.Fatalf("suppression after ambiguity=%q want false", got)
+	}
+}
+
 func TestDeferredVectorBuildMaintenanceScopesDoNotJoin(t *testing.T) {
 	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
 	first := (&DeferredVectorBuildMaintenance{db: d}).Scoped()
@@ -885,6 +915,9 @@ func TestDeferredVectorBuildMaintenanceManualWrappersInvalidateEpoch(t *testing.
 	_ = d.CompactIndex()
 	if control.CommitInsert(epochID) {
 		t.Fatal("CompactIndex did not invalidate epoch")
+	}
+	if got := d.cached.Stats()["treedb.cache.vlog_generation.deferred_vector_build.active"]; got != "false" {
+		t.Fatalf("CompactIndex left value-log suppression=%q want false", got)
 	}
 }
 
@@ -1045,6 +1078,9 @@ func TestBackgroundIndexVacuumDeferredVectorBuildAbandonmentRestoresPolicy(t *te
 	if stats.DeferredVectorBuildActive || stats.DeferredVectorBuildExpired != 1 || vacuums.Load() != 1 {
 		t.Fatalf("abandoned epoch stats=%+v vacuums=%d want expired normal vacuum", stats, vacuums.Load())
 	}
+	if got := d.cached.Stats()["treedb.cache.vlog_generation.deferred_vector_build.active"]; got != "false" {
+		t.Fatalf("expired epoch left value-log suppression=%q want false", got)
+	}
 }
 
 func TestDeferredVectorBuildMaintenanceCloseAndReopen(t *testing.T) {
@@ -1058,8 +1094,12 @@ func TestDeferredVectorBuildMaintenanceCloseAndReopen(t *testing.T) {
 	if epochID == 0 || !control.CommitInsert(epochID) {
 		t.Fatal("begin epoch")
 	}
+	cached := d.cached
 	if err := d.Close(); err != nil {
 		t.Fatalf("close: %v", err)
+	}
+	if got := cached.Stats()["treedb.cache.vlog_generation.deferred_vector_build.active"]; got != "false" {
+		t.Fatalf("closed epoch left value-log suppression=%q want false", got)
 	}
 	if control.CommitInsert(epochID) || d.bgVac.Stats().DeferredVectorBuildActive {
 		t.Fatal("closed database admitted a deferred epoch")
@@ -1100,7 +1140,7 @@ func TestDeferredVectorBuildMaintenanceTracksConcurrentReservations(t *testing.T
 		reservations: append([]uint64(nil), epoch.reservations...),
 		lastActivity: time.Now().Add(-3 * time.Millisecond).UnixNano(),
 	})
-	if !d.bgVac.deferredVectorBuildActive(time.Now()) {
+	if !d.bgVac.deferredVectorBuildActive(time.Now(), d) {
 		t.Fatal("first commit expired an outstanding reservation")
 	}
 	if !control.CommitInsert(second) || control.CommitInsert(second) {

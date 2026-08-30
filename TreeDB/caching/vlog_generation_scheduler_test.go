@@ -886,6 +886,118 @@ func TestMaybeRunVlogGenerationMaintenanceWithOptions_TracksCollision(t *testing
 	}
 }
 
+func TestDeferredVectorBuildVlogMaintenanceCoalescesBeforeSchedulerAdmission(t *testing.T) {
+	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	if !db.BeginDeferredVectorBuildMaintenance() {
+		t.Fatal("begin deferred vector-build value-log maintenance suppression")
+	}
+	for range 10 {
+		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
+	}
+	if got := db.vlogGenerationMaintenanceAttempts.Load(); got != 0 {
+		t.Fatalf("scheduler attempts=%d want 0", got)
+	}
+	if got := db.vlogGenerationMaintenanceAcquired.Load(); got != 0 {
+		t.Fatalf("scheduler acquisitions=%d want 0", got)
+	}
+	if got := db.deferredVectorBuildVlogMaintenanceSkips.Load(); got != 10 {
+		t.Fatalf("deferred skips=%d want 10", got)
+	}
+	if got := db.deferredVectorBuildVlogMaintenanceDebtSet.Load(); got != 1 {
+		t.Fatalf("deferred debt sets=%d want 1", got)
+	}
+	if !db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		t.Fatal("suppressed attempts did not retain coalesced debt")
+	}
+	db.EndDeferredVectorBuildMaintenance(false)
+}
+
+func TestDeferredVectorBuildVlogMaintenanceBeginWaitsForAdmittedPass(t *testing.T) {
+	db := &DB{}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	db.vlogGenerationMaintenanceActive.Store(true)
+	first := make(chan bool, 1)
+	second := make(chan bool, 1)
+	go func() { first <- db.BeginDeferredVectorBuildMaintenance() }()
+	go func() { second <- db.BeginDeferredVectorBuildMaintenance() }()
+	select {
+	case <-first:
+		t.Fatal("first begin returned while maintenance remained active")
+	case <-second:
+		t.Fatal("second begin returned while maintenance remained active")
+	case <-time.After(20 * time.Millisecond):
+	}
+	db.checkpointMu.Lock()
+	db.vlogGenerationMaintenanceActive.Store(false)
+	db.checkpointCond.Broadcast()
+	db.checkpointMu.Unlock()
+	if !<-first || !<-second {
+		t.Fatal("begin failed after the admitted pass released")
+	}
+	db.EndDeferredVectorBuildMaintenance(false)
+}
+
+func TestDeferredVectorBuildVlogMaintenanceFinalizeConsumesOnePass(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	db, err := Open(dir, backend, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("open cache: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if !db.BeginDeferredVectorBuildMaintenance() {
+		t.Fatal("begin deferred vector-build value-log maintenance suppression")
+	}
+	for range 10 {
+		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
+	}
+	before := db.vlogGenerationMaintenanceAcquired.Load()
+	if err := db.FinalizeDeferredVectorBuildMaintenance(context.Background()); err != nil {
+		t.Fatalf("finalize deferred value-log maintenance: %v", err)
+	}
+	if got := db.vlogGenerationMaintenanceAcquired.Load() - before; got > 1 {
+		t.Fatalf("finalization acquisitions=%d want at most 1", got)
+	}
+	if db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		t.Fatal("successful finalization retained coalesced debt")
+	}
+	db.EndDeferredVectorBuildMaintenance(true)
+}
+
+func TestDeferredVectorBuildVlogMaintenanceFinalizeFailsClosedWithoutAdmission(t *testing.T) {
+	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	if !db.BeginDeferredVectorBuildMaintenance() {
+		t.Fatal("begin deferred vector-build value-log maintenance suppression")
+	}
+	db.deferredVectorBuildVlogMaintenanceDebt.Store(true)
+	db.vlogGenerationMaintenanceActive.Store(true)
+	// A nil condition emulates an invalid scheduler ownership handoff without
+	// blocking the test. Finalization must not mistake the collision for success.
+	db.checkpointCond = nil
+	if err := db.FinalizeDeferredVectorBuildMaintenance(context.Background()); err == nil {
+		t.Fatal("finalization succeeded without acquiring its debt pass")
+	}
+	if !db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		t.Fatal("failed finalization lost coalesced debt")
+	}
+	db.vlogGenerationMaintenanceActive.Store(false)
+	db.EndDeferredVectorBuildMaintenance(false)
+}
+
 func TestShouldRunVlogGenerationIndexVacuum_TracksSkipReasons(t *testing.T) {
 	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
 	now := time.Now()

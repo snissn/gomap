@@ -9631,6 +9631,12 @@ type DB struct {
 	vlogGenerationSchedulerState                                 atomic.Uint32
 	vlogGenerationMaintenanceActive                              atomic.Bool
 	vlogGenerationMaintenanceAutomatic                           atomic.Bool
+	deferredVectorBuildVlogMaintenanceState                      atomic.Uint32
+	deferredVectorBuildVlogMaintenanceDebt                       atomic.Bool
+	deferredVectorBuildVlogMaintenanceSkips                      atomic.Uint64
+	deferredVectorBuildVlogMaintenanceDebtSet                    atomic.Uint64
+	deferredVectorBuildVlogMaintenanceFinalizations              atomic.Uint64
+	deferredVectorBuildVlogMaintenanceFailures                   atomic.Uint64
 	vlogGenerationMaintenanceAttempts                            atomic.Uint64
 	vlogGenerationMaintenanceAcquired                            atomic.Uint64
 	vlogGenerationMaintenanceCollisions                          atomic.Uint64
@@ -13816,14 +13822,18 @@ func (db *DB) vlogGenerationMaintenanceContext(timeout time.Duration, opts vlogG
 	// quiet-window gate. Keep this context timeout-bounded, but do not
 	// self-cancel on immediate foreground activity resumes.
 	if opts.bypassQuiet {
+		parent := opts.callerContext
+		if parent == nil {
+			parent = context.Background()
+		}
 		var (
 			ctx    context.Context
 			cancel context.CancelFunc
 		)
 		if timeout > 0 {
-			ctx, cancel = context.WithTimeout(context.Background(), timeout)
+			ctx, cancel = context.WithTimeout(parent, timeout)
 		} else {
-			ctx, cancel = context.WithCancel(context.Background())
+			ctx, cancel = context.WithCancel(parent)
 		}
 		// Preserve close-aware cancellation even on bypass-quiet paths.
 		go func() {
@@ -19144,6 +19154,9 @@ func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
 	if db == nil {
 		return false
 	}
+	if db.coalesceDeferredVectorBuildVlogMaintenance() {
+		return false
+	}
 	if db.vlogGenerationMaintenanceActive.Load() {
 		return false
 	}
@@ -20482,6 +20495,9 @@ func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 	if db == nil || observedAt <= 0 || db.closing.Load() {
 		return
 	}
+	if db.coalesceDeferredVectorBuildVlogMaintenance() {
+		return
+	}
 	if db.vlogGenerationMaintenanceAutomatic.Load() {
 		db.vlogGenerationRewriteStageAutomatic.Store(true)
 	}
@@ -20513,6 +20529,9 @@ func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 			timer.Stop()
 		}
 		if db.closing.Load() {
+			return
+		}
+		if db.coalesceDeferredVectorBuildVlogMaintenance() {
 			return
 		}
 		if db.vlogGenerationRewriteStageWakeObservedNS.Load() != expectedObservedAt {
@@ -20553,12 +20572,152 @@ func (db *DB) vlogGenerationRewriteAgeBlockedDueMode(now time.Time) (bool, bool)
 }
 
 type vlogGenerationMaintenanceOptions struct {
-	bypassQuiet           bool
-	skipRetainedPruneWait bool
-	skipCheckpoint        bool
-	automatic             bool
-	rewriteDebtDrain      bool
-	debugSource           string
+	bypassQuiet            bool
+	skipRetainedPruneWait  bool
+	skipCheckpoint         bool
+	automatic              bool
+	rewriteDebtDrain       bool
+	debugSource            string
+	callerContext          context.Context
+	deferredVectorFinalize bool
+	resultErr              *error
+}
+
+const (
+	deferredVectorBuildVlogMaintenanceInactive uint32 = iota
+	deferredVectorBuildVlogMaintenanceSuppressed
+	deferredVectorBuildVlogMaintenanceFinalizing
+)
+
+// BeginDeferredVectorBuildMaintenance suppresses optional automatic value-log
+// generation work after the first deferred vector insert has committed. It
+// waits for a pass admitted before suppression to leave the scheduler slot.
+func (db *DB) BeginDeferredVectorBuildMaintenance() bool {
+	if db == nil || db.closing.Load() {
+		return false
+	}
+	if !db.deferredVectorBuildVlogMaintenanceState.CompareAndSwap(
+		deferredVectorBuildVlogMaintenanceInactive,
+		deferredVectorBuildVlogMaintenanceSuppressed,
+	) {
+		if db.deferredVectorBuildVlogMaintenanceState.Load() != deferredVectorBuildVlogMaintenanceSuppressed {
+			return false
+		}
+	}
+	if db.checkpointCond == nil {
+		if db.vlogGenerationMaintenanceActive.Load() {
+			db.EndDeferredVectorBuildMaintenance(false)
+			return false
+		}
+		return true
+	}
+	db.checkpointMu.Lock()
+	for db.vlogGenerationMaintenanceActive.Load() && !db.closing.Load() {
+		db.checkpointCond.Wait()
+	}
+	closing := db.closing.Load()
+	db.checkpointMu.Unlock()
+	if closing {
+		db.EndDeferredVectorBuildMaintenance(false)
+		return false
+	}
+	return true
+}
+
+func (db *DB) coalesceDeferredVectorBuildVlogMaintenance() bool {
+	if db == nil || db.deferredVectorBuildVlogMaintenanceState.Load() == deferredVectorBuildVlogMaintenanceInactive {
+		return false
+	}
+	db.deferredVectorBuildVlogMaintenanceSkips.Add(1)
+	if db.deferredVectorBuildVlogMaintenanceState.Load() == deferredVectorBuildVlogMaintenanceSuppressed &&
+		db.deferredVectorBuildVlogMaintenanceDebt.CompareAndSwap(false, true) {
+		db.deferredVectorBuildVlogMaintenanceDebtSet.Add(1)
+	}
+	return true
+}
+
+// FinalizeDeferredVectorBuildMaintenance consumes at most one coalesced
+// automatic maintenance request while suppression remains held.
+func (db *DB) FinalizeDeferredVectorBuildMaintenance(ctx context.Context) error {
+	if db == nil || db.closing.Load() {
+		return errDBClosing
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !db.deferredVectorBuildVlogMaintenanceState.CompareAndSwap(
+		deferredVectorBuildVlogMaintenanceSuppressed,
+		deferredVectorBuildVlogMaintenanceFinalizing,
+	) {
+		return errors.New("cachingdb: deferred vector-build value-log maintenance is not suppressed")
+	}
+	if !db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		return nil
+	}
+	if db.checkpointCond != nil {
+		db.checkpointMu.Lock()
+		for db.vlogGenerationMaintenanceActive.Load() && !db.closing.Load() {
+			db.checkpointCond.Wait()
+		}
+		closing := db.closing.Load()
+		db.checkpointMu.Unlock()
+		if closing {
+			return errDBClosing
+		}
+	}
+	db.deferredVectorBuildVlogMaintenanceFinalizations.Add(1)
+	var runErr error
+	acquired := db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:            true,
+		skipRetainedPruneWait:  true,
+		skipCheckpoint:         true,
+		automatic:              true,
+		rewriteDebtDrain:       true,
+		debugSource:            "deferred_vector_finalize",
+		callerContext:          ctx,
+		deferredVectorFinalize: true,
+		resultErr:              &runErr,
+	})
+	if runErr == nil {
+		runErr = ctx.Err()
+	}
+	if runErr == nil && !acquired && db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		runErr = errors.New("cachingdb: deferred vector-build value-log maintenance was not admitted")
+	}
+	if runErr != nil {
+		db.deferredVectorBuildVlogMaintenanceFailures.Add(1)
+		return runErr
+	}
+	db.deferredVectorBuildVlogMaintenanceDebt.Store(false)
+	return nil
+}
+
+// EndDeferredVectorBuildMaintenance restores ordinary automatic scheduling.
+// A failed or abandoned epoch retains its coalesced debt until a later normal
+// scheduler pass observes it.
+func (db *DB) EndDeferredVectorBuildMaintenance(serviced bool) {
+	if db == nil {
+		return
+	}
+	if serviced {
+		db.deferredVectorBuildVlogMaintenanceDebt.Store(false)
+	}
+	db.deferredVectorBuildVlogMaintenanceState.Store(deferredVectorBuildVlogMaintenanceInactive)
+}
+
+func (db *DB) reportVlogGenerationMaintenanceError(opts vlogGenerationMaintenanceOptions, err error) {
+	if err == nil {
+		return
+	}
+	if opts.resultErr != nil && *opts.resultErr == nil {
+		*opts.resultErr = err
+	}
+	if db.notifyError != nil {
+		db.notifyError(err)
+	}
 }
 
 func (opts vlogGenerationMaintenanceOptions) withPendingMode(automatic bool) vlogGenerationMaintenanceOptions {
@@ -20633,6 +20792,9 @@ func (db *DB) schedulePendingVlogGenerationCheckpointKick() {
 	if db == nil || db.closing.Load() {
 		return
 	}
+	if db.coalesceDeferredVectorBuildVlogMaintenance() {
+		return
+	}
 	if db.vlogGenerationDeferredMaintenanceDue(time.Now()) {
 		deferredAutomatic, checkpointAutomatic, _ := db.snapshotVlogGenerationPendingAutomaticModes()
 		automatic := deferredAutomatic || checkpointAutomatic
@@ -20677,6 +20839,9 @@ func (db *DB) startVlogGenerationRewriteQueueMaintenance(opts vlogGenerationMain
 	if db == nil || db.closing.Load() {
 		return
 	}
+	if db.coalesceDeferredVectorBuildVlogMaintenance() {
+		return
+	}
 	db.queueVlogGenerationRewriteQueue(opts.automatic)
 	if !db.vlogGenerationRewriteQueueRunning.CompareAndSwap(false, true) {
 		return
@@ -20693,6 +20858,9 @@ func (db *DB) startVlogGenerationRewriteQueueMaintenance(opts vlogGenerationMain
 			if !pending {
 				return
 			}
+			if db.coalesceDeferredVectorBuildVlogMaintenance() {
+				return
+			}
 			runOpts := opts.withPendingMode(automatic)
 			rewriteQueue, _, qerr := db.currentVlogGenerationRewriteEligible(time.Now())
 			stagePending, _, serr := db.currentVlogGenerationRewriteStage()
@@ -20706,6 +20874,9 @@ func (db *DB) startVlogGenerationRewriteQueueMaintenance(opts vlogGenerationMain
 
 func (db *DB) schedulePendingVlogGenerationRewriteQueue() {
 	if db == nil || db.closing.Load() {
+		return
+	}
+	if db.coalesceDeferredVectorBuildVlogMaintenance() {
 		return
 	}
 	if db.vlogGenerationDeferredMaintenanceDue(time.Now()) {
@@ -20752,6 +20923,9 @@ func (db *DB) vlogGenerationRewriteQueueOptions() vlogGenerationMaintenanceOptio
 
 func (db *DB) startVlogGenerationDeferredMaintenance(opts vlogGenerationMaintenanceOptions) {
 	if db == nil || db.closing.Load() {
+		return
+	}
+	if db.coalesceDeferredVectorBuildVlogMaintenance() {
 		return
 	}
 	db.queueVlogGenerationDeferredMaintenance(opts.automatic)
@@ -20805,6 +20979,9 @@ func (db *DB) snapshotVlogGenerationPendingAutomaticModes() (deferred, checkpoin
 
 func (db *DB) scheduleDueVlogGenerationDeferredMaintenance(automatic bool) {
 	if db == nil || db.closing.Load() {
+		return
+	}
+	if db.coalesceDeferredVectorBuildVlogMaintenance() {
 		return
 	}
 	now := time.Now()
@@ -20871,6 +21048,9 @@ func (db *DB) runVlogGenerationMaintenanceRetries(opts vlogGenerationMaintenance
 	if db == nil || db.closing.Load() {
 		return
 	}
+	if !opts.deferredVectorFinalize && db.coalesceDeferredVectorBuildVlogMaintenance() {
+		return
+	}
 	if retryWindow <= 0 {
 		retryWindow = vlogGenerationCheckpointKickRetryWindow
 	}
@@ -20903,6 +21083,9 @@ func (db *DB) runVlogGenerationMaintenanceRetries(opts vlogGenerationMaintenance
 		}
 	}
 	for !db.closing.Load() {
+		if !opts.deferredVectorFinalize && db.coalesceDeferredVectorBuildVlogMaintenance() {
+			return
+		}
 		// Retry loops should never hammer an already-active maintenance pass.
 		// Wait for release/deadline instead of repeatedly colliding and inflating
 		// maintenance.attempts/collisions under hot checkpoint-kick activity.
@@ -20990,6 +21173,13 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	if db == nil || db.closing.Load() || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
 	}
+	if !opts.deferredVectorFinalize && db.coalesceDeferredVectorBuildVlogMaintenance() {
+		return
+	}
+	var localErr error
+	if opts.resultErr == nil {
+		opts.resultErr = &localErr
+	}
 	db.vlogGenerationMaintenanceAttempts.Add(1)
 	if paused, path := vlogGenerationMaintenancePausedByFile(); paused {
 		db.vlogGenerationMaintenanceSkipPauseFile.Add(1)
@@ -21046,6 +21236,17 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				db.vlogGenerationDeferredMaintenancePending.Load(),
 				db.vlogGenerationMaintenanceActive.Load(),
 			)
+		}
+		return
+	}
+	// Close the race where suppression starts after the entry guard but before
+	// scheduler admission. Begin waits for this release before returning.
+	if !opts.deferredVectorFinalize && db.coalesceDeferredVectorBuildVlogMaintenance() {
+		db.vlogGenerationMaintenanceActive.Store(false)
+		if db.checkpointCond != nil {
+			db.checkpointMu.Lock()
+			db.checkpointCond.Broadcast()
+			db.checkpointMu.Unlock()
 		}
 		return
 	}
@@ -21114,6 +21315,20 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		// on rewrite-state I/O or a long-held queue mutex, periodic maintenance
 		// must still be able to re-enter on live workloads.
 		db.vlogGenerationMaintenanceActive.Store(false)
+		if db.checkpointCond != nil {
+			db.checkpointMu.Lock()
+			db.checkpointCond.Broadcast()
+			db.checkpointMu.Unlock()
+		}
+		// A pass admitted before a deferred epoch may finish, but it must not
+		// perform post-release ledger reads or schedule follow-ups after Begin
+		// observes the slot release.
+		if db.deferredVectorBuildVlogMaintenanceState.Load() != deferredVectorBuildVlogMaintenanceInactive {
+			return
+		}
+		if *opts.resultErr == nil {
+			db.deferredVectorBuildVlogMaintenanceDebt.Store(false)
+		}
 		// If a deferred confirmation/age wake became due while this pass held the
 		// scheduler active, requeue it immediately on exit instead of relying on
 		// the original retry goroutine to still be alive.
@@ -21168,18 +21383,14 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	rewriteQueue, err := db.currentVlogGenerationRewriteQueue()
 	if err != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-		if db.notifyError != nil {
-			db.notifyError(fmt.Errorf("cachingdb: load generational rewrite queue: %w", err))
-		}
+		db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: load generational rewrite queue: %w", err))
 		return
 	}
 	if len(rewriteQueue) > 0 {
 		prunedQueue, dropped, pruneErr := db.pruneVlogGenerationRewriteLedgerNonPositiveLive()
 		if pruneErr != nil {
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-			if db.notifyError != nil {
-				db.notifyError(fmt.Errorf("cachingdb: prune generational rewrite queue: %w", pruneErr))
-			}
+			db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: prune generational rewrite queue: %w", pruneErr))
 			return
 		}
 		if dropped > 0 {
@@ -21191,9 +21402,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	rewriteLedger, ledgerErr := db.currentVlogGenerationRewriteLedger()
 	if ledgerErr != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-		if db.notifyError != nil {
-			db.notifyError(fmt.Errorf("cachingdb: load generational rewrite ledger: %w", ledgerErr))
-		}
+		db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: load generational rewrite ledger: %w", ledgerErr))
 		return
 	}
 	rewriteQueueBeforeSegments = len(rewriteQueue)
@@ -21211,9 +21420,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	stagePending, _, stageErr := db.currentVlogGenerationRewriteStage()
 	if stageErr != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-		if db.notifyError != nil {
-			db.notifyError(fmt.Errorf("cachingdb: load generational rewrite stage: %w", stageErr))
-		}
+		db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: load generational rewrite stage: %w", stageErr))
 		return
 	}
 	if vlogGenerationIsStageConfirmSource(opts) && !stagePending {
@@ -21227,9 +21434,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	rewritePenalties, penaltyErr := db.currentVlogGenerationRewritePenalties()
 	if penaltyErr != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-		if db.notifyError != nil {
-			db.notifyError(fmt.Errorf("cachingdb: load generational rewrite penalties: %w", penaltyErr))
-		}
+		db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: load generational rewrite penalties: %w", penaltyErr))
 		return
 	}
 	rewriteQueueEligible := append([]uint32(nil), rewriteQueue...)
@@ -21491,9 +21696,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				}
 				if !isVlogGenerationPlannerCanceled(err) {
 					updatePlanTimestamp = true
-					if db.notifyError != nil {
-						db.notifyError(fmt.Errorf("cachingdb: generational rewrite chunk plan: %w", err))
-					}
+					db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: generational rewrite chunk plan: %w", err))
 				}
 			} else if len(chunkPlan.SourceChunks) > 0 {
 				db.clearVlogGenerationRewriteAgeBlockedUntil()
@@ -21501,9 +21704,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				chunkPlan, err = db.filterVlogGenerationRewriteChunkPlanPenalties(chunkPlan, now)
 				if err != nil {
 					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-					if db.notifyError != nil {
-						db.notifyError(fmt.Errorf("cachingdb: filter generational rewrite chunk penalties: %w", err))
-					}
+					db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: filter generational rewrite chunk penalties: %w", err))
 					return
 				}
 				db.observeVlogGenerationRewritePlanPenaltyFilter(beforePenaltyFilter, len(chunkPlan.SourceChunks))
@@ -21513,9 +21714,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 						stagedChunks, stagedChunkBytes, ledgerErr := db.currentVlogGenerationRewriteChunkLedger()
 						if ledgerErr != nil {
 							db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-							if db.notifyError != nil {
-								db.notifyError(fmt.Errorf("cachingdb: load staged generational rewrite chunk ledger: %w", ledgerErr))
-							}
+							db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: load staged generational rewrite chunk ledger: %w", ledgerErr))
 							return
 						}
 						confirmed := []backenddb.ValueLogRewritePlanChunk(nil)
@@ -21525,9 +21724,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 								stagedLedger, ledgerErr = db.currentVlogGenerationRewriteLedger()
 								if ledgerErr != nil {
 									db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-									if db.notifyError != nil {
-										db.notifyError(fmt.Errorf("cachingdb: load staged generational rewrite ledger: %w", ledgerErr))
-									}
+									db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: load staged generational rewrite ledger: %w", ledgerErr))
 									return
 								}
 							}
@@ -21550,9 +21747,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				if stagePending {
 					if err := db.setVlogGenerationRewriteChunkLedger(nil, 0); err != nil {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-						if db.notifyError != nil {
-							db.notifyError(fmt.Errorf("cachingdb: clear staged generational rewrite chunk ledger after age-blocked confirmation: %w", err))
-						}
+						db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: clear staged generational rewrite chunk ledger after age-blocked confirmation: %w", err))
 						return
 					}
 				}
@@ -21568,9 +21763,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				if stagePending {
 					if err := db.setVlogGenerationRewriteChunkLedger(nil, 0); err != nil {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-						if db.notifyError != nil {
-							db.notifyError(fmt.Errorf("cachingdb: clear staged generational rewrite chunk ledger after empty confirmation: %w", err))
-						}
+						db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: clear staged generational rewrite chunk ledger after empty confirmation: %w", err))
 						return
 					}
 				}
@@ -21610,9 +21803,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				}
 				if !isVlogGenerationPlannerCanceled(err) {
 					updatePlanTimestamp = true
-					if db.notifyError != nil {
-						db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
-					}
+					db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
 				}
 			} else if len(plan.SourceFileIDs) > 0 {
 				db.clearVlogGenerationRewriteAgeBlockedUntil()
@@ -21620,9 +21811,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				plan, err = db.filterVlogGenerationRewritePlanPenalties(plan, now)
 				if err != nil {
 					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-					if db.notifyError != nil {
-						db.notifyError(fmt.Errorf("cachingdb: filter generational rewrite penalties: %w", err))
-					}
+					db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: filter generational rewrite penalties: %w", err))
 					return
 				}
 				db.observeVlogGenerationRewritePlanPenaltyFilter(beforePenaltyFilter, len(plan.SourceFileIDs))
@@ -21632,9 +21821,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 						stagedLedger, ledgerErr := db.currentVlogGenerationRewriteLedger()
 						if ledgerErr != nil {
 							db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-							if db.notifyError != nil {
-								db.notifyError(fmt.Errorf("cachingdb: load staged generational rewrite ledger: %w", ledgerErr))
-							}
+							db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: load staged generational rewrite ledger: %w", ledgerErr))
 							return
 						}
 						confirmed := stableVlogGenerationRewriteLedgerSegments(stagedLedger, plan.SelectedSegments)
@@ -21655,9 +21842,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				if stagePending {
 					if err := db.setVlogGenerationRewriteLedger(nil); err != nil {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-						if db.notifyError != nil {
-							db.notifyError(fmt.Errorf("cachingdb: clear staged generational rewrite ledger after age-blocked confirmation: %w", err))
-						}
+						db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: clear staged generational rewrite ledger after age-blocked confirmation: %w", err))
 						return
 					}
 				}
@@ -21673,9 +21858,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				if stagePending {
 					if err := db.setVlogGenerationRewriteLedger(nil); err != nil {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-						if db.notifyError != nil {
-							db.notifyError(fmt.Errorf("cachingdb: clear staged generational rewrite ledger after empty confirmation: %w", err))
-						}
+						db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: clear staged generational rewrite ledger after empty confirmation: %w", err))
 						return
 					}
 				}
@@ -21774,9 +21957,7 @@ planned:
 					if !isVlogGenerationPlannerCanceled(err) {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
 						db.vlogGenerationRemapFailures.Add(1)
-						if db.notifyError != nil {
-							db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
-						}
+						db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
 						return
 					}
 				}
@@ -21787,9 +21968,7 @@ planned:
 					if err != nil {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
 						db.vlogGenerationRemapFailures.Add(1)
-						if db.notifyError != nil {
-							db.notifyError(fmt.Errorf("cachingdb: filter generational rewrite penalties: %w", err))
-						}
+						db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: filter generational rewrite penalties: %w", err))
 						return
 					}
 					db.observeVlogGenerationRewritePlanPenaltyFilter(beforePenaltyFilter, len(plan.SourceFileIDs))
@@ -22833,14 +23012,15 @@ planned:
 		})
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
+				if opts.resultErr != nil && opts.callerContext != nil && opts.callerContext.Err() != nil {
+					*opts.resultErr = opts.callerContext.Err()
+				}
 				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 				return
 			}
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
 			db.vlogGenerationRemapFailures.Add(1)
-			if db.notifyError != nil {
-				db.notifyError(fmt.Errorf("cachingdb: %w", err))
-			}
+			db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: %w", err))
 		}
 	}
 
@@ -22866,9 +23046,7 @@ planned:
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
 		db.vlogGenerationLeafPackErrors.Add(1)
 		db.storeVlogGenerationLeafPackLastSkipReason("error")
-		if db.notifyError != nil {
-			db.notifyError(fmt.Errorf("cachingdb: %w", err))
-		}
+		db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: %w", err))
 		return
 	}
 	if leafPackRan {
@@ -23138,9 +23316,7 @@ planned:
 			return
 		}
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-		if db.notifyError != nil {
-			db.notifyError(fmt.Errorf("cachingdb: %w", err))
-		}
+		db.reportVlogGenerationMaintenanceError(opts, fmt.Errorf("cachingdb: %w", err))
 		return
 	}
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
@@ -23185,6 +23361,10 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint(automatic bool) 
 		if db != nil {
 			db.debugVlogMaintf("checkpoint_kick_skip reason=closing")
 		}
+		return
+	}
+	if db.coalesceDeferredVectorBuildVlogMaintenance() {
+		db.debugVlogMaintf("checkpoint_kick_skip reason=deferred_vector_build")
 		return
 	}
 	if envBool(envDisableVlogGenerationCheckpointKick) {
@@ -32297,6 +32477,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.maintenance_phase"] = maintenancePhaseString(db.maintenancePhase.Load())
 	stats["treedb.cache.vlog_generation.scheduler_state"] = vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load())
 	stats["treedb.cache.vlog_generation.maintenance.active"] = fmt.Sprintf("%t", db.vlogGenerationMaintenanceActive.Load())
+	stats["treedb.cache.vlog_generation.deferred_vector_build.active"] = fmt.Sprintf("%t", db.deferredVectorBuildVlogMaintenanceState.Load() != deferredVectorBuildVlogMaintenanceInactive)
+	stats["treedb.cache.vlog_generation.deferred_vector_build.debt"] = fmt.Sprintf("%t", db.deferredVectorBuildVlogMaintenanceDebt.Load())
+	stats["treedb.cache.vlog_generation.deferred_vector_build.skips"] = fmt.Sprintf("%d", db.deferredVectorBuildVlogMaintenanceSkips.Load())
+	stats["treedb.cache.vlog_generation.deferred_vector_build.debt_set"] = fmt.Sprintf("%d", db.deferredVectorBuildVlogMaintenanceDebtSet.Load())
+	stats["treedb.cache.vlog_generation.deferred_vector_build.finalizations"] = fmt.Sprintf("%d", db.deferredVectorBuildVlogMaintenanceFinalizations.Load())
+	stats["treedb.cache.vlog_generation.deferred_vector_build.failures"] = fmt.Sprintf("%d", db.deferredVectorBuildVlogMaintenanceFailures.Load())
 	stats["treedb.cache.vlog_generation.scheduler_last_reason"] = vlogGenerationReasonString(db.vlogGenerationLastReason.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.active"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickActive.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.pending"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickPending.Load())
