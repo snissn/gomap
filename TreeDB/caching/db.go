@@ -13638,12 +13638,12 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 		db.foregroundMaintenanceGraceMu.Lock()
 		graceActivity = db.foregroundMaintenanceGraceActivity.Load()
 		graceValue = db.foregroundMaintenanceGraceSequence.Add(1) << 1
+		db.activeForegroundIterators.publishGrace(graceValue)
 		graceDeadline = time.Now().Add(resumeGrace)
 		db.foregroundMaintenanceGraceDeadlineUnixNano.Store(graceDeadline.UnixNano())
 		db.foregroundMaintenanceGraceCancel = cancel
 		db.foregroundMaintenanceGraceCancelValue = graceValue
 		db.foregroundMaintenanceGraceState.Store(graceValue)
-		db.activeForegroundIterators.publishGrace(graceValue)
 		db.foregroundMaintenanceGraceMu.Unlock()
 		boundary := make(chan struct{}, 1)
 		graceC = boundary

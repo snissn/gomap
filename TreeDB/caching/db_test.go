@@ -355,6 +355,16 @@ func TestWrapForegroundIterator_AvoidsDoubleWrapAndCloseIsIdempotent(t *testing.
 }
 func TestForegroundReaderStateBoundaryOrdering(t *testing.T) {
 	db := &DB{}
+	initializing := &foregroundReaderState{}
+	initializing.Store(1)
+	initializing.publishGrace(2)
+	if initializing.endIfNoGrace() {
+		t.Fatal("reader end bypassed a published grace during initialization")
+	}
+	if got := initializing.Load(); got != 1 {
+		t.Fatalf("initializing grace reader count=%d want=1", got)
+	}
+
 	db.activeForegroundIterators.Store(1)
 	db.activeForegroundIterators.publishGrace(2)
 	db.foregroundMaintenanceGraceState.Store(2)
