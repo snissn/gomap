@@ -63,7 +63,6 @@ func TestBackendAutomaticMaintenanceBoundaryDoesNotForceCheckpoint(t *testing.T)
 	release := make(chan struct{})
 	backend := &checkpointBoundaryBackend{
 		checkpointStarted: make(chan struct{}),
-		checkpointRelease: release,
 	}
 
 	if err := backendAutomaticMaintenanceBoundary(backend); err != nil {
@@ -76,6 +75,7 @@ func TestBackendAutomaticMaintenanceBoundaryDoesNotForceCheckpoint(t *testing.T)
 		t.Fatalf("checkpoint calls=%d, want 0", backend.calls)
 	}
 
+	backend.checkpointRelease = release
 	explicitDone := make(chan error, 1)
 	go func() { explicitDone <- backendSyncBoundary(backend) }()
 	select {

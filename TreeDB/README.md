@@ -360,7 +360,7 @@ after the collection WAL gate, not current behavior.
   `BackgroundCheckpointIdleDuration`, and `MaxWALBytes` bound reclaimable WAL
   pressure. External command-WAL passes clean only recovery-covered prefixes;
   legacy/unwired backends use a full checkpoint, as do explicit barriers.
-- Command-WAL bounded growth: `CommandWALSegmentTargetBytes` rotates active
+- Command-WAL-bounded growth: `CommandWALSegmentTargetBytes` rotates active
   command-WAL segments independently from `WALMaxSegmentBytes`, which remains a
   per-frame safety cap; `MaxWALBytes` triggers command-WAL-aware auto
   maintenance in command-WAL cached mode.

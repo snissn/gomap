@@ -250,8 +250,9 @@ workloads, TreeDB enables periodic cached-mode auto maintenance by default:
 
 - `Options.BackgroundCheckpointInterval` (default 30s): periodic auto-maintenance cadence
 - `Options.BackgroundCheckpointIdleDuration` (default 2s): opportunistic auto maintenance after write-idle
-- `Options.MaxWALBytes` (default 2 GiB): safety cap that can trigger maintenance early
-  from reclaimable cached journal/value-log pressure (legacy name: WAL).
+- `Options.MaxWALBytes` (default 2 GiB): safety cap that can trigger maintenance early.
+  External command-WAL mode counts command-WAL segment bytes; other cached
+  modes use reclaimable cached journal/value-log pressure (legacy name: WAL).
 
 In external command-WAL mode, automatic passes rotate and clean only the
 recovery-covered command-WAL prefix without publishing the current visible

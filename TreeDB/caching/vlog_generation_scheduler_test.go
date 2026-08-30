@@ -8420,6 +8420,7 @@ func TestVlogGenerationAutomaticDelayedWakesPreserveMaintenanceBoundary(t *testi
 			boundary := &queuedRewriteBoundaryBackend{BackendDB: backend, recorder: recorder}
 			db, cleanup := openRewriteQueueTestDB(t, dir, boundary)
 			t.Cleanup(cleanup)
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 			skipRetainedPrune(db)
 			forceVlogMaintenanceIdle(db)
 			db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
@@ -8600,6 +8601,7 @@ func TestVlogGenerationAutomaticRetainedPruneFollowupPreservesMaintenanceBoundar
 	boundary := &queuedRewriteBoundaryBackend{BackendDB: backend, recorder: recorder}
 	db, cleanup := openRewriteQueueTestDB(t, dir, boundary)
 	t.Cleanup(cleanup)
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 	forceVlogMaintenanceIdle(db)
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
 	_, fileID := seedRetainedPruneSegment(t, db, 701, 2<<30)

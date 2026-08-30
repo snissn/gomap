@@ -2559,8 +2559,37 @@ func TestPublicCommandWALAutoCheckpointRetainsUncoveredTailThroughReopen(t *test
 	if err := db.Set([]byte("tail"), []byte("retained")); err != nil {
 		t.Fatalf("Set tail: %v", err)
 	}
-	if segments := publicCommandWALSegmentNames(t, dir); len(segments) == 0 {
-		t.Fatal("automatic maintenance removed the uncovered command-WAL tail")
+	tailLSN := db.backend.CommandWALNextLSN() - 1
+	tailSegment := ""
+	for _, name := range publicCommandWALSegmentNames(t, dir) {
+		frames, err := commitlog.ScanCommandFrames(filepath.Join(backenddb.WALDirPath(dir), name), commitlog.Options{})
+		if err != nil {
+			t.Fatalf("scan command-WAL segment %s: %v", name, err)
+		}
+		for _, frame := range frames {
+			if frame.LSN == tailLSN {
+				tailSegment = name
+				break
+			}
+		}
+	}
+	if tailSegment == "" {
+		t.Fatalf("command-WAL segment containing uncovered tail LSN %d not found", tailLSN)
+	}
+	before = statMapUint64(t, db.cached.Stats(), "treedb.cache.auto_checkpoint.count")
+	db.triggerAutoCheckpointForTest()
+	if err := waitForPublicCommandWALAutoCheckpointCount(db, before+1); err != nil {
+		t.Fatal(err)
+	}
+	tailRetained := false
+	for _, name := range publicCommandWALSegmentNames(t, dir) {
+		if name == tailSegment {
+			tailRetained = true
+			break
+		}
+	}
+	if !tailRetained {
+		t.Fatalf("automatic maintenance removed uncovered tail segment %s", tailSegment)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
