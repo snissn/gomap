@@ -9930,6 +9930,22 @@ func TestForegroundMaintenanceContextWithResumeGrace_CancelsShortReadAfterBounda
 	}
 }
 
+func TestRawForegroundReadGraceCrossingMarker(t *testing.T) {
+	db := &DB{closeCh: make(chan struct{})}
+	db.foregroundMaintenanceGraceDeadlineUnixNano.Store(time.Now().Add(20 * time.Millisecond).UnixNano())
+
+	endRead := db.beginRawForegroundRead()
+	time.Sleep(30 * time.Millisecond)
+	endRead()
+
+	if got := db.foregroundMaintenanceGraceActivity.Load(); got != 1 {
+		t.Fatalf("grace-crossing activity=%d want=1", got)
+	}
+	if got := db.activeForegroundIterators.Load(); got != 0 {
+		t.Fatalf("active foreground reads=%d want=0", got)
+	}
+}
+
 func TestVlogGenerationRewritePlan_CancelBackoffSkipsImmediateRetry(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

@@ -9272,6 +9272,8 @@ type DB struct {
 	lastForegroundReadUnixNano                                   atomic.Int64
 	foregroundReadStampCounter                                   atomic.Uint32
 	activeForegroundIterators                                    atomic.Int64
+	foregroundMaintenanceGraceDeadlineUnixNano                   atomic.Int64
+	foregroundMaintenanceGraceActivity                           atomic.Uint64
 	retainedPruneLastStartUnixNano                               atomic.Int64
 	retainedValueLogPruneLastUnixNano                            atomic.Int64
 	retainedValueLogPruneLastStatus                              atomic.Uint32
@@ -13517,20 +13519,25 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 		ctx, cancel = context.WithCancel(context.Background())
 	}
 	lastActivity := db.lastForegroundActivityUnixNano()
-	lastReadStampCounter := db.foregroundReadStampCounter.Load()
 	var (
-		graceTimer *time.Timer
-		graceC     <-chan time.Time
+		graceTimer            *time.Timer
+		graceC                <-chan time.Time
+		graceDeadlineUnixNano int64
+		graceActivity         uint64
 	)
 	if resumeGrace > 0 {
+		graceDeadlineUnixNano = time.Now().Add(resumeGrace).UnixNano()
+		graceActivity = db.foregroundMaintenanceGraceActivity.Load()
+		db.foregroundMaintenanceGraceDeadlineUnixNano.Store(graceDeadlineUnixNano)
 		graceTimer = time.NewTimer(resumeGrace)
 		graceC = graceTimer.C
 	}
-	go func(lastActivity int64, lastReadStampCounter uint32) {
+	go func(lastActivity int64, graceActivity uint64) {
 		ticker := time.NewTicker(foregroundMaintenancePollInterval())
 		defer ticker.Stop()
 		if graceTimer != nil {
 			defer graceTimer.Stop()
+			defer db.foregroundMaintenanceGraceDeadlineUnixNano.CompareAndSwap(graceDeadlineUnixNano, 0)
 		}
 		graceElapsed := resumeGrace <= 0
 		for {
@@ -13543,9 +13550,8 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 			case <-graceC:
 				graceC = nil
 				graceElapsed = true
-				lastActivity = db.lastForegroundActivityUnixNano()
-				lastReadStampCounter = db.foregroundReadStampCounter.Load()
-				if db.activeForegroundIterators.Load() > 0 {
+				if db.activeForegroundIterators.Load() > 0 ||
+					db.foregroundMaintenanceGraceActivity.Load() != graceActivity {
 					cancel()
 					return
 				}
@@ -13560,18 +13566,14 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 					}
 					continue
 				}
-				// Activity completed before the grace timer fires becomes the new
-				// baseline. Reads active at that boundary cancel immediately;
-				// timestamp or stamp-counter changes catch short activity after it.
 				if db.activeForegroundIterators.Load() > 0 ||
-					db.lastForegroundActivityUnixNano() != lastActivity ||
-					db.foregroundReadStampCounter.Load() != lastReadStampCounter {
+					db.foregroundMaintenanceGraceActivity.Load() != graceActivity {
 					cancel()
 					return
 				}
 			}
 		}
-	}(lastActivity, lastReadStampCounter)
+	}(lastActivity, graceActivity)
 	return ctx, cancel
 }
 
@@ -13690,11 +13692,22 @@ func (db *DB) vlogGenerationRewritePlanContext(timeout time.Duration, opts vlogG
 	return db.foregroundMaintenanceContextWithResumeGrace(timeout, vlogGenerationRewritePlanResumeGrace)
 }
 
+func (db *DB) noteForegroundMaintenanceGraceActivity(now int64) {
+	if db == nil {
+		return
+	}
+	if deadline := db.foregroundMaintenanceGraceDeadlineUnixNano.Load(); deadline > 0 && now >= deadline {
+		db.foregroundMaintenanceGraceActivity.Add(1)
+	}
+}
+
 func (db *DB) noteWrite() {
 	if db == nil {
 		return
 	}
-	db.lastForegroundWriteUnixNano.Store(time.Now().UnixNano())
+	now := time.Now().UnixNano()
+	db.lastForegroundWriteUnixNano.Store(now)
+	db.noteForegroundMaintenanceGraceActivity(now)
 	if !db.autoCheckpointOn.Load() {
 		return
 	}
@@ -13751,6 +13764,7 @@ func (db *DB) noteRead() {
 		return
 	}
 	now := time.Now().UnixNano()
+	db.noteForegroundMaintenanceGraceActivity(now)
 	last := db.lastForegroundReadUnixNano.Load()
 	if last > 0 && now-last < int64(foregroundReadStampMaxAge) {
 		n := db.foregroundReadStampCounter.Add(1)
@@ -13770,6 +13784,9 @@ func (db *DB) beginRawForegroundRead() func() {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
+			if deadline := db.foregroundMaintenanceGraceDeadlineUnixNano.Load(); deadline > 0 {
+				db.noteForegroundMaintenanceGraceActivity(time.Now().UnixNano())
+			}
 			db.activeForegroundIterators.Add(-1)
 		})
 	}
