@@ -10669,6 +10669,30 @@ func TestVlogGenerationRewritePlan_OneShotReadBlipDoesNotCancelLongPlan(t *testi
 	}
 }
 
+func TestForegroundMaintenanceContextResumeGrace_ActiveReaderAtDeadlineEndsBeforeNextPoll(t *testing.T) {
+	resumeGrace := foregroundMaintenancePollInterval() / 4
+	db := &DB{
+		closeCh:                         make(chan struct{}),
+		testForegroundMaintenancePollCh: make(chan time.Time),
+	}
+	endRead := db.beginRawForegroundRead()
+	defer endRead()
+
+	ctx, cancel := db.foregroundMaintenanceContextWithResumeGrace(0, resumeGrace)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			t.Fatalf("maintenance context ended with %v, want cancellation", ctx.Err())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("active reader at grace cutoff did not cancel maintenance while polling was withheld")
+	}
+
+	endRead()
+}
+
 func TestForegroundMaintenanceContextResumeGrace_WriteBoundaryOrdering(t *testing.T) {
 	waitForBoundary := func(db *DB) {
 		t.Helper()
