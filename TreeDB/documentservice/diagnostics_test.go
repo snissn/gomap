@@ -241,8 +241,8 @@ func TestDiagnosticsSnapshotPublishesFallbackSingletonInsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepareDocumentsForWrite: %v", err)
 	}
-	inserted, updated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc[0], true, func() {
-		svc.publishDiagnosticsInsert(info.Name, info, col.LastInsertStats())
+	inserted, updated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc[0], true, func(stats collections.CollectionInsertStats) {
+		svc.publishDiagnosticsInsert(info.Name, info, stats)
 	})
 	if err != nil || !inserted || updated {
 		t.Fatalf("fallback singleton insert inserted=%v updated=%v err=%v", inserted, updated, err)

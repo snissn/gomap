@@ -402,14 +402,6 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
 	}
-	if sharedCandidate {
-		// Concurrent writers need request-local LastInsertStats; the prepared
-		// search cache intentionally reuses one Collection handle.
-		col, err = s.manager.OpenCollection(index)
-		if err != nil {
-			return UpsertDocumentsResponse{}, serviceErrorFromCollectionOpen(err, index)
-		}
-	}
 	if sharedCandidate && info.VectorStrategy != collections.VectorIndexStrategyColumnGraph {
 		release()
 		return s.upsertDocuments(ctx, index, req, false, diagnostics, upsertStats)
@@ -481,9 +473,9 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 	updated := 0
 	startPhase(&upsertStats.InsertNanos)
 	if len(insertIDs) > 0 {
-		if _, err := col.InsertBatch(insertIDs, insertDocs); err == nil {
+		if _, insertStats, err := col.InsertBatchWithStats(insertIDs, insertDocs); err == nil {
 			inserted = len(insertIDs)
-			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
+			s.publishDiagnosticsInsert(index, info, insertStats)
 		} else if collections.IsDuplicateKeyError(err) {
 			if sharedCandidate {
 				if deferredMaintenanceEpoch != 0 && s.deferredVectorBuildMaintenance != nil {
@@ -509,8 +501,8 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 			// between the read preflight and InsertBatch, fall back per item to
 			// replace-or-insert semantics instead of leaking ErrDocumentExists.
 			for _, doc := range inserts {
-				wasInserted, wasUpdated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc, true, func() {
-					s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
+				wasInserted, wasUpdated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc, true, func(insertStats collections.CollectionInsertStats) {
+					s.publishDiagnosticsInsert(index, info, insertStats)
 				})
 				if err != nil {
 					return UpsertDocumentsResponse{}, err
@@ -528,8 +520,8 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 	}
 	startPhase(&upsertStats.UpdateNanos)
 	for _, doc := range updates {
-		wasInserted, wasUpdated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc, false, func() {
-			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
+		wasInserted, wasUpdated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc, false, func(insertStats collections.CollectionInsertStats) {
+			s.publishDiagnosticsInsert(index, info, insertStats)
 		})
 		if err != nil {
 			return UpsertDocumentsResponse{}, err
@@ -588,7 +580,11 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 	}
 	if inserted+updated > 0 {
-		if err := s.finishVectorMutation(index, col, info); err != nil && rebuildErr == nil {
+		finish := s.finishVectorMutation
+		if sharedCandidate && deferVectorIndexRebuild && info.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
+			finish = s.finishDeferredColumnGraphMutation
+		}
+		if err := finish(index, col, info); err != nil && rebuildErr == nil {
 			return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "publish vector mutation after upsert failed", err)
 		}
 	}
@@ -1407,6 +1403,36 @@ func (s *Service) finishVectorMutation(name string, col *collections.Collection,
 	return s.primeBenchmarkSearchCache(name, col, info)
 }
 
+// finishDeferredColumnGraphMutation preserves the service-owned handle for an
+// insert-only deferred load, but closes its prepared search state after all
+// active searches release the cache read lock.
+func (s *Service) finishDeferredColumnGraphMutation(name string, col *collections.Collection, info IndexInfo) error {
+	if s == nil || col == nil {
+		return nil
+	}
+	s.benchmarkSearchCacheMu.Lock()
+	defer s.benchmarkSearchCacheMu.Unlock()
+	if s.closed {
+		return serviceClosedError()
+	}
+	if s.benchmarkSearchCache == nil {
+		s.benchmarkSearchCache = make(map[string]*serviceBenchmarkSearchCacheEntry)
+	}
+	entry := s.benchmarkSearchCache[name]
+	if entry == nil || entry.collection == nil || entry.info.Generation != info.Generation {
+		if entry != nil && entry.collection != nil && entry.collection != col {
+			if err := entry.collection.CloseVectorIndexPreparedSearchCache(); err != nil {
+				return err
+			}
+		}
+		entry = &serviceBenchmarkSearchCacheEntry{collection: col, info: info}
+		s.benchmarkSearchCache[name] = entry
+	} else {
+		entry.info = info
+	}
+	return entry.collection.CloseVectorIndexPreparedSearchCache()
+}
+
 func (s *Service) invalidateBenchmarkSearchCache(name string) error {
 	if s == nil {
 		return nil
@@ -1754,16 +1780,16 @@ func upsertPreparedDocument(ctx context.Context, col *collections.Collection, do
 	return upsertPreparedDocumentWithInsertCallback(ctx, col, doc, preferInsert, nil)
 }
 
-func upsertPreparedDocumentWithInsertCallback(ctx context.Context, col *collections.Collection, doc preparedDocument, preferInsert bool, afterInsert func()) (inserted bool, updated bool, err error) {
+func upsertPreparedDocumentWithInsertCallback(ctx context.Context, col *collections.Collection, doc preparedDocument, preferInsert bool, afterInsert func(collections.CollectionInsertStats)) (inserted bool, updated bool, err error) {
 	const maxAttempts = 4
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if err := ctxErr(ctx); err != nil {
 			return false, false, err
 		}
 		if preferInsert {
-			if _, err := col.InsertBatch([][]byte{[]byte(doc.id)}, [][]byte{doc.raw}); err == nil {
+			if _, insertStats, err := col.InsertBatchWithStats([][]byte{[]byte(doc.id)}, [][]byte{doc.raw}); err == nil {
 				if afterInsert != nil {
-					afterInsert()
+					afterInsert(insertStats)
 				}
 				return true, false, nil
 			} else if !collections.IsDuplicateKeyError(err) {
