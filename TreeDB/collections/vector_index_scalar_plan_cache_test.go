@@ -131,8 +131,14 @@ func TestNativeScalarPlanCacheKeySeparatesFilterLimitsSchemaAndIndexIdentity(t *
 			if _, stats := col.nativeScalarPlanCachePut(base, plan, nativeScalarPlanCacheStats{misses: 1}); stats.entries != 1 {
 				t.Fatalf("put entries=%d", stats.entries)
 			}
-			if got, stats := col.nativeScalarPlanCacheGet(variant); got != nil || stats.hits != 0 || stats.misses != 1 {
-				t.Fatalf("aliased plan=%p stats=%+v", got, stats)
+			got, stats := col.nativeScalarPlanCacheGet(variant)
+			wantInvalidations := uint64(0)
+			switch name {
+			case "scalar_schema", "vector_schema", "generation", "mutation":
+				wantInvalidations = 1
+			}
+			if got != nil || stats.hits != 0 || stats.misses != 1 || stats.invalidations != wantInvalidations {
+				t.Fatalf("aliased plan=%p stats=%+v want_invalidations=%d", got, stats, wantInvalidations)
 			}
 		})
 	}
@@ -153,6 +159,15 @@ func TestNativeScalarPlanCacheBoundsEntriesAndRetainedBytes(t *testing.T) {
 	}
 	if stats.entries > nativeScalarPlanCacheMaxEntries || stats.retainedBytes > nativeScalarPlanCacheMaxBytes || stats.evictions == 0 {
 		t.Fatalf("bounded stats=%+v max_entries=%d max_bytes=%d", stats, nativeScalarPlanCacheMaxEntries, nativeScalarPlanCacheMaxBytes)
+	}
+	sameEpochMiss := nativeScalarPlanCacheKey{
+		vectorIndex: index, sourceGeneration: 1, vectorGeneration: 1,
+		vectorSchema: "vector", scalarSchema: "scalar", filterIdentity: "same-epoch-miss",
+		probeLimit: nativeScalarProbeLimit, exactSafetyCap: nativeScalarExactSafetyCap,
+		annSeedProbeLimit: nativeScalarANNSeedProbeLimit, annSeedLimit: nativeScalarANNSeedLimit,
+	}
+	if plan, miss := col.nativeScalarPlanCacheGet(sameEpochMiss); plan != nil || miss.misses != 1 || miss.invalidations != 0 || miss.entries != stats.entries {
+		t.Fatalf("same-epoch miss plan=%p stats=%+v prior=%+v", plan, miss, stats)
 	}
 
 	oversized := &Collection{}

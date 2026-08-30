@@ -437,6 +437,29 @@ type nativeScalarPlanCacheKey struct {
 	annSeedLimit      int
 }
 
+type nativeScalarPlanCacheEpoch struct {
+	sourceGeneration  uint64
+	vectorGeneration  uint64
+	vectorMutationSeq uint64
+	vectorSchema      string
+	scalarSchema      string
+}
+
+type nativeScalarPlanCacheEpochState struct {
+	epoch   nativeScalarPlanCacheEpoch
+	entries int
+}
+
+func (key nativeScalarPlanCacheKey) epoch() nativeScalarPlanCacheEpoch {
+	return nativeScalarPlanCacheEpoch{
+		sourceGeneration:  key.sourceGeneration,
+		vectorGeneration:  key.vectorGeneration,
+		vectorMutationSeq: key.vectorMutationSeq,
+		vectorSchema:      key.vectorSchema,
+		scalarSchema:      key.scalarSchema,
+	}
+}
+
 func (idx *VectorIndex) nativeScalarPlanCacheGeneration() (uint64, uint64, bool) {
 	if idx == nil {
 		return 0, 0, false
@@ -573,13 +596,31 @@ func nativeScalarPlanCacheEntryBytes(key nativeScalarPlanCacheKey, plan *nativeS
 	return size
 }
 
-func nativeScalarPlanCacheKeyStale(cached, current nativeScalarPlanCacheKey) bool {
-	return cached.vectorIndex == current.vectorIndex &&
-		(cached.sourceGeneration != current.sourceGeneration ||
-			cached.vectorGeneration != current.vectorGeneration ||
-			cached.vectorMutationSeq != current.vectorMutationSeq ||
-			cached.vectorSchema != current.vectorSchema ||
-			cached.scalarSchema != current.scalarSchema)
+func (c *Collection) nativeScalarPlanCacheInvalidateEpochLocked(key nativeScalarPlanCacheKey, stats *nativeScalarPlanCacheStats) {
+	state, ok := c.nativeScalarPlanCacheEpochs[key.vectorIndex]
+	if !ok || state.epoch == key.epoch() {
+		return
+	}
+	oldOrder := c.nativeScalarPlanCacheOrder
+	nextOrder := oldOrder[:0]
+	for _, cachedKey := range oldOrder {
+		entry, ok := c.nativeScalarPlanCache[cachedKey]
+		if !ok {
+			continue
+		}
+		if cachedKey.vectorIndex == key.vectorIndex {
+			delete(c.nativeScalarPlanCache, cachedKey)
+			c.nativeScalarPlanCacheBytes -= entry.bytes
+			stats.invalidations++
+			continue
+		}
+		nextOrder = append(nextOrder, cachedKey)
+	}
+	for i := len(nextOrder); i < len(oldOrder); i++ {
+		oldOrder[i] = nativeScalarPlanCacheKey{}
+	}
+	c.nativeScalarPlanCacheOrder = nextOrder
+	delete(c.nativeScalarPlanCacheEpochs, key.vectorIndex)
 }
 
 func (c *Collection) nativeScalarPlanCacheSnapshotLocked(stats nativeScalarPlanCacheStats) nativeScalarPlanCacheStats {
@@ -599,30 +640,11 @@ func (c *Collection) nativeScalarPlanCacheGet(key nativeScalarPlanCacheKey) (*na
 	defer c.nativeScalarPlanCacheMu.Unlock()
 
 	var stats nativeScalarPlanCacheStats
-	oldOrder := c.nativeScalarPlanCacheOrder
-	nextOrder := oldOrder[:0]
-	for _, cachedKey := range oldOrder {
-		entry, ok := c.nativeScalarPlanCache[cachedKey]
-		if !ok {
-			continue
-		}
-		if nativeScalarPlanCacheKeyStale(cachedKey, key) {
-			delete(c.nativeScalarPlanCache, cachedKey)
-			c.nativeScalarPlanCacheBytes -= entry.bytes
-			stats.invalidations++
-			continue
-		}
-		nextOrder = append(nextOrder, cachedKey)
-	}
-	for i := len(nextOrder); i < len(oldOrder); i++ {
-		oldOrder[i] = nativeScalarPlanCacheKey{}
-	}
-	c.nativeScalarPlanCacheOrder = nextOrder
-
 	if entry, ok := c.nativeScalarPlanCache[key]; ok {
 		stats.hits = 1
 		return cloneNativeScalarPlanForQuery(entry.plan), c.nativeScalarPlanCacheSnapshotLocked(stats)
 	}
+	c.nativeScalarPlanCacheInvalidateEpochLocked(key, &stats)
 	stats.misses = 1
 	return nil, c.nativeScalarPlanCacheSnapshotLocked(stats)
 }
@@ -630,6 +652,8 @@ func (c *Collection) nativeScalarPlanCacheGet(key nativeScalarPlanCacheKey) (*na
 func (c *Collection) nativeScalarPlanCachePut(key nativeScalarPlanCacheKey, plan *nativeScalarFilterExecution, stats nativeScalarPlanCacheStats) (*nativeScalarFilterExecution, nativeScalarPlanCacheStats) {
 	c.nativeScalarPlanCacheMu.Lock()
 	defer c.nativeScalarPlanCacheMu.Unlock()
+
+	c.nativeScalarPlanCacheInvalidateEpochLocked(key, &stats)
 
 	if entry, ok := c.nativeScalarPlanCache[key]; ok {
 		return cloneNativeScalarPlanForQuery(entry.plan), c.nativeScalarPlanCacheSnapshotLocked(stats)
@@ -641,6 +665,9 @@ func (c *Collection) nativeScalarPlanCachePut(key nativeScalarPlanCacheKey, plan
 	if c.nativeScalarPlanCache == nil {
 		c.nativeScalarPlanCache = make(map[nativeScalarPlanCacheKey]nativeScalarPlanCacheEntry)
 	}
+	if c.nativeScalarPlanCacheEpochs == nil {
+		c.nativeScalarPlanCacheEpochs = make(map[*VectorIndex]nativeScalarPlanCacheEpochState)
+	}
 	for len(c.nativeScalarPlanCacheOrder) >= nativeScalarPlanCacheMaxEntries ||
 		c.nativeScalarPlanCacheBytes+entry.bytes > nativeScalarPlanCacheMaxBytes {
 		victim := c.nativeScalarPlanCacheOrder[0]
@@ -650,11 +677,25 @@ func (c *Collection) nativeScalarPlanCachePut(key nativeScalarPlanCacheKey, plan
 			delete(c.nativeScalarPlanCache, victim)
 			c.nativeScalarPlanCacheBytes -= evicted.bytes
 			stats.evictions++
+			if state, tracked := c.nativeScalarPlanCacheEpochs[victim.vectorIndex]; tracked {
+				state.entries--
+				if state.entries == 0 {
+					delete(c.nativeScalarPlanCacheEpochs, victim.vectorIndex)
+				} else {
+					c.nativeScalarPlanCacheEpochs[victim.vectorIndex] = state
+				}
+			}
 		}
 	}
 	c.nativeScalarPlanCache[key] = entry
 	c.nativeScalarPlanCacheOrder = append(c.nativeScalarPlanCacheOrder, key)
 	c.nativeScalarPlanCacheBytes += entry.bytes
+	state := c.nativeScalarPlanCacheEpochs[key.vectorIndex]
+	if state.entries == 0 || state.epoch != key.epoch() {
+		state = nativeScalarPlanCacheEpochState{epoch: key.epoch()}
+	}
+	state.entries++
+	c.nativeScalarPlanCacheEpochs[key.vectorIndex] = state
 	return cloneNativeScalarPlanForQuery(plan), c.nativeScalarPlanCacheSnapshotLocked(stats)
 }
 
