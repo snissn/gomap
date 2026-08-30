@@ -424,16 +424,16 @@ type nativeScalarFilterExecution struct {
 }
 
 type nativeScalarPlanCacheKey struct {
-	vectorIndex          *VectorIndex
-	sourceGeneration     uint64
-	vectorGeneration     uint64
-	vectorSchema         string
-	scalarSchema         string
-	filterIdentity       string
-	probeLimit           int
-	exactSafetyCap       int
-	annSeedProbeLimit    int
-	annSeedLimit         int
+	vectorIndex       *VectorIndex
+	sourceGeneration  uint64
+	vectorGeneration  uint64
+	vectorSchema      string
+	scalarSchema      string
+	filterIdentity    string
+	probeLimit        int
+	exactSafetyCap    int
+	annSeedProbeLimit int
+	annSeedLimit      int
 }
 
 type nativeScalarPlanCacheEntry struct {
@@ -766,16 +766,16 @@ func (c *Collection) planNativeScalarFilter(filter *HybridScalarFilter, index *V
 
 	vectorGeneration, vectorGenerationValid := index.sourceDocumentCoverage()
 	cacheKey := nativeScalarPlanCacheKey{
-		vectorIndex:          index,
-		sourceGeneration:     generation,
-		vectorGeneration:     vectorGeneration,
-		vectorSchema:         nativeScalarVectorSchemaIdentity(vectorDef),
-		scalarSchema:         nativeScalarSchemaIdentity(view.catalog.meta.Indexes),
-		filterIdentity:       nativeScalarFilterIdentity(plan.clauses),
-		probeLimit:           nativeScalarProbeLimit,
-		exactSafetyCap:       nativeScalarExactSafetyCap,
-		annSeedProbeLimit:    nativeScalarANNSeedProbeLimit,
-		annSeedLimit:         nativeScalarANNSeedLimit,
+		vectorIndex:       index,
+		sourceGeneration:  generation,
+		vectorGeneration:  vectorGeneration,
+		vectorSchema:      nativeScalarVectorSchemaIdentity(vectorDef),
+		scalarSchema:      nativeScalarSchemaIdentity(view.catalog.meta.Indexes),
+		filterIdentity:    nativeScalarFilterIdentity(plan.clauses),
+		probeLimit:        nativeScalarProbeLimit,
+		exactSafetyCap:    nativeScalarExactSafetyCap,
+		annSeedProbeLimit: nativeScalarANNSeedProbeLimit,
+		annSeedLimit:      nativeScalarANNSeedLimit,
 	}
 	cacheable := vectorGenerationValid && vectorGeneration == generation
 	var cacheStats nativeScalarPlanCacheStats

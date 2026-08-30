@@ -48,8 +48,8 @@ func TestNativeScalarPlanCacheConcurrentReuseClonesMutationOwnedState(t *testing
 		annSeedProbeLimit: nativeScalarANNSeedProbeLimit, annSeedLimit: nativeScalarANNSeedLimit,
 	}
 	immutable := &nativeScalarFilterExecution{
-		identity: NativeScalarFilterPlanMixed,
-		finiteIDs: hybridScalarAllowSet{"alpha": {}, "beta": {}},
+		identity:     NativeScalarFilterPlanMixed,
+		finiteIDs:    hybridScalarAllowSet{"alpha": {}, "beta": {}},
 		candidateIDs: 2, retainedCandidateIDs: 2, refinedCandidateIDs: 2,
 		sourceGeneration: 7,
 	}
