@@ -8129,6 +8129,10 @@ type logicalOrderedRootObserverRegistrar interface {
 	RegisterLogicalOrderedRootPublicationObserver(func()) func()
 }
 
+type foregroundReadObserverRegistrar interface {
+	RegisterForegroundReadObserver(func(), func() func()) func()
+}
+
 func backendPublicationReady(backend BackendDB) error {
 	if checker, ok := backend.(backendPublicationReadinessChecker); ok {
 		return checker.CheckCommandWALPublishReady()
@@ -8868,6 +8872,7 @@ type DB struct {
 	// Level 1 (Disk)
 	backend                              BackendDB
 	unregisterLogicalOrderedRootObserver func()
+	unregisterForegroundReadObserver     func()
 	dictStore                            DictStore
 	templateStore                        template.Store
 
@@ -12966,6 +12971,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if registrar, ok := backend.(logicalOrderedRootObserverRegistrar); ok {
 		db.unregisterLogicalOrderedRootObserver = registrar.RegisterLogicalOrderedRootPublicationObserver(db.noteWrite)
 	}
+	if registrar, ok := backend.(foregroundReadObserverRegistrar); ok {
+		db.unregisterForegroundReadObserver = registrar.RegisterForegroundReadObserver(db.noteRead, db.beginRawForegroundRead)
+	}
 
 	// Start background flusher
 	db.wg.Add(1)
@@ -13445,6 +13453,16 @@ func (db *DB) foregroundActivityResumedSince(lastActivity int64) bool {
 	return db.lastForegroundActivityUnixNano() > lastActivity
 }
 
+func (db *DB) foregroundActivityRecentlyResumedSince(lastActivity int64, now time.Time) bool {
+	if !db.foregroundActivityResumedSince(lastActivity) {
+		return false
+	}
+	if db.activeForegroundIterators.Load() > 0 {
+		return true
+	}
+	return !db.foregroundActivityQuietFor(now, foregroundReadStampMaxAge, foregroundReadStampMaxAge)
+}
+
 func (db *DB) foregroundVlogMaintenanceResumedSince(lastWrite int64) bool {
 	if db == nil {
 		return false
@@ -13520,11 +13538,18 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 			case <-db.closeCh:
 				cancel()
 				return
-			case <-ticker.C:
-				if resumeGrace > 0 && time.Since(startedAt) < resumeGrace {
+			case now := <-ticker.C:
+				if resumeGrace <= 0 {
+					if db.foregroundActivityResumedSince(lastActivity) {
+						cancel()
+						return
+					}
 					continue
 				}
-				if db.foregroundActivityResumedSince(lastActivity) {
+				if now.Sub(startedAt) < resumeGrace {
+					continue
+				}
+				if db.foregroundActivityRecentlyResumedSince(lastActivity, now) {
 					cancel()
 					return
 				}
@@ -13646,7 +13671,7 @@ func (db *DB) vlogGenerationRewritePlanContext(timeout time.Duration, opts vlogG
 			timeout = budget
 		}
 	}
-	return db.foregroundVlogMaintenanceContextWithResumeGrace(timeout, vlogGenerationRewritePlanResumeGrace)
+	return db.foregroundMaintenanceContextWithResumeGrace(timeout, vlogGenerationRewritePlanResumeGrace)
 }
 
 func (db *DB) noteWrite() {
@@ -13718,6 +13743,20 @@ func (db *DB) noteRead() {
 		}
 	}
 	db.lastForegroundReadUnixNano.Store(now)
+}
+
+func (db *DB) beginRawForegroundRead() func() {
+	if db == nil {
+		return func() {}
+	}
+	db.noteRead()
+	db.activeForegroundIterators.Add(1)
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			db.activeForegroundIterators.Add(-1)
+		})
+	}
 }
 
 type autoCheckpointMode uint8
@@ -25155,6 +25194,10 @@ func (db *DB) Close() error {
 	db.closing.Store(true)
 	if unregister := db.unregisterLogicalOrderedRootObserver; unregister != nil {
 		db.unregisterLogicalOrderedRootObserver = nil
+		unregister()
+	}
+	if unregister := db.unregisterForegroundReadObserver; unregister != nil {
+		db.unregisterForegroundReadObserver = nil
 		unregister()
 	}
 	db.cancelActiveRetainedValueLogPrune()

@@ -31,6 +31,76 @@ var getManyEmptyValue = []byte{}
 // found=false and value=nil.
 type GetManyViewFunc = tree.GetManyViewFunc
 
+type foregroundReadObserver struct {
+	id     uint64
+	notify func()
+	begin  func() func()
+}
+
+var noForegroundReadEnd = func() {}
+
+// RegisterForegroundReadObserver installs the cached layer's observer for
+// logical collection reads routed through this raw backend. begin returns an
+// idempotent function that ends a snapshot-backed read. The returned
+// registration function removes this exact observer.
+func (db *DB) RegisterForegroundReadObserver(notify func(), begin func() func()) func() {
+	if db == nil || notify == nil || begin == nil {
+		return func() {}
+	}
+	db.foregroundReadObserverMu.Lock()
+	db.foregroundReadObserverID++
+	registration := &foregroundReadObserver{
+		id:     db.foregroundReadObserverID,
+		notify: notify,
+		begin:  begin,
+	}
+	db.foregroundReadObserver.Store(registration)
+	db.foregroundReadObserverMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			db.foregroundReadObserverMu.Lock()
+			if current := db.foregroundReadObserver.Load(); current != nil && current.id == registration.id {
+				db.foregroundReadObserver.Store(nil)
+			}
+			db.foregroundReadObserverMu.Unlock()
+		})
+	}
+}
+
+// NotifyForegroundRead forwards one instantaneous logical collection read to
+// the cached scheduler without classifying backend-internal maintenance scans
+// as foreground work.
+func (db *DB) NotifyForegroundRead() {
+	if db == nil {
+		return
+	}
+	if observer := db.foregroundReadObserver.Load(); observer != nil {
+		observer.notify()
+	}
+}
+
+// BeginForegroundRead starts one logical collection read that is not tied to a
+// snapshot's ownership. The returned end function is always non-nil and
+// idempotent when an observer is installed.
+func (db *DB) BeginForegroundRead() func() {
+	if end := db.beginForegroundRead(); end != nil {
+		return end
+	}
+	return noForegroundReadEnd
+}
+
+func (db *DB) beginForegroundRead() func() {
+	if db == nil {
+		return nil
+	}
+	if observer := db.foregroundReadObserver.Load(); observer != nil {
+		return observer.begin()
+	}
+	return nil
+}
+
 func getManyArenaCap(keyCount int) int {
 	if keyCount <= 0 {
 		return 0

@@ -216,6 +216,7 @@ func (c *Collection) OpenCollectionReadView() (*CollectionReadView, error) {
 		return nil, errCollectionNotFound
 	}
 	view := newCollectionReadViewAtSnapshot(c, snap, catalog, true, mappedresource.ScopeCollectionReadView)
+	snap.DetachForegroundRead()
 	closeOnErr = false
 	return view, nil
 }
@@ -228,6 +229,8 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 	if err != nil {
 		return nil, err
 	}
+	endForegroundRead := view.beginForegroundRead()
+	defer endForegroundRead()
 	closeWithError := func(err error) (*CollectionReadView, error) {
 		return nil, errors.Join(err, view.Close())
 	}
@@ -302,6 +305,13 @@ func newCollectionReadViewScopeID(kind mappedresource.ScopeKind) string {
 	return fmt.Sprintf("%s-%d", kind, seq)
 }
 
+func (v *CollectionReadView) beginForegroundRead() func() {
+	if v == nil || v.collection == nil || v.collection.db == nil {
+		return noCollectionForegroundReadEnd
+	}
+	return v.collection.db.BeginForegroundRead()
+}
+
 // Close releases the snapshot owned by the read view. Views that are bound to a
 // caller-owned snapshot still become closed, but leave snapshot release to the
 // owner.
@@ -322,6 +332,8 @@ func (v *CollectionReadView) Close() error {
 // FetchDocumentsByID materializes full documents for ids in input order. Missing
 // documents produce Found=false results without failing the whole fetch.
 func (v *CollectionReadView) FetchDocumentsByID(ids [][]byte, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
+	endForegroundRead := v.beginForegroundRead()
+	defer endForegroundRead()
 	start := time.Now()
 	response, err := v.fetchDocumentsByID(ids, nil, opts)
 	response.Stats.FetchNanos = time.Since(start).Nanoseconds()
@@ -533,6 +545,8 @@ func (v *CollectionReadView) clearDerivedRowFetchCaches() {
 // refs in input order. It builds or reuses a generic materializer row-locator
 // map for the read view; missing or deleted documents return Found=false.
 func (v *CollectionReadView) LookupDocumentRowRefsByID(ids [][]byte, opts DocumentFetchOptions) (DocumentRowRefLookupResponse, error) {
+	endForegroundRead := v.beginForegroundRead()
+	defer endForegroundRead()
 	start := time.Now()
 	response, err := v.lookupDocumentRowRefsByID(ids, opts)
 	response.Stats.FetchNanos = time.Since(start).Nanoseconds()
@@ -832,6 +846,8 @@ func (v *CollectionReadView) pointRowScanProjection(view columnPhysicalScanSnaps
 // fetches are strict: a missing primary-root document, stale ref, or physical
 // mismatch fails the request instead of silently returning a partial batch.
 func (v *CollectionReadView) FetchDocumentsByRowRef(refs []DocumentRowRef, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
+	endForegroundRead := v.beginForegroundRead()
+	defer endForegroundRead()
 	start := time.Now()
 	response, err := v.fetchDocumentsByRowRef(refs, opts, false)
 	response.Stats.FetchNanos = time.Since(start).Nanoseconds()

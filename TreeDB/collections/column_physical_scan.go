@@ -234,6 +234,7 @@ type columnPhysicalScanSnapshotView struct {
 	ColumnAssetRootDir    string
 	AssetNamespace        string
 	ManifestCatalogBytes  int64
+	snapshot              *backenddb.Snapshot
 }
 
 func columnPhysicalScanSnapshotViewAssetRefs(view columnPhysicalScanSnapshotView) []ColumnAssetRef {
@@ -355,6 +356,7 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewWithContextAndSidecars
 		closeView()
 		return columnPhysicalScanSnapshotView{}, nil, err
 	}
+	view.snapshot = snap
 	return view, closeView, nil
 }
 

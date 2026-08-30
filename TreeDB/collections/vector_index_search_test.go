@@ -1077,6 +1077,217 @@ func TestSearchVectorIndexWithBufferQuantizedOnlyAndRerank2415(t *testing.T) {
 	}
 }
 
+func TestPreparedSearchForegroundLifetimeIdleAndConcurrent(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	tests := []struct {
+		name    string
+		options func(VectorIndexDefinition) VectorIndexSearchOptions
+		search  func(*Collection, VectorIndexSearchOptions) error
+	}{
+		{
+			name: "quantized buffered",
+			options: func(def VectorIndexDefinition) VectorIndexSearchOptions {
+				return VectorIndexSearchOptions{
+					IndexName:          def.Name,
+					Query:              []float32{1, 0, 0},
+					QueryMode:          VectorIndexQueryModeQuantizedOnly,
+					QuantizedIndexName: def.QuantizedIndexes[0].Name,
+					TopK:               1,
+					EfSearch:           len(rows),
+					MaxDecodedBlocks:   1,
+					StatsMode:          VectorIndexSearchStatsModeProduction,
+				}
+			},
+			search: func(col *Collection, opts VectorIndexSearchOptions) error {
+				var buffer VectorIndexSearchBuffer
+				_, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+				return err
+			},
+		},
+		{
+			name: "exact owned no documents",
+			options: func(def VectorIndexDefinition) VectorIndexSearchOptions {
+				return VectorIndexSearchOptions{
+					IndexName:        def.Name,
+					Query:            []float32{1, 0, 0},
+					QueryMode:        VectorIndexQueryModeExact,
+					TopK:             1,
+					EfSearch:         len(rows),
+					MaxDecodedBlocks: 1,
+					StatsMode:        VectorIndexSearchStatsModeProduction,
+				}
+			},
+			search: func(col *Collection, opts VectorIndexSearchOptions) error {
+				_, err := col.SearchVectorIndex(opts)
+				return err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
+			defer func() { _ = d.Close() }()
+			if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+				t.Fatalf("RebuildVectorIndex: %v", err)
+			}
+
+			var begins atomic.Int64
+			var ends atomic.Int64
+			var active atomic.Int64
+			unregister := d.RegisterForegroundReadObserver(func() {}, func() func() {
+				begins.Add(1)
+				active.Add(1)
+				var once sync.Once
+				return func() {
+					once.Do(func() {
+						ends.Add(1)
+						active.Add(-1)
+					})
+				}
+			})
+			defer unregister()
+
+			opts := tc.options(def)
+			if _, err := col.WarmVectorIndexPreparedSearch(opts); err != nil {
+				t.Fatalf("WarmVectorIndexPreparedSearch: %v", err)
+			}
+			if got := active.Load(); got != 0 {
+				t.Fatalf("active foreground reads while prepared cache is idle=%d want 0", got)
+			}
+
+			queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+			if err != nil {
+				t.Fatalf("normalize query mode: %v", err)
+			}
+			slot := collectionVectorIndexPreparedSearchCacheSlotForOptions(opts, queryMode)
+			col.vectorBufferedSearchMu.Lock()
+			entry := col.vectorBufferedSearch[slot]
+			var prepared *collectionVectorIndexPreparedSearch
+			if entry != nil {
+				prepared = entry.prepared
+			}
+			col.vectorBufferedSearchMu.Unlock()
+			if prepared == nil {
+				t.Fatal("warm prepared cache entry is unavailable")
+			}
+
+			entered := make(chan struct{}, 2)
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			releaseSearches := func() { releaseOnce.Do(func() { close(release) }) }
+			defer releaseSearches()
+			prepared.mu.Lock()
+			prepared.searchStartedForTest = func() {
+				entered <- struct{}{}
+				<-release
+			}
+			prepared.mu.Unlock()
+
+			done := make(chan error, 2)
+			for range 2 {
+				go func() {
+					done <- tc.search(col, opts)
+				}()
+			}
+			for i := range 2 {
+				select {
+				case <-entered:
+				case err := <-done:
+					releaseSearches()
+					t.Fatalf("prepared search %d ended before blocking: %v", i, err)
+				case <-time.After(time.Second):
+					releaseSearches()
+					t.Fatalf("prepared search %d did not reach active hook", i)
+				}
+			}
+			if got := active.Load(); got != 2 {
+				releaseSearches()
+				t.Fatalf("active foreground reads during concurrent prepared searches=%d want 2", got)
+			}
+			releaseSearches()
+			for i := range 2 {
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Fatalf("prepared search %d: %v", i, err)
+					}
+				case <-time.After(time.Second):
+					t.Fatalf("prepared search %d did not finish", i)
+				}
+			}
+			if got := active.Load(); got != 0 {
+				t.Fatalf("active foreground reads after prepared searches=%d want 0", got)
+			}
+			if got, want := ends.Load(), begins.Load(); got != want {
+				t.Fatalf("foreground begin/end mismatch=%d/%d", want, got)
+			}
+		})
+	}
+}
+
+func TestPreparedColumnPhysicalQueryForegroundLifetimeIdleAndRun(t *testing.T) {
+	col, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(16))
+	defer closeFn()
+
+	begins, ends, active := 0, 0, 0
+	unregister := col.db.RegisterForegroundReadObserver(func() {}, func() func() {
+		begins++
+		active++
+		return func() {
+			ends++
+			active--
+		}
+	})
+	defer unregister()
+
+	runner, err := col.PrepareColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
+	if err != nil {
+		t.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+	}
+	defer func() { _ = runner.Close() }()
+	if runner.view.snapshot != nil {
+		t.Fatal("prepared runner retained detached snapshot pointer")
+	}
+	if active != 0 || begins != ends {
+		t.Fatalf("foreground begin/end/active after prepare=%d/%d/%d want balanced idle", begins, ends, active)
+	}
+	beginsAfterPrepare := begins
+
+	if _, err := runner.Run(); err != nil {
+		t.Fatalf("runner.Run: %v", err)
+	}
+	if active != 0 || begins != ends || begins != beginsAfterPrepare+1 {
+		t.Fatalf("foreground begin/end/active after run=%d/%d/%d want one balanced operation", begins, ends, active)
+	}
+}
+
+func TestMutationVisibilityScanMarksSnapshotForegroundRead(t *testing.T) {
+	col, closeFn, _ := openColumnPhysicalMutationFixtureM13C(t, 32)
+	defer closeFn()
+
+	begins, ends, active := 0, 0, 0
+	unregister := col.db.RegisterForegroundReadObserver(func() {}, func() func() {
+		begins++
+		active++
+		return func() {
+			ends++
+			active--
+		}
+	})
+	defer unregister()
+
+	if _, err := col.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}); err != nil {
+		t.Fatalf("RunColumnPhysicalQuery: %v", err)
+	}
+	if begins == 0 || begins != ends || active != 0 {
+		t.Fatalf("foreground begin/end/active=%d/%d/%d want nonzero balanced idle", begins, ends, active)
+	}
+}
+
 func TestSearchVectorIndexWithBufferScalarU8PreparedReadersShareQuantizedAsset2621(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

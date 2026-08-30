@@ -2,6 +2,8 @@ package db
 
 import (
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -161,6 +163,176 @@ func TestSnapshotClosedSurfaceRejectsReadsAndInvalidatesAllIterators(t *testing.
 	}
 	if snap.db != nil {
 		t.Fatal("snapshot retained state after final iterator close")
+	}
+}
+
+func TestSnapshotForegroundReadLifetimeFollowsBoundIterator(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := d.SetSync([]byte("key"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+
+	var begins atomic.Int64
+	var ends atomic.Int64
+	var active atomic.Int64
+	unregister := d.RegisterForegroundReadObserver(func() {}, func() func() {
+		begins.Add(1)
+		active.Add(1)
+		return func() {
+			ends.Add(1)
+			active.Add(-1)
+		}
+	})
+	defer unregister()
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	snap.MarkForegroundRead()
+	snap.MarkForegroundRead()
+	if got := begins.Load(); got != 1 {
+		t.Fatalf("foreground begins=%d want 1", got)
+	}
+	if got := active.Load(); got != 1 {
+		t.Fatalf("active foreground reads=%d want 1", got)
+	}
+	it, err := snap.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("Iterator: %v", err)
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatalf("Snapshot.Close: %v", err)
+	}
+	if got := ends.Load(); got != 0 {
+		t.Fatalf("foreground ends after Snapshot.Close=%d want 0 while iterator retains snapshot", got)
+	}
+	if got := active.Load(); got != 1 {
+		t.Fatalf("active foreground reads after Snapshot.Close=%d want 1", got)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Iterator.Close: %v", err)
+	}
+	if got := ends.Load(); got != 1 {
+		t.Fatalf("foreground ends after Iterator.Close=%d want 1", got)
+	}
+	if got := active.Load(); got != 0 {
+		t.Fatalf("active foreground reads after Iterator.Close=%d want 0", got)
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatalf("second Snapshot.Close: %v", err)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("second Iterator.Close: %v", err)
+	}
+	if got := ends.Load(); got != 1 {
+		t.Fatalf("foreground ends after repeated closes=%d want 1", got)
+	}
+}
+
+func TestSnapshotDetachForegroundReadUsesOperationScopedLifetime(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	var begins atomic.Int64
+	var ends atomic.Int64
+	var active atomic.Int64
+	unregister := d.RegisterForegroundReadObserver(func() {}, func() func() {
+		begins.Add(1)
+		active.Add(1)
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				ends.Add(1)
+				active.Add(-1)
+			})
+		}
+	})
+	defer unregister()
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	snap.MarkForegroundRead()
+	snap.DetachForegroundRead()
+	snap.DetachForegroundRead()
+	snap.MarkForegroundRead()
+	if got := active.Load(); got != 0 {
+		t.Fatalf("active foreground reads after detach=%d want 0", got)
+	}
+	if got := begins.Load(); got != 1 {
+		t.Fatalf("foreground begins after detach and remark=%d want 1", got)
+	}
+
+	end := d.BeginForegroundRead()
+	if got := active.Load(); got != 1 {
+		t.Fatalf("active foreground reads during operation=%d want 1", got)
+	}
+	end()
+	end()
+	if got := active.Load(); got != 0 {
+		t.Fatalf("active foreground reads after repeated operation end=%d want 0", got)
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatalf("Snapshot.Close: %v", err)
+	}
+	if got := begins.Load(); got != 2 {
+		t.Fatalf("foreground begins=%d want 2", got)
+	}
+	if got := ends.Load(); got != 2 {
+		t.Fatalf("foreground ends=%d want 2", got)
+	}
+}
+
+func TestSnapshotForegroundReadConcurrentCloseEndsOnce(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	var ends atomic.Int64
+	unregister := d.RegisterForegroundReadObserver(func() {}, func() func() {
+		return func() { ends.Add(1) }
+	})
+	defer unregister()
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	snap.MarkForegroundRead()
+	it, err := snap.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("Iterator: %v", err)
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		_ = snap.Close()
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		_ = it.Close()
+	}()
+	close(start)
+	wg.Wait()
+
+	if got := ends.Load(); got != 1 {
+		t.Fatalf("foreground ends after concurrent close=%d want 1", got)
 	}
 }
 

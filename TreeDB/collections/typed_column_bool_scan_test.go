@@ -54,6 +54,39 @@ func TestTypedColumnBoolPreparedCountsAndDiagnostics(t *testing.T) {
 	}
 }
 
+func TestTypedColumnBoolPreparedForegroundLifetimeIdleAndRun(t *testing.T) {
+	d, col := setupTypedColumnBoolScanCollection(t, false)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnBoolScanRows(t, col, []bool{true, false, true})
+
+	begins, ends, active := 0, 0, 0
+	unregister := d.RegisterForegroundReadObserver(func() {}, func() func() {
+		begins++
+		active++
+		return func() {
+			ends++
+			active--
+		}
+	})
+	defer unregister()
+
+	session, err := col.PrepareTypedColumnBoolPredicateAggregate(TypedColumnBoolPredicateAggregateRequest{Column: "flag", Kind: TypedColumnBoolPredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("PrepareTypedColumnBoolPredicateAggregate: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+	if session.view.snapshot != nil || active != 0 || begins != ends {
+		t.Fatalf("prepared bool snapshot=%p foreground begin/end/active=%d/%d/%d want nil balanced idle", session.view.snapshot, begins, ends, active)
+	}
+	before := begins
+	if _, err := session.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if active != 0 || begins != ends || begins != before+1 {
+		t.Fatalf("foreground begin/end/active after bool Run=%d/%d/%d want one balanced operation", begins, ends, active)
+	}
+}
+
 func TestTypedColumnBoolOneShotVerifyUsesBoolKernel(t *testing.T) {
 	d, col := setupTypedColumnBoolScanCollection(t, false)
 	defer func() { _ = d.Close() }()

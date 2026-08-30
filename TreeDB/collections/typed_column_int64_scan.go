@@ -171,21 +171,22 @@ type TypedColumnInt64PredicateAggregateResult struct {
 // A session is not safe for concurrent Run and Close calls; callers that share a
 // session between goroutines must provide external synchronization.
 type TypedColumnInt64PredicateAggregateSession struct {
-	view               columnPhysicalScanSnapshotView
-	closeView          func()
-	req                TypedColumnInt64PredicateAggregateRequest
-	fields             []TypedStorageField
-	aggregateColumn    typedColumnAdapterColumn
-	schemaHash         uint64
-	refsByGeneration   map[uint64]columnManifestAssetRefForScan
-	validatedRefs      map[ColumnAssetRef]struct{}
-	preparedState      *typedColumnPreparedScanState
-	aggregateScratch   typedColumnInt64PredicateAggregateScanScratch
-	readCache          columnPhysicalAssetReadCache
-	resourceManager    *mappedresource.Manager
-	resolver           *typedColumnLatestRowResolver
-	prepareDiagnostics TypedColumnInt64PredicateScanDiagnostics
-	closed             bool
+	view                columnPhysicalScanSnapshotView
+	closeView           func()
+	req                 TypedColumnInt64PredicateAggregateRequest
+	fields              []TypedStorageField
+	aggregateColumn     typedColumnAdapterColumn
+	schemaHash          uint64
+	refsByGeneration    map[uint64]columnManifestAssetRefForScan
+	validatedRefs       map[ColumnAssetRef]struct{}
+	preparedState       *typedColumnPreparedScanState
+	aggregateScratch    typedColumnInt64PredicateAggregateScanScratch
+	readCache           columnPhysicalAssetReadCache
+	resourceManager     *mappedresource.Manager
+	resolver            *typedColumnLatestRowResolver
+	prepareDiagnostics  TypedColumnInt64PredicateScanDiagnostics
+	beginForegroundRead func() func()
+	closed              bool
 }
 
 // TypedColumnInt64PredicateAggregateSessionDiagnostics reports scoped resource
@@ -375,6 +376,10 @@ func (c *Collection) PrepareTypedColumnInt64PredicateAggregate(req TypedColumnIn
 	session, _, err := c.prepareTypedColumnInt64PredicateAggregateSessionFromView(view, closeView, req)
 	if err != nil {
 		return nil, err
+	}
+	if session.view.snapshot != nil {
+		session.view.snapshot.DetachForegroundRead()
+		session.view.snapshot = nil
 	}
 	release = false
 	return session, nil
@@ -785,6 +790,7 @@ func (c *Collection) prepareTypedColumnInt64PredicateAggregateSessionFromView(vi
 		readCache:        readCache,
 		resourceManager:  mgr,
 	}
+	session.beginForegroundRead = c.db.BeginForegroundRead
 	if session.useTargetedAggregateRanges() {
 		if err := session.prepareTargetedAggregateState(); err != nil {
 			if session.preparedState != nil {
@@ -854,6 +860,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) Close() error {
 	s.validatedRefs = nil
 	s.resolver = nil
 	s.view = columnPhysicalScanSnapshotView{}
+	s.beginForegroundRead = nil
 	var closeErr error
 	if err := s.readCache.close(); err != nil {
 		closeErr = err
@@ -893,6 +900,14 @@ func (s *TypedColumnInt64PredicateAggregateSession) Diagnostics() TypedColumnInt
 // Run executes one hot aggregate scan against the prepared snapshot. Setup and
 // warmup work done before Run is not included in the returned ScanNanos.
 func (s *TypedColumnInt64PredicateAggregateSession) Run() (TypedColumnInt64PredicateAggregateResult, error) {
+	if s == nil || s.closed {
+		return s.run(time.Now(), TypedColumnInt64PredicateScanDiagnostics{})
+	}
+	endForegroundRead := noCollectionForegroundReadEnd
+	if s.beginForegroundRead != nil {
+		endForegroundRead = s.beginForegroundRead()
+	}
+	defer endForegroundRead()
 	return s.run(time.Now(), TypedColumnInt64PredicateScanDiagnostics{})
 }
 

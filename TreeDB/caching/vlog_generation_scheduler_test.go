@@ -28,6 +28,7 @@ type blockingRewritePlannerBackend struct {
 	rewriteCalls  int
 	planCompleted int
 	planCanceled  int
+	planResponse  backenddb.ValueLogRewritePlan
 }
 
 func rewriteChunkPlanForTest(plan backenddb.ValueLogRewritePlan, chunkBytes int64) backenddb.ValueLogRewriteChunkPlan {
@@ -228,8 +229,9 @@ func (b *blockingRewritePlannerBackend) ValueLogRewritePlan(ctx context.Context,
 	case <-b.planBlock:
 		b.mu.Lock()
 		b.planCompleted++
+		plan := b.planResponse
 		b.mu.Unlock()
-		return backenddb.ValueLogRewritePlan{}, nil
+		return plan, nil
 	case <-ctx.Done():
 		b.mu.Lock()
 		b.planCanceled++
@@ -9682,13 +9684,32 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.
 		t.Fatalf("rewrite plan did not start")
 	}
 
-	db.lastForegroundWriteUnixNano.Store(time.Now().UnixNano())
+	stopWrites := make(chan struct{})
+	writesStopped := make(chan struct{})
+	go func() {
+		defer close(writesStopped)
+		ticker := time.NewTicker(foregroundReadStampMaxAge / 4)
+		defer ticker.Stop()
+		db.lastForegroundWriteUnixNano.Store(time.Now().UnixNano())
+		for {
+			select {
+			case <-stopWrites:
+				return
+			case <-db.closeCh:
+				return
+			case now := <-ticker.C:
+				db.lastForegroundWriteUnixNano.Store(now.UnixNano())
+			}
+		}
+	}()
 
 	select {
 	case <-doneMaintenance:
 	case <-time.After(wait):
 		t.Fatalf("maintenance did not cancel after foreground writes resumed")
 	}
+	close(stopWrites)
+	<-writesStopped
 
 	if got := db.vlogGenerationLastRewritePlanUnixNano.Load(); got != 0 {
 		t.Fatalf("last rewrite plan timestamp=%d want=0 after cancellation", got)
@@ -9773,7 +9794,7 @@ func TestVlogGenerationRewritePlan_GraceAllowsShortPlanDuringForegroundResume(t 
 	}
 
 	// Resume foreground activity while the short planner call is in flight.
-	db.noteRead()
+	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
 
 	select {
 	case <-doneMaintenance:
@@ -9794,6 +9815,91 @@ func TestVlogGenerationRewritePlan_GraceAllowsShortPlanDuringForegroundResume(t 
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty"]; got != "1" {
 		t.Fatalf("plan empty=%q want 1", got)
+	}
+}
+
+func TestVlogGenerationRewritePlan_OneShotReadBlipDoesNotCancelLongPlan(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+
+	blocking := &blockingRewritePlannerBackend{
+		DB:        backend,
+		planStart: make(chan struct{}),
+		planBlock: make(chan struct{}),
+	}
+
+	db, err := Open(dir, blocking, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("k1"), make([]byte, 4096)); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	forceVlogMaintenanceIdle(db)
+
+	doneMaintenance := make(chan struct{})
+	go func() {
+		db.maybeRunVlogGenerationMaintenance(false)
+		close(doneMaintenance)
+	}()
+
+	wait := schedulerTestWait(t)
+	select {
+	case <-blocking.planStart:
+	case <-time.After(wait):
+		t.Fatalf("rewrite plan did not start")
+	}
+
+	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
+	staleAndBeyondGrace := vlogGenerationRewritePlanResumeGrace
+	if staleAndBeyondGrace < foregroundReadStampMaxAge {
+		staleAndBeyondGrace = foregroundReadStampMaxAge
+	}
+	staleAndBeyondGrace += foregroundMaintenancePollInterval()
+	select {
+	case <-doneMaintenance:
+		t.Fatalf("rewrite plan canceled after a one-shot read blip")
+	case <-time.After(staleAndBeyondGrace):
+	}
+	blocking.unblockPlan()
+	select {
+	case <-doneMaintenance:
+	case <-time.After(wait):
+		t.Fatalf("long rewrite plan did not complete after one-shot read blip became stale")
+	}
+
+	completed, canceled := blocking.recordedPlanOutcomes()
+	if completed != 1 || canceled != 0 {
+		t.Fatalf("plan outcomes completed=%d canceled=%d want completed=1 canceled=0", completed, canceled)
+	}
+	if got := db.vlogGenerationRewritePlanCanceled.Load(); got != 0 {
+		t.Fatalf("plan canceled=%d want=0", got)
 	}
 }
 
@@ -9959,7 +10065,7 @@ func TestVlogGenerationRewritePlan_CancelBackoffExpires(t *testing.T) {
 	}
 }
 
-func TestVlogGenerationRewritePlan_DoesNotCancelWhenForegroundReadsResume(t *testing.T) {
+func TestVlogGenerationRewritePlan_CancelsForResumedReadsAndRetriesAfterQuiet(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
 	dir := t.TempDir()
@@ -10001,7 +10107,9 @@ func TestVlogGenerationRewritePlan_DoesNotCancelWhenForegroundReadsResume(t *tes
 		t.Fatalf("checkpoint: %v", err)
 	}
 
-	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	const initialTokens = int64(1024)
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(initialTokens)
+	initialConsumed := db.vlogGenerationRewriteBudgetConsumed.Load()
 	forceVlogMaintenanceIdle(db)
 
 	doneMaintenance := make(chan struct{})
@@ -10017,20 +10125,71 @@ func TestVlogGenerationRewritePlan_DoesNotCancelWhenForegroundReadsResume(t *tes
 		t.Fatalf("rewrite plan did not start")
 	}
 
-	db.noteRead()
-	blocking.unblockPlan()
-
+	stopReads := make(chan struct{})
+	readsStopped := make(chan struct{})
+	go func() {
+		defer close(readsStopped)
+		ticker := time.NewTicker(foregroundReadStampMaxAge / 4)
+		defer ticker.Stop()
+		db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
+		for {
+			select {
+			case <-stopReads:
+				return
+			case <-db.closeCh:
+				return
+			case now := <-ticker.C:
+				db.lastForegroundReadUnixNano.Store(now.UnixNano())
+			}
+		}
+	}()
+	select {
+	case <-doneMaintenance:
+		t.Fatalf("rewrite plan canceled before resume grace elapsed")
+	case <-time.After(vlogGenerationRewritePlanResumeGrace / 2):
+	}
 	select {
 	case <-doneMaintenance:
 	case <-time.After(wait):
-		t.Fatalf("maintenance did not complete after foreground reads resumed")
+		t.Fatalf("rewrite plan did not cancel after foreground reads remained resumed through grace")
 	}
+	close(stopReads)
+	<-readsStopped
 
-	if got := db.vlogGenerationRewritePlanCanceled.Load(); got != 0 {
-		t.Fatalf("plan canceled=%d want=0", got)
+	completed, canceled := blocking.recordedPlanOutcomes()
+	if completed != 0 || canceled != 1 {
+		t.Fatalf("plan outcomes completed=%d canceled=%d want completed=0 canceled=1", completed, canceled)
+	}
+	if got := db.vlogGenerationRewriteBudgetTokensBytes.Load(); got != initialTokens {
+		t.Fatalf("tokens after canceled plan=%d want=%d", got, initialTokens)
+	}
+	if got := db.vlogGenerationRewriteBudgetConsumed.Load(); got != initialConsumed {
+		t.Fatalf("consumed budget after canceled plan=%d want=%d", got, initialConsumed)
 	}
 	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
 		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)
+	}
+
+	blocking.mu.Lock()
+	blocking.planResponse = backenddb.ValueLogRewritePlan{
+		SourceFileIDs:     []uint32{11},
+		SelectedBytesLive: 64,
+	}
+	blocking.mu.Unlock()
+	blocking.unblockPlan()
+	db.vlogGenerationRewritePlanCanceledLastNS.Store(time.Now().Add(-2 * vlogGenerationRewritePlanCancelBackoff).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	completed, canceled = blocking.recordedPlanOutcomes()
+	if completed != 1 || canceled != 1 {
+		t.Fatalf("plan outcomes after quiet retry completed=%d canceled=%d want completed=1 canceled=1", completed, canceled)
+	}
+	if got := blocking.recordedRewriteCalls(); got != 1 {
+		t.Fatalf("rewrite calls after quiet retry=%d want=1", got)
+	}
+	if got := db.vlogGenerationRewriteBudgetConsumed.Load(); got != initialConsumed+64 {
+		t.Fatalf("consumed budget after quiet retry=%d want=%d", got, initialConsumed+64)
 	}
 }
 
@@ -10093,7 +10252,7 @@ func TestVlogGenerationRewritePlan_ForegroundReadsStillRunForcedGC(t *testing.T)
 	}
 
 	// Resume foreground read activity while a forced-GC maintenance pass is active.
-	db.noteRead()
+	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
 	blocking.unblockPlan()
 
 	select {

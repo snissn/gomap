@@ -291,6 +291,22 @@ func TestIteratorTracksActiveForegroundIterators(t *testing.T) {
 	}
 }
 
+func TestBeginRawForegroundReadEndIsIdempotent(t *testing.T) {
+	db := &DB{}
+	end := db.beginRawForegroundRead()
+	if got := db.activeForegroundIterators.Load(); got != 1 {
+		t.Fatalf("activeForegroundIterators after begin=%d want=1", got)
+	}
+	if got := db.lastForegroundReadUnixNano.Load(); got == 0 {
+		t.Fatal("raw foreground read did not update read activity")
+	}
+	end()
+	end()
+	if got := db.activeForegroundIterators.Load(); got != 0 {
+		t.Fatalf("activeForegroundIterators after repeated end=%d want=0", got)
+	}
+}
+
 func deleteMutable(db *DB, key []byte) {
 	shard := db.shardForKey(key)
 	shard.mu.Lock()

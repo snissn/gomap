@@ -131,6 +131,7 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 		return VectorIndexStatus{}, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
+	snap.MarkForegroundRead()
 	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
 	if err != nil {
 		return VectorIndexStatus{}, err
