@@ -7772,6 +7772,7 @@ func TestVlogGenerationRewriteAgeBlocked_ParksDuringAutomaticCheckpoint(t *testi
 		}
 		time.Sleep(time.Millisecond)
 	}
+	deadline = time.Now().Add(schedulerTestWait(t))
 	for db.vlogGenerationMaintenanceActive.Load() {
 		if time.Now().After(deadline) {
 			t.Fatal("second parked age wake did not release scheduler")
@@ -7782,6 +7783,7 @@ func TestVlogGenerationRewriteAgeBlocked_ParksDuringAutomaticCheckpoint(t *testi
 	db.checkpointing.Store(false)
 	db.checkpointCond.Broadcast()
 	db.checkpointMu.Unlock()
+	deadline = time.Now().Add(schedulerTestWait(t))
 	for db.vlogGenerationDeferredMaintenanceRunning.Load() {
 		if time.Now().After(deadline) {
 			t.Fatal("parked deferred runner did not exit before periodic fallback")
