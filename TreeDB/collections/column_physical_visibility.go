@@ -39,6 +39,7 @@ func (c *Collection) scanColumnPhysicalVisibleRowsWithReadIntegrity(projected []
 		return columnPhysicalVisibilityResult{}, errCollectionDBNil
 	}
 	defer func() { _ = snap.Close() }()
+	snap.MarkForegroundRead()
 	c.catalogMu.RLock()
 	collectionName := c.meta.Name
 	c.catalogMu.RUnlock()

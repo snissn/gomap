@@ -1229,6 +1229,62 @@ func TestPreparedSearchForegroundLifetimeIdleAndConcurrent(t *testing.T) {
 	}
 }
 
+func TestPreparedColumnPhysicalQueryForegroundLifetimeIdleAndRun(t *testing.T) {
+	col, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(16))
+	defer closeFn()
+
+	begins, ends, active := 0, 0, 0
+	unregister := col.db.RegisterForegroundReadObserver(func() {}, func() func() {
+		begins++
+		active++
+		return func() {
+			ends++
+			active--
+		}
+	})
+	defer unregister()
+
+	runner, err := col.PrepareColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
+	if err != nil {
+		t.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+	}
+	defer func() { _ = runner.Close() }()
+	if active != 0 || begins != ends {
+		t.Fatalf("foreground begin/end/active after prepare=%d/%d/%d want balanced idle", begins, ends, active)
+	}
+	beginsAfterPrepare := begins
+
+	if _, err := runner.Run(); err != nil {
+		t.Fatalf("runner.Run: %v", err)
+	}
+	if active != 0 || begins != ends || begins != beginsAfterPrepare+1 {
+		t.Fatalf("foreground begin/end/active after run=%d/%d/%d want one balanced operation", begins, ends, active)
+	}
+}
+
+func TestMutationVisibilityScanMarksSnapshotForegroundRead(t *testing.T) {
+	col, closeFn, _ := openColumnPhysicalMutationFixtureM13C(t, 32)
+	defer closeFn()
+
+	begins, ends, active := 0, 0, 0
+	unregister := col.db.RegisterForegroundReadObserver(func() {}, func() func() {
+		begins++
+		active++
+		return func() {
+			ends++
+			active--
+		}
+	})
+	defer unregister()
+
+	if _, err := col.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}); err != nil {
+		t.Fatalf("RunColumnPhysicalQuery: %v", err)
+	}
+	if begins == 0 || begins != ends || active != 0 {
+		t.Fatalf("foreground begin/end/active=%d/%d/%d want nonzero balanced idle", begins, ends, active)
+	}
+}
+
 func TestSearchVectorIndexWithBufferScalarU8PreparedReadersShareQuantizedAsset2621(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
