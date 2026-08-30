@@ -69,6 +69,9 @@ func TestColumnHNSWPreparedScalarU8RerankScratchReuse4227(t *testing.T) {
 	for i := range want {
 		want[i].ID = append([]byte(nil), want[i].ID...)
 	}
+	if !collectionsRaceEnabled && !enterIsolatedVectorAllocationGate(t, "prepared-scalar-u8-rerank-scratch") {
+		return
+	}
 
 	allocs := testing.AllocsPerRun(100, func() {
 		got, stats, searchErr := reader.SearchCosineScalarU8PreparedTraversal(pack, query, opts, &scratch)
@@ -173,6 +176,9 @@ func TestColumnHNSWPreparedScalarU8RawDotRerankScratchReuse4227(t *testing.T) {
 	want := append([]columnVectorGraphNativeSearchResult(nil), wantResults...)
 	for i := range want {
 		want[i].ID = append([]byte(nil), want[i].ID...)
+	}
+	if !collectionsRaceEnabled && !enterIsolatedVectorAllocationGate(t, "prepared-scalar-u8-raw-dot-rerank-scratch") {
+		return
 	}
 
 	allocs := testing.AllocsPerRun(100, func() {
