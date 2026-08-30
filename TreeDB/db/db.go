@@ -3837,8 +3837,14 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 	unlockCommandWALPublish := db.lockCommandWALRawPublish()
 	rotated, advanced, err := db.closeCommandWALCheckpointPrefix()
 	unlockCommandWALPublish()
-	if err != nil || (!rotated && !advanced) {
+	if err != nil {
 		return err
+	}
+	// A durable root can advance between automatic passes without another
+	// command-WAL append. Recheck already-closed segments in that case; the
+	// closed-byte counter avoids a cleanup scan for a truly idle journal.
+	if !rotated && !advanced && db.commandWALClosedBytes.Load() <= 0 {
+		return nil
 	}
 	return db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(false)
 }

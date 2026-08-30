@@ -2,6 +2,8 @@ package db
 
 import (
 	"bytes"
+	"context"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -150,6 +152,75 @@ func TestMaintainCommandWALCoveredPrefixPinsTeardown(t *testing.T) {
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestMaintainCommandWALCoveredPrefixRetriesClosedSegmentsAfterCoverageAdvance(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir:                          dir,
+		CommandWAL:                   true,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWALSegmentTargetBytes: 1,
+		DisableBackgroundPrune:       true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := d.Set([]byte("covered-prefix"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := d.MaintainCommandWALCoveredPrefix(); err != nil {
+		t.Fatalf("first MaintainCommandWALCoveredPrefix: %v", err)
+	}
+	if d.commandWALClosedBytes.Load() <= 0 {
+		t.Fatalf("closed command WAL bytes=%d, want retained rotated segment", d.commandWALClosedBytes.Load())
+	}
+
+	state := d.State()
+	if state == nil || state.AppliedCommandLSN == 0 {
+		t.Fatalf("state after first maintenance=%+v, want applied command WAL coverage", state)
+	}
+	if err := d.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, state.AppliedCommandLSN, nil, true); err != nil {
+		t.Fatalf("advance durable root coverage: %v", err)
+	}
+	if err := d.rootPublication.coordinator.WaitThrough(context.Background(), d.State().CommitSeq); err != nil {
+		t.Fatalf("wait durable root coverage: %v", err)
+	}
+	if err := d.RefreshCommandWALCheckpointFallback(); err != nil {
+		t.Fatalf("advance fallback durable root coverage without WAL append: %v", err)
+	}
+	proof, err := d.captureDurableWALCleanupProofV1()
+	if err != nil {
+		t.Fatalf("capture cleanup proof after coverage advance: %v", err)
+	}
+	if proof.cleanupThrough < state.AppliedCommandLSN || proof.rootCount != 2 {
+		t.Fatalf("coverage proof: through=%d roots=%d, want two roots through %d", proof.cleanupThrough, proof.rootCount, state.AppliedCommandLSN)
+	}
+	if err := d.MaintainCommandWALCoveredPrefix(); err != nil {
+		t.Fatalf("second MaintainCommandWALCoveredPrefix: %v", err)
+	}
+	if d.commandWALClosedBytes.Load() != 0 {
+		t.Fatalf("closed command WAL bytes=%d, want covered segment removed without new append", d.commandWALClosedBytes.Load())
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(Options{Dir: dir, CommandWAL: true, Durability: DurabilityWALOnRelaxed, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	got, err := reopened.Get([]byte("covered-prefix"))
+	if err != nil {
+		t.Fatalf("Get after reopen: %v", err)
+	}
+	if !bytes.Equal(got, []byte("value")) {
+		t.Fatalf("Get after reopen=%q want value", got)
+	}
+	if entries, err := os.ReadDir(WALDirPath(dir)); err != nil || len(entries) == 0 {
+		t.Fatalf("command WAL after cleanup entries=%v err=%v, want active successor", entries, err)
 	}
 }
 
