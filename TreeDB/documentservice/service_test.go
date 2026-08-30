@@ -128,7 +128,8 @@ func TestServiceRawBackendReadsAdvanceCachedForegroundActivity(t *testing.T) {
 		}
 		return err
 	})
-	if _, err := manager.OpenCollection("docs"); err != nil {
+	col, err := manager.OpenCollection("docs")
+	if err != nil {
 		t.Fatalf("warm cached collection open: %v", err)
 	}
 	assertAdvances("cached collection open", func() error {
@@ -137,6 +138,74 @@ func TestServiceRawBackendReadsAdvanceCachedForegroundActivity(t *testing.T) {
 	})
 	assertAdvances("bounded collection list", func() error {
 		_, _, err := manager.ListCollectionsBounded(1)
+		return err
+	})
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{
+		Documents: []Document{{ID: "long-scan", Embedding: []float32{1, 0}}},
+	}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	readActive := func() int64 {
+		t.Helper()
+		const activeKey = "treedb.cache.vlog_generation.maintenance.foreground_active_iterators"
+		var active int64
+		if _, err := fmt.Sscan(stats()[activeKey], &active); err != nil {
+			t.Fatalf("parse %s: %v", activeKey, err)
+		}
+		return active
+	}
+	assertLongRawScan := func(name string, scan func(func() (bool, error)) error) {
+		t.Helper()
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		releaseScan := func() { releaseOnce.Do(func() { close(release) }) }
+		defer releaseScan()
+		done := make(chan error, 1)
+		go func() {
+			done <- scan(func() (bool, error) {
+				close(entered)
+				<-release
+				return true, nil
+			})
+		}()
+		select {
+		case <-entered:
+		case err := <-done:
+			t.Fatalf("%s ended before callback: %v", name, err)
+		case <-time.After(time.Second):
+			t.Fatalf("%s did not reach callback", name)
+		}
+		if got := readActive(); got != 1 {
+			releaseScan()
+			<-done
+			t.Fatalf("%s active foreground reads=%d want 1", name, got)
+		}
+		time.Sleep(300 * time.Millisecond)
+		if got := readActive(); got != 1 {
+			releaseScan()
+			<-done
+			t.Fatalf("%s active foreground reads after read timestamp aged=%d want 1", name, got)
+		}
+		releaseScan()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s did not finish", name)
+		}
+		if got := readActive(); got != 0 {
+			t.Fatalf("%s active foreground reads after completion=%d want 0", name, got)
+		}
+	}
+	assertLongRawScan("ScanDocumentIDsFunc", func(block func() (bool, error)) error {
+		_, err := col.ScanDocumentIDsFunc(1, func([]byte) (bool, error) { return block() })
+		return err
+	})
+	assertLongRawScan("ScanDocumentsFunc", func(block func() (bool, error)) error {
+		_, err := col.ScanDocumentsFunc(1, func(collections.DocumentRecord) (bool, error) { return block() })
 		return err
 	})
 }

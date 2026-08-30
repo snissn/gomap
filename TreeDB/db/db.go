@@ -1554,6 +1554,8 @@ type Snapshot struct {
 	readState               atomic.Uint64
 	iteratorMu              sync.Mutex
 	iterators               map[*snapshotBoundIterator]struct{}
+	foregroundReadMarked    bool
+	foregroundReadEnd       func()
 	treePager               *pager.Pager
 	treeRoot                uint64
 	// registryShardHint is used to route reader registrations to a stable fast
@@ -1806,6 +1808,25 @@ func (s *Snapshot) releaseLeafGenerationPins() {
 	s.leafGenerationRefs = s.leafGenerationRefs[:0]
 }
 
+// MarkForegroundRead keeps a logical collection read active until this
+// snapshot and every iterator bound to it have released their pinned state.
+// Repeated calls on the same snapshot are idempotent.
+func (s *Snapshot) MarkForegroundRead() {
+	if s == nil {
+		return
+	}
+	s.iteratorMu.Lock()
+	if s.closed.Load() || s.foregroundReadMarked {
+		s.iteratorMu.Unlock()
+		return
+	}
+	s.foregroundReadMarked = true
+	if s.db != nil {
+		s.foregroundReadEnd = s.db.beginForegroundRead()
+	}
+	s.iteratorMu.Unlock()
+}
+
 // Close releases the snapshot.
 func (s *Snapshot) Close() error {
 	if s == nil {
@@ -1828,6 +1849,9 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 		s.iteratorMu.Unlock()
 		return nil
 	}
+	endForegroundRead := s.foregroundReadEnd
+	s.foregroundReadEnd = nil
+	s.foregroundReadMarked = false
 	s.iteratorMu.Unlock()
 	var err error
 	if s.vlogPinned && s.state != nil && s.state.ValueLogSet != nil && s.vlogManager != nil {
@@ -1853,6 +1877,9 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 		s.stableIndexCapture = false
 	}
 	s.stableIndexCaptureCounter = nil
+	if endForegroundRead != nil {
+		endForegroundRead()
+	}
 	if s.db != nil {
 		s.db.snapPool.Put(s)
 	}

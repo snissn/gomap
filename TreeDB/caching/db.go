@@ -8130,7 +8130,7 @@ type logicalOrderedRootObserverRegistrar interface {
 }
 
 type foregroundReadObserverRegistrar interface {
-	RegisterForegroundReadObserver(func()) func()
+	RegisterForegroundReadObserver(func(), func() func()) func()
 }
 
 func backendPublicationReady(backend BackendDB) error {
@@ -12972,7 +12972,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		db.unregisterLogicalOrderedRootObserver = registrar.RegisterLogicalOrderedRootPublicationObserver(db.noteWrite)
 	}
 	if registrar, ok := backend.(foregroundReadObserverRegistrar); ok {
-		db.unregisterForegroundReadObserver = registrar.RegisterForegroundReadObserver(db.noteRead)
+		db.unregisterForegroundReadObserver = registrar.RegisterForegroundReadObserver(db.noteRead, db.beginRawForegroundRead)
 	}
 
 	// Start background flusher
@@ -13743,6 +13743,20 @@ func (db *DB) noteRead() {
 		}
 	}
 	db.lastForegroundReadUnixNano.Store(now)
+}
+
+func (db *DB) beginRawForegroundRead() func() {
+	if db == nil {
+		return func() {}
+	}
+	db.noteRead()
+	db.activeForegroundIterators.Add(1)
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			db.activeForegroundIterators.Add(-1)
+		})
+	}
 }
 
 type autoCheckpointMode uint8

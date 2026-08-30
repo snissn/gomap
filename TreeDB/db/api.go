@@ -34,20 +34,23 @@ type GetManyViewFunc = tree.GetManyViewFunc
 type foregroundReadObserver struct {
 	id     uint64
 	notify func()
+	begin  func() func()
 }
 
 // RegisterForegroundReadObserver installs the cached layer's observer for
-// logical collection reads routed through this raw backend. The returned
-// function removes this exact registration.
-func (db *DB) RegisterForegroundReadObserver(observer func()) func() {
-	if db == nil || observer == nil {
+// logical collection reads routed through this raw backend. begin returns an
+// idempotent function that ends a snapshot-backed read. The returned
+// registration function removes this exact observer.
+func (db *DB) RegisterForegroundReadObserver(notify func(), begin func() func()) func() {
+	if db == nil || notify == nil || begin == nil {
 		return func() {}
 	}
 	db.foregroundReadObserverMu.Lock()
 	db.foregroundReadObserverID++
 	registration := &foregroundReadObserver{
 		id:     db.foregroundReadObserverID,
-		notify: observer,
+		notify: notify,
+		begin:  begin,
 	}
 	db.foregroundReadObserver.Store(registration)
 	db.foregroundReadObserverMu.Unlock()
@@ -64,9 +67,9 @@ func (db *DB) RegisterForegroundReadObserver(observer func()) func() {
 	}
 }
 
-// NotifyForegroundRead forwards one logical collection read to the cached
-// scheduler without classifying backend-internal maintenance scans as
-// foreground work.
+// NotifyForegroundRead forwards one instantaneous logical collection read to
+// the cached scheduler without classifying backend-internal maintenance scans
+// as foreground work.
 func (db *DB) NotifyForegroundRead() {
 	if db == nil {
 		return
@@ -74,6 +77,16 @@ func (db *DB) NotifyForegroundRead() {
 	if observer := db.foregroundReadObserver.Load(); observer != nil {
 		observer.notify()
 	}
+}
+
+func (db *DB) beginForegroundRead() func() {
+	if db == nil {
+		return nil
+	}
+	if observer := db.foregroundReadObserver.Load(); observer != nil {
+		return observer.begin()
+	}
+	return nil
 }
 
 func getManyArenaCap(keyCount int) int {

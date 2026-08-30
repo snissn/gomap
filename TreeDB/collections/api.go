@@ -3615,9 +3615,6 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 	if err := ValidateCollectionName(name); err != nil {
 		return nil, err
 	}
-	if commandWALIntent == nil {
-		m.db.NotifyForegroundRead()
-	}
 	coveredCommandWALIntent := commandWALIntent != nil && commandWALIntent.AssignedLSN() != 0
 	if collection, ok := m.openCollectionFromWriteDomainCache(name); ok {
 		if m.db.IsClosing() {
@@ -3627,6 +3624,9 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 			if err := validateColumnStoreProfileSupportForDB(m.db, collection.meta.Options.ColumnStore, "open"); err != nil {
 				return nil, err
 			}
+		}
+		if commandWALIntent == nil {
+			m.db.NotifyForegroundRead()
 		}
 		return collection, nil
 	}
@@ -3638,6 +3638,9 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
+	}
+	if commandWALIntent == nil {
+		snap.MarkForegroundRead()
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := loadCollectionCatalog(snap, name)
@@ -3763,11 +3766,11 @@ func (m *CollectionManager) ListCollectionsBounded(maxCollections int) ([]Collec
 	if m.db == nil {
 		return nil, false, errCollectionDBNil
 	}
-	m.db.NotifyForegroundRead()
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, false, backenddb.ErrClosed
 	}
+	snap.MarkForegroundRead()
 	defer func() { _ = snap.Close() }()
 	state, ok := snap.StateToken()
 	if !ok || state.SystemRootPageID == 0 {
@@ -19360,9 +19363,7 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLockState(snap *backenddb.
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}
-	if c != nil && c.db != nil {
-		c.db.NotifyForegroundRead()
-	}
+	snap.MarkForegroundRead()
 	systemRoot := snapshotSystemRoot(snap)
 	commitSeq := snapshotCommitSeq(snap)
 
