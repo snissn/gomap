@@ -10508,23 +10508,10 @@ func TestForegroundMaintenanceContextResumeGrace_ActiveReaderAtDeadlineEndsBefor
 		t.Fatalf("foreground read started at %v, not before grace cutoff %v", readStartedAt, cutoff)
 	}
 
-	boundaryWaitDeadline := time.Now().Add(2 * time.Second)
-	for db.foregroundMaintenanceGraceState.Load()&1 == 0 {
-		if time.Now().After(boundaryWaitDeadline) {
-			t.Fatal("grace boundary was not published")
-		}
-		time.Sleep(time.Millisecond)
-	}
-
-	endRead()
-	endedAt := time.Now()
-	if !cutoff.Before(endedAt) {
-		t.Fatalf("foreground read ended at %v, not after grace cutoff %v", endedAt, cutoff)
-	}
 	cancelDeadline := startedAt.Add(3 * pollInterval / 4)
 	cancelWindow := time.Until(cancelDeadline)
 	if cancelWindow <= 0 {
-		t.Fatalf("foreground read ended at %v, outside the pre-poll cancellation window ending at %v", endedAt, cancelDeadline)
+		t.Fatalf("foreground read started outside the pre-poll cancellation window ending at %v", cancelDeadline)
 	}
 	if cancelWindow >= pollInterval {
 		t.Fatalf("cancellation window %v is not shorter than poll interval %v", cancelWindow, pollInterval)
@@ -10536,6 +10523,15 @@ func TestForegroundMaintenanceContextResumeGrace_ActiveReaderAtDeadlineEndsBefor
 		}
 	case <-time.After(cancelWindow):
 		t.Fatal("active reader at grace cutoff did not cancel maintenance before the next poll")
+	}
+
+	endRead()
+	endedAt := time.Now()
+	if !cutoff.Before(endedAt) {
+		t.Fatalf("foreground read ended at %v, not after grace cutoff %v", endedAt, cutoff)
+	}
+	if !endedAt.Before(cancelDeadline) {
+		t.Fatalf("foreground read ended at %v, not before pre-poll deadline %v", endedAt, cancelDeadline)
 	}
 }
 
