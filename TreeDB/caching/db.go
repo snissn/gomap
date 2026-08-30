@@ -13693,9 +13693,6 @@ func (db *DB) vlogGenerationRewritePlanContext(timeout time.Duration, opts vlogG
 }
 
 func (db *DB) noteForegroundMaintenanceGraceActivity(now int64) {
-	if db == nil {
-		return
-	}
 	if deadline := db.foregroundMaintenanceGraceDeadlineUnixNano.Load(); deadline > 0 && now >= deadline {
 		db.foregroundMaintenanceGraceActivity.Add(1)
 	}
@@ -13775,6 +13772,14 @@ func (db *DB) noteRead() {
 	db.lastForegroundReadUnixNano.Store(now)
 }
 
+func (db *DB) beginForegroundRead() {
+	if db == nil {
+		return
+	}
+	db.noteRead()
+	db.activeForegroundIterators.Add(1)
+}
+
 func (db *DB) endForegroundRead() {
 	if db == nil {
 		return
@@ -13789,8 +13794,7 @@ func (db *DB) beginRawForegroundRead() func() {
 	if db == nil {
 		return func() {}
 	}
-	db.noteRead()
-	db.activeForegroundIterators.Add(1)
+	db.beginForegroundRead()
 	var once sync.Once
 	return func() {
 		once.Do(db.endForegroundRead)
@@ -29742,7 +29746,8 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
 	key = normalizeRawKVPointKey(key)
-	db.noteRead()
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 	view := db.retainMemtableView()
 	bypass := db.canBypassMemtableRead(view, key)
 	if view != nil {
@@ -29817,7 +29822,8 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	if len(keys) == 0 {
 		return make([][]byte, 0), nil
 	}
-	db.noteRead()
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 
 	// Fast path: no mutable/queued state and all touched mutable shards are
 	// observably empty, so we can delegate to backend single-snapshot GetMany.
@@ -29922,7 +29928,8 @@ func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 	if len(keys) == 0 {
 		return nil
 	}
-	db.noteRead()
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 
 	view := db.retainMemtableView()
 	bypass := db.canBypassMemtableReadMany(view, keys)
@@ -29985,6 +29992,8 @@ func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	key = normalizeRawKVPointKey(key)
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 	// 1. Memtable
 	out, found, err := db.getMemtableAppend(key, dst)
 	if err != nil {
@@ -30003,7 +30012,8 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 
 func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {
 	key = normalizeRawKVPointKey(key)
-	db.noteRead()
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 	out, revision, found, err := db.getMemtableAppendWithRevision(key, dst)
 	if err != nil {
 		return dst, revision, err
@@ -30024,7 +30034,8 @@ func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, e
 
 func (db *DB) Has(key []byte) (bool, error) {
 	key = normalizeRawKVPointKey(key)
-	db.noteRead()
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 	view := db.retainMemtableView()
 	if view != nil {
 		defer db.releaseMemtableView(view)
@@ -30057,6 +30068,8 @@ func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
 	if len(keys) == 0 {
 		return out, nil
 	}
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 	provider, ok := db.backend.(backendSnapshotProvider)
 	if !ok {
 		for i, key := range keys {
@@ -32959,7 +32972,8 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	if iteratorDebug {
 		db.iteratorCallsTotal.Add(1)
 	}
-	db.noteRead()
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 	if err := db.ensureBackendRange(); err != nil {
 		return nil, err
 	}
@@ -33259,7 +33273,7 @@ func (db *DB) wrapForegroundIterator(it merging.Iterator) merging.Iterator {
 	if tracked, ok := it.(*foregroundTrackedIterator); ok {
 		return tracked
 	}
-	db.activeForegroundIterators.Add(1)
+	db.beginForegroundRead()
 	return &foregroundTrackedIterator{Iterator: it, db: db}
 }
 
@@ -33394,7 +33408,8 @@ func (it *concatUnsafeIterator) Error() error {
 func (it *concatUnsafeIterator) Domain() (start, end []byte) { return nil, nil }
 
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
-	db.noteRead()
+	db.beginForegroundRead()
+	defer db.endForegroundRead()
 	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}

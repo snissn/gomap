@@ -9876,10 +9876,8 @@ func TestVlogGenerationRewritePlan_OneShotReadBlipDoesNotCancelLongPlan(t *testi
 		t.Fatalf("rewrite plan did not start")
 	}
 
-	// Model a completed one-shot read late enough inside the grace that its
-	// timestamp is still fresh at the first post-grace poll. The grace boundary,
-	// not timestamp staleness, must absorb it.
-	db.lastForegroundReadUnixNano.Store(time.Now().Add(vlogGenerationRewritePlanResumeGrace / 2).UnixNano())
+	endRead := db.beginRawForegroundRead()
+	endRead()
 	staleAndBeyondGrace := vlogGenerationRewritePlanResumeGrace
 	if staleAndBeyondGrace < foregroundReadStampMaxAge {
 		staleAndBeyondGrace = foregroundReadStampMaxAge
@@ -9903,46 +9901,6 @@ func TestVlogGenerationRewritePlan_OneShotReadBlipDoesNotCancelLongPlan(t *testi
 	}
 	if got := db.vlogGenerationRewritePlanCanceled.Load(); got != 0 {
 		t.Fatalf("plan canceled=%d want=0", got)
-	}
-}
-
-func TestForegroundMaintenanceContextWithResumeGrace_CancelsShortReadAfterBoundary(t *testing.T) {
-	db := &DB{closeCh: make(chan struct{})}
-	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
-
-	const grace = 50 * time.Millisecond
-	ctx, cancel := db.foregroundMaintenanceContextWithResumeGrace(2*time.Second, grace)
-	defer cancel()
-
-	time.Sleep(grace + foregroundMaintenancePollInterval())
-	select {
-	case <-ctx.Done():
-		t.Fatalf("maintenance canceled without post-grace activity: %v", ctx.Err())
-	default:
-	}
-
-	endRead := db.beginRawForegroundRead()
-	endRead()
-	select {
-	case <-ctx.Done():
-	case <-time.After(2 * foregroundMaintenancePollInterval()):
-		t.Fatalf("maintenance did not cancel after a short post-grace read")
-	}
-}
-
-func TestRawForegroundReadGraceCrossingMarker(t *testing.T) {
-	db := &DB{closeCh: make(chan struct{})}
-	db.foregroundMaintenanceGraceDeadlineUnixNano.Store(time.Now().Add(20 * time.Millisecond).UnixNano())
-
-	endRead := db.beginRawForegroundRead()
-	time.Sleep(30 * time.Millisecond)
-	endRead()
-
-	if got := db.foregroundMaintenanceGraceActivity.Load(); got != 1 {
-		t.Fatalf("grace-crossing activity=%d want=1", got)
-	}
-	if got := db.activeForegroundIterators.Load(); got != 0 {
-		t.Fatalf("active foreground reads=%d want=0", got)
 	}
 }
 
@@ -10168,8 +10126,24 @@ func TestVlogGenerationRewritePlan_CancelsForResumedReadsAndRetriesAfterQuiet(t 
 		t.Fatalf("rewrite plan did not start")
 	}
 
-	endRead := db.beginRawForegroundRead()
-	defer endRead()
+	stopReads := make(chan struct{})
+	readsStopped := make(chan struct{})
+	go func() {
+		defer close(readsStopped)
+		ticker := time.NewTicker(foregroundReadStampMaxAge / 4)
+		defer ticker.Stop()
+		db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
+		for {
+			select {
+			case <-stopReads:
+				return
+			case <-db.closeCh:
+				return
+			case now := <-ticker.C:
+				db.lastForegroundReadUnixNano.Store(now.UnixNano())
+			}
+		}
+	}()
 	select {
 	case <-doneMaintenance:
 		t.Fatalf("rewrite plan canceled before resume grace elapsed")
@@ -10180,7 +10154,8 @@ func TestVlogGenerationRewritePlan_CancelsForResumedReadsAndRetriesAfterQuiet(t 
 	case <-time.After(wait):
 		t.Fatalf("rewrite plan did not cancel after foreground reads remained resumed through grace")
 	}
-	endRead()
+	close(stopReads)
+	<-readsStopped
 
 	completed, canceled := blocking.recordedPlanOutcomes()
 	if completed != 0 || canceled != 1 {

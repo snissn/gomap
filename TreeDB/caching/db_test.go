@@ -321,7 +321,6 @@ func deleteMutable(db *DB, key []byte) {
 
 func TestWrapForegroundIterator_AvoidsDoubleWrapAndCloseIsIdempotent(t *testing.T) {
 	db := &DB{closeCh: make(chan struct{})}
-	db.foregroundMaintenanceGraceDeadlineUnixNano.Store(time.Now().Add(-time.Millisecond).UnixNano())
 	base := &MockIterator{}
 	wrapped := db.wrapForegroundIterator(base)
 	if got := db.activeForegroundIterators.Load(); got != 1 {
@@ -334,6 +333,7 @@ func TestWrapForegroundIterator_AvoidsDoubleWrapAndCloseIsIdempotent(t *testing.
 	if got := db.activeForegroundIterators.Load(); got != 1 {
 		t.Fatalf("activeForegroundIterators after second wrap=%d want=1", got)
 	}
+	db.foregroundMaintenanceGraceDeadlineUnixNano.Store(time.Now().Add(-time.Millisecond).UnixNano())
 	if err := wrappedAgain.Close(); err != nil {
 		t.Fatalf("close wrapped iterator: %v", err)
 	}
