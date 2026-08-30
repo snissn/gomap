@@ -1495,6 +1495,62 @@ type rewriteBudgetRecordingBackend struct {
 	leafPackErr       error
 }
 
+// queuedRewriteBoundaryBackend deliberately exposes only the rewrite and
+// checkpoint capabilities needed by the queued-follow-up test. In particular,
+// it does not expose ValueLogGC, so a successful rewrite cannot add the
+// separate observed-source reclaim checkpoint to this boundary assertion.
+type queuedRewriteBoundaryBackend struct {
+	BackendDB
+	recorder *rewriteBudgetRecordingBackend
+
+	mu              sync.Mutex
+	checkpointCalls int
+	vacuumCalls     int
+}
+
+func (b *queuedRewriteBoundaryBackend) Checkpoint() error {
+	b.mu.Lock()
+	b.checkpointCalls++
+	b.mu.Unlock()
+	return b.recorder.DB.Checkpoint()
+}
+
+func (b *queuedRewriteBoundaryBackend) SetValueLogAppender(appender backenddb.ValueLogAppender) {
+	b.recorder.DB.SetValueLogAppender(appender)
+}
+
+func (b *queuedRewriteBoundaryBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
+	return b.recorder.ValueLogRewritePlan(ctx, opts)
+}
+
+func (b *queuedRewriteBoundaryBackend) ValueLogRewriteChunkPlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions, chunkBytes int64) (backenddb.ValueLogRewriteChunkPlan, error) {
+	return b.recorder.ValueLogRewriteChunkPlan(ctx, opts, chunkBytes)
+}
+
+func (b *queuedRewriteBoundaryBackend) ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error) {
+	return b.recorder.ValueLogRewriteOnline(ctx, opts)
+}
+
+func (b *queuedRewriteBoundaryBackend) VacuumIndexOnline(context.Context) error {
+	b.mu.Lock()
+	b.vacuumCalls++
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *queuedRewriteBoundaryBackend) resetBoundaryCalls() {
+	b.mu.Lock()
+	b.checkpointCalls = 0
+	b.vacuumCalls = 0
+	b.mu.Unlock()
+}
+
+func (b *queuedRewriteBoundaryBackend) boundaryCalls() (checkpointCalls, vacuumCalls int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.checkpointCalls, b.vacuumCalls
+}
+
 func (b *rewriteBudgetRecordingBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
 	b.mu.Lock()
 	b.planOpts = cloneRewriteOptsForTest(opts)
@@ -1974,9 +2030,9 @@ func leafPackWindowExhaustingStats(genID uint64, expectedReclaimBytes int64, cop
 	}
 }
 
-func openRewriteQueueTestDB(t *testing.T, dir string, recorder *rewriteBudgetRecordingBackend) (*DB, func()) {
+func openRewriteQueueTestDB(t *testing.T, dir string, backend BackendDB) (*DB, func()) {
 	t.Helper()
-	db, err := Open(dir, recorder, Options{
+	db, err := Open(dir, backend, Options{
 		AllowUnsafe:                      true,
 		DisableWAL:                       true,
 		JournalLanes:                     1,
@@ -8088,15 +8144,71 @@ func TestCheckpoint_AutomaticKickDoesNotForceBackendCheckpoint(t *testing.T) {
 }
 
 func TestVlogGenerationAutomaticCheckpointKickPreservesQueuedFollowup(t *testing.T) {
-	db := &DB{}
-	db.queueVlogGenerationRewriteQueue(true)
+	disableVlogGenerationLoop(t)
 
-	opts := db.vlogGenerationRewriteQueueOptions()
-	if !opts.automatic || !opts.skipCheckpoint {
-		t.Fatalf("automatic queued follow-up options=%+v, want automatic covered-prefix maintenance", opts)
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
 	}
-	if db.vlogGenerationRewriteQueuePendingAutomatic.Load() {
-		t.Fatal("queued automatic provenance was not consumed")
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   vlogGenerationVacuumTriggerRewriteBytes,
+			BytesAfter:    32,
+			RecordsCopied: 1,
+		},
+	}
+	boundary := &queuedRewriteBoundaryBackend{BackendDB: backend, recorder: recorder}
+	db, cleanup := openRewriteQueueTestDB(t, dir, boundary)
+	t.Cleanup(cleanup)
+	skipRetainedPrune(db)
+	forceVlogMaintenanceIdle(db)
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	if err := db.setVlogGenerationRewriteQueue([]uint32{11}); err != nil {
+		t.Fatalf("seed automatic rewrite queue: %v", err)
+	}
+
+	boundary.resetBoundaryCalls()
+	db.queueVlogGenerationRewriteQueue(true)
+	db.schedulePendingVlogGenerationRewriteQueue()
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if _, calls := recorder.recordedRewrite(); calls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, calls := recorder.recordedRewrite()
+			t.Fatalf("automatic queued follow-up did not rewrite: calls=%d", calls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if checkpoints, vacuums := boundary.boundaryCalls(); checkpoints != 0 || vacuums != 0 {
+		t.Fatalf("automatic queued follow-up boundaries: checkpoints=%d vacuums=%d, want 0/0", checkpoints, vacuums)
+	}
+
+	// The same queued path remains a full durability and post-rewrite vacuum
+	// boundary when explicitly requested.
+	if err := db.setVlogGenerationRewriteQueue([]uint32{12}); err != nil {
+		t.Fatalf("seed explicit rewrite queue: %v", err)
+	}
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	boundary.resetBoundaryCalls()
+	db.queueVlogGenerationRewriteQueue(false)
+	db.schedulePendingVlogGenerationRewriteQueue()
+	deadline = time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if _, calls := recorder.recordedRewrite(); calls == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, calls := recorder.recordedRewrite()
+			t.Fatalf("explicit queued follow-up did not rewrite: calls=%d", calls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if checkpoints, vacuums := boundary.boundaryCalls(); checkpoints == 0 || vacuums != 1 {
+		t.Fatalf("explicit queued follow-up boundaries: checkpoints=%d vacuums=%d, want checkpoint and one vacuum", checkpoints, vacuums)
 	}
 }
 

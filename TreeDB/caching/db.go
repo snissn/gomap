@@ -22734,7 +22734,7 @@ planned:
 			db.scheduleRetainedValueLogPruneForce()
 			queuedIDs, droppedIDs := db.retryVlogGenerationObservedSourceGCList(observedSourceGCIDs)
 			if queuedIDs > 0 {
-				db.vlogGenerationCheckpointKickPending.Store(true)
+				db.queueVlogGenerationCheckpointKick(opts.automatic)
 			}
 			db.debugVlogMaintf(
 				"gc_observed_retry_result reason=retained_protected observed_ids=%d queued_ids=%d dropped_ids=%d max_attempts=%d",
@@ -22757,7 +22757,7 @@ planned:
 			)
 			queuedIDs, droppedIDs := db.retryVlogGenerationObservedSourceGCList(observedSourceGCIDs)
 			if queuedIDs > 0 {
-				db.vlogGenerationCheckpointKickPending.Store(true)
+				db.queueVlogGenerationCheckpointKick(opts.automatic)
 			}
 			db.debugVlogMaintf(
 				"gc_observed_retry_result reason=active_source observed_ids=%d queued_ids=%d dropped_ids=%d max_attempts=%d",
