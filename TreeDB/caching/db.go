@@ -9896,6 +9896,7 @@ type DB struct {
 	testSkipCheckpointAutoVacuum        bool
 	testAgeBlockedStateReadHook         func()
 	testStageConfirmStateReadHook       func()
+	testForegroundMaintenancePollCh     <-chan time.Time
 }
 
 const (
@@ -13708,6 +13709,10 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 	go func(lastActivity int64, graceActivity uint64) {
 		ticker := time.NewTicker(foregroundMaintenancePollInterval())
 		defer ticker.Stop()
+		pollCh := ticker.C
+		if db.testForegroundMaintenancePollCh != nil {
+			pollCh = db.testForegroundMaintenancePollCh
+		}
 		if graceTimer != nil {
 			defer graceTimer.Stop()
 			defer func() {
@@ -13743,7 +13748,7 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 					cancel()
 					return
 				}
-			case <-ticker.C:
+			case <-pollCh:
 				if !graceElapsed {
 					continue
 				}

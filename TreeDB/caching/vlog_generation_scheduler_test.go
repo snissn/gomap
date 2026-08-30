@@ -10493,11 +10493,12 @@ func TestVlogGenerationRewritePlan_OneShotReadBlipDoesNotCancelLongPlan(t *testi
 }
 
 func TestForegroundMaintenanceContextResumeGrace_ActiveReaderAtDeadlineEndsBeforeNextPoll(t *testing.T) {
-	pollInterval := foregroundMaintenancePollInterval()
-	resumeGrace := pollInterval / 4
-	db := &DB{closeCh: make(chan struct{})}
-	startedAt := time.Now()
-	ctx, cancel := db.foregroundMaintenanceContextWithResumeGrace(2*time.Second, resumeGrace)
+	resumeGrace := foregroundMaintenancePollInterval() / 4
+	db := &DB{
+		closeCh:                         make(chan struct{}),
+		testForegroundMaintenancePollCh: make(chan time.Time),
+	}
+	ctx, cancel := db.foregroundMaintenanceContextWithResumeGrace(0, resumeGrace)
 	defer cancel()
 
 	readStartedAt := time.Now()
@@ -10508,30 +10509,19 @@ func TestForegroundMaintenanceContextResumeGrace_ActiveReaderAtDeadlineEndsBefor
 		t.Fatalf("foreground read started at %v, not before grace cutoff %v", readStartedAt, cutoff)
 	}
 
-	cancelDeadline := startedAt.Add(3 * pollInterval / 4)
-	cancelWindow := time.Until(cancelDeadline)
-	if cancelWindow <= 0 {
-		t.Fatalf("foreground read started outside the pre-poll cancellation window ending at %v", cancelDeadline)
-	}
-	if cancelWindow >= pollInterval {
-		t.Fatalf("cancellation window %v is not shorter than poll interval %v", cancelWindow, pollInterval)
-	}
 	select {
 	case <-ctx.Done():
 		if !errors.Is(ctx.Err(), context.Canceled) {
 			t.Fatalf("maintenance context ended with %v, want cancellation", ctx.Err())
 		}
-	case <-time.After(cancelWindow):
-		t.Fatal("active reader at grace cutoff did not cancel maintenance before the next poll")
+	case <-time.After(2 * time.Second):
+		t.Fatal("active reader at grace cutoff did not cancel maintenance while polling was withheld")
 	}
 
 	endRead()
 	endedAt := time.Now()
 	if !cutoff.Before(endedAt) {
 		t.Fatalf("foreground read ended at %v, not after grace cutoff %v", endedAt, cutoff)
-	}
-	if !endedAt.Before(cancelDeadline) {
-		t.Fatalf("foreground read ended at %v, not before pre-poll deadline %v", endedAt, cancelDeadline)
 	}
 }
 
