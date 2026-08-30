@@ -213,6 +213,46 @@ TREEDB_TRACE_SUMMARY=/path/to/trace.summary.json \
 go test -bench BenchmarkTraceReplayMemtableModes -run '^$' ./TreeDB
 ```
 
+### Restore-Like Replay With Runtime Rewrite Metrics
+
+Uses an embedded restore/catch-up trace summary by default
+(`TreeDB/testdata/trace_replay/restore_like.summary.json`) and adds a bounded
+steady-state overwrite tail so online rewrite has measurable stale debt.
+
+The default steady tail intentionally rewrites a narrow hot-key window and
+waits longer for maintenance than the generic summary replay. The embedded
+restore/catch-up fixture carries much larger value sizes than the old synthetic
+fallback path, so a broader hot set under-stresses rewrite and can make the
+benchmark look restore-heavy but rewrite-irrelevant.
+
+It reports throughput plus:
+- maintenance attempts / maintenance passes with rewrite
+- rewrite planning and rewrite execution counts
+- retained bytes
+- on-disk home / index / WAL dir bytes
+
+Benchmark:
+```bash
+GOWORK=off go test -bench BenchmarkRestoreLikeTraceReplay -run '^$' ./TreeDB
+```
+
+The benchmark runs `WALOn` and `WALOff` sub-benchmarks. `TREEDB_TRACE_SUMMARY`
+can still override the embedded summary if you want to replay a different
+capture.
+
+Useful knobs:
+- `TREEDB_TRACE_REPLAY_STEADY_CHURN_BYTES`: overwrite volume after restore/catch-up
+- `TREEDB_TRACE_REPLAY_FOLLOWUP_CHURN_BYTES`: small dirtying burst before the
+  second checkpoint
+- `TREEDB_TRACE_REPLAY_STEADY_HOT_KEYS`: hot-key window used for overwrite churn
+- `TREEDB_TRACE_REPLAY_CHECKPOINT_GAP_MS`: delay between the first and second
+  steady checkpoints
+- `TREEDB_TRACE_REPLAY_REWRITE_TRIGGER_BYTES`
+- `TREEDB_TRACE_REPLAY_REWRITE_MIN_AGE_MS`
+- `TREEDB_TRACE_REPLAY_HOT_TARGET_BYTES`
+- `TREEDB_TRACE_REPLAY_WARM_TARGET_BYTES`
+- `TREEDB_TRACE_REPLAY_COLD_TARGET_BYTES`
+
 ## 3) Trace Timeline Replay (Overlap-Aware)
 
 Uses the JSONL trace to model iterator lifetimes and write overlap. This is the
