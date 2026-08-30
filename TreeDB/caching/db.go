@@ -13719,9 +13719,16 @@ func (db *DB) noteWrite() {
 	if db == nil {
 		return
 	}
+	graceActive := db.foregroundMaintenanceGraceState.Load() != 0
+	if graceActive {
+		db.foregroundMaintenanceGraceMu.RLock()
+	}
 	now := time.Now().UnixNano()
 	db.lastForegroundWriteUnixNano.Store(now)
 	db.noteForegroundMaintenanceGraceActivity()
+	if graceActive {
+		db.foregroundMaintenanceGraceMu.RUnlock()
+	}
 	if !db.autoCheckpointOn.Load() {
 		return
 	}
@@ -13776,6 +13783,11 @@ func (db *DB) noteWrite() {
 func (db *DB) noteRead() {
 	if db == nil {
 		return
+	}
+	graceActive := db.foregroundMaintenanceGraceState.Load() != 0
+	if graceActive {
+		db.foregroundMaintenanceGraceMu.RLock()
+		defer db.foregroundMaintenanceGraceMu.RUnlock()
 	}
 	now := time.Now().UnixNano()
 	db.noteForegroundMaintenanceGraceActivity()

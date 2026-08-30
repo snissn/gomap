@@ -9904,6 +9904,45 @@ func TestVlogGenerationRewritePlan_OneShotReadBlipDoesNotCancelLongPlan(t *testi
 	}
 }
 
+func TestForegroundMaintenanceContextResumeGrace_WriteBoundaryOrdering(t *testing.T) {
+	waitForBoundary := func(db *DB) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for db.foregroundMaintenanceGraceState.Load()&1 == 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("grace boundary was not published")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	t.Run("write_inside_grace_is_absorbed", func(t *testing.T) {
+		db := &DB{closeCh: make(chan struct{})}
+		ctx, cancel := db.foregroundMaintenanceContextWithResumeGrace(2*time.Second, 50*time.Millisecond)
+		defer cancel()
+		db.noteWrite()
+		waitForBoundary(db)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("inside-grace write canceled maintenance: %v", ctx.Err())
+		case <-time.After(2 * foregroundMaintenancePollInterval()):
+		}
+	})
+
+	t.Run("write_after_boundary_cancels", func(t *testing.T) {
+		db := &DB{closeCh: make(chan struct{})}
+		ctx, cancel := db.foregroundMaintenanceContextWithResumeGrace(2*time.Second, 50*time.Millisecond)
+		defer cancel()
+		waitForBoundary(db)
+		db.noteWrite()
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * foregroundMaintenancePollInterval()):
+			t.Fatal("post-boundary write did not cancel maintenance")
+		}
+	})
+}
+
 func TestVlogGenerationRewritePlan_CancelBackoffSkipsImmediateRetry(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
