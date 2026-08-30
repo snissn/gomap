@@ -9943,6 +9943,31 @@ func TestForegroundMaintenanceContextResumeGrace_WriteBoundaryOrdering(t *testin
 			t.Fatal("post-boundary write did not cancel maintenance")
 		}
 	})
+	t.Run("read_after_deadline_cancels_with_delayed_boundary", func(t *testing.T) {
+		db := &DB{closeCh: make(chan struct{})}
+		ctx, cancel := db.foregroundMaintenanceContextWithResumeGrace(2*time.Second, 50*time.Millisecond)
+		defer cancel()
+		db.beginForegroundRead()
+		db.foregroundMaintenanceGraceMu.Lock()
+		time.Sleep(75 * time.Millisecond)
+		ended := make(chan struct{})
+		go func() {
+			db.endForegroundRead()
+			close(ended)
+		}()
+		db.foregroundMaintenanceGraceMu.Unlock()
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * foregroundMaintenancePollInterval()):
+			t.Fatal("post-boundary read did not cancel maintenance")
+		}
+		select {
+		case <-ended:
+		case <-time.After(2 * foregroundMaintenancePollInterval()):
+			t.Fatal("post-boundary read did not finish")
+		}
+	})
+
 }
 
 func TestVlogGenerationRewritePlan_CancelBackoffSkipsImmediateRetry(t *testing.T) {

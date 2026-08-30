@@ -622,6 +622,7 @@ func TestDB_GetRecordsForegroundGraceCrossing(t *testing.T) {
 		t.Fatalf("grace boundary: transitioned=%v active=%d want true,1", transitioned, active)
 	}
 	cdb.foregroundMaintenanceGraceState.Store(3)
+	cdb.foregroundMaintenanceGraceDeadlineUnixNano.Store(time.Now().Add(-time.Second).UnixNano())
 	close(backend.release)
 	select {
 	case err := <-done:

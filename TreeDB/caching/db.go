@@ -8716,6 +8716,22 @@ func (s *foregroundReaderState) clearGrace(grace uint32) bool {
 		}
 	}
 }
+func (s *foregroundReaderState) endIfNoGrace() bool {
+	for {
+		current := s.value.Load()
+		if uint32(current>>32) != 0 {
+			return false
+		}
+		count := uint32(current)
+		if count == 0 {
+			panic("caching: foreground reader count underflow")
+		}
+		next := uint64(count - 1)
+		if s.value.CompareAndSwap(current, next) {
+			return true
+		}
+	}
+}
 
 func (s *foregroundReaderState) end() uint32 {
 	for {
@@ -13942,12 +13958,15 @@ func (db *DB) endForegroundRead() {
 	if db == nil {
 		return
 	}
-	grace := db.activeForegroundIterators.end()
-	if grace&1 == 0 {
+	if db.activeForegroundIterators.endIfNoGrace() {
 		return
 	}
 	db.foregroundMaintenanceGraceMu.RLock()
-	if grace == db.foregroundMaintenanceGraceState.Load() {
+	completedAt := time.Now().UnixNano()
+	grace := db.activeForegroundIterators.end()
+	deadline := db.foregroundMaintenanceGraceDeadlineUnixNano.Load()
+	if grace != 0 && deadline > 0 && completedAt >= deadline &&
+		grace == db.foregroundMaintenanceGraceState.Load() {
 		db.foregroundMaintenanceGraceActivity.Add(1)
 		if db.foregroundMaintenanceGraceCancelValue == grace&^1 && db.foregroundMaintenanceGraceCancel != nil {
 			db.foregroundMaintenanceGraceCancel()
