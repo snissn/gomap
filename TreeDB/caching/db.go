@@ -13775,6 +13775,16 @@ func (db *DB) noteRead() {
 	db.lastForegroundReadUnixNano.Store(now)
 }
 
+func (db *DB) endForegroundRead() {
+	if db == nil {
+		return
+	}
+	if deadline := db.foregroundMaintenanceGraceDeadlineUnixNano.Load(); deadline > 0 && time.Now().UnixNano() >= deadline {
+		db.foregroundMaintenanceGraceActivity.Add(1)
+	}
+	db.activeForegroundIterators.Add(-1)
+}
+
 func (db *DB) beginRawForegroundRead() func() {
 	if db == nil {
 		return func() {}
@@ -13783,12 +13793,7 @@ func (db *DB) beginRawForegroundRead() func() {
 	db.activeForegroundIterators.Add(1)
 	var once sync.Once
 	return func() {
-		once.Do(func() {
-			if deadline := db.foregroundMaintenanceGraceDeadlineUnixNano.Load(); deadline > 0 {
-				db.noteForegroundMaintenanceGraceActivity(time.Now().UnixNano())
-			}
-			db.activeForegroundIterators.Add(-1)
-		})
+		once.Do(db.endForegroundRead)
 	}
 }
 
@@ -33241,7 +33246,7 @@ func (it *foregroundTrackedIterator) Close() error {
 	it.closeOnce.Do(func() {
 		it.closeErr = it.Iterator.Close()
 		if it.db != nil {
-			it.db.activeForegroundIterators.Add(-1)
+			it.db.endForegroundRead()
 		}
 	})
 	return it.closeErr
