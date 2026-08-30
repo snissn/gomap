@@ -2102,6 +2102,7 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 		readerLast: reader.Stats(),
 		routeStats: vectorIndexSearchRouteStatsForColumnGraphReader(reader),
 	}
+	snap.DetachForegroundRead()
 	closeOnErr = false
 	return searcher, response, nil
 }
@@ -2137,6 +2138,8 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 		response.Stats = VectorIndexSearchStats{HNSWSearchPackClosed: 1}
 		return response, errors.New("collections: vector index searcher is closed")
 	}
+	endForegroundRead := s.collection.db.BeginForegroundRead()
+	defer endForegroundRead()
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
 		return response, err
 	}
@@ -2290,6 +2293,8 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 		clear(previousResults)
 		return response, errors.New("collections: vector index searcher is closed")
 	}
+	endForegroundRead := s.collection.db.BeginForegroundRead()
+	defer endForegroundRead()
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
 		clear(previousResults)
 		return response, err

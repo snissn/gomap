@@ -37,6 +37,8 @@ type foregroundReadObserver struct {
 	begin  func() func()
 }
 
+var noForegroundReadEnd = func() {}
+
 // RegisterForegroundReadObserver installs the cached layer's observer for
 // logical collection reads routed through this raw backend. begin returns an
 // idempotent function that ends a snapshot-backed read. The returned
@@ -77,6 +79,16 @@ func (db *DB) NotifyForegroundRead() {
 	if observer := db.foregroundReadObserver.Load(); observer != nil {
 		observer.notify()
 	}
+}
+
+// BeginForegroundRead starts one logical collection read that is not tied to a
+// snapshot's ownership. The returned end function is always non-nil and
+// idempotent when an observer is installed.
+func (db *DB) BeginForegroundRead() func() {
+	if end := db.beginForegroundRead(); end != nil {
+		return end
+	}
+	return noForegroundReadEnd
 }
 
 func (db *DB) beginForegroundRead() func() {

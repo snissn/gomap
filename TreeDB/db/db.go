@@ -1827,6 +1827,24 @@ func (s *Snapshot) MarkForegroundRead() {
 	s.iteratorMu.Unlock()
 }
 
+// DetachForegroundRead ends this snapshot's automatic foreground lifetime
+// without closing its pinned state. The snapshot remains marked so later
+// collection helpers cannot accidentally reattach a permanent lease. Callers
+// retaining the snapshot must bracket each actual operation with
+// DB.BeginForegroundRead.
+func (s *Snapshot) DetachForegroundRead() {
+	if s == nil {
+		return
+	}
+	s.iteratorMu.Lock()
+	end := s.foregroundReadEnd
+	s.foregroundReadEnd = nil
+	s.iteratorMu.Unlock()
+	if end != nil {
+		end()
+	}
+}
+
 // Close releases the snapshot.
 func (s *Snapshot) Close() error {
 	if s == nil {

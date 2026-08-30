@@ -234,6 +234,64 @@ func TestSnapshotForegroundReadLifetimeFollowsBoundIterator(t *testing.T) {
 	}
 }
 
+func TestSnapshotDetachForegroundReadUsesOperationScopedLifetime(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	var begins atomic.Int64
+	var ends atomic.Int64
+	var active atomic.Int64
+	unregister := d.RegisterForegroundReadObserver(func() {}, func() func() {
+		begins.Add(1)
+		active.Add(1)
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				ends.Add(1)
+				active.Add(-1)
+			})
+		}
+	})
+	defer unregister()
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	snap.MarkForegroundRead()
+	snap.DetachForegroundRead()
+	snap.DetachForegroundRead()
+	snap.MarkForegroundRead()
+	if got := active.Load(); got != 0 {
+		t.Fatalf("active foreground reads after detach=%d want 0", got)
+	}
+	if got := begins.Load(); got != 1 {
+		t.Fatalf("foreground begins after detach and remark=%d want 1", got)
+	}
+
+	end := d.BeginForegroundRead()
+	if got := active.Load(); got != 1 {
+		t.Fatalf("active foreground reads during operation=%d want 1", got)
+	}
+	end()
+	end()
+	if got := active.Load(); got != 0 {
+		t.Fatalf("active foreground reads after repeated operation end=%d want 0", got)
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatalf("Snapshot.Close: %v", err)
+	}
+	if got := begins.Load(); got != 2 {
+		t.Fatalf("foreground begins=%d want 2", got)
+	}
+	if got := ends.Load(); got != 2 {
+		t.Fatalf("foreground ends=%d want 2", got)
+	}
+}
+
 func TestSnapshotForegroundReadConcurrentCloseEndsOnce(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
