@@ -8023,6 +8023,23 @@ func TestTakeVlogGenerationDeferredMaintenanceClearsOrphanedAutomaticMode(t *tes
 	}
 }
 
+func TestSnapshotVlogGenerationPendingAutomaticModesRequiresPendingWork(t *testing.T) {
+	db := &DB{}
+	db.vlogGenerationDeferredMaintenanceAutomatic.Store(true)
+	db.vlogGenerationCheckpointKickPendingAutomatic.Store(true)
+	db.vlogGenerationRewriteQueuePendingAutomatic.Store(true)
+	if deferred, checkpoint, rewrite := db.snapshotVlogGenerationPendingAutomaticModes(); deferred || checkpoint || rewrite {
+		t.Fatalf("orphaned modes=(%t, %t, %t), want false/false/false", deferred, checkpoint, rewrite)
+	}
+
+	db.vlogGenerationDeferredMaintenancePending.Store(true)
+	db.vlogGenerationCheckpointKickPending.Store(true)
+	db.vlogGenerationRewriteQueuePending.Store(true)
+	if deferred, checkpoint, rewrite := db.snapshotVlogGenerationPendingAutomaticModes(); !deferred || !checkpoint || !rewrite {
+		t.Fatalf("pending modes=(%t, %t, %t), want true/true/true", deferred, checkpoint, rewrite)
+	}
+}
+
 func TestVlogGenerationRewrite_IneffectiveBackoffSkipsImmediateGenericRetry(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

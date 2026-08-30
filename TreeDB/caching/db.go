@@ -20628,7 +20628,8 @@ func (db *DB) schedulePendingVlogGenerationCheckpointKick() {
 		return
 	}
 	if db.vlogGenerationDeferredMaintenanceDue(time.Now()) {
-		automatic := db.vlogGenerationDeferredMaintenanceAutomatic.Load() || db.vlogGenerationCheckpointKickPendingAutomatic.Load()
+		deferredAutomatic, checkpointAutomatic, _ := db.snapshotVlogGenerationPendingAutomaticModes()
+		automatic := deferredAutomatic || checkpointAutomatic
 		db.scheduleDueVlogGenerationDeferredMaintenance(automatic)
 		return
 	}
@@ -20703,7 +20704,8 @@ func (db *DB) schedulePendingVlogGenerationRewriteQueue() {
 		return
 	}
 	if db.vlogGenerationDeferredMaintenanceDue(time.Now()) {
-		automatic := db.vlogGenerationDeferredMaintenanceAutomatic.Load() || db.vlogGenerationRewriteQueuePendingAutomatic.Load()
+		deferredAutomatic, _, rewriteAutomatic := db.snapshotVlogGenerationPendingAutomaticModes()
+		automatic := deferredAutomatic || rewriteAutomatic
 		db.scheduleDueVlogGenerationDeferredMaintenance(automatic)
 		return
 	}
@@ -20787,6 +20789,14 @@ func (db *DB) takeVlogGenerationDeferredMaintenance() (bool, bool) {
 		return false, false
 	}
 	return true, db.vlogGenerationDeferredMaintenanceAutomatic.Swap(false)
+}
+
+func (db *DB) snapshotVlogGenerationPendingAutomaticModes() (deferred, checkpointKick, rewriteQueue bool) {
+	db.vlogGenerationMaintenancePendingMu.Lock()
+	defer db.vlogGenerationMaintenancePendingMu.Unlock()
+	return db.vlogGenerationDeferredMaintenancePending.Load() && db.vlogGenerationDeferredMaintenanceAutomatic.Load(),
+		db.vlogGenerationCheckpointKickPending.Load() && db.vlogGenerationCheckpointKickPendingAutomatic.Load(),
+		db.vlogGenerationRewriteQueuePending.Load() && db.vlogGenerationRewriteQueuePendingAutomatic.Load()
 }
 
 func (db *DB) scheduleDueVlogGenerationDeferredMaintenance(automatic bool) {
