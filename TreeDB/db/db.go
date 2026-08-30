@@ -3830,7 +3830,13 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 	if err := db.commandWALPoisonedError(); err != nil {
 		return err
 	}
-	if !db.commandWAL || db.commandJournal == nil || db.rootPublication == nil || db.rootPublication.coordinator == nil {
+	// Online vacuum replaces the runtime under db.mu. Snapshot it there before
+	// deciding whether covered-prefix maintenance is available; teardownMu keeps
+	// the DB runtime and journal alive through this pass.
+	db.mu.RLock()
+	runtime := db.rootPublication
+	db.mu.RUnlock()
+	if !db.commandWAL || db.commandJournal == nil || runtime == nil || runtime.coordinator == nil {
 		return db.Checkpoint()
 	}
 

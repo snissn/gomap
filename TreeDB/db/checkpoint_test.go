@@ -155,6 +155,35 @@ func TestMaintainCommandWALCoveredPrefixPinsTeardown(t *testing.T) {
 	}
 }
 
+func TestMaintainCommandWALCoveredPrefixSnapshotsRootPublicationUnderDBMu(t *testing.T) {
+	d, err := Open(Options{
+		Dir:                    t.TempDir(),
+		CommandWAL:             true,
+		Durability:             DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	// Online vacuum swaps rootPublication while holding db.mu. The capability
+	// snapshot must use that same lock rather than racing the replacement.
+	d.mu.Lock()
+	maintained := make(chan error, 1)
+	go func() { maintained <- d.MaintainCommandWALCoveredPrefix() }()
+	select {
+	case err := <-maintained:
+		d.mu.Unlock()
+		t.Fatalf("covered-prefix maintenance bypassed root-publication snapshot: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	d.mu.Unlock()
+	if err := <-maintained; err != nil {
+		t.Fatalf("MaintainCommandWALCoveredPrefix: %v", err)
+	}
+}
+
 func TestMaintainCommandWALCoveredPrefixRetriesClosedSegmentsAfterCoverageAdvance(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{
