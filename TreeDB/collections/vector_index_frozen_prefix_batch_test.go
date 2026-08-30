@@ -121,6 +121,57 @@ func TestVectorIndexFrozenPrefixBatchUsesExactMinimum4297(t *testing.T) {
 	}
 }
 
+func TestVectorIndexFrozenPrefixBatchM8IsDeterministicSearchableAndReachable4487(t *testing.T) {
+	rows := vectorIndexReciprocalParityRows4257(32, 16, false)
+	build := func(workers int) *VectorIndex {
+		t.Helper()
+		index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 16, M: 8, EfConstruction: 128})
+		if err != nil {
+			t.Fatal(err)
+		}
+		index.setNativePersistent(true)
+		index.constructionWorkers = workers
+		ids := make([][]byte, len(rows))
+		for row := range ids {
+			ids[row] = []byte(fmt.Sprintf("doc-%04d", row))
+		}
+		if err := index.insertVectorBatchLocked(ids, rows); err != nil {
+			t.Fatal(err)
+		}
+		if index.frozenPrefixBatches == 0 {
+			t.Fatal("M=8 batch did not use frozen-prefix construction")
+		}
+		reachable := map[int]bool{index.entry: true}
+		queue := []int{index.entry}
+		for len(queue) > 0 {
+			nodeID := queue[0]
+			queue = queue[1:]
+			for _, neighbor := range index.nodes[nodeID].neighbors[0] {
+				if !reachable[neighbor.nodeID] {
+					reachable[neighbor.nodeID] = true
+					queue = append(queue, neighbor.nodeID)
+				}
+			}
+		}
+		if len(reachable) != len(index.nodes) {
+			t.Fatalf("entry reaches %d of %d nodes", len(reachable), len(index.nodes))
+		}
+		return index
+	}
+	want := build(0)
+	wantTopology := snapshotVectorIndexTopology4257(want)
+	wantSearch := snapshotVectorIndexSearches4257(t, want, rows)
+	for _, workers := range []int{0, 1, 2, 4} {
+		got := build(workers)
+		if topology := snapshotVectorIndexTopology4257(got); !reflect.DeepEqual(topology, wantTopology) {
+			t.Fatalf("worker budget %d changed M=8 topology", workers)
+		}
+		if search := snapshotVectorIndexSearches4257(t, got, rows); !reflect.DeepEqual(search, wantSearch) {
+			t.Fatalf("worker budget %d changed M=8 search", workers)
+		}
+	}
+}
+
 func TestVectorIndexFrozenPrefixBatchKeepsSmallMReachable4297(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 1, EfConstruction: 16})
 	if err != nil {

@@ -2391,7 +2391,11 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 			start++
 			continue
 		}
-		end := minInt(start+nativeVectorFrozenPrefixBatchWidth, len(documentIDs))
+		batchWidth := nativeVectorFrozenPrefixBatchWidth
+		if idx.m == 8 {
+			batchWidth = idx.m
+		}
+		end := minInt(start+batchWidth, len(documentIDs))
 		if !idx.canPlanFrozenPrefixBatchLocked(documentIDs[start:end]) {
 			for row := start; row < end; row++ {
 				if err := idx.insertVectorLocked(documentIDs[row], vectors[row]); err != nil {
