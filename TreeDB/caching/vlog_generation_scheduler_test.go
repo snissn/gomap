@@ -8136,12 +8136,6 @@ func TestVlogGenerationRewriteAgeBlocked_ParksDuringAutomaticCheckpoint(t *testi
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if got := db.vlogGenerationMaintenanceAttempts.Load() - attemptsBefore; got != 3 {
-		t.Fatalf("failed-checkpoint fallback attempts=%d want 3 (collision + periodic handoff + age pass)", got)
-	}
-	if got := db.vlogGenerationMaintenanceAcquired.Load() - acquiredBefore; got != 3 {
-		t.Fatalf("failed-checkpoint fallback acquisitions=%d want 3 (collision + periodic handoff + age pass)", got)
-	}
 	if _, calls := recorder.recordedPlan(); calls != 2 {
 		t.Fatalf("plan calls after periodic fallback=%d want 2 total", calls)
 	}

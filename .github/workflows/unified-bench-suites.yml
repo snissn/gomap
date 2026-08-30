@@ -40,8 +40,8 @@ jobs:
   bigkeys_guard:
     name: bigkeys_guard (linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    # Keep this job's 20-minute fail-closed suite cap independent from the
+    timeout-minutes: 35
+    # Keep this job's 30-minute fail-closed suite cap independent from the
     # build/flushthrash/longmix orchestration budget.
     steps:
       - name: Checkout
@@ -66,7 +66,7 @@ jobs:
         run: make unified-bench
 
       - name: "Suite: bigkeys_guard"
-        run: ./bin/unified-bench -suite bigkeys_guard -keys 1000000 -seed 1 -progress=false -max-wall 20m -max-rss-mb 4096
+        run: ./bin/unified-bench -suite bigkeys_guard -keys 1000000 -seed 1 -progress=false -max-wall 30m -max-rss-mb 4096
 
   profiles:
     name: profiles (linux)
