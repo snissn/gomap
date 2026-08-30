@@ -592,20 +592,27 @@ type VectorIndexSearchStats struct {
 	// DocumentRowRefLookupFallbacks counts post-top-k document fetches that fell back to ID-to-row-ref lookup.
 	DocumentRowRefLookupFallbacks uint64 `json:"document_row_ref_lookup_fallbacks,omitempty"`
 	// ScalarFilterPlan identifies the native declared-scalar execution plan.
-	ScalarFilterPlan                 NativeScalarFilterPlan `json:"scalar_filter_plan,omitempty"`
-	ScalarFilterProbeIDs             uint64                 `json:"scalar_filter_probe_ids,omitempty"`
-	ScalarFilterProbeTruncated       uint64                 `json:"scalar_filter_probe_truncated,omitempty"`
-	ScalarFilterCandidates           uint64                 `json:"scalar_filter_candidates,omitempty"`
-	ScalarFilterCandidateIDs         uint64                 `json:"scalar_filter_candidate_ids,omitempty"`
-	ScalarFilterRetainedCandidateIDs uint64                 `json:"scalar_filter_retained_candidate_ids,omitempty"`
-	ScalarFilterRefinedCandidateIDs  uint64                 `json:"scalar_filter_refined_candidate_ids,omitempty"`
-	ScalarFilterVisited              uint64                 `json:"scalar_filter_visited,omitempty"`
-	ScalarFilterScored               uint64                 `json:"scalar_filter_scored,omitempty"`
-	ScalarFilterSeedRowsVisited      uint64                 `json:"scalar_filter_seed_rows_visited,omitempty"`
-	ScalarFilterEligibleSeeds        uint64                 `json:"scalar_filter_eligible_seeds,omitempty"`
-	ScalarFilterAdmitted             uint64                 `json:"scalar_filter_admitted,omitempty"`
-	ScalarFilterUnderfill            uint64                 `json:"scalar_filter_underfill,omitempty"`
-	ScalarFilterExactScoring         uint64                 `json:"scalar_filter_exact_scoring,omitempty"`
+	ScalarFilterPlan                        NativeScalarFilterPlan `json:"scalar_filter_plan,omitempty"`
+	ScalarFilterProbeIDs                    uint64                 `json:"scalar_filter_probe_ids,omitempty"`
+	ScalarFilterProbeTruncated              uint64                 `json:"scalar_filter_probe_truncated,omitempty"`
+	ScalarFilterCandidates                  uint64                 `json:"scalar_filter_candidates,omitempty"`
+	ScalarFilterCandidateIDs                uint64                 `json:"scalar_filter_candidate_ids,omitempty"`
+	ScalarFilterRetainedCandidateIDs        uint64                 `json:"scalar_filter_retained_candidate_ids,omitempty"`
+	ScalarFilterRefinedCandidateIDs         uint64                 `json:"scalar_filter_refined_candidate_ids,omitempty"`
+	ScalarFilterVisited                     uint64                 `json:"scalar_filter_visited,omitempty"`
+	ScalarFilterScored                      uint64                 `json:"scalar_filter_scored,omitempty"`
+	ScalarFilterSeedRowsVisited             uint64                 `json:"scalar_filter_seed_rows_visited,omitempty"`
+	ScalarFilterEligibleSeeds               uint64                 `json:"scalar_filter_eligible_seeds,omitempty"`
+	ScalarFilterAdmitted                    uint64                 `json:"scalar_filter_admitted,omitempty"`
+	ScalarFilterUnderfill                   uint64                 `json:"scalar_filter_underfill,omitempty"`
+	ScalarFilterExactScoring                uint64                 `json:"scalar_filter_exact_scoring,omitempty"`
+	ScalarFilterPlanCacheHits               uint64                 `json:"scalar_filter_plan_cache_hits,omitempty"`
+	ScalarFilterPlanCacheMisses             uint64                 `json:"scalar_filter_plan_cache_misses,omitempty"`
+	ScalarFilterPlanCacheInvalidations      uint64                 `json:"scalar_filter_plan_cache_invalidations,omitempty"`
+	ScalarFilterPlanCacheGenerationBypasses uint64                 `json:"scalar_filter_plan_cache_generation_bypasses,omitempty"`
+	ScalarFilterPlanCacheEvictions          uint64                 `json:"scalar_filter_plan_cache_evictions,omitempty"`
+	ScalarFilterPlanCacheEntries            uint64                 `json:"scalar_filter_plan_cache_entries,omitempty"`
+	ScalarFilterPlanCacheRetainedBytes      uint64                 `json:"scalar_filter_plan_cache_retained_bytes,omitempty"`
 }
 
 type vectorIndexSearchVisibility struct {
@@ -714,34 +721,41 @@ const (
 // route/status and no-document guardrail checks. It is derived from
 // VectorIndexSearchStats; callers that need full counters should inspect Stats.
 type VectorIndexSearchDiagnostics struct {
-	Route                         VectorIndexSearchRouteKind            `json:"route"`
-	HNSWSearchPackStatus          VectorIndexSearchHNSWSearchPackStatus `json:"hnsw_search_pack_status"`
-	FallbackReason                VectorIndexSearchFallbackReason       `json:"fallback_reason"`
-	NoDocumentGuardrailsOK        bool                                  `json:"no_document_guardrails_ok"`
-	ExactHNSWSearchPackNoDocRoute bool                                  `json:"exact_hnsw_search_pack_no_doc_route"`
-	DocumentsFetched              uint64                                `json:"docs_fetched,omitempty"`
-	GraphRowFallbacks             uint64                                `json:"graph_row_fallbacks,omitempty"`
-	TypedColumnVectorFallbacks    uint64                                `json:"typed_column_vector_fallbacks,omitempty"`
-	VectorScratchDecodes          uint64                                `json:"vector_scratch_decodes,omitempty"`
-	OpenSearcherCalls             uint64                                `json:"open_searcher_calls,omitempty"`
-	OpenSetupInTimedLoop          uint64                                `json:"open_setup_in_timed_loop,omitempty"`
-	ResponseOwnedResultAllocs     uint64                                `json:"response_owned_result_allocs,omitempty"`
-	HNSWSearchPackCacheHits       uint64                                `json:"hnsw_search_pack_cache_hits,omitempty"`
-	HNSWSearchPackCacheMisses     uint64                                `json:"hnsw_search_pack_cache_misses,omitempty"`
-	HNSWSearchPackCacheWaits      uint64                                `json:"hnsw_search_pack_cache_waits,omitempty"`
-	HNSWSearchPackCacheBuilds     uint64                                `json:"hnsw_search_pack_cache_builds,omitempty"`
-	LiveANN                       VectorIndexSearchLiveANNDiagnostics   `json:"live_ann"`
-	ScalarFilterPlan              NativeScalarFilterPlan                `json:"scalar_filter_plan,omitempty"`
-	ScalarFilterProbeIDs          uint64                                `json:"scalar_filter_probe_ids,omitempty"`
-	ScalarFilterProbeTruncated    uint64                                `json:"scalar_filter_probe_truncated,omitempty"`
-	ScalarFilterCandidateIDs      uint64                                `json:"scalar_filter_candidate_ids,omitempty"`
-	ScalarFilterVisited           uint64                                `json:"scalar_filter_visited,omitempty"`
-	ScalarFilterScored            uint64                                `json:"scalar_filter_scored,omitempty"`
-	ScalarFilterSeedRowsVisited   uint64                                `json:"scalar_filter_seed_rows_visited,omitempty"`
-	ScalarFilterEligibleSeeds     uint64                                `json:"scalar_filter_eligible_seeds,omitempty"`
-	ScalarFilterAdmitted          uint64                                `json:"scalar_filter_admitted,omitempty"`
-	ScalarFilterUnderfill         bool                                  `json:"scalar_filter_underfill,omitempty"`
-	ScalarFilterExactScoring      bool                                  `json:"scalar_filter_exact_scoring,omitempty"`
+	Route                                   VectorIndexSearchRouteKind            `json:"route"`
+	HNSWSearchPackStatus                    VectorIndexSearchHNSWSearchPackStatus `json:"hnsw_search_pack_status"`
+	FallbackReason                          VectorIndexSearchFallbackReason       `json:"fallback_reason"`
+	NoDocumentGuardrailsOK                  bool                                  `json:"no_document_guardrails_ok"`
+	ExactHNSWSearchPackNoDocRoute           bool                                  `json:"exact_hnsw_search_pack_no_doc_route"`
+	DocumentsFetched                        uint64                                `json:"docs_fetched,omitempty"`
+	GraphRowFallbacks                       uint64                                `json:"graph_row_fallbacks,omitempty"`
+	TypedColumnVectorFallbacks              uint64                                `json:"typed_column_vector_fallbacks,omitempty"`
+	VectorScratchDecodes                    uint64                                `json:"vector_scratch_decodes,omitempty"`
+	OpenSearcherCalls                       uint64                                `json:"open_searcher_calls,omitempty"`
+	OpenSetupInTimedLoop                    uint64                                `json:"open_setup_in_timed_loop,omitempty"`
+	ResponseOwnedResultAllocs               uint64                                `json:"response_owned_result_allocs,omitempty"`
+	HNSWSearchPackCacheHits                 uint64                                `json:"hnsw_search_pack_cache_hits,omitempty"`
+	HNSWSearchPackCacheMisses               uint64                                `json:"hnsw_search_pack_cache_misses,omitempty"`
+	HNSWSearchPackCacheWaits                uint64                                `json:"hnsw_search_pack_cache_waits,omitempty"`
+	HNSWSearchPackCacheBuilds               uint64                                `json:"hnsw_search_pack_cache_builds,omitempty"`
+	LiveANN                                 VectorIndexSearchLiveANNDiagnostics   `json:"live_ann"`
+	ScalarFilterPlan                        NativeScalarFilterPlan                `json:"scalar_filter_plan,omitempty"`
+	ScalarFilterProbeIDs                    uint64                                `json:"scalar_filter_probe_ids,omitempty"`
+	ScalarFilterProbeTruncated              uint64                                `json:"scalar_filter_probe_truncated,omitempty"`
+	ScalarFilterCandidateIDs                uint64                                `json:"scalar_filter_candidate_ids,omitempty"`
+	ScalarFilterVisited                     uint64                                `json:"scalar_filter_visited,omitempty"`
+	ScalarFilterScored                      uint64                                `json:"scalar_filter_scored,omitempty"`
+	ScalarFilterSeedRowsVisited             uint64                                `json:"scalar_filter_seed_rows_visited,omitempty"`
+	ScalarFilterEligibleSeeds               uint64                                `json:"scalar_filter_eligible_seeds,omitempty"`
+	ScalarFilterAdmitted                    uint64                                `json:"scalar_filter_admitted,omitempty"`
+	ScalarFilterUnderfill                   bool                                  `json:"scalar_filter_underfill,omitempty"`
+	ScalarFilterExactScoring                bool                                  `json:"scalar_filter_exact_scoring,omitempty"`
+	ScalarFilterPlanCacheHits               uint64                                `json:"scalar_filter_plan_cache_hits,omitempty"`
+	ScalarFilterPlanCacheMisses             uint64                                `json:"scalar_filter_plan_cache_misses,omitempty"`
+	ScalarFilterPlanCacheInvalidations      uint64                                `json:"scalar_filter_plan_cache_invalidations,omitempty"`
+	ScalarFilterPlanCacheGenerationBypasses uint64                                `json:"scalar_filter_plan_cache_generation_bypasses,omitempty"`
+	ScalarFilterPlanCacheEvictions          uint64                                `json:"scalar_filter_plan_cache_evictions,omitempty"`
+	ScalarFilterPlanCacheEntries            uint64                                `json:"scalar_filter_plan_cache_entries,omitempty"`
+	ScalarFilterPlanCacheRetainedBytes      uint64                                `json:"scalar_filter_plan_cache_retained_bytes,omitempty"`
 }
 
 // VectorIndexSearchLiveANNDiagnostics proves that the selected query stayed on
@@ -760,33 +774,40 @@ func (r VectorIndexSearchResponse) Diagnostics() VectorIndexSearchDiagnostics {
 // Diagnostics returns a compact route/status summary derived from the stats.
 func (s VectorIndexSearchStats) Diagnostics() VectorIndexSearchDiagnostics {
 	return VectorIndexSearchDiagnostics{
-		Route:                         s.RouteKind(),
-		HNSWSearchPackStatus:          s.HNSWSearchPackStatus(),
-		FallbackReason:                s.FallbackReason(),
-		NoDocumentGuardrailsOK:        s.NoDocumentGuardrailsOK(),
-		ExactHNSWSearchPackNoDocRoute: s.ExactHNSWSearchPackNoDocumentRoute(),
-		DocumentsFetched:              s.DocumentsFetched,
-		GraphRowFallbacks:             s.GraphRowFallbacks,
-		TypedColumnVectorFallbacks:    s.TypedColumnFallbacks,
-		VectorScratchDecodes:          s.VectorScratchDecodes,
-		OpenSearcherCalls:             s.OpenSearcherCalls,
-		OpenSetupInTimedLoop:          s.OpenSetupInTimedLoop,
-		ResponseOwnedResultAllocs:     s.ResponseOwnedResultAllocs,
-		HNSWSearchPackCacheHits:       s.HNSWSearchPackCacheHits,
-		HNSWSearchPackCacheMisses:     s.HNSWSearchPackCacheMisses,
-		HNSWSearchPackCacheWaits:      s.HNSWSearchPackCacheWaits,
-		HNSWSearchPackCacheBuilds:     s.HNSWSearchPackCacheBuilds,
-		ScalarFilterPlan:              s.ScalarFilterPlan,
-		ScalarFilterProbeIDs:          s.ScalarFilterProbeIDs,
-		ScalarFilterProbeTruncated:    s.ScalarFilterProbeTruncated,
-		ScalarFilterCandidateIDs:      s.ScalarFilterCandidateIDs,
-		ScalarFilterVisited:           s.ScalarFilterVisited,
-		ScalarFilterScored:            s.ScalarFilterScored,
-		ScalarFilterSeedRowsVisited:   s.ScalarFilterSeedRowsVisited,
-		ScalarFilterEligibleSeeds:     s.ScalarFilterEligibleSeeds,
-		ScalarFilterAdmitted:          s.ScalarFilterAdmitted,
-		ScalarFilterUnderfill:         s.ScalarFilterUnderfill > 0,
-		ScalarFilterExactScoring:      s.ScalarFilterExactScoring > 0,
+		Route:                                   s.RouteKind(),
+		HNSWSearchPackStatus:                    s.HNSWSearchPackStatus(),
+		FallbackReason:                          s.FallbackReason(),
+		NoDocumentGuardrailsOK:                  s.NoDocumentGuardrailsOK(),
+		ExactHNSWSearchPackNoDocRoute:           s.ExactHNSWSearchPackNoDocumentRoute(),
+		DocumentsFetched:                        s.DocumentsFetched,
+		GraphRowFallbacks:                       s.GraphRowFallbacks,
+		TypedColumnVectorFallbacks:              s.TypedColumnFallbacks,
+		VectorScratchDecodes:                    s.VectorScratchDecodes,
+		OpenSearcherCalls:                       s.OpenSearcherCalls,
+		OpenSetupInTimedLoop:                    s.OpenSetupInTimedLoop,
+		ResponseOwnedResultAllocs:               s.ResponseOwnedResultAllocs,
+		HNSWSearchPackCacheHits:                 s.HNSWSearchPackCacheHits,
+		HNSWSearchPackCacheMisses:               s.HNSWSearchPackCacheMisses,
+		HNSWSearchPackCacheWaits:                s.HNSWSearchPackCacheWaits,
+		HNSWSearchPackCacheBuilds:               s.HNSWSearchPackCacheBuilds,
+		ScalarFilterPlan:                        s.ScalarFilterPlan,
+		ScalarFilterProbeIDs:                    s.ScalarFilterProbeIDs,
+		ScalarFilterProbeTruncated:              s.ScalarFilterProbeTruncated,
+		ScalarFilterCandidateIDs:                s.ScalarFilterCandidateIDs,
+		ScalarFilterVisited:                     s.ScalarFilterVisited,
+		ScalarFilterScored:                      s.ScalarFilterScored,
+		ScalarFilterSeedRowsVisited:             s.ScalarFilterSeedRowsVisited,
+		ScalarFilterEligibleSeeds:               s.ScalarFilterEligibleSeeds,
+		ScalarFilterAdmitted:                    s.ScalarFilterAdmitted,
+		ScalarFilterUnderfill:                   s.ScalarFilterUnderfill > 0,
+		ScalarFilterExactScoring:                s.ScalarFilterExactScoring > 0,
+		ScalarFilterPlanCacheHits:               s.ScalarFilterPlanCacheHits,
+		ScalarFilterPlanCacheMisses:             s.ScalarFilterPlanCacheMisses,
+		ScalarFilterPlanCacheInvalidations:      s.ScalarFilterPlanCacheInvalidations,
+		ScalarFilterPlanCacheGenerationBypasses: s.ScalarFilterPlanCacheGenerationBypasses,
+		ScalarFilterPlanCacheEvictions:          s.ScalarFilterPlanCacheEvictions,
+		ScalarFilterPlanCacheEntries:            s.ScalarFilterPlanCacheEntries,
+		ScalarFilterPlanCacheRetainedBytes:      s.ScalarFilterPlanCacheRetainedBytes,
 		LiveANN: VectorIndexSearchLiveANNDiagnostics{
 			Enabled:      s.SearchRouteNativeRuntime > 0,
 			FullRebuilds: s.NativeRuntimeFullRebuilds,
@@ -1477,8 +1498,9 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBufferCoverage(def Vector
 			return response, fmt.Errorf("%w: native_runtime vector index %q is not loaded: %s", ErrVectorIndexSearchUnavailable, def.Name, load.ExactFallbackReason)
 		}
 		var scalarPlan *nativeScalarFilterExecution
+		var scalarPlanCache nativeScalarPlanCacheStats
 		if opts.DeclaredScalarFilter != nil {
-			scalarPlan, err = c.planNativeScalarFilter(opts.DeclaredScalarFilter)
+			scalarPlan, scalarPlanCache, err = c.planNativeScalarFilter(opts.DeclaredScalarFilter, index, def)
 			if err != nil {
 				buffer.Reset()
 				return response, err
@@ -1532,6 +1554,13 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBufferCoverage(def Vector
 				if scalarPlan.exact() {
 					response.Stats.ScalarFilterExactScoring = 1
 				}
+				response.Stats.ScalarFilterPlanCacheHits = scalarPlanCache.hits
+				response.Stats.ScalarFilterPlanCacheMisses = scalarPlanCache.misses
+				response.Stats.ScalarFilterPlanCacheInvalidations = scalarPlanCache.invalidations
+				response.Stats.ScalarFilterPlanCacheGenerationBypasses = scalarPlanCache.generationBypasses
+				response.Stats.ScalarFilterPlanCacheEvictions = scalarPlanCache.evictions
+				response.Stats.ScalarFilterPlanCacheEntries = scalarPlanCache.entries
+				response.Stats.ScalarFilterPlanCacheRetainedBytes = scalarPlanCache.retainedBytes
 			}
 			response.visibility = vectorIndexSearchVisibility{
 				runtime:                  index,

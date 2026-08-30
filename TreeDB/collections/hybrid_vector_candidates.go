@@ -431,6 +431,13 @@ func hybridVectorCandidateStatsFromSearch(requested int, vectorStats VectorIndex
 	stats.ScalarFilterMatched = vectorStats.ScalarFilterAdmitted
 	stats.ScalarFilterUnderfill = vectorStats.ScalarFilterUnderfill
 	stats.ScalarFilterExactScoring = vectorStats.ScalarFilterExactScoring
+	stats.ScalarFilterPlanCacheHits = vectorStats.ScalarFilterPlanCacheHits
+	stats.ScalarFilterPlanCacheMisses = vectorStats.ScalarFilterPlanCacheMisses
+	stats.ScalarFilterPlanCacheInvalidations = vectorStats.ScalarFilterPlanCacheInvalidations
+	stats.ScalarFilterPlanCacheGenerationBypasses = vectorStats.ScalarFilterPlanCacheGenerationBypasses
+	stats.ScalarFilterPlanCacheEvictions = vectorStats.ScalarFilterPlanCacheEvictions
+	stats.ScalarFilterPlanCacheEntries = vectorStats.ScalarFilterPlanCacheEntries
+	stats.ScalarFilterPlanCacheRetainedBytes = vectorStats.ScalarFilterPlanCacheRetainedBytes
 	if vectorStats.CandidateRows > returned64 {
 		stats.Truncated = vectorStats.CandidateRows - returned64
 	}
