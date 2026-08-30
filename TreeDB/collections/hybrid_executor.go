@@ -608,18 +608,15 @@ func (view *hybridScalarLookupView) leafProbe(filter HybridScalarFilter, limit i
 	if persistedIt != nil {
 		defer func() { _ = persistedIt.Close() }()
 	}
-	ids := make([][]byte, 0, min(limit, hybridScalarDefaultLookupLimit))
-	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, limit, shouldDedupeIndexDocumentIDs(idx, view.catalog.meta.Options), func(id []byte) (bool, error) {
-		ids = append(ids, id)
+	set := make(hybridScalarAllowSet)
+	var inputIDs uint64
+	truncated, err := scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt, idx.ValueType, limit, shouldDedupeIndexDocumentIDs(idx, view.catalog.meta.Options), func(id []byte) (bool, error) {
+		inputIDs++
+		set[string(id)] = struct{}{}
 		return true, nil
 	})
-	inputIDs := uint64(len(ids))
 	if err != nil {
 		return nil, inputIDs, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
-	}
-	set := make(hybridScalarAllowSet, len(ids))
-	for _, id := range ids {
-		set[string(id)] = struct{}{}
 	}
 	return set, inputIDs, truncated, nil
 }
