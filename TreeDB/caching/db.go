@@ -9723,8 +9723,10 @@ type DB struct {
 	autoCheckpointOn      atomic.Bool
 	autoCheckpointBytesFn atomic.Pointer[autoCheckpointBytesHookBox]
 	// autoCheckpointSizeArmed gates the maxWALBytes size-triggered checkpoint.
-	// It is disarmed after the first size-triggered checkpoint and re-armed only
-	// after reclaimable WAL bytes fall below maxWALBytes/2.
+	// It is normally re-armed after reclaimable WAL bytes fall below
+	// maxWALBytes/2. A successful pass that leaves reclaimable bytes above the
+	// cap also re-arms it so a later write notification can retry after durable
+	// coverage advances.
 	autoCheckpointSizeArmed atomic.Bool
 
 	autoCheckpointCount                    atomic.Uint64
@@ -13231,16 +13233,14 @@ func (db *DB) startProcessMemorySampler() {
 	}()
 }
 
-// StartAutoCheckpoint enables a background loop that periodically forces a
-// durable boundary and trims cached-mode WAL segments. When idleInterval > 0,
-// it also triggers an opportunistic checkpoint after a period of write-idleness.
+// StartAutoCheckpoint enables a background loop that periodically maintains
+// the recovery-covered command-WAL prefix and trims cached-mode WAL segments.
+// When idleInterval > 0, it also runs after a period of write-idleness. Backends
+// without covered-prefix maintenance fall back to a full checkpoint.
 //
 // interval > 0 enables periodic checkpoints. maxWALBytes is a safety cap: if > 0,
 // the loop will attempt to checkpoint when the effective WAL bytes exceed this
 // cap. maxWALBytes <= 0 disables the size trigger.
-//
-// This does not make each individual write durable; it bounds the window of
-// unsynced writes for long-running workloads.
 func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
 	if db == nil {
 		return
@@ -18740,7 +18740,8 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 		}
 		// Avoid repeatedly checkpointing when WAL bytes cannot be reduced (e.g.
 		// value-log segments retained for pointers). Rearm once reclaimable bytes
-		// drop below maxWALBytes/2.
+		// drop below maxWALBytes/2; a successful pass with enough reclaimable
+		// bytes also re-arms so later write notifications can retry.
 		if !db.autoCheckpointSizeArmed.CompareAndSwap(true, false) {
 			return
 		}
@@ -18771,6 +18772,9 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 			db.autoCheckpointSizeArmed.CompareAndSwap(false, true)
 		}
 		return
+	}
+	if mode == autoCheckpointModeSize && maxWALBytes > 0 && afterReclaimable >= maxWALBytes {
+		db.autoCheckpointSizeArmed.CompareAndSwap(false, true)
 	}
 
 	db.autoCheckpointCount.Add(1)

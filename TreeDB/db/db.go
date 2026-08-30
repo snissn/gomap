@@ -1480,9 +1480,10 @@ type Options struct {
 	// distant, keeping the tree clustered. Set to true to maximize write speed.
 	DisablePiggybackCompaction bool
 
-	// BackgroundCheckpointInterval enables periodic durable checkpoints in cached
-	// mode. A checkpoint creates a backend sync boundary and trims
-	// cached-mode WAL segments to keep `wal/` growth bounded.
+	// BackgroundCheckpointInterval enables periodic automatic covered-prefix
+	// maintenance in cached mode. It trims command-WAL segments already covered
+	// by recovery-selectable durable roots; backends without that maintenance seam
+	// fall back to a full checkpoint.
 	//
 	// Semantics:
 	// - `0` uses a default.

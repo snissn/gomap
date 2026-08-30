@@ -1040,6 +1040,28 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_TrimsWAL(t *testing.T) {
 	}
 }
 
+func TestCachingDB_AutoCheckpoint_SizeTrigger_RearmsAfterSuccessfulNoRelief(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const maxWALBytes int64 = 1024
+	db.SetAutoCheckpointWALBytesHook(func() int64 { return maxWALBytes })
+	db.autoCheckpointSizeArmed.Store(true)
+
+	db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeSize)
+	if !db.autoCheckpointSizeArmed.Load() {
+		t.Fatal("successful size checkpoint without relief left gate disarmed")
+	}
+
+	db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeSize)
+	if got := db.autoCheckpointCount.Load(); got != 2 {
+		t.Fatalf("successful no-relief size passes=%d want 2", got)
+	}
+}
+
 func TestCachingDB_AutoCheckpoint_SizeTrigger_SeedsExistingWAL(t *testing.T) {
 	dir := t.TempDir()
 	walDir := filepath.Join(dir, "wal")
