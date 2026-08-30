@@ -905,9 +905,31 @@ func TestShouldRunVlogGenerationIndexVacuum_TracksSkipReasons(t *testing.T) {
 func TestMaybeRunVlogGenerationIndexVacuum_TracksDisabledSkip(t *testing.T) {
 	t.Setenv(envDisableVlogGenerationVacuum, "1")
 	db := &DB{valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
-	db.maybeRunVlogGenerationIndexVacuum(vlogGenerationVacuumTriggerRewriteBytes)
+	db.maybeRunVlogGenerationIndexVacuum(vlogGenerationVacuumTriggerRewriteBytes, false)
 	if got, want := db.vlogGenerationVacuumSkippedDisabled.Load(), uint64(1); got != want {
 		t.Fatalf("vacuum skipped_disabled=%d want=%d", got, want)
+	}
+}
+
+func TestMaybeRunVlogGenerationIndexVacuum_SkipsAutomaticPass(t *testing.T) {
+	backend := NewMockBackend()
+	db := &DB{backend: backend, valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold)}
+	db.maintenanceActive.Store(true)
+
+	db.maybeRunVlogGenerationIndexVacuum(vlogGenerationVacuumTriggerRewriteBytes, true)
+	backend.mu.RLock()
+	calls := backend.vacuumCalls
+	backend.mu.RUnlock()
+	if calls != 0 {
+		t.Fatalf("automatic post-rewrite vacuum calls=%d want 0", calls)
+	}
+
+	db.maybeRunVlogGenerationIndexVacuum(vlogGenerationVacuumTriggerRewriteBytes, false)
+	backend.mu.RLock()
+	calls = backend.vacuumCalls
+	backend.mu.RUnlock()
+	if calls != 1 {
+		t.Fatalf("explicit post-rewrite vacuum calls=%d want 1", calls)
 	}
 }
 

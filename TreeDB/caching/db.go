@@ -20244,6 +20244,7 @@ type vlogGenerationMaintenanceOptions struct {
 	bypassQuiet           bool
 	skipRetainedPruneWait bool
 	skipCheckpoint        bool
+	automatic             bool
 	rewriteDebtDrain      bool
 	debugSource           string
 }
@@ -22419,7 +22420,7 @@ planned:
 			if consumed > 0 {
 				db.vlogGenerationConsumeRewriteBudgetBytes(consumed, activeSourceIdx)
 			}
-			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore))
+			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore), opts.automatic)
 			return nil
 		})
 		if err != nil {
@@ -22921,12 +22922,13 @@ func vlogGenerationCheckpointKickOptions(automatic bool) vlogGenerationMaintenan
 		// backend prefix. Reuse that view instead of publishing the visible
 		// frontier through a second full checkpoint.
 		skipCheckpoint:   automatic,
+		automatic:        automatic,
 		rewriteDebtDrain: true,
 	}
 }
 
-func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
-	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64, automatic bool) {
+	if automatic || db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
 	}
 	if envBool(envDisableVlogGenerationVacuum) {
