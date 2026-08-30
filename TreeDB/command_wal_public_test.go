@@ -2473,20 +2473,21 @@ func TestPublicCommandWALAutoCheckpointUsesCommandWALBytes(t *testing.T) {
 			applied = db.backend.State().AppliedCommandLSN
 		}
 		if count > 0 && stats["treedb.cache.auto_checkpoint.last_reason"] == "size" && applied >= 1 {
-			// One auto-checkpoint establishes the applied frontier, while the older
-			// durable slot can still require LSN 1. Advance the fallback slot before
-			// requiring physical cleanup convergence.
-			if err := db.Set([]byte("auto-checkpoint/fallback-advance"), []byte("value")); err != nil {
-				t.Fatalf("Set fallback advance after size auto-checkpoint: %v", err)
+			// Automatic covered-prefix maintenance is root-neutral. Advance both
+			// durable root slots explicitly before requiring physical cleanup.
+			for i := 0; i < 2; i++ {
+				key := []byte(fmt.Sprintf("auto-checkpoint/fallback-advance-%d", i))
+				if err := db.Set(key, []byte("value")); err != nil {
+					t.Fatalf("Set fallback advance %d after size auto-checkpoint: %v", i+1, err)
+				}
+				if err := db.Checkpoint(); err != nil {
+					t.Fatalf("Checkpoint fallback advance %d after size auto-checkpoint: %v", i+1, err)
+				}
+				if got := statMapUint64(t, db.Stats(), "treedb.command_wal.cleanup.removed_segments"); got > 0 {
+					return
+				}
 			}
-			if err := db.Checkpoint(); err != nil {
-				t.Fatalf("Checkpoint fallback advance after size auto-checkpoint: %v", err)
-			}
-			commandStats := db.Stats()
-			if got := statMapUint64(t, commandStats, "treedb.command_wal.cleanup.removed_segments"); got == 0 {
-				t.Fatalf("cleanup.removed_segments=0, want >0 after fallback advance (stats=%#v)", commandStats)
-			}
-			return
+			t.Fatalf("cleanup.removed_segments=0, want >0 after advancing both durable root slots (stats=%#v)", db.Stats())
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for size auto-checkpoint: cache=%#v command=%#v applied=%d", stats, db.Stats(), applied)
