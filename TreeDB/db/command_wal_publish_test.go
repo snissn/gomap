@@ -1743,6 +1743,13 @@ func TestCommandWALCleanupTreatsMissingRetainedReplayLineageAsUnavailableProof(t
 	if err := db.CleanupCommandWALCoveredSegmentsAtCheckpoint(false); err != nil {
 		t.Fatalf("checkpoint cleanup with unavailable retained lineage: %v", err)
 	}
+	complete, err := db.CleanupCommandWALCoveredPrefix()
+	if err != nil {
+		t.Fatalf("deferred cleanup with unavailable retained lineage: %v", err)
+	}
+	if complete {
+		t.Fatal("unavailable retained lineage reported deferred cleanup complete")
+	}
 	if _, err := os.Stat(filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))); err != nil {
 		t.Fatalf("unavailable proof removed covered segment: %v", err)
 	}
@@ -2283,10 +2290,13 @@ func TestCommandWALCleanupAfterUnlinkFailureRetainsNamespaceSyncDebt(t *testing.
 		}
 		return nil
 	})
-	err := db.CleanupCommandWALCoveredSegments(true)
+	complete, err := db.CleanupCommandWALCoveredPrefix()
 	restore()
 	if !errors.Is(err, wantErr) || !errors.Is(err, ErrRecoveryRequired) {
-		t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want injected cut and ErrRecoveryRequired", err)
+		t.Fatalf("CleanupCommandWALCoveredPrefix error=%v, want injected cut and ErrRecoveryRequired", err)
+	}
+	if complete {
+		t.Fatal("failed post-unlink namespace sync reported cleanup complete")
 	}
 	if !fired || !db.commandWALCleanupNamespaceDirty.Load() {
 		t.Fatalf("after-unlink fired=%t namespaceDirty=%t, want retained sync debt", fired, db.commandWALCleanupNamespaceDirty.Load())
@@ -2305,10 +2315,13 @@ func TestCommandWALCleanupAfterUnlinkFailureRetainsNamespaceSyncDebt(t *testing.
 		}
 		return nil
 	})
-	err = db.CleanupCommandWALCoveredSegments(true)
+	complete, err = db.CleanupCommandWALCoveredPrefix()
 	restore()
 	if err != nil {
 		t.Fatalf("cleanup retry: %v", err)
+	}
+	if !complete {
+		t.Fatal("cleanup retry did not service namespace-sync debt")
 	}
 	if db.commandWALCleanupNamespaceDirty.Load() {
 		t.Fatal("cleanup retry left command-WAL namespace sync debt pending")

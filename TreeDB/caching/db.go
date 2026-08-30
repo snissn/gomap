@@ -8190,6 +8190,14 @@ type backendCoveredPrefixMaintainer interface {
 	MaintainCommandWALCoveredPrefix() error
 }
 
+// backendDeferredCoveredPrefixMaintainer separates the synchronous durability
+// cut from opportunistic proof/scan/unlink cleanup for automatic checkpoints.
+// Both methods are backend capabilities, not public caching configuration.
+type backendDeferredCoveredPrefixMaintainer interface {
+	PrepareCommandWALCoveredPrefixCleanup() (bool, error)
+	CleanupCommandWALCoveredPrefix() (bool, error)
+}
+
 func backendSyncBoundary(backend BackendDB) error {
 	if backend == nil {
 		return errors.New("cachingdb: missing backend")
@@ -9220,6 +9228,9 @@ type DB struct {
 	checkpointStageValueLogFlush                                 checkpointStageStats
 	checkpointStageCommandWALPublish                             checkpointStageStats
 	checkpointStageCommandWALCleanup                             checkpointStageStats
+	checkpointStageCommandWALPrefixClose                         checkpointStageStats
+	checkpointStageCommandWALPostReleaseCleanup                  checkpointStageStats
+	checkpointStageAutoCriticalSection                           checkpointStageStats
 	checkpointStageFlushAll                                      checkpointStageStats
 	checkpointStageLeafValueLogSync                              checkpointStageStats
 	checkpointStageReducerPublish                                checkpointStageStats
@@ -9875,6 +9886,12 @@ type DB struct {
 	autoCheckpointLastWALTrimmed           atomic.Int64
 	autoCheckpointLastWALBytes             atomic.Int64
 	autoCheckpointMaxWALBytes              atomic.Int64
+	commandWALCleanupPending               atomic.Bool
+	commandWALCleanupActive                atomic.Bool
+	commandWALCleanupRequests              atomic.Uint64
+	commandWALCleanupCoalesced             atomic.Uint64
+	commandWALCleanupCompletions           atomic.Uint64
+	commandWALCleanupRetries               atomic.Uint64
 
 	checkpointCutoverLastNanos    atomic.Int64
 	checkpointCutoverMaxNanos     atomic.Int64
@@ -19015,6 +19032,10 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 	effectiveBytes := db.effectiveWALBytes()
 	if effectiveBytes <= 0 {
+		// A prior proof may have been temporarily unavailable even though no new
+		// WAL bytes arrived. The next existing worker event gets one retry; never
+		// spin or schedule a separate task for cleanup debt.
+		db.runPendingCommandWALCleanup()
 		return
 	}
 	reclaimableBytes := db.reclaimableWALBytes()
@@ -19054,6 +19075,12 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 	beforeReclaimable := reclaimableBytes
 	start := time.Now()
 	err := db.checkpointContext(context.Background(), true)
+	criticalSectionDur := time.Since(start)
+	db.checkpointStageAutoCriticalSection.record(criticalSectionDur)
+	// The durability cut is complete and checkpointContext has released cache
+	// writer admission. Consume at most one coalesced cleanup request before
+	// sampling WAL relief and re-arming the size trigger.
+	db.runPendingCommandWALCleanup()
 	dur := time.Since(start)
 	after := db.effectiveWALBytes()
 	afterReclaimable := db.reclaimableWALBytes()
@@ -24858,9 +24885,70 @@ func (db *DB) waitForActiveCheckpointContext(ctx context.Context) error {
 
 func (db *DB) backendCheckpointBoundary(automatic bool) error {
 	if automatic && db.externalCommandWAL {
+		if maintainer, ok := db.backend.(backendDeferredCoveredPrefixMaintainer); ok {
+			start := time.Now()
+			pending, err := maintainer.PrepareCommandWALCoveredPrefixCleanup()
+			recordCheckpointStageSince(&db.checkpointStageCommandWALPrefixClose, start)
+			if err != nil {
+				return err
+			}
+			if pending {
+				db.requestCommandWALCleanup()
+			}
+			return nil
+		}
 		return backendAutomaticMaintenanceBoundary(db.backend)
 	}
 	return backendSyncBoundary(db.backend)
+}
+
+func (db *DB) defersAutomaticCommandWALCleanup() bool {
+	if db == nil || !db.externalCommandWAL {
+		return false
+	}
+	_, ok := db.backend.(backendDeferredCoveredPrefixMaintainer)
+	return ok
+}
+
+func (db *DB) requestCommandWALCleanup() {
+	if db == nil {
+		return
+	}
+	db.commandWALCleanupRequests.Add(1)
+	if !db.commandWALCleanupPending.CompareAndSwap(false, true) {
+		db.commandWALCleanupCoalesced.Add(1)
+	}
+}
+
+// runPendingCommandWALCleanup consumes at most one debt bit. It is called only
+// by the existing automatic-checkpoint worker after checkpointContext has
+// released flushMu and cache writer admission. A concurrent new request stays
+// latched for a later worker event rather than being cleared by this pass.
+func (db *DB) runPendingCommandWALCleanup() {
+	if db == nil || !db.commandWALCleanupPending.CompareAndSwap(true, false) {
+		return
+	}
+	maintainer, ok := db.backend.(backendDeferredCoveredPrefixMaintainer)
+	if !ok {
+		db.commandWALCleanupPending.Store(true)
+		db.commandWALCleanupRetries.Add(1)
+		return
+	}
+
+	db.commandWALCleanupActive.Store(true)
+	start := time.Now()
+	complete, err := maintainer.CleanupCommandWALCoveredPrefix()
+	db.checkpointStageCommandWALPostReleaseCleanup.record(time.Since(start))
+	db.commandWALCleanupActive.Store(false)
+	if err != nil || !complete {
+		db.commandWALCleanupPending.Store(true)
+		db.commandWALCleanupRetries.Add(1)
+		if err != nil {
+			db.reportError(fmt.Errorf("cachingdb: cleanup covered command WAL prefix: %w", err))
+		}
+		return
+	}
+	db.commandWALCleanupCompletions.Add(1)
 }
 
 func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
@@ -25081,7 +25169,7 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 				if err != nil {
 					return err
 				}
-				if err := db.cleanupCommandWALCheckpointTimed(true); err != nil {
+				if err := db.cleanupCommandWALCheckpointBoundary(automatic, true); err != nil {
 					return err
 				}
 			}
@@ -25313,7 +25401,7 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 		return commitErr
 	}
 	if commandWALAppliedLSN != 0 || commandWALPublishCovered {
-		if err := db.cleanupCommandWALCheckpointTimed(true); err != nil {
+		if err := db.cleanupCommandWALCheckpointBoundary(automatic, true); err != nil {
 			return err
 		}
 	}
@@ -25386,6 +25474,16 @@ func (db *DB) cleanupCommandWALCheckpointTimed(sync bool) error {
 	commandWALCleanupStart := time.Now()
 	defer recordCheckpointStageSince(&db.checkpointStageCommandWALCleanup, commandWALCleanupStart)
 	return db.cleanupCommandWALCheckpoint(sync)
+}
+
+func (db *DB) cleanupCommandWALCheckpointBoundary(automatic, sync bool) error {
+	if automatic && db.defersAutomaticCommandWALCleanup() {
+		// backendCheckpointBoundary already closed the exact prefix and latched
+		// cleanup debt. Running the public cleanup hook here would put the same
+		// proof/scan/unlink work back under cache writer admission.
+		return nil
+	}
+	return db.cleanupCommandWALCheckpointTimed(sync)
 }
 
 func (db *DB) publishCommandWALCheckpointApplied(appliedLSN uint64, ranges []backenddb.CommandWALLSNRange) (bool, error) {
@@ -31431,6 +31529,9 @@ func (db *DB) Stats() map[string]string {
 	appendCheckpointStageStats(stats, "value_log_flush", &db.checkpointStageValueLogFlush)
 	appendCheckpointStageStats(stats, "command_wal_publish", &db.checkpointStageCommandWALPublish)
 	appendCheckpointStageStats(stats, "command_wal_cleanup", &db.checkpointStageCommandWALCleanup)
+	appendCheckpointStageStats(stats, "command_wal_prefix_close", &db.checkpointStageCommandWALPrefixClose)
+	appendCheckpointStageStats(stats, "command_wal_post_release_cleanup", &db.checkpointStageCommandWALPostReleaseCleanup)
+	appendCheckpointStageStats(stats, "auto_critical_section", &db.checkpointStageAutoCriticalSection)
 	appendCheckpointStageStats(stats, "flush_all", &db.checkpointStageFlushAll)
 	appendCheckpointStageStats(stats, "leaf_value_log_sync", &db.checkpointStageLeafValueLogSync)
 	appendCheckpointStageStats(stats, "reducer_publish", &db.checkpointStageReducerPublish)
@@ -31439,6 +31540,12 @@ func (db *DB) Stats() map[string]string {
 	appendCheckpointStageStats(stats, "post_maintenance", &db.checkpointStagePostMaintenance)
 	stats["treedb.cache.command_wal.checkpoint_publish.piggybacked"] = fmt.Sprintf("%d", db.commandWALCheckpointPublishPiggybacked.Load())
 	stats["treedb.cache.command_wal.checkpoint_publish.separate"] = fmt.Sprintf("%d", db.commandWALCheckpointPublishSeparate.Load())
+	stats["treedb.cache.command_wal.cleanup.pending"] = fmt.Sprintf("%t", db.commandWALCleanupPending.Load())
+	stats["treedb.cache.command_wal.cleanup.active"] = fmt.Sprintf("%t", db.commandWALCleanupActive.Load())
+	stats["treedb.cache.command_wal.cleanup.requests_total"] = fmt.Sprintf("%d", db.commandWALCleanupRequests.Load())
+	stats["treedb.cache.command_wal.cleanup.coalesced_total"] = fmt.Sprintf("%d", db.commandWALCleanupCoalesced.Load())
+	stats["treedb.cache.command_wal.cleanup.completions_total"] = fmt.Sprintf("%d", db.commandWALCleanupCompletions.Load())
+	stats["treedb.cache.command_wal.cleanup.retries_total"] = fmt.Sprintf("%d", db.commandWALCleanupRetries.Load())
 	db.appendCacheFlushApplyStats(stats)
 	stats["treedb.cache.checkpoint.auto_vacuum_runs"] = fmt.Sprintf("%d", db.checkpointAutoVacuumRuns.Load())
 	stats["treedb.cache.checkpoint.auto_vacuum_last_pages"] = fmt.Sprintf("%d", db.checkpointAutoVacuumLastPages.Load())

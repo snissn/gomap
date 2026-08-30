@@ -709,6 +709,32 @@ func (db *DB) CleanupCommandWALCoveredSegmentsAtCheckpoint(_ bool) error {
 	return db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(false)
 }
 
+// CleanupCommandWALCoveredPrefix consumes cleanup debt created by
+// PrepareCommandWALCoveredPrefixCleanup. The boolean reports whether the debt
+// was serviced. A stale or temporarily unavailable proof leaves every segment
+// intact and asks the existing automatic-checkpoint worker to try once on a
+// later event.
+func (db *DB) CleanupCommandWALCoveredPrefix() (bool, error) {
+	if db == nil || !db.commandWAL {
+		return true, nil
+	}
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+	if db.closing.Load() {
+		return false, ErrClosed
+	}
+	err := db.cleanupCommandWALCoveredSegmentsV1()
+	if errors.Is(err, errDurableWALCleanupProofUnavailable) ||
+		errors.Is(err, errDurableWALCleanupProofStale) ||
+		errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // cleanupCommandWALCoveredSegmentsAtCheckpointV1 accepts maintenanceAlreadyHeld
 // only from an enclosing backend maintenance operation. Ordinary checkpoint
 // callers still enter through the public maintenance admission gate.

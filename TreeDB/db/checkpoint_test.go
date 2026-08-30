@@ -260,8 +260,25 @@ func TestMaintainCommandWALCoveredPrefixRetriesClosedSegmentsAfterCoverageAdvanc
 	if proof.cleanupThrough < state.AppliedCommandLSN || proof.rootCount != 2 {
 		t.Fatalf("coverage proof: through=%d roots=%d, want two roots through %d", proof.cleanupThrough, proof.rootCount, state.AppliedCommandLSN)
 	}
-	if err := d.MaintainCommandWALCoveredPrefix(); err != nil {
-		t.Fatalf("second MaintainCommandWALCoveredPrefix: %v", err)
+	pending, err := d.PrepareCommandWALCoveredPrefixCleanup()
+	if err != nil {
+		t.Fatalf("PrepareCommandWALCoveredPrefixCleanup: %v", err)
+	}
+	if !pending {
+		t.Fatal("covered closed segment did not create cleanup debt")
+	}
+	if d.commandWALClosedBytes.Load() <= 0 {
+		t.Fatal("prefix preparation performed cleanup synchronously")
+	}
+	if err := d.Set([]byte("post-cut"), []byte("retained")); err != nil {
+		t.Fatalf("post-cut Set: %v", err)
+	}
+	complete, err := d.CleanupCommandWALCoveredPrefix()
+	if err != nil {
+		t.Fatalf("CleanupCommandWALCoveredPrefix: %v", err)
+	}
+	if !complete {
+		t.Fatal("cleanup proof remained unavailable after durable coverage advanced")
 	}
 	if d.commandWALClosedBytes.Load() != 0 {
 		t.Fatalf("closed command WAL bytes=%d, want covered segment removed without new append", d.commandWALClosedBytes.Load())
@@ -281,6 +298,13 @@ func TestMaintainCommandWALCoveredPrefixRetriesClosedSegmentsAfterCoverageAdvanc
 	}
 	if !bytes.Equal(got, []byte("value")) {
 		t.Fatalf("Get after reopen=%q want value", got)
+	}
+	got, err = reopened.Get([]byte("post-cut"))
+	if err != nil {
+		t.Fatalf("Get post-cut value after reopen: %v", err)
+	}
+	if !bytes.Equal(got, []byte("retained")) {
+		t.Fatalf("Get post-cut value after reopen=%q want retained", got)
 	}
 	if entries, err := os.ReadDir(WALDirPath(dir)); err != nil || len(entries) == 0 {
 		t.Fatalf("command WAL after cleanup entries=%v err=%v, want active successor", entries, err)
