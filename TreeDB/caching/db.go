@@ -13517,11 +13517,22 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 		ctx, cancel = context.WithCancel(context.Background())
 	}
 	lastActivity := db.lastForegroundActivityUnixNano()
-	startedAt := time.Now()
-	resumeCutoff := startedAt.Add(resumeGrace).UnixNano()
-	go func(lastActivity, resumeCutoff int64) {
+	lastReadStampCounter := db.foregroundReadStampCounter.Load()
+	var (
+		graceTimer *time.Timer
+		graceC     <-chan time.Time
+	)
+	if resumeGrace > 0 {
+		graceTimer = time.NewTimer(resumeGrace)
+		graceC = graceTimer.C
+	}
+	go func(lastActivity int64, lastReadStampCounter uint32) {
 		ticker := time.NewTicker(foregroundMaintenancePollInterval())
 		defer ticker.Stop()
+		if graceTimer != nil {
+			defer graceTimer.Stop()
+		}
+		graceElapsed := resumeGrace <= 0
 		for {
 			select {
 			case <-ctx.Done():
@@ -13529,7 +13540,19 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 			case <-db.closeCh:
 				cancel()
 				return
-			case now := <-ticker.C:
+			case <-graceC:
+				graceC = nil
+				graceElapsed = true
+				lastActivity = db.lastForegroundActivityUnixNano()
+				lastReadStampCounter = db.foregroundReadStampCounter.Load()
+				if db.activeForegroundIterators.Load() > 0 {
+					cancel()
+					return
+				}
+			case <-ticker.C:
+				if !graceElapsed {
+					continue
+				}
 				if resumeGrace <= 0 {
 					if db.foregroundActivityResumedSince(lastActivity) {
 						cancel()
@@ -13537,19 +13560,18 @@ func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace t
 					}
 					continue
 				}
-				if now.Sub(startedAt) < resumeGrace {
-					continue
-				}
-				// Activity that starts and finishes inside the grace is absorbed.
-				// A read still active at the boundary, or any activity beginning
-				// after the boundary, cancels the maintenance plan.
-				if db.activeForegroundIterators.Load() > 0 || db.lastForegroundActivityUnixNano() > resumeCutoff {
+				// Activity completed before the grace timer fires becomes the new
+				// baseline. Reads active at that boundary cancel immediately;
+				// timestamp or stamp-counter changes catch short activity after it.
+				if db.activeForegroundIterators.Load() > 0 ||
+					db.lastForegroundActivityUnixNano() != lastActivity ||
+					db.foregroundReadStampCounter.Load() != lastReadStampCounter {
 					cancel()
 					return
 				}
 			}
 		}
-	}(lastActivity, resumeCutoff)
+	}(lastActivity, lastReadStampCounter)
 	return ctx, cancel
 }
 

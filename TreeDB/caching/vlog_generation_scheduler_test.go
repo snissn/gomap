@@ -9906,6 +9906,30 @@ func TestVlogGenerationRewritePlan_OneShotReadBlipDoesNotCancelLongPlan(t *testi
 	}
 }
 
+func TestForegroundMaintenanceContextWithResumeGrace_CancelsShortReadAfterBoundary(t *testing.T) {
+	db := &DB{closeCh: make(chan struct{})}
+	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
+
+	const grace = 50 * time.Millisecond
+	ctx, cancel := db.foregroundMaintenanceContextWithResumeGrace(2*time.Second, grace)
+	defer cancel()
+
+	time.Sleep(grace + foregroundMaintenancePollInterval())
+	select {
+	case <-ctx.Done():
+		t.Fatalf("maintenance canceled without post-grace activity: %v", ctx.Err())
+	default:
+	}
+
+	endRead := db.beginRawForegroundRead()
+	endRead()
+	select {
+	case <-ctx.Done():
+	case <-time.After(2 * foregroundMaintenancePollInterval()):
+		t.Fatalf("maintenance did not cancel after a short post-grace read")
+	}
+}
+
 func TestVlogGenerationRewritePlan_CancelBackoffSkipsImmediateRetry(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
@@ -10128,24 +10152,8 @@ func TestVlogGenerationRewritePlan_CancelsForResumedReadsAndRetriesAfterQuiet(t 
 		t.Fatalf("rewrite plan did not start")
 	}
 
-	stopReads := make(chan struct{})
-	readsStopped := make(chan struct{})
-	go func() {
-		defer close(readsStopped)
-		ticker := time.NewTicker(foregroundReadStampMaxAge / 4)
-		defer ticker.Stop()
-		db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
-		for {
-			select {
-			case <-stopReads:
-				return
-			case <-db.closeCh:
-				return
-			case now := <-ticker.C:
-				db.lastForegroundReadUnixNano.Store(now.UnixNano())
-			}
-		}
-	}()
+	endRead := db.beginRawForegroundRead()
+	defer endRead()
 	select {
 	case <-doneMaintenance:
 		t.Fatalf("rewrite plan canceled before resume grace elapsed")
@@ -10156,8 +10164,7 @@ func TestVlogGenerationRewritePlan_CancelsForResumedReadsAndRetriesAfterQuiet(t 
 	case <-time.After(wait):
 		t.Fatalf("rewrite plan did not cancel after foreground reads remained resumed through grace")
 	}
-	close(stopReads)
-	<-readsStopped
+	endRead()
 
 	completed, canceled := blocking.recordedPlanOutcomes()
 	if completed != 0 || canceled != 1 {
