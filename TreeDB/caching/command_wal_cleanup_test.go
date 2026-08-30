@@ -3,19 +3,35 @@ package caching
 import (
 	"errors"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 type checkpointBoundaryBackend struct {
 	BackendDB
-	err   error
-	calls int
+	err               error
+	calls             int
+	maintenanceErr    error
+	maintenanceCalls  int
+	checkpointStarted chan struct{}
+	checkpointRelease <-chan struct{}
 }
 
 func (b *checkpointBoundaryBackend) Checkpoint() error {
 	b.calls++
+	if b.checkpointStarted != nil {
+		close(b.checkpointStarted)
+	}
+	if b.checkpointRelease != nil {
+		<-b.checkpointRelease
+	}
 	return b.err
+}
+
+func (b *checkpointBoundaryBackend) MaintainCommandWALCoveredPrefix() error {
+	b.maintenanceCalls++
+	return b.maintenanceErr
 }
 
 func TestBackendSyncBoundaryTreatsStaleCleanupProofAsRetryable(t *testing.T) {
@@ -40,6 +56,49 @@ func TestBackendSyncBoundaryPropagatesUnexpectedCheckpointError(t *testing.T) {
 
 	if err := backendSyncBoundary(backend); !errors.Is(err, want) {
 		t.Fatalf("backendSyncBoundary error=%v, want %v", err, want)
+	}
+}
+
+func TestBackendAutomaticMaintenanceBoundaryDoesNotForceCheckpoint(t *testing.T) {
+	release := make(chan struct{})
+	backend := &checkpointBoundaryBackend{
+		checkpointStarted: make(chan struct{}),
+		checkpointRelease: release,
+	}
+
+	if err := backendAutomaticMaintenanceBoundary(backend); err != nil {
+		t.Fatalf("backendAutomaticMaintenanceBoundary: %v", err)
+	}
+	if backend.maintenanceCalls != 1 {
+		t.Fatalf("covered-prefix calls=%d, want 1", backend.maintenanceCalls)
+	}
+	if backend.calls != 0 {
+		t.Fatalf("checkpoint calls=%d, want 0", backend.calls)
+	}
+
+	explicitDone := make(chan error, 1)
+	go func() { explicitDone <- backendSyncBoundary(backend) }()
+	select {
+	case <-backend.checkpointStarted:
+	case <-time.After(withRaceTimeout(time.Second)):
+		t.Fatal("explicit checkpoint did not reach held visible frontier")
+	}
+	select {
+	case err := <-explicitDone:
+		t.Fatalf("explicit checkpoint returned early: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-explicitDone; err != nil {
+		t.Fatalf("explicit checkpoint: %v", err)
+	}
+}
+
+func TestBackendAutomaticMaintenanceBoundaryRetainsStaleCleanupProof(t *testing.T) {
+	backend := &checkpointBoundaryBackend{maintenanceErr: backenddb.ErrDurableWALCleanupProofStale}
+
+	if err := backendAutomaticMaintenanceBoundary(backend); err != nil {
+		t.Fatalf("backendAutomaticMaintenanceBoundary error=%v, want stale proof retained for retry", err)
 	}
 }
 

@@ -8174,6 +8174,13 @@ type backendCheckpointer interface {
 	Checkpoint() error
 }
 
+// backendCoveredPrefixMaintainer is the automatic-checkpoint-only boundary.
+// It rotates and cleans a recovery-covered command-WAL prefix without making
+// the current visible root frontier durable.
+type backendCoveredPrefixMaintainer interface {
+	MaintainCommandWALCoveredPrefix() error
+}
+
 func backendSyncBoundary(backend BackendDB) error {
 	if backend == nil {
 		return errors.New("cachingdb: missing backend")
@@ -8198,6 +8205,20 @@ func backendSyncBoundary(backend BackendDB) error {
 		err = cerr
 	}
 	return err
+}
+
+func backendAutomaticMaintenanceBoundary(backend BackendDB) error {
+	if backend == nil {
+		return errors.New("cachingdb: missing backend")
+	}
+	if maintainer, ok := backend.(backendCoveredPrefixMaintainer); ok {
+		err := maintainer.MaintainCommandWALCoveredPrefix()
+		if errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
+			return nil
+		}
+		return err
+	}
+	return backendSyncBoundary(backend)
 }
 
 type backendCloseHookRunner interface {
@@ -18731,7 +18752,7 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 	before := effectiveBytes
 	beforeReclaimable := reclaimableBytes
 	start := time.Now()
-	err := db.Checkpoint()
+	err := db.checkpointContext(context.Background(), true)
 	dur := time.Since(start)
 	after := db.effectiveWALBytes()
 	afterReclaimable := db.reclaimableWALBytes()
@@ -24100,7 +24121,7 @@ func (db *DB) observePublishWatermarkLagDrift(backlogBytes int64, now time.Time)
 //   - forces a backend sync boundary (even if the queue is empty),
 //   - removes all older WAL segments (keeping only the currently-open one).
 func (db *DB) Checkpoint() error {
-	return db.checkpointContext(context.Background())
+	return db.checkpointContext(context.Background(), false)
 }
 
 // CheckpointContext is Checkpoint with cooperative cancellation while waiting
@@ -24110,7 +24131,7 @@ func (db *DB) CheckpointContext(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return db.checkpointContext(ctx)
+	return db.checkpointContext(ctx, false)
 }
 
 type checkpointTryLocker interface {
@@ -24184,7 +24205,14 @@ func (db *DB) waitForActiveCheckpointContext(ctx context.Context) error {
 	return nil
 }
 
-func (db *DB) checkpointContext(ctx context.Context) error {
+func (db *DB) backendCheckpointBoundary(automatic bool) error {
+	if automatic {
+		return backendAutomaticMaintenanceBoundary(db.backend)
+	}
+	return backendSyncBoundary(db.backend)
+}
+
+func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 	if db == nil {
 		return nil
 	}
@@ -24354,7 +24382,7 @@ func (db *DB) checkpointContext(ctx context.Context) error {
 			return err
 		}
 		backendBoundaryStart := time.Now()
-		err := backendSyncBoundary(db.backend)
+		err := db.backendCheckpointBoundary(automatic)
 		recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
 		if err != nil {
 			return err
@@ -24397,7 +24425,7 @@ func (db *DB) checkpointContext(ctx context.Context) error {
 					return err
 				}
 				backendBoundaryStart := time.Now()
-				err = backendSyncBoundary(db.backend)
+				err = db.backendCheckpointBoundary(automatic)
 				recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
 				if err != nil {
 					return err
@@ -24628,7 +24656,7 @@ func (db *DB) checkpointContext(ctx context.Context) error {
 		return err
 	}
 	backendBoundaryStart := time.Now()
-	commitErr := backendSyncBoundary(db.backend)
+	commitErr := db.backendCheckpointBoundary(automatic)
 	recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
 	if commitErr != nil {
 		return commitErr

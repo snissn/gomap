@@ -2530,6 +2530,53 @@ func TestPublicCommandWALAutoCheckpointBytesIncludesRotatedSegments(t *testing.T
 	}
 }
 
+func TestPublicCommandWALAutoCheckpointRetainsUncoveredTailThroughReopen(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                              dir,
+		Durability:                       DurabilityWALOnRelaxed,
+		CommandWAL:                       true,
+		CommandWALStatsScan:              true,
+		CommandWALSegmentTargetBytes:     1,
+		MaxWALBytes:                      1,
+		BackgroundCheckpointInterval:     -1,
+		BackgroundCheckpointIdleDuration: -1,
+		DisableSideStores:                true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if err := db.Set([]byte("covered"), []byte("value")); err != nil {
+		t.Fatalf("Set covered: %v", err)
+	}
+	before := statMapUint64(t, db.cached.Stats(), "treedb.cache.auto_checkpoint.count")
+	db.triggerAutoCheckpointForTest()
+	if err := waitForPublicCommandWALAutoCheckpointCount(db, before+1); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Set([]byte("tail"), []byte("retained")); err != nil {
+		t.Fatalf("Set tail: %v", err)
+	}
+	if segments := publicCommandWALSegmentNames(t, dir); len(segments) == 0 {
+		t.Fatal("automatic maintenance removed the uncovered command-WAL tail")
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	db, err = Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true, CommandWALStatsScan: true, DisableSideStores: true})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	for key, want := range map[string]string{"covered": "value", "tail": "retained"} {
+		got, err := db.Get([]byte(key))
+		if err != nil || string(got) != want {
+			t.Fatalf("Get(%q)=(%q, %v), want (%q, nil)", key, got, err, want)
+		}
+	}
+}
+
 func TestPublicCommandWALCheckpointPiggybacksAppliedLSN(t *testing.T) {
 	db, err := Open(Options{
 		Dir:               t.TempDir(),

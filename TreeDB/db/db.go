@@ -3807,6 +3807,33 @@ func (db *DB) Checkpoint() error {
 	return db.checkpoint(false)
 }
 
+// MaintainCommandWALCoveredPrefix rotates the physical command-WAL prefix and
+// removes only segments already covered by recovery-selectable durable roots.
+// Automatic cache maintenance uses this instead of Checkpoint so deferred root
+// publication remains under the existing coordinator's debt policy.
+func (db *DB) MaintainCommandWALCoveredPrefix() error {
+	if db == nil || db.closing.Load() {
+		return ErrClosed
+	}
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	if db.rootPublication == nil || db.rootPublication.coordinator == nil {
+		return db.Checkpoint()
+	}
+
+	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	rotated, advanced, err := db.closeCommandWALCheckpointPrefix()
+	unlockCommandWALPublish()
+	if err != nil || (!rotated && !advanced) {
+		return err
+	}
+	return db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(false)
+}
+
 // checkpoint runs with maintenanceAlreadyHeld only for an enclosing backend
 // maintenance operation such as CompactStorage. Command-WAL cleanup must not
 // recursively acquire maintenanceMu in that case.
