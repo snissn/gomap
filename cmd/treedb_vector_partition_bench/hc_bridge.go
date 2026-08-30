@@ -21,6 +21,9 @@ import (
 const hcBridgeVersionV1 = 1
 const hcBridgeResponseGraceV1 = time.Second
 
+// Leave one production-node connection available for explicit diagnostics.
+const hcBridgeMaxClientsV1 = vectorPartitionSystemMaxConnectionsV1 - 1
+
 type hcBridgeClientV1 interface {
 	callContext(context.Context, vectorPartitionOperationsWireRequestV1) (vectorPartitionOperationsWireResponseV1, error)
 	Close() error
@@ -51,7 +54,7 @@ type hcBridgeErrorV1 struct {
 }
 
 func newHCBridgeV1(endpoint string, maxClients int, maxBody int64, timeout time.Duration) (*hcBridgeV1, error) {
-	if endpoint == "" || maxClients < 1 || maxClients > 256 || maxBody < 1 || maxBody > 16<<20 || timeout <= 0 || timeout > time.Minute {
+	if endpoint == "" || !validHCBridgeBoundsV1(maxClients, maxBody, timeout) {
 		return nil, errors.New("invalid hc bridge bounds")
 	}
 	b := &hcBridgeV1{clients: make(chan *hcBridgeSlotV1, maxClients), timeout: timeout, maxBody: maxBody}
@@ -83,6 +86,10 @@ func newHCBridgeV1(endpoint string, maxClients int, maxBody int64, timeout time.
 	return b, nil
 }
 
+func validHCBridgeBoundsV1(maxClients int, maxBody int64, timeout time.Duration) bool {
+	return maxClients >= 1 && maxClients <= hcBridgeMaxClientsV1 && maxBody >= 1 && maxBody <= 16<<20 && timeout > 0 && timeout <= time.Minute
+}
+
 func (b *hcBridgeV1) Close() error {
 	if b == nil {
 		return nil
@@ -112,6 +119,23 @@ func (b *hcBridgeV1) call(ctx context.Context, request vectorPartitionOperations
 			}
 		}
 		response, err := slot.client.callContext(ctx, request)
+		if err == nil || request.Operation != "search" {
+			if err != nil {
+				_ = slot.client.Close()
+				slot.client = nil
+			}
+			return response, err
+		}
+		_ = slot.client.Close()
+		slot.client = nil
+		if ctx.Err() != nil {
+			return vectorPartitionOperationsWireResponseV1{}, ctx.Err()
+		}
+		slot.client, err = b.redial(ctx)
+		if err != nil {
+			return vectorPartitionOperationsWireResponseV1{}, err
+		}
+		response, err = slot.client.callContext(ctx, request)
 		if err != nil {
 			_ = slot.client.Close()
 			slot.client = nil

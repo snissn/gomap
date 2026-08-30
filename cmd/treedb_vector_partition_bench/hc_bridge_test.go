@@ -49,6 +49,15 @@ func TestHCBridgeRejectsNonLoopbackV1(t *testing.T) {
 	}
 }
 
+func TestHCBridgeClientCapReservesSystemDiagnosticConnectionV1(t *testing.T) {
+	if !validHCBridgeBoundsV1(vectorPartitionSystemMaxConnectionsV1-1, 1, time.Second) {
+		t.Fatal("system-aligned bridge cap rejected")
+	}
+	if validHCBridgeBoundsV1(vectorPartitionSystemMaxConnectionsV1, 1, time.Second) {
+		t.Fatal("bridge consumed reserved system diagnostic connection")
+	}
+}
+
 func TestHCBridgeStatusAndSearchIdentityV1(t *testing.T) {
 	b := hcBridgeTestV1(&hcBridgeFakeClientV1{search: public.SearchResponseV1{Generation: public.GenerationIDV1{Index: "idx", Generation: 7}, Neighbors: []public.NeighborV1{{ID: "doc-000042", Score: .5}}, Counters: public.SearchCountersV1{SelectedPartitions: 1, HNSWServedPartitions: 1}}})
 	for _, tc := range []struct {
@@ -173,6 +182,21 @@ func TestHCBridgeRetiresFailedSlotThenRedialsV1(t *testing.T) {
 		t.Fatalf("redial recovery: %v", err)
 	}
 	if len(failed.calls) != 1 || failed.closes != 1 || redials != 1 || len(recovered.calls) != 1 {
+		t.Fatalf("failed=%+v closes=%d redials=%d recovered=%+v", failed.calls, failed.closes, redials, recovered.calls)
+	}
+}
+
+func TestHCBridgeSearchRetriesRetiredClientOnceV1(t *testing.T) {
+	failed := &hcBridgeCountingClientV1{err: errors.New("expired connection")}
+	recovered := &hcBridgeCountingClientV1{}
+	b := hcBridgeTestV1(failed)
+	redials := 0
+	b.redial = func(context.Context) (hcBridgeClientV1, error) { redials++; return recovered, nil }
+	request := vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "search"}
+	if _, err := b.call(context.Background(), request); err != nil {
+		t.Fatalf("same-request recovery: %v", err)
+	}
+	if len(failed.calls) != 1 || failed.closes != 1 || redials != 1 || len(recovered.calls) != 1 || recovered.calls[0] != "search" {
 		t.Fatalf("failed=%+v closes=%d redials=%d recovered=%+v", failed.calls, failed.closes, redials, recovered.calls)
 	}
 }
