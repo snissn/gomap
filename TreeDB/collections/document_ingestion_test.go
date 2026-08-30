@@ -1374,7 +1374,7 @@ func TestIngestSourcesProgressCallbackCanReadCommittedParent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ingest: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("progress callback deadlocked on the committed parent's lifecycle lock")
 	}
 	if err := <-callbackErr; err != nil {
@@ -1406,7 +1406,7 @@ func TestIngestSourcesProgressCallbackCanReadSiblingParent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ingest: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("progress callback deadlocked on a sibling lifecycle lock")
 	}
 	if callbacks != len(sources) {

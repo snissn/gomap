@@ -115,6 +115,7 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 
 	// The refused log entry does not prevent a safe metadata generation from
 	// advancing monotonically, and the old backup still cannot roll it back.
+	newLeader = target.waitLeader(t, ctx)
 	command2 := mustCatalogMetaCommand(t, 1, 2, realCatalogMetaIntegrationCatalogV1("group-a"))
 	if _, _, err := target.providers[newLeader].SubmitCatalogMetaCommandV1(ctx, command2); err != nil {
 		t.Fatalf("target epoch 2 after failover: %v", err)
