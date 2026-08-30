@@ -20629,8 +20629,7 @@ func (db *DB) coalesceDeferredVectorBuildVlogMaintenance() bool {
 		return false
 	}
 	db.deferredVectorBuildVlogMaintenanceSkips.Add(1)
-	if db.deferredVectorBuildVlogMaintenanceState.Load() == deferredVectorBuildVlogMaintenanceSuppressed &&
-		db.deferredVectorBuildVlogMaintenanceDebt.CompareAndSwap(false, true) {
+	if db.deferredVectorBuildVlogMaintenanceDebt.CompareAndSwap(false, true) {
 		db.deferredVectorBuildVlogMaintenanceDebtSet.Add(1)
 	}
 	return true
@@ -20648,15 +20647,28 @@ func (db *DB) FinalizeDeferredVectorBuildMaintenance(ctx context.Context) error 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Consume the admitted debt before changing state. A request coalesced after
+	// this swap, whether it still observes Suppressed or already sees Finalizing,
+	// belongs to a later ordinary scheduler pass and must remain latched.
+	admittedDebt := db.deferredVectorBuildVlogMaintenanceDebt.Swap(false)
 	if !db.deferredVectorBuildVlogMaintenanceState.CompareAndSwap(
 		deferredVectorBuildVlogMaintenanceSuppressed,
 		deferredVectorBuildVlogMaintenanceFinalizing,
 	) {
+		if admittedDebt {
+			db.deferredVectorBuildVlogMaintenanceDebt.Store(true)
+		}
 		return errors.New("cachingdb: deferred vector-build value-log maintenance is not suppressed")
 	}
-	if !db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+	if !admittedDebt {
 		return nil
 	}
+	serviced := false
+	defer func() {
+		if !serviced {
+			db.deferredVectorBuildVlogMaintenanceDebt.Store(true)
+		}
+	}()
 	if db.checkpointCond != nil {
 		db.checkpointMu.Lock()
 		for db.vlogGenerationMaintenanceActive.Load() && !db.closing.Load() {
@@ -20691,19 +20703,16 @@ func (db *DB) FinalizeDeferredVectorBuildMaintenance(ctx context.Context) error 
 		db.deferredVectorBuildVlogMaintenanceFailures.Add(1)
 		return runErr
 	}
-	db.deferredVectorBuildVlogMaintenanceDebt.Store(false)
+	serviced = true
 	return nil
 }
 
 // EndDeferredVectorBuildMaintenance restores ordinary automatic scheduling.
-// A failed or abandoned epoch retains its coalesced debt until a later normal
-// scheduler pass observes it.
-func (db *DB) EndDeferredVectorBuildMaintenance(serviced bool) {
+// Finalize consumes its admitted debt snapshot; any later, failed, or abandoned
+// debt remains latched until a normal scheduler pass observes it.
+func (db *DB) EndDeferredVectorBuildMaintenance(_ bool) {
 	if db == nil {
 		return
-	}
-	if serviced {
-		db.deferredVectorBuildVlogMaintenanceDebt.Store(false)
 	}
 	db.deferredVectorBuildVlogMaintenanceState.Store(deferredVectorBuildVlogMaintenanceInactive)
 }

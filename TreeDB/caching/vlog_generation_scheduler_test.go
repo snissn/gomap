@@ -938,7 +938,7 @@ func TestDeferredVectorBuildVlogMaintenanceBeginWaitsForAdmittedPass(t *testing.
 	db.EndDeferredVectorBuildMaintenance(false)
 }
 
-func TestDeferredVectorBuildVlogMaintenanceFinalizeConsumesOnePass(t *testing.T) {
+func TestDeferredVectorBuildVlogMaintenanceFinalizeConsumesSnapshotAndPreservesNewDebt(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -974,7 +974,38 @@ func TestDeferredVectorBuildVlogMaintenanceFinalizeConsumesOnePass(t *testing.T)
 	if db.deferredVectorBuildVlogMaintenanceDebt.Load() {
 		t.Fatal("successful finalization retained coalesced debt")
 	}
+
+	// A request arriving after the finalization pass but before the outer vector
+	// build releases suppression belongs to a later ordinary scheduler pass.
+	skipsBefore := db.deferredVectorBuildVlogMaintenanceSkips.Load()
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{})
+	if got := db.deferredVectorBuildVlogMaintenanceSkips.Load() - skipsBefore; got != 1 {
+		t.Fatalf("finalizing skips=%d want 1", got)
+	}
+	if !db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		t.Fatal("finalizing request did not latch follow-up debt")
+	}
 	db.EndDeferredVectorBuildMaintenance(true)
+	if !db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		t.Fatal("release cleared debt raised after the finalization snapshot")
+	}
+	before = db.vlogGenerationMaintenanceAcquired.Load()
+	if acquired := db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        true,
+		automatic:             true,
+		rewriteDebtDrain:      true,
+		debugSource:           "test_deferred_vector_followup",
+	}); !acquired {
+		t.Fatal("ordinary scheduler did not acquire the follow-up debt pass")
+	}
+	if got := db.vlogGenerationMaintenanceAcquired.Load() - before; got != 1 {
+		t.Fatalf("ordinary follow-up acquisitions=%d want 1", got)
+	}
+	if db.deferredVectorBuildVlogMaintenanceDebt.Load() {
+		t.Fatal("ordinary scheduler did not consume follow-up debt")
+	}
 }
 
 func TestDeferredVectorBuildVlogMaintenanceFinalizeFailsClosedWithoutAdmission(t *testing.T) {
