@@ -678,10 +678,15 @@ type DB struct {
 	conditionalOraclePrunedPoints    atomic.Uint64
 	conditionalOraclePrunedRanges    atomic.Uint64
 	commandWALRawPublishMu           sync.RWMutex
-	commandWALRawBarrierMu           sync.Mutex
-	commandWALRawBarrierNextID       uint64
-	commandWALRawBarriers            []*commandWALRawBarrier
-	closing                          atomic.Bool
+	// commandWALRawAdmissionMu keeps expensive prepared publishers outside the
+	// raw-publish critical section. A quiescent boundary takes it exclusively
+	// before raw; a prepared publisher must use TryLockCommandWALPreparedPublish
+	// immediately before its short atomic publish.
+	commandWALRawAdmissionMu   sync.RWMutex
+	commandWALRawBarrierMu     sync.Mutex
+	commandWALRawBarrierNextID uint64
+	commandWALRawBarriers      []*commandWALRawBarrier
+	closing                    atomic.Bool
 }
 
 // These hooks let package tests attach producer-side fixtures to the exact DB
@@ -3915,7 +3920,7 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
 	hasRootPublication := db.rootPublication != nil && db.rootPublication.coordinator != nil
 	db.mu.RUnlock()
 	if !db.commandWAL || db.commandJournal == nil || !hasRootPublication {
-		return false, db.checkpoint(true)
+		return false, db.checkpointTeardownPinned(true)
 	}
 
 	unlockCommandWALPublish := db.lockCommandWALRawPublish()
@@ -3934,6 +3939,16 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
 // maintenance operation such as CompactStorage. Command-WAL cleanup must not
 // recursively acquire maintenanceMu in that case.
 func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
+	if db == nil {
+		return ErrClosed
+	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	return db.checkpointTeardownPinned(maintenanceAlreadyHeld)
+}
+
+// checkpointTeardownPinned runs while the caller holds teardownMu.RLock.
+func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 	if db == nil || db.closing.Load() {
 		return ErrClosed
 	}
@@ -3950,8 +3965,13 @@ func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
 	// Command publishers take raw-publish before writeMu. Checkpoint must use
 	// the same order so its command-WAL frontier cannot deadlock a writer that
 	// has appended a frame and is waiting to publish the matching root.
+	unlockCommandWALAdmission := db.lockCommandWALQuiescentAdmission()
+	defer func() { unlockCommandWALAdmission() }()
 	unlockCommandWALPublish := db.lockCommandWALRawPublish()
 	defer func() { unlockCommandWALPublish() }()
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		return err
+	}
 
 	db.writeMu.Lock()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
@@ -3992,10 +4012,12 @@ func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
 		}
 		if rotatedCommandWAL || commandWALPrefixAdvanced {
 			// Cleanup captures and revalidates its own exact journal namespace
-			// snapshot. Release raw-publish before maintenance admission so a
-			// concurrent maintenance checkpoint cannot invert those locks.
+			// snapshot. Release publish admission before maintenance cleanup so a
+			// concurrent storage maintenance pass cannot invert those locks.
 			unlockCommandWALPublish()
 			unlockCommandWALPublish = func() {}
+			unlockCommandWALAdmission()
+			unlockCommandWALAdmission = func() {}
 			if err := db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyHeld); err != nil {
 				return err
 			}
@@ -4049,12 +4071,14 @@ func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
 	}
 	if rotatedCommandWAL || commandWALPrefixAdvanced {
 		// The cleanup proof independently rejects new appends and namespace
-		// changes. Drop write/raw-publish before maintenance admission to keep
-		// the global maintenance -> raw-publish -> write order acyclic.
+		// changes. Drop write/publish admission before maintenance cleanup to
+		// keep the global maintenance -> publish -> write order acyclic.
 		db.writeMu.Unlock()
 		writeLocked = false
 		unlockCommandWALPublish()
 		unlockCommandWALPublish = func() {}
+		unlockCommandWALAdmission()
+		unlockCommandWALAdmission = func() {}
 		if err := db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyHeld); err != nil {
 			return err
 		}
