@@ -432,9 +432,14 @@ func (b *columnPartImageBuilder) build() (ColumnPartImage, error) {
 		return ColumnPartImage{}, err
 	}
 
-	sections, manifest, imageBytes, err := b.layoutManifestAndSections()
+	sections, manifest, err := b.layoutManifestAndSections()
 	if err != nil {
 		return ColumnPartImage{}, err
+	}
+	imageBytes := len(manifest)
+	if len(sections) > 0 {
+		last := sections[len(sections)-1]
+		imageBytes = last.Offset + last.Length
 	}
 	out := make([]byte, 0, imageBytes)
 	out = append(out, manifest...)
@@ -459,7 +464,7 @@ func (b *columnPartImageBuilder) build() (ColumnPartImage, error) {
 	return image, nil
 }
 
-func (b *columnPartImageBuilder) layoutManifestAndSections() ([]ColumnPartImageSection, []byte, int, error) {
+func (b *columnPartImageBuilder) layoutManifestAndSections() ([]ColumnPartImageSection, []byte, error) {
 	sections := make([]ColumnPartImageSection, len(b.sections))
 	for i := range b.sections {
 		sections[i] = b.sections[i].section
@@ -468,7 +473,7 @@ func (b *columnPartImageBuilder) layoutManifestAndSections() ([]ColumnPartImageS
 	for attempt := 0; attempt < 8; attempt++ {
 		manifest, err := encodeColumnPartImageManifest(b.part, sections, manifestBytes)
 		if err != nil {
-			return nil, nil, 0, err
+			return nil, nil, err
 		}
 		offset := alignColumnPartImageOffsetTo(len(manifest), b.sectionAlignment)
 		for i := range b.sections {
@@ -479,18 +484,18 @@ func (b *columnPartImageBuilder) layoutManifestAndSections() ([]ColumnPartImageS
 			offset += b.sections[i].payloadLen()
 		}
 		if err := b.refreshLayoutContractSection(sections, len(manifest)); err != nil {
-			return nil, nil, 0, err
+			return nil, nil, err
 		}
 		finalManifest, err := encodeColumnPartImageManifest(b.part, sections, len(manifest))
 		if err != nil {
-			return nil, nil, 0, err
+			return nil, nil, err
 		}
 		if len(finalManifest) == len(manifest) {
-			return sections, finalManifest, offset, nil
+			return sections, finalManifest, nil
 		}
 		manifestBytes = len(finalManifest)
 	}
-	return nil, nil, 0, fmt.Errorf("typedcolumn: part image manifest length did not stabilize")
+	return nil, nil, fmt.Errorf("typedcolumn: part image manifest length did not stabilize")
 }
 
 func (b *columnPartImageBuilder) addDescriptorSection() error {
