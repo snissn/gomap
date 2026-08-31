@@ -119,9 +119,7 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("phase=%s rows=%d setup_complete=true measured_boundary_starts_now db_bytes_before=%d", phase, rows, before)
-	measuredStart := time.Now()
-	err = profileManualPhase(os.Getenv("TREEDB_TEXT_PROFILE_MODE"), os.Getenv("TREEDB_TEXT_PROFILE_DIR"), action)
-	measuredSeconds := time.Since(measuredStart).Seconds()
+	measured, profileErr := profileManualPhase(os.Getenv("TREEDB_TEXT_PROFILE_MODE"), os.Getenv("TREEDB_TEXT_PROFILE_DIR"), action)
 	after, sizeErr := dirSize(cfg.dbDir)
 	if loadFixture.db != nil {
 		_ = loadFixture.db.Close()
@@ -130,9 +128,9 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 	if sizeErr != nil {
 		t.Fatal(sizeErr)
 	}
-	t.Logf("phase=%s rows=%d measured_seconds=%.9f db_bytes_after=%d", phase, rows, measuredSeconds, after)
-	if err != nil {
-		t.Fatal(err)
+	t.Logf("phase=%s rows=%d measured_seconds=%.9f db_bytes_after=%d", phase, rows, measured.Seconds(), after)
+	if profileErr != nil {
+		t.Fatal(profileErr)
 	}
 }
 
@@ -147,15 +145,15 @@ func manualProfileRows() (int, error) {
 	}
 }
 
-func profileManualPhase(mode, dir string, action func() error) error {
+func profileManualPhase(mode, dir string, action func() error) (time.Duration, error) {
 	if mode == "" || mode == "none" {
-		return action()
+		return timeManualAction(action)
 	}
 	if dir == "" {
-		return fmt.Errorf("TREEDB_TEXT_PROFILE_DIR is required with profiling")
+		return 0, fmt.Errorf("TREEDB_TEXT_PROFILE_DIR is required with profiling")
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return 0, err
 	}
 	write := func(name, profile string) error {
 		f, err := os.Create(filepath.Join(dir, name))
@@ -167,44 +165,44 @@ func profileManualPhase(mode, dir string, action func() error) error {
 	}
 	if mode == "alloc" {
 		if err := write("alloc_before.pprof", "allocs"); err != nil {
-			return err
+			return 0, err
 		}
-		err := action()
+		measured, err := timeManualAction(action)
 		runtime.GC()
 		if writeErr := write("alloc_after.pprof", "allocs"); writeErr != nil {
-			return writeErr
+			return measured, writeErr
 		}
 		if writeErr := write("heap_after.pprof", "heap"); writeErr != nil {
-			return writeErr
+			return measured, writeErr
 		}
-		return err
+		return measured, err
 	}
 	if mode != "runtime" {
-		return fmt.Errorf("unknown profile mode %q", mode)
+		return 0, fmt.Errorf("unknown profile mode %q", mode)
 	}
 	cpu, err := os.Create(filepath.Join(dir, "cpu.pprof"))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if err := pprof.StartCPUProfile(cpu); err != nil {
 		_ = cpu.Close()
-		return err
+		return 0, err
 	}
 	traceFile, err := os.Create(filepath.Join(dir, "trace.out"))
 	if err != nil {
 		pprof.StopCPUProfile()
 		_ = cpu.Close()
-		return err
+		return 0, err
 	}
 	if err := trace.Start(traceFile); err != nil {
 		pprof.StopCPUProfile()
 		_ = cpu.Close()
 		_ = traceFile.Close()
-		return err
+		return 0, err
 	}
 	runtime.SetBlockProfileRate(1)
 	previousMutex := runtime.SetMutexProfileFraction(1)
-	err = action()
+	measured, err := timeManualAction(action)
 	trace.Stop()
 	pprof.StopCPUProfile()
 	runtime.SetBlockProfileRate(0)
@@ -221,5 +219,18 @@ func profileManualPhase(mode, dir string, action func() error) error {
 	if writeErr := write("mutex.pprof", "mutex"); writeErr != nil && err == nil {
 		err = writeErr
 	}
-	return err
+	return measured, err
+}
+
+func timeManualAction(action func() error) (time.Duration, error) {
+	start := time.Now()
+	err := action()
+	return time.Since(start), err
+}
+
+func TestTimeManualActionMeasuresAction4546(t *testing.T) {
+	duration, err := timeManualAction(func() error { time.Sleep(time.Millisecond); return nil })
+	if err != nil || duration < time.Millisecond {
+		t.Fatalf("duration=%s err=%v", duration, err)
+	}
 }
