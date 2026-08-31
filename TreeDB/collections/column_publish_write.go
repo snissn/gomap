@@ -181,7 +181,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	}
 	preflight := c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs)
 	var plan ColumnPublishPlan
-	defer func() { plan.releaseStableResources() }()
+	var planLease *columnPublishPlanLease
 	var updatedMeta CollectionMeta
 	var newSystemRoot uint64
 	var rootIDs []uint64
@@ -192,12 +192,15 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 				input.insertStats.ColumnPublishBuildColumnDelta += time.Since(stageStart)
 			}
 		}()
-		nextPlan, err := c.buildColumnPublishPlanForCommandWALContext(ctx, input, columnBaseRoot)
+		nextLease, err := c.prepareColumnPublishPlanLease(input, columnBaseRoot, ctx.AppliedCommandLSN)
 		if err != nil {
 			return nil, err
 		}
-		plan.releaseStableResources()
-		plan = nextPlan
+		planLease = nextLease
+		plan, err = planLease.beginInstall(input.meta.Name, ctx.AppliedCommandLSN, columnBaseRoot)
+		if err != nil {
+			return nil, err
+		}
 		recordColumnPublishPlanStats(input.insertStats, plan)
 		materializeStart := time.Now()
 		columnDelta, err := plan.RootDelta.OrderedRootDeltaPublishInput()
@@ -205,28 +208,9 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		if err != nil {
 			return nil, err
 		}
-		if plan.durableResourceRequirementsFallback != nil {
-			if err := ctx.RegisterDurableLogicalObligationAppendMutation(plan.durableResourceMutation, plan.durableResourceRequirementWork, plan.durableResourceRequirementsFallback); err != nil {
-				_ = columnDelta.Iter.Close()
-				return nil, fmt.Errorf("collections: register column publish durable append mutation: %w", err)
-			}
-		} else {
-			if err := ctx.RegisterDurableLogicalObligationRequirements(plan.durableResourceRequirements); err != nil {
-				_ = columnDelta.Iter.Close()
-				return nil, fmt.Errorf("collections: register column publish durable requirements: %w", err)
-			}
-			if err := ctx.RegisterDurableLogicalObligationMutation(plan.durableResourceMutation); err != nil {
-				_ = columnDelta.Iter.Close()
-				return nil, fmt.Errorf("collections: register column publish durable mutation: %w", err)
-			}
-			if err := ctx.RecordDurableLogicalObligationRequirementWork(plan.durableResourceRequirementWork); err != nil {
-				_ = columnDelta.Iter.Close()
-				return nil, fmt.Errorf("collections: record column publish durable requirement work: %w", err)
-			}
-		}
-		if err := ctx.RegisterDurableResources(plan.takeStableResources()); err != nil {
+		if err := installPrebuiltColumnPublishPlanDurability(ctx, planLease); err != nil {
 			_ = columnDelta.Iter.Close()
-			return nil, fmt.Errorf("collections: register column publish durable resources: %w", err)
+			return nil, err
 		}
 		locatorPolicy, err := collectionRootStoragePolicyForDB(c.db, input.meta, locatorRootName)
 		if err != nil {
@@ -283,6 +267,15 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	recordColumnPublishCommit(input.insertStats, time.Since(commitStart))
 	recordColumnPublishTiming(input.insertStats, publishTiming)
 	if err != nil {
+		if planLease != nil {
+			err = errors.Join(err, planLease.finishFailure(err))
+		}
+		return 0, nil, CollectionMeta{}, nil, err
+	}
+	if planLease == nil {
+		return 0, nil, CollectionMeta{}, nil, errors.New("collections: column publish completed without a prepared plan lease")
+	}
+	if err := planLease.finishCommit(); err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if updatedMeta.Name == "" {
@@ -330,7 +323,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	}
 	preflight = combineOrderedRootGroupPreflight(preflight, c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs))
 	var plan ColumnPublishPlan
-	defer func() { plan.releaseStableResources() }()
+	var planLease *columnPublishPlanLease
 	var updatedMeta CollectionMeta
 	var cleanupColumnDelta func()
 	buildColumnDelta := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaBatchPublishInput, error) {
@@ -340,12 +333,15 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 				input.insertStats.ColumnPublishBuildColumnDelta += time.Since(stageStart)
 			}
 		}()
-		nextPlan, err := c.buildColumnPublishPlanForCommandWALContext(ctx, input, columnBaseRoot)
+		nextLease, err := c.prepareColumnPublishPlanLease(input, columnBaseRoot, ctx.AppliedCommandLSN)
 		if err != nil {
 			return nil, err
 		}
-		plan.releaseStableResources()
-		plan = nextPlan
+		planLease = nextLease
+		plan, err = planLease.beginInstall(input.meta.Name, ctx.AppliedCommandLSN, columnBaseRoot)
+		if err != nil {
+			return nil, err
+		}
 		recordColumnPublishPlanStats(input.insertStats, plan)
 		materializeStart := time.Now()
 		columnDelta, cleanup, err := plan.RootDelta.OrderedRootDeltaBatchPublishInput()
@@ -357,43 +353,12 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 			return nil, err
 		}
 		cleanupColumnDelta = cleanup
-		if plan.durableResourceRequirementsFallback != nil {
-			if err := ctx.RegisterDurableLogicalObligationAppendMutation(plan.durableResourceMutation, plan.durableResourceRequirementWork, plan.durableResourceRequirementsFallback); err != nil {
-				if cleanupColumnDelta != nil {
-					cleanupColumnDelta()
-					cleanupColumnDelta = nil
-				}
-				return nil, fmt.Errorf("collections: register column publish durable append mutation: %w", err)
-			}
-		} else {
-			if err := ctx.RegisterDurableLogicalObligationRequirements(plan.durableResourceRequirements); err != nil {
-				if cleanupColumnDelta != nil {
-					cleanupColumnDelta()
-					cleanupColumnDelta = nil
-				}
-				return nil, fmt.Errorf("collections: register column publish durable requirements: %w", err)
-			}
-			if err := ctx.RegisterDurableLogicalObligationMutation(plan.durableResourceMutation); err != nil {
-				if cleanupColumnDelta != nil {
-					cleanupColumnDelta()
-					cleanupColumnDelta = nil
-				}
-				return nil, fmt.Errorf("collections: register column publish durable mutation: %w", err)
-			}
-			if err := ctx.RecordDurableLogicalObligationRequirementWork(plan.durableResourceRequirementWork); err != nil {
-				if cleanupColumnDelta != nil {
-					cleanupColumnDelta()
-					cleanupColumnDelta = nil
-				}
-				return nil, fmt.Errorf("collections: record column publish durable requirement work: %w", err)
-			}
-		}
-		if err := ctx.RegisterDurableResources(plan.takeStableResources()); err != nil {
+		if err := installPrebuiltColumnPublishPlanDurability(ctx, planLease); err != nil {
 			if cleanupColumnDelta != nil {
 				cleanupColumnDelta()
 				cleanupColumnDelta = nil
 			}
-			return nil, fmt.Errorf("collections: register column publish durable resources: %w", err)
+			return nil, err
 		}
 		locatorPolicy, err := collectionRootStoragePolicyForDB(c.db, input.meta, locatorRootName)
 		if err != nil {
@@ -458,6 +423,15 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	recordColumnPublishTiming(input.insertStats, publishTiming)
 	if err != nil {
 		// The DB publish helper owns context-built batch deltas on publish errors.
+		if planLease != nil {
+			err = errors.Join(err, planLease.finishFailure(err))
+		}
+		return 0, nil, CollectionMeta{}, nil, err
+	}
+	if planLease == nil {
+		return 0, nil, CollectionMeta{}, nil, errors.New("collections: column publish completed without a prepared plan lease")
+	}
+	if err := planLease.finishCommit(); err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if cleanupColumnDelta != nil {
@@ -786,14 +760,20 @@ func (c *Collection) publishRootDeltaBatchGroupWithoutColumn(ordered []backenddb
 	})
 }
 
-func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.CommandWALPublishContext, input columnWritePublishInput, baseManifestRootID uint64) (ColumnPublishPlan, error) {
+// prepareColumnPublishPlanLease performs every immutable plan stage without a
+// command-WAL publish context. The caller supplies the already reserved LSN;
+// final installation revalidates that exact binding inside the context.
+func (c *Collection) prepareColumnPublishPlanLease(input columnWritePublishInput, baseManifestRootID, appliedCommandLSN uint64) (*columnPublishPlanLease, error) {
 	cfg := input.meta.Options.ColumnStore
 	if cfg == nil {
-		return ColumnPublishPlan{}, errors.New("collections: column publish requires column store config")
+		return nil, errors.New("collections: column publish requires column store config")
+	}
+	if appliedCommandLSN == 0 {
+		return nil, errors.New("collections: column publish lease requires a reserved AppliedCommandLSN")
 	}
 	currentRecords, err := c.loadColumnManifestRecordsForPublish(baseManifestRootID, input.meta.Name, *cfg)
 	if err != nil {
-		return ColumnPublishPlan{}, err
+		return nil, err
 	}
 	plan, err := BuildColumnPublishPlan(ColumnPublishPlanInput{
 		Collection:               input.meta.Name,
@@ -804,20 +784,48 @@ func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.Co
 		Operation:                input.operation,
 		CurrentManifest:          cfg.ActiveManifest,
 		CurrentManifestRecords:   currentRecords,
-		AppliedCommandLSN:        ctx.AppliedCommandLSN,
+		AppliedCommandLSN:        appliedCommandLSN,
 		BaseManifestRootID:       baseManifestRootID,
 		Hooks: ColumnPublishPlanHooks{
 			PrepareAssets: func(hookInput ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
 				return c.prepareColumnPhysicalAssetsForCommand(input, hookInput)
 			},
 			EncodeManifest: encodeColumnManifestIdentityForWrite,
+			abandonPreparedAssets: func(assets []ColumnPreparedAsset, stable bool) error {
+				retained := columnPublishPlanPreparedRefs(ColumnPublishPlan{PreparedAssets: assets})
+				var cleanupErr error
+				if !stable {
+					retained, cleanupErr = cleanupUnpublishedColumnPublishAssets(c.db.ColumnAssetRootDir(), assets)
+				}
+				if len(retained) == 0 {
+					return cleanupErr
+				}
+				_, quarantineErr := c.RegisterColumnAssetQuarantine(ColumnAssetQuarantineRegistrationOptions{
+					Owner:  fmt.Sprintf("column-publish-plan-%s-%d", input.meta.Name, appliedCommandLSN),
+					Source: "column_publish_plan",
+					Reason: "column publish plan construction failed after asset preparation",
+					Refs:   retained,
+				})
+				return errors.Join(cleanupErr, errColumnPublishPlanLeaseCleanupQuarantined, quarantineErr)
+			},
 		},
 	})
 	if err != nil {
-		return ColumnPublishPlan{}, err
+		return nil, err
 	}
 	plan.StageMetrics.DocumentExtraction += input.documentExtraction
-	return plan, nil
+	return newColumnPublishPlanLease(c, plan)
+}
+
+// installPrebuiltColumnPublishPlanDurability is the single stable-resource
+// transfer point shared by the synchronous path and future outside-context
+// preparers. The lease remains installing until the enclosing atomic publish
+// reports an unambiguous result.
+func installPrebuiltColumnPublishPlanDurability(ctx backenddb.CommandWALPublishContext, lease *columnPublishPlanLease) error {
+	if lease == nil {
+		return errors.New("collections: nil prebuilt column publish plan lease")
+	}
+	return lease.installDurability(ctx)
 }
 
 func (c *Collection) loadColumnManifestRecordsForPublish(rootID uint64, collectionName string, cfg ColumnStoreConfig) ([]columnManifestRecord, error) {

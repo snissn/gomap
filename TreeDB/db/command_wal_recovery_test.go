@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1300,6 +1301,10 @@ func TestCommandWALRawPublishBarriersSkippedAfterPoison(t *testing.T) {
 	var barrierCalled atomic.Bool
 	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
 		barrierCalled.Store(true)
+		if db.commandWALRawAdmissionMu.TryRLock() {
+			db.commandWALRawAdmissionMu.RUnlock()
+			return errors.New("checkpoint ran raw publish barrier without quiescent admission")
+		}
 		return nil
 	})
 	defer unregister()
@@ -1348,6 +1353,174 @@ func TestAppendCommandWALPayloadRunsRawPublishBarriers(t *testing.T) {
 	}
 	if !barrierCalled.Load() {
 		t.Fatalf("higher-level command WAL payload append did not run raw publish barrier")
+	}
+}
+
+func TestCommandWALPreparedPublishAdmissionWorkerWinsBeforeQuiescence(t *testing.T) {
+	db := &DB{commandWAL: true}
+	releaseFirstPrepared, ok := db.TryLockCommandWALPreparedPublish()
+	if !ok {
+		t.Fatal("prepared publisher did not claim shared admission")
+	}
+	firstPreparedHeld := true
+	defer func() {
+		if firstPreparedHeld {
+			releaseFirstPrepared()
+		}
+	}()
+	boundaryStarted := make(chan struct{})
+	boundaryDone := make(chan struct{})
+	go func() {
+		close(boundaryStarted)
+		unlock := db.lockCommandWALQuiescentAdmission()
+		unlock()
+		close(boundaryDone)
+	}()
+	select {
+	case <-boundaryStarted:
+	case <-time.After(time.Second):
+		t.Fatal("quiescent boundary did not start")
+	}
+
+	// sync.RWMutex has no queued-writer hook. Once the writer is queued, its
+	// writer preference makes TryRLock fail; that proves a second prepared
+	// publisher cannot barge ahead of the quiescent boundary.
+	deadline := time.Now().Add(time.Second)
+	for {
+		if releaseSecondPrepared, ok := db.TryLockCommandWALPreparedPublish(); !ok {
+			break
+		} else {
+			releaseSecondPrepared()
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("quiescent boundary did not queue behind the prepared publisher")
+		}
+		runtime.Gosched()
+	}
+
+	releaseFirstPrepared()
+	firstPreparedHeld = false
+	select {
+	case <-boundaryDone:
+	case <-time.After(time.Second):
+		t.Fatal("quiescent boundary did not finish after prepared publisher released admission")
+	}
+}
+
+func TestCommandWALPreparedPublishAdmissionBoundaryWins(t *testing.T) {
+	db := &DB{commandWAL: true}
+	unlockBoundary := db.lockCommandWALQuiescentAdmission()
+	defer unlockBoundary()
+	if unlockPrepared, ok := db.TryLockCommandWALPreparedPublish(); ok {
+		unlockPrepared()
+		t.Fatal("prepared publisher claimed admission while quiescent boundary was held")
+	}
+}
+
+func TestCommandWALPreparedPublishAdmissionRejectsTeardownOrClosing(t *testing.T) {
+	db := &DB{commandWAL: true}
+	db.teardownMu.Lock()
+	if unlockPrepared, ok := db.TryLockCommandWALPreparedPublish(); ok {
+		unlockPrepared()
+		db.teardownMu.Unlock()
+		t.Fatal("prepared publisher claimed admission while teardown was exclusive")
+	}
+	db.teardownMu.Unlock()
+
+	db.closing.Store(true)
+	if unlockPrepared, ok := db.TryLockCommandWALPreparedPublish(); ok {
+		unlockPrepared()
+		t.Fatal("prepared publisher claimed admission while closing")
+	}
+}
+
+func TestCommandWALStagingDoesNotWaitForQuiescentAdmission(t *testing.T) {
+	db := &DB{commandWAL: true}
+	unlockBoundary := db.lockCommandWALQuiescentAdmission()
+	defer unlockBoundary()
+	staged := make(chan struct{})
+	go func() {
+		unlock := db.LockCommandWALStaging()
+		unlock()
+		close(staged)
+	}()
+	select {
+	case <-staged:
+	case <-time.After(time.Second):
+		t.Fatal("ordinary command WAL staging waited for quiescent admission")
+	}
+}
+
+func TestCheckpointRunsRawPublishBarrierBeforeRawAdmission(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	var barrierCalled atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		barrierCalled.Store(true)
+		return nil
+	})
+	defer unregister()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if !barrierCalled.Load() {
+		t.Fatal("Checkpoint did not run raw publish barrier before its raw boundary")
+	}
+}
+
+func TestCloseWaitsForTeardownPinnedQuiescentAdmission(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	barrierEntered := make(chan struct{})
+	releaseBarrier := make(chan struct{})
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		close(barrierEntered)
+		<-releaseBarrier
+		return nil
+	})
+	defer unregister()
+	publisherDone := make(chan error, 1)
+	db.teardownMu.RLock()
+	go func() {
+		unlock, err := db.lockCommandWALPublishWithBarriersTeardownPinned()
+		if err == nil {
+			unlock()
+		}
+		db.teardownMu.RUnlock()
+		publisherDone <- err
+	}()
+	select {
+	case <-barrierEntered:
+	case <-time.After(time.Second):
+		t.Fatal("teardown-pinned publisher did not enter its raw barrier")
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- db.Close() }()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before teardown-pinned publisher released admission: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseBarrier)
+	select {
+	case err := <-publisherDone:
+		if err != nil {
+			t.Fatalf("teardown-pinned publisher: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("teardown-pinned publisher did not finish")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not finish after teardown-pinned publisher released admission")
 	}
 }
 

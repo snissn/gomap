@@ -311,17 +311,16 @@ func (b *Batch) write(sync bool) error {
 	}
 	if sync && b.batch != nil && b.batch.Len() == 0 && b.commandWALPublishIntent == nil {
 		b.db.observeRawSpanNativeApplyResult(b.rawSpanNativeBatchPlan(), zipper.ApplyResult{}, nil, false, false)
-		return b.db.Checkpoint()
+		return b.db.checkpointTeardownPinned(false)
 	}
 	maxEntryRevision := b.db.assignBatchEntryRevisions(b.batch)
 	intent := b.commandWALPublishIntent
 	if !b.physicalOnly && b.db.commandWAL {
-		unlockRawPublish := b.db.lockCommandWALRawPublish()
-		defer unlockRawPublish()
-		if err := b.db.runCommandWALRawPublishBarriers(); err != nil {
+		unlockRawPublish, err := b.db.lockCommandWALPublishWithBarriersTeardownPinned()
+		if err != nil {
 			return err
 		}
-		var err error
+		defer unlockRawPublish()
 		intent, err = b.db.prepareRawKVCommandWALIntent(b, sync)
 		if err != nil {
 			return err
@@ -847,11 +846,11 @@ func (b *Batch) writeConditional(sync bool, conditional *ConditionalTxn) error {
 	intent := b.commandWALPublishIntent
 	var err error
 	if !b.physicalOnly && b.db.commandWAL {
-		unlockRawPublish := b.db.lockCommandWALRawPublish()
-		defer unlockRawPublish()
-		if err := b.db.runCommandWALRawPublishBarriers(); err != nil {
+		unlockRawPublish, err := b.db.lockCommandWALPublishWithBarriersTeardownPinned()
+		if err != nil {
 			return err
 		}
+		defer unlockRawPublish()
 		intent, err = b.db.prepareRawKVCommandWALIntent(b, sync)
 		if err != nil {
 			return err
