@@ -3868,18 +3868,39 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 	// order so leaf-generation GC cannot deadlock this cleanup path.
 	db.maintenanceMu.Lock()
 	defer db.maintenanceMu.Unlock()
+	pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked()
+	if err != nil || !pending {
+		return err
+	}
+	return db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(true)
+}
+
+// PrepareCommandWALCoveredPrefixCleanup closes the recovery-covered physical
+// prefix without scanning or deleting covered segments. The caching layer uses
+// this internal capability during automatic checkpoints so it can release its
+// writer frontier before consuming cleanup debt on its existing worker.
+func (db *DB) PrepareCommandWALCoveredPrefixCleanup() (bool, error) {
+	if db == nil {
+		return false, ErrClosed
+	}
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+	return db.prepareCommandWALCoveredPrefixCleanupLocked()
+}
+
+func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
 	if db.closing.Load() {
-		return ErrClosed
+		return false, ErrClosed
 	}
 	if db.readOnly {
-		return ErrReadOnly
+		return false, ErrReadOnly
 	}
 	if err := db.commandWALPoisonedError(); err != nil {
-		return err
+		return false, err
 	}
 	if hook := db.testStorageMaintenanceAfterLockHook; hook != nil {
 		if err := hook("command-wal-covered-prefix"); err != nil {
-			return err
+			return false, err
 		}
 	}
 	// Keep the runtime and journal alive from the capability check through
@@ -3894,22 +3915,19 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 	hasRootPublication := db.rootPublication != nil && db.rootPublication.coordinator != nil
 	db.mu.RUnlock()
 	if !db.commandWAL || db.commandJournal == nil || !hasRootPublication {
-		return db.checkpoint(true)
+		return false, db.checkpoint(true)
 	}
 
 	unlockCommandWALPublish := db.lockCommandWALRawPublish()
 	rotated, advanced, err := db.closeCommandWALCheckpointPrefix()
 	unlockCommandWALPublish()
 	if err != nil {
-		return err
+		return false, err
 	}
 	// A durable root can advance between automatic passes without another
 	// command-WAL append. Recheck already-closed segments in that case; the
 	// closed-byte counter avoids a cleanup scan for a truly idle journal.
-	if !rotated && !advanced && db.commandWALClosedBytes.Load() <= 0 {
-		return nil
-	}
-	return db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(true)
+	return rotated || advanced || db.commandWALClosedBytes.Load() > 0, nil
 }
 
 // checkpoint runs with maintenanceAlreadyHeld only for an enclosing backend

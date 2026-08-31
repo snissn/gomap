@@ -4601,8 +4601,7 @@ func TestPublicCommandWALAutoCheckpointOverlapAdmitsPostFrontierWrites(t *testin
 
 	checkpointPublish := make(chan struct{})
 	releaseCheckpointPublish := make(chan struct{})
-	checkpointComplete := make(chan struct{})
-	var checkpointPublishOnce, releaseCheckpointPublishOnce, checkpointCompleteOnce sync.Once
+	var checkpointPublishOnce, releaseCheckpointPublishOnce sync.Once
 	defer releaseCheckpointPublishOnce.Do(func() { close(releaseCheckpointPublish) })
 	db.cached.SetCommandWALCheckpointCutoverHook(func() {
 		db.snapshotPublicCommandWALCheckpointCutover()
@@ -4616,14 +4615,6 @@ func TestPublicCommandWALAutoCheckpointOverlapAdmitsPostFrontierWrites(t *testin
 		}
 		return db.preparePublicCommandWALPendingPublish(sync)
 	})
-	db.cached.SetCommandWALCheckpointCleanupHook(func(sync bool) error {
-		err := db.cleanupPublicCommandWALCheckpoint(sync)
-		if err == nil {
-			checkpointCompleteOnce.Do(func() { close(checkpointComplete) })
-		}
-		return err
-	})
-
 	before := db.Stats()
 	db.triggerAutoCheckpointForTest()
 	if err := waitForPublicCommandWALCheckpointPhase(checkpointPublish, "checkpoint publish hook"); err != nil {
@@ -4674,23 +4665,16 @@ func TestPublicCommandWALAutoCheckpointOverlapAdmitsPostFrontierWrites(t *testin
 			if result.err != nil {
 				t.Fatalf("overlap Write(%d): %v", result.index, result.err)
 			}
-		case <-checkpointComplete:
-			t.Fatalf("checkpoint completed before publish latch released after %d/%d overlap writes", i, len(overlapBatches))
 		case <-writeCompletionTimer.C:
 			t.Fatalf("timed out waiting for post-frontier write completion %d/%d", i+1, len(overlapBatches))
 		}
 	}
 	writeCompletionTimer.Stop()
-	select {
-	case <-checkpointComplete:
-		t.Fatal("checkpoint completed while publish hook remained latched")
-	default:
-	}
-	releaseCheckpointPublishOnce.Do(func() { close(releaseCheckpointPublish) })
-	if err := waitForPublicCommandWALCheckpointPhase(checkpointComplete, "checkpoint cleanup hook"); err != nil {
-		t.Fatal(err)
-	}
+	latched := db.Stats()
+	requirePublicStatDelta(t, before, latched, "treedb.cache.auto_checkpoint.count", 0)
+	requirePublicStatDelta(t, before, latched, "treedb.cache.command_wal.cleanup.completions_total", 0)
 
+	releaseCheckpointPublishOnce.Do(func() { close(releaseCheckpointPublish) })
 	wantAutoCheckpointCount := statMapUint64(t, before, "treedb.cache.auto_checkpoint.count") + 1
 	if err := waitForPublicCommandWALAutoCheckpointCount(db, wantAutoCheckpointCount); err != nil {
 		t.Fatal(err)
@@ -4705,6 +4689,14 @@ func TestPublicCommandWALAutoCheckpointOverlapAdmitsPostFrontierWrites(t *testin
 	}
 	if got := statMapUint64(t, after, "treedb.cache.checkpoint.frontier.drained_units_last"); got == 0 {
 		t.Fatal("checkpoint frontier drained no units")
+	}
+	requirePublicStatDelta(t, before, after, "treedb.cache.command_wal.cleanup.requests_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.cache.command_wal.cleanup.completions_total", 1)
+	if got := after["treedb.cache.command_wal.cleanup.pending"]; got != "false" {
+		t.Fatalf("command WAL cleanup pending=%q, want false", got)
+	}
+	if got := after["treedb.cache.command_wal.cleanup.active"]; got != "false" {
+		t.Fatalf("command WAL cleanup active=%q, want false", got)
 	}
 	requirePublicStatDelta(t, before, after, "treedb.cache.write.wait_for_checkpoint.count_total", 0)
 	requirePublicStatDelta(t, before, after, "treedb.cache.write.post_frontier_admission.count_total", 16)
