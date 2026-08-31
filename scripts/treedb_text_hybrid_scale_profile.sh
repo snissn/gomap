@@ -21,7 +21,7 @@ mkdir -p "$RUN_DIR"
 if [[ "$PROFILE_MODE" != none && ! ",$PHASES," =~ ,"$PROFILE_PHASE", ]]; then echo "PROFILE_PHASE must be selected by PHASES" >&2; exit 2; fi
 
 run_matrix() {
-  local rows="$1" phase phase_dir artifact_before artifact_after db_before db_after measured_seconds test_rows start elapsed mode
+  local rows="$1" phase phase_dir artifact_before artifact_after db_before db_after measured_seconds test_rows start elapsed mode godebug
   IFS=',' read -ra selected <<< "$PHASES"
   for phase in "${selected[@]}"; do
     case "$phase" in load|vector|phrase|broad|maintenance|reopen) ;; *) echo "unknown phase: $phase" >&2; return 2;; esac
@@ -33,7 +33,12 @@ run_matrix() {
     fi
     mkdir -p "$phase_dir"
     mode=none; if [[ "$PROFILE_PHASE" == "$phase" ]]; then mode="$PROFILE_MODE"; fi
-    cmd=(env GOWORK=off TREEDB_TEXT_PROFILE_PHASE="$phase" TREEDB_TEXT_PROFILE_ROWS="$rows" TREEDB_TEXT_PROFILE_MODE="$mode" TREEDB_TEXT_PROFILE_DIR="$phase_dir/profiles" TREEDB_TEXT_PROFILE_TINY="$([[ "$TINY_SMOKE" == true ]] && echo 1 || echo 0)" go test ./cmd/treedb_text_hybrid_scale -run '^TestManualTextHybridScaleProfile4546$' -count=1 -v -timeout "$TIMEOUT")
+    if [[ "$mode" == alloc ]]; then
+      godebug="${GODEBUG:+${GODEBUG},}memprofilerate=1"
+      cmd=(env GOWORK=off GODEBUG="$godebug" TREEDB_TEXT_PROFILE_PHASE="$phase" TREEDB_TEXT_PROFILE_ROWS="$rows" TREEDB_TEXT_PROFILE_MODE="$mode" TREEDB_TEXT_PROFILE_DIR="$phase_dir/profiles" TREEDB_TEXT_PROFILE_TINY="$([[ "$TINY_SMOKE" == true ]] && echo 1 || echo 0)" go test ./cmd/treedb_text_hybrid_scale -run '^TestManualTextHybridScaleProfile4546$' -count=1 -v -timeout "$TIMEOUT")
+    else
+      cmd=(env GOWORK=off TREEDB_TEXT_PROFILE_PHASE="$phase" TREEDB_TEXT_PROFILE_ROWS="$rows" TREEDB_TEXT_PROFILE_MODE="$mode" TREEDB_TEXT_PROFILE_DIR="$phase_dir/profiles" TREEDB_TEXT_PROFILE_TINY="$([[ "$TINY_SMOKE" == true ]] && echo 1 || echo 0)" go test ./cmd/treedb_text_hybrid_scale -run '^TestManualTextHybridScaleProfile4546$' -count=1 -v -timeout "$TIMEOUT")
+    fi
     printf '%q ' "${cmd[@]}" > "$phase_dir/command.txt"; echo >> "$phase_dir/command.txt"
     if [[ "$DRY_RUN" == true ]]; then continue; fi
     artifact_before=$(du -sk "$phase_dir" | awk '{print $1}'); start=$(date +%s)

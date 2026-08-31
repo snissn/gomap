@@ -37,7 +37,9 @@ scripts/treedb_text_hybrid_scale_profile.sh
 
 `runtime` writes CPU, trace, block, and mutex profiles. `PROFILE_MODE=alloc`
 writes allocation before/after and after-phase heap profiles, plus action-only
-allocation counters in `alloc_delta.txt` that exclude profile bookkeeping. For a quick
+allocation counters in `alloc_delta.txt` that exclude profile bookkeeping. Its
+test process starts with `memprofilerate=1` (while preserving other `GODEBUG`
+settings) for complete short-phase allocation stacks. For a quick
 implementation smoke only, use `TINY_SMOKE=true`; it preserves the script's
 10k selection guard but gives the manual test a 96-row fixture. This is
 instrumentation evidence, not a product speedup claim.

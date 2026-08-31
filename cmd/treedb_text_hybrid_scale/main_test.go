@@ -870,6 +870,14 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil || !strings.Contains(string(command), "TREEDB_TEXT_PROFILE_ROWS=10000") {
 		t.Fatalf("dry-run command=%q err=%v", command, err)
 	}
+	allocDryRun := t.TempDir()
+	if output, err := run("RUN_DIR="+allocDryRun, "PHASES=phrase", "DRY_RUN=true", "PROFILE_MODE=alloc", "PROFILE_PHASE=phrase", "GODEBUG=foo=bar"); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("allocation dry-run err=%v output=%s", err, output)
+	}
+	command, err = os.ReadFile(filepath.Join(allocDryRun, "10000", "phrase", "command.txt"))
+	if err != nil || !strings.Contains(string(command), "GODEBUG=foo=bar\\,memprofilerate=1") {
+		t.Fatalf("allocation command=%q err=%v", command, err)
+	}
 	escalated := t.TempDir()
 	if output, err := run("RUN_DIR="+escalated, "ROWS=100000", "RUN_100K=true", "PHASES=phrase", "DRY_RUN=true"); err != nil || !strings.Contains(string(output), "artifacts:") {
 		t.Fatalf("100k dry-run err=%v output=%s", err, output)

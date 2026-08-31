@@ -47,6 +47,7 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 	}
 	var action func() error
 	var loadFixture scaleFixture
+	var reopenedFixture scaleFixture
 	switch phase {
 	case "load":
 		action = func() error {
@@ -105,10 +106,7 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 	case "reopen":
 		fixture := setup(true)
 		action = func() error {
-			_, reopened, err := runReopenProbe(fixture, cfg)
-			if reopened.db != nil {
-				_ = reopened.db.Close()
-			}
+			_, reopenedFixture, err = runReopenProbe(fixture, cfg)
 			return err
 		}
 	default:
@@ -124,6 +122,10 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 	if loadFixture.db != nil {
 		_ = loadFixture.db.Close()
 		loadFixture.cleanup()
+	}
+	if reopenedFixture.db != nil {
+		_ = reopenedFixture.db.Close()
+		reopenedFixture.cleanup()
 	}
 	if sizeErr != nil {
 		t.Fatal(sizeErr)
