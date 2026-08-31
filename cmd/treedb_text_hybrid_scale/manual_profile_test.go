@@ -167,8 +167,16 @@ func profileManualPhase(mode, dir string, action func() error) (time.Duration, e
 		if err := write("alloc_before.pprof", "allocs"); err != nil {
 			return 0, err
 		}
+		// Snapshot immediately around the action so profile serialization and any
+		// profiler bookkeeping are not included in the allocation delta.
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
 		measured, err := timeManualAction(action)
-		runtime.GC()
+		runtime.ReadMemStats(&after)
+		allocationDelta := fmt.Sprintf("allocation_bytes=%d\nallocation_objects=%d\n", after.TotalAlloc-before.TotalAlloc, after.Mallocs-before.Mallocs)
+		if writeErr := os.WriteFile(filepath.Join(dir, "alloc_delta.txt"), []byte(allocationDelta), 0o644); writeErr != nil {
+			return measured, writeErr
+		}
 		if writeErr := write("alloc_after.pprof", "allocs"); writeErr != nil {
 			return measured, writeErr
 		}

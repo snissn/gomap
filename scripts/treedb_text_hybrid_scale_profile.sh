@@ -25,7 +25,11 @@ run_matrix() {
   IFS=',' read -ra selected <<< "$PHASES"
   for phase in "${selected[@]}"; do
     case "$phase" in load|vector|phrase|broad|maintenance|reopen) ;; *) echo "unknown phase: $phase" >&2; return 2;; esac
-    phase_dir="$RUN_DIR/${rows}/${phase}"; mkdir -p "$phase_dir"
+    phase_dir="$RUN_DIR/${rows}/${phase}"
+    # A phase is one fresh process invocation; do not publish stale profiles
+    # from a prior invocation that used a different profiling mode.
+    rm -rf "$phase_dir"
+    mkdir -p "$phase_dir"
     mode=none; if [[ "$PROFILE_PHASE" == "$phase" ]]; then mode="$PROFILE_MODE"; fi
     cmd=(env GOWORK=off TREEDB_TEXT_PROFILE_PHASE="$phase" TREEDB_TEXT_PROFILE_ROWS="$rows" TREEDB_TEXT_PROFILE_MODE="$mode" TREEDB_TEXT_PROFILE_DIR="$phase_dir/profiles" TREEDB_TEXT_PROFILE_TINY="$([[ "$TINY_SMOKE" == true ]] && echo 1 || echo 0)" go test ./cmd/treedb_text_hybrid_scale -run '^TestManualTextHybridScaleProfile4546$' -count=1 -v -timeout "$TIMEOUT")
     printf '%q ' "${cmd[@]}" > "$phase_dir/command.txt"; echo >> "$phase_dir/command.txt"
@@ -39,7 +43,7 @@ run_matrix() {
     test_rows=$(sed -n 's/.* rows=\([0-9][0-9]*\) setup_complete=.*/\1/p' "$phase_dir/phase.log" | tail -1)
     printf 'phase=%s\nmatrix_rows=%s\ntest_rows=%s\nsetup=logged before measured boundary\nmeasured_seconds=%s\nprocess_elapsed_seconds=%s\ndb_bytes_before=%s\ndb_bytes_after=%s\nartifact_kib_before=%s\nartifact_kib_after=%s\n' "$phase" "$rows" "$test_rows" "$measured_seconds" "$elapsed" "$db_before" "$db_after" "$artifact_before" "$artifact_after" > "$phase_dir/observations.txt"
     if [[ "$PROFILE_PHASE" == "$phase" && "$PROFILE_MODE" == runtime ]]; then for artifact in cpu.pprof trace.out block.pprof mutex.pprof; do test -s "$phase_dir/profiles/$artifact"; done; fi
-    if [[ "$PROFILE_PHASE" == "$phase" && "$PROFILE_MODE" == alloc ]]; then for artifact in alloc_before.pprof alloc_after.pprof heap_after.pprof; do test -s "$phase_dir/profiles/$artifact"; done; fi
+    if [[ "$PROFILE_PHASE" == "$phase" && "$PROFILE_MODE" == alloc ]]; then for artifact in alloc_before.pprof alloc_after.pprof alloc_delta.txt heap_after.pprof; do test -s "$phase_dir/profiles/$artifact"; done; fi
   done
 }
 

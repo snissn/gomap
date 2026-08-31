@@ -886,6 +886,21 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil || !strings.Contains(string(observations), "test_rows=96\n") || !strings.Contains(string(observations), "measured_seconds=") || !strings.Contains(string(observations), "process_elapsed_seconds=") || !strings.Contains(string(observations), "db_bytes_before=0\n") || !strings.Contains(string(observations), "db_bytes_after=") {
 		t.Fatalf("observations=%q err=%v", observations, err)
 	}
+	reused := t.TempDir()
+	if output, err := run("RUN_DIR="+reused, "PHASES=phrase", "TINY_SMOKE=true", "TIMEOUT=2m", "PROFILE_MODE=alloc", "PROFILE_PHASE=phrase"); err != nil {
+		t.Fatalf("allocation smoke err=%v output=%s", err, output)
+	}
+	profiles := filepath.Join(reused, "10000", "phrase", "profiles")
+	allocationDelta, err := os.ReadFile(filepath.Join(profiles, "alloc_delta.txt"))
+	if err != nil || !strings.Contains(string(allocationDelta), "allocation_bytes=") || !strings.Contains(string(allocationDelta), "allocation_objects=") {
+		t.Fatalf("allocation delta=%q err=%v", allocationDelta, err)
+	}
+	if output, err := run("RUN_DIR="+reused, "PHASES=phrase", "TINY_SMOKE=true", "TIMEOUT=2m"); err != nil {
+		t.Fatalf("rerun smoke err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(profiles, "alloc_after.pprof")); !os.IsNotExist(err) {
+		t.Fatalf("rerun retained stale allocation profile: %v", err)
+	}
 	if output, err := run("RUN_DIR="+t.TempDir(), "PHASES=load", "TINY_SMOKE=true", "TIMEOUT=1ns"); err == nil || !strings.Contains(string(output), "FAIL") {
 		t.Fatalf("tiny timeout err=%v output=%s", err, output)
 	}
