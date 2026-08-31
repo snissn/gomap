@@ -53,6 +53,7 @@ func TestCheckpointReleasesCommandWALAdmissionBeforeCleanupMaintenance(t *testin
 		runtime.Gosched()
 	}
 	d.commandWALRawPublishMu.Unlock()
+	deadline = time.Now().Add(time.Second)
 	for {
 		if d.commandWALRawAdmissionMu.TryLock() {
 			d.commandWALRawAdmissionMu.Unlock()

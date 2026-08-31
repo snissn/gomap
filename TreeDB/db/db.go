@@ -3920,7 +3920,7 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
 	hasRootPublication := db.rootPublication != nil && db.rootPublication.coordinator != nil
 	db.mu.RUnlock()
 	if !db.commandWAL || db.commandJournal == nil || !hasRootPublication {
-		return false, db.checkpoint(true)
+		return false, db.checkpointTeardownPinned(true)
 	}
 
 	unlockCommandWALPublish := db.lockCommandWALRawPublish()
@@ -3939,6 +3939,13 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
 // maintenance operation such as CompactStorage. Command-WAL cleanup must not
 // recursively acquire maintenanceMu in that case.
 func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	return db.checkpointTeardownPinned(maintenanceAlreadyHeld)
+}
+
+// checkpointTeardownPinned runs while the caller holds teardownMu.RLock.
+func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 	if db == nil || db.closing.Load() {
 		return ErrClosed
 	}

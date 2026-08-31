@@ -1301,6 +1301,10 @@ func TestCommandWALRawPublishBarriersSkippedAfterPoison(t *testing.T) {
 	var barrierCalled atomic.Bool
 	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
 		barrierCalled.Store(true)
+		if db.commandWALRawAdmissionMu.TryRLock() {
+			db.commandWALRawAdmissionMu.RUnlock()
+			return errors.New("checkpoint ran raw publish barrier without quiescent admission")
+		}
 		return nil
 	})
 	defer unregister()
@@ -1499,7 +1503,7 @@ func TestCloseWaitsForTeardownPinnedQuiescentAdmission(t *testing.T) {
 	select {
 	case err := <-closeDone:
 		t.Fatalf("Close returned before teardown-pinned publisher released admission: %v", err)
-	default:
+	case <-time.After(50 * time.Millisecond):
 	}
 	close(releaseBarrier)
 	select {
