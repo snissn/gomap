@@ -108,19 +108,49 @@ func columnVectorIndexStateAdjacencyColumnStoreConfig(collection string, base Co
 
 func buildColumnVectorIndexStateAdjacencyLists(rows []columnVectorGraphAssetRow) ([]typedcolumn.Uint32List, error) {
 	maxLayer := 0
+	layerValueCounts := []int{0}
 	for rowIdx := range rows {
-		rowMaxLayer, err := columnVectorGraphAdjacencyMaxLayer(rows[rowIdx].Adjacency)
+		adjacency := rows[rowIdx].Adjacency
+		rowMaxLayer, err := columnVectorGraphAdjacencyMaxLayer(adjacency)
 		if err != nil {
 			return nil, fmt.Errorf("collections: vector-index state adjacency row %d max layer: %w", rowIdx, err)
 		}
 		if rowMaxLayer > maxLayer {
 			maxLayer = rowMaxLayer
+			layerValueCounts = append(layerValueCounts, make([]int, rowMaxLayer+1-len(layerValueCounts))...)
+		}
+		if !columnVectorGraphAdjacencyIsLayered(adjacency) {
+			if len(adjacency) > math.MaxInt-layerValueCounts[0] {
+				return nil, fmt.Errorf("collections: vector-index state adjacency layer 0 values overflow int")
+			}
+			layerValueCounts[0] += len(adjacency)
+			continue
+		}
+		pos := 2
+		for layer := 0; layer <= rowMaxLayer; layer++ {
+			if pos >= len(adjacency) {
+				return nil, fmt.Errorf("collections: vector-index state adjacency row %d layer=%d missing count", rowIdx, layer)
+			}
+			count := int(adjacency[pos])
+			pos++
+			if count < 0 || count > len(adjacency)-pos {
+				return nil, fmt.Errorf("collections: vector-index state adjacency row %d layer=%d count=%d exceeds remaining=%d", rowIdx, layer, count, len(adjacency)-pos)
+			}
+			if count > math.MaxInt-layerValueCounts[layer] {
+				return nil, fmt.Errorf("collections: vector-index state adjacency layer %d values overflow int", layer)
+			}
+			layerValueCounts[layer] += count
+			pos += count
+		}
+		if pos != len(adjacency) {
+			return nil, fmt.Errorf("collections: vector-index state adjacency row %d trailing values=%d", rowIdx, len(adjacency)-pos)
 		}
 	}
 	layers := make([]typedcolumn.Uint32List, maxLayer+1)
 	for layer := range layers {
 		layers[layer].Rows = len(rows)
 		layers[layer].Offsets = make([]uint64, len(rows)+1)
+		layers[layer].Values = make([]uint32, 0, layerValueCounts[layer])
 	}
 	for rowIdx := range rows {
 		adjacency := rows[rowIdx].Adjacency
