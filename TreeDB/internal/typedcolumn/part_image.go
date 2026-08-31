@@ -1015,15 +1015,26 @@ func (b *columnPartImageBuilder) addColumnDataSections() error {
 
 func (b *columnPartImageBuilder) addUint32OffsetsListColumnSections(columnDescriptor ColumnPartColumnDescriptor, column ColumnPartColumn) error {
 	globalOffsets := resizeFixedWidthValues([]uint64(nil), b.part.Descriptor.RowCount+1)
-	globalValues := make([]uint32, 0)
+	globalValuesCapacity := 0
+	for i, block := range column.Blocks {
+		if len(block.Granule.Payload) != block.Descriptor.StoredBytes {
+			return fmt.Errorf("typedcolumn: column %s block %d payload bytes=%d descriptor stored bytes=%d", columnDescriptor.Name, i, len(block.Granule.Payload), block.Descriptor.StoredBytes)
+		}
+		_, valuesBytes, err := RawUint32OffsetsListBlockPayloadBytes(block.Descriptor.RowCount, len(block.Granule.Payload))
+		if err != nil {
+			return fmt.Errorf("typedcolumn: column %s block %d offsets-list payload bytes: %w", columnDescriptor.Name, i, err)
+		}
+		globalValuesCapacity, err = checkedAddInt(globalValuesCapacity, valuesBytes/4, "offsets-list global values")
+		if err != nil {
+			return fmt.Errorf("typedcolumn: column %s offsets-list values: %w", columnDescriptor.Name, err)
+		}
+	}
+	globalValues := make([]uint32, 0, globalValuesCapacity)
 	expectedFirstRow := 0
 	var reader GranuleReader
 	var offsetsScratch []uint64
 	var valuesScratch []uint32
 	for i, block := range column.Blocks {
-		if len(block.Granule.Payload) != block.Descriptor.StoredBytes {
-			return fmt.Errorf("typedcolumn: column %s block %d payload bytes=%d descriptor stored bytes=%d", columnDescriptor.Name, i, len(block.Granule.Payload), block.Descriptor.StoredBytes)
-		}
 		if block.Descriptor.FirstRow != expectedFirstRow {
 			return fmt.Errorf("typedcolumn: column %s block %d first_row=%d want %d", columnDescriptor.Name, i, block.Descriptor.FirstRow, expectedFirstRow)
 		}
