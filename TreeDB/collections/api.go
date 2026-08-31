@@ -9093,7 +9093,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	}
 
 	rotateIndexedMutableToFlushUnitForAsyncLocked(domain)
-	if err = domain.validateIndexedFlushUnitCommandWALOwnershipLocked(c.db); err != nil {
+	if err = domain.validateIndexedFlushUnitCommandWALOwnershipLocked(); err != nil {
 		return nil, err
 	}
 	units := domain.indexedFlushUnits
@@ -9721,7 +9721,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	}
 
 	rotateIndexedMutableToFlushUnitLocked(domain)
-	if err := domain.validateIndexedFlushUnitCommandWALOwnershipLocked(c.db); err != nil {
+	if err := domain.validateIndexedFlushUnitCommandWALOwnershipLocked(); err != nil {
 		return err
 	}
 	flushUnit, materializedPrimaryRuns, err := mergedIndexedFlushUnitForSyncLocked(meta, domain)

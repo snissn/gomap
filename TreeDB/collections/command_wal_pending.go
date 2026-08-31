@@ -532,7 +532,7 @@ func (domain *collectionWriteDomain) recordPendingIndexedCommandWALLSNLocked(db 
 		}
 		domain.indexedMutableCommandWALLast = lsn
 	}
-	return domain.validateIndexedFlushUnitCommandWALOwnershipLocked(db)
+	return domain.validateIndexedFlushUnitCommandWALOwnershipLocked()
 }
 
 func (domain *collectionWriteDomain) pendingCommandWALCoverageIntentLocked(db *backenddb.DB) (*backenddb.CommandWALIntent, uint64, error) {
@@ -575,36 +575,37 @@ func (domain *collectionWriteDomain) pendingCommandWALCoverageIntentThroughLocke
 	return intent, applied, nil
 }
 
-func (domain *collectionWriteDomain) validateIndexedFlushUnitCommandWALOwnershipLocked(db *backenddb.DB) error {
+func (domain *collectionWriteDomain) validateIndexedFlushUnitCommandWALOwnershipLocked() error {
 	if domain == nil {
 		return nil
 	}
-	var current uint64
-	if db != nil {
-		state, ok := db.StateToken()
-		if !ok {
-			return backenddb.ErrClosed
-		}
-		current = state.AppliedCommandLSN
-	}
-	units := make([]indexedFlushUnit, 0, len(domain.indexedPublishingUnits)+len(domain.indexedFlushUnits)+1)
-	units = append(units, domain.indexedPublishingUnits...)
-	units = append(units, domain.indexedFlushUnits...)
-	units = append(units, indexedFlushUnit{commandWALFirst: domain.indexedMutableCommandWALFirst, commandWALLast: domain.indexedMutableCommandWALLast})
 	var first, last uint64
-	for _, unit := range units {
+	visit := func(unit indexedFlushUnit) error {
 		unitFirst, unitLast := unit.commandWALFirst, unit.commandWALLast
 		if unitFirst == 0 && unitLast == 0 {
-			continue
+			return nil
 		}
-		if unitFirst == 0 || unitLast < unitFirst || unitFirst != current+1 {
-			return fmt.Errorf("%w: indexed flush command WAL interval [%d,%d] after applied %d", backenddb.ErrCommandWALAppliedLSNNonContig, unitFirst, unitLast, current)
+		if unitFirst == 0 || unitLast < unitFirst || (last != 0 && unitFirst != last+1) {
+			return fmt.Errorf("%w: indexed flush command WAL interval [%d,%d] after [%d,%d]", backenddb.ErrCommandWALAppliedLSNNonContig, unitFirst, unitLast, first, last)
 		}
 		if first == 0 {
 			first = unitFirst
 		}
 		last = unitLast
-		current = unitLast
+		return nil
+	}
+	for _, unit := range domain.indexedPublishingUnits {
+		if err := visit(unit); err != nil {
+			return err
+		}
+	}
+	for _, unit := range domain.indexedFlushUnits {
+		if err := visit(unit); err != nil {
+			return err
+		}
+	}
+	if err := visit(indexedFlushUnit{commandWALFirst: domain.indexedMutableCommandWALFirst, commandWALLast: domain.indexedMutableCommandWALLast}); err != nil {
+		return err
 	}
 	if first == 0 {
 		return nil

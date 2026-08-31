@@ -2317,7 +2317,7 @@ func TestIndexedFlushUnitCommandWALIntervalsCoverOnlyPublishingPrefix(t *testing
 	domain.rootRuns = map[string][]memtable.Table{"users:primary": nil}
 	domain.indexedMutableCommandWALFirst = 3
 	domain.indexedMutableCommandWALLast = 3
-	if err := domain.validateIndexedFlushUnitCommandWALOwnershipLocked(d); err != nil {
+	if err := domain.validateIndexedFlushUnitCommandWALOwnershipLocked(); err != nil {
 		t.Fatalf("validate ownership: %v", err)
 	}
 	work := domain.indexedFlushUnits[0]
@@ -2360,7 +2360,7 @@ func TestIndexedFlushUnitCommandWALIntervalsRejectInvalidOwnership(t *testing.T)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := domain.validateIndexedFlushUnitCommandWALOwnershipLocked(d); !errors.Is(err, backenddb.ErrCommandWALAppliedLSNNonContig) {
+			if err := domain.validateIndexedFlushUnitCommandWALOwnershipLocked(); !errors.Is(err, backenddb.ErrCommandWALAppliedLSNNonContig) {
 				t.Fatalf("validateIndexedFlushUnitCommandWALOwnershipLocked error=%v, want ErrCommandWALAppliedLSNNonContig", err)
 			}
 		})
@@ -2371,6 +2371,36 @@ func TestIndexedFlushUnitCommandWALIntervalsRejectInvalidOwnership(t *testing.T)
 	}
 	if _, _, err := domain.pendingCommandWALCoverageIntentThroughLocked(d, 3); !errors.Is(err, backenddb.ErrCommandWALAppliedLSNNonContig) {
 		t.Fatalf("over-coverage error=%v, want ErrCommandWALAppliedLSNNonContig", err)
+	}
+}
+
+func TestIndexedFlushUnitCommandWALOwnershipIgnoresAlreadyAppliedPublishingPrefix(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	payload, err := commitlog.EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	intent, err := d.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		t.Fatalf("NewCommandWALIntent: %v", err)
+	}
+	if err := d.PublishCommandWALNoop(intent, true); err != nil {
+		t.Fatalf("PublishCommandWALNoop: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	domain := &collectionWriteDomain{
+		pendingCommandWALFirst:        1,
+		pendingCommandWALLast:         2,
+		indexedPublishingUnits:        []indexedFlushUnit{{commandWALFirst: 1, commandWALLast: 1}},
+		indexedMutableCommandWALFirst: 2,
+		indexedMutableCommandWALLast:  2,
+	}
+	if err := domain.validateIndexedFlushUnitCommandWALOwnershipLocked(); err != nil {
+		t.Fatalf("validate ownership after publishing prefix applied: %v", err)
 	}
 }
 
@@ -2393,7 +2423,7 @@ func TestIndexedFlushUnitCommandWALIntervalsRequeueWithoutChange(t *testing.T) {
 		t.Fatalf("remove publishing work owned=%t units=%d, want true/1", owned, len(removed))
 	}
 	domain.indexedFlushUnits = append(removed, domain.indexedFlushUnits...)
-	if err := domain.validateIndexedFlushUnitCommandWALOwnershipLocked(d); err != nil {
+	if err := domain.validateIndexedFlushUnitCommandWALOwnershipLocked(); err != nil {
 		t.Fatalf("validate ownership after requeue: %v", err)
 	}
 	if got := domain.indexedFlushUnits[0]; got.commandWALFirst != 1 || got.commandWALLast != 1 {
@@ -2443,7 +2473,7 @@ func TestCollectionCommandWALAsyncFlushWorkCarriesIndexedInterval(t *testing.T) 
 		t.Fatal("completePreparedIndexedFlush requeue error=nil")
 	}
 	col.writeDomain.mu.Lock()
-	err = col.writeDomain.validateIndexedFlushUnitCommandWALOwnershipLocked(d)
+	err = col.writeDomain.validateIndexedFlushUnitCommandWALOwnershipLocked()
 	col.writeDomain.mu.Unlock()
 	if err != nil {
 		t.Fatalf("validate ownership after requeue: %v", err)
