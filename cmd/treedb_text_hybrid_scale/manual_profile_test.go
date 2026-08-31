@@ -50,6 +50,7 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 		return fixture
 	}
 	var action func() error
+	var validateAfterProfile func() error
 	var loadFixture scaleFixture
 	var reopenedFixture scaleFixture
 	switch phase {
@@ -98,6 +99,7 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 	case "maintenance":
 		cfg.includeVector = false // text rewrite uses the same no-command-WAL fixture as runMaintenanceProbe.
 		fixture := setup(false)
+		validateAfterProfile = func() error { return validateManualMaintenancePostconditions(fixture, cfg) }
 		action = func() error {
 			for i := 0; i < cfg.maintenanceUpdates; i++ {
 				id, replacement := scaleDocID(i), scaleDocument(i, cfg.dims, "maintenance-updated")
@@ -148,6 +150,10 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 	}
 	t.Logf("phase=%s rows=%d setup_complete=true measured_boundary_starts_now db_bytes_before=%d", phase, rows, before)
 	measured, profileErr := profileManualPhase(profileMode, os.Getenv("TREEDB_TEXT_PROFILE_DIR"), action)
+	var postProfileErr error
+	if profileErr == nil && validateAfterProfile != nil {
+		postProfileErr = validateAfterProfile()
+	}
 	after, sizeErr := dirSize(cfg.dbDir)
 	if loadFixture.db != nil {
 		_ = loadFixture.db.Close()
@@ -164,6 +170,33 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 	if profileErr != nil {
 		t.Fatal(profileErr)
 	}
+	if postProfileErr != nil {
+		t.Fatal(postProfileErr)
+	}
+}
+
+func validateManualMaintenancePostconditions(fixture scaleFixture, cfg config) error {
+	storage, err := fixture.col.TextIndexStorageStats(textIndexName)
+	if err != nil {
+		return fmt.Errorf("text storage after rewrite: %w", err)
+	}
+	if storage.V2DeletedDocs != 0 {
+		return fmt.Errorf("deleted docs remain after rewrite: %d", storage.V2DeletedDocs)
+	}
+	if storage.V2RewriteMergeState == "" {
+		return errors.New("empty rewrite merge state")
+	}
+	probe, err := fixture.col.SearchText(collections.TextSearchOptions{IndexName: textIndexName, Query: "refund", TopK: cfg.topK, ResultMode: collections.TextSearchResultModeScoreOnly, CandidateLimit: cfg.rows, MaxPostingsScanned: maxInt(cfg.rows*4, cfg.topK)})
+	if err != nil {
+		return fmt.Errorf("post-rewrite search: %w", err)
+	}
+	if guard := textGuardrail("post_rewrite_text_probe", probe.Stats); !guard.OK {
+		return errors.New(guard.Failure)
+	}
+	if len(probe.Results) == 0 {
+		return errors.New("post-rewrite search returned no results")
+	}
+	return nil
 }
 
 func manualProfileRows() (int, error) {

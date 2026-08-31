@@ -12,6 +12,7 @@ PROFILE_PHASE="${PROFILE_PHASE:-}"
 RUN_100K="${RUN_100K:-false}"
 TINY_SMOKE="${TINY_SMOKE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
+controlled_go_env=(env -u GOMAXPROCS -u GOGC -u GOMEMLIMIT -u GOAMD64 -u GOARM64 -u GO386 -u GOARM -u GOMIPS -u GOMIPS64 -u GOPPC64 -u GORISCV64 -u GOWASM -u GOEXPERIMENT -u CGO_ENABLED GOWORK=off GOFLAGS= GOENV=off)
 
 case "$ROWS" in 10000|100000) ;; *) echo "ROWS must be 10000 or 100000" >&2; exit 2;; esac
 case "$PROFILE_MODE" in none|runtime|alloc) ;; *) echo "PROFILE_MODE must be none, runtime, or alloc" >&2; exit 2;; esac
@@ -26,8 +27,9 @@ for phase in "${configured_phases[@]}"; do
   seen_phases+="$phase,"
   if [[ "$phase" == "$PROFILE_PHASE" ]]; then profile_phase_selected=true; fi
 done
+if [[ "$PROFILE_MODE" == none && -n "$PROFILE_PHASE" ]]; then echo "PROFILE_PHASE requires PROFILE_MODE=runtime or alloc" >&2; exit 2; fi
 if [[ "$PROFILE_MODE" != none || -n "$PROFILE_PHASE" ]] && [[ "$profile_phase_selected" != true ]]; then echo "PROFILE_PHASE must be selected by PHASES" >&2; exit 2; fi
-if [[ -n "$(git status --porcelain)" ]]; then echo "worktree must be clean before profiling" >&2; exit 2; fi
+if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then echo "worktree must be clean before profiling" >&2; exit 2; fi
 if [[ -L "$RUN_DIR" || ( -e "$RUN_DIR" && ! -d "$RUN_DIR" ) ]]; then echo "RUN_DIR must be an empty directory: $RUN_DIR" >&2; exit 2; fi
 mkdir -p "$RUN_DIR"
 if [[ -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then echo "RUN_DIR must be empty: $RUN_DIR; use a fresh RUN_DIR" >&2; exit 2; fi
@@ -35,12 +37,13 @@ if [[ -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then echo
   echo "commit=$(git rev-parse HEAD)"
   echo "command=$0 $*"
   echo "host=$(uname -a)"
-  echo "go=$(env -u GOMAXPROCS -u GOGC -u GOMEMLIMIT GOENV=off GOFLAGS= go version)"
+  echo "go=$("${controlled_go_env[@]}" go version)"
   echo "goflags=cleared"
   echo "goenv=off"
   echo "gomaxprocs=cleared"
   echo "gogc=cleared"
   echo "gomemlimit=cleared"
+  echo "compiler_tuning=cleared GOAMD64,GOARM64,GO386,GOARM,GOMIPS,GOMIPS64,GOPPC64,GORISCV64,GOWASM,GOEXPERIMENT,CGO_ENABLED"
   if [[ -n "${GODEBUG:-}" ]]; then printf 'godebug_shell_escaped=%q\n' "$GODEBUG"; fi
 } > "$RUN_DIR/context.txt"
 
@@ -61,7 +64,7 @@ run_matrix() {
     if [[ "$mode" == alloc ]]; then
       godebug="${GODEBUG:+${GODEBUG},}memprofilerate=1"
     fi
-    cmd=(env -u GOMAXPROCS -u GOGC -u GOMEMLIMIT GOWORK=off GOFLAGS= GOENV=off)
+    cmd=("${controlled_go_env[@]}")
     if [[ -n "$godebug" ]]; then cmd+=(GODEBUG="$godebug"); fi
     cmd+=(TREEDB_TEXT_PROFILE_PHASE="$phase" TREEDB_TEXT_PROFILE_ROWS="$rows" TREEDB_TEXT_PROFILE_MODE="$mode" TREEDB_TEXT_PROFILE_DIR="$phase_dir/profiles" TREEDB_TEXT_PROFILE_TINY="$([[ "$TINY_SMOKE" == true ]] && echo 1 || echo 0)" go test ./cmd/treedb_text_hybrid_scale -run '^TestManualTextHybridScaleProfile4546$' -count=1 -v -timeout "$TIMEOUT")
     printf '%q ' "${cmd[@]}" > "$phase_dir/command.txt"; echo >> "$phase_dir/command.txt"
