@@ -2371,14 +2371,9 @@ func TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs(t *testin
 	}
 	defer func() { _ = db.Close() }()
 
-	cleanupCalls := 0
-	db.cached.SetCommandWALCheckpointCleanupHook(func(sync bool) error {
-		cleanupCalls++
-		if cleanupCalls <= 2 {
-			return nil
-		}
-		return db.cleanupPublicCommandWALCheckpoint(sync)
-	})
+	// Keep both benchmark epochs intact through fixture construction. The empty
+	// checkpoint below is the first checkpoint allowed to run production cleanup.
+	db.cached.SetCommandWALCheckpointCleanupHook(func(bool) error { return nil })
 
 	for _, epoch := range []string{"first", "second"} {
 		batch := db.NewBatch()
@@ -2400,9 +2395,6 @@ func TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs(t *testin
 	before := publicCommandWALSegmentNames(t, dir)
 	if len(before) < 2 {
 		t.Fatalf("segments after two checkpointed epochs=%v, want closed command WAL generations", before)
-	}
-	if cleanupCalls != 2 {
-		t.Fatalf("suppressed cleanup calls=%d, want 2", cleanupCalls)
 	}
 	db.cached.SetCommandWALCheckpointCleanupHook(db.cleanupPublicCommandWALCheckpoint)
 	stateBefore := db.backend.State()
