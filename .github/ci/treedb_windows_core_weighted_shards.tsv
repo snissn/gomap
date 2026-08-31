@@ -1,4 +1,4 @@
-# kind	shard	item	max_seconds	optional preserve-fallback; evidence runs 32407394988, 32410661113, 32412648919, 32416637299, 32828779665
+# kind	shard	item	max_seconds	optional preserve-fallback; evidence runs 32407394988, 32410661113, 32412648919, 32416637299, 32828779665, 33414568777
 package	0	github.com/snissn/gomap/TreeDB/mvcc	166.88
 root	0	TestReopenVerify_DurableWALCoalescedInlineAroundPointerRecords	11.24
 root	1	TestCrashRecovery_CommandWALDurableSyncedUncheckpointedFramesReplay	16.22
