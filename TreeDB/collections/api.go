@@ -11161,6 +11161,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	baseCommitSeq := snapshotCommitSeq(snap)
 	if len(meta.Indexes) == 0 && !commandWALIndexedBufferedMode {
 		if plannerOptions.documentFormat == DocumentFormatJSON && !commandWALNoIndexBufferedMode {
+			runTestBeforeInsertBatchPlanningHook()
 			return c.insertBatchNoIndex(catalog, snap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, documents, commandWALIntent, execOpts)
 		}
 	}
@@ -12184,8 +12185,12 @@ func (c *Collection) insertBatchNoIndex(
 			return nil, errCollectionNotFound
 		}
 		if !sameCollectionMeta(currentCatalog.meta, c.meta) {
-			_ = current.Close()
-			return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", c.meta.Name)
+			if !columnStoreWriteEnabled(currentCatalog.meta) ||
+				!sameCollectionMetaIgnoringColumnManifestProgress(currentCatalog.meta, c.meta) {
+				_ = current.Close()
+				return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", c.meta.Name)
+			}
+			c.meta = currentCatalog.meta
 		}
 		for i, rootName := range rootNames {
 			rootID := currentCatalog.rootID(rootName)
