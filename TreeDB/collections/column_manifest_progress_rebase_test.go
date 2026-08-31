@@ -9,6 +9,72 @@ import (
 	"time"
 )
 
+func TestConcurrentSchemaModificationErrorAttributesNormalizedMetaDiff(t *testing.T) {
+	base := CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+			Enabled:                 true,
+			Columns:                 []ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3}},
+			RetainedPayload:         ColumnRetainedPayloadFull,
+			RetainedPayloadEncoding: ColumnRetainedPayloadEncodingJSON,
+		}},
+		VectorIndexes: []VectorIndexDefinition{{Name: "embedding_graph", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 3, M: 2, Strategy: VectorIndexStrategyColumnGraph}},
+	}
+	var err error
+	base, err = normalizeCollectionMeta(base)
+	if err != nil {
+		t.Fatalf("normalize base metadata: %v", err)
+	}
+	identity := &ColumnManifestIdentity{Generation: 1, Version: 1, Checksum: 1}
+	base.Options.ColumnStore.ActiveManifest = identity
+	base.Options.ColumnStore.RecoveryAuthoritativeManifest = identity
+	base.Options.ColumnStore.RecoveryAuthoritativeAppliedCommandLSN = 1
+	normalizedEqual := copyCollectionMeta(base)
+	normalizedEqual.Options.DocumentFormat = DocumentFormatJSON
+	manifestProgress := copyCollectionMeta(base)
+	manifestProgress.Options.ColumnStore.ActiveManifest = &ColumnManifestIdentity{Generation: 2, Version: 1, Checksum: 2}
+	manifestProgress.Options.ColumnStore.RecoveryAuthoritativeManifest = &ColumnManifestIdentity{Generation: 2, Version: 1, Checksum: 2}
+	manifestProgress.Options.ColumnStore.RecoveryAuthoritativeAppliedCommandLSN = 2
+	options := copyCollectionMeta(base)
+	options.Options.AllowArrayValuesInIndex = true
+	indexes := copyCollectionMeta(base)
+	indexes.Indexes = []IndexDefinition{{Name: "title", Field: "title", ValueType: IndexValueString}}
+	vectorIndexes := copyCollectionMeta(base)
+	vectorIndexes.VectorIndexes[0].Dimensions = 4
+	manifestAndVectorIndexes := copyCollectionMeta(manifestProgress)
+	manifestAndVectorIndexes.VectorIndexes[0].Dimensions = 4
+	textIndexes := copyCollectionMeta(base)
+	textIndexes.TextIndexes = []TextIndexDefinition{{Name: "lexical", Fields: []TextIndexField{{Field: "body"}}}}
+	name := copyCollectionMeta(base)
+	name.Name = "other"
+	name.Options.ColumnStore.ManifestRoot.Name = collectionColumnManifestRootName(name.Name)
+	invalid := copyCollectionMeta(base)
+	invalid.Name = ""
+
+	for _, tc := range []struct {
+		name   string
+		actual CollectionMeta
+		want   string
+	}{
+		{name: "normalized equal", actual: normalizedEqual, want: "[stage=buffered_domain_revalidate diff=other]"},
+		{name: "manifest progress", actual: manifestProgress, want: "[stage=buffered_domain_revalidate diff=manifest_progress]"},
+		{name: "options", actual: options, want: "[stage=buffered_domain_revalidate diff=options]"},
+		{name: "indexes", actual: indexes, want: "[stage=buffered_domain_revalidate diff=indexes]"},
+		{name: "vector indexes", actual: vectorIndexes, want: "[stage=buffered_domain_revalidate diff=vector_indexes]"},
+		{name: "manifest and vector indexes", actual: manifestAndVectorIndexes, want: "[stage=buffered_domain_revalidate diff=vector_indexes]"},
+		{name: "text indexes", actual: textIndexes, want: "[stage=buffered_domain_revalidate diff=text_indexes]"},
+		{name: "name", actual: name, want: "[stage=buffered_domain_revalidate diff=name]"},
+		{name: "invalid", actual: invalid, want: "[stage=buffered_domain_revalidate diff=invalid]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := concurrentSchemaModificationError("buffered_domain_revalidate", base, tc.actual)
+			if !strings.Contains(err.Error(), "collections: concurrent schema modification detected for \"docs\"") || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%q want stable schema error with %s", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestColumnGraphInsertPlanningSurvivesCheckpointManifestProgress(t *testing.T) {
 	dir, d, _ := openValidatedFloat32ProjectionCollection(t, 3)
 	defer func() {
