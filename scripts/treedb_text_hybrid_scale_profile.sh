@@ -19,8 +19,11 @@ if [[ "$ROWS" == 100000 && "$RUN_100K" != true ]]; then echo "100k requires RUN_
 if [[ -z "$PHASES" ]]; then echo "unknown phase: " >&2; exit 2; fi
 IFS=',' read -ra configured_phases <<< "$PHASES"
 profile_phase_selected=false
+seen_phases=""
 for phase in "${configured_phases[@]}"; do
   case "$phase" in load|vector|phrase|broad|maintenance|reopen) ;; *) echo "unknown phase: $phase" >&2; exit 2;; esac
+  if [[ ",$seen_phases" == *,"$phase",* ]]; then echo "duplicate phase: $phase" >&2; exit 2; fi
+  seen_phases+="$phase,"
   if [[ "$phase" == "$PROFILE_PHASE" ]]; then profile_phase_selected=true; fi
 done
 if [[ "$PROFILE_MODE" != none || -n "$PROFILE_PHASE" ]] && [[ "$profile_phase_selected" != true ]]; then echo "PROFILE_PHASE must be selected by PHASES" >&2; exit 2; fi

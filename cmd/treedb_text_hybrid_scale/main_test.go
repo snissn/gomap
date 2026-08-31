@@ -905,6 +905,13 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(invalid, "context.txt")); !os.IsNotExist(err) {
 		t.Fatalf("invalid phase wrote provenance: %v", err)
 	}
+	duplicate := t.TempDir()
+	if output, err := run("RUN_DIR="+duplicate, "PHASES=vector,vector", "DRY_RUN=true"); err == nil || !strings.Contains(string(output), "duplicate phase: vector") {
+		t.Fatalf("duplicate phase err=%v output=%s", err, output)
+	}
+	if entries, err := os.ReadDir(duplicate); err != nil || len(entries) != 0 {
+		t.Fatalf("duplicate phase wrote artifacts: entries=%v err=%v", entries, err)
+	}
 	if output, err := run("RUN_DIR="+invalid, "PHASES=phrase", "DRY_RUN=true"); err != nil || !strings.Contains(string(output), "artifacts:") {
 		t.Fatalf("invalid phase retry err=%v output=%s", err, output)
 	}
@@ -1031,10 +1038,6 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.Join(profiles, "alloc_after.pprof")); err != nil || info.Size() == 0 {
 		t.Fatalf("rerun overwrote allocation profile: info=%v err=%v", info, err)
-	}
-	phaseGuard := t.TempDir()
-	if output, err := run("RUN_DIR="+phaseGuard, "PHASES=phrase,phrase", "DRY_RUN=true"); err == nil || !strings.Contains(string(output), "phase artifact directory already exists") {
-		t.Fatalf("duplicate phase guard err=%v output=%s", err, output)
 	}
 	if output, err := run("RUN_DIR="+t.TempDir(), "PHASES=load", "TINY_SMOKE=true", "TIMEOUT=1ns"); err == nil || !strings.Contains(string(output), "FAIL") {
 		t.Fatalf("tiny timeout err=%v output=%s", err, output)
