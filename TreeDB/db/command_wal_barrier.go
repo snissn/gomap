@@ -19,7 +19,8 @@ type commandWALRawBarrier struct {
 // raw KV publishes cannot create AppliedCommandLSN gaps. A caller takes
 // exclusive pre-raw admission before it acquires the command-WAL publish mutex;
 // hooks still run with that mutex held so existing staged publishers retain
-// their atomic raw-publish contract. The returned unregister
+// their atomic raw-publish contract. A hook must not append command-WAL frames,
+// acquire LockCommandWALStaging, or call a path that does either. The returned unregister
 // function waits for in-flight hooks and must not be called from the hook itself.
 func (db *DB) RegisterCommandWALRawPublishBarrier(hook func() error) func() {
 	if db == nil || hook == nil || !db.commandWAL {
