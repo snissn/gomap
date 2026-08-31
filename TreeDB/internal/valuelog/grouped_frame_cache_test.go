@@ -79,10 +79,78 @@ func TestGroupedFrameCache_StateIsolationAndSubValues(t *testing.T) {
 	if _, _, err, hit := f.groupedFrameCacheReadTo(100, false, 3, changedRawLenOffsets, changedRawLenOffsets[3], 0, nil); err != nil || hit {
 		t.Fatalf("cache hit crossed raw-length identity: hit=%v err=%v", hit, err)
 	}
+	misses := f.groupedFrameCacheDetailedStats().Misses
 	invalidOffsets := offsets
 	invalidOffsets[2] = invalidOffsets[1] - 1
 	if _, _, err, hit := f.groupedFrameCacheReadTo(100, false, 3, invalidOffsets, offsets[3], 0, nil); !hit || !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("expected invalid current offset state to fail closed, hit=%v err=%v", hit, err)
+	}
+	if got := f.groupedFrameCacheDetailedStats().Misses; got != misses {
+		t.Fatalf("corrupt miss incremented misses: got=%d want=%d", got, misses)
+	}
+}
+
+func TestGroupedFrameCache_ZeroStartPublishesFingerprintAndHits(t *testing.T) {
+	f := newTestGroupedCacheFile(1, 1024, 0)
+	raw := []byte("zero")
+	offsets := groupedCacheOffsets(len(raw))
+	if groupedFrameCacheHash(0, false) != 0 {
+		t.Fatalf("zero-start hash changed")
+	}
+	if !f.groupedFrameCacheStore(0, false, 1, offsets, raw, false) {
+		t.Fatalf("store zero-start frame")
+	}
+
+	cache := f.groupedFrameCache.Load()
+	slot := &cache.shardFor(0, false).slots[0]
+	wantFP := groupedFrameCacheHash(0, false) | 1
+	if fp := slot.fp.Load(); fp == 0 || fp != wantFP {
+		t.Fatalf("zero-start fingerprint=%d want=%d", fp, wantFP)
+	}
+	got, _, err, hit := f.groupedFrameCacheReadTo(0, false, 1, offsets, uint32(len(raw)), 0, nil)
+	if err != nil || !hit || !bytes.Equal(got, raw) {
+		t.Fatalf("zero-start read: hit=%v err=%v got=%q", hit, err, got)
+	}
+}
+
+func TestGroupedFrameCache_CorruptNonHitPathsFailClosed(t *testing.T) {
+	origin := groupedCacheOffsets(4)
+	origin[0] = 1
+	order := groupedCacheOffsets(2, 2)
+	order[2] = 1
+	terminal := groupedCacheOffsets(4)
+
+	capZero := newGroupedFrameCache(nil, 1, 1024, 0, nil)
+	capZero.shards[0].cap = 0
+	unallocated := newGroupedFrameCache(nil, 1, 1024, 0, nil)
+	miss := newGroupedFrameCache(nil, 1, 1024, 0, nil)
+	valid := groupedCacheOffsets(4)
+	if !miss.store(1, false, 1, valid, []byte("data"), false) {
+		t.Fatalf("store miss-path frame")
+	}
+
+	tests := []struct {
+		name    string
+		cache   *groupedFrameCache
+		k       int
+		offsets [MaxFrameK + 1]uint32
+		rawLen  uint32
+	}{
+		{name: "zero-capacity shard", cache: capZero, offsets: origin, k: 1, rawLen: origin[1]},
+		{name: "unallocated shard", cache: unallocated, offsets: terminal, k: 1, rawLen: terminal[1] + 1},
+		{name: "populated miss", cache: miss, offsets: order, k: 2, rawLen: order[2]},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			misses := tt.cache.misses.Load()
+			_, _, err, hit := tt.cache.readTo(2, false, tt.k, tt.offsets, tt.rawLen, 0, nil, nil)
+			if !hit || !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("corrupt non-hit read did not fail closed: hit=%v err=%v", hit, err)
+			}
+			if tt.cache.misses.Load() != misses {
+				t.Fatalf("corrupt non-hit read incremented misses")
+			}
+		})
 	}
 }
 
