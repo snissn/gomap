@@ -250,6 +250,7 @@ func profileManualPhase(mode, dir string, action func() error) (time.Duration, e
 		if writeErr := write("alloc_after.pprof", "allocs"); writeErr != nil {
 			return measured, writeErr
 		}
+		runtime.GC()
 		if writeErr := write("heap_after.pprof", "heap"); writeErr != nil {
 			return measured, writeErr
 		}
