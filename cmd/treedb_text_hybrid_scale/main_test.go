@@ -952,6 +952,18 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil || !strings.Contains(string(command), "TREEDB_TEXT_PROFILE_ROWS=10000") {
 		t.Fatalf("dry-run command=%q err=%v", command, err)
 	}
+	goFlagsDryRun := t.TempDir()
+	if output, err := run("RUN_DIR="+goFlagsDryRun, "PHASES=phrase", "DRY_RUN=true", "GOFLAGS=-race"); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("GOFLAGS dry-run err=%v output=%s", err, output)
+	}
+	command, err = os.ReadFile(filepath.Join(goFlagsDryRun, "10000", "phrase", "command.txt"))
+	if err != nil || !strings.Contains(string(command), "GOFLAGS= GOENV=off") {
+		t.Fatalf("GOFLAGS command=%q err=%v", command, err)
+	}
+	context, err := os.ReadFile(filepath.Join(goFlagsDryRun, "context.txt"))
+	if err != nil || !strings.Contains(string(context), "goflags=cleared\ngoenv=off") {
+		t.Fatalf("GOFLAGS context=%q err=%v", context, err)
+	}
 	runtimeDebugDryRun := t.TempDir()
 	if output, err := run("RUN_DIR="+runtimeDebugDryRun, "PHASES=phrase", "DRY_RUN=true", "PROFILE_MODE=runtime", "PROFILE_PHASE=phrase", "GODEBUG=asyncpreemptoff=1,invalidptr=0"); err != nil || !strings.Contains(string(output), "artifacts:") {
 		t.Fatalf("runtime GODEBUG dry-run err=%v output=%s", err, output)
@@ -960,7 +972,7 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil || !strings.Contains(string(command), "GODEBUG=asyncpreemptoff=1\\,invalidptr=0") {
 		t.Fatalf("runtime GODEBUG command=%q err=%v", command, err)
 	}
-	context, err := os.ReadFile(filepath.Join(runtimeDebugDryRun, "context.txt"))
+	context, err = os.ReadFile(filepath.Join(runtimeDebugDryRun, "context.txt"))
 	if err != nil || !strings.Contains(string(context), "godebug_shell_escaped=asyncpreemptoff=1\\,invalidptr=0") {
 		t.Fatalf("runtime GODEBUG context=%q err=%v", context, err)
 	}
