@@ -1,9 +1,40 @@
 package typedcolumn
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestEncodeInt64PruningPayloadSizeAndRoundTrip(t *testing.T) {
+	index := Int64ValueRowIndex{
+		Rows:         4,
+		NullCount:    1,
+		DefaultCount: 2,
+		Blocks: []Int64PruningBlock{
+			{Index: 0, FirstRow: 0, RowCount: 2, HasMinMax: true, Min: -2, Max: 5},
+			{Index: 1, FirstRow: 2, RowCount: 2, HasMinMax: true, Min: 3, Max: 8},
+		},
+		Entries: []Int64PruningEntry{{Value: -2, Row: 0}, {Value: 3, Row: 2}, {Value: 5, Row: 1}, {Value: 8, Row: 3}},
+	}
+	payload, err := encodeInt64PruningPayload(index)
+	if err != nil {
+		t.Fatalf("encodeInt64PruningPayload: %v", err)
+	}
+	if got, want := len(payload), 36+len(index.Blocks)*int64PruningBlockEncodedBytes+len(index.Entries)*16; got != want {
+		t.Fatalf("payload bytes=%d want %d", got, want)
+	}
+	if cap(payload) != len(payload) {
+		t.Fatalf("payload capacity=%d want exact size=%d", cap(payload), len(payload))
+	}
+	decoded, err := decodeInt64PruningPayload(ColumnPruningEnvelope{}, payload)
+	if err != nil {
+		t.Fatalf("decodeInt64PruningPayload: %v", err)
+	}
+	if decoded.Rows != index.Rows || decoded.NullCount != index.NullCount || decoded.DefaultCount != index.DefaultCount || !reflect.DeepEqual(decoded.Blocks, index.Blocks) || !reflect.DeepEqual(decoded.Entries, index.Entries) {
+		t.Fatalf("decoded=%+v want=%+v", decoded, index)
+	}
+}
 
 func TestColumnPruningInt64ValueRowsRoundTrip(t *testing.T) {
 	part := mustStatsTestPartWithBlockRows(t, []int64{5, 1, 5, 9, 5, 2}, EncodingDeltaVarint, 3)
