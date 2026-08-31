@@ -1319,6 +1319,8 @@ type indexedFlushUnit struct {
 	byteCount       int64
 	rootRunCount    int
 	columnDocuments []columnWriteDocument
+	commandWALFirst uint64
+	commandWALLast  uint64
 }
 
 type indexedFlushPublishWork struct {
@@ -1338,6 +1340,8 @@ type indexedFlushPublishWork struct {
 	rootRunCount       int
 	rootCount          int
 	rootDeltaStats     collectionRootDeltaPlanStats
+	commandWALFirst    uint64
+	commandWALLast     uint64
 }
 
 type bufferedIndexedCheckpoint struct {
@@ -1372,7 +1376,10 @@ type bufferedIndexedCheckpoint struct {
 	indexedDeletesOnly     bool
 	pendingCommandWALFirst uint64
 	pendingCommandWALLast  uint64
-	columnDocuments        []columnWriteDocument
+
+	indexedMutableCommandWALFirst uint64
+	indexedMutableCommandWALLast  uint64
+	columnDocuments               []columnWriteDocument
 }
 
 type bufferedUniqueValueIndex struct {
@@ -1470,22 +1477,25 @@ type collectionWriteDomain struct {
 	nativeVectorPublishMu    sync.RWMutex
 	// Built lazily by readers so write-only indexed buffering does not pay for
 	// an auxiliary lookup structure it never uses.
-	primaryRunIndex             *bufferedPrimaryRunIndex
-	uniqueValueRuns             map[string][]memtable.Table
-	uniqueValueMutableRuns      map[string]memtable.Table
-	uniqueValueIndex            map[string]*bufferedUniqueValueIndex
-	count                       int
-	bufferedBytes               int64
-	mutableCount                int
-	mutableBytes                int64
-	rootRunCount                int
-	writeGeneration             uint64
-	primaryWriteIndex           *bufferedPrimaryWriteIndex
-	indexedDeletesOnly          bool
-	pendingCommandWALFirst      uint64
-	pendingCommandWALLast       uint64
-	columnDocuments             []columnWriteDocument
-	commandWALStageReservations atomic.Int32
+	primaryRunIndex        *bufferedPrimaryRunIndex
+	uniqueValueRuns        map[string][]memtable.Table
+	uniqueValueMutableRuns map[string]memtable.Table
+	uniqueValueIndex       map[string]*bufferedUniqueValueIndex
+	count                  int
+	bufferedBytes          int64
+	mutableCount           int
+	mutableBytes           int64
+	rootRunCount           int
+	writeGeneration        uint64
+	primaryWriteIndex      *bufferedPrimaryWriteIndex
+	indexedDeletesOnly     bool
+	pendingCommandWALFirst uint64
+	pendingCommandWALLast  uint64
+
+	indexedMutableCommandWALFirst uint64
+	indexedMutableCommandWALLast  uint64
+	columnDocuments               []columnWriteDocument
+	commandWALStageReservations   atomic.Int32
 
 	mutationLockCalls                  atomic.Uint64
 	mutationLockWaitTotalNs            atomic.Uint64
@@ -5530,7 +5540,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.observeIndexedStage(len(plan.resultIDs), stagedBytes, stagedRootRuns)
 	c.meta = catalog.meta
 	if commandWALLSN != 0 {
-		if err := domain.recordPendingCommandWALLSNLocked(c.db, commandWALLSN); err != nil {
+		if err := domain.recordPendingIndexedCommandWALLSNLocked(c.db, commandWALLSN); err != nil {
 			return 0, commandWALBufferedInsertCommitAmbiguous(err)
 		}
 		releaseCommandWALRawStage()
@@ -5741,7 +5751,7 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 	domain.observeIndexedStage(len(plan.resultIDs), direct.stagedBytes, actualRootRuns)
 	c.meta = catalog.meta
 	if commandWALLSN != 0 {
-		if err := domain.recordPendingCommandWALLSNLocked(c.db, commandWALLSN); err != nil {
+		if err := domain.recordPendingIndexedCommandWALLSNLocked(c.db, commandWALLSN); err != nil {
 			return 0, commandWALBufferedInsertCommitAmbiguous(err)
 		}
 		if releaseCommandWALRawStage != nil {
@@ -5783,6 +5793,8 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
 	domain.indexedPublishingUnits = nil
 	domain.indexedFlushUnits = nil
+	domain.indexedMutableCommandWALFirst = 0
+	domain.indexedMutableCommandWALLast = 0
 	domain.rootRuns = nil
 	domain.rootMutableRuns = nil
 	domain.rootPolicies = nil
@@ -7087,7 +7099,10 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		indexedDeletesOnly:     domain.indexedDeletesOnly,
 		pendingCommandWALFirst: domain.pendingCommandWALFirst,
 		pendingCommandWALLast:  domain.pendingCommandWALLast,
-		columnDocuments:        append([]columnWriteDocument(nil), domain.columnDocuments...),
+
+		indexedMutableCommandWALFirst: domain.indexedMutableCommandWALFirst,
+		indexedMutableCommandWALLast:  domain.indexedMutableCommandWALLast,
+		columnDocuments:               append([]columnWriteDocument(nil), domain.columnDocuments...),
 	}
 }
 
@@ -7126,6 +7141,8 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.indexedDeletesOnly = checkpoint.indexedDeletesOnly
 	domain.pendingCommandWALFirst = checkpoint.pendingCommandWALFirst
 	domain.pendingCommandWALLast = checkpoint.pendingCommandWALLast
+	domain.indexedMutableCommandWALFirst = checkpoint.indexedMutableCommandWALFirst
+	domain.indexedMutableCommandWALLast = checkpoint.indexedMutableCommandWALLast
 	domain.columnDocuments = checkpoint.columnDocuments
 	if collectionCommandWALDomainPendingLocked(domain) {
 		domain.reserveCommandWALCoordinatorOwnerLocked()
@@ -7168,6 +7185,8 @@ func cloneIndexedFlushUnits(in []indexedFlushUnit) []indexedFlushUnit {
 			byteCount:       unit.byteCount,
 			rootRunCount:    unit.rootRunCount,
 			columnDocuments: append([]columnWriteDocument(nil), unit.columnDocuments...),
+			commandWALFirst: unit.commandWALFirst,
+			commandWALLast:  unit.commandWALLast,
 		}
 	}
 	return out
@@ -9074,6 +9093,9 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	}
 
 	rotateIndexedMutableToFlushUnitForAsyncLocked(domain)
+	if err = domain.validateIndexedFlushUnitCommandWALOwnershipLocked(c.db); err != nil {
+		return nil, err
+	}
 	units := domain.indexedFlushUnits
 	flushUnit := mergedIndexedFlushUnits(units)
 	rootNames := orderedBufferedRootNames(meta, flushUnit.rootRuns)
@@ -9118,6 +9140,8 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	work.byteCount = flushUnit.byteCount
 	work.rootRunCount = indexedFlushUnitRootRunCount(flushUnit)
 	work.rootCount = len(rootNames)
+	work.commandWALFirst = flushUnit.commandWALFirst
+	work.commandWALLast = flushUnit.commandWALLast
 
 	domain.indexedPublishingUnits = append(domain.indexedPublishingUnits, units...)
 	domain.indexedFlushUnits = nil
@@ -9697,6 +9721,9 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	}
 
 	rotateIndexedMutableToFlushUnitLocked(domain)
+	if err := domain.validateIndexedFlushUnitCommandWALOwnershipLocked(c.db); err != nil {
+		return err
+	}
 	flushUnit, materializedPrimaryRuns, err := mergedIndexedFlushUnitForSyncLocked(meta, domain)
 	if err != nil {
 		return err
@@ -9789,7 +9816,13 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 			return err
 		}
 		defer unlock()
-		commandWALIntent, appliedLSN, err := domain.pendingCommandWALCoverageIntentLocked(c.db)
+		var commandWALIntent *backenddb.CommandWALIntent
+		var appliedLSN uint64
+		if flushUnit.commandWALLast != 0 {
+			commandWALIntent, appliedLSN, err = domain.pendingCommandWALCoverageIntentThroughLocked(c.db, flushUnit.commandWALLast)
+		} else {
+			commandWALIntent, appliedLSN, err = domain.pendingCommandWALCoverageIntentLocked(c.db)
+		}
 		if err != nil {
 			return err
 		}
@@ -9918,6 +9951,8 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	domain.bufferedBytes = 0
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
+	domain.indexedMutableCommandWALFirst = 0
+	domain.indexedMutableCommandWALLast = 0
 	if commandWALAppliedLSN != 0 {
 		domain.clearPendingCommandWALThroughLocked(commandWALAppliedLSN)
 		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
@@ -9992,6 +10027,8 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 		byteCount:       domain.mutableBytes,
 		rootRunCount:    domain.rootRunCount,
 		columnDocuments: domain.columnDocuments,
+		commandWALFirst: domain.indexedMutableCommandWALFirst,
+		commandWALLast:  domain.indexedMutableCommandWALLast,
 	}
 	domain.indexedFlushUnits = append(domain.indexedFlushUnits, unit)
 	domain.rootRuns = nil
@@ -10005,6 +10042,8 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.columnDocuments = nil
+	domain.indexedMutableCommandWALFirst = 0
+	domain.indexedMutableCommandWALLast = 0
 	return true
 }
 
@@ -10028,6 +10067,8 @@ func rotateIndexedMutableToFlushUnitForAsyncLocked(domain *collectionWriteDomain
 		byteCount:       domain.mutableBytes,
 		rootRunCount:    rootRunCount,
 		columnDocuments: domain.columnDocuments,
+		commandWALFirst: domain.indexedMutableCommandWALFirst,
+		commandWALLast:  domain.indexedMutableCommandWALLast,
 	}
 	domain.indexedFlushUnits = append(domain.indexedFlushUnits, unit)
 	domain.rootRuns = nil
@@ -10042,6 +10083,8 @@ func rotateIndexedMutableToFlushUnitForAsyncLocked(domain *collectionWriteDomain
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.columnDocuments = nil
+	domain.indexedMutableCommandWALFirst = 0
+	domain.indexedMutableCommandWALLast = 0
 	return true
 }
 
@@ -10080,7 +10123,9 @@ func removeIndexedPublishingWorkUnitsLocked(domain *collectionWriteDomain, units
 func sameIndexedFlushUnitTables(a, b indexedFlushUnit) bool {
 	return sameTableRunMap(a.rootRuns, b.rootRuns) &&
 		sameTableRunMap(a.uniqueValueRuns, b.uniqueValueRuns) &&
-		a.primaryOverlay == b.primaryOverlay
+		a.primaryOverlay == b.primaryOverlay &&
+		a.commandWALFirst == b.commandWALFirst &&
+		a.commandWALLast == b.commandWALLast
 }
 
 func sameTableRunMap(a, b map[string][]memtable.Table) bool {
@@ -10179,6 +10224,8 @@ func mergedIndexedFlushUnitLocked(domain *collectionWriteDomain) indexedFlushUni
 		uniqueValueRuns: domain.uniqueValueRuns,
 		arenaRefs:       domain.rootValueArenas,
 		rootRunCount:    domain.rootRunCount,
+		commandWALFirst: domain.indexedMutableCommandWALFirst,
+		commandWALLast:  domain.indexedMutableCommandWALLast,
 	})
 	if len(unit.rootRuns) == 0 {
 		unit.rootRuns = nil
@@ -10222,6 +10269,8 @@ func mergedIndexedFlushUnitForSyncLocked(meta CollectionMeta, domain *collection
 		uniqueValueRuns: domain.uniqueValueRuns,
 		arenaRefs:       domain.rootValueArenas,
 		rootRunCount:    domain.rootRunCount,
+		commandWALFirst: domain.indexedMutableCommandWALFirst,
+		commandWALLast:  domain.indexedMutableCommandWALLast,
 	})
 	if len(unit.rootRuns) == 0 {
 		unit.rootRuns = nil
@@ -10257,6 +10306,12 @@ func mergeIndexedFlushUnit(dst *indexedFlushUnit, src indexedFlushUnit) {
 	dst.byteCount = saturatingAddNonNegativeInt64(dst.byteCount, src.byteCount)
 	dst.rootRunCount = saturatingAddNonNegativeInt(dst.rootRunCount, indexedFlushUnitRootRunCount(src))
 	dst.columnDocuments = append(dst.columnDocuments, src.columnDocuments...)
+	if src.commandWALFirst != 0 {
+		if dst.commandWALFirst == 0 {
+			dst.commandWALFirst = src.commandWALFirst
+		}
+		dst.commandWALLast = src.commandWALLast
+	}
 }
 
 func indexedFlushUnitRootRunCount(unit indexedFlushUnit) int {
@@ -18645,7 +18700,11 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		if plan.bufferedCommandWALLSN == 0 || commandWALPendingRecorded {
 			return nil
 		}
-		if err := domain.recordPendingCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
+		if primaryOnlyDirectUpdate {
+			if err := domain.recordPendingCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
+				return commandWALBufferedUpdateCommitAmbiguous(err)
+			}
+		} else if err := domain.recordPendingIndexedCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
 			return commandWALBufferedUpdateCommitAmbiguous(err)
 		}
 		commandWALPendingRecorded = true

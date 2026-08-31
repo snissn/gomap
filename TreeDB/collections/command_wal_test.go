@@ -16,6 +16,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -2261,17 +2262,24 @@ func TestCollectionCommandWALPendingRecordIgnoresAlreadyAppliedLSN(t *testing.T)
 func TestRollbackBufferedIndexedDomainRestoresPendingCommandWAL(t *testing.T) {
 	coord := newCollectionCommandWALCoordinator()
 	domain := &collectionWriteDomain{
-		pendingCommandWALFirst: 1,
-		pendingCommandWALLast:  2,
+		pendingCommandWALFirst:        1,
+		pendingCommandWALLast:         2,
+		indexedFlushUnits:             []indexedFlushUnit{{commandWALFirst: 1, commandWALLast: 1}},
+		indexedMutableCommandWALFirst: 2,
+		indexedMutableCommandWALLast:  2,
 	}
 	domain.commandWALCoordinator.Store(coord)
 	domain.reserveCommandWALCoordinatorOwnerLocked()
 	checkpoint := checkpointBufferedIndexedDomain(domain)
 
 	domain.pendingCommandWALLast = 3
+	domain.indexedMutableCommandWALLast = 3
 	rollbackBufferedIndexedDomain(domain, checkpoint)
 	if domain.pendingCommandWALFirst != 1 || domain.pendingCommandWALLast != 2 {
 		t.Fatalf("pending command WAL range=[%d,%d], want [1,2]", domain.pendingCommandWALFirst, domain.pendingCommandWALLast)
+	}
+	if domain.indexedMutableCommandWALFirst != 2 || domain.indexedMutableCommandWALLast != 2 {
+		t.Fatalf("mutable command WAL interval=[%d,%d], want [2,2]", domain.indexedMutableCommandWALFirst, domain.indexedMutableCommandWALLast)
 	}
 	coord.mu.Lock()
 	if coord.owner != domain {
@@ -2291,6 +2299,155 @@ func TestRollbackBufferedIndexedDomainRestoresPendingCommandWAL(t *testing.T) {
 		t.Fatalf("coordinator owner retained after pending command WAL rollback")
 	}
 	coord.mu.Unlock()
+}
+
+func TestIndexedFlushUnitCommandWALIntervalsCoverOnlyPublishingPrefix(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	domain := &collectionWriteDomain{pendingCommandWALFirst: 1, pendingCommandWALLast: 3}
+	for _, lsn := range []uint64{1, 2} {
+		domain.rootRuns = map[string][]memtable.Table{"users:primary": nil}
+		domain.indexedMutableCommandWALFirst = lsn
+		domain.indexedMutableCommandWALLast = lsn
+		if !rotateIndexedMutableToFlushUnitLocked(domain) {
+			t.Fatalf("rotate LSN %d=false", lsn)
+		}
+	}
+	domain.rootRuns = map[string][]memtable.Table{"users:primary": nil}
+	domain.indexedMutableCommandWALFirst = 3
+	domain.indexedMutableCommandWALLast = 3
+	if err := domain.validateIndexedFlushUnitCommandWALOwnershipLocked(d); err != nil {
+		t.Fatalf("validate ownership: %v", err)
+	}
+	work := domain.indexedFlushUnits[0]
+	if work.commandWALFirst != 1 || work.commandWALLast != 1 {
+		t.Fatalf("publishing prefix interval=[%d,%d], want [1,1]", work.commandWALFirst, work.commandWALLast)
+	}
+	intent, applied, err := domain.pendingCommandWALCoverageIntentThroughLocked(d, work.commandWALLast)
+	if err != nil {
+		t.Fatalf("pendingCommandWALCoverageIntentThroughLocked: %v", err)
+	}
+	if intent == nil || applied != 1 {
+		t.Fatalf("prefix coverage intent=%v applied=%d, want non-nil/1", intent, applied)
+	}
+	domain.indexedFlushUnits = domain.indexedFlushUnits[1:]
+	domain.clearPendingCommandWALThroughLocked(applied)
+	if domain.pendingCommandWALFirst != 2 || domain.pendingCommandWALLast != 3 {
+		t.Fatalf("pending interval after prefix clear=[%d,%d], want [2,3]", domain.pendingCommandWALFirst, domain.pendingCommandWALLast)
+	}
+	if domain.indexedMutableCommandWALFirst != 3 || domain.indexedMutableCommandWALLast != 3 {
+		t.Fatalf("mutable interval after prefix clear=[%d,%d], want [3,3]", domain.indexedMutableCommandWALFirst, domain.indexedMutableCommandWALLast)
+	}
+}
+
+func TestIndexedFlushUnitCommandWALIntervalsRejectInvalidOwnership(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	for name, domain := range map[string]*collectionWriteDomain{
+		"gap": {
+			pendingCommandWALFirst: 1, pendingCommandWALLast: 3,
+			indexedFlushUnits: []indexedFlushUnit{{commandWALFirst: 1, commandWALLast: 1}, {commandWALFirst: 3, commandWALLast: 3}},
+		},
+		"overlap": {
+			pendingCommandWALFirst: 1, pendingCommandWALLast: 3,
+			indexedFlushUnits: []indexedFlushUnit{{commandWALFirst: 1, commandWALLast: 2}, {commandWALFirst: 2, commandWALLast: 3}},
+		},
+		"outside aggregate": {
+			pendingCommandWALFirst: 1, pendingCommandWALLast: 2,
+			indexedFlushUnits: []indexedFlushUnit{{commandWALFirst: 1, commandWALLast: 3}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := domain.validateIndexedFlushUnitCommandWALOwnershipLocked(d); !errors.Is(err, backenddb.ErrCommandWALAppliedLSNNonContig) {
+				t.Fatalf("validateIndexedFlushUnitCommandWALOwnershipLocked error=%v, want ErrCommandWALAppliedLSNNonContig", err)
+			}
+		})
+	}
+	domain := &collectionWriteDomain{
+		pendingCommandWALFirst: 1, pendingCommandWALLast: 2,
+		indexedFlushUnits: []indexedFlushUnit{{commandWALFirst: 1, commandWALLast: 2}},
+	}
+	if _, _, err := domain.pendingCommandWALCoverageIntentThroughLocked(d, 3); !errors.Is(err, backenddb.ErrCommandWALAppliedLSNNonContig) {
+		t.Fatalf("over-coverage error=%v, want ErrCommandWALAppliedLSNNonContig", err)
+	}
+}
+
+func TestIndexedFlushUnitCommandWALIntervalsRequeueWithoutChange(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	publishing := indexedFlushUnit{commandWALFirst: 1, commandWALLast: 1}
+	domain := &collectionWriteDomain{
+		pendingCommandWALFirst:        1,
+		pendingCommandWALLast:         3,
+		indexedPublishingUnits:        []indexedFlushUnit{publishing},
+		indexedFlushUnits:             []indexedFlushUnit{{commandWALFirst: 2, commandWALLast: 2}},
+		indexedMutableCommandWALFirst: 3,
+		indexedMutableCommandWALLast:  3,
+	}
+	work := []indexedFlushUnit{publishing}
+	removed, owned := removeIndexedPublishingWorkUnitsLocked(domain, work)
+	if !owned || len(removed) != 1 {
+		t.Fatalf("remove publishing work owned=%t units=%d, want true/1", owned, len(removed))
+	}
+	domain.indexedFlushUnits = append(removed, domain.indexedFlushUnits...)
+	if err := domain.validateIndexedFlushUnitCommandWALOwnershipLocked(d); err != nil {
+		t.Fatalf("validate ownership after requeue: %v", err)
+	}
+	if got := domain.indexedFlushUnits[0]; got.commandWALFirst != 1 || got.commandWALLast != 1 {
+		t.Fatalf("requeued interval=[%d,%d], want [1,1]", got.commandWALFirst, got.commandWALLast)
+	}
+}
+
+func TestCollectionCommandWALAsyncFlushWorkCarriesIndexedInterval(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:                          DocumentFormatBSON,
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 1,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "email", Value: "ada@example.test"}})},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepareIndexedAsyncPublish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepareIndexedAsyncPublish returned nil work")
+	}
+	defer func() {
+		if work.pin != nil {
+			_ = work.pin.Close()
+		}
+	}()
+	if work.commandWALFirst != 1 || work.commandWALLast != 1 {
+		t.Fatalf("work command WAL interval=[%d,%d], want [1,1]", work.commandWALFirst, work.commandWALLast)
+	}
+	if err := col.completePreparedIndexedFlush(work, 0, nil, errors.New("requeue for test"), 0, 0, 0); err == nil {
+		t.Fatal("completePreparedIndexedFlush requeue error=nil")
+	}
+	col.writeDomain.mu.Lock()
+	err = col.writeDomain.validateIndexedFlushUnitCommandWALOwnershipLocked(d)
+	col.writeDomain.mu.Unlock()
+	if err != nil {
+		t.Fatalf("validate ownership after requeue: %v", err)
+	}
 }
 
 func TestCollectionCommandWALUpdateBSONSetUniqueIndexReopenRecovery(t *testing.T) {

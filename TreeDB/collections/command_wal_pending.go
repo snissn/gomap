@@ -517,7 +517,34 @@ func (domain *collectionWriteDomain) recordPendingCommandWALLSNLocked(db *backen
 	return nil
 }
 
+// recordPendingIndexedCommandWALLSNLocked assigns a buffered indexed write to
+// the mutable interval that will move intact into its flush unit.
+func (domain *collectionWriteDomain) recordPendingIndexedCommandWALLSNLocked(db *backenddb.DB, lsn uint64) error {
+	if err := domain.recordPendingCommandWALLSNLocked(db, lsn); err != nil || lsn == 0 {
+		return err
+	}
+	if domain.indexedMutableCommandWALFirst == 0 {
+		domain.indexedMutableCommandWALFirst = lsn
+		domain.indexedMutableCommandWALLast = lsn
+	} else {
+		if lsn != domain.indexedMutableCommandWALLast+1 {
+			return fmt.Errorf("%w: indexed mutable command WAL range [%d,%d] cannot cover lsn %d", backenddb.ErrCommandWALAppliedLSNNonContig, domain.indexedMutableCommandWALFirst, domain.indexedMutableCommandWALLast, lsn)
+		}
+		domain.indexedMutableCommandWALLast = lsn
+	}
+	return domain.validateIndexedFlushUnitCommandWALOwnershipLocked(db)
+}
+
 func (domain *collectionWriteDomain) pendingCommandWALCoverageIntentLocked(db *backenddb.DB) (*backenddb.CommandWALIntent, uint64, error) {
+	if domain == nil {
+		return nil, 0, nil
+	}
+	return domain.pendingCommandWALCoverageIntentThroughLocked(db, domain.pendingCommandWALLast)
+}
+
+// pendingCommandWALCoverageIntentThroughLocked covers an owned prefix only;
+// later queued or mutable frames remain pending.
+func (domain *collectionWriteDomain) pendingCommandWALCoverageIntentThroughLocked(db *backenddb.DB, through uint64) (*backenddb.CommandWALIntent, uint64, error) {
 	if domain == nil || db == nil || !db.CommandWALEnabled() {
 		return nil, 0, nil
 	}
@@ -537,12 +564,55 @@ func (domain *collectionWriteDomain) pendingCommandWALCoverageIntentLocked(db *b
 	if first > current+1 {
 		return nil, 0, fmt.Errorf("%w: pending collection command WAL starts at %d after applied %d", backenddb.ErrCommandWALAppliedLSNNonContig, first, current)
 	}
-	applied := last
+	if through < first || through > last {
+		return nil, 0, fmt.Errorf("%w: pending collection command WAL range [%d,%d] cannot cover through %d", backenddb.ErrCommandWALAppliedLSNNonContig, first, last, through)
+	}
+	applied := through
 	intent, err := backenddb.NewCommandWALCoverageIntent(applied, backenddb.CommandWALLSNRange{First: current + 1, Last: applied})
 	if err != nil {
 		return nil, 0, err
 	}
 	return intent, applied, nil
+}
+
+func (domain *collectionWriteDomain) validateIndexedFlushUnitCommandWALOwnershipLocked(db *backenddb.DB) error {
+	if domain == nil {
+		return nil
+	}
+	var current uint64
+	if db != nil {
+		state, ok := db.StateToken()
+		if !ok {
+			return backenddb.ErrClosed
+		}
+		current = state.AppliedCommandLSN
+	}
+	units := make([]indexedFlushUnit, 0, len(domain.indexedPublishingUnits)+len(domain.indexedFlushUnits)+1)
+	units = append(units, domain.indexedPublishingUnits...)
+	units = append(units, domain.indexedFlushUnits...)
+	units = append(units, indexedFlushUnit{commandWALFirst: domain.indexedMutableCommandWALFirst, commandWALLast: domain.indexedMutableCommandWALLast})
+	var first, last uint64
+	for _, unit := range units {
+		unitFirst, unitLast := unit.commandWALFirst, unit.commandWALLast
+		if unitFirst == 0 && unitLast == 0 {
+			continue
+		}
+		if unitFirst == 0 || unitLast < unitFirst || unitFirst != current+1 {
+			return fmt.Errorf("%w: indexed flush command WAL interval [%d,%d] after applied %d", backenddb.ErrCommandWALAppliedLSNNonContig, unitFirst, unitLast, current)
+		}
+		if first == 0 {
+			first = unitFirst
+		}
+		last = unitLast
+		current = unitLast
+	}
+	if first == 0 {
+		return nil
+	}
+	if domain.pendingCommandWALFirst != first || domain.pendingCommandWALLast != last {
+		return fmt.Errorf("%w: indexed flush command WAL intervals [%d,%d] do not own pending range [%d,%d]", backenddb.ErrCommandWALAppliedLSNNonContig, first, last, domain.pendingCommandWALFirst, domain.pendingCommandWALLast)
+	}
+	return nil
 }
 
 func (domain *collectionWriteDomain) clearPendingCommandWALThroughLocked(lsn uint64) {
