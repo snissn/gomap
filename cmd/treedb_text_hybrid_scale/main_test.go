@@ -862,6 +862,17 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if output, err := run("RUN_DIR="+t.TempDir(), "ROWS=100000"); err == nil || !strings.Contains(string(output), "100k requires RUN_100K=true") {
 		t.Fatalf("100k escalation err=%v output=%s", err, output)
 	}
+	nonempty := t.TempDir()
+	sentinel := filepath.Join(nonempty, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := run("RUN_DIR="+nonempty, "PHASES=phrase", "DRY_RUN=true"); err == nil || !strings.Contains(string(output), "RUN_DIR must be empty") {
+		t.Fatalf("nonempty run dir err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(nonempty, "context.txt")); !os.IsNotExist(err) {
+		t.Fatalf("nonempty run dir wrote provenance: %v", err)
+	}
 	dryRun := t.TempDir()
 	if output, err := run("RUN_DIR="+dryRun, "PHASES=phrase", "DRY_RUN=true"); err != nil || !strings.Contains(string(output), "artifacts:") {
 		t.Fatalf("phase selection err=%v output=%s", err, output)
@@ -903,11 +914,23 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil || !strings.Contains(string(allocationDelta), "allocation_bytes=") || !strings.Contains(string(allocationDelta), "allocation_objects=") {
 		t.Fatalf("allocation delta=%q err=%v", allocationDelta, err)
 	}
-	if output, err := run("RUN_DIR="+reused, "PHASES=phrase", "TINY_SMOKE=true", "TIMEOUT=2m"); err == nil || !strings.Contains(string(output), "phase artifact directory already exists") {
+	runtimeProfile := t.TempDir()
+	if output, err := run("RUN_DIR="+runtimeProfile, "PHASES=phrase", "TINY_SMOKE=true", "TIMEOUT=2m", "PROFILE_MODE=runtime", "PROFILE_PHASE=phrase"); err != nil {
+		t.Fatalf("runtime sampling smoke err=%v output=%s", err, output)
+	}
+	phaseLog, err := os.ReadFile(filepath.Join(runtimeProfile, "10000", "phrase", "phase.log"))
+	if err != nil || !strings.Contains(string(phaseLog), "runtime_read_only_sampling_minimum_seconds=0.250") {
+		t.Fatalf("runtime sampling log=%q err=%v", phaseLog, err)
+	}
+	if output, err := run("RUN_DIR="+reused, "PHASES=phrase", "TINY_SMOKE=true", "TIMEOUT=2m"); err == nil || !strings.Contains(string(output), "RUN_DIR must be empty") {
 		t.Fatalf("rerun rejection err=%v output=%s", err, output)
 	}
 	if info, err := os.Stat(filepath.Join(profiles, "alloc_after.pprof")); err != nil || info.Size() == 0 {
 		t.Fatalf("rerun overwrote allocation profile: info=%v err=%v", info, err)
+	}
+	phaseGuard := t.TempDir()
+	if output, err := run("RUN_DIR="+phaseGuard, "PHASES=phrase,phrase", "DRY_RUN=true"); err == nil || !strings.Contains(string(output), "phase artifact directory already exists") {
+		t.Fatalf("duplicate phase guard err=%v output=%s", err, output)
 	}
 	if output, err := run("RUN_DIR="+t.TempDir(), "PHASES=load", "TINY_SMOKE=true", "TIMEOUT=1ns"); err == nil || !strings.Contains(string(output), "FAIL") {
 		t.Fatalf("tiny timeout err=%v output=%s", err, output)

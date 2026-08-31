@@ -21,7 +21,8 @@ separately labeled process elapsed time, actual DB
 bytes immediately before/after the measured action, and separately labeled
 artifact-directory growth), plus profiles when chosen.
 Each phase artifact directory is single-use: reruns fail rather than overwrite
-it, so use a fresh `RUN_DIR` for a new capture.
+it, and `RUN_DIR` itself must be empty before a capture starts, so use a fresh
+`RUN_DIR` for a new capture.
 
 ```sh
 RUN_DIR=/tmp/gomap_text_hybrid_profile_$(date +%Y%m%d_%H%M%S) \
@@ -43,6 +44,10 @@ settings) for complete short-phase allocation stacks. For a quick
 implementation smoke only, use `TINY_SMOKE=true`; it preserves the script's
 10k selection guard but gives the manual test a 96-row fixture. This is
 instrumentation evidence, not a product speedup claim.
+
+For `PROFILE_MODE=runtime`, only the read-only `phrase` and `broad` action
+groups repeat until at least 250ms, which is logged in `phase.log` and makes
+their CPU samples useful. Mutating phases and all non-runtime runs execute once.
 
 ## Stable commands
 

@@ -13,6 +13,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 )
 
+const manualRuntimeSamplingMinimum = 250 * time.Millisecond
+
 // TestManualTextHybridScaleProfile4546 is intentionally opt-in: the wrapper
 // starts one fresh go test process per phase with TREEDB_TEXT_PROFILE_PHASE set.
 func TestManualTextHybridScaleProfile4546(t *testing.T) {
@@ -112,12 +114,18 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 	default:
 		t.Fatalf("unknown manual profile phase %q", phase)
 	}
+	profileMode := os.Getenv("TREEDB_TEXT_PROFILE_MODE")
+	if profileMode == "runtime" && (phase == "phrase" || phase == "broad") {
+		readOnlyAction := action
+		action = func() error { return repeatManualReadOnlyAction(readOnlyAction, manualRuntimeSamplingMinimum) }
+		t.Logf("phase=%s runtime_read_only_sampling_minimum_seconds=%.3f", phase, manualRuntimeSamplingMinimum.Seconds())
+	}
 	before, err := dirSize(cfg.dbDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("phase=%s rows=%d setup_complete=true measured_boundary_starts_now db_bytes_before=%d", phase, rows, before)
-	measured, profileErr := profileManualPhase(os.Getenv("TREEDB_TEXT_PROFILE_MODE"), os.Getenv("TREEDB_TEXT_PROFILE_DIR"), action)
+	measured, profileErr := profileManualPhase(profileMode, os.Getenv("TREEDB_TEXT_PROFILE_DIR"), action)
 	after, sizeErr := dirSize(cfg.dbDir)
 	if loadFixture.db != nil {
 		_ = loadFixture.db.Close()
@@ -213,10 +221,10 @@ func profileManualPhase(mode, dir string, action func() error) (time.Duration, e
 	runtime.SetBlockProfileRate(1)
 	previousMutex := runtime.SetMutexProfileFraction(1)
 	measured, err := timeManualAction(action)
-	trace.Stop()
-	pprof.StopCPUProfile()
 	runtime.SetBlockProfileRate(0)
 	runtime.SetMutexProfileFraction(previousMutex)
+	pprof.StopCPUProfile()
+	trace.Stop()
 	if closeErr := cpu.Close(); closeErr != nil && err == nil {
 		err = closeErr
 	}
@@ -236,6 +244,18 @@ func timeManualAction(action func() error) (time.Duration, error) {
 	start := time.Now()
 	err := action()
 	return time.Since(start), err
+}
+
+func repeatManualReadOnlyAction(action func() error, minimum time.Duration) error {
+	start := time.Now()
+	for {
+		if err := action(); err != nil {
+			return err
+		}
+		if time.Since(start) >= minimum {
+			return nil
+		}
+	}
 }
 
 func TestTimeManualActionMeasuresAction4546(t *testing.T) {
