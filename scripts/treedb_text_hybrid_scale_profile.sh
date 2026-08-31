@@ -28,7 +28,13 @@ if [[ -n "$(git status --porcelain)" ]]; then echo "worktree must be clean befor
 if [[ -L "$RUN_DIR" || ( -e "$RUN_DIR" && ! -d "$RUN_DIR" ) ]]; then echo "RUN_DIR must be an empty directory: $RUN_DIR" >&2; exit 2; fi
 mkdir -p "$RUN_DIR"
 if [[ -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then echo "RUN_DIR must be empty: $RUN_DIR; use a fresh RUN_DIR" >&2; exit 2; fi
-{ echo "commit=$(git rev-parse HEAD)"; echo "command=$0 $*"; echo "host=$(uname -a)"; echo "go=$(go version)"; } > "$RUN_DIR/context.txt"
+{
+  echo "commit=$(git rev-parse HEAD)"
+  echo "command=$0 $*"
+  echo "host=$(uname -a)"
+  echo "go=$(go version)"
+  if [[ -n "${GODEBUG:-}" ]]; then printf 'godebug_shell_escaped=%q\n' "$GODEBUG"; fi
+} > "$RUN_DIR/context.txt"
 
 run_matrix() {
   local rows="$1" phase phase_dir artifact_before artifact_after db_before db_after measured_seconds test_rows start elapsed mode godebug
@@ -43,12 +49,13 @@ run_matrix() {
     fi
     mkdir -p "$phase_dir"
     mode=none; if [[ "$PROFILE_PHASE" == "$phase" ]]; then mode="$PROFILE_MODE"; fi
+    godebug="${GODEBUG:-}"
     if [[ "$mode" == alloc ]]; then
       godebug="${GODEBUG:+${GODEBUG},}memprofilerate=1"
-      cmd=(env GOWORK=off GODEBUG="$godebug" TREEDB_TEXT_PROFILE_PHASE="$phase" TREEDB_TEXT_PROFILE_ROWS="$rows" TREEDB_TEXT_PROFILE_MODE="$mode" TREEDB_TEXT_PROFILE_DIR="$phase_dir/profiles" TREEDB_TEXT_PROFILE_TINY="$([[ "$TINY_SMOKE" == true ]] && echo 1 || echo 0)" go test ./cmd/treedb_text_hybrid_scale -run '^TestManualTextHybridScaleProfile4546$' -count=1 -v -timeout "$TIMEOUT")
-    else
-      cmd=(env GOWORK=off TREEDB_TEXT_PROFILE_PHASE="$phase" TREEDB_TEXT_PROFILE_ROWS="$rows" TREEDB_TEXT_PROFILE_MODE="$mode" TREEDB_TEXT_PROFILE_DIR="$phase_dir/profiles" TREEDB_TEXT_PROFILE_TINY="$([[ "$TINY_SMOKE" == true ]] && echo 1 || echo 0)" go test ./cmd/treedb_text_hybrid_scale -run '^TestManualTextHybridScaleProfile4546$' -count=1 -v -timeout "$TIMEOUT")
     fi
+    cmd=(env GOWORK=off)
+    if [[ -n "$godebug" ]]; then cmd+=(GODEBUG="$godebug"); fi
+    cmd+=(TREEDB_TEXT_PROFILE_PHASE="$phase" TREEDB_TEXT_PROFILE_ROWS="$rows" TREEDB_TEXT_PROFILE_MODE="$mode" TREEDB_TEXT_PROFILE_DIR="$phase_dir/profiles" TREEDB_TEXT_PROFILE_TINY="$([[ "$TINY_SMOKE" == true ]] && echo 1 || echo 0)" go test ./cmd/treedb_text_hybrid_scale -run '^TestManualTextHybridScaleProfile4546$' -count=1 -v -timeout "$TIMEOUT")
     printf '%q ' "${cmd[@]}" > "$phase_dir/command.txt"; echo >> "$phase_dir/command.txt"
     if [[ "$DRY_RUN" == true ]]; then continue; fi
     artifact_before=$(du -sk "$phase_dir" | awk '{print $1}'); start=$(date +%s)

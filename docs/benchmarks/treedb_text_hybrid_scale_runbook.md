@@ -19,7 +19,8 @@ other row count. Each phase directory contains the exact `command.txt`,
 `phase.log`, and `observations.txt` (setup boundary, action-only measured time,
 separately labeled process elapsed time, actual DB
 bytes immediately before/after the measured action, and separately labeled
-artifact-directory growth), plus profiles when chosen.
+artifact-directory growth), plus profiles when chosen. `context.txt` records
+any inherited `GODEBUG` with shell escaping.
 Each phase artifact directory is single-use: reruns fail rather than overwrite
 it, and `RUN_DIR` itself must be empty before a capture starts, so use a fresh
 `RUN_DIR` for a new capture. The wrapper also rejects a dirty worktree before

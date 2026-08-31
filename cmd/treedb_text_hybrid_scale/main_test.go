@@ -934,6 +934,18 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil || !strings.Contains(string(command), "TREEDB_TEXT_PROFILE_ROWS=10000") {
 		t.Fatalf("dry-run command=%q err=%v", command, err)
 	}
+	runtimeDebugDryRun := t.TempDir()
+	if output, err := run("RUN_DIR="+runtimeDebugDryRun, "PHASES=phrase", "DRY_RUN=true", "PROFILE_MODE=runtime", "PROFILE_PHASE=phrase", "GODEBUG=asyncpreemptoff=1,invalidptr=0"); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("runtime GODEBUG dry-run err=%v output=%s", err, output)
+	}
+	command, err = os.ReadFile(filepath.Join(runtimeDebugDryRun, "10000", "phrase", "command.txt"))
+	if err != nil || !strings.Contains(string(command), "GODEBUG=asyncpreemptoff=1\\,invalidptr=0") {
+		t.Fatalf("runtime GODEBUG command=%q err=%v", command, err)
+	}
+	context, err := os.ReadFile(filepath.Join(runtimeDebugDryRun, "context.txt"))
+	if err != nil || !strings.Contains(string(context), "godebug_shell_escaped=asyncpreemptoff=1\\,invalidptr=0") {
+		t.Fatalf("runtime GODEBUG context=%q err=%v", context, err)
+	}
 	allocDryRun := t.TempDir()
 	if output, err := run("RUN_DIR="+allocDryRun, "PHASES=phrase", "DRY_RUN=true", "PROFILE_MODE=alloc", "PROFILE_PHASE=phrase", "GODEBUG=foo=bar"); err != nil || !strings.Contains(string(output), "artifacts:") {
 		t.Fatalf("allocation dry-run err=%v output=%s", err, output)
