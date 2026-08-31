@@ -186,10 +186,14 @@ func (b *hcBridgeV1) search(w http.ResponseWriter, r *http.Request) {
 		hcBridgeWriteErrorV1(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
+	limits := public.ConservativeOperationsConfigV1()
+	if request.TopK > limits.MaxTopK || request.Probes > limits.MaxProbes || request.EfSearch > limits.MaxEfSearch || request.EfSearch < request.TopK || request.Probes > limits.MaxMergeEntries/request.TopK {
+		hcBridgeWriteErrorV1(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), b.timeout)
 	defer cancel()
-	limits := public.ConservativeOperationsConfigV1()
-	response, err := b.call(ctx, vectorPartitionOperationsWireRequestV1{SchemaVersion: hcBridgeVersionV1, Operation: "search", Search: public.SearchRequestV1{Version: hcBridgeVersionV1, Generation: public.GenerationIDV1{Index: request.Index, Generation: request.Generation}, Query: request.Query, Metric: public.MetricCosineV1, TopK: request.TopK, Probes: request.Probes, EfSearch: request.EfSearch, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: limits.MaxRequestBytes, CandidateBytes: limits.MaxCandidateBytes, ResponseBytes: limits.MaxResponseBytes, MergeEntries: limits.MaxMergeEntries}, Deadline: time.Now().Add(b.timeout)}})
+	response, err := b.call(ctx, vectorPartitionOperationsWireRequestV1{SchemaVersion: hcBridgeVersionV1, Operation: "search", Search: public.SearchRequestV1{Version: hcBridgeVersionV1, Generation: public.GenerationIDV1{Index: request.Index, Generation: request.Generation}, Query: request.Query, Metric: public.MetricCosineV1, TopK: request.TopK, Probes: request.Probes, EfSearch: request.EfSearch, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: limits.MaxRequestBytes, CandidateBytes: limits.MaxCandidateBytes, ResponseBytes: limits.MaxResponseBytes, MergeEntries: request.Probes * request.TopK}, Deadline: time.Now().Add(b.timeout)}})
 	if err != nil || response.Search == nil {
 		hcBridgeWriteErrorV1(w, hcBridgeStatusV1(err), "search_failed")
 		return
