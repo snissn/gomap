@@ -5028,10 +5028,17 @@ func (db *DB) flushValueLogLaneWithSize(l *lane) (int64, error) {
 	if l == nil {
 		return -1, errWALUnavailable
 	}
+	timingsOn := debugVlogTimingsOn()
 	if db.splitValueLogEnabled() {
-		waitStart := time.Now()
+		var waitStart time.Time
+		if timingsOn {
+			waitStart = time.Now()
+		}
 		l.vlogMu.Lock()
-		waited := time.Since(waitStart)
+		var waited time.Duration
+		if timingsOn {
+			waited = time.Since(waitStart)
+		}
 		w := l.vlog
 		if w == nil {
 			l.vlogMu.Unlock()
@@ -5045,12 +5052,17 @@ func (db *DB) flushValueLogLaneWithSize(l *lane) (int64, error) {
 				return size, nil
 			}
 		}
-		start := time.Now()
+		var start time.Time
+		if timingsOn {
+			start = time.Now()
+		}
 		err := w.Flush()
 		if db.testOnVlogFlush != nil {
 			db.testOnVlogFlush(int(l.id))
 		}
-		db.debugVlogTiming("vlog_flush", int(l.id), "vlogMu", waited, time.Since(start))
+		if timingsOn {
+			db.debugVlogTiming("vlog_flush", int(l.id), "vlogMu", waited, time.Since(start))
+		}
 		if err == nil {
 			l.vlogDirty.Store(false)
 			if db.relaxedSync {
@@ -5065,20 +5077,31 @@ func (db *DB) flushValueLogLaneWithSize(l *lane) (int64, error) {
 		l.vlogMu.Unlock()
 		return size, err
 	}
-	waitStart := time.Now()
+	var waitStart time.Time
+	if timingsOn {
+		waitStart = time.Now()
+	}
 	l.walMu.Lock()
-	waited := time.Since(waitStart)
+	var waited time.Duration
+	if timingsOn {
+		waited = time.Since(waitStart)
+	}
 	w := l.wal
 	if w == nil {
 		l.walMu.Unlock()
 		return -1, errWALUnavailable
 	}
-	start := time.Now()
+	var start time.Time
+	if timingsOn {
+		start = time.Now()
+	}
 	err := w.Flush()
 	if db.testOnVlogFlush != nil {
 		db.testOnVlogFlush(int(l.id))
 	}
-	db.debugVlogTiming("wal_flush", int(l.id), "walMu", waited, time.Since(start))
+	if timingsOn {
+		db.debugVlogTiming("wal_flush", int(l.id), "walMu", waited, time.Since(start))
+	}
 	if err == nil {
 		l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
 	}
