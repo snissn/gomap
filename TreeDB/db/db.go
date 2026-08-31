@@ -678,10 +678,15 @@ type DB struct {
 	conditionalOraclePrunedPoints    atomic.Uint64
 	conditionalOraclePrunedRanges    atomic.Uint64
 	commandWALRawPublishMu           sync.RWMutex
-	commandWALRawBarrierMu           sync.Mutex
-	commandWALRawBarrierNextID       uint64
-	commandWALRawBarriers            []*commandWALRawBarrier
-	closing                          atomic.Bool
+	// commandWALRawAdmissionMu keeps expensive prepared publishers outside the
+	// raw-publish critical section. A quiescent boundary takes it exclusively
+	// before raw; a prepared publisher must use TryLockCommandWALPreparedPublish
+	// immediately before its short atomic publish.
+	commandWALRawAdmissionMu   sync.RWMutex
+	commandWALRawBarrierMu     sync.Mutex
+	commandWALRawBarrierNextID uint64
+	commandWALRawBarriers      []*commandWALRawBarrier
+	closing                    atomic.Bool
 }
 
 // These hooks let package tests attach producer-side fixtures to the exact DB
@@ -3950,8 +3955,13 @@ func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
 	// Command publishers take raw-publish before writeMu. Checkpoint must use
 	// the same order so its command-WAL frontier cannot deadlock a writer that
 	// has appended a frame and is waiting to publish the matching root.
+	unlockCommandWALAdmission := db.lockCommandWALQuiescentAdmission()
+	defer unlockCommandWALAdmission()
 	unlockCommandWALPublish := db.lockCommandWALRawPublish()
 	defer func() { unlockCommandWALPublish() }()
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		return err
+	}
 
 	db.writeMu.Lock()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
