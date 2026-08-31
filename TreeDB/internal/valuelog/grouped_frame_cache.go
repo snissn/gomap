@@ -265,20 +265,6 @@ func groupedFrameCacheHash(start int64, verifyCRC bool) uint64 {
 	return x
 }
 
-func groupedFrameCacheFingerprint(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, rawLen uint32) uint64 {
-	x := groupedFrameCacheHash(start, verifyCRC)
-	x ^= uint64(uint32(k)) * 0x9e3779b185ebca87
-	x ^= uint64(rawLen) * 0xc2b2ae3d27d4eb4f
-	for i := 0; i < k+1 && i <= MaxFrameK; i++ {
-		y := uint64(offsets[i]) + 0x9e3779b97f4a7c15 + (x << 6) + (x >> 2)
-		x ^= y
-	}
-	if x == 0 {
-		return 1
-	}
-	return x
-}
-
 func (c *groupedFrameCache) shardFor(start int64, verifyCRC bool) *groupedFrameCacheShard {
 	if c == nil || len(c.shards) == 0 {
 		return nil
@@ -353,7 +339,7 @@ func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK int, e
 		c.misses.Add(1)
 		return nil, false, nil, false
 	}
-	wantFP := groupedFrameCacheFingerprint(start, verifyCRC, expectedK, expectedOffsets, expectedRawLen)
+	wantFP := groupedFrameCacheHash(start, verifyCRC) | 1
 	for i := range slots {
 		slot := &slots[i]
 		if slot.fp.Load() != wantFP {
@@ -485,7 +471,7 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 	slot.rawPooled = pooled
 	slot.used = s.clock
 	slot.valid = true
-	slot.fp.Store(groupedFrameCacheFingerprint(start, verifyCRC, k, offsets, uint32(len(raw))))
+	slot.fp.Store(groupedFrameCacheHash(start, verifyCRC) | 1)
 	slot.mu.Unlock()
 	c.stores.Add(1)
 	return true
