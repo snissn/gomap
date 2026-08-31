@@ -11938,38 +11938,9 @@ func (c *Collection) insertBatchNoIndex(
 	}
 
 	rootName := collectionPrimaryRootName(c.meta.Name)
-	if len(catalog.overlayRootIDs(rootName)) == 0 {
-		baseRoot := catalog.rootID(rootName)
-		if baseRoot != 0 {
-			keys := make([][]byte, len(entries))
-			for i := range entries {
-				keys[i] = entries[i].id
-			}
-			exists, err := snap.HasAnySortedAtRoot(baseRoot, keys)
-			if err != nil {
-				_ = snap.Close()
-				return nil, err
-			}
-			if exists {
-				_ = snap.Close()
-				return nil, ErrDocumentExists
-			}
-		}
-	} else {
-		for i := range entries {
-			entry, _, err := collectionGetEntryAtCatalogRoot(snap, catalog, rootName, entries[i].id)
-			if err == nil {
-				if entry.Flags&node.FlagTombstone == 0 {
-					_ = snap.Close()
-					return nil, ErrDocumentExists
-				}
-				continue
-			}
-			if !errors.Is(err, tree.ErrKeyNotFound) {
-				_ = snap.Close()
-				return nil, err
-			}
-		}
+	if err := rejectNoIndexBatchDocumentConflicts(snap, catalog, rootName, entries); err != nil {
+		_ = snap.Close()
+		return nil, err
 	}
 	stats.DuplicateDocumentPreflight = time.Since(phaseStart)
 	var columnDocuments []columnWriteDocument
@@ -12190,6 +12161,10 @@ func (c *Collection) insertBatchNoIndex(
 				_ = current.Close()
 				return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", c.meta.Name)
 			}
+			if err := rejectNoIndexBatchDocumentConflicts(current, currentCatalog, rootName, entries); err != nil {
+				_ = current.Close()
+				return nil, err
+			}
 			c.meta = currentCatalog.meta
 		}
 		for i, rootName := range rootNames {
@@ -12291,6 +12266,40 @@ func (c *Collection) insertBatchNoIndex(
 	c.replacePrimaryDocumentCacheAfterInsert(newSystemRoot, c.meta, entries)
 	c.recordInsertBatchStats(stats, execOpts)
 	return maybeInsertBatchResultIDs(resultIDs, execOpts), nil
+}
+
+func rejectNoIndexBatchDocumentConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, entries []noIndexBatchEntry) error {
+	if len(catalog.overlayRootIDs(rootName)) == 0 {
+		rootID := catalog.rootID(rootName)
+		if rootID == 0 {
+			return nil
+		}
+		keys := make([][]byte, len(entries))
+		for i := range entries {
+			keys[i] = entries[i].id
+		}
+		exists, err := snap.HasAnySortedAtRoot(rootID, keys)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return ErrDocumentExists
+		}
+		return nil
+	}
+	for i := range entries {
+		entry, _, err := collectionGetEntryAtCatalogRoot(snap, catalog, rootName, entries[i].id)
+		if err == nil {
+			if entry.Flags&node.FlagTombstone == 0 {
+				return ErrDocumentExists
+			}
+			continue
+		}
+		if !errors.Is(err, tree.ErrKeyNotFound) {
+			return err
+		}
+	}
+	return nil
 }
 
 // Delete removes one document. See DeleteDocument for the matched/deleted
