@@ -96,7 +96,7 @@ func TestColumnGraphInsertPlanningSurvivesCheckpointManifestProgress(t *testing.
 	}
 	if sameCollectionMeta(currentCatalog.meta, plannedMeta) || !sameCollectionMetaIgnoringColumnManifestProgress(currentCatalog.meta, plannedMeta) {
 		release()
-		t.Fatalf("checkpoint delta was not manifest progress only: planned=%+v current=%+v", plannedMeta.Options.ColumnStore, currentCatalog.meta.Options.ColumnStore)
+		t.Fatal("checkpoint delta was not manifest progress only")
 	}
 	release()
 
