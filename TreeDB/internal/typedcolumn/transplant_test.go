@@ -581,6 +581,9 @@ func TestTypedColumnTransplantRequestedSectionAlignment4234(t *testing.T) {
 	if padding := image.PaddingBytes(); padding > len(image.Sections)*63 {
 		t.Fatalf("padding=%d exceeds bounded 64-byte section padding=%d", padding, len(image.Sections)*63)
 	}
+	if cap(image.Bytes) != image.TotalBytes() {
+		t.Fatalf("image capacity=%d want final image bytes=%d", cap(image.Bytes), image.TotalBytes())
+	}
 	if _, err := ParseColumnPartImage(image.Bytes); err != nil {
 		t.Fatalf("ParseColumnPartImage 64-byte aligned image: %v", err)
 	}
