@@ -36,20 +36,7 @@ func TestCheckpointReleasesCommandWALAdmissionBeforeCleanupMaintenance(t *testin
 		t.Fatalf("Close batch: %v", err)
 	}
 
-	maintenanceLocked := make(chan struct{})
-	releaseMaintenance := make(chan struct{})
-	d.testStorageMaintenanceAfterLockHook = func(operation string) error {
-		if operation != "compact-storage" {
-			return nil
-		}
-		close(maintenanceLocked)
-		<-releaseMaintenance
-		return nil
-	}
-	compactDone := make(chan error, 1)
-	go func() { _, err := d.CompactStorage(context.Background(), CompactStorageOptions{}); compactDone <- err }()
-	<-maintenanceLocked
-
+	d.maintenanceMu.Lock()
 	d.commandWALRawPublishMu.Lock()
 	checkpointDone := make(chan error, 1)
 	go func() { checkpointDone <- d.Checkpoint() }()
@@ -59,8 +46,7 @@ func TestCheckpointReleasesCommandWALAdmissionBeforeCleanupMaintenance(t *testin
 		d.commandWALRawAdmissionMu.Unlock()
 		if time.Now().After(deadline) {
 			d.commandWALRawPublishMu.Unlock()
-			close(releaseMaintenance)
-			<-compactDone
+			d.maintenanceMu.Unlock()
 			<-checkpointDone
 			t.Fatal("Checkpoint did not acquire command-WAL admission")
 		}
@@ -73,17 +59,13 @@ func TestCheckpointReleasesCommandWALAdmissionBeforeCleanupMaintenance(t *testin
 			break
 		}
 		if time.Now().After(deadline) {
-			close(releaseMaintenance)
-			<-compactDone
+			d.maintenanceMu.Unlock()
 			<-checkpointDone
 			t.Fatal("Checkpoint retained command-WAL admission while cleanup waited for maintenance")
 		}
 		runtime.Gosched()
 	}
-	close(releaseMaintenance)
-	if err := <-compactDone; err != nil {
-		t.Fatalf("CompactStorage: %v", err)
-	}
+	d.maintenanceMu.Unlock()
 	if err := <-checkpointDone; err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
