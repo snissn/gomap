@@ -874,6 +874,7 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	commit := exec.CommandContext(ctx, "git", "-C", cleanCheckout,
 		"-c", "user.name=gomap manual profile test",
 		"-c", "user.email=gomap-manual-profile-test@invalid",
+		"-c", "commit.gpgSign=false",
 		"commit", "--allow-empty", "-m", "test: overlay manual profile scope")
 	if output, err := commit.CombinedOutput(); err != nil {
 		t.Fatalf("commit clean checkout overlay: %v\n%s", err, output)
