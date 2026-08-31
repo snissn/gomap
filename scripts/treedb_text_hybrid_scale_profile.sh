@@ -37,7 +37,7 @@ if [[ -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then echo
 } > "$RUN_DIR/context.txt"
 
 run_matrix() {
-  local rows="$1" phase phase_dir artifact_before artifact_after db_before db_after measured_seconds test_rows start elapsed mode godebug
+  local rows="$1" phase phase_dir artifact_before artifact_after db_before db_after measured_seconds test_rows elapsed elapsed_file mode godebug
   IFS=',' read -ra selected <<< "$PHASES"
   for phase in "${selected[@]}"; do
     case "$phase" in load|vector|phrase|broad|maintenance|reopen) ;; *) echo "unknown phase: $phase" >&2; return 2;; esac
@@ -58,9 +58,16 @@ run_matrix() {
     cmd+=(TREEDB_TEXT_PROFILE_PHASE="$phase" TREEDB_TEXT_PROFILE_ROWS="$rows" TREEDB_TEXT_PROFILE_MODE="$mode" TREEDB_TEXT_PROFILE_DIR="$phase_dir/profiles" TREEDB_TEXT_PROFILE_TINY="$([[ "$TINY_SMOKE" == true ]] && echo 1 || echo 0)" go test ./cmd/treedb_text_hybrid_scale -run '^TestManualTextHybridScaleProfile4546$' -count=1 -v -timeout "$TIMEOUT")
     printf '%q ' "${cmd[@]}" > "$phase_dir/command.txt"; echo >> "$phase_dir/command.txt"
     if [[ "$DRY_RUN" == true ]]; then continue; fi
-    artifact_before=$(du -sk "$phase_dir" | awk '{print $1}'); start=$(date +%s)
-    "${cmd[@]}" 2>&1 | tee "$phase_dir/phase.log"
-    elapsed=$(( $(date +%s) - start )); artifact_after=$(du -sk "$phase_dir" | awk '{print $1}')
+    artifact_before=$(du -sk "$phase_dir" | awk '{print $1}')
+    elapsed_file=$(mktemp "$phase_dir/process_elapsed.XXXXXX")
+    TIMEFORMAT='%R'
+    if ! { time "${cmd[@]}" 2>&1 | tee "$phase_dir/phase.log"; } 2>"$elapsed_file"; then
+      rm "$elapsed_file"
+      return 1
+    fi
+    elapsed=$(<"$elapsed_file")
+    rm "$elapsed_file"
+    artifact_after=$(du -sk "$phase_dir" | awk '{print $1}')
     db_before=$(awk -F'db_bytes_before=' '/db_bytes_before=/{print $2}' "$phase_dir/phase.log" | tail -1)
     db_after=$(awk -F'db_bytes_after=' '/db_bytes_after=/{print $2}' "$phase_dir/phase.log" | tail -1)
     measured_seconds=$(awk -F'measured_seconds=' '/measured_seconds=/{print $2}' "$phase_dir/phase.log" | awk '{print $1}' | tail -1)

@@ -17,7 +17,7 @@ default is the bounded 10k matrix; `RUN_100K=true ROWS=100000` first completes
 that same invocation's 10k matrix and only then starts 100k. It accepts no
 other row count. Each phase directory contains the exact `command.txt`,
 `phase.log`, and `observations.txt` (setup boundary, action-only measured time,
-separately labeled process elapsed time, actual DB
+separately labeled high-resolution process elapsed time, actual DB
 bytes immediately before/after the measured action, and separately labeled
 artifact-directory growth), plus profiles when chosen. `context.txt` records
 any inherited `GODEBUG` with shell escaping.

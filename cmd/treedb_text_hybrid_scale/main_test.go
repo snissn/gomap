@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -861,6 +862,19 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if output, err := setup.CombinedOutput(); err != nil {
 		t.Fatalf("create clean checkout: %v\n%s", err, output)
 	}
+	for _, path := range []string{"cmd/treedb_text_hybrid_scale", "scripts/treedb_text_hybrid_scale_profile.sh"} {
+		if err := copyManualProfileTestPath(filepath.Join(repoRoot, path), filepath.Join(cleanCheckout, path)); err != nil {
+			t.Fatalf("overlay %s: %v", path, err)
+		}
+	}
+	stage := exec.CommandContext(ctx, "git", "-C", cleanCheckout, "add", "-A", "--", "cmd/treedb_text_hybrid_scale", "scripts/treedb_text_hybrid_scale_profile.sh")
+	if output, err := stage.CombinedOutput(); err != nil {
+		t.Fatalf("stage clean checkout overlay: %v\n%s", err, output)
+	}
+	commit := exec.CommandContext(ctx, "git", "-C", cleanCheckout, "commit", "--allow-empty", "-m", "test: overlay manual profile scope")
+	if output, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("commit clean checkout overlay: %v\n%s", err, output)
+	}
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cleanupCancel()
@@ -970,6 +984,15 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil || !strings.Contains(string(observations), "test_rows=96\n") || !strings.Contains(string(observations), "measured_seconds=") || !strings.Contains(string(observations), "process_elapsed_seconds=") || !strings.Contains(string(observations), "db_bytes_before=0\n") || !strings.Contains(string(observations), "db_bytes_after=") {
 		t.Fatalf("observations=%q err=%v", observations, err)
 	}
+	for _, line := range strings.Split(string(observations), "\n") {
+		if value, found := strings.CutPrefix(line, "process_elapsed_seconds="); found {
+			elapsed, err := strconv.ParseFloat(value, 64)
+			if err != nil || elapsed <= 0 {
+				t.Fatalf("process elapsed=%q parsed=%f err=%v", value, elapsed, err)
+			}
+			break
+		}
+	}
 	reused := t.TempDir()
 	if output, err := run("RUN_DIR="+reused, "PHASES=phrase", "TINY_SMOKE=true", "TIMEOUT=2m", "PROFILE_MODE=alloc", "PROFILE_PHASE=phrase"); err != nil {
 		t.Fatalf("allocation smoke err=%v output=%s", err, output)
@@ -1000,4 +1023,39 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if output, err := run("RUN_DIR="+t.TempDir(), "PHASES=load", "TINY_SMOKE=true", "TIMEOUT=1ns"); err == nil || !strings.Contains(string(output), "FAIL") {
 		t.Fatalf("tiny timeout err=%v output=%s", err, output)
 	}
+}
+
+func copyManualProfileTestPath(source, destination string) error {
+	info, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		data, err := os.ReadFile(source)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(destination, data, info.Mode())
+	}
+	if err := os.RemoveAll(destination); err != nil {
+		return err
+	}
+	return filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(destination, relative)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode())
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode())
+	})
 }
