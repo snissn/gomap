@@ -16,7 +16,8 @@ The manual-only package test runs one fresh `go test` process per phase. Its
 default is the bounded 10k matrix; `RUN_100K=true ROWS=100000` first completes
 that same invocation's 10k matrix and only then starts 100k. It accepts no
 other row count. Each phase directory contains the exact `command.txt`,
-`phase.log`, and `observations.txt` (setup boundary, elapsed time, actual DB
+`phase.log`, and `observations.txt` (setup boundary, action-only measured time,
+separately labeled process elapsed time, actual DB
 bytes immediately before/after the measured action, and separately labeled
 artifact-directory growth), plus profiles when chosen.
 

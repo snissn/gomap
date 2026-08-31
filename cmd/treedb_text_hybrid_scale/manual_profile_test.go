@@ -8,6 +8,7 @@ import (
 	"runtime/pprof"
 	"runtime/trace"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 )
@@ -118,7 +119,9 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("phase=%s rows=%d setup_complete=true measured_boundary_starts_now db_bytes_before=%d", phase, rows, before)
+	measuredStart := time.Now()
 	err = profileManualPhase(os.Getenv("TREEDB_TEXT_PROFILE_MODE"), os.Getenv("TREEDB_TEXT_PROFILE_DIR"), action)
+	measuredSeconds := time.Since(measuredStart).Seconds()
 	after, sizeErr := dirSize(cfg.dbDir)
 	if loadFixture.db != nil {
 		_ = loadFixture.db.Close()
@@ -127,7 +130,7 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 	if sizeErr != nil {
 		t.Fatal(sizeErr)
 	}
-	t.Logf("phase=%s rows=%d db_bytes_after=%d", phase, rows, after)
+	t.Logf("phase=%s rows=%d measured_seconds=%.9f db_bytes_after=%d", phase, rows, measuredSeconds, after)
 	if err != nil {
 		t.Fatal(err)
 	}

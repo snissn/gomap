@@ -21,7 +21,7 @@ mkdir -p "$RUN_DIR"
 if [[ "$PROFILE_MODE" != none && ! ",$PHASES," =~ ,"$PROFILE_PHASE", ]]; then echo "PROFILE_PHASE must be selected by PHASES" >&2; exit 2; fi
 
 run_matrix() {
-  local rows="$1" phase phase_dir artifact_before artifact_after db_before db_after test_rows start elapsed mode
+  local rows="$1" phase phase_dir artifact_before artifact_after db_before db_after measured_seconds test_rows start elapsed mode
   IFS=',' read -ra selected <<< "$PHASES"
   for phase in "${selected[@]}"; do
     case "$phase" in load|vector|phrase|broad|maintenance|reopen) ;; *) echo "unknown phase: $phase" >&2; return 2;; esac
@@ -35,8 +35,9 @@ run_matrix() {
     elapsed=$(( $(date +%s) - start )); artifact_after=$(du -sk "$phase_dir" | awk '{print $1}')
     db_before=$(awk -F'db_bytes_before=' '/db_bytes_before=/{print $2}' "$phase_dir/phase.log" | tail -1)
     db_after=$(awk -F'db_bytes_after=' '/db_bytes_after=/{print $2}' "$phase_dir/phase.log" | tail -1)
+    measured_seconds=$(awk -F'measured_seconds=' '/measured_seconds=/{print $2}' "$phase_dir/phase.log" | awk '{print $1}' | tail -1)
     test_rows=$(sed -n 's/.* rows=\([0-9][0-9]*\) setup_complete=.*/\1/p' "$phase_dir/phase.log" | tail -1)
-    printf 'phase=%s\nmatrix_rows=%s\ntest_rows=%s\nsetup=logged before measured boundary\nelapsed_seconds=%s\ndb_bytes_before=%s\ndb_bytes_after=%s\nartifact_kib_before=%s\nartifact_kib_after=%s\n' "$phase" "$rows" "$test_rows" "$elapsed" "$db_before" "$db_after" "$artifact_before" "$artifact_after" > "$phase_dir/observations.txt"
+    printf 'phase=%s\nmatrix_rows=%s\ntest_rows=%s\nsetup=logged before measured boundary\nmeasured_seconds=%s\nprocess_elapsed_seconds=%s\ndb_bytes_before=%s\ndb_bytes_after=%s\nartifact_kib_before=%s\nartifact_kib_after=%s\n' "$phase" "$rows" "$test_rows" "$measured_seconds" "$elapsed" "$db_before" "$db_after" "$artifact_before" "$artifact_after" > "$phase_dir/observations.txt"
     if [[ "$PROFILE_PHASE" == "$phase" && "$PROFILE_MODE" == runtime ]]; then for artifact in cpu.pprof trace.out block.pprof mutex.pprof; do test -s "$phase_dir/profiles/$artifact"; done; fi
     if [[ "$PROFILE_PHASE" == "$phase" && "$PROFILE_MODE" == alloc ]]; then for artifact in alloc_before.pprof alloc_after.pprof heap_after.pprof; do test -s "$phase_dir/profiles/$artifact"; done; fi
   done
