@@ -877,6 +877,9 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dirtyRun, "context.txt")); !os.IsNotExist(err) {
 		t.Fatalf("dirty worktree wrote provenance: %v", err)
 	}
+	if err := os.Remove(dirty.Name()); err != nil {
+		t.Fatal(err)
+	}
 	nonempty := t.TempDir()
 	sentinel := filepath.Join(nonempty, "sentinel")
 	if err := os.WriteFile(sentinel, []byte("keep"), 0o644); err != nil {
