@@ -75,6 +75,43 @@ func TestColumnGraphRebuildPublishesUint32ListAdjacencyState1987(t *testing.T) {
 	})
 }
 
+func TestBuildColumnVectorIndexStateAdjacencyListsPresizesValues4521(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{Adjacency: []uint32{7, 8}},
+		{Adjacency: []uint32{columnVectorGraphLayeredAdjacencyMagic, 2, 2, 9, 10, 1, 11, 0}},
+		{Adjacency: []uint32{12}},
+		{Adjacency: []uint32{columnVectorGraphLayeredAdjacencyMagic, 1, 1, 13, 2, 14, 15}},
+	}
+	want := []typedcolumn.Uint32List{
+		{Rows: 4, Offsets: []uint64{0, 2, 4, 5, 6}, Values: []uint32{7, 8, 9, 10, 12, 13}},
+		{Rows: 4, Offsets: []uint64{0, 0, 1, 1, 3}, Values: []uint32{11, 14, 15}},
+		{Rows: 4, Offsets: []uint64{0, 0, 0, 0, 0}},
+	}
+	got, err := buildColumnVectorIndexStateAdjacencyLists(rows)
+	if err != nil {
+		t.Fatalf("buildColumnVectorIndexStateAdjacencyLists: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("layers=%d want %d", len(got), len(want))
+	}
+	for layer := range want {
+		if cap(got[layer].Values) != len(got[layer].Values) {
+			t.Fatalf("layer %d values cap=%d len=%d want exact capacity", layer, cap(got[layer].Values), len(got[layer].Values))
+		}
+		gotBytes, err := typedcolumn.EncodeRawUint32OffsetsListPayload(nil, got[layer].Rows, got[layer].Offsets, got[layer].Values)
+		if err != nil {
+			t.Fatalf("encode layer %d got: %v", layer, err)
+		}
+		wantBytes, err := typedcolumn.EncodeRawUint32OffsetsListPayload(nil, want[layer].Rows, want[layer].Offsets, want[layer].Values)
+		if err != nil {
+			t.Fatalf("encode layer %d want: %v", layer, err)
+		}
+		if string(gotBytes) != string(wantBytes) {
+			t.Fatalf("layer %d bytes/value/offset parity mismatch: got rows=%d offsets=%v values=%v; want rows=%d offsets=%v values=%v", layer, got[layer].Rows, got[layer].Offsets, got[layer].Values, want[layer].Rows, want[layer].Offsets, want[layer].Values)
+		}
+	}
+}
+
 func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 	t.Run("loaded_without_legacy_column_graph_adjacency_sources", func(t *testing.T) {
 		d := openCollectionCommandWALDB(t, t.TempDir())
