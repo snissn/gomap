@@ -883,7 +883,7 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 		t.Fatalf("tiny observations smoke err=%v output=%s", err, output)
 	}
 	observations, err := os.ReadFile(filepath.Join(smoke, "10000", "load", "observations.txt"))
-	if err != nil || !strings.Contains(string(observations), "test_rows=96\n") || !strings.Contains(string(observations), "db_bytes_before=0\n") || !strings.Contains(string(observations), "db_bytes_after=") {
+	if err != nil || !strings.Contains(string(observations), "test_rows=96\n") || !strings.Contains(string(observations), "measured_seconds=") || !strings.Contains(string(observations), "process_elapsed_seconds=") || !strings.Contains(string(observations), "db_bytes_before=0\n") || !strings.Contains(string(observations), "db_bytes_after=") {
 		t.Fatalf("observations=%q err=%v", observations, err)
 	}
 	if output, err := run("RUN_DIR="+t.TempDir(), "PHASES=load", "TINY_SMOKE=true", "TIMEOUT=1ns"); err == nil || !strings.Contains(string(output), "FAIL") {
