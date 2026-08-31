@@ -24047,11 +24047,76 @@ func sameCollectionMeta(a, b CollectionMeta) bool {
 }
 
 func concurrentSchemaModificationError(stage string, expected, actual CollectionMeta) error {
-	diff := "structural"
-	if sameCollectionMetaIgnoringColumnManifestProgress(expected, actual) {
-		diff = "column_manifest_progress"
+	return fmt.Errorf("collections: concurrent schema modification detected for %q [stage=%s diff=%s]", expected.Name, stage, normalizedCollectionMetaDiff(expected, actual))
+}
+
+func normalizedCollectionMetaDiff(expected, actual CollectionMeta) string {
+	expected, err := normalizeCollectionMeta(expected)
+	if err != nil {
+		return "invalid"
 	}
-	return fmt.Errorf("collections: concurrent schema modification detected for %q [stage=%s diff=%s]", expected.Name, stage, diff)
+	actual, err = normalizeCollectionMeta(actual)
+	if err != nil {
+		return "invalid"
+	}
+	if collectionMetaValuesEqual(expected, actual) {
+		return "other"
+	}
+	if expected.Name != actual.Name {
+		return "name"
+	}
+	if sameCollectionMetaIgnoringColumnManifestProgress(expected, actual) {
+		return "manifest_progress"
+	}
+	if !collectionOptionsEqual(expected.Options, actual.Options) {
+		return "options"
+	}
+	if !indexDefinitionsEqual(expected.Indexes, actual.Indexes) {
+		return "indexes"
+	}
+	if !vectorIndexDefinitionsEqual(expected.VectorIndexes, actual.VectorIndexes) {
+		return "vector_indexes"
+	}
+	if !textIndexDefinitionsEqual(expected.TextIndexes, actual.TextIndexes) {
+		return "text_indexes"
+	}
+	return "other"
+}
+
+func indexDefinitionsEqual(a, b []IndexDefinition) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !indexDefinitionValuesEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func vectorIndexDefinitionsEqual(a, b []VectorIndexDefinition) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !vectorIndexDefinitionValuesEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func textIndexDefinitionsEqual(a, b []TextIndexDefinition) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !textIndexDefinitionValuesEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func collectionMetaValuesEqual(a, b CollectionMeta) bool {
