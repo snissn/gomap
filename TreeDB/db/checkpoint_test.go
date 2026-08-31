@@ -39,7 +39,7 @@ func TestCheckpointReleasesCommandWALAdmissionBeforeCleanupMaintenance(t *testin
 	d.maintenanceMu.Lock()
 	d.commandWALRawPublishMu.Lock()
 	checkpointDone := make(chan error, 1)
-	go func() { checkpointDone <- d.Checkpoint() }()
+	go func() { checkpointDone <- d.checkpoint(true) }()
 
 	deadline := time.Now().Add(time.Second)
 	for d.commandWALRawAdmissionMu.TryLock() {

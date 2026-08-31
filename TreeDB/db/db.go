@@ -3939,9 +3939,16 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
 // maintenance operation such as CompactStorage. Command-WAL cleanup must not
 // recursively acquire maintenanceMu in that case.
 func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
+	if db == nil {
+		return ErrClosed
+	}
+	if !maintenanceAlreadyHeld {
+		db.maintenanceMu.Lock()
+		defer db.maintenanceMu.Unlock()
+	}
 	db.teardownMu.RLock()
 	defer db.teardownMu.RUnlock()
-	return db.checkpointTeardownPinned(maintenanceAlreadyHeld)
+	return db.checkpointTeardownPinned(true)
 }
 
 // checkpointTeardownPinned runs while the caller holds teardownMu.RLock.
