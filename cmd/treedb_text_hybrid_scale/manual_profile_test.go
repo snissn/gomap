@@ -60,7 +60,16 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 		}
 	case "vector":
 		fixture := setup(false)
-		action = func() error { _, err := fixture.col.RebuildVectorIndex(vectorIndexName); return err }
+		action = func() error {
+			status, err := fixture.col.RebuildVectorIndex(vectorIndexName)
+			if err != nil {
+				return err
+			}
+			if status.State != collections.VectorIndexStateColumnGraphLoaded || !status.Loaded {
+				return fmt.Errorf("unexpected vector status after rebuild: %+v", status)
+			}
+			return nil
+		}
 	case "phrase":
 		cfg.textStorePositions = true
 		fixture := setup(false)
