@@ -718,7 +718,23 @@ func decodeColumnPruningEnvelope(dec *columnPartImageDecoder) (ColumnPruningEnve
 }
 
 func encodeInt64PruningPayload(index Int64ValueRowIndex) ([]byte, error) {
-	var enc columnPartImageEncoder
+	blocksBytes, err := checkedMulInt(len(index.Blocks), int64PruningBlockEncodedBytes, "int64 pruning payload block bytes")
+	if err != nil {
+		return nil, err
+	}
+	entriesBytes, err := checkedMulInt(len(index.Entries), 16, "int64 pruning payload entry bytes")
+	if err != nil {
+		return nil, err
+	}
+	payloadBytes, err := checkedAddInt(36, blocksBytes, "int64 pruning payload bytes")
+	if err != nil {
+		return nil, err
+	}
+	payloadBytes, err = checkedAddInt(payloadBytes, entriesBytes, "int64 pruning payload bytes")
+	if err != nil {
+		return nil, err
+	}
+	enc := columnPartImageEncoder{buf: make([]byte, 0, payloadBytes)}
 	enc.u16(Int64PruningPayloadVersion)
 	enc.u16(0)
 	enc.i64(int64(index.Rows))
