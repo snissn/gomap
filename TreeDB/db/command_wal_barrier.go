@@ -111,13 +111,15 @@ func (db *DB) lockCommandWALRawPublish() func() {
 // TryLockCommandWALPreparedPublish claims shared pre-raw admission for a
 // prepared higher-level publisher. It never waits: a quiescent boundary that
 // is pending or active makes it return false so the caller can relinquish its
-// prepared work and let that boundary drain it synchronously. It pins teardown
-// first, preserving teardown -> admission -> raw order.
+// prepared work and let that boundary drain it synchronously. It claims teardown
+// opportunistically first, preserving teardown -> admission -> raw order.
 func (db *DB) TryLockCommandWALPreparedPublish() (func(), bool) {
 	if db == nil || !db.commandWAL {
 		return func() {}, true
 	}
-	db.teardownMu.RLock()
+	if db.closing.Load() || !db.teardownMu.TryRLock() {
+		return nil, false
+	}
 	if db.closing.Load() {
 		db.teardownMu.RUnlock()
 		return nil, false

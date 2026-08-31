@@ -1413,6 +1413,23 @@ func TestCommandWALPreparedPublishAdmissionBoundaryWins(t *testing.T) {
 	}
 }
 
+func TestCommandWALPreparedPublishAdmissionRejectsTeardownOrClosing(t *testing.T) {
+	db := &DB{commandWAL: true}
+	db.teardownMu.Lock()
+	if unlockPrepared, ok := db.TryLockCommandWALPreparedPublish(); ok {
+		unlockPrepared()
+		db.teardownMu.Unlock()
+		t.Fatal("prepared publisher claimed admission while teardown was exclusive")
+	}
+	db.teardownMu.Unlock()
+
+	db.closing.Store(true)
+	if unlockPrepared, ok := db.TryLockCommandWALPreparedPublish(); ok {
+		unlockPrepared()
+		t.Fatal("prepared publisher claimed admission while closing")
+	}
+}
+
 func TestCommandWALStagingDoesNotWaitForQuiescentAdmission(t *testing.T) {
 	db := &DB{commandWAL: true}
 	unlockBoundary := db.lockCommandWALQuiescentAdmission()
