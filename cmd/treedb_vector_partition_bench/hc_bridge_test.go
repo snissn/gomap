@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/nativewire"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -25,14 +28,16 @@ func (c *hcBridgeFakeClientV1) callContext(_ context.Context, r vectorPartitionO
 func (*hcBridgeFakeClientV1) Close() error { return nil }
 
 type hcBridgeCountingClientV1 struct {
-	search public.SearchResponseV1
-	err    error
-	calls  []string
-	closes int
+	search  public.SearchResponseV1
+	err     error
+	calls   []string
+	request []vectorPartitionOperationsWireRequestV1
+	closes  int
 }
 
 func (c *hcBridgeCountingClientV1) callContext(_ context.Context, r vectorPartitionOperationsWireRequestV1) (vectorPartitionOperationsWireResponseV1, error) {
 	c.calls = append(c.calls, r.Operation)
+	c.request = append(c.request, r)
 	if c.err != nil {
 		return vectorPartitionOperationsWireResponseV1{}, c.err
 	}
@@ -209,6 +214,61 @@ func TestHCBridgeSearchDoesNotIssueStatusRPCV1(t *testing.T) {
 	if w.Code != http.StatusOK || len(client.calls) != 1 || client.calls[0] != "search" {
 		t.Fatalf("status=%d calls=%+v", w.Code, client.calls)
 	}
+}
+
+func TestHCBridgeSearchUsesRequestLocalMergeBudgetV1(t *testing.T) {
+	client := &hcBridgeCountingClientV1{search: hcBridgeTenNeighborSearchV1()}
+	b := hcBridgeTestV1(client)
+	query := make([]float32, 128)
+	query[0] = 1
+	body, err := json.Marshal(hcBridgeSearchRequestV1{Version: 1, Index: "idx", Generation: 7, Query: query, TopK: 10, Probes: 1, EfSearch: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	b.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/search", strings.NewReader(string(body))))
+	if w.Code != http.StatusOK || len(client.calls) != 1 || client.calls[0] != "search" {
+		t.Fatalf("status=%d calls=%+v", w.Code, client.calls)
+	}
+	if got := client.request[0].Search.Limits.MergeEntries; got != 10 || got > nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxMergeEntries {
+		t.Fatalf("merge budget got=%d want=10", got)
+	}
+}
+
+func TestHCBridgeSearchRejectsOverCapWithoutNativeCallV1(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		request hcBridgeSearchRequestV1
+	}{
+		{"top_k", hcBridgeSearchRequestV1{Version: 1, Index: "idx", Generation: 7, Query: []float32{1}, TopK: 257, Probes: 1, EfSearch: 257}},
+		{"ef_search", hcBridgeSearchRequestV1{Version: 1, Index: "idx", Generation: 7, Query: []float32{1}, TopK: 1, Probes: 1, EfSearch: 4097}},
+		{"query", hcBridgeSearchRequestV1{Version: 1, Index: "idx", Generation: 7, Query: append([]float32{1}, make([]float32, 4096)...), TopK: 1, Probes: 1, EfSearch: 1}},
+		{"probes", hcBridgeSearchRequestV1{Version: 1, Index: "idx", Generation: 7, Query: []float32{1}, TopK: 1, Probes: 257, EfSearch: 1}},
+		{"merge_product", hcBridgeSearchRequestV1{Version: 1, Index: "idx", Generation: 7, Query: []float32{1}, TopK: 256, Probes: 257, EfSearch: 256}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &hcBridgeCountingClientV1{}
+			body, err := json.Marshal(tc.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bridge := hcBridgeTestV1(client)
+			bridge.maxBody = 1 << 20
+			w := httptest.NewRecorder()
+			bridge.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/search", strings.NewReader(string(body))))
+			if w.Code != http.StatusBadRequest || len(client.calls) != 0 {
+				t.Fatalf("status=%d calls=%+v", w.Code, client.calls)
+			}
+		})
+	}
+}
+
+func hcBridgeTenNeighborSearchV1() public.SearchResponseV1 {
+	neighbors := make([]public.NeighborV1, 10)
+	for i := range neighbors {
+		neighbors[i] = public.NeighborV1{ID: fmt.Sprintf("doc-%06d", i), Score: float32(i)}
+	}
+	return public.SearchResponseV1{Generation: public.GenerationIDV1{Index: "idx", Generation: 7}, Neighbors: neighbors, Counters: public.SearchCountersV1{SelectedPartitions: 1, HNSWServedPartitions: 1}}
 }
 
 func TestHCBridgeServerReservesTimeoutResponseGraceV1(t *testing.T) {
