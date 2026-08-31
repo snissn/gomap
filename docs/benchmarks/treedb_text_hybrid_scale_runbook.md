@@ -10,6 +10,32 @@ separate text-block GC path.
 The default script run is a bounded smoke. Full 10M runs can take multiple hours
 and tens of GB; **do not start a 10M run without explicit coordinator approval**.
 
+### Phase-separated local profiling (#4546)
+
+The manual-only package test runs one fresh `go test` process per phase. Its
+default is the bounded 10k matrix; `RUN_100K=true ROWS=100000` first completes
+that same invocation's 10k matrix and only then starts 100k. It accepts no
+other row count. Each phase directory contains `phase.log`, `observations.txt`
+(setup boundary, elapsed time, and filesystem bytes), and profiles when chosen.
+
+```sh
+RUN_DIR=/tmp/gomap_text_hybrid_profile_$(date +%Y%m%d_%H%M%S) \
+TIMEOUT=20m scripts/treedb_text_hybrid_scale_profile.sh
+```
+
+Select a single profile-bearing phase without changing the six-process matrix:
+
+```sh
+PROFILE_MODE=runtime PROFILE_PHASE=broad \
+scripts/treedb_text_hybrid_scale_profile.sh
+```
+
+`runtime` writes CPU, trace, block, and mutex profiles. `PROFILE_MODE=alloc`
+writes allocation before/after and after-phase heap profiles. For a quick
+implementation smoke only, use `TINY_SMOKE=true`; it preserves the script's
+10k selection guard but gives the manual test a 96-row fixture. This is
+instrumentation evidence, not a product speedup claim.
+
 ## Stable commands
 
 ### Bounded local smoke

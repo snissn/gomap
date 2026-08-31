@@ -79,6 +79,7 @@ type config struct {
 	queries             int
 	readers             int
 	includeVector       bool
+	textStorePositions  bool // manual profiling fixture only; the scale contract remains positions-off.
 	runBackfill         bool
 	backfillRows        int
 	runReopen           bool
@@ -928,6 +929,12 @@ func resolvePathSymlinks(path string) (string, error) {
 }
 
 func loadPrimaryFixture(cfg config) (scaleFixture, loadReport, error) {
+	return loadPrimaryFixtureWithVectorRebuild(cfg, true)
+}
+
+// loadPrimaryFixtureWithVectorRebuild keeps the fixture setup reusable by the
+// manual profiling entry point, where vector construction is its own boundary.
+func loadPrimaryFixtureWithVectorRebuild(cfg config, rebuildVector bool) (scaleFixture, loadReport, error) {
 	start := time.Now()
 	if cfg.includeVector {
 		if err := backenddb.SaveFormatConfig(cfg.dbDir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -979,7 +986,7 @@ func loadPrimaryFixture(cfg config) (scaleFixture, loadReport, error) {
 	load.GenerationSeconds = genElapsed.Seconds()
 	load.InsertSeconds = insertElapsed.Seconds()
 
-	if cfg.includeVector {
+	if cfg.includeVector && rebuildVector {
 		rebuildStart := time.Now()
 		status, err := col.RebuildVectorIndex(vectorIndexName)
 		if err != nil {
@@ -1026,7 +1033,7 @@ func primaryCollectionMeta(cfg config) *collections.CollectionMeta {
 			{Name: tenantIndexName, Field: "tenant", ValueType: collections.IndexValueString},
 			{Name: regionIndexName, Field: "region", ValueType: collections.IndexValueString},
 		},
-		TextIndexes: []collections.TextIndexDefinition{textDefinition()},
+		TextIndexes: []collections.TextIndexDefinition{textDefinitionWithPositions(cfg.textStorePositions)},
 	}
 	if cfg.includeVector {
 		meta.Options.ColumnStore = columnStoreConfig(cfg.dims)
@@ -1036,11 +1043,15 @@ func primaryCollectionMeta(cfg config) *collections.CollectionMeta {
 }
 
 func textDefinition() collections.TextIndexDefinition {
+	return textDefinitionWithPositions(false)
+}
+
+func textDefinitionWithPositions(storePositions bool) collections.TextIndexDefinition {
 	return collections.TextIndexDefinition{
 		Name:           textIndexName,
 		Version:        collections.TextIndexVersionV2,
 		Fields:         []collections.TextIndexField{{Field: "title", Weight: 3}, {Field: "body"}},
-		StorePositions: false,
+		StorePositions: storePositions,
 		StoreOffsets:   false,
 	}
 }

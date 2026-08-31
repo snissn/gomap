@@ -848,3 +848,24 @@ func TestScaleCommandFlagValidation2731(t *testing.T) {
 		t.Fatalf("selected phases=%v want %v", got, wantSelected)
 	}
 }
+
+func TestManualProfileWrapperGuards4546(t *testing.T) {
+	run := func(env ...string) ([]byte, error) {
+		cmd := exec.Command("bash", "scripts/treedb_text_hybrid_scale_profile.sh")
+		cmd.Dir = filepath.Join("..", "..")
+		cmd.Env = append(os.Environ(), env...)
+		return cmd.CombinedOutput()
+	}
+	if output, err := run("RUN_DIR="+t.TempDir(), "ROWS=999"); err == nil || !strings.Contains(string(output), "ROWS must be 10000 or 100000") {
+		t.Fatalf("unsupported rows err=%v output=%s", err, output)
+	}
+	if output, err := run("RUN_DIR="+t.TempDir(), "ROWS=100000"); err == nil || !strings.Contains(string(output), "100k requires RUN_100K=true") {
+		t.Fatalf("100k escalation err=%v output=%s", err, output)
+	}
+	if output, err := run("RUN_DIR="+t.TempDir(), "PHASES=phrase", "DRY_RUN=true"); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("phase selection err=%v output=%s", err, output)
+	}
+	if output, err := run("RUN_DIR="+t.TempDir(), "PHASES=load", "TINY_SMOKE=true", "TIMEOUT=1ns"); err == nil || !strings.Contains(string(output), "FAIL") {
+		t.Fatalf("tiny timeout err=%v output=%s", err, output)
+	}
+}
