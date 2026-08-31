@@ -1010,6 +1010,10 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if output, err := run("RUN_DIR="+smoke, "PHASES=load", "TINY_SMOKE=true", "TIMEOUT=2m"); err != nil {
 		t.Fatalf("tiny observations smoke err=%v output=%s", err, output)
 	}
+	maintenanceSmoke := t.TempDir()
+	if output, err := run("RUN_DIR="+maintenanceSmoke, "PHASES=maintenance", "TINY_SMOKE=true", "TIMEOUT=2m", "PROFILE_MODE=runtime", "PROFILE_PHASE=maintenance"); err != nil {
+		t.Fatalf("tiny maintenance profile smoke err=%v output=%s", err, output)
+	}
 	observations, err := os.ReadFile(filepath.Join(smoke, "10000", "load", "observations.txt"))
 	if err != nil || !strings.Contains(string(observations), "test_rows=96\n") || !strings.Contains(string(observations), "measured_seconds=") || !strings.Contains(string(observations), "process_elapsed_seconds=") || !strings.Contains(string(observations), "db_bytes_before=0\n") || !strings.Contains(string(observations), "db_bytes_after=") {
 		t.Fatalf("observations=%q err=%v", observations, err)
