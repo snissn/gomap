@@ -342,6 +342,103 @@ func TestValueLogReadAppendDoesNotDoubleOwnGroupedCacheScratch(t *testing.T) {
 	}
 }
 
+func TestValueLogReadAppendCurrentWritableMmapGroupedCacheHitReusesDst(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+	ptrs, want := appendCompressedFrameForCacheTestsTB(t, writer, 1, 4)
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush writer: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+	m.SetGroupedFrameCacheEntries(8)
+	m.SetCurrentWritableMmapEnabled(true)
+	if err := m.RegisterSegment(path, fileID); err != nil {
+		t.Fatalf("register segment: %v", err)
+	}
+	if err := m.PromoteCurrentWritable(fileID); err != nil {
+		t.Fatalf("promote current writable: %v", err)
+	}
+
+	f := m.files[fileID]
+	if !f.currentWritable.Load() {
+		t.Fatalf("segment is not current writable")
+	}
+	f.remapToFileSize()
+	if data, _ := f.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("current writable segment is not mmapped")
+	}
+
+	prefix := []byte("caller-prefix:")
+	backing := make([]byte, len(prefix), len(prefix)+512)
+	copy(backing, prefix)
+	expected := make([]byte, len(prefix)+len(want[1]))
+	copy(expected, prefix)
+	copy(expected[len(prefix):], want[1])
+
+	if _, err := m.ReadAppend(ptrs[0], backing[:len(prefix)]); err != nil {
+		t.Fatalf("warm grouped cache: %v", err)
+	}
+	hitsBefore, _, _, _ := f.groupedFrameCacheStats()
+	mmapHitsBefore := f.mmapReadHits.Load()
+	fallbacksBefore := f.mmapReadFallbackReadAt.Load()
+	got, err := m.ReadAppend(ptrs[1], backing[:len(prefix)])
+	if err != nil {
+		t.Fatalf("warm cache hit: %v", err)
+	}
+	hitsAfter, _, _, _ := f.groupedFrameCacheStats()
+	if hitsAfter != hitsBefore+1 {
+		t.Fatalf("expected grouped cache hit: before=%d after=%d", hitsBefore, hitsAfter)
+	}
+	if mmapHitsAfter := f.mmapReadHits.Load(); mmapHitsAfter != mmapHitsBefore+1 {
+		t.Fatalf("expected one mmap hit: before=%d after=%d", mmapHitsBefore, mmapHitsAfter)
+	}
+	if fallbacksAfter := f.mmapReadFallbackReadAt.Load(); fallbacksAfter != fallbacksBefore {
+		t.Fatalf("unexpected ReadAt fallback: before=%d after=%d", fallbacksBefore, fallbacksAfter)
+	}
+	if !bytes.Equal(got, expected) {
+		t.Fatalf("ReadAppend bytes mismatch: got=%q want=%q", got, expected)
+	}
+	if len(got) == 0 || &got[0] != &backing[0] {
+		t.Fatalf("ReadAppend did not reuse caller destination")
+	}
+
+	const readsPerRun = 1000
+	allocsPerRun := testing.AllocsPerRun(20, func() {
+		for range readsPerRun {
+			var readErr error
+			got, readErr = m.ReadAppend(ptrs[1], backing[:len(prefix)])
+			if readErr != nil {
+				t.Fatalf("cache-hit ReadAppend: %v", readErr)
+			}
+			if !bytes.Equal(got, expected) {
+				t.Fatalf("cache-hit ReadAppend bytes mismatch")
+			}
+		}
+	})
+	if allocsPerRead := allocsPerRun / readsPerRun; allocsPerRead > 0.005 {
+		t.Fatalf("alloc regression: allocs/read=%f (allocs/run=%f, reads/run=%d)", allocsPerRead, allocsPerRun, readsPerRun)
+	}
+}
+
 func TestValueLogManager_RandomReadGroupedFrameAllocBudget(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
