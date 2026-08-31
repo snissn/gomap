@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -862,6 +863,29 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if output, err := setup.CombinedOutput(); err != nil {
 		t.Fatalf("create clean checkout: %v\n%s", err, output)
 	}
+	commonDir := exec.CommandContext(ctx, "git", "-C", repoRoot, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	commonDirPath, err := commonDir.Output()
+	if err != nil {
+		t.Fatalf("git common dir: %v", err)
+	}
+	sharedConfigPath := filepath.Join(strings.TrimSpace(string(commonDirPath)), "config")
+	sharedExcludePath := filepath.Join(strings.TrimSpace(string(commonDirPath)), "info", "exclude")
+	sharedConfig, err := os.ReadFile(sharedConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sharedExclude, err := os.ReadFile(sharedExcludePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if got, err := os.ReadFile(sharedConfigPath); err != nil || !bytes.Equal(got, sharedConfig) {
+			t.Fatalf("shared git config changed: err=%v", err)
+		}
+		if got, err := os.ReadFile(sharedExcludePath); err != nil || !bytes.Equal(got, sharedExclude) {
+			t.Fatalf("shared git exclude changed: err=%v", err)
+		}
+	})
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cleanupCancel()
@@ -931,19 +955,18 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	}
 	ignoredName := "manual_profile_ignored_4546.go"
 	ignoredSource := filepath.Join(cleanCheckout, "cmd", "treedb_text_hybrid_scale", ignoredName)
-	exclude := exec.CommandContext(ctx, "git", "-C", cleanCheckout, "rev-parse", "--git-path", "info/exclude")
-	excludePath, err := exclude.Output()
-	if err != nil {
-		t.Fatalf("git exclude path: %v", err)
+	ignoredConfigHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ignoredConfigHome, "git"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if err := os.WriteFile(strings.TrimSpace(string(excludePath)), []byte("cmd/treedb_text_hybrid_scale/"+ignoredName+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(ignoredConfigHome, "git", "ignore"), []byte("cmd/treedb_text_hybrid_scale/"+ignoredName+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(ignoredSource, []byte("package main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	ignoredRun := t.TempDir()
-	if output, err := run("RUN_DIR="+ignoredRun, "PHASES=phrase", "DRY_RUN=true"); err == nil || !strings.Contains(string(output), "ignored build input before profiling") {
+	if output, err := run("RUN_DIR="+ignoredRun, "PHASES=phrase", "DRY_RUN=true", "HOME="+ignoredConfigHome, "XDG_CONFIG_HOME="+ignoredConfigHome); err == nil || !strings.Contains(string(output), "ignored build input before profiling") {
 		t.Fatalf("ignored build input err=%v output=%s", err, output)
 	}
 	if entries, err := os.ReadDir(ignoredRun); err != nil || len(entries) != 0 {
@@ -960,9 +983,12 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Remove(dirty.Name()) })
-	statusConfig := exec.CommandContext(ctx, "git", "-C", cleanCheckout, "config", "status.showUntrackedFiles", "no")
-	if output, err := statusConfig.CombinedOutput(); err != nil {
-		t.Fatalf("set status config: %v\n%s", err, output)
+	statusConfigHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(statusConfigHome, "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(statusConfigHome, "git", "config"), []byte("[status]\n\tshowUntrackedFiles = no\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	otherGitDirCommand := exec.CommandContext(ctx, "git", "-C", repoRoot, "rev-parse", "--absolute-git-dir")
 	otherGitDir, err := otherGitDirCommand.Output()
@@ -970,7 +996,7 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 		t.Fatalf("other git dir: %v", err)
 	}
 	dirtyRun := t.TempDir()
-	if output, err := run("RUN_DIR="+dirtyRun, "PHASES=phrase", "DRY_RUN=true", "GIT_DIR="+strings.TrimSpace(string(otherGitDir)), "GIT_WORK_TREE="+repoRoot); err == nil || !strings.Contains(string(output), "worktree must be clean before profiling") {
+	if output, err := run("RUN_DIR="+dirtyRun, "PHASES=phrase", "DRY_RUN=true", "HOME="+statusConfigHome, "XDG_CONFIG_HOME="+statusConfigHome, "GIT_DIR="+strings.TrimSpace(string(otherGitDir)), "GIT_WORK_TREE="+repoRoot); err == nil || !strings.Contains(string(output), "worktree must be clean before profiling") {
 		t.Fatalf("dirty worktree err=%v output=%s", err, output)
 	}
 	if _, err := os.Stat(filepath.Join(dirtyRun, "context.txt")); !os.IsNotExist(err) {
