@@ -236,23 +236,30 @@ func TestHCBridgeSearchUsesRequestLocalMergeBudgetV1(t *testing.T) {
 }
 
 func TestHCBridgeSearchRejectsOverCapWithoutNativeCallV1(t *testing.T) {
-	for _, tc := range []hcBridgeSearchRequestV1{
-		{Version: 1, Index: "idx", Generation: 7, Query: []float32{1}, TopK: public.ConservativeOperationsConfigV1().MaxTopK + 1, Probes: 1, EfSearch: 1},
-		{Version: 1, Index: "idx", Generation: 7, Query: []float32{1}, TopK: 1, Probes: public.ConservativeOperationsConfigV1().MaxProbes + 1, EfSearch: 1},
-		{Version: 1, Index: "idx", Generation: 7, Query: []float32{1}, TopK: 1, Probes: 1, EfSearch: public.ConservativeOperationsConfigV1().MaxEfSearch + 1},
-		{Version: 1, Index: "idx", Generation: 7, Query: []float32{1}, TopK: 2, Probes: 1, EfSearch: 1},
-		{Version: 1, Index: "idx", Generation: 7, Query: []float32{1}, TopK: 1, Probes: public.ConservativeOperationsConfigV1().MaxMergeEntries + 1, EfSearch: 1},
+	for _, tc := range []struct {
+		name    string
+		request hcBridgeSearchRequestV1
+	}{
+		{"top_k", hcBridgeSearchRequestV1{Version: 1, Index: "idx", Generation: 7, Query: []float32{1}, TopK: 257, Probes: 1, EfSearch: 257}},
+		{"ef_search", hcBridgeSearchRequestV1{Version: 1, Index: "idx", Generation: 7, Query: []float32{1}, TopK: 1, Probes: 1, EfSearch: 4097}},
+		{"query", hcBridgeSearchRequestV1{Version: 1, Index: "idx", Generation: 7, Query: append([]float32{1}, make([]float32, 4096)...), TopK: 1, Probes: 1, EfSearch: 1}},
+		{"probes", hcBridgeSearchRequestV1{Version: 1, Index: "idx", Generation: 7, Query: []float32{1}, TopK: 1, Probes: 257, EfSearch: 1}},
+		{"merge_product", hcBridgeSearchRequestV1{Version: 1, Index: "idx", Generation: 7, Query: []float32{1}, TopK: 256, Probes: 257, EfSearch: 256}},
 	} {
-		client := &hcBridgeCountingClientV1{}
-		body, err := json.Marshal(tc)
-		if err != nil {
-			t.Fatal(err)
-		}
-		w := httptest.NewRecorder()
-		hcBridgeTestV1(client).ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/search", strings.NewReader(string(body))))
-		if w.Code != http.StatusBadRequest || len(client.calls) != 0 {
-			t.Fatalf("status=%d calls=%+v", w.Code, client.calls)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			client := &hcBridgeCountingClientV1{}
+			body, err := json.Marshal(tc.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bridge := hcBridgeTestV1(client)
+			bridge.maxBody = 1 << 20
+			w := httptest.NewRecorder()
+			bridge.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/search", strings.NewReader(string(body))))
+			if w.Code != http.StatusBadRequest || len(client.calls) != 0 {
+				t.Fatalf("status=%d calls=%+v", w.Code, client.calls)
+			}
+		})
 	}
 }
 
