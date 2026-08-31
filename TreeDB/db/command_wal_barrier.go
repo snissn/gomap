@@ -181,36 +181,37 @@ func (db *DB) LockCommandWALPublishWithBarriers() (func(), error) {
 		return func() {}, nil
 	}
 	db.teardownMu.RLock()
-	unlockAdmission := db.lockCommandWALQuiescentAdmission()
-	unlockRaw := db.lockCommandWALRawPublish()
+	db.commandWALRawAdmissionMu.Lock()
+	db.commandWALRawPublishMu.Lock()
 	if err := db.runCommandWALRawPublishBarriers(); err != nil {
-		unlockRaw()
-		unlockAdmission()
-		db.teardownMu.RUnlock()
+		db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
 		return nil, err
 	}
-	return func() {
-		unlockRaw()
-		unlockAdmission()
-		db.teardownMu.RUnlock()
-	}, nil
+	return db.unlockCommandWALRawPublishWithAdmissionAndTeardown, nil
+}
+
+func (db *DB) unlockCommandWALRawPublishWithAdmissionAndTeardown() {
+	db.commandWALRawPublishMu.Unlock()
+	db.commandWALRawAdmissionMu.Unlock()
+	db.teardownMu.RUnlock()
 }
 
 // lockCommandWALPublishWithBarriersTeardownPinned is the inner form for root
 // publishers that already own a teardown read lease. Reacquiring an RWMutex
 // read lease while Close is queued would deadlock under writer preference.
 func (db *DB) lockCommandWALPublishWithBarriersTeardownPinned() (func(), error) {
-	unlockAdmission := db.lockCommandWALQuiescentAdmission()
-	unlockRaw := db.lockCommandWALRawPublish()
+	db.commandWALRawAdmissionMu.Lock()
+	db.commandWALRawPublishMu.Lock()
 	if err := db.runCommandWALRawPublishBarriers(); err != nil {
-		unlockRaw()
-		unlockAdmission()
+		db.unlockCommandWALRawPublishWithAdmission()
 		return nil, err
 	}
-	return func() {
-		unlockRaw()
-		unlockAdmission()
-	}, nil
+	return db.unlockCommandWALRawPublishWithAdmission, nil
+}
+
+func (db *DB) unlockCommandWALRawPublishWithAdmission() {
+	db.commandWALRawPublishMu.Unlock()
+	db.commandWALRawAdmissionMu.Unlock()
 }
 
 // LockCommandWALStaging pins DB teardown and prevents any command-WAL
