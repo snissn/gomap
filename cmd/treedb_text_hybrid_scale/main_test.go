@@ -862,6 +862,11 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if output, err := setup.CombinedOutput(); err != nil {
 		t.Fatalf("create clean checkout: %v\n%s", err, output)
 	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cleanupCancel()
+		_ = exec.CommandContext(cleanupCtx, "git", "-C", repoRoot, "worktree", "remove", "--force", cleanCheckout).Run()
+	})
 	for _, path := range []string{"cmd/treedb_text_hybrid_scale", "scripts/treedb_text_hybrid_scale_profile.sh"} {
 		if err := copyManualProfileTestPath(filepath.Join(repoRoot, path), filepath.Join(cleanCheckout, path)); err != nil {
 			t.Fatalf("overlay %s: %v", path, err)
@@ -875,15 +880,10 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 		"-c", "user.name=gomap manual profile test",
 		"-c", "user.email=gomap-manual-profile-test@invalid",
 		"-c", "commit.gpgSign=false",
-		"commit", "--allow-empty", "-m", "test: overlay manual profile scope")
+		"commit", "--no-verify", "--allow-empty", "-m", "test: overlay manual profile scope")
 	if output, err := commit.CombinedOutput(); err != nil {
 		t.Fatalf("commit clean checkout overlay: %v\n%s", err, output)
 	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cleanupCancel()
-		_ = exec.CommandContext(cleanupCtx, "git", "-C", repoRoot, "worktree", "remove", "--force", cleanCheckout).Run()
-	})
 	run := func(env ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
