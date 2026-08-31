@@ -24065,12 +24065,6 @@ func normalizedCollectionMetaDiff(expected, actual CollectionMeta) string {
 	if expected.Name != actual.Name {
 		return "name"
 	}
-	if sameCollectionMetaIgnoringColumnManifestProgress(expected, actual) {
-		return "manifest_progress"
-	}
-	if !collectionOptionsEqual(expected.Options, actual.Options) {
-		return "options"
-	}
 	if !slices.EqualFunc(expected.Indexes, actual.Indexes, indexDefinitionValuesEqual) {
 		return "indexes"
 	}
@@ -24079,6 +24073,12 @@ func normalizedCollectionMetaDiff(expected, actual CollectionMeta) string {
 	}
 	if !slices.EqualFunc(expected.TextIndexes, actual.TextIndexes, textIndexDefinitionValuesEqual) {
 		return "text_indexes"
+	}
+	if sameCollectionMetaIgnoringColumnManifestProgress(expected, actual) {
+		return "manifest_progress"
+	}
+	if !collectionOptionsEqual(expected.Options, actual.Options) {
+		return "options"
 	}
 	return "other"
 }

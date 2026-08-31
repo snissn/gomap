@@ -41,6 +41,8 @@ func TestConcurrentSchemaModificationErrorAttributesNormalizedMetaDiff(t *testin
 	indexes.Indexes = []IndexDefinition{{Name: "title", Field: "title", ValueType: IndexValueString}}
 	vectorIndexes := copyCollectionMeta(base)
 	vectorIndexes.VectorIndexes[0].Dimensions = 4
+	manifestAndVectorIndexes := copyCollectionMeta(manifestProgress)
+	manifestAndVectorIndexes.VectorIndexes[0].Dimensions = 4
 	textIndexes := copyCollectionMeta(base)
 	textIndexes.TextIndexes = []TextIndexDefinition{{Name: "lexical", Fields: []TextIndexField{{Field: "body"}}}}
 	name := copyCollectionMeta(base)
@@ -59,6 +61,7 @@ func TestConcurrentSchemaModificationErrorAttributesNormalizedMetaDiff(t *testin
 		{name: "options", actual: options, want: "[stage=buffered_domain_revalidate diff=options]"},
 		{name: "indexes", actual: indexes, want: "[stage=buffered_domain_revalidate diff=indexes]"},
 		{name: "vector indexes", actual: vectorIndexes, want: "[stage=buffered_domain_revalidate diff=vector_indexes]"},
+		{name: "manifest and vector indexes", actual: manifestAndVectorIndexes, want: "[stage=buffered_domain_revalidate diff=vector_indexes]"},
 		{name: "text indexes", actual: textIndexes, want: "[stage=buffered_domain_revalidate diff=text_indexes]"},
 		{name: "name", actual: name, want: "[stage=buffered_domain_revalidate diff=name]"},
 		{name: "invalid", actual: invalid, want: "[stage=buffered_domain_revalidate diff=invalid]"},
