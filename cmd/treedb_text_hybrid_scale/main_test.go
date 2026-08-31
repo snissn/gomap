@@ -929,6 +929,29 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if entries, err := os.ReadDir(profileDisabled); err != nil || len(entries) != 0 {
 		t.Fatalf("disabled profile phase wrote artifacts: entries=%v err=%v", entries, err)
 	}
+	ignoredName := "manual_profile_ignored_4546.go"
+	ignoredSource := filepath.Join(cleanCheckout, "cmd", "treedb_text_hybrid_scale", ignoredName)
+	exclude := exec.CommandContext(ctx, "git", "-C", cleanCheckout, "rev-parse", "--git-path", "info/exclude")
+	excludePath, err := exclude.Output()
+	if err != nil {
+		t.Fatalf("git exclude path: %v", err)
+	}
+	if err := os.WriteFile(strings.TrimSpace(string(excludePath)), []byte("cmd/treedb_text_hybrid_scale/"+ignoredName+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ignoredSource, []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ignoredRun := t.TempDir()
+	if output, err := run("RUN_DIR="+ignoredRun, "PHASES=phrase", "DRY_RUN=true"); err == nil || !strings.Contains(string(output), "ignored build input before profiling") {
+		t.Fatalf("ignored build input err=%v output=%s", err, output)
+	}
+	if entries, err := os.ReadDir(ignoredRun); err != nil || len(entries) != 0 {
+		t.Fatalf("ignored build input wrote artifacts: entries=%v err=%v", entries, err)
+	}
+	if err := os.Remove(ignoredSource); err != nil {
+		t.Fatal(err)
+	}
 	dirty, err := os.CreateTemp(filepath.Join(cleanCheckout, "cmd", "treedb_text_hybrid_scale"), "manual_profile_dirty_*.go")
 	if err != nil {
 		t.Fatal(err)
@@ -937,8 +960,17 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Remove(dirty.Name()) })
+	statusConfig := exec.CommandContext(ctx, "git", "-C", cleanCheckout, "config", "status.showUntrackedFiles", "no")
+	if output, err := statusConfig.CombinedOutput(); err != nil {
+		t.Fatalf("set status config: %v\n%s", err, output)
+	}
+	otherGitDirCommand := exec.CommandContext(ctx, "git", "-C", repoRoot, "rev-parse", "--absolute-git-dir")
+	otherGitDir, err := otherGitDirCommand.Output()
+	if err != nil {
+		t.Fatalf("other git dir: %v", err)
+	}
 	dirtyRun := t.TempDir()
-	if output, err := run("RUN_DIR="+dirtyRun, "PHASES=phrase", "DRY_RUN=true", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=status.showUntrackedFiles", "GIT_CONFIG_VALUE_0=no"); err == nil || !strings.Contains(string(output), "worktree must be clean before profiling") {
+	if output, err := run("RUN_DIR="+dirtyRun, "PHASES=phrase", "DRY_RUN=true", "GIT_DIR="+strings.TrimSpace(string(otherGitDir)), "GIT_WORK_TREE="+repoRoot); err == nil || !strings.Contains(string(output), "worktree must be clean before profiling") {
 		t.Fatalf("dirty worktree err=%v output=%s", err, output)
 	}
 	if _, err := os.Stat(filepath.Join(dirtyRun, "context.txt")); !os.IsNotExist(err) {
@@ -946,6 +978,19 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	}
 	if err := os.Remove(dirty.Name()); err != nil {
 		t.Fatal(err)
+	}
+	gitOverrideRun := t.TempDir()
+	if output, err := run("RUN_DIR="+gitOverrideRun, "PHASES=phrase", "DRY_RUN=true", "GIT_DIR="+strings.TrimSpace(string(otherGitDir)), "GIT_WORK_TREE="+repoRoot); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("git override dry-run err=%v output=%s", err, output)
+	}
+	sourceHeadCommand := exec.CommandContext(ctx, "git", "-C", cleanCheckout, "rev-parse", "HEAD")
+	sourceHead, err := sourceHeadCommand.Output()
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	context, err := os.ReadFile(filepath.Join(gitOverrideRun, "context.txt"))
+	if err != nil || !strings.Contains(string(context), "commit="+strings.TrimSpace(string(sourceHead))) {
+		t.Fatalf("git override context=%q err=%v", context, err)
 	}
 	nonempty := t.TempDir()
 	sentinel := filepath.Join(nonempty, "sentinel")
@@ -974,7 +1019,7 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil || !strings.Contains(string(command), "-u GOMAXPROCS -u GOGC -u GOMEMLIMIT -u GOAMD64 -u GOARM64 -u GO386 -u GOARM -u GOMIPS -u GOMIPS64 -u GOPPC64 -u GORISCV64 -u GOWASM -u GOEXPERIMENT -u CGO_ENABLED GOWORK=off GOFLAGS= GOENV=off") {
 		t.Fatalf("GOFLAGS command=%q err=%v", command, err)
 	}
-	context, err := os.ReadFile(filepath.Join(goFlagsDryRun, "context.txt"))
+	context, err = os.ReadFile(filepath.Join(goFlagsDryRun, "context.txt"))
 	if err != nil || !strings.Contains(string(context), "goflags=cleared\ngoenv=off\ngomaxprocs=cleared\ngogc=cleared\ngomemlimit=cleared\ncompiler_tuning=cleared GOAMD64,GOARM64,GO386,GOARM,GOMIPS,GOMIPS64,GOPPC64,GORISCV64,GOWASM,GOEXPERIMENT,CGO_ENABLED") {
 		t.Fatalf("GOFLAGS context=%q err=%v", context, err)
 	}
