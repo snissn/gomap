@@ -323,21 +323,17 @@ func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK int, e
 	if c == nil || c.capacity <= 0 || len(c.shards) == 0 {
 		return nil, false, nil, false
 	}
-	if !validateGroupedFrameCacheState(expectedK, expectedOffsets, int(expectedRawLen)) || subIndex < 0 || subIndex >= expectedK {
+	if expectedK <= 0 || expectedK > MaxFrameK || expectedRawLen == 0 || subIndex < 0 || subIndex >= expectedK {
 		return nil, false, ErrCorrupt, true
 	}
+	var slots []groupedFrameCacheSlot
+	countMiss := false
 	s := c.shardFor(start, verifyCRC)
-	if s == nil || s.cap <= 0 {
-		return nil, false, nil, false
-	}
-	if !s.allocated.Load() {
-		c.misses.Add(1)
-		return nil, false, nil, false
-	}
-	slots := s.slots
-	if len(slots) == 0 {
-		c.misses.Add(1)
-		return nil, false, nil, false
+	if s != nil && s.cap > 0 {
+		countMiss = true
+		if s.allocated.Load() {
+			slots = s.slots
+		}
 	}
 	wantFP := groupedFrameCacheHash(start, verifyCRC) | 1
 	for i := range slots {
@@ -384,7 +380,14 @@ func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK int, e
 		c.hits.Add(1)
 		return out, false, nil, true
 	}
-	c.misses.Add(1)
+	// Stored slots are validated before publication, and hits match their full
+	// identity under RLock. Only non-hits need the full offset walk.
+	if !validateGroupedFrameCacheState(expectedK, expectedOffsets, int(expectedRawLen)) {
+		return nil, false, ErrCorrupt, true
+	}
+	if countMiss {
+		c.misses.Add(1)
+	}
 	return nil, false, nil, false
 }
 
