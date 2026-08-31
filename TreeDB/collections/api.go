@@ -4990,7 +4990,7 @@ func (c *Collection) revalidateBufferedWriteDomainAtSnapshotLocked(domain *colle
 		return nil, err
 	}
 	if !sameCollectionMeta(catalog.meta, domain.meta) {
-		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", domain.meta.Name)
+		return nil, concurrentSchemaModificationError("buffered_domain_revalidate", domain.meta, catalog.meta)
 	}
 
 	primaryRootName := collectionPrimaryRootName(domain.meta.Name)
@@ -5406,7 +5406,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 			return 0, err
 		}
 		if !sameCollectionMeta(currentCatalog.meta, catalog.meta) {
-			return 0, fmt.Errorf("collections: concurrent schema modification detected for %q", catalog.meta.Name)
+			return 0, concurrentSchemaModificationError("buffered_insert_plan_revalidate", catalog.meta, currentCatalog.meta)
 		}
 		if err := forEachPendingIndexedRootBaseIDLocked(domain, func(rootName string, baseRoot uint64) error {
 			if got := currentCatalog.rootID(rootName); got != baseRoot {
@@ -9055,7 +9055,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		return nil, err
 	}
 	if !sameCollectionMeta(pinnedCatalog.meta, meta) {
-		err = fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
+		err = concurrentSchemaModificationError("buffered_async_flush_pin", meta, pinnedCatalog.meta)
 		return nil, err
 	}
 	if err = forEachPendingIndexedRootBaseIDLocked(domain, func(rootName string, baseRoot uint64) error {
@@ -9685,7 +9685,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 		return errCollectionNotFound
 	}
 	if !sameCollectionMeta(pinnedCatalog.meta, meta) {
-		return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
+		return concurrentSchemaModificationError("buffered_sync_flush_pin", meta, pinnedCatalog.meta)
 	}
 	if err := forEachPendingIndexedRootBaseIDLocked(domain, func(rootName string, baseRoot uint64) error {
 		if got := pinnedCatalog.rootID(rootName); got != baseRoot {
@@ -9955,7 +9955,7 @@ func (c *Collection) bufferedIndexedRootPublishPreflight(expectedPager *pager.Pa
 			return errCollectionNotFound
 		}
 		if !sameCollectionMeta(catalog.meta, meta) {
-			return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
+			return concurrentSchemaModificationError("buffered_publish_preflight", meta, catalog.meta)
 		}
 		for _, rootName := range rootNames {
 			if catalog.rootID(rootName) != baseRootIDs[rootName] {
@@ -20413,7 +20413,7 @@ func (c *Collection) validateRootDescriptorSystemDeltaForMeta(meta CollectionMet
 			return errCollectionNotFound
 		}
 		if !sameCollectionMeta(catalog.meta, meta) {
-			return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
+			return concurrentSchemaModificationError("root_descriptor_system_delta", meta, catalog.meta)
 		}
 		for _, rootName := range rootNames {
 			want := baseRootIDs[rootName]
@@ -24044,6 +24044,14 @@ func sameCollectionMeta(a, b CollectionMeta) bool {
 		return false
 	}
 	return collectionMetaValuesEqual(na, nb)
+}
+
+func concurrentSchemaModificationError(stage string, expected, actual CollectionMeta) error {
+	diff := "structural"
+	if sameCollectionMetaIgnoringColumnManifestProgress(expected, actual) {
+		diff = "column_manifest_progress"
+	}
+	return fmt.Errorf("collections: concurrent schema modification detected for %q [stage=%s diff=%s]", expected.Name, stage, diff)
 }
 
 func collectionMetaValuesEqual(a, b CollectionMeta) bool {

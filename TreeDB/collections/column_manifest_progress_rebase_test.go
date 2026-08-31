@@ -9,6 +9,33 @@ import (
 	"time"
 )
 
+func TestConcurrentSchemaModificationErrorAttributesNormalizedMetaDiff(t *testing.T) {
+	base := CollectionMeta{
+		Name:    "docs",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{Enabled: true}},
+	}
+	manifestProgress := copyCollectionMeta(base)
+	manifestProgress.Options.ColumnStore.ActiveManifest = &ColumnManifestIdentity{Generation: 1}
+	structural := copyCollectionMeta(base)
+	structural.VectorIndexes = []VectorIndexDefinition{{Name: "embedding", Field: "embedding", Dimensions: 3}}
+
+	for _, tc := range []struct {
+		name   string
+		actual CollectionMeta
+		want   string
+	}{
+		{name: "manifest progress", actual: manifestProgress, want: "[stage=buffered_domain_revalidate diff=column_manifest_progress]"},
+		{name: "structural", actual: structural, want: "[stage=buffered_domain_revalidate diff=structural]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := concurrentSchemaModificationError("buffered_domain_revalidate", base, tc.actual)
+			if !strings.Contains(err.Error(), "collections: concurrent schema modification detected for \"docs\"") || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%q want stable schema error with %s", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestColumnGraphInsertPlanningSurvivesCheckpointManifestProgress(t *testing.T) {
 	dir, d, _ := openValidatedFloat32ProjectionCollection(t, 3)
 	defer func() {
