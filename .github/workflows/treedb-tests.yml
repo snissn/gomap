@@ -292,43 +292,49 @@ jobs:
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 0
-            package_shard_count: 7
+            package_shard_count: 8
           - name: windows-core-2
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 1
-            package_shard_count: 7
+            package_shard_count: 8
           - name: windows-core-3
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 2
-            package_shard_count: 7
+            package_shard_count: 8
           - name: windows-core-4
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 3
-            package_shard_count: 7
+            package_shard_count: 8
           - name: windows-core-5
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 4
-            package_shard_count: 7
+            package_shard_count: 8
           - name: windows-core-6
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 5
-            package_shard_count: 7
+            package_shard_count: 8
           - name: windows-core-7
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 6
-            package_shard_count: 7
+            package_shard_count: 8
+          - name: windows-core-8
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-core
+            package_shard_index: 7
+            package_shard_count: 8
           - name: windows-caching-heavy-1
             os: windows-latest
             timeout: 25
