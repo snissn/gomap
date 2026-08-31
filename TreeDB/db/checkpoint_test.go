@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +17,76 @@ import (
 type checkpointTestLeafPageLog struct {
 	flushes atomic.Uint64
 	syncs   atomic.Uint64
+}
+
+func TestCheckpointReleasesCommandWALAdmissionBeforeCleanupMaintenance(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+	b := d.NewBatch()
+	if err := b.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close batch: %v", err)
+	}
+
+	maintenanceLocked := make(chan struct{})
+	releaseMaintenance := make(chan struct{})
+	d.testStorageMaintenanceAfterLockHook = func(operation string) error {
+		if operation != "compact-storage" {
+			return nil
+		}
+		close(maintenanceLocked)
+		<-releaseMaintenance
+		return nil
+	}
+	compactDone := make(chan error, 1)
+	go func() { _, err := d.CompactStorage(context.Background(), CompactStorageOptions{}); compactDone <- err }()
+	<-maintenanceLocked
+
+	d.commandWALRawPublishMu.Lock()
+	checkpointDone := make(chan error, 1)
+	go func() { checkpointDone <- d.Checkpoint() }()
+
+	deadline := time.Now().Add(time.Second)
+	for d.commandWALRawAdmissionMu.TryLock() {
+		d.commandWALRawAdmissionMu.Unlock()
+		if time.Now().After(deadline) {
+			d.commandWALRawPublishMu.Unlock()
+			close(releaseMaintenance)
+			<-compactDone
+			<-checkpointDone
+			t.Fatal("Checkpoint did not acquire command-WAL admission")
+		}
+		runtime.Gosched()
+	}
+	d.commandWALRawPublishMu.Unlock()
+	for {
+		if d.commandWALRawAdmissionMu.TryLock() {
+			d.commandWALRawAdmissionMu.Unlock()
+			break
+		}
+		if time.Now().After(deadline) {
+			close(releaseMaintenance)
+			<-compactDone
+			<-checkpointDone
+			t.Fatal("Checkpoint retained command-WAL admission while cleanup waited for maintenance")
+		}
+		runtime.Gosched()
+	}
+	close(releaseMaintenance)
+	if err := <-compactDone; err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if err := <-checkpointDone; err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
 }
 
 func (l *checkpointTestLeafPageLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {

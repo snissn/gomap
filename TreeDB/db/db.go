@@ -3956,7 +3956,7 @@ func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
 	// the same order so its command-WAL frontier cannot deadlock a writer that
 	// has appended a frame and is waiting to publish the matching root.
 	unlockCommandWALAdmission := db.lockCommandWALQuiescentAdmission()
-	defer unlockCommandWALAdmission()
+	defer func() { unlockCommandWALAdmission() }()
 	unlockCommandWALPublish := db.lockCommandWALRawPublish()
 	defer func() { unlockCommandWALPublish() }()
 	if err := db.runCommandWALRawPublishBarriers(); err != nil {
@@ -4002,10 +4002,12 @@ func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
 		}
 		if rotatedCommandWAL || commandWALPrefixAdvanced {
 			// Cleanup captures and revalidates its own exact journal namespace
-			// snapshot. Release raw-publish before maintenance admission so a
-			// concurrent maintenance checkpoint cannot invert those locks.
+			// snapshot. Release publish admission before maintenance cleanup so a
+			// concurrent storage maintenance pass cannot invert those locks.
 			unlockCommandWALPublish()
 			unlockCommandWALPublish = func() {}
+			unlockCommandWALAdmission()
+			unlockCommandWALAdmission = func() {}
 			if err := db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyHeld); err != nil {
 				return err
 			}
@@ -4059,12 +4061,14 @@ func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
 	}
 	if rotatedCommandWAL || commandWALPrefixAdvanced {
 		// The cleanup proof independently rejects new appends and namespace
-		// changes. Drop write/raw-publish before maintenance admission to keep
-		// the global maintenance -> raw-publish -> write order acyclic.
+		// changes. Drop write/publish admission before maintenance cleanup to
+		// keep the global maintenance -> publish -> write order acyclic.
 		db.writeMu.Unlock()
 		writeLocked = false
 		unlockCommandWALPublish()
 		unlockCommandWALPublish = func() {}
+		unlockCommandWALAdmission()
+		unlockCommandWALAdmission = func() {}
 		if err := db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyHeld); err != nil {
 			return err
 		}
