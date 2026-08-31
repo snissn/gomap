@@ -24071,52 +24071,16 @@ func normalizedCollectionMetaDiff(expected, actual CollectionMeta) string {
 	if !collectionOptionsEqual(expected.Options, actual.Options) {
 		return "options"
 	}
-	if !indexDefinitionsEqual(expected.Indexes, actual.Indexes) {
+	if !slices.EqualFunc(expected.Indexes, actual.Indexes, indexDefinitionValuesEqual) {
 		return "indexes"
 	}
-	if !vectorIndexDefinitionsEqual(expected.VectorIndexes, actual.VectorIndexes) {
+	if !slices.EqualFunc(expected.VectorIndexes, actual.VectorIndexes, vectorIndexDefinitionValuesEqual) {
 		return "vector_indexes"
 	}
-	if !textIndexDefinitionsEqual(expected.TextIndexes, actual.TextIndexes) {
+	if !slices.EqualFunc(expected.TextIndexes, actual.TextIndexes, textIndexDefinitionValuesEqual) {
 		return "text_indexes"
 	}
 	return "other"
-}
-
-func indexDefinitionsEqual(a, b []IndexDefinition) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if !indexDefinitionValuesEqual(a[i], b[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func vectorIndexDefinitionsEqual(a, b []VectorIndexDefinition) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if !vectorIndexDefinitionValuesEqual(a[i], b[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func textIndexDefinitionsEqual(a, b []TextIndexDefinition) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if !textIndexDefinitionValuesEqual(a[i], b[i]) {
-			return false
-		}
-	}
-	return true
 }
 
 func collectionMetaValuesEqual(a, b CollectionMeta) bool {
