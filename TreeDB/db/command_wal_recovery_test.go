@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1353,10 +1354,16 @@ func TestAppendCommandWALPayloadRunsRawPublishBarriers(t *testing.T) {
 
 func TestCommandWALPreparedPublishAdmissionWorkerWinsBeforeQuiescence(t *testing.T) {
 	db := &DB{commandWAL: true}
-	releasePrepared, ok := db.TryLockCommandWALPreparedPublish()
+	releaseFirstPrepared, ok := db.TryLockCommandWALPreparedPublish()
 	if !ok {
 		t.Fatal("prepared publisher did not claim shared admission")
 	}
+	firstPreparedHeld := true
+	defer func() {
+		if firstPreparedHeld {
+			releaseFirstPrepared()
+		}
+	}()
 	boundaryStarted := make(chan struct{})
 	boundaryDone := make(chan struct{})
 	go func() {
@@ -1370,7 +1377,25 @@ func TestCommandWALPreparedPublishAdmissionWorkerWinsBeforeQuiescence(t *testing
 	case <-time.After(time.Second):
 		t.Fatal("quiescent boundary did not start")
 	}
-	releasePrepared()
+
+	// sync.RWMutex has no queued-writer hook. Once the writer is queued, its
+	// writer preference makes TryRLock fail; that proves a second prepared
+	// publisher cannot barge ahead of the quiescent boundary.
+	deadline := time.Now().Add(time.Second)
+	for {
+		if releaseSecondPrepared, ok := db.TryLockCommandWALPreparedPublish(); !ok {
+			break
+		} else {
+			releaseSecondPrepared()
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("quiescent boundary did not queue behind the prepared publisher")
+		}
+		runtime.Gosched()
+	}
+
+	releaseFirstPrepared()
+	firstPreparedHeld = false
 	select {
 	case <-boundaryDone:
 	case <-time.After(time.Second):
