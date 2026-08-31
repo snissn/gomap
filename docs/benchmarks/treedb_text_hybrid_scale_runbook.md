@@ -15,8 +15,10 @@ and tens of GB; **do not start a 10M run without explicit coordinator approval**
 The manual-only package test runs one fresh `go test` process per phase. Its
 default is the bounded 10k matrix; `RUN_100K=true ROWS=100000` first completes
 that same invocation's 10k matrix and only then starts 100k. It accepts no
-other row count. Each phase directory contains `phase.log`, `observations.txt`
-(setup boundary, elapsed time, and filesystem bytes), and profiles when chosen.
+other row count. Each phase directory contains the exact `command.txt`,
+`phase.log`, and `observations.txt` (setup boundary, elapsed time, actual DB
+bytes immediately before/after the measured action, and separately labeled
+artifact-directory growth), plus profiles when chosen.
 
 ```sh
 RUN_DIR=/tmp/gomap_text_hybrid_profile_$(date +%Y%m%d_%H%M%S) \

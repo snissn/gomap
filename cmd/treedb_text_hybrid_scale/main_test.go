@@ -862,8 +862,29 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if output, err := run("RUN_DIR="+t.TempDir(), "ROWS=100000"); err == nil || !strings.Contains(string(output), "100k requires RUN_100K=true") {
 		t.Fatalf("100k escalation err=%v output=%s", err, output)
 	}
-	if output, err := run("RUN_DIR="+t.TempDir(), "PHASES=phrase", "DRY_RUN=true"); err != nil || !strings.Contains(string(output), "artifacts:") {
+	dryRun := t.TempDir()
+	if output, err := run("RUN_DIR="+dryRun, "PHASES=phrase", "DRY_RUN=true"); err != nil || !strings.Contains(string(output), "artifacts:") {
 		t.Fatalf("phase selection err=%v output=%s", err, output)
+	}
+	command, err := os.ReadFile(filepath.Join(dryRun, "10000", "phrase", "command.txt"))
+	if err != nil || !strings.Contains(string(command), "TREEDB_TEXT_PROFILE_ROWS=10000") {
+		t.Fatalf("dry-run command=%q err=%v", command, err)
+	}
+	escalated := t.TempDir()
+	if output, err := run("RUN_DIR="+escalated, "ROWS=100000", "RUN_100K=true", "PHASES=phrase", "DRY_RUN=true"); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("100k dry-run err=%v output=%s", err, output)
+	}
+	command, err = os.ReadFile(filepath.Join(escalated, "100000", "phrase", "command.txt"))
+	if err != nil || !strings.Contains(string(command), "TREEDB_TEXT_PROFILE_ROWS=100000") {
+		t.Fatalf("100k dry-run command=%q err=%v", command, err)
+	}
+	smoke := t.TempDir()
+	if output, err := run("RUN_DIR="+smoke, "PHASES=load", "TINY_SMOKE=true", "TIMEOUT=2m"); err != nil {
+		t.Fatalf("tiny observations smoke err=%v output=%s", err, output)
+	}
+	observations, err := os.ReadFile(filepath.Join(smoke, "10000", "load", "observations.txt"))
+	if err != nil || !strings.Contains(string(observations), "test_rows=96\n") || !strings.Contains(string(observations), "db_bytes_before=0\n") || !strings.Contains(string(observations), "db_bytes_after=") {
+		t.Fatalf("observations=%q err=%v", observations, err)
 	}
 	if output, err := run("RUN_DIR="+t.TempDir(), "PHASES=load", "TINY_SMOKE=true", "TIMEOUT=1ns"); err == nil || !strings.Contains(string(output), "FAIL") {
 		t.Fatalf("tiny timeout err=%v output=%s", err, output)

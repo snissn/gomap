@@ -19,7 +19,10 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 	if phase == "" {
 		t.Skip("manual profiling only; use scripts/treedb_text_hybrid_scale_profile.sh")
 	}
-	rows := 10_000
+	rows, err := manualProfileRows()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if os.Getenv("TREEDB_TEXT_PROFILE_TINY") == "1" {
 		rows = 96
 	}
@@ -42,14 +45,11 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 		return fixture
 	}
 	var action func() error
+	var loadFixture scaleFixture
 	switch phase {
 	case "load":
 		action = func() error {
-			fixture, _, err := loadPrimaryFixtureWithVectorRebuild(cfg, false)
-			if fixture.db != nil {
-				_ = fixture.db.Close()
-				fixture.cleanup()
-			}
+			loadFixture, _, err = loadPrimaryFixtureWithVectorRebuild(cfg, false)
 			return err
 		}
 	case "vector":
@@ -113,9 +113,34 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 	default:
 		t.Fatalf("unknown manual profile phase %q", phase)
 	}
-	t.Logf("phase=%s setup_complete=true measured_boundary_starts_now", phase)
-	if err := profileManualPhase(os.Getenv("TREEDB_TEXT_PROFILE_MODE"), os.Getenv("TREEDB_TEXT_PROFILE_DIR"), action); err != nil {
+	before, err := dirSize(cfg.dbDir)
+	if err != nil {
 		t.Fatal(err)
+	}
+	t.Logf("phase=%s rows=%d setup_complete=true measured_boundary_starts_now db_bytes_before=%d", phase, rows, before)
+	err = profileManualPhase(os.Getenv("TREEDB_TEXT_PROFILE_MODE"), os.Getenv("TREEDB_TEXT_PROFILE_DIR"), action)
+	after, sizeErr := dirSize(cfg.dbDir)
+	if loadFixture.db != nil {
+		_ = loadFixture.db.Close()
+		loadFixture.cleanup()
+	}
+	if sizeErr != nil {
+		t.Fatal(sizeErr)
+	}
+	t.Logf("phase=%s rows=%d db_bytes_after=%d", phase, rows, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func manualProfileRows() (int, error) {
+	switch os.Getenv("TREEDB_TEXT_PROFILE_ROWS") {
+	case "", "10000":
+		return 10_000, nil
+	case "100000":
+		return 100_000, nil
+	default:
+		return 0, fmt.Errorf("TREEDB_TEXT_PROFILE_ROWS must be 10000 or 100000")
 	}
 }
 
