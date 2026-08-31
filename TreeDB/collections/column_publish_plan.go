@@ -132,6 +132,7 @@ type ColumnPublishPlanHooks struct {
 	ValidateClosure       func(ColumnPublishClosureValidationInput) (ColumnPublishDurabilityClosure, error)
 	BuildRootDelta        func(ColumnPublishRootDeltaInput) (ColumnManifestRootDelta, error)
 	BuildSystemDelta      func(ColumnPublishSystemDeltaInput) error
+	abandonPreparedAssets func([]ColumnPreparedAsset, bool) error
 }
 
 // ColumnPublishDeclaredColumnEncodeInput is passed to the declared-column
@@ -264,6 +265,7 @@ type ColumnPublishPlan struct {
 	durableResourceMutation                rootpublication.StableLogicalObligationMutation
 	durableResourceRequirementsFallback    func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error)
 	durableResourceRequirementWork         rootpublication.StableResourceClosureWork
+	stablePreparedAssets                   bool
 }
 
 // ColumnManifestRootDelta is the ordered-root publish descriptor for the
@@ -371,7 +373,7 @@ type ColumnPublishAssetPreparationMetrics struct {
 
 // BuildColumnPublishPlan validates and stages an atomic column manifest publish
 // plan. A nil or completely empty disabled column_store is a zero-work fast path.
-func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, error) {
+func BuildColumnPublishPlan(input ColumnPublishPlanInput) (_ ColumnPublishPlan, retErr error) {
 	if input.ColumnStore == nil {
 		return ColumnPublishPlan{}, nil
 	}
@@ -429,6 +431,9 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 	stableResources := prepared.stableResources
 	prepared.stableResources = nil
 	defer func() {
+		if retErr != nil && input.Hooks.abandonPreparedAssets != nil && len(prepared.Assets) != 0 {
+			retErr = errors.Join(retErr, input.Hooks.abandonPreparedAssets(cloneColumnPreparedAssets(prepared.Assets), prepared.stableResourcesRequired || stableResources != nil))
+		}
 		if stableResources != nil {
 			stableResources.Release()
 		}
@@ -530,6 +535,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		durableResourceMutation:             durableResourceMutation,
 		durableResourceRequirementsFallback: durableResourceRequirementsFallback,
 		durableResourceRequirementWork:      durableResourceRequirementWork,
+		stablePreparedAssets:                prepared.stableResourcesRequired || stableResources != nil,
 	}
 
 	if input.Hooks.BuildSystemDelta != nil {
