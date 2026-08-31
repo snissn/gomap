@@ -706,7 +706,7 @@ func (db *DB) CleanupCommandWALCoveredSegments(_ bool) (retErr error) {
 // propagates; explicit cleanup callers continue to receive the unavailable
 // authority error from CleanupCommandWALCoveredSegments.
 func (db *DB) CleanupCommandWALCoveredSegmentsAtCheckpoint(_ bool) error {
-	return db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(false)
+	return normalizeCommandWALCheckpointCleanupError(db.CleanupCommandWALCoveredSegments(false))
 }
 
 // CleanupCommandWALCoveredPrefix consumes cleanup debt created by
@@ -735,15 +735,18 @@ func (db *DB) CleanupCommandWALCoveredPrefix() (bool, error) {
 	return true, nil
 }
 
-// cleanupCommandWALCoveredSegmentsAtCheckpointV1 accepts maintenanceAlreadyHeld
-// only from an enclosing backend maintenance operation. Ordinary checkpoint
-// callers still enter through the public maintenance admission gate.
+// cleanupCommandWALCoveredSegmentsAtCheckpointV1 runs only from a
+// teardown-pinned checkpoint. It retains cleanup debt when maintenance is busy.
 func (db *DB) cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyHeld bool) error {
 	var err error
 	if maintenanceAlreadyHeld {
 		err = db.cleanupCommandWALCoveredSegmentsV1()
 	} else {
-		err = db.CleanupCommandWALCoveredSegments(false)
+		if !db.maintenanceMu.TryLock() {
+			return nil
+		}
+		defer db.maintenanceMu.Unlock()
+		err = db.cleanupCommandWALCoveredSegmentsV1()
 	}
 	return normalizeCommandWALCheckpointCleanupError(err)
 }

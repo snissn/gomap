@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +17,59 @@ import (
 type checkpointTestLeafPageLog struct {
 	flushes atomic.Uint64
 	syncs   atomic.Uint64
+}
+
+func TestCheckpointReleasesCommandWALAdmissionBeforeCleanupMaintenance(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+	b := d.NewBatch()
+	if err := b.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close batch: %v", err)
+	}
+
+	d.maintenanceMu.Lock()
+	d.commandWALRawPublishMu.Lock()
+	checkpointDone := make(chan error, 1)
+	go func() { checkpointDone <- d.checkpoint(true) }()
+
+	deadline := time.Now().Add(time.Second)
+	for d.commandWALRawAdmissionMu.TryLock() {
+		d.commandWALRawAdmissionMu.Unlock()
+		if time.Now().After(deadline) {
+			d.commandWALRawPublishMu.Unlock()
+			d.maintenanceMu.Unlock()
+			<-checkpointDone
+			t.Fatal("Checkpoint did not acquire command-WAL admission")
+		}
+		runtime.Gosched()
+	}
+	d.commandWALRawPublishMu.Unlock()
+	deadline = time.Now().Add(time.Second)
+	for {
+		if d.commandWALRawAdmissionMu.TryLock() {
+			d.commandWALRawAdmissionMu.Unlock()
+			break
+		}
+		if time.Now().After(deadline) {
+			d.maintenanceMu.Unlock()
+			<-checkpointDone
+			t.Fatal("Checkpoint retained command-WAL admission while cleanup waited for maintenance")
+		}
+		runtime.Gosched()
+	}
+	d.maintenanceMu.Unlock()
+	if err := <-checkpointDone; err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
 }
 
 func (l *checkpointTestLeafPageLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {

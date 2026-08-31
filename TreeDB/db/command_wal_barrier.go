@@ -16,9 +16,11 @@ type commandWALRawBarrier struct {
 // RegisterCommandWALRawPublishBarrier registers a callback that raw command-WAL
 // writers must run before appending a new raw KV command frame. Higher-level
 // command executors use this to drain already-appended staged command frames so
-// raw KV publishes cannot create AppliedCommandLSN gaps. Hooks run while the
-// command-WAL publish mutex is held, so they must not append command-WAL frames,
-// take a staging lock, or call paths that may do either. The returned unregister
+// raw KV publishes cannot create AppliedCommandLSN gaps. A caller takes
+// exclusive pre-raw admission before it acquires the command-WAL publish mutex;
+// hooks still run with that mutex held so existing staged publishers retain
+// their atomic raw-publish contract. A hook must not append command-WAL frames,
+// acquire LockCommandWALStaging, or call a path that does either. The returned unregister
 // function waits for in-flight hooks and must not be called from the hook itself.
 func (db *DB) RegisterCommandWALRawPublishBarrier(hook func() error) func() {
 	if db == nil || hook == nil || !db.commandWAL {
@@ -107,6 +109,43 @@ func (db *DB) lockCommandWALRawPublish() func() {
 	return db.commandWALRawPublishMu.Unlock
 }
 
+// TryLockCommandWALPreparedPublish claims shared pre-raw admission for a
+// prepared higher-level publisher. It never waits: a quiescent boundary that
+// is pending or active makes it return false so the caller can relinquish its
+// prepared work and let that boundary drain it synchronously. It claims teardown
+// opportunistically first, preserving teardown -> admission -> raw order.
+func (db *DB) TryLockCommandWALPreparedPublish() (func(), bool) {
+	if db == nil || !db.commandWAL {
+		return func() {}, true
+	}
+	if db.closing.Load() || !db.teardownMu.TryRLock() {
+		return nil, false
+	}
+	if db.closing.Load() {
+		db.teardownMu.RUnlock()
+		return nil, false
+	}
+	if !db.commandWALRawAdmissionMu.TryRLock() {
+		db.teardownMu.RUnlock()
+		return nil, false
+	}
+	return func() {
+		db.commandWALRawAdmissionMu.RUnlock()
+		db.teardownMu.RUnlock()
+	}, true
+}
+
+// lockCommandWALQuiescentAdmission prevents newly prepared publishers from
+// entering their final raw publish and waits for a publisher that already won
+// shared admission. Callers already hold teardown and acquire raw afterwards.
+func (db *DB) lockCommandWALQuiescentAdmission() func() {
+	if db == nil || !db.commandWAL {
+		return func() {}
+	}
+	db.commandWALRawAdmissionMu.Lock()
+	return db.commandWALRawAdmissionMu.Unlock
+}
+
 // lockCommandWALRawPublishWithTeardown preserves the global shutdown order:
 // root publishers and ordinary batches acquire teardown before raw publish, so
 // higher-level command-WAL guards must do the same. Release raw first so Close
@@ -138,24 +177,41 @@ func (db *DB) LockCommandWALPublish() func() {
 // drains registered staged-command barriers before the caller appends a frame.
 // The returned guard also pins teardown and must be released after raw publish.
 func (db *DB) LockCommandWALPublishWithBarriers() (func(), error) {
-	unlock := db.lockCommandWALRawPublishWithTeardown()
+	if db == nil || !db.commandWAL {
+		return func() {}, nil
+	}
+	db.teardownMu.RLock()
+	db.commandWALRawAdmissionMu.Lock()
+	db.commandWALRawPublishMu.Lock()
 	if err := db.runCommandWALRawPublishBarriers(); err != nil {
-		unlock()
+		db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
 		return nil, err
 	}
-	return unlock, nil
+	return db.unlockCommandWALRawPublishWithAdmissionAndTeardown, nil
+}
+
+func (db *DB) unlockCommandWALRawPublishWithAdmissionAndTeardown() {
+	db.commandWALRawPublishMu.Unlock()
+	db.commandWALRawAdmissionMu.Unlock()
+	db.teardownMu.RUnlock()
 }
 
 // lockCommandWALPublishWithBarriersTeardownPinned is the inner form for root
 // publishers that already own a teardown read lease. Reacquiring an RWMutex
 // read lease while Close is queued would deadlock under writer preference.
 func (db *DB) lockCommandWALPublishWithBarriersTeardownPinned() (func(), error) {
-	unlock := db.lockCommandWALRawPublish()
+	db.commandWALRawAdmissionMu.Lock()
+	db.commandWALRawPublishMu.Lock()
 	if err := db.runCommandWALRawPublishBarriers(); err != nil {
-		unlock()
+		db.unlockCommandWALRawPublishWithAdmission()
 		return nil, err
 	}
-	return unlock, nil
+	return db.unlockCommandWALRawPublishWithAdmission, nil
+}
+
+func (db *DB) unlockCommandWALRawPublishWithAdmission() {
+	db.commandWALRawPublishMu.Unlock()
+	db.commandWALRawAdmissionMu.Unlock()
 }
 
 // LockCommandWALStaging pins DB teardown and prevents any command-WAL
