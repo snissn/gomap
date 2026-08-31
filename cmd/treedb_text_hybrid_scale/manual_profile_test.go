@@ -221,24 +221,26 @@ func profileManualPhase(mode, dir string, action func() error) (time.Duration, e
 	if err != nil {
 		return 0, err
 	}
-	if err := pprof.StartCPUProfile(cpu); err != nil {
-		_ = cpu.Close()
-		return 0, err
-	}
 	traceFile, err := os.Create(filepath.Join(dir, "trace.out"))
 	if err != nil {
-		pprof.StopCPUProfile()
 		_ = cpu.Close()
 		return 0, err
 	}
 	if err := trace.Start(traceFile); err != nil {
-		pprof.StopCPUProfile()
 		_ = cpu.Close()
 		_ = traceFile.Close()
 		return 0, err
 	}
 	runtime.SetBlockProfileRate(1)
 	previousMutex := runtime.SetMutexProfileFraction(1)
+	if err := pprof.StartCPUProfile(cpu); err != nil {
+		runtime.SetBlockProfileRate(0)
+		runtime.SetMutexProfileFraction(previousMutex)
+		trace.Stop()
+		_ = cpu.Close()
+		_ = traceFile.Close()
+		return 0, err
+	}
 	measured, err := timeManualAction(action)
 	runtime.SetBlockProfileRate(0)
 	runtime.SetMutexProfileFraction(previousMutex)
