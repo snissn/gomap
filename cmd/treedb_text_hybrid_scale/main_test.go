@@ -895,11 +895,11 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil || !strings.Contains(string(allocationDelta), "allocation_bytes=") || !strings.Contains(string(allocationDelta), "allocation_objects=") {
 		t.Fatalf("allocation delta=%q err=%v", allocationDelta, err)
 	}
-	if output, err := run("RUN_DIR="+reused, "PHASES=phrase", "TINY_SMOKE=true", "TIMEOUT=2m"); err != nil {
-		t.Fatalf("rerun smoke err=%v output=%s", err, output)
+	if output, err := run("RUN_DIR="+reused, "PHASES=phrase", "TINY_SMOKE=true", "TIMEOUT=2m"); err == nil || !strings.Contains(string(output), "phase artifact directory already exists") {
+		t.Fatalf("rerun rejection err=%v output=%s", err, output)
 	}
-	if _, err := os.Stat(filepath.Join(profiles, "alloc_after.pprof")); !os.IsNotExist(err) {
-		t.Fatalf("rerun retained stale allocation profile: %v", err)
+	if info, err := os.Stat(filepath.Join(profiles, "alloc_after.pprof")); err != nil || info.Size() == 0 {
+		t.Fatalf("rerun overwrote allocation profile: info=%v err=%v", info, err)
 	}
 	if output, err := run("RUN_DIR="+t.TempDir(), "PHASES=load", "TINY_SMOKE=true", "TIMEOUT=1ns"); err == nil || !strings.Contains(string(output), "FAIL") {
 		t.Fatalf("tiny timeout err=%v output=%s", err, output)

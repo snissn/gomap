@@ -20,6 +20,8 @@ other row count. Each phase directory contains the exact `command.txt`,
 separately labeled process elapsed time, actual DB
 bytes immediately before/after the measured action, and separately labeled
 artifact-directory growth), plus profiles when chosen.
+Each phase artifact directory is single-use: reruns fail rather than overwrite
+it, so use a fresh `RUN_DIR` for a new capture.
 
 ```sh
 RUN_DIR=/tmp/gomap_text_hybrid_profile_$(date +%Y%m%d_%H%M%S) \
