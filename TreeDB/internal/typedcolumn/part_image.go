@@ -436,7 +436,12 @@ func (b *columnPartImageBuilder) build() (ColumnPartImage, error) {
 	if err != nil {
 		return ColumnPartImage{}, err
 	}
-	out := make([]byte, 0, len(manifest)+sumImageSectionDataBytes(b.sections))
+	imageBytes := len(manifest)
+	if len(sections) > 0 {
+		last := sections[len(sections)-1]
+		imageBytes = last.Offset + last.Length
+	}
+	out := make([]byte, 0, imageBytes)
 	out = append(out, manifest...)
 	for _, section := range b.sections {
 		if section.section.Offset < len(out) {
@@ -1424,14 +1429,6 @@ func countColumnBlocks(desc ColumnPartDescriptor) int {
 	total := 0
 	for _, column := range desc.Columns {
 		total += len(column.Blocks)
-	}
-	return total
-}
-
-func sumImageSectionDataBytes(sections []columnPartImageSectionData) int {
-	total := 0
-	for _, section := range sections {
-		total += section.payloadLen()
 	}
 	return total
 }
