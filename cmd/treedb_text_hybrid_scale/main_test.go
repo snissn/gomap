@@ -863,6 +863,11 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if output, err := setup.CombinedOutput(); err != nil {
 		t.Fatalf("create clean checkout: %v\n%s", err, output)
 	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cleanupCancel()
+		_ = exec.CommandContext(cleanupCtx, "git", "-C", repoRoot, "worktree", "remove", "--force", cleanCheckout).Run()
+	})
 	commonDir := exec.CommandContext(ctx, "git", "-C", repoRoot, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	commonDirPath, err := commonDir.Output()
 	if err != nil {
@@ -885,11 +890,6 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 		if got, err := os.ReadFile(sharedExcludePath); err != nil || !bytes.Equal(got, sharedExclude) {
 			t.Fatalf("shared git exclude changed: err=%v", err)
 		}
-	})
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cleanupCancel()
-		_ = exec.CommandContext(cleanupCtx, "git", "-C", repoRoot, "worktree", "remove", "--force", cleanCheckout).Run()
 	})
 	for _, path := range []string{"cmd/treedb_text_hybrid_scale", "scripts/treedb_text_hybrid_scale_profile.sh"} {
 		if err := copyManualProfileTestPath(filepath.Join(repoRoot, path), filepath.Join(cleanCheckout, path)); err != nil {
@@ -1038,15 +1038,15 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 		t.Fatalf("dry-run command=%q err=%v", command, err)
 	}
 	goFlagsDryRun := t.TempDir()
-	if output, err := run("RUN_DIR="+goFlagsDryRun, "PHASES=phrase", "DRY_RUN=true", "GOFLAGS=-race", "GOMAXPROCS=1", "GOGC=10", "GOMEMLIMIT=1MiB", "GOAMD64=v3", "GOARM64=v8.0", "GO386=sse2", "GOARM=7", "GOMIPS=softfloat", "GOMIPS64=softfloat", "GOPPC64=power8", "GORISCV64=rva20u64", "GOWASM=signext", "GOEXPERIMENT=arenas", "CGO_ENABLED=0"); err != nil || !strings.Contains(string(output), "artifacts:") {
+	if output, err := run("RUN_DIR="+goFlagsDryRun, "PHASES=phrase", "DRY_RUN=true", "GOFLAGS=-race", "GOMAXPROCS=1", "GOGC=10", "GOMEMLIMIT=1MiB", "GOOS=plan9", "GOARCH=386", "GOAMD64=v3", "GOARM64=v8.0", "GO386=sse2", "GOARM=7", "GOMIPS=softfloat", "GOMIPS64=softfloat", "GOPPC64=power8", "GORISCV64=rva20u64", "GOWASM=signext", "GOEXPERIMENT=arenas", "CGO_ENABLED=0"); err != nil || !strings.Contains(string(output), "artifacts:") {
 		t.Fatalf("GOFLAGS dry-run err=%v output=%s", err, output)
 	}
 	command, err = os.ReadFile(filepath.Join(goFlagsDryRun, "10000", "phrase", "command.txt"))
-	if err != nil || !strings.Contains(string(command), "-u GOMAXPROCS -u GOGC -u GOMEMLIMIT -u GOAMD64 -u GOARM64 -u GO386 -u GOARM -u GOMIPS -u GOMIPS64 -u GOPPC64 -u GORISCV64 -u GOWASM -u GOEXPERIMENT -u CGO_ENABLED GOWORK=off GOFLAGS= GOENV=off") {
+	if err != nil || !strings.Contains(string(command), "-u GOMAXPROCS -u GOGC -u GOMEMLIMIT -u GOOS -u GOARCH -u GOAMD64 -u GOARM64 -u GO386 -u GOARM -u GOMIPS -u GOMIPS64 -u GOPPC64 -u GORISCV64 -u GOWASM -u GOEXPERIMENT -u CGO_ENABLED GOWORK=off GOFLAGS= GOENV=off") {
 		t.Fatalf("GOFLAGS command=%q err=%v", command, err)
 	}
 	context, err = os.ReadFile(filepath.Join(goFlagsDryRun, "context.txt"))
-	if err != nil || !strings.Contains(string(context), "goflags=cleared\ngoenv=off\ngomaxprocs=cleared\ngogc=cleared\ngomemlimit=cleared\ncompiler_tuning=cleared GOAMD64,GOARM64,GO386,GOARM,GOMIPS,GOMIPS64,GOPPC64,GORISCV64,GOWASM,GOEXPERIMENT,CGO_ENABLED") {
+	if err != nil || !strings.Contains(string(context), "goflags=cleared\ngoenv=off\ngomaxprocs=cleared\ngogc=cleared\ngomemlimit=cleared\ncompiler_tuning=cleared GOOS,GOARCH,GOAMD64,GOARM64,GO386,GOARM,GOMIPS,GOMIPS64,GOPPC64,GORISCV64,GOWASM,GOEXPERIMENT,CGO_ENABLED") {
 		t.Fatalf("GOFLAGS context=%q err=%v", context, err)
 	}
 	runtimeDebugDryRun := t.TempDir()

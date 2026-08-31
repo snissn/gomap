@@ -12,7 +12,7 @@ PROFILE_PHASE="${PROFILE_PHASE:-}"
 RUN_100K="${RUN_100K:-false}"
 TINY_SMOKE="${TINY_SMOKE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
-controlled_go_env=(env -u GOMAXPROCS -u GOGC -u GOMEMLIMIT -u GOAMD64 -u GOARM64 -u GO386 -u GOARM -u GOMIPS -u GOMIPS64 -u GOPPC64 -u GORISCV64 -u GOWASM -u GOEXPERIMENT -u CGO_ENABLED GOWORK=off GOFLAGS= GOENV=off)
+controlled_go_env=(env -u GOMAXPROCS -u GOGC -u GOMEMLIMIT -u GOOS -u GOARCH -u GOAMD64 -u GOARM64 -u GO386 -u GOARM -u GOMIPS -u GOMIPS64 -u GOPPC64 -u GORISCV64 -u GOWASM -u GOEXPERIMENT -u CGO_ENABLED GOWORK=off GOFLAGS= GOENV=off)
 controlled_git_env=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_COMMON_DIR -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_NOSYSTEM)
 while IFS= read -r local_git_env_var; do
   controlled_git_env+=(-u "$local_git_env_var")
@@ -49,7 +49,7 @@ if [[ -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then echo
   echo "gomaxprocs=cleared"
   echo "gogc=cleared"
   echo "gomemlimit=cleared"
-  echo "compiler_tuning=cleared GOAMD64,GOARM64,GO386,GOARM,GOMIPS,GOMIPS64,GOPPC64,GORISCV64,GOWASM,GOEXPERIMENT,CGO_ENABLED"
+  echo "compiler_tuning=cleared GOOS,GOARCH,GOAMD64,GOARM64,GO386,GOARM,GOMIPS,GOMIPS64,GOPPC64,GORISCV64,GOWASM,GOEXPERIMENT,CGO_ENABLED"
   if [[ -n "${GODEBUG:-}" ]]; then printf 'godebug_shell_escaped=%q\n' "$GODEBUG"; fi
 } > "$RUN_DIR/context.txt"
 
