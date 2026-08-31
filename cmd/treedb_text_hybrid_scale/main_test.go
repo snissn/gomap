@@ -862,6 +862,21 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if output, err := run("RUN_DIR="+t.TempDir(), "ROWS=100000"); err == nil || !strings.Contains(string(output), "100k requires RUN_100K=true") {
 		t.Fatalf("100k escalation err=%v output=%s", err, output)
 	}
+	dirty, err := os.CreateTemp(filepath.Join("..", ".."), ".treedb_text_hybrid_scale_profile_dirty_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dirty.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(dirty.Name()) })
+	dirtyRun := t.TempDir()
+	if output, err := run("RUN_DIR="+dirtyRun, "PHASES=phrase", "DRY_RUN=true"); err == nil || !strings.Contains(string(output), "worktree must be clean before profiling") {
+		t.Fatalf("dirty worktree err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(dirtyRun, "context.txt")); !os.IsNotExist(err) {
+		t.Fatalf("dirty worktree wrote provenance: %v", err)
+	}
 	nonempty := t.TempDir()
 	sentinel := filepath.Join(nonempty, "sentinel")
 	if err := os.WriteFile(sentinel, []byte("keep"), 0o644); err != nil {
