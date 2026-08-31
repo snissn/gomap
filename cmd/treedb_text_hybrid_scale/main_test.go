@@ -862,6 +862,23 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if output, err := run("RUN_DIR="+t.TempDir(), "ROWS=100000"); err == nil || !strings.Contains(string(output), "100k requires RUN_100K=true") {
 		t.Fatalf("100k escalation err=%v output=%s", err, output)
 	}
+	invalid := t.TempDir()
+	if output, err := run("RUN_DIR="+invalid, "PHASES=unknown", "DRY_RUN=true"); err == nil || !strings.Contains(string(output), "unknown phase: unknown") {
+		t.Fatalf("invalid phase err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(invalid, "context.txt")); !os.IsNotExist(err) {
+		t.Fatalf("invalid phase wrote provenance: %v", err)
+	}
+	if output, err := run("RUN_DIR="+invalid, "PHASES=phrase", "DRY_RUN=true"); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("invalid phase retry err=%v output=%s", err, output)
+	}
+	profileInvalid := t.TempDir()
+	if output, err := run("RUN_DIR="+profileInvalid, "PHASES=phrase", "DRY_RUN=true", "PROFILE_MODE=runtime", "PROFILE_PHASE=broad"); err == nil || !strings.Contains(string(output), "PROFILE_PHASE must be selected by PHASES") {
+		t.Fatalf("profile phase membership err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(profileInvalid, "context.txt")); !os.IsNotExist(err) {
+		t.Fatalf("profile phase wrote provenance: %v", err)
+	}
 	dirty, err := os.CreateTemp(filepath.Join("..", ".."), ".treedb_text_hybrid_scale_profile_dirty_")
 	if err != nil {
 		t.Fatal(err)

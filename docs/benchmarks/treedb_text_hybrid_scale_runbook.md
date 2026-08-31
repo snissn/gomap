@@ -23,7 +23,9 @@ artifact-directory growth), plus profiles when chosen.
 Each phase artifact directory is single-use: reruns fail rather than overwrite
 it, and `RUN_DIR` itself must be empty before a capture starts, so use a fresh
 `RUN_DIR` for a new capture. The wrapper also rejects a dirty worktree before
-creating any run artifacts, preserving the recorded commit provenance.
+creating any run artifacts, preserving the recorded commit provenance. It
+validates all selected phases and profile-phase membership before either check,
+so an invalid invocation leaves its empty `RUN_DIR` retryable.
 
 ```sh
 RUN_DIR=/tmp/gomap_text_hybrid_profile_$(date +%Y%m%d_%H%M%S) \

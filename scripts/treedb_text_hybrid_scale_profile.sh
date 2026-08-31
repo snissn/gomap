@@ -16,12 +16,19 @@ DRY_RUN="${DRY_RUN:-false}"
 case "$ROWS" in 10000|100000) ;; *) echo "ROWS must be 10000 or 100000" >&2; exit 2;; esac
 case "$PROFILE_MODE" in none|runtime|alloc) ;; *) echo "PROFILE_MODE must be none, runtime, or alloc" >&2; exit 2;; esac
 if [[ "$ROWS" == 100000 && "$RUN_100K" != true ]]; then echo "100k requires RUN_100K=true after this invocation's 10k matrix" >&2; exit 2; fi
+if [[ -z "$PHASES" ]]; then echo "unknown phase: " >&2; exit 2; fi
+IFS=',' read -ra configured_phases <<< "$PHASES"
+profile_phase_selected=false
+for phase in "${configured_phases[@]}"; do
+  case "$phase" in load|vector|phrase|broad|maintenance|reopen) ;; *) echo "unknown phase: $phase" >&2; exit 2;; esac
+  if [[ "$phase" == "$PROFILE_PHASE" ]]; then profile_phase_selected=true; fi
+done
+if [[ "$PROFILE_MODE" != none || -n "$PROFILE_PHASE" ]] && [[ "$profile_phase_selected" != true ]]; then echo "PROFILE_PHASE must be selected by PHASES" >&2; exit 2; fi
 if [[ -n "$(git status --porcelain)" ]]; then echo "worktree must be clean before profiling" >&2; exit 2; fi
 if [[ -L "$RUN_DIR" || ( -e "$RUN_DIR" && ! -d "$RUN_DIR" ) ]]; then echo "RUN_DIR must be an empty directory: $RUN_DIR" >&2; exit 2; fi
 mkdir -p "$RUN_DIR"
 if [[ -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then echo "RUN_DIR must be empty: $RUN_DIR; use a fresh RUN_DIR" >&2; exit 2; fi
 { echo "commit=$(git rev-parse HEAD)"; echo "command=$0 $*"; echo "host=$(uname -a)"; echo "go=$(go version)"; } > "$RUN_DIR/context.txt"
-if [[ "$PROFILE_MODE" != none && ! ",$PHASES," =~ ,"$PROFILE_PHASE", ]]; then echo "PROFILE_PHASE must be selected by PHASES" >&2; exit 2; fi
 
 run_matrix() {
   local rows="$1" phase phase_dir artifact_before artifact_after db_before db_after measured_seconds test_rows start elapsed mode godebug
