@@ -1286,14 +1286,18 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return nil, ErrCorrupt, true
 	}
 
-	if cachedVal, _, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, offsets, rawLen, subIndex, nil); hit {
+	if cachedVal, usedDst, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, offsets, rawLen, subIndex, dst[len(dst):len(dst)]); hit {
 		if err != nil {
 			return nil, err, true
 		}
 		oldLen := len(dst)
-		dst, err = appendDecodedTemplatePayload(dst, cachedVal, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-		if err != nil {
-			return nil, err, true
+		if usedDst {
+			dst = dst[:oldLen+len(cachedVal)]
+		} else {
+			dst, err = appendDecodedTemplatePayload(dst, cachedVal, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+			if err != nil {
+				return nil, err, true
+			}
 		}
 		dst, err = f.appendMaybeDecodeLeafLogPayload(dst[:oldLen], dst[oldLen:])
 		if err != nil {

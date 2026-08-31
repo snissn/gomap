@@ -12,12 +12,17 @@ func openSnapshotValueLogBenchDB(b *testing.B) (*DB, [][]byte) {
 	b.Helper()
 
 	opts := Options{
-		Dir:                        b.TempDir(),
-		KeepRecent:                 10_000,
-		IndexOuterLeavesInValueLog: true,
-		LeafPrefixCompression:      true,
-		IndexColumnarLeaves:        true,
-		IndexPackedValuePtr:        true,
+		Dir:                              b.TempDir(),
+		KeepRecent:                       10_000,
+		IndexOuterLeavesInValueLog:       true,
+		LeafPrefixCompression:            true,
+		IndexColumnarLeaves:              true,
+		IndexPackedValuePtr:              true,
+		BackgroundCheckpointInterval:     -1,
+		BackgroundCheckpointIdleDuration: -1,
+		MaxWALBytes:                      -1,
+		BackgroundIndexVacuumInterval:    -1,
+		DisableBackgroundPrune:           true,
 	}
 	opts.ValueLog.PointerThreshold = 1
 
