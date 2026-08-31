@@ -850,9 +850,27 @@ func TestScaleCommandFlagValidation2731(t *testing.T) {
 }
 
 func TestManualProfileWrapperGuards4546(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanCheckout := filepath.Join(t.TempDir(), "clean-checkout")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	setup := exec.CommandContext(ctx, "git", "-C", repoRoot, "worktree", "add", "--detach", cleanCheckout, "HEAD")
+	if output, err := setup.CombinedOutput(); err != nil {
+		t.Fatalf("create clean checkout: %v\n%s", err, output)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cleanupCancel()
+		_ = exec.CommandContext(cleanupCtx, "git", "-C", repoRoot, "worktree", "remove", "--force", cleanCheckout).Run()
+	})
 	run := func(env ...string) ([]byte, error) {
-		cmd := exec.Command("bash", "scripts/treedb_text_hybrid_scale_profile.sh")
-		cmd.Dir = filepath.Join("..", "..")
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "bash", "scripts/treedb_text_hybrid_scale_profile.sh")
+		cmd.Dir = cleanCheckout
 		cmd.Env = append(os.Environ(), env...)
 		return cmd.CombinedOutput()
 	}
@@ -879,7 +897,7 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(profileInvalid, "context.txt")); !os.IsNotExist(err) {
 		t.Fatalf("profile phase wrote provenance: %v", err)
 	}
-	dirty, err := os.CreateTemp(filepath.Join("..", ".."), ".treedb_text_hybrid_scale_profile_dirty_")
+	dirty, err := os.CreateTemp(cleanCheckout, ".treedb_text_hybrid_scale_profile_dirty_")
 	if err != nil {
 		t.Fatal(err)
 	}

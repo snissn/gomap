@@ -10,7 +10,7 @@ separate text-block GC path.
 The default script run is a bounded smoke. Full 10M runs can take multiple hours
 and tens of GB; **do not start a 10M run without explicit coordinator approval**.
 
-### Phase-separated local profiling (#4546)
+## Phase-separated local profiling (#4546)
 
 The manual-only package test runs one fresh `go test` process per phase. Its
 default is the bounded 10k matrix; `RUN_100K=true ROWS=100000` first completes

@@ -1,12 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,8 +67,11 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 		action = func() error {
 			for i := 0; i < cfg.queries; i++ {
 				got, err := fixture.col.SearchText(collections.TextSearchOptions{IndexName: textIndexName, Phrase: &collections.TextSearchPhraseQuery{Query: "refund policy"}, TopK: cfg.topK, CandidateLimit: cfg.rows, MaxPostingsScanned: cfg.rows * 4, ResultMode: collections.TextSearchResultModeScoreOnly})
-				if err != nil || len(got.Results) == 0 {
+				if err != nil {
 					return fmt.Errorf("phrase search: %w", err)
+				}
+				if len(got.Results) == 0 {
+					return errors.New("phrase search returned no results")
 				}
 			}
 			return nil
@@ -161,6 +166,11 @@ func profileManualPhase(mode, dir string, action func() error) (time.Duration, e
 	}
 	if dir == "" {
 		return 0, fmt.Errorf("TREEDB_TEXT_PROFILE_DIR is required with profiling")
+	}
+	if mode == "alloc" {
+		if err := requireExactMemProfileRate(true, runtime.MemProfileRate); err != nil {
+			return 0, err
+		}
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return 0, err
@@ -262,5 +272,14 @@ func TestTimeManualActionMeasuresAction4546(t *testing.T) {
 	duration, err := timeManualAction(func() error { time.Sleep(time.Millisecond); return nil })
 	if err != nil || duration < time.Millisecond {
 		t.Fatalf("duration=%s err=%v", duration, err)
+	}
+}
+
+func TestManualAllocProfileRequiresExactRate4546(t *testing.T) {
+	previous := runtime.MemProfileRate
+	runtime.MemProfileRate = 512 * 1024
+	t.Cleanup(func() { runtime.MemProfileRate = previous })
+	if _, err := profileManualPhase("alloc", t.TempDir(), func() error { return nil }); err == nil || !strings.Contains(err.Error(), "GODEBUG=memprofilerate=1") {
+		t.Fatalf("allocation precondition err=%v", err)
 	}
 }
