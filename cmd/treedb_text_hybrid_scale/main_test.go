@@ -953,15 +953,15 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 		t.Fatalf("dry-run command=%q err=%v", command, err)
 	}
 	goFlagsDryRun := t.TempDir()
-	if output, err := run("RUN_DIR="+goFlagsDryRun, "PHASES=phrase", "DRY_RUN=true", "GOFLAGS=-race"); err != nil || !strings.Contains(string(output), "artifacts:") {
+	if output, err := run("RUN_DIR="+goFlagsDryRun, "PHASES=phrase", "DRY_RUN=true", "GOFLAGS=-race", "GOMAXPROCS=1", "GOGC=10", "GOMEMLIMIT=1MiB"); err != nil || !strings.Contains(string(output), "artifacts:") {
 		t.Fatalf("GOFLAGS dry-run err=%v output=%s", err, output)
 	}
 	command, err = os.ReadFile(filepath.Join(goFlagsDryRun, "10000", "phrase", "command.txt"))
-	if err != nil || !strings.Contains(string(command), "GOFLAGS= GOENV=off") {
+	if err != nil || !strings.Contains(string(command), "-u GOMAXPROCS -u GOGC -u GOMEMLIMIT GOWORK=off GOFLAGS= GOENV=off") {
 		t.Fatalf("GOFLAGS command=%q err=%v", command, err)
 	}
 	context, err := os.ReadFile(filepath.Join(goFlagsDryRun, "context.txt"))
-	if err != nil || !strings.Contains(string(context), "goflags=cleared\ngoenv=off") {
+	if err != nil || !strings.Contains(string(context), "goflags=cleared\ngoenv=off\ngomaxprocs=cleared\ngogc=cleared\ngomemlimit=cleared") {
 		t.Fatalf("GOFLAGS context=%q err=%v", context, err)
 	}
 	runtimeDebugDryRun := t.TempDir()

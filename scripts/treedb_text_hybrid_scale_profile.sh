@@ -32,9 +32,12 @@ if [[ -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then echo
   echo "commit=$(git rev-parse HEAD)"
   echo "command=$0 $*"
   echo "host=$(uname -a)"
-  echo "go=$(GOENV=off GOFLAGS= go version)"
+  echo "go=$(env -u GOMAXPROCS -u GOGC -u GOMEMLIMIT GOENV=off GOFLAGS= go version)"
   echo "goflags=cleared"
   echo "goenv=off"
+  echo "gomaxprocs=cleared"
+  echo "gogc=cleared"
+  echo "gomemlimit=cleared"
   if [[ -n "${GODEBUG:-}" ]]; then printf 'godebug_shell_escaped=%q\n' "$GODEBUG"; fi
 } > "$RUN_DIR/context.txt"
 
@@ -55,7 +58,7 @@ run_matrix() {
     if [[ "$mode" == alloc ]]; then
       godebug="${GODEBUG:+${GODEBUG},}memprofilerate=1"
     fi
-    cmd=(env GOWORK=off GOFLAGS= GOENV=off)
+    cmd=(env -u GOMAXPROCS -u GOGC -u GOMEMLIMIT GOWORK=off GOFLAGS= GOENV=off)
     if [[ -n "$godebug" ]]; then cmd+=(GODEBUG="$godebug"); fi
     cmd+=(TREEDB_TEXT_PROFILE_PHASE="$phase" TREEDB_TEXT_PROFILE_ROWS="$rows" TREEDB_TEXT_PROFILE_MODE="$mode" TREEDB_TEXT_PROFILE_DIR="$phase_dir/profiles" TREEDB_TEXT_PROFILE_TINY="$([[ "$TINY_SMOKE" == true ]] && echo 1 || echo 0)" go test ./cmd/treedb_text_hybrid_scale -run '^TestManualTextHybridScaleProfile4546$' -count=1 -v -timeout "$TIMEOUT")
     printf '%q ' "${cmd[@]}" > "$phase_dir/command.txt"; echo >> "$phase_dir/command.txt"

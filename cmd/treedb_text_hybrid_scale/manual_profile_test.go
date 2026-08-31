@@ -101,8 +101,12 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 		action = func() error {
 			for i := 0; i < cfg.maintenanceUpdates; i++ {
 				id, replacement := scaleDocID(i), scaleDocument(i, cfg.dims, "maintenance-updated")
-				if _, _, err := fixture.col.Update(id, func([]byte) ([]byte, bool, error) { return replacement, true, nil }); err != nil {
+				updated, changed, err := fixture.col.Update(id, func([]byte) ([]byte, bool, error) { return replacement, true, nil })
+				if err != nil {
 					return err
+				}
+				if !updated || !changed {
+					return fmt.Errorf("maintenance update %s updated=%v changed=%v", id, updated, changed)
 				}
 			}
 			ids := make([][]byte, cfg.maintenanceDeletes)
@@ -110,8 +114,12 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 				ids[i] = scaleDocID(cfg.maintenanceUpdates + i)
 			}
 			if len(ids) > 0 {
-				if _, err := fixture.col.DeleteBatch(ids); err != nil {
+				deleted, err := fixture.col.DeleteBatch(ids)
+				if err != nil {
 					return err
+				}
+				if deleted != len(ids) {
+					return fmt.Errorf("maintenance delete batch deleted=%d want %d", deleted, len(ids))
 				}
 			}
 			if _, err := fixture.col.RewriteTextIndex(textIndexName, collections.TextIndexRewriteOptions{}); err != nil {
