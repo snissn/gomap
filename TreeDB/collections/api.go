@@ -6796,7 +6796,7 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 		}
 	}
 	domain.indexedAutoFlushes.Add(1)
-	if opts.BufferedIndexedAsyncFlush {
+	if opts.BufferedIndexedAsyncFlush && (c.db == nil || !c.db.CommandWALEnabled()) {
 		rotateIndexedMutableToFlushUnitForAsyncLocked(domain)
 		if opts.BufferedIndexedAsyncFlushMaxQueuedUnits > 0 && len(domain.indexedFlushUnits) >= opts.BufferedIndexedAsyncFlushMaxQueuedUnits {
 			if len(domain.indexedPublishingUnits) == 0 {

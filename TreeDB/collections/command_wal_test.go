@@ -2128,6 +2128,62 @@ func TestCollectionCommandWALThresholdFlushClearsCoordinatorOwner(t *testing.T) 
 	}
 }
 
+func TestCollectionCommandWALAsyncFlushMetadataUsesForegroundThresholdFlush(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:                          DocumentFormatBSON,
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 1,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if !col.Meta().Options.BufferedIndexedAsyncFlush {
+		t.Fatal("BufferedIndexedAsyncFlush metadata=false, want preserved")
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "email", Value: "ada@example.test"}})},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after command-WAL threshold flush=%d, want 1", got)
+	}
+	col.writeDomain.mu.Lock()
+	async := col.writeDomain.indexedAsyncFlushRunning()
+	queued := len(col.writeDomain.indexedFlushUnits)
+	publishing := len(col.writeDomain.indexedPublishingUnits)
+	col.writeDomain.mu.Unlock()
+	if async || queued != 0 || publishing != 0 {
+		t.Fatalf("command-WAL threshold scheduled async work: running=%t queued=%d publishing=%d", async, queued, publishing)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	if _, found, err := reopened.GetInto([]byte("u1"), nil); err != nil || !found {
+		t.Fatalf("reopen GetInto found=%t err=%v, want document", found, err)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after reopen=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALStageCoordinatorPinsFallbackToDomain(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
