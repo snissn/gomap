@@ -3942,13 +3942,9 @@ func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
 	if db == nil {
 		return ErrClosed
 	}
-	if !maintenanceAlreadyHeld {
-		db.maintenanceMu.Lock()
-		defer db.maintenanceMu.Unlock()
-	}
 	db.teardownMu.RLock()
 	defer db.teardownMu.RUnlock()
-	return db.checkpointTeardownPinned(true)
+	return db.checkpointTeardownPinned(maintenanceAlreadyHeld)
 }
 
 // checkpointTeardownPinned runs while the caller holds teardownMu.RLock.

@@ -743,7 +743,11 @@ func (db *DB) cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyH
 	if maintenanceAlreadyHeld {
 		err = db.cleanupCommandWALCoveredSegmentsV1()
 	} else {
-		err = db.CleanupCommandWALCoveredSegments(false)
+		if !db.maintenanceMu.TryLock() {
+			return nil
+		}
+		err = db.cleanupCommandWALCoveredSegmentsV1()
+		db.maintenanceMu.Unlock()
 	}
 	return normalizeCommandWALCheckpointCleanupError(err)
 }
