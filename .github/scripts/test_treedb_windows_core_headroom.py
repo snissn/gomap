@@ -117,7 +117,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
         manifests = (
             (
                 "treedb_windows_core_weighted_shards.tsv",
-                7,
+                8,
                 {"package", "root", "db", "collections"},
             ),
             (
@@ -141,7 +141,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
     def test_recent_slow_packages_stay_on_rebalanced_shards(self) -> None:
         windows = read_weights(
             "treedb_windows_core_weighted_shards.tsv",
-            7,
+            8,
             {"package", "root", "db", "collections"},
         )
         race = read_weights(
@@ -156,7 +156,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
             (1, False),
         )
         shards = weighted_shards(
-            [rag_benchmark, "unrelated-package"], "package", 7, windows
+            [rag_benchmark, "unrelated-package"], "package", 8, windows
         )
         self.assertEqual(shards[5], [rag_benchmark])
         self.assertEqual(shards[1], ["unrelated-package"])
@@ -174,20 +174,36 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
 
 
 class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
-    def test_core_shards_use_seven_weighted_jobs_plus_dedicated_heavy_tests(self) -> None:
+    def test_core_shards_use_eight_weighted_jobs_plus_dedicated_heavy_tests(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(
             len(re.findall(r"^          - name: windows-core-\d+$", workflow, re.MULTILINE)),
-            7,
+            8,
         )
-        for shard in range(7):
+        for shard in range(8):
             job_name = f"windows-core-{shard + 1}"
             with self.subTest(job_name=job_name):
                 self.assertEqual(matrix_timeout(workflow, job_name), 40)
-                self.assertEqual(core_matrix_partition(workflow, job_name), (shard, 7))
+                self.assertEqual(core_matrix_partition(workflow, job_name), (shard, 8))
         self.assertEqual(matrix_timeout(workflow, "windows-mongo-gateway"), 40)
         self.assertEqual(matrix_timeout(workflow, "windows-nativewire"), 40)
         self.assertEqual(matrix_timeout(workflow, "windows-powerloss-oracle"), 40)
+
+    def test_new_lane_splits_the_observed_core_seven_heavy_work(self) -> None:
+        windows = read_weights(
+            "treedb_windows_core_weighted_shards.tsv",
+            8,
+            {"package", "root", "db", "collections"},
+        )
+        self.assertEqual(
+            windows[("package", "github.com/snissn/gomap/TreeDB/cmd/treemap")][0], 7
+        )
+        for test in (
+            "TestReadSnapshotsSeeQueuedWritesBeforeCheckpoint_ProfileMatrix",
+            "TestReopenVerify_OuterLeavesExplicitInternalBaseDeltaDisabled_Churn",
+        ):
+            with self.subTest(test=test):
+                self.assertEqual(windows[("root", test)][0], 7)
 
     def test_core_selector_weights_every_split_domain(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")

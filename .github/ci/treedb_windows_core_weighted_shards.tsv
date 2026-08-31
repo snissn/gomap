@@ -1,4 +1,4 @@
-# kind	shard	item	max_seconds	optional preserve-fallback; evidence runs 32407394988, 32410661113, 32412648919, 32416637299, 32828779665
+# kind	shard	item	max_seconds	optional preserve-fallback; evidence runs 32407394988, 32410661113, 32412648919, 32416637299, 32828779665, 33414568777
 package	0	github.com/snissn/gomap/TreeDB/mvcc	166.88
 root	0	TestReopenVerify_DurableWALCoalescedInlineAroundPointerRecords	11.24
 root	1	TestCrashRecovery_CommandWALDurableSyncedUncheckpointedFramesReplay	16.22
@@ -41,14 +41,14 @@ root	5	TestProductionProfilesForcedPointersDeleteReuseRotationReopen	20.64
 root	5	TestValueLogGCOnline_ProtectedSetSafety	15.15
 db	6	TestBatchWritesPreserveUniformLeafDepthWithOuterLeafInternalSplits	12.18
 db	6	TestIndexVacuumTriggerReportMatchesFragmentationSpan	19.55
-package	6	github.com/snissn/gomap/TreeDB/cmd/treemap	108.01
+package	7	github.com/snissn/gomap/TreeDB/cmd/treemap	349.34
 package	6	github.com/snissn/gomap/TreeDB/documentservice	43.05
 root	6	TestBackgroundIndexVacuumIdleUnchangedCommitSkipsStructuralWalks	187.76
 root	6	TestPowerLossCertificationGroupedAmbiguousFailureDirtyPublicReopen	15.60
 root	6	TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID	22.94
 root	6	TestProfileFast_BulkRestoreMaintainsKeyValueParity	14.68
 root	6	TestProfileFast_MultiDomainWritesAvoidPageExplosionAtCheckpointBoundaries	16.28
-root	6	TestReadSnapshotsSeeQueuedWritesBeforeCheckpoint_ProfileMatrix	45.41
+root	7	TestReadSnapshotsSeeQueuedWritesBeforeCheckpoint_ProfileMatrix	158.03
 root	6	TestReopenVerify_DurableWALCoalescedInlineWrites	98.83
-root	6	TestReopenVerify_OuterLeavesExplicitInternalBaseDeltaDisabled_Churn	55.84
+root	7	TestReopenVerify_OuterLeavesExplicitInternalBaseDeltaDisabled_Churn	141.33
 root	6	TestWriteReadVisibilityMatrix	34.94
