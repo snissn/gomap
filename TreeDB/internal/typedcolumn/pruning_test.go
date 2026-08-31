@@ -24,6 +24,9 @@ func TestEncodeInt64PruningPayloadSizeAndRoundTrip(t *testing.T) {
 	if got, want := len(payload), 36+len(index.Blocks)*int64PruningBlockEncodedBytes+len(index.Entries)*16; got != want {
 		t.Fatalf("payload bytes=%d want %d", got, want)
 	}
+	if cap(payload) != len(payload) {
+		t.Fatalf("payload capacity=%d want exact size=%d", cap(payload), len(payload))
+	}
 	decoded, err := decodeInt64PruningPayload(ColumnPruningEnvelope{}, payload)
 	if err != nil {
 		t.Fatalf("decodeInt64PruningPayload: %v", err)
