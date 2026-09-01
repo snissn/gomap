@@ -5395,15 +5395,6 @@ func isDefaultIndexedWriteMemtableMaxDocuments(opts CollectionOptions) bool {
 		opts.BufferedIndexedWriteMaxDocuments == DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
 }
 
-func foregroundIndexedWriteOptionsForColumnDocuments(opts CollectionOptions, columnDocuments []columnWriteDocument) CollectionOptions {
-	if len(columnDocuments) == 0 || !opts.BufferedIndexedAsyncFlush {
-		return opts
-	}
-	opts.BufferedIndexedAsyncFlush = false
-	opts.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
-	return opts
-}
-
 func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan, columnDocuments []columnWriteDocument, commandWALStageIntent *backenddb.CommandWALIntent, rawStageLocked bool, releaseCommandWALRawStage func()) (elapsed time.Duration, err error) {
 	domain := c.writeDomain
 	if domain == nil {
@@ -5417,7 +5408,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 			return 0, fmt.Errorf("collections: buffered typed-column insert documents=%d rows=%d", len(columnDocuments), len(plan.resultIDs))
 		}
 	}
-	writeOptions := foregroundIndexedWriteOptionsForColumnDocuments(catalog.meta.Options, columnDocuments)
+	writeOptions := catalog.meta.Options
 	var unlockCommandWALRawStage func()
 	if releaseCommandWALRawStage == nil {
 		releaseCommandWALRawStage = func() {
@@ -5646,7 +5637,7 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 		domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex)
 	}
 	ensureBufferedPrimaryRunIndexLocked(domain, len(plan.primaryKeys))
-	writeOptions := foregroundIndexedWriteOptionsForColumnDocuments(catalog.meta.Options, columnDocuments)
+	writeOptions := catalog.meta.Options
 
 	addedRootRuns := estimateAccumulatedRootRunsForNamesLocked(domain, direct.rootNames)
 	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, writeOptions, len(plan.resultIDs), direct.stagedBytes, addedRootRuns)
@@ -6853,7 +6844,7 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 		}
 	}
 	domain.indexedAutoFlushes.Add(1)
-	if opts.BufferedIndexedAsyncFlush && (c.db == nil || !c.db.CommandWALEnabled() || !columnStoreWriteEnabled(domain.meta)) {
+	if opts.BufferedIndexedAsyncFlush {
 		rotateIndexedMutableToFlushUnitForAsyncLocked(domain)
 		if opts.BufferedIndexedAsyncFlushMaxQueuedUnits > 0 && len(domain.indexedFlushUnits) >= opts.BufferedIndexedAsyncFlushMaxQueuedUnits {
 			if len(domain.indexedPublishingUnits) == 0 {
@@ -9134,6 +9125,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		err = concurrentSchemaModificationError("buffered_async_flush_pin", meta, pinnedCatalog.meta)
 		return nil, err
 	}
+	work.catalog = pinnedCatalog
 	if err = forEachPendingIndexedRootBaseIDLocked(domain, func(rootName string, baseRoot uint64) error {
 		if got := pinnedCatalog.rootID(rootName); got != baseRoot {
 			return errBufferedRootBaseMismatch(meta.Name, rootName)
@@ -9274,12 +9266,9 @@ func (c *Collection) tryLockPreparedIndexedCommandWALPublish(work *indexedFlushP
 	}
 }
 
-func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) error {
+func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) (retErr error) {
 	if c == nil || c.db == nil || work == nil {
 		return nil
-	}
-	if c.db.CommandWALEnabled() && columnStoreWriteEnabled(work.meta) {
-		return c.completePreparedIndexedFlush(work, 0, nil, fmt.Errorf("%w: typed-column indexed async publish is not supported", backenddb.ErrCommandWALContextMissingFrame), 0, 0, 0)
 	}
 	defer func() {
 		if work.pin != nil {
@@ -9298,6 +9287,50 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	}
 	if err != nil {
 		return c.completePreparedIndexedFlush(work, 0, nil, err, overlayMaterializeElapsed, overlayMaterializeElapsed, 0)
+	}
+	cleanupTextRuns, err := c.appendBufferedTextIndexFlushDeltas(work.pin, work.catalog, work.meta, &work.flushUnit)
+	if err != nil {
+		return c.completePreparedIndexedFlush(work, 0, nil, err, overlayMaterializeElapsed, overlayMaterializeElapsed, 0)
+	}
+	defer cleanupTextRuns()
+	work.rootNames = orderedBufferedRootNames(work.meta, work.flushUnit.rootRuns)
+	work.rootBaseIDs = make(map[string]uint64, len(work.rootNames))
+	for _, rootName := range work.rootNames {
+		baseRoot, ok := work.flushUnit.rootBaseIDs[rootName]
+		if !ok {
+			return c.completePreparedIndexedFlush(work, 0, nil, fmt.Errorf("collections: buffered indexed flush missing base root for %q", rootName), overlayMaterializeElapsed, overlayMaterializeElapsed, 0)
+		}
+		work.rootBaseIDs[rootName] = baseRoot
+		if _, ok := work.rootOverlays[rootName]; !ok {
+			work.rootOverlays[rootName] = append([]uint64(nil), work.catalog.overlayRootIDs(rootName)...)
+		}
+	}
+	work.rootCount = len(work.rootNames)
+	var columnInput columnWritePublishInput
+	if columnStoreWriteEnabled(work.meta) {
+		if work.commandWALLast == 0 {
+			return c.completePreparedIndexedFlush(work, 0, nil, fmt.Errorf("%w: typed-column indexed async publish missing command WAL interval", backenddb.ErrCommandWALContextMissingFrame), overlayMaterializeElapsed, overlayMaterializeElapsed, 0)
+		}
+		columnInput = columnWritePublishInput{
+			meta: work.meta, catalog: work.catalog, baseCommitSeq: work.baseCommitSeq, baseSystemRoot: work.baseSystemRoot,
+			rootNames: cloneColumnPublishRootNames(work.rootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(work.rootBaseIDs),
+			operation: ColumnPublishOperationInsert, documents: work.flushUnit.columnDocuments, rows: len(work.flushUnit.columnDocuments),
+		}
+		columnInput, err = prepareColumnWritePublishInputBeforeCommandWAL(columnInput)
+		if err == nil {
+			columnInput.preparedPlan, err = c.prepareColumnPublishPlanLease(columnInput, work.catalog.rootID(collectionColumnManifestRootName(work.meta.Name)), work.commandWALLast)
+		}
+		if err != nil {
+			return c.completePreparedIndexedFlush(work, 0, nil, err, overlayMaterializeElapsed, overlayMaterializeElapsed, 0)
+		}
+		// The atomic publisher consumes the lease on success. Any earlier
+		// materialization or admission failure must release (or quarantine) its
+		// unpublished assets before this unit is requeued.
+		defer func() {
+			if cleanupErr := columnInput.preparedPlan.finishFailure(retErr); cleanupErr != nil && !errors.Is(cleanupErr, errColumnPublishPlanLeaseConsumed) {
+				retErr = errors.Join(retErr, cleanupErr)
+			}
+		}()
 	}
 	publishRootRuns, cleanupPointerizedRuns, err := pointerizeCollectionRootRunMapValues(c.db, work.meta, work.flushUnit.rootRuns)
 	if err != nil {
@@ -9382,7 +9415,19 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	var publishErr error
-	if lease != nil {
+	if columnStoreWriteEnabled(work.meta) {
+		if lease == nil {
+			publishErr = fmt.Errorf("%w: typed-column indexed async publish missing command WAL lease", backenddb.ErrCommandWALContextMissingFrame)
+		} else {
+			columnInput.commandWALIntent, columnInput.rawPublishLocked = lease.intent, true
+			var publishMeta CollectionMeta
+			var publishRootNames []string
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, publishErr = c.publishRootDeltaBatchGroupMaybeColumn(ordered, c.bufferedIndexedRootPublishPreflight(work.pin.Pager(), work.baseSystemRoot, work.baseCommitSeq, work.meta, work.rootNames, work.rootBaseIDs), columnInput)
+			if publishErr == nil {
+				work.meta, work.rootNames = publishMeta, publishRootNames
+			}
+		}
+	} else if lease != nil {
 		newSystemRoot, rootIDs, publishErr = c.publishBufferedOrderedRootDeltaBatchGroupWithCommandWAL(ordered, c.bufferedIndexedRootPublishPreflight(work.pin.Pager(), work.baseSystemRoot, work.baseCommitSeq, work.meta, work.rootNames, work.rootBaseIDs), lease.intent, true, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
 		})
@@ -9854,6 +9899,43 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	return c.flushBufferedIndexedLockedWithRawPublishState(domain, false)
 }
 
+// appendBufferedTextIndexFlushDeltas adds deferred text-index deltas to a
+// buffered typed-column flush after the collection catalog has been pinned.
+// The returned cleanup releases only unpublished memtable runs.
+func (c *Collection) appendBufferedTextIndexFlushDeltas(pin *backenddb.Snapshot, catalog *collectionCatalog, meta CollectionMeta, flushUnit *indexedFlushUnit) (func(), error) {
+	if len(meta.TextIndexes) == 0 {
+		return func() {}, nil
+	}
+	if len(flushUnit.columnDocuments) == 0 {
+		return nil, errors.New("collections: buffered text-index flush missing source documents")
+	}
+	plannerOptions, err := collectionPlannerOptionsForDB(c.db, meta)
+	if err != nil {
+		return nil, err
+	}
+	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, pin, catalog)
+	var deferredTextPlan insertBatchPlan
+	if err := appendTextIndexInsertDocumentsDeltas(pin, catalog, plannerOptions, flushUnit.columnDocuments, &deferredTextPlan); err != nil {
+		return nil, err
+	}
+	if flushUnit.rootRuns == nil {
+		flushUnit.rootRuns = make(map[string][]memtable.Table)
+	}
+	if flushUnit.rootPolicies == nil {
+		flushUnit.rootPolicies = make(map[string]backenddb.OrderedRootStoragePolicy)
+	}
+	if flushUnit.rootBaseIDs == nil {
+		flushUnit.rootBaseIDs = make(map[string]uint64)
+	}
+	for _, run := range deferredTextPlan.runs {
+		flushUnit.rootRuns[run.name] = append(flushUnit.rootRuns[run.name], run.table)
+		flushUnit.rootPolicies[run.name] = run.storagePolicy
+		flushUnit.rootBaseIDs[run.name] = catalog.rootID(run.name)
+		flushUnit.rootRunCount++
+	}
+	return func() { resetCollectionRunTables(deferredTextPlan.runs) }, nil
+}
+
 func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *collectionWriteDomain, rawPublishLocked bool) (err error) {
 	if domain == nil {
 		return nil
@@ -9912,36 +9994,11 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	if len(materializedPrimaryRuns) > 0 {
 		defer resetCollectionTables(materializedPrimaryRuns)
 	}
-	var deferredTextPlan insertBatchPlan
-	if len(meta.TextIndexes) > 0 {
-		if len(flushUnit.columnDocuments) == 0 {
-			return errors.New("collections: buffered text-index flush missing source documents")
-		}
-		plannerOptions, err := collectionPlannerOptionsForDB(c.db, meta)
-		if err != nil {
-			return err
-		}
-		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, pin, pinnedCatalog)
-		if err := appendTextIndexInsertDocumentsDeltas(pin, pinnedCatalog, plannerOptions, flushUnit.columnDocuments, &deferredTextPlan); err != nil {
-			return err
-		}
-		defer resetCollectionRunTables(deferredTextPlan.runs)
-		if flushUnit.rootRuns == nil {
-			flushUnit.rootRuns = make(map[string][]memtable.Table)
-		}
-		if flushUnit.rootPolicies == nil {
-			flushUnit.rootPolicies = make(map[string]backenddb.OrderedRootStoragePolicy)
-		}
-		if flushUnit.rootBaseIDs == nil {
-			flushUnit.rootBaseIDs = make(map[string]uint64)
-		}
-		for _, run := range deferredTextPlan.runs {
-			flushUnit.rootRuns[run.name] = append(flushUnit.rootRuns[run.name], run.table)
-			flushUnit.rootPolicies[run.name] = run.storagePolicy
-			flushUnit.rootBaseIDs[run.name] = pinnedCatalog.rootID(run.name)
-			flushUnit.rootRunCount++
-		}
+	cleanupTextRuns, err := c.appendBufferedTextIndexFlushDeltas(pin, pinnedCatalog, meta, &flushUnit)
+	if err != nil {
+		return err
 	}
+	defer cleanupTextRuns()
 	rootNames := orderedBufferedRootNames(meta, flushUnit.rootRuns)
 	if len(rootNames) == 0 {
 		domain.indexedFlushUnits = nil

@@ -97,8 +97,11 @@ func TestServiceColumnGraphCoalescesBufferedInsertPublication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
-	if !col.Meta().Options.DisableBufferedIndexedAsyncFlush {
-		t.Fatal("column_graph service collection did not select foreground buffered publication")
+	if col.Meta().Options.DisableBufferedIndexedAsyncFlush {
+		t.Fatal("column_graph service collection opted out of buffered async publication")
+	}
+	if !col.Meta().Options.BufferedIndexedAsyncFlush {
+		t.Fatal("column_graph service collection did not enable buffered async publication")
 	}
 
 	for _, doc := range []Document{
@@ -185,14 +188,14 @@ func TestServiceColumnGraphCoalescesLegacyAsyncMetadata(t *testing.T) {
 	}
 }
 
-func TestServiceColumnGraphLegacyAsyncMetadataUsesForegroundThreshold(t *testing.T) {
+func TestServiceColumnGraphAsyncMetadataPublishesInBackground(t *testing.T) {
 	dir := t.TempDir()
 	db, err := backenddb.Open(testBackendOptions(dir))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 	manager := collections.NewCollectionManager(db)
-	createLegacyAsyncColumnGraphCollection(t, manager, 1)
+	createExplicitAsyncColumnGraphCollection(t, manager, 1)
 	svc := New(manager)
 	if _, err := svc.UpsertDocuments(context.Background(), "docs", UpsertDocumentsRequest{
 		Documents:               []Document{{ID: "a", Content: "durable alpha", Embedding: []float32{1, 0}}},
@@ -203,8 +206,8 @@ func TestServiceColumnGraphLegacyAsyncMetadataUsesForegroundThreshold(t *testing
 	if err := manager.FlushAll(); err != nil {
 		t.Fatalf("FlushAll: %v", err)
 	}
-	if stats := manager.StatsSnapshot(); stats.IndexedAsyncFlushScheduled != 0 || stats.IndexedAsyncFlushErrors != 0 || stats.IndexedFlushDocs != 1 {
-		t.Fatalf("legacy async stats=%+v, want one foreground flush", stats)
+	if stats := manager.StatsSnapshot(); stats.IndexedAsyncFlushScheduled == 0 || stats.IndexedAsyncFlushErrors != 0 || stats.IndexedFlushDocs != 1 {
+		t.Fatalf("async stats=%+v, want one successful background flush", stats)
 	}
 	if err := svc.Close(); err != nil {
 		t.Fatalf("close service: %v", err)
@@ -234,6 +237,14 @@ func TestServiceColumnGraphLegacyAsyncMetadataUsesForegroundThreshold(t *testing
 }
 
 func createLegacyAsyncColumnGraphCollection(t *testing.T, manager *collections.CollectionManager, maxDocuments int) *collections.Collection {
+	return createColumnGraphCollection(t, manager, maxDocuments, false)
+}
+
+func createExplicitAsyncColumnGraphCollection(t *testing.T, manager *collections.CollectionManager, maxDocuments int) *collections.Collection {
+	return createColumnGraphCollection(t, manager, maxDocuments, true)
+}
+
+func createColumnGraphCollection(t *testing.T, manager *collections.CollectionManager, maxDocuments int, bufferedAsync bool) *collections.Collection {
 	t.Helper()
 	_, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: "docs",
@@ -241,6 +252,7 @@ func createLegacyAsyncColumnGraphCollection(t *testing.T, manager *collections.C
 			DocumentFormat:                   collections.DocumentFormatJSON,
 			ColumnStore:                      serviceColumnStoreConfig(2),
 			BufferedIndexedWriteMaxDocuments: maxDocuments,
+			BufferedIndexedAsyncFlush:        bufferedAsync,
 		},
 		VectorIndexes: []collections.VectorIndexDefinition{{
 			Name:             defaultVectorIndexName,
