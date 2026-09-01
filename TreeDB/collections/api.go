@@ -967,6 +967,8 @@ type CollectionManagerStats struct {
 	PendingBytes                       int64
 	PendingRootRuns                    int
 	PendingIndexedFlushUnits           int
+	PendingIndexedRawDocumentBytes     int64
+	PendingIndexedPublicationBytes     int64
 	OverlayMutableDocuments            int
 	OverlayQueuedIndexedFlushUnits     int
 	OverlayActiveIndexedFlushUnits     int
@@ -1311,18 +1313,22 @@ type noIndexBatchEntry struct {
 }
 
 type indexedFlushUnit struct {
-	rootRuns        map[string][]memtable.Table
-	rootPolicies    map[string]backenddb.OrderedRootStoragePolicy
-	rootBaseIDs     map[string]uint64
-	uniqueValueRuns map[string][]memtable.Table
-	arenaRefs       [][]byte
-	primaryOverlay  *bufferedPrimaryOverlay
-	docCount        int
-	byteCount       int64
-	rootRunCount    int
-	columnDocuments []columnWriteDocument
-	commandWALFirst uint64
-	commandWALLast  uint64
+	rootRuns            map[string][]memtable.Table
+	rootPolicies        map[string]backenddb.OrderedRootStoragePolicy
+	rootBaseIDs         map[string]uint64
+	uniqueValueRuns     map[string][]memtable.Table
+	arenaRefs           [][]byte
+	primaryOverlay      *bufferedPrimaryOverlay
+	docCount            int
+	byteCount           int64
+	rootRunCount        int
+	columnDocuments     []columnWriteDocument
+	preparedTextInserts []preparedTextIndexInsert
+	columnCommandBytes  int64
+	rawDocumentBytes    int64
+	publicationBytes    int64
+	commandWALFirst     uint64
+	commandWALLast      uint64
 }
 
 type indexedFlushPublishWork struct {
@@ -1414,6 +1420,10 @@ type bufferedIndexedCheckpoint struct {
 	indexedMutableCommandWALFirst uint64
 	indexedMutableCommandWALLast  uint64
 	columnDocuments               []columnWriteDocument
+	preparedTextInserts           []preparedTextIndexInsert
+	columnCommandBytes            int64
+	rawDocumentBytes              int64
+	publicationBytes              int64
 }
 
 type bufferedUniqueValueIndex struct {
@@ -1529,6 +1539,10 @@ type collectionWriteDomain struct {
 	indexedMutableCommandWALFirst uint64
 	indexedMutableCommandWALLast  uint64
 	columnDocuments               []columnWriteDocument
+	preparedTextInserts           []preparedTextIndexInsert
+	columnCommandBytes            int64
+	rawDocumentBytes              int64
+	publicationBytes              int64
 	commandWALStageReservations   atomic.Int32
 
 	mutationLockCalls                  atomic.Uint64
@@ -1867,6 +1881,8 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.pending_bytes"] = fmt.Sprintf("%d", stats.PendingBytes)
 	out["treedb.collections.write_domain.pending_root_runs"] = fmt.Sprintf("%d", stats.PendingRootRuns)
 	out["treedb.collections.write_domain.pending_indexed_flush_units"] = fmt.Sprintf("%d", stats.PendingIndexedFlushUnits)
+	out["treedb.collections.write_domain.pending_indexed_raw_document_bytes"] = fmt.Sprintf("%d", stats.PendingIndexedRawDocumentBytes)
+	out["treedb.collections.write_domain.pending_indexed_publication_bytes"] = fmt.Sprintf("%d", stats.PendingIndexedPublicationBytes)
 	out["treedb.collections.write_domain.overlay.mutable_docs"] = fmt.Sprintf("%d", stats.OverlayMutableDocuments)
 	out["treedb.collections.write_domain.overlay.queued_indexed_flush_units"] = fmt.Sprintf("%d", stats.OverlayQueuedIndexedFlushUnits)
 	out["treedb.collections.write_domain.overlay.active_indexed_flush_units"] = fmt.Sprintf("%d", stats.OverlayActiveIndexedFlushUnits)
@@ -2169,6 +2185,8 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.PendingBytes = saturatingAddNonNegativeInt64(s.PendingBytes, other.PendingBytes)
 	s.PendingRootRuns = saturatingAddNonNegativeInt(s.PendingRootRuns, other.PendingRootRuns)
 	s.PendingIndexedFlushUnits = saturatingAddNonNegativeInt(s.PendingIndexedFlushUnits, other.PendingIndexedFlushUnits)
+	s.PendingIndexedRawDocumentBytes = saturatingAddNonNegativeInt64(s.PendingIndexedRawDocumentBytes, other.PendingIndexedRawDocumentBytes)
+	s.PendingIndexedPublicationBytes = saturatingAddNonNegativeInt64(s.PendingIndexedPublicationBytes, other.PendingIndexedPublicationBytes)
 	s.OverlayMutableDocuments = saturatingAddNonNegativeInt(s.OverlayMutableDocuments, other.OverlayMutableDocuments)
 	s.OverlayQueuedIndexedFlushUnits = saturatingAddNonNegativeInt(s.OverlayQueuedIndexedFlushUnits, other.OverlayQueuedIndexedFlushUnits)
 	s.OverlayActiveIndexedFlushUnits = saturatingAddNonNegativeInt(s.OverlayActiveIndexedFlushUnits, other.OverlayActiveIndexedFlushUnits)
@@ -2286,6 +2304,29 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	}
 }
 
+func indexedPublicationPayloadBytes(documents []columnWriteDocument, prepared []preparedTextIndexInsert) (raw, payload int64) {
+	for _, document := range documents {
+		raw = saturatingAddNonNegativeInt64(raw, int64(len(document.Document)))
+		payload = saturatingAddNonNegativeInt64(payload, int64(len(document.ID)+len(document.Document)))
+		for _, value := range document.declaredValues {
+			payload = saturatingAddNonNegativeInt64(payload, int64(len(value.String)+len(value.DenseNumericVector)+len(value.Bytes)+len(value.StringBytes)))
+			payload = saturatingAddNonNegativeInt64(payload, int64(4*(len(value.Float32Vector)+len(value.Uint32List)+len(value.AdjacencyList))))
+		}
+	}
+	for _, index := range prepared {
+		payload = saturatingAddNonNegativeInt64(payload, int64(len(index.indexName)))
+		for _, state := range index.states {
+			for _, field := range state.Fields {
+				payload = saturatingAddNonNegativeInt64(payload, int64(len(field.Field)))
+				for _, term := range field.Terms {
+					payload = saturatingAddNonNegativeInt64(payload, int64(len(term.Term)+4*len(term.Positions)+8*len(term.Offsets)))
+				}
+			}
+		}
+	}
+	return raw, payload
+}
+
 func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	if domain == nil {
 		return CollectionManagerStats{}
@@ -2297,6 +2338,16 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	pendingRootRuns := bufferedIndexedRootRunCount(domain)
 	stats.PendingRootRuns = pendingRootRuns
 	stats.PendingIndexedFlushUnits = len(domain.indexedPublishingUnits) + len(domain.indexedFlushUnits)
+	stats.PendingIndexedRawDocumentBytes = domain.rawDocumentBytes
+	stats.PendingIndexedPublicationBytes = domain.publicationBytes
+	for _, unit := range domain.indexedPublishingUnits {
+		stats.PendingIndexedRawDocumentBytes = saturatingAddNonNegativeInt64(stats.PendingIndexedRawDocumentBytes, unit.rawDocumentBytes)
+		stats.PendingIndexedPublicationBytes = saturatingAddNonNegativeInt64(stats.PendingIndexedPublicationBytes, unit.publicationBytes)
+	}
+	for _, unit := range domain.indexedFlushUnits {
+		stats.PendingIndexedRawDocumentBytes = saturatingAddNonNegativeInt64(stats.PendingIndexedRawDocumentBytes, unit.rawDocumentBytes)
+		stats.PendingIndexedPublicationBytes = saturatingAddNonNegativeInt64(stats.PendingIndexedPublicationBytes, unit.publicationBytes)
+	}
 	stats.OverlayMutableDocuments = domain.mutableCount
 	stats.OverlayQueuedIndexedFlushUnits = len(domain.indexedFlushUnits)
 	stats.OverlayActiveIndexedFlushUnits = len(domain.indexedPublishingUnits)
@@ -5401,7 +5452,7 @@ func isDefaultIndexedWriteMemtableMaxDocuments(opts CollectionOptions) bool {
 		opts.BufferedIndexedWriteMaxDocuments == DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
 }
 
-func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan, columnDocuments []columnWriteDocument, commandWALStageIntent *backenddb.CommandWALIntent, rawStageLocked bool, releaseCommandWALRawStage func()) (elapsed time.Duration, err error) {
+func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan, columnDocuments []columnWriteDocument, preparedTextInserts []preparedTextIndexInsert, columnCommandBytes int64, commandWALStageIntent *backenddb.CommandWALIntent, rawStageLocked bool, releaseCommandWALRawStage func()) (elapsed time.Duration, err error) {
 	domain := c.writeDomain
 	if domain == nil {
 		return 0, errors.New("collections: missing write domain")
@@ -5413,7 +5464,13 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		if len(columnDocuments) != len(plan.resultIDs) {
 			return 0, fmt.Errorf("collections: buffered typed-column insert documents=%d rows=%d", len(columnDocuments), len(plan.resultIDs))
 		}
+		if len(catalog.meta.TextIndexes) > 0 {
+			if err := validatePreparedTextIndexInserts(catalog.meta, columnDocuments, preparedTextInserts); err != nil {
+				return 0, err
+			}
+		}
 	}
+	rawDocumentBytes, publicationBytes := indexedPublicationPayloadBytes(columnDocuments, preparedTextInserts)
 	writeOptions := catalog.meta.Options
 	var unlockCommandWALRawStage func()
 	if releaseCommandWALRawStage == nil {
@@ -5509,7 +5566,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		return 0, err
 	}
 	if plan.directBufferedInsert != nil {
-		return c.bufferDirectIndexedInsertPlanLocked(domain, catalog, plan, columnDocuments, commandWALLSN, releaseCommandWALRawStage)
+		return c.bufferDirectIndexedInsertPlanLocked(domain, catalog, plan, columnDocuments, preparedTextInserts, columnCommandBytes, rawDocumentBytes, publicationBytes, commandWALLSN, releaseCommandWALRawStage)
 	}
 	autoFlushEnabled := bufferedIndexedAutoFlushEnabled(writeOptions)
 	freezeMutableIndexedRunMapsLocked(domain)
@@ -5588,6 +5645,10 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, len(plan.resultIDs))
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
 	domain.columnDocuments = append(domain.columnDocuments, columnDocuments...)
+	appendPreparedTextIndexInserts(&domain.preparedTextInserts, preparedTextInserts)
+	domain.columnCommandBytes = saturatingAddNonNegativeInt64(domain.columnCommandBytes, columnCommandBytes)
+	domain.rawDocumentBytes = saturatingAddNonNegativeInt64(domain.rawDocumentBytes, rawDocumentBytes)
+	domain.publicationBytes = saturatingAddNonNegativeInt64(domain.publicationBytes, publicationBytes)
 	domain.indexedDeletesOnly = false
 	domain.writeGeneration++
 	domain.notePrimaryWriteKeysLocked(plan.resultIDs, domain.writeGeneration)
@@ -5619,7 +5680,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	return 0, nil
 }
 
-func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWriteDomain, catalog *collectionCatalog, plan *insertBatchPlan, columnDocuments []columnWriteDocument, commandWALLSN uint64, releaseCommandWALRawStage func()) (time.Duration, error) {
+func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWriteDomain, catalog *collectionCatalog, plan *insertBatchPlan, columnDocuments []columnWriteDocument, preparedTextInserts []preparedTextIndexInsert, columnCommandBytes, rawDocumentBytes, publicationBytes int64, commandWALLSN uint64, releaseCommandWALRawStage func()) (time.Duration, error) {
 	direct := plan.directBufferedInsert
 	if direct == nil {
 		return 0, nil
@@ -5797,6 +5858,10 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, len(plan.resultIDs))
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, direct.stagedBytes)
 	domain.columnDocuments = append(domain.columnDocuments, columnDocuments...)
+	appendPreparedTextIndexInserts(&domain.preparedTextInserts, preparedTextInserts)
+	domain.columnCommandBytes = saturatingAddNonNegativeInt64(domain.columnCommandBytes, columnCommandBytes)
+	domain.rawDocumentBytes = saturatingAddNonNegativeInt64(domain.rawDocumentBytes, rawDocumentBytes)
+	domain.publicationBytes = saturatingAddNonNegativeInt64(domain.publicationBytes, publicationBytes)
 	domain.writeGeneration++
 	domain.notePrimaryWriteKeysLocked(plan.primaryKeys, domain.writeGeneration)
 	if rollbackOnError {
@@ -5856,6 +5921,10 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.rootValueArenas = nil
 	domain.primaryOverlay = nil
 	domain.columnDocuments = nil
+	domain.preparedTextInserts = nil
+	domain.columnCommandBytes = 0
+	domain.rawDocumentBytes = 0
+	domain.publicationBytes = 0
 	domain.rootRunCount = 0
 	domain.indexedDeletesOnly = false
 	domain.mutableCount = 0
@@ -7157,6 +7226,10 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		indexedMutableCommandWALFirst: domain.indexedMutableCommandWALFirst,
 		indexedMutableCommandWALLast:  domain.indexedMutableCommandWALLast,
 		columnDocuments:               append([]columnWriteDocument(nil), domain.columnDocuments...),
+		preparedTextInserts:           clonePreparedTextIndexInserts(domain.preparedTextInserts),
+		columnCommandBytes:            domain.columnCommandBytes,
+		rawDocumentBytes:              domain.rawDocumentBytes,
+		publicationBytes:              domain.publicationBytes,
 	}
 }
 
@@ -7198,6 +7271,10 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.indexedMutableCommandWALFirst = checkpoint.indexedMutableCommandWALFirst
 	domain.indexedMutableCommandWALLast = checkpoint.indexedMutableCommandWALLast
 	domain.columnDocuments = checkpoint.columnDocuments
+	domain.preparedTextInserts = checkpoint.preparedTextInserts
+	domain.columnCommandBytes = checkpoint.columnCommandBytes
+	domain.rawDocumentBytes = checkpoint.rawDocumentBytes
+	domain.publicationBytes = checkpoint.publicationBytes
 	if collectionCommandWALDomainPendingLocked(domain) {
 		domain.reserveCommandWALCoordinatorOwnerLocked()
 	} else {
@@ -7229,18 +7306,22 @@ func cloneIndexedFlushUnits(in []indexedFlushUnit) []indexedFlushUnit {
 	out := make([]indexedFlushUnit, len(in))
 	for i, unit := range in {
 		out[i] = indexedFlushUnit{
-			rootRuns:        cloneTableRunMap(unit.rootRuns),
-			rootPolicies:    cloneRootPolicyMap(unit.rootPolicies),
-			rootBaseIDs:     cloneUint64Map(unit.rootBaseIDs),
-			uniqueValueRuns: cloneTableRunMap(unit.uniqueValueRuns),
-			arenaRefs:       cloneArenaRefs(unit.arenaRefs),
-			primaryOverlay:  cloneBufferedPrimaryOverlay(unit.primaryOverlay),
-			docCount:        unit.docCount,
-			byteCount:       unit.byteCount,
-			rootRunCount:    unit.rootRunCount,
-			columnDocuments: append([]columnWriteDocument(nil), unit.columnDocuments...),
-			commandWALFirst: unit.commandWALFirst,
-			commandWALLast:  unit.commandWALLast,
+			rootRuns:            cloneTableRunMap(unit.rootRuns),
+			rootPolicies:        cloneRootPolicyMap(unit.rootPolicies),
+			rootBaseIDs:         cloneUint64Map(unit.rootBaseIDs),
+			uniqueValueRuns:     cloneTableRunMap(unit.uniqueValueRuns),
+			arenaRefs:           cloneArenaRefs(unit.arenaRefs),
+			primaryOverlay:      cloneBufferedPrimaryOverlay(unit.primaryOverlay),
+			docCount:            unit.docCount,
+			byteCount:           unit.byteCount,
+			rootRunCount:        unit.rootRunCount,
+			columnDocuments:     append([]columnWriteDocument(nil), unit.columnDocuments...),
+			preparedTextInserts: clonePreparedTextIndexInserts(unit.preparedTextInserts),
+			columnCommandBytes:  unit.columnCommandBytes,
+			rawDocumentBytes:    unit.rawDocumentBytes,
+			publicationBytes:    unit.publicationBytes,
+			commandWALFirst:     unit.commandWALFirst,
+			commandWALLast:      unit.commandWALLast,
 		}
 	}
 	return out
@@ -9325,7 +9406,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		columnInput = columnWritePublishInput{
 			meta: work.meta, catalog: work.catalog, baseCommitSeq: work.baseCommitSeq, baseSystemRoot: work.baseSystemRoot,
 			rootNames: cloneColumnPublishRootNames(work.rootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(work.rootBaseIDs),
-			operation: ColumnPublishOperationInsert, documents: work.flushUnit.columnDocuments, rows: len(work.flushUnit.columnDocuments),
+			operation: ColumnPublishOperationInsert, documents: work.flushUnit.columnDocuments, rows: len(work.flushUnit.columnDocuments), commandBytes: work.flushUnit.columnCommandBytes,
 		}
 		columnInput, err = prepareColumnWritePublishInputBeforeCommandWAL(columnInput)
 		if err == nil {
@@ -9920,16 +10001,20 @@ func (c *Collection) appendBufferedTextIndexFlushDeltas(pin *backenddb.Snapshot,
 	if len(meta.TextIndexes) == 0 {
 		return func() {}, nil
 	}
-	if len(flushUnit.columnDocuments) == 0 {
-		return nil, errors.New("collections: buffered text-index flush missing source documents")
-	}
 	plannerOptions, err := collectionPlannerOptionsForDB(c.db, meta)
 	if err != nil {
 		return nil, err
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, pin, catalog)
 	var deferredTextPlan insertBatchPlan
-	if err := appendTextIndexInsertDocumentsDeltas(pin, catalog, plannerOptions, flushUnit.columnDocuments, &deferredTextPlan); err != nil {
+	if len(flushUnit.preparedTextInserts) != 0 {
+		err = appendPreparedTextIndexInsertDeltas(pin, catalog, plannerOptions, flushUnit.columnDocuments, flushUnit.preparedTextInserts, &deferredTextPlan)
+	} else if len(flushUnit.columnDocuments) != 0 {
+		err = appendTextIndexInsertDocumentsDeltas(pin, catalog, plannerOptions, flushUnit.columnDocuments, &deferredTextPlan)
+	} else {
+		err = errors.New("collections: buffered text-index flush missing source documents")
+	}
+	if err != nil {
 		return nil, err
 	}
 	if flushUnit.rootRuns == nil {
@@ -10020,6 +10105,10 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 		domain.rootValueArenas = nil
 		domain.primaryOverlay = nil
 		domain.columnDocuments = nil
+		domain.preparedTextInserts = nil
+		domain.columnCommandBytes = 0
+		domain.rawDocumentBytes = 0
+		domain.publicationBytes = 0
 		domain.count = 0
 		domain.indexedDeletesOnly = false
 		domain.bufferedBytes = 0
@@ -10146,6 +10235,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 					operation:        ColumnPublishOperationInsert,
 					documents:        flushUnit.columnDocuments,
 					rows:             len(flushUnit.columnDocuments),
+					commandBytes:     flushUnit.columnCommandBytes,
 				})
 			} else if commandWALIntent != nil {
 				newSystemRoot, rootIDs, err = c.publishBufferedOrderedRootDeltaBatchGroupWithCommandWAL(ordered, preflight, commandWALIntent, rawPublishLocked, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -10192,6 +10282,10 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	domain.rootValueArenas = nil
 	domain.primaryOverlay = nil
 	domain.columnDocuments = nil
+	domain.preparedTextInserts = nil
+	domain.columnCommandBytes = 0
+	domain.rawDocumentBytes = 0
+	domain.publicationBytes = 0
 	domain.rootRunCount = 0
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil
@@ -10272,17 +10366,21 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	}
 	freezeMutableIndexedRunMapsLocked(domain)
 	unit := indexedFlushUnit{
-		rootRuns:        domain.rootRuns,
-		rootPolicies:    domain.rootPolicies,
-		rootBaseIDs:     domain.rootBaseIDs,
-		uniqueValueRuns: domain.uniqueValueRuns,
-		arenaRefs:       domain.rootValueArenas,
-		docCount:        domain.mutableCount,
-		byteCount:       domain.mutableBytes,
-		rootRunCount:    domain.rootRunCount,
-		columnDocuments: domain.columnDocuments,
-		commandWALFirst: domain.indexedMutableCommandWALFirst,
-		commandWALLast:  domain.indexedMutableCommandWALLast,
+		rootRuns:            domain.rootRuns,
+		rootPolicies:        domain.rootPolicies,
+		rootBaseIDs:         domain.rootBaseIDs,
+		uniqueValueRuns:     domain.uniqueValueRuns,
+		arenaRefs:           domain.rootValueArenas,
+		docCount:            domain.mutableCount,
+		byteCount:           domain.mutableBytes,
+		rootRunCount:        domain.rootRunCount,
+		columnDocuments:     domain.columnDocuments,
+		preparedTextInserts: domain.preparedTextInserts,
+		columnCommandBytes:  domain.columnCommandBytes,
+		rawDocumentBytes:    domain.rawDocumentBytes,
+		publicationBytes:    domain.publicationBytes,
+		commandWALFirst:     domain.indexedMutableCommandWALFirst,
+		commandWALLast:      domain.indexedMutableCommandWALLast,
 	}
 	domain.indexedFlushUnits = append(domain.indexedFlushUnits, unit)
 	domain.rootRuns = nil
@@ -10296,6 +10394,10 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.columnDocuments = nil
+	domain.preparedTextInserts = nil
+	domain.columnCommandBytes = 0
+	domain.rawDocumentBytes = 0
+	domain.publicationBytes = 0
 	domain.indexedMutableCommandWALFirst = 0
 	domain.indexedMutableCommandWALLast = 0
 	return true
@@ -10311,18 +10413,22 @@ func rotateIndexedMutableToFlushUnitForAsyncLocked(domain *collectionWriteDomain
 		rootRunCount = saturatingAddNonNegativeInt(rootRunCount, 1)
 	}
 	unit := indexedFlushUnit{
-		rootRuns:        domain.rootRuns,
-		rootPolicies:    domain.rootPolicies,
-		rootBaseIDs:     domain.rootBaseIDs,
-		uniqueValueRuns: domain.uniqueValueRuns,
-		arenaRefs:       domain.rootValueArenas,
-		primaryOverlay:  domain.primaryOverlay,
-		docCount:        domain.mutableCount,
-		byteCount:       domain.mutableBytes,
-		rootRunCount:    rootRunCount,
-		columnDocuments: domain.columnDocuments,
-		commandWALFirst: domain.indexedMutableCommandWALFirst,
-		commandWALLast:  domain.indexedMutableCommandWALLast,
+		rootRuns:            domain.rootRuns,
+		rootPolicies:        domain.rootPolicies,
+		rootBaseIDs:         domain.rootBaseIDs,
+		uniqueValueRuns:     domain.uniqueValueRuns,
+		arenaRefs:           domain.rootValueArenas,
+		primaryOverlay:      domain.primaryOverlay,
+		docCount:            domain.mutableCount,
+		byteCount:           domain.mutableBytes,
+		rootRunCount:        rootRunCount,
+		columnDocuments:     domain.columnDocuments,
+		preparedTextInserts: domain.preparedTextInserts,
+		columnCommandBytes:  domain.columnCommandBytes,
+		rawDocumentBytes:    domain.rawDocumentBytes,
+		publicationBytes:    domain.publicationBytes,
+		commandWALFirst:     domain.indexedMutableCommandWALFirst,
+		commandWALLast:      domain.indexedMutableCommandWALLast,
 	}
 	domain.indexedFlushUnits = append(domain.indexedFlushUnits, unit)
 	domain.rootRuns = nil
@@ -10337,6 +10443,10 @@ func rotateIndexedMutableToFlushUnitForAsyncLocked(domain *collectionWriteDomain
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.columnDocuments = nil
+	domain.preparedTextInserts = nil
+	domain.columnCommandBytes = 0
+	domain.rawDocumentBytes = 0
+	domain.publicationBytes = 0
 	domain.indexedMutableCommandWALFirst = 0
 	domain.indexedMutableCommandWALLast = 0
 	return true
@@ -10472,14 +10582,19 @@ func mergedIndexedFlushUnitLocked(domain *collectionWriteDomain) indexedFlushUni
 		mergeIndexedFlushUnit(&unit, pending)
 	}
 	mergeIndexedFlushUnit(&unit, indexedFlushUnit{
-		rootRuns:        domain.rootRuns,
-		rootPolicies:    domain.rootPolicies,
-		rootBaseIDs:     domain.rootBaseIDs,
-		uniqueValueRuns: domain.uniqueValueRuns,
-		arenaRefs:       domain.rootValueArenas,
-		rootRunCount:    domain.rootRunCount,
-		commandWALFirst: domain.indexedMutableCommandWALFirst,
-		commandWALLast:  domain.indexedMutableCommandWALLast,
+		rootRuns:            domain.rootRuns,
+		rootPolicies:        domain.rootPolicies,
+		rootBaseIDs:         domain.rootBaseIDs,
+		uniqueValueRuns:     domain.uniqueValueRuns,
+		arenaRefs:           domain.rootValueArenas,
+		rootRunCount:        domain.rootRunCount,
+		columnDocuments:     domain.columnDocuments,
+		preparedTextInserts: domain.preparedTextInserts,
+		columnCommandBytes:  domain.columnCommandBytes,
+		rawDocumentBytes:    domain.rawDocumentBytes,
+		publicationBytes:    domain.publicationBytes,
+		commandWALFirst:     domain.indexedMutableCommandWALFirst,
+		commandWALLast:      domain.indexedMutableCommandWALLast,
 	})
 	if len(unit.rootRuns) == 0 {
 		unit.rootRuns = nil
@@ -10517,14 +10632,19 @@ func mergedIndexedFlushUnitForSyncLocked(meta CollectionMeta, domain *collection
 		return indexedFlushUnit{}, nil, err
 	}
 	mergeIndexedFlushUnit(&unit, indexedFlushUnit{
-		rootRuns:        domain.rootRuns,
-		rootPolicies:    domain.rootPolicies,
-		rootBaseIDs:     domain.rootBaseIDs,
-		uniqueValueRuns: domain.uniqueValueRuns,
-		arenaRefs:       domain.rootValueArenas,
-		rootRunCount:    domain.rootRunCount,
-		commandWALFirst: domain.indexedMutableCommandWALFirst,
-		commandWALLast:  domain.indexedMutableCommandWALLast,
+		rootRuns:            domain.rootRuns,
+		rootPolicies:        domain.rootPolicies,
+		rootBaseIDs:         domain.rootBaseIDs,
+		uniqueValueRuns:     domain.uniqueValueRuns,
+		arenaRefs:           domain.rootValueArenas,
+		rootRunCount:        domain.rootRunCount,
+		columnDocuments:     domain.columnDocuments,
+		preparedTextInserts: domain.preparedTextInserts,
+		columnCommandBytes:  domain.columnCommandBytes,
+		rawDocumentBytes:    domain.rawDocumentBytes,
+		publicationBytes:    domain.publicationBytes,
+		commandWALFirst:     domain.indexedMutableCommandWALFirst,
+		commandWALLast:      domain.indexedMutableCommandWALLast,
 	})
 	if len(unit.rootRuns) == 0 {
 		unit.rootRuns = nil
@@ -10560,6 +10680,10 @@ func mergeIndexedFlushUnit(dst *indexedFlushUnit, src indexedFlushUnit) {
 	dst.byteCount = saturatingAddNonNegativeInt64(dst.byteCount, src.byteCount)
 	dst.rootRunCount = saturatingAddNonNegativeInt(dst.rootRunCount, indexedFlushUnitRootRunCount(src))
 	dst.columnDocuments = append(dst.columnDocuments, src.columnDocuments...)
+	appendPreparedTextIndexInserts(&dst.preparedTextInserts, src.preparedTextInserts)
+	dst.columnCommandBytes = saturatingAddNonNegativeInt64(dst.columnCommandBytes, src.columnCommandBytes)
+	dst.rawDocumentBytes = saturatingAddNonNegativeInt64(dst.rawDocumentBytes, src.rawDocumentBytes)
+	dst.publicationBytes = saturatingAddNonNegativeInt64(dst.publicationBytes, src.publicationBytes)
 	if src.commandWALFirst != 0 {
 		if dst.commandWALFirst == 0 {
 			dst.commandWALFirst = src.commandWALFirst
@@ -11237,7 +11361,7 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 	updateInsertBatchBaseRootIDs(rootNames, baseRootIDs, currentCatalog)
 	pinCommitSeq := snapshotCommitSeq(pin)
 	pinSystemRoot := snapshotSystemRoot(pin)
-	bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, nil, nil, false, nil)
+	bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, nil, nil, 0, nil, false, nil)
 	_ = pin.Close()
 	if err != nil {
 		resetCollectionRunTables(plan.runs)
@@ -11553,6 +11677,8 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 		var bufferedCommandWALIntent *backenddb.CommandWALIntent
 		var columnDocuments []columnWriteDocument
+		var preparedTextInserts []preparedTextIndexInsert
+		var columnCommandBytes int64
 		if commandWALBufferedMode {
 			docs, err := collectionDocumentsFromInsertPlan(plan, collectionPrimaryRootName(meta.Name))
 			if err != nil {
@@ -11591,12 +11717,22 @@ func (c *Collection) insertBatchOnceWithLockState(
 					columnDocuments[i].declaredValuesReady = true
 				}
 				plan.stats.ColumnPublishDocumentExtraction += prepared.documentExtraction
+				preparedTextInserts, err = prepareTextIndexInsertDocuments(meta, plannerOptions, columnDocuments)
+				if err != nil {
+					closePlanningSnapshot()
+					resetCollectionRunTables(plan.runs)
+					return nil, err
+				}
+				columnCommandBytes = columnWriteDocumentsBytes(columnDocuments)
 			}
 			bufferedCommandWALIntent, err = c.newCollectionInsertCommandWALIntent(docs, nil)
 			if err != nil {
 				closePlanningSnapshot()
 				resetCollectionRunTables(plan.runs)
 				return nil, err
+			}
+			for i := range columnDocuments {
+				columnDocuments[i].Document = nil
 			}
 		}
 		var unlockCommandWALRawStage func()
@@ -11630,7 +11766,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			}
 			defer unlockCommandWALStage()
 		}
-		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, columnDocuments, bufferedCommandWALIntent, bufferedCommandWALIntent != nil && c.db != nil, releaseCommandWALRawStage)
+		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, columnDocuments, preparedTextInserts, columnCommandBytes, bufferedCommandWALIntent, bufferedCommandWALIntent != nil && c.db != nil, releaseCommandWALRawStage)
 		_ = pin.Close()
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
@@ -19969,6 +20105,10 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.rootValueArenas = nil
 	domain.primaryOverlay = nil
 	domain.columnDocuments = nil
+	domain.preparedTextInserts = nil
+	domain.columnCommandBytes = 0
+	domain.rawDocumentBytes = 0
+	domain.publicationBytes = 0
 	retainPrimaryDocumentCacheForCatalogLocked(domain, catalog.meta, systemRoot)
 	domain.rootRunCount = 0
 	domain.indexedDeletesOnly = false

@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"sort"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -14,7 +15,40 @@ type textDocumentMutation struct {
 	oldDocument []byte
 	deleteOld   bool
 	newDocument []byte
+	preparedNew *textDocumentStateValue
 	setNew      bool
+}
+
+type preparedTextIndexInsert struct {
+	indexName string
+	states    []textDocumentStateValue
+}
+
+func appendPreparedTextIndexInserts(dst *[]preparedTextIndexInsert, src []preparedTextIndexInsert) {
+	if len(src) == 0 {
+		return
+	}
+	if len(*dst) == 0 {
+		*dst = clonePreparedTextIndexInserts(src)
+		return
+	}
+	for index := range src {
+		(*dst)[index].states = append((*dst)[index].states, src[index].states...)
+	}
+}
+
+func clonePreparedTextIndexInserts(in []preparedTextIndexInsert) []preparedTextIndexInsert {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]preparedTextIndexInsert, len(in))
+	for index := range in {
+		out[index] = preparedTextIndexInsert{
+			indexName: in[index].indexName,
+			states:    append([]textDocumentStateValue(nil), in[index].states...),
+		}
+	}
+	return out
 }
 
 type textStatsDelta struct {
@@ -110,7 +144,7 @@ func appendSingleTextIndexMutationDeltas(
 			statsDelta.addState(oldState, -1)
 		}
 		if mutation.setNew {
-			newState, newAnalysis, err := analyzeTextIndexStoredDocumentWithAnalysis(def, mutation.newDocument, opts)
+			newState, newAnalysis, err := textMutationNewStateAndAnalysis(def, mutation, opts)
 			if err != nil {
 				return err
 			}
@@ -235,7 +269,7 @@ func appendSingleTextV2IndexMutationDeltas(
 			}
 		}
 		if mutation.setNew {
-			newState, newAnalysis, err = analyzeTextIndexStoredDocumentWithAnalysis(def, mutation.newDocument, opts)
+			newState, newAnalysis, err = textMutationNewStateAndAnalysis(def, mutation, opts)
 			if err != nil {
 				return err
 			}
@@ -600,6 +634,13 @@ func analyzeTextIndexStoredDocumentWithAnalysis(def TextIndexDefinition, documen
 	return textDocumentStateValueFromAnalysis(analysis), analysis, nil
 }
 
+func textMutationNewStateAndAnalysis(def TextIndexDefinition, mutation textDocumentMutation, opts collectionOptions) (textDocumentStateValue, textAnalyzedDocument, error) {
+	if mutation.preparedNew != nil {
+		return *mutation.preparedNew, textAnalysisFromDocumentState(*mutation.preparedNew), nil
+	}
+	return analyzeTextIndexStoredDocumentWithAnalysis(def, mutation.newDocument, opts)
+}
+
 func loadTextDocumentStateForMutation(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, documentID, fallbackDocument []byte, opts collectionOptions) (textDocumentStateValue, error) {
 	stateRootName := collectionTextStateRootName(catalog.meta.Name, def.Name)
 	stateKey := encodeTextStateKey(documentID)
@@ -894,6 +935,82 @@ func appendTextIndexInsertDocumentsDeltas(snap *backenddb.Snapshot, catalog *col
 		})
 	}
 	return appendTextIndexInsertMutationDeltas(snap, catalog, opts, mutations, plan)
+}
+
+func prepareTextIndexInsertDocuments(meta CollectionMeta, opts collectionOptions, documents []columnWriteDocument) ([]preparedTextIndexInsert, error) {
+	if len(meta.TextIndexes) == 0 {
+		return nil, nil
+	}
+	if len(documents) == 0 {
+		return nil, errors.New("collections: buffered text-index insert missing source documents")
+	}
+	prepared := make([]preparedTextIndexInsert, len(meta.TextIndexes))
+	for index := range meta.TextIndexes {
+		def := meta.TextIndexes[index]
+		prepared[index] = preparedTextIndexInsert{
+			indexName: def.Name,
+			states:    make([]textDocumentStateValue, len(documents)),
+		}
+		for row := range documents {
+			state, err := analyzeTextIndexStoredDocument(def, documents[row].Document, opts)
+			if err != nil {
+				return nil, err
+			}
+			prepared[index].states[row] = state
+		}
+	}
+	return prepared, nil
+}
+
+func validatePreparedTextIndexInserts(meta CollectionMeta, documents []columnWriteDocument, prepared []preparedTextIndexInsert) error {
+	if len(meta.TextIndexes) != len(prepared) {
+		return fmt.Errorf("collections: prepared text indexes=%d want %d", len(prepared), len(meta.TextIndexes))
+	}
+	for index := range prepared {
+		if prepared[index].indexName != meta.TextIndexes[index].Name {
+			return fmt.Errorf("collections: prepared text index %d name=%q want %q", index, prepared[index].indexName, meta.TextIndexes[index].Name)
+		}
+		if len(prepared[index].states) != len(documents) {
+			return fmt.Errorf("collections: prepared text index %q documents=%d want %d", prepared[index].indexName, len(prepared[index].states), len(documents))
+		}
+	}
+	return nil
+}
+
+func appendPreparedTextIndexInsertDeltas(snap *backenddb.Snapshot, catalog *collectionCatalog, opts collectionOptions, documents []columnWriteDocument, prepared []preparedTextIndexInsert, plan *insertBatchPlan) error {
+	if plan == nil || len(prepared) == 0 {
+		return nil
+	}
+	if err := validatePreparedTextIndexInserts(catalog.meta, documents, prepared); err != nil {
+		return err
+	}
+	rootNames := make([]string, 0, len(prepared)*3)
+	baseRootIDs := make(map[string]uint64, len(prepared)*3)
+	policies := make([]backenddb.OrderedRootStoragePolicy, 0, len(prepared)*3)
+	deltaTables := make([]memtable.Table, 0, len(prepared)*3)
+	for index, def := range catalog.meta.TextIndexes {
+		mutations := make([]textDocumentMutation, len(documents))
+		for row := range documents {
+			mutations[row] = textDocumentMutation{
+				documentID:  documents[row].ID,
+				preparedNew: &prepared[index].states[row],
+				setNew:      true,
+			}
+		}
+		if err := appendSingleTextIndexMutationDeltas(snap, catalog, opts, def, mutations, &rootNames, baseRootIDs, &policies, &deltaTables); err != nil {
+			resetCollectionTables(deltaTables)
+			return err
+		}
+	}
+	for index, rootName := range rootNames {
+		plan.runs = append(plan.runs, collectionRootRun{
+			name:          rootName,
+			table:         deltaTables[index],
+			storagePolicy: policies[index],
+		})
+	}
+	plan.stats.Runs = len(plan.runs)
+	return nil
 }
 
 func appendTextIndexInsertMutationDeltas(snap *backenddb.Snapshot, catalog *collectionCatalog, opts collectionOptions, mutations []textDocumentMutation, plan *insertBatchPlan) error {
