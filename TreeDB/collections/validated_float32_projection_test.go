@@ -311,6 +311,21 @@ func TestValidateTrustedFloat32ProjectionMetaRejectsSchemaDrift(t *testing.T) {
 	if err := validateTrustedFloat32ProjectionMeta(nonColumn, retainedProjection); err != nil {
 		t.Fatalf("trusted retained projection rejected exact non-column JSON metadata: %v", err)
 	}
+	scalarIndexed := copyCollectionMeta(nonColumn)
+	scalarIndexed.Indexes = []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}}
+	if err := validateTrustedFloat32ProjectionMeta(scalarIndexed, retainedProjection); err == nil {
+		t.Fatal("trusted retained projection accepted scalar-index metadata")
+	}
+	textIndexedColumn := copyCollectionMeta(nonColumn)
+	textIndexedColumn.TextIndexes = []TextIndexDefinition{{Name: "embedding_text", Fields: []TextIndexField{{Field: "embedding"}}}}
+	if err := validateTrustedFloat32ProjectionMeta(textIndexedColumn, retainedProjection); err == nil {
+		t.Fatal("trusted retained projection accepted overlapping text-index metadata")
+	}
+	textIndexedResidual := copyCollectionMeta(nonColumn)
+	textIndexedResidual.TextIndexes = []TextIndexDefinition{{Name: "content_text", Fields: []TextIndexField{{Field: "content"}}}}
+	if err := validateTrustedFloat32ProjectionMeta(textIndexedResidual, retainedProjection); err != nil {
+		t.Fatalf("trusted retained projection rejected residual text-index metadata: %v", err)
+	}
 	implicitEncoding := copyCollectionMeta(nonColumn)
 	implicitEncoding.Options.ColumnStore.RetainedPayloadEncoding = ""
 	if err := validateTrustedFloat32ProjectionMeta(implicitEncoding, retainedProjection); err == nil {

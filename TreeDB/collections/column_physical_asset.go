@@ -102,6 +102,18 @@ func validateTrustedFloat32ProjectionMeta(meta CollectionMeta, projection *trust
 	if projection.retainedJSON != nil && strings.Contains(projection.column, ".") {
 		return errors.New("collections: validated float32 projection retained JSON requires a top-level column")
 	}
+	if projection.retainedJSON != nil {
+		if len(meta.Indexes) != 0 {
+			return errors.New("collections: validated float32 projection retained JSON does not support scalar indexes")
+		}
+		for _, index := range meta.TextIndexes {
+			for _, field := range index.Fields {
+				if field.Field == projection.column || strings.HasPrefix(field.Field, projection.column+".") {
+					return fmt.Errorf("collections: validated float32 projection retained JSON column %q overlaps text index %q", projection.column, index.Name)
+				}
+			}
+		}
+	}
 	column := cfg.Columns[0]
 	owner, err := columnStoreColumnOwner(column)
 	if err != nil {
