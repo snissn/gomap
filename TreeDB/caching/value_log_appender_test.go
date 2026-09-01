@@ -500,6 +500,79 @@ func TestPrepareAppendFramesBlockBackoffPersistsAcrossWorkerTasks(t *testing.T) 
 	}
 }
 
+func TestPrepareAppendFramesCloseWaitsForSubmittedTasks(t *testing.T) {
+	db := &DB{closeCh: make(chan struct{}), lanes: make([]lane, 1)}
+	l := &db.lanes[0]
+	l.vlogPrepMaxWorkers = 2
+	l.vlogPrepWorkers = 2
+	l.vlogPrepCh = make(chan vlogDictPrepareTask, vlogDictPrepBuffer)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	released := false
+	stop := make(chan struct{})
+	consumerDone := make(chan struct{})
+	go func() {
+		defer close(consumerDone)
+		first := true
+		for {
+			select {
+			case task := <-l.vlogPrepCh:
+				if first {
+					first = false
+					close(started)
+					<-release
+				}
+				task.out <- vlogDictPrepareResult{fi: task.fi, err: errWALClosed}
+			case <-stop:
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		if !released {
+			close(release)
+		}
+		close(stop)
+		<-consumerDone
+	})
+
+	records := []valuelog.Record{
+		{RID: 1, Value: bytes.Repeat([]byte("a"), 128<<10)},
+		{RID: 2, Value: bytes.Repeat([]byte("b"), 128<<10)},
+	}
+	done := make(chan error, 1)
+	go func() {
+		prepared, _, err := db.prepareAppendFrames(
+			l, 0, nil, records, 1, 256<<10, vlogWriteBlock, false,
+			valuelog.BlockCodecZSTD, 0, 0, 0, time.Time{},
+		)
+		if prepared != nil {
+			releasePreparedDictFrames(prepared)
+			putVlogPreparedFrames(prepared)
+		}
+		done <- err
+	}()
+
+	<-started
+	close(db.closeCh)
+	select {
+	case err := <-done:
+		t.Fatalf("prepare returned before submitted task completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	released = true
+	select {
+	case err := <-done:
+		if !errors.Is(err, errWALClosed) {
+			t.Fatalf("prepare error=%v, want %v", err, errWALClosed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("prepare did not return after submitted task completed")
+	}
+}
+
 func TestCachingValueLogExternalRefFlusherEmptyIDsSyncsAllPendingLanes(t *testing.T) {
 	db := &DB{lanes: make([]lane, 2)}
 	writers := make([]*vlogDirtyOrderWriter, len(db.lanes))

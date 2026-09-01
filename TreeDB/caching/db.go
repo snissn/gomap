@@ -17228,6 +17228,22 @@ func (db *DB) prepareAppendFrames(
 	// autotune keep-policy estimates.
 	measureEncode := false
 	results := getVlogDictPrepareResults(frameCount)
+	receiveAfterClose := func() vlogDictPrepareResult {
+		for {
+			select {
+			case res := <-results:
+				return res
+			case task := <-l.vlogPrepCh:
+				// A worker may observe close immediately before a sender wins the
+				// channel race. Complete such stranded work here as closed.
+				db.publishVlogDictPrepareResult(task, vlogDictPrepareResult{
+					fi:  task.fi,
+					err: errWALClosed,
+				})
+			}
+		}
+	}
+	submitted := 0
 	for fi := 0; fi < frameCount; fi++ {
 		start := fi * k
 		end := start + k
@@ -17255,47 +17271,68 @@ func (db *DB) prepareAppendFrames(
 		}
 		select {
 		case l.vlogPrepCh <- task:
+			submitted++
 		case <-db.closeCh:
+			// Submitted workers still reference records owned by the caller. Drain
+			// them before returning so the caller can safely recycle those slices.
+			for collected := 0; collected < submitted; collected++ {
+				res := receiveAfterClose()
+				if res.bodyBuf != nil {
+					putVlogPreparedFrameBody(res.bodyBuf)
+				}
+			}
 			releasePreparedDictFrames(prepared)
 			putVlogPreparedFrames(prepared)
-			// Workers may still publish into results after close is observed; do
-			// not pool this channel on early return.
-			return nil, 0, errWALClosed
+			putVlogDictPrepareResults(results)
+			return nil, time.Since(prepStart).Nanoseconds(), errWALClosed
 		}
 	}
 
 	var firstErr error
+	closed := false
 	for collected := 0; collected < frameCount; collected++ {
-		select {
-		case res := <-results:
-			if res.err != nil {
-				if firstErr == nil {
-					firstErr = res.err
-				}
-				continue
+		var res vlogDictPrepareResult
+		if closed {
+			res = receiveAfterClose()
+		} else {
+			select {
+			case res = <-results:
+			case <-db.closeCh:
+				closed = true
+				res = receiveAfterClose()
 			}
-			start := res.fi * k
-			end := start + k
-			if end > len(records) {
-				end = len(records)
+		}
+		if res.err != nil {
+			if firstErr == nil {
+				firstErr = res.err
 			}
-			releasePreparedDictFrame(&prepared[res.fi])
-			prepared[res.fi] = preparedDictFrame{
-				start:   start,
-				end:     end,
-				body:    res.body,
-				bodyBuf: res.bodyBuf,
-				stats:   res.stats,
-			}
-		case <-db.closeCh:
-			releasePreparedDictFrames(prepared)
-			putVlogPreparedFrames(prepared)
-			// Workers may still publish into results after close is observed; do
-			// not pool this channel on early return.
-			return nil, time.Since(prepStart).Nanoseconds(), errWALClosed
+			continue
+		}
+		start := res.fi * k
+		end := start + k
+		if end > len(records) {
+			end = len(records)
+		}
+		releasePreparedDictFrame(&prepared[res.fi])
+		prepared[res.fi] = preparedDictFrame{
+			start:   start,
+			end:     end,
+			body:    res.body,
+			bodyBuf: res.bodyBuf,
+			stats:   res.stats,
 		}
 	}
 	putVlogDictPrepareResults(results)
+	if !closed {
+		select {
+		case <-db.closeCh:
+			closed = true
+		default:
+		}
+	}
+	if closed && firstErr == nil {
+		firstErr = errWALClosed
+	}
 	if firstErr != nil {
 		releasePreparedDictFrames(prepared)
 		putVlogPreparedFrames(prepared)
