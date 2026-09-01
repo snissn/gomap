@@ -3,6 +3,7 @@ package valuelog
 import (
 	"bytes"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,6 +36,8 @@ func cohereBlockRecords(count int) []Record {
 func TestWriterBlockCompressionZSTDCohereShapeRoundTrip(t *testing.T) {
 	const recordCount = 60
 	records := cohereBlockRecords(recordCount)
+	records[3].Value = nil
+	records[17].Value = []byte{}
 	path := filepath.Join(t.TempDir(), "value-000001.log")
 	w, err := NewWriter(path, page.ValueLogFileID(1))
 	if err != nil {
@@ -49,6 +52,10 @@ func TestWriterBlockCompressionZSTDCohereShapeRoundTrip(t *testing.T) {
 	if !stats.Kept || stats.StoredPayloadBytes*5 >= stats.RawPayloadBytes*3 {
 		_ = w.Close()
 		t.Fatalf("unexpected compression: %+v", stats)
+	}
+	if cap(w.rawScratch) != 0 || cap(w.blockScratch) != 0 {
+		_ = w.Close()
+		t.Fatalf("eligible parts path staged payload copies: raw=%d encoded=%d", cap(w.rawScratch), cap(w.blockScratch))
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
@@ -70,6 +77,32 @@ func TestWriterBlockCompressionZSTDCohereShapeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWriterBlockCompressionZSTDPartsFallsBackToRaw(t *testing.T) {
+	const recordCount = 60
+	records := make([]Record, recordCount)
+	rng := rand.New(rand.NewSource(1))
+	for i := range records {
+		value := make([]byte, cohereBlockValueBytes)
+		if _, err := rng.Read(value); err != nil {
+			t.Fatal(err)
+		}
+		records[i] = Record{RID: uint64(i + 1), Value: value}
+	}
+
+	w := NewWriterWithSink(io.Discard, page.ValueLogFileID(1))
+	w.SetBlockCompression(BlockCodecZSTD, true)
+	_, stats, err := w.AppendFrameWithStatsInto(0, nil, records, make([]page.ValuePtr, recordCount))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stats.Attempted || stats.Kept || stats.StoredPayloadBytes != stats.RawPayloadBytes {
+		t.Fatalf("unexpected raw fallback: %+v", stats)
+	}
+	if cap(w.blockScratch) != 0 {
+		t.Fatalf("eligible raw fallback staged encoded payload: %d", cap(w.blockScratch))
+	}
+}
+
 func BenchmarkWriterBlockCompressionZSTDCohereShape(b *testing.B) {
 	const recordCount = 60
 	records := cohereBlockRecords(recordCount)
@@ -88,7 +121,6 @@ func BenchmarkWriterBlockCompressionZSTDCohereShape(b *testing.B) {
 
 	b.ReportAllocs()
 	b.SetBytes(int64(rawBytes))
-	b.ReportMetric(float64(stats.StoredPayloadBytes)/float64(rawBytes), "stored/raw")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		base := uint64(i+1) * recordCount
@@ -99,4 +131,5 @@ func BenchmarkWriterBlockCompressionZSTDCohereShape(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+	b.ReportMetric(float64(stats.StoredPayloadBytes)/float64(rawBytes), "stored/raw")
 }
