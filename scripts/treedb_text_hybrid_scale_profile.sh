@@ -5,7 +5,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 RUN_DIR="${RUN_DIR:-/tmp/gomap_text_hybrid_profile_$(date +%Y%m%d_%H%M%S)}"
 ROWS="${ROWS:-10000}"
-PHASES="${PHASES:-load,vector,phrase,broad,maintenance,reopen}"
+PHASES="${PHASES-load,vector,phrase,broad,maintenance,reopen}"
 TIMEOUT="${TIMEOUT:-20m}"
 PROFILE_MODE="${PROFILE_MODE:-none}"
 PROFILE_PHASE="${PROFILE_PHASE:-}"
@@ -52,7 +52,8 @@ check_profile_source() {
 case "$ROWS" in 10000|100000) ;; *) echo "ROWS must be 10000 or 100000" >&2; exit 2;; esac
 case "$PROFILE_MODE" in none|runtime|alloc) ;; *) echo "PROFILE_MODE must be none, runtime, or alloc" >&2; exit 2;; esac
 if [[ "$ROWS" == 100000 && "$RUN_100K" != true ]]; then echo "100k requires RUN_100K=true after this invocation's 10k matrix" >&2; exit 2; fi
-if [[ -z "$PHASES" ]]; then echo "unknown phase: " >&2; exit 2; fi
+if [[ -z "$PHASES" ]]; then echo "PHASES must not be empty" >&2; exit 2; fi
+if [[ "$PROFILE_MODE" != none && -z "$PROFILE_PHASE" ]]; then echo "PROFILE_PHASE is required with PROFILE_MODE=$PROFILE_MODE" >&2; exit 2; fi
 IFS=',' read -ra configured_phases <<< "$PHASES"
 profile_phase_selected=false
 seen_phases=""
@@ -63,7 +64,7 @@ for phase in "${configured_phases[@]}"; do
   if [[ "$phase" == "$PROFILE_PHASE" ]]; then profile_phase_selected=true; fi
 done
 if [[ "$PROFILE_MODE" == none && -n "$PROFILE_PHASE" ]]; then echo "PROFILE_PHASE requires PROFILE_MODE=runtime or alloc" >&2; exit 2; fi
-if [[ "$PROFILE_MODE" != none || -n "$PROFILE_PHASE" ]] && [[ "$profile_phase_selected" != true ]]; then echo "PROFILE_PHASE must be selected by PHASES" >&2; exit 2; fi
+if [[ -n "$PROFILE_PHASE" && "$profile_phase_selected" != true ]]; then echo "PROFILE_PHASE must be selected by PHASES" >&2; exit 2; fi
 if ! check_profile_source; then exit 2; fi
 profile_commit=$("${controlled_git_env[@]}" git rev-parse HEAD)
 if [[ -L "$RUN_DIR" || ( -e "$RUN_DIR" && ! -d "$RUN_DIR" ) ]]; then echo "RUN_DIR must be an empty directory: $RUN_DIR" >&2; exit 2; fi
@@ -71,7 +72,9 @@ mkdir -p "$RUN_DIR"
 if (shopt -s nullglob dotglob; entries=("$RUN_DIR"/*); ((${#entries[@]}))); then echo "RUN_DIR must be empty: $RUN_DIR; use a fresh RUN_DIR" >&2; exit 2; fi
 {
   echo "commit=$profile_commit"
-  echo "command=$0 $*"
+  printf 'command='
+  printf '%q ' "$0" "$@"
+  printf '\n'
   echo "host=$(uname -a)"
   echo "go=$("${controlled_go_env[@]}" go version)"
   echo "goflags=cleared"

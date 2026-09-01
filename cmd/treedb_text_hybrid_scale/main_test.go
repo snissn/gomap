@@ -944,6 +944,20 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(invalid, "context.txt")); !os.IsNotExist(err) {
 		t.Fatalf("invalid phase wrote provenance: %v", err)
 	}
+	emptyPhases := t.TempDir()
+	if output, err := run("RUN_DIR="+emptyPhases, "PHASES=", "DRY_RUN=true"); err == nil || !strings.Contains(string(output), "PHASES must not be empty") {
+		t.Fatalf("empty phases err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(emptyPhases, "context.txt")); !os.IsNotExist(err) {
+		t.Fatalf("empty phases wrote provenance: %v", err)
+	}
+	emptyProfilePhase := t.TempDir()
+	if output, err := run("RUN_DIR="+emptyProfilePhase, "PHASES=phrase", "DRY_RUN=true", "PROFILE_MODE=runtime"); err == nil || !strings.Contains(string(output), "PROFILE_PHASE is required with PROFILE_MODE=runtime") {
+		t.Fatalf("empty profile phase err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(emptyProfilePhase, "context.txt")); !os.IsNotExist(err) {
+		t.Fatalf("empty profile phase wrote provenance: %v", err)
+	}
 	duplicate := t.TempDir()
 	if output, err := run("RUN_DIR="+duplicate, "PHASES=vector,vector", "DRY_RUN=true"); err == nil || !strings.Contains(string(output), "duplicate phase: vector") {
 		t.Fatalf("duplicate phase err=%v output=%s", err, output)
@@ -1027,9 +1041,9 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil {
 		t.Fatalf("source head: %v", err)
 	}
-	context, err := os.ReadFile(filepath.Join(gitOverrideRun, "context.txt"))
-	if err != nil || !strings.Contains(string(context), "commit="+strings.TrimSpace(string(sourceHead))) {
-		t.Fatalf("git override context=%q err=%v", context, err)
+	contextData, err := os.ReadFile(filepath.Join(gitOverrideRun, "context.txt"))
+	if err != nil || !strings.Contains(string(contextData), "commit="+strings.TrimSpace(string(sourceHead))) {
+		t.Fatalf("git override context=%q err=%v", contextData, err)
 	}
 	nonempty := t.TempDir()
 	sentinel := filepath.Join(nonempty, ".sentinel")
@@ -1049,6 +1063,10 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	command, err := os.ReadFile(filepath.Join(dryRun, "10000", "phrase", "command.txt"))
 	if err != nil || !strings.Contains(string(command), "TREEDB_TEXT_PROFILE_ROWS=10000") {
 		t.Fatalf("dry-run command=%q err=%v", command, err)
+	}
+	dryRunContext, err := os.ReadFile(filepath.Join(dryRun, "context.txt"))
+	if err != nil || !strings.Contains(string(dryRunContext), "command=scripts/treedb_text_hybrid_scale_profile.sh ") {
+		t.Fatalf("dry-run context=%q err=%v", dryRunContext, err)
 	}
 	mountGoDir := t.TempDir()
 	mountGo := filepath.Join(mountGoDir, "go")
@@ -1097,9 +1115,9 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil || !strings.Contains(string(command), "-u GOMAXPROCS -u GOGC -u GOMEMLIMIT -u GOOS -u GOARCH -u GOAMD64 -u GOARM64 -u GO386 -u GOARM -u GOMIPS -u GOMIPS64 -u GOPPC64 -u GORISCV64 -u GOWASM -u GOEXPERIMENT -u CGO_ENABLED -u TREEDB_LEAF_PAGE_CACHE_ENTRIES -u TREEDB_COLUMN_STORE_TYPED_COMPRESSION") || !strings.Contains(string(command), "-u TREEDB_DEBUG_VLOG_TIMINGS -u TREEDB_DEBUG_VLOG_TIMINGS_MIN_MS -u TREEDB_DEBUG_VLOG_TIMINGS_BUDGET") || !strings.Contains(string(command), "-u TREEDB_DEBUG_MEMTABLE_ROTATE -u TREEDB_DEBUG_MEMTABLE_ROTATE_BUDGET -u TREEDB_DEBUG_VLOG_SHAPE -u TREEDB_DEBUG_VLOG_SHAPE_DISK -u TREEDB_DEBUG_VLOG_SHAPE_INTERVAL_MS -u TREEDB_DEBUG_VLOG_SHAPE_BUDGET -u TREEDB_DEBUG_VLOG_MAINT -u TREEDB_DEBUG_VLOG_MAINT_BUDGET") || !strings.Contains(string(command), "-u TREEDB_OUTER_LEAF_READ_SAMPLE_MOD -u TREEDB_HOT_PATH_STATS") || !strings.Contains(string(command), "-u TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS") {
 		t.Fatalf("GOFLAGS command=%q err=%v", command, err)
 	}
-	context, err = os.ReadFile(filepath.Join(goFlagsDryRun, "context.txt"))
-	if err != nil || !strings.Contains(string(context), "goflags=cleared\ngoenv=off\ngomaxprocs=cleared\ngogc=cleared\ngomemlimit=cleared\ncompiler_tuning=cleared GOOS,GOARCH,GOAMD64,GOARM64,GO386,GOARM,GOMIPS,GOMIPS64,GOPPC64,GORISCV64,GOWASM,GOEXPERIMENT,CGO_ENABLED\ntreedb_performance_overrides=cleared TREEDB_LEAF_PAGE_CACHE_ENTRIES") || !strings.Contains(string(context), "TREEDB_DEBUG_VLOG_TIMINGS TREEDB_DEBUG_VLOG_TIMINGS_MIN_MS TREEDB_DEBUG_VLOG_TIMINGS_BUDGET") || !strings.Contains(string(context), "TREEDB_DEBUG_MEMTABLE_ROTATE TREEDB_DEBUG_MEMTABLE_ROTATE_BUDGET TREEDB_DEBUG_VLOG_SHAPE TREEDB_DEBUG_VLOG_SHAPE_DISK TREEDB_DEBUG_VLOG_SHAPE_INTERVAL_MS TREEDB_DEBUG_VLOG_SHAPE_BUDGET TREEDB_DEBUG_VLOG_MAINT TREEDB_DEBUG_VLOG_MAINT_BUDGET") || !strings.Contains(string(context), "TREEDB_OUTER_LEAF_READ_SAMPLE_MOD TREEDB_HOT_PATH_STATS") || !strings.Contains(string(context), "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS") {
-		t.Fatalf("GOFLAGS context=%q err=%v", context, err)
+	contextData, err = os.ReadFile(filepath.Join(goFlagsDryRun, "context.txt"))
+	if err != nil || !strings.Contains(string(contextData), "goflags=cleared\ngoenv=off\ngomaxprocs=cleared\ngogc=cleared\ngomemlimit=cleared\ncompiler_tuning=cleared GOOS,GOARCH,GOAMD64,GOARM64,GO386,GOARM,GOMIPS,GOMIPS64,GOPPC64,GORISCV64,GOWASM,GOEXPERIMENT,CGO_ENABLED\ntreedb_performance_overrides=cleared TREEDB_LEAF_PAGE_CACHE_ENTRIES") || !strings.Contains(string(contextData), "TREEDB_DEBUG_VLOG_TIMINGS TREEDB_DEBUG_VLOG_TIMINGS_MIN_MS TREEDB_DEBUG_VLOG_TIMINGS_BUDGET") || !strings.Contains(string(contextData), "TREEDB_DEBUG_MEMTABLE_ROTATE TREEDB_DEBUG_MEMTABLE_ROTATE_BUDGET TREEDB_DEBUG_VLOG_SHAPE TREEDB_DEBUG_VLOG_SHAPE_DISK TREEDB_DEBUG_VLOG_SHAPE_INTERVAL_MS TREEDB_DEBUG_VLOG_SHAPE_BUDGET TREEDB_DEBUG_VLOG_MAINT TREEDB_DEBUG_VLOG_MAINT_BUDGET") || !strings.Contains(string(contextData), "TREEDB_OUTER_LEAF_READ_SAMPLE_MOD TREEDB_HOT_PATH_STATS") || !strings.Contains(string(contextData), "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS") {
+		t.Fatalf("GOFLAGS context=%q err=%v", contextData, err)
 	}
 	runtimeDebugDryRun := t.TempDir()
 	if output, err := run("RUN_DIR="+runtimeDebugDryRun, "PHASES=phrase", "DRY_RUN=true", "PROFILE_MODE=runtime", "PROFILE_PHASE=phrase", "GODEBUG=asyncpreemptoff=1,invalidptr=0"); err != nil || !strings.Contains(string(output), "artifacts:") {
@@ -1109,9 +1127,9 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil || !strings.Contains(string(command), "GODEBUG=asyncpreemptoff=1\\,invalidptr=0") {
 		t.Fatalf("runtime GODEBUG command=%q err=%v", command, err)
 	}
-	context, err = os.ReadFile(filepath.Join(runtimeDebugDryRun, "context.txt"))
-	if err != nil || !strings.Contains(string(context), "godebug_shell_escaped=asyncpreemptoff=1\\,invalidptr=0") {
-		t.Fatalf("runtime GODEBUG context=%q err=%v", context, err)
+	contextData, err = os.ReadFile(filepath.Join(runtimeDebugDryRun, "context.txt"))
+	if err != nil || !strings.Contains(string(contextData), "godebug_shell_escaped=asyncpreemptoff=1\\,invalidptr=0") {
+		t.Fatalf("runtime GODEBUG context=%q err=%v", contextData, err)
 	}
 	allocDryRun := t.TempDir()
 	if output, err := run("RUN_DIR="+allocDryRun, "PHASES=phrase", "DRY_RUN=true", "PROFILE_MODE=alloc", "PROFILE_PHASE=phrase", "GODEBUG=foo=bar"); err != nil || !strings.Contains(string(output), "artifacts:") {
