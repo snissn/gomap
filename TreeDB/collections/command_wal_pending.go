@@ -517,7 +517,63 @@ func (domain *collectionWriteDomain) recordPendingCommandWALLSNLocked(db *backen
 	return nil
 }
 
+// recordPendingIndexedCommandWALLSNLocked assigns a buffered indexed write to
+// the mutable interval that will move intact into its flush unit.
+func (domain *collectionWriteDomain) recordPendingIndexedCommandWALLSNLocked(db *backenddb.DB, lsn uint64) error {
+	if err := domain.recordPendingCommandWALLSNLocked(db, lsn); err != nil || lsn == 0 {
+		return err
+	}
+	if domain.pendingCommandWALLast != lsn {
+		// Recovery can replay an already-applied LSN. The aggregate recorder
+		// deliberately leaves no pending range in that case, so it has no
+		// indexed unit to assign.
+		return nil
+	}
+	if domain.indexedMutableCommandWALFirst == 0 {
+		lastIndexed := indexedFlushUnitCommandWALLastLocked(domain)
+		if lastIndexed != 0 && lsn != lastIndexed+1 {
+			return fmt.Errorf("%w: indexed mutable command WAL starts at %d after indexed interval ending at %d", backenddb.ErrCommandWALAppliedLSNNonContig, lsn, lastIndexed)
+		}
+		if lastIndexed == 0 && domain.pendingCommandWALFirst != lsn {
+			return fmt.Errorf("%w: indexed mutable command WAL starts at %d after aggregate pending range beginning at %d", backenddb.ErrCommandWALAppliedLSNNonContig, lsn, domain.pendingCommandWALFirst)
+		}
+		domain.indexedMutableCommandWALFirst = lsn
+		domain.indexedMutableCommandWALLast = lsn
+	} else {
+		if lsn != domain.indexedMutableCommandWALLast+1 {
+			return fmt.Errorf("%w: indexed mutable command WAL range [%d,%d] cannot cover lsn %d", backenddb.ErrCommandWALAppliedLSNNonContig, domain.indexedMutableCommandWALFirst, domain.indexedMutableCommandWALLast, lsn)
+		}
+		domain.indexedMutableCommandWALLast = lsn
+	}
+	return nil
+}
+
+// indexedFlushUnitCommandWALLastLocked returns the tail of the already-checked
+// indexed prefix. Full structural validation remains at rotation and publish
+// boundaries; staging only needs this constant-time continuity check.
+func indexedFlushUnitCommandWALLastLocked(domain *collectionWriteDomain) uint64 {
+	if domain == nil {
+		return 0
+	}
+	if n := len(domain.indexedFlushUnits); n > 0 {
+		return domain.indexedFlushUnits[n-1].commandWALLast
+	}
+	if n := len(domain.indexedPublishingUnits); n > 0 {
+		return domain.indexedPublishingUnits[n-1].commandWALLast
+	}
+	return 0
+}
+
 func (domain *collectionWriteDomain) pendingCommandWALCoverageIntentLocked(db *backenddb.DB) (*backenddb.CommandWALIntent, uint64, error) {
+	if domain == nil {
+		return nil, 0, nil
+	}
+	return domain.pendingCommandWALCoverageIntentThroughLocked(db, domain.pendingCommandWALLast)
+}
+
+// pendingCommandWALCoverageIntentThroughLocked covers an owned prefix only;
+// later queued or mutable frames remain pending.
+func (domain *collectionWriteDomain) pendingCommandWALCoverageIntentThroughLocked(db *backenddb.DB, through uint64) (*backenddb.CommandWALIntent, uint64, error) {
 	if domain == nil || db == nil || !db.CommandWALEnabled() {
 		return nil, 0, nil
 	}
@@ -537,12 +593,56 @@ func (domain *collectionWriteDomain) pendingCommandWALCoverageIntentLocked(db *b
 	if first > current+1 {
 		return nil, 0, fmt.Errorf("%w: pending collection command WAL starts at %d after applied %d", backenddb.ErrCommandWALAppliedLSNNonContig, first, current)
 	}
-	applied := last
+	if through < first || through > last {
+		return nil, 0, fmt.Errorf("%w: pending collection command WAL range [%d,%d] cannot cover through %d", backenddb.ErrCommandWALAppliedLSNNonContig, first, last, through)
+	}
+	applied := through
 	intent, err := backenddb.NewCommandWALCoverageIntent(applied, backenddb.CommandWALLSNRange{First: current + 1, Last: applied})
 	if err != nil {
 		return nil, 0, err
 	}
 	return intent, applied, nil
+}
+
+func (domain *collectionWriteDomain) validateIndexedFlushUnitCommandWALOwnershipLocked() error {
+	if domain == nil {
+		return nil
+	}
+	var first, last uint64
+	visit := func(unit indexedFlushUnit) error {
+		unitFirst, unitLast := unit.commandWALFirst, unit.commandWALLast
+		if unitFirst == 0 && unitLast == 0 {
+			return nil
+		}
+		if unitFirst == 0 || unitLast < unitFirst || (last != 0 && unitFirst != last+1) {
+			return fmt.Errorf("%w: indexed flush command WAL interval [%d,%d] after [%d,%d]", backenddb.ErrCommandWALAppliedLSNNonContig, unitFirst, unitLast, first, last)
+		}
+		if first == 0 {
+			first = unitFirst
+		}
+		last = unitLast
+		return nil
+	}
+	for _, unit := range domain.indexedPublishingUnits {
+		if err := visit(unit); err != nil {
+			return err
+		}
+	}
+	for _, unit := range domain.indexedFlushUnits {
+		if err := visit(unit); err != nil {
+			return err
+		}
+	}
+	if err := visit(indexedFlushUnit{commandWALFirst: domain.indexedMutableCommandWALFirst, commandWALLast: domain.indexedMutableCommandWALLast}); err != nil {
+		return err
+	}
+	if first == 0 {
+		return nil
+	}
+	if domain.pendingCommandWALFirst != first || domain.pendingCommandWALLast < last {
+		return fmt.Errorf("%w: indexed flush command WAL intervals [%d,%d] do not own a pending prefix of [%d,%d]", backenddb.ErrCommandWALAppliedLSNNonContig, first, last, domain.pendingCommandWALFirst, domain.pendingCommandWALLast)
+	}
+	return nil
 }
 
 func (domain *collectionWriteDomain) clearPendingCommandWALThroughLocked(lsn uint64) {
