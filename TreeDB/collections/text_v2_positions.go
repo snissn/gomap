@@ -281,12 +281,11 @@ func addTextV2PositionEntriesForDocument(table memtable.Table, def TextIndexDefi
 // posting-block root. It caches one doc-map block while position keys advance
 // by ordinal, avoiding repeated doc-map decodes without retaining every doc.
 type textV2PositionValidation struct {
-	postings map[textV2PositionPostingValidationKey]textV2PositionPostingValidationEntry
+	postings map[string]textV2PositionPostingValidationPartition
 	docMap   *textV2DocMapBlockValue
 }
 
 type textV2PositionPostingValidationKey struct {
-	term       string
 	ordinal    uint64
 	generation uint64
 }
@@ -296,9 +295,15 @@ type textV2PositionPostingValidationEntry struct {
 	duplicate bool
 }
 
+type textV2PositionPostingValidationPartition struct {
+	ordinal uint64
+	entry   textV2PositionPostingValidationEntry
+	entries map[textV2PositionPostingValidationKey]textV2PositionPostingValidationEntry
+}
+
 func newTextV2PositionValidation() *textV2PositionValidation {
 	return &textV2PositionValidation{
-		postings: make(map[textV2PositionPostingValidationKey]textV2PositionPostingValidationEntry),
+		postings: make(map[string]textV2PositionPostingValidationPartition),
 	}
 }
 
@@ -340,13 +345,32 @@ func (v *textV2PositionValidation) add(term string, entry textV2PostingBlockEntr
 	if err != nil {
 		return err
 	}
-	key := textV2PositionPostingValidationKey{term: term, ordinal: entry.Ordinal, generation: entry.Generation}
-	if existing, exists := v.postings[key]; exists {
-		existing.duplicate = true
-		v.postings[key] = existing
+	partition, exists := v.postings[term]
+	if !exists {
+		v.postings[term] = textV2PositionPostingValidationPartition{
+			ordinal: entry.Ordinal,
+			entry:   textV2PositionPostingValidationEntry{posting: posting},
+		}
 		return nil
 	}
-	v.postings[key] = textV2PositionPostingValidationEntry{posting: posting}
+	if partition.entries == nil {
+		if partition.ordinal == entry.Ordinal && partition.entry.posting.generation == entry.Generation {
+			partition.entry.duplicate = true
+			v.postings[term] = partition
+			return nil
+		}
+		partition.entries = make(map[textV2PositionPostingValidationKey]textV2PositionPostingValidationEntry, 2)
+		partition.entries[textV2PositionPostingValidationKey{ordinal: partition.ordinal, generation: partition.entry.posting.generation}] = partition.entry
+	}
+	key := textV2PositionPostingValidationKey{ordinal: entry.Ordinal, generation: entry.Generation}
+	if existing, exists := partition.entries[key]; exists {
+		existing.duplicate = true
+		partition.entries[key] = existing
+		v.postings[term] = partition
+		return nil
+	}
+	partition.entries[key] = textV2PositionPostingValidationEntry{posting: posting}
+	v.postings[term] = partition
 	return nil
 }
 
@@ -354,7 +378,17 @@ func (v *textV2PositionValidation) lookup(term string, ordinal, generation uint6
 	if v == nil {
 		return textV2SearchPostingValue{}, false, false
 	}
-	entry, ok := v.postings[textV2PositionPostingValidationKey{term: term, ordinal: ordinal, generation: generation}]
+	partition, ok := v.postings[term]
+	if !ok {
+		return textV2SearchPostingValue{}, false, false
+	}
+	if partition.entries == nil {
+		if partition.ordinal != ordinal || partition.entry.posting.generation != generation {
+			return textV2SearchPostingValue{}, false, false
+		}
+		return partition.entry.posting, true, partition.entry.duplicate
+	}
+	entry, ok := partition.entries[textV2PositionPostingValidationKey{ordinal: ordinal, generation: generation}]
 	return entry.posting, ok, entry.duplicate
 }
 
