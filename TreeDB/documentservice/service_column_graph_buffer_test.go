@@ -97,8 +97,11 @@ func TestServiceColumnGraphCoalescesBufferedInsertPublication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
-	if !col.Meta().Options.DisableBufferedIndexedAsyncFlush {
-		t.Fatal("column_graph service collection did not select foreground buffered publication")
+	if col.Meta().Options.DisableBufferedIndexedAsyncFlush {
+		t.Fatal("column_graph service collection opted out of buffered async publication")
+	}
+	if !col.Meta().Options.BufferedIndexedAsyncFlush {
+		t.Fatal("column_graph service collection did not enable buffered async publication")
 	}
 
 	for _, doc := range []Document{
@@ -116,6 +119,12 @@ func TestServiceColumnGraphCoalescesBufferedInsertPublication(t *testing.T) {
 	if before.PendingRootRuns == 0 || before.IndexedFlushCalls != 0 {
 		t.Fatalf("before search pending_root_runs=%d indexed_flush_calls=%d, want pending and unpublished", before.PendingRootRuns, before.IndexedFlushCalls)
 	}
+	if before.PendingIndexedRawDocumentBytes != 0 {
+		t.Fatalf("before search retained raw document bytes=%d want 0", before.PendingIndexedRawDocumentBytes)
+	}
+	if before.PendingIndexedPublicationBytes == 0 {
+		t.Fatal("before search retained compact publication bytes=0 want positive")
+	}
 	result, err := svc.SearchKeyword(ctx, "docs", KeywordSearchRequest{Query: "alpha", TopK: 2})
 	if err != nil {
 		t.Fatalf("SearchKeyword: %v", err)
@@ -126,6 +135,9 @@ func TestServiceColumnGraphCoalescesBufferedInsertPublication(t *testing.T) {
 	after := manager.StatsSnapshot()
 	if after.IndexedFlushCalls != 1 || after.IndexedFlushDocs != 2 || after.PendingRootRuns != 0 {
 		t.Fatalf("after search flush_calls=%d flush_docs=%d pending_root_runs=%d, want 1/2/0", after.IndexedFlushCalls, after.IndexedFlushDocs, after.PendingRootRuns)
+	}
+	if after.PendingIndexedRawDocumentBytes != 0 || after.PendingIndexedPublicationBytes != 0 {
+		t.Fatalf("after search retained raw/publication bytes=%d/%d want 0/0", after.PendingIndexedRawDocumentBytes, after.PendingIndexedPublicationBytes)
 	}
 
 	if err := svc.Close(); err != nil {
