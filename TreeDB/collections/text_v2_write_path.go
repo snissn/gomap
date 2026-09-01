@@ -125,7 +125,7 @@ func (b *textV2PostingBatchBuilder) addDocument(def TextIndexDefinition, ordinal
 			Ordinal:          ordinal,
 			Generation:       generation,
 			TermFrequency:    term.TermFrequency,
-			FieldFrequencies: append([]uint32(nil), term.FieldFrequencies...),
+			FieldFrequencies: term.FieldFrequencies,
 		}
 		b.byTerm[term.Term] = append(b.byTerm[term.Term], entry)
 	}

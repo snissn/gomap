@@ -23,6 +23,31 @@ type textV2PostingParityPosting2625 struct {
 	fields []uint32
 }
 
+func TestTextV2PostingBatchBuilderTransfersCompletedFieldFrequencies4566(t *testing.T) {
+	def := TextIndexDefinition{Fields: []TextIndexField{{Field: "title"}, {Field: "body"}}}
+	sharedTitle := &textAnalyzedTerm{Term: "shared", Frequency: 2}
+	sharedBody := &textAnalyzedTerm{Term: "shared", Frequency: 3}
+	analysis := textAnalyzedDocument{Fields: []textAnalyzedField{
+		{Field: "title", Terms: map[string]*textAnalyzedTerm{"shared": sharedTitle}},
+		{Field: "body", Terms: map[string]*textAnalyzedTerm{"shared": sharedBody, "body-only": {Term: "body-only", Frequency: 1}}},
+	}}
+	var builder textV2PostingBatchBuilder
+	if err := builder.addDocument(def, 7, 11, analysis); err != nil {
+		t.Fatalf("add document: %v", err)
+	}
+	sharedTitle.Frequency = 99
+	sharedBody.Frequency = 99
+
+	shared := builder.byTerm["shared"]
+	if len(shared) != 1 || shared[0].Ordinal != 7 || shared[0].Generation != 11 || shared[0].TermFrequency != 5 || !slices.Equal(shared[0].FieldFrequencies, []uint32{2, 3}) {
+		t.Fatalf("shared postings=%+v", shared)
+	}
+	bodyOnly := builder.byTerm["body-only"]
+	if len(bodyOnly) != 1 || bodyOnly[0].TermFrequency != 1 || !slices.Equal(bodyOnly[0].FieldFrequencies, []uint32{0, 1}) {
+		t.Fatalf("body-only postings=%+v", bodyOnly)
+	}
+}
+
 func TestTextV2PostingBlockCodecRoundTripAndFailClosed2625(t *testing.T) {
 	for _, term := range []string{"", strings.Repeat("term", 512)} {
 		key := encodeTextV2PostingBlockKey(term, 1, 7)
