@@ -22,16 +22,30 @@ while IFS= read -r local_git_env_var; do
 done < <("${controlled_git_env[@]}" git rev-parse --local-env-vars)
 
 check_profile_source() {
-  if [[ -n "$("${controlled_git_env[@]}" git status --porcelain --untracked-files=all)" ]]; then echo "worktree must be clean before profiling" >&2; return 1; fi
-  local ignored_build_input entry path
-  ignored_build_input=$(while IFS= read -r -d '' entry; do
+  local status ignored_build_input="" entry path ignored_status_file
+  if ! status=$("${controlled_git_env[@]}" git status --porcelain --untracked-files=all); then
+    echo "git status failed before profiling" >&2
+    return 1
+  fi
+  if [[ -n "$status" ]]; then echo "worktree must be clean before profiling" >&2; return 1; fi
+  if ! ignored_status_file=$(mktemp); then
+    echo "could not create ignored-status file before profiling" >&2
+    return 1
+  fi
+  if ! "${controlled_git_env[@]}" git status --porcelain=v1 -z --untracked-files=all --ignored > "$ignored_status_file"; then
+    rm -f "$ignored_status_file"
+    echo "git status failed before profiling" >&2
+    return 1
+  fi
+  while IFS= read -r -d '' entry; do
     [[ "$entry" == "!! "* ]] || continue
     path=${entry#!! }
     if [[ "$path" =~ \.(go|s|S|c|cc|cpp|cxx|h|hh|hpp|syso)$ ]]; then
-      printf '%s' "$path"
+      ignored_build_input=$path
       break
     fi
-  done < <("${controlled_git_env[@]}" git status --porcelain=v1 -z --untracked-files=all --ignored))
+  done < "$ignored_status_file"
+  rm -f "$ignored_status_file"
   if [[ -n "$ignored_build_input" ]]; then printf 'ignored build input before profiling: %q\n' "$ignored_build_input" >&2; return 1; fi
 }
 

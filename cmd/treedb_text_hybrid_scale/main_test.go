@@ -922,6 +922,22 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if output, err := run("RUN_DIR="+t.TempDir(), "ROWS=100000"); err == nil || !strings.Contains(string(output), "100k requires RUN_100K=true") {
 		t.Fatalf("100k escalation err=%v output=%s", err, output)
 	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusFailureGitDir := t.TempDir()
+	statusFailureGit := filepath.Join(statusFailureGitDir, "git")
+	if err := os.WriteFile(statusFailureGit, []byte("#!/bin/sh\nif [ \"$1\" = status ]; then exit 1; fi\nexec \"$REAL_GIT\" \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	statusFailureRun := t.TempDir()
+	if output, err := run("RUN_DIR="+statusFailureRun, "PHASES=phrase", "DRY_RUN=true", "PATH="+statusFailureGitDir+string(os.PathListSeparator)+os.Getenv("PATH"), "REAL_GIT="+realGit); err == nil || !strings.Contains(string(output), "git status failed before profiling") {
+		t.Fatalf("status failure err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(statusFailureRun, "context.txt")); !os.IsNotExist(err) {
+		t.Fatalf("status failure wrote provenance: %v", err)
+	}
 	invalid := t.TempDir()
 	if output, err := run("RUN_DIR="+invalid, "PHASES=unknown", "DRY_RUN=true"); err == nil || !strings.Contains(string(output), "unknown phase: unknown") {
 		t.Fatalf("invalid phase err=%v output=%s", err, output)
