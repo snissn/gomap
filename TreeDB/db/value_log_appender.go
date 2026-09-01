@@ -12,6 +12,7 @@ import (
 )
 
 var ErrValueLogAppenderUnavailable = errors.New("value-log appender unavailable")
+var ErrValueLogReaderUnavailable = errors.New("value-log reader unavailable")
 
 // ValueLogAppender appends user values to the persistent value log and returns
 // stable ValuePtr references that may be stored by native-root callers.
@@ -23,6 +24,12 @@ type ValueLogAppender interface {
 	Flush() error
 	Sync() error
 	CurrentValueLogSegment() (path string, fileID uint32, ok bool)
+}
+
+// ValueLogRecordReader is an optional appender extension used by native-root
+// callers that must read an appended pointer before its root is published.
+type ValueLogRecordReader interface {
+	ReadValueLogRecordAppend(ptr page.ValuePtr, dst []byte) ([]byte, error)
 }
 
 // ValueLogExternalRefFlusher is an optional extension for appenders that can
@@ -86,6 +93,28 @@ func (db *DB) currentValueLogRIDReserver() valueLogRIDReserver {
 // values to the persistent value log.
 func (db *DB) HasValueLogAppender() bool {
 	return db.currentValueLogAppender() != nil
+}
+
+// HasValueLogRecordReader reports whether pending native-root pointers can be
+// resolved before publication.
+func (db *DB) HasValueLogRecordReader() bool {
+	if db == nil {
+		return false
+	}
+	_, ok := db.currentValueLogAppender().(ValueLogRecordReader)
+	return ok
+}
+
+// ReadValueLogRecordAppend resolves a pending native-root pointer into dst.
+func (db *DB) ReadValueLogRecordAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
+	if db == nil {
+		return nil, ErrClosed
+	}
+	reader, ok := db.currentValueLogAppender().(ValueLogRecordReader)
+	if !ok {
+		return nil, ErrValueLogReaderUnavailable
+	}
+	return reader.ReadValueLogRecordAppend(ptr, dst)
 }
 
 // AppendValueLogValues appends values through the configured persistent value
@@ -182,6 +211,12 @@ func (db *DB) ReleaseValueLogValues(ptrs []page.ValuePtr) {
 		release[ptr]++
 	}
 	db.releasePendingValueLogAppendPtrCounts(release)
+}
+
+// RetainValueLogValues adds another pending GC claim for pointers whose
+// unpublished native-root ownership is being copied.
+func (db *DB) RetainValueLogValues(ptrs []page.ValuePtr) {
+	db.protectPendingValueLogAppendPtrs(ptrs)
 }
 
 func (db *DB) releasePendingValueLogAppendFileIDsFromEntries(entries []batchpkg.Entry) {

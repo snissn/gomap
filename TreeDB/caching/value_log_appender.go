@@ -18,6 +18,7 @@ type cachingValueLogAppender struct {
 
 var _ backenddb.ValueLogAppender = (*cachingValueLogAppender)(nil)
 var _ backenddb.ValueLogExternalRefFlusher = (*cachingValueLogAppender)(nil)
+var _ backenddb.ValueLogRecordReader = (*cachingValueLogAppender)(nil)
 
 func newCachingValueLogAppender(db *DB, l *lane) backenddb.ValueLogAppender {
 	return &cachingValueLogAppender{db: db, lane: l}
@@ -60,6 +61,13 @@ func (a *cachingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr
 	out := append([]page.ValuePtr(nil), ptrs...)
 	putValueLogPtrs(ptrs)
 	return out, nil
+}
+
+func (a *cachingValueLogAppender) ReadValueLogRecordAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
+	if a == nil || a.db == nil {
+		return nil, errWALUnavailable
+	}
+	return a.db.readValueLogAppend(nil, ptr, dst)
 }
 
 func (a *cachingValueLogAppender) emitDependencyAppend(ptrs []page.ValuePtr) error {

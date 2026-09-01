@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -50,6 +51,200 @@ func TestColumnRetainedPayloadValueLogPlacementReopen(t *testing.T) {
 	reopenedPtr := requireColumnRetainedPlacementPointer(t, reopen, "events", []byte("doc-1"))
 	if reopenedPtr != ptr {
 		t.Fatalf("retained payload pointer changed after reopen: got=%+v want=%+v", reopenedPtr, ptr)
+	}
+}
+
+func TestColumnRetainedPayloadBufferedInsertOwnsPointersBeforePublication(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	closed := false
+	defer func() {
+		if !closed {
+			_ = d.Close()
+		}
+	}()
+	col := createBufferedRetainedPlacementCollection(t, d, "events")
+	want := []byte(`{"row_id":1,"kind":"alpha","payload":"caller-owned-buffer"}`)
+	document := bytes.Clone(want)
+	injected := errors.New("injected retained-primary value-log append failure")
+	fired := false
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if !fired && event.Resource == durabilitycut.ResourceValueLog && event.Point == durabilitycut.BeforeDependencyAppend {
+			fired = true
+			return injected
+		}
+		return nil
+	})
+	_, insertErr := col.InsertBatch([][]byte{[]byte("doc-1")}, [][]byte{document})
+	restore()
+	if !fired || !errors.Is(insertErr, injected) {
+		t.Fatalf("value-log cut fired=%v err=%v want injected failure", fired, insertErr)
+	}
+	if got, err := col.Get([]byte("doc-1")); err != nil || got != nil {
+		t.Fatalf("Get after failed admission=%q err=%v want missing", got, err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("doc-1")}, [][]byte{document}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	primaryRoot := collectionPrimaryRootName("events")
+	col.writeDomain.mu.RLock()
+	table := col.writeDomain.rootMutableRuns[primaryRoot]
+	if table == nil {
+		col.writeDomain.mu.RUnlock()
+		t.Fatal("buffered primary mutable run is missing")
+	}
+	value, ptr, flags, found := table.GetEntry([]byte("doc-1"))
+	owner, ownsPointers := table.(*collectionPointerizedRunTable)
+	ownedPointers := 0
+	if ownsPointers {
+		ownedPointers = len(owner.ptrs)
+	}
+	col.writeDomain.mu.RUnlock()
+	if !found || len(value) != 0 || flags&node.FlagPointer == 0 || !page.IsValueLogFileID(ptr.FileID) {
+		t.Fatalf("buffered primary found=%v value_len=%d flags=%#x ptr=%+v want pointer-only", found, len(value), flags, ptr)
+	}
+	if !ownsPointers || ownedPointers != 1 {
+		t.Fatalf("buffered primary table=%T owned_ptrs=%d want pointer owner with one ptr", table, ownedPointers)
+	}
+
+	for i := range document {
+		document[i] = 'x'
+	}
+	if got, err := col.Get([]byte("doc-1")); err != nil {
+		t.Fatalf("Get buffered pointer: %v", err)
+	} else if !bytes.Equal(got, want) {
+		t.Fatalf("Get buffered pointer=%q want %q", got, want)
+	}
+	if ids, err := col.FindByIndexValue("kind", "alpha"); err != nil {
+		t.Fatalf("FindByIndexValue buffered pointer: %v", err)
+	} else if len(ids) != 1 || !bytes.Equal(ids[0], []byte("doc-1")) {
+		t.Fatalf("FindByIndexValue ids=%q want [doc-1]", ids)
+	}
+
+	items := []updateBatchItem{{UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("doc-1")}}}
+	col.writeDomain.mu.RLock()
+	entries, buffer, err := snapshotUpdateBatchBufferedPrimaryEntriesLocked(d, col.writeDomain, "events", items)
+	col.writeDomain.mu.RUnlock()
+	if err != nil {
+		t.Fatalf("snapshot buffered primary pointer: %v", err)
+	}
+	defer putUpdateBatchBufferedEntries(entries, buffer)
+	if len(entries) != 1 || !entries[0].found || !bytes.Equal(entries[0].value, want) {
+		t.Fatalf("snapshot buffered primary entries=%+v want exact document", entries)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	closed = true
+
+	reopened := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = reopened.Close() }()
+	reopenedCol := openColumnRetainedPlacementCollection(t, reopened, "events")
+	if got, err := reopenedCol.Get([]byte("doc-1")); err != nil {
+		t.Fatalf("Get after reopen: %v", err)
+	} else if !bytes.Equal(got, want) {
+		t.Fatalf("Get after reopen=%q want %q", got, want)
+	}
+}
+
+func TestColumnRetainedPayloadCompactionKeepsPointersPinnedUntilPublication(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	closed := false
+	defer func() {
+		if !closed {
+			_ = d.Close()
+		}
+	}()
+	col := createBufferedRetainedPlacementCollection(t, d, "events")
+	for i := 1; i <= 2; i++ {
+		id := []byte(fmt.Sprintf("doc-%d", i))
+		document := retainedPlacementDocument("compacted", i)
+		if _, err := col.InsertBatch([][]byte{id}, [][]byte{document}); err != nil {
+			t.Fatalf("InsertBatch %s: %v", id, err)
+		}
+		col.writeDomain.mu.Lock()
+		freezeMutableIndexedRunMapsLocked(col.writeDomain)
+		col.writeDomain.mu.Unlock()
+	}
+
+	primaryRoot := collectionPrimaryRootName("events")
+	col.writeDomain.mu.Lock()
+	rootRunCount := col.writeDomain.rootRunCount
+	rootCounts := make(map[string]int, len(col.writeDomain.rootRuns))
+	for name, runs := range col.writeDomain.rootRuns {
+		rootCounts[name] = len(runs)
+	}
+	obsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(col.writeDomain, CollectionOptions{
+		BufferedIndexedWriteMaxDocuments: 1024,
+		BufferedIndexedWriteMaxRootRuns:  rootRunCount,
+	})
+	if err != nil {
+		col.writeDomain.mu.Unlock()
+		t.Fatalf("compact buffered runs: %v", err)
+	}
+	primaryRuns := col.writeDomain.rootRuns[primaryRoot]
+	if len(primaryRuns) != 1 {
+		col.writeDomain.mu.Unlock()
+		t.Fatalf("compacted primary runs=%d want 1; before root_run_count=%d roots=%v", len(primaryRuns), rootRunCount, rootCounts)
+	}
+	owner, ok := primaryRuns[0].(*collectionPointerizedRunTable)
+	ownedPointers := 0
+	if ok {
+		ownedPointers = len(owner.ptrs)
+	}
+	resetCollectionTables(obsolete)
+	col.writeDomain.mu.Unlock()
+	if !ok || ownedPointers != 2 {
+		t.Fatalf("compacted primary table=%T owned_ptrs=%d want pointer owner with two ptrs", primaryRuns[0], ownedPointers)
+	}
+
+	gcDone := make(chan error, 1)
+	go func() {
+		_, err := d.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{})
+		gcDone <- err
+	}()
+	for i := 1; i <= 2; i++ {
+		id := []byte(fmt.Sprintf("doc-%d", i))
+		want := retainedPlacementDocument("compacted", i)
+		if got, err := col.Get(id); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("Get pending %s=%q err=%v want %q", id, got, err, want)
+		}
+	}
+	if err := <-gcDone; err != nil {
+		t.Fatalf("ValueLogGC while compacted run pending: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	closed = true
+
+	reopened := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = reopened.Close() }()
+	reopenedCol := openColumnRetainedPlacementCollection(t, reopened, "events")
+	for i := 1; i <= 2; i++ {
+		id := []byte(fmt.Sprintf("doc-%d", i))
+		want := retainedPlacementDocument("compacted", i)
+		if got, err := reopenedCol.Get(id); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("Get reopened %s=%q err=%v want %q", id, got, err, want)
+		}
 	}
 }
 
@@ -1282,6 +1477,39 @@ func createColumnRetainedPlacementCollection(t testing.TB, d *backenddb.DB, name
 	}
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{Name: name, Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: cfg}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	return openColumnRetainedPlacementCollection(t, d, name)
+}
+
+func createBufferedRetainedPlacementCollection(t testing.TB, d *backenddb.DB, name string) *Collection {
+	t.Helper()
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		},
+		RetainedPayload: ColumnRetainedPayloadFull,
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: name,
+		Options: CollectionOptions{
+			DocumentFormat:                   DocumentFormatJSON,
+			ColumnStore:                      cfg,
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 1024,
+			BufferedIndexedWriteMaxRootRuns:  1024,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+		TextIndexes: []TextIndexDefinition{{
+			Name:     "kind_text",
+			Fields:   []TextIndexField{{Field: "kind"}},
+			Analyzer: TextAnalyzerSimple,
+		}},
+	}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
 	return openColumnRetainedPlacementCollection(t, d, name)

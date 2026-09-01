@@ -999,6 +999,8 @@ type replayInlineAppender struct {
 	dirty   bool
 }
 
+var _ ValueLogRecordReader = (*replayInlineAppender)(nil)
+
 func newReplayInlineAppender(db *DB, segments []logSegment, ridMap map[uint64]page.ValuePtr) (*replayInlineAppender, error) {
 	var maxRID uint64
 	for rid := range ridMap {
@@ -1253,6 +1255,21 @@ func (a *replayInlineAppender) Flush() error {
 		return err
 	}
 	return nil
+}
+
+func (a *replayInlineAppender) ReadValueLogRecordAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
+	if a == nil {
+		return nil, ErrValueLogReaderUnavailable
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.writer == nil || a.db == nil || a.db.valueLogManager == nil {
+		return nil, ErrValueLogReaderUnavailable
+	}
+	if err := a.writer.Flush(); err != nil {
+		return nil, err
+	}
+	return a.db.valueLogManager.ReadAppend(ptr, dst)
 }
 
 func (a *replayInlineAppender) Sync() error {

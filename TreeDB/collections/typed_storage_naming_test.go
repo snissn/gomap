@@ -334,7 +334,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// Raft snapshot M1 fixture names the public compatibility configuration and
 	// stable typed-column append API while proving ready-manifest transport.
 	{path: "TreeDB/internal/raftfsm/raft_snapshot_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 5},
-	{path: "TreeDB/collections/api.go", classification: typedStorageLegacyCompatibility, matchingLines: 61, occurrences: 67},
+	{path: "TreeDB/collections/api.go", classification: typedStorageLegacyCompatibility, matchingLines: 62, occurrences: 68},
 	// RAG benchmark harness (issue #4267) consumes the public compatibility
 	// configuration API for typed-column collection setup; no new legacy
 	// terminology introduced.
@@ -419,7 +419,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_retained_payload_audit_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 29, occurrences: 30},
 	{path: "TreeDB/collections/column_retained_semantic_stream.go", classification: typedStorageLegacyCompatibility, matchingLines: 19, occurrences: 19},
 	{path: "TreeDB/collections/column_retained_semantic_stream_raw_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 16, occurrences: 16},
-	{path: "TreeDB/collections/column_retained_vlog_placement_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 51, occurrences: 51},
+	{path: "TreeDB/collections/column_retained_vlog_placement_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 56, occurrences: 56},
 	{path: "TreeDB/collections/column_semantics.go", classification: typedStorageLegacyCompatibility, matchingLines: 34, occurrences: 34},
 	{path: "TreeDB/collections/dense_numeric_vector.go", classification: typedStorageLegacyCompatibility, matchingLines: 32, occurrences: 41},
 	{path: "TreeDB/collections/dense_numeric_vector_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 35, occurrences: 38},

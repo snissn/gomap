@@ -12558,7 +12558,10 @@ func TestGetBufferedDocumentPrefersCurrentRootRunOverDetachedOverlay(t *testing.
 			primaryRoot: {currentPrimary},
 		},
 	}
-	doc, buffered, found := col.getBufferedDocumentIntoLocked(domain, []byte("u1"), nil)
+	doc, buffered, found, err := col.getBufferedDocumentIntoLocked(domain, []byte("u1"), nil)
+	if err != nil {
+		t.Fatalf("get buffered document: %v", err)
+	}
 	if !buffered || !found {
 		t.Fatalf("buffered=%v found=%v want true,true", buffered, found)
 	}
@@ -16651,7 +16654,7 @@ func TestSnapshotUpdateBatchBufferedReadCachesEmptyPrimaryRunIndex(t *testing.T)
 		},
 	}
 
-	read, _, blocked, staleSnapshot, err := snapshotUpdateBatchBufferedRead(domain, meta, 1, 7, []updateBatchItem{{
+	read, _, blocked, staleSnapshot, err := snapshotUpdateBatchBufferedRead(nil, domain, meta, 1, 7, []updateBatchItem{{
 		UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("missing")},
 	}}, DocumentFormatJSON)
 	if err != nil {
@@ -16691,7 +16694,7 @@ func TestSnapshotUpdateBatchBufferedReadDetectsStalePublishedDomain(t *testing.T
 		baseSystemRoot: 9,
 	}
 
-	read, _, blocked, staleSnapshot, err := snapshotUpdateBatchBufferedRead(domain, meta, 7, 7, []updateBatchItem{{
+	read, _, blocked, staleSnapshot, err := snapshotUpdateBatchBufferedRead(nil, domain, meta, 7, 7, []updateBatchItem{{
 		UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("u1")},
 	}}, DocumentFormatJSON)
 	if err != nil {
@@ -16743,7 +16746,7 @@ func TestSnapshotUpdateBatchBufferedReadPrimaryRunIndexAvoidsCollectingPendingRu
 	items := []updateBatchItem{{UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("u1")}}}
 	assertRead := func() {
 		t.Helper()
-		read, _, blocked, staleSnapshot, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 1, 7, items, DocumentFormatJSON, false)
+		read, _, blocked, staleSnapshot, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(nil, domain, meta, 1, 7, items, DocumentFormatJSON, false)
 		if err != nil {
 			t.Fatalf("snapshotUpdateBatchBufferedReadLocked: %v", err)
 		}
@@ -17050,7 +17053,7 @@ func BenchmarkSnapshotUpdateBatchBufferedReadPrimaryRunIndexPendingUnits(b *test
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		read, _, blocked, staleSnapshot, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 1, 7, items, DocumentFormatJSON, false)
+		read, _, blocked, staleSnapshot, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(nil, domain, meta, 1, 7, items, DocumentFormatJSON, false)
 		if err != nil {
 			b.Fatalf("snapshotUpdateBatchBufferedReadLocked: %v", err)
 		}
