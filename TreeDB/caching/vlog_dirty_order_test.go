@@ -13,15 +13,19 @@ import (
 )
 
 type vlogDirtyOrderWriter struct {
-	size    int64
-	flushes atomic.Int64
-	syncs   atomic.Int64
-	syncErr error
+	size      int64
+	flushes   atomic.Int64
+	syncs     atomic.Int64
+	appendErr error
+	syncErr   error
 }
 
 var _ valueWriter = (*vlogDirtyOrderWriter)(nil)
 
 func (w *vlogDirtyOrderWriter) Append(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error) {
+	if w.appendErr != nil {
+		return page.ValuePtr{}, w.appendErr
+	}
 	if rid == 0 {
 		return page.ValuePtr{}, errors.New("missing rid")
 	}
@@ -35,6 +39,9 @@ func (w *vlogDirtyOrderWriter) Append(dictID uint64, dict []byte, rid uint64, va
 }
 
 func (w *vlogDirtyOrderWriter) AppendFrame(dictID uint64, dict []byte, records []valuelog.Record) ([]page.ValuePtr, error) {
+	if w.appendErr != nil {
+		return nil, w.appendErr
+	}
 	if len(records) == 0 {
 		return nil, nil
 	}

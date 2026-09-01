@@ -91,7 +91,7 @@ func (m *vlogAutotuneMetrics) now() time.Time {
 		return time.Time{}
 	}
 	if m.clock == nil {
-		m.clock = valuelog.RealClock{}
+		return time.Now()
 	}
 	return m.clock.Now()
 }
@@ -100,10 +100,7 @@ func (m *vlogAutotuneMetrics) observe(start time.Time, rawBytes, storedBytes int
 	if m == nil || rawBytes <= 0 || start.IsZero() {
 		return
 	}
-	if m.clock == nil {
-		m.clock = valuelog.RealClock{}
-	}
-	wallNs := m.clock.Now().Sub(start).Nanoseconds()
+	wallNs := m.now().Sub(start).Nanoseconds()
 	if wallNs <= 0 {
 		return
 	}

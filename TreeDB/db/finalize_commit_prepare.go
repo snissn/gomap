@@ -102,8 +102,14 @@ func (db *DB) finalizeDependencySyncEvent(valueLogAppender ValueLogAppender) (du
 		}
 	}
 	if valueLogAppender != nil {
-		if path, _, ok := valueLogAppender.CurrentValueLogSegment(); ok && path != "" {
-			eventsByPath[path] = durabilitycut.Event{Resource: durabilitycut.ResourceValueLog, Root: db.dir, Path: path}
+		segments, err := valueLogAppenderCurrentSegments(valueLogAppender)
+		if err != nil {
+			return durabilitycut.Event{}, false, fmt.Errorf("durability cut: list value-log dependency paths: %w", err)
+		}
+		for _, segment := range segments {
+			if segment.Path != "" {
+				eventsByPath[segment.Path] = durabilitycut.Event{Resource: durabilitycut.ResourceValueLog, Root: db.dir, Path: segment.Path}
+			}
 		}
 	}
 	paths := make([]string, 0, len(eventsByPath))
