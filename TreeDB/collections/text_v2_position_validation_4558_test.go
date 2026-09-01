@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -25,7 +26,7 @@ func TestTextV2StorageStatsPositionValidationUsesScanTables4558(t *testing.T) {
 		if err != nil || !ok {
 			t.Fatalf("read status ok=%v err=%v", ok, err)
 		}
-		postings := newTextV2PositionPostingValidation()
+		postings := newTextV2PositionValidation()
 		docMapStats := TextIndexStorageStats{Version: TextIndexVersionV2}
 		if err := inspectTextV2Root(snap, catalog, def, collectionTextV2DocMapRootName("docs", "lexical"), textV2RootFamilyDocMap, status, &docMapStats, nil, postings); err != nil {
 			t.Fatalf("inspect docmap root: %v", err)
@@ -69,7 +70,7 @@ func TestTextV2StorageStatsPositionValidationUsesScanTables4558(t *testing.T) {
 }
 
 func TestTextV2PositionPostingValidationDefersDuplicateFailure4558(t *testing.T) {
-	postings := newTextV2PositionPostingValidation()
+	postings := newTextV2PositionValidation()
 	entry := textV2PostingBlockEntry{Ordinal: 7, Generation: 3, TermFrequency: 1, FieldFrequencies: []uint32{1}}
 	if err := postings.add("shared", entry, 1); err != nil {
 		t.Fatalf("first add: %v", err)
@@ -79,6 +80,27 @@ func TestTextV2PositionPostingValidationDefersDuplicateFailure4558(t *testing.T)
 	}
 	if _, found, duplicate := postings.lookup("shared", entry.Ordinal, entry.Generation); !found || !duplicate {
 		t.Fatalf("lookup found=%v duplicate=%v want duplicate entry", found, duplicate)
+	}
+}
+
+func TestTextV2StorageStatsRejectsNoncanonicalDocMapBlockWithPositions4560(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	def := TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, StorePositions: true, Fields: []TextIndexField{{Field: "body"}}}
+	col := createTextSearchCollection2627(t, d, "docs", def, [][]byte{[]byte("d1"), []byte("d2")}, [][]byte{[]byte(`{"body":"shared"}`), []byte(`{"body":"shared"}`)})
+
+	var entry textV2DocMapEntry
+	withTextCatalog(t, d, "docs", func(snap *backenddb.Snapshot, catalog *collectionCatalog) {
+		block := textV2DocMapRootBlock(t, snap, catalog, "docs", "lexical", 1)
+		var ok bool
+		entry, ok = block.find(2)
+		if !ok {
+			t.Fatal("missing canonical docmap entry")
+		}
+	})
+	corruptTextRootValue(t, d, "docs", collectionTextV2DocMapRootName("docs", "lexical"), encodeTextV2BlockKey(2), encodeTextV2DocMapBlockValue(textV2DocMapBlockValue{BlockStart: 2, BlockSize: textV2DefaultDocMapBlockSize, Entries: []textV2DocMapEntry{entry}}))
+	if _, err := col.TextIndexStorageStats("lexical"); !errors.Is(err, ErrTextIndexStorageCorrupt) {
+		t.Fatalf("TextIndexStorageStats err=%v want storage corruption", err)
 	}
 }
 

@@ -277,10 +277,10 @@ func addTextV2PositionEntriesForDocument(table memtable.Table, def TextIndexDefi
 	return len(terms), bytesWritten, nil
 }
 
-// textV2PositionPostingValidation is built while TextIndexStorageStats scans
+// textV2PositionValidation is built while TextIndexStorageStats scans
 // the doc-map and posting-block roots. It avoids re-reading a doc-map block
 // for every position and repeated term-posting scans.
-type textV2PositionPostingValidation struct {
+type textV2PositionValidation struct {
 	postings map[textV2PositionPostingValidationKey]textV2PositionPostingValidationEntry
 	docMaps  map[uint64]textV2PositionDocMapValidationEntry
 }
@@ -301,20 +301,20 @@ type textV2PositionDocMapValidationEntry struct {
 	tombstoned bool
 }
 
-func newTextV2PositionPostingValidation() *textV2PositionPostingValidation {
-	return &textV2PositionPostingValidation{
+func newTextV2PositionValidation() *textV2PositionValidation {
+	return &textV2PositionValidation{
 		postings: make(map[textV2PositionPostingValidationKey]textV2PositionPostingValidationEntry),
 		docMaps:  make(map[uint64]textV2PositionDocMapValidationEntry),
 	}
 }
 
-func (v *textV2PositionPostingValidation) addDocMap(entry textV2DocMapEntry) {
+func (v *textV2PositionValidation) addDocMap(entry textV2DocMapEntry) {
 	if v != nil {
 		v.docMaps[entry.Ordinal] = textV2PositionDocMapValidationEntry{generation: entry.Generation, tombstoned: entry.tombstoned()}
 	}
 }
 
-func (v *textV2PositionPostingValidation) docMapCurrent(ordinal, generation uint64) bool {
+func (v *textV2PositionValidation) docMapCurrent(ordinal, generation uint64) bool {
 	if v == nil {
 		return false
 	}
@@ -322,7 +322,7 @@ func (v *textV2PositionPostingValidation) docMapCurrent(ordinal, generation uint
 	return ok && !entry.tombstoned && entry.generation == generation
 }
 
-func (v *textV2PositionPostingValidation) add(term string, entry textV2PostingBlockEntry, fieldCount int) error {
+func (v *textV2PositionValidation) add(term string, entry textV2PostingBlockEntry, fieldCount int) error {
 	if v == nil {
 		return nil
 	}
@@ -340,7 +340,7 @@ func (v *textV2PositionPostingValidation) add(term string, entry textV2PostingBl
 	return nil
 }
 
-func (v *textV2PositionPostingValidation) lookup(term string, ordinal, generation uint64) (textV2SearchPostingValue, bool, bool) {
+func (v *textV2PositionValidation) lookup(term string, ordinal, generation uint64) (textV2SearchPostingValue, bool, bool) {
 	if v == nil {
 		return textV2SearchPostingValue{}, false, false
 	}
@@ -348,7 +348,7 @@ func (v *textV2PositionPostingValidation) lookup(term string, ordinal, generatio
 	return entry.posting, ok, entry.duplicate
 }
 
-func validateTextV2PositionEntryAtSnapshot(def TextIndexDefinition, key []byte, value textV2PositionValue, status textV2IndexStatusValue, postings *textV2PositionPostingValidation) error {
+func validateTextV2PositionEntryAtSnapshot(def TextIndexDefinition, key []byte, value textV2PositionValue, status textV2IndexStatusValue, postings *textV2PositionValidation) error {
 	ordinal, term, err := decodeTextV2PositionKey(key)
 	if err != nil {
 		return err
