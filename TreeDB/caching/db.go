@@ -17591,9 +17591,13 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 	}
 
 	// Prepared block frames are appended through the same ordered writer path as
-	// dictionary frames. Physical append and segment ownership stay serialized,
-	// while every sufficiently large block batch uses the existing bounded preparers.
+	// dictionary frames. Physical append and segment ownership stay serialized.
 	prepareWriteMode := finalWriteMode
+	if prepareWriteMode == vlogWriteBlock && leafLogAppend && db.flushApplyConcurrency <= 1 {
+		// Preserve the single-concurrency leaf-log generation/rewrite accounting.
+		// Ordinary value batches still use the bounded preparers below.
+		prepareWriteMode = vlogWriteOff
+	}
 	preparedDictFrames, prepEncodeWallNs, prepareErr := db.prepareAppendFrames(
 		l,
 		dictID,
