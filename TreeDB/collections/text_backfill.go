@@ -1092,6 +1092,10 @@ func inspectTextV2IndexStorage(snap *backenddb.Snapshot, catalog *collectionCata
 
 func inspectTextV2IndexStorageWithBudget(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, budget *textV2RewriteBudget) (TextIndexStorageStats, error) {
 	stats := TextIndexStorageStats{Version: TextIndexVersionV2}
+	var positionPostings *textV2PositionPostingValidation
+	if def.StorePositions {
+		positionPostings = newTextV2PositionPostingValidation()
+	}
 	generationsRootName := collectionTextV2GenerationsRootName(catalog.meta.Name, def.Name)
 	status, ok, err := readTextV2StatusAtRoot(snap, catalog, generationsRootName)
 	if err != nil {
@@ -1117,7 +1121,7 @@ func inspectTextV2IndexStorageWithBudget(snap *backenddb.Snapshot, catalog *coll
 		if !ok {
 			return stats, errMalformedTextStorage("unknown text-v2 root %q", rootName)
 		}
-		if err := inspectTextV2Root(snap, catalog, def, rootName, family, status, &stats, budget); err != nil {
+		if err := inspectTextV2Root(snap, catalog, def, rootName, family, status, &stats, budget, positionPostings); err != nil {
 			return stats, err
 		}
 	}
@@ -1164,7 +1168,7 @@ func readTextV2StatusAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog
 	return status, true, err
 }
 
-func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, rootName string, family textV2RootFamily, status textV2IndexStatusValue, stats *TextIndexStorageStats, budget *textV2RewriteBudget) error {
+func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, rootName string, family textV2RootFamily, status textV2IndexStatusValue, stats *TextIndexStorageStats, budget *textV2RewriteBudget, positionPostings *textV2PositionPostingValidation) error {
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return errMalformedTextStorage("missing text-v2 root %q", rootName)
@@ -1323,6 +1327,9 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 				if entry.Ordinal >= status.NextOrdinal || entry.Generation > status.RootGeneration {
 					return errMalformedTextStorage("text-v2 posting block entry outside status snapshot")
 				}
+				if err := positionPostings.add(postingKey.Term, entry, len(def.Fields)); err != nil {
+					return err
+				}
 			}
 			switch block.Kind {
 			case textV2PostingBlockKindSealed:
@@ -1388,7 +1395,7 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 			if err != nil {
 				return err
 			}
-			if err := validateTextV2PositionEntryAtSnapshot(snap, catalog, def, key, position, status); err != nil {
+			if err := validateTextV2PositionEntryAtSnapshot(snap, catalog, def, key, position, status, positionPostings); err != nil {
 				return err
 			}
 			stats.V2PositionEntries++

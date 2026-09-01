@@ -277,7 +277,56 @@ func addTextV2PositionEntriesForDocument(table memtable.Table, def TextIndexDefi
 	return len(terms), bytesWritten, nil
 }
 
-func validateTextV2PositionEntryAtSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, key []byte, value textV2PositionValue, status textV2IndexStatusValue) error {
+// textV2PositionPostingValidation is built while TextIndexStorageStats scans
+// the posting-block root. Position keys are ordered by ordinal while postings
+// are ordered by term, so looking up every position in the root would restart
+// a term iterator and repeatedly rescan its history.
+type textV2PositionPostingValidation struct {
+	postings map[textV2PositionPostingValidationKey]textV2PositionPostingValidationEntry
+}
+
+type textV2PositionPostingValidationKey struct {
+	term       string
+	ordinal    uint64
+	generation uint64
+}
+
+type textV2PositionPostingValidationEntry struct {
+	posting   textV2SearchPostingValue
+	duplicate bool
+}
+
+func newTextV2PositionPostingValidation() *textV2PositionPostingValidation {
+	return &textV2PositionPostingValidation{postings: make(map[textV2PositionPostingValidationKey]textV2PositionPostingValidationEntry)}
+}
+
+func (v *textV2PositionPostingValidation) add(term string, entry textV2PostingBlockEntry, fieldCount int) error {
+	if v == nil {
+		return nil
+	}
+	posting, err := textV2SearchPostingValueFromEntry(entry, fieldCount)
+	if err != nil {
+		return err
+	}
+	key := textV2PositionPostingValidationKey{term: term, ordinal: entry.Ordinal, generation: entry.Generation}
+	if existing, exists := v.postings[key]; exists {
+		existing.duplicate = true
+		v.postings[key] = existing
+		return nil
+	}
+	v.postings[key] = textV2PositionPostingValidationEntry{posting: posting}
+	return nil
+}
+
+func (v *textV2PositionPostingValidation) lookup(term string, ordinal, generation uint64) (textV2SearchPostingValue, bool, bool) {
+	if v == nil {
+		return textV2SearchPostingValue{}, false, false
+	}
+	entry, ok := v.postings[textV2PositionPostingValidationKey{term: term, ordinal: ordinal, generation: generation}]
+	return entry.posting, ok, entry.duplicate
+}
+
+func validateTextV2PositionEntryAtSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, key []byte, value textV2PositionValue, status textV2IndexStatusValue, postings *textV2PositionPostingValidation) error {
 	if catalog == nil {
 		return errCollectionNotFound
 	}
@@ -301,9 +350,9 @@ func validateTextV2PositionEntryAtSnapshot(snap *backenddb.Snapshot, catalog *co
 	if !ok || docMap.tombstoned() || docMap.Generation != value.Generation {
 		return errMalformedTextStorage("text-v2 position entry ordinal %d generation %d is not current", value.Ordinal, value.Generation)
 	}
-	posting, ok, err := readTextV2PositionPostingAtRoot(snap, catalog, collectionTextV2PostingBlocksRootName(catalog.meta.Name, def.Name), value.Term, value.Ordinal, value.Generation, len(def.Fields))
-	if err != nil {
-		return err
+	posting, ok, duplicate := postings.lookup(value.Term, value.Ordinal, value.Generation)
+	if duplicate {
+		return errMalformedTextStorage("duplicate text-v2 scoring posting for position ordinal %d term %q generation %d", value.Ordinal, value.Term, value.Generation)
 	}
 	if !ok {
 		return errMalformedTextStorage("text-v2 position entry ordinal %d term %q has no matching scoring posting", value.Ordinal, value.Term)
