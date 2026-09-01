@@ -1054,15 +1054,15 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 		t.Fatal(err)
 	}
 	goFlagsDryRun := t.TempDir()
-	if output, err := run("RUN_DIR="+goFlagsDryRun, "PHASES=phrase", "DRY_RUN=true", "GOFLAGS=-race", "GOMAXPROCS=1", "GOGC=10", "GOMEMLIMIT=1MiB", "GOOS=plan9", "GOARCH=386", "GOAMD64=v3", "GOARM64=v8.0", "GO386=sse2", "GOARM=7", "GOMIPS=softfloat", "GOMIPS64=softfloat", "GOPPC64=power8", "GORISCV64=rva20u64", "GOWASM=signext", "GOEXPERIMENT=arenas", "CGO_ENABLED=0"); err != nil || !strings.Contains(string(output), "artifacts:") {
+	if output, err := run("RUN_DIR="+goFlagsDryRun, "PHASES=phrase", "DRY_RUN=true", "GOFLAGS=-race", "GOMAXPROCS=1", "GOGC=10", "GOMEMLIMIT=1MiB", "GOOS=plan9", "GOARCH=386", "GOAMD64=v3", "GOARM64=v8.0", "GO386=sse2", "GOARM=7", "GOMIPS=softfloat", "GOMIPS64=softfloat", "GOPPC64=power8", "GORISCV64=rva20u64", "GOWASM=signext", "GOEXPERIMENT=arenas", "CGO_ENABLED=0", "TREEDB_LEAF_PAGE_CACHE_ENTRIES=1", "TREEDB_COLUMN_STORE_TYPED_COMPRESSION=none"); err != nil || !strings.Contains(string(output), "artifacts:") {
 		t.Fatalf("GOFLAGS dry-run err=%v output=%s", err, output)
 	}
 	command, err = os.ReadFile(filepath.Join(goFlagsDryRun, "10000", "phrase", "command.txt"))
-	if err != nil || !strings.Contains(string(command), "-u GOMAXPROCS -u GOGC -u GOMEMLIMIT -u GOOS -u GOARCH -u GOAMD64 -u GOARM64 -u GO386 -u GOARM -u GOMIPS -u GOMIPS64 -u GOPPC64 -u GORISCV64 -u GOWASM -u GOEXPERIMENT -u CGO_ENABLED GOWORK=off GOFLAGS= GOENV=off") {
+	if err != nil || !strings.Contains(string(command), "-u GOMAXPROCS -u GOGC -u GOMEMLIMIT -u GOOS -u GOARCH -u GOAMD64 -u GOARM64 -u GO386 -u GOARM -u GOMIPS -u GOMIPS64 -u GOPPC64 -u GORISCV64 -u GOWASM -u GOEXPERIMENT -u CGO_ENABLED -u TREEDB_LEAF_PAGE_CACHE_ENTRIES -u TREEDB_COLUMN_STORE_TYPED_COMPRESSION") {
 		t.Fatalf("GOFLAGS command=%q err=%v", command, err)
 	}
 	context, err = os.ReadFile(filepath.Join(goFlagsDryRun, "context.txt"))
-	if err != nil || !strings.Contains(string(context), "goflags=cleared\ngoenv=off\ngomaxprocs=cleared\ngogc=cleared\ngomemlimit=cleared\ncompiler_tuning=cleared GOOS,GOARCH,GOAMD64,GOARM64,GO386,GOARM,GOMIPS,GOMIPS64,GOPPC64,GORISCV64,GOWASM,GOEXPERIMENT,CGO_ENABLED") {
+	if err != nil || !strings.Contains(string(context), "goflags=cleared\ngoenv=off\ngomaxprocs=cleared\ngogc=cleared\ngomemlimit=cleared\ncompiler_tuning=cleared GOOS,GOARCH,GOAMD64,GOARM64,GO386,GOARM,GOMIPS,GOMIPS64,GOPPC64,GORISCV64,GOWASM,GOEXPERIMENT,CGO_ENABLED\ntreedb_performance_overrides=cleared TREEDB_LEAF_PAGE_CACHE_ENTRIES") {
 		t.Fatalf("GOFLAGS context=%q err=%v", context, err)
 	}
 	runtimeDebugDryRun := t.TempDir()
@@ -1102,8 +1102,23 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 		t.Fatalf("tiny maintenance profile smoke err=%v output=%s", err, output)
 	}
 	observations, err := os.ReadFile(filepath.Join(smoke, "10000", "load", "observations.txt"))
-	if err != nil || !strings.Contains(string(observations), "test_rows=96\n") || !strings.Contains(string(observations), "measured_seconds=") || !strings.Contains(string(observations), "process_elapsed_seconds=") || !strings.Contains(string(observations), "db_bytes_before=0\n") || !strings.Contains(string(observations), "db_bytes_after=") {
+	if err != nil || !strings.Contains(string(observations), "test_rows=96\n") || !strings.Contains(string(observations), "measured_seconds=") || !strings.Contains(string(observations), "process_elapsed_seconds=") || !strings.Contains(string(observations), "db_bytes_before=0\n") || !strings.Contains(string(observations), "db_bytes_after=") || !strings.Contains(string(observations), "db_filesystem=") || !strings.Contains(string(observations), "db_mount=") {
 		t.Fatalf("observations=%q err=%v", observations, err)
+	}
+	for _, key := range []string{"db_filesystem", "db_mount"} {
+		found := false
+		for _, line := range strings.Split(string(observations), "\n") {
+			if value, ok := strings.CutPrefix(line, key+"="); ok {
+				if value == "" {
+					t.Fatalf("empty %s in observations=%q", key, observations)
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing %s in observations=%q", key, observations)
+		}
 	}
 	for _, line := range strings.Split(string(observations), "\n") {
 		if value, found := strings.CutPrefix(line, "process_elapsed_seconds="); found {

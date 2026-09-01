@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
@@ -148,7 +149,11 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("phase=%s rows=%d setup_complete=true measured_boundary_starts_now db_bytes_before=%d", phase, rows, before)
+	dbFilesystem, dbMount, err := manualProfileDBFilesystem(cfg.dbDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("phase=%s rows=%d setup_complete=true measured_boundary_starts_now db_bytes_before=%d db_filesystem=%s db_mount=%s", phase, rows, before, dbFilesystem, dbMount)
 	measured, profileErr := profileManualPhase(profileMode, os.Getenv("TREEDB_TEXT_PROFILE_DIR"), action)
 	var postProfileErr error
 	if profileErr == nil && validateAfterProfile != nil {
@@ -309,6 +314,22 @@ func timeManualAction(action func() error) (time.Duration, error) {
 	start := time.Now()
 	err := action()
 	return time.Since(start), err
+}
+
+func manualProfileDBFilesystem(path string) (device, mount string, err error) {
+	out, err := exec.Command("df", "-P", path).Output()
+	if err != nil {
+		return "", "", fmt.Errorf("database filesystem: %w", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) < 2 {
+		return "", "", fmt.Errorf("database filesystem: unexpected df output %q", out)
+	}
+	fields := strings.Fields(lines[len(lines)-1])
+	if len(fields) < 6 {
+		return "", "", fmt.Errorf("database filesystem: unexpected df row %q", lines[len(lines)-1])
+	}
+	return fields[0], fields[len(fields)-1], nil
 }
 
 func repeatManualReadOnlyAction(action func() error, minimum time.Duration) error {

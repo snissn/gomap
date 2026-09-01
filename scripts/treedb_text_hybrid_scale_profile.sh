@@ -12,7 +12,10 @@ PROFILE_PHASE="${PROFILE_PHASE:-}"
 RUN_100K="${RUN_100K:-false}"
 TINY_SMOKE="${TINY_SMOKE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
-controlled_go_env=(env -u GOMAXPROCS -u GOGC -u GOMEMLIMIT -u GOOS -u GOARCH -u GOAMD64 -u GOARM64 -u GO386 -u GOARM -u GOMIPS -u GOMIPS64 -u GOPPC64 -u GORISCV64 -u GOWASM -u GOEXPERIMENT -u CGO_ENABLED GOWORK=off GOFLAGS= GOENV=off)
+treedb_performance_env=(TREEDB_LEAF_PAGE_CACHE_ENTRIES TREEDB_COLUMN_STORE_TYPED_COMPRESSION TREEDB_COLUMN_STORE_TYPED_SECTION_COMPRESSION TREEDB_COLUMN_STORE_TYPED_LOCATOR_COMPRESSION TREEDB_COLUMN_STORE_TYPED_DICTIONARY_COMPRESSION TREEDB_COLUMN_STORE_TYPED_PRUNING_COMPRESSION TREEDB_COLUMN_STORE_TYPED_INT64_ENCODING TREEDB_COLUMN_STORE_TYPED_ROWS_PER_GRANULE TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_ENABLED TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_TARGET_BYTES TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_MIN_ROWS TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_MAX_ROWS)
+controlled_go_env=(env -u GOMAXPROCS -u GOGC -u GOMEMLIMIT -u GOOS -u GOARCH -u GOAMD64 -u GOARM64 -u GO386 -u GOARM -u GOMIPS -u GOMIPS64 -u GOPPC64 -u GORISCV64 -u GOWASM -u GOEXPERIMENT -u CGO_ENABLED)
+for treedb_env in "${treedb_performance_env[@]}"; do controlled_go_env+=(-u "$treedb_env"); done
+controlled_go_env+=(GOWORK=off GOFLAGS= GOENV=off)
 controlled_git_env=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_COMMON_DIR -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_NOSYSTEM)
 while IFS= read -r local_git_env_var; do
   controlled_git_env+=(-u "$local_git_env_var")
@@ -56,11 +59,12 @@ if [[ -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then echo
   echo "gogc=cleared"
   echo "gomemlimit=cleared"
   echo "compiler_tuning=cleared GOOS,GOARCH,GOAMD64,GOARM64,GO386,GOARM,GOMIPS,GOMIPS64,GOPPC64,GORISCV64,GOWASM,GOEXPERIMENT,CGO_ENABLED"
+  echo "treedb_performance_overrides=cleared ${treedb_performance_env[*]}"
   if [[ -n "${GODEBUG:-}" ]]; then printf 'godebug_shell_escaped=%q\n' "$GODEBUG"; fi
 } > "$RUN_DIR/context.txt"
 
 run_matrix() {
-  local rows="$1" phase phase_dir artifact_before artifact_after db_before db_after measured_seconds test_rows elapsed elapsed_file mode godebug
+  local rows="$1" phase phase_dir artifact_before artifact_after db_before db_after db_filesystem db_mount measured_seconds test_rows elapsed elapsed_file mode godebug
   IFS=',' read -ra selected <<< "$PHASES"
   for phase in "${selected[@]}"; do
     case "$phase" in load|vector|phrase|broad|maintenance|reopen) ;; *) echo "unknown phase: $phase" >&2; return 2;; esac
@@ -96,11 +100,13 @@ run_matrix() {
     elapsed=$(<"$elapsed_file")
     rm "$elapsed_file"
     artifact_after=$(du -sk "$phase_dir" | awk '{print $1}')
-    db_before=$(awk -F'db_bytes_before=' '/db_bytes_before=/{print $2}' "$phase_dir/phase.log" | tail -1)
+    db_before=$(awk -F'db_bytes_before=' '/db_bytes_before=/{print $2}' "$phase_dir/phase.log" | awk '{print $1}' | tail -1)
     db_after=$(awk -F'db_bytes_after=' '/db_bytes_after=/{print $2}' "$phase_dir/phase.log" | tail -1)
+    db_filesystem=$(sed -n 's/.* db_filesystem=\([^ ]*\) db_mount=.*/\1/p' "$phase_dir/phase.log" | tail -1)
+    db_mount=$(sed -n 's/.* db_filesystem=[^ ]* db_mount=\([^ ]*\).*/\1/p' "$phase_dir/phase.log" | tail -1)
     measured_seconds=$(awk -F'measured_seconds=' '/measured_seconds=/{print $2}' "$phase_dir/phase.log" | awk '{print $1}' | tail -1)
     test_rows=$(sed -n 's/.* rows=\([0-9][0-9]*\) setup_complete=.*/\1/p' "$phase_dir/phase.log" | tail -1)
-    printf 'phase=%s\nmatrix_rows=%s\ntest_rows=%s\nsetup=logged before measured boundary\nmeasured_seconds=%s\nprocess_elapsed_seconds=%s\ndb_bytes_before=%s\ndb_bytes_after=%s\nartifact_kib_before=%s\nartifact_kib_after=%s\n' "$phase" "$rows" "$test_rows" "$measured_seconds" "$elapsed" "$db_before" "$db_after" "$artifact_before" "$artifact_after" > "$phase_dir/observations.txt"
+    printf 'phase=%s\nmatrix_rows=%s\ntest_rows=%s\nsetup=logged before measured boundary\nmeasured_seconds=%s\nprocess_elapsed_seconds=%s\ndb_bytes_before=%s\ndb_bytes_after=%s\ndb_filesystem=%s\ndb_mount=%s\nartifact_kib_before=%s\nartifact_kib_after=%s\n' "$phase" "$rows" "$test_rows" "$measured_seconds" "$elapsed" "$db_before" "$db_after" "$db_filesystem" "$db_mount" "$artifact_before" "$artifact_after" > "$phase_dir/observations.txt"
     if [[ "$PROFILE_PHASE" == "$phase" && "$PROFILE_MODE" == runtime ]]; then for artifact in cpu.pprof trace.out block.pprof mutex.pprof; do test -s "$phase_dir/profiles/$artifact"; done; fi
     if [[ "$PROFILE_PHASE" == "$phase" && "$PROFILE_MODE" == alloc ]]; then for artifact in alloc_before.pprof alloc_after.pprof alloc_delta.txt heap_after.pprof; do test -s "$phase_dir/profiles/$artifact"; done; fi
   done
