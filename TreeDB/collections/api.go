@@ -116,6 +116,7 @@ var (
 	errUpdateBatchHasSecondaryUniqueIndex      = errors.New("collections: update batch has secondary unique index")
 	errUpdateBatchChangesSecondaryUniqueIndex  = errors.New("collections: update batch changes secondary unique index")
 	errIndexedFlushLostOwnership               = errors.New("collections: async indexed publish lost ownership of in-flight flush units")
+	errIndexedFlushRelinquished                = errors.New("collections: async indexed publish relinquished to a quiescent command WAL boundary")
 	errCreateCollectionNoopExistingSchema      = errors.New("collections: create collection no-op existing schema")
 	errUpdateCombinerStopped                   = errors.New("collections: update combiner stopped before DB update completed; callback may have been invoked")
 	indexedAsyncFlushPprofLabels               = pprof.Labels(
@@ -1319,6 +1320,8 @@ type indexedFlushUnit struct {
 	byteCount       int64
 	rootRunCount    int
 	columnDocuments []columnWriteDocument
+	commandWALFirst uint64
+	commandWALLast  uint64
 }
 
 type indexedFlushPublishWork struct {
@@ -1338,6 +1341,39 @@ type indexedFlushPublishWork struct {
 	rootRunCount       int
 	rootCount          int
 	rootDeltaStats     collectionRootDeltaPlanStats
+	commandWALFirst    uint64
+	commandWALLast     uint64
+	commandWALApplied  uint64
+}
+
+type preparedIndexedCommandWALPublish struct {
+	intent            *backenddb.CommandWALIntent
+	applied           uint64
+	unlockPrepared    func()
+	unlockRaw         func()
+	unlockCoordinator func()
+}
+
+func (lease *preparedIndexedCommandWALPublish) releaseCoordinator() {
+	if lease != nil && lease.unlockCoordinator != nil {
+		lease.unlockCoordinator()
+		lease.unlockCoordinator = nil
+	}
+}
+
+func (lease *preparedIndexedCommandWALPublish) release() {
+	if lease == nil {
+		return
+	}
+	lease.releaseCoordinator()
+	if lease.unlockRaw != nil {
+		lease.unlockRaw()
+		lease.unlockRaw = nil
+	}
+	if lease.unlockPrepared != nil {
+		lease.unlockPrepared()
+		lease.unlockPrepared = nil
+	}
 }
 
 type bufferedIndexedCheckpoint struct {
@@ -1372,7 +1408,10 @@ type bufferedIndexedCheckpoint struct {
 	indexedDeletesOnly     bool
 	pendingCommandWALFirst uint64
 	pendingCommandWALLast  uint64
-	columnDocuments        []columnWriteDocument
+
+	indexedMutableCommandWALFirst uint64
+	indexedMutableCommandWALLast  uint64
+	columnDocuments               []columnWriteDocument
 }
 
 type bufferedUniqueValueIndex struct {
@@ -1470,22 +1509,25 @@ type collectionWriteDomain struct {
 	nativeVectorPublishMu    sync.RWMutex
 	// Built lazily by readers so write-only indexed buffering does not pay for
 	// an auxiliary lookup structure it never uses.
-	primaryRunIndex             *bufferedPrimaryRunIndex
-	uniqueValueRuns             map[string][]memtable.Table
-	uniqueValueMutableRuns      map[string]memtable.Table
-	uniqueValueIndex            map[string]*bufferedUniqueValueIndex
-	count                       int
-	bufferedBytes               int64
-	mutableCount                int
-	mutableBytes                int64
-	rootRunCount                int
-	writeGeneration             uint64
-	primaryWriteIndex           *bufferedPrimaryWriteIndex
-	indexedDeletesOnly          bool
-	pendingCommandWALFirst      uint64
-	pendingCommandWALLast       uint64
-	columnDocuments             []columnWriteDocument
-	commandWALStageReservations atomic.Int32
+	primaryRunIndex        *bufferedPrimaryRunIndex
+	uniqueValueRuns        map[string][]memtable.Table
+	uniqueValueMutableRuns map[string]memtable.Table
+	uniqueValueIndex       map[string]*bufferedUniqueValueIndex
+	count                  int
+	bufferedBytes          int64
+	mutableCount           int
+	mutableBytes           int64
+	rootRunCount           int
+	writeGeneration        uint64
+	primaryWriteIndex      *bufferedPrimaryWriteIndex
+	indexedDeletesOnly     bool
+	pendingCommandWALFirst uint64
+	pendingCommandWALLast  uint64
+
+	indexedMutableCommandWALFirst uint64
+	indexedMutableCommandWALLast  uint64
+	columnDocuments               []columnWriteDocument
+	commandWALStageReservations   atomic.Int32
 
 	mutationLockCalls                  atomic.Uint64
 	mutationLockWaitTotalNs            atomic.Uint64
@@ -3200,6 +3242,9 @@ func flushCollectionWriteDomainAsync(db *backenddb.DB, domain *collectionWriteDo
 			return err
 		}
 		if err := collection.publishPreparedIndexedFlush(work); err != nil {
+			if errors.Is(err, errIndexedFlushRelinquished) {
+				return nil
+			}
 			return err
 		}
 		domain.mu.RLock()
@@ -5083,7 +5128,7 @@ func (c *Collection) flushBufferedNoIndexWithAdmissionState(admissionLocked bool
 			admissionLocked = true
 			continue
 		}
-		err := c.flushBufferedNoIndexLocked(domain)
+		err := c.flushBufferedNoIndexLocked(domain, false)
 		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
 		if err == nil && publishedPrimary {
 			err = c.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLocked()
@@ -5173,7 +5218,7 @@ func (c *Collection) flushBufferedWritesLockedWithRawPublishState(domain *collec
 	if hasBufferedIndexedRootRuns(domain) {
 		err = c.flushBufferedIndexedLockedWithRawPublishState(domain, rawPublishLocked)
 	} else {
-		err = c.flushBufferedNoIndexLocked(domain)
+		err = c.flushBufferedNoIndexLocked(domain, rawPublishLocked)
 	}
 	if err == nil {
 		domain.clearIndexedAsyncFlushError()
@@ -5181,7 +5226,7 @@ func (c *Collection) flushBufferedWritesLockedWithRawPublishState(domain *collec
 	return err
 }
 
-func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) error {
+func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain, rawPublishLocked bool) error {
 	if domain == nil || domain.count == 0 || domain.table == nil {
 		return nil
 	}
@@ -5225,6 +5270,10 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	baseSystemRoot := snapshotSystemRoot(pin)
 	baseCommitSeq := snapshotCommitSeq(pin)
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
+	commandWALIntent, commandWALApplied, err := domain.pendingCommandWALCoverageIntentLocked(c.db)
+	if err != nil {
+		return err
+	}
 	table := domain.table
 	publishTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(c.db, meta, rootName, table)
 	if err != nil {
@@ -5235,13 +5284,28 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	}
 	iter := publishTable.NewIterator(nil, nil)
 
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
+	ordered := []backenddb.OrderedRootDeltaPublishInput{{
 		BaseRoot:      baseRoot,
 		Iter:          iter,
 		StoragePolicy: domain.storagePolicy,
-	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
-	})
+	}}
+	var newSystemRoot uint64
+	var rootIDs []uint64
+	if commandWALIntent != nil {
+		if rawPublishLocked || c.commandWALRawPublishLocked {
+			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+			})
+		} else {
+			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+			})
+		}
+	} else {
+		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+		})
+	}
 	_ = iter.Close()
 	if err != nil {
 		return err
@@ -5263,6 +5327,9 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.primaryWriteIndex = nil
+	if commandWALApplied != 0 {
+		domain.clearPendingCommandWALThroughLocked(commandWALApplied)
+	}
 	c.meta = meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	resetCollectionRunTable(table)
@@ -5530,7 +5597,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.observeIndexedStage(len(plan.resultIDs), stagedBytes, stagedRootRuns)
 	c.meta = catalog.meta
 	if commandWALLSN != 0 {
-		if err := domain.recordPendingCommandWALLSNLocked(c.db, commandWALLSN); err != nil {
+		if err := domain.recordPendingIndexedCommandWALLSNLocked(c.db, commandWALLSN); err != nil {
 			return 0, commandWALBufferedInsertCommitAmbiguous(err)
 		}
 		releaseCommandWALRawStage()
@@ -5741,7 +5808,7 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 	domain.observeIndexedStage(len(plan.resultIDs), direct.stagedBytes, actualRootRuns)
 	c.meta = catalog.meta
 	if commandWALLSN != 0 {
-		if err := domain.recordPendingCommandWALLSNLocked(c.db, commandWALLSN); err != nil {
+		if err := domain.recordPendingIndexedCommandWALLSNLocked(c.db, commandWALLSN); err != nil {
 			return 0, commandWALBufferedInsertCommitAmbiguous(err)
 		}
 		if releaseCommandWALRawStage != nil {
@@ -5783,6 +5850,8 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
 	domain.indexedPublishingUnits = nil
 	domain.indexedFlushUnits = nil
+	domain.indexedMutableCommandWALFirst = 0
+	domain.indexedMutableCommandWALLast = 0
 	domain.rootRuns = nil
 	domain.rootMutableRuns = nil
 	domain.rootPolicies = nil
@@ -6784,7 +6853,7 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 		}
 	}
 	domain.indexedAutoFlushes.Add(1)
-	if opts.BufferedIndexedAsyncFlush {
+	if opts.BufferedIndexedAsyncFlush && (c.db == nil || !c.db.CommandWALEnabled() || !columnStoreWriteEnabled(domain.meta)) {
 		rotateIndexedMutableToFlushUnitForAsyncLocked(domain)
 		if opts.BufferedIndexedAsyncFlushMaxQueuedUnits > 0 && len(domain.indexedFlushUnits) >= opts.BufferedIndexedAsyncFlushMaxQueuedUnits {
 			if len(domain.indexedPublishingUnits) == 0 {
@@ -7087,7 +7156,10 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		indexedDeletesOnly:     domain.indexedDeletesOnly,
 		pendingCommandWALFirst: domain.pendingCommandWALFirst,
 		pendingCommandWALLast:  domain.pendingCommandWALLast,
-		columnDocuments:        append([]columnWriteDocument(nil), domain.columnDocuments...),
+
+		indexedMutableCommandWALFirst: domain.indexedMutableCommandWALFirst,
+		indexedMutableCommandWALLast:  domain.indexedMutableCommandWALLast,
+		columnDocuments:               append([]columnWriteDocument(nil), domain.columnDocuments...),
 	}
 }
 
@@ -7126,6 +7198,8 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.indexedDeletesOnly = checkpoint.indexedDeletesOnly
 	domain.pendingCommandWALFirst = checkpoint.pendingCommandWALFirst
 	domain.pendingCommandWALLast = checkpoint.pendingCommandWALLast
+	domain.indexedMutableCommandWALFirst = checkpoint.indexedMutableCommandWALFirst
+	domain.indexedMutableCommandWALLast = checkpoint.indexedMutableCommandWALLast
 	domain.columnDocuments = checkpoint.columnDocuments
 	if collectionCommandWALDomainPendingLocked(domain) {
 		domain.reserveCommandWALCoordinatorOwnerLocked()
@@ -7168,6 +7242,8 @@ func cloneIndexedFlushUnits(in []indexedFlushUnit) []indexedFlushUnit {
 			byteCount:       unit.byteCount,
 			rootRunCount:    unit.rootRunCount,
 			columnDocuments: append([]columnWriteDocument(nil), unit.columnDocuments...),
+			commandWALFirst: unit.commandWALFirst,
+			commandWALLast:  unit.commandWALLast,
 		}
 	}
 	return out
@@ -9074,6 +9150,9 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	}
 
 	rotateIndexedMutableToFlushUnitForAsyncLocked(domain)
+	if err = domain.validateIndexedFlushUnitCommandWALOwnershipLocked(); err != nil {
+		return nil, err
+	}
 	units := domain.indexedFlushUnits
 	flushUnit := mergedIndexedFlushUnits(units)
 	rootNames := orderedBufferedRootNames(meta, flushUnit.rootRuns)
@@ -9118,6 +9197,8 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	work.byteCount = flushUnit.byteCount
 	work.rootRunCount = indexedFlushUnitRootRunCount(flushUnit)
 	work.rootCount = len(rootNames)
+	work.commandWALFirst = flushUnit.commandWALFirst
+	work.commandWALLast = flushUnit.commandWALLast
 
 	domain.indexedPublishingUnits = append(domain.indexedPublishingUnits, units...)
 	domain.indexedFlushUnits = nil
@@ -9125,9 +9206,80 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	return work, nil
 }
 
+// tryLockPreparedIndexedCommandWALPublish claims the final, short raw-publish
+// window after async materialization. A quiescent boundary wins by making the
+// nonblocking admission claim fail; the caller requeues the unchanged FIFO work
+// for that boundary to drain synchronously.
+func (c *Collection) tryLockPreparedIndexedCommandWALPublish(work *indexedFlushPublishWork) (*preparedIndexedCommandWALPublish, error) {
+	if c == nil || c.db == nil || c.writeDomain == nil || work == nil || !c.db.CommandWALEnabled() || work.commandWALLast == 0 {
+		return nil, nil
+	}
+	for {
+		unlockPrepared, ok := c.db.TryLockCommandWALPreparedPublish()
+		if !ok {
+			return nil, errIndexedFlushRelinquished
+		}
+		lease := &preparedIndexedCommandWALPublish{unlockPrepared: unlockPrepared}
+		lease.unlockRaw = c.db.LockCommandWALPreparedPublish()
+		domain := c.writeDomain
+		coord := domain.commandWALCoordinatorForDomain(c.db)
+		if coord != nil {
+			if !coord.mu.TryLock() {
+				// A stage cleanup can hold this mutex briefly. Drop the raw and
+				// prepared leases before waiting for that handoff, then retry the
+				// nonblocking boundary claim; a real boundary still wins there.
+				lease.release()
+				coord.mu.Lock()
+				coord.mu.Unlock()
+				continue
+			}
+			if coord.owner != nil && coord.owner != domain {
+				coord.mu.Unlock()
+				lease.release()
+				return nil, errIndexedFlushRelinquished
+			}
+			lease.unlockCoordinator = coord.mu.Unlock
+		}
+		state, ok := c.db.StateToken()
+		if !ok || work.commandWALLast <= state.AppliedCommandLSN {
+			lease.release()
+			return nil, errIndexedFlushLostOwnership
+		}
+		domain.mu.Lock()
+		if len(domain.indexedPublishingUnits) < len(work.units) {
+			domain.mu.Unlock()
+			lease.release()
+			return nil, errIndexedFlushLostOwnership
+		}
+		for i := range work.units {
+			if !sameIndexedFlushUnitTables(domain.indexedPublishingUnits[i], work.units[i]) {
+				domain.mu.Unlock()
+				lease.release()
+				return nil, errIndexedFlushLostOwnership
+			}
+		}
+		intent, applied, err := domain.pendingCommandWALCoverageIntentThroughLocked(c.db, work.commandWALLast)
+		domain.mu.Unlock()
+		if err != nil {
+			lease.release()
+			return nil, err
+		}
+		if intent == nil || applied != work.commandWALLast {
+			lease.release()
+			return nil, fmt.Errorf("%w: indexed async publish missing owned command WAL prefix through %d", backenddb.ErrCommandWALContextMissingFrame, work.commandWALLast)
+		}
+		lease.intent = intent
+		lease.applied = applied
+		return lease, nil
+	}
+}
+
 func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) error {
 	if c == nil || c.db == nil || work == nil {
 		return nil
+	}
+	if c.db.CommandWALEnabled() && columnStoreWriteEnabled(work.meta) {
+		return c.completePreparedIndexedFlush(work, 0, nil, fmt.Errorf("%w: typed-column indexed async publish is not supported", backenddb.ErrCommandWALContextMissingFrame), 0, 0, 0)
 	}
 	defer func() {
 		if work.pin != nil {
@@ -9167,14 +9319,36 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		}
 		work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
 		materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
+		lease, leaseErr := c.tryLockPreparedIndexedCommandWALPublish(work)
+		if leaseErr != nil {
+			return c.completePreparedIndexedFlush(work, 0, nil, leaseErr, materializeElapsed, materializeElapsed, 0)
+		}
+		if lease != nil {
+			defer lease.release()
+		}
 		unlockAdmission := c.lockVectorIndexPublicationAdmission()
 		defer unlockAdmission()
 		publishStart := time.Now()
-		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, c.bufferedIndexedRootPublishPreflight(work.pin.Pager(), work.baseSystemRoot, work.baseCommitSeq, work.meta, work.rootNames, work.rootBaseIDs), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
-		})
+		var newSystemRoot uint64
+		var rootIDs []uint64
+		var publishErr error
+		if lease != nil {
+			newSystemRoot, rootIDs, publishErr = c.publishBufferedOrderedRootDeltaBatchGroupWithCommandWAL(ordered, c.bufferedIndexedRootPublishPreflight(work.pin.Pager(), work.baseSystemRoot, work.baseCommitSeq, work.meta, work.rootNames, work.rootBaseIDs), lease.intent, true, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
+			})
+		} else {
+			newSystemRoot, rootIDs, publishErr = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, c.bufferedIndexedRootPublishPreflight(work.pin.Pager(), work.baseSystemRoot, work.baseCommitSeq, work.meta, work.rootNames, work.rootBaseIDs), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
+			})
+		}
 		publishElapsed := collectionObservedElapsedSince(publishStart)
 		cleanupDeltas()
+		if lease != nil {
+			lease.releaseCoordinator()
+			if publishErr == nil {
+				work.commandWALApplied = lease.applied
+			}
+		}
 		if publishErr == nil && len(rootIDs) != len(work.rootNames) {
 			publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
 		}
@@ -9195,14 +9369,36 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	}
 	work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
 	materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
+	lease, leaseErr := c.tryLockPreparedIndexedCommandWALPublish(work)
+	if leaseErr != nil {
+		return c.completePreparedIndexedFlush(work, 0, nil, leaseErr, materializeElapsed, materializeElapsed, 0)
+	}
+	if lease != nil {
+		defer lease.release()
+	}
 	unlockAdmission := c.lockVectorIndexPublicationAdmission()
 	defer unlockAdmission()
 	publishStart := time.Now()
-	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, c.bufferedIndexedRootPublishPreflight(work.pin.Pager(), work.baseSystemRoot, work.baseCommitSeq, work.meta, work.rootNames, work.rootBaseIDs), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
-	})
+	var newSystemRoot uint64
+	var rootIDs []uint64
+	var publishErr error
+	if lease != nil {
+		newSystemRoot, rootIDs, publishErr = c.publishBufferedOrderedRootDeltaBatchGroupWithCommandWAL(ordered, c.bufferedIndexedRootPublishPreflight(work.pin.Pager(), work.baseSystemRoot, work.baseCommitSeq, work.meta, work.rootNames, work.rootBaseIDs), lease.intent, true, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
+		})
+	} else {
+		newSystemRoot, rootIDs, publishErr = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, c.bufferedIndexedRootPublishPreflight(work.pin.Pager(), work.baseSystemRoot, work.baseCommitSeq, work.meta, work.rootNames, work.rootBaseIDs), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
+		})
+	}
 	publishElapsed := collectionObservedElapsedSince(publishStart)
 	cleanupDeltas()
+	if lease != nil {
+		lease.releaseCoordinator()
+		if publishErr == nil {
+			work.commandWALApplied = lease.applied
+		}
+	}
 	if publishErr == nil && len(rootIDs) != len(work.rootNames) {
 		publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
 	}
@@ -9585,6 +9781,7 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	defer domain.mu.Unlock()
 	preservePrimaryRunIndex := domain.primaryRunIndex != nil
 	if publishErr != nil {
+		relinquished := errors.Is(publishErr, errIndexedFlushRelinquished)
 		if errors.Is(publishErr, ErrConcurrentMutation) {
 			domain.indexedFlushRootBaseMismatches.Add(1)
 		}
@@ -9601,6 +9798,10 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 		}
 		domain.indexedFlushUnits = append(removed, domain.indexedFlushUnits...)
 		rebuildBufferedPendingIndexesLocked(domain, work.meta.Name, preservePrimaryRunIndex)
+		if relinquished {
+			domain.observeIndexedFlush(len(work.units), work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, nil)
+			return publishErr
+		}
 		domain.observeIndexedFlush(len(work.units), work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, publishErr)
 		return publishErr
 	}
@@ -9637,6 +9838,10 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	c.meta = work.meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	resetIndexedFlushUnits(oldPublishing)
+	if work.commandWALApplied != 0 {
+		domain.clearPendingCommandWALThroughLocked(work.commandWALApplied)
+		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
+	}
 	domain.observeIndexedFlush(len(work.units), work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, nil)
 	domain.observeRootDeltaPlan(work.rootDeltaStats)
 	if slices.Contains(work.rootNames, collectionPrimaryRootName(work.meta.Name)) {
@@ -9697,6 +9902,9 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	}
 
 	rotateIndexedMutableToFlushUnitLocked(domain)
+	if err := domain.validateIndexedFlushUnitCommandWALOwnershipLocked(); err != nil {
+		return err
+	}
 	flushUnit, materializedPrimaryRuns, err := mergedIndexedFlushUnitForSyncLocked(meta, domain)
 	if err != nil {
 		return err
@@ -9789,7 +9997,13 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 			return err
 		}
 		defer unlock()
-		commandWALIntent, appliedLSN, err := domain.pendingCommandWALCoverageIntentLocked(c.db)
+		var commandWALIntent *backenddb.CommandWALIntent
+		var appliedLSN uint64
+		if flushUnit.commandWALLast != 0 {
+			commandWALIntent, appliedLSN, err = domain.pendingCommandWALCoverageIntentThroughLocked(c.db, flushUnit.commandWALLast)
+		} else {
+			commandWALIntent, appliedLSN, err = domain.pendingCommandWALCoverageIntentLocked(c.db)
+		}
 		if err != nil {
 			return err
 		}
@@ -9918,6 +10132,8 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	domain.bufferedBytes = 0
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
+	domain.indexedMutableCommandWALFirst = 0
+	domain.indexedMutableCommandWALLast = 0
 	if commandWALAppliedLSN != 0 {
 		domain.clearPendingCommandWALThroughLocked(commandWALAppliedLSN)
 		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
@@ -9992,6 +10208,8 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 		byteCount:       domain.mutableBytes,
 		rootRunCount:    domain.rootRunCount,
 		columnDocuments: domain.columnDocuments,
+		commandWALFirst: domain.indexedMutableCommandWALFirst,
+		commandWALLast:  domain.indexedMutableCommandWALLast,
 	}
 	domain.indexedFlushUnits = append(domain.indexedFlushUnits, unit)
 	domain.rootRuns = nil
@@ -10005,6 +10223,8 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.columnDocuments = nil
+	domain.indexedMutableCommandWALFirst = 0
+	domain.indexedMutableCommandWALLast = 0
 	return true
 }
 
@@ -10028,6 +10248,8 @@ func rotateIndexedMutableToFlushUnitForAsyncLocked(domain *collectionWriteDomain
 		byteCount:       domain.mutableBytes,
 		rootRunCount:    rootRunCount,
 		columnDocuments: domain.columnDocuments,
+		commandWALFirst: domain.indexedMutableCommandWALFirst,
+		commandWALLast:  domain.indexedMutableCommandWALLast,
 	}
 	domain.indexedFlushUnits = append(domain.indexedFlushUnits, unit)
 	domain.rootRuns = nil
@@ -10042,6 +10264,8 @@ func rotateIndexedMutableToFlushUnitForAsyncLocked(domain *collectionWriteDomain
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.columnDocuments = nil
+	domain.indexedMutableCommandWALFirst = 0
+	domain.indexedMutableCommandWALLast = 0
 	return true
 }
 
@@ -10080,7 +10304,9 @@ func removeIndexedPublishingWorkUnitsLocked(domain *collectionWriteDomain, units
 func sameIndexedFlushUnitTables(a, b indexedFlushUnit) bool {
 	return sameTableRunMap(a.rootRuns, b.rootRuns) &&
 		sameTableRunMap(a.uniqueValueRuns, b.uniqueValueRuns) &&
-		a.primaryOverlay == b.primaryOverlay
+		a.primaryOverlay == b.primaryOverlay &&
+		a.commandWALFirst == b.commandWALFirst &&
+		a.commandWALLast == b.commandWALLast
 }
 
 func sameTableRunMap(a, b map[string][]memtable.Table) bool {
@@ -10179,6 +10405,8 @@ func mergedIndexedFlushUnitLocked(domain *collectionWriteDomain) indexedFlushUni
 		uniqueValueRuns: domain.uniqueValueRuns,
 		arenaRefs:       domain.rootValueArenas,
 		rootRunCount:    domain.rootRunCount,
+		commandWALFirst: domain.indexedMutableCommandWALFirst,
+		commandWALLast:  domain.indexedMutableCommandWALLast,
 	})
 	if len(unit.rootRuns) == 0 {
 		unit.rootRuns = nil
@@ -10222,6 +10450,8 @@ func mergedIndexedFlushUnitForSyncLocked(meta CollectionMeta, domain *collection
 		uniqueValueRuns: domain.uniqueValueRuns,
 		arenaRefs:       domain.rootValueArenas,
 		rootRunCount:    domain.rootRunCount,
+		commandWALFirst: domain.indexedMutableCommandWALFirst,
+		commandWALLast:  domain.indexedMutableCommandWALLast,
 	})
 	if len(unit.rootRuns) == 0 {
 		unit.rootRuns = nil
@@ -10257,6 +10487,12 @@ func mergeIndexedFlushUnit(dst *indexedFlushUnit, src indexedFlushUnit) {
 	dst.byteCount = saturatingAddNonNegativeInt64(dst.byteCount, src.byteCount)
 	dst.rootRunCount = saturatingAddNonNegativeInt(dst.rootRunCount, indexedFlushUnitRootRunCount(src))
 	dst.columnDocuments = append(dst.columnDocuments, src.columnDocuments...)
+	if src.commandWALFirst != 0 {
+		if dst.commandWALFirst == 0 {
+			dst.commandWALFirst = src.commandWALFirst
+		}
+		dst.commandWALLast = src.commandWALLast
+	}
 }
 
 func indexedFlushUnitRootRunCount(unit indexedFlushUnit) int {
@@ -18645,7 +18881,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		if plan.bufferedCommandWALLSN == 0 || commandWALPendingRecorded {
 			return nil
 		}
-		if err := domain.recordPendingCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
+		if err := domain.recordPendingIndexedCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
 			return commandWALBufferedUpdateCommitAmbiguous(err)
 		}
 		commandWALPendingRecorded = true
