@@ -26,14 +26,21 @@ func TestTextV2StorageStatsPositionValidationUsesPostingTableAndDocMapBlockCache
 			t.Fatalf("read status ok=%v err=%v", ok, err)
 		}
 		postings := newTextV2PositionValidation()
-		current, err := postings.docMapCurrentAtRoot(snap, catalog, collectionTextV2DocMapRootName("docs", "lexical"), 1, 1)
+		docMapRoot := collectionTextV2DocMapRootName("docs", "lexical")
+		current, err := postings.docMapCurrentAtRoot(snap, catalog, docMapRoot, 1, 1)
 		if err != nil || !current || postings.docMap == nil {
 			t.Fatalf("first docmap lookup current=%v cache=%v err=%v", current, postings.docMap != nil, err)
 		}
 		cached := postings.docMap
-		current, err = postings.docMapCurrentAtRoot(snap, catalog, collectionTextV2DocMapRootName("docs", "lexical"), 2, 1)
+		current, err = postings.docMapCurrentAtRoot(snap, catalog, docMapRoot, 2, 1)
 		if err != nil || !current || postings.docMap != cached {
 			t.Fatalf("second docmap lookup current=%v reused=%v err=%v", current, postings.docMap == cached, err)
+		}
+		allocs := testing.AllocsPerRun(100, func() {
+			current, err = postings.docMapCurrentAtRoot(snap, catalog, docMapRoot, 2, 1)
+		})
+		if err != nil || !current || allocs != 0 {
+			t.Fatalf("cached docmap lookup current=%v allocs=%v err=%v", current, allocs, err)
 		}
 		stats := TextIndexStorageStats{Version: TextIndexVersionV2}
 		if err := inspectTextV2Root(snap, catalog, def, collectionTextV2PostingBlocksRootName("docs", "lexical"), textV2RootFamilyPostingBlocks, status, &stats, nil, postings); err != nil {

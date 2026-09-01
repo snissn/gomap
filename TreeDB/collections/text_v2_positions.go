@@ -324,8 +324,12 @@ func (v *textV2PositionValidation) docMapCurrentAtRoot(snap *backenddb.Snapshot,
 		}
 		v.docMap = &block
 	}
-	entry, ok := v.docMap.find(ordinal)
-	return ok && !entry.tombstoned() && entry.Generation == generation, nil
+	for _, entry := range v.docMap.Entries {
+		if entry.Ordinal == ordinal {
+			return !entry.tombstoned() && entry.Generation == generation, nil
+		}
+	}
+	return false, nil
 }
 
 func (v *textV2PositionValidation) add(term string, entry textV2PostingBlockEntry, fieldCount int) error {
