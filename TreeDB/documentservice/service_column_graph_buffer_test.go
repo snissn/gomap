@@ -339,15 +339,19 @@ func TestServiceColumnGraphScalarIndexesRetainFullJSON(t *testing.T) {
 	manager := collections.NewCollectionManager(db)
 	svc := New(manager)
 	ctx := context.Background()
-	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{
+	create := CreateIndexRequest{
 		Name:      "docs",
 		Dimension: 2,
 		VectorIndexOptions: &BenchmarkVectorIndexOptions{
 			Strategy: collections.VectorIndexStrategyColumnGraph,
 		},
 		ScalarFields: []ScalarFieldDeclaration{{Field: "meta.kind", ValueType: ScalarFieldString}},
-	}); err != nil {
+	}
+	if _, err := svc.CreateIndex(ctx, create); err != nil {
 		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.CreateIndex(ctx, create); err != nil {
+		t.Fatalf("idempotent CreateIndex: %v", err)
 	}
 	col, err := manager.OpenCollection("docs")
 	if err != nil {
@@ -371,6 +375,52 @@ func TestServiceColumnGraphScalarIndexesRetainFullJSON(t *testing.T) {
 	}
 	if len(filtered.Documents) != 1 || filtered.Documents[0].ID != "a" || !reflect.DeepEqual(filtered.Documents[0].Embedding, []float32{1, 0}) {
 		t.Fatalf("FilterDocuments=%+v", filtered)
+	}
+}
+
+func TestServiceColumnGraphRejectsUnsafeExistingScalarRetainedPayload(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		columnStore *collections.ColumnStoreConfig
+	}{
+		{name: "missing"},
+		{name: "non-column", columnStore: serviceColumnStoreConfig(2)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := backenddb.Open(testBackendOptions(t.TempDir()))
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer db.Close()
+			manager := collections.NewCollectionManager(db)
+			if _, err := manager.CreateCollection(&collections.CollectionMeta{
+				Name: "docs",
+				Options: collections.CollectionOptions{
+					DocumentFormat: collections.DocumentFormatJSON,
+					ColumnStore:    tc.columnStore,
+				},
+				Indexes: []collections.IndexDefinition{{Name: "meta_kind", Field: "meta.kind", ValueType: collections.IndexValueString}},
+				VectorIndexes: []collections.VectorIndexDefinition{{
+					Name: defaultVectorIndexName, Field: defaultEmbeddingField, Metric: collections.VectorMetricCosine,
+					Dimensions: 2, Encoding: collections.VectorIndexEncodingFloat32, Strategy: collections.VectorIndexStrategyColumnGraph, SchemaGeneration: 1,
+				}},
+				TextIndexes: []collections.TextIndexDefinition{{
+					Name: defaultTextIndexName, Fields: []collections.TextIndexField{{Field: defaultTextField}},
+					Analyzer: collections.TextAnalyzerSimple, StorePositions: true, SchemaGeneration: 1,
+				}},
+			}); err != nil {
+				t.Fatalf("CreateCollection: %v", err)
+			}
+			svc := New(manager)
+			_, err = svc.CreateIndex(context.Background(), CreateIndexRequest{
+				Name: "docs", Dimension: 2,
+				VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph},
+				ScalarFields:       []ScalarFieldDeclaration{{Field: "meta.kind", ValueType: ScalarFieldString}},
+			})
+			if ErrorCodeOf(err) != CodeConflict {
+				t.Fatalf("CreateIndex err=%v code=%s want conflict", err, ErrorCodeOf(err))
+			}
+		})
 	}
 }
 

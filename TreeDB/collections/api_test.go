@@ -12840,8 +12840,8 @@ func TestBufferedReconstructionRowAccountingLifecycle(t *testing.T) {
 	if got := domain.statsSnapshot().PendingIndexedReconstructionRows; got != 1 {
 		t.Fatalf("reconstruction rows after rollback=%d want 1", got)
 	}
-	if domain.reconstructionRows != 1 || len(domain.indexedFlushUnits) != 0 {
-		t.Fatalf("rollback reconstruction rows mutable=%d units=%d", domain.reconstructionRows, len(domain.indexedFlushUnits))
+	if domain.reconstructionRows != 1 || len(domain.indexedFlushUnits) != 0 || len(domain.columnDocuments) != 1 {
+		t.Fatalf("rollback reconstruction rows mutable=%d units=%d documents=%d", domain.reconstructionRows, len(domain.indexedFlushUnits), len(domain.columnDocuments))
 	}
 
 	if !rotateIndexedMutableToFlushUnitForAsyncLocked(domain) {

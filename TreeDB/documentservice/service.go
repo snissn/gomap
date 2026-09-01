@@ -253,7 +253,10 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 		switch {
 		case openErr == nil:
 			existingOptions := existing.Meta().Options
-			meta.Options.ColumnStore = existingOptions.ColumnStore
+			if existingOptions.ColumnStore != nil && existingOptions.ColumnStore.Enabled &&
+				(len(scalarDeclarations) == 0 || existingOptions.ColumnStore.RetainedPayload == collections.ColumnRetainedPayloadFull) {
+				meta.Options.ColumnStore = existingOptions.ColumnStore
+			}
 			meta.Options.DisableBufferedIndexedAsyncFlush = existingOptions.DisableBufferedIndexedAsyncFlush
 			meta.Options.BufferedIndexedAsyncFlush = existingOptions.BufferedIndexedAsyncFlush
 			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = existingOptions.BufferedIndexedAsyncFlushMaxQueuedUnits
