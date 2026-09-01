@@ -325,6 +325,104 @@ func TestCachingValueLogExternalRefFlusherDefersRotatedCommandFrameSyncToPinnedD
 	}
 }
 
+func TestCachingValueLogAppenderPreparedOrdinaryBlockFramesPreserveOrderAfterReopen(t *testing.T) {
+	previousProcs := runtime.GOMAXPROCS(4)
+	t.Cleanup(func() { runtime.GOMAXPROCS(previousProcs) })
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityDurable})
+	if err != nil {
+		t.Fatalf("backend Open: %v", err)
+	}
+	db, err := Open(dir, backend, Options{
+		JournalLanes:                       1,
+		ValueLogCompression:                uint8(vlogCompressionBlock),
+		ValueLogBlockTargetCompressedBytes: 256,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache Open: %v", err)
+	}
+	// Keep the test on the ordinary block grouping path rather than the retained
+	// storage-first grouping policy, which intentionally coalesces these values.
+	db.valueLogThreshold = 1 << 30
+
+	values := make([][]byte, 16)
+	for i := range values {
+		values[i] = make([]byte, 8<<10)
+		for j := range values[i] {
+			values[i][j] = byte((i*131 + j*17 + j>>4) % 251)
+		}
+	}
+	ptrs, err := backend.AppendValueLogValues(values)
+	if err != nil {
+		_ = db.Close()
+		_ = backend.Close()
+		t.Fatalf("AppendValueLogValues: %v", err)
+	}
+	if len(ptrs) != len(values) {
+		_ = db.Close()
+		_ = backend.Close()
+		t.Fatalf("AppendValueLogValues pointers=%d, want %d", len(ptrs), len(values))
+	}
+	db.lanes[0].vlogPrepMu.Lock()
+	workers := db.lanes[0].vlogPrepWorkers
+	db.lanes[0].vlogPrepMu.Unlock()
+	if workers == 0 {
+		_ = db.Close()
+		_ = backend.Close()
+		t.Fatalf("ordinary block append did not start prepared-frame workers (mode=%d target=%d max=%d channel=%t block-k-count=%d max-k=%d)", db.valueLogCompressionMode, db.valueLogBlockTargetBytes, db.lanes[0].vlogPrepMaxWorkers, db.lanes[0].vlogPrepCh != nil, db.lanes[0].vlogBlockKCount[0].Load(), db.lanes[0].vlogBlockKMax[0].Load())
+	}
+	for i, ptr := range ptrs {
+		if i > 0 && ptr.FileID == ptrs[i-1].FileID && ptr.Offset <= ptrs[i-1].Offset {
+			_ = db.Close()
+			_ = backend.Close()
+			t.Fatalf("pointer %d offset=%d, want > previous offset=%d in file %d", i, ptr.Offset, ptrs[i-1].Offset, ptr.FileID)
+		}
+		got, err := db.ReadValueLogRecord(ptr)
+		if err != nil {
+			_ = db.Close()
+			_ = backend.Close()
+			t.Fatalf("read value %d: %v", i, err)
+		}
+		if !bytes.Equal(got, values[i]) {
+			_ = db.Close()
+			_ = backend.Close()
+			t.Fatalf("read value %d mismatch", i)
+		}
+	}
+	if err := db.Close(); err != nil {
+		_ = backend.Close()
+		t.Fatalf("close cache: %v", err)
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatalf("close backend: %v", err)
+	}
+
+	reopenedBackend, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityDurable})
+	if err != nil {
+		t.Fatalf("reopen backend: %v", err)
+	}
+	reopened, err := Open(dir, reopenedBackend, Options{JournalLanes: 1})
+	if err != nil {
+		_ = reopenedBackend.Close()
+		t.Fatalf("reopen cache: %v", err)
+	}
+	defer func() {
+		_ = reopened.Close()
+		_ = reopenedBackend.Close()
+	}()
+	for i, ptr := range ptrs {
+		got, err := reopened.ReadValueLogRecord(ptr)
+		if err != nil {
+			t.Fatalf("reopen read value %d: %v", i, err)
+		}
+		if !bytes.Equal(got, values[i]) {
+			t.Fatalf("reopen read value %d mismatch", i)
+		}
+	}
+}
+
 func TestCachingValueLogExternalRefFlusherEmptyIDsSyncsAllPendingLanes(t *testing.T) {
 	db := &DB{lanes: make([]lane, 2)}
 	writers := make([]*vlogDirtyOrderWriter, len(db.lanes))
