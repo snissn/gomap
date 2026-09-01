@@ -65,33 +65,7 @@ func TestColumnRetainedPayloadBufferedInsertOwnsPointersBeforePublication(t *tes
 			_ = d.Close()
 		}
 	}()
-	cfg := &ColumnStoreConfig{
-		Enabled: true,
-		Columns: []ColumnStoreColumn{
-			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
-			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
-		},
-		RetainedPayload: ColumnRetainedPayloadFull,
-	}
-	mgr := NewCollectionManager(d)
-	if _, err := mgr.CreateCollection(&CollectionMeta{
-		Name: "events",
-		Options: CollectionOptions{
-			DocumentFormat:                   DocumentFormatJSON,
-			ColumnStore:                      cfg,
-			BufferedIndexedWrites:            true,
-			DisableBufferedIndexedAsyncFlush: true,
-		},
-		Indexes: []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
-		TextIndexes: []TextIndexDefinition{{
-			Name:     "kind_text",
-			Fields:   []TextIndexField{{Field: "kind"}},
-			Analyzer: TextAnalyzerSimple,
-		}},
-	}); err != nil {
-		t.Fatalf("CreateCollection: %v", err)
-	}
-	col := openColumnRetainedPlacementCollection(t, d, "events")
+	col := createBufferedRetainedPlacementCollection(t, d, "events")
 	want := []byte(`{"row_id":1,"kind":"alpha","payload":"caller-owned-buffer"}`)
 	document := bytes.Clone(want)
 	injected := errors.New("injected retained-primary value-log append failure")
@@ -193,35 +167,7 @@ func TestColumnRetainedPayloadCompactionKeepsPointersPinnedUntilPublication(t *t
 			_ = d.Close()
 		}
 	}()
-	cfg := &ColumnStoreConfig{
-		Enabled: true,
-		Columns: []ColumnStoreColumn{
-			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
-			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
-		},
-		RetainedPayload: ColumnRetainedPayloadFull,
-	}
-	mgr := NewCollectionManager(d)
-	if _, err := mgr.CreateCollection(&CollectionMeta{
-		Name: "events",
-		Options: CollectionOptions{
-			DocumentFormat:                   DocumentFormatJSON,
-			ColumnStore:                      cfg,
-			BufferedIndexedWrites:            true,
-			BufferedIndexedWriteMaxDocuments: 1024,
-			BufferedIndexedWriteMaxRootRuns:  1024,
-			DisableBufferedIndexedAsyncFlush: true,
-		},
-		Indexes: []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
-		TextIndexes: []TextIndexDefinition{{
-			Name:     "kind_text",
-			Fields:   []TextIndexField{{Field: "kind"}},
-			Analyzer: TextAnalyzerSimple,
-		}},
-	}); err != nil {
-		t.Fatalf("CreateCollection: %v", err)
-	}
-	col := openColumnRetainedPlacementCollection(t, d, "events")
+	col := createBufferedRetainedPlacementCollection(t, d, "events")
 	for i := 1; i <= 2; i++ {
 		id := []byte(fmt.Sprintf("doc-%d", i))
 		document := retainedPlacementDocument("compacted", i)
@@ -1531,6 +1477,39 @@ func createColumnRetainedPlacementCollection(t testing.TB, d *backenddb.DB, name
 	}
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{Name: name, Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: cfg}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	return openColumnRetainedPlacementCollection(t, d, name)
+}
+
+func createBufferedRetainedPlacementCollection(t testing.TB, d *backenddb.DB, name string) *Collection {
+	t.Helper()
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		},
+		RetainedPayload: ColumnRetainedPayloadFull,
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: name,
+		Options: CollectionOptions{
+			DocumentFormat:                   DocumentFormatJSON,
+			ColumnStore:                      cfg,
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 1024,
+			BufferedIndexedWriteMaxRootRuns:  1024,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+		TextIndexes: []TextIndexDefinition{{
+			Name:     "kind_text",
+			Fields:   []TextIndexField{{Field: "kind"}},
+			Analyzer: TextAnalyzerSimple,
+		}},
+	}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
 	return openColumnRetainedPlacementCollection(t, d, name)
