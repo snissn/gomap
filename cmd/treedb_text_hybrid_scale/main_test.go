@@ -1082,6 +1082,16 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err := os.Remove(betweenPhaseSource); err != nil {
 		t.Fatal(err)
 	}
+	finalPhaseRun := t.TempDir()
+	if output, err := run("RUN_DIR="+finalPhaseRun, "PHASES=load", "PATH="+fakeGoDir+string(os.PathListSeparator)+os.Getenv("PATH"), "DIRTY_FILE="+betweenPhaseSource); err == nil || !strings.Contains(string(output), "worktree must be clean before profiling") || strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("final-phase source change err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(finalPhaseRun, "10000", "load", "observations.txt")); !os.IsNotExist(err) {
+		t.Fatalf("final-phase source change accepted observations: %v", err)
+	}
+	if err := os.Remove(betweenPhaseSource); err != nil {
+		t.Fatal(err)
+	}
 	goFlagsDryRun := t.TempDir()
 	if output, err := run("RUN_DIR="+goFlagsDryRun, "PHASES=phrase", "DRY_RUN=true", "GOFLAGS=-race", "GOMAXPROCS=1", "GOGC=10", "GOMEMLIMIT=1MiB", "GOOS=plan9", "GOARCH=386", "GOAMD64=v3", "GOARM64=v8.0", "GO386=sse2", "GOARM=7", "GOMIPS=softfloat", "GOMIPS64=softfloat", "GOPPC64=power8", "GORISCV64=rva20u64", "GOWASM=signext", "GOEXPERIMENT=arenas", "CGO_ENABLED=0", "TREEDB_LEAF_PAGE_CACHE_ENTRIES=1", "TREEDB_COLUMN_STORE_TYPED_COMPRESSION=none", "TREEDB_DEBUG_VLOG_TIMINGS=1", "TREEDB_DEBUG_MEMTABLE_ROTATE=1", "TREEDB_DEBUG_VLOG_SHAPE=1", "TREEDB_DEBUG_VLOG_MAINT=1", "TREEDB_OUTER_LEAF_READ_SAMPLE_MOD=1", "TREEDB_HOT_PATH_STATS=1", "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS=0"); err != nil || !strings.Contains(string(output), "artifacts:") {
 		t.Fatalf("GOFLAGS dry-run err=%v output=%s", err, output)

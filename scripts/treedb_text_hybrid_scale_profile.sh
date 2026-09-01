@@ -118,6 +118,15 @@ run_matrix() {
       rm "$elapsed_file"
       return 1
     fi
+    if ! check_profile_source; then
+      rm "$elapsed_file"
+      return 2
+    fi
+    if [[ "$("${controlled_git_env[@]}" git rev-parse HEAD)" != "$profile_commit" ]]; then
+      rm "$elapsed_file"
+      echo "source commit changed after phase: $phase" >&2
+      return 2
+    fi
     elapsed=$(<"$elapsed_file")
     rm "$elapsed_file"
     artifact_after=$(du -sk "$phase_dir" | awk '{print $1}')
