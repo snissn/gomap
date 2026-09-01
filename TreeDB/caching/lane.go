@@ -105,8 +105,13 @@ type lane struct {
 	// Observability counters for diagnosing pathological lane shapes (e.g. huge l0).
 	// These are incremented on segment rotation and allow distinguishing useful
 	// rotations from "idle" rotations that produced no bytes.
-	vlogRotateTotal     atomic.Uint64
-	vlogRotateIdleTotal atomic.Uint64
+	vlogRotateTotal         atomic.Uint64
+	vlogRotateIdleTotal     atomic.Uint64
+	nativeRootAppendCalls   atomic.Uint64
+	nativeRootAppendRecords atomic.Uint64
+	nativeRootAppendBytes   atomic.Uint64
+	nativeRootAppendWallNs  atomic.Uint64
+	nativeRootAppendErrors  atomic.Uint64
 
 	leafLogAppendCalls      atomic.Uint64
 	leafLogAppendPages      atomic.Uint64

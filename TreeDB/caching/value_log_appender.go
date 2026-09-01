@@ -64,16 +64,13 @@ func (a *cachingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr
 }
 
 func (a *cachingValueLogAppender) appendRecords(records []valuelog.Record) ([]page.ValuePtr, error) {
-	laneCount := len(a.db.lanes)
-	if a.db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold) && len(a.db.valueLogHotLanes) > 0 {
-		laneCount = len(a.db.valueLogHotLanes)
-	}
+	laneCount := a.appendLaneCount()
 	if laneCount <= 1 || len(records) == 1 {
 		lane := a.lane
 		if laneCount > 1 {
-			lane = &a.db.lanes[a.laneForRID(records[0].RID)]
+			lane = a.appendLane(a.appendLaneIndexForRID(records[0].RID))
 		}
-		ptrs, err := a.db.appendValueLogForRecords(lane, records, journalDurabilityNone)
+		ptrs, err := a.appendRecordsToLane(lane, records)
 		if err != nil {
 			return nil, err
 		}
@@ -88,56 +85,101 @@ func (a *cachingValueLogAppender) appendRecords(records []valuelog.Record) ([]pa
 		ptrs    []page.ValuePtr
 		err     error
 	}
-	batches := make([]laneBatch, len(a.db.lanes))
+	batches := make([]laneBatch, laneCount)
 	for i := range records {
-		laneID := a.laneForRID(records[i].RID)
-		batches[laneID].indexes = append(batches[laneID].indexes, i)
+		laneIndex := a.appendLaneIndexForRID(records[i].RID)
+		batches[laneIndex].indexes = append(batches[laneIndex].indexes, i)
 	}
 	active := make([]int, 0, len(batches))
-	for laneID := range batches {
-		batch := &batches[laneID]
+	for laneIndex := range batches {
+		batch := &batches[laneIndex]
 		if len(batch.indexes) == 0 {
 			continue
 		}
-		active = append(active, laneID)
+		active = append(active, laneIndex)
 		batch.records = getValueLogRecordsCap(len(batch.indexes))
 		for _, index := range batch.indexes {
 			batch.records = append(batch.records, records[index])
 		}
 	}
 	defer func() {
-		for _, laneID := range active {
-			batch := &batches[laneID]
+		for _, laneIndex := range active {
+			batch := &batches[laneIndex]
 			putValueLogRecordsNoClear(batch.records)
 			putValueLogPtrs(batch.ptrs)
 		}
 	}()
 
 	var wg sync.WaitGroup
-	for _, laneID := range active {
-		batch := &batches[laneID]
+	for _, laneIndex := range active {
+		batch := &batches[laneIndex]
+		lane := a.appendLane(laneIndex)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			batch.ptrs, batch.err = a.db.appendValueLogForRecords(&a.db.lanes[laneID], batch.records, journalDurabilityNone)
+			batch.ptrs, batch.err = a.appendRecordsToLane(lane, batch.records)
 		}()
 	}
 	wg.Wait()
 
 	out := make([]page.ValuePtr, len(records))
-	for _, laneID := range active {
-		batch := &batches[laneID]
+	for _, laneIndex := range active {
+		batch := &batches[laneIndex]
 		if batch.err != nil {
 			return nil, batch.err
 		}
 		if len(batch.ptrs) != len(batch.indexes) {
-			return nil, fmt.Errorf("cachingdb: value-log lane %d returned %d ptrs for %d records", laneID, len(batch.ptrs), len(batch.indexes))
+			return nil, fmt.Errorf("cachingdb: value-log append writer %d returned %d ptrs for %d records", laneIndex, len(batch.ptrs), len(batch.indexes))
 		}
 		for i, index := range batch.indexes {
 			out[index] = batch.ptrs[i]
 		}
 	}
 	return out, nil
+}
+
+func (a *cachingValueLogAppender) appendRecordsToLane(l *lane, records []valuelog.Record) ([]page.ValuePtr, error) {
+	if l == nil {
+		return nil, errWALUnavailable
+	}
+	var bytes int
+	for i := range records {
+		bytes += len(records[i].Value)
+	}
+	start := time.Now()
+	l.nativeRootAppendCalls.Add(1)
+	l.nativeRootAppendRecords.Add(uint64(len(records)))
+	l.nativeRootAppendBytes.Add(uint64(bytes))
+	ptrs, err := a.db.appendValueLogForRecords(l, records, journalDurabilityNone)
+	l.nativeRootAppendWallNs.Add(uint64(time.Since(start).Nanoseconds()))
+	if err != nil {
+		l.nativeRootAppendErrors.Add(1)
+	}
+	return ptrs, err
+}
+
+func (a *cachingValueLogAppender) appendLaneCount() int {
+	if lanes := a.db.nativeRootValueLogAppendLanesSnapshot(); len(lanes) > 0 {
+		return len(lanes)
+	}
+	if a.db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold) && len(a.db.valueLogHotLanes) > 0 {
+		return len(a.db.valueLogHotLanes)
+	}
+	return len(a.db.lanes)
+}
+
+func (a *cachingValueLogAppender) appendLaneIndexForRID(rid uint64) int {
+	if lanes := a.db.nativeRootValueLogAppendLanesSnapshot(); len(lanes) > 0 {
+		return int((rid - 1) % uint64(len(lanes)))
+	}
+	return a.laneForRID(rid)
+}
+
+func (a *cachingValueLogAppender) appendLane(index int) *lane {
+	if lanes := a.db.nativeRootValueLogAppendLanesSnapshot(); len(lanes) > 0 {
+		return lanes[index]
+	}
+	return &a.db.lanes[index]
 }
 
 func (a *cachingValueLogAppender) laneForRID(rid uint64) int {
@@ -428,9 +470,9 @@ func (a *cachingValueLogAppender) CurrentValueLogSegmentsSnapshot() ([]backenddb
 		}
 		return []backenddb.ValueLogAppenderSegment{{Path: path, FileID: fileID}}, nil
 	}
-	segments := make([]backenddb.ValueLogAppenderSegment, 0, len(a.db.lanes))
-	for i := range a.db.lanes {
-		l := &a.db.lanes[i]
+	lanes := a.db.allValueLogWriterLanesSnapshot()
+	segments := make([]backenddb.ValueLogAppenderSegment, 0, len(lanes))
+	for _, l := range lanes {
 		l.vlogMu.Lock()
 		path, seq := l.vlogPath, l.vlogSeq
 		l.vlogMu.Unlock()
