@@ -14528,20 +14528,10 @@ func (db *DB) publishVlogDictPrepareResult(task vlogDictPrepareTask, res vlogDic
 		}
 		return
 	}
-	select {
-	case task.out <- res:
-		return
-	case <-db.closeCh:
-		// During shutdown callers may stop receiving. Avoid blocking workers and
-		// leaking pooled frame buffers in that case.
-		select {
-		case task.out <- res:
-		default:
-			if res.bodyBuf != nil {
-				putVlogPreparedFrameBody(res.bodyBuf)
-			}
-		}
-	}
+	// prepareAppendFrames owns a result slot for every submitted task and drains
+	// all of them before returning, including during close. Never drop a result:
+	// that would strand the owner and release its record slices too early.
+	task.out <- res
 }
 
 const (
@@ -17230,6 +17220,11 @@ func (db *DB) prepareAppendFrames(
 	results := getVlogDictPrepareResults(frameCount)
 	receiveAfterClose := func() vlogDictPrepareResult {
 		for {
+			select {
+			case res := <-results:
+				return res
+			default:
+			}
 			select {
 			case res := <-results:
 				return res
