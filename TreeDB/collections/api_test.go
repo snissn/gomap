@@ -12570,6 +12570,86 @@ func TestGetBufferedDocumentPrefersCurrentRootRunOverDetachedOverlay(t *testing.
 	}
 }
 
+func TestGetBufferedFullDocumentOverlayHonorsNewestPrimaryWrite(t *testing.T) {
+	meta := CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}}
+	col := &Collection{meta: meta}
+	primaryRoot := collectionPrimaryRootName(meta.Name)
+	entryOverlay := func(value string, flags byte) *bufferedPrimaryOverlay {
+		overlay := newBufferedPrimaryOverlay(1)
+		overlay.addEntry(directBufferedRootEntry{key: []byte("a"), value: []byte(value), flags: flags})
+		return overlay
+	}
+	old := indexedFlushUnit{
+		primaryOverlay:      entryOverlay(`{"content":"compact-old"}`, node.FlagInline),
+		fullDocumentOverlay: entryOverlay(`{"content":"old","embedding":[1,0]}`, node.FlagInline),
+	}
+
+	t.Run("mutable overlay delete wins", func(t *testing.T) {
+		domain := &collectionWriteDomain{
+			count:             2,
+			loaded:            true,
+			meta:              meta,
+			primaryOverlay:    entryOverlay("", node.FlagTombstone),
+			indexedFlushUnits: []indexedFlushUnit{old},
+		}
+		got, buffered, found, err := col.getBufferedDocumentIntoLocked(domain, []byte("a"), nil)
+		if err != nil || !buffered || found || len(got) != 0 {
+			t.Fatalf("get after mutable overlay delete got=%s buffered=%v found=%v err=%v", got, buffered, found, err)
+		}
+	})
+
+	t.Run("mutable run delete wins", func(t *testing.T) {
+		deleted := buildDeleteRootDeltaTable([][]byte{[]byte("a")})
+		defer resetCollectionRunTable(deleted)
+		domain := &collectionWriteDomain{
+			count:             2,
+			loaded:            true,
+			meta:              meta,
+			rootRuns:          map[string][]memtable.Table{primaryRoot: {deleted}},
+			indexedFlushUnits: []indexedFlushUnit{old},
+		}
+		got, buffered, found, err := col.getBufferedDocumentIntoLocked(domain, []byte("a"), nil)
+		if err != nil || !buffered || found || len(got) != 0 {
+			t.Fatalf("get after mutable run delete got=%s buffered=%v found=%v err=%v", got, buffered, found, err)
+		}
+	})
+
+	t.Run("queued run delete wins over publishing", func(t *testing.T) {
+		deleted := buildDeleteRootDeltaTable([][]byte{[]byte("a")})
+		defer resetCollectionRunTable(deleted)
+		domain := &collectionWriteDomain{
+			count:                  2,
+			loaded:                 true,
+			meta:                   meta,
+			indexedFlushUnits:      []indexedFlushUnit{{rootRuns: map[string][]memtable.Table{primaryRoot: {deleted}}}},
+			indexedPublishingUnits: []indexedFlushUnit{old},
+		}
+		got, buffered, found, err := col.getBufferedDocumentIntoLocked(domain, []byte("a"), nil)
+		if err != nil || !buffered || found || len(got) != 0 {
+			t.Fatalf("get after queued delete got=%s buffered=%v found=%v err=%v", got, buffered, found, err)
+		}
+	})
+
+	t.Run("mutable replacement wins", func(t *testing.T) {
+		replacement := newCollectionRunTable(1)
+		setCollectionRunValue(replacement, []byte("a"), []byte(`{"content":"compact-new"}`))
+		replacement.Freeze()
+		defer resetCollectionRunTable(replacement)
+		domain := &collectionWriteDomain{
+			count:               2,
+			loaded:              true,
+			meta:                meta,
+			rootRuns:            map[string][]memtable.Table{primaryRoot: {replacement}},
+			fullDocumentOverlay: entryOverlay(`{"content":"new","embedding":[0,1]}`, node.FlagInline),
+			indexedFlushUnits:   []indexedFlushUnit{old},
+		}
+		got, buffered, found, err := col.getBufferedDocumentIntoLocked(domain, []byte("a"), nil)
+		if err != nil || !buffered || !found || string(got) != `{"content":"new","embedding":[0,1]}` {
+			t.Fatalf("get after replacement got=%s buffered=%v found=%v err=%v", got, buffered, found, err)
+		}
+	})
+}
+
 func TestCollectionUpdateCombinerMixedCollectionsFallbackDirect(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

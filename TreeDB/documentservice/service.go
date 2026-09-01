@@ -206,6 +206,12 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 	options := collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}
 	if vectorOptions.strategy == collections.VectorIndexStrategyColumnGraph {
 		options.ColumnStore = serviceColumnStoreConfig(req.Dimension)
+		if len(scalarDeclarations) != 0 {
+			// Retained-payload reconstruction is intentionally fail-closed for
+			// collection secondary indexes until their mutation paths consume
+			// reconstructed documents.
+			options.ColumnStore.RetainedPayload = collections.ColumnRetainedPayloadFull
+		}
 	}
 	meta := &collections.CollectionMeta{
 		Name:    req.Name,
@@ -247,6 +253,7 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 		switch {
 		case openErr == nil:
 			existingOptions := existing.Meta().Options
+			meta.Options.ColumnStore = existingOptions.ColumnStore
 			meta.Options.DisableBufferedIndexedAsyncFlush = existingOptions.DisableBufferedIndexedAsyncFlush
 			meta.Options.BufferedIndexedAsyncFlush = existingOptions.BufferedIndexedAsyncFlush
 			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = existingOptions.BufferedIndexedAsyncFlushMaxQueuedUnits
@@ -1772,7 +1779,7 @@ func serviceColumnStoreConfig(dimension int) *collections.ColumnStoreConfig {
 			ValueType:  collections.ColumnStoreValueFloat32Vector,
 			VectorDims: dimension,
 		}},
-		RetainedPayload:         collections.ColumnRetainedPayloadFull,
+		RetainedPayload:         collections.ColumnRetainedPayloadNonColumn,
 		RetainedPayloadEncoding: collections.ColumnRetainedPayloadEncodingJSON,
 	}
 }

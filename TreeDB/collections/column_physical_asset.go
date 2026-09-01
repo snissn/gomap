@@ -87,8 +87,9 @@ func validateTrustedFloat32ProjectionMeta(meta CollectionMeta, projection *trust
 	if !columnStoreWriteEnabled(meta) || len(cfg.Columns) != 1 {
 		return errors.New("collections: validated float32 projection requires exactly one enabled column")
 	}
-	if cfg.RetainedPayload != ColumnRetainedPayloadFull || columnRetainedPayloadEffectiveEncoding(cfg) != ColumnRetainedPayloadEncodingJSON {
-		return errors.New("collections: validated float32 projection requires full JSON retained payload")
+	if (cfg.RetainedPayload != ColumnRetainedPayloadFull && cfg.RetainedPayload != ColumnRetainedPayloadNonColumn) ||
+		columnRetainedPayloadEffectiveEncoding(cfg) != ColumnRetainedPayloadEncodingJSON {
+		return errors.New("collections: validated float32 projection requires full or non-column JSON retained payload")
 	}
 	column := cfg.Columns[0]
 	owner, err := columnStoreColumnOwner(column)

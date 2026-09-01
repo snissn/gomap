@@ -3,8 +3,10 @@ package collections
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -177,9 +179,9 @@ func TestValidateTrustedFloat32ProjectionMetaRejectsSchemaDrift(t *testing.T) {
 	}{
 		{name: "disabled", mutate: func(meta *CollectionMeta) { meta.Options.ColumnStore.Enabled = false }},
 		{name: "no column config", mutate: func(meta *CollectionMeta) { meta.Options.ColumnStore = nil }},
-		{name: "retained payload transform", mutate: func(meta *CollectionMeta) {
-			meta.Options.ColumnStore.RetainedPayload = ColumnRetainedPayloadNonColumn
-			meta.Options.ColumnStore.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingJSON
+		{name: "retained payload none", mutate: func(meta *CollectionMeta) {
+			meta.Options.ColumnStore.RetainedPayload = ColumnRetainedPayloadNone
+			meta.Options.ColumnStore.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingNone
 		}},
 		{name: "path", mutate: func(meta *CollectionMeta) { meta.Options.ColumnStore.Columns[0].Path = "other" }},
 		{name: "type", mutate: func(meta *CollectionMeta) { meta.Options.ColumnStore.Columns[0].ValueType = ColumnStoreValueDouble }},
@@ -206,7 +208,63 @@ func TestValidateTrustedFloat32ProjectionMetaRejectsSchemaDrift(t *testing.T) {
 	}
 }
 
+func TestColumnRetainedPayloadJSONTopLevelColumn(t *testing.T) {
+	cfg := ColumnStoreConfig{
+		RetainedPayload: ColumnRetainedPayloadNonColumn,
+		Columns:         []ColumnStoreColumn{{Name: "embedding", Path: "embedding"}},
+	}
+	for _, tc := range []struct {
+		name     string
+		document string
+		want     string
+		wantErr  bool
+	}{
+		{
+			name:     "large declared array omitted",
+			document: `{"content":"kept","embedding":[1,2,3],"meta":{"row":1,"source":"test"}}`,
+			want:     `{"content":"kept","meta":{"row":1,"source":"test"}}`,
+		},
+		{
+			name:     "duplicate declared member omitted",
+			document: `{"embedding":[1],"embedding":[2],"content":"kept"}`,
+			want:     `{"content":"kept"}`,
+		},
+		{name: "malformed fails closed", document: `{"embedding":[1]`, wantErr: true},
+		{name: "non-object fails closed", document: `null`, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := columnRetainedPayloadJSONFromJSONDocument(cfg, []byte(tc.document))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("columnRetainedPayloadJSONFromJSONDocument() error=nil want failure; retained=%s", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("columnRetainedPayloadJSONFromJSONDocument: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("retained=%s want %s", got, tc.want)
+			}
+		})
+	}
+
+	nested := cfg
+	nested.Columns = []ColumnStoreColumn{{Name: "embedding_values", Path: "embedding.values"}}
+	got, err := columnRetainedPayloadJSONFromJSONDocument(nested, []byte(`{"embedding":{"values":[1,2],"keep":3},"content":"kept"}`))
+	if err != nil {
+		t.Fatalf("nested columnRetainedPayloadJSONFromJSONDocument: %v", err)
+	}
+	if want := `{"content":"kept","embedding":{"keep":3}}`; string(got) != want {
+		t.Fatalf("nested retained=%s want %s", got, want)
+	}
+}
+
 func openValidatedFloat32ProjectionCollection(t testing.TB, dims int) (string, *backenddb.DB, *Collection) {
+	return openValidatedFloat32ProjectionCollectionWithPolicy(t, dims, ColumnRetainedPayloadNonColumn)
+}
+
+func openValidatedFloat32ProjectionCollectionWithPolicy(t testing.TB, dims int, retainedPayload ColumnRetainedPayloadPolicy) (string, *backenddb.DB, *Collection) {
 	t.Helper()
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -221,7 +279,7 @@ func openValidatedFloat32ProjectionCollection(t testing.TB, dims int) (string, *
 			ColumnStore: &ColumnStoreConfig{
 				Enabled:                 true,
 				Columns:                 []ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: dims}},
-				RetainedPayload:         ColumnRetainedPayloadFull,
+				RetainedPayload:         retainedPayload,
 				RetainedPayloadEncoding: ColumnRetainedPayloadEncodingJSON,
 			},
 		},
@@ -237,6 +295,80 @@ func openValidatedFloat32ProjectionCollection(t testing.TB, dims int) (string, *
 		t.Fatalf("OpenCollection: %v", err)
 	}
 	return dir, d, col
+}
+
+func BenchmarkInsertBatchValidatedFloat32ProjectionCohere768RetainedPayload(b *testing.B) {
+	const rowsPerBatch = 32
+	for _, policy := range []ColumnRetainedPayloadPolicy{ColumnRetainedPayloadFull, ColumnRetainedPayloadNonColumn} {
+		policy := policy
+		b.Run(string(policy)+"_json", func(b *testing.B) {
+			_, d, col := openValidatedFloat32ProjectionCollectionWithPolicy(b, 768, policy)
+			defer func() { _ = d.Close() }()
+			batches := make([]struct {
+				ids       [][]byte
+				documents [][]byte
+				vectors   [][]float32
+			}, b.N)
+			var inputBytes int64
+			for batch := range batches {
+				batches[batch].ids = make([][]byte, rowsPerBatch)
+				batches[batch].documents = make([][]byte, rowsPerBatch)
+				batches[batch].vectors = make([][]float32, rowsPerBatch)
+				for row := range rowsPerBatch {
+					id := fmt.Sprintf("cohere-%d-%d", batch, row)
+					vector := make([]float32, 768)
+					for dim := range vector {
+						vector[dim] = float32(((batch*rowsPerBatch+row+dim)%127)-63) / 64
+					}
+					raw, err := json.Marshal(map[string]any{
+						"id": id, "content": "cohere shaped retained payload", "embedding": vector,
+						"meta": map[string]any{"source": "benchmark", "row": batch*rowsPerBatch + row},
+					})
+					if err != nil {
+						b.Fatalf("marshal document: %v", err)
+					}
+					batches[batch].ids[row] = []byte(id)
+					batches[batch].documents[row] = raw
+					batches[batch].vectors[row] = vector
+					if batch == 0 {
+						inputBytes += int64(len(raw))
+					}
+				}
+			}
+			cfg := col.Meta().Options.ColumnStore.copy()
+			var retainedBytes int64
+			for _, document := range batches[0].documents {
+				retained, err := ColumnRetainedPayloadFromJSONDocument(cfg, document)
+				if err != nil {
+					b.Fatalf("prepare retained payload: %v", err)
+				}
+				retainedBytes += int64(len(retained))
+			}
+			b.ReportAllocs()
+			b.SetBytes(inputBytes)
+			var retainedPrepare time.Duration
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, stats, err := col.InsertBatchWithStatsValidatedFloat32Projection(
+					batches[i].ids, batches[i].documents, "embedding", VectorMetricCosine, batches[i].vectors,
+				)
+				if err != nil {
+					b.Fatalf("InsertBatchWithStatsValidatedFloat32Projection: %v", err)
+				}
+				retainedPrepare += stats.RetainedPayloadPrepare
+			}
+			b.StopTimer()
+			if err := col.Flush(); err != nil {
+				b.Fatalf("Flush: %v", err)
+			}
+			if b.N > 0 {
+				b.ReportMetric(float64(retainedPrepare.Nanoseconds())/float64(b.N), "retained_prepare_ns/op")
+			}
+			b.ReportMetric(float64(inputBytes), "input_B/op")
+			b.ReportMetric(float64(retainedBytes), "retained_B/op")
+			b.ReportMetric(float64(rowsPerBatch*768*4), "typed_column_B/op")
+		})
+	}
 }
 
 func validatedFloat32ProjectionDocuments(t testing.TB, ids [][]byte, vectors [][]float32) [][]byte {
