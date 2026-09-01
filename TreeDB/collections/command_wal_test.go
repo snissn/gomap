@@ -2776,12 +2776,8 @@ func TestCollectionCommandWALAsyncFlushEmptyHeadRetainsQueuedTail(t *testing.T) 
 	domain.mu.Unlock()
 
 	work, err := col.prepareIndexedAsyncPublish()
-	if err != nil || work != nil {
-		t.Fatalf("empty-head prepare work=%v err=%v", work != nil, err)
-	}
-	work, err = col.prepareIndexedAsyncPublish()
 	if err != nil || work == nil {
-		t.Fatalf("tail prepare work=%v err=%v", work != nil, err)
+		t.Fatalf("empty-head prepare did not continue to tail: work=%v err=%v", work != nil, err)
 	}
 	defer func() {
 		if work.pin != nil {

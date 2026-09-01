@@ -9245,6 +9245,13 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	// bounded async flush into one long, non-relinquishable drain.
 	units := domain.indexedFlushUnits[:1]
 	flushUnit := mergedIndexedFlushUnits(units)
+	// Publication appends transient primary/text runs outside domain.mu. Keep
+	// those mutations and their cleanup separate from the claimed FIFO unit so
+	// a failed publication can requeue the original unit unchanged.
+	flushUnit.rootRuns = cloneTableRunMap(flushUnit.rootRuns)
+	flushUnit.rootPolicies = cloneRootPolicyMap(flushUnit.rootPolicies)
+	flushUnit.rootBaseIDs = cloneUint64Map(flushUnit.rootBaseIDs)
+	flushUnit.uniqueValueRuns = cloneTableRunMap(flushUnit.uniqueValueRuns)
 	rootNames := orderedBufferedRootNames(meta, flushUnit.rootRuns)
 	if hasIndexedFlushUnitPrimaryOverlay(units) {
 		rootNames = appendOrderedRootName(rootNames, collectionPrimaryRootName(meta.Name))
@@ -9264,6 +9271,9 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		if domain.count == 0 && !hasBufferedIndexedPendingWrites(domain) {
 			domain.indexedDeletesOnly = false
 			domain.primaryWriteIndex = nil
+		}
+		if len(domain.indexedFlushUnits) > 0 {
+			return c.prepareIndexedAsyncPublishLocked(domain)
 		}
 		return nil, nil
 	}
