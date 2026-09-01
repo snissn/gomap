@@ -235,8 +235,12 @@ func profileManualPhase(mode, dir string, action func() error) (time.Duration, e
 		if err != nil {
 			return err
 		}
-		defer f.Close()
-		return pprof.Lookup(profile).WriteTo(f, 0)
+		writeErr := pprof.Lookup(profile).WriteTo(f, 0)
+		closeErr := f.Close()
+		if writeErr != nil {
+			return writeErr
+		}
+		return closeErr
 	}
 	if mode == "alloc" {
 		runtime.GC()

@@ -857,10 +857,12 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 		t.Fatal(err)
 	}
 	cleanCheckout := filepath.Join(t.TempDir(), "clean-checkout")
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	setup := exec.CommandContext(ctx, "git", "-C", repoRoot, "worktree", "add", "--detach", cleanCheckout, "HEAD")
-	if output, err := setup.CombinedOutput(); err != nil {
+	runGit := func(dir string, args ...string) ([]byte, error) {
+		gitCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		return exec.CommandContext(gitCtx, "git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	}
+	if output, err := runGit(repoRoot, "worktree", "add", "--detach", cleanCheckout, "HEAD"); err != nil {
 		t.Fatalf("create clean checkout: %v\n%s", err, output)
 	}
 	t.Cleanup(func() {
@@ -868,8 +870,7 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 		defer cleanupCancel()
 		_ = exec.CommandContext(cleanupCtx, "git", "-C", repoRoot, "worktree", "remove", "--force", cleanCheckout).Run()
 	})
-	commonDir := exec.CommandContext(ctx, "git", "-C", repoRoot, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	commonDirPath, err := commonDir.Output()
+	commonDirPath, err := runGit(repoRoot, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		t.Fatalf("git common dir: %v", err)
 	}
@@ -896,16 +897,14 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 			t.Fatalf("overlay %s: %v", path, err)
 		}
 	}
-	stage := exec.CommandContext(ctx, "git", "-C", cleanCheckout, "add", "-A", "--", "cmd/treedb_text_hybrid_scale", "scripts/treedb_text_hybrid_scale_profile.sh")
-	if output, err := stage.CombinedOutput(); err != nil {
+	if output, err := runGit(cleanCheckout, "add", "-A", "--", "cmd/treedb_text_hybrid_scale", "scripts/treedb_text_hybrid_scale_profile.sh"); err != nil {
 		t.Fatalf("stage clean checkout overlay: %v\n%s", err, output)
 	}
-	commit := exec.CommandContext(ctx, "git", "-C", cleanCheckout,
+	if output, err := runGit(cleanCheckout,
 		"-c", "user.name=gomap manual profile test",
 		"-c", "user.email=gomap-manual-profile-test@invalid",
 		"-c", "commit.gpgSign=false",
-		"commit", "--no-verify", "--allow-empty", "-m", "test: overlay manual profile scope")
-	if output, err := commit.CombinedOutput(); err != nil {
+		"commit", "--no-verify", "--allow-empty", "-m", "test: overlay manual profile scope"); err != nil {
 		t.Fatalf("commit clean checkout overlay: %v\n%s", err, output)
 	}
 	run := func(env ...string) ([]byte, error) {
@@ -1006,8 +1005,7 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(statusConfigHome, "git", "config"), []byte("[status]\n\tshowUntrackedFiles = no\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	otherGitDirCommand := exec.CommandContext(ctx, "git", "-C", repoRoot, "rev-parse", "--absolute-git-dir")
-	otherGitDir, err := otherGitDirCommand.Output()
+	otherGitDir, err := runGit(repoRoot, "rev-parse", "--absolute-git-dir")
 	if err != nil {
 		t.Fatalf("other git dir: %v", err)
 	}
@@ -1025,8 +1023,7 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if output, err := run("RUN_DIR="+gitOverrideRun, "PHASES=phrase", "DRY_RUN=true", "GIT_DIR="+strings.TrimSpace(string(otherGitDir)), "GIT_WORK_TREE="+repoRoot); err != nil || !strings.Contains(string(output), "artifacts:") {
 		t.Fatalf("git override dry-run err=%v output=%s", err, output)
 	}
-	sourceHeadCommand := exec.CommandContext(ctx, "git", "-C", cleanCheckout, "rev-parse", "HEAD")
-	sourceHead, err := sourceHeadCommand.Output()
+	sourceHead, err := runGit(cleanCheckout, "rev-parse", "HEAD")
 	if err != nil {
 		t.Fatalf("source head: %v", err)
 	}
