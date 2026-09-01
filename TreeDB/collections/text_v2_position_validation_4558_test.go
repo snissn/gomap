@@ -7,7 +7,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-func TestTextV2StorageStatsPositionValidationUsesPostingTable4558(t *testing.T) {
+func TestTextV2StorageStatsPositionValidationUsesPostingTableAndDocMapBlockCache4558(t *testing.T) {
 	const documents = 128
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
@@ -25,7 +25,23 @@ func TestTextV2StorageStatsPositionValidationUsesPostingTable4558(t *testing.T) 
 		if err != nil || !ok {
 			t.Fatalf("read status ok=%v err=%v", ok, err)
 		}
-		postings := newTextV2PositionPostingValidation()
+		postings := newTextV2PositionValidation()
+		docMapRoot := collectionTextV2DocMapRootName("docs", "lexical")
+		current, err := postings.docMapCurrentAtRoot(snap, catalog, docMapRoot, 1, 1)
+		if err != nil || !current || postings.docMap == nil {
+			t.Fatalf("first docmap lookup current=%v cache=%v err=%v", current, postings.docMap != nil, err)
+		}
+		cached := postings.docMap
+		current, err = postings.docMapCurrentAtRoot(snap, catalog, docMapRoot, 2, 1)
+		if err != nil || !current || postings.docMap != cached {
+			t.Fatalf("second docmap lookup current=%v reused=%v err=%v", current, postings.docMap == cached, err)
+		}
+		allocs := testing.AllocsPerRun(100, func() {
+			current, err = postings.docMapCurrentAtRoot(snap, catalog, docMapRoot, 2, 1)
+		})
+		if err != nil || !current || allocs != 0 {
+			t.Fatalf("cached docmap lookup current=%v allocs=%v err=%v", current, allocs, err)
+		}
 		stats := TextIndexStorageStats{Version: TextIndexVersionV2}
 		if err := inspectTextV2Root(snap, catalog, def, collectionTextV2PostingBlocksRootName("docs", "lexical"), textV2RootFamilyPostingBlocks, status, &stats, nil, postings); err != nil {
 			t.Fatalf("inspect posting root: %v", err)
@@ -62,7 +78,7 @@ func TestTextV2StorageStatsPositionValidationUsesPostingTable4558(t *testing.T) 
 }
 
 func TestTextV2PositionPostingValidationDefersDuplicateFailure4558(t *testing.T) {
-	postings := newTextV2PositionPostingValidation()
+	postings := newTextV2PositionValidation()
 	entry := textV2PostingBlockEntry{Ordinal: 7, Generation: 3, TermFrequency: 1, FieldFrequencies: []uint32{1}}
 	if err := postings.add("shared", entry, 1); err != nil {
 		t.Fatalf("first add: %v", err)
@@ -72,6 +88,36 @@ func TestTextV2PositionPostingValidationDefersDuplicateFailure4558(t *testing.T)
 	}
 	if _, found, duplicate := postings.lookup("shared", entry.Ordinal, entry.Generation); !found || !duplicate {
 		t.Fatalf("lookup found=%v duplicate=%v want duplicate entry", found, duplicate)
+	}
+}
+
+func TestTextV2StorageStatsEmptyPositionsKeepsDocMapCacheEmpty4560(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	def := TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, StorePositions: true, Fields: []TextIndexField{{Field: "body"}}}
+	col := createTextSearchCollection2627(t, d, "docs", def, [][]byte{[]byte("d1"), []byte("d2")}, [][]byte{[]byte(`{"other":"one"}`), []byte(`{"other":"two"}`)})
+	withTextCatalog(t, d, "docs", func(snap *backenddb.Snapshot, catalog *collectionCatalog) {
+		status, ok, err := readTextV2StatusAtRoot(snap, catalog, collectionTextV2GenerationsRootName("docs", "lexical"))
+		if err != nil || !ok {
+			t.Fatalf("read status ok=%v err=%v", ok, err)
+		}
+		validation := newTextV2PositionValidation()
+		stats := TextIndexStorageStats{Version: TextIndexVersionV2}
+		if err := inspectTextV2Root(snap, catalog, def, collectionTextV2DocMapRootName("docs", "lexical"), textV2RootFamilyDocMap, status, &stats, nil, validation); err != nil {
+			t.Fatalf("inspect docmap root: %v", err)
+		}
+		if validation.docMap != nil {
+			t.Fatal("docmap cache populated without positions")
+		}
+		if err := inspectTextV2Root(snap, catalog, def, collectionTextV2PositionsRootName("docs", "lexical"), textV2RootFamilyPositions, status, &stats, nil, validation); err != nil {
+			t.Fatalf("inspect positions root: %v", err)
+		}
+		if validation.docMap != nil {
+			t.Fatal("docmap cache populated for empty positions root")
+		}
+	})
+	if _, err := col.TextIndexStorageStats("lexical"); err != nil {
+		t.Fatalf("TextIndexStorageStats: %v", err)
 	}
 }
 
