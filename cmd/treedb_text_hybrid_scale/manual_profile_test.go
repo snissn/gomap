@@ -321,6 +321,10 @@ func manualProfileDBFilesystem(path string) (device, mount string, err error) {
 	if err != nil {
 		return "", "", fmt.Errorf("database filesystem: %w", err)
 	}
+	return parseManualProfileDF(out)
+}
+
+func parseManualProfileDF(out []byte) (device, mount string, err error) {
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	if len(lines) < 2 {
 		return "", "", fmt.Errorf("database filesystem: unexpected df output %q", out)
@@ -329,7 +333,7 @@ func manualProfileDBFilesystem(path string) (device, mount string, err error) {
 	if len(fields) < 6 {
 		return "", "", fmt.Errorf("database filesystem: unexpected df row %q", lines[len(lines)-1])
 	}
-	return fields[0], fields[len(fields)-1], nil
+	return fields[0], strings.Join(fields[5:], " "), nil
 }
 
 func repeatManualReadOnlyAction(action func() error, minimum time.Duration) error {
@@ -357,5 +361,12 @@ func TestManualAllocProfileRequiresExactRate4546(t *testing.T) {
 	t.Cleanup(func() { runtime.MemProfileRate = previous })
 	if _, err := profileManualPhase("alloc", t.TempDir(), func() error { return nil }); err == nil || !strings.Contains(err.Error(), "GODEBUG=memprofilerate=1") {
 		t.Fatalf("allocation precondition err=%v", err)
+	}
+}
+
+func TestParseManualProfileDFPreservesMountWhitespace4546(t *testing.T) {
+	device, mount, err := parseManualProfileDF([]byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk3s5 976490576 123 976490453 1% /Volumes/Fast Disk\n"))
+	if err != nil || device != "/dev/disk3s5" || mount != "/Volumes/Fast Disk" {
+		t.Fatalf("device=%q mount=%q err=%v", device, mount, err)
 	}
 }
