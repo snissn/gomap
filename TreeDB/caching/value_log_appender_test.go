@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"testing"
+	"time"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -322,6 +323,253 @@ func TestCachingValueLogExternalRefFlusherDefersRotatedCommandFrameSyncToPinnedD
 		requireStatUint64(t, after, "treedb.cache.value_log.file_sync.ns_total"),
 		requireStatUint64(t, after, "treedb.cache.value_log.file_sync.rotated_segment.ns_total"); aggregate < rotated {
 		t.Fatalf("aggregate file-sync ns=%d, want >= rotated-segment ns=%d", aggregate, rotated)
+	}
+}
+
+func TestCachingValueLogAppenderPreparedOrdinaryBlockFramesPreserveOrderAfterReopen(t *testing.T) {
+	previousProcs := runtime.GOMAXPROCS(4)
+	t.Cleanup(func() { runtime.GOMAXPROCS(previousProcs) })
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityDurable})
+	if err != nil {
+		t.Fatalf("backend Open: %v", err)
+	}
+	db, err := Open(dir, backend, Options{
+		JournalLanes:                       1,
+		ValueLogCompression:                uint8(vlogCompressionBlock),
+		ValueLogBlockTargetCompressedBytes: 256,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache Open: %v", err)
+	}
+	// Keep the test on the ordinary block grouping path rather than the retained
+	// storage-first grouping policy, which intentionally coalesces these values.
+	db.valueLogThreshold = 1 << 30
+
+	values := make([][]byte, 16)
+	for i := range values {
+		values[i] = make([]byte, 8<<10)
+		for j := range values[i] {
+			values[i][j] = byte((i*131 + j*17 + j>>4) % 251)
+		}
+	}
+	ptrs, err := backend.AppendValueLogValues(values)
+	if err != nil {
+		_ = db.Close()
+		_ = backend.Close()
+		t.Fatalf("AppendValueLogValues: %v", err)
+	}
+	if len(ptrs) != len(values) {
+		_ = db.Close()
+		_ = backend.Close()
+		t.Fatalf("AppendValueLogValues pointers=%d, want %d", len(ptrs), len(values))
+	}
+	db.lanes[0].vlogPrepMu.Lock()
+	workers := db.lanes[0].vlogPrepWorkers
+	db.lanes[0].vlogPrepMu.Unlock()
+	if workers == 0 {
+		_ = db.Close()
+		_ = backend.Close()
+		t.Fatalf("ordinary block append did not start prepared-frame workers (mode=%d target=%d max=%d channel=%t block-k-count=%d max-k=%d)", db.valueLogCompressionMode, db.valueLogBlockTargetBytes, db.lanes[0].vlogPrepMaxWorkers, db.lanes[0].vlogPrepCh != nil, db.lanes[0].vlogBlockKCount[0].Load(), db.lanes[0].vlogBlockKMax[0].Load())
+	}
+	for i, ptr := range ptrs {
+		if i > 0 && ptr.FileID == ptrs[i-1].FileID && ptr.Offset <= ptrs[i-1].Offset {
+			_ = db.Close()
+			_ = backend.Close()
+			t.Fatalf("pointer %d offset=%d, want > previous offset=%d in file %d", i, ptr.Offset, ptrs[i-1].Offset, ptr.FileID)
+		}
+		got, err := db.ReadValueLogRecord(ptr)
+		if err != nil {
+			_ = db.Close()
+			_ = backend.Close()
+			t.Fatalf("read value %d: %v", i, err)
+		}
+		if !bytes.Equal(got, values[i]) {
+			_ = db.Close()
+			_ = backend.Close()
+			t.Fatalf("read value %d mismatch", i)
+		}
+	}
+	if err := db.Close(); err != nil {
+		_ = backend.Close()
+		t.Fatalf("close cache: %v", err)
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatalf("close backend: %v", err)
+	}
+
+	reopenedBackend, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityDurable})
+	if err != nil {
+		t.Fatalf("reopen backend: %v", err)
+	}
+	reopened, err := Open(dir, reopenedBackend, Options{JournalLanes: 1})
+	if err != nil {
+		_ = reopenedBackend.Close()
+		t.Fatalf("reopen cache: %v", err)
+	}
+	defer func() {
+		_ = reopened.Close()
+		_ = reopenedBackend.Close()
+	}()
+	for i, ptr := range ptrs {
+		got, err := reopened.ReadValueLogRecord(ptr)
+		if err != nil {
+			t.Fatalf("reopen read value %d: %v", i, err)
+		}
+		if !bytes.Equal(got, values[i]) {
+			t.Fatalf("reopen read value %d mismatch", i)
+		}
+	}
+}
+
+func TestPrepareAppendFramesBlockBackoffPersistsAcrossWorkerTasks(t *testing.T) {
+	previousProcs := runtime.GOMAXPROCS(4)
+	t.Cleanup(func() { runtime.GOMAXPROCS(previousProcs) })
+
+	db := &DB{closeCh: make(chan struct{}), lanes: make([]lane, 1)}
+	db.startVlogDictPreparer(&db.lanes[0])
+	t.Cleanup(func() {
+		close(db.closeCh)
+		db.wg.Wait()
+	})
+
+	const (
+		frames     = 8
+		valueBytes = 32 << 10
+	)
+	records := make([]valuelog.Record, frames)
+	rawBytes := 0
+	for i := range records {
+		value := make([]byte, valueBytes)
+		state := uint32(i + 1)
+		for j := range value {
+			state ^= state << 13
+			state ^= state >> 17
+			state ^= state << 5
+			value[j] = byte(state)
+		}
+		records[i] = valuelog.Record{RID: uint64(i + 1), Value: value}
+		rawBytes += len(value)
+	}
+
+	attempted := 0
+	for batch := 0; batch < 2; batch++ {
+		prepared, _, err := db.prepareAppendFrames(
+			&db.lanes[0], 0, nil, records, 1, rawBytes, vlogWriteBlock, false,
+			valuelog.BlockCodecZSTD, 0, 0, 0, time.Time{},
+		)
+		if err != nil {
+			t.Fatalf("prepare batch %d: %v", batch, err)
+		}
+		for i := range prepared {
+			if prepared[i].stats.Attempted {
+				attempted++
+			}
+			if prepared[i].stats.Kept {
+				t.Fatalf("batch %d frame %d unexpectedly kept incompressible data", batch, i)
+			}
+		}
+		releasePreparedDictFrames(prepared)
+		putVlogPreparedFrames(prepared)
+	}
+	if max := db.lanes[0].vlogPrepMaxWorkers * 2; attempted > max {
+		t.Fatalf("compression attempts=%d, want <= %d with persistent worker backoff", attempted, max)
+	}
+
+	compressible := make([]valuelog.Record, frames)
+	for i := range compressible {
+		compressible[i] = valuelog.Record{RID: uint64(i + 1), Value: bytes.Repeat([]byte{byte(i + 1)}, valueBytes)}
+	}
+	prepared, _, err := db.prepareAppendFrames(
+		&db.lanes[0], 0, nil, compressible, 1, rawBytes, vlogWriteBlock, true,
+		valuelog.BlockCodecZSTD, 0, 0, 0, time.Time{},
+	)
+	if err != nil {
+		t.Fatalf("prepare forced probe: %v", err)
+	}
+	defer func() {
+		releasePreparedDictFrames(prepared)
+		putVlogPreparedFrames(prepared)
+	}()
+	for i := range prepared {
+		if !prepared[i].stats.Attempted || !prepared[i].stats.Kept {
+			t.Fatalf("forced probe frame %d stats=%+v, want attempted and kept", i, prepared[i].stats)
+		}
+	}
+}
+
+func TestPrepareAppendFramesCloseWaitsForSubmittedTasks(t *testing.T) {
+	db := &DB{closeCh: make(chan struct{}), lanes: make([]lane, 1)}
+	l := &db.lanes[0]
+	l.vlogPrepMaxWorkers = 2
+	l.vlogPrepWorkers = 2
+	l.vlogPrepCh = make(chan vlogDictPrepareTask, vlogDictPrepBuffer)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	released := false
+	stop := make(chan struct{})
+	consumerDone := make(chan struct{})
+	go func() {
+		defer close(consumerDone)
+		first := true
+		for {
+			select {
+			case task := <-l.vlogPrepCh:
+				if first {
+					first = false
+					close(started)
+					<-release
+				}
+				task.out <- vlogDictPrepareResult{fi: task.fi, err: errWALClosed}
+			case <-stop:
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		if !released {
+			close(release)
+		}
+		close(stop)
+		<-consumerDone
+	})
+
+	records := []valuelog.Record{
+		{RID: 1, Value: bytes.Repeat([]byte("a"), 128<<10)},
+		{RID: 2, Value: bytes.Repeat([]byte("b"), 128<<10)},
+	}
+	done := make(chan error, 1)
+	go func() {
+		prepared, _, err := db.prepareAppendFrames(
+			l, 0, nil, records, 1, 256<<10, vlogWriteBlock, false,
+			valuelog.BlockCodecZSTD, 0, 0, 0, time.Time{},
+		)
+		if prepared != nil {
+			releasePreparedDictFrames(prepared)
+			putVlogPreparedFrames(prepared)
+		}
+		done <- err
+	}()
+
+	<-started
+	close(db.closeCh)
+	select {
+	case err := <-done:
+		t.Fatalf("prepare returned before submitted task completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	released = true
+	select {
+	case err := <-done:
+		if !errors.Is(err, errWALClosed) {
+			t.Fatalf("prepare error=%v, want %v", err, errWALClosed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("prepare did not return after submitted task completed")
 	}
 }
 

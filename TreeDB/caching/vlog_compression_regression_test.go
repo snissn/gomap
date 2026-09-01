@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -767,6 +768,181 @@ func TestAppendValueLogOne_AutoForcePointerRetainedPayloadResetsBlockBackoff(t *
 	}
 	if got := valuelog.BlockCodec(header.Reserved); got != valuelog.BlockCodecZSTD {
 		t.Fatalf("block codec=%v want zstd", got)
+	}
+}
+
+func TestAppendValueLog_PreparedProbeResetsWriterBackoff(t *testing.T) {
+	previousProcs := runtime.GOMAXPROCS(4)
+	t.Cleanup(func() { runtime.GOMAXPROCS(previousProcs) })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	t.Cleanup(func() {
+		if writer != nil {
+			_ = writer.Close()
+		}
+	})
+	writer.SetBlockCompression(valuelog.BlockCodecSnappy, true)
+
+	incompressible := make([]valuelog.Record, 8)
+	for i := range incompressible {
+		value := make([]byte, 4096)
+		state := uint32(i + 1)
+		for j := range value {
+			state ^= state << 13
+			state ^= state >> 17
+			state ^= state << 5
+			value[j] = byte(state)
+		}
+		incompressible[i] = valuelog.Record{RID: uint64(i + 1), Value: value}
+	}
+	seedPtrs := make([]page.ValuePtr, len(incompressible))
+	_, seedStats, err := writer.AppendFrameWithStatsInto(0, nil, incompressible, seedPtrs)
+	if err != nil {
+		t.Fatalf("seed writer backoff: %v", err)
+	}
+	if !seedStats.Attempted || seedStats.Kept {
+		t.Fatalf("seed stats=%+v, want attempted raw fallback", seedStats)
+	}
+
+	db := &DB{
+		closeCh:                  make(chan struct{}),
+		valueLogCompressionMode:  uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
+		valueLogBlockCodec:       valuelog.BlockCodecSnappy,
+		valueLogBlockTargetBytes: 4096,
+		forceValueLogPointers:    true,
+		lanes: []lane{
+			{id: 0, vlog: writer, vlogCompressionSelector: newVlogCompressionSelector(vlogAutoBalanced, 0, 0)},
+		},
+	}
+	db.startVlogDictPreparer(&db.lanes[0])
+	t.Cleanup(func() {
+		close(db.closeCh)
+		db.wg.Wait()
+	})
+
+	const valueBytes = 32 << 10
+	jsonChunk := []byte(`{"kind":"commit","operation":"create","text":"prepared-probe"}`)
+	probeRecords := make([]valuelog.Record, 32)
+	for i := range probeRecords {
+		value := bytes.Repeat(jsonChunk, valueBytes/len(jsonChunk)+1)
+		probeRecords[i] = valuelog.Record{RID: uint64(100 + i), Value: value[:valueBytes]}
+	}
+	if _, err := db.appendValueLog(&db.lanes[0], 0, nil, probeRecords, journalDurabilityFlush); err != nil {
+		t.Fatalf("append prepared probe: %v", err)
+	}
+	db.lanes[0].vlogPrepMu.Lock()
+	prepWorkers := db.lanes[0].vlogPrepWorkers
+	db.lanes[0].vlogPrepMu.Unlock()
+	if prepWorkers < 2 {
+		t.Fatalf("prepared probe workers=%d, want at least 2", prepWorkers)
+	}
+
+	db.valueLogCompressionMode = uint8(vlogCompressionBlock)
+	finalRecords := []valuelog.Record{{
+		RID:   1000,
+		Value: bytes.Repeat([]byte("compressible-block"), 2048),
+	}}
+	if _, err := db.appendValueLog(&db.lanes[0], 0, nil, finalRecords, journalDurabilityFlush); err != nil {
+		t.Fatalf("append writer-owned frame: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	writer = nil
+
+	headers := readValueLogFrameHeaders(t, path)
+	last := headers[len(headers)-1]
+	if last.Flags&valuelog.FrameFlagCompressed == 0 {
+		t.Fatalf("writer-owned frame remained raw after prepared forced probe")
+	}
+}
+
+func TestAppendValueLog_PreparedSuccessResetsWriterBackoff(t *testing.T) {
+	previousProcs := runtime.GOMAXPROCS(4)
+	t.Cleanup(func() { runtime.GOMAXPROCS(previousProcs) })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	t.Cleanup(func() {
+		if writer != nil {
+			_ = writer.Close()
+		}
+	})
+	writer.SetBlockCompression(valuelog.BlockCodecSnappy, true)
+
+	incompressible := make([]valuelog.Record, 8)
+	for i := range incompressible {
+		value := make([]byte, 4096)
+		state := uint32(i + 1)
+		for j := range value {
+			state ^= state << 13
+			state ^= state >> 17
+			state ^= state << 5
+			value[j] = byte(state)
+		}
+		incompressible[i] = valuelog.Record{RID: uint64(i + 1), Value: value}
+	}
+	seedPtrs := make([]page.ValuePtr, len(incompressible))
+	_, seedStats, err := writer.AppendFrameWithStatsInto(0, nil, incompressible, seedPtrs)
+	if err != nil {
+		t.Fatalf("seed writer backoff: %v", err)
+	}
+	if !seedStats.Attempted || seedStats.Kept {
+		t.Fatalf("seed stats=%+v, want attempted raw fallback", seedStats)
+	}
+
+	db := &DB{
+		closeCh:                  make(chan struct{}),
+		valueLogCompressionMode:  uint8(vlogCompressionBlock),
+		valueLogBlockCodec:       valuelog.BlockCodecSnappy,
+		valueLogBlockTargetBytes: 4096,
+		forceValueLogPointers:    true,
+		lanes:                    []lane{{id: 0, vlog: writer}},
+	}
+	db.startVlogDictPreparer(&db.lanes[0])
+	t.Cleanup(func() {
+		close(db.closeCh)
+		db.wg.Wait()
+	})
+
+	const valueBytes = 32 << 10
+	preparedRecords := make([]valuelog.Record, 32)
+	for i := range preparedRecords {
+		preparedRecords[i] = valuelog.Record{
+			RID:   uint64(100 + i),
+			Value: bytes.Repeat([]byte("compressible-prepared-block"), valueBytes/len("compressible-prepared-block")+1)[:valueBytes],
+		}
+	}
+	if _, err := db.appendValueLog(&db.lanes[0], 0, nil, preparedRecords, journalDurabilityFlush); err != nil {
+		t.Fatalf("append prepared block: %v", err)
+	}
+
+	finalRecords := []valuelog.Record{{
+		RID:   1000,
+		Value: bytes.Repeat([]byte("compressible-writer-block"), 2048),
+	}}
+	if _, err := db.appendValueLog(&db.lanes[0], 0, nil, finalRecords, journalDurabilityFlush); err != nil {
+		t.Fatalf("append writer-owned frame: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	writer = nil
+
+	headers := readValueLogFrameHeaders(t, path)
+	last := headers[len(headers)-1]
+	if last.Flags&valuelog.FrameFlagCompressed == 0 {
+		t.Fatalf("writer-owned frame remained raw after prepared compression success")
 	}
 }
 

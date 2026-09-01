@@ -14503,6 +14503,7 @@ type vlogDictPrepareTask struct {
 	records          []valuelog.Record
 	blockCodec       valuelog.BlockCodec
 	blockCompression bool
+	resetHints       bool
 	level            zstd.EncoderLevel
 	enableEntropy    bool
 	ioNsPerStored    float64
@@ -14527,20 +14528,10 @@ func (db *DB) publishVlogDictPrepareResult(task vlogDictPrepareTask, res vlogDic
 		}
 		return
 	}
-	select {
-	case task.out <- res:
-		return
-	case <-db.closeCh:
-		// During shutdown callers may stop receiving. Avoid blocking workers and
-		// leaking pooled frame buffers in that case.
-		select {
-		case task.out <- res:
-		default:
-			if res.bodyBuf != nil {
-				putVlogPreparedFrameBody(res.bodyBuf)
-			}
-		}
-	}
+	// prepareAppendFrames owns a result slot for every submitted task and drains
+	// all of them before returning, including during close. Never drop a result:
+	// that would strand the owner and release its record slices too early.
+	task.out <- res
 }
 
 const (
@@ -15559,7 +15550,12 @@ func (db *DB) vlogDictPrepareLoop(l *lane) {
 	}
 	preparer := valuelog.NewFramePreparer()
 	processTask := func(task vlogDictPrepareTask) {
-		preparer.SetDictFrameEncoderOptions(task.level, task.enableEntropy)
+		if task.resetHints {
+			preparer.ResetCompressionHints()
+		}
+		if !task.blockCompression {
+			preparer.SetDictFrameEncoderOptions(task.level, task.enableEntropy)
+		}
 		preparer.SetBlockCompression(task.blockCodec, task.blockCompression)
 		preparer.SetKeepPolicy(task.ioNsPerStored, task.encodeNsPerRaw, task.safetyMargin)
 		if task.measureEncode {
@@ -16209,6 +16205,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			plan.k,
 			plan.rawBytes,
 			plan.writeMode,
+			false,
 			plan.blockCodec,
 			keepIoNs,
 			keepEncodeNs,
@@ -17145,6 +17142,7 @@ func (db *DB) prepareAppendFrames(
 	k int,
 	rawPayloadBytes int,
 	writeMode vlogCompressionWriteMode,
+	resetBlockCompressionHints bool,
 	blockCodec valuelog.BlockCodec,
 	ioNsPerStoredByte float64,
 	encodeNsPerRawByte float64,
@@ -17167,6 +17165,11 @@ func (db *DB) prepareAppendFrames(
 		return nil, 0, nil
 	}
 	useWorkers := db.shouldUseVlogDictPrepWorkers(l, frameCount, rawPayloadBytes)
+	if blockCompression && !useWorkers {
+		// The writer owns persistent block-compression backoff. Keep small batches
+		// there rather than resetting pooled-preparer hints between calls.
+		return nil, 0, nil
+	}
 	prepStart := time.Now()
 	prepared := getVlogPreparedFrames(frameCount)
 	if !useWorkers {
@@ -17215,12 +17218,36 @@ func (db *DB) prepareAppendFrames(
 	// autotune keep-policy estimates.
 	measureEncode := false
 	results := getVlogDictPrepareResults(frameCount)
+	receiveAfterClose := func() vlogDictPrepareResult {
+		for {
+			select {
+			case res := <-results:
+				return res
+			default:
+			}
+			select {
+			case res := <-results:
+				return res
+			case task := <-l.vlogPrepCh:
+				// A worker may observe close immediately before a sender wins the
+				// channel race. Complete such stranded work here as closed.
+				db.publishVlogDictPrepareResult(task, vlogDictPrepareResult{
+					fi:  task.fi,
+					err: errWALClosed,
+				})
+			}
+		}
+	}
+	submitted := 0
 	for fi := 0; fi < frameCount; fi++ {
 		start := fi * k
 		end := start + k
 		if end > len(records) {
 			end = len(records)
 		}
+		// Workers own independent backoff state and may receive tasks in any order.
+		// Forced probes must therefore reset every task so no participating worker
+		// can skip its compression attempt with stale hints.
 		task := vlogDictPrepareTask{
 			fi:               fi,
 			dictID:           dictID,
@@ -17228,6 +17255,7 @@ func (db *DB) prepareAppendFrames(
 			records:          records[start:end],
 			blockCodec:       blockCodec,
 			blockCompression: blockCompression,
+			resetHints:       resetBlockCompressionHints,
 			level:            db.valueLogDictFrameEncodeLevel,
 			enableEntropy:    db.valueLogDictFrameEnableEntropy,
 			ioNsPerStored:    ioNsPerStoredByte,
@@ -17238,47 +17266,68 @@ func (db *DB) prepareAppendFrames(
 		}
 		select {
 		case l.vlogPrepCh <- task:
+			submitted++
 		case <-db.closeCh:
+			// Submitted workers still reference records owned by the caller. Drain
+			// them before returning so the caller can safely recycle those slices.
+			for collected := 0; collected < submitted; collected++ {
+				res := receiveAfterClose()
+				if res.bodyBuf != nil {
+					putVlogPreparedFrameBody(res.bodyBuf)
+				}
+			}
 			releasePreparedDictFrames(prepared)
 			putVlogPreparedFrames(prepared)
-			// Workers may still publish into results after close is observed; do
-			// not pool this channel on early return.
-			return nil, 0, errWALClosed
+			putVlogDictPrepareResults(results)
+			return nil, time.Since(prepStart).Nanoseconds(), errWALClosed
 		}
 	}
 
 	var firstErr error
+	closed := false
 	for collected := 0; collected < frameCount; collected++ {
-		select {
-		case res := <-results:
-			if res.err != nil {
-				if firstErr == nil {
-					firstErr = res.err
-				}
-				continue
+		var res vlogDictPrepareResult
+		if closed {
+			res = receiveAfterClose()
+		} else {
+			select {
+			case res = <-results:
+			case <-db.closeCh:
+				closed = true
+				res = receiveAfterClose()
 			}
-			start := res.fi * k
-			end := start + k
-			if end > len(records) {
-				end = len(records)
+		}
+		if res.err != nil {
+			if firstErr == nil {
+				firstErr = res.err
 			}
-			releasePreparedDictFrame(&prepared[res.fi])
-			prepared[res.fi] = preparedDictFrame{
-				start:   start,
-				end:     end,
-				body:    res.body,
-				bodyBuf: res.bodyBuf,
-				stats:   res.stats,
-			}
-		case <-db.closeCh:
-			releasePreparedDictFrames(prepared)
-			putVlogPreparedFrames(prepared)
-			// Workers may still publish into results after close is observed; do
-			// not pool this channel on early return.
-			return nil, time.Since(prepStart).Nanoseconds(), errWALClosed
+			continue
+		}
+		start := res.fi * k
+		end := start + k
+		if end > len(records) {
+			end = len(records)
+		}
+		releasePreparedDictFrame(&prepared[res.fi])
+		prepared[res.fi] = preparedDictFrame{
+			start:   start,
+			end:     end,
+			body:    res.body,
+			bodyBuf: res.bodyBuf,
+			stats:   res.stats,
 		}
 	}
 	putVlogDictPrepareResults(results)
+	if !closed {
+		select {
+		case <-db.closeCh:
+			closed = true
+		default:
+		}
+	}
+	if closed && firstErr == nil {
+		firstErr = errWALClosed
+	}
 	if firstErr != nil {
 		releasePreparedDictFrames(prepared)
 		putVlogPreparedFrames(prepared)
@@ -17575,12 +17624,12 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 		}
 	}
 
+	// Prepared block frames are appended through the same ordered writer path as
+	// dictionary frames. Physical append and segment ownership stay serialized.
 	prepareWriteMode := finalWriteMode
-	if prepareWriteMode == vlogWriteBlock && (!leafLogAppend || db.flushApplyConcurrency <= 1) {
-		// Keep the ordinary value-log block path and non-parallel leaf-log path on the
-		// writer so existing generation accounting and rewrite heuristics remain
-		// unchanged. M3 only moves block frame preparation out of the append mutex for
-		// opt-in parallel flush/apply leaf-log output.
+	if prepareWriteMode == vlogWriteBlock && leafLogAppend && db.flushApplyConcurrency <= 1 {
+		// Preserve the single-concurrency leaf-log generation/rewrite accounting.
+		// Ordinary value batches still use the bounded preparers below.
 		prepareWriteMode = vlogWriteOff
 	}
 	preparedDictFrames, prepEncodeWallNs, prepareErr := db.prepareAppendFrames(
@@ -17591,6 +17640,7 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 		k,
 		rawPayloadBytes,
 		prepareWriteMode,
+		resetBlockCompressionHints,
 		finalBlockCodec,
 		ioNsPerStoredForWriter,
 		encodeNsPerRawForWriter,
@@ -17704,7 +17754,7 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 	if policySetter != nil && !usePreparedFrames {
 		policySetter.SetKeepPolicy(ioNsPerStoredForWriter, encodeNsPerRawForWriter, safetyMargin)
 	}
-	if resetBlockCompressionHints && compressionResetter != nil && !usePreparedFrames {
+	if resetBlockCompressionHints && compressionResetter != nil {
 		compressionResetter.ResetCompressionHints()
 	}
 
@@ -17810,6 +17860,9 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 				encodeNsTotal += pf.stats.EncodeNs
 				encodeRawBytes += pf.stats.RawPayloadBytes
 			}
+		}
+		if err == nil && finalWriteMode == vlogWriteBlock && framesKept > 0 && caps.reset != nil {
+			caps.reset.ResetCompressionHints()
 		}
 	}
 
