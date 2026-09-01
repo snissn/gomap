@@ -46,8 +46,14 @@ func TestTextV2StorageStatsPositionValidationUsesPostingTableAndDocMapBlockCache
 		if err := inspectTextV2Root(snap, catalog, def, collectionTextV2PostingBlocksRootName("docs", "lexical"), textV2RootFamilyPostingBlocks, status, &stats, nil, postings); err != nil {
 			t.Fatalf("inspect posting root: %v", err)
 		}
-		if got, want := len(postings.postings), 2*documents; got != want {
-			t.Fatalf("posting table entries=%d want %d", got, want)
+		if got, want := len(postings.postings), 2; got != want {
+			t.Fatalf("posting table terms=%d want %d", got, want)
+		}
+		if got, want := len(postings.postings["shared"]), documents; got != want {
+			t.Fatalf("shared posting entries=%d want %d", got, want)
+		}
+		if got, want := len(postings.postings["phrase"]), documents; got != want {
+			t.Fatalf("phrase posting entries=%d want %d", got, want)
 		}
 		positionStats := TextIndexStorageStats{Version: TextIndexVersionV2}
 		if err := inspectTextV2Root(snap, catalog, def, collectionTextV2PositionsRootName("docs", "lexical"), textV2RootFamilyPositions, status, &positionStats, nil, postings); err != nil {
@@ -88,6 +94,27 @@ func TestTextV2PositionPostingValidationDefersDuplicateFailure4558(t *testing.T)
 	}
 	if _, found, duplicate := postings.lookup("shared", entry.Ordinal, entry.Generation); !found || !duplicate {
 		t.Fatalf("lookup found=%v duplicate=%v want duplicate entry", found, duplicate)
+	}
+}
+
+func TestTextV2PositionPostingValidationKeepsDistinctGenerations4564(t *testing.T) {
+	postings := newTextV2PositionValidation()
+	first := textV2PostingBlockEntry{Ordinal: 7, Generation: 3, TermFrequency: 1, FieldFrequencies: []uint32{1}}
+	second := textV2PostingBlockEntry{Ordinal: 7, Generation: 4, TermFrequency: 2, FieldFrequencies: []uint32{2}}
+	if err := postings.add("shared", first, 1); err != nil {
+		t.Fatalf("first add: %v", err)
+	}
+	if err := postings.add("shared", second, 1); err != nil {
+		t.Fatalf("second generation add: %v", err)
+	}
+	if err := postings.add("shared", first, 1); err != nil {
+		t.Fatalf("duplicate add: %v", err)
+	}
+	if posting, found, duplicate := postings.lookup("shared", first.Ordinal, first.Generation); !found || !duplicate || posting.fieldFrequency(0) != 1 {
+		t.Fatalf("first generation found=%v duplicate=%v frequency=%d", found, duplicate, posting.fieldFrequency(0))
+	}
+	if posting, found, duplicate := postings.lookup("shared", second.Ordinal, second.Generation); !found || duplicate || posting.fieldFrequency(0) != 2 {
+		t.Fatalf("second generation found=%v duplicate=%v frequency=%d", found, duplicate, posting.fieldFrequency(0))
 	}
 }
 
