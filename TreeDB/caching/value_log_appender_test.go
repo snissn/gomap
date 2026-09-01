@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"testing"
+	"time"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -420,6 +421,61 @@ func TestCachingValueLogAppenderPreparedOrdinaryBlockFramesPreserveOrderAfterReo
 		if !bytes.Equal(got, values[i]) {
 			t.Fatalf("reopen read value %d mismatch", i)
 		}
+	}
+}
+
+func TestPrepareAppendFramesBlockBackoffPersistsAcrossWorkerTasks(t *testing.T) {
+	previousProcs := runtime.GOMAXPROCS(4)
+	t.Cleanup(func() { runtime.GOMAXPROCS(previousProcs) })
+
+	db := &DB{closeCh: make(chan struct{}), lanes: make([]lane, 1)}
+	db.startVlogDictPreparer(&db.lanes[0])
+	t.Cleanup(func() {
+		close(db.closeCh)
+		db.wg.Wait()
+	})
+
+	const (
+		frames     = 8
+		valueBytes = 32 << 10
+	)
+	records := make([]valuelog.Record, frames)
+	rawBytes := 0
+	for i := range records {
+		value := make([]byte, valueBytes)
+		state := uint32(i + 1)
+		for j := range value {
+			state ^= state << 13
+			state ^= state >> 17
+			state ^= state << 5
+			value[j] = byte(state)
+		}
+		records[i] = valuelog.Record{RID: uint64(i + 1), Value: value}
+		rawBytes += len(value)
+	}
+
+	attempted := 0
+	for batch := 0; batch < 2; batch++ {
+		prepared, _, err := db.prepareAppendFrames(
+			&db.lanes[0], 0, nil, records, 1, rawBytes, vlogWriteBlock,
+			valuelog.BlockCodecZSTD, 0, 0, 0, time.Time{},
+		)
+		if err != nil {
+			t.Fatalf("prepare batch %d: %v", batch, err)
+		}
+		for i := range prepared {
+			if prepared[i].stats.Attempted {
+				attempted++
+			}
+			if prepared[i].stats.Kept {
+				t.Fatalf("batch %d frame %d unexpectedly kept incompressible data", batch, i)
+			}
+		}
+		releasePreparedDictFrames(prepared)
+		putVlogPreparedFrames(prepared)
+	}
+	if max := db.lanes[0].vlogPrepMaxWorkers * 2; attempted > max {
+		t.Fatalf("compression attempts=%d, want <= %d with persistent worker backoff", attempted, max)
 	}
 }
 

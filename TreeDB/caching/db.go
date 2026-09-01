@@ -15559,7 +15559,9 @@ func (db *DB) vlogDictPrepareLoop(l *lane) {
 	}
 	preparer := valuelog.NewFramePreparer()
 	processTask := func(task vlogDictPrepareTask) {
-		preparer.SetDictFrameEncoderOptions(task.level, task.enableEntropy)
+		if !task.blockCompression {
+			preparer.SetDictFrameEncoderOptions(task.level, task.enableEntropy)
+		}
 		preparer.SetBlockCompression(task.blockCodec, task.blockCompression)
 		preparer.SetKeepPolicy(task.ioNsPerStored, task.encodeNsPerRaw, task.safetyMargin)
 		if task.measureEncode {
@@ -17167,6 +17169,11 @@ func (db *DB) prepareAppendFrames(
 		return nil, 0, nil
 	}
 	useWorkers := db.shouldUseVlogDictPrepWorkers(l, frameCount, rawPayloadBytes)
+	if blockCompression && !useWorkers {
+		// The writer owns persistent block-compression backoff. Keep small batches
+		// there rather than resetting pooled-preparer hints between calls.
+		return nil, 0, nil
+	}
 	prepStart := time.Now()
 	prepared := getVlogPreparedFrames(frameCount)
 	if !useWorkers {
