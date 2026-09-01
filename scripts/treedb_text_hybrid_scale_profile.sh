@@ -68,7 +68,7 @@ if ! check_profile_source; then exit 2; fi
 profile_commit=$("${controlled_git_env[@]}" git rev-parse HEAD)
 if [[ -L "$RUN_DIR" || ( -e "$RUN_DIR" && ! -d "$RUN_DIR" ) ]]; then echo "RUN_DIR must be an empty directory: $RUN_DIR" >&2; exit 2; fi
 mkdir -p "$RUN_DIR"
-if [[ -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then echo "RUN_DIR must be empty: $RUN_DIR; use a fresh RUN_DIR" >&2; exit 2; fi
+if (shopt -s nullglob dotglob; entries=("$RUN_DIR"/*); ((${#entries[@]}))); then echo "RUN_DIR must be empty: $RUN_DIR; use a fresh RUN_DIR" >&2; exit 2; fi
 {
   echo "commit=$profile_commit"
   echo "command=$0 $*"

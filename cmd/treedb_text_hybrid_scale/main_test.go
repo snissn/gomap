@@ -1032,7 +1032,7 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 		t.Fatalf("git override context=%q err=%v", context, err)
 	}
 	nonempty := t.TempDir()
-	sentinel := filepath.Join(nonempty, "sentinel")
+	sentinel := filepath.Join(nonempty, ".sentinel")
 	if err := os.WriteFile(sentinel, []byte("keep"), 0o644); err != nil {
 		t.Fatal(err)
 	}
