@@ -10,6 +10,51 @@ separate text-block GC path.
 The default script run is a bounded smoke. Full 10M runs can take multiple hours
 and tens of GB; **do not start a 10M run without explicit coordinator approval**.
 
+## Phase-separated local profiling (#4546)
+
+The manual-only package test runs one fresh `go test` process per phase. Its
+default is the bounded 10k matrix; `RUN_100K=true ROWS=100000` first completes
+that same invocation's 10k matrix and only then starts 100k. It accepts no
+other row count. Each phase directory contains the exact `command.txt`,
+`phase.log`, and `observations.txt` (setup boundary, action-only measured time,
+separately labeled high-resolution process elapsed time, actual DB
+bytes immediately before/after the measured action, and separately labeled
+artifact-directory growth, plus the temporary DB filesystem device and mount),
+plus profiles when chosen. `context.txt` records any inherited `GODEBUG` with
+shell escaping and the cleared TreeDB cache, typed-column, debug instrumentation,
+read-statistics, and value-log mapping overrides.
+Each phase artifact directory is single-use: reruns fail rather than overwrite
+it, and `RUN_DIR` itself must be empty before a capture starts, so use a fresh
+`RUN_DIR` for a new capture. The wrapper also rejects a dirty worktree before
+creating any run artifacts, preserving the recorded commit provenance. It
+validates all selected phases and profile-phase membership before either check,
+so an invalid invocation leaves its empty `RUN_DIR` retryable.
+
+```sh
+RUN_DIR=/tmp/gomap_text_hybrid_profile_$(date +%Y%m%d_%H%M%S) \
+TIMEOUT=20m scripts/treedb_text_hybrid_scale_profile.sh
+```
+
+Select a single profile-bearing phase without changing the six-process matrix:
+
+```sh
+PROFILE_MODE=runtime PROFILE_PHASE=broad \
+scripts/treedb_text_hybrid_scale_profile.sh
+```
+
+`runtime` writes CPU, trace, block, and mutex profiles. `PROFILE_MODE=alloc`
+writes allocation before/after and after-phase heap profiles, plus action-only
+allocation counters in `alloc_delta.txt` that exclude profile bookkeeping. Its
+test process starts with `memprofilerate=1` (while preserving other `GODEBUG`
+settings) for complete short-phase allocation stacks. For a quick
+implementation smoke only, use `TINY_SMOKE=true`; it preserves the script's
+10k selection guard but gives the manual test a 96-row fixture. This is
+instrumentation evidence, not a product speedup claim.
+
+For `PROFILE_MODE=runtime`, only the read-only `phrase` and `broad` action
+groups repeat until at least 250ms, which is logged in `phase.log` and makes
+their CPU samples useful. Mutating phases and all non-runtime runs execute once.
+
 ## Stable commands
 
 ### Bounded local smoke
@@ -26,6 +71,14 @@ scripts/bench_text_hybrid_scale.sh
 The smoke exercises load, text-only retrieval, hybrid retrieval, reopen,
 concurrent search/write sanity, maintenance rewrite postconditions, and text
 backfill with tiny deterministic fixtures.
+
+The package guard test keeps its real tiny-workload smoke opt-in so ordinary
+`go test` runs do not execute it. Run that smoke explicitly with:
+
+```sh
+TREEDB_TEXT_PROFILE_RUN_SMOKE=true GOWORK=off \
+  go test ./cmd/treedb_text_hybrid_scale -run '^TestManualProfileWrapperGuards4546$' -count=1 -timeout=120s
+```
 
 ### 1M scale matrix
 

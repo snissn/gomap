@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -846,5 +848,391 @@ func TestScaleCommandFlagValidation2731(t *testing.T) {
 	wantSelected := []string{"load", "queries"}
 	if got := selectedPhaseNames(cfg.selectedPhases); strings.Join(got, ",") != strings.Join(wantSelected, ",") {
 		t.Fatalf("selected phases=%v want %v", got, wantSelected)
+	}
+}
+
+func TestManualProfileWrapperGuards4546(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanCheckout := filepath.Join(t.TempDir(), "clean-checkout")
+	runGit := func(dir string, args ...string) ([]byte, error) {
+		gitCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		return exec.CommandContext(gitCtx, "git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	}
+	if output, err := runGit(repoRoot, "worktree", "add", "--detach", cleanCheckout, "HEAD"); err != nil {
+		t.Fatalf("create clean checkout: %v\n%s", err, output)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cleanupCancel()
+		_ = exec.CommandContext(cleanupCtx, "git", "-C", repoRoot, "worktree", "remove", "--force", cleanCheckout).Run()
+	})
+	commonDirPath, err := runGit(repoRoot, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		t.Fatalf("git common dir: %v", err)
+	}
+	sharedConfigPath := filepath.Join(strings.TrimSpace(string(commonDirPath)), "config")
+	sharedExcludePath := filepath.Join(strings.TrimSpace(string(commonDirPath)), "info", "exclude")
+	sharedConfig, err := os.ReadFile(sharedConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sharedExclude, err := os.ReadFile(sharedExcludePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if got, err := os.ReadFile(sharedConfigPath); err != nil || !bytes.Equal(got, sharedConfig) {
+			t.Fatalf("shared git config changed: err=%v", err)
+		}
+		if got, err := os.ReadFile(sharedExcludePath); err != nil || !bytes.Equal(got, sharedExclude) {
+			t.Fatalf("shared git exclude changed: err=%v", err)
+		}
+	})
+	profileAssets := []string{
+		"cmd/treedb_text_hybrid_scale/main.go",
+		"cmd/treedb_text_hybrid_scale/manual_profile_test.go",
+		"scripts/treedb_text_hybrid_scale_profile.sh",
+	}
+	for _, path := range profileAssets {
+		data, err := os.ReadFile(filepath.Join(repoRoot, path))
+		if err != nil {
+			t.Fatalf("read overlay %s: %v", path, err)
+		}
+		info, err := os.Stat(filepath.Join(repoRoot, path))
+		if err != nil {
+			t.Fatalf("stat overlay %s: %v", path, err)
+		}
+		if err := os.WriteFile(filepath.Join(cleanCheckout, path), data, info.Mode()); err != nil {
+			t.Fatalf("overlay %s: %v", path, err)
+		}
+	}
+	gitAddArgs := append([]string{"add", "--"}, profileAssets...)
+	if output, err := runGit(cleanCheckout, gitAddArgs...); err != nil {
+		t.Fatalf("stage clean checkout overlay: %v\n%s", err, output)
+	}
+	if output, err := runGit(cleanCheckout,
+		"-c", "user.name=gomap manual profile test",
+		"-c", "user.email=gomap-manual-profile-test@invalid",
+		"-c", "commit.gpgSign=false",
+		"commit", "--no-verify", "--allow-empty", "-m", "test: overlay manual profile scope"); err != nil {
+		t.Fatalf("commit clean checkout overlay: %v\n%s", err, output)
+	}
+	run := func(env ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "bash", "scripts/treedb_text_hybrid_scale_profile.sh")
+		cmd.Dir = cleanCheckout
+		cmd.Env = append(os.Environ(), env...)
+		return cmd.CombinedOutput()
+	}
+	if output, err := run("RUN_DIR="+t.TempDir(), "ROWS=999"); err == nil || !strings.Contains(string(output), "ROWS must be 10000 or 100000") {
+		t.Fatalf("unsupported rows err=%v output=%s", err, output)
+	}
+	if output, err := run("RUN_DIR="+t.TempDir(), "ROWS=100000"); err == nil || !strings.Contains(string(output), "100k requires RUN_100K=true") {
+		t.Fatalf("100k escalation err=%v output=%s", err, output)
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusFailureGitDir := t.TempDir()
+	statusFailureGit := filepath.Join(statusFailureGitDir, "git")
+	if err := os.WriteFile(statusFailureGit, []byte("#!/bin/sh\nif [ \"$1\" = status ]; then exit 1; fi\nexec \"$REAL_GIT\" \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	statusFailureRun := t.TempDir()
+	if output, err := run("RUN_DIR="+statusFailureRun, "PHASES=phrase", "DRY_RUN=true", "PATH="+statusFailureGitDir+string(os.PathListSeparator)+os.Getenv("PATH"), "REAL_GIT="+realGit); err == nil || !strings.Contains(string(output), "git status failed before profiling") {
+		t.Fatalf("status failure err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(statusFailureRun, "context.txt")); !os.IsNotExist(err) {
+		t.Fatalf("status failure wrote provenance: %v", err)
+	}
+	invalid := t.TempDir()
+	if output, err := run("RUN_DIR="+invalid, "PHASES=unknown", "DRY_RUN=true"); err == nil || !strings.Contains(string(output), "unknown phase: unknown") {
+		t.Fatalf("invalid phase err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(invalid, "context.txt")); !os.IsNotExist(err) {
+		t.Fatalf("invalid phase wrote provenance: %v", err)
+	}
+	emptyPhases := t.TempDir()
+	if output, err := run("RUN_DIR="+emptyPhases, "PHASES=", "DRY_RUN=true"); err == nil || !strings.Contains(string(output), "PHASES must not be empty") {
+		t.Fatalf("empty phases err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(emptyPhases, "context.txt")); !os.IsNotExist(err) {
+		t.Fatalf("empty phases wrote provenance: %v", err)
+	}
+	emptyProfilePhase := t.TempDir()
+	if output, err := run("RUN_DIR="+emptyProfilePhase, "PHASES=phrase", "DRY_RUN=true", "PROFILE_MODE=runtime"); err == nil || !strings.Contains(string(output), "PROFILE_PHASE is required with PROFILE_MODE=runtime") {
+		t.Fatalf("empty profile phase err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(emptyProfilePhase, "context.txt")); !os.IsNotExist(err) {
+		t.Fatalf("empty profile phase wrote provenance: %v", err)
+	}
+	duplicate := t.TempDir()
+	if output, err := run("RUN_DIR="+duplicate, "PHASES=vector,vector", "DRY_RUN=true"); err == nil || !strings.Contains(string(output), "duplicate phase: vector") {
+		t.Fatalf("duplicate phase err=%v output=%s", err, output)
+	}
+	if entries, err := os.ReadDir(duplicate); err != nil || len(entries) != 0 {
+		t.Fatalf("duplicate phase wrote artifacts: entries=%v err=%v", entries, err)
+	}
+	if output, err := run("RUN_DIR="+invalid, "PHASES=phrase", "DRY_RUN=true"); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("invalid phase retry err=%v output=%s", err, output)
+	}
+	profileInvalid := t.TempDir()
+	if output, err := run("RUN_DIR="+profileInvalid, "PHASES=phrase", "DRY_RUN=true", "PROFILE_MODE=runtime", "PROFILE_PHASE=broad"); err == nil || !strings.Contains(string(output), "PROFILE_PHASE must be selected by PHASES") {
+		t.Fatalf("profile phase membership err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(profileInvalid, "context.txt")); !os.IsNotExist(err) {
+		t.Fatalf("profile phase wrote provenance: %v", err)
+	}
+	profileDisabled := t.TempDir()
+	if output, err := run("RUN_DIR="+profileDisabled, "PHASES=phrase", "DRY_RUN=true", "PROFILE_PHASE=phrase"); err == nil || !strings.Contains(string(output), "PROFILE_PHASE requires PROFILE_MODE=runtime or alloc") {
+		t.Fatalf("disabled profile phase err=%v output=%s", err, output)
+	}
+	if entries, err := os.ReadDir(profileDisabled); err != nil || len(entries) != 0 {
+		t.Fatalf("disabled profile phase wrote artifacts: entries=%v err=%v", entries, err)
+	}
+	ignoredName := "manual profile ignored 4546.go"
+	ignoredSource := filepath.Join(cleanCheckout, "cmd", "treedb_text_hybrid_scale", ignoredName)
+	ignoredConfigHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ignoredConfigHome, "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ignoredConfigHome, "git", "ignore"), []byte("cmd/treedb_text_hybrid_scale/"+ignoredName+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ignoredSource, []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ignoredRun := t.TempDir()
+	if output, err := run("RUN_DIR="+ignoredRun, "PHASES=phrase", "DRY_RUN=true", "HOME="+ignoredConfigHome, "XDG_CONFIG_HOME="+ignoredConfigHome); err == nil || !strings.Contains(string(output), "ignored build input before profiling") {
+		t.Fatalf("ignored build input err=%v output=%s", err, output)
+	}
+	if entries, err := os.ReadDir(ignoredRun); err != nil || len(entries) != 0 {
+		t.Fatalf("ignored build input wrote artifacts: entries=%v err=%v", entries, err)
+	}
+	if err := os.Remove(ignoredSource); err != nil {
+		t.Fatal(err)
+	}
+	dirty, err := os.CreateTemp(filepath.Join(cleanCheckout, "cmd", "treedb_text_hybrid_scale"), "manual_profile_dirty_*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dirty.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(dirty.Name()) })
+	statusConfigHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(statusConfigHome, "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(statusConfigHome, "git", "config"), []byte("[status]\n\tshowUntrackedFiles = no\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	otherGitDir, err := runGit(repoRoot, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		t.Fatalf("other git dir: %v", err)
+	}
+	dirtyRun := t.TempDir()
+	if output, err := run("RUN_DIR="+dirtyRun, "PHASES=phrase", "DRY_RUN=true", "HOME="+statusConfigHome, "XDG_CONFIG_HOME="+statusConfigHome, "GIT_DIR="+strings.TrimSpace(string(otherGitDir)), "GIT_WORK_TREE="+repoRoot); err == nil || !strings.Contains(string(output), "worktree must be clean before profiling") {
+		t.Fatalf("dirty worktree err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(dirtyRun, "context.txt")); !os.IsNotExist(err) {
+		t.Fatalf("dirty worktree wrote provenance: %v", err)
+	}
+	if err := os.Remove(dirty.Name()); err != nil {
+		t.Fatal(err)
+	}
+	gitOverrideRun := t.TempDir()
+	if output, err := run("RUN_DIR="+gitOverrideRun, "PHASES=phrase", "DRY_RUN=true", "GIT_DIR="+strings.TrimSpace(string(otherGitDir)), "GIT_WORK_TREE="+repoRoot); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("git override dry-run err=%v output=%s", err, output)
+	}
+	sourceHead, err := runGit(cleanCheckout, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	contextData, err := os.ReadFile(filepath.Join(gitOverrideRun, "context.txt"))
+	if err != nil || !strings.Contains(string(contextData), "commit="+strings.TrimSpace(string(sourceHead))) {
+		t.Fatalf("git override context=%q err=%v", contextData, err)
+	}
+	nonempty := t.TempDir()
+	sentinel := filepath.Join(nonempty, ".sentinel")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := run("RUN_DIR="+nonempty, "PHASES=phrase", "DRY_RUN=true"); err == nil || !strings.Contains(string(output), "RUN_DIR must be empty") {
+		t.Fatalf("nonempty run dir err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(nonempty, "context.txt")); !os.IsNotExist(err) {
+		t.Fatalf("nonempty run dir wrote provenance: %v", err)
+	}
+	dryRun := t.TempDir()
+	if output, err := run("RUN_DIR="+dryRun, "PHASES=phrase", "DRY_RUN=true"); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("phase selection err=%v output=%s", err, output)
+	}
+	command, err := os.ReadFile(filepath.Join(dryRun, "10000", "phrase", "command.txt"))
+	if err != nil || !strings.Contains(string(command), "TREEDB_TEXT_PROFILE_ROWS=10000") {
+		t.Fatalf("dry-run command=%q err=%v", command, err)
+	}
+	dryRunContext, err := os.ReadFile(filepath.Join(dryRun, "context.txt"))
+	if err != nil || !strings.Contains(string(dryRunContext), "command=scripts/treedb_text_hybrid_scale_profile.sh ") {
+		t.Fatalf("dry-run context=%q err=%v", dryRunContext, err)
+	}
+	mountGoDir := t.TempDir()
+	mountGo := filepath.Join(mountGoDir, "go")
+	if err := os.WriteFile(mountGo, []byte("#!/bin/sh\nif [ \"$1\" = version ]; then echo 'go version go1.0 test'; exit 0; fi\necho 'phase=load rows=10000 setup_complete=true measured_boundary_starts_now db_bytes_before=0 db_filesystem=/dev/test db_mount=/Volumes/Fast Disk'\necho 'phase=load rows=10000 measured_seconds=0.001 db_bytes_after=1'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mountRun := t.TempDir()
+	if output, err := run("RUN_DIR="+mountRun, "PHASES=load", "PATH="+mountGoDir+string(os.PathListSeparator)+os.Getenv("PATH")); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("mount parsing run err=%v output=%s", err, output)
+	}
+	mountObservations, err := os.ReadFile(filepath.Join(mountRun, "10000", "load", "observations.txt"))
+	if err != nil || !strings.Contains(string(mountObservations), "db_mount=/Volumes/Fast Disk\n") {
+		t.Fatalf("mount observations=%q err=%v", mountObservations, err)
+	}
+	betweenPhaseSource := filepath.Join(cleanCheckout, "cmd", "treedb_text_hybrid_scale", "manual_profile_between_phase_4546.go")
+	fakeGoDir := t.TempDir()
+	fakeGo := filepath.Join(fakeGoDir, "go")
+	if err := os.WriteFile(fakeGo, []byte("#!/bin/sh\nif [ \"$1\" = version ]; then echo 'go version go1.0 test'; exit 0; fi\n: > \"$DIRTY_FILE\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	betweenPhaseRun := t.TempDir()
+	if output, err := run("RUN_DIR="+betweenPhaseRun, "PHASES=load,phrase", "PATH="+fakeGoDir+string(os.PathListSeparator)+os.Getenv("PATH"), "DIRTY_FILE="+betweenPhaseSource); err == nil || !strings.Contains(string(output), "worktree must be clean before profiling") {
+		t.Fatalf("between-phase source change err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(betweenPhaseRun, "10000", "phrase")); !os.IsNotExist(err) {
+		t.Fatalf("source change ran later phase: %v", err)
+	}
+	if err := os.Remove(betweenPhaseSource); err != nil {
+		t.Fatal(err)
+	}
+	finalPhaseRun := t.TempDir()
+	if output, err := run("RUN_DIR="+finalPhaseRun, "PHASES=load", "PATH="+fakeGoDir+string(os.PathListSeparator)+os.Getenv("PATH"), "DIRTY_FILE="+betweenPhaseSource); err == nil || !strings.Contains(string(output), "worktree must be clean before profiling") || strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("final-phase source change err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(finalPhaseRun, "10000", "load", "observations.txt")); !os.IsNotExist(err) {
+		t.Fatalf("final-phase source change accepted observations: %v", err)
+	}
+	if err := os.Remove(betweenPhaseSource); err != nil {
+		t.Fatal(err)
+	}
+	goFlagsDryRun := t.TempDir()
+	if output, err := run("RUN_DIR="+goFlagsDryRun, "PHASES=phrase", "DRY_RUN=true", "GOFLAGS=-race", "GOMAXPROCS=1", "GOGC=10", "GOMEMLIMIT=1MiB", "GOOS=plan9", "GOARCH=386", "GOAMD64=v3", "GOARM64=v8.0", "GO386=sse2", "GOARM=7", "GOMIPS=softfloat", "GOMIPS64=softfloat", "GOPPC64=power8", "GORISCV64=rva20u64", "GOWASM=signext", "GOEXPERIMENT=arenas", "CGO_ENABLED=0", "TREEDB_LEAF_PAGE_CACHE_ENTRIES=1", "TREEDB_COLUMN_STORE_TYPED_COMPRESSION=none", "TREEDB_DEBUG_VLOG_TIMINGS=1", "TREEDB_DEBUG_MEMTABLE_ROTATE=1", "TREEDB_DEBUG_VLOG_SHAPE=1", "TREEDB_DEBUG_VLOG_MAINT=1", "TREEDB_OUTER_LEAF_READ_SAMPLE_MOD=1", "TREEDB_HOT_PATH_STATS=1", "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS=0"); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("GOFLAGS dry-run err=%v output=%s", err, output)
+	}
+	command, err = os.ReadFile(filepath.Join(goFlagsDryRun, "10000", "phrase", "command.txt"))
+	if err != nil || !strings.Contains(string(command), "-u GOMAXPROCS -u GOGC -u GOMEMLIMIT -u GOOS -u GOARCH -u GOAMD64 -u GOARM64 -u GO386 -u GOARM -u GOMIPS -u GOMIPS64 -u GOPPC64 -u GORISCV64 -u GOWASM -u GOEXPERIMENT -u CGO_ENABLED -u TREEDB_LEAF_PAGE_CACHE_ENTRIES -u TREEDB_COLUMN_STORE_TYPED_COMPRESSION") || !strings.Contains(string(command), "-u TREEDB_DEBUG_VLOG_TIMINGS -u TREEDB_DEBUG_VLOG_TIMINGS_MIN_MS -u TREEDB_DEBUG_VLOG_TIMINGS_BUDGET") || !strings.Contains(string(command), "-u TREEDB_DEBUG_MEMTABLE_ROTATE -u TREEDB_DEBUG_MEMTABLE_ROTATE_BUDGET -u TREEDB_DEBUG_VLOG_SHAPE -u TREEDB_DEBUG_VLOG_SHAPE_DISK -u TREEDB_DEBUG_VLOG_SHAPE_INTERVAL_MS -u TREEDB_DEBUG_VLOG_SHAPE_BUDGET -u TREEDB_DEBUG_VLOG_MAINT -u TREEDB_DEBUG_VLOG_MAINT_BUDGET") || !strings.Contains(string(command), "-u TREEDB_OUTER_LEAF_READ_SAMPLE_MOD -u TREEDB_HOT_PATH_STATS") || !strings.Contains(string(command), "-u TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS") {
+		t.Fatalf("GOFLAGS command=%q err=%v", command, err)
+	}
+	contextData, err = os.ReadFile(filepath.Join(goFlagsDryRun, "context.txt"))
+	if err != nil || !strings.Contains(string(contextData), "goflags=cleared\ngoenv=off\ngomaxprocs=cleared\ngogc=cleared\ngomemlimit=cleared\ncompiler_tuning=cleared GOOS,GOARCH,GOAMD64,GOARM64,GO386,GOARM,GOMIPS,GOMIPS64,GOPPC64,GORISCV64,GOWASM,GOEXPERIMENT,CGO_ENABLED\ntreedb_performance_overrides=cleared TREEDB_LEAF_PAGE_CACHE_ENTRIES") || !strings.Contains(string(contextData), "TREEDB_DEBUG_VLOG_TIMINGS TREEDB_DEBUG_VLOG_TIMINGS_MIN_MS TREEDB_DEBUG_VLOG_TIMINGS_BUDGET") || !strings.Contains(string(contextData), "TREEDB_DEBUG_MEMTABLE_ROTATE TREEDB_DEBUG_MEMTABLE_ROTATE_BUDGET TREEDB_DEBUG_VLOG_SHAPE TREEDB_DEBUG_VLOG_SHAPE_DISK TREEDB_DEBUG_VLOG_SHAPE_INTERVAL_MS TREEDB_DEBUG_VLOG_SHAPE_BUDGET TREEDB_DEBUG_VLOG_MAINT TREEDB_DEBUG_VLOG_MAINT_BUDGET") || !strings.Contains(string(contextData), "TREEDB_OUTER_LEAF_READ_SAMPLE_MOD TREEDB_HOT_PATH_STATS") || !strings.Contains(string(contextData), "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS") {
+		t.Fatalf("GOFLAGS context=%q err=%v", contextData, err)
+	}
+	callerSampleEnv := "TREEDB_DEBUG_BATCH_SET_CALLER_SAMPLE_MOD TREEDB_DEBUG_DB_GET_CALLER_SAMPLE_MOD TREEDB_DEBUG_SNAPSHOT_GET_CALLER_SAMPLE_MOD"
+	if !strings.Contains(string(command), "-u TREEDB_DEBUG_BATCH_SET_CALLER_SAMPLE_MOD -u TREEDB_DEBUG_DB_GET_CALLER_SAMPLE_MOD -u TREEDB_DEBUG_SNAPSHOT_GET_CALLER_SAMPLE_MOD") || !strings.Contains(string(contextData), callerSampleEnv) {
+		t.Fatalf("caller sampling controls missing: command=%q context=%q", command, contextData)
+	}
+	runtimeDebugDryRun := t.TempDir()
+	if output, err := run("RUN_DIR="+runtimeDebugDryRun, "PHASES=phrase", "DRY_RUN=true", "PROFILE_MODE=runtime", "PROFILE_PHASE=phrase", "GODEBUG=asyncpreemptoff=1,invalidptr=0"); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("runtime GODEBUG dry-run err=%v output=%s", err, output)
+	}
+	command, err = os.ReadFile(filepath.Join(runtimeDebugDryRun, "10000", "phrase", "command.txt"))
+	if err != nil || !strings.Contains(string(command), "GODEBUG=asyncpreemptoff=1\\,invalidptr=0") {
+		t.Fatalf("runtime GODEBUG command=%q err=%v", command, err)
+	}
+	contextData, err = os.ReadFile(filepath.Join(runtimeDebugDryRun, "context.txt"))
+	if err != nil || !strings.Contains(string(contextData), "godebug_shell_escaped=asyncpreemptoff=1\\,invalidptr=0") {
+		t.Fatalf("runtime GODEBUG context=%q err=%v", contextData, err)
+	}
+	allocDryRun := t.TempDir()
+	if output, err := run("RUN_DIR="+allocDryRun, "PHASES=phrase", "DRY_RUN=true", "PROFILE_MODE=alloc", "PROFILE_PHASE=phrase", "GODEBUG=foo=bar"); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("allocation dry-run err=%v output=%s", err, output)
+	}
+	command, err = os.ReadFile(filepath.Join(allocDryRun, "10000", "phrase", "command.txt"))
+	if err != nil || !strings.Contains(string(command), "GODEBUG=foo=bar\\,memprofilerate=1") {
+		t.Fatalf("allocation command=%q err=%v", command, err)
+	}
+	escalated := t.TempDir()
+	if output, err := run("RUN_DIR="+escalated, "ROWS=100000", "RUN_100K=true", "PHASES=phrase", "DRY_RUN=true"); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("100k dry-run err=%v output=%s", err, output)
+	}
+	command, err = os.ReadFile(filepath.Join(escalated, "100000", "phrase", "command.txt"))
+	if err != nil || !strings.Contains(string(command), "TREEDB_TEXT_PROFILE_ROWS=100000") {
+		t.Fatalf("100k dry-run command=%q err=%v", command, err)
+	}
+	if os.Getenv("TREEDB_TEXT_PROFILE_RUN_SMOKE") != "true" {
+		return
+	}
+	smoke := t.TempDir()
+	if output, err := run("RUN_DIR="+smoke, "PHASES=load", "TINY_SMOKE=true", "TIMEOUT=2m"); err != nil {
+		t.Fatalf("tiny observations smoke err=%v output=%s", err, output)
+	}
+	maintenanceSmoke := t.TempDir()
+	if output, err := run("RUN_DIR="+maintenanceSmoke, "PHASES=maintenance", "TINY_SMOKE=true", "TIMEOUT=2m", "PROFILE_MODE=runtime", "PROFILE_PHASE=maintenance"); err != nil {
+		t.Fatalf("tiny maintenance profile smoke err=%v output=%s", err, output)
+	}
+	observations, err := os.ReadFile(filepath.Join(smoke, "10000", "load", "observations.txt"))
+	if err != nil || !strings.Contains(string(observations), "test_rows=96\n") || !strings.Contains(string(observations), "measured_seconds=") || !strings.Contains(string(observations), "process_elapsed_seconds=") || !strings.Contains(string(observations), "db_bytes_before=0\n") || !strings.Contains(string(observations), "db_bytes_after=") || !strings.Contains(string(observations), "db_filesystem=") || !strings.Contains(string(observations), "db_mount=") {
+		t.Fatalf("observations=%q err=%v", observations, err)
+	}
+	for _, key := range []string{"db_filesystem", "db_mount"} {
+		found := false
+		for _, line := range strings.Split(string(observations), "\n") {
+			if value, ok := strings.CutPrefix(line, key+"="); ok {
+				if value == "" {
+					t.Fatalf("empty %s in observations=%q", key, observations)
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing %s in observations=%q", key, observations)
+		}
+	}
+	for _, line := range strings.Split(string(observations), "\n") {
+		if value, found := strings.CutPrefix(line, "process_elapsed_seconds="); found {
+			elapsed, err := strconv.ParseFloat(value, 64)
+			if err != nil || elapsed <= 0 {
+				t.Fatalf("process elapsed=%q parsed=%f err=%v", value, elapsed, err)
+			}
+			break
+		}
+	}
+	reused := t.TempDir()
+	if output, err := run("RUN_DIR="+reused, "PHASES=phrase", "TINY_SMOKE=true", "TIMEOUT=2m", "PROFILE_MODE=alloc", "PROFILE_PHASE=phrase"); err != nil {
+		t.Fatalf("allocation smoke err=%v output=%s", err, output)
+	}
+	profiles := filepath.Join(reused, "10000", "phrase", "profiles")
+	allocationDelta, err := os.ReadFile(filepath.Join(profiles, "alloc_delta.txt"))
+	if err != nil || !strings.Contains(string(allocationDelta), "allocation_bytes=") || !strings.Contains(string(allocationDelta), "allocation_objects=") {
+		t.Fatalf("allocation delta=%q err=%v", allocationDelta, err)
+	}
+	for _, profile := range []string{"alloc_before.pprof", "alloc_after.pprof", "heap_after.pprof"} {
+		if info, err := os.Stat(filepath.Join(profiles, profile)); err != nil || info.Size() == 0 {
+			t.Fatalf("allocation profile %s: info=%v err=%v", profile, info, err)
+		}
+	}
+	runtimeProfile := t.TempDir()
+	if output, err := run("RUN_DIR="+runtimeProfile, "PHASES=phrase", "TINY_SMOKE=true", "TIMEOUT=2m", "PROFILE_MODE=runtime", "PROFILE_PHASE=phrase"); err != nil {
+		t.Fatalf("runtime sampling smoke err=%v output=%s", err, output)
+	}
+	phaseLog, err := os.ReadFile(filepath.Join(runtimeProfile, "10000", "phrase", "phase.log"))
+	if err != nil || !strings.Contains(string(phaseLog), "runtime_read_only_sampling_minimum_seconds=0.250") {
+		t.Fatalf("runtime sampling log=%q err=%v", phaseLog, err)
+	}
+	if output, err := run("RUN_DIR="+reused, "PHASES=phrase", "TINY_SMOKE=true", "TIMEOUT=2m"); err == nil || !strings.Contains(string(output), "RUN_DIR must be empty") {
+		t.Fatalf("rerun rejection err=%v output=%s", err, output)
+	}
+	if info, err := os.Stat(filepath.Join(profiles, "alloc_after.pprof")); err != nil || info.Size() == 0 {
+		t.Fatalf("rerun overwrote allocation profile: info=%v err=%v", info, err)
+	}
+	if output, err := run("RUN_DIR="+t.TempDir(), "PHASES=load", "TINY_SMOKE=true", "TIMEOUT=1ns"); err == nil || !strings.Contains(string(output), "FAIL") {
+		t.Fatalf("tiny timeout err=%v output=%s", err, output)
 	}
 }
