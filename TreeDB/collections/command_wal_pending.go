@@ -616,8 +616,8 @@ func (domain *collectionWriteDomain) validateIndexedFlushUnitCommandWALOwnership
 	if first == 0 {
 		return nil
 	}
-	if domain.pendingCommandWALFirst != first || domain.pendingCommandWALLast != last {
-		return fmt.Errorf("%w: indexed flush command WAL intervals [%d,%d] do not own pending range [%d,%d]", backenddb.ErrCommandWALAppliedLSNNonContig, first, last, domain.pendingCommandWALFirst, domain.pendingCommandWALLast)
+	if domain.pendingCommandWALFirst != first || domain.pendingCommandWALLast < last {
+		return fmt.Errorf("%w: indexed flush command WAL intervals [%d,%d] do not own a pending prefix of [%d,%d]", backenddb.ErrCommandWALAppliedLSNNonContig, first, last, domain.pendingCommandWALFirst, domain.pendingCommandWALLast)
 	}
 	return nil
 }

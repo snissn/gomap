@@ -5128,7 +5128,7 @@ func (c *Collection) flushBufferedNoIndexWithAdmissionState(admissionLocked bool
 			admissionLocked = true
 			continue
 		}
-		err := c.flushBufferedNoIndexLocked(domain)
+		err := c.flushBufferedNoIndexLocked(domain, false)
 		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
 		if err == nil && publishedPrimary {
 			err = c.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLocked()
@@ -5218,7 +5218,7 @@ func (c *Collection) flushBufferedWritesLockedWithRawPublishState(domain *collec
 	if hasBufferedIndexedRootRuns(domain) {
 		err = c.flushBufferedIndexedLockedWithRawPublishState(domain, rawPublishLocked)
 	} else {
-		err = c.flushBufferedNoIndexLocked(domain)
+		err = c.flushBufferedNoIndexLocked(domain, rawPublishLocked)
 	}
 	if err == nil {
 		domain.clearIndexedAsyncFlushError()
@@ -5226,7 +5226,7 @@ func (c *Collection) flushBufferedWritesLockedWithRawPublishState(domain *collec
 	return err
 }
 
-func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) error {
+func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain, rawPublishLocked bool) error {
 	if domain == nil || domain.count == 0 || domain.table == nil {
 		return nil
 	}
@@ -5270,6 +5270,10 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	baseSystemRoot := snapshotSystemRoot(pin)
 	baseCommitSeq := snapshotCommitSeq(pin)
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
+	commandWALIntent, commandWALApplied, err := domain.pendingCommandWALCoverageIntentLocked(c.db)
+	if err != nil {
+		return err
+	}
 	table := domain.table
 	publishTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(c.db, meta, rootName, table)
 	if err != nil {
@@ -5280,13 +5284,28 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	}
 	iter := publishTable.NewIterator(nil, nil)
 
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
+	ordered := []backenddb.OrderedRootDeltaPublishInput{{
 		BaseRoot:      baseRoot,
 		Iter:          iter,
 		StoragePolicy: domain.storagePolicy,
-	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
-	})
+	}}
+	var newSystemRoot uint64
+	var rootIDs []uint64
+	if commandWALIntent != nil {
+		if rawPublishLocked || c.commandWALRawPublishLocked {
+			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+			})
+		} else {
+			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+			})
+		}
+	} else {
+		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+		})
+	}
 	_ = iter.Close()
 	if err != nil {
 		return err
@@ -5308,6 +5327,9 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.primaryWriteIndex = nil
+	if commandWALApplied != 0 {
+		domain.clearPendingCommandWALThroughLocked(commandWALApplied)
+	}
 	c.meta = meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	resetCollectionRunTable(table)
@@ -18852,11 +18874,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		if plan.bufferedCommandWALLSN == 0 || commandWALPendingRecorded {
 			return nil
 		}
-		if primaryOnlyDirectUpdate {
-			if err := domain.recordPendingCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
-				return commandWALBufferedUpdateCommitAmbiguous(err)
-			}
-		} else if err := domain.recordPendingIndexedCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
+		if err := domain.recordPendingIndexedCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
 			return commandWALBufferedUpdateCommitAmbiguous(err)
 		}
 		commandWALPendingRecorded = true

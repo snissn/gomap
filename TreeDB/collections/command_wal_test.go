@@ -108,6 +108,26 @@ func TestCollectionCommandWALInsertByIDStagesAppliedLSNUntilFlush(t *testing.T) 
 		_ = d.Close()
 		t.Fatalf("AppliedCommandLSN after flush=%d, want 1", got)
 	}
+	// A no-index buffered flush owns the aggregate command-WAL interval: its
+	// root publication must advance that interval and release the coordinator.
+	domain := col.writeDomain
+	domain.mu.RLock()
+	pendingFirst, pendingLast := domain.pendingCommandWALFirst, domain.pendingCommandWALLast
+	coord := domain.commandWALCoordinator.Load()
+	domain.mu.RUnlock()
+	if pendingFirst != 0 || pendingLast != 0 {
+		_ = d.Close()
+		t.Fatalf("pending command WAL range after no-index flush=[%d,%d], want empty", pendingFirst, pendingLast)
+	}
+	if coord != nil {
+		coord.mu.Lock()
+		owner := coord.owner
+		coord.mu.Unlock()
+		if owner != nil {
+			_ = d.Close()
+			t.Fatal("command WAL coordinator owner remains after no-index flush")
+		}
+	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -1138,6 +1158,8 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexStagesAfterWALAppend(t *testing
 		rootRuns := domain.rootRunCount
 		pendingFirst := domain.pendingCommandWALFirst
 		pendingLast := domain.pendingCommandWALLast
+		indexedFirst := domain.indexedMutableCommandWALFirst
+		indexedLast := domain.indexedMutableCommandWALLast
 		domain.mu.RUnlock()
 		if overlayEntries != 1 || rootRuns != 0 {
 			_ = d.Close()
@@ -1146,6 +1168,10 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexStagesAfterWALAppend(t *testing
 		if pendingFirst != 1 || pendingLast != 1 {
 			_ = d.Close()
 			t.Fatalf("pending command WAL range=[%d,%d], want [1,1]", pendingFirst, pendingLast)
+		}
+		if indexedFirst != 1 || indexedLast != 1 {
+			_ = d.Close()
+			t.Fatalf("primary-overlay command WAL interval=[%d,%d], want [1,1]", indexedFirst, indexedLast)
 		}
 	}
 	frames := collectionCommandWALFrames(t, dir)
@@ -1160,6 +1186,13 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexStagesAfterWALAppend(t *testing
 	if got := d.State().AppliedCommandLSN; got != 1 {
 		_ = d.Close()
 		t.Fatalf("AppliedCommandLSN after flush=%d, want 1", got)
+	}
+	col.writeDomain.mu.RLock()
+	indexedFirst, indexedLast := col.writeDomain.indexedMutableCommandWALFirst, col.writeDomain.indexedMutableCommandWALLast
+	col.writeDomain.mu.RUnlock()
+	if indexedFirst != 0 || indexedLast != 0 {
+		_ = d.Close()
+		t.Fatalf("primary-overlay command WAL interval after flush=[%d,%d], want empty", indexedFirst, indexedLast)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -2375,7 +2408,10 @@ func TestIndexedFlushUnitCommandWALIntervalsCoverOnlyPublishingPrefix(t *testing
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}})
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
-	domain := &collectionWriteDomain{pendingCommandWALFirst: 1, pendingCommandWALLast: 3}
+	// A later aggregate-only command may follow the indexed prefix. The async
+	// publisher may cover only its owned prefix; a later indexed command still
+	// fails closed because it would leave a gap in the indexed intervals.
+	domain := &collectionWriteDomain{pendingCommandWALFirst: 1, pendingCommandWALLast: 4}
 	for _, lsn := range []uint64{1, 2} {
 		domain.rootRuns = map[string][]memtable.Table{"users:primary": nil}
 		domain.indexedMutableCommandWALFirst = lsn
@@ -2403,8 +2439,8 @@ func TestIndexedFlushUnitCommandWALIntervalsCoverOnlyPublishingPrefix(t *testing
 	}
 	domain.indexedFlushUnits = domain.indexedFlushUnits[1:]
 	domain.clearPendingCommandWALThroughLocked(applied)
-	if domain.pendingCommandWALFirst != 2 || domain.pendingCommandWALLast != 3 {
-		t.Fatalf("pending interval after prefix clear=[%d,%d], want [2,3]", domain.pendingCommandWALFirst, domain.pendingCommandWALLast)
+	if domain.pendingCommandWALFirst != 2 || domain.pendingCommandWALLast != 4 {
+		t.Fatalf("pending interval after prefix clear=[%d,%d], want [2,4]", domain.pendingCommandWALFirst, domain.pendingCommandWALLast)
 	}
 	if domain.indexedMutableCommandWALFirst != 3 || domain.indexedMutableCommandWALLast != 3 {
 		t.Fatalf("mutable interval after prefix clear=[%d,%d], want [3,3]", domain.indexedMutableCommandWALFirst, domain.indexedMutableCommandWALLast)
