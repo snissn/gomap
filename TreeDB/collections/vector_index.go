@@ -3948,7 +3948,10 @@ func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchR
 			break
 		}
 		result := ranked[i]
-		document, buffered, found := idx.collection.getBufferedDocumentInto(result.DocumentID, nil)
+		document, buffered, found, err := idx.collection.getBufferedDocumentInto(result.DocumentID, nil)
+		if err != nil {
+			return nil, err
+		}
 		if buffered {
 			if !found {
 				continue

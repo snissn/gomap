@@ -1447,6 +1447,7 @@ type bufferedPrimaryRunRef struct {
 	key        []byte
 	table      memtable.Table
 	value      []byte
+	ptr        page.ValuePtr
 	flags      byte
 	entryValid bool
 }
@@ -5765,7 +5766,17 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 			domain.rootBaseIDs[rootName] = baseRoot
 		}
 		domain.rootPolicies[rootName] = direct.policies[i]
-		table, created := mutableRootRunLocked(domain, rootName)
+		var table memtable.Table
+		var created bool
+		if direct.pointerizePrimary && rootName == direct.primaryRootName {
+			pointerized, pointerizedCreated, err := mutablePointerizedRootRunLocked(domain, rootName, c.db)
+			if err != nil {
+				return 0, err
+			}
+			table, created = pointerized, pointerizedCreated
+		} else {
+			table, created = mutableRootRunLocked(domain, rootName)
+		}
 		if table == nil {
 			return 0, fmt.Errorf("collections: InsertBatch collection %q failed to allocate direct root accumulator for %q", catalog.meta.Name, rootName)
 		}
@@ -5810,6 +5821,16 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 			c.meta = collectionMetaCheckpoint
 		}
 		return 0, err
+	}
+	if direct.pointerizePrimary {
+		owner, ok := primaryTable.(*collectionPointerizedRunTable)
+		if !ok {
+			return 0, errors.New("collections: retained primary accumulator lost pointer ownership")
+		}
+		if err := owner.adopt(direct.pointerizedPtrs); err != nil {
+			return 0, err
+		}
+		direct.pointerizedPtrs = nil
 	}
 	if domain.primaryIDIndex == nil {
 		domain.primaryIDIndex = newBufferedUniqueValueIndex(max(1, len(plan.primaryKeys)))
@@ -6373,6 +6394,18 @@ type collectionPointerizedRunTable struct {
 	ptrs []page.ValuePtr
 }
 
+func (t *collectionPointerizedRunTable) adopt(ptrs []page.ValuePtr) error {
+	if t == nil || t.db == nil {
+		return errors.New("collections: pointerized run table has no value-log owner")
+	}
+	if len(t.ptrs) == 0 {
+		t.ptrs = ptrs
+		return nil
+	}
+	t.ptrs = append(t.ptrs, ptrs...)
+	return nil
+}
+
 func (t *collectionPointerizedRunTable) Release() {
 	if t == nil {
 		return
@@ -6387,6 +6420,78 @@ func (t *collectionPointerizedRunTable) Release() {
 
 func (t *collectionPointerizedRunTable) Reset() {
 	t.Release()
+}
+
+func pointerizeDirectBufferedPrimaryEntries(db *backenddb.DB, meta CollectionMeta, direct *directBufferedInsertPlan) (err error) {
+	if direct == nil || !direct.pointerizePrimary || len(direct.primaryEntries) == 0 {
+		return nil
+	}
+	if db == nil || !db.HasValueLogAppender() || !db.HasValueLogRecordReader() {
+		return backenddb.ErrValueLogReaderUnavailable
+	}
+	before := directBufferedRootEntriesSize(direct.primaryEntries)
+	appended := make([]page.ValuePtr, 0, len(direct.primaryEntries))
+	defer func() {
+		if err != nil {
+			db.ReleaseValueLogValues(appended)
+		}
+	}()
+	values := make([][]byte, 0, min(len(direct.primaryEntries), collectionPointerizeBatchMaxValues))
+	indexes := make([]int, 0, cap(values))
+	bytesInBatch := 0
+	flush := func() error {
+		if len(values) == 0 {
+			return nil
+		}
+		ptrs, appendErr := appendCollectionPointerizedBatchValues(db, values, columnStoreRetainedPayloadUsesTemplateV1(meta.Options.ColumnStore))
+		if appendErr != nil {
+			return appendErr
+		}
+		if len(ptrs) != len(values) {
+			db.ReleaseValueLogValues(ptrs)
+			return fmt.Errorf("collections: retained primary append returned %d ptrs for %d values", len(ptrs), len(values))
+		}
+		for i, ptr := range ptrs {
+			entry := &direct.primaryEntries[indexes[i]]
+			entry.value = nil
+			entry.ptr = ptr
+			entry.flags = (entry.flags &^ node.FlagTombstone) | node.FlagPointer
+		}
+		appended = append(appended, ptrs...)
+		values = values[:0]
+		indexes = indexes[:0]
+		bytesInBatch = 0
+		return nil
+	}
+	for i := range direct.primaryEntries {
+		entry := &direct.primaryEntries[i]
+		if entry.flags&(node.FlagTombstone|node.FlagPointer) != 0 || len(entry.value) == 0 {
+			continue
+		}
+		values = append(values, entry.value)
+		indexes = append(indexes, i)
+		bytesInBatch += len(entry.value)
+		if len(values) >= collectionPointerizeBatchMaxValues || bytesInBatch >= collectionPointerizeBatchMaxBytes {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return err
+	}
+	direct.pointerizedPtrs = appended
+	direct.stagedBytes = subtractNonNegativeInt64(direct.stagedBytes, before)
+	direct.stagedBytes = saturatingAddNonNegativeInt64(direct.stagedBytes, directBufferedRootEntriesSize(direct.primaryEntries))
+	return nil
+}
+
+func releaseDirectBufferedPrimaryPointers(db *backenddb.DB, direct *directBufferedInsertPlan) {
+	if db == nil || direct == nil || len(direct.pointerizedPtrs) == 0 {
+		return
+	}
+	db.ReleaseValueLogValues(direct.pointerizedPtrs)
+	direct.pointerizedPtrs = nil
 }
 
 func appendCollectionPointerizedBatchValues(db *backenddb.DB, values [][]byte, packRetainedTemplateV1 bool) ([]page.ValuePtr, error) {
@@ -6584,6 +6689,37 @@ func mutableRootRunLocked(domain *collectionWriteDomain, rootName string) (memta
 	domain.rootRuns[rootName] = append(domain.rootRuns[rootName], table)
 	domain.rootRunCount = saturatingAddNonNegativeInt(domain.rootRunCount, 1)
 	return table, true
+}
+
+func mutablePointerizedRootRunLocked(domain *collectionWriteDomain, rootName string, db *backenddb.DB) (*collectionPointerizedRunTable, bool, error) {
+	if domain == nil || rootName == "" || db == nil {
+		return nil, false, errors.New("collections: invalid pointerized root accumulator")
+	}
+	if table := domain.rootMutableRuns[rootName]; table != nil {
+		if pointerized, ok := table.(*collectionPointerizedRunTable); ok {
+			return pointerized, false, nil
+		}
+		runs := domain.rootRuns[rootName]
+		if len(runs) == 0 {
+			return nil, false, fmt.Errorf("collections: mutable root %q is missing its run", rootName)
+		}
+		pointerized := &collectionPointerizedRunTable{Table: table, db: db}
+		runs[len(runs)-1] = pointerized
+		domain.rootRuns[rootName] = runs
+		domain.rootMutableRuns[rootName] = pointerized
+		return pointerized, false, nil
+	}
+	table := &collectionPointerizedRunTable{Table: newCollectionRootAccumulatorRunTable(), db: db}
+	if domain.rootRuns == nil {
+		domain.rootRuns = make(map[string][]memtable.Table)
+	}
+	if domain.rootMutableRuns == nil {
+		domain.rootMutableRuns = make(map[string]memtable.Table)
+	}
+	domain.rootMutableRuns[rootName] = table
+	domain.rootRuns[rootName] = append(domain.rootRuns[rootName], table)
+	domain.rootRunCount = saturatingAddNonNegativeInt(domain.rootRunCount, 1)
+	return table, true, nil
 }
 
 func materializePrimaryOverlayLocked(domain *collectionWriteDomain) bool {
@@ -8365,8 +8501,9 @@ func addBufferedPrimaryRunIndexEntries(index *bufferedPrimaryRunIndex, batchPrim
 			key := it.UnsafeKey()
 			ref := bufferedPrimaryRunRef{key: key, table: batchPrimary}
 			if index.directEntries {
-				value, _, flags := it.UnsafeEntry()
+				value, ptr, flags := it.UnsafeEntry()
 				ref.value = value
+				ref.ptr = ptr
 				ref.flags = flags
 				ref.entryValid = true
 			}
@@ -11654,6 +11791,12 @@ func (c *Collection) insertBatchOnceWithLockState(
 		planner.buildPrimaryVal = clonePrimaryDocument
 		planner.cloneTemplateRunValues = true
 		planner.directBufferedRuns = directBufferedInsertAccumulators
+		if directBufferedInsertAccumulators &&
+			collectionRootStoresRetainedPayloadBodies(meta, catalog.primaryRootName) &&
+			c.db.HasValueLogAppender() && c.db.HasValueLogRecordReader() {
+			planner.buildPrimaryVal = borrowPrimaryDocument
+			planner.pointerizePrimary = true
+		}
 	}
 	var plan *insertBatchPlan
 	if preflightPersistedConflicts {
@@ -11753,6 +11896,12 @@ func (c *Collection) insertBatchOnceWithLockState(
 				columnDocuments[i].Document = nil
 			}
 		}
+		if err := pointerizeDirectBufferedPrimaryEntries(c.db, meta, plan.directBufferedInsert); err != nil {
+			closePlanningSnapshot()
+			resetCollectionRunTables(plan.runs)
+			return nil, err
+		}
+		defer releaseDirectBufferedPrimaryPointers(c.db, plan.directBufferedInsert)
 		var unlockCommandWALRawStage func()
 		releaseCommandWALRawStage := func() {
 			if unlockCommandWALRawStage != nil {
@@ -16560,6 +16709,7 @@ func (direct *directBufferedUpdatePlan) stagesOnlyPrimaryRoot() bool {
 type directBufferedRootEntry struct {
 	key   []byte
 	value []byte
+	ptr   page.ValuePtr
 	flags byte
 }
 
@@ -16682,7 +16832,7 @@ func applyDirectBufferedRootEntries(table memtable.Table, entries []directBuffer
 	}
 	return applyCollectionRunEntriesWithFlags(table, len(entries), func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
 		entry := entries[i]
-		return entry.key, entry.value, page.ValuePtr{}, entry.flags, nil
+		return entry.key, entry.value, entry.ptr, entry.flags, nil
 	})
 }
 
@@ -17086,6 +17236,28 @@ func (buffer *updateBatchBufferedEntryBuffer) copyValue(value []byte) []byte {
 	start := len(buffer.arena)
 	buffer.arena = append(buffer.arena, value...)
 	return buffer.arena[start:len(buffer.arena):len(buffer.arena)]
+}
+
+func (buffer *updateBatchBufferedEntryBuffer) copyPrimaryEntry(db *backenddb.DB, value []byte, ptr page.ValuePtr, flags byte) ([]byte, error) {
+	if flags&node.FlagTombstone != 0 {
+		return nil, nil
+	}
+	if flags&node.FlagPointer == 0 {
+		return buffer.copyValue(value), nil
+	}
+	if db == nil {
+		return nil, backenddb.ErrValueLogReaderUnavailable
+	}
+	if buffer == nil {
+		return db.ReadValueLogRecordAppend(ptr, nil)
+	}
+	start := len(buffer.arena)
+	out, err := db.ReadValueLogRecordAppend(ptr, buffer.arena)
+	if err != nil {
+		return nil, err
+	}
+	buffer.arena = out
+	return out[start:len(out):len(out)], nil
 }
 
 func (buffer *updateBatchBufferedEntryBuffer) ensureValueArenaCapacity(capacity int) {
@@ -17743,20 +17915,24 @@ func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRu
 	return entries, buffer, nil
 }
 
-func fillUpdateBatchBufferedPrimaryEntriesFromTable(entries []updateBatchBufferedEntry, buffer *updateBatchBufferedEntryBuffer, table memtable.Table, items []updateBatchItem, missing int) int {
+func fillUpdateBatchBufferedPrimaryEntriesFromTable(db *backenddb.DB, entries []updateBatchBufferedEntry, buffer *updateBatchBufferedEntryBuffer, table memtable.Table, items []updateBatchItem, missing int) (int, error) {
 	if table == nil || missing <= 0 {
-		return missing
+		return missing, nil
 	}
 	for i, item := range items {
 		if entries[i].found {
 			continue
 		}
-		value, _, flags, found := table.GetEntry(item.DocumentID)
+		value, ptr, flags, found := table.GetEntry(item.DocumentID)
 		if !found {
 			continue
 		}
+		value, err := buffer.copyPrimaryEntry(db, value, ptr, flags)
+		if err != nil {
+			return missing, err
+		}
 		entries[i] = updateBatchBufferedEntry{
-			value: buffer.copyValue(value),
+			value: value,
 			flags: flags,
 			found: true,
 		}
@@ -17765,13 +17941,25 @@ func fillUpdateBatchBufferedPrimaryEntriesFromTable(entries []updateBatchBuffere
 			break
 		}
 	}
-	return missing
+	return missing, nil
 }
 
-func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDomain, collectionName string, items []updateBatchItem) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer, error) {
+func snapshotUpdateBatchBufferedPrimaryEntriesLocked(db *backenddb.DB, domain *collectionWriteDomain, collectionName string, items []updateBatchItem) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer, error) {
 	entries, buffer := getUpdateBatchBufferedEntries(len(items))
 	if domain == nil || len(items) == 0 {
 		return entries, buffer, nil
+	}
+	setEntry := func(i int, value []byte, ptr page.ValuePtr, flags byte) error {
+		copied, err := buffer.copyPrimaryEntry(db, value, ptr, flags)
+		if err != nil {
+			return err
+		}
+		entries[i] = updateBatchBufferedEntry{value: copied, flags: flags, found: true}
+		return nil
+	}
+	fail := func(err error) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer, error) {
+		putUpdateBatchBufferedEntries(entries, buffer)
+		return nil, nil, err
 	}
 	missing := len(items)
 	if overlay := domain.primaryOverlay; overlay != nil && overlay.len() > 0 {
@@ -17800,11 +17988,9 @@ func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDoma
 		if !ok {
 			continue
 		}
-		if value, _, flags, found := getBufferedRunEntry(primaryRuns, item.DocumentID); found {
-			entries[i] = updateBatchBufferedEntry{
-				value: buffer.copyValue(value),
-				flags: flags,
-				found: true,
+		if value, ptr, flags, found := getBufferedRunEntry(primaryRuns, item.DocumentID); found {
+			if err := setEntry(i, value, ptr, flags); err != nil {
+				return fail(err)
 			}
 			missing--
 			continue
@@ -17828,29 +18014,31 @@ func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDoma
 			if !ok {
 				continue
 			}
-			value, flags, found := ref.value, ref.flags, ref.entryValid
+			value, ptr, flags, found := ref.value, ref.ptr, ref.flags, ref.entryValid
 			if !found {
 				if ref.table == nil {
 					continue
 				}
-				value, _, flags, found = ref.table.GetEntry(item.DocumentID)
+				value, ptr, flags, found = ref.table.GetEntry(item.DocumentID)
 			}
 			if !found {
 				continue
 			}
-			entries[i] = updateBatchBufferedEntry{
-				value: buffer.copyValue(value),
-				flags: flags,
-				found: true,
+			if err := setEntry(i, value, ptr, flags); err != nil {
+				return fail(err)
 			}
 			missing--
 		}
-		fillUpdateBatchBufferedPrimaryEntriesFromTable(entries, buffer, domain.table, items, missing)
+		if _, err := fillUpdateBatchBufferedPrimaryEntriesFromTable(db, entries, buffer, domain.table, items, missing); err != nil {
+			return fail(err)
+		}
 		return entries, buffer, nil
 	}
 	runs := pendingIndexedRootRunsLocked(domain, collectionPrimaryRootName(collectionName))
 	if len(runs) == 0 {
-		fillUpdateBatchBufferedPrimaryEntriesFromTable(entries, buffer, domain.table, items, missing)
+		if _, err := fillUpdateBatchBufferedPrimaryEntriesFromTable(db, entries, buffer, domain.table, items, missing); err != nil {
+			return fail(err)
+		}
 		return entries, buffer, nil
 	}
 	if len(runs) <= 1 || len(runs)*len(items) <= updateBatchBufferedPrimaryDirectProbeLimit {
@@ -17858,15 +18046,16 @@ func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDoma
 			if entries[i].found {
 				continue
 			}
-			if value, _, flags, found := getBufferedRunEntry(runs, item.DocumentID); found {
-				entries[i] = updateBatchBufferedEntry{
-					value: buffer.copyValue(value),
-					flags: flags,
-					found: true,
+			if value, ptr, flags, found := getBufferedRunEntry(runs, item.DocumentID); found {
+				if err := setEntry(i, value, ptr, flags); err != nil {
+					return fail(err)
 				}
+				missing--
 			}
 		}
-		fillUpdateBatchBufferedPrimaryEntriesFromTable(entries, buffer, domain.table, items, missing)
+		if _, err := fillUpdateBatchBufferedPrimaryEntriesFromTable(db, entries, buffer, domain.table, items, missing); err != nil {
+			return fail(err)
+		}
 		return entries, buffer, nil
 	}
 	targets := make(map[string]int, missing)
@@ -17884,11 +18073,10 @@ func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDoma
 		for it.Valid() && len(targets) > 0 {
 			key := string(it.UnsafeKey())
 			if itemIndex, ok := targets[key]; ok && !entries[itemIndex].found {
-				value, _, flags := it.UnsafeEntry()
-				entries[itemIndex] = updateBatchBufferedEntry{
-					value: buffer.copyValue(value),
-					flags: flags,
-					found: true,
+				value, ptr, flags := it.UnsafeEntry()
+				if err := setEntry(itemIndex, value, ptr, flags); err != nil {
+					_ = it.Close()
+					return fail(err)
 				}
 				delete(targets, key)
 			}
@@ -17901,16 +18089,18 @@ func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDoma
 		}
 		_ = it.Close()
 	}
-	fillUpdateBatchBufferedPrimaryEntriesFromTable(entries, buffer, domain.table, items, len(targets))
+	if _, err := fillUpdateBatchBufferedPrimaryEntriesFromTable(db, entries, buffer, domain.table, items, len(targets)); err != nil {
+		return fail(err)
+	}
 	return entries, buffer, nil
 }
 
-func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta CollectionMeta, baseCommitSeq uint64, baseSystemRoot uint64, items []updateBatchItem, documentFormat DocumentFormat) (updateBatchBufferedRead, []memtable.Table, bool, bool, error) {
+func snapshotUpdateBatchBufferedRead(db *backenddb.DB, domain *collectionWriteDomain, meta CollectionMeta, baseCommitSeq uint64, baseSystemRoot uint64, items []updateBatchItem, documentFormat DocumentFormat) (updateBatchBufferedRead, []memtable.Table, bool, bool, error) {
 	if domain == nil {
 		return updateBatchBufferedRead{}, nil, false, false, nil
 	}
 	domain.mu.RLock()
-	read, templateRuns, blocked, staleSnapshot, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, baseCommitSeq, baseSystemRoot, items, documentFormat, true)
+	read, templateRuns, blocked, staleSnapshot, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(db, domain, meta, baseCommitSeq, baseSystemRoot, items, documentFormat, true)
 	domain.mu.RUnlock()
 	if err != nil || !needPrimaryRunIndex {
 		return read, templateRuns, blocked, staleSnapshot, err
@@ -17929,11 +18119,11 @@ func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta Collect
 		}
 		domain.primaryRunIndex = index
 	}
-	read, templateRuns, blocked, staleSnapshot, _, err = snapshotUpdateBatchBufferedReadLocked(domain, meta, baseCommitSeq, baseSystemRoot, items, documentFormat, false)
+	read, templateRuns, blocked, staleSnapshot, _, err = snapshotUpdateBatchBufferedReadLocked(db, domain, meta, baseCommitSeq, baseSystemRoot, items, documentFormat, false)
 	return read, templateRuns, blocked, staleSnapshot, err
 }
 
-func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta CollectionMeta, baseCommitSeq uint64, baseSystemRoot uint64, items []updateBatchItem, documentFormat DocumentFormat, allowPrimaryRunIndexBuild bool) (updateBatchBufferedRead, []memtable.Table, bool, bool, bool, error) {
+func snapshotUpdateBatchBufferedReadLocked(db *backenddb.DB, domain *collectionWriteDomain, meta CollectionMeta, baseCommitSeq uint64, baseSystemRoot uint64, items []updateBatchItem, documentFormat DocumentFormat, allowPrimaryRunIndexBuild bool) (updateBatchBufferedRead, []memtable.Table, bool, bool, bool, error) {
 	if columnStoreNeedsRetainedPayloadTransform(meta) {
 		if domain != nil && domain.count > 0 {
 			return updateBatchBufferedRead{}, nil, true, false, false, nil
@@ -17948,7 +18138,7 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 		var primaryEntries []updateBatchBufferedEntry
 		var primaryBuffer *updateBatchBufferedEntryBuffer
 		var err error
-		primaryEntries, primaryBuffer, err = snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain, bufferedCollectionName, items)
+		primaryEntries, primaryBuffer, err = snapshotUpdateBatchBufferedPrimaryEntriesLocked(db, domain, bufferedCollectionName, items)
 		if err != nil {
 			return updateBatchBufferedRead{}, nil, false, false, false, err
 		}
@@ -18068,7 +18258,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	bufferedReadBlocked := false
 	if domain := c.writeDomain; useBufferedRead && domain != nil {
 		var staleBufferedSnapshot bool
-		bufferedRead, bufferedTemplateRuns, bufferedReadBlocked, staleBufferedSnapshot, err = snapshotUpdateBatchBufferedRead(domain, meta, baseCommitSeq, baseSystemRoot, items, plannerOptions.documentFormat)
+		bufferedRead, bufferedTemplateRuns, bufferedReadBlocked, staleBufferedSnapshot, err = snapshotUpdateBatchBufferedRead(c.db, domain, meta, baseCommitSeq, baseSystemRoot, items, plannerOptions.documentFormat)
 		if err != nil {
 			_ = snap.Close()
 			return nil, err
@@ -20401,7 +20591,7 @@ func (c *Collection) bufferedIndexedDeleteTombstoneLocked(domain *collectionWrit
 	if c == nil || domain == nil || domain.count == 0 || !domain.indexedDeletesOnly {
 		return false
 	}
-	_, buffered, found := c.getBufferedDocumentIntoLocked(domain, documentID, nil)
+	_, buffered, found, _ := c.getBufferedDocumentIntoLocked(domain, documentID, nil)
 	return buffered && !found
 }
 
@@ -21336,7 +21526,9 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 	if len(documentID) == 0 {
 		return dst[:0], false, errors.New("collections: document id cannot be empty")
 	}
-	if value, buffered, found := c.getBufferedDocumentInto(documentID, dst); buffered {
+	if value, buffered, found, err := c.getBufferedDocumentInto(documentID, dst); err != nil {
+		return dst[:0], false, err
+	} else if buffered {
 		c.db.NotifyForegroundRead()
 		return value, found, nil
 	}
@@ -21363,31 +21555,31 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 	return append(dst[:0], reconstructed...), true, nil
 }
 
-func (c *Collection) getBufferedDocumentInto(documentID []byte, dst []byte) ([]byte, bool, bool) {
+func (c *Collection) getBufferedDocumentInto(documentID []byte, dst []byte) ([]byte, bool, bool, error) {
 	if c == nil || c.writeDomain == nil {
-		return nil, false, false
+		return nil, false, false, nil
 	}
 	domain := c.writeDomain
 	domain.mu.RLock()
 	if domain.count == 0 {
 		domain.mu.RUnlock()
-		return nil, false, false
+		return nil, false, false, nil
 	}
 	if domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, c.meta.Name) {
 		domain.mu.RUnlock()
 		return c.getBufferedDocumentIntoWithPrimaryRunIndex(documentID, dst)
 	}
-	value, buffered, found := c.getBufferedDocumentIntoLocked(domain, documentID, dst)
+	value, buffered, found, err := c.getBufferedDocumentIntoLocked(domain, documentID, dst)
 	domain.mu.RUnlock()
-	return value, buffered, found
+	return value, buffered, found, err
 }
 
-func (c *Collection) getBufferedDocumentIntoWithPrimaryRunIndex(documentID []byte, dst []byte) ([]byte, bool, bool) {
+func (c *Collection) getBufferedDocumentIntoWithPrimaryRunIndex(documentID []byte, dst []byte) ([]byte, bool, bool, error) {
 	domain := c.writeDomain
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
 	if domain.count == 0 {
-		return nil, false, false
+		return nil, false, false, nil
 	}
 	if domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, c.meta.Name) {
 		collectionName := bufferedDomainCollectionName(domain, c.meta.Name)
@@ -21433,25 +21625,26 @@ func hasBufferedPrimaryWritesLocked(domain *collectionWriteDomain, fallbackColle
 	return hasBufferedPrimaryRootRuns(domain, fallbackCollectionName)
 }
 
-func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain, documentID []byte, dst []byte) ([]byte, bool, bool) {
+func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain, documentID []byte, dst []byte) ([]byte, bool, bool, error) {
 	table := domain.table
 	if ref, ok := domain.primaryOverlay.lookupRef(documentID); ok {
 		if ref.flags&node.FlagTombstone != 0 {
-			return dst[:0], true, false
+			return dst[:0], true, false, nil
 		}
-		return append(dst[:0], ref.value...), true, true
+		return append(dst[:0], ref.value...), true, true, nil
 	}
 	if ref, ok := lookupPendingPrimaryOverlayLocked(domain, documentID); ok {
-		if value, flags, found := c.getCurrentPrimaryRootRunEntryLocked(domain, documentID); found {
+		if value, ptr, flags, found := c.getCurrentPrimaryRootRunEntryLocked(domain, documentID); found {
 			if flags&node.FlagTombstone != 0 {
-				return dst[:0], true, false
+				return dst[:0], true, false, nil
 			}
-			return append(dst[:0], value...), true, true
+			value, err := appendBufferedPrimaryEntry(c.db, dst[:0], value, ptr, flags)
+			return value, true, true, err
 		}
 		if ref.flags&node.FlagTombstone != 0 {
-			return dst[:0], true, false
+			return dst[:0], true, false, nil
 		}
-		return append(dst[:0], ref.value...), true, true
+		return append(dst[:0], ref.value...), true, true, nil
 	}
 	if hasBufferedIndexedRootRuns(domain) {
 		name := collectionPrimaryRootName(c.meta.Name)
@@ -21459,46 +21652,58 @@ func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain
 			name = collectionPrimaryRootName(domain.meta.Name)
 		}
 		var value []byte
+		var ptr page.ValuePtr
 		var flags byte
 		found := false
 		if domain.primaryRunIndex == nil {
-			value, _, flags, found = getBufferedRunEntry(pendingIndexedRootRunsLocked(domain, name), documentID)
+			value, ptr, flags, found = getBufferedRunEntry(pendingIndexedRootRunsLocked(domain, name), documentID)
 		} else if ref, ok := domain.primaryRunIndex.lookupRef(documentID); ok {
-			value, flags, found = ref.value, ref.flags, ref.entryValid
+			value, ptr, flags, found = ref.value, ref.ptr, ref.flags, ref.entryValid
 			if !found && ref.table != nil {
-				value, _, flags, found = ref.table.GetEntry(documentID)
+				value, ptr, flags, found = ref.table.GetEntry(documentID)
 			}
 		}
 		if found {
 			if flags&node.FlagTombstone != 0 {
-				return dst[:0], true, false
+				return dst[:0], true, false, nil
 			}
-			return append(dst[:0], value...), true, true
+			value, err := appendBufferedPrimaryEntry(c.db, dst[:0], value, ptr, flags)
+			return value, true, true, err
 		}
 	}
 	if table == nil {
-		return nil, false, false
+		return nil, false, false, nil
 	}
-	value, _, flags, found := table.GetEntry(documentID)
+	value, ptr, flags, found := table.GetEntry(documentID)
 	if !found {
-		return nil, false, false
+		return nil, false, false, nil
 	}
 	if flags&node.FlagTombstone != 0 {
-		return dst[:0], true, false
+		return dst[:0], true, false, nil
 	}
-	return append(dst[:0], value...), true, true
+	value, err := appendBufferedPrimaryEntry(c.db, dst[:0], value, ptr, flags)
+	return value, true, true, err
 }
 
-func (c *Collection) getCurrentPrimaryRootRunEntryLocked(domain *collectionWriteDomain, documentID []byte) ([]byte, byte, bool) {
+func appendBufferedPrimaryEntry(db *backenddb.DB, dst, value []byte, ptr page.ValuePtr, flags byte) ([]byte, error) {
+	if flags&node.FlagPointer == 0 {
+		return append(dst, value...), nil
+	}
+	if db == nil {
+		return nil, errCollectionDBNil
+	}
+	return db.ReadValueLogRecordAppend(ptr, dst)
+}
+
+func (c *Collection) getCurrentPrimaryRootRunEntryLocked(domain *collectionWriteDomain, documentID []byte) ([]byte, page.ValuePtr, byte, bool) {
 	if c == nil || domain == nil {
-		return nil, 0, false
+		return nil, page.ValuePtr{}, 0, false
 	}
 	name := collectionPrimaryRootName(c.meta.Name)
 	if domain.meta.Name != "" {
 		name = collectionPrimaryRootName(domain.meta.Name)
 	}
-	value, _, flags, found := getBufferedRunEntry(domain.rootRuns[name], documentID)
-	return value, flags, found
+	return getBufferedRunEntry(domain.rootRuns[name], documentID)
 }
 
 func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {
@@ -21964,7 +22169,11 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 		var value []byte
 		var buffered, found bool
 		if domainLocked {
-			value, buffered, found = c.getBufferedDocumentIntoLocked(domain, id, scratch[:0])
+			var bufferedErr error
+			value, buffered, found, bufferedErr = c.getBufferedDocumentIntoLocked(domain, id, scratch[:0])
+			if bufferedErr != nil {
+				return false, bufferedErr
+			}
 		}
 		if !buffered {
 			if primaryReaderOK {

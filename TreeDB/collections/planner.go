@@ -87,6 +87,7 @@ type insertBatchPlanner struct {
 	buildPrimaryVal        func(documentID, document []byte) ([]byte, error)
 	cloneTemplateRunValues bool
 	directBufferedRuns     bool
+	pointerizePrimary      bool
 }
 
 type insertBatchPlan struct {
@@ -131,6 +132,8 @@ type directBufferedInsertPlan struct {
 	primaryRootName      string
 	indexStateRootName   string
 	stagedBytes          int64
+	pointerizePrimary    bool
+	pointerizedPtrs      []page.ValuePtr
 }
 
 type directBufferedUniqueValueRootPlan struct {
@@ -928,6 +931,7 @@ func (p insertBatchPlanner) buildDirectBufferedInsertPlan(plan *insertBatchPlan,
 		indexStateRootName: p.indexStateRoot,
 		rootNames:          make([]string, 0, rootCap),
 		policies:           make([]backenddb.OrderedRootStoragePolicy, 0, rootCap),
+		pointerizePrimary:  p.pointerizePrimary,
 	}
 	if len(templateRecords) > 0 {
 		phaseStart := time.Now()
@@ -1007,6 +1011,7 @@ func (p insertBatchPlanner) buildSingleDirectBufferedInsertPlan(plan *insertBatc
 		indexStateRootName: p.indexStateRoot,
 		rootNames:          make([]string, 0, rootCap),
 		policies:           make([]backenddb.OrderedRootStoragePolicy, 0, rootCap),
+		pointerizePrimary:  p.pointerizePrimary,
 	}
 	if len(templateRecords) > 0 {
 		phaseStart := time.Now()
@@ -1383,7 +1388,11 @@ func (plan *directBufferedInsertPlan) addRoot(rootName string, policy backenddb.
 func directBufferedRootEntriesSize(entries []directBufferedRootEntry) int64 {
 	var total int64
 	for _, entry := range entries {
-		total = saturatingAddNonNegativeInt64(total, int64(len(entry.key)+len(entry.value)))
+		valueBytes := len(entry.value)
+		if entry.flags&node.FlagPointer != 0 {
+			valueBytes = page.ValuePtrSize
+		}
+		total = saturatingAddNonNegativeInt64(total, int64(len(entry.key)+valueBytes))
 	}
 	return total
 }

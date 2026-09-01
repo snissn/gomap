@@ -1062,7 +1062,7 @@ func TestColumnStoreRetainedPayloadDisablesBufferedUpdateReadsM13C(t *testing.T)
 		defer putUpdateBatchBufferedEntries(cached.primaryEntries, cached.primaryBuffer)
 		t.Fatal("retained-payload column store used primary cache for update planning")
 	}
-	read, templateRuns, blocked, stale, needIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, columnMeta, 1, baseSystemRoot, items, DocumentFormatJSON, false)
+	read, templateRuns, blocked, stale, needIndex, err := snapshotUpdateBatchBufferedReadLocked(nil, domain, columnMeta, 1, baseSystemRoot, items, DocumentFormatJSON, false)
 	defer resetCollectionTables(templateRuns)
 	defer putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
 	if err != nil {
