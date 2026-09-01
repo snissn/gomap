@@ -6132,10 +6132,24 @@ func deleteCollectionRunEntryStealWithRevision(table memtable.Table, key []byte,
 
 func compactTableRuns(runs []memtable.Table) (memtable.Table, error) {
 	entryCapacity := 0
+	var pointerDB *backenddb.DB
+	var retainedPtrs []page.ValuePtr
 	for _, table := range runs {
 		if table != nil {
 			entryCapacity = saturatingAddNonNegativeInt(entryCapacity, table.Len())
 		}
+		owner, ok := table.(*collectionPointerizedRunTable)
+		if !ok || len(owner.ptrs) == 0 {
+			continue
+		}
+		if owner.db == nil {
+			return nil, errors.New("collections: compacted pointerized run has no value-log owner")
+		}
+		if pointerDB != nil && pointerDB != owner.db {
+			return nil, errors.New("collections: compacted pointerized runs have different value-log owners")
+		}
+		pointerDB = owner.db
+		retainedPtrs = append(retainedPtrs, owner.ptrs...)
 	}
 	table := newCollectionRunTable(entryCapacity)
 	iter := newBufferedRootRunsIteratorWithDeleted(runs, nil, nil, true)
@@ -6154,6 +6168,10 @@ func compactTableRuns(runs []memtable.Table) (memtable.Table, error) {
 		return nil, err
 	}
 	table.Freeze()
+	if len(retainedPtrs) > 0 {
+		pointerDB.RetainValueLogValues(retainedPtrs)
+		return &collectionPointerizedRunTable{Table: table, db: pointerDB, ptrs: retainedPtrs}, nil
+	}
 	return table, nil
 }
 

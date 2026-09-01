@@ -182,6 +182,126 @@ func TestColumnRetainedPayloadBufferedInsertOwnsPointersBeforePublication(t *tes
 	}
 }
 
+func TestColumnRetainedPayloadCompactionKeepsPointersPinnedUntilPublication(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	closed := false
+	defer func() {
+		if !closed {
+			_ = d.Close()
+		}
+	}()
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		},
+		RetainedPayload: ColumnRetainedPayloadFull,
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{
+			DocumentFormat:                   DocumentFormatJSON,
+			ColumnStore:                      cfg,
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 1024,
+			BufferedIndexedWriteMaxRootRuns:  1024,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+		TextIndexes: []TextIndexDefinition{{
+			Name:     "kind_text",
+			Fields:   []TextIndexField{{Field: "kind"}},
+			Analyzer: TextAnalyzerSimple,
+		}},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col := openColumnRetainedPlacementCollection(t, d, "events")
+	for i := 1; i <= 2; i++ {
+		id := []byte(fmt.Sprintf("doc-%d", i))
+		document := retainedPlacementDocument("compacted", i)
+		if _, err := col.InsertBatch([][]byte{id}, [][]byte{document}); err != nil {
+			t.Fatalf("InsertBatch %s: %v", id, err)
+		}
+		col.writeDomain.mu.Lock()
+		freezeMutableIndexedRunMapsLocked(col.writeDomain)
+		col.writeDomain.mu.Unlock()
+	}
+
+	primaryRoot := collectionPrimaryRootName("events")
+	col.writeDomain.mu.Lock()
+	rootRunCount := col.writeDomain.rootRunCount
+	rootCounts := make(map[string]int, len(col.writeDomain.rootRuns))
+	for name, runs := range col.writeDomain.rootRuns {
+		rootCounts[name] = len(runs)
+	}
+	obsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(col.writeDomain, CollectionOptions{
+		BufferedIndexedWriteMaxDocuments: 1024,
+		BufferedIndexedWriteMaxRootRuns:  rootRunCount,
+	})
+	if err != nil {
+		col.writeDomain.mu.Unlock()
+		t.Fatalf("compact buffered runs: %v", err)
+	}
+	primaryRuns := col.writeDomain.rootRuns[primaryRoot]
+	if len(primaryRuns) != 1 {
+		col.writeDomain.mu.Unlock()
+		t.Fatalf("compacted primary runs=%d want 1; before root_run_count=%d roots=%v", len(primaryRuns), rootRunCount, rootCounts)
+	}
+	owner, ok := primaryRuns[0].(*collectionPointerizedRunTable)
+	ownedPointers := 0
+	if ok {
+		ownedPointers = len(owner.ptrs)
+	}
+	resetCollectionTables(obsolete)
+	col.writeDomain.mu.Unlock()
+	if !ok || ownedPointers != 2 {
+		t.Fatalf("compacted primary table=%T owned_ptrs=%d want pointer owner with two ptrs", primaryRuns[0], ownedPointers)
+	}
+
+	gcDone := make(chan error, 1)
+	go func() {
+		_, err := d.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{})
+		gcDone <- err
+	}()
+	for i := 1; i <= 2; i++ {
+		id := []byte(fmt.Sprintf("doc-%d", i))
+		want := retainedPlacementDocument("compacted", i)
+		if got, err := col.Get(id); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("Get pending %s=%q err=%v want %q", id, got, err, want)
+		}
+	}
+	if err := <-gcDone; err != nil {
+		t.Fatalf("ValueLogGC while compacted run pending: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	closed = true
+
+	reopened := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = reopened.Close() }()
+	reopenedCol := openColumnRetainedPlacementCollection(t, reopened, "events")
+	for i := 1; i <= 2; i++ {
+		id := []byte(fmt.Sprintf("doc-%d", i))
+		want := retainedPlacementDocument("compacted", i)
+		if got, err := reopenedCol.Get(id); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("Get reopened %s=%q err=%v want %q", id, got, err, want)
+		}
+	}
+}
+
 func TestColumnRetainedPayloadValueLogPlacementGCRewrite(t *testing.T) {
 	dir := t.TempDir()
 	enableColumnRetainedPlacementCommandWAL(t, dir)

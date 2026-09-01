@@ -213,6 +213,12 @@ func (db *DB) ReleaseValueLogValues(ptrs []page.ValuePtr) {
 	db.releasePendingValueLogAppendPtrCounts(release)
 }
 
+// RetainValueLogValues adds another pending GC claim for pointers whose
+// unpublished native-root ownership is being copied.
+func (db *DB) RetainValueLogValues(ptrs []page.ValuePtr) {
+	db.protectPendingValueLogAppendPtrs(ptrs)
+}
+
 func (db *DB) releasePendingValueLogAppendFileIDsFromEntries(entries []batchpkg.Entry) {
 	if db == nil || len(entries) == 0 {
 		return
