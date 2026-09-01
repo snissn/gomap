@@ -1147,6 +1147,9 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil || !strings.Contains(string(command), "TREEDB_TEXT_PROFILE_ROWS=100000") {
 		t.Fatalf("100k dry-run command=%q err=%v", command, err)
 	}
+	if os.Getenv("TREEDB_TEXT_PROFILE_RUN_SMOKE") != "true" {
+		return
+	}
 	smoke := t.TempDir()
 	if output, err := run("RUN_DIR="+smoke, "PHASES=load", "TINY_SMOKE=true", "TIMEOUT=2m"); err != nil {
 		t.Fatalf("tiny observations smoke err=%v output=%s", err, output)

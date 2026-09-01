@@ -72,6 +72,14 @@ The smoke exercises load, text-only retrieval, hybrid retrieval, reopen,
 concurrent search/write sanity, maintenance rewrite postconditions, and text
 backfill with tiny deterministic fixtures.
 
+The package guard test keeps its real tiny-workload smoke opt-in so ordinary
+`go test` runs do not execute it. Run that smoke explicitly with:
+
+```sh
+TREEDB_TEXT_PROFILE_RUN_SMOKE=true GOWORK=off \
+  go test ./cmd/treedb_text_hybrid_scale -run '^TestManualProfileWrapperGuards4546$' -count=1 -timeout=120s
+```
+
 ### 1M scale matrix
 
 The selected 1M command is opt-in via `RUN_1M=true`:
