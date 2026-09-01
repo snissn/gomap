@@ -17722,7 +17722,7 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 	if policySetter != nil && !usePreparedFrames {
 		policySetter.SetKeepPolicy(ioNsPerStoredForWriter, encodeNsPerRawForWriter, safetyMargin)
 	}
-	if resetBlockCompressionHints && compressionResetter != nil && !usePreparedFrames {
+	if resetBlockCompressionHints && compressionResetter != nil {
 		compressionResetter.ResetCompressionHints()
 	}
 
