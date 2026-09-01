@@ -892,12 +892,26 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 			t.Fatalf("shared git exclude changed: err=%v", err)
 		}
 	})
-	for _, path := range []string{"cmd/treedb_text_hybrid_scale", "scripts/treedb_text_hybrid_scale_profile.sh"} {
-		if err := copyManualProfileTestPath(filepath.Join(repoRoot, path), filepath.Join(cleanCheckout, path)); err != nil {
+	profileAssets := []string{
+		"cmd/treedb_text_hybrid_scale/main.go",
+		"cmd/treedb_text_hybrid_scale/manual_profile_test.go",
+		"scripts/treedb_text_hybrid_scale_profile.sh",
+	}
+	for _, path := range profileAssets {
+		data, err := os.ReadFile(filepath.Join(repoRoot, path))
+		if err != nil {
+			t.Fatalf("read overlay %s: %v", path, err)
+		}
+		info, err := os.Stat(filepath.Join(repoRoot, path))
+		if err != nil {
+			t.Fatalf("stat overlay %s: %v", path, err)
+		}
+		if err := os.WriteFile(filepath.Join(cleanCheckout, path), data, info.Mode()); err != nil {
 			t.Fatalf("overlay %s: %v", path, err)
 		}
 	}
-	if output, err := runGit(cleanCheckout, "add", "-A", "--", "cmd/treedb_text_hybrid_scale", "scripts/treedb_text_hybrid_scale_profile.sh"); err != nil {
+	gitAddArgs := append([]string{"add", "--"}, profileAssets...)
+	if output, err := runGit(cleanCheckout, gitAddArgs...); err != nil {
 		t.Fatalf("stage clean checkout overlay: %v\n%s", err, output)
 	}
 	if output, err := runGit(cleanCheckout,
@@ -1119,6 +1133,10 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil || !strings.Contains(string(contextData), "goflags=cleared\ngoenv=off\ngomaxprocs=cleared\ngogc=cleared\ngomemlimit=cleared\ncompiler_tuning=cleared GOOS,GOARCH,GOAMD64,GOARM64,GO386,GOARM,GOMIPS,GOMIPS64,GOPPC64,GORISCV64,GOWASM,GOEXPERIMENT,CGO_ENABLED\ntreedb_performance_overrides=cleared TREEDB_LEAF_PAGE_CACHE_ENTRIES") || !strings.Contains(string(contextData), "TREEDB_DEBUG_VLOG_TIMINGS TREEDB_DEBUG_VLOG_TIMINGS_MIN_MS TREEDB_DEBUG_VLOG_TIMINGS_BUDGET") || !strings.Contains(string(contextData), "TREEDB_DEBUG_MEMTABLE_ROTATE TREEDB_DEBUG_MEMTABLE_ROTATE_BUDGET TREEDB_DEBUG_VLOG_SHAPE TREEDB_DEBUG_VLOG_SHAPE_DISK TREEDB_DEBUG_VLOG_SHAPE_INTERVAL_MS TREEDB_DEBUG_VLOG_SHAPE_BUDGET TREEDB_DEBUG_VLOG_MAINT TREEDB_DEBUG_VLOG_MAINT_BUDGET") || !strings.Contains(string(contextData), "TREEDB_OUTER_LEAF_READ_SAMPLE_MOD TREEDB_HOT_PATH_STATS") || !strings.Contains(string(contextData), "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS") {
 		t.Fatalf("GOFLAGS context=%q err=%v", contextData, err)
 	}
+	callerSampleEnv := "TREEDB_DEBUG_BATCH_SET_CALLER_SAMPLE_MOD TREEDB_DEBUG_DB_GET_CALLER_SAMPLE_MOD TREEDB_DEBUG_SNAPSHOT_GET_CALLER_SAMPLE_MOD"
+	if !strings.Contains(string(command), "-u TREEDB_DEBUG_BATCH_SET_CALLER_SAMPLE_MOD -u TREEDB_DEBUG_DB_GET_CALLER_SAMPLE_MOD -u TREEDB_DEBUG_SNAPSHOT_GET_CALLER_SAMPLE_MOD") || !strings.Contains(string(contextData), callerSampleEnv) {
+		t.Fatalf("caller sampling controls missing: command=%q context=%q", command, contextData)
+	}
 	runtimeDebugDryRun := t.TempDir()
 	if output, err := run("RUN_DIR="+runtimeDebugDryRun, "PHASES=phrase", "DRY_RUN=true", "PROFILE_MODE=runtime", "PROFILE_PHASE=phrase", "GODEBUG=asyncpreemptoff=1,invalidptr=0"); err != nil || !strings.Contains(string(output), "artifacts:") {
 		t.Fatalf("runtime GODEBUG dry-run err=%v output=%s", err, output)
@@ -1217,39 +1235,4 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if output, err := run("RUN_DIR="+t.TempDir(), "PHASES=load", "TINY_SMOKE=true", "TIMEOUT=1ns"); err == nil || !strings.Contains(string(output), "FAIL") {
 		t.Fatalf("tiny timeout err=%v output=%s", err, output)
 	}
-}
-
-func copyManualProfileTestPath(source, destination string) error {
-	info, err := os.Stat(source)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		data, err := os.ReadFile(source)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(destination, data, info.Mode())
-	}
-	if err := os.RemoveAll(destination); err != nil {
-		return err
-	}
-	return filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		relative, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(destination, relative)
-		if info.IsDir() {
-			return os.MkdirAll(target, info.Mode())
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, info.Mode())
-	})
 }
