@@ -9214,57 +9214,64 @@ func (c *Collection) tryLockPreparedIndexedCommandWALPublish(work *indexedFlushP
 	if c == nil || c.db == nil || c.writeDomain == nil || work == nil || !c.db.CommandWALEnabled() || work.commandWALLast == 0 {
 		return nil, nil
 	}
-	unlockPrepared, ok := c.db.TryLockCommandWALPreparedPublish()
-	if !ok {
-		return nil, errIndexedFlushRelinquished
-	}
-	lease := &preparedIndexedCommandWALPublish{unlockPrepared: unlockPrepared}
-	lease.unlockRaw = c.db.LockCommandWALPreparedPublish()
-	domain := c.writeDomain
-	coord := domain.commandWALCoordinatorForDomain(c.db)
-	if coord != nil {
-		// Prepared admission already excluded a quiescent boundary. A stage
-		// cleanup can still hold this mutex briefly; wait for that handoff rather
-		// than abandoning work that no boundary is responsible for draining.
-		coord.mu.Lock()
-		if coord.owner != nil && coord.owner != domain {
-			coord.mu.Unlock()
-			lease.release()
+	for {
+		unlockPrepared, ok := c.db.TryLockCommandWALPreparedPublish()
+		if !ok {
 			return nil, errIndexedFlushRelinquished
 		}
-		lease.unlockCoordinator = coord.mu.Unlock
-	}
-	state, ok := c.db.StateToken()
-	if !ok || work.commandWALLast <= state.AppliedCommandLSN {
-		lease.release()
-		return nil, errIndexedFlushLostOwnership
-	}
-	domain.mu.Lock()
-	if len(domain.indexedPublishingUnits) < len(work.units) {
-		domain.mu.Unlock()
-		lease.release()
-		return nil, errIndexedFlushLostOwnership
-	}
-	for i := range work.units {
-		if !sameIndexedFlushUnitTables(domain.indexedPublishingUnits[i], work.units[i]) {
+		lease := &preparedIndexedCommandWALPublish{unlockPrepared: unlockPrepared}
+		lease.unlockRaw = c.db.LockCommandWALPreparedPublish()
+		domain := c.writeDomain
+		coord := domain.commandWALCoordinatorForDomain(c.db)
+		if coord != nil {
+			if !coord.mu.TryLock() {
+				// A stage cleanup can hold this mutex briefly. Drop the raw and
+				// prepared leases before waiting for that handoff, then retry the
+				// nonblocking boundary claim; a real boundary still wins there.
+				lease.release()
+				coord.mu.Lock()
+				coord.mu.Unlock()
+				continue
+			}
+			if coord.owner != nil && coord.owner != domain {
+				coord.mu.Unlock()
+				lease.release()
+				return nil, errIndexedFlushRelinquished
+			}
+			lease.unlockCoordinator = coord.mu.Unlock
+		}
+		state, ok := c.db.StateToken()
+		if !ok || work.commandWALLast <= state.AppliedCommandLSN {
+			lease.release()
+			return nil, errIndexedFlushLostOwnership
+		}
+		domain.mu.Lock()
+		if len(domain.indexedPublishingUnits) < len(work.units) {
 			domain.mu.Unlock()
 			lease.release()
 			return nil, errIndexedFlushLostOwnership
 		}
+		for i := range work.units {
+			if !sameIndexedFlushUnitTables(domain.indexedPublishingUnits[i], work.units[i]) {
+				domain.mu.Unlock()
+				lease.release()
+				return nil, errIndexedFlushLostOwnership
+			}
+		}
+		intent, applied, err := domain.pendingCommandWALCoverageIntentThroughLocked(c.db, work.commandWALLast)
+		domain.mu.Unlock()
+		if err != nil {
+			lease.release()
+			return nil, err
+		}
+		if intent == nil || applied != work.commandWALLast {
+			lease.release()
+			return nil, fmt.Errorf("%w: indexed async publish missing owned command WAL prefix through %d", backenddb.ErrCommandWALContextMissingFrame, work.commandWALLast)
+		}
+		lease.intent = intent
+		lease.applied = applied
+		return lease, nil
 	}
-	intent, applied, err := domain.pendingCommandWALCoverageIntentThroughLocked(c.db, work.commandWALLast)
-	domain.mu.Unlock()
-	if err != nil {
-		lease.release()
-		return nil, err
-	}
-	if intent == nil || applied != work.commandWALLast {
-		lease.release()
-		return nil, fmt.Errorf("%w: indexed async publish missing owned command WAL prefix through %d", backenddb.ErrCommandWALContextMissingFrame, work.commandWALLast)
-	}
-	lease.intent = intent
-	lease.applied = applied
-	return lease, nil
 }
 
 func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) error {
