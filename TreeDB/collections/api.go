@@ -10051,7 +10051,9 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 		rootOverlays[rootName] = append([]uint64(nil), catalog.overlayRootIDs(rootName)...)
 	}
 	preflight := c.bufferedIndexedRootPublishPreflight(pin.Pager(), baseSystemRoot, baseCommitSeq, meta, rootNames, baseRootIDs)
+	pointerizeStart := time.Now()
 	publishRootRuns, cleanupPointerizedRuns, err := pointerizeCollectionRootRunMapValues(c.db, meta, flushUnit.rootRuns)
+	domain.indexedFlushPointerizeTotalNs.Add(durationToAtomicNs(collectionObservedElapsedSince(pointerizeStart)))
 	if err != nil {
 		return err
 	}
