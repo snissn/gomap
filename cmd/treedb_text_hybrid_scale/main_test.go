@@ -1037,6 +1037,22 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil || !strings.Contains(string(command), "TREEDB_TEXT_PROFILE_ROWS=10000") {
 		t.Fatalf("dry-run command=%q err=%v", command, err)
 	}
+	betweenPhaseSource := filepath.Join(cleanCheckout, "cmd", "treedb_text_hybrid_scale", "manual_profile_between_phase_4546.go")
+	fakeGoDir := t.TempDir()
+	fakeGo := filepath.Join(fakeGoDir, "go")
+	if err := os.WriteFile(fakeGo, []byte("#!/bin/sh\nif [ \"$1\" = version ]; then echo 'go version go1.0 test'; exit 0; fi\n: > \"$DIRTY_FILE\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	betweenPhaseRun := t.TempDir()
+	if output, err := run("RUN_DIR="+betweenPhaseRun, "PHASES=load,phrase", "PATH="+fakeGoDir+string(os.PathListSeparator)+os.Getenv("PATH"), "DIRTY_FILE="+betweenPhaseSource); err == nil || !strings.Contains(string(output), "worktree must be clean before profiling") {
+		t.Fatalf("between-phase source change err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(betweenPhaseRun, "10000", "phrase")); !os.IsNotExist(err) {
+		t.Fatalf("source change ran later phase: %v", err)
+	}
+	if err := os.Remove(betweenPhaseSource); err != nil {
+		t.Fatal(err)
+	}
 	goFlagsDryRun := t.TempDir()
 	if output, err := run("RUN_DIR="+goFlagsDryRun, "PHASES=phrase", "DRY_RUN=true", "GOFLAGS=-race", "GOMAXPROCS=1", "GOGC=10", "GOMEMLIMIT=1MiB", "GOOS=plan9", "GOARCH=386", "GOAMD64=v3", "GOARM64=v8.0", "GO386=sse2", "GOARM=7", "GOMIPS=softfloat", "GOMIPS64=softfloat", "GOPPC64=power8", "GORISCV64=rva20u64", "GOWASM=signext", "GOEXPERIMENT=arenas", "CGO_ENABLED=0"); err != nil || !strings.Contains(string(output), "artifacts:") {
 		t.Fatalf("GOFLAGS dry-run err=%v output=%s", err, output)
@@ -1106,6 +1122,11 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	allocationDelta, err := os.ReadFile(filepath.Join(profiles, "alloc_delta.txt"))
 	if err != nil || !strings.Contains(string(allocationDelta), "allocation_bytes=") || !strings.Contains(string(allocationDelta), "allocation_objects=") {
 		t.Fatalf("allocation delta=%q err=%v", allocationDelta, err)
+	}
+	for _, profile := range []string{"alloc_before.pprof", "alloc_after.pprof", "heap_after.pprof"} {
+		if info, err := os.Stat(filepath.Join(profiles, profile)); err != nil || info.Size() == 0 {
+			t.Fatalf("allocation profile %s: info=%v err=%v", profile, info, err)
+		}
 	}
 	runtimeProfile := t.TempDir()
 	if output, err := run("RUN_DIR="+runtimeProfile, "PHASES=phrase", "TINY_SMOKE=true", "TIMEOUT=2m", "PROFILE_MODE=runtime", "PROFILE_PHASE=phrase"); err != nil {

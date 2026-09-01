@@ -234,6 +234,7 @@ func profileManualPhase(mode, dir string, action func() error) (time.Duration, e
 		return pprof.Lookup(profile).WriteTo(f, 0)
 	}
 	if mode == "alloc" {
+		runtime.GC()
 		if err := write("alloc_before.pprof", "allocs"); err != nil {
 			return 0, err
 		}
@@ -247,6 +248,7 @@ func profileManualPhase(mode, dir string, action func() error) (time.Duration, e
 		if writeErr := os.WriteFile(filepath.Join(dir, "alloc_delta.txt"), []byte(allocationDelta), 0o644); writeErr != nil {
 			return measured, writeErr
 		}
+		runtime.GC()
 		if writeErr := write("alloc_after.pprof", "allocs"); writeErr != nil {
 			return measured, writeErr
 		}

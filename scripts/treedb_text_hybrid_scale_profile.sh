@@ -18,6 +18,13 @@ while IFS= read -r local_git_env_var; do
   controlled_git_env+=(-u "$local_git_env_var")
 done < <("${controlled_git_env[@]}" git rev-parse --local-env-vars)
 
+check_profile_source() {
+  if [[ -n "$("${controlled_git_env[@]}" git status --porcelain --untracked-files=all)" ]]; then echo "worktree must be clean before profiling" >&2; return 1; fi
+  local ignored_build_inputs
+  ignored_build_inputs=$("${controlled_git_env[@]}" git status --porcelain --untracked-files=all --ignored | awk '/^!! / { path=substr($0, 4); if (path ~ /\.(go|s|S|c|cc|cpp|cxx|h|hh|hpp|syso)$/) { print path; exit } }')
+  if [[ -n "$ignored_build_inputs" ]]; then echo "ignored build input before profiling: $ignored_build_inputs" >&2; return 1; fi
+}
+
 case "$ROWS" in 10000|100000) ;; *) echo "ROWS must be 10000 or 100000" >&2; exit 2;; esac
 case "$PROFILE_MODE" in none|runtime|alloc) ;; *) echo "PROFILE_MODE must be none, runtime, or alloc" >&2; exit 2;; esac
 if [[ "$ROWS" == 100000 && "$RUN_100K" != true ]]; then echo "100k requires RUN_100K=true after this invocation's 10k matrix" >&2; exit 2; fi
@@ -33,14 +40,13 @@ for phase in "${configured_phases[@]}"; do
 done
 if [[ "$PROFILE_MODE" == none && -n "$PROFILE_PHASE" ]]; then echo "PROFILE_PHASE requires PROFILE_MODE=runtime or alloc" >&2; exit 2; fi
 if [[ "$PROFILE_MODE" != none || -n "$PROFILE_PHASE" ]] && [[ "$profile_phase_selected" != true ]]; then echo "PROFILE_PHASE must be selected by PHASES" >&2; exit 2; fi
-if [[ -n "$("${controlled_git_env[@]}" git status --porcelain --untracked-files=all)" ]]; then echo "worktree must be clean before profiling" >&2; exit 2; fi
-ignored_build_inputs=$("${controlled_git_env[@]}" git status --porcelain --untracked-files=all --ignored | awk '/^!! / { path=substr($0, 4); if (path ~ /\.(go|s|S|c|cc|cpp|cxx|h|hh|hpp|syso)$/) { print path; exit } }')
-if [[ -n "$ignored_build_inputs" ]]; then echo "ignored build input before profiling: $ignored_build_inputs" >&2; exit 2; fi
+if ! check_profile_source; then exit 2; fi
+profile_commit=$("${controlled_git_env[@]}" git rev-parse HEAD)
 if [[ -L "$RUN_DIR" || ( -e "$RUN_DIR" && ! -d "$RUN_DIR" ) ]]; then echo "RUN_DIR must be an empty directory: $RUN_DIR" >&2; exit 2; fi
 mkdir -p "$RUN_DIR"
 if [[ -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then echo "RUN_DIR must be empty: $RUN_DIR; use a fresh RUN_DIR" >&2; exit 2; fi
 {
-  echo "commit=$("${controlled_git_env[@]}" git rev-parse HEAD)"
+  echo "commit=$profile_commit"
   echo "command=$0 $*"
   echo "host=$(uname -a)"
   echo "go=$("${controlled_go_env[@]}" go version)"
@@ -59,6 +65,11 @@ run_matrix() {
   for phase in "${selected[@]}"; do
     case "$phase" in load|vector|phrase|broad|maintenance|reopen) ;; *) echo "unknown phase: $phase" >&2; return 2;; esac
     phase_dir="$RUN_DIR/${rows}/${phase}"
+    if ! check_profile_source; then return 2; fi
+    if [[ "$("${controlled_git_env[@]}" git rev-parse HEAD)" != "$profile_commit" ]]; then
+      echo "source commit changed before phase: $phase" >&2
+      return 2
+    fi
     mkdir -p "$RUN_DIR/${rows}"
     if [[ -e "$phase_dir" || -L "$phase_dir" ]]; then
       echo "phase artifact directory already exists: $phase_dir; use a fresh RUN_DIR" >&2
