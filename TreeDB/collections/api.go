@@ -2307,10 +2307,16 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 func indexedPublicationPayloadBytes(documents []columnWriteDocument, prepared []preparedTextIndexInsert) (raw, payload int64) {
 	for _, document := range documents {
 		raw = saturatingAddNonNegativeInt64(raw, int64(len(document.Document)))
-		payload = saturatingAddNonNegativeInt64(payload, int64(len(document.ID)+len(document.Document)))
+		payload = saturatingAddNonNegativeInt64(payload, int64(len(document.ID)))
+		payload = saturatingAddNonNegativeInt64(payload, int64(len(document.Document)))
 		for _, value := range document.declaredValues {
-			payload = saturatingAddNonNegativeInt64(payload, int64(len(value.String)+len(value.DenseNumericVector)+len(value.Bytes)+len(value.StringBytes)))
-			payload = saturatingAddNonNegativeInt64(payload, int64(4*(len(value.Float32Vector)+len(value.Uint32List)+len(value.AdjacencyList))))
+			payload = saturatingAddNonNegativeInt64(payload, int64(len(value.String)))
+			payload = saturatingAddNonNegativeInt64(payload, int64(len(value.DenseNumericVector)))
+			payload = saturatingAddNonNegativeInt64(payload, int64(len(value.Bytes)))
+			payload = saturatingAddNonNegativeInt64(payload, int64(len(value.StringBytes)))
+			payload = saturatingAddNonNegativeInt64(payload, 4*int64(len(value.Float32Vector)))
+			payload = saturatingAddNonNegativeInt64(payload, 4*int64(len(value.Uint32List)))
+			payload = saturatingAddNonNegativeInt64(payload, 4*int64(len(value.AdjacencyList)))
 		}
 	}
 	for _, index := range prepared {
@@ -2319,7 +2325,9 @@ func indexedPublicationPayloadBytes(documents []columnWriteDocument, prepared []
 			for _, field := range state.Fields {
 				payload = saturatingAddNonNegativeInt64(payload, int64(len(field.Field)))
 				for _, term := range field.Terms {
-					payload = saturatingAddNonNegativeInt64(payload, int64(len(term.Term)+4*len(term.Positions)+8*len(term.Offsets)))
+					payload = saturatingAddNonNegativeInt64(payload, int64(len(term.Term)))
+					payload = saturatingAddNonNegativeInt64(payload, 4*int64(len(term.Positions)))
+					payload = saturatingAddNonNegativeInt64(payload, 8*int64(len(term.Offsets)))
 				}
 			}
 		}
