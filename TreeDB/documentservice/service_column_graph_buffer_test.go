@@ -97,11 +97,8 @@ func TestServiceColumnGraphCoalescesBufferedInsertPublication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
-	if col.Meta().Options.DisableBufferedIndexedAsyncFlush {
-		t.Fatal("column_graph service collection opted out of buffered async publication")
-	}
-	if !col.Meta().Options.BufferedIndexedAsyncFlush {
-		t.Fatal("column_graph service collection did not enable buffered async publication")
+	if !col.Meta().Options.DisableBufferedIndexedAsyncFlush {
+		t.Fatal("column_graph service collection did not select foreground buffered publication")
 	}
 
 	for _, doc := range []Document{

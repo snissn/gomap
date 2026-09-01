@@ -206,6 +206,7 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 	options := collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}
 	if vectorOptions.strategy == collections.VectorIndexStrategyColumnGraph {
 		options.ColumnStore = serviceColumnStoreConfig(req.Dimension)
+		options.DisableBufferedIndexedAsyncFlush = true
 	}
 	meta := &collections.CollectionMeta{
 		Name:    req.Name,
