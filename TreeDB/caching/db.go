@@ -17861,6 +17861,9 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 				encodeRawBytes += pf.stats.RawPayloadBytes
 			}
 		}
+		if err == nil && finalWriteMode == vlogWriteBlock && framesKept > 0 && caps.reset != nil {
+			caps.reset.ResetCompressionHints()
+		}
 	}
 
 	if err == nil && !rawBatchUsed {
