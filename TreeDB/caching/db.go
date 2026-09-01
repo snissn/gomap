@@ -14503,6 +14503,7 @@ type vlogDictPrepareTask struct {
 	records          []valuelog.Record
 	blockCodec       valuelog.BlockCodec
 	blockCompression bool
+	resetHints       bool
 	level            zstd.EncoderLevel
 	enableEntropy    bool
 	ioNsPerStored    float64
@@ -15559,6 +15560,9 @@ func (db *DB) vlogDictPrepareLoop(l *lane) {
 	}
 	preparer := valuelog.NewFramePreparer()
 	processTask := func(task vlogDictPrepareTask) {
+		if task.resetHints {
+			preparer.ResetCompressionHints()
+		}
 		if !task.blockCompression {
 			preparer.SetDictFrameEncoderOptions(task.level, task.enableEntropy)
 		}
@@ -16211,6 +16215,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			plan.k,
 			plan.rawBytes,
 			plan.writeMode,
+			false,
 			plan.blockCodec,
 			keepIoNs,
 			keepEncodeNs,
@@ -17147,6 +17152,7 @@ func (db *DB) prepareAppendFrames(
 	k int,
 	rawPayloadBytes int,
 	writeMode vlogCompressionWriteMode,
+	resetBlockCompressionHints bool,
 	blockCodec valuelog.BlockCodec,
 	ioNsPerStoredByte float64,
 	encodeNsPerRawByte float64,
@@ -17228,6 +17234,7 @@ func (db *DB) prepareAppendFrames(
 		if end > len(records) {
 			end = len(records)
 		}
+		// Match the writer path: clear backoff once before the batch's first probe.
 		task := vlogDictPrepareTask{
 			fi:               fi,
 			dictID:           dictID,
@@ -17235,6 +17242,7 @@ func (db *DB) prepareAppendFrames(
 			records:          records[start:end],
 			blockCodec:       blockCodec,
 			blockCompression: blockCompression,
+			resetHints:       resetBlockCompressionHints && fi == 0,
 			level:            db.valueLogDictFrameEncodeLevel,
 			enableEntropy:    db.valueLogDictFrameEnableEntropy,
 			ioNsPerStored:    ioNsPerStoredByte,
@@ -17594,6 +17602,7 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 		k,
 		rawPayloadBytes,
 		prepareWriteMode,
+		resetBlockCompressionHints,
 		finalBlockCodec,
 		ioNsPerStoredForWriter,
 		encodeNsPerRawForWriter,
