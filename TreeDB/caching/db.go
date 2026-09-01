@@ -17234,7 +17234,9 @@ func (db *DB) prepareAppendFrames(
 		if end > len(records) {
 			end = len(records)
 		}
-		// Match the writer path: clear backoff once before the batch's first probe.
+		// Workers own independent backoff state and may receive tasks in any order.
+		// Forced probes must therefore reset every task so no participating worker
+		// can skip its compression attempt with stale hints.
 		task := vlogDictPrepareTask{
 			fi:               fi,
 			dictID:           dictID,
@@ -17242,7 +17244,7 @@ func (db *DB) prepareAppendFrames(
 			records:          records[start:end],
 			blockCodec:       blockCodec,
 			blockCompression: blockCompression,
-			resetHints:       resetBlockCompressionHints && fi == 0,
+			resetHints:       resetBlockCompressionHints,
 			level:            db.valueLogDictFrameEncodeLevel,
 			enableEntropy:    db.valueLogDictFrameEnableEntropy,
 			ioNsPerStored:    ioNsPerStoredByte,

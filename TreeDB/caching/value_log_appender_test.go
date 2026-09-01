@@ -493,8 +493,10 @@ func TestPrepareAppendFramesBlockBackoffPersistsAcrossWorkerTasks(t *testing.T) 
 		releasePreparedDictFrames(prepared)
 		putVlogPreparedFrames(prepared)
 	}()
-	if !prepared[0].stats.Attempted || !prepared[0].stats.Kept {
-		t.Fatalf("forced probe stats=%+v, want attempted and kept", prepared[0].stats)
+	for i := range prepared {
+		if !prepared[i].stats.Attempted || !prepared[i].stats.Kept {
+			t.Fatalf("forced probe frame %d stats=%+v, want attempted and kept", i, prepared[i].stats)
+		}
 	}
 }
 
