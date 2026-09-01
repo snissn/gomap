@@ -237,7 +237,7 @@ func TestDiagnosticsSnapshotPublishesFallbackSingletonInsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openIndex: %v", err)
 	}
-	doc, err := prepareDocumentsForWrite([]Document{{ID: "fallback", Embedding: []float32{1, 0}}}, info)
+	doc, err := prepareDocumentsForWrite([]Document{{ID: "fallback", Embedding: []float32{1, 0}}}, info, false)
 	if err != nil {
 		t.Fatalf("prepareDocumentsForWrite: %v", err)
 	}

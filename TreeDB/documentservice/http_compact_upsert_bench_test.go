@@ -68,7 +68,7 @@ func BenchmarkHTTPUpsertDecodePrepareNumericVsCompact(b *testing.B) {
 				if err := dec.Decode(&req); err != nil {
 					b.Fatal(err)
 				}
-				if _, err := prepareDocumentsForWrite(req.Documents, info); err != nil {
+				if _, err := prepareDocumentsForWrite(req.Documents, info, false); err != nil {
 					b.Fatal(err)
 				}
 			}

@@ -1,6 +1,7 @@
 package documentservice
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -107,6 +108,9 @@ func TestServiceColumnGraphCoalescesBufferedInsertPublication(t *testing.T) {
 	}
 	if cfg := col.Meta().Options.ColumnStore; cfg == nil || cfg.RetainedPayload != collections.ColumnRetainedPayloadNonColumn || cfg.RetainedPayloadEncoding != collections.ColumnRetainedPayloadEncodingJSON {
 		t.Fatalf("column_graph retained payload=%+v want non-column JSON", cfg)
+	}
+	if !serviceUsesTrustedNonColumnRetainedJSON(col.MetaView()) {
+		t.Fatalf("column_graph service collection did not select trusted non-column retained JSON: %+v", col.MetaView())
 	}
 
 	for _, doc := range []Document{
@@ -277,6 +281,9 @@ func TestServiceColumnGraphCoalescesLegacyAsyncMetadata(t *testing.T) {
 	if got := col.Meta().Options.ColumnStore.RetainedPayload; got != collections.ColumnRetainedPayloadFull {
 		t.Fatalf("legacy retained payload=%q want full", got)
 	}
+	if serviceUsesTrustedNonColumnRetainedJSON(col.MetaView()) {
+		t.Fatal("legacy full retained-payload metadata selected trusted non-column JSON")
+	}
 
 	svc := New(manager)
 	if _, err := svc.CreateIndex(context.Background(), CreateIndexRequest{
@@ -329,6 +336,9 @@ func TestServiceColumnGraphScalarIndexesRetainFullJSON(t *testing.T) {
 	if got := col.Meta().Options.ColumnStore.RetainedPayload; got != collections.ColumnRetainedPayloadFull {
 		t.Fatalf("scalar-index retained payload=%q want full", got)
 	}
+	if serviceUsesTrustedNonColumnRetainedJSON(col.MetaView()) {
+		t.Fatal("scalar-index metadata selected trusted non-column JSON")
+	}
 	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{
 		Documents:               []Document{{ID: "a", Content: "alpha", Embedding: []float32{1, 0}, Meta: map[string]any{"kind": "kept"}}},
 		DeferVectorIndexRebuild: true,
@@ -341,6 +351,26 @@ func TestServiceColumnGraphScalarIndexesRetainFullJSON(t *testing.T) {
 	}
 	if len(filtered.Documents) != 1 || filtered.Documents[0].ID != "a" || !reflect.DeepEqual(filtered.Documents[0].Embedding, []float32{1, 0}) {
 		t.Fatalf("FilterDocuments=%+v", filtered)
+	}
+}
+
+func TestPrepareDocumentsForWriteTrustedNonColumnRetainedJSON(t *testing.T) {
+	info := IndexInfo{Dimension: 3, Metric: MetricCosine}
+	prepared, err := prepareDocumentsForWrite([]Document{{
+		ID: "a", Content: "alpha", Embedding: []float32{1, 0, 0}, Meta: map[string]any{"source": "test"},
+	}}, info, true)
+	if err != nil {
+		t.Fatalf("prepareDocumentsForWrite: %v", err)
+	}
+	if len(prepared) != 1 || !bytes.Contains(prepared[0].raw, []byte(`"embedding"`)) || bytes.Contains(prepared[0].retainedJSON, []byte(`"embedding"`)) {
+		t.Fatalf("prepared full=%s retained=%s", prepared[0].raw, prepared[0].retainedJSON)
+	}
+	var retained Document
+	if err := json.Unmarshal(prepared[0].retainedJSON, &retained); err != nil {
+		t.Fatalf("decode retained JSON: %v", err)
+	}
+	if retained.ID != "a" || retained.Content != "alpha" || len(retained.Embedding) != 0 || !reflect.DeepEqual(retained.Meta, map[string]any{"source": "test"}) {
+		t.Fatalf("retained document=%+v", retained)
 	}
 }
 

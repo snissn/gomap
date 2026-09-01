@@ -858,14 +858,14 @@ func TestServiceUpsertInsertRaceFallsBackToReplace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openIndex: %v", err)
 	}
-	first, err := prepareDocumentsForWrite([]Document{{ID: "race", Content: "first", Embedding: []float32{1, 0}}}, info)
+	first, err := prepareDocumentsForWrite([]Document{{ID: "race", Content: "first", Embedding: []float32{1, 0}}}, info, false)
 	if err != nil {
 		t.Fatalf("prepare first: %v", err)
 	}
 	if _, err := col.InsertBatch([][]byte{[]byte(first[0].id)}, [][]byte{first[0].raw}); err != nil {
 		t.Fatalf("InsertBatch first: %v", err)
 	}
-	raced, err := prepareDocumentsForWrite([]Document{{ID: "race", Content: "winner", Embedding: []float32{0, 1}, Meta: map[string]any{"repo": "gomap"}}}, info)
+	raced, err := prepareDocumentsForWrite([]Document{{ID: "race", Content: "winner", Embedding: []float32{0, 1}, Meta: map[string]any{"repo": "gomap"}}}, info, false)
 	if err != nil {
 		t.Fatalf("prepare raced: %v", err)
 	}
@@ -1903,7 +1903,7 @@ func TestServiceDenseNativeRuntimeSearchMaterializesOneStableSnapshot(t *testing
 		t.Fatalf("openIndex: %v", err)
 	}
 	replace := func(doc Document) error {
-		prepared, err := prepareDocumentsForWrite([]Document{doc}, info)
+		prepared, err := prepareDocumentsForWrite([]Document{doc}, info, false)
 		if err != nil {
 			return err
 		}

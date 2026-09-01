@@ -11133,8 +11133,15 @@ func (c *Collection) InsertBatchWithStats(ids, documents [][]byte) ([][]byte, Co
 // documents while carrying one caller-validated float32 vector column into the
 // existing column-store write plan. The collection still owns duplicate,
 // command-WAL, schema, and publication validation.
-func (c *Collection) InsertBatchWithStatsValidatedFloat32Projection(ids, documents [][]byte, column string, metric VectorMetric, vectors [][]float32) ([][]byte, CollectionInsertStats, error) {
-	projection, err := newTrustedFloat32Projection(ids, documents, column, metric, vectors)
+func (c *Collection) InsertBatchWithStatsValidatedFloat32Projection(ids, documents [][]byte, column string, metric VectorMetric, vectors [][]float32, retainedJSONOption ...[][]byte) ([][]byte, CollectionInsertStats, error) {
+	if len(retainedJSONOption) > 1 {
+		return nil, CollectionInsertStats{}, errors.New("collections: validated float32 projection accepts at most one retained JSON batch")
+	}
+	var retainedJSON [][]byte
+	if len(retainedJSONOption) == 1 {
+		retainedJSON = retainedJSONOption[0]
+	}
+	projection, err := newTrustedFloat32Projection(ids, documents, column, metric, vectors, retainedJSON)
 	if err != nil {
 		return nil, CollectionInsertStats{}, err
 	}
@@ -11477,7 +11484,7 @@ func shouldAttemptOptimisticInsertBatchPlanning(documents [][]byte, templateEnco
 		!commandWALActive
 }
 
-func prepareInsertBatchPlanRetainedPayload(meta CollectionMeta, plan *insertBatchPlan) ([]commitlog.CollectionDocument, error) {
+func prepareInsertBatchPlanRetainedPayload(meta CollectionMeta, plan *insertBatchPlan, inputIDs [][]byte, projection *trustedFloat32Projection) ([]commitlog.CollectionDocument, error) {
 	if !columnStoreNeedsRetainedPayloadTransform(meta) || plan == nil {
 		return nil, nil
 	}
@@ -11498,23 +11505,40 @@ func prepareInsertBatchPlanRetainedPayload(meta CollectionMeta, plan *insertBatc
 		ids[i], full[i] = owned[i].ID, owned[i].Document
 	}
 	start := time.Now()
-	prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(*cfg, ids, full, nil)
-	if err != nil {
-		return nil, err
+	var retainedDocuments [][]byte
+	if projection != nil && projection.retainedJSON != nil {
+		retainedByID, validateErr := validateTrustedFloat32ProjectionRetainedJSON(inputIDs, projection)
+		if validateErr != nil {
+			return nil, validateErr
+		}
+		retainedDocuments = make([][]byte, len(owned))
+		for row := range owned {
+			retained, ok := retainedByID[string(owned[row].ID)]
+			if !ok {
+				return nil, fmt.Errorf("collections: validated retained primary row %d id mismatch", row)
+			}
+			retainedDocuments[row] = retained
+		}
+	} else {
+		prepared, prepareErr := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(*cfg, ids, full, nil)
+		if prepareErr != nil {
+			return nil, prepareErr
+		}
+		retainedDocuments = prepared.documents
 	}
 	plan.stats.RetainedPayloadPrepare += time.Since(start)
-	plan.stats.RetainedPayloadRows += len(prepared.documents)
+	plan.stats.RetainedPayloadRows += len(retainedDocuments)
 
 	if direct := plan.directBufferedInsert; direct != nil && direct.primaryRootName == primaryRootName {
-		if len(direct.primaryEntries) != len(prepared.documents) {
-			return nil, fmt.Errorf("collections: retained primary documents=%d entries=%d", len(prepared.documents), len(direct.primaryEntries))
+		if len(direct.primaryEntries) != len(retainedDocuments) {
+			return nil, fmt.Errorf("collections: retained primary documents=%d entries=%d", len(retainedDocuments), len(direct.primaryEntries))
 		}
 		before := directBufferedRootEntriesSize(direct.primaryEntries)
 		for i := range direct.primaryEntries {
 			if !bytes.Equal(direct.primaryEntries[i].key, owned[i].ID) {
 				return nil, fmt.Errorf("collections: retained primary row %d id mismatch", i)
 			}
-			direct.primaryEntries[i].value = prepared.documents[i]
+			direct.primaryEntries[i].value = retainedDocuments[i]
 		}
 		direct.stagedBytes = subtractNonNegativeInt64(direct.stagedBytes, before)
 		direct.stagedBytes = saturatingAddNonNegativeInt64(direct.stagedBytes, directBufferedRootEntriesSize(direct.primaryEntries))
@@ -11524,9 +11548,9 @@ func prepareInsertBatchPlanRetainedPayload(meta CollectionMeta, plan *insertBatc
 		if plan.runs[i].name != primaryRootName {
 			continue
 		}
-		replacement := newCollectionRunTable(len(prepared.documents))
-		for row := range prepared.documents {
-			setCollectionRunCopiedValue(replacement, owned[row].ID, prepared.documents[row])
+		replacement := newCollectionRunTable(len(retainedDocuments))
+		for row := range retainedDocuments {
+			setCollectionRunCopiedValue(replacement, owned[row].ID, retainedDocuments[row])
 		}
 		replacement.Freeze()
 		resetCollectionRunTable(plan.runs[i].table)
@@ -11986,7 +12010,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	if cfg := meta.Options.ColumnStore; cfg != nil &&
 		cfg.RetainedPayload == ColumnRetainedPayloadNonColumn &&
 		columnRetainedPayloadEffectiveEncoding(cfg) == ColumnRetainedPayloadEncodingJSON {
-		fullRetainedPayloadDocuments, err = prepareInsertBatchPlanRetainedPayload(meta, plan)
+		fullRetainedPayloadDocuments, err = prepareInsertBatchPlanRetainedPayload(meta, plan, ids, execOpts.trustedFloat32Projection)
 		if err != nil {
 			closePlanningSnapshot()
 			resetCollectionRunTables(plan.runs)
@@ -12757,21 +12781,37 @@ func (c *Collection) insertBatchNoIndex(
 	var retainedDeclaredRowsReady bool
 	if columnStoreNeedsRetainedPayloadTransform(c.meta) {
 		phaseStart = time.Now()
-		fullDocumentIDs := make([][]byte, len(entries))
-		fullDocuments := make([][]byte, len(entries))
-		for i := range entries {
-			fullDocumentIDs[i] = entries[i].id
-			fullDocuments[i] = entries[i].document
+		var prepared columnRetainedPayloadStorageDocuments
+		if projection := execOpts.trustedFloat32Projection; projection != nil && projection.retainedJSON != nil {
+			retainedByID, err := validateTrustedFloat32ProjectionRetainedJSON(ids, projection)
+			if err != nil {
+				return nil, err
+			}
+			retainedDocuments = make([][]byte, len(entries))
+			for row := range entries {
+				retained, ok := retainedByID[string(entries[row].id)]
+				if !ok {
+					return nil, fmt.Errorf("collections: validated retained primary row %d id mismatch", row)
+				}
+				retainedDocuments[row] = retained
+			}
+		} else {
+			fullDocumentIDs := make([][]byte, len(entries))
+			fullDocuments := make([][]byte, len(entries))
+			for i := range entries {
+				fullDocumentIDs[i] = entries[i].id
+				fullDocuments[i] = entries[i].document
+			}
+			prepared, err = prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(*c.meta.Options.ColumnStore, fullDocumentIDs, fullDocuments, columnRetainedPayloadTemplateResolver(snap, catalog))
+			if err != nil {
+				return nil, err
+			}
+			retainedDocuments = prepared.documents
+			retainedTemplateRecords = prepared.templateRecords
+			retainedSemanticStreamBlocks = prepared.semanticStreamBlocks
+			retainedDeclaredRows = prepared.declaredRows
+			retainedDeclaredRowsReady = prepared.declaredRowsReady
 		}
-		prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(*c.meta.Options.ColumnStore, fullDocumentIDs, fullDocuments, columnRetainedPayloadTemplateResolver(snap, catalog))
-		if err != nil {
-			return nil, err
-		}
-		retainedDocuments = prepared.documents
-		retainedTemplateRecords = prepared.templateRecords
-		retainedSemanticStreamBlocks = prepared.semanticStreamBlocks
-		retainedDeclaredRows = prepared.declaredRows
-		retainedDeclaredRowsReady = prepared.declaredRowsReady
 		stats.RetainedPayloadPrepare = time.Since(phaseStart)
 		stats.RetainedPayloadRows = len(entries)
 		if retainedDeclaredRowsReady {

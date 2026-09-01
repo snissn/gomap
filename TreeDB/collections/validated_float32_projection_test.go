@@ -156,6 +156,82 @@ func TestInsertBatchWithStatsValidatedFloat32ProjectionFailsBeforeCommandWAL(t *
 	})
 }
 
+func TestInsertBatchWithStatsValidatedFloat32ProjectionRetainedJSONFailsBeforeCommandWAL(t *testing.T) {
+	_, d, col := openValidatedFloat32ProjectionCollection(t, 3)
+	defer func() { _ = d.Close() }()
+	ids := [][]byte{[]byte("good")}
+	documents := validatedFloat32ProjectionDocuments(t, ids, [][]float32{{1, 0, 0}})
+	vectors := [][]float32{{1, 0, 0}}
+
+	baseLSN := d.State().AppliedCommandLSN
+	tests := []struct {
+		name     string
+		retained [][]byte
+	}{
+		{name: "row count", retained: [][]byte{}},
+		{name: "id mismatch", retained: [][]byte{[]byte(`{"id":"other"}`)}},
+		{name: "malformed", retained: [][]byte{[]byte(`{"id":"good"`)}},
+		{name: "non object", retained: [][]byte{[]byte(`[]`)}},
+		{name: "declared column present", retained: [][]byte{[]byte(`{"id":"good","embedding":[]}`)}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			projection, err := newTrustedFloat32Projection(ids, documents, "embedding", VectorMetricCosine, vectors, tc.retained)
+			if err == nil {
+				_, err = validateTrustedFloat32ProjectionRetainedJSON(ids, projection)
+			}
+			if err == nil {
+				t.Fatal("trusted retained JSON validation succeeded")
+			}
+			if _, _, err := col.InsertBatchWithStatsValidatedFloat32Projection(
+				ids, documents, "embedding", VectorMetricCosine, vectors, tc.retained,
+			); err == nil {
+				t.Fatal("trusted retained JSON insert succeeded")
+			}
+			if got := d.State().AppliedCommandLSN; got != baseLSN {
+				t.Fatalf("AppliedCommandLSN=%d want unchanged %d", got, baseLSN)
+			}
+			if got, err := col.Get([]byte("good")); err != nil || got != nil {
+				t.Fatalf("rejected document=%s err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestInsertBatchWithStatsValidatedFloat32ProjectionUsesTrustedRetainedJSON(t *testing.T) {
+	_, d, col := openValidatedFloat32ProjectionCollection(t, 3)
+	defer func() { _ = d.Close() }()
+	ids := [][]byte{[]byte("b"), []byte("a")}
+	vectors := [][]float32{{0, 1, 0}, {1, 0, 0}}
+	documents := [][]byte{
+		[]byte(`{"id":"b","content":"second","embedding":[0,1,0],"meta":{"row":2}}`),
+		[]byte(`{"id":"a","content":"first","embedding":[1,0,0],"meta":{"row":1}}`),
+	}
+	retained := [][]byte{
+		[]byte(`{"id":"b","content":"second","meta":{"row":2}}`),
+		[]byte(`{"id":"a","content":"first","meta":{"row":1}}`),
+	}
+	if _, stats, err := col.InsertBatchWithStatsValidatedFloat32Projection(
+		ids, documents, "embedding", VectorMetricCosine, vectors, retained,
+	); err != nil {
+		t.Fatalf("InsertBatchWithStatsValidatedFloat32Projection: %v", err)
+	} else if stats.RetainedPayloadRows != 2 || stats.ColumnPublishValidatedFloat32ProjectionRows != 2 {
+		t.Fatalf("insert stats=%+v want two retained and trusted projection rows", stats)
+	}
+	retained[0][0] = '['
+	for row, id := range ids {
+		got, err := col.Get(id)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", id, err)
+		}
+		var want map[string]any
+		if err := json.Unmarshal(documents[row], &want); err != nil {
+			t.Fatalf("decode expected document: %v", err)
+		}
+		assertJSONMapEqual1875(t, got, want)
+	}
+}
+
 func TestValidateTrustedFloat32ProjectionMetaRejectsSchemaDrift(t *testing.T) {
 	base := CollectionMeta{
 		Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: &ColumnStoreConfig{
@@ -168,7 +244,7 @@ func TestValidateTrustedFloat32ProjectionMetaRejectsSchemaDrift(t *testing.T) {
 		}},
 		VectorIndexes: []VectorIndexDefinition{{Field: "embedding", Dimensions: 3, Metric: VectorMetricCosine, Strategy: VectorIndexStrategyColumnGraph}},
 	}
-	projection, err := newTrustedFloat32Projection([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0,0]}`)}, "embedding", VectorMetricCosine, [][]float32{{1, 0, 0}})
+	projection, err := newTrustedFloat32Projection([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0,0]}`)}, "embedding", VectorMetricCosine, [][]float32{{1, 0, 0}}, nil)
 	if err != nil {
 		t.Fatalf("newTrustedFloat32Projection: %v", err)
 	}
@@ -205,6 +281,38 @@ func TestValidateTrustedFloat32ProjectionMetaRejectsSchemaDrift(t *testing.T) {
 	}
 	if err := applyTrustedFloat32Projection([][]byte{[]byte("a")}, documents, projection); err != nil {
 		t.Fatalf("applyTrustedFloat32Projection: %v", err)
+	}
+	retainedProjection, err := newTrustedFloat32Projection(
+		[][]byte{[]byte("a")}, [][]byte{[]byte(`{"id":"a","embedding":[1,0,0]}`)}, "embedding", VectorMetricCosine, [][]float32{{1, 0, 0}}, [][]byte{[]byte(`{"id":"a"}`)},
+	)
+	if err != nil {
+		t.Fatalf("new trusted retained projection: %v", err)
+	}
+	if err := validateTrustedFloat32ProjectionMeta(base, retainedProjection); err == nil {
+		t.Fatal("trusted retained projection accepted full retained-payload metadata")
+	}
+	nonColumn := copyCollectionMeta(base)
+	nonColumn.Options.ColumnStore.RetainedPayload = ColumnRetainedPayloadNonColumn
+	if err := validateTrustedFloat32ProjectionMeta(nonColumn, retainedProjection); err != nil {
+		t.Fatalf("trusted retained projection rejected exact non-column JSON metadata: %v", err)
+	}
+	implicitEncoding := copyCollectionMeta(nonColumn)
+	implicitEncoding.Options.ColumnStore.RetainedPayloadEncoding = ""
+	if err := validateTrustedFloat32ProjectionMeta(implicitEncoding, retainedProjection); err == nil {
+		t.Fatal("trusted retained projection accepted implicit retained-payload encoding")
+	}
+	nested := copyCollectionMeta(nonColumn)
+	nested.Options.ColumnStore.Columns[0].Name = "embedding.values"
+	nested.Options.ColumnStore.Columns[0].Path = "embedding.values"
+	nested.VectorIndexes[0].Field = "embedding.values"
+	nestedProjection, err := newTrustedFloat32Projection(
+		[][]byte{[]byte("a")}, [][]byte{[]byte(`{"id":"a","embedding":{"values":[1,0,0]}}`)}, "embedding.values", VectorMetricCosine, [][]float32{{1, 0, 0}}, [][]byte{[]byte(`{"id":"a"}`)},
+	)
+	if err != nil {
+		t.Fatalf("new nested trusted retained projection: %v", err)
+	}
+	if err := validateTrustedFloat32ProjectionMeta(nested, nestedProjection); err == nil {
+		t.Fatal("trusted retained projection accepted a nested column")
 	}
 }
 
@@ -299,21 +407,31 @@ func openValidatedFloat32ProjectionCollectionWithPolicy(t testing.TB, dims int, 
 
 func BenchmarkInsertBatchValidatedFloat32ProjectionCohere768RetainedPayload(b *testing.B) {
 	const rowsPerBatch = 32
-	for _, policy := range []ColumnRetainedPayloadPolicy{ColumnRetainedPayloadFull, ColumnRetainedPayloadNonColumn} {
-		policy := policy
-		b.Run(string(policy)+"_json", func(b *testing.B) {
-			_, d, col := openValidatedFloat32ProjectionCollectionWithPolicy(b, 768, policy)
+	for _, benchmark := range []struct {
+		name    string
+		policy  ColumnRetainedPayloadPolicy
+		trusted bool
+	}{
+		{name: "full_json", policy: ColumnRetainedPayloadFull},
+		{name: "non-column_json", policy: ColumnRetainedPayloadNonColumn},
+		{name: "non-column_json_trusted", policy: ColumnRetainedPayloadNonColumn, trusted: true},
+	} {
+		benchmark := benchmark
+		b.Run(benchmark.name, func(b *testing.B) {
+			_, d, col := openValidatedFloat32ProjectionCollectionWithPolicy(b, 768, benchmark.policy)
 			defer func() { _ = d.Close() }()
 			batches := make([]struct {
 				ids       [][]byte
 				documents [][]byte
 				vectors   [][]float32
+				retained  [][]byte
 			}, b.N)
 			var inputBytes int64
 			for batch := range batches {
 				batches[batch].ids = make([][]byte, rowsPerBatch)
 				batches[batch].documents = make([][]byte, rowsPerBatch)
 				batches[batch].vectors = make([][]float32, rowsPerBatch)
+				batches[batch].retained = make([][]byte, rowsPerBatch)
 				for row := range rowsPerBatch {
 					id := fmt.Sprintf("cohere-%d-%d", batch, row)
 					vector := make([]float32, 768)
@@ -327,9 +445,17 @@ func BenchmarkInsertBatchValidatedFloat32ProjectionCohere768RetainedPayload(b *t
 					if err != nil {
 						b.Fatalf("marshal document: %v", err)
 					}
+					retained, err := json.Marshal(map[string]any{
+						"id": id, "content": "cohere shaped retained payload",
+						"meta": map[string]any{"source": "benchmark", "row": batch*rowsPerBatch + row},
+					})
+					if err != nil {
+						b.Fatalf("marshal retained document: %v", err)
+					}
 					batches[batch].ids[row] = []byte(id)
 					batches[batch].documents[row] = raw
 					batches[batch].vectors[row] = vector
+					batches[batch].retained[row] = retained
 					if batch == 0 {
 						inputBytes += int64(len(raw))
 					}
@@ -349,9 +475,17 @@ func BenchmarkInsertBatchValidatedFloat32ProjectionCohere768RetainedPayload(b *t
 			var retainedPrepare time.Duration
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, stats, err := col.InsertBatchWithStatsValidatedFloat32Projection(
-					batches[i].ids, batches[i].documents, "embedding", VectorMetricCosine, batches[i].vectors,
-				)
+				var stats CollectionInsertStats
+				var err error
+				if benchmark.trusted {
+					_, stats, err = col.InsertBatchWithStatsValidatedFloat32Projection(
+						batches[i].ids, batches[i].documents, "embedding", VectorMetricCosine, batches[i].vectors, batches[i].retained,
+					)
+				} else {
+					_, stats, err = col.InsertBatchWithStatsValidatedFloat32Projection(
+						batches[i].ids, batches[i].documents, "embedding", VectorMetricCosine, batches[i].vectors,
+					)
+				}
 				if err != nil {
 					b.Fatalf("InsertBatchWithStatsValidatedFloat32Projection: %v", err)
 				}

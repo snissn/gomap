@@ -44,12 +44,13 @@ type columnWriteDocument struct {
 }
 
 type trustedFloat32Projection struct {
-	column  string
-	metric  VectorMetric
-	vectors [][]float32
+	column       string
+	metric       VectorMetric
+	vectors      [][]float32
+	retainedJSON [][]byte
 }
 
-func newTrustedFloat32Projection(ids, documents [][]byte, column string, metric VectorMetric, vectors [][]float32) (*trustedFloat32Projection, error) {
+func newTrustedFloat32Projection(ids, documents [][]byte, column string, metric VectorMetric, vectors [][]float32, retainedJSON [][]byte) (*trustedFloat32Projection, error) {
 	if column == "" {
 		return nil, errors.New("collections: validated float32 projection column is required")
 	}
@@ -59,6 +60,9 @@ func newTrustedFloat32Projection(ids, documents [][]byte, column string, metric 
 	}
 	if len(ids) != len(documents) || len(vectors) != len(documents) {
 		return nil, fmt.Errorf("collections: validated float32 projection ids=%d documents=%d vectors=%d", len(ids), len(documents), len(vectors))
+	}
+	if retainedJSON != nil && len(retainedJSON) != len(documents) {
+		return nil, fmt.Errorf("collections: validated float32 projection retained JSON=%d documents=%d", len(retainedJSON), len(documents))
 	}
 	owned := make([][]float32, len(vectors))
 	for row := range vectors {
@@ -73,7 +77,7 @@ func newTrustedFloat32Projection(ids, documents [][]byte, column string, metric 
 			return nil, fmt.Errorf("collections: validated float32 projection row %d has zero magnitude for cosine metric", row)
 		}
 	}
-	return &trustedFloat32Projection{column: column, metric: metric, vectors: owned}, nil
+	return &trustedFloat32Projection{column: column, metric: metric, vectors: owned, retainedJSON: retainedJSON}, nil
 }
 
 func validateTrustedFloat32ProjectionMeta(meta CollectionMeta, projection *trustedFloat32Projection) error {
@@ -90,6 +94,12 @@ func validateTrustedFloat32ProjectionMeta(meta CollectionMeta, projection *trust
 	if (cfg.RetainedPayload != ColumnRetainedPayloadFull && cfg.RetainedPayload != ColumnRetainedPayloadNonColumn) ||
 		columnRetainedPayloadEffectiveEncoding(cfg) != ColumnRetainedPayloadEncodingJSON {
 		return errors.New("collections: validated float32 projection requires full or non-column JSON retained payload")
+	}
+	if projection.retainedJSON != nil && (cfg.RetainedPayload != ColumnRetainedPayloadNonColumn || cfg.RetainedPayloadEncoding != ColumnRetainedPayloadEncodingJSON) {
+		return errors.New("collections: validated float32 projection retained JSON requires non-column JSON retained payload")
+	}
+	if projection.retainedJSON != nil && strings.Contains(projection.column, ".") {
+		return errors.New("collections: validated float32 projection retained JSON requires a top-level column")
 	}
 	column := cfg.Columns[0]
 	owner, err := columnStoreColumnOwner(column)
@@ -115,6 +125,39 @@ func validateTrustedFloat32ProjectionMeta(meta CollectionMeta, projection *trust
 		}
 	}
 	return nil
+}
+
+func validateTrustedFloat32ProjectionRetainedJSON(ids [][]byte, projection *trustedFloat32Projection) (map[string][]byte, error) {
+	if projection == nil || projection.retainedJSON == nil {
+		return nil, nil
+	}
+	if len(ids) != len(projection.retainedJSON) {
+		return nil, fmt.Errorf("collections: validated float32 projection ids=%d retained JSON=%d", len(ids), len(projection.retainedJSON))
+	}
+	owned := make(map[string][]byte, len(ids))
+	for row, document := range projection.retainedJSON {
+		trimmed := bytes.TrimSpace(document)
+		if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' || !json.Valid(trimmed) {
+			return nil, fmt.Errorf("collections: validated float32 projection retained JSON row %d must be a valid JSON object", row)
+		}
+		id, err := jsonparser.GetString(trimmed, "id")
+		if err != nil {
+			return nil, fmt.Errorf("collections: validated float32 projection retained JSON row %d id: %w", row, err)
+		}
+		if id != string(ids[row]) {
+			return nil, fmt.Errorf("collections: validated float32 projection retained JSON row %d id=%q want %q", row, id, ids[row])
+		}
+		if _, exists := owned[id]; exists {
+			return nil, fmt.Errorf("collections: validated float32 projection retained JSON duplicate id at row %d", row)
+		}
+		if _, _, _, err := jsonparser.Get(trimmed, projection.column); err == nil {
+			return nil, fmt.Errorf("collections: validated float32 projection retained JSON row %d contains declared column %q", row, projection.column)
+		} else if err != jsonparser.KeyPathNotFoundError {
+			return nil, fmt.Errorf("collections: validated float32 projection retained JSON row %d column %q: %w", row, projection.column, err)
+		}
+		owned[id] = bytes.Clone(trimmed)
+	}
+	return owned, nil
 }
 
 func applyTrustedFloat32Projection(ids [][]byte, documents []columnWriteDocument, projection *trustedFloat32Projection) error {
