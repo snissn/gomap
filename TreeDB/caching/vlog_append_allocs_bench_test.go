@@ -92,6 +92,11 @@ func BenchmarkAppendValueLogOrdinaryBlockPrepared(b *testing.B) {
 		}
 		records[i] = valuelog.Record{RID: uint64(i + 1), Value: value}
 	}
+	warmPtrs, err := db.appendValueLog(&db.lanes[0], 0, nil, records, journalDurabilityNone)
+	if err != nil {
+		b.Fatalf("warm appendValueLog: %v", err)
+	}
+	putValueLogPtrs(warmPtrs)
 
 	b.ReportAllocs()
 	b.SetBytes(valuesPerBatch * valueBytes)
