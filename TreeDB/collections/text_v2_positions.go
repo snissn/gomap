@@ -307,7 +307,10 @@ func (v *textV2PositionValidation) docMapCurrentAtRoot(snap *backenddb.Snapshot,
 	if blockStart == 0 {
 		return false, errMalformedTextStorage("text-v2 invalid position ordinal %d", ordinal)
 	}
-	if v == nil || v.docMap == nil || v.docMap.BlockStart != blockStart {
+	if v == nil {
+		return false, nil
+	}
+	if v.docMap == nil || v.docMap.BlockStart != blockStart {
 		raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, encodeTextV2BlockKey(blockStart), nil)
 		if err != nil || !ok {
 			return false, err
@@ -319,12 +322,7 @@ func (v *textV2PositionValidation) docMapCurrentAtRoot(snap *backenddb.Snapshot,
 		if block.BlockStart != blockStart || block.BlockSize != textV2DefaultDocMapBlockSize {
 			return false, errMalformedTextStorage("text-v2 position docmap block key/value mismatch")
 		}
-		if v != nil {
-			v.docMap = &block
-		}
-	}
-	if v == nil || v.docMap == nil {
-		return false, nil
+		v.docMap = &block
 	}
 	entry, ok := v.docMap.find(ordinal)
 	return ok && !entry.tombstoned() && entry.Generation == generation, nil
