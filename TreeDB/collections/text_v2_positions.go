@@ -357,6 +357,9 @@ func (v *textV2PositionValidation) lookup(term string, ordinal, generation uint6
 }
 
 func validateTextV2PositionEntryAtSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, key []byte, value textV2PositionValue, status textV2IndexStatusValue, validation *textV2PositionValidation) error {
+	if catalog == nil {
+		return errCollectionNotFound
+	}
 	ordinal, term, err := decodeTextV2PositionKey(key)
 	if err != nil {
 		return err
