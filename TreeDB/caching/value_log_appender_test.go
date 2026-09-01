@@ -340,6 +340,7 @@ func TestCachingValueLogAppenderPreparedOrdinaryBlockFramesPreserveOrderAfterReo
 		JournalLanes:                       1,
 		ValueLogCompression:                uint8(vlogCompressionBlock),
 		ValueLogBlockTargetCompressedBytes: 256,
+		ValueLogGenerationPolicy:           uint8(backenddb.ValueLogGenerationOff),
 	})
 	if err != nil {
 		_ = backend.Close()
@@ -405,7 +406,10 @@ func TestCachingValueLogAppenderPreparedOrdinaryBlockFramesPreserveOrderAfterReo
 	if err != nil {
 		t.Fatalf("reopen backend: %v", err)
 	}
-	reopened, err := Open(dir, reopenedBackend, Options{JournalLanes: 1})
+	reopened, err := Open(dir, reopenedBackend, Options{
+		JournalLanes:             1,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationOff),
+	})
 	if err != nil {
 		_ = reopenedBackend.Close()
 		t.Fatalf("reopen cache: %v", err)
