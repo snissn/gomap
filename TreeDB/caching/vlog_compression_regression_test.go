@@ -832,8 +832,11 @@ func TestAppendValueLog_PreparedProbeResetsWriterBackoff(t *testing.T) {
 	if _, err := db.appendValueLog(&db.lanes[0], 0, nil, probeRecords, journalDurabilityFlush); err != nil {
 		t.Fatalf("append prepared probe: %v", err)
 	}
-	if db.lanes[0].vlogPrepWorkers < 2 {
-		t.Fatalf("prepared probe workers=%d, want at least 2", db.lanes[0].vlogPrepWorkers)
+	db.lanes[0].vlogPrepMu.Lock()
+	prepWorkers := db.lanes[0].vlogPrepWorkers
+	db.lanes[0].vlogPrepMu.Unlock()
+	if prepWorkers < 2 {
+		t.Fatalf("prepared probe workers=%d, want at least 2", prepWorkers)
 	}
 
 	db.valueLogCompressionMode = uint8(vlogCompressionBlock)
