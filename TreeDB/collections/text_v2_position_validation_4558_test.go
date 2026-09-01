@@ -46,8 +46,14 @@ func TestTextV2StorageStatsPositionValidationUsesPostingTableAndDocMapBlockCache
 		if err := inspectTextV2Root(snap, catalog, def, collectionTextV2PostingBlocksRootName("docs", "lexical"), textV2RootFamilyPostingBlocks, status, &stats, nil, postings); err != nil {
 			t.Fatalf("inspect posting root: %v", err)
 		}
-		if got, want := len(postings.postings), 2*documents; got != want {
-			t.Fatalf("posting table entries=%d want %d", got, want)
+		if got, want := len(postings.postings), 2; got != want {
+			t.Fatalf("posting table terms=%d want %d", got, want)
+		}
+		if got, want := len(postings.postings["shared"].entries), documents; got != want {
+			t.Fatalf("shared posting entries=%d want %d", got, want)
+		}
+		if got, want := len(postings.postings["phrase"].entries), documents; got != want {
+			t.Fatalf("phrase posting entries=%d want %d", got, want)
 		}
 		positionStats := TextIndexStorageStats{Version: TextIndexVersionV2}
 		if err := inspectTextV2Root(snap, catalog, def, collectionTextV2PositionsRootName("docs", "lexical"), textV2RootFamilyPositions, status, &positionStats, nil, postings); err != nil {
@@ -91,6 +97,47 @@ func TestTextV2PositionPostingValidationDefersDuplicateFailure4558(t *testing.T)
 	}
 }
 
+func TestTextV2PositionPostingValidationKeepsDistinctGenerations4564(t *testing.T) {
+	postings := newTextV2PositionValidation()
+	first := textV2PostingBlockEntry{Ordinal: 7, Generation: 3, TermFrequency: 1, FieldFrequencies: []uint32{1}}
+	second := textV2PostingBlockEntry{Ordinal: 7, Generation: 4, TermFrequency: 2, FieldFrequencies: []uint32{2}}
+	if err := postings.add("shared", first, 1); err != nil {
+		t.Fatalf("first add: %v", err)
+	}
+	if err := postings.add("shared", second, 1); err != nil {
+		t.Fatalf("second generation add: %v", err)
+	}
+	if err := postings.add("shared", first, 1); err != nil {
+		t.Fatalf("duplicate add: %v", err)
+	}
+	if posting, found, duplicate := postings.lookup("shared", first.Ordinal, first.Generation); !found || !duplicate || posting.fieldFrequency(0) != 1 {
+		t.Fatalf("first generation found=%v duplicate=%v frequency=%d", found, duplicate, posting.fieldFrequency(0))
+	}
+	if posting, found, duplicate := postings.lookup("shared", second.Ordinal, second.Generation); !found || duplicate || posting.fieldFrequency(0) != 2 {
+		t.Fatalf("second generation found=%v duplicate=%v frequency=%d", found, duplicate, posting.fieldFrequency(0))
+	}
+}
+
+func TestTextV2PositionPostingValidationKeepsSingletonTermsInline4565(t *testing.T) {
+	postings := newTextV2PositionValidation()
+	const terms = 128
+	for i := range terms {
+		term := fmt.Sprintf("term-%03d", i)
+		entry := textV2PostingBlockEntry{Ordinal: uint64(i + 1), Generation: 1, TermFrequency: 1, FieldFrequencies: []uint32{1}}
+		if err := postings.add(term, entry, 1); err != nil {
+			t.Fatalf("add %q: %v", term, err)
+		}
+	}
+	if got := len(postings.postings); got != terms {
+		t.Fatalf("posting terms=%d want %d", got, terms)
+	}
+	for term, partition := range postings.postings {
+		if partition.entries != nil {
+			t.Fatalf("singleton term %q allocated inner map", term)
+		}
+	}
+}
+
 func TestTextV2StorageStatsEmptyPositionsKeepsDocMapCacheEmpty4560(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
@@ -130,6 +177,27 @@ func BenchmarkTextV2StorageStatsPositionValidation4558(b *testing.B) {
 	for i := range ids {
 		ids[i] = []byte(fmt.Sprintf("doc-%04d", i))
 		docs[i] = []byte(`{"body":"shared phrase"}`)
+	}
+	def := TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, StorePositions: true, Fields: []TextIndexField{{Field: "body"}}}
+	col := createTextSearchCollection2627(b, d, "docs", def, ids, docs)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := col.TextIndexStorageStats("lexical"); err != nil {
+			b.Fatalf("TextIndexStorageStats: %v", err)
+		}
+	}
+}
+
+func BenchmarkTextV2StorageStatsPositionValidationHighCardinality4565(b *testing.B) {
+	const documents = 1024
+	d := openTextV2TestDB(b, b.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	ids := make([][]byte, documents)
+	docs := make([][]byte, documents)
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("doc-%04d", i))
+		docs[i] = []byte(fmt.Sprintf(`{"body":"term%04d"}`, i))
 	}
 	def := TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, StorePositions: true, Fields: []TextIndexField{{Field: "body"}}}
 	col := createTextSearchCollection2627(b, d, "docs", def, ids, docs)
