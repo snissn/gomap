@@ -7,7 +7,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-func TestTextV2StorageStatsPositionValidationUsesPostingTable4558(t *testing.T) {
+func TestTextV2StorageStatsPositionValidationUsesScanTables4558(t *testing.T) {
 	const documents = 128
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
@@ -26,6 +26,13 @@ func TestTextV2StorageStatsPositionValidationUsesPostingTable4558(t *testing.T) 
 			t.Fatalf("read status ok=%v err=%v", ok, err)
 		}
 		postings := newTextV2PositionPostingValidation()
+		docMapStats := TextIndexStorageStats{Version: TextIndexVersionV2}
+		if err := inspectTextV2Root(snap, catalog, def, collectionTextV2DocMapRootName("docs", "lexical"), textV2RootFamilyDocMap, status, &docMapStats, nil, postings); err != nil {
+			t.Fatalf("inspect docmap root: %v", err)
+		}
+		if got, want := len(postings.docMaps), documents; got != want {
+			t.Fatalf("docmap table entries=%d want %d", got, want)
+		}
 		stats := TextIndexStorageStats{Version: TextIndexVersionV2}
 		if err := inspectTextV2Root(snap, catalog, def, collectionTextV2PostingBlocksRootName("docs", "lexical"), textV2RootFamilyPostingBlocks, status, &stats, nil, postings); err != nil {
 			t.Fatalf("inspect posting root: %v", err)
