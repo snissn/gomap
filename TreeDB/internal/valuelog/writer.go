@@ -2380,8 +2380,11 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 		return writeRaw(false, 0)
 	}
 
+	// EncodeAllParts starts a Zstd block for each record; stream eligible parts
+	// instead so grouped payloads retain normal cross-record block formation.
+	useNoCopyParts := w.blockCodec == BlockCodecZSTD && shouldUseEncodeAllParts(records, rawPayloadBytes)
 	payload := records[0].Value
-	if k > 1 {
+	if k > 1 && !useNoCopyParts {
 		if cap(w.rawScratch) < rawPayloadBytes {
 			w.rawScratch = make([]byte, rawPayloadBytes)
 		}
@@ -2393,9 +2396,48 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 	}
 
 	encodeStart := w.sampleEncodeStart()
-	encoded, encodeErr := encodeBlockPayloadWithScratch(w.blockCodec, payload, w.blockScratch[:0], &w.blockCodecScratch)
+	var (
+		encoded      []byte
+		encodedFrame []byte
+		encodeErr    error
+	)
+	if useNoCopyParts {
+		enc, err := getBlockZstdEncoder()
+		if err != nil {
+			encodeErr = err
+		} else {
+			prefixLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4)
+			encodedStart := HeaderSize + prefixLen
+			maxRecordLen := encodedStart + enc.MaxEncodedSize(rawPayloadBytes)
+			if cap(w.scratch) < maxRecordLen {
+				w.scratch = make([]byte, encodedStart, maxRecordLen)
+			} else {
+				w.scratch = w.scratch[:encodedStart]
+			}
+			w.encLimiter.buf = w.scratch
+			w.encLimiter.limit = encodedStart + rawPayloadBytes - 1
+			enc.ResetContentSize(&w.encLimiter, int64(rawPayloadBytes))
+			for i := range records {
+				if _, encodeErr = enc.Write(records[i].Value); encodeErr != nil {
+					break
+				}
+			}
+			if encodeErr == nil {
+				encodeErr = enc.Close()
+			}
+			encodedFrame = w.encLimiter.buf
+			w.encLimiter.buf = nil
+			w.encLimiter.limit = 0
+			putBlockZstdEncoder(enc)
+			if encodeErr == nil {
+				encoded = encodedFrame[encodedStart:]
+			}
+		}
+	} else {
+		encoded, encodeErr = encodeBlockPayloadWithScratch(w.blockCodec, payload, w.blockScratch[:0], &w.blockCodecScratch)
+	}
 	encodeNs := w.sampleEncodeEnd(encodeStart, rawPayloadBytes, k)
-	if encoded != nil {
+	if encoded != nil && !useNoCopyParts {
 		w.blockScratch = encoded[:0]
 	}
 	keepCompressed := false
@@ -2432,10 +2474,16 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 
 	recordLen := HeaderSize + bodyLen
 	start := w.size
-	if cap(w.scratch) < recordLen {
-		w.scratch = make([]byte, recordLen)
+	var buf []byte
+	if encodedFrame != nil {
+		buf = encodedFrame
+		w.scratch = encodedFrame
+	} else {
+		if cap(w.scratch) < recordLen {
+			w.scratch = make([]byte, recordLen)
+		}
+		buf = w.scratch[:recordLen]
 	}
-	buf := w.scratch[:recordLen]
 	buf[4] = Version
 	buf[5] = recordFlagGrouped
 	buf[6] = 0
@@ -2458,7 +2506,9 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 		binary.LittleEndian.PutUint32(buf[frameOff:frameOff+4], offsets[i])
 		frameOff += 4
 	}
-	copy(buf[frameOff:], encoded)
+	if encodedFrame == nil {
+		copy(buf[frameOff:], encoded)
+	}
 
 	sum := crc.ChecksumParts(buf[4:HeaderSize], buf[HeaderSize:])
 	binary.LittleEndian.PutUint32(buf[0:4], sum)
