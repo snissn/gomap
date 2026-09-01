@@ -1286,7 +1286,6 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 				if textV2OrdinalBlockStart(entry.Ordinal, block.BlockSize) != block.BlockStart {
 					return errMalformedTextStorage("text-v2 docmap entry ordinal %d belongs to a different block", entry.Ordinal)
 				}
-				positionValidation.addDocMap(entry)
 			}
 			stats.V2DocMapBlocks++
 		case family == textV2RootFamilyNormBlocks:
@@ -1399,7 +1398,7 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 			if err != nil {
 				return err
 			}
-			if err := validateTextV2PositionEntryAtSnapshot(def, key, position, status, positionValidation); err != nil {
+			if err := validateTextV2PositionEntryAtSnapshot(snap, catalog, def, key, position, status, positionValidation); err != nil {
 				return err
 			}
 			stats.V2PositionEntries++
