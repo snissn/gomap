@@ -3367,9 +3367,15 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 			return post, prePublishErr(err)
 		}
 		if valueLogAppender != nil {
-			path, fileID, ok := valueLogAppender.CurrentValueLogSegment()
-			if ok && path != "" && fileID != 0 {
-				if _, err := db.ensureValueLogSegmentRegisteredAt(path, fileID); err != nil {
+			segments, err := valueLogAppenderCurrentSegments(valueLogAppender)
+			if err != nil {
+				return post, prePublishErr(err)
+			}
+			for _, segment := range segments {
+				if segment.Path == "" || segment.FileID == 0 {
+					continue
+				}
+				if _, err := db.ensureValueLogSegmentRegisteredAt(segment.Path, segment.FileID); err != nil {
 					return post, prePublishErr(err)
 				}
 			}

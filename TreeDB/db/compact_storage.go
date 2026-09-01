@@ -1456,7 +1456,10 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 		return debt, err
 	}
 	if !opts.DisableZeroByteValueLogCleanup {
-		currentPaths, currentIDs := db.currentValueLogProtectedRefs()
+		currentPaths, currentIDs, err := db.currentValueLogProtectedRefs()
+		if err != nil {
+			return debt, err
+		}
 		allProtectedPaths := mergeUniqueNonEmptyPaths(protectedPaths, currentPaths)
 		zeroBytes, err := zeroByteValueLogFilesFromUsage(usage, allProtectedPaths, currentIDs)
 		if err != nil {
@@ -1890,7 +1893,10 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		}
 		return 0, err
 	}
-	currentPaths, currentIDs := db.currentValueLogProtectedRefs()
+	currentPaths, currentIDs, err := db.currentValueLogProtectedRefs()
+	if err != nil {
+		return 0, err
+	}
 	protectedPaths = mergeUniqueNonEmptyPaths(protectedPaths, currentPaths)
 	protected := compactStorageProtectedPathSet(protectedPaths)
 	protectedFileIDs := compactStorageProtectedFileIDSet(protectedPaths, currentIDs)
@@ -2007,9 +2013,9 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 	return deleted, nil
 }
 
-func (db *DB) currentValueLogProtectedRefs() ([]string, []uint32) {
+func (db *DB) currentValueLogProtectedRefs() ([]string, []uint32, error) {
 	if db == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var fileIDs []uint32
 	if db.valueLogManager != nil {
@@ -2017,17 +2023,22 @@ func (db *DB) currentValueLogProtectedRefs() ([]string, []uint32) {
 	}
 	appender := db.currentValueLogAppender()
 	if appender == nil {
-		return nil, fileIDs
+		return nil, fileIDs, nil
 	}
-	path, fileID, ok := appender.CurrentValueLogSegment()
-	var paths []string
-	if ok && path != "" {
-		paths = []string{path}
+	segments, err := valueLogAppenderCurrentSegments(appender)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list current value-log appender segments: %w", err)
 	}
-	if ok && fileID != 0 {
-		fileIDs = append(fileIDs, fileID)
+	paths := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		if segment.Path != "" {
+			paths = append(paths, segment.Path)
+		}
+		if segment.FileID != 0 {
+			fileIDs = append(fileIDs, segment.FileID)
+		}
 	}
-	return paths, fileIDs
+	return paths, fileIDs, nil
 }
 
 func zeroByteValueLogSegmentFiles(dir string, protectedPaths []string, protectedFileIDs []uint32) (int, error) {

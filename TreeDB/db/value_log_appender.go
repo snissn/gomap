@@ -26,6 +26,32 @@ type ValueLogAppender interface {
 	CurrentValueLogSegment() (path string, fileID uint32, ok bool)
 }
 
+// ValueLogAppenderSegment identifies a currently writable value-log segment.
+type ValueLogAppenderSegment struct {
+	Path   string
+	FileID uint32
+}
+
+// ValueLogAppenderCurrentSegmentProvider optionally reports every currently
+// writable segment owned by a multi-lane appender.
+type ValueLogAppenderCurrentSegmentProvider interface {
+	CurrentValueLogSegmentsSnapshot() ([]ValueLogAppenderSegment, error)
+}
+
+func valueLogAppenderCurrentSegments(appender ValueLogAppender) ([]ValueLogAppenderSegment, error) {
+	if appender == nil {
+		return nil, nil
+	}
+	if provider, ok := appender.(ValueLogAppenderCurrentSegmentProvider); ok {
+		return provider.CurrentValueLogSegmentsSnapshot()
+	}
+	path, fileID, ok := appender.CurrentValueLogSegment()
+	if !ok || path == "" || fileID == 0 {
+		return nil, nil
+	}
+	return []ValueLogAppenderSegment{{Path: path, FileID: fileID}}, nil
+}
+
 // ValueLogRecordReader is an optional appender extension used by native-root
 // callers that must read an appended pointer before its root is published.
 type ValueLogRecordReader interface {
