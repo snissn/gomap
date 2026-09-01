@@ -49,6 +49,25 @@ func TestCollectionIndexedAsyncPublishFailureRequeuesUnitsAndPreservesUniqueRese
 		t.Fatal("prepare async publish returned nil work")
 	}
 	defer collectionTestCloseIndexedFlushWork(work)
+	const transientRoot = "test:transient"
+	work.flushUnit.rootRuns[transientRoot] = nil
+	work.flushUnit.rootPolicies[transientRoot] = 0
+	work.flushUnit.rootBaseIDs[transientRoot] = 1
+	work.flushUnit.uniqueValueRuns[transientRoot] = nil
+	col.writeDomain.mu.RLock()
+	claimed := col.writeDomain.indexedPublishingUnits[0]
+	_, rootRunsShared := claimed.rootRuns[transientRoot]
+	_, rootPoliciesShared := claimed.rootPolicies[transientRoot]
+	_, rootBaseIDsShared := claimed.rootBaseIDs[transientRoot]
+	_, uniqueRunsShared := claimed.uniqueValueRuns[transientRoot]
+	col.writeDomain.mu.RUnlock()
+	if rootRunsShared || rootPoliciesShared || rootBaseIDsShared || uniqueRunsShared {
+		t.Fatal("prepared publication shares mutable maps with claimed FIFO unit")
+	}
+	delete(work.flushUnit.rootRuns, transientRoot)
+	delete(work.flushUnit.rootPolicies, transientRoot)
+	delete(work.flushUnit.rootBaseIDs, transientRoot)
+	delete(work.flushUnit.uniqueValueRuns, transientRoot)
 
 	if _, err := col.InsertBatch(
 		[][]byte{[]byte("u2")},
