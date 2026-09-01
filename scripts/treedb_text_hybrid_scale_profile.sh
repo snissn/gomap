@@ -110,7 +110,7 @@ run_matrix() {
     db_before=$(awk -F'db_bytes_before=' '/db_bytes_before=/{print $2}' "$phase_dir/phase.log" | awk '{print $1}' | tail -1)
     db_after=$(awk -F'db_bytes_after=' '/db_bytes_after=/{print $2}' "$phase_dir/phase.log" | tail -1)
     db_filesystem=$(sed -n 's/.* db_filesystem=\([^ ]*\) db_mount=.*/\1/p' "$phase_dir/phase.log" | tail -1)
-    db_mount=$(sed -n 's/.* db_filesystem=[^ ]* db_mount=\([^ ]*\).*/\1/p' "$phase_dir/phase.log" | tail -1)
+    db_mount=$(sed -n 's/.* db_filesystem=[^ ]* db_mount=\(.*\)$/\1/p' "$phase_dir/phase.log" | tail -1)
     measured_seconds=$(awk -F'measured_seconds=' '/measured_seconds=/{print $2}' "$phase_dir/phase.log" | awk '{print $1}' | tail -1)
     test_rows=$(sed -n 's/.* rows=\([0-9][0-9]*\) setup_complete=.*/\1/p' "$phase_dir/phase.log" | tail -1)
     printf 'phase=%s\nmatrix_rows=%s\ntest_rows=%s\nsetup=logged before measured boundary\nmeasured_seconds=%s\nprocess_elapsed_seconds=%s\ndb_bytes_before=%s\ndb_bytes_after=%s\ndb_filesystem=%s\ndb_mount=%s\nartifact_kib_before=%s\nartifact_kib_after=%s\n' "$phase" "$rows" "$test_rows" "$measured_seconds" "$elapsed" "$db_before" "$db_after" "$db_filesystem" "$db_mount" "$artifact_before" "$artifact_after" > "$phase_dir/observations.txt"

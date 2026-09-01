@@ -1037,6 +1037,19 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if err != nil || !strings.Contains(string(command), "TREEDB_TEXT_PROFILE_ROWS=10000") {
 		t.Fatalf("dry-run command=%q err=%v", command, err)
 	}
+	mountGoDir := t.TempDir()
+	mountGo := filepath.Join(mountGoDir, "go")
+	if err := os.WriteFile(mountGo, []byte("#!/bin/sh\nif [ \"$1\" = version ]; then echo 'go version go1.0 test'; exit 0; fi\necho 'phase=load rows=10000 setup_complete=true measured_boundary_starts_now db_bytes_before=0 db_filesystem=/dev/test db_mount=/Volumes/Fast Disk'\necho 'phase=load rows=10000 measured_seconds=0.001 db_bytes_after=1'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mountRun := t.TempDir()
+	if output, err := run("RUN_DIR="+mountRun, "PHASES=load", "PATH="+mountGoDir+string(os.PathListSeparator)+os.Getenv("PATH")); err != nil || !strings.Contains(string(output), "artifacts:") {
+		t.Fatalf("mount parsing run err=%v output=%s", err, output)
+	}
+	mountObservations, err := os.ReadFile(filepath.Join(mountRun, "10000", "load", "observations.txt"))
+	if err != nil || !strings.Contains(string(mountObservations), "db_mount=/Volumes/Fast Disk\n") {
+		t.Fatalf("mount observations=%q err=%v", mountObservations, err)
+	}
 	betweenPhaseSource := filepath.Join(cleanCheckout, "cmd", "treedb_text_hybrid_scale", "manual_profile_between_phase_4546.go")
 	fakeGoDir := t.TempDir()
 	fakeGo := filepath.Join(fakeGoDir, "go")
