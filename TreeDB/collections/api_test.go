@@ -2683,8 +2683,8 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	if stats.IndexedFlushBytes == 0 || stats.IndexedFlushRootRuns == 0 || stats.IndexedFlushRoots == 0 {
 		t.Fatalf("stats indexed flush bytes/root-runs/roots=%d/%d/%d want positive", stats.IndexedFlushBytes, stats.IndexedFlushRootRuns, stats.IndexedFlushRoots)
 	}
-	if stats.IndexedFlushDuration <= 0 || stats.IndexedFlushMaterialize <= 0 || stats.IndexedFlushPublish <= 0 {
-		t.Fatalf("stats indexed flush duration/materialize/publish=%s/%s/%s want positive", stats.IndexedFlushDuration, stats.IndexedFlushMaterialize, stats.IndexedFlushPublish)
+	if stats.IndexedFlushDuration <= 0 || stats.IndexedFlushMaterialize <= 0 || stats.IndexedFlushPointerize <= 0 || stats.IndexedFlushPublish <= 0 {
+		t.Fatalf("stats indexed flush duration/materialize/pointerize/publish=%s/%s/%s/%s want positive", stats.IndexedFlushDuration, stats.IndexedFlushMaterialize, stats.IndexedFlushPointerize, stats.IndexedFlushPublish)
 	}
 	if stats.RootDeltaPlanPrimaryRoots == 0 || stats.RootDeltaPlanSecondaryRoots == 0 || stats.RootDeltaPlanEntries == 0 {
 		t.Fatalf("stats root delta primary/secondary/entries=%d/%d/%d want positive", stats.RootDeltaPlanPrimaryRoots, stats.RootDeltaPlanSecondaryRoots, stats.RootDeltaPlanEntries)
@@ -2698,6 +2698,7 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 		"treedb.collections.write_domain.indexed_flush.forced_drains_total",
 		"treedb.collections.write_domain.indexed_flush.duration_ns_total",
 		"treedb.collections.write_domain.indexed_flush.materialize_ns_total",
+		"treedb.collections.write_domain.indexed_flush.pointerize_ns_total",
 		"treedb.collections.write_domain.indexed_flush.publish_ns_total",
 		"treedb.collections.write_domain.root_delta_plan.roots.primary_total",
 		"treedb.collections.write_domain.root_delta_plan.roots.template_total",

@@ -2680,6 +2680,122 @@ func TestCollectionCommandWALAsyncFlushWorkCarriesIndexedInterval(t *testing.T) 
 	}
 }
 
+func TestCollectionCommandWALAsyncFlushClaimsOneQueuedUnit(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:                   DocumentFormatBSON,
+			BufferedIndexedWrites:            true,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	for _, id := range []string{"u1", "u2"} {
+		if _, err := col.InsertBatch(
+			[][]byte{[]byte(id)},
+			[][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "email", Value: id + "@example.test"}})},
+		); err != nil {
+			t.Fatalf("InsertBatch %s: %v", id, err)
+		}
+		col.writeDomain.mu.Lock()
+		if !rotateIndexedMutableToFlushUnitForAsyncLocked(col.writeDomain) {
+			col.writeDomain.mu.Unlock()
+			t.Fatalf("rotate indexed mutable unit for %s returned false", id)
+		}
+		col.writeDomain.mu.Unlock()
+	}
+
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil || work == nil {
+		t.Fatalf("prepareIndexedAsyncPublish work=%v err=%v", work != nil, err)
+	}
+	defer func() {
+		if work.pin != nil {
+			_ = work.pin.Close()
+		}
+	}()
+	if got := len(work.units); got != 1 {
+		t.Fatalf("claimed units=%d want 1", got)
+	}
+	if got := work.commandWALLast; got != 1 {
+		t.Fatalf("claimed command WAL last=%d want first unit 1", got)
+	}
+	col.writeDomain.mu.RLock()
+	queued := append([]indexedFlushUnit(nil), col.writeDomain.indexedFlushUnits...)
+	publishing := append([]indexedFlushUnit(nil), col.writeDomain.indexedPublishingUnits...)
+	col.writeDomain.mu.RUnlock()
+	if got := len(publishing); got != 1 {
+		t.Fatalf("publishing units=%d want 1", got)
+	}
+	if got := len(queued); got != 1 {
+		t.Fatalf("queued units=%d want 1", got)
+	}
+	if got := queued[0].commandWALFirst; got != 2 {
+		t.Fatalf("queued command WAL first=%d want 2", got)
+	}
+	if err := col.completePreparedIndexedFlush(work, 0, nil, errors.New("requeue for test"), 0, 0, 0); err == nil {
+		t.Fatal("completePreparedIndexedFlush requeue error=nil")
+	}
+}
+
+func TestCollectionCommandWALAsyncFlushEmptyHeadRetainsQueuedTail(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:                   DocumentFormatBSON,
+			BufferedIndexedWrites:            true,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "email", Value: "u1@example.test"}})},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	domain := col.writeDomain
+	domain.mu.Lock()
+	if !rotateIndexedMutableToFlushUnitForAsyncLocked(domain) {
+		domain.mu.Unlock()
+		t.Fatal("rotate indexed mutable unit returned false")
+	}
+	domain.indexedFlushUnits = append([]indexedFlushUnit{{}}, domain.indexedFlushUnits...)
+	domain.mu.Unlock()
+
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil || work != nil {
+		t.Fatalf("empty-head prepare work=%v err=%v", work != nil, err)
+	}
+	work, err = col.prepareIndexedAsyncPublish()
+	if err != nil || work == nil {
+		t.Fatalf("tail prepare work=%v err=%v", work != nil, err)
+	}
+	defer func() {
+		if work.pin != nil {
+			_ = work.pin.Close()
+		}
+	}()
+	if got := work.commandWALLast; got != 1 {
+		t.Fatalf("tail command WAL last=%d want 1", got)
+	}
+	if err := col.completePreparedIndexedFlush(work, 0, nil, errors.New("requeue for test"), 0, 0, 0); err == nil {
+		t.Fatal("completePreparedIndexedFlush requeue error=nil")
+	}
+}
+
 func TestCollectionCommandWALUpdateBSONSetUniqueIndexReopenRecovery(t *testing.T) {
 	doc1 := mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}, {Key: "city", Value: "hnl"}})
 	doc2 := mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Grace"}, {Key: "city", Value: "nyc"}})

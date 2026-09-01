@@ -996,6 +996,7 @@ type CollectionManagerStats struct {
 	IndexedFlushRoots                  uint64
 	IndexedFlushDuration               time.Duration
 	IndexedFlushMaterialize            time.Duration
+	IndexedFlushPointerize             time.Duration
 	IndexedFlushPublish                time.Duration
 	RootDeltaPlanPrimaryRoots          uint64
 	RootDeltaPlanTemplateRoots         uint64
@@ -1343,6 +1344,7 @@ type indexedFlushPublishWork struct {
 	rootDeltaStats     collectionRootDeltaPlanStats
 	commandWALFirst    uint64
 	commandWALLast     uint64
+	pointerizeElapsed  time.Duration
 	commandWALApplied  uint64
 }
 
@@ -1557,6 +1559,7 @@ type collectionWriteDomain struct {
 	indexedFlushRoots                  atomic.Uint64
 	indexedFlushDurationTotalNs        atomic.Uint64
 	indexedFlushMaterializeTotalNs     atomic.Uint64
+	indexedFlushPointerizeTotalNs      atomic.Uint64
 	indexedFlushPublishTotalNs         atomic.Uint64
 	rootDeltaPlanPrimaryRoots          atomic.Uint64
 	rootDeltaPlanTemplateRoots         atomic.Uint64
@@ -1900,6 +1903,7 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.indexed_flush.roots_total"] = fmt.Sprintf("%d", stats.IndexedFlushRoots)
 	out["treedb.collections.write_domain.indexed_flush.duration_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushDuration.Nanoseconds())
 	out["treedb.collections.write_domain.indexed_flush.materialize_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushMaterialize.Nanoseconds())
+	out["treedb.collections.write_domain.indexed_flush.pointerize_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushPointerize.Nanoseconds())
 	out["treedb.collections.write_domain.indexed_flush.publish_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushPublish.Nanoseconds())
 	out["treedb.collections.write_domain.root_delta_plan.roots.primary_total"] = fmt.Sprintf("%d", stats.RootDeltaPlanPrimaryRoots)
 	out["treedb.collections.write_domain.root_delta_plan.roots.template_total"] = fmt.Sprintf("%d", stats.RootDeltaPlanTemplateRoots)
@@ -2198,6 +2202,7 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.IndexedFlushRoots += other.IndexedFlushRoots
 	s.IndexedFlushDuration += other.IndexedFlushDuration
 	s.IndexedFlushMaterialize += other.IndexedFlushMaterialize
+	s.IndexedFlushPointerize += other.IndexedFlushPointerize
 	s.IndexedFlushPublish += other.IndexedFlushPublish
 	s.RootDeltaPlanPrimaryRoots += other.RootDeltaPlanPrimaryRoots
 	s.RootDeltaPlanTemplateRoots += other.RootDeltaPlanTemplateRoots
@@ -2339,6 +2344,7 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.IndexedFlushRoots = domain.indexedFlushRoots.Load()
 	stats.IndexedFlushDuration = durationFromAtomicNs(domain.indexedFlushDurationTotalNs.Load())
 	stats.IndexedFlushMaterialize = durationFromAtomicNs(domain.indexedFlushMaterializeTotalNs.Load())
+	stats.IndexedFlushPointerize = durationFromAtomicNs(domain.indexedFlushPointerizeTotalNs.Load())
 	stats.IndexedFlushPublish = durationFromAtomicNs(domain.indexedFlushPublishTotalNs.Load())
 	stats.RootDeltaPlanPrimaryRoots = domain.rootDeltaPlanPrimaryRoots.Load()
 	stats.RootDeltaPlanTemplateRoots = domain.rootDeltaPlanTemplateRoots.Load()
@@ -9145,7 +9151,10 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	if err = domain.validateIndexedFlushUnitCommandWALOwnershipLocked(); err != nil {
 		return nil, err
 	}
-	units := domain.indexedFlushUnits
+	// Claim one FIFO unit at a time. Preparation can be expensive (notably
+	// value-log pointerization), so claiming the entire queued tail turns a
+	// bounded async flush into one long, non-relinquishable drain.
+	units := domain.indexedFlushUnits[:1]
 	flushUnit := mergedIndexedFlushUnits(units)
 	rootNames := orderedBufferedRootNames(meta, flushUnit.rootRuns)
 	if hasIndexedFlushUnitPrimaryOverlay(units) {
@@ -9154,17 +9163,19 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	if len(rootNames) == 0 {
 		_ = pin.Close()
 		work.pin = nil
-		domain.indexedFlushUnits = nil
-		domain.rootMutableRuns = nil
-		domain.rootValueArenas = nil
-		domain.primaryOverlay = nil
-		domain.columnDocuments = nil
-		domain.count = 0
-		domain.indexedDeletesOnly = false
-		domain.bufferedBytes = 0
-		domain.mutableCount = 0
-		domain.mutableBytes = 0
-		domain.primaryWriteIndex = nil
+		// FIFO preparation may encounter an empty/delete-only unit ahead of
+		// later queued or mutable work. Retire only that unit; clearing the
+		// whole domain would drop the tail now that async preparation is bounded.
+		emptyUnit := domain.indexedFlushUnits[0]
+		domain.indexedFlushUnits = domain.indexedFlushUnits[1:]
+		domain.count = subtractNonNegativeInt(domain.count, emptyUnit.docCount)
+		domain.bufferedBytes = subtractNonNegativeInt64(domain.bufferedBytes, emptyUnit.byteCount)
+		resetIndexedFlushUnits([]indexedFlushUnit{emptyUnit})
+		rebuildBufferedPendingIndexesLocked(domain, meta.Name, domain.primaryRunIndex != nil)
+		if domain.count == 0 && !hasBufferedIndexedPendingWrites(domain) {
+			domain.indexedDeletesOnly = false
+			domain.primaryWriteIndex = nil
+		}
 		return nil, nil
 	}
 	rootBaseIDs := make(map[string]uint64, len(rootNames))
@@ -9193,7 +9204,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	work.commandWALLast = flushUnit.commandWALLast
 
 	domain.indexedPublishingUnits = append(domain.indexedPublishingUnits, units...)
-	domain.indexedFlushUnits = nil
+	domain.indexedFlushUnits = domain.indexedFlushUnits[1:]
 	domain.writeGeneration++
 	return work, nil
 }
@@ -9332,7 +9343,9 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			}
 		}()
 	}
+	pointerizeStart := time.Now()
 	publishRootRuns, cleanupPointerizedRuns, err := pointerizeCollectionRootRunMapValues(c.db, work.meta, work.flushUnit.rootRuns)
+	work.pointerizeElapsed = collectionObservedElapsedSince(pointerizeStart)
 	if err != nil {
 		return c.completePreparedIndexedFlush(work, 0, nil, err, overlayMaterializeElapsed, overlayMaterializeElapsed, 0)
 	}
@@ -9824,6 +9837,7 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	domain := c.writeDomain
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
+	defer domain.indexedFlushPointerizeTotalNs.Add(durationToAtomicNs(work.pointerizeElapsed))
 	preservePrimaryRunIndex := domain.primaryRunIndex != nil
 	if publishErr != nil {
 		relinquished := errors.Is(publishErr, errIndexedFlushRelinquished)
