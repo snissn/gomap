@@ -781,7 +781,11 @@ func TestAppendValueLog_PreparedProbeResetsWriterBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
-	t.Cleanup(func() { _ = writer.Close() })
+	t.Cleanup(func() {
+		if writer != nil {
+			_ = writer.Close()
+		}
+	})
 	writer.SetBlockCompression(valuelog.BlockCodecSnappy, true)
 
 	incompressible := make([]valuelog.Record, 8)
@@ -850,6 +854,7 @@ func TestAppendValueLog_PreparedProbeResetsWriterBackoff(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	writer = nil
 
 	headers := readValueLogFrameHeaders(t, path)
 	last := headers[len(headers)-1]
