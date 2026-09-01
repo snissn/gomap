@@ -41,6 +41,7 @@ type columnWritePublishInput struct {
 	rootNames             []string
 	baseRootIDs           map[string]uint64
 	commandWALIntent      *backenddb.CommandWALIntent
+	preparedPlan          *columnPublishPlanLease
 	rawPublishLocked      bool
 	operation             ColumnPublishOperation
 	documents             []columnWriteDocument
@@ -192,9 +193,13 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 				input.insertStats.ColumnPublishBuildColumnDelta += time.Since(stageStart)
 			}
 		}()
-		nextLease, err := c.prepareColumnPublishPlanLease(input, columnBaseRoot, ctx.AppliedCommandLSN)
-		if err != nil {
-			return nil, err
+		nextLease := input.preparedPlan
+		if nextLease == nil {
+			var err error
+			nextLease, err = c.prepareColumnPublishPlanLease(input, columnBaseRoot, ctx.AppliedCommandLSN)
+			if err != nil {
+				return nil, err
+			}
 		}
 		planLease = nextLease
 		plan, err = planLease.beginInstall(input.meta.Name, ctx.AppliedCommandLSN, columnBaseRoot)
@@ -333,9 +338,13 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 				input.insertStats.ColumnPublishBuildColumnDelta += time.Since(stageStart)
 			}
 		}()
-		nextLease, err := c.prepareColumnPublishPlanLease(input, columnBaseRoot, ctx.AppliedCommandLSN)
-		if err != nil {
-			return nil, err
+		nextLease := input.preparedPlan
+		if nextLease == nil {
+			var err error
+			nextLease, err = c.prepareColumnPublishPlanLease(input, columnBaseRoot, ctx.AppliedCommandLSN)
+			if err != nil {
+				return nil, err
+			}
 		}
 		planLease = nextLease
 		plan, err = planLease.beginInstall(input.meta.Name, ctx.AppliedCommandLSN, columnBaseRoot)
