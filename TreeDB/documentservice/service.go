@@ -206,6 +206,12 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 	options := collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}
 	if vectorOptions.strategy == collections.VectorIndexStrategyColumnGraph {
 		options.ColumnStore = serviceColumnStoreConfig(req.Dimension)
+		if len(scalarDeclarations) != 0 {
+			// Retained-payload reconstruction is intentionally fail-closed for
+			// collection secondary indexes until their mutation paths consume
+			// reconstructed documents.
+			options.ColumnStore.RetainedPayload = collections.ColumnRetainedPayloadFull
+		}
 	}
 	meta := &collections.CollectionMeta{
 		Name:    req.Name,
@@ -247,6 +253,10 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 		switch {
 		case openErr == nil:
 			existingOptions := existing.Meta().Options
+			if existingOptions.ColumnStore != nil && existingOptions.ColumnStore.Enabled &&
+				(len(scalarDeclarations) == 0 || existingOptions.ColumnStore.RetainedPayload == collections.ColumnRetainedPayloadFull) {
+				meta.Options.ColumnStore = existingOptions.ColumnStore
+			}
 			meta.Options.DisableBufferedIndexedAsyncFlush = existingOptions.DisableBufferedIndexedAsyncFlush
 			meta.Options.BufferedIndexedAsyncFlush = existingOptions.BufferedIndexedAsyncFlush
 			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = existingOptions.BufferedIndexedAsyncFlushMaxQueuedUnits
@@ -409,7 +419,8 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 		return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "documents must not be empty")
 	}
 	startPhase(&upsertStats.PrepareNanos)
-	prepared, err := prepareDocumentsForWrite(req.Documents, info)
+	prepareRetainedJSON := sharedCandidate && req.DeferVectorIndexRebuild && serviceUsesTrustedNonColumnRetainedJSON(col.MetaView())
+	prepared, err := prepareDocumentsForWrite(req.Documents, info, prepareRetainedJSON)
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
 	}
@@ -419,6 +430,10 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 	insertIDs := make([][]byte, 0, len(prepared))
 	insertDocs := make([][]byte, 0, len(prepared))
 	insertEmbeddings := make([][]float32, 0, len(prepared))
+	var insertRetainedJSON [][]byte
+	if prepareRetainedJSON {
+		insertRetainedJSON = make([][]byte, 0, len(prepared))
+	}
 	inserts := make([]preparedDocument, 0, len(prepared))
 	updates := make([]preparedDocument, 0)
 	if !sharedCandidate {
@@ -439,6 +454,9 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 			insertIDs = append(insertIDs, []byte(doc.id))
 			insertDocs = append(insertDocs, doc.raw)
 			insertEmbeddings = append(insertEmbeddings, doc.embedding)
+			if prepareRetainedJSON {
+				insertRetainedJSON = append(insertRetainedJSON, doc.retainedJSON)
+			}
 			inserts = append(inserts, doc)
 			continue
 		}
@@ -488,6 +506,9 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 				return UpsertDocumentsResponse{}, err
 			}
 			insert = func(ids, documents [][]byte) ([][]byte, collections.CollectionInsertStats, error) {
+				if insertRetainedJSON != nil {
+					return col.InsertBatchWithStatsValidatedFloat32Projection(ids, documents, defaultEmbeddingField, collectionMetric, insertEmbeddings, insertRetainedJSON)
+				}
 				return col.InsertBatchWithStatsValidatedFloat32Projection(ids, documents, defaultEmbeddingField, collectionMetric, insertEmbeddings)
 			}
 		}
@@ -1772,15 +1793,32 @@ func serviceColumnStoreConfig(dimension int) *collections.ColumnStoreConfig {
 			ValueType:  collections.ColumnStoreValueFloat32Vector,
 			VectorDims: dimension,
 		}},
-		RetainedPayload:         collections.ColumnRetainedPayloadFull,
+		RetainedPayload:         collections.ColumnRetainedPayloadNonColumn,
 		RetainedPayloadEncoding: collections.ColumnRetainedPayloadEncodingJSON,
 	}
+}
+
+func serviceUsesTrustedNonColumnRetainedJSON(meta collections.CollectionMeta) bool {
+	cfg := meta.Options.ColumnStore
+	if (meta.Options.DocumentFormat != "" && meta.Options.DocumentFormat != collections.DocumentFormatJSON) || cfg == nil || !cfg.Enabled ||
+		cfg.RetainedPayload != collections.ColumnRetainedPayloadNonColumn ||
+		cfg.RetainedPayloadEncoding != collections.ColumnRetainedPayloadEncodingJSON ||
+		len(cfg.Columns) != 1 || len(meta.Indexes) != 0 || len(meta.VectorIndexes) != 1 {
+		return false
+	}
+	column := cfg.Columns[0]
+	index := meta.VectorIndexes[0]
+	return column.Name == defaultEmbeddingField && column.Path == defaultEmbeddingField &&
+		column.Owner == collections.TypedStorageOwnerColumnPart &&
+		column.ValueType == collections.ColumnStoreValueFloat32Vector && !column.Nullable && column.VectorDims > 0 &&
+		index.Field == defaultEmbeddingField && index.Strategy == collections.VectorIndexStrategyColumnGraph
 }
 
 type preparedDocument struct {
 	id               string
 	raw              []byte
 	embedding        []float32
+	retainedJSON     []byte
 	compactEmbedding bool
 }
 
@@ -1829,7 +1867,7 @@ func upsertPreparedDocumentWithInsertCallback(ctx context.Context, col *collecti
 	return false, false, serviceErrorf(CodeConflict, "document %q changed concurrently during upsert", doc.id)
 }
 
-func prepareDocumentsForWrite(documents []Document, info IndexInfo) ([]preparedDocument, error) {
+func prepareDocumentsForWrite(documents []Document, info IndexInfo, prepareRetainedJSON bool) ([]preparedDocument, error) {
 	seen := make(map[string]struct{}, len(documents))
 	prepared := make([]preparedDocument, len(documents))
 	for i, doc := range documents {
@@ -1856,7 +1894,16 @@ func prepareDocumentsForWrite(documents []Document, info IndexInfo) ([]preparedD
 		if err != nil {
 			return nil, wrapServiceError(CodeInvalidRequest, fmt.Sprintf("documents[%d] is not JSON-serializable", i), err)
 		}
-		prepared[i] = preparedDocument{id: id, raw: raw, embedding: stored.Embedding, compactEmbedding: compactEmbedding}
+		var retainedJSON []byte
+		if prepareRetainedJSON {
+			retained := stored
+			retained.Embedding = nil
+			retainedJSON, err = json.Marshal(retained)
+			if err != nil {
+				return nil, wrapServiceError(CodeInvalidRequest, fmt.Sprintf("documents[%d] retained payload is not JSON-serializable", i), err)
+			}
+		}
+		prepared[i] = preparedDocument{id: id, raw: raw, embedding: stored.Embedding, retainedJSON: retainedJSON, compactEmbedding: compactEmbedding}
 	}
 	return prepared, nil
 }

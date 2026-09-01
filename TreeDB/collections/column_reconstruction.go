@@ -47,6 +47,9 @@ func columnRetainedPayloadJSONFromJSONDocument(cfg ColumnStoreConfig, document [
 	case ColumnRetainedPayloadNone:
 		return []byte("{}"), nil
 	case ColumnRetainedPayloadNonColumn:
+		if retained, ok, err := columnRetainedPayloadTopLevelJSON(cfg, document); ok || err != nil {
+			return retained, err
+		}
 		obj, err := columnRetainedPayloadJSONObjectFromJSONDocument(cfg, document)
 		if err != nil {
 			return nil, err
@@ -59,6 +62,33 @@ func columnRetainedPayloadJSONFromJSONDocument(cfg ColumnStoreConfig, document [
 	default:
 		return nil, fmt.Errorf("collections: unsupported retained payload policy %q", cfg.RetainedPayload)
 	}
+}
+
+// columnRetainedPayloadTopLevelJSON avoids decoding large declared arrays into
+// interface values when every declared column is a top-level JSON member. The
+// RawMessage values retain the standard JSON decoder's validation and duplicate
+// key semantics while the nested-path case keeps using the established walker.
+func columnRetainedPayloadTopLevelJSON(cfg ColumnStoreConfig, document []byte) ([]byte, bool, error) {
+	for _, col := range cfg.Columns {
+		if col.Path == "" || strings.Contains(col.Path, ".") {
+			return nil, false, nil
+		}
+	}
+	obj := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(document, &obj); err != nil {
+		return nil, true, fmt.Errorf("collections: invalid JSON document for column retained payload: %w", err)
+	}
+	if obj == nil {
+		return nil, true, errors.New("collections: column retained payload root must be a JSON object")
+	}
+	for _, col := range cfg.Columns {
+		delete(obj, col.Path)
+	}
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return nil, true, fmt.Errorf("collections: encode retained column payload: %w", err)
+	}
+	return out, true, nil
 }
 
 func columnRetainedPayloadJSONObjectFromJSONDocument(cfg ColumnStoreConfig, document []byte) (map[string]any, error) {

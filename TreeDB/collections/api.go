@@ -967,6 +967,8 @@ type CollectionManagerStats struct {
 	PendingBytes                       int64
 	PendingRootRuns                    int
 	PendingIndexedFlushUnits           int
+	PendingIndexedFullDocumentRows     int
+	PendingIndexedReconstructionRows   int
 	PendingIndexedRawDocumentBytes     int64
 	PendingIndexedPublicationBytes     int64
 	OverlayMutableDocuments            int
@@ -1319,10 +1321,13 @@ type indexedFlushUnit struct {
 	uniqueValueRuns     map[string][]memtable.Table
 	arenaRefs           [][]byte
 	primaryOverlay      *bufferedPrimaryOverlay
+	fullDocumentOverlay *bufferedPrimaryOverlay
 	docCount            int
 	byteCount           int64
 	rootRunCount        int
 	columnDocuments     []columnWriteDocument
+	columnDocumentIndex *bufferedColumnDocumentIndex
+	reconstructionRows  int
 	preparedTextInserts []preparedTextIndexInsert
 	columnCommandBytes  int64
 	rawDocumentBytes    int64
@@ -1403,6 +1408,7 @@ type bufferedIndexedCheckpoint struct {
 	rootBaseIDs            map[string]uint64
 	rootValueArenas        [][]byte
 	primaryOverlay         *bufferedPrimaryOverlay
+	fullDocumentOverlay    *bufferedPrimaryOverlay
 	primaryCache           *bufferedPrimaryOverlay
 	primaryCacheSystemRoot uint64
 	primaryCacheCollection string
@@ -1420,6 +1426,7 @@ type bufferedIndexedCheckpoint struct {
 	indexedMutableCommandWALFirst uint64
 	indexedMutableCommandWALLast  uint64
 	columnDocuments               []columnWriteDocument
+	reconstructionRows            int
 	preparedTextInserts           []preparedTextIndexInsert
 	columnCommandBytes            int64
 	rawDocumentBytes              int64
@@ -1464,6 +1471,11 @@ type bufferedPrimaryOverlayRef struct {
 	flags byte
 }
 
+type bufferedColumnDocumentIndex struct {
+	values     map[uint64]int
+	collisions map[uint64][]int
+}
+
 type collectionWriteDomain struct {
 	// mutationMu serializes root descriptor publishes for handles opened
 	// through the same manager so optimistic retries do not starve under
@@ -1502,6 +1514,7 @@ type collectionWriteDomain struct {
 	rootBaseIDs              map[string]uint64
 	rootValueArenas          [][]byte
 	primaryOverlay           *bufferedPrimaryOverlay
+	fullDocumentOverlay      *bufferedPrimaryOverlay
 	primaryCache             *bufferedPrimaryOverlay
 	primaryCacheSystemRoot   uint64
 	primaryCacheCollection   string
@@ -1540,6 +1553,8 @@ type collectionWriteDomain struct {
 	indexedMutableCommandWALFirst uint64
 	indexedMutableCommandWALLast  uint64
 	columnDocuments               []columnWriteDocument
+	columnDocumentIndex           *bufferedColumnDocumentIndex
+	reconstructionRows            int
 	preparedTextInserts           []preparedTextIndexInsert
 	columnCommandBytes            int64
 	rawDocumentBytes              int64
@@ -1882,6 +1897,8 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.pending_bytes"] = fmt.Sprintf("%d", stats.PendingBytes)
 	out["treedb.collections.write_domain.pending_root_runs"] = fmt.Sprintf("%d", stats.PendingRootRuns)
 	out["treedb.collections.write_domain.pending_indexed_flush_units"] = fmt.Sprintf("%d", stats.PendingIndexedFlushUnits)
+	out["treedb.collections.write_domain.pending_indexed_full_document_rows"] = fmt.Sprintf("%d", stats.PendingIndexedFullDocumentRows)
+	out["treedb.collections.write_domain.pending_indexed_reconstruction_rows"] = fmt.Sprintf("%d", stats.PendingIndexedReconstructionRows)
 	out["treedb.collections.write_domain.pending_indexed_raw_document_bytes"] = fmt.Sprintf("%d", stats.PendingIndexedRawDocumentBytes)
 	out["treedb.collections.write_domain.pending_indexed_publication_bytes"] = fmt.Sprintf("%d", stats.PendingIndexedPublicationBytes)
 	out["treedb.collections.write_domain.overlay.mutable_docs"] = fmt.Sprintf("%d", stats.OverlayMutableDocuments)
@@ -2186,6 +2203,8 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.PendingBytes = saturatingAddNonNegativeInt64(s.PendingBytes, other.PendingBytes)
 	s.PendingRootRuns = saturatingAddNonNegativeInt(s.PendingRootRuns, other.PendingRootRuns)
 	s.PendingIndexedFlushUnits = saturatingAddNonNegativeInt(s.PendingIndexedFlushUnits, other.PendingIndexedFlushUnits)
+	s.PendingIndexedFullDocumentRows = saturatingAddNonNegativeInt(s.PendingIndexedFullDocumentRows, other.PendingIndexedFullDocumentRows)
+	s.PendingIndexedReconstructionRows = saturatingAddNonNegativeInt(s.PendingIndexedReconstructionRows, other.PendingIndexedReconstructionRows)
 	s.PendingIndexedRawDocumentBytes = saturatingAddNonNegativeInt64(s.PendingIndexedRawDocumentBytes, other.PendingIndexedRawDocumentBytes)
 	s.PendingIndexedPublicationBytes = saturatingAddNonNegativeInt64(s.PendingIndexedPublicationBytes, other.PendingIndexedPublicationBytes)
 	s.OverlayMutableDocuments = saturatingAddNonNegativeInt(s.OverlayMutableDocuments, other.OverlayMutableDocuments)
@@ -2347,13 +2366,19 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	pendingRootRuns := bufferedIndexedRootRunCount(domain)
 	stats.PendingRootRuns = pendingRootRuns
 	stats.PendingIndexedFlushUnits = len(domain.indexedPublishingUnits) + len(domain.indexedFlushUnits)
+	stats.PendingIndexedFullDocumentRows = domain.fullDocumentOverlay.len()
+	stats.PendingIndexedReconstructionRows = domain.reconstructionRows
 	stats.PendingIndexedRawDocumentBytes = domain.rawDocumentBytes
 	stats.PendingIndexedPublicationBytes = domain.publicationBytes
 	for _, unit := range domain.indexedPublishingUnits {
+		stats.PendingIndexedFullDocumentRows = saturatingAddNonNegativeInt(stats.PendingIndexedFullDocumentRows, unit.fullDocumentOverlay.len())
+		stats.PendingIndexedReconstructionRows = saturatingAddNonNegativeInt(stats.PendingIndexedReconstructionRows, unit.reconstructionRows)
 		stats.PendingIndexedRawDocumentBytes = saturatingAddNonNegativeInt64(stats.PendingIndexedRawDocumentBytes, unit.rawDocumentBytes)
 		stats.PendingIndexedPublicationBytes = saturatingAddNonNegativeInt64(stats.PendingIndexedPublicationBytes, unit.publicationBytes)
 	}
 	for _, unit := range domain.indexedFlushUnits {
+		stats.PendingIndexedFullDocumentRows = saturatingAddNonNegativeInt(stats.PendingIndexedFullDocumentRows, unit.fullDocumentOverlay.len())
+		stats.PendingIndexedReconstructionRows = saturatingAddNonNegativeInt(stats.PendingIndexedReconstructionRows, unit.reconstructionRows)
 		stats.PendingIndexedRawDocumentBytes = saturatingAddNonNegativeInt64(stats.PendingIndexedRawDocumentBytes, unit.rawDocumentBytes)
 		stats.PendingIndexedPublicationBytes = saturatingAddNonNegativeInt64(stats.PendingIndexedPublicationBytes, unit.publicationBytes)
 	}
@@ -5461,7 +5486,7 @@ func isDefaultIndexedWriteMemtableMaxDocuments(opts CollectionOptions) bool {
 		opts.BufferedIndexedWriteMaxDocuments == DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
 }
 
-func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan, columnDocuments []columnWriteDocument, preparedTextInserts []preparedTextIndexInsert, columnCommandBytes int64, commandWALStageIntent *backenddb.CommandWALIntent, rawStageLocked bool, releaseCommandWALRawStage func()) (elapsed time.Duration, err error) {
+func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan, columnDocuments []columnWriteDocument, fullDocumentOverlay *bufferedPrimaryOverlay, preparedTextInserts []preparedTextIndexInsert, columnCommandBytes int64, commandWALStageIntent *backenddb.CommandWALIntent, rawStageLocked bool, releaseCommandWALRawStage func()) (elapsed time.Duration, err error) {
 	domain := c.writeDomain
 	if domain == nil {
 		return 0, errors.New("collections: missing write domain")
@@ -5480,6 +5505,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		}
 	}
 	rawDocumentBytes, publicationBytes := indexedPublicationPayloadBytes(columnDocuments, preparedTextInserts)
+	rawDocumentBytes = saturatingAddNonNegativeInt64(rawDocumentBytes, bufferedPrimaryOverlayValueBytes(fullDocumentOverlay))
 	writeOptions := catalog.meta.Options
 	var unlockCommandWALRawStage func()
 	if releaseCommandWALRawStage == nil {
@@ -5575,7 +5601,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		return 0, err
 	}
 	if plan.directBufferedInsert != nil {
-		return c.bufferDirectIndexedInsertPlanLocked(domain, catalog, plan, columnDocuments, preparedTextInserts, columnCommandBytes, rawDocumentBytes, publicationBytes, commandWALLSN, releaseCommandWALRawStage)
+		return c.bufferDirectIndexedInsertPlanLocked(domain, catalog, plan, columnDocuments, fullDocumentOverlay, preparedTextInserts, columnCommandBytes, rawDocumentBytes, publicationBytes, commandWALLSN, releaseCommandWALRawStage)
 	}
 	autoFlushEnabled := bufferedIndexedAutoFlushEnabled(writeOptions)
 	freezeMutableIndexedRunMapsLocked(domain)
@@ -5654,6 +5680,9 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, len(plan.resultIDs))
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
 	domain.columnDocuments = append(domain.columnDocuments, columnDocuments...)
+	domain.columnDocumentIndex = nil
+	domain.reconstructionRows = saturatingAddNonNegativeInt(domain.reconstructionRows, bufferedColumnDocumentReconstructionRows(columnDocuments))
+	mergeBufferedPrimaryOverlay(&domain.fullDocumentOverlay, fullDocumentOverlay)
 	appendPreparedTextIndexInserts(&domain.preparedTextInserts, preparedTextInserts)
 	domain.columnCommandBytes = saturatingAddNonNegativeInt64(domain.columnCommandBytes, columnCommandBytes)
 	domain.rawDocumentBytes = saturatingAddNonNegativeInt64(domain.rawDocumentBytes, rawDocumentBytes)
@@ -5689,7 +5718,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	return 0, nil
 }
 
-func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWriteDomain, catalog *collectionCatalog, plan *insertBatchPlan, columnDocuments []columnWriteDocument, preparedTextInserts []preparedTextIndexInsert, columnCommandBytes, rawDocumentBytes, publicationBytes int64, commandWALLSN uint64, releaseCommandWALRawStage func()) (time.Duration, error) {
+func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWriteDomain, catalog *collectionCatalog, plan *insertBatchPlan, columnDocuments []columnWriteDocument, fullDocumentOverlay *bufferedPrimaryOverlay, preparedTextInserts []preparedTextIndexInsert, columnCommandBytes, rawDocumentBytes, publicationBytes int64, commandWALLSN uint64, releaseCommandWALRawStage func()) (time.Duration, error) {
 	direct := plan.directBufferedInsert
 	if direct == nil {
 		return 0, nil
@@ -5887,6 +5916,9 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, len(plan.resultIDs))
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, direct.stagedBytes)
 	domain.columnDocuments = append(domain.columnDocuments, columnDocuments...)
+	domain.columnDocumentIndex = nil
+	domain.reconstructionRows = saturatingAddNonNegativeInt(domain.reconstructionRows, bufferedColumnDocumentReconstructionRows(columnDocuments))
+	mergeBufferedPrimaryOverlay(&domain.fullDocumentOverlay, fullDocumentOverlay)
 	appendPreparedTextIndexInserts(&domain.preparedTextInserts, preparedTextInserts)
 	domain.columnCommandBytes = saturatingAddNonNegativeInt64(domain.columnCommandBytes, columnCommandBytes)
 	domain.rawDocumentBytes = saturatingAddNonNegativeInt64(domain.rawDocumentBytes, rawDocumentBytes)
@@ -5949,7 +5981,10 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.rootBaseIDs = nil
 	domain.rootValueArenas = nil
 	domain.primaryOverlay = nil
+	domain.fullDocumentOverlay = nil
 	domain.columnDocuments = nil
+	domain.columnDocumentIndex = nil
+	domain.reconstructionRows = 0
 	domain.preparedTextInserts = nil
 	domain.columnCommandBytes = 0
 	domain.rawDocumentBytes = 0
@@ -7370,6 +7405,7 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		rootBaseIDs:            cloneUint64Map(domain.rootBaseIDs),
 		rootValueArenas:        cloneArenaRefs(domain.rootValueArenas),
 		primaryOverlay:         cloneBufferedPrimaryOverlay(domain.primaryOverlay),
+		fullDocumentOverlay:    cloneBufferedPrimaryOverlay(domain.fullDocumentOverlay),
 		primaryCache:           cloneBufferedPrimaryOverlay(domain.primaryCache),
 		primaryCacheSystemRoot: domain.primaryCacheSystemRoot,
 		primaryCacheCollection: domain.primaryCacheCollection,
@@ -7388,6 +7424,7 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		indexedMutableCommandWALFirst: domain.indexedMutableCommandWALFirst,
 		indexedMutableCommandWALLast:  domain.indexedMutableCommandWALLast,
 		columnDocuments:               append([]columnWriteDocument(nil), domain.columnDocuments...),
+		reconstructionRows:            domain.reconstructionRows,
 		preparedTextInserts:           clonePreparedTextIndexInserts(domain.preparedTextInserts),
 		columnCommandBytes:            domain.columnCommandBytes,
 		rawDocumentBytes:              domain.rawDocumentBytes,
@@ -7422,6 +7459,7 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
 	domain.rootValueArenas = checkpoint.rootValueArenas
 	domain.primaryOverlay = checkpoint.primaryOverlay
+	domain.fullDocumentOverlay = checkpoint.fullDocumentOverlay
 	domain.primaryCache = checkpoint.primaryCache
 	domain.primaryCacheSystemRoot = checkpoint.primaryCacheSystemRoot
 	domain.primaryCacheCollection = checkpoint.primaryCacheCollection
@@ -7433,6 +7471,8 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.indexedMutableCommandWALFirst = checkpoint.indexedMutableCommandWALFirst
 	domain.indexedMutableCommandWALLast = checkpoint.indexedMutableCommandWALLast
 	domain.columnDocuments = checkpoint.columnDocuments
+	domain.columnDocumentIndex = nil
+	domain.reconstructionRows = checkpoint.reconstructionRows
 	domain.preparedTextInserts = checkpoint.preparedTextInserts
 	domain.columnCommandBytes = checkpoint.columnCommandBytes
 	domain.rawDocumentBytes = checkpoint.rawDocumentBytes
@@ -7474,10 +7514,12 @@ func cloneIndexedFlushUnits(in []indexedFlushUnit) []indexedFlushUnit {
 			uniqueValueRuns:     cloneTableRunMap(unit.uniqueValueRuns),
 			arenaRefs:           cloneArenaRefs(unit.arenaRefs),
 			primaryOverlay:      cloneBufferedPrimaryOverlay(unit.primaryOverlay),
+			fullDocumentOverlay: cloneBufferedPrimaryOverlay(unit.fullDocumentOverlay),
 			docCount:            unit.docCount,
 			byteCount:           unit.byteCount,
 			rootRunCount:        unit.rootRunCount,
 			columnDocuments:     append([]columnWriteDocument(nil), unit.columnDocuments...),
+			reconstructionRows:  unit.reconstructionRows,
 			preparedTextInserts: clonePreparedTextIndexInserts(unit.preparedTextInserts),
 			columnCommandBytes:  unit.columnCommandBytes,
 			rawDocumentBytes:    unit.rawDocumentBytes,
@@ -8086,6 +8128,32 @@ func (overlay *bufferedPrimaryOverlay) addEntries(entries []directBufferedRootEn
 	}
 }
 
+func mergeBufferedPrimaryOverlay(dst **bufferedPrimaryOverlay, src *bufferedPrimaryOverlay) {
+	if dst == nil || src == nil || src.len() == 0 {
+		return
+	}
+	if *dst == nil {
+		*dst = newBufferedPrimaryOverlay(src.len())
+	}
+	(*dst).addEntries(src.appendEntries(nil))
+}
+
+func bufferedPrimaryOverlayValueBytes(overlay *bufferedPrimaryOverlay) int64 {
+	if overlay == nil {
+		return 0
+	}
+	var total int64
+	for _, ref := range overlay.values {
+		total = saturatingAddNonNegativeInt64(total, int64(len(ref.value)))
+	}
+	for _, bucket := range overlay.collisions {
+		for _, ref := range bucket {
+			total = saturatingAddNonNegativeInt64(total, int64(len(ref.value)))
+		}
+	}
+	return total
+}
+
 func (overlay *bufferedPrimaryOverlay) lookupRef(key []byte) (bufferedPrimaryOverlayRef, bool) {
 	if overlay == nil || len(overlay.values) == 0 {
 		return bufferedPrimaryOverlayRef{}, false
@@ -8100,6 +8168,69 @@ func (overlay *bufferedPrimaryOverlay) lookupRef(key []byte) (bufferedPrimaryOve
 		}
 	}
 	return bufferedPrimaryOverlayRef{}, false
+}
+
+func buildBufferedColumnDocumentIndex(documents []columnWriteDocument, reconstructionRows int) *bufferedColumnDocumentIndex {
+	if reconstructionRows <= 0 {
+		// A non-nil empty index records that this generic unit has no retained
+		// reconstruction rows, so later pending reads stay on the read-lock path.
+		return &bufferedColumnDocumentIndex{}
+	}
+	index := &bufferedColumnDocumentIndex{values: make(map[uint64]int, len(documents))}
+	for row := range documents {
+		hash := xxhash.Sum64(documents[row].ID)
+		if existing, ok := index.values[hash]; !ok {
+			index.values[hash] = row
+		} else if bytes.Equal(documents[existing].ID, documents[row].ID) {
+			index.values[hash] = row
+		} else {
+			updated := false
+			for i, collision := range index.collisions[hash] {
+				if bytes.Equal(documents[collision].ID, documents[row].ID) {
+					index.collisions[hash][i] = row
+					updated = true
+					break
+				}
+			}
+			if !updated {
+				if index.collisions == nil {
+					index.collisions = make(map[uint64][]int)
+				}
+				index.collisions[hash] = append(index.collisions[hash], row)
+			}
+		}
+	}
+	return index
+}
+
+func bufferedColumnDocumentReconstructionRows(documents []columnWriteDocument) int {
+	rows := 0
+	for i := range documents {
+		if documents[i].reconstructFromRetained {
+			rows++
+		}
+	}
+	return rows
+}
+
+func bufferedColumnDocumentsNeedIndex(documents []columnWriteDocument, index *bufferedColumnDocumentIndex) bool {
+	return len(documents) != 0 && index == nil
+}
+
+func (index *bufferedColumnDocumentIndex) lookup(documents []columnWriteDocument, key []byte) (*columnWriteDocument, bool) {
+	if index == nil {
+		return nil, false
+	}
+	hash := xxhash.Sum64(key)
+	if row, ok := index.values[hash]; ok && row >= 0 && row < len(documents) && bytes.Equal(documents[row].ID, key) {
+		return &documents[row], true
+	}
+	for _, row := range index.collisions[hash] {
+		if row >= 0 && row < len(documents) && bytes.Equal(documents[row].ID, key) {
+			return &documents[row], true
+		}
+	}
+	return nil, false
 }
 
 func (overlay *bufferedPrimaryOverlay) appendEntries(dst []directBufferedRootEntry) []directBufferedRootEntry {
@@ -8139,6 +8270,26 @@ func lookupPendingPrimaryOverlayLocked(domain *collectionWriteDomain, key []byte
 	}
 	if ref, ok := lookupIndexedFlushUnitPrimaryOverlay(domain.indexedPublishingUnits, key); ok {
 		return ref, true
+	}
+	return bufferedPrimaryOverlayRef{}, false
+}
+
+func lookupPendingFullDocumentLocked(domain *collectionWriteDomain, key []byte) (bufferedPrimaryOverlayRef, bool) {
+	if domain == nil {
+		return bufferedPrimaryOverlayRef{}, false
+	}
+	if ref, ok := domain.fullDocumentOverlay.lookupRef(key); ok {
+		return ref, true
+	}
+	for i := len(domain.indexedFlushUnits) - 1; i >= 0; i-- {
+		if ref, ok := domain.indexedFlushUnits[i].fullDocumentOverlay.lookupRef(key); ok {
+			return ref, true
+		}
+	}
+	for i := len(domain.indexedPublishingUnits) - 1; i >= 0; i-- {
+		if ref, ok := domain.indexedPublishingUnits[i].fullDocumentOverlay.lookupRef(key); ok {
+			return ref, true
+		}
 	}
 	return bufferedPrimaryOverlayRef{}, false
 }
@@ -10278,6 +10429,8 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 		domain.rootValueArenas = nil
 		domain.primaryOverlay = nil
 		domain.columnDocuments = nil
+		domain.columnDocumentIndex = nil
+		domain.reconstructionRows = 0
 		domain.preparedTextInserts = nil
 		domain.columnCommandBytes = 0
 		domain.rawDocumentBytes = 0
@@ -10454,7 +10607,10 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	domain.rootBaseIDs = nil
 	domain.rootValueArenas = nil
 	domain.primaryOverlay = nil
+	domain.fullDocumentOverlay = nil
 	domain.columnDocuments = nil
+	domain.columnDocumentIndex = nil
+	domain.reconstructionRows = 0
 	domain.preparedTextInserts = nil
 	domain.columnCommandBytes = 0
 	domain.rawDocumentBytes = 0
@@ -10548,6 +10704,9 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 		byteCount:           domain.mutableBytes,
 		rootRunCount:        domain.rootRunCount,
 		columnDocuments:     domain.columnDocuments,
+		columnDocumentIndex: domain.columnDocumentIndex,
+		reconstructionRows:  domain.reconstructionRows,
+		fullDocumentOverlay: domain.fullDocumentOverlay,
 		preparedTextInserts: domain.preparedTextInserts,
 		columnCommandBytes:  domain.columnCommandBytes,
 		rawDocumentBytes:    domain.rawDocumentBytes,
@@ -10567,6 +10726,9 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.columnDocuments = nil
+	domain.columnDocumentIndex = nil
+	domain.reconstructionRows = 0
+	domain.fullDocumentOverlay = nil
 	domain.preparedTextInserts = nil
 	domain.columnCommandBytes = 0
 	domain.rawDocumentBytes = 0
@@ -10592,10 +10754,13 @@ func rotateIndexedMutableToFlushUnitForAsyncLocked(domain *collectionWriteDomain
 		uniqueValueRuns:     domain.uniqueValueRuns,
 		arenaRefs:           domain.rootValueArenas,
 		primaryOverlay:      domain.primaryOverlay,
+		fullDocumentOverlay: domain.fullDocumentOverlay,
 		docCount:            domain.mutableCount,
 		byteCount:           domain.mutableBytes,
 		rootRunCount:        rootRunCount,
 		columnDocuments:     domain.columnDocuments,
+		columnDocumentIndex: domain.columnDocumentIndex,
+		reconstructionRows:  domain.reconstructionRows,
 		preparedTextInserts: domain.preparedTextInserts,
 		columnCommandBytes:  domain.columnCommandBytes,
 		rawDocumentBytes:    domain.rawDocumentBytes,
@@ -10612,10 +10777,13 @@ func rotateIndexedMutableToFlushUnitForAsyncLocked(domain *collectionWriteDomain
 	domain.uniqueValueMutableRuns = nil
 	domain.rootValueArenas = nil
 	domain.primaryOverlay = nil
+	domain.fullDocumentOverlay = nil
 	domain.rootRunCount = 0
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.columnDocuments = nil
+	domain.columnDocumentIndex = nil
+	domain.reconstructionRows = 0
 	domain.preparedTextInserts = nil
 	domain.columnCommandBytes = 0
 	domain.rawDocumentBytes = 0
@@ -10661,6 +10829,7 @@ func sameIndexedFlushUnitTables(a, b indexedFlushUnit) bool {
 	return sameTableRunMap(a.rootRuns, b.rootRuns) &&
 		sameTableRunMap(a.uniqueValueRuns, b.uniqueValueRuns) &&
 		a.primaryOverlay == b.primaryOverlay &&
+		a.fullDocumentOverlay == b.fullDocumentOverlay &&
 		a.commandWALFirst == b.commandWALFirst &&
 		a.commandWALLast == b.commandWALLast
 }
@@ -10762,6 +10931,7 @@ func mergedIndexedFlushUnitLocked(domain *collectionWriteDomain) indexedFlushUni
 		arenaRefs:           domain.rootValueArenas,
 		rootRunCount:        domain.rootRunCount,
 		columnDocuments:     domain.columnDocuments,
+		reconstructionRows:  domain.reconstructionRows,
 		preparedTextInserts: domain.preparedTextInserts,
 		columnCommandBytes:  domain.columnCommandBytes,
 		rawDocumentBytes:    domain.rawDocumentBytes,
@@ -10812,6 +10982,7 @@ func mergedIndexedFlushUnitForSyncLocked(meta CollectionMeta, domain *collection
 		arenaRefs:           domain.rootValueArenas,
 		rootRunCount:        domain.rootRunCount,
 		columnDocuments:     domain.columnDocuments,
+		reconstructionRows:  domain.reconstructionRows,
 		preparedTextInserts: domain.preparedTextInserts,
 		columnCommandBytes:  domain.columnCommandBytes,
 		rawDocumentBytes:    domain.rawDocumentBytes,
@@ -10853,6 +11024,8 @@ func mergeIndexedFlushUnit(dst *indexedFlushUnit, src indexedFlushUnit) {
 	dst.byteCount = saturatingAddNonNegativeInt64(dst.byteCount, src.byteCount)
 	dst.rootRunCount = saturatingAddNonNegativeInt(dst.rootRunCount, indexedFlushUnitRootRunCount(src))
 	dst.columnDocuments = append(dst.columnDocuments, src.columnDocuments...)
+	dst.columnDocumentIndex = nil
+	dst.reconstructionRows = saturatingAddNonNegativeInt(dst.reconstructionRows, src.reconstructionRows)
 	appendPreparedTextIndexInserts(&dst.preparedTextInserts, src.preparedTextInserts)
 	dst.columnCommandBytes = saturatingAddNonNegativeInt64(dst.columnCommandBytes, src.columnCommandBytes)
 	dst.rawDocumentBytes = saturatingAddNonNegativeInt64(dst.rawDocumentBytes, src.rawDocumentBytes)
@@ -10877,13 +11050,16 @@ func indexedFlushUnitRootRunCount(unit indexedFlushUnit) int {
 }
 
 func resetIndexedFlushUnits(units []indexedFlushUnit) {
-	for _, unit := range units {
+	for i := range units {
+		unit := &units[i]
 		for _, runs := range unit.rootRuns {
 			resetCollectionTables(runs)
 		}
 		for _, runs := range unit.uniqueValueRuns {
 			resetCollectionTables(runs)
 		}
+		unit.columnDocumentIndex = nil
+		unit.reconstructionRows = 0
 	}
 }
 
@@ -11065,8 +11241,15 @@ func (c *Collection) InsertBatchWithStats(ids, documents [][]byte) ([][]byte, Co
 // documents while carrying one caller-validated float32 vector column into the
 // existing column-store write plan. The collection still owns duplicate,
 // command-WAL, schema, and publication validation.
-func (c *Collection) InsertBatchWithStatsValidatedFloat32Projection(ids, documents [][]byte, column string, metric VectorMetric, vectors [][]float32) ([][]byte, CollectionInsertStats, error) {
-	projection, err := newTrustedFloat32Projection(ids, documents, column, metric, vectors)
+func (c *Collection) InsertBatchWithStatsValidatedFloat32Projection(ids, documents [][]byte, column string, metric VectorMetric, vectors [][]float32, retainedJSONOption ...[][]byte) ([][]byte, CollectionInsertStats, error) {
+	if len(retainedJSONOption) > 1 {
+		return nil, CollectionInsertStats{}, errors.New("collections: validated float32 projection accepts at most one retained JSON batch")
+	}
+	var retainedJSON [][]byte
+	if len(retainedJSONOption) == 1 {
+		retainedJSON = retainedJSONOption[0]
+	}
+	projection, err := newTrustedFloat32Projection(ids, documents, column, metric, vectors, retainedJSON)
 	if err != nil {
 		return nil, CollectionInsertStats{}, err
 	}
@@ -11409,6 +11592,93 @@ func shouldAttemptOptimisticInsertBatchPlanning(documents [][]byte, templateEnco
 		!commandWALActive
 }
 
+func prepareInsertBatchPlanRetainedPayload(meta CollectionMeta, plan *insertBatchPlan, inputIDs [][]byte, projection *trustedFloat32Projection) ([]commitlog.CollectionDocument, error) {
+	if !columnStoreNeedsRetainedPayloadTransform(meta) || plan == nil {
+		return nil, nil
+	}
+	cfg := meta.Options.ColumnStore
+	if cfg == nil || cfg.RetainedPayload != ColumnRetainedPayloadNonColumn || columnRetainedPayloadEffectiveEncoding(cfg) != ColumnRetainedPayloadEncodingJSON {
+		return nil, fmt.Errorf("collections: insert retained payload requires non-column JSON collection=%q", meta.Name)
+	}
+	primaryRootName := collectionPrimaryRootName(meta.Name)
+	docs, err := collectionDocumentsFromInsertPlan(plan, primaryRootName)
+	if err != nil {
+		return nil, err
+	}
+	owned := make([]commitlog.CollectionDocument, len(docs))
+	ids := make([][]byte, len(docs))
+	full := make([][]byte, len(docs))
+	for i := range docs {
+		owned[i] = commitlog.CollectionDocument{ID: bytes.Clone(docs[i].ID), Document: bytes.Clone(docs[i].Document)}
+		ids[i], full[i] = owned[i].ID, owned[i].Document
+	}
+	start := time.Now()
+	var retainedDocuments [][]byte
+	if projection != nil && projection.retainedJSON != nil {
+		retainedByID, validateErr := validateTrustedFloat32ProjectionRetainedJSON(inputIDs, projection)
+		if validateErr != nil {
+			return nil, validateErr
+		}
+		retainedDocuments = make([][]byte, len(owned))
+		for row := range owned {
+			retained, ok := retainedByID[string(owned[row].ID)]
+			if !ok {
+				return nil, fmt.Errorf("collections: validated retained primary row %d id mismatch", row)
+			}
+			retainedDocuments[row] = retained
+		}
+	} else {
+		prepared, prepareErr := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(*cfg, ids, full, nil)
+		if prepareErr != nil {
+			return nil, prepareErr
+		}
+		retainedDocuments = prepared.documents
+	}
+	plan.stats.RetainedPayloadPrepare += time.Since(start)
+	plan.stats.RetainedPayloadRows += len(retainedDocuments)
+
+	if direct := plan.directBufferedInsert; direct != nil && direct.primaryRootName == primaryRootName {
+		if len(direct.primaryEntries) != len(retainedDocuments) {
+			return nil, fmt.Errorf("collections: retained primary documents=%d entries=%d", len(retainedDocuments), len(direct.primaryEntries))
+		}
+		before := directBufferedRootEntriesSize(direct.primaryEntries)
+		for i := range direct.primaryEntries {
+			if !bytes.Equal(direct.primaryEntries[i].key, owned[i].ID) {
+				return nil, fmt.Errorf("collections: retained primary row %d id mismatch", i)
+			}
+			direct.primaryEntries[i].value = retainedDocuments[i]
+		}
+		direct.stagedBytes = subtractNonNegativeInt64(direct.stagedBytes, before)
+		direct.stagedBytes = saturatingAddNonNegativeInt64(direct.stagedBytes, directBufferedRootEntriesSize(direct.primaryEntries))
+		return owned, nil
+	}
+	for i := range plan.runs {
+		if plan.runs[i].name != primaryRootName {
+			continue
+		}
+		replacement := newCollectionRunTable(len(retainedDocuments))
+		for row := range retainedDocuments {
+			setCollectionRunCopiedValue(replacement, owned[row].ID, retainedDocuments[row])
+		}
+		replacement.Freeze()
+		resetCollectionRunTable(plan.runs[i].table)
+		plan.runs[i].table = replacement
+		return owned, nil
+	}
+	return nil, fmt.Errorf("collections: insert plan missing retained primary root collection=%q", meta.Name)
+}
+
+func bufferedFullDocumentOverlay(docs []commitlog.CollectionDocument) *bufferedPrimaryOverlay {
+	if len(docs) == 0 {
+		return nil
+	}
+	overlay := newBufferedPrimaryOverlay(len(docs))
+	for i := range docs {
+		overlay.addEntry(directBufferedRootEntry{key: docs[i].ID, value: docs[i].Document, flags: node.FlagInline})
+	}
+	return overlay
+}
+
 func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]byte, trustedValidBSON bool, execOpts insertBatchExecutionOptions) ([][]byte, error, bool) {
 	if c == nil || c.db == nil {
 		return nil, nil, false
@@ -11534,7 +11804,7 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 	updateInsertBatchBaseRootIDs(rootNames, baseRootIDs, currentCatalog)
 	pinCommitSeq := snapshotCommitSeq(pin)
 	pinSystemRoot := snapshotSystemRoot(pin)
-	bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, nil, nil, 0, nil, false, nil)
+	bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, nil, nil, nil, 0, nil, false, nil)
 	_ = pin.Close()
 	if err != nil {
 		resetCollectionRunTables(plan.runs)
@@ -11844,6 +12114,17 @@ func (c *Collection) insertBatchOnceWithLockState(
 		c.recordInsertBatchStats(plan.stats.CollectionInsertStats, execOpts)
 		return maybeInsertBatchResultIDs(plan.resultIDs, execOpts), nil
 	}
+	var fullRetainedPayloadDocuments []commitlog.CollectionDocument
+	if cfg := meta.Options.ColumnStore; cfg != nil &&
+		cfg.RetainedPayload == ColumnRetainedPayloadNonColumn &&
+		columnRetainedPayloadEffectiveEncoding(cfg) == ColumnRetainedPayloadEncodingJSON {
+		fullRetainedPayloadDocuments, err = prepareInsertBatchPlanRetainedPayload(meta, plan, ids, execOpts.trustedFloat32Projection)
+		if err != nil {
+			closePlanningSnapshot()
+			resetCollectionRunTables(plan.runs)
+			return nil, err
+		}
+	}
 
 	rootNames, baseRootIDs := insertBatchPlanRootNamesAndBaseIDs(plan, catalog)
 
@@ -11858,8 +12139,12 @@ func (c *Collection) insertBatchOnceWithLockState(
 		var columnDocuments []columnWriteDocument
 		var preparedTextInserts []preparedTextIndexInsert
 		var columnCommandBytes int64
+		var fullDocumentOverlay *bufferedPrimaryOverlay
 		if commandWALBufferedMode {
-			docs, err := collectionDocumentsFromInsertPlan(plan, collectionPrimaryRootName(meta.Name))
+			docs := fullRetainedPayloadDocuments
+			if docs == nil {
+				docs, err = collectionDocumentsFromInsertPlan(plan, collectionPrimaryRootName(meta.Name))
+			}
 			if err != nil {
 				closePlanningSnapshot()
 				resetCollectionRunTables(plan.runs)
@@ -11903,6 +12188,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 					return nil, err
 				}
 				columnCommandBytes = columnWriteDocumentsBytes(columnDocuments)
+				if len(fullRetainedPayloadDocuments) != 0 &&
+					(execOpts.trustedFloat32Projection == nil || execOpts.trustedFloat32Projection.retainedJSON == nil) {
+					fullDocumentOverlay = bufferedFullDocumentOverlay(fullRetainedPayloadDocuments)
+				}
 			}
 			bufferedCommandWALIntent, err = c.newCollectionInsertCommandWALIntent(docs, nil)
 			if err != nil {
@@ -11951,7 +12240,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			}
 			defer unlockCommandWALStage()
 		}
-		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, columnDocuments, preparedTextInserts, columnCommandBytes, bufferedCommandWALIntent, bufferedCommandWALIntent != nil && c.db != nil, releaseCommandWALRawStage)
+		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, columnDocuments, fullDocumentOverlay, preparedTextInserts, columnCommandBytes, bufferedCommandWALIntent, bufferedCommandWALIntent != nil && c.db != nil, releaseCommandWALRawStage)
 		_ = pin.Close()
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
@@ -11977,7 +12266,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 	}
 	if commandWALIntent == nil && commandWALActive {
-		var docs []commitlog.CollectionDocument
+		docs := fullRetainedPayloadDocuments
 		if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
 			docs, err = collectionDocumentsFromBatchInput(ids, documents)
 			if err != nil {
@@ -11985,7 +12274,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 				resetCollectionRunTables(plan.runs)
 				return nil, err
 			}
-		} else {
+		} else if docs == nil {
 			docs, err = collectionDocumentsFromInsertPlan(plan, collectionPrimaryRootName(meta.Name))
 			if err != nil {
 				closePlanningSnapshot()
@@ -12601,21 +12890,37 @@ func (c *Collection) insertBatchNoIndex(
 	var retainedDeclaredRowsReady bool
 	if columnStoreNeedsRetainedPayloadTransform(c.meta) {
 		phaseStart = time.Now()
-		fullDocumentIDs := make([][]byte, len(entries))
-		fullDocuments := make([][]byte, len(entries))
-		for i := range entries {
-			fullDocumentIDs[i] = entries[i].id
-			fullDocuments[i] = entries[i].document
+		var prepared columnRetainedPayloadStorageDocuments
+		if projection := execOpts.trustedFloat32Projection; projection != nil && projection.retainedJSON != nil {
+			retainedByID, err := validateTrustedFloat32ProjectionRetainedJSON(ids, projection)
+			if err != nil {
+				return nil, err
+			}
+			retainedDocuments = make([][]byte, len(entries))
+			for row := range entries {
+				retained, ok := retainedByID[string(entries[row].id)]
+				if !ok {
+					return nil, fmt.Errorf("collections: validated retained primary row %d id mismatch", row)
+				}
+				retainedDocuments[row] = retained
+			}
+		} else {
+			fullDocumentIDs := make([][]byte, len(entries))
+			fullDocuments := make([][]byte, len(entries))
+			for i := range entries {
+				fullDocumentIDs[i] = entries[i].id
+				fullDocuments[i] = entries[i].document
+			}
+			prepared, err = prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(*c.meta.Options.ColumnStore, fullDocumentIDs, fullDocuments, columnRetainedPayloadTemplateResolver(snap, catalog))
+			if err != nil {
+				return nil, err
+			}
+			retainedDocuments = prepared.documents
+			retainedTemplateRecords = prepared.templateRecords
+			retainedSemanticStreamBlocks = prepared.semanticStreamBlocks
+			retainedDeclaredRows = prepared.declaredRows
+			retainedDeclaredRowsReady = prepared.declaredRowsReady
 		}
-		prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(*c.meta.Options.ColumnStore, fullDocumentIDs, fullDocuments, columnRetainedPayloadTemplateResolver(snap, catalog))
-		if err != nil {
-			return nil, err
-		}
-		retainedDocuments = prepared.documents
-		retainedTemplateRecords = prepared.templateRecords
-		retainedSemanticStreamBlocks = prepared.semanticStreamBlocks
-		retainedDeclaredRows = prepared.declaredRows
-		retainedDeclaredRowsReady = prepared.declaredRowsReady
 		stats.RetainedPayloadPrepare = time.Since(phaseStart)
 		stats.RetainedPayloadRows = len(entries)
 		if retainedDeclaredRowsReady {
@@ -20330,7 +20635,10 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.rootBaseIDs = nil
 	domain.rootValueArenas = nil
 	domain.primaryOverlay = nil
+	domain.fullDocumentOverlay = nil
 	domain.columnDocuments = nil
+	domain.columnDocumentIndex = nil
+	domain.reconstructionRows = 0
 	domain.preparedTextInserts = nil
 	domain.columnCommandBytes = 0
 	domain.rawDocumentBytes = 0
@@ -21583,7 +21891,12 @@ func (c *Collection) getBufferedDocumentInto(documentID []byte, dst []byte) ([]b
 		domain.mu.RUnlock()
 		return nil, false, false, nil
 	}
-	if domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, c.meta.Name) {
+	meta := domain.meta
+	if meta.Name == "" {
+		meta = c.meta
+	}
+	needsColumnDocumentIndex := bufferedNonColumnJSONNeedsReconstruction(meta) && pendingBufferedColumnDocumentIndexNeedsBuildLocked(domain)
+	if (domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, c.meta.Name)) || needsColumnDocumentIndex {
 		domain.mu.RUnlock()
 		return c.getBufferedDocumentIntoWithPrimaryRunIndex(documentID, dst)
 	}
@@ -21609,7 +21922,57 @@ func (c *Collection) getBufferedDocumentIntoWithPrimaryRunIndex(documentID []byt
 			domain.primaryRunIndex = index
 		}
 	}
+	meta := domain.meta
+	if meta.Name == "" {
+		meta = c.meta
+	}
+	if bufferedNonColumnJSONNeedsReconstruction(meta) {
+		buildPendingBufferedColumnDocumentIndexesLocked(domain)
+	}
 	return c.getBufferedDocumentIntoLocked(domain, documentID, dst)
+}
+
+func pendingBufferedColumnDocumentIndexNeedsBuildLocked(domain *collectionWriteDomain) bool {
+	if domain == nil {
+		return false
+	}
+	if bufferedColumnDocumentsNeedIndex(domain.columnDocuments, domain.columnDocumentIndex) {
+		return true
+	}
+	for i := range domain.indexedFlushUnits {
+		unit := &domain.indexedFlushUnits[i]
+		if bufferedColumnDocumentsNeedIndex(unit.columnDocuments, unit.columnDocumentIndex) {
+			return true
+		}
+	}
+	for i := range domain.indexedPublishingUnits {
+		unit := &domain.indexedPublishingUnits[i]
+		if bufferedColumnDocumentsNeedIndex(unit.columnDocuments, unit.columnDocumentIndex) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildPendingBufferedColumnDocumentIndexesLocked(domain *collectionWriteDomain) {
+	if domain == nil {
+		return
+	}
+	if bufferedColumnDocumentsNeedIndex(domain.columnDocuments, domain.columnDocumentIndex) {
+		domain.columnDocumentIndex = buildBufferedColumnDocumentIndex(domain.columnDocuments, domain.reconstructionRows)
+	}
+	for i := range domain.indexedFlushUnits {
+		unit := &domain.indexedFlushUnits[i]
+		if bufferedColumnDocumentsNeedIndex(unit.columnDocuments, unit.columnDocumentIndex) {
+			unit.columnDocumentIndex = buildBufferedColumnDocumentIndex(unit.columnDocuments, unit.reconstructionRows)
+		}
+	}
+	for i := range domain.indexedPublishingUnits {
+		unit := &domain.indexedPublishingUnits[i]
+		if bufferedColumnDocumentsNeedIndex(unit.columnDocuments, unit.columnDocumentIndex) {
+			unit.columnDocumentIndex = buildBufferedColumnDocumentIndex(unit.columnDocuments, unit.reconstructionRows)
+		}
+	}
 }
 
 func bufferedDomainCollectionName(domain *collectionWriteDomain, fallback string) string {
@@ -21645,6 +22008,13 @@ func hasBufferedPrimaryWritesLocked(domain *collectionWriteDomain, fallbackColle
 
 func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain, documentID []byte, dst []byte) ([]byte, bool, bool, error) {
 	table := domain.table
+	meta := domain.meta
+	if meta.Name == "" {
+		meta = c.meta
+	}
+	if _, ok := lookupPendingFullDocumentLocked(domain, documentID); ok || bufferedNonColumnJSONNeedsReconstruction(meta) {
+		return c.getBufferedFullDocumentIntoLocked(domain, documentID, dst)
+	}
 	if ref, ok := domain.primaryOverlay.lookupRef(documentID); ok {
 		if ref.flags&node.FlagTombstone != 0 {
 			return dst[:0], true, false, nil
@@ -21701,6 +22071,96 @@ func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain
 	}
 	value, err := appendBufferedPrimaryEntry(c.db, dst[:0], value, ptr, flags)
 	return value, true, true, err
+}
+
+func bufferedNonColumnJSONNeedsReconstruction(meta CollectionMeta) bool {
+	cfg := meta.Options.ColumnStore
+	return cfg != nil && cfg.Enabled && cfg.RetainedPayload == ColumnRetainedPayloadNonColumn &&
+		columnRetainedPayloadEffectiveEncoding(cfg) == ColumnRetainedPayloadEncodingJSON &&
+		normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatJSON
+}
+
+func (c *Collection) getBufferedFullDocumentIntoLocked(domain *collectionWriteDomain, documentID, dst []byte) ([]byte, bool, bool, error) {
+	meta := domain.meta
+	if meta.Name == "" {
+		meta = c.meta
+	}
+	rootName := collectionPrimaryRootName(meta.Name)
+	mutable := indexedFlushUnit{
+		rootRuns:            domain.rootRuns,
+		primaryOverlay:      domain.primaryOverlay,
+		fullDocumentOverlay: domain.fullDocumentOverlay,
+		columnDocuments:     domain.columnDocuments,
+		columnDocumentIndex: domain.columnDocumentIndex,
+	}
+	if value, buffered, found, err := c.getBufferedFullDocumentFromUnit(documentID, dst, rootName, meta.Options.ColumnStore, &mutable); buffered || err != nil {
+		return value, buffered, found, err
+	}
+	for i := len(domain.indexedFlushUnits) - 1; i >= 0; i-- {
+		if value, buffered, found, err := c.getBufferedFullDocumentFromUnit(documentID, dst, rootName, meta.Options.ColumnStore, &domain.indexedFlushUnits[i]); buffered || err != nil {
+			return value, buffered, found, err
+		}
+	}
+	for i := len(domain.indexedPublishingUnits) - 1; i >= 0; i-- {
+		if value, buffered, found, err := c.getBufferedFullDocumentFromUnit(documentID, dst, rootName, meta.Options.ColumnStore, &domain.indexedPublishingUnits[i]); buffered || err != nil {
+			return value, buffered, found, err
+		}
+	}
+	return nil, false, false, nil
+}
+
+func (c *Collection) getBufferedFullDocumentFromUnit(documentID, dst []byte, rootName string, cfg *ColumnStoreConfig, unit *indexedFlushUnit) ([]byte, bool, bool, error) {
+	if unit == nil {
+		return nil, false, false, nil
+	}
+	full, hasFull := unit.fullDocumentOverlay.lookupRef(documentID)
+	var value []byte
+	var ptr page.ValuePtr
+	var flags byte
+	found := false
+	if ref, ok := unit.primaryOverlay.lookupRef(documentID); ok {
+		value, flags, found = ref.value, ref.flags, true
+	} else {
+		value, ptr, flags, found = getBufferedRunEntry(unit.rootRuns[rootName], documentID)
+	}
+	if found {
+		if flags&node.FlagTombstone != 0 {
+			return dst[:0], true, false, nil
+		}
+		document, ok := unit.columnDocumentIndex.lookup(unit.columnDocuments, documentID)
+		if !ok || !document.reconstructFromRetained {
+			if hasFull {
+				return append(dst[:0], full.value...), true, true, nil
+			}
+			return nil, true, false, errors.New("collections: buffered primary write is missing its full-document overlay or retained reconstruction row")
+		}
+		if !document.declaredValuesReady {
+			return nil, true, false, errors.New("collections: buffered retained reconstruction row has no declared values")
+		}
+		if cfg == nil {
+			return nil, true, false, errors.New("collections: buffered retained reconstruction is missing column-store metadata")
+		}
+		retained := value
+		var err error
+		if flags&node.FlagPointer != 0 {
+			retained, err = appendBufferedPrimaryEntry(c.db, nil, value, ptr, flags)
+			if err != nil {
+				return nil, true, false, err
+			}
+		}
+		_, reconstructed, err := reconstructColumnJSONDocumentProjectedInto(dst[:0], *cfg, retained, document.declaredValues, nil, nil)
+		if err != nil {
+			return nil, true, false, fmt.Errorf("collections: reconstruct buffered retained document %q: %w", documentID, err)
+		}
+		return reconstructed, true, true, nil
+	}
+	if hasFull {
+		if full.flags&node.FlagTombstone != 0 {
+			return dst[:0], true, false, nil
+		}
+		return append(dst[:0], full.value...), true, true, nil
+	}
+	return nil, false, false, nil
 }
 
 func appendBufferedPrimaryEntry(db *backenddb.DB, dst, value []byte, ptr page.ValuePtr, flags byte) ([]byte, error) {
