@@ -37,10 +37,11 @@ const (
 var ErrColumnDeclaredValueUnsupported = errors.New("collections: unsupported column declared value")
 
 type columnWriteDocument struct {
-	ID                  []byte
-	Document            []byte
-	declaredValues      []columnDeclaredValue
-	declaredValuesReady bool
+	ID                      []byte
+	Document                []byte
+	declaredValues          []columnDeclaredValue
+	declaredValuesReady     bool
+	reconstructFromRetained bool
 }
 
 type trustedFloat32Projection struct {
@@ -186,6 +187,7 @@ func applyTrustedFloat32Projection(ids [][]byte, documents []columnWriteDocument
 			Float32Vector: vector,
 		}}
 		documents[row].declaredValuesReady = true
+		documents[row].reconstructFromRetained = projection.retainedJSON != nil
 	}
 	return nil
 }

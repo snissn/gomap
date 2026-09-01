@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"runtime"
 	"testing"
 	"time"
 
@@ -218,6 +219,20 @@ func TestInsertBatchWithStatsValidatedFloat32ProjectionUsesTrustedRetainedJSON(t
 	} else if stats.RetainedPayloadRows != 2 || stats.ColumnPublishValidatedFloat32ProjectionRows != 2 {
 		t.Fatalf("insert stats=%+v want two retained and trusted projection rows", stats)
 	}
+	col.writeDomain.mu.RLock()
+	if got := col.writeDomain.fullDocumentOverlay.len(); got != 0 {
+		col.writeDomain.mu.RUnlock()
+		t.Fatalf("pending full-document rows=%d want 0", got)
+	}
+	if got := col.writeDomain.rawDocumentBytes; got != 0 {
+		col.writeDomain.mu.RUnlock()
+		t.Fatalf("pending raw-document bytes=%d want 0", got)
+	}
+	if col.writeDomain.columnDocumentIndex != nil {
+		col.writeDomain.mu.RUnlock()
+		t.Fatal("pending retained-row index was built before a read")
+	}
+	col.writeDomain.mu.RUnlock()
 	retained[0][0] = '['
 	for row, id := range ids {
 		got, err := col.Get(id)
@@ -373,6 +388,10 @@ func openValidatedFloat32ProjectionCollection(t testing.TB, dims int) (string, *
 }
 
 func openValidatedFloat32ProjectionCollectionWithPolicy(t testing.TB, dims int, retainedPayload ColumnRetainedPayloadPolicy) (string, *backenddb.DB, *Collection) {
+	return openValidatedFloat32ProjectionCollectionWithPolicyAndBufferLimit(t, dims, retainedPayload, 0, false)
+}
+
+func openValidatedFloat32ProjectionCollectionWithPolicyAndBufferLimit(t testing.TB, dims int, retainedPayload ColumnRetainedPayloadPolicy, bufferedMaxDocuments int, withTextIndex bool) (string, *backenddb.DB, *Collection) {
 	t.Helper()
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -384,6 +403,7 @@ func openValidatedFloat32ProjectionCollectionWithPolicy(t testing.TB, dims int, 
 		Options: CollectionOptions{
 			DocumentFormat:                   DocumentFormatJSON,
 			DisableBufferedIndexedAsyncFlush: true,
+			BufferedIndexedWriteMaxDocuments: bufferedMaxDocuments,
 			ColumnStore: &ColumnStoreConfig{
 				Enabled:                 true,
 				Columns:                 []ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: dims}},
@@ -392,6 +412,9 @@ func openValidatedFloat32ProjectionCollectionWithPolicy(t testing.TB, dims int, 
 			},
 		},
 		VectorIndexes: []VectorIndexDefinition{{Name: "embedding_graph", Field: "embedding", Metric: VectorMetricCosine, Dimensions: dims, M: 2, Strategy: VectorIndexStrategyColumnGraph}},
+	}
+	if withTextIndex {
+		meta.TextIndexes = []TextIndexDefinition{{Name: "content_text", Fields: []TextIndexField{{Field: "content"}}, Analyzer: TextAnalyzerSimple}}
 	}
 	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
 		_ = d.Close()
@@ -418,7 +441,7 @@ func BenchmarkInsertBatchValidatedFloat32ProjectionCohere768RetainedPayload(b *t
 	} {
 		benchmark := benchmark
 		b.Run(benchmark.name, func(b *testing.B) {
-			_, d, col := openValidatedFloat32ProjectionCollectionWithPolicy(b, 768, benchmark.policy)
+			_, d, col := openValidatedFloat32ProjectionCollectionWithPolicyAndBufferLimit(b, 768, benchmark.policy, 1<<20, true)
 			defer func() { _ = d.Close() }()
 			batches := make([]struct {
 				ids       [][]byte
@@ -473,6 +496,9 @@ func BenchmarkInsertBatchValidatedFloat32ProjectionCohere768RetainedPayload(b *t
 			b.ReportAllocs()
 			b.SetBytes(inputBytes)
 			var retainedPrepare time.Duration
+			runtime.GC()
+			var heapBefore runtime.MemStats
+			runtime.ReadMemStats(&heapBefore)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				var stats CollectionInsertStats
@@ -492,6 +518,13 @@ func BenchmarkInsertBatchValidatedFloat32ProjectionCohere768RetainedPayload(b *t
 				retainedPrepare += stats.RetainedPayloadPrepare
 			}
 			b.StopTimer()
+			var heapPending runtime.MemStats
+			runtime.ReadMemStats(&heapPending)
+			runtime.GC()
+			var heapLive runtime.MemStats
+			runtime.ReadMemStats(&heapLive)
+			runtime.KeepAlive(batches)
+			pending := col.writeDomain.statsSnapshot()
 			if err := col.Flush(); err != nil {
 				b.Fatalf("Flush: %v", err)
 			}
@@ -499,10 +532,22 @@ func BenchmarkInsertBatchValidatedFloat32ProjectionCohere768RetainedPayload(b *t
 				b.ReportMetric(float64(retainedPrepare.Nanoseconds())/float64(b.N), "retained_prepare_ns/op")
 			}
 			b.ReportMetric(float64(inputBytes), "input_B/op")
+			b.ReportMetric(float64(saturatingSubtractUint64(heapPending.HeapAlloc, heapBefore.HeapAlloc)), "pending_heap_B")
+			b.ReportMetric(float64(saturatingSubtractUint64(heapLive.HeapAlloc, heapBefore.HeapAlloc)), "pending_live_heap_B")
+			b.ReportMetric(float64(pending.PendingIndexedFullDocumentRows), "pending_full_document_rows")
+			b.ReportMetric(float64(pending.PendingIndexedReconstructionRows), "pending_reconstruction_rows")
+			b.ReportMetric(float64(pending.PendingIndexedRawDocumentBytes), "pending_raw_document_B")
 			b.ReportMetric(float64(retainedBytes), "retained_B/op")
 			b.ReportMetric(float64(rowsPerBatch*768*4), "typed_column_B/op")
 		})
 	}
+}
+
+func saturatingSubtractUint64(value, baseline uint64) uint64 {
+	if value <= baseline {
+		return 0
+	}
+	return value - baseline
 }
 
 func validatedFloat32ProjectionDocuments(t testing.TB, ids [][]byte, vectors [][]float32) [][]byte {

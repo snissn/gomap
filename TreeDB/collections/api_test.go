@@ -21,6 +21,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/cespare/xxhash/v2"
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -12646,6 +12647,128 @@ func TestGetBufferedFullDocumentOverlayHonorsNewestPrimaryWrite(t *testing.T) {
 		got, buffered, found, err := col.getBufferedDocumentIntoLocked(domain, []byte("a"), nil)
 		if err != nil || !buffered || !found || string(got) != `{"content":"new","embedding":[0,1]}` {
 			t.Fatalf("get after replacement got=%s buffered=%v found=%v err=%v", got, buffered, found, err)
+		}
+	})
+}
+
+func TestGetBufferedRetainedDocumentReconstructsWithinOwningUnit(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+			ColumnStore: &ColumnStoreConfig{
+				Enabled:                 true,
+				RetainedPayload:         ColumnRetainedPayloadNonColumn,
+				RetainedPayloadEncoding: ColumnRetainedPayloadEncodingJSON,
+				Columns: []ColumnStoreColumn{{
+					Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart,
+					ValueType: ColumnStoreValueFloat32Vector, VectorDims: 2,
+				}},
+			},
+		},
+	}
+	col := &Collection{meta: meta}
+	primaryRoot := collectionPrimaryRootName(meta.Name)
+	fullOverlay := func(value string) *bufferedPrimaryOverlay {
+		overlay := newBufferedPrimaryOverlay(1)
+		overlay.addEntry(directBufferedRootEntry{key: []byte("a"), value: []byte(value), flags: node.FlagInline})
+		return overlay
+	}
+	newUnit := func(t *testing.T) indexedFlushUnit {
+		t.Helper()
+		primary := newCollectionRunTable(1)
+		setCollectionRunValue(primary, []byte("a"), []byte(`{"content":"alpha","id":"a"}`))
+		primary.Freeze()
+		t.Cleanup(func() { resetCollectionRunTable(primary) })
+		return indexedFlushUnit{
+			rootRuns: map[string][]memtable.Table{primaryRoot: {primary}},
+			columnDocuments: []columnWriteDocument{{
+				ID: []byte("a"), declaredValuesReady: true, reconstructFromRetained: true,
+				declaredValues: []columnDeclaredValue{{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{1, 0}}},
+			}},
+		}
+	}
+	assertReconstructed := func(t *testing.T, domain *collectionWriteDomain) {
+		t.Helper()
+		buildPendingBufferedColumnDocumentIndexesLocked(domain)
+		got, buffered, found, err := col.getBufferedDocumentIntoLocked(domain, []byte("a"), nil)
+		if err != nil || !buffered || !found {
+			t.Fatalf("get reconstructed buffered document got=%s buffered=%v found=%v err=%v", got, buffered, found, err)
+		}
+		var document struct {
+			ID        string    `json:"id"`
+			Content   string    `json:"content"`
+			Embedding []float32 `json:"embedding"`
+		}
+		if err := json.Unmarshal(got, &document); err != nil {
+			t.Fatalf("decode reconstructed document %s: %v", got, err)
+		}
+		if document.ID != "a" || document.Content != "alpha" || !reflect.DeepEqual(document.Embedding, []float32{1, 0}) {
+			t.Fatalf("reconstructed document=%+v", document)
+		}
+	}
+
+	t.Run("mutable", func(t *testing.T) {
+		unit := newUnit(t)
+		domain := &collectionWriteDomain{count: 1, loaded: true, meta: meta, rootRuns: unit.rootRuns, columnDocuments: unit.columnDocuments}
+		assertReconstructed(t, domain)
+		if domain.columnDocumentIndex == nil {
+			t.Fatal("mutable retained-row index was not built lazily")
+		}
+	})
+	t.Run("queued", func(t *testing.T) {
+		unit := newUnit(t)
+		domain := &collectionWriteDomain{count: 1, loaded: true, meta: meta, indexedFlushUnits: []indexedFlushUnit{unit}}
+		assertReconstructed(t, domain)
+		if domain.indexedFlushUnits[0].columnDocumentIndex == nil {
+			t.Fatal("queued retained-row index was not built lazily")
+		}
+	})
+	t.Run("publishing", func(t *testing.T) {
+		unit := newUnit(t)
+		domain := &collectionWriteDomain{count: 1, loaded: true, meta: meta, indexedPublishingUnits: []indexedFlushUnit{unit}}
+		assertReconstructed(t, domain)
+		if domain.indexedPublishingUnits[0].columnDocumentIndex == nil {
+			t.Fatal("publishing retained-row index was not built lazily")
+		}
+	})
+	t.Run("collision", func(t *testing.T) {
+		unit := newUnit(t)
+		unit.columnDocuments = append([]columnWriteDocument{{
+			ID: []byte("collision"), declaredValuesReady: true, reconstructFromRetained: true,
+			declaredValues: []columnDeclaredValue{{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{0, 1}}},
+		}}, unit.columnDocuments...)
+		hash := xxhash.Sum64([]byte("a"))
+		unit.columnDocumentIndex = &bufferedColumnDocumentIndex{values: map[uint64]int{hash: 0}, collisions: map[uint64][]int{hash: {1}}}
+		domain := &collectionWriteDomain{count: 1, loaded: true, meta: meta, indexedFlushUnits: []indexedFlushUnit{unit}}
+		assertReconstructed(t, domain)
+	})
+	t.Run("newer retained row wins over stale full overlay", func(t *testing.T) {
+		unit := newUnit(t)
+		unit.columnDocuments = append([]columnWriteDocument{{ID: []byte("a"), declaredValuesReady: true}}, unit.columnDocuments...)
+		unit.fullDocumentOverlay = fullOverlay(`{"content":"stale","embedding":[0,1],"id":"a"}`)
+		domain := &collectionWriteDomain{count: 2, loaded: true, meta: meta, indexedFlushUnits: []indexedFlushUnit{unit}}
+		assertReconstructed(t, domain)
+	})
+	t.Run("newer generic row keeps full overlay", func(t *testing.T) {
+		unit := newUnit(t)
+		unit.columnDocuments = append(unit.columnDocuments, columnWriteDocument{ID: []byte("a"), declaredValuesReady: true})
+		want := `{"content":"generic latest","embedding":[0,1],"id":"a"}`
+		unit.fullDocumentOverlay = fullOverlay(want)
+		domain := &collectionWriteDomain{count: 2, loaded: true, meta: meta, indexedFlushUnits: []indexedFlushUnit{unit}}
+		buildPendingBufferedColumnDocumentIndexesLocked(domain)
+		got, buffered, found, err := col.getBufferedDocumentIntoLocked(domain, []byte("a"), nil)
+		if err != nil || !buffered || !found || string(got) != want {
+			t.Fatalf("get latest generic row got=%s buffered=%v found=%v err=%v", got, buffered, found, err)
+		}
+	})
+	t.Run("mismatched row fails closed", func(t *testing.T) {
+		unit := newUnit(t)
+		unit.columnDocuments[0].ID = []byte("other")
+		domain := &collectionWriteDomain{count: 1, loaded: true, meta: meta, indexedFlushUnits: []indexedFlushUnit{unit}}
+		buildPendingBufferedColumnDocumentIndexesLocked(domain)
+		if _, buffered, found, err := col.getBufferedDocumentIntoLocked(domain, []byte("a"), nil); err == nil || !buffered || found {
+			t.Fatalf("mismatched retained row buffered=%v found=%v err=%v", buffered, found, err)
 		}
 	})
 }

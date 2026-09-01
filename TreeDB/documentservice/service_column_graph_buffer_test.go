@@ -128,11 +128,14 @@ func TestServiceColumnGraphCoalescesBufferedInsertPublication(t *testing.T) {
 	if before.PendingRootRuns == 0 || before.IndexedFlushCalls != 0 {
 		t.Fatalf("before search pending_root_runs=%d indexed_flush_calls=%d, want pending and unpublished", before.PendingRootRuns, before.IndexedFlushCalls)
 	}
-	if before.PendingIndexedRawDocumentBytes == 0 {
-		t.Fatal("before search read-your-writes overlay bytes=0 want positive")
+	if before.PendingIndexedRawDocumentBytes != 0 {
+		t.Fatalf("before search retained raw-document bytes=%d want 0", before.PendingIndexedRawDocumentBytes)
 	}
-	if before.PendingIndexedFullDocumentRows != 2 {
-		t.Fatalf("before search full-document overlay rows=%d want 2", before.PendingIndexedFullDocumentRows)
+	if before.PendingIndexedFullDocumentRows != 0 {
+		t.Fatalf("before search full-document overlay rows=%d want 0", before.PendingIndexedFullDocumentRows)
+	}
+	if before.PendingIndexedReconstructionRows != 2 {
+		t.Fatalf("before search retained reconstruction rows=%d want 2", before.PendingIndexedReconstructionRows)
 	}
 	if before.PendingIndexedPublicationBytes == 0 {
 		t.Fatal("before search retained compact publication bytes=0 want positive")
@@ -171,6 +174,9 @@ func TestServiceColumnGraphCoalescesBufferedInsertPublication(t *testing.T) {
 	if after.PendingIndexedFullDocumentRows != 0 {
 		t.Fatalf("after search full-document overlay rows=%d want 0", after.PendingIndexedFullDocumentRows)
 	}
+	if after.PendingIndexedReconstructionRows != 0 {
+		t.Fatalf("after search retained reconstruction rows=%d want 0", after.PendingIndexedReconstructionRows)
+	}
 	withEmbedding, err := svc.SearchKeyword(ctx, "docs", KeywordSearchRequest{Query: "alpha", TopK: 2, ReturnEmbedding: true})
 	if err != nil {
 		t.Fatalf("SearchKeyword with embedding: %v", err)
@@ -187,8 +193,22 @@ func TestServiceColumnGraphCoalescesBufferedInsertPublication(t *testing.T) {
 	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{replacement}, DeferVectorIndexRebuild: true}); err != nil {
 		t.Fatalf("replace document: %v", err)
 	}
+	raw, err = col.Get([]byte("a"))
+	if err != nil {
+		t.Fatalf("Get buffered replacement: %v", err)
+	}
+	buffered = Document{}
+	if err := json.Unmarshal(raw, &buffered); err != nil {
+		t.Fatalf("decode buffered replacement: %v", err)
+	}
+	if buffered.Content != replacement.Content || !reflect.DeepEqual(buffered.Embedding, replacement.Embedding) {
+		t.Fatalf("buffered replacement=%+v want %+v", buffered, replacement)
+	}
 	if _, err := svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{IDs: []string{"b"}}); err != nil {
 		t.Fatalf("delete document: %v", err)
+	}
+	if raw, err := col.Get([]byte("b")); err != nil || raw != nil {
+		t.Fatalf("Get buffered delete=%s err=%v want missing", raw, err)
 	}
 	if err := manager.FlushAll(); err != nil {
 		t.Fatalf("FlushAll after replace/delete: %v", err)
