@@ -171,3 +171,76 @@ func BenchmarkComponentValueLanesParallel(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkComponentNativeRootValueLogAppendWriters(b *testing.B) {
+	const (
+		valuesPerBatch = 480
+		valueBytes     = 8_704
+	)
+	records := make([]valuelog.Record, valuesPerBatch)
+	for i := range records {
+		value := make([]byte, valueBytes)
+		state := uint32(i + 1)
+		for j := range value[:valueBytes/2] {
+			state ^= state << 13
+			state ^= state >> 17
+			state ^= state << 5
+			value[j] = byte(state)
+		}
+		for j := valueBytes / 2; j < len(value); j++ {
+			value[j] = byte((i*31 + j*17 + j>>5) % 251)
+		}
+		records[i] = valuelog.Record{RID: uint64(i + 1), Value: value}
+	}
+
+	for _, width := range []int{1, 2, 4, 8} {
+		b.Run(fmt.Sprintf("writers_%d", width), func(b *testing.B) {
+			db := &DB{
+				closeCh:                  make(chan struct{}),
+				splitValueLog:            true,
+				disableJournal:           true,
+				forceValueLogPointers:    true,
+				valueLogCompressionMode:  uint8(vlogCompressionBlock),
+				valueLogBlockCodec:       valuelog.BlockCodecZSTD,
+				valueLogBlockTargetBytes: 256,
+				valueLogThreshold:        1 << 30,
+				valueLogAutotuneOptions: valuelog.AutotuneOptions{
+					Mode: valuelog.AutotuneOff,
+				},
+				lanes: []lane{{id: 0}},
+			}
+			db.nativeRootValueLogAppendLanes = make([]*lane, width)
+			for i := 0; i < width; i++ {
+				fileID, _ := valuelog.EncodeFileID(0, uint32(i+1))
+				writer := valuelog.NewWriterWithSink(&valuelog.VirtualSink{Clock: valuelog.NewVirtualClock(time.Unix(0, 0))}, fileID)
+				writer.SetEncodeSampleStride(0)
+				l := &db.lanes[0]
+				if i > 0 {
+					l = &lane{id: 0}
+				}
+				l.vlog = writer
+				l.vlogSeq = i + 1
+				db.nativeRootValueLogAppendLanes[i] = l
+			}
+			db.nativeRootValueLogAppendShared = width > 1
+			appender := &cachingValueLogAppender{db: db, lane: &db.lanes[0]}
+
+			b.ReportAllocs()
+			b.SetBytes(valuesPerBatch * valueBytes)
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					if _, err := appender.appendRecords(records); err != nil {
+						panic(err)
+					}
+				}
+			})
+			b.StopTimer()
+			for _, l := range db.nativeRootValueLogAppendLanes {
+				if err := l.vlog.Close(); err != nil {
+					b.Fatalf("writer close: %v", err)
+				}
+			}
+		})
+	}
+}

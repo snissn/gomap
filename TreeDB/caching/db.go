@@ -2547,6 +2547,11 @@ func (db *DB) hasDirtyValueLogLanes() bool {
 			return true
 		}
 	}
+	for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
+		if l.vlogDirty.Load() || l.vlogSyncPending.Load() {
+			return true
+		}
+	}
 	return false
 }
 
@@ -2646,10 +2651,9 @@ func (db *DB) flushPendingValueLogLanes(sync bool, syncPath valueLogSyncPath) er
 		return nil
 	}
 	actualSync := sync && !db.relaxedSync
-	for i := range db.lanes {
-		l := &db.lanes[i]
+	flushLane := func(l *lane) error {
 		if !l.vlogDirty.Load() && !(actualSync && l.vlogSyncPending.Load()) {
-			continue
+			return nil
 		}
 		waitStart := time.Now()
 		l.vlogMu.Lock()
@@ -2674,7 +2678,15 @@ func (db *DB) flushPendingValueLogLanes(sync bool, syncPath valueLogSyncPath) er
 			l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
 		}
 		l.vlogMu.Unlock()
-		if err != nil {
+		return err
+	}
+	for i := range db.lanes {
+		if err := flushLane(&db.lanes[i]); err != nil {
+			return err
+		}
+	}
+	for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
+		if err := flushLane(l); err != nil {
 			return err
 		}
 	}
@@ -3282,6 +3294,9 @@ func (db *DB) valueLogLaneForFileID(fileID uint32) *lane {
 		return nil
 	}
 	laneID, seq := valuelog.DecodeFileID(fileID)
+	if l := db.nativeRootValueLogAppendLaneForFileID(laneID, seq); l != nil {
+		return l
+	}
 	if laneID != leafLogLaneID || !db.indexOuterLeavesInValueLog {
 		return db.valueLogLaneByID(int(laneID))
 	}
@@ -3351,6 +3366,13 @@ func (db *DB) isLeafLogAppendLane(l *lane) bool {
 
 func (db *DB) leafLogAppendCompressionSelector() *vlogCompressionSelector {
 	if db == nil || !db.indexOuterLeavesInValueLog {
+		return nil
+	}
+	return db.newValueLogCompressionSelector()
+}
+
+func (db *DB) newValueLogCompressionSelector() *vlogCompressionSelector {
+	if db == nil {
 		return nil
 	}
 	seedCodec := db.valueLogBlockCodec
@@ -3565,6 +3587,13 @@ func (db *DB) currentValueLogPaths() []string {
 			paths = append(paths, l.walPath)
 		}
 		l.walMu.Unlock()
+	}
+	for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
+		l.vlogMu.Lock()
+		if l.vlogPath != "" {
+			paths = append(paths, l.vlogPath)
+		}
+		l.vlogMu.Unlock()
 	}
 	if db.indexOuterLeavesInValueLog && db.splitValueLogEnabled() {
 		for _, l := range db.leafLogAppendLanesSnapshot() {
@@ -4420,8 +4449,7 @@ func (db *DB) SetDictStore(store DictStore) {
 	db.valueLogDictBytesID = 0
 	db.valueLogDictBytes = nil
 	db.valueLogDictBytesMu.Unlock()
-	for i := range db.lanes {
-		l := &db.lanes[i]
+	for _, l := range db.allValueLogWriterLanesSnapshot() {
 		l.vlogDictBytesMu.Lock()
 		l.vlogDictBytes = nil
 		l.vlogDictBytesMu.Unlock()
@@ -4744,6 +4772,11 @@ func (db *DB) flushValueLog(laneIDs ...int) error {
 				return err
 			}
 		}
+		for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
+			if err := db.flushValueLogLane(l); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
@@ -4997,6 +5030,11 @@ func (db *DB) syncValueLog(laneIDs ...int) error {
 	if len(laneIDs) == 0 {
 		for i := range db.lanes {
 			if err := db.syncValueLogLane(&db.lanes[i]); err != nil {
+				return err
+			}
+		}
+		for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
+			if err := db.syncValueLogLane(l); err != nil {
 				return err
 			}
 		}
@@ -5310,6 +5348,18 @@ func (db *DB) valueLogRetainedStatsDetailed() valueLogRetainedGenerationStats {
 	if db.splitValueLogEnabled() {
 		for i := range db.lanes {
 			l := &db.lanes[i]
+			l.vlogMu.Lock()
+			for path, size := range l.vlogClosedSizes {
+				pathSizes[path] = size
+				pathClasses[path] = l.vlogGenerationClass
+			}
+			if l.vlogPath != "" {
+				currentSizes[l.vlogPath] = l.vlogLiveBytes.Load()
+				pathClasses[l.vlogPath] = l.vlogGenerationClass
+			}
+			l.vlogMu.Unlock()
+		}
+		for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
 			l.vlogMu.Lock()
 			for path, size := range l.vlogClosedSizes {
 				pathSizes[path] = size
@@ -5677,6 +5727,24 @@ func (db *DB) BeginValueLogMaintenanceFence(ctx context.Context) (func(), error)
 		}
 		l.vlogMu.Unlock()
 	}
+	for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
+		if err := ctx.Err(); err != nil {
+			unlock()
+			return nil, err
+		}
+		l.vlogMu.Lock()
+		if l.vlogPath != "" {
+			db.markValueLogRetain(l.vlogPath)
+			err := db.rotateValueLogMuHeld(l)
+			l.vlogMu.Unlock()
+			if err != nil {
+				unlock()
+				return nil, err
+			}
+			continue
+		}
+		l.vlogMu.Unlock()
+	}
 	if db.indexOuterLeavesInValueLog {
 		for _, l := range db.leafLogAppendLanesSnapshot() {
 			if l == nil {
@@ -5716,6 +5784,26 @@ func (db *DB) rotateObservedValueLogSources(ctx context.Context, ids map[uint32]
 			return err
 		}
 		l := &db.lanes[i]
+		l.vlogMu.Lock()
+		if l.vlogPath == "" || l.vlogSeq <= 0 {
+			l.vlogMu.Unlock()
+			continue
+		}
+		fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
+		if err == nil {
+			if _, ok := ids[fileID]; ok {
+				err = db.rotateValueLogMuHeld(l)
+			}
+		}
+		l.vlogMu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		l.vlogMu.Lock()
 		if l.vlogPath == "" || l.vlogSeq <= 0 {
 			l.vlogMu.Unlock()
@@ -6490,6 +6578,11 @@ func (db *DB) allowValueLogPointers() bool {
 	if db.splitValueLogEnabled() {
 		for i := range db.lanes {
 			l := &db.lanes[i]
+			if l.vlogPath != "" && l.vlogPath == l.vlogRetainedPath {
+				bytes += l.vlogLiveBytes.Load()
+			}
+		}
+		for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
 			if l.vlogPath != "" && l.vlogPath == l.vlogRetainedPath {
 				bytes += l.vlogLiveBytes.Load()
 			}
@@ -7944,8 +8037,16 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
 			maxSeqByLane[seg.lane] = seg.seq
 		}
 	}
+	if db.nativeRootValueLogAppendShared && len(db.nativeRootValueLogAppendLanes) > 0 {
+		db.advanceNativeRootValueLogAppendSeqAtLeast(maxSeqByLane[db.nativeRootValueLogAppendLanes[0].id])
+	}
 	for i := range db.lanes {
 		if err := db.advanceValueLogWriterPastObservedSeq(&db.lanes[i], maxSeqByLane[db.lanes[i].id]); err != nil {
+			return err
+		}
+	}
+	for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
+		if err := db.advanceValueLogWriterPastObservedSeq(l, maxSeqByLane[l.id]); err != nil {
 			return err
 		}
 	}
@@ -8001,6 +8102,13 @@ func (db *DB) advanceValueLogWriterPastObservedSeq(l *lane, observedMaxSeq int) 
 		l.vlogModeSet = false
 		l.vlogModeWriter = nil
 		return nil
+	}
+	if db.isSharedNativeRootValueLogAppendLane(l) {
+		nextSeq, err := db.nextNativeRootValueLogAppendSeq()
+		if err != nil {
+			return err
+		}
+		return db.rotateValueLogMuHeldToSeq(l, nextSeq)
 	}
 	return db.rotateValueLogMuHeldToSeq(l, observedMaxSeq+1)
 }
@@ -8954,28 +9062,31 @@ type DB struct {
 	backendRangeErr               error
 
 	// Durability
-	journalLanesConfigured    int
-	journalLanesDefaulted     bool
-	journalLanesGOMAXPROCS    int
-	journalLanesPhysicalCores int
-	lanes                     []lane
-	leafLog                   lane
-	leafLogAppendMu           sync.RWMutex
-	leafLogAppendLanes        []*lane
-	leafLogAppendSeq          atomic.Uint32
-	leafLogAppendLanesView    atomic.Pointer[[]*lane]
-	laneMu                    sync.Mutex
-	laneCond                  *sync.Cond
-	nextLane                  int
-	flushLaneMu               []sync.Mutex
-	nextCommitSeq             atomic.Uint64
-	walAckMu                  sync.Mutex
-	walErr                    error
-	nextRID                   atomic.Uint64
-	valueLogSyncPathCalls     [valueLogSyncPathCount]atomic.Uint64
-	valueLogSyncPathNs        [valueLogSyncPathCount]atomic.Uint64
-	valueLogSyncPathWaitNs    [valueLogSyncPathCount]atomic.Uint64
-	valueLogSyncPathErrors    [valueLogSyncPathCount]atomic.Uint64
+	journalLanesConfigured         int
+	journalLanesDefaulted          bool
+	journalLanesGOMAXPROCS         int
+	journalLanesPhysicalCores      int
+	lanes                          []lane
+	leafLog                        lane
+	leafLogAppendMu                sync.RWMutex
+	leafLogAppendLanes             []*lane
+	leafLogAppendSeq               atomic.Uint32
+	leafLogAppendLanesView         atomic.Pointer[[]*lane]
+	nativeRootValueLogAppendLanes  []*lane
+	nativeRootValueLogAppendSeq    atomic.Uint32
+	nativeRootValueLogAppendShared bool
+	laneMu                         sync.Mutex
+	laneCond                       *sync.Cond
+	nextLane                       int
+	flushLaneMu                    []sync.Mutex
+	nextCommitSeq                  atomic.Uint64
+	walAckMu                       sync.Mutex
+	walErr                         error
+	nextRID                        atomic.Uint64
+	valueLogSyncPathCalls          [valueLogSyncPathCount]atomic.Uint64
+	valueLogSyncPathNs             [valueLogSyncPathCount]atomic.Uint64
+	valueLogSyncPathWaitNs         [valueLogSyncPathCount]atomic.Uint64
+	valueLogSyncPathErrors         [valueLogSyncPathCount]atomic.Uint64
 
 	valueLogRotatedFileSyncCalls  atomic.Uint64
 	valueLogRotatedFileSyncNs     atomic.Uint64
@@ -13014,6 +13125,19 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	db.advanceEntryRevisionFloor(backendMaxEntryRevision(backend))
 	db.rebuildGenerationLaneSets()
+	db.initNativeRootValueLogAppendLanes()
+	if db.nativeRootValueLogAppendShared {
+		setter, ok := backend.(interface {
+			SetMultiCurrentWritableValueLogLane(lane uint32, enabled bool)
+		})
+		if !ok {
+			db.initNativeRootValueLogAppendLanesWithWidth(1)
+		} else {
+			laneID := uint32(db.nativeRootValueLogAppendLanes[0].id)
+			db.valueLogReader.SetMultiCurrentWritableLane(laneID, true)
+			setter.SetMultiCurrentWritableValueLogLane(laneID, true)
+		}
+	}
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 	db.maintenancePhase.Store(uint32(MaintenancePhaseSteady))
@@ -13122,6 +13246,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if db.valueLogEnabled() {
 		for i := range db.lanes {
 			db.startVlogWriter(&db.lanes[i])
+		}
+		for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
+			db.startVlogWriter(l)
 		}
 		if opts.IndexOuterLeavesInValueLog {
 			db.startVlogWriter(&db.leafLog)
@@ -15470,7 +15597,7 @@ func (db *DB) vlogWriteWorkerCount() int {
 	if procs <= 1 {
 		return 1
 	}
-	lanes := len(db.lanes)
+	lanes := db.valueLogWriterLaneCount()
 	if lanes < 1 {
 		lanes = 1
 	}
@@ -15484,12 +15611,23 @@ func (db *DB) vlogWriteWorkerCount() int {
 	return workers
 }
 
+func (db *DB) valueLogWriterLaneCount() int {
+	if db == nil {
+		return 1
+	}
+	lanes := len(db.lanes) + len(db.nativeRootValueLogAppendAuxLanesSnapshot())
+	if lanes < 1 {
+		return 1
+	}
+	return lanes
+}
+
 func (db *DB) vlogDictPrepWorkerCount() int {
 	procs := runtime.GOMAXPROCS(0)
 	if procs <= 1 {
 		return 0
 	}
-	lanes := len(db.lanes)
+	lanes := db.valueLogWriterLaneCount()
 	if lanes < 1 {
 		lanes = 1
 	}
@@ -26151,6 +26289,11 @@ func (db *DB) Close() error {
 		l.vlogModeWriter = nil
 		l.vlogMu.Unlock()
 	}
+	for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
+		if err := db.closeLeafValueLogLane(l); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if db.indexOuterLeavesInValueLog {
 		for _, l := range db.leafLogAppendLanesSnapshot() {
 			if err := db.closeLeafValueLogLane(l); err != nil {
@@ -28331,6 +28474,13 @@ func (db *DB) rotateValueLogMuHeldCapture(l *lane, capture *stableOuterLeafCaptu
 		}
 		return db.rotateValueLogMuHeldToSeqCapture(l, nextSeq, capture)
 	}
+	if db.isSharedNativeRootValueLogAppendLane(l) {
+		nextSeq, err := db.nextNativeRootValueLogAppendSeq()
+		if err != nil {
+			return err
+		}
+		return db.rotateValueLogMuHeldToSeqCapture(l, nextSeq, capture)
+	}
 	return db.rotateValueLogMuHeldToSeqCapture(l, l.vlogSeq+1, capture)
 }
 
@@ -28357,6 +28507,8 @@ func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *st
 	}
 	if db.isLeafLogAppendLane(l) {
 		db.advanceLeafLogAppendSeqAtLeast(nextSeq)
+	} else if db.isSharedNativeRootValueLogAppendLane(l) {
+		db.advanceNativeRootValueLogAppendSeqAtLeast(nextSeq)
 	}
 	if nextSeq <= l.vlogSeq {
 		return nil
@@ -28649,6 +28801,14 @@ func (db *DB) untrackValueLogSegmentLocked(path string) {
 	}
 	if laneID == leafLogLaneID && db.indexOuterLeavesInValueLog {
 		for _, l := range db.leafLogAppendLanesSnapshot() {
+			if db.untrackValueLogSegmentFromLane(l, path) {
+				return
+			}
+		}
+		return
+	}
+	if db.nativeRootValueLogAppendShared && len(db.nativeRootValueLogAppendLanes) > 0 && laneID == db.nativeRootValueLogAppendLanes[0].id {
+		for _, l := range db.nativeRootValueLogAppendLanes {
 			if db.untrackValueLogSegmentFromLane(l, path) {
 				return
 			}
@@ -31155,6 +31315,29 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.journal_lanes.cold"] = fmt.Sprintf("%d", len(db.valueLogColdLanes))
 	stats["treedb.cache.journal_lanes.gomaxprocs"] = fmt.Sprintf("%d", db.journalLanesGOMAXPROCS)
 	stats["treedb.cache.journal_lanes.physical_cores"] = fmt.Sprintf("%d", db.journalLanesPhysicalCores)
+	nativeRootWriters := db.nativeRootValueLogAppendLanesSnapshot()
+	stats["treedb.cache.native_root_vlog_append.writers"] = fmt.Sprintf("%d", len(nativeRootWriters))
+	stats["treedb.cache.native_root_vlog_append.shared_logical_lane"] = fmt.Sprintf("%t", db.nativeRootValueLogAppendShared)
+	for i, l := range nativeRootWriters {
+		prefix := fmt.Sprintf("treedb.cache.native_root_vlog_append.writer.%d", i)
+		stats[prefix+".logical_lane"] = fmt.Sprintf("%d", l.id)
+		stats[prefix+".calls_total"] = fmt.Sprintf("%d", l.nativeRootAppendCalls.Load())
+		stats[prefix+".records_total"] = fmt.Sprintf("%d", l.nativeRootAppendRecords.Load())
+		stats[prefix+".bytes_total"] = fmt.Sprintf("%d", l.nativeRootAppendBytes.Load())
+		stats[prefix+".wall_ns_total"] = fmt.Sprintf("%d", l.nativeRootAppendWallNs.Load())
+		stats[prefix+".errors_total"] = fmt.Sprintf("%d", l.nativeRootAppendErrors.Load())
+		l.vlogMu.Lock()
+		segments := len(l.vlogClosedSizes)
+		if l.vlogPath != "" {
+			segments++
+		}
+		currentBytes := l.vlogLiveBytes.Load()
+		closedBytes := l.vlogClosedBytes.Load()
+		l.vlogMu.Unlock()
+		stats[prefix+".segments"] = fmt.Sprintf("%d", segments)
+		stats[prefix+".current_bytes"] = fmt.Sprintf("%d", currentBytes)
+		stats[prefix+".closed_bytes"] = fmt.Sprintf("%d", closedBytes)
+	}
 	redoLogMode := "enabled"
 	if db.externalCommandWAL {
 		redoLogMode = "external_command_wal"
@@ -31239,6 +31422,36 @@ func (db *DB) Stats() map[string]string {
 	var vlogShapeL0Bytes int64
 	splitValueLog := db.splitValueLogEnabled()
 	valueLogOn := db.valueLogEnabled()
+	addValueLogWriterIOStats := func(vlogWriter valueWriter) {
+		if snapper, ok := any(vlogWriter).(interface {
+			RawWritevStats() valuelog.RawWritevStats
+		}); ok {
+			snap := snapper.RawWritevStats()
+			rawWritevSyscalls += snap.Syscalls
+			rawWritevBytes += snap.Bytes
+			rawWritevIovecs += snap.Iovecs
+			rawWritevFlushes += snap.Flushes
+		}
+		if snapper, ok := any(vlogWriter).(interface {
+			RawWriteStats() valuelog.RawWriteStats
+		}); ok {
+			snap := snapper.RawWriteStats()
+			rawWriteSyscalls += snap.Syscalls
+			rawWriteBytes += snap.Bytes
+			rawWriteCalls += snap.Calls
+		}
+		if snapper, ok := any(vlogWriter).(interface {
+			DurabilityStats() valuelog.DurabilityStats
+		}); ok {
+			snap := snapper.DurabilityStats()
+			valueLogFileSyncCalls += snap.FileSyncCalls
+			valueLogFileSyncNs += snap.FileSyncNs
+			valueLogFileSyncErrors += snap.FileSyncErrors
+			valueLogDirectorySyncCalls += snap.DirectorySyncCalls
+			valueLogDirectorySyncNs += snap.DirectorySyncNs
+			valueLogDirectorySyncErrors += snap.DirectorySyncErrors
+		}
+	}
 	for i := range db.lanes {
 		l := &db.lanes[i]
 		walCurrentBytes += l.walLiveBytes.Load()
@@ -31314,34 +31527,7 @@ func (db *DB) Stats() map[string]string {
 			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.rotations_total", laneID)] = fmt.Sprintf("%d", rotTotal)
 			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.rotations_idle_total", laneID)] = fmt.Sprintf("%d", rotIdle)
 		}
-		if snapper, ok := any(vlogWriter).(interface {
-			RawWritevStats() valuelog.RawWritevStats
-		}); ok {
-			snap := snapper.RawWritevStats()
-			rawWritevSyscalls += snap.Syscalls
-			rawWritevBytes += snap.Bytes
-			rawWritevIovecs += snap.Iovecs
-			rawWritevFlushes += snap.Flushes
-		}
-		if snapper, ok := any(vlogWriter).(interface {
-			RawWriteStats() valuelog.RawWriteStats
-		}); ok {
-			snap := snapper.RawWriteStats()
-			rawWriteSyscalls += snap.Syscalls
-			rawWriteBytes += snap.Bytes
-			rawWriteCalls += snap.Calls
-		}
-		if snapper, ok := any(vlogWriter).(interface {
-			DurabilityStats() valuelog.DurabilityStats
-		}); ok {
-			snap := snapper.DurabilityStats()
-			valueLogFileSyncCalls += snap.FileSyncCalls
-			valueLogFileSyncNs += snap.FileSyncNs
-			valueLogFileSyncErrors += snap.FileSyncErrors
-			valueLogDirectorySyncCalls += snap.DirectorySyncCalls
-			valueLogDirectorySyncNs += snap.DirectorySyncNs
-			valueLogDirectorySyncErrors += snap.DirectorySyncErrors
-		}
+		addValueLogWriterIOStats(vlogWriter)
 
 		laneLagP99 := estimateVlogQueueLagPercentile(lagSnap.Buckets, lagSnap.Count, 0.99)
 		laneLagP999 := estimateVlogQueueLagPercentile(lagSnap.Buckets, lagSnap.Count, 0.999)
@@ -31357,6 +31543,25 @@ func (db *DB) Stats() map[string]string {
 		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_max_ms", i)] = fmt.Sprintf("%.3f", float64(lagSnap.MaxNs)/float64(time.Millisecond))
 		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_p99_ms", i)] = fmt.Sprintf("%.3f", float64(laneLagP99)/float64(time.Millisecond))
 		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_p999_ms", i)] = fmt.Sprintf("%.3f", float64(laneLagP999)/float64(time.Millisecond))
+	}
+	for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
+		l.vlogMu.Lock()
+		vlogWriter := l.vlog
+		segments := len(l.vlogClosedSizes)
+		if l.vlogPath != "" {
+			segments++
+		}
+		bytes := l.vlogClosedBytes.Load() + l.vlogLiveBytes.Load()
+		l.vlogMu.Unlock()
+		addValueLogWriterIOStats(vlogWriter)
+		if splitValueLog && valueLogOn {
+			vlogShapeSegmentsTotal += int64(segments)
+			vlogShapeBytesTotal += bytes
+			if l.id == 0 {
+				vlogShapeL0Segments += int64(segments)
+				vlogShapeL0Bytes += bytes
+			}
+		}
 	}
 	if splitValueLog && valueLogOn {
 		stats["treedb.cache.vlog_shape.segments_total"] = fmt.Sprintf("%d", vlogShapeSegmentsTotal)

@@ -680,7 +680,7 @@ func currentValueLogIDs(set *valuelog.Set) map[uint32]struct{} {
 	}
 	for id := range set.Files {
 		lane, seq := valuelog.DecodeFileID(id)
-		if maxByLane[lane] == seq {
+		if maxByLane[lane] == seq || set.Files[id].IsCurrentWritable() {
 			active[id] = struct{}{}
 		}
 	}

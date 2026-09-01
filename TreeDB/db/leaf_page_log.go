@@ -1021,6 +1021,15 @@ func (db *DB) RegisterValueLogSegment(path string, fileID uint32) error {
 	return db.RegisterValueLogSegmentReplacing(path, fileID, 0)
 }
 
+// SetMultiCurrentWritableValueLogLane allows cached mode to keep independent
+// physical append writers current under one logical lane ID.
+func (db *DB) SetMultiCurrentWritableValueLogLane(lane uint32, enabled bool) {
+	if db == nil || db.valueLogManager == nil {
+		return
+	}
+	db.valueLogManager.SetMultiCurrentWritableLane(lane, enabled)
+}
+
 // RegisterValueLogSegmentReplacing registers a newly created value-log segment
 // and marks it as current writable, sealing previousFileID when it is the prior
 // segment for the same physical writer. Cached leaf-log lanes use this because

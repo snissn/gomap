@@ -1189,6 +1189,102 @@ func TestValueLogGC_ObservedSourceReclaimActiveRequiresExplicitOption(t *testing
 	}
 }
 
+func TestValueLogGC_KeepsEveryCurrentWritableInMultiCurrentLane(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("mkdir value log: %v", err)
+	}
+	type currentWriter struct {
+		writer *valuelog.Writer
+		path   string
+		id     uint32
+	}
+	writers := make([]currentWriter, 0, 2)
+	for seq := uint32(1); seq <= 2; seq++ {
+		id, err := valuelog.EncodeFileID(0, seq)
+		if err != nil {
+			t.Fatalf("encode file id: %v", err)
+		}
+		path := valuelog.SegmentPath(valueLogDir, id)
+		writer, err := valuelog.NewWriter(path, id)
+		if err != nil {
+			t.Fatalf("new writer: %v", err)
+		}
+		if _, err := writer.Append(0, nil, uint64(seq), []byte("unreferenced")); err != nil {
+			t.Fatalf("seed writer %d: %v", seq, err)
+		}
+		if err := writer.Flush(); err != nil {
+			t.Fatalf("flush writer %d: %v", seq, err)
+		}
+		if err := database.valueLogManager.RegisterSegment(path, id); err != nil {
+			t.Fatalf("register writer %d: %v", seq, err)
+		}
+		writers = append(writers, currentWriter{writer: writer, path: path, id: id})
+	}
+	database.valueLogManager.SetMultiCurrentWritableLane(0, true)
+	for _, current := range writers {
+		if err := database.valueLogManager.PromoteCurrentWritable(current.id); err != nil {
+			t.Fatalf("promote current writer %d: %v", current.id, err)
+		}
+	}
+
+	stats, err := database.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats.SegmentsActive != 2 || stats.SegmentsEligible != 0 || stats.SegmentsDeleted != 0 {
+		t.Fatalf("multi-current writers were not all protected: %+v", stats)
+	}
+	for _, current := range writers {
+		if _, err := os.Stat(current.path); err != nil {
+			t.Fatalf("current writer %d removed by GC: %v", current.id, err)
+		}
+	}
+
+	lateValue := []byte("appended after GC")
+	latePtr, err := writers[0].writer.Append(0, nil, 3, lateValue)
+	if err != nil {
+		t.Fatalf("append after GC: %v", err)
+	}
+	if err := writers[0].writer.Flush(); err != nil {
+		t.Fatalf("flush after GC: %v", err)
+	}
+	got, err := database.valueLogManager.Read(latePtr)
+	if err != nil {
+		t.Fatalf("read after GC: %v", err)
+	}
+	if !bytes.Equal(got, lateValue) {
+		t.Fatalf("read after GC=%q want %q", got, lateValue)
+	}
+
+	for _, current := range writers {
+		if err := current.writer.Close(); err != nil {
+			t.Fatalf("close writer %d: %v", current.id, err)
+		}
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	database, err = Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+	got, err = database.valueLogManager.Read(latePtr)
+	if err != nil {
+		t.Fatalf("read after reopen: %v", err)
+	}
+	if !bytes.Equal(got, lateValue) {
+		t.Fatalf("read after reopen=%q want %q", got, lateValue)
+	}
+}
+
 func TestMarkValueLogZombie_PreservesMissingSegmentSignal(t *testing.T) {
 	dir := t.TempDir()
 

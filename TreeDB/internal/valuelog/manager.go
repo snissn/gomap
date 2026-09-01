@@ -123,6 +123,11 @@ type File struct {
 	readRecordCRCChecks atomic.Uint64
 }
 
+// IsCurrentWritable reports whether this segment may still receive appends.
+func (f *File) IsCurrentWritable() bool {
+	return f != nil && !f.IsZombie.Load() && f.currentWritable.Load()
+}
+
 func (f *File) allowsCompactLeafPayload() bool {
 	if f == nil {
 		return false
