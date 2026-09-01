@@ -9223,10 +9223,10 @@ func (c *Collection) tryLockPreparedIndexedCommandWALPublish(work *indexedFlushP
 	domain := c.writeDomain
 	coord := domain.commandWALCoordinatorForDomain(c.db)
 	if coord != nil {
-		if !coord.mu.TryLock() {
-			lease.release()
-			return nil, errIndexedFlushRelinquished
-		}
+		// Prepared admission already excluded a quiescent boundary. A stage
+		// cleanup can still hold this mutex briefly; wait for that handoff rather
+		// than abandoning work that no boundary is responsible for draining.
+		coord.mu.Lock()
 		if coord.owner != nil && coord.owner != domain {
 			coord.mu.Unlock()
 			lease.release()

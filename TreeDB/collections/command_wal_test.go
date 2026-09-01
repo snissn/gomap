@@ -2225,6 +2225,86 @@ func TestCollectionCommandWALAsyncFlushMetadataPublishesOwnedPrefixAndReopens(t 
 	}
 }
 
+func TestCollectionCommandWALPreparedAsyncPublishWaitsForCoordinatorHandoff(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:                          DocumentFormatBSON,
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        2,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 2,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "email", Value: "ada@example.test"}})},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	domain := col.writeDomain
+	if !domain.beginIndexedAsyncFlush() {
+		t.Fatal("begin indexed async flush returned false")
+	}
+	domain.mu.Lock()
+	work, err := col.prepareIndexedAsyncPublishLocked(domain)
+	domain.mu.Unlock()
+	if err != nil || work == nil {
+		domain.finishIndexedAsyncFlush(err)
+		t.Fatalf("prepare indexed async publish: work=%v err=%v", work != nil, err)
+	}
+
+	coord := domain.commandWALCoordinatorForDomain(d)
+	if coord == nil {
+		domain.finishIndexedAsyncFlush(nil)
+		t.Fatal("missing command WAL coordinator")
+	}
+	coord.mu.Lock()
+	released := false
+	releaseCoordinator := func() {
+		if !released {
+			coord.mu.Unlock()
+			released = true
+		}
+	}
+	defer releaseCoordinator()
+	result := make(chan error, 1)
+	go func() { result <- col.publishPreparedIndexedFlush(work) }()
+
+	deadline := time.Now().Add(collectionTestTimeout(t, time.Second))
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-result:
+			domain.finishIndexedAsyncFlush(err)
+			t.Fatalf("prepared publish returned while coordinator was held: %v", err)
+		default:
+			runtime.Gosched()
+		}
+	}
+	releaseCoordinator()
+	select {
+	case err := <-result:
+		domain.finishIndexedAsyncFlush(err)
+		if err != nil {
+			t.Fatalf("prepared publish after coordinator handoff: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		domain.finishIndexedAsyncFlush(errors.New("test cleanup"))
+		t.Fatal("prepared publish did not complete after coordinator handoff")
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after coordinator handoff=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALStageCoordinatorPinsFallbackToDomain(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
