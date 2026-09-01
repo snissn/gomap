@@ -12,7 +12,7 @@ PROFILE_PHASE="${PROFILE_PHASE:-}"
 RUN_100K="${RUN_100K:-false}"
 TINY_SMOKE="${TINY_SMOKE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
-treedb_performance_env=(TREEDB_LEAF_PAGE_CACHE_ENTRIES TREEDB_COLUMN_STORE_TYPED_COMPRESSION TREEDB_COLUMN_STORE_TYPED_SECTION_COMPRESSION TREEDB_COLUMN_STORE_TYPED_LOCATOR_COMPRESSION TREEDB_COLUMN_STORE_TYPED_DICTIONARY_COMPRESSION TREEDB_COLUMN_STORE_TYPED_PRUNING_COMPRESSION TREEDB_COLUMN_STORE_TYPED_INT64_ENCODING TREEDB_COLUMN_STORE_TYPED_ROWS_PER_GRANULE TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_ENABLED TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_TARGET_BYTES TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_MIN_ROWS TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_MAX_ROWS)
+treedb_performance_env=(TREEDB_LEAF_PAGE_CACHE_ENTRIES TREEDB_COLUMN_STORE_TYPED_COMPRESSION TREEDB_COLUMN_STORE_TYPED_SECTION_COMPRESSION TREEDB_COLUMN_STORE_TYPED_LOCATOR_COMPRESSION TREEDB_COLUMN_STORE_TYPED_DICTIONARY_COMPRESSION TREEDB_COLUMN_STORE_TYPED_PRUNING_COMPRESSION TREEDB_COLUMN_STORE_TYPED_INT64_ENCODING TREEDB_COLUMN_STORE_TYPED_ROWS_PER_GRANULE TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_ENABLED TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_TARGET_BYTES TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_MIN_ROWS TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_MAX_ROWS TREEDB_DEBUG_COMMIT_TIMING TREEDB_OUTER_LEAF_READ_SAMPLE_MOD TREEDB_HOT_PATH_STATS TREEDB_VLOG_MAX_DEAD_MAPPINGS TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS TREEDB_VLOG_ENABLE_CURRENT_WRITABLE_MMAP TREEDB_VLOG_ENABLE_CURRENT_LEAF_WRITABLE_MMAP TREEDB_VLOG_CURRENT_WRITABLE_MMAP_TARGET_BYTES TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_SEGMENTS TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_BYTES)
 controlled_go_env=(env -u GOMAXPROCS -u GOGC -u GOMEMLIMIT -u GOOS -u GOARCH -u GOAMD64 -u GOARM64 -u GO386 -u GOARM -u GOMIPS -u GOMIPS64 -u GOPPC64 -u GORISCV64 -u GOWASM -u GOEXPERIMENT -u CGO_ENABLED)
 for treedb_env in "${treedb_performance_env[@]}"; do controlled_go_env+=(-u "$treedb_env"); done
 controlled_go_env+=(GOWORK=off GOFLAGS= GOENV=off)
@@ -23,9 +23,16 @@ done < <("${controlled_git_env[@]}" git rev-parse --local-env-vars)
 
 check_profile_source() {
   if [[ -n "$("${controlled_git_env[@]}" git status --porcelain --untracked-files=all)" ]]; then echo "worktree must be clean before profiling" >&2; return 1; fi
-  local ignored_build_inputs
-  ignored_build_inputs=$("${controlled_git_env[@]}" git status --porcelain --untracked-files=all --ignored | awk '/^!! / { path=substr($0, 4); if (path ~ /\.(go|s|S|c|cc|cpp|cxx|h|hh|hpp|syso)$/) { print path; exit } }')
-  if [[ -n "$ignored_build_inputs" ]]; then echo "ignored build input before profiling: $ignored_build_inputs" >&2; return 1; fi
+  local ignored_build_input entry path
+  ignored_build_input=$(while IFS= read -r -d '' entry; do
+    [[ "$entry" == "!! "* ]] || continue
+    path=${entry#!! }
+    if [[ "$path" =~ \.(go|s|S|c|cc|cpp|cxx|h|hh|hpp|syso)$ ]]; then
+      printf '%s' "$path"
+      break
+    fi
+  done < <("${controlled_git_env[@]}" git status --porcelain=v1 -z --untracked-files=all --ignored))
+  if [[ -n "$ignored_build_input" ]]; then printf 'ignored build input before profiling: %q\n' "$ignored_build_input" >&2; return 1; fi
 }
 
 case "$ROWS" in 10000|100000) ;; *) echo "ROWS must be 10000 or 100000" >&2; exit 2;; esac

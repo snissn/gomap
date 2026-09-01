@@ -953,7 +953,7 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	if entries, err := os.ReadDir(profileDisabled); err != nil || len(entries) != 0 {
 		t.Fatalf("disabled profile phase wrote artifacts: entries=%v err=%v", entries, err)
 	}
-	ignoredName := "manual_profile_ignored_4546.go"
+	ignoredName := "manual profile ignored 4546.go"
 	ignoredSource := filepath.Join(cleanCheckout, "cmd", "treedb_text_hybrid_scale", ignoredName)
 	ignoredConfigHome := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(ignoredConfigHome, "git"), 0o755); err != nil {
@@ -1054,15 +1054,15 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 		t.Fatal(err)
 	}
 	goFlagsDryRun := t.TempDir()
-	if output, err := run("RUN_DIR="+goFlagsDryRun, "PHASES=phrase", "DRY_RUN=true", "GOFLAGS=-race", "GOMAXPROCS=1", "GOGC=10", "GOMEMLIMIT=1MiB", "GOOS=plan9", "GOARCH=386", "GOAMD64=v3", "GOARM64=v8.0", "GO386=sse2", "GOARM=7", "GOMIPS=softfloat", "GOMIPS64=softfloat", "GOPPC64=power8", "GORISCV64=rva20u64", "GOWASM=signext", "GOEXPERIMENT=arenas", "CGO_ENABLED=0", "TREEDB_LEAF_PAGE_CACHE_ENTRIES=1", "TREEDB_COLUMN_STORE_TYPED_COMPRESSION=none"); err != nil || !strings.Contains(string(output), "artifacts:") {
+	if output, err := run("RUN_DIR="+goFlagsDryRun, "PHASES=phrase", "DRY_RUN=true", "GOFLAGS=-race", "GOMAXPROCS=1", "GOGC=10", "GOMEMLIMIT=1MiB", "GOOS=plan9", "GOARCH=386", "GOAMD64=v3", "GOARM64=v8.0", "GO386=sse2", "GOARM=7", "GOMIPS=softfloat", "GOMIPS64=softfloat", "GOPPC64=power8", "GORISCV64=rva20u64", "GOWASM=signext", "GOEXPERIMENT=arenas", "CGO_ENABLED=0", "TREEDB_LEAF_PAGE_CACHE_ENTRIES=1", "TREEDB_COLUMN_STORE_TYPED_COMPRESSION=none", "TREEDB_OUTER_LEAF_READ_SAMPLE_MOD=1", "TREEDB_HOT_PATH_STATS=1", "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS=0"); err != nil || !strings.Contains(string(output), "artifacts:") {
 		t.Fatalf("GOFLAGS dry-run err=%v output=%s", err, output)
 	}
 	command, err = os.ReadFile(filepath.Join(goFlagsDryRun, "10000", "phrase", "command.txt"))
-	if err != nil || !strings.Contains(string(command), "-u GOMAXPROCS -u GOGC -u GOMEMLIMIT -u GOOS -u GOARCH -u GOAMD64 -u GOARM64 -u GO386 -u GOARM -u GOMIPS -u GOMIPS64 -u GOPPC64 -u GORISCV64 -u GOWASM -u GOEXPERIMENT -u CGO_ENABLED -u TREEDB_LEAF_PAGE_CACHE_ENTRIES -u TREEDB_COLUMN_STORE_TYPED_COMPRESSION") {
+	if err != nil || !strings.Contains(string(command), "-u GOMAXPROCS -u GOGC -u GOMEMLIMIT -u GOOS -u GOARCH -u GOAMD64 -u GOARM64 -u GO386 -u GOARM -u GOMIPS -u GOMIPS64 -u GOPPC64 -u GORISCV64 -u GOWASM -u GOEXPERIMENT -u CGO_ENABLED -u TREEDB_LEAF_PAGE_CACHE_ENTRIES -u TREEDB_COLUMN_STORE_TYPED_COMPRESSION") || !strings.Contains(string(command), "-u TREEDB_OUTER_LEAF_READ_SAMPLE_MOD -u TREEDB_HOT_PATH_STATS") || !strings.Contains(string(command), "-u TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS") {
 		t.Fatalf("GOFLAGS command=%q err=%v", command, err)
 	}
 	context, err = os.ReadFile(filepath.Join(goFlagsDryRun, "context.txt"))
-	if err != nil || !strings.Contains(string(context), "goflags=cleared\ngoenv=off\ngomaxprocs=cleared\ngogc=cleared\ngomemlimit=cleared\ncompiler_tuning=cleared GOOS,GOARCH,GOAMD64,GOARM64,GO386,GOARM,GOMIPS,GOMIPS64,GOPPC64,GORISCV64,GOWASM,GOEXPERIMENT,CGO_ENABLED\ntreedb_performance_overrides=cleared TREEDB_LEAF_PAGE_CACHE_ENTRIES") {
+	if err != nil || !strings.Contains(string(context), "goflags=cleared\ngoenv=off\ngomaxprocs=cleared\ngogc=cleared\ngomemlimit=cleared\ncompiler_tuning=cleared GOOS,GOARCH,GOAMD64,GOARM64,GO386,GOARM,GOMIPS,GOMIPS64,GOPPC64,GORISCV64,GOWASM,GOEXPERIMENT,CGO_ENABLED\ntreedb_performance_overrides=cleared TREEDB_LEAF_PAGE_CACHE_ENTRIES") || !strings.Contains(string(context), "TREEDB_OUTER_LEAF_READ_SAMPLE_MOD TREEDB_HOT_PATH_STATS") || !strings.Contains(string(context), "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS") {
 		t.Fatalf("GOFLAGS context=%q err=%v", context, err)
 	}
 	runtimeDebugDryRun := t.TempDir()

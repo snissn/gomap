@@ -21,7 +21,8 @@ separately labeled high-resolution process elapsed time, actual DB
 bytes immediately before/after the measured action, and separately labeled
 artifact-directory growth, plus the temporary DB filesystem device and mount),
 plus profiles when chosen. `context.txt` records any inherited `GODEBUG` with
-shell escaping and the cleared TreeDB cache/typed-column benchmark overrides.
+shell escaping and the cleared TreeDB cache, typed-column, read-statistics, and
+value-log mapping overrides.
 Each phase artifact directory is single-use: reruns fail rather than overwrite
 it, and `RUN_DIR` itself must be empty before a capture starts, so use a fresh
 `RUN_DIR` for a new capture. The wrapper also rejects a dirty worktree before
