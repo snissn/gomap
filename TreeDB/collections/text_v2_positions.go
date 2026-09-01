@@ -309,7 +309,7 @@ func (v *textV2PositionPostingValidation) add(term string, entry textV2PostingBl
 		return err
 	}
 	key := textV2PositionPostingValidationKey{term: term, ordinal: entry.Ordinal, generation: entry.Generation}
-	if existing, duplicate := v.postings[key]; duplicate {
+	if existing, exists := v.postings[key]; exists {
 		existing.duplicate = true
 		v.postings[key] = existing
 		return nil
