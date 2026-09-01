@@ -2442,6 +2442,20 @@ func TestCollectionCommandWALPendingRecordIgnoresAlreadyAppliedLSN(t *testing.T)
 	}
 }
 
+func TestCollectionCommandWALIndexedPendingRejectsAggregateGap(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	domain := &collectionWriteDomain{pendingCommandWALFirst: 1, pendingCommandWALLast: 1}
+	if err := domain.recordPendingIndexedCommandWALLSNLocked(d, 2); !errors.Is(err, backenddb.ErrCommandWALAppliedLSNNonContig) {
+		t.Fatalf("record indexed pending after aggregate gap: %v, want ErrCommandWALAppliedLSNNonContig", err)
+	}
+	if domain.indexedMutableCommandWALFirst != 0 || domain.indexedMutableCommandWALLast != 0 {
+		t.Fatalf("indexed mutable interval=[%d,%d], want empty after rejected aggregate gap", domain.indexedMutableCommandWALFirst, domain.indexedMutableCommandWALLast)
+	}
+}
+
 func TestRollbackBufferedIndexedDomainRestoresPendingCommandWAL(t *testing.T) {
 	coord := newCollectionCommandWALCoordinator()
 	domain := &collectionWriteDomain{

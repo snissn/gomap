@@ -530,6 +530,13 @@ func (domain *collectionWriteDomain) recordPendingIndexedCommandWALLSNLocked(db 
 		return nil
 	}
 	if domain.indexedMutableCommandWALFirst == 0 {
+		lastIndexed := indexedFlushUnitCommandWALLastLocked(domain)
+		if lastIndexed != 0 && lsn != lastIndexed+1 {
+			return fmt.Errorf("%w: indexed mutable command WAL starts at %d after indexed interval ending at %d", backenddb.ErrCommandWALAppliedLSNNonContig, lsn, lastIndexed)
+		}
+		if lastIndexed == 0 && domain.pendingCommandWALFirst != lsn {
+			return fmt.Errorf("%w: indexed mutable command WAL starts at %d after aggregate pending range beginning at %d", backenddb.ErrCommandWALAppliedLSNNonContig, lsn, domain.pendingCommandWALFirst)
+		}
 		domain.indexedMutableCommandWALFirst = lsn
 		domain.indexedMutableCommandWALLast = lsn
 	} else {
@@ -538,7 +545,23 @@ func (domain *collectionWriteDomain) recordPendingIndexedCommandWALLSNLocked(db 
 		}
 		domain.indexedMutableCommandWALLast = lsn
 	}
-	return domain.validateIndexedFlushUnitCommandWALOwnershipLocked()
+	return nil
+}
+
+// indexedFlushUnitCommandWALLastLocked returns the tail of the already-checked
+// indexed prefix. Full structural validation remains at rotation and publish
+// boundaries; staging only needs this constant-time continuity check.
+func indexedFlushUnitCommandWALLastLocked(domain *collectionWriteDomain) uint64 {
+	if domain == nil {
+		return 0
+	}
+	if n := len(domain.indexedFlushUnits); n > 0 {
+		return domain.indexedFlushUnits[n-1].commandWALLast
+	}
+	if n := len(domain.indexedPublishingUnits); n > 0 {
+		return domain.indexedPublishingUnits[n-1].commandWALLast
+	}
+	return 0
 }
 
 func (domain *collectionWriteDomain) pendingCommandWALCoverageIntentLocked(db *backenddb.DB) (*backenddb.CommandWALIntent, uint64, error) {
