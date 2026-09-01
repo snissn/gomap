@@ -135,6 +135,13 @@ func (db *DB) TryLockCommandWALPreparedPublish() (func(), bool) {
 	}, true
 }
 
+// LockCommandWALPreparedPublish serializes the final raw publish for a
+// prepared publisher that already owns the teardown and shared-admission
+// leases returned by TryLockCommandWALPreparedPublish.
+func (db *DB) LockCommandWALPreparedPublish() func() {
+	return db.lockCommandWALRawPublish()
+}
+
 // lockCommandWALQuiescentAdmission prevents newly prepared publishers from
 // entering their final raw publish and waits for a publisher that already won
 // shared admission. Callers already hold teardown and acquire raw afterwards.

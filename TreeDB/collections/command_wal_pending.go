@@ -523,6 +523,12 @@ func (domain *collectionWriteDomain) recordPendingIndexedCommandWALLSNLocked(db 
 	if err := domain.recordPendingCommandWALLSNLocked(db, lsn); err != nil || lsn == 0 {
 		return err
 	}
+	if domain.pendingCommandWALLast != lsn {
+		// Recovery can replay an already-applied LSN. The aggregate recorder
+		// deliberately leaves no pending range in that case, so it has no
+		// indexed unit to assign.
+		return nil
+	}
 	if domain.indexedMutableCommandWALFirst == 0 {
 		domain.indexedMutableCommandWALFirst = lsn
 		domain.indexedMutableCommandWALLast = lsn

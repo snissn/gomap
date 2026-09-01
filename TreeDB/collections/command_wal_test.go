@@ -2128,7 +2128,7 @@ func TestCollectionCommandWALThresholdFlushClearsCoordinatorOwner(t *testing.T) 
 	}
 }
 
-func TestCollectionCommandWALAsyncFlushMetadataUsesForegroundThresholdFlush(t *testing.T) {
+func TestCollectionCommandWALAsyncFlushMetadataPublishesOwnedPrefixAndReopens(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
 		Options: CollectionOptions{
@@ -2136,7 +2136,7 @@ func TestCollectionCommandWALAsyncFlushMetadataUsesForegroundThresholdFlush(t *t
 			BufferedIndexedWrites:                   true,
 			BufferedIndexedWriteMaxDocuments:        1,
 			BufferedIndexedAsyncFlush:               true,
-			BufferedIndexedAsyncFlushMaxQueuedUnits: 1,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 2,
 		},
 		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
 	})
@@ -2154,6 +2154,14 @@ func TestCollectionCommandWALAsyncFlushMetadataUsesForegroundThresholdFlush(t *t
 		[][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "email", Value: "ada@example.test"}})},
 	); err != nil {
 		t.Fatalf("InsertBatch: %v", err)
+	}
+	col.writeDomain.waitIndexedAsyncFlush()
+	stats := mgr.StatsSnapshot()
+	if got := stats.IndexedAsyncFlushScheduled; got != 1 {
+		t.Fatalf("command-WAL indexed async flushes scheduled=%d, want 1", got)
+	}
+	if got := stats.IndexedAsyncFlushErrors; got != 0 {
+		t.Fatalf("command-WAL indexed async flush errors=%d, want 0", got)
 	}
 	if got := d.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("AppliedCommandLSN after command-WAL threshold flush=%d, want 1", got)
@@ -2309,6 +2317,12 @@ func TestCollectionCommandWALPendingRecordIgnoresAlreadyAppliedLSN(t *testing.T)
 	}
 	if domain.pendingCommandWALFirst != 0 || domain.pendingCommandWALLast != 0 {
 		t.Fatalf("pending command WAL range=[%d,%d], want empty", domain.pendingCommandWALFirst, domain.pendingCommandWALLast)
+	}
+	if err := domain.recordPendingIndexedCommandWALLSNLocked(d, 2); err != nil {
+		t.Fatalf("recordPendingIndexedCommandWALLSNLocked already applied: %v", err)
+	}
+	if domain.indexedMutableCommandWALFirst != 0 || domain.indexedMutableCommandWALLast != 0 {
+		t.Fatalf("indexed mutable command WAL range=[%d,%d], want empty", domain.indexedMutableCommandWALFirst, domain.indexedMutableCommandWALLast)
 	}
 	if err := domain.recordPendingCommandWALLSNLocked(d, 1); !errors.Is(err, backenddb.ErrCommandWALAppliedLSNNonContig) {
 		t.Fatalf("recordPendingCommandWALLSNLocked stale error=%v, want ErrCommandWALAppliedLSNNonContig", err)
