@@ -65,7 +65,11 @@ func TestWriterBlockCompressionZSTDCohereShapeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	t.Cleanup(func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close value log: %v", err)
+		}
+	})
 	for i, ptr := range ptrs {
 		got, err := ReadAtWithDict(f, ptr, true, nil, nil, nil, templ.DecodeOptions{})
 		if err != nil {
