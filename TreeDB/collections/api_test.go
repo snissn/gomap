@@ -12686,6 +12686,7 @@ func TestGetBufferedRetainedDocumentReconstructsWithinOwningUnit(t *testing.T) {
 				ID: []byte("a"), declaredValuesReady: true, reconstructFromRetained: true,
 				declaredValues: []columnDeclaredValue{{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{1, 0}}},
 			}},
+			reconstructionRows: 1,
 		}
 	}
 	assertReconstructed := func(t *testing.T, domain *collectionWriteDomain) {
@@ -12710,7 +12711,10 @@ func TestGetBufferedRetainedDocumentReconstructsWithinOwningUnit(t *testing.T) {
 
 	t.Run("mutable", func(t *testing.T) {
 		unit := newUnit(t)
-		domain := &collectionWriteDomain{count: 1, loaded: true, meta: meta, rootRuns: unit.rootRuns, columnDocuments: unit.columnDocuments}
+		domain := &collectionWriteDomain{
+			count: 1, loaded: true, meta: meta, rootRuns: unit.rootRuns,
+			columnDocuments: unit.columnDocuments, reconstructionRows: unit.reconstructionRows,
+		}
 		assertReconstructed(t, domain)
 		if domain.columnDocumentIndex == nil {
 			t.Fatal("mutable retained-row index was not built lazily")
@@ -12762,6 +12766,34 @@ func TestGetBufferedRetainedDocumentReconstructsWithinOwningUnit(t *testing.T) {
 			t.Fatalf("get latest generic row got=%s buffered=%v found=%v err=%v", got, buffered, found, err)
 		}
 	})
+	t.Run("generic unit installs one empty sentinel", func(t *testing.T) {
+		unit := newUnit(t)
+		unit.columnDocuments[0].reconstructFromRetained = false
+		unit.reconstructionRows = 0
+		want := `{"content":"generic","embedding":[1,0],"id":"a"}`
+		unit.fullDocumentOverlay = fullOverlay(want)
+		domain := &collectionWriteDomain{count: 1, loaded: true, meta: meta, indexedFlushUnits: []indexedFlushUnit{unit}}
+		bufferedCollection := &Collection{meta: meta, writeDomain: domain}
+
+		got, buffered, found, err := bufferedCollection.getBufferedDocumentInto([]byte("a"), nil)
+		if err != nil || !buffered || !found || string(got) != want {
+			t.Fatalf("first generic get got=%s buffered=%v found=%v err=%v", got, buffered, found, err)
+		}
+		index := domain.indexedFlushUnits[0].columnDocumentIndex
+		if index == nil || index.values != nil || index.collisions != nil {
+			t.Fatalf("generic index=%+v want non-nil empty sentinel", index)
+		}
+		if pendingBufferedColumnDocumentIndexNeedsBuildLocked(domain) {
+			t.Fatal("generic unit still requests an index build after sentinel installation")
+		}
+		got, buffered, found, err = bufferedCollection.getBufferedDocumentInto([]byte("a"), nil)
+		if err != nil || !buffered || !found || string(got) != want {
+			t.Fatalf("repeated generic get got=%s buffered=%v found=%v err=%v", got, buffered, found, err)
+		}
+		if domain.indexedFlushUnits[0].columnDocumentIndex != index {
+			t.Fatal("repeated generic get rebuilt the empty sentinel")
+		}
+	})
 	t.Run("mismatched row fails closed", func(t *testing.T) {
 		unit := newUnit(t)
 		unit.columnDocuments[0].ID = []byte("other")
@@ -12771,6 +12803,58 @@ func TestGetBufferedRetainedDocumentReconstructsWithinOwningUnit(t *testing.T) {
 			t.Fatalf("mismatched retained row buffered=%v found=%v err=%v", buffered, found, err)
 		}
 	})
+}
+
+func TestBufferedReconstructionRowAccountingLifecycle(t *testing.T) {
+	newOverlay := func(key, value string) *bufferedPrimaryOverlay {
+		overlay := newBufferedPrimaryOverlay(1)
+		overlay.addEntry(directBufferedRootEntry{key: []byte(key), value: []byte(value), flags: node.FlagInline})
+		return overlay
+	}
+	marked := func(id string) columnWriteDocument {
+		return columnWriteDocument{ID: []byte(id), declaredValuesReady: true, reconstructFromRetained: true}
+	}
+	domain := &collectionWriteDomain{
+		count: 1, mutableCount: 1,
+		primaryOverlay:     newOverlay("a", `{"content":"alpha"}`),
+		columnDocuments:    []columnWriteDocument{marked("a")},
+		reconstructionRows: 1,
+	}
+	checkpoint := checkpointBufferedIndexedDomain(domain)
+	domain.count++
+	domain.mutableCount++
+	domain.primaryOverlay.addEntry(directBufferedRootEntry{key: []byte("b"), value: []byte(`{"content":"beta"}`), flags: node.FlagInline})
+	domain.columnDocuments = append(domain.columnDocuments, marked("b"))
+	domain.reconstructionRows++
+	if !rotateIndexedMutableToFlushUnitForAsyncLocked(domain) {
+		t.Fatal("rotate indexed mutable state returned false")
+	}
+	if got := domain.statsSnapshot().PendingIndexedReconstructionRows; got != 2 {
+		t.Fatalf("reconstruction rows after rotate=%d want 2", got)
+	}
+	if domain.reconstructionRows != 0 || len(domain.indexedFlushUnits) != 1 || domain.indexedFlushUnits[0].reconstructionRows != 2 {
+		t.Fatalf("rotated reconstruction rows mutable=%d units=%d unit=%d", domain.reconstructionRows, len(domain.indexedFlushUnits), domain.indexedFlushUnits[0].reconstructionRows)
+	}
+
+	rollbackBufferedIndexedDomain(domain, checkpoint)
+	if got := domain.statsSnapshot().PendingIndexedReconstructionRows; got != 1 {
+		t.Fatalf("reconstruction rows after rollback=%d want 1", got)
+	}
+	if domain.reconstructionRows != 1 || len(domain.indexedFlushUnits) != 0 {
+		t.Fatalf("rollback reconstruction rows mutable=%d units=%d", domain.reconstructionRows, len(domain.indexedFlushUnits))
+	}
+
+	if !rotateIndexedMutableToFlushUnitForAsyncLocked(domain) {
+		t.Fatal("rotate restored indexed mutable state returned false")
+	}
+	if got := domain.statsSnapshot().PendingIndexedReconstructionRows; got != 1 {
+		t.Fatalf("reconstruction rows after restored rotate=%d want 1", got)
+	}
+	resetIndexedFlushUnits(domain.indexedFlushUnits)
+	domain.indexedFlushUnits = nil
+	if got := domain.statsSnapshot().PendingIndexedReconstructionRows; got != 0 {
+		t.Fatalf("reconstruction rows after reset=%d want 0", got)
+	}
 }
 
 func TestCollectionUpdateCombinerMixedCollectionsFallbackDirect(t *testing.T) {
