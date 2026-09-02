@@ -3,3 +3,4 @@ TreeDB/docs/spec/authority-inventory.md text eol=lf
 TreeDB/docs/performance/vector-partition-m1-0aae57a7a.raw.txt -text
 TreeDB/docs/performance/vector-partition-m1-b16bcbf98.raw.txt -text
 scripts/treedb_kahip_partition.py text eol=lf
+benchmarks/vector_db_compare/qdrant-client-darwin-arm64-py313.lock text eol=lf
