@@ -1,5 +1,5 @@
 {
-  "schema_version": "treedb-construction-policy-4587/v7",
+  "schema_version": "treedb-construction-policy-4587/v8",
   "authority": "FROZEN_AUTHORITATIVE",
   "engineering_status": "QUALIFIED",
   "execution_validity": "REQUIRES_FINAL_EXTERNAL_AUTHORIZATION",
@@ -288,9 +288,14 @@
         "--lifecycle-started-at", "{lifecycle_started_at}",
         "--lifecycle-completed-at", "{lifecycle_completed_at}",
         "--ef-construction", "{ef_construction}",
-        "--expected-generation", "{expected_generation}", "--route", "{route}"
+        "--expected-generation", "{expected_generation}", "--route", "{route}",
+        "--service-bin", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
+        "--service-binary-sha256", "{service_binary_sha256}",
+        "--search-isolation-out", "{artifact_root}/search-isolation-{route}.json",
+        "--exclusive-lock", "/mnt/fast4tb/treedb-4587-c0.lock",
+        "--diagnostics-interval", "5", "--service-health-timeout", "60"
       ],
-      "probe_contract": "for each route and transport, require an exact existing-index diagnostic probe immediately followed by execution of the matching frozen unmodified VectorDBBench command into a new result directory; reject preexisting outputs, reruns, stale results, reordered routes, or ledger rebinding; append one fsynced record per canonical command with exact helper argv, exact VectorDBBench argv, probe and command timing, zero exit status, and result/response/metadata checksums; emit one origin sidecar binding each result to its exact append-only record, run, manifest, dataset, role, partition, and lifecycle",
+      "probe_contract": "for each route, the helper acquires the frozen exclusive lock, starts isolation sampling, launches the exact authorized service binary against the retained artifact data root, waits healthy, then executes diagnostic probe to canonical VectorDBBench and production probe to canonical VectorDBBench sequentially. It terminates the service, closes monitoring, writes checksum-bound isolation and origin sidecars, and only then releases the lock. Preexisting outputs, lock contention, binary/argv/data-root drift, service exit, swap, competing processes, sampling errors, reruns, stale results, reordered routes, or ledger rebinding fail closed.",
       "vectordbbench_common_argv_template": [
         "python", "-m", "vectordb_bench.cli.vectordbbench", "{subcommand}",
         "--base-url", "{base_url}", "--index-name", "{index_name}",
@@ -317,7 +322,7 @@
           "--quantized-index-name", "embedding.scalar_u8.fast", "--quantized-rerank-candidates", "400"
         ]
       },
-      "identity_check": "the helper never creates or resets; the unmodified adapter's idempotent create_index then independently opens only a compatible existing index",
+      "identity_check": "the helper owns the complete search envelope and never creates or resets the index; it launches the authorized service binary with the exact retained data root and the unmodified adapter's idempotent create_index independently opens only a compatible existing index",
       "required_stages": ["search_serial", "search_concurrent"],
       "required_order": ["diagnostic_exact", "production_exact", "diagnostic_scalar_u8_rerank", "production_scalar_u8_rerank"]
     },
@@ -499,7 +504,7 @@
       "schema_version": "treedb-construction-policy-4587-winner-selection/v1",
       "no_winner_value": null
     },
-    "search_origin_schema_version": "treedb-construction-policy-4587-search-origin/v2",
+    "search_origin_schema_version": "treedb-construction-policy-4587-search-origin/v3",
     "search_evidence_exact_keys": [
       "kind", "route", "origin", "result", "response", "index_metadata"
     ],
@@ -510,13 +515,23 @@
       "lifecycle_completed_at", "kind", "route", "result_sha256",
       "response_sha256", "index_metadata_sha256", "command_ledger_path",
       "command_sequence", "command_record_sha256", "probe_started_at",
-      "probe_completed_at"
+      "probe_completed_at", "service_binary_sha256", "service_argv", "isolation",
+      "search_started_at", "search_completed_at"
     ],
+    "search_isolation_schema": {
+      "schema_version": "treedb-construction-policy-4587-search-isolation/v1",
+      "exact_keys": [
+        "schema_version", "artifact_root", "lock_path", "lock_acquired_at",
+        "coverage_completed_at", "gomaxprocs", "service_binary_sha256", "service_argv",
+        "service_started_at", "service_completed_at", "samples"
+      ],
+      "sample_exact_keys": ["timestamp", "swap_used_bytes", "competing_processes"]
+    },
     "production_metric_bounds": "Recall and NDCG are finite in [0,1]; QPS and concurrent p99 are finite and strictly positive",
     "decision_resource_bounds": "peak_rss_bytes, persisted_bytes, and cumulative_allocated_bytes are strictly positive for both decision rows",
     "run_roles": ["screening_candidate", "screening_control", "decision_candidate", "decision_control"],
     "run_cardinality": "exactly four ordered 250K rows, then either stop with a null winner_selection or bind one selection event and exactly matched 1M control and selected winner",
-    "evidence_binding": "every measurement and checksum-bound search-origin sidecar binds its originating run, dataset digest, artifact root and manifest, scale, role, partition, coordinate, execution commit, and checksum-bound lifecycle timing; each search-origin sidecar also resolves an append-only executed-command ledger record with exact argv, start/completion, zero exit status, and exact canonical-result, response, and index-metadata checksums, and probes begin only after lifecycle teardown; all runs verify one service-binary SHA-256 equal to the external authorization; the authorization, winner selection, manifests, isolation/measurement documents, index metadata, command ledgers, and canonical VectorDBBench results are checksum-bound; unknown or extra result rows are rejected",
+    "evidence_binding": "every lifecycle plus its exact and scalar search envelopes completes before the next lifecycle starts. Each checksum-bound search origin binds the authorized service binary and exact argv, retained manifest data root, exclusive lock, GOMAXPROCS, zero-swap/no-competitor sampled isolation with bounded positive gaps, complete command coverage, append-only command/result evidence, run identity, dataset, scale, role, partition, coordinate, and execution timing. Exact and scalar envelopes are strictly ordered after lifecycle teardown; unknown or extra evidence is rejected.",
     "runs": []
   }
 }

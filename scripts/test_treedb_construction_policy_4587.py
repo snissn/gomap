@@ -11,6 +11,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("policy4587", HERE / "treedb_construction_policy_4587.py")
@@ -442,6 +443,11 @@ class DecisionFixture:
                 "--lifecycle-started-at", started.isoformat(),
                 "--lifecycle-completed-at", completed.isoformat(),
                 "--ef-construction", str(ef), "--expected-generation", "1", "--route", route,
+                "--service-bin", self.contract["commands"]["binary"],
+                "--service-binary-sha256", binary_sha,
+                "--search-isolation-out", str(root / f"search-isolation-{route}.json"),
+                "--exclusive-lock", self.contract["experiment"]["isolation_and_noise"]["lock_path"],
+                "--diagnostics-interval", "5", "--service-health-timeout", "60",
             ]
             command_records.append({
                 "schema_version": "treedb-construction-policy-4587-probe-command/v2",
@@ -476,6 +482,38 @@ class DecisionFixture:
         ledger_path.write_text("".join(
             json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n"
             for record in command_records))
+        service_argv = [
+            self.contract["commands"]["binary"],
+            "-dir", str(root / "treedb-data"), "-addr", "127.0.0.1:6060",
+            "-profile", "command_wal_durable",
+        ]
+        route_isolation = {}
+        for group, route in enumerate(("exact", "scalar_u8_rerank")):
+            envelope_start = completed + timedelta(seconds=group * 8 + 0.5)
+            envelope_completed = completed + timedelta(seconds=group * 8 + 8)
+            samples = [
+                {"timestamp": envelope_start.isoformat(), "swap_used_bytes": 0,
+                 "competing_processes": []},
+                {"timestamp": (envelope_start + timedelta(seconds=5)).isoformat(),
+                 "swap_used_bytes": 0, "competing_processes": []},
+                {"timestamp": envelope_completed.isoformat(), "swap_used_bytes": 0,
+                 "competing_processes": []},
+            ]
+            route_isolation[route] = self._write(
+                root / f"search-isolation-{route}.json",
+                {
+                    "schema_version": policy.SEARCH_ISOLATION_SCHEMA,
+                    "artifact_root": str(root.resolve()),
+                    "lock_path": self.contract["experiment"]["isolation_and_noise"]["lock_path"],
+                    "lock_acquired_at": (envelope_start - timedelta(seconds=0.1)).isoformat(),
+                    "coverage_completed_at": envelope_completed.isoformat(),
+                    "gomaxprocs": 12,
+                    "service_binary_sha256": binary_sha,
+                    "service_argv": service_argv,
+                    "service_started_at": (envelope_start + timedelta(seconds=0.1)).isoformat(),
+                    "service_completed_at": (envelope_completed - timedelta(seconds=0.1)).isoformat(),
+                    "samples": samples,
+                })
         search = []
         for position, (result, response, metadata, kind, route) in enumerate(raw_search):
             command = command_records[position]
@@ -503,6 +541,15 @@ class DecisionFixture:
                 "command_record_sha256": policy.canonical_sha256(command),
                 "probe_started_at": command["probe_started_at"],
                 "probe_completed_at": command["probe_completed_at"],
+                "service_binary_sha256": binary_sha,
+                "service_argv": service_argv,
+                "isolation": route_isolation[route],
+                "search_started_at": (
+                    completed + timedelta(seconds=(0 if route == "exact" else 8) + 0.5)
+                ).isoformat(),
+                "search_completed_at": (
+                    completed + timedelta(seconds=(0 if route == "exact" else 8) + 8)
+                ).isoformat(),
             }
             search.append({
                 "kind": kind,
@@ -645,6 +692,24 @@ class DecisionFixture:
         origin["probe_completed_at"] = records[sequence]["probe_completed_at"]
         origin_path.write_text(json.dumps(origin, sort_keys=True) + "\n")
         binding["sha256"] = policy.sha256_file(origin_path)
+
+
+    def rewrite_search_isolation(self, run: dict, route: str, mutate) -> None:
+        root = Path(run["artifact"]["root"])
+        entries = [entry for entry in run["search_evidence"] if entry["route"] == route]
+        first_origin_path = root / entries[0]["origin"]["path"]
+        first_origin = json.loads(first_origin_path.read_text())
+        isolation_path = root / first_origin["isolation"]["path"]
+        isolation = json.loads(isolation_path.read_text())
+        mutate(isolation)
+        isolation_path.write_text(json.dumps(isolation, sort_keys=True) + "\n")
+        isolation_sha = policy.sha256_file(isolation_path)
+        for entry in entries:
+            origin_path = root / entry["origin"]["path"]
+            origin = json.loads(origin_path.read_text())
+            origin["isolation"]["sha256"] = isolation_sha
+            origin_path.write_text(json.dumps(origin, sort_keys=True) + "\n")
+            entry["origin"]["sha256"] = policy.sha256_file(origin_path)
 
 
     def rewrite_adapter(self, run: dict, mutate) -> None:
@@ -978,6 +1043,16 @@ class ValidatorMutations(unittest.TestCase):
         self.fixture.rewrite_winner_selection(
             packet, lambda value: value.update({"selected_at": screening_completed}))
         self.assert_invalid(packet, "after all screening lifecycles")
+        packet = self.fixture.go_packet()
+        screening_measurement = Path(packet["runs"][3]["artifact"]["root"]) / "measurements.json"
+        screening_completed = policy.utc_timestamp(
+            json.loads(screening_measurement.read_text())["origin"]["lifecycle_completed_at"],
+            "screening completion")
+        self.fixture.rewrite_winner_selection(
+            packet, lambda value: value.update({
+                "selected_at": (screening_completed + timedelta(seconds=1)).isoformat(),
+            }))
+        self.assert_invalid(packet, "winner selection must follow every completed screening search")
 
         packet = self.fixture.go_packet()
         holdout_measurement = Path(packet["runs"][4]["artifact"]["root"]) / "measurements.json"
@@ -1050,9 +1125,13 @@ class ValidatorMutations(unittest.TestCase):
                 lifecycle_sha256="3" * 64, lifecycle_started_at="2026-09-02T00:00:00+00:00",
                 lifecycle_completed_at="2026-09-02T00:01:00+00:00", route="exact",
                 metadata_out=metadata, command_ledger=root / "probe-command-ledger.jsonl",
+                service_bin=Path("/authorized/service"), service_binary_sha256="4" * 64,
+                service_addr="127.0.0.1:6060",
             )
             search_existing_index.write_origin(
-                args, "production", result, response, output, command)
+                args, "production", result, response, output, command,
+                {"path": "search-isolation-exact.json", "sha256": "5" * 64},
+                "2026-09-02T00:01:01+00:00", "2026-09-02T00:03:00+00:00")
             origin = json.loads(output.read_text())
             self.assertEqual(origin["result_sha256"], search_existing_index.sha256_file(result))
             self.assertEqual(origin["response_sha256"], search_existing_index.sha256_file(response))
@@ -1218,7 +1297,8 @@ class ValidatorMutations(unittest.TestCase):
         control_completed = json.loads(control_measurement.read_text())["origin"]["lifecycle_completed_at"]
         candidate_completed = json.loads(candidate_measurement.read_text())["origin"]["lifecycle_completed_at"]
         self.fixture.retime_run(packet["runs"][5], control_completed, candidate_completed)
-        self.assert_invalid(packet, "decision control lifecycle must complete before candidate")
+        self.assert_invalid(
+            packet, "each lifecycle and search envelope must complete before the next lifecycle starts")
 
     def test_recall_and_ndcg_must_be_finite_unit_interval(self) -> None:
         for metric, value in (("recall", 1.01), ("ndcg", 1.01), ("recall", float("inf"))):
@@ -1287,7 +1367,8 @@ class ValidatorMutations(unittest.TestCase):
         second_measurement = Path(packet["runs"][1]["artifact"]["root"]) / "measurements.json"
         second_completed = json.loads(second_measurement.read_text())["origin"]["lifecycle_completed_at"]
         self.fixture.retime_run(packet["runs"][1], first_completed, second_completed)
-        self.assert_invalid(packet, "screening lifecycle order must be strictly non-overlapping")
+        self.assert_invalid(
+            packet, "each lifecycle and search envelope must complete before the next lifecycle starts")
 
     def test_projected_reduction_is_a_fraction(self) -> None:
         packet = self.fixture.go_packet()
@@ -1339,6 +1420,36 @@ class ValidatorMutations(unittest.TestCase):
                 self.fixture.rewrite_bound(run, run["isolation_evidence"], mutate)
                 self.assert_invalid(packet, pattern)
 
+    def test_search_envelope_is_fail_closed(self) -> None:
+        mutations = [
+            ("swap", lambda value: value["samples"][0].update({"swap_used_bytes": 1})),
+            ("competitors", lambda value: value["samples"][0].update({
+                "competing_processes": [{"pid": 9, "command": "vectordbbench"}],
+            })),
+            ("sampling gap", lambda value: value["samples"][1].update({
+                "timestamp": (
+                    policy.utc_timestamp(value["samples"][0]["timestamp"], "search sample")
+                    + timedelta(seconds=7)
+                ).isoformat(),
+            })),
+            ("service argv", lambda value: value["service_argv"].__setitem__(2, "/tmp/wrong")),
+            ("gomaxprocs", lambda value: value.update({"gomaxprocs": 1})),
+        ]
+        for pattern, mutate in mutations:
+            with self.subTest(pattern=pattern):
+                packet = self.fixture.no_go_packet()
+                self.fixture.rewrite_search_isolation(packet["runs"][0], "exact", mutate)
+                self.assert_invalid(packet, pattern)
+
+    def test_search_origin_binds_authorized_service(self) -> None:
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_bound(
+            run, run["search_evidence"][0]["origin"],
+            lambda value: value.update({"service_binary_sha256": "0" * 64}),
+        )
+        self.assert_invalid(packet, "authorized service binary")
+
     def test_winner_tie_break_uses_both_routes(self) -> None:
         runs = [
             self.fixture.run(128, 250000, "screening_candidate", "selection", adjacency=60),
@@ -1377,6 +1488,36 @@ class ValidatorMutations(unittest.TestCase):
         packet["runs"][5] = self.fixture.run(
             192, 1000000, "decision_candidate", "holdout", adjacency=60, projection=0.4)
         self.assert_invalid(packet, "holdout cardinality and order")
+
+
+class SearchEnvelopeHelperTest(unittest.TestCase):
+    def test_service_argv_is_exact_and_retained(self) -> None:
+        args = SimpleNamespace(
+            service_bin=Path("/authorized/service"),
+            artifact_root=Path("/artifact"),
+            service_addr="127.0.0.1:6060",
+        )
+        self.assertEqual(search_existing_index.service_argv(args), [
+            "/authorized/service", "-dir", "/artifact/treedb-data",
+            "-addr", "127.0.0.1:6060", "-profile", "command_wal_durable",
+        ])
+
+    def test_isolation_monitor_rethrows_sampling_failure(self) -> None:
+        monitor = object.__new__(search_existing_index.IsolationMonitor)
+        monitor.stop_event = mock.Mock()
+        monitor.thread = mock.Mock()
+        monitor.error = OSError("sample failed")
+        monitor.samples = []
+        with self.assertRaisesRegex(RuntimeError, "isolation monitor failed"):
+            monitor.stop()
+        monitor.thread.join.assert_called_once_with()
+
+    def test_stop_service_rejects_early_exit(self) -> None:
+        process = mock.Mock()
+        process.poll.return_value = 2
+        process.returncode = 2
+        with self.assertRaisesRegex(ValueError, "exited unexpectedly"):
+            search_existing_index.stop_service(process)
 
 
 if __name__ == "__main__":

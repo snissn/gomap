@@ -15,14 +15,15 @@ import struct
 import subprocess
 import sys
 from typing import Any
+from urllib.parse import urlsplit
 
-SCHEMA = "treedb-construction-policy-4587/v7"
+SCHEMA = "treedb-construction-policy-4587/v8"
 RESULT_SCHEMA = "treedb-construction-policy-4587-results/v5"
 AUTHORIZATION_SCHEMA = "treedb-construction-policy-4587-execution-authorization/v1"
 MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v4"
 ISOLATION_SCHEMA = "treedb-construction-policy-4587-isolation/v2"
 WINNER_SELECTION_SCHEMA = "treedb-construction-policy-4587-winner-selection/v1"
-SEARCH_ORIGIN_SCHEMA = "treedb-construction-policy-4587-search-origin/v2"
+SEARCH_ORIGIN_SCHEMA = "treedb-construction-policy-4587-search-origin/v3"
 COORDINATES = [128, 192, 256, 300]
 CONTROL = 300
 HISTORY_PATH = "docs/benchmarks/treedb_construction_policy_history_2026-09-02.md"
@@ -70,6 +71,13 @@ ISOLATION_KEYS = {
     "competing_processes", "peak_swap_used_bytes", "samples",
 }
 ISOLATION_SAMPLE_KEYS = {"timestamp", "swap_used_bytes", "competing_processes"}
+SEARCH_ISOLATION_SCHEMA = "treedb-construction-policy-4587-search-isolation/v1"
+SEARCH_ISOLATION_KEYS = {
+    "schema_version", "artifact_root", "lock_path", "lock_acquired_at",
+    "coverage_completed_at", "gomaxprocs", "service_binary_sha256", "service_argv",
+    "service_started_at", "service_completed_at", "samples",
+}
+SEARCH_ISOLATION_SAMPLE_KEYS = {"timestamp", "swap_used_bytes", "competing_processes"}
 SEARCH_ORIGIN_KEYS = {
     "schema_version", "run_id", "artifact_root", "manifest_sha256",
     "execution_commit", "dataset_sha256", "scale", "role", "partition",
@@ -77,7 +85,8 @@ SEARCH_ORIGIN_KEYS = {
     "lifecycle_completed_at", "kind", "route", "result_sha256",
     "response_sha256", "index_metadata_sha256", "command_ledger_path",
     "command_sequence", "command_record_sha256", "probe_started_at",
-    "probe_completed_at",
+    "probe_completed_at", "service_binary_sha256", "service_argv", "isolation",
+    "search_started_at", "search_completed_at",
 }
 RUN_KEYS = {
     "run_id", "scale", "role", "partition", "ef_construction",
@@ -623,6 +632,14 @@ def validate_contract(contract: dict[str, Any], allow_draft: bool,
           "search evidence contract keys")
     exact(set(result_schema["search_origin_exact_keys"]), SEARCH_ORIGIN_KEYS,
           "search origin contract keys")
+    search_isolation_schema = object_at(
+        result_schema["search_isolation_schema"], "result_schema.search_isolation_schema")
+    exact(search_isolation_schema["schema_version"], SEARCH_ISOLATION_SCHEMA,
+          "search isolation contract schema")
+    exact(set(search_isolation_schema["exact_keys"]), SEARCH_ISOLATION_KEYS,
+          "search isolation contract keys")
+    exact(set(search_isolation_schema["sample_exact_keys"]), SEARCH_ISOLATION_SAMPLE_KEYS,
+          "search isolation sample contract keys")
     gomap = verify_git_identity(Path(source["gomap_root"]), source, allow_draft)
     external = verify_external_git(source)
     datasets = verify_datasets(contract)
@@ -740,7 +757,9 @@ def probe_argv_options(argv: Any, name: str) -> dict[str, str]:
         "--manifest-sha256", "--execution-commit", "--dataset-sha256", "--scale",
         "--role", "--partition", "--lifecycle-sha256", "--lifecycle-started-at",
         "--lifecycle-completed-at", "--ef-construction", "--expected-generation", "--route",
-        "--dataset-name", "--dataset-dir", "--vectordbbench-dir",
+        "--dataset-name", "--dataset-dir", "--vectordbbench-dir", "--service-bin",
+        "--service-binary-sha256", "--search-isolation-out", "--exclusive-lock",
+        "--diagnostics-interval", "--service-health-timeout",
     }, f"{name}.argv frozen options")
     return options
 def expected_vdbbench_argv(
@@ -781,10 +800,58 @@ def expected_vdbbench_argv(
 
 
 
-def validate_search_evidence(run_row: dict[str, Any], root: Path,
-                             timing: dict[str, Any], expected_base_url: str,
-                             expected_vdbbench_dir: str,
-                             expected_gomap_root: str) -> dict[str, dict[str, float]]:
+def validate_search_isolation(
+    root: Path,
+    binding: Any,
+    expected_service_argv: list[str],
+    expected_binary_sha256: str,
+    contract: dict[str, Any],
+    name: str,
+) -> tuple[datetime, datetime, datetime, datetime]:
+    isolation, _ = read_bound_json(root, binding, name)
+    exact_keys(isolation, SEARCH_ISOLATION_KEYS, name)
+    exact(isolation["schema_version"], SEARCH_ISOLATION_SCHEMA, f"{name}.schema_version")
+    exact(isolation["artifact_root"], str(root), f"{name}.artifact_root")
+    policy = contract["experiment"]["isolation_and_noise"]
+    exact(isolation["lock_path"], policy["lock_path"], f"{name}.lock_path")
+    exact(isolation["gomaxprocs"], policy["gomaxprocs"], f"{name}.gomaxprocs")
+    exact(isolation["service_binary_sha256"], expected_binary_sha256,
+          f"{name}.service_binary_sha256")
+    exact(isolation["service_argv"], expected_service_argv, f"{name}.service_argv")
+    samples = isolation["samples"]
+    if not isinstance(samples, list) or len(samples) < 2:
+        fail(f"{name}.samples must contain start and completion observations")
+    sample_times = []
+    for position, sample in enumerate(samples):
+        sample = object_at(sample, f"{name}.samples[{position}]")
+        exact_keys(sample, SEARCH_ISOLATION_SAMPLE_KEYS, f"{name}.samples[{position}]")
+        sample_times.append(utc_timestamp(sample["timestamp"], f"{name}.samples[{position}].timestamp"))
+        exact(nonnegative_number(sample["swap_used_bytes"], f"{name}.samples[{position}].swap"),
+              0.0, f"{name}.samples[{position}].swap")
+        exact(sample["competing_processes"], [], f"{name}.samples[{position}].competitors")
+    maximum_gap = policy["diagnostics_interval_seconds"] + policy["sampling_gap_tolerance_seconds"]
+    for previous, current in zip(sample_times, sample_times[1:]):
+        gap = (current - previous).total_seconds()
+        if gap <= 0 or gap > maximum_gap:
+            fail("search isolation sampling gap exceeds frozen interval and tolerance")
+    lock_acquired = utc_timestamp(isolation["lock_acquired_at"], f"{name}.lock_acquired_at")
+    coverage_completed = utc_timestamp(
+        isolation["coverage_completed_at"], f"{name}.coverage_completed_at")
+    service_started = utc_timestamp(isolation["service_started_at"], f"{name}.service_started_at")
+    service_completed = utc_timestamp(
+        isolation["service_completed_at"], f"{name}.service_completed_at")
+    exact(coverage_completed, sample_times[-1], f"{name}.coverage completion")
+    if (lock_acquired > sample_times[0] or service_started < sample_times[0]
+            or service_completed < service_started or coverage_completed < service_completed):
+        fail("search isolation does not cover the owned service envelope")
+    return sample_times[0], coverage_completed, service_started, service_completed
+
+
+def validate_search_evidence(
+    run_row: dict[str, Any], root: Path, timing: dict[str, Any], expected_base_url: str,
+    expected_vdbbench_dir: str, expected_gomap_root: str, contract: dict[str, Any],
+    expected_binary_sha256: str,
+) -> tuple[dict[str, dict[str, float]], datetime]:
     rows = run_row.get("search_evidence")
     if not isinstance(rows, list) or len(rows) != len(SEARCH_ORDER):
         fail("run.search_evidence must contain exactly four ordered diagnostic/production rows")
@@ -793,6 +860,17 @@ def validate_search_evidence(run_row: dict[str, Any], root: Path,
     identities: set[tuple[str, int, str]] = set()
     prior_timestamp = -math.inf
     prior_command_completed = timing["completed"]
+    parsed_base_url = urlsplit(expected_base_url)
+    expected_service_argv = [
+        contract["commands"]["binary"],
+        "-dir", str(root / "treedb-data"),
+        "-addr", f"{parsed_base_url.hostname}:{parsed_base_url.port}",
+        "-profile", "command_wal_durable",
+    ]
+    route_envelopes: dict[
+        str, tuple[datetime, datetime, datetime, datetime, Any]
+    ] = {}
+    prior_envelope_completed = timing["completed"]
     for position, (entry, expected) in enumerate(zip(rows, SEARCH_ORDER, strict=True)):
         item = object_at(entry, f"search_evidence[{position}]")
         exact_keys(item, {"kind", "route", "origin", "result", "response", "index_metadata"},
@@ -827,6 +905,34 @@ def validate_search_evidence(run_row: dict[str, Any], root: Path,
         for key, expected_value in expected_origin.items():
             exact(origin[key], expected_value,
                   f"search_evidence[{position}] originating run binding {key}")
+        exact(origin["service_binary_sha256"], expected_binary_sha256,
+              f"search_evidence[{position}] authorized service binary")
+        exact(origin["service_argv"], expected_service_argv,
+              f"search_evidence[{position}] service argv")
+        envelope_started = utc_timestamp(
+            origin["search_started_at"], f"search_evidence[{position}] search start")
+        envelope_completed = utc_timestamp(
+            origin["search_completed_at"], f"search_evidence[{position}] search completion")
+        if item["route"] not in route_envelopes:
+            observed_start, observed_completed, service_started, service_completed = (
+                validate_search_isolation(
+                    root, origin["isolation"], expected_service_argv, expected_binary_sha256,
+                    contract, f"search_evidence[{position}].isolation"))
+            exact((envelope_started, envelope_completed), (observed_start, observed_completed),
+                  f"search_evidence[{position}] isolation timing binding")
+            if envelope_started <= prior_envelope_completed:
+                fail("exact/scalar search envelopes must be ordered after lifecycle completion")
+            route_envelopes[item["route"]] = (
+                envelope_started, envelope_completed, service_started, service_completed,
+                origin["isolation"])
+            prior_envelope_completed = envelope_completed
+        else:
+            exact(
+                (envelope_started, envelope_completed, origin["isolation"]),
+                (route_envelopes[item["route"]][0], route_envelopes[item["route"]][1],
+                 route_envelopes[item["route"]][4]),
+                f"search_evidence[{position}] route envelope binding")
+            service_started, service_completed = route_envelopes[item["route"]][2:4]
         command = read_probe_command_record(
             root, origin, position, f"search_evidence[{position}].origin")
         exact(command["run_id"], run_row["run_id"], f"search_evidence[{position}] command run")
@@ -854,6 +960,9 @@ def validate_search_evidence(run_row: dict[str, Any], root: Path,
                 or command_started < probe_completed or command_completed < command_started
                 or (command_started - probe_completed).total_seconds() > 1):
             fail("each diagnostic probe must immediately precede its canonical command")
+        if (probe_started < envelope_started or command_started < service_started
+                or command_completed > service_completed):
+            fail("owned search service and isolation must cover every canonical command")
         prior_command_completed = command_completed
         index_name = metadata.get("name")
         if not isinstance(index_name, str) or not index_name:
@@ -911,6 +1020,13 @@ def validate_search_evidence(run_row: dict[str, Any], root: Path,
             "--dataset-name": run_row["dataset"]["name"],
             "--dataset-dir": run_row["dataset"]["directory"],
             "--vectordbbench-dir": expected_vdbbench_dir,
+            "--service-bin": contract["commands"]["binary"],
+            "--service-binary-sha256": expected_binary_sha256,
+            "--search-isolation-out": str(root / f"search-isolation-{item['route']}.json"),
+            "--exclusive-lock": contract["experiment"]["isolation_and_noise"]["lock_path"],
+            "--diagnostics-interval": str(
+                contract["experiment"]["isolation_and_noise"]["diagnostics_interval_seconds"]),
+            "--service-health-timeout": "60",
         }, {key: options[key] for key in options if key not in {"--base-url", "--query-json"}},
               f"search_evidence[{position}] executed command identity")
         query_path = Path(options["--query-json"]).resolve()
@@ -1005,7 +1121,7 @@ def validate_search_evidence(run_row: dict[str, Any], root: Path,
     if len(identities) != 1:
         fail("diagnostic and production search rows do not bind one exact existing index identity")
     exact(set(production), {"exact", "scalar_u8_rerank"}, "production search routes")
-    return production
+    return production, prior_envelope_completed
 
 
 def validate_nonoverlapping_lifecycles(rows: list[dict[str, Any]], name: str) -> None:
@@ -1302,13 +1418,17 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
     exact(measurements["projected_10m_adjacency_reduction_fraction"], None,
           "raw producer projection field")
     projection = expected_measurements["projected_10m_adjacency_reduction_fraction"]
-    production = validate_search_evidence(
+    manifest_data_root = Path(
+        object_at(manifest["service"], "manifest.service")["data_dir"]).resolve()
+    exact(manifest_data_root, (root / "treedb-data").resolve(),
+          "search manifest retained data root")
+    production, search_completed = validate_search_evidence(
         row, root, timing, object_at(manifest["service"], "manifest.service").get("base_url"),
         contract["source_identity"]["vectordbbench"]["root"],
-        contract["source_identity"]["gomap_root"])
+        contract["source_identity"]["gomap_root"], contract, service_binary_sha256)
     return {"row": row, "phases": phases, "resources": resources, "production": production,
             "projection": projection, "service_binary_sha256": service_binary_sha256,
-            "timing": timing}
+            "timing": timing, "search_completed": search_completed}
 
 
 def clears_gates(candidate: dict[str, Any], control: dict[str, Any], require_projection: bool,
@@ -1425,6 +1545,9 @@ def validate_decision(packet: dict[str, Any], contract: dict[str, Any], *, run_b
     run_ids = [item["row"]["run_id"] for item in validated]
     if len(set(roots)) != len(roots) or len(set(run_ids)) != len(run_ids):
         fail("artifact roots and run IDs must be unique")
+    for previous, current in zip(validated, validated[1:]):
+        if previous["search_completed"] >= current["timing"]["started"]:
+            fail("each lifecycle and search envelope must complete before the next lifecycle starts")
     screening = validated[:4]
     exact(len(screening), 4, "screening cardinality")
     exact([(item["row"]["scale"], item["row"]["ef_construction"], item["row"]["partition"], item["row"]["role"])
@@ -1445,15 +1568,20 @@ def validate_decision(packet: dict[str, Any], contract: dict[str, Any], *, run_b
     selected_at = validate_winner_selection(
         packet["winner_selection"], contract, expected_checksum, screening, winner)
     decision = validated[4:]
-    exact([(item["row"]["scale"], item["row"]["ef_construction"], item["row"]["partition"], item["row"]["role"])
-           for item in decision],
-          [(1000000, 300, "holdout", "decision_control"),
-           (1000000, winner["row"]["ef_construction"], "holdout", "decision_candidate")],
-          "holdout cardinality and order")
+    if any(item["search_completed"] >= selected_at for item in screening):
+        fail("winner selection must follow every completed screening search envelope")
+    exact([
+        (item["row"]["scale"], item["row"]["ef_construction"],
+         item["row"]["partition"], item["row"]["role"])
+        for item in decision
+    ], [
+        (1000000, 300, "holdout", "decision_control"),
+        (1000000, winner["row"]["ef_construction"], "holdout", "decision_candidate"),
+    ], "holdout cardinality and order")
     if any(item["timing"]["started"] <= selected_at for item in decision):
         fail("holdout lifecycle must start after the checksum-bound winner selection")
-    if decision[0]["timing"]["completed"] >= decision[1]["timing"]["started"]:
-        fail("decision control lifecycle must complete before candidate lifecycle starts")
+    if decision[0]["search_completed"] >= decision[1]["timing"]["started"]:
+        fail("decision control lifecycle and search envelope must complete before candidate lifecycle starts")
     for item in decision:
         for key in RESOURCE_KEYS:
             positive_number(item["resources"][key], f"decision {item['row']['role']} resources.{key}")

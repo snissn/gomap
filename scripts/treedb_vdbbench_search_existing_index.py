@@ -1,21 +1,28 @@
 #!/usr/bin/env python3
 """Fail-closed route probes for VectorDBBench search on an existing TreeDB index.
 
-This helper never creates, resets, optimizes, or mutates an index. For each
-transport it captures the required route response and immediately executes the
-matching unmodified VectorDBBench --skip-load/--skip-drop-old command into a
-new result directory. Each result is bound to its own append-only command
-record; preexisting outputs, reruns, and reordered route invocations fail.
+This helper owns one retained-index route envelope: exclusive lock, isolation
+monitor, exact authorized service process, diagnostic and production probes,
+their matching unmodified VectorDBBench --skip-load/--skip-drop-old commands,
+service teardown, and checksum-bound evidence. It never creates, resets,
+optimizes, or mutates an index; preexisting outputs and reordered runs fail.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 from datetime import datetime, timezone
 from dataclasses import asdict, is_dataclass
 import hashlib
 import json
 import math
+import signal
+import threading
+import time
+from urllib.parse import urlsplit
+from urllib.request import urlopen
 import re
 from pathlib import Path
 import subprocess
@@ -69,6 +76,106 @@ def canonical_sha256(value: Any) -> str:
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+def swap_used_bytes() -> int:
+    fields: dict[str, int] = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        key, separator, value = line.partition(":")
+        if separator and key in {"SwapTotal", "SwapFree"}:
+            fields[key] = int(value.strip().split()[0]) * 1024
+    if set(fields) != {"SwapTotal", "SwapFree"}:
+        fail("/proc/meminfo did not expose swap counters")
+    return fields["SwapTotal"] - fields["SwapFree"]
+
+
+def competing_processes() -> list[dict[str, Any]]:
+    result = subprocess.run(
+        ["ps", "-eo", "pid=,ppid=,args="], text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    rows = []
+    for line in result.stdout.splitlines():
+        fields = line.strip().split(maxsplit=2)
+        if len(fields) == 3:
+            rows.append({"pid": int(fields[0]), "ppid": int(fields[1]), "command": fields[2]})
+    owned = {os.getpid()}
+    while True:
+        descendants = {row["pid"] for row in rows if row["ppid"] in owned}
+        if descendants <= owned:
+            break
+        owned.update(descendants)
+    return [
+        row for row in rows
+        if row["pid"] not in owned
+        and ("treedb-document-service" in row["command"].lower()
+             or "vectordbbench" in row["command"].lower()
+             or "vectordb_bench" in row["command"].lower())
+    ]
+
+
+def isolation_sample() -> dict[str, Any]:
+    return {
+        "timestamp": iso_now(),
+        "swap_used_bytes": swap_used_bytes(),
+        "competing_processes": competing_processes(),
+    }
+
+
+class IsolationMonitor:
+    def __init__(self, interval: float) -> None:
+        self.interval = interval
+        self.samples = [isolation_sample()]
+        self.stop_event = threading.Event()
+        self.error: BaseException | None = None
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self) -> None:
+        try:
+            while not self.stop_event.wait(self.interval):
+                self.samples.append(isolation_sample())
+        except BaseException as exc:
+            self.error = exc
+            self.stop_event.set()
+
+    def stop(self) -> list[dict[str, Any]]:
+        self.stop_event.set()
+        self.thread.join()
+        if self.error is not None:
+            raise RuntimeError("search isolation monitor failed") from self.error
+        self.samples.append(isolation_sample())
+        return self.samples
+
+
+def service_argv(args: argparse.Namespace) -> list[str]:
+    return [
+        str(args.service_bin), "-dir", str(args.artifact_root / "treedb-data"),
+        "-addr", args.service_addr, "-profile", "command_wal_durable",
+    ]
+
+
+def wait_healthy(process: subprocess.Popen[Any], base_url: str, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    last_error: BaseException | None = None
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            fail(f"search service exited before health with {process.returncode}")
+        try:
+            with urlopen(f"{base_url.rstrip('/')}/v1/health", timeout=2):
+                return
+        except BaseException as exc:
+            last_error = exc
+            time.sleep(0.1)
+    raise RuntimeError("search service did not become healthy") from last_error
+
+
+def stop_service(process: subprocess.Popen[Any]) -> None:
+    if process.poll() is not None:
+        fail(f"search service exited unexpectedly with {process.returncode}")
+    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=5)
 
 
 def append_command_record(path: Path, record: dict[str, Any]) -> None:
@@ -90,9 +197,12 @@ def write_origin(
     response: Path,
     output: Path,
     command_record: dict[str, Any],
+    isolation_binding: dict[str, str],
+    search_started_at: str,
+    search_completed_at: str,
 ) -> None:
     write_json(output, {
-        "schema_version": "treedb-construction-policy-4587-search-origin/v2",
+        "schema_version": "treedb-construction-policy-4587-search-origin/v3",
         "run_id": args.run_id,
         "artifact_root": str(args.artifact_root),
         "manifest_sha256": args.manifest_sha256,
@@ -115,6 +225,11 @@ def write_origin(
         "command_record_sha256": canonical_sha256(command_record),
         "probe_started_at": command_record["probe_started_at"],
         "probe_completed_at": command_record["probe_completed_at"],
+        "service_binary_sha256": args.service_binary_sha256,
+        "service_argv": service_argv(args),
+        "isolation": isolation_binding,
+        "search_started_at": search_started_at,
+        "search_completed_at": search_completed_at,
     })
 
 
@@ -314,25 +429,44 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rerank-candidates", type=int, default=400)
     parser.add_argument("--effective-rerank-candidates", type=int, default=192)
     parser.add_argument("--timeout", type=float, default=3600.0)
+    parser.add_argument("--service-bin", required=True, type=Path)
+    parser.add_argument("--service-binary-sha256", required=True)
+    parser.add_argument("--search-isolation-out", required=True, type=Path)
+    parser.add_argument("--exclusive-lock", required=True, type=Path)
+    parser.add_argument("--diagnostics-interval", type=float, default=5.0)
+    parser.add_argument("--service-health-timeout", type=float, default=60.0)
     args = parser.parse_args()
-    for name in ("dimensions", "m", "ef_construction", "ef_search", "expected_generation", "top_k",
-                 "rerank_candidates", "effective_rerank_candidates"):
+    for name in ("dimensions", "m", "ef_construction", "ef_search", "expected_generation",
+                 "top_k", "rerank_candidates", "effective_rerank_candidates", "scale"):
         positive_int(getattr(args, name), name)
+    if args.diagnostics_interval <= 0 or args.service_health_timeout <= 0:
+        fail("search diagnostics and health intervals must be positive")
     if args.effective_rerank_candidates > args.rerank_candidates:
         fail("effective rerank candidates cannot exceed the configured shortlist")
     args.artifact_root = args.artifact_root.resolve()
-    for name in ("manifest_sha256", "dataset_sha256", "lifecycle_sha256"):
-        if not isinstance(getattr(args, name), str) or re.fullmatch(r"[0-9a-f]{64}", getattr(args, name)) is None:
+    for name in ("manifest_sha256", "dataset_sha256", "lifecycle_sha256",
+                 "service_binary_sha256"):
+        if re.fullmatch(r"[0-9a-f]{64}", getattr(args, name)) is None:
             fail(f"{name} must be a lowercase SHA-256")
     if re.fullmatch(r"[0-9a-f]{40}", args.execution_commit) is None:
         fail("execution_commit must be a lowercase commit digest")
     if not args.run_id or not args.role or not args.partition:
         fail("run identity strings must be non-empty")
-    positive_int(args.scale, "scale")
+    parsed_url = urlsplit(args.base_url)
+    if (parsed_url.scheme != "http"
+            or parsed_url.hostname not in {"127.0.0.1", "::1", "localhost"}
+            or parsed_url.port is None or parsed_url.path not in {"", "/"}
+            or parsed_url.query or parsed_url.fragment):
+        fail("base-url must be a loopback HTTP origin with an explicit port")
+    args.service_addr = f"{parsed_url.hostname}:{parsed_url.port}"
+    args.service_bin = args.service_bin.resolve()
+    if not args.service_bin.is_file() or sha256_file(args.service_bin) != args.service_binary_sha256:
+        fail("authorized search service binary checksum mismatch")
     paths = (
         args.query_json, args.metadata_out, args.diagnostic_response_out,
         args.production_response_out, args.diagnostic_result, args.production_result,
         args.diagnostic_origin_out, args.production_origin_out, args.command_ledger,
+        args.search_isolation_out,
     )
     for path in paths:
         try:
@@ -345,12 +479,18 @@ def parse_args() -> argparse.Namespace:
     args.vectordbbench_dir = args.vectordbbench_dir.resolve()
     if not args.vectordbbench_dir.is_dir():
         fail("vectordbbench_dir must exist")
+    args.exclusive_lock = args.exclusive_lock.resolve()
+    args.exclusive_lock.parent.mkdir(parents=True, exist_ok=True)
     manifest_path = args.artifact_root / "manifest.json"
     if sha256_file(manifest_path) != args.manifest_sha256:
         fail("manifest_sha256 does not match artifact manifest")
     manifest = json.loads(manifest_path.read_text())
     if manifest.get("artifact_root") != str(args.artifact_root):
         fail("manifest artifact root does not match --artifact-root")
+    service = manifest.get("service")
+    if not isinstance(service, dict) or Path(service.get("data_dir", "")).resolve() != (
+            args.artifact_root / "treedb-data").resolve():
+        fail("manifest service data root does not match frozen search service argv")
     lifecycle = manifest.get("lifecycle")
     if not isinstance(lifecycle, dict) or lifecycle.get("sha256") != args.lifecycle_sha256:
         fail("lifecycle_sha256 does not match artifact manifest")
@@ -366,21 +506,52 @@ def parse_args() -> argparse.Namespace:
     existing_records = args.command_ledger.read_text().splitlines() if args.command_ledger.exists() else []
     if len(existing_records) != expected_records:
         fail("route execution is not append-only or is out of order")
-    for output in (
+    outputs = (
         args.metadata_out, args.diagnostic_response_out, args.production_response_out,
         args.diagnostic_result, args.production_result, args.diagnostic_origin_out,
-        args.production_origin_out,
-    ):
+        args.production_origin_out, args.search_isolation_out,
+        args.artifact_root / f"search-service-{args.route}.log",
+        args.artifact_root / f"vdbbench-results-{args.route}-diagnostic",
+        args.artifact_root / f"vdbbench-results-{args.route}-production",
+    )
+    for output in outputs:
         if output.exists():
             fail(f"search evidence output already exists: {output}")
     return args
 
-
 def main() -> int:
     args = parse_args()
     query = load_query(args.query_json, args.dimensions)
-    client = TreeDBClient(args.base_url, timeout=args.timeout)
+    lock_file = args.exclusive_lock.open("a+")
+    monitor: IsolationMonitor | None = None
+    service: subprocess.Popen[Any] | None = None
+    client: TreeDBClient | None = None
+    service_log = None
+    captured: list[tuple[str, Path, Path, Path, dict[str, Any]]] = []
+    failure: BaseException | None = None
+    lock_acquired_at = ""
+    service_started_at = ""
     try:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            fail("frozen search exclusive lock is already held")
+        lock_acquired_at = iso_now()
+        monitor = IsolationMonitor(args.diagnostics_interval)
+        search_started_at = monitor.samples[0]["timestamp"]
+        log_path = args.artifact_root / f"search-service-{args.route}.log"
+        service_log = log_path.open("xb")
+        if (monitor.samples[0]["swap_used_bytes"] != 0
+                or monitor.samples[0]["competing_processes"]):
+            fail("search isolation is not clean before service launch")
+        env = os.environ.copy()
+        env["GOMAXPROCS"] = "12"
+        service_started_at = iso_now()
+        service = subprocess.Popen(
+            service_argv(args), stdout=service_log, stderr=subprocess.STDOUT,
+            env=env, start_new_session=True)
+        wait_healthy(service, args.base_url, args.service_health_timeout)
+        client = TreeDBClient(args.base_url, timeout=args.timeout)
         before = jsonable(client.open_index(args.index_name))
         validate_metadata(before, args)
         write_json(args.metadata_out, before)
@@ -395,7 +566,6 @@ def main() -> int:
                 "quantized_index_name": args.quantized_index_name,
                 "quantized_rerank_candidates": args.rerank_candidates,
             })
-        evidence = []
         for kind, response_path, origin_path in (
             ("diagnostic", args.diagnostic_response_out, args.diagnostic_origin_out),
             ("production", args.production_response_out, args.production_origin_out),
@@ -415,20 +585,76 @@ def main() -> int:
             write_json(response_path, response)
             result_path, command_record = run_vdbbench_command(
                 args, kind, response_path, probe_started_at, probe_completed_at)
-            write_origin(args, kind, result_path, response_path, origin_path, command_record)
-            evidence.append(command_record)
+            captured.append((kind, result_path, response_path, origin_path, command_record))
         after = jsonable(client.open_index(args.index_name))
         validate_metadata(after, args)
         if after != before:
             fail("existing index identity changed during canonical search commands")
-        return 0
+    except BaseException as exc:
+        failure = exc
     finally:
-        client.close()
+        if client is not None:
+            with contextlib.suppress(Exception):
+                client.close()
+        if service is not None:
+            try:
+                stop_service(service)
+            except BaseException as exc:
+                failure = failure or exc
+        service_completed_at = iso_now()
+        samples: list[dict[str, Any]] = []
+        if monitor is not None:
+            try:
+                samples = monitor.stop()
+            except BaseException as exc:
+                failure = failure or exc
+        try:
+            search_completed_at = samples[-1]["timestamp"] if samples else iso_now()
+            if samples:
+                isolation = {
+                    "schema_version": "treedb-construction-policy-4587-search-isolation/v1",
+                    "artifact_root": str(args.artifact_root),
+                    "lock_path": str(args.exclusive_lock),
+                    "lock_acquired_at": lock_acquired_at,
+                    "coverage_completed_at": search_completed_at,
+                    "gomaxprocs": 12,
+                    "service_binary_sha256": args.service_binary_sha256,
+                    "service_argv": service_argv(args),
+                    "service_started_at": service_started_at,
+                    "service_completed_at": service_completed_at,
+                    "samples": samples,
+                }
+                write_json(args.search_isolation_out, isolation)
+                if any(
+                    sample["swap_used_bytes"] != 0 or sample["competing_processes"]
+                    for sample in samples
+                ):
+                    failure = failure or ValueError(
+                        "search isolation observed swap or competing processes")
+                isolation_binding = {
+                    "path": args.search_isolation_out.relative_to(args.artifact_root).as_posix(),
+                    "sha256": sha256_file(args.search_isolation_out),
+                }
+                if failure is None:
+                    for kind, result, response, output, command in captured:
+                        write_origin(
+                            args, kind, result, response, output, command, isolation_binding,
+                            search_started_at, search_completed_at)
+        except BaseException as exc:
+            failure = failure or exc
+        with contextlib.suppress(OSError):
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+        if service_log is not None:
+            service_log.close()
+    if failure is not None:
+        raise failure
+    return 0
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
         print(f"INVALID: {exc}")
         raise SystemExit(1) from exc
