@@ -51,21 +51,22 @@ mkdir -p "$RUN_DIR" "$QDRANT_STORAGE_PATH"
 
 # Every capped command owns a new process group. Timeout kills the complete group
 # and appends a durable partial/failure record before returning nonzero.
-run_90s() {
-	local phase=$1
-	shift
-	"$PYTHON" - "$PHASE_STATUS" "$phase" "$@" <<'PY'
+run_capped() {
+	local cap_seconds=$1
+	local phase=$2
+	shift 2
+	"$PYTHON" - "$PHASE_STATUS" "$phase" "$cap_seconds" "$@" <<'PY'
 import datetime, json, os, signal, subprocess, sys, time
-status_path, phase, command = sys.argv[1], sys.argv[2], sys.argv[3:]
+status_path, phase, cap_seconds, command = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4:]
 started = time.monotonic()
 process = subprocess.Popen(command, start_new_session=True)
 state, code, error = "complete", None, ""
 try:
-    code = process.wait(timeout=90)
+    code = process.wait(timeout=cap_seconds)
     if code != 0:
         state, error = "failed", f"exit status {code}"
 except subprocess.TimeoutExpired:
-    state, error = "timeout", "90 second hard phase cap"
+    state, error = "timeout", f"{cap_seconds} second hard phase cap"
     os.killpg(process.pid, signal.SIGTERM)
     try:
         process.wait(timeout=2)
@@ -74,16 +75,16 @@ except subprocess.TimeoutExpired:
         process.wait()
     code = 124
 record = {"phase": phase, "state": state, "exit_code": code, "elapsed_seconds": time.monotonic() - started,
-          "command": command, "error": error, "recorded_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+          "hard_cap_seconds": cap_seconds, "command": command, "error": error, "recorded_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}
 with open(status_path, "a", encoding="utf-8") as output:
     output.write(json.dumps(record, sort_keys=True) + "\n")
 raise SystemExit(code)
 PY
 }
 
-run_90s build-comparator go build -buildvcs=true -ldflags "$COMPARATOR_LDFLAGS" -o "$COMPARATOR_BIN" ./TreeDB/cmd/treedb_rag_benchmark
-run_90s manifest "$COMPARATOR_BIN" -dump-application-comparison-manifest "$MANIFEST"
-run_90s treedb-build-query-reopen "$COMPARATOR_BIN" \
+run_capped 90 build-comparator go build -buildvcs=true -ldflags "$COMPARATOR_LDFLAGS" -o "$COMPARATOR_BIN" ./TreeDB/cmd/treedb_rag_benchmark
+run_capped 90 manifest "$COMPARATOR_BIN" -dump-application-comparison-manifest "$MANIFEST"
+run_capped 180 treedb-build-query-reopen "$COMPARATOR_BIN" \
 	-dir "$TREEDB_DIR" \
 	-harness-revision "$HARNESS_REVISION" \
 	-application-comparison-treedb-output "$TREEDB_ARTIFACT"
@@ -119,12 +120,12 @@ while time.monotonic()<deadline:
 raise SystemExit('Qdrant readiness exceeded 90 seconds')
 PY
 
-run_90s qdrant-build-query-reopen "$VENV/bin/python" benchmarks/vector_db_compare/rag_qdrant_runner.py \
+run_capped 270 qdrant-build-query-reopen "$VENV/bin/python" benchmarks/vector_db_compare/rag_qdrant_runner.py \
 	--manifest "$MANIFEST" --output "$QDRANT_ARTIFACT" --url "$URL" \
 	--collection "$QDRANT_COLLECTION" --server-identity "$SERVER_IDENTITY" \
 	--harness-revision "$HARNESS_REVISION" --storage-path "$QDRANT_STORAGE_PATH" \
 	--restart-hook "$RESTART_HOOK" --server-pid "$PID" --server-binary "$QDRANT_BIN"
-run_90s consolidation "$COMPARATOR_BIN" \
+run_capped 90 consolidation "$COMPARATOR_BIN" \
 	-application-comparison-manifest "$MANIFEST" \
 	-application-comparison-treedb "$TREEDB_ARTIFACT" \
 	-application-comparison-qdrant "$QDRANT_ARTIFACT" \

@@ -203,6 +203,7 @@ class Runner:
             for ordinal in range(self.config["warmups_per_cell"]): self.query(route, self.manifest["queries"][ordinal % 3], filter_id)
             for repetition in range(self.config["repetitions"]):
               order = "reverse" if repetition % 2 else "forward"
+              repetition_results = []
               repetition_started = time.monotonic_ns()
               for ordinal in range(self.config["samples_per_cell"]):
                 total_started = time.monotonic_ns()
@@ -211,12 +212,13 @@ class Runner:
                     query_index = len(self.manifest["queries"]) - 1 - query_index
                 query = self.manifest["queries"][query_index]
                 ids, payloads, search_ms, fetch_ms = self.query(route, query, filter_id)
-                total_ms = (time.monotonic_ns() - total_started) / 1e6
+                repetition_results.append((ordinal, query, ids, payloads, search_ms, fetch_ms, (time.monotonic_ns() - total_started) / 1e6))
+              wall = (time.monotonic_ns() - repetition_started) / 1e9
+              for ordinal, query, ids, payloads, search_ms, fetch_ms, total_ms in repetition_results:
                 leakage += sum(not authorized(row, self.filters[filter_id]) for row in payloads); fetch_max = max(fetch_max, len(payloads))
                 judgment = next(row for row in query["cases"] if row["filter"] == filter_id)
                 metrics.append(quality(ids, [row["parent_id"] for row in payloads], judgment["relevant_chunks"], judgment["relevant_parents"]))
                 samples.append({"repetition": repetition, "ordinal": ordinal, "query_id": query["id"], "search_ms": search_ms, "fetch_ms": fetch_ms, "total_ms": total_ms, "result_ids": ids, "fetched_count": len(payloads), "fetched_bytes": len(canonical(payloads))})
-              wall = sum(row["total_ms"] for row in samples if row["repetition"] == repetition) / 1000
               repetitions.append({"repetition": repetition, "order": order, "samples": self.config["samples_per_cell"], "wall_seconds": wall, "qps": self.config["samples_per_cell"] / wall})
             durations = [row["total_ms"] for row in samples]; vectors = [self.config["sparse_vector_name"]] if route == "lexical" else [self.config["dense_vector_name"]]
             if route == "hybrid": vectors = [self.config["sparse_vector_name"], self.config["dense_vector_name"]]
