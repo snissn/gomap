@@ -75,10 +75,10 @@ observed; the declared gate is M10/M2. The exact plotted values are in the
 | M10 | 57.0855 | 17,517.57 | 81.71% |
 
 The previous exact-main post-#4531 load took 1,786.410 seconds and ended at
-62.81% M10/M2. This run was 71.88% faster by wall time and improved the
-sustained ratio by 18.90 percentage points. Against the earlier complete
-matched run, insert fell from 2,593.554 seconds to 502.311 seconds, an 80.63%
-reduction.
+62.81% M10/M2. This run reduced load duration by 71.88% (3.56x equivalent
+throughput by wall time) and improved the sustained ratio by 18.90 percentage
+points. Against the earlier complete matched run, insert fell from 2,593.554
+seconds to 502.311 seconds, an 80.63% reduction.
 
 ## Durability, maintenance, and reopen
 
