@@ -97,7 +97,7 @@ class Runner:
         self.config = manifest["config"]; self.filters = {row["id"]: row for row in manifest["filters"]}
         self.sparse_docs, self.sparse_queries, self.sparse_sha = sparse_vectors(manifest)
         self.ids = {row["id"]: i + 1 for i, row in enumerate(manifest["chunks"])}; self.cells, self.failures, self.build_seconds, self.query_seconds = [], [], 0, 0
-        self.reopen = {"attempted": False, "succeeded": False, "version": "", "status": "", "point_count": 0, "indexed_vectors_count": 0, "payload_indexes": [], "seconds": 0}
+        self.reopen = {"attempted": False, "succeeded": False, "optimizer_update_triggered": False, "version": "", "status": "", "point_count": 0, "indexed_vectors_count": 0, "payload_indexes": [], "seconds": 0}
         self.indexed_vectors_count = 0
         self.filter_cardinalities = {spec["id"]: sum(authorized(chunk, spec) for chunk in manifest["chunks"]) for spec in manifest["filters"]}
         self.process_samples = [process_stats(args.server_pid)]
@@ -136,7 +136,16 @@ class Runner:
         deadline, last = time.monotonic() + 90, None
         while time.monotonic() < deadline:
             try:
-                server = server_info(self.args.url); self.client = self.factory(); collection = self.client.get_collection(self.args.collection)
+                server = server_info(self.args.url); self.client = self.factory(); self.client.get_collection(self.args.collection)
+                break
+            except Exception as exc: last = exc; time.sleep(.2)
+        else:
+            raise RuntimeError(f"reopen connection failed: {last}")
+        self.client.update_collection(self.args.collection, optimizers_config=self.models.OptimizersConfigDiff())
+        self.reopen["optimizer_update_triggered"] = True
+        while time.monotonic() < deadline:
+            try:
+                server = server_info(self.args.url); collection = self.client.get_collection(self.args.collection)
                 count = int(getattr(collection, "points_count", -1)); indexed = int(getattr(collection, "indexed_vectors_count", -1))
                 status = str(getattr(collection, "status", "")).lower(); payload_indexes = sorted((getattr(collection, "payload_schema", {}) or {}).keys())
                 if count != 54 or indexed < 54 or not status.endswith("green") or payload_indexes != ["tenant", "updated_year", "workspace"]: raise RuntimeError(f"reopen index proof count={count} indexed={indexed} status={status} payload={payload_indexes}")

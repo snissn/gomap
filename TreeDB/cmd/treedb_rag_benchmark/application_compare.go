@@ -71,14 +71,15 @@ type qdrantComparisonBuild struct {
 }
 
 type qdrantComparisonReopen struct {
-	Attempted           bool     `json:"attempted"`
-	Succeeded           bool     `json:"succeeded"`
-	Version             string   `json:"version"`
-	Status              string   `json:"status"`
-	PointCount          int      `json:"point_count"`
-	IndexedVectorsCount int      `json:"indexed_vectors_count"`
-	PayloadIndexes      []string `json:"payload_indexes"`
-	Seconds             float64  `json:"seconds"`
+	Attempted                bool     `json:"attempted"`
+	Succeeded                bool     `json:"succeeded"`
+	OptimizerUpdateTriggered bool     `json:"optimizer_update_triggered"`
+	Version                  string   `json:"version"`
+	Status                   string   `json:"status"`
+	PointCount               int      `json:"point_count"`
+	IndexedVectorsCount      int      `json:"indexed_vectors_count"`
+	PayloadIndexes           []string `json:"payload_indexes"`
+	Seconds                  float64  `json:"seconds"`
 }
 
 type qdrantComparisonRouteProof struct {
@@ -788,7 +789,7 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 	if len(artifact.Failures) != 0 || artifact.Build.Points != len(manifest.Chunks) ||
 		artifact.Build.Seconds <= 0 || artifact.Build.Seconds > float64(manifest.Config.PhaseTimeoutSeconds) ||
 		artifact.QuerySeconds <= 0 || artifact.QuerySeconds > float64(manifest.Config.PhaseTimeoutSeconds) ||
-		!artifact.Reopen.Attempted || !artifact.Reopen.Succeeded ||
+		!artifact.Reopen.Attempted || !artifact.Reopen.Succeeded || !artifact.Reopen.OptimizerUpdateTriggered ||
 		artifact.Reopen.Version != manifest.Config.QdrantServerVersion || artifact.Reopen.Status != "green" ||
 		artifact.Reopen.PointCount != len(manifest.Chunks) ||
 		artifact.Reopen.IndexedVectorsCount != artifact.Server.IndexProof.IndexedVectorsCount ||

@@ -84,7 +84,7 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 		},
 		Build: qdrantComparisonBuild{Seconds: 1, Points: 54}, QuerySeconds: 1,
 		Reopen: qdrantComparisonReopen{
-			Attempted: true, Succeeded: true, Version: "1.19.0", Status: "green", PointCount: 54,
+			Attempted: true, Succeeded: true, OptimizerUpdateTriggered: true, Version: "1.19.0", Status: "green", PointCount: 54,
 			IndexedVectorsCount: 54, PayloadIndexes: []string{"tenant", "updated_year", "workspace"}, Seconds: 1,
 		},
 	}
@@ -196,6 +196,7 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		{"build timeout", func(a *qdrantComparisonArtifact) { a.Build.Seconds = 91 }},
 		{"query timeout", func(a *qdrantComparisonArtifact) { a.QuerySeconds = 91 }},
 		{"reopen failure", func(a *qdrantComparisonArtifact) { a.Reopen.Succeeded = false }},
+		{"reopen optimizer update missing", func(a *qdrantComparisonArtifact) { a.Reopen.OptimizerUpdateTriggered = false }},
 		{"reopen timeout", func(a *qdrantComparisonArtifact) { a.Reopen.Seconds = 91 }},
 		{"reopen not green", func(a *qdrantComparisonArtifact) { a.Reopen.Status = "yellow" }},
 		{"reopen index missing", func(a *qdrantComparisonArtifact) { a.Reopen.IndexedVectorsCount = 53 }},
