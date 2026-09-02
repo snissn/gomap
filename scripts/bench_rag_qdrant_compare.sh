@@ -25,6 +25,7 @@ if [[ ! "$HARNESS_REVISION" =~ ^[0-9a-f]{40}$ ]] || [[ -n "$(git status --porcel
 	echo "comparison requires a full clean harness revision" >&2
 	exit 2
 fi
+COMPARATOR_LDFLAGS="-X main.applicationStampedVCSRevision=$HARNESS_REVISION -X main.applicationStampedVCSModified=false"
 if [[ ! -x "$QDRANT_BIN" ]]; then
 	echo "QDRANT_BIN is not an executable standalone Qdrant binary" >&2
 	exit 2
@@ -79,7 +80,7 @@ raise SystemExit(code)
 PY
 }
 
-run_90s build-comparator go build -o "$COMPARATOR_BIN" ./TreeDB/cmd/treedb_rag_benchmark
+run_90s build-comparator go build -buildvcs=true -ldflags "$COMPARATOR_LDFLAGS" -o "$COMPARATOR_BIN" ./TreeDB/cmd/treedb_rag_benchmark
 run_90s manifest "$COMPARATOR_BIN" -dump-application-comparison-manifest "$MANIFEST"
 run_90s treedb-build-query-reopen "$COMPARATOR_BIN" \
 	-dir "$TREEDB_DIR" \

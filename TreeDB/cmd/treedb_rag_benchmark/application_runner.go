@@ -41,11 +41,13 @@ const (
 )
 
 var (
-	applicationRoutes      = []string{"text_only", "vector_only", "hybrid"}
-	applicationProjections = []string{"score_only", "fetch_topk"}
-	applicationSurfaces    = []string{"direct_collection", "http_service"}
-	applicationEmbeddings  = []string{"hashing_regression", "semantic_minilm"}
-	applicationClients     = []int{1, 4}
+	applicationRoutes             = []string{"text_only", "vector_only", "hybrid"}
+	applicationProjections        = []string{"score_only", "fetch_topk"}
+	applicationSurfaces           = []string{"direct_collection", "http_service"}
+	applicationEmbeddings         = []string{"hashing_regression", "semantic_minilm"}
+	applicationClients            = []int{1, 4}
+	applicationStampedVCSRevision string
+	applicationStampedVCSModified string
 )
 
 type applicationConfig struct {
@@ -2035,14 +2037,31 @@ func buildApplicationProvenance(cfg applicationConfig, fixture *applicationFixtu
 	}, nil
 }
 
+func effectiveApplicationBuildInfo(settings map[string]string, buildInfoOK bool, stampedRevision, stampedModified string) (map[string]string, bool) {
+	hasVCSSettings := false
+	for key := range settings {
+		hasVCSSettings = hasVCSSettings || strings.HasPrefix(key, "vcs.")
+	}
+	if hasVCSSettings || !isFullRevision(strings.TrimSpace(stampedRevision)) ||
+		(stampedModified != "false" && stampedModified != "true") {
+		return settings, buildInfoOK
+	}
+	effective := make(map[string]string, len(settings)+2)
+	for key, value := range settings {
+		effective[key] = value
+	}
+	effective["vcs.revision"] = strings.TrimSpace(stampedRevision)
+	effective["vcs.modified"] = stampedModified
+	return effective, true
+}
+
 func runtimeBuildInfo() (map[string]string, bool) {
 	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return nil, false
-	}
 	settings := map[string]string{}
-	for _, setting := range info.Settings {
-		settings[setting.Key] = setting.Value
+	if ok {
+		for _, setting := range info.Settings {
+			settings[setting.Key] = setting.Value
+		}
 	}
-	return settings, true
+	return effectiveApplicationBuildInfo(settings, ok, applicationStampedVCSRevision, applicationStampedVCSModified)
 }
