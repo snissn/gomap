@@ -2,6 +2,7 @@ package documentservice
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -2189,6 +2190,86 @@ func TestServiceOptimizeNativeRuntimeDoesNotWarmColumnGraph(t *testing.T) {
 	response, err := svc.SearchBenchmarkVector(ctx, "native_optimize", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
 	if err != nil || len(response.Results) != 1 || response.Results[0].ID != "a" || response.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime {
 		t.Fatalf("SearchBenchmarkVector response=%+v err=%v", response, err)
+	}
+}
+
+func TestServiceOptimizeConstructionDecisionDiagnosticsOptIn(t *testing.T) {
+	db, err := backenddb.Open(testBackendOptions(t.TempDir()))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	manager := collections.NewCollectionManager(db)
+	svc := New(manager)
+	defer func() { _ = svc.Close() }()
+	ctx := context.Background()
+	const dimensions = 16
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{
+		Name:      "construction_diagnostics",
+		Dimension: dimensions,
+		Metric:    MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{
+			Strategy:       collections.VectorIndexStrategyColumnGraph,
+			M:              16,
+			EfConstruction: 64,
+		},
+	}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	documents := make([]Document, 96)
+	for row := range documents {
+		embedding := make([]float32, dimensions)
+		for dimension := range embedding {
+			embedding[dimension] = float32(1 + ((row+1)*(dimension+3))%97)
+		}
+		documents[row] = Document{ID: fmt.Sprintf("doc-%04d", row), Embedding: embedding}
+	}
+	if _, err := svc.UpsertDocuments(ctx, "construction_diagnostics", UpsertDocumentsRequest{
+		Documents:               documents,
+		DeferVectorIndexRebuild: true,
+	}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	disabled, err := svc.OptimizeIndex(ctx, "construction_diagnostics", OptimizeIndexRequest{})
+	if err != nil {
+		t.Fatalf("disabled OptimizeIndex: %v", err)
+	}
+	if disabled.Status.ColumnGraphBuild.ConstructionDecisions != nil {
+		t.Fatalf("disabled optimize exposed construction decisions: %+v", disabled.Status.ColumnGraphBuild.ConstructionDecisions)
+	}
+	disabledJSON, err := json.Marshal(disabled)
+	if err != nil {
+		t.Fatalf("marshal disabled optimize response: %v", err)
+	}
+	if strings.Contains(string(disabledJSON), `"construction_decisions"`) {
+		t.Fatalf("disabled optimize JSON exposed construction decisions: %s", disabledJSON)
+	}
+
+	manager.SetVectorIndexConstructionDecisionObserverEnabled(true)
+	enabled, err := svc.OptimizeIndex(ctx, "construction_diagnostics", OptimizeIndexRequest{})
+	if err != nil {
+		t.Fatalf("enabled OptimizeIndex: %v", err)
+	}
+	decisions := enabled.Status.ColumnGraphBuild.ConstructionDecisions
+	if decisions == nil || decisions.Planning.Decisions == 0 || decisions.Reciprocal.Decisions == 0 ||
+		decisions.Planning.DiversityComparisonsRequested < decisions.Planning.DiversityComparisonsExecuted ||
+		decisions.Reciprocal.DiversityComparisonsRequested < decisions.Reciprocal.DiversityComparisonsExecuted {
+		t.Fatalf("enabled optimize missing construction decisions: %+v", decisions)
+	}
+	if decisions.Planning.ApproximateScoreRows != 0 || decisions.Planning.ApproximateScoreCalls != 0 ||
+		decisions.Reciprocal.ApproximateScoreRows != 0 || decisions.Reciprocal.ApproximateScoreCalls != 0 {
+		t.Fatalf("exact optimize reported approximate construction scores: %+v", decisions)
+	}
+	enabledJSON, err := json.Marshal(enabled)
+	if err != nil {
+		t.Fatalf("marshal enabled optimize response: %v", err)
+	}
+	if !strings.Contains(string(enabledJSON), `"construction_decisions"`) ||
+		!strings.Contains(string(enabledJSON), `"diversity_comparisons_requested"`) ||
+		!strings.Contains(string(enabledJSON), `"diversity_comparisons_executed"`) ||
+		!strings.Contains(string(enabledJSON), `"approximate_score_rows":0`) ||
+		!strings.Contains(string(enabledJSON), `"approximate_score_calls":0`) {
+		t.Fatalf("enabled optimize JSON omitted bounded decision schema: %s", enabledJSON)
 	}
 }
 
