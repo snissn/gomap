@@ -75,7 +75,7 @@ func TestValidateComparisonPathsRejectsAliases(t *testing.T) {
 			t.Fatal("accepted hard-link alias")
 		}
 	}
-	if err := validateComparisonPaths(filepath.Join(dir, "comparison.JSON"), filepath.Join(dir, "comparison.json")); err == nil {
+	if err := validateComparisonPaths(filepath.Join(dir, "case-only.JSON"), filepath.Join(dir, "case-only.json")); err == nil {
 		t.Fatal("accepted case-only output alias")
 	}
 	storage := filepath.Join(dir, "qdrant-storage")
