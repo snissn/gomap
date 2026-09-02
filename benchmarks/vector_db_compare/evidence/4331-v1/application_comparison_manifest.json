@@ -3,7 +3,7 @@
   "product_base_sha": "8cf3a6a8d19cf8615b5301795937048857464085",
   "fixture_sha256": "df71c11510a64b09a4b991a17a9062c8090dddf2d0a1e993b19bebd37d4c5db2",
   "semantic_vector_sha256": "aff8b31fad35f45c862c943b19717ddf9979b09726b2ac9352e159a4815663a4",
-  "config_sha256": "3d1e3ee10e59668cca4cc2d1926652c1099a8425adb2c6acd75b0e29cc09e206",
+  "config_sha256": "262541b73acf995271810381e46392c65031026b150e8e3494b46461a853e9f6",
   "config": {
     "top_k": 10,
     "candidate_limit": 32,
@@ -20,6 +20,7 @@
     "sparse_bm25_k1": 1.2,
     "sparse_bm25_b": 0.75,
     "fusion": "qdrant_query_api_rrf",
+    "qdrant_hnsw_ef": 64,
     "qdrant_server_version": "1.19.0",
     "qdrant_release_asset_sha256": "4e279a80cc1ebe73e859318ff86375af54c123887dd7ae46605c0eb6cb7c44e8",
     "qdrant_binary_sha256": "036b94e5a39f1ea8f2329c8e528fcea54f83eb9205221a7dc1623c9862acc74d",
