@@ -262,6 +262,49 @@ func addTextV2PositionEntriesForDocument(table memtable.Table, def TextIndexDefi
 			})
 		}
 	}
+	entries, bytesWritten := writeTextV2PositionEntriesForDocument(table, ordinal, generation, byTerm)
+	return entries, bytesWritten, nil
+}
+
+func addTextV2PositionEntriesForState(table memtable.Table, def TextIndexDefinition, ordinal, generation uint64, state textDocumentStateValue) (int, uint64, error) {
+	if table == nil || !def.StorePositions {
+		return 0, 0, nil
+	}
+	if ordinal == 0 || generation == 0 {
+		return 0, 0, errMalformedTextStorage("text-v2 position document ordinal/generation cannot be zero")
+	}
+	byTerm := make(map[string][]textV2PositionFieldValue)
+	for _, field := range state.Fields {
+		fieldIndex := textV2FieldIndex(def, field.Field)
+		if fieldIndex < 0 {
+			return 0, 0, errMalformedTextStorage("text-v2 position field %q missing from definition", field.Field)
+		}
+		for _, term := range field.Terms {
+			if term.Frequency == 0 {
+				continue
+			}
+			if uint32(len(term.Positions)) != term.Frequency {
+				return 0, 0, errMalformedTextStorage("text-v2 position term %q field %q positions=%d frequency=%d", term.Term, field.Field, len(term.Positions), term.Frequency)
+			}
+			offsets := term.Offsets
+			if !def.StoreOffsets {
+				offsets = nil
+			} else if uint32(len(offsets)) != term.Frequency {
+				return 0, 0, errMalformedTextStorage("text-v2 position term %q field %q offsets=%d frequency=%d", term.Term, field.Field, len(offsets), term.Frequency)
+			}
+			byTerm[term.Term] = append(byTerm[term.Term], textV2PositionFieldValue{
+				FieldIndex: uint32(fieldIndex),
+				Frequency:  term.Frequency,
+				Positions:  term.Positions,
+				Offsets:    offsets,
+			})
+		}
+	}
+	entries, bytesWritten := writeTextV2PositionEntriesForDocument(table, ordinal, generation, byTerm)
+	return entries, bytesWritten, nil
+}
+
+func writeTextV2PositionEntriesForDocument(table memtable.Table, ordinal, generation uint64, byTerm map[string][]textV2PositionFieldValue) (int, uint64) {
 	terms := make([]string, 0, len(byTerm))
 	for term := range byTerm {
 		terms = append(terms, term)
@@ -274,7 +317,7 @@ func addTextV2PositionEntriesForDocument(table memtable.Table, def TextIndexDefi
 		table.SetSteal(key, value)
 		bytesWritten += uint64(len(key) + len(value))
 	}
-	return len(terms), bytesWritten, nil
+	return len(terms), bytesWritten
 }
 
 // textV2PositionValidation is built while TextIndexStorageStats scans the

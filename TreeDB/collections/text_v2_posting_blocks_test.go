@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -45,6 +46,57 @@ func TestTextV2PostingBatchBuilderTransfersCompletedFieldFrequencies4566(t *test
 	bodyOnly := builder.byTerm["body-only"]
 	if len(bodyOnly) != 1 || bodyOnly[0].TermFrequency != 1 || !slices.Equal(bodyOnly[0].FieldFrequencies, []uint32{0, 1}) {
 		t.Fatalf("body-only postings=%+v", bodyOnly)
+	}
+}
+
+func TestTextV2PreparedStateWritersMatchAnalysis4592(t *testing.T) {
+	def := TextIndexDefinition{
+		Fields:         []TextIndexField{{Field: "body"}, {Field: "title"}},
+		StorePositions: true,
+		StoreOffsets:   true,
+	}
+	analysis := textAnalyzedDocument{Fields: []textAnalyzedField{
+		{Field: "body", Length: 3, Terms: map[string]*textAnalyzedTerm{
+			"body-only": {Term: "body-only", Frequency: 1, Positions: []uint32{2}, Offsets: []textTokenOffset{{Start: 8, End: 12}}},
+			"shared":    {Term: "shared", Frequency: 2, Positions: []uint32{0, 1}, Offsets: []textTokenOffset{{Start: 0, End: 3}, {Start: 4, End: 7}}},
+		}},
+		{Field: "title", Length: 1, Terms: map[string]*textAnalyzedTerm{
+			"shared": {Term: "shared", Frequency: 1, Positions: []uint32{0}, Offsets: []textTokenOffset{{Start: 0, End: 3}}},
+		}},
+	}}
+	state := textDocumentStateValueFromAnalysis(analysis)
+
+	var analysisBuilder, stateBuilder textV2PostingBatchBuilder
+	if err := analysisBuilder.addDocument(def, 7, 11, analysis); err != nil {
+		t.Fatalf("add analysis document: %v", err)
+	}
+	if err := stateBuilder.addDocumentState(def, 7, 11, state); err != nil {
+		t.Fatalf("add state document: %v", err)
+	}
+	if !reflect.DeepEqual(stateBuilder, analysisBuilder) {
+		t.Fatalf("state postings=%+v want analysis postings=%+v", stateBuilder, analysisBuilder)
+	}
+
+	analysisTable := newCollectionRunTable(2)
+	stateTable := newCollectionRunTable(2)
+	analysisEntries, analysisBytes, err := addTextV2PositionEntriesForDocument(analysisTable, def, 7, 11, analysis)
+	if err != nil {
+		t.Fatalf("add analysis positions: %v", err)
+	}
+	stateEntries, stateBytes, err := addTextV2PositionEntriesForState(stateTable, def, 7, 11, state)
+	if err != nil {
+		t.Fatalf("add state positions: %v", err)
+	}
+	if stateEntries != analysisEntries || stateBytes != analysisBytes {
+		t.Fatalf("state positions entries=%d bytes=%d want entries=%d bytes=%d", stateEntries, stateBytes, analysisEntries, analysisBytes)
+	}
+	for _, term := range []string{"body-only", "shared"} {
+		key := encodeTextV2PositionKey(7, term)
+		got, gotOK, gotDeleted := stateTable.Get(key)
+		want, wantOK, wantDeleted := analysisTable.Get(key)
+		if gotOK != wantOK || gotDeleted != wantDeleted || !bytes.Equal(got, want) {
+			t.Fatalf("state position %q=(%x,%v,%v) want (%x,%v,%v)", term, got, gotOK, gotDeleted, want, wantOK, wantDeleted)
+		}
 	}
 }
 

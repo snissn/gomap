@@ -269,9 +269,13 @@ func appendSingleTextV2IndexMutationDeltas(
 			}
 		}
 		if mutation.setNew {
-			newState, newAnalysis, err = textMutationNewStateAndAnalysis(def, mutation, opts)
-			if err != nil {
-				return err
+			if mutation.preparedNew != nil {
+				newState = *mutation.preparedNew
+			} else {
+				newState, newAnalysis, err = analyzeTextIndexStoredDocumentWithAnalysis(def, mutation.newDocument, opts)
+				if err != nil {
+					return err
+				}
 			}
 		}
 
@@ -328,11 +332,20 @@ func appendSingleTextV2IndexMutationDeltas(
 			deleteTextV2PositionEntriesForDocument(positionsTable, def, current.Ordinal, oldState)
 		}
 		if mutation.setNew {
-			if err := postingBuilder.addDocument(def, nextDoc.Ordinal, nextDoc.Generation, newAnalysis); err != nil {
-				return err
-			}
-			if _, _, err := addTextV2PositionEntriesForDocument(positionsTable, def, nextDoc.Ordinal, nextDoc.Generation, newAnalysis); err != nil {
-				return err
+			if mutation.preparedNew != nil {
+				if err := postingBuilder.addDocumentState(def, nextDoc.Ordinal, nextDoc.Generation, newState); err != nil {
+					return err
+				}
+				if _, _, err := addTextV2PositionEntriesForState(positionsTable, def, nextDoc.Ordinal, nextDoc.Generation, newState); err != nil {
+					return err
+				}
+			} else {
+				if err := postingBuilder.addDocument(def, nextDoc.Ordinal, nextDoc.Generation, newAnalysis); err != nil {
+					return err
+				}
+				if _, _, err := addTextV2PositionEntriesForDocument(positionsTable, def, nextDoc.Ordinal, nextDoc.Generation, newAnalysis); err != nil {
+					return err
+				}
 			}
 		}
 	}
