@@ -1063,6 +1063,7 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStorageP
 		HarnessRevision: tree.HarnessRevision, TreeDBBinarySHA256: tree.BinarySHA256,
 		TreeDBProcessResources: tree.ProcessResources, TreeDBStorageBytes: tree.StorageBytes, QdrantResources: qdrant.Resources,
 		QdrantClientVersion: qdrant.ClientVersion, QdrantServerVersion: qdrant.Server.Version,
+		QdrantServerBinarySHA256: qdrant.Server.BinarySHA256,
 		QdrantReleaseAssetSHA256: qdrant.Server.ReleaseAssetSHA256,
 		ManifestSHA256:           manifestSHA, FixtureSHA256: manifest.FixtureSHA256,
 		SemanticVectorSHA256: manifest.SemanticVectorSHA256, ConfigSHA256: manifest.ConfigSHA256,
