@@ -139,6 +139,16 @@ func TestTreeDBComparisonValidatorRejectsMismatchedEvidence(t *testing.T) {
 		{"wrong resource semantics", func(a *treeDBComparisonArtifact) { a.ProcessResources.RSSSemantics = "current RSS" }},
 		{"missing before snapshot", func(a *treeDBComparisonArtifact) { a.ProcessResources.Before.Available = false }},
 		{"missing after snapshot", func(a *treeDBComparisonArtifact) { a.ProcessResources.After.Available = false }},
+		{"wall shorter than retained samples", func(a *treeDBComparisonArtifact) {
+			performance := &a.Rows[0].Repetitions[0]
+			performance.WallSeconds = .1
+			performance.QPS = 100 / performance.WallSeconds
+			qps := 0.0
+			for _, repetition := range a.Rows[0].Repetitions {
+				qps += repetition.QPS
+			}
+			a.Rows[0].QPSMean = qps / float64(len(a.Rows[0].Repetitions))
+		}},
 		{"unordered snapshots", func(a *treeDBComparisonArtifact) { a.ProcessResources.After.CapturedUnixNanos = 1 }},
 		{"cumulative CPU regression", func(a *treeDBComparisonArtifact) { a.ProcessResources.After.CPUSeconds = 1 }},
 		{"wrong CPU aggregate", func(a *treeDBComparisonArtifact) { a.ProcessResources.CPUSeconds = .5 }},

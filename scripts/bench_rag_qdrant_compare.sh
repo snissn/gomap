@@ -44,7 +44,12 @@ cleanup() {
 	fi
 }
 trap cleanup EXIT
-mkdir -p "$RUN_DIR" "$QDRANT_STORAGE_PATH"
+mkdir -p "$RUN_DIR"
+if [[ -e "$QDRANT_STORAGE_PATH" ]]; then
+	echo "Qdrant comparison storage path must be absent: $QDRANT_STORAGE_PATH" >&2
+	exit 2
+fi
+mkdir -p "$QDRANT_STORAGE_PATH"
 : >"$PHASE_STATUS"
 "$PYTHON" -m venv "$VENV"
 "$VENV/bin/python" -m pip install --disable-pip-version-check "qdrant-client==1.19.0"

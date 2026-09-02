@@ -178,6 +178,7 @@ type applicationComparisonReport struct {
 	HarnessRevision          string                     `json:"harness_revision"`
 	TreeDBBinarySHA256       string                     `json:"treedb_binary_sha256"`
 	TreeDBProcessResources   comparisonProcessResources `json:"treedb_process_resources"`
+	TreeDBStorageBytes       int64                      `json:"treedb_storage_bytes"`
 	QdrantResources          qdrantComparisonResources  `json:"qdrant_resources"`
 	QdrantClientVersion      string                     `json:"qdrant_client_version"`
 	QdrantServerVersion      string                     `json:"qdrant_server_version"`
@@ -438,6 +439,12 @@ func validateTreeDBComparisonArtifact(artifact *treeDBComparisonArtifact, manife
 		}
 		qpsMean := 0.0
 		for rep, performance := range row.Repetitions {
+			retainedWall := 0.0
+			for _, sample := range row.Samples {
+				if sample.Repetition == rep {
+					retainedWall += sample.Millis / 1000
+				}
+			}
 			wantOrder := "forward"
 			if rep%2 == 1 {
 				wantOrder = "reverse"
@@ -445,6 +452,7 @@ func validateTreeDBComparisonArtifact(artifact *treeDBComparisonArtifact, manife
 			expectedQPS := float64(manifest.Config.SamplesPerCell) / performance.WallSeconds
 			if performance.Repetition != rep || performance.Order != wantOrder ||
 				performance.Samples != manifest.Config.SamplesPerCell || performance.WallSeconds <= 0 ||
+				performance.WallSeconds+1e-9 < retainedWall ||
 				!comparisonFloatMatches(performance.QPS, expectedQPS) {
 				return nil, fmt.Errorf("TreeDB artifact cell %s/%s has invalid repetition wall evidence", route, row.Cell.Filter)
 			}
@@ -1006,7 +1014,7 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, outputPath, 
 	}
 	report := applicationComparisonReport{Schema: applicationComparisonSchema, State: "validated",
 		HarnessRevision: tree.HarnessRevision, TreeDBBinarySHA256: tree.BinarySHA256,
-		TreeDBProcessResources: tree.ProcessResources, QdrantResources: qdrant.Resources,
+		TreeDBProcessResources: tree.ProcessResources, TreeDBStorageBytes: tree.StorageBytes, QdrantResources: qdrant.Resources,
 		QdrantClientVersion: qdrant.ClientVersion, QdrantServerVersion: qdrant.Server.Version,
 		QdrantServerBinarySHA256: qdrant.Server.BinarySHA256,
 		QdrantReleaseAssetSHA256: manifest.Config.QdrantReleaseAssetSHA256,
@@ -1041,6 +1049,7 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, outputPath, 
 	}
 	var md strings.Builder
 	fmt.Fprintf(&md, "# TreeDB / Qdrant bounded RAG comparison\n\nState: **validated**  \nManifest SHA-256: `%s`  \nHarness revision: `%s`  \nTreeDB binary SHA-256: `%s`  \nTreeDB process CPU / peak RSS: `%.6fs` / `%d bytes`  \nTreeDB resource semantics: `%s`; `%s`; `%s`  \nQdrant client/server: `%s` / `%s`  \nQdrant server binary SHA-256: `%s`  \nQdrant release asset SHA-256: `%s`  \nQdrant process CPU / observed peak RSS / durable bytes: `%.6fs` / `%d bytes` / `%d bytes`\n\n", manifestSHA, report.HarnessRevision, report.TreeDBBinarySHA256, report.TreeDBProcessResources.CPUSeconds, report.TreeDBProcessResources.PeakRSSBytes, report.TreeDBProcessResources.CPUSemantics, report.TreeDBProcessResources.RSSSemantics, report.TreeDBProcessResources.Scope, report.QdrantClientVersion, report.QdrantServerVersion, report.QdrantServerBinarySHA256, report.QdrantReleaseAssetSHA256, report.QdrantResources.CPUSeconds, report.QdrantResources.PeakObservedRSSBytes, report.QdrantResources.DurableBytes)
+	fmt.Fprintf(&md, "TreeDB durable bytes: `%d bytes`\n\n", report.TreeDBStorageBytes)
 	md.WriteString("| Backend | Route | Filter | Semantics | Samples | Reps | QPS | p50 ms | p95 ms | p99 ms | P@10 | nDCG@10 | MRR@10 | Parent R@10 |\n|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, row := range report.Rows {
 		fmt.Fprintf(&md, "| %s | %s | %s | %s | %d | %d | %.2f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f |\n",
