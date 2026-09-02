@@ -39,6 +39,12 @@ class DecisionFixture:
         self.contract["source_identity"]["runtime"]["python_sha256"] = policy.sha256_file(
             python_executable)
         commands = self.contract["commands"]
+        commands["lifecycle_vdbbench_environment_template"]["PYTHONPATH"] = (
+            policy.os.pathsep.join((
+                self.contract["source_identity"]["vectordbbench"]["root"],
+                str(HERE.parent / "clients/python/treedb_client/src"),
+            ))
+        )
         for name in (
             "authorization_generate_argv_template",
             "authorized_preflight_argv",
