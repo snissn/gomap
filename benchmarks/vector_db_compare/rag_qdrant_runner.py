@@ -202,6 +202,10 @@ class Runner:
                 candidate.get_collection(self.args.collection)
                 trigger_client = candidate
                 break
+            except TimeoutError:
+                if candidate is not None:
+                    candidate.close()
+                raise
             except Exception as exc:
                 last = exc
                 if candidate is not None:
@@ -233,6 +237,10 @@ class Runner:
                 self.client = candidate
                 self.reopen.update(attempted=True, succeeded=True, version=server["version"], status="green", point_count=count, indexed_vectors_count=indexed, payload_indexes=payload_indexes, filter_cardinalities=reopen_filter_cardinalities, seconds=time.monotonic() - started)
                 return
+            except TimeoutError:
+                if candidate is not None:
+                    candidate.close()
+                raise
             except Exception as exc:
                 last = exc
                 if candidate is not None:
