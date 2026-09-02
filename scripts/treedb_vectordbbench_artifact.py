@@ -478,17 +478,26 @@ class IsolationMonitor:
         self.samples = [isolation_sample()]
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, name="isolation-monitor", daemon=True)
+        self._error: BaseException | None = None
+        self._stopped = False
         self.thread.start()
 
     def _run(self) -> None:
-        while not self.stop_event.wait(self.interval):
-            self.samples.append(isolation_sample())
+        try:
+            while not self.stop_event.wait(self.interval):
+                self.samples.append(isolation_sample())
+        except BaseException as exc:
+            self._error = exc
+            self.stop_event.set()
 
     def stop(self) -> list[dict[str, Any]]:
-        if not self.stop_event.is_set():
+        if not self._stopped:
             self.stop_event.set()
             self.thread.join()
+            if self._error is not None:
+                raise RuntimeError("isolation monitor failed") from self._error
             self.samples.append(isolation_sample())
+            self._stopped = True
         return self.samples
 
 
@@ -1120,7 +1129,14 @@ def file_identity(path: Path) -> dict[str, Any]:
 
 
 def canonical_sha256(value: Any) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def protocol_canonical_sha256(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def lifecycle_config_sha256(manifest: dict[str, Any]) -> str:
@@ -4141,8 +4157,8 @@ def write_protocol_measurements(
         },
         "cpu_utilization_logical_cores": cpu_seconds / elapsed,
         "determinism": {
-            "graph_config_checksum": canonical_sha256(configuration),
-            "persisted_data_ledger_checksum": canonical_sha256(data_files),
+            "graph_config_checksum": protocol_canonical_sha256(configuration),
+            "persisted_data_ledger_checksum": protocol_canonical_sha256(data_files),
             "adapter_lifecycle_checksum": sha256_file(adapter_path),
         },
         "diagnostic_work_profile": decisions,

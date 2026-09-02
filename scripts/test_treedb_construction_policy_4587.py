@@ -1087,6 +1087,65 @@ class ValidatorMutations(unittest.TestCase):
         value = {"a": 1}
         self.assertEqual(policy.canonical_sha256(value), search_existing_index.canonical_sha256(value))
 
+    def test_existing_index_helper_executes_and_records_canonical_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            query = root / "query.json"
+            response = root / "response.json"
+            metadata = root / "metadata.json"
+            for path in (query, response, metadata):
+                path.write_text("{}\n")
+            args = search_existing_index.argparse.Namespace(
+                route="exact",
+                base_url="http://127.0.0.1:6060",
+                index_name="index-ef128",
+                m=16,
+                ef_construction=128,
+                ef_search=192,
+                top_k=100,
+                scale=250000,
+                role="screening_candidate",
+                dataset_name="cohere-medium-250k-selection-v1",
+                dataset_dir=root / "dataset",
+                dimensions=768,
+                quantized_index_name="embedding.scalar_u8.fast",
+                rerank_candidates=400,
+                artifact_root=root,
+                vectordbbench_dir=root,
+                diagnostic_result=root / "diagnostic-result.json",
+                production_result=root / "production-result.json",
+                command_ledger=root / "probe-command-ledger.jsonl",
+                query_json=query,
+                run_id="screening-ef128",
+                metadata_out=metadata,
+            )
+
+            def execute(command, *, cwd, env):
+                result_root = Path(env["RESULTS_LOCAL_DIR"])
+                result_root.mkdir()
+                (result_root / "result_generated.json").write_text('{"result":true}\n')
+                return search_existing_index.argparse.Namespace(returncode=0)
+
+            with mock.patch.object(
+                search_existing_index.subprocess, "run", side_effect=execute
+            ) as invoked:
+                result, record = search_existing_index.run_vdbbench_command(
+                    args,
+                    "diagnostic",
+                    response,
+                    "2026-09-02T00:00:00Z",
+                    "2026-09-02T00:00:01Z",
+                )
+
+            self.assertEqual(invoked.call_count, 1)
+            self.assertEqual(result, args.diagnostic_result)
+            self.assertEqual(record["result_sha256"], search_existing_index.sha256_file(result))
+            self.assertEqual(
+                json.loads(args.command_ledger.read_text()),
+                record,
+            )
+
+
     def test_canonical_vdbbench_command_is_bound(self) -> None:
         packet = self.fixture.no_go_packet()
         run = packet["runs"][0]
@@ -1129,6 +1188,7 @@ class ValidatorMutations(unittest.TestCase):
         packet = self.fixture.no_go_packet()
         self.fixture.contract["experiment"]["go_gates"]["minimum_production_qps_ratio"] = 0.90
         self.assert_invalid(packet, "frozen GO gate policy")
+        self.fixture.contract["experiment"]["go_gates"]["minimum_production_qps_ratio"] = 0.95
         packet = self.fixture.no_go_packet()
         self.fixture.contract["experiment"]["projection_model"]["target_scale"] = 9_000_000
         self.assert_invalid(packet, "10M projection model")

@@ -7,6 +7,7 @@ import contextlib
 import datetime as _dt
 import functools
 import gzip
+import hashlib
 import io
 import inspect
 import json
@@ -22,6 +23,7 @@ from pathlib import Path
 from unittest import mock
 from types import SimpleNamespace
 
+import treedb_construction_policy_4587 as policy
 import treedb_vectordbbench_artifact as harness
 
 
@@ -4208,6 +4210,26 @@ class LifecycleValidatorTest(unittest.TestCase):
 
 
 class ProtocolMeasurementProducerTest(unittest.TestCase):
+    def test_protocol_canonical_sha256_includes_record_terminator(self) -> None:
+        value = {"b": 2, "a": 1}
+        expected = hashlib.sha256(b'{"a":1,"b":2}\n').hexdigest()
+        self.assertEqual(harness.protocol_canonical_sha256(value), expected)
+
+    def test_isolation_monitor_rethrows_sampler_failure(self) -> None:
+        initial = {
+            "timestamp": "2026-09-02T00:00:00Z",
+            "swap_used_bytes": 0,
+            "competing_processes": [],
+        }
+        with mock.patch.object(
+            harness, "isolation_sample",
+            side_effect=[initial, RuntimeError("sample failed")],
+        ):
+            monitor = harness.IsolationMonitor(0.001)
+            self.assertTrue(monitor.stop_event.wait(1))
+            with self.assertRaisesRegex(RuntimeError, "isolation monitor failed"):
+                monitor.stop()
+
     def test_linux_process_metrics_are_positive(self) -> None:
         got = harness.linux_process_metrics(os.getpid())
         self.assertGreaterEqual(got["cpu_nanoseconds"], 0)
@@ -4292,6 +4314,37 @@ class ProtocolMeasurementProducerTest(unittest.TestCase):
             )
             measurements = json.loads((root / "measurements.json").read_text())
             source = json.loads((root / "measurement-source.json").read_text())
+            configuration = {
+                "dimensions": 768,
+                "metric": "cosine",
+                "m": 16,
+                "ef_construction": 128,
+                "ef_search": 192,
+                "configured_rerank_candidates": 400,
+                "effective_rerank_candidates": 192,
+                "top_k": 100,
+            }
+            manifest = {
+                "lifecycle": {
+                    "expected_rows": 250000,
+                    "raw_artifacts": [
+                        {"path": "adapter-lifecycle.jsonl",
+                         "sha256": harness.sha256_file(root / "adapter-lifecycle.jsonl")},
+                        {"path": "diagnostics.jsonl",
+                         "sha256": harness.sha256_file(root / "diagnostics.jsonl")},
+                    ],
+                },
+                "service": {"data_dir": str(data_dir)},
+            }
+            validator_values = policy.measurement_source_values(
+                root,
+                measurements["source"],
+                measurements["phase_seconds"],
+                measurements["diagnostic_work_profile"],
+                configuration,
+                manifest,
+            )
+            self.assertEqual(measurements["determinism"], validator_values["determinism"])
 
         self.assertEqual(measurements["phase_seconds"], {"adjacency": 0.5, "optimize": 2.0})
         self.assertEqual(measurements["cpu_utilization_logical_cores"], 1.0)

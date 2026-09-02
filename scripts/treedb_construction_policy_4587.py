@@ -7,6 +7,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 import math
 from pathlib import Path
 import re
@@ -217,6 +218,7 @@ def validate_go_gates(contract: dict[str, Any]) -> dict[str, Any]:
     gates = object_at(contract["experiment"]["go_gates"], "experiment.go_gates")
     exact_keys(gates, set(GO_GATES), "GO gate policy")
     exact(gates, GO_GATES, "frozen GO gate policy")
+    exact(contract["experiment"]["projection_model"], PROJECTION_MODEL, "10M projection model")
     return gates
 
 
