@@ -48,6 +48,10 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 	}
 	sum := sha256.Sum256(raw)
 	manifestSHA := hex.EncodeToString(sum[:])
+	sparseVectorSHA, err := expectedQdrantSparseVectorSHA256(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cardinalities := map[string]int{
 		filterUnfiltered: 54, filterTenantAlpha: 27,
 		filterTenantAlphaWorkspaceRed: 18, filterModerateRange: 9,
@@ -57,12 +61,14 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 		Schema: qdrantComparisonArtifactSchema, Backend: "qdrant_server", HarnessRevision: harness,
 		ClientVersion: "1.19.0", ManifestSHA256: manifestSHA,
 		FixtureSHA256: manifest.FixtureSHA256, SemanticVectorSHA256: manifest.SemanticVectorSHA256,
-		ConfigSHA256: manifest.ConfigSHA256, SourceCount: 18, ChunkCount: 54, QueryCount: 3,
+		SparseVectorSHA256: sparseVectorSHA, ConfigSHA256: manifest.ConfigSHA256,
+		SourceCount: 18, ChunkCount: 54, QueryCount: 3,
 		Server: qdrantComparisonServer{
 			Version: "1.19.0", Deployment: "standalone", BinarySHA256: manifest.Config.QdrantBinarySHA256, Identity: "pid:1|reopened_pid:2",
 			Config: map[string]any{
 				"dense": manifest.Config.DenseVectorName, "sparse": manifest.Config.SparseVectorName, "exact": false,
 				"full_scan_threshold": float64(10), "full_scan_threshold_unit": "KiB",
+				"hnsw_m": float64(16), "indexing_threshold": float64(1),
 			},
 			IndexProof: qdrantComparisonIndexProof{IndexedVectorsCount: 54, FilterCardinalities: cardinalities},
 		},
@@ -77,7 +83,10 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 			PeakObservedRSSBytes: 30, CPUSeconds: 3, DurableBytes: 1,
 		},
 		Build: qdrantComparisonBuild{Seconds: 1, Points: 54}, QuerySeconds: 1,
-		Reopen: qdrantComparisonReopen{Attempted: true, Succeeded: true, Version: "1.19.0", PointCount: 54, Seconds: 1},
+		Reopen: qdrantComparisonReopen{
+			Attempted: true, Succeeded: true, Version: "1.19.0", Status: "green", PointCount: 54,
+			IndexedVectorsCount: 54, PayloadIndexes: []string{"tenant", "updated_year", "workspace"}, Seconds: 1,
+		},
 	}
 	for _, route := range []string{"lexical", "dense", "hybrid"} {
 		for _, filter := range applicationFilterOrder {
@@ -138,6 +147,31 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 	return manifest, manifestSHA, artifact
 }
 
+func TestQdrantSparseVectorDigestMatchesPythonCanonicalAlgorithm(t *testing.T) {
+	manifest, err := buildApplicationComparisonManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := expectedQdrantSparseVectorSHA256(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "beb0a6c2a32ef155cb8ad1e3f4d00ebc52abbef79e2e3368c0fa2e0feded6a7b"
+	if got != want {
+		t.Fatalf("sparse vector SHA-256=%s want Python canonical digest %s", got, want)
+	}
+	mutated := manifest
+	mutated.Chunks = append([]applicationComparisonChunk(nil), manifest.Chunks...)
+	mutated.Chunks[0].Content += " mutation"
+	changed, err := expectedQdrantSparseVectorSHA256(mutated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed == want {
+		t.Fatal("sparse vector digest ignored frozen content mutation")
+	}
+}
+
 func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 	cases := []struct {
 		name string
@@ -149,6 +183,9 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		{"wrong binary hash", func(a *qdrantComparisonArtifact) { a.Server.BinarySHA256 = strings.Repeat("0", 64) }},
 		{"exact search", func(a *qdrantComparisonArtifact) { a.Server.Config["exact"] = true }},
 		{"full scan threshold", func(a *qdrantComparisonArtifact) { a.Server.Config["full_scan_threshold"] = float64(1) }},
+		{"wrong HNSW M", func(a *qdrantComparisonArtifact) { a.Server.Config["hnsw_m"] = float64(15) }},
+		{"wrong indexing threshold", func(a *qdrantComparisonArtifact) { a.Server.Config["indexing_threshold"] = float64(2) }},
+		{"wrong sparse vector digest", func(a *qdrantComparisonArtifact) { a.SparseVectorSHA256 = strings.Repeat("0", 64) }},
 		{"missing indexed vectors", func(a *qdrantComparisonArtifact) { a.Server.IndexProof.IndexedVectorsCount = 0 }},
 		{"wrong filter cardinality", func(a *qdrantComparisonArtifact) { a.Server.IndexProof.FilterCardinalities[filterUnfiltered] = 53 }},
 		{"missing route", func(a *qdrantComparisonArtifact) { a.Cells = a.Cells[:len(a.Cells)-1] }},
@@ -160,6 +197,9 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		{"query timeout", func(a *qdrantComparisonArtifact) { a.QuerySeconds = 91 }},
 		{"reopen failure", func(a *qdrantComparisonArtifact) { a.Reopen.Succeeded = false }},
 		{"reopen timeout", func(a *qdrantComparisonArtifact) { a.Reopen.Seconds = 91 }},
+		{"reopen not green", func(a *qdrantComparisonArtifact) { a.Reopen.Status = "yellow" }},
+		{"reopen index missing", func(a *qdrantComparisonArtifact) { a.Reopen.IndexedVectorsCount = 53 }},
+		{"reopen payload index missing", func(a *qdrantComparisonArtifact) { a.Reopen.PayloadIndexes = a.Reopen.PayloadIndexes[:2] }},
 		{"unbounded fetch", func(a *qdrantComparisonArtifact) { a.Cells[0].FetchMaxCount = 11 }},
 		{"wrong manifest", func(a *qdrantComparisonArtifact) { a.ManifestSHA256 = "wrong" }},
 		{"missing process samples", func(a *qdrantComparisonArtifact) { a.Resources.ProcessSamples = nil }},

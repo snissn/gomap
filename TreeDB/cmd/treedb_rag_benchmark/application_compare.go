@@ -7,14 +7,33 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
 const (
-	qdrantComparisonArtifactSchema = "treedb-rag-qdrant-comparison/v1"
-	applicationComparisonSchema    = "treedb-rag-system-comparison/v1"
+	qdrantComparisonArtifactSchema      = "treedb-rag-qdrant-comparison/v1"
+	applicationComparisonSchema         = "treedb-rag-system-comparison/v1"
+	qdrantSparseWeightSignificantDigits = 14
 )
+
+var qdrantSparseTokenPattern = regexp.MustCompile(`[a-z0-9]+`)
+
+type qdrantPythonFloat float64
+
+func (value qdrantPythonFloat) MarshalJSON() ([]byte, error) {
+	number := float64(value)
+	if math.IsNaN(number) || math.IsInf(number, 0) {
+		return nil, fmt.Errorf("non-finite sparse vector value")
+	}
+	text := strconv.FormatFloat(number, 'g', -1, 64)
+	if !strings.ContainsAny(text, ".e") {
+		text += ".0"
+	}
+	return []byte(text), nil
+}
 
 type qdrantComparisonIndexProof struct {
 	IndexedVectorsCount int            `json:"indexed_vectors_count"`
@@ -52,11 +71,14 @@ type qdrantComparisonBuild struct {
 }
 
 type qdrantComparisonReopen struct {
-	Attempted  bool    `json:"attempted"`
-	Succeeded  bool    `json:"succeeded"`
-	Version    string  `json:"version"`
-	PointCount int     `json:"point_count"`
-	Seconds    float64 `json:"seconds"`
+	Attempted           bool     `json:"attempted"`
+	Succeeded           bool     `json:"succeeded"`
+	Version             string   `json:"version"`
+	Status              string   `json:"status"`
+	PointCount          int      `json:"point_count"`
+	IndexedVectorsCount int      `json:"indexed_vectors_count"`
+	PayloadIndexes      []string `json:"payload_indexes"`
+	Seconds             float64  `json:"seconds"`
 }
 
 type qdrantComparisonRouteProof struct {
@@ -119,6 +141,7 @@ type qdrantComparisonArtifact struct {
 	ManifestSHA256       string                    `json:"manifest_sha256"`
 	FixtureSHA256        string                    `json:"fixture_sha256"`
 	SemanticVectorSHA256 string                    `json:"semantic_vector_sha256"`
+	SparseVectorSHA256   string                    `json:"sparse_vector_sha256"`
 	ConfigSHA256         string                    `json:"config_sha256"`
 	SourceCount          int                       `json:"source_count"`
 	ChunkCount           int                       `json:"chunk_count"`
@@ -202,6 +225,109 @@ func validSHA256(value string) bool {
 	}
 	_, err := hex.DecodeString(value)
 	return err == nil
+}
+
+func qdrantSparseVectorCanonicalBytes(manifest applicationComparisonManifest) ([]byte, error) {
+	documentTokens := make([][]string, len(manifest.Chunks))
+	vocabularySet := map[string]bool{}
+	documentFrequency := map[string]int{}
+	for i, chunk := range manifest.Chunks {
+		tokens := qdrantSparseTokenPattern.FindAllString(strings.ToLower(chunk.Content), -1)
+		documentTokens[i] = tokens
+		seen := map[string]bool{}
+		for _, token := range tokens {
+			vocabularySet[token] = true
+			if !seen[token] {
+				documentFrequency[token]++
+				seen[token] = true
+			}
+		}
+	}
+	queryTokens := make(map[string][]string, len(manifest.Queries))
+	for _, query := range manifest.Queries {
+		tokens := qdrantSparseTokenPattern.FindAllString(strings.ToLower(query.Text), -1)
+		queryTokens[query.ID] = tokens
+		for _, token := range tokens {
+			vocabularySet[token] = true
+		}
+	}
+	vocabulary := make([]string, 0, len(vocabularySet))
+	for token := range vocabularySet {
+		vocabulary = append(vocabulary, token)
+	}
+	sort.Strings(vocabulary)
+	tokenIndexes := make(map[string]int, len(vocabulary))
+	for index, token := range vocabulary {
+		tokenIndexes[token] = index
+	}
+
+	serial := struct {
+		Documents  map[string][][]any `json:"documents"`
+		Queries    map[string][][]any `json:"queries"`
+		Vocabulary []string           `json:"vocabulary"`
+	}{
+		Documents:  make(map[string][][]any, len(manifest.Chunks)),
+		Queries:    make(map[string][][]any, len(manifest.Queries)),
+		Vocabulary: vocabulary,
+	}
+	totalTokens := 0
+	for _, tokens := range documentTokens {
+		totalTokens += len(tokens)
+	}
+	documentCount := float64(len(documentTokens))
+	averageLength := float64(totalTokens) / documentCount
+	for i, chunk := range manifest.Chunks {
+		counts := map[string]int{}
+		for _, token := range documentTokens[i] {
+			counts[token]++
+		}
+		values := make([][]any, 0, len(counts))
+		for _, token := range vocabulary {
+			termFrequency := counts[token]
+			if termFrequency == 0 {
+				continue
+			}
+			documentFrequencyValue := float64(documentFrequency[token])
+			inverseDocumentFrequency := math.Log(1 + (documentCount-documentFrequencyValue+.5)/(documentFrequencyValue+.5))
+			tf := float64(termFrequency)
+			length := float64(len(documentTokens[i]))
+			weight := inverseDocumentFrequency * tf * (manifest.Config.SparseBM25K1 + 1) /
+				(tf + manifest.Config.SparseBM25K1*(1-manifest.Config.SparseBM25B+manifest.Config.SparseBM25B*length/averageLength))
+			weight, err := strconv.ParseFloat(strconv.FormatFloat(weight, 'g', qdrantSparseWeightSignificantDigits, 64), 64)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, []any{tokenIndexes[token], qdrantPythonFloat(weight)})
+		}
+		serial.Documents[chunk.ID] = values
+	}
+	for _, query := range manifest.Queries {
+		counts := map[string]int{}
+		for _, token := range queryTokens[query.ID] {
+			counts[token]++
+		}
+		values := make([][]any, 0, len(counts))
+		for _, token := range vocabulary {
+			if counts[token] != 0 {
+				values = append(values, []any{tokenIndexes[token], qdrantPythonFloat(counts[token])})
+			}
+		}
+		serial.Queries[query.ID] = values
+	}
+	raw, err := json.Marshal(serial)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func expectedQdrantSparseVectorSHA256(manifest applicationComparisonManifest) (string, error) {
+	raw, err := qdrantSparseVectorCanonicalBytes(manifest)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func validateTreeDBComparisonArtifact(artifact *treeDBComparisonArtifact, manifest applicationComparisonManifest, manifestSHA string) ([]applicationComparisonRow, error) {
@@ -622,8 +748,14 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		artifact.ChunkCount != len(manifest.Chunks) || artifact.QueryCount != len(manifest.Queries) {
 		return fmt.Errorf("Qdrant artifact runtime/manifest/hash/cardinality binding mismatch")
 	}
+	expectedSparseVectorSHA256, err := expectedQdrantSparseVectorSHA256(manifest)
+	if err != nil || artifact.SparseVectorSHA256 != expectedSparseVectorSHA256 {
+		return fmt.Errorf("Qdrant artifact sparse vector digest mismatch")
+	}
 	exact, exactOK := artifact.Server.Config["exact"].(bool)
 	fullScanThresholdKB, fullScanOK := artifact.Server.Config["full_scan_threshold"].(float64)
+	hnswM, hnswMOK := artifact.Server.Config["hnsw_m"].(float64)
+	indexingThreshold, indexingThresholdOK := artifact.Server.Config["indexing_threshold"].(float64)
 	if artifact.Server.Version != manifest.Config.QdrantServerVersion || artifact.Server.LocalMode ||
 		artifact.Server.Identity == "" || !strings.Contains(artifact.Server.Identity, "|reopened_pid:") ||
 		artifact.Server.Deployment != "standalone" ||
@@ -632,6 +764,7 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		artifact.Server.Config["sparse"] != manifest.Config.SparseVectorName ||
 		artifact.Server.Config["full_scan_threshold_unit"] != "KiB" ||
 		!exactOK || exact || !fullScanOK || fullScanThresholdKB != 10 ||
+		!hnswMOK || hnswM != 16 || !indexingThresholdOK || indexingThreshold != 1 ||
 		artifact.Server.IndexProof.IndexedVectorsCount < len(manifest.Chunks) {
 		return fmt.Errorf("Qdrant artifact lacks pinned standalone server/index configuration")
 	}
@@ -656,9 +789,12 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		artifact.Build.Seconds <= 0 || artifact.Build.Seconds > float64(manifest.Config.PhaseTimeoutSeconds) ||
 		artifact.QuerySeconds <= 0 || artifact.QuerySeconds > float64(manifest.Config.PhaseTimeoutSeconds) ||
 		!artifact.Reopen.Attempted || !artifact.Reopen.Succeeded ||
-		artifact.Reopen.Version != manifest.Config.QdrantServerVersion ||
-		artifact.Reopen.PointCount != len(manifest.Chunks) || artifact.Reopen.Seconds <= 0 ||
-		artifact.Reopen.Seconds > float64(manifest.Config.PhaseTimeoutSeconds) {
+		artifact.Reopen.Version != manifest.Config.QdrantServerVersion || artifact.Reopen.Status != "green" ||
+		artifact.Reopen.PointCount != len(manifest.Chunks) ||
+		artifact.Reopen.IndexedVectorsCount != artifact.Server.IndexProof.IndexedVectorsCount ||
+		artifact.Reopen.IndexedVectorsCount < len(manifest.Chunks) ||
+		!equalStrings(artifact.Reopen.PayloadIndexes, []string{"tenant", "updated_year", "workspace"}) ||
+		artifact.Reopen.Seconds <= 0 || artifact.Reopen.Seconds > float64(manifest.Config.PhaseTimeoutSeconds) {
 		return fmt.Errorf("Qdrant artifact failed or lacks successful bounded build/query/durable reopen")
 	}
 	if artifact.Resources.DurableBytes <= 0 ||
