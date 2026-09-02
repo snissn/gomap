@@ -42,10 +42,13 @@ def sparse_vectors(manifest):
         queries[query["id"]] = ([v[0] for v in values], [v[1] for v in values]); serial["queries"][query["id"]] = values
     return docs, queries, hashlib.sha256(canonical(serial)).hexdigest()
 
+class PhaseTimeoutError(TimeoutError):
+    pass
+
 @contextlib.contextmanager
 def phase_timeout(name, seconds):
     previous = signal.getsignal(signal.SIGALRM)
-    def expired(_signum, _frame): raise TimeoutError(f"{name} exceeded {seconds}s phase cap")
+    def expired(_signum, _frame): raise PhaseTimeoutError(f"{name} exceeded {seconds}s phase cap")
     signal.signal(signal.SIGALRM, expired); signal.setitimer(signal.ITIMER_REAL, seconds)
     try: yield
     finally: signal.setitimer(signal.ITIMER_REAL, 0); signal.signal(signal.SIGALRM, previous)
@@ -202,7 +205,7 @@ class Runner:
                 candidate.get_collection(self.args.collection)
                 trigger_client = candidate
                 break
-            except TimeoutError:
+            except PhaseTimeoutError:
                 if candidate is not None:
                     candidate.close()
                 raise
@@ -237,7 +240,7 @@ class Runner:
                 self.client = candidate
                 self.reopen.update(attempted=True, succeeded=True, version=server["version"], status="green", point_count=count, indexed_vectors_count=indexed, payload_indexes=payload_indexes, filter_cardinalities=reopen_filter_cardinalities, seconds=time.monotonic() - started)
                 return
-            except TimeoutError:
+            except PhaseTimeoutError:
                 if candidate is not None:
                     candidate.close()
                 raise
