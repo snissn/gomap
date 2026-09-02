@@ -537,7 +537,7 @@
       "resources", "projected_10m_adjacency_reduction_fraction"
     ],
     "source_exact_keys": [
-      "schema_version", "adapter_lifecycle", "diagnostics", "isolation", "data_root", "data_files"
+      "schema_version", "adapter_lifecycle", "diagnostics", "isolation", "storage_ownership_audit", "data_root", "data_files"
     ],
     "origin_exact_keys": [
       "run_id", "artifact_root", "execution_commit", "dataset_sha256", "scale",

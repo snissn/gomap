@@ -350,6 +350,7 @@ class DecisionFixture:
             "harness": {
                 "m": 16, "ef_construction": ef, "ef_search": 192, "k": 100,
                 "rerank_candidates": 400, "rows": "scalar",
+                "quantized_index_name": "fixture-index",
                 "construction_decision_diagnostics": True,
                 "python_executable": self.contract["source_identity"]["runtime"]["python_executable"],
                 "python_sha256": self.contract["source_identity"]["runtime"]["python_sha256"],
@@ -395,6 +396,51 @@ class DecisionFixture:
         (data_root / "maindb").mkdir(parents=True)
         data_file = data_root / "maindb" / "index.db"
         data_file.write_bytes(b"x" * int(persisted))
+        audit = {
+            "schema_version": "treedb-column-section-audit/v1",
+            "status": "passed",
+            "collection": "fixture-index",
+            "detailed_sections": False,
+            "read_integrity": "verify",
+            "physical_accounting": {
+                "complete": True,
+                "collection": "fixture-index",
+                "manifest_generation": 1,
+                "recovery_manifest_generation": 1,
+                "manifest_checksum": 123,
+                "recovery_manifest_checksum": 123,
+            },
+            "storage_plan": {
+                "before": [
+                    {
+                        "name": name,
+                        "path": str((data_root / path).resolve()),
+                        "bytes": data_file.stat().st_size if name in {"index", "total"} else 0,
+                        "files": 1 if name in {"index", "total"} else 0,
+                        "zero_byte_files": 0,
+                    }
+                    for name, path in (
+                        ("index", "maindb/index.db"),
+                        ("wal", "maindb/wal"),
+                        ("value_vlog", "maindb/value_vlog"),
+                        ("leaf_vlog", "maindb/leaf_vlog"),
+                        ("total", "maindb"),
+                    )
+                ],
+                "value_log_gc": {"BytesTotal": 0, "SegmentsTotal": 0},
+            },
+            "asset_lifecycle": {
+                "reachability_complete": True,
+                "reachability": {"Complete": True, "SegmentEntries": []},
+            },
+        }
+        audit_path = root / "storage-ownership-audit.json"
+        audit_path.write_text(json.dumps(audit, sort_keys=True) + "\n")
+        manifest["lifecycle"]["storage_ownership_audit"] = audit_path.name
+        manifest["lifecycle"]["raw_artifacts"].append({
+            "path": audit_path.name,
+            "sha256": policy.sha256_file(audit_path),
+        })
         diagnostics_path = root / "diagnostics.jsonl"
         diagnostics = [
             {
@@ -427,7 +473,10 @@ class DecisionFixture:
             "sha256": policy.sha256_file(data_file),
         }]
         measurement_source = {
-            "schema_version": "treedb-construction-policy-4587-measurement-source/v2",
+            "storage_ownership_audit": {
+                "path": audit_path.name, "sha256": policy.sha256_file(audit_path),
+            },
+            "schema_version": "treedb-construction-policy-4587-measurement-source/v3",
             "adapter_lifecycle": {
                 "path": adapter_path.name, "sha256": policy.sha256_file(adapter_path),
             },
@@ -937,6 +986,51 @@ class ValidatorMutations(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, pattern):
             self.fixture.validate(packet)
 
+    def storage_audit_inputs(self) -> tuple[Path, dict, dict, Path, list[dict]]:
+        run = self.fixture.no_go_packet()["runs"][0]
+        root = Path(run["artifact"]["root"])
+        manifest = json.loads((root / "manifest.json").read_text())
+        measurements = json.loads(
+            (root / run["measurement_evidence"]["path"]).read_text())
+        source = json.loads((root / measurements["source"]["path"]).read_text())
+        return (
+            root,
+            source["storage_ownership_audit"],
+            manifest,
+            Path(source["data_root"]),
+            source["data_files"],
+        )
+
+    def test_storage_ownership_audit_must_pass(self) -> None:
+        root, binding, manifest, data_root, data_files = self.storage_audit_inputs()
+        audit_path = root / binding["path"]
+        audit = json.loads(audit_path.read_text())
+        audit["status"] = "failed"
+        audit_path.write_text(json.dumps(audit, sort_keys=True) + "\n")
+        binding["sha256"] = policy.sha256_file(audit_path)
+        next(item for item in manifest["lifecycle"]["raw_artifacts"]
+             if item["path"] == binding["path"])["sha256"] = binding["sha256"]
+        with self.assertRaisesRegex(ValueError, "audit status"):
+            policy.validate_storage_ownership_audit(
+                root, binding, manifest, data_root, data_files)
+
+    def test_storage_ownership_audit_requires_every_column_segment(self) -> None:
+        root, binding, manifest, data_root, data_files = self.storage_audit_inputs()
+        segment = (
+            data_root / "maindb" / "column_assets" / "fixture-index"
+            / "column-assets" / "assets" / "segments" / "segment-000001.tca"
+        )
+        segment.parent.mkdir(parents=True)
+        segment.write_bytes(b"owned")
+        data_files.append({
+            "path": segment.relative_to(data_root).as_posix(),
+            "size": segment.stat().st_size,
+            "sha256": policy.sha256_file(segment),
+        })
+        with self.assertRaisesRegex(ValueError, "complete column segment ledger"):
+            policy.validate_storage_ownership_audit(
+                root, binding, manifest, data_root, data_files)
+
     def test_valid_no_go(self) -> None:
         self.assertEqual(self.fixture.validate(self.fixture.no_go_packet())["verdict"], "C0_NO_GO")
 
@@ -1190,23 +1284,10 @@ class ValidatorMutations(unittest.TestCase):
         root = Path(run["artifact"]["root"])
         measurement_path = root / run["measurement_evidence"]["path"]
         measurement = json.loads(measurement_path.read_text())
-        source_path = root / measurement["source"]["path"]
-        source = json.loads(source_path.read_text())
-        data_path = Path(source["data_root"]) / source["data_files"][0]["path"]
-        data_path.write_bytes(b"x" * 101)
-        source["data_files"][0].update({
-            "size": 101,
-            "sha256": policy.sha256_file(data_path),
-        })
-        source_path.write_text(json.dumps(source, sort_keys=True) + "\n")
-        measurement["source"]["sha256"] = policy.sha256_file(source_path)
         measurement["resources"]["persisted_bytes"] = 101
-        measurement["determinism"]["persisted_data_ledger_checksum"] = policy.canonical_sha256(
-            source["data_files"]
-        )
         measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
         run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
-        self.assert_invalid(packet, "computed verdict")
+        self.assert_invalid(packet, "resources raw source binding")
 
     def test_duplicate_persisted_data_paths_are_rejected(self) -> None:
         packet = self.fixture.go_packet()

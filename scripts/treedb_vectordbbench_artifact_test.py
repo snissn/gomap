@@ -1477,6 +1477,7 @@ class HarnessOrderTest(unittest.TestCase):
 
             with mock.patch.object(harness, "collect_context", return_value=context), \
                     mock.patch.object(harness, "build_service", return_value=binary), \
+                    mock.patch.object(harness, "build_storage_audit", return_value=binary), \
                     mock.patch.object(harness, "start_service", side_effect=start), \
                     mock.patch.object(harness, "DiagnosticsSampler", Sampler), \
                     mock.patch.object(harness, "run_vdbbench_tests", side_effect=KeyboardInterrupt), \
@@ -4365,6 +4366,45 @@ class ProtocolMeasurementProducerTest(unittest.TestCase):
                 encoding="utf-8",
             )
             harness.write_json(root / "isolation.json", {"complete": True})
+            storage_audit = {
+                "schema_version": "treedb-column-section-audit/v1",
+                "status": "passed",
+                "collection": "fixture-index",
+                "detailed_sections": False,
+                "read_integrity": "verify",
+                "physical_accounting": {
+                    "complete": True,
+                    "collection": "fixture-index",
+                    "manifest_generation": 1,
+                    "recovery_manifest_generation": 1,
+                    "manifest_checksum": 123,
+                    "recovery_manifest_checksum": 123,
+                },
+                "storage_plan": {
+                    "before": [
+                        {
+                            "name": name,
+                            "path": str((data_dir / path).resolve()),
+                            "bytes": 10 if name in {"index", "total"} else 0,
+                            "files": 1 if name in {"index", "total"} else 0,
+                            "zero_byte_files": 0,
+                        }
+                        for name, path in (
+                            ("index", "maindb/index.db"),
+                            ("wal", "maindb/wal"),
+                            ("value_vlog", "maindb/value_vlog"),
+                            ("leaf_vlog", "maindb/leaf_vlog"),
+                            ("total", "maindb"),
+                        )
+                    ],
+                    "value_log_gc": {"BytesTotal": 0, "SegmentsTotal": 0},
+                },
+                "asset_lifecycle": {
+                    "reachability_complete": True,
+                    "reachability": {"Complete": True, "SegmentEntries": []},
+                },
+            }
+            harness.write_json(root / "storage-ownership-audit.json", storage_audit)
             args = SimpleNamespace(
                 data_dir=data_dir,
                 lifecycle_dimensions=768,
@@ -4397,14 +4437,18 @@ class ProtocolMeasurementProducerTest(unittest.TestCase):
             manifest = {
                 "lifecycle": {
                     "expected_rows": 250000,
+                    "storage_ownership_audit": "storage-ownership-audit.json",
                     "raw_artifacts": [
                         {"path": "adapter-lifecycle.jsonl",
                          "sha256": harness.sha256_file(root / "adapter-lifecycle.jsonl")},
                         {"path": "diagnostics.jsonl",
                          "sha256": harness.sha256_file(root / "diagnostics.jsonl")},
+                        {"path": "storage-ownership-audit.json",
+                         "sha256": harness.sha256_file(root / "storage-ownership-audit.json")},
                     ],
                 },
                 "service": {"data_dir": str(data_dir)},
+                "harness": {"quantized_index_name": "fixture-index"},
             }
             validator_values = policy.measurement_source_values(
                 root,

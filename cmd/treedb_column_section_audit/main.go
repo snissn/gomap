@@ -11,14 +11,20 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
+const columnSectionAuditSchema = "treedb-column-section-audit/v1"
+
 type columnSectionAuditResult struct {
+	SchemaVersion      string                                    `json:"schema_version"`
 	Status             string                                    `json:"status"`
 	Collection         string                                    `json:"collection,omitempty"`
 	DetailedSections   bool                                      `json:"detailed_sections"`
 	ReadIntegrity      collections.ColumnAssetReadIntegrity      `json:"read_integrity"`
 	PhysicalAccounting collections.ColumnStorePhysicalAccounting `json:"physical_accounting,omitempty"`
+	StoragePlan        backenddb.CompactStorageStats             `json:"storage_plan"`
+	AssetLifecycle     collections.ColumnAssetLifecycleReport    `json:"asset_lifecycle"`
 	Errors             []string                                  `json:"errors,omitempty"`
 }
 
@@ -83,18 +89,28 @@ func run() (code int) {
 		DetailedSections: detailedSections,
 		ReadIntegrity:    integrity,
 	})
+	if err != nil {
+		return writeFailure(collectionName, detailedSections, integrity, fmt.Errorf("physical accounting: %w", err))
+	}
+	storagePlan, err := db.CompactStoragePlan(context.Background(), backenddb.CompactStorageOptions{})
+	if err != nil {
+		return writeFailure(collectionName, detailedSections, integrity, fmt.Errorf("storage reachability: %w", err))
+	}
+	assetLifecycle, err := col.PlanColumnAssetLifecycle(context.Background(), collections.ColumnAssetLifecycleOptions{
+		SegmentDetails: true,
+	})
+	if err != nil {
+		return writeFailure(collectionName, detailedSections, integrity, fmt.Errorf("column asset reachability: %w", err))
+	}
 	result := columnSectionAuditResult{
+		SchemaVersion:      columnSectionAuditSchema,
 		Status:             "passed",
 		Collection:         collectionName,
 		DetailedSections:   detailedSections,
 		ReadIntegrity:      integrity,
 		PhysicalAccounting: accounting,
-	}
-	if err != nil {
-		result.Status = "failed"
-		result.Errors = []string{err.Error()}
-		writeResult(result)
-		return 1
+		StoragePlan:        storagePlan,
+		AssetLifecycle:     assetLifecycle,
 	}
 	writeResult(result)
 	return 0
@@ -118,6 +134,7 @@ func writeFailure(collectionName string, detailedSections bool, integrity collec
 		integrity = collections.ColumnAssetReadIntegrityVerify
 	}
 	result := columnSectionAuditResult{
+		SchemaVersion:    columnSectionAuditSchema,
 		Status:           "failed",
 		Collection:       collectionName,
 		DetailedSections: detailedSections,

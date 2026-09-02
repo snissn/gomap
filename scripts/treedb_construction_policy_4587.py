@@ -769,7 +769,7 @@ def validate_contract(contract: dict[str, Any], allow_draft: bool,
     exact(set(measurement_schema["exact_keys"]), MEASUREMENT_KEYS, "measurement contract keys")
     exact(set(measurement_schema["source_exact_keys"]), {
         "schema_version", "adapter_lifecycle", "diagnostics", "isolation",
-        "data_root", "data_files",
+        "storage_ownership_audit", "data_root", "data_files",
     }, "measurement source contract keys")
     exact(set(measurement_schema["origin_exact_keys"]), MEASUREMENT_ORIGIN_KEYS,
           "measurement origin contract keys")
@@ -1418,6 +1418,156 @@ def nested_numeric_values(value: Any, key: str) -> list[float]:
     return found
 
 
+def validate_storage_ownership_audit(
+    root: Path,
+    binding: Any,
+    manifest: dict[str, Any],
+    data_root: Path,
+    data_files: list[dict[str, Any]],
+) -> None:
+    binding = object_at(binding, "measurement source storage ownership audit")
+    exact_keys(binding, {"path", "sha256"}, "measurement source storage ownership audit binding")
+    raw_artifacts = object_at(manifest.get("lifecycle"), "manifest.lifecycle").get("raw_artifacts")
+    matches = [
+        item for item in raw_artifacts
+        if isinstance(item, dict) and item.get("path") == binding.get("path")
+    ]
+    if len(matches) != 1:
+        fail("manifest lifecycle must bind exactly one storage ownership audit")
+    exact(binding, matches[0], "storage ownership audit manifest binding")
+    exact(object_at(manifest.get("lifecycle"), "manifest.lifecycle").get("storage_ownership_audit"),
+          binding["path"], "manifest storage ownership audit path")
+    audit, _ = read_bound_json(root, binding, "storage ownership audit")
+    exact_keys(audit, {
+        "schema_version", "status", "collection", "detailed_sections",
+        "read_integrity", "physical_accounting", "storage_plan", "asset_lifecycle",
+    }, "storage ownership audit")
+    exact(audit["schema_version"], "treedb-column-section-audit/v1",
+          "storage ownership audit schema")
+    exact(audit["status"], "passed", "storage ownership audit status")
+    exact(audit["detailed_sections"], False, "storage ownership audit detailed sections")
+    exact(audit["collection"],
+          object_at(manifest.get("harness"), "manifest.harness").get("quantized_index_name"),
+          "storage ownership selected collection")
+    exact(audit["read_integrity"], "verify", "storage ownership audit read integrity")
+
+    accounting = object_at(audit["physical_accounting"], "storage ownership physical accounting")
+    exact(accounting.get("complete"), True, "storage ownership physical accounting completeness")
+    exact(accounting.get("collection"), audit["collection"], "storage ownership collection")
+    exact(accounting.get("manifest_generation"), accounting.get("recovery_manifest_generation"),
+          "storage ownership manifest generation")
+    exact(accounting.get("manifest_checksum"), accounting.get("recovery_manifest_checksum"),
+          "storage ownership manifest checksum")
+
+    ledger = {
+        Path(object_at(item, f"storage ownership data_files[{position}]")["path"]).as_posix():
+        nonnegative_int(item["size"], f"storage ownership data_files[{position}].size")
+        for position, item in enumerate(data_files)
+    }
+    collection_prefix = f"maindb/column_assets/{audit['collection']}/"
+    for relative in ledger:
+        if relative.startswith("maindb/column_assets/") and not relative.startswith(collection_prefix):
+            fail(f"storage ownership audit found an unrelated collection asset: {relative}")
+
+    storage_plan = object_at(audit["storage_plan"], "storage ownership storage plan")
+    before = storage_plan.get("before")
+    if not isinstance(before, list):
+        fail("storage ownership storage plan before must be a list")
+    domains = {}
+    for position, item in enumerate(before):
+        item = object_at(item, f"storage ownership storage plan before[{position}]")
+        exact_keys(item, {"name", "path", "bytes", "files", "zero_byte_files"},
+                   f"storage ownership storage plan before[{position}]")
+        name = item["name"]
+        if name in domains:
+            fail(f"storage ownership storage domain is duplicated: {name}")
+        domains[name] = item
+    exact(set(domains), {"index", "wal", "value_vlog", "leaf_vlog", "total"},
+          "storage ownership storage domains")
+    storage_roots = {
+        "index": "maindb/index.db",
+        "wal": "maindb/wal/",
+        "value_vlog": "maindb/value_vlog/",
+        "leaf_vlog": "maindb/leaf_vlog/",
+    }
+    for name, prefix in storage_roots.items():
+        matches = {
+            relative: size for relative, size in ledger.items()
+            if relative == prefix or relative.startswith(prefix)
+        }
+        domain = domains[name]
+        exact(Path(domain["path"]).resolve(),
+              (data_root / prefix.rstrip("/")).resolve(),
+              f"storage ownership {name} path")
+        exact(nonnegative_int(domain["bytes"], f"storage ownership {name} bytes"),
+              sum(matches.values()), f"storage ownership {name} bytes")
+        exact(nonnegative_int(domain["files"], f"storage ownership {name} files"),
+              len(matches), f"storage ownership {name} files")
+        exact(nonnegative_int(domain["zero_byte_files"], f"storage ownership {name} zero-byte files"),
+              sum(size == 0 for size in matches.values()),
+              f"storage ownership {name} zero-byte files")
+    exact(Path(domains["total"]["path"]).resolve(), (data_root / "maindb").resolve(),
+          "storage ownership total path")
+    exact(nonnegative_int(domains["total"]["bytes"], "storage ownership total bytes"),
+          sum(nonnegative_int(domains[name]["bytes"], f"storage ownership {name} bytes")
+              for name in storage_roots),
+          "storage ownership total bytes")
+    exact(nonnegative_int(domains["total"]["files"], "storage ownership total files"),
+          sum(nonnegative_int(domains[name]["files"], f"storage ownership {name} files")
+              for name in storage_roots),
+          "storage ownership total files")
+    exact(nonnegative_int(domains["total"]["zero_byte_files"],
+                          "storage ownership total zero-byte files"),
+          sum(nonnegative_int(domains[name]["zero_byte_files"],
+                              f"storage ownership {name} zero-byte files")
+              for name in storage_roots),
+          "storage ownership total zero-byte files")
+
+    value_log_gc = object_at(storage_plan.get("value_log_gc"),
+                          "storage ownership value-log reachability")
+    exact(nonnegative_int(value_log_gc.get("BytesTotal"), "storage ownership value-log bytes"),
+          domains["value_vlog"]["bytes"], "storage ownership value-log physical bytes")
+    exact(nonnegative_int(value_log_gc.get("SegmentsTotal"), "storage ownership value-log segments"),
+          domains["value_vlog"]["files"], "storage ownership value-log physical segments")
+
+    lifecycle = object_at(audit["asset_lifecycle"], "storage ownership asset lifecycle")
+    exact(lifecycle.get("reachability_complete"), True,
+          "storage ownership asset reachability completeness")
+    reachability = object_at(lifecycle.get("reachability"),
+                             "storage ownership asset reachability")
+    exact(reachability.get("Complete"), True, "storage ownership asset reachability report")
+    segment_entries = reachability.get("SegmentEntries")
+    if not isinstance(segment_entries, list):
+        fail("storage ownership asset segment entries must be a list")
+    audited_segments = set()
+    for position, item in enumerate(segment_entries):
+        item = object_at(item, f"storage ownership asset segment[{position}]")
+        path = Path(item.get("Path", "")).resolve()
+        try:
+            relative = path.relative_to(data_root).as_posix()
+        except ValueError:
+            fail("storage ownership asset segment path must remain inside data root")
+        if relative in audited_segments:
+            fail(f"storage ownership asset segment is duplicated: {relative}")
+        exact(ledger.get(relative), nonnegative_int(item.get("Bytes"),
+              f"storage ownership asset segment[{position}].Bytes"),
+              f"storage ownership asset segment bytes for {relative}")
+        accounted = (
+            nonnegative_int(item.get("ProtectedBytes"), "storage ownership protected asset bytes")
+            + nonnegative_int(item.get("ReclaimableBytes"), "storage ownership reclaimable asset bytes")
+            + nonnegative_int(item.get("UnknownBytes"), "storage ownership unknown asset bytes")
+        )
+        exact(accounted, item["Bytes"], f"storage ownership asset byte classification for {relative}")
+        exact(item.get("UnknownBytes"), 0, f"storage ownership unknown asset bytes for {relative}")
+        audited_segments.add(relative)
+    physical_segments = {
+        relative for relative in ledger
+        if relative.startswith(collection_prefix)
+        and "/assets/segments/" in relative and relative.endswith(".tca")
+    }
+    exact(audited_segments, physical_segments, "storage ownership complete column segment ledger")
+
+
 def measurement_source_values(
     root: Path, binding: Any, producer_phases: dict[str, float],
     construction_decisions: dict[str, Any], configuration: dict[str, Any],
@@ -1427,12 +1577,15 @@ def measurement_source_values(
     exact_keys(source, {
         "schema_version", "adapter_lifecycle", "diagnostics", "isolation",
         "data_root", "data_files",
+        "storage_ownership_audit",
     }, "measurement source")
-    exact(source["schema_version"], "treedb-construction-policy-4587-measurement-source/v2",
+    exact(source["schema_version"], "treedb-construction-policy-4587-measurement-source/v3",
           "measurement source schema")
     adapter_binding = object_at(source["adapter_lifecycle"], "measurement source adapter")
     diagnostics_binding = object_at(source["diagnostics"], "measurement source diagnostics")
     isolation_binding = object_at(source["isolation"], "measurement source isolation")
+    storage_audit_binding = object_at(
+        source["storage_ownership_audit"], "measurement source storage ownership audit")
     exact_keys(adapter_binding, {"path", "sha256"}, "measurement source adapter binding")
     exact_keys(diagnostics_binding, {"path", "sha256"}, "measurement source diagnostics binding")
     exact_keys(isolation_binding, {"path", "sha256"}, "measurement source isolation binding")
@@ -1523,6 +1676,8 @@ def measurement_source_values(
         persisted += item["size"]
     actual_paths = {path.resolve() for path in data_root.rglob("*") if path.is_file()}
     exact(actual_paths, expected_paths, "measurement source complete data file ledger")
+    validate_storage_ownership_audit(
+        root, storage_audit_binding, manifest, data_root, data_files)
     data_digest = canonical_sha256(data_files)
     adapter_digest = sha256_file(adapter_path)
     peak_rss = max(

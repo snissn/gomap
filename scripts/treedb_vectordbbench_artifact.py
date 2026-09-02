@@ -45,7 +45,7 @@ LIFECYCLE_SCHEMA = "treedb-vectordbbench-lifecycle/v1"
 LIFECYCLE_EVENT_SCHEMA = "treedb-vectordbbench-lifecycle-event/v1"
 LIFECYCLE_VALIDATION_SCHEMA = "treedb-vectordbbench-lifecycle-validation/v1"
 MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v4"
-MEASUREMENT_SOURCE_SCHEMA = "treedb-construction-policy-4587-measurement-source/v2"
+MEASUREMENT_SOURCE_SCHEMA = "treedb-construction-policy-4587-measurement-source/v3"
 LIFECYCLE_EXCLUSIVE_LOCK = Path("/mnt/fast4tb/treedb-4587-c0.lock")
 PPROF_PROFILE_KINDS = frozenset({"cpu", "heap", "allocs", "block", "mutex"})
 OPTIMIZED_ROUTE_NAMES = frozenset({"exact_hnsw_search_pack_v1", "quantized_rerank"})
@@ -163,6 +163,7 @@ class HarnessState:
     skips: list[dict[str, str]] = field(default_factory=list)
     service_pid: int | None = None
     service_binary: dict[str, Any] | None = None
+    storage_audit_binary: dict[str, Any] | None = None
     health: dict[str, Any] | None = None
     route_proof: dict[str, Any] | None = None
     vdbbench: list[dict[str, Any]] = field(default_factory=list)
@@ -650,6 +651,23 @@ def build_service(state: HarnessState, gomap_root: Path, service_bin: str | None
         state,
         "go_build_treedb_document_service",
         ["go", "build", "-o", str(bin_path), "./cmd/treedb-document-service"],
+        cwd=gomap_root,
+        timeout=180,
+        required=True,
+    )
+    return bin_path
+
+
+def build_storage_audit(state: HarnessState, gomap_root: Path) -> Path:
+    bin_path = state.root / "bin" / "treedb-column-section-audit"
+    bin_path.parent.mkdir(parents=True, exist_ok=True)
+    run_command(
+        state,
+        "go_build_treedb_column_section_audit",
+        [
+            "go", "build", "-trimpath", "-buildvcs=false", "-o", str(bin_path),
+            "./cmd/treedb_column_section_audit",
+        ],
         cwd=gomap_root,
         timeout=180,
         required=True,
@@ -4063,6 +4081,72 @@ def require_positive_construction_work(decisions: dict[str, Any]) -> None:
 
 
 
+def data_file_state(data_dir: Path) -> list[dict[str, Any]]:
+    files = []
+    for path in sorted(data_dir.rglob("*")):
+        if path.is_file():
+            stat = path.stat()
+            files.append({
+                "path": path.relative_to(data_dir).as_posix(),
+                "size": stat.st_size,
+                "device": stat.st_dev,
+                "inode": stat.st_ino,
+                "mtime_ns": stat.st_mtime_ns,
+                "ctime_ns": stat.st_ctime_ns,
+            })
+    return files
+
+
+def data_file_ledger(data_dir: Path) -> list[dict[str, Any]]:
+    files = []
+    for path in sorted(data_dir.rglob("*")):
+        if path.is_file():
+            files.append({
+                "path": path.relative_to(data_dir).as_posix(),
+                "size": path.stat().st_size,
+                "sha256": sha256_file(path),
+            })
+    return files
+
+
+def run_storage_ownership_audit(
+    state: HarnessState,
+    *,
+    gomap_root: Path,
+    audit_bin: Path,
+    data_dir: Path,
+    collection: str,
+) -> Path:
+    before = data_file_state(data_dir)
+    record = run_command(
+        state,
+        "treedb_storage_ownership_audit",
+        [
+            str(audit_bin),
+            "-db-dir", str(data_dir),
+            "-collection", collection,
+            "-detailed-sections=false",
+            "-read-integrity=verify",
+        ],
+        cwd=gomap_root,
+        env=lifecycle_subprocess_environment(),
+        timeout=1800,
+        required=True,
+    )
+    if record.stdout is None:
+        raise RuntimeError("storage ownership audit did not retain stdout")
+    raw_path = state.root / record.stdout
+    audit = _object(_strict_json_loads(raw_path.read_text(encoding="utf-8")), "storage ownership audit", [])
+    if audit.get("status") != "passed":
+        raise RuntimeError(f"storage ownership audit failed: {audit}")
+    after = data_file_state(data_dir)
+    if after != before:
+        raise RuntimeError("read-only storage ownership audit changed TreeDB data files")
+    path = state.root / "storage-ownership-audit.json"
+    write_json(path, audit)
+    return path
+
+
 def write_protocol_measurements(
     state: HarnessState,
     args: argparse.Namespace,
@@ -4113,14 +4197,7 @@ def write_protocol_measurements(
     if peak_rss <= 0:
         raise RuntimeError("protocol measurement source has no positive peak RSS")
 
-    data_files = []
-    for path in sorted(args.data_dir.rglob("*")):
-        if path.is_file():
-            data_files.append({
-                "path": path.relative_to(args.data_dir).as_posix(),
-                "size": path.stat().st_size,
-                "sha256": sha256_file(path),
-            })
+    data_files = data_file_ledger(args.data_dir)
     if not data_files:
         raise RuntimeError("protocol measurement source has no persisted data files")
     source = {
@@ -4136,6 +4213,10 @@ def write_protocol_measurements(
         "isolation": {
             "path": isolation_path.relative_to(state.root).as_posix(),
             "sha256": sha256_file(isolation_path),
+        },
+        "storage_ownership_audit": {
+            "path": "storage-ownership-audit.json",
+            "sha256": sha256_file(state.root / "storage-ownership-audit.json"),
         },
         "data_root": str(args.data_dir.resolve()),
         "data_files": data_files,
@@ -4221,6 +4302,7 @@ def complete_lifecycle(
     service_bin: Path,
     service_proc: subprocess.Popen[str],
     sampler: DiagnosticsSampler,
+    storage_audit_bin: Path | None = None,
 ) -> list[str]:
     adapter = read_adapter_lifecycle_sidecar(state.root / "adapter-lifecycle.jsonl")
     milestone_path = write_lifecycle_load_milestones(state, adapter["records"])
@@ -4385,17 +4467,29 @@ def complete_lifecycle(
         terminate_process_group(reopened_proc, graceful_timeout=args.service_close_timeout)
         raise
 
+    storage_audit_path = None
+    if storage_audit_bin is not None:
+        storage_audit_path = run_storage_ownership_audit(
+            state,
+            gomap_root=gomap_root,
+            audit_bin=storage_audit_bin,
+            data_dir=args.data_dir,
+            collection=index_name,
+        )
+
     profile_relative = str(profile_path.relative_to(state.root))
     profile_sha = sha256_file(profile_path)
+    audit_artifacts = [storage_audit_path] if storage_audit_path is not None else []
     raw_artifacts = lifecycle_raw_artifacts(state, [
-        profile_path,
-        state.root / "diagnostics.jsonl",
         state.root / "adapter-lifecycle.jsonl",
-        state.root / "lifecycle-boundary-diagnostics.json",
+        state.root / "diagnostics.jsonl",
+        state.root / "lifecycle.jsonl",
+        state.root / "isolation.json",
         milestone_path,
         state.root / "service.log",
         state.root / "lifecycle_count_response.json",
         state.root / "lifecycle_route_response.json",
+        *audit_artifacts,
     ])
     assert state.lifecycle is not None
     state.diagnostics = list(sampler.samples)
@@ -4410,9 +4504,12 @@ def complete_lifecycle(
                 "kind": "heap",
                 "before_sequence": 8,
                 "after_sequence": 9,
-            }
+            },
         ],
     })
+    if storage_audit_path is not None:
+        state.lifecycle["storage_ownership_audit"] = (
+            storage_audit_path.relative_to(state.root).as_posix())
     return command
 
 
@@ -4429,6 +4526,7 @@ def write_readme(state: HarnessState, args: argparse.Namespace) -> None:
             "- lifecycle: `lifecycle.jsonl`",
             "- cold-reopen route proof: `lifecycle_route_response.json` (also embedded in the `route_verify` lifecycle stage)",
             "- service log: `service.log`",
+            "- storage ownership audit: `storage-ownership-audit.json` (read-only physical accounting and reachability)",
             f"- data dir: `{args.data_dir}`",
             f"- VDBBench load batch: `{args.num_per_batch}` documents",
             "",
@@ -4544,6 +4642,7 @@ def write_manifest(
             "use_uv": args.use_uv,
             "service_environment": state.service_environment,
             "vdbbench_environments": state.vdbbench_environments,
+            "storage_audit_binary": state.storage_audit_binary,
         },
         "commands": [asdict(record) for record in state.commands],
         "vdbbench": state.vdbbench,
@@ -4877,6 +4976,8 @@ def main(argv: list[str]) -> int:
     try:
         service_bin = build_service(state, gomap_root, args.service_bin or None)
         state.service_binary = file_identity(service_bin)
+        storage_audit_bin = build_storage_audit(state, gomap_root) if args.lifecycle else None
+        state.storage_audit_binary = file_identity(storage_audit_bin) if storage_audit_bin else None
         service_proc, health, service_command = start_service(
             state,
             gomap_root=gomap_root,
@@ -4915,8 +5016,10 @@ def main(argv: list[str]) -> int:
         )
         if args.lifecycle:
             assert sampler is not None
+            assert storage_audit_bin is not None
             service_command = complete_lifecycle(
-                state, args, gomap_root, service_bin, service_proc, sampler
+                state, args, gomap_root, service_bin, service_proc, sampler,
+                storage_audit_bin=storage_audit_bin,
             )
             monitor = isolation_monitor
             isolation_monitor = None
