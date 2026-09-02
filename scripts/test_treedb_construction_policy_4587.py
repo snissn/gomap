@@ -490,11 +490,15 @@ class DecisionFixture:
                 "--diagnostics-interval", "5", "--service-health-timeout", "60",
             ]
             command_records.append({
-                "schema_version": "treedb-construction-policy-4587-probe-command/v3",
+                "schema_version": "treedb-construction-policy-4587-probe-command/v4",
                 "sequence": position,
                 "argv": argv,
                 "helper_sha256": policy.sha256_file(
                     HERE.parent / policy.SEARCH_HELPER_PATH),
+                "python_executable": str(Path(
+                    self.contract["source_identity"]["runtime"]["python_executable"]
+                ).resolve()),
+                "python_sha256": self.contract["source_identity"]["runtime"]["python_sha256"],
                 "vdbbench_argv": [
                     self.contract["source_identity"]["runtime"]["python_executable"],
                 ] + policy.expected_vdbbench_argv(
@@ -882,6 +886,12 @@ class ValidatorMutations(unittest.TestCase):
 
     def test_valid_no_go(self) -> None:
         self.assertEqual(self.fixture.validate(self.fixture.no_go_packet())["verdict"], "C0_NO_GO")
+
+    def test_authorization_service_build_argv_is_frozen(self) -> None:
+        contract = copy.deepcopy(self.fixture.contract)
+        contract["commands"]["build_argv"][2] = "-race"
+        with self.assertRaisesRegex(ValueError, "authorization service build argv"):
+            policy.validate_python_command_contract(contract)
 
     def test_partition_rows_must_match_canonical_ordinals(self) -> None:
         import pyarrow as arrow
@@ -1340,6 +1350,19 @@ class ValidatorMutations(unittest.TestCase):
         packet = self.fixture.no_go_packet()
         run = packet["runs"][0]
         self.fixture.rewrite_command(
+            run, 0, lambda value: value.update({
+                "python_executable": "/tmp/unreviewed-python"}))
+        self.assert_invalid(packet, "frozen helper Python interpreter")
+
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_command(
+            run, 0, lambda value: value.update({"python_sha256": "0" * 64}))
+        self.assert_invalid(packet, "frozen helper Python checksum")
+
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_command(
             run, 0, lambda value: value["vdbbench_env"].update({"PYTHONHASHSEED": "1"}))
         self.assert_invalid(packet, "canonical VectorDBBench environment")
 
@@ -1470,6 +1493,11 @@ class ValidatorMutations(unittest.TestCase):
             self.assertEqual(
                 record["helper_sha256"],
                 search_existing_index.sha256_file(Path(search_existing_index.__file__).resolve()))
+            self.assertEqual(
+                record["python_executable"], str(Path(sys.executable).resolve()))
+            self.assertEqual(
+                record["python_sha256"],
+                search_existing_index.sha256_file(Path(sys.executable).resolve()))
             self.assertEqual(
                 json.loads(args.command_ledger.read_text()),
                 record,

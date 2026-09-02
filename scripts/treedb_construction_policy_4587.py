@@ -542,6 +542,12 @@ def generate_authorization(contract: dict[str, Any], path: Path, service_binary:
     exact(run("git", "status", "--porcelain=v1", cwd=root), "",
           "authorization source cleanliness")
     service_binary = service_binary.resolve()
+    expected_binary = Path(contract["commands"]["binary"]).resolve()
+    exact(service_binary.resolve(), expected_binary,
+          "authorization service binary output path")
+    service_binary = expected_binary
+    service_binary.parent.mkdir(parents=True, exist_ok=True)
+    run(*contract["commands"]["build_argv"], cwd=root)
     authorization = {
         "schema_version": AUTHORIZATION_SCHEMA,
         "authorization_kind": "COORDINATOR_REVIEW_PROVENANCE",
@@ -577,6 +583,12 @@ def validate_python_command_contract(contract: dict[str, Any]) -> None:
     exact(search_commands.get("service_environment"),
           {"GOMAXPROCS": str(runtime.get("gomaxprocs"))},
           "existing-index service environment")
+    expected_build_argv = [
+        "go", "build", "-trimpath", "-o", commands.get("binary"),
+        "./cmd/treedb-document-service",
+    ]
+    exact(commands.get("build_argv"), expected_build_argv,
+          "authorization service build argv")
     python_commands = {
         "authorization_generate_argv_template": commands.get(
             "authorization_generate_argv_template"),
@@ -776,6 +788,7 @@ def validate_index_metadata(metadata: dict[str, Any], run_row: dict[str, Any], i
 def read_probe_command_record(
     root: Path, origin: dict[str, Any], expected_sequence: int, name: str,
     expected_helper_path: Path, expected_helper_sha256: str,
+    expected_python_executable: str, expected_python_sha256: str,
 ) -> dict[str, Any]:
     ledger_relative = Path(origin["command_ledger_path"])
     if ledger_relative.is_absolute() or ".." in ledger_relative.parts:
@@ -791,12 +804,13 @@ def read_probe_command_record(
         fail("probe command ledger must contain exactly four append-only evidence records")
     for sequence, record in enumerate(records):
         exact_keys(record, {
-            "schema_version", "sequence", "argv", "helper_sha256", "vdbbench_argv",
-            "vdbbench_env", "kind", "started_at", "completed_at", "probe_started_at",
+            "schema_version", "sequence", "argv", "helper_sha256",
+            "python_executable", "python_sha256", "vdbbench_argv", "vdbbench_env",
+            "kind", "started_at", "completed_at", "probe_started_at",
             "probe_completed_at", "exit_code", "query_sha256", "run_id", "route",
             "result_sha256", "response_sha256", "index_metadata_sha256",
         }, f"probe command ledger[{sequence}]")
-        exact(record["schema_version"], "treedb-construction-policy-4587-probe-command/v3",
+        exact(record["schema_version"], "treedb-construction-policy-4587-probe-command/v4",
               f"probe command ledger[{sequence}].schema_version")
         exact(record["sequence"], sequence, f"probe command ledger[{sequence}].sequence")
     record = records[expected_sequence]
@@ -810,6 +824,11 @@ def read_probe_command_record(
         fail(f"{name}.command argv must resolve to the authorized existing-index helper")
     exact(record["helper_sha256"], expected_helper_sha256,
           f"{name}.command authorized helper SHA-256")
+    exact(Path(record["python_executable"]).resolve(),
+          Path(expected_python_executable).resolve(),
+          f"{name}.command frozen helper Python interpreter")
+    exact(record["python_sha256"], expected_python_sha256,
+          f"{name}.command frozen helper Python checksum")
     return record
 
 
@@ -1027,7 +1046,8 @@ def validate_search_evidence(
             service_started, service_completed = route_envelopes[item["route"]][2:4]
         command = read_probe_command_record(
             root, origin, position, f"search_evidence[{position}].origin",
-            expected_helper_path, expected_helper_sha256)
+            expected_helper_path, expected_helper_sha256,
+            python_executable, python_sha256)
         exact(command["run_id"], run_row["run_id"], f"search_evidence[{position}] command run")
         exact((command["kind"], command["route"]), (item["kind"], item["route"]),
               f"search_evidence[{position}] command identity")
