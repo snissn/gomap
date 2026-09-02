@@ -77,7 +77,11 @@ raise SystemExit('Qdrant readiness exceeded 90 seconds')
 PY
 
 RUNNER_ARGS=(--manifest "$MANIFEST" --output "$QDRANT_ARTIFACT" --url "$URL" --collection "$QDRANT_COLLECTION" --deployment "$DEPLOYMENT" --image "$QDRANT_IMAGE" --server-identity "$SERVER_IDENTITY" --storage-path "$QDRANT_STORAGE_PATH" --restart-hook "$RESTART_HOOK" --allow-drop)
-if [[ -n "$CONTAINER" ]]; then RUNNER_ARGS+=(--container-id "$CONTAINER"); fi
+if [[ -n "$CONTAINER" ]]; then
+	RUNNER_ARGS+=(--container-id "$CONTAINER")
+else
+	RUNNER_ARGS+=(--server-pid "$PID")
+fi
 "$VENV/bin/python" benchmarks/vector_db_compare/rag_qdrant_runner.py "${RUNNER_ARGS[@]}"
 run_90s go run ./TreeDB/cmd/treedb_rag_benchmark \
 	-application-comparison-manifest "$MANIFEST" \

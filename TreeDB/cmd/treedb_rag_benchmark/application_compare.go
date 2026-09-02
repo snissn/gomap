@@ -25,9 +25,12 @@ type qdrantComparisonServer struct {
 }
 
 type qdrantComparisonResources struct {
-	HostPIDMetrics string         `json:"host_pid_metrics"`
-	DockerStats    map[string]any `json:"docker_stats,omitempty"`
-	DurableBytes   int64          `json:"durable_bytes"`
+	HostPIDMetrics       string           `json:"host_pid_metrics"`
+	DockerStats          map[string]any   `json:"docker_stats,omitempty"`
+	ProcessSamples       []map[string]any `json:"process_samples,omitempty"`
+	PeakObservedRSSBytes int64            `json:"peak_observed_rss_bytes"`
+	CPUSeconds           float64          `json:"cpu_seconds"`
+	DurableBytes         int64            `json:"durable_bytes"`
 }
 
 type qdrantComparisonReopen struct {
@@ -208,6 +211,12 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 	}
 	if artifact.Resources.DurableBytes <= 0 || artifact.Resources.HostPIDMetrics == "" {
 		return fmt.Errorf("Qdrant artifact lacks resource/storage semantics")
+	}
+	if artifact.Server.Deployment == "docker" && len(artifact.Resources.DockerStats) == 0 {
+		return fmt.Errorf("Qdrant Docker artifact lacks container resource evidence")
+	}
+	if artifact.Server.Deployment == "standalone" && (len(artifact.Resources.ProcessSamples) < 4 || artifact.Resources.PeakObservedRSSBytes <= 0 || artifact.Resources.CPUSeconds <= 0) {
+		return fmt.Errorf("Qdrant standalone artifact lacks process RSS/CPU evidence")
 	}
 	seen := map[string]bool{}
 	for _, cell := range artifact.Cells {
