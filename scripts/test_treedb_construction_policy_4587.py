@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
@@ -27,6 +28,24 @@ SPEC.loader.exec_module(policy)
 CONTRACT_PATH = HERE.parent / "docs/benchmarks/treedb_construction_policy_c0_4587.json"
 COMMIT = "1" * 40
 
+@functools.cache
+def fixture_go_runtime() -> dict[str, str]:
+    values = json.loads(policy.run(
+        "go", "env", "-json", "GOROOT", "GOPATH", "GOMODCACHE"))
+    go_root = Path(values["GOROOT"]).resolve()
+    go_executable = (go_root / "bin/go").resolve()
+    version = policy.run(str(go_executable), "version")
+    if not version.startswith("go version "):
+        raise RuntimeError(f"unexpected Go version output: {version}")
+    return {
+        "go": version.removeprefix("go version "),
+        "go_executable": str(go_executable),
+        "go_sha256": policy.sha256_file(go_executable),
+        "go_root": str(go_root),
+        "go_path": str(Path(values["GOPATH"]).resolve()),
+        "go_mod_cache": str(Path(values["GOMODCACHE"]).resolve()),
+    }
+
 
 class DecisionFixture:
     def __init__(self, root: Path):
@@ -34,10 +53,11 @@ class DecisionFixture:
         self.contract = json.loads(CONTRACT_PATH.read_text())
         self.contract["commands"]["artifact_root"] = str(root.resolve())
         self.contract["source_identity"]["gomap_root"] = str(HERE.parent)
+        runtime = self.contract["source_identity"]["runtime"]
         python_executable = Path(sys.executable).resolve()
-        self.contract["source_identity"]["runtime"]["python_executable"] = str(python_executable)
-        self.contract["source_identity"]["runtime"]["python_sha256"] = policy.sha256_file(
-            python_executable)
+        runtime["python_executable"] = str(python_executable)
+        runtime["python_sha256"] = policy.sha256_file(python_executable)
+        runtime.update(fixture_go_runtime())
         commands = self.contract["commands"]
         commands["lifecycle_vdbbench_environment_template"]["PYTHONPATH"] = (
             policy.os.pathsep.join((
