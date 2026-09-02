@@ -142,6 +142,29 @@ reproductions. Full methodology, latency, profiles, supporting quantized-only
 measurements, raw data, and evidence archive:
 [August 21 Cohere 1M report](docs/benchmarks/treedb_vectordbbench_cohere1m_c6i_dense_curve_2026-08-21.md).
 
+### VectorDBBench Cohere 10M Lifecycle
+
+A production-shaped AWS run durably loaded 10 million Cohere vectors, built the
+deferred column graph, cold-reopened the database, and served the optimized
+scalar-u8 traversal plus FP32-rerank route.
+
+| Measurement | Result |
+| --- | ---: |
+| Durable ingestion | 502.31 s; 19,908 vectors/s |
+| Sustained throughput | M10/M2 81.71% |
+| Offline optimize | 6,296.34 s |
+| Query-ready load plus optimize | 6,798.65 s |
+| Cold reopen | 10,000,000 rows exact; optimized route, no fallback |
+| Search | 21,986.66 QPS |
+| Recall@100 / NDCG@100 | 0.9335 / 0.9425 |
+| Concurrent p99 | 2.164 ms |
+
+Durable insert was 80.63% faster than the earlier complete matched run.
+Adjacency construction is now the dominant time-to-ready wall at 5,774.24
+seconds, or 92.5% of column-graph build time. Full topology, lifecycle gates,
+profiles, bottleneck attribution, raw evidence, archive, and caveats:
+[September 1 Cohere 10M lifecycle report](docs/benchmarks/treedb_vectordbbench_cohere10m_lifecycle_2026-09-01.md).
+
 ### YCSB Server Workload
 
 External `go-ycsb`, local loopback TCP, `recordcount=100000`,

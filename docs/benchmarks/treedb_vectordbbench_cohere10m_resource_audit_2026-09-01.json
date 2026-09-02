@@ -1,0 +1,26 @@
+{
+  "captured_at": "2026-09-01T23:30:30Z",
+  "region": "us-west-2",
+  "campaign": "treedb-cohere10m-qualification-20260901-post4584",
+  "retained_snapshot": {
+    "snapshot_id": "snap-08ce3b93c55890efe",
+    "state": "completed",
+    "progress": "100%",
+    "start_time": "2026-09-01T22:16:20.425Z",
+    "completion_observed_at": "2026-09-01T23:28:20Z",
+    "volume_size_gib": 500,
+    "encrypted": true,
+    "description": "TreeDB Cohere-10M query-ready post-4584 exact fcc1d79696a9b7c6655b793f6224f6937e698ce5",
+    "tags": {
+      "Retention": "explicit-query-ready-asset",
+      "SourceCommit": "fcc1d79696a9b7c6655b793f6224f6937e698ce5",
+      "Name": "treedb-cohere10m-query-ready-post4584",
+      "Campaign": "treedb-cohere10m-qualification-20260901-post4584"
+    }
+  },
+  "active_instances": [],
+  "volumes": [],
+  "key_pairs": [],
+  "security_groups": [],
+  "verdict": "PASS: no unintended campaign resources remain; only the explicitly retained completed snapshot remains"
+}
