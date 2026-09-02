@@ -34,7 +34,7 @@
       "TreeDB/collections/vector_index_rebuild.go": "21bed0f84ae5301d17619ed2753300be73cf422c"
     },
     "harness_blobs": {
-      "scripts/treedb_vectordbbench_artifact.py": "cdcef067675c41850d131aa1c05a9b8ca2853fda"
+      "scripts/treedb_vectordbbench_artifact.py": "435a96f6a996822610cf8ec4d80e15378e1af0c9"
     },
     "vectordbbench": {
       "root": "/mnt/fast4tb/codex-vectordbbench-4545",
@@ -385,7 +385,9 @@
           "docs/benchmarks/treedb_construction_policy_history_2026-09-02.md",
           "scripts/treedb_construction_policy_4587.py",
           "scripts/test_treedb_construction_policy_4587.py",
-          "scripts/treedb_vdbbench_search_existing_index.py"
+          "scripts/treedb_vdbbench_search_existing_index.py",
+          "scripts/treedb_vectordbbench_artifact.py",
+          "scripts/treedb_vectordbbench_artifact_test.py"
         ],
         "properties": {
           "docs/benchmarks/treedb_construction_policy_c0_4587.json": {
@@ -405,6 +407,14 @@
             "pattern": "^[0-9a-f]{64}$"
           },
           "scripts/treedb_vdbbench_search_existing_index.py": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "scripts/treedb_vectordbbench_artifact.py": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "scripts/treedb_vectordbbench_artifact_test.py": {
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
           }

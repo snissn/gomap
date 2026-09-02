@@ -903,6 +903,12 @@ class ValidatorMutations(unittest.TestCase):
                 with mock.patch.object(policy, "sha256_file", side_effect=changed_digest):
                     self.assert_invalid(packet, "authorized protocol file")
 
+    def test_authorization_schema_matches_protocol_files(self) -> None:
+        protocol_schema = self.fixture.contract[
+            "execution_authorization_schema"]["properties"]["protocol_files"]
+        self.assertEqual(protocol_schema["required"], list(policy.PROTOCOL_PATHS))
+        self.assertEqual(set(protocol_schema["properties"]), set(policy.PROTOCOL_PATHS))
+
     def test_authorization_binds_commit_contract_and_source_identities(self) -> None:
         mutations = [
             ("authorized execution commit", lambda value: value.update({"execution_commit": "3" * 40})),
@@ -1017,6 +1023,32 @@ class ValidatorMutations(unittest.TestCase):
         measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
         run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
         self.assert_invalid(packet, "data file paths must be unique")
+
+    def test_persisted_data_symlink_cannot_escape_data_root(self) -> None:
+        packet = self.fixture.go_packet()
+        run = packet["runs"][4]
+        root = Path(run["artifact"]["root"])
+        measurement_path = root / run["measurement_evidence"]["path"]
+        measurement = json.loads(measurement_path.read_text())
+        source_path = root / measurement["source"]["path"]
+        source = json.loads(source_path.read_text())
+        data_root = Path(source["data_root"])
+        external = root / "external-data"
+        external.write_bytes(b"unrelated external storage")
+        (data_root / "external-link").symlink_to(external)
+        source["data_files"].append({
+            "path": "external-link",
+            "size": external.stat().st_size,
+            "sha256": policy.sha256_file(external),
+        })
+        source_path.write_text(json.dumps(source, sort_keys=True) + "\n")
+        measurement["source"]["sha256"] = policy.sha256_file(source_path)
+        measurement["resources"]["persisted_bytes"] += external.stat().st_size
+        measurement["determinism"]["persisted_data_ledger_checksum"] = policy.canonical_sha256(
+            source["data_files"])
+        measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
+        run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
+        self.assert_invalid(packet, "data file path must remain inside data root")
 
     def test_fallback_and_result_count(self) -> None:
         packet = self.fixture.no_go_packet()

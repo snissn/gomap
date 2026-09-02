@@ -1333,6 +1333,10 @@ def measurement_source_values(
         if relative.is_absolute() or ".." in relative.parts:
             fail("measurement source data file path must be relative")
         path = (data_root / relative).resolve()
+        try:
+            path.relative_to(data_root)
+        except ValueError:
+            fail("measurement source data file path must remain inside data root")
         if path in expected_paths:
             fail("measurement source data file paths must be unique")
         exact(path.stat().st_size, nonnegative_int(item["size"], "measurement source file size"),
