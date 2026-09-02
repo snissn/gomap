@@ -48,6 +48,10 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 	}
 	sum := sha256.Sum256(raw)
 	manifestSHA := hex.EncodeToString(sum[:])
+	cardinalities := map[string]int{
+		filterUnfiltered: 54, filterTenantAlpha: 27,
+		filterTenantAlphaWorkspaceRed: 18, filterModerateRange: 9,
+	}
 	harness := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	artifact := qdrantComparisonArtifact{
 		Schema: qdrantComparisonArtifactSchema, Backend: "qdrant_server", HarnessRevision: harness,
@@ -56,7 +60,11 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 		ConfigSHA256: manifest.ConfigSHA256, SourceCount: 18, ChunkCount: 54, QueryCount: 3,
 		Server: qdrantComparisonServer{
 			Version: "1.19.0", Deployment: "standalone", BinarySHA256: manifest.Config.QdrantBinarySHA256, Identity: "pid:1|reopened_pid:2",
-			Config: map[string]any{"dense": manifest.Config.DenseVectorName, "sparse": manifest.Config.SparseVectorName, "exact": false, "full_scan_threshold": float64(0)},
+			Config: map[string]any{
+				"dense": manifest.Config.DenseVectorName, "sparse": manifest.Config.SparseVectorName, "exact": false,
+				"full_scan_threshold": float64(10), "full_scan_threshold_unit": "KiB",
+			},
+			IndexProof: qdrantComparisonIndexProof{IndexedVectorsCount: 54, FilterCardinalities: cardinalities},
 		},
 		Resources: qdrantComparisonResources{
 			HostPIDMetrics: "observed_process_samples_across_pre_and_post_restart_segments",
@@ -115,6 +123,8 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		{"wrong binary hash", func(a *qdrantComparisonArtifact) { a.Server.BinarySHA256 = strings.Repeat("0", 64) }},
 		{"exact search", func(a *qdrantComparisonArtifact) { a.Server.Config["exact"] = true }},
 		{"full scan threshold", func(a *qdrantComparisonArtifact) { a.Server.Config["full_scan_threshold"] = float64(1) }},
+		{"missing indexed vectors", func(a *qdrantComparisonArtifact) { a.Server.IndexProof.IndexedVectorsCount = 0 }},
+		{"wrong filter cardinality", func(a *qdrantComparisonArtifact) { a.Server.IndexProof.FilterCardinalities[filterUnfiltered] = 53 }},
 		{"missing route", func(a *qdrantComparisonArtifact) { a.Cells = a.Cells[:len(a.Cells)-1] }},
 		{"fallback", func(a *qdrantComparisonArtifact) { a.Cells[0].RouteProof.Fallbacks = 1 }},
 		{"exhaustive", func(a *qdrantComparisonArtifact) { a.Cells[0].RouteProof.ExhaustiveSearch = true }},

@@ -16,13 +16,19 @@ const (
 	applicationComparisonSchema    = "treedb-rag-system-comparison/v1"
 )
 
+type qdrantComparisonIndexProof struct {
+	IndexedVectorsCount int            `json:"indexed_vectors_count"`
+	FilterCardinalities map[string]int `json:"filter_cardinalities"`
+}
+
 type qdrantComparisonServer struct {
-	Version      string         `json:"version"`
-	Deployment   string         `json:"deployment"`
-	BinarySHA256 string         `json:"binary_sha256"`
-	Identity     string         `json:"identity"`
-	LocalMode    bool           `json:"local_mode"`
-	Config       map[string]any `json:"config"`
+	Version      string                     `json:"version"`
+	Deployment   string                     `json:"deployment"`
+	BinarySHA256 string                     `json:"binary_sha256"`
+	Identity     string                     `json:"identity"`
+	LocalMode    bool                       `json:"local_mode"`
+	Config       map[string]any             `json:"config"`
+	IndexProof   qdrantComparisonIndexProof `json:"index_proof"`
 }
 
 type qdrantComparisonProcessSample struct {
@@ -284,15 +290,34 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		return fmt.Errorf("Qdrant artifact runtime/manifest/hash/cardinality binding mismatch")
 	}
 	exact, exactOK := artifact.Server.Config["exact"].(bool)
-	fullScanThreshold, fullScanOK := artifact.Server.Config["full_scan_threshold"].(float64)
+	fullScanThresholdKB, fullScanOK := artifact.Server.Config["full_scan_threshold"].(float64)
 	if artifact.Server.Version != manifest.Config.QdrantServerVersion || artifact.Server.LocalMode ||
 		artifact.Server.Identity == "" || !strings.Contains(artifact.Server.Identity, "|reopened_pid:") ||
 		artifact.Server.Deployment != "standalone" ||
 		artifact.Server.BinarySHA256 != manifest.Config.QdrantBinarySHA256 ||
 		artifact.Server.Config["dense"] != manifest.Config.DenseVectorName ||
 		artifact.Server.Config["sparse"] != manifest.Config.SparseVectorName ||
-		!exactOK || exact || !fullScanOK || fullScanThreshold != 0 {
-		return fmt.Errorf("Qdrant artifact lacks pinned standalone approximate-HNSW server/config identity")
+		artifact.Server.Config["full_scan_threshold_unit"] != "KiB" ||
+		!exactOK || exact || !fullScanOK || fullScanThresholdKB != 10 ||
+		artifact.Server.IndexProof.IndexedVectorsCount < len(manifest.Chunks) {
+		return fmt.Errorf("Qdrant artifact lacks pinned standalone server/index configuration")
+	}
+	if len(artifact.Server.IndexProof.FilterCardinalities) != len(manifest.Filters) {
+		return fmt.Errorf("Qdrant artifact lacks exact filter-cardinality proof")
+	}
+	for _, filter := range manifest.Filters {
+		cardinality := 0
+		for _, chunk := range manifest.Chunks {
+			if (filter.Tenant == "" || chunk.Tenant == filter.Tenant) &&
+				(filter.Workspace == "" || chunk.Workspace == filter.Workspace) &&
+				(filter.UpdatedYearGTE == 0 || chunk.UpdatedYear >= filter.UpdatedYearGTE) {
+				cardinality++
+			}
+		}
+		if artifact.Server.IndexProof.FilterCardinalities[filter.ID] != cardinality ||
+			cardinality*len(manifest.Chunks[0].DenseVector)*4 <= int(fullScanThresholdKB)*1024 {
+			return fmt.Errorf("Qdrant filter %s cardinality/footprint proof mismatch", filter.ID)
+		}
 	}
 	if len(artifact.Failures) != 0 || artifact.Build.Points != len(manifest.Chunks) ||
 		artifact.Build.Seconds <= 0 || artifact.Build.Seconds > float64(manifest.Config.PhaseTimeoutSeconds) ||
@@ -418,7 +443,7 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, outputPath, 
 		ManifestSHA256:           manifestSHA, FixtureSHA256: manifest.FixtureSHA256,
 		SemanticVectorSHA256: manifest.SemanticVectorSHA256, ConfigSHA256: manifest.ConfigSHA256,
 		Rows: treeRows, Dispositions: []string{
-			"All TreeDB-versus-Qdrant latency rows are directional: lexical scoring differs, and TreeDB dense/hybrid uses declared_column_graph_exact while Qdrant uses HNSW exact=false.",
+			"All TreeDB-versus-Qdrant latency rows are directional: lexical scoring differs; TreeDB dense/hybrid uses declared_column_graph_exact, while Qdrant HNSW is indexed and exact=false is requested but server planner selection is opaque.",
 			"Parent collapse is disabled for both systems; chunk rankings are retained and parent recall is derived from frozen parent IDs.",
 			"The 18-source/54-chunk synthetic fixture is bounded comparison evidence, not a public winner claim.",
 		}}
