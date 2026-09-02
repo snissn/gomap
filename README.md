@@ -144,25 +144,26 @@ measurements, raw data, and evidence archive:
 
 ### VectorDBBench Cohere 10M Lifecycle
 
-A production-shaped AWS run durably loaded 10 million Cohere vectors, built the
-deferred column graph, cold-reopened the database, and served the optimized
-scalar-u8 traversal plus effective 192-row FP32-rerank route (configured maximum
-400).
+A production-shaped AWS run used an `r6i.8xlarge` server and `c6i.4xlarge`
+client to durably load 10 million 768-dimensional Cohere vectors, build the
+deferred column graph, cold-reopen the database, and serve scalar-u8 traversal
+with 192-candidate FP32 reranking.
 
-| Measurement | Result |
+| Cohere-10M result | Measurement |
 | --- | ---: |
-| Durable ingestion | 502.31 s; 19,908 vectors/s |
-| Sustained throughput | M10/M2 81.71% |
-| Offline optimize | 6,296.34 s |
-| Query-ready load plus optimize | 6,798.65 s |
-| Cold reopen | 10,000,000 rows exact; optimized route, no fallback |
-| Search | 21,986.66 QPS |
-| Recall@100 / NDCG@100 | 0.9335 / 0.9425 |
-| Concurrent p99 | 2.164 ms |
+| Durable load | 8m 22s; 19,908 vectors/s average |
+| Final 1M load window | 17,518 vectors/s |
+| Offline graph build | 1h 44m 56s |
+| Load to query-ready | 1h 53m 19s |
+| Cold reopen readiness | 34.21 s; exact 10,000,000 rows |
+| Search at concurrency 32 | 21,987 QPS; 2.164 ms p99 |
+| Search quality | 0.9335 recall@100; 0.9425 NDCG@100 |
+| Query-ready footprint | 79 GiB disk; 35.35 GiB RSS |
+| Peak build memory | 75.48 GiB RSS; zero swap |
+| Complete AWS campaign | approximately $6.44 |
 
-Adjacency construction took 5,774.24 seconds and represented 92.5% of
-column-graph build time. Full topology, lifecycle gates,
-profiles, bottleneck attribution, raw evidence, archive, and caveats:
+Full topology, lifecycle gates, profiles, bottleneck attribution, raw evidence,
+archive, and caveats:
 [September 1 Cohere 10M lifecycle report](docs/benchmarks/treedb_vectordbbench_cohere10m_lifecycle_2026-09-01.md).
 
 ### YCSB Server Workload
@@ -335,27 +336,20 @@ Source:
 
 ### Indexed Text/Vector/Hybrid Insert And Search Workload
 
-The #2589 optimized context rows use the #2564 fixture on an active Apple M3 laptop:
-`256` JSON documents, scalar indexes on `tenant`/`region`, a `lexical`
-title/body text index (new text indexes default to text-v2; v1 is explicit
-compatibility), and an exact cosine column graph (`dims=16`, `M=8`). The
-insert row times `InsertBatch` + `Flush` + `RebuildVectorIndex`; search rows
-build/index the fixture before timing and then time the search API call only.
-Original #2564 rows remain in the linked runbook for context; treat these as
-same-host/context evidence, not universal throughput claims.
+Apple M3 snapshot using `256` JSON documents, scalar indexes on
+`tenant`/`region`, a `lexical` title/body text index, and an exact cosine column
+graph (`dims=16`, `M=8`). The insert row times `InsertBatch` + `Flush` +
+`RebuildVectorIndex`; search rows build the fixture before timing and then time
+only the search API call.
 
-| row | timed boundary | ns/op median | ops/sec | B/op | allocs/op | allocation delta vs #2564 context | key counters |
-| --- | --- | ---: | ---: | ---: | ---: | --- | --- |
-| Indexed insert/readiness | 256-doc batch insert + flush + vector rebuild | 68,588,625 | 14.58 ops/sec / 3,732.4 docs/sec | 7,902,142 | 31,953 | B/op -28.3%; allocs/op -71.8% | 141,939 insert ns/doc; 130,717 vector rebuild ns/doc |
-| Text candidates | `SearchHybridTextCandidates`, no docs | 140,917 | 7,096.38 | 109,298 | 878 | B/op -74.3%; allocs/op -88.4% | 64 text candidates; 0 docs fetched; 0 fail/fallback |
-| Vector candidates | `SearchHybridVectorCandidates`, no docs | 20,584 | 48,582.60 | 36,408 | 82 | B/op 0.0%; allocs/op 0.0% | 64 vector candidates; 0 docs fetched; 0 fail/fallback |
-| Hybrid no-doc search | `SearchHybrid` + rare scalar filter, no docs | 163,924 | 6,100.41 | 198,426 | 1,078 | B/op -61.4%; allocs/op -86.2% | 64 text + 64 vector candidates; 16 fused; 0 docs fetched |
-| Hybrid final fetch | `SearchHybrid` + rare scalar filter + final topK fetch | 377,382 | 2,649.83 | 256,232 | 2,055 | B/op -55.2%; allocs/op -76.6% | 10 docs fetched at topK=10; 112 scalar rejections; 0 fail/fallback |
+| row | timed boundary | ns/op median | ops/sec | B/op | allocs/op | key counters |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| Indexed insert/readiness | 256-doc batch insert + flush + vector rebuild | 68,588,625 | 14.58 ops/sec / 3,732.4 docs/sec | 7,902,142 | 31,953 | 141,939 insert ns/doc; 130,717 vector rebuild ns/doc |
+| Text candidates | `SearchHybridTextCandidates`, no docs | 140,917 | 7,096.38 | 109,298 | 878 | 64 text candidates; 0 docs fetched; 0 fail/fallback |
+| Vector candidates | `SearchHybridVectorCandidates`, no docs | 20,584 | 48,582.60 | 36,408 | 82 | 64 vector candidates; 0 docs fetched; 0 fail/fallback |
+| Hybrid no-doc search | `SearchHybrid` + rare scalar filter, no docs | 163,924 | 6,100.41 | 198,426 | 1,078 | 64 text + 64 vector candidates; 16 fused; 0 docs fetched |
+| Hybrid final fetch | `SearchHybrid` + rare scalar filter + final topK fetch | 377,382 | 2,649.83 | 256,232 | 2,055 | 10 docs fetched at topK=10; 112 scalar rejections; 0 fail/fallback |
 
-The strict same-host M4 paired insert/readiness delta was B/op -28.2%,
-allocs/op -71.8%, and ns/op +0.8%. Remaining allocation floors include DB
-open/commitlog setup in profiles plus value-log append buffers, typed-column
-image builders, text analysis/posting construction, and vector rebuild state.
 Source, commands, artifact paths, guardrails, and caveats:
 [TreeDB indexed insertion/search benchmark](docs/benchmarks/treedb_index_insert_search_benchmarks.md).
 
