@@ -36,6 +36,7 @@ PROTOCOL_PATHS = (
     SEARCH_HELPER_PATH,
     "scripts/treedb_vectordbbench_artifact.py",
     "scripts/treedb_vectordbbench_artifact_test.py",
+    "cmd/treedb_column_section_audit/main.go",
 )
 DRAFT_PATHS = set(PROTOCOL_PATHS)
 WORK_KEYS = {"planning", "reciprocal"}
