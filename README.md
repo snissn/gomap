@@ -146,7 +146,8 @@ measurements, raw data, and evidence archive:
 
 A production-shaped AWS run durably loaded 10 million Cohere vectors, built the
 deferred column graph, cold-reopened the database, and served the optimized
-scalar-u8 traversal plus FP32-rerank route.
+scalar-u8 traversal plus effective 192-row FP32-rerank route (configured maximum
+400).
 
 | Measurement | Result |
 | --- | ---: |

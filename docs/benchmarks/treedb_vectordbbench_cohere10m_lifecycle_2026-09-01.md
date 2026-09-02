@@ -46,7 +46,9 @@ partial index generation was observed.
 - Load: 500 documents/request, 32 persistent workers,
   `command_wal_durable`, deferred column-graph build.
 - Index/search: M16, efConstruction300, efSearch192, scalar-u8 traversal using
-  `embedding.scalar_u8.fast`, then FP32 rerank400.
+  `embedding.scalar_u8.fast`, and a configured FP32 rerank budget of 400.
+  Because efSearch192 capped the candidate pool, the observed effective
+  shortlist and exact-score count were both 192 rows/query.
 - Timed search: `stats_mode=production`, IDs-only response, concurrency 32 for
   30 seconds.
 
@@ -165,7 +167,8 @@ active; HTTP transport and the split client were not the measured ceiling.
 The production search row was:
 
 ```text
-TreeDB scalar-u8 + FP32 rerank400, Cohere-10M, topK100,
+TreeDB scalar-u8 + FP32 rerank192 effective (configured budget400),
+Cohere-10M, topK100,
 M16 / efConstruction300 / efSearch192, concurrency32, 30s:
 QPS 21,986.664; recall 0.9335; NDCG 0.9425;
 concurrent p99 2.1638 ms; p95 1.8965 ms; average 1.4436 ms.
