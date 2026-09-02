@@ -12,6 +12,21 @@ import (
 
 const treeDBComparisonArtifactSchema = "treedb-rag-treedb-comparison/v1"
 
+type comparisonProcessUsage struct {
+	Available    bool
+	CPUSeconds   float64
+	PeakRSSBytes int64
+}
+
+type comparisonProcessResources struct {
+	Available    bool    `json:"available"`
+	CPUSeconds   float64 `json:"cpu_seconds"`
+	PeakRSSBytes int64   `json:"peak_rss_bytes"`
+	CPUSemantics string  `json:"cpu_semantics"`
+	RSSSemantics string  `json:"rss_semantics"`
+	Scope        string  `json:"scope"`
+}
+
 type treeDBComparisonArtifact struct {
 	Schema               string                      `json:"schema"`
 	Authority            string                      `json:"authority"`
@@ -30,6 +45,7 @@ type treeDBComparisonArtifact struct {
 	BuildReopenSeconds   float64                     `json:"build_reopen_seconds"`
 	QuerySeconds         float64                     `json:"query_seconds"`
 	StorageBytes         int64                       `json:"storage_bytes"`
+	ProcessResources     comparisonProcessResources  `json:"process_resources"`
 	Lifecycle            lifecycleEvidence           `json:"lifecycle"`
 	Rows                 []applicationRow            `json:"rows"`
 	Failures             []string                    `json:"failures"`
@@ -84,6 +100,10 @@ func runTreeDBComparisonEvidence(cfg applicationConfig, outputPath string) error
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
+	usageBefore, err := comparisonProcessUsageSnapshot()
+	if err != nil {
+		return err
+	}
 	dims, provider := embeddingCellConfig("semantic_minilm", bundle)
 	setupStarted := time.Now()
 	env, lifecycle, err := openApplicationEnvironment(cfg, &fixture, bundle, "semantic_minilm", provider, dims, filepath.Join(root, "semantic_minilm"))
@@ -119,19 +139,36 @@ func runTreeDBComparisonEvidence(cfg applicationConfig, outputPath string) error
 	if err != nil {
 		return err
 	}
+	usageAfter, err := comparisonProcessUsageSnapshot()
+	if err != nil {
+		return err
+	}
+	resources := comparisonProcessResources{
+		Available:    usageBefore.Available && usageAfter.Available,
+		CPUSemantics: "getrusage(RUSAGE_SELF) user+system CPU delta",
+		RSSSemantics: "getrusage(RUSAGE_SELF) process high-water RSS; Darwin bytes, Linux KiB normalized to bytes",
+		Scope:        "fresh comparison process; build, lifecycle reopen, and all 12 query cells",
+	}
+	if resources.Available {
+		resources.CPUSeconds = usageAfter.CPUSeconds - usageBefore.CPUSeconds
+		resources.PeakRSSBytes = usageAfter.PeakRSSBytes
+	} else {
+		resources.CPUSemantics = "unavailable on this operating system"
+		resources.RSSSemantics = "unavailable on this operating system"
+	}
 	provenance, err := buildApplicationProvenance(cfg, &fixture, bundle)
 	if err != nil {
 		return err
 	}
 	artifact := treeDBComparisonArtifact{
-		Schema: treeDBComparisonArtifactSchema, Authority: "M1_RETAINED_BASELINE",
+		Schema: treeDBComparisonArtifactSchema, Authority: "BOUNDED_COMPARISON_EVIDENCE",
 		GeneratedAtUTC: time.Now().UTC().Format(time.RFC3339Nano), ManifestSHA256: manifestSHA,
 		ProductBaseSHA: provenance.ProductBaseSHA, HarnessRevision: provenance.HarnessRevision,
 		BinarySHA256: provenance.BinarySHA256, FixtureSHA256: provenance.FixtureSHA256,
 		SemanticVectorSHA256: provenance.SemanticVectorSHA256, ConfigSHA256: manifest.ConfigSHA256,
 		Config: manifest.Config, SourceCount: len(manifest.Sources), ChunkCount: len(manifest.Chunks), QueryCount: len(manifest.Queries),
 		BuildReopenSeconds: buildReopenSeconds, QuerySeconds: querySeconds, StorageBytes: storageBytes,
-		Lifecycle: lifecycle, Rows: rows,
+		Lifecycle: lifecycle, ProcessResources: resources, Rows: rows,
 	}
 	if _, err := validateTreeDBComparisonArtifact(&artifact, manifest, manifestSHA); err != nil {
 		return err

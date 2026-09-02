@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 func validTreeDBComparisonArtifact(t *testing.T) (applicationComparisonManifest, string, treeDBComparisonArtifact) {
 	t.Helper()
@@ -17,7 +20,7 @@ func validTreeDBComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 		t.Fatal(err)
 	}
 	artifact := treeDBComparisonArtifact{
-		Schema: treeDBComparisonArtifactSchema, Authority: "M1_RETAINED_BASELINE",
+		Schema: treeDBComparisonArtifactSchema, Authority: "BOUNDED_COMPARISON_EVIDENCE",
 		ManifestSHA256: manifestSHA, ProductBaseSHA: manifest.ProductBaseSHA,
 		HarnessRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		BinarySHA256:    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -25,6 +28,12 @@ func validTreeDBComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 		ConfigSHA256: manifest.ConfigSHA256, Config: manifest.Config,
 		SourceCount: 18, ChunkCount: 54, QueryCount: 3, BuildReopenSeconds: 1, QuerySeconds: 1, StorageBytes: 1,
 		Lifecycle: lifecycleEvidence{ColdReopenParity: true, TextIndexParity: true, VectorIndexParity: true, ScalarIndexParity: true},
+		ProcessResources: comparisonProcessResources{
+			Available: true, CPUSeconds: 1, PeakRSSBytes: 1024,
+			CPUSemantics: "getrusage(RUSAGE_SELF) user+system CPU delta",
+			RSSSemantics: "getrusage(RUSAGE_SELF) process high-water RSS; Darwin bytes, Linux KiB normalized to bytes",
+			Scope:        "fresh comparison process; build, lifecycle reopen, and all 12 query cells",
+		},
 	}
 	for _, route := range applicationRoutes {
 		for _, filter := range applicationFilterOrder {
@@ -51,6 +60,9 @@ func TestTreeDBComparisonValidatorRejectsMismatchedEvidence(t *testing.T) {
 		{"partial samples", func(a *treeDBComparisonArtifact) { a.Rows[0].Samples = a.Rows[0].Samples[:299] }},
 		{"phase timeout", func(a *treeDBComparisonArtifact) { a.QuerySeconds = 91 }},
 		{"reopen failure", func(a *treeDBComparisonArtifact) { a.Lifecycle.ColdReopenParity = false }},
+		{"missing CPU", func(a *treeDBComparisonArtifact) { a.ProcessResources.CPUSeconds = 0 }},
+		{"missing peak RSS", func(a *treeDBComparisonArtifact) { a.ProcessResources.PeakRSSBytes = 0 }},
+		{"wrong resource semantics", func(a *treeDBComparisonArtifact) { a.ProcessResources.RSSSemantics = "current RSS" }},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -67,5 +79,17 @@ func TestTreeDBComparisonValidatorAcceptsExactEvidence(t *testing.T) {
 	manifest, manifestSHA, artifact := validTreeDBComparisonArtifact(t)
 	if _, err := validateTreeDBComparisonArtifact(&artifact, manifest, manifestSHA); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestComparisonProcessUsageSnapshot(t *testing.T) {
+	snapshot, err := comparisonProcessUsageSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
+		if !snapshot.Available || snapshot.CPUSeconds < 0 || snapshot.PeakRSSBytes <= 0 {
+			t.Fatalf("invalid getrusage snapshot: %+v", snapshot)
+		}
 	}
 }
