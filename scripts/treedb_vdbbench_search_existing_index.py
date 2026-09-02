@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Fail-closed route probes for VectorDBBench search on an existing TreeDB index.
 
-This helper never creates, resets, optimizes, or mutates an index. It captures
-checksum-ready metadata plus the required full-diagnostic and production/IDs
-responses immediately before the unmodified VectorDBBench --skip-load
---skip-drop-old search command. The VectorDBBench adapter then independently
-idempotently opens the same exact configuration.
+This helper never creates, resets, optimizes, or mutates an index. For each
+transport it captures the required route response and immediately executes the
+matching unmodified VectorDBBench --skip-load/--skip-drop-old command into a
+new result directory. Each result is bound to its own append-only command
+record; preexisting outputs, reruns, and reordered route invocations fail.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import json
 import math
 import re
 from pathlib import Path
+import subprocess
 import sys
 import os
 from typing import Any
@@ -62,8 +63,8 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 def canonical_sha256(value: Any) -> str:
-    payload = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
-    return hashlib.sha256(payload).hexdigest()
+    payload = json.dumps(value, separators=(",", ":"), sort_keys=True) + "\n"
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def iso_now() -> str:
@@ -112,8 +113,8 @@ def write_origin(
         "command_ledger_path": str(args.command_ledger.relative_to(args.artifact_root)),
         "command_sequence": command_record["sequence"],
         "command_record_sha256": canonical_sha256(command_record),
-        "probe_started_at": command_record["started_at"],
-        "probe_completed_at": command_record["completed_at"],
+        "probe_started_at": command_record["probe_started_at"],
+        "probe_completed_at": command_record["probe_completed_at"],
     })
 
 
@@ -190,6 +191,90 @@ def validate_production(response: dict[str, Any], args: argparse.Namespace) -> N
         fail("production response result count does not equal topK")
 
 
+def vdbbench_command(args: argparse.Namespace, kind: str) -> list[str]:
+    command = [
+        sys.executable, "-m", "vectordb_bench.cli.vectordbbench",
+        "treedbcolumngraphexact" if args.route == "exact" else "treedbscalaru8rerank",
+        "--base-url", args.base_url, "--index-name", args.index_name,
+        "--skip-drop-old", "--skip-load", "--search-serial", "--search-concurrent",
+        "--m", str(args.m), "--ef-construction", str(args.ef_construction),
+        "--ef-search", str(args.ef_search), "--case-type", "PerformanceCustomDataset",
+        "--k", str(args.top_k), "--num-concurrency", "32", "--concurrency-duration", "30",
+        "--custom-case-name", f"treedb-4587-{args.scale}-{args.role}-{kind}-{args.route}",
+        "--custom-dataset-name", args.dataset_name, "--custom-dataset-dir", str(args.dataset_dir),
+        "--custom-dataset-size", str(args.scale), "--custom-dataset-dim", str(args.dimensions),
+        "--custom-dataset-file-count", "1", "--query-embedding-encoding", "f32_le",
+    ]
+    if kind == "diagnostic":
+        command.extend(["--stats-mode", "full_diagnostics", "--response-format", "full"])
+    else:
+        command.extend([
+            "--stats-mode", "production", "--response-format", "ids",
+            "--skip-vector-index-guards",
+        ])
+    if args.route == "scalar_u8_rerank":
+        command.extend([
+            "--quantized-index-name", args.quantized_index_name,
+            "--quantized-rerank-candidates", str(args.rerank_candidates),
+        ])
+    return command
+
+
+def run_vdbbench_command(
+    args: argparse.Namespace, kind: str, response_path: Path,
+    probe_started_at: str, probe_completed_at: str,
+) -> tuple[Path, dict[str, Any]]:
+    result_path = args.diagnostic_result if kind == "diagnostic" else args.production_result
+    result_root = args.artifact_root / f"vdbbench-results-{args.route}-{kind}"
+    if result_path.exists() or result_root.exists():
+        fail(f"{kind} canonical result destination already exists")
+    command = vdbbench_command(args, kind)
+    started_at = iso_now()
+    env = os.environ.copy()
+    env["RESULTS_LOCAL_DIR"] = str(result_root)
+    bound_env = {
+        "RESULTS_LOCAL_DIR": str(result_root),
+        "PYTHONPATH": os.pathsep.join((
+            str(args.vectordbbench_dir),
+            str(ROOT / "clients" / "python" / "treedb_client" / "src"),
+        )),
+        "LOG_FILE": str(args.artifact_root / f"vdbbench-{args.route}-{kind}.log"),
+        "NUM_PER_BATCH": "500",
+    }
+    env.update(bound_env)
+    completed = subprocess.run(command, cwd=args.vectordbbench_dir, env=env)
+    completed_at = iso_now()
+    if completed.returncode != 0:
+        fail(f"{kind} canonical VectorDBBench command failed with exit {completed.returncode}")
+    generated = list(result_root.rglob("result_*.json"))
+    if len(generated) != 1:
+        fail(f"{kind} canonical VectorDBBench command must create exactly one result")
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    generated[0].replace(result_path)
+    existing_records = args.command_ledger.read_text().splitlines() if args.command_ledger.exists() else []
+    record = {
+        "schema_version": "treedb-construction-policy-4587-probe-command/v2",
+        "sequence": len(existing_records),
+        "argv": sys.argv,
+        "vdbbench_argv": command,
+        "vdbbench_env": bound_env,
+        "kind": kind,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "probe_started_at": probe_started_at,
+        "probe_completed_at": probe_completed_at,
+        "exit_code": completed.returncode,
+        "query_sha256": sha256_file(args.query_json),
+        "run_id": args.run_id,
+        "route": args.route,
+        "result_sha256": sha256_file(result_path),
+        "response_sha256": sha256_file(response_path),
+        "index_metadata_sha256": sha256_file(args.metadata_out),
+    }
+    append_command_record(args.command_ledger, record)
+    return result_path, record
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", required=True)
@@ -209,6 +294,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--execution-commit", required=True)
     parser.add_argument("--dataset-sha256", required=True)
     parser.add_argument("--scale", required=True, type=int)
+    parser.add_argument("--dataset-name", required=True)
+    parser.add_argument("--dataset-dir", required=True, type=Path)
+    parser.add_argument("--vectordbbench-dir", required=True, type=Path)
     parser.add_argument("--role", required=True)
     parser.add_argument("--partition", required=True)
     parser.add_argument("--lifecycle-sha256", required=True)
@@ -241,9 +329,6 @@ def parse_args() -> argparse.Namespace:
     if not args.run_id or not args.role or not args.partition:
         fail("run identity strings must be non-empty")
     positive_int(args.scale, "scale")
-    for path in (args.diagnostic_result, args.production_result):
-        if not path.is_file():
-            fail(f"canonical result does not exist: {path}")
     paths = (
         args.query_json, args.metadata_out, args.diagnostic_response_out,
         args.production_response_out, args.diagnostic_result, args.production_result,
@@ -254,6 +339,12 @@ def parse_args() -> argparse.Namespace:
             path.resolve().relative_to(args.artifact_root)
         except ValueError:
             fail(f"search evidence path escapes artifact root: {path}")
+    args.dataset_dir = args.dataset_dir.resolve()
+    if not args.dataset_dir.is_dir():
+        fail("dataset_dir must exist")
+    args.vectordbbench_dir = args.vectordbbench_dir.resolve()
+    if not args.vectordbbench_dir.is_dir():
+        fail("vectordbbench_dir must exist")
     manifest_path = args.artifact_root / "manifest.json"
     if sha256_file(manifest_path) != args.manifest_sha256:
         fail("manifest_sha256 does not match artifact manifest")
@@ -271,17 +362,28 @@ def parse_args() -> argparse.Namespace:
     completed = [event.get("timestamp") for event in events if event.get("stage") == "teardown"]
     if starts != [args.lifecycle_started_at] or completed != [args.lifecycle_completed_at]:
         fail("lifecycle timestamps do not match lifecycle file")
+    expected_records = 0 if args.route == "exact" else 2
+    existing_records = args.command_ledger.read_text().splitlines() if args.command_ledger.exists() else []
+    if len(existing_records) != expected_records:
+        fail("route execution is not append-only or is out of order")
+    for output in (
+        args.metadata_out, args.diagnostic_response_out, args.production_response_out,
+        args.diagnostic_result, args.production_result, args.diagnostic_origin_out,
+        args.production_origin_out,
+    ):
+        if output.exists():
+            fail(f"search evidence output already exists: {output}")
     return args
 
 
 def main() -> int:
     args = parse_args()
     query = load_query(args.query_json, args.dimensions)
-    started_at = iso_now()
     client = TreeDBClient(args.base_url, timeout=args.timeout)
     try:
         before = jsonable(client.open_index(args.index_name))
         validate_metadata(before, args)
+        write_json(args.metadata_out, before)
         common = {
             "ef_search": args.ef_search,
             "query_mode": "exact" if args.route == "exact" else "quantized_rerank",
@@ -293,51 +395,32 @@ def main() -> int:
                 "quantized_index_name": args.quantized_index_name,
                 "quantized_rerank_candidates": args.rerank_candidates,
             })
-        diagnostic = jsonable(client.search_vector_index(
-            args.index_name, query, args.top_k, stats_mode="full_diagnostics", response_format="full", **common
-        ))
-        validate_diagnostic(diagnostic, args)
-        production = jsonable(client.search_vector_index(
-            args.index_name, query, args.top_k, stats_mode="production", response_format="ids", **common
-        ))
-        validate_production(production, args)
+        evidence = []
+        for kind, response_path, origin_path in (
+            ("diagnostic", args.diagnostic_response_out, args.diagnostic_origin_out),
+            ("production", args.production_response_out, args.production_origin_out),
+        ):
+            probe_started_at = iso_now()
+            if kind == "diagnostic":
+                response = jsonable(client.search_vector_index(
+                    args.index_name, query, args.top_k, stats_mode="full_diagnostics",
+                    response_format="full", **common))
+                validate_diagnostic(response, args)
+            else:
+                response = jsonable(client.search_vector_index(
+                    args.index_name, query, args.top_k, stats_mode="production",
+                    response_format="ids", **common))
+                validate_production(response, args)
+            probe_completed_at = iso_now()
+            write_json(response_path, response)
+            result_path, command_record = run_vdbbench_command(
+                args, kind, response_path, probe_started_at, probe_completed_at)
+            write_origin(args, kind, result_path, response_path, origin_path, command_record)
+            evidence.append(command_record)
         after = jsonable(client.open_index(args.index_name))
         validate_metadata(after, args)
         if after != before:
-            fail("existing index identity changed during route probes")
-        write_json(args.metadata_out, before)
-        write_json(args.diagnostic_response_out, diagnostic)
-        write_json(args.production_response_out, production)
-        existing_records = args.command_ledger.read_text().splitlines() if args.command_ledger.exists() else []
-        command_record = {
-            "schema_version": "treedb-construction-policy-4587-probe-command/v1",
-            "sequence": len(existing_records),
-            "argv": sys.argv,
-            "started_at": started_at,
-            "completed_at": iso_now(),
-            "exit_code": 0,
-            "query_sha256": sha256_file(args.query_json),
-            "run_id": args.run_id,
-            "route": args.route,
-            "result_sha256": {
-                "diagnostic": sha256_file(args.diagnostic_result),
-                "production": sha256_file(args.production_result),
-            },
-            "response_sha256": {
-                "diagnostic": sha256_file(args.diagnostic_response_out),
-                "production": sha256_file(args.production_response_out),
-            },
-            "index_metadata_sha256": sha256_file(args.metadata_out),
-        }
-        append_command_record(args.command_ledger, command_record)
-        write_origin(
-            args, "diagnostic", args.diagnostic_result,
-            args.diagnostic_response_out, args.diagnostic_origin_out, command_record,
-        )
-        write_origin(
-            args, "production", args.production_result,
-            args.production_response_out, args.production_origin_out, command_record,
-        )
+            fail("existing index identity changed during canonical search commands")
         return 0
     finally:
         client.close()

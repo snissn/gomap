@@ -15,7 +15,7 @@ import subprocess
 import sys
 from typing import Any
 
-SCHEMA = "treedb-construction-policy-4587/v6"
+SCHEMA = "treedb-construction-policy-4587/v7"
 RESULT_SCHEMA = "treedb-construction-policy-4587-results/v5"
 AUTHORIZATION_SCHEMA = "treedb-construction-policy-4587-execution-authorization/v1"
 MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v4"
@@ -95,6 +95,12 @@ GO_GATES = {
     "require_deterministic_identity": True,
     "require_all_route_and_reopen_guardrails": True,
 }
+PROJECTION_MODEL = {
+    "source_scale": 1_000_000,
+    "target_scale": 10_000_000,
+    "complexity": "n_log_n",
+    "frozen_10m_control_adjacency_seconds": 5774.242,
+}
 SEARCH_ORDER = [
     ("diagnostic", "exact"),
     ("production", "exact"),
@@ -152,6 +158,21 @@ def positive_number(value: Any, name: str) -> float:
     if result <= 0:
         fail(f"{name} must be a finite positive number")
     return result
+def finite_number(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        fail(f"{name} must be a finite number")
+    return float(value)
+
+
+def projected_10m_reduction(adjacency_seconds: float, scale: int) -> float | None:
+    if scale != PROJECTION_MODEL["source_scale"]:
+        return None
+    source = PROJECTION_MODEL["source_scale"]
+    target = PROJECTION_MODEL["target_scale"]
+    factor = target * math.log(target) / (source * math.log(source))
+    projected_seconds = positive_number(adjacency_seconds, "projection source adjacency") * factor
+    return 1 - projected_seconds / PROJECTION_MODEL["frozen_10m_control_adjacency_seconds"]
+
 
 
 def unit_interval_number(value: Any, name: str) -> float:
@@ -550,6 +571,11 @@ def validate_contract(contract: dict[str, Any], allow_draft: bool,
     ordering = object_at(contract["experiment"]["ordering"], "experiment.ordering")
     exact(ordering["screening_run_order"], COORDINATES, "screening order")
     exact(ordering["decision_run_order"], [300, "selected_screening_winner"], "decision order")
+    isolation_policy = object_at(
+        contract["experiment"]["isolation_and_noise"], "experiment.isolation_and_noise")
+    exact(isolation_policy["diagnostics_interval_seconds"], 5, "isolation sampling interval")
+    exact(isolation_policy["sampling_gap_tolerance_seconds"], 1, "isolation sampling tolerance")
+    exact(contract["experiment"]["projection_model"], PROJECTION_MODEL, "10M projection model")
     exact(set(contract["experiment"]["required_metrics_per_run"]["diagnostic_work_profile"]), WORK_KEYS,
           "required diagnostic work metrics")
     exact(set(contract["experiment"]["required_metrics_per_run"]["resources"]), RESOURCE_KEYS,
@@ -671,15 +697,16 @@ def read_probe_command_record(
         fail(f"{name}.command_ledger_path escapes artifact root")
     records = [object_at(json.loads(line), f"{name}.command ledger record")
                for line in ledger_path.read_text().splitlines()]
-    if len(records) != 2:
-        fail("probe command ledger must contain exactly two append-only route records")
+    if len(records) != 4:
+        fail("probe command ledger must contain exactly four append-only evidence records")
     for sequence, record in enumerate(records):
         exact_keys(record, {
-            "schema_version", "sequence", "argv", "started_at", "completed_at", "exit_code",
-            "query_sha256", "run_id", "route", "result_sha256", "response_sha256",
-            "index_metadata_sha256",
+            "schema_version", "sequence", "argv", "vdbbench_argv", "vdbbench_env", "kind",
+            "started_at", "completed_at", "probe_started_at", "probe_completed_at",
+            "exit_code", "query_sha256", "run_id", "route", "result_sha256",
+            "response_sha256", "index_metadata_sha256",
         }, f"probe command ledger[{sequence}]")
-        exact(record["schema_version"], "treedb-construction-policy-4587-probe-command/v1",
+        exact(record["schema_version"], "treedb-construction-policy-4587-probe-command/v2",
               f"probe command ledger[{sequence}].schema_version")
         exact(record["sequence"], sequence, f"probe command ledger[{sequence}].sequence")
     record = records[expected_sequence]
@@ -711,13 +738,51 @@ def probe_argv_options(argv: Any, name: str) -> dict[str, str]:
         "--manifest-sha256", "--execution-commit", "--dataset-sha256", "--scale",
         "--role", "--partition", "--lifecycle-sha256", "--lifecycle-started-at",
         "--lifecycle-completed-at", "--ef-construction", "--expected-generation", "--route",
+        "--dataset-name", "--dataset-dir", "--vectordbbench-dir",
     }, f"{name}.argv frozen options")
     return options
+def expected_vdbbench_argv(
+    run_row: dict[str, Any], index_name: str, kind: str, route: str, base_url: str,
+) -> list[str]:
+    config = run_row["configuration"]
+    command = [
+        "-m", "vectordb_bench.cli.vectordbbench",
+        "treedbcolumngraphexact" if route == "exact" else "treedbscalaru8rerank",
+        "--base-url", base_url, "--index-name", index_name,
+        "--skip-drop-old", "--skip-load", "--search-serial", "--search-concurrent",
+        "--m", str(config["m"]), "--ef-construction", str(config["ef_construction"]),
+        "--ef-search", str(config["ef_search"]), "--case-type", "PerformanceCustomDataset",
+        "--k", str(config["top_k"]), "--num-concurrency", "32", "--concurrency-duration", "30",
+        "--custom-case-name",
+        f"treedb-4587-{run_row['scale']}-{run_row['role']}-{kind}-{route}",
+        "--custom-dataset-name", run_row["dataset"]["name"],
+        "--custom-dataset-dir", run_row["dataset"]["directory"],
+        "--custom-dataset-size", str(run_row["scale"]),
+        "--custom-dataset-dim", str(config["dimensions"]),
+        "--custom-dataset-file-count", "1", "--query-embedding-encoding", "f32_le",
+    ]
+    if kind == "diagnostic":
+        command.extend(["--stats-mode", "full_diagnostics", "--response-format", "full"])
+    else:
+        command.extend([
+            "--stats-mode", "production", "--response-format", "ids",
+            "--skip-vector-index-guards",
+        ])
+    if route == "scalar_u8_rerank":
+        command.extend([
+            "--quantized-index-name", "embedding.scalar_u8.fast",
+            "--quantized-rerank-candidates", str(config["configured_rerank_candidates"]),
+        ])
+    return command
+
+
 
 
 
 def validate_search_evidence(run_row: dict[str, Any], root: Path,
-                             timing: dict[str, Any], expected_base_url: str) -> dict[str, dict[str, float]]:
+                             timing: dict[str, Any], expected_base_url: str,
+                             expected_vdbbench_dir: str,
+                             expected_gomap_root: str) -> dict[str, dict[str, float]]:
     rows = run_row.get("search_evidence")
     if not isinstance(rows, list) or len(rows) != len(SEARCH_ORDER):
         fail("run.search_evidence must contain exactly four ordered diagnostic/production rows")
@@ -725,6 +790,7 @@ def validate_search_evidence(run_row: dict[str, Any], root: Path,
     production: dict[str, dict[str, float]] = {}
     identities: set[tuple[str, int, str]] = set()
     prior_timestamp = -math.inf
+    prior_command_completed = timing["completed"]
     for position, (entry, expected) in enumerate(zip(rows, SEARCH_ORDER, strict=True)):
         item = object_at(entry, f"search_evidence[{position}]")
         exact_keys(item, {"kind", "route", "origin", "result", "response", "index_metadata"},
@@ -760,26 +826,33 @@ def validate_search_evidence(run_row: dict[str, Any], root: Path,
             exact(origin[key], expected_value,
                   f"search_evidence[{position}] originating run binding {key}")
         command = read_probe_command_record(
-            root, origin, position // 2, f"search_evidence[{position}].origin")
+            root, origin, position, f"search_evidence[{position}].origin")
         exact(command["run_id"], run_row["run_id"], f"search_evidence[{position}] command run")
-        exact(command["route"], item["route"], f"search_evidence[{position}] command route")
-        exact(command["result_sha256"], {
-            "diagnostic": rows[(position // 2) * 2]["result"]["sha256"],
-            "production": rows[(position // 2) * 2 + 1]["result"]["sha256"],
-        }, f"search_evidence[{position}] command result checksums")
-        exact(command["response_sha256"], {
-            "diagnostic": rows[(position // 2) * 2]["response"]["sha256"],
-            "production": rows[(position // 2) * 2 + 1]["response"]["sha256"],
-        }, f"search_evidence[{position}] command response checksums")
+        exact((command["kind"], command["route"]), (item["kind"], item["route"]),
+              f"search_evidence[{position}] command identity")
+        exact(command["result_sha256"], item["result"]["sha256"],
+              f"search_evidence[{position}] command result checksum")
+        exact(command["response_sha256"], item["response"]["sha256"],
+              f"search_evidence[{position}] command response checksum")
         exact(command["index_metadata_sha256"], item["index_metadata"]["sha256"],
               f"search_evidence[{position}] command index metadata checksum")
-        probe_started = utc_timestamp(command["started_at"], f"search_evidence[{position}] probe start")
-        probe_completed = utc_timestamp(command["completed_at"], f"search_evidence[{position}] probe completion")
-        exact(origin["probe_started_at"], command["started_at"], f"search_evidence[{position}] probe start binding")
-        exact(origin["probe_completed_at"], command["completed_at"],
+        probe_started = utc_timestamp(
+            command["probe_started_at"], f"search_evidence[{position}] probe start")
+        probe_completed = utc_timestamp(
+            command["probe_completed_at"], f"search_evidence[{position}] probe completion")
+        command_started = utc_timestamp(
+            command["started_at"], f"search_evidence[{position}] command start")
+        command_completed = utc_timestamp(
+            command["completed_at"], f"search_evidence[{position}] command completion")
+        exact(origin["probe_started_at"], command["probe_started_at"],
+              f"search_evidence[{position}] probe start binding")
+        exact(origin["probe_completed_at"], command["probe_completed_at"],
               f"search_evidence[{position}] probe completion binding")
-        if probe_started <= timing["completed"] or probe_completed < probe_started:
-            fail("search probe command must complete after lifecycle teardown")
+        if (probe_started <= prior_command_completed or probe_completed < probe_started
+                or command_started < probe_completed or command_completed < command_started
+                or (command_started - probe_completed).total_seconds() > 1):
+            fail("each diagnostic probe must immediately precede its canonical command")
+        prior_command_completed = command_completed
         index_name = metadata.get("name")
         if not isinstance(index_name, str) or not index_name:
             fail("index metadata name must be non-empty")
@@ -787,6 +860,27 @@ def validate_search_evidence(run_row: dict[str, Any], root: Path,
             command["argv"], f"search_evidence[{position}] command")
         exact(options["--base-url"], expected_base_url,
               f"search_evidence[{position}] executed service base URL")
+        vdbbench_argv = command["vdbbench_argv"]
+        if (not isinstance(vdbbench_argv, list) or not vdbbench_argv
+                or not isinstance(vdbbench_argv[0], str)
+                or not Path(vdbbench_argv[0]).name.startswith("python")):
+            fail(f"search_evidence[{position}] canonical command must execute Python VectorDBBench")
+        exact(
+            vdbbench_argv[1:],
+            expected_vdbbench_argv(
+                run_row, index_name, item["kind"], item["route"], expected_base_url),
+            f"search_evidence[{position}] canonical VectorDBBench argv",
+        )
+        exact(command["vdbbench_env"], {
+            "RESULTS_LOCAL_DIR": str(
+                root / f"vdbbench-results-{item['route']}-{item['kind']}"),
+            "PYTHONPATH": os.pathsep.join((
+                expected_vdbbench_dir,
+                str(Path(expected_gomap_root) / "clients/python/treedb_client/src"),
+            )),
+            "LOG_FILE": str(root / f"vdbbench-{item['route']}-{item['kind']}.log"),
+            "NUM_PER_BATCH": "500",
+        }, f"search_evidence[{position}] canonical VectorDBBench environment")
         group = rows[(position // 2) * 2:(position // 2) * 2 + 2]
         exact({
             "--index-name": index_name,
@@ -812,6 +906,9 @@ def validate_search_evidence(run_row: dict[str, Any], root: Path,
             "--ef-construction": str(run_row["ef_construction"]),
             "--expected-generation": str(metadata.get("generation")),
             "--route": item["route"],
+            "--dataset-name": run_row["dataset"]["name"],
+            "--dataset-dir": run_row["dataset"]["directory"],
+            "--vectordbbench-dir": expected_vdbbench_dir,
         }, {key: options[key] for key in options if key not in {"--base-url", "--query-json"}},
               f"search_evidence[{position}] executed command identity")
         query_path = Path(options["--query-json"]).resolve()
@@ -988,6 +1085,7 @@ def nested_numeric_values(value: Any, key: str) -> list[float]:
 def measurement_source_values(
     root: Path, binding: Any, producer_phases: dict[str, float],
     construction_decisions: dict[str, Any], configuration: dict[str, Any],
+    manifest: dict[str, Any],
 ) -> dict[str, Any]:
     source, _ = read_bound_json(root, binding, "measurements.source")
     exact_keys(source, {
@@ -999,6 +1097,18 @@ def measurement_source_values(
     diagnostics_binding = object_at(source["diagnostics"], "measurement source diagnostics")
     exact_keys(adapter_binding, {"path", "sha256"}, "measurement source adapter binding")
     exact_keys(diagnostics_binding, {"path", "sha256"}, "measurement source diagnostics binding")
+    raw_artifacts = object_at(manifest.get("lifecycle"), "manifest.lifecycle").get("raw_artifacts")
+    if not isinstance(raw_artifacts, list):
+        fail("manifest.lifecycle.raw_artifacts must be a list")
+    for expected_path, source_binding, name in (
+        ("adapter-lifecycle.jsonl", adapter_binding, "adapter"),
+        ("diagnostics.jsonl", diagnostics_binding, "diagnostics"),
+    ):
+        matches = [item for item in raw_artifacts if isinstance(item, dict)
+                   and item.get("path") == expected_path]
+        if len(matches) != 1:
+            fail(f"manifest lifecycle must bind exactly one measurement source {name}")
+        exact(source_binding, matches[0], f"measurement source {name} manifest binding")
     adapter_relative = Path(adapter_binding["path"])
     if adapter_relative.is_absolute() or ".." in adapter_relative.parts:
         fail("measurement source adapter path must be artifact-root relative")
@@ -1034,10 +1144,9 @@ def measurement_source_values(
     if not allocated:
         fail("measurement source is missing cumulative allocation telemetry")
     data_root = Path(source["data_root"]).resolve()
-    try:
-        data_root.relative_to(root)
-    except ValueError:
-        fail("measurement source data root must be inside artifact root")
+    manifest_data_root = Path(
+        object_at(manifest.get("service"), "manifest.service").get("data_dir", "")).resolve()
+    exact(data_root, manifest_data_root, "measurement source manifest data root binding")
     data_files = source["data_files"]
     if not isinstance(data_files, list) or not data_files:
         fail("measurement source data file ledger must be non-empty")
@@ -1078,7 +1187,9 @@ def measurement_source_values(
             "persisted_bytes": persisted,
             "cumulative_allocated_bytes": max(allocated),
         },
-        "projected_10m_adjacency_reduction_fraction": None,
+        "projected_10m_adjacency_reduction_fraction": projected_10m_reduction(
+            producer_phases["adjacency"],
+            object_at(manifest.get("lifecycle"), "manifest.lifecycle").get("expected_rows")),
     }
 
 
@@ -1138,6 +1249,13 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
               0.0, f"isolation.samples[{position}].swap_used_bytes")
     if sample_times != sorted(sample_times):
         fail("isolation sample timestamps must be ordered")
+    maximum_gap = (
+        contract["experiment"]["isolation_and_noise"]["diagnostics_interval_seconds"]
+        + contract["experiment"]["isolation_and_noise"]["sampling_gap_tolerance_seconds"])
+    for previous, current in zip(sample_times, sample_times[1:]):
+        gap = (current - previous).total_seconds()
+        if gap <= 0 or gap > maximum_gap:
+            fail("isolation sampling gap exceeds frozen interval and tolerance")
     lock_acquired = utc_timestamp(isolation["lock_acquired_at"], "isolation.lock_acquired_at")
     coverage_completed = utc_timestamp(isolation["coverage_completed_at"], "isolation.coverage_completed_at")
     if lock_acquired > timing["started"] or sample_times[0] > timing["started"]:
@@ -1166,9 +1284,11 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
         "lifecycle_completed_at": timing["completed_at"],
     }, "measurement originating run binding")
     expected_measurements = measurement_source_values(
-        root, measurements["source"], producer_phases, construction_decisions, row["configuration"])
+        root, measurements["source"], producer_phases, construction_decisions,
+        row["configuration"], manifest)
     for key, expected_value in expected_measurements.items():
-        exact(measurements[key], expected_value, f"measurements.{key} raw source binding")
+        if key != "projected_10m_adjacency_reduction_fraction":
+            exact(measurements[key], expected_value, f"measurements.{key} raw source binding")
     cpu_utilization = positive_number(
         measurements["cpu_utilization_logical_cores"], "measurements.cpu_utilization_logical_cores")
     if cpu_utilization > contract["source_identity"]["runtime"]["logical_cpus"]:
@@ -1177,9 +1297,13 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
     resources = object_at(measurements["resources"], "measurements.resources")
     for key, value in resources.items():
         positive_number(value, f"resources.{key}")
-    projection = measurements["projected_10m_adjacency_reduction_fraction"]
+    exact(measurements["projected_10m_adjacency_reduction_fraction"], None,
+          "raw producer projection field")
+    projection = expected_measurements["projected_10m_adjacency_reduction_fraction"]
     production = validate_search_evidence(
-        row, root, timing, object_at(manifest["service"], "manifest.service").get("base_url"))
+        row, root, timing, object_at(manifest["service"], "manifest.service").get("base_url"),
+        contract["source_identity"]["vectordbbench"]["root"],
+        contract["source_identity"]["gomap_root"])
     return {"row": row, "phases": phases, "resources": resources, "production": production,
             "projection": projection, "service_binary_sha256": service_binary_sha256,
             "timing": timing}
@@ -1188,7 +1312,8 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
 def clears_gates(candidate: dict[str, Any], control: dict[str, Any], require_projection: bool,
                  gates: dict[str, Any]) -> bool:
     cand_exact, ctrl_exact = candidate["production"]["exact"], control["production"]["exact"]
-    cand_prod, ctrl_prod = candidate["production"]["scalar_u8_rerank"], control["production"]["scalar_u8_rerank"]
+    cand_prod = candidate["production"]["scalar_u8_rerank"]
+    ctrl_prod = control["production"]["scalar_u8_rerank"]
     reduction = 1 - candidate["phases"]["adjacency"] / control["phases"]["adjacency"]
     increase = gates["maximum_unexplained_persisted_or_allocation_increase_bytes"]
     checks = [
@@ -1208,7 +1333,8 @@ def clears_gates(candidate: dict[str, Any], control: dict[str, Any], require_pro
     ]
     if require_projection:
         checks.append(
-            reduction >= gates["minimum_projected_10m_adjacency_reduction_fraction"]
+            finite_number(candidate["projection"], "candidate projected 10M adjacency reduction")
+            >= gates["minimum_projected_10m_adjacency_reduction_fraction"]
         )
     return all(checks)
 
@@ -1220,10 +1346,10 @@ def select_screening_winner(screening: list[dict[str, Any]], gates: dict[str, An
         return None
     return sorted(eligible, key=lambda item: (
         -(1 - item["phases"]["adjacency"] / control["phases"]["adjacency"]),
-        (
-            - item["production"]["scalar_u8_rerank"]["recall"],
-            control["production"]["scalar_u8_rerank"]["ndcg"]
-            - item["production"]["scalar_u8_rerank"]["ndcg"],
+        max(
+            control["production"][route][metric] - item["production"][route][metric]
+            for route in ("exact", "scalar_u8_rerank")
+            for metric in ("recall", "ndcg")
         ),
         item["row"]["ef_construction"],
     ))[0]

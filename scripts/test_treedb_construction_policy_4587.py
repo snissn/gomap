@@ -311,16 +311,16 @@ class DecisionFixture:
             "peak_swap_used_bytes": 0,
             "samples": [
                 {
-                    "timestamp": (started - timedelta(seconds=1)).isoformat(),
+                    "timestamp": (started + timedelta(seconds=offset)).isoformat(),
                     "swap_used_bytes": 0,
                     "competing_processes": [],
-                },
-                {
-                    "timestamp": (completed + timedelta(seconds=1)).isoformat(),
-                    "swap_used_bytes": 0,
-                    "competing_processes": [],
-                },
-            ],
+                }
+                for offset in range(-1, 302, 5)
+            ] + [{
+                "timestamp": (completed + timedelta(seconds=1)).isoformat(),
+                "swap_used_bytes": 0,
+                "competing_processes": [],
+            }],
         }
         data_root = root / "treedb-data"
         data_root.mkdir()
@@ -347,6 +347,11 @@ class DecisionFixture:
         diagnostics_path.write_text("".join(
             json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n"
             for record in diagnostics))
+        manifest["lifecycle"]["raw_artifacts"].append({
+            "path": diagnostics_path.name,
+            "sha256": policy.sha256_file(diagnostics_path),
+        })
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
         data_files = [{
             "path": data_file.name,
             "size": data_file.stat().st_size,
@@ -405,52 +410,67 @@ class DecisionFixture:
             for position, (kind, route) in enumerate(policy.SEARCH_ORDER)
         ]
         command_records = []
-        for sequence, route in enumerate(("exact", "scalar_u8_rerank")):
-            diagnostic, production = raw_search[sequence * 2:sequence * 2 + 2]
-            probe_started = completed + timedelta(seconds=sequence * 2 + 1)
+        for position, (result, response, metadata, kind, route) in enumerate(raw_search):
+            group_start = (position // 2) * 2
+            diagnostic, production = raw_search[group_start:group_start + 2]
+            probe_started = completed + timedelta(seconds=position * 4 + 1)
+            probe_completed = probe_started + timedelta(seconds=1)
+            command_started = probe_completed
+            command_completed = command_started + timedelta(seconds=1)
             argv = [
                 "scripts/treedb_vdbbench_search_existing_index.py",
                 "--base-url", "http://127.0.0.1:6060",
                 "--index-name", f"index-ef{ef}",
                 "--query-json", str(query_path),
-                "--metadata-out", str(root / raw_search[sequence * 2][2]["path"]),
+                "--metadata-out", str(root / diagnostic[2]["path"]),
                 "--diagnostic-response-out", str(root / diagnostic[1]["path"]),
                 "--production-response-out", str(root / production[1]["path"]),
                 "--diagnostic-result", str(root / diagnostic[0]["path"]),
                 "--production-result", str(root / production[0]["path"]),
-                "--diagnostic-origin-out", str(root / f"search-origin-{sequence * 2}.json"),
-                "--production-origin-out", str(root / f"search-origin-{sequence * 2 + 1}.json"),
+                "--diagnostic-origin-out", str(root / f"search-origin-{group_start}.json"),
+                "--production-origin-out", str(root / f"search-origin-{group_start + 1}.json"),
                 "--command-ledger", str(root / "probe-command-ledger.jsonl"),
                 "--run-id", f"run-{self.counter}", "--artifact-root", str(root.resolve()),
                 "--manifest-sha256", policy.sha256_file(manifest_path),
                 "--execution-commit", COMMIT,
                 "--dataset-sha256", policy.canonical_sha256(dataset),
-                "--scale", str(scale), "--role", role,
-                "--partition", partition,
+                "--scale", str(scale), "--dataset-name", dataset["name"],
+                "--dataset-dir", dataset["directory"],
+                "--vectordbbench-dir", self.contract["source_identity"]["vectordbbench"]["root"],
+                "--role", role, "--partition", partition,
                 "--lifecycle-sha256", policy.sha256_file(lifecycle_path),
                 "--lifecycle-started-at", started.isoformat(),
                 "--lifecycle-completed-at", completed.isoformat(),
                 "--ef-construction", str(ef), "--expected-generation", "1", "--route", route,
             ]
             command_records.append({
-                "schema_version": "treedb-construction-policy-4587-probe-command/v1",
-                "sequence": sequence,
+                "schema_version": "treedb-construction-policy-4587-probe-command/v2",
+                "sequence": position,
                 "argv": argv,
-                "started_at": probe_started.isoformat(),
-                "completed_at": (probe_started + timedelta(seconds=1)).isoformat(),
+                "vdbbench_argv": ["python3"] + policy.expected_vdbbench_argv(
+                    {"scale": scale, "role": role, "dataset": dataset, "configuration": config},
+                    f"index-ef{ef}", kind, route, "http://127.0.0.1:6060"),
+                "vdbbench_env": {
+                    "RESULTS_LOCAL_DIR": str(root / f"vdbbench-results-{route}-{kind}"),
+                    "PYTHONPATH": search_existing_index.os.pathsep.join((
+                        self.contract["source_identity"]["vectordbbench"]["root"],
+                        str(HERE.parent / "clients/python/treedb_client/src"),
+                    )),
+                    "LOG_FILE": str(root / f"vdbbench-{route}-{kind}.log"),
+                    "NUM_PER_BATCH": "500",
+                },
+                "kind": kind,
+                "started_at": command_started.isoformat(),
+                "completed_at": command_completed.isoformat(),
+                "probe_started_at": probe_started.isoformat(),
+                "probe_completed_at": probe_completed.isoformat(),
                 "query_sha256": policy.sha256_file(query_path),
                 "exit_code": 0,
                 "run_id": f"run-{self.counter}",
                 "route": route,
-                "result_sha256": {
-                    "diagnostic": diagnostic[0]["sha256"],
-                    "production": production[0]["sha256"],
-                },
-                "response_sha256": {
-                    "diagnostic": diagnostic[1]["sha256"],
-                    "production": production[1]["sha256"],
-                },
-                "index_metadata_sha256": diagnostic[2]["sha256"],
+                "result_sha256": result["sha256"],
+                "response_sha256": response["sha256"],
+                "index_metadata_sha256": metadata["sha256"],
             })
         ledger_path = root / "probe-command-ledger.jsonl"
         ledger_path.write_text("".join(
@@ -458,7 +478,7 @@ class DecisionFixture:
             for record in command_records))
         search = []
         for position, (result, response, metadata, kind, route) in enumerate(raw_search):
-            command = command_records[position // 2]
+            command = command_records[position]
             origin = {
                 "schema_version": policy.SEARCH_ORIGIN_SCHEMA,
                 "run_id": f"run-{self.counter}",
@@ -481,8 +501,8 @@ class DecisionFixture:
                 "command_ledger_path": ledger_path.name,
                 "command_sequence": command["sequence"],
                 "command_record_sha256": policy.canonical_sha256(command),
-                "probe_started_at": command["started_at"],
-                "probe_completed_at": command["completed_at"],
+                "probe_started_at": command["probe_started_at"],
+                "probe_completed_at": command["probe_completed_at"],
             }
             search.append({
                 "kind": kind,
@@ -590,18 +610,11 @@ class DecisionFixture:
         if linked:
             ledger_path = Path(run["artifact"]["root"]) / "probe-command-ledger.jsonl"
             records = [json.loads(line) for line in ledger_path.read_text().splitlines()]
-            for sequence, record in enumerate(records):
-                diagnostic = run["search_evidence"][sequence * 2]
-                production = run["search_evidence"][sequence * 2 + 1]
-                record["result_sha256"] = {
-                    "diagnostic": diagnostic["result"]["sha256"],
-                    "production": production["result"]["sha256"],
-                }
-                record["response_sha256"] = {
-                    "diagnostic": diagnostic["response"]["sha256"],
-                    "production": production["response"]["sha256"],
-                }
-                record["index_metadata_sha256"] = diagnostic["index_metadata"]["sha256"]
+            for position, record in enumerate(records):
+                entry = run["search_evidence"][position]
+                record["result_sha256"] = entry["result"]["sha256"]
+                record["response_sha256"] = entry["response"]["sha256"]
+                record["index_metadata_sha256"] = entry["index_metadata"]["sha256"]
             ledger_path.write_text("".join(
                 json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n"
                 for record in records))
@@ -611,7 +624,7 @@ class DecisionFixture:
                 origin = json.loads(origin_path.read_text())
                 for key in ("result", "response", "index_metadata"):
                     origin[f"{key}_sha256"] = entry[key]["sha256"]
-                origin["command_record_sha256"] = policy.canonical_sha256(records[position // 2])
+                origin["command_record_sha256"] = policy.canonical_sha256(records[position])
                 origin_path.write_text(json.dumps(origin, sort_keys=True) + "\n")
                 origin_binding["sha256"] = policy.sha256_file(origin_path)
 
@@ -624,15 +637,14 @@ class DecisionFixture:
         path.write_text("".join(
             json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n"
             for record in records))
-        for position in (sequence * 2, sequence * 2 + 1):
-            binding = run["search_evidence"][position]["origin"]
-            origin_path = root / binding["path"]
-            origin = json.loads(origin_path.read_text())
-            origin["command_record_sha256"] = policy.canonical_sha256(records[sequence])
-            origin["probe_started_at"] = records[sequence]["started_at"]
-            origin["probe_completed_at"] = records[sequence]["completed_at"]
-            origin_path.write_text(json.dumps(origin, sort_keys=True) + "\n")
-            binding["sha256"] = policy.sha256_file(origin_path)
+        binding = run["search_evidence"][sequence]["origin"]
+        origin_path = root / binding["path"]
+        origin = json.loads(origin_path.read_text())
+        origin["command_record_sha256"] = policy.canonical_sha256(records[sequence])
+        origin["probe_started_at"] = records[sequence]["probe_started_at"]
+        origin["probe_completed_at"] = records[sequence]["probe_completed_at"]
+        origin_path.write_text(json.dumps(origin, sort_keys=True) + "\n")
+        binding["sha256"] = policy.sha256_file(origin_path)
 
 
     def rewrite_adapter(self, run: dict, mutate) -> None:
@@ -693,8 +705,20 @@ class DecisionFixture:
         isolation = json.loads(isolation_path.read_text())
         isolation["lock_acquired_at"] = (started_at - timedelta(seconds=1)).isoformat()
         isolation["coverage_completed_at"] = (completed_at + timedelta(seconds=1)).isoformat()
-        isolation["samples"][0]["timestamp"] = isolation["lock_acquired_at"]
-        isolation["samples"][-1]["timestamp"] = isolation["coverage_completed_at"]
+        isolation["samples"] = [
+            {
+                "timestamp": (started_at + timedelta(seconds=offset)).isoformat(),
+                "swap_used_bytes": 0,
+                "competing_processes": [],
+            }
+            for offset in range(-1, int((completed_at - started_at).total_seconds()) + 2, 5)
+        ]
+        if isolation["samples"][-1]["timestamp"] != isolation["coverage_completed_at"]:
+            isolation["samples"].append({
+                "timestamp": isolation["coverage_completed_at"],
+                "swap_used_bytes": 0,
+                "competing_processes": [],
+            })
         isolation_path.write_text(json.dumps(isolation, sort_keys=True) + "\n")
         run["isolation_evidence"]["sha256"] = policy.sha256_file(isolation_path)
         for entry in run["search_evidence"]:
@@ -708,11 +732,13 @@ class DecisionFixture:
             })
             origin_path.write_text(json.dumps(origin, sort_keys=True) + "\n")
             entry["origin"]["sha256"] = policy.sha256_file(origin_path)
-        for sequence in range(2):
-            probe_started = completed_at + timedelta(seconds=sequence * 2 + 1)
+        for sequence in range(4):
+            probe_started = completed_at + timedelta(seconds=sequence * 4 + 1)
             def mutate_command(record, probe_started=probe_started):
-                record["started_at"] = probe_started.isoformat()
-                record["completed_at"] = (probe_started + timedelta(seconds=1)).isoformat()
+                record["probe_started_at"] = probe_started.isoformat()
+                record["probe_completed_at"] = (probe_started + timedelta(seconds=1)).isoformat()
+                record["started_at"] = record["probe_completed_at"]
+                record["completed_at"] = (probe_started + timedelta(seconds=2)).isoformat()
                 values = {
                     "--manifest-sha256": manifest_sha,
                     "--lifecycle-sha256": lifecycle_sha,
@@ -810,7 +836,7 @@ class ValidatorMutations(unittest.TestCase):
                 run, entry["origin"],
                 lambda value: value.update({"manifest_sha256": run["artifact"]["manifest_sha256"]}),
             )
-        for sequence in range(2):
+        for sequence in range(4):
             self.fixture.rewrite_command(
                 run, sequence, lambda value: value["argv"].__setitem__(
                     value["argv"].index("--manifest-sha256") + 1,
@@ -1014,8 +1040,8 @@ class ValidatorMutations(unittest.TestCase):
                 path.write_text(json.dumps(value, sort_keys=True) + "\n")
             command = {
                 "sequence": 0,
-                "started_at": "2026-09-02T00:02:00+00:00",
-                "completed_at": "2026-09-02T00:02:01+00:00",
+                "probe_started_at": "2026-09-02T00:02:00+00:00",
+                "probe_completed_at": "2026-09-02T00:02:01+00:00",
             }
             args = search_existing_index.argparse.Namespace(
                 run_id="run-1", artifact_root=root, manifest_sha256="1" * 64,
@@ -1051,15 +1077,61 @@ class ValidatorMutations(unittest.TestCase):
         )["origin"]["lifecycle_completed_at"]
         self.fixture.rewrite_command(
             run, 0, lambda value: value.update({
+                "probe_started_at": lifecycle_completed,
+                "probe_completed_at": lifecycle_completed,
                 "started_at": lifecycle_completed,
                 "completed_at": lifecycle_completed,
             }))
-        self.assert_invalid(packet, "must complete after lifecycle teardown")
+        self.assert_invalid(packet, "immediately precede")
+    def test_canonical_digest_matches_existing_index_producer(self) -> None:
+        value = {"a": 1}
+        self.assertEqual(policy.canonical_sha256(value), search_existing_index.canonical_sha256(value))
+
+    def test_canonical_vdbbench_command_is_bound(self) -> None:
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_command(
+            run, 0, lambda value: value["vdbbench_argv"].append("--stale-result"))
+        self.assert_invalid(packet, "canonical VectorDBBench argv")
+
+    def test_measurement_source_is_manifest_bound(self) -> None:
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        root = Path(run["artifact"]["root"])
+        measurement_path = root / run["measurement_evidence"]["path"]
+        measurement = json.loads(measurement_path.read_text())
+        source_path = root / measurement["source"]["path"]
+        source = json.loads(source_path.read_text())
+        source["diagnostics"]["path"] = "adapter-lifecycle.jsonl"
+        source["diagnostics"]["sha256"] = policy.sha256_file(root / "adapter-lifecycle.jsonl")
+        source_path.write_text(json.dumps(source, sort_keys=True) + "\n")
+        measurement["source"]["sha256"] = policy.sha256_file(source_path)
+        measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
+        run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
+        self.assert_invalid(packet, "diagnostics manifest binding")
+
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        root = Path(run["artifact"]["root"])
+        measurement_path = root / run["measurement_evidence"]["path"]
+        measurement = json.loads(measurement_path.read_text())
+        source_path = root / measurement["source"]["path"]
+        source = json.loads(source_path.read_text())
+        source["data_root"] = str(root)
+        source_path.write_text(json.dumps(source, sort_keys=True) + "\n")
+        measurement["source"]["sha256"] = policy.sha256_file(source_path)
+        measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
+        run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
+        self.assert_invalid(packet, "manifest data root binding")
+
 
     def test_frozen_go_gate_policy_drift_is_invalid(self) -> None:
         packet = self.fixture.no_go_packet()
         self.fixture.contract["experiment"]["go_gates"]["minimum_production_qps_ratio"] = 0.90
         self.assert_invalid(packet, "frozen GO gate policy")
+        packet = self.fixture.no_go_packet()
+        self.fixture.contract["experiment"]["projection_model"]["target_scale"] = 9_000_000
+        self.assert_invalid(packet, "10M projection model")
 
     def test_search_evidence_origin_binding(self) -> None:
         mutations = [
@@ -1164,7 +1236,7 @@ class ValidatorMutations(unittest.TestCase):
             run, run["measurement_evidence"],
             lambda value: value.update({"projected_10m_adjacency_reduction_fraction": 1.01}),
         )
-        self.assert_invalid(packet, "raw source binding")
+        self.assert_invalid(packet, "raw producer projection field")
 
     def test_runtime_identity_is_bound(self) -> None:
         packet = self.fixture.no_go_packet()
@@ -1192,6 +1264,12 @@ class ValidatorMutations(unittest.TestCase):
             })),
             ("at least start and completion", lambda value: value.update({
                 "samples": value["samples"][:1],
+            })),
+            ("sampling gap", lambda value: value["samples"][1].update({
+                "timestamp": (
+                    policy.utc_timestamp(value["samples"][0]["timestamp"], "sample")
+                    + timedelta(seconds=7)
+                ).isoformat(),
             })),
         ]
         for pattern, mutate in mutations:

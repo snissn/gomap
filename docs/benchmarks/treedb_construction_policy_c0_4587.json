@@ -1,5 +1,5 @@
 {
-  "schema_version": "treedb-construction-policy-4587/v6",
+  "schema_version": "treedb-construction-policy-4587/v7",
   "authority": "FROZEN_AUTHORITATIVE",
   "engineering_status": "QUALIFIED",
   "execution_validity": "REQUIRES_FINAL_EXTERNAL_AUTHORIZATION",
@@ -162,6 +162,7 @@
       "fixed_build_flags": ["-trimpath"],
       "profiles_on_timed_rows": false,
       "diagnostics_interval_seconds": 5,
+      "sampling_gap_tolerance_seconds": 1,
       "warmup": "no construction warmup; each diagnostic full-response route preflight immediately precedes its production-stats IDs-only row",
       "repetition": "one timed build per frozen coordinate; deterministic identity is the checksum-bound exact configuration, complete persisted-data ledger, and adapter lifecycle ledger from that run; no A/A, synthetic repeat, or quality-triggered rerun",
       "captured_evidence": {
@@ -204,6 +205,12 @@
       "minimum_projected_10m_adjacency_reduction_fraction": 0.30,
       "require_deterministic_identity": true,
       "require_all_route_and_reopen_guardrails": true
+    },
+    "projection_model": {
+      "source_scale": 1000000,
+      "target_scale": 10000000,
+      "complexity": "n_log_n",
+      "frozen_10m_control_adjacency_seconds": 5774.242
     }
   },
   "commands": {
@@ -274,6 +281,8 @@
         "--run-id", "{run_id}", "--artifact-root", "{artifact_root}",
         "--manifest-sha256", "{manifest_sha256}", "--execution-commit", "{execution_commit}",
         "--dataset-sha256", "{dataset_sha256}", "--scale", "{vectors}",
+        "--dataset-name", "{dataset_name}", "--dataset-dir", "{dataset_dir}",
+        "--vectordbbench-dir", "/mnt/fast4tb/codex-vectordbbench-4545",
         "--role", "{role}", "--partition", "{partition}",
         "--lifecycle-sha256", "{lifecycle_sha256}",
         "--lifecycle-started-at", "{lifecycle_started_at}",
@@ -281,7 +290,7 @@
         "--ef-construction", "{ef_construction}",
         "--expected-generation", "{expected_generation}", "--route", "{route}"
       ],
-      "probe_contract": "for each route, require exact open_index name/generation/dimension/metric/strategy/M/efConstruction/efSearch/score-plane identity, then checksum-bound full-diagnostic and production/IDs responses at expected_generation; append one fsynced command record with exact argv, start/completion, zero exit status, and result/response/metadata checksums, then emit search-origin sidecars binding that ledger record and all evidence to the exact run, artifact manifest, dataset, role, partition, and lifecycle",
+      "probe_contract": "for each route and transport, require an exact existing-index diagnostic probe immediately followed by execution of the matching frozen unmodified VectorDBBench command into a new result directory; reject preexisting outputs, reruns, stale results, reordered routes, or ledger rebinding; append one fsynced record per canonical command with exact helper argv, exact VectorDBBench argv, probe and command timing, zero exit status, and result/response/metadata checksums; emit one origin sidecar binding each result to its exact append-only record, run, manifest, dataset, role, partition, and lifecycle",
       "vectordbbench_common_argv_template": [
         "python", "-m", "vectordb_bench.cli.vectordbbench", "{subcommand}",
         "--base-url", "{base_url}", "--index-name", "{index_name}",
@@ -443,7 +452,7 @@
       "competing_processes", "peak_swap_used_bytes", "samples"
     ],
     "sample_exact_keys": ["timestamp", "swap_used_bytes", "competing_processes"],
-    "coverage": "exclusive lock and timestamped samples span lifecycle startup through teardown; every sample proves zero swap use and no competing external benchmark process"
+    "coverage": "exclusive lock and timestamped samples span lifecycle startup through teardown; every sample proves zero swap use and no competing external benchmark process; every adjacent timestamp gap is positive and no greater than diagnostics_interval_seconds plus sampling_gap_tolerance_seconds"
   },
   "measurement_schema": {
     "schema_version": "treedb-construction-policy-4587-measurements/v4",
@@ -460,7 +469,7 @@
       "role", "partition", "ef_construction", "lifecycle_sha256",
       "lifecycle_started_at", "lifecycle_completed_at"
     ],
-    "producer_binding": "the lifecycle harness writes measurement-source.json and measurements.json; the validator resolves and checksum-validates adapter lifecycle JSONL, diagnostics JSONL, and the complete persisted data-file ledger, then recomputes every measurement value exactly: phase timings and observer work from raw adapter optimize evidence, CPU and peak RSS from /proc samples at optimize boundaries, cumulative allocation from service telemetry, persisted bytes and deterministic identity from the verified data ledger, config/tie identity from the exact configuration and adapter ledger; projected_10m_adjacency_reduction_fraction is null in each row and the decision gate directly consumes the raw holdout adjacency reduction",
+    "producer_binding": "the lifecycle harness writes checksum-bound measurement-source.json and measurements.json, including originating run/dataset/artifact root/scale/role/partition and lifecycle checksum/start/completion. The validator requires those origin values to equal the enclosing retained run, verifies the source adapter and diagnostics bindings against manifest.lifecycle.raw_artifacts, requires data_root to equal manifest.service.data_dir, resolves the complete persisted-data ledger, and recomputes every emitted measurement value exactly. The producer leaves projected_10m_adjacency_reduction_fraction null; the validator derives the prospective 10M adjacency reduction from the raw 1M candidate adjacency seconds by (10M*ln(10M))/(1M*ln(1M)) and compares that projected wall time with the frozen accepted 10M control adjacency wall of 5774.242 seconds.",
     "observer_phase_exact_keys": [
       "decisions", "accepted", "rejected", "direct_exact_fp32_rows", "direct_exact_fp32_calls",
       "indexed_exact_fp32_rows", "indexed_exact_fp32_calls", "approximate_score_rows",
