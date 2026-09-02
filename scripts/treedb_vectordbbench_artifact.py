@@ -45,7 +45,7 @@ LIFECYCLE_SCHEMA = "treedb-vectordbbench-lifecycle/v1"
 LIFECYCLE_EVENT_SCHEMA = "treedb-vectordbbench-lifecycle-event/v1"
 LIFECYCLE_VALIDATION_SCHEMA = "treedb-vectordbbench-lifecycle-validation/v1"
 MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v4"
-MEASUREMENT_SOURCE_SCHEMA = "treedb-construction-policy-4587-measurement-source/v3"
+MEASUREMENT_SOURCE_SCHEMA = "treedb-construction-policy-4587-measurement-source/v4"
 LIFECYCLE_EXCLUSIVE_LOCK = Path("/mnt/fast4tb/treedb-4587-c0.lock")
 PPROF_PROFILE_KINDS = frozenset({"cpu", "heap", "allocs", "block", "mutex"})
 OPTIMIZED_ROUTE_NAMES = frozenset({"exact_hnsw_search_pack_v1", "quantized_rerank"})
@@ -2733,11 +2733,12 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 if (
                     len(phases) != 2
                     or any(not isinstance(phase, dict) for phase in phases)
-                    or sum(
-                        phase.get("decisions", 0)
+                    or any(
+                        isinstance(phase.get("decisions"), bool)
+                        or not isinstance(phase.get("decisions"), int)
+                        or phase["decisions"] <= 0
                         for phase in phases
-                        if isinstance(phase.get("decisions"), int)
-                    ) <= 0
+                    )
                     or any(phase.get("saturated") is not False for phase in phases)
                 ):
                     completion_errors.append(
@@ -4109,6 +4110,42 @@ def data_file_ledger(data_dir: Path) -> list[dict[str, Any]]:
     return files
 
 
+def audited_data_files(
+    audit: dict[str, Any],
+    data_dir: Path,
+    data_files: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    owned_paths = {
+        item["path"] for item in data_files
+        if item["path"] == "maindb/index.db"
+        or item["path"].startswith((
+            "maindb/wal/",
+            "maindb/value_vlog/",
+            "maindb/leaf_vlog/",
+        ))
+    }
+    lifecycle = _object(audit.get("asset_lifecycle"), "storage ownership asset lifecycle", [])
+    reachability = _object(
+        lifecycle.get("reachability"), "storage ownership asset reachability", [])
+    segments = reachability.get("SegmentEntries")
+    if not isinstance(segments, list):
+        raise RuntimeError("storage ownership audit has no segment ledger")
+    for position, item in enumerate(segments):
+        item = _object(item, f"storage ownership segment[{position}]", [])
+        path = Path(str(item.get("Path", ""))).resolve()
+        try:
+            owned_paths.add(path.relative_to(data_dir.resolve()).as_posix())
+        except ValueError as exc:
+            raise RuntimeError(
+                "storage ownership segment path escapes the data root") from exc
+    selected = [item for item in data_files if item["path"] in owned_paths]
+    if {item["path"] for item in selected} != owned_paths:
+        raise RuntimeError("storage ownership audit references a missing data file")
+    if not selected:
+        raise RuntimeError("storage ownership audit produced an empty measured ledger")
+    return selected
+
+
 def run_storage_ownership_audit(
     state: HarnessState,
     *,
@@ -4200,6 +4237,12 @@ def write_protocol_measurements(
     data_files = data_file_ledger(args.data_dir)
     if not data_files:
         raise RuntimeError("protocol measurement source has no persisted data files")
+    audit = _object(
+        _strict_json_loads((state.root / "storage-ownership-audit.json").read_text(encoding="utf-8")),
+        "storage ownership audit",
+        [],
+    )
+    measured_data_files = audited_data_files(audit, args.data_dir, data_files)
     source = {
         "schema_version": MEASUREMENT_SOURCE_SCHEMA,
         "adapter_lifecycle": {
@@ -4220,6 +4263,7 @@ def write_protocol_measurements(
         },
         "data_root": str(args.data_dir.resolve()),
         "data_files": data_files,
+        "audited_data_files": measured_data_files,
     }
     source_path = state.root / "measurement-source.json"
     write_json(source_path, source)
@@ -4281,13 +4325,13 @@ def write_protocol_measurements(
         "cpu_utilization_logical_cores": cpu_seconds / elapsed,
         "determinism": {
             "graph_config_checksum": protocol_canonical_sha256(configuration),
-            "persisted_data_ledger_checksum": protocol_canonical_sha256(data_files),
+            "persisted_data_ledger_checksum": protocol_canonical_sha256(measured_data_files),
             "adapter_lifecycle_checksum": sha256_file(adapter_path),
         },
         "diagnostic_work_profile": decisions,
         "resources": {
             "peak_rss_bytes": peak_rss,
-            "persisted_bytes": sum(item["size"] for item in data_files),
+            "persisted_bytes": sum(item["size"] for item in measured_data_files),
             "cumulative_allocated_bytes": max(allocated),
         },
         "projected_10m_adjacency_reduction_fraction": None,

@@ -34,7 +34,7 @@
       "TreeDB/collections/vector_index_rebuild.go": "21bed0f84ae5301d17619ed2753300be73cf422c"
     },
     "harness_blobs": {
-      "scripts/treedb_vectordbbench_artifact.py": "f59380605cc0777dec344a0f56a9184b4035a702",
+      "scripts/treedb_vectordbbench_artifact.py": "d6b5f5cf1e7447cb541d3ec38af100b5ed18c418",
       "cmd/treedb_column_section_audit/main.go": "c22478631e79d76339190b2c94b99bda3db8a2a3"
     },
     "vectordbbench": {
@@ -543,14 +543,14 @@
       "resources", "projected_10m_adjacency_reduction_fraction"
     ],
     "source_exact_keys": [
-      "schema_version", "adapter_lifecycle", "diagnostics", "isolation", "storage_ownership_audit", "data_root", "data_files"
+      "schema_version", "adapter_lifecycle", "diagnostics", "isolation", "storage_ownership_audit", "data_root", "data_files", "audited_data_files"
     ],
     "origin_exact_keys": [
       "run_id", "artifact_root", "execution_commit", "dataset_sha256", "scale",
       "role", "partition", "ef_construction", "lifecycle_sha256",
       "lifecycle_started_at", "lifecycle_completed_at"
     ],
-    "producer_binding": "the lifecycle harness finalizes isolation monitoring before writing checksum-bound measurement-source.json and measurements.json, including finalized isolation, originating run/dataset/artifact root/scale/role/partition, and lifecycle checksum/start/completion. The validator requires those origin values to equal the enclosing retained run, requires the measurement-source isolation binding to equal the run isolation binding, verifies the source adapter and diagnostics bindings against manifest.lifecycle.raw_artifacts, requires data_root to equal manifest.service.data_dir, resolves the complete persisted-data ledger, and recomputes every emitted measurement value exactly. The producer leaves projected_10m_adjacency_reduction_fraction null; the validator derives the prospective 10M adjacency reduction from the raw 1M candidate adjacency seconds by (10M*ln(10M))/(1M*ln(1M)) and compares that derived value against the gate.",
+    "producer_binding": "the lifecycle harness finalizes isolation monitoring before writing checksum-bound measurement-source.json and measurements.json, including finalized isolation, originating run/dataset/artifact root/scale/role/partition, and lifecycle checksum/start/completion. The validator requires those origin values to equal the enclosing retained run, requires the measurement-source isolation binding to equal the run isolation binding, verifies the source adapter and diagnostics bindings against manifest.lifecycle.raw_artifacts, requires data_root to equal manifest.service.data_dir, resolves the complete persisted-data ledger for filesystem closure, derives audited_data_files from the storage-ownership audit for persisted-byte accounting, and recomputes every emitted measurement value exactly. The producer leaves projected_10m_adjacency_reduction_fraction null; the validator derives the prospective 10M adjacency reduction from the raw 1M candidate adjacency seconds by (10M*ln(10M))/(1M*ln(1M)) and compares that derived value against the gate.",
     "observer_phase_exact_keys": [
       "decisions", "accepted", "rejected", "direct_exact_fp32_rows", "direct_exact_fp32_calls",
       "indexed_exact_fp32_rows", "indexed_exact_fp32_calls", "approximate_score_rows",

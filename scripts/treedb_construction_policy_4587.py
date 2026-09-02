@@ -358,6 +358,8 @@ def validate_construction_evidence(
     exact_keys(decisions, WORK_KEYS, "raw construction decisions")
     for phase_name, phase_value in decisions.items():
         phase = object_at(phase_value, f"raw construction decisions.{phase_name}")
+        exact_keys(phase, OBSERVER_PHASE_KEYS,
+                   f"raw construction decisions.{phase_name}")
         for key, value in phase.items():
             name = f"raw construction decisions.{phase_name}.{key}"
             if key == "saturated":
@@ -769,7 +771,7 @@ def validate_contract(contract: dict[str, Any], allow_draft: bool,
     exact(set(measurement_schema["exact_keys"]), MEASUREMENT_KEYS, "measurement contract keys")
     exact(set(measurement_schema["source_exact_keys"]), {
         "schema_version", "adapter_lifecycle", "diagnostics", "isolation",
-        "storage_ownership_audit", "data_root", "data_files",
+        "storage_ownership_audit", "data_root", "data_files", "audited_data_files",
     }, "measurement source contract keys")
     exact(set(measurement_schema["origin_exact_keys"]), MEASUREMENT_ORIGIN_KEYS,
           "measurement origin contract keys")
@@ -1424,7 +1426,7 @@ def validate_storage_ownership_audit(
     manifest: dict[str, Any],
     data_root: Path,
     data_files: list[dict[str, Any]],
-) -> None:
+) -> set[str]:
     binding = object_at(binding, "measurement source storage ownership audit")
     exact_keys(binding, {"path", "sha256"}, "measurement source storage ownership audit binding")
     raw_artifacts = object_at(manifest.get("lifecycle"), "manifest.lifecycle").get("raw_artifacts")
@@ -1490,11 +1492,13 @@ def validate_storage_ownership_audit(
         "value_vlog": "maindb/value_vlog/",
         "leaf_vlog": "maindb/leaf_vlog/",
     }
+    audited_paths: set[str] = set()
     for name, prefix in storage_roots.items():
         matches = {
             relative: size for relative, size in ledger.items()
             if relative == prefix or relative.startswith(prefix)
         }
+        audited_paths.update(matches)
         domain = domains[name]
         exact(Path(domain["path"]).resolve(),
               (data_root / prefix.rstrip("/")).resolve(),
@@ -1566,6 +1570,10 @@ def validate_storage_ownership_audit(
         and "/assets/segments/" in relative and relative.endswith(".tca")
     }
     exact(audited_segments, physical_segments, "storage ownership complete column segment ledger")
+    audited_paths.update(audited_segments)
+    if not audited_paths:
+        fail("storage ownership audit produced an empty measured ledger")
+    return audited_paths
 
 
 def measurement_source_values(
@@ -1576,10 +1584,10 @@ def measurement_source_values(
     source, _ = read_bound_json(root, binding, "measurements.source")
     exact_keys(source, {
         "schema_version", "adapter_lifecycle", "diagnostics", "isolation",
-        "data_root", "data_files",
+        "data_root", "data_files", "audited_data_files",
         "storage_ownership_audit",
     }, "measurement source")
-    exact(source["schema_version"], "treedb-construction-policy-4587-measurement-source/v3",
+    exact(source["schema_version"], "treedb-construction-policy-4587-measurement-source/v4",
           "measurement source schema")
     adapter_binding = object_at(source["adapter_lifecycle"], "measurement source adapter")
     diagnostics_binding = object_at(source["diagnostics"], "measurement source diagnostics")
@@ -1647,7 +1655,6 @@ def measurement_source_values(
         fail("measurement source data file ledger must be non-empty")
     expected_paths = set()
     expected_file_ids = set()
-    persisted = 0
     for position, item in enumerate(data_files):
         item = object_at(item, f"measurement source data_files[{position}]")
         exact_keys(item, {"path", "size", "sha256"}, f"measurement source data_files[{position}]")
@@ -1673,12 +1680,25 @@ def measurement_source_values(
         exact(sha256_file(path), item["sha256"], "measurement source file checksum")
         expected_paths.add(path)
         expected_file_ids.add(file_id)
-        persisted += item["size"]
     actual_paths = {path.resolve() for path in data_root.rglob("*") if path.is_file()}
     exact(actual_paths, expected_paths, "measurement source complete data file ledger")
-    validate_storage_ownership_audit(
+    audited_paths = validate_storage_ownership_audit(
         root, storage_audit_binding, manifest, data_root, data_files)
-    data_digest = canonical_sha256(data_files)
+    audited = source["audited_data_files"]
+    if not isinstance(audited, list) or not audited:
+        fail("measurement source audited data file ledger must be non-empty")
+    expected_audited = [
+        item for item in data_files if item["path"] in audited_paths
+    ]
+    exact(audited, expected_audited,
+          "measurement source audited data file ledger")
+    exact({item["path"] for item in audited}, audited_paths,
+          "measurement source complete audited data file paths")
+    persisted = sum(
+        nonnegative_int(item["size"], "measurement source audited file size")
+        for item in audited
+    )
+    data_digest = canonical_sha256(audited)
     adapter_digest = sha256_file(adapter_path)
     peak_rss = max(
         positive_int(object_at(sample.get("process"), "measurement process").get("peak_rss_bytes"),

@@ -474,10 +474,7 @@ class DecisionFixture:
             "sha256": policy.sha256_file(data_file),
         }]
         measurement_source = {
-            "storage_ownership_audit": {
-                "path": audit_path.name, "sha256": policy.sha256_file(audit_path),
-            },
-            "schema_version": "treedb-construction-policy-4587-measurement-source/v3",
+            "schema_version": "treedb-construction-policy-4587-measurement-source/v4",
             "adapter_lifecycle": {
                 "path": adapter_path.name, "sha256": policy.sha256_file(adapter_path),
             },
@@ -485,8 +482,12 @@ class DecisionFixture:
                 "path": diagnostics_path.name, "sha256": policy.sha256_file(diagnostics_path),
             },
             "isolation": isolation_binding,
+            "storage_ownership_audit": {
+                "path": audit_path.name, "sha256": policy.sha256_file(audit_path),
+            },
             "data_root": str(data_root.resolve()),
             "data_files": data_files,
+            "audited_data_files": data_files,
         }
         measurement_source_binding = self._write(
             root / "measurement-source.json", measurement_source)
@@ -1412,6 +1413,29 @@ class ValidatorMutations(unittest.TestCase):
         measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
         run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
         self.assert_invalid(packet, "unexpected TreeDB data file path")
+
+    def test_allowed_control_padding_is_not_counted_as_persisted_data(self) -> None:
+        packet = self.fixture.go_packet()
+        run = packet["runs"][4]
+        root = Path(run["artifact"]["root"])
+        measurement_path = root / run["measurement_evidence"]["path"]
+        measurement = json.loads(measurement_path.read_text())
+        source_path = root / measurement["source"]["path"]
+        source = json.loads(source_path.read_text())
+        data_root = Path(source["data_root"])
+        padding = data_root / "maindb" / "LOCK"
+        padding.write_bytes(b"x" * 1000)
+        source["data_files"].append({
+            "path": padding.relative_to(data_root).as_posix(),
+            "size": padding.stat().st_size,
+            "sha256": policy.sha256_file(padding),
+        })
+        source_path.write_text(json.dumps(source, sort_keys=True) + "\n")
+        measurement["source"]["sha256"] = policy.sha256_file(source_path)
+        measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
+        run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
+
+        self.assertEqual(self.fixture.validate(packet)["verdict"], "GO")
 
     def test_treedb_data_file_allowlist_matches_canonical_layout(self) -> None:
         allowed = (
