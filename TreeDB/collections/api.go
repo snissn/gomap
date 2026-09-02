@@ -395,16 +395,17 @@ func persistIndexStateForDocumentFormat(format DocumentFormat) bool {
 }
 
 type CollectionManager struct {
-	db                       *backenddb.DB
-	closeUnregister          func()
-	closing                  atomic.Bool
-	updateBatchDetailedStats atomic.Bool
-	commandWALCoordinator    *collectionCommandWALCoordinator
-	commandWALRawUnregister  func()
-	domainMu                 sync.RWMutex
-	domains                  map[string]*collectionWriteDomain
-	collectionsMu            sync.RWMutex
-	collections              map[*Collection]struct{}
+	db                                      *backenddb.DB
+	closeUnregister                         func()
+	closing                                 atomic.Bool
+	updateBatchDetailedStats                atomic.Bool
+	vectorIndexConstructionDecisionObserver atomic.Bool
+	commandWALCoordinator                   *collectionCommandWALCoordinator
+	commandWALRawUnregister                 func()
+	domainMu                                sync.RWMutex
+	domains                                 map[string]*collectionWriteDomain
+	collectionsMu                           sync.RWMutex
+	collections                             map[*Collection]struct{}
 }
 
 type collectionManagerOptions struct {
@@ -1712,6 +1713,16 @@ func (m *CollectionManager) SetUpdateBatchDetailedStatsEnabled(enabled bool) {
 		}
 	}
 	m.domainMu.RUnlock()
+}
+
+// SetVectorIndexConstructionDecisionObserverEnabled toggles bounded diagnostic
+// work accounting for this manager's column_graph rebuilds. It is disabled by
+// default so ordinary rebuilds allocate no observer and record no atomics.
+func (m *CollectionManager) SetVectorIndexConstructionDecisionObserverEnabled(enabled bool) {
+	if m == nil {
+		return
+	}
+	m.vectorIndexConstructionDecisionObserver.Store(enabled)
 }
 
 func (m *CollectionManager) closeForBackend() error {

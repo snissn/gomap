@@ -38,15 +38,29 @@ func TestVectorIndexConstructionDecisionObserverPreservesFrozenPrefix4461(t *tes
 		}
 	}
 	firstStats, secondStats := firstObserver.snapshot(), secondObserver.snapshot()
-	for phase := range firstStats {
-		if firstStats[phase].DigestXOR == 0 || firstStats[phase].DigestSum == 0 || firstStats[phase].Decisions == 0 {
-			t.Fatalf("phase %d missing decision evidence: %+v", phase, firstStats[phase])
+	firstPhases := []VectorIndexConstructionDecisionPhaseSnapshot{firstStats.Planning, firstStats.Reciprocal}
+	secondPhases := []VectorIndexConstructionDecisionPhaseSnapshot{secondStats.Planning, secondStats.Reciprocal}
+	for phase := range firstPhases {
+		firstPhase, secondPhase := firstPhases[phase], secondPhases[phase]
+		if firstPhase.DigestXOR == 0 || firstPhase.DigestSum == 0 || firstPhase.Decisions == 0 {
+			t.Fatalf("phase %d missing decision evidence: %+v", phase, firstPhase)
 		}
-		if firstStats[phase].DigestXOR != secondStats[phase].DigestXOR || firstStats[phase].DigestSum != secondStats[phase].DigestSum {
-			t.Fatalf("phase %d digest changed: first=%x/%x second=%x/%x", phase, firstStats[phase].DigestXOR, firstStats[phase].DigestSum, secondStats[phase].DigestXOR, secondStats[phase].DigestSum)
+		if firstPhase.DigestXOR != secondPhase.DigestXOR || firstPhase.DigestSum != secondPhase.DigestSum {
+			t.Fatalf("phase %d digest changed: first=%x/%x second=%x/%x", phase, firstPhase.DigestXOR, firstPhase.DigestSum, secondPhase.DigestXOR, secondPhase.DigestSum)
 		}
-		if firstStats[phase].ScalarRows+firstStats[phase].IndexedRows == 0 || firstStats[phase].RowDimensions == 0 {
-			t.Fatalf("phase %d invalid bounded row evidence: %+v", phase, firstStats[phase])
+		if firstPhase.DirectExactFP32Rows+firstPhase.IndexedExactFP32Rows == 0 ||
+			firstPhase.DirectExactFP32Calls+firstPhase.IndexedExactFP32Calls == 0 ||
+			firstPhase.ExactFP32Dimensions == 0 {
+			t.Fatalf("phase %d invalid bounded row/call evidence: %+v", phase, firstPhase)
+		}
+		if firstPhase.ApproximateScoreRows != 0 || firstPhase.ApproximateScoreCalls != 0 {
+			t.Fatalf("phase %d exact route reported approximate scores: %+v", phase, firstPhase)
+		}
+		if firstPhase.Accepted+firstPhase.Rejected != firstPhase.DiversityPredicates ||
+			firstPhase.DiversityCandidates == 0 ||
+			firstPhase.DiversityComparisonsExecuted == 0 ||
+			firstPhase.DiversityComparisonsRequested < firstPhase.DiversityComparisonsExecuted {
+			t.Fatalf("phase %d inconsistent diversity accounting: %+v", phase, firstPhase)
 		}
 	}
 	if size := unsafe.Sizeof(*firstObserver); size > 70<<10 {
@@ -57,7 +71,7 @@ func TestVectorIndexConstructionDecisionObserverPreservesFrozenPrefix4461(t *tes
 	for pair := 0; pair < vectorIndexConstructionDecisionPairSlots*2; pair++ {
 		replacementContext.recordRowFrom(pair, pair+1, false)
 	}
-	replacementStats := replacementObserver.snapshot()[vectorIndexConstructionDecisionPlanning]
+	replacementStats := replacementObserver.snapshot().Planning
 	if replacementStats.RowPairReplacements == 0 || replacementStats.Saturated {
 		t.Fatalf("rolling row-pair sketch replacements=%d saturated=%t", replacementStats.RowPairReplacements, replacementStats.Saturated)
 	}
@@ -111,6 +125,69 @@ func TestVectorIndexConstructionDecisionObserverPreservesFrozenPrefix4461(t *tes
 	}
 	if got := loaded.persistMetaLocked(); !reflect.DeepEqual(got, persistedMeta) {
 		t.Fatalf("reopened metadata=%+v want %+v", got, persistedMeta)
+	}
+}
+
+func TestVectorIndexConstructionDecisionObserverCountsUpperLayerGreedyScores(t *testing.T) {
+	const dimensions = 16
+	rows := vectorIndexReciprocalParityRows4257(96, dimensions, true)
+	index := buildVectorIndexDecisionObserver4461(t, rows, nil)
+	if index.maxLevel <= 0 {
+		t.Fatal("fixture did not produce an upper graph layer")
+	}
+	query := rows[len(rows)-1]
+	norm := vectorNormSquared(query)
+	prepared, err := prepareFloat32CosineQuery(query, norm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := index.greedyNearestAtLayerLocked(query, norm, &prepared, index.entry, index.maxLevel)
+	observer := &vectorIndexConstructionDecisionObserverV1{}
+	context := &vectorIndexConstructionDecisionContextV1{
+		observer: observer, phase: vectorIndexConstructionDecisionPlanning,
+		source: len(index.nodes), layer: index.maxLevel, dimensions: dimensions,
+	}
+	got := index.greedyNearestAtLayerObservedLocked(query, norm, &prepared, index.entry, index.maxLevel, context)
+	if got != want {
+		t.Fatalf("observed upper-layer greedy result=%d want %d", got, want)
+	}
+	stats := observer.snapshot().Planning
+	if stats.DirectExactFP32Rows == 0 ||
+		stats.DirectExactFP32Calls != stats.DirectExactFP32Rows ||
+		stats.ExactFP32Dimensions != stats.DirectExactFP32Rows*uint64(dimensions) {
+		t.Fatalf("upper-layer greedy scoring not fully accounted: %+v", stats)
+	}
+}
+
+func TestVectorIndexConstructionDecisionObserverCountsReciprocalCandidateScores(t *testing.T) {
+	const dimensions = 16
+	rows := vectorIndexReciprocalParityRows4257(96, dimensions, true)
+	index := buildVectorIndexDecisionObserver4461(t, rows, nil)
+	fromNodeID, toNodeID := -1, -1
+	for source := range index.nodes {
+		neighbors := index.nodes[source].neighbors[0]
+		if len(neighbors) == 0 {
+			continue
+		}
+		fromNodeID = source
+		toNodeID = neighbors[len(neighbors)-1].nodeID
+		index.nodes[source].neighbors[0] = neighbors[:len(neighbors)-1]
+		break
+	}
+	if fromNodeID < 0 {
+		t.Fatal("fixture has no reciprocal edge to replay")
+	}
+	observer := &vectorIndexConstructionDecisionObserverV1{}
+	index.decisionObserver = observer
+	link := vectorIndexFrozenPrefixReciprocalLink{fromNodeID: fromNodeID, toNodeID: toNodeID, layer: 0}
+	if pruned := index.linkFrozenPrefixReciprocalGroupLocked([]vectorIndexFrozenPrefixReciprocalLink{link}, nil); pruned {
+		t.Fatal("single reciprocal candidate unexpectedly pruned")
+	}
+	stats := observer.snapshot().Reciprocal
+	if stats.DirectExactFP32Rows != 1 ||
+		stats.DirectExactFP32Calls != 1 ||
+		stats.ExactFP32Dimensions != uint64(dimensions) {
+		t.Fatalf("reciprocal candidate score accounting=%+v", stats)
 	}
 }
 

@@ -335,11 +335,16 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 			typedSource = nil
 		}
 	}
+	var decisionObserver *vectorIndexConstructionDecisionObserverV1
+	if c.manager != nil && c.manager.vectorIndexConstructionDecisionObserver.Load() {
+		decisionObserver = &vectorIndexConstructionDecisionObserverV1{}
+	}
 	runColumnVectorGraphRebuildBeforeBuildTestHook()
 
-	if err := buildColumnVectorGraphAdjacencyTimedWithConstructionMatrix(rows, def, constructionMatrix, &timing); err != nil {
+	if err := buildColumnVectorGraphAdjacencyTimedWithConstructionMatrixAndDecisionObserver(rows, def, constructionMatrix, decisionObserver, &timing); err != nil {
 		return VectorIndexStatus{}, err
 	}
+	timing.ConstructionDecisions = decisionObserver.snapshot()
 	rootNames := []string{rootName}
 	baseRootIDs := map[string]uint64{rootName: baseManifestRootID}
 	intent, err := c.newCollectionRebuildVectorIndexCommandWALIntent(name, replay)
@@ -850,10 +855,14 @@ func buildColumnVectorGraphAdjacencyTimed(rows []columnVectorGraphAssetRow, def 
 }
 
 func buildColumnVectorGraphAdjacencyTimedWithConstructionMatrix(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, matrix *columnVectorGraphConstructionMatrix, timing *ColumnGraphBuildTiming) error {
+	return buildColumnVectorGraphAdjacencyTimedWithConstructionMatrixAndDecisionObserver(rows, def, matrix, nil, timing)
+}
+
+func buildColumnVectorGraphAdjacencyTimedWithConstructionMatrixAndDecisionObserver(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, matrix *columnVectorGraphConstructionMatrix, observer *vectorIndexConstructionDecisionObserverV1, timing *ColumnGraphBuildTiming) error {
 	if matrix == nil {
-		return buildColumnVectorGraphAdjacencyTimed(rows, def, timing)
+		return buildColumnVectorGraphAdjacencyV1WithFixedRows(rows, def, nil, true, nil, true, timing, nil, observer)
 	}
-	return buildColumnVectorGraphAdjacencyV1WithFixedRows(rows, def, nil, true, nil, true, timing, matrix.values)
+	return buildColumnVectorGraphAdjacencyV1WithFixedRows(rows, def, nil, true, nil, true, timing, matrix.values, observer)
 }
 
 func buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1) error {
@@ -872,10 +881,10 @@ func buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(rows []columnVector
 }
 
 func buildColumnVectorGraphAdjacencyV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool, policy *vectorIndexLayer0ConstructionPolicyV1, parallelReciprocalLinks bool, timing *ColumnGraphBuildTiming) error {
-	return buildColumnVectorGraphAdjacencyV1WithFixedRows(rows, def, trace, recordFinal, policy, parallelReciprocalLinks, timing, nil)
+	return buildColumnVectorGraphAdjacencyV1WithFixedRows(rows, def, trace, recordFinal, policy, parallelReciprocalLinks, timing, nil, nil)
 }
 
-func buildColumnVectorGraphAdjacencyV1WithFixedRows(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool, policy *vectorIndexLayer0ConstructionPolicyV1, parallelReciprocalLinks bool, timing *ColumnGraphBuildTiming, fixedRows []float32) error {
+func buildColumnVectorGraphAdjacencyV1WithFixedRows(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool, policy *vectorIndexLayer0ConstructionPolicyV1, parallelReciprocalLinks bool, timing *ColumnGraphBuildTiming, fixedRows []float32, observer *vectorIndexConstructionDecisionObserverV1) error {
 	if uint64(len(rows)) > maxColumnVectorGraphAdjacencyOrdinal {
 		return fmt.Errorf("collections: column vector graph row count=%d exceeds uint32 adjacency encoding", len(rows))
 	}
@@ -897,6 +906,7 @@ func buildColumnVectorGraphAdjacencyV1WithFixedRows(rows []columnVectorGraphAsse
 		return err
 	}
 	index.constructionTrace = trace
+	index.decisionObserver = observer
 	index.layer0ConstructionPolicy = policy
 	index.parallelReciprocalLinks = parallelReciprocalLinks
 	index.mu.Lock()
