@@ -134,7 +134,7 @@ func runTreeDBComparisonEvidence(cfg applicationConfig, outputPath string) error
 		for _, filter := range applicationFilterOrder {
 			cell := applicationCellIdentity{Route: route, Projection: "fetch_topk", Filter: filter, Collapse: "disabled", Surface: "direct_collection", Embedding: "semantic_minilm", Clients: 1}
 			cell.VectorRoute = applicationVectorRoute(cell)
-			row, rowErr := runApplicationCell(cellCfg, &fixture, env, queryVectors, cell)
+			row, rowErr := runApplicationCell(cellCfg, &fixture, env, queryVectors, cell, false)
 			if rowErr != nil {
 				return fmt.Errorf("TreeDB comparison cell %s/%s: %w", route, filter, rowErr)
 			}

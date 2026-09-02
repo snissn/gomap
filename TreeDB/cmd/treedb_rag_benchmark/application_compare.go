@@ -404,6 +404,11 @@ func validateTreeDBComparisonArtifact(artifact *treeDBComparisonArtifact, manife
 			return nil, fmt.Errorf("TreeDB artifact has duplicate comparison cell %s/%s", route, row.Cell.Filter)
 		}
 		seen[key] = true
+		for _, counter := range ragCounterKeys {
+			if _, ok := row.Counters[counter.Key]; !ok {
+				return nil, fmt.Errorf("TreeDB artifact cell %s/%s lacks required counter %q", route, row.Cell.Filter, counter.Key)
+			}
+		}
 		if row.Status != "supported" || row.Errors != 0 || row.Counters["full_document_scan_fallbacks"] != 0 ||
 			row.Counters["cross_tenant_results"] != 0 || row.Counters["cross_workspace_results"] != 0 ||
 			row.Counters["documents_fetched"] > float64(manifest.Config.TopK) ||
@@ -807,14 +812,22 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 	fullScanThresholdKB, fullScanOK := artifact.Server.Config["full_scan_threshold"].(float64)
 	hnswM, hnswMOK := artifact.Server.Config["hnsw_m"].(float64)
 	indexingThreshold, indexingThresholdOK := artifact.Server.Config["indexing_threshold"].(float64)
+	denseSize, denseSizeOK := artifact.Server.Config["dense_size"].(float64)
+	sparseOnDisk, sparseOnDiskOK := artifact.Server.Config["sparse_on_disk"].(bool)
+	hnswEFConstruct, hnswEFConstructOK := artifact.Server.Config["hnsw_ef_construct"].(float64)
+	maxOptimizationThreads, maxOptimizationThreadsOK := artifact.Server.Config["max_optimization_threads"].(float64)
 	if artifact.Server.Version != manifest.Config.QdrantServerVersion || artifact.Server.LocalMode ||
 		artifact.Server.Deployment != "standalone" ||
 		artifact.Server.BinarySHA256 != manifest.Config.QdrantBinarySHA256 ||
 		artifact.Server.Config["dense"] != manifest.Config.DenseVectorName ||
 		artifact.Server.Config["sparse"] != manifest.Config.SparseVectorName ||
+		artifact.Server.Config["dense_distance"] != "cosine" ||
 		artifact.Server.Config["full_scan_threshold_unit"] != "KiB" ||
+		!denseSizeOK || denseSize != 384 || !sparseOnDiskOK || sparseOnDisk ||
 		!exactOK || exact || !fullScanOK || fullScanThresholdKB != 10 ||
-		!hnswMOK || hnswM != 16 || !indexingThresholdOK || indexingThreshold != 1 ||
+		!hnswMOK || hnswM != 16 || !hnswEFConstructOK || hnswEFConstruct != 100 ||
+		!indexingThresholdOK || indexingThreshold != 1 ||
+		!maxOptimizationThreadsOK || maxOptimizationThreads != 1 ||
 		artifact.Server.IndexProof.IndexedVectorsCount < 2*len(manifest.Chunks) {
 		return fmt.Errorf("Qdrant artifact lacks pinned standalone server/index configuration")
 	}

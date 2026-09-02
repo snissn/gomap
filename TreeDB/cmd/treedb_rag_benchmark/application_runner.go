@@ -498,7 +498,7 @@ func runApplicationBaseline(cfg applicationConfig) (*applicationReport, error) {
 		}
 		report.ExactControls = append(report.ExactControls, control)
 		for _, cell := range applicationCellMatrix(embeddingCell) {
-			row, rowErr := runApplicationCell(cfg, &fixture, env, queryVectors, cell)
+			row, rowErr := runApplicationCell(cfg, &fixture, env, queryVectors, cell, true)
 			if rowErr != nil {
 				env.close()
 				return nil, fmt.Errorf("cell %+v: %w", cell, rowErr)
@@ -1130,7 +1130,7 @@ func applicationWarmupQuery(fixture *applicationFixture, ordinal int) applicatio
 	return fixture.Queries[ordinal%len(fixture.Queries)]
 }
 
-func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env *applicationEnvironment, queryVectors map[string][]float32, cell applicationCellIdentity) (applicationRow, error) {
+func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env *applicationEnvironment, queryVectors map[string][]float32, cell applicationCellIdentity, measureInitialQuality bool) (applicationRow, error) {
 	row := applicationRow{Cell: cell, Status: "supported", Counters: map[string]float64{}}
 	qualityDigest := applicationFixtureDigest(fixture)
 	workRaw, _ := json.Marshal(struct {
@@ -1150,20 +1150,22 @@ func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env 
 		}
 		return runDirectQuery(cfg, env.col, query, queryVectors[query.ID], cell, false)
 	}
-	qualityCall := call
-	attributionMode := "untimed_projection_query_sources"
-	if cell.Surface == "direct_collection" && cell.Projection == "score_only" {
-		qualityCall = func(query applicationQuery) (queryResult, error) {
-			return runDirectQuery(cfg, env.col, query, queryVectors[query.ID], cell, true)
+	if measureInitialQuality {
+		qualityCall := call
+		attributionMode := "untimed_projection_query_sources"
+		if cell.Surface == "direct_collection" && cell.Projection == "score_only" {
+			qualityCall = func(query applicationQuery) (queryResult, error) {
+				return runDirectQuery(cfg, env.col, query, queryVectors[query.ID], cell, true)
+			}
+			attributionMode = "untimed_compact_same_work_route_filter"
 		}
-		attributionMode = "untimed_compact_same_work_route_filter"
+		quality, err := measureApplicationQuality(fixture, cell.Filter, cfg.TopK, qualityCall)
+		if err != nil {
+			return row, err
+		}
+		quality.AttributionMode = attributionMode
+		row.Quality = quality
 	}
-	quality, err := measureApplicationQuality(fixture, cell.Filter, cfg.TopK, qualityCall)
-	if err != nil {
-		return row, err
-	}
-	quality.AttributionMode = attributionMode
-	row.Quality = quality
 	for i := range cfg.WarmupQueries {
 		query := applicationWarmupQuery(fixture, i)
 		if _, err := call(query); err != nil {

@@ -53,6 +53,9 @@ func validTreeDBComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 		for _, filter := range applicationFilterOrder {
 			vectorRoute := "none"
 			counters := map[string]float64{}
+			for _, counter := range ragCounterKeys {
+				counters[counter.Key] = 0
+			}
 			if route == "vector_only" || route == "hybrid" {
 				vectorRoute = "declared_column_graph_exact"
 				counters["vector_candidates_examined"] = 54
@@ -156,6 +159,7 @@ func TestTreeDBComparisonValidatorRejectsMismatchedEvidence(t *testing.T) {
 		{"high-water RSS regression", func(a *treeDBComparisonArtifact) { a.ProcessResources.After.PeakRSSBytes = 511 }},
 		{"wrong exact vector route", func(a *treeDBComparisonArtifact) { a.Rows[4].Cell.VectorRoute = "brute_force" }},
 		{"missing vector counters", func(a *treeDBComparisonArtifact) { a.Rows[4].Counters["vector_candidates_examined"] = 0 }},
+		{"absent route counter", func(a *treeDBComparisonArtifact) { delete(a.Rows[0].Counters, "full_document_scan_fallbacks") }},
 		{"missing hybrid fusion counters", func(a *treeDBComparisonArtifact) { a.Rows[8].Counters["candidates_fused"] = 0 }},
 		{"wrong QPS", func(a *treeDBComparisonArtifact) { a.Rows[0].QPSMean++ }},
 		{"wrong latency", func(a *treeDBComparisonArtifact) { a.Rows[0].LatencyMSP95++ }},

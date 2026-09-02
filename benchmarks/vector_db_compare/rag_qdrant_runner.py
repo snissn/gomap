@@ -106,6 +106,45 @@ class Runner:
         self.indexed_vectors_count = 0
         self.filter_cardinalities = {spec["id"]: sum(authorized(chunk, spec) for chunk in manifest["chunks"]) for spec in manifest["filters"]}
         self.process_samples = [process_stats(args.server_pid)]
+        self.effective_config = None
+    def read_effective_config(self, info):
+        config = info.config.model_dump(mode="json")
+        params = config["params"]
+        dense = params["vectors"][self.config["dense_vector_name"]]
+        sparse = params["sparse_vectors"][self.config["sparse_vector_name"]]
+        hnsw = config["hnsw_config"]
+        optimizer = config["optimizer_config"]
+        effective = {
+            "dense": self.config["dense_vector_name"],
+            "sparse": self.config["sparse_vector_name"],
+            "dense_size": dense["size"],
+            "dense_distance": dense["distance"].lower(),
+            "sparse_on_disk": sparse["index"]["on_disk"],
+            "hnsw_m": hnsw["m"],
+            "hnsw_ef_construct": hnsw["ef_construct"],
+            "full_scan_threshold": hnsw["full_scan_threshold"],
+            "full_scan_threshold_unit": "KiB",
+            "indexing_threshold": optimizer["indexing_threshold"],
+            "max_optimization_threads": optimizer["max_optimization_threads"],
+            "exact": False,
+        }
+        expected = {
+            "dense": self.config["dense_vector_name"],
+            "sparse": self.config["sparse_vector_name"],
+            "dense_size": 384,
+            "dense_distance": "cosine",
+            "sparse_on_disk": False,
+            "hnsw_m": 16,
+            "hnsw_ef_construct": 100,
+            "full_scan_threshold": 10,
+            "full_scan_threshold_unit": "KiB",
+            "indexing_threshold": 1,
+            "max_optimization_threads": 1,
+            "exact": False,
+        }
+        if effective != expected:
+            raise RuntimeError(f"effective Qdrant collection configuration mismatch: {effective!r}")
+        return effective
     def build(self):
         m, c = self.models, self.client
         started = time.monotonic()
@@ -127,6 +166,7 @@ class Runner:
         self.build_seconds = time.monotonic() - started
         if info is None or int(getattr(info, "points_count", -1)) != 54 or int(getattr(info, "indexed_vectors_count", -1)) < 108 or any(field not in (getattr(info, "payload_schema", {}) or {}) for field in ("tenant", "workspace", "updated_year")): raise RuntimeError("build count/index proof failed")
         self.indexed_vectors_count = int(getattr(info, "indexed_vectors_count", -1))
+        self.effective_config = self.read_effective_config(info)
     def restart(self):
         started = time.monotonic()
         self.reopen["attempted"] = True
@@ -174,6 +214,9 @@ class Runner:
                 payload_indexes = sorted((getattr(collection, "payload_schema", {}) or {}).keys())
                 if count != 54 or indexed < 108 or not status.endswith("green") or payload_indexes != ["tenant", "updated_year", "workspace"]:
                     raise RuntimeError(f"reopen index proof count={count} indexed={indexed} status={status} payload={payload_indexes}")
+                effective_config = self.read_effective_config(collection)
+                if effective_config != self.effective_config:
+                    raise RuntimeError(f"reopen collection configuration changed: {effective_config!r}")
                 self.client = candidate
                 self.reopen.update(attempted=True, succeeded=True, version=server["version"], status="green", point_count=count, indexed_vectors_count=indexed, payload_indexes=payload_indexes, seconds=time.monotonic() - started)
                 return
@@ -229,7 +272,7 @@ class Runner:
         observed = [row for row in self.process_samples if row]
         resources = {"host_pid_metrics": "observed_process_samples_across_pre_and_post_restart_segments", "process_samples": observed, "peak_observed_rss_bytes": max((row["rss_bytes"] for row in observed), default=0), "cpu_seconds": sum(max(0, right["cpu_seconds"] - left["cpu_seconds"]) for left, right in zip(observed, observed[1:]) if left["pid"] == right["pid"]) + sum(row["cpu_seconds"] for index, row in enumerate(observed) if index > 0 and row["pid"] != observed[index - 1]["pid"]), "durable_bytes": directory_bytes(self.args.storage_path)}
         server_binary_sha = file_sha256(self.args.server_binary)
-        return {"schema": ARTIFACT_SCHEMA, "backend": "qdrant_server", "harness_revision": self.args.harness_revision, "client_version": VERSION, "manifest_sha256": self.manifest_sha, "fixture_sha256": self.manifest["fixture_sha256"], "semantic_vector_sha256": self.manifest["semantic_vector_sha256"], "config_sha256": self.manifest["config_sha256"], "source_count": 18, "chunk_count": 54, "query_count": 3, "sparse_vector_sha256": self.sparse_sha, "build": {"seconds": self.build_seconds, "points": 54}, "query_seconds": self.query_seconds, "server": {"version": VERSION, "deployment": "standalone", "binary_sha256": server_binary_sha, "identity": self.args.server_identity, "local_mode": False, "config": {"dense": self.config["dense_vector_name"], "sparse": self.config["sparse_vector_name"], "hnsw_m": 16, "full_scan_threshold": 10, "full_scan_threshold_unit": "KiB", "indexing_threshold": 1, "exact": False}, "index_proof": {"indexed_vectors_count": self.indexed_vectors_count, "filter_cardinalities": self.filter_cardinalities}}, "resources": resources, "reopen": self.reopen, "cells": self.cells, "failures": self.failures}
+        return {"schema": ARTIFACT_SCHEMA, "backend": "qdrant_server", "harness_revision": self.args.harness_revision, "client_version": VERSION, "manifest_sha256": self.manifest_sha, "fixture_sha256": self.manifest["fixture_sha256"], "semantic_vector_sha256": self.manifest["semantic_vector_sha256"], "config_sha256": self.manifest["config_sha256"], "source_count": 18, "chunk_count": 54, "query_count": 3, "sparse_vector_sha256": self.sparse_sha, "build": {"seconds": self.build_seconds, "points": 54}, "query_seconds": self.query_seconds, "server": {"version": VERSION, "deployment": "standalone", "binary_sha256": server_binary_sha, "identity": self.args.server_identity, "local_mode": False, "config": self.effective_config, "index_proof": {"indexed_vectors_count": self.indexed_vectors_count, "filter_cardinalities": self.filter_cardinalities}}, "resources": resources, "reopen": self.reopen, "cells": self.cells, "failures": self.failures}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
