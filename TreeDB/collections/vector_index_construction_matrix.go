@@ -99,6 +99,19 @@ func stageColumnVectorGraphConstructionMatrix(root string, rows []columnVectorGr
 	return matrix, nil
 }
 
+// CloseRows invalidates every row alias before releasing the backing mapping.
+// Close remains idempotent so the rebuild's deferred cleanup can call this
+// after the explicit last-use release.
+func (m *columnVectorGraphConstructionMatrix) CloseRows(rows []columnVectorGraphAssetRow) error {
+	if m == nil {
+		return nil
+	}
+	for i := range rows {
+		rows[i].Vector = nil
+	}
+	return m.Close()
+}
+
 func (m *columnVectorGraphConstructionMatrix) Close() error {
 	if m == nil || m.closed {
 		return nil

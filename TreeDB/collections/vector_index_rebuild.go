@@ -80,6 +80,11 @@ var columnVectorGraphConstructionMatrixBoundTestHook struct {
 	hook func(*VectorIndex)
 }
 
+var columnVectorGraphConstructionMatrixLastUseTestHook struct {
+	sync.RWMutex
+	hook func([]columnVectorGraphAssetRow, *columnVectorGraphConstructionMatrix) error
+}
+
 func setColumnVectorGraphCanonicalRowsTestHook(hook func()) func() {
 	columnVectorGraphCanonicalRowsTestHook.Lock()
 	previous := columnVectorGraphCanonicalRowsTestHook.hook
@@ -141,6 +146,28 @@ func runColumnVectorGraphConstructionMatrixBoundTestHook(index *VectorIndex) {
 	if hook != nil {
 		hook(index)
 	}
+}
+
+func setColumnVectorGraphConstructionMatrixLastUseTestHook(hook func([]columnVectorGraphAssetRow, *columnVectorGraphConstructionMatrix) error) func() {
+	columnVectorGraphConstructionMatrixLastUseTestHook.Lock()
+	previous := columnVectorGraphConstructionMatrixLastUseTestHook.hook
+	columnVectorGraphConstructionMatrixLastUseTestHook.hook = hook
+	columnVectorGraphConstructionMatrixLastUseTestHook.Unlock()
+	return func() {
+		columnVectorGraphConstructionMatrixLastUseTestHook.Lock()
+		columnVectorGraphConstructionMatrixLastUseTestHook.hook = previous
+		columnVectorGraphConstructionMatrixLastUseTestHook.Unlock()
+	}
+}
+
+func runColumnVectorGraphConstructionMatrixLastUseTestHook(rows []columnVectorGraphAssetRow, matrix *columnVectorGraphConstructionMatrix) error {
+	columnVectorGraphConstructionMatrixLastUseTestHook.RLock()
+	hook := columnVectorGraphConstructionMatrixLastUseTestHook.hook
+	columnVectorGraphConstructionMatrixLastUseTestHook.RUnlock()
+	if hook != nil {
+		return hook(rows, matrix)
+	}
+	return nil
 }
 
 func takeColumnVectorGraphDurablePublication(prepared *columnVectorGraphPreparedPhysicalAsset, records []columnManifestRecord, activeGeneration uint64, namespace string) (*rootpublication.StableResourceSet, rootpublication.StableLogicalObligationRequirements, error) {
@@ -301,7 +328,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 			constructionMatrix = nil
 			err = nil
 		} else {
-			defer func() { err = errors.Join(err, constructionMatrix.Close()) }()
+			defer func() { err = errors.Join(err, constructionMatrix.CloseRows(rows)) }()
 			if err := typedSource.Close(); err != nil {
 				return VectorIndexStatus{}, err
 			}
@@ -342,6 +369,12 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 			deltaRecords, nextIdentity = preparedRecords, preparedIdentity
 			if prepared.RowCount != len(rows) {
 				return nil, fmt.Errorf("collections: column_graph rebuild row count changed rows=%d prepared=%d", len(rows), prepared.RowCount)
+			}
+			if err := constructionMatrix.CloseRows(rows); err != nil {
+				return nil, err
+			}
+			if err := runColumnVectorGraphConstructionMatrixLastUseTestHook(rows, constructionMatrix); err != nil {
+				return nil, err
 			}
 			delta := ColumnManifestRootDelta{
 				RootName:       rootName,

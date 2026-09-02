@@ -7,6 +7,10 @@ import (
 	"runtime"
 	"slices"
 	"testing"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestColumnGraphRebuildConstructionMatrixLifecycle4438(t *testing.T) {
@@ -145,4 +149,246 @@ func TestColumnGraphRebuildConstructionMatrixLifecycle4438(t *testing.T) {
 			t.Fatalf("failed staging root entries=%v read_err=%v", entries, readErr)
 		}
 	})
+}
+
+func TestColumnGraphRebuildReleasesConstructionMatrixBeforePublication4542(t *testing.T) {
+	if runtime.GOOS == "windows" || !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("rebuild-local construction mmap is unsupported on Windows")
+	}
+	const dimensions = 64
+	rows := columnGraphRebuildSyntheticRowsV2A(48, dimensions)
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, dimensions, 16, rows)
+	defer func() { _ = d.Close() }()
+
+	type observedState struct {
+		aliasesEmpty     bool
+		closed           bool
+		handleGone       bool
+		activeHandles    int
+		activeMappedByte int64
+	}
+	stagedHandles := 0
+	var stagedMappedBytes int64
+	restoreBound := setColumnVectorGraphConstructionMatrixBoundTestHook(func(*VectorIndex) {
+		for _, pin := range mappedresource.GlobalPinSummary() {
+			if pin.Root == d.ColumnAssetRootDir() && pin.Key.Kind == "column_graph_construction_matrix" {
+				stagedHandles++
+				if pin.Source == mappedresource.SourceMapped {
+					stagedMappedBytes += pin.Bytes
+				}
+			}
+		}
+	})
+	defer restoreBound()
+	reached := make(chan observedState, 1)
+	resume := make(chan struct{})
+	restore := setColumnVectorGraphConstructionMatrixLastUseTestHook(func(rows []columnVectorGraphAssetRow, matrix *columnVectorGraphConstructionMatrix) error {
+		state := observedState{
+			aliasesEmpty: true,
+			closed:       matrix != nil && matrix.closed && len(matrix.values) == 0,
+			handleGone:   matrix != nil && matrix.handle.Released() && len(matrix.handle.Bytes()) == 0,
+		}
+		for i := range rows {
+			if len(rows[i].Vector) != 0 {
+				state.aliasesEmpty = false
+				break
+			}
+		}
+		for _, pin := range mappedresource.GlobalPinSummary() {
+			if pin.Root == d.ColumnAssetRootDir() && pin.Key.Kind == "column_graph_construction_matrix" {
+				state.activeHandles++
+				if pin.Source == mappedresource.SourceMapped {
+					state.activeMappedByte += pin.Bytes
+				}
+			}
+		}
+		reached <- state
+		<-resume
+		return nil
+	})
+	defer restore()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := col.RebuildVectorIndex(def.Name)
+		done <- err
+	}()
+	var state observedState
+	select {
+	case state = <-reached:
+	case <-time.After(collectionTestTimeout(t, 10*time.Second)):
+		t.Fatal("timed out waiting for post-preparation publication boundary")
+	}
+	close(resume)
+	wantMappedBytes := int64(len(rows) * dimensions * 4)
+	if stagedHandles != 1 || stagedMappedBytes != wantMappedBytes {
+		t.Fatalf("staged construction matrix handles=%d mapped_bytes=%d want 1/%d", stagedHandles, stagedMappedBytes, wantMappedBytes)
+	}
+	if !state.aliasesEmpty || !state.closed || !state.handleGone || state.activeHandles != 0 || state.activeMappedByte != 0 {
+		t.Fatalf("post-preparation matrix state=%+v want empty aliases and zero active handles/mapped bytes before publication", state)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RebuildVectorIndex: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, 10*time.Second)):
+		t.Fatal("timed out waiting for rebuild publication")
+	}
+}
+
+func TestColumnGraphConstructionMatrixCloseRowsIsIdempotent4542(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{Vector: []float32{1, 2, 3}},
+		{Vector: []float32{4, 5, 6}},
+	}
+	matrix, err := stageColumnVectorGraphConstructionMatrix(t.TempDir(), rows, 3)
+	if errors.Is(err, mappedresource.ErrMmapUnsupported) {
+		t.Skip("rebuild-local construction mmap is unsupported")
+	}
+	if err != nil {
+		t.Fatalf("stage construction matrix: %v", err)
+	}
+	defer func() { _ = matrix.CloseRows(rows) }()
+	before := mappedresource.GlobalStats()
+	if err := matrix.CloseRows(rows); err != nil {
+		t.Fatalf("first CloseRows: %v", err)
+	}
+	afterFirst := mappedresource.GlobalStats()
+	if err := matrix.CloseRows(rows); err != nil {
+		t.Fatalf("second CloseRows: %v", err)
+	}
+	afterSecond := mappedresource.GlobalStats()
+	for i := range rows {
+		if len(rows[i].Vector) != 0 {
+			t.Fatalf("row[%d] vector remains aliased after close", i)
+		}
+	}
+	if !matrix.closed || len(matrix.values) != 0 || !matrix.handle.Released() || len(matrix.handle.Bytes()) != 0 {
+		t.Fatalf("closed matrix=%+v released=%t bytes=%d", matrix, matrix.handle.Released(), len(matrix.handle.Bytes()))
+	}
+	if got := afterFirst.TotalReleases - before.TotalReleases; got != 1 {
+		t.Fatalf("first close release delta=%d want 1", got)
+	}
+	if got := afterSecond.TotalReleases - afterFirst.TotalReleases; got != 0 {
+		t.Fatalf("idempotent close release delta=%d want 0", got)
+	}
+}
+
+func TestColumnGraphRebuildPreparationFailureReleasesConstructionMatrix4542(t *testing.T) {
+	if runtime.GOOS == "windows" || !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("rebuild-local construction mmap is unsupported on Windows")
+	}
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable vector authority requires exact relative namespace support")
+	}
+	const dimensions = 64
+	rows := columnGraphRebuildSyntheticRowsV2A(48, dimensions)
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, dimensions, 16, rows)
+	defer func() { _ = d.Close() }()
+	injected := errors.New("injected preparation failure before matrix release")
+	restorePrepare := setColumnVectorGraphStableAuthorityTestHook(func(*rootpublication.StableResourceSet, []columnVectorIndexStateAssetSnapshot) error {
+		return injected
+	})
+	defer restorePrepare()
+	lastUseCalls := 0
+	restoreLastUse := setColumnVectorGraphConstructionMatrixLastUseTestHook(func([]columnVectorGraphAssetRow, *columnVectorGraphConstructionMatrix) error {
+		lastUseCalls++
+		return nil
+	})
+	defer restoreLastUse()
+
+	if _, err := col.RebuildVectorIndex(def.Name); !errors.Is(err, injected) {
+		t.Fatalf("RebuildVectorIndex error=%v want injected preparation failure", err)
+	}
+	if lastUseCalls != 0 {
+		t.Fatalf("last-use hook calls=%d want 0 before successful preparation", lastUseCalls)
+	}
+	for _, pin := range mappedresource.GlobalPinSummary() {
+		if pin.Root == d.ColumnAssetRootDir() && pin.Key.Kind == "column_graph_construction_matrix" {
+			t.Fatalf("failed preparation retained construction matrix pin=%+v", pin)
+		}
+	}
+}
+
+func TestColumnGraphRebuildPublicationFailureReplayAfterMatrixRelease4542(t *testing.T) {
+	if runtime.GOOS == "windows" || !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("rebuild-local construction mmap is unsupported on Windows")
+	}
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable vector authority requires exact relative namespace support")
+	}
+	const dimensions = 64
+	rows := columnGraphRebuildSyntheticRowsV2A(48, dimensions)
+	dir, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, dimensions, 16, rows)
+	injected := errors.New("injected publication failure after matrix release")
+	failPublish := true
+	restorePublish := setColumnVectorGraphStablePublishTestHook(func(*columnVectorGraphPreparedPhysicalAsset) error {
+		if failPublish {
+			failPublish = false
+			return injected
+		}
+		return nil
+	})
+	defer restorePublish()
+	lastUseCalls := 0
+	restoreLastUse := setColumnVectorGraphConstructionMatrixLastUseTestHook(func(gotRows []columnVectorGraphAssetRow, matrix *columnVectorGraphConstructionMatrix) error {
+		lastUseCalls++
+		for i := range gotRows {
+			if len(gotRows[i].Vector) != 0 {
+				return errors.New("row vector remains aliased at publication failure boundary")
+			}
+		}
+		if matrix == nil || !matrix.closed || !matrix.handle.Released() {
+			return errors.New("construction matrix remains live at publication failure boundary")
+		}
+		return nil
+	})
+	defer restoreLastUse()
+
+	if _, err := col.RebuildVectorIndex(def.Name); !errors.Is(err, injected) {
+		_ = d.Close()
+		t.Fatalf("RebuildVectorIndex error=%v want injected publication failure", err)
+	}
+	if lastUseCalls != 1 {
+		_ = d.Close()
+		t.Fatalf("last-use hook calls after failed publication=%d want 1", lastUseCalls)
+	}
+	for _, pin := range mappedresource.GlobalPinSummary() {
+		if pin.Root == d.ColumnAssetRootDir() && pin.Key.Kind == "column_graph_construction_matrix" {
+			_ = d.Close()
+			t.Fatalf("failed publication retained construction matrix pin=%+v", pin)
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close after publication failure: %v", err)
+	}
+
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection after replay: %v", err)
+	}
+	status, err := reopenedCol.columnGraphVectorIndexStatus(def.Name)
+	if err != nil {
+		t.Fatalf("columnGraphVectorIndexStatus after replay: %v", err)
+	}
+	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+	if lastUseCalls != 2 {
+		t.Fatalf("last-use hook calls after replay=%d want 2", lastUseCalls)
+	}
+	got, err := reopenedCol.SearchVectorIndex(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     append([]float32(nil), rows[0].vector...),
+		TopK:      2,
+		EfSearch:  len(rows),
+		StatsMode: VectorIndexSearchStatsModeProduction,
+	})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex after replay: %v", err)
+	}
+	if len(got.Results) != 2 || got.Stats.SearchRouteHNSWSearchPack != 1 || got.Stats.HNSWSearchPackFallbacks != 0 {
+		t.Fatalf("search after replay=%+v want two results on optimized pack route", got)
+	}
 }
