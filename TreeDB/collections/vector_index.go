@@ -472,7 +472,8 @@ type vectorIndexConstructionDecisionPhaseV1 struct {
 	directExactFP32Rows, directExactFP32Calls                     atomic.Uint64
 	indexedExactFP32Rows, indexedExactFP32Calls                   atomic.Uint64
 	approximateScoreRows, approximateScoreCalls                   atomic.Uint64
-	exactFP32Dimensions, diversityRequests, diversityComparisons  atomic.Uint64
+	exactFP32Dimensions, diversityPredicates, diversityCandidates atomic.Uint64
+	diversityComparisonsRequested, diversityComparisonsExecuted   atomic.Uint64
 	uniqueRowPairs, repeatedRowPairs, rowPairReplacements         atomic.Uint64
 	activeWallNanos                                               atomic.Uint64
 	saturated                                                     atomic.Bool
@@ -500,40 +501,43 @@ type VectorIndexConstructionDecisionSnapshot struct {
 // VectorIndexConstructionDecisionPhaseSnapshot reports exact work accounting
 // for one construction phase. Row fields count scored vector rows, Calls count
 // scoring invocations, and ExactFP32Dimensions is the sum of scored row widths.
-// Accepted and Rejected classify diversity predicate requests.
-// DiversityComparisons counts predicate comparisons executed; indexed kernels
-// may score more requested rows before the predicate's early exit. Approximate
-// score rows/calls are reserved for an explicitly instrumented future scorer
+// Accepted and Rejected classify diversity predicates. DiversityCandidates is
+// the exact candidate count presented to selection. Comparison counts separate
+// the requested selected-row fanout from comparisons executed before early exit;
+// indexed kernels may score every requested row before the predicate exits.
+// Approximate score rows/calls are reserved for an explicitly instrumented future scorer
 // and are zero for the current exact route. Active wall nanoseconds sum observed
 // function time and may exceed elapsed adjacency wall when reciprocal work runs
 // concurrently. Histogram buckets are powers of two (0, 1, 2, 3-4, ...),
 // capped at bucket 15. Row-pair counters describe a fixed 4096-slot replacement
 // sketch. Saturated means at least one counter overflowed.
 type VectorIndexConstructionDecisionPhaseSnapshot struct {
-	DigestXOR                   uint64     `json:"digest_xor"`
-	DigestSum                   uint64     `json:"digest_sum"`
-	Decisions                   uint64     `json:"decisions"`
-	Accepted                    uint64     `json:"accepted"`
-	Rejected                    uint64     `json:"rejected"`
-	DirectExactFP32Rows         uint64     `json:"direct_exact_fp32_rows"`
-	DirectExactFP32Calls        uint64     `json:"direct_exact_fp32_calls"`
-	IndexedExactFP32Rows        uint64     `json:"indexed_exact_fp32_rows"`
-	IndexedExactFP32Calls       uint64     `json:"indexed_exact_fp32_calls"`
-	ApproximateScoreRows        uint64     `json:"approximate_score_rows"`
-	ApproximateScoreCalls       uint64     `json:"approximate_score_calls"`
-	ExactFP32Dimensions         uint64     `json:"exact_fp32_dimensions"`
-	DiversityRequests           uint64     `json:"diversity_requests"`
-	DiversityComparisons        uint64     `json:"diversity_comparisons"`
-	UniqueRowPairs              uint64     `json:"unique_row_pairs"`
-	RepeatedRowPairs            uint64     `json:"repeated_row_pairs"`
-	RowPairReplacements         uint64     `json:"row_pair_replacements"`
-	ActiveWallNanos             uint64     `json:"active_wall_nanos"`
-	Saturated                   bool       `json:"saturated"`
-	CandidateCountHistogram     [16]uint64 `json:"candidate_count_histogram"`
-	SelectedCountHistogram      [16]uint64 `json:"selected_count_histogram"`
-	DiversityEarlyExitHistogram [16]uint64 `json:"diversity_early_exit_histogram"`
-	ReciprocalGroupHistogram    [16]uint64 `json:"reciprocal_group_histogram"`
-	PruneSurvivorHistogram      [16]uint64 `json:"prune_survivor_histogram"`
+	DigestXOR                     uint64     `json:"digest_xor"`
+	DigestSum                     uint64     `json:"digest_sum"`
+	Decisions                     uint64     `json:"decisions"`
+	Accepted                      uint64     `json:"accepted"`
+	Rejected                      uint64     `json:"rejected"`
+	DirectExactFP32Rows           uint64     `json:"direct_exact_fp32_rows"`
+	DirectExactFP32Calls          uint64     `json:"direct_exact_fp32_calls"`
+	IndexedExactFP32Rows          uint64     `json:"indexed_exact_fp32_rows"`
+	IndexedExactFP32Calls         uint64     `json:"indexed_exact_fp32_calls"`
+	ApproximateScoreRows          uint64     `json:"approximate_score_rows"`
+	ApproximateScoreCalls         uint64     `json:"approximate_score_calls"`
+	ExactFP32Dimensions           uint64     `json:"exact_fp32_dimensions"`
+	DiversityPredicates           uint64     `json:"diversity_predicates"`
+	DiversityCandidates           uint64     `json:"diversity_candidates"`
+	DiversityComparisonsRequested uint64     `json:"diversity_comparisons_requested"`
+	DiversityComparisonsExecuted  uint64     `json:"diversity_comparisons_executed"`
+	UniqueRowPairs                uint64     `json:"unique_row_pairs"`
+	RepeatedRowPairs              uint64     `json:"repeated_row_pairs"`
+	RowPairReplacements           uint64     `json:"row_pair_replacements"`
+	ActiveWallNanos               uint64     `json:"active_wall_nanos"`
+	Saturated                     bool       `json:"saturated"`
+	CandidateCountHistogram       [16]uint64 `json:"candidate_count_histogram"`
+	SelectedCountHistogram        [16]uint64 `json:"selected_count_histogram"`
+	DiversityEarlyExitHistogram   [16]uint64 `json:"diversity_early_exit_histogram"`
+	ReciprocalGroupHistogram      [16]uint64 `json:"reciprocal_group_histogram"`
+	PruneSurvivorHistogram        [16]uint64 `json:"prune_survivor_histogram"`
 }
 
 func (observer *vectorIndexConstructionDecisionObserverV1) snapshot() *VectorIndexConstructionDecisionSnapshot {
@@ -549,25 +553,27 @@ func (observer *vectorIndexConstructionDecisionObserverV1) snapshot() *VectorInd
 func (observer *vectorIndexConstructionDecisionObserverV1) phaseSnapshot(phase int) VectorIndexConstructionDecisionPhaseSnapshot {
 	source := &observer.phases[phase]
 	target := VectorIndexConstructionDecisionPhaseSnapshot{
-		DigestXOR:             source.digestXOR.Load(),
-		DigestSum:             source.digestSum.Load(),
-		Decisions:             source.decisions.Load(),
-		Accepted:              source.accepted.Load(),
-		Rejected:              source.rejected.Load(),
-		DirectExactFP32Rows:   source.directExactFP32Rows.Load(),
-		DirectExactFP32Calls:  source.directExactFP32Calls.Load(),
-		IndexedExactFP32Rows:  source.indexedExactFP32Rows.Load(),
-		IndexedExactFP32Calls: source.indexedExactFP32Calls.Load(),
-		ApproximateScoreRows:  source.approximateScoreRows.Load(),
-		ApproximateScoreCalls: source.approximateScoreCalls.Load(),
-		ExactFP32Dimensions:   source.exactFP32Dimensions.Load(),
-		DiversityRequests:     source.diversityRequests.Load(),
-		DiversityComparisons:  source.diversityComparisons.Load(),
-		UniqueRowPairs:        source.uniqueRowPairs.Load(),
-		RepeatedRowPairs:      source.repeatedRowPairs.Load(),
-		RowPairReplacements:   source.rowPairReplacements.Load(),
-		ActiveWallNanos:       source.activeWallNanos.Load(),
-		Saturated:             source.saturated.Load(),
+		DigestXOR:                     source.digestXOR.Load(),
+		DigestSum:                     source.digestSum.Load(),
+		Decisions:                     source.decisions.Load(),
+		Accepted:                      source.accepted.Load(),
+		Rejected:                      source.rejected.Load(),
+		DirectExactFP32Rows:           source.directExactFP32Rows.Load(),
+		DirectExactFP32Calls:          source.directExactFP32Calls.Load(),
+		IndexedExactFP32Rows:          source.indexedExactFP32Rows.Load(),
+		IndexedExactFP32Calls:         source.indexedExactFP32Calls.Load(),
+		ApproximateScoreRows:          source.approximateScoreRows.Load(),
+		ApproximateScoreCalls:         source.approximateScoreCalls.Load(),
+		ExactFP32Dimensions:           source.exactFP32Dimensions.Load(),
+		DiversityPredicates:           source.diversityPredicates.Load(),
+		DiversityCandidates:           source.diversityCandidates.Load(),
+		DiversityComparisonsRequested: source.diversityComparisonsRequested.Load(),
+		DiversityComparisonsExecuted:  source.diversityComparisonsExecuted.Load(),
+		UniqueRowPairs:                source.uniqueRowPairs.Load(),
+		RepeatedRowPairs:              source.repeatedRowPairs.Load(),
+		RowPairReplacements:           source.rowPairReplacements.Load(),
+		ActiveWallNanos:               source.activeWallNanos.Load(),
+		Saturated:                     source.saturated.Load(),
 	}
 	for bucket := range target.CandidateCountHistogram {
 		target.CandidateCountHistogram[bucket] = source.candidateCount[bucket].Load()
@@ -683,14 +689,15 @@ func (context *vectorIndexConstructionDecisionContextV1) recordApproximateScoreC
 	vectorIndexConstructionDecisionAddV1(&stats.approximateScoreRows, uint64(rows), &stats.saturated)
 }
 
-func (context *vectorIndexConstructionDecisionContextV1) recordEarlyExit(position int, accepted bool) {
+func (context *vectorIndexConstructionDecisionContextV1) recordEarlyExit(executed, requested int, accepted bool) {
 	stats := context.phaseStats()
 	if stats == nil {
 		return
 	}
-	vectorIndexConstructionDecisionAddV1(&stats.earlyExit[vectorIndexConstructionDecisionBucketV1(position)], 1, &stats.saturated)
-	vectorIndexConstructionDecisionAddV1(&stats.diversityRequests, 1, &stats.saturated)
-	vectorIndexConstructionDecisionAddV1(&stats.diversityComparisons, uint64(position), &stats.saturated)
+	vectorIndexConstructionDecisionAddV1(&stats.earlyExit[vectorIndexConstructionDecisionBucketV1(executed)], 1, &stats.saturated)
+	vectorIndexConstructionDecisionAddV1(&stats.diversityPredicates, 1, &stats.saturated)
+	vectorIndexConstructionDecisionAddV1(&stats.diversityComparisonsRequested, uint64(requested), &stats.saturated)
+	vectorIndexConstructionDecisionAddV1(&stats.diversityComparisonsExecuted, uint64(executed), &stats.saturated)
 	if accepted {
 		vectorIndexConstructionDecisionAddV1(&stats.accepted, 1, &stats.saturated)
 	} else {
@@ -712,6 +719,7 @@ func (context *vectorIndexConstructionDecisionContextV1) recordDecision(orderedH
 	vectorIndexConstructionDecisionXORV1(&stats.digestXOR, hash)
 	stats.digestSum.Add(hash)
 	vectorIndexConstructionDecisionAddV1(&stats.decisions, 1, &stats.saturated)
+	vectorIndexConstructionDecisionAddV1(&stats.diversityCandidates, uint64(candidates), &stats.saturated)
 	vectorIndexConstructionDecisionAddV1(&stats.candidateCount[vectorIndexConstructionDecisionBucketV1(candidates)], 1, &stats.saturated)
 	vectorIndexConstructionDecisionAddV1(&stats.selectedCount[vectorIndexConstructionDecisionBucketV1(selected)], 1, &stats.saturated)
 }
@@ -4954,19 +4962,19 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseWithFrozenPrefixScratchObse
 	if idx.metric == VectorMetricCosine && candidate.nodeID >= 0 && candidate.nodeID < len(idx.nodes) {
 		candidateNode := &idx.nodes[candidate.nodeID]
 		if len(candidateNode.vector) > 0 && candidateNode.cachedInvNorm != 0 {
-			if idx.frozenPrefixIndexedDotRowsReadyLocked(candidateNode, selected, dotScratch, context) {
+			if idx.frozenPrefixIndexedDotRowsReadyLocked(candidate.nodeID, candidateNode, selected, dotScratch, context) {
 				for i, existing := range selected {
 					distance := float32(1 - float64(dotScratch.dots[i])*float64(candidateNode.cachedInvNorm)*float64(idx.nodes[existing.nodeID].cachedInvNorm))
 					if distance < candidate.distance {
 						if context != nil {
-							context.recordEarlyExit(i+1, false)
+							context.recordEarlyExit(i+1, len(selected), false)
 						}
 						return false
 					}
 				}
 				dotScratch.indexedBatches++
 				if context != nil {
-					context.recordEarlyExit(len(selected), true)
+					context.recordEarlyExit(len(selected), len(selected), true)
 				}
 				return true
 			}
@@ -4980,13 +4988,13 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseWithFrozenPrefixScratchObse
 				}
 				if distance < candidate.distance {
 					if context != nil {
-						context.recordEarlyExit(position+1, false)
+						context.recordEarlyExit(position+1, len(selected), false)
 					}
 					return false
 				}
 			}
 			if context != nil {
-				context.recordEarlyExit(len(selected), true)
+				context.recordEarlyExit(len(selected), len(selected), true)
 			}
 			return true
 		}
@@ -5001,19 +5009,19 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseWithFrozenPrefixScratchObse
 		}
 		if distance < candidate.distance {
 			if context != nil {
-				context.recordEarlyExit(position+1, false)
+				context.recordEarlyExit(position+1, len(selected), false)
 			}
 			return false
 		}
 	}
 	if context != nil {
-		context.recordEarlyExit(len(selected), true)
+		context.recordEarlyExit(len(selected), len(selected), true)
 	}
 	return true
 }
 
-func (idx *VectorIndex) frozenPrefixIndexedDotRowsReadyLocked(candidate *vectorIndexNode, selected []vectorIndexCandidate, scratch *vectorIndexFrozenPrefixDiversityScratch, context *vectorIndexConstructionDecisionContextV1) bool {
-	if scratch == nil || !vectorops.DotFloat32IndexedOptimizedEligible(len(selected), idx.dimensions) || len(candidate.vector) != idx.dimensions || len(idx.vectorRows) != len(idx.nodes)*idx.dimensions {
+func (idx *VectorIndex) frozenPrefixIndexedDotRowsReadyLocked(candidateNodeID int, candidate *vectorIndexNode, selected []vectorIndexCandidate, scratch *vectorIndexFrozenPrefixDiversityScratch, context *vectorIndexConstructionDecisionContextV1) bool {
+	if candidateNodeID < 0 || candidateNodeID >= len(idx.nodes) || scratch == nil || !vectorops.DotFloat32IndexedOptimizedEligible(len(selected), idx.dimensions) || len(candidate.vector) != idx.dimensions || len(idx.vectorRows) != len(idx.nodes)*idx.dimensions {
 		return false
 	}
 	if cap(scratch.rowIDs) < len(selected) {
@@ -5036,7 +5044,7 @@ func (idx *VectorIndex) frozenPrefixIndexedDotRowsReadyLocked(candidate *vectorI
 	if context != nil && status.Rows > 0 {
 		context.recordIndexedExactFP32Call()
 		for i := 0; i < status.Rows && i < len(selected); i++ {
-			context.recordRowFrom(candidate.nodeID, selected[i].nodeID, true)
+			context.recordRowFrom(candidateNodeID, selected[i].nodeID, true)
 		}
 	}
 	return !status.Invalid && status.Optimized && status.Rows == len(selected)

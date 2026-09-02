@@ -56,8 +56,11 @@ func TestVectorIndexConstructionDecisionObserverPreservesFrozenPrefix4461(t *tes
 		if firstPhase.ApproximateScoreRows != 0 || firstPhase.ApproximateScoreCalls != 0 {
 			t.Fatalf("phase %d exact route reported approximate scores: %+v", phase, firstPhase)
 		}
-		if firstPhase.Accepted+firstPhase.Rejected != firstPhase.DiversityRequests {
-			t.Fatalf("phase %d inconsistent diversity requests: %+v", phase, firstPhase)
+		if firstPhase.Accepted+firstPhase.Rejected != firstPhase.DiversityPredicates ||
+			firstPhase.DiversityCandidates == 0 ||
+			firstPhase.DiversityComparisonsExecuted == 0 ||
+			firstPhase.DiversityComparisonsRequested < firstPhase.DiversityComparisonsExecuted {
+			t.Fatalf("phase %d inconsistent diversity accounting: %+v", phase, firstPhase)
 		}
 	}
 	if size := unsafe.Sizeof(*firstObserver); size > 70<<10 {

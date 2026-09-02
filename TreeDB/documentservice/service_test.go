@@ -2225,7 +2225,7 @@ func TestServiceOptimizeConstructionDecisionDiagnosticsOptIn(t *testing.T) {
 		documents[row] = Document{ID: fmt.Sprintf("doc-%04d", row), Embedding: embedding}
 	}
 	if _, err := svc.UpsertDocuments(ctx, "construction_diagnostics", UpsertDocumentsRequest{
-		Documents:              documents,
+		Documents:               documents,
 		DeferVectorIndexRebuild: true,
 	}); err != nil {
 		t.Fatalf("UpsertDocuments: %v", err)
@@ -2251,7 +2251,9 @@ func TestServiceOptimizeConstructionDecisionDiagnosticsOptIn(t *testing.T) {
 		t.Fatalf("enabled OptimizeIndex: %v", err)
 	}
 	decisions := enabled.Status.ColumnGraphBuild.ConstructionDecisions
-	if decisions == nil || decisions.Planning.Decisions == 0 || decisions.Reciprocal.Decisions == 0 {
+	if decisions == nil || decisions.Planning.Decisions == 0 || decisions.Reciprocal.Decisions == 0 ||
+		decisions.Planning.DiversityComparisonsRequested < decisions.Planning.DiversityComparisonsExecuted ||
+		decisions.Reciprocal.DiversityComparisonsRequested < decisions.Reciprocal.DiversityComparisonsExecuted {
 		t.Fatalf("enabled optimize missing construction decisions: %+v", decisions)
 	}
 	if decisions.Planning.ApproximateScoreRows != 0 || decisions.Planning.ApproximateScoreCalls != 0 ||
@@ -2263,6 +2265,8 @@ func TestServiceOptimizeConstructionDecisionDiagnosticsOptIn(t *testing.T) {
 		t.Fatalf("marshal enabled optimize response: %v", err)
 	}
 	if !strings.Contains(string(enabledJSON), `"construction_decisions"`) ||
+		!strings.Contains(string(enabledJSON), `"diversity_comparisons_requested"`) ||
+		!strings.Contains(string(enabledJSON), `"diversity_comparisons_executed"`) ||
 		!strings.Contains(string(enabledJSON), `"approximate_score_rows":0`) ||
 		!strings.Contains(string(enabledJSON), `"approximate_score_calls":0`) {
 		t.Fatalf("enabled optimize JSON omitted bounded decision schema: %s", enabledJSON)

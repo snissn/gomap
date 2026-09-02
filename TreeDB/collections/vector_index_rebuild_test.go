@@ -79,8 +79,11 @@ func TestColumnGraphRebuildConstructionDecisionObserverOptIn(t *testing.T) {
 			t.Fatalf("%s exact construction reported approximate scores: %+v", name, phase)
 		}
 		if phase.Accepted+phase.Rejected == 0 ||
-			phase.Accepted+phase.Rejected != phase.DiversityRequests ||
-			phase.DiversityComparisons == 0 || phase.ActiveWallNanos == 0 {
+			phase.Accepted+phase.Rejected != phase.DiversityPredicates ||
+			phase.DiversityCandidates == 0 ||
+			phase.DiversityComparisonsExecuted == 0 ||
+			phase.DiversityComparisonsRequested < phase.DiversityComparisonsExecuted ||
+			phase.ActiveWallNanos == 0 {
 			t.Fatalf("%s missing diversity/active-wall accounting: %+v", name, phase)
 		}
 	}

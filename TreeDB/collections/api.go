@@ -395,17 +395,17 @@ func persistIndexStateForDocumentFormat(format DocumentFormat) bool {
 }
 
 type CollectionManager struct {
-	db                       *backenddb.DB
-	closeUnregister          func()
-	closing                  atomic.Bool
-	updateBatchDetailedStats atomic.Bool
+	db                                      *backenddb.DB
+	closeUnregister                         func()
+	closing                                 atomic.Bool
+	updateBatchDetailedStats                atomic.Bool
 	vectorIndexConstructionDecisionObserver atomic.Bool
-	commandWALCoordinator    *collectionCommandWALCoordinator
-	commandWALRawUnregister  func()
-	domainMu                 sync.RWMutex
-	domains                  map[string]*collectionWriteDomain
-	collectionsMu            sync.RWMutex
-	collections              map[*Collection]struct{}
+	commandWALCoordinator                   *collectionCommandWALCoordinator
+	commandWALRawUnregister                 func()
+	domainMu                                sync.RWMutex
+	domains                                 map[string]*collectionWriteDomain
+	collectionsMu                           sync.RWMutex
+	collections                             map[*Collection]struct{}
 }
 
 type collectionManagerOptions struct {
