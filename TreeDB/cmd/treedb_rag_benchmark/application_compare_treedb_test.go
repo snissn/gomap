@@ -37,10 +37,24 @@ func validTreeDBComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 	}
 	for _, route := range applicationRoutes {
 		for _, filter := range applicationFilterOrder {
+			vectorRoute := "none"
+			counters := map[string]float64{}
+			if route == "vector_only" || route == "hybrid" {
+				vectorRoute = "declared_column_graph_exact"
+				counters["vector_candidates_examined"] = 54
+				counters["vector_candidates_returned"] = 10
+			}
+			if route == "hybrid" {
+				counters["text_candidates_returned"] = 10
+				counters["candidates_fused"] = 20
+			}
 			artifact.Rows = append(artifact.Rows, applicationRow{
-				Cell:   applicationCellIdentity{Route: route, Projection: "fetch_topk", Filter: filter, Collapse: "disabled", Surface: "direct_collection", Embedding: "semantic_minilm", Clients: 1},
+				Cell: applicationCellIdentity{
+					Route: route, Projection: "fetch_topk", Filter: filter, Collapse: "disabled",
+					Surface: "direct_collection", Embedding: "semantic_minilm", Clients: 1, VectorRoute: vectorRoute,
+				},
 				Status: "supported", Samples: make([]querySample, 300), Repetitions: make([]repetitionPerformance, 3),
-				Counters: map[string]float64{},
+				Counters: counters,
 			})
 		}
 	}
@@ -63,6 +77,9 @@ func TestTreeDBComparisonValidatorRejectsMismatchedEvidence(t *testing.T) {
 		{"missing CPU", func(a *treeDBComparisonArtifact) { a.ProcessResources.CPUSeconds = 0 }},
 		{"missing peak RSS", func(a *treeDBComparisonArtifact) { a.ProcessResources.PeakRSSBytes = 0 }},
 		{"wrong resource semantics", func(a *treeDBComparisonArtifact) { a.ProcessResources.RSSSemantics = "current RSS" }},
+		{"wrong exact vector route", func(a *treeDBComparisonArtifact) { a.Rows[4].Cell.VectorRoute = "brute_force" }},
+		{"missing vector counters", func(a *treeDBComparisonArtifact) { a.Rows[4].Counters["vector_candidates_examined"] = 0 }},
+		{"missing hybrid fusion counters", func(a *treeDBComparisonArtifact) { a.Rows[8].Counters["candidates_fused"] = 0 }},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -77,8 +94,14 @@ func TestTreeDBComparisonValidatorRejectsMismatchedEvidence(t *testing.T) {
 
 func TestTreeDBComparisonValidatorAcceptsExactEvidence(t *testing.T) {
 	manifest, manifestSHA, artifact := validTreeDBComparisonArtifact(t)
-	if _, err := validateTreeDBComparisonArtifact(&artifact, manifest, manifestSHA); err != nil {
+	rows, err := validateTreeDBComparisonArtifact(&artifact, manifest, manifestSHA)
+	if err != nil {
 		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Equivalence != "directional" {
+			t.Fatalf("TreeDB %s/%s equivalence=%q want directional", row.Route, row.Filter, row.Equivalence)
+		}
 	}
 }
 

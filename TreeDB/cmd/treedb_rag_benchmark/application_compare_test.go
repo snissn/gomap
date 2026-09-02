@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 )
 
@@ -53,11 +54,22 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 		ClientVersion: "1.19.0", ManifestSHA256: manifestSHA,
 		FixtureSHA256: manifest.FixtureSHA256, SemanticVectorSHA256: manifest.SemanticVectorSHA256,
 		ConfigSHA256: manifest.ConfigSHA256, SourceCount: 18, ChunkCount: 54, QueryCount: 3,
-		Server: qdrantComparisonServer{Version: "1.19.0", Deployment: "docker", Identity: "container-id",
-			Image:  "qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc",
-			Config: map[string]any{"dense": manifest.Config.DenseVectorName, "sparse": manifest.Config.SparseVectorName}},
-		Resources: qdrantComparisonResources{HostPIDMetrics: "unavailable_for_docker_container", DockerStats: map[string]any{"memory_usage": "1MiB"}, DurableBytes: 1},
-		Reopen:    qdrantComparisonReopen{Attempted: true, Succeeded: true, Version: "1.19.0", PointCount: 54},
+		Server: qdrantComparisonServer{
+			Version: "1.19.0", Deployment: "standalone", BinarySHA256: manifest.Config.QdrantBinarySHA256, Identity: "pid:1|reopened_pid:2",
+			Config: map[string]any{"dense": manifest.Config.DenseVectorName, "sparse": manifest.Config.SparseVectorName, "exact": false, "full_scan_threshold": float64(0)},
+		},
+		Resources: qdrantComparisonResources{
+			HostPIDMetrics: "observed_process_samples_across_pre_and_post_restart_segments",
+			ProcessSamples: []qdrantComparisonProcessSample{
+				{PID: 1, RSSBytes: 1, CapturedUnixNanos: 1},
+				{PID: 1, RSSBytes: 1, CPUSeconds: 1, CapturedUnixNanos: 2},
+				{PID: 2, RSSBytes: 1, CapturedUnixNanos: 3},
+				{PID: 2, RSSBytes: 1, CPUSeconds: 1, CapturedUnixNanos: 4},
+			},
+			PeakObservedRSSBytes: 1, CPUSeconds: 1, DurableBytes: 1,
+		},
+		Build: qdrantComparisonBuild{Seconds: 1, Points: 54}, QuerySeconds: 1,
+		Reopen: qdrantComparisonReopen{Attempted: true, Succeeded: true, Version: "1.19.0", PointCount: 54, Seconds: 1},
 	}
 	for _, route := range []string{"lexical", "dense", "hybrid"} {
 		for _, filter := range applicationFilterOrder {
@@ -67,12 +79,22 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 			} else if route == "hybrid" {
 				vectors = []string{manifest.Config.SparseVectorName, manifest.Config.DenseVectorName}
 			}
-			cell := qdrantComparisonCell{Route: route, Filter: filter, Equivalence: "direct", Warmups: 20,
-				Repetitions: 3, Samples: make([]map[string]any, 300), FetchMaxCount: 10,
-				RouteProof: qdrantComparisonRouteProof{API: "qdrant.query_points", NamedVectors: vectors, BoundedFetch: true}}
-			if route != "dense" {
-				cell.Equivalence = "directional"
+			cell := qdrantComparisonCell{
+				Route: route, Filter: filter, Equivalence: "directional",
+				TimingSemantics: "total_ms spans query_points, point-ID extraction, bounded retrieve, payload ordering/validation, leakage/accounting, and sample recording; search_ms and fetch_ms are nested subtimers",
+				Warmups:         20, Repetitions: 3, FetchMaxCount: 1,
+				RouteProof: qdrantComparisonRouteProof{API: "qdrant.query_points", NamedVectors: vectors, BoundedFetch: true},
 			}
+			for repetition := range manifest.Config.Repetitions {
+				cell.RepetitionPerformance = append(cell.RepetitionPerformance, qdrantComparisonRepetition{Repetition: repetition, Samples: 100, WallSeconds: 1, QPS: 100})
+				for ordinal := range manifest.Config.SamplesPerCell {
+					cell.Samples = append(cell.Samples, qdrantComparisonSample{
+						Repetition: repetition, Ordinal: ordinal, QueryID: "q", SearchMS: 1, FetchMS: 1,
+						TotalMS: 2.1, ResultIDs: []string{"chunk"}, FetchedCount: 1, FetchedBytes: 1,
+					})
+				}
+			}
+			cell.Summary.QPS = 100
 			if route == "hybrid" {
 				cell.RouteProof.Fusion = "rrf"
 			}
@@ -88,24 +110,33 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		edit func(*qdrantComparisonArtifact)
 	}{
 		{"local mode", func(a *qdrantComparisonArtifact) { a.Server.LocalMode = true }},
+		{"Docker deployment", func(a *qdrantComparisonArtifact) { a.Server.Deployment = "docker" }},
 		{"missing identity", func(a *qdrantComparisonArtifact) { a.Server.Identity = "" }},
+		{"wrong binary hash", func(a *qdrantComparisonArtifact) { a.Server.BinarySHA256 = strings.Repeat("0", 64) }},
+		{"exact search", func(a *qdrantComparisonArtifact) { a.Server.Config["exact"] = true }},
+		{"full scan threshold", func(a *qdrantComparisonArtifact) { a.Server.Config["full_scan_threshold"] = float64(1) }},
 		{"missing route", func(a *qdrantComparisonArtifact) { a.Cells = a.Cells[:len(a.Cells)-1] }},
 		{"fallback", func(a *qdrantComparisonArtifact) { a.Cells[0].RouteProof.Fallbacks = 1 }},
 		{"exhaustive", func(a *qdrantComparisonArtifact) { a.Cells[0].RouteProof.ExhaustiveSearch = true }},
 		{"leakage", func(a *qdrantComparisonArtifact) { a.Cells[0].Leakage = 1 }},
 		{"partial samples", func(a *qdrantComparisonArtifact) { a.Cells[0].Samples = a.Cells[0].Samples[:299] }},
+		{"build timeout", func(a *qdrantComparisonArtifact) { a.Build.Seconds = 91 }},
+		{"query timeout", func(a *qdrantComparisonArtifact) { a.QuerySeconds = 91 }},
 		{"reopen failure", func(a *qdrantComparisonArtifact) { a.Reopen.Succeeded = false }},
+		{"reopen timeout", func(a *qdrantComparisonArtifact) { a.Reopen.Seconds = 91 }},
 		{"unbounded fetch", func(a *qdrantComparisonArtifact) { a.Cells[0].FetchMaxCount = 11 }},
 		{"wrong manifest", func(a *qdrantComparisonArtifact) { a.ManifestSHA256 = "wrong" }},
-		{"missing resources", func(a *qdrantComparisonArtifact) { a.Resources.DockerStats = nil }},
+		{"missing process samples", func(a *qdrantComparisonArtifact) { a.Resources.ProcessSamples = nil }},
+		{"missing CPU", func(a *qdrantComparisonArtifact) { a.Resources.CPUSeconds = 0 }},
 		{"wrong harness", func(a *qdrantComparisonArtifact) { a.HarnessRevision = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }},
 		{"wrong client", func(a *qdrantComparisonArtifact) { a.ClientVersion = "1.18.0" }},
 		{"wrong named vectors", func(a *qdrantComparisonArtifact) { a.Cells[0].RouteProof.NamedVectors = []string{"dense_minilm"} }},
 		{"wrong warmups", func(a *qdrantComparisonArtifact) { a.Cells[0].Warmups = 60 }},
-		{"missing standalone binary hash", func(a *qdrantComparisonArtifact) {
-			a.Server.Deployment = "standalone"
-			a.Server.Image = ""
-		}},
+		{"wrong timing semantics", func(a *qdrantComparisonArtifact) { a.Cells[0].TimingSemantics = "search only" }},
+		{"missing total work", func(a *qdrantComparisonArtifact) { a.Cells[0].Samples[0].TotalMS = 1 }},
+		{"missing repetition wall", func(a *qdrantComparisonArtifact) { a.Cells[0].RepetitionPerformance[0].WallSeconds = 0 }},
+		{"wrong QPS mean", func(a *qdrantComparisonArtifact) { a.Cells[0].Summary.QPS = 99 }},
+		{"direct equivalence", func(a *qdrantComparisonArtifact) { a.Cells[0].Equivalence = "direct" }},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

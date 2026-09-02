@@ -6,72 +6,98 @@ cd "$ROOT"
 RUN_DIR=${RUN_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gomap_rag_qdrant_XXXXXXXX")}
 PYTHON=${PYTHON:-python3}
 VENV=${VENV:-$RUN_DIR/venv}
-TREEDB_ARTIFACT=$RUN_DIR/treedb_backend.json
-TREEDB_DIR=$RUN_DIR/treedb
-QDRANT_BIN=${QDRANT_BIN:-}
-QDRANT_IMAGE=${QDRANT_IMAGE:-qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc}
+QDRANT_BIN=${QDRANT_BIN:?set QDRANT_BIN to the pinned standalone Qdrant 1.19.0 release binary}
 QDRANT_STORAGE_PATH=${QDRANT_STORAGE_PATH:-$RUN_DIR/qdrant-storage}
 QDRANT_COLLECTION=${QDRANT_COLLECTION:-gomap_rag_4331_${RANDOM}_$$}
+COMPARATOR_BIN=$RUN_DIR/treedb_rag_benchmark
 MANIFEST=$RUN_DIR/application_comparison_manifest.json
+TREEDB_ARTIFACT=$RUN_DIR/treedb_backend.json
+TREEDB_DIR=$RUN_DIR/treedb
 QDRANT_ARTIFACT=$RUN_DIR/qdrant_backend.json
 COMPARISON_JSON=$RUN_DIR/comparison.json
 COMPARISON_MD=$RUN_DIR/comparison.md
+PHASE_STATUS=$RUN_DIR/phase_status.jsonl
 PID_FILE=$RUN_DIR/qdrant.pid
-CONTAINER=""
 PID=""
+
 HARNESS_REVISION=$(git rev-parse HEAD)
 if [[ ! "$HARNESS_REVISION" =~ ^[0-9a-f]{40}$ ]] || [[ -n "$(git status --porcelain)" ]]; then
 	echo "comparison requires a full clean harness revision" >&2
 	exit 2
 fi
+if [[ ! -x "$QDRANT_BIN" ]]; then
+	echo "QDRANT_BIN is not an executable standalone Qdrant binary" >&2
+	exit 2
+fi
 
 cleanup() {
-	if [[ -n "$CONTAINER" ]]; then docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; fi
 	if [[ -s "$PID_FILE" ]]; then
 		local saved_pid saved_identity current_identity
 		{ IFS= read -r saved_pid; IFS= read -r saved_identity || true; } <"$PID_FILE"
 		current_identity=$(ps -o lstart= -o command= -p "$saved_pid" 2>/dev/null || true)
-		if [[ -n "$saved_identity" && "$current_identity" == "$saved_identity" ]]; then kill "$saved_pid" >/dev/null 2>&1 || true; wait "$saved_pid" >/dev/null 2>&1 || true; fi
+		if [[ -n "$saved_identity" && "$current_identity" == "$saved_identity" ]]; then
+			kill "$saved_pid" >/dev/null 2>&1 || true
+			wait "$saved_pid" >/dev/null 2>&1 || true
+		fi
 	fi
 }
 trap cleanup EXIT
 mkdir -p "$RUN_DIR" "$QDRANT_STORAGE_PATH"
+: >"$PHASE_STATUS"
 "$PYTHON" -m venv "$VENV"
 "$VENV/bin/python" -m pip install --disable-pip-version-check "qdrant-client==1.19.0"
 
-# Portable hard cap for manifest and validation phases; the runner separately caps build/query/reopen.
+# Every capped command owns a new process group. Timeout kills the complete group
+# and appends a durable partial/failure record before returning nonzero.
 run_90s() {
-	"$PYTHON" -c 'import subprocess,sys; raise SystemExit(subprocess.run(sys.argv[1:], timeout=90).returncode)' "$@"
+	local phase=$1
+	shift
+	"$PYTHON" - "$PHASE_STATUS" "$phase" "$@" <<'PY'
+import datetime, json, os, signal, subprocess, sys, time
+status_path, phase, command = sys.argv[1], sys.argv[2], sys.argv[3:]
+started = time.monotonic()
+process = subprocess.Popen(command, start_new_session=True)
+state, code, error = "complete", None, ""
+try:
+    code = process.wait(timeout=90)
+    if code != 0:
+        state, error = "failed", f"exit status {code}"
+except subprocess.TimeoutExpired:
+    state, error = "timeout", "90 second hard phase cap"
+    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+    code = 124
+record = {"phase": phase, "state": state, "exit_code": code, "elapsed_seconds": time.monotonic() - started,
+          "command": command, "error": error, "recorded_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+with open(status_path, "a", encoding="utf-8") as output:
+    output.write(json.dumps(record, sort_keys=True) + "\n")
+raise SystemExit(code)
+PY
 }
-run_90s go run ./TreeDB/cmd/treedb_rag_benchmark -dump-application-comparison-manifest "$MANIFEST"
-run_90s go run ./TreeDB/cmd/treedb_rag_benchmark \
+
+run_90s build-comparator go build -o "$COMPARATOR_BIN" ./TreeDB/cmd/treedb_rag_benchmark
+run_90s manifest "$COMPARATOR_BIN" -dump-application-comparison-manifest "$MANIFEST"
+run_90s treedb-build-query-reopen "$COMPARATOR_BIN" \
 	-dir "$TREEDB_DIR" \
 	-harness-revision "$HARNESS_REVISION" \
 	-application-comparison-treedb-output "$TREEDB_ARTIFACT"
+
 PORT=$("$PYTHON" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 URL="http://127.0.0.1:$PORT"
 RESTART_HOOK=$RUN_DIR/restart-qdrant.sh
-if [[ -n "$QDRANT_BIN" ]]; then
-	[[ -x "$QDRANT_BIN" ]] || { echo "QDRANT_BIN is not executable" >&2; exit 2; }
-	DEPLOYMENT=standalone
-	printf '#!/usr/bin/env bash\nexec %q standalone %q %q %q %q %q\n' "$ROOT/scripts/restart_minima_qdrant_backend.sh" "$QDRANT_BIN" "$PORT" "$QDRANT_STORAGE_PATH" "$RUN_DIR/qdrant.log" "$PID_FILE" >"$RESTART_HOOK"
-	chmod +x "$RESTART_HOOK"
-	QDRANT__SERVICE__HOST=127.0.0.1 QDRANT__SERVICE__HTTP_PORT="$PORT" QDRANT__STORAGE__STORAGE_PATH="$QDRANT_STORAGE_PATH" "$QDRANT_BIN" >"$RUN_DIR/qdrant.log" 2>&1 &
-	PID=$!
-	IDENTITY=$(ps -o lstart= -o command= -p "$PID" 2>/dev/null || true)
-	[[ -n "$IDENTITY" ]] || { echo "Qdrant exited before identity capture" >&2; exit 1; }
-	printf '%s\n%s\n' "$PID" "$IDENTITY" >"$PID_FILE"
-	SERVER_IDENTITY="pid:$PID:$IDENTITY"
-else
-	[[ "$QDRANT_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo "QDRANT_IMAGE must be digest pinned" >&2; exit 2; }
-	command -v docker >/dev/null || { echo "Docker unavailable and QDRANT_BIN unset; refusing substitution" >&2; exit 2; }
-	DEPLOYMENT=docker
-	CONTAINER="gomap-rag-4331-${RANDOM}-$$"
-	printf '#!/usr/bin/env bash\nexec %q docker %q\n' "$ROOT/scripts/restart_minima_qdrant_backend.sh" "$CONTAINER" >"$RESTART_HOOK"
-	chmod +x "$RESTART_HOOK"
-	docker run -d --rm --name "$CONTAINER" -p "127.0.0.1:${PORT}:6333" -v "$QDRANT_STORAGE_PATH:/qdrant/storage" "$QDRANT_IMAGE" >/dev/null
-	SERVER_IDENTITY=$(docker inspect --format '{{.Id}}' "$CONTAINER")
-fi
+printf '#!/usr/bin/env bash\nexec %q standalone %q %q %q %q %q\n' "$ROOT/scripts/restart_minima_qdrant_backend.sh" "$QDRANT_BIN" "$PORT" "$QDRANT_STORAGE_PATH" "$RUN_DIR/qdrant.log" "$PID_FILE" >"$RESTART_HOOK"
+chmod +x "$RESTART_HOOK"
+QDRANT__SERVICE__HOST=127.0.0.1 QDRANT__SERVICE__HTTP_PORT="$PORT" QDRANT__STORAGE__STORAGE_PATH="$QDRANT_STORAGE_PATH" "$QDRANT_BIN" >"$RUN_DIR/qdrant.log" 2>&1 &
+PID=$!
+IDENTITY=$(ps -o lstart= -o command= -p "$PID" 2>/dev/null || true)
+[[ -n "$IDENTITY" ]] || { echo "Qdrant exited before identity capture" >&2; exit 1; }
+printf '%s\n%s\n' "$PID" "$IDENTITY" >"$PID_FILE"
+SERVER_IDENTITY="pid:$PID:$IDENTITY"
+
 "$VENV/bin/python" - "$URL" <<'PY'
 import json,sys,time,urllib.request
 url=sys.argv[1].rstrip('/')+'/'
@@ -86,18 +112,15 @@ while time.monotonic()<deadline:
 raise SystemExit('Qdrant readiness exceeded 90 seconds')
 PY
 
-RUNNER_ARGS=(--manifest "$MANIFEST" --output "$QDRANT_ARTIFACT" --url "$URL" --collection "$QDRANT_COLLECTION" --deployment "$DEPLOYMENT" --image "$QDRANT_IMAGE" --server-identity "$SERVER_IDENTITY" --harness-revision "$HARNESS_REVISION" --storage-path "$QDRANT_STORAGE_PATH" --restart-hook "$RESTART_HOOK" --allow-drop)
-if [[ -n "$CONTAINER" ]]; then
-	RUNNER_ARGS+=(--container-id "$CONTAINER")
-else
-	RUNNER_ARGS+=(--server-pid "$PID")
-	RUNNER_ARGS+=(--server-binary "$QDRANT_BIN")
-fi
-"$VENV/bin/python" benchmarks/vector_db_compare/rag_qdrant_runner.py "${RUNNER_ARGS[@]}"
-run_90s go run ./TreeDB/cmd/treedb_rag_benchmark \
+"$VENV/bin/python" benchmarks/vector_db_compare/rag_qdrant_runner.py \
+	--manifest "$MANIFEST" --output "$QDRANT_ARTIFACT" --url "$URL" \
+	--collection "$QDRANT_COLLECTION" --server-identity "$SERVER_IDENTITY" \
+	--harness-revision "$HARNESS_REVISION" --storage-path "$QDRANT_STORAGE_PATH" \
+	--restart-hook "$RESTART_HOOK" --server-pid "$PID" --server-binary "$QDRANT_BIN" --allow-drop
+run_90s consolidation "$COMPARATOR_BIN" \
 	-application-comparison-manifest "$MANIFEST" \
 	-application-comparison-treedb "$TREEDB_ARTIFACT" \
 	-application-comparison-qdrant "$QDRANT_ARTIFACT" \
 	-application-comparison-output "$COMPARISON_JSON" \
 	-application-comparison-report "$COMPARISON_MD"
-printf 'run_dir=%s\nmanifest=%s\ntreedb=%s\nqdrant=%s\ncomparison_json=%s\ncomparison_md=%s\n' "$RUN_DIR" "$MANIFEST" "$TREEDB_ARTIFACT" "$QDRANT_ARTIFACT" "$COMPARISON_JSON" "$COMPARISON_MD"
+printf 'run_dir=%s\nphase_status=%s\nmanifest=%s\ntreedb=%s\nqdrant=%s\ncomparison_json=%s\ncomparison_md=%s\n' "$RUN_DIR" "$PHASE_STATUS" "$MANIFEST" "$TREEDB_ARTIFACT" "$QDRANT_ARTIFACT" "$COMPARISON_JSON" "$COMPARISON_MD"

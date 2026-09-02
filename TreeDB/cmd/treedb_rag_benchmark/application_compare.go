@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -18,27 +19,38 @@ const (
 type qdrantComparisonServer struct {
 	Version      string         `json:"version"`
 	Deployment   string         `json:"deployment"`
-	Image        string         `json:"image"`
-	BinarySHA256 string         `json:"binary_sha256,omitempty"`
+	BinarySHA256 string         `json:"binary_sha256"`
 	Identity     string         `json:"identity"`
 	LocalMode    bool           `json:"local_mode"`
 	Config       map[string]any `json:"config"`
 }
 
+type qdrantComparisonProcessSample struct {
+	PID               int     `json:"pid"`
+	RSSBytes          int64   `json:"rss_bytes"`
+	CPUSeconds        float64 `json:"cpu_seconds"`
+	CapturedUnixNanos int64   `json:"captured_unix_nanos"`
+}
+
 type qdrantComparisonResources struct {
-	HostPIDMetrics       string           `json:"host_pid_metrics"`
-	DockerStats          map[string]any   `json:"docker_stats,omitempty"`
-	ProcessSamples       []map[string]any `json:"process_samples,omitempty"`
-	PeakObservedRSSBytes int64            `json:"peak_observed_rss_bytes"`
-	CPUSeconds           float64          `json:"cpu_seconds"`
-	DurableBytes         int64            `json:"durable_bytes"`
+	HostPIDMetrics       string                          `json:"host_pid_metrics"`
+	ProcessSamples       []qdrantComparisonProcessSample `json:"process_samples"`
+	PeakObservedRSSBytes int64                           `json:"peak_observed_rss_bytes"`
+	CPUSeconds           float64                         `json:"cpu_seconds"`
+	DurableBytes         int64                           `json:"durable_bytes"`
+}
+
+type qdrantComparisonBuild struct {
+	Seconds float64 `json:"seconds"`
+	Points  int     `json:"points"`
 }
 
 type qdrantComparisonReopen struct {
-	Attempted  bool   `json:"attempted"`
-	Succeeded  bool   `json:"succeeded"`
-	Version    string `json:"version"`
-	PointCount int    `json:"point_count"`
+	Attempted  bool    `json:"attempted"`
+	Succeeded  bool    `json:"succeeded"`
+	Version    string  `json:"version"`
+	PointCount int     `json:"point_count"`
+	Seconds    float64 `json:"seconds"`
 }
 
 type qdrantComparisonRouteProof struct {
@@ -56,21 +68,41 @@ type qdrantComparisonSummary struct {
 	LatencyMSP95 float64 `json:"latency_ms_p95"`
 	LatencyMSP99 float64 `json:"latency_ms_p99"`
 }
+type qdrantComparisonSample struct {
+	Repetition   int      `json:"repetition"`
+	Ordinal      int      `json:"ordinal"`
+	QueryID      string   `json:"query_id"`
+	SearchMS     float64  `json:"search_ms"`
+	FetchMS      float64  `json:"fetch_ms"`
+	TotalMS      float64  `json:"total_ms"`
+	ResultIDs    []string `json:"result_ids"`
+	FetchedCount int      `json:"fetched_count"`
+	FetchedBytes int      `json:"fetched_bytes"`
+}
+
+type qdrantComparisonRepetition struct {
+	Repetition  int     `json:"repetition"`
+	Samples     int     `json:"samples"`
+	WallSeconds float64 `json:"wall_seconds"`
+	QPS         float64 `json:"qps"`
+}
 
 type qdrantComparisonCell struct {
-	Route         string                     `json:"route"`
-	Filter        string                     `json:"filter"`
-	Equivalence   string                     `json:"equivalence"`
-	Warmups       int                        `json:"warmups"`
-	Repetitions   int                        `json:"repetitions"`
-	Samples       []map[string]any           `json:"samples"`
-	Summary       qdrantComparisonSummary    `json:"summary"`
-	Quality       qualityMetrics             `json:"quality"`
-	Leakage       int                        `json:"leakage"`
-	Errors        int                        `json:"errors"`
-	Timeouts      int                        `json:"timeouts"`
-	FetchMaxCount int                        `json:"fetch_max_count"`
-	RouteProof    qdrantComparisonRouteProof `json:"route_proof"`
+	Route                 string                       `json:"route"`
+	Filter                string                       `json:"filter"`
+	Equivalence           string                       `json:"equivalence"`
+	TimingSemantics       string                       `json:"timing_semantics"`
+	Warmups               int                          `json:"warmups"`
+	Repetitions           int                          `json:"repetitions"`
+	Samples               []qdrantComparisonSample     `json:"samples"`
+	RepetitionPerformance []qdrantComparisonRepetition `json:"repetition_performance"`
+	Summary               qdrantComparisonSummary      `json:"summary"`
+	Quality               qualityMetrics               `json:"quality"`
+	Leakage               int                          `json:"leakage"`
+	Errors                int                          `json:"errors"`
+	Timeouts              int                          `json:"timeouts"`
+	FetchMaxCount         int                          `json:"fetch_max_count"`
+	RouteProof            qdrantComparisonRouteProof   `json:"route_proof"`
 }
 
 type qdrantComparisonArtifact struct {
@@ -87,6 +119,8 @@ type qdrantComparisonArtifact struct {
 	QueryCount           int                       `json:"query_count"`
 	Server               qdrantComparisonServer    `json:"server"`
 	Resources            qdrantComparisonResources `json:"resources"`
+	Build                qdrantComparisonBuild     `json:"build"`
+	QuerySeconds         float64                   `json:"query_seconds"`
 	Reopen               qdrantComparisonReopen    `json:"reopen"`
 	Cells                []qdrantComparisonCell    `json:"cells"`
 	Failures             []string                  `json:"failures"`
@@ -115,8 +149,8 @@ type applicationComparisonReport struct {
 	QdrantResources          qdrantComparisonResources  `json:"qdrant_resources"`
 	QdrantClientVersion      string                     `json:"qdrant_client_version"`
 	QdrantServerVersion      string                     `json:"qdrant_server_version"`
-	QdrantServerBinarySHA256 string                     `json:"qdrant_server_binary_sha256,omitempty"`
-	QdrantImage              string                     `json:"qdrant_image,omitempty"`
+	QdrantServerBinarySHA256 string                     `json:"qdrant_server_binary_sha256"`
+	QdrantReleaseAssetSHA256 string                     `json:"qdrant_release_asset_sha256"`
 	ManifestSHA256           string                     `json:"manifest_sha256"`
 	FixtureSHA256            string                     `json:"fixture_sha256"`
 	SemanticVectorSHA256     string                     `json:"semantic_vector_sha256"`
@@ -200,6 +234,13 @@ func validateTreeDBComparisonArtifact(artifact *treeDBComparisonArtifact, manife
 			row.Cell.Embedding != "semantic_minilm" || row.Cell.Clients != 1 {
 			return nil, fmt.Errorf("TreeDB artifact contains non-comparison cell %+v", row.Cell)
 		}
+		wantVectorRoute := "none"
+		if route == "dense" || route == "hybrid" {
+			wantVectorRoute = "declared_column_graph_exact"
+		}
+		if row.Cell.VectorRoute != wantVectorRoute {
+			return nil, fmt.Errorf("TreeDB artifact cell %s/%s vector route=%q want %q", route, row.Cell.Filter, row.Cell.VectorRoute, wantVectorRoute)
+		}
 		key := route + "\x00" + row.Cell.Filter
 		if seen[key] {
 			return nil, fmt.Errorf("TreeDB artifact has duplicate comparison cell %s/%s", route, row.Cell.Filter)
@@ -212,10 +253,17 @@ func validateTreeDBComparisonArtifact(artifact *treeDBComparisonArtifact, manife
 			len(row.Samples) != manifest.Config.SamplesPerCell*manifest.Config.Repetitions {
 			return nil, fmt.Errorf("TreeDB artifact cell %s/%s is partial, leaking, unbounded, failed, or fell back", route, row.Cell.Filter)
 		}
-		equivalence := "direct"
-		if route != "dense" {
-			equivalence = "directional"
+		if route == "lexical" && (row.Counters["vector_candidates_examined"] != 0 || row.Counters["vector_candidates_returned"] != 0) {
+			return nil, fmt.Errorf("TreeDB lexical cell %s used vector candidates", row.Cell.Filter)
 		}
+		if (route == "dense" || route == "hybrid") &&
+			(row.Counters["vector_candidates_examined"] <= 0 || row.Counters["vector_candidates_returned"] <= 0) {
+			return nil, fmt.Errorf("TreeDB %s cell %s lacks exact vector route counters", route, row.Cell.Filter)
+		}
+		if route == "hybrid" && (row.Counters["text_candidates_returned"] <= 0 || row.Counters["candidates_fused"] <= 0) {
+			return nil, fmt.Errorf("TreeDB hybrid cell %s lacks text/fusion route counters", row.Cell.Filter)
+		}
+		equivalence := "directional"
 		rows = append(rows, applicationComparisonRow{Backend: "treedb", Route: route, Filter: row.Cell.Filter,
 			Equivalence: equivalence, Samples: len(row.Samples), Repetitions: len(row.Repetitions), QPS: row.QPSMean,
 			LatencyMSP50: row.LatencyMSP50, LatencyMSP95: row.LatencyMSP95, LatencyMSP99: row.LatencyMSP99, Quality: row.Quality})
@@ -235,31 +283,41 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		artifact.ChunkCount != len(manifest.Chunks) || artifact.QueryCount != len(manifest.Queries) {
 		return fmt.Errorf("Qdrant artifact runtime/manifest/hash/cardinality binding mismatch")
 	}
-	if artifact.Server.Version != "1.19.0" || artifact.Server.LocalMode || artifact.Server.Identity == "" ||
-		(artifact.Server.Deployment != "docker" && artifact.Server.Deployment != "standalone") ||
+	exact, exactOK := artifact.Server.Config["exact"].(bool)
+	fullScanThreshold, fullScanOK := artifact.Server.Config["full_scan_threshold"].(float64)
+	if artifact.Server.Version != manifest.Config.QdrantServerVersion || artifact.Server.LocalMode ||
+		artifact.Server.Identity == "" || !strings.Contains(artifact.Server.Identity, "|reopened_pid:") ||
+		artifact.Server.Deployment != "standalone" ||
+		artifact.Server.BinarySHA256 != manifest.Config.QdrantBinarySHA256 ||
 		artifact.Server.Config["dense"] != manifest.Config.DenseVectorName ||
-		artifact.Server.Config["sparse"] != manifest.Config.SparseVectorName {
-		return fmt.Errorf("Qdrant artifact lacks pinned external server/config identity")
+		artifact.Server.Config["sparse"] != manifest.Config.SparseVectorName ||
+		!exactOK || exact || !fullScanOK || fullScanThreshold != 0 {
+		return fmt.Errorf("Qdrant artifact lacks pinned standalone approximate-HNSW server/config identity")
 	}
-	if artifact.Server.Deployment == "docker" && !strings.Contains(artifact.Server.Image, "sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc") {
-		return fmt.Errorf("Qdrant artifact image is not digest pinned")
+	if len(artifact.Failures) != 0 || artifact.Build.Points != len(manifest.Chunks) ||
+		artifact.Build.Seconds <= 0 || artifact.Build.Seconds > float64(manifest.Config.PhaseTimeoutSeconds) ||
+		artifact.QuerySeconds <= 0 || artifact.QuerySeconds > float64(manifest.Config.PhaseTimeoutSeconds) ||
+		!artifact.Reopen.Attempted || !artifact.Reopen.Succeeded ||
+		artifact.Reopen.Version != manifest.Config.QdrantServerVersion ||
+		artifact.Reopen.PointCount != len(manifest.Chunks) || artifact.Reopen.Seconds <= 0 ||
+		artifact.Reopen.Seconds > float64(manifest.Config.PhaseTimeoutSeconds) {
+		return fmt.Errorf("Qdrant artifact failed or lacks successful bounded build/query/durable reopen")
 	}
-	if artifact.Server.Deployment == "standalone" && !validSHA256(artifact.Server.BinarySHA256) {
-		return fmt.Errorf("Qdrant standalone artifact lacks server binary SHA-256")
+	if artifact.Resources.DurableBytes <= 0 ||
+		artifact.Resources.HostPIDMetrics != "observed_process_samples_across_pre_and_post_restart_segments" ||
+		len(artifact.Resources.ProcessSamples) < 4 || artifact.Resources.PeakObservedRSSBytes <= 0 ||
+		artifact.Resources.CPUSeconds <= 0 {
+		return fmt.Errorf("Qdrant artifact lacks authoritative standalone process/storage evidence")
 	}
-	if len(artifact.Failures) != 0 || !artifact.Reopen.Attempted || !artifact.Reopen.Succeeded ||
-		artifact.Reopen.Version != "1.19.0" || artifact.Reopen.PointCount != len(manifest.Chunks) {
-		return fmt.Errorf("Qdrant artifact failed or lacks successful durable reopen")
+	processes := map[int]bool{}
+	for _, sample := range artifact.Resources.ProcessSamples {
+		if sample.PID <= 0 || sample.RSSBytes <= 0 || sample.CPUSeconds < 0 || sample.CapturedUnixNanos <= 0 {
+			return fmt.Errorf("Qdrant artifact contains invalid process sample")
+		}
+		processes[sample.PID] = true
 	}
-	if artifact.Resources.DurableBytes <= 0 || artifact.Resources.HostPIDMetrics == "" {
-		return fmt.Errorf("Qdrant artifact lacks resource/storage semantics")
-	}
-	if artifact.Server.Deployment == "docker" && len(artifact.Resources.DockerStats) == 0 {
-		return fmt.Errorf("Qdrant Docker artifact lacks container resource evidence")
-	}
-	if artifact.Server.Deployment == "standalone" && (len(artifact.Resources.ProcessSamples) < 4 ||
-		artifact.Resources.PeakObservedRSSBytes <= 0 || artifact.Resources.CPUSeconds <= 0) {
-		return fmt.Errorf("Qdrant standalone artifact lacks process RSS/CPU evidence")
+	if len(processes) < 2 {
+		return fmt.Errorf("Qdrant artifact lacks distinct pre/post-restart process identities")
 	}
 	seen := map[string]bool{}
 	for _, cell := range artifact.Cells {
@@ -270,13 +328,39 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		seen[key] = true
 		if !containsString([]string{"lexical", "dense", "hybrid"}, cell.Route) ||
 			!containsString(applicationFilterOrder, cell.Filter) ||
+			cell.TimingSemantics != "total_ms spans query_points, point-ID extraction, bounded retrieve, payload ordering/validation, leakage/accounting, and sample recording; search_ms and fetch_ms are nested subtimers" ||
 			cell.Warmups != manifest.Config.WarmupsPerCell || cell.Repetitions != manifest.Config.Repetitions ||
 			len(cell.Samples) != manifest.Config.SamplesPerCell*manifest.Config.Repetitions ||
+			len(cell.RepetitionPerformance) != manifest.Config.Repetitions ||
 			cell.Errors != 0 || cell.Timeouts != 0 || cell.Leakage != 0 ||
 			cell.FetchMaxCount > manifest.Config.TopK || cell.RouteProof.Fallbacks != 0 ||
 			cell.RouteProof.ExhaustiveSearch || !cell.RouteProof.BoundedFetch ||
 			cell.RouteProof.API != "qdrant.query_points" {
 			return fmt.Errorf("Qdrant artifact cell %s/%s is partial, leaking, unbounded, failed, exhaustive, or fell back", cell.Route, cell.Filter)
+		}
+		samplesByRep := make([]int, manifest.Config.Repetitions)
+		for _, sample := range cell.Samples {
+			if sample.Repetition < 0 || sample.Repetition >= manifest.Config.Repetitions ||
+				sample.QueryID == "" || sample.SearchMS <= 0 || sample.FetchMS <= 0 ||
+				sample.TotalMS+1e-9 < sample.SearchMS+sample.FetchMS ||
+				sample.FetchedCount != len(sample.ResultIDs) || sample.FetchedCount > manifest.Config.TopK ||
+				sample.FetchedBytes <= 0 {
+				return fmt.Errorf("Qdrant artifact cell %s/%s has invalid total/subtimer/fetch sample", cell.Route, cell.Filter)
+			}
+			samplesByRep[sample.Repetition]++
+		}
+		qpsMean := 0.0
+		for rep, performance := range cell.RepetitionPerformance {
+			if performance.Repetition != rep || performance.Samples != manifest.Config.SamplesPerCell ||
+				samplesByRep[rep] != manifest.Config.SamplesPerCell ||
+				performance.WallSeconds <= 0 || performance.QPS <= 0 {
+				return fmt.Errorf("Qdrant artifact cell %s/%s has invalid repetition wall evidence", cell.Route, cell.Filter)
+			}
+			qpsMean += performance.QPS
+		}
+		qpsMean /= float64(manifest.Config.Repetitions)
+		if math.Abs(cell.Summary.QPS-qpsMean) > 1e-9*math.Max(1, qpsMean) {
+			return fmt.Errorf("Qdrant artifact cell %s/%s QPS is not mean-per-repetition", cell.Route, cell.Filter)
 		}
 		wantVectors := []string{manifest.Config.SparseVectorName}
 		if cell.Route == "dense" {
@@ -290,7 +374,7 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		if cell.Route == "hybrid" && cell.RouteProof.Fusion != "rrf" {
 			return fmt.Errorf("Qdrant hybrid cell %s lacks Query API RRF proof", cell.Filter)
 		}
-		if cell.Route != "dense" && cell.Equivalence != "directional" {
+		if cell.Equivalence != "directional" {
 			return fmt.Errorf("Qdrant %s cell must be labeled directional", cell.Route)
 		}
 	}
@@ -329,11 +413,12 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, outputPath, 
 		HarnessRevision: tree.HarnessRevision, TreeDBBinarySHA256: tree.BinarySHA256,
 		TreeDBProcessResources: tree.ProcessResources, QdrantResources: qdrant.Resources,
 		QdrantClientVersion: qdrant.ClientVersion, QdrantServerVersion: qdrant.Server.Version,
-		QdrantServerBinarySHA256: qdrant.Server.BinarySHA256, QdrantImage: qdrant.Server.Image,
-		ManifestSHA256: manifestSHA, FixtureSHA256: manifest.FixtureSHA256,
+		QdrantServerBinarySHA256: qdrant.Server.BinarySHA256,
+		QdrantReleaseAssetSHA256: manifest.Config.QdrantReleaseAssetSHA256,
+		ManifestSHA256:           manifestSHA, FixtureSHA256: manifest.FixtureSHA256,
 		SemanticVectorSHA256: manifest.SemanticVectorSHA256, ConfigSHA256: manifest.ConfigSHA256,
 		Rows: treeRows, Dispositions: []string{
-			"TreeDB-versus-Qdrant lexical and hybrid rows are directional because Qdrant uses client-generated sparse BM25 and native Query API RRF, not exact TreeDB BM25F scoring/fusion parity.",
+			"All TreeDB-versus-Qdrant latency rows are directional: lexical scoring differs, and TreeDB dense/hybrid uses declared_column_graph_exact while Qdrant uses HNSW exact=false.",
 			"Parent collapse is disabled for both systems; chunk rankings are retained and parent recall is derived from frozen parent IDs.",
 			"The 18-source/54-chunk synthetic fixture is bounded comparison evidence, not a public winner claim.",
 		}}
@@ -360,7 +445,7 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, outputPath, 
 		return err
 	}
 	var md strings.Builder
-	fmt.Fprintf(&md, "# TreeDB / Qdrant bounded RAG comparison\n\nState: **validated**  \nManifest SHA-256: `%s`  \nHarness revision: `%s`  \nTreeDB binary SHA-256: `%s`  \nTreeDB process CPU / peak RSS: `%.6fs` / `%d bytes`  \nTreeDB resource semantics: `%s`; `%s`; `%s`  \nQdrant client/server: `%s` / `%s`  \nQdrant server binary SHA-256: `%s`  \nQdrant image: `%s`  \nQdrant process CPU / observed peak RSS / durable bytes: `%.6fs` / `%d bytes` / `%d bytes`\n\n", manifestSHA, report.HarnessRevision, report.TreeDBBinarySHA256, report.TreeDBProcessResources.CPUSeconds, report.TreeDBProcessResources.PeakRSSBytes, report.TreeDBProcessResources.CPUSemantics, report.TreeDBProcessResources.RSSSemantics, report.TreeDBProcessResources.Scope, report.QdrantClientVersion, report.QdrantServerVersion, report.QdrantServerBinarySHA256, report.QdrantImage, report.QdrantResources.CPUSeconds, report.QdrantResources.PeakObservedRSSBytes, report.QdrantResources.DurableBytes)
+	fmt.Fprintf(&md, "# TreeDB / Qdrant bounded RAG comparison\n\nState: **validated**  \nManifest SHA-256: `%s`  \nHarness revision: `%s`  \nTreeDB binary SHA-256: `%s`  \nTreeDB process CPU / peak RSS: `%.6fs` / `%d bytes`  \nTreeDB resource semantics: `%s`; `%s`; `%s`  \nQdrant client/server: `%s` / `%s`  \nQdrant server binary SHA-256: `%s`  \nQdrant release asset SHA-256: `%s`  \nQdrant process CPU / observed peak RSS / durable bytes: `%.6fs` / `%d bytes` / `%d bytes`\n\n", manifestSHA, report.HarnessRevision, report.TreeDBBinarySHA256, report.TreeDBProcessResources.CPUSeconds, report.TreeDBProcessResources.PeakRSSBytes, report.TreeDBProcessResources.CPUSemantics, report.TreeDBProcessResources.RSSSemantics, report.TreeDBProcessResources.Scope, report.QdrantClientVersion, report.QdrantServerVersion, report.QdrantServerBinarySHA256, report.QdrantReleaseAssetSHA256, report.QdrantResources.CPUSeconds, report.QdrantResources.PeakObservedRSSBytes, report.QdrantResources.DurableBytes)
 	md.WriteString("| Backend | Route | Filter | Semantics | Samples | Reps | QPS | p50 ms | p95 ms | p99 ms | P@10 | nDCG@10 | MRR@10 | Parent R@10 |\n|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, row := range report.Rows {
 		fmt.Fprintf(&md, "| %s | %s | %s | %s | %d | %d | %.2f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f |\n",
