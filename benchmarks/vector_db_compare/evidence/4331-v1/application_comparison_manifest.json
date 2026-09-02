@@ -1,6 +1,6 @@
 {
   "schema": "treedb-rag-application-comparison/v1",
-  "product_base_sha": "60c2d804eb73f54da7a99424bae6583bd2599736",
+  "product_base_sha": "6beea3ace082eee8afe5dccf629cc1a533823bfc",
   "fixture_sha256": "df71c11510a64b09a4b991a17a9062c8090dddf2d0a1e993b19bebd37d4c5db2",
   "semantic_vector_sha256": "aff8b31fad35f45c862c943b19717ddf9979b09726b2ac9352e159a4815663a4",
   "config_sha256": "0ce19470a39756014a72729258373fe5b0d04e543784e787a0bfd9dcd8adbd0a",
