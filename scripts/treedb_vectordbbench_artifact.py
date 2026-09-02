@@ -539,12 +539,15 @@ def start_service(
     port: int,
     profile: str,
     health_timeout: float,
+    construction_decision_diagnostics: bool = False,
     pprof_addr: str = "",
     append_log: bool = False,
 ) -> tuple[subprocess.Popen[str], dict[str, Any], list[str]]:
     service_log = state.root / "service.log"
     address = host_port(host, port)
     cmd = [str(service_bin), "-dir", str(data_dir), "-addr", address, "-profile", profile]
+    if construction_decision_diagnostics:
+        cmd.append("-diagnostic-construction-decisions")
     if pprof_addr:
         cmd.extend(["-pprof", pprof_addr])
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -1731,6 +1734,11 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         completion_errors.append("completed lifecycle requires command_wal_durable")
     if lifecycle.get("result_status") == "completed" and harness.get("vdbbench_dry_run") is not False:
         completion_errors.append("completed lifecycle requires vdbbench_dry_run=false")
+    construction_decision_diagnostics = harness.get(
+        "construction_decision_diagnostics", False
+    )
+    if not isinstance(construction_decision_diagnostics, bool):
+        errors.append("manifest.harness.construction_decision_diagnostics must be boolean")
     service_command = service.get("command")
     effective_addr = None
     effective_dir = None
@@ -1745,6 +1753,9 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         known_flags = {
             "addr", "dir", "profile", "pprof", "block-profile-rate", "mutex-profile-fraction",
         }
+        diagnostic_flag = "diagnostic-construction-decisions"
+        diagnostic_flag_count = 0
+        diagnostic_flag_enabled = False
         profile_values = []
         effective_addr = "127.0.0.1:7120"
         effective_dir = "/tmp/treedb-document-service"
@@ -1756,7 +1767,9 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             argument = service_command[position]
             if not parsing_flags:
                 trailing_flag = argument[2:] if argument.startswith("--") else argument[1:]
-                if argument.startswith("-") and trailing_flag.partition("=")[0] == "profile":
+                if argument.startswith("-") and trailing_flag.partition("=")[0] in {
+                    "profile", diagnostic_flag,
+                }:
                     invalid_command = True
                 position += 1
                 continue
@@ -1770,6 +1783,20 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 continue
             flag = argument[2:] if argument.startswith("--") else argument[1:]
             name, separator, inline_value = flag.partition("=")
+            if name == diagnostic_flag:
+                diagnostic_flag_count += 1
+                if (
+                    argument != f"-{diagnostic_flag}"
+                    or (
+                        position + 1 < len(service_command)
+                        and service_command[position + 1].lower() in {"true", "false"}
+                    )
+                ):
+                    invalid_command = True
+                else:
+                    diagnostic_flag_enabled = True
+                position += 1
+                continue
             if name not in known_flags:
                 invalid_command = True
                 position += 1
@@ -1804,6 +1831,11 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             or (
                 effective_pprof
                 and int(effective_addr.rsplit(":", 1)[1]) == int(effective_pprof.rsplit(":", 1)[1])
+            )
+            or diagnostic_flag_count > 1
+            or (
+                isinstance(construction_decision_diagnostics, bool)
+                and diagnostic_flag_enabled != construction_decision_diagnostics
             )
             or len(profile_values) != 1
             or profile_values[0] != service.get("profile")
@@ -3925,6 +3957,7 @@ def complete_lifecycle(
         profile=args.profile,
         health_timeout=args.health_timeout,
         pprof_addr=host_port(args.host, args.pprof_port),
+        construction_decision_diagnostics=args.construction_decision_diagnostics,
         append_log=True,
     )
     try:
@@ -4139,6 +4172,7 @@ def write_manifest(
             "quantized_index_name": args.quantized_index_name,
             "num_per_batch": args.num_per_batch,
             "vdbbench_dry_run": args.vdbbench_dry_run,
+            "construction_decision_diagnostics": args.construction_decision_diagnostics,
         },
         "commands": [asdict(record) for record in state.commands],
         "vdbbench": state.vdbbench,
@@ -4182,6 +4216,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=int(env_text("TREEDB_VDBBENCH_PORT", "0")), help="service port; 0 chooses a free local port")
     parser.add_argument("--profile", default=env_text("TREEDB_VDBBENCH_PROFILE", "command_wal_durable"))
     parser.add_argument("--service-bin", default=os.environ.get("TREEDB_VDBBENCH_SERVICE_BIN", ""), help="existing treedb-document-service binary")
+    parser.add_argument(
+        "--construction-decision-diagnostics",
+        action="store_true",
+        help="enable service construction-decision diagnostics for every launch",
+    )
     parser.add_argument("--health-timeout", type=float, default=float(env_text("TREEDB_VDBBENCH_HEALTH_TIMEOUT", "60")))
     parser.add_argument("--python", default=env_text("TREEDB_VDBBENCH_PYTHON", sys.executable or "python3"))
     parser.add_argument("--use-uv", choices=["auto", "on", "off"], default=env_text("TREEDB_VDBBENCH_USE_UV", "auto"), help="use `uv run --with ...` for VectorDBBench Python commands")
@@ -4402,6 +4441,7 @@ def main(argv: list[str]) -> int:
             profile=args.profile,
             health_timeout=args.health_timeout,
             pprof_addr=host_port(args.host, args.pprof_port) if args.lifecycle else "",
+            construction_decision_diagnostics=args.construction_decision_diagnostics,
         )
         state.lifecycle_started_ns = time.time_ns()
         state.health = health
