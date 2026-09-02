@@ -1728,7 +1728,8 @@ def print_screening_commands(contract: dict[str, Any]) -> None:
             "ef_construction": str(ef),
             "dataset_dir": dataset["directory"],
             "dataset_name": dataset["name"],
-            "dataset_sha256": canonical_sha256(dataset),
+            "dataset_sha256": canonical_sha256(
+                dataset_expected(contract, 250000, "selection")),
             "vectors": str(dataset["vectors"]),
             "index_prefix": f"treedb_4587_c0_250k_ef{ef}",
             "db_label": f"treedb-4587-c0-250k-ef{ef}",

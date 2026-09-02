@@ -1332,6 +1332,19 @@ class ValidatorMutations(unittest.TestCase):
                 self.assert_invalid(self.fixture.no_go_packet(), error)
         self.fixture.contract = base
 
+    def test_screening_commands_bind_normalized_dataset(self) -> None:
+        expected = policy.canonical_sha256(
+            policy.dataset_expected(self.fixture.contract, 250000, "selection"))
+        raw = policy.canonical_sha256(self.fixture.contract["datasets"]["screening"])
+        self.assertNotEqual(expected, raw)
+        with mock.patch("builtins.print") as emitted:
+            policy.print_screening_commands(self.fixture.contract)
+        self.assertEqual(emitted.call_count, 4)
+        for call in emitted.call_args_list:
+            command = call.args[0]
+            self.assertIn(f"--measurement-dataset-sha256 {expected}", command)
+            self.assertNotIn(raw, command)
+
     def test_canonical_vdbbench_command_is_bound(self) -> None:
         packet = self.fixture.no_go_packet()
         run = packet["runs"][0]
