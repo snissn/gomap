@@ -432,7 +432,8 @@
           "scripts/test_treedb_construction_policy_4587.py",
           "scripts/treedb_vdbbench_search_existing_index.py",
           "scripts/treedb_vectordbbench_artifact.py",
-          "scripts/treedb_vectordbbench_artifact_test.py"
+          "scripts/treedb_vectordbbench_artifact_test.py",
+          "cmd/treedb_column_section_audit/main.go"
         ],
         "properties": {
           "docs/benchmarks/treedb_construction_policy_c0_4587.json": {
@@ -460,6 +461,10 @@
             "pattern": "^[0-9a-f]{64}$"
           },
           "scripts/treedb_vectordbbench_artifact_test.py": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "cmd/treedb_column_section_audit/main.go": {
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
           }
