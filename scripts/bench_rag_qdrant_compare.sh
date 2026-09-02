@@ -90,9 +90,12 @@ run_90s treedb-build-query-reopen "$COMPARATOR_BIN" \
 PORT=$("$PYTHON" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 URL="http://127.0.0.1:$PORT"
 RESTART_HOOK=$RUN_DIR/restart-qdrant.sh
-printf '#!/usr/bin/env bash\nexec %q standalone %q %q %q %q %q\n' "$ROOT/scripts/restart_minima_qdrant_backend.sh" "$QDRANT_BIN" "$PORT" "$QDRANT_STORAGE_PATH" "$RUN_DIR/qdrant.log" "$PID_FILE" >"$RESTART_HOOK"
+printf '#!/usr/bin/env bash\nset -euo pipefail\ncd %q\nexec %q standalone %q %q %q %q %q\n' "$RUN_DIR" "$ROOT/scripts/restart_minima_qdrant_backend.sh" "$QDRANT_BIN" "$PORT" "$QDRANT_STORAGE_PATH" "$RUN_DIR/qdrant.log" "$PID_FILE" >"$RESTART_HOOK"
 chmod +x "$RESTART_HOOK"
-QDRANT__SERVICE__HOST=127.0.0.1 QDRANT__SERVICE__HTTP_PORT="$PORT" QDRANT__STORAGE__STORAGE_PATH="$QDRANT_STORAGE_PATH" "$QDRANT_BIN" >"$RUN_DIR/qdrant.log" 2>&1 &
+(
+	cd "$RUN_DIR"
+	exec env QDRANT__SERVICE__HOST=127.0.0.1 QDRANT__SERVICE__HTTP_PORT="$PORT" QDRANT__STORAGE__STORAGE_PATH="$QDRANT_STORAGE_PATH" "$QDRANT_BIN"
+) >"$RUN_DIR/qdrant.log" 2>&1 &
 PID=$!
 IDENTITY=$(ps -o lstart= -o command= -p "$PID" 2>/dev/null || true)
 [[ -n "$IDENTITY" ]] || { echo "Qdrant exited before identity capture" >&2; exit 1; }
