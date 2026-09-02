@@ -73,6 +73,18 @@ def docker_stats(container):
     if not container: return {}
     result = subprocess.run(["docker", "stats", "--no-stream", "--format", "{{json .}}", container], check=True, capture_output=True, text=True, timeout=10)
     row = json.loads(result.stdout); return {"container": row.get("Container", container), "name": row.get("Name", ""), "cpu_percent": row.get("CPUPerc", ""), "memory_usage": row.get("MemUsage", "")}
+def process_stats(pid):
+    if pid <= 0: return {}
+    result = subprocess.run(["ps", "-o", "rss=", "-o", "time=", "-p", str(pid)], check=True, capture_output=True, text=True, timeout=5)
+    fields = result.stdout.split()
+    if len(fields) != 2: raise RuntimeError(f"cannot parse Qdrant process metrics for PID {pid}")
+    clock = fields[1]
+    days = 0
+    if "-" in clock:
+        day_text, clock = clock.split("-", 1); days = int(day_text)
+    parts = [float(value) for value in clock.split(":")]
+    cpu_seconds = sum(value * (60 ** index) for index, value in enumerate(reversed(parts))) + days * 86400
+    return {"pid": pid, "rss_bytes": int(fields[0]) * 1024, "cpu_seconds": cpu_seconds, "captured_unix_nanos": time.time_ns()}
 
 class Runner:
     def __init__(self, manifest, manifest_sha, args, factory, models):
@@ -81,6 +93,7 @@ class Runner:
         self.sparse_docs, self.sparse_queries, self.sparse_sha = sparse_vectors(manifest)
         self.ids = {row["id"]: i + 1 for i, row in enumerate(manifest["chunks"])}; self.cells, self.failures, self.build_seconds = [], [], 0
         self.reopen = {"attempted": False, "succeeded": False, "version": "", "point_count": 0}
+        self.process_samples = [process_stats(args.server_pid)] if args.deployment == "standalone" else []
     def build(self):
         m, c = self.models, self.client
         if c.collection_exists(self.args.collection):
@@ -102,7 +115,14 @@ class Runner:
         self.build_seconds = time.monotonic() - started
         if info is None or int(getattr(info, "points_count", -1)) != 54 or int(getattr(info, "indexed_vectors_count", -1)) < 54 or any(field not in (getattr(info, "payload_schema", {}) or {}) for field in ("tenant", "workspace", "updated_year")): raise RuntimeError("build count/index proof failed")
     def restart(self):
-        self.reopen["attempted"] = True; self.client.close(); subprocess.run([str(self.args.restart_hook)], check=True, timeout=90)
+        self.reopen["attempted"] = True
+        if self.args.deployment == "standalone": self.process_samples.append(process_stats(self.args.server_pid))
+        self.client.close()
+        restarted = subprocess.run([str(self.args.restart_hook)], check=True, capture_output=True, text=True, timeout=90)
+        if self.args.deployment == "standalone":
+            try: self.args.server_pid = int(restarted.stdout.splitlines()[-1])
+            except (IndexError, ValueError) as exc: raise RuntimeError("standalone restart hook did not return authoritative PID") from exc
+            self.process_samples.append(process_stats(self.args.server_pid))
         deadline, last = time.monotonic() + 90, None
         while time.monotonic() < deadline:
             try:
@@ -136,17 +156,21 @@ class Runner:
                 judgment = next(row for row in query["cases"] if row["filter"] == filter_id); ids, parents = last[query["id"]]; metrics.append(quality(ids, parents, judgment["relevant_chunks"], judgment["relevant_parents"]))
             durations = [row["total_ms"] for row in samples]
             self.cells.append({"route": route, "filter": filter_id, "equivalence": "direct" if route == "dense" else "directional", "warmups": 60, "repetitions": 3, "samples": samples, "summary": {"qps": len(samples) / (sum(durations) / 1000), "latency_ms_p50": percentile(durations, .5), "latency_ms_p95": percentile(durations, .95), "latency_ms_p99": percentile(durations, .99)}, "quality": mean_quality(metrics), "leakage": leakage, "errors": 0, "timeouts": 0, "fetch_max_count": fetch_max, "route_proof": {"api": "qdrant.query_points", "named_vector": self.config["dense_vector_name"] if route == "dense" else self.config["sparse_vector_name"], "fusion": "rrf" if route == "hybrid" else "", "fallbacks": 0, "exhaustive_search": False, "bounded_fetch": True}})
+            if self.args.deployment == "standalone": self.process_samples.append(process_stats(self.args.server_pid))
     def artifact(self):
-        return {"schema": ARTIFACT_SCHEMA, "backend": "qdrant_server", "manifest_sha256": self.manifest_sha, "fixture_sha256": self.manifest["fixture_sha256"], "semantic_vector_sha256": self.manifest["semantic_vector_sha256"], "config_sha256": self.manifest["config_sha256"], "source_count": 18, "chunk_count": 54, "query_count": 3, "sparse_vector_sha256": self.sparse_sha, "build": {"seconds": self.build_seconds, "points": 54}, "server": {"version": VERSION, "deployment": self.args.deployment, "image": self.args.image, "identity": self.args.server_identity, "local_mode": False, "config": {"dense": self.config["dense_vector_name"], "sparse": self.config["sparse_vector_name"], "hnsw_m": 16, "full_scan_threshold": 0, "indexing_threshold": 1}}, "resources": {"host_pid_metrics": "unavailable_for_docker_container" if self.args.deployment == "docker" else "standalone_process_identity_recorded", "docker_stats": docker_stats(self.args.container_id), "durable_bytes": directory_bytes(self.args.storage_path)}, "reopen": self.reopen, "cells": self.cells, "failures": self.failures}
+        observed = [row for row in self.process_samples if row]
+        resources = {"host_pid_metrics": "unavailable_for_docker_container" if self.args.deployment == "docker" else "observed_process_samples_across_pre_and_post_restart_segments", "docker_stats": docker_stats(self.args.container_id), "process_samples": observed, "peak_observed_rss_bytes": max((row["rss_bytes"] for row in observed), default=0), "cpu_seconds": sum(max(0, right["cpu_seconds"] - left["cpu_seconds"]) for left, right in zip(observed, observed[1:]) if left["pid"] == right["pid"]), "durable_bytes": directory_bytes(self.args.storage_path)}
+        return {"schema": ARTIFACT_SCHEMA, "backend": "qdrant_server", "manifest_sha256": self.manifest_sha, "fixture_sha256": self.manifest["fixture_sha256"], "semantic_vector_sha256": self.manifest["semantic_vector_sha256"], "config_sha256": self.manifest["config_sha256"], "source_count": 18, "chunk_count": 54, "query_count": 3, "sparse_vector_sha256": self.sparse_sha, "build": {"seconds": self.build_seconds, "points": 54}, "server": {"version": VERSION, "deployment": self.args.deployment, "image": self.args.image, "identity": self.args.server_identity, "local_mode": False, "config": {"dense": self.config["dense_vector_name"], "sparse": self.config["sparse_vector_name"], "hnsw_m": 16, "full_scan_threshold": 0, "indexing_threshold": 1}}, "resources": resources, "reopen": self.reopen, "cells": self.cells, "failures": self.failures}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name, kwargs in [("--manifest", {"type": Path, "required": True}), ("--output", {"type": Path, "required": True}), ("--url", {"required": True}), ("--collection", {"required": True}), ("--server-identity", {"required": True}), ("--storage-path", {"type": Path, "required": True}), ("--restart-hook", {"type": Path, "required": True})]: parser.add_argument(name, **kwargs)
-    parser.add_argument("--deployment", choices=("docker", "standalone"), required=True); parser.add_argument("--image", default=""); parser.add_argument("--container-id", default=""); parser.add_argument("--allow-drop", action="store_true"); args = parser.parse_args()
+    parser.add_argument("--deployment", choices=("docker", "standalone"), required=True); parser.add_argument("--image", default=""); parser.add_argument("--container-id", default=""); parser.add_argument("--server-pid", type=int, default=0); parser.add_argument("--allow-drop", action="store_true"); args = parser.parse_args()
     raw = args.manifest.read_bytes(); manifest = json.loads(raw)
     if manifest.get("schema") != SCHEMA or importlib.metadata.version("qdrant-client") != VERSION: raise RuntimeError("manifest or qdrant-client identity mismatch")
     if args.deployment == "docker" and IMAGE_DIGEST not in args.image: raise RuntimeError("Docker image is not digest pinned")
     if not args.storage_path.is_dir() or not os.access(args.restart_hook, os.X_OK): raise RuntimeError("durable path and executable restart hook required")
+    if args.deployment == "standalone" and args.server_pid <= 0: raise RuntimeError("standalone Qdrant requires an authoritative positive server PID")
     from qdrant_client import QdrantClient, models
     server_info(args.url); factory = lambda: QdrantClient(url=args.url, timeout=90, prefer_grpc=False); runner = Runner(manifest, hashlib.sha256(raw).hexdigest(), args, factory, models); code = 0
     try:

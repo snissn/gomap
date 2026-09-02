@@ -53,7 +53,7 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 		ConfigSHA256: manifest.ConfigSHA256, SourceCount: 18, ChunkCount: 54, QueryCount: 3,
 		Server: qdrantComparisonServer{Version: "1.19.0", Deployment: "docker", Identity: "container-id",
 			Image: "qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc"},
-		Resources: qdrantComparisonResources{HostPIDMetrics: "unavailable_for_docker_container", DurableBytes: 1},
+		Resources: qdrantComparisonResources{HostPIDMetrics: "unavailable_for_docker_container", DockerStats: map[string]any{"memory_usage": "1MiB"}, DurableBytes: 1},
 		Reopen:    qdrantComparisonReopen{Attempted: true, Succeeded: true, Version: "1.19.0", PointCount: 54},
 	}
 	for _, route := range []string{"lexical", "dense", "hybrid"} {
@@ -88,6 +88,7 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		{"reopen failure", func(a *qdrantComparisonArtifact) { a.Reopen.Succeeded = false }},
 		{"unbounded fetch", func(a *qdrantComparisonArtifact) { a.Cells[0].FetchMaxCount = 11 }},
 		{"wrong manifest", func(a *qdrantComparisonArtifact) { a.ManifestSHA256 = "wrong" }},
+		{"missing resources", func(a *qdrantComparisonArtifact) { a.Resources.DockerStats = nil }},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
