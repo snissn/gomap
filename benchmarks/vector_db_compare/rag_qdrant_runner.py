@@ -122,10 +122,10 @@ class Runner:
         deadline, info = time.monotonic() + 90, None
         while time.monotonic() < deadline:
             info = c.get_collection(self.args.collection)
-            if int(getattr(info, "points_count", -1)) == 54 and int(getattr(info, "indexed_vectors_count", -1)) >= 54 and str(getattr(info, "status", "")).lower().endswith("green"): break
+            if int(getattr(info, "points_count", -1)) == 54 and int(getattr(info, "indexed_vectors_count", -1)) >= 108 and str(getattr(info, "status", "")).lower().endswith("green"): break
             time.sleep(.1)
         self.build_seconds = time.monotonic() - started
-        if info is None or int(getattr(info, "points_count", -1)) != 54 or int(getattr(info, "indexed_vectors_count", -1)) < 54 or any(field not in (getattr(info, "payload_schema", {}) or {}) for field in ("tenant", "workspace", "updated_year")): raise RuntimeError("build count/index proof failed")
+        if info is None or int(getattr(info, "points_count", -1)) != 54 or int(getattr(info, "indexed_vectors_count", -1)) < 108 or any(field not in (getattr(info, "payload_schema", {}) or {}) for field in ("tenant", "workspace", "updated_year")): raise RuntimeError("build count/index proof failed")
         self.indexed_vectors_count = int(getattr(info, "indexed_vectors_count", -1))
     def restart(self):
         started = time.monotonic()
@@ -172,7 +172,7 @@ class Runner:
                 indexed = int(getattr(collection, "indexed_vectors_count", -1))
                 status = str(getattr(collection, "status", "")).lower()
                 payload_indexes = sorted((getattr(collection, "payload_schema", {}) or {}).keys())
-                if count != 54 or indexed < 54 or not status.endswith("green") or payload_indexes != ["tenant", "updated_year", "workspace"]:
+                if count != 54 or indexed < 108 or not status.endswith("green") or payload_indexes != ["tenant", "updated_year", "workspace"]:
                     raise RuntimeError(f"reopen index proof count={count} indexed={indexed} status={status} payload={payload_indexes}")
                 self.client = candidate
                 self.reopen.update(attempted=True, succeeded=True, version=server["version"], status="green", point_count=count, indexed_vectors_count=indexed, payload_indexes=payload_indexes, seconds=time.monotonic() - started)
@@ -199,7 +199,7 @@ class Runner:
         timing = "total_ms spans query_points, point-ID extraction, bounded retrieve, payload ordering/validation, leakage/accounting, and sample recording; search_ms and fetch_ms are nested subtimers"
         for route in ("lexical", "dense", "hybrid"):
           for filter_id in [row["id"] for row in self.manifest["filters"]]:
-            samples, repetitions, last, leakage, fetch_max = [], [], {}, 0, 0
+            samples, repetitions, quality_basis, leakage, fetch_max = [], [], {}, 0, 0
             for ordinal in range(self.config["warmups_per_cell"]): self.query(route, self.manifest["queries"][ordinal % 3], filter_id)
             for repetition in range(self.config["repetitions"]):
               order = "reverse" if repetition % 2 else "forward"
@@ -211,14 +211,17 @@ class Runner:
                     query_index = len(self.manifest["queries"]) - 1 - query_index
                 query = self.manifest["queries"][query_index]
                 ids, payloads, search_ms, fetch_ms = self.query(route, query, filter_id)
-                leakage += sum(not authorized(row, self.filters[filter_id]) for row in payloads); fetch_max = max(fetch_max, len(payloads)); last[query["id"]] = (ids, [row["parent_id"] for row in payloads])
+                leakage += sum(not authorized(row, self.filters[filter_id]) for row in payloads); fetch_max = max(fetch_max, len(payloads))
+                ranking = (ids, [row["parent_id"] for row in payloads])
+                if query["id"] in quality_basis and quality_basis[query["id"]] != ranking: raise RuntimeError(f"measured ranking varied for {query['id']}")
+                quality_basis.setdefault(query["id"], ranking)
                 sample = {"repetition": repetition, "ordinal": ordinal, "query_id": query["id"], "search_ms": search_ms, "fetch_ms": fetch_ms, "total_ms": 0, "result_ids": ids, "fetched_count": len(payloads), "fetched_bytes": len(canonical(payloads))}
                 samples.append(sample); sample["total_ms"] = (time.monotonic_ns() - total_started) / 1e6
               wall = (time.monotonic_ns() - repetition_started) / 1e9
               repetitions.append({"repetition": repetition, "order": order, "samples": self.config["samples_per_cell"], "wall_seconds": wall, "qps": self.config["samples_per_cell"] / wall})
             metrics = []
             for query in self.manifest["queries"]:
-                judgment = next(row for row in query["cases"] if row["filter"] == filter_id); ids, parents = last[query["id"]]; metrics.append(quality(ids, parents, judgment["relevant_chunks"], judgment["relevant_parents"]))
+                judgment = next(row for row in query["cases"] if row["filter"] == filter_id); ids, parents = quality_basis[query["id"]]; metrics.append(quality(ids, parents, judgment["relevant_chunks"], judgment["relevant_parents"]))
             durations = [row["total_ms"] for row in samples]; vectors = [self.config["sparse_vector_name"]] if route == "lexical" else [self.config["dense_vector_name"]]
             if route == "hybrid": vectors = [self.config["sparse_vector_name"], self.config["dense_vector_name"]]
             self.cells.append({"route": route, "filter": filter_id, "equivalence": "directional", "timing_semantics": timing, "warmups": self.config["warmups_per_cell"], "repetitions": self.config["repetitions"], "samples": samples, "repetition_performance": repetitions, "summary": {"qps": sum(row["qps"] for row in repetitions) / len(repetitions), "latency_ms_p50": percentile(durations, .5), "latency_ms_p95": percentile(durations, .95), "latency_ms_p99": percentile(durations, .99)}, "quality": mean_quality(metrics), "leakage": leakage, "errors": 0, "timeouts": 0, "fetch_max_count": fetch_max, "route_proof": {"api": "qdrant.query_points", "named_vectors": vectors, "fusion": "rrf" if route == "hybrid" else "", "fallbacks": 0, "exhaustive_search": False, "bounded_fetch": True}})

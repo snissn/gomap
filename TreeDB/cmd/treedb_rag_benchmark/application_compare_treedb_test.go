@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -152,6 +153,7 @@ func TestTreeDBComparisonValidatorRejectsMismatchedEvidence(t *testing.T) {
 			sample.ResultSources[sample.ResultIDs[0]] = [2]bool{}
 		}},
 	}
+
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			manifest, manifestSHA, artifact := validTreeDBComparisonArtifact(t)
@@ -160,6 +162,24 @@ func TestTreeDBComparisonValidatorRejectsMismatchedEvidence(t *testing.T) {
 				t.Fatal("invalid TreeDB comparison evidence accepted")
 			}
 		})
+	}
+}
+func TestTreeDBComparisonValidatorRejectsVariedMeasuredRanking(t *testing.T) {
+	manifest, manifestSHA, artifact := validTreeDBComparisonArtifact(t)
+	row := &artifact.Rows[0]
+	sample := &row.Samples[0]
+	original := sample.ResultIDs[0]
+	for _, chunk := range manifest.Chunks {
+		if chunk.ID != original {
+			delete(sample.ResultSources, original)
+			sample.ResultIDs = []string{chunk.ID}
+			sample.ResultSources[chunk.ID] = [2]bool{true, false}
+			break
+		}
+	}
+	if _, err := validateTreeDBComparisonArtifact(&artifact, manifest, manifestSHA); err == nil ||
+		!strings.Contains(err.Error(), "measured ranking varied") {
+		t.Fatalf("varied measured ranking err=%v", err)
 	}
 }
 

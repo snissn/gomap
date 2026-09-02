@@ -5,9 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -540,6 +542,9 @@ func recomputeQdrantCellEvidence(cell qdrantComparisonCell, manifest application
 		}
 		fetchMax = max(fetchMax, sample.FetchedCount)
 		latencies = append(latencies, sample.TotalMS)
+		if previous, ok := lastRankings[sample.QueryID]; ok && !slices.Equal(previous, sample.ResultIDs) {
+			return nil, qualityMetrics{}, fmt.Errorf("measured ranking varied for query %q at sample %d", sample.QueryID, sampleIndex)
+		}
 		lastRankings[sample.QueryID] = append([]string(nil), sample.ResultIDs...)
 	}
 	if cell.FetchMaxCount != fetchMax || len(lastRankings) != len(manifest.Queries) {
@@ -664,11 +669,17 @@ func recomputeTreeDBCellEvidence(row applicationRow, manifest applicationCompari
 			rankingIDs[resultID] = true
 		}
 		latencies = append(latencies, sample.Millis)
-		lastRankings[sample.QueryID] = append([]string(nil), sample.ResultIDs...)
 		sources := make(map[string][2]bool, len(sample.ResultSources))
 		for id, source := range sample.ResultSources {
 			sources[id] = source
 		}
+		if previous, ok := lastRankings[sample.QueryID]; ok && !slices.Equal(previous, sample.ResultIDs) {
+			return nil, qualityMetrics{}, fmt.Errorf("measured ranking varied for query %q at sample %d", sample.QueryID, sampleIndex)
+		}
+		if previous, ok := lastSources[sample.QueryID]; ok && !maps.Equal(previous, sources) {
+			return nil, qualityMetrics{}, fmt.Errorf("measured attribution varied for query %q at sample %d", sample.QueryID, sampleIndex)
+		}
+		lastRankings[sample.QueryID] = append([]string(nil), sample.ResultIDs...)
 		lastSources[sample.QueryID] = sources
 	}
 	if len(lastRankings) != len(manifest.Queries) {
@@ -782,7 +793,7 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		artifact.Server.Config["full_scan_threshold_unit"] != "KiB" ||
 		!exactOK || exact || !fullScanOK || fullScanThresholdKB != 10 ||
 		!hnswMOK || hnswM != 16 || !indexingThresholdOK || indexingThreshold != 1 ||
-		artifact.Server.IndexProof.IndexedVectorsCount < len(manifest.Chunks) {
+		artifact.Server.IndexProof.IndexedVectorsCount < 2*len(manifest.Chunks) {
 		return fmt.Errorf("Qdrant artifact lacks pinned standalone server/index configuration")
 	}
 	identityPIDs, err := qdrantServerIdentityPIDs(artifact.Server.Identity)
@@ -813,7 +824,7 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		artifact.Reopen.Version != manifest.Config.QdrantServerVersion || artifact.Reopen.Status != "green" ||
 		artifact.Reopen.PointCount != len(manifest.Chunks) ||
 		artifact.Reopen.IndexedVectorsCount != artifact.Server.IndexProof.IndexedVectorsCount ||
-		artifact.Reopen.IndexedVectorsCount < len(manifest.Chunks) ||
+		artifact.Reopen.IndexedVectorsCount < 2*len(manifest.Chunks) ||
 		!equalStrings(artifact.Reopen.PayloadIndexes, []string{"tenant", "updated_year", "workspace"}) ||
 		artifact.Reopen.Seconds <= 0 || artifact.Reopen.Seconds > float64(manifest.Config.PhaseTimeoutSeconds) {
 		return fmt.Errorf("Qdrant artifact failed or lacks successful bounded build/query/durable reopen")

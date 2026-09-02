@@ -70,7 +70,7 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 				"full_scan_threshold": float64(10), "full_scan_threshold_unit": "KiB",
 				"hnsw_m": float64(16), "indexing_threshold": float64(1),
 			},
-			IndexProof: qdrantComparisonIndexProof{IndexedVectorsCount: 54, FilterCardinalities: cardinalities},
+			IndexProof: qdrantComparisonIndexProof{IndexedVectorsCount: 108, FilterCardinalities: cardinalities},
 		},
 		Resources: qdrantComparisonResources{
 			HostPIDMetrics: "observed_process_samples_across_pre_and_post_restart_segments",
@@ -85,7 +85,7 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 		Build: qdrantComparisonBuild{Seconds: 1, Points: 54}, QuerySeconds: 1,
 		Reopen: qdrantComparisonReopen{
 			Attempted: true, Succeeded: true, OptimizerUpdateTriggered: true, Version: "1.19.0", Status: "green", PointCount: 54,
-			IndexedVectorsCount: 54, PayloadIndexes: []string{"tenant", "updated_year", "workspace"}, Seconds: 1,
+			IndexedVectorsCount: 108, PayloadIndexes: []string{"tenant", "updated_year", "workspace"}, Seconds: 1,
 		},
 	}
 	for _, route := range []string{"lexical", "dense", "hybrid"} {
@@ -256,6 +256,23 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 				t.Fatal("invalid Qdrant comparison evidence accepted")
 			}
 		})
+	}
+}
+
+func TestQdrantComparisonValidatorRejectsVariedMeasuredRanking(t *testing.T) {
+	manifest, manifestSHA, artifact := validQdrantComparisonArtifact(t)
+	cell := &artifact.Cells[0]
+	sample := &cell.Samples[0]
+	original := sample.ResultIDs[0]
+	for _, chunk := range manifest.Chunks {
+		if chunk.ID != original {
+			sample.ResultIDs = []string{chunk.ID}
+			break
+		}
+	}
+	if err := validateQdrantComparisonArtifact(&artifact, manifest, manifestSHA, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err == nil ||
+		!strings.Contains(err.Error(), "measured ranking varied") {
+		t.Fatalf("varied measured ranking err=%v", err)
 	}
 }
 
