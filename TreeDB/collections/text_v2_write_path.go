@@ -87,22 +87,10 @@ func (a *textV2DocumentPostingAccumulator) add(term string, fieldIndex int, freq
 }
 
 func (b *textV2PostingBatchBuilder) addDocument(def TextIndexDefinition, ordinal, generation uint64, analysis textAnalyzedDocument) error {
-	if ordinal == 0 || generation == 0 {
-		return errMalformedTextStorage("text-v2 posting document ordinal/generation cannot be zero")
+	acc, err := b.beginDocument(def, ordinal, generation)
+	if err != nil {
+		return err
 	}
-	fieldCount := len(def.Fields)
-	if fieldCount == 0 || fieldCount > int(textV2PostingBlockMaxFieldCount) {
-		return errMalformedTextStorage("text-v2 posting document field count %d invalid", fieldCount)
-	}
-	if b.fieldCount == 0 {
-		b.fieldCount = uint32(fieldCount)
-	} else if b.fieldCount != uint32(fieldCount) {
-		return errMalformedTextStorage("text-v2 posting batch field count changed from %d to %d", b.fieldCount, fieldCount)
-	}
-	if b.byTerm == nil {
-		b.byTerm = make(map[string][]textV2PostingBlockEntry)
-	}
-	acc := newTextV2DocumentPostingAccumulator(fieldCount)
 	for _, field := range analysis.Fields {
 		fieldIndex := textV2FieldIndex(def, field.Field)
 		if fieldIndex < 0 {
@@ -117,6 +105,50 @@ func (b *textV2PostingBatchBuilder) addDocument(def TextIndexDefinition, ordinal
 			}
 		}
 	}
+	b.finishDocument(ordinal, generation, acc)
+	return nil
+}
+
+func (b *textV2PostingBatchBuilder) addDocumentState(def TextIndexDefinition, ordinal, generation uint64, state textDocumentStateValue) error {
+	acc, err := b.beginDocument(def, ordinal, generation)
+	if err != nil {
+		return err
+	}
+	for _, field := range state.Fields {
+		fieldIndex := textV2FieldIndex(def, field.Field)
+		if fieldIndex < 0 {
+			return errMalformedTextStorage("text-v2 posting field %q missing from definition", field.Field)
+		}
+		for _, term := range field.Terms {
+			if err := acc.add(term.Term, fieldIndex, term.Frequency); err != nil {
+				return err
+			}
+		}
+	}
+	b.finishDocument(ordinal, generation, acc)
+	return nil
+}
+
+func (b *textV2PostingBatchBuilder) beginDocument(def TextIndexDefinition, ordinal, generation uint64) (textV2DocumentPostingAccumulator, error) {
+	if ordinal == 0 || generation == 0 {
+		return textV2DocumentPostingAccumulator{}, errMalformedTextStorage("text-v2 posting document ordinal/generation cannot be zero")
+	}
+	fieldCount := len(def.Fields)
+	if fieldCount == 0 || fieldCount > int(textV2PostingBlockMaxFieldCount) {
+		return textV2DocumentPostingAccumulator{}, errMalformedTextStorage("text-v2 posting document field count %d invalid", fieldCount)
+	}
+	if b.fieldCount == 0 {
+		b.fieldCount = uint32(fieldCount)
+	} else if b.fieldCount != uint32(fieldCount) {
+		return textV2DocumentPostingAccumulator{}, errMalformedTextStorage("text-v2 posting batch field count changed from %d to %d", b.fieldCount, fieldCount)
+	}
+	if b.byTerm == nil {
+		b.byTerm = make(map[string][]textV2PostingBlockEntry)
+	}
+	return newTextV2DocumentPostingAccumulator(fieldCount), nil
+}
+
+func (b *textV2PostingBatchBuilder) finishDocument(ordinal, generation uint64, acc textV2DocumentPostingAccumulator) {
 	for _, term := range acc.terms {
 		if term.TermFrequency == 0 {
 			continue
@@ -129,7 +161,6 @@ func (b *textV2PostingBatchBuilder) addDocument(def TextIndexDefinition, ordinal
 		}
 		b.byTerm[term.Term] = append(b.byTerm[term.Term], entry)
 	}
-	return nil
 }
 
 func (b *textV2PostingBatchBuilder) empty() bool {
