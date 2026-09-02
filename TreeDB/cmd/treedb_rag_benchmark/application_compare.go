@@ -66,11 +66,12 @@ type qdrantComparisonProcessSample struct {
 }
 
 type qdrantComparisonResources struct {
-	HostPIDMetrics       string                          `json:"host_pid_metrics"`
-	ProcessSamples       []qdrantComparisonProcessSample `json:"process_samples"`
-	PeakObservedRSSBytes int64                           `json:"peak_observed_rss_bytes"`
-	CPUSeconds           float64                         `json:"cpu_seconds"`
-	DurableBytes         int64                           `json:"durable_bytes"`
+	HostPIDMetrics        string                          `json:"host_pid_metrics"`
+	ProcessSamples        []qdrantComparisonProcessSample `json:"process_samples"`
+	PeakObservedRSSBytes  int64                           `json:"peak_observed_rss_bytes"`
+	CPUSeconds            float64                         `json:"cpu_seconds"`
+	DurableBytes          int64                           `json:"durable_bytes"`
+	DurableBytesSemantics string                          `json:"durable_bytes_semantics"`
 }
 
 type qdrantComparisonBuild struct {
@@ -901,6 +902,7 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		return fmt.Errorf("Qdrant artifact failed or lacks successful bounded build/query/durable reopen")
 	}
 	if artifact.Resources.DurableBytes <= 0 ||
+		artifact.Resources.DurableBytesSemantics != "live_before_server_shutdown" ||
 		artifact.Resources.HostPIDMetrics != "observed_process_samples_across_pre_and_post_restart_segments" ||
 		len(artifact.Resources.ProcessSamples) < 4 || artifact.Resources.PeakObservedRSSBytes <= 0 ||
 		artifact.Resources.CPUSeconds <= 0 {
@@ -1080,6 +1082,7 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStorageP
 		return fmt.Errorf("TreeDB storage total does not match live storage root")
 	}
 	qdrant.Resources.DurableBytes = qdrantStorageBytes
+	qdrant.Resources.DurableBytesSemantics = "quiesced_after_server_shutdown"
 	report := applicationComparisonReport{Schema: applicationComparisonSchema, State: "validated",
 		HarnessRevision: tree.HarnessRevision, TreeDBBinarySHA256: tree.BinarySHA256,
 		TreeDBProcessResources: tree.ProcessResources, TreeDBStorageBytes: tree.StorageBytes, QdrantResources: qdrant.Resources,
@@ -1121,7 +1124,7 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStorageP
 		return err
 	}
 	var md strings.Builder
-	fmt.Fprintf(&md, "# TreeDB / Qdrant bounded RAG comparison\n\nState: **validated**  \nManifest SHA-256: `%s`  \nHarness revision: `%s`  \nTreeDB binary SHA-256: `%s`  \nTreeDB process CPU / peak RSS: `%.6fs` / `%d bytes`  \nTreeDB resource semantics: `%s`; `%s`; `%s`  \nQdrant client/server: `%s` / `%s`  \nQdrant client lock SHA-256: `%s`  \nQdrant Python: `%s` / `%s` / `%s`  \nQdrant Python executable SHA-256: `%s`  \nQdrant server binary SHA-256: `%s`  \nQdrant release asset SHA-256: `%s`  \nQdrant process CPU / observed peak RSS / durable bytes: `%.6fs` / `%d bytes` / `%d bytes`\n\n", manifestSHA, report.HarnessRevision, report.TreeDBBinarySHA256, report.TreeDBProcessResources.CPUSeconds, report.TreeDBProcessResources.PeakRSSBytes, report.TreeDBProcessResources.CPUSemantics, report.TreeDBProcessResources.RSSSemantics, report.TreeDBProcessResources.Scope, report.QdrantClientVersion, report.QdrantServerVersion, report.QdrantClientLockSHA256, report.QdrantPythonVersion, report.QdrantPythonImplementation, report.QdrantPythonPlatform, report.QdrantPythonExecutableSHA256, report.QdrantServerBinarySHA256, report.QdrantReleaseAssetSHA256, report.QdrantResources.CPUSeconds, report.QdrantResources.PeakObservedRSSBytes, report.QdrantResources.DurableBytes)
+	fmt.Fprintf(&md, "# TreeDB / Qdrant bounded RAG comparison\n\nState: **validated**  \nManifest SHA-256: `%s`  \nHarness revision: `%s`  \nTreeDB binary SHA-256: `%s`  \nTreeDB process CPU / peak RSS: `%.6fs` / `%d bytes`  \nTreeDB resource semantics: `%s`; `%s`; `%s`  \nQdrant client/server: `%s` / `%s`  \nQdrant client lock SHA-256: `%s`  \nQdrant Python: `%s` / `%s` / `%s`  \nQdrant Python executable SHA-256: `%s`  \nQdrant server binary SHA-256: `%s`  \nQdrant release asset SHA-256: `%s`  \nQdrant process CPU / observed peak RSS / durable bytes: `%.6fs` / `%d bytes` / `%d bytes`  \nQdrant durable-byte semantics: `%s`\n\n", manifestSHA, report.HarnessRevision, report.TreeDBBinarySHA256, report.TreeDBProcessResources.CPUSeconds, report.TreeDBProcessResources.PeakRSSBytes, report.TreeDBProcessResources.CPUSemantics, report.TreeDBProcessResources.RSSSemantics, report.TreeDBProcessResources.Scope, report.QdrantClientVersion, report.QdrantServerVersion, report.QdrantClientLockSHA256, report.QdrantPythonVersion, report.QdrantPythonImplementation, report.QdrantPythonPlatform, report.QdrantPythonExecutableSHA256, report.QdrantServerBinarySHA256, report.QdrantReleaseAssetSHA256, report.QdrantResources.CPUSeconds, report.QdrantResources.PeakObservedRSSBytes, report.QdrantResources.DurableBytes, report.QdrantResources.DurableBytesSemantics)
 	fmt.Fprintf(&md, "TreeDB durable bytes: `%d bytes`\n\n", report.TreeDBStorageBytes)
 	md.WriteString("| Backend | Route | Filter | Semantics | Samples | Reps | QPS | p50 ms | p95 ms | p99 ms | P@10 | nDCG@10 | MRR@10 | Parent R@10 |\n|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, row := range report.Rows {
