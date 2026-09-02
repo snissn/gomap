@@ -91,13 +91,14 @@ func TestApplicationEvidenceIntegrityContracts(t *testing.T) {
 	t.Run("cold reopen and index parity fail closed", func(t *testing.T) {
 		good := lifecycleEvidence{
 			ColdReopenParity: true, TextIndexParity: true,
-			VectorIndexParity: true, ScalarIndexParity: true,
+			VectorIndexParity: true, ScalarIndexParity: true, QueryCollectionReopened: true,
 		}
 		for name, mutate := range map[string]func(*lifecycleEvidence){
-			"cold reopen":  func(e *lifecycleEvidence) { e.ColdReopenParity = false },
-			"text index":   func(e *lifecycleEvidence) { e.TextIndexParity = false },
-			"vector index": func(e *lifecycleEvidence) { e.VectorIndexParity = false },
-			"scalar index": func(e *lifecycleEvidence) { e.ScalarIndexParity = false },
+			"cold reopen":      func(e *lifecycleEvidence) { e.ColdReopenParity = false },
+			"query collection": func(e *lifecycleEvidence) { e.QueryCollectionReopened = false },
+			"text index":       func(e *lifecycleEvidence) { e.TextIndexParity = false },
+			"vector index":     func(e *lifecycleEvidence) { e.VectorIndexParity = false },
+			"scalar index":     func(e *lifecycleEvidence) { e.ScalarIndexParity = false },
 		} {
 			t.Run(name, func(t *testing.T) {
 				bad := good
@@ -160,6 +161,40 @@ func TestApplicationEvidenceIntegrityContracts(t *testing.T) {
 					t.Fatal("invalid final binary binding accepted")
 				}
 			})
+		}
+	})
+
+	t.Run("linker revision is used only when debug VCS settings are absent", func(t *testing.T) {
+		const revision = "0123456789abcdef0123456789abcdef01234567"
+		cfg := defaultApplicationConfig()
+		cfg.HarnessRevision = revision
+		stamped, ok := effectiveApplicationBuildInfo(map[string]string{"CGO_ENABLED": "1"}, true, revision, "false")
+		if got, err := resolveApplicationHarnessRevision(cfg, stamped, ok); err != nil || got != revision {
+			t.Fatalf("clean stamped revision got=%q err=%v", got, err)
+		}
+
+		actual := "1123456789abcdef0123456789abcdef01234567"
+		debugSettings := map[string]string{"vcs.revision": actual, "vcs.modified": "false"}
+		effective, ok := effectiveApplicationBuildInfo(debugSettings, true, revision, "false")
+		if effective["vcs.revision"] != actual || !ok {
+			t.Fatalf("linker stamp overrode debug settings: %+v ok=%v", effective, ok)
+		}
+
+		for name, settings := range map[string]map[string]string{
+			"unstamped":              {},
+			"partial debug settings": {"vcs.revision": revision},
+		} {
+			t.Run(name, func(t *testing.T) {
+				effective, buildInfoOK := effectiveApplicationBuildInfo(settings, true, "", "")
+				if _, err := resolveApplicationHarnessRevision(cfg, effective, buildInfoOK); err == nil {
+					t.Fatal("unstamped or partial final binary binding accepted")
+				}
+			})
+		}
+
+		dirty, ok := effectiveApplicationBuildInfo(nil, false, revision, "true")
+		if _, err := resolveApplicationHarnessRevision(cfg, dirty, ok); err == nil {
+			t.Fatal("dirty linker stamp accepted")
 		}
 	})
 

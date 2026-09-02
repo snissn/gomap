@@ -159,14 +159,18 @@ set -e
 generated_runs=("$TMP"/gomap_minima_qualification_*)
 [[ "${#generated_runs[@]}" == 1 && -d "${generated_runs[0]}" ]]
 
-cat >"$TMP/fake-qdrant" <<'EOF'
-#!/usr/bin/env bash
-trap 'exit 0' TERM INT
-while :; do
-	sleep 1
-done
+cat >"$TMP/fake-qdrant.go" <<'EOF'
+package main
+
+import "time"
+
+func main() {
+	for {
+		time.Sleep(time.Hour)
+	}
+}
 EOF
-chmod +x "$TMP/fake-qdrant"
+go build -o "$TMP/fake-qdrant" "$TMP/fake-qdrant.go"
 mkdir -p "$TMP/qdrant-storage"
 sleep 30 &
 unrelated_pid=$!
@@ -178,7 +182,12 @@ kill -0 "$unrelated_pid"
 [[ "$(<"$TMP/restart.err")" == *"refusing to signal that process"* ]]
 IFS= read -r recorded_pid <"$TMP/qdrant.pid"
 [[ "$recorded_pid" == "$replacement_pid" ]]
-[[ "$(sed -n '2p' "$TMP/qdrant.pid")" == *"$TMP/fake-qdrant"* ]]
+recorded_identity=$(sed -n '2p' "$TMP/qdrant.pid")
+[[ "$recorded_identity" == "$(ps -o lstart= -o command= -p "$replacement_pid")" ]]
+recorded_command=$(ps -o command= -p "$replacement_pid")
+recorded_command=${recorded_command#"${recorded_command%%[![:space:]]*}"}
+recorded_command=${recorded_command%"${recorded_command##*[![:space:]]}"}
+[[ "$recorded_command" == "$TMP/fake-qdrant" ]]
 kill "$replacement_pid"
 wait "$replacement_pid" 2>/dev/null || true
 replacement_pid=""
