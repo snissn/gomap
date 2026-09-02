@@ -15,11 +15,11 @@ import subprocess
 import sys
 from typing import Any
 
-SCHEMA = "treedb-construction-policy-4587/v5"
+SCHEMA = "treedb-construction-policy-4587/v6"
 RESULT_SCHEMA = "treedb-construction-policy-4587-results/v5"
 AUTHORIZATION_SCHEMA = "treedb-construction-policy-4587-execution-authorization/v1"
-MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v2"
-ISOLATION_SCHEMA = "treedb-construction-policy-4587-isolation/v1"
+MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v3"
+ISOLATION_SCHEMA = "treedb-construction-policy-4587-isolation/v2"
 WINNER_SELECTION_SCHEMA = "treedb-construction-policy-4587-winner-selection/v1"
 SEARCH_ORIGIN_SCHEMA = "treedb-construction-policy-4587-search-origin/v1"
 COORDINATES = [128, 192, 256, 300]
@@ -31,17 +31,21 @@ PROTOCOL_PATHS = (
     "scripts/treedb_construction_policy_4587.py",
     "scripts/test_treedb_construction_policy_4587.py",
     "scripts/treedb_vdbbench_search_existing_index.py",
+    "scripts/treedb_vectordbbench_artifact.py",
+    "scripts/treedb_vectordbbench_artifact_test.py",
 )
 DRAFT_PATHS = set(PROTOCOL_PATHS)
-WORK_KEYS = {
-    "direct_exact_fp32_rows", "direct_exact_fp32_calls",
-    "indexed_exact_fp32_rows", "indexed_exact_fp32_calls",
-    "approximate_score_rows", "approximate_score_calls",
-    "search_visited_candidates_by_layer", "diversity_candidates",
-    "diversity_comparisons_requested", "diversity_comparisons_executed",
-    "diversity_rejection_position_distribution", "reciprocal_prune_work",
-    "worker_active_seconds", "dependency_barrier_wait_seconds",
-    "goroutine_scheduler_seconds",
+WORK_KEYS = {"planning", "reciprocal"}
+OBSERVER_PHASE_KEYS = {
+    "decisions", "accepted", "rejected", "direct_exact_fp32_rows", "direct_exact_fp32_calls",
+    "indexed_exact_fp32_rows", "indexed_exact_fp32_calls", "approximate_score_rows",
+    "approximate_score_calls", "exact_fp32_dimensions", "diversity_predicates",
+    "diversity_candidates", "diversity_comparisons_requested",
+    "diversity_comparisons_executed", "unique_row_pairs", "repeated_row_pairs",
+    "row_pair_replacements", "active_wall_nanos", "saturated",
+    "candidate_count_histogram", "selected_count_histogram",
+    "diversity_early_exit_histogram", "reciprocal_group_histogram",
+    "prune_survivor_histogram",
 }
 RESOURCE_KEYS = {
     "peak_rss_bytes", "peak_rss_anon_bytes", "peak_rss_file_bytes",
@@ -62,6 +66,12 @@ MEASUREMENT_ORIGIN_KEYS = {
     "role", "partition", "ef_construction", "lifecycle_sha256",
     "lifecycle_started_at", "lifecycle_completed_at",
 }
+ISOLATION_KEYS = {
+    "schema_version", "artifact_root", "lock_path", "lock_acquired_at",
+    "lock_held_through_evidence", "coverage_completed_at", "gomaxprocs",
+    "competing_processes", "peak_swap_used_bytes", "samples",
+}
+ISOLATION_SAMPLE_KEYS = {"timestamp", "swap_used_bytes", "competing_processes"}
 SEARCH_ORIGIN_KEYS = {
     "schema_version", "run_id", "artifact_root", "manifest_sha256",
     "execution_commit", "dataset_sha256", "scale", "role", "partition",
@@ -150,6 +160,12 @@ def unit_interval_number(value: Any, name: str) -> float:
     if result > 1:
         fail(f"{name} must be a finite number in [0, 1]")
     return result
+
+
+def nonnegative_int(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        fail(f"{name} must be a non-negative integer")
+    return value
 
 
 def positive_int(value: Any, name: str) -> int:
@@ -254,6 +270,63 @@ def lifecycle_timing(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
         "completed_at": completions[0]["timestamp"],
         "started": started_at,
         "completed": completed_at,
+    }
+
+def validate_construction_evidence(
+    root: Path, manifest: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, float]]:
+    lifecycle = object_at(manifest.get("lifecycle"), "manifest.lifecycle")
+    raw_artifacts = lifecycle.get("raw_artifacts")
+    if not isinstance(raw_artifacts, list):
+        fail("manifest.lifecycle.raw_artifacts must be a list")
+    matches = [item for item in raw_artifacts
+               if isinstance(item, dict) and item.get("path") == "adapter-lifecycle.jsonl"]
+    if len(matches) != 1:
+        fail("lifecycle must bind exactly one adapter-lifecycle.jsonl")
+    binding = matches[0]
+    exact_keys(binding, {"path", "sha256"}, "adapter lifecycle binding")
+    path = root / "adapter-lifecycle.jsonl"
+    exact(sha256_file(path), full_sha(binding["sha256"], "adapter lifecycle SHA-256", 64),
+          "adapter lifecycle SHA-256")
+    raw = path.read_text()
+    if not raw or not raw.endswith("\n"):
+        fail("adapter lifecycle sidecar must be complete and newline terminated")
+    records = [object_at(json.loads(line), f"adapter lifecycle line {position}")
+               for position, line in enumerate(raw.splitlines())]
+    starts = [record for record in records if record.get("event") == "optimize_start"]
+    ends = [record for record in records if record.get("event") == "optimize_end"]
+    if len(starts) != 1 or len(ends) != 1:
+        fail("adapter lifecycle must contain exactly one optimize start and end")
+    start_ns = positive_int(starts[0].get("timestamp_ns"), "optimize start timestamp_ns")
+    end_ns = positive_int(ends[0].get("timestamp_ns"), "optimize end timestamp_ns")
+    if start_ns >= end_ns:
+        fail("optimize end must follow optimize start")
+    response = object_at(ends[0].get("response"), "raw optimize response")
+    status = object_at(response.get("status"), "raw optimize response.status")
+    column_graph = object_at(status.get("column_graph_build"), "raw optimize column_graph_build")
+    adjacency_nanos = positive_int(
+        column_graph.get("adjacency_build_nanos"), "raw optimize adjacency_build_nanos")
+    decisions = object_at(column_graph.get("construction_decisions"), "raw construction decisions")
+    exact_keys(decisions, WORK_KEYS, "raw construction decisions")
+    for phase_name, phase_value in decisions.items():
+        phase = object_at(phase_value, f"raw construction decisions.{phase_name}")
+        exact_keys(phase, OBSERVER_PHASE_KEYS, f"raw construction decisions.{phase_name}")
+        for key, value in phase.items():
+            name = f"raw construction decisions.{phase_name}.{key}"
+            if key == "saturated":
+                exact(value, False, name)
+            elif key.endswith("_histogram"):
+                if not isinstance(value, list) or len(value) != 16:
+                    fail(f"{name} must contain exactly 16 buckets")
+                for position, bucket in enumerate(value):
+                    nonnegative_int(bucket, f"{name}[{position}]")
+            else:
+                nonnegative_int(value, name)
+    if sum(decisions[phase]["decisions"] for phase in WORK_KEYS) <= 0:
+        fail("raw construction decisions must contain observed decisions")
+    return decisions, {
+        "adjacency": adjacency_nanos / 1_000_000_000,
+        "optimize": (end_ns - start_ns) / 1_000_000_000,
     }
 
 
@@ -486,11 +559,25 @@ def validate_contract(contract: dict[str, Any], allow_draft: bool,
     exact(required["cpu_utilization"], "cpu_utilization_logical_cores", "required CPU utilization metric")
     exact(set(required["determinism"]), DETERMINISM_KEYS, "required deterministic identity metrics")
     validate_go_gates(contract)
+    isolation_schema = object_at(contract["isolation_schema"], "isolation_schema")
+    exact_keys(isolation_schema, {
+        "schema_version", "exact_keys", "sample_exact_keys", "coverage",
+    }, "isolation_schema")
+    exact(isolation_schema["schema_version"], ISOLATION_SCHEMA, "isolation contract schema")
+    exact(set(isolation_schema["exact_keys"]), ISOLATION_KEYS, "isolation contract keys")
+    exact(set(isolation_schema["sample_exact_keys"]), ISOLATION_SAMPLE_KEYS,
+          "isolation sample contract keys")
     measurement_schema = object_at(contract["measurement_schema"], "measurement_schema")
+    exact_keys(measurement_schema, {
+        "schema_version", "exact_keys", "origin_exact_keys", "producer_binding",
+        "observer_phase_exact_keys", "timing_source",
+    }, "measurement_schema")
     exact(measurement_schema["schema_version"], MEASUREMENT_SCHEMA, "measurement contract schema")
     exact(set(measurement_schema["exact_keys"]), MEASUREMENT_KEYS, "measurement contract keys")
     exact(set(measurement_schema["origin_exact_keys"]), MEASUREMENT_ORIGIN_KEYS,
           "measurement origin contract keys")
+    exact(set(measurement_schema["observer_phase_exact_keys"]), OBSERVER_PHASE_KEYS,
+          "observer phase contract keys")
     result_schema = object_at(contract["result_schema"], "result_schema")
     exact(result_schema["schema_version"], RESULT_SCHEMA, "result contract schema")
     exact(result_schema["decision_exact_keys"], [
@@ -701,6 +788,12 @@ def validate_search_evidence(run_row: dict[str, Any], root: Path,
     return production
 
 
+def validate_nonoverlapping_lifecycles(rows: list[dict[str, Any]], name: str) -> None:
+    for previous, current in zip(rows, rows[1:]):
+        if previous["timing"]["completed"] >= current["timing"]["started"]:
+            fail(f"{name} lifecycle order must be strictly non-overlapping")
+
+
 def validate_manifest(run_row: dict[str, Any], root: Path, manifest: dict[str, Any], contract: dict[str, Any],
                       packet_commit: str, run_base_validator: bool) -> str:
     if run_base_validator:
@@ -712,6 +805,19 @@ def validate_manifest(run_row: dict[str, Any], root: Path, manifest: dict[str, A
     exact(manifest.get("schema_version"), "treedb-vectordbbench-artifact/v1", "artifact schema")
     exact(manifest.get("artifact_root"), str(root), "artifact root")
     context = object_at(manifest.get("context"), "manifest.context")
+    host = object_at(context.get("host"), "manifest.context.host")
+    runtime = contract["source_identity"]["runtime"]
+    exact(host.get("go"), f"go version {runtime['go']}", "artifact Go runtime")
+    if not isinstance(host.get("python"), str) or not host["python"].startswith(runtime["python"] + " "):
+        fail("artifact Python runtime does not match frozen identity")
+    exact(host.get("pyarrow"), runtime["pyarrow"], "artifact PyArrow runtime")
+    exact(host.get("cpu_brand"), runtime["host_cpu"], "artifact CPU identity")
+    exact((host.get("physical_cpu_count"), host.get("logical_cpu_count")),
+          (runtime["physical_cores"], runtime["logical_cpus"]), "artifact CPU topology")
+    exact(host.get("gomaxprocs"), str(runtime["gomaxprocs"]), "artifact GOMAXPROCS")
+    storage = object_at(host.get("storage"), "manifest.context.host.storage")
+    exact((storage.get("mount"), storage.get("filesystem")),
+          (runtime["storage_mount"], runtime["filesystem"]), "artifact storage identity")
     gomap = object_at(context.get("gomap"), "manifest.context.gomap")
     vdb = object_at(context.get("vectordbbench"), "manifest.context.vectordbbench")
     exact((gomap.get("commit"), gomap.get("dirty")), (packet_commit, False), "artifact gomap identity")
@@ -732,6 +838,8 @@ def validate_manifest(run_row: dict[str, Any], root: Path, manifest: dict[str, A
           (expected_dataset["name"], expected_dataset["vectors"], expected_dataset["dimensions"],
            expected_dataset["train_sha256"]), "lifecycle dataset")
     harness_cfg = object_at(manifest.get("harness"), "manifest.harness")
+    exact(harness_cfg.get("construction_decision_diagnostics"), True,
+          "lifecycle construction-decision diagnostics")
     config = run_row["configuration"]
     exact((harness_cfg.get("m"), harness_cfg.get("ef_construction"), harness_cfg.get("ef_search"),
            harness_cfg.get("k"), harness_cfg.get("rerank_candidates"), harness_cfg.get("rows")),
@@ -771,16 +879,40 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
     manifest = object_at(json.loads(manifest_path.read_text()), "manifest")
     service_binary_sha256 = validate_manifest(
         row, root, manifest, contract, packet_commit, run_base_validator)
+    construction_decisions, producer_phases = validate_construction_evidence(root, manifest)
     timing = lifecycle_timing(root, manifest)
     isolation, _ = read_bound_json(root, row["isolation_evidence"], "run.isolation_evidence")
+    exact_keys(isolation, ISOLATION_KEYS, "isolation")
     exact(isolation.get("schema_version"), ISOLATION_SCHEMA, "isolation schema")
     exact(isolation.get("artifact_root"), str(root), "isolation artifact root")
     exact(isolation.get("lock_path"), contract["experiment"]["isolation_and_noise"]["lock_path"], "isolation lock")
-    exact(isolation.get("gomaxprocs"), 12, "isolation GOMAXPROCS")
-    exact(isolation.get("competing_processes"), [], "competing process snapshot")
-    swap = object_at(isolation.get("swap"), "isolation.swap")
-    for key in ("before_used_bytes", "after_used_bytes", "peak_used_bytes"):
-        exact(nonnegative_number(swap.get(key), f"isolation.swap.{key}"), 0.0, f"isolation.swap.{key}")
+    exact(isolation.get("lock_held_through_evidence"), True, "isolation lock coverage")
+    exact(isolation.get("gomaxprocs"), contract["experiment"]["isolation_and_noise"]["gomaxprocs"],
+          "isolation GOMAXPROCS")
+    exact(isolation.get("competing_processes"), [], "competing process series")
+    samples = isolation.get("samples")
+    if not isinstance(samples, list) or len(samples) < 2:
+        fail("isolation samples must contain at least start and completion observations")
+    sample_times = []
+    for position, sample in enumerate(samples):
+        sample = object_at(sample, f"isolation.samples[{position}]")
+        exact_keys(sample, ISOLATION_SAMPLE_KEYS, f"isolation.samples[{position}]")
+        sample_times.append(utc_timestamp(sample["timestamp"], f"isolation.samples[{position}].timestamp"))
+        exact(sample["competing_processes"], [], f"isolation.samples[{position}].competing_processes")
+        exact(nonnegative_number(sample["swap_used_bytes"],
+                                 f"isolation.samples[{position}].swap_used_bytes"),
+              0.0, f"isolation.samples[{position}].swap_used_bytes")
+    if sample_times != sorted(sample_times):
+        fail("isolation sample timestamps must be ordered")
+    lock_acquired = utc_timestamp(isolation["lock_acquired_at"], "isolation.lock_acquired_at")
+    coverage_completed = utc_timestamp(isolation["coverage_completed_at"], "isolation.coverage_completed_at")
+    if lock_acquired > timing["started"] or sample_times[0] > timing["started"]:
+        fail("isolation lock and sampling must precede lifecycle start")
+    if coverage_completed < timing["completed"] or sample_times[-1] < timing["completed"]:
+        fail("isolation sampling must cover lifecycle completion")
+    exact(coverage_completed, sample_times[-1], "isolation completion timestamp")
+    exact(nonnegative_number(isolation["peak_swap_used_bytes"], "isolation.peak_swap_used_bytes"),
+          0.0, "isolation.peak_swap_used_bytes")
     measurements, _ = read_bound_json(root, row["measurement_evidence"], "run.measurement_evidence")
     exact(measurements.get("schema_version"), MEASUREMENT_SCHEMA, "measurement schema")
     exact_keys(measurements, MEASUREMENT_KEYS, "measurements")
@@ -811,27 +943,21 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
           "graph/config checksum binding")
     exact(determinism["small_repeat_checksum_a"], determinism["small_repeat_checksum_b"],
           "small-repeat graph determinism")
-    exact(determinism["tie_row_order_digest_a"], determinism["tie_row_order_digest_b"],
-          "small-repeat tie/row-order determinism")
     phases = object_at(measurements.get("phase_seconds"), "measurements.phase_seconds")
+    exact_keys(phases, {"adjacency", "optimize"}, "measurement phase keys")
     for key in ("adjacency", "optimize"):
-        if nonnegative_number(phases.get(key), f"phase_seconds.{key}") <= 0:
-            fail(f"phase_seconds.{key} must be positive")
+        if positive_number(phases.get(key), f"phase_seconds.{key}") != producer_phases[key]:
+            fail(f"phase_seconds.{key} does not match raw optimize evidence")
     work = object_at(measurements.get("diagnostic_work_profile"), "measurements.diagnostic_work_profile")
-    exact(set(work), WORK_KEYS, "diagnostic work profile keys")
-    for key, value in work.items():
-        if key in {"search_visited_candidates_by_layer", "diversity_rejection_position_distribution"}:
-            if not isinstance(value, (dict, list)) or not value:
-                fail(f"diagnostic_work_profile.{key} must be non-empty structured evidence")
-        else:
-            nonnegative_number(value, f"diagnostic_work_profile.{key}")
+    exact(work, construction_decisions,
+          "diagnostic work profile must equal raw construction-decision observer evidence")
     resources = object_at(measurements.get("resources"), "measurements.resources")
     exact(set(resources), RESOURCE_KEYS, "measurement resource keys")
     for key, value in resources.items():
         nonnegative_number(value, f"resources.{key}")
     projection = measurements.get("projected_10m_adjacency_reduction_fraction")
     if projection is not None:
-        nonnegative_number(projection, "projected 10M adjacency reduction")
+        unit_interval_number(projection, "projected 10M adjacency reduction")
     production = validate_search_evidence(row, root, timing)
     return {"row": row, "phases": phases, "resources": resources, "production": production,
             "projection": projection, "service_binary_sha256": service_binary_sha256,
@@ -962,6 +1088,7 @@ def validate_decision(packet: dict[str, Any], contract: dict[str, Any], *, run_b
            (250000, 192, "selection", "screening_candidate"),
            (250000, 256, "selection", "screening_candidate"),
            (250000, 300, "selection", "screening_control")], "screening cardinality and order")
+    validate_nonoverlapping_lifecycles(screening, "screening")
     winner = select_screening_winner(screening, gates)
     if winner is None:
         exact(packet["winner_selection"], None, "no-winner selection event")
@@ -983,7 +1110,7 @@ def validate_decision(packet: dict[str, Any], contract: dict[str, Any], *, run_b
     if decision[0]["timing"]["completed"] >= decision[1]["timing"]["started"]:
         fail("decision control lifecycle must complete before candidate lifecycle starts")
     for item in decision:
-        for key in ("peak_rss_bytes", "persisted_bytes", "cumulative_allocated_bytes"):
+        for key in RESOURCE_KEYS:
             positive_number(item["resources"][key], f"decision {item['row']['role']} resources.{key}")
     passed = clears_gates(decision[1], decision[0], True, gates)
     exact(packet["verdict"], "GO" if passed else "C0_NO_GO", "computed verdict")
@@ -1016,6 +1143,7 @@ def generate_winner_selection(contract: dict[str, Any], runs_path: Path, output_
         (250000, 256, "selection", "screening_candidate"),
         (250000, 300, "selection", "screening_control"),
     ], "screening cardinality and order")
+    validate_nonoverlapping_lifecycles(screening, "screening")
     exact(
         {item["service_binary_sha256"] for item in screening},
         {authorization["service_binary_sha256"]},

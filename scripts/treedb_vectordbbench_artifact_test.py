@@ -271,6 +271,13 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
                     "state": "column_graph_loaded",
                     "loaded": True,
                     "rebuild_needed": False,
+                    "column_graph_build": {
+                        "adjacency_build_nanos": 1,
+                        "construction_decisions": {
+                            "planning": {"decisions": 1, "saturated": False},
+                            "reciprocal": {"decisions": 0, "saturated": False},
+                        },
+                    },
                 },
             },
         },
@@ -576,6 +583,38 @@ class ArtifactRootTest(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "must be new or empty"):
                 harness.prepare_artifact_root(root)
+
+
+class IsolationEvidenceTest(unittest.TestCase):
+    def test_finalize_isolation_aggregates_timestamped_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "isolation.json"
+            harness.write_json(path, {
+                "schema_version": "treedb-construction-policy-4587-isolation/v2",
+                "samples": [],
+            })
+            monitor = mock.Mock()
+            monitor.stop.return_value = [
+                {"timestamp": "2026-09-02T00:00:00+00:00", "swap_used_bytes": 0,
+                 "competing_processes": []},
+                {"timestamp": "2026-09-02T00:01:00+00:00", "swap_used_bytes": 0,
+                 "competing_processes": []},
+            ]
+
+            harness.finalize_isolation(path, monitor)
+
+            evidence = json.loads(path.read_text())
+            self.assertEqual(evidence["coverage_completed_at"], "2026-09-02T00:01:00+00:00")
+            self.assertEqual(evidence["peak_swap_used_bytes"], 0)
+            self.assertEqual(evidence["competing_processes"], [])
+
+    def test_explicit_exclusive_lock_is_resolved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            args = harness.parse_args([
+                "--out", str(Path(tmp) / "artifact"),
+                "--exclusive-lock", str(Path(tmp) / "matrix.lock"),
+            ])
+            self.assertEqual(args.exclusive_lock, (Path(tmp) / "matrix.lock").resolve())
 
 
 class HostContextTest(unittest.TestCase):

@@ -1,5 +1,5 @@
 {
-  "schema_version": "treedb-construction-policy-4587/v5",
+  "schema_version": "treedb-construction-policy-4587/v6",
   "authority": "FROZEN_AUTHORITATIVE",
   "engineering_status": "QUALIFIED",
   "execution_validity": "REQUIRES_FINAL_EXTERNAL_AUTHORIZATION",
@@ -34,7 +34,7 @@
       "TreeDB/collections/vector_index_rebuild.go": "21bed0f84ae5301d17619ed2753300be73cf422c"
     },
     "harness_blobs": {
-      "scripts/treedb_vectordbbench_artifact.py": "2f46dcfae5132583ab340252955e388952da07e6"
+      "scripts/treedb_vectordbbench_artifact.py": "d5083d01679e49b691a9ea3636695d5f7317d316"
     },
     "vectordbbench": {
       "root": "/mnt/fast4tb/codex-vectordbbench-4545",
@@ -167,8 +167,8 @@
       "repetition": "one timed build per frozen coordinate plus two untimed small deterministic builds; no A/A or quality-triggered rerun",
       "captured_evidence": {
         "artifact_owned_fresh_root": "validated by the lifecycle artifact manifest and base lifecycle validator",
-        "process_isolation": "checksum-bound isolation JSON records the lock path and complete competing gomap/VectorDBBench process snapshot",
-        "swap": "checksum-bound isolation JSON records numeric before, after, and peak used bytes; each must be zero",
+        "process_isolation": "the lifecycle harness holds the configured exclusive lock for the full run and emits checksum-bound timestamped process samples spanning lifecycle startup through teardown; every sample must contain no competing external gomap/VectorDBBench process",
+        "swap": "the same timestamped isolation series records swap used bytes throughout lifecycle; every sample and the derived peak must be zero",
         "noise_action": "mark the entire matrix invalid and stop; rerun requires coordinator amendment before any quality inspection"
       }
     },
@@ -180,15 +180,7 @@
         "small_repeat_checksum_a", "small_repeat_checksum_b",
         "tie_row_order_digest_a", "tie_row_order_digest_b"
       ],
-      "diagnostic_work_profile": [
-        "direct_exact_fp32_rows", "direct_exact_fp32_calls",
-        "indexed_exact_fp32_rows", "indexed_exact_fp32_calls",
-        "approximate_score_rows", "approximate_score_calls",
-        "search_visited_candidates_by_layer",
-        "diversity_candidates", "diversity_comparisons_requested", "diversity_comparisons_executed",
-        "diversity_rejection_position_distribution", "reciprocal_prune_work",
-        "worker_active_seconds", "dependency_barrier_wait_seconds", "goroutine_scheduler_seconds"
-      ],
+      "diagnostic_work_profile": ["planning", "reciprocal"],
       "resources": [
         "peak_rss_bytes", "peak_rss_anon_bytes", "peak_rss_file_bytes", "peak_mapped_bytes",
         "peak_live_heap_bytes", "cumulative_allocated_bytes", "graph_bytes", "search_pack_bytes",
@@ -249,6 +241,8 @@
       "--vectordbbench-dir", "/mnt/fast4tb/codex-vectordbbench-4545",
       "--service-bin", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
       "--run-tests", "off", "--run-vdbbench", "--rows", "scalar", "--lifecycle",
+      "--construction-decision-diagnostics",
+      "--exclusive-lock", "/mnt/fast4tb/treedb-4587-c0.lock",
       "--case-type", "PerformanceCustomDataset", "--k", "100",
       "--num-concurrency", "32", "--concurrency-duration", "30",
       "--client-timeout", "3600", "--vdbbench-timeout", "36000",
@@ -267,6 +261,26 @@
         "-dir", "{artifact_root}/treedb-data", "-addr", "{addr}", "-profile", "command_wal_durable"
       ],
       "probe_runner": "scripts/treedb_vdbbench_search_existing_index.py",
+      "probe_argv_template": [
+        "python3", "scripts/treedb_vdbbench_search_existing_index.py",
+        "--base-url", "{base_url}", "--index-name", "{index_name}",
+        "--query-json", "{query_json}", "--metadata-out", "{metadata_out}",
+        "--diagnostic-response-out", "{diagnostic_response_out}",
+        "--production-response-out", "{production_response_out}",
+        "--diagnostic-result", "{diagnostic_result}",
+        "--production-result", "{production_result}",
+        "--diagnostic-origin-out", "{diagnostic_origin_out}",
+        "--production-origin-out", "{production_origin_out}",
+        "--run-id", "{run_id}", "--artifact-root", "{artifact_root}",
+        "--manifest-sha256", "{manifest_sha256}", "--execution-commit", "{execution_commit}",
+        "--dataset-sha256", "{dataset_sha256}", "--scale", "{vectors}",
+        "--role", "{role}", "--partition", "{partition}",
+        "--lifecycle-sha256", "{lifecycle_sha256}",
+        "--lifecycle-started-at", "{lifecycle_started_at}",
+        "--lifecycle-completed-at", "{lifecycle_completed_at}",
+        "--ef-construction", "{ef_construction}",
+        "--expected-generation", "{expected_generation}", "--route", "{route}"
+      ],
       "probe_contract": "for each route, require exact open_index name/generation/dimension/metric/strategy/M/efConstruction/efSearch/score-plane identity, then checksum-bound full-diagnostic and production/IDs responses at expected_generation; after the canonical result exists, emit a checksum-bound search-origin sidecar binding that result, response, and metadata to the exact run, artifact manifest, dataset, role, partition, and lifecycle",
       "vectordbbench_common_argv_template": [
         "python", "-m", "vectordb_bench.cli.vectordbbench", "{subcommand}",
@@ -421,8 +435,18 @@
       }
     }
   },
+  "isolation_schema": {
+    "schema_version": "treedb-construction-policy-4587-isolation/v2",
+    "exact_keys": [
+      "schema_version", "artifact_root", "lock_path", "lock_acquired_at",
+      "lock_held_through_evidence", "coverage_completed_at", "gomaxprocs",
+      "competing_processes", "peak_swap_used_bytes", "samples"
+    ],
+    "sample_exact_keys": ["timestamp", "swap_used_bytes", "competing_processes"],
+    "coverage": "exclusive lock and timestamped samples span lifecycle startup through teardown; every sample proves zero swap use and no competing external benchmark process"
+  },
   "measurement_schema": {
-    "schema_version": "treedb-construction-policy-4587-measurements/v2",
+    "schema_version": "treedb-construction-policy-4587-measurements/v3",
     "exact_keys": [
       "schema_version", "origin", "phase_seconds", "cpu_utilization_logical_cores",
       "determinism", "diagnostic_work_profile", "resources",
@@ -432,6 +456,18 @@
       "run_id", "artifact_root", "execution_commit", "dataset_sha256", "scale",
       "role", "partition", "ef_construction", "lifecycle_sha256",
       "lifecycle_started_at", "lifecycle_completed_at"
+    ],
+    "producer_binding": "phase_seconds must equal the checksum-bound adapter optimize timing and column_graph_build adjacency nanoseconds; diagnostic_work_profile must equal the raw optimize construction_decisions snapshot exactly",
+    "observer_phase_exact_keys": [
+      "decisions", "accepted", "rejected", "direct_exact_fp32_rows", "direct_exact_fp32_calls",
+      "indexed_exact_fp32_rows", "indexed_exact_fp32_calls", "approximate_score_rows",
+      "approximate_score_calls", "exact_fp32_dimensions", "diversity_predicates",
+      "diversity_candidates", "diversity_comparisons_requested",
+      "diversity_comparisons_executed", "unique_row_pairs", "repeated_row_pairs",
+      "row_pair_replacements", "active_wall_nanos", "saturated",
+      "candidate_count_histogram", "selected_count_histogram",
+      "diversity_early_exit_histogram", "reciprocal_group_histogram",
+      "prune_survivor_histogram"
     ],
     "timing_source": "checksum-bound lifecycle JSONL startup and teardown events"
   },

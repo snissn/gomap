@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, is_dataclass
+import hashlib
 import json
 import math
+import re
 from pathlib import Path
 import sys
 from typing import Any
@@ -49,6 +51,36 @@ def jsonable(value: Any) -> Any:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(jsonable(value), indent=2, sort_keys=True) + "\n")
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_origin(args: argparse.Namespace, kind: str, result: Path, response: Path, output: Path) -> None:
+    write_json(output, {
+        "schema_version": "treedb-construction-policy-4587-search-origin/v1",
+        "run_id": args.run_id,
+        "artifact_root": str(args.artifact_root),
+        "manifest_sha256": args.manifest_sha256,
+        "execution_commit": args.execution_commit,
+        "dataset_sha256": args.dataset_sha256,
+        "scale": args.scale,
+        "role": args.role,
+        "partition": args.partition,
+        "ef_construction": args.ef_construction,
+        "lifecycle_sha256": args.lifecycle_sha256,
+        "lifecycle_started_at": args.lifecycle_started_at,
+        "lifecycle_completed_at": args.lifecycle_completed_at,
+        "kind": kind,
+        "route": "exact" if args.route == "exact" else "scalar_u8_rerank",
+        "result_sha256": sha256_file(result),
+        "response_sha256": sha256_file(response),
+        "index_metadata_sha256": sha256_file(args.metadata_out),
+    })
 
 
 def load_query(path: Path, dimensions: int) -> list[float]:
@@ -132,6 +164,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--metadata-out", required=True, type=Path)
     parser.add_argument("--diagnostic-response-out", required=True, type=Path)
     parser.add_argument("--production-response-out", required=True, type=Path)
+    parser.add_argument("--diagnostic-result", required=True, type=Path)
+    parser.add_argument("--production-result", required=True, type=Path)
+    parser.add_argument("--diagnostic-origin-out", required=True, type=Path)
+    parser.add_argument("--production-origin-out", required=True, type=Path)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--artifact-root", required=True, type=Path)
+    parser.add_argument("--manifest-sha256", required=True)
+    parser.add_argument("--execution-commit", required=True)
+    parser.add_argument("--dataset-sha256", required=True)
+    parser.add_argument("--scale", required=True, type=int)
+    parser.add_argument("--role", required=True)
+    parser.add_argument("--partition", required=True)
+    parser.add_argument("--lifecycle-sha256", required=True)
+    parser.add_argument("--lifecycle-started-at", required=True)
+    parser.add_argument("--lifecycle-completed-at", required=True)
     parser.add_argument("--dimensions", type=int, default=768)
     parser.add_argument("--metric", default="cosine", choices=("cosine",))
     parser.add_argument("--m", type=int, default=16)
@@ -150,6 +197,45 @@ def parse_args() -> argparse.Namespace:
         positive_int(getattr(args, name), name)
     if args.effective_rerank_candidates > args.rerank_candidates:
         fail("effective rerank candidates cannot exceed the configured shortlist")
+    args.artifact_root = args.artifact_root.resolve()
+    for name in ("manifest_sha256", "dataset_sha256", "lifecycle_sha256"):
+        if not isinstance(getattr(args, name), str) or re.fullmatch(r"[0-9a-f]{64}", getattr(args, name)) is None:
+            fail(f"{name} must be a lowercase SHA-256")
+    if re.fullmatch(r"[0-9a-f]{40}", args.execution_commit) is None:
+        fail("execution_commit must be a lowercase commit digest")
+    if not args.run_id or not args.role or not args.partition:
+        fail("run identity strings must be non-empty")
+    positive_int(args.scale, "scale")
+    for path in (args.diagnostic_result, args.production_result):
+        if not path.is_file():
+            fail(f"canonical result does not exist: {path}")
+    paths = (
+        args.metadata_out, args.diagnostic_response_out, args.production_response_out,
+        args.diagnostic_result, args.production_result,
+        args.diagnostic_origin_out, args.production_origin_out,
+    )
+    for path in paths:
+        try:
+            path.resolve().relative_to(args.artifact_root)
+        except ValueError:
+            fail(f"search evidence path escapes artifact root: {path}")
+    manifest_path = args.artifact_root / "manifest.json"
+    if sha256_file(manifest_path) != args.manifest_sha256:
+        fail("manifest_sha256 does not match artifact manifest")
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get("artifact_root") != str(args.artifact_root):
+        fail("manifest artifact root does not match --artifact-root")
+    lifecycle = manifest.get("lifecycle")
+    if not isinstance(lifecycle, dict) or lifecycle.get("sha256") != args.lifecycle_sha256:
+        fail("lifecycle_sha256 does not match artifact manifest")
+    lifecycle_path = args.artifact_root / lifecycle.get("file", "")
+    if sha256_file(lifecycle_path) != args.lifecycle_sha256:
+        fail("lifecycle_sha256 does not match lifecycle file")
+    events = [json.loads(line) for line in lifecycle_path.read_text().splitlines()]
+    starts = [event.get("timestamp") for event in events if event.get("stage") == "startup"]
+    completed = [event.get("timestamp") for event in events if event.get("stage") == "teardown"]
+    if starts != [args.lifecycle_started_at] or completed != [args.lifecycle_completed_at]:
+        fail("lifecycle timestamps do not match lifecycle file")
     return args
 
 
@@ -186,6 +272,14 @@ def main() -> int:
         write_json(args.metadata_out, before)
         write_json(args.diagnostic_response_out, diagnostic)
         write_json(args.production_response_out, production)
+        write_origin(
+            args, "diagnostic", args.diagnostic_result,
+            args.diagnostic_response_out, args.diagnostic_origin_out,
+        )
+        write_origin(
+            args, "production", args.production_result,
+            args.production_response_out, args.production_origin_out,
+        )
         return 0
     finally:
         client.close()

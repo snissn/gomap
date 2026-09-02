@@ -199,6 +199,36 @@ class DecisionFixture:
         ]
         lifecycle_path.write_text("".join(
             json.dumps(event, sort_keys=True) + "\n" for event in lifecycle_events))
+        planning = {key: 0 for key in policy.OBSERVER_PHASE_KEYS}
+        reciprocal = {key: 0 for key in policy.OBSERVER_PHASE_KEYS}
+        for phase in (planning, reciprocal):
+            phase["saturated"] = False
+            for key in policy.OBSERVER_PHASE_KEYS:
+                if key.endswith("_histogram"):
+                    phase[key] = [0] * 16
+        planning["decisions"] = 1
+        construction_decisions = {"planning": planning, "reciprocal": reciprocal}
+        optimize_start_ns = int((started + timedelta(seconds=30)).timestamp() * 1_000_000_000)
+        optimize_end_ns = optimize_start_ns + int((adjacency + 10) * 1_000_000_000)
+        adapter_path = root / "adapter-lifecycle.jsonl"
+        adapter_path.write_text("".join(
+            json.dumps(record, sort_keys=True) + "\n"
+            for record in (
+                {"event": "optimize_start", "timestamp_ns": optimize_start_ns},
+                {
+                    "event": "optimize_end",
+                    "timestamp_ns": optimize_end_ns,
+                    "response": {
+                        "status": {
+                            "column_graph_build": {
+                                "adjacency_build_nanos": int(adjacency * 1_000_000_000),
+                                "construction_decisions": construction_decisions,
+                            },
+                        },
+                    },
+                },
+            )
+        ))
         binary_sha = binary_sha or self.binary_sha
         dataset = policy.dataset_expected(self.contract, scale, partition)
         config = {
@@ -215,6 +245,19 @@ class DecisionFixture:
             "schema_version": "treedb-vectordbbench-artifact/v1",
             "artifact_root": str(root.resolve()),
             "context": {
+                "host": {
+                    "go": f"go version {self.contract['source_identity']['runtime']['go']}",
+                    "python": self.contract["source_identity"]["runtime"]["python"] + " fixture",
+                    "pyarrow": self.contract["source_identity"]["runtime"]["pyarrow"],
+                    "cpu_brand": self.contract["source_identity"]["runtime"]["host_cpu"],
+                    "physical_cpu_count": self.contract["source_identity"]["runtime"]["physical_cores"],
+                    "logical_cpu_count": self.contract["source_identity"]["runtime"]["logical_cpus"],
+                    "gomaxprocs": str(self.contract["source_identity"]["runtime"]["gomaxprocs"]),
+                    "storage": {
+                        "mount": self.contract["source_identity"]["runtime"]["storage_mount"],
+                        "filesystem": self.contract["source_identity"]["runtime"]["filesystem"],
+                    },
+                },
                 "gomap": {"commit": COMMIT, "dirty": False},
                 "vectordbbench": {
                     "commit": self.contract["source_identity"]["vectordbbench"]["commit"],
@@ -230,6 +273,10 @@ class DecisionFixture:
                 "file": lifecycle_path.name,
                 "sha256": policy.sha256_file(lifecycle_path),
                 "result_status": "completed",
+                "raw_artifacts": [{
+                    "path": "adapter-lifecycle.jsonl",
+                    "sha256": policy.sha256_file(adapter_path),
+                }],
                 "expected_rows": scale,
                 "identity": {
                     "gomap_commit": COMMIT,
@@ -243,8 +290,11 @@ class DecisionFixture:
                     "sha256": dataset["train_sha256"],
                 },
             },
-            "harness": {"m": 16, "ef_construction": ef, "ef_search": 192, "k": 100,
-                        "rerank_candidates": 400, "rows": "scalar"},
+            "harness": {
+                "m": 16, "ef_construction": ef, "ef_search": 192, "k": 100,
+                "rerank_candidates": 400, "rows": "scalar",
+                "construction_decision_diagnostics": True,
+            },
         }
         manifest_path = root / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
@@ -252,13 +302,26 @@ class DecisionFixture:
             "schema_version": policy.ISOLATION_SCHEMA,
             "artifact_root": str(root.resolve()),
             "lock_path": self.contract["experiment"]["isolation_and_noise"]["lock_path"],
+            "lock_acquired_at": (started - timedelta(seconds=1)).isoformat(),
+            "lock_held_through_evidence": True,
+            "coverage_completed_at": (completed + timedelta(seconds=1)).isoformat(),
             "gomaxprocs": 12,
             "competing_processes": [],
-            "swap": {"before_used_bytes": 0, "after_used_bytes": 0, "peak_used_bytes": 0},
+            "peak_swap_used_bytes": 0,
+            "samples": [
+                {
+                    "timestamp": (started - timedelta(seconds=1)).isoformat(),
+                    "swap_used_bytes": 0,
+                    "competing_processes": [],
+                },
+                {
+                    "timestamp": (completed + timedelta(seconds=1)).isoformat(),
+                    "swap_used_bytes": 0,
+                    "competing_processes": [],
+                },
+            ],
         }
-        work = {key: 1 for key in policy.WORK_KEYS}
-        work["search_visited_candidates_by_layer"] = {"0": 1}
-        work["diversity_rejection_position_distribution"] = {"0": 1}
+        work = construction_decisions
         resources = {key: 100.0 for key in policy.RESOURCE_KEYS}
         resources["persisted_bytes"] = persisted
         resources["cumulative_allocated_bytes"] = allocated
@@ -424,6 +487,23 @@ class DecisionFixture:
             origin[f"{key}_sha256"] = binding["sha256"]
             origin_path.write_text(json.dumps(origin, sort_keys=True) + "\n")
             origin_binding["sha256"] = policy.sha256_file(origin_path)
+
+
+    def rewrite_adapter(self, run: dict, mutate) -> None:
+        root = Path(run["artifact"]["root"])
+        path = root / "adapter-lifecycle.jsonl"
+        records = [json.loads(line) for line in path.read_text().splitlines()]
+        mutate(records)
+        path.write_text("".join(json.dumps(record, sort_keys=True) + "\n" for record in records))
+        manifest_path = root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        binding = next(
+            item for item in manifest["lifecycle"]["raw_artifacts"]
+            if item["path"] == "adapter-lifecycle.jsonl"
+        )
+        binding["sha256"] = policy.sha256_file(path)
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
+        run["artifact"]["manifest_sha256"] = policy.sha256_file(manifest_path)
 
 
     def retime_run(self, run: dict, started: str, completed: str) -> None:
@@ -718,6 +798,35 @@ class ValidatorMutations(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing document counters"):
             search_existing_index.validate_diagnostic(response, args)
 
+    def test_existing_index_helper_emits_bound_search_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            result = root / "result.json"
+            response = root / "response.json"
+            metadata = root / "metadata.json"
+            output = root / "origin.json"
+            for path, value in (
+                (result, {"result": 1}), (response, {"response": 1}), (metadata, {"metadata": 1}),
+            ):
+                path.write_text(json.dumps(value, sort_keys=True) + "\n")
+            args = search_existing_index.argparse.Namespace(
+                run_id="run-1", artifact_root=root, manifest_sha256="1" * 64,
+                execution_commit=COMMIT, dataset_sha256="2" * 64, scale=250000,
+                role="screening_candidate", partition="selection", ef_construction=128,
+                lifecycle_sha256="3" * 64, lifecycle_started_at="2026-09-02T00:00:00+00:00",
+                lifecycle_completed_at="2026-09-02T00:01:00+00:00", route="exact",
+                metadata_out=metadata,
+            )
+            search_existing_index.write_origin(args, "production", result, response, output)
+            origin = json.loads(output.read_text())
+            self.assertEqual(origin["result_sha256"], search_existing_index.sha256_file(result))
+            self.assertEqual(origin["response_sha256"], search_existing_index.sha256_file(response))
+            self.assertEqual(origin["index_metadata_sha256"], search_existing_index.sha256_file(metadata))
+            self.assertEqual(
+                set(origin),
+                policy.SEARCH_ORIGIN_KEYS,
+            )
+
     def test_frozen_go_gate_policy_drift_is_invalid(self) -> None:
         packet = self.fixture.no_go_packet()
         self.fixture.contract["experiment"]["go_gates"]["minimum_production_qps_ratio"] = 0.90
@@ -764,7 +873,7 @@ class ValidatorMutations(unittest.TestCase):
 
     def test_decision_gate_resources_must_be_positive(self) -> None:
         for position in (4, 5):
-            for key in ("peak_rss_bytes", "persisted_bytes", "cumulative_allocated_bytes"):
+            for key in policy.RESOURCE_KEYS:
                 with self.subTest(position=position, key=key):
                     packet = self.fixture.go_packet()
                     run = packet["runs"][position]
@@ -772,7 +881,97 @@ class ValidatorMutations(unittest.TestCase):
                         run, run["measurement_evidence"],
                         lambda value, key=key: value["resources"].update({key: 0.0}),
                     )
-                    self.assert_invalid(packet, rf"decision .* resources\.{key} must be a finite positive")
+                    self.assert_invalid(
+                        packet, rf"decision .* resources\.{key} must be a finite positive")
+
+    def test_construction_observer_evidence_is_required_and_bound(self) -> None:
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_adapter(
+            run,
+            lambda records: records[-1]["response"]["status"]["column_graph_build"].pop(
+                "construction_decisions"),
+        )
+        self.assert_invalid(packet, "raw construction decisions")
+
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_adapter(
+            run,
+            lambda records: records[-1]["response"]["status"]["column_graph_build"][
+                "construction_decisions"]["planning"].update({"saturated": True}),
+        )
+        self.assert_invalid(packet, "saturated")
+
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_bound(
+            run, run["measurement_evidence"],
+            lambda value: value["diagnostic_work_profile"]["planning"].update({"decisions": 2}),
+        )
+        self.assert_invalid(packet, "must equal raw construction-decision observer evidence")
+
+    def test_phase_timings_are_bound_to_raw_optimize_evidence(self) -> None:
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_bound(
+            run, run["measurement_evidence"],
+            lambda value: value["phase_seconds"].update({"adjacency": 96}),
+        )
+        self.assert_invalid(packet, "does not match raw optimize evidence")
+
+    def test_screening_lifecycles_must_not_overlap(self) -> None:
+        packet = self.fixture.no_go_packet()
+        first_measurement = Path(packet["runs"][0]["artifact"]["root"]) / "measurements.json"
+        first_completed = json.loads(first_measurement.read_text())["origin"]["lifecycle_completed_at"]
+        second_measurement = Path(packet["runs"][1]["artifact"]["root"]) / "measurements.json"
+        second_completed = json.loads(second_measurement.read_text())["origin"]["lifecycle_completed_at"]
+        self.fixture.retime_run(packet["runs"][1], first_completed, second_completed)
+        self.assert_invalid(packet, "screening lifecycle order must be strictly non-overlapping")
+
+    def test_projected_reduction_is_a_fraction(self) -> None:
+        packet = self.fixture.go_packet()
+        run = packet["runs"][5]
+        self.fixture.rewrite_bound(
+            run, run["measurement_evidence"],
+            lambda value: value.update({"projected_10m_adjacency_reduction_fraction": 1.01}),
+        )
+        self.assert_invalid(packet, "projected 10M adjacency reduction must be in")
+
+    def test_runtime_identity_is_bound(self) -> None:
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        manifest_path = Path(run["artifact"]["root"]) / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["context"]["host"]["pyarrow"] = "0.0.0"
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
+        run["artifact"]["manifest_sha256"] = policy.sha256_file(manifest_path)
+        self.assert_invalid(packet, "artifact PyArrow runtime")
+
+    def test_isolation_series_is_fail_closed(self) -> None:
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        binding = run["isolation_evidence"]
+        self.fixture.rewrite_bound(
+            run, binding, lambda value: value["samples"][0].update({"swap_used_bytes": 1}),
+        )
+        self.assert_invalid(packet, "swap_used_bytes")
+
+        mutations = [
+            ("lock coverage", lambda value: value.update({"lock_held_through_evidence": False})),
+            ("competing_processes", lambda value: value["samples"][0].update({
+                "competing_processes": [{"pid": 1, "command": "vectordbbench"}],
+            })),
+            ("at least start and completion", lambda value: value.update({
+                "samples": value["samples"][:1],
+            })),
+        ]
+        for pattern, mutate in mutations:
+            with self.subTest(pattern=pattern):
+                packet = self.fixture.no_go_packet()
+                run = packet["runs"][0]
+                self.fixture.rewrite_bound(run, run["isolation_evidence"], mutate)
+                self.assert_invalid(packet, pattern)
 
     def test_winner_tie_break_uses_both_routes(self) -> None:
         runs = [

@@ -14,6 +14,7 @@ import argparse
 import contextlib
 import datetime as _dt
 import gzip
+import fcntl
 import hashlib
 import ipaddress
 import json
@@ -394,6 +395,88 @@ def valid_storage_context(storage: Any) -> bool:
     )
 
 
+def swap_used_bytes() -> int:
+    fields: dict[str, int] = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        key, separator, value = line.partition(":")
+        if separator and key in {"SwapTotal", "SwapFree"}:
+            fields[key] = int(value.strip().split()[0]) * 1024
+    if set(fields) != {"SwapTotal", "SwapFree"}:
+        raise RuntimeError("/proc/meminfo did not expose swap counters")
+    return fields["SwapTotal"] - fields["SwapFree"]
+
+
+def competing_benchmark_processes() -> list[dict[str, Any]]:
+    result = subprocess.run(
+        ["ps", "-eo", "pid=,ppid=,args="], text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+    )
+    rows = []
+    for line in result.stdout.splitlines():
+        fields = line.strip().split(maxsplit=2)
+        if len(fields) == 3:
+            rows.append({"pid": int(fields[0]), "ppid": int(fields[1]), "command": fields[2]})
+    owned = {os.getpid()}
+    while True:
+        descendants = {row["pid"] for row in rows if row["ppid"] in owned}
+        if descendants <= owned:
+            break
+        owned.update(descendants)
+    parents = {row["pid"]: row["ppid"] for row in rows}
+    ancestor = parents.get(os.getpid())
+    while ancestor is not None and ancestor > 1:
+        owned.add(ancestor)
+        ancestor = parents.get(ancestor)
+    return [
+        row for row in rows
+        if row["pid"] not in owned
+        and ("treedb-document-service" in row["command"].lower()
+             or "vectordbbench" in row["command"].lower())
+    ]
+
+
+def isolation_sample() -> dict[str, Any]:
+    return {
+        "timestamp": iso_now(),
+        "swap_used_bytes": swap_used_bytes(),
+        "competing_processes": competing_benchmark_processes(),
+    }
+
+
+class IsolationMonitor:
+    def __init__(self, interval: float) -> None:
+        self.interval = interval
+        self.samples = [isolation_sample()]
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._run, name="isolation-monitor", daemon=True)
+        self.thread.start()
+
+    def _run(self) -> None:
+        while not self.stop_event.wait(self.interval):
+            self.samples.append(isolation_sample())
+
+    def stop(self) -> list[dict[str, Any]]:
+        if not self.stop_event.is_set():
+            self.stop_event.set()
+            self.thread.join()
+            self.samples.append(isolation_sample())
+        return self.samples
+
+
+def finalize_isolation(path: Path, monitor: IsolationMonitor | None) -> None:
+    if monitor is None:
+        return
+    samples = monitor.stop()
+    isolation = json.loads(path.read_text())
+    isolation["samples"] = samples
+    isolation["coverage_completed_at"] = samples[-1]["timestamp"]
+    isolation["competing_processes"] = [
+        process for sample in samples for process in sample["competing_processes"]
+    ]
+    isolation["peak_swap_used_bytes"] = max(sample["swap_used_bytes"] for sample in samples)
+    write_json(path, isolation)
+
+
 def collect_context(
     gomap_root: Path, vectordbbench_dir: Path | None, storage_path: Path | None = None
 ) -> dict[str, Any]:
@@ -409,6 +492,10 @@ def collect_context(
             "go": command_output(["go", "version"]),
             "uname": command_output(["uname", "-a"]),
             "cpu_brand": cpu_brand(),
+            "pyarrow": command_output(
+                [sys.executable, "-c", "import pyarrow; print(pyarrow.__version__)"]
+            ),
+            "gomaxprocs": os.environ.get("GOMAXPROCS", ""),
             "logical_cpu_count": os.cpu_count() or 1,
             "physical_cpu_count": physical_cpu_count(),
             "memory_bytes": memory_bytes(),
@@ -2537,6 +2624,33 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 errors.append(f"completed adapter lifecycle sidecar is invalid: {exc}")
         if adapter is not None:
             optimize_response = adapter["optimize_response"]
+            if construction_decision_diagnostics is True:
+                optimize_status = optimize_response.get("status")
+                column_graph_build = (
+                    optimize_status.get("column_graph_build")
+                    if isinstance(optimize_status, dict) else None
+                )
+                decisions = (
+                    column_graph_build.get("construction_decisions")
+                    if isinstance(column_graph_build, dict) else None
+                )
+                phases = (
+                    [decisions.get("planning"), decisions.get("reciprocal")]
+                    if isinstance(decisions, dict) else []
+                )
+                if (
+                    len(phases) != 2
+                    or any(not isinstance(phase, dict) for phase in phases)
+                    or sum(
+                        phase.get("decisions", 0)
+                        for phase in phases
+                        if isinstance(phase.get("decisions"), int)
+                    ) <= 0
+                    or any(phase.get("saturated") is not False for phase in phases)
+                ):
+                    completion_errors.append(
+                        "construction-decision diagnostics are missing, empty, or saturated"
+                    )
             optimize_index = optimize_response.get("index")
             response_index_name = (
                 optimize_index.get("name") if isinstance(optimize_index, dict) else None
@@ -4222,6 +4336,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="enable service construction-decision diagnostics for every launch",
     )
     parser.add_argument("--health-timeout", type=float, default=float(env_text("TREEDB_VDBBENCH_HEALTH_TIMEOUT", "60")))
+    parser.add_argument(
+        "--exclusive-lock",
+        default=os.environ.get("TREEDB_VDBBENCH_EXCLUSIVE_LOCK", ""),
+        help="exclusive advisory lock held until final lifecycle evidence is written",
+    )
     parser.add_argument("--python", default=env_text("TREEDB_VDBBENCH_PYTHON", sys.executable or "python3"))
     parser.add_argument("--use-uv", choices=["auto", "on", "off"], default=env_text("TREEDB_VDBBENCH_USE_UV", "auto"), help="use `uv run --with ...` for VectorDBBench Python commands")
     parser.add_argument("--run-vdbbench", action="store_true", default=env_flag("TREEDB_VDBBENCH_RUN_VDBBENCH", False), help="run selected VectorDBBench TreeDB rows")
@@ -4326,6 +4445,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args.lifecycle_dataset_file = (
         Path(args.lifecycle_dataset_file).expanduser().resolve() if args.lifecycle_dataset_file else None
     )
+    args.exclusive_lock = (
+        Path(args.exclusive_lock).expanduser().resolve()
+        if args.exclusive_lock else args.out / ".lifecycle.lock"
+    )
     if args.lifecycle and (args.lifecycle_dataset_file is None or not args.lifecycle_dataset_file.is_file()):
         parser.error("lifecycle dataset file must exist and be a regular file")
     if args.port == 0:
@@ -4426,6 +4549,40 @@ def main(argv: list[str]) -> int:
             print("harness failed before start; error=clean source commit identity is unavailable", file=sys.stderr)
             return 2
     service_proc: subprocess.Popen[str] | None = None
+    lock_stream = None
+    isolation_monitor: IsolationMonitor | None = None
+    isolation_path = args.out / "isolation.json"
+    if args.lifecycle:
+        assert args.exclusive_lock is not None
+        args.exclusive_lock.parent.mkdir(parents=True, exist_ok=True)
+        lock_stream = args.exclusive_lock.open("a+")
+        try:
+            fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock_stream.close()
+            print(f"harness failed before start; error=exclusive lock is held: {args.exclusive_lock}",
+                  file=sys.stderr)
+            return 2
+        try:
+            lock_acquired_at = iso_now()
+            isolation_monitor = IsolationMonitor(args.diagnostics_interval)
+            write_json(isolation_path, {
+                "schema_version": "treedb-construction-policy-4587-isolation/v2",
+                "artifact_root": str(args.out),
+                "lock_path": str(args.exclusive_lock),
+                "lock_acquired_at": lock_acquired_at,
+                "lock_held_through_evidence": True,
+                "gomaxprocs": int(os.environ.get("GOMAXPROCS", "0")),
+                "competing_processes": isolation_monitor.samples[0]["competing_processes"],
+                "samples": isolation_monitor.samples,
+            })
+        except Exception as exc:  # noqa: BLE001
+            if isolation_monitor is not None:
+                isolation_monitor.stop()
+            fcntl.flock(lock_stream.fileno(), fcntl.LOCK_UN)
+            lock_stream.close()
+            print(f"harness failed before start; error={exc}", file=sys.stderr)
+            return 2
     service_command: list[str] | None = None
     sampler: DiagnosticsSampler | None = None
     try:
@@ -4489,6 +4646,7 @@ def main(argv: list[str]) -> int:
                 smoke_top_k=args.smoke_top_k,
             )
         write_readme(state, args)
+        finalize_isolation(isolation_path, isolation_monitor)
         write_manifest(state, args=args, context=context, service_command=service_command)
         print(f"artifact_root={args.out}")
         print(f"manifest={args.out / 'manifest.json'}")
@@ -4507,6 +4665,7 @@ def main(argv: list[str]) -> int:
             finalize_partial_lifecycle(state, args, sampler, result_status="interrupted")
             sampler = None
         with contextlib.suppress(Exception):
+            finalize_isolation(isolation_path, isolation_monitor)
             write_manifest(state, args=args, context=context, service_command=service_command)
         print(f"harness interrupted; artifact_root={args.out}", file=sys.stderr)
         return 130
@@ -4520,15 +4679,21 @@ def main(argv: list[str]) -> int:
             finalize_partial_lifecycle(state, args, sampler)
             sampler = None
         with contextlib.suppress(Exception):
+            finalize_isolation(isolation_path, isolation_monitor)
+        with contextlib.suppress(Exception):
             write_manifest(state, args=args, context=context, service_command=service_command)
         print(f"harness failed; artifact_root={args.out}; error={exc}", file=sys.stderr)
         return 1
     finally:
+        finalize_isolation(isolation_path, isolation_monitor)
         if sampler is not None:
             sampler.stop()
         if service_proc is not None:
             terminate_process_group(service_proc, graceful_timeout=args.service_close_timeout)
 
+        if lock_stream is not None:
+            fcntl.flock(lock_stream.fileno(), fcntl.LOCK_UN)
+            lock_stream.close()
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
