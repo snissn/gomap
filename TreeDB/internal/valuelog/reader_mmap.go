@@ -698,7 +698,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 	}
 
 	if fFlags&FrameFlagCompressed != 0 {
-		if val, _, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, offsets, rawLen, subIndex, nil); hit {
+		if val, _, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, &offsets, rawLen, subIndex, nil); hit {
 			if err != nil {
 				return nil, err, true
 			}
@@ -976,7 +976,7 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 
 	if fFlags&FrameFlagCompressed != 0 {
-		if val, usedDst, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, offsets, rawLen, subIndex, dst); hit {
+		if val, usedDst, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, &offsets, rawLen, subIndex, dst); hit {
 			if err != nil {
 				return nil, false, err, true
 			}
@@ -1286,7 +1286,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return nil, ErrCorrupt, true
 	}
 
-	if cachedVal, usedDst, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, offsets, rawLen, subIndex, dst[len(dst):len(dst)]); hit {
+	if cachedVal, usedDst, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, &offsets, rawLen, subIndex, dst[len(dst):len(dst)]); hit {
 		if err != nil {
 			return nil, err, true
 		}
