@@ -35,6 +35,7 @@ func main() {
 	pprofAddr := flag.String("pprof", "", "optional net/http/pprof listen address, e.g. 127.0.0.1:6060")
 	blockProfileRate := flag.Int("block-profile-rate", 0, "runtime.SetBlockProfileRate value for pprof diagnostics (0=disabled, 1=all blocking events)")
 	mutexProfileFraction := flag.Int("mutex-profile-fraction", 0, "runtime.SetMutexProfileFraction value for pprof diagnostics (0=disabled, 1=all mutex contention)")
+	constructionDecisionObserver := flag.Bool("diagnostic-construction-decisions", false, "include bounded column_graph construction decision work accounting in optimize responses")
 	flag.Parse()
 
 	if *dataDir == "" {
@@ -56,6 +57,7 @@ func main() {
 		log.Fatalf("Failed to open TreeDB: %v", err)
 	}
 	manager := collections.NewCollectionManager(database)
+	manager.SetVectorIndexConstructionDecisionObserverEnabled(*constructionDecisionObserver)
 	service := documentservice.NewWithDeferredVectorBuildMaintenance(manager, deferredMaintenance)
 	appServer := &http.Server{Addr: *addr, Handler: documentservice.NewHandler(service), ReadHeaderTimeout: 5 * time.Second}
 	var diagnosticsServer *http.Server

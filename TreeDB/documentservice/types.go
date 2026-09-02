@@ -331,6 +331,7 @@ type ColumnGraphBuildTiming struct {
 	NamespaceSyncNanos             int64  `json:"namespace_sync_nanos,omitempty"`
 	NamespaceSyncCount             uint64 `json:"namespace_sync_count,omitempty"`
 	PublicationNanos               int64  `json:"publication_nanos,omitempty"`
+	ConstructionDecisions *collections.VectorIndexConstructionDecisionSnapshot `json:"construction_decisions,omitempty"`
 }
 
 type OptimizeIndexTiming struct {

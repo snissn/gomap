@@ -2283,6 +2283,7 @@ func vectorIndexMaintenanceStatus(status collections.VectorIndexStatus) VectorIn
 			NamespaceSyncNanos:             status.ColumnGraphBuild.NamespaceSync.Nanoseconds(),
 			NamespaceSyncCount:             status.ColumnGraphBuild.NamespaceSyncCount,
 			PublicationNanos:               status.ColumnGraphBuild.Publication.Nanoseconds(),
+			ConstructionDecisions:          status.ColumnGraphBuild.ConstructionDecisions,
 		},
 	}
 }

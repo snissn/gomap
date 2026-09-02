@@ -38,15 +38,26 @@ func TestVectorIndexConstructionDecisionObserverPreservesFrozenPrefix4461(t *tes
 		}
 	}
 	firstStats, secondStats := firstObserver.snapshot(), secondObserver.snapshot()
-	for phase := range firstStats {
-		if firstStats[phase].DigestXOR == 0 || firstStats[phase].DigestSum == 0 || firstStats[phase].Decisions == 0 {
-			t.Fatalf("phase %d missing decision evidence: %+v", phase, firstStats[phase])
+	firstPhases := []VectorIndexConstructionDecisionPhaseSnapshot{firstStats.Planning, firstStats.Reciprocal}
+	secondPhases := []VectorIndexConstructionDecisionPhaseSnapshot{secondStats.Planning, secondStats.Reciprocal}
+	for phase := range firstPhases {
+		firstPhase, secondPhase := firstPhases[phase], secondPhases[phase]
+		if firstPhase.DigestXOR == 0 || firstPhase.DigestSum == 0 || firstPhase.Decisions == 0 {
+			t.Fatalf("phase %d missing decision evidence: %+v", phase, firstPhase)
 		}
-		if firstStats[phase].DigestXOR != secondStats[phase].DigestXOR || firstStats[phase].DigestSum != secondStats[phase].DigestSum {
-			t.Fatalf("phase %d digest changed: first=%x/%x second=%x/%x", phase, firstStats[phase].DigestXOR, firstStats[phase].DigestSum, secondStats[phase].DigestXOR, secondStats[phase].DigestSum)
+		if firstPhase.DigestXOR != secondPhase.DigestXOR || firstPhase.DigestSum != secondPhase.DigestSum {
+			t.Fatalf("phase %d digest changed: first=%x/%x second=%x/%x", phase, firstPhase.DigestXOR, firstPhase.DigestSum, secondPhase.DigestXOR, secondPhase.DigestSum)
 		}
-		if firstStats[phase].ScalarRows+firstStats[phase].IndexedRows == 0 || firstStats[phase].RowDimensions == 0 {
-			t.Fatalf("phase %d invalid bounded row evidence: %+v", phase, firstStats[phase])
+		if firstPhase.DirectExactFP32Rows+firstPhase.IndexedExactFP32Rows == 0 ||
+			firstPhase.DirectExactFP32Calls+firstPhase.IndexedExactFP32Calls == 0 ||
+			firstPhase.ExactFP32Dimensions == 0 {
+			t.Fatalf("phase %d invalid bounded row/call evidence: %+v", phase, firstPhase)
+		}
+		if firstPhase.ApproximateScoreRows != 0 || firstPhase.ApproximateScoreCalls != 0 {
+			t.Fatalf("phase %d exact route reported approximate scores: %+v", phase, firstPhase)
+		}
+		if firstPhase.Accepted+firstPhase.Rejected != firstPhase.DiversityRequests {
+			t.Fatalf("phase %d inconsistent diversity requests: %+v", phase, firstPhase)
 		}
 	}
 	if size := unsafe.Sizeof(*firstObserver); size > 70<<10 {
@@ -57,7 +68,7 @@ func TestVectorIndexConstructionDecisionObserverPreservesFrozenPrefix4461(t *tes
 	for pair := 0; pair < vectorIndexConstructionDecisionPairSlots*2; pair++ {
 		replacementContext.recordRowFrom(pair, pair+1, false)
 	}
-	replacementStats := replacementObserver.snapshot()[vectorIndexConstructionDecisionPlanning]
+	replacementStats := replacementObserver.snapshot().Planning
 	if replacementStats.RowPairReplacements == 0 || replacementStats.Saturated {
 		t.Fatalf("rolling row-pair sketch replacements=%d saturated=%t", replacementStats.RowPairReplacements, replacementStats.Saturated)
 	}

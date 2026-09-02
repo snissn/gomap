@@ -399,6 +399,7 @@ type CollectionManager struct {
 	closeUnregister          func()
 	closing                  atomic.Bool
 	updateBatchDetailedStats atomic.Bool
+	vectorIndexConstructionDecisionObserver atomic.Bool
 	commandWALCoordinator    *collectionCommandWALCoordinator
 	commandWALRawUnregister  func()
 	domainMu                 sync.RWMutex
@@ -1712,6 +1713,16 @@ func (m *CollectionManager) SetUpdateBatchDetailedStatsEnabled(enabled bool) {
 		}
 	}
 	m.domainMu.RUnlock()
+}
+
+// SetVectorIndexConstructionDecisionObserverEnabled toggles bounded diagnostic
+// work accounting for this manager's column_graph rebuilds. It is disabled by
+// default so ordinary rebuilds allocate no observer and record no atomics.
+func (m *CollectionManager) SetVectorIndexConstructionDecisionObserverEnabled(enabled bool) {
+	if m == nil {
+		return
+	}
+	m.vectorIndexConstructionDecisionObserver.Store(enabled)
 }
 
 func (m *CollectionManager) closeForBackend() error {

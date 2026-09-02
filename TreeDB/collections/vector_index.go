@@ -459,23 +459,26 @@ const (
 	vectorIndexConstructionDecisionPhaseCount
 )
 
-// vectorIndexConstructionDecisionObserverV1 is an offline-only, bounded sink
-// for the production frozen-prefix constructor. It retains aggregates and
-// hashes, never corpus-sized events.
+// vectorIndexConstructionDecisionObserverV1 is a bounded sink for the
+// production frozen-prefix constructor. Collection rebuilds install it only
+// when their manager explicitly enables construction diagnostics.
 type vectorIndexConstructionDecisionObserverV1 struct {
 	phases [vectorIndexConstructionDecisionPhaseCount]vectorIndexConstructionDecisionPhaseV1
 }
 
 type vectorIndexConstructionDecisionPhaseV1 struct {
-	digestXOR, digestSum                                  atomic.Uint64
-	decisions, accepted, rejected                         atomic.Uint64
-	scalarRows, indexedRows, rowDimensions                atomic.Uint64
-	uniqueRowPairs, repeatedRowPairs, rowPairReplacements atomic.Uint64
-	wallNanos                                             atomic.Uint64
-	saturated                                             atomic.Bool
-	candidateCount, selectedCount, earlyExit, groupSize   [16]atomic.Uint64
-	pruneSurvivors                                        [16]atomic.Uint64
-	rowPairs                                              [vectorIndexConstructionDecisionPairSlots]atomic.Uint64
+	digestXOR, digestSum                                          atomic.Uint64
+	decisions, accepted, rejected                                 atomic.Uint64
+	directExactFP32Rows, directExactFP32Calls                     atomic.Uint64
+	indexedExactFP32Rows, indexedExactFP32Calls                   atomic.Uint64
+	approximateScoreRows, approximateScoreCalls                   atomic.Uint64
+	exactFP32Dimensions, diversityRequests, diversityComparisons  atomic.Uint64
+	uniqueRowPairs, repeatedRowPairs, rowPairReplacements         atomic.Uint64
+	activeWallNanos                                               atomic.Uint64
+	saturated                                                     atomic.Bool
+	candidateCount, selectedCount, earlyExit, groupSize           [16]atomic.Uint64
+	pruneSurvivors                                                [16]atomic.Uint64
+	rowPairs                                                      [vectorIndexConstructionDecisionPairSlots]atomic.Uint64
 }
 
 type vectorIndexConstructionDecisionContextV1 struct {
@@ -486,38 +489,94 @@ type vectorIndexConstructionDecisionContextV1 struct {
 	dimensions int
 }
 
-type vectorIndexConstructionDecisionPhaseSnapshotV1 struct {
-	DigestXOR, DigestSum                                             uint64
-	Decisions, Accepted, Rejected                                    uint64
-	ScalarRows, IndexedRows, RowDimensions                           uint64
-	UniqueRowPairs, RepeatedRowPairs, RowPairReplacements, WallNanos uint64
-	Saturated                                                        bool
-	CandidateCount, SelectedCount, EarlyExit, GroupSize              [16]uint64
-	PruneSurvivors                                                   [16]uint64
+// VectorIndexConstructionDecisionSnapshot is bounded, process-local evidence
+// from one completed column_graph adjacency build. Planning covers frozen-prefix
+// candidate search/selection; Reciprocal covers reciprocal-link pruning.
+type VectorIndexConstructionDecisionSnapshot struct {
+	Planning   VectorIndexConstructionDecisionPhaseSnapshot `json:"planning"`
+	Reciprocal VectorIndexConstructionDecisionPhaseSnapshot `json:"reciprocal"`
 }
 
-func (observer *vectorIndexConstructionDecisionObserverV1) snapshot() [vectorIndexConstructionDecisionPhaseCount]vectorIndexConstructionDecisionPhaseSnapshotV1 {
-	var out [vectorIndexConstructionDecisionPhaseCount]vectorIndexConstructionDecisionPhaseSnapshotV1
+// VectorIndexConstructionDecisionPhaseSnapshot reports exact work accounting
+// for one construction phase. Row fields count scored vector rows, Calls count
+// scoring invocations, and ExactFP32Dimensions is the sum of scored row widths.
+// Accepted and Rejected classify diversity predicate requests.
+// DiversityComparisons counts predicate comparisons executed; indexed kernels
+// may score more requested rows before the predicate's early exit. Approximate
+// score rows/calls are reserved for an explicitly instrumented future scorer
+// and are zero for the current exact route. Active wall nanoseconds sum observed
+// function time and may exceed elapsed adjacency wall when reciprocal work runs
+// concurrently. Histogram buckets are powers of two (0, 1, 2, 3-4, ...),
+// capped at bucket 15. Row-pair counters describe a fixed 4096-slot replacement
+// sketch. Saturated means at least one counter overflowed.
+type VectorIndexConstructionDecisionPhaseSnapshot struct {
+	DigestXOR                   uint64     `json:"digest_xor"`
+	DigestSum                   uint64     `json:"digest_sum"`
+	Decisions                   uint64     `json:"decisions"`
+	Accepted                    uint64     `json:"accepted"`
+	Rejected                    uint64     `json:"rejected"`
+	DirectExactFP32Rows         uint64     `json:"direct_exact_fp32_rows"`
+	DirectExactFP32Calls        uint64     `json:"direct_exact_fp32_calls"`
+	IndexedExactFP32Rows        uint64     `json:"indexed_exact_fp32_rows"`
+	IndexedExactFP32Calls       uint64     `json:"indexed_exact_fp32_calls"`
+	ApproximateScoreRows        uint64     `json:"approximate_score_rows"`
+	ApproximateScoreCalls       uint64     `json:"approximate_score_calls"`
+	ExactFP32Dimensions         uint64     `json:"exact_fp32_dimensions"`
+	DiversityRequests           uint64     `json:"diversity_requests"`
+	DiversityComparisons        uint64     `json:"diversity_comparisons"`
+	UniqueRowPairs              uint64     `json:"unique_row_pairs"`
+	RepeatedRowPairs            uint64     `json:"repeated_row_pairs"`
+	RowPairReplacements         uint64     `json:"row_pair_replacements"`
+	ActiveWallNanos             uint64     `json:"active_wall_nanos"`
+	Saturated                   bool       `json:"saturated"`
+	CandidateCountHistogram     [16]uint64 `json:"candidate_count_histogram"`
+	SelectedCountHistogram      [16]uint64 `json:"selected_count_histogram"`
+	DiversityEarlyExitHistogram [16]uint64 `json:"diversity_early_exit_histogram"`
+	ReciprocalGroupHistogram    [16]uint64 `json:"reciprocal_group_histogram"`
+	PruneSurvivorHistogram      [16]uint64 `json:"prune_survivor_histogram"`
+}
+
+func (observer *vectorIndexConstructionDecisionObserverV1) snapshot() *VectorIndexConstructionDecisionSnapshot {
 	if observer == nil {
-		return out
+		return nil
 	}
-	for phase := range observer.phases {
-		source := &observer.phases[phase]
-		target := &out[phase]
-		target.DigestXOR, target.DigestSum = source.digestXOR.Load(), source.digestSum.Load()
-		target.Decisions, target.Accepted, target.Rejected = source.decisions.Load(), source.accepted.Load(), source.rejected.Load()
-		target.ScalarRows, target.IndexedRows, target.RowDimensions = source.scalarRows.Load(), source.indexedRows.Load(), source.rowDimensions.Load()
-		target.UniqueRowPairs, target.RepeatedRowPairs, target.RowPairReplacements, target.WallNanos = source.uniqueRowPairs.Load(), source.repeatedRowPairs.Load(), source.rowPairReplacements.Load(), source.wallNanos.Load()
-		target.Saturated = source.saturated.Load()
-		for bucket := range target.CandidateCount {
-			target.CandidateCount[bucket] = source.candidateCount[bucket].Load()
-			target.SelectedCount[bucket] = source.selectedCount[bucket].Load()
-			target.EarlyExit[bucket] = source.earlyExit[bucket].Load()
-			target.GroupSize[bucket] = source.groupSize[bucket].Load()
-			target.PruneSurvivors[bucket] = source.pruneSurvivors[bucket].Load()
-		}
+	return &VectorIndexConstructionDecisionSnapshot{
+		Planning:   observer.phaseSnapshot(vectorIndexConstructionDecisionPlanning),
+		Reciprocal: observer.phaseSnapshot(vectorIndexConstructionDecisionReciprocal),
 	}
-	return out
+}
+
+func (observer *vectorIndexConstructionDecisionObserverV1) phaseSnapshot(phase int) VectorIndexConstructionDecisionPhaseSnapshot {
+	source := &observer.phases[phase]
+	target := VectorIndexConstructionDecisionPhaseSnapshot{
+		DigestXOR:             source.digestXOR.Load(),
+		DigestSum:             source.digestSum.Load(),
+		Decisions:             source.decisions.Load(),
+		Accepted:              source.accepted.Load(),
+		Rejected:              source.rejected.Load(),
+		DirectExactFP32Rows:   source.directExactFP32Rows.Load(),
+		DirectExactFP32Calls:  source.directExactFP32Calls.Load(),
+		IndexedExactFP32Rows:  source.indexedExactFP32Rows.Load(),
+		IndexedExactFP32Calls: source.indexedExactFP32Calls.Load(),
+		ApproximateScoreRows:  source.approximateScoreRows.Load(),
+		ApproximateScoreCalls: source.approximateScoreCalls.Load(),
+		ExactFP32Dimensions:   source.exactFP32Dimensions.Load(),
+		DiversityRequests:     source.diversityRequests.Load(),
+		DiversityComparisons:  source.diversityComparisons.Load(),
+		UniqueRowPairs:        source.uniqueRowPairs.Load(),
+		RepeatedRowPairs:      source.repeatedRowPairs.Load(),
+		RowPairReplacements:   source.rowPairReplacements.Load(),
+		ActiveWallNanos:       source.activeWallNanos.Load(),
+		Saturated:             source.saturated.Load(),
+	}
+	for bucket := range target.CandidateCountHistogram {
+		target.CandidateCountHistogram[bucket] = source.candidateCount[bucket].Load()
+		target.SelectedCountHistogram[bucket] = source.selectedCount[bucket].Load()
+		target.DiversityEarlyExitHistogram[bucket] = source.earlyExit[bucket].Load()
+		target.ReciprocalGroupHistogram[bucket] = source.groupSize[bucket].Load()
+		target.PruneSurvivorHistogram[bucket] = source.pruneSurvivors[bucket].Load()
+	}
+	return target
 }
 
 func vectorIndexConstructionDecisionHashV1(hash, value uint64) uint64 {
@@ -581,12 +640,14 @@ func (context *vectorIndexConstructionDecisionContextV1) recordRowFrom(source, n
 	if stats == nil {
 		return
 	}
-	rows := &stats.scalarRows
+	rows := &stats.directExactFP32Rows
 	if indexed {
-		rows = &stats.indexedRows
+		rows = &stats.indexedExactFP32Rows
+	} else {
+		vectorIndexConstructionDecisionAddV1(&stats.directExactFP32Calls, 1, &stats.saturated)
 	}
 	vectorIndexConstructionDecisionAddV1(rows, 1, &stats.saturated)
-	vectorIndexConstructionDecisionAddV1(&stats.rowDimensions, uint64(context.dimensions), &stats.saturated)
+	vectorIndexConstructionDecisionAddV1(&stats.exactFP32Dimensions, uint64(context.dimensions), &stats.saturated)
 	pair := vectorIndexConstructionDecisionMixV1(uint64(source + 1))
 	pair = vectorIndexConstructionDecisionHashV1(pair, uint64(nodeID+1)) | 1
 	seen := stats.rowPairs[pair&(vectorIndexConstructionDecisionPairSlots-1)].Swap(pair)
@@ -604,12 +665,32 @@ func (context *vectorIndexConstructionDecisionContextV1) recordRow(nodeID int, i
 	context.recordRowFrom(context.source, nodeID, indexed)
 }
 
+func (context *vectorIndexConstructionDecisionContextV1) recordIndexedExactFP32Call() {
+	stats := context.phaseStats()
+	if stats != nil {
+		vectorIndexConstructionDecisionAddV1(&stats.indexedExactFP32Calls, 1, &stats.saturated)
+	}
+}
+
+// recordApproximateScoreCall is the private ownership seam for a future
+// approximate construction scorer. The current exact constructor never calls it.
+func (context *vectorIndexConstructionDecisionContextV1) recordApproximateScoreCall(rows int) {
+	stats := context.phaseStats()
+	if stats == nil || rows <= 0 {
+		return
+	}
+	vectorIndexConstructionDecisionAddV1(&stats.approximateScoreCalls, 1, &stats.saturated)
+	vectorIndexConstructionDecisionAddV1(&stats.approximateScoreRows, uint64(rows), &stats.saturated)
+}
+
 func (context *vectorIndexConstructionDecisionContextV1) recordEarlyExit(position int, accepted bool) {
 	stats := context.phaseStats()
 	if stats == nil {
 		return
 	}
 	vectorIndexConstructionDecisionAddV1(&stats.earlyExit[vectorIndexConstructionDecisionBucketV1(position)], 1, &stats.saturated)
+	vectorIndexConstructionDecisionAddV1(&stats.diversityRequests, 1, &stats.saturated)
+	vectorIndexConstructionDecisionAddV1(&stats.diversityComparisons, uint64(position), &stats.saturated)
 	if accepted {
 		vectorIndexConstructionDecisionAddV1(&stats.accepted, 1, &stats.saturated)
 	} else {
@@ -648,7 +729,7 @@ func (context *vectorIndexConstructionDecisionContextV1) recordGroup(groupSize, 
 func (context *vectorIndexConstructionDecisionContextV1) recordWall(elapsed time.Duration) {
 	stats := context.phaseStats()
 	if stats != nil && elapsed > 0 {
-		vectorIndexConstructionDecisionAddV1(&stats.wallNanos, uint64(elapsed), &stats.saturated)
+		vectorIndexConstructionDecisionAddV1(&stats.activeWallNanos, uint64(elapsed), &stats.saturated)
 	}
 }
 
@@ -4873,12 +4954,7 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseWithFrozenPrefixScratchObse
 	if idx.metric == VectorMetricCosine && candidate.nodeID >= 0 && candidate.nodeID < len(idx.nodes) {
 		candidateNode := &idx.nodes[candidate.nodeID]
 		if len(candidateNode.vector) > 0 && candidateNode.cachedInvNorm != 0 {
-			if idx.frozenPrefixIndexedDotRowsReadyLocked(candidateNode, selected, dotScratch) {
-				if context != nil {
-					for i := range selected {
-						context.recordRowFrom(candidate.nodeID, selected[i].nodeID, true)
-					}
-				}
+			if idx.frozenPrefixIndexedDotRowsReadyLocked(candidateNode, selected, dotScratch, context) {
 				for i, existing := range selected {
 					distance := float32(1 - float64(dotScratch.dots[i])*float64(candidateNode.cachedInvNorm)*float64(idx.nodes[existing.nodeID].cachedInvNorm))
 					if distance < candidate.distance {
@@ -4936,7 +5012,7 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseWithFrozenPrefixScratchObse
 	return true
 }
 
-func (idx *VectorIndex) frozenPrefixIndexedDotRowsReadyLocked(candidate *vectorIndexNode, selected []vectorIndexCandidate, scratch *vectorIndexFrozenPrefixDiversityScratch) bool {
+func (idx *VectorIndex) frozenPrefixIndexedDotRowsReadyLocked(candidate *vectorIndexNode, selected []vectorIndexCandidate, scratch *vectorIndexFrozenPrefixDiversityScratch, context *vectorIndexConstructionDecisionContextV1) bool {
 	if scratch == nil || !vectorops.DotFloat32IndexedOptimizedEligible(len(selected), idx.dimensions) || len(candidate.vector) != idx.dimensions || len(idx.vectorRows) != len(idx.nodes)*idx.dimensions {
 		return false
 	}
@@ -4957,6 +5033,12 @@ func (idx *VectorIndex) frozenPrefixIndexedDotRowsReadyLocked(candidate *vectorI
 		scratch.rowIDs[i] = uint32(existing.nodeID)
 	}
 	status := vectorops.DotFloat32IndexedPrevalidated(scratch.dots, idx.vectorRows, candidate.vector, scratch.rowIDs, idx.dimensions)
+	if context != nil && status.Rows > 0 {
+		context.recordIndexedExactFP32Call()
+		for i := 0; i < status.Rows && i < len(selected); i++ {
+			context.recordRowFrom(candidate.nodeID, selected[i].nodeID, true)
+		}
+	}
 	return !status.Invalid && status.Optimized && status.Rows == len(selected)
 }
 
