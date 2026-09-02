@@ -352,62 +352,49 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		var prepared columnVectorGraphPreparedPhysicalAsset
 		defer func() { prepared.releaseStableResources() }()
 		var updatedMeta CollectionMeta
-		var preparedRecords []columnManifestRecord
-		var preparedIdentity ColumnManifestIdentity
-		var preparedLSN uint64
-		preparationComplete := false
-		publicationRegistered := false
 		buildContextDeltas := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaPublishInput, error) {
-			if !preparationComplete {
-				prepareStarted := time.Now()
-				preparedAsset, nextRecords, nextIdentity, prepareErr := prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource(baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), typedSource, &timing)
-				timing.AssetPreparation = collectionObservedElapsedSince(prepareStarted)
-				if prepareErr != nil {
-					return nil, prepareErr
-				}
-				timing.FileSync = preparedAsset.stableFileSync
-				timing.FileSyncCount = preparedAsset.stableContentSyncs
-				timing.NamespaceSync = preparedAsset.stableNamespaceSync
-				timing.NamespaceSyncCount = preparedAsset.stableNamespaceSyncs
-				replaceColumnVectorGraphPreparedPhysicalAsset(&prepared, preparedAsset)
-				if prepared.RowCount != len(rows) {
-					return nil, fmt.Errorf("collections: column_graph rebuild row count changed rows=%d prepared=%d", len(rows), prepared.RowCount)
-				}
-				if err := constructionMatrix.CloseRows(rows); err != nil {
-					return nil, err
-				}
-				if err := runColumnVectorGraphConstructionMatrixLastUseTestHook(rows, constructionMatrix); err != nil {
-					return nil, err
-				}
-				preparedRecords = nextRecords
-				preparedIdentity = nextIdentity
-				preparedLSN = ctx.AppliedCommandLSN
-				preparationComplete = true
-			} else if ctx.AppliedCommandLSN != preparedLSN {
-				return nil, fmt.Errorf("collections: column_graph rebuild physical preparation cannot be reused across command WAL LSNs: prepared=%d requested=%d", preparedLSN, ctx.AppliedCommandLSN)
+			var deltaRecords []columnManifestRecord
+			var nextIdentity ColumnManifestIdentity
+			prepareStarted := time.Now()
+			preparedAsset, preparedRecords, preparedIdentity, prepareErr := prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource(baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), typedSource, &timing)
+			timing.AssetPreparation = collectionObservedElapsedSince(prepareStarted)
+			if prepareErr != nil {
+				return nil, prepareErr
+			}
+			timing.FileSync = preparedAsset.stableFileSync
+			timing.FileSyncCount = preparedAsset.stableContentSyncs
+			timing.NamespaceSync = preparedAsset.stableNamespaceSync
+			timing.NamespaceSyncCount = preparedAsset.stableNamespaceSyncs
+			replaceColumnVectorGraphPreparedPhysicalAsset(&prepared, preparedAsset)
+			deltaRecords, nextIdentity = preparedRecords, preparedIdentity
+			if prepared.RowCount != len(rows) {
+				return nil, fmt.Errorf("collections: column_graph rebuild row count changed rows=%d prepared=%d", len(rows), prepared.RowCount)
+			}
+			if err := constructionMatrix.CloseRows(rows); err != nil {
+				return nil, err
+			}
+			if err := runColumnVectorGraphConstructionMatrixLastUseTestHook(rows, constructionMatrix); err != nil {
+				return nil, err
 			}
 			delta := ColumnManifestRootDelta{
 				RootName:       rootName,
 				BaseRootID:     baseManifestRootID,
 				StoragePolicy:  cfg.ManifestRoot.StoragePolicy,
-				Identity:       preparedIdentity,
-				IdentityRecord: encodeColumnManifestIdentityRecordArray(preparedIdentity),
-				Records:        preparedRecords,
+				Identity:       nextIdentity,
+				IdentityRecord: encodeColumnManifestIdentityRecordArray(nextIdentity),
+				Records:        deltaRecords,
 			}
 			ordered, err := delta.OrderedRootDeltaPublishInput()
 			if err != nil {
 				return nil, err
 			}
-			updated, metaErr := columnGraphRebuildUpdatedMeta(baseMeta, preparedIdentity, ctx.AppliedCommandLSN)
+			updated, metaErr := columnGraphRebuildUpdatedMeta(baseMeta, nextIdentity, ctx.AppliedCommandLSN)
 			if metaErr != nil {
 				return nil, metaErr
 			}
 			updatedMeta = updated
-			if !publicationRegistered {
-				if err := registerColumnVectorGraphDurablePublication(ctx, &prepared, preparedRecords, preparedIdentity.Generation, cfg.AssetManager.Namespace); err != nil {
-					return nil, err
-				}
-				publicationRegistered = true
+			if err := registerColumnVectorGraphDurablePublication(ctx, &prepared, deltaRecords, nextIdentity.Generation, cfg.AssetManager.Namespace); err != nil {
+				return nil, err
 			}
 			return []backenddb.OrderedRootDeltaPublishInput{ordered}, nil
 		}
