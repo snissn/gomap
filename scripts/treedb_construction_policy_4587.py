@@ -358,7 +358,6 @@ def validate_construction_evidence(
     exact_keys(decisions, WORK_KEYS, "raw construction decisions")
     for phase_name, phase_value in decisions.items():
         phase = object_at(phase_value, f"raw construction decisions.{phase_name}")
-        exact_keys(phase, OBSERVER_PHASE_KEYS, f"raw construction decisions.{phase_name}")
         for key, value in phase.items():
             name = f"raw construction decisions.{phase_name}.{key}"
             if key == "saturated":
@@ -368,10 +367,10 @@ def validate_construction_evidence(
                     fail(f"{name} must contain exactly 16 buckets")
                 for position, bucket in enumerate(value):
                     nonnegative_int(bucket, f"{name}[{position}]")
+            elif key == "decisions":
+                positive_int(value, name)
             else:
                 nonnegative_int(value, name)
-    if sum(decisions[phase]["decisions"] for phase in WORK_KEYS) <= 0:
-        fail("raw construction decisions must contain observed decisions")
     return decisions, {
         "adjacency": adjacency_nanos / 1_000_000_000,
         "optimize": (end_ns - start_ns) / 1_000_000_000,

@@ -263,6 +263,7 @@ class DecisionFixture:
                 if key.endswith("_histogram"):
                     phase[key] = [0] * 16
         planning["decisions"] = 1
+        reciprocal["decisions"] = 1
         construction_decisions = {"planning": planning, "reciprocal": reciprocal}
         optimize_start_ns = int((started + timedelta(seconds=30)).timestamp() * 1_000_000_000)
         optimize_end_ns = optimize_start_ns + int((adjacency + 10) * 1_000_000_000)
@@ -1977,6 +1978,15 @@ class ValidatorMutations(unittest.TestCase):
                 "construction_decisions"]["planning"].update({"saturated": True}),
         )
         self.assert_invalid(packet, "saturated")
+
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_adapter(
+            run,
+            lambda records: records[-1]["response"]["status"]["column_graph_build"][
+                "construction_decisions"]["reciprocal"].update({"decisions": 0}),
+        )
+        self.assert_invalid(packet, "raw construction decisions.reciprocal.decisions")
 
         packet = self.fixture.no_go_packet()
         run = packet["runs"][0]
