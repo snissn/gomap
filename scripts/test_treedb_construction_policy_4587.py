@@ -390,6 +390,7 @@ class DecisionFixture:
                 "competing_processes": [],
             }],
         }
+        isolation_binding = self._write(root / "isolation.json", isolation)
         data_root = root / "treedb-data"
         (data_root / "maindb").mkdir(parents=True)
         data_file = data_root / "maindb" / "index.db"
@@ -426,13 +427,14 @@ class DecisionFixture:
             "sha256": policy.sha256_file(data_file),
         }]
         measurement_source = {
-            "schema_version": "treedb-construction-policy-4587-measurement-source/v1",
+            "schema_version": "treedb-construction-policy-4587-measurement-source/v2",
             "adapter_lifecycle": {
                 "path": adapter_path.name, "sha256": policy.sha256_file(adapter_path),
             },
             "diagnostics": {
                 "path": diagnostics_path.name, "sha256": policy.sha256_file(diagnostics_path),
             },
+            "isolation": isolation_binding,
             "data_root": str(data_root.resolve()),
             "data_files": data_files,
         }
@@ -659,7 +661,7 @@ class DecisionFixture:
             "dataset": dataset,
             "configuration": config,
             "artifact": {"root": str(root.resolve()), "manifest_sha256": policy.sha256_file(manifest_path)},
-            "isolation_evidence": self._write(root / "isolation.json", isolation),
+            "isolation_evidence": isolation_binding,
             "measurement_evidence": self._write(root / "measurements.json", measurements),
             "search_evidence": search,
         }
@@ -881,6 +883,13 @@ class DecisionFixture:
             })
         isolation_path.write_text(json.dumps(isolation, sort_keys=True) + "\n")
         run["isolation_evidence"]["sha256"] = policy.sha256_file(isolation_path)
+        source_path = root / measurement["source"]["path"]
+        source = json.loads(source_path.read_text())
+        source["isolation"] = run["isolation_evidence"]
+        source_path.write_text(json.dumps(source, sort_keys=True) + "\n")
+        measurement["source"]["sha256"] = policy.sha256_file(source_path)
+        measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
+        run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
         for entry in run["search_evidence"]:
             origin_path = root / entry["origin"]["path"]
             origin = json.loads(origin_path.read_text())
@@ -913,7 +922,13 @@ class DecisionFixture:
 class ValidatorMutations(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
-        self.fixture = DecisionFixture(Path(self.temp.name))
+        self._fixture: DecisionFixture | None = None
+
+    @property
+    def fixture(self) -> DecisionFixture:
+        if self._fixture is None:
+            self._fixture = DecisionFixture(Path(self.temp.name))
+        return self._fixture
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -2049,6 +2064,98 @@ class ValidatorMutations(unittest.TestCase):
 
 
 class SearchEnvelopeHelperTest(unittest.TestCase):
+    def parse_args_fixture(
+        self, root: Path, *, base_url: str = "http://127.0.0.1:6060",
+    ) -> search_existing_index.argparse.Namespace:
+        root.mkdir(parents=True, exist_ok=True)
+        dataset_dir = root / "dataset"
+        dataset_dir.mkdir()
+        vectordbbench_dir = root / "vectordbbench"
+        vectordbbench_dir.mkdir()
+        service = root / "service"
+        service.write_bytes(b"service")
+        query = root / "query.json"
+        query.write_text("{}\n")
+        lifecycle = root / "lifecycle.jsonl"
+        lifecycle.write_text(
+            '{"stage":"startup","timestamp":"2026-09-02T00:00:00+00:00"}\n'
+            '{"stage":"teardown","timestamp":"2026-09-02T00:01:00+00:00"}\n'
+        )
+        service_sha = search_existing_index.sha256_file(service)
+        lifecycle_sha = search_existing_index.sha256_file(lifecycle)
+        manifest = {
+            "artifact_root": str(root),
+            "service": {
+                "data_dir": str(root / "treedb-data"),
+                "base_url": base_url,
+                "profile": "command_wal_durable",
+                "binary": {"sha256": service_sha},
+            },
+            "lifecycle": {"file": lifecycle.name, "sha256": lifecycle_sha},
+        }
+        manifest_path = root / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest) + "\n")
+        alias = root / "alias"
+        alias.symlink_to(root, target_is_directory=True)
+        python = Path(sys.executable).resolve()
+        argv = [
+            "--base-url", base_url,
+            "--index-name", "index-ef128",
+            "--query-json", str(alias / query.name),
+            "--metadata-out", str(alias / "metadata.json"),
+            "--diagnostic-response-out", str(alias / "diagnostic-response.json"),
+            "--production-response-out", str(alias / "production-response.json"),
+            "--diagnostic-result", str(alias / "diagnostic-result.json"),
+            "--production-result", str(alias / "production-result.json"),
+            "--diagnostic-origin-out", str(alias / "diagnostic-origin.json"),
+            "--production-origin-out", str(alias / "production-origin.json"),
+            "--command-ledger", str(alias / "command-ledger.jsonl"),
+            "--run-id", "screening-ef128",
+            "--artifact-root", str(root),
+            "--manifest-sha256", search_existing_index.sha256_file(manifest_path),
+            "--execution-commit", COMMIT,
+            "--dataset-sha256", "d" * 64,
+            "--scale", "250000",
+            "--dataset-name", "cohere-medium-250k-selection-v1",
+            "--dataset-dir", str(dataset_dir),
+            "--vectordbbench-dir", str(vectordbbench_dir),
+            "--role", "screening_candidate",
+            "--partition", "selection",
+            "--lifecycle-sha256", lifecycle_sha,
+            "--lifecycle-started-at", "2026-09-02T00:00:00+00:00",
+            "--lifecycle-completed-at", "2026-09-02T00:01:00+00:00",
+            "--ef-construction", "128",
+            "--expected-generation", "1",
+            "--route", "exact",
+            "--service-bin", str(service),
+            "--service-binary-sha256", service_sha,
+            "--python-executable", str(python),
+            "--python-sha256", search_existing_index.sha256_file(python),
+            "--search-isolation-out", str(alias / "search-isolation.json"),
+            "--exclusive-lock", str(root / "shared.lock"),
+        ]
+        with mock.patch.dict(search_existing_index.os.environ, {"GOMAXPROCS": "12"}), \
+                mock.patch.object(search_existing_index.sys, "argv", ["helper", *argv]):
+            return search_existing_index.parse_args()
+
+    def test_parse_args_brackets_ipv6_and_retains_resolved_evidence_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "artifact"
+            args = self.parse_args_fixture(root, base_url="http://[::1]:6060")
+
+        self.assertEqual(args.service_addr, "[::1]:6060")
+        self.assertEqual(args.command_ledger, root / "command-ledger.jsonl")
+        self.assertEqual(args.search_isolation_out, root / "search-isolation.json")
+
+    def test_parse_args_rejects_preexisting_vdbbench_logs(self) -> None:
+        for kind in ("diagnostic", "production"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "artifact"
+                root.mkdir()
+                (root / f"vdbbench-exact-{kind}.log").write_text("stale\n")
+                with self.assertRaisesRegex(ValueError, "output already exists"):
+                    self.parse_args_fixture(root)
+
     def test_service_argv_is_exact_and_retained(self) -> None:
         args = SimpleNamespace(
             service_bin=Path("/authorized/service"),

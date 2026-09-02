@@ -768,7 +768,8 @@ def validate_contract(contract: dict[str, Any], allow_draft: bool,
     exact(measurement_schema["schema_version"], MEASUREMENT_SCHEMA, "measurement contract schema")
     exact(set(measurement_schema["exact_keys"]), MEASUREMENT_KEYS, "measurement contract keys")
     exact(set(measurement_schema["source_exact_keys"]), {
-        "schema_version", "adapter_lifecycle", "diagnostics", "data_root", "data_files",
+        "schema_version", "adapter_lifecycle", "diagnostics", "isolation",
+        "data_root", "data_files",
     }, "measurement source contract keys")
     exact(set(measurement_schema["origin_exact_keys"]), MEASUREMENT_ORIGIN_KEYS,
           "measurement origin contract keys")
@@ -1420,18 +1421,24 @@ def nested_numeric_values(value: Any, key: str) -> list[float]:
 def measurement_source_values(
     root: Path, binding: Any, producer_phases: dict[str, float],
     construction_decisions: dict[str, Any], configuration: dict[str, Any],
-    manifest: dict[str, Any],
+    manifest: dict[str, Any], expected_isolation_binding: dict[str, Any],
 ) -> dict[str, Any]:
     source, _ = read_bound_json(root, binding, "measurements.source")
     exact_keys(source, {
-        "schema_version", "adapter_lifecycle", "diagnostics", "data_root", "data_files",
+        "schema_version", "adapter_lifecycle", "diagnostics", "isolation",
+        "data_root", "data_files",
     }, "measurement source")
-    exact(source["schema_version"], "treedb-construction-policy-4587-measurement-source/v1",
+    exact(source["schema_version"], "treedb-construction-policy-4587-measurement-source/v2",
           "measurement source schema")
     adapter_binding = object_at(source["adapter_lifecycle"], "measurement source adapter")
     diagnostics_binding = object_at(source["diagnostics"], "measurement source diagnostics")
+    isolation_binding = object_at(source["isolation"], "measurement source isolation")
     exact_keys(adapter_binding, {"path", "sha256"}, "measurement source adapter binding")
     exact_keys(diagnostics_binding, {"path", "sha256"}, "measurement source diagnostics binding")
+    exact_keys(isolation_binding, {"path", "sha256"}, "measurement source isolation binding")
+    exact(isolation_binding, expected_isolation_binding,
+          "measurement source isolation run binding")
+    read_bound_json(root, isolation_binding, "measurement source isolation")
     raw_artifacts = object_at(manifest.get("lifecycle"), "manifest.lifecycle").get("raw_artifacts")
     if not isinstance(raw_artifacts, list):
         fail("manifest.lifecycle.raw_artifacts must be a list")
@@ -1635,7 +1642,7 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
     }, "measurement originating run binding")
     expected_measurements = measurement_source_values(
         root, measurements["source"], producer_phases, construction_decisions,
-        row["configuration"], manifest)
+        row["configuration"], manifest, row["isolation_evidence"])
     for key, expected_value in expected_measurements.items():
         if key != "projected_10m_adjacency_reduction_fraction":
             exact(measurements[key], expected_value, f"measurements.{key} raw source binding")

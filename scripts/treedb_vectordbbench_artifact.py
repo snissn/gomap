@@ -45,7 +45,8 @@ LIFECYCLE_SCHEMA = "treedb-vectordbbench-lifecycle/v1"
 LIFECYCLE_EVENT_SCHEMA = "treedb-vectordbbench-lifecycle-event/v1"
 LIFECYCLE_VALIDATION_SCHEMA = "treedb-vectordbbench-lifecycle-validation/v1"
 MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v4"
-MEASUREMENT_SOURCE_SCHEMA = "treedb-construction-policy-4587-measurement-source/v1"
+MEASUREMENT_SOURCE_SCHEMA = "treedb-construction-policy-4587-measurement-source/v2"
+LIFECYCLE_EXCLUSIVE_LOCK = Path("/mnt/fast4tb/treedb-4587-c0.lock")
 PPROF_PROFILE_KINDS = frozenset({"cpu", "heap", "allocs", "block", "mutex"})
 OPTIMIZED_ROUTE_NAMES = frozenset({"exact_hnsw_search_pack_v1", "quantized_rerank"})
 LIFECYCLE_STAGES = (
@@ -1014,10 +1015,15 @@ def run_route_proof_smoke(
     return proof
 
 
-def pythonpath_for(vectordbbench_dir: Path, gomap_root: Path) -> str:
-    parts = [str(vectordbbench_dir), str(gomap_root / "clients" / "python" / "treedb_client" / "src")]
+def pythonpath_for(
+    vectordbbench_dir: Path, gomap_root: Path, *, include_parent: bool = True,
+) -> str:
+    parts = [
+        str(vectordbbench_dir),
+        str(gomap_root / "clients" / "python" / "treedb_client" / "src"),
+    ]
     existing = os.environ.get("PYTHONPATH")
-    if existing:
+    if include_parent and existing:
         parts.append(existing)
     return os.pathsep.join(parts)
 
@@ -1116,7 +1122,9 @@ def vdbbench_base_cmd(args: argparse.Namespace, base_url: str, index_name: str, 
 
 def vdbbench_row_env(args: argparse.Namespace, vectordbbench_dir: Path, gomap_root: Path, state: HarnessState, row: str = "") -> dict[str, str]:
     env = lifecycle_subprocess_environment() if args.lifecycle else os.environ.copy()
-    env["PYTHONPATH"] = pythonpath_for(vectordbbench_dir, gomap_root)
+    env["PYTHONPATH"] = pythonpath_for(
+        vectordbbench_dir, gomap_root, include_parent=not args.lifecycle,
+    )
     env["RESULTS_LOCAL_DIR"] = str(state.root / "vdbbench-results" / row) if row else str(state.root / "vdbbench-results")
     env["LOG_FILE"] = str(state.root / "vdbbench.log")
     env["NUM_PER_BATCH"] = str(args.num_per_batch)
@@ -4043,6 +4051,16 @@ def nested_numeric_values(value: Any, key: str) -> list[float]:
         for item in value:
             found.extend(nested_numeric_values(item, key))
     return found
+def require_positive_construction_work(decisions: dict[str, Any]) -> None:
+    for phase in ("planning", "reciprocal"):
+        phase_evidence = decisions.get(phase)
+        count = phase_evidence.get("decisions") if isinstance(phase_evidence, dict) else None
+        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+            raise RuntimeError(
+                f"protocol measurements require positive {phase} construction work"
+            )
+
+
 
 
 def write_protocol_measurements(
@@ -4053,6 +4071,9 @@ def write_protocol_measurements(
     adapter_path = state.root / "adapter-lifecycle.jsonl"
     diagnostics_path = state.root / "diagnostics.jsonl"
     lifecycle_path = state.root / "lifecycle.jsonl"
+    isolation_path = state.root / "isolation.json"
+    if not isolation_path.is_file():
+        raise RuntimeError("protocol measurement source requires finalized isolation evidence")
     adapter = read_adapter_lifecycle_sidecar(adapter_path)
     diagnostics = [
         _object(_strict_json_loads(line), "diagnostic sample", [])
@@ -4112,6 +4133,10 @@ def write_protocol_measurements(
             "path": diagnostics_path.relative_to(state.root).as_posix(),
             "sha256": sha256_file(diagnostics_path),
         },
+        "isolation": {
+            "path": isolation_path.relative_to(state.root).as_posix(),
+            "sha256": sha256_file(isolation_path),
+        },
         "data_root": str(args.data_dir.resolve()),
         "data_files": data_files,
     }
@@ -4138,6 +4163,7 @@ def write_protocol_measurements(
         or not isinstance(decisions, dict)
     ):
         raise RuntimeError("protocol measurements require raw construction-decision evidence")
+    require_positive_construction_work(decisions)
     configuration = {
         "dimensions": args.lifecycle_dimensions,
         "metric": "cosine",
@@ -4570,7 +4596,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--exclusive-lock",
         default=os.environ.get("TREEDB_VDBBENCH_EXCLUSIVE_LOCK", ""),
-        help="exclusive advisory lock held until final lifecycle evidence is written",
+        help=f"policy-wide lifecycle lock; must be {LIFECYCLE_EXCLUSIVE_LOCK}",
     )
     parser.add_argument("--python", default=env_text("TREEDB_VDBBENCH_PYTHON", sys.executable or "python3"))
     parser.add_argument("--use-uv", choices=["auto", "on", "off"], default=env_text("TREEDB_VDBBENCH_USE_UV", "auto"), help="use `uv run --with ...` for VectorDBBench Python commands")
@@ -4708,8 +4734,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     args.exclusive_lock = (
         Path(args.exclusive_lock).expanduser().resolve()
-        if args.exclusive_lock else args.out / ".lifecycle.lock"
+        if args.exclusive_lock else (LIFECYCLE_EXCLUSIVE_LOCK if args.lifecycle else None)
     )
+    if args.lifecycle and args.exclusive_lock != LIFECYCLE_EXCLUSIVE_LOCK:
+        parser.error(f"lifecycle exclusive lock must be {LIFECYCLE_EXCLUSIVE_LOCK}")
     if args.lifecycle and (args.lifecycle_dataset_file is None or not args.lifecycle_dataset_file.is_file()):
         parser.error("lifecycle dataset file must exist and be a regular file")
     if args.port == 0:
@@ -4890,6 +4918,9 @@ def main(argv: list[str]) -> int:
             service_command = complete_lifecycle(
                 state, args, gomap_root, service_bin, service_proc, sampler
             )
+            monitor = isolation_monitor
+            isolation_monitor = None
+            finalize_isolation(isolation_path, monitor)
             if args.measurement_run_id:
                 execution_commit = context.get("gomap", {}).get("commit")
                 if not isinstance(execution_commit, str) or re.fullmatch(r"[0-9a-f]{40}", execution_commit) is None:
@@ -4914,7 +4945,6 @@ def main(argv: list[str]) -> int:
                 smoke_top_k=args.smoke_top_k,
             )
         write_readme(state, args)
-        finalize_isolation(isolation_path, isolation_monitor)
         write_manifest(state, args=args, context=context, service_command=service_command)
         print(f"artifact_root={args.out}")
         print(f"manifest={args.out / 'manifest.json'}")
@@ -4932,8 +4962,10 @@ def main(argv: list[str]) -> int:
         with contextlib.suppress(Exception):
             finalize_partial_lifecycle(state, args, sampler, result_status="interrupted")
             sampler = None
+        monitor = isolation_monitor
+        isolation_monitor = None
         with contextlib.suppress(Exception):
-            finalize_isolation(isolation_path, isolation_monitor)
+            finalize_isolation(isolation_path, monitor)
             write_manifest(state, args=args, context=context, service_command=service_command)
         print(f"harness interrupted; artifact_root={args.out}", file=sys.stderr)
         return 130
@@ -4946,22 +4978,33 @@ def main(argv: list[str]) -> int:
         with contextlib.suppress(Exception):
             finalize_partial_lifecycle(state, args, sampler)
             sampler = None
+        monitor = isolation_monitor
+        isolation_monitor = None
         with contextlib.suppress(Exception):
-            finalize_isolation(isolation_path, isolation_monitor)
+            finalize_isolation(isolation_path, monitor)
         with contextlib.suppress(Exception):
             write_manifest(state, args=args, context=context, service_command=service_command)
         print(f"harness failed; artifact_root={args.out}; error={exc}", file=sys.stderr)
         return 1
     finally:
-        finalize_isolation(isolation_path, isolation_monitor)
-        if sampler is not None:
-            sampler.stop()
-        if service_proc is not None:
-            terminate_process_group(service_proc, graceful_timeout=args.service_close_timeout)
-
-        if lock_stream is not None:
-            fcntl.flock(lock_stream.fileno(), fcntl.LOCK_UN)
-            lock_stream.close()
+        monitor = isolation_monitor
+        isolation_monitor = None
+        try:
+            finalize_isolation(isolation_path, monitor)
+        finally:
+            try:
+                if sampler is not None:
+                    sampler.stop()
+            finally:
+                try:
+                    if service_proc is not None:
+                        terminate_process_group(
+                            service_proc, graceful_timeout=args.service_close_timeout,
+                        )
+                finally:
+                    if lock_stream is not None:
+                        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_UN)
+                        lock_stream.close()
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))

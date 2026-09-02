@@ -499,7 +499,8 @@ def parse_args() -> argparse.Namespace:
             or parsed_url.port is None or parsed_url.path not in {"", "/"}
             or parsed_url.query or parsed_url.fragment):
         fail("base-url must be a loopback HTTP origin with an explicit port")
-    args.service_addr = f"{parsed_url.hostname}:{parsed_url.port}"
+    host = parsed_url.hostname
+    args.service_addr = f"[{host}]:{parsed_url.port}" if ":" in host else f"{host}:{parsed_url.port}"
     args.service_bin = args.service_bin.resolve()
     if not args.service_bin.is_file() or sha256_file(args.service_bin) != args.service_binary_sha256:
         fail("authorized search service binary checksum mismatch")
@@ -507,17 +508,19 @@ def parse_args() -> argparse.Namespace:
             or not args.python_executable.is_file()
             or sha256_file(args.python_executable) != args.python_sha256):
         fail("frozen VectorDBBench Python interpreter checksum mismatch")
-    paths = (
-        args.query_json, args.metadata_out, args.diagnostic_response_out,
-        args.production_response_out, args.diagnostic_result, args.production_result,
-        args.diagnostic_origin_out, args.production_origin_out, args.command_ledger,
-        args.search_isolation_out,
+    path_names = (
+        "query_json", "metadata_out", "diagnostic_response_out",
+        "production_response_out", "diagnostic_result", "production_result",
+        "diagnostic_origin_out", "production_origin_out", "command_ledger",
+        "search_isolation_out",
     )
-    for path in paths:
+    for name in path_names:
+        path = getattr(args, name).resolve()
         try:
-            path.resolve().relative_to(args.artifact_root)
+            path.relative_to(args.artifact_root)
         except ValueError:
             fail(f"search evidence path escapes artifact root: {path}")
+        setattr(args, name, path)
     args.dataset_dir = args.dataset_dir.resolve()
     if not args.dataset_dir.is_dir():
         fail("dataset_dir must exist")
@@ -563,6 +566,8 @@ def parse_args() -> argparse.Namespace:
         args.diagnostic_result, args.production_result, args.diagnostic_origin_out,
         args.production_origin_out, args.search_isolation_out,
         args.artifact_root / f"search-service-{args.route}.log",
+        args.artifact_root / f"vdbbench-{args.route}-diagnostic.log",
+        args.artifact_root / f"vdbbench-{args.route}-production.log",
         args.artifact_root / f"vdbbench-results-{args.route}-diagnostic",
         args.artifact_root / f"vdbbench-results-{args.route}-production",
     )

@@ -34,7 +34,7 @@
       "TreeDB/collections/vector_index_rebuild.go": "21bed0f84ae5301d17619ed2753300be73cf422c"
     },
     "harness_blobs": {
-      "scripts/treedb_vectordbbench_artifact.py": "51961bb215251794cee38871527b2447e1daf2ba"
+      "scripts/treedb_vectordbbench_artifact.py": "0b448738a9287ba47fb0ee1a638cf6a38f8e8dd5"
     },
     "vectordbbench": {
       "root": "/mnt/fast4tb/codex-vectordbbench-4545",
@@ -537,14 +537,14 @@
       "resources", "projected_10m_adjacency_reduction_fraction"
     ],
     "source_exact_keys": [
-      "schema_version", "adapter_lifecycle", "diagnostics", "data_root", "data_files"
+      "schema_version", "adapter_lifecycle", "diagnostics", "isolation", "data_root", "data_files"
     ],
     "origin_exact_keys": [
       "run_id", "artifact_root", "execution_commit", "dataset_sha256", "scale",
       "role", "partition", "ef_construction", "lifecycle_sha256",
       "lifecycle_started_at", "lifecycle_completed_at"
     ],
-    "producer_binding": "the lifecycle harness writes checksum-bound measurement-source.json and measurements.json, including originating run/dataset/artifact root/scale/role/partition and lifecycle checksum/start/completion. The validator requires those origin values to equal the enclosing retained run, verifies the source adapter and diagnostics bindings against manifest.lifecycle.raw_artifacts, requires data_root to equal manifest.service.data_dir, resolves the complete persisted-data ledger, and recomputes every emitted measurement value exactly. The producer leaves projected_10m_adjacency_reduction_fraction null; the validator derives the prospective 10M adjacency reduction from the raw 1M candidate adjacency seconds by (10M*ln(10M))/(1M*ln(1M)) and compares that projected wall time with the frozen accepted 10M control adjacency wall of 5774.242 seconds.",
+    "producer_binding": "the lifecycle harness finalizes isolation monitoring before writing checksum-bound measurement-source.json and measurements.json, including finalized isolation, originating run/dataset/artifact root/scale/role/partition, and lifecycle checksum/start/completion. The validator requires those origin values to equal the enclosing retained run, requires the measurement-source isolation binding to equal the run isolation binding, verifies the source adapter and diagnostics bindings against manifest.lifecycle.raw_artifacts, requires data_root to equal manifest.service.data_dir, resolves the complete persisted-data ledger, and recomputes every emitted measurement value exactly. The producer leaves projected_10m_adjacency_reduction_fraction null; the validator derives the prospective 10M adjacency reduction from the raw 1M candidate adjacency seconds by (10M*ln(10M))/(1M*ln(1M)) and compares that derived value against the gate.",
     "observer_phase_exact_keys": [
       "decisions", "accepted", "rejected", "direct_exact_fp32_rows", "direct_exact_fp32_calls",
       "indexed_exact_fp32_rows", "indexed_exact_fp32_calls", "approximate_score_rows",

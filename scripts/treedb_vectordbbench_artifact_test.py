@@ -808,6 +808,18 @@ class HostContextTest(unittest.TestCase):
 
         self.assertEqual(args.port, 7120)
         self.assertEqual(args.pprof_port, 7121)
+        self.assertEqual(args.exclusive_lock, harness.LIFECYCLE_EXCLUSIVE_LOCK)
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = Path(tmp) / "train.parquet"
+            dataset.write_bytes(b"dataset")
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                harness.parse_args([
+                    "--run-vdbbench", "--rows", "exact", "--lifecycle",
+                    "--case-type", "PerformanceCustomDataset",
+                    "--lifecycle-dataset-file", str(dataset),
+                    "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
+                    "--exclusive-lock", str(Path(tmp) / "run-specific.lock"),
+                ])
 
 
 class SmokeShapeTest(unittest.TestCase):
@@ -1358,7 +1370,8 @@ class ServiceProcessOwnershipTest(unittest.TestCase):
     def test_lifecycle_vdbbench_environment_is_complete_and_non_inherited(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
             harness.os.environ,
-            {"GOMAXPROCS": "12", "GOGC": "off", "HTTPS_PROXY": "http://proxy"},
+            {"GOMAXPROCS": "12", "GOGC": "off", "HTTPS_PROXY": "http://proxy",
+             "PYTHONPATH": "/unreviewed"},
             clear=False,
         ):
             root = Path(tmp)
@@ -1373,6 +1386,10 @@ class ServiceProcessOwnershipTest(unittest.TestCase):
             "NUM_PER_BATCH", "TREEDB_LIFECYCLE_SIDECAR",
             "TREEDB_LIFECYCLE_BOUNDARY_ACK",
         })
+        self.assertEqual(
+            environment["PYTHONPATH"],
+            "/vectordbbench:/gomap/clients/python/treedb_client/src",
+        )
         self.assertEqual(state.vdbbench_environments, {"scalar": environment})
 
     def test_construction_decision_diagnostics_cli_defaults_off(self) -> None:
@@ -4255,6 +4272,18 @@ class ProtocolMeasurementProducerTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "isolation monitor failed"):
                 monitor.stop()
 
+    def test_construction_measurements_require_positive_work_in_each_phase(self) -> None:
+        for phase in ("planning", "reciprocal"):
+            for invalid in (None, False, 0, -1, 1.0):
+                with self.subTest(phase=phase, invalid=invalid):
+                    decisions = {
+                        "planning": {"decisions": 1},
+                        "reciprocal": {"decisions": 1},
+                    }
+                    decisions[phase]["decisions"] = invalid
+                    with self.assertRaisesRegex(RuntimeError, f"positive {phase}"):
+                        harness.require_positive_construction_work(decisions)
+
     def test_diagnostics_sampler_records_first_sample(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
             harness, "http_json", return_value={"status": "ok"},
@@ -4296,7 +4325,10 @@ class ProtocolMeasurementProducerTest(unittest.TestCase):
                         "status": {
                             "column_graph_build": {
                                 "adjacency_build_nanos": 500_000_000,
-                                "construction_decisions": {"planning": {"decisions": 1}},
+                                "construction_decisions": {
+                                    "planning": {"decisions": 1},
+                                    "reciprocal": {"decisions": 1},
+                                },
                             }
                         }
                     },
@@ -4332,6 +4364,7 @@ class ProtocolMeasurementProducerTest(unittest.TestCase):
                 ]),
                 encoding="utf-8",
             )
+            harness.write_json(root / "isolation.json", {"complete": True})
             args = SimpleNamespace(
                 data_dir=data_dir,
                 lifecycle_dimensions=768,
@@ -4380,6 +4413,7 @@ class ProtocolMeasurementProducerTest(unittest.TestCase):
                 measurements["diagnostic_work_profile"],
                 configuration,
                 manifest,
+                source["isolation"],
             )
             self.assertEqual(measurements["determinism"], validator_values["determinism"])
 
@@ -4392,6 +4426,7 @@ class ProtocolMeasurementProducerTest(unittest.TestCase):
         })
         self.assertEqual(measurements["origin"]["run_id"], "screening-ef128")
         self.assertEqual(source["data_files"][0]["path"], "maindb/index.db")
+        self.assertEqual(source["isolation"]["path"], "isolation.json")
 
 
 class LifecycleIntegrationTest(unittest.TestCase):
