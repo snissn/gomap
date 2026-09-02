@@ -189,7 +189,8 @@ latency parity.
   snapshot is `snap-08ce3b93c55890efe`; AWS reported `completed` and `100%`.
 - Both instances and all campaign volumes, the key pair, and the security group
   were deleted. The checked-in [resource audit](treedb_vectordbbench_cohere10m_resource_audit_2026-09-01.json)
-  found no unintended resources; only the explicitly retained snapshot remains.
+  found exactly one campaign snapshot and no unintended resources; only the
+  explicitly retained snapshot remains.
 
 ## Evidence
 
@@ -197,10 +198,10 @@ Checked-in evidence:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| [VDBBench load result](treedb_vectordbbench_cohere10m_load_2026-09-01.json) | `13dd8a600a05e24bb3f16b97a5b04b07c3f8c849556ced68c9c56d9b12cfec4f` |
-| [VDBBench production search result](treedb_vectordbbench_cohere10m_search_2026-09-01.json) | `73a588fa1c97ea2c1bcc25a00f3055262ad9e762f6235f2aa75ceb653f37d3a3` |
+| [VDBBench load result](treedb_vectordbbench_cohere10m_load_2026-09-01.json) | `d0164970e1f0a083fe73c36abbd48aa1699f28b8bd5967bd5fd413dd669bfd06` |
+| [VDBBench production search result](treedb_vectordbbench_cohere10m_search_2026-09-01.json) | `612dad0a80d464577cf95cb67e51bae87a73cd68d7c286fc44e0d367c881654e` |
 | [Cold-reopen proof](treedb_vectordbbench_cohere10m_cold_reopen_2026-09-01.json) | `33311289eb2cdb91aee88dce8cd1181a376b36a3d1d07e35477ea00345214829` |
-| [Final AWS resource audit](treedb_vectordbbench_cohere10m_resource_audit_2026-09-01.json) | `ab0fdd23a1f7b9d05b902fac5e24c0543d5a52e11ddecd045cf64dc075692bfe` |
+| [Final AWS resource audit](treedb_vectordbbench_cohere10m_resource_audit_2026-09-01.json) | `fe44e546c797301c0c9b66dc28b8371dd3b4d06c225795fc4350f2117abe2958` |
 | [Million-window CSV](treedb_vectordbbench_cohere10m_million_windows_2026-09-01.csv) | `b7e8af469fd417188535c36c9d59f14b7fb0ffe7103022f6498099470956b6f8` |
 
 The raw VDBBench load file owns the load/optimize wall timings and exact task
@@ -208,7 +209,8 @@ configuration. Its convenience `inserted_count` field is zero because that
 runner did not populate it; the server lifecycle stream and cold-reopen
 validator own the exact 10,000,000-row count. The timed search deliberately
 used production statistics and an IDs-only response; the separate cold-reopen
-proof owns the fail-closed route/configuration checks.
+proof owns the fail-closed route/configuration checks. The checked-in VDBBench
+JSON normalizes the server's private address to `treedb-server`.
 
 Bulky lifecycle events, server/client telemetry, CPU/heap/allocation/contention
 profiles, Go traces, Linux perf captures, commands, logs, environment records,

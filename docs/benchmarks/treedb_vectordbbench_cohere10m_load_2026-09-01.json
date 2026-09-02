@@ -54,7 +54,7 @@
           "db_label": "TreeDB-post4584-scalar-u8-rerank400-ef192",
           "version": "",
           "note": "",
-          "base_url": "http:\/\/172.31.23.223:7120",
+          "base_url": "http:\/\/treedb-server:7120",
           "index_name": "cohere10m_scalar_u8_post4584",
           "timeout": 864000.0,
           "document_embedding_encoding": "f32_le_b64",

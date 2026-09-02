@@ -2,6 +2,8 @@
   "captured_at": "2026-09-01T23:30:30Z",
   "region": "us-west-2",
   "campaign": "treedb-cohere10m-qualification-20260901-post4584",
+  "snapshot_inventory_verified_at": "2026-09-02T00:51:58Z",
+  "campaign_snapshot_count": 1,
   "retained_snapshot": {
     "snapshot_id": "snap-08ce3b93c55890efe",
     "state": "completed",
