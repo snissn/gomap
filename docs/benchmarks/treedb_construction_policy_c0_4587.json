@@ -20,7 +20,7 @@
   ],
   "source_identity": {
     "accepted_baseline_commit": "fcc1d79696a9b7c6655b793f6224f6937e698ce5",
-    "definition_base_commit": "4629b2157c57618bee3e329529ff364e385fa73d",
+    "definition_base_commit": "05c7bd35b02196879dc4378248228927ed367517",
     "branch": "codex/4587-construction-policy",
     "gomap_root": "/mnt/fast4tb/gomap-4586-exec/issue-4587",
     "gomap_required_clean": true,
