@@ -73,7 +73,7 @@ def fail(message: str) -> None:
 def run(*argv: str, cwd: Path | None = None) -> str:
     result = subprocess.run(argv, cwd=cwd, check=True, text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    return result.stdout.strip()
+    return result.stdout.rstrip()
 
 
 def sha256_file(path: Path) -> str:
@@ -343,7 +343,7 @@ def validate_contract(contract: dict[str, Any], allow_draft: bool,
     exact(contract.get("trial_started"), False, "trial_started")
     exact(contract.get("scope"), "C0_ONLY", "scope")
     source = object_at(contract.get("source_identity"), "source_identity")
-    exact(source["definition_base_commit"], "b7191c104ab56d1e8aea0d8dcece641c7059c6b3",
+    exact(source["definition_base_commit"], "8cf3a6a8d19cf8615b5301795937048857464085",
           "definition base commit")
     graph = object_at(contract["experiment"]["graph"], "experiment.graph")
     exact(graph["ef_construction_coordinates"], COORDINATES, "C0 coordinates")
