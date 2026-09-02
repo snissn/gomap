@@ -31,6 +31,7 @@ class DecisionFixture:
         self.root = root
         self.contract = json.loads(CONTRACT_PATH.read_text())
         self.contract["commands"]["artifact_root"] = str(root.resolve())
+        self.contract["source_identity"]["gomap_root"] = str(HERE.parent)
         self.counter = 0
         self.service_binary = root / "treedb-document-service"
         self.service_binary.write_bytes(b"fixture service binary\n")
