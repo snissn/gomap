@@ -455,7 +455,7 @@ func (f *File) ensureGroupedFrameCache() *groupedFrameCache {
 	return cache
 }
 
-func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, expectedK int, expectedOffsets [MaxFrameK + 1]uint32, expectedRawLen uint32, subIndex int, dst []byte) (out []byte, usedDst bool, err error, hit bool) {
+func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, expectedK int, expectedOffsets *[MaxFrameK + 1]uint32, expectedRawLen uint32, subIndex int, dst []byte) (out []byte, usedDst bool, err error, hit bool) {
 	if f == nil || f.closed.Load() {
 		return nil, false, nil, false
 	}
@@ -853,7 +853,7 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 		return nil, false, ErrCorrupt, true
 	}
 	cacheableRaw := f.groupedFrameCacheAllowsRaw(int(rawLen))
-	if out, usedDst, err, hit := f.groupedFrameCacheReadTo(start, false, k, offsets, rawLen, subIndex, dst); hit {
+	if out, usedDst, err, hit := f.groupedFrameCacheReadTo(start, false, k, &offsets, rawLen, subIndex, dst); hit {
 		return out, usedDst, err, true
 	}
 

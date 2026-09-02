@@ -273,7 +273,7 @@ func (c *groupedFrameCache) shardFor(start int64, verifyCRC bool) *groupedFrameC
 	return &c.shards[int(h&uint64(len(c.shards)-1))]
 }
 
-func validateGroupedFrameCacheState(k int, offsets [MaxFrameK + 1]uint32, rawLen int) bool {
+func validateGroupedFrameCacheState(k int, offsets *[MaxFrameK + 1]uint32, rawLen int) bool {
 	if k <= 0 || k > MaxFrameK || rawLen <= 0 {
 		return false
 	}
@@ -291,7 +291,7 @@ func validateGroupedFrameCacheState(k int, offsets [MaxFrameK + 1]uint32, rawLen
 	return uint32(rawLen) == offsets[k]
 }
 
-func groupedFrameOffsetsEqual(a, b [MaxFrameK + 1]uint32, k int) bool {
+func groupedFrameOffsetsEqual(a, b *[MaxFrameK + 1]uint32, k int) bool {
 	if k < 0 || k > MaxFrameK {
 		return false
 	}
@@ -319,7 +319,7 @@ func (c *groupedFrameCache) releaseRaw(raw []byte, pooled bool) {
 	}
 }
 
-func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK int, expectedOffsets [MaxFrameK + 1]uint32, expectedRawLen uint32, subIndex int, dst []byte, f *File) (out []byte, usedDst bool, err error, hit bool) {
+func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK int, expectedOffsets *[MaxFrameK + 1]uint32, expectedRawLen uint32, subIndex int, dst []byte, f *File) (out []byte, usedDst bool, err error, hit bool) {
 	if c == nil || c.capacity <= 0 || len(c.shards) == 0 {
 		return nil, false, nil, false
 	}
@@ -342,7 +342,7 @@ func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK int, e
 			continue
 		}
 		slot.mu.RLock()
-		if slot.fp.Load() != wantFP || !slot.valid || slot.start != start || slot.verifyCRC != verifyCRC || slot.k != expectedK || slot.rawLen != expectedRawLen || !groupedFrameOffsetsEqual(slot.offsets, expectedOffsets, expectedK) {
+		if slot.fp.Load() != wantFP || !slot.valid || slot.start != start || slot.verifyCRC != verifyCRC || slot.k != expectedK || slot.rawLen != expectedRawLen || !groupedFrameOffsetsEqual(&slot.offsets, expectedOffsets, expectedK) {
 			slot.mu.RUnlock()
 			continue
 		}
@@ -398,7 +398,7 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 		}
 		return false
 	}
-	if !validateGroupedFrameCacheState(k, offsets, len(raw)) {
+	if !validateGroupedFrameCacheState(k, &offsets, len(raw)) {
 		c.skippedOversize.Add(1)
 		return false
 	}
