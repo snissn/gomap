@@ -51,6 +51,9 @@ type ColumnGraphBuildTiming struct {
 	NamespaceSync             time.Duration
 	NamespaceSyncCount        uint64
 	Publication               time.Duration
+	// ConstructionDecisions is present only when the owning CollectionManager
+	// enabled bounded construction diagnostics for this rebuild.
+	ConstructionDecisions *VectorIndexConstructionDecisionSnapshot
 }
 
 // VectorIndexStatus returns persisted-root and runtime status for a declared

@@ -26,6 +26,80 @@ import (
 
 var columnGraphRebuildBenchSinkV2A VectorIndexStatus
 
+func TestColumnGraphRebuildConstructionDecisionObserverOptIn(t *testing.T) {
+	const (
+		rowCount   = 96
+		dimensions = 16
+	)
+	rows := columnGraphRebuildSyntheticRowsV2A(rowCount, dimensions)
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, dimensions, 16, rows)
+	defer func() { _ = d.Close() }()
+
+	disabled, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("disabled RebuildVectorIndex: %v", err)
+	}
+	if disabled.ColumnGraphBuild.ConstructionDecisions != nil {
+		t.Fatalf("disabled rebuild exposed construction decisions: %+v", disabled.ColumnGraphBuild.ConstructionDecisions)
+	}
+	_, disabledRows := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
+	searchOptions := VectorIndexSearchOptions{
+		IndexName:        def.Name,
+		Query:            rows[0].vector,
+		TopK:             10,
+		EfSearch:         rowCount,
+		MaxDecodedBlocks: 1,
+	}
+	disabledSearch, err := col.SearchVectorIndex(searchOptions)
+	if err != nil {
+		t.Fatalf("disabled SearchVectorIndex: %v", err)
+	}
+
+	col.manager.SetVectorIndexConstructionDecisionObserverEnabled(true)
+	enabled, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("enabled RebuildVectorIndex: %v", err)
+	}
+	decisions := enabled.ColumnGraphBuild.ConstructionDecisions
+	if decisions == nil {
+		t.Fatal("enabled rebuild omitted construction decisions")
+	}
+	for name, phase := range map[string]VectorIndexConstructionDecisionPhaseSnapshot{
+		"planning":   decisions.Planning,
+		"reciprocal": decisions.Reciprocal,
+	} {
+		if phase.DigestXOR == 0 || phase.DigestSum == 0 || phase.Decisions == 0 {
+			t.Fatalf("%s missing decision digest/counts: %+v", name, phase)
+		}
+		if phase.DirectExactFP32Rows+phase.IndexedExactFP32Rows == 0 ||
+			phase.DirectExactFP32Calls+phase.IndexedExactFP32Calls == 0 {
+			t.Fatalf("%s missing exact FP32 row/call accounting: %+v", name, phase)
+		}
+		if phase.ApproximateScoreRows != 0 || phase.ApproximateScoreCalls != 0 {
+			t.Fatalf("%s exact construction reported approximate scores: %+v", name, phase)
+		}
+		if phase.Accepted+phase.Rejected == 0 ||
+			phase.Accepted+phase.Rejected != phase.DiversityPredicates ||
+			phase.DiversityCandidates == 0 ||
+			phase.DiversityComparisonsExecuted == 0 ||
+			phase.DiversityComparisonsRequested < phase.DiversityComparisonsExecuted ||
+			phase.ActiveWallNanos == 0 {
+			t.Fatalf("%s missing diversity/active-wall accounting: %+v", name, phase)
+		}
+	}
+	_, enabledRows := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
+	if !reflect.DeepEqual(enabledRows, disabledRows) {
+		t.Fatal("observer changed persisted column_graph topology")
+	}
+	enabledSearch, err := col.SearchVectorIndex(searchOptions)
+	if err != nil {
+		t.Fatalf("enabled SearchVectorIndex: %v", err)
+	}
+	if !reflect.DeepEqual(enabledSearch.Results, disabledSearch.Results) {
+		t.Fatalf("observer changed search results: disabled=%+v enabled=%+v", disabledSearch.Results, enabledSearch.Results)
+	}
+}
+
 func TestColumnGraphRebuildPinsIndexNamespaceUntilPublication4259(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online index vacuum is not supported on Windows")
