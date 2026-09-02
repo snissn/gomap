@@ -383,7 +383,7 @@ func validateTreeDBComparisonArtifact(artifact *treeDBComparisonArtifact, manife
 	if !isFullRevision(artifact.HarnessRevision) || artifact.BinarySHA256 != executableSHA {
 		return nil, fmt.Errorf("TreeDB artifact lacks exact clean harness/binary identity")
 	}
-	if len(artifact.Failures) != 0 || artifact.StorageBytes <= 0 || artifact.BuildReopenSeconds <= 0 ||
+	if len(artifact.Failures) != 0 || artifact.StorageBytes <= 0 || artifact.StoragePath == "" || !filepath.IsAbs(artifact.StoragePath) || artifact.BuildReopenSeconds <= 0 ||
 		artifact.BuildReopenSeconds > float64(manifest.Config.PhaseTimeoutSeconds) || artifact.QuerySeconds <= 0 ||
 		artifact.QuerySeconds > float64(manifest.Config.PhaseTimeoutSeconds) {
 		return nil, fmt.Errorf("TreeDB artifact failed or lacks bounded build/query/storage evidence")
@@ -1149,9 +1149,9 @@ func reserveComparisonOutputs(paths ...string) (func(), error) {
 	}
 	return cleanup, nil
 }
-func validateQdrantStorageBinding(recorded, supplied string) error {
+func validateComparisonStorageBinding(backend, recorded, supplied string) error {
 	if recorded == "" || !filepath.IsAbs(recorded) {
-		return fmt.Errorf("Qdrant artifact storage path is not absolute")
+		return fmt.Errorf("%s artifact storage path is not absolute", backend)
 	}
 	recordedCanonical, err := canonicalComparisonPath(recorded)
 	if err != nil {
@@ -1162,7 +1162,7 @@ func validateQdrantStorageBinding(recorded, supplied string) error {
 		return err
 	}
 	if recordedCanonical != suppliedCanonical {
-		return fmt.Errorf("Qdrant artifact storage path does not identify measured storage root")
+		return fmt.Errorf("%s artifact storage path does not identify measured storage root", backend)
 	}
 	return nil
 }
@@ -1213,7 +1213,10 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStorageP
 	if err := validateQdrantComparisonArtifact(&qdrant, manifest, manifestSHA, tree.HarnessRevision); err != nil {
 		return err
 	}
-	if err := validateQdrantStorageBinding(qdrant.Resources.StoragePath, qdrantStoragePath); err != nil {
+	if err := validateComparisonStorageBinding("Qdrant", qdrant.Resources.StoragePath, qdrantStoragePath); err != nil {
+		return err
+	}
+	if err := validateComparisonStorageBinding("TreeDB", tree.StoragePath, treeStoragePath); err != nil {
 		return err
 	}
 	treeStorageBytes, err := dirSize(treeStoragePath)

@@ -48,6 +48,7 @@ type treeDBComparisonArtifact struct {
 	BuildReopenSeconds   float64                     `json:"build_reopen_seconds"`
 	QuerySeconds         float64                     `json:"query_seconds"`
 	StorageBytes         int64                       `json:"storage_bytes"`
+	StoragePath          string                      `json:"storage_path"`
 	ProcessResources     comparisonProcessResources  `json:"process_resources"`
 	Lifecycle            lifecycleEvidence           `json:"lifecycle"`
 	Rows                 []applicationRow            `json:"rows"`
@@ -175,6 +176,10 @@ func runTreeDBComparisonEvidence(cfg applicationConfig, outputPath string) error
 	if err != nil {
 		return err
 	}
+	storagePath, err := canonicalComparisonPath(root)
+	if err != nil {
+		return fmt.Errorf("resolve TreeDB storage path: %w", err)
+	}
 	artifact := treeDBComparisonArtifact{
 		Schema: treeDBComparisonArtifactSchema, Authority: "BOUNDED_COMPARISON_EVIDENCE",
 		GeneratedAtUTC: time.Now().UTC().Format(time.RFC3339Nano), ManifestSHA256: manifestSHA,
@@ -182,7 +187,7 @@ func runTreeDBComparisonEvidence(cfg applicationConfig, outputPath string) error
 		BinarySHA256: provenance.BinarySHA256, FixtureSHA256: provenance.FixtureSHA256,
 		SemanticVectorSHA256: provenance.SemanticVectorSHA256, ConfigSHA256: manifest.ConfigSHA256,
 		Config: manifest.Config, SourceCount: len(manifest.Sources), ChunkCount: len(manifest.Chunks), QueryCount: len(manifest.Queries),
-		BuildReopenSeconds: buildReopenSeconds, QuerySeconds: querySeconds, StorageBytes: storageBytes,
+		BuildReopenSeconds: buildReopenSeconds, QuerySeconds: querySeconds, StorageBytes: storageBytes, StoragePath: storagePath,
 		Lifecycle: lifecycle, ProcessResources: resources, Rows: rows,
 	}
 	if _, err := validateTreeDBComparisonArtifact(&artifact, manifest, manifestSHA); err != nil {

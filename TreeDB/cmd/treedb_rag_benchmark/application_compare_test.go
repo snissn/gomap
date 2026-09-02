@@ -104,16 +104,20 @@ func TestReserveComparisonOutputsRejectsFilesystemAliases(t *testing.T) {
 	}
 }
 
-func TestValidateQdrantStorageBinding(t *testing.T) {
-	recorded := t.TempDir()
-	if err := validateQdrantStorageBinding(recorded, recorded); err != nil {
-		t.Fatalf("rejected matching storage path: %v", err)
-	}
-	if err := validateQdrantStorageBinding(recorded, t.TempDir()); err == nil {
-		t.Fatal("accepted unrelated storage path")
-	}
-	if err := validateQdrantStorageBinding("relative", recorded); err == nil {
-		t.Fatal("accepted relative recorded storage path")
+func TestValidateComparisonStorageBinding(t *testing.T) {
+	for _, backend := range []string{"TreeDB", "Qdrant"} {
+		t.Run(backend, func(t *testing.T) {
+			recorded := t.TempDir()
+			if err := validateComparisonStorageBinding(backend, recorded, recorded); err != nil {
+				t.Fatalf("rejected matching storage path: %v", err)
+			}
+			if err := validateComparisonStorageBinding(backend, recorded, t.TempDir()); err == nil {
+				t.Fatal("accepted unrelated storage path")
+			}
+			if err := validateComparisonStorageBinding(backend, "relative", recorded); err == nil {
+				t.Fatal("accepted relative recorded storage path")
+			}
+		})
 	}
 }
 

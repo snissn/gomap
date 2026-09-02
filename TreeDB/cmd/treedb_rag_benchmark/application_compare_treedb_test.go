@@ -38,7 +38,7 @@ func validTreeDBComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 		BinarySHA256:    mustCurrentExecutableSHA256(t),
 		FixtureSHA256:   manifest.FixtureSHA256, SemanticVectorSHA256: manifest.SemanticVectorSHA256,
 		ConfigSHA256: manifest.ConfigSHA256, Config: manifest.Config,
-		SourceCount: 18, ChunkCount: 54, QueryCount: 3, BuildReopenSeconds: 1, QuerySeconds: 1, StorageBytes: 1,
+		SourceCount: 18, ChunkCount: 54, QueryCount: 3, BuildReopenSeconds: 1, QuerySeconds: 1, StorageBytes: 1, StoragePath: t.TempDir(),
 		Lifecycle: lifecycleEvidence{ColdReopenParity: true, TextIndexParity: true, VectorIndexParity: true, ScalarIndexParity: true, QueryCollectionReopened: true},
 		ProcessResources: comparisonProcessResources{
 			Available: true, CPUSeconds: 1, PeakRSSBytes: 1024,
