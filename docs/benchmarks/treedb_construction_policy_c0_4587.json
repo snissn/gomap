@@ -1,0 +1,289 @@
+{
+  "schema_version": "treedb-construction-policy-4587/v2",
+  "authority": "FROZEN_AUTHORITATIVE",
+  "engineering_status": "QUALIFIED",
+  "execution_validity": "AUTHORIZED_NOT_STARTED",
+  "protocol_verdict": "PROTOCOL_ACCEPTED",
+  "scientific_inference": "none",
+  "issue": 4587,
+  "parent_issue": 4586,
+  "profile": "promotion",
+  "stage": "frozen",
+  "trial_started": false,
+  "scope": "C0_ONLY",
+  "forbidden": [
+    "production_default_change",
+    "C1_before_complete_C0_NO_GO",
+    "C2_without_parent_amendment",
+    "post_holdout_tuning",
+    "AWS"
+  ],
+  "source_identity": {
+    "accepted_baseline_commit": "fcc1d79696a9b7c6655b793f6224f6937e698ce5",
+    "definition_base_commit": "6beea3ace082eee8afe5dccf629cc1a533823bfc",
+    "branch": "codex/4587-construction-policy",
+    "gomap_root": "/mnt/fast4tb/gomap-4586-exec/issue-4587",
+    "gomap_required_clean": true,
+    "runtime_subtrees": {
+      "TreeDB/collections": "b63ddc3c69af7bc90549657a1b1fb1dbb7f759fa",
+      "cmd/treedb-document-service": "e33177fa50931a7c1e60221b80493fbd7c22fa95"
+    },
+    "runtime_blobs": {
+      "TreeDB/collections/vector_index.go": "9425de0db49f18ea5a2c8d4fd21e8010c2a0456f",
+      "TreeDB/collections/vector_index_ops.go": "ea54a52c50b1e29a25ef3aa39e6cc5b801c24395",
+      "TreeDB/collections/vector_index_rebuild.go": "b15037ecb6d4fbecf4c172770e61c4449f2ef438"
+    },
+    "harness_blobs": {
+      "scripts/treedb_vectordbbench_artifact.py": "bc9ceeea729ac837c3cce0e9e7c03320ffc0a967"
+    },
+    "vectordbbench": {
+      "root": "/mnt/fast4tb/codex-vectordbbench-4545",
+      "commit": "52a46b55e41c34cfb86f8d21eafb70b4cca19787",
+      "required_clean": true,
+      "subtrees": {
+        "vectordb_bench/backend/clients/treedb": "69fb911940af2c2d7d93c3664aef50a82f6ed4b0",
+        "vectordb_bench/backend/runner": "92d5d4d6acd32dff629bab5abacf7a274575dfa9",
+        "vectordb_bench/cli": "bfda581170a572454aaaa87983aa35aafb645aa1"
+      },
+      "blobs": {
+        "vectordb_bench/backend/dataset.py": "c249f91c983044694baebdbe6eab761922756d44",
+        "vectordb_bench/backend/task_runner.py": "ac95643f27fe6fefb4866f636c584fe0b07901da",
+        "vectordb_bench/backend/clients/treedb/cli.py": "478fd3ceb62de76f25e234a54cc66d9cbde74ad3"
+      }
+    },
+    "runtime": {
+      "go": "go1.26.0 linux/amd64",
+      "python": "3.10.12",
+      "pyarrow": "20.0.0",
+      "host_cpu": "11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz",
+      "physical_cores": 6,
+      "logical_cpus": 12,
+      "gomaxprocs": 12,
+      "storage_mount": "/mnt/fast4tb",
+      "filesystem": "ext4"
+    }
+  },
+  "datasets": {
+    "canonical_query_source": {
+      "rows": 1000,
+      "dimensions": 768,
+      "ids": "int64 0..999 in ascending source order",
+      "test_sha256": "a2ec76c907da22e5533ce31c1105e4fd4d3c4597915a7771d5e41897a95ecbed",
+      "neighbors_sha256": "30e7467766be3e2a6b167df16388a4a35e38fa6cc9e593fb659cce81ffde0940",
+      "test_path": "/mnt/fast4tb/treedb-4568-dataset-cohere250k/test.parquet",
+      "neighbors_path": "/mnt/fast4tb/treedb-4568-dataset-cohere250k/neighbors.parquet"
+    },
+    "partition": {
+      "algorithm": "sort query ordinals by (SHA256(seed || NUL || signed-int64-big-endian(query_id)), query_id, source_ordinal); selection is first 500 ranks; emit both partitions in source order",
+      "seed": "snissn/gomap#4587-c0-query-split-v1",
+      "selection_rows": 500,
+      "holdout_rows": 500,
+      "selection_ordinals_sha256": "8b13d4b20cecc10d0332e347ba99f71ef043152c85ba3c6d4b149d23088428c2",
+      "holdout_ordinals_sha256": "8dec75b203bc32ffc385553f5dc096a318fd4ffa93b80a934364da7d88b239cd",
+      "holdout_use": "untouched until the selected C0 winner and matched 1M efConstruction=300 control; no parameter change or rerun after inspection"
+    },
+    "screening": {
+      "name": "cohere-medium-250k-selection-v1",
+      "directory": "/mnt/fast4tb/treedb-4587-c0-inputs-draft/selection-250k",
+      "vectors": 250000,
+      "dimensions": 768,
+      "metric": "COSINE",
+      "files": {
+        "train.parquet": "27c6144b8ab65e24015775f18943690c30ac17df4e052745877f3663d350db0b",
+        "test.parquet": "0b8e69435dfdfe010d8017b4bf1456168866ac08ca20d6a27723172e89e525b9",
+        "neighbors.parquet": "babf22a38f63b8a119b5fcf9386ed0bb83eb97f6f11d25b794ce68e4a19e7c91"
+      }
+    },
+    "decision": {
+      "name": "cohere-medium-1m-holdout-v1",
+      "directory": "/mnt/fast4tb/treedb-4587-c0-inputs-draft/holdout-1m",
+      "vectors": 1000000,
+      "dimensions": 768,
+      "metric": "COSINE",
+      "files": {
+        "train.parquet": "023b16f7abafecda7c790a25f6eb3837367070f6ea8837be1f986fbd302ccf21",
+        "test.parquet": "f69442c9c5c0c6487d975e58740c8dd1092417e128de5f9800d4be69fb96c81c",
+        "neighbors.parquet": "6ef9523d55b8111e1c01dd0fd3363dd969ece21f40df6ce03c3f9d9a267e3c15"
+      }
+    }
+  },
+  "experiment": {
+    "family": "C0_no_code_exact_HNSW_construction_width",
+    "causal_difference": "changes the prospectively quality-gated efConstruction topology contract; it does not preserve graph bytes or resurrect exact-dot, worker, batch, epoch, replay, coalescing, chunking, scalar-u8 ordinary-diversity, Vamana, or landmark work",
+    "graph": {
+      "strategy": "column_graph",
+      "metric": "cosine",
+      "dimensions": 768,
+      "m": 16,
+      "ef_construction_coordinates": [128, 192, 256, 300],
+      "control_ef_construction": 300,
+      "row_order": "source parquet order",
+      "document_id": "source parquet id",
+      "tie_contract": "existing exact-FP32 production comparator and document-ID-derived level/tie behavior; no code or build-flag change"
+    },
+    "search": {
+      "top_k": 100,
+      "ef_search": 192,
+      "exact_route": "exact_hnsw_search_pack_v1",
+      "production_route": "quantized_rerank",
+      "score_plane": "embedding.scalar_u8.fast",
+      "configured_rerank_candidates": 400,
+      "effective_rerank_candidates": 192,
+      "diagnostic_transport": {
+        "stats_mode": "full_diagnostics",
+        "response_format": "full",
+        "require_vector_index_guards": true
+      },
+      "production_transport": {
+        "stats_mode": "production",
+        "response_format": "ids",
+        "require_vector_index_guards": false
+      },
+      "concurrency": 32,
+      "concurrency_duration_seconds": 30
+    },
+    "ordering": {
+      "screening_run_order": [128, 192, 256, 300],
+      "screening_repetitions": 1,
+      "small_determinism_repetitions": 2,
+      "decision_run_order": [300, "selected_screening_winner"],
+      "winner_order": [
+        "largest adjacency_reduction_fraction",
+        "smallest max(recall_loss, ndcg_loss)",
+        "lowest efConstruction"
+      ],
+      "screening_promotion_requires": "all GO gates except 1M projection, applied to the selection partition against the efConstruction=300 screening control, including at least 30% adjacency reduction",
+      "no_screening_winner": "C0_NO_GO; do not inspect holdout and do not run 1M",
+      "holdout_failure": "C0_NO_GO; no retuning or rerun; C1 may be designed only after recording the complete C0 disposition"
+    },
+    "isolation_and_noise": {
+      "lock_path": "/mnt/fast4tb/treedb-4587-c0.lock",
+      "gomaxprocs": 12,
+      "fixed_build_flags": ["-trimpath"],
+      "profiles_on_timed_rows": false,
+      "diagnostics_interval_seconds": 5,
+      "warmup": "no construction warmup; each diagnostic full-response route preflight immediately precedes its production-stats IDs-only row",
+      "repetition": "one timed build per frozen coordinate plus two untimed small deterministic builds; no A/A or quality-triggered rerun",
+      "captured_evidence": {
+        "artifact_owned_fresh_root": "validated by the lifecycle artifact manifest and base lifecycle validator",
+        "process_isolation": "checksum-bound isolation JSON records the lock path and complete competing gomap/VectorDBBench process snapshot",
+        "swap": "checksum-bound isolation JSON records numeric before, after, and peak used bytes; each must be zero",
+        "noise_action": "mark the entire matrix invalid and stop; rerun requires coordinator amendment before any quality inspection"
+      }
+    },
+    "required_metrics_per_run": {
+      "phase_seconds": ["adjacency", "optimize"],
+      "cpu_utilization": "cpu_utilization_logical_cores",
+      "determinism": [
+        "graph_config_checksum",
+        "small_repeat_checksum_a", "small_repeat_checksum_b",
+        "tie_row_order_digest_a", "tie_row_order_digest_b"
+      ],
+      "diagnostic_work_profile": [
+        "direct_exact_fp32_rows", "direct_exact_fp32_calls",
+        "indexed_exact_fp32_rows", "indexed_exact_fp32_calls",
+        "approximate_score_rows", "approximate_score_calls",
+        "search_visited_candidates_by_layer",
+        "diversity_candidates", "diversity_comparisons_requested", "diversity_comparisons_executed",
+        "diversity_rejection_position_distribution", "reciprocal_prune_work",
+        "worker_active_seconds", "dependency_barrier_wait_seconds", "goroutine_scheduler_seconds"
+      ],
+      "resources": [
+        "peak_rss_bytes", "peak_rss_anon_bytes", "peak_rss_file_bytes", "peak_mapped_bytes",
+        "peak_live_heap_bytes", "cumulative_allocated_bytes", "graph_bytes", "search_pack_bytes",
+        "persisted_bytes"
+      ],
+      "search_evidence_order": [
+        "diagnostic exact full_diagnostics/full with guards",
+        "production exact production/ids",
+        "diagnostic scalar_u8_rerank full_diagnostics/full with guards",
+        "production scalar_u8_rerank production/ids"
+      ],
+      "index_identity": [
+        "name", "generation", "dimension", "metric", "vector_strategy", "vector_m",
+        "vector_ef_construction", "vector_ef_search", "quantized_indexes"
+      ]
+    },
+    "go_gates": {
+      "minimum_adjacency_reduction_fraction": 0.30,
+      "maximum_absolute_recall_loss": 0.002,
+      "maximum_absolute_ndcg_loss": 0.002,
+      "minimum_production_qps_ratio": 0.95,
+      "maximum_concurrent_p99_ratio": 1.05,
+      "maximum_peak_rss_ratio": 1.0,
+      "maximum_unexplained_persisted_or_allocation_increase_bytes": 0,
+      "minimum_projected_10m_adjacency_reduction_fraction": 0.30,
+      "require_deterministic_identity": true,
+      "require_all_route_and_reopen_guardrails": true
+    }
+  },
+  "commands": {
+    "artifact_root": "/mnt/fast4tb/treedb-4587-c0-evidence",
+    "binary": "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
+    "build_argv": ["go", "build", "-trimpath", "-o", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service", "./cmd/treedb-document-service"],
+    "lifecycle_harness_argv_template": [
+      "python3", "scripts/treedb_vectordbbench_artifact.py",
+      "--out", "{artifact_root}",
+      "--vectordbbench-dir", "/mnt/fast4tb/codex-vectordbbench-4545",
+      "--service-bin", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
+      "--run-tests", "off", "--run-vdbbench", "--rows", "scalar", "--lifecycle",
+      "--case-type", "PerformanceCustomDataset", "--k", "100",
+      "--num-concurrency", "32", "--concurrency-duration", "30",
+      "--client-timeout", "3600", "--vdbbench-timeout", "36000",
+      "--m", "16", "--ef-construction", "{ef_construction}", "--ef-search", "192",
+      "--quantized-index-name", "embedding.scalar_u8.fast", "--rerank-candidates", "400",
+      "--num-per-batch", "500", "--diagnostics-interval", "5",
+      "--lifecycle-dataset-file", "{dataset_dir}/train.parquet",
+      "--lifecycle-dataset-name", "{dataset_name}",
+      "--lifecycle-vectors", "{vectors}", "--lifecycle-dimensions", "768",
+      "--index-prefix", "{index_prefix}", "--db-label", "{db_label}",
+      "--vdbbench-extra-args", "--custom-case-name {case_name} --custom-dataset-name {dataset_name} --custom-dataset-dir {dataset_dir} --custom-dataset-size {vectors} --custom-dataset-dim 768 --custom-dataset-file-count 1 --document-embedding-encoding f32_le_b64 --query-embedding-encoding f32_le --stats-mode production --response-format ids --skip-vector-index-guards"
+    ],
+    "existing_index_search": {
+      "service_argv_template": [
+        "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
+        "-dir", "{artifact_root}/treedb-data", "-addr", "{addr}", "-profile", "command_wal_durable"
+      ],
+      "probe_runner": "scripts/treedb_vdbbench_search_existing_index.py",
+      "probe_contract": "for each route, require exact open_index name/generation/dimension/metric/strategy/M/efConstruction/efSearch/score-plane identity, then checksum-bound full-diagnostic and production/IDs responses at expected_generation",
+      "vectordbbench_common_argv_template": [
+        "python", "-m", "vectordb_bench.cli.vectordbbench", "{subcommand}",
+        "--base-url", "{base_url}", "--index-name", "{index_name}",
+        "--skip-drop-old", "--skip-load", "--search-serial", "--search-concurrent",
+        "--m", "16", "--ef-construction", "{ef_construction}", "--ef-search", "192",
+        "--case-type", "PerformanceCustomDataset", "--k", "100",
+        "--num-concurrency", "32", "--concurrency-duration", "30",
+        "--custom-case-name", "{case_name}", "--custom-dataset-name", "{dataset_name}",
+        "--custom-dataset-dir", "{dataset_dir}", "--custom-dataset-size", "{vectors}",
+        "--custom-dataset-dim", "768", "--custom-dataset-file-count", "1",
+        "--query-embedding-encoding", "f32_le"
+      ],
+      "diagnostic_transport_argv": ["--stats-mode", "full_diagnostics", "--response-format", "full"],
+      "production_transport_argv": [
+        "--stats-mode", "production", "--response-format", "ids", "--skip-vector-index-guards"
+      ],
+      "subcommands": {
+        "exact": "treedbcolumngraphexact",
+        "scalar_u8_rerank": "treedbscalaru8rerank"
+      },
+      "route_extra_argv": {
+        "exact": [],
+        "scalar_u8_rerank": [
+          "--quantized-index-name", "embedding.scalar_u8.fast", "--quantized-rerank-candidates", "400"
+        ]
+      },
+      "identity_check": "the helper never creates or resets; the unmodified adapter's idempotent create_index then independently opens only a compatible existing index",
+      "required_stages": ["search_serial", "search_concurrent"],
+      "required_order": ["diagnostic_exact", "production_exact", "diagnostic_scalar_u8_rerank", "production_scalar_u8_rerank"]
+    },
+    "decision_packet": "/mnt/fast4tb/treedb-4587-c0-evidence/decision.json"
+  },
+  "result_schema": {
+    "schema_version": "treedb-construction-policy-4587-results/v2",
+    "allowed_verdicts": ["GO", "C0_NO_GO"],
+    "run_roles": ["screening_candidate", "screening_control", "decision_candidate", "decision_control"],
+    "run_cardinality": "exactly four ordered 250K rows, then either stop or exactly matched 1M control and selected winner",
+    "evidence_binding": "all manifests, isolation/measurement documents, index metadata, and canonical VectorDBBench results are checksum-bound; unknown or extra result rows are rejected",
+    "runs": []
+  }
+}
