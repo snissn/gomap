@@ -1242,10 +1242,11 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStorageP
 		ManifestSHA256:               manifestSHA, FixtureSHA256: manifest.FixtureSHA256,
 		SemanticVectorSHA256: manifest.SemanticVectorSHA256, ConfigSHA256: manifest.ConfigSHA256,
 		Rows: treeRows, Dispositions: []string{
-			"All TreeDB-versus-Qdrant latency rows are directional: lexical scoring differs; TreeDB dense/hybrid uses declared_column_graph_exact, while Qdrant HNSW is indexed and exact=false is requested but server planner selection is opaque.",
+			"Latency and QPS are transport-non-comparable directional diagnostics: TreeDB uses the in-process direct_collection surface, while Qdrant uses URL-backed HTTP query_points plus retrieve; lexical scoring also differs, TreeDB dense/hybrid uses declared_column_graph_exact, and Qdrant HNSW planner selection is opaque.",
 			"Parent collapse is disabled for both systems; chunk rankings are retained and parent recall is derived from frozen parent IDs.",
 			"The 18-source/54-chunk synthetic fixture is bounded comparison evidence, not a public winner claim.",
 			"CPU and RSS figures are scoped diagnostics, not cross-backend comparisons: TreeDB includes the in-process Go driver while Qdrant covers only the standalone server PID.",
+			"Durable-byte totals are storage-non-comparable diagnostics: the TreeDB root includes the source collection and separately projected query collection, while the Qdrant root contains only the 54-chunk query collection.",
 		}}
 	for _, cell := range qdrant.Cells {
 		report.Rows = append(report.Rows, applicationComparisonRow{Backend: "qdrant", Route: cell.Route, Filter: cell.Filter,
