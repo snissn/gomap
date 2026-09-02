@@ -1364,6 +1364,10 @@ func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture
 		for key, value := range result.result.Counters {
 			counters[key] += value
 		}
+		crossTenant, crossWorkspace, crossRange := applicationScopeViolations(fixture, cell.Filter, result.result.IDs)
+		counters["cross_tenant_results"] += float64(crossTenant)
+		counters["cross_workspace_results"] += float64(crossWorkspace)
+		counters["cross_range_results"] += float64(crossRange)
 	}
 	wall := time.Since(start).Seconds()
 	sort.Slice(samples, func(i, j int) bool { return samples[i].Ordinal < samples[j].Ordinal })

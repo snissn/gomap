@@ -56,6 +56,9 @@ func validTreeDBComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 			for _, counter := range ragCounterKeys {
 				counters[counter.Key] = 0
 			}
+			counters["cross_tenant_results"] = 0
+			counters["cross_workspace_results"] = 0
+			counters["cross_range_results"] = 0
 			if route == "vector_only" || route == "hybrid" {
 				vectorRoute = "declared_column_graph_exact"
 				counters["vector_candidates_examined"] = 54
@@ -160,6 +163,7 @@ func TestTreeDBComparisonValidatorRejectsMismatchedEvidence(t *testing.T) {
 		{"wrong exact vector route", func(a *treeDBComparisonArtifact) { a.Rows[4].Cell.VectorRoute = "brute_force" }},
 		{"missing vector counters", func(a *treeDBComparisonArtifact) { a.Rows[4].Counters["vector_candidates_examined"] = 0 }},
 		{"absent route counter", func(a *treeDBComparisonArtifact) { delete(a.Rows[0].Counters, "full_document_scan_fallbacks") }},
+		{"absent leakage counter", func(a *treeDBComparisonArtifact) { delete(a.Rows[0].Counters, "cross_tenant_results") }},
 		{"missing hybrid fusion counters", func(a *treeDBComparisonArtifact) { a.Rows[8].Counters["candidates_fused"] = 0 }},
 		{"wrong QPS", func(a *treeDBComparisonArtifact) { a.Rows[0].QPSMean++ }},
 		{"wrong latency", func(a *treeDBComparisonArtifact) { a.Rows[0].LatencyMSP95++ }},

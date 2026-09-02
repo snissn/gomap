@@ -409,9 +409,14 @@ func validateTreeDBComparisonArtifact(artifact *treeDBComparisonArtifact, manife
 				return nil, fmt.Errorf("TreeDB artifact cell %s/%s lacks required counter %q", route, row.Cell.Filter, counter.Key)
 			}
 		}
+		for _, key := range []string{"cross_tenant_results", "cross_workspace_results", "cross_range_results"} {
+			if _, ok := row.Counters[key]; !ok {
+				return nil, fmt.Errorf("TreeDB artifact cell %s/%s lacks required counter %q", route, row.Cell.Filter, key)
+			}
+		}
 		if row.Status != "supported" || row.Errors != 0 || row.Counters["full_document_scan_fallbacks"] != 0 ||
 			row.Counters["cross_tenant_results"] != 0 || row.Counters["cross_workspace_results"] != 0 ||
-			row.Counters["documents_fetched"] > float64(manifest.Config.TopK) ||
+			row.Counters["cross_range_results"] != 0 || row.Counters["documents_fetched"] > float64(manifest.Config.TopK) ||
 			len(row.Repetitions) != manifest.Config.Repetitions ||
 			len(row.Samples) != manifest.Config.SamplesPerCell*manifest.Config.Repetitions {
 			return nil, fmt.Errorf("TreeDB artifact cell %s/%s is partial, leaking, unbounded, failed, or fell back", route, row.Cell.Filter)
