@@ -22,6 +22,12 @@ func main() {
 		hostNote             = flag.String("host-note", "", "free-form host note recorded in provenance")
 		smoke                = flag.Bool("smoke", false, "run a bounded diagnostic that cannot claim final p99/QPS evidence")
 		dumpInputs           = flag.String("dump-semantic-inputs", "", "write the exact semantic generation input manifest and exit")
+		dumpComparison       = flag.String("dump-application-comparison-manifest", "", "write the frozen #4331 application comparison manifest and exit")
+		compareManifest      = flag.String("application-comparison-manifest", "", "frozen #4331 comparison manifest")
+		compareTree          = flag.String("application-comparison-treedb", "", "TreeDB application artifact for #4331 validation")
+		compareQdrant        = flag.String("application-comparison-qdrant", "", "Qdrant artifact for #4331 validation")
+		compareOutput        = flag.String("application-comparison-output", "", "validated #4331 comparison JSON")
+		compareReport        = flag.String("application-comparison-report", "", "validated #4331 comparison markdown")
 		dumpMinima           = flag.String("dump-minima-manifest", "", "write the frozen compact Minima fixture/operation manifest and exit")
 		minimaTree           = flag.String("minima-treedb-evidence", "", "TreeDB partial backend evidence to compare and validate")
 		validateMinima       = flag.String("validate-minima-artifact", "", "validate one Minima JSON artifact fail closed and exit")
@@ -88,6 +94,26 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("wrote %s\n", *dumpInputs)
+		return
+	}
+	if *dumpComparison != "" {
+		if err := writeApplicationComparisonManifest(*dumpComparison); err != nil {
+			fmt.Fprintf(os.Stderr, "treedb_rag_benchmark: dump application comparison manifest: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("wrote %s\n", *dumpComparison)
+		return
+	}
+	if *compareManifest != "" || *compareTree != "" || *compareQdrant != "" || *compareOutput != "" || *compareReport != "" {
+		if *compareManifest == "" || *compareTree == "" || *compareQdrant == "" || *compareOutput == "" || *compareReport == "" {
+			fmt.Fprintln(os.Stderr, "treedb_rag_benchmark: application comparison requires manifest, TreeDB, Qdrant, JSON output, and markdown report paths")
+			os.Exit(2)
+		}
+		if err := compareApplicationEvidence(*compareManifest, *compareTree, *compareQdrant, *compareOutput, *compareReport); err != nil {
+			fmt.Fprintf(os.Stderr, "treedb_rag_benchmark: application comparison failed closed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("wrote %s\nwrote %s\n", *compareOutput, *compareReport)
 		return
 	}
 	cfg.Dir = strings.TrimSpace(*dir)
