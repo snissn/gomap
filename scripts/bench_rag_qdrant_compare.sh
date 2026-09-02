@@ -134,6 +134,8 @@ run_capped 90 consolidation "$COMPARATOR_BIN" \
 	-application-comparison-manifest "$MANIFEST" \
 	-application-comparison-treedb "$TREEDB_ARTIFACT" \
 	-application-comparison-qdrant "$QDRANT_ARTIFACT" \
+	-application-comparison-treedb-storage "$TREEDB_DIR" \
+	-application-comparison-qdrant-storage "$QDRANT_STORAGE_PATH" \
 	-application-comparison-output "$COMPARISON_JSON" \
 	-application-comparison-report "$COMPARISON_MD"
 printf 'run_dir=%s\nphase_status=%s\nmanifest=%s\ntreedb=%s\nqdrant=%s\ncomparison_json=%s\ncomparison_md=%s\n' "$RUN_DIR" "$PHASE_STATUS" "$MANIFEST" "$TREEDB_ARTIFACT" "$QDRANT_ARTIFACT" "$COMPARISON_JSON" "$COMPARISON_MD"

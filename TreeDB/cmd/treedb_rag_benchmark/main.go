@@ -27,6 +27,8 @@ func main() {
 		compareManifest      = flag.String("application-comparison-manifest", "", "frozen #4331 comparison manifest")
 		compareTree          = flag.String("application-comparison-treedb", "", "TreeDB application artifact for #4331 validation")
 		compareQdrant        = flag.String("application-comparison-qdrant", "", "Qdrant artifact for #4331 validation")
+		compareTreeStorage   = flag.String("application-comparison-treedb-storage", "", "TreeDB storage root for independent size validation")
+		compareQdrantStorage = flag.String("application-comparison-qdrant-storage", "", "Qdrant storage root for independent size validation")
 		compareOutput        = flag.String("application-comparison-output", "", "validated #4331 comparison JSON")
 		compareReport        = flag.String("application-comparison-report", "", "validated #4331 comparison markdown")
 		dumpMinima           = flag.String("dump-minima-manifest", "", "write the frozen compact Minima fixture/operation manifest and exit")
@@ -105,12 +107,12 @@ func main() {
 		fmt.Printf("wrote %s\n", *dumpComparison)
 		return
 	}
-	if *compareManifest != "" || *compareTree != "" || *compareQdrant != "" || *compareOutput != "" || *compareReport != "" {
-		if *compareManifest == "" || *compareTree == "" || *compareQdrant == "" || *compareOutput == "" || *compareReport == "" {
-			fmt.Fprintln(os.Stderr, "treedb_rag_benchmark: application comparison requires manifest, TreeDB, Qdrant, JSON output, and markdown report paths")
+	if *compareManifest != "" || *compareTree != "" || *compareQdrant != "" || *compareTreeStorage != "" || *compareQdrantStorage != "" || *compareOutput != "" || *compareReport != "" {
+		if *compareManifest == "" || *compareTree == "" || *compareQdrant == "" || *compareTreeStorage == "" || *compareQdrantStorage == "" || *compareOutput == "" || *compareReport == "" {
+			fmt.Fprintln(os.Stderr, "treedb_rag_benchmark: application comparison requires manifest, TreeDB, Qdrant, both storage roots, JSON output, and markdown report paths")
 			os.Exit(2)
 		}
-		if err := compareApplicationEvidence(*compareManifest, *compareTree, *compareQdrant, *compareOutput, *compareReport); err != nil {
+		if err := compareApplicationEvidence(*compareManifest, *compareTree, *compareQdrant, *compareTreeStorage, *compareQdrantStorage, *compareOutput, *compareReport); err != nil {
 			fmt.Fprintf(os.Stderr, "treedb_rag_benchmark: application comparison failed closed: %v\n", err)
 			os.Exit(1)
 		}

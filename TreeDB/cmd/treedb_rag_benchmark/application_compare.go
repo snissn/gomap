@@ -987,7 +987,7 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 	return nil
 }
 
-func compareApplicationEvidence(manifestPath, treePath, qdrantPath, outputPath, markdownPath string) error {
+func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStoragePath, qdrantStoragePath, outputPath, markdownPath string) error {
 	var manifest applicationComparisonManifest
 	rawManifest, err := readJSONFile(manifestPath, &manifest)
 	if err != nil {
@@ -1012,6 +1012,17 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, outputPath, 
 	if err := validateQdrantComparisonArtifact(&qdrant, manifest, manifestSHA, tree.HarnessRevision); err != nil {
 		return err
 	}
+	treeStorageBytes, err := dirSize(treeStoragePath)
+	if err != nil {
+		return fmt.Errorf("measure TreeDB storage: %w", err)
+	}
+	qdrantStorageBytes, err := dirSize(qdrantStoragePath)
+	if err != nil {
+		return fmt.Errorf("measure Qdrant storage: %w", err)
+	}
+	if treeStorageBytes != tree.StorageBytes || qdrantStorageBytes != qdrant.Resources.DurableBytes {
+		return fmt.Errorf("backend storage totals do not match live storage roots")
+	}
 	report := applicationComparisonReport{Schema: applicationComparisonSchema, State: "validated",
 		HarnessRevision: tree.HarnessRevision, TreeDBBinarySHA256: tree.BinarySHA256,
 		TreeDBProcessResources: tree.ProcessResources, TreeDBStorageBytes: tree.StorageBytes, QdrantResources: qdrant.Resources,
@@ -1024,6 +1035,7 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, outputPath, 
 			"All TreeDB-versus-Qdrant latency rows are directional: lexical scoring differs; TreeDB dense/hybrid uses declared_column_graph_exact, while Qdrant HNSW is indexed and exact=false is requested but server planner selection is opaque.",
 			"Parent collapse is disabled for both systems; chunk rankings are retained and parent recall is derived from frozen parent IDs.",
 			"The 18-source/54-chunk synthetic fixture is bounded comparison evidence, not a public winner claim.",
+			"CPU and RSS figures are scoped diagnostics, not cross-backend comparisons: TreeDB includes the in-process Go driver while Qdrant covers only the standalone server PID.",
 		}}
 	for _, cell := range qdrant.Cells {
 		report.Rows = append(report.Rows, applicationComparisonRow{Backend: "qdrant", Route: cell.Route, Filter: cell.Filter,
