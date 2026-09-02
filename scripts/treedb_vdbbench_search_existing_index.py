@@ -319,7 +319,7 @@ def validate_production(response: dict[str, Any], args: argparse.Namespace) -> N
 
 def vdbbench_command(args: argparse.Namespace, kind: str) -> list[str]:
     command = [
-        sys.executable, "-m", "vectordb_bench.cli.vectordbbench",
+        str(args.python_executable), "-m", "vectordb_bench.cli.vectordbbench",
         "treedbcolumngraphexact" if args.route == "exact" else "treedbscalaru8rerank",
         "--base-url", args.base_url, "--index-name", args.index_name,
         "--skip-drop-old", "--skip-load", "--search-serial", "--search-concurrent",
@@ -442,6 +442,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=3600.0)
     parser.add_argument("--service-bin", required=True, type=Path)
     parser.add_argument("--service-binary-sha256", required=True)
+    parser.add_argument("--python-executable", required=True, type=Path)
+    parser.add_argument("--python-sha256", required=True)
     parser.add_argument("--search-isolation-out", required=True, type=Path)
     parser.add_argument("--exclusive-lock", required=True, type=Path)
     parser.add_argument("--diagnostics-interval", type=float, default=5.0)
@@ -456,7 +458,7 @@ def parse_args() -> argparse.Namespace:
         fail("effective rerank candidates cannot exceed the configured shortlist")
     args.artifact_root = args.artifact_root.resolve()
     for name in ("manifest_sha256", "dataset_sha256", "lifecycle_sha256",
-                 "service_binary_sha256"):
+                 "service_binary_sha256", "python_sha256"):
         if re.fullmatch(r"[0-9a-f]{64}", getattr(args, name)) is None:
             fail(f"{name} must be a lowercase SHA-256")
     if re.fullmatch(r"[0-9a-f]{40}", args.execution_commit) is None:
@@ -473,6 +475,10 @@ def parse_args() -> argparse.Namespace:
     args.service_bin = args.service_bin.resolve()
     if not args.service_bin.is_file() or sha256_file(args.service_bin) != args.service_binary_sha256:
         fail("authorized search service binary checksum mismatch")
+    if (not args.python_executable.is_absolute()
+            or not args.python_executable.is_file()
+            or sha256_file(args.python_executable) != args.python_sha256):
+        fail("frozen VectorDBBench Python interpreter checksum mismatch")
     paths = (
         args.query_json, args.metadata_out, args.diagnostic_response_out,
         args.production_response_out, args.diagnostic_result, args.production_result,

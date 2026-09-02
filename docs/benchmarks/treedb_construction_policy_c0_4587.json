@@ -54,6 +54,8 @@
     "runtime": {
       "go": "go1.26.0 linux/amd64",
       "python": "3.10.12",
+      "python_executable": "/usr/bin/python3",
+      "python_sha256": "7d51cd6b48b521277f5caa4610a82126e315fa2be4df069823a8b1eeb5bd4a86",
       "pyarrow": "20.0.0",
       "host_cpu": "11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz",
       "physical_cores": 6,
@@ -291,13 +293,15 @@
         "--expected-generation", "{expected_generation}", "--route", "{route}",
         "--service-bin", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
         "--service-binary-sha256", "{service_binary_sha256}",
+        "--python-executable", "/usr/bin/python3",
+        "--python-sha256", "7d51cd6b48b521277f5caa4610a82126e315fa2be4df069823a8b1eeb5bd4a86",
         "--search-isolation-out", "{artifact_root}/search-isolation-{route}.json",
         "--exclusive-lock", "/mnt/fast4tb/treedb-4587-c0.lock",
         "--diagnostics-interval", "5", "--service-health-timeout", "60"
       ],
       "probe_contract": "for each route, the helper acquires the frozen exclusive lock, starts isolation sampling, launches the exact authorized service binary against the retained artifact data root, waits healthy, then executes diagnostic probe to canonical VectorDBBench and production probe to canonical VectorDBBench sequentially. It terminates the service, closes monitoring, writes checksum-bound isolation and origin sidecars, and only then releases the lock. Preexisting outputs, lock contention, binary/argv/data-root drift, service exit, swap, competing processes, sampling errors, reruns, stale results, reordered routes, or ledger rebinding fail closed.",
       "vectordbbench_common_argv_template": [
-        "python", "-m", "vectordb_bench.cli.vectordbbench", "{subcommand}",
+        "/usr/bin/python3", "-m", "vectordb_bench.cli.vectordbbench", "{subcommand}",
         "--base-url", "{base_url}", "--index-name", "{index_name}",
         "--skip-drop-old", "--skip-load", "--search-serial", "--search-concurrent",
         "--m", "16", "--ef-construction", "{ef_construction}", "--ef-search", "192",
@@ -501,7 +505,7 @@
     },
     "winner_selection_binding": {
       "exact_keys": ["path", "sha256"],
-      "schema_version": "treedb-construction-policy-4587-winner-selection/v1",
+      "schema_version": "treedb-construction-policy-4587-winner-selection/v2",
       "no_winner_value": null
     },
     "search_origin_schema_version": "treedb-construction-policy-4587-search-origin/v3",

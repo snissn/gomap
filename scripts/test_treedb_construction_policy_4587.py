@@ -445,6 +445,8 @@ class DecisionFixture:
                 "--ef-construction", str(ef), "--expected-generation", "1", "--route", route,
                 "--service-bin", self.contract["commands"]["binary"],
                 "--service-binary-sha256", binary_sha,
+                "--python-executable", self.contract["source_identity"]["runtime"]["python_executable"],
+                "--python-sha256", self.contract["source_identity"]["runtime"]["python_sha256"],
                 "--search-isolation-out", str(root / f"search-isolation-{route}.json"),
                 "--exclusive-lock", self.contract["experiment"]["isolation_and_noise"]["lock_path"],
                 "--diagnostics-interval", "5", "--service-health-timeout", "60",
@@ -453,7 +455,9 @@ class DecisionFixture:
                 "schema_version": "treedb-construction-policy-4587-probe-command/v2",
                 "sequence": position,
                 "argv": argv,
-                "vdbbench_argv": ["python3"] + policy.expected_vdbbench_argv(
+                "vdbbench_argv": [
+                    self.contract["source_identity"]["runtime"]["python_executable"],
+                ] + policy.expected_vdbbench_argv(
                     {"scale": scale, "role": role, "dataset": dataset, "configuration": config},
                     f"index-ef{ef}", kind, route, "http://127.0.0.1:6060"),
                 "vdbbench_env": {
@@ -582,13 +586,18 @@ class DecisionFixture:
         for run in runs[:4]:
             measurement_path = Path(run["artifact"]["root"]) / run["measurement_evidence"]["path"]
             origin = json.loads(measurement_path.read_text())["origin"]
-            completed.append(policy.utc_timestamp(origin["lifecycle_completed_at"], "fixture completion"))
+            search_origin_path = (
+                Path(run["artifact"]["root"]) / run["search_evidence"][-1]["origin"]["path"]
+            )
+            search_completed_at = json.loads(search_origin_path.read_text())["search_completed_at"]
+            completed.append(policy.utc_timestamp(search_completed_at, "fixture search completion"))
             screening_rows.append({
                 "run_id": run["run_id"],
                 "artifact_root": run["artifact"]["root"],
                 "measurement_sha256": run["measurement_evidence"]["sha256"],
                 "lifecycle_sha256": origin["lifecycle_sha256"],
                 "completed_at": origin["lifecycle_completed_at"],
+                "search_completed_at": search_completed_at,
             })
         selected_at = selected_at or max(completed) + timedelta(minutes=1)
         event = {
@@ -1043,7 +1052,7 @@ class ValidatorMutations(unittest.TestCase):
         screening_completed = json.loads(screening_measurement.read_text())["origin"]["lifecycle_completed_at"]
         self.fixture.rewrite_winner_selection(
             packet, lambda value: value.update({"selected_at": screening_completed}))
-        self.assert_invalid(packet, "after all screening lifecycles")
+        self.assert_invalid(packet, "after all screening search envelopes")
         packet = self.fixture.go_packet()
         screening_measurement = Path(packet["runs"][3]["artifact"]["root"]) / "measurements.json"
         screening_completed = policy.utc_timestamp(
@@ -1053,7 +1062,7 @@ class ValidatorMutations(unittest.TestCase):
             packet, lambda value: value.update({
                 "selected_at": (screening_completed + timedelta(seconds=1)).isoformat(),
             }))
-        self.assert_invalid(packet, "winner selection must follow every completed screening search")
+        self.assert_invalid(packet, "after all screening search envelopes")
 
         packet = self.fixture.go_packet()
         holdout_measurement = Path(packet["runs"][4]["artifact"]["root"]) / "measurements.json"
@@ -1230,6 +1239,7 @@ class ValidatorMutations(unittest.TestCase):
                 query_json=query,
                 run_id="screening-ef128",
                 metadata_out=metadata,
+                python_executable=Path("/usr/bin/python3"),
             )
 
             def execute(command, *, cwd, env):
@@ -1257,6 +1267,14 @@ class ValidatorMutations(unittest.TestCase):
                 record,
             )
 
+
+    def test_canonical_vdbbench_interpreter_is_bound(self) -> None:
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_command(
+            run, 0, lambda value: value["vdbbench_argv"].__setitem__(
+                0, "/usr/local/bin/python3"))
+        self.assert_invalid(packet, "frozen Python interpreter")
 
     def test_canonical_vdbbench_command_is_bound(self) -> None:
         packet = self.fixture.no_go_packet()

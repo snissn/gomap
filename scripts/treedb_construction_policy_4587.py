@@ -22,7 +22,7 @@ RESULT_SCHEMA = "treedb-construction-policy-4587-results/v5"
 AUTHORIZATION_SCHEMA = "treedb-construction-policy-4587-execution-authorization/v1"
 MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v4"
 ISOLATION_SCHEMA = "treedb-construction-policy-4587-isolation/v2"
-WINNER_SELECTION_SCHEMA = "treedb-construction-policy-4587-winner-selection/v1"
+WINNER_SELECTION_SCHEMA = "treedb-construction-policy-4587-winner-selection/v2"
 SEARCH_ORIGIN_SCHEMA = "treedb-construction-policy-4587-search-origin/v3"
 COORDINATES = [128, 192, 256, 300]
 CONTROL = 300
@@ -758,8 +758,9 @@ def probe_argv_options(argv: Any, name: str) -> dict[str, str]:
         "--role", "--partition", "--lifecycle-sha256", "--lifecycle-started-at",
         "--lifecycle-completed-at", "--ef-construction", "--expected-generation", "--route",
         "--dataset-name", "--dataset-dir", "--vectordbbench-dir", "--service-bin",
-        "--service-binary-sha256", "--search-isolation-out", "--exclusive-lock",
-        "--diagnostics-interval", "--service-health-timeout",
+        "--service-binary-sha256", "--python-executable", "--python-sha256",
+        "--search-isolation-out", "--exclusive-lock", "--diagnostics-interval",
+        "--service-health-timeout",
     }, f"{name}.argv frozen options")
     return options
 def expected_vdbbench_argv(
@@ -868,6 +869,11 @@ def validate_search_evidence(
         "-addr", f"{parsed_base_url.hostname}:{parsed_base_url.port}",
         "-profile", "command_wal_durable",
     ]
+    runtime = contract["source_identity"]["runtime"]
+    python_executable = runtime["python_executable"]
+    python_sha256 = full_sha(runtime["python_sha256"], "VectorDBBench Python SHA-256", 64)
+    if sha256_file(Path(python_executable)) != python_sha256:
+        fail("frozen VectorDBBench Python interpreter checksum mismatch")
     route_envelopes: dict[
         str, tuple[datetime, datetime, datetime, datetime, Any]
     ] = {}
@@ -970,13 +976,12 @@ def validate_search_evidence(
             fail("index metadata name must be non-empty")
         options = probe_argv_options(
             command["argv"], f"search_evidence[{position}] command")
+        vdbbench_argv = command["vdbbench_argv"]
         exact(options["--base-url"], expected_base_url,
               f"search_evidence[{position}] executed service base URL")
-        vdbbench_argv = command["vdbbench_argv"]
         if (not isinstance(vdbbench_argv, list) or not vdbbench_argv
-                or not isinstance(vdbbench_argv[0], str)
-                or not Path(vdbbench_argv[0]).name.startswith("python")):
-            fail(f"search_evidence[{position}] canonical command must execute Python VectorDBBench")
+                or vdbbench_argv[0] != python_executable):
+            fail(f"search_evidence[{position}] canonical command must execute the frozen Python interpreter")
         exact(
             vdbbench_argv[1:],
             expected_vdbbench_argv(
@@ -1022,6 +1027,8 @@ def validate_search_evidence(
             "--dataset-dir": run_row["dataset"]["directory"],
             "--vectordbbench-dir": expected_vdbbench_dir,
             "--service-bin": contract["commands"]["binary"],
+            "--python-executable": python_executable,
+            "--python-sha256": python_sha256,
             "--service-binary-sha256": expected_binary_sha256,
             "--search-isolation-out": str(root / f"search-isolation-{item['route']}.json"),
             "--exclusive-lock": contract["experiment"]["isolation_and_noise"]["lock_path"],
@@ -1498,13 +1505,14 @@ def validate_winner_selection(binding: Any, contract: dict[str, Any], authorizat
         "measurement_sha256": item["row"]["measurement_evidence"]["sha256"],
         "lifecycle_sha256": item["timing"]["sha256"],
         "completed_at": item["timing"]["completed_at"],
+        "search_completed_at": item["search_completed"].isoformat(),
     } for item in screening]
     exact(event["screening_runs"], expected_runs, "winner selection screening evidence")
     exact(event["selected_ef_construction"], winner["row"]["ef_construction"],
           "winner selection coordinate")
     selected_at = utc_timestamp(event["selected_at"], "winner selection timestamp")
-    if any(item["timing"]["completed"] >= selected_at for item in screening):
-        fail("winner selection must occur after all screening lifecycles complete")
+    if any(item["search_completed"] >= selected_at for item in screening):
+        fail("winner selection must occur after all screening search envelopes complete")
     return selected_at
 
 
@@ -1618,6 +1626,9 @@ def generate_winner_selection(contract: dict[str, Any], runs_path: Path, output_
         (250000, 300, "selection", "screening_control"),
     ], "screening cardinality and order")
     validate_nonoverlapping_lifecycles(screening, "screening")
+    for previous, current in zip(screening, screening[1:]):
+        if previous["search_completed"] >= current["timing"]["started"]:
+            fail("each screening search envelope must complete before the next lifecycle starts")
     exact(
         {item["service_binary_sha256"] for item in screening},
         {authorization["service_binary_sha256"]},
@@ -1627,8 +1638,8 @@ def generate_winner_selection(contract: dict[str, Any], runs_path: Path, output_
     if winner is None:
         fail("screening has no winner; holdout execution is forbidden")
     selected_at = datetime.now(timezone.utc)
-    if any(item["timing"]["completed"] >= selected_at for item in screening):
-        fail("winner selection timestamp does not follow all screening lifecycles")
+    if any(item["search_completed"] >= selected_at for item in screening):
+        fail("winner selection timestamp does not follow all screening search envelopes")
     root = Path(contract["commands"]["artifact_root"]).resolve()
     output_path = output_path.resolve()
     try:
@@ -1646,6 +1657,7 @@ def generate_winner_selection(contract: dict[str, Any], runs_path: Path, output_
             "measurement_sha256": item["row"]["measurement_evidence"]["sha256"],
             "lifecycle_sha256": item["timing"]["sha256"],
             "completed_at": item["timing"]["completed_at"],
+            "search_completed_at": item["search_completed"].isoformat(),
         } for item in screening],
         "selected_ef_construction": winner["row"]["ef_construction"],
         "selected_at": selected_at.isoformat(),
