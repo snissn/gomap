@@ -44,16 +44,37 @@ QDRANT_BIN=$(cd -- "$(dirname -- "$QDRANT_BIN")" && pwd -P)/$(basename -- "$QDRA
 QDRANT_RELEASE_ASSET=$(cd -- "$(dirname -- "$QDRANT_RELEASE_ASSET")" && pwd -P)/$(basename -- "$QDRANT_RELEASE_ASSET")
 QDRANT_CLIENT_LOCK=$(cd -- "$(dirname -- "$QDRANT_CLIENT_LOCK")" && pwd -P)/$(basename -- "$QDRANT_CLIENT_LOCK")
 
-cleanup() {
-	if [[ -s "$PID_FILE" ]]; then
-		local saved_pid saved_identity current_identity
-		{ IFS= read -r saved_pid; IFS= read -r saved_identity || true; } <"$PID_FILE"
-		current_identity=$(ps -o lstart= -o command= -p "$saved_pid" 2>/dev/null || true)
-		if [[ -n "$saved_identity" && "$current_identity" == "$saved_identity" ]]; then
-			kill "$saved_pid" >/dev/null 2>&1 || true
-			wait "$saved_pid" >/dev/null 2>&1 || true
-		fi
+stop_qdrant() {
+	if [[ ! -s "$PID_FILE" ]]; then
+		return 0
 	fi
+	local saved_pid saved_identity current_identity attempt
+	{ IFS= read -r saved_pid; IFS= read -r saved_identity || true; } <"$PID_FILE"
+	current_identity=$(ps -o lstart= -o command= -p "$saved_pid" 2>/dev/null || true)
+	if [[ -z "$saved_identity" || "$current_identity" != "$saved_identity" ]]; then
+		return 0
+	fi
+	kill "$saved_pid"
+	for ((attempt = 0; attempt < 100; attempt++)); do
+		current_identity=$(ps -o lstart= -o command= -p "$saved_pid" 2>/dev/null || true)
+		if [[ "$current_identity" != "$saved_identity" ]]; then
+			return 0
+		fi
+		sleep 0.1
+	done
+	kill -KILL "$saved_pid"
+	for ((attempt = 0; attempt < 20; attempt++)); do
+		current_identity=$(ps -o lstart= -o command= -p "$saved_pid" 2>/dev/null || true)
+		if [[ "$current_identity" != "$saved_identity" ]]; then
+			return 0
+		fi
+		sleep 0.1
+	done
+	echo "Qdrant process did not exit: $saved_identity" >&2
+	return 1
+}
+cleanup() {
+	stop_qdrant || true
 }
 trap cleanup EXIT
 mkdir -p "$RUN_DIR"
@@ -144,7 +165,7 @@ run_capped 300 qdrant-build-query-reopen "$VENV/bin/python" benchmarks/vector_db
 	--harness-revision "$HARNESS_REVISION" --storage-path "$QDRANT_STORAGE_PATH" \
 	--restart-hook "$RESTART_HOOK" --server-pid "$PID" --server-binary "$QDRANT_BIN" \
 	--server-release-asset "$QDRANT_RELEASE_ASSET" --client-lock "$QDRANT_CLIENT_LOCK"
-cleanup
+stop_qdrant
 : >"$PID_FILE"
 run_capped 90 consolidation "$COMPARATOR_BIN" \
 	-application-comparison-manifest "$MANIFEST" \
