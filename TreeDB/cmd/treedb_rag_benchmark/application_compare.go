@@ -42,13 +42,14 @@ type qdrantComparisonIndexProof struct {
 }
 
 type qdrantComparisonServer struct {
-	Version      string                     `json:"version"`
-	Deployment   string                     `json:"deployment"`
-	BinarySHA256 string                     `json:"binary_sha256"`
-	Identity     string                     `json:"identity"`
-	LocalMode    bool                       `json:"local_mode"`
-	Config       map[string]any             `json:"config"`
-	IndexProof   qdrantComparisonIndexProof `json:"index_proof"`
+	Version            string                     `json:"version"`
+	Deployment         string                     `json:"deployment"`
+	BinarySHA256       string                     `json:"binary_sha256"`
+	ReleaseAssetSHA256 string                     `json:"release_asset_sha256"`
+	Identity           string                     `json:"identity"`
+	LocalMode          bool                       `json:"local_mode"`
+	Config             map[string]any             `json:"config"`
+	IndexProof         qdrantComparisonIndexProof `json:"index_proof"`
 }
 
 type qdrantComparisonProcessSample struct {
@@ -831,6 +832,7 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 	queryHNSWEF, queryHNSWEFOK := artifact.Server.Config["query_hnsw_ef"].(float64)
 	if artifact.Server.Version != manifest.Config.QdrantServerVersion || artifact.Server.LocalMode ||
 		artifact.Server.Deployment != "standalone" ||
+		artifact.Server.ReleaseAssetSHA256 != manifest.Config.QdrantReleaseAssetSHA256 ||
 		artifact.Server.BinarySHA256 != manifest.Config.QdrantBinarySHA256 ||
 		artifact.Server.Config["dense"] != manifest.Config.DenseVectorName ||
 		artifact.Server.Config["sparse"] != manifest.Config.SparseVectorName ||
@@ -1061,8 +1063,7 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStorageP
 		HarnessRevision: tree.HarnessRevision, TreeDBBinarySHA256: tree.BinarySHA256,
 		TreeDBProcessResources: tree.ProcessResources, TreeDBStorageBytes: tree.StorageBytes, QdrantResources: qdrant.Resources,
 		QdrantClientVersion: qdrant.ClientVersion, QdrantServerVersion: qdrant.Server.Version,
-		QdrantServerBinarySHA256: qdrant.Server.BinarySHA256,
-		QdrantReleaseAssetSHA256: manifest.Config.QdrantReleaseAssetSHA256,
+		QdrantReleaseAssetSHA256: qdrant.Server.ReleaseAssetSHA256,
 		ManifestSHA256:           manifestSHA, FixtureSHA256: manifest.FixtureSHA256,
 		SemanticVectorSHA256: manifest.SemanticVectorSHA256, ConfigSHA256: manifest.ConfigSHA256,
 		Rows: treeRows, Dispositions: []string{

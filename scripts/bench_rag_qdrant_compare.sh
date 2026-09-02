@@ -7,6 +7,7 @@ RUN_DIR=${RUN_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gomap_rag_qdrant_XXXXXXXX")}
 PYTHON=${PYTHON:-python3}
 VENV=${VENV:-$RUN_DIR/venv}
 QDRANT_BIN=${QDRANT_BIN:?set QDRANT_BIN to the pinned standalone Qdrant 1.19.0 release binary}
+QDRANT_RELEASE_ASSET=${QDRANT_RELEASE_ASSET:?set QDRANT_RELEASE_ASSET to the pinned Qdrant 1.19.0 release archive}
 QDRANT_STORAGE_PATH=${QDRANT_STORAGE_PATH:-$RUN_DIR/qdrant-storage}
 QDRANT_COLLECTION=${QDRANT_COLLECTION:-gomap_rag_4331_${RANDOM}_$$}
 COMPARATOR_BIN=$RUN_DIR/treedb_rag_benchmark
@@ -30,7 +31,12 @@ if [[ ! -x "$QDRANT_BIN" ]]; then
 	echo "QDRANT_BIN is not an executable standalone Qdrant binary" >&2
 	exit 2
 fi
+if [[ ! -f "$QDRANT_RELEASE_ASSET" ]]; then
+	echo "QDRANT_RELEASE_ASSET is not a file" >&2
+	exit 2
+fi
 QDRANT_BIN=$(cd -- "$(dirname -- "$QDRANT_BIN")" && pwd -P)/$(basename -- "$QDRANT_BIN")
+QDRANT_RELEASE_ASSET=$(cd -- "$(dirname -- "$QDRANT_RELEASE_ASSET")" && pwd -P)/$(basename -- "$QDRANT_RELEASE_ASSET")
 
 cleanup() {
 	if [[ -s "$PID_FILE" ]]; then
@@ -129,7 +135,8 @@ run_capped 300 qdrant-build-query-reopen "$VENV/bin/python" benchmarks/vector_db
 	--manifest "$MANIFEST" --output "$QDRANT_ARTIFACT" --url "$URL" \
 	--collection "$QDRANT_COLLECTION" --server-identity "$SERVER_IDENTITY" \
 	--harness-revision "$HARNESS_REVISION" --storage-path "$QDRANT_STORAGE_PATH" \
-	--restart-hook "$RESTART_HOOK" --server-pid "$PID" --server-binary "$QDRANT_BIN"
+	--restart-hook "$RESTART_HOOK" --server-pid "$PID" --server-binary "$QDRANT_BIN" \
+	--server-release-asset "$QDRANT_RELEASE_ASSET"
 run_capped 90 consolidation "$COMPARATOR_BIN" \
 	-application-comparison-manifest "$MANIFEST" \
 	-application-comparison-treedb "$TREEDB_ARTIFACT" \

@@ -64,7 +64,9 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 		SparseVectorSHA256: sparseVectorSHA, ConfigSHA256: manifest.ConfigSHA256,
 		SourceCount: 18, ChunkCount: 54, QueryCount: 3,
 		Server: qdrantComparisonServer{
-			Version: "1.19.0", Deployment: "standalone", BinarySHA256: manifest.Config.QdrantBinarySHA256, Identity: "pid:1:Tue Sep  1 22:55:00 2026 /qdrant|reopened_pid:2",
+			Version: "1.19.0", Deployment: "standalone", BinarySHA256: manifest.Config.QdrantBinarySHA256,
+			ReleaseAssetSHA256: manifest.Config.QdrantReleaseAssetSHA256,
+			Identity:           "pid:1:Tue Sep  1 22:55:00 2026 /qdrant|reopened_pid:2",
 			Config: map[string]any{
 				"dense": manifest.Config.DenseVectorName, "sparse": manifest.Config.SparseVectorName,
 				"dense_size": float64(384), "dense_distance": "cosine", "sparse_on_disk": false,
@@ -193,6 +195,7 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 	}{
 		{"local mode", func(a *qdrantComparisonArtifact) { a.Server.LocalMode = true }},
 		{"Docker deployment", func(a *qdrantComparisonArtifact) { a.Server.Deployment = "docker" }},
+		{"wrong release asset hash", func(a *qdrantComparisonArtifact) { a.Server.ReleaseAssetSHA256 = strings.Repeat("0", 64) }},
 		{"missing identity", func(a *qdrantComparisonArtifact) { a.Server.Identity = "" }},
 		{"wrong binary hash", func(a *qdrantComparisonArtifact) { a.Server.BinarySHA256 = strings.Repeat("0", 64) }},
 		{"malformed identity", func(a *qdrantComparisonArtifact) { a.Server.Identity = "pid:1|reopened_pid:2" }},
