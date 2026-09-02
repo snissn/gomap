@@ -553,6 +553,47 @@ def generate_authorization(contract: dict[str, Any], path: Path, service_binary:
     return validate_authorization(contract, path)
 
 
+def validate_python_command_contract(contract: dict[str, Any]) -> None:
+    source = object_at(contract.get("source_identity"), "source_identity")
+    runtime = object_at(source.get("runtime"), "source_identity.runtime")
+    python_executable = runtime.get("python_executable")
+    if (not isinstance(python_executable, str)
+            or not Path(python_executable).is_absolute()):
+        fail("frozen Python interpreter path must be absolute")
+    exact(sha256_file(Path(python_executable)), runtime.get("python_sha256"),
+          "frozen Python interpreter checksum")
+    commands = object_at(contract.get("commands"), "commands")
+    search_commands = object_at(
+        commands.get("existing_index_search"), "commands.existing_index_search")
+    python_commands = {
+        "authorization_generate_argv_template": commands.get(
+            "authorization_generate_argv_template"),
+        "authorized_preflight_argv": commands.get("authorized_preflight_argv"),
+        "winner_selection_generate_argv_template": commands.get(
+            "winner_selection_generate_argv_template"),
+        "lifecycle_harness_argv_template": commands.get(
+            "lifecycle_harness_argv_template"),
+        "decision_validation_argv": commands.get("decision_validation_argv"),
+        "existing_index_search.probe_argv_template": search_commands.get(
+            "probe_argv_template"),
+        "existing_index_search.vectordbbench_common_argv_template": search_commands.get(
+            "vectordbbench_common_argv_template"),
+    }
+    for name, argv in python_commands.items():
+        if not isinstance(argv, list) or not argv:
+            fail(f"commands.{name} must be a non-empty argv array")
+        exact(argv[0], python_executable, f"commands.{name} frozen Python launcher")
+    lifecycle_argv = python_commands["lifecycle_harness_argv_template"]
+    exact(lifecycle_argv[1], "scripts/treedb_vectordbbench_artifact.py",
+          "lifecycle harness script binding")
+    for flag, expected in (("--python", python_executable), ("--use-uv", "off")):
+        positions = [position for position, token in enumerate(lifecycle_argv) if token == flag]
+        if len(positions) != 1 or positions[0] + 1 >= len(lifecycle_argv):
+            fail(f"lifecycle harness must contain exactly one {flag} value")
+        exact(lifecycle_argv[positions[0] + 1], expected,
+              f"lifecycle harness {flag} binding")
+
+
 def validate_contract(contract: dict[str, Any], allow_draft: bool,
                       authorization_path: Path | None = None) -> dict[str, Any]:
     exact(contract.get("schema_version"), SCHEMA, "schema_version")
@@ -567,6 +608,7 @@ def validate_contract(contract: dict[str, Any], allow_draft: bool,
     source = object_at(contract.get("source_identity"), "source_identity")
     exact(source["definition_base_commit"], "4629b2157c57618bee3e329529ff364e385fa73d",
           "definition base commit")
+    validate_python_command_contract(contract)
     graph = object_at(contract["experiment"]["graph"], "experiment.graph")
     exact(graph["ef_construction_coordinates"], COORDINATES, "C0 coordinates")
     exact(graph["control_ef_construction"], CONTROL, "C0 control")
@@ -1184,6 +1226,12 @@ def validate_manifest(run_row: dict[str, Any], root: Path, manifest: dict[str, A
     harness_cfg = object_at(manifest.get("harness"), "manifest.harness")
     exact(harness_cfg.get("construction_decision_diagnostics"), True,
           "lifecycle construction-decision diagnostics")
+    exact(
+        (harness_cfg.get("python_executable"), harness_cfg.get("python_sha256"),
+         harness_cfg.get("use_uv")),
+        (runtime["python_executable"], runtime["python_sha256"], "off"),
+        "lifecycle harness Python environment",
+    )
     config = run_row["configuration"]
     exact((harness_cfg.get("m"), harness_cfg.get("ef_construction"), harness_cfg.get("ef_search"),
            harness_cfg.get("k"), harness_cfg.get("rerank_candidates"), harness_cfg.get("rows")),
@@ -1527,6 +1575,7 @@ def validate_decision(packet: dict[str, Any], contract: dict[str, Any], *, run_b
     }, "decision")
     exact(packet.get("schema_version"), RESULT_SCHEMA, "result schema_version")
     gates = validate_go_gates(contract)
+    validate_python_command_contract(contract)
     if packet.get("verdict") not in {"GO", "C0_NO_GO"}:
         fail("result verdict must be GO or C0_NO_GO")
     commit = full_sha(packet.get("execution_commit"), "decision.execution_commit")

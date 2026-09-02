@@ -38,6 +38,20 @@ class DecisionFixture:
         self.contract["source_identity"]["runtime"]["python_executable"] = str(python_executable)
         self.contract["source_identity"]["runtime"]["python_sha256"] = policy.sha256_file(
             python_executable)
+        commands = self.contract["commands"]
+        for name in (
+            "authorization_generate_argv_template",
+            "authorized_preflight_argv",
+            "winner_selection_generate_argv_template",
+            "lifecycle_harness_argv_template",
+            "decision_validation_argv",
+        ):
+            commands[name][0] = str(python_executable)
+        search_commands = commands["existing_index_search"]
+        search_commands["probe_argv_template"][0] = str(python_executable)
+        search_commands["vectordbbench_common_argv_template"][0] = str(python_executable)
+        lifecycle_argv = commands["lifecycle_harness_argv_template"]
+        lifecycle_argv[lifecycle_argv.index("--python") + 1] = str(python_executable)
         self.counter = 0
         self.service_binary = root / "treedb-document-service"
         self.service_binary.write_bytes(b"fixture service binary\n")
@@ -301,6 +315,9 @@ class DecisionFixture:
                 "m": 16, "ef_construction": ef, "ef_search": 192, "k": 100,
                 "rerank_candidates": 400, "rows": "scalar",
                 "construction_decision_diagnostics": True,
+                "python_executable": self.contract["source_identity"]["runtime"]["python_executable"],
+                "python_sha256": self.contract["source_identity"]["runtime"]["python_sha256"],
+                "use_uv": "off",
             },
         }
         manifest_path = root / "manifest.json"
@@ -1298,6 +1315,22 @@ class ValidatorMutations(unittest.TestCase):
             run, 0, lambda value: value["vdbbench_argv"].__setitem__(
                 0, "/usr/local/bin/python3"))
         self.assert_invalid(packet, "frozen Python interpreter")
+
+    def test_lifecycle_interpreter_and_environment_are_frozen(self) -> None:
+        base = copy.deepcopy(self.fixture.contract)
+        mutations = (
+            (lambda argv: argv.__setitem__(0, "/tmp/python3"), "frozen Python launcher"),
+            (lambda argv: argv.__setitem__(
+                argv.index("--python") + 1, "/tmp/python3"), "lifecycle harness --python binding"),
+            (lambda argv: argv.__setitem__(
+                argv.index("--use-uv") + 1, "auto"), "lifecycle harness --use-uv binding"),
+        )
+        for mutate, error in mutations:
+            with self.subTest(error=error):
+                self.fixture.contract = copy.deepcopy(base)
+                mutate(self.fixture.contract["commands"]["lifecycle_harness_argv_template"])
+                self.assert_invalid(self.fixture.no_go_packet(), error)
+        self.fixture.contract = base
 
     def test_canonical_vdbbench_command_is_bound(self) -> None:
         packet = self.fixture.no_go_packet()

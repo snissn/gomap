@@ -15,6 +15,7 @@ import os
 import shlex
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -5118,6 +5119,12 @@ class ManifestFileListTest(unittest.TestCase):
             manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
             self.assertIsNone(manifest["vdbbench_load_metrics"])
             self.assertFalse(manifest["harness"]["construction_decision_diagnostics"])
+            self.assertEqual(manifest["harness"]["python_executable"], str(Path(sys.executable).resolve()))
+            self.assertEqual(
+                manifest["harness"]["python_sha256"],
+                harness.sha256_file(Path(sys.executable).resolve()),
+            )
+            self.assertEqual(manifest["harness"]["use_uv"], "auto")
             self.assertNotIn("lifecycle_route_proof", manifest)
 
     def test_manifest_uses_service_identity_captured_before_launch(self) -> None:

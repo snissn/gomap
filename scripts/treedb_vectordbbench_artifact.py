@@ -4496,6 +4496,9 @@ def write_manifest(
             "num_per_batch": args.num_per_batch,
             "vdbbench_dry_run": args.vdbbench_dry_run,
             "construction_decision_diagnostics": args.construction_decision_diagnostics,
+            "python_executable": args.python,
+            "python_sha256": sha256_file(Path(args.python)),
+            "use_uv": args.use_uv,
         },
         "commands": [asdict(record) for record in state.commands],
         "vdbbench": state.vdbbench,
@@ -4669,6 +4672,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                 parser.error("protocol measurement output requires construction-decision diagnostics")
             if re.fullmatch(r"[0-9a-f]{64}", args.measurement_dataset_sha256) is None:
                 parser.error("measurement-dataset-sha256 must be a lowercase SHA-256")
+    python_path = Path(args.python).expanduser()
+    if not python_path.is_absolute():
+        resolved_python = shutil.which(args.python)
+        if resolved_python is None:
+            parser.error(f"python executable not found: {args.python}")
+        python_path = Path(resolved_python)
+    python_path = python_path.resolve()
+    if not python_path.is_file():
+        parser.error(f"python executable is not a regular file: {python_path}")
+    args.python = str(python_path)
     args.out = Path(args.out).expanduser().resolve()
     args.validate_lifecycle = None
     args.vectordbbench_dir = Path(args.vectordbbench_dir).expanduser().resolve() if args.vectordbbench_dir else None

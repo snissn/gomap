@@ -34,7 +34,7 @@
       "TreeDB/collections/vector_index_rebuild.go": "21bed0f84ae5301d17619ed2753300be73cf422c"
     },
     "harness_blobs": {
-      "scripts/treedb_vectordbbench_artifact.py": "1b96410d3d4addde77bc67992e25e47f4936a829"
+      "scripts/treedb_vectordbbench_artifact.py": "cdcef067675c41850d131aa1c05a9b8ca2853fda"
     },
     "vectordbbench": {
       "root": "/mnt/fast4tb/codex-vectordbbench-4545",
@@ -221,27 +221,28 @@
     "binary": "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
     "build_argv": ["go", "build", "-trimpath", "-o", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service", "./cmd/treedb-document-service"],
     "authorization_generate_argv_template": [
-      "python3", "scripts/treedb_construction_policy_4587.py",
+      "/usr/bin/python3", "scripts/treedb_construction_policy_4587.py",
       "docs/benchmarks/treedb_construction_policy_c0_4587.json",
       "--generate-authorization", "/mnt/fast4tb/treedb-4587-c0-evidence/execution-authorization.json",
       "--service-binary", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
       "--reviewed-head", "{final_reviewed_head}"
     ],
     "authorized_preflight_argv": [
-      "python3", "scripts/treedb_construction_policy_4587.py",
+      "/usr/bin/python3", "scripts/treedb_construction_policy_4587.py",
       "docs/benchmarks/treedb_construction_policy_c0_4587.json",
       "--authorization", "/mnt/fast4tb/treedb-4587-c0-evidence/execution-authorization.json"
     ],
     "screening_runs_file": "/mnt/fast4tb/treedb-4587-c0-evidence/screening-runs.json",
     "winner_selection_generate_argv_template": [
-      "python3", "scripts/treedb_construction_policy_4587.py",
+      "/usr/bin/python3", "scripts/treedb_construction_policy_4587.py",
       "docs/benchmarks/treedb_construction_policy_c0_4587.json",
       "--authorization", "/mnt/fast4tb/treedb-4587-c0-evidence/execution-authorization.json",
       "--screening-runs", "/mnt/fast4tb/treedb-4587-c0-evidence/screening-runs.json",
       "--generate-winner-selection", "/mnt/fast4tb/treedb-4587-c0-evidence/winner-selection.json"
     ],
     "lifecycle_harness_argv_template": [
-      "python3", "scripts/treedb_vectordbbench_artifact.py",
+      "/usr/bin/python3", "scripts/treedb_vectordbbench_artifact.py",
+      "--python", "/usr/bin/python3", "--use-uv", "off",
       "--out", "{artifact_root}",
       "--vectordbbench-dir", "/mnt/fast4tb/codex-vectordbbench-4545",
       "--service-bin", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
@@ -270,7 +271,7 @@
       ],
       "probe_runner": "scripts/treedb_vdbbench_search_existing_index.py",
       "probe_argv_template": [
-        "python3", "scripts/treedb_vdbbench_search_existing_index.py",
+        "/usr/bin/python3", "scripts/treedb_vdbbench_search_existing_index.py",
         "--base-url", "{base_url}", "--index-name", "{index_name}",
         "--query-json", "{query_json}", "--metadata-out", "{metadata_out}",
         "--diagnostic-response-out", "{diagnostic_response_out}",
@@ -332,7 +333,7 @@
     },
     "decision_packet": "/mnt/fast4tb/treedb-4587-c0-evidence/decision.json",
     "decision_validation_argv": [
-      "python3", "scripts/treedb_construction_policy_4587.py",
+      "/usr/bin/python3", "scripts/treedb_construction_policy_4587.py",
       "docs/benchmarks/treedb_construction_policy_c0_4587.json",
       "--decision", "/mnt/fast4tb/treedb-4587-c0-evidence/decision.json"
     ]
