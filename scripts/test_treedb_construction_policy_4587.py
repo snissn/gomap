@@ -534,6 +534,8 @@ class DecisionFixture:
                     "lock_acquired_at": (envelope_start - timedelta(seconds=0.1)).isoformat(),
                     "coverage_completed_at": envelope_completed.isoformat(),
                     "gomaxprocs": 12,
+                    "service_environment": self.contract[
+                        "commands"]["existing_index_search"]["service_environment"],
                     "service_binary_sha256": binary_sha,
                     "service_argv": service_argv,
                     "service_started_at": (envelope_start + timedelta(seconds=0.1)).isoformat(),
@@ -1049,6 +1051,32 @@ class ValidatorMutations(unittest.TestCase):
         measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
         run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
         self.assert_invalid(packet, "data file path must remain inside data root")
+
+    def test_persisted_data_hard_links_cannot_double_count_storage(self) -> None:
+        packet = self.fixture.go_packet()
+        run = packet["runs"][4]
+        root = Path(run["artifact"]["root"])
+        measurement_path = root / run["measurement_evidence"]["path"]
+        measurement = json.loads(measurement_path.read_text())
+        source_path = root / measurement["source"]["path"]
+        source = json.loads(source_path.read_text())
+        data_root = Path(source["data_root"])
+        original = data_root / source["data_files"][0]["path"]
+        hard_link = data_root / "duplicate-inode"
+        hard_link.hardlink_to(original)
+        source["data_files"].append({
+            "path": hard_link.name,
+            "size": original.stat().st_size,
+            "sha256": policy.sha256_file(original),
+        })
+        source_path.write_text(json.dumps(source, sort_keys=True) + "\n")
+        measurement["source"]["sha256"] = policy.sha256_file(source_path)
+        measurement["resources"]["persisted_bytes"] += original.stat().st_size
+        measurement["determinism"]["persisted_data_ledger_checksum"] = policy.canonical_sha256(
+            source["data_files"])
+        measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
+        run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
+        self.assert_invalid(packet, "data files must have unique file identities")
 
     def test_fallback_and_result_count(self) -> None:
         packet = self.fixture.no_go_packet()
@@ -1586,6 +1614,9 @@ class ValidatorMutations(unittest.TestCase):
             })),
             ("service_argv", lambda value: value["service_argv"].__setitem__(2, "/tmp/wrong")),
             ("gomaxprocs", lambda value: value.update({"gomaxprocs": 1})),
+            ("service_environment", lambda value: value["service_environment"].update({
+                "GOGC": "off",
+            })),
             ("service_exit_code", lambda value: value.update({"service_exit_code": -9})),
         ]
         for pattern, mutate in mutations:
@@ -1654,6 +1685,17 @@ class SearchEnvelopeHelperTest(unittest.TestCase):
             "/authorized/service", "-dir", "/artifact/treedb-data",
             "-addr", "127.0.0.1:6060", "-profile", "command_wal_durable",
         ])
+
+    def test_service_environment_is_complete_and_non_inherited(self) -> None:
+        with mock.patch.dict(
+            search_existing_index.os.environ,
+            {"GOGC": "off", "GOMEMLIMIT": "1"},
+            clear=False,
+        ):
+            self.assertEqual(
+                search_existing_index.service_environment(SimpleNamespace(gomaxprocs=12)),
+                {"GOMAXPROCS": "12"},
+            )
 
     def test_isolation_monitor_rethrows_sampling_failure(self) -> None:
         monitor = object.__new__(search_existing_index.IsolationMonitor)

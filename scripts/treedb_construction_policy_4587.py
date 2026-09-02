@@ -71,11 +71,12 @@ ISOLATION_KEYS = {
     "competing_processes", "peak_swap_used_bytes", "samples",
 }
 ISOLATION_SAMPLE_KEYS = {"timestamp", "swap_used_bytes", "competing_processes"}
-SEARCH_ISOLATION_SCHEMA = "treedb-construction-policy-4587-search-isolation/v2"
+SEARCH_ISOLATION_SCHEMA = "treedb-construction-policy-4587-search-isolation/v3"
 SEARCH_ISOLATION_KEYS = {
     "schema_version", "artifact_root", "lock_path", "lock_acquired_at",
-    "coverage_completed_at", "gomaxprocs", "service_binary_sha256", "service_argv",
-    "service_started_at", "service_completed_at", "service_exit_code", "samples",
+    "coverage_completed_at", "gomaxprocs", "service_environment",
+    "service_binary_sha256", "service_argv", "service_started_at",
+    "service_completed_at", "service_exit_code", "samples",
 }
 SEARCH_ISOLATION_SAMPLE_KEYS = {"timestamp", "swap_used_bytes", "competing_processes"}
 SEARCH_ORIGIN_KEYS = {
@@ -565,6 +566,9 @@ def validate_python_command_contract(contract: dict[str, Any]) -> None:
     commands = object_at(contract.get("commands"), "commands")
     search_commands = object_at(
         commands.get("existing_index_search"), "commands.existing_index_search")
+    exact(search_commands.get("service_environment"),
+          {"GOMAXPROCS": str(runtime.get("gomaxprocs"))},
+          "existing-index service environment")
     python_commands = {
         "authorization_generate_argv_template": commands.get(
             "authorization_generate_argv_template"),
@@ -861,6 +865,9 @@ def validate_search_isolation(
     exact(isolation["service_binary_sha256"], expected_binary_sha256,
           f"{name}.service_binary_sha256")
     exact(isolation["service_argv"], expected_service_argv, f"{name}.service_argv")
+    expected_environment = contract["commands"]["existing_index_search"]["service_environment"]
+    exact(isolation["service_environment"], expected_environment,
+          f"{name}.service_environment")
     samples = isolation["samples"]
     if not isinstance(samples, list) or len(samples) < 2:
         fail(f"{name}.samples must contain start and completion observations")
@@ -1325,6 +1332,7 @@ def measurement_source_values(
     if not isinstance(data_files, list) or not data_files:
         fail("measurement source data file ledger must be non-empty")
     expected_paths = set()
+    expected_file_ids = set()
     persisted = 0
     for position, item in enumerate(data_files):
         item = object_at(item, f"measurement source data_files[{position}]")
@@ -1339,10 +1347,15 @@ def measurement_source_values(
             fail("measurement source data file path must remain inside data root")
         if path in expected_paths:
             fail("measurement source data file paths must be unique")
-        exact(path.stat().st_size, nonnegative_int(item["size"], "measurement source file size"),
+        file_stat = path.stat()
+        file_id = (file_stat.st_dev, file_stat.st_ino)
+        if file_id in expected_file_ids:
+            fail("measurement source data files must have unique file identities")
+        exact(file_stat.st_size, nonnegative_int(item["size"], "measurement source file size"),
               "measurement source file size")
         exact(sha256_file(path), item["sha256"], "measurement source file checksum")
         expected_paths.add(path)
+        expected_file_ids.add(file_id)
         persisted += item["size"]
     actual_paths = {path.resolve() for path in data_root.rglob("*") if path.is_file()}
     exact(actual_paths, expected_paths, "measurement source complete data file ledger")

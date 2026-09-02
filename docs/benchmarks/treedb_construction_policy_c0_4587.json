@@ -269,6 +269,9 @@
         "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
         "-dir", "{artifact_root}/treedb-data", "-addr", "{addr}", "-profile", "command_wal_durable"
       ],
+      "service_environment": {
+        "GOMAXPROCS": "12"
+      },
       "probe_runner": "scripts/treedb_vdbbench_search_existing_index.py",
       "probe_argv_template": [
         "/usr/bin/python3", "scripts/treedb_vdbbench_search_existing_index.py",
@@ -300,7 +303,7 @@
         "--exclusive-lock", "/mnt/fast4tb/treedb-4587-c0.lock",
         "--diagnostics-interval", "5", "--service-health-timeout", "60"
       ],
-      "probe_contract": "for each route, the helper acquires the frozen exclusive lock, starts isolation sampling, launches the exact authorized service binary against the retained artifact data root, waits healthy, then executes diagnostic probe to canonical VectorDBBench and production probe to canonical VectorDBBench sequentially. It terminates the service, closes monitoring, writes checksum-bound isolation and origin sidecars, and only then releases the lock. Preexisting outputs, lock contention, binary/argv/data-root drift, service exit, swap, competing processes, sampling errors, reruns, stale results, reordered routes, or ledger rebinding fail closed.",
+      "probe_contract": "for each route, the helper acquires the frozen exclusive lock, starts isolation sampling, launches the exact authorized service binary against the retained artifact data root with the complete frozen non-inherited service environment, waits healthy, then executes diagnostic probe to canonical VectorDBBench and production probe to canonical VectorDBBench sequentially. It terminates the service, closes monitoring, writes checksum-bound isolation and origin sidecars, and only then releases the lock. Preexisting outputs, lock contention, binary/argv/environment/data-root drift, service exit, swap, competing processes, sampling errors, reruns, stale results, reordered routes, or ledger rebinding fail closed.",
       "vectordbbench_common_argv_template": [
         "/usr/bin/python3", "-m", "vectordb_bench.cli.vectordbbench", "{subcommand}",
         "--base-url", "{base_url}", "--index-name", "{index_name}",
@@ -534,10 +537,11 @@
       "search_started_at", "search_completed_at"
     ],
     "search_isolation_schema": {
-      "schema_version": "treedb-construction-policy-4587-search-isolation/v2",
+      "schema_version": "treedb-construction-policy-4587-search-isolation/v3",
       "exact_keys": [
         "schema_version", "artifact_root", "lock_path", "lock_acquired_at",
-        "coverage_completed_at", "gomaxprocs", "service_binary_sha256", "service_argv",
+        "coverage_completed_at", "gomaxprocs", "service_environment",
+        "service_binary_sha256", "service_argv",
         "service_started_at", "service_completed_at", "service_exit_code", "samples"
       ],
       "sample_exact_keys": ["timestamp", "swap_used_bytes", "competing_processes"]

@@ -159,6 +159,11 @@ def service_argv(args: argparse.Namespace) -> list[str]:
     ]
 
 
+def service_environment(args: argparse.Namespace) -> dict[str, str]:
+    """Return the complete, non-inherited environment for the search service."""
+    return {"GOMAXPROCS": str(args.gomaxprocs)}
+
+
 def wait_healthy(process: subprocess.Popen[Any], base_url: str, timeout: float) -> None:
     deadline = time.monotonic() + timeout
     last_error: BaseException | None = None
@@ -569,8 +574,7 @@ def main() -> int:
         if (monitor.samples[0]["swap_used_bytes"] != 0
                 or monitor.samples[0]["competing_processes"]):
             fail("search isolation is not clean before service launch")
-        env = os.environ.copy()
-        env["GOMAXPROCS"] = str(args.gomaxprocs)
+        env = service_environment(args)
         service_started_at = iso_now()
         service = subprocess.Popen(
             service_argv(args), stdout=service_log, stderr=subprocess.STDOUT,
@@ -637,12 +641,13 @@ def main() -> int:
             search_completed_at = samples[-1]["timestamp"] if samples else iso_now()
             if samples:
                 isolation = {
-                    "schema_version": "treedb-construction-policy-4587-search-isolation/v2",
+                    "schema_version": "treedb-construction-policy-4587-search-isolation/v3",
                     "artifact_root": str(args.artifact_root),
                     "lock_path": str(args.exclusive_lock),
                     "lock_acquired_at": lock_acquired_at,
                     "coverage_completed_at": search_completed_at,
                     "gomaxprocs": args.gomaxprocs,
+                    "service_environment": service_environment(args),
                     "service_binary_sha256": args.service_binary_sha256,
                     "service_argv": service_argv(args),
                     "service_started_at": service_started_at,
