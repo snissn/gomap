@@ -11,6 +11,7 @@ idempotently opens the same exact configuration.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 from dataclasses import asdict, is_dataclass
 import hashlib
 import json
@@ -18,6 +19,7 @@ import math
 import re
 from pathlib import Path
 import sys
+import os
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,10 +61,37 @@ def sha256_file(path: Path) -> str:
             digest.update(chunk)
     return digest.hexdigest()
 
+def canonical_sha256(value: Any) -> str:
+    payload = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
+    return hashlib.sha256(payload).hexdigest()
 
-def write_origin(args: argparse.Namespace, kind: str, result: Path, response: Path, output: Path) -> None:
+
+def iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def append_command_record(path: Path, record: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = (json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n").encode()
+    descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+    try:
+        if os.write(descriptor, payload) != len(payload):
+            fail("short probe command ledger write")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def write_origin(
+    args: argparse.Namespace,
+    kind: str,
+    result: Path,
+    response: Path,
+    output: Path,
+    command_record: dict[str, Any],
+) -> None:
     write_json(output, {
-        "schema_version": "treedb-construction-policy-4587-search-origin/v1",
+        "schema_version": "treedb-construction-policy-4587-search-origin/v2",
         "run_id": args.run_id,
         "artifact_root": str(args.artifact_root),
         "manifest_sha256": args.manifest_sha256,
@@ -80,6 +109,11 @@ def write_origin(args: argparse.Namespace, kind: str, result: Path, response: Pa
         "result_sha256": sha256_file(result),
         "response_sha256": sha256_file(response),
         "index_metadata_sha256": sha256_file(args.metadata_out),
+        "command_ledger_path": str(args.command_ledger.relative_to(args.artifact_root)),
+        "command_sequence": command_record["sequence"],
+        "command_record_sha256": canonical_sha256(command_record),
+        "probe_started_at": command_record["started_at"],
+        "probe_completed_at": command_record["completed_at"],
     })
 
 
@@ -168,6 +202,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--production-result", required=True, type=Path)
     parser.add_argument("--diagnostic-origin-out", required=True, type=Path)
     parser.add_argument("--production-origin-out", required=True, type=Path)
+    parser.add_argument("--command-ledger", required=True, type=Path)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--artifact-root", required=True, type=Path)
     parser.add_argument("--manifest-sha256", required=True)
@@ -210,9 +245,9 @@ def parse_args() -> argparse.Namespace:
         if not path.is_file():
             fail(f"canonical result does not exist: {path}")
     paths = (
-        args.metadata_out, args.diagnostic_response_out, args.production_response_out,
-        args.diagnostic_result, args.production_result,
-        args.diagnostic_origin_out, args.production_origin_out,
+        args.query_json, args.metadata_out, args.diagnostic_response_out,
+        args.production_response_out, args.diagnostic_result, args.production_result,
+        args.diagnostic_origin_out, args.production_origin_out, args.command_ledger,
     )
     for path in paths:
         try:
@@ -242,6 +277,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     query = load_query(args.query_json, args.dimensions)
+    started_at = iso_now()
     client = TreeDBClient(args.base_url, timeout=args.timeout)
     try:
         before = jsonable(client.open_index(args.index_name))
@@ -272,13 +308,35 @@ def main() -> int:
         write_json(args.metadata_out, before)
         write_json(args.diagnostic_response_out, diagnostic)
         write_json(args.production_response_out, production)
+        existing_records = args.command_ledger.read_text().splitlines() if args.command_ledger.exists() else []
+        command_record = {
+            "schema_version": "treedb-construction-policy-4587-probe-command/v1",
+            "sequence": len(existing_records),
+            "argv": sys.argv,
+            "started_at": started_at,
+            "completed_at": iso_now(),
+            "exit_code": 0,
+            "query_sha256": sha256_file(args.query_json),
+            "run_id": args.run_id,
+            "route": args.route,
+            "result_sha256": {
+                "diagnostic": sha256_file(args.diagnostic_result),
+                "production": sha256_file(args.production_result),
+            },
+            "response_sha256": {
+                "diagnostic": sha256_file(args.diagnostic_response_out),
+                "production": sha256_file(args.production_response_out),
+            },
+            "index_metadata_sha256": sha256_file(args.metadata_out),
+        }
+        append_command_record(args.command_ledger, command_record)
         write_origin(
             args, "diagnostic", args.diagnostic_result,
-            args.diagnostic_response_out, args.diagnostic_origin_out,
+            args.diagnostic_response_out, args.diagnostic_origin_out, command_record,
         )
         write_origin(
             args, "production", args.production_result,
-            args.production_response_out, args.production_origin_out,
+            args.production_response_out, args.production_origin_out, command_record,
         )
         return 0
     finally:

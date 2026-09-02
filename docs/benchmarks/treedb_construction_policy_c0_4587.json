@@ -145,7 +145,6 @@
     "ordering": {
       "screening_run_order": [128, 192, 256, 300],
       "screening_repetitions": 1,
-      "small_determinism_repetitions": 2,
       "decision_run_order": [300, "selected_screening_winner"],
       "winner_order": [
         "largest adjacency_reduction_fraction",
@@ -164,7 +163,7 @@
       "profiles_on_timed_rows": false,
       "diagnostics_interval_seconds": 5,
       "warmup": "no construction warmup; each diagnostic full-response route preflight immediately precedes its production-stats IDs-only row",
-      "repetition": "one timed build per frozen coordinate plus two untimed small deterministic builds; no A/A or quality-triggered rerun",
+      "repetition": "one timed build per frozen coordinate; deterministic identity is the checksum-bound exact configuration, complete persisted-data ledger, and adapter lifecycle ledger from that run; no A/A, synthetic repeat, or quality-triggered rerun",
       "captured_evidence": {
         "artifact_owned_fresh_root": "validated by the lifecycle artifact manifest and base lifecycle validator",
         "process_isolation": "the lifecycle harness holds the configured exclusive lock for the full run and emits checksum-bound timestamped process samples spanning lifecycle startup through teardown; every sample must contain no competing external gomap/VectorDBBench process",
@@ -176,15 +175,12 @@
       "phase_seconds": ["adjacency", "optimize"],
       "cpu_utilization": "cpu_utilization_logical_cores",
       "determinism": [
-        "graph_config_checksum",
-        "small_repeat_checksum_a", "small_repeat_checksum_b",
-        "tie_row_order_digest_a", "tie_row_order_digest_b"
+        "graph_config_checksum", "persisted_data_ledger_checksum",
+        "adapter_lifecycle_checksum"
       ],
       "diagnostic_work_profile": ["planning", "reciprocal"],
       "resources": [
-        "peak_rss_bytes", "peak_rss_anon_bytes", "peak_rss_file_bytes", "peak_mapped_bytes",
-        "peak_live_heap_bytes", "cumulative_allocated_bytes", "graph_bytes", "search_pack_bytes",
-        "persisted_bytes"
+        "peak_rss_bytes", "cumulative_allocated_bytes", "persisted_bytes"
       ],
       "search_evidence_order": [
         "diagnostic exact full_diagnostics/full with guards",
@@ -271,6 +267,7 @@
         "--production-result", "{production_result}",
         "--diagnostic-origin-out", "{diagnostic_origin_out}",
         "--production-origin-out", "{production_origin_out}",
+        "--command-ledger", "{artifact_root}/probe-command-ledger.jsonl",
         "--run-id", "{run_id}", "--artifact-root", "{artifact_root}",
         "--manifest-sha256", "{manifest_sha256}", "--execution-commit", "{execution_commit}",
         "--dataset-sha256", "{dataset_sha256}", "--scale", "{vectors}",
@@ -281,7 +278,7 @@
         "--ef-construction", "{ef_construction}",
         "--expected-generation", "{expected_generation}", "--route", "{route}"
       ],
-      "probe_contract": "for each route, require exact open_index name/generation/dimension/metric/strategy/M/efConstruction/efSearch/score-plane identity, then checksum-bound full-diagnostic and production/IDs responses at expected_generation; after the canonical result exists, emit a checksum-bound search-origin sidecar binding that result, response, and metadata to the exact run, artifact manifest, dataset, role, partition, and lifecycle",
+      "probe_contract": "for each route, require exact open_index name/generation/dimension/metric/strategy/M/efConstruction/efSearch/score-plane identity, then checksum-bound full-diagnostic and production/IDs responses at expected_generation; append one fsynced command record with exact argv, start/completion, zero exit status, and result/response/metadata checksums, then emit search-origin sidecars binding that ledger record and all evidence to the exact run, artifact manifest, dataset, role, partition, and lifecycle",
       "vectordbbench_common_argv_template": [
         "python", "-m", "vectordb_bench.cli.vectordbbench", "{subcommand}",
         "--base-url", "{base_url}", "--index-name", "{index_name}",
@@ -446,18 +443,21 @@
     "coverage": "exclusive lock and timestamped samples span lifecycle startup through teardown; every sample proves zero swap use and no competing external benchmark process"
   },
   "measurement_schema": {
-    "schema_version": "treedb-construction-policy-4587-measurements/v3",
+    "schema_version": "treedb-construction-policy-4587-measurements/v4",
     "exact_keys": [
-      "schema_version", "origin", "phase_seconds", "cpu_utilization_logical_cores",
-      "determinism", "diagnostic_work_profile", "resources",
-      "projected_10m_adjacency_reduction_fraction"
+      "schema_version", "source", "origin", "phase_seconds",
+      "cpu_utilization_logical_cores", "determinism", "diagnostic_work_profile",
+      "resources", "projected_10m_adjacency_reduction_fraction"
+    ],
+    "source_exact_keys": [
+      "schema_version", "adapter_lifecycle", "diagnostics", "data_root", "data_files"
     ],
     "origin_exact_keys": [
       "run_id", "artifact_root", "execution_commit", "dataset_sha256", "scale",
       "role", "partition", "ef_construction", "lifecycle_sha256",
       "lifecycle_started_at", "lifecycle_completed_at"
     ],
-    "producer_binding": "phase_seconds must equal the checksum-bound adapter optimize timing and column_graph_build adjacency nanoseconds; diagnostic_work_profile must equal the raw optimize construction_decisions snapshot exactly",
+    "producer_binding": "the lifecycle harness writes measurement-source.json and measurements.json; the validator resolves and checksum-validates adapter lifecycle JSONL, diagnostics JSONL, and the complete persisted data-file ledger, then recomputes every measurement value exactly: phase timings and observer work from raw adapter optimize evidence, CPU and peak RSS from /proc samples at optimize boundaries, cumulative allocation from service telemetry, persisted bytes and deterministic identity from the verified data ledger, config/tie identity from the exact configuration and adapter ledger; projected_10m_adjacency_reduction_fraction is null in each row and the decision gate directly consumes the raw holdout adjacency reduction",
     "observer_phase_exact_keys": [
       "decisions", "accepted", "rejected", "direct_exact_fp32_rows", "direct_exact_fp32_calls",
       "indexed_exact_fp32_rows", "indexed_exact_fp32_calls", "approximate_score_rows",
@@ -487,7 +487,7 @@
       "schema_version": "treedb-construction-policy-4587-winner-selection/v1",
       "no_winner_value": null
     },
-    "search_origin_schema_version": "treedb-construction-policy-4587-search-origin/v1",
+    "search_origin_schema_version": "treedb-construction-policy-4587-search-origin/v2",
     "search_evidence_exact_keys": [
       "kind", "route", "origin", "result", "response", "index_metadata"
     ],
@@ -496,13 +496,15 @@
       "execution_commit", "dataset_sha256", "scale", "role", "partition",
       "ef_construction", "lifecycle_sha256", "lifecycle_started_at",
       "lifecycle_completed_at", "kind", "route", "result_sha256",
-      "response_sha256", "index_metadata_sha256"
+      "response_sha256", "index_metadata_sha256", "command_ledger_path",
+      "command_sequence", "command_record_sha256", "probe_started_at",
+      "probe_completed_at"
     ],
     "production_metric_bounds": "Recall and NDCG are finite in [0,1]; QPS and concurrent p99 are finite and strictly positive",
     "decision_resource_bounds": "peak_rss_bytes, persisted_bytes, and cumulative_allocated_bytes are strictly positive for both decision rows",
     "run_roles": ["screening_candidate", "screening_control", "decision_candidate", "decision_control"],
     "run_cardinality": "exactly four ordered 250K rows, then either stop with a null winner_selection or bind one selection event and exactly matched 1M control and selected winner",
-    "evidence_binding": "every measurement and checksum-bound search-origin sidecar binds its originating run, dataset digest, artifact root and manifest, scale, role, partition, coordinate, execution commit, and checksum-bound lifecycle timing; each search-origin sidecar also binds the exact canonical result, response, and index-metadata checksums; all runs verify one service-binary SHA-256 equal to the external authorization; the authorization, winner selection, manifests, isolation/measurement documents, index metadata, and canonical VectorDBBench results are checksum-bound; unknown or extra result rows are rejected",
+    "evidence_binding": "every measurement and checksum-bound search-origin sidecar binds its originating run, dataset digest, artifact root and manifest, scale, role, partition, coordinate, execution commit, and checksum-bound lifecycle timing; each search-origin sidecar also resolves an append-only executed-command ledger record with exact argv, start/completion, zero exit status, and exact canonical-result, response, and index-metadata checksums, and probes begin only after lifecycle teardown; all runs verify one service-binary SHA-256 equal to the external authorization; the authorization, winner selection, manifests, isolation/measurement documents, index metadata, command ledgers, and canonical VectorDBBench results are checksum-bound; unknown or extra result rows are rejected",
     "runs": []
   }
 }
