@@ -20,7 +20,7 @@
   ],
   "source_identity": {
     "accepted_baseline_commit": "fcc1d79696a9b7c6655b793f6224f6937e698ce5",
-    "definition_base_commit": "8cf3a6a8d19cf8615b5301795937048857464085",
+    "definition_base_commit": "4629b2157c57618bee3e329529ff364e385fa73d",
     "branch": "codex/4587-construction-policy",
     "gomap_root": "/mnt/fast4tb/gomap-4586-exec/issue-4587",
     "gomap_required_clean": true,
@@ -34,7 +34,7 @@
       "TreeDB/collections/vector_index_rebuild.go": "21bed0f84ae5301d17619ed2753300be73cf422c"
     },
     "harness_blobs": {
-      "scripts/treedb_vectordbbench_artifact.py": "bc9ceeea729ac837c3cce0e9e7c03320ffc0a967"
+      "scripts/treedb_vectordbbench_artifact.py": "2f46dcfae5132583ab340252955e388952da07e6"
     },
     "vectordbbench": {
       "root": "/mnt/fast4tb/codex-vectordbbench-4545",

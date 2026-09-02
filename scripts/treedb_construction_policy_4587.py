@@ -461,7 +461,7 @@ def validate_contract(contract: dict[str, Any], allow_draft: bool,
     exact(contract.get("trial_started"), False, "trial_started")
     exact(contract.get("scope"), "C0_ONLY", "scope")
     source = object_at(contract.get("source_identity"), "source_identity")
-    exact(source["definition_base_commit"], "8cf3a6a8d19cf8615b5301795937048857464085",
+    exact(source["definition_base_commit"], "4629b2157c57618bee3e329529ff364e385fa73d",
           "definition base commit")
     graph = object_at(contract["experiment"]["graph"], "experiment.graph")
     exact(graph["ef_construction_coordinates"], COORDINATES, "C0 coordinates")
