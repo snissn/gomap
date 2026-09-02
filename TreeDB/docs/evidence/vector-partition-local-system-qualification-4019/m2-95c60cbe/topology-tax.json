@@ -1,0 +1,470 @@
+{
+  "execution_identity": {
+    "executable_path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/bin/treedb_vector_partition_bench.vcs",
+    "executable_sha256": "b8d12f98778698ed74db4a905e2bb6b2925840702664beb6fab9e402c4f913d1",
+    "source_revision": "95c60cbef0b0cb824a74a29e9304784e76745d9d",
+    "vcs_modified": false
+  },
+  "fixture_truth_identity": {
+    "dataset_checksum": "ecc2224f386932e580e4956f2cfa852140d3134625971c3511bc0d5feddf9b95",
+    "truth_artifact_sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c"
+  },
+  "inputs": [
+    {
+      "client_attestation_sha256": {
+        "command": "96619340477f597706aa13a2caf358c5cbf367ee9668194c0064cc3e87217609",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "time": "d1c0d9a8c4ba8d404de3d380e7b40cc686edcd267d5493f3b4e5fed8a997ebb9"
+      },
+      "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/single_daemon_four_group/repeat-1/search.json",
+      "ready_sha256": {
+        "single": "752306b1913555ace2f7918a38ad5e49223ace9d430e94c67d377bf9da9b19cf"
+      },
+      "repetition": 1,
+      "sha256": "a85c702bacc2fe98ae70bf7bd994e57faa36581a1d6bdfbb1ee001b896bf1605",
+      "topology": "single_daemon_four_group",
+      "topology_identity_sha256": "5af3f24747c9917857f268b77272af0fa14e1899f25cd43f3d624c577b90ef79"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "f3138c12b91d0698a9c6a54786f60b3ea6aff7490b95c466ff76a7e3fae933ca",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "time": "30b51a91256e0bff60379668539737c6a9ee29ade480b79b8fd1e1b1a0c62948"
+      },
+      "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/single_daemon_four_group/repeat-2/search.json",
+      "ready_sha256": {
+        "single": "1050b4b39053e4f9660301dae2a7a4cf582ea469d4d541f0f6425d0de741d2c7"
+      },
+      "repetition": 2,
+      "sha256": "787da76fdaa95d7351fb17c89c046d94e0ffd2d168950d9d217fbae9e2394eff",
+      "topology": "single_daemon_four_group",
+      "topology_identity_sha256": "d0aec7796d3d2488e5b851460fe89d70a8efd067c2e580d20b2fe8332f0e6993"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "cb80653f8004bdab51ef25f0616aa0b9f7aaa08c9708321a2127f505f77ebdcb",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "time": "f6fe9c1237f4aaa559cd3a842ff07201c8eb154fe861f5cc940697c903f66c82"
+      },
+      "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/single_daemon_four_group/repeat-3/search.json",
+      "ready_sha256": {
+        "single": "90815b4fddb434b7d7ec20ffe7624483a49f5cf401a6816465a93bffcdf2352f"
+      },
+      "repetition": 3,
+      "sha256": "84f0da18d253b4d584f194af03040583fa80c5a4d55624b27b66ecec37c2343b",
+      "topology": "single_daemon_four_group",
+      "topology_identity_sha256": "c9f95500813d61d2041505b90fb08b3712065f39080fe7462d17e8b9651ec996"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "6ac6335fab34a7996a8ecb83f8f7757b3d42718711ca167fe7daa32798cbfb6a",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "time": "81c285b7ff2d221d1c8a8baaaabb5d400ecf40541d6a1d7821d0c5f968f26a9e"
+      },
+      "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/search.json",
+      "ready_sha256": {
+        "native-group-a": "bb31379432cb92268b6d20a98925d08671c511adebf4cdc3e74fbffcb73f4fd5",
+        "native-group-b": "00507b3c4a85d06441c880f192f6cae3ad23e0ef118599fe19196365df0d3029",
+        "native-group-c": "c38d5914a8a342f3c28a65b37e25b7463debe2397d24e1c0ae98ff75e5f2c2be",
+        "native-group-d": "3210404a4c3ba2c19aab4301b19db76719537261d71fece70bda31bbd1325f07"
+      },
+      "repetition": 1,
+      "sha256": "28e89df2212bcad2e7fc8e0e2c4c1e84181535be83caa568e4e8b9dd9f1163f8",
+      "topology": "native_four_daemon_four_group",
+      "topology_identity_sha256": "bf67330402e4e67ef441fb8ecd55e46e06b03de44b75f613674a5ab129519c5e"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "d48e9a4f2fd629c56d17d2793f95302cadb224b3be6e726aafb0e042f4e358b1",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "time": "ca7d6f64386fe47d03fc6b430aa7f18af57ee2a17e30f778f28851c26f6c6203"
+      },
+      "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-2/search.json",
+      "ready_sha256": {
+        "native-group-a": "a8457b75b08e65884ca2698076a4bfda48e94a56c38792f15695838a74c2f3bb",
+        "native-group-b": "6a0bd1e6ba6e751f8b5948d3cc18cc8a2f3486cad4df633f4c45e976cdf88e06",
+        "native-group-c": "2731704e8772e0339a655fd2514902ba9fb74d5f9964a83cefb96f64d3f33fdf",
+        "native-group-d": "5ecdc2f84d8998d5aa78c399b7646b95b0129d6dd79a48a668db4aebcbd9611d"
+      },
+      "repetition": 2,
+      "sha256": "47e8698ac8c3ccf0ac12486edaf47d6babbd962c4fd27350b7bf7000a1d3473f",
+      "topology": "native_four_daemon_four_group",
+      "topology_identity_sha256": "7b49c874e388474edf4084e2ecc0340c35076f01a507946745bb15e84ce65eee"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "9f6742c677358a2f1bcfaa4816fff5485fd4952537b00642139f5583291bc171",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "time": "390edf53e7f66fb5a5c577ffa8fcc1fa5254e780daa11a987d6d22d8a5852452"
+      },
+      "path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-3/search.json",
+      "ready_sha256": {
+        "native-group-a": "35b651cf21a2b18c5e6ee13e6fbc9fcd3a6177d142bfe779d617834c98d152ca",
+        "native-group-b": "cea334da3332f87d00be96909e0e2749096d0649e6a1d0b32981bdf2dfd6077b",
+        "native-group-c": "641eb581dd015ccd7c90932b7904db58746f43b1d9bbd435baae2ec6a059c4f8",
+        "native-group-d": "03dc448a03925e7d1086a35bdb50d92794194b8f64b88e1601bdef20150351cf"
+      },
+      "repetition": 3,
+      "sha256": "c6bfb5dced12ee3de21c5b46732e1d5b69e5aac441a238a525722c83f993ba24",
+      "topology": "native_four_daemon_four_group",
+      "topology_identity_sha256": "111cc5a5958553d9c9e9955bdb9b1970329724f5443f5fc85800028fa93590f6"
+    }
+  ],
+  "result_kind": "vector_partition_topology_tax_v1",
+  "rows": [
+    {
+      "concurrency": 1,
+      "native_over_single_p95": 1.6102575530638863,
+      "native_over_single_qps": 0.7540761257292743,
+      "probes": 2,
+      "topologies": {
+        "native_four_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 243577.792,
+            "candidates": 3805.903,
+            "edges": 8402.652,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1897.244,
+            "requests": 1.836,
+            "response_bytes": 1246.016,
+            "retries": 0.0,
+            "rpcs": 1.836,
+            "selected_groups": 1.836,
+            "selected_partitions": 2.0
+          },
+          "p95_nanos_max": 51028731,
+          "p95_nanos_median": 50783124,
+          "p95_nanos_min": 31500748,
+          "qps_max": 41.319207992522095,
+          "qps_median": 32.57240110012621,
+          "qps_min": 31.862941006629136,
+          "recall_at_10_max": 0.9809999999999972,
+          "recall_at_10_median": 0.9809999999999972,
+          "recall_at_10_min": 0.9809999999999972,
+          "timing_nanos_per_query_median": {
+            "dedupe": 1875.304,
+            "generation_open": 21560972.576,
+            "merge": 4515.421,
+            "network": 501785.054,
+            "placement": 160471.82,
+            "queue": 24037.727,
+            "read_index_apply": 50706.452,
+            "response": 3310.438,
+            "router_open": 1663.107,
+            "router_search": 98188.256,
+            "rpc": 22687870.351,
+            "shard_search": 560312.981,
+            "total": 22429899.707
+          }
+        },
+        "single_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 243577.792,
+            "candidates": 3805.903,
+            "edges": 8402.652,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1897.244,
+            "requests": 1.836,
+            "response_bytes": 1246.016,
+            "retries": 0.0,
+            "rpcs": 1.836,
+            "selected_groups": 1.836,
+            "selected_partitions": 2.0
+          },
+          "p95_nanos_max": 33138038,
+          "p95_nanos_median": 31537268,
+          "p95_nanos_min": 31304421,
+          "qps_max": 44.70046126032726,
+          "qps_median": 43.19510986854958,
+          "qps_min": 42.95676157982654,
+          "recall_at_10_max": 0.9809999999999972,
+          "recall_at_10_median": 0.9809999999999972,
+          "recall_at_10_min": 0.9809999999999972,
+          "timing_nanos_per_query_median": {
+            "dedupe": 1810.278,
+            "generation_open": 15257779.514,
+            "merge": 4445.286,
+            "network": 481917.54,
+            "placement": 161250.061,
+            "queue": 24173.663,
+            "read_index_apply": 47336.924,
+            "response": 3247.435,
+            "router_open": 1750.314,
+            "router_search": 98532.816,
+            "rpc": 16366599.709,
+            "shard_search": 594278.18,
+            "total": 16444139.169
+          }
+        }
+      }
+    },
+    {
+      "concurrency": 8,
+      "native_over_single_p95": 1.3800646422485183,
+      "native_over_single_qps": 0.711489227148062,
+      "probes": 2,
+      "topologies": {
+        "native_four_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 243577.792,
+            "candidates": 3805.903,
+            "edges": 8402.652,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1897.244,
+            "requests": 1.836,
+            "response_bytes": 1246.016,
+            "retries": 0.0,
+            "rpcs": 1.836,
+            "selected_groups": 1.836,
+            "selected_partitions": 2.0
+          },
+          "p95_nanos_max": 201111663,
+          "p95_nanos_median": 147990132,
+          "p95_nanos_min": 142455582,
+          "qps_max": 72.83352907551848,
+          "qps_median": 71.71864482849585,
+          "qps_min": 64.36166831155975,
+          "recall_at_10_max": 0.9809999999999972,
+          "recall_at_10_median": 0.9809999999999972,
+          "recall_at_10_min": 0.9809999999999972,
+          "timing_nanos_per_query_median": {
+            "dedupe": 2056.1,
+            "generation_open": 57721827.854,
+            "merge": 4502.283,
+            "network": 522429.969,
+            "placement": 172837.048,
+            "queue": 24928.748,
+            "read_index_apply": 56780.465,
+            "response": 3476.489,
+            "router_open": 1615.557,
+            "router_search": 109518.267,
+            "rpc": 59008115.65,
+            "shard_search": 608950.526,
+            "total": 73785996.174
+          }
+        },
+        "single_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 243577.792,
+            "candidates": 3805.903,
+            "edges": 8402.652,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1897.244,
+            "requests": 1.836,
+            "response_bytes": 1246.016,
+            "retries": 0.0,
+            "rpcs": 1.836,
+            "selected_groups": 1.836,
+            "selected_partitions": 2.0
+          },
+          "p95_nanos_max": 173085045,
+          "p95_nanos_median": 107234203,
+          "p95_nanos_min": 106238644,
+          "qps_max": 101.83657685753334,
+          "qps_median": 100.8007459451963,
+          "qps_min": 85.37834304723937,
+          "recall_at_10_max": 0.9809999999999972,
+          "recall_at_10_median": 0.9809999999999972,
+          "recall_at_10_min": 0.9809999999999972,
+          "timing_nanos_per_query_median": {
+            "dedupe": 2102.956,
+            "generation_open": 49354845.557,
+            "merge": 4621.727,
+            "network": 519989.966,
+            "placement": 188903.008,
+            "queue": 29319.105,
+            "read_index_apply": 54898.255,
+            "response": 3851.143,
+            "router_open": 1519.88,
+            "router_search": 113303.19,
+            "rpc": 50716751.599,
+            "shard_search": 769510.989,
+            "total": 53695910.711
+          }
+        }
+      }
+    },
+    {
+      "concurrency": 1,
+      "native_over_single_p95": 0.8511396058477428,
+      "native_over_single_qps": 0.9281266471544575,
+      "probes": 16,
+      "topologies": {
+        "native_four_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 1818206.272,
+            "candidates": 28409.473,
+            "edges": 67624.979,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 4180.0,
+            "requests": 4.0,
+            "response_bytes": 7232.0,
+            "retries": 0.0,
+            "rpcs": 4.0,
+            "selected_groups": 4.0,
+            "selected_partitions": 16.0
+          },
+          "p95_nanos_max": 49711316,
+          "p95_nanos_median": 41976069,
+          "p95_nanos_min": 41580580,
+          "qps_max": 29.638929392156385,
+          "qps_median": 29.488846736821007,
+          "qps_min": 28.38917745928194,
+          "recall_at_10_max": 0.9828999999999971,
+          "recall_at_10_median": 0.9828999999999971,
+          "recall_at_10_min": 0.9828999999999971,
+          "timing_nanos_per_query_median": {
+            "dedupe": 4871.769,
+            "generation_open": 65230139.615,
+            "merge": 5147.455,
+            "network": 1360166.042,
+            "placement": 235983.411,
+            "queue": 73628.265,
+            "read_index_apply": 120511.937,
+            "response": 17007.922,
+            "router_open": 1783.213,
+            "router_search": 102191.279,
+            "rpc": 71051674.49,
+            "shard_search": 4397247.355,
+            "total": 27433991.392
+          }
+        },
+        "single_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 1818206.272,
+            "candidates": 28409.473,
+            "edges": 67624.979,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 4180.0,
+            "requests": 4.0,
+            "response_bytes": 7232.0,
+            "retries": 0.0,
+            "rpcs": 4.0,
+            "selected_groups": 4.0,
+            "selected_partitions": 16.0
+          },
+          "p95_nanos_max": 61300574,
+          "p95_nanos_median": 49317490,
+          "p95_nanos_min": 41770472,
+          "qps_max": 32.70765100637873,
+          "qps_median": 31.77243841369153,
+          "qps_min": 28.542042203425606,
+          "recall_at_10_max": 0.9828999999999971,
+          "recall_at_10_median": 0.9828999999999971,
+          "recall_at_10_min": 0.9828999999999971,
+          "timing_nanos_per_query_median": {
+            "dedupe": 5108.961,
+            "generation_open": 51863518.866,
+            "merge": 5871.25,
+            "network": 1273573.975,
+            "placement": 234360.991,
+            "queue": 81304.198,
+            "read_index_apply": 105368.065,
+            "response": 18302.341,
+            "router_open": 1781.712,
+            "router_search": 103103.975,
+            "rpc": 58058658.522,
+            "shard_search": 4773912.829,
+            "total": 24396654.689
+          }
+        }
+      }
+    },
+    {
+      "concurrency": 8,
+      "native_over_single_p95": 1.2691403367086698,
+      "native_over_single_qps": 0.6441223883437609,
+      "probes": 16,
+      "topologies": {
+        "native_four_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 1818206.272,
+            "candidates": 28409.473,
+            "edges": 67624.979,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 4180.0,
+            "requests": 4.0,
+            "response_bytes": 7232.0,
+            "retries": 0.0,
+            "rpcs": 4.0,
+            "selected_groups": 4.0,
+            "selected_partitions": 16.0
+          },
+          "p95_nanos_max": 249905445,
+          "p95_nanos_median": 243394721,
+          "p95_nanos_min": 219767765,
+          "qps_max": 48.02329067282611,
+          "qps_median": 47.67648773156586,
+          "qps_min": 46.89791303574612,
+          "recall_at_10_max": 0.9828999999999971,
+          "recall_at_10_median": 0.9828999999999971,
+          "recall_at_10_min": 0.9828999999999971,
+          "timing_nanos_per_query_median": {
+            "dedupe": 5678.259,
+            "generation_open": 184611846.122,
+            "merge": 5414.12,
+            "network": 1513789.663,
+            "placement": 251668.697,
+            "queue": 128601.457,
+            "read_index_apply": 145586.819,
+            "response": 17784.266,
+            "router_open": 1761.18,
+            "router_search": 121482.426,
+            "rpc": 191026308.736,
+            "shard_search": 4700751.572,
+            "total": 115576894.049
+          }
+        },
+        "single_daemon_four_group": {
+          "counters_per_query_median": {
+            "candidate_bytes": 1818206.272,
+            "candidates": 28409.473,
+            "edges": 67624.979,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 4180.0,
+            "requests": 4.0,
+            "response_bytes": 7232.0,
+            "retries": 0.0,
+            "rpcs": 4.0,
+            "selected_groups": 4.0,
+            "selected_partitions": 16.0
+          },
+          "p95_nanos_max": 228665164,
+          "p95_nanos_median": 191779202,
+          "p95_nanos_min": 131005312,
+          "qps_max": 83.62156189589737,
+          "qps_median": 74.01774661824275,
+          "qps_min": 54.00252914051711,
+          "recall_at_10_max": 0.9828999999999971,
+          "recall_at_10_median": 0.9828999999999971,
+          "recall_at_10_min": 0.9828999999999971,
+          "timing_nanos_per_query_median": {
+            "dedupe": 5696.899,
+            "generation_open": 141826969.271,
+            "merge": 6531.513,
+            "network": 1869053.933,
+            "placement": 288289.828,
+            "queue": 270779.644,
+            "read_index_apply": 244316.224,
+            "response": 31068.431,
+            "router_open": 1720.419,
+            "router_search": 137445.128,
+            "rpc": 150679456.641,
+            "shard_search": 7074318.283,
+            "total": 73941467.491
+          }
+        }
+      }
+    }
+  ],
+  "schema_version": 1,
+  "status": "valid_baseline"
+}

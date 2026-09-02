@@ -1,0 +1,285 @@
+{
+  "tracker": "https://github.com/snissn/gomap/issues/1529",
+  "milestone": "PR9 default command-WAL public raw KV cutover",
+  "branch": "codex/user-command-wal-pr9",
+  "base_branch": "codex/user-command-wal-pr8",
+  "implementation_commit": "pr-head",
+  "go_version": "go1.25.7",
+  "platform": "linux/amd64",
+  "command_support_matrix_version": "TreeDB/docs/spec/command-wal-support-matrix.json version 1",
+  "features": [
+    "public treedb.Open read-write command-WAL handles",
+    "public Set/Delete/Batch.Write raw KV writes routed to RawKVBatch typed command frames",
+    "public command-WAL mode proof through treedb.write_path.mode=command_wal_cached",
+    "cached public command-WAL writes with the legacy cached redo journal disabled",
+    "physical backend flush batches that do not emit duplicate RawKVBatch command frames",
+    "checkpoint/close publication of covered command-WAL LSNs after cached flush",
+    "reopen from persisted command_wal_v1 with command_wal_cached mode proof",
+    "unified_bench public cached command-WAL variant for end-to-end batch-write comparison",
+    "public command-WAL batches preserve Reset and SetView/DeleteView fast paths",
+    "streaming RawKVBatch payload encoder avoids intermediate operation slice allocation",
+    "single-operation public Set/Delete encoder avoids one-entry operation slice allocation",
+    "public command-WAL append path avoids allocating backend command intent tokens for one-shot public writes",
+    "single-pass hinted RawKVBatch payload scan for public command-WAL batches",
+    "direct single-operation command frame append avoids point-write payload allocation",
+    "public command-WAL batches build the RawKVBatch payload incrementally",
+    "public command-WAL batch reserve hints pre-size the command payload to avoid repeated payload growth",
+    "public command-WAL batch payload append writes prebuilt RawKVBatch payload bytes directly without copying them into a second frame buffer",
+    "non-sync public command-WAL appends use the buffered journal writer and flush at stats/publish/sync boundaries",
+    "command-WAL flush semantics follow DurabilityWALOnRelaxed by flushing rather than fsyncing the command journal in relaxed mode",
+    "public command-WAL point writes serialize command LSN assignment with cached same-key mutation order",
+    "public command-WAL batches use specialized Set/Delete payload appenders and trusted prebuilt-payload command appends to avoid redundant payload validation scans",
+    "public command-WAL checkpoint publication can piggyback AppliedCommandLSN advancement onto the cached checkpoint backend publish boundary",
+    "public command-WAL checkpoint publication piggybacks same-lane unchunked combined checkpoint queues without advancing AppliedCommandLSN ahead of covered roots",
+    "public command-WAL pending LSN range updates are serialized so checkpoint clear cannot discard newer pending command LSNs",
+    "Close returns final command-WAL checkpoint publication failures in addition to reporting them through NotifyError",
+    "public command-WAL batch correctness hook appends the command frame after cached batch preflight and before cached visibility without disabling sorted-run memtable ingestion",
+    "public command-WAL batch cached-view hook rebinding is centralized for constructor and Reset reuse",
+    "public command-WAL batches skip duplicate cached SetView/DeleteView validation after the public wrapper validates inputs",
+    "deferred command-WAL writer size advances only after buffered command frames are flushed to the segment file",
+    "trusted public command-WAL batch frames are buffered in writer-owned memory and finalized at command-WAL flush/checkpoint boundaries to avoid per-batch direct writev/digest overhead",
+    "command-WAL reopen after published frames opens a fresh active segment instead of reusing the covered segment",
+    "buffered command-frame write failures truncate any unaccounted partial tail back to the writer size before poisoning the writer",
+    "command journal LSN reservation and rollback paths protect owner state with the owner mutex",
+    "public command-WAL close uses the cached checkpoint helper directly instead of re-entering the public Checkpoint method",
+    "cached command-WAL checkpoint fallback re-snapshots publish ranges if a prepared piggyback is not consumed",
+    "value-log auto high-entropy forced-pointer 512-byte single-value batches bypass block/dict probing and stay on raw frames",
+    "value-log auto high-entropy raw bypass uses max grouped raw frames and raw writev to reduce CRC/header/copy overhead while preserving value bytes",
+    "single-class value-log dict routing avoids per-record class range scans when split outer-leaf dict classes are disabled",
+    "cheap live accepted/covered command-frame counters let benchmark mode proof avoid diagnostic WAL segment scans"
+  ],
+  "passed_tests": [
+    "TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor",
+    "TestCommandWALSupportMatrix",
+    "TestEncodeRawKVBatchPayloadScanMatchesSliceEncoder",
+    "TestEncodeRawKVSingleCommandFrameMatchesEnvelopeEncoder",
+    "TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder",
+    "TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature",
+    "TestPublicCommandWALBatchCloseDiscardsDirtyPayload",
+    "TestPublicCommandWALBatchResetFallbackKeepsWrapperUsable",
+    "TestPublicCommandWALBatchWriteFailureDoesNotAppendFrame",
+    "TestCanPiggybackCommandWALCheckpointPublishSingleLaneCombinedQueue",
+    "TestPublicCommandWALCheckpointPiggybacksAppliedLSN",
+    "TestPublicCommandWALCheckpointPublishCapsAtCutoverLSN",
+    "TestPublicCommandWALCheckpointPublishesOnlyCoveredLSNs",
+    "TestPublicCommandWALCloseReportsFinalCheckpointError",
+    "TestPublicCommandWALPendingClearPreservesNewerRange",
+    "TestPublicCommandWALPointWritesSerializeLSNWithCachedMutation",
+    "TestPublicCommandWALPublishSyncMatrix",
+    "TestPublicCommandWALRawKVWritesUseTypedFrames",
+    "TestRawKVBatchPayloadBuilderMatchesSliceEncoder",
+    "TestRawKVBatchPayloadBuilderResetWithHintReportsOverflow",
+    "TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath",
+    "TestWriterAppendRawKVBatchPayloadCommandDirect",
+    "TestPR9AcceptancePerformanceGateIsStrictParityPlus",
+    "TestCommandJournalAllocatesContiguousLSNs",
+    "TestCommandJournalAppendFailureRollsBackLSN",
+    "TestCommandJournalConcurrentAppendsSerializeFrameOrder",
+    "TestWriterBufferedCommandSizeAdvancesOnFlush",
+    "TestCommandWALReopenAfterPublishedFrameUsesFreshSegment",
+    "TestWriterPoisonCommandBufferTruncatesUnaccountedTail",
+    "TestShouldBypassAutoRawValueCompression_ForcePointerHighEntropy",
+    "TestShouldBypassAutoRawValueCompression_CompressibleStaysEligible",
+    "TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt",
+    "TestPublicCommandWALLiveCountersDoNotRequireStatsScan",
+    "TestCommandWALStatsDefaultDoesNotScanWAL"
+  ],
+  "local_validation_commands": [
+    "GOWORK=off go test ./TreeDB ./TreeDB/docs ./TreeDB/db ./TreeDB/nativewire ./TreeDB/internal/commitlog ./cmd/unified_bench -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|TestPublicCommandWALPointWritesSerializeLSNWithCachedMutation|TestPublicCommandWALBatchCloseDiscardsDirtyPayload|TestPublicCommandWALBatchWriteFailureDoesNotAppendFrame|TestPublicCommandWALPublishSyncMatrix|TestRawKVBatchPayloadBuilderMatchesSliceEncoder|TestRawKVBatchPayloadBuilderResetWithHintReportsOverflow|TestWriterAppendRawKVBatchPayloadCommandDirect|TestEncodeRawKVBatchPayloadScanMatchesSliceEncoder|TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder|TestEncodeRawKVSingleCommandFrameMatchesEnvelopeEncoder|TestCommandWALSupportMatrix|TestCommandWALRejectedErrorDistinctFromUnsupported|TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature|TestCommandWALNativeWireAlignmentManifestCoverage|TestNativeWireAndLocalCommandDigestStable|TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN|TestNativeWirePostFramePublishFailureCommitAmbiguous|TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema|TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor|TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath|TestTreeDBCommandWALAliasResolvesToBackendVariant|^$' -count=1",
+    "GOWORK=off go test ./TreeDB/caching ./TreeDB/db -run '^$' -count=1",
+    "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|^$' -bench 'BenchmarkPublicCommandWALRawKV(Set|BatchWrite)$' -benchtime=50x -count=1",
+    "GOWORK=off go test ./TreeDB -run '^$' -bench 'BenchmarkPublicCommandWALRawKVSet$' -benchtime=100000x -count=5",
+    "GOWORK=off go test ./TreeDB -run '^$' -bench 'BenchmarkPublicCommandWALRawKVBatchWrite$' -benchtime=1000x -count=3",
+    "GOWORK=off go run ./cmd/unified_bench -dbs treedb,treedb_public_command_wal -test batch_write -keys 200000 -batchsize 1024 -valsize 32 -profile wal_on_fast -treedb-maintenance-mode bench -treedb-command-wal-stats-scan -progress=false -format markdown",
+    "GOWORK=off go test ./TreeDB/docs -run TestPR9AcceptancePerformanceGateIsStrictParityPlus -count=1",
+    "for i in 1 2 3; do GOWORK=off go run ./cmd/unified_bench -dbs treedb,treedb_public_command_wal -test batch_write -keys 200000 -batchsize 1024 -valsize 32 -profile wal_on_fast -treedb-maintenance-mode bench -treedb-command-wal-stats-scan -progress=false -format markdown; done",
+    "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/db ./TreeDB -run 'TestWriterAppendRawKVBatchPayloadCommandDirect|TestCommandJournalAllocatesContiguousLSNs|TestCommandJournalAppendFailureRollsBackLSN|TestCommandJournalConcurrentAppendsSerializeFrameOrder|TestPublicCommandWALRawKVWritesUseTypedFrames|TestPublicCommandWALBatchWriteFailureDoesNotAppendFrame|TestPublicCommandWALPublishSyncMatrix|^$' -count=1",
+    "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWALCheckpointPiggybacksAppliedLSN|TestPublicCommandWALCheckpointPublishCapsAtCutoverLSN|TestPublicCommandWALCheckpointPublishesOnlyCoveredLSNs|TestPublicCommandWALNoopCheckpointRunsPublishHook|TestPublicCommandWALCheckpointRetainsCommandJournalSegment|TestPublicCommandWALCheckpointHookUsesSyncIntent' -count=1",
+    "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWAL' -count=1",
+    "GOWORK=off go test ./TreeDB/db -run 'TestCommandWAL|TestPublishCommandWAL|TestRawKV' -count=1",
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run 'TestWriter|TestRawKV|TestCommand' -count=1",
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run 'TestWriterAppendRawKVBatchPayloadCommandDirect|TestWriterBufferedCommandFlushFailurePoisonsWriter|TestWriterBufferedCommandSizeAdvancesOnFlush|TestCommandJournal|TestRawKV|TestCommand' -count=1",
+    "GOWORK=off go test ./TreeDB/caching -run TestCanPiggybackCommandWALCheckpointPublishSingleLaneCombinedQueue -count=1",
+    "GOWORK=off go test ./cmd/unified_bench -run 'TestTreeDBCommandWAL|TestRunBenchmark' -count=1",
+    "GOWORK=off go test ./TreeDB/docs -run TestPR9AcceptancePerformanceGateIsStrictParityPlus -count=1",
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run 'TestCommandJournal|TestWriterBufferedCommand|TestWriterPoisonCommandBuffer|TestRawKVBatchPayloadBuilder|TestWriterAppendRawKVBatchPayloadCommandDirect|TestRawKV' -count=1",
+    "GOWORK=off go test ./TreeDB/db -run 'TestCommandWAL(ReopenAfterPublishedFrameUsesFreshSegment|CrashAfterRootAppliedLSNBeforeCleanupSkipsFrame|CleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames)|TestPublishCommandWAL|TestRawKV' -count=1",
+    "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWALCheckpointPiggybacksAppliedLSN|TestPublicCommandWALCheckpointHookUsesSyncIntent|TestPublicCommandWALClosePublishesPendingAppliedLSN|TestPublicCommandWALCheckpointRetainsCommandJournalSegment' -count=1",
+    "GOWORK=off go test ./TreeDB/docs -run 'TestPR9AcceptancePerformanceGateIsStrictParityPlus|TestCommandWAL' -count=1",
+    "GOWORK=off go test ./cmd/unified_bench -run 'TestTreeDBCommandWAL|TestRunBenchmark|TestProfile' -count=1",
+    "GOWORK=off go test ./TreeDB/caching -run 'TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt|TestShouldBypassAutoRawValueCompression|TestObserveVlogWriteMode_ForcePointers|TestResolveVlogWriteMode_ForcePointers' -count=1 -v",
+    "GOWORK=off go test ./TreeDB/caching -count=1",
+    "GOWORK=off go test ./cmd/unified_bench -run 'TestTreeDBCommandWAL|TestRunBenchmark|TestProfile|TestBuildTreeDBOptions|TestParseTreeDBVlog' -count=1",
+    "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWAL|TestPR9AcceptancePerformanceGateIsStrictParityPlus' -count=1 && GOWORK=off go test ./TreeDB/db -run 'TestCommandWAL|TestPublishCommandWAL|TestRawKV' -count=1",
+    "tmp=$(mktemp -d /tmp/vlog_auto_gate_full_XXXXXX); GOWORK=off go run ./cmd/unified_bench -keys 1000000 -valsize 512 -batchsize 1024 -dbs treedb_vlog_off -test batch_write -val-pattern random -format markdown -progress=false -keep=false -seed 1 -treedb-force-value-pointers=true -treedb-value-log-threshold=1 -treedb-vlog-dict-train-bytes=-1 > \"$tmp/off.txt\" 2>&1; GOWORK=off go run ./cmd/unified_bench -keys 1000000 -valsize 512 -batchsize 1024 -dbs treedb_vlog_auto -test batch_write -val-pattern random -format markdown -progress=false -keep=false -seed 1 -treedb-force-value-pointers=true -treedb-value-log-threshold=1 -treedb-vlog-dict-train-bytes=-1 > \"$tmp/auto.txt\" 2>&1; GOWORK=off go run .github/scripts/check_vlog_auto_incompressible.go -off-log \"$tmp/off.txt\" -auto-log \"$tmp/auto.txt\" -min-throughput-frac 1.01 -max-size-frac 1.02",
+    "GOWORK=off go test ./TreeDB/db -run 'TestCommandWALStats|TestCommandWALAppliedCommandLSNMetaFieldRoundTrip|TestPublishCommandWAL' -count=1",
+    "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWAL(RawKVWritesUseTypedFrames|LiveCountersDoNotRequireStatsScan|PointWritesSerializeLSNWithCachedMutation|CheckpointPiggybacksAppliedLSN|CheckpointPublishesOnlyCoveredLSNs|CheckpointRetainsCommandJournalSegment)' -count=1",
+    "GOWORK=off go test ./cmd/unified_bench -run 'TestTreeDBCommandWAL|TestRenderMarkdownSingle_IncludesTreeDBPerfSections' -count=1",
+    "GOWORK=off go run ./cmd/unified_bench -dbs treedb_public_command_wal -test batch_write -keys 4096 -batchsize 128 -valsize 32 -profile wal_on_fast -treedb-maintenance-mode bench -progress=false -format markdown"
+  ],
+  "benchmark_artifacts": [
+    "artifacts/command-wal/pr9/public-raw-kv-microbench.txt",
+    "artifacts/command-wal/pr9/public-raw-kv-set-longer.txt",
+    "artifacts/command-wal/pr9/public-raw-kv-batch-longer.txt",
+    "artifacts/command-wal/pr9/public-cached-command-wal-unified-bench.md"
+  ],
+  "performance_gate": {
+    "required": true,
+    "status": "passed_strict_parity_plus",
+    "throughput_gate_operator": ">",
+    "thresholds": {
+      "focused_batch_write_min_ratio": 1.01,
+      "unified_batch_write_min_ratio": 1.01,
+      "allocation_regression_allowed": false,
+      "point_set_longer_min_ratio": 1.01,
+      "vlog_auto_incompressible_min_ratio": 1.01,
+      "all_throughput_gates_must_exceed_ratio": 1.01
+    },
+    "rationale": "Strict PR9 performance gates require every measured public command-WAL throughput lane and the incompressible value-log auto/off lane to be greater than 1.01x of its baseline. Current refreshed evidence passes that bar: point Set median is 1.074x with allocation parity, focused Batch.Write medians are 1.542x for batch_size=64 and 1.296x for batch_size=1024 with fewer allocations, unified_bench batch_write is 1.219x on the median representative stats-scan run, and value-log auto/off incompressible throughput is 1.1027x. The implementation keeps same-key command ordering, appends public batch command frames after cached preflight and before cached visibility, piggybacks AppliedCommandLSN publication onto cached checkpoint publication, and buffers trusted public command-WAL batch frames in writer-owned memory so digest/CRC/write finalization occurs at command-WAL flush/checkpoint boundaries instead of as a direct writev per batch.",
+    "latest_review_fix_smoke": {
+      "status": "passed_strict_greater_than_1_01_threshold",
+      "focused_50x": {
+        "point_set_ratio": 2.161,
+        "batch_write_size_64_ratio": 1.464,
+        "batch_write_size_1024_ratio": 1.874
+      },
+      "unified_bench_batch_write_200k_batch_size_1024": {
+        "legacy_public_cached_sets_per_sec": 4197819,
+        "public_command_wal_cached_sets_per_sec": 4262801,
+        "public_command_wal_cached_to_legacy_ratio": 1.015,
+        "mode_proof": {
+          "write_path_mode": "command_wal_cached",
+          "write_path_redo_log": "command_wal",
+          "command_wal_enabled": true,
+          "command_wal_required_feature": true,
+          "applied_command_lsn": 196,
+          "typed_frames_at_end": 196
+        }
+      }
+    },
+    "point_set_gate": {
+      "status": "passed_strict_greater_than_1_01_threshold",
+      "short_50x": {
+        "legacy_public_cached_wal_on_sets_per_sec": 142144,
+        "public_command_wal_cached_sets_per_sec": 324637,
+        "public_command_wal_cached_to_legacy_ratio": 2.284,
+        "legacy_public_cached_allocs_per_op": 5,
+        "public_command_wal_cached_allocs_per_op": 5,
+        "status": "informational_smoke_no_threshold"
+      },
+      "longer_100000x_count5": {
+        "legacy_public_cached_wal_on_sets_per_sec_median": 1842704,
+        "public_command_wal_cached_sets_per_sec_median": 1978818,
+        "public_command_wal_cached_to_legacy_ratio": 1.074,
+        "legacy_public_cached_allocs_per_op_median": 4,
+        "public_command_wal_cached_allocs_per_op_median": 4,
+        "sample_sets_per_sec": {
+          "legacy_public_cached_wal_on": [
+            1755713,
+            1843660,
+            1823660,
+            1842704,
+            1846864
+          ],
+          "public_command_wal_cached": [
+            2071048,
+            1993738,
+            1978818,
+            1976433,
+            1933127
+          ]
+        }
+      }
+    },
+    "batch_write_gate": {
+      "status": "passed_strict_greater_than_1_01_threshold",
+      "short_50x_batch_size_64": {
+        "legacy_public_cached_sets_per_sec": 1977457,
+        "public_command_wal_cached_sets_per_sec": 2888908,
+        "public_command_wal_cached_to_legacy_ratio": 1.461,
+        "legacy_public_cached_allocs_per_batch": 153,
+        "public_command_wal_cached_allocs_per_batch": 149
+      },
+      "short_50x_batch_size_1024": {
+        "legacy_public_cached_sets_per_sec": 2832243,
+        "public_command_wal_cached_sets_per_sec": 4142929,
+        "public_command_wal_cached_to_legacy_ratio": 1.463,
+        "legacy_public_cached_allocs_per_batch": 2079,
+        "public_command_wal_cached_allocs_per_batch": 2076
+      },
+      "longer_1000x_batch_size_64": {
+        "legacy_public_cached_sets_per_sec_median": 2057253,
+        "public_command_wal_cached_sets_per_sec_median": 3171308,
+        "public_command_wal_cached_to_legacy_ratio": 1.542,
+        "legacy_public_cached_allocs_per_batch_median": 145,
+        "public_command_wal_cached_allocs_per_batch_median": 143
+      },
+      "longer_1000x_batch_size_1024": {
+        "legacy_public_cached_sets_per_sec_median": 2252536,
+        "public_command_wal_cached_sets_per_sec_median": 2919696,
+        "public_command_wal_cached_to_legacy_ratio": 1.296,
+        "legacy_public_cached_allocs_per_batch_median": 2072,
+        "public_command_wal_cached_allocs_per_batch_median": 2070
+      },
+      "unified_bench_batch_write_200k_batch_size_1024": {
+        "legacy_public_cached_sets_per_sec": 5851645,
+        "public_command_wal_cached_sets_per_sec": 7133165,
+        "public_command_wal_cached_to_legacy_ratio": 1.219,
+        "sample_public_command_wal_cached_to_legacy_ratios": [
+          1.136,
+          1.219,
+          1.224
+        ],
+        "mode_proof": {
+          "write_path_mode": "command_wal_cached",
+          "write_path_redo_log": "command_wal",
+          "command_wal_enabled": true,
+          "command_wal_required_feature": true,
+          "applied_command_lsn": 196,
+          "typed_frames_at_end": 0,
+          "typed_frames_note": "end-of-run checkpoints covered and cleaned typed frames; applied_command_lsn proves 196 command frames were accepted and published"
+        }
+      }
+    },
+    "vlog_auto_incompressible_gate": {
+      "status": "passed_strict_greater_than_1_01_threshold",
+      "min_throughput_ratio": 1.01,
+      "max_value_log_size_ratio": 1.02,
+      "keys": 1000000,
+      "value_size": 512,
+      "batch_size": 1024,
+      "value_pattern": "random",
+      "force_value_pointers": true,
+      "dict_training": "disabled",
+      "legacy_vlog_off_ops_per_sec": 2099109,
+      "vlog_auto_ops_per_sec": 2314702,
+      "vlog_auto_to_off_ratio": 1.1027,
+      "legacy_vlog_off_value_log_bytes": 528482304,
+      "vlog_auto_value_log_bytes": 523239424,
+      "vlog_auto_to_off_value_log_size_ratio": 0.9901,
+      "evidence": "local full CI-equivalent run after high-entropy raw bypass and max grouped raw writev optimization"
+    },
+    "stats_scan_live_counter_smoke": {
+      "status": "passed_no_scan_mode_proof",
+      "command": "GOWORK=off go run ./cmd/unified_bench -dbs treedb_public_command_wal -test batch_write -keys 4096 -batchsize 128 -valsize 32 -profile wal_on_fast -treedb-maintenance-mode bench -progress=false -format markdown",
+      "stats_scan": false,
+      "applied_command_lsn": 32,
+      "live_accepted_frames": 32,
+      "live_accepted_max_lsn": 32,
+      "live_covered_frames": 32,
+      "live_covered_max_lsn": 32,
+      "write_path_mode": "command_wal_cached",
+      "write_path_redo_log": "command_wal"
+    }
+  },
+  "unsupported_modes": [
+    "Update/UpdateSync remain rejected under cached public command-WAL until they have typed command coverage",
+    "DeleteRange remains rejected under cached public command-WAL until it has typed command coverage"
+  ],
+  "next_required_work": [
+    "after pushing review fixes: refresh live PR CI/review state and confirm PR9 has no active actionable review threads"
+  ],
+  "local_validation_notes": [
+    "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/db ./TreeDB ./TreeDB/caching -count=1: command-WAL/db/caching packages passed; TreeDB package failed two value-log dict-compression tests that also fail on unmodified origin/codex/user-command-wal-pr9 in this environment"
+  ]
+}

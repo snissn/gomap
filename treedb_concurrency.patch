@@ -1,0 +1,727 @@
+diff --git a/TreeDB/caching/db.go b/TreeDB/caching/db.go
+index fc46d18..81910ab 100644
+--- a/TreeDB/caching/db.go
++++ b/TreeDB/caching/db.go
+@@ -293,7 +293,9 @@ func (db *DB) noteWriteKeyLocked(key []byte) {
+ 	if stats.hasLastKey && bytes.Compare(stats.lastKey, key) < 0 {
+ 		stats.seqWrites++
+ 	}
+-	stats.lastKey = key
++	// Copy the key bytes. We must not retain references to caller-provided
++	// slices, which may be mutated/reused after the write returns.
++	stats.lastKey = append(stats.lastKey[:0], key...)
+ 	stats.hasLastKey = true
+ }
+ 
+@@ -1096,10 +1098,15 @@ func (db *DB) SetSync(key, value []byte) error {
+ func (db *DB) set(key, value []byte, sync bool) error {
+ 	db.writeMu.Lock()
+ 
++	// Snapshot of current mutable memtable. This is safe because writers are
++	// serialized by writeMu, and the pointer itself is protected by db.mu.
++	var mutable memtable.Table
++
+ 	if !db.disableWAL {
+ 		db.mu.RLock()
+ 		w := db.wal
+ 		relaxedSync := db.relaxedSync
++		mutable = db.mutable
+ 		db.mu.RUnlock()
+ 
+ 		if w != nil {
+@@ -1117,14 +1124,26 @@ func (db *DB) set(key, value []byte, sync bool) error {
+ 		}
+ 	}
+ 
++	// Update write statistics and key range under db.mu, but perform the actual
++	// memtable mutation without holding db.mu to improve read/write concurrency.
+ 	db.mu.Lock()
+-	db.mutable.Set(key, value)
+-
++	if mutable == nil {
++		mutable = db.mutable
++	}
+ 	db.mutableRange.add(key)
+ 	db.noteWriteKeyLocked(key)
++	db.mu.Unlock()
++
++	if mutable != nil {
++		mutable.Set(key, value)
++	}
+ 
+ 	// 3. Check Threshold
+-	if db.mutable.Size() > db.mutableFlushThresholdLocked() {
++	db.mu.Lock()
++	if mutable == nil {
++		mutable = db.mutable
++	}
++	if mutable != nil && mutable.Size() > db.mutableFlushThresholdLocked() {
+ 		if err := db.rotateMemtableLocked(true); err != nil {
+ 			db.mu.Unlock()
+ 			db.writeMu.Unlock()
+@@ -1585,10 +1604,14 @@ func (db *DB) DeleteSync(key []byte) error {
+ func (db *DB) delete(key []byte, sync bool) error {
+ 	db.writeMu.Lock()
+ 
++	// Snapshot of current mutable memtable (see set for rationale).
++	var mutable memtable.Table
++
+ 	if !db.disableWAL {
+ 		db.mu.RLock()
+ 		w := db.wal
+ 		relaxedSync := db.relaxedSync
++		mutable = db.mutable
+ 		db.mu.RUnlock()
+ 
+ 		if w != nil {
+@@ -1606,14 +1629,26 @@ func (db *DB) delete(key []byte, sync bool) error {
+ 		}
+ 	}
+ 
++	// Update write statistics and key range under db.mu, but perform the actual
++	// memtable mutation without holding db.mu to improve read/write concurrency.
+ 	db.mu.Lock()
+-	db.mutable.Delete(key)
+-
++	if mutable == nil {
++		mutable = db.mutable
++	}
+ 	db.mutableRange.add(key)
+ 	db.noteWriteKeyLocked(key)
++	db.mu.Unlock()
++
++	if mutable != nil {
++		mutable.Delete(key)
++	}
+ 
+ 	// 3. Threshold
+-	if db.mutable.Size() > db.mutableFlushThresholdLocked() {
++	db.mu.Lock()
++	if mutable == nil {
++		mutable = db.mutable
++	}
++	if mutable != nil && mutable.Size() > db.mutableFlushThresholdLocked() {
+ 		if err := db.rotateMemtableLocked(true); err != nil {
+ 			db.mu.Unlock()
+ 			db.writeMu.Unlock()
+@@ -2230,25 +2265,48 @@ func (db *DB) flushOneLocked(sync bool) bool {
+ }
+ 
+ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
++	// Snapshot the memtable pointers under the lock, but do the actual lookups
++	// without holding db.mu.
++	//
++	// This significantly improves read/write concurrency because:
++	// - Reads no longer hold db.mu while taking per-memtable locks.
++	// - Writes can take db.mu briefly for metadata updates without being blocked
++	//   by long-running reads.
+ 	db.mu.RLock()
+-	// check mutable
+-	val, deleted, found := db.mutable.Get(key)
+-	if found {
+-		db.mu.RUnlock()
+-		if deleted {
+-			return nil, true, nil
++	mutable := db.mutable
++	q := db.queue
++	var queue []memtable.Table
++	if n := len(q); n > 0 {
++		// Avoid heap allocation for the common small-queue case.
++		var buf [16]memtable.Table
++		if n <= len(buf) {
++			queue = buf[:n]
++			copy(queue, q)
++		} else {
++			queue = make([]memtable.Table, n)
++			copy(queue, q)
+ 		}
+-		if val == nil {
+-			return []byte{}, true, nil
++	}
++	db.mu.RUnlock()
++
++	// check mutable
++	if mutable != nil {
++		val, deleted, found := mutable.Get(key)
++		if found {
++			if deleted {
++				return nil, true, nil
++			}
++			if val == nil {
++				return []byte{}, true, nil
++			}
++			return val, true, nil
+ 		}
+-		return val, true, nil
+ 	}
+ 
+ 	// check queue backwards (newest first)
+-	for i := len(db.queue) - 1; i >= 0; i-- {
+-		val, deleted, found = db.queue[i].Get(key)
++	for i := len(queue) - 1; i >= 0; i-- {
++		val, deleted, found := queue[i].Get(key)
+ 		if found {
+-			db.mu.RUnlock()
+ 			if deleted {
+ 				return nil, true, nil
+ 			}
+@@ -2258,7 +2316,6 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
+ 			return val, true, nil
+ 		}
+ 	}
+-	db.mu.RUnlock()
+ 	return nil, false, nil
+ }
+ 
+@@ -2331,21 +2388,35 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
+ }
+ 
+ func (db *DB) Has(key []byte) (bool, error) {
++	// Same snapshot pattern as getMemtable to improve concurrency.
+ 	db.mu.RLock()
+-	_, deleted, found := db.mutable.Get(key)
+-	if found {
+-		db.mu.RUnlock()
+-		return !deleted, nil
++	mutable := db.mutable
++	q := db.queue
++	var queue []memtable.Table
++	if n := len(q); n > 0 {
++		var buf [16]memtable.Table
++		if n <= len(buf) {
++			queue = buf[:n]
++			copy(queue, q)
++		} else {
++			queue = make([]memtable.Table, n)
++			copy(queue, q)
++		}
+ 	}
++	db.mu.RUnlock()
+ 
+-	for i := len(db.queue) - 1; i >= 0; i-- {
+-		_, deleted, found = db.queue[i].Get(key)
++	if mutable != nil {
++		_, deleted, found := mutable.Get(key)
++		if found {
++			return !deleted, nil
++		}
++	}
++	for i := len(queue) - 1; i >= 0; i-- {
++		_, deleted, found := queue[i].Get(key)
+ 		if found {
+-			db.mu.RUnlock()
+ 			return !deleted, nil
+ 		}
+ 	}
+-	db.mu.RUnlock()
+ 
+ 	return db.backend.Has(key)
+ }
+@@ -3028,45 +3099,110 @@ func (b *Batch) writeRegular(sync bool) error {
+ 		}
+ 	}
+ 
++	// Precompute key-range and sequential-write statistics without holding db.mu.
++	entries := b.entries
++	var (
++		minKey    []byte
++		maxKey    []byte
++		firstKey  []byte
++		lastKey   []byte
++		seqWithin uint64
++	)
++	if len(entries) > 0 {
++		firstKey = entries[0].Key
++		lastKey = entries[len(entries)-1].Key
++		if b.streamEligible {
++			// Strictly increasing key order.
++			minKey = firstKey
++			maxKey = lastKey
++			if len(entries) > 1 {
++				seqWithin = uint64(len(entries) - 1)
++			}
++		} else {
++			minKey = firstKey
++			maxKey = firstKey
++			prev := firstKey
++			for i := 1; i < len(entries); i++ {
++				k := entries[i].Key
++				if bytes.Compare(k, minKey) < 0 {
++					minKey = k
++				}
++				if bytes.Compare(k, maxKey) > 0 {
++					maxKey = k
++				}
++				if bytes.Compare(prev, k) < 0 {
++					seqWithin++
++				}
++				prev = k
++			}
++		}
++	}
++
++	// 2. Update DB metadata under db.mu, but apply the batch to the memtable
++	// without holding db.mu to improve concurrency.
++	var mutable memtable.Table
+ 	b.db.mu.Lock()
+-	// 2. Memtable Update
+-	onKey := func(key []byte) {
+-		b.db.noteWriteKeyLocked(key)
+-		b.db.mutableRange.add(key)
++	mutable = b.db.mutable
++	if len(entries) > 0 {
++		// Maintain a conservative key-range (min/max) for the mutable memtable.
++		b.db.mutableRange.add(minKey)
++		b.db.mutableRange.add(maxKey)
++
++		// Maintain adaptive statistics without retaining references to caller data.
++		if b.db.memtableAdaptive {
++			stats := &b.db.memtableStats
++			stats.writes += uint64(len(entries))
++			if len(firstKey) == 0 {
++				stats.hasLastKey = false
++			} else {
++				if stats.hasLastKey && bytes.Compare(stats.lastKey, firstKey) < 0 {
++					stats.seqWrites++
++				}
++				stats.seqWrites += seqWithin
++				stats.lastKey = append(stats.lastKey[:0], lastKey...)
++				stats.hasLastKey = true
++			}
++		}
+ 	}
+-	if b.streamEligible {
+-		if applier, ok := b.db.mutable.(memtable.SortedBatchApplier); ok {
+-			applier.ApplyStealSortedBatch(b.entries, onKey)
++	b.db.mu.Unlock()
++
++	// 3. Memtable update (outside db.mu).
++	if len(entries) > 0 && mutable != nil {
++		if b.streamEligible {
++			if applier, ok := mutable.(memtable.SortedBatchApplier); ok {
++				applier.ApplyStealSortedBatch(entries, nil)
++			} else {
++				for _, op := range entries {
++					if op.Type == batch.OpDelete {
++						mutable.DeleteSteal(op.Key)
++					} else {
++						mutable.SetSteal(op.Key, op.Value)
++					}
++				}
++			}
+ 		} else {
+-			for _, op := range b.entries {
++			for _, op := range entries {
+ 				if op.Type == batch.OpDelete {
+-					b.db.mutable.DeleteSteal(op.Key)
++					mutable.DeleteSteal(op.Key)
+ 				} else {
+-					b.db.mutable.SetSteal(op.Key, op.Value)
++					mutable.SetSteal(op.Key, op.Value)
+ 				}
+-				onKey(op.Key)
+ 			}
+ 		}
+-	} else {
+-		for _, op := range b.entries {
+-			if op.Type == batch.OpDelete {
+-				b.db.mutable.DeleteSteal(op.Key)
+-			} else {
+-				b.db.mutable.SetSteal(op.Key, op.Value)
+-			}
+-			onKey(op.Key)
+-		}
+ 	}
+ 
+-	// 3. Threshold Check
+-	if b.db.mutable.Size() > b.db.mutableFlushThresholdLocked() {
++	// 4. Threshold check/rotation under db.mu.
++	b.db.mu.Lock()
++	if mutable == nil {
++		mutable = b.db.mutable
++	}
++	if mutable != nil && mutable.Size() > b.db.mutableFlushThresholdLocked() {
+ 		if err := b.db.rotateMemtableLocked(true); err != nil {
+ 			b.db.mu.Unlock()
+ 			b.db.writeMu.Unlock()
+ 			return err
+ 		}
+ 	}
+-
+ 	b.db.mu.Unlock()
+ 	b.db.writeMu.Unlock()
+ 
+diff --git a/TreeDB/caching/locking_concurrency_test.go b/TreeDB/caching/locking_concurrency_test.go
+new file mode 100644
+index 0000000..40080c8
+--- /dev/null
++++ b/TreeDB/caching/locking_concurrency_test.go
+@@ -0,0 +1,278 @@
++package caching
++
++import (
++	"bytes"
++	"testing"
++	"time"
++
++	"github.com/snissn/gomap/TreeDB/internal/iter"
++	"github.com/snissn/gomap/TreeDB/internal/memtable"
++)
++
++// blockingMemtable wraps an underlying memtable.Table and can optionally block
++// in Get/Set to allow tests to assert higher-level lock behavior.
++//
++// This is intentionally lightweight: it does not attempt to be a general-purpose
++// test double, it just provides controllable pauses at the entry points we care
++// about.
++type blockingMemtable struct {
++	inner memtable.Table
++
++	// If non-nil, Set will signal on setEntered then block reading from blockSet.
++	setEntered chan struct{}
++	blockSet   chan struct{}
++
++	// If non-nil, Get will signal on getEntered then block reading from blockGet.
++	getEntered chan struct{}
++	blockGet   chan struct{}
++}
++
++func (m *blockingMemtable) Set(key, value []byte) {
++	if m.blockSet != nil {
++		select {
++		case m.setEntered <- struct{}{}:
++		default:
++		}
++		<-m.blockSet
++	}
++	m.inner.Set(key, value)
++}
++
++func (m *blockingMemtable) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
++	// PutWithCallback isn't used by the caching layer directly in these tests, but
++	// we implement it for completeness and future safety.
++	if m.blockSet != nil {
++		select {
++		case m.setEntered <- struct{}{}:
++		default:
++		}
++		<-m.blockSet
++	}
++	return m.inner.PutWithCallback(key, value, cb)
++}
++
++func (m *blockingMemtable) Delete(key []byte) {
++	m.inner.Delete(key)
++}
++
++func (m *blockingMemtable) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error {
++	return m.inner.DeleteWithCallback(key, cb)
++}
++
++func (m *blockingMemtable) SetSteal(key, value []byte) {
++	m.inner.SetSteal(key, value)
++}
++
++func (m *blockingMemtable) DeleteSteal(key []byte) {
++	m.inner.DeleteSteal(key)
++}
++
++func (m *blockingMemtable) Get(key []byte) (value []byte, deleted bool, found bool) {
++	if m.blockGet != nil {
++		select {
++		case m.getEntered <- struct{}{}:
++		default:
++		}
++		<-m.blockGet
++	}
++	return m.inner.Get(key)
++}
++
++func (m *blockingMemtable) Size() int64 {
++	return m.inner.Size()
++}
++
++func (m *blockingMemtable) Len() int {
++	return m.inner.Len()
++}
++
++func (m *blockingMemtable) NewIterator(start, end []byte) iter.Iterator {
++	return m.inner.NewIterator(start, end)
++}
++
++func (m *blockingMemtable) Freeze() {
++	m.inner.Freeze()
++}
++
++func TestDB_SetDoesNotHoldGlobalMuWhileBlockedInMemtableSet(t *testing.T) {
++	backend := NewMockBackend()
++	// Disable WAL to keep this test tight and deterministic.
++	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist"})
++	if err != nil {
++		t.Fatalf("open: %v", err)
++	}
++	defer func() {
++		_ = db.Close()
++	}()
++
++	setEntered := make(chan struct{}, 1)
++	blockSet := make(chan struct{})
++
++	// Swap in a memtable that blocks in Set.
++	db.mu.Lock()
++	orig := db.mutable
++	db.mutable = &blockingMemtable{inner: orig, setEntered: setEntered, blockSet: blockSet}
++	db.mu.Unlock()
++
++	setDone := make(chan error, 1)
++	go func() {
++		setDone <- db.Set([]byte("k"), []byte("v"))
++	}()
++
++	select {
++	case <-setEntered:
++		// ok
++	case <-time.After(2 * time.Second):
++		t.Fatal("Set did not reach memtable.Set in time")
++	}
++
++	// Stats takes db.mu.RLock(). The whole point of this test is to verify that
++	// db.mu is *not* held for the duration of the (blocked) memtable write.
++	statsDone := make(chan struct{})
++	go func() {
++		_, _ = db.Stats()
++		close(statsDone)
++	}()
++	select {
++	case <-statsDone:
++		// ok: Stats was not blocked by Set.
++	case <-time.After(2 * time.Second):
++		t.Fatal("Stats blocked while Set was paused inside memtable.Set; db.mu appears to be held too long")
++	}
++
++	// Unblock Set and ensure it completes.
++	close(blockSet)
++	select {
++	case err := <-setDone:
++		if err != nil {
++			t.Fatalf("Set returned error: %v", err)
++		}
++	case <-time.After(2 * time.Second):
++		t.Fatal("Set did not complete after unblocking memtable.Set")
++	}
++
++	got, err := db.Get([]byte("k"))
++	if err != nil {
++		t.Fatalf("Get: %v", err)
++	}
++	if !bytes.Equal(got, []byte("v")) {
++		t.Fatalf("unexpected value: got %q want %q", got, "v")
++	}
++}
++
++func TestDB_GetDoesNotHoldGlobalMuWhileBlockedInMemtableGet(t *testing.T) {
++	backend := NewMockBackend()
++	// Disable WAL to keep this test tight and deterministic.
++	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist"})
++	if err != nil {
++		t.Fatalf("open: %v", err)
++	}
++	defer func() {
++		_ = db.Close()
++	}()
++
++	getEntered := make(chan struct{}, 1)
++	blockGet := make(chan struct{})
++
++	// Swap in a memtable that blocks in Get.
++	db.mu.Lock()
++	orig := db.mutable
++	db.mutable = &blockingMemtable{inner: orig, getEntered: getEntered, blockGet: blockGet}
++	db.mu.Unlock()
++
++	getDone := make(chan error, 1)
++	go func() {
++		_, err := db.Get([]byte("missing"))
++		getDone <- err
++	}()
++
++	select {
++	case <-getEntered:
++		// ok
++	case <-time.After(2 * time.Second):
++		t.Fatal("Get did not reach memtable.Get in time")
++	}
++
++	// While Get is stalled in memtable.Get, a concurrent writer should still be
++	// able to acquire db.mu.Lock() to update metadata.
++	setDone := make(chan error, 1)
++	go func() {
++		setDone <- db.Set([]byte("k"), []byte("v"))
++	}()
++	select {
++	case err := <-setDone:
++		if err != nil {
++			t.Fatalf("Set returned error: %v", err)
++		}
++	case <-time.After(2 * time.Second):
++		t.Fatal("Set blocked while Get was paused inside memtable.Get; Get appears to be holding db.mu too long")
++	}
++
++	// Unblock Get and ensure it completes.
++	close(blockGet)
++	select {
++	case <-getDone:
++		// Get may return ErrNotFound. We only care that it returns.
++	case <-time.After(2 * time.Second):
++		t.Fatal("Get did not complete after unblocking memtable.Get")
++	}
++}
++
++func TestDB_MemtableAdaptiveDoesNotRetainCallerKeySlice(t *testing.T) {
++	backend := NewMockBackend()
++	db, err := Open(t.TempDir(), backend, Options{
++		DisableWAL:     true,
++		FlushThreshold: 1 << 30,
++		MemtableMode:   "adaptive",
++	})
++	if err != nil {
++		t.Fatalf("Open: %v", err)
++	}
++	defer db.Close()
++
++	// The key passed to Set is caller-owned memory. After Set returns, callers are
++	// free to reuse or mutate that memory. TreeDB must not retain references and
++	// read it later (directly or indirectly).
++
++	shared := bytes.Repeat([]byte{'a'}, 64*1024)
++	if err := db.Set(shared, []byte("init")); err != nil {
++		t.Fatalf("Set(shared): %v", err)
++	}
++
++	// Mutate caller-owned key bytes concurrently.
++	stop := make(chan struct{})
++	done := make(chan struct{})
++	go func() {
++		defer close(done)
++		for i := 0; ; i++ {
++			select {
++			case <-stop:
++				return
++			default:
++				// Only flip the last byte to keep the prefix stable and
++				// increase the chance that comparisons touch the mutated byte.
++				if i&1 == 0 {
++					shared[len(shared)-1] = 'a'
++				} else {
++					shared[len(shared)-1] = 'b'
++				}
++			}
++		}
++	}()
++
++	// Repeatedly compare the internal lastKey against a constant key under the
++	// DB mutex. With -race, this test used to flag a data race because the DB
++	// retained a reference to the caller's key slice. The fix copies the key.
++	cmpKey := bytes.Repeat([]byte{'a'}, len(shared))
++	cmpKey[len(cmpKey)-1] = 'c'
++
++	deadline := time.Now().Add(200 * time.Millisecond)
++	for time.Now().Before(deadline) {
++		db.mu.Lock()
++		_ = bytes.Compare(db.memtableStats.lastKey, cmpKey)
++		db.mu.Unlock()
++	}
++
++	close(stop)
++	<-done
++}
+diff --git a/TreeDB/db/db.go b/TreeDB/db/db.go
+index 0b64b45..8bd4917 100644
+--- a/TreeDB/db/db.go
++++ b/TreeDB/db/db.go
+@@ -800,7 +800,11 @@ func (db *DB) Prune() {
+ 	defer db.releaseIndex(idx)
+ 
+ 	min := idx.registry.MinPinnedSeq()
+-	current := db.meta.CommitSeq
++	state := db.state.Load()
++	if state == nil {
++		return
++	}
++	current := state.CommitSeq
+ 
+ 	freed := idx.graveyard.Extract(min, current, db.keepRecent)
+ 
+diff --git a/TreeDB/db/prune_race_test.go b/TreeDB/db/prune_race_test.go
+new file mode 100644
+index 0000000..e491757
+--- /dev/null
++++ b/TreeDB/db/prune_race_test.go
+@@ -0,0 +1,67 @@
++package db
++
++import (
++	"sync"
++	"testing"
++)
++
++// This test is primarily intended to be run with -race.
++// It validates that calling Prune concurrently with commits does not introduce
++// a data race.
++func TestPruneConcurrentWithCommits(t *testing.T) {
++	dir := t.TempDir()
++	db, err := Open(Options{
++		Dir:                    dir,
++		DisableBackgroundPrune: true, // isolate explicit Prune calls
++		DisablePageFreelist:    true,
++		FreelistRegionPages:    0,
++		FreelistRegionRadius:   0,
++		KeepRecent:             0,
++		ChunkSize:              1 << 20,
++		PruneInterval:          0,
++		PruneMaxDuration:       0,
++		PruneMaxPages:          0,
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer db.Close()
++
++	// Drive a lot of commit seq bumps while pruning in parallel.
++	const iters = 500
++	var wg sync.WaitGroup
++	start := make(chan struct{})
++	errCh := make(chan error, 1)
++
++	wg.Add(1)
++	go func() {
++		defer wg.Done()
++		<-start
++		for i := 0; i < iters; i++ {
++			if err := db.Set([]byte("k"), []byte("v")); err != nil {
++				select {
++				case errCh <- err:
++				default:
++				}
++				return
++			}
++		}
++	}()
++
++	wg.Add(1)
++	go func() {
++		defer wg.Done()
++		<-start
++		for i := 0; i < iters; i++ {
++			db.Prune()
++		}
++	}()
++
++	close(start)
++	wg.Wait()
++	select {
++	case err := <-errCh:
++		t.Fatal(err)
++	default:
++	}
++}

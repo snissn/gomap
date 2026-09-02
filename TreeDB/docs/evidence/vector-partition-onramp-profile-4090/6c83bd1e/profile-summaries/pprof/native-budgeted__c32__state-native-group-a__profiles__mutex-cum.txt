@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:09:33 HST
+Showing nodes accounting for 18831us, 99.75% of 18877.70us total
+Dropped 151 nodes (cum <= 94.39us)
+Showing top 40 nodes out of 49
+      flat  flat%   sum%        cum   cum%
+13538.40us 71.72% 71.72% 13538.40us 71.72%  sync.(*Mutex).Unlock (partial-inline)
+         0     0% 71.72% 13496.08us 71.49%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 71.72% 11154.16us 59.09%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 71.72% 11128.38us 58.95%  github.com/hashicorp/raft.(*Raft).run-fm
+         0     0% 71.72%    11127us 58.94%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0% 71.72% 11110.02us 58.85%  github.com/hashicorp/raft.(*Raft).leaderLoop
+         0     0% 71.72% 11110.02us 58.85%  github.com/hashicorp/raft.(*Raft).runLeader
+         0     0% 71.72% 11095.20us 58.77%  github.com/hashicorp/raft.(*Raft).dispatchLogs
+         0     0% 71.72% 11029.47us 58.43%  go.etcd.io/bbolt.(*Tx).Commit
+         0     0% 71.72% 10962.57us 58.07%  go.etcd.io/bbolt.(*Tx).writeMeta
+ 5292.60us 28.04% 99.75%  5292.60us 28.04%  runtime.unlock (inline)
+         0     0% 99.75%  4493.14us 23.80%  runtime.mcall
+         0     0% 99.75%  4488.45us 23.78%  runtime.park_m
+         0     0% 99.75%  4405.20us 23.34%  runtime.findRunnable
+         0     0% 99.75%  4405.20us 23.34%  runtime.schedule
+         0     0% 99.75%  4398.27us 23.30%  runtime.injectglist
+         0     0% 99.75%  4398.27us 23.30%  runtime.injectglist.func1
+         0     0% 99.75%  2339.11us 12.39%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).GetLog
+         0     0% 99.75%  2339.11us 12.39%  github.com/hashicorp/raft.(*Raft).pipelineReplicate
+         0     0% 99.75%  2339.11us 12.39%  github.com/hashicorp/raft.(*Raft).pipelineSend
+         0     0% 99.75%  2339.11us 12.39%  github.com/hashicorp/raft.(*Raft).replicate
+         0     0% 99.75%  2339.11us 12.39%  github.com/hashicorp/raft.(*Raft).setupAppendEntries
+         0     0% 99.75%  2339.11us 12.39%  github.com/hashicorp/raft.(*Raft).startStopReplication.func1
+         0     0% 99.75%  1574.61us  8.34%  github.com/hashicorp/raft.(*Raft).setPreviousLog
+         0     0% 99.75%  1348.39us  7.14%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).GetLog.deferwrap2
+         0     0% 99.75%  1348.39us  7.14%  go.etcd.io/bbolt.(*DB).removeTx
+         0     0% 99.75%  1348.39us  7.14%  go.etcd.io/bbolt.(*Tx).Rollback
+         0     0% 99.75%  1348.39us  7.14%  go.etcd.io/bbolt.(*Tx).close
+         0     0% 99.75%  1348.39us  7.14%  go.etcd.io/bbolt.(*Tx).nonPhysicalRollback
+         0     0% 99.75%  1088.13us  5.76%  go.etcd.io/bbolt.(*DB).Begin
+         0     0% 99.75%   990.72us  5.25%  go.etcd.io/bbolt.(*DB).beginTx
+         0     0% 99.75%   764.50us  4.05%  github.com/hashicorp/raft.(*Raft).setNewLogs
+         0     0% 99.75%   710.91us  3.77%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).dispatch.func1
+         0     0% 99.75%   710.91us  3.77%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).dispatchTask
+         0     0% 99.75%   710.91us  3.77%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchTCPDispatcherV1).DispatchVectorPartitionShardSearchV1
+         0     0% 99.75%   710.91us  3.77%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchTCPDispatcherV1).dispatchVectorPartitionShardSearchOnceV1
+         0     0% 99.75%   665.97us  3.53%  runtime.newstack
+         0     0% 99.75%   663.66us  3.52%  runtime.stackalloc
+         0     0% 99.75%   663.66us  3.52%  runtime.stackcacherefill
+         0     0% 99.75%   659.76us  3.49%  runtime.copystack

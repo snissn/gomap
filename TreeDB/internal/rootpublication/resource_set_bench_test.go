@@ -1,0 +1,384 @@
+package rootpublication
+
+import (
+	"crypto/sha256"
+	"fmt"
+	"testing"
+)
+
+func BenchmarkStableResourceBuilderDistinctPhysicalAdd(b *testing.B) {
+	for _, entries := range []int{8, 4096} {
+		b.Run(fmt.Sprintf("entries=%d", entries), func(b *testing.B) {
+			file := writeStableResourceFixture(b, b.TempDir(), "scale.bin", "x")
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				tokens := make([]*StableResourceToken, entries)
+				for index := range tokens {
+					tokens[index] = distinctPhysicalTokenFixture(b, file, uint64(index+1))
+				}
+				b.StartTimer()
+				builder := NewStableResourceSetBuilder()
+				for _, token := range tokens {
+					if err := builder.Add(token); err != nil {
+						b.Fatal(err)
+					}
+				}
+				work := builder.ClosureWorkSnapshot()
+				b.StopTimer()
+				if entries > stableResourceEntryLinearLookupLimit && (work.PhysicalEntryLookupProbes != uint64(entries-stableResourceEntryLinearLookupLimit) || work.PhysicalEntryLookupComparisons != 0) {
+					builder.Abandon()
+					b.Fatalf("work=%+v", work)
+				}
+				b.ReportMetric(float64(work.PhysicalEntryLookupProbes)/float64(entries), "physical-lookup-probes/entry")
+				b.ReportMetric(float64(work.PhysicalEntryLookupComparisons)/float64(entries), "physical-lookup-comparisons/entry")
+				b.ReportMetric(float64(work.PhysicalEntryLookupAdmissions)/float64(entries), "physical-lookup-admissions/entry")
+				builder.Abandon()
+				b.StartTimer()
+			}
+		})
+	}
+}
+
+func BenchmarkStableResourceBuilderImmutableGenerations(b *testing.B) {
+	for _, entries := range []int{8, 4096} {
+		b.Run(fmt.Sprintf("entries=%d", entries), func(b *testing.B) {
+			file := writeStableResourceFixture(b, b.TempDir(), "generation.pack", "immutable-pack")
+			digest := sha256.Sum256([]byte("immutable-pack"))
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				tokens := make([]*StableResourceToken, entries)
+				for index := range tokens {
+					tokens[index] = immutableGenerationTokenFixture(b, file, uint64(index+1), digest)
+				}
+				builder := NewStableResourceSetBuilder(ReachabilityOuterLeafPackedPointer)
+				b.StartTimer()
+				for _, token := range tokens {
+					if err := builder.Add(token); err != nil {
+						b.Fatal(err)
+					}
+				}
+				work := builder.ClosureWorkSnapshot()
+				b.StopTimer()
+				var indexedEntries uint64
+				if entries > stableResourceEntryLinearLookupLimit {
+					indexedEntries = uint64(entries - stableResourceEntryLinearLookupLimit)
+				}
+				if work.PhysicalEntryLookupProbes != indexedEntries || work.PhysicalEntryLookupComparisons != 0 || work.PhysicalEntryLookupAdmissions != indexedEntries {
+					b.Fatalf("work=%+v", work)
+				}
+				builder.Abandon()
+				b.StartTimer()
+			}
+		})
+	}
+}
+
+func BenchmarkStableResourceBuilderDistinctPhysicalMerge(b *testing.B) {
+	for _, entries := range []int{8, 4096} {
+		b.Run(fmt.Sprintf("entries=%d", entries), func(b *testing.B) {
+			file := writeStableResourceFixture(b, b.TempDir(), "scale.bin", "x")
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				parent, childBuilder := NewStableResourceSetBuilder(), NewStableResourceSetBuilder()
+				for index := 0; index < entries; index++ {
+					if err := parent.Add(distinctPhysicalTokenFixture(b, file, uint64(index+1))); err != nil {
+						b.Fatal(err)
+					}
+					if err := childBuilder.Add(distinctPhysicalTokenFixture(b, file, uint64(entries+index+1))); err != nil {
+						b.Fatal(err)
+					}
+				}
+				child, err := childBuilder.Freeze()
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
+				if err := parent.Merge(child); err != nil {
+					b.Fatal(err)
+				}
+				work := parent.ClosureWorkSnapshot()
+				b.StopTimer()
+				if entries > stableResourceEntryLinearLookupLimit && work.PhysicalEntryLookupComparisons != 0 {
+					b.Fatalf("work=%+v", work)
+				}
+				b.ReportMetric(float64(work.PhysicalEntryLookupComparisons)/float64(entries), "physical-lookup-comparisons/child-entry")
+				parent.Abandon()
+				child.Release()
+				b.StartTimer()
+			}
+		})
+	}
+}
+
+func BenchmarkStableResourceSetCloneDistinctPhysical(b *testing.B) {
+	for _, entries := range []int{8, 4096} {
+		b.Run(fmt.Sprintf("entries=%d", entries), func(b *testing.B) {
+			file := writeStableResourceFixture(b, b.TempDir(), "scale.bin", "x")
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				sourceBuilder := NewStableResourceSetBuilder()
+				for index := 0; index < entries; index++ {
+					if err := sourceBuilder.Add(distinctPhysicalTokenFixture(b, file, uint64(index+1))); err != nil {
+						b.Fatal(err)
+					}
+				}
+				source, err := sourceBuilder.Freeze()
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
+				cloned, work, err := CloneStableResourceSetForLogicalObligationsWithWork(source, StableLogicalObligationRequirements{})
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StopTimer()
+				if work.SourceEntriesInspected != 0 || work.PhysicalHandleShares != 0 || work.PhysicalHandleCopies != 0 || work.PhysicalRootShares != 1 {
+					b.Fatalf("clone work=%+v", work)
+				}
+				b.ReportMetric(float64(work.SourceEntriesInspected)/float64(entries), "source-entry-visits/entry")
+				b.ReportMetric(float64(work.PhysicalHandleShares)/float64(entries), "physical-handle-shares/entry")
+				cloned.Release()
+				source.Release()
+				b.StartTimer()
+			}
+		})
+	}
+}
+
+func BenchmarkStableResourceSetAppendDistinctPhysical(b *testing.B) {
+	for _, entries := range []int{8, 4096} {
+		b.Run(fmt.Sprintf("entries=%d", entries), func(b *testing.B) {
+			file := writeStableResourceFixture(b, b.TempDir(), "append-scale.bin", "x")
+			baseBuilder := NewStableResourceSetBuilder()
+			for index := 0; index < entries; index++ {
+				if err := baseBuilder.Add(distinctPhysicalTokenFixture(b, file, uint64(index+1))); err != nil {
+					b.Fatal(err)
+				}
+			}
+			base, err := baseBuilder.Freeze()
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer base.Release()
+			if _, _, err := base.DependencyManifestV1(); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				producerBuilder := NewStableResourceSetBuilder()
+				if err := producerBuilder.Add(distinctPhysicalTokenFixture(b, file, uint64(entries+1))); err != nil {
+					b.Fatal(err)
+				}
+				producer, err := producerBuilder.Freeze()
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
+				inherited, cloneWork, err := CloneStableResourceSetApplyingLogicalObligationMutation(base, StableLogicalObligationMutation{})
+				if err != nil {
+					b.Fatal(err)
+				}
+				candidateBuilder := NewStableResourceSetBuilder()
+				if err := candidateBuilder.Merge(inherited); err != nil {
+					b.Fatal(err)
+				}
+				appendWork, err := candidateBuilder.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{})
+				if err != nil {
+					b.Fatal(err)
+				}
+				candidate, err := candidateBuilder.Freeze()
+				if err != nil {
+					b.Fatal(err)
+				}
+				_, manifestWork, err := candidate.DependencyManifestV1()
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StopTimer()
+				if cloneWork.SourceEntriesInspected != 0 || cloneWork.PhysicalRootShares != 1 || appendWork.SourceEntriesInspected != 1 || appendWork.CopiedEntries != 0 || manifestWork.EntriesEncoded != 1 {
+					b.Fatalf("clone=%+v append=%+v manifest=%+v", cloneWork, appendWork, manifestWork)
+				}
+				candidate.Release()
+				b.StartTimer()
+			}
+		})
+	}
+}
+
+func BenchmarkStableResourceSetAppendDistinctLogicalObligation4371(b *testing.B) {
+	for _, benchmark := range []struct {
+		retained int
+		added    int
+	}{{64, 1}, {4096, 1}, {65536, 1}, {4096, 16}} {
+		b.Run(fmt.Sprintf("retained=%d/added=%d", benchmark.retained, benchmark.added), func(b *testing.B) {
+			file := writeStableResourceFixture(b, b.TempDir(), "logical-segments.pack", "segments")
+			baseBuilder := NewStableResourceSetBuilder()
+			for id := uint64(1); id <= uint64(benchmark.retained); id++ {
+				if err := baseBuilder.Add(appendMutationDistinctResourceToken(b, file, id, appendMutationTestObligation(id))); err != nil {
+					b.Fatal(err)
+				}
+			}
+			base, err := baseBuilder.Freeze()
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer base.Release()
+			added := make([]StableLogicalObligation, benchmark.added)
+			for index := range added {
+				added[index] = appendMutationTestObligation(uint64(benchmark.retained + index + 1))
+			}
+			mutation := StableLogicalObligationMutation{ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: added}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				inherited, _, err := CloneStableResourceSetApplyingLogicalObligationMutation(base, StableLogicalObligationMutation{})
+				if err != nil {
+					b.Fatal(err)
+				}
+				producerBuilder := NewStableResourceSetBuilder()
+				for index, obligation := range added {
+					id := uint64(benchmark.retained + index + 1)
+					if err := producerBuilder.Add(appendMutationDistinctResourceToken(b, file, id, obligation)); err != nil {
+						b.Fatal(err)
+					}
+				}
+				producer, err := producerBuilder.Freeze()
+				if err != nil {
+					b.Fatal(err)
+				}
+				candidate := NewStableResourceSetBuilder()
+				if err := candidate.Merge(inherited); err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
+				work, err := candidate.MergeAppendOnlyLogicalObligations(producer, mutation)
+				if err != nil {
+					b.Fatal(err)
+				}
+				result, err := candidate.Freeze()
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StopTimer()
+				if work.AppendOnlyFastPath != 1 || work.SourceObligationsInspected != uint64(benchmark.added) || work.AggregateMembershipProbes != uint64(2*benchmark.added) || work.AggregateMembershipAdmissions != uint64(benchmark.added) {
+					b.Fatalf("work=%+v", work)
+				}
+				b.ReportMetric(float64(work.AggregateMembershipNodeVisits), "membership-node-visits/op")
+				b.ReportMetric(float64(work.AggregateMembershipNodeCopies), "membership-node-copies/op")
+				b.ReportMetric(float64(benchmark.retained), "retained-obligations")
+				b.ReportMetric(1, "resource-kinds")
+				b.ReportMetric(float64(benchmark.added), "added-obligations")
+				result.Release()
+			}
+		})
+	}
+}
+
+func BenchmarkStableResourceSetAppendPhysicalCollision(b *testing.B) {
+	for _, entries := range []int{8, 32, 4096} {
+		b.Run(fmt.Sprintf("entries=%d", entries), func(b *testing.B) {
+			b.StopTimer()
+			dir := b.TempDir()
+			scaleFile := writeStableResourceFixture(b, dir, "collision-scale.bin", "x")
+			collisionFile := writeStableResourceFixture(b, dir, "current.bin", "xx")
+			baseBuilder := NewStableResourceSetBuilder()
+			for id := 1; id < entries; id++ {
+				if err := baseBuilder.Add(distinctPhysicalTokenFixture(b, scaleFile, uint64(id))); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if err := baseBuilder.Add(appendMutationResourceToken(b, collisionFile, ResourceColumnAsset, "current", 1, ReachabilityColumnManifest, appendMutationTestObligation(1))); err != nil {
+				b.Fatal(err)
+			}
+			base, err := baseBuilder.Freeze()
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer base.Release()
+			added := appendMutationTestObligation(2)
+			mutation := StableLogicalObligationMutation{ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: []StableLogicalObligation{added}}
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				producerBuilder := NewStableResourceSetBuilder()
+				if err := producerBuilder.Add(appendMutationResourceToken(b, collisionFile, ResourceColumnAsset, "current", 2, ReachabilityColumnManifest, added)); err != nil {
+					b.Fatal(err)
+				}
+				producer, err := producerBuilder.Freeze()
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
+				inherited, _, err := CloneStableResourceSetApplyingLogicalObligationMutation(base, StableLogicalObligationMutation{})
+				if err != nil {
+					b.Fatal(err)
+				}
+				candidateBuilder := NewStableResourceSetBuilder()
+				if err := candidateBuilder.Merge(inherited); err != nil {
+					b.Fatal(err)
+				}
+				work, err := candidateBuilder.MergeAppendOnlyLogicalObligations(producer, mutation)
+				if err != nil {
+					b.Fatal(err)
+				}
+				candidate, err := candidateBuilder.Freeze()
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StopTimer()
+				if entries > stableResourceEntryLinearLookupLimit {
+					if work.AppendOnlyCollisionFastPath != 1 || work.CopiedEntries != 0 || work.PhysicalHandleShares != 0 {
+						b.Fatalf("large collision work=%+v", work)
+					}
+				} else if work.AppendOnlyCollisionFallbacks != 1 {
+					b.Fatalf("small collision work=%+v", work)
+				}
+				b.ReportMetric(float64(work.CopiedEntries), "copied-entries/op")
+				b.ReportMetric(float64(work.PhysicalHandleShares), "physical-handle-shares/op")
+				b.ReportMetric(float64(work.SourceEntriesInspected), "source-entries/op")
+				candidate.Release()
+				b.StartTimer()
+			}
+		})
+	}
+}
+
+func BenchmarkStableResourceSetDependencyManifestCached(b *testing.B) {
+	for _, entries := range []int{8, 4096} {
+		b.Run(fmt.Sprintf("entries=%d", entries), func(b *testing.B) {
+			file := writeStableResourceFixture(b, b.TempDir(), "manifest-cache.bin", "x")
+			builder := NewStableResourceSetBuilder()
+			for id := uint64(1); id <= uint64(entries); id++ {
+				if err := builder.Add(distinctPhysicalTokenFixture(b, file, id)); err != nil {
+					builder.Abandon()
+					b.Fatal(err)
+				}
+			}
+			resources, err := builder.Freeze()
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer resources.Release()
+			if _, _, err := resources.DependencyManifestV1(); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, work, err := resources.DependencyManifestV1()
+				if err != nil {
+					b.Fatal(err)
+				}
+				if work.EntriesEncoded != 0 || work.BytesEncoded != 0 {
+					b.Fatalf("cached manifest work=%+v", work)
+				}
+			}
+		})
+	}
+}

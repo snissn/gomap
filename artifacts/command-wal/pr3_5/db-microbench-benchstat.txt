@@ -1,0 +1,47 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+                                                                    │ artifacts/command-wal/pr3_5/db-microbench.txt │
+                                                                    │                    sec/op                     │
+CommandWALRawKVDirectWrite/backend_no_command_wal-12                                                   3.824µ ±  4%
+CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                       4.837µ ±  4%
+CommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12                                    3.796µ ±  2%
+CommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12                                        429.8µ ±  3%
+CommandWALReplayFrameClassification-12                                                                 31.10µ ±  4%
+CommandWALReadReplayFrames-12                                                                          290.4µ ±  6%
+CommandWALCoveredSegmentCleanupProof-12                                                                85.85µ ± 10%
+geomean                                                                                                30.29µ
+
+                                                                    │ artifacts/command-wal/pr3_5/db-microbench.txt │
+                                                                    │                      B/s                      │
+CommandWALRawKVDirectWrite/backend_no_command_wal-12                                                   13.22Mi ± 5%
+CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                       10.45Mi ± 4%
+CommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12                                    12.06Mi ± 2%
+CommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12                                        107.4Ki ± 0%
+CommandWALReplayFrameClassification-12                                                                 10.11Gi ± 3%
+geomean                                                                                                17.84Mi
+
+                                                                    │ artifacts/command-wal/pr3_5/db-microbench.txt │
+                                                                    │                     B/op                      │
+CommandWALRawKVDirectWrite/backend_no_command_wal-12                                                 5.670Ki ± 0%
+CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                     5.833Ki ± 0%
+CommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12                                  5.991Ki ± 0%
+CommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12                                      6.962Ki ± 0%
+CommandWALReplayFrameClassification-12                                                                 0.000 ± 0%
+CommandWALReadReplayFrames-12                                                                        61.98Ki ± 0%
+CommandWALCoveredSegmentCleanupProof-12                                                              12.72Ki ± 6%
+geomean                                                                                                           ¹
+¹ summaries must be >0 to compute geomean
+
+                                                                    │ artifacts/command-wal/pr3_5/db-microbench.txt │
+                                                                    │                   allocs/op                   │
+CommandWALRawKVDirectWrite/backend_no_command_wal-12                                                   19.00 ± 0%
+CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                       22.00 ± 0%
+CommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12                                    22.00 ± 0%
+CommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12                                        33.00 ± 0%
+CommandWALReplayFrameClassification-12                                                                 0.000 ± 0%
+CommandWALReadReplayFrames-12                                                                          533.0 ± 0%
+CommandWALCoveredSegmentCleanupProof-12                                                                52.00 ± 2%
+geomean                                                                                                           ¹
+¹ summaries must be >0 to compute geomean

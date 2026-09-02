@@ -1,0 +1,25 @@
+File: treedb_vector_partition_bench
+Type: delay
+Showing nodes accounting for 55626.28ms, 98.97% of 56207.48ms total
+Dropped 284 nodes (cum <= 281.04ms)
+      flat  flat%   sum%        cum   cum%
+         0     0%     0% 37110.77ms 66.02%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0%     0% 37110.77ms 66.02%  github.com/hashicorp/raft.(*Raft).run
+         0     0%     0% 37110.77ms 66.02%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0%     0% 37110.77ms 66.02%  go.etcd.io/bbolt.(*Tx).Commit
+         0     0%     0% 36337.13ms 64.65%  go.etcd.io/bbolt.fdatasync
+36337.13ms 64.65% 64.65% 36337.13ms 64.65%  syscall.Fdatasync
+         0     0% 64.65% 25287.59ms 44.99%  github.com/hashicorp/raft.(*Raft).appendEntries
+         0     0% 64.65% 25287.59ms 44.99%  github.com/hashicorp/raft.(*Raft).processRPC
+         0     0% 64.65% 25287.59ms 44.99%  github.com/hashicorp/raft.(*Raft).runFollower
+         0     0% 64.65% 22045.88ms 39.22%  go.etcd.io/bbolt.(*Tx).write
+         0     0% 64.65% 18666.15ms 33.21%  runtime/pprof.profileWriter
+18665.92ms 33.21% 97.86% 18665.92ms 33.21%  runtime.(*profBuf).read
+         0     0% 97.86% 18665.92ms 33.21%  runtime/pprof.readProfile
+         0     0% 97.86% 14914.49ms 26.53%  go.etcd.io/bbolt.(*Tx).writeMeta
+         0     0% 97.86% 11823.18ms 21.03%  github.com/hashicorp/raft.(*Raft).dispatchLogs
+         0     0% 97.86% 11823.18ms 21.03%  github.com/hashicorp/raft.(*Raft).leaderLoop
+         0     0% 97.86% 11823.18ms 21.03%  github.com/hashicorp/raft.(*Raft).runLeader
+         0     0% 97.86%   623.23ms  1.11%  internal/poll.(*FD).Pwrite
+         0     0% 97.86%   623.23ms  1.11%  os.(*File).WriteAt
+  623.23ms  1.11% 98.97%   623.23ms  1.11%  syscall.pwrite

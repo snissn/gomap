@@ -1,0 +1,184 @@
+File: db.test
+Build ID: 6ebee5eebf8d2793329812183a8f9812f963ec34
+Type: cpu
+Time: 2026-07-09 20:01:55 HST
+Duration: 3.93s, Total samples = 4.03s (102.43%)
+Showing nodes accounting for 3.50s, 86.85% of 4.03s total
+Dropped 146 nodes (cum <= 0.02s)
+      flat  flat%   sum%        cum   cum%
+     0.54s 13.40% 13.40%      0.54s 13.40%  aeshashbody
+     0.23s  5.71% 19.11%      0.23s  5.71%  internal/runtime/syscall/linux.Syscall6
+     0.19s  4.71% 23.82%      0.19s  4.71%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+     0.14s  3.47% 27.30%      0.36s  8.93%  github.com/snissn/gomap/TreeDB/node.(*Node).getLeafValueViewColumnarPrefixV2
+     0.14s  3.47% 30.77%      0.57s 14.14%  github.com/snissn/gomap/TreeDB/tree.(*Iterator).loadCurrent
+     0.14s  3.47% 34.24%      0.14s  3.47%  runtime.memmove
+     0.12s  2.98% 37.22%      0.52s 12.90%  runtime.mapaccess2
+     0.11s  2.73% 39.95%      0.29s  7.20%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2FullKeyFlagsAt
+     0.10s  2.48% 42.43%      2.52s 62.53%  github.com/snissn/gomap/TreeDB/db.(*DB).collectValueLogLiveBytes
+     0.10s  2.48% 44.91%      0.67s 16.63%  github.com/snissn/gomap/TreeDB/db.collectValueLogRefCounts
+     0.10s  2.48% 47.39%      0.16s  3.97%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2ValueMetaAt
+     0.09s  2.23% 49.63%      0.22s  5.46%  internal/runtime/maps.(*table).uncheckedPutSlot
+     0.09s  2.23% 51.86%      1.09s 27.05%  runtime.mapassign
+     0.09s  2.23% 54.09%      0.09s  2.23%  runtime.memclrNoHeapPointers
+     0.08s  1.99% 56.08%      0.18s  4.47%  runtime.mapassign_fast32
+     0.07s  1.74% 57.82%      0.11s  2.73%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2KeyMetaAt
+     0.07s  1.74% 59.55%      0.07s  1.74%  internal/runtime/maps.(*groupReference).key (inline)
+     0.06s  1.49% 61.04%      0.50s 12.41%  github.com/snissn/gomap/TreeDB/tree.(*Iterator).ensurePointerLoaded
+     0.06s  1.49% 62.53%      0.06s  1.49%  runtime.futex
+     0.05s  1.24% 63.77%      0.05s  1.24%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnar (inline)
+     0.05s  1.24% 65.01%      0.55s 13.65%  github.com/snissn/gomap/TreeDB/tree.(*Iterator).UnsafeEntry
+     0.05s  1.24% 66.25%      0.35s  8.68%  github.com/snissn/gomap/TreeDB/tree.(*Iterator).getLeafKeyFlags
+     0.05s  1.24% 67.49%      0.05s  1.24%  internal/runtime/maps.(*Map).directoryAt (inline)
+     0.05s  1.24% 68.73%      0.60s 14.89%  internal/runtime/maps.(*table).split
+     0.05s  1.24% 69.98%      0.05s  1.24%  runtime.memhash
+     0.04s  0.99% 70.97%      0.04s  0.99%  github.com/snissn/gomap/TreeDB/node.(*Node).Count (inline)
+     0.04s  0.99% 71.96%      0.04s  0.99%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2EnsureMeta
+     0.04s  0.99% 72.95%      0.04s  0.99%  github.com/snissn/gomap/TreeDB/node.(*Node).leafPackedValuePtr (inline)
+     0.04s  0.99% 73.95%      0.61s 15.14%  github.com/snissn/gomap/TreeDB/tree.(*Iterator).Next
+     0.04s  0.99% 74.94%      0.04s  0.99%  internal/runtime/maps.ctrlGroup.matchEmptyOrDeleted (inline)
+     0.04s  0.99% 75.93%      0.12s  2.98%  internal/runtime/maps.typedmemmove
+     0.04s  0.99% 76.92%      0.04s  0.99%  runtime.memhash32
+     0.04s  0.99% 77.92%      0.08s  1.99%  runtime.scanObject
+     0.04s  0.99% 78.91%      0.05s  1.24%  runtime.scanblock
+     0.03s  0.74% 79.65%      0.04s  0.99%  github.com/snissn/gomap/TreeDB/node.(*Node).ensureKeyScratch (inline)
+     0.03s  0.74% 80.40%      0.03s  0.74%  github.com/snissn/gomap/TreeDB/node.getUint16At (inline)
+     0.03s  0.74% 81.14%      0.03s  0.74%  internal/runtime/maps.(*groupReference).elem (inline)
+     0.03s  0.74% 81.89%      0.03s  0.74%  internal/runtime/maps.(*groupsReference).group (inline)
+     0.03s  0.74% 82.63%      0.62s 15.38%  type:.hash.github.com/snissn/gomap/TreeDB/db.groupedRecordKey
+     0.02s   0.5% 83.13%      0.44s 10.92%  github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafValueView
+     0.02s   0.5% 83.62%      0.04s  0.99%  internal/filepathlite.Clean
+     0.01s  0.25% 83.87%      0.03s  0.74%  github.com/snissn/go-crc32-asm.Update
+     0.01s  0.25% 84.12%      0.08s  1.99%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationGroupedFrameInfo
+     0.01s  0.25% 84.37%      0.08s  1.99%  github.com/snissn/gomap/TreeDB/db.(*DB).valueOnlyValueLogFiles
+     0.01s  0.25% 84.62%      0.04s  0.99%  github.com/snissn/gomap/TreeDB/internal/crc.Update (inline)
+     0.01s  0.25% 84.86%      0.30s  7.44%  github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafKeyFlagsView
+     0.01s  0.25% 85.11%      0.06s  1.49%  internal/runtime/maps.(*Map).putSlotSmallFast32
+     0.01s  0.25% 85.36%      0.05s  1.24%  os.openDir
+     0.01s  0.25% 85.61%      0.13s  3.23%  path/filepath.walkDir
+     0.01s  0.25% 85.86%      0.11s  2.73%  runtime.mallocgc
+     0.01s  0.25% 86.10%      0.10s  2.48%  runtime.mallocgcSmallNoscan
+     0.01s  0.25% 86.35%      0.04s  0.99%  runtime.notesleep
+     0.01s  0.25% 86.60%      0.08s  1.99%  runtime.typedmemmove
+     0.01s  0.25% 86.85%      0.03s  0.74%  runtime.unlockWithRank (inline)
+         0     0% 86.85%      3.64s 90.32%  github.com/snissn/gomap/TreeDB/db.(*DB).CompactStoragePlan (inline)
+         0     0% 86.85%      0.06s  1.49%  github.com/snissn/gomap/TreeDB/db.(*DB).LeafGenerationPlan
+         0     0% 86.85%      2.61s 64.76%  github.com/snissn/gomap/TreeDB/db.(*DB).ValueLogRewritePlan
+         0     0% 86.85%      3.64s 90.32%  github.com/snissn/gomap/TreeDB/db.(*DB).compactStorage
+         0     0% 86.85%      2.53s 62.78%  github.com/snissn/gomap/TreeDB/db.(*DB).estimateValueLogLiveBytesBySegment
+         0     0% 86.85%      2.53s 62.78%  github.com/snissn/gomap/TreeDB/db.(*DB).estimateValueLogLiveBytesBySegment.func1
+         0     0% 86.85%      0.06s  1.49%  github.com/snissn/gomap/TreeDB/db.(*DB).isLeafLogValueFile
+         0     0% 86.85%      0.10s  2.48%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationGC
+         0     0% 86.85%      0.10s  2.48%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationGCAttempt
+         0     0% 86.85%      0.05s  1.24%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationLiveStatsForSnapshot
+         0     0% 86.85%      0.06s  1.49%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationLiveStatsForSnapshotUncachedWithProtectedRoots
+         0     0% 86.85%      0.05s  1.24%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationLiveStatsForSnapshotWithProtectedRoots
+         0     0% 86.85%      3.56s 88.34%  github.com/snissn/gomap/TreeDB/db.(*DB).populateCompactStorageAudit
+         0     0% 86.85%      0.03s  0.74%  github.com/snissn/gomap/TreeDB/db.(*DB).prepareLeafGenerationGCScan
+         0     0% 86.85%      0.68s 16.87%  github.com/snissn/gomap/TreeDB/db.(*DB).referencedValueLogSegments (inline)
+         0     0% 86.85%      0.68s 16.87%  github.com/snissn/gomap/TreeDB/db.(*DB).referencedValueLogSegmentsWithSource
+         0     0% 86.85%      0.05s  1.24%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationLiveStats (inline)
+         0     0% 86.85%      0.11s  2.73%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationLiveStatsWithOptions
+         0     0% 86.85%      0.08s  1.99%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationPtrTotals
+         0     0% 86.85%      0.08s  1.99%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationSubtreeStats (inline)
+         0     0% 86.85%      0.08s  1.99%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationSubtreeStatsDepth
+         0     0% 86.85%      0.08s  1.99%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationSubtreeStatsDepth.func1
+         0     0% 86.85%      0.67s 16.63%  github.com/snissn/gomap/TreeDB/db.(*DB).scanValueLogRefCounts
+         0     0% 86.85%      0.72s 17.87%  github.com/snissn/gomap/TreeDB/db.(*DB).valueLogGC
+         0     0% 86.85%      0.03s  0.74%  github.com/snissn/gomap/TreeDB/db.(*leafPageReadCache).getToWithState
+         0     0% 86.85%      0.04s  0.99%  github.com/snissn/gomap/TreeDB/db.(*maintenanceRootAccumulator).addSystemRootWithDescriptors
+         0     0% 86.85%      3.77s 93.55%  github.com/snissn/gomap/TreeDB/db.BenchmarkCompactStorageSharedAudit
+         0     0% 86.85%      0.04s  0.99%  github.com/snissn/gomap/TreeDB/db.LeafLogDirPath (inline)
+         0     0% 86.85%      0.06s  1.49%  github.com/snissn/gomap/TreeDB/db.collectLiveLeafGenerationIDs
+         0     0% 86.85%      0.04s  0.99%  github.com/snissn/gomap/TreeDB/db.collectMaintenanceRootsWithContext
+         0     0% 86.85%      0.14s  3.47%  github.com/snissn/gomap/TreeDB/db.compactStoragePathUsage
+         0     0% 86.85%      0.05s  1.24%  github.com/snissn/gomap/TreeDB/db.compactStoragePathUsage.func1
+         0     0% 86.85%      0.15s  3.72%  github.com/snissn/gomap/TreeDB/db.compactStorageUsage
+         0     0% 86.85%      0.04s  0.99%  github.com/snissn/gomap/TreeDB/db.fileSize
+         0     0% 86.85%      0.04s  0.99%  github.com/snissn/gomap/TreeDB/db.maintenanceRootsForSnapshotWithContext
+         0     0% 86.85%      0.05s  1.24%  github.com/snissn/gomap/TreeDB/db.resolveStorageLayout
+         0     0% 86.85%      0.04s  0.99%  github.com/snissn/gomap/TreeDB/db.vacuumCollectCollectionRootDescriptorsWithContext
+         0     0% 86.85%      0.03s  0.74%  github.com/snissn/gomap/TreeDB/db.valueReader.ReadLeafLogPageUnsafeToWithState
+         0     0% 86.85%      0.03s  0.74%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).Refresh
+         0     0% 86.85%      0.03s  0.74%  github.com/snissn/gomap/TreeDB/internal/valuelog.listSegments
+         0     0% 86.85%      0.04s  0.99%  github.com/snissn/gomap/TreeDB/node.(*Node).VerifyChecksum (inline)
+         0     0% 86.85%      0.08s  1.99%  github.com/snissn/gomap/TreeDB/node.(*Node).WalkInternalChildren
+         0     0% 86.85%      0.29s  7.20%  github.com/snissn/gomap/TreeDB/node.(*Node).getLeafKeyFlagsViewColumnarPrefixV2 (inline)
+         0     0% 86.85%      0.04s  0.99%  github.com/snissn/gomap/TreeDB/page.CalculateChecksum
+         0     0% 86.85%      0.04s  0.99%  github.com/snissn/gomap/TreeDB/page.VerifyChecksumNonMutating
+         0     0% 86.85%      0.07s  1.74%  github.com/snissn/gomap/TreeDB/tree.(*Iterator).loadNodeRef
+         0     0% 86.85%      0.07s  1.74%  github.com/snissn/gomap/TreeDB/tree.(*Iterator).stepForward
+         0     0% 86.85%      0.04s  0.99%  github.com/snissn/gomap/TreeDB/tree.validateLeafLogNodeIntoWithState
+         0     0% 86.85%      0.07s  1.74%  internal/poll.(*FD).Pread
+         0     0% 86.85%      0.06s  1.49%  internal/poll.(*FD).Pread.func1 (inline)
+         0     0% 86.85%      0.03s  0.74%  internal/poll.(*FD).ReadDirent
+         0     0% 86.85%      0.06s  1.49%  internal/poll.ignoringEINTR2[go.shape.int] (inline)
+         0     0% 86.85%      0.03s  0.74%  internal/poll.ignoringEINTRIO (inline)
+         0     0% 86.85%      0.60s 14.89%  internal/runtime/maps.(*table).rehash
+         0     0% 86.85%      0.11s  2.73%  internal/runtime/maps.(*table).reset
+         0     0% 86.85%      0.03s  0.74%  internal/runtime/maps.NewMap
+         0     0% 86.85%      0.09s  2.23%  internal/runtime/maps.newGroups (inline)
+         0     0% 86.85%      0.11s  2.73%  internal/runtime/maps.newTable
+         0     0% 86.85%      0.09s  2.23%  internal/runtime/maps.newarray
+         0     0% 86.85%      0.07s  1.74%  os.(*File).ReadAt
+         0     0% 86.85%      0.03s  0.74%  os.(*File).ReadDir
+         0     0% 86.85%      0.07s  1.74%  os.(*File).pread (inline)
+         0     0% 86.85%      0.03s  0.74%  os.(*File).readdir
+         0     0% 86.85%      0.05s  1.24%  os.(*unixDirent).Info
+         0     0% 86.85%      0.04s  0.99%  os.Lstat
+         0     0% 86.85%      0.10s  2.48%  os.ReadDir
+         0     0% 86.85%      0.05s  1.24%  os.Stat
+         0     0% 86.85%      0.14s  3.47%  os.ignoringEINTR (inline)
+         0     0% 86.85%      0.04s  0.99%  os.lstatNolog
+         0     0% 86.85%      0.04s  0.99%  os.lstatNolog.func1 (inline)
+         0     0% 86.85%      0.05s  1.24%  os.open
+         0     0% 86.85%      0.04s  0.99%  os.openDirNolog
+         0     0% 86.85%      0.04s  0.99%  os.openDirNolog.func1 (inline)
+         0     0% 86.85%      0.05s  1.24%  os.statNolog
+         0     0% 86.85%      0.05s  1.24%  os.statNolog.func1 (inline)
+         0     0% 86.85%      0.04s  0.99%  path/filepath.Clean (inline)
+         0     0% 86.85%      0.05s  1.24%  path/filepath.Join (inline)
+         0     0% 86.85%      0.13s  3.23%  path/filepath.WalkDir
+         0     0% 86.85%      0.05s  1.24%  path/filepath.join
+         0     0% 86.85%      0.08s  1.99%  runtime.ReadMemStats
+         0     0% 86.85%      0.03s  0.74%  runtime.ReadMemStats.func1
+         0     0% 86.85%      0.08s  1.99%  runtime.findRunnable
+         0     0% 86.85%      0.03s  0.74%  runtime.flushallmcaches
+         0     0% 86.85%      0.03s  0.74%  runtime.flushmcache
+         0     0% 86.85%      0.03s  0.74%  runtime.futexsleep
+         0     0% 86.85%      0.03s  0.74%  runtime.futexwakeup
+         0     0% 86.85%      0.14s  3.47%  runtime.gcBgMarkWorker
+         0     0% 86.85%      0.14s  3.47%  runtime.gcBgMarkWorker.func2
+         0     0% 86.85%      0.14s  3.47%  runtime.gcDrain
+         0     0% 86.85%      0.13s  3.23%  runtime.gcDrainMarkWorkerDedicated (inline)
+         0     0% 86.85%      0.04s  0.99%  runtime.mPark (inline)
+         0     0% 86.85%      0.03s  0.74%  runtime.makemap
+         0     0% 86.85%      0.05s  1.24%  runtime.markroot
+         0     0% 86.85%      0.05s  1.24%  runtime.markrootBlock
+         0     0% 86.85%      0.07s  1.74%  runtime.mcall
+         0     0% 86.85%      0.09s  2.23%  runtime.newarray
+         0     0% 86.85%      0.03s  0.74%  runtime.notewakeup
+         0     0% 86.85%      0.07s  1.74%  runtime.park_m
+         0     0% 86.85%      0.03s  0.74%  runtime.readmemstats_m
+         0     0% 86.85%      0.08s  1.99%  runtime.schedule
+         0     0% 86.85%      0.04s  0.99%  runtime.startTheWorld
+         0     0% 86.85%      0.04s  0.99%  runtime.startTheWorld.func1
+         0     0% 86.85%      0.04s  0.99%  runtime.startTheWorldWithSema
+         0     0% 86.85%      0.04s  0.99%  runtime.stopm
+         0     0% 86.85%      0.24s  5.96%  runtime.systemstack
+         0     0% 86.85%      0.03s  0.74%  runtime.unlock (inline)
+         0     0% 86.85%      0.03s  0.74%  syscall.Getdents
+         0     0% 86.85%      0.04s  0.99%  syscall.Lstat (inline)
+         0     0% 86.85%      0.05s  1.24%  syscall.Open (inline)
+         0     0% 86.85%      0.06s  1.49%  syscall.Pread (inline)
+         0     0% 86.85%      0.23s  5.71%  syscall.RawSyscall6
+         0     0% 86.85%      0.03s  0.74%  syscall.ReadDirent (inline)
+         0     0% 86.85%      0.05s  1.24%  syscall.Stat (inline)
+         0     0% 86.85%      0.04s  0.99%  syscall.Syscall
+         0     0% 86.85%      0.20s  4.96%  syscall.Syscall6
+         0     0% 86.85%      0.09s  2.23%  syscall.fstatat
+         0     0% 86.85%      0.05s  1.24%  syscall.openat
+         0     0% 86.85%      0.06s  1.49%  syscall.pread
+         0     0% 86.85%      0.06s  1.49%  testing.(*B).StartTimer
+         0     0% 86.85%      0.03s  0.74%  testing.(*B).StopTimer
+         0     0% 86.85%      3.76s 93.30%  testing.(*B).launch
+         0     0% 86.85%      3.77s 93.55%  testing.(*B).runN

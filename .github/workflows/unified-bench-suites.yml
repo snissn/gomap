@@ -1,0 +1,94 @@
+name: "unified_bench: suites (gates)"
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  suites:
+    name: suites (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Unified suite headroom contract
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 .github/scripts/test_unified_bench_suites_headroom.py
+
+      - name: Build unified-bench
+        run: make unified-bench
+
+      - name: "Suite: flushthrash"
+        run: ./bin/unified-bench -suite flushthrash -keys 200000 -seed 1 -progress=false
+
+      - name: "Suite: longmix"
+        run: ./bin/unified-bench -suite longmix -keys 100001 -seed 1 -progress=false
+
+  bigkeys_guard:
+    name: bigkeys_guard (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    # Keep this job's 30-minute fail-closed suite cap independent from the
+    # build/flushthrash/longmix orchestration budget.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Unified suite headroom contract
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 .github/scripts/test_unified_bench_suites_headroom.py
+
+      - name: Build unified-bench
+        run: make unified-bench
+
+      - name: "Suite: bigkeys_guard"
+        run: ./bin/unified-bench -suite bigkeys_guard -keys 1000000 -seed 1 -progress=false -max-wall 30m -max-rss-mb 4096
+
+  profiles:
+    name: profiles (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        profile: [balanced, fast, durable]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Build unified-bench
+        run: make unified-bench
+
+      - name: "Smoke: ${{ matrix.profile }}"
+        run: ./bin/unified-bench -dbs treedb -profile ${{ matrix.profile }} -test write_rand,read_rand -keys 20000 -seed 1 -progress=false -checkpoint-between-tests

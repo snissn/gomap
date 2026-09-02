@@ -1,0 +1,326 @@
+# TreeDB M1 exact-candidate raw evidence
+# candidate: b16bcbf989d9fb9333d95fe8de08fcc6c1122bcc
+# captured sequentially; fixture setup is outside Go benchmark timer; /usr/bin/time covers full go test process
+
+## environment
+$ git rev-parse HEAD && git merge-base HEAD origin/main && git status --porcelain && go version && uname -a && lscpu | sed -n '1,20p'
+b16bcbf989d9fb9333d95fe8de08fcc6c1122bcc
+35e8a45d9d50e5f48e70b998d8f2ac19cafc199b
+go version go1.26.0 linux/amd64
+Linux mikers-B560-DS3H-AC-Y1 6.8.0-124-generic #124~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 21:05:19 UTC  x86_64 x86_64 x86_64 GNU/Linux
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           39 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  12
+On-line CPU(s) list:                     0-11
+Vendor ID:                               GenuineIntel
+Model name:                              11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+CPU family:                              6
+Model:                                   167
+Thread(s) per core:                      2
+Core(s) per socket:                      6
+Socket(s):                               1
+Stepping:                                1
+CPU max MHz:                             4400.0000
+CPU min MHz:                             800.0000
+BogoMIPS:                                5184.00
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq dtes64 monitor ds_cpl vmx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid mpx avx512f avx512dq rdseed adx smap avx512ifma clflushopt intel_pt avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves dtherm ida arat pln pts hwp hwp_notify hwp_act_window hwp_epp hwp_pkg_req vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm md_clear flush_l1d arch_capabilities
+Virtualization:                          VT-x
+L1d cache:                               288 KiB (6 instances)
+
+EXIT_CODE=0
+
+
+## codec_10k
+$ /usr/bin/time -v env GOWORK=off go test ./TreeDB/collections -run \^\$ -bench \^BenchmarkVectorPartitionManifestV1Scale\$/\^rows=10000\$/\^\(decode_validate\|encode\)\$ -benchtime=1x -benchmem -count=1
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/collections
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkVectorPartitionManifestV1Scale/rows=10000/decode_validate-12         	       1	    981828 ns/op	 1609696 B/op	      85 allocs/op
+BenchmarkVectorPartitionManifestV1Scale/rows=10000/encode-12                  	       1	   1908414 ns/op	 1962592 B/op	     109 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/collections	0.012s
+	Command being timed: "env GOWORK=off go test ./TreeDB/collections -run ^$ -bench ^BenchmarkVectorPartitionManifestV1Scale$/^rows=10000$/^(decode_validate|encode)$ -benchtime=1x -benchmem -count=1"
+	User time (seconds): 1.07
+	System time (seconds): 0.22
+	Percent of CPU this job got: 167%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.78
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 436480
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 112
+	Minor (reclaiming a frame) page faults: 58930
+	Voluntary context switches: 5305
+	Involuntary context switches: 449
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 96328
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+EXIT_CODE=0
+
+
+## codec_100k
+$ /usr/bin/time -v env GOWORK=off go test ./TreeDB/collections -run \^\$ -bench \^BenchmarkVectorPartitionManifestV1Scale\$/\^rows=100000\$/\^\(decode_validate\|encode\)\$ -benchtime=1x -benchmem -count=1
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/collections
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkVectorPartitionManifestV1Scale/rows=100000/decode_validate-12         	       1	   9336004 ns/op	14003392 B/op	      97 allocs/op
+BenchmarkVectorPartitionManifestV1Scale/rows=100000/encode-12                  	       1	  17765410 ns/op	17594744 B/op	     114 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/collections	0.065s
+	Command being timed: "env GOWORK=off go test ./TreeDB/collections -run ^$ -bench ^BenchmarkVectorPartitionManifestV1Scale$/^rows=100000$/^(decode_validate|encode)$ -benchtime=1x -benchmem -count=1"
+	User time (seconds): 1.14
+	System time (seconds): 0.24
+	Percent of CPU this job got: 163%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.84
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 439168
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 106
+	Minor (reclaiming a frame) page faults: 63123
+	Voluntary context switches: 5756
+	Involuntary context switches: 570
+	Swaps: 0
+	File system inputs: 8
+	File system outputs: 96288
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+EXIT_CODE=0
+
+
+## codec_1m
+$ /usr/bin/time -v env GOWORK=off go test ./TreeDB/collections -run \^\$ -bench \^BenchmarkVectorPartitionManifestV1Scale\$/\^rows=1000000\$/\^\(decode_validate\|encode\)\$ -benchtime=1x -benchmem -count=1
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/collections
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkVectorPartitionManifestV1Scale/rows=1000000/decode_validate-12         	       1	 102101968 ns/op	191125240 B/op	      95 allocs/op
+BenchmarkVectorPartitionManifestV1Scale/rows=1000000/encode-12                  	       1	 184429532 ns/op	228014440 B/op	     118 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/collections	0.640s
+	Command being timed: "env GOWORK=off go test ./TreeDB/collections -run ^$ -bench ^BenchmarkVectorPartitionManifestV1Scale$/^rows=1000000$/^(decode_validate|encode)$ -benchtime=1x -benchmem -count=1"
+	User time (seconds): 1.63
+	System time (seconds): 0.35
+	Percent of CPU this job got: 142%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.39
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 440192
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 112
+	Minor (reclaiming a frame) page faults: 136841
+	Voluntary context switches: 6080
+	Involuntary context switches: 644
+	Swaps: 0
+	File system inputs: 16
+	File system outputs: 96280
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+EXIT_CODE=0
+
+
+## warm_open
+$ /usr/bin/time -v env GOWORK=off go test ./TreeDB/collections -run \^\$ -bench \^BenchmarkVectorPartitionStoreV1WarmOpen\$ -benchtime=1x -benchmem -count=1
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/collections
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkVectorPartitionStoreV1WarmOpen/open-12         	       1	    196040 ns/op	   69528 B/op	     373 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/collections	0.023s
+	Command being timed: "env GOWORK=off go test ./TreeDB/collections -run ^$ -bench ^BenchmarkVectorPartitionStoreV1WarmOpen$ -benchtime=1x -benchmem -count=1"
+	User time (seconds): 1.07
+	System time (seconds): 0.22
+	Percent of CPU this job got: 163%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.79
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 435968
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 106
+	Minor (reclaiming a frame) page faults: 58107
+	Voluntary context switches: 5887
+	Involuntary context switches: 515
+	Swaps: 0
+	File system inputs: 168
+	File system outputs: 96296
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+EXIT_CODE=0
+
+
+## warm_status
+$ /usr/bin/time -v env GOWORK=off go test ./TreeDB/collections -run \^\$ -bench \^BenchmarkVectorPartitionStatusV1Warm\$ -benchtime=1x -benchmem -count=1
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/collections
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkVectorPartitionStatusV1Warm-12    	       1	  13157171 ns/op	  670080 B/op	    3256 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/collections	0.225s
+	Command being timed: "env GOWORK=off go test ./TreeDB/collections -run ^$ -bench ^BenchmarkVectorPartitionStatusV1Warm$ -benchtime=1x -benchmem -count=1"
+	User time (seconds): 1.09
+	System time (seconds): 0.25
+	Percent of CPU this job got: 132%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.02
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 439296
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 107
+	Minor (reclaiming a frame) page faults: 58426
+	Voluntary context switches: 6284
+	Involuntary context switches: 630
+	Swaps: 0
+	File system inputs: 24
+	File system outputs: 97352
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+EXIT_CODE=0
+
+
+## snapshot_10k
+$ /usr/bin/time -v env GOWORK=off go test -tags treedb_benchmark ./TreeDB/internal/raftfsm -run \^\$ -bench \^BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall\$/\^memberships=10000\$/\^\(archive\|install\)\$ -benchtime=1x -benchmem -count=1
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/raftfsm
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall/memberships=10000/archive-12 	       1	  46190914 ns/op	    695296 archive-bytes	13443136 B/op	    2058 allocs/op
+BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall/memberships=10000/install-12 	       1	 282760342 ns/op	83787088 B/op	   10572 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/raftfsm	0.851s
+	Command being timed: "env GOWORK=off go test -tags treedb_benchmark ./TreeDB/internal/raftfsm -run ^$ -bench ^BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall$/^memberships=10000$/^(archive|install)$ -benchtime=1x -benchmem -count=1"
+	User time (seconds): 0.90
+	System time (seconds): 0.21
+	Percent of CPU this job got: 89%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.25
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 326144
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 54
+	Minor (reclaiming a frame) page faults: 62744
+	Voluntary context switches: 6808
+	Involuntary context switches: 454
+	Swaps: 0
+	File system inputs: 8
+	File system outputs: 47112
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+EXIT_CODE=0
+
+
+## snapshot_100k
+$ /usr/bin/time -v env GOWORK=off go test -tags treedb_benchmark ./TreeDB/internal/raftfsm -run \^\$ -bench \^BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall\$/\^memberships=100000\$/\^\(archive\|install\)\$ -benchtime=1x -benchmem -count=1
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/raftfsm
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall/memberships=100000/archive-12 	       1	 229331503 ns/op	   1775616 archive-bytes	130632208 B/op	    2114 allocs/op
+BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall/memberships=100000/install-12 	       1	 662289049 ns/op	337747928 B/op	   10670 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/raftfsm	3.154s
+	Command being timed: "env GOWORK=off go test -tags treedb_benchmark ./TreeDB/internal/raftfsm -run ^$ -bench ^BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall$/^memberships=100000$/^(archive|install)$ -benchtime=1x -benchmem -count=1"
+	User time (seconds): 3.18
+	System time (seconds): 0.28
+	Percent of CPU this job got: 97%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:03.56
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 331008
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 55
+	Minor (reclaiming a frame) page faults: 102371
+	Voluntary context switches: 8443
+	Involuntary context switches: 889
+	Swaps: 0
+	File system inputs: 8
+	File system outputs: 55560
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+EXIT_CODE=0
+
+
+## snapshot_1m
+$ /usr/bin/time -v env GOWORK=off go test -tags treedb_benchmark ./TreeDB/internal/raftfsm -run \^\$ -bench \^BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall\$/\^memberships=1000000\$/\^\(archive\|install\)\$ -benchtime=1x -benchmem -count=1
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/raftfsm
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall/memberships=1000000/archive-12 	       1	2094246445 ns/op	  12575232 archive-bytes	1614262104 B/op	    2198 allocs/op
+BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall/memberships=1000000/install-12 	       1	4542216670 ns/op	3628172544 B/op	   10855 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/raftfsm	27.042s
+	Command being timed: "env GOWORK=off go test -tags treedb_benchmark ./TreeDB/internal/raftfsm -run ^$ -bench ^BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall$/^memberships=1000000$/^(archive|install)$ -benchtime=1x -benchmem -count=1"
+	User time (seconds): 26.54
+	System time (seconds): 1.58
+	Percent of CPU this job got: 102%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:27.45
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 617296
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 58
+	Minor (reclaiming a frame) page faults: 1039960
+	Voluntary context switches: 16068
+	Involuntary context switches: 4023
+	Swaps: 0
+	File system inputs: 16
+	File system outputs: 139968
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+EXIT_CODE=0

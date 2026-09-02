@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:07:00 HST
+Showing nodes accounting for 845.98s, 100% of 846.01s total
+Dropped 75 nodes (cum <= 4.23s)
+Showing top 40 nodes out of 42
+      flat  flat%   sum%        cum   cum%
+   761.97s 90.07% 90.07%    761.97s 90.07%  runtime.selectgo
+         0     0% 90.07%    522.76s 61.79%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 90.07%    123.04s 14.54%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 90.07%    123.04s 14.54%  github.com/hashicorp/raft.(*Raft).run-fm
+         0     0% 90.07%    110.46s 13.06%  github.com/hashicorp/raft.(*Raft).pipelineDecode
+         0     0% 90.07%    110.46s 13.06%  github.com/hashicorp/raft.(*Raft).pipelineReplicate.func1
+         0     0% 90.07%    110.40s 13.05%  github.com/hashicorp/raft.(*inmemPipeline).decodeResponses
+         0     0% 90.07%    110.40s 13.05%  github.com/hashicorp/raft.newInmemPipeline.gowrap1
+         0     0% 90.07%    110.26s 13.03%  github.com/hashicorp/raft.(*Raft).pipelineReplicate
+         0     0% 90.07%    110.26s 13.03%  github.com/hashicorp/raft.(*Raft).replicate
+         0     0% 90.07%    110.26s 13.03%  github.com/hashicorp/raft.(*Raft).startStopReplication.func1
+         0     0% 90.07%    108.44s 12.82%  github.com/hashicorp/raft.(*Raft).heartbeat
+         0     0% 90.07%    108.44s 12.82%  github.com/hashicorp/raft.(*Raft).replicate.func1
+         0     0% 90.07%     85.84s 10.15%  github.com/hashicorp/raft.(*Raft).runFollower
+    84.02s  9.93%   100%     84.02s  9.93%  runtime.chanrecv1
+         0     0%   100%     70.55s  8.34%  github.com/hashicorp/raft.(*Raft).runFSM
+         0     0%   100%     70.55s  8.34%  github.com/hashicorp/raft.(*Raft).runFSM-fm
+         0     0%   100%     56.84s  6.72%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0%   100%     56.84s  6.72%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
+         0     0%   100%     56.83s  6.72%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0%   100%     55.23s  6.53%  runtime.(*wakeableSleep).sleep
+         0     0%   100%     53.94s  6.38%  github.com/snissn/gomap/TreeDB/nativewire.(*CollectionVectorPartitionGenerationSourceV1).PinVectorPartitionGenerationV1
+         0     0%   100%     53.94s  6.38%  github.com/snissn/gomap/TreeDB/nativewire.(*vectorPartitionProductionNodeGenerationSourceV1).PinVectorPartitionGenerationV1
+         0     0%   100%     53.94s  6.38%  github.com/snissn/gomap/TreeDB/nativewire.vectorPartitionProductionNodeGenerationSourceV1.PinVectorPartitionGenerationV1
+         0     0%   100%     44.50s  5.26%  github.com/snissn/gomap/TreeDB/internal/raftcluster.(*CatalogMetaRaftProviderV1).LinearizableCatalogMetaAppliedIndexV1
+         0     0%   100%     44.50s  5.26%  github.com/snissn/gomap/TreeDB/nativewire.(*LinearizableCatalogVectorPartitionLifecycleAuthorityV1).ValidateVectorPartitionGenerationSearchV1
+         0     0%   100%     44.49s  5.26%  github.com/snissn/gomap/TreeDB/nativewire.(*CollectionVectorPartitionGenerationSourceV1).validateActive
+         0     0%   100%     43.19s  5.10%  github.com/snissn/gomap/TreeDB/internal/raftcluster.waitHashicorpRaftFuture
+         0     0%   100%     43.16s  5.10%  github.com/hashicorp/raft.(*deferError).Error
+         0     0%   100%     43.16s  5.10%  github.com/snissn/gomap/TreeDB/internal/raftcluster.waitHashicorpRaftFuture.func1
+         0     0%   100%     37.21s  4.40%  github.com/hashicorp/raft.(*Raft).leaderLoop
+         0     0%   100%     37.21s  4.40%  github.com/hashicorp/raft.(*Raft).runLeader
+         0     0%   100%        30s  3.55%  github.com/hashicorp/raft.(*Raft).runLeader.gowrap1
+         0     0%   100%        30s  3.55%  github.com/hashicorp/raft.emitLogStoreMetrics
+         0     0%   100%     27.64s  3.27%  runtime.traceStartReadCPU.func1
+         0     0%   100%     27.63s  3.27%  main.main
+         0     0%   100%     27.63s  3.27%  main.run
+         0     0%   100%     27.63s  3.27%  main.runVectorPartitionSystemNodeV1
+         0     0%   100%     27.63s  3.27%  runtime.main
+         0     0%   100%     27.59s  3.26%  runtime.(*traceAdvancerState).start.func1

@@ -1,0 +1,45 @@
+/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/bin/treedb_vector_partition_bench.vcs: go1.26.0
+	path	github.com/snissn/gomap/cmd/treedb_vector_partition_bench
+	mod	github.com/snissn/gomap	v0.6.2-0.20260806050128-95c60cbef0b0
+	dep	github.com/armon/go-metrics	v0.4.1	h1:hR91U9KYmb6bLBYLQjyM+3j+rcd/UhE+G78SFnF8gJA=
+	dep	github.com/boltdb/bolt	v1.3.1	h1:JQmyP4ZBrce+ZQu0dY660FMfatumYDLun9hBCUVIkF4=
+	dep	github.com/buger/jsonparser	v1.1.2	h1:frqHqw7otoVbk5M8LlE/L7HTnIq2v9RX6EJ48i9AxJk=
+	dep	github.com/cespare/xxhash/v2	v2.3.0	h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
+	dep	github.com/fatih/color	v1.13.0	h1:8LOYc1KYPPmyKMuN8QV2DNRWNbLo6LZ0iLs8+mlH53w=
+	dep	github.com/golang/snappy	v0.0.4	h1:yAGX7huGHXlcLOEtBnF4w7FQwA26wojNCwOYAEhLjQM=
+	dep	github.com/hashicorp/go-hclog	v1.6.2	h1:NOtoftovWkDheyUM/8JW3QMiXyxJK3uHRK7wV04nD2I=
+	dep	github.com/hashicorp/go-immutable-radix	v1.0.0	h1:AKDB1HM5PWEA7i4nhcpwOrO2byshxBjXVn/J/3+z5/0=
+	dep	github.com/hashicorp/go-metrics	v0.5.4	h1:8mmPiIJkTPPEbAiV97IxdAGNdRdaWwVap1BU6elejKY=
+	dep	github.com/hashicorp/go-msgpack/v2	v2.1.2	h1:4Ee8FTp834e+ewB71RDrQ0VKpyFdrKOjvYtnQ/ltVj0=
+	dep	github.com/hashicorp/golang-lru	v0.5.0	h1:CL2msUPvZTLb5O648aiLNJw3hnBxN2+1Jq8rCOH9wdo=
+	dep	github.com/hashicorp/raft	v1.7.3	h1:DxpEqZJysHN0wK+fviai5mFcSYsCkNpFUl1xpAW8Rbo=
+	dep	github.com/hashicorp/raft-boltdb/v2	v2.3.1	h1:ackhdCNPKblmOhjEU9+4lHSJYFkJd6Jqyvj6eW9pwkc=
+	dep	github.com/klauspost/cpuid/v2	v2.2.10	h1:tBs3QSyvjDyFTq3uoc/9xFpCuOsJQFNPiAhYdw2skhE=
+	dep	github.com/mattn/go-colorable	v0.1.13	h1:fFA4WZxdEF4tXPZVKMLwD8oUnCTTo08duU7wxecdEvA=
+	dep	github.com/mattn/go-isatty	v0.0.17	h1:BTarxUcIeDqL27Mc+vyvdWYSL28zpIhv3RoTdsLMPng=
+	dep	github.com/pierrec/lz4/v4	v4.1.22	h1:cKFw6uJDK+/gfw5BcDL0JL5aBsAFdsIT18eRtLj7VIU=
+	dep	github.com/snissn/compress	v1.18.2-snissn.0.0.20260506201017-87fb149e4721	h1:2XYKYq/WV3oldGbGi3b7M7VQoh38DIKSO0lNteuazJ0=
+	dep	github.com/snissn/go-crc32-asm	v0.0.0-20260522204125-08945951423a	h1:uqSq50AAT36ZzDiRApq8GNsbeJASPaneZ6aKfw3KShc=
+	dep	github.com/tidwall/btree	v1.8.1	h1:27ehoXvm5AG/g+1VxLS1SD3vRhp/H7LuEfwNvddEdmA=
+	dep	github.com/tidwall/gjson	v1.14.3	h1:9jvXn7olKEHU1S9vwoMGliaT8jq1vJ7IH/n9zD9Dnlw=
+	dep	github.com/tidwall/match	v1.1.1	h1:+Ho715JplO36QYgwN9PGYNhgZvoUSc9X2c80KVTi+GA=
+	dep	github.com/tidwall/pretty	v1.2.0	h1:RWIZEg2iJ8/g6fDDYzMpobmaoGh5OLl4AXtGUGPcqCs=
+	dep	github.com/tphakala/simd	v1.0.22	h1:3wHL91t4yvhCB0ycyTznvucTHax+QGpYkvOhqfraTYw=
+	dep	github.com/zeebo/xxh3	v1.1.0	h1:s7DLGDK45Dyfg7++yxI0khrfwq9661w9EN78eP/UZVs=
+	dep	go.etcd.io/bbolt	v1.4.3	h1:dEadXpI6G79deX5prL3QRNP6JB8UxVkqo4UPnHaNXJo=
+	dep	go.mongodb.org/mongo-driver/v2	v2.6.0	h1:b9sJOYrkmt4l8bY43ZenFBcPlhYIjaOfYHLtbB/5qi8=
+	dep	golang.org/x/sys	v0.41.0	h1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	CGO_ENABLED=1
+	build	CGO_CFLAGS=
+	build	CGO_CPPFLAGS=
+	build	CGO_CXXFLAGS=
+	build	CGO_LDFLAGS=
+	build	GOARCH=amd64
+	build	GOOS=linux
+	build	GOAMD64=v1
+	build	vcs=git
+	build	vcs.revision=95c60cbef0b0cb824a74a29e9304784e76745d9d
+	build	vcs.time=2026-08-06T05:01:28Z
+	build	vcs.modified=false

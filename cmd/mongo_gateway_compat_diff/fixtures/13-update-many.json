@@ -1,0 +1,17 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "update-many-bounded-natural-order",
+  "capability_id": "crud.bounded-multi-write-and-batch-ordering",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": false,
+  "normalize_response_envelope_order": true,
+  "seed": [
+    {"_id": "first", "group": "a", "score": {"$numberInt": "1"}},
+    {"_id": "second", "group": "a", "score": {"$numberInt": "2"}},
+    {"_id": "third", "group": "b", "score": {"$numberInt": "3"}}
+  ],
+  "command": {"update": "records", "updates": [{"q": {"group": "a"}, "u": {"$set": {"seen": true}}, "multi": true, "upsert": false}]}
+}

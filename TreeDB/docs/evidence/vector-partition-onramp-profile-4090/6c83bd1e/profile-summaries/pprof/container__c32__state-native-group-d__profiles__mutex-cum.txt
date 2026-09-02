@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:11:56 HST
+Showing nodes accounting for 9793.71us, 99.07% of 9885.78us total
+Dropped 108 nodes (cum <= 49.43us)
+Showing top 40 nodes out of 68
+      flat  flat%   sum%        cum   cum%
+ 9448.25us 95.57% 95.57%  9448.25us 95.57%  sync.(*Mutex).Unlock (partial-inline)
+         0     0% 95.57%  8095.94us 81.89%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 95.57%  8006.34us 80.99%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0% 95.57%  8006.34us 80.99%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 95.57%  7998.95us 80.91%  go.etcd.io/bbolt.(*Tx).Commit
+         0     0% 95.57%  7985.62us 80.78%  github.com/hashicorp/raft.(*Raft).run-fm
+         0     0% 95.57%  7965.92us 80.58%  github.com/hashicorp/raft.(*Raft).dispatchLogs
+         0     0% 95.57%  7965.92us 80.58%  github.com/hashicorp/raft.(*Raft).leaderLoop
+         0     0% 95.57%  7965.92us 80.58%  github.com/hashicorp/raft.(*Raft).runLeader
+         0     0% 95.57%  7916.92us 80.08%  go.etcd.io/bbolt.(*Tx).writeMeta
+         0     0% 95.57%  1465.24us 14.82%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0% 95.57%  1465.24us 14.82%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0% 95.57%  1465.24us 14.82%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
+         0     0% 95.57%  1453.97us 14.71%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationCacheV1).openPartition
+         0     0% 95.57%  1453.97us 14.71%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationLeaseV1).OpenPartition
+         0     0% 95.57%  1452.40us 14.69%  github.com/snissn/gomap/TreeDB/collections.(*Collection).OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1
+         0     0% 95.57%  1452.40us 14.69%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1
+         0     0% 95.57%  1451.17us 14.68%  github.com/snissn/gomap/TreeDB/nativewire.(*vectorPartitionProductionNodePinnedGenerationV1).OpenPartition
+         0     0% 95.57%  1449.61us 14.66%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphAdjacencyDirectSources).Close
+         0     0% 95.57%  1449.61us 14.66%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphLayer0AdjacencyDirectSource).Close
+         0     0% 95.57%  1449.61us 14.66%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).Close
+         0     0% 95.57%  1449.61us 14.66%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).releaseSharedPreparedSearch
+         0     0% 95.57%  1449.61us 14.66%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphSharedPreparedSearch).close
+         0     0% 95.57%  1449.61us 14.66%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphSharedPreparedSearchRef).release
+         0     0% 95.57%  1449.61us 14.66%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphSharedPreparedSearchRef).release.func1
+         0     0% 95.57%  1449.61us 14.66%  github.com/snissn/gomap/TreeDB/collections.releaseMappedResourceHandle (inline)
+         0     0% 95.57%  1449.61us 14.66%  github.com/snissn/gomap/TreeDB/internal/mappedresource.(*Handle).Release
+         0     0% 95.57%  1449.61us 14.66%  github.com/snissn/gomap/TreeDB/internal/mappedresource.(*Manager).AcquireFileRange.func1
+         0     0% 95.57%  1449.61us 14.66%  github.com/snissn/gomap/TreeDB/internal/mappedresource.munmapFile (inline)
+         0     0% 95.57%  1449.61us 14.66%  sync.(*Once).Do (inline)
+         0     0% 95.57%  1449.61us 14.66%  sync.(*Once).doSlow
+         0     0% 95.57%  1449.61us 14.66%  syscall.(*mmapper).Munmap
+         0     0% 95.57%  1449.61us 14.66%  syscall.Munmap (inline)
+  345.45us  3.49% 99.07%   345.45us  3.49%  runtime.unlock (inline)
+         0     0% 99.07%   139.23us  1.41%  runtime.systemstack
+         0     0% 99.07%   123.23us  1.25%  runtime.findRunnable
+         0     0% 99.07%   123.23us  1.25%  runtime.schedule
+         0     0% 99.07%   102.44us  1.04%  runtime.gcBgMarkWorker
+         0     0% 99.07%   102.44us  1.04%  runtime.gcMarkDone
+         0     0% 99.07%   101.18us  1.02%  runtime.mcall

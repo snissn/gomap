@@ -1,0 +1,68 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: alloc_space
+Time: 2026-08-09 14:09:33 HST
+Showing nodes accounting for 5815.45MB, 61.52% of 9453.42MB total
+Dropped 366 nodes (cum <= 47.27MB)
+Showing top 60 nodes out of 135
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%  7984.34MB 84.46%  runtime.main
+         0     0%     0%  7983.84MB 84.45%  main.main
+         0     0%     0%  7983.84MB 84.45%  main.run
+         0     0%     0%  7983.84MB 84.45%  main.runVectorPartitionSystemNodeV1
+         0     0%     0%  7976.74MB 84.38%  main.openVectorPartitionSystemNodeV1
+         0     0%     0%  7724.24MB 81.71%  main.openM8ProductionMultiGroupExistingAssetsV1
+         0     0%     0%  4649.61MB 49.18%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphPhysicalRowReader
+         0     0%     0%  4649.61MB 49.18%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphPhysicalRowReaderAtSnapshot
+         0     0%     0%  4585.37MB 48.50%  github.com/snissn/gomap/TreeDB/collections.(*Collection).acquireColumnVectorGraphSharedPreparedSearch
+         0     0%     0%  4585.37MB 48.50%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphPhysicalRowReaderAtSnapshot.func1
+         0     0%     0%  4585.37MB 48.50%  github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot
+         0     0%     0%  4474.11MB 47.33%  github.com/snissn/gomap/TreeDB/collections.(*Collection).VectorPartitionStatusV1
+         0     0%     0%  4474.11MB 47.33%  main.m8BindRetainedM3DescriptorV1
+         0     0%     0%  4126.65MB 43.65%  github.com/snissn/gomap/TreeDB/collections.(*Collection).validateVectorPartitionAssetMembershipBindingsV1
+         0     0%     0%  2821.58MB 29.85%  main.openM8ProductionExistingAssetSetV1
+         0     0%     0%  2766.82MB 29.27%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphAdjacencyStateSourcesForReader
+         0     0%     0%  2766.82MB 29.27%  github.com/snissn/gomap/TreeDB/collections.newColumnVectorGraphAdjacencyStateDirectSourceFromRoot
+         0     0%     0%  2766.82MB 29.27%  github.com/snissn/gomap/TreeDB/collections.openColumnVectorGraphAdjacencyStateSourcesFromRoot
+         0     0%     0%  2579.34MB 27.28%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.ColumnPartFromImageWithOptions
+         0     0%     0%  2467.41MB 26.10%  github.com/snissn/gomap/TreeDB/db.Open
+         0     0%     0%  2466.91MB 26.10%  github.com/snissn/gomap/TreeDB/db.openReadOnly
+         0     0%     0%  2457.18MB 25.99%  github.com/snissn/gomap/TreeDB/db.scanCommandWALSegmentReader
+         0     0%     0%  2457.18MB 25.99%  github.com/snissn/gomap/TreeDB/db.scanCommandWALSegmentWithOptions
+         0     0%     0%  2457.18MB 25.99%  github.com/snissn/gomap/TreeDB/db.scanCommandWALSegmentWithSeen (inline)
+         0     0%     0%  2457.18MB 25.99%  github.com/snissn/gomap/TreeDB/internal/commitlog.(*Reader).ReadCommandFrame
+         0     0%     0%  2021.15MB 21.38%  github.com/snissn/gomap/TreeDB/collections.typedColumnAdapterPartFromImageWithoutRowLocators (inline)
+         0     0%     0%  2021.15MB 21.38%  github.com/snissn/gomap/TreeDB/collections.typedColumnAdapterPartFromImageWithoutRowLocatorsWithDiagnostics
+         0     0%     0%  2007.09MB 21.23%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.attachColumnPayloadsFromImage
+         0     0%     0%  2005.17MB 21.21%  github.com/snissn/gomap/TreeDB/collections.readColumnPhysicalAssetFromManager
+         0     0%     0%  2005.17MB 21.21%  github.com/snissn/gomap/TreeDB/collections.readColumnPhysicalAssetFromManagerInto (inline)
+ 2004.67MB 21.21% 21.21%  2005.17MB 21.21%  github.com/snissn/gomap/TreeDB/collections.readColumnPhysicalAssetFromManagerIntoWithIntegrity
+         0     0% 21.21%  1796.82MB 19.01%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.attachUint32OffsetsListColumnPayloadsFromImage
+         0     0% 21.21%  1685.38MB 17.83%  github.com/snissn/gomap/TreeDB/internal/commitlog.DecodeCommandFrame
+  771.80MB  8.16% 29.37%  1685.38MB 17.83%  github.com/snissn/gomap/TreeDB/internal/commitlog.DecodeCommandFrameV2
+         0     0% 29.37%  1383.50MB 14.63%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0% 29.37%  1383.50MB 14.63%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
+    0.50MB 0.0053% 29.38%  1374.98MB 14.54%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0% 29.38%  1328.59MB 14.05%  github.com/snissn/gomap/TreeDB/collections.(*VectorPartitionStoreV1).loadVectorPartitionLifecycleAuthorityWithContextV1
+         0     0% 29.38%  1328.59MB 14.05%  github.com/snissn/gomap/TreeDB/collections.(*VectorPartitionStoreV1).loadVectorPartitionLifecycleCheckpointStateFromDirWithContextV1
+         0     0% 29.38%  1244.08MB 13.16%  github.com/snissn/gomap/TreeDB/db.requireNoUnappliedCommandWALFrames
+         0     0% 29.38%  1213.11MB 12.83%  github.com/snissn/gomap/TreeDB/db.filterCommandWALSegmentsForLegacyReplay
+         0     0% 29.38%  1213.11MB 12.83%  github.com/snissn/gomap/TreeDB/db.legacyCachedRedoJournalReplaySegments
+         0     0% 29.38%  1213.11MB 12.83%  github.com/snissn/gomap/TreeDB/db.requireNoLegacyCachedRedoJournalReplay
+ 1131.50MB 11.97% 41.34%  1132.04MB 11.97%  encoding/json.Marshal
+         0     0% 41.34%  1131.53MB 11.97%  github.com/snissn/gomap/TreeDB/collections.VectorPartitionManifestV1.integrityDigestWithContextV1
+         0     0% 41.34%  1131.03MB 11.96%  github.com/snissn/gomap/TreeDB/collections.VectorPartitionManifestV1.integrityDigestWithContextV1.func2
+    0.50MB 0.0053% 41.35%  1130.53MB 11.96%  github.com/snissn/gomap/TreeDB/collections.writeVectorPartitionJSONSliceWithContextV1[go.shape.struct { VectorOrdinal uint64; PartitionID uint32 }]
+         0     0% 41.35%  1021.78MB 10.81%  github.com/snissn/gomap/TreeDB/collections.WithVectorPartitionStorageBarrierWithContextV1
+         0     0% 41.35%   985.29MB 10.42%  github.com/snissn/gomap/TreeDB/collections.reduceVectorPartitionLifecycleCheckpointTailV1
+         0     0% 41.35%   934.72MB  9.89%  github.com/snissn/gomap/TreeDB/collections.VectorPartitionManifestV1.integrityDigestWithContextV1.func4
+   25.59MB  0.27% 41.62%   913.59MB  9.66%  github.com/snissn/gomap/TreeDB/internal/commitlog.DecodeCollectionInsertBatchByIDPayload
+         0     0% 41.62%   913.59MB  9.66%  github.com/snissn/gomap/TreeDB/internal/commitlog.validateCommandEnvelopePayload
+         0     0% 41.62%   913.59MB  9.66%  github.com/snissn/gomap/TreeDB/internal/commitlog.validateCommandEnvelopePayloadV2
+     888MB  9.39% 51.01%      888MB  9.39%  github.com/snissn/gomap/TreeDB/internal/commitlog.cloneBytesPreserveEmpty (inline)
+  801.31MB  8.48% 59.49%   801.31MB  8.48%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.EncodeRawUint32OffsetsListPayload
+  108.81MB  1.15% 60.64%   800.99MB  8.47%  github.com/snissn/gomap/TreeDB/collections.(*Collection).newColumnVectorGraphTypedColumnVectorSource
+         0     0% 60.64%   800.99MB  8.47%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphTypedColumnVectorSourceForReader
+         0     0% 60.64%   780.69MB  8.26%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.DecodeRawUint32OffsetsListFallback
+   82.77MB  0.88% 61.52%   773.41MB  8.18%  github.com/snissn/gomap/TreeDB/collections.encodeVectorPartitionManifestWithContextV1
+         0     0% 61.52%   771.80MB  8.16%  github.com/snissn/gomap/TreeDB/internal/commitlog.(*Reader).readSegmentPayload (inline)

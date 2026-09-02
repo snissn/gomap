@@ -1,0 +1,17 @@
+{
+  "pr": "PR5 collection update by explicit ID",
+  "base": "codex/user-command-wal-pr4",
+  "local_gates": [
+    "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/db ./TreeDB/collections -run 'TestCommandWAL|TestCollectionCommandWAL|TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder|TestPublishOrderedRootDeltaGroupWithSystemBuilder' -count=1",
+    "GOWORK=off go test ./TreeDB/collections -run '^$' -bench 'BenchmarkCollectionCommandWALUpdateBatchByID' -benchtime=200x -benchmem -count=3"
+  ],
+  "artifacts": [
+    "artifacts/command-wal/pr5/collection-update-microbench.txt",
+    "artifacts/command-wal/pr5/collection-update-microbench-benchstat.txt"
+  ],
+  "notes": [
+    "Callback and BSON-set update APIs append resolved final replacement documents; recovery does not invoke user callbacks.",
+    "Indexed public updates publish primary and secondary roots under one command LSN.",
+    "Declarative operator/resolver command payloads remain future work."
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "completed_monotonic_nanos": 1491844626533684,
+  "phases": {
+    "checkpoint_or_flush": 0,
+    "cleanup": 63636187,
+    "index_build": 0,
+    "load": 1813454291,
+    "readiness": 23058195971,
+    "reopen_or_reconnect": 23058195971,
+    "search": 31380926950,
+    "warmup": 31818789673
+  },
+  "resources": {
+    "cgroup": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/gomap4090-profile-single-1-retry.scope",
+    "client_cpu_set": "",
+    "control": "single",
+    "cpu_seconds": 34.102148,
+    "network_rx_bytes": 250170688,
+    "network_tx_bytes": 2407186,
+    "peak_rss_bytes": 2841300992,
+    "persistent_bytes": 1064865408,
+    "profile_concurrency": 1,
+    "server_cpu_sets": [],
+    "swap_bytes": 0,
+    "temporary_bytes": 16057560
+  },
+  "started_monotonic_nanos": 1491756491530612
+}

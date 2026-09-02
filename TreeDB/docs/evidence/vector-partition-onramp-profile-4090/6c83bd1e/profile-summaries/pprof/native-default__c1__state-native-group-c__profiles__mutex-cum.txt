@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:06:07 HST
+Showing nodes accounting for 6087.15us, 95.16% of 6397.08us total
+Dropped 146 nodes (cum <= 31.98us)
+Showing top 40 nodes out of 82
+      flat  flat%   sum%        cum   cum%
+ 6087.15us 95.16% 95.16%  6087.15us 95.16%  runtime.unlock (partial-inline)
+         0     0% 95.16%  5598.79us 87.52%  runtime.systemstack
+         0     0% 95.16%  4128.35us 64.53%  runtime.gcBgMarkWorker
+         0     0% 95.16%  3251.80us 50.83%  runtime.(*mheap).allocSpan
+         0     0% 95.16%  2302.05us 35.99%  runtime.forEachP (inline)
+         0     0% 95.16%  2302.05us 35.99%  runtime.forEachPInternal
+         0     0% 95.16%  2302.05us 35.99%  runtime.gcMarkDone
+         0     0% 95.16%  2300.38us 35.96%  runtime.gcMarkTermination
+         0     0% 95.16%  2300.38us 35.96%  runtime.gcMarkTermination.forEachP.func7
+         0     0% 95.16%  1826.30us 28.55%  runtime.gcBgMarkWorker.func2
+         0     0% 95.16%  1826.30us 28.55%  runtime.gcDrain
+         0     0% 95.16%  1823.41us 28.50%  runtime.(*mheap).allocManual
+         0     0% 95.16%  1823.41us 28.50%  runtime.getempty
+         0     0% 95.16%  1823.41us 28.50%  runtime.getempty.func1
+         0     0% 95.16%  1819.57us 28.44%  runtime.markroot
+         0     0% 95.16%  1819.57us 28.44%  runtime.markroot.func1
+         0     0% 95.16%  1819.57us 28.44%  runtime.scanstack
+         0     0% 95.16%  1819.30us 28.44%  runtime.scanframeworker
+         0     0% 95.16%  1601.09us 25.03%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 95.16%  1578.38us 24.67%  runtime.gcDrainMarkWorkerIdle (inline)
+         0     0% 95.16%  1549.94us 24.23%  github.com/hashicorp/raft.(*Raft).pipelineReplicate
+         0     0% 95.16%  1549.94us 24.23%  github.com/hashicorp/raft.(*Raft).replicate
+         0     0% 95.16%  1549.94us 24.23%  github.com/hashicorp/raft.(*Raft).startStopReplication.func1
+         0     0% 95.16%  1461.14us 22.84%  github.com/hashicorp/raft.(*Raft).pipelineSend
+         0     0% 95.16%  1461.14us 22.84%  github.com/hashicorp/raft.(*Raft).setupAppendEntries
+         0     0% 95.16%  1440.35us 22.52%  runtime.mallocgc
+         0     0% 95.16%  1439.55us 22.50%  github.com/hashicorp/raft.(*Raft).setNewLogs
+         0     0% 95.16%  1435.40us 22.44%  runtime.makeslice
+         0     0% 95.16%  1434.06us 22.42%  runtime.(*mheap).alloc
+         0     0% 95.16%  1434.06us 22.42%  runtime.(*mheap).alloc.func1
+         0     0% 95.16%  1430.94us 22.37%  runtime.(*mcache).nextFree
+         0     0% 95.16%  1430.94us 22.37%  runtime.(*mcache).refill
+         0     0% 95.16%  1428.50us 22.33%  runtime.(*mcentral).cacheSpan
+         0     0% 95.16%  1428.50us 22.33%  runtime.(*mcentral).grow
+         0     0% 95.16%  1428.38us 22.33%  runtime.mallocgcSmallScanNoHeader
+         0     0% 95.16%   954.07us 14.91%  runtime.(*stackScanState).addObject
+         0     0% 95.16%   865.50us 13.53%  runtime.scanblock
+         0     0% 95.16%   776.35us 12.14%  runtime.(*stackScanState).putPtr
+         0     0% 95.16%   290.42us  4.54%  runtime.mcall
+         0     0% 95.16%   274.58us  4.29%  runtime.schedule

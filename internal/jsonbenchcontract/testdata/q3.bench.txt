@@ -1,0 +1,1 @@
+BenchmarkJSONBenchQ3-8  5  1000 ns/op  1000000 ops/s  1024 B/op  4 allocs/op

@@ -1,0 +1,13 @@
+{
+  "schema":"treedb.mongo-gateway.compat-diff.fixture",
+  "version":1,
+  "id":"delete-by-id",
+  "capability_id":"crud.delete-by-id",
+  "expectation":"supported",
+  "database":"compat",
+  "collection":"records",
+  "smoke":false,
+  "seed":[{"_id":"delete-me"}],
+  "normalize_response_envelope_order":true,
+  "command":{"delete":"records","deletes":[{"q":{"_id":"delete-me"},"limit":{"$numberInt":"1"}}]}
+}

@@ -1,0 +1,12 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/nativewire
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkVectorPartitionServingSnapshotAcquireV1/snapshot_pin-12         	 3020664	       406.2 ns/op	      48 B/op	       1 allocs/op
+BenchmarkVectorPartitionServingSnapshotAcquireV1/snapshot_pin-12         	 2965159	       402.8 ns/op	      48 B/op	       1 allocs/op
+BenchmarkVectorPartitionServingSnapshotAcquireV1/snapshot_pin-12         	 2958676	       401.5 ns/op	      48 B/op	       1 allocs/op
+BenchmarkVectorPartitionServingSnapshotAcquireV1/fresh_no_log_authority-12         	   69711	     17241 ns/op	    7263 B/op	      95 allocs/op
+BenchmarkVectorPartitionServingSnapshotAcquireV1/fresh_no_log_authority-12         	   69729	     17135 ns/op	    7264 B/op	      95 allocs/op
+BenchmarkVectorPartitionServingSnapshotAcquireV1/fresh_no_log_authority-12         	   70311	     17179 ns/op	    7263 B/op	      95 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/nativewire	17.672s

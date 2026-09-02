@@ -1,0 +1,206 @@
+File: collections.test
+Type: cpu
+Time: 2026-05-25 19:25:34 HST
+Duration: 34.41s, Total samples = 29.28s (85.10%)
+Showing nodes accounting for 26.14s, 89.28% of 29.28s total
+Dropped 439 nodes (cum <= 0.15s)
+      flat  flat%   sum%        cum   cum%
+     4.04s 13.80% 13.80%      4.04s 13.80%  github.com/snissn/gomap/TreeDB/collections.(*vectorIndexNode).vectorValueAt (inline)
+     3.43s 11.71% 25.51%      3.43s 11.71%  runtime.madvise
+     2.64s  9.02% 34.53%      2.64s  9.02%  github.com/axiomhq/simd-go.dotProductFloat32NEON
+     1.79s  6.11% 40.64%     11.22s 38.32%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).vectorIndexCandidateIsDiverseLocked
+     1.54s  5.26% 45.90%      5.96s 20.36%  github.com/snissn/gomap/TreeDB/collections.vectorDistanceBetweenStoredNodes
+     1.22s  4.17% 50.07%      1.22s  4.17%  syscall.syscall
+     1.21s  4.13% 54.20%      4.52s 15.44%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).searchLayerWithScratchLocked
+     1.12s  3.83% 58.03%      1.35s  4.61%  github.com/snissn/gomap/TreeDB/collections.vectorDistanceToStoredNodeWithQueryNorm
+     0.87s  2.97% 61.00%      0.87s  2.97%  runtime.pthread_cond_signal
+     0.63s  2.15% 63.15%      0.63s  2.15%  syscall.syscall6
+     0.53s  1.81% 64.96%      3.17s 10.83%  github.com/axiomhq/simd-go.dotProductFloat32Impl
+     0.39s  1.33% 66.29%      0.39s  1.33%  strconv.readFloat
+     0.38s  1.30% 67.59%     11.90s 40.64%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).selectDiverseCandidatesLocked
+     0.38s  1.30% 68.89%      3.04s 10.38%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).SearchCosine
+     0.38s  1.30% 70.18%      0.38s  1.30%  github.com/snissn/gomap/TreeDB/collections.(*vectorIndexNode).vectorDimensions (inline)
+     0.31s  1.06% 71.24%      3.78s 12.91%  github.com/snissn/gomap/TreeDB/collections.dotProductFloat32ForCosine
+     0.31s  1.06% 72.30%      0.31s  1.06%  runtime.memmove
+     0.28s  0.96% 73.26%      0.81s  2.77%  fmt.(*pp).doPrintf
+     0.28s  0.96% 74.21%      3.54s 12.09%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).distanceBetweenFloat32CosineCandidateAndNodeLocked
+     0.27s  0.92% 75.14%      0.28s  0.96%  github.com/snissn/gomap/TreeDB/collections.(*vectorIndexMinCandidateHeap).push (inline)
+     0.24s  0.82% 75.96%      3.58s 12.23%  github.com/snissn/gomap/TreeDB/internal/vectorops.DotFloat32
+     0.23s  0.79% 76.74%      0.24s  0.82%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).compareVectorIndexCandidatesByDistanceLocked
+     0.23s  0.79% 77.53%      3.30s 11.27%  github.com/snissn/gomap/TreeDB/collections.vectorDistanceBetweenFloat32NodesCosineUnchecked
+     0.21s  0.72% 78.24%     10.87s 37.12%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).pruneLayerNeighborsLocked
+     0.18s  0.61% 78.86%      0.18s  0.61%  github.com/snissn/gomap/TreeDB/collections.(*vectorIndexNode).cachedNormSquared
+     0.17s  0.58% 79.44%      3.34s 11.41%  github.com/axiomhq/simd-go.DotProductFloat32
+     0.17s  0.58% 80.02%      0.17s  0.58%  github.com/buger/jsonparser.blockEnd
+     0.17s  0.58% 80.60%      0.17s  0.58%  runtime.kevent
+     0.16s  0.55% 81.15%      0.21s  0.72%  github.com/snissn/gomap/TreeDB/collections.vectorIndexMaxCandidateHeap.down
+     0.15s  0.51% 81.66%      0.45s  1.54%  github.com/buger/jsonparser.getType
+     0.15s  0.51% 82.17%      0.15s  0.51%  github.com/snissn/gomap/TreeDB/collections.sortVectorIndexCandidates.func1
+     0.15s  0.51% 82.68%      0.99s  3.38%  runtime.mallocgc
+     0.14s  0.48% 83.16%      0.17s  0.58%  github.com/snissn/gomap/TreeDB/collections.vectorIndexMinCandidateHeap.down
+     0.13s  0.44% 83.61%      1.83s  6.25%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphBlockView).adjacency
+     0.13s  0.44% 84.05%      0.79s  2.70%  github.com/snissn/gomap/TreeDB/collections.vectorDistanceToFloat32NodeCosineUnchecked
+     0.12s  0.41% 84.46%      0.15s  0.51%  errors.is
+     0.11s  0.38% 84.84%      0.15s  0.51%  fmt.(*fmt).fmtInteger
+     0.11s  0.38% 85.21%      2.25s  7.68%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).distanceToNodeWithPreparedQueryLocked
+     0.08s  0.27% 85.48%      0.34s  1.16%  runtime.mallocgcSmallScanNoHeader
+     0.08s  0.27% 85.76%      0.18s  0.61%  slices.partitionCmpFunc[go.shape.struct { github.com/snissn/gomap/TreeDB/collections.nodeID int; github.com/snissn/gomap/TreeDB/collections.distance float32 }]
+     0.07s  0.24% 86.00%      5.89s 20.12%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).distanceBetweenNodesFastLocked
+     0.07s  0.24% 86.24%      1.39s  4.75%  github.com/snissn/gomap/TreeDB/internal/mappedresource.ValidateDirectView
+     0.07s  0.24% 86.48%      0.40s  1.37%  runtime.slicebytetostring
+     0.06s   0.2% 86.68%      0.46s  1.57%  fmt.(*pp).printArg
+     0.06s   0.2% 86.89%     11.11s 37.94%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).linkLayerLocked
+     0.06s   0.2% 87.09%      3.64s 12.43%  github.com/snissn/gomap/TreeDB/collections.vectorDotProductFloat32 (inline)
+     0.05s  0.17% 87.26%      0.52s  1.78%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).scoreOrdinal
+     0.05s  0.17% 87.43%      0.57s  1.95%  github.com/snissn/gomap/TreeDB/collections.vectorFromJSONField.func1
+     0.04s  0.14% 87.57%      0.19s  0.65%  errors.Is
+     0.04s  0.14% 87.70%      0.92s  3.14%  github.com/buger/jsonparser.ArrayEach
+     0.04s  0.14% 87.84%      0.29s  0.99%  github.com/snissn/gomap/TreeDB/collections.(*vectorIndexMaxCandidateHeap).pushBounded
+     0.04s  0.14% 87.98%      0.26s  0.89%  github.com/snissn/gomap/TreeDB/internal/typeddecode.validateViewLen[go.shape.uint32]
+     0.04s  0.14% 88.11%      0.36s  1.23%  runtime.mallocgcSmallNoscan
+     0.03s   0.1% 88.22%      0.22s  0.75%  github.com/snissn/gomap/TreeDB/internal/typeddecode.classifyViewError
+     0.03s   0.1% 88.32%      0.17s  0.58%  strconv.genericFtoa
+     0.02s 0.068% 88.39%     16.22s 55.40%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).insertVectorLocked
+     0.02s 0.068% 88.46%      1.90s  6.49%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).expandCandidateAdjacencyLayer
+     0.02s 0.068% 88.52%      0.19s  0.65%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).greedyNearestAtLayer
+     0.02s 0.068% 88.59%      0.19s  0.65%  github.com/snissn/gomap/TreeDB/collections.(*vectorIndexMinCandidateHeap).pop
+     0.02s 0.068% 88.66%      1.69s  5.77%  github.com/snissn/gomap/TreeDB/collections.columnVectorGraphLittleEndianUint32DirectView
+     0.02s 0.068% 88.73%      0.33s  1.13%  github.com/snissn/gomap/TreeDB/collections.vectorBenchmarkDocument
+     0.02s 0.068% 88.80%      0.28s  0.96%  runtime.(*mcentral).cacheSpan
+     0.02s 0.068% 88.87%      0.29s  0.99%  slices.pdqsortCmpFunc[go.shape.struct { github.com/snissn/gomap/TreeDB/collections.nodeID int; github.com/snissn/gomap/TreeDB/collections.distance float32 }]
+     0.02s 0.068% 88.93%      0.46s  1.57%  strconv.atof32
+     0.01s 0.034% 88.97%      0.16s  0.55%  fmt.(*pp).fmtInteger
+     0.01s 0.034% 89.00%      1.06s  3.62%  fmt.Errorf
+     0.01s 0.034% 89.04%      2.01s  6.86%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).Search
+     0.01s 0.034% 89.07%      1.27s  4.34%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).selectLayerNeighborsLocked
+     0.01s 0.034% 89.11%      0.23s  0.79%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).sortVectorIndexCandidatesByDistanceLocked
+     0.01s 0.034% 89.14%      0.28s  0.96%  github.com/snissn/gomap/TreeDB/collections.columnVectorGraphNativeCosineScoreVector
+     0.01s 0.034% 89.17%      1.66s  5.67%  github.com/snissn/gomap/TreeDB/internal/typeddecode.Uint32ByteView
+     0.01s 0.034% 89.21%      0.27s  0.92%  runtime.convTstring
+     0.01s 0.034% 89.24%      0.88s  3.01%  runtime.newstack
+     0.01s 0.034% 89.28%      0.47s  1.61%  strconv.parseFloatPrefix
+         0     0% 89.28%      0.31s  1.06%  encoding/json.(*Decoder).Decode
+         0     0% 89.28%      0.17s  0.58%  encoding/json.(*decodeState).arrayInterface
+         0     0% 89.28%      0.19s  0.65%  encoding/json.(*decodeState).object
+         0     0% 89.28%      0.18s  0.61%  encoding/json.(*decodeState).objectInterface
+         0     0% 89.28%      0.19s  0.65%  encoding/json.(*decodeState).unmarshal
+         0     0% 89.28%      0.19s  0.65%  encoding/json.(*decodeState).value
+         0     0% 89.28%      0.18s  0.61%  encoding/json.(*decodeState).valueInterface
+         0     0% 89.28%      0.20s  0.68%  fmt.Sprintf
+         0     0% 89.28%      0.46s  1.57%  github.com/buger/jsonparser.Get (inline)
+         0     0% 89.28%      0.46s  1.57%  github.com/buger/jsonparser.internalGet
+         0     0% 89.28%     13.07s 44.64%  github.com/snissn/gomap/TreeDB/collections.(*Collection).BuildVectorIndex
+         0     0% 89.28%      0.42s  1.43%  github.com/snissn/gomap/TreeDB/collections.(*Collection).InsertBatch
+         0     0% 89.28%      1.18s  4.03%  github.com/snissn/gomap/TreeDB/collections.(*Collection).OpenVectorIndexSearcher (inline)
+         0     0% 89.28%      3.68s 12.57%  github.com/snissn/gomap/TreeDB/collections.(*Collection).RebuildVectorIndex
+         0     0% 89.28%     13.22s 45.15%  github.com/snissn/gomap/TreeDB/collections.(*Collection).ScanDocumentsFunc
+         0     0% 89.28%     13.07s 44.64%  github.com/snissn/gomap/TreeDB/collections.(*Collection).buildVectorIndex (inline)
+         0     0% 89.28%     13.07s 44.64%  github.com/snissn/gomap/TreeDB/collections.(*Collection).buildVectorIndexPrepared
+         0     0% 89.28%     13.01s 44.43%  github.com/snissn/gomap/TreeDB/collections.(*Collection).buildVectorIndexPrepared.func2
+         0     0% 89.28%      0.17s  0.58%  github.com/snissn/gomap/TreeDB/collections.(*Collection).columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot
+         0     0% 89.28%      0.19s  0.65%  github.com/snissn/gomap/TreeDB/collections.(*Collection).columnVectorGraphRowsFromCatalogSnapshot
+         0     0% 89.28%      0.42s  1.43%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatch (inline)
+         0     0% 89.28%      0.42s  1.43%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchNoIndex
+         0     0% 89.28%      0.26s  0.89%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchNoIndex.func4
+         0     0% 89.28%      0.42s  1.43%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnce
+         0     0% 89.28%      0.42s  1.43%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnceWithLockState
+         0     0% 89.28%      0.42s  1.43%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchWithCommandWALIntent
+         0     0% 89.28%      0.42s  1.43%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchWithCommandWALIntent.func1
+         0     0% 89.28%      1.19s  4.06%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphPhysicalRowReaderAtSnapshot
+         0     0% 89.28%      1.18s  4.03%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openVectorIndexSearcher
+         0     0% 89.28%      0.26s  0.89%  github.com/snissn/gomap/TreeDB/collections.(*Collection).publishRootDeltaGroupMaybeColumn
+         0     0% 89.28%      3.68s 12.57%  github.com/snissn/gomap/TreeDB/collections.(*Collection).rebuildVectorIndexWithCommandWALIntent
+         0     0% 89.28%      0.18s  0.61%  github.com/snissn/gomap/TreeDB/collections.(*Collection).scanDocumentsFuncWithColumnReconstruction
+         0     0% 89.28%      0.26s  0.89%  github.com/snissn/gomap/TreeDB/collections.(*Collection).withCommandWALPublishCoordinator
+         0     0% 89.28%      0.15s  0.51%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).CheckRecall
+         0     0% 89.28%      0.15s  0.51%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).checkRecallExactBatch
+         0     0% 89.28%      0.15s  0.51%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).distanceBetweenNodesLocked
+         0     0% 89.28%      0.84s  2.87%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).rerankCandidates
+         0     0% 89.28%      0.98s  3.35%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).searchCandidatesLocked
+         0     0% 89.28%      0.45s  1.54%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndexSearcher).Close
+         0     0% 89.28%      0.99s  3.38%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndexSearcher).Search
+         0     0% 89.28%      0.45s  1.54%  github.com/snissn/gomap/TreeDB/collections.(*columnPhysicalAssetReadCache).close
+         0     0% 89.28%      0.39s  1.33%  github.com/snissn/gomap/TreeDB/collections.(*columnPhysicalAssetReadCache).fileForRef
+         0     0% 89.28%      1.01s  3.45%  github.com/snissn/gomap/TreeDB/collections.(*columnPhysicalAssetReadCache).read
+         0     0% 89.28%      0.45s  1.54%  github.com/snissn/gomap/TreeDB/collections.(*columnPhysicalAssetSegmentReader).close
+         0     0% 89.28%      0.45s  1.54%  github.com/snissn/gomap/TreeDB/collections.(*columnPhysicalRowReader).Close
+         0     0% 89.28%      1.01s  3.45%  github.com/snissn/gomap/TreeDB/collections.(*columnPhysicalRowReader).buildOrdinalRanges
+         0     0% 89.28%      0.45s  1.54%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).Close
+         0     0% 89.28%      1.83s  6.25%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).rawCandidateAdjacencyWithDirectView
+         0     0% 89.28%      0.47s  1.61%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).scoreAndPushFrontierVisited
+         0     0% 89.28%      5.21s 17.79%  github.com/snissn/gomap/TreeDB/collections.BenchmarkCollectionVectorIndexSearch
+         0     0% 89.28%     10.40s 35.52%  github.com/snissn/gomap/TreeDB/collections.BenchmarkCollectionVectorIndexSearchInt8
+         0     0% 89.28%      2.08s  7.10%  github.com/snissn/gomap/TreeDB/collections.BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnV3
+         0     0% 89.28%      2.08s  7.10%  github.com/snissn/gomap/TreeDB/collections.BenchmarkColumnVectorGraphNativeSearchCosineV3
+         0     0% 89.28%      2.73s  9.32%  github.com/snissn/gomap/TreeDB/collections.BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderSetupV6
+         0     0% 89.28%      1.99s  6.80%  github.com/snissn/gomap/TreeDB/collections.BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderV4
+         0     0% 89.28%      4.16s 14.21%  github.com/snissn/gomap/TreeDB/collections.benchmarkColumnVectorGraphNativeSearchCosineV3
+         0     0% 89.28%      3.47s 11.85%  github.com/snissn/gomap/TreeDB/collections.buildColumnVectorGraphAdjacency
+         0     0% 89.28%      0.27s  0.92%  github.com/snissn/gomap/TreeDB/collections.extractColumnDeclaredRowsFromJSONDocuments
+         0     0% 89.28%      0.45s  1.54%  github.com/snissn/gomap/TreeDB/collections.insertColumnGraphRebuildRowsV2A
+         0     0% 89.28%      1.01s  3.45%  github.com/snissn/gomap/TreeDB/collections.newColumnPhysicalRowReaderFromSnapshotView (inline)
+         0     0% 89.28%      1.01s  3.45%  github.com/snissn/gomap/TreeDB/collections.newColumnPhysicalRowReaderFromSnapshotViewWithClose
+         0     0% 89.28%      0.38s  1.30%  github.com/snissn/gomap/TreeDB/collections.openColumnGraphRebuildTestCollectionV2A
+         0     0% 89.28%      2.09s  7.14%  github.com/snissn/gomap/TreeDB/collections.openColumnVectorGraphNativeSearchBenchFixtureV3
+         0     0% 89.28%      0.37s  1.26%  github.com/snissn/gomap/TreeDB/collections.openVectorBenchmarkCollection
+         0     0% 89.28%      0.37s  1.26%  github.com/snissn/gomap/TreeDB/collections.openVectorBenchmarkCollectionWithIndexes
+         0     0% 89.28%      0.15s  0.51%  github.com/snissn/gomap/TreeDB/collections.prepareColumnWritePublishInputBeforeCommandWAL
+         0     0% 89.28%      0.62s  2.12%  github.com/snissn/gomap/TreeDB/collections.readColumnPhysicalAssetFromFileWithChecksum
+         0     0% 89.28%      0.42s  1.43%  github.com/snissn/gomap/TreeDB/collections.retryInsertBatchMutation
+         0     0% 89.28%      0.27s  0.92%  github.com/snissn/gomap/TreeDB/collections.sortVectorIndexCandidates
+         0     0% 89.28%      0.17s  0.58%  github.com/snissn/gomap/TreeDB/collections.validateColumnVectorGraphAssetRefAvailable
+         0     0% 89.28%      0.33s  1.13%  github.com/snissn/gomap/TreeDB/collections.vectorBenchmarkWriteBatch
+         0     0% 89.28%      1.11s  3.79%  github.com/snissn/gomap/TreeDB/collections.vectorFromJSONField
+         0     0% 89.28%      1.12s  3.83%  github.com/snissn/gomap/TreeDB/collections.vectorFromStoredDocument
+         0     0% 89.28%      1.39s  4.75%  github.com/snissn/gomap/TreeDB/internal/mappedresource.Uint32View
+         0     0% 89.28%      0.45s  1.54%  internal/poll.(*FD).Close
+         0     0% 89.28%      0.62s  2.12%  internal/poll.(*FD).Pread
+         0     0% 89.28%      0.62s  2.12%  internal/poll.(*FD).Pread.func1 (inline)
+         0     0% 89.28%      0.45s  1.54%  internal/poll.(*FD).decref
+         0     0% 89.28%      0.45s  1.54%  internal/poll.(*FD).destroy
+         0     0% 89.28%      0.45s  1.54%  internal/poll.(*SysFile).destroy (inline)
+         0     0% 89.28%      0.62s  2.12%  internal/poll.ignoringEINTR2[go.shape.int] (inline)
+         0     0% 89.28%      0.45s  1.54%  os.(*File).Close (inline)
+         0     0% 89.28%      0.62s  2.12%  os.(*File).ReadAt
+         0     0% 89.28%      0.62s  2.12%  os.(*File).pread (inline)
+         0     0% 89.28%      0.45s  1.54%  os.(*file).close
+         0     0% 89.28%      0.42s  1.43%  os.Open (inline)
+         0     0% 89.28%      0.44s  1.50%  os.OpenFile
+         0     0% 89.28%      0.18s  0.61%  os.Stat
+         0     0% 89.28%      0.70s  2.39%  os.ignoringEINTR (inline)
+         0     0% 89.28%      0.45s  1.54%  os.open (inline)
+         0     0% 89.28%      0.44s  1.50%  os.openFileNolog
+         0     0% 89.28%      0.44s  1.50%  os.openFileNolog.func1 (inline)
+         0     0% 89.28%      0.18s  0.61%  os.statNolog
+         0     0% 89.28%      0.18s  0.61%  os.statNolog.func1 (inline)
+         0     0% 89.28%      0.32s  1.09%  runtime.(*mcache).nextFree
+         0     0% 89.28%      0.31s  1.06%  runtime.(*mcache).refill
+         0     0% 89.28%      3.51s 11.99%  runtime.(*mheap).alloc.func1
+         0     0% 89.28%      3.54s 12.09%  runtime.(*mheap).allocSpan
+         0     0% 89.28%      0.15s  0.51%  runtime.findRunnable
+         0     0% 89.28%      0.85s  2.90%  runtime.gopreempt_m (inline)
+         0     0% 89.28%      0.86s  2.94%  runtime.goschedImpl
+         0     0% 89.28%      0.17s  0.58%  runtime.growslice
+         0     0% 89.28%      0.20s  0.68%  runtime.mcall
+         0     0% 89.28%      0.86s  2.94%  runtime.morestack
+         0     0% 89.28%      0.16s  0.55%  runtime.netpoll
+         0     0% 89.28%      0.89s  3.04%  runtime.notewakeup
+         0     0% 89.28%      0.19s  0.65%  runtime.park_m
+         0     0% 89.28%      0.20s  0.68%  runtime.schedule
+         0     0% 89.28%      0.89s  3.04%  runtime.semawakeup
+         0     0% 89.28%      0.88s  3.01%  runtime.startm
+         0     0% 89.28%      3.42s 11.68%  runtime.sysUsed (inline)
+         0     0% 89.28%      3.42s 11.68%  runtime.sysUsedOS (inline)
+         0     0% 89.28%      3.81s 13.01%  runtime.systemstack
+         0     0% 89.28%      0.90s  3.07%  runtime.wakep
+         0     0% 89.28%      0.29s  0.99%  slices.SortFunc[go.shape.[]github.com/snissn/gomap/TreeDB/collections.vectorIndexCandidate,go.shape.struct { github.com/snissn/gomap/TreeDB/collections.nodeID int; github.com/snissn/gomap/TreeDB/collections.distance float32 }] (inline)
+         0     0% 89.28%      0.17s  0.58%  strconv.AppendFloat (inline)
+         0     0% 89.28%      0.47s  1.61%  strconv.ParseFloat
+         0     0% 89.28%      0.45s  1.54%  syscall.Close
+         0     0% 89.28%      0.45s  1.54%  syscall.Open
+         0     0% 89.28%      0.62s  2.12%  syscall.Pread (inline)
+         0     0% 89.28%      0.18s  0.61%  syscall.Stat
+         0     0% 89.28%      0.62s  2.12%  syscall.pread
+         0     0% 89.28%     19.37s 66.15%  testing.(*B).launch
+         0     0% 89.28%      5.15s 17.59%  testing.(*B).run1.func1
+         0     0% 89.28%     24.52s 83.74%  testing.(*B).runN

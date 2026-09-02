@@ -1,0 +1,54 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   60758	      3835 ns/op	  13.82 MB/s	    5806 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   64826	      3851 ns/op	  13.76 MB/s	    5808 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   65160	      3727 ns/op	  14.22 MB/s	    5808 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   63572	      3652 ns/op	  14.51 MB/s	    5806 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   61942	      3818 ns/op	  13.88 MB/s	    5805 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   57856	      3829 ns/op	  13.84 MB/s	    5803 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   46855	      5018 ns/op	  10.56 MB/s	    5972 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   46812	      4794 ns/op	  11.05 MB/s	    5972 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   47306	      4826 ns/op	  10.98 MB/s	    5972 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   47744	      4834 ns/op	  10.96 MB/s	    5974 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   47253	      4986 ns/op	  10.63 MB/s	    5975 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   47596	      4839 ns/op	  10.95 MB/s	    5975 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   60163	      3782 ns/op	  12.69 MB/s	    6135 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   60120	      3797 ns/op	  12.64 MB/s	    6133 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   59241	      3888 ns/op	  12.35 MB/s	    6135 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   60496	      3796 ns/op	  12.65 MB/s	    6134 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   59965	      3767 ns/op	  12.74 MB/s	    6135 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   58986	      3877 ns/op	  12.38 MB/s	    6135 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	     496	    444264 ns/op	   0.11 MB/s	    7139 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	     543	    427985 ns/op	   0.11 MB/s	    7129 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	     518	    426246 ns/op	   0.11 MB/s	    7134 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	     530	    438965 ns/op	   0.11 MB/s	    7130 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	     547	    431634 ns/op	   0.11 MB/s	    7126 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	     543	    427060 ns/op	   0.11 MB/s	    7127 B/op	      33 allocs/op
+BenchmarkCommandWALReplayFrameClassification-12                                      	    7789	     32131 ns/op	10500.97 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandWALReplayFrameClassification-12                                      	    7902	     32215 ns/op	10473.65 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandWALReplayFrameClassification-12                                      	    7947	     30233 ns/op	11160.11 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandWALReplayFrameClassification-12                                      	    7786	     31173 ns/op	10823.61 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandWALReplayFrameClassification-12                                      	    7785	     30841 ns/op	10940.17 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandWALReplayFrameClassification-12                                      	    7806	     31021 ns/op	10876.85 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandWALReadReplayFrames-12                                               	     722	    280148 ns/op	   63472 B/op	     533 allocs/op
+BenchmarkCommandWALReadReplayFrames-12                                               	     842	    275490 ns/op	   63472 B/op	     533 allocs/op
+BenchmarkCommandWALReadReplayFrames-12                                               	     832	    277283 ns/op	   63472 B/op	     533 allocs/op
+BenchmarkCommandWALReadReplayFrames-12                                               	     728	    308455 ns/op	   63472 B/op	     533 allocs/op
+BenchmarkCommandWALReadReplayFrames-12                                               	     838	    300686 ns/op	   63472 B/op	     533 allocs/op
+BenchmarkCommandWALReadReplayFrames-12                                               	     846	    307492 ns/op	   63472 B/op	     533 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	23.876s
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkCommandWALCoveredSegmentCleanupProof-12    	      10	     88280 ns/op	   13024 B/op	      52 allocs/op
+BenchmarkCommandWALCoveredSegmentCleanupProof-12    	      10	     84441 ns/op	   13024 B/op	      52 allocs/op
+BenchmarkCommandWALCoveredSegmentCleanupProof-12    	      10	     87253 ns/op	   13024 B/op	      52 allocs/op
+BenchmarkCommandWALCoveredSegmentCleanupProof-12    	      10	     81883 ns/op	   13024 B/op	      52 allocs/op
+BenchmarkCommandWALCoveredSegmentCleanupProof-12    	      10	     77600 ns/op	   12202 B/op	      51 allocs/op
+BenchmarkCommandWALCoveredSegmentCleanupProof-12    	      10	     89206 ns/op	   13024 B/op	      52 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	1.357s

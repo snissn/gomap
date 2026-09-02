@@ -1,0 +1,100 @@
+{
+  "tracker": "https://github.com/snissn/gomap/issues/1529",
+  "milestone": "PR6.5 collection/catalog command-WAL performance polish",
+  "branch": "codex/user-command-wal-pr6_5",
+  "base_branch": "codex/user-command-wal-pr6",
+  "implementation_commit": "ea9de049ee9f4f741f5dbeba55648cd8ee8357b2",
+  "follow_up_issue": "https://github.com/snissn/gomap/issues/1584",
+  "go_version": "go1.25.7",
+  "platform": "linux/amd64",
+  "features": [
+    "consolidates PR4 collection insert/delete command-WAL performance evidence",
+    "consolidates PR5 collection update command-WAL performance evidence",
+    "consolidates PR6 catalog create/rejected-DDL command-WAL performance evidence",
+    "applies the strict >1.01x default-ready throughput gate to collection/catalog lanes",
+    "keeps PR9 default cutover scoped to public raw KV because collection write lanes remain below strict parity-plus",
+    "opens explicit follow-up issue 1584 with thresholds for collection command-WAL optimization"
+  ],
+  "passed_tests": [
+    "GOWORK=off go test ./TreeDB/docs -run 'TestCommandWAL' -count=1",
+    "git diff --check",
+    "jq empty artifacts/command-wal/pr6_5/acceptance.json"
+  ],
+  "benchmark_artifacts": [
+    "artifacts/command-wal/pr4/collection-insert-delete-microbench-benchstat.txt",
+    "artifacts/command-wal/pr5/collection-update-microbench-benchstat.txt",
+    "artifacts/command-wal/pr6/bench.txt",
+    "artifacts/command-wal/pr6_5/collection-catalog-performance-summary.md"
+  ],
+  "performance_gate": {
+    "required": true,
+    "throughput_gate_operator": ">",
+    "threshold_operator": ">",
+    "default_ready_min_ratio": 1.01,
+    "status": "fail_excluded_with_follow_up",
+    "decision": "catalog create clears strict parity-plus; collection insert/delete/update lanes are measured below strict parity-plus and are explicitly excluded from PR9 default-ready scope until issue 1584 passes",
+    "lanes": {
+      "insert_unindexed": {
+        "baseline_docs_per_sec": 1205000,
+        "command_wal_docs_per_sec": 873200,
+        "ratio": "0.725",
+        "default_ready": false
+      },
+      "insert_indexed": {
+        "baseline_docs_per_sec": 482100,
+        "command_wal_docs_per_sec": 479800,
+        "ratio": "0.995",
+        "default_ready": false
+      },
+      "delete_unindexed": {
+        "baseline_docs_per_sec": 866900,
+        "command_wal_docs_per_sec": 807800,
+        "ratio": "0.932",
+        "default_ready": false
+      },
+      "delete_indexed": {
+        "baseline_docs_per_sec": 407800,
+        "command_wal_docs_per_sec": 383200,
+        "ratio": "0.940",
+        "default_ready": false
+      },
+      "update_unindexed": {
+        "baseline_docs_per_sec": 793300,
+        "command_wal_docs_per_sec": 649000,
+        "ratio": "0.818",
+        "default_ready": false
+      },
+      "update_indexed": {
+        "baseline_docs_per_sec": 486800,
+        "command_wal_docs_per_sec": 412000,
+        "ratio": "0.846",
+        "default_ready": false
+      },
+      "catalog_create": {
+        "baseline_collections_per_sec": 18223,
+        "command_wal_collections_per_sec": 51910,
+        "ratio": "2.848",
+        "default_ready": true
+      }
+    },
+    "ratio_note": "ratio values are strings computed from the recorded throughput fields and rounded to three decimal places"
+  },
+  "default_cutover_scope": {
+    "pr9_may_enable": [
+      "public raw KV Set/Delete/Batch.Write command-WAL cached path"
+    ],
+    "excluded_until_follow_up_passes": [
+      "collection insert/delete/update default-ready performance claims"
+    ],
+    "reason": "collection command-WAL lanes remain at or below 1.01x in existing PR4/PR5 benchmark artifacts"
+  },
+  "local_validation_commands": [
+    "GOWORK=off go test ./TreeDB/docs -run 'TestCommandWAL' -count=1",
+    "git diff --check",
+    "jq empty artifacts/command-wal/pr6_5/acceptance.json"
+  ],
+  "next_required_work": [
+    "issue 1584: optimize collection insert/delete/update command-WAL lanes until each supported lane is >1.01x its WAL-off baseline",
+    "do not use PR9 raw KV performance evidence to claim collection command-WAL default readiness"
+  ]
+}

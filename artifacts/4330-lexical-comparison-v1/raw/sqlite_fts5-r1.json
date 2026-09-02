@@ -1,0 +1,604 @@
+{
+  "build": {
+    "checkpointed": true,
+    "cpu": {
+      "status": "ok",
+      "unit": "nanoseconds",
+      "value": 46029000
+    },
+    "docs_per_second": 168814.23983226347,
+    "elapsed_nanos": 59236709,
+    "peak_rss": {
+      "status": "ok",
+      "unit": "bytes",
+      "value": 53379072
+    }
+  },
+  "cases": [
+    {
+      "equivalent": false,
+      "id": "common",
+      "non_equivalent_reason": "SQLite FTS5 native bm25() IDF and floor do not implement the pinned BM25F formula",
+      "reopen_result_digest": "32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40",
+      "reopen_result_ids": [
+        "doc-000000",
+        "doc-000001",
+        "doc-000002",
+        "doc-000003",
+        "doc-000004",
+        "doc-000005",
+        "doc-000006",
+        "doc-000007",
+        "doc-000009",
+        "doc-000008"
+      ],
+      "result_digest": "32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40",
+      "result_ids": [
+        "doc-000000",
+        "doc-000001",
+        "doc-000002",
+        "doc-000003",
+        "doc-000004",
+        "doc-000005",
+        "doc-000006",
+        "doc-000007",
+        "doc-000009",
+        "doc-000008"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "sqlite_fts5_virtual_table_match_bm25",
+        "proof": [
+          [
+            5,
+            0,
+            156,
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+          ],
+          [
+            10,
+            0,
+            45,
+            "SEARCH docs USING INTEGER PRIMARY KEY (rowid=?)"
+          ],
+          [
+            24,
+            0,
+            0,
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        ]
+      },
+      "samples_nanos": [
+        2005834,
+        1984666,
+        1992083,
+        1988958,
+        1991083,
+        1977084,
+        1987625,
+        1976792,
+        1980875,
+        1956375,
+        1977792,
+        1969333,
+        1987416,
+        1967958,
+        1985875,
+        1975875,
+        1983083,
+        1976792,
+        1969833,
+        1994708
+      ],
+      "status": "directional",
+      "timed_out": false
+    },
+    {
+      "equivalent": false,
+      "id": "rare",
+      "non_equivalent_reason": "SQLite FTS5 native bm25() IDF and floor do not implement the pinned BM25F formula",
+      "reopen_result_digest": "d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0",
+      "reopen_result_ids": [
+        "doc-000010",
+        "doc-000011",
+        "doc-000012",
+        "doc-000013",
+        "doc-000014",
+        "doc-000015",
+        "doc-000016",
+        "doc-000017",
+        "doc-000018",
+        "doc-000019"
+      ],
+      "result_digest": "d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0",
+      "result_ids": [
+        "doc-000010",
+        "doc-000011",
+        "doc-000012",
+        "doc-000013",
+        "doc-000014",
+        "doc-000015",
+        "doc-000016",
+        "doc-000017",
+        "doc-000018",
+        "doc-000019"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "sqlite_fts5_virtual_table_match_bm25",
+        "proof": [
+          [
+            5,
+            0,
+            156,
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+          ],
+          [
+            10,
+            0,
+            45,
+            "SEARCH docs USING INTEGER PRIMARY KEY (rowid=?)"
+          ],
+          [
+            24,
+            0,
+            0,
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        ]
+      },
+      "samples_nanos": [
+        18000,
+        17750,
+        18000,
+        17417,
+        17708,
+        17625,
+        17500,
+        17542,
+        17625,
+        17625,
+        17917,
+        17459,
+        17458,
+        17667,
+        17500,
+        17625,
+        17875,
+        17834,
+        18334,
+        17750
+      ],
+      "status": "directional",
+      "timed_out": false
+    },
+    {
+      "equivalent": false,
+      "id": "and",
+      "non_equivalent_reason": "SQLite FTS5 native bm25() IDF and floor do not implement the pinned BM25F formula",
+      "reopen_result_digest": "ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d",
+      "reopen_result_ids": [
+        "doc-000020",
+        "doc-000021",
+        "doc-000022",
+        "doc-000023",
+        "doc-000024",
+        "doc-000025",
+        "doc-000026",
+        "doc-000027",
+        "doc-000028",
+        "doc-000029"
+      ],
+      "result_digest": "ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d",
+      "result_ids": [
+        "doc-000020",
+        "doc-000021",
+        "doc-000022",
+        "doc-000023",
+        "doc-000024",
+        "doc-000025",
+        "doc-000026",
+        "doc-000027",
+        "doc-000028",
+        "doc-000029"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "sqlite_fts5_virtual_table_match_bm25",
+        "proof": [
+          [
+            5,
+            0,
+            156,
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+          ],
+          [
+            10,
+            0,
+            45,
+            "SEARCH docs USING INTEGER PRIMARY KEY (rowid=?)"
+          ],
+          [
+            24,
+            0,
+            0,
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        ]
+      },
+      "samples_nanos": [
+        21833,
+        21500,
+        21625,
+        21375,
+        21417,
+        21708,
+        21375,
+        21375,
+        21541,
+        22083,
+        21292,
+        21250,
+        21375,
+        21542,
+        21500,
+        21292,
+        21458,
+        21667,
+        21833,
+        21458
+      ],
+      "status": "directional",
+      "timed_out": false
+    },
+    {
+      "equivalent": false,
+      "id": "or",
+      "non_equivalent_reason": "SQLite FTS5 native bm25() IDF and floor do not implement the pinned BM25F formula",
+      "reopen_result_digest": "d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8",
+      "reopen_result_ids": [
+        "doc-000070",
+        "doc-000071",
+        "doc-000072",
+        "doc-000073",
+        "doc-000074",
+        "doc-000075",
+        "doc-000076",
+        "doc-000077",
+        "doc-000078",
+        "doc-000079"
+      ],
+      "result_digest": "d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8",
+      "result_ids": [
+        "doc-000070",
+        "doc-000071",
+        "doc-000072",
+        "doc-000073",
+        "doc-000074",
+        "doc-000075",
+        "doc-000076",
+        "doc-000077",
+        "doc-000078",
+        "doc-000079"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "sqlite_fts5_virtual_table_match_bm25",
+        "proof": [
+          [
+            5,
+            0,
+            156,
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+          ],
+          [
+            10,
+            0,
+            45,
+            "SEARCH docs USING INTEGER PRIMARY KEY (rowid=?)"
+          ],
+          [
+            24,
+            0,
+            0,
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        ]
+      },
+      "samples_nanos": [
+        30541,
+        32417,
+        31500,
+        30583,
+        30500,
+        30834,
+        30750,
+        30500,
+        30792,
+        30667,
+        30625,
+        30833,
+        30583,
+        30834,
+        30792,
+        30375,
+        30500,
+        30666,
+        30375,
+        30625
+      ],
+      "status": "directional",
+      "timed_out": false
+    },
+    {
+      "equivalent": false,
+      "id": "phrase",
+      "non_equivalent_reason": "SQLite FTS5 native bm25() IDF and floor do not implement the pinned BM25F formula",
+      "reopen_result_digest": "8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696",
+      "reopen_result_ids": [
+        "doc-000090",
+        "doc-000091",
+        "doc-000092",
+        "doc-000093",
+        "doc-000094",
+        "doc-000095",
+        "doc-000096",
+        "doc-000097",
+        "doc-000098",
+        "doc-000099"
+      ],
+      "result_digest": "8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696",
+      "result_ids": [
+        "doc-000090",
+        "doc-000091",
+        "doc-000092",
+        "doc-000093",
+        "doc-000094",
+        "doc-000095",
+        "doc-000096",
+        "doc-000097",
+        "doc-000098",
+        "doc-000099"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "sqlite_fts5_virtual_table_match_bm25",
+        "proof": [
+          [
+            5,
+            0,
+            156,
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+          ],
+          [
+            10,
+            0,
+            45,
+            "SEARCH docs USING INTEGER PRIMARY KEY (rowid=?)"
+          ],
+          [
+            24,
+            0,
+            0,
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        ]
+      },
+      "samples_nanos": [
+        27792,
+        27583,
+        27708,
+        27708,
+        27708,
+        27583,
+        27459,
+        27750,
+        27583,
+        29250,
+        27917,
+        27584,
+        27792,
+        27542,
+        27542,
+        27667,
+        27959,
+        29667,
+        27542,
+        30417
+      ],
+      "status": "directional",
+      "timed_out": false
+    },
+    {
+      "equivalent": false,
+      "id": "scalar_filtered",
+      "non_equivalent_reason": "SQLite FTS5 native bm25() IDF and floor do not implement the pinned BM25F formula",
+      "reopen_result_digest": "efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0",
+      "reopen_result_ids": [
+        "doc-000100",
+        "doc-000101",
+        "doc-000102",
+        "doc-000103",
+        "doc-000104",
+        "doc-000105",
+        "doc-000106",
+        "doc-000107",
+        "doc-000108",
+        "doc-000109"
+      ],
+      "result_digest": "efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0",
+      "result_ids": [
+        "doc-000100",
+        "doc-000101",
+        "doc-000102",
+        "doc-000103",
+        "doc-000104",
+        "doc-000105",
+        "doc-000106",
+        "doc-000107",
+        "doc-000108",
+        "doc-000109"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "sqlite_fts5_virtual_table_match_bm25",
+        "proof": [
+          [
+            5,
+            0,
+            156,
+            "SCAN docs_fts VIRTUAL TABLE INDEX 0:M3"
+          ],
+          [
+            10,
+            0,
+            45,
+            "SEARCH docs USING INTEGER PRIMARY KEY (rowid=?)"
+          ],
+          [
+            26,
+            0,
+            0,
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        ]
+      },
+      "samples_nanos": [
+        20833,
+        20917,
+        20833,
+        20833,
+        20917,
+        20708,
+        20750,
+        20875,
+        20958,
+        20834,
+        20667,
+        20792,
+        21000,
+        20875,
+        21000,
+        20875,
+        20792,
+        20625,
+        20833,
+        20625
+      ],
+      "status": "directional",
+      "timed_out": false
+    }
+  ],
+  "command": [
+    "/opt/homebrew/opt/python@3.14/bin/python3.14",
+    "-E",
+    "-s",
+    "-B",
+    "$REPO/benchmarks/text_hybrid_scoreboard/sqlite_fts5_bench.py",
+    "--manifest",
+    "$REPO/benchmarks/text_hybrid_scoreboard/lexical_manifest.json",
+    "--corpus",
+    "$RUN/corpus.tsv",
+    "--out",
+    "$RUN/raw/sqlite_fts5-r1.json",
+    "--repetition",
+    "1",
+    "--db",
+    "$RUN/indexes/sqlite_fts5-r1.sqlite3"
+  ],
+  "config": {
+    "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close",
+    "fts_content_mode": "contentless",
+    "generated_weighted_field_storage": "FTS index only",
+    "journal_mode": "WAL",
+    "phrase_fields": [
+      "title",
+      "body"
+    ],
+    "phrase_scoring": "native bm25 title weight 3, body weight 1",
+    "scoring_contract": "native_directional",
+    "source_table": "docs",
+    "sqlite_auxiliary_threads": 0,
+    "stored_source_fields": [
+      "id",
+      "title",
+      "body",
+      "tenant"
+    ],
+    "synchronous": "FULL",
+    "tie_break": "score,id",
+    "tokenizer": "unicode61 remove_diacritics 2",
+    "top_k": 10,
+    "weighted_field_materialization": "title repeated 3x then body for non-phrase native scoring",
+    "working_directory": "$REPO"
+  },
+  "corpus": {
+    "document_count": 10000,
+    "sha256": "fe5b9d106a099d5c29d3327a8424b7f6d57f248b8802225b2d7bb3719062a227"
+  },
+  "engine": {
+    "family": "embedded_sql",
+    "id": "sqlite_fts5",
+    "name": "SQLite FTS5",
+    "version": "3.53.2"
+  },
+  "environment": {
+    "contract": {
+      "build_cpu_metric": "process CPU nanoseconds",
+      "engine_process_concurrency": 1,
+      "filesystem_identity_policy": "runner output, corpus, index, and result artifact must have the same decimal POSIX st_dev identity",
+      "latency_clock": "monotonic wall clock",
+      "memory_limit_policy": "inherit one detected host address-space limit; adapters do not raise or lower it",
+      "peak_rss_metric": "process lifetime peak resident bytes when the runtime exposes it; otherwise typed unsupported",
+      "query_concurrency": 1,
+      "resource_scope": "single adapter process per retained repetition",
+      "runtime_cpu_parallelism": 1
+    },
+    "execution": {
+      "engine_process_concurrency": 1,
+      "query_concurrency": 1,
+      "runtime_cpu_parallelism": 1
+    },
+    "filesystem": {
+      "corpus_store_id": "16777232",
+      "index_store_id": "16777232",
+      "result_store_id": "16777232",
+      "runner_device_id": "16777232",
+      "same_filesystem": true
+    },
+    "memory": {
+      "adapter_changed_limit": false,
+      "detected_address_space_limit": "unlimited",
+      "detection_source": "runner_rlimit",
+      "matches_runner_detected": true
+    }
+  },
+  "manifest_sha256": "a268cb2e59f4a63d8bcc7a0047fe85fe2195bef62a536f9b54bcae6f4b568d8f",
+  "reopen": {
+    "durability_connection_reopened": true,
+    "performed": true,
+    "query_connection_reopened": true,
+    "result_digest": "61b4e26f72eacfb5c7f8d1ecbdffc6b0ef69a7b17daa24b6a7ec60b29561b4b0",
+    "verified": true
+  },
+  "repetition": 1,
+  "schema_version": "treedb_lexical_result/v1",
+  "status": "ok",
+  "storage": {
+    "durable_bytes": 3915776,
+    "transient_bytes": 0,
+    "wal_bytes": 0
+  },
+  "versions": {
+    "platform": "Darwin-25.2.0-arm64-arm-64bit-Mach-O",
+    "python": "3.14.6 (main, Jun 10 2026, 10:03:53) [Clang 21.0.0 (clang-2100.0.123.102)]",
+    "sqlite": "3.53.2"
+  }
+}

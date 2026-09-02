@@ -1,0 +1,30 @@
+name: "Race (manual)"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  race:
+    name: ubuntu-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: HashDB (race)
+        run: GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -race -p 1 ./HashDB/...
+
+      - name: TreeDB (race, focused)
+        run: GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -race -p 1 ./TreeDB/db ./TreeDB/caching ./TreeDB/internal/merging

@@ -1,0 +1,35 @@
+name: "unified_bench: vet+test"
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Vet
+        working-directory: cmd/unified_bench
+        run: go vet ./...
+
+      - name: Test
+        working-directory: cmd/unified_bench
+        run: go test ./...

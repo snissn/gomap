@@ -1,0 +1,1039 @@
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"math"
+	"sort"
+
+	"github.com/snissn/gomap/TreeDB/collections"
+)
+
+// This is deliberately a reduced, calibration-only sidecar. Raw construction
+// and traversal events remain bounded to the disposable offline harness.
+const localHNSWAttributionInstrumentationSchemaV1 = "treedb_local_hnsw_attribution_instrumentation_v3"
+
+var localHNSWAttributionConstructionOriginOrderV1 = [8]string{"diversity_selected", "nearest_backfill", "reciprocal_add", "reciprocity_repair", "overlay_rewrite", "quality_postfill", "robust_prune_refinement", "robust_prune_residual_fill"}
+
+type localHNSWAttributionConstructionTotalsV1 struct {
+	OriginOrder [8]string `json:"origin_order"`
+	// Lifecycle age/delta buckets below cover only detailed partitions. Compact
+	// partitions retain count-only lifecycle summaries. Final age/delta uses
+	// final origins and therefore covers every partition.
+	LifecycleAgeDeltaPartitions     uint64       `json:"lifecycle_age_delta_detailed_partitions"`
+	FinalAgeDeltaPartitions         uint64       `json:"final_age_delta_all_partitions"`
+	DiversitySelected               uint64       `json:"diversity_selected"`
+	BackfillSelected                uint64       `json:"backfill_selected"`
+	InitialAdded                    uint64       `json:"initial_added"`
+	ReciprocalAdded                 uint64       `json:"reciprocal_added"`
+	VariantRewriteAdded             uint64       `json:"variant_rewrite_added"`
+	VariantRewriteDropped           uint64       `json:"variant_rewrite_dropped"`
+	QualityPostfillAdded            uint64       `json:"quality_postfill_added"`
+	PruneKept                       uint64       `json:"prune_kept"`
+	PruneDropped                    uint64       `json:"prune_dropped"`
+	FinalSurvivors                  uint64       `json:"final_survivors"`
+	FinalDiversity                  uint64       `json:"final_diversity_selected"`
+	FinalBackfill                   uint64       `json:"final_nearest_backfill"`
+	FinalReciprocal                 uint64       `json:"final_reciprocal_add"`
+	FinalRepair                     uint64       `json:"final_reciprocity_repair"`
+	FinalOverlay                    uint64       `json:"final_overlay_rewrite"`
+	FinalQualityPostfill            uint64       `json:"final_quality_postfill"`
+	FinalRobustPrune                uint64       `json:"final_robust_prune_refinement"`
+	FinalRobustPruneResidual        uint64       `json:"final_robust_prune_residual_fill"`
+	InitialAddByOrigin              [8]uint64    `json:"initial_add_by_origin"`
+	ReciprocalAddByOrigin           [8]uint64    `json:"reciprocal_add_by_origin"`
+	VariantRewriteAddByOrigin       [8]uint64    `json:"variant_rewrite_add_by_origin"`
+	VariantRewriteDropByOrigin      [8]uint64    `json:"variant_rewrite_drop_by_origin"`
+	QualityPostfillAddByOrigin      [8]uint64    `json:"quality_postfill_add_by_origin"`
+	PruneKeepByOrigin               [8]uint64    `json:"prune_keep_by_origin"`
+	PruneDropByOrigin               [8]uint64    `json:"prune_drop_by_origin"`
+	InitialAddAgeByOrigin           [8][4]uint64 `json:"initial_add_age_by_origin"`
+	InitialAddDeltaByOrigin         [8][4]uint64 `json:"initial_add_delta_by_origin"`
+	ReciprocalAddAgeByOrigin        [8][4]uint64 `json:"reciprocal_add_age_by_origin"`
+	ReciprocalAddDeltaByOrigin      [8][4]uint64 `json:"reciprocal_add_delta_by_origin"`
+	VariantRewriteAddAgeByOrigin    [8][4]uint64 `json:"variant_rewrite_add_age_by_origin"`
+	VariantRewriteAddDeltaByOrigin  [8][4]uint64 `json:"variant_rewrite_add_delta_by_origin"`
+	VariantRewriteDropAgeByOrigin   [8][4]uint64 `json:"variant_rewrite_drop_age_by_origin"`
+	VariantRewriteDropDeltaByOrigin [8][4]uint64 `json:"variant_rewrite_drop_delta_by_origin"`
+	QualityPostfillAddAgeByOrigin   [8][4]uint64 `json:"quality_postfill_add_age_by_origin"`
+	QualityPostfillAddDeltaByOrigin [8][4]uint64 `json:"quality_postfill_add_delta_by_origin"`
+	PruneDropAgeByOrigin            [8][4]uint64 `json:"prune_drop_age_by_origin"`
+	PruneDropDeltaByOrigin          [8][4]uint64 `json:"prune_drop_delta_by_origin"`
+	FinalAgeByOrigin                [8][4]uint64 `json:"final_age_by_origin"`
+	FinalDeltaByOrigin              [8][4]uint64 `json:"final_delta_by_origin"`
+}
+
+type localHNSWAttributionQueryUtilityV1 struct {
+	ExaminedNative      uint64                                   `json:"examined_native"`
+	ExaminedAuxiliary   uint64                                   `json:"examined_auxiliary"`
+	NewlyVisited        uint64                                   `json:"newly_visited"`
+	Scored              uint64                                   `json:"scored"`
+	TopAdmissions       uint64                                   `json:"top_admissions"`
+	FrontierAdmissions  uint64                                   `json:"frontier_admissions"`
+	StateImprovements   uint64                                   `json:"state_improvements"`
+	TruthRecovered      uint64                                   `json:"truth_recovered"`
+	Diversity           localHNSWAttributionQueryOriginUtilityV1 `json:"diversity_selected"`
+	Backfill            localHNSWAttributionQueryOriginUtilityV1 `json:"nearest_backfill"`
+	Reciprocal          localHNSWAttributionQueryOriginUtilityV1 `json:"reciprocal"`
+	Repair              localHNSWAttributionQueryOriginUtilityV1 `json:"reciprocity_repair"`
+	Overlay             localHNSWAttributionQueryOriginUtilityV1 `json:"overlay_rewrite"`
+	QualityPostfill     localHNSWAttributionQueryOriginUtilityV1 `json:"quality_postfill"`
+	RobustPrune         localHNSWAttributionQueryOriginUtilityV1 `json:"robust_prune_refinement"`
+	RobustPruneResidual localHNSWAttributionQueryOriginUtilityV1 `json:"robust_prune_residual_fill"`
+	Auxiliary           localHNSWAttributionQueryOriginUtilityV1 `json:"auxiliary"`
+	Unattributed        localHNSWAttributionQueryOriginUtilityV1 `json:"unattributed_native"`
+}
+
+type localHNSWAttributionQueryOriginUtilityV1 struct {
+	Examined           uint64 `json:"examined"`
+	NewlyVisited       uint64 `json:"newly_visited"`
+	Scored             uint64 `json:"scored"`
+	TopAdmissions      uint64 `json:"top_admissions"`
+	FrontierAdmissions uint64 `json:"frontier_admissions"`
+	StateImprovements  uint64 `json:"state_improvements"`
+	TruthRecovered     uint64 `json:"truth_recovered"`
+}
+
+// localHNSWAttributionDistanceAggregateV1 intentionally contains only
+// aggregations that remain meaningful when per-pack quantiles are combined.
+type localHNSWAttributionDistanceAggregateV1 struct {
+	Count uint64  `json:"count"`
+	Min   float64 `json:"min"`
+	Mean  float64 `json:"mean"`
+	Max   float64 `json:"max"`
+}
+
+// localHNSWAttributionNeighborhoodOracleV1 is an offline-only exact-vector
+// audit. Candidate coverage, final overlap, and angular diversity are all
+// restricted to the same bounded construction sample; none is request-path
+// work.
+type localHNSWAttributionNeighborhoodOracleV1 struct {
+	Schema                    string                                         `json:"schema"`
+	OriginOrder               [8]string                                      `json:"origin_order"`
+	ExactK                    int                                            `json:"exact_k"`
+	CandidateSamples          uint64                                         `json:"candidate_samples"`
+	CandidateTruthNeighbors   uint64                                         `json:"candidate_truth_neighbors"`
+	CandidateTruthRecovered   uint64                                         `json:"candidate_truth_recovered"`
+	FinalSamples              uint64                                         `json:"final_samples"`
+	FinalSampleTruthNeighbors uint64                                         `json:"final_sample_truth_neighbors"`
+	FinalSampleTruthRecovered uint64                                         `json:"final_sample_truth_recovered"`
+	FinalEdgesByOrigin        [8]uint64                                      `json:"final_edges_by_origin"`
+	FinalTruthByOrigin        [8]uint64                                      `json:"final_truth_recovered_by_origin"`
+	AngularPairs              uint64                                         `json:"angular_pairs"`
+	AngularCosineDistanceMean float64                                        `json:"angular_cosine_distance_mean"`
+	PackDiagnostics           []collections.VectorPartitionPackDiagnosticsV1 `json:"pack_diagnostics"`
+}
+
+const localHNSWAttributionNeighborhoodOracleSchemaV1 = "treedb_local_hnsw_attribution_neighborhood_oracle_v3"
+const localHNSWAttributionNeighborhoodExactKV1 = 10
+
+type localHNSWAttributionHardMissV1 struct {
+	QueryOrdinal int    `json:"query_ordinal"`
+	QuerySHA256  string `json:"query_sha256"`
+	Variant      string `json:"variant"`
+	OverlapBits  uint32 `json:"overlap_bits"`
+	Rank         string `json:"rank"`
+}
+
+type localHNSWAttributionInstrumentationSummaryV1 struct {
+	Schema                 string                                   `json:"schema"`
+	ManifestIntegrity      string                                   `json:"manifest_integrity_digest"`
+	IndexDefinitionDigest  string                                   `json:"index_definition_digest"`
+	NativeVariant          string                                   `json:"native_variant"`
+	OverlayVariant         string                                   `json:"overlay_variant"`
+	NativeConstruction     localHNSWAttributionConstructionTotalsV1 `json:"native_construction"`
+	OverlayConstruction    localHNSWAttributionConstructionTotalsV1 `json:"overlay_construction"`
+	NativeQuery            localHNSWAttributionQueryUtilityV1       `json:"native_query"`
+	OverlayQuery           localHNSWAttributionQueryUtilityV1       `json:"overlay_query"`
+	NativeLayer0Distances  localHNSWAttributionDistanceAggregateV1  `json:"native_layer0_distances"`
+	OverlayLayer0Distances localHNSWAttributionDistanceAggregateV1  `json:"overlay_layer0_distances"`
+	NativeNeighborhood     localHNSWAttributionNeighborhoodOracleV1 `json:"native_neighborhood_oracle"`
+	OverlayNeighborhood    localHNSWAttributionNeighborhoodOracleV1 `json:"overlay_neighborhood_oracle"`
+	HardMisses             []localHNSWAttributionHardMissV1         `json:"hard_misses"`
+}
+
+func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartitionConstructionEvidenceV1) (localHNSWAttributionConstructionTotalsV1, error) {
+	out := localHNSWAttributionConstructionTotalsV1{OriginOrder: localHNSWAttributionConstructionOriginOrderV1}
+	var detailedInitial, detailedReciprocal, detailedVariantAdd, detailedVariantDrop, detailedQualityPostfill, detailedPruneDrop uint64
+	if evidence.Schema != collections.VectorPartitionConstructionEvidenceSchemaV1 || evidence.Variant == "" || !localHNSWAttributionSHA256V1(evidence.ManifestChecksum) || !localHNSWAttributionSHA256V1(evidence.IndexDefinitionDigest) || len(evidence.Partitions) == 0 {
+		return out, errors.New("invalid local HNSW construction provenance")
+	}
+	variant := collections.VectorPartitionLocalGraphVariantV1(evidence.Variant)
+	if _, err := collections.VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
+		return out, errors.New("invalid local HNSW construction variant")
+	}
+	for _, partition := range evidence.Partitions {
+		if len(partition.NativeInsertionOrdinals) == 0 {
+			return out, errors.New("missing local HNSW insertion ordinals")
+		}
+		seenInsertion := make([]bool, len(partition.NativeInsertionOrdinals))
+		for _, native := range partition.NativeInsertionOrdinals {
+			if native < 0 || native >= len(seenInsertion) || seenInsertion[native] {
+				return out, errors.New("invalid local HNSW insertion ordinal permutation")
+			}
+			seenInsertion[native] = true
+		}
+		for _, selection := range partition.Selections {
+			if selection.Selected != selection.DiversitySelected+selection.BackfillSelected || selection.Selected < 0 {
+				return out, errors.New("invalid local HNSW construction selection")
+			}
+			out.DiversitySelected += uint64(selection.DiversitySelected)
+			out.BackfillSelected += uint64(selection.BackfillSelected)
+		}
+		// Prune-keep is deliberately count-only even for detailed traces: it is
+		// maintenance bookkeeping, not a causal edge transition. Compact traces
+		// carry the same per-origin summary.
+		for origin := range partition.CompactLifecycle.PruneKeep {
+			out.PruneKept += partition.CompactLifecycle.PruneKeep[origin]
+			out.PruneKeepByOrigin[origin] += partition.CompactLifecycle.PruneKeep[origin]
+		}
+		if partition.TraceMode == "compact" {
+			out.FinalAgeDeltaPartitions++
+			if len(partition.Events) != 0 || len(partition.FinalOrigins) == 0 {
+				return out, errors.New("invalid compact local HNSW construction history")
+			}
+			for origin := range partition.CompactLifecycle.InitialAdd {
+				out.InitialAdded += partition.CompactLifecycle.InitialAdd[origin]
+				out.InitialAddByOrigin[origin] += partition.CompactLifecycle.InitialAdd[origin]
+				out.ReciprocalAdded += partition.CompactLifecycle.ReciprocalAdd[origin]
+				out.ReciprocalAddByOrigin[origin] += partition.CompactLifecycle.ReciprocalAdd[origin]
+				out.VariantRewriteAdded += partition.CompactLifecycle.VariantAdd[origin]
+				out.VariantRewriteAddByOrigin[origin] += partition.CompactLifecycle.VariantAdd[origin]
+				out.VariantRewriteDropped += partition.CompactLifecycle.VariantDrop[origin]
+				out.VariantRewriteDropByOrigin[origin] += partition.CompactLifecycle.VariantDrop[origin]
+				out.PruneDropped += partition.CompactLifecycle.PruneDrop[origin]
+				out.PruneDropByOrigin[origin] += partition.CompactLifecycle.PruneDrop[origin]
+				out.QualityPostfillAdded += partition.CompactLifecycle.QualityPostfillAdd[origin]
+				out.QualityPostfillAddByOrigin[origin] += partition.CompactLifecycle.QualityPostfillAdd[origin]
+			}
+			for _, final := range partition.FinalOrigins {
+				if final.From < 0 || final.To < 0 || final.From == final.To || final.Layer < 0 || final.From >= len(partition.NativeInsertionOrdinals) || final.To >= len(partition.NativeInsertionOrdinals) {
+					return out, errors.New("invalid compact local HNSW final edge")
+				}
+				origin, ok := localHNSWAttributionNeighborhoodOriginV1(final.Origin)
+				if !ok {
+					return out, errors.New("invalid compact local HNSW final origin")
+				}
+				age := max(partition.NativeInsertionOrdinals[final.From], partition.NativeInsertionOrdinals[final.To])
+				delta := partition.NativeInsertionOrdinals[final.From] - partition.NativeInsertionOrdinals[final.To]
+				if delta < 0 {
+					delta = -delta
+				}
+				out.FinalSurvivors++
+				switch origin {
+				case 0:
+					out.FinalDiversity++
+				case 1:
+					out.FinalBackfill++
+				case 2:
+					out.FinalReciprocal++
+				case 3:
+					out.FinalRepair++
+				case 4:
+					out.FinalOverlay++
+				case 5:
+					out.FinalQualityPostfill++
+				case 6:
+					out.FinalRobustPrune++
+				case 7:
+					out.FinalRobustPruneResidual++
+				}
+				out.FinalAgeByOrigin[origin][localHNSWAttributionBucketV1(age)]++
+				out.FinalDeltaByOrigin[origin][localHNSWAttributionBucketV1(delta)]++
+			}
+			continue
+		}
+		if partition.TraceMode != "detailed" || len(partition.FinalOrigins) != 0 {
+			return out, errors.New("invalid local HNSW construction trace mode")
+		}
+		out.LifecycleAgeDeltaPartitions++
+		out.FinalAgeDeltaPartitions++
+		for _, event := range partition.Events {
+			if event.InsertionOrdinal < 0 || event.From < 0 || event.To < 0 || event.From == event.To || event.From >= len(partition.NativeInsertionOrdinals) || event.To >= len(partition.NativeInsertionOrdinals) || event.InsertionOrdinal != max(partition.NativeInsertionOrdinals[event.From], partition.NativeInsertionOrdinals[event.To]) {
+				return out, errors.New("invalid local HNSW construction insertion age")
+			}
+			originIndex := -1
+			switch event.Origin {
+			case "diversity_selected":
+				originIndex = 0
+			case "nearest_backfill":
+				originIndex = 1
+			case "reciprocal_add":
+				originIndex = 2
+			case "reciprocity_repair":
+				originIndex = 3
+			case "overlay_rewrite":
+				originIndex = 4
+			case "quality_postfill":
+				originIndex = 5
+			case "robust_prune_refinement":
+				originIndex = 6
+			case "robust_prune_residual_fill":
+				originIndex = 7
+			default:
+				return out, errors.New("invalid local HNSW construction origin")
+			}
+			bucket := localHNSWAttributionBucketV1(event.InsertionOrdinal)
+			delta := partition.NativeInsertionOrdinals[event.From] - partition.NativeInsertionOrdinals[event.To]
+			if delta < 0 {
+				delta = -delta
+			}
+			deltaBucket := localHNSWAttributionBucketV1(delta)
+			switch event.Action {
+			case "initial_add":
+				if originIndex == 2 {
+					return out, errors.New("invalid local HNSW initial origin")
+				}
+				out.InitialAdded++
+				detailedInitial++
+				out.InitialAddByOrigin[originIndex]++
+				out.InitialAddAgeByOrigin[originIndex][bucket]++
+				out.InitialAddDeltaByOrigin[originIndex][deltaBucket]++
+			case "reciprocal_add":
+				if originIndex != 2 {
+					return out, errors.New("invalid local HNSW reciprocal origin")
+				}
+				out.ReciprocalAdded++
+				detailedReciprocal++
+				out.ReciprocalAddByOrigin[originIndex]++
+				out.ReciprocalAddAgeByOrigin[originIndex][bucket]++
+				out.ReciprocalAddDeltaByOrigin[originIndex][deltaBucket]++
+			case "reciprocity_repair_add", "overlay_rewrite_add", "robust_prune_add", "robust_prune_residual_fill_add":
+				if !localHNSWAttributionVariantMutationAllowedV1(variant, event.Action) {
+					return out, errors.New("invalid local HNSW variant rewrite action")
+				}
+				if (event.Action == "reciprocity_repair_add" && originIndex != 3) || (event.Action == "overlay_rewrite_add" && originIndex != 4) || (event.Action == "robust_prune_add" && originIndex != 6) || (event.Action == "robust_prune_residual_fill_add" && originIndex != 7) {
+					return out, errors.New("invalid local HNSW variant rewrite add origin")
+				}
+				out.VariantRewriteAdded++
+				detailedVariantAdd++
+				out.VariantRewriteAddByOrigin[originIndex]++
+				out.VariantRewriteAddAgeByOrigin[originIndex][bucket]++
+				out.VariantRewriteAddDeltaByOrigin[originIndex][deltaBucket]++
+			case "quality_postfill_add":
+				if originIndex != 5 {
+					return out, errors.New("invalid local HNSW quality postfill origin")
+				}
+				out.QualityPostfillAdded++
+				detailedQualityPostfill++
+				out.QualityPostfillAddByOrigin[originIndex]++
+				out.QualityPostfillAddAgeByOrigin[originIndex][bucket]++
+				out.QualityPostfillAddDeltaByOrigin[originIndex][deltaBucket]++
+			case "reciprocity_repair_drop", "overlay_rewrite_drop", "robust_prune_drop":
+				if !localHNSWAttributionVariantMutationAllowedV1(variant, event.Action) {
+					return out, errors.New("invalid local HNSW variant rewrite action")
+				}
+				out.VariantRewriteDropped++
+				detailedVariantDrop++
+				out.VariantRewriteDropByOrigin[originIndex]++
+				out.VariantRewriteDropAgeByOrigin[originIndex][bucket]++
+				out.VariantRewriteDropDeltaByOrigin[originIndex][deltaBucket]++
+			case "reciprocal_prune_keep":
+				return out, errors.New("unexpected per-edge local HNSW prune keep")
+			case "reciprocal_prune_drop":
+				out.PruneDropped++
+				detailedPruneDrop++
+				out.PruneDropByOrigin[originIndex]++
+				out.PruneDropAgeByOrigin[originIndex][bucket]++
+				out.PruneDropDeltaByOrigin[originIndex][deltaBucket]++
+			case "final_survivor":
+				out.FinalSurvivors++
+				switch event.Origin {
+				case "diversity_selected":
+					out.FinalDiversity++
+				case "nearest_backfill":
+					out.FinalBackfill++
+				case "reciprocal_add":
+					out.FinalReciprocal++
+				case "reciprocity_repair":
+					out.FinalRepair++
+				case "overlay_rewrite":
+					out.FinalOverlay++
+				case "quality_postfill":
+					out.FinalQualityPostfill++
+				case "robust_prune_refinement":
+					out.FinalRobustPrune++
+				case "robust_prune_residual_fill":
+					out.FinalRobustPruneResidual++
+				}
+				out.FinalAgeByOrigin[originIndex][bucket]++
+				out.FinalDeltaByOrigin[originIndex][deltaBucket]++
+			default:
+				return out, errors.New("invalid local HNSW construction action")
+			}
+		}
+	}
+	if out.FinalSurvivors != out.FinalDiversity+out.FinalBackfill+out.FinalReciprocal+out.FinalRepair+out.FinalOverlay+out.FinalQualityPostfill+out.FinalRobustPrune+out.FinalRobustPruneResidual {
+		return localHNSWAttributionConstructionTotalsV1{}, errors.New("local HNSW final origin conservation")
+	}
+	if out.InitialAdded != localHNSWAttributionOriginSumV1(out.InitialAddByOrigin) || out.ReciprocalAdded != localHNSWAttributionOriginSumV1(out.ReciprocalAddByOrigin) || out.VariantRewriteAdded != localHNSWAttributionOriginSumV1(out.VariantRewriteAddByOrigin) || out.VariantRewriteDropped != localHNSWAttributionOriginSumV1(out.VariantRewriteDropByOrigin) || out.QualityPostfillAdded != localHNSWAttributionOriginSumV1(out.QualityPostfillAddByOrigin) || out.PruneKept != localHNSWAttributionOriginSumV1(out.PruneKeepByOrigin) || out.PruneDropped != localHNSWAttributionOriginSumV1(out.PruneDropByOrigin) {
+		return localHNSWAttributionConstructionTotalsV1{}, errors.New("local HNSW lifecycle origin conservation")
+	}
+	if localHNSWAttributionBucketsSumV1(out.InitialAddAgeByOrigin) != detailedInitial || localHNSWAttributionBucketsSumV1(out.InitialAddDeltaByOrigin) != detailedInitial || localHNSWAttributionBucketsSumV1(out.ReciprocalAddAgeByOrigin) != detailedReciprocal || localHNSWAttributionBucketsSumV1(out.ReciprocalAddDeltaByOrigin) != detailedReciprocal || localHNSWAttributionBucketsSumV1(out.VariantRewriteAddAgeByOrigin) != detailedVariantAdd || localHNSWAttributionBucketsSumV1(out.VariantRewriteAddDeltaByOrigin) != detailedVariantAdd || localHNSWAttributionBucketsSumV1(out.VariantRewriteDropAgeByOrigin) != detailedVariantDrop || localHNSWAttributionBucketsSumV1(out.VariantRewriteDropDeltaByOrigin) != detailedVariantDrop || localHNSWAttributionBucketsSumV1(out.QualityPostfillAddAgeByOrigin) != detailedQualityPostfill || localHNSWAttributionBucketsSumV1(out.QualityPostfillAddDeltaByOrigin) != detailedQualityPostfill || localHNSWAttributionBucketsSumV1(out.PruneDropAgeByOrigin) != detailedPruneDrop || localHNSWAttributionBucketsSumV1(out.PruneDropDeltaByOrigin) != detailedPruneDrop || localHNSWAttributionBucketsSumV1(out.FinalAgeByOrigin) != out.FinalSurvivors || localHNSWAttributionBucketsSumV1(out.FinalDeltaByOrigin) != out.FinalSurvivors {
+		return localHNSWAttributionConstructionTotalsV1{}, errors.New("local HNSW lifecycle bucket conservation")
+	}
+	return out, nil
+}
+
+func localHNSWAttributionVariantMutationAllowedV1(variant collections.VectorPartitionLocalGraphVariantV1, action string) bool {
+	switch action {
+	case "overlay_rewrite_add", "overlay_rewrite_drop":
+		return variant == collections.VectorPartitionLocalGraphVariantOverlayCurrentV1
+	case "reciprocity_repair_add", "reciprocity_repair_drop":
+		return variant != collections.VectorPartitionLocalGraphVariantNativeV1 && variant != collections.VectorPartitionLocalGraphVariantOverlayCurrentV1
+	case "quality_postfill_add":
+		return variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1
+	case "robust_prune_add", "robust_prune_residual_fill_add", "robust_prune_drop":
+		return variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1
+	default:
+		return true
+	}
+}
+
+func localHNSWAttributionOriginSumV1(values [8]uint64) uint64 {
+	var total uint64
+	for _, value := range values {
+		total += value
+	}
+	return total
+}
+
+func localHNSWAttributionBucketV1(value int) int {
+	switch {
+	case value < 16:
+		return 0
+	case value < 256:
+		return 1
+	case value < 4096:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func localHNSWAttributionBucketsSumV1(values [8][4]uint64) uint64 {
+	var total uint64
+	for _, origins := range values {
+		for _, value := range origins {
+			total += value
+		}
+	}
+	return total
+}
+
+type localHNSWAttributionFinalEdgeKeyV1 struct{ From, To, Layer int }
+
+func localHNSWAttributionFinalOriginsV1(evidence collections.VectorPartitionConstructionEvidenceV1, partitionID int) (map[localHNSWAttributionFinalEdgeKeyV1]string, error) {
+	if partitionID < 0 {
+		return nil, errors.New("invalid local HNSW construction partition")
+	}
+	var part *collections.VectorPartitionConstructionPartitionEvidenceV1
+	for i := range evidence.Partitions {
+		if evidence.Partitions[i].PartitionID == uint32(partitionID) {
+			if part != nil {
+				return nil, errors.New("duplicate local HNSW construction partition")
+			}
+			part = &evidence.Partitions[i]
+		}
+	}
+	if part == nil {
+		return nil, errors.New("invalid local HNSW construction partition")
+	}
+	out := map[localHNSWAttributionFinalEdgeKeyV1]string{}
+	if part.TraceMode == "compact" {
+		for _, final := range part.FinalOrigins {
+			key := localHNSWAttributionFinalEdgeKeyV1{final.From, final.To, final.Layer}
+			if _, exists := out[key]; exists || !localHNSWAttributionConstructionOriginValidV1(final.Origin) {
+				return nil, errors.New("invalid compact local HNSW final edge origin")
+			}
+			out[key] = final.Origin
+		}
+	} else {
+		for _, event := range part.Events {
+			if event.Action != "final_survivor" {
+				continue
+			}
+			key := localHNSWAttributionFinalEdgeKeyV1{event.From, event.To, event.Layer}
+			if _, exists := out[key]; exists || !localHNSWAttributionConstructionOriginValidV1(event.Origin) {
+				return nil, errors.New("invalid local HNSW final edge origin")
+			}
+			out[key] = event.Origin
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("empty local HNSW final edge origins")
+	}
+	return out, nil
+}
+
+func localHNSWAttributionQueryUtilityReduceV1(metrics collections.VectorPartitionSearchMetricsV1, attribution collections.VectorPartitionSearchAttributionV1, origins map[localHNSWAttributionFinalEdgeKeyV1]string, ids []string, truth map[string]struct{}) (localHNSWAttributionQueryUtilityV1, error) {
+	var out localHNSWAttributionQueryUtilityV1
+	if !localHNSWAttributionSearchValidV1(attribution) {
+		return out, errors.New("invalid local HNSW query attribution")
+	}
+	recovered := map[string]struct{}{}
+	creditSeed := func(seed collections.VectorPartitionSearchSeedEventV1) error {
+		if seed.Ordinal < 0 || seed.Ordinal >= len(ids) {
+			return errors.New("invalid local HNSW seed ordinal")
+		}
+		if _, wanted := truth[ids[seed.Ordinal]]; wanted {
+			if _, seen := recovered[ids[seed.Ordinal]]; !seen {
+				recovered[ids[seed.Ordinal]] = struct{}{}
+				out.TruthRecovered++
+				out.Unattributed.TruthRecovered++
+			}
+		}
+		return nil
+	}
+	// The initial entry is scored before upper-layer descent, so it owns a
+	// truth recovery before any subsequently examined edge can claim it.
+	for _, seed := range attribution.SeedEvents {
+		if seed.InitialEntry {
+			if err := creditSeed(seed); err != nil {
+				return out, err
+			}
+		}
+	}
+	var layer0NewlyVisited, layer0Scored uint64
+	for _, event := range attribution.EdgeEvents {
+		if event.DestinationOrdinal < 0 || event.DestinationOrdinal >= len(ids) {
+			return localHNSWAttributionQueryUtilityV1{}, errors.New("invalid local HNSW trace ordinal")
+		}
+		var origin *localHNSWAttributionQueryOriginUtilityV1
+		if event.Auxiliary {
+			out.ExaminedAuxiliary++
+			origin = &out.Auxiliary
+		} else {
+			out.ExaminedNative++
+			switch origins[localHNSWAttributionFinalEdgeKeyV1{event.SourceOrdinal, event.DestinationOrdinal, event.Layer}] {
+			case "diversity_selected":
+				origin = &out.Diversity
+			case "nearest_backfill":
+				origin = &out.Backfill
+			case "reciprocal_add":
+				origin = &out.Reciprocal
+			case "reciprocity_repair":
+				origin = &out.Repair
+			case "overlay_rewrite":
+				origin = &out.Overlay
+			case "quality_postfill":
+				origin = &out.QualityPostfill
+			case "robust_prune_refinement":
+				origin = &out.RobustPrune
+			case "robust_prune_residual_fill":
+				origin = &out.RobustPruneResidual
+			default:
+				return localHNSWAttributionQueryUtilityV1{}, errors.New("unmatched local HNSW native final edge")
+			}
+		}
+		origin.Examined++
+		if event.NewlyVisited {
+			out.NewlyVisited++
+			origin.NewlyVisited++
+			if event.Layer == 0 {
+				layer0NewlyVisited++
+			}
+		}
+		if event.Scored {
+			out.Scored++
+			origin.Scored++
+			if event.Layer == 0 {
+				layer0Scored++
+			}
+		}
+		if event.TopAdmission {
+			out.TopAdmissions++
+			origin.TopAdmissions++
+		}
+		if event.FrontierAdmission {
+			out.FrontierAdmissions++
+			origin.FrontierAdmissions++
+		}
+		if event.StateImprovement {
+			out.StateImprovements++
+			origin.StateImprovements++
+		}
+		if event.Scored {
+			if _, wanted := truth[ids[event.DestinationOrdinal]]; wanted {
+				if _, seen := recovered[ids[event.DestinationOrdinal]]; !seen {
+					recovered[ids[event.DestinationOrdinal]] = struct{}{}
+					out.TruthRecovered++
+					origin.TruthRecovered++
+				}
+			}
+		}
+	}
+	// Remaining L0/fallback seeds are reached after edge examination.
+	for _, seed := range attribution.SeedEvents {
+		if !seed.InitialEntry {
+			if err := creditSeed(seed); err != nil {
+				return out, err
+			}
+		}
+	}
+	originsTotal := func(field func(localHNSWAttributionQueryOriginUtilityV1) uint64) uint64 {
+		return field(out.Diversity) + field(out.Backfill) + field(out.Reciprocal) + field(out.Repair) + field(out.Overlay) + field(out.QualityPostfill) + field(out.RobustPrune) + field(out.RobustPruneResidual) + field(out.Auxiliary) + field(out.Unattributed)
+	}
+	originExamined := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.Examined })
+	originNewlyVisited := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.NewlyVisited })
+	originScored := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.Scored })
+	originTopAdmissions := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.TopAdmissions })
+	originFrontierAdmissions := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.FrontierAdmissions })
+	originStateImprovements := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.StateImprovements })
+	originTruthRecovered := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.TruthRecovered })
+	totalEdges, err := localHNSWAttributionMetricEdgesV1(metrics)
+	if err != nil || out.ExaminedNative != metrics.Edges || out.ExaminedAuxiliary != metrics.AuxiliaryEdges || originExamined != totalEdges {
+		return localHNSWAttributionQueryUtilityV1{}, fmt.Errorf("local HNSW query edge conservation: native=%d auxiliary=%d origin=%d metrics=%d metrics_auxiliary=%d", out.ExaminedNative, out.ExaminedAuxiliary, originExamined, metrics.Edges, metrics.AuxiliaryEdges)
+	}
+	if originNewlyVisited != out.NewlyVisited || originScored != out.Scored || originTopAdmissions != out.TopAdmissions || originFrontierAdmissions != out.FrontierAdmissions || originStateImprovements != out.StateImprovements || originTruthRecovered != out.TruthRecovered {
+		return localHNSWAttributionQueryUtilityV1{}, fmt.Errorf("local HNSW query origin conservation: newly=%d/%d scored=%d/%d top=%d/%d frontier=%d/%d improvement=%d/%d truth=%d/%d", originNewlyVisited, out.NewlyVisited, originScored, out.Scored, originTopAdmissions, out.TopAdmissions, originFrontierAdmissions, out.FrontierAdmissions, originStateImprovements, out.StateImprovements, originTruthRecovered, out.TruthRecovered)
+	}
+	if layer0NewlyVisited+attribution.SeedCandidates != metrics.Candidates || layer0Scored != layer0NewlyVisited {
+		return localHNSWAttributionQueryUtilityV1{}, fmt.Errorf("local HNSW query candidate conservation: layer0_new=%d layer0_scored=%d seeds=%d metrics=%d", layer0NewlyVisited, layer0Scored, attribution.SeedCandidates, metrics.Candidates)
+	}
+	if out.FrontierAdmissions+attribution.SeedAdmissions != attribution.FrontierAdmissions || out.TopAdmissions != out.FrontierAdmissions {
+		return localHNSWAttributionQueryUtilityV1{}, fmt.Errorf("local HNSW query admission conservation: top=%d edge_frontier=%d seed_frontier=%d total_frontier=%d", out.TopAdmissions, out.FrontierAdmissions, attribution.SeedAdmissions, attribution.FrontierAdmissions)
+	}
+	return out, nil
+}
+
+// VectorPartitionSearchMetricsV1 reports native and auxiliary edge work in
+// separate fields. Attribution records use their checked sum as total work.
+func localHNSWAttributionMetricEdgesV1(metrics collections.VectorPartitionSearchMetricsV1) (uint64, error) {
+	if math.MaxUint64-metrics.Edges < metrics.AuxiliaryEdges {
+		return 0, errors.New("local HNSW query edge metric overflow")
+	}
+	return metrics.Edges + metrics.AuxiliaryEdges, nil
+}
+
+func localHNSWAttributionTruthRecoveriesV1(attribution collections.VectorPartitionSearchAttributionV1, origins map[localHNSWAttributionFinalEdgeKeyV1]string, ids []string, truth map[string]struct{}) map[string]string {
+	out := make(map[string]string)
+	creditSeed := func(seed collections.VectorPartitionSearchSeedEventV1) {
+		if seed.Ordinal >= 0 && seed.Ordinal < len(ids) {
+			if _, wanted := truth[ids[seed.Ordinal]]; wanted {
+				if _, exists := out[ids[seed.Ordinal]]; !exists {
+					out[ids[seed.Ordinal]] = "unattributed"
+				}
+			}
+		}
+	}
+	for _, seed := range attribution.SeedEvents {
+		if seed.InitialEntry {
+			creditSeed(seed)
+		}
+	}
+	for _, event := range attribution.EdgeEvents {
+		if !event.Scored || event.DestinationOrdinal < 0 || event.DestinationOrdinal >= len(ids) {
+			continue
+		}
+		id := ids[event.DestinationOrdinal]
+		if _, wanted := truth[id]; !wanted {
+			continue
+		}
+		if _, exists := out[id]; exists {
+			continue
+		}
+		origin := "auxiliary"
+		if !event.Auxiliary {
+			origin = origins[localHNSWAttributionFinalEdgeKeyV1{event.SourceOrdinal, event.DestinationOrdinal, event.Layer}]
+		}
+		out[id] = origin
+	}
+	for _, seed := range attribution.SeedEvents {
+		if !seed.InitialEntry {
+			creditSeed(seed)
+		}
+	}
+	return out
+}
+
+func localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(out *localHNSWAttributionQueryUtilityV1, origin string) error {
+	if out == nil || out.TruthRecovered == 0 {
+		return errors.New("local HNSW truth recovery underflow")
+	}
+	bucket, ok := localHNSWAttributionTruthRecoveryBucketV1(out, origin)
+	if !ok {
+		return errors.New("invalid local HNSW truth recovery origin")
+	}
+	if *bucket == 0 {
+		return errors.New("local HNSW truth recovery origin underflow")
+	}
+	out.TruthRecovered--
+	*bucket = *bucket - 1
+	return nil
+}
+
+func localHNSWAttributionTruthRecoveryBucketV1(out *localHNSWAttributionQueryUtilityV1, origin string) (*uint64, bool) {
+	if out == nil {
+		return nil, false
+	}
+	switch origin {
+	case "diversity_selected":
+		return &out.Diversity.TruthRecovered, true
+	case "nearest_backfill":
+		return &out.Backfill.TruthRecovered, true
+	case "reciprocal_add":
+		return &out.Reciprocal.TruthRecovered, true
+	case "reciprocity_repair":
+		return &out.Repair.TruthRecovered, true
+	case "overlay_rewrite":
+		return &out.Overlay.TruthRecovered, true
+	case "quality_postfill":
+		return &out.QualityPostfill.TruthRecovered, true
+	case "robust_prune_refinement":
+		return &out.RobustPrune.TruthRecovered, true
+	case "robust_prune_residual_fill":
+		return &out.RobustPruneResidual.TruthRecovered, true
+	case "auxiliary":
+		return &out.Auxiliary.TruthRecovered, true
+	case "unattributed":
+		return &out.Unattributed.TruthRecovered, true
+	default:
+		return nil, false
+	}
+}
+
+func localHNSWAttributionHardMissesV1(in []localHNSWAttributionHardMissV1) []localHNSWAttributionHardMissV1 {
+	// Stable digest ranking makes the sample independent of calibration order.
+	sort.Slice(in, func(i, j int) bool {
+		if in[i].Rank != in[j].Rank {
+			return in[i].Rank < in[j].Rank
+		}
+		if in[i].Variant != in[j].Variant {
+			return in[i].Variant < in[j].Variant
+		}
+		if in[i].QueryOrdinal != in[j].QueryOrdinal {
+			return in[i].QueryOrdinal < in[j].QueryOrdinal
+		}
+		if in[i].QuerySHA256 != in[j].QuerySHA256 {
+			return in[i].QuerySHA256 < in[j].QuerySHA256
+		}
+		return in[i].OverlapBits < in[j].OverlapBits
+	})
+	if len(in) > 32 {
+		in = in[:32]
+	}
+	return in
+}
+
+func localHNSWAttributionHardMissV1Build(queryOrdinal int, querySHA, variant string, overlap float64) (localHNSWAttributionHardMissV1, bool) {
+	if queryOrdinal < 0 || !localHNSWAttributionSHA256V1(querySHA) || (variant != "native" && variant != "overlay_current") || overlap >= 1 || overlap < 0 || math.IsNaN(overlap) {
+		return localHNSWAttributionHardMissV1{}, false
+	}
+	h := sha256.Sum256([]byte("treedb-4170-hard-miss-v1/" + variant + "/" + querySHA))
+	return localHNSWAttributionHardMissV1{QueryOrdinal: queryOrdinal, QuerySHA256: querySHA, Variant: variant, OverlapBits: math.Float32bits(float32(overlap)), Rank: hex.EncodeToString(h[:])}, true
+}
+
+func localHNSWAttributionInstrumentationSummaryV1Build(source *m8ProductionMultiGroupAssetsV1, native, overlay *localHNSWVariantHarnessV1, graph localHNSWAttributionGraphAggregateV1, calibration localHNSWAttributionCalibrationSummaryV1) (localHNSWAttributionInstrumentationSummaryV1, error) {
+	var out localHNSWAttributionInstrumentationSummaryV1
+	if source == nil || source.descriptor == nil || native == nil || overlay == nil || source.manifest.IntegrityDigest == "" || len(native.constructionEvidence.Partitions) != int(source.manifest.PartitionCount) || len(overlay.constructionEvidence.Partitions) != int(source.manifest.PartitionCount) {
+		return out, errors.New("invalid local HNSW instrumentation inputs")
+	}
+	nativeConstruction, err := localHNSWAttributionConstructionReduceV1(native.constructionEvidence)
+	if err != nil {
+		return out, err
+	}
+	overlayConstruction, err := localHNSWAttributionConstructionReduceV1(overlay.constructionEvidence)
+	if err != nil {
+		return out, err
+	}
+	nativeDiagnostics, err := localHNSWAttributionPackDiagnosticsV1(native.searchers)
+	if err != nil {
+		return out, err
+	}
+	overlayDiagnostics, err := localHNSWAttributionPackDiagnosticsV1(overlay.searchers)
+	if err != nil {
+		return out, err
+	}
+	nativeNeighborhood, err := localHNSWAttributionNeighborhoodOracleV1Build(native, nativeDiagnostics)
+	if err != nil {
+		return out, err
+	}
+	overlayNeighborhood, err := localHNSWAttributionNeighborhoodOracleV1Build(overlay, overlayDiagnostics)
+	if err != nil {
+		return out, err
+	}
+	if calibration.QueryCount == 0 || calibration.NativeUtility.ExaminedNative+calibration.NativeUtility.ExaminedAuxiliary == 0 || calibration.OverlayUtility.ExaminedNative+calibration.OverlayUtility.ExaminedAuxiliary == 0 {
+		return out, errors.New("empty local HNSW instrumentation query utility")
+	}
+	out = localHNSWAttributionInstrumentationSummaryV1{Schema: localHNSWAttributionInstrumentationSchemaV1, ManifestIntegrity: source.manifest.IntegrityDigest, IndexDefinitionDigest: native.constructionEvidence.IndexDefinitionDigest, NativeVariant: native.constructionEvidence.Variant, OverlayVariant: overlay.constructionEvidence.Variant, NativeConstruction: nativeConstruction, OverlayConstruction: overlayConstruction, NativeQuery: calibration.NativeUtility, OverlayQuery: calibration.OverlayUtility, NativeLayer0Distances: graphDistanceAggregateV1(nativeDiagnostics), OverlayLayer0Distances: graphDistanceAggregateV1(overlayDiagnostics), NativeNeighborhood: nativeNeighborhood, OverlayNeighborhood: overlayNeighborhood, HardMisses: append([]localHNSWAttributionHardMissV1(nil), calibration.HardMisses...)}
+	if out.NativeVariant != "native" || out.OverlayVariant != "overlay_current" || !localHNSWAttributionSHA256V1(out.IndexDefinitionDigest) || out.NativeLayer0Distances.Count == 0 || out.OverlayLayer0Distances.Count == 0 || out.NativeConstruction.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 || out.OverlayConstruction.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 || out.NativeNeighborhood.Schema != localHNSWAttributionNeighborhoodOracleSchemaV1 || out.OverlayNeighborhood.Schema != localHNSWAttributionNeighborhoodOracleSchemaV1 || out.NativeNeighborhood.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 || out.OverlayNeighborhood.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 {
+		return localHNSWAttributionInstrumentationSummaryV1{}, errors.New("invalid local HNSW instrumentation summary")
+	}
+	return out, nil
+}
+
+func localHNSWAttributionNeighborhoodOriginV1(origin string) (int, bool) {
+	switch origin {
+	case "diversity_selected":
+		return 0, true
+	case "nearest_backfill":
+		return 1, true
+	case "reciprocal_add":
+		return 2, true
+	case "reciprocity_repair":
+		return 3, true
+	case "overlay_rewrite":
+		return 4, true
+	case "quality_postfill":
+		return 5, true
+	case "robust_prune_refinement":
+		return 6, true
+	case "robust_prune_residual_fill":
+		return 7, true
+	}
+	return 0, false
+}
+
+func localHNSWAttributionConstructionOriginValidV1(origin string) bool {
+	_, ok := localHNSWAttributionNeighborhoodOriginV1(origin)
+	return ok
+}
+
+func localHNSWAttributionCosineDistanceV1(a, b []float32) (float64, bool) {
+	if len(a) == 0 || len(a) != len(b) {
+		return 0, false
+	}
+	var dot, an, bn float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		an += float64(a[i]) * float64(a[i])
+		bn += float64(b[i]) * float64(b[i])
+	}
+	if an == 0 || bn == 0 {
+		return 0, false
+	}
+	return 1 - dot/math.Sqrt(an*bn), true
+}
+
+func localHNSWAttributionNearestIDsV1(ids []string, vectors map[string][]float32, source string, allowed func(string) bool, k int) ([]string, error) {
+	type scored struct {
+		id    string
+		score float32
+	}
+	query, ok := vectors[source]
+	if !ok {
+		return nil, errors.New("missing local HNSW oracle source vector")
+	}
+	scorer, err := collections.NewCanonicalVectorPartitionCosineScorerV1(query)
+	if err != nil {
+		return nil, err
+	}
+	all := make([]scored, 0, len(ids))
+	for _, id := range ids {
+		if id == source || !allowed(id) {
+			continue
+		}
+		score, err := scorer.ScoreV1(vectors[id])
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, scored{id, score})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].score != all[j].score {
+			return all[i].score > all[j].score
+		}
+		return all[i].id < all[j].id
+	})
+	if len(all) > k {
+		all = all[:k]
+	}
+	out := make([]string, len(all))
+	for i := range all {
+		out[i] = all[i].id
+	}
+	return out, nil
+}
+
+func localHNSWAttributionPackDiagnosticsV1(searchers []*collections.VectorPartitionLocalSearcherV1) ([]collections.VectorPartitionPackDiagnosticsV1, error) {
+	out := make([]collections.VectorPartitionPackDiagnosticsV1, len(searchers))
+	for i, searcher := range searchers {
+		var err error
+		out[i], err = searcher.PackDiagnosticsV1()
+		if err != nil {
+			return nil, fmt.Errorf("local HNSW pack diagnostics partition_index=%d partition_id=%d: %w", i, searcher.Status().PartitionID, err)
+		}
+	}
+	return out, nil
+}
+
+func localHNSWAttributionNeighborhoodOracleV1Build(h *localHNSWVariantHarnessV1, diagnostics []collections.VectorPartitionPackDiagnosticsV1) (localHNSWAttributionNeighborhoodOracleV1, error) {
+	vectors, err := localHNSWAttributionNeighborhoodVectorsV1(h)
+	if err != nil {
+		return localHNSWAttributionNeighborhoodOracleV1{}, err
+	}
+	return localHNSWAttributionNeighborhoodOracleWithVectorsV1(h, diagnostics, vectors)
+}
+
+func localHNSWAttributionNeighborhoodVectorsV1(h *localHNSWVariantHarnessV1) (map[string][]float32, error) {
+	if h == nil || h.assets == nil {
+		return nil, errors.New("invalid local HNSW oracle assets")
+	}
+	_, rows, err := h.assets.collection.ReadVectorPartitionRouterSourceRowsV1(h.assets.manifest.IndexName)
+	if err != nil {
+		return nil, err
+	}
+	vectors := make(map[string][]float32, len(rows))
+	for _, row := range rows {
+		vectors[string(row.DocumentID)] = row.Values
+	}
+	if len(vectors) == 0 {
+		return nil, errors.New("empty local HNSW oracle vectors")
+	}
+	return vectors, nil
+}
+
+func localHNSWAttributionNeighborhoodOracleWithVectorsV1(h *localHNSWVariantHarnessV1, diagnostics []collections.VectorPartitionPackDiagnosticsV1, vectors map[string][]float32) (localHNSWAttributionNeighborhoodOracleV1, error) {
+	out := localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1}
+	if h == nil || h.assets == nil || len(h.searchers) != len(h.documentIDs) || len(h.searchers) != len(h.constructionEvidence.Partitions) || len(vectors) == 0 {
+		return out, errors.New("invalid local HNSW oracle harness")
+	}
+	if len(diagnostics) != len(h.searchers) {
+		return out, errors.New("invalid local HNSW cached diagnostics")
+	}
+	for p, part := range h.constructionEvidence.Partitions {
+		ids := h.documentIDs[p]
+		if len(ids) != len(part.NativeInsertionOrdinals) {
+			return out, errors.New("local HNSW oracle ordinal binding")
+		}
+		out.PackDiagnostics = append(out.PackDiagnostics, diagnostics[p])
+		final := map[int][]struct {
+			to     int
+			origin string
+		}{}
+		finalOrigins, err := localHNSWAttributionFinalOriginsV1(h.constructionEvidence, int(part.PartitionID))
+		if err != nil {
+			return out, err
+		}
+		finalEdges := make([]localHNSWAttributionFinalEdgeKeyV1, 0, len(finalOrigins))
+		for edge := range finalOrigins {
+			finalEdges = append(finalEdges, edge)
+		}
+		sort.Slice(finalEdges, func(i, j int) bool {
+			if finalEdges[i].From != finalEdges[j].From {
+				return finalEdges[i].From < finalEdges[j].From
+			}
+			if finalEdges[i].Layer != finalEdges[j].Layer {
+				return finalEdges[i].Layer < finalEdges[j].Layer
+			}
+			return finalEdges[i].To < finalEdges[j].To
+		})
+		for _, edge := range finalEdges {
+			if edge.Layer != 0 {
+				continue
+			}
+			if edge.From < 0 || edge.From >= len(ids) || edge.To < 0 || edge.To >= len(ids) {
+				return out, errors.New("local HNSW oracle final ordinal")
+			}
+			final[edge.From] = append(final[edge.From], struct {
+				to     int
+				origin string
+			}{edge.To, finalOrigins[edge]})
+		}
+		samples := make(map[int]collections.VectorPartitionConstructionSelectionV1)
+		sampleNodes := make([]int, 0)
+		idOrdinal := make(map[string]int, len(ids))
+		for ordinal, id := range ids {
+			idOrdinal[id] = ordinal
+		}
+		for _, selection := range part.Selections {
+			if !selection.CandidateSampled {
+				continue
+			}
+			if selection.Node < 0 || selection.Node >= len(ids) {
+				return out, errors.New("local HNSW oracle sample ordinal")
+			}
+			if _, duplicate := samples[selection.Node]; duplicate {
+				return out, errors.New("duplicate local HNSW oracle sample")
+			}
+			samples[selection.Node] = selection
+			sampleNodes = append(sampleNodes, selection.Node)
+			exact, err := localHNSWAttributionNearestIDsV1(ids, vectors, ids[selection.Node], func(id string) bool {
+				ordinal, ok := idOrdinal[id]
+				return ok && part.NativeInsertionOrdinals[ordinal] < part.NativeInsertionOrdinals[selection.Node]
+			}, out.ExactK)
+			if err != nil {
+				return out, err
+			}
+			candidate := map[string]struct{}{}
+			for _, ordinal := range selection.CandidateOrdinals {
+				if ordinal < 0 || ordinal >= len(ids) {
+					return out, errors.New("local HNSW oracle candidate ordinal")
+				}
+				candidate[ids[ordinal]] = struct{}{}
+			}
+			out.CandidateSamples++
+			out.CandidateTruthNeighbors += uint64(len(exact))
+			for _, id := range exact {
+				if _, ok := candidate[id]; ok {
+					out.CandidateTruthRecovered++
+				}
+			}
+		}
+		sort.Ints(sampleNodes)
+		for _, from := range sampleNodes {
+			edges := final[from]
+			exact, err := localHNSWAttributionNearestIDsV1(ids, vectors, ids[from], func(string) bool { return true }, out.ExactK)
+			if err != nil {
+				return out, err
+			}
+			truth := map[string]struct{}{}
+			for _, id := range exact {
+				truth[id] = struct{}{}
+			}
+			out.FinalSamples++
+			out.FinalSampleTruthNeighbors += uint64(len(exact))
+			for _, edge := range edges {
+				oi, ok := localHNSWAttributionNeighborhoodOriginV1(edge.origin)
+				if !ok {
+					return out, errors.New("local HNSW oracle final origin")
+				}
+				out.FinalEdgesByOrigin[oi]++
+				if _, ok := truth[ids[edge.to]]; ok {
+					out.FinalSampleTruthRecovered++
+					out.FinalTruthByOrigin[oi]++
+				}
+			}
+			for i := 0; i < len(edges); i++ {
+				for j := i + 1; j < len(edges); j++ {
+					d, ok := localHNSWAttributionCosineDistanceV1(vectors[ids[edges[i].to]], vectors[ids[edges[j].to]])
+					if !ok {
+						return out, errors.New("invalid local HNSW angular vector")
+					}
+					out.AngularPairs++
+					out.AngularCosineDistanceMean += d
+				}
+			}
+		}
+	}
+	if out.CandidateSamples == 0 || out.FinalSamples == 0 || len(out.PackDiagnostics) != len(h.searchers) {
+		return localHNSWAttributionNeighborhoodOracleV1{}, errors.New("empty local HNSW oracle")
+	}
+	if out.AngularPairs != 0 {
+		out.AngularCosineDistanceMean /= float64(out.AngularPairs)
+	}
+	return out, nil
+}
+
+func graphDistanceAggregateV1(diagnostics []collections.VectorPartitionPackDiagnosticsV1) localHNSWAttributionDistanceAggregateV1 {
+	// PackDiagnostics already computes the authoritative per-pack distances.
+	// Keep the report compact: weighted mean and global extrema are sufficient.
+	var out localHNSWAttributionDistanceAggregateV1
+	for _, d := range diagnostics {
+		if d.Layer0Distances.Count == 0 {
+			return localHNSWAttributionDistanceAggregateV1{}
+		}
+		if out.Count == 0 || d.Layer0Distances.Min < out.Min {
+			out.Min = d.Layer0Distances.Min
+		}
+		if d.Layer0Distances.Max > out.Max {
+			out.Max = d.Layer0Distances.Max
+		}
+		out.Mean = (out.Mean*float64(out.Count) + d.Layer0Distances.Mean*float64(d.Layer0Distances.Count)) / float64(out.Count+d.Layer0Distances.Count)
+		out.Count += d.Layer0Distances.Count
+	}
+	return out
+}

@@ -1,0 +1,42 @@
+{
+  "schema": "treedb-mvcc-key-codec-v1",
+  "cases": [
+    {
+      "name": "empty-oldest",
+      "logical_hex": "",
+      "timestamp": 1,
+      "physical_hex": "005444424d564343010000fffffffffffffffe"
+    },
+    {
+      "name": "embedded-zero-and-ff",
+      "logical_hex": "006100ff",
+      "timestamp": 42,
+      "physical_hex": "005444424d5643430100ff6100ffff0000ffffffffffffffd5"
+    },
+    {
+      "name": "a-zero-b-newest",
+      "logical_hex": "610062",
+      "timestamp": 18446744073709551615,
+      "physical_hex": "005444424d564343016100ff6200000000000000000000"
+    },
+    {
+      "name": "a-zero-b-oldest",
+      "logical_hex": "610062",
+      "timestamp": 1,
+      "physical_hex": "005444424d564343016100ff620000fffffffffffffffe"
+    },
+    {
+      "name": "ff-midpoint",
+      "logical_hex": "ff",
+      "timestamp": 9223372036854775808,
+      "physical_hex": "005444424d56434301ff00007fffffffffffffff"
+    }
+  ],
+  "physical_order": [
+    "empty-oldest",
+    "embedded-zero-and-ff",
+    "a-zero-b-newest",
+    "a-zero-b-oldest",
+    "ff-midpoint"
+  ]
+}

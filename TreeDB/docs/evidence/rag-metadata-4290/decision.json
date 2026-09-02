@@ -1,0 +1,33 @@
+{
+  "schema": "treedb_rag_metadata_evidence/v1",
+  "issue": 4290,
+  "base_revision": "e9911721c2e03ae10ef12d84249de139f8334426",
+  "candidate_revision": "9cf3c53c432b1a5027263bb8d1b227709f3538fc",
+  "fixture_sha256": "df71c11510a64b09a4b991a17a9062c8090dddf2d0a1e993b19bebd37d4c5db2",
+  "config_sha256": "1bac1adb8f5bfd7037ae0e832656d448c1461c21bd302d1287d987a3a7bb2a0e",
+  "semantic_vector_sha256": "aff8b31fad35f45c862c943b19717ddf9979b09726b2ac9352e159a4815663a4",
+  "base": {
+    "median_source_docs_per_sec": 392.11,
+    "median_bytes_per_source": 1828468,
+    "persisted_bytes": 3743269
+  },
+  "candidate": {
+    "median_source_docs_per_sec": 415.57,
+    "p95_source_docs_per_sec": 485.35,
+    "median_bytes_per_source": 1850420,
+    "p95_bytes_per_source": 2255592,
+    "persisted_bytes": 3748827
+  },
+  "decision": {
+    "throughput_change_percent": 5.98,
+    "allocation_change_percent": 1.20,
+    "persisted_bytes_change_percent": 0.15,
+    "retained_4284_throughput_gate_passed": true,
+    "retained_4284_allocation_gate_passed": true,
+    "cross_tenant_results": 0,
+    "cross_workspace_results": 0,
+    "full_document_scan_fallbacks": 0,
+    "reopen_text_vector_scalar_parity": true,
+    "accepted": true
+  }
+}

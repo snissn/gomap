@@ -1,0 +1,454 @@
+{
+  "buckets": [
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 1,
+      "corpus": "embedding_mixture_100k",
+      "p95_nanos_max": 33108952,
+      "p95_nanos_median": 32442588,
+      "p95_nanos_min": 29913347,
+      "qps_max": 44.308984867039854,
+      "qps_median": 42.622356265052595,
+      "qps_min": 41.63161185899596,
+      "recall_at_10_median": 0.9809999999999972,
+      "row": "treedb_single_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 8,
+      "corpus": "embedding_mixture_100k",
+      "p95_nanos_max": 172258417,
+      "p95_nanos_median": 123266162,
+      "p95_nanos_min": 110769361,
+      "qps_max": 101.18330172101213,
+      "qps_median": 99.07749704408208,
+      "qps_min": 79.79742466817268,
+      "recall_at_10_median": 0.9809999999999972,
+      "row": "treedb_single_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 32,
+      "corpus": "embedding_mixture_100k",
+      "p95_nanos_max": 326828307,
+      "p95_nanos_median": 265276187,
+      "p95_nanos_min": 262858226,
+      "qps_max": 154.72240804155643,
+      "qps_median": 154.4375540695143,
+      "qps_min": 148.11829577240152,
+      "recall_at_10_median": 0.9809999999999972,
+      "row": "treedb_single_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 1,
+      "corpus": "embedding_mixture_250k",
+      "p95_nanos_max": 35320417,
+      "p95_nanos_median": 30762636,
+      "p95_nanos_min": 30363610,
+      "qps_max": 43.77007258269368,
+      "qps_median": 43.37176602196206,
+      "qps_min": 41.95402223755286,
+      "recall_at_10_median": 0.9246999999999927,
+      "row": "treedb_single_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 8,
+      "corpus": "embedding_mixture_250k",
+      "p95_nanos_max": 114281258,
+      "p95_nanos_median": 110649400,
+      "p95_nanos_min": 107022591,
+      "qps_max": 103.28713409240885,
+      "qps_median": 100.9738668133783,
+      "qps_min": 98.01241807261304,
+      "recall_at_10_median": 0.9246999999999927,
+      "row": "treedb_single_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 32,
+      "corpus": "embedding_mixture_250k",
+      "p95_nanos_max": 379582330,
+      "p95_nanos_median": 370204132,
+      "p95_nanos_min": 247029136,
+      "qps_max": 165.7496108386849,
+      "qps_median": 143.86887701695258,
+      "qps_min": 135.7943265995085,
+      "recall_at_10_median": 0.9246999999999927,
+      "row": "treedb_single_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 1,
+      "corpus": "embedding_mixture_100k",
+      "p95_nanos_max": 47203538,
+      "p95_nanos_median": 30183844,
+      "p95_nanos_min": 29960738,
+      "qps_max": 42.7316272526867,
+      "qps_median": 42.03103455813085,
+      "qps_min": 35.92352944879574,
+      "recall_at_10_median": 0.9809999999999972,
+      "row": "treedb_native_multi_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 8,
+      "corpus": "embedding_mixture_100k",
+      "p95_nanos_max": 220497466,
+      "p95_nanos_median": 145603200,
+      "p95_nanos_min": 144762530,
+      "qps_max": 73.82467163357644,
+      "qps_median": 72.02100395323133,
+      "qps_min": 64.0744488669311,
+      "recall_at_10_median": 0.9809999999999972,
+      "row": "treedb_native_multi_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 32,
+      "corpus": "embedding_mixture_100k",
+      "p95_nanos_max": 536336641,
+      "p95_nanos_median": 479373836,
+      "p95_nanos_min": 375917252,
+      "qps_max": 111.33507107004955,
+      "qps_median": 100.30061590067615,
+      "qps_min": 94.07905894562792,
+      "recall_at_10_median": 0.9809999999999972,
+      "row": "treedb_native_multi_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 1,
+      "corpus": "embedding_mixture_250k",
+      "p95_nanos_max": 71697574,
+      "p95_nanos_median": 71022566,
+      "p95_nanos_min": 30437561,
+      "qps_max": 41.765899790694476,
+      "qps_median": 22.158530681645015,
+      "qps_min": 19.81345633122882,
+      "recall_at_10_median": 0.9246999999999927,
+      "row": "treedb_native_multi_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 8,
+      "corpus": "embedding_mixture_250k",
+      "p95_nanos_max": 372457014,
+      "p95_nanos_median": 281090263,
+      "p95_nanos_min": 198271189,
+      "qps_max": 65.0524936498296,
+      "qps_median": 39.079062518807234,
+      "qps_min": 33.34269064604185,
+      "recall_at_10_median": 0.9246999999999927,
+      "row": "treedb_native_multi_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 32,
+      "corpus": "embedding_mixture_250k",
+      "p95_nanos_max": 785472177,
+      "p95_nanos_median": 694105382,
+      "p95_nanos_min": 415830214,
+      "qps_max": 99.52564793309485,
+      "qps_median": 60.510675724580146,
+      "qps_min": 57.297756966415506,
+      "recall_at_10_median": 0.9246999999999927,
+      "row": "treedb_native_multi_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 1,
+      "corpus": "embedding_mixture_100k",
+      "p95_nanos_max": 42071907,
+      "p95_nanos_median": 32022607,
+      "p95_nanos_min": 31048916,
+      "qps_max": 42.248652174890154,
+      "qps_median": 41.92797337057977,
+      "qps_min": 39.72572707952498,
+      "recall_at_10_median": 0.9809999999999972,
+      "row": "treedb_container_multi_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 8,
+      "corpus": "embedding_mixture_100k",
+      "p95_nanos_max": 228893899,
+      "p95_nanos_median": 216115377,
+      "p95_nanos_min": 161745078,
+      "qps_max": 80.22390904402393,
+      "qps_median": 65.54721654930344,
+      "qps_min": 63.266600336562576,
+      "recall_at_10_median": 0.9809999999999972,
+      "row": "treedb_container_multi_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 32,
+      "corpus": "embedding_mixture_100k",
+      "p95_nanos_max": 560860089,
+      "p95_nanos_median": 318876073,
+      "p95_nanos_min": 305328987,
+      "qps_max": 148.78070886071512,
+      "qps_median": 142.719619251458,
+      "qps_min": 103.01971308830238,
+      "recall_at_10_median": 0.9809999999999972,
+      "row": "treedb_container_multi_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 1,
+      "corpus": "embedding_mixture_250k",
+      "p95_nanos_max": 51541693,
+      "p95_nanos_median": 39951576,
+      "p95_nanos_min": 35799699,
+      "qps_max": 41.297447960254196,
+      "qps_median": 40.061110894715675,
+      "qps_min": 33.10887703640872,
+      "recall_at_10_median": 0.9246999999999927,
+      "row": "treedb_container_multi_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 8,
+      "corpus": "embedding_mixture_250k",
+      "p95_nanos_max": 215884216,
+      "p95_nanos_median": 168452831,
+      "p95_nanos_min": 118180032,
+      "qps_max": 89.61985122664842,
+      "qps_median": 75.47632198067085,
+      "qps_min": 68.51187208424165,
+      "recall_at_10_median": 0.9246999999999927,
+      "row": "treedb_container_multi_daemon"
+    },
+    {
+      "budget": {
+        "probes": 2
+      },
+      "concurrency": 32,
+      "corpus": "embedding_mixture_250k",
+      "p95_nanos_max": 559548606,
+      "p95_nanos_median": 432698154,
+      "p95_nanos_min": 340776247,
+      "qps_max": 127.78184592581256,
+      "qps_median": 126.39611607345044,
+      "qps_min": 102.88853472291088,
+      "recall_at_10_median": 0.9246999999999927,
+      "row": "treedb_container_multi_daemon"
+    },
+    {
+      "budget": {
+        "ef": 64
+      },
+      "concurrency": 1,
+      "corpus": "embedding_mixture_100k",
+      "p95_nanos_max": 3078688,
+      "p95_nanos_median": 2917405,
+      "p95_nanos_min": 2622961,
+      "qps_max": 461.63523228080965,
+      "qps_median": 440.64025144661065,
+      "qps_min": 435.6517519501167,
+      "recall_at_10_median": 0.918,
+      "row": "milvus_standalone"
+    },
+    {
+      "budget": {
+        "ef": 64
+      },
+      "concurrency": 8,
+      "corpus": "embedding_mixture_100k",
+      "p95_nanos_max": 6754628,
+      "p95_nanos_median": 6644976,
+      "p95_nanos_min": 6387932,
+      "qps_max": 1818.9701725180987,
+      "qps_median": 1804.7381336375004,
+      "qps_min": 1732.3395881791844,
+      "recall_at_10_median": 0.918,
+      "row": "milvus_standalone"
+    },
+    {
+      "budget": {
+        "ef": 64
+      },
+      "concurrency": 32,
+      "corpus": "embedding_mixture_100k",
+      "p95_nanos_max": 33282411,
+      "p95_nanos_median": 30098474,
+      "p95_nanos_min": 30046146,
+      "qps_max": 1835.091394397798,
+      "qps_median": 1827.7424029999008,
+      "qps_min": 1788.01987339066,
+      "recall_at_10_median": 0.918,
+      "row": "milvus_standalone"
+    },
+    {
+      "budget": {
+        "ef": 128
+      },
+      "concurrency": 1,
+      "corpus": "embedding_mixture_250k",
+      "p95_nanos_max": 5557982,
+      "p95_nanos_median": 2973563,
+      "p95_nanos_min": 2788915,
+      "qps_max": 441.6985447878677,
+      "qps_median": 404.41458050226515,
+      "qps_min": 278.9224076874067,
+      "recall_at_10_median": 0.9328,
+      "row": "milvus_standalone"
+    },
+    {
+      "budget": {
+        "ef": 128
+      },
+      "concurrency": 8,
+      "corpus": "embedding_mixture_250k",
+      "p95_nanos_max": 14192647,
+      "p95_nanos_median": 6792368,
+      "p95_nanos_min": 6466987,
+      "qps_max": 1726.4738647583947,
+      "qps_median": 1708.1924143570322,
+      "qps_min": 916.7559959870738,
+      "recall_at_10_median": 0.9328,
+      "row": "milvus_standalone"
+    },
+    {
+      "budget": {
+        "ef": 128
+      },
+      "concurrency": 32,
+      "corpus": "embedding_mixture_250k",
+      "p95_nanos_max": 51562579,
+      "p95_nanos_median": 43586214,
+      "p95_nanos_min": 32305724,
+      "qps_max": 1751.454595544786,
+      "qps_median": 1324.6059830117363,
+      "qps_min": 1161.485510509637,
+      "recall_at_10_median": 0.9328,
+      "row": "milvus_standalone"
+    },
+    {
+      "budget": {
+        "ef_search": 64
+      },
+      "concurrency": 1,
+      "corpus": "embedding_mixture_100k",
+      "p95_nanos_max": 1367891,
+      "p95_nanos_median": 1363956,
+      "p95_nanos_min": 1220054,
+      "qps_max": 1100.6029539677893,
+      "qps_median": 987.8219092867107,
+      "qps_min": 977.6783459972435,
+      "recall_at_10_median": 0.9285,
+      "row": "postgres_pgvector"
+    },
+    {
+      "budget": {
+        "ef_search": 64
+      },
+      "concurrency": 8,
+      "corpus": "embedding_mixture_100k",
+      "p95_nanos_max": 2662714,
+      "p95_nanos_median": 2656021,
+      "p95_nanos_min": 2640840,
+      "qps_max": 4875.862181746746,
+      "qps_median": 4741.446978318517,
+      "qps_min": 4699.871165318971,
+      "recall_at_10_median": 0.9285,
+      "row": "postgres_pgvector"
+    },
+    {
+      "budget": {
+        "ef_search": 64
+      },
+      "concurrency": 32,
+      "corpus": "embedding_mixture_100k",
+      "p95_nanos_max": 16552248,
+      "p95_nanos_median": 14892216,
+      "p95_nanos_min": 14185413,
+      "qps_max": 4082.7486232731353,
+      "qps_median": 4034.1523777944335,
+      "qps_min": 3703.6897144994005,
+      "recall_at_10_median": 0.9285,
+      "row": "postgres_pgvector"
+    },
+    {
+      "budget": {
+        "ef_search": 128
+      },
+      "concurrency": 1,
+      "corpus": "embedding_mixture_250k",
+      "p95_nanos_max": 4891962,
+      "p95_nanos_median": 4848076,
+      "p95_nanos_min": 4676292,
+      "qps_max": 299.07627915223674,
+      "qps_median": 294.19126539051985,
+      "qps_min": 285.05390994100225,
+      "recall_at_10_median": 0.9269,
+      "row": "postgres_pgvector"
+    },
+    {
+      "budget": {
+        "ef_search": 128
+      },
+      "concurrency": 8,
+      "corpus": "embedding_mixture_250k",
+      "p95_nanos_max": 8269322,
+      "p95_nanos_median": 7413918,
+      "p95_nanos_min": 7048408,
+      "qps_max": 1589.502712995361,
+      "qps_median": 1559.2211110582218,
+      "qps_min": 1451.489122687833,
+      "recall_at_10_median": 0.9269,
+      "row": "postgres_pgvector"
+    },
+    {
+      "budget": {
+        "ef_search": 128
+      },
+      "concurrency": 32,
+      "corpus": "embedding_mixture_250k",
+      "p95_nanos_max": 40054576,
+      "p95_nanos_median": 39920973,
+      "p95_nanos_min": 38076812,
+      "qps_max": 1629.8797962770143,
+      "qps_median": 1595.266861039621,
+      "qps_min": 1492.4901711615425,
+      "recall_at_10_median": 0.9269,
+      "row": "postgres_pgvector"
+    }
+  ]
+}

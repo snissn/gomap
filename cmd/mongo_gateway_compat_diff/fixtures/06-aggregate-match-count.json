@@ -1,0 +1,14 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "aggregate-match-count",
+  "capability_id": "read-command.aggregate-match-project-sort-skip-limit-count",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": false,
+  "normalize_cursor_namespace": true,
+  "normalize_cursor_envelope_order": true,
+  "seed": [{"_id": "user-1", "score": {"$numberInt": "7"}}, {"_id": "user-2", "score": {"$numberInt": "9"}}],
+  "command": {"aggregate": "records", "pipeline": [{"$match": {"score": {"$gte": {"$numberInt": "7"}}}}, {"$count": "total"}], "cursor": {}}
+}

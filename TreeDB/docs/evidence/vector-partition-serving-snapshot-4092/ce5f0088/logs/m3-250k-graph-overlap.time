@@ -1,0 +1,23 @@
+	Command being timed: "/mnt/fast4tb/gomap-4092-serving-snapshot-ce5f0088/bin/treedb_vector_partition_bench -stage overlap,partition_index -source-checkout /mnt/fast4tb/gomap-4092-serving-snapshot-ce5f0088/source -dataset /mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset -out /mnt/fast4tb/gomap-4092-serving-snapshot-ce5f0088/250k/graph-overlap-020-out -m3-persist-db /mnt/fast4tb/gomap-4092-serving-snapshot-ce5f0088/250k/graph-overlap-020-db -partitions 16 -overlap .2 -partition-assignment graph -partition-kahip-python /mnt/fast4tb/gomap-4024-kahip-3.25/bin/python -partition-kahip-script /mnt/fast4tb/gomap-4092-serving-snapshot-ce5f0088/source/scripts/treedb_kahip_partition.py -partition-kahip-timeout 5m -partition-max-distance-work 50000000000 -router-max-vectors 300000 -router-max-scalar-work 50000000000 -m3-max-benchmark-visits 900000000 -max-vectors 250000 -max-fixture-bytes 4294967296 -top-k 10 -seed 4016 -base-sha 1ddf7bfef0ba374ace10460ac2072da9c53b56df -head-sha ce5f008855ef0a285cf8e69d5cba7d9b6b4bf56a -format json"
+	User time (seconds): 827.28
+	System time (seconds): 20.02
+	Percent of CPU this job got: 103%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 13:38.08
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2257996
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 57
+	Minor (reclaiming a frame) page faults: 2328439
+	Voluntary context switches: 504862
+	Involuntary context switches: 138863
+	Swaps: 0
+	File system inputs: 596760
+	File system outputs: 2291472
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

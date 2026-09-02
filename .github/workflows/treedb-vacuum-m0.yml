@@ -1,0 +1,56 @@
+name: "TreeDB: index-vacuum M0 evidence"
+
+on:
+  pull_request:
+    paths:
+      - "TreeDB/db/vacuum*.go"
+      - "TreeDB/db/recoverable_root_set.go"
+      - "TreeDB/db/durable_root*.go"
+      - "TreeDB/db/root_publication*.go"
+      - "TreeDB/internal/rootpublication/**"
+      - "TreeDB/db/ordered_root_publish.go"
+      - "TreeDB/db/stable_resource.go"
+      - "TreeDB/db/db.go"
+      - "TreeDB/public.go"
+      - "scripts/treedb_vacuum_m0_capture.sh"
+      - "scripts/treedb_vacuum_m0_summarize.py"
+      - "scripts/treedb_vacuum_m0_summarize_test.py"
+      - ".github/workflows/treedb-vacuum-m0.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: treedb-vacuum-m0-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: stable legacy/public capture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Capture and enforce M0 evidence
+        run: RUN_DIR="$RUNNER_TEMP/treedb-vacuum-m0" scripts/treedb_vacuum_m0_capture.sh
+
+      - name: Upload complete evidence packet
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: treedb-vacuum-m0-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/treedb-vacuum-m0
+          if-no-files-found: error

@@ -1,0 +1,1089 @@
+name: "TreeDB: vet+test"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: treedb-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  mvcc-raw-path-gate:
+    name: mvcc raw-path gate (linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      MVCC_GATE_PATH_RE: '^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\.sh$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_path_equivalence|benchmark_pairing|candidate_checkout_guard)|summarize_mvcc_closeout)|test_treedb_ci_contract|test_treedb_windows_core_headroom)\.py$|\.github/workflows/treedb-tests\.yml$)'
+    steps:
+      - name: Resolve pull request and relevant paths
+        id: scope
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Event ${EVENT_NAME} has no pull-request comparison pair; skipping MVCC raw-path gate."
+            exit 0
+          fi
+          if [[ -z "$PR_NUMBER" || -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
+            echo "pull_request event is missing number/base/head identity" >&2
+            exit 2
+          fi
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${REPOSITORY}/pulls/${PR_NUMBER}" > "$RUNNER_TEMP/pull.json"
+          if jq -e \
+            '.labels[]? | select(.name == "performance-observation-only")' \
+            "$RUNNER_TEMP/pull.json" >/dev/null; then
+            echo "enforce=false" >> "$GITHUB_OUTPUT"
+            echo "PR #${PR_NUMBER} carries performance-observation-only; the exact base/head comparison remains mandatory evidence but its threshold verdict is non-blocking."
+          else
+            echo "enforce=true" >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo "run=true"
+            echo "pr_number=$PR_NUMBER"
+            echo "base_sha=$BASE_SHA"
+            echo "head_sha=$HEAD_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact PR head
+        if: steps.scope.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.scope.outputs.head_sha }}
+          fetch-depth: 0
+
+      - name: Resolve relevant paths from the event pair
+        id: paths
+        if: steps.scope.outputs.run == 'true'
+        shell: bash
+        env:
+          BASE_SHA: ${{ steps.scope.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.scope.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]]; then
+            echo "candidate checkout does not match pull-request event head" >&2
+            exit 2
+          fi
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/pr-files.txt"
+          cat "$RUNNER_TEMP/pr-files.txt"
+          if grep -Eq "$MVCC_GATE_PATH_RE" "$RUNNER_TEMP/pr-files.txt"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No MVCC/raw-gate relevant path changed; skipping."
+          fi
+
+      - name: Setup Go
+        if: steps.paths.outputs.run == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Gate self-checks
+        if: steps.paths.outputs.run == 'true'
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          for script in \
+            scripts/mvcc_raw_path_gate.sh \
+            scripts/mvcc_adapter_overhead_gate.sh \
+            scripts/mvcc_closeout_matrix.sh \
+            scripts/mvcc_candidate_checkout_guard.sh; do
+            bash -n "$script"
+          done
+          python3 .github/scripts/check_mvcc_raw_path_gate.py --self-test
+          python3 .github/scripts/check_mvcc_adapter_overhead_gate.py --self-test
+          python3 .github/scripts/test_mvcc_raw_path_equivalence.py
+          python3 .github/scripts/test_mvcc_benchmark_pairing.py
+          python3 .github/scripts/test_summarize_mvcc_closeout.py
+          python3 .github/scripts/test_mvcc_candidate_checkout_guard.py
+          python3 .github/scripts/test_treedb_ci_contract.py
+          python3 .github/scripts/test_treedb_windows_core_headroom.py
+          for path in \
+            TreeDB/snapshot_seek_iterator_bench_test.go \
+            TreeDB/command_wal_public_test.go \
+            TreeDB/caching/bench_test.go \
+            TreeDB/bg_vacuum.go \
+            TreeDB/node/leaf_prefix_v2.go \
+            TreeDB/page/freelist.go \
+            TreeDB/pager/madvise_linux.go \
+            TreeDB/internal/valuelog/autotune_options.go \
+            TreeDB/docs/spec/native-ann-vector-index.md \
+            scripts/mvcc_raw_path_gate.sh \
+            scripts/mvcc_adapter_overhead_gate.sh \
+            scripts/mvcc_closeout_matrix.sh \
+            scripts/mvcc_candidate_checkout_guard.sh \
+            .github/scripts/summarize_mvcc_closeout.py \
+            .github/scripts/test_summarize_mvcc_closeout.py \
+            .github/scripts/test_mvcc_candidate_checkout_guard.py \
+            .github/scripts/test_treedb_ci_contract.py \
+            .github/scripts/test_treedb_windows_core_headroom.py; do
+            if ! grep -Eq "$MVCC_GATE_PATH_RE" <<< "$path"; then
+              echo "MVCC gate path scope unexpectedly excludes: $path" >&2
+              exit 1
+            fi
+          done
+
+      - name: Compare exact base and head
+        if: steps.paths.outputs.run == 'true'
+        continue-on-error: ${{ steps.scope.outputs.enforce != 'true' }}
+        env:
+          BASELINE_HASH: ${{ steps.scope.outputs.base_sha }}
+          CANDIDATE_HASH: ${{ steps.scope.outputs.head_sha }}
+          RUNS: "8"
+          BENCHTIME: 2s
+          BATCH_WRITE_BENCHTIME: 1000x
+          CPUSET: "0"
+          MAX_REGRESSION_PERCENT: "5"
+          MAX_BYTES_REGRESSION_PERCENT: "1"
+          MAX_BYTES_REGRESSION_ABSOLUTE: "64"
+          SCRIPT_GOWORK: "off"
+          OUT_DIR: ${{ runner.temp }}/mvcc-raw-path-gate
+        run: |
+          status=$(git status --porcelain --untracked-files=normal)
+          if [[ -n "$status" ]]; then
+            echo "candidate checkout became dirty before the raw-path gate:" >&2
+            printf '%s\n' "$status" >&2
+            exit 2
+          fi
+          ./scripts/mvcc_raw_path_gate.sh
+
+      - name: Add benchmark summary
+        if: always() && steps.paths.outputs.run == 'true'
+        run: |
+          if [[ "${{ steps.scope.outputs.enforce }}" != "true" ]]; then
+            {
+              echo "### Performance threshold disposition"
+              echo
+              echo "The exact base/head fixture is observation-only under the \`performance-observation-only\` label. The linked ticket and PR must document the replacement matched evidence and accepted performance class."
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -f "$RUNNER_TEMP/mvcc-raw-path-gate/summary.md" ]]; then
+            cat "$RUNNER_TEMP/mvcc-raw-path-gate/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "MVCC raw-path gate did not produce a summary." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload benchmark evidence
+        if: always() && steps.paths.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mvcc-raw-path-gate-${{ steps.scope.outputs.head_sha }}
+          path: ${{ runner.temp }}/mvcc-raw-path-gate
+          if-no-files-found: error
+
+  vet:
+    name: vet (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu
+            os: ubuntu-latest
+          - name: macos
+            os: macos-latest
+          - name: windows
+            os: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+          cache-dependency-path: |
+            go.sum
+
+      - name: CI shard contracts
+        if: ${{ matrix.name == 'ubuntu' }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 .github/scripts/test_treedb_ci_contract.py
+          python3 .github/scripts/test_treedb_windows_core_headroom.py
+
+      - name: Vet
+        working-directory: TreeDB
+        run: go vet ./...
+
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-latest-1
+            os: ubuntu-latest
+            timeout: 25
+            shard_kind: all
+            package_shard_index: 0
+            package_shard_count: 3
+          - name: ubuntu-latest-2
+            os: ubuntu-latest
+            timeout: 25
+            shard_kind: all
+            package_shard_index: 1
+            package_shard_count: 3
+          - name: ubuntu-latest-3
+            os: ubuntu-latest
+            timeout: 25
+            shard_kind: all
+            package_shard_index: 2
+            package_shard_count: 3
+          - name: macos-latest-1
+            os: macos-latest
+            timeout: 30
+            shard_kind: all
+            package_shard_index: 0
+            package_shard_count: 3
+          - name: macos-latest-2
+            os: macos-latest
+            timeout: 30
+            shard_kind: all
+            package_shard_index: 1
+            package_shard_count: 3
+          - name: macos-latest-3
+            os: macos-latest
+            timeout: 30
+            shard_kind: all
+            package_shard_index: 2
+            package_shard_count: 3
+          - name: windows-mongo-gateway
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-mongo
+          - name: windows-nativewire
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-nativewire
+          - name: windows-powerloss-oracle
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-powerloss-oracle
+          - name: windows-core-1
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-core
+            package_shard_index: 0
+            package_shard_count: 8
+          - name: windows-core-2
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-core
+            package_shard_index: 1
+            package_shard_count: 8
+          - name: windows-core-3
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-core
+            package_shard_index: 2
+            package_shard_count: 8
+          - name: windows-core-4
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-core
+            package_shard_index: 3
+            package_shard_count: 8
+          - name: windows-core-5
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-core
+            package_shard_index: 4
+            package_shard_count: 8
+          - name: windows-core-6
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-core
+            package_shard_index: 5
+            package_shard_count: 8
+          - name: windows-core-7
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-core
+            package_shard_index: 6
+            package_shard_count: 8
+          - name: windows-core-8
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-core
+            package_shard_index: 7
+            package_shard_count: 8
+          - name: windows-caching-heavy-1
+            os: windows-latest
+            timeout: 25
+            shard_kind: windows-caching-heavy
+            heavy_shard_index: 0
+            heavy_shard_count: 2
+          - name: windows-caching-heavy-2
+            os: windows-latest
+            timeout: 25
+            shard_kind: windows-caching-heavy
+            heavy_shard_index: 1
+            heavy_shard_count: 2
+          - name: windows-caching-rest-1
+            os: windows-latest
+            timeout: 25
+            shard_kind: windows-caching-rest
+            rest_shard_index: 0
+            rest_shard_count: 3
+          - name: windows-caching-rest-2
+            os: windows-latest
+            timeout: 25
+            shard_kind: windows-caching-rest
+            rest_shard_index: 1
+            rest_shard_count: 3
+          - name: windows-caching-rest-3
+            os: windows-latest
+            timeout: 25
+            shard_kind: windows-caching-rest
+            rest_shard_index: 2
+            rest_shard_count: 3
+    timeout-minutes: ${{ matrix.timeout }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+          cache-dependency-path: |
+            go.sum
+
+      - name: Test
+        working-directory: TreeDB
+        shell: bash
+        env:
+          GOMEMLIMIT: 4GiB
+          GOMAXPROCS: 2
+        run: |
+          set -euo pipefail
+          tmp_dir="$(mktemp -d)"
+          cleanup() {
+            rm -rf "$tmp_dir"
+          }
+          make_tmp() {
+            mktemp "$tmp_dir/tmp.XXXXXX"
+          }
+          ci_list() {
+            sed -e 's/\r$//' -e '/^#/d' -e '/^$/d' "$1"
+          }
+          weighted_shard_file() {
+            kind="$1"
+            shard_index="$2"
+            shard_count="$3"
+            weights_file="$4"
+            all_file="$5"
+            shard_file="$6"
+            awk -F '\t' -v kind="$kind" -v idx="$shard_index" -v n="$shard_count" '
+              NR == FNR {
+                if ($0 !~ /^#/ && NF >= 3 && $1 == kind) {
+                  pinned[$3] = $2
+                  preserve_fallback[$3] = ($5 == "preserve-fallback")
+                }
+                next
+              }
+              $0 in pinned {
+                if ((pinned[$0] + 0) == idx) print
+                if (preserve_fallback[$0]) fallback++
+                next
+              }
+              (fallback % n) == idx { print }
+              { fallback++ }
+            ' "$weights_file" "$all_file" > "$shard_file"
+          }
+          run_named_test_file() {
+            pkg="$1"
+            label="$2"
+            tests_file="$3"
+            output_file="$4"
+            max_regex_chars=6000
+            chunk=""
+            chunk_count=0
+            chunk_index=0
+            while IFS= read -r test_name || [ -n "$test_name" ]; do
+              if [ -z "$test_name" ]; then
+                continue
+              fi
+              if [ -n "$chunk" ]; then
+                candidate="${chunk}|${test_name}"
+              else
+                candidate="$test_name"
+              fi
+              if [ -n "$chunk" ] && [ "${#candidate}" -gt "$max_regex_chars" ]; then
+                chunk_index=$((chunk_index + 1))
+                regex="^(${chunk})$"
+                echo "${label} chunk=${chunk_index} tests=${chunk_count} regex_len=${#regex}"
+                go test -json -timeout 30m -p 1 "$pkg" -run "$regex" | tee -a "$output_file"
+                chunk="$test_name"
+                chunk_count=1
+              else
+                chunk="$candidate"
+                chunk_count=$((chunk_count + 1))
+              fi
+            done < "$tests_file"
+            if [ -n "$chunk" ]; then
+              chunk_index=$((chunk_index + 1))
+              regex="^(${chunk})$"
+              echo "${label} chunk=${chunk_index} tests=${chunk_count} regex_len=${#regex}"
+              go test -json -timeout 30m -p 1 "$pkg" -run "$regex" | tee -a "$output_file"
+            fi
+          }
+          trap cleanup EXIT
+          case "${{ matrix.shard_kind }}" in
+            all)
+              package_shard_index="${{ matrix.package_shard_index }}"
+              package_shard_count="${{ matrix.package_shard_count }}"
+              package_all_file="$(make_tmp)"
+              package_file="$(make_tmp)"
+              go list ./... > "$package_all_file"
+              weighted_shard_file package "$package_shard_index" "$package_shard_count" ../.github/ci/treedb_unix_weighted_shards.tsv "$package_all_file" "$package_file"
+              echo "TreeDB package shard=${package_shard_index}/${package_shard_count}"
+              cat "$package_file"
+              if [ -s "$package_file" ]; then
+                xargs go test -json -timeout 30m -p 1 < "$package_file" | tee treedb-test.jsonl
+              else
+                printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-test.jsonl
+              fi
+              ;;
+            windows-core)
+              package_shard_index="${{ matrix.package_shard_index }}"
+              package_shard_count="${{ matrix.package_shard_count }}"
+              if [ -z "$package_shard_index" ]; then
+                package_shard_index=0
+              fi
+              if [ -z "$package_shard_count" ] || [ "$package_shard_count" -lt 1 ]; then
+                package_shard_count=1
+              fi
+              package_all_file="$(make_tmp)"
+              package_file="$(make_tmp)"
+              root_all_file="$(make_tmp)"
+              root_test_file="$(make_tmp)"
+              db_all_file="$(make_tmp)"
+              db_test_file="$(make_tmp)"
+              collections_all_file="$(make_tmp)"
+              collections_test_file="$(make_tmp)"
+              go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/collections$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' | grep -v '^github.com/snissn/gomap/TreeDB/mongo_gateway$' | grep -v '^github.com/snissn/gomap/TreeDB/nativewire$' > "$package_all_file"
+              go test . -list '^(Test|Example).*' | tr -d '\r' | grep -E '^(Test|Example)' | grep -v '^TestPowerLossOracleEnumerateCutPoints$' > "$root_all_file"
+              go test ./db -list 'Test.*' | tr -d '\r' | grep '^Test' > "$db_all_file"
+              go test ./collections -list '^(Test|Example|Fuzz).*' | tr -d '\r' | grep -E '^(Test|Example|Fuzz)' > "$collections_all_file"
+              weights_file=../.github/ci/treedb_windows_core_weighted_shards.tsv
+              weighted_shard_file package "$package_shard_index" "$package_shard_count" "$weights_file" "$package_all_file" "$package_file"
+              weighted_shard_file root "$package_shard_index" "$package_shard_count" "$weights_file" "$root_all_file" "$root_test_file"
+              weighted_shard_file db "$package_shard_index" "$package_shard_count" "$weights_file" "$db_all_file" "$db_test_file"
+              weighted_shard_file collections "$package_shard_index" "$package_shard_count" "$weights_file" "$collections_all_file" "$collections_test_file"
+              echo "TreeDB windows-core package shard=${package_shard_index}/${package_shard_count}"
+              ran_tests=false
+              if [ -s "$package_file" ]; then
+                xargs go test -json -timeout 30m -p 1 < "$package_file" | tee treedb-test.jsonl
+                ran_tests=true
+              fi
+              if [ -s "$root_test_file" ]; then
+                run_named_test_file . "TreeDB root test shard=${package_shard_index}/${package_shard_count}" "$root_test_file" treedb-test.jsonl
+                ran_tests=true
+              fi
+              if [ -s "$db_test_file" ]; then
+                run_named_test_file ./db "TreeDB/db test shard=${package_shard_index}/${package_shard_count}" "$db_test_file" treedb-test.jsonl
+                ran_tests=true
+              fi
+              if [ -s "$collections_test_file" ]; then
+                run_named_test_file ./collections "TreeDB/collections test shard=${package_shard_index}/${package_shard_count}" "$collections_test_file" treedb-test.jsonl
+                ran_tests=true
+              fi
+              if [ "$ran_tests" = false ]; then
+                echo "no TreeDB windows-core tests found for shard ${package_shard_index}/${package_shard_count}; skipping"
+                printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-test.jsonl
+              fi
+              ;;
+            windows-mongo)
+              echo "TreeDB/mongo_gateway dedicated Windows shard"
+              go test -json -timeout 30m -p 1 ./mongo_gateway | tee treedb-test.jsonl
+              ;;
+            windows-nativewire)
+              echo "TreeDB/nativewire dedicated Windows shard"
+              go test -json -timeout 30m -p 1 ./nativewire | tee treedb-test.jsonl
+              ;;
+            windows-powerloss-oracle)
+              echo "TreeDB power-loss oracle dedicated Windows shard"
+              go test -json -timeout 30m -p 1 . -run '^TestPowerLossOracleEnumerateCutPoints$' | tee treedb-test.jsonl
+              ;;
+            windows-caching-heavy)
+              heavy_file="$(make_tmp)"
+              heavy_pin_file="$(make_tmp)"
+              heavy_shard_file="$(make_tmp)"
+              ci_list ../.github/ci/treedb_windows_caching_heavy_tests.txt > "$heavy_file"
+              ci_list ../.github/ci/treedb_windows_caching_heavy_shard0_tests.txt > "$heavy_pin_file"
+              heavy_shard_index="${{ matrix.heavy_shard_index }}"
+              heavy_shard_count="${{ matrix.heavy_shard_count }}"
+              if [ -z "$heavy_shard_index" ]; then
+                heavy_shard_index=0
+              fi
+              if [ -z "$heavy_shard_count" ] || [ "$heavy_shard_count" -lt 1 ]; then
+                heavy_shard_count=1
+              fi
+              if [ "$heavy_shard_count" -eq 2 ]; then
+                case "$heavy_shard_index" in
+                  0)
+                    grep -F -x -f "$heavy_pin_file" "$heavy_file" > "$heavy_shard_file"
+                    ;;
+                  1)
+                    grep -F -x -v -f "$heavy_pin_file" "$heavy_file" > "$heavy_shard_file" || true
+                    ;;
+                  *)
+                    : > "$heavy_shard_file"
+                    ;;
+                esac
+              else
+                awk -v idx="$heavy_shard_index" -v n="$heavy_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$heavy_file" > "$heavy_shard_file"
+              fi
+              if ! [ -s "$heavy_shard_file" ]; then
+                echo "no heavy caching tests found for shard ${heavy_shard_index}/${heavy_shard_count}; skipping"
+                printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB/caching"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-test.jsonl
+                exit 0
+              fi
+              regex="^($(paste -sd'|' "$heavy_shard_file"))$"
+              echo "TreeDB/caching heavy shard=${heavy_shard_index}/${heavy_shard_count} regex=${regex}"
+              go test -json -timeout 30m -p 1 ./caching -run "$regex" | tee treedb-test.jsonl
+              ;;
+            windows-caching-rest)
+              heavy_file="$(make_tmp)"
+              rest_file="$(make_tmp)"
+              rest_shard_file="$(make_tmp)"
+              ci_list ../.github/ci/treedb_windows_caching_heavy_tests.txt > "$heavy_file"
+              go test ./caching -list 'Test.*' | tr -d '\r' | grep '^Test' | grep -F -x -v -f "$heavy_file" > "$rest_file"
+              rest_shard_index="${{ matrix.rest_shard_index }}"
+              rest_shard_count="${{ matrix.rest_shard_count }}"
+              if [ -z "$rest_shard_index" ]; then
+                rest_shard_index=0
+              fi
+              if [ -z "$rest_shard_count" ] || [ "$rest_shard_count" -lt 1 ]; then
+                rest_shard_count=1
+              fi
+              awk -v idx="$rest_shard_index" -v n="$rest_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$rest_file" > "$rest_shard_file"
+              rest_regex="^($(paste -sd'|' "$rest_shard_file"))$"
+              if [ "$rest_regex" = '^()$' ]; then
+                echo "no non-heavy caching tests found for shard ${rest_shard_index}/${rest_shard_count}; skipping"
+                printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB/caching"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-test.jsonl
+                exit 0
+              fi
+              echo "TreeDB/caching rest shard=${rest_shard_index}/${rest_shard_count} regex=${rest_regex}"
+              go test -json -timeout 30m -p 1 ./caching -run "$rest_regex" | tee treedb-test.jsonl
+              ;;
+            *)
+              echo "unknown shard kind: ${{ matrix.shard_kind }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Summarize test timings
+        if: always()
+        working-directory: TreeDB
+        shell: bash
+        run: |
+          python ../.github/scripts/summarize_go_test_json.py treedb-test.jsonl | tee treedb-test-summary.md
+          {
+            echo "### TreeDB test timing summary (${{ matrix.name }})"
+            echo
+            cat treedb-test-summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test timing log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: treedb-test-json-${{ matrix.name }}
+          path: |
+            TreeDB/treedb-test.jsonl
+            TreeDB/treedb-test.jsonl.summary.md
+
+  race:
+    name: race-check (linux)-${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: 1
+            shard_kind: core
+            shard_index: 0
+            shard_count: 3
+          - shard: 2
+            shard_kind: core
+            shard_index: 1
+            shard_count: 3
+          - shard: 3
+            shard_kind: core
+            shard_index: 2
+            shard_count: 3
+          - shard: 4
+            shard_kind: collections
+            shard_index: 0
+            shard_count: 1
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Test Race
+        working-directory: TreeDB
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp_dir="$(mktemp -d)"
+          cleanup() {
+            rm -rf "$tmp_dir"
+          }
+          make_tmp() {
+            mktemp "$tmp_dir/tmp.XXXXXX"
+          }
+          weighted_shard_file() {
+            kind="$1"
+            shard_index="$2"
+            shard_count="$3"
+            weights_file="$4"
+            all_file="$5"
+            shard_file="$6"
+            awk -F '\t' -v kind="$kind" -v idx="$shard_index" -v n="$shard_count" '
+              NR == FNR {
+                if ($0 !~ /^#/ && NF >= 3 && $1 == kind) {
+                  pinned[$3] = $2
+                  preserve_fallback[$3] = ($5 == "preserve-fallback")
+                }
+                next
+              }
+              $0 in pinned {
+                if ((pinned[$0] + 0) == idx) print
+                if (preserve_fallback[$0]) fallback++
+                next
+              }
+              (fallback % n) == idx { print }
+              { fallback++ }
+            ' "$weights_file" "$all_file" > "$shard_file"
+          }
+          trap cleanup EXIT
+          shard_kind="${{ matrix.shard_kind }}"
+          shard_index="${{ matrix.shard_index }}"
+          shard_count="${{ matrix.shard_count }}"
+          if [ "$shard_kind" = collections ]; then
+            echo "TreeDB/collections and vacuum-race dedicated race shard"
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m ./collections | tee treedb-race.jsonl
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m ./db -run '^TestVacuumRaceMissingKey$' | tee -a treedb-race.jsonl
+            exit 0
+          fi
+          weights_file=../.github/ci/treedb_race_weighted_shards.tsv
+          package_all_file="$(make_tmp)"
+          package_file="$(make_tmp)"
+          root_all_file="$(make_tmp)"
+          root_test_file="$(make_tmp)"
+          caching_all_file="$(make_tmp)"
+          caching_test_file="$(make_tmp)"
+          db_all_file="$(make_tmp)"
+          db_test_file="$(make_tmp)"
+          go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/collections$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' > "$package_all_file"
+          go test . -list '^(Test|Example).*' | grep -E '^(Test|Example)' > "$root_all_file"
+          go test ./caching -list 'Test.*' | grep '^Test' > "$caching_all_file"
+          go test ./db -list 'Test.*' | grep '^Test' | grep -v '^TestVacuumRaceMissingKey$' > "$db_all_file"
+          weighted_shard_file package "$shard_index" "$shard_count" "$weights_file" "$package_all_file" "$package_file"
+          weighted_shard_file root "$shard_index" "$shard_count" "$weights_file" "$root_all_file" "$root_test_file"
+          weighted_shard_file caching "$shard_index" "$shard_count" "$weights_file" "$caching_all_file" "$caching_test_file"
+          weighted_shard_file db "$shard_index" "$shard_count" "$weights_file" "$db_all_file" "$db_test_file"
+          echo "TreeDB race package shard=${shard_index}/${shard_count}"
+          ran_tests=false
+          if [ -s "$package_file" ]; then
+            cat "$package_file"
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 xargs go test -json -race -p 1 -timeout 12m < "$package_file" | tee treedb-race.jsonl
+            ran_tests=true
+          fi
+          if [ -s "$root_test_file" ]; then
+            root_regex="^($(paste -sd'|' "$root_test_file"))$"
+            echo "TreeDB root race test shard=${shard_index}/${shard_count} regex=${root_regex}"
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m . -run "$root_regex" | tee -a treedb-race.jsonl
+            ran_tests=true
+          fi
+          if [ -s "$caching_test_file" ]; then
+            caching_regex="^($(paste -sd'|' "$caching_test_file"))$"
+            echo "TreeDB/caching race test shard=${shard_index}/${shard_count} regex=${caching_regex}"
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m ./caching -run "$caching_regex" | tee -a treedb-race.jsonl
+            ran_tests=true
+          fi
+          if [ -s "$db_test_file" ]; then
+            db_regex="^($(paste -sd'|' "$db_test_file"))$"
+            echo "TreeDB/db race test shard=${shard_index}/${shard_count} regex=${db_regex}"
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m ./db -run "$db_regex" | tee -a treedb-race.jsonl
+            ran_tests=true
+          fi
+          if [ "$ran_tests" = false ]; then
+            echo "no TreeDB race tests found for shard ${shard_index}/${shard_count}; skipping"
+            printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-race.jsonl
+          fi
+
+      - name: Summarize race timing
+        if: always()
+        working-directory: TreeDB
+        shell: bash
+        run: |
+          python ../.github/scripts/summarize_go_test_json.py treedb-race.jsonl | tee treedb-race-summary.md
+          {
+            echo "### TreeDB race timing summary"
+            echo
+            cat treedb-race-summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload race timing log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: treedb-race-json-linux-${{ matrix.shard }}
+          path: |
+            TreeDB/treedb-race.jsonl
+            TreeDB/treedb-race.jsonl.summary.md
+
+  perf:
+    name: perf-smoke (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Aggregate perf gate self-tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 .github/scripts/test_vlog_auto_incompressible.py
+
+      - name: ValueLog dict compressibility bench
+        run: |
+          go test ./TreeDB/internal/valuelog -run '^$' \
+            -bench 'BenchmarkValueLogDictCompressibilitySweep/valsize=1024/(highly_compressible_tail64|medium_compressible|incompressible)/dict_(off|on)/k=4$' \
+            -benchmem -count=5 | tee vlog_dict_bench.txt
+
+      - name: Perf baseline checker (gate)
+        run: |
+          go run .github/scripts/check_vlog_dict_bench.go \
+            -bench-output vlog_dict_bench.txt \
+            -baseline .github/perf_baselines/vlog_dict_defaults.json \
+            -strict=true
+
+      - name: Incompressible auto-vs-off gate
+        run: |
+          sample_count=6
+          if ((sample_count % 2 != 0)); then
+            echo "sample_count must be even to balance off/auto row order"
+            exit 2
+          fi
+
+          mapfile -t cpu_models < <(
+            sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | sort -u
+          )
+          cpu_model="unknown"
+          if ((${#cpu_models[@]} == 1)); then
+            cpu_model="${cpu_models[0]}"
+          elif ((${#cpu_models[@]} > 1)); then
+            cpu_model="ambiguous: ${cpu_models[*]}"
+          fi
+          min_cpu_efficiency_frac="0.95"
+          if [[ "${cpu_model}" == "AMD EPYC 7763 64-Core Processor" ]]; then
+            min_cpu_efficiency_frac="0.93"
+          elif [[ "${cpu_model}" == "AMD EPYC 9V74 80-Core Processor" ]]; then
+            # Fifteen recent hosted aggregates on this exact model ranged
+            # 0.9396-1.0026 (geomean 0.9698). Keep a one-point margin below
+            # that observed low while rejecting a material seven-percent CPU
+            # efficiency regression.
+            min_cpu_efficiency_frac="0.93"
+          fi
+
+          # This gate measures the explicit bench_unsafe compression ceiling,
+          # not the command_wal_durable default used by production callers.
+          # Keep it independent of the unconfigured flush-admission default
+          # under test in #2788. Force admission off for both rows so the
+          # settled auto/off comparison stays on the old serial/default-off
+          # flush boundary and measures the deferred value-log and leaf-log
+          # work rather than span-native admission changes. The checker sums
+          # the total= fields from value_vlog plus leaf_vlog and verifies the
+          # intended raw-user and leaf-compression modes independently of the
+          # throughput bound.
+          run_vlog_row() {
+            local db="$1"
+            local output="$2"
+            local cpu_profile_prefix="$3"
+            if ! go run ./cmd/unified_bench \
+              -profile fast \
+              -keys 1000000 \
+              -valsize 512 \
+              -batchsize 1024 \
+              -dbs "${db}" \
+              -test batch_write_steady \
+              -cpuprofile "${cpu_profile_prefix}" \
+              -cpuprofile-tests batch_write_steady \
+              -val-pattern random \
+              -format markdown \
+              -progress=false \
+              -keep=false \
+              -seed 1 \
+              -treedb-force-value-pointers=true \
+              -treedb-value-log-threshold=1 \
+              -treedb-vlog-dict-train-bytes=-1 \
+              -treedb-flush-admission-policy=off \
+              > "${output}" 2>&1; then
+              echo "${db} benchmark failed"
+              tail -n 80 "${output}" || true
+              return 1
+            fi
+          }
+
+          off_logs=()
+          auto_logs=()
+          off_cpu_profiles=()
+          auto_cpu_profiles=()
+          benchmark_failures=()
+          record_vlog_row() {
+            local db="$1"
+            local output="$2"
+            local cpu_profile_prefix="$3"
+            if ! run_vlog_row "${db}" "${output}" "${cpu_profile_prefix}"; then
+              benchmark_failures+=("${db}:${output}")
+            fi
+          }
+          for sample in $(seq 1 "${sample_count}"); do
+            off_log="vlog_auto_incompressible_off_sample${sample}.txt"
+            auto_log="vlog_auto_incompressible_auto_sample${sample}.txt"
+            off_cpu_profile_prefix="vlog_auto_incompressible_off_sample${sample}"
+            auto_cpu_profile_prefix="vlog_auto_incompressible_auto_sample${sample}"
+            off_cpu_profile="${off_cpu_profile_prefix}_batch_write_steady_treedb_vlog_off.pprof"
+            auto_cpu_profile="${auto_cpu_profile_prefix}_batch_write_steady_treedb_vlog_auto.pprof"
+            off_logs+=("${off_log}")
+            auto_logs+=("${auto_log}")
+            off_cpu_profiles+=("${off_cpu_profile}")
+            auto_cpu_profiles+=("${auto_cpu_profile}")
+            echo "incompressible gate sample ${sample}/${sample_count}"
+
+            if ((sample % 2 == 1)); then
+              echo "sample ${sample} order=off-auto"
+              record_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}"
+              record_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}"
+            else
+              echo "sample ${sample} order=auto-off"
+              record_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}"
+              record_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}"
+            fi
+          done
+
+          checker_args=()
+          for sample in $(seq 0 $((sample_count - 1))); do
+            checker_args+=( -off-log "${off_logs[$sample]}" -auto-log "${auto_logs[$sample]}" )
+            checker_args+=( -off-cpu-profile "${off_cpu_profiles[$sample]}" -auto-cpu-profile "${auto_cpu_profiles[$sample]}" )
+          done
+
+          # #3861 makes this a settled non-regression and persistent-storage
+          # tradeoff gate; #3863 uses exact-function CPU samples so hosted runner
+          # descheduling remains visible in raw wall throughput without becoming
+          # the blocking product-work metric.
+          # EPYC 7763 and EPYC 9V74 use 0.93x, and every other or unknown CPU uses 0.95x.
+          # One lucky sample cannot override a mostly
+          # failing sample set, and every pair retains the 1.02x storage ceiling.
+          summary_log="vlog_auto_incompressible_summary.txt"
+          {
+            echo "incompressible gate cpu_model=${cpu_model}"
+            echo "incompressible gate min_cpu_efficiency_frac=${min_cpu_efficiency_frac}"
+            echo "incompressible gate benchmark_failures=${#benchmark_failures[@]}"
+            if ((${#benchmark_failures[@]} > 0)); then
+              printf 'incompressible gate benchmark_failure=%s\n' "${benchmark_failures[@]}"
+            fi
+          } > "${summary_log}"
+          set +e
+          go run .github/scripts/check_vlog_auto_incompressible.go \
+            "${checker_args[@]}" \
+            -min-samples "${sample_count}" \
+            -min-cpu-efficiency-frac "${min_cpu_efficiency_frac}" \
+            -min-cpu-seconds 0.25 \
+            -max-size-frac 1.02 \
+            2>&1 | tee -a "${summary_log}"
+          checker_status=${PIPESTATUS[0]}
+          set -e
+
+          {
+            echo "## Incompressible value-log aggregate"
+            echo '```text'
+            cat "${summary_log}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+          if ((${#benchmark_failures[@]} > 0)); then
+            exit 1
+          fi
+          exit "${checker_status}"
+
+      - name: Upload value-log performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vlog-perf-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            vlog_dict_bench.txt
+            vlog_auto_incompressible_summary.txt
+            vlog_auto_incompressible_off_sample*.txt
+            vlog_auto_incompressible_auto_sample*.txt
+            vlog_auto_incompressible_*_sample*.pprof
+          if-no-files-found: warn
+
+  snapshot-iterator-perf:
+    name: snapshot-iterator-perf (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Test snapshot iterator benchmark parser
+        run: GOWORK=off go test ./.github/scripts/snapshot_iterator_bench
+
+      - name: Capture exact-head runner metadata
+        run: |
+          mkdir -p artifacts/snapshot_iterator_perf
+          {
+            echo "head=$(git rev-parse HEAD)"
+            echo "runner_image=${ImageOS:-unknown}-${ImageVersion:-unknown}"
+            echo "cpu=$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)"
+            echo "go=$(go version)"
+            echo "gomaxprocs=1"
+            echo "kernel=$(uname -a)"
+          } | tee artifacts/snapshot_iterator_perf/environment.txt
+
+      - name: Build one exact-head snapshot iterator benchmark binary
+        run: |
+          GOWORK=off go test -c -o artifacts/snapshot_iterator_perf/snapshot_iterator.test ./TreeDB
+          sha256sum artifacts/snapshot_iterator_perf/snapshot_iterator.test | tee artifacts/snapshot_iterator_perf/binary.sha256
+
+      - name: Collect CPU-pinned balanced same-binary snapshot iterator pairs
+        run: |
+          SNAPSHOT_ITERATOR_PAIRS=8 \
+            .github/scripts/collect_snapshot_iterator_pairs.sh \
+              artifacts/snapshot_iterator_perf/snapshot_iterator.test \
+              artifacts/snapshot_iterator_perf/raw.txt
+          affinity=$(cut -d= -f2 artifacts/snapshot_iterator_perf/raw.affinity)
+          echo "affinity=${affinity}" | tee -a artifacts/snapshot_iterator_perf/environment.txt
+
+      - name: Check snapshot iterator performance gate
+        run: |
+          GOWORK=off go run ./.github/scripts/snapshot_iterator_bench \
+            -bench-output artifacts/snapshot_iterator_perf/raw.txt \
+            -json-output artifacts/snapshot_iterator_perf/report.json \
+            -markdown-output artifacts/snapshot_iterator_perf/report.md \
+            -head "$(git rev-parse HEAD)" \
+            -binary-sha256 "$(cut -d' ' -f1 artifacts/snapshot_iterator_perf/binary.sha256)" \
+            -runner-image "${ImageOS:-unknown}-${ImageVersion:-unknown}" \
+            -cpu "$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)" \
+            -affinity "$(cut -d= -f2 artifacts/snapshot_iterator_perf/raw.affinity)" \
+            -go-version "$(go version)" \
+            -samples 8 \
+            -max-regression 0.05
+
+      - name: Publish snapshot iterator summary
+        if: always()
+        run: |
+          if [[ -f artifacts/snapshot_iterator_perf/report.md ]]; then
+            cat artifacts/snapshot_iterator_perf/report.md >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "## Snapshot iterator performance gate: no report generated" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload snapshot iterator performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-iterator-perf-${{ github.sha }}
+          path: artifacts/snapshot_iterator_perf/
+          if-no-files-found: error
+          retention-days: 14
+
+  required:
+    name: TreeDB required gate
+    if: ${{ always() }}
+    needs:
+      - mvcc-raw-path-gate
+      - vet
+      - test
+      - race
+      - perf
+      - snapshot-iterator-perf
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify required TreeDB jobs
+        shell: bash
+        env:
+          MVCC_RESULT: ${{ needs.mvcc-raw-path-gate.result }}
+          VET_RESULT: ${{ needs.vet.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          RACE_RESULT: ${{ needs.race.result }}
+          PERF_RESULT: ${{ needs.perf.result }}
+          SNAPSHOT_ITERATOR_PERF_RESULT: ${{ needs.snapshot-iterator-perf.result }}
+        run: |
+          set -euo pipefail
+          failed=false
+          for result in \
+            "$MVCC_RESULT" \
+            "$VET_RESULT" \
+            "$TEST_RESULT" \
+            "$RACE_RESULT" \
+            "$PERF_RESULT" \
+            "$SNAPSHOT_ITERATOR_PERF_RESULT"; do
+            if ! [[ "$result" == "success" ]]; then
+              echo "required TreeDB job result is ${result}" >&2
+              failed=true
+            fi
+          done
+          if [[ "$failed" == "true" ]]; then
+            exit 1
+          fi

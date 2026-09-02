@@ -1,0 +1,106 @@
+{
+  "schema": "treedb_rag_atomic_source_evidence/v1",
+  "issue": 4284,
+  "base_revision": "cc5b6babf0b7227af90ba7aca0add4bc21c54caa",
+  "candidate_revision": "37b257565ff8a6f6d43bb8c8397649467204d621",
+  "implementation_revision": "78258370d6f40f2a4ee8f26c3abeef0f2bcafae9",
+  "frozen_gate": {
+    "median_source_docs_per_sec_min": 325.45,
+    "median_bytes_per_source_max": 1947235
+  },
+  "matched_identity": {
+    "fixture_sha256": "df71c11510a64b09a4b991a17a9062c8090dddf2d0a1e993b19bebd37d4c5db2",
+    "config_sha256": "1bac1adb8f5bfd7037ae0e832656d448c1461c21bd302d1287d987a3a7bb2a0e",
+    "semantic_vector_sha256": "aff8b31fad35f45c862c943b19717ddf9979b09726b2ac9352e159a4815663a4"
+  },
+  "abba_order": ["base_a1", "candidate_b1", "candidate_b2", "base_a2"],
+  "abba": {
+    "a1": {
+      "provenance": {
+        "product_base_sha": "cc5b6babf0b7227af90ba7aca0add4bc21c54caa",
+        "harness_revision": "cc5b6babf0b7227af90ba7aca0add4bc21c54caa"
+      },
+      "ingestion_runs": [
+        {"repetition":0,"source_docs_per_sec":205.78562629929328,"bytes_per_source":398262.1666666667},
+        {"repetition":1,"source_docs_per_sec":248.05617667597224,"bytes_per_source":398253.1666666667},
+        {"repetition":2,"source_docs_per_sec":308.4652266378848,"bytes_per_source":398253.1666666667},
+        {"repetition":3,"source_docs_per_sec":333.63504444676795,"bytes_per_source":398253.1666666667},
+        {"repetition":4,"source_docs_per_sec":330.206564568876,"bytes_per_source":398253.1666666667}
+      ],
+      "ingestion_summary": {"repetitions":5,"median_docs_per_sec":308.4652266378848,"p95_docs_per_sec":332.9493484711896,"median_bytes_per_op":2160267.111111111,"p95_bytes_per_op":2556104.9777777777}
+    },
+    "b1": {
+      "provenance": {
+        "product_base_sha": "cc5b6babf0b7227af90ba7aca0add4bc21c54caa",
+        "harness_revision": "78258370d6f40f2a4ee8f26c3abeef0f2bcafae9"
+      },
+      "ingestion_runs": [
+        {"repetition":0,"source_docs_per_sec":245.16883906234798,"bytes_per_source":207955.77777777778},
+        {"repetition":1,"source_docs_per_sec":329.31999592228664,"bytes_per_source":207959.38888888888},
+        {"repetition":2,"source_docs_per_sec":371.5991631669423,"bytes_per_source":207959.38888888888},
+        {"repetition":3,"source_docs_per_sec":407.8014686516781,"bytes_per_source":207959.38888888888},
+        {"repetition":4,"source_docs_per_sec":423.8560302350635,"bytes_per_source":207959.38888888888}
+      ],
+      "ingestion_summary": {"repetitions":5,"median_docs_per_sec":371.5991631669423,"p95_docs_per_sec":420.6451179183864,"median_bytes_per_op":1821189.3333333333,"p95_bytes_per_op":2223121.5999999996}
+    },
+    "b2": {
+      "provenance": {
+        "product_base_sha": "cc5b6babf0b7227af90ba7aca0add4bc21c54caa",
+        "harness_revision": "78258370d6f40f2a4ee8f26c3abeef0f2bcafae9"
+      },
+      "ingestion_runs": [
+        {"repetition":0,"source_docs_per_sec":257.1212773213677,"bytes_per_source":207959.38888888888},
+        {"repetition":1,"source_docs_per_sec":359.43598742597067,"bytes_per_source":207955.66666666666},
+        {"repetition":2,"source_docs_per_sec":414.30224757588303,"bytes_per_source":207959.38888888888},
+        {"repetition":3,"source_docs_per_sec":425.1462178224838,"bytes_per_source":207959.38888888888},
+        {"repetition":4,"source_docs_per_sec":465.9525615767959,"bytes_per_source":207959.38888888888}
+      ],
+      "ingestion_summary": {"repetitions":5,"median_docs_per_sec":414.30224757588303,"p95_docs_per_sec":457.79129282593345,"median_bytes_per_op":1826864.4444444445,"p95_bytes_per_op":2232228.3555555553}
+    },
+    "a2": {
+      "provenance": {
+        "product_base_sha": "cc5b6babf0b7227af90ba7aca0add4bc21c54caa",
+        "harness_revision": "cc5b6babf0b7227af90ba7aca0add4bc21c54caa"
+      },
+      "ingestion_runs": [
+        {"repetition":0,"source_docs_per_sec":151.96162320644444,"bytes_per_source":398253.1666666667},
+        {"repetition":1,"source_docs_per_sec":271.04045655259125,"bytes_per_source":398263.22222222225},
+        {"repetition":2,"source_docs_per_sec":245.37507515974872,"bytes_per_source":398257.6111111111},
+        {"repetition":3,"source_docs_per_sec":306.17256651280076,"bytes_per_source":398263.22222222225},
+        {"repetition":4,"source_docs_per_sec":305.8485065060604,"bytes_per_source":398262.1666666667}
+      ],
+      "ingestion_summary": {"repetitions":5,"median_docs_per_sec":271.04045655259125,"p95_docs_per_sec":306.1077545114527,"median_bytes_per_op":2158379.111111111,"p95_bytes_per_op":2556058.6666666665}
+    }
+  },
+  "final_exact_candidate": {
+    "provenance": {
+      "product_base_sha": "cc5b6babf0b7227af90ba7aca0add4bc21c54caa",
+      "harness_revision": "37b257565ff8a6f6d43bb8c8397649467204d621"
+    },
+    "ingestion_summary": {"repetitions":5,"median_docs_per_sec":395.35,"p95_docs_per_sec":408.76,"median_bytes_per_op":1832542,"p95_bytes_per_op":2223480}
+  },
+  "decision": {
+    "candidate_abba_medians_docs_per_sec": [371.5991631669423,414.30224757588303],
+    "base_abba_medians_docs_per_sec": [308.4652266378848,271.04045655259125],
+    "candidate_abba_medians_bytes_per_source": [1821189.3333333333,1826864.4444444445],
+    "base_abba_medians_bytes_per_source": [2160267.111111111,2158379.111111111],
+    "all_ten_position_matched_candidate_rows_faster": true,
+    "frozen_throughput_gate_passed": true,
+    "frozen_allocation_gate_passed": true,
+    "final_exact_candidate_gate_passed": true,
+    "query_noise_disposition": "One repeat-stable relative p99 increase was 0.0043 ms absolute on the semantic direct vector score-only row while QPS changed by -0.5%/-1.4%; timer/tail noise, not a material regression."
+  },
+  "microbenchmark_10k_candidate": {
+    "command": "go test ./TreeDB/collections -run '^$' -bench '^BenchmarkIngestSources10K$' -benchtime=1x -count=5 -benchmem",
+    "docs_per_sec": [106.8,109.6,113.0,113.5,115.1],
+    "bytes_per_op": [42823746008,42648474560,42785197000,42741253296,42675109264],
+    "allocs_per_op": [45044727,44943770,45107237,45085753,45022994],
+    "historical_candidate_anchor": {"docs_per_sec":37.59,"bytes_per_op":132100000000,"allocs_per_op":95500000}
+  },
+  "qualification": {
+    "collection_suite": "go test ./TreeDB/collections -count=1",
+    "race_fault_suite": "go test -race ./TreeDB/collections -run 'TestIngestSources(AtomicPublicationBoundariesReopenAndRetry|CommandWALPublicationCutsRecoverWholeSource|IndependentParentsDoNotShareLifecycleLock)' -count=1",
+    "commitlog_suite": "go test ./TreeDB/internal/commitlog -count=1",
+    "vet": "go vet ./TreeDB/collections ./TreeDB/internal/commitlog"
+  }
+}

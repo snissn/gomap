@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "result_kind": "vector_partition_system_topology_v1",
+  "assembly": "production_public_v1",
+  "topology": "native_four_daemon_four_group",
+  "nodes": [
+    {
+      "node_id": "native-group-a",
+      "node_config_sha256": "43534fc7c44c86e293afc93d2bd6801b1b691f508be73ea25072e530ab41bb82",
+      "database_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/database-native-group-a",
+      "state_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/state-native-group-a",
+      "ready_path": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/state-native-group-a/ready.json",
+      "profile_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/state-native-group-a/profiles",
+      "public_listen": "127.0.0.1:33465",
+      "local_groups": [
+        {
+          "group_id": "group-a",
+          "listen": "127.0.0.1:57553"
+        }
+      ]
+    },
+    {
+      "node_id": "native-group-b",
+      "node_config_sha256": "378d9fbd67938d90773957dce79391bde090506e636a930f9d94e6532ab21b2c",
+      "database_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/database-native-group-b",
+      "state_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/state-native-group-b",
+      "ready_path": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/state-native-group-b/ready.json",
+      "profile_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/state-native-group-b/profiles",
+      "local_groups": [
+        {
+          "group_id": "group-b",
+          "listen": "127.0.0.1:48377"
+        }
+      ]
+    },
+    {
+      "node_id": "native-group-c",
+      "node_config_sha256": "e5776742e66d93e0902cadb7659d5e830de914ad2739ba8a6a02a2e49d8d17e8",
+      "database_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/database-native-group-c",
+      "state_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/state-native-group-c",
+      "ready_path": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/state-native-group-c/ready.json",
+      "profile_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/state-native-group-c/profiles",
+      "local_groups": [
+        {
+          "group_id": "group-c",
+          "listen": "127.0.0.1:49823"
+        }
+      ]
+    },
+    {
+      "node_id": "native-group-d",
+      "node_config_sha256": "d30f669523828a4645ddf9477be067ee0509abda5a8a01c51b5ec26c0d64455c",
+      "database_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/database-native-group-d",
+      "state_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/state-native-group-d",
+      "ready_path": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/state-native-group-d/ready.json",
+      "profile_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-default/c1/state-native-group-d/profiles",
+      "local_groups": [
+        {
+          "group_id": "group-d",
+          "listen": "127.0.0.1:37449"
+        }
+      ]
+    }
+  ],
+  "dataset_directory": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset",
+  "endpoints": {
+    "group-a": "127.0.0.1:57553",
+    "group-b": "127.0.0.1:48377",
+    "group-c": "127.0.0.1:49823",
+    "group-d": "127.0.0.1:37449"
+  },
+  "group_applied_indexes": {
+    "group-a": 1,
+    "group-b": 1,
+    "group-c": 1,
+    "group-d": 1
+  },
+  "public_route": "vectorpartition.OperationsV1.Search",
+  "m8_loopback": false,
+  "topology_identity_sha256": "e9808f8f62aa8705c2641cfa1ffbea0da884597395e4ce08ba7e72c745dbe186"
+}

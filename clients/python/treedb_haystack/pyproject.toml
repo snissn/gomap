@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "treedb-haystack"
+version = "0.1.0"
+description = "Haystack DocumentStore and TreeDB retrievers"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "gomap contributors" }]
+license = { text = "See repository license" }
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Typing :: Typed",
+]
+dependencies = [
+  "haystack-ai>=2.26.1",
+  "treedb-client>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "mypy",
+  "ruff",
+]
+
+[project.urls]
+Source = "https://github.com/snissn/gomap"
+Documentation = "https://github.com/snissn/gomap/tree/main/clients/python/treedb_haystack"
+Issues = "https://github.com/snissn/gomap/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["haystack_integrations*"]
+namespaces = true
+
+[tool.setuptools.package-data]
+haystack_integrations = ["py.typed"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers"
+markers = [
+  "integration: tests that start a local TreeDB document service",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.mypy]
+python_version = "3.10"
+check_untyped_defs = true
+warn_unused_ignores = true

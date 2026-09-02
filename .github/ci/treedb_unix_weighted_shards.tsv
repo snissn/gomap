@@ -1,0 +1,11 @@
+# kind	shard	item	max seconds from successful main medians and PR run 32407394988
+package	0	github.com/snissn/gomap/TreeDB/caching	80.21
+package	0	github.com/snissn/gomap/TreeDB/internal/powerlosscert	15.64
+package	0	github.com/snissn/gomap/TreeDB/internal/raftplacement	55.61
+package	0	github.com/snissn/gomap/TreeDB/nativewire	182.12
+package	1	github.com/snissn/gomap/TreeDB	146.96
+package	1	github.com/snissn/gomap/TreeDB/collections	78.30
+package	1	github.com/snissn/gomap/TreeDB/internal/raftcluster	96.60
+package	1	github.com/snissn/gomap/TreeDB/internal/rootpublication	10.82
+package	2	github.com/snissn/gomap/TreeDB/db	279.95
+package	2	github.com/snissn/gomap/TreeDB/mongo_gateway	52.06

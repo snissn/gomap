@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:08:49 HST
+Showing nodes accounting for 1421.20us, 100% of 1421.20us total
+Dropped 74 nodes (cum <= 7.11us)
+Showing top 40 nodes out of 98
+      flat  flat%   sum%        cum   cum%
+  754.01us 53.05% 53.05%   754.01us 53.05%  sync.(*Mutex).Unlock (partial-inline)
+  667.19us 46.95%   100%   667.19us 46.95%  runtime.unlock (partial-inline)
+         0     0%   100%   550.35us 38.72%  runtime.systemstack
+         0     0%   100%   537.55us 37.82%  context.(*cancelCtx).propagateCancel
+         0     0%   100%   537.55us 37.82%  context.WithDeadline (inline)
+         0     0%   100%   537.55us 37.82%  context.WithDeadlineCause
+         0     0%   100%   537.55us 37.82%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).dispatch.func1
+         0     0%   100%   537.55us 37.82%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).dispatchTask
+         0     0%   100%   537.55us 37.82%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchTCPDispatcherV1).DispatchVectorPartitionShardSearchV1
+         0     0%   100%   537.55us 37.82%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchTCPDispatcherV1).dispatchVectorPartitionShardSearchOnceV1
+         0     0%   100%   537.55us 37.82%  github.com/snissn/gomap/TreeDB/nativewire.vectorPartitionShardSearchTCPRequestContextV1
+         0     0%   100%   473.31us 33.30%  runtime.(*traceMap).newTraceMapNode
+         0     0%   100%   473.31us 33.30%  runtime.(*traceMap).put
+         0     0%   100%   473.31us 33.30%  runtime.(*traceRegionAlloc).alloc
+         0     0%   100%   473.31us 33.30%  runtime.(*traceRegionAlloc).alloc.func1
+         0     0%   100%   473.31us 33.30%  runtime.(*traceStackTable).put
+         0     0%   100%   473.31us 33.30%  runtime.traceLocker.stack (inline)
+         0     0%   100%   473.31us 33.30%  runtime.traceStack
+         0     0%   100%   450.20us 31.68%  runtime.(*traceAdvancerState).start.func1
+         0     0%   100%   450.20us 31.68%  runtime.traceAdvance
+         0     0%   100%   449.99us 31.66%  runtime.traceLocker.Gomaxprocs
+         0     0%   100%   266.88us 18.78%  context.(*cancelCtx).Done
+         0     0%   100%   246.58us 17.35%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0%   100%   142.34us 10.02%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0%   100%   142.34us 10.02%  github.com/hashicorp/raft.(*Raft).run
+         0     0%   100%   126.91us  8.93%  github.com/hashicorp/raft.(*Raft).run-fm
+         0     0%   100%   122.37us  8.61%  github.com/hashicorp/raft.(*Raft).appendEntries
+         0     0%   100%   122.37us  8.61%  github.com/hashicorp/raft.(*Raft).processRPC
+         0     0%   100%   122.37us  8.61%  github.com/hashicorp/raft.(*Raft).runFollower
+         0     0%   100%   121.47us  8.55%  go.etcd.io/bbolt.(*Tx).Commit
+         0     0%   100%   107.79us  7.58%  runtime.mcall
+         0     0%   100%   106.94us  7.52%  go.etcd.io/bbolt.(*DB).allocate
+         0     0%   100%   106.94us  7.52%  go.etcd.io/bbolt.(*DB).mmap
+         0     0%   100%   106.94us  7.52%  go.etcd.io/bbolt.(*DB).munmap
+         0     0%   100%   106.94us  7.52%  go.etcd.io/bbolt.(*Tx).allocate
+         0     0%   100%   106.94us  7.52%  go.etcd.io/bbolt.(*Tx).commitFreelist
+         0     0%   100%   106.94us  7.52%  go.etcd.io/bbolt.munmap
+         0     0%   100%   106.94us  7.52%  golang.org/x/sys/unix.(*mmapper).Munmap
+         0     0%   100%   106.94us  7.52%  golang.org/x/sys/unix.Munmap (inline)
+         0     0%   100%   106.21us  7.47%  runtime.park_m

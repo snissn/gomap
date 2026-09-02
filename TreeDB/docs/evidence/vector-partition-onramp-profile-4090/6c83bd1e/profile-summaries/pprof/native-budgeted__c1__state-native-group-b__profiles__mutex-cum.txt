@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:08:49 HST
+Showing nodes accounting for 193.91us, 94.73% of 204.70us total
+Dropped 51 nodes (cum <= 1.02us)
+Showing top 40 nodes out of 135
+      flat  flat%   sum%        cum   cum%
+  122.07us 59.63% 59.63%   122.07us 59.63%  runtime.unlock (partial-inline)
+         0     0% 59.63%   101.69us 49.68%  runtime.systemstack
+         0     0% 59.63%    77.19us 37.71%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+   71.84us 35.10% 94.73%    71.84us 35.10%  sync.(*Mutex).Unlock (partial-inline)
+         0     0% 94.73%    67.67us 33.06%  runtime.gcBgMarkWorker
+         0     0% 94.73%    67.67us 33.06%  runtime.gcMarkDone
+         0     0% 94.73%    58.19us 28.43%  runtime.forEachP (inline)
+         0     0% 94.73%    58.19us 28.43%  runtime.forEachPInternal
+         0     0% 94.73%    42.28us 20.65%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 94.73%    40.98us 20.02%  runtime.gcMarkTermination
+         0     0% 94.73%    40.66us 19.87%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0% 94.73%    40.66us 19.87%  go.etcd.io/bbolt.(*Tx).Commit
+         0     0% 94.73%    39.90us 19.49%  github.com/hashicorp/raft.(*Raft).run-fm
+         0     0% 94.73%    37.06us 18.11%  github.com/hashicorp/raft.(*Raft).runFollower
+         0     0% 94.73%    35.45us 17.32%  github.com/hashicorp/raft.(*Raft).appendEntries
+         0     0% 94.73%    35.45us 17.32%  github.com/hashicorp/raft.(*Raft).processRPC
+         0     0% 94.73%    34.68us 16.94%  go.etcd.io/bbolt.(*DB).allocate
+         0     0% 94.73%    34.68us 16.94%  go.etcd.io/bbolt.(*DB).mmap
+         0     0% 94.73%    34.68us 16.94%  go.etcd.io/bbolt.(*DB).munmap
+         0     0% 94.73%    34.68us 16.94%  go.etcd.io/bbolt.(*Tx).allocate
+         0     0% 94.73%    34.68us 16.94%  go.etcd.io/bbolt.(*Tx).commitFreelist
+         0     0% 94.73%    34.68us 16.94%  go.etcd.io/bbolt.munmap
+         0     0% 94.73%    34.68us 16.94%  golang.org/x/sys/unix.(*mmapper).Munmap
+         0     0% 94.73%    34.68us 16.94%  golang.org/x/sys/unix.Munmap (inline)
+         0     0% 94.73%    31.51us 15.39%  runtime.gcMarkTermination.forEachP.func7
+         0     0% 94.73%    29.96us 14.63%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).GetLog
+         0     0% 94.73%    29.96us 14.63%  github.com/hashicorp/raft.(*Raft).pipelineReplicate
+         0     0% 94.73%    29.96us 14.63%  github.com/hashicorp/raft.(*Raft).pipelineSend
+         0     0% 94.73%    29.96us 14.63%  github.com/hashicorp/raft.(*Raft).replicate
+         0     0% 94.73%    29.96us 14.63%  github.com/hashicorp/raft.(*Raft).setupAppendEntries
+         0     0% 94.73%    29.96us 14.63%  github.com/hashicorp/raft.(*Raft).startStopReplication.func1
+         0     0% 94.73%    28.57us 13.95%  go.etcd.io/bbolt.(*DB).Begin
+         0     0% 94.73%    28.57us 13.95%  go.etcd.io/bbolt.(*DB).beginTx
+         0     0% 94.73%    26.69us 13.04%  runtime.gcMarkDone.forEachP.func5
+         0     0% 94.73%    23.76us 11.61%  github.com/hashicorp/raft.(*Raft).setPreviousLog
+         0     0% 94.73%    21.34us 10.43%  runtime.mallocgc
+         0     0% 94.73%    20.13us  9.83%  runtime.runSafePointFn
+         0     0% 94.73%    19.77us  9.66%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0% 94.73%    19.77us  9.66%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0% 94.73%    19.77us  9.66%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn

@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:09:33 HST
+Showing nodes accounting for 54.72ms, 99.26% of 55.13ms total
+Dropped 106 nodes (cum <= 0.28ms)
+Showing top 40 nodes out of 43
+      flat  flat%   sum%        cum   cum%
+   54.72ms 99.26% 99.26%    54.72ms 99.26%  sync.(*Mutex).Unlock (partial-inline)
+         0     0% 99.26%    52.93ms 96.01%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 99.26%    40.31ms 73.12%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 99.26%    40.31ms 73.12%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0% 99.26%    40.31ms 73.12%  github.com/hashicorp/raft.(*Raft).run-fm
+         0     0% 99.26%    40.30ms 73.11%  go.etcd.io/bbolt.(*Tx).Commit
+         0     0% 99.26%    40.29ms 73.08%  github.com/hashicorp/raft.(*Raft).dispatchLogs
+         0     0% 99.26%    40.29ms 73.08%  github.com/hashicorp/raft.(*Raft).leaderLoop
+         0     0% 99.26%    40.29ms 73.08%  github.com/hashicorp/raft.(*Raft).runLeader
+         0     0% 99.26%    40.29ms 73.08%  go.etcd.io/bbolt.(*Tx).writeMeta
+         0     0% 99.26%    12.62ms 22.89%  github.com/hashicorp/raft.(*Raft).pipelineReplicate
+         0     0% 99.26%    12.62ms 22.89%  github.com/hashicorp/raft.(*Raft).replicate
+         0     0% 99.26%    12.62ms 22.89%  github.com/hashicorp/raft.(*Raft).startStopReplication.func1
+         0     0% 99.26%    12.61ms 22.88%  github.com/hashicorp/raft.(*Raft).pipelineSend
+         0     0% 99.26%    12.60ms 22.86%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).GetLog
+         0     0% 99.26%    12.60ms 22.86%  github.com/hashicorp/raft.(*Raft).setupAppendEntries
+         0     0% 99.26%    12.60ms 22.86%  go.etcd.io/bbolt.(*DB).Begin
+         0     0% 99.26%    12.60ms 22.86%  go.etcd.io/bbolt.(*DB).beginTx
+         0     0% 99.26%    12.59ms 22.84%  github.com/hashicorp/raft.(*Raft).setPreviousLog
+         0     0% 99.26%     1.81ms  3.28%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0% 99.26%     1.81ms  3.28%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0% 99.26%     1.81ms  3.28%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
+         0     0% 99.26%     1.81ms  3.28%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationCacheV1).openPartition
+         0     0% 99.26%     1.81ms  3.28%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationLeaseV1).OpenPartition
+         0     0% 99.26%     1.81ms  3.28%  github.com/snissn/gomap/TreeDB/nativewire.(*vectorPartitionProductionNodePinnedGenerationV1).OpenPartition
+         0     0% 99.26%     1.80ms  3.27%  github.com/snissn/gomap/TreeDB/collections.(*Collection).OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1
+         0     0% 99.26%     1.80ms  3.27%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1
+         0     0% 99.26%     1.79ms  3.25%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphAdjacencyDirectSources).Close
+         0     0% 99.26%     1.79ms  3.25%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphLayer0AdjacencyDirectSource).Close
+         0     0% 99.26%     1.79ms  3.25%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).Close
+         0     0% 99.26%     1.79ms  3.25%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).releaseSharedPreparedSearch
+         0     0% 99.26%     1.79ms  3.25%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphSharedPreparedSearch).close
+         0     0% 99.26%     1.79ms  3.25%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphSharedPreparedSearchRef).release
+         0     0% 99.26%     1.79ms  3.25%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphSharedPreparedSearchRef).release.func1
+         0     0% 99.26%     1.79ms  3.25%  github.com/snissn/gomap/TreeDB/collections.releaseMappedResourceHandle (inline)
+         0     0% 99.26%     1.79ms  3.25%  github.com/snissn/gomap/TreeDB/internal/mappedresource.(*Handle).Release
+         0     0% 99.26%     1.79ms  3.25%  github.com/snissn/gomap/TreeDB/internal/mappedresource.(*Manager).AcquireFileRange.func1
+         0     0% 99.26%     1.79ms  3.25%  github.com/snissn/gomap/TreeDB/internal/mappedresource.munmapFile (inline)
+         0     0% 99.26%     1.79ms  3.25%  sync.(*Once).Do (inline)
+         0     0% 99.26%     1.79ms  3.25%  sync.(*Once).doSlow

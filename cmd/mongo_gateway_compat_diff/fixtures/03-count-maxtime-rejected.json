@@ -1,0 +1,13 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "count-max-time-rejected",
+  "capability_id": "read-command-gap.maxtimems-on-aggregate-count-distinct",
+  "expectation": "rejected",
+  "expected_error_code": 2,
+  "database": "compat",
+  "collection": "records",
+  "smoke": true,
+  "seed": [{"_id": "user-1", "score": {"$numberInt": "7"}}],
+  "command": {"count": "records", "query": {}, "maxTimeMS": {"$numberInt": "1000"}}
+}

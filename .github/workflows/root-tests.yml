@@ -1,0 +1,84 @@
+name: "Root: vet+test"
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-latest-1
+            os: ubuntu-latest
+            run_docs_check: true
+            run_vet: true
+            test_shard_index: 0
+            test_shard_count: 2
+          - name: ubuntu-latest-2
+            os: ubuntu-latest
+            run_docs_check: false
+            run_vet: false
+            test_shard_index: 1
+            test_shard_count: 2
+          - name: macos-latest-1
+            os: macos-latest
+            run_docs_check: true
+            run_vet: true
+            test_shard_index: 0
+            test_shard_count: 2
+          - name: macos-latest-2
+            os: macos-latest
+            run_docs_check: false
+            run_vet: false
+            test_shard_index: 1
+            test_shard_count: 2
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Root CI headroom contract
+        if: ${{ matrix.name == 'ubuntu-latest-1' }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 .github/scripts/test_root_ci_headroom.py
+
+      - name: Docs check
+        if: ${{ matrix.run_docs_check }}
+        run: make docs-check
+
+      - name: Vet
+        if: ${{ matrix.run_vet }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          go list ./... | grep -Ev '^github.com/snissn/gomap/TreeDB($|/)' | xargs go vet
+
+      - name: Test
+        shell: bash
+        run: |
+          set -euo pipefail
+          shard_index="${{ matrix.test_shard_index }}"
+          shard_count="${{ matrix.test_shard_count }}"
+          package_file="$(mktemp)"
+          go list ./... | grep -Ev '^github.com/snissn/gomap/TreeDB($|/)' | awk -v idx="$shard_index" -v n="$shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$package_file"
+          if [ -s "$package_file" ]; then
+            echo "root package shard=${shard_index}/${shard_count}"
+            cat "$package_file"
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 xargs go test -p 1 < "$package_file"
+          fi
+          rm -f "$package_file"

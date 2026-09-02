@@ -1,0 +1,383 @@
+package vectorpartition
+
+import (
+	"errors"
+	"fmt"
+	"math"
+)
+
+const (
+	// FP32BytesPerDimensionV1 is the current exact-FP32 traversal-row width.
+	FP32BytesPerDimensionV1 = 4
+	// DefaultFP32DimensionsV1 is the selected 128-d FP32 traversal plane.
+	DefaultFP32DimensionsV1 = 128
+	// FP32VectorSectionAlignmentBytesV1 mirrors the persisted search pack's
+	// vector-section alignment (collections.columnHNSWSearchPackVectorSectionAlignment).
+	// A materialized row occupies its padded stride, not dimensions*4, so the
+	// planner charges the padded width. vectorpartition cannot import
+	// collections (collections imports this package), so the invariant is
+	// pinned by TestSearchPackVectorStrideMatchesShardPlanChargeV1 in
+	// TreeDB/collections.
+	FP32VectorSectionAlignmentBytesV1 = 16
+	// GraphIdentityOverheadPerRowV1 is a fixed per-row charge for HNSW
+	// adjacency, level metadata, and stable identity. It is not derived
+	// from host LLC or runtime pack inspection.
+	GraphIdentityOverheadPerRowV1 = 512
+	// PackFixedOverheadBytesV1 reserves format framing that is not attributable
+	// to a row: the V3 header, section directory, and alignment padding. The
+	// collections format test pins this conservative reserve above the encoder's
+	// maximum framing requirement.
+	PackFixedOverheadBytesV1 = 16 << 10
+	// SelectedOverlapRatioV1 is the #4142 useful-only overlap cap.
+	SelectedOverlapRatioV1 = 0.2
+	// SelectedRouterCandidatesV1 is the #4142 c256 router budget.
+	SelectedRouterCandidatesV1 = 256
+	// SelectedPartitionProbesV1 is the #4142 bounded probe policy.
+	SelectedPartitionProbesV1 = 2
+	// SelectedSearchableRowsPerPackV1 is the #4142 per-pack membership cap.
+	SelectedSearchableRowsPerPackV1 = 7500
+	// DefaultTargetHotBytesV1 preserves the selected 7500-row geometry while
+	// making the advertised total budget include fixed pack framing.
+	DefaultTargetHotBytesV1 = uint64(PackFixedOverheadBytesV1 + SelectedSearchableRowsPerPackV1*(DefaultFP32DimensionsV1*FP32BytesPerDimensionV1+GraphIdentityOverheadPerRowV1))
+)
+
+// Aliases keep earlier contract names compiling against the selected defaults.
+const (
+	GraphIdentityOverheadBytesV1 = GraphIdentityOverheadPerRowV1
+	SelectedTargetHotBytesV1     = DefaultTargetHotBytesV1
+)
+
+// ShardPlanInputV1 is the portable, explicit planner input. Callers must
+// supply TargetHotBytes when they want a non-default budget; the planner
+// never inspects serving-host LLC.
+type ShardPlanInputV1 struct {
+	Vectors        int
+	Dimensions     int
+	OverlapRatio   float64
+	Imbalance      float64
+	TargetHotBytes uint64
+	MaxPartitions  int
+}
+
+// ShardPlanRequestV1 is a compatibility alias for ShardPlanInputV1.
+type ShardPlanRequestV1 = ShardPlanInputV1
+
+// ShardPlanV1 is the deterministic byte-bounded partition/capacity contract.
+type ShardPlanV1 struct {
+	Partitions            int     `json:"partitions"`
+	HomeCapacity          int     `json:"home_capacity"`
+	OverlapCapacity       int     `json:"overlap_capacity"`
+	MaxMembershipsPerPack int     `json:"max_memberships_per_pack"`
+	RequestedOverlap      int     `json:"requested_overlap"`
+	PlannedMemberships    int     `json:"planned_memberships"`
+	TargetHotBytes        uint64  `json:"target_hot_bytes"`
+	TraversalRowBytes     int     `json:"traversal_row_bytes"`
+	GraphIdentityOverhead int     `json:"graph_identity_overhead"`
+	PackFixedOverhead     int     `json:"pack_fixed_overhead"`
+	MaxPackBytes          uint64  `json:"max_pack_bytes"`
+	OverlapRatio          float64 `json:"overlap_ratio"`
+	Imbalance             float64 `json:"imbalance"`
+	Vectors               int     `json:"vectors"`
+	Dimensions            int     `json:"dimensions"`
+}
+
+// HomeCap is a compatibility alias used by some tests.
+func (p ShardPlanV1) HomeCap() int { return p.HomeCapacity }
+
+// AlignedTraversalRowBytesV1 returns the bytes one traversal row occupies in a
+// materialized search pack: dimensions*4 rounded up to the pack's vector
+// section alignment. Charging dimensions*4 directly understates every row whose
+// width is not already aligned, which would let a tight target admit packs
+// above their advertised hot-byte budget.
+func AlignedTraversalRowBytesV1(dimensions int) (int, bool) {
+	if dimensions < 1 || dimensions > math.MaxInt/FP32BytesPerDimensionV1 {
+		return 0, false
+	}
+	traversal := dimensions * FP32BytesPerDimensionV1
+	remainder := traversal % FP32VectorSectionAlignmentBytesV1
+	if remainder == 0 {
+		return traversal, true
+	}
+	padded, ok := checkedAddInt(traversal, FP32VectorSectionAlignmentBytesV1-remainder)
+	if !ok {
+		return 0, false
+	}
+	return padded, true
+}
+
+// DefaultShardPlanInputV1 returns the portable #4142 defaults for one corpus.
+func DefaultShardPlanInputV1(vectors, dimensions int) ShardPlanInputV1 {
+	return ShardPlanInputV1{
+		Vectors:        vectors,
+		Dimensions:     dimensions,
+		OverlapRatio:   SelectedOverlapRatioV1,
+		Imbalance:      DefaultConfig().Imbalance,
+		TargetHotBytes: DefaultTargetHotBytesV1,
+	}
+}
+
+// SelectedShardPlanRequestV1 is a compatibility wrapper around the selected input.
+func SelectedShardPlanRequestV1(sourceRows, dimensions int) ShardPlanInputV1 {
+	return DefaultShardPlanInputV1(sourceRows, dimensions)
+}
+
+// PlanByteBoundedShardsV1 derives partition count and capacities from an
+// explicit hot-byte target. It fails closed before any allocation on overflow,
+// an undersized target, or an impossible balance.
+func PlanByteBoundedShardsV1(in ShardPlanInputV1) (ShardPlanV1, error) {
+	if in.MaxPartitions == 0 {
+		in.MaxPartitions = maxPartitions
+	}
+	if in.TargetHotBytes == 0 {
+		in.TargetHotBytes = DefaultTargetHotBytesV1
+	}
+	if in.Vectors < 1 || in.Vectors > maxVectors || in.Dimensions < 1 || in.Dimensions > maxDimensions || in.MaxPartitions < 1 || in.MaxPartitions > maxPartitions {
+		return ShardPlanV1{}, errors.New("vectorpartition: invalid shard plan vector/dimension bounds")
+	}
+	if math.IsNaN(in.OverlapRatio) || math.IsInf(in.OverlapRatio, 0) || in.OverlapRatio < 0 || in.OverlapRatio > 1 {
+		return ShardPlanV1{}, errors.New("vectorpartition: overlap ratio must be finite in [0,1]")
+	}
+	if math.IsNaN(in.Imbalance) || math.IsInf(in.Imbalance, 0) || in.Imbalance < 0 || in.Imbalance > 1 {
+		return ShardPlanV1{}, errors.New("vectorpartition: imbalance must be finite in [0,1]")
+	}
+	traversal, ok := AlignedTraversalRowBytesV1(in.Dimensions)
+	if !ok {
+		return ShardPlanV1{}, errors.New("vectorpartition: traversal-row byte overflow")
+	}
+	rowBytes, ok := checkedAddInt(traversal, GraphIdentityOverheadPerRowV1)
+	if !ok {
+		return ShardPlanV1{}, errors.New("vectorpartition: row-byte accounting overflow")
+	}
+	minimumBytes, ok := checkedAddInt(PackFixedOverheadBytesV1, rowBytes)
+	if !ok || in.TargetHotBytes < uint64(minimumBytes) {
+		return ShardPlanV1{}, fmt.Errorf("vectorpartition: target-hot-bytes %d undersized versus framing plus one row %d", in.TargetHotBytes, minimumBytes)
+	}
+	maxMemberships := (in.TargetHotBytes - uint64(PackFixedOverheadBytesV1)) / uint64(rowBytes)
+	if maxMemberships < 1 || maxMemberships > uint64(math.MaxInt) {
+		return ShardPlanV1{}, errors.New("vectorpartition: target-hot-bytes undersized")
+	}
+	requestedFloat := math.Floor(in.OverlapRatio * float64(in.Vectors))
+	if requestedFloat > float64(math.MaxInt) {
+		return ShardPlanV1{}, errors.New("vectorpartition: overlap request overflows int")
+	}
+	requested := int(requestedFloat)
+	total, ok := checkedAddInt(in.Vectors, requested)
+	if !ok {
+		return ShardPlanV1{}, errors.New("vectorpartition: planned memberships overflow")
+	}
+	maxRows := int(maxMemberships)
+	partitions := (total + maxRows - 1) / maxRows
+	if partitions < 1 {
+		partitions = 1
+	}
+	for {
+		if partitions > in.Vectors || partitions > in.MaxPartitions {
+			return ShardPlanV1{}, fmt.Errorf("vectorpartition: impossible shard balance rows=%d target_hot_bytes=%d", in.Vectors, in.TargetHotBytes)
+		}
+		homeCap := partitionCap(in.Vectors, partitions, in.Imbalance)
+		if homeCap < 1 {
+			return ShardPlanV1{}, errors.New("vectorpartition: home capacity underflow")
+		}
+		overlapCap, err := overlapCapacityForRequestedV1(in.Vectors, requested, partitions, homeCap)
+		if err != nil {
+			return ShardPlanV1{}, err
+		}
+		if overlapCap <= maxRows && homeCap <= maxRows {
+			return ShardPlanV1{
+				Partitions:            partitions,
+				HomeCapacity:          homeCap,
+				OverlapCapacity:       overlapCap,
+				MaxMembershipsPerPack: maxRows,
+				RequestedOverlap:      requested,
+				PlannedMemberships:    total,
+				TargetHotBytes:        in.TargetHotBytes,
+				TraversalRowBytes:     traversal,
+				GraphIdentityOverhead: GraphIdentityOverheadPerRowV1,
+				PackFixedOverhead:     PackFixedOverheadBytesV1,
+				MaxPackBytes:          in.TargetHotBytes,
+				OverlapRatio:          in.OverlapRatio,
+				Imbalance:             in.Imbalance,
+				Vectors:               in.Vectors,
+				Dimensions:            in.Dimensions,
+			}, nil
+		}
+		if partitions == in.Vectors || partitions == in.MaxPartitions {
+			return ShardPlanV1{}, fmt.Errorf("vectorpartition: impossible shard balance rows=%d target_hot_bytes=%d", in.Vectors, in.TargetHotBytes)
+		}
+		partitions++
+	}
+}
+
+func (p ShardPlanV1) input() ShardPlanInputV1 {
+	return ShardPlanInputV1{
+		Vectors:        p.Vectors,
+		Dimensions:     p.Dimensions,
+		OverlapRatio:   p.OverlapRatio,
+		Imbalance:      p.Imbalance,
+		TargetHotBytes: p.TargetHotBytes,
+	}
+}
+
+func (p ShardPlanV1) request() ShardPlanInputV1 { return p.input() }
+
+// ShardPackSummaryV1 records realized memberships and charged hot bytes for
+// one partition pack. Bytes use the planner's portable row charge, not host LLC.
+// Every field is derived from the realized membership list; none of them is
+// trusted from a decoded descriptor.
+type ShardPackSummaryV1 struct {
+	Partition   int    `json:"partition"`
+	HomeRows    int    `json:"home_rows"`
+	OverlapRows int    `json:"overlap_rows"`
+	Rows        int    `json:"rows"`
+	Bytes       uint64 `json:"bytes"`
+}
+
+// SelectedOverlapConfigV1 is the #4143 useful-only overlap contract. Callers
+// that need a non-selected ratio overwrite Ratio after construction.
+func SelectedOverlapConfigV1(capacity int) OverlapConfig {
+	return OverlapConfig{Ratio: SelectedOverlapRatioV1, Capacity: capacity, UsefulOnly: true}
+}
+
+// AccountShardPacksV1 derives the authoritative per-pack accounting from the
+// realized membership list alone. It always returns exactly plan.Partitions
+// summaries in canonical partition order, so a descriptor cannot omit a pack or
+// publish loads unrelated to its memberships. It fails closed on a noncanonical
+// or duplicate membership, an out-of-range ordinal or partition, a vector
+// without exactly one home, and on any pack that exceeds the planned home
+// capacity, membership capacity, or hot-byte budget.
+func AccountShardPacksV1(plan ShardPlanV1, memberships []Membership) ([]ShardPackSummaryV1, error) {
+	if plan.Partitions < 1 || plan.Partitions > maxPartitions || plan.Vectors < 1 || plan.Vectors > maxVectors ||
+		plan.HomeCapacity < 1 || plan.OverlapCapacity < plan.HomeCapacity || plan.MaxMembershipsPerPack < 1 ||
+		plan.TraversalRowBytes < 1 || plan.PackFixedOverhead < 1 || plan.MaxPackBytes != plan.TargetHotBytes || plan.PlannedMemberships < plan.Vectors {
+		return nil, errors.New("vectorpartition: invalid shard pack accounting inputs")
+	}
+	rowBytes, ok := checkedAddInt(plan.TraversalRowBytes, plan.GraphIdentityOverhead)
+	if !ok || rowBytes < 1 {
+		return nil, errors.New("vectorpartition: pack row-byte overflow")
+	}
+	if len(memberships) < plan.Vectors || len(memberships) > plan.PlannedMemberships {
+		return nil, fmt.Errorf("vectorpartition: realized memberships %d outside planned [%d,%d]", len(memberships), plan.Vectors, plan.PlannedMemberships)
+	}
+	homes := make([]int, plan.Vectors)
+	extras := make([]int, plan.Vectors)
+	out := make([]ShardPackSummaryV1, plan.Partitions)
+	for partition := range out {
+		out[partition].Partition = partition
+	}
+	for i, membership := range memberships {
+		if membership.VectorOrdinal < 0 || membership.VectorOrdinal >= plan.Vectors || membership.Partition < 0 || membership.Partition >= plan.Partitions {
+			return nil, errors.New("vectorpartition: shard membership is outside planned bounds")
+		}
+		if i > 0 && (membership.VectorOrdinal < memberships[i-1].VectorOrdinal ||
+			membership.VectorOrdinal == memberships[i-1].VectorOrdinal && membership.Partition <= memberships[i-1].Partition) {
+			return nil, errors.New("vectorpartition: noncanonical or duplicate shard membership")
+		}
+		if membership.Home {
+			homes[membership.VectorOrdinal]++
+			out[membership.Partition].HomeRows++
+		} else {
+			// BuildOverlap enforces the durable per-vector cap while building,
+			// but a decoded descriptor is only ever checked here. Without this
+			// a self-consistent record could replicate one ordinal into more
+			// partitions than the builder could ever produce while every pack
+			// total stayed inside capacity.
+			extras[membership.VectorOrdinal]++
+			if extras[membership.VectorOrdinal] > MaxOverlapMembershipsPerVector {
+				return nil, fmt.Errorf("vectorpartition: vector %d holds %d non-home memberships above the %d cap", membership.VectorOrdinal, extras[membership.VectorOrdinal], MaxOverlapMembershipsPerVector)
+			}
+			out[membership.Partition].OverlapRows++
+		}
+		out[membership.Partition].Rows++
+	}
+	for ordinal, count := range homes {
+		if count != 1 {
+			return nil, fmt.Errorf("vectorpartition: vector %d has %d home memberships", ordinal, count)
+		}
+	}
+	for partition := range out {
+		summary := &out[partition]
+		if summary.HomeRows > plan.HomeCapacity || summary.Rows > plan.OverlapCapacity || summary.Rows > plan.MaxMembershipsPerPack {
+			return nil, fmt.Errorf("vectorpartition: pack %d home=%d rows=%d exceed planned capacity", partition, summary.HomeRows, summary.Rows)
+		}
+		rowHotBytes, ok := mulUint64(uint64(summary.Rows), uint64(rowBytes))
+		if !ok || plan.PackFixedOverhead < 0 || uint64(plan.PackFixedOverhead) > math.MaxUint64-rowHotBytes {
+			return nil, fmt.Errorf("vectorpartition: pack %d hot-bytes overflow", partition)
+		}
+		hotBytes := rowHotBytes + uint64(plan.PackFixedOverhead)
+		if hotBytes > plan.TargetHotBytes {
+			return nil, fmt.Errorf("vectorpartition: pack %d hot-bytes overflow or exceed target", partition)
+		}
+		summary.Bytes = hotBytes
+	}
+	return out, nil
+}
+
+// RouterPartitionsFromMembershipsV1 rebuilds router input from final
+// membership only. Every realized membership appears once.
+func RouterPartitionsFromMembershipsV1(memberships []Membership, values [][]float32, partitions int) ([]RouterPartitionV1, error) {
+	if partitions < 1 || partitions > routerMaxPartitions || len(values) == 0 {
+		return nil, errors.New("vectorpartition: invalid router membership inputs")
+	}
+	parts := make([]RouterPartitionV1, partitions)
+	for i := range parts {
+		parts[i].PartitionID = uint32(i)
+	}
+	seen := make(map[[2]int]struct{}, len(memberships))
+	for _, membership := range memberships {
+		if membership.VectorOrdinal < 0 || membership.VectorOrdinal >= len(values) || membership.Partition < 0 || membership.Partition >= partitions {
+			return nil, errors.New("vectorpartition: router membership is outside realized bounds")
+		}
+		key := [2]int{membership.VectorOrdinal, membership.Partition}
+		if _, dup := seen[key]; dup {
+			return nil, errors.New("vectorpartition: duplicate router membership")
+		}
+		seen[key] = struct{}{}
+		kind := "overlap"
+		if membership.Home {
+			kind = "home"
+		}
+		parts[membership.Partition].Vectors = append(parts[membership.Partition].Vectors, RouterVectorV1{
+			Ordinal:        uint64(membership.VectorOrdinal),
+			Values:         append([]float32(nil), values[membership.VectorOrdinal]...),
+			MembershipKind: kind,
+		})
+	}
+	for i, part := range parts {
+		if len(part.Vectors) == 0 {
+			return nil, fmt.Errorf("vectorpartition: router partition %d has no realized membership", i)
+		}
+	}
+	return parts, nil
+}
+
+func overlapCapacityForRequestedV1(rows, requested, partitions, baseCapacity int) (int, error) {
+	if rows < 0 || requested < 0 || partitions < 1 || baseCapacity < 0 || rows > math.MaxInt-requested {
+		return 0, errors.New("vectorpartition: overlap capacity overflows int")
+	}
+	total := rows + requested
+	capacity := total / partitions
+	if total%partitions != 0 {
+		if capacity == math.MaxInt {
+			return 0, errors.New("vectorpartition: overlap capacity overflows int")
+		}
+		capacity++
+	}
+	if baseCapacity > capacity {
+		return baseCapacity, nil
+	}
+	return capacity, nil
+}
+
+func checkedAddInt(a, b int) (int, bool) {
+	if a < 0 || b < 0 || a > math.MaxInt-b {
+		return 0, false
+	}
+	return a + b, true
+}
+
+func mulUint64(a, b uint64) (uint64, bool) {
+	if a != 0 && b > math.MaxUint64/a {
+		return 0, false
+	}
+	return a * b, true
+}
