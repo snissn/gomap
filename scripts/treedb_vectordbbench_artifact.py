@@ -4697,7 +4697,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         if resolved_python is None:
             parser.error(f"python executable not found: {args.python}")
         python_path = Path(resolved_python)
-    python_path = python_path.resolve()
     if not python_path.is_file():
         parser.error(f"python executable is not a regular file: {python_path}")
     args.python = str(python_path)

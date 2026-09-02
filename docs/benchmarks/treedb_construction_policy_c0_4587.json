@@ -34,7 +34,7 @@
       "TreeDB/collections/vector_index_rebuild.go": "21bed0f84ae5301d17619ed2753300be73cf422c"
     },
     "harness_blobs": {
-      "scripts/treedb_vectordbbench_artifact.py": "521edcd549c01c7dd812a553f0a1685d9c0b4529"
+      "scripts/treedb_vectordbbench_artifact.py": "51961bb215251794cee38871527b2447e1daf2ba"
     },
     "vectordbbench": {
       "root": "/mnt/fast4tb/codex-vectordbbench-4545",
