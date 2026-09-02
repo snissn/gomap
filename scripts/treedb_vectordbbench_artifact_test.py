@@ -4231,6 +4231,18 @@ class ProtocolMeasurementProducerTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "isolation monitor failed"):
                 monitor.stop()
 
+    def test_diagnostics_sampler_records_first_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            harness, "http_json", return_value={"status": "ok"},
+        ):
+            root = Path(tmp)
+            sampler = harness.DiagnosticsSampler(
+                "http://127.0.0.1:1/diagnostics", root / "diagnostics.jsonl", 60, root,
+            )
+            sample = sampler.sample()
+
+        self.assertEqual(sampler.samples, [sample])
+
     def test_linux_process_metrics_are_positive(self) -> None:
         got = harness.linux_process_metrics(os.getpid())
         self.assertGreaterEqual(got["cpu_nanoseconds"], 0)

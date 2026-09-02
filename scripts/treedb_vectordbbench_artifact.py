@@ -1318,6 +1318,7 @@ class DiagnosticsSampler:
         self._thread: threading.Thread | None = None
         self._stopped = False
         self._sample_lock = threading.Lock()
+        self.samples: list[dict[str, Any]] = []
 
     def sample(self, *, boundary: str | None = None, boundary_timestamp_ns: int | None = None) -> dict[str, Any]:
         with self._sample_lock:
