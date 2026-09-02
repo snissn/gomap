@@ -144,6 +144,8 @@ run_capped 300 qdrant-build-query-reopen "$VENV/bin/python" benchmarks/vector_db
 	--harness-revision "$HARNESS_REVISION" --storage-path "$QDRANT_STORAGE_PATH" \
 	--restart-hook "$RESTART_HOOK" --server-pid "$PID" --server-binary "$QDRANT_BIN" \
 	--server-release-asset "$QDRANT_RELEASE_ASSET" --client-lock "$QDRANT_CLIENT_LOCK"
+cleanup
+: >"$PID_FILE"
 run_capped 90 consolidation "$COMPARATOR_BIN" \
 	-application-comparison-manifest "$MANIFEST" \
 	-application-comparison-treedb "$TREEDB_ARTIFACT" \

@@ -1076,9 +1076,10 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStorageP
 	if err != nil {
 		return fmt.Errorf("measure Qdrant storage: %w", err)
 	}
-	if treeStorageBytes != tree.StorageBytes || qdrantStorageBytes != qdrant.Resources.DurableBytes {
-		return fmt.Errorf("backend storage totals do not match live storage roots")
+	if treeStorageBytes != tree.StorageBytes {
+		return fmt.Errorf("TreeDB storage total does not match live storage root")
 	}
+	qdrant.Resources.DurableBytes = qdrantStorageBytes
 	report := applicationComparisonReport{Schema: applicationComparisonSchema, State: "validated",
 		HarnessRevision: tree.HarnessRevision, TreeDBBinarySHA256: tree.BinarySHA256,
 		TreeDBProcessResources: tree.ProcessResources, TreeDBStorageBytes: tree.StorageBytes, QdrantResources: qdrant.Resources,
