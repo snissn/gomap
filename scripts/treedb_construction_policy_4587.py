@@ -596,6 +596,22 @@ def validate_python_command_contract(contract: dict[str, Any]) -> None:
             fail(f"lifecycle harness must contain exactly one {flag} value")
         exact(lifecycle_argv[positions[0] + 1], expected,
               f"lifecycle harness {flag} binding")
+    expected_service_environment = {"GOMAXPROCS": str(runtime["gomaxprocs"])}
+    exact(commands.get("lifecycle_service_environment"), expected_service_environment,
+          "lifecycle service environment")
+    exact(commands.get("lifecycle_vdbbench_environment_template"), {
+        "GOMAXPROCS": str(runtime["gomaxprocs"]),
+        "PYTHONPATH": os.pathsep.join((
+            source["vectordbbench"]["root"],
+            str(Path(source["gomap_root"]) / "clients/python/treedb_client/src"),
+        )),
+        "RESULTS_LOCAL_DIR": "{artifact_root}/vdbbench-results/{row}",
+        "LOG_FILE": "{artifact_root}/vdbbench.log",
+        "NUM_PER_BATCH": "500",
+        "TREEDB_LIFECYCLE_SIDECAR": "{artifact_root}/adapter-lifecycle.jsonl",
+        "TREEDB_LIFECYCLE_BOUNDARY_ACK":
+            "{artifact_root}/lifecycle-boundary-diagnostics.json",
+    }, "lifecycle VectorDBBench environment template")
 
 
 def validate_contract(contract: dict[str, Any], allow_draft: bool,
@@ -1038,6 +1054,7 @@ def validate_search_evidence(
             f"search_evidence[{position}] canonical VectorDBBench argv",
         )
         exact(command["vdbbench_env"], {
+            "GOMAXPROCS": str(contract["experiment"]["isolation_and_noise"]["gomaxprocs"]),
             "RESULTS_LOCAL_DIR": str(
                 root / f"vdbbench-results-{item['route']}-{item['kind']}"),
             "PYTHONPATH": os.pathsep.join((
@@ -1239,6 +1256,17 @@ def validate_manifest(run_row: dict[str, Any], root: Path, manifest: dict[str, A
         (runtime["python_executable"], runtime["python_sha256"], "off"),
         "lifecycle harness Python environment",
     )
+    commands = contract["commands"]
+    exact(harness_cfg.get("service_environment"),
+          commands["lifecycle_service_environment"],
+          "lifecycle service subprocess environment")
+    environment_template = commands["lifecycle_vdbbench_environment_template"]
+    expected_environment = {
+        key: value.format(artifact_root=str(root), row="scalar")
+        for key, value in environment_template.items()
+    }
+    exact(harness_cfg.get("vdbbench_environments"), {"scalar": expected_environment},
+          "lifecycle VectorDBBench subprocess environments")
     config = run_row["configuration"]
     exact((harness_cfg.get("m"), harness_cfg.get("ef_construction"), harness_cfg.get("ef_search"),
            harness_cfg.get("k"), harness_cfg.get("rerank_candidates"), harness_cfg.get("rows")),

@@ -168,6 +168,8 @@ class HarnessState:
     lifecycle: dict[str, Any] | None = None
     lifecycle_started_ns: int | None = None
     diagnostics: list[dict[str, Any]] = field(default_factory=list)
+    service_environment: dict[str, str] | None = None
+    vdbbench_environments: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 def add_skip(state: HarnessState, name: str, reason: str) -> None:
@@ -654,6 +656,12 @@ def build_service(state: HarnessState, gomap_root: Path, service_bin: str | None
     return bin_path
 
 
+def lifecycle_subprocess_environment() -> dict[str, str]:
+    """Return the complete, non-inherited base environment for lifecycle work."""
+    gomaxprocs = os.environ.get("GOMAXPROCS") or str(os.cpu_count() or 1)
+    return {"GOMAXPROCS": gomaxprocs}
+
+
 def start_service(
     state: HarnessState,
     *,
@@ -667,6 +675,7 @@ def start_service(
     construction_decision_diagnostics: bool = False,
     pprof_addr: str = "",
     append_log: bool = False,
+    environment: dict[str, str] | None = None,
 ) -> tuple[subprocess.Popen[str], dict[str, Any], list[str]]:
     service_log = state.root / "service.log"
     address = host_port(host, port)
@@ -677,12 +686,17 @@ def start_service(
         cmd.extend(["-pprof", pprof_addr])
     data_dir.mkdir(parents=True, exist_ok=True)
     log_fh = service_log.open("a" if append_log else "w", encoding="utf-8")
+    if environment is not None:
+        if state.service_environment is not None and state.service_environment != environment:
+            raise ValueError("lifecycle service environment changed between launches")
+        state.service_environment = dict(environment)
     proc = subprocess.Popen(
         cmd,
         cwd=str(gomap_root),
         stdout=log_fh,
         stderr=subprocess.STDOUT,
         text=True,
+        env=environment,
         start_new_session=True,
     )
     state.service_pid = proc.pid
@@ -1101,7 +1115,7 @@ def vdbbench_base_cmd(args: argparse.Namespace, base_url: str, index_name: str, 
 
 
 def vdbbench_row_env(args: argparse.Namespace, vectordbbench_dir: Path, gomap_root: Path, state: HarnessState, row: str = "") -> dict[str, str]:
-    env = os.environ.copy()
+    env = lifecycle_subprocess_environment() if args.lifecycle else os.environ.copy()
     env["PYTHONPATH"] = pythonpath_for(vectordbbench_dir, gomap_root)
     env["RESULTS_LOCAL_DIR"] = str(state.root / "vdbbench-results" / row) if row else str(state.root / "vdbbench-results")
     env["LOG_FILE"] = str(state.root / "vdbbench.log")
@@ -1109,6 +1123,7 @@ def vdbbench_row_env(args: argparse.Namespace, vectordbbench_dir: Path, gomap_ro
     if getattr(args, "lifecycle", False):
         env["TREEDB_LIFECYCLE_SIDECAR"] = str(state.root / "adapter-lifecycle.jsonl")
         env["TREEDB_LIFECYCLE_BOUNDARY_ACK"] = str(state.root / "lifecycle-boundary-diagnostics.json")
+        state.vdbbench_environments[row or "default"] = dict(env)
     return env
 
 
@@ -4283,6 +4298,7 @@ def complete_lifecycle(
         pprof_addr=host_port(args.host, args.pprof_port),
         construction_decision_diagnostics=args.construction_decision_diagnostics,
         append_log=True,
+        environment=lifecycle_subprocess_environment(),
     )
     try:
         state.health = health
@@ -4500,6 +4516,8 @@ def write_manifest(
             "python_executable": args.python,
             "python_sha256": sha256_file(Path(args.python)),
             "use_uv": args.use_uv,
+            "service_environment": state.service_environment,
+            "vdbbench_environments": state.vdbbench_environments,
         },
         "commands": [asdict(record) for record in state.commands],
         "vdbbench": state.vdbbench,
@@ -4843,6 +4861,7 @@ def main(argv: list[str]) -> int:
             health_timeout=args.health_timeout,
             pprof_addr=host_port(args.host, args.pprof_port) if args.lifecycle else "",
             construction_decision_diagnostics=args.construction_decision_diagnostics,
+            environment=lifecycle_subprocess_environment() if args.lifecycle else None,
         )
         state.lifecycle_started_ns = time.time_ns()
         state.health = health

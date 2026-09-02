@@ -164,6 +164,22 @@ def service_environment(args: argparse.Namespace) -> dict[str, str]:
     return {"GOMAXPROCS": str(args.gomaxprocs)}
 
 
+def vdbbench_environment(
+    args: argparse.Namespace, kind: str, result_root: Path,
+) -> dict[str, str]:
+    """Return the complete, non-inherited environment for VectorDBBench."""
+    return {
+        "GOMAXPROCS": str(args.gomaxprocs),
+        "RESULTS_LOCAL_DIR": str(result_root),
+        "PYTHONPATH": os.pathsep.join((
+            str(args.vectordbbench_dir),
+            str(ROOT / "clients" / "python" / "treedb_client" / "src"),
+        )),
+        "LOG_FILE": str(args.artifact_root / f"vdbbench-{args.route}-{kind}.log"),
+        "NUM_PER_BATCH": "500",
+    }
+
+
 def wait_healthy(process: subprocess.Popen[Any], base_url: str, timeout: float) -> None:
     deadline = time.monotonic() + timeout
     last_error: BaseException | None = None
@@ -361,18 +377,8 @@ def run_vdbbench_command(
         fail(f"{kind} canonical result destination already exists")
     command = vdbbench_command(args, kind)
     started_at = iso_now()
-    env = os.environ.copy()
-    env["RESULTS_LOCAL_DIR"] = str(result_root)
-    bound_env = {
-        "RESULTS_LOCAL_DIR": str(result_root),
-        "PYTHONPATH": os.pathsep.join((
-            str(args.vectordbbench_dir),
-            str(ROOT / "clients" / "python" / "treedb_client" / "src"),
-        )),
-        "LOG_FILE": str(args.artifact_root / f"vdbbench-{args.route}-{kind}.log"),
-        "NUM_PER_BATCH": "500",
-    }
-    env.update(bound_env)
+    env = vdbbench_environment(args, kind, result_root)
+    bound_env = dict(env)
     completed = subprocess.run(command, cwd=args.vectordbbench_dir, env=env)
     completed_at = iso_now()
     if completed.returncode != 0:

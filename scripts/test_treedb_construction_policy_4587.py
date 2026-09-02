@@ -318,6 +318,15 @@ class DecisionFixture:
                 "python_executable": self.contract["source_identity"]["runtime"]["python_executable"],
                 "python_sha256": self.contract["source_identity"]["runtime"]["python_sha256"],
                 "use_uv": "off",
+                "service_environment": self.contract[
+                    "commands"]["lifecycle_service_environment"],
+                "vdbbench_environments": {
+                    "scalar": {
+                        key: value.format(artifact_root=str(root), row="scalar")
+                        for key, value in self.contract["commands"][
+                            "lifecycle_vdbbench_environment_template"].items()
+                    },
+                },
             },
         }
         manifest_path = root / "manifest.json"
@@ -483,6 +492,7 @@ class DecisionFixture:
                     {"scale": scale, "role": role, "dataset": dataset, "configuration": config},
                     f"index-ef{ef}", kind, route, "http://127.0.0.1:6060"),
                 "vdbbench_env": {
+                    "GOMAXPROCS": "12",
                     "RESULTS_LOCAL_DIR": str(root / f"vdbbench-results-{route}-{kind}"),
                     "PYTHONPATH": search_existing_index.os.pathsep.join((
                         self.contract["source_identity"]["vectordbbench"]["root"],
@@ -1261,6 +1271,12 @@ class ValidatorMutations(unittest.TestCase):
 
         packet = self.fixture.no_go_packet()
         run = packet["runs"][0]
+        self.fixture.rewrite_command(
+            run, 0, lambda value: value["vdbbench_env"].update({"PYTHONHASHSEED": "1"}))
+        self.assert_invalid(packet, "canonical VectorDBBench environment")
+
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
         lifecycle_completed = json.loads(
             (Path(run["artifact"]["root"]) / "measurements.json").read_text()
         )["origin"]["lifecycle_completed_at"]
@@ -1272,6 +1288,24 @@ class ValidatorMutations(unittest.TestCase):
                 "completed_at": lifecycle_completed,
             }))
         self.assert_invalid(packet, "immediately precede")
+
+    def test_existing_index_vdbbench_environment_is_non_inherited(self) -> None:
+        args = SimpleNamespace(
+            gomaxprocs=12,
+            vectordbbench_dir=Path("/vectordbbench"),
+            artifact_root=Path("/artifact"),
+            route="exact",
+        )
+        with mock.patch.dict(
+            search_existing_index.os.environ,
+            {"PYTHONHASHSEED": "random", "HTTPS_PROXY": "http://proxy"},
+            clear=False,
+        ):
+            environment = search_existing_index.vdbbench_environment(
+                args, "production", Path("/artifact/results"))
+        self.assertEqual(set(environment), {
+            "GOMAXPROCS", "RESULTS_LOCAL_DIR", "PYTHONPATH", "LOG_FILE", "NUM_PER_BATCH",
+        })
     def test_canonical_digest_matches_existing_index_producer(self) -> None:
         value = {"a": 1}
         self.assertEqual(policy.canonical_sha256(value), search_existing_index.canonical_sha256(value))
@@ -1318,6 +1352,7 @@ class ValidatorMutations(unittest.TestCase):
                 path.write_text("{}\n")
             args = search_existing_index.argparse.Namespace(
                 route="exact",
+                gomaxprocs=12,
                 base_url="http://127.0.0.1:6060",
                 index_name="index-ef128",
                 m=16,
@@ -1599,6 +1634,21 @@ class ValidatorMutations(unittest.TestCase):
                 run = packet["runs"][0]
                 self.fixture.rewrite_bound(run, run["isolation_evidence"], mutate)
                 self.assert_invalid(packet, pattern)
+
+    def test_lifecycle_subprocess_environments_are_fail_closed(self) -> None:
+        for field, mutation in (
+            ("service_environment", {"GOGC": "off"}),
+            ("vdbbench_environments", {"scalar": {"GOMAXPROCS": "8"}}),
+        ):
+            with self.subTest(field=field):
+                packet = self.fixture.no_go_packet()
+                run = packet["runs"][0]
+                manifest_path = Path(run["artifact"]["root"]) / "manifest.json"
+                manifest = json.loads(manifest_path.read_text())
+                manifest["harness"][field] = mutation
+                manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
+                run["artifact"]["manifest_sha256"] = policy.sha256_file(manifest_path)
+                self.assert_invalid(packet, "subprocess environment")
 
     def test_search_envelope_is_fail_closed(self) -> None:
         mutations = [

@@ -34,7 +34,7 @@
       "TreeDB/collections/vector_index_rebuild.go": "21bed0f84ae5301d17619ed2753300be73cf422c"
     },
     "harness_blobs": {
-      "scripts/treedb_vectordbbench_artifact.py": "435a96f6a996822610cf8ec4d80e15378e1af0c9"
+      "scripts/treedb_vectordbbench_artifact.py": "521edcd549c01c7dd812a553f0a1685d9c0b4529"
     },
     "vectordbbench": {
       "root": "/mnt/fast4tb/codex-vectordbbench-4545",
@@ -240,6 +240,18 @@
       "--screening-runs", "/mnt/fast4tb/treedb-4587-c0-evidence/screening-runs.json",
       "--generate-winner-selection", "/mnt/fast4tb/treedb-4587-c0-evidence/winner-selection.json"
     ],
+    "lifecycle_service_environment": {
+      "GOMAXPROCS": "12"
+    },
+    "lifecycle_vdbbench_environment_template": {
+      "GOMAXPROCS": "12",
+      "PYTHONPATH": "/mnt/fast4tb/codex-vectordbbench-4545:/mnt/fast4tb/gomap-4586-exec/issue-4587/clients/python/treedb_client/src",
+      "RESULTS_LOCAL_DIR": "{artifact_root}/vdbbench-results/{row}",
+      "LOG_FILE": "{artifact_root}/vdbbench.log",
+      "NUM_PER_BATCH": "500",
+      "TREEDB_LIFECYCLE_SIDECAR": "{artifact_root}/adapter-lifecycle.jsonl",
+      "TREEDB_LIFECYCLE_BOUNDARY_ACK": "{artifact_root}/lifecycle-boundary-diagnostics.json"
+    },
     "lifecycle_harness_argv_template": [
       "/usr/bin/python3", "scripts/treedb_vectordbbench_artifact.py",
       "--python", "/usr/bin/python3", "--use-uv", "off",

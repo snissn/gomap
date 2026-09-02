@@ -1321,6 +1321,7 @@ class ServiceProcessOwnershipTest(unittest.TestCase):
             with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 state = harness.HarnessState(root=root)
+                environment = {"GOMAXPROCS": "12"}
                 proc = mock.Mock(pid=1234)
                 with mock.patch.object(harness.subprocess, "Popen", return_value=proc) as popen, \
                         mock.patch.object(harness, "wait_health", return_value={"ok": True}):
@@ -1336,6 +1337,7 @@ class ServiceProcessOwnershipTest(unittest.TestCase):
                         construction_decision_diagnostics=enabled,
                         pprof_addr="127.0.0.1:6060",
                         append_log=append_log,
+                        environment=environment,
                     )
 
                 expected = [
@@ -1350,6 +1352,28 @@ class ServiceProcessOwnershipTest(unittest.TestCase):
                 self.assertEqual(command, expected)
                 self.assertEqual(command.count("-diagnostic-construction-decisions"), int(enabled))
                 self.assertEqual(popen.call_args.args[0], expected)
+                self.assertEqual(popen.call_args.kwargs["env"], environment)
+                self.assertEqual(state.service_environment, environment)
+
+    def test_lifecycle_vdbbench_environment_is_complete_and_non_inherited(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            harness.os.environ,
+            {"GOMAXPROCS": "12", "GOGC": "off", "HTTPS_PROXY": "http://proxy"},
+            clear=False,
+        ):
+            root = Path(tmp)
+            state = harness.HarnessState(root=root)
+            args = SimpleNamespace(lifecycle=True, num_per_batch=500)
+            environment = harness.vdbbench_row_env(
+                args, Path("/vectordbbench"), Path("/gomap"), state, "scalar",
+            )
+
+        self.assertEqual(set(environment), {
+            "GOMAXPROCS", "PYTHONPATH", "RESULTS_LOCAL_DIR", "LOG_FILE",
+            "NUM_PER_BATCH", "TREEDB_LIFECYCLE_SIDECAR",
+            "TREEDB_LIFECYCLE_BOUNDARY_ACK",
+        })
+        self.assertEqual(state.vdbbench_environments, {"scalar": environment})
 
     def test_construction_decision_diagnostics_cli_defaults_off(self) -> None:
         default = harness.parse_args(["--port", "9876"])
