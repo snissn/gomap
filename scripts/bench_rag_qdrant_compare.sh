@@ -30,6 +30,7 @@ if [[ ! -x "$QDRANT_BIN" ]]; then
 	echo "QDRANT_BIN is not an executable standalone Qdrant binary" >&2
 	exit 2
 fi
+QDRANT_BIN=$(cd -- "$(dirname -- "$QDRANT_BIN")" && pwd -P)/$(basename -- "$QDRANT_BIN")
 
 cleanup() {
 	if [[ -s "$PID_FILE" ]]; then
@@ -92,14 +93,16 @@ URL="http://127.0.0.1:$PORT"
 RESTART_HOOK=$RUN_DIR/restart-qdrant.sh
 printf '#!/usr/bin/env bash\nset -euo pipefail\ncd %q\nexec %q standalone %q %q %q %q %q\n' "$RUN_DIR" "$ROOT/scripts/restart_minima_qdrant_backend.sh" "$QDRANT_BIN" "$PORT" "$QDRANT_STORAGE_PATH" "$RUN_DIR/qdrant.log" "$PID_FILE" >"$RESTART_HOOK"
 chmod +x "$RESTART_HOOK"
-(
+PID=$(
 	cd "$RUN_DIR"
-	exec env QDRANT__SERVICE__HOST=127.0.0.1 QDRANT__SERVICE__HTTP_PORT="$PORT" QDRANT__STORAGE__STORAGE_PATH="$QDRANT_STORAGE_PATH" "$QDRANT_BIN"
-) >"$RUN_DIR/qdrant.log" 2>&1 &
-PID=$!
-IDENTITY=$(ps -o lstart= -o command= -p "$PID" 2>/dev/null || true)
-[[ -n "$IDENTITY" ]] || { echo "Qdrant exited before identity capture" >&2; exit 1; }
-printf '%s\n%s\n' "$PID" "$IDENTITY" >"$PID_FILE"
+	exec "$ROOT/scripts/restart_minima_qdrant_backend.sh" standalone \
+		"$QDRANT_BIN" "$PORT" "$QDRANT_STORAGE_PATH" "$RUN_DIR/qdrant.log" "$PID_FILE"
+)
+{ IFS= read -r recorded_pid; IFS= read -r IDENTITY || true; } <"$PID_FILE"
+[[ "$PID" == "$recorded_pid" && -n "$IDENTITY" ]] || {
+	echo "Qdrant helper returned inconsistent process identity" >&2
+	exit 1
+}
 SERVER_IDENTITY="pid:$PID:$IDENTITY"
 
 "$VENV/bin/python" - "$URL" <<'PY'
