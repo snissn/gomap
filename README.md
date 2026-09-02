@@ -160,9 +160,8 @@ scalar-u8 traversal plus effective 192-row FP32-rerank route (configured maximum
 | Recall@100 / NDCG@100 | 0.9335 / 0.9425 |
 | Concurrent p99 | 2.164 ms |
 
-Durable insert took 80.63% less time than the earlier complete matched run.
-Adjacency construction is now the dominant time-to-ready wall at 5,774.24
-seconds, or 92.5% of column-graph build time. Full topology, lifecycle gates,
+Adjacency construction took 5,774.24 seconds and represented 92.5% of
+column-graph build time. Full topology, lifecycle gates,
 profiles, bottleneck attribution, raw evidence, archive, and caveats:
 [September 1 Cohere 10M lifecycle report](docs/benchmarks/treedb_vectordbbench_cohere10m_lifecycle_2026-09-01.md).
 
