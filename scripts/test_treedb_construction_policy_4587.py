@@ -456,7 +456,8 @@ class DecisionFixture:
             command_started = probe_completed
             command_completed = command_started + timedelta(seconds=1)
             argv = [
-                "scripts/treedb_vdbbench_search_existing_index.py",
+                str(Path(self.contract["source_identity"]["gomap_root"]) /
+                    policy.SEARCH_HELPER_PATH),
                 "--base-url", "http://127.0.0.1:6060",
                 "--index-name", f"index-ef{ef}",
                 "--query-json", str(query_path),
@@ -489,9 +490,11 @@ class DecisionFixture:
                 "--diagnostics-interval", "5", "--service-health-timeout", "60",
             ]
             command_records.append({
-                "schema_version": "treedb-construction-policy-4587-probe-command/v2",
+                "schema_version": "treedb-construction-policy-4587-probe-command/v3",
                 "sequence": position,
                 "argv": argv,
+                "helper_sha256": policy.sha256_file(
+                    HERE.parent / policy.SEARCH_HELPER_PATH),
                 "vdbbench_argv": [
                     self.contract["source_identity"]["runtime"]["python_executable"],
                 ] + policy.expected_vdbbench_argv(
@@ -1323,6 +1326,20 @@ class ValidatorMutations(unittest.TestCase):
         packet = self.fixture.no_go_packet()
         run = packet["runs"][0]
         self.fixture.rewrite_command(
+            run, 0, lambda value: value["argv"].__setitem__(
+                0, str(Path(run["artifact"]["root"]) /
+                       policy.SEARCH_HELPER_PATH)))
+        self.assert_invalid(packet, "authorized existing-index helper")
+
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_command(
+            run, 0, lambda value: value.update({"helper_sha256": "0" * 64}))
+        self.assert_invalid(packet, "authorized helper SHA-256")
+
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_command(
             run, 0, lambda value: value["vdbbench_env"].update({"PYTHONHASHSEED": "1"}))
         self.assert_invalid(packet, "canonical VectorDBBench environment")
 
@@ -1448,6 +1465,11 @@ class ValidatorMutations(unittest.TestCase):
             self.assertEqual(invoked.call_count, 1)
             self.assertEqual(result, args.diagnostic_result)
             self.assertEqual(record["result_sha256"], search_existing_index.sha256_file(result))
+            self.assertEqual(
+                record["argv"][0], str(Path(search_existing_index.__file__).resolve()))
+            self.assertEqual(
+                record["helper_sha256"],
+                search_existing_index.sha256_file(Path(search_existing_index.__file__).resolve()))
             self.assertEqual(
                 json.loads(args.command_ledger.read_text()),
                 record,

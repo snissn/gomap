@@ -27,12 +27,13 @@ SEARCH_ORIGIN_SCHEMA = "treedb-construction-policy-4587-search-origin/v3"
 COORDINATES = [128, 192, 256, 300]
 CONTROL = 300
 HISTORY_PATH = "docs/benchmarks/treedb_construction_policy_history_2026-09-02.md"
+SEARCH_HELPER_PATH = "scripts/treedb_vdbbench_search_existing_index.py"
 PROTOCOL_PATHS = (
     "docs/benchmarks/treedb_construction_policy_c0_4587.json",
     HISTORY_PATH,
     "scripts/treedb_construction_policy_4587.py",
     "scripts/test_treedb_construction_policy_4587.py",
-    "scripts/treedb_vdbbench_search_existing_index.py",
+    SEARCH_HELPER_PATH,
     "scripts/treedb_vectordbbench_artifact.py",
     "scripts/treedb_vectordbbench_artifact_test.py",
 )
@@ -507,6 +508,7 @@ def validate_authorization(contract: dict[str, Any], path: Path, *,
         "path": str(path),
         "sha256": checksum,
         "execution_commit": commit,
+        "protocol_files": protocol_files,
         "service_binary_sha256": expected_binary_sha,
     }
 
@@ -773,6 +775,7 @@ def validate_index_metadata(metadata: dict[str, Any], run_row: dict[str, Any], i
     return generation
 def read_probe_command_record(
     root: Path, origin: dict[str, Any], expected_sequence: int, name: str,
+    expected_helper_path: Path, expected_helper_sha256: str,
 ) -> dict[str, Any]:
     ledger_relative = Path(origin["command_ledger_path"])
     if ledger_relative.is_absolute() or ".." in ledger_relative.parts:
@@ -788,12 +791,12 @@ def read_probe_command_record(
         fail("probe command ledger must contain exactly four append-only evidence records")
     for sequence, record in enumerate(records):
         exact_keys(record, {
-            "schema_version", "sequence", "argv", "vdbbench_argv", "vdbbench_env", "kind",
-            "started_at", "completed_at", "probe_started_at", "probe_completed_at",
-            "exit_code", "query_sha256", "run_id", "route", "result_sha256",
-            "response_sha256", "index_metadata_sha256",
+            "schema_version", "sequence", "argv", "helper_sha256", "vdbbench_argv",
+            "vdbbench_env", "kind", "started_at", "completed_at", "probe_started_at",
+            "probe_completed_at", "exit_code", "query_sha256", "run_id", "route",
+            "result_sha256", "response_sha256", "index_metadata_sha256",
         }, f"probe command ledger[{sequence}]")
-        exact(record["schema_version"], "treedb-construction-policy-4587-probe-command/v2",
+        exact(record["schema_version"], "treedb-construction-policy-4587-probe-command/v3",
               f"probe command ledger[{sequence}].schema_version")
         exact(record["sequence"], sequence, f"probe command ledger[{sequence}].sequence")
     record = records[expected_sequence]
@@ -801,13 +804,17 @@ def read_probe_command_record(
     exact(origin["command_record_sha256"], canonical_sha256(record), f"{name}.command record SHA-256")
     exact(record["exit_code"], 0, f"{name}.command exit code")
     argv = record["argv"]
-    if (not isinstance(argv, list) or not argv or not isinstance(argv[0], str)
-            or Path(argv[0]).name != "treedb_vdbbench_search_existing_index.py"):
+    if not isinstance(argv, list) or not argv or not isinstance(argv[0], str):
         fail(f"{name}.command argv must execute the frozen existing-index helper")
+    if Path(argv[0]).resolve() != expected_helper_path:
+        fail(f"{name}.command argv must resolve to the authorized existing-index helper")
+    exact(record["helper_sha256"], expected_helper_sha256,
+          f"{name}.command authorized helper SHA-256")
     return record
 
+
 def probe_argv_options(argv: Any, name: str) -> dict[str, str]:
-    if not isinstance(argv, list) or not argv or Path(argv[0]).name != "treedb_vdbbench_search_existing_index.py":
+    if not isinstance(argv, list) or not argv or not isinstance(argv[0], str):
         fail(f"{name}.argv must execute the frozen existing-index helper")
     tokens = argv[1:]
     if len(tokens) % 2:
@@ -923,7 +930,7 @@ def validate_search_isolation(
 def validate_search_evidence(
     run_row: dict[str, Any], root: Path, timing: dict[str, Any], expected_base_url: str,
     expected_vdbbench_dir: str, expected_gomap_root: str, contract: dict[str, Any],
-    expected_binary_sha256: str,
+    expected_binary_sha256: str, authorized_helper_sha256: str,
 ) -> tuple[dict[str, dict[str, float]], datetime]:
     rows = run_row.get("search_evidence")
     if not isinstance(rows, list) or len(rows) != len(SEARCH_ORDER):
@@ -945,6 +952,13 @@ def validate_search_evidence(
     python_sha256 = full_sha(runtime["python_sha256"], "VectorDBBench Python SHA-256", 64)
     if sha256_file(Path(python_executable)) != python_sha256:
         fail("frozen VectorDBBench Python interpreter checksum mismatch")
+    expected_helper_path = (
+        Path(contract["source_identity"]["gomap_root"]) / SEARCH_HELPER_PATH
+    ).resolve()
+    expected_helper_sha256 = full_sha(
+        authorized_helper_sha256, "authorized existing-index helper SHA-256", 64)
+    exact(sha256_file(expected_helper_path), expected_helper_sha256,
+          "authorized existing-index helper checksum")
     route_envelopes: dict[
         str, tuple[datetime, datetime, datetime, datetime, Any]
     ] = {}
@@ -1012,7 +1026,8 @@ def validate_search_evidence(
                 f"search_evidence[{position}] route envelope binding")
             service_started, service_completed = route_envelopes[item["route"]][2:4]
         command = read_probe_command_record(
-            root, origin, position, f"search_evidence[{position}].origin")
+            root, origin, position, f"search_evidence[{position}].origin",
+            expected_helper_path, expected_helper_sha256)
         exact(command["run_id"], run_row["run_id"], f"search_evidence[{position}] command run")
         exact((command["kind"], command["route"]), (item["kind"], item["route"]),
               f"search_evidence[{position}] command identity")
@@ -1423,7 +1438,7 @@ def measurement_source_values(
 
 
 def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: str,
-                 run_base_validator: bool) -> dict[str, Any]:
+                 run_base_validator: bool, authorized_helper_sha256: str) -> dict[str, Any]:
     exact_keys(row, RUN_KEYS, "run")
     if not isinstance(row["run_id"], str) or not row["run_id"]:
         fail("run.run_id must be a non-empty string")
@@ -1534,7 +1549,8 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
     production, search_completed = validate_search_evidence(
         row, root, timing, object_at(manifest["service"], "manifest.service").get("base_url"),
         contract["source_identity"]["vectordbbench"]["root"],
-        contract["source_identity"]["gomap_root"], contract, service_binary_sha256)
+        contract["source_identity"]["gomap_root"], contract, service_binary_sha256,
+        authorized_helper_sha256)
     return {"row": row, "phases": phases, "resources": resources, "production": production,
             "projection": projection, "service_binary_sha256": service_binary_sha256,
             "timing": timing, "search_completed": search_completed}
@@ -1647,8 +1663,12 @@ def validate_decision(packet: dict[str, Any], contract: dict[str, Any], *, run_b
     runs = packet.get("runs")
     if not isinstance(runs, list):
         fail("result runs must be a list")
-    validated = [validate_run(object_at(row, f"runs[{index}]"), contract, commit, run_base_validator)
-                 for index, row in enumerate(runs)]
+    validated = [
+        validate_run(
+            object_at(row, f"runs[{index}]"), contract, commit, run_base_validator,
+            authorization["protocol_files"][SEARCH_HELPER_PATH])
+        for index, row in enumerate(runs)
+    ]
     binary_digests = {item["service_binary_sha256"] for item in validated}
     exact(binary_digests, {authorization["service_binary_sha256"]},
           "one authorized service binary across all runs")
@@ -1711,7 +1731,9 @@ def generate_winner_selection(contract: dict[str, Any], runs_path: Path, output_
         fail("screening runs file must contain exactly four rows")
     commit = authorization["execution_commit"]
     screening = [
-        validate_run(object_at(row, f"screening runs[{index}]"), contract, commit, True)
+        validate_run(
+            object_at(row, f"screening runs[{index}]"), contract, commit, True,
+            authorization["protocol_files"][SEARCH_HELPER_PATH])
         for index, row in enumerate(rows)
     ]
     roots = [item["row"]["artifact"]["root"] for item in screening]

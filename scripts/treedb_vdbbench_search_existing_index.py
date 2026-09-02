@@ -390,9 +390,10 @@ def run_vdbbench_command(
     generated[0].replace(result_path)
     existing_records = args.command_ledger.read_text().splitlines() if args.command_ledger.exists() else []
     record = {
-        "schema_version": "treedb-construction-policy-4587-probe-command/v2",
+        "schema_version": "treedb-construction-policy-4587-probe-command/v3",
         "sequence": len(existing_records),
-        "argv": sys.argv,
+        "argv": [str(Path(__file__).resolve()), *sys.argv[1:]],
+        "helper_sha256": sha256_file(Path(__file__).resolve()),
         "vdbbench_argv": command,
         "vdbbench_env": bound_env,
         "kind": kind,
