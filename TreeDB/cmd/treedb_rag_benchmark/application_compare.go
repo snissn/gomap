@@ -934,6 +934,12 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		}
 		qpsMean := 0.0
 		for rep, performance := range cell.RepetitionPerformance {
+			retainedWall := 0.0
+			for _, sample := range cell.Samples {
+				if sample.Repetition == rep {
+					retainedWall += sample.TotalMS / 1000
+				}
+			}
 			expectedQPS := float64(manifest.Config.SamplesPerCell) / performance.WallSeconds
 			expectedOrder := "forward"
 			if rep%2 == 1 {
@@ -941,7 +947,8 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 			}
 			if performance.Repetition != rep || performance.Order != expectedOrder ||
 				performance.Samples != manifest.Config.SamplesPerCell ||
-				performance.WallSeconds <= 0 || !comparisonFloatMatches(performance.QPS, expectedQPS) {
+				performance.WallSeconds <= 0 || performance.WallSeconds+1e-9 < retainedWall ||
+				!comparisonFloatMatches(performance.QPS, expectedQPS) {
 				return fmt.Errorf("Qdrant artifact cell %s/%s has invalid repetition wall evidence", cell.Route, cell.Filter)
 			}
 			qpsMean += performance.QPS

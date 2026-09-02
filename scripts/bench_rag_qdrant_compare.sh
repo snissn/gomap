@@ -84,7 +84,7 @@ PY
 
 run_capped 90 build-comparator go build -buildvcs=true -ldflags "$COMPARATOR_LDFLAGS" -o "$COMPARATOR_BIN" ./TreeDB/cmd/treedb_rag_benchmark
 run_capped 90 manifest "$COMPARATOR_BIN" -dump-application-comparison-manifest "$MANIFEST"
-run_capped 180 treedb-build-query-reopen "$COMPARATOR_BIN" \
+run_capped 200 treedb-build-query-reopen "$COMPARATOR_BIN" \
 	-dir "$TREEDB_DIR" \
 	-harness-revision "$HARNESS_REVISION" \
 	-application-comparison-treedb-output "$TREEDB_ARTIFACT"
@@ -120,7 +120,7 @@ while time.monotonic()<deadline:
 raise SystemExit('Qdrant readiness exceeded 90 seconds')
 PY
 
-run_capped 270 qdrant-build-query-reopen "$VENV/bin/python" benchmarks/vector_db_compare/rag_qdrant_runner.py \
+run_capped 300 qdrant-build-query-reopen "$VENV/bin/python" benchmarks/vector_db_compare/rag_qdrant_runner.py \
 	--manifest "$MANIFEST" --output "$QDRANT_ARTIFACT" --url "$URL" \
 	--collection "$QDRANT_COLLECTION" --server-identity "$SERVER_IDENTITY" \
 	--harness-revision "$HARNESS_REVISION" --storage-path "$QDRANT_STORAGE_PATH" \

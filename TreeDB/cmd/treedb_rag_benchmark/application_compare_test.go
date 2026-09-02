@@ -123,7 +123,8 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 				if repetition%2 == 1 {
 					order = "reverse"
 				}
-				cell.RepetitionPerformance = append(cell.RepetitionPerformance, qdrantComparisonRepetition{Repetition: repetition, Order: order, Samples: 100, WallSeconds: 1, QPS: 100})
+				wall := 5.17 + float64(10*repetition)
+				cell.RepetitionPerformance = append(cell.RepetitionPerformance, qdrantComparisonRepetition{Repetition: repetition, Order: order, Samples: 100, WallSeconds: wall, QPS: 100 / wall})
 				for ordinal := range manifest.Config.SamplesPerCell {
 					queryIndex := ordinal % len(manifest.Queries)
 					if order == "reverse" {
@@ -137,7 +138,9 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 					})
 				}
 			}
-			cell.Summary.QPS = 100
+			for _, repetition := range cell.RepetitionPerformance {
+				cell.Summary.QPS += repetition.QPS / float64(len(cell.RepetitionPerformance))
+			}
 			latencies, quality, err := recomputeQdrantCellEvidence(cell, manifest)
 			if err != nil {
 				t.Fatal(err)
@@ -231,6 +234,16 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		{"wrong timing semantics", func(a *qdrantComparisonArtifact) { a.Cells[0].TimingSemantics = "search only" }},
 		{"missing total work", func(a *qdrantComparisonArtifact) { a.Cells[0].Samples[0].TotalMS = 1 }},
 		{"nearest-rank latency", func(a *qdrantComparisonArtifact) { a.Cells[0].Summary.LatencyMSP99 = a.Cells[0].Samples[296].TotalMS }},
+		{"wall shorter than retained samples", func(a *qdrantComparisonArtifact) {
+			performance := &a.Cells[0].RepetitionPerformance[0]
+			performance.WallSeconds /= 2
+			performance.QPS = 100 / performance.WallSeconds
+			qps := 0.0
+			for _, repetition := range a.Cells[0].RepetitionPerformance {
+				qps += repetition.QPS
+			}
+			a.Cells[0].Summary.QPS = qps / float64(len(a.Cells[0].RepetitionPerformance))
+		}},
 		{"missing repetition wall", func(a *qdrantComparisonArtifact) { a.Cells[0].RepetitionPerformance[0].WallSeconds = 0 }},
 		{"wrong QPS mean", func(a *qdrantComparisonArtifact) { a.Cells[0].Summary.QPS = 99 }},
 		{"wrong latency summary", func(a *qdrantComparisonArtifact) { a.Cells[0].Summary.LatencyMSP95++ }},
