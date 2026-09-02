@@ -16,12 +16,13 @@ const (
 )
 
 type qdrantComparisonServer struct {
-	Version    string         `json:"version"`
-	Deployment string         `json:"deployment"`
-	Image      string         `json:"image"`
-	Identity   string         `json:"identity"`
-	LocalMode  bool           `json:"local_mode"`
-	Config     map[string]any `json:"config"`
+	Version      string         `json:"version"`
+	Deployment   string         `json:"deployment"`
+	Image        string         `json:"image"`
+	BinarySHA256 string         `json:"binary_sha256,omitempty"`
+	Identity     string         `json:"identity"`
+	LocalMode    bool           `json:"local_mode"`
+	Config       map[string]any `json:"config"`
 }
 
 type qdrantComparisonResources struct {
@@ -41,12 +42,12 @@ type qdrantComparisonReopen struct {
 }
 
 type qdrantComparisonRouteProof struct {
-	API              string `json:"api"`
-	NamedVector      string `json:"named_vector"`
-	Fusion           string `json:"fusion,omitempty"`
-	Fallbacks        int    `json:"fallbacks"`
-	ExhaustiveSearch bool   `json:"exhaustive_search"`
-	BoundedFetch     bool   `json:"bounded_fetch"`
+	API              string   `json:"api"`
+	NamedVectors     []string `json:"named_vectors"`
+	Fusion           string   `json:"fusion,omitempty"`
+	Fallbacks        int      `json:"fallbacks"`
+	ExhaustiveSearch bool     `json:"exhaustive_search"`
+	BoundedFetch     bool     `json:"bounded_fetch"`
 }
 
 type qdrantComparisonSummary struct {
@@ -75,6 +76,8 @@ type qdrantComparisonCell struct {
 type qdrantComparisonArtifact struct {
 	Schema               string                    `json:"schema"`
 	Backend              string                    `json:"backend"`
+	HarnessRevision      string                    `json:"harness_revision"`
+	ClientVersion        string                    `json:"client_version"`
 	ManifestSHA256       string                    `json:"manifest_sha256"`
 	FixtureSHA256        string                    `json:"fixture_sha256"`
 	SemanticVectorSHA256 string                    `json:"semantic_vector_sha256"`
@@ -104,14 +107,20 @@ type applicationComparisonRow struct {
 }
 
 type applicationComparisonReport struct {
-	Schema               string                     `json:"schema"`
-	State                string                     `json:"state"`
-	ManifestSHA256       string                     `json:"manifest_sha256"`
-	FixtureSHA256        string                     `json:"fixture_sha256"`
-	SemanticVectorSHA256 string                     `json:"semantic_vector_sha256"`
-	ConfigSHA256         string                     `json:"config_sha256"`
-	Rows                 []applicationComparisonRow `json:"rows"`
-	Dispositions         []string                   `json:"dispositions"`
+	Schema                   string                     `json:"schema"`
+	State                    string                     `json:"state"`
+	HarnessRevision          string                     `json:"harness_revision"`
+	TreeDBBinarySHA256       string                     `json:"treedb_binary_sha256"`
+	QdrantClientVersion      string                     `json:"qdrant_client_version"`
+	QdrantServerVersion      string                     `json:"qdrant_server_version"`
+	QdrantServerBinarySHA256 string                     `json:"qdrant_server_binary_sha256,omitempty"`
+	QdrantImage              string                     `json:"qdrant_image,omitempty"`
+	ManifestSHA256           string                     `json:"manifest_sha256"`
+	FixtureSHA256            string                     `json:"fixture_sha256"`
+	SemanticVectorSHA256     string                     `json:"semantic_vector_sha256"`
+	ConfigSHA256             string                     `json:"config_sha256"`
+	Rows                     []applicationComparisonRow `json:"rows"`
+	Dispositions             []string                   `json:"dispositions"`
 }
 
 func readJSONFile(path string, value any) ([]byte, error) {
@@ -145,27 +154,42 @@ func validateComparisonManifest(raw []byte, manifest *applicationComparisonManif
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func selectedTreeDBComparisonRows(report *applicationReport, manifest applicationComparisonManifest) ([]applicationComparisonRow, error) {
-	if report.Schema != applicationReportSchema || report.Provenance.FixtureSHA256 != manifest.FixtureSHA256 ||
-		report.Provenance.SemanticVectorSHA256 != manifest.SemanticVectorSHA256 || applicationFixtureDigest(&report.Fixture) != manifest.FixtureSHA256 ||
-		report.SemanticVectors.Digest() != manifest.SemanticVectorSHA256 {
-		return nil, fmt.Errorf("TreeDB artifact manifest/fixture/vector binding mismatch")
+func validSHA256(value string) bool {
+	if len(value) != 64 {
+		return false
 	}
-	if len(report.Failures) != 0 || !report.Lifecycle["semantic_minilm"].ColdReopenParity {
-		return nil, fmt.Errorf("TreeDB artifact has failures or missing semantic reopen parity")
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func validateTreeDBComparisonArtifact(artifact *treeDBComparisonArtifact, manifest applicationComparisonManifest, manifestSHA string) ([]applicationComparisonRow, error) {
+	if artifact.Schema != treeDBComparisonArtifactSchema || artifact.Authority != "M1_RETAINED_BASELINE" ||
+		artifact.ManifestSHA256 != manifestSHA || artifact.ProductBaseSHA != manifest.ProductBaseSHA ||
+		artifact.FixtureSHA256 != manifest.FixtureSHA256 || artifact.SemanticVectorSHA256 != manifest.SemanticVectorSHA256 ||
+		artifact.ConfigSHA256 != manifest.ConfigSHA256 || applicationComparisonConfigDigest(artifact.Config) != manifest.ConfigSHA256 ||
+		artifact.SourceCount != len(manifest.Sources) || artifact.ChunkCount != len(manifest.Chunks) || artifact.QueryCount != len(manifest.Queries) {
+		return nil, fmt.Errorf("TreeDB artifact authority/manifest/hash/config/cardinality binding mismatch")
+	}
+	if !isFullRevision(artifact.HarnessRevision) || !validSHA256(artifact.BinarySHA256) {
+		return nil, fmt.Errorf("TreeDB artifact lacks full clean harness/binary identity")
+	}
+	if len(artifact.Failures) != 0 || artifact.StorageBytes <= 0 || artifact.BuildReopenSeconds <= 0 ||
+		artifact.BuildReopenSeconds > float64(manifest.Config.PhaseTimeoutSeconds) || artifact.QuerySeconds <= 0 ||
+		artifact.QuerySeconds > float64(manifest.Config.PhaseTimeoutSeconds) {
+		return nil, fmt.Errorf("TreeDB artifact failed or lacks bounded build/query/storage evidence")
+	}
+	if err := validateLifecycleEvidence("semantic_minilm", artifact.Lifecycle); err != nil {
+		return nil, err
 	}
 	routeNames := map[string]string{"text_only": "lexical", "vector_only": "dense", "hybrid": "hybrid"}
-	wantedFilters := map[string]bool{}
-	for _, filter := range manifest.Filters {
-		wantedFilters[filter.ID] = true
-	}
 	seen := map[string]bool{}
 	rows := make([]applicationComparisonRow, 0, 12)
-	for _, row := range report.Rows {
+	for _, row := range artifact.Rows {
 		route, ok := routeNames[row.Cell.Route]
-		if !ok || !wantedFilters[row.Cell.Filter] || row.Cell.Projection != "fetch_topk" || row.Cell.Collapse != "disabled" ||
-			row.Cell.Surface != "direct_collection" || row.Cell.Embedding != "semantic_minilm" || row.Cell.Clients != 1 {
-			continue
+		if !ok || !containsString(applicationFilterOrder, row.Cell.Filter) || row.Cell.Projection != "fetch_topk" ||
+			row.Cell.Collapse != "disabled" || row.Cell.Surface != "direct_collection" ||
+			row.Cell.Embedding != "semantic_minilm" || row.Cell.Clients != 1 {
+			return nil, fmt.Errorf("TreeDB artifact contains non-comparison cell %+v", row.Cell)
 		}
 		key := route + "\x00" + row.Cell.Filter
 		if seen[key] {
@@ -174,8 +198,9 @@ func selectedTreeDBComparisonRows(report *applicationReport, manifest applicatio
 		seen[key] = true
 		if row.Status != "supported" || row.Errors != 0 || row.Counters["full_document_scan_fallbacks"] != 0 ||
 			row.Counters["cross_tenant_results"] != 0 || row.Counters["cross_workspace_results"] != 0 ||
-			row.Counters["documents_fetched"] > float64(manifest.Config.TopK) || len(row.Repetitions) < manifest.Config.Repetitions ||
-			len(row.Samples) < manifest.Config.SamplesPerCell*manifest.Config.Repetitions {
+			row.Counters["documents_fetched"] > float64(manifest.Config.TopK) ||
+			len(row.Repetitions) != manifest.Config.Repetitions ||
+			len(row.Samples) != manifest.Config.SamplesPerCell*manifest.Config.Repetitions {
 			return nil, fmt.Errorf("TreeDB artifact cell %s/%s is partial, leaking, unbounded, failed, or fell back", route, row.Cell.Filter)
 		}
 		equivalence := "direct"
@@ -192,21 +217,29 @@ func selectedTreeDBComparisonRows(report *applicationReport, manifest applicatio
 	return rows, nil
 }
 
-func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manifest applicationComparisonManifest, manifestSHA string) error {
-	if artifact.Schema != qdrantComparisonArtifactSchema || artifact.Backend != "qdrant_server" || artifact.ManifestSHA256 != manifestSHA ||
+func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manifest applicationComparisonManifest, manifestSHA, harnessRevision string) error {
+	if artifact.Schema != qdrantComparisonArtifactSchema || artifact.Backend != "qdrant_server" ||
+		artifact.HarnessRevision != harnessRevision || !isFullRevision(artifact.HarnessRevision) ||
+		artifact.ClientVersion != "1.19.0" || artifact.ManifestSHA256 != manifestSHA ||
 		artifact.FixtureSHA256 != manifest.FixtureSHA256 || artifact.SemanticVectorSHA256 != manifest.SemanticVectorSHA256 ||
 		artifact.ConfigSHA256 != manifest.ConfigSHA256 || artifact.SourceCount != len(manifest.Sources) ||
 		artifact.ChunkCount != len(manifest.Chunks) || artifact.QueryCount != len(manifest.Queries) {
-		return fmt.Errorf("Qdrant artifact manifest/hash/cardinality binding mismatch")
+		return fmt.Errorf("Qdrant artifact runtime/manifest/hash/cardinality binding mismatch")
 	}
 	if artifact.Server.Version != "1.19.0" || artifact.Server.LocalMode || artifact.Server.Identity == "" ||
-		(artifact.Server.Deployment != "docker" && artifact.Server.Deployment != "standalone") {
-		return fmt.Errorf("Qdrant artifact lacks pinned external server identity")
+		(artifact.Server.Deployment != "docker" && artifact.Server.Deployment != "standalone") ||
+		artifact.Server.Config["dense"] != manifest.Config.DenseVectorName ||
+		artifact.Server.Config["sparse"] != manifest.Config.SparseVectorName {
+		return fmt.Errorf("Qdrant artifact lacks pinned external server/config identity")
 	}
 	if artifact.Server.Deployment == "docker" && !strings.Contains(artifact.Server.Image, "sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc") {
 		return fmt.Errorf("Qdrant artifact image is not digest pinned")
 	}
-	if len(artifact.Failures) != 0 || !artifact.Reopen.Attempted || !artifact.Reopen.Succeeded || artifact.Reopen.Version != "1.19.0" || artifact.Reopen.PointCount != len(manifest.Chunks) {
+	if artifact.Server.Deployment == "standalone" && !validSHA256(artifact.Server.BinarySHA256) {
+		return fmt.Errorf("Qdrant standalone artifact lacks server binary SHA-256")
+	}
+	if len(artifact.Failures) != 0 || !artifact.Reopen.Attempted || !artifact.Reopen.Succeeded ||
+		artifact.Reopen.Version != "1.19.0" || artifact.Reopen.PointCount != len(manifest.Chunks) {
 		return fmt.Errorf("Qdrant artifact failed or lacks successful durable reopen")
 	}
 	if artifact.Resources.DurableBytes <= 0 || artifact.Resources.HostPIDMetrics == "" {
@@ -215,7 +248,8 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 	if artifact.Server.Deployment == "docker" && len(artifact.Resources.DockerStats) == 0 {
 		return fmt.Errorf("Qdrant Docker artifact lacks container resource evidence")
 	}
-	if artifact.Server.Deployment == "standalone" && (len(artifact.Resources.ProcessSamples) < 4 || artifact.Resources.PeakObservedRSSBytes <= 0 || artifact.Resources.CPUSeconds <= 0) {
+	if artifact.Server.Deployment == "standalone" && (len(artifact.Resources.ProcessSamples) < 4 ||
+		artifact.Resources.PeakObservedRSSBytes <= 0 || artifact.Resources.CPUSeconds <= 0) {
 		return fmt.Errorf("Qdrant standalone artifact lacks process RSS/CPU evidence")
 	}
 	seen := map[string]bool{}
@@ -225,12 +259,24 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 			return fmt.Errorf("Qdrant artifact duplicate cell %s/%s", cell.Route, cell.Filter)
 		}
 		seen[key] = true
-		if !containsString([]string{"lexical", "dense", "hybrid"}, cell.Route) || !containsString(applicationFilterOrder, cell.Filter) ||
-			cell.Warmups != manifest.Config.WarmupsPerCell*manifest.Config.Repetitions || cell.Repetitions != manifest.Config.Repetitions ||
-			len(cell.Samples) != manifest.Config.SamplesPerCell*manifest.Config.Repetitions || cell.Errors != 0 || cell.Timeouts != 0 ||
-			cell.Leakage != 0 || cell.FetchMaxCount > manifest.Config.TopK || cell.RouteProof.Fallbacks != 0 ||
-			cell.RouteProof.ExhaustiveSearch || !cell.RouteProof.BoundedFetch || cell.RouteProof.API != "qdrant.query_points" {
+		if !containsString([]string{"lexical", "dense", "hybrid"}, cell.Route) ||
+			!containsString(applicationFilterOrder, cell.Filter) ||
+			cell.Warmups != manifest.Config.WarmupsPerCell || cell.Repetitions != manifest.Config.Repetitions ||
+			len(cell.Samples) != manifest.Config.SamplesPerCell*manifest.Config.Repetitions ||
+			cell.Errors != 0 || cell.Timeouts != 0 || cell.Leakage != 0 ||
+			cell.FetchMaxCount > manifest.Config.TopK || cell.RouteProof.Fallbacks != 0 ||
+			cell.RouteProof.ExhaustiveSearch || !cell.RouteProof.BoundedFetch ||
+			cell.RouteProof.API != "qdrant.query_points" {
 			return fmt.Errorf("Qdrant artifact cell %s/%s is partial, leaking, unbounded, failed, exhaustive, or fell back", cell.Route, cell.Filter)
+		}
+		wantVectors := []string{manifest.Config.SparseVectorName}
+		if cell.Route == "dense" {
+			wantVectors = []string{manifest.Config.DenseVectorName}
+		} else if cell.Route == "hybrid" {
+			wantVectors = []string{manifest.Config.SparseVectorName, manifest.Config.DenseVectorName}
+		}
+		if !equalStrings(cell.RouteProof.NamedVectors, wantVectors) {
+			return fmt.Errorf("Qdrant %s cell %s named vectors=%q want %q", cell.Route, cell.Filter, cell.RouteProof.NamedVectors, wantVectors)
 		}
 		if cell.Route == "hybrid" && cell.RouteProof.Fusion != "rrf" {
 			return fmt.Errorf("Qdrant hybrid cell %s lacks Query API RRF proof", cell.Filter)
@@ -255,11 +301,11 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, outputPath, 
 	if err != nil {
 		return err
 	}
-	var tree applicationReport
+	var tree treeDBComparisonArtifact
 	if _, err := readJSONFile(treePath, &tree); err != nil {
 		return err
 	}
-	treeRows, err := selectedTreeDBComparisonRows(&tree, manifest)
+	treeRows, err := validateTreeDBComparisonArtifact(&tree, manifest, manifestSHA)
 	if err != nil {
 		return err
 	}
@@ -267,10 +313,13 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, outputPath, 
 	if _, err := readJSONFile(qdrantPath, &qdrant); err != nil {
 		return err
 	}
-	if err := validateQdrantComparisonArtifact(&qdrant, manifest, manifestSHA); err != nil {
+	if err := validateQdrantComparisonArtifact(&qdrant, manifest, manifestSHA, tree.HarnessRevision); err != nil {
 		return err
 	}
 	report := applicationComparisonReport{Schema: applicationComparisonSchema, State: "validated",
+		HarnessRevision: tree.HarnessRevision, TreeDBBinarySHA256: tree.BinarySHA256,
+		QdrantClientVersion: qdrant.ClientVersion, QdrantServerVersion: qdrant.Server.Version,
+		QdrantServerBinarySHA256: qdrant.Server.BinarySHA256, QdrantImage: qdrant.Server.Image,
 		ManifestSHA256: manifestSHA, FixtureSHA256: manifest.FixtureSHA256,
 		SemanticVectorSHA256: manifest.SemanticVectorSHA256, ConfigSHA256: manifest.ConfigSHA256,
 		Rows: treeRows, Dispositions: []string{
@@ -301,7 +350,7 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, outputPath, 
 		return err
 	}
 	var md strings.Builder
-	fmt.Fprintf(&md, "# TreeDB / Qdrant bounded RAG comparison\n\nState: **validated**  \nManifest SHA-256: `%s`\n\n", manifestSHA)
+	fmt.Fprintf(&md, "# TreeDB / Qdrant bounded RAG comparison\n\nState: **validated**  \nManifest SHA-256: `%s`  \nHarness revision: `%s`  \nTreeDB binary SHA-256: `%s`  \nQdrant client/server: `%s` / `%s`  \nQdrant server binary SHA-256: `%s`  \nQdrant image: `%s`\n\n", manifestSHA, report.HarnessRevision, report.TreeDBBinarySHA256, report.QdrantClientVersion, report.QdrantServerVersion, report.QdrantServerBinarySHA256, report.QdrantImage)
 	md.WriteString("| Backend | Route | Filter | Semantics | Samples | Reps | QPS | p50 ms | p95 ms | p99 ms | P@10 | nDCG@10 | MRR@10 | Parent R@10 |\n|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, row := range report.Rows {
 		fmt.Fprintf(&md, "| %s | %s | %s | %s | %d | %d | %.2f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f |\n",
