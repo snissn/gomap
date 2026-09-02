@@ -17,6 +17,7 @@ const (
 	qdrantComparisonArtifactSchema      = "treedb-rag-qdrant-comparison/v1"
 	applicationComparisonSchema         = "treedb-rag-system-comparison/v1"
 	qdrantSparseWeightSignificantDigits = 14
+	qdrantClientLockSHA256              = "4c66f563c863801ab692132c5089075dc398959771784756ee9d14f7a353e595"
 )
 
 var qdrantSparseTokenPattern = regexp.MustCompile(`[a-z0-9]+`)
@@ -827,7 +828,7 @@ func recomputeTreeDBCellEvidence(row applicationRow, manifest applicationCompari
 func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manifest applicationComparisonManifest, manifestSHA, harnessRevision string) error {
 	if artifact.Schema != qdrantComparisonArtifactSchema || artifact.Backend != "qdrant_server" ||
 		artifact.HarnessRevision != harnessRevision || !isFullRevision(artifact.HarnessRevision) ||
-		artifact.ClientVersion != "1.19.0" || !isSHA256(artifact.ClientLockSHA256) ||
+		artifact.ClientVersion != "1.19.0" || artifact.ClientLockSHA256 != qdrantClientLockSHA256 ||
 		!strings.HasPrefix(artifact.PythonVersion, "3.13.") || artifact.PythonImplementation != "CPython" ||
 		!strings.Contains(artifact.PythonPlatform, "macOS") || !strings.Contains(artifact.PythonPlatform, "arm64") ||
 		!isSHA256(artifact.PythonExecutableSHA256) || artifact.ManifestSHA256 != manifestSHA ||

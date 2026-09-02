@@ -3,6 +3,8 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -35,6 +37,16 @@ func TestApplicationComparisonManifestDeterministic(t *testing.T) {
 		}
 	}
 }
+func TestQdrantClientLockDigestIsBound(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "benchmarks", "vector_db_compare", "qdrant-client-darwin-arm64-py313.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	if got := hex.EncodeToString(sum[:]); got != qdrantClientLockSHA256 {
+		t.Fatalf("Qdrant client lock SHA-256=%s, want %s", got, qdrantClientLockSHA256)
+	}
+}
 
 func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest, string, qdrantComparisonArtifact) {
 	t.Helper()
@@ -59,7 +71,7 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 	harness := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	artifact := qdrantComparisonArtifact{
 		Schema: qdrantComparisonArtifactSchema, Backend: "qdrant_server", HarnessRevision: harness,
-		ClientVersion: "1.19.0", ClientLockSHA256: strings.Repeat("1", 64),
+		ClientVersion: "1.19.0", ClientLockSHA256: qdrantClientLockSHA256,
 		PythonVersion: "3.13.11", PythonPlatform: "macOS-26.1-arm64-arm-64bit-Mach-O",
 		PythonImplementation: "CPython", PythonExecutableSHA256: strings.Repeat("2", 64), ManifestSHA256: manifestSHA,
 		FixtureSHA256: manifest.FixtureSHA256, SemanticVectorSHA256: manifest.SemanticVectorSHA256,
@@ -244,6 +256,7 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		{"wrong named vectors", func(a *qdrantComparisonArtifact) { a.Cells[0].RouteProof.NamedVectors = []string{"dense_minilm"} }},
 		{"wrong warmups", func(a *qdrantComparisonArtifact) { a.Cells[0].Warmups = 60 }},
 		{"missing client lock digest", func(a *qdrantComparisonArtifact) { a.ClientLockSHA256 = "" }},
+		{"wrong client lock digest", func(a *qdrantComparisonArtifact) { a.ClientLockSHA256 = strings.Repeat("1", 64) }},
 		{"wrong Python version", func(a *qdrantComparisonArtifact) { a.PythonVersion = "3.14.0" }},
 		{"wrong Python platform", func(a *qdrantComparisonArtifact) { a.PythonPlatform = "Linux-x86_64" }},
 		{"wrong Python implementation", func(a *qdrantComparisonArtifact) { a.PythonImplementation = "PyPy" }},
