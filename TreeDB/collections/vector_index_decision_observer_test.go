@@ -159,6 +159,38 @@ func TestVectorIndexConstructionDecisionObserverCountsUpperLayerGreedyScores(t *
 	}
 }
 
+func TestVectorIndexConstructionDecisionObserverCountsReciprocalCandidateScores(t *testing.T) {
+	const dimensions = 16
+	rows := vectorIndexReciprocalParityRows4257(96, dimensions, true)
+	index := buildVectorIndexDecisionObserver4461(t, rows, nil)
+	fromNodeID, toNodeID := -1, -1
+	for source := range index.nodes {
+		neighbors := index.nodes[source].neighbors[0]
+		if len(neighbors) == 0 {
+			continue
+		}
+		fromNodeID = source
+		toNodeID = neighbors[len(neighbors)-1].nodeID
+		index.nodes[source].neighbors[0] = neighbors[:len(neighbors)-1]
+		break
+	}
+	if fromNodeID < 0 {
+		t.Fatal("fixture has no reciprocal edge to replay")
+	}
+	observer := &vectorIndexConstructionDecisionObserverV1{}
+	index.decisionObserver = observer
+	link := vectorIndexFrozenPrefixReciprocalLink{fromNodeID: fromNodeID, toNodeID: toNodeID, layer: 0}
+	if pruned := index.linkFrozenPrefixReciprocalGroupLocked([]vectorIndexFrozenPrefixReciprocalLink{link}, nil); pruned {
+		t.Fatal("single reciprocal candidate unexpectedly pruned")
+	}
+	stats := observer.snapshot().Reciprocal
+	if stats.DirectExactFP32Rows != 1 ||
+		stats.DirectExactFP32Calls != 1 ||
+		stats.ExactFP32Dimensions != uint64(dimensions) {
+		t.Fatalf("reciprocal candidate score accounting=%+v", stats)
+	}
+}
+
 type vectorIndexDecisionMetadataSnapshot4461 struct {
 	entry, maxLevel, dimensions, m, efConstruction int
 	mutationSeq, frozenPrefixBatches               uint64

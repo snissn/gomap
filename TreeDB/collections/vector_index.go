@@ -2770,6 +2770,9 @@ func (idx *VectorIndex) linkFrozenPrefixReciprocalGroupLocked(links []vectorInde
 		if duplicate {
 			continue
 		}
+		if context != nil {
+			context.recordRowFrom(fromNodeID, link.toNodeID, false)
+		}
 		distance, ok := normalizeVectorIndexEdgeDistance(idx.distanceBetweenNodesLocked(fromNodeID, link.toNodeID))
 		if ok {
 			candidates = append(candidates, vectorIndexNeighbor{nodeID: link.toNodeID, distance: distance})
