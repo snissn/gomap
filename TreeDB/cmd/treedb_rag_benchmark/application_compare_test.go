@@ -47,20 +47,29 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 	}
 	sum := sha256.Sum256(raw)
 	manifestSHA := hex.EncodeToString(sum[:])
+	harness := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	artifact := qdrantComparisonArtifact{
-		Schema: qdrantComparisonArtifactSchema, Backend: "qdrant_server", ManifestSHA256: manifestSHA,
+		Schema: qdrantComparisonArtifactSchema, Backend: "qdrant_server", HarnessRevision: harness,
+		ClientVersion: "1.19.0", ManifestSHA256: manifestSHA,
 		FixtureSHA256: manifest.FixtureSHA256, SemanticVectorSHA256: manifest.SemanticVectorSHA256,
 		ConfigSHA256: manifest.ConfigSHA256, SourceCount: 18, ChunkCount: 54, QueryCount: 3,
 		Server: qdrantComparisonServer{Version: "1.19.0", Deployment: "docker", Identity: "container-id",
-			Image: "qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc"},
+			Image:  "qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc",
+			Config: map[string]any{"dense": manifest.Config.DenseVectorName, "sparse": manifest.Config.SparseVectorName}},
 		Resources: qdrantComparisonResources{HostPIDMetrics: "unavailable_for_docker_container", DockerStats: map[string]any{"memory_usage": "1MiB"}, DurableBytes: 1},
 		Reopen:    qdrantComparisonReopen{Attempted: true, Succeeded: true, Version: "1.19.0", PointCount: 54},
 	}
 	for _, route := range []string{"lexical", "dense", "hybrid"} {
 		for _, filter := range applicationFilterOrder {
-			cell := qdrantComparisonCell{Route: route, Filter: filter, Equivalence: "direct", Warmups: 60,
+			vectors := []string{manifest.Config.SparseVectorName}
+			if route == "dense" {
+				vectors = []string{manifest.Config.DenseVectorName}
+			} else if route == "hybrid" {
+				vectors = []string{manifest.Config.SparseVectorName, manifest.Config.DenseVectorName}
+			}
+			cell := qdrantComparisonCell{Route: route, Filter: filter, Equivalence: "direct", Warmups: 20,
 				Repetitions: 3, Samples: make([]map[string]any, 300), FetchMaxCount: 10,
-				RouteProof: qdrantComparisonRouteProof{API: "qdrant.query_points", NamedVector: "dense_minilm", BoundedFetch: true}}
+				RouteProof: qdrantComparisonRouteProof{API: "qdrant.query_points", NamedVectors: vectors, BoundedFetch: true}}
 			if route != "dense" {
 				cell.Equivalence = "directional"
 			}
@@ -89,12 +98,20 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		{"unbounded fetch", func(a *qdrantComparisonArtifact) { a.Cells[0].FetchMaxCount = 11 }},
 		{"wrong manifest", func(a *qdrantComparisonArtifact) { a.ManifestSHA256 = "wrong" }},
 		{"missing resources", func(a *qdrantComparisonArtifact) { a.Resources.DockerStats = nil }},
+		{"wrong harness", func(a *qdrantComparisonArtifact) { a.HarnessRevision = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }},
+		{"wrong client", func(a *qdrantComparisonArtifact) { a.ClientVersion = "1.18.0" }},
+		{"wrong named vectors", func(a *qdrantComparisonArtifact) { a.Cells[0].RouteProof.NamedVectors = []string{"dense_minilm"} }},
+		{"wrong warmups", func(a *qdrantComparisonArtifact) { a.Cells[0].Warmups = 60 }},
+		{"missing standalone binary hash", func(a *qdrantComparisonArtifact) {
+			a.Server.Deployment = "standalone"
+			a.Server.Image = ""
+		}},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			manifest, manifestSHA, artifact := validQdrantComparisonArtifact(t)
 			test.edit(&artifact)
-			if err := validateQdrantComparisonArtifact(&artifact, manifest, manifestSHA); err == nil {
+			if err := validateQdrantComparisonArtifact(&artifact, manifest, manifestSHA, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err == nil {
 				t.Fatal("invalid Qdrant comparison evidence accepted")
 			}
 		})
@@ -103,7 +120,7 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 
 func TestQdrantComparisonValidatorAcceptsCompleteEvidence(t *testing.T) {
 	manifest, manifestSHA, artifact := validQdrantComparisonArtifact(t)
-	if err := validateQdrantComparisonArtifact(&artifact, manifest, manifestSHA); err != nil {
+	if err := validateQdrantComparisonArtifact(&artifact, manifest, manifestSHA, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err != nil {
 		t.Fatal(err)
 	}
 }

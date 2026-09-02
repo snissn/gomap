@@ -6,7 +6,8 @@ cd "$ROOT"
 RUN_DIR=${RUN_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gomap_rag_qdrant_XXXXXXXX")}
 PYTHON=${PYTHON:-python3}
 VENV=${VENV:-$RUN_DIR/venv}
-TREEDB_ARTIFACT=${TREEDB_ARTIFACT:?set TREEDB_ARTIFACT to an existing retained TreeDB application JSON artifact}
+TREEDB_ARTIFACT=$RUN_DIR/treedb_backend.json
+TREEDB_DIR=$RUN_DIR/treedb
 QDRANT_BIN=${QDRANT_BIN:-}
 QDRANT_IMAGE=${QDRANT_IMAGE:-qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc}
 QDRANT_STORAGE_PATH=${QDRANT_STORAGE_PATH:-$RUN_DIR/qdrant-storage}
@@ -18,6 +19,11 @@ COMPARISON_MD=$RUN_DIR/comparison.md
 PID_FILE=$RUN_DIR/qdrant.pid
 CONTAINER=""
 PID=""
+HARNESS_REVISION=$(git rev-parse HEAD)
+if [[ ! "$HARNESS_REVISION" =~ ^[0-9a-f]{40}$ ]] || [[ -n "$(git status --porcelain)" ]]; then
+	echo "comparison requires a full clean harness revision" >&2
+	exit 2
+fi
 
 cleanup() {
 	if [[ -n "$CONTAINER" ]]; then docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; fi
@@ -38,6 +44,10 @@ run_90s() {
 	"$PYTHON" -c 'import subprocess,sys; raise SystemExit(subprocess.run(sys.argv[1:], timeout=90).returncode)' "$@"
 }
 run_90s go run ./TreeDB/cmd/treedb_rag_benchmark -dump-application-comparison-manifest "$MANIFEST"
+run_90s go run ./TreeDB/cmd/treedb_rag_benchmark \
+	-dir "$TREEDB_DIR" \
+	-harness-revision "$HARNESS_REVISION" \
+	-application-comparison-treedb-output "$TREEDB_ARTIFACT"
 PORT=$("$PYTHON" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 URL="http://127.0.0.1:$PORT"
 RESTART_HOOK=$RUN_DIR/restart-qdrant.sh
@@ -76,11 +86,12 @@ while time.monotonic()<deadline:
 raise SystemExit('Qdrant readiness exceeded 90 seconds')
 PY
 
-RUNNER_ARGS=(--manifest "$MANIFEST" --output "$QDRANT_ARTIFACT" --url "$URL" --collection "$QDRANT_COLLECTION" --deployment "$DEPLOYMENT" --image "$QDRANT_IMAGE" --server-identity "$SERVER_IDENTITY" --storage-path "$QDRANT_STORAGE_PATH" --restart-hook "$RESTART_HOOK" --allow-drop)
+RUNNER_ARGS=(--manifest "$MANIFEST" --output "$QDRANT_ARTIFACT" --url "$URL" --collection "$QDRANT_COLLECTION" --deployment "$DEPLOYMENT" --image "$QDRANT_IMAGE" --server-identity "$SERVER_IDENTITY" --harness-revision "$HARNESS_REVISION" --storage-path "$QDRANT_STORAGE_PATH" --restart-hook "$RESTART_HOOK" --allow-drop)
 if [[ -n "$CONTAINER" ]]; then
 	RUNNER_ARGS+=(--container-id "$CONTAINER")
 else
 	RUNNER_ARGS+=(--server-pid "$PID")
+	RUNNER_ARGS+=(--server-binary "$QDRANT_BIN")
 fi
 "$VENV/bin/python" benchmarks/vector_db_compare/rag_qdrant_runner.py "${RUNNER_ARGS[@]}"
 run_90s go run ./TreeDB/cmd/treedb_rag_benchmark \
@@ -89,4 +100,4 @@ run_90s go run ./TreeDB/cmd/treedb_rag_benchmark \
 	-application-comparison-qdrant "$QDRANT_ARTIFACT" \
 	-application-comparison-output "$COMPARISON_JSON" \
 	-application-comparison-report "$COMPARISON_MD"
-printf 'run_dir=%s\nmanifest=%s\nqdrant=%s\ncomparison_json=%s\ncomparison_md=%s\n' "$RUN_DIR" "$MANIFEST" "$QDRANT_ARTIFACT" "$COMPARISON_JSON" "$COMPARISON_MD"
+printf 'run_dir=%s\nmanifest=%s\ntreedb=%s\nqdrant=%s\ncomparison_json=%s\ncomparison_md=%s\n' "$RUN_DIR" "$MANIFEST" "$TREEDB_ARTIFACT" "$QDRANT_ARTIFACT" "$COMPARISON_JSON" "$COMPARISON_MD"

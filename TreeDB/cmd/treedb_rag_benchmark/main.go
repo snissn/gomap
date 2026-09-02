@@ -23,6 +23,7 @@ func main() {
 		smoke                = flag.Bool("smoke", false, "run a bounded diagnostic that cannot claim final p99/QPS evidence")
 		dumpInputs           = flag.String("dump-semantic-inputs", "", "write the exact semantic generation input manifest and exit")
 		dumpComparison       = flag.String("dump-application-comparison-manifest", "", "write the frozen #4331 application comparison manifest and exit")
+		treeComparisonOutput = flag.String("application-comparison-treedb-output", "", "run only the frozen 12-cell TreeDB #4331 comparison and write its artifact")
 		compareManifest      = flag.String("application-comparison-manifest", "", "frozen #4331 comparison manifest")
 		compareTree          = flag.String("application-comparison-treedb", "", "TreeDB application artifact for #4331 validation")
 		compareQdrant        = flag.String("application-comparison-qdrant", "", "Qdrant artifact for #4331 validation")
@@ -122,6 +123,14 @@ func main() {
 	cfg.HarnessRevision = strings.TrimSpace(*harnessSHA)
 	cfg.HostNote = strings.TrimSpace(*hostNote)
 	cfg.Command = append([]string(nil), os.Args...)
+	if *treeComparisonOutput != "" {
+		if err := runTreeDBComparisonEvidence(cfg, *treeComparisonOutput); err != nil {
+			fmt.Fprintf(os.Stderr, "treedb_rag_benchmark: TreeDB application comparison failed closed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("wrote %s\n", *treeComparisonOutput)
+		return
+	}
 	cfg.FinalEvidence = !*smoke
 	if *smoke {
 		cfg.WarmupQueries = 3

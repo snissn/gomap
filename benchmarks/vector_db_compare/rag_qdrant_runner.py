@@ -13,6 +13,11 @@ IMAGE_DIGEST = "sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc
 TOKENS = re.compile(r"[a-z0-9]+")
 
 def canonical(value: Any) -> bytes: return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""): digest.update(block)
+    return digest.hexdigest()
 def server_info(url: str):
     with urllib.request.urlopen(url.rstrip("/") + "/", timeout=5) as response: value = json.load(response)
     if str(value.get("version")) != VERSION: raise RuntimeError(f"Qdrant server must be {VERSION}, got {value.get('version')!r}")
@@ -122,6 +127,7 @@ class Runner:
         if self.args.deployment == "standalone":
             try: self.args.server_pid = int(restarted.stdout.splitlines()[-1])
             except (IndexError, ValueError) as exc: raise RuntimeError("standalone restart hook did not return authoritative PID") from exc
+            self.args.server_identity += f"|reopened_pid:{self.args.server_pid}"
             self.process_samples.append(process_stats(self.args.server_pid))
         deadline, last = time.monotonic() + 90, None
         while time.monotonic() < deadline:
@@ -145,8 +151,8 @@ class Runner:
         for route in ("lexical", "dense", "hybrid"):
           for filter_id in [row["id"] for row in self.manifest["filters"]]:
             samples, last, leakage, fetch_max = [], {}, 0, 0
+            for ordinal in range(20): self.query(route, self.manifest["queries"][ordinal % 3], filter_id)
             for repetition in range(3):
-              for ordinal in range(20): self.query(route, self.manifest["queries"][ordinal % 3], filter_id)
               for ordinal in range(100):
                 query = self.manifest["queries"][ordinal % 3]; ids, payloads, search_ms, fetch_ms = self.query(route, query, filter_id)
                 leakage += sum(not authorized(row, self.filters[filter_id]) for row in payloads); fetch_max = max(fetch_max, len(payloads)); last[query["id"]] = (ids, [row["parent_id"] for row in payloads])
@@ -155,19 +161,24 @@ class Runner:
             for query in self.manifest["queries"]:
                 judgment = next(row for row in query["cases"] if row["filter"] == filter_id); ids, parents = last[query["id"]]; metrics.append(quality(ids, parents, judgment["relevant_chunks"], judgment["relevant_parents"]))
             durations = [row["total_ms"] for row in samples]
-            self.cells.append({"route": route, "filter": filter_id, "equivalence": "direct" if route == "dense" else "directional", "warmups": 60, "repetitions": 3, "samples": samples, "summary": {"qps": len(samples) / (sum(durations) / 1000), "latency_ms_p50": percentile(durations, .5), "latency_ms_p95": percentile(durations, .95), "latency_ms_p99": percentile(durations, .99)}, "quality": mean_quality(metrics), "leakage": leakage, "errors": 0, "timeouts": 0, "fetch_max_count": fetch_max, "route_proof": {"api": "qdrant.query_points", "named_vector": self.config["dense_vector_name"] if route == "dense" else self.config["sparse_vector_name"], "fusion": "rrf" if route == "hybrid" else "", "fallbacks": 0, "exhaustive_search": False, "bounded_fetch": True}})
+            vectors = [self.config["sparse_vector_name"]] if route == "lexical" else [self.config["dense_vector_name"]]
+            if route == "hybrid": vectors = [self.config["sparse_vector_name"], self.config["dense_vector_name"]]
+            self.cells.append({"route": route, "filter": filter_id, "equivalence": "direct" if route == "dense" else "directional", "warmups": 20, "repetitions": 3, "samples": samples, "summary": {"qps": len(samples) / (sum(durations) / 1000), "latency_ms_p50": percentile(durations, .5), "latency_ms_p95": percentile(durations, .95), "latency_ms_p99": percentile(durations, .99)}, "quality": mean_quality(metrics), "leakage": leakage, "errors": 0, "timeouts": 0, "fetch_max_count": fetch_max, "route_proof": {"api": "qdrant.query_points", "named_vectors": vectors, "fusion": "rrf" if route == "hybrid" else "", "fallbacks": 0, "exhaustive_search": False, "bounded_fetch": True}})
             if self.args.deployment == "standalone": self.process_samples.append(process_stats(self.args.server_pid))
     def artifact(self):
         observed = [row for row in self.process_samples if row]
         resources = {"host_pid_metrics": "unavailable_for_docker_container" if self.args.deployment == "docker" else "observed_process_samples_across_pre_and_post_restart_segments", "docker_stats": docker_stats(self.args.container_id), "process_samples": observed, "peak_observed_rss_bytes": max((row["rss_bytes"] for row in observed), default=0), "cpu_seconds": sum(max(0, right["cpu_seconds"] - left["cpu_seconds"]) for left, right in zip(observed, observed[1:]) if left["pid"] == right["pid"]), "durable_bytes": directory_bytes(self.args.storage_path)}
-        return {"schema": ARTIFACT_SCHEMA, "backend": "qdrant_server", "manifest_sha256": self.manifest_sha, "fixture_sha256": self.manifest["fixture_sha256"], "semantic_vector_sha256": self.manifest["semantic_vector_sha256"], "config_sha256": self.manifest["config_sha256"], "source_count": 18, "chunk_count": 54, "query_count": 3, "sparse_vector_sha256": self.sparse_sha, "build": {"seconds": self.build_seconds, "points": 54}, "server": {"version": VERSION, "deployment": self.args.deployment, "image": self.args.image, "identity": self.args.server_identity, "local_mode": False, "config": {"dense": self.config["dense_vector_name"], "sparse": self.config["sparse_vector_name"], "hnsw_m": 16, "full_scan_threshold": 0, "indexing_threshold": 1}}, "resources": resources, "reopen": self.reopen, "cells": self.cells, "failures": self.failures}
+        server_binary_sha = file_sha256(self.args.server_binary) if self.args.server_binary else ""
+        return {"schema": ARTIFACT_SCHEMA, "backend": "qdrant_server", "harness_revision": self.args.harness_revision, "client_version": VERSION, "manifest_sha256": self.manifest_sha, "fixture_sha256": self.manifest["fixture_sha256"], "semantic_vector_sha256": self.manifest["semantic_vector_sha256"], "config_sha256": self.manifest["config_sha256"], "source_count": 18, "chunk_count": 54, "query_count": 3, "sparse_vector_sha256": self.sparse_sha, "build": {"seconds": self.build_seconds, "points": 54}, "server": {"version": VERSION, "deployment": self.args.deployment, "image": self.args.image, "binary_sha256": server_binary_sha, "identity": self.args.server_identity, "local_mode": False, "config": {"dense": self.config["dense_vector_name"], "sparse": self.config["sparse_vector_name"], "hnsw_m": 16, "full_scan_threshold": 0, "indexing_threshold": 1}}, "resources": resources, "reopen": self.reopen, "cells": self.cells, "failures": self.failures}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name, kwargs in [("--manifest", {"type": Path, "required": True}), ("--output", {"type": Path, "required": True}), ("--url", {"required": True}), ("--collection", {"required": True}), ("--server-identity", {"required": True}), ("--storage-path", {"type": Path, "required": True}), ("--restart-hook", {"type": Path, "required": True})]: parser.add_argument(name, **kwargs)
-    parser.add_argument("--deployment", choices=("docker", "standalone"), required=True); parser.add_argument("--image", default=""); parser.add_argument("--container-id", default=""); parser.add_argument("--server-pid", type=int, default=0); parser.add_argument("--allow-drop", action="store_true"); args = parser.parse_args()
+    for name, kwargs in [("--manifest", {"type": Path, "required": True}), ("--output", {"type": Path, "required": True}), ("--url", {"required": True}), ("--collection", {"required": True}), ("--server-identity", {"required": True}), ("--harness-revision", {"required": True}), ("--storage-path", {"type": Path, "required": True}), ("--restart-hook", {"type": Path, "required": True})]: parser.add_argument(name, **kwargs)
+    parser.add_argument("--deployment", choices=("docker", "standalone"), required=True); parser.add_argument("--image", default=""); parser.add_argument("--container-id", default=""); parser.add_argument("--server-pid", type=int, default=0); parser.add_argument("--server-binary", type=Path); parser.add_argument("--allow-drop", action="store_true"); args = parser.parse_args()
     raw = args.manifest.read_bytes(); manifest = json.loads(raw)
     if manifest.get("schema") != SCHEMA or importlib.metadata.version("qdrant-client") != VERSION: raise RuntimeError("manifest or qdrant-client identity mismatch")
+    if not re.fullmatch(r"[0-9a-f]{40}", args.harness_revision): raise RuntimeError("full harness revision required")
+    if args.deployment == "standalone" and (args.server_binary is None or not args.server_binary.is_file()): raise RuntimeError("standalone Qdrant server binary is required")
     if args.deployment == "docker" and IMAGE_DIGEST not in args.image: raise RuntimeError("Docker image is not digest pinned")
     if not args.storage_path.is_dir() or not os.access(args.restart_hook, os.X_OK): raise RuntimeError("durable path and executable restart hook required")
     if args.deployment == "standalone" and args.server_pid <= 0: raise RuntimeError("standalone Qdrant requires an authoritative positive server PID")
