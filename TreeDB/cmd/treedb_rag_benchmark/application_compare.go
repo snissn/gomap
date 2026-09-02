@@ -280,6 +280,150 @@ func validateTreeDBComparisonArtifact(artifact *treeDBComparisonArtifact, manife
 	return rows, nil
 }
 
+func comparisonFloatMatches(got, want float64) bool {
+	return math.Abs(got-want) <= 1e-9*math.Max(1, math.Abs(want))
+}
+
+func qdrantNearestRank(values []float64, quantile float64) float64 {
+	ordered := append([]float64(nil), values...)
+	sort.Float64s(ordered)
+	index := max(0, int(math.Ceil(quantile*float64(len(ordered))))-1)
+	return ordered[index]
+}
+
+func qdrantQualityMatches(got, want qualityMetrics) bool {
+	gotFloats := [...]float64{
+		got.PrecisionAt5, got.PrecisionAt10, got.NDCGAt5, got.NDCGAt10, got.MRRAt10, got.HitRateAt10,
+		got.ChunkRecallAt5, got.ChunkRecallAt10, got.ParentRecallAt5, got.ParentRecallAt10,
+		got.RelevantChunksMean, got.RelevantParentsMean, got.MaxAchievableChunkRecallAt5,
+		got.MaxAchievableChunkRecallAt10, got.MaxAchievableParentRecallAt5, got.MaxAchievableParentRecallAt10,
+	}
+	wantFloats := [...]float64{
+		want.PrecisionAt5, want.PrecisionAt10, want.NDCGAt5, want.NDCGAt10, want.MRRAt10, want.HitRateAt10,
+		want.ChunkRecallAt5, want.ChunkRecallAt10, want.ParentRecallAt5, want.ParentRecallAt10,
+		want.RelevantChunksMean, want.RelevantParentsMean, want.MaxAchievableChunkRecallAt5,
+		want.MaxAchievableChunkRecallAt10, want.MaxAchievableParentRecallAt5, want.MaxAchievableParentRecallAt10,
+	}
+	for i := range gotFloats {
+		if !comparisonFloatMatches(gotFloats[i], wantFloats[i]) {
+			return false
+		}
+	}
+	return got.MaxPerParentResults == want.MaxPerParentResults &&
+		got.CollapseRejections == want.CollapseRejections &&
+		got.CollapseExhaustions == want.CollapseExhaustions &&
+		got.TextAttributedResults == want.TextAttributedResults &&
+		got.VectorAttributedResults == want.VectorAttributedResults &&
+		got.TextVectorOverlapResults == want.TextVectorOverlapResults &&
+		got.AttributionMode == want.AttributionMode
+}
+
+func recomputeQdrantCellEvidence(cell qdrantComparisonCell, manifest applicationComparisonManifest) ([]float64, qualityMetrics, error) {
+	chunks := make(map[string]applicationComparisonChunk, len(manifest.Chunks))
+	for _, chunk := range manifest.Chunks {
+		chunks[chunk.ID] = chunk
+	}
+	var filter applicationComparisonFilter
+	filterFound := false
+	for _, candidate := range manifest.Filters {
+		if candidate.ID == cell.Filter {
+			filter, filterFound = candidate, true
+			break
+		}
+	}
+	if !filterFound {
+		return nil, qualityMetrics{}, fmt.Errorf("unknown filter %q", cell.Filter)
+	}
+
+	latencies := make([]float64, 0, len(cell.Samples))
+	lastRankings := make(map[string][]string, len(manifest.Queries))
+	fetchMax := 0
+	for sampleIndex, sample := range cell.Samples {
+		wantRepetition := sampleIndex / manifest.Config.SamplesPerCell
+		wantOrdinal := sampleIndex % manifest.Config.SamplesPerCell
+		wantQuery := manifest.Queries[wantOrdinal%len(manifest.Queries)].ID
+		if sample.Repetition != wantRepetition || sample.Ordinal != wantOrdinal || sample.QueryID != wantQuery ||
+			sample.SearchMS <= 0 || sample.FetchMS <= 0 ||
+			sample.TotalMS+1e-9 < sample.SearchMS+sample.FetchMS ||
+			sample.FetchedCount != len(sample.ResultIDs) || sample.FetchedCount == 0 ||
+			sample.FetchedCount > manifest.Config.TopK || sample.FetchedBytes <= 0 {
+			return nil, qualityMetrics{}, fmt.Errorf("invalid sample order/query/timing/fetch at index %d", sampleIndex)
+		}
+		rankingIDs := map[string]bool{}
+		for _, resultID := range sample.ResultIDs {
+			chunk, ok := chunks[resultID]
+			if !ok || rankingIDs[resultID] ||
+				(filter.Tenant != "" && chunk.Tenant != filter.Tenant) ||
+				(filter.Workspace != "" && chunk.Workspace != filter.Workspace) ||
+				(filter.UpdatedYearGTE != 0 && chunk.UpdatedYear < filter.UpdatedYearGTE) {
+				return nil, qualityMetrics{}, fmt.Errorf("invalid or duplicate result %q at sample %d", resultID, sampleIndex)
+			}
+			rankingIDs[resultID] = true
+		}
+		fetchMax = max(fetchMax, sample.FetchedCount)
+		latencies = append(latencies, sample.TotalMS)
+		lastRankings[sample.QueryID] = append([]string(nil), sample.ResultIDs...)
+	}
+	if cell.FetchMaxCount != fetchMax || len(lastRankings) != len(manifest.Queries) {
+		return nil, qualityMetrics{}, fmt.Errorf("fetch/query coverage mismatch")
+	}
+
+	var quality qualityMetrics
+	for _, query := range manifest.Queries {
+		var judgment applicationComparisonCase
+		judgmentFound := false
+		for _, candidate := range query.Cases {
+			if candidate.Filter == cell.Filter {
+				judgment, judgmentFound = candidate, true
+				break
+			}
+		}
+		if !judgmentFound {
+			return nil, qualityMetrics{}, fmt.Errorf("query %s lacks filter judgment %s", query.ID, cell.Filter)
+		}
+		ranked := append([]string(nil), lastRankings[query.ID]...)
+		parents := make([]string, 0, len(ranked))
+		for _, id := range ranked {
+			parents = append(parents, chunks[id].ParentID)
+		}
+		for len(ranked) < manifest.Config.TopK {
+			ranked = append(ranked, "")
+		}
+		chunkRelevant := stringSet(judgment.RelevantChunks)
+		parentRelevant := stringSet(judgment.RelevantParents)
+		p5, _ := precisionAtK(ranked, chunkRelevant, 5)
+		p10, _ := precisionAtK(ranked, chunkRelevant, 10)
+		r5, _ := recallAtK(ranked, chunkRelevant, 5)
+		r10, _ := recallAtK(ranked, chunkRelevant, 10)
+		mrr, _ := mrrAtK(ranked, chunkRelevant, 10)
+		quality.PrecisionAt5 += p5
+		quality.PrecisionAt10 += p10
+		quality.NDCGAt5 += ndcgAtK(ranked, chunkRelevant, 5)
+		quality.NDCGAt10 += ndcgAtK(ranked, chunkRelevant, 10)
+		quality.MRRAt10 += mrr
+		if mrr > 0 {
+			quality.HitRateAt10++
+		}
+		quality.ChunkRecallAt5 += r5
+		quality.ChunkRecallAt10 += r10
+		quality.ParentRecallAt5 += parentRecallAtK(parents, parentRelevant, 5)
+		quality.ParentRecallAt10 += parentRecallAtK(parents, parentRelevant, 10)
+	}
+	queryCount := float64(len(manifest.Queries))
+	quality.PrecisionAt5 /= queryCount
+	quality.PrecisionAt10 /= queryCount
+	quality.NDCGAt5 /= queryCount
+	quality.NDCGAt10 /= queryCount
+	quality.MRRAt10 /= queryCount
+	quality.HitRateAt10 /= queryCount
+	quality.ChunkRecallAt5 /= queryCount
+	quality.ChunkRecallAt10 /= queryCount
+	quality.ParentRecallAt5 /= queryCount
+	quality.ParentRecallAt10 /= queryCount
+	quality.AttributionMode = "qdrant_native_route"
+	return latencies, quality, nil
+}
+
 func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manifest applicationComparisonManifest, manifestSHA, harnessRevision string) error {
 	if artifact.Schema != qdrantComparisonArtifactSchema || artifact.Backend != "qdrant_server" ||
 		artifact.HarnessRevision != harnessRevision || !isFullRevision(artifact.HarnessRevision) ||
@@ -363,28 +507,29 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 			cell.RouteProof.API != "qdrant.query_points" {
 			return fmt.Errorf("Qdrant artifact cell %s/%s is partial, leaking, unbounded, failed, exhaustive, or fell back", cell.Route, cell.Filter)
 		}
-		samplesByRep := make([]int, manifest.Config.Repetitions)
-		for _, sample := range cell.Samples {
-			if sample.Repetition < 0 || sample.Repetition >= manifest.Config.Repetitions ||
-				sample.QueryID == "" || sample.SearchMS <= 0 || sample.FetchMS <= 0 ||
-				sample.TotalMS+1e-9 < sample.SearchMS+sample.FetchMS ||
-				sample.FetchedCount != len(sample.ResultIDs) || sample.FetchedCount > manifest.Config.TopK ||
-				sample.FetchedBytes <= 0 {
-				return fmt.Errorf("Qdrant artifact cell %s/%s has invalid total/subtimer/fetch sample", cell.Route, cell.Filter)
-			}
-			samplesByRep[sample.Repetition]++
+		latencies, quality, err := recomputeQdrantCellEvidence(cell, manifest)
+		if err != nil {
+			return fmt.Errorf("Qdrant artifact cell %s/%s sample evidence: %w", cell.Route, cell.Filter, err)
+		}
+		if !comparisonFloatMatches(cell.Summary.LatencyMSP50, qdrantNearestRank(latencies, .50)) ||
+			!comparisonFloatMatches(cell.Summary.LatencyMSP95, qdrantNearestRank(latencies, .95)) ||
+			!comparisonFloatMatches(cell.Summary.LatencyMSP99, qdrantNearestRank(latencies, .99)) {
+			return fmt.Errorf("Qdrant artifact cell %s/%s latency summary does not match raw samples", cell.Route, cell.Filter)
+		}
+		if !qdrantQualityMatches(cell.Quality, quality) {
+			return fmt.Errorf("Qdrant artifact cell %s/%s quality does not match raw rankings", cell.Route, cell.Filter)
 		}
 		qpsMean := 0.0
 		for rep, performance := range cell.RepetitionPerformance {
+			expectedQPS := float64(manifest.Config.SamplesPerCell) / performance.WallSeconds
 			if performance.Repetition != rep || performance.Samples != manifest.Config.SamplesPerCell ||
-				samplesByRep[rep] != manifest.Config.SamplesPerCell ||
-				performance.WallSeconds <= 0 || performance.QPS <= 0 {
+				performance.WallSeconds <= 0 || !comparisonFloatMatches(performance.QPS, expectedQPS) {
 				return fmt.Errorf("Qdrant artifact cell %s/%s has invalid repetition wall evidence", cell.Route, cell.Filter)
 			}
 			qpsMean += performance.QPS
 		}
 		qpsMean /= float64(manifest.Config.Repetitions)
-		if math.Abs(cell.Summary.QPS-qpsMean) > 1e-9*math.Max(1, qpsMean) {
+		if !comparisonFloatMatches(cell.Summary.QPS, qpsMean) {
 			return fmt.Errorf("Qdrant artifact cell %s/%s QPS is not mean-per-repetition", cell.Route, cell.Filter)
 		}
 		wantVectors := []string{manifest.Config.SparseVectorName}

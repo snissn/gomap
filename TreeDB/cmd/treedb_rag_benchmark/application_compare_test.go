@@ -81,6 +81,22 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 	}
 	for _, route := range []string{"lexical", "dense", "hybrid"} {
 		for _, filter := range applicationFilterOrder {
+			var filterSpec applicationComparisonFilter
+			for _, candidate := range manifest.Filters {
+				if candidate.ID == filter {
+					filterSpec = candidate
+					break
+				}
+			}
+			resultID := ""
+			for _, chunk := range manifest.Chunks {
+				if (filterSpec.Tenant == "" || chunk.Tenant == filterSpec.Tenant) &&
+					(filterSpec.Workspace == "" || chunk.Workspace == filterSpec.Workspace) &&
+					(filterSpec.UpdatedYearGTE == 0 || chunk.UpdatedYear >= filterSpec.UpdatedYearGTE) {
+					resultID = chunk.ID
+					break
+				}
+			}
 			vectors := []string{manifest.Config.SparseVectorName}
 			if route == "dense" {
 				vectors = []string{manifest.Config.DenseVectorName}
@@ -97,12 +113,22 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 				cell.RepetitionPerformance = append(cell.RepetitionPerformance, qdrantComparisonRepetition{Repetition: repetition, Samples: 100, WallSeconds: 1, QPS: 100})
 				for ordinal := range manifest.Config.SamplesPerCell {
 					cell.Samples = append(cell.Samples, qdrantComparisonSample{
-						Repetition: repetition, Ordinal: ordinal, QueryID: "q", SearchMS: 1, FetchMS: 1,
-						TotalMS: 2.1, ResultIDs: []string{"chunk"}, FetchedCount: 1, FetchedBytes: 1,
+						Repetition: repetition, Ordinal: ordinal,
+						QueryID:  manifest.Queries[ordinal%len(manifest.Queries)].ID,
+						SearchMS: 1, FetchMS: 1, TotalMS: 2.1, ResultIDs: []string{resultID},
+						FetchedCount: 1, FetchedBytes: 1,
 					})
 				}
 			}
 			cell.Summary.QPS = 100
+			latencies, quality, err := recomputeQdrantCellEvidence(cell, manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cell.Summary.LatencyMSP50 = qdrantNearestRank(latencies, .50)
+			cell.Summary.LatencyMSP95 = qdrantNearestRank(latencies, .95)
+			cell.Summary.LatencyMSP99 = qdrantNearestRank(latencies, .99)
+			cell.Quality = quality
 			if route == "hybrid" {
 				cell.RouteProof.Fusion = "rrf"
 			}
@@ -146,6 +172,15 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		{"missing total work", func(a *qdrantComparisonArtifact) { a.Cells[0].Samples[0].TotalMS = 1 }},
 		{"missing repetition wall", func(a *qdrantComparisonArtifact) { a.Cells[0].RepetitionPerformance[0].WallSeconds = 0 }},
 		{"wrong QPS mean", func(a *qdrantComparisonArtifact) { a.Cells[0].Summary.QPS = 99 }},
+		{"wrong latency summary", func(a *qdrantComparisonArtifact) { a.Cells[0].Summary.LatencyMSP95++ }},
+		{"wrong quality summary", func(a *qdrantComparisonArtifact) { a.Cells[0].Quality.NDCGAt10++ }},
+		{"unknown query", func(a *qdrantComparisonArtifact) { a.Cells[0].Samples[0].QueryID = "unknown" }},
+		{"invalid result ranking", func(a *qdrantComparisonArtifact) { a.Cells[0].Samples[0].ResultIDs[0] = "unknown" }},
+		{"duplicate result ranking", func(a *qdrantComparisonArtifact) {
+			sample := &a.Cells[0].Samples[0]
+			sample.ResultIDs = append(sample.ResultIDs, sample.ResultIDs[0])
+			sample.FetchedCount = len(sample.ResultIDs)
+		}},
 		{"direct equivalence", func(a *qdrantComparisonArtifact) { a.Cells[0].Equivalence = "direct" }},
 	}
 	for _, test := range cases {
