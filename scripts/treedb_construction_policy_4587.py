@@ -1479,6 +1479,7 @@ def measurement_source_values(
         if path in expected_paths:
             fail("measurement source data file paths must be unique")
         file_stat = path.stat()
+        exact(file_stat.st_nlink, 1, "measurement source data file link count")
         file_id = (file_stat.st_dev, file_stat.st_ino)
         if file_id in expected_file_ids:
             fail("measurement source data files must have unique file identities")

@@ -1253,7 +1253,34 @@ class ValidatorMutations(unittest.TestCase):
             source["data_files"])
         measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
         run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
-        self.assert_invalid(packet, "data files must have unique file identities")
+        self.assert_invalid(packet, "data file link count")
+
+    def test_persisted_data_hard_link_outside_root_is_rejected(self) -> None:
+        packet = self.fixture.go_packet()
+        run = packet["runs"][4]
+        root = Path(run["artifact"]["root"])
+        measurement_path = root / run["measurement_evidence"]["path"]
+        measurement = json.loads(measurement_path.read_text())
+        source_path = root / measurement["source"]["path"]
+        source = json.loads(source_path.read_text())
+        data_root = Path(source["data_root"])
+        external = root / "external-owned-data"
+        external.write_bytes(b"unrelated external storage")
+        hard_link = data_root / "external-inode"
+        hard_link.hardlink_to(external)
+        source["data_files"].append({
+            "path": hard_link.name,
+            "size": external.stat().st_size,
+            "sha256": policy.sha256_file(external),
+        })
+        source_path.write_text(json.dumps(source, sort_keys=True) + "\n")
+        measurement["source"]["sha256"] = policy.sha256_file(source_path)
+        measurement["resources"]["persisted_bytes"] += external.stat().st_size
+        measurement["determinism"]["persisted_data_ledger_checksum"] = policy.canonical_sha256(
+            source["data_files"])
+        measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
+        run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
+        self.assert_invalid(packet, "data file link count")
 
     def test_fallback_and_result_count(self) -> None:
         packet = self.fixture.no_go_packet()
