@@ -71,11 +71,11 @@ ISOLATION_KEYS = {
     "competing_processes", "peak_swap_used_bytes", "samples",
 }
 ISOLATION_SAMPLE_KEYS = {"timestamp", "swap_used_bytes", "competing_processes"}
-SEARCH_ISOLATION_SCHEMA = "treedb-construction-policy-4587-search-isolation/v1"
+SEARCH_ISOLATION_SCHEMA = "treedb-construction-policy-4587-search-isolation/v2"
 SEARCH_ISOLATION_KEYS = {
     "schema_version", "artifact_root", "lock_path", "lock_acquired_at",
     "coverage_completed_at", "gomaxprocs", "service_binary_sha256", "service_argv",
-    "service_started_at", "service_completed_at", "samples",
+    "service_started_at", "service_completed_at", "service_exit_code", "samples",
 }
 SEARCH_ISOLATION_SAMPLE_KEYS = {"timestamp", "swap_used_bytes", "competing_processes"}
 SEARCH_ORIGIN_KEYS = {
@@ -840,6 +840,7 @@ def validate_search_isolation(
     service_started = utc_timestamp(isolation["service_started_at"], f"{name}.service_started_at")
     service_completed = utc_timestamp(
         isolation["service_completed_at"], f"{name}.service_completed_at")
+    exact(isolation["service_exit_code"], 0, f"{name}.service_exit_code")
     exact(coverage_completed, sample_times[-1], f"{name}.coverage completion")
     if (lock_acquired > sample_times[0] or service_started < sample_times[0]
             or service_completed < service_started or coverage_completed < service_completed):

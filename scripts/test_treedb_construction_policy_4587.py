@@ -512,6 +512,7 @@ class DecisionFixture:
                     "service_argv": service_argv,
                     "service_started_at": (envelope_start + timedelta(seconds=0.1)).isoformat(),
                     "service_completed_at": (envelope_completed - timedelta(seconds=0.1)).isoformat(),
+                    "service_exit_code": 0,
                     "samples": samples,
                 })
         search = []
@@ -1173,6 +1174,31 @@ class ValidatorMutations(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "frozen value 12"):
                 search_existing_index.frozen_gomaxprocs()
 
+    def test_existing_index_helper_requires_clean_service_teardown(self) -> None:
+        process = mock.Mock(pid=123, returncode=None)
+        process.poll.return_value = None
+        process.wait.return_value = 0
+        with mock.patch.object(search_existing_index.os, "killpg"):
+            self.assertEqual(search_existing_index.stop_service(process), 0)
+
+        process = mock.Mock(pid=123, returncode=2)
+        process.poll.return_value = None
+        process.wait.return_value = 2
+        with mock.patch.object(search_existing_index.os, "killpg"):
+            with self.assertRaisesRegex(ValueError, "did not close cleanly"):
+                search_existing_index.stop_service(process)
+
+        process = mock.Mock(pid=123, returncode=-9)
+        process.poll.return_value = None
+        process.wait.side_effect = [
+            search_existing_index.subprocess.TimeoutExpired("service", 30),
+            -9,
+        ]
+        with mock.patch.object(search_existing_index.os, "killpg"):
+            with self.assertRaisesRegex(RuntimeError, "did not close within"):
+                search_existing_index.stop_service(process)
+
+
     def test_existing_index_helper_executes_and_records_canonical_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -1441,6 +1467,7 @@ class ValidatorMutations(unittest.TestCase):
             })),
             ("service_argv", lambda value: value["service_argv"].__setitem__(2, "/tmp/wrong")),
             ("gomaxprocs", lambda value: value.update({"gomaxprocs": 1})),
+            ("service_exit_code", lambda value: value.update({"service_exit_code": -9})),
         ]
         for pattern, mutate in mutations:
             with self.subTest(pattern=pattern):

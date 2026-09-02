@@ -174,15 +174,19 @@ def wait_healthy(process: subprocess.Popen[Any], base_url: str, timeout: float) 
     raise RuntimeError("search service did not become healthy") from last_error
 
 
-def stop_service(process: subprocess.Popen[Any]) -> None:
+def stop_service(process: subprocess.Popen[Any]) -> int:
     if process.poll() is not None:
         fail(f"search service exited unexpectedly with {process.returncode}")
     os.killpg(process.pid, signal.SIGTERM)
     try:
-        process.wait(timeout=30)
-    except subprocess.TimeoutExpired:
+        return_code = process.wait(timeout=30)
+    except subprocess.TimeoutExpired as exc:
         os.killpg(process.pid, signal.SIGKILL)
         process.wait(timeout=5)
+        raise RuntimeError("search service did not close within 30 seconds") from exc
+    if return_code != 0:
+        fail(f"search service did not close cleanly: exit={return_code}")
+    return return_code
 
 
 def append_command_record(path: Path, record: dict[str, Any]) -> None:
@@ -545,6 +549,7 @@ def main() -> int:
     failure: BaseException | None = None
     lock_acquired_at = ""
     service_started_at = ""
+    service_exit_code: int | None = None
     try:
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -612,7 +617,7 @@ def main() -> int:
                 client.close()
         if service is not None:
             try:
-                stop_service(service)
+                service_exit_code = stop_service(service)
             except BaseException as exc:
                 failure = failure or exc
         service_completed_at = iso_now()
@@ -626,7 +631,7 @@ def main() -> int:
             search_completed_at = samples[-1]["timestamp"] if samples else iso_now()
             if samples:
                 isolation = {
-                    "schema_version": "treedb-construction-policy-4587-search-isolation/v1",
+                    "schema_version": "treedb-construction-policy-4587-search-isolation/v2",
                     "artifact_root": str(args.artifact_root),
                     "lock_path": str(args.exclusive_lock),
                     "lock_acquired_at": lock_acquired_at,
@@ -636,6 +641,7 @@ def main() -> int:
                     "service_argv": service_argv(args),
                     "service_started_at": service_started_at,
                     "service_completed_at": service_completed_at,
+                    "service_exit_code": service_exit_code,
                     "samples": samples,
                 }
                 write_json(args.search_isolation_out, isolation)

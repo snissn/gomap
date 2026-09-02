@@ -519,11 +519,11 @@
       "search_started_at", "search_completed_at"
     ],
     "search_isolation_schema": {
-      "schema_version": "treedb-construction-policy-4587-search-isolation/v1",
+      "schema_version": "treedb-construction-policy-4587-search-isolation/v2",
       "exact_keys": [
         "schema_version", "artifact_root", "lock_path", "lock_acquired_at",
         "coverage_completed_at", "gomaxprocs", "service_binary_sha256", "service_argv",
-        "service_started_at", "service_completed_at", "samples"
+        "service_started_at", "service_completed_at", "service_exit_code", "samples"
       ],
       "sample_exact_keys": ["timestamp", "swap_used_bytes", "competing_processes"]
     },
