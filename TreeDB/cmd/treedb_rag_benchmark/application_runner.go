@@ -108,15 +108,16 @@ type applicationCellIdentity struct {
 }
 
 type querySample struct {
-	Repetition    int                `json:"repetition"`
-	Ordinal       int                `json:"ordinal"`
-	QueryID       string             `json:"query_id"`
-	Millis        float64            `json:"millis"`
-	RequestBytes  int64              `json:"request_bytes"`
-	ResponseBytes int64              `json:"response_bytes"`
-	ResultIDs     []string           `json:"result_ids,omitempty"`
-	ResultSources map[string][2]bool `json:"result_sources,omitempty"`
-	Error         string             `json:"error,omitempty"`
+	Repetition       int                `json:"repetition"`
+	Ordinal          int                `json:"ordinal"`
+	QueryID          string             `json:"query_id"`
+	Millis           float64            `json:"millis"`
+	RequestBytes     int64              `json:"request_bytes"`
+	ResponseBytes    int64              `json:"response_bytes"`
+	ResultIDs        []string           `json:"result_ids,omitempty"`
+	ResultSources    map[string][2]bool `json:"result_sources,omitempty"`
+	DocumentsFetched float64            `json:"documents_fetched,omitempty"`
+	Error            string             `json:"error,omitempty"`
 }
 
 type repetitionPerformance struct {
@@ -1346,6 +1347,7 @@ func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture
 				if retainRankings {
 					sample.ResultIDs = append([]string(nil), result.IDs...)
 					sample.ResultSources = result.Sources
+					sample.DocumentsFetched = result.Counters["documents_fetched"]
 				}
 				if err != nil {
 					sample.Error = err.Error()

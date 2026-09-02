@@ -695,6 +695,7 @@ func recomputeTreeDBCellEvidence(row applicationRow, manifest applicationCompari
 		if sample.Repetition != wantRepetition || sample.Ordinal != wantOrdinal ||
 			sample.QueryID != manifest.Queries[queryIndex].ID || sample.Millis <= 0 ||
 			sample.Error != "" || len(sample.ResultIDs) == 0 || len(sample.ResultIDs) > manifest.Config.TopK ||
+			sample.DocumentsFetched != float64(len(sample.ResultIDs)) ||
 			len(sample.ResultSources) != len(sample.ResultIDs) {
 			return nil, qualityMetrics{}, fmt.Errorf("invalid sample order/query/timing/ranking at index %d", sampleIndex)
 		}

@@ -109,7 +109,7 @@ func validTreeDBComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 					}
 					row.Samples = append(row.Samples, querySample{
 						Repetition: repetition, Ordinal: ordinal, QueryID: manifest.Queries[queryIndex].ID, Millis: 2.1,
-						ResultIDs: []string{resultID}, ResultSources: map[string][2]bool{resultID: source},
+						ResultIDs: []string{resultID}, ResultSources: map[string][2]bool{resultID: source}, DocumentsFetched: 1,
 					})
 				}
 			}
@@ -177,6 +177,9 @@ func TestTreeDBComparisonValidatorRejectsMismatchedEvidence(t *testing.T) {
 		{"duplicate result", func(a *treeDBComparisonArtifact) {
 			sample := &a.Rows[0].Samples[0]
 			sample.ResultIDs = append(sample.ResultIDs, sample.ResultIDs[0])
+		}},
+		{"excess per-query fetch count", func(a *treeDBComparisonArtifact) {
+			a.Rows[0].Samples[0].DocumentsFetched = float64(a.Config.TopK + 1)
 		}},
 		{"wrong lexical attribution", func(a *treeDBComparisonArtifact) {
 			sample := &a.Rows[0].Samples[0]
