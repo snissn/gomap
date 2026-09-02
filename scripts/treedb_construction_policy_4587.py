@@ -1403,11 +1403,20 @@ def print_screening_commands(contract: dict[str, Any]) -> None:
     root = contract["commands"]["artifact_root"]
     dataset = contract["datasets"]["screening"]
     for ef in COORDINATES:
-        values = {"artifact_root": f"{root}/screening-ef{ef}", "ef_construction": str(ef),
-                  "dataset_dir": dataset["directory"], "dataset_name": dataset["name"],
-                  "vectors": str(dataset["vectors"]), "index_prefix": f"treedb_4587_c0_250k_ef{ef}",
-                  "db_label": f"treedb-4587-c0-250k-ef{ef}",
-                  "case_name": f"cohere250k-selection-ef{ef}"}
+        values = {
+            "artifact_root": f"{root}/screening-ef{ef}",
+            "ef_construction": str(ef),
+            "dataset_dir": dataset["directory"],
+            "dataset_name": dataset["name"],
+            "dataset_sha256": canonical_sha256(dataset),
+            "vectors": str(dataset["vectors"]),
+            "index_prefix": f"treedb_4587_c0_250k_ef{ef}",
+            "db_label": f"treedb-4587-c0-250k-ef{ef}",
+            "case_name": f"cohere250k-selection-ef{ef}",
+            "run_id": f"screening-ef{ef}",
+            "role": "screening_control" if ef == CONTROL else "screening_candidate",
+            "partition": "selection",
+        }
         argv = [token.format(**values) for token in template]
         print("GOMAXPROCS=12 " + subprocess.list2cmdline(argv))
 

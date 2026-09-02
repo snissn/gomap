@@ -20,6 +20,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+from types import SimpleNamespace
 
 import treedb_vectordbbench_artifact as harness
 
@@ -4204,6 +4205,103 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["complete"])
         self.assertTrue(any("non-empty cumulative counter" in item for item in got["errors"]), got)
         self.assertEqual(exit_code, 1)
+
+
+class ProtocolMeasurementProducerTest(unittest.TestCase):
+    def test_linux_process_metrics_are_positive(self) -> None:
+        got = harness.linux_process_metrics(os.getpid())
+        self.assertGreaterEqual(got["cpu_nanoseconds"], 0)
+        self.assertGreater(got["peak_rss_bytes"], 0)
+
+    def test_measurements_are_derived_from_raw_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_dir = root / "treedb-data"
+            (data_dir / "maindb").mkdir(parents=True)
+            (data_dir / "maindb" / "segment").write_bytes(b"persistent")
+            records = [
+                {"event": "reset", "timestamp_ns": 1, "response": {}},
+                {"event": "load_start", "timestamp_ns": 2},
+                {
+                    "event": "batch_accepted",
+                    "timestamp_ns": 3,
+                    "client_sent": 1,
+                    "server_accepted": 1,
+                },
+                {"event": "load_end", "timestamp_ns": 4},
+                {"event": "optimize_start", "timestamp_ns": 1_000_000_000},
+                {
+                    "event": "optimize_end",
+                    "timestamp_ns": 3_000_000_000,
+                    "response": {
+                        "status": {
+                            "column_graph_build": {
+                                "adjacency_build_nanos": 500_000_000,
+                                "construction_decisions": {"planning": {"decisions": 1}},
+                            }
+                        }
+                    },
+                },
+                {"event": "cache_prime", "timestamp_ns": 4_000_000_000},
+                {"event": "cache_warm", "timestamp_ns": 5_000_000_000},
+            ]
+            (root / "adapter-lifecycle.jsonl").write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            diagnostic_records = [
+                {
+                    "boundary": "optimize_start",
+                    "process": {"cpu_nanoseconds": 1_000_000_000, "peak_rss_bytes": 100},
+                    "snapshot": {"treedb.process.memory.total_alloc_bytes": "1000"},
+                },
+                {
+                    "boundary": "optimize_end",
+                    "process": {"cpu_nanoseconds": 3_000_000_000, "peak_rss_bytes": 200},
+                    "snapshot": {"treedb.process.memory.total_alloc_bytes": "2000"},
+                },
+            ]
+            (root / "diagnostics.jsonl").write_text(
+                "".join(json.dumps(record) + "\n" for record in diagnostic_records),
+                encoding="utf-8",
+            )
+            (root / "lifecycle.jsonl").write_text(
+                "\n".join([
+                    json.dumps({"stage": "startup", "timestamp": "2026-09-02T00:00:00Z"}),
+                    json.dumps({"stage": "teardown", "timestamp": "2026-09-02T00:01:00Z"}),
+                    "",
+                ]),
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                data_dir=data_dir,
+                lifecycle_dimensions=768,
+                lifecycle_vectors=250000,
+                m=16,
+                ef_construction=128,
+                ef_search=192,
+                rerank_candidates=400,
+                k=100,
+                measurement_run_id="screening-ef128",
+                measurement_dataset_sha256="d" * 64,
+                measurement_role="screening_candidate",
+                measurement_partition="selection",
+            )
+            harness.write_protocol_measurements(
+                harness.HarnessState(root=root), args, "e" * 40
+            )
+            measurements = json.loads((root / "measurements.json").read_text())
+            source = json.loads((root / "measurement-source.json").read_text())
+
+        self.assertEqual(measurements["phase_seconds"], {"adjacency": 0.5, "optimize": 2.0})
+        self.assertEqual(measurements["cpu_utilization_logical_cores"], 1.0)
+        self.assertEqual(measurements["resources"], {
+            "peak_rss_bytes": 200,
+            "persisted_bytes": 10,
+            "cumulative_allocated_bytes": 2000.0,
+        })
+        self.assertEqual(measurements["origin"]["run_id"], "screening-ef128")
+        self.assertEqual(source["data_files"][0]["path"], "maindb/segment")
 
 
 class LifecycleIntegrationTest(unittest.TestCase):

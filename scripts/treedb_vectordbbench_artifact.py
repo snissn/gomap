@@ -44,6 +44,8 @@ ROUTE_PROOF_SCHEMA = "treedb-vectordbbench-route-proof/v2"
 LIFECYCLE_SCHEMA = "treedb-vectordbbench-lifecycle/v1"
 LIFECYCLE_EVENT_SCHEMA = "treedb-vectordbbench-lifecycle-event/v1"
 LIFECYCLE_VALIDATION_SCHEMA = "treedb-vectordbbench-lifecycle-validation/v1"
+MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v4"
+MEASUREMENT_SOURCE_SCHEMA = "treedb-construction-policy-4587-measurement-source/v1"
 PPROF_PROFILE_KINDS = frozenset({"cpu", "heap", "allocs", "block", "mutex"})
 OPTIMIZED_ROUTE_NAMES = frozenset({"exact_hnsw_search_pack_v1", "quantized_rerank"})
 LIFECYCLE_STAGES = (
@@ -299,6 +301,33 @@ def memory_bytes() -> int | None:
     if value.isascii() and value.isdigit() and int(value) > 0:
         return int(value)
     return None
+
+
+def linux_process_metrics(pid: int) -> dict[str, int]:
+    stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    close = stat.rfind(")")
+    if close < 0:
+        raise RuntimeError(f"/proc/{pid}/stat has no command terminator")
+    fields = stat[close + 2:].split()
+    if len(fields) < 13:
+        raise RuntimeError(f"/proc/{pid}/stat is missing CPU fields")
+    ticks = int(fields[11]) + int(fields[12])
+    ticks_per_second = int(os.sysconf("SC_CLK_TCK"))
+    if ticks < 0 or ticks_per_second <= 0:
+        raise RuntimeError(f"/proc/{pid}/stat has invalid CPU counters")
+    peak_rss_bytes = None
+    for line in Path(f"/proc/{pid}/status").read_text(encoding="utf-8").splitlines():
+        if line.startswith("VmHWM:"):
+            parts = line.split()
+            if len(parts) == 3 and parts[2] == "kB":
+                peak_rss_bytes = int(parts[1]) * 1024
+            break
+    if peak_rss_bytes is None or peak_rss_bytes <= 0:
+        raise RuntimeError(f"/proc/{pid}/status has no positive VmHWM")
+    return {
+        "cpu_nanoseconds": ticks * 1_000_000_000 // ticks_per_second,
+        "peak_rss_bytes": peak_rss_bytes,
+    }
 
 
 def storage_context(path: Path) -> dict[str, Any]:
@@ -1260,12 +1289,15 @@ class LifecycleJournal:
 class DiagnosticsSampler:
     """Persist bounded service snapshots while the blocking benchmark runs."""
 
-    def __init__(self, url: str, path: Path, interval: float, data_dir: Path):
+    def __init__(
+        self, url: str, path: Path, interval: float, data_dir: Path,
+        service_pid: int | None = None,
+    ):
         self.url = url
         self.path = path
         self.interval = interval
         self.data_dir = data_dir
-        self.samples: list[dict[str, Any]] = []
+        self.service_pid = service_pid
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._stopped = False
@@ -1290,6 +1322,8 @@ class DiagnosticsSampler:
                     "bytes": wal_bytes,
                 },
             }
+            if self.service_pid is not None:
+                record["process"] = linux_process_metrics(self.service_pid)
             if boundary is not None:
                 record["boundary"] = boundary
                 record["boundary_timestamp_ns"] = boundary_timestamp_ns
@@ -3963,6 +3997,165 @@ def lifecycle_ready_asset(
     return f"{index_name}:{vector_index_name}", generation, expected_service_generation
 
 
+def nested_numeric_values(value: Any, key: str) -> list[float]:
+    found: list[float] = []
+    if isinstance(value, dict):
+        for current_key, current_value in value.items():
+            if current_key == key:
+                if isinstance(current_value, (int, float)) and not isinstance(current_value, bool):
+                    found.append(float(current_value))
+                elif isinstance(current_value, str) and re.fullmatch(r"\d+(?:\.\d+)?", current_value):
+                    found.append(float(current_value))
+            found.extend(nested_numeric_values(current_value, key))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(nested_numeric_values(item, key))
+    return found
+
+
+def write_protocol_measurements(
+    state: HarnessState,
+    args: argparse.Namespace,
+    execution_commit: str,
+) -> None:
+    adapter_path = state.root / "adapter-lifecycle.jsonl"
+    diagnostics_path = state.root / "diagnostics.jsonl"
+    lifecycle_path = state.root / "lifecycle.jsonl"
+    adapter = read_adapter_lifecycle_sidecar(adapter_path)
+    diagnostics = [
+        _object(_strict_json_loads(line), "diagnostic sample", [])
+        for line in diagnostics_path.read_text(encoding="utf-8").splitlines()
+    ]
+    boundaries = {
+        sample.get("boundary"): sample
+        for sample in diagnostics
+        if isinstance(sample.get("boundary"), str)
+    }
+    optimize_start = _object(
+        boundaries.get("optimize_start", {}).get("process"), "optimize start process", []
+    )
+    optimize_end = _object(
+        boundaries.get("optimize_end", {}).get("process"), "optimize end process", []
+    )
+    elapsed = (adapter["optimize_end_ns"] - adapter["optimize_start_ns"]) / 1_000_000_000
+    cpu_seconds = (
+        int(optimize_end["cpu_nanoseconds"]) - int(optimize_start["cpu_nanoseconds"])
+    ) / 1_000_000_000
+    if elapsed <= 0 or cpu_seconds <= 0:
+        raise RuntimeError("protocol measurement source has no positive optimize CPU interval")
+    allocated = [
+        metric
+        for sample in diagnostics
+        for metric in nested_numeric_values(
+            sample.get("snapshot"), "treedb.process.memory.total_alloc_bytes"
+        )
+    ]
+    if not allocated or max(allocated) <= 0:
+        raise RuntimeError("protocol measurement source has no positive allocation telemetry")
+    peak_rss = max(
+        int(sample["process"]["peak_rss_bytes"])
+        for sample in diagnostics
+        if isinstance(sample.get("process"), dict)
+    )
+    if peak_rss <= 0:
+        raise RuntimeError("protocol measurement source has no positive peak RSS")
+
+    data_files = []
+    for path in sorted(args.data_dir.rglob("*")):
+        if path.is_file():
+            data_files.append({
+                "path": path.relative_to(args.data_dir).as_posix(),
+                "size": path.stat().st_size,
+                "sha256": sha256_file(path),
+            })
+    if not data_files:
+        raise RuntimeError("protocol measurement source has no persisted data files")
+    source = {
+        "schema_version": MEASUREMENT_SOURCE_SCHEMA,
+        "adapter_lifecycle": {
+            "path": adapter_path.relative_to(state.root).as_posix(),
+            "sha256": sha256_file(adapter_path),
+        },
+        "diagnostics": {
+            "path": diagnostics_path.relative_to(state.root).as_posix(),
+            "sha256": sha256_file(diagnostics_path),
+        },
+        "data_root": str(args.data_dir.resolve()),
+        "data_files": data_files,
+    }
+    source_path = state.root / "measurement-source.json"
+    write_json(source_path, source)
+
+    events = [
+        _object(_strict_json_loads(line), "lifecycle event", [])
+        for line in lifecycle_path.read_text(encoding="utf-8").splitlines()
+    ]
+    starts = [event for event in events if event.get("stage") == "startup"]
+    completions = [event for event in events if event.get("stage") == "teardown"]
+    if len(starts) != 1 or len(completions) != 1:
+        raise RuntimeError("protocol measurements require one lifecycle startup and teardown")
+    optimize = _object(adapter["optimize_response"], "optimize response", [])
+    status = _object(optimize.get("status"), "optimize status", [])
+    column_graph = _object(status.get("column_graph_build"), "column graph build", [])
+    adjacency_nanos = column_graph.get("adjacency_build_nanos")
+    decisions = column_graph.get("construction_decisions")
+    if (
+        isinstance(adjacency_nanos, bool)
+        or not isinstance(adjacency_nanos, int)
+        or adjacency_nanos <= 0
+        or not isinstance(decisions, dict)
+    ):
+        raise RuntimeError("protocol measurements require raw construction-decision evidence")
+    configuration = {
+        "dimensions": args.lifecycle_dimensions,
+        "metric": "cosine",
+        "m": args.m,
+        "ef_construction": args.ef_construction,
+        "ef_search": args.ef_search,
+        "configured_rerank_candidates": args.rerank_candidates,
+        "effective_rerank_candidates": min(args.rerank_candidates, args.ef_search),
+        "top_k": args.k,
+    }
+    measurements = {
+        "schema_version": MEASUREMENT_SCHEMA,
+        "source": {
+            "path": source_path.relative_to(state.root).as_posix(),
+            "sha256": sha256_file(source_path),
+        },
+        "origin": {
+            "run_id": args.measurement_run_id,
+            "artifact_root": str(state.root),
+            "execution_commit": execution_commit,
+            "dataset_sha256": args.measurement_dataset_sha256,
+            "scale": args.lifecycle_vectors,
+            "role": args.measurement_role,
+            "partition": args.measurement_partition,
+            "ef_construction": args.ef_construction,
+            "lifecycle_sha256": sha256_file(lifecycle_path),
+            "lifecycle_started_at": starts[0]["timestamp"],
+            "lifecycle_completed_at": completions[0]["timestamp"],
+        },
+        "phase_seconds": {
+            "adjacency": adjacency_nanos / 1_000_000_000,
+            "optimize": elapsed,
+        },
+        "cpu_utilization_logical_cores": cpu_seconds / elapsed,
+        "determinism": {
+            "graph_config_checksum": canonical_sha256(configuration),
+            "persisted_data_ledger_checksum": canonical_sha256(data_files),
+            "adapter_lifecycle_checksum": sha256_file(adapter_path),
+        },
+        "diagnostic_work_profile": decisions,
+        "resources": {
+            "peak_rss_bytes": peak_rss,
+            "persisted_bytes": sum(item["size"] for item in data_files),
+            "cumulative_allocated_bytes": max(allocated),
+        },
+        "projected_10m_adjacency_reduction_fraction": None,
+    }
+    write_json(state.root / "measurements.json", measurements)
+
+
 def complete_lifecycle(
     state: HarnessState,
     args: argparse.Namespace,
@@ -4376,6 +4569,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--lifecycle-dataset-name", default="", help="stable dataset label recorded with its checksum")
     parser.add_argument("--lifecycle-vectors", type=int, default=0, help="custom-case vector count, verified against canonical task_config")
     parser.add_argument("--lifecycle-dimensions", type=int, default=0, help="custom-case dimensions, verified against canonical task_config")
+    parser.add_argument("--measurement-run-id", default="", help="protocol run identity; enables raw measurement output")
+    parser.add_argument("--measurement-dataset-sha256", default="", help="canonical protocol dataset identity")
+    parser.add_argument(
+        "--measurement-role",
+        choices=["", "screening_candidate", "screening_control", "decision_candidate", "decision_control"],
+        default="",
+    )
+    parser.add_argument("--measurement-partition", choices=["", "selection", "holdout"], default="")
     parser.add_argument("--diagnostics-interval", type=float, default=5.0, help="seconds between lifecycle service/filesystem snapshots")
     parser.add_argument(
         "--service-close-timeout",
@@ -4439,6 +4640,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             parser.error("diagnostics-interval must be positive")
         if args.service_close_timeout <= 0:
             parser.error("service-close-timeout must be positive")
+        measurement_origin = (
+            args.measurement_run_id,
+            args.measurement_dataset_sha256,
+            args.measurement_role,
+            args.measurement_partition,
+        )
+        if any(measurement_origin) and not all(measurement_origin):
+            parser.error("protocol measurement output requires every measurement-origin argument")
+        if args.measurement_run_id:
+            if not args.construction_decision_diagnostics:
+                parser.error("protocol measurement output requires construction-decision diagnostics")
+            if re.fullmatch(r"[0-9a-f]{64}", args.measurement_dataset_sha256) is None:
+                parser.error("measurement-dataset-sha256 must be a lowercase SHA-256")
     args.out = Path(args.out).expanduser().resolve()
     args.validate_lifecycle = None
     args.vectordbbench_dir = Path(args.vectordbbench_dir).expanduser().resolve() if args.vectordbbench_dir else None
@@ -4609,6 +4823,7 @@ def main(argv: list[str]) -> int:
                 args.out / "diagnostics.jsonl",
                 args.diagnostics_interval,
                 args.data_dir,
+                service_proc.pid,
             )
             sampler.start()
             initialize_lifecycle_capture(state, args, sampler)
@@ -4627,6 +4842,11 @@ def main(argv: list[str]) -> int:
             service_command = complete_lifecycle(
                 state, args, gomap_root, service_bin, service_proc, sampler
             )
+            if args.measurement_run_id:
+                execution_commit = context.get("gomap", {}).get("commit")
+                if not isinstance(execution_commit, str) or re.fullmatch(r"[0-9a-f]{40}", execution_commit) is None:
+                    raise RuntimeError("protocol measurements require an exact gomap commit")
+                write_protocol_measurements(state, args, execution_commit)
             service_proc = None
             sampler = None
         elif args.skip_route_proof:

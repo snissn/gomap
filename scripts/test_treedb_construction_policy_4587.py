@@ -430,7 +430,7 @@ class DecisionFixture:
                 "--lifecycle-sha256", policy.sha256_file(lifecycle_path),
                 "--lifecycle-started-at", started.isoformat(),
                 "--lifecycle-completed-at", completed.isoformat(),
-                "--ef-construction", str(ef), "--expected-generation", "7", "--route", route,
+                "--ef-construction", str(ef), "--expected-generation", "1", "--route", route,
             ]
             command_records.append({
                 "schema_version": "treedb-construction-policy-4587-probe-command/v1",
@@ -856,9 +856,25 @@ class ValidatorMutations(unittest.TestCase):
     def test_resource_regression_cannot_be_go(self) -> None:
         packet = self.fixture.go_packet()
         run = packet["runs"][5]
-        binding = run["measurement_evidence"]
-        self.fixture.rewrite_bound(run, binding,
-                                   lambda value: value["resources"].update({"persisted_bytes": 101.0}))
+        root = Path(run["artifact"]["root"])
+        measurement_path = root / run["measurement_evidence"]["path"]
+        measurement = json.loads(measurement_path.read_text())
+        source_path = root / measurement["source"]["path"]
+        source = json.loads(source_path.read_text())
+        data_path = Path(source["data_root"]) / source["data_files"][0]["path"]
+        data_path.write_bytes(b"x" * 101)
+        source["data_files"][0].update({
+            "size": 101,
+            "sha256": policy.sha256_file(data_path),
+        })
+        source_path.write_text(json.dumps(source, sort_keys=True) + "\n")
+        measurement["source"]["sha256"] = policy.sha256_file(source_path)
+        measurement["resources"]["persisted_bytes"] = 101
+        measurement["determinism"]["persisted_data_ledger_checksum"] = policy.canonical_sha256(
+            source["data_files"]
+        )
+        measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
+        run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
         self.assert_invalid(packet, "computed verdict")
 
     def test_fallback_and_result_count(self) -> None:

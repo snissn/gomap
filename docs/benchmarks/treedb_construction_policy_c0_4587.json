@@ -34,7 +34,7 @@
       "TreeDB/collections/vector_index_rebuild.go": "21bed0f84ae5301d17619ed2753300be73cf422c"
     },
     "harness_blobs": {
-      "scripts/treedb_vectordbbench_artifact.py": "d5083d01679e49b691a9ea3636695d5f7317d316"
+      "scripts/treedb_vectordbbench_artifact.py": "deb69be2459f485f6ac6b88911b1284ced69cd86"
     },
     "vectordbbench": {
       "root": "/mnt/fast4tb/codex-vectordbbench-4545",
@@ -238,6 +238,9 @@
       "--service-bin", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
       "--run-tests", "off", "--run-vdbbench", "--rows", "scalar", "--lifecycle",
       "--construction-decision-diagnostics",
+      "--measurement-run-id", "{run_id}",
+      "--measurement-dataset-sha256", "{dataset_sha256}",
+      "--measurement-role", "{role}", "--measurement-partition", "{partition}",
       "--exclusive-lock", "/mnt/fast4tb/treedb-4587-c0.lock",
       "--case-type", "PerformanceCustomDataset", "--k", "100",
       "--num-concurrency", "32", "--concurrency-duration", "30",
