@@ -1,42 +1,42 @@
 # TreeDB / Qdrant bounded RAG comparison
 
 State: **validated**  
-Manifest SHA-256: `e3bffb65c6f1a8308fe16c9f69ac7d958fa921e9275471b1a4eafdc8c32ab805`  
-Harness revision: `2dbd7810b59f5fc1954e9dd2657b5b863e62737c`  
-TreeDB binary SHA-256: `5a15cef07b5e5b00a03df2b3ba1dedab39b2400d873e17bf8fef7c5f781289e9`  
-TreeDB process CPU / peak RSS: `6.146247s` / `80183296 bytes`  
-TreeDB resource semantics: `getrusage(RUSAGE_SELF) user+system CPU delta`; `getrusage(RUSAGE_SELF) process high-water RSS; Darwin bytes, Linux KiB normalized to bytes`; `fresh comparison process; build, lifecycle reopen, and all 12 query cells`  
+Manifest SHA-256: `b13541afb44ee88509231fda0be96875ea6706b2fc948bf1c329eaefb1a57b07`  
+Harness revision: `b79261243b992183040bd0b991336305932204aa`  
+TreeDB binary SHA-256: `9d0091c30de6c510e179f0ddd30b4b4afaee0e36735fd72fc4a630e9864406a4`  
+TreeDB process CPU / peak RSS: `6.164712s` / `79708160 bytes`  
+TreeDB resource semantics: `getrusage(RUSAGE_SELF) user+system CPU; cumulative before/after snapshots, aggregate is after-before`; `getrusage(RUSAGE_SELF) process high-water RSS; before/after snapshots, aggregate is after high-water; Darwin bytes, Linux KiB normalized to bytes`; `fresh comparison process; build, lifecycle reopen, and all 12 query cells`  
 Qdrant client/server: `1.19.0` / `1.19.0`  
 Qdrant server binary SHA-256: `036b94e5a39f1ea8f2329c8e528fcea54f83eb9205221a7dc1623c9862acc74d`  
 Qdrant release asset SHA-256: `4e279a80cc1ebe73e859318ff86375af54c123887dd7ae46605c0eb6cb7c44e8`  
-Qdrant process CPU / observed peak RSS / durable bytes: `1.620000s` / `279773184 bytes` / `683820267 bytes`
+Qdrant process CPU / observed peak RSS / durable bytes: `1.660000s` / `280133632 bytes` / `366551558 bytes`
 
 | Backend | Route | Filter | Semantics | Samples | Reps | QPS | p50 ms | p95 ms | p99 ms | P@10 | nDCG@10 | MRR@10 | Parent R@10 |
 |---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| qdrant | dense | tenant_alpha | directional | 300 | 3 | 904.99 | 1.068 | 1.284 | 1.466 | 0.900 | 1.000 | 1.000 | 1.000 |
-| qdrant | dense | tenant_alpha_workspace_red | directional | 300 | 3 | 906.97 | 1.069 | 1.309 | 1.432 | 0.600 | 1.000 | 1.000 | 1.000 |
-| qdrant | dense | tenant_alpha_workspace_red_updated_ge_2024 | directional | 300 | 3 | 888.26 | 1.096 | 1.315 | 1.482 | 0.300 | 1.000 | 1.000 | 1.000 |
-| qdrant | dense | unfiltered | directional | 300 | 3 | 920.27 | 1.062 | 1.261 | 1.411 | 1.000 | 1.000 | 1.000 | 0.667 |
-| qdrant | hybrid | tenant_alpha | directional | 300 | 3 | 598.79 | 1.647 | 1.889 | 1.973 | 0.900 | 1.000 | 1.000 | 1.000 |
-| qdrant | hybrid | tenant_alpha_workspace_red | directional | 300 | 3 | 618.15 | 1.589 | 1.860 | 1.982 | 0.600 | 1.000 | 1.000 | 1.000 |
-| qdrant | hybrid | tenant_alpha_workspace_red_updated_ge_2024 | directional | 300 | 3 | 632.68 | 1.556 | 1.757 | 1.959 | 0.300 | 1.000 | 1.000 | 1.000 |
-| qdrant | hybrid | unfiltered | directional | 300 | 3 | 608.43 | 1.617 | 1.844 | 1.939 | 1.000 | 1.000 | 1.000 | 0.722 |
-| qdrant | lexical | tenant_alpha | directional | 300 | 3 | 1099.55 | 0.884 | 1.084 | 1.185 | 0.900 | 1.000 | 1.000 | 1.000 |
-| qdrant | lexical | tenant_alpha_workspace_red | directional | 300 | 3 | 1091.54 | 0.893 | 1.062 | 1.230 | 0.600 | 1.000 | 1.000 | 1.000 |
-| qdrant | lexical | tenant_alpha_workspace_red_updated_ge_2024 | directional | 300 | 3 | 1044.44 | 0.880 | 1.078 | 1.283 | 0.300 | 1.000 | 1.000 | 1.000 |
-| qdrant | lexical | unfiltered | directional | 300 | 3 | 1102.15 | 0.881 | 1.090 | 1.251 | 1.000 | 1.000 | 1.000 | 0.667 |
-| treedb | dense | tenant_alpha | directional | 300 | 3 | 665.31 | 1.470 | 1.747 | 2.047 | 0.900 | 1.000 | 1.000 | 1.000 |
-| treedb | dense | tenant_alpha_workspace_red | directional | 300 | 3 | 670.95 | 1.465 | 1.772 | 2.041 | 0.600 | 1.000 | 1.000 | 1.000 |
-| treedb | dense | tenant_alpha_workspace_red_updated_ge_2024 | directional | 300 | 3 | 740.02 | 1.333 | 1.520 | 1.792 | 0.300 | 1.000 | 1.000 | 1.000 |
-| treedb | dense | unfiltered | directional | 300 | 3 | 670.51 | 1.468 | 1.626 | 1.987 | 1.000 | 1.000 | 1.000 | 0.667 |
-| treedb | hybrid | tenant_alpha | directional | 300 | 3 | 650.64 | 1.494 | 1.816 | 2.175 | 0.900 | 1.000 | 1.000 | 1.000 |
-| treedb | hybrid | tenant_alpha_workspace_red | directional | 300 | 3 | 651.58 | 1.499 | 1.798 | 2.113 | 0.600 | 1.000 | 1.000 | 1.000 |
-| treedb | hybrid | tenant_alpha_workspace_red_updated_ge_2024 | directional | 300 | 3 | 712.16 | 1.371 | 1.611 | 2.160 | 0.300 | 1.000 | 1.000 | 1.000 |
-| treedb | hybrid | unfiltered | directional | 300 | 3 | 652.48 | 1.510 | 1.795 | 2.011 | 1.000 | 1.000 | 1.000 | 0.722 |
-| treedb | lexical | tenant_alpha | directional | 300 | 3 | 655.48 | 1.499 | 1.740 | 2.049 | 0.900 | 1.000 | 1.000 | 1.000 |
-| treedb | lexical | tenant_alpha_workspace_red | directional | 300 | 3 | 658.43 | 1.497 | 1.711 | 2.018 | 0.600 | 1.000 | 1.000 | 1.000 |
-| treedb | lexical | tenant_alpha_workspace_red_updated_ge_2024 | directional | 300 | 3 | 923.42 | 0.940 | 1.385 | 1.656 | 0.300 | 1.000 | 1.000 | 1.000 |
-| treedb | lexical | unfiltered | directional | 300 | 3 | 677.10 | 1.466 | 1.695 | 2.031 | 1.000 | 1.000 | 1.000 | 0.667 |
+| qdrant | dense | tenant_alpha | directional | 300 | 3 | 908.62 | 1.069 | 1.285 | 1.476 | 0.900 | 1.000 | 1.000 | 1.000 |
+| qdrant | dense | tenant_alpha_workspace_red | directional | 300 | 3 | 901.18 | 1.083 | 1.318 | 1.444 | 0.600 | 1.000 | 1.000 | 1.000 |
+| qdrant | dense | tenant_alpha_workspace_red_updated_ge_2024 | directional | 300 | 3 | 893.88 | 1.095 | 1.316 | 1.513 | 0.300 | 1.000 | 1.000 | 1.000 |
+| qdrant | dense | unfiltered | directional | 300 | 3 | 913.86 | 1.068 | 1.260 | 1.419 | 1.000 | 1.000 | 1.000 | 0.667 |
+| qdrant | hybrid | tenant_alpha | directional | 300 | 3 | 595.54 | 1.657 | 1.899 | 1.950 | 0.900 | 1.000 | 1.000 | 1.000 |
+| qdrant | hybrid | tenant_alpha_workspace_red | directional | 300 | 3 | 590.91 | 1.661 | 1.858 | 2.037 | 0.600 | 1.000 | 1.000 | 1.000 |
+| qdrant | hybrid | tenant_alpha_workspace_red_updated_ge_2024 | directional | 300 | 3 | 563.28 | 1.680 | 2.031 | 4.118 | 0.300 | 1.000 | 1.000 | 1.000 |
+| qdrant | hybrid | unfiltered | directional | 300 | 3 | 592.44 | 1.650 | 1.910 | 2.126 | 1.000 | 1.000 | 1.000 | 0.722 |
+| qdrant | lexical | tenant_alpha | directional | 300 | 3 | 1080.37 | 0.897 | 1.109 | 1.306 | 0.900 | 1.000 | 1.000 | 1.000 |
+| qdrant | lexical | tenant_alpha_workspace_red | directional | 300 | 3 | 1070.67 | 0.902 | 1.088 | 1.305 | 0.600 | 1.000 | 1.000 | 1.000 |
+| qdrant | lexical | tenant_alpha_workspace_red_updated_ge_2024 | directional | 300 | 3 | 1043.85 | 0.888 | 1.088 | 1.220 | 0.300 | 1.000 | 1.000 | 1.000 |
+| qdrant | lexical | unfiltered | directional | 300 | 3 | 1092.71 | 0.880 | 1.109 | 1.298 | 1.000 | 1.000 | 1.000 | 0.667 |
+| treedb | dense | tenant_alpha | directional | 300 | 3 | 673.00 | 1.464 | 1.623 | 1.904 | 0.900 | 1.000 | 1.000 | 1.000 |
+| treedb | dense | tenant_alpha_workspace_red | directional | 300 | 3 | 663.68 | 1.470 | 1.653 | 2.230 | 0.600 | 1.000 | 1.000 | 1.000 |
+| treedb | dense | tenant_alpha_workspace_red_updated_ge_2024 | directional | 300 | 3 | 724.26 | 1.343 | 1.654 | 1.960 | 0.300 | 1.000 | 1.000 | 1.000 |
+| treedb | dense | unfiltered | directional | 300 | 3 | 678.96 | 1.450 | 1.581 | 1.943 | 1.000 | 1.000 | 1.000 | 0.667 |
+| treedb | hybrid | tenant_alpha | directional | 300 | 3 | 657.80 | 1.487 | 1.783 | 1.982 | 0.900 | 1.000 | 1.000 | 1.000 |
+| treedb | hybrid | tenant_alpha_workspace_red | directional | 300 | 3 | 651.73 | 1.502 | 1.832 | 2.074 | 0.600 | 1.000 | 1.000 | 1.000 |
+| treedb | hybrid | tenant_alpha_workspace_red_updated_ge_2024 | directional | 300 | 3 | 710.88 | 1.368 | 1.730 | 2.040 | 0.300 | 1.000 | 1.000 | 1.000 |
+| treedb | hybrid | unfiltered | directional | 300 | 3 | 661.12 | 1.487 | 1.705 | 1.975 | 1.000 | 1.000 | 1.000 | 0.722 |
+| treedb | lexical | tenant_alpha | directional | 300 | 3 | 666.33 | 1.477 | 1.598 | 1.908 | 0.900 | 1.000 | 1.000 | 1.000 |
+| treedb | lexical | tenant_alpha_workspace_red | directional | 300 | 3 | 637.24 | 1.537 | 1.900 | 2.159 | 0.600 | 1.000 | 1.000 | 1.000 |
+| treedb | lexical | tenant_alpha_workspace_red_updated_ge_2024 | directional | 300 | 3 | 914.68 | 0.945 | 1.386 | 1.684 | 0.300 | 1.000 | 1.000 | 1.000 |
+| treedb | lexical | unfiltered | directional | 300 | 3 | 660.83 | 1.480 | 1.785 | 1.999 | 1.000 | 1.000 | 1.000 | 0.667 |
 
 ## Dispositions
 
