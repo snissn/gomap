@@ -162,8 +162,12 @@ generated_runs=("$TMP"/gomap_minima_qualification_*)
 cat >"$TMP/fake-qdrant.go" <<'EOF'
 package main
 
+import "time"
+
 func main() {
-	select {}
+	for {
+		time.Sleep(time.Hour)
+	}
 }
 EOF
 go build -o "$TMP/fake-qdrant" "$TMP/fake-qdrant.go"
