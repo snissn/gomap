@@ -311,3 +311,86 @@ func TestColumnVectorGraphRowRefStateValidationFailures1993(t *testing.T) {
 		}
 	})
 }
+
+func BenchmarkColumnVectorGraphRowRefPruningCharacterization4589(b *testing.B) {
+	const rowsCount = 50_000
+	const generation = uint64(17)
+
+	rows := make([]columnVectorGraphAssetRow, rowsCount)
+	for row := range rows {
+		rows[row].BaseRowRef = DocumentRowRef{
+			Generation:        generation,
+			PartID:            100 + uint64(row/8_192),
+			RowIndex:          row % 8_192,
+			AppliedCommandLSN: 200 + uint64(row/500),
+		}
+	}
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		AssetManager: &ColumnAssetManagerConfig{
+			Kind:              ColumnAssetManagerValueLogShaped,
+			IsolatedNamespace: true,
+			Namespace:         "pruning-characterization-4589",
+		},
+	}
+	def := columnGraphRebuildVectorIndexDefinitionV2A(768, 16)
+
+	for fieldIndex, field := range columnVectorGraphRowRefStateFields {
+		values, err := columnVectorGraphRowRefStateValues(field, rows, generation)
+		if err != nil {
+			b.Fatalf("row-ref values for %s: %v", field, err)
+		}
+		monotone := true
+		for row := 1; row < len(values); row++ {
+			if values[row] < values[row-1] {
+				monotone = false
+				break
+			}
+		}
+		b.Run(string(field), func(b *testing.B) {
+			b.ReportAllocs()
+			var payload columnVectorGraphPreparedRowRefStatePayload
+			for range b.N {
+				payload, err = prepareColumnVectorGraphRowRefStatePayloadFromValues("docs", cfg, def, uint64(1_000+fieldIndex), field, values)
+				if err != nil {
+					b.Fatalf("prepare row-ref payload for %s: %v", field, err)
+				}
+			}
+			b.StopTimer()
+			image, err := typedcolumn.ParseColumnPartImage(payload.Payload)
+			if err != nil {
+				b.Fatalf("parse row-ref payload for %s: %v", field, err)
+			}
+			part, err := typedcolumn.ColumnPartFromImage(image)
+			if err != nil {
+				b.Fatalf("decode row-ref payload for %s: %v", field, err)
+			}
+			index, ok := part.PruningMetadata.Int64Column(columnVectorGraphRowRefStateColumnName(field))
+			if !ok {
+				b.Fatalf("row-ref field %s missing full int64 pruning payload", field)
+			}
+			if len(index.Entries) != rowsCount {
+				b.Fatalf("row-ref field %s pruning entries=%d want %d", field, len(index.Entries), rowsCount)
+			}
+			if equality, _ := index.CanPlan(typedcolumn.ColumnPruningOpEquality); !equality {
+				b.Fatalf("row-ref field %s does not advertise equality", field)
+			}
+			if orderedRange, _ := index.CanPlan(typedcolumn.ColumnPruningOpOrderedRange); !orderedRange {
+				b.Fatalf("row-ref field %s does not advertise ordered range", field)
+			}
+			section, ok, err := image.PruningMetadataSection()
+			if err != nil || !ok {
+				b.Fatalf("row-ref field %s pruning section ok=%t err=%v", field, ok, err)
+			}
+			b.ReportMetric(float64(rowsCount), "rows/op")
+			b.ReportMetric(float64(len(index.Blocks)), "pruning_blocks/op")
+			b.ReportMetric(float64(len(index.Entries)), "pruning_entries/op")
+			b.ReportMetric(float64(section.RawBytes), "pruning_raw_bytes/op")
+			if monotone {
+				b.ReportMetric(1, "row_order_monotone/op")
+			} else {
+				b.ReportMetric(0, "row_order_monotone/op")
+			}
+		})
+	}
+}
