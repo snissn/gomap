@@ -349,12 +349,17 @@ func validateTreeDBComparisonArtifact(artifact *treeDBComparisonArtifact, manife
 		artifact.QuerySeconds > float64(manifest.Config.PhaseTimeoutSeconds) {
 		return nil, fmt.Errorf("TreeDB artifact failed or lacks bounded build/query/storage evidence")
 	}
-	if !artifact.ProcessResources.Available || artifact.ProcessResources.CPUSeconds <= 0 ||
-		artifact.ProcessResources.PeakRSSBytes <= 0 ||
-		artifact.ProcessResources.CPUSemantics != "getrusage(RUSAGE_SELF) user+system CPU delta" ||
-		artifact.ProcessResources.RSSSemantics != "getrusage(RUSAGE_SELF) process high-water RSS; Darwin bytes, Linux KiB normalized to bytes" ||
-		artifact.ProcessResources.Scope != "fresh comparison process; build, lifecycle reopen, and all 12 query cells" {
-		return nil, fmt.Errorf("TreeDB artifact lacks process CPU/RSS evidence or exact semantics")
+	resources := artifact.ProcessResources
+	if !resources.Available || !resources.Before.Available || !resources.After.Available ||
+		resources.Before.CapturedUnixNanos <= 0 || resources.After.CapturedUnixNanos <= resources.Before.CapturedUnixNanos ||
+		resources.Before.CPUSeconds < 0 || resources.After.CPUSeconds < resources.Before.CPUSeconds ||
+		resources.Before.PeakRSSBytes <= 0 || resources.After.PeakRSSBytes < resources.Before.PeakRSSBytes ||
+		resources.CPUSeconds <= 0 || !comparisonFloatMatches(resources.CPUSeconds, resources.After.CPUSeconds-resources.Before.CPUSeconds) ||
+		resources.PeakRSSBytes != resources.After.PeakRSSBytes ||
+		resources.CPUSemantics != "getrusage(RUSAGE_SELF) user+system CPU; cumulative before/after snapshots, aggregate is after-before" ||
+		resources.RSSSemantics != "getrusage(RUSAGE_SELF) process high-water RSS; before/after snapshots, aggregate is after high-water; Darwin bytes, Linux KiB normalized to bytes" ||
+		resources.Scope != "fresh comparison process; build, lifecycle reopen, and all 12 query cells" {
+		return nil, fmt.Errorf("TreeDB artifact lacks independently verifiable process CPU/RSS snapshots, aggregates, or exact semantics")
 	}
 	if err := validateLifecycleEvidence("semantic_minilm", artifact.Lifecycle); err != nil {
 		return nil, err

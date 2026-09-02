@@ -2,6 +2,8 @@
 
 package main
 
+import "time"
+
 func comparisonProcessUsageSnapshot() (comparisonProcessUsage, error) {
-	return comparisonProcessUsage{Available: false}, nil
+	return comparisonProcessUsage{Available: false, CapturedUnixNanos: time.Now().UnixNano()}, nil
 }

@@ -13,18 +13,21 @@ import (
 const treeDBComparisonArtifactSchema = "treedb-rag-treedb-comparison/v1"
 
 type comparisonProcessUsage struct {
-	Available    bool
-	CPUSeconds   float64
-	PeakRSSBytes int64
+	Available         bool    `json:"available"`
+	CPUSeconds        float64 `json:"cumulative_cpu_seconds"`
+	PeakRSSBytes      int64   `json:"high_water_rss_bytes"`
+	CapturedUnixNanos int64   `json:"captured_unix_nanos"`
 }
 
 type comparisonProcessResources struct {
-	Available    bool    `json:"available"`
-	CPUSeconds   float64 `json:"cpu_seconds"`
-	PeakRSSBytes int64   `json:"peak_rss_bytes"`
-	CPUSemantics string  `json:"cpu_semantics"`
-	RSSSemantics string  `json:"rss_semantics"`
-	Scope        string  `json:"scope"`
+	Available    bool                   `json:"available"`
+	CPUSeconds   float64                `json:"cpu_seconds"`
+	PeakRSSBytes int64                  `json:"peak_rss_bytes"`
+	Before       comparisonProcessUsage `json:"before"`
+	After        comparisonProcessUsage `json:"after"`
+	CPUSemantics string                 `json:"cpu_semantics"`
+	RSSSemantics string                 `json:"rss_semantics"`
+	Scope        string                 `json:"scope"`
 }
 
 type treeDBComparisonArtifact struct {
@@ -149,8 +152,10 @@ func runTreeDBComparisonEvidence(cfg applicationConfig, outputPath string) error
 	}
 	resources := comparisonProcessResources{
 		Available:    usageBefore.Available && usageAfter.Available,
-		CPUSemantics: "getrusage(RUSAGE_SELF) user+system CPU delta",
-		RSSSemantics: "getrusage(RUSAGE_SELF) process high-water RSS; Darwin bytes, Linux KiB normalized to bytes",
+		Before:       usageBefore,
+		After:        usageAfter,
+		CPUSemantics: "getrusage(RUSAGE_SELF) user+system CPU; cumulative before/after snapshots, aggregate is after-before",
+		RSSSemantics: "getrusage(RUSAGE_SELF) process high-water RSS; before/after snapshots, aggregate is after high-water; Darwin bytes, Linux KiB normalized to bytes",
 		Scope:        "fresh comparison process; build, lifecycle reopen, and all 12 query cells",
 	}
 	if resources.Available {

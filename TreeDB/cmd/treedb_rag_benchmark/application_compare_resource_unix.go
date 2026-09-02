@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"syscall"
+	"time"
 )
 
 func comparisonProcessUsageSnapshot() (comparisonProcessUsage, error) {
@@ -18,9 +19,10 @@ func comparisonProcessUsageSnapshot() (comparisonProcessUsage, error) {
 		maxRSSBytes *= 1024
 	}
 	return comparisonProcessUsage{
-		Available:    true,
-		CPUSeconds:   timevalSeconds(usage.Utime) + timevalSeconds(usage.Stime),
-		PeakRSSBytes: maxRSSBytes,
+		Available:         true,
+		CPUSeconds:        timevalSeconds(usage.Utime) + timevalSeconds(usage.Stime),
+		PeakRSSBytes:      maxRSSBytes,
+		CapturedUnixNanos: time.Now().UnixNano(),
 	}, nil
 }
 

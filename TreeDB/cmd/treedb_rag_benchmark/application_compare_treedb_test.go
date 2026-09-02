@@ -32,8 +32,10 @@ func validTreeDBComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 		Lifecycle: lifecycleEvidence{ColdReopenParity: true, TextIndexParity: true, VectorIndexParity: true, ScalarIndexParity: true},
 		ProcessResources: comparisonProcessResources{
 			Available: true, CPUSeconds: 1, PeakRSSBytes: 1024,
-			CPUSemantics: "getrusage(RUSAGE_SELF) user+system CPU delta",
-			RSSSemantics: "getrusage(RUSAGE_SELF) process high-water RSS; Darwin bytes, Linux KiB normalized to bytes",
+			Before:       comparisonProcessUsage{Available: true, CPUSeconds: 2, PeakRSSBytes: 512, CapturedUnixNanos: 1},
+			After:        comparisonProcessUsage{Available: true, CPUSeconds: 3, PeakRSSBytes: 1024, CapturedUnixNanos: 2},
+			CPUSemantics: "getrusage(RUSAGE_SELF) user+system CPU; cumulative before/after snapshots, aggregate is after-before",
+			RSSSemantics: "getrusage(RUSAGE_SELF) process high-water RSS; before/after snapshots, aggregate is after high-water; Darwin bytes, Linux KiB normalized to bytes",
 			Scope:        "fresh comparison process; build, lifecycle reopen, and all 12 query cells",
 		},
 	}
@@ -125,6 +127,13 @@ func TestTreeDBComparisonValidatorRejectsMismatchedEvidence(t *testing.T) {
 		{"missing CPU", func(a *treeDBComparisonArtifact) { a.ProcessResources.CPUSeconds = 0 }},
 		{"missing peak RSS", func(a *treeDBComparisonArtifact) { a.ProcessResources.PeakRSSBytes = 0 }},
 		{"wrong resource semantics", func(a *treeDBComparisonArtifact) { a.ProcessResources.RSSSemantics = "current RSS" }},
+		{"missing before snapshot", func(a *treeDBComparisonArtifact) { a.ProcessResources.Before.Available = false }},
+		{"missing after snapshot", func(a *treeDBComparisonArtifact) { a.ProcessResources.After.Available = false }},
+		{"unordered snapshots", func(a *treeDBComparisonArtifact) { a.ProcessResources.After.CapturedUnixNanos = 1 }},
+		{"cumulative CPU regression", func(a *treeDBComparisonArtifact) { a.ProcessResources.After.CPUSeconds = 1 }},
+		{"wrong CPU aggregate", func(a *treeDBComparisonArtifact) { a.ProcessResources.CPUSeconds = .5 }},
+		{"wrong peak RSS aggregate", func(a *treeDBComparisonArtifact) { a.ProcessResources.PeakRSSBytes = 1023 }},
+		{"high-water RSS regression", func(a *treeDBComparisonArtifact) { a.ProcessResources.After.PeakRSSBytes = 511 }},
 		{"wrong exact vector route", func(a *treeDBComparisonArtifact) { a.Rows[4].Cell.VectorRoute = "brute_force" }},
 		{"missing vector counters", func(a *treeDBComparisonArtifact) { a.Rows[4].Counters["vector_candidates_examined"] = 0 }},
 		{"missing hybrid fusion counters", func(a *treeDBComparisonArtifact) { a.Rows[8].Counters["candidates_fused"] = 0 }},
@@ -190,7 +199,7 @@ func TestComparisonProcessUsageSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
-		if !snapshot.Available || snapshot.CPUSeconds < 0 || snapshot.PeakRSSBytes <= 0 {
+		if !snapshot.Available || snapshot.CPUSeconds < 0 || snapshot.PeakRSSBytes <= 0 || snapshot.CapturedUnixNanos <= 0 {
 			t.Fatalf("invalid getrusage snapshot: %+v", snapshot)
 		}
 	}
