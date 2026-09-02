@@ -145,6 +145,13 @@ class IsolationMonitor:
         return self.samples
 
 
+def frozen_gomaxprocs() -> int:
+    value = os.environ.get("GOMAXPROCS")
+    if value != "12":
+        fail("GOMAXPROCS must equal the frozen value 12")
+    return 12
+
+
 def service_argv(args: argparse.Namespace) -> list[str]:
     return [
         str(args.service_bin), "-dir", str(args.artifact_root / "treedb-data"),
@@ -488,9 +495,16 @@ def parse_args() -> argparse.Namespace:
     if manifest.get("artifact_root") != str(args.artifact_root):
         fail("manifest artifact root does not match --artifact-root")
     service = manifest.get("service")
-    if not isinstance(service, dict) or Path(service.get("data_dir", "")).resolve() != (
-            args.artifact_root / "treedb-data").resolve():
-        fail("manifest service data root does not match frozen search service argv")
+    binary = service.get("binary") if isinstance(service, dict) else None
+    if (not isinstance(service, dict)
+            or Path(service.get("data_dir", "")).resolve()
+            != (args.artifact_root / "treedb-data").resolve()
+            or service.get("base_url") != args.base_url
+            or service.get("profile") != "command_wal_durable"
+            or not isinstance(binary, dict)
+            or binary.get("sha256") != args.service_binary_sha256):
+        fail("manifest service identity does not match frozen search service")
+    args.gomaxprocs = frozen_gomaxprocs()
     lifecycle = manifest.get("lifecycle")
     if not isinstance(lifecycle, dict) or lifecycle.get("sha256") != args.lifecycle_sha256:
         fail("lifecycle_sha256 does not match artifact manifest")
@@ -545,7 +559,7 @@ def main() -> int:
                 or monitor.samples[0]["competing_processes"]):
             fail("search isolation is not clean before service launch")
         env = os.environ.copy()
-        env["GOMAXPROCS"] = "12"
+        env["GOMAXPROCS"] = str(args.gomaxprocs)
         service_started_at = iso_now()
         service = subprocess.Popen(
             service_argv(args), stdout=service_log, stderr=subprocess.STDOUT,
@@ -617,7 +631,7 @@ def main() -> int:
                     "lock_path": str(args.exclusive_lock),
                     "lock_acquired_at": lock_acquired_at,
                     "coverage_completed_at": search_completed_at,
-                    "gomaxprocs": 12,
+                    "gomaxprocs": args.gomaxprocs,
                     "service_binary_sha256": args.service_binary_sha256,
                     "service_argv": service_argv(args),
                     "service_started_at": service_started_at,

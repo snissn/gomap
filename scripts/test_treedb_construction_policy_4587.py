@@ -907,7 +907,7 @@ class ValidatorMutations(unittest.TestCase):
                     value["argv"].index("--manifest-sha256") + 1,
                     run["artifact"]["manifest_sha256"],
                 ))
-        self.assert_invalid(packet, "one authorized service binary")
+        self.assert_invalid(packet, "authorized service binary")
 
     def test_extra_row_and_holdout_misuse(self) -> None:
         packet = self.fixture.no_go_packet()
@@ -1165,6 +1165,13 @@ class ValidatorMutations(unittest.TestCase):
     def test_canonical_digest_matches_existing_index_producer(self) -> None:
         value = {"a": 1}
         self.assertEqual(policy.canonical_sha256(value), search_existing_index.canonical_sha256(value))
+
+    def test_existing_index_helper_requires_frozen_gomaxprocs(self) -> None:
+        with mock.patch.dict(search_existing_index.os.environ, {"GOMAXPROCS": "12"}):
+            self.assertEqual(search_existing_index.frozen_gomaxprocs(), 12)
+        with mock.patch.dict(search_existing_index.os.environ, {"GOMAXPROCS": "8"}):
+            with self.assertRaisesRegex(ValueError, "frozen value 12"):
+                search_existing_index.frozen_gomaxprocs()
 
     def test_existing_index_helper_executes_and_records_canonical_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1432,7 +1439,7 @@ class ValidatorMutations(unittest.TestCase):
                     + timedelta(seconds=7)
                 ).isoformat(),
             })),
-            ("service argv", lambda value: value["service_argv"].__setitem__(2, "/tmp/wrong")),
+            ("service_argv", lambda value: value["service_argv"].__setitem__(2, "/tmp/wrong")),
             ("gomaxprocs", lambda value: value.update({"gomaxprocs": 1})),
         ]
         for pattern, mutate in mutations:
