@@ -104,6 +104,19 @@ func TestReserveComparisonOutputsRejectsFilesystemAliases(t *testing.T) {
 	}
 }
 
+func TestValidateQdrantStorageBinding(t *testing.T) {
+	recorded := t.TempDir()
+	if err := validateQdrantStorageBinding(recorded, recorded); err != nil {
+		t.Fatalf("rejected matching storage path: %v", err)
+	}
+	if err := validateQdrantStorageBinding(recorded, t.TempDir()); err == nil {
+		t.Fatal("accepted unrelated storage path")
+	}
+	if err := validateQdrantStorageBinding("relative", recorded); err == nil {
+		t.Fatal("accepted relative recorded storage path")
+	}
+}
+
 func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest, string, qdrantComparisonArtifact) {
 	t.Helper()
 	manifest, err := buildApplicationComparisonManifest()
@@ -160,7 +173,8 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 		Build: qdrantComparisonBuild{Seconds: 1, Points: 54}, QuerySeconds: 1,
 		Reopen: qdrantComparisonReopen{
 			Attempted: true, Succeeded: true, OptimizerUpdateTriggered: true, Version: "1.19.0", Status: "green", PointCount: 54,
-			IndexedVectorsCount: 108, PayloadIndexes: []string{"tenant", "updated_year", "workspace"}, Seconds: 1,
+			IndexedVectorsCount: 108, PayloadIndexes: []string{"tenant", "updated_year", "workspace"},
+			FilterCardinalities: cardinalities, Seconds: 1,
 		},
 	}
 	for _, route := range []string{"lexical", "dense", "hybrid"} {
@@ -282,6 +296,7 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		{"wrong sparse vector digest", func(a *qdrantComparisonArtifact) { a.SparseVectorSHA256 = strings.Repeat("0", 64) }},
 		{"missing indexed vectors", func(a *qdrantComparisonArtifact) { a.Server.IndexProof.IndexedVectorsCount = 0 }},
 		{"wrong filter cardinality", func(a *qdrantComparisonArtifact) { a.Server.IndexProof.FilterCardinalities[filterUnfiltered] = 53 }},
+		{"wrong reopen filter cardinality", func(a *qdrantComparisonArtifact) { a.Reopen.FilterCardinalities[filterUnfiltered] = 53 }},
 		{"missing route", func(a *qdrantComparisonArtifact) { a.Cells = a.Cells[:len(a.Cells)-1] }},
 		{"fallback", func(a *qdrantComparisonArtifact) { a.Cells[0].RouteProof.Fallbacks = 1 }},
 		{"exhaustive", func(a *qdrantComparisonArtifact) { a.Cells[0].RouteProof.ExhaustiveSearch = true }},

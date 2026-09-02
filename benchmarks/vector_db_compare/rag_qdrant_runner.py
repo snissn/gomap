@@ -102,9 +102,9 @@ class Runner:
         self.config = manifest["config"]; self.filters = {row["id"]: row for row in manifest["filters"]}
         self.sparse_docs, self.sparse_queries, self.sparse_sha = sparse_vectors(manifest)
         self.ids = {row["id"]: i + 1 for i, row in enumerate(manifest["chunks"])}; self.cells, self.failures, self.build_seconds, self.query_seconds = [], [], 0, 0
-        self.reopen = {"attempted": False, "succeeded": False, "optimizer_update_triggered": False, "version": "", "status": "", "point_count": 0, "indexed_vectors_count": 0, "payload_indexes": [], "seconds": 0}
+        self.reopen = {"attempted": False, "succeeded": False, "optimizer_update_triggered": False, "version": "", "status": "", "point_count": 0, "indexed_vectors_count": 0, "payload_indexes": [], "filter_cardinalities": {}, "seconds": 0}
         self.indexed_vectors_count = 0
-        self.filter_cardinalities = {spec["id"]: sum(authorized(chunk, spec) for chunk in manifest["chunks"]) for spec in manifest["filters"]}
+        self.filter_cardinalities = {}
         self.process_samples = [process_stats(args.server_pid)]
         self.effective_config = None
     def read_effective_config(self, info):
@@ -147,6 +147,15 @@ class Runner:
         if effective != expected:
             raise RuntimeError(f"effective Qdrant collection configuration mismatch: {effective!r}")
         return effective
+    def measure_filter_cardinalities(self, client):
+        return {
+            spec["id"]: int(client.count(
+                collection_name=self.args.collection,
+                count_filter=filter_for(self.models, spec),
+                exact=True,
+            ).count)
+            for spec in self.manifest["filters"]
+        }
     def build(self):
         m, c = self.models, self.client
         started = time.monotonic()
@@ -169,6 +178,7 @@ class Runner:
         if info is None or int(getattr(info, "points_count", -1)) != 54 or int(getattr(info, "indexed_vectors_count", -1)) < 108 or any(field not in (getattr(info, "payload_schema", {}) or {}) for field in ("tenant", "workspace", "updated_year")): raise RuntimeError("build count/index proof failed")
         self.indexed_vectors_count = int(getattr(info, "indexed_vectors_count", -1))
         self.effective_config = self.read_effective_config(info)
+        self.filter_cardinalities = self.measure_filter_cardinalities(c)
     def restart(self):
         started = time.monotonic()
         self.reopen["attempted"] = True
@@ -219,8 +229,9 @@ class Runner:
                 effective_config = self.read_effective_config(collection)
                 if effective_config != self.effective_config:
                     raise RuntimeError(f"reopen collection configuration changed: {effective_config!r}")
+                reopen_filter_cardinalities = self.measure_filter_cardinalities(candidate)
                 self.client = candidate
-                self.reopen.update(attempted=True, succeeded=True, version=server["version"], status="green", point_count=count, indexed_vectors_count=indexed, payload_indexes=payload_indexes, seconds=time.monotonic() - started)
+                self.reopen.update(attempted=True, succeeded=True, version=server["version"], status="green", point_count=count, indexed_vectors_count=indexed, payload_indexes=payload_indexes, filter_cardinalities=reopen_filter_cardinalities, seconds=time.monotonic() - started)
                 return
             except Exception as exc:
                 last = exc
@@ -274,6 +285,7 @@ class Runner:
         observed = [row for row in self.process_samples if row]
         resources = {"host_pid_metrics": "observed_process_samples_across_pre_and_post_restart_segments", "process_samples": observed, "peak_observed_rss_bytes": max((row["rss_bytes"] for row in observed), default=0), "cpu_seconds": sum(max(0, right["cpu_seconds"] - left["cpu_seconds"]) for left, right in zip(observed, observed[1:]) if left["pid"] == right["pid"]) + sum(row["cpu_seconds"] for index, row in enumerate(observed) if index > 0 and row["pid"] != observed[index - 1]["pid"]), "durable_bytes": directory_bytes(self.args.storage_path)}
         resources["durable_bytes_semantics"] = "live_before_server_shutdown"
+        resources["storage_path"] = str(self.args.storage_path.resolve())
         server_binary_sha = file_sha256(self.args.server_binary)
         release_asset_sha = file_sha256(self.args.server_release_asset)
         return {"schema": ARTIFACT_SCHEMA, "backend": "qdrant_server", "harness_revision": self.args.harness_revision, "client_version": VERSION, "manifest_sha256": self.manifest_sha, "fixture_sha256": self.manifest["fixture_sha256"], "semantic_vector_sha256": self.manifest["semantic_vector_sha256"], "config_sha256": self.manifest["config_sha256"], "source_count": 18, "chunk_count": 54, "query_count": 3, "sparse_vector_sha256": self.sparse_sha, "build": {"seconds": self.build_seconds, "points": 54}, "query_seconds": self.query_seconds, "server": {"version": VERSION, "deployment": "standalone", "binary_sha256": server_binary_sha, "release_asset_sha256": release_asset_sha, "identity": self.args.server_identity, "local_mode": False, "config": self.effective_config, "index_proof": {"indexed_vectors_count": self.indexed_vectors_count, "filter_cardinalities": self.filter_cardinalities}}, "resources": resources, "reopen": self.reopen, "cells": self.cells, "failures": self.failures}

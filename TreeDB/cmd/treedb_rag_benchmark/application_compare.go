@@ -73,6 +73,7 @@ type qdrantComparisonResources struct {
 	CPUSeconds            float64                         `json:"cpu_seconds"`
 	DurableBytes          int64                           `json:"durable_bytes"`
 	DurableBytesSemantics string                          `json:"durable_bytes_semantics"`
+	StoragePath           string                          `json:"storage_path"`
 }
 
 type qdrantComparisonBuild struct {
@@ -81,15 +82,16 @@ type qdrantComparisonBuild struct {
 }
 
 type qdrantComparisonReopen struct {
-	Attempted                bool     `json:"attempted"`
-	Succeeded                bool     `json:"succeeded"`
-	OptimizerUpdateTriggered bool     `json:"optimizer_update_triggered"`
-	Version                  string   `json:"version"`
-	Status                   string   `json:"status"`
-	PointCount               int      `json:"point_count"`
-	IndexedVectorsCount      int      `json:"indexed_vectors_count"`
-	PayloadIndexes           []string `json:"payload_indexes"`
-	Seconds                  float64  `json:"seconds"`
+	Attempted                bool           `json:"attempted"`
+	Succeeded                bool           `json:"succeeded"`
+	OptimizerUpdateTriggered bool           `json:"optimizer_update_triggered"`
+	Version                  string         `json:"version"`
+	Status                   string         `json:"status"`
+	PointCount               int            `json:"point_count"`
+	IndexedVectorsCount      int            `json:"indexed_vectors_count"`
+	PayloadIndexes           []string       `json:"payload_indexes"`
+	FilterCardinalities      map[string]int `json:"filter_cardinalities"`
+	Seconds                  float64        `json:"seconds"`
 }
 
 type qdrantComparisonRouteProof struct {
@@ -873,8 +875,9 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 	if err != nil {
 		return fmt.Errorf("Qdrant artifact lacks pinned standalone process identity: %w", err)
 	}
-	if len(artifact.Server.IndexProof.FilterCardinalities) != len(manifest.Filters) {
-		return fmt.Errorf("Qdrant artifact lacks exact filter-cardinality proof")
+	if len(artifact.Server.IndexProof.FilterCardinalities) != len(manifest.Filters) ||
+		len(artifact.Reopen.FilterCardinalities) != len(manifest.Filters) {
+		return fmt.Errorf("Qdrant artifact lacks exact build/reopen filter-cardinality proof")
 	}
 	for _, filter := range manifest.Filters {
 		cardinality := 0
@@ -886,8 +889,9 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 			}
 		}
 		if artifact.Server.IndexProof.FilterCardinalities[filter.ID] != cardinality ||
+			artifact.Reopen.FilterCardinalities[filter.ID] != cardinality ||
 			cardinality*len(manifest.Chunks[0].DenseVector)*4 <= int(fullScanThresholdKB)*1024 {
-			return fmt.Errorf("Qdrant filter %s cardinality/footprint proof mismatch", filter.ID)
+			return fmt.Errorf("Qdrant filter %s build/reopen cardinality or footprint proof mismatch", filter.ID)
 		}
 	}
 	if len(artifact.Failures) != 0 || artifact.Build.Points != len(manifest.Chunks) ||
@@ -1141,8 +1145,26 @@ func reserveComparisonOutputs(paths ...string) (func(), error) {
 			cleanup()
 			return nil, fmt.Errorf("close reserved comparison output %s: %w", path, err)
 		}
+
 	}
 	return cleanup, nil
+}
+func validateQdrantStorageBinding(recorded, supplied string) error {
+	if recorded == "" || !filepath.IsAbs(recorded) {
+		return fmt.Errorf("Qdrant artifact storage path is not absolute")
+	}
+	recordedCanonical, err := canonicalComparisonPath(recorded)
+	if err != nil {
+		return err
+	}
+	suppliedCanonical, err := canonicalComparisonPath(supplied)
+	if err != nil {
+		return err
+	}
+	if recordedCanonical != suppliedCanonical {
+		return fmt.Errorf("Qdrant artifact storage path does not identify measured storage root")
+	}
+	return nil
 }
 
 func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStoragePath, qdrantStoragePath, outputPath, markdownPath string) error {
@@ -1189,6 +1211,9 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStorageP
 		return err
 	}
 	if err := validateQdrantComparisonArtifact(&qdrant, manifest, manifestSHA, tree.HarnessRevision); err != nil {
+		return err
+	}
+	if err := validateQdrantStorageBinding(qdrant.Resources.StoragePath, qdrantStoragePath); err != nil {
 		return err
 	}
 	treeStorageBytes, err := dirSize(treeStoragePath)
