@@ -365,6 +365,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "rerank_candidates": 32,
             "quantized_index_name": "embedding_scalar_u8",
             "vdbbench_dry_run": False,
+            "construction_decision_diagnostics": False,
         },
         "vdbbench": [{
             "row": "exact",
@@ -1266,6 +1267,56 @@ class ServiceProcessOwnershipTest(unittest.TestCase):
 
             killpg.assert_called_once_with(proc.pid, signal.SIGTERM)
             proc.wait.assert_called_once_with(timeout=10.0)
+
+    def test_service_command_activates_diagnostics_once_for_initial_and_reopen(self) -> None:
+        cases = (
+            ("default-initial", False, False),
+            ("enabled-initial", True, False),
+            ("enabled-reopen", True, True),
+        )
+        for label, enabled, append_log in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                state = harness.HarnessState(root=root)
+                proc = mock.Mock(pid=1234)
+                with mock.patch.object(harness.subprocess, "Popen", return_value=proc) as popen, \
+                        mock.patch.object(harness, "wait_health", return_value={"ok": True}):
+                    _proc, _health, command = harness.start_service(
+                        state,
+                        gomap_root=root,
+                        service_bin=root / "treedb-document-service",
+                        data_dir=root / "treedb-data",
+                        host="127.0.0.1",
+                        port=9876,
+                        profile="command_wal_durable",
+                        health_timeout=1.0,
+                        construction_decision_diagnostics=enabled,
+                        pprof_addr="127.0.0.1:6060",
+                        append_log=append_log,
+                    )
+
+                expected = [
+                    str(root / "treedb-document-service"),
+                    "-dir", str(root / "treedb-data"),
+                    "-addr", "127.0.0.1:9876",
+                    "-profile", "command_wal_durable",
+                ]
+                if enabled:
+                    expected.append("-diagnostic-construction-decisions")
+                expected.extend(["-pprof", "127.0.0.1:6060"])
+                self.assertEqual(command, expected)
+                self.assertEqual(command.count("-diagnostic-construction-decisions"), int(enabled))
+                self.assertEqual(popen.call_args.args[0], expected)
+
+    def test_construction_decision_diagnostics_cli_defaults_off(self) -> None:
+        default = harness.parse_args(["--port", "9876"])
+        enabled = harness.parse_args([
+            "--port", "9876", "--construction-decision-diagnostics",
+        ])
+
+        self.assertFalse(default.construction_decision_diagnostics)
+        self.assertTrue(enabled.construction_decision_diagnostics)
+
 
     def test_initial_start_interrupt_cleans_owned_child(self) -> None:
         self.assert_startup_failure_cleans_child(KeyboardInterrupt(), append_log=False)
@@ -3118,6 +3169,108 @@ class LifecycleValidatorTest(unittest.TestCase):
 
                 self.assertTrue(got["complete"], got)
 
+    def test_construction_decision_diagnostics_command_is_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _ = lifecycle_fixture(root)
+            manifest["harness"]["construction_decision_diagnostics"] = True
+            manifest["service"]["command"].append("-diagnostic-construction-decisions")
+            manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertTrue(got["complete"], got)
+
+        mutations = (
+            (
+                "enabled-without-command-flag",
+                lambda row: row["harness"].__setitem__("construction_decision_diagnostics", True),
+            ),
+            (
+                "disabled-with-command-flag",
+                lambda row: row["service"]["command"].append(
+                    "-diagnostic-construction-decisions"
+                ),
+            ),
+            (
+                "duplicate",
+                lambda row: (
+                    row["harness"].__setitem__("construction_decision_diagnostics", True),
+                    row["service"]["command"].extend([
+                        "-diagnostic-construction-decisions",
+                        "-diagnostic-construction-decisions",
+                    ]),
+                ),
+            ),
+            (
+                "inline-value",
+                lambda row: (
+                    row["harness"].__setitem__("construction_decision_diagnostics", True),
+                    row["service"]["command"].append(
+                        "-diagnostic-construction-decisions=true"
+                    ),
+                ),
+            ),
+            (
+                "separate-value",
+                lambda row: (
+                    row["harness"].__setitem__("construction_decision_diagnostics", True),
+                    row["service"]["command"].extend([
+                        "-diagnostic-construction-decisions", "true",
+                    ]),
+                ),
+            ),
+            (
+                "double-dash",
+                lambda row: (
+                    row["harness"].__setitem__("construction_decision_diagnostics", True),
+                    row["service"]["command"].append(
+                        "--diagnostic-construction-decisions"
+                    ),
+                ),
+            ),
+            (
+                "wrong-harness-type",
+                lambda row: row["harness"].__setitem__(
+                    "construction_decision_diagnostics", "true"
+                ),
+            ),
+        )
+        for label, mutation in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _ = lifecycle_fixture(root)
+                mutation(manifest)
+                manifest["lifecycle"]["identity"]["config_sha256"] = (
+                    harness.lifecycle_config_sha256(manifest)
+                )
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            expected_error = (
+                "manifest.harness.construction_decision_diagnostics"
+                if label == "wrong-harness-type"
+                else "manifest.service.command"
+            )
+            self.assertTrue(
+                any(expected_error in error for error in got["errors"]), got
+            )
+
+    def test_missing_construction_diagnostics_identity_remains_default_off(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _ = lifecycle_fixture(root)
+            manifest["harness"].pop("construction_decision_diagnostics")
+            manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertTrue(got["complete"], got)
+
     def test_service_pprof_address_matches_loopback_listener_contract(self) -> None:
         valid = ("127.0.0.1:6060", "localhost:6060", "[::1]:6060", "127.0.0.1:65535")
         invalid = (
@@ -4177,6 +4330,7 @@ class LifecycleIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             args, state, sampler, proc = self._complete_fixture(root)
+            args.construction_decision_diagnostics = True
             reopened = mock.Mock(returncode=None)
             snapshot = sampler.samples[0]["snapshot"]
             responses = iter([
@@ -4214,8 +4368,13 @@ class LifecycleIntegrationTest(unittest.TestCase):
             with mock.patch.object(harness, "fetch_file", side_effect=fetch), \
                     mock.patch.object(harness, "http_json", side_effect=lambda *_args, **_kwargs: next(responses)), \
                     mock.patch.object(harness, "close_process_group_cleanly"), \
-                    mock.patch.object(harness, "start_service", return_value=(reopened, {}, ["service"])):
+                    mock.patch.object(
+                        harness, "start_service", return_value=(reopened, {}, ["service"])
+                    ) as start_service:
                 harness.complete_lifecycle(state, args, root, root / "service", proc, sampler)
+                self.assertTrue(
+                    start_service.call_args.kwargs["construction_decision_diagnostics"]
+                )
 
             profile = state.lifecycle["profiles"][0]
             raw_paths = {artifact["path"] for artifact in state.lifecycle["raw_artifacts"]}
@@ -4768,6 +4927,7 @@ class ManifestFileListTest(unittest.TestCase):
 
             manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
             self.assertIsNone(manifest["vdbbench_load_metrics"])
+            self.assertFalse(manifest["harness"]["construction_decision_diagnostics"])
             self.assertNotIn("lifecycle_route_proof", manifest)
 
     def test_manifest_uses_service_identity_captured_before_launch(self) -> None:
