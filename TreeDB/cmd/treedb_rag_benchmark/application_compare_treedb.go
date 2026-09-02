@@ -138,6 +138,11 @@ func runTreeDBComparisonEvidence(cfg applicationConfig, outputPath string) error
 			if rowErr != nil {
 				return fmt.Errorf("TreeDB comparison cell %s/%s: %w", route, filter, rowErr)
 			}
+			if _, measuredQuality, qualityErr := recomputeTreeDBCellEvidence(row, manifest); qualityErr != nil {
+				return fmt.Errorf("TreeDB comparison measured quality %s/%s: %w", route, filter, qualityErr)
+			} else {
+				row.Quality = measuredQuality
+			}
 			rows = append(rows, row)
 		}
 	}

@@ -263,16 +263,34 @@ func TestQdrantComparisonValidatorRejectsVariedMeasuredRanking(t *testing.T) {
 	manifest, manifestSHA, artifact := validQdrantComparisonArtifact(t)
 	cell := &artifact.Cells[0]
 	sample := &cell.Samples[0]
-	original := sample.ResultIDs[0]
+	filterSpec := manifest.Filters[0]
+	for _, candidate := range manifest.Filters {
+		if candidate.ID == cell.Filter {
+			filterSpec = candidate
+		}
+	}
+	relevant := map[string]bool{}
+	for _, query := range manifest.Queries {
+		if query.ID == sample.QueryID {
+			for _, judgment := range query.Cases {
+				if judgment.Filter == cell.Filter {
+					relevant = stringSet(judgment.RelevantChunks)
+				}
+			}
+		}
+	}
 	for _, chunk := range manifest.Chunks {
-		if chunk.ID != original {
+		if !relevant[chunk.ID] &&
+			(filterSpec.Tenant == "" || chunk.Tenant == filterSpec.Tenant) &&
+			(filterSpec.Workspace == "" || chunk.Workspace == filterSpec.Workspace) &&
+			(filterSpec.UpdatedYearGTE == 0 || chunk.UpdatedYear >= filterSpec.UpdatedYearGTE) {
 			sample.ResultIDs = []string{chunk.ID}
 			break
 		}
 	}
 	if err := validateQdrantComparisonArtifact(&artifact, manifest, manifestSHA, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err == nil ||
-		!strings.Contains(err.Error(), "measured ranking varied") {
-		t.Fatalf("varied measured ranking err=%v", err)
+		!strings.Contains(err.Error(), "quality does not match raw rankings") {
+		t.Fatalf("unaggregated measured ranking quality err=%v", err)
 	}
 }
 

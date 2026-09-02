@@ -168,9 +168,28 @@ func TestTreeDBComparisonValidatorRejectsVariedMeasuredRanking(t *testing.T) {
 	manifest, manifestSHA, artifact := validTreeDBComparisonArtifact(t)
 	row := &artifact.Rows[0]
 	sample := &row.Samples[0]
+	filterSpec := manifest.Filters[0]
+	for _, candidate := range manifest.Filters {
+		if candidate.ID == row.Cell.Filter {
+			filterSpec = candidate
+		}
+	}
+	relevant := map[string]bool{}
+	for _, query := range manifest.Queries {
+		if query.ID == sample.QueryID {
+			for _, judgment := range query.Cases {
+				if judgment.Filter == row.Cell.Filter {
+					relevant = stringSet(judgment.RelevantChunks)
+				}
+			}
+		}
+	}
 	original := sample.ResultIDs[0]
 	for _, chunk := range manifest.Chunks {
-		if chunk.ID != original {
+		if !relevant[chunk.ID] &&
+			(filterSpec.Tenant == "" || chunk.Tenant == filterSpec.Tenant) &&
+			(filterSpec.Workspace == "" || chunk.Workspace == filterSpec.Workspace) &&
+			(filterSpec.UpdatedYearGTE == 0 || chunk.UpdatedYear >= filterSpec.UpdatedYearGTE) {
 			delete(sample.ResultSources, original)
 			sample.ResultIDs = []string{chunk.ID}
 			sample.ResultSources[chunk.ID] = [2]bool{true, false}
@@ -178,8 +197,8 @@ func TestTreeDBComparisonValidatorRejectsVariedMeasuredRanking(t *testing.T) {
 		}
 	}
 	if _, err := validateTreeDBComparisonArtifact(&artifact, manifest, manifestSHA); err == nil ||
-		!strings.Contains(err.Error(), "measured ranking varied") {
-		t.Fatalf("varied measured ranking err=%v", err)
+		!strings.Contains(err.Error(), "quality does not match raw rankings") {
+		t.Fatalf("unaggregated measured ranking quality err=%v", err)
 	}
 }
 

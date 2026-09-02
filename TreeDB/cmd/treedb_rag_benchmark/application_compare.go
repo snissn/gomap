@@ -5,11 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"math"
 	"os"
 	"regexp"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -512,7 +510,7 @@ func recomputeQdrantCellEvidence(cell qdrantComparisonCell, manifest application
 	}
 
 	latencies := make([]float64, 0, len(cell.Samples))
-	lastRankings := make(map[string][]string, len(manifest.Queries))
+	queryCoverage := make(map[string]bool, len(manifest.Queries))
 	fetchMax := 0
 	for sampleIndex, sample := range cell.Samples {
 		wantRepetition := sampleIndex / manifest.Config.SamplesPerCell
@@ -542,17 +540,21 @@ func recomputeQdrantCellEvidence(cell qdrantComparisonCell, manifest application
 		}
 		fetchMax = max(fetchMax, sample.FetchedCount)
 		latencies = append(latencies, sample.TotalMS)
-		if previous, ok := lastRankings[sample.QueryID]; ok && !slices.Equal(previous, sample.ResultIDs) {
-			return nil, qualityMetrics{}, fmt.Errorf("measured ranking varied for query %q at sample %d", sample.QueryID, sampleIndex)
-		}
-		lastRankings[sample.QueryID] = append([]string(nil), sample.ResultIDs...)
+		queryCoverage[sample.QueryID] = true
 	}
-	if cell.FetchMaxCount != fetchMax || len(lastRankings) != len(manifest.Queries) {
+	if cell.FetchMaxCount != fetchMax || len(queryCoverage) != len(manifest.Queries) {
 		return nil, qualityMetrics{}, fmt.Errorf("fetch/query coverage mismatch")
 	}
 
 	var quality qualityMetrics
-	for _, query := range manifest.Queries {
+	for _, sample := range cell.Samples {
+		var query applicationComparisonQuery
+		for _, candidate := range manifest.Queries {
+			if candidate.ID == sample.QueryID {
+				query = candidate
+				break
+			}
+		}
 		var judgment applicationComparisonCase
 		judgmentFound := false
 		for _, candidate := range query.Cases {
@@ -564,7 +566,7 @@ func recomputeQdrantCellEvidence(cell qdrantComparisonCell, manifest application
 		if !judgmentFound {
 			return nil, qualityMetrics{}, fmt.Errorf("query %s lacks filter judgment %s", query.ID, cell.Filter)
 		}
-		ranked := append([]string(nil), lastRankings[query.ID]...)
+		ranked := append([]string(nil), sample.ResultIDs...)
 		parents := make([]string, 0, len(ranked))
 		perParent := map[string]int{}
 		for _, id := range ranked {
@@ -602,23 +604,23 @@ func recomputeQdrantCellEvidence(cell qdrantComparisonCell, manifest application
 		quality.MaxAchievableParentRecallAt5 += maxAchievableRecall(len(parentRelevant), 5)
 		quality.MaxAchievableParentRecallAt10 += maxAchievableRecall(len(parentRelevant), 10)
 	}
-	queryCount := float64(len(manifest.Queries))
-	quality.PrecisionAt5 /= queryCount
-	quality.PrecisionAt10 /= queryCount
-	quality.NDCGAt5 /= queryCount
-	quality.NDCGAt10 /= queryCount
-	quality.MRRAt10 /= queryCount
-	quality.HitRateAt10 /= queryCount
-	quality.ChunkRecallAt5 /= queryCount
-	quality.ChunkRecallAt10 /= queryCount
-	quality.ParentRecallAt5 /= queryCount
-	quality.ParentRecallAt10 /= queryCount
-	quality.RelevantChunksMean /= queryCount
-	quality.RelevantParentsMean /= queryCount
-	quality.MaxAchievableChunkRecallAt5 /= queryCount
-	quality.MaxAchievableChunkRecallAt10 /= queryCount
-	quality.MaxAchievableParentRecallAt5 /= queryCount
-	quality.MaxAchievableParentRecallAt10 /= queryCount
+	sampleCount := float64(len(cell.Samples))
+	quality.PrecisionAt5 /= sampleCount
+	quality.PrecisionAt10 /= sampleCount
+	quality.NDCGAt5 /= sampleCount
+	quality.NDCGAt10 /= sampleCount
+	quality.MRRAt10 /= sampleCount
+	quality.HitRateAt10 /= sampleCount
+	quality.ChunkRecallAt5 /= sampleCount
+	quality.ChunkRecallAt10 /= sampleCount
+	quality.ParentRecallAt5 /= sampleCount
+	quality.ParentRecallAt10 /= sampleCount
+	quality.RelevantChunksMean /= sampleCount
+	quality.RelevantParentsMean /= sampleCount
+	quality.MaxAchievableChunkRecallAt5 /= sampleCount
+	quality.MaxAchievableChunkRecallAt10 /= sampleCount
+	quality.MaxAchievableParentRecallAt5 /= sampleCount
+	quality.MaxAchievableParentRecallAt10 /= sampleCount
 	quality.AttributionMode = "qdrant_native_route"
 	return latencies, quality, nil
 }
@@ -641,8 +643,7 @@ func recomputeTreeDBCellEvidence(row applicationRow, manifest applicationCompari
 	}
 
 	latencies := make([]float64, 0, len(row.Samples))
-	lastRankings := make(map[string][]string, len(manifest.Queries))
-	lastSources := make(map[string]map[string][2]bool, len(manifest.Queries))
+	queryCoverage := make(map[string]bool, len(manifest.Queries))
 	for sampleIndex, sample := range row.Samples {
 		wantRepetition := sampleIndex / manifest.Config.SamplesPerCell
 		wantOrdinal := sampleIndex % manifest.Config.SamplesPerCell
@@ -669,25 +670,21 @@ func recomputeTreeDBCellEvidence(row applicationRow, manifest applicationCompari
 			rankingIDs[resultID] = true
 		}
 		latencies = append(latencies, sample.Millis)
-		sources := make(map[string][2]bool, len(sample.ResultSources))
-		for id, source := range sample.ResultSources {
-			sources[id] = source
-		}
-		if previous, ok := lastRankings[sample.QueryID]; ok && !slices.Equal(previous, sample.ResultIDs) {
-			return nil, qualityMetrics{}, fmt.Errorf("measured ranking varied for query %q at sample %d", sample.QueryID, sampleIndex)
-		}
-		if previous, ok := lastSources[sample.QueryID]; ok && !maps.Equal(previous, sources) {
-			return nil, qualityMetrics{}, fmt.Errorf("measured attribution varied for query %q at sample %d", sample.QueryID, sampleIndex)
-		}
-		lastRankings[sample.QueryID] = append([]string(nil), sample.ResultIDs...)
-		lastSources[sample.QueryID] = sources
+		queryCoverage[sample.QueryID] = true
 	}
-	if len(lastRankings) != len(manifest.Queries) {
+	if len(queryCoverage) != len(manifest.Queries) {
 		return nil, qualityMetrics{}, fmt.Errorf("query coverage mismatch")
 	}
 
 	var quality qualityMetrics
-	for _, query := range manifest.Queries {
+	for _, sample := range row.Samples {
+		var query applicationComparisonQuery
+		for _, candidate := range manifest.Queries {
+			if candidate.ID == sample.QueryID {
+				query = candidate
+				break
+			}
+		}
 		var judgment applicationComparisonCase
 		judgmentFound := false
 		for _, candidate := range query.Cases {
@@ -699,7 +696,7 @@ func recomputeTreeDBCellEvidence(row applicationRow, manifest applicationCompari
 		if !judgmentFound {
 			return nil, qualityMetrics{}, fmt.Errorf("query %s lacks filter judgment %s", query.ID, row.Cell.Filter)
 		}
-		ranked := append([]string(nil), lastRankings[query.ID]...)
+		ranked := append([]string(nil), sample.ResultIDs...)
 		parents := make([]string, 0, len(ranked))
 		perParent := map[string]int{}
 		for _, id := range ranked {
@@ -707,7 +704,7 @@ func recomputeTreeDBCellEvidence(row applicationRow, manifest applicationCompari
 			parents = append(parents, parent)
 			perParent[parent]++
 			quality.MaxPerParentResults = max(quality.MaxPerParentResults, perParent[parent])
-			source := lastSources[query.ID][id]
+			source := sample.ResultSources[id]
 			if source[0] {
 				quality.TextAttributedResults++
 			}
@@ -747,23 +744,23 @@ func recomputeTreeDBCellEvidence(row applicationRow, manifest applicationCompari
 		quality.MaxAchievableParentRecallAt5 += maxAchievableRecall(len(parentRelevant), 5)
 		quality.MaxAchievableParentRecallAt10 += maxAchievableRecall(len(parentRelevant), 10)
 	}
-	queryCount := float64(len(manifest.Queries))
-	quality.PrecisionAt5 /= queryCount
-	quality.PrecisionAt10 /= queryCount
-	quality.NDCGAt5 /= queryCount
-	quality.NDCGAt10 /= queryCount
-	quality.MRRAt10 /= queryCount
-	quality.HitRateAt10 /= queryCount
-	quality.ChunkRecallAt5 /= queryCount
-	quality.ChunkRecallAt10 /= queryCount
-	quality.ParentRecallAt5 /= queryCount
-	quality.ParentRecallAt10 /= queryCount
-	quality.RelevantChunksMean /= queryCount
-	quality.RelevantParentsMean /= queryCount
-	quality.MaxAchievableChunkRecallAt5 /= queryCount
-	quality.MaxAchievableChunkRecallAt10 /= queryCount
-	quality.MaxAchievableParentRecallAt5 /= queryCount
-	quality.MaxAchievableParentRecallAt10 /= queryCount
+	sampleCount := float64(len(row.Samples))
+	quality.PrecisionAt5 /= sampleCount
+	quality.PrecisionAt10 /= sampleCount
+	quality.NDCGAt5 /= sampleCount
+	quality.NDCGAt10 /= sampleCount
+	quality.MRRAt10 /= sampleCount
+	quality.HitRateAt10 /= sampleCount
+	quality.ChunkRecallAt5 /= sampleCount
+	quality.ChunkRecallAt10 /= sampleCount
+	quality.ParentRecallAt5 /= sampleCount
+	quality.ParentRecallAt10 /= sampleCount
+	quality.RelevantChunksMean /= sampleCount
+	quality.RelevantParentsMean /= sampleCount
+	quality.MaxAchievableChunkRecallAt5 /= sampleCount
+	quality.MaxAchievableChunkRecallAt10 /= sampleCount
+	quality.MaxAchievableParentRecallAt5 /= sampleCount
+	quality.MaxAchievableParentRecallAt10 /= sampleCount
 	quality.AttributionMode = "untimed_projection_query_sources"
 	return latencies, quality, nil
 }
