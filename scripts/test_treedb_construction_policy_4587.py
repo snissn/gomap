@@ -893,6 +893,38 @@ class ValidatorMutations(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "authorization service build argv"):
             policy.validate_python_command_contract(contract)
 
+    def test_authorization_builds_service_from_reviewed_checkout(self) -> None:
+        contract = copy.deepcopy(self.fixture.contract)
+        service_binary = self.fixture.root / "built-service"
+        contract["commands"]["binary"] = str(service_binary)
+        contract["commands"]["build_argv"] = [
+            "go", "build", "-trimpath", "-o", str(service_binary),
+            "./cmd/treedb-document-service",
+        ]
+        calls = []
+
+        def execute(*argv: str, cwd: Path) -> str:
+            calls.append(argv)
+            if argv == ("git", "rev-parse", "HEAD"):
+                return COMMIT
+            if argv == ("git", "status", "--porcelain=v1"):
+                return ""
+            if argv == tuple(contract["commands"]["build_argv"]):
+                service_binary.write_bytes(b"binary built by frozen command\n")
+                return ""
+            raise AssertionError(f"unexpected command: {argv}")
+
+        authorization_path = self.fixture.root / "generated-authorization.json"
+        with mock.patch.object(policy, "validate_contract"), mock.patch.object(
+            policy, "run", side_effect=execute
+        ):
+            generated = policy.generate_authorization(
+                contract, authorization_path, service_binary, COMMIT)
+        self.assertIn(tuple(contract["commands"]["build_argv"]), calls)
+        self.assertEqual(generated["execution_commit"], COMMIT)
+        self.assertEqual(
+            generated["service_binary_sha256"], policy.sha256_file(service_binary))
+
     def test_partition_rows_must_match_canonical_ordinals(self) -> None:
         import pyarrow as arrow
         import pyarrow.parquet as parquet
