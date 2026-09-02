@@ -1,5 +1,5 @@
 {
-  "schema_version": "treedb-construction-policy-4587/v4",
+  "schema_version": "treedb-construction-policy-4587/v5",
   "authority": "FROZEN_AUTHORITATIVE",
   "engineering_status": "QUALIFIED",
   "execution_validity": "REQUIRES_FINAL_EXTERNAL_AUTHORIZATION",
@@ -155,7 +155,7 @@
       "screening_promotion_requires": "all GO gates except 1M projection, applied to the selection partition against the efConstruction=300 screening control, including at least 30% adjacency reduction",
       "no_screening_winner": "C0_NO_GO; do not inspect holdout and do not run 1M",
       "holdout_failure": "C0_NO_GO; no retuning or rerun; C1 may be designed only after recording the complete C0 disposition",
-      "winner_selection_event": "after every ordered 250K lifecycle completes, validate the checksum-bound screening rows and write one checksum-bound selection event; neither 1M lifecycle may start until after that event"
+      "winner_selection_event": "after every ordered 250K lifecycle completes, validate the checksum-bound screening rows and write one checksum-bound selection event; neither 1M lifecycle may start until after that event, and the decision control lifecycle must complete strictly before the decision candidate lifecycle starts"
     },
     "isolation_and_noise": {
       "lock_path": "/mnt/fast4tb/treedb-4587-c0.lock",
@@ -267,7 +267,7 @@
         "-dir", "{artifact_root}/treedb-data", "-addr", "{addr}", "-profile", "command_wal_durable"
       ],
       "probe_runner": "scripts/treedb_vdbbench_search_existing_index.py",
-      "probe_contract": "for each route, require exact open_index name/generation/dimension/metric/strategy/M/efConstruction/efSearch/score-plane identity, then checksum-bound full-diagnostic and production/IDs responses at expected_generation",
+      "probe_contract": "for each route, require exact open_index name/generation/dimension/metric/strategy/M/efConstruction/efSearch/score-plane identity, then checksum-bound full-diagnostic and production/IDs responses at expected_generation; after the canonical result exists, emit a checksum-bound search-origin sidecar binding that result, response, and metadata to the exact run, artifact manifest, dataset, role, partition, and lifecycle",
       "vectordbbench_common_argv_template": [
         "python", "-m", "vectordb_bench.cli.vectordbbench", "{subcommand}",
         "--base-url", "{base_url}", "--index-name", "{index_name}",
@@ -436,7 +436,7 @@
     "timing_source": "checksum-bound lifecycle JSONL startup and teardown events"
   },
   "result_schema": {
-    "schema_version": "treedb-construction-policy-4587-results/v4",
+    "schema_version": "treedb-construction-policy-4587-results/v5",
     "allowed_verdicts": ["GO", "C0_NO_GO"],
     "decision_exact_keys": [
       "schema_version", "execution_commit", "contract_sha256", "authorization",
@@ -451,9 +451,22 @@
       "schema_version": "treedb-construction-policy-4587-winner-selection/v1",
       "no_winner_value": null
     },
+    "search_origin_schema_version": "treedb-construction-policy-4587-search-origin/v1",
+    "search_evidence_exact_keys": [
+      "kind", "route", "origin", "result", "response", "index_metadata"
+    ],
+    "search_origin_exact_keys": [
+      "schema_version", "run_id", "artifact_root", "manifest_sha256",
+      "execution_commit", "dataset_sha256", "scale", "role", "partition",
+      "ef_construction", "lifecycle_sha256", "lifecycle_started_at",
+      "lifecycle_completed_at", "kind", "route", "result_sha256",
+      "response_sha256", "index_metadata_sha256"
+    ],
+    "production_metric_bounds": "Recall and NDCG are finite in [0,1]; QPS and concurrent p99 are finite and strictly positive",
+    "decision_resource_bounds": "peak_rss_bytes, persisted_bytes, and cumulative_allocated_bytes are strictly positive for both decision rows",
     "run_roles": ["screening_candidate", "screening_control", "decision_candidate", "decision_control"],
     "run_cardinality": "exactly four ordered 250K rows, then either stop with a null winner_selection or bind one selection event and exactly matched 1M control and selected winner",
-    "evidence_binding": "every measurement binds its originating run, dataset digest, artifact root, scale, role, partition, coordinate, execution commit, and checksum-bound lifecycle timing; all runs verify one service-binary SHA-256 equal to the external authorization; the authorization, winner selection, manifests, isolation/measurement documents, index metadata, and canonical VectorDBBench results are checksum-bound; unknown or extra result rows are rejected",
+    "evidence_binding": "every measurement and checksum-bound search-origin sidecar binds its originating run, dataset digest, artifact root and manifest, scale, role, partition, coordinate, execution commit, and checksum-bound lifecycle timing; each search-origin sidecar also binds the exact canonical result, response, and index-metadata checksums; all runs verify one service-binary SHA-256 equal to the external authorization; the authorization, winner selection, manifests, isolation/measurement documents, index metadata, and canonical VectorDBBench results are checksum-bound; unknown or extra result rows are rejected",
     "runs": []
   }
 }

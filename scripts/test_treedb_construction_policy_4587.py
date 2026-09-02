@@ -294,8 +294,34 @@ class DecisionFixture:
         for position, (kind, route) in enumerate(policy.SEARCH_ORDER):
             result, response, metadata = self._result(
                 root, ef, kind, route, float(position + 1), dataset)
-            search.append({"kind": kind, "route": route, "result": result,
-                           "response": response, "index_metadata": metadata})
+            origin = {
+                "schema_version": policy.SEARCH_ORIGIN_SCHEMA,
+                "run_id": f"run-{self.counter}",
+                "artifact_root": str(root.resolve()),
+                "manifest_sha256": policy.sha256_file(manifest_path),
+                "execution_commit": COMMIT,
+                "dataset_sha256": policy.canonical_sha256(dataset),
+                "scale": scale,
+                "role": role,
+                "partition": partition,
+                "ef_construction": ef,
+                "lifecycle_sha256": policy.sha256_file(lifecycle_path),
+                "lifecycle_started_at": started.isoformat(),
+                "lifecycle_completed_at": completed.isoformat(),
+                "kind": kind,
+                "route": route,
+                "result_sha256": result["sha256"],
+                "response_sha256": response["sha256"],
+                "index_metadata_sha256": metadata["sha256"],
+            }
+            search.append({
+                "kind": kind,
+                "route": route,
+                "origin": self._write(root / f"search-origin-{position}.json", origin),
+                "result": result,
+                "response": response,
+                "index_metadata": metadata,
+            })
         return {
             "run_id": f"run-{self.counter}",
             "scale": scale,
@@ -380,11 +406,61 @@ class DecisionFixture:
         binding["sha256"] = policy.sha256_file(path)
 
     def rewrite_bound(self, run: dict, binding: dict, mutate) -> None:
+        linked = [
+            (entry, key)
+            for entry in run["search_evidence"]
+            for key in ("result", "response", "index_metadata")
+            if entry[key] is binding
+        ]
         path = Path(run["artifact"]["root"]) / binding["path"]
         value = json.loads(path.read_text())
         mutate(value)
         path.write_text(json.dumps(value, sort_keys=True) + "\n")
         binding["sha256"] = policy.sha256_file(path)
+        for entry, key in linked:
+            origin_binding = entry["origin"]
+            origin_path = Path(run["artifact"]["root"]) / origin_binding["path"]
+            origin = json.loads(origin_path.read_text())
+            origin[f"{key}_sha256"] = binding["sha256"]
+            origin_path.write_text(json.dumps(origin, sort_keys=True) + "\n")
+            origin_binding["sha256"] = policy.sha256_file(origin_path)
+
+
+    def retime_run(self, run: dict, started: str, completed: str) -> None:
+        root = Path(run["artifact"]["root"])
+        manifest_path = root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        lifecycle_path = root / manifest["lifecycle"]["file"]
+        events = [json.loads(line) for line in lifecycle_path.read_text().splitlines()]
+        events[0]["timestamp"] = started
+        events[-1]["timestamp"] = completed
+        lifecycle_path.write_text("".join(
+            json.dumps(event, sort_keys=True) + "\n" for event in events))
+        lifecycle_sha = policy.sha256_file(lifecycle_path)
+        manifest["lifecycle"]["sha256"] = lifecycle_sha
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
+        manifest_sha = policy.sha256_file(manifest_path)
+        run["artifact"]["manifest_sha256"] = manifest_sha
+        measurement_path = root / run["measurement_evidence"]["path"]
+        measurement = json.loads(measurement_path.read_text())
+        measurement["origin"].update({
+            "lifecycle_sha256": lifecycle_sha,
+            "lifecycle_started_at": started,
+            "lifecycle_completed_at": completed,
+        })
+        measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
+        run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
+        for entry in run["search_evidence"]:
+            origin_path = root / entry["origin"]["path"]
+            origin = json.loads(origin_path.read_text())
+            origin.update({
+                "manifest_sha256": manifest_sha,
+                "lifecycle_sha256": lifecycle_sha,
+                "lifecycle_started_at": started,
+                "lifecycle_completed_at": completed,
+            })
+            origin_path.write_text(json.dumps(origin, sort_keys=True) + "\n")
+            entry["origin"]["sha256"] = policy.sha256_file(origin_path)
 
 
 class ValidatorMutations(unittest.TestCase):
@@ -468,6 +544,11 @@ class ValidatorMutations(unittest.TestCase):
         manifest["lifecycle"]["identity"]["service_binary_sha256"] = "3" * 64
         manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
         run["artifact"]["manifest_sha256"] = policy.sha256_file(manifest_path)
+        for entry in run["search_evidence"]:
+            self.fixture.rewrite_bound(
+                run, entry["origin"],
+                lambda value: value.update({"manifest_sha256": run["artifact"]["manifest_sha256"]}),
+            )
         self.assert_invalid(packet, "one authorized service binary")
 
     def test_extra_row_and_holdout_misuse(self) -> None:
@@ -641,6 +722,57 @@ class ValidatorMutations(unittest.TestCase):
         packet = self.fixture.no_go_packet()
         self.fixture.contract["experiment"]["go_gates"]["minimum_production_qps_ratio"] = 0.90
         self.assert_invalid(packet, "frozen GO gate policy")
+
+    def test_search_evidence_origin_binding(self) -> None:
+        mutations = [
+            {"run_id": "other-run"},
+            {"manifest_sha256": "0" * 64},
+            {"result_sha256": "0" * 64},
+            {"response_sha256": "0" * 64},
+            {"index_metadata_sha256": "0" * 64},
+        ]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                packet = self.fixture.no_go_packet()
+                run = packet["runs"][0]
+                self.fixture.rewrite_bound(
+                    run, run["search_evidence"][0]["origin"],
+                    lambda value, mutation=mutation: value.update(mutation),
+                )
+                self.assert_invalid(packet, "originating run binding")
+
+    def test_decision_control_completes_before_candidate_starts(self) -> None:
+        packet = self.fixture.go_packet()
+        control_measurement = Path(packet["runs"][4]["artifact"]["root"]) / "measurements.json"
+        candidate_measurement = Path(packet["runs"][5]["artifact"]["root"]) / "measurements.json"
+        control_completed = json.loads(control_measurement.read_text())["origin"]["lifecycle_completed_at"]
+        candidate_completed = json.loads(candidate_measurement.read_text())["origin"]["lifecycle_completed_at"]
+        self.fixture.retime_run(packet["runs"][5], control_completed, candidate_completed)
+        self.assert_invalid(packet, "decision control lifecycle must complete before candidate")
+
+    def test_recall_and_ndcg_must_be_finite_unit_interval(self) -> None:
+        for metric, value in (("recall", 1.01), ("ndcg", 1.01), ("recall", float("inf"))):
+            with self.subTest(metric=metric, value=value):
+                packet = self.fixture.no_go_packet()
+                run = packet["runs"][0]
+                self.fixture.rewrite_bound(
+                    run, run["search_evidence"][1]["result"],
+                    lambda result, metric=metric, value=value:
+                    result["results"][0]["metrics"].update({metric: value}),
+                )
+                self.assert_invalid(packet, "finite")
+
+    def test_decision_gate_resources_must_be_positive(self) -> None:
+        for position in (4, 5):
+            for key in ("peak_rss_bytes", "persisted_bytes", "cumulative_allocated_bytes"):
+                with self.subTest(position=position, key=key):
+                    packet = self.fixture.go_packet()
+                    run = packet["runs"][position]
+                    self.fixture.rewrite_bound(
+                        run, run["measurement_evidence"],
+                        lambda value, key=key: value["resources"].update({key: 0.0}),
+                    )
+                    self.assert_invalid(packet, rf"decision .* resources\.{key} must be a finite positive")
 
     def test_winner_tie_break_uses_both_routes(self) -> None:
         runs = [

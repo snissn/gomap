@@ -15,12 +15,13 @@ import subprocess
 import sys
 from typing import Any
 
-SCHEMA = "treedb-construction-policy-4587/v4"
-RESULT_SCHEMA = "treedb-construction-policy-4587-results/v4"
+SCHEMA = "treedb-construction-policy-4587/v5"
+RESULT_SCHEMA = "treedb-construction-policy-4587-results/v5"
 AUTHORIZATION_SCHEMA = "treedb-construction-policy-4587-execution-authorization/v1"
 MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v2"
 ISOLATION_SCHEMA = "treedb-construction-policy-4587-isolation/v1"
 WINNER_SELECTION_SCHEMA = "treedb-construction-policy-4587-winner-selection/v1"
+SEARCH_ORIGIN_SCHEMA = "treedb-construction-policy-4587-search-origin/v1"
 COORDINATES = [128, 192, 256, 300]
 CONTROL = 300
 HISTORY_PATH = "docs/benchmarks/treedb_construction_policy_history_2026-09-02.md"
@@ -60,6 +61,13 @@ MEASUREMENT_ORIGIN_KEYS = {
     "run_id", "artifact_root", "execution_commit", "dataset_sha256", "scale",
     "role", "partition", "ef_construction", "lifecycle_sha256",
     "lifecycle_started_at", "lifecycle_completed_at",
+}
+SEARCH_ORIGIN_KEYS = {
+    "schema_version", "run_id", "artifact_root", "manifest_sha256",
+    "execution_commit", "dataset_sha256", "scale", "role", "partition",
+    "ef_construction", "lifecycle_sha256", "lifecycle_started_at",
+    "lifecycle_completed_at", "kind", "route", "result_sha256",
+    "response_sha256", "index_metadata_sha256",
 }
 RUN_KEYS = {
     "run_id", "scale", "role", "partition", "ef_construction",
@@ -134,6 +142,13 @@ def positive_number(value: Any, name: str) -> float:
     result = nonnegative_number(value, name)
     if result <= 0:
         fail(f"{name} must be a finite positive number")
+    return result
+
+
+def unit_interval_number(value: Any, name: str) -> float:
+    result = nonnegative_number(value, name)
+    if result > 1:
+        fail(f"{name} must be a finite number in [0, 1]")
     return result
 
 
@@ -484,6 +499,13 @@ def validate_contract(contract: dict[str, Any], allow_draft: bool,
     ], "decision contract keys")
     exact(result_schema["winner_selection_binding"]["schema_version"], WINNER_SELECTION_SCHEMA,
           "winner selection contract schema")
+    exact(result_schema["search_origin_schema_version"], SEARCH_ORIGIN_SCHEMA,
+          "search origin contract schema")
+    exact(result_schema["search_evidence_exact_keys"],
+          ["kind", "route", "origin", "result", "response", "index_metadata"],
+          "search evidence contract keys")
+    exact(set(result_schema["search_origin_exact_keys"]), SEARCH_ORIGIN_KEYS,
+          "search origin contract keys")
     gomap = verify_git_identity(Path(source["gomap_root"]), source, allow_draft)
     external = verify_external_git(source)
     datasets = verify_datasets(contract)
@@ -549,7 +571,8 @@ def validate_index_metadata(metadata: dict[str, Any], run_row: dict[str, Any], i
     return generation
 
 
-def validate_search_evidence(run_row: dict[str, Any], root: Path) -> dict[str, dict[str, float]]:
+def validate_search_evidence(run_row: dict[str, Any], root: Path,
+                             timing: dict[str, Any]) -> dict[str, dict[str, float]]:
     rows = run_row.get("search_evidence")
     if not isinstance(rows, list) or len(rows) != len(SEARCH_ORDER):
         fail("run.search_evidence must contain exactly four ordered diagnostic/production rows")
@@ -559,12 +582,34 @@ def validate_search_evidence(run_row: dict[str, Any], root: Path) -> dict[str, d
     prior_timestamp = -math.inf
     for position, (entry, expected) in enumerate(zip(rows, SEARCH_ORDER, strict=True)):
         item = object_at(entry, f"search_evidence[{position}]")
-        exact_keys(item, {"kind", "route", "result", "response", "index_metadata"},
+        exact_keys(item, {"kind", "route", "origin", "result", "response", "index_metadata"},
                    f"search_evidence[{position}]")
         exact((item["kind"], item["route"]), expected, f"search_evidence[{position}] ordering")
+        origin, _ = read_bound_json(root, item["origin"], f"search_evidence[{position}].origin")
         _, result_path = read_bound_json(root, item["result"], f"search_evidence[{position}].result")
         response, _ = read_bound_json(root, item["response"], f"search_evidence[{position}].response")
         metadata, _ = read_bound_json(root, item["index_metadata"], f"search_evidence[{position}].index_metadata")
+        exact_keys(origin, SEARCH_ORIGIN_KEYS, f"search_evidence[{position}].origin")
+        exact(origin, {
+            "schema_version": SEARCH_ORIGIN_SCHEMA,
+            "run_id": run_row["run_id"],
+            "artifact_root": str(root),
+            "manifest_sha256": run_row["artifact"]["manifest_sha256"],
+            "execution_commit": run_row["execution_commit"],
+            "dataset_sha256": canonical_sha256(run_row["dataset"]),
+            "scale": run_row["scale"],
+            "role": run_row["role"],
+            "partition": run_row["partition"],
+            "ef_construction": run_row["ef_construction"],
+            "lifecycle_sha256": timing["sha256"],
+            "lifecycle_started_at": timing["started_at"],
+            "lifecycle_completed_at": timing["completed_at"],
+            "kind": item["kind"],
+            "route": item["route"],
+            "result_sha256": item["result"]["sha256"],
+            "response_sha256": item["response"]["sha256"],
+            "index_metadata_sha256": item["index_metadata"]["sha256"],
+        }, f"search_evidence[{position}] originating run binding")
         index_name = metadata.get("name")
         if not isinstance(index_name, str) or not index_name:
             fail("index metadata name must be non-empty")
@@ -645,8 +690,8 @@ def validate_search_evidence(run_row: dict[str, Any], root: Path) -> dict[str, d
             if not isinstance(conc, list) or len(conc) != 1:
                 fail(f"search_evidence[{position}] must contain exactly one concurrent p99")
             production[item["route"]] = {
-                "recall": nonnegative_number(metrics.get("recall"), f"search_evidence[{position}].recall"),
-                "ndcg": nonnegative_number(metrics.get("ndcg"), f"search_evidence[{position}].ndcg"),
+                "recall": unit_interval_number(metrics.get("recall"), f"search_evidence[{position}].recall"),
+                "ndcg": unit_interval_number(metrics.get("ndcg"), f"search_evidence[{position}].ndcg"),
                 "qps": positive_number(metrics.get("qps"), f"search_evidence[{position}].qps"),
                 "concurrent_p99_ms": 1000 * positive_number(conc[0], f"search_evidence[{position}].p99"),
             }
@@ -787,7 +832,7 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
     projection = measurements.get("projected_10m_adjacency_reduction_fraction")
     if projection is not None:
         nonnegative_number(projection, "projected 10M adjacency reduction")
-    production = validate_search_evidence(row, root)
+    production = validate_search_evidence(row, root, timing)
     return {"row": row, "phases": phases, "resources": resources, "production": production,
             "projection": projection, "service_binary_sha256": service_binary_sha256,
             "timing": timing}
@@ -935,6 +980,11 @@ def validate_decision(packet: dict[str, Any], contract: dict[str, Any], *, run_b
           "holdout cardinality and order")
     if any(item["timing"]["started"] <= selected_at for item in decision):
         fail("holdout lifecycle must start after the checksum-bound winner selection")
+    if decision[0]["timing"]["completed"] >= decision[1]["timing"]["started"]:
+        fail("decision control lifecycle must complete before candidate lifecycle starts")
+    for item in decision:
+        for key in ("peak_rss_bytes", "persisted_bytes", "cumulative_allocated_bytes"):
+            positive_number(item["resources"][key], f"decision {item['row']['role']} resources.{key}")
     passed = clears_gates(decision[1], decision[0], True, gates)
     exact(packet["verdict"], "GO" if passed else "C0_NO_GO", "computed verdict")
     return {"verdict": packet["verdict"], "winner": winner["row"]["ef_construction"],
