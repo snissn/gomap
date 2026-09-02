@@ -92,8 +92,9 @@ func runTreeDBComparisonEvidence(cfg applicationConfig, outputPath string) error
 	cfg.Workload = "application"
 	cfg.TopK = manifest.Config.TopK
 	cfg.CandidateLimit = manifest.Config.CandidateLimit
-	cfg.EfSearch = 64
-	cfg.M = 8
+	cfg.EfSearch = manifest.Config.TreeDBEfSearch
+	cfg.EfConstruction = manifest.Config.TreeDBEfConstruction
+	cfg.M = manifest.Config.TreeDBM
 	cfg.WarmupQueries = manifest.Config.WarmupsPerCell
 	cfg.Repetitions = manifest.Config.Repetitions
 	cfg.SamplesPerRep = manifest.Config.SamplesPerCell

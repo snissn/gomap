@@ -18,6 +18,9 @@ const (
 type applicationComparisonConfig struct {
 	TopK                     int      `json:"top_k"`
 	CandidateLimit           int      `json:"candidate_limit"`
+	TreeDBM                  int      `json:"treedb_m"`
+	TreeDBEfConstruction     int      `json:"treedb_ef_construction"`
+	TreeDBEfSearch           int      `json:"treedb_ef_search"`
 	DenseVectorName          string   `json:"dense_vector_name"`
 	SparseVectorName         string   `json:"sparse_vector_name"`
 	DenseMetric              string   `json:"dense_metric"`
@@ -94,6 +97,7 @@ type applicationComparisonManifest struct {
 func defaultApplicationComparisonConfig() applicationComparisonConfig {
 	return applicationComparisonConfig{
 		TopK: 10, CandidateLimit: 32,
+		TreeDBM: 8, TreeDBEfConstruction: 64, TreeDBEfSearch: 64,
 		DenseVectorName: "dense_minilm", SparseVectorName: "sparse_bm25",
 		DenseMetric: "cosine", LexicalFields: []string{"content"},
 		LexicalAnalyzer: "lowercase ASCII alphanumeric tokens; no stopword removal",

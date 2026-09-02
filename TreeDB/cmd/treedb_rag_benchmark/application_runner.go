@@ -56,6 +56,7 @@ type applicationConfig struct {
 	CandidateLimit  int
 	EfSearch        int
 	M               int
+	EfConstruction  int
 	WarmupQueries   int
 	Repetitions     int
 	SamplesPerRep   int
@@ -72,7 +73,7 @@ type applicationConfig struct {
 func defaultApplicationConfig() applicationConfig {
 	return applicationConfig{
 		Workload: "application",
-		TopK:     10, CandidateLimit: 32, EfSearch: 64, M: 8,
+		TopK:     10, CandidateLimit: 32, EfSearch: 64, EfConstruction: 64, M: 8,
 		WarmupQueries: 24, Repetitions: 3, SamplesPerRep: 336,
 		IngestionReps: 5, FinalEvidence: true,
 	}
@@ -340,8 +341,8 @@ func validateApplicationConfig(cfg applicationConfig) error {
 	if cfg.Workload != "application" {
 		return fmt.Errorf("config: application baseline cannot run workload %q", cfg.Workload)
 	}
-	if cfg.TopK < 10 || cfg.CandidateLimit < cfg.TopK || cfg.EfSearch < cfg.TopK {
-		return fmt.Errorf("config: top_k>=10 and candidate/ef budgets >= top_k required")
+	if cfg.TopK < 10 || cfg.CandidateLimit < cfg.TopK || cfg.EfSearch < cfg.TopK || cfg.EfConstruction <= 0 || cfg.M <= 0 {
+		return fmt.Errorf("config: top_k>=10, candidate/ef-search budgets >= top_k, and positive graph construction settings required")
 	}
 	if cfg.Repetitions <= 0 || cfg.SamplesPerRep <= 0 || cfg.IngestionReps <= 0 {
 		return fmt.Errorf("config: repetitions, samples, and ingestion reps must be positive")
@@ -365,13 +366,13 @@ func isFullRevision(revision string) bool {
 
 func applicationConfigDigest(cfg applicationConfig) string {
 	raw, _ := json.Marshal(struct {
-		Workload                                  string
-		TopK, CandidateLimit, EfSearch, M         int
-		WarmupQueries, Repetitions, SamplesPerRep int
-		IngestionReps                             int
+		Workload                                          string
+		TopK, CandidateLimit, EfSearch, EfConstruction, M int
+		WarmupQueries, Repetitions, SamplesPerRep         int
+		IngestionReps                                     int
 	}{
 		Workload: cfg.Workload,
-		TopK:     cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch, M: cfg.M,
+		TopK:     cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch, EfConstruction: cfg.EfConstruction, M: cfg.M,
 		WarmupQueries: cfg.WarmupQueries, Repetitions: cfg.Repetitions,
 		SamplesPerRep: cfg.SamplesPerRep, IngestionReps: cfg.IngestionReps,
 	})
@@ -761,7 +762,7 @@ func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixtu
 func applicationIndexRequest(cfg applicationConfig, dims int) documentservice.CreateIndexRequest {
 	return documentservice.CreateIndexRequest{
 		Name: applicationCollection, Dimension: dims, Metric: documentservice.MetricCosine,
-		VectorIndexOptions: &documentservice.BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph, M: cfg.M, EfConstruction: 64, EfSearch: cfg.EfSearch},
+		VectorIndexOptions: &documentservice.BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph, M: cfg.M, EfConstruction: cfg.EfConstruction, EfSearch: cfg.EfSearch},
 		ScalarFields: []documentservice.ScalarFieldDeclaration{
 			{Field: "meta.tenant_id", ValueType: documentservice.ScalarFieldString},
 			{Field: "meta.workspace_id", ValueType: documentservice.ScalarFieldString},
@@ -1130,15 +1131,23 @@ func applicationWarmupQuery(fixture *applicationFixture, ordinal int) applicatio
 	return fixture.Queries[ordinal%len(fixture.Queries)]
 }
 
+func applicationCellWorkDigest(cell applicationCellIdentity, topK, candidateLimit, efSearch, efConstruction, m int) string {
+	raw, _ := json.Marshal(struct {
+		Cell                                              applicationCellIdentity
+		TopK, CandidateLimit, EfSearch, EfConstruction, M int
+	}{cell, topK, candidateLimit, efSearch, efConstruction, m})
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
 func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env *applicationEnvironment, queryVectors map[string][]float32, cell applicationCellIdentity, measureInitialQuality bool) (applicationRow, error) {
+
 	row := applicationRow{Cell: cell, Status: "supported", Counters: map[string]float64{}}
 	qualityDigest := applicationFixtureDigest(fixture)
-	workRaw, _ := json.Marshal(struct {
-		Cell                           applicationCellIdentity
-		TopK, CandidateLimit, EfSearch int
-	}{cell, cfg.TopK, cfg.CandidateLimit, cfg.EfSearch})
-	workSum := sha256.Sum256(workRaw)
-	row.Comparison = comparisonIdentity{WorkDigest: hex.EncodeToString(workSum[:]), Projection: cell.Projection, QualityDigest: qualityDigest}
+	row.Comparison = comparisonIdentity{
+		WorkDigest:    applicationCellWorkDigest(cell, cfg.TopK, cfg.CandidateLimit, cfg.EfSearch, cfg.EfConstruction, cfg.M),
+		Projection:    cell.Projection,
+		QualityDigest: qualityDigest,
+	}
 	if capability := unsupportedCapability(cell); capability != nil {
 		row.Status = "unsupported"
 		row.Capability = &capabilityEvidence{ErrorType: capabilityErrorType, Code: capability.Code, Message: capability.Message, RequiredIssues: capability.RequiredIssues, ResultsReturned: 0, FailClosed: true}

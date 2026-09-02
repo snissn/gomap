@@ -399,6 +399,11 @@ func validateTreeDBComparisonArtifact(artifact *treeDBComparisonArtifact, manife
 		if row.Cell.VectorRoute != wantVectorRoute {
 			return nil, fmt.Errorf("TreeDB artifact cell %s/%s vector route=%q want %q", route, row.Cell.Filter, row.Cell.VectorRoute, wantVectorRoute)
 		}
+		wantWorkDigest := applicationCellWorkDigest(row.Cell, manifest.Config.TopK, manifest.Config.CandidateLimit,
+			manifest.Config.TreeDBEfSearch, manifest.Config.TreeDBEfConstruction, manifest.Config.TreeDBM)
+		if row.Comparison.WorkDigest != wantWorkDigest {
+			return nil, fmt.Errorf("TreeDB artifact cell %s/%s work digest mismatch", route, row.Cell.Filter)
+		}
 		key := route + "\x00" + row.Cell.Filter
 		if seen[key] {
 			return nil, fmt.Errorf("TreeDB artifact has duplicate comparison cell %s/%s", route, row.Cell.Filter)
@@ -696,7 +701,9 @@ func recomputeTreeDBCellEvidence(row applicationRow, manifest applicationCompari
 		for _, resultID := range sample.ResultIDs {
 			chunk, ok := chunks[resultID]
 			source, sourceOK := sample.ResultSources[resultID]
-			if !ok || rankingIDs[resultID] || !sourceOK || (!source[0] && !source[1]) ||
+			wrongAttribution := (row.Cell.Route == "text_only" && source != [2]bool{true, false}) ||
+				(row.Cell.Route == "vector_only" && source != [2]bool{false, true})
+			if !ok || rankingIDs[resultID] || !sourceOK || (!source[0] && !source[1]) || wrongAttribution ||
 				(filter.Tenant != "" && chunk.Tenant != filter.Tenant) ||
 				(filter.Workspace != "" && chunk.Workspace != filter.Workspace) ||
 				(filter.UpdatedYearGTE != 0 && chunk.UpdatedYear < filter.UpdatedYearGTE) {

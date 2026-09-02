@@ -92,6 +92,8 @@ func validTreeDBComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 				},
 				Status: "supported", Counters: counters,
 			}
+			row.Comparison.WorkDigest = applicationCellWorkDigest(row.Cell, manifest.Config.TopK, manifest.Config.CandidateLimit,
+				manifest.Config.TreeDBEfSearch, manifest.Config.TreeDBEfConstruction, manifest.Config.TreeDBM)
 			for repetition := range manifest.Config.Repetitions {
 				order := "forward"
 				if repetition%2 == 1 {
@@ -161,6 +163,7 @@ func TestTreeDBComparisonValidatorRejectsMismatchedEvidence(t *testing.T) {
 		{"wrong peak RSS aggregate", func(a *treeDBComparisonArtifact) { a.ProcessResources.PeakRSSBytes = 1023 }},
 		{"high-water RSS regression", func(a *treeDBComparisonArtifact) { a.ProcessResources.After.PeakRSSBytes = 511 }},
 		{"wrong exact vector route", func(a *treeDBComparisonArtifact) { a.Rows[4].Cell.VectorRoute = "brute_force" }},
+		{"wrong work digest", func(a *treeDBComparisonArtifact) { a.Rows[0].Comparison.WorkDigest = strings.Repeat("0", 64) }},
 		{"missing vector counters", func(a *treeDBComparisonArtifact) { a.Rows[4].Counters["vector_candidates_examined"] = 0 }},
 		{"absent route counter", func(a *treeDBComparisonArtifact) { delete(a.Rows[0].Counters, "full_document_scan_fallbacks") }},
 		{"absent leakage counter", func(a *treeDBComparisonArtifact) { delete(a.Rows[0].Counters, "cross_tenant_results") }},
@@ -174,6 +177,14 @@ func TestTreeDBComparisonValidatorRejectsMismatchedEvidence(t *testing.T) {
 		{"duplicate result", func(a *treeDBComparisonArtifact) {
 			sample := &a.Rows[0].Samples[0]
 			sample.ResultIDs = append(sample.ResultIDs, sample.ResultIDs[0])
+		}},
+		{"wrong lexical attribution", func(a *treeDBComparisonArtifact) {
+			sample := &a.Rows[0].Samples[0]
+			sample.ResultSources[sample.ResultIDs[0]] = [2]bool{false, true}
+		}},
+		{"wrong dense attribution", func(a *treeDBComparisonArtifact) {
+			sample := &a.Rows[4].Samples[0]
+			sample.ResultSources[sample.ResultIDs[0]] = [2]bool{true, false}
 		}},
 		{"invalid attribution", func(a *treeDBComparisonArtifact) {
 			sample := &a.Rows[0].Samples[0]
