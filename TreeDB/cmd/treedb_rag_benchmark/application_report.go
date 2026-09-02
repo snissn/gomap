@@ -159,8 +159,8 @@ func renderApplicationMarkdown(report *applicationReport) []byte {
 	sort.Strings(lifecycleKeys)
 	for _, key := range lifecycleKeys {
 		row := report.Lifecycle[key]
-		fmt.Fprintf(&b, "- `%s`: re-ingest=%t update=`%s` delete=`%s` cold reopen=%t text/vector/scalar parity=%t/%t/%t; %s.\n",
-			key, row.UnchangedReingest, row.UpdatedSource, row.DeletedSource, row.ColdReopenParity,
+		fmt.Fprintf(&b, "- `%s`: re-ingest=%t update=`%s` delete=`%s` source reopen=%t measured collection reopen=%t text/vector/scalar parity=%t/%t/%t; %s.\n",
+			key, row.UnchangedReingest, row.UpdatedSource, row.DeletedSource, row.ColdReopenParity, row.QueryCollectionReopened,
 			row.TextIndexParity, row.VectorIndexParity, row.ScalarIndexParity, row.FaultBoundary)
 	}
 	fmt.Fprintf(&b, "\n## Frozen structural/noise policy\n\n- cross-tenant results = 0\n- cross-workspace results = 0\n- full-document-scan fallbacks = 0\n- score-only document fetches = 0\n- fetch rows <= TopK documents\n- %s\n", report.Gate.NoisePolicy)

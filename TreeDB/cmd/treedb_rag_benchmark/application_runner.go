@@ -228,19 +228,20 @@ type ingestionSummary struct {
 }
 
 type lifecycleEvidence struct {
-	InitialSources    int                `json:"initial_sources"`
-	FinalSources      int                `json:"final_sources"`
-	InitialChunks     int                `json:"initial_chunks"`
-	FinalChunks       int                `json:"final_chunks"`
-	UnchangedReingest bool               `json:"unchanged_reingest"`
-	UpdatedSource     string             `json:"updated_source"`
-	DeletedSource     string             `json:"deleted_source"`
-	ColdReopenParity  bool               `json:"cold_reopen_parity"`
-	TextIndexParity   bool               `json:"text_index_parity"`
-	VectorIndexParity bool               `json:"vector_index_parity"`
-	ScalarIndexParity bool               `json:"scalar_index_parity"`
-	FaultBoundary     string             `json:"fault_boundary"`
-	FaultEvidence     capabilityEvidence `json:"fault_evidence"`
+	InitialSources          int                `json:"initial_sources"`
+	FinalSources            int                `json:"final_sources"`
+	InitialChunks           int                `json:"initial_chunks"`
+	FinalChunks             int                `json:"final_chunks"`
+	UnchangedReingest       bool               `json:"unchanged_reingest"`
+	UpdatedSource           string             `json:"updated_source"`
+	DeletedSource           string             `json:"deleted_source"`
+	ColdReopenParity        bool               `json:"cold_reopen_parity"`
+	TextIndexParity         bool               `json:"text_index_parity"`
+	VectorIndexParity       bool               `json:"vector_index_parity"`
+	ScalarIndexParity       bool               `json:"scalar_index_parity"`
+	QueryCollectionReopened bool               `json:"query_collection_reopened"`
+	FaultBoundary           string             `json:"fault_boundary"`
+	FaultEvidence           capabilityEvidence `json:"fault_evidence"`
 }
 
 type frozenGate struct {
@@ -721,10 +722,6 @@ func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixtu
 		_ = db.Close()
 		return nil, lifecycle, err
 	}
-	if err := validateLifecycleEvidence("cold reopen", lifecycle); err != nil {
-		_ = db.Close()
-		return nil, lifecycle, err
-	}
 
 	service := documentservice.New(manager)
 	if _, err := service.CreateIndex(context.Background(), applicationIndexRequest(cfg, dims)); err != nil {
@@ -749,6 +746,30 @@ func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixtu
 		return nil, lifecycle, fmt.Errorf("rebuild projected vector index: %w", err)
 	}
 	if err := db.Checkpoint(); err != nil {
+		_ = service.Close()
+		_ = db.Close()
+		return nil, lifecycle, err
+	}
+	if err := service.Close(); err != nil {
+		_ = db.Close()
+		return nil, lifecycle, fmt.Errorf("close query collection before measured reopen: %w", err)
+	}
+	if err := db.Close(); err != nil {
+		return nil, lifecycle, fmt.Errorf("close database before measured reopen: %w", err)
+	}
+	db, err = backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		return nil, lifecycle, fmt.Errorf("reopen database for measured queries: %w", err)
+	}
+	manager = collections.NewCollectionManager(db)
+	queryCol, err = manager.OpenCollection(applicationCollection)
+	if err != nil {
+		_ = db.Close()
+		return nil, lifecycle, fmt.Errorf("reopen measured query collection: %w", err)
+	}
+	service = documentservice.New(manager)
+	lifecycle.QueryCollectionReopened = true
+	if err := validateLifecycleEvidence("cold reopen", lifecycle); err != nil {
 		_ = service.Close()
 		_ = db.Close()
 		return nil, lifecycle, err
@@ -1078,6 +1099,9 @@ func validateApplicationIndexQueryParity(before, after, expected applicationInde
 func validateLifecycleEvidence(name string, lifecycle lifecycleEvidence) error {
 	if !lifecycle.ColdReopenParity {
 		return fmt.Errorf("report: %s cold reopen parity is false", name)
+	}
+	if !lifecycle.QueryCollectionReopened {
+		return fmt.Errorf("report: %s measured query collection was not reopened", name)
 	}
 	if !lifecycle.TextIndexParity || !lifecycle.VectorIndexParity || !lifecycle.ScalarIndexParity {
 		return fmt.Errorf("report: %s queried index parity text/vector/scalar=%t/%t/%t",

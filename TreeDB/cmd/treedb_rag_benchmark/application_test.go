@@ -57,7 +57,7 @@ func TestApplicationDiagnosticSmokeLifecycleServiceAndArtifacts(t *testing.T) {
 		t.Fatalf("authority=%q", report.Authority)
 	}
 	for name, lifecycle := range report.Lifecycle {
-		if !lifecycle.UnchangedReingest || !lifecycle.ColdReopenParity || !lifecycle.TextIndexParity || !lifecycle.VectorIndexParity || !lifecycle.ScalarIndexParity {
+		if !lifecycle.UnchangedReingest || !lifecycle.ColdReopenParity || !lifecycle.TextIndexParity || !lifecycle.VectorIndexParity || !lifecycle.ScalarIndexParity || !lifecycle.QueryCollectionReopened {
 			t.Fatalf("%s lifecycle=%+v", name, lifecycle)
 		}
 		if lifecycle.InitialSources != 19 || lifecycle.FinalSources != 18 || lifecycle.InitialChunks != 57 || lifecycle.FinalChunks != 54 {

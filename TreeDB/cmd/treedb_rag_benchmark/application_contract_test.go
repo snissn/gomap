@@ -91,13 +91,14 @@ func TestApplicationEvidenceIntegrityContracts(t *testing.T) {
 	t.Run("cold reopen and index parity fail closed", func(t *testing.T) {
 		good := lifecycleEvidence{
 			ColdReopenParity: true, TextIndexParity: true,
-			VectorIndexParity: true, ScalarIndexParity: true,
+			VectorIndexParity: true, ScalarIndexParity: true, QueryCollectionReopened: true,
 		}
 		for name, mutate := range map[string]func(*lifecycleEvidence){
-			"cold reopen":  func(e *lifecycleEvidence) { e.ColdReopenParity = false },
-			"text index":   func(e *lifecycleEvidence) { e.TextIndexParity = false },
-			"vector index": func(e *lifecycleEvidence) { e.VectorIndexParity = false },
-			"scalar index": func(e *lifecycleEvidence) { e.ScalarIndexParity = false },
+			"cold reopen":      func(e *lifecycleEvidence) { e.ColdReopenParity = false },
+			"query collection": func(e *lifecycleEvidence) { e.QueryCollectionReopened = false },
+			"text index":       func(e *lifecycleEvidence) { e.TextIndexParity = false },
+			"vector index":     func(e *lifecycleEvidence) { e.VectorIndexParity = false },
+			"scalar index":     func(e *lifecycleEvidence) { e.ScalarIndexParity = false },
 		} {
 			t.Run(name, func(t *testing.T) {
 				bad := good
