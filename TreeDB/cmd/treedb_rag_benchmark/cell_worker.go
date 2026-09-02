@@ -181,7 +181,7 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 			state = opened
 			env, queryVectors = state.env, state.queryVectors
 		}
-		row, err := runApplicationCell(cfg, &fixture, env, queryVectors, cell, true)
+		row, err := runApplicationCell(cfg, &fixture, env, queryVectors, cell, true, false)
 		if state != nil {
 			if closeErr := state.env.closeWithError(); err == nil && closeErr != nil {
 				err = fmt.Errorf("close fresh cell environment: %w", closeErr)

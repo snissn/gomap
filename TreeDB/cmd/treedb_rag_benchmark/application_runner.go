@@ -114,8 +114,8 @@ type querySample struct {
 	Millis        float64            `json:"millis"`
 	RequestBytes  int64              `json:"request_bytes"`
 	ResponseBytes int64              `json:"response_bytes"`
-	ResultIDs     []string           `json:"result_ids"`
-	ResultSources map[string][2]bool `json:"result_sources"`
+	ResultIDs     []string           `json:"result_ids,omitempty"`
+	ResultSources map[string][2]bool `json:"result_sources,omitempty"`
 	Error         string             `json:"error,omitempty"`
 }
 
@@ -499,7 +499,7 @@ func runApplicationBaseline(cfg applicationConfig) (*applicationReport, error) {
 		}
 		report.ExactControls = append(report.ExactControls, control)
 		for _, cell := range applicationCellMatrix(embeddingCell) {
-			row, rowErr := runApplicationCell(cfg, &fixture, env, queryVectors, cell, true)
+			row, rowErr := runApplicationCell(cfg, &fixture, env, queryVectors, cell, true, false)
 			if rowErr != nil {
 				env.close()
 				return nil, fmt.Errorf("cell %+v: %w", cell, rowErr)
@@ -1139,7 +1139,7 @@ func applicationCellWorkDigest(cell applicationCellIdentity, topK, candidateLimi
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
-func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env *applicationEnvironment, queryVectors map[string][]float32, cell applicationCellIdentity, measureInitialQuality bool) (applicationRow, error) {
+func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env *applicationEnvironment, queryVectors map[string][]float32, cell applicationCellIdentity, measureInitialQuality, retainRankings bool) (applicationRow, error) {
 
 	row := applicationRow{Cell: cell, Status: "supported", Counters: map[string]float64{}}
 	qualityDigest := applicationFixtureDigest(fixture)
@@ -1186,7 +1186,7 @@ func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env 
 	runtime.ReadMemStats(&before)
 	cpuBefore := runtimeCPUSeconds()
 	for rep := range cfg.Repetitions {
-		repSamples, perf, counters, err := runApplicationRepetition(cfg, fixture, cell, rep, call)
+		repSamples, perf, counters, err := runApplicationRepetition(cfg, fixture, cell, rep, retainRankings, call)
 		if err != nil {
 			return row, err
 		}
@@ -1317,7 +1317,7 @@ func applicationScopeViolations(fixture *applicationFixture, filter string, ids 
 	}
 	return crossTenant, crossWorkspace, crossRange
 }
-func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture, cell applicationCellIdentity, rep int, call func(applicationQuery) (queryResult, error)) ([]querySample, repetitionPerformance, map[string]float64, error) {
+func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture, cell applicationCellIdentity, rep int, retainRankings bool, call func(applicationQuery) (queryResult, error)) ([]querySample, repetitionPerformance, map[string]float64, error) {
 	order := "forward"
 	if rep%2 == 1 {
 		order = "reverse"
@@ -1342,7 +1342,11 @@ func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture
 				query := fixture.Queries[queryIndex]
 				queryStart := time.Now()
 				result, err := call(query)
-				sample := querySample{Repetition: rep, Ordinal: ordinal, QueryID: query.ID, Millis: time.Since(queryStart).Seconds() * 1000, RequestBytes: result.RequestBytes, ResponseBytes: result.ResponseBytes, ResultIDs: append([]string(nil), result.IDs...), ResultSources: result.Sources}
+				sample := querySample{Repetition: rep, Ordinal: ordinal, QueryID: query.ID, Millis: time.Since(queryStart).Seconds() * 1000, RequestBytes: result.RequestBytes, ResponseBytes: result.ResponseBytes}
+				if retainRankings {
+					sample.ResultIDs = append([]string(nil), result.IDs...)
+					sample.ResultSources = result.Sources
+				}
 				if err != nil {
 					sample.Error = err.Error()
 				}

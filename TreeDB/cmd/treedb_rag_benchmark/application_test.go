@@ -73,6 +73,11 @@ func TestApplicationDiagnosticSmokeLifecycleServiceAndArtifacts(t *testing.T) {
 		if row.Errors != 0 || row.Quality.ChunkRecallAt10 <= 0 || len(row.Samples) != cfg.SamplesPerRep {
 			t.Fatalf("supported row invalid: %+v", row)
 		}
+		for _, sample := range row.Samples {
+			if sample.ResultIDs != nil || sample.ResultSources != nil {
+				t.Fatalf("baseline retained comparison-only rankings: %+v", sample)
+			}
+		}
 		if row.Cell.Surface == "direct_collection" && row.Cell.Projection == "score_only" {
 			if row.Counters["documents_fetched"] != 0 || row.Quality.AttributionMode != "untimed_compact_same_work_route_filter" {
 				t.Fatalf("direct score-only projection/attribution invalid: %+v", row)
@@ -99,6 +104,13 @@ func TestApplicationDiagnosticSmokeLifecycleServiceAndArtifacts(t *testing.T) {
 		if info, err := os.Stat(path); err != nil || info.Size() == 0 {
 			t.Fatalf("artifact %s info=%v err=%v", path, info, err)
 		}
+	}
+	jsonArtifact, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read JSON artifact: %v", err)
+	}
+	if strings.Contains(string(jsonArtifact), `"result_ids"`) || strings.Contains(string(jsonArtifact), `"result_sources"`) {
+		t.Fatal("baseline JSON serialized comparison-only rankings")
 	}
 	bad := *report
 	bad.Lifecycle = make(map[string]lifecycleEvidence, len(report.Lifecycle))
