@@ -80,7 +80,7 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 				{PID: 2, RSSBytes: 30, CPUSeconds: 3, CapturedUnixNanos: 3},
 				{PID: 2, RSSBytes: 25, CPUSeconds: 5, CapturedUnixNanos: 4},
 			},
-			PeakObservedRSSBytes: 30, CPUSeconds: 3, DurableBytes: 1,
+			PeakObservedRSSBytes: 30, CPUSeconds: 6, DurableBytes: 1,
 		},
 		Build: qdrantComparisonBuild{Seconds: 1, Points: 54}, QuerySeconds: 1,
 		Reopen: qdrantComparisonReopen{
@@ -114,7 +114,7 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 			}
 			cell := qdrantComparisonCell{
 				Route: route, Filter: filter, Equivalence: "directional",
-				TimingSemantics: "total_ms spans query_points, point-ID extraction, bounded retrieve, payload ordering/validation, leakage/accounting, and sample recording; search_ms and fetch_ms are nested subtimers",
+				TimingSemantics: "total_ms spans query_points, point-ID extraction, bounded retrieve, and payload ordering/validation; benchmark quality/byte bookkeeping is excluded; search_ms and fetch_ms are nested subtimers",
 				Warmups:         20, Repetitions: 3, FetchMaxCount: 1,
 				RouteProof: qdrantComparisonRouteProof{API: "qdrant.query_points", NamedVectors: vectors, BoundedFetch: true},
 			}
@@ -220,6 +220,7 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		{"missing CPU", func(a *qdrantComparisonArtifact) { a.Resources.CPUSeconds = 0 }},
 		{"unordered process samples", func(a *qdrantComparisonArtifact) { a.Resources.ProcessSamples[1].CapturedUnixNanos = 1 }},
 		{"CPU regression", func(a *qdrantComparisonArtifact) { a.Resources.ProcessSamples[1].CPUSeconds = .5 }},
+		{"restarted startup CPU omitted", func(a *qdrantComparisonArtifact) { a.Resources.CPUSeconds = 3 }},
 		{"wrong peak RSS aggregate", func(a *qdrantComparisonArtifact) { a.Resources.PeakObservedRSSBytes = 29 }},
 		{"wrong CPU aggregate", func(a *qdrantComparisonArtifact) { a.Resources.CPUSeconds = 4 }},
 		{"noncontiguous PID lifecycle", func(a *qdrantComparisonArtifact) { a.Resources.ProcessSamples[3].PID = 1 }},

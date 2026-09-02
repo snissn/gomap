@@ -8,6 +8,15 @@ import (
 	"testing"
 )
 
+func mustCurrentExecutableSHA256(t *testing.T) string {
+	t.Helper()
+	sum, err := currentExecutableSHA256()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sum
+}
+
 func validTreeDBComparisonArtifact(t *testing.T) (applicationComparisonManifest, string, treeDBComparisonArtifact) {
 	t.Helper()
 	manifest, err := buildApplicationComparisonManifest()
@@ -26,7 +35,7 @@ func validTreeDBComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 		Schema: treeDBComparisonArtifactSchema, Authority: "BOUNDED_COMPARISON_EVIDENCE",
 		ManifestSHA256: manifestSHA, ProductBaseSHA: manifest.ProductBaseSHA,
 		HarnessRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		BinarySHA256:    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		BinarySHA256:    mustCurrentExecutableSHA256(t),
 		FixtureSHA256:   manifest.FixtureSHA256, SemanticVectorSHA256: manifest.SemanticVectorSHA256,
 		ConfigSHA256: manifest.ConfigSHA256, Config: manifest.Config,
 		SourceCount: 18, ChunkCount: 54, QueryCount: 3, BuildReopenSeconds: 1, QuerySeconds: 1, StorageBytes: 1,

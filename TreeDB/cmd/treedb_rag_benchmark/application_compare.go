@@ -333,6 +333,19 @@ func expectedQdrantSparseVectorSHA256(manifest applicationComparisonManifest) (s
 	return hex.EncodeToString(sum[:]), nil
 }
 
+func currentExecutableSHA256() (string, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(executable)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
 func validateTreeDBComparisonArtifact(artifact *treeDBComparisonArtifact, manifest applicationComparisonManifest, manifestSHA string) ([]applicationComparisonRow, error) {
 	if artifact.Schema != treeDBComparisonArtifactSchema || artifact.Authority != "BOUNDED_COMPARISON_EVIDENCE" ||
 		artifact.ManifestSHA256 != manifestSHA || artifact.ProductBaseSHA != manifest.ProductBaseSHA ||
@@ -341,8 +354,12 @@ func validateTreeDBComparisonArtifact(artifact *treeDBComparisonArtifact, manife
 		artifact.SourceCount != len(manifest.Sources) || artifact.ChunkCount != len(manifest.Chunks) || artifact.QueryCount != len(manifest.Queries) {
 		return nil, fmt.Errorf("TreeDB artifact authority/manifest/hash/config/cardinality binding mismatch")
 	}
-	if !isFullRevision(artifact.HarnessRevision) || !validSHA256(artifact.BinarySHA256) {
-		return nil, fmt.Errorf("TreeDB artifact lacks full clean harness/binary identity")
+	executableSHA, err := currentExecutableSHA256()
+	if err != nil {
+		return nil, fmt.Errorf("hash comparator executable: %w", err)
+	}
+	if !isFullRevision(artifact.HarnessRevision) || artifact.BinarySHA256 != executableSHA {
+		return nil, fmt.Errorf("TreeDB artifact lacks exact clean harness/binary identity")
 	}
 	if len(artifact.Failures) != 0 || artifact.StorageBytes <= 0 || artifact.BuildReopenSeconds <= 0 ||
 		artifact.BuildReopenSeconds > float64(manifest.Config.PhaseTimeoutSeconds) || artifact.QuerySeconds <= 0 ||
@@ -859,6 +876,8 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 			}
 			if lastPID != 0 {
 				retiredProcesses[lastPID] = true
+				cpuTotal += sample.CPUSeconds
+				processCPUDeltas[sample.PID] += sample.CPUSeconds
 			}
 			lastPID = sample.PID
 			processPIDOrder = append(processPIDOrder, sample.PID)
@@ -888,7 +907,7 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		seen[key] = true
 		if !containsString([]string{"lexical", "dense", "hybrid"}, cell.Route) ||
 			!containsString(applicationFilterOrder, cell.Filter) ||
-			cell.TimingSemantics != "total_ms spans query_points, point-ID extraction, bounded retrieve, payload ordering/validation, leakage/accounting, and sample recording; search_ms and fetch_ms are nested subtimers" ||
+			cell.TimingSemantics != "total_ms spans query_points, point-ID extraction, bounded retrieve, and payload ordering/validation; benchmark quality/byte bookkeeping is excluded; search_ms and fetch_ms are nested subtimers" ||
 			cell.Warmups != manifest.Config.WarmupsPerCell || cell.Repetitions != manifest.Config.Repetitions ||
 			len(cell.Samples) != manifest.Config.SamplesPerCell*manifest.Config.Repetitions ||
 			len(cell.RepetitionPerformance) != manifest.Config.Repetitions ||

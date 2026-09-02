@@ -196,7 +196,7 @@ class Runner:
         return ids, payloads, search_ms, fetch_ms
     def run(self):
         query_started = time.monotonic()
-        timing = "total_ms spans query_points, point-ID extraction, bounded retrieve, payload ordering/validation, leakage/accounting, and sample recording; search_ms and fetch_ms are nested subtimers"
+        timing = "total_ms spans query_points, point-ID extraction, bounded retrieve, and payload ordering/validation; benchmark quality/byte bookkeeping is excluded; search_ms and fetch_ms are nested subtimers"
         for route in ("lexical", "dense", "hybrid"):
           for filter_id in [row["id"] for row in self.manifest["filters"]]:
             samples, repetitions, metrics, leakage, fetch_max = [], [], [], 0, 0
@@ -211,12 +211,12 @@ class Runner:
                     query_index = len(self.manifest["queries"]) - 1 - query_index
                 query = self.manifest["queries"][query_index]
                 ids, payloads, search_ms, fetch_ms = self.query(route, query, filter_id)
+                total_ms = (time.monotonic_ns() - total_started) / 1e6
                 leakage += sum(not authorized(row, self.filters[filter_id]) for row in payloads); fetch_max = max(fetch_max, len(payloads))
                 judgment = next(row for row in query["cases"] if row["filter"] == filter_id)
                 metrics.append(quality(ids, [row["parent_id"] for row in payloads], judgment["relevant_chunks"], judgment["relevant_parents"]))
-                sample = {"repetition": repetition, "ordinal": ordinal, "query_id": query["id"], "search_ms": search_ms, "fetch_ms": fetch_ms, "total_ms": 0, "result_ids": ids, "fetched_count": len(payloads), "fetched_bytes": len(canonical(payloads))}
-                samples.append(sample); sample["total_ms"] = (time.monotonic_ns() - total_started) / 1e6
-              wall = (time.monotonic_ns() - repetition_started) / 1e9
+                samples.append({"repetition": repetition, "ordinal": ordinal, "query_id": query["id"], "search_ms": search_ms, "fetch_ms": fetch_ms, "total_ms": total_ms, "result_ids": ids, "fetched_count": len(payloads), "fetched_bytes": len(canonical(payloads))})
+              wall = sum(row["total_ms"] for row in samples if row["repetition"] == repetition) / 1000
               repetitions.append({"repetition": repetition, "order": order, "samples": self.config["samples_per_cell"], "wall_seconds": wall, "qps": self.config["samples_per_cell"] / wall})
             durations = [row["total_ms"] for row in samples]; vectors = [self.config["sparse_vector_name"]] if route == "lexical" else [self.config["dense_vector_name"]]
             if route == "hybrid": vectors = [self.config["sparse_vector_name"], self.config["dense_vector_name"]]
@@ -224,8 +224,7 @@ class Runner:
             self.process_samples.append(process_stats(self.args.server_pid))
         self.query_seconds = time.monotonic() - query_started
     def artifact(self):
-        observed = [row for row in self.process_samples if row]
-        resources = {"host_pid_metrics": "observed_process_samples_across_pre_and_post_restart_segments", "process_samples": observed, "peak_observed_rss_bytes": max((row["rss_bytes"] for row in observed), default=0), "cpu_seconds": sum(max(0, right["cpu_seconds"] - left["cpu_seconds"]) for left, right in zip(observed, observed[1:]) if left["pid"] == right["pid"]), "durable_bytes": directory_bytes(self.args.storage_path)}
+        resources = {"host_pid_metrics": "observed_process_samples_across_pre_and_post_restart_segments", "process_samples": observed, "peak_observed_rss_bytes": max((row["rss_bytes"] for row in observed), default=0), "cpu_seconds": sum(max(0, right["cpu_seconds"] - left["cpu_seconds"]) for left, right in zip(observed, observed[1:]) if left["pid"] == right["pid"]) + sum(row["cpu_seconds"] for index, row in enumerate(observed) if index > 0 and row["pid"] != observed[index - 1]["pid"]), "durable_bytes": directory_bytes(self.args.storage_path)}
         server_binary_sha = file_sha256(self.args.server_binary)
         return {"schema": ARTIFACT_SCHEMA, "backend": "qdrant_server", "harness_revision": self.args.harness_revision, "client_version": VERSION, "manifest_sha256": self.manifest_sha, "fixture_sha256": self.manifest["fixture_sha256"], "semantic_vector_sha256": self.manifest["semantic_vector_sha256"], "config_sha256": self.manifest["config_sha256"], "source_count": 18, "chunk_count": 54, "query_count": 3, "sparse_vector_sha256": self.sparse_sha, "build": {"seconds": self.build_seconds, "points": 54}, "query_seconds": self.query_seconds, "server": {"version": VERSION, "deployment": "standalone", "binary_sha256": server_binary_sha, "identity": self.args.server_identity, "local_mode": False, "config": {"dense": self.config["dense_vector_name"], "sparse": self.config["sparse_vector_name"], "hnsw_m": 16, "full_scan_threshold": 10, "full_scan_threshold_unit": "KiB", "indexing_threshold": 1, "exact": False}, "index_proof": {"indexed_vectors_count": self.indexed_vectors_count, "filter_cardinalities": self.filter_cardinalities}}, "resources": resources, "reopen": self.reopen, "cells": self.cells, "failures": self.failures}
 
