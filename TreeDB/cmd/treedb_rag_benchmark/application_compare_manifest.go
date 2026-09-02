@@ -12,7 +12,7 @@ import (
 
 const (
 	applicationComparisonManifestSchema = "treedb-rag-application-comparison/v1"
-	applicationComparisonProductBase    = "b7191c104ab56d1e8aea0d8dcece641c7059c6b3"
+	applicationComparisonProductBase    = "8cf3a6a8d19cf8615b5301795937048857464085"
 )
 
 type applicationComparisonConfig struct {
