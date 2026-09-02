@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1095,10 +1094,9 @@ func validateComparisonPaths(paths ...string) error {
 		} else if !os.IsNotExist(statErr) {
 			return statErr
 		}
-		key := canonical
-		if runtime.GOOS == "windows" {
-			key = strings.ToLower(key)
-		}
+		// Reject case-only distinctions on every platform so a retained command
+		// cannot become destructive when replayed on a case-insensitive volume.
+		key := strings.ToLower(canonical)
 		if prior, exists := seen[key]; exists {
 			return fmt.Errorf("comparison paths alias: %s and %s", prior, path)
 		}

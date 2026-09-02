@@ -75,6 +75,9 @@ func TestValidateComparisonPathsRejectsAliases(t *testing.T) {
 			t.Fatal("accepted hard-link alias")
 		}
 	}
+	if err := validateComparisonPaths(filepath.Join(dir, "comparison.JSON"), filepath.Join(dir, "comparison.json")); err == nil {
+		t.Fatal("accepted case-only output alias")
+	}
 	if err := validateComparisonPaths(input, filepath.Join(dir, "output.json"), filepath.Join(dir, "report.md")); err != nil {
 		t.Fatalf("rejected distinct paths: %v", err)
 	}
