@@ -8,11 +8,15 @@ The accepted production control is TreeDB
 `fcc1d79696a9b7c6655b793f6224f6937e698ce5`: Cohere-10M, 768-dimensional
 cosine, M16, efConstruction300, with a 5,774.242 s adjacency build, 0.9335
 Recall@100, 0.9425 NDCG@100, 21,986.664 QPS, 2.1638 ms concurrent p99, and
-75.480 GiB peak service RSS. The #4587 execution base
-`6beea3ace082eee8afe5dccf629cc1a533823bfc` changes only four text-index files
+75.480 GiB peak service RSS. The original #4587 definition base
+`6beea3ace082eee8afe5dccf629cc1a533823bfc` changed only four text-index files
 under the inspected `TreeDB/collections`, `scripts`, `cmd`, and
 `docs/benchmarks` scope relative to that control; no vector-construction or
-benchmark-harness path changed.
+benchmark-harness path changed. The repaired protocol branch is rebased onto
+`b7191c104ab56d1e8aea0d8dcece641c7059c6b3`, whose runtime identities are
+separately pinned in the contract. That rebase does not authorize execution:
+the final reviewed protocol head and exact service binary must be bound by the
+external coordinator authorization manifest.
 
 | Candidate family | Exact design tested | Integrated wall result | Quality result | Memory result | Disposition | Why C0 is causally different |
 | --- | --- | ---: | ---: | ---: | --- | --- |

@@ -1,8 +1,8 @@
 {
-  "schema_version": "treedb-construction-policy-4587/v2",
+  "schema_version": "treedb-construction-policy-4587/v3",
   "authority": "FROZEN_AUTHORITATIVE",
   "engineering_status": "QUALIFIED",
-  "execution_validity": "AUTHORIZED_NOT_STARTED",
+  "execution_validity": "REQUIRES_FINAL_EXTERNAL_AUTHORIZATION",
   "protocol_verdict": "PROTOCOL_ACCEPTED",
   "scientific_inference": "none",
   "issue": 4587,
@@ -20,18 +20,18 @@
   ],
   "source_identity": {
     "accepted_baseline_commit": "fcc1d79696a9b7c6655b793f6224f6937e698ce5",
-    "definition_base_commit": "6beea3ace082eee8afe5dccf629cc1a533823bfc",
+    "definition_base_commit": "b7191c104ab56d1e8aea0d8dcece641c7059c6b3",
     "branch": "codex/4587-construction-policy",
     "gomap_root": "/mnt/fast4tb/gomap-4586-exec/issue-4587",
     "gomap_required_clean": true,
     "runtime_subtrees": {
-      "TreeDB/collections": "b63ddc3c69af7bc90549657a1b1fb1dbb7f759fa",
+      "TreeDB/collections": "b657ab394186addb049e873dc1c819e883191a09",
       "cmd/treedb-document-service": "e33177fa50931a7c1e60221b80493fbd7c22fa95"
     },
     "runtime_blobs": {
       "TreeDB/collections/vector_index.go": "9425de0db49f18ea5a2c8d4fd21e8010c2a0456f",
       "TreeDB/collections/vector_index_ops.go": "ea54a52c50b1e29a25ef3aa39e6cc5b801c24395",
-      "TreeDB/collections/vector_index_rebuild.go": "b15037ecb6d4fbecf4c172770e61c4449f2ef438"
+      "TreeDB/collections/vector_index_rebuild.go": "d8a65b36bae1a8d216d148d48800e416c5414c4a"
     },
     "harness_blobs": {
       "scripts/treedb_vectordbbench_artifact.py": "bc9ceeea729ac837c3cce0e9e7c03320ffc0a967"
@@ -219,8 +219,21 @@
   },
   "commands": {
     "artifact_root": "/mnt/fast4tb/treedb-4587-c0-evidence",
+    "authorization_manifest": "/mnt/fast4tb/treedb-4587-c0-evidence/execution-authorization.json",
     "binary": "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
     "build_argv": ["go", "build", "-trimpath", "-o", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service", "./cmd/treedb-document-service"],
+    "authorization_generate_argv_template": [
+      "python3", "scripts/treedb_construction_policy_4587.py",
+      "docs/benchmarks/treedb_construction_policy_c0_4587.json",
+      "--generate-authorization", "/mnt/fast4tb/treedb-4587-c0-evidence/execution-authorization.json",
+      "--service-binary", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
+      "--reviewed-head", "{final_reviewed_head}"
+    ],
+    "authorized_preflight_argv": [
+      "python3", "scripts/treedb_construction_policy_4587.py",
+      "docs/benchmarks/treedb_construction_policy_c0_4587.json",
+      "--authorization", "/mnt/fast4tb/treedb-4587-c0-evidence/execution-authorization.json"
+    ],
     "lifecycle_harness_argv_template": [
       "python3", "scripts/treedb_vectordbbench_artifact.py",
       "--out", "{artifact_root}",
@@ -276,14 +289,142 @@
       "required_stages": ["search_serial", "search_concurrent"],
       "required_order": ["diagnostic_exact", "production_exact", "diagnostic_scalar_u8_rerank", "production_scalar_u8_rerank"]
     },
-    "decision_packet": "/mnt/fast4tb/treedb-4587-c0-evidence/decision.json"
+    "decision_packet": "/mnt/fast4tb/treedb-4587-c0-evidence/decision.json",
+    "decision_validation_argv": [
+      "python3", "scripts/treedb_construction_policy_4587.py",
+      "docs/benchmarks/treedb_construction_policy_c0_4587.json",
+      "--decision", "/mnt/fast4tb/treedb-4587-c0-evidence/decision.json"
+    ]
+  },
+  "execution_authorization_policy": {
+    "initial_status": "MISSING_PRE_REVIEW",
+    "creation_boundary": "the coordinator creates the external manifest only after the final reviewed protocol head is merged/rebased and the exact service binary exists",
+    "trust_boundary": "the durable coordinator artifact records review provenance and detects accidental drift; checksums are not a cryptographic signature",
+    "validation": "draft mode is never authorized; non-draft preflight and every decision require the manifest and its checksum"
+  },
+  "execution_authorization_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "treedb-construction-policy-4587-execution-authorization/v1",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schema_version",
+      "authorization_kind",
+      "artifact_root",
+      "execution_commit",
+      "contract_sha256",
+      "protocol_files",
+      "source_identity",
+      "service_binary"
+    ],
+    "properties": {
+      "schema_version": {
+        "const": "treedb-construction-policy-4587-execution-authorization/v1"
+      },
+      "authorization_kind": {
+        "const": "COORDINATOR_REVIEW_PROVENANCE"
+      },
+      "artifact_root": {
+        "const": "/mnt/fast4tb/treedb-4587-c0-evidence"
+      },
+      "execution_commit": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{40}$"
+      },
+      "contract_sha256": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "protocol_files": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "docs/benchmarks/treedb_construction_policy_c0_4587.json",
+          "docs/benchmarks/treedb_construction_policy_history_2026-09-02.md",
+          "scripts/treedb_construction_policy_4587.py",
+          "scripts/test_treedb_construction_policy_4587.py",
+          "scripts/treedb_vdbbench_search_existing_index.py"
+        ],
+        "properties": {
+          "docs/benchmarks/treedb_construction_policy_c0_4587.json": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "docs/benchmarks/treedb_construction_policy_history_2026-09-02.md": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "scripts/treedb_construction_policy_4587.py": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "scripts/test_treedb_construction_policy_4587.py": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "scripts/treedb_vdbbench_search_existing_index.py": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "source_identity": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runtime_subtrees": {
+            "type": "object"
+          },
+          "runtime_blobs": {
+            "type": "object"
+          },
+          "harness_blobs": {
+            "type": "object"
+          },
+          "vectordbbench": {
+            "type": "object"
+          },
+          "runtime": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "runtime_subtrees",
+          "runtime_blobs",
+          "harness_blobs",
+          "vectordbbench",
+          "runtime"
+        ]
+      },
+      "service_binary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    }
   },
   "result_schema": {
-    "schema_version": "treedb-construction-policy-4587-results/v2",
+    "schema_version": "treedb-construction-policy-4587-results/v3",
     "allowed_verdicts": ["GO", "C0_NO_GO"],
+    "decision_exact_keys": [
+      "schema_version", "execution_commit", "contract_sha256", "authorization", "verdict", "runs"
+    ],
+    "authorization_binding": {
+      "exact_keys": ["path", "sha256"],
+      "path": "absolute or relative to commands.artifact_root"
+    },
     "run_roles": ["screening_candidate", "screening_control", "decision_candidate", "decision_control"],
     "run_cardinality": "exactly four ordered 250K rows, then either stop or exactly matched 1M control and selected winner",
-    "evidence_binding": "all manifests, isolation/measurement documents, index metadata, and canonical VectorDBBench results are checksum-bound; unknown or extra result rows are rejected",
+    "evidence_binding": "all runs must verify one service-binary SHA-256 equal to the external authorization; the authorization, manifests, isolation/measurement documents, index metadata, and canonical VectorDBBench results are checksum-bound; unknown or extra result rows are rejected",
     "runs": []
   }
 }

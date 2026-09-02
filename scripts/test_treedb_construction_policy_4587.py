@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused mutation checks for the uncommitted #4587 C0 validator draft."""
+"""Focused mutation checks for the #4587 C0 authorization and decision validator."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("policy4587", HERE / "treedb_construction_policy_4587.py")
@@ -24,12 +25,49 @@ class DecisionFixture:
         self.root = root
         self.contract = json.loads(CONTRACT_PATH.read_text())
         self.counter = 0
+        self.service_binary = root / "treedb-document-service"
+        self.service_binary.write_bytes(b"fixture service binary\n")
+        self.binary_sha = policy.sha256_file(self.service_binary)
+        self.authorization_path = root / "execution-authorization.json"
+        self.reset_authorization()
 
     @staticmethod
     def _write(path: Path, value: object) -> dict[str, str]:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value, sort_keys=True) + "\n")
         return {"path": path.name, "sha256": policy.sha256_file(path)}
+
+    def reset_authorization(self) -> dict[str, str]:
+        source_root = Path(self.contract["source_identity"]["gomap_root"])
+        authorization = {
+            "schema_version": policy.AUTHORIZATION_SCHEMA,
+            "authorization_kind": "COORDINATOR_REVIEW_PROVENANCE",
+            "artifact_root": str(Path(self.contract["commands"]["artifact_root"]).resolve()),
+            "execution_commit": COMMIT,
+            "contract_sha256": policy.canonical_sha256(self.contract),
+            "protocol_files": {
+                path: policy.sha256_file(source_root / path) for path in policy.PROTOCOL_PATHS
+            },
+            "source_identity": policy.authorization_source_identity(self.contract),
+            "service_binary": {
+                "path": str(self.service_binary.resolve()),
+                "sha256": self.binary_sha,
+            },
+        }
+        self.authorization_path.write_text(json.dumps(authorization, sort_keys=True) + "\n")
+        return {
+            "path": str(self.authorization_path.resolve()),
+            "sha256": policy.sha256_file(self.authorization_path),
+        }
+
+    def mutate_authorization(self, mutate) -> dict[str, str]:
+        authorization = json.loads(self.authorization_path.read_text())
+        mutate(authorization)
+        self.authorization_path.write_text(json.dumps(authorization, sort_keys=True) + "\n")
+        return {
+            "path": str(self.authorization_path.resolve()),
+            "sha256": policy.sha256_file(self.authorization_path),
+        }
 
     def _result(self, root: Path, ef: int, kind: str, route: str, timestamp: float,
                 dataset: dict) -> tuple[dict, dict, dict]:
@@ -127,10 +165,12 @@ class DecisionFixture:
         )
 
     def run(self, ef: int, scale: int, role: str, partition: str, *, adjacency: float,
-            persisted: float = 100.0, allocated: float = 100.0, projection: float | None = None) -> dict:
+            persisted: float = 100.0, allocated: float = 100.0, projection: float | None = None,
+            binary_sha: str | None = None) -> dict:
         self.counter += 1
         root = self.root / f"run-{self.counter}-{scale}-ef{ef}"
         root.mkdir(parents=True)
+        binary_sha = binary_sha or self.binary_sha
         dataset = policy.dataset_expected(self.contract, scale, partition)
         config = {
             "dimensions": 768,
@@ -153,7 +193,7 @@ class DecisionFixture:
                 },
             },
             "service": {
-                "binary": {"sha256": "2" * 64},
+                "binary": {"sha256": binary_sha},
                 "data_dir": str((root / "treedb-data").resolve()),
             },
             "lifecycle": {
@@ -161,7 +201,7 @@ class DecisionFixture:
                 "expected_rows": scale,
                 "identity": {
                     "gomap_commit": COMMIT,
-                    "service_binary_sha256": "2" * 64,
+                    "service_binary_sha256": binary_sha,
                     "vectordbbench_commit": self.contract["source_identity"]["vectordbbench"]["commit"],
                 },
                 "dataset": {
@@ -234,7 +274,9 @@ class DecisionFixture:
             self.run(300, 250000, "screening_control", "selection", adjacency=100),
         ]
         return {"schema_version": policy.RESULT_SCHEMA, "execution_commit": COMMIT,
-                "contract_sha256": policy.canonical_sha256(self.contract), "verdict": "C0_NO_GO", "runs": runs}
+                "contract_sha256": policy.canonical_sha256(self.contract),
+                "authorization": self.reset_authorization(),
+                "verdict": "C0_NO_GO", "runs": runs}
 
     def go_packet(self) -> dict:
         runs = [
@@ -246,7 +288,9 @@ class DecisionFixture:
             self.run(128, 1000000, "decision_candidate", "holdout", adjacency=60, projection=0.4),
         ]
         return {"schema_version": policy.RESULT_SCHEMA, "execution_commit": COMMIT,
-                "contract_sha256": policy.canonical_sha256(self.contract), "verdict": "GO", "runs": runs}
+                "contract_sha256": policy.canonical_sha256(self.contract),
+                "authorization": self.reset_authorization(),
+                "verdict": "GO", "runs": runs}
 
     def validate(self, packet: dict) -> dict:
         return policy.validate_decision(packet, self.contract, run_base_validator=False, require_clean_head=False)
@@ -286,6 +330,61 @@ class ValidatorMutations(unittest.TestCase):
         manifest.write_text(json.dumps(value, sort_keys=True) + "\n")
         run["artifact"]["manifest_sha256"] = policy.sha256_file(manifest)
         self.assert_invalid(packet, "artifact gomap identity")
+
+    def test_authorization_required_and_checksum_bound(self) -> None:
+        packet = self.fixture.no_go_packet()
+        packet.pop("authorization")
+        self.assert_invalid(packet, "decision keys")
+        packet = self.fixture.no_go_packet()
+        packet["authorization"]["sha256"] = "0" * 64
+        self.assert_invalid(packet, "authorization SHA-256")
+        packet = self.fixture.no_go_packet()
+        packet["authorization"] = self.fixture.mutate_authorization(
+            lambda value: value.update({"unexpected": True}))
+        self.assert_invalid(packet, "execution authorization keys")
+
+    def test_authorization_rejects_post_review_protocol_file_drift(self) -> None:
+        source_root = Path(self.fixture.contract["source_identity"]["gomap_root"])
+        original_sha256_file = policy.sha256_file
+        for path in policy.PROTOCOL_PATHS:
+            with self.subTest(path=path):
+                packet = self.fixture.no_go_packet()
+                changed_path = (source_root / path).resolve()
+
+                def changed_digest(candidate: Path) -> str:
+                    if candidate.resolve() == changed_path:
+                        return "0" * 64
+                    return original_sha256_file(candidate)
+
+                with mock.patch.object(policy, "sha256_file", side_effect=changed_digest):
+                    self.assert_invalid(packet, "authorized protocol file")
+
+    def test_authorization_binds_commit_contract_and_source_identities(self) -> None:
+        mutations = [
+            ("authorized execution commit", lambda value: value.update({"execution_commit": "3" * 40})),
+            ("contract SHA-256", lambda value: value.update({"contract_sha256": "0" * 64})),
+            ("source identity", lambda value: value["source_identity"]["runtime"].update({"logical_cpus": 11})),
+            ("source identity", lambda value: value["source_identity"]["harness_blobs"].update(
+                {"scripts/treedb_vectordbbench_artifact.py": "0" * 40})),
+            ("source identity", lambda value: value["source_identity"]["vectordbbench"].update(
+                {"commit": "0" * 40})),
+        ]
+        for pattern, mutate in mutations:
+            with self.subTest(pattern=pattern):
+                packet = self.fixture.no_go_packet()
+                packet["authorization"] = self.fixture.mutate_authorization(mutate)
+                self.assert_invalid(packet, pattern)
+
+    def test_mixed_service_binaries_fail_even_when_each_manifest_is_self_consistent(self) -> None:
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][1]
+        manifest_path = Path(run["artifact"]["root"]) / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["service"]["binary"]["sha256"] = "3" * 64
+        manifest["lifecycle"]["identity"]["service_binary_sha256"] = "3" * 64
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
+        run["artifact"]["manifest_sha256"] = policy.sha256_file(manifest_path)
+        self.assert_invalid(packet, "one authorized service binary")
 
     def test_extra_row_and_holdout_misuse(self) -> None:
         packet = self.fixture.no_go_packet()
@@ -399,6 +498,7 @@ class ValidatorMutations(unittest.TestCase):
             "schema_version": policy.RESULT_SCHEMA,
             "execution_commit": COMMIT,
             "contract_sha256": policy.canonical_sha256(self.fixture.contract),
+            "authorization": self.fixture.reset_authorization(),
             "verdict": "GO",
             "runs": runs,
         }

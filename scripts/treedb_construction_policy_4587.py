@@ -14,19 +14,22 @@ import subprocess
 import sys
 from typing import Any
 
-SCHEMA = "treedb-construction-policy-4587/v2"
-RESULT_SCHEMA = "treedb-construction-policy-4587-results/v2"
+SCHEMA = "treedb-construction-policy-4587/v3"
+RESULT_SCHEMA = "treedb-construction-policy-4587-results/v3"
+AUTHORIZATION_SCHEMA = "treedb-construction-policy-4587-execution-authorization/v1"
 MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v1"
 ISOLATION_SCHEMA = "treedb-construction-policy-4587-isolation/v1"
 COORDINATES = [128, 192, 256, 300]
 CONTROL = 300
-DRAFT_PATHS = {
+HISTORY_PATH = "docs/benchmarks/treedb_construction_policy_history_2026-09-02.md"
+PROTOCOL_PATHS = (
     "docs/benchmarks/treedb_construction_policy_c0_4587.json",
+    HISTORY_PATH,
     "scripts/treedb_construction_policy_4587.py",
     "scripts/test_treedb_construction_policy_4587.py",
     "scripts/treedb_vdbbench_search_existing_index.py",
-}
-HISTORY_PATH = "docs/benchmarks/treedb_construction_policy_history_2026-09-02.md"
+)
+DRAFT_PATHS = set(PROTOCOL_PATHS)
 WORK_KEYS = {
     "direct_exact_fp32_rows", "direct_exact_fp32_calls",
     "indexed_exact_fp32_rows", "indexed_exact_fp32_calls",
@@ -214,17 +217,134 @@ def verify_datasets(contract: dict[str, Any]) -> dict[str, Any]:
             "selection_digest": canonical_sha256(selection), "holdout_digest": canonical_sha256(holdout)}
 
 
-def validate_contract(contract: dict[str, Any], allow_draft: bool) -> dict[str, Any]:
+def authorization_source_identity(contract: dict[str, Any]) -> dict[str, Any]:
+    source = object_at(contract["source_identity"], "source_identity")
+    vectordbbench = object_at(source["vectordbbench"], "source_identity.vectordbbench")
+    return {
+        "runtime_subtrees": source["runtime_subtrees"],
+        "runtime_blobs": source["runtime_blobs"],
+        "harness_blobs": source["harness_blobs"],
+        "vectordbbench": {
+            "commit": vectordbbench["commit"],
+            "subtrees": vectordbbench["subtrees"],
+            "blobs": vectordbbench["blobs"],
+        },
+        "runtime": source["runtime"],
+    }
+
+
+def validate_authorization(contract: dict[str, Any], path: Path, *,
+                           require_clean_head: bool = True) -> dict[str, Any]:
+    path = path.resolve()
+    checksum = sha256_file(path)
+    authorization = object_at(json.loads(path.read_text()), "execution authorization")
+    exact_keys(authorization, {
+        "schema_version", "authorization_kind", "artifact_root", "execution_commit",
+        "contract_sha256", "protocol_files", "source_identity", "service_binary",
+    }, "execution authorization")
+    exact(authorization["schema_version"], AUTHORIZATION_SCHEMA, "authorization schema")
+    exact(authorization["authorization_kind"], "COORDINATOR_REVIEW_PROVENANCE",
+          "authorization kind")
+    artifact_root = Path(contract["commands"]["artifact_root"]).resolve()
+    exact(authorization["artifact_root"], str(artifact_root), "authorization artifact root")
+    commit = full_sha(authorization["execution_commit"], "authorization execution commit")
+    gomap_root = Path(contract["source_identity"]["gomap_root"])
+    if require_clean_head:
+        exact(run("git", "rev-parse", "HEAD", cwd=gomap_root), commit,
+              "authorization execution commit")
+        exact(run("git", "status", "--porcelain=v1", cwd=gomap_root), "",
+              "authorization source cleanliness")
+    exact(authorization["contract_sha256"], canonical_sha256(contract),
+          "authorization contract SHA-256")
+    protocol_files = object_at(authorization["protocol_files"], "authorization.protocol_files")
+    exact_keys(protocol_files, set(PROTOCOL_PATHS), "authorization.protocol_files")
+    for protocol_path in PROTOCOL_PATHS:
+        expected = full_sha(protocol_files[protocol_path],
+                            f"authorization.protocol_files.{protocol_path}", 64)
+        exact(sha256_file(gomap_root / protocol_path), expected,
+              f"authorized protocol file {protocol_path} SHA-256")
+    exact(authorization["source_identity"], authorization_source_identity(contract),
+          "authorization source identity")
+    binary = object_at(authorization["service_binary"], "authorization.service_binary")
+    exact_keys(binary, {"path", "sha256"}, "authorization.service_binary")
+    if not isinstance(binary.get("path"), str) or not binary["path"]:
+        fail("authorization.service_binary.path must be a non-empty string")
+    binary_path = Path(binary["path"])
+    if not binary_path.is_absolute():
+        fail("authorization.service_binary.path must be absolute")
+    expected_binary_sha = full_sha(binary["sha256"], "authorization.service_binary.sha256", 64)
+    exact(sha256_file(binary_path), expected_binary_sha, "authorized service binary SHA-256")
+    return {
+        "path": str(path),
+        "sha256": checksum,
+        "execution_commit": commit,
+        "service_binary_sha256": expected_binary_sha,
+    }
+
+
+def resolve_authorization_binding(binding: Any, contract: dict[str, Any]) -> tuple[Path, str]:
+    bound = object_at(binding, "decision.authorization")
+    exact_keys(bound, {"path", "sha256"}, "decision.authorization")
+    expected = full_sha(bound["sha256"], "decision.authorization.sha256", 64)
+    if not isinstance(bound.get("path"), str) or not bound["path"]:
+        fail("decision.authorization.path must be a non-empty string")
+    path = Path(bound["path"])
+    if path.is_absolute():
+        return path.resolve(), expected
+    if ".." in path.parts:
+        fail("relative decision.authorization.path must stay within artifact root")
+    artifact_root = Path(contract["commands"]["artifact_root"]).resolve()
+    path = (artifact_root / path).resolve()
+    try:
+        path.relative_to(artifact_root)
+    except ValueError:
+        fail("relative decision.authorization.path escapes artifact root")
+    return path, expected
+
+
+def generate_authorization(contract: dict[str, Any], path: Path, service_binary: Path,
+                           reviewed_head: str) -> dict[str, Any]:
+    validate_contract(contract, True)
+    root = Path(contract["source_identity"]["gomap_root"])
+    head = run("git", "rev-parse", "HEAD", cwd=root)
+    exact(head, full_sha(reviewed_head, "reviewed head"), "reviewed execution head")
+    exact(run("git", "status", "--porcelain=v1", cwd=root), "",
+          "authorization source cleanliness")
+    service_binary = service_binary.resolve()
+    authorization = {
+        "schema_version": AUTHORIZATION_SCHEMA,
+        "authorization_kind": "COORDINATOR_REVIEW_PROVENANCE",
+        "artifact_root": str(Path(contract["commands"]["artifact_root"]).resolve()),
+        "execution_commit": head,
+        "contract_sha256": canonical_sha256(contract),
+        "protocol_files": {
+            protocol_path: sha256_file(root / protocol_path) for protocol_path in PROTOCOL_PATHS
+        },
+        "source_identity": authorization_source_identity(contract),
+        "service_binary": {
+            "path": str(service_binary),
+            "sha256": sha256_file(service_binary),
+        },
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(authorization, indent=2, sort_keys=True) + "\n")
+    return validate_authorization(contract, path)
+
+
+def validate_contract(contract: dict[str, Any], allow_draft: bool,
+                      authorization_path: Path | None = None) -> dict[str, Any]:
     exact(contract.get("schema_version"), SCHEMA, "schema_version")
     exact(contract.get("authority"), "FROZEN_AUTHORITATIVE", "authority")
     exact(contract.get("engineering_status"), "QUALIFIED", "engineering_status")
-    exact(contract.get("execution_validity"), "AUTHORIZED_NOT_STARTED", "execution_validity")
+    exact(contract.get("execution_validity"), "REQUIRES_FINAL_EXTERNAL_AUTHORIZATION",
+          "execution_validity")
     exact(contract.get("protocol_verdict"), "PROTOCOL_ACCEPTED", "protocol_verdict")
     exact(contract.get("stage"), "frozen", "stage")
     exact(contract.get("trial_started"), False, "trial_started")
     exact(contract.get("scope"), "C0_ONLY", "scope")
     source = object_at(contract.get("source_identity"), "source_identity")
-    exact(source["definition_base_commit"], "6beea3ace082eee8afe5dccf629cc1a533823bfc", "definition base commit")
+    exact(source["definition_base_commit"], "b7191c104ab56d1e8aea0d8dcece641c7059c6b3",
+          "definition base commit")
     graph = object_at(contract["experiment"]["graph"], "experiment.graph")
     exact(graph["ef_construction_coordinates"], COORDINATES, "C0 coordinates")
     exact(graph["control_ef_construction"], CONTROL, "C0 control")
@@ -250,14 +370,17 @@ def validate_contract(contract: dict[str, Any], allow_draft: bool) -> dict[str, 
     gomap = verify_git_identity(Path(source["gomap_root"]), source, allow_draft)
     external = verify_external_git(source)
     datasets = verify_datasets(contract)
-    execution_authorized = not allow_draft and not gomap["dirty"]
-    reason = (
-        "clean frozen protocol is authorized for bounded C0 execution"
-        if execution_authorized
-        else "draft mode never authorizes execution"
-    )
+    if allow_draft:
+        authorization = None
+        reason = "draft mode never authorizes execution"
+    else:
+        if authorization_path is None:
+            authorization_path = Path(contract["commands"]["authorization_manifest"])
+        authorization = validate_authorization(contract, authorization_path)
+        reason = "exact reviewed protocol bytes and service binary are authorized by external coordinator manifest"
     return {"contract": "valid", "gomap": gomap, "vectordbbench": external, "datasets": datasets,
-            "execution_authorized": execution_authorized, "reason": reason}
+            "execution_authorized": authorization is not None, "authorization": authorization,
+            "reason": reason}
 
 
 def dataset_expected(contract: dict[str, Any], scale: int, partition: str) -> dict[str, Any]:
@@ -415,7 +538,7 @@ def validate_search_evidence(run_row: dict[str, Any], root: Path) -> dict[str, d
 
 
 def validate_manifest(run_row: dict[str, Any], root: Path, manifest: dict[str, Any], contract: dict[str, Any],
-                      packet_commit: str, run_base_validator: bool) -> None:
+                      packet_commit: str, run_base_validator: bool) -> str:
     if run_base_validator:
         harness = Path(contract["source_identity"]["gomap_root"]) / "scripts/treedb_vectordbbench_artifact.py"
         result = subprocess.run([sys.executable, str(harness), "--validate-lifecycle", str(root)], text=True,
@@ -435,8 +558,8 @@ def validate_manifest(run_row: dict[str, Any], root: Path, manifest: dict[str, A
     exact(lifecycle.get("expected_rows"), run_row["scale"], "lifecycle expected rows")
     identity = object_at(lifecycle.get("identity"), "lifecycle.identity")
     exact(identity.get("gomap_commit"), packet_commit, "lifecycle gomap commit")
-    full_sha(identity.get("service_binary_sha256"), "service binary SHA-256", 64)
-    exact(identity.get("service_binary_sha256"), manifest["service"]["binary"]["sha256"], "binary identity")
+    binary_sha = full_sha(identity.get("service_binary_sha256"), "service binary SHA-256", 64)
+    exact(binary_sha, manifest["service"]["binary"]["sha256"], "binary identity")
     exact(identity.get("vectordbbench_commit"), contract["source_identity"]["vectordbbench"]["commit"],
           "lifecycle VectorDBBench commit")
     dataset = object_at(lifecycle.get("dataset"), "lifecycle.dataset")
@@ -452,6 +575,7 @@ def validate_manifest(run_row: dict[str, Any], root: Path, manifest: dict[str, A
            config["configured_rerank_candidates"], "scalar"), "lifecycle harness config")
     data_dir = Path(manifest["service"]["data_dir"]).resolve()
     exact(data_dir, (root / "treedb-data").resolve(), "fresh artifact-owned data root")
+    return binary_sha
 
 
 def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: str,
@@ -477,7 +601,8 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
     full_sha(artifact["manifest_sha256"], "run.artifact.manifest_sha256", 64)
     exact(sha256_file(manifest_path), artifact["manifest_sha256"], "artifact manifest SHA-256")
     manifest = object_at(json.loads(manifest_path.read_text()), "manifest")
-    validate_manifest(row, root, manifest, contract, packet_commit, run_base_validator)
+    service_binary_sha256 = validate_manifest(
+        row, root, manifest, contract, packet_commit, run_base_validator)
     isolation, _ = read_bound_json(root, row["isolation_evidence"], "run.isolation_evidence")
     exact(isolation.get("schema_version"), ISOLATION_SCHEMA, "isolation schema")
     exact(isolation.get("artifact_root"), str(root), "isolation artifact root")
@@ -525,7 +650,7 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
         nonnegative_number(projection, "projected 10M adjacency reduction")
     production = validate_search_evidence(row, root)
     return {"row": row, "phases": phases, "resources": resources, "production": production,
-            "projection": projection}
+            "projection": projection, "service_binary_sha256": service_binary_sha256}
 
 
 def clears_gates(candidate: dict[str, Any], control: dict[str, Any], require_projection: bool) -> bool:
@@ -550,8 +675,11 @@ def clears_gates(candidate: dict[str, Any], control: dict[str, Any], require_pro
 
 
 def validate_decision(packet: dict[str, Any], contract: dict[str, Any], *, run_base_validator: bool = True,
-                      require_clean_head: bool = True) -> dict[str, Any]:
-    exact_keys(packet, {"schema_version", "execution_commit", "contract_sha256", "verdict", "runs"}, "decision")
+                      require_clean_head: bool = True,
+                      expected_authorization: dict[str, Any] | None = None) -> dict[str, Any]:
+    exact_keys(packet, {
+        "schema_version", "execution_commit", "contract_sha256", "authorization", "verdict", "runs",
+    }, "decision")
     exact(packet.get("schema_version"), RESULT_SCHEMA, "result schema_version")
     if packet.get("verdict") not in {"GO", "C0_NO_GO"}:
         fail("result verdict must be GO or C0_NO_GO")
@@ -561,11 +689,23 @@ def validate_decision(packet: dict[str, Any], contract: dict[str, Any], *, run_b
         exact(run("git", "rev-parse", "HEAD", cwd=root), commit, "decision execution commit")
         exact(run("git", "status", "--porcelain=v1", cwd=root), "", "decision source cleanliness")
     exact(packet.get("contract_sha256"), canonical_sha256(contract), "decision contract SHA-256")
+    authorization_path, expected_checksum = resolve_authorization_binding(packet["authorization"], contract)
+    exact(sha256_file(authorization_path), expected_checksum, "decision authorization SHA-256")
+    authorization = validate_authorization(
+        contract, authorization_path, require_clean_head=require_clean_head)
+    exact(authorization["execution_commit"], commit, "decision authorized execution commit")
+    if expected_authorization is not None:
+        exact((authorization["path"], authorization["sha256"]),
+              (expected_authorization["path"], expected_authorization["sha256"]),
+              "decision preflight authorization")
     runs = packet.get("runs")
     if not isinstance(runs, list):
         fail("result runs must be a list")
     validated = [validate_run(object_at(row, f"runs[{index}]"), contract, commit, run_base_validator)
                  for index, row in enumerate(runs)]
+    binary_digests = {item["service_binary_sha256"] for item in validated}
+    exact(binary_digests, {authorization["service_binary_sha256"]},
+          "one authorized service binary across all runs")
     roots = [item["row"]["artifact"]["root"] for item in validated]
     run_ids = [item["row"]["run_id"] for item in validated]
     if len(set(roots)) != len(roots) or len(set(run_ids)) != len(run_ids):
@@ -583,7 +723,8 @@ def validate_decision(packet: dict[str, Any], contract: dict[str, Any], *, run_b
     if not eligible:
         exact(len(validated), 4, "no-winner run cardinality")
         exact(packet["verdict"], "C0_NO_GO", "no-winner verdict")
-        return {"verdict": "C0_NO_GO", "winner": None, "performance_gate": "NO-GO"}
+        return {"verdict": "C0_NO_GO", "winner": None, "performance_gate": "NO-GO",
+                "service_binary_sha256": authorization["service_binary_sha256"]}
     winner = sorted(eligible, key=lambda item: (
         -(1 - item["phases"]["adjacency"] / control["phases"]["adjacency"]),
         max(
@@ -606,7 +747,8 @@ def validate_decision(packet: dict[str, Any], contract: dict[str, Any], *, run_b
     passed = clears_gates(decision[1], decision[0], True)
     exact(packet["verdict"], "GO" if passed else "C0_NO_GO", "computed verdict")
     return {"verdict": packet["verdict"], "winner": winner["row"]["ef_construction"],
-            "performance_gate": "GO" if passed else "NO-GO"}
+            "performance_gate": "GO" if passed else "NO-GO",
+            "service_binary_sha256": authorization["service_binary_sha256"]}
 
 
 def print_screening_commands(contract: dict[str, Any]) -> None:
@@ -626,20 +768,43 @@ def print_screening_commands(contract: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("contract", type=Path)
-    parser.add_argument("--draft", action="store_true", help="allow only the uncommitted exact-byte review paths")
+    parser.add_argument("--draft", action="store_true", help="validate a draft without authorizing execution")
+    parser.add_argument("--authorization", type=Path,
+                        help="external authorization path; defaults to commands.authorization_manifest")
+    parser.add_argument("--generate-authorization", type=Path)
+    parser.add_argument("--service-binary", type=Path)
+    parser.add_argument("--reviewed-head")
     parser.add_argument("--decision", type=Path)
     parser.add_argument("--print-screening-commands", action="store_true")
     args = parser.parse_args()
     try:
         contract = json.loads(args.contract.read_text())
-        report = validate_contract(contract, args.draft)
+        if args.generate_authorization:
+            if (args.draft or args.decision or args.authorization or args.print_screening_commands
+                    or not args.service_binary or not args.reviewed_head):
+                fail("--generate-authorization requires --service-binary and --reviewed-head only")
+            generated = generate_authorization(
+                contract, args.generate_authorization, args.service_binary, args.reviewed_head)
+            print(json.dumps({"authorization": generated}, indent=2, sort_keys=True))
+            return 0
+        decision = json.loads(args.decision.read_text()) if args.decision else None
+        authorization_path = args.authorization
+        if decision is not None and authorization_path is None:
+            authorization_path, _ = resolve_authorization_binding(decision.get("authorization"), contract)
+        report = validate_contract(contract, args.draft, authorization_path)
         if args.print_screening_commands:
+            if not report["execution_authorized"]:
+                fail("screening commands require final external authorization")
             print_screening_commands(contract)
-        if args.decision:
-            report["decision"] = validate_decision(json.loads(args.decision.read_text()), contract)
+        if decision is not None:
+            if args.draft:
+                fail("draft mode cannot validate a decision packet")
+            report["decision"] = validate_decision(
+                decision, contract, expected_authorization=report["authorization"])
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0
-    except (OSError, ValueError, KeyError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError,
+            json.JSONDecodeError) as exc:
         print(f"INVALID: {exc}", file=sys.stderr)
         return 1
 
