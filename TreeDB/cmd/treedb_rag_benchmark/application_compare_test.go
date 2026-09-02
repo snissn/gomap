@@ -90,6 +90,20 @@ func TestValidateComparisonPathsRejectsAliases(t *testing.T) {
 	}
 }
 
+func TestReserveComparisonOutputsRejectsFilesystemAliases(t *testing.T) {
+	dir := t.TempDir()
+	nfc := filepath.Join(dir, "\u00e9.json")
+	nfd := filepath.Join(dir, "e\u0301.json")
+	cleanup, err := reserveComparisonOutputs(nfc, nfd)
+	if err == nil {
+		cleanup()
+		t.Skip("filesystem treats NFC and NFD names as distinct")
+	}
+	if _, statErr := os.Stat(nfc); !os.IsNotExist(statErr) {
+		t.Fatalf("reserved output was not cleaned up: %v", statErr)
+	}
+}
+
 func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest, string, qdrantComparisonArtifact) {
 	t.Helper()
 	manifest, err := buildApplicationComparisonManifest()

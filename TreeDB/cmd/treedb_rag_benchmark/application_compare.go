@@ -1123,12 +1123,44 @@ func validateComparisonPaths(paths ...string) error {
 	}
 	return nil
 }
+func reserveComparisonOutputs(paths ...string) (func(), error) {
+	var created []string
+	cleanup := func() {
+		for _, path := range created {
+			_ = os.Remove(path)
+		}
+	}
+	for _, path := range paths {
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			cleanup()
+			return nil, fmt.Errorf("reserve comparison output %s: %w", path, err)
+		}
+		created = append(created, path)
+		if err := file.Close(); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("close reserved comparison output %s: %w", path, err)
+		}
+	}
+	return cleanup, nil
+}
+
 func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStoragePath, qdrantStoragePath, outputPath, markdownPath string) error {
 
 	var manifest applicationComparisonManifest
 	if err := validateComparisonPaths(manifestPath, treePath, qdrantPath, treeStoragePath, qdrantStoragePath, outputPath, markdownPath); err != nil {
 		return err
 	}
+	cleanupOutputs, err := reserveComparisonOutputs(outputPath, markdownPath)
+	if err != nil {
+		return err
+	}
+	keepOutputs := false
+	defer func() {
+		if !keepOutputs {
+			cleanupOutputs()
+		}
+	}()
 	rawManifest, err := readJSONFile(manifestPath, &manifest)
 	if err != nil {
 		return err
@@ -1226,5 +1258,9 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStorageP
 	for _, disposition := range report.Dispositions {
 		fmt.Fprintf(&md, "- %s\n", disposition)
 	}
-	return os.WriteFile(markdownPath, []byte(md.String()), 0o644)
+	if err := os.WriteFile(markdownPath, []byte(md.String()), 0o644); err != nil {
+		return err
+	}
+	keepOutputs = true
+	return nil
 }
