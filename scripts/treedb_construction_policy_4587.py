@@ -594,6 +594,8 @@ def generate_authorization(contract: dict[str, Any], path: Path, service_binary:
         cwd=root, env=build_environment)
     exact(go_version, f"go version {contract['source_identity']['runtime']['go']}",
           "authorization Go toolchain version")
+    run(contract["commands"]["build_argv"][0], "mod", "verify",
+        cwd=root, env=build_environment)
     run(*contract["commands"]["build_argv"], cwd=root, env=build_environment)
     authorization = {
         "schema_version": AUTHORIZATION_SCHEMA,

@@ -18,8 +18,9 @@ merged observer prerequisite at
 pinned separately in the contract. That integration does not authorize
 execution: after exact-head review, the external coordinator authorization flow
 must build the service binary from the clean reviewed commit with the contract's
-complete non-inherited Go environment, then bind the build argv, environment,
-toolchain identity, and resulting binary checksum.
+complete non-inherited Go environment, first verify that the frozen module
+cache is unmodified, then bind the build argv, environment, toolchain identity,
+and resulting binary checksum.
 
 | Candidate family | Exact design tested | Integrated wall result | Quality result | Memory result | Disposition | Why C0 is causally different |
 | --- | --- | ---: | ---: | ---: | --- | --- |

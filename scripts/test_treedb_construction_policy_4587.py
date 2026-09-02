@@ -959,6 +959,9 @@ class ValidatorMutations(unittest.TestCase):
             if argv == (contract["commands"]["build_argv"][0], "version"):
                 self.assertEqual(env, contract["commands"]["build_environment"])
                 return f"go version {contract['source_identity']['runtime']['go']}"
+            if argv == (contract["commands"]["build_argv"][0], "mod", "verify"):
+                self.assertEqual(env, contract["commands"]["build_environment"])
+                return "all modules verified"
             if argv == tuple(contract["commands"]["build_argv"]):
                 self.assertEqual(env, contract["commands"]["build_environment"])
                 service_binary.write_bytes(b"binary built by frozen command\n")
@@ -975,6 +978,14 @@ class ValidatorMutations(unittest.TestCase):
             (tuple(contract["commands"]["build_argv"]),
              contract["commands"]["build_environment"]),
             calls)
+        verify_call = (
+            (contract["commands"]["build_argv"][0], "mod", "verify"),
+            contract["commands"]["build_environment"],
+        )
+        self.assertIn(verify_call, calls)
+        self.assertLess(calls.index(verify_call), calls.index(
+            (tuple(contract["commands"]["build_argv"]),
+             contract["commands"]["build_environment"])))
         self.assertEqual(generated["execution_commit"], COMMIT)
         self.assertEqual(
             generated["service_binary_sha256"], policy.sha256_file(service_binary))
