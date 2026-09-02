@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 
 SCHEMA = "treedb-construction-policy-4587/v8"
 RESULT_SCHEMA = "treedb-construction-policy-4587-results/v5"
-AUTHORIZATION_SCHEMA = "treedb-construction-policy-4587-execution-authorization/v1"
+AUTHORIZATION_SCHEMA = "treedb-construction-policy-4587-execution-authorization/v2"
 MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v4"
 ISOLATION_SCHEMA = "treedb-construction-policy-4587-isolation/v2"
 WINNER_SELECTION_SCHEMA = "treedb-construction-policy-4587-winner-selection/v2"
@@ -125,8 +125,9 @@ def fail(message: str) -> None:
     raise ValueError(message)
 
 
-def run(*argv: str, cwd: Path | None = None) -> str:
-    result = subprocess.run(argv, cwd=cwd, check=True, text=True,
+def run(*argv: str, cwd: Path | None = None,
+        env: dict[str, str] | None = None) -> str:
+    result = subprocess.run(argv, cwd=cwd, env=env, check=True, text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return result.stdout.rstrip()
 
@@ -496,12 +497,22 @@ def validate_authorization(contract: dict[str, Any], path: Path, *,
     exact(authorization["source_identity"], authorization_source_identity(contract),
           "authorization source identity")
     binary = object_at(authorization["service_binary"], "authorization.service_binary")
-    exact_keys(binary, {"path", "sha256"}, "authorization.service_binary")
+    exact_keys(binary, {
+        "path", "sha256", "build_argv", "build_environment", "go_version",
+    }, "authorization.service_binary")
     if not isinstance(binary.get("path"), str) or not binary["path"]:
         fail("authorization.service_binary.path must be a non-empty string")
     binary_path = Path(binary["path"])
     if not binary_path.is_absolute():
         fail("authorization.service_binary.path must be absolute")
+    exact(binary_path.resolve(), Path(contract["commands"]["binary"]).resolve(),
+          "authorization service binary path")
+    exact(binary["build_argv"], contract["commands"]["build_argv"],
+          "authorization service build argv")
+    exact(binary["build_environment"], expected_build_environment(contract),
+          "authorization service build environment")
+    exact(binary["go_version"], f"go version {contract['source_identity']['runtime']['go']}",
+          "authorization Go toolchain version")
     expected_binary_sha = full_sha(binary["sha256"], "authorization.service_binary.sha256", 64)
     exact(sha256_file(binary_path), expected_binary_sha, "authorized service binary SHA-256")
     return {
@@ -532,6 +543,34 @@ def resolve_authorization_binding(binding: Any, contract: dict[str, Any]) -> tup
         fail("relative decision.authorization.path escapes artifact root")
     return path, expected
 
+def expected_build_environment(contract: dict[str, Any]) -> dict[str, str]:
+    runtime = object_at(contract["source_identity"]["runtime"], "source_identity.runtime")
+    artifact_root = Path(contract["commands"]["artifact_root"]).resolve()
+    return {
+        "PATH": str(Path(runtime["go_executable"]).resolve().parent),
+        "GOROOT": str(Path(runtime["go_root"]).resolve()),
+        "GOPATH": str(Path(runtime["go_path"]).resolve()),
+        "GOMODCACHE": str(Path(runtime["go_mod_cache"]).resolve()),
+        "GOCACHE": str(artifact_root / "go-build-cache"),
+        "TMPDIR": str(artifact_root / "tmp"),
+        "GOENV": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "GOFLAGS": "",
+        "GOEXPERIMENT": "",
+        "GODEBUG": "",
+        "GOFIPS140": "off",
+        "GOTELEMETRY": "off",
+        "GO111MODULE": "on",
+        "GOPROXY": "off",
+        "GOSUMDB": "off",
+        "CGO_ENABLED": "0",
+        "GOOS": "linux",
+        "GOARCH": "amd64",
+        "GOAMD64": "v1",
+        "GOMAXPROCS": str(runtime["gomaxprocs"]),
+    }
+
 
 def generate_authorization(contract: dict[str, Any], path: Path, service_binary: Path,
                            reviewed_head: str) -> dict[str, Any]:
@@ -547,7 +586,15 @@ def generate_authorization(contract: dict[str, Any], path: Path, service_binary:
           "authorization service binary output path")
     service_binary = expected_binary
     service_binary.parent.mkdir(parents=True, exist_ok=True)
-    run(*contract["commands"]["build_argv"], cwd=root)
+    build_environment = expected_build_environment(contract)
+    for variable in ("GOCACHE", "TMPDIR"):
+        Path(build_environment[variable]).mkdir(parents=True, exist_ok=True)
+    go_version = run(
+        contract["commands"]["build_argv"][0], "version",
+        cwd=root, env=build_environment)
+    exact(go_version, f"go version {contract['source_identity']['runtime']['go']}",
+          "authorization Go toolchain version")
+    run(*contract["commands"]["build_argv"], cwd=root, env=build_environment)
     authorization = {
         "schema_version": AUTHORIZATION_SCHEMA,
         "authorization_kind": "COORDINATOR_REVIEW_PROVENANCE",
@@ -561,6 +608,9 @@ def generate_authorization(contract: dict[str, Any], path: Path, service_binary:
         "service_binary": {
             "path": str(service_binary),
             "sha256": sha256_file(service_binary),
+            "build_argv": contract["commands"]["build_argv"],
+            "build_environment": build_environment,
+            "go_version": go_version,
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -583,12 +633,22 @@ def validate_python_command_contract(contract: dict[str, Any]) -> None:
     exact(search_commands.get("service_environment"),
           {"GOMAXPROCS": str(runtime.get("gomaxprocs"))},
           "existing-index service environment")
+    go_executable = runtime.get("go_executable")
+    if not isinstance(go_executable, str) or not Path(go_executable).is_absolute():
+        fail("frozen Go executable path must be absolute")
+    exact(Path(go_executable).resolve(),
+          (Path(runtime.get("go_root", "")) / "bin/go").resolve(),
+          "frozen Go executable root binding")
+    exact(sha256_file(Path(go_executable)), runtime.get("go_sha256"),
+          "frozen Go executable checksum")
     expected_build_argv = [
-        "go", "build", "-trimpath", "-o", commands.get("binary"),
-        "./cmd/treedb-document-service",
+        go_executable, "build", "-trimpath", "-buildvcs=false",
+        "-o", commands.get("binary"), "./cmd/treedb-document-service",
     ]
     exact(commands.get("build_argv"), expected_build_argv,
           "authorization service build argv")
+    exact(commands.get("build_environment"), expected_build_environment(contract),
+          "authorization service build environment")
     python_commands = {
         "authorization_generate_argv_template": commands.get(
             "authorization_generate_argv_template"),

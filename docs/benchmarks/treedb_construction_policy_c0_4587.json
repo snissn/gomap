@@ -53,6 +53,11 @@
     },
     "runtime": {
       "go": "go1.26.0 linux/amd64",
+      "go_executable": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin/go",
+      "go_sha256": "61e7455a40a2fdfcdab99e881cd30ba10e216e3d0f32ab5f8e59d10cac4ecf57",
+      "go_root": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64",
+      "go_path": "/home/mikers/.gvm/pkgsets/go1.25/global",
+      "go_mod_cache": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod",
       "python": "3.10.12",
       "python_executable": "/usr/bin/python3",
       "python_sha256": "7d51cd6b48b521277f5caa4610a82126e315fa2be4df069823a8b1eeb5bd4a86",
@@ -161,7 +166,7 @@
     "isolation_and_noise": {
       "lock_path": "/mnt/fast4tb/treedb-4587-c0.lock",
       "gomaxprocs": 12,
-      "fixed_build_flags": ["-trimpath"],
+      "fixed_build_flags": ["-trimpath", "-buildvcs=false"],
       "profiles_on_timed_rows": false,
       "diagnostics_interval_seconds": 5,
       "sampling_gap_tolerance_seconds": 1,
@@ -219,7 +224,31 @@
     "artifact_root": "/mnt/fast4tb/treedb-4587-c0-evidence",
     "authorization_manifest": "/mnt/fast4tb/treedb-4587-c0-evidence/execution-authorization.json",
     "binary": "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
-    "build_argv": ["go", "build", "-trimpath", "-o", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service", "./cmd/treedb-document-service"],
+    "build_argv": ["/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin/go", "build", "-trimpath", "-buildvcs=false", "-o", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service", "./cmd/treedb-document-service"],
+    "build_environment": {
+      "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin",
+      "GOROOT": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64",
+      "GOPATH": "/home/mikers/.gvm/pkgsets/go1.25/global",
+      "GOMODCACHE": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod",
+      "GOCACHE": "/mnt/fast4tb/treedb-4587-c0-evidence/go-build-cache",
+      "TMPDIR": "/mnt/fast4tb/treedb-4587-c0-evidence/tmp",
+      "GOENV": "off",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "GOFLAGS": "",
+      "GOEXPERIMENT": "",
+      "GODEBUG": "",
+      "GOFIPS140": "off",
+      "GOTELEMETRY": "off",
+      "GO111MODULE": "on",
+      "GOPROXY": "off",
+      "GOSUMDB": "off",
+      "CGO_ENABLED": "0",
+      "GOOS": "linux",
+      "GOARCH": "amd64",
+      "GOAMD64": "v1",
+      "GOMAXPROCS": "12"
+    },
     "authorization_generate_argv_template": [
       "/usr/bin/python3", "scripts/treedb_construction_policy_4587.py",
       "docs/benchmarks/treedb_construction_policy_c0_4587.json",
@@ -361,7 +390,7 @@
   },
   "execution_authorization_schema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "$id": "treedb-construction-policy-4587-execution-authorization/v1",
+    "$id": "treedb-construction-policy-4587-execution-authorization/v2",
     "type": "object",
     "additionalProperties": false,
     "required": [
@@ -376,7 +405,7 @@
     ],
     "properties": {
       "schema_version": {
-        "const": "treedb-construction-policy-4587-execution-authorization/v1"
+        "const": "treedb-construction-policy-4587-execution-authorization/v2"
       },
       "authorization_kind": {
         "const": "COORDINATOR_REVIEW_PROVENANCE"
@@ -466,7 +495,7 @@
       "service_binary": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["path", "sha256"],
+        "required": ["path", "sha256", "build_argv", "build_environment", "go_version"],
         "properties": {
           "path": {
             "type": "string"
@@ -474,6 +503,17 @@
           "sha256": {
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
+          },
+          "build_argv": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "build_environment": {
+            "type": "object",
+            "additionalProperties": {"type": "string"}
+          },
+          "go_version": {
+            "const": "go version go1.26.0 linux/amd64"
           }
         }
       }

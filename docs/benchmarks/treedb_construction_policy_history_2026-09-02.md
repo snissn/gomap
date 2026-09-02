@@ -16,8 +16,10 @@ benchmark-harness path changed. The repaired protocol branch incorporates the
 merged observer prerequisite at
 `8cf3a6a8d19cf8615b5301795937048857464085`; its final runtime identities are
 pinned separately in the contract. That integration does not authorize
-execution: the final reviewed protocol head and exact service binary must be
-bound by the external coordinator authorization manifest.
+execution: after exact-head review, the external coordinator authorization flow
+must build the service binary from the clean reviewed commit with the contract's
+complete non-inherited Go environment, then bind the build argv, environment,
+toolchain identity, and resulting binary checksum.
 
 | Candidate family | Exact design tested | Integrated wall result | Quality result | Memory result | Disposition | Why C0 is causally different |
 | --- | --- | ---: | ---: | ---: | --- | --- |

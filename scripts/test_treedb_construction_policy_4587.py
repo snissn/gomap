@@ -62,6 +62,13 @@ class DecisionFixture:
         self.service_binary = root / "treedb-document-service"
         self.service_binary.write_bytes(b"fixture service binary\n")
         self.binary_sha = policy.sha256_file(self.service_binary)
+        commands["binary"] = str(self.service_binary.resolve())
+        commands["build_argv"] = [
+            self.contract["source_identity"]["runtime"]["go_executable"],
+            "build", "-trimpath", "-buildvcs=false", "-o",
+            commands["binary"], "./cmd/treedb-document-service",
+        ]
+        commands["build_environment"] = policy.expected_build_environment(self.contract)
         self.authorization_path = root / "execution-authorization.json"
         self.reset_authorization()
 
@@ -86,6 +93,9 @@ class DecisionFixture:
             "service_binary": {
                 "path": str(self.service_binary.resolve()),
                 "sha256": self.binary_sha,
+                "build_argv": self.contract["commands"]["build_argv"],
+                "build_environment": self.contract["commands"]["build_environment"],
+                "go_version": f"go version {self.contract['source_identity']['runtime']['go']}",
             },
         }
         self.authorization_path.write_text(json.dumps(authorization, sort_keys=True) + "\n")
@@ -893,23 +903,44 @@ class ValidatorMutations(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "authorization service build argv"):
             policy.validate_python_command_contract(contract)
 
+        for variable, value in (
+            ("GOFLAGS", "-overlay=/tmp/unreviewed.json"),
+            ("GOEXPERIMENT", "arenas"),
+            ("GOTOOLCHAIN", "auto"),
+            ("GOWORK", "/tmp/unreviewed.work"),
+            ("CGO_ENABLED", "1"),
+        ):
+            with self.subTest(variable=variable):
+                contract = copy.deepcopy(self.fixture.contract)
+                contract["commands"]["build_environment"][variable] = value
+                with self.assertRaisesRegex(
+                    ValueError, "authorization service build environment"
+                ):
+                    policy.validate_python_command_contract(contract)
     def test_authorization_builds_service_from_reviewed_checkout(self) -> None:
         contract = copy.deepcopy(self.fixture.contract)
         service_binary = self.fixture.root / "built-service"
         contract["commands"]["binary"] = str(service_binary)
         contract["commands"]["build_argv"] = [
-            "go", "build", "-trimpath", "-o", str(service_binary),
+            contract["source_identity"]["runtime"]["go_executable"],
+            "build", "-trimpath", "-buildvcs=false", "-o", str(service_binary),
             "./cmd/treedb-document-service",
         ]
+        contract["commands"]["build_environment"] = policy.expected_build_environment(contract)
         calls = []
 
-        def execute(*argv: str, cwd: Path) -> str:
-            calls.append(argv)
+        def execute(*argv: str, cwd: Path,
+                    env: dict[str, str] | None = None) -> str:
+            calls.append((argv, env))
             if argv == ("git", "rev-parse", "HEAD"):
                 return COMMIT
             if argv == ("git", "status", "--porcelain=v1"):
                 return ""
+            if argv == (contract["commands"]["build_argv"][0], "version"):
+                self.assertEqual(env, contract["commands"]["build_environment"])
+                return f"go version {contract['source_identity']['runtime']['go']}"
             if argv == tuple(contract["commands"]["build_argv"]):
+                self.assertEqual(env, contract["commands"]["build_environment"])
                 service_binary.write_bytes(b"binary built by frozen command\n")
                 return ""
             raise AssertionError(f"unexpected command: {argv}")
@@ -920,7 +951,10 @@ class ValidatorMutations(unittest.TestCase):
         ):
             generated = policy.generate_authorization(
                 contract, authorization_path, service_binary, COMMIT)
-        self.assertIn(tuple(contract["commands"]["build_argv"]), calls)
+        self.assertIn(
+            (tuple(contract["commands"]["build_argv"]),
+             contract["commands"]["build_environment"]),
+            calls)
         self.assertEqual(generated["execution_commit"], COMMIT)
         self.assertEqual(
             generated["service_binary_sha256"], policy.sha256_file(service_binary))
@@ -1026,6 +1060,12 @@ class ValidatorMutations(unittest.TestCase):
                 {"scripts/treedb_vectordbbench_artifact.py": "0" * 40})),
             ("source identity", lambda value: value["source_identity"]["vectordbbench"].update(
                 {"commit": "0" * 40})),
+            ("authorization service build argv", lambda value: value["service_binary"][
+                "build_argv"].append("-race")),
+            ("authorization service build environment", lambda value: value["service_binary"][
+                "build_environment"].update({"GOFLAGS": "-overlay=/tmp/unreviewed.json"})),
+            ("authorization Go toolchain version", lambda value: value["service_binary"].update(
+                {"go_version": "go version go1.25.0 linux/amd64"})),
         ]
         for pattern, mutate in mutations:
             with self.subTest(pattern=pattern):
