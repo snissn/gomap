@@ -828,6 +828,7 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 	sparseOnDisk, sparseOnDiskOK := artifact.Server.Config["sparse_on_disk"].(bool)
 	hnswEFConstruct, hnswEFConstructOK := artifact.Server.Config["hnsw_ef_construct"].(float64)
 	maxOptimizationThreads, maxOptimizationThreadsOK := artifact.Server.Config["max_optimization_threads"].(float64)
+	queryHNSWEF, queryHNSWEFOK := artifact.Server.Config["query_hnsw_ef"].(float64)
 	if artifact.Server.Version != manifest.Config.QdrantServerVersion || artifact.Server.LocalMode ||
 		artifact.Server.Deployment != "standalone" ||
 		artifact.Server.BinarySHA256 != manifest.Config.QdrantBinarySHA256 ||
@@ -840,6 +841,7 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		!hnswMOK || hnswM != 16 || !hnswEFConstructOK || hnswEFConstruct != 100 ||
 		!indexingThresholdOK || indexingThreshold != 1 ||
 		!maxOptimizationThreadsOK || maxOptimizationThreads != 1 ||
+		!queryHNSWEFOK || queryHNSWEF != float64(manifest.Config.QdrantHNSWEF) ||
 		artifact.Server.IndexProof.IndexedVectorsCount < 2*len(manifest.Chunks) {
 		return fmt.Errorf("Qdrant artifact lacks pinned standalone server/index configuration")
 	}
@@ -1025,6 +1027,13 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStorageP
 	var tree treeDBComparisonArtifact
 	if _, err := readJSONFile(treePath, &tree); err != nil {
 		return err
+	}
+	provenanceConfig := defaultApplicationConfig()
+	provenanceConfig.FinalEvidence = true
+	provenanceConfig.HarnessRevision = tree.HarnessRevision
+	settings, buildInfoOK := runtimeBuildInfo()
+	if _, err := resolveApplicationHarnessRevision(provenanceConfig, settings, buildInfoOK); err != nil {
+		return fmt.Errorf("comparison executable provenance: %w", err)
 	}
 	treeRows, err := validateTreeDBComparisonArtifact(&tree, manifest, manifestSHA)
 	if err != nil {

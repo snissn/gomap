@@ -29,6 +29,7 @@ type applicationComparisonConfig struct {
 	SparseBM25K1             float64  `json:"sparse_bm25_k1"`
 	SparseBM25B              float64  `json:"sparse_bm25_b"`
 	Fusion                   string   `json:"fusion"`
+	QdrantHNSWEF             int      `json:"qdrant_hnsw_ef"`
 	QdrantServerVersion      string   `json:"qdrant_server_version"`
 	QdrantReleaseAssetSHA256 string   `json:"qdrant_release_asset_sha256"`
 	QdrantBinarySHA256       string   `json:"qdrant_binary_sha256"`
@@ -104,6 +105,7 @@ func defaultApplicationComparisonConfig() applicationComparisonConfig {
 		SparseBM25K1:    1.2, SparseBM25B: 0.75, Fusion: "qdrant_query_api_rrf",
 		ParentCollapse:           "disabled; raw chunks returned; parent recall derived from parent_id",
 		QdrantServerVersion:      "1.19.0",
+		QdrantHNSWEF:             64,
 		QdrantReleaseAssetSHA256: "4e279a80cc1ebe73e859318ff86375af54c123887dd7ae46605c0eb6cb7c44e8",
 		QdrantBinarySHA256:       "036b94e5a39f1ea8f2329c8e528fcea54f83eb9205221a7dc1623c9862acc74d",
 		WarmupsPerCell:           20, SamplesPerCell: 100, Repetitions: 3, PhaseTimeoutSeconds: 90,

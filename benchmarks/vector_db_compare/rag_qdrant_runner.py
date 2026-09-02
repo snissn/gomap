@@ -126,6 +126,7 @@ class Runner:
             "full_scan_threshold_unit": "KiB",
             "indexing_threshold": optimizer["indexing_threshold"],
             "max_optimization_threads": optimizer["max_optimization_threads"],
+            "query_hnsw_ef": self.config["qdrant_hnsw_ef"],
             "exact": False,
         }
         expected = {
@@ -140,6 +141,7 @@ class Runner:
             "full_scan_threshold_unit": "KiB",
             "indexing_threshold": 1,
             "max_optimization_threads": 1,
+            "query_hnsw_ef": 64,
             "exact": False,
         }
         if effective != expected:
@@ -228,7 +230,7 @@ class Runner:
         raise RuntimeError(f"reopen failed: {last}")
     def query(self, route, query, filter_id):
         m, c, filt = self.models, self.client, filter_for(self.models, self.filters[filter_id]); sparse = self.sparse_queries[query["id"]]
-        params, started = m.SearchParams(hnsw_ef=64, exact=False), time.monotonic_ns()
+        params, started = m.SearchParams(hnsw_ef=self.config["qdrant_hnsw_ef"], exact=False), time.monotonic_ns()
         if route == "lexical": response = c.query_points(self.args.collection, query=m.SparseVector(indices=sparse[0], values=sparse[1]), using=self.config["sparse_vector_name"], query_filter=filt, limit=self.config["top_k"], with_payload=False, with_vectors=False)
         elif route == "dense": response = c.query_points(self.args.collection, query=query["dense_vector"], using=self.config["dense_vector_name"], query_filter=filt, search_params=params, limit=self.config["top_k"], with_payload=False, with_vectors=False)
         else: response = c.query_points(self.args.collection, query=m.FusionQuery(fusion=m.Fusion.RRF), prefetch=[m.Prefetch(query=m.SparseVector(indices=sparse[0], values=sparse[1]), using=self.config["sparse_vector_name"], filter=filt, limit=self.config["candidate_limit"]), m.Prefetch(query=query["dense_vector"], using=self.config["dense_vector_name"], filter=filt, params=params, limit=self.config["candidate_limit"])], query_filter=filt, limit=self.config["top_k"], with_payload=False, with_vectors=False)
