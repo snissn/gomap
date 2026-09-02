@@ -74,6 +74,14 @@ def canonical_sha256(value: Any) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def dataset_file_checksums(dataset_dir: str) -> dict[str, str]:
+    root = Path(dataset_dir)
+    return {
+        name: sha256_file(root / name)
+        for name in ("test.parquet", "neighbors.parquet")
+    }
+
+
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 def swap_used_bytes() -> int:
@@ -376,10 +384,14 @@ def run_vdbbench_command(
     if result_path.exists() or result_root.exists():
         fail(f"{kind} canonical result destination already exists")
     command = vdbbench_command(args, kind)
+    dataset_files_before = dataset_file_checksums(args.dataset_dir)
     started_at = iso_now()
     env = vdbbench_environment(args, kind, result_root)
     bound_env = dict(env)
     completed = subprocess.run(command, cwd=args.vectordbbench_dir, env=env)
+    dataset_files_after = dataset_file_checksums(args.dataset_dir)
+    if dataset_files_after != dataset_files_before:
+        fail(f"{kind} canonical VectorDBBench command changed its search dataset files")
     completed_at = iso_now()
     if completed.returncode != 0:
         fail(f"{kind} canonical VectorDBBench command failed with exit {completed.returncode}")
@@ -390,7 +402,7 @@ def run_vdbbench_command(
     generated[0].replace(result_path)
     existing_records = args.command_ledger.read_text().splitlines() if args.command_ledger.exists() else []
     record = {
-        "schema_version": "treedb-construction-policy-4587-probe-command/v4",
+        "schema_version": "treedb-construction-policy-4587-probe-command/v5",
         "sequence": len(existing_records),
         "argv": [str(Path(__file__).resolve()), *sys.argv[1:]],
         "helper_sha256": sha256_file(Path(__file__).resolve()),
@@ -405,6 +417,8 @@ def run_vdbbench_command(
         "probe_completed_at": probe_completed_at,
         "exit_code": completed.returncode,
         "query_sha256": sha256_file(args.query_json),
+        "dataset_files_before_sha256": dataset_files_before,
+        "dataset_files_after_sha256": dataset_files_after,
         "run_id": args.run_id,
         "route": args.route,
         "result_sha256": sha256_file(result_path),

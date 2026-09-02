@@ -391,8 +391,8 @@ class DecisionFixture:
             }],
         }
         data_root = root / "treedb-data"
-        data_root.mkdir()
-        data_file = data_root / "index.data"
+        (data_root / "maindb").mkdir(parents=True)
+        data_file = data_root / "maindb" / "index.db"
         data_file.write_bytes(b"x" * int(persisted))
         diagnostics_path = root / "diagnostics.jsonl"
         diagnostics = [
@@ -421,7 +421,7 @@ class DecisionFixture:
         })
         manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
         data_files = [{
-            "path": data_file.name,
+            "path": data_file.relative_to(data_root).as_posix(),
             "size": data_file.stat().st_size,
             "sha256": policy.sha256_file(data_file),
         }]
@@ -520,7 +520,7 @@ class DecisionFixture:
                 "--diagnostics-interval", "5", "--service-health-timeout", "60",
             ]
             command_records.append({
-                "schema_version": "treedb-construction-policy-4587-probe-command/v4",
+                "schema_version": "treedb-construction-policy-4587-probe-command/v5",
                 "sequence": position,
                 "argv": argv,
                 "helper_sha256": policy.sha256_file(
@@ -550,6 +550,14 @@ class DecisionFixture:
                 "probe_started_at": probe_started.isoformat(),
                 "probe_completed_at": probe_completed.isoformat(),
                 "query_sha256": policy.sha256_file(query_path),
+                "dataset_files_before_sha256": {
+                    "test.parquet": dataset["test_sha256"],
+                    "neighbors.parquet": dataset["neighbors_sha256"],
+                },
+                "dataset_files_after_sha256": {
+                    "test.parquet": dataset["test_sha256"],
+                    "neighbors.parquet": dataset["neighbors_sha256"],
+                },
                 "exit_code": 0,
                 "run_id": f"run-{self.counter}",
                 "route": route,
@@ -1214,9 +1222,10 @@ class ValidatorMutations(unittest.TestCase):
         data_root = Path(source["data_root"])
         external = root / "external-data"
         external.write_bytes(b"unrelated external storage")
-        (data_root / "external-link").symlink_to(external)
+        link = data_root / "maindb" / "format.json"
+        link.symlink_to(external)
         source["data_files"].append({
-            "path": "external-link",
+            "path": link.relative_to(data_root).as_posix(),
             "size": external.stat().st_size,
             "sha256": policy.sha256_file(external),
         })
@@ -1239,10 +1248,10 @@ class ValidatorMutations(unittest.TestCase):
         source = json.loads(source_path.read_text())
         data_root = Path(source["data_root"])
         original = data_root / source["data_files"][0]["path"]
-        hard_link = data_root / "duplicate-inode"
+        hard_link = data_root / "maindb" / "format.json"
         hard_link.hardlink_to(original)
         source["data_files"].append({
-            "path": hard_link.name,
+            "path": hard_link.relative_to(data_root).as_posix(),
             "size": original.stat().st_size,
             "sha256": policy.sha256_file(original),
         })
@@ -1266,10 +1275,10 @@ class ValidatorMutations(unittest.TestCase):
         data_root = Path(source["data_root"])
         external = root / "external-owned-data"
         external.write_bytes(b"unrelated external storage")
-        hard_link = data_root / "external-inode"
+        hard_link = data_root / "maindb" / "format.json"
         hard_link.hardlink_to(external)
         source["data_files"].append({
-            "path": hard_link.name,
+            "path": hard_link.relative_to(data_root).as_posix(),
             "size": external.stat().st_size,
             "sha256": policy.sha256_file(external),
         })
@@ -1281,6 +1290,46 @@ class ValidatorMutations(unittest.TestCase):
         measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
         run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
         self.assert_invalid(packet, "data file link count")
+
+    def test_unrelated_regular_file_cannot_inflate_persisted_storage(self) -> None:
+        packet = self.fixture.go_packet()
+        run = packet["runs"][4]
+        root = Path(run["artifact"]["root"])
+        measurement_path = root / run["measurement_evidence"]["path"]
+        measurement = json.loads(measurement_path.read_text())
+        source_path = root / measurement["source"]["path"]
+        source = json.loads(source_path.read_text())
+        data_root = Path(source["data_root"])
+        padding = data_root / "unrelated-padding.bin"
+        padding.write_bytes(b"x" * 100)
+        source["data_files"].append({
+            "path": padding.name,
+            "size": padding.stat().st_size,
+            "sha256": policy.sha256_file(padding),
+        })
+        source_path.write_text(json.dumps(source, sort_keys=True) + "\n")
+        measurement["source"]["sha256"] = policy.sha256_file(source_path)
+        measurement["resources"]["persisted_bytes"] += padding.stat().st_size
+        measurement["determinism"]["persisted_data_ledger_checksum"] = policy.canonical_sha256(
+            source["data_files"])
+        measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
+        run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
+        self.assert_invalid(packet, "unexpected TreeDB data file path")
+
+    def test_treedb_data_file_allowlist_matches_canonical_layout(self) -> None:
+        allowed = (
+            "maindb/index.db",
+            "dictdb/format.json",
+            "maindb/vlog_health.json",
+            "maindb/wal/commit-l0-000001.log",
+            "maindb/wal/command-wal-journal-owner.lock",
+            "maindb/value_vlog/value-l0-000001.log",
+            "maindb/leaf_vlog/value-l255-000018.log.lenidx",
+            "maindb/leaf_vlog/manifest.durable.0000000000000005.json",
+            "maindb/column_assets/example/column-assets/assets/segments/segment-1048579.tca",
+        )
+        self.assertTrue(all(policy.is_treedb_data_file(Path(path)) for path in allowed))
+        self.assertFalse(policy.is_treedb_data_file(Path("unrelated-padding.bin")))
 
     def test_fallback_and_result_count(self) -> None:
         packet = self.fixture.no_go_packet()
@@ -1493,6 +1542,20 @@ class ValidatorMutations(unittest.TestCase):
         packet = self.fixture.no_go_packet()
         run = packet["runs"][0]
         self.fixture.rewrite_command(
+            run, 0, lambda value: value["dataset_files_before_sha256"].update({
+                "test.parquet": "0" * 64}))
+        self.assert_invalid(packet, "pre-command dataset checksums")
+
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_command(
+            run, 0, lambda value: value["dataset_files_after_sha256"].update({
+                "neighbors.parquet": "0" * 64}))
+        self.assert_invalid(packet, "post-command dataset checksums")
+
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_command(
             run, 0, lambda value: value["vdbbench_env"].update({"PYTHONHASHSEED": "1"}))
         self.assert_invalid(packet, "canonical VectorDBBench environment")
 
@@ -1569,6 +1632,10 @@ class ValidatorMutations(unittest.TestCase):
             query = root / "query.json"
             response = root / "response.json"
             metadata = root / "metadata.json"
+            dataset_dir = root / "dataset"
+            dataset_dir.mkdir()
+            (dataset_dir / "test.parquet").write_bytes(b"test")
+            (dataset_dir / "neighbors.parquet").write_bytes(b"neighbors")
             for path in (query, response, metadata):
                 path.write_text("{}\n")
             args = search_existing_index.argparse.Namespace(
@@ -1583,7 +1650,7 @@ class ValidatorMutations(unittest.TestCase):
                 scale=250000,
                 role="screening_candidate",
                 dataset_name="cohere-medium-250k-selection-v1",
-                dataset_dir=root / "dataset",
+                dataset_dir=dataset_dir,
                 dimensions=768,
                 quantized_index_name="embedding.scalar_u8.fast",
                 rerank_candidates=400,
@@ -1616,6 +1683,16 @@ class ValidatorMutations(unittest.TestCase):
                 )
 
             self.assertEqual(invoked.call_count, 1)
+            self.assertEqual(record["dataset_files_before_sha256"], {
+                "test.parquet": search_existing_index.sha256_file(
+                    dataset_dir / "test.parquet"),
+                "neighbors.parquet": search_existing_index.sha256_file(
+                    dataset_dir / "neighbors.parquet"),
+            })
+            self.assertEqual(
+                record["dataset_files_after_sha256"],
+                record["dataset_files_before_sha256"])
+
             self.assertEqual(result, args.diagnostic_result)
             self.assertEqual(record["result_sha256"], search_existing_index.sha256_file(result))
             self.assertEqual(
@@ -1632,6 +1709,22 @@ class ValidatorMutations(unittest.TestCase):
                 json.loads(args.command_ledger.read_text()),
                 record,
             )
+
+            def mutate_dataset(command, *, cwd, env):
+                (dataset_dir / "test.parquet").write_bytes(b"substituted")
+                return search_existing_index.argparse.Namespace(returncode=0)
+
+            with mock.patch.object(
+                search_existing_index.subprocess, "run", side_effect=mutate_dataset
+            ):
+                with self.assertRaisesRegex(ValueError, "changed its search dataset files"):
+                    search_existing_index.run_vdbbench_command(
+                        args,
+                        "production",
+                        response,
+                        "2026-09-02T00:00:02Z",
+                        "2026-09-02T00:00:03Z",
+                    )
 
 
     def test_canonical_vdbbench_interpreter_is_bound(self) -> None:

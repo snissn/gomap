@@ -61,6 +61,19 @@ MEASUREMENT_KEYS = {
     "cpu_utilization_logical_cores", "determinism", "diagnostic_work_profile",
     "resources", "projected_10m_adjacency_reduction_fraction",
 }
+TREEDB_DATA_FILE_PATTERNS = tuple(map(re.compile, (
+    r"(?:maindb|dictdb|templatedb)/(?:LOCK|format\.json|index\.db|vlog_health\.json|vlog_ref_counts\.meta)",
+    r"(?:maindb|dictdb|templatedb)/wal/(?:commit|wal)-l[0-9]+-[0-9]{6}\.log",
+    r"(?:maindb|dictdb|templatedb)/wal/command-wal-journal-owner\.lock",
+    r"(?:maindb|dictdb|templatedb)/(?:value_vlog|leaf_vlog)/value-l[0-9]+-[0-9]{6}\.log(?:\.lenidx)?",
+    r"(?:maindb|dictdb|templatedb)/(?:value_vlog|leaf_vlog)/manifest(?:\.durable\.[0-9]{16})?\.json",
+    r"maindb/column_assets/[A-Za-z0-9_.-]+/column-assets/assets/segments/segment-[0-9]{6,10}\.tca",
+)))
+
+
+def is_treedb_data_file(relative: Path) -> bool:
+    return any(pattern.fullmatch(relative.as_posix())
+               for pattern in TREEDB_DATA_FILE_PATTERNS)
 MEASUREMENT_ORIGIN_KEYS = {
     "run_id", "artifact_root", "execution_commit", "dataset_sha256", "scale",
     "role", "partition", "ef_construction", "lifecycle_sha256",
@@ -869,10 +882,12 @@ def read_probe_command_record(
             "schema_version", "sequence", "argv", "helper_sha256",
             "python_executable", "python_sha256", "vdbbench_argv", "vdbbench_env",
             "kind", "started_at", "completed_at", "probe_started_at",
-            "probe_completed_at", "exit_code", "query_sha256", "run_id", "route",
-            "result_sha256", "response_sha256", "index_metadata_sha256",
+            "probe_completed_at", "exit_code", "query_sha256",
+            "dataset_files_before_sha256", "dataset_files_after_sha256",
+            "run_id", "route", "result_sha256", "response_sha256",
+            "index_metadata_sha256",
         }, f"probe command ledger[{sequence}]")
-        exact(record["schema_version"], "treedb-construction-policy-4587-probe-command/v4",
+        exact(record["schema_version"], "treedb-construction-policy-4587-probe-command/v5",
               f"probe command ledger[{sequence}].schema_version")
         exact(record["sequence"], sequence, f"probe command ledger[{sequence}].sequence")
     record = records[expected_sequence]
@@ -1119,6 +1134,14 @@ def validate_search_evidence(
               f"search_evidence[{position}] command response checksum")
         exact(command["index_metadata_sha256"], item["index_metadata"]["sha256"],
               f"search_evidence[{position}] command index metadata checksum")
+        expected_dataset_files = {
+            "test.parquet": run_row["dataset"]["test_sha256"],
+            "neighbors.parquet": run_row["dataset"]["neighbors_sha256"],
+        }
+        exact(command["dataset_files_before_sha256"], expected_dataset_files,
+              f"search_evidence[{position}] pre-command dataset checksums")
+        exact(command["dataset_files_after_sha256"], expected_dataset_files,
+              f"search_evidence[{position}] post-command dataset checksums")
         probe_started = utc_timestamp(
             command["probe_started_at"], f"search_evidence[{position}] probe start")
         probe_completed = utc_timestamp(
@@ -1471,6 +1494,8 @@ def measurement_source_values(
         relative = Path(item["path"])
         if relative.is_absolute() or ".." in relative.parts:
             fail("measurement source data file path must be relative")
+        if not is_treedb_data_file(relative):
+            fail(f"unexpected TreeDB data file path: {relative.as_posix()}")
         path = (data_root / relative).resolve()
         try:
             path.relative_to(data_root)

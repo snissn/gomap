@@ -4277,7 +4277,7 @@ class ProtocolMeasurementProducerTest(unittest.TestCase):
             root = Path(tmp)
             data_dir = root / "treedb-data"
             (data_dir / "maindb").mkdir(parents=True)
-            (data_dir / "maindb" / "segment").write_bytes(b"persistent")
+            (data_dir / "maindb" / "index.db").write_bytes(b"persistent")
             records = [
                 {"event": "reset", "timestamp_ns": 1, "response": {}},
                 {"event": "load_start", "timestamp_ns": 2},
@@ -4391,7 +4391,7 @@ class ProtocolMeasurementProducerTest(unittest.TestCase):
             "cumulative_allocated_bytes": 2000.0,
         })
         self.assertEqual(measurements["origin"]["run_id"], "screening-ef128")
-        self.assertEqual(source["data_files"][0]["path"], "maindb/segment")
+        self.assertEqual(source["data_files"][0]["path"], "maindb/index.db")
 
 
 class LifecycleIntegrationTest(unittest.TestCase):
