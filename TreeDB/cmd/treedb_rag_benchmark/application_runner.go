@@ -41,11 +41,13 @@ const (
 )
 
 var (
-	applicationRoutes      = []string{"text_only", "vector_only", "hybrid"}
-	applicationProjections = []string{"score_only", "fetch_topk"}
-	applicationSurfaces    = []string{"direct_collection", "http_service"}
-	applicationEmbeddings  = []string{"hashing_regression", "semantic_minilm"}
-	applicationClients     = []int{1, 4}
+	applicationRoutes             = []string{"text_only", "vector_only", "hybrid"}
+	applicationProjections        = []string{"score_only", "fetch_topk"}
+	applicationSurfaces           = []string{"direct_collection", "http_service"}
+	applicationEmbeddings         = []string{"hashing_regression", "semantic_minilm"}
+	applicationClients            = []int{1, 4}
+	applicationStampedVCSRevision string
+	applicationStampedVCSModified string
 )
 
 type applicationConfig struct {
@@ -54,6 +56,7 @@ type applicationConfig struct {
 	CandidateLimit  int
 	EfSearch        int
 	M               int
+	EfConstruction  int
 	WarmupQueries   int
 	Repetitions     int
 	SamplesPerRep   int
@@ -70,7 +73,7 @@ type applicationConfig struct {
 func defaultApplicationConfig() applicationConfig {
 	return applicationConfig{
 		Workload: "application",
-		TopK:     10, CandidateLimit: 32, EfSearch: 64, M: 8,
+		TopK:     10, CandidateLimit: 32, EfSearch: 64, EfConstruction: 64, M: 8,
 		WarmupQueries: 24, Repetitions: 3, SamplesPerRep: 336,
 		IngestionReps: 5, FinalEvidence: true,
 	}
@@ -105,13 +108,16 @@ type applicationCellIdentity struct {
 }
 
 type querySample struct {
-	Repetition    int     `json:"repetition"`
-	Ordinal       int     `json:"ordinal"`
-	QueryID       string  `json:"query_id"`
-	Millis        float64 `json:"millis"`
-	RequestBytes  int64   `json:"request_bytes"`
-	ResponseBytes int64   `json:"response_bytes"`
-	Error         string  `json:"error,omitempty"`
+	Repetition       int                `json:"repetition"`
+	Ordinal          int                `json:"ordinal"`
+	QueryID          string             `json:"query_id"`
+	Millis           float64            `json:"millis"`
+	RequestBytes     int64              `json:"request_bytes"`
+	ResponseBytes    int64              `json:"response_bytes"`
+	ResultIDs        []string           `json:"result_ids,omitempty"`
+	ResultSources    map[string][2]bool `json:"result_sources,omitempty"`
+	DocumentsFetched float64            `json:"documents_fetched,omitempty"`
+	Error            string             `json:"error,omitempty"`
 }
 
 type repetitionPerformance struct {
@@ -222,19 +228,20 @@ type ingestionSummary struct {
 }
 
 type lifecycleEvidence struct {
-	InitialSources    int                `json:"initial_sources"`
-	FinalSources      int                `json:"final_sources"`
-	InitialChunks     int                `json:"initial_chunks"`
-	FinalChunks       int                `json:"final_chunks"`
-	UnchangedReingest bool               `json:"unchanged_reingest"`
-	UpdatedSource     string             `json:"updated_source"`
-	DeletedSource     string             `json:"deleted_source"`
-	ColdReopenParity  bool               `json:"cold_reopen_parity"`
-	TextIndexParity   bool               `json:"text_index_parity"`
-	VectorIndexParity bool               `json:"vector_index_parity"`
-	ScalarIndexParity bool               `json:"scalar_index_parity"`
-	FaultBoundary     string             `json:"fault_boundary"`
-	FaultEvidence     capabilityEvidence `json:"fault_evidence"`
+	InitialSources          int                `json:"initial_sources"`
+	FinalSources            int                `json:"final_sources"`
+	InitialChunks           int                `json:"initial_chunks"`
+	FinalChunks             int                `json:"final_chunks"`
+	UnchangedReingest       bool               `json:"unchanged_reingest"`
+	UpdatedSource           string             `json:"updated_source"`
+	DeletedSource           string             `json:"deleted_source"`
+	ColdReopenParity        bool               `json:"cold_reopen_parity"`
+	TextIndexParity         bool               `json:"text_index_parity"`
+	VectorIndexParity       bool               `json:"vector_index_parity"`
+	ScalarIndexParity       bool               `json:"scalar_index_parity"`
+	QueryCollectionReopened bool               `json:"query_collection_reopened"`
+	FaultBoundary           string             `json:"fault_boundary"`
+	FaultEvidence           capabilityEvidence `json:"fault_evidence"`
 }
 
 type frozenGate struct {
@@ -336,8 +343,8 @@ func validateApplicationConfig(cfg applicationConfig) error {
 	if cfg.Workload != "application" {
 		return fmt.Errorf("config: application baseline cannot run workload %q", cfg.Workload)
 	}
-	if cfg.TopK < 10 || cfg.CandidateLimit < cfg.TopK || cfg.EfSearch < cfg.TopK {
-		return fmt.Errorf("config: top_k>=10 and candidate/ef budgets >= top_k required")
+	if cfg.TopK < 10 || cfg.CandidateLimit < cfg.TopK || cfg.EfSearch < cfg.TopK || cfg.EfConstruction <= 0 || cfg.M <= 0 {
+		return fmt.Errorf("config: top_k>=10, candidate/ef-search budgets >= top_k, and positive graph construction settings required")
 	}
 	if cfg.Repetitions <= 0 || cfg.SamplesPerRep <= 0 || cfg.IngestionReps <= 0 {
 		return fmt.Errorf("config: repetitions, samples, and ingestion reps must be positive")
@@ -361,13 +368,13 @@ func isFullRevision(revision string) bool {
 
 func applicationConfigDigest(cfg applicationConfig) string {
 	raw, _ := json.Marshal(struct {
-		Workload                                  string
-		TopK, CandidateLimit, EfSearch, M         int
-		WarmupQueries, Repetitions, SamplesPerRep int
-		IngestionReps                             int
+		Workload                                          string
+		TopK, CandidateLimit, EfSearch, EfConstruction, M int
+		WarmupQueries, Repetitions, SamplesPerRep         int
+		IngestionReps                                     int
 	}{
 		Workload: cfg.Workload,
-		TopK:     cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch, M: cfg.M,
+		TopK:     cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch, EfConstruction: cfg.EfConstruction, M: cfg.M,
 		WarmupQueries: cfg.WarmupQueries, Repetitions: cfg.Repetitions,
 		SamplesPerRep: cfg.SamplesPerRep, IngestionReps: cfg.IngestionReps,
 	})
@@ -494,7 +501,7 @@ func runApplicationBaseline(cfg applicationConfig) (*applicationReport, error) {
 		}
 		report.ExactControls = append(report.ExactControls, control)
 		for _, cell := range applicationCellMatrix(embeddingCell) {
-			row, rowErr := runApplicationCell(cfg, &fixture, env, queryVectors, cell)
+			row, rowErr := runApplicationCell(cfg, &fixture, env, queryVectors, cell, true, false)
 			if rowErr != nil {
 				env.close()
 				return nil, fmt.Errorf("cell %+v: %w", cell, rowErr)
@@ -715,10 +722,6 @@ func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixtu
 		_ = db.Close()
 		return nil, lifecycle, err
 	}
-	if err := validateLifecycleEvidence("cold reopen", lifecycle); err != nil {
-		_ = db.Close()
-		return nil, lifecycle, err
-	}
 
 	service := documentservice.New(manager)
 	if _, err := service.CreateIndex(context.Background(), applicationIndexRequest(cfg, dims)); err != nil {
@@ -747,6 +750,30 @@ func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixtu
 		_ = db.Close()
 		return nil, lifecycle, err
 	}
+	if err := service.Close(); err != nil {
+		_ = db.Close()
+		return nil, lifecycle, fmt.Errorf("close query collection before measured reopen: %w", err)
+	}
+	if err := db.Close(); err != nil {
+		return nil, lifecycle, fmt.Errorf("close database before measured reopen: %w", err)
+	}
+	db, err = backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		return nil, lifecycle, fmt.Errorf("reopen database for measured queries: %w", err)
+	}
+	manager = collections.NewCollectionManager(db)
+	queryCol, err = manager.OpenCollection(applicationCollection)
+	if err != nil {
+		_ = db.Close()
+		return nil, lifecycle, fmt.Errorf("reopen measured query collection: %w", err)
+	}
+	service = documentservice.New(manager)
+	lifecycle.QueryCollectionReopened = true
+	if err := validateLifecycleEvidence("cold reopen", lifecycle); err != nil {
+		_ = service.Close()
+		_ = db.Close()
+		return nil, lifecycle, err
+	}
 	lifecycle.FaultBoundary = "IngestSources publishes each source replacement as one dependency-closed durable root selection"
 	lifecycle.FaultEvidence = capabilityEvidence{ErrorType: capabilityErrorType, Code: "storage_boundary_fault_injection_out_of_process", Message: "the external application harness verifies public lifecycle and reopen parity; package fault tests cover private publication and command-WAL cuts", ResultsReturned: 0, FailClosed: true}
 	server := httptest.NewServer(documentservice.NewHandler(service))
@@ -757,7 +784,7 @@ func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixtu
 func applicationIndexRequest(cfg applicationConfig, dims int) documentservice.CreateIndexRequest {
 	return documentservice.CreateIndexRequest{
 		Name: applicationCollection, Dimension: dims, Metric: documentservice.MetricCosine,
-		VectorIndexOptions: &documentservice.BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph, M: cfg.M, EfConstruction: 64, EfSearch: cfg.EfSearch},
+		VectorIndexOptions: &documentservice.BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph, M: cfg.M, EfConstruction: cfg.EfConstruction, EfSearch: cfg.EfSearch},
 		ScalarFields: []documentservice.ScalarFieldDeclaration{
 			{Field: "meta.tenant_id", ValueType: documentservice.ScalarFieldString},
 			{Field: "meta.workspace_id", ValueType: documentservice.ScalarFieldString},
@@ -1073,6 +1100,9 @@ func validateLifecycleEvidence(name string, lifecycle lifecycleEvidence) error {
 	if !lifecycle.ColdReopenParity {
 		return fmt.Errorf("report: %s cold reopen parity is false", name)
 	}
+	if !lifecycle.QueryCollectionReopened {
+		return fmt.Errorf("report: %s measured query collection was not reopened", name)
+	}
 	if !lifecycle.TextIndexParity || !lifecycle.VectorIndexParity || !lifecycle.ScalarIndexParity {
 		return fmt.Errorf("report: %s queried index parity text/vector/scalar=%t/%t/%t",
 			name, lifecycle.TextIndexParity, lifecycle.VectorIndexParity, lifecycle.ScalarIndexParity)
@@ -1126,15 +1156,23 @@ func applicationWarmupQuery(fixture *applicationFixture, ordinal int) applicatio
 	return fixture.Queries[ordinal%len(fixture.Queries)]
 }
 
-func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env *applicationEnvironment, queryVectors map[string][]float32, cell applicationCellIdentity) (applicationRow, error) {
+func applicationCellWorkDigest(cell applicationCellIdentity, topK, candidateLimit, efSearch, efConstruction, m int) string {
+	raw, _ := json.Marshal(struct {
+		Cell                                              applicationCellIdentity
+		TopK, CandidateLimit, EfSearch, EfConstruction, M int
+	}{cell, topK, candidateLimit, efSearch, efConstruction, m})
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env *applicationEnvironment, queryVectors map[string][]float32, cell applicationCellIdentity, measureInitialQuality, retainRankings bool) (applicationRow, error) {
+
 	row := applicationRow{Cell: cell, Status: "supported", Counters: map[string]float64{}}
 	qualityDigest := applicationFixtureDigest(fixture)
-	workRaw, _ := json.Marshal(struct {
-		Cell                           applicationCellIdentity
-		TopK, CandidateLimit, EfSearch int
-	}{cell, cfg.TopK, cfg.CandidateLimit, cfg.EfSearch})
-	workSum := sha256.Sum256(workRaw)
-	row.Comparison = comparisonIdentity{WorkDigest: hex.EncodeToString(workSum[:]), Projection: cell.Projection, QualityDigest: qualityDigest}
+	row.Comparison = comparisonIdentity{
+		WorkDigest:    applicationCellWorkDigest(cell, cfg.TopK, cfg.CandidateLimit, cfg.EfSearch, cfg.EfConstruction, cfg.M),
+		Projection:    cell.Projection,
+		QualityDigest: qualityDigest,
+	}
 	if capability := unsupportedCapability(cell); capability != nil {
 		row.Status = "unsupported"
 		row.Capability = &capabilityEvidence{ErrorType: capabilityErrorType, Code: capability.Code, Message: capability.Message, RequiredIssues: capability.RequiredIssues, ResultsReturned: 0, FailClosed: true}
@@ -1146,20 +1184,22 @@ func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env 
 		}
 		return runDirectQuery(cfg, env.col, query, queryVectors[query.ID], cell, false)
 	}
-	qualityCall := call
-	attributionMode := "untimed_projection_query_sources"
-	if cell.Surface == "direct_collection" && cell.Projection == "score_only" {
-		qualityCall = func(query applicationQuery) (queryResult, error) {
-			return runDirectQuery(cfg, env.col, query, queryVectors[query.ID], cell, true)
+	if measureInitialQuality {
+		qualityCall := call
+		attributionMode := "untimed_projection_query_sources"
+		if cell.Surface == "direct_collection" && cell.Projection == "score_only" {
+			qualityCall = func(query applicationQuery) (queryResult, error) {
+				return runDirectQuery(cfg, env.col, query, queryVectors[query.ID], cell, true)
+			}
+			attributionMode = "untimed_compact_same_work_route_filter"
 		}
-		attributionMode = "untimed_compact_same_work_route_filter"
+		quality, err := measureApplicationQuality(fixture, cell.Filter, cfg.TopK, qualityCall)
+		if err != nil {
+			return row, err
+		}
+		quality.AttributionMode = attributionMode
+		row.Quality = quality
 	}
-	quality, err := measureApplicationQuality(fixture, cell.Filter, cfg.TopK, qualityCall)
-	if err != nil {
-		return row, err
-	}
-	quality.AttributionMode = attributionMode
-	row.Quality = quality
 	for i := range cfg.WarmupQueries {
 		query := applicationWarmupQuery(fixture, i)
 		if _, err := call(query); err != nil {
@@ -1171,7 +1211,7 @@ func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env 
 	runtime.ReadMemStats(&before)
 	cpuBefore := runtimeCPUSeconds()
 	for rep := range cfg.Repetitions {
-		repSamples, perf, counters, err := runApplicationRepetition(cfg, fixture, cell, rep, call)
+		repSamples, perf, counters, err := runApplicationRepetition(cfg, fixture, cell, rep, retainRankings, call)
 		if err != nil {
 			return row, err
 		}
@@ -1302,7 +1342,7 @@ func applicationScopeViolations(fixture *applicationFixture, filter string, ids 
 	}
 	return crossTenant, crossWorkspace, crossRange
 }
-func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture, cell applicationCellIdentity, rep int, call func(applicationQuery) (queryResult, error)) ([]querySample, repetitionPerformance, map[string]float64, error) {
+func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture, cell applicationCellIdentity, rep int, retainRankings bool, call func(applicationQuery) (queryResult, error)) ([]querySample, repetitionPerformance, map[string]float64, error) {
 	order := "forward"
 	if rep%2 == 1 {
 		order = "reverse"
@@ -1328,6 +1368,11 @@ func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture
 				queryStart := time.Now()
 				result, err := call(query)
 				sample := querySample{Repetition: rep, Ordinal: ordinal, QueryID: query.ID, Millis: time.Since(queryStart).Seconds() * 1000, RequestBytes: result.RequestBytes, ResponseBytes: result.ResponseBytes}
+				if retainRankings {
+					sample.ResultIDs = append([]string(nil), result.IDs...)
+					sample.ResultSources = result.Sources
+					sample.DocumentsFetched = result.Counters["documents_fetched"]
+				}
 				if err != nil {
 					sample.Error = err.Error()
 				}
@@ -1358,6 +1403,10 @@ func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture
 		for key, value := range result.result.Counters {
 			counters[key] += value
 		}
+		crossTenant, crossWorkspace, crossRange := applicationScopeViolations(fixture, cell.Filter, result.result.IDs)
+		counters["cross_tenant_results"] += float64(crossTenant)
+		counters["cross_workspace_results"] += float64(crossWorkspace)
+		counters["cross_range_results"] += float64(crossRange)
 	}
 	wall := time.Since(start).Seconds()
 	sort.Slice(samples, func(i, j int) bool { return samples[i].Ordinal < samples[j].Ordinal })
@@ -2035,14 +2084,31 @@ func buildApplicationProvenance(cfg applicationConfig, fixture *applicationFixtu
 	}, nil
 }
 
+func effectiveApplicationBuildInfo(settings map[string]string, buildInfoOK bool, stampedRevision, stampedModified string) (map[string]string, bool) {
+	hasVCSSettings := false
+	for key := range settings {
+		hasVCSSettings = hasVCSSettings || strings.HasPrefix(key, "vcs.")
+	}
+	if hasVCSSettings || !isFullRevision(strings.TrimSpace(stampedRevision)) ||
+		(stampedModified != "false" && stampedModified != "true") {
+		return settings, buildInfoOK
+	}
+	effective := make(map[string]string, len(settings)+2)
+	for key, value := range settings {
+		effective[key] = value
+	}
+	effective["vcs.revision"] = strings.TrimSpace(stampedRevision)
+	effective["vcs.modified"] = stampedModified
+	return effective, true
+}
+
 func runtimeBuildInfo() (map[string]string, bool) {
 	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return nil, false
-	}
 	settings := map[string]string{}
-	for _, setting := range info.Settings {
-		settings[setting.Key] = setting.Value
+	if ok {
+		for _, setting := range info.Settings {
+			settings[setting.Key] = setting.Value
+		}
 	}
-	return settings, true
+	return effectiveApplicationBuildInfo(settings, ok, applicationStampedVCSRevision, applicationStampedVCSModified)
 }

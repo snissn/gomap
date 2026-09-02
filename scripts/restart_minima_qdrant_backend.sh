@@ -1,6 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+capture_stable_identity() {
+	local pid=$1
+	local binary=$2
+	local initial_start state current_start command identity
+
+	initial_start=$(ps -o lstart= -p "$pid" 2>/dev/null || true)
+	[[ -n "$initial_start" ]] || return 1
+	for _ in {1..200}; do
+		state=$(ps -o stat= -p "$pid" 2>/dev/null || true)
+		[[ -n "$state" && "$state" != Z* ]] || return 1
+		current_start=$(ps -o lstart= -p "$pid" 2>/dev/null || true)
+		[[ "$current_start" == "$initial_start" ]] || return 1
+		command=$(ps -o command= -p "$pid" 2>/dev/null || true)
+		command=${command#"${command%%[![:space:]]*}"}
+		command=${command%"${command##*[![:space:]]}"}
+		if [[ "$command" == "$binary" ]]; then
+			identity=$(ps -o lstart= -o command= -p "$pid" 2>/dev/null || true)
+			[[ -n "$identity" ]] || return 1
+			printf '%s\n' "$identity"
+			return 0
+		fi
+		sleep 0.01
+	done
+	return 1
+}
+
 mode=${1:?restart mode required}
 case "$mode" in
 standalone)
@@ -9,6 +35,8 @@ standalone)
 	storage=${4:?Qdrant storage path required}
 	log=${5:?Qdrant log path required}
 	pid_file=${6:?Qdrant PID file required}
+	binary_dir=$(cd -- "$(dirname -- "$binary")" && pwd -P)
+	binary="$binary_dir/$(basename -- "$binary")"
 	if [[ -s "$pid_file" ]]; then
 		{
 			IFS= read -r old_pid
@@ -42,7 +70,7 @@ standalone)
 		QDRANT__STORAGE__STORAGE_PATH="$storage" \
 		"$binary" >>"$log" 2>&1 </dev/null &
 	pid=$!
-	identity=$(ps -o lstart= -o command= -p "$pid" 2>/dev/null || true)
+	identity=$(capture_stable_identity "$pid" "$binary" || true)
 	if [[ -z "$identity" ]]; then
 		kill "$pid" >/dev/null 2>&1 || true
 		wait "$pid" >/dev/null 2>&1 || true
