@@ -20,18 +20,18 @@
   ],
   "source_identity": {
     "accepted_baseline_commit": "fcc1d79696a9b7c6655b793f6224f6937e698ce5",
-    "definition_base_commit": "b7191c104ab56d1e8aea0d8dcece641c7059c6b3",
+    "definition_base_commit": "8cf3a6a8d19cf8615b5301795937048857464085",
     "branch": "codex/4587-construction-policy",
     "gomap_root": "/mnt/fast4tb/gomap-4586-exec/issue-4587",
     "gomap_required_clean": true,
     "runtime_subtrees": {
-      "TreeDB/collections": "b657ab394186addb049e873dc1c819e883191a09",
-      "cmd/treedb-document-service": "e33177fa50931a7c1e60221b80493fbd7c22fa95"
+      "TreeDB/collections": "e42347cf4f85a815eb1c3f8b91bb4c73ae1136b8",
+      "cmd/treedb-document-service": "a27f75f3dfd36de4001b7ab50fb64afc737e665f"
     },
     "runtime_blobs": {
-      "TreeDB/collections/vector_index.go": "9425de0db49f18ea5a2c8d4fd21e8010c2a0456f",
-      "TreeDB/collections/vector_index_ops.go": "ea54a52c50b1e29a25ef3aa39e6cc5b801c24395",
-      "TreeDB/collections/vector_index_rebuild.go": "d8a65b36bae1a8d216d148d48800e416c5414c4a"
+      "TreeDB/collections/vector_index.go": "5533e5b75670f52c0b711ca699c7a03d60648bf6",
+      "TreeDB/collections/vector_index_ops.go": "dd41fd9619215df367cc910a1390ae5d49798e4b",
+      "TreeDB/collections/vector_index_rebuild.go": "21bed0f84ae5301d17619ed2753300be73cf422c"
     },
     "harness_blobs": {
       "scripts/treedb_vectordbbench_artifact.py": "bc9ceeea729ac837c3cce0e9e7c03320ffc0a967"

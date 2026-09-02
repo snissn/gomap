@@ -12,11 +12,12 @@ Recall@100, 0.9425 NDCG@100, 21,986.664 QPS, 2.1638 ms concurrent p99, and
 `6beea3ace082eee8afe5dccf629cc1a533823bfc` changed only four text-index files
 under the inspected `TreeDB/collections`, `scripts`, `cmd`, and
 `docs/benchmarks` scope relative to that control; no vector-construction or
-benchmark-harness path changed. The repaired protocol branch is rebased onto
-`b7191c104ab56d1e8aea0d8dcece641c7059c6b3`, whose runtime identities are
-separately pinned in the contract. That rebase does not authorize execution:
-the final reviewed protocol head and exact service binary must be bound by the
-external coordinator authorization manifest.
+benchmark-harness path changed. The repaired protocol branch incorporates the
+merged observer prerequisite at
+`8cf3a6a8d19cf8615b5301795937048857464085`; its final runtime identities are
+pinned separately in the contract. That integration does not authorize
+execution: the final reviewed protocol head and exact service binary must be
+bound by the external coordinator authorization manifest.
 
 | Candidate family | Exact design tested | Integrated wall result | Quality result | Memory result | Disposition | Why C0 is causally different |
 | --- | --- | ---: | ---: | ---: | --- | --- |
