@@ -22,6 +22,11 @@ const (
 var qdrantSparseTokenPattern = regexp.MustCompile(`[a-z0-9]+`)
 var qdrantServerIdentityPattern = regexp.MustCompile(`^pid:([1-9][0-9]*):.+\|reopened_pid:([1-9][0-9]*)$`)
 
+func isSHA256(value string) bool {
+	raw, err := hex.DecodeString(value)
+	return err == nil && len(raw) == sha256.Size
+}
+
 type qdrantPythonFloat float64
 
 func (value qdrantPythonFloat) MarshalJSON() ([]byte, error) {
@@ -138,25 +143,30 @@ type qdrantComparisonCell struct {
 }
 
 type qdrantComparisonArtifact struct {
-	Schema               string                    `json:"schema"`
-	Backend              string                    `json:"backend"`
-	HarnessRevision      string                    `json:"harness_revision"`
-	ClientVersion        string                    `json:"client_version"`
-	ManifestSHA256       string                    `json:"manifest_sha256"`
-	FixtureSHA256        string                    `json:"fixture_sha256"`
-	SemanticVectorSHA256 string                    `json:"semantic_vector_sha256"`
-	SparseVectorSHA256   string                    `json:"sparse_vector_sha256"`
-	ConfigSHA256         string                    `json:"config_sha256"`
-	SourceCount          int                       `json:"source_count"`
-	ChunkCount           int                       `json:"chunk_count"`
-	QueryCount           int                       `json:"query_count"`
-	Server               qdrantComparisonServer    `json:"server"`
-	Resources            qdrantComparisonResources `json:"resources"`
-	Build                qdrantComparisonBuild     `json:"build"`
-	QuerySeconds         float64                   `json:"query_seconds"`
-	Reopen               qdrantComparisonReopen    `json:"reopen"`
-	Cells                []qdrantComparisonCell    `json:"cells"`
-	Failures             []string                  `json:"failures"`
+	Schema                 string                    `json:"schema"`
+	Backend                string                    `json:"backend"`
+	HarnessRevision        string                    `json:"harness_revision"`
+	ClientVersion          string                    `json:"client_version"`
+	ClientLockSHA256       string                    `json:"client_lock_sha256"`
+	PythonVersion          string                    `json:"python_version"`
+	PythonPlatform         string                    `json:"python_platform"`
+	PythonImplementation   string                    `json:"python_implementation"`
+	PythonExecutableSHA256 string                    `json:"python_executable_sha256"`
+	ManifestSHA256         string                    `json:"manifest_sha256"`
+	FixtureSHA256          string                    `json:"fixture_sha256"`
+	SemanticVectorSHA256   string                    `json:"semantic_vector_sha256"`
+	SparseVectorSHA256     string                    `json:"sparse_vector_sha256"`
+	ConfigSHA256           string                    `json:"config_sha256"`
+	SourceCount            int                       `json:"source_count"`
+	ChunkCount             int                       `json:"chunk_count"`
+	QueryCount             int                       `json:"query_count"`
+	Server                 qdrantComparisonServer    `json:"server"`
+	Resources              qdrantComparisonResources `json:"resources"`
+	Build                  qdrantComparisonBuild     `json:"build"`
+	QuerySeconds           float64                   `json:"query_seconds"`
+	Reopen                 qdrantComparisonReopen    `json:"reopen"`
+	Cells                  []qdrantComparisonCell    `json:"cells"`
+	Failures               []string                  `json:"failures"`
 }
 
 type applicationComparisonRow struct {
@@ -174,23 +184,28 @@ type applicationComparisonRow struct {
 }
 
 type applicationComparisonReport struct {
-	Schema                   string                     `json:"schema"`
-	State                    string                     `json:"state"`
-	HarnessRevision          string                     `json:"harness_revision"`
-	TreeDBBinarySHA256       string                     `json:"treedb_binary_sha256"`
-	TreeDBProcessResources   comparisonProcessResources `json:"treedb_process_resources"`
-	TreeDBStorageBytes       int64                      `json:"treedb_storage_bytes"`
-	QdrantResources          qdrantComparisonResources  `json:"qdrant_resources"`
-	QdrantClientVersion      string                     `json:"qdrant_client_version"`
-	QdrantServerVersion      string                     `json:"qdrant_server_version"`
-	QdrantServerBinarySHA256 string                     `json:"qdrant_server_binary_sha256"`
-	QdrantReleaseAssetSHA256 string                     `json:"qdrant_release_asset_sha256"`
-	ManifestSHA256           string                     `json:"manifest_sha256"`
-	FixtureSHA256            string                     `json:"fixture_sha256"`
-	SemanticVectorSHA256     string                     `json:"semantic_vector_sha256"`
-	ConfigSHA256             string                     `json:"config_sha256"`
-	Rows                     []applicationComparisonRow `json:"rows"`
-	Dispositions             []string                   `json:"dispositions"`
+	Schema                       string                     `json:"schema"`
+	State                        string                     `json:"state"`
+	HarnessRevision              string                     `json:"harness_revision"`
+	TreeDBBinarySHA256           string                     `json:"treedb_binary_sha256"`
+	TreeDBProcessResources       comparisonProcessResources `json:"treedb_process_resources"`
+	TreeDBStorageBytes           int64                      `json:"treedb_storage_bytes"`
+	QdrantResources              qdrantComparisonResources  `json:"qdrant_resources"`
+	QdrantClientVersion          string                     `json:"qdrant_client_version"`
+	QdrantClientLockSHA256       string                     `json:"qdrant_client_lock_sha256"`
+	QdrantPythonVersion          string                     `json:"qdrant_python_version"`
+	QdrantPythonPlatform         string                     `json:"qdrant_python_platform"`
+	QdrantPythonImplementation   string                     `json:"qdrant_python_implementation"`
+	QdrantPythonExecutableSHA256 string                     `json:"qdrant_python_executable_sha256"`
+	QdrantServerVersion          string                     `json:"qdrant_server_version"`
+	QdrantServerBinarySHA256     string                     `json:"qdrant_server_binary_sha256"`
+	QdrantReleaseAssetSHA256     string                     `json:"qdrant_release_asset_sha256"`
+	ManifestSHA256               string                     `json:"manifest_sha256"`
+	FixtureSHA256                string                     `json:"fixture_sha256"`
+	SemanticVectorSHA256         string                     `json:"semantic_vector_sha256"`
+	ConfigSHA256                 string                     `json:"config_sha256"`
+	Rows                         []applicationComparisonRow `json:"rows"`
+	Dispositions                 []string                   `json:"dispositions"`
 }
 
 func readJSONFile(path string, value any) ([]byte, error) {
@@ -812,7 +827,10 @@ func recomputeTreeDBCellEvidence(row applicationRow, manifest applicationCompari
 func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manifest applicationComparisonManifest, manifestSHA, harnessRevision string) error {
 	if artifact.Schema != qdrantComparisonArtifactSchema || artifact.Backend != "qdrant_server" ||
 		artifact.HarnessRevision != harnessRevision || !isFullRevision(artifact.HarnessRevision) ||
-		artifact.ClientVersion != "1.19.0" || artifact.ManifestSHA256 != manifestSHA ||
+		artifact.ClientVersion != "1.19.0" || !isSHA256(artifact.ClientLockSHA256) ||
+		!strings.HasPrefix(artifact.PythonVersion, "3.13.") || artifact.PythonImplementation != "CPython" ||
+		!strings.Contains(artifact.PythonPlatform, "macOS") || !strings.Contains(artifact.PythonPlatform, "arm64") ||
+		!isSHA256(artifact.PythonExecutableSHA256) || artifact.ManifestSHA256 != manifestSHA ||
 		artifact.FixtureSHA256 != manifest.FixtureSHA256 || artifact.SemanticVectorSHA256 != manifest.SemanticVectorSHA256 ||
 		artifact.ConfigSHA256 != manifest.ConfigSHA256 || artifact.SourceCount != len(manifest.Sources) ||
 		artifact.ChunkCount != len(manifest.Chunks) || artifact.QueryCount != len(manifest.Queries) {
@@ -1064,9 +1082,13 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStorageP
 		HarnessRevision: tree.HarnessRevision, TreeDBBinarySHA256: tree.BinarySHA256,
 		TreeDBProcessResources: tree.ProcessResources, TreeDBStorageBytes: tree.StorageBytes, QdrantResources: qdrant.Resources,
 		QdrantClientVersion: qdrant.ClientVersion, QdrantServerVersion: qdrant.Server.Version,
-		QdrantServerBinarySHA256: qdrant.Server.BinarySHA256,
-		QdrantReleaseAssetSHA256: qdrant.Server.ReleaseAssetSHA256,
-		ManifestSHA256:           manifestSHA, FixtureSHA256: manifest.FixtureSHA256,
+		QdrantClientLockSHA256: qdrant.ClientLockSHA256,
+		QdrantPythonVersion:    qdrant.PythonVersion, QdrantPythonPlatform: qdrant.PythonPlatform,
+		QdrantPythonImplementation:   qdrant.PythonImplementation,
+		QdrantPythonExecutableSHA256: qdrant.PythonExecutableSHA256,
+		QdrantServerBinarySHA256:     qdrant.Server.BinarySHA256,
+		QdrantReleaseAssetSHA256:     qdrant.Server.ReleaseAssetSHA256,
+		ManifestSHA256:               manifestSHA, FixtureSHA256: manifest.FixtureSHA256,
 		SemanticVectorSHA256: manifest.SemanticVectorSHA256, ConfigSHA256: manifest.ConfigSHA256,
 		Rows: treeRows, Dispositions: []string{
 			"All TreeDB-versus-Qdrant latency rows are directional: lexical scoring differs; TreeDB dense/hybrid uses declared_column_graph_exact, while Qdrant HNSW is indexed and exact=false is requested but server planner selection is opaque.",
@@ -1097,7 +1119,7 @@ func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStorageP
 		return err
 	}
 	var md strings.Builder
-	fmt.Fprintf(&md, "# TreeDB / Qdrant bounded RAG comparison\n\nState: **validated**  \nManifest SHA-256: `%s`  \nHarness revision: `%s`  \nTreeDB binary SHA-256: `%s`  \nTreeDB process CPU / peak RSS: `%.6fs` / `%d bytes`  \nTreeDB resource semantics: `%s`; `%s`; `%s`  \nQdrant client/server: `%s` / `%s`  \nQdrant server binary SHA-256: `%s`  \nQdrant release asset SHA-256: `%s`  \nQdrant process CPU / observed peak RSS / durable bytes: `%.6fs` / `%d bytes` / `%d bytes`\n\n", manifestSHA, report.HarnessRevision, report.TreeDBBinarySHA256, report.TreeDBProcessResources.CPUSeconds, report.TreeDBProcessResources.PeakRSSBytes, report.TreeDBProcessResources.CPUSemantics, report.TreeDBProcessResources.RSSSemantics, report.TreeDBProcessResources.Scope, report.QdrantClientVersion, report.QdrantServerVersion, report.QdrantServerBinarySHA256, report.QdrantReleaseAssetSHA256, report.QdrantResources.CPUSeconds, report.QdrantResources.PeakObservedRSSBytes, report.QdrantResources.DurableBytes)
+	fmt.Fprintf(&md, "# TreeDB / Qdrant bounded RAG comparison\n\nState: **validated**  \nManifest SHA-256: `%s`  \nHarness revision: `%s`  \nTreeDB binary SHA-256: `%s`  \nTreeDB process CPU / peak RSS: `%.6fs` / `%d bytes`  \nTreeDB resource semantics: `%s`; `%s`; `%s`  \nQdrant client/server: `%s` / `%s`  \nQdrant client lock SHA-256: `%s`  \nQdrant Python: `%s` / `%s` / `%s`  \nQdrant Python executable SHA-256: `%s`  \nQdrant server binary SHA-256: `%s`  \nQdrant release asset SHA-256: `%s`  \nQdrant process CPU / observed peak RSS / durable bytes: `%.6fs` / `%d bytes` / `%d bytes`\n\n", manifestSHA, report.HarnessRevision, report.TreeDBBinarySHA256, report.TreeDBProcessResources.CPUSeconds, report.TreeDBProcessResources.PeakRSSBytes, report.TreeDBProcessResources.CPUSemantics, report.TreeDBProcessResources.RSSSemantics, report.TreeDBProcessResources.Scope, report.QdrantClientVersion, report.QdrantServerVersion, report.QdrantClientLockSHA256, report.QdrantPythonVersion, report.QdrantPythonImplementation, report.QdrantPythonPlatform, report.QdrantPythonExecutableSHA256, report.QdrantServerBinarySHA256, report.QdrantReleaseAssetSHA256, report.QdrantResources.CPUSeconds, report.QdrantResources.PeakObservedRSSBytes, report.QdrantResources.DurableBytes)
 	fmt.Fprintf(&md, "TreeDB durable bytes: `%d bytes`\n\n", report.TreeDBStorageBytes)
 	md.WriteString("| Backend | Route | Filter | Semantics | Samples | Reps | QPS | p50 ms | p95 ms | p99 ms | P@10 | nDCG@10 | MRR@10 | Parent R@10 |\n|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, row := range report.Rows {

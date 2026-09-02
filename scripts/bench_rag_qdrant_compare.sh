@@ -8,6 +8,7 @@ PYTHON=${PYTHON:-python3}
 VENV=${VENV:-$RUN_DIR/venv}
 QDRANT_BIN=${QDRANT_BIN:?set QDRANT_BIN to the pinned standalone Qdrant 1.19.0 release binary}
 QDRANT_RELEASE_ASSET=${QDRANT_RELEASE_ASSET:?set QDRANT_RELEASE_ASSET to the pinned Qdrant 1.19.0 release archive}
+QDRANT_CLIENT_LOCK=${QDRANT_CLIENT_LOCK:-$ROOT/benchmarks/vector_db_compare/qdrant-client-darwin-arm64-py313.lock}
 QDRANT_STORAGE_PATH=${QDRANT_STORAGE_PATH:-$RUN_DIR/qdrant-storage}
 QDRANT_COLLECTION=${QDRANT_COLLECTION:-gomap_rag_4331_${RANDOM}_$$}
 COMPARATOR_BIN=$RUN_DIR/treedb_rag_benchmark
@@ -35,8 +36,13 @@ if [[ ! -f "$QDRANT_RELEASE_ASSET" ]]; then
 	echo "QDRANT_RELEASE_ASSET is not a file" >&2
 	exit 2
 fi
+if [[ ! -f "$QDRANT_CLIENT_LOCK" ]]; then
+	echo "QDRANT_CLIENT_LOCK is not a file" >&2
+	exit 2
+fi
 QDRANT_BIN=$(cd -- "$(dirname -- "$QDRANT_BIN")" && pwd -P)/$(basename -- "$QDRANT_BIN")
 QDRANT_RELEASE_ASSET=$(cd -- "$(dirname -- "$QDRANT_RELEASE_ASSET")" && pwd -P)/$(basename -- "$QDRANT_RELEASE_ASSET")
+QDRANT_CLIENT_LOCK=$(cd -- "$(dirname -- "$QDRANT_CLIENT_LOCK")" && pwd -P)/$(basename -- "$QDRANT_CLIENT_LOCK")
 
 cleanup() {
 	if [[ -s "$PID_FILE" ]]; then
@@ -58,7 +64,8 @@ fi
 mkdir -p "$QDRANT_STORAGE_PATH"
 : >"$PHASE_STATUS"
 "$PYTHON" -m venv "$VENV"
-"$VENV/bin/python" -m pip install --disable-pip-version-check "qdrant-client==1.19.0"
+"$VENV/bin/python" -c 'import platform,sys; assert sys.version_info[:2] == (3,13) and platform.system() == "Darwin" and platform.machine() == "arm64", "Qdrant lock requires CPython 3.13 on macOS arm64"'
+"$VENV/bin/python" -m pip install --disable-pip-version-check --require-hashes -r "$QDRANT_CLIENT_LOCK"
 
 # Every capped command owns a new process group. Timeout kills the complete group
 # and appends a durable partial/failure record before returning nonzero.
@@ -136,7 +143,7 @@ run_capped 300 qdrant-build-query-reopen "$VENV/bin/python" benchmarks/vector_db
 	--collection "$QDRANT_COLLECTION" --server-identity "$SERVER_IDENTITY" \
 	--harness-revision "$HARNESS_REVISION" --storage-path "$QDRANT_STORAGE_PATH" \
 	--restart-hook "$RESTART_HOOK" --server-pid "$PID" --server-binary "$QDRANT_BIN" \
-	--server-release-asset "$QDRANT_RELEASE_ASSET"
+	--server-release-asset "$QDRANT_RELEASE_ASSET" --client-lock "$QDRANT_CLIENT_LOCK"
 run_capped 90 consolidation "$COMPARATOR_BIN" \
 	-application-comparison-manifest "$MANIFEST" \
 	-application-comparison-treedb "$TREEDB_ARTIFACT" \

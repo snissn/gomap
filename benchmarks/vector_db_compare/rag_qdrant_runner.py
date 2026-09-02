@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the frozen #4331 manifest against an external Qdrant 1.19.0 server."""
 from __future__ import annotations
-import argparse, contextlib, hashlib, importlib.metadata, json, math, os, re, signal, subprocess, time, urllib.request
+import argparse, contextlib, hashlib, importlib.metadata, json, math, os, platform, re, signal, subprocess, sys, time, urllib.request
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -279,13 +279,14 @@ class Runner:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name, kwargs in [("--manifest", {"type": Path, "required": True}), ("--output", {"type": Path, "required": True}), ("--url", {"required": True}), ("--collection", {"required": True}), ("--server-identity", {"required": True}), ("--harness-revision", {"required": True}), ("--storage-path", {"type": Path, "required": True}), ("--restart-hook", {"type": Path, "required": True}), ("--server-binary", {"type": Path, "required": True}), ("--server-release-asset", {"type": Path, "required": True}), ("--server-pid", {"type": int, "required": True})]: parser.add_argument(name, **kwargs)
+    for name, kwargs in [("--manifest", {"type": Path, "required": True}), ("--output", {"type": Path, "required": True}), ("--url", {"required": True}), ("--collection", {"required": True}), ("--server-identity", {"required": True}), ("--harness-revision", {"required": True}), ("--storage-path", {"type": Path, "required": True}), ("--restart-hook", {"type": Path, "required": True}), ("--server-binary", {"type": Path, "required": True}), ("--server-release-asset", {"type": Path, "required": True}), ("--client-lock", {"type": Path, "required": True}), ("--server-pid", {"type": int, "required": True})]: parser.add_argument(name, **kwargs)
     args = parser.parse_args()
     raw = args.manifest.read_bytes(); manifest = json.loads(raw)
     if manifest.get("schema") != SCHEMA or importlib.metadata.version("qdrant-client") != VERSION: raise RuntimeError("manifest or qdrant-client identity mismatch")
     if not re.fullmatch(r"[0-9a-f]{40}", args.harness_revision): raise RuntimeError("full harness revision required")
     if not args.server_binary.is_file() or file_sha256(args.server_binary) != manifest["config"]["qdrant_binary_sha256"]: raise RuntimeError("Qdrant server binary SHA-256 mismatch")
     if not args.server_release_asset.is_file() or file_sha256(args.server_release_asset) != manifest["config"]["qdrant_release_asset_sha256"]: raise RuntimeError("Qdrant release asset SHA-256 mismatch")
+    if not args.client_lock.is_file(): raise RuntimeError("Qdrant client lock is not a file")
     if manifest["config"]["qdrant_server_version"] != VERSION: raise RuntimeError("Qdrant server version binding mismatch")
     if not args.storage_path.is_dir() or not os.access(args.restart_hook, os.X_OK): raise RuntimeError("durable path and executable restart hook required")
     if args.server_pid <= 0: raise RuntimeError("standalone Qdrant requires an authoritative positive server PID")
@@ -298,6 +299,14 @@ def main():
     except BaseException as exc: runner.failures.append(f"{type(exc).__name__}: {exc}"); code = 1
     finally:
         try: runner.client.close()
-        finally: args.output.parent.mkdir(parents=True, exist_ok=True); args.output.write_text(json.dumps(runner.artifact(), indent=2, sort_keys=True, allow_nan=False) + "\n")
+        finally:
+            artifact = runner.artifact()
+            artifact["client_lock_sha256"] = file_sha256(args.client_lock)
+            artifact["python_version"] = platform.python_version()
+            artifact["python_platform"] = platform.platform()
+            artifact["python_implementation"] = platform.python_implementation()
+            artifact["python_executable_sha256"] = file_sha256(Path(sys.executable))
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps(artifact, indent=2, sort_keys=True, allow_nan=False) + "\n")
     return code
 if __name__ == "__main__": raise SystemExit(main())
