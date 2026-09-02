@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -33,6 +34,10 @@ class DecisionFixture:
         self.contract = json.loads(CONTRACT_PATH.read_text())
         self.contract["commands"]["artifact_root"] = str(root.resolve())
         self.contract["source_identity"]["gomap_root"] = str(HERE.parent)
+        python_executable = Path(sys.executable).resolve()
+        self.contract["source_identity"]["runtime"]["python_executable"] = str(python_executable)
+        self.contract["source_identity"]["runtime"]["python_sha256"] = policy.sha256_file(
+            python_executable)
         self.counter = 0
         self.service_binary = root / "treedb-document-service"
         self.service_binary.write_bytes(b"fixture service binary\n")
@@ -977,6 +982,24 @@ class ValidatorMutations(unittest.TestCase):
         measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
         run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
         self.assert_invalid(packet, "computed verdict")
+
+    def test_duplicate_persisted_data_paths_are_rejected(self) -> None:
+        packet = self.fixture.go_packet()
+        run = packet["runs"][4]
+        root = Path(run["artifact"]["root"])
+        measurement_path = root / run["measurement_evidence"]["path"]
+        measurement = json.loads(measurement_path.read_text())
+        source_path = root / measurement["source"]["path"]
+        source = json.loads(source_path.read_text())
+        source["data_files"].append(copy.deepcopy(source["data_files"][0]))
+        source_path.write_text(json.dumps(source, sort_keys=True) + "\n")
+        measurement["source"]["sha256"] = policy.sha256_file(source_path)
+        measurement["resources"]["persisted_bytes"] *= 2
+        measurement["determinism"]["persisted_data_ledger_checksum"] = policy.canonical_sha256(
+            source["data_files"])
+        measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
+        run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
+        self.assert_invalid(packet, "data file paths must be unique")
 
     def test_fallback_and_result_count(self) -> None:
         packet = self.fixture.no_go_packet()
