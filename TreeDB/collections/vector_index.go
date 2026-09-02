@@ -2628,7 +2628,12 @@ func (idx *VectorIndex) planFrozenPrefixInsertLocked(documentID []byte, vector [
 		return plan, err
 	}
 	for layer := maxLevel; layer > plan.level; layer-- {
-		entry = idx.greedyNearestAtLayerLocked(vector, norm, &prepared, entry, layer)
+		if observer == nil {
+			entry = idx.greedyNearestAtLayerLocked(vector, norm, &prepared, entry, layer)
+		} else {
+			context := &vectorIndexConstructionDecisionContextV1{observer: observer, phase: vectorIndexConstructionDecisionPlanning, source: sourceNodeID, layer: layer, dimensions: idx.dimensions}
+			entry = idx.greedyNearestAtLayerObservedLocked(vector, norm, &prepared, entry, layer, context)
+		}
 	}
 	scratch := idx.getSearchScratch()
 	defer idx.putSearchScratch(scratch)
@@ -4335,6 +4340,29 @@ func (idx *VectorIndex) greedyNearestAtLayerLocked(query []float32, queryNormSqu
 		changed = false
 		for _, neighbor := range idx.layerNeighborsLocked(best, layer) {
 			neighborID := neighbor.nodeID
+			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighborID)
+			if distance < bestDistance {
+				best = neighborID
+				bestDistance = distance
+				changed = true
+			}
+		}
+	}
+	return best
+}
+func (idx *VectorIndex) greedyNearestAtLayerObservedLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, layer int, context *vectorIndexConstructionDecisionContextV1) int {
+	if entryPoint < 0 {
+		return entryPoint
+	}
+	best := entryPoint
+	context.recordRow(best, false)
+	bestDistance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, best)
+	changed := true
+	for changed {
+		changed = false
+		for _, neighbor := range idx.layerNeighborsLocked(best, layer) {
+			neighborID := neighbor.nodeID
+			context.recordRow(neighborID, false)
 			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighborID)
 			if distance < bestDistance {
 				best = neighborID

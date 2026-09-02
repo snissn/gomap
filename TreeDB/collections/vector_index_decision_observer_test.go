@@ -128,6 +128,37 @@ func TestVectorIndexConstructionDecisionObserverPreservesFrozenPrefix4461(t *tes
 	}
 }
 
+func TestVectorIndexConstructionDecisionObserverCountsUpperLayerGreedyScores(t *testing.T) {
+	const dimensions = 16
+	rows := vectorIndexReciprocalParityRows4257(96, dimensions, true)
+	index := buildVectorIndexDecisionObserver4461(t, rows, nil)
+	if index.maxLevel <= 0 {
+		t.Fatal("fixture did not produce an upper graph layer")
+	}
+	query := rows[len(rows)-1]
+	norm := vectorNormSquared(query)
+	prepared, err := prepareFloat32CosineQuery(query, norm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := index.greedyNearestAtLayerLocked(query, norm, &prepared, index.entry, index.maxLevel)
+	observer := &vectorIndexConstructionDecisionObserverV1{}
+	context := &vectorIndexConstructionDecisionContextV1{
+		observer: observer, phase: vectorIndexConstructionDecisionPlanning,
+		source: len(index.nodes), layer: index.maxLevel, dimensions: dimensions,
+	}
+	got := index.greedyNearestAtLayerObservedLocked(query, norm, &prepared, index.entry, index.maxLevel, context)
+	if got != want {
+		t.Fatalf("observed upper-layer greedy result=%d want %d", got, want)
+	}
+	stats := observer.snapshot().Planning
+	if stats.DirectExactFP32Rows == 0 ||
+		stats.DirectExactFP32Calls != stats.DirectExactFP32Rows ||
+		stats.ExactFP32Dimensions != stats.DirectExactFP32Rows*uint64(dimensions) {
+		t.Fatalf("upper-layer greedy scoring not fully accounted: %+v", stats)
+	}
+}
+
 type vectorIndexDecisionMetadataSnapshot4461 struct {
 	entry, maxLevel, dimensions, m, efConstruction int
 	mutationSeq, frozenPrefixBatches               uint64
