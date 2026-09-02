@@ -116,7 +116,7 @@ while time.monotonic()<deadline:
 raise SystemExit('Qdrant readiness exceeded 90 seconds')
 PY
 
-"$VENV/bin/python" benchmarks/vector_db_compare/rag_qdrant_runner.py \
+run_90s qdrant-build-query-reopen "$VENV/bin/python" benchmarks/vector_db_compare/rag_qdrant_runner.py \
 	--manifest "$MANIFEST" --output "$QDRANT_ARTIFACT" --url "$URL" \
 	--collection "$QDRANT_COLLECTION" --server-identity "$SERVER_IDENTITY" \
 	--harness-revision "$HARNESS_REVISION" --storage-path "$QDRANT_STORAGE_PATH" \

@@ -107,13 +107,15 @@ type applicationCellIdentity struct {
 }
 
 type querySample struct {
-	Repetition    int     `json:"repetition"`
-	Ordinal       int     `json:"ordinal"`
-	QueryID       string  `json:"query_id"`
-	Millis        float64 `json:"millis"`
-	RequestBytes  int64   `json:"request_bytes"`
-	ResponseBytes int64   `json:"response_bytes"`
-	Error         string  `json:"error,omitempty"`
+	Repetition    int                `json:"repetition"`
+	Ordinal       int                `json:"ordinal"`
+	QueryID       string             `json:"query_id"`
+	Millis        float64            `json:"millis"`
+	RequestBytes  int64              `json:"request_bytes"`
+	ResponseBytes int64              `json:"response_bytes"`
+	ResultIDs     []string           `json:"result_ids"`
+	ResultSources map[string][2]bool `json:"result_sources"`
+	Error         string             `json:"error,omitempty"`
 }
 
 type repetitionPerformance struct {
@@ -1329,7 +1331,7 @@ func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture
 				query := fixture.Queries[queryIndex]
 				queryStart := time.Now()
 				result, err := call(query)
-				sample := querySample{Repetition: rep, Ordinal: ordinal, QueryID: query.ID, Millis: time.Since(queryStart).Seconds() * 1000, RequestBytes: result.RequestBytes, ResponseBytes: result.ResponseBytes}
+				sample := querySample{Repetition: rep, Ordinal: ordinal, QueryID: query.ID, Millis: time.Since(queryStart).Seconds() * 1000, RequestBytes: result.RequestBytes, ResponseBytes: result.ResponseBytes, ResultIDs: append([]string(nil), result.IDs...), ResultSources: result.Sources}
 				if err != nil {
 					sample.Error = err.Error()
 				}

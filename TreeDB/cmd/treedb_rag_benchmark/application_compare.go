@@ -269,6 +269,40 @@ func validateTreeDBComparisonArtifact(artifact *treeDBComparisonArtifact, manife
 		if route == "hybrid" && (row.Counters["text_candidates_returned"] <= 0 || row.Counters["candidates_fused"] <= 0) {
 			return nil, fmt.Errorf("TreeDB hybrid cell %s lacks text/fusion route counters", row.Cell.Filter)
 		}
+		latencies, quality, err := recomputeTreeDBCellEvidence(row, manifest)
+		if err != nil {
+			return nil, fmt.Errorf("TreeDB artifact cell %s/%s sample evidence: %w", route, row.Cell.Filter, err)
+		}
+		p50, _ := percentile(latencies, 50)
+		p95, _ := percentile(latencies, 95)
+		p99, _ := percentile(latencies, 99)
+		if !comparisonFloatMatches(row.LatencyMSMean, mean(latencies)) ||
+			!comparisonFloatMatches(row.LatencyMSP50, p50) ||
+			!comparisonFloatMatches(row.LatencyMSP95, p95) ||
+			!comparisonFloatMatches(row.LatencyMSP99, p99) {
+			return nil, fmt.Errorf("TreeDB artifact cell %s/%s latency summary does not match raw samples", route, row.Cell.Filter)
+		}
+		if !qdrantQualityMatches(row.Quality, quality) {
+			return nil, fmt.Errorf("TreeDB artifact cell %s/%s quality does not match raw rankings", route, row.Cell.Filter)
+		}
+		qpsMean := 0.0
+		for rep, performance := range row.Repetitions {
+			wantOrder := "forward"
+			if rep%2 == 1 {
+				wantOrder = "reverse"
+			}
+			expectedQPS := float64(manifest.Config.SamplesPerCell) / performance.WallSeconds
+			if performance.Repetition != rep || performance.Order != wantOrder ||
+				performance.Samples != manifest.Config.SamplesPerCell || performance.WallSeconds <= 0 ||
+				!comparisonFloatMatches(performance.QPS, expectedQPS) {
+				return nil, fmt.Errorf("TreeDB artifact cell %s/%s has invalid repetition wall evidence", route, row.Cell.Filter)
+			}
+			qpsMean += performance.QPS
+		}
+		qpsMean /= float64(manifest.Config.Repetitions)
+		if !comparisonFloatMatches(row.QPSMean, qpsMean) {
+			return nil, fmt.Errorf("TreeDB artifact cell %s/%s QPS is not mean-per-repetition", route, row.Cell.Filter)
+		}
 		equivalence := "directional"
 		rows = append(rows, applicationComparisonRow{Backend: "treedb", Route: route, Filter: row.Cell.Filter,
 			Equivalence: equivalence, Samples: len(row.Samples), Repetitions: len(row.Repetitions), QPS: row.QPSMean,
@@ -440,6 +474,145 @@ func recomputeQdrantCellEvidence(cell qdrantComparisonCell, manifest application
 	return latencies, quality, nil
 }
 
+func recomputeTreeDBCellEvidence(row applicationRow, manifest applicationComparisonManifest) ([]float64, qualityMetrics, error) {
+	chunks := make(map[string]applicationComparisonChunk, len(manifest.Chunks))
+	for _, chunk := range manifest.Chunks {
+		chunks[chunk.ID] = chunk
+	}
+	var filter applicationComparisonFilter
+	filterFound := false
+	for _, candidate := range manifest.Filters {
+		if candidate.ID == row.Cell.Filter {
+			filter, filterFound = candidate, true
+			break
+		}
+	}
+	if !filterFound {
+		return nil, qualityMetrics{}, fmt.Errorf("unknown filter %q", row.Cell.Filter)
+	}
+
+	latencies := make([]float64, 0, len(row.Samples))
+	lastRankings := make(map[string][]string, len(manifest.Queries))
+	lastSources := make(map[string]map[string][2]bool, len(manifest.Queries))
+	for sampleIndex, sample := range row.Samples {
+		wantRepetition := sampleIndex / manifest.Config.SamplesPerCell
+		wantOrdinal := sampleIndex % manifest.Config.SamplesPerCell
+		queryIndex := wantOrdinal % len(manifest.Queries)
+		if wantRepetition%2 == 1 {
+			queryIndex = len(manifest.Queries) - 1 - queryIndex
+		}
+		if sample.Repetition != wantRepetition || sample.Ordinal != wantOrdinal ||
+			sample.QueryID != manifest.Queries[queryIndex].ID || sample.Millis <= 0 ||
+			sample.Error != "" || len(sample.ResultIDs) == 0 || len(sample.ResultIDs) > manifest.Config.TopK ||
+			len(sample.ResultSources) != len(sample.ResultIDs) {
+			return nil, qualityMetrics{}, fmt.Errorf("invalid sample order/query/timing/ranking at index %d", sampleIndex)
+		}
+		rankingIDs := map[string]bool{}
+		for _, resultID := range sample.ResultIDs {
+			chunk, ok := chunks[resultID]
+			source, sourceOK := sample.ResultSources[resultID]
+			if !ok || rankingIDs[resultID] || !sourceOK || (!source[0] && !source[1]) ||
+				(filter.Tenant != "" && chunk.Tenant != filter.Tenant) ||
+				(filter.Workspace != "" && chunk.Workspace != filter.Workspace) ||
+				(filter.UpdatedYearGTE != 0 && chunk.UpdatedYear < filter.UpdatedYearGTE) {
+				return nil, qualityMetrics{}, fmt.Errorf("invalid or duplicate result %q at sample %d", resultID, sampleIndex)
+			}
+			rankingIDs[resultID] = true
+		}
+		latencies = append(latencies, sample.Millis)
+		lastRankings[sample.QueryID] = append([]string(nil), sample.ResultIDs...)
+		sources := make(map[string][2]bool, len(sample.ResultSources))
+		for id, source := range sample.ResultSources {
+			sources[id] = source
+		}
+		lastSources[sample.QueryID] = sources
+	}
+	if len(lastRankings) != len(manifest.Queries) {
+		return nil, qualityMetrics{}, fmt.Errorf("query coverage mismatch")
+	}
+
+	var quality qualityMetrics
+	for _, query := range manifest.Queries {
+		var judgment applicationComparisonCase
+		judgmentFound := false
+		for _, candidate := range query.Cases {
+			if candidate.Filter == row.Cell.Filter {
+				judgment, judgmentFound = candidate, true
+				break
+			}
+		}
+		if !judgmentFound {
+			return nil, qualityMetrics{}, fmt.Errorf("query %s lacks filter judgment %s", query.ID, row.Cell.Filter)
+		}
+		ranked := append([]string(nil), lastRankings[query.ID]...)
+		parents := make([]string, 0, len(ranked))
+		perParent := map[string]int{}
+		for _, id := range ranked {
+			parent := chunks[id].ParentID
+			parents = append(parents, parent)
+			perParent[parent]++
+			quality.MaxPerParentResults = max(quality.MaxPerParentResults, perParent[parent])
+			source := lastSources[query.ID][id]
+			if source[0] {
+				quality.TextAttributedResults++
+			}
+			if source[1] {
+				quality.VectorAttributedResults++
+			}
+			if source[0] && source[1] {
+				quality.TextVectorOverlapResults++
+			}
+		}
+		for len(ranked) < manifest.Config.TopK {
+			ranked = append(ranked, "")
+		}
+		chunkRelevant := stringSet(judgment.RelevantChunks)
+		parentRelevant := stringSet(judgment.RelevantParents)
+		p5, _ := precisionAtK(ranked, chunkRelevant, 5)
+		p10, _ := precisionAtK(ranked, chunkRelevant, 10)
+		r5, _ := recallAtK(ranked, chunkRelevant, 5)
+		r10, _ := recallAtK(ranked, chunkRelevant, 10)
+		mrr, _ := mrrAtK(ranked, chunkRelevant, 10)
+		quality.PrecisionAt5 += p5
+		quality.PrecisionAt10 += p10
+		quality.NDCGAt5 += ndcgAtK(ranked, chunkRelevant, 5)
+		quality.NDCGAt10 += ndcgAtK(ranked, chunkRelevant, 10)
+		quality.MRRAt10 += mrr
+		if mrr > 0 {
+			quality.HitRateAt10++
+		}
+		quality.ChunkRecallAt5 += r5
+		quality.ChunkRecallAt10 += r10
+		quality.ParentRecallAt5 += parentRecallAtK(parents, parentRelevant, 5)
+		quality.ParentRecallAt10 += parentRecallAtK(parents, parentRelevant, 10)
+		quality.RelevantChunksMean += float64(len(chunkRelevant))
+		quality.RelevantParentsMean += float64(len(parentRelevant))
+		quality.MaxAchievableChunkRecallAt5 += maxAchievableRecall(len(chunkRelevant), 5)
+		quality.MaxAchievableChunkRecallAt10 += maxAchievableRecall(len(chunkRelevant), 10)
+		quality.MaxAchievableParentRecallAt5 += maxAchievableRecall(len(parentRelevant), 5)
+		quality.MaxAchievableParentRecallAt10 += maxAchievableRecall(len(parentRelevant), 10)
+	}
+	queryCount := float64(len(manifest.Queries))
+	quality.PrecisionAt5 /= queryCount
+	quality.PrecisionAt10 /= queryCount
+	quality.NDCGAt5 /= queryCount
+	quality.NDCGAt10 /= queryCount
+	quality.MRRAt10 /= queryCount
+	quality.HitRateAt10 /= queryCount
+	quality.ChunkRecallAt5 /= queryCount
+	quality.ChunkRecallAt10 /= queryCount
+	quality.ParentRecallAt5 /= queryCount
+	quality.ParentRecallAt10 /= queryCount
+	quality.RelevantChunksMean /= queryCount
+	quality.RelevantParentsMean /= queryCount
+	quality.MaxAchievableChunkRecallAt5 /= queryCount
+	quality.MaxAchievableChunkRecallAt10 /= queryCount
+	quality.MaxAchievableParentRecallAt5 /= queryCount
+	quality.MaxAchievableParentRecallAt10 /= queryCount
+	quality.AttributionMode = "untimed_projection_query_sources"
+	return latencies, quality, nil
+}
+
 func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manifest applicationComparisonManifest, manifestSHA, harnessRevision string) error {
 	if artifact.Schema != qdrantComparisonArtifactSchema || artifact.Backend != "qdrant_server" ||
 		artifact.HarnessRevision != harnessRevision || !isFullRevision(artifact.HarnessRevision) ||
@@ -494,15 +667,48 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		artifact.Resources.CPUSeconds <= 0 {
 		return fmt.Errorf("Qdrant artifact lacks authoritative standalone process/storage evidence")
 	}
-	processes := map[int]bool{}
-	for _, sample := range artifact.Resources.ProcessSamples {
-		if sample.PID <= 0 || sample.RSSBytes <= 0 || sample.CPUSeconds < 0 || sample.CapturedUnixNanos <= 0 {
-			return fmt.Errorf("Qdrant artifact contains invalid process sample")
+	processCounts := map[int]int{}
+	processCPUDeltas := map[int]float64{}
+	retiredProcesses := map[int]bool{}
+	var lastPID int
+	var lastCPU float64
+	var lastCapture int64
+	var peakRSS int64
+	cpuTotal := 0.0
+	for sampleIndex, sample := range artifact.Resources.ProcessSamples {
+		if sample.PID <= 0 || sample.RSSBytes <= 0 || sample.CPUSeconds < 0 ||
+			sample.CapturedUnixNanos <= lastCapture {
+			return fmt.Errorf("Qdrant artifact contains invalid or unordered process sample %d", sampleIndex)
 		}
-		processes[sample.PID] = true
+		if sample.PID == lastPID {
+			if sample.CPUSeconds < lastCPU {
+				return fmt.Errorf("Qdrant artifact process %d CPU regressed", sample.PID)
+			}
+			delta := sample.CPUSeconds - lastCPU
+			processCPUDeltas[sample.PID] += delta
+			cpuTotal += delta
+		} else {
+			if retiredProcesses[sample.PID] {
+				return fmt.Errorf("Qdrant artifact process %d lifecycle is non-contiguous", sample.PID)
+			}
+			if lastPID != 0 {
+				retiredProcesses[lastPID] = true
+			}
+			lastPID = sample.PID
+		}
+		processCounts[sample.PID]++
+		lastCPU = sample.CPUSeconds
+		lastCapture = sample.CapturedUnixNanos
+		peakRSS = max(peakRSS, sample.RSSBytes)
 	}
-	if len(processes) < 2 {
-		return fmt.Errorf("Qdrant artifact lacks distinct pre/post-restart process identities")
+	if len(processCounts) != 2 || peakRSS != artifact.Resources.PeakObservedRSSBytes ||
+		!comparisonFloatMatches(artifact.Resources.CPUSeconds, cpuTotal) {
+		return fmt.Errorf("Qdrant artifact process aggregate/restart evidence mismatch")
+	}
+	for pid, count := range processCounts {
+		if count < 2 || processCPUDeltas[pid] <= 0 {
+			return fmt.Errorf("Qdrant artifact process %d lacks positive monotonic CPU samples", pid)
+		}
 	}
 	seen := map[string]bool{}
 	for _, cell := range artifact.Cells {

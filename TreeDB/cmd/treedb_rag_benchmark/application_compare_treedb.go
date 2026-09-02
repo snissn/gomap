@@ -51,6 +51,16 @@ type treeDBComparisonArtifact struct {
 	Failures             []string                    `json:"failures"`
 }
 
+func createTreeDBComparisonRoot(root string) error {
+	if root == "" {
+		return fmt.Errorf("TreeDB comparison requires an explicit durable database directory")
+	}
+	if err := os.Mkdir(root, 0o755); err != nil {
+		return fmt.Errorf("TreeDB comparison database directory must be absent: %w", err)
+	}
+	return nil
+}
+
 func runTreeDBComparisonEvidence(cfg applicationConfig, outputPath string) error {
 	manifest, err := buildApplicationComparisonManifest()
 	if err != nil {
@@ -91,13 +101,7 @@ func runTreeDBComparisonEvidence(cfg applicationConfig, outputPath string) error
 		return err
 	}
 	root := cfg.Dir
-	if root == "" {
-		return fmt.Errorf("TreeDB comparison requires an explicit durable database directory")
-	}
-	if err := os.RemoveAll(root); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := createTreeDBComparisonRoot(root); err != nil {
 		return err
 	}
 	usageBefore, err := comparisonProcessUsageSnapshot()
