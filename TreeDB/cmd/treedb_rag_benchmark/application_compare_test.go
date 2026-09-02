@@ -174,6 +174,11 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		{"wrong QPS mean", func(a *qdrantComparisonArtifact) { a.Cells[0].Summary.QPS = 99 }},
 		{"wrong latency summary", func(a *qdrantComparisonArtifact) { a.Cells[0].Summary.LatencyMSP95++ }},
 		{"wrong quality summary", func(a *qdrantComparisonArtifact) { a.Cells[0].Quality.NDCGAt10++ }},
+		{"wrong relevant chunks", func(a *qdrantComparisonArtifact) { a.Cells[0].Quality.RelevantChunksMean++ }},
+		{"wrong relevant parents", func(a *qdrantComparisonArtifact) { a.Cells[0].Quality.RelevantParentsMean++ }},
+		{"wrong achievable chunk recall", func(a *qdrantComparisonArtifact) { a.Cells[0].Quality.MaxAchievableChunkRecallAt5++ }},
+		{"wrong achievable parent recall", func(a *qdrantComparisonArtifact) { a.Cells[0].Quality.MaxAchievableParentRecallAt10++ }},
+		{"wrong max parent multiplicity", func(a *qdrantComparisonArtifact) { a.Cells[0].Quality.MaxPerParentResults++ }},
 		{"unknown query", func(a *qdrantComparisonArtifact) { a.Cells[0].Samples[0].QueryID = "unknown" }},
 		{"invalid result ranking", func(a *qdrantComparisonArtifact) { a.Cells[0].Samples[0].ResultIDs[0] = "unknown" }},
 		{"duplicate result ranking", func(a *qdrantComparisonArtifact) {

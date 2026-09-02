@@ -67,10 +67,13 @@ def quality(ids, parents, chunks, relevant_parents):
         return actual / ideal
     rank = next((i + 1 for i, value in enumerate(ids[:10]) if value in relevant), 0)
     parent_recall = lambda k: len({value for value in parents[:k] if value in relevantp}) / len(relevantp)
-    return {"precision_at_5": precision(5), "precision_at_10": precision(10), "ndcg_at_5": ndcg(5), "ndcg_at_10": ndcg(10), "mrr_at_10": 1 / rank if rank else 0, "hit_rate_at_10": 1 if rank else 0, "chunk_recall_at_5": recall(5), "chunk_recall_at_10": recall(10), "parent_recall_at_5": parent_recall(5), "parent_recall_at_10": parent_recall(10)}
+    achievable = lambda relevant_count, k: min(relevant_count, k) / relevant_count
+    parent_counts = Counter(parents)
+    return {"precision_at_5": precision(5), "precision_at_10": precision(10), "ndcg_at_5": ndcg(5), "ndcg_at_10": ndcg(10), "mrr_at_10": 1 / rank if rank else 0, "hit_rate_at_10": 1 if rank else 0, "chunk_recall_at_5": recall(5), "chunk_recall_at_10": recall(10), "parent_recall_at_5": parent_recall(5), "parent_recall_at_10": parent_recall(10), "relevant_chunks_mean": len(relevant), "relevant_parents_mean": len(relevantp), "max_achievable_chunk_recall_at_5": achievable(len(relevant), 5), "max_achievable_chunk_recall_at_10": achievable(len(relevant), 10), "max_achievable_parent_recall_at_5": achievable(len(relevantp), 5), "max_achievable_parent_recall_at_10": achievable(len(relevantp), 10), "max_per_parent_results": max(parent_counts.values(), default=0)}
 def mean_quality(rows):
-    out = {key: sum(row[key] for row in rows) / len(rows) for key in rows[0]}
-    out.update({"relevant_chunks_mean": 0, "relevant_parents_mean": 0, "max_achievable_chunk_recall_at_5": 0, "max_achievable_chunk_recall_at_10": 0, "max_achievable_parent_recall_at_5": 0, "max_achievable_parent_recall_at_10": 0, "max_per_parent_results": 0, "collapse_rejections": 0, "collapse_exhaustions": 0, "text_attributed_results": 0, "vector_attributed_results": 0, "text_vector_overlap_results": 0, "attribution_mode": "qdrant_native_route"})
+    out = {key: sum(row[key] for row in rows) / len(rows) for key in rows[0] if key != "max_per_parent_results"}
+    out["max_per_parent_results"] = max(row["max_per_parent_results"] for row in rows)
+    out.update({"collapse_rejections": 0, "collapse_exhaustions": 0, "text_attributed_results": 0, "vector_attributed_results": 0, "text_vector_overlap_results": 0, "attribution_mode": "qdrant_native_route"})
     return out
 def directory_bytes(path): return sum(row.stat().st_size for row in path.rglob("*") if row.is_file())
 def process_stats(pid):

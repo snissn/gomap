@@ -383,8 +383,12 @@ func recomputeQdrantCellEvidence(cell qdrantComparisonCell, manifest application
 		}
 		ranked := append([]string(nil), lastRankings[query.ID]...)
 		parents := make([]string, 0, len(ranked))
+		perParent := map[string]int{}
 		for _, id := range ranked {
-			parents = append(parents, chunks[id].ParentID)
+			parent := chunks[id].ParentID
+			parents = append(parents, parent)
+			perParent[parent]++
+			quality.MaxPerParentResults = max(quality.MaxPerParentResults, perParent[parent])
 		}
 		for len(ranked) < manifest.Config.TopK {
 			ranked = append(ranked, "")
@@ -408,6 +412,12 @@ func recomputeQdrantCellEvidence(cell qdrantComparisonCell, manifest application
 		quality.ChunkRecallAt10 += r10
 		quality.ParentRecallAt5 += parentRecallAtK(parents, parentRelevant, 5)
 		quality.ParentRecallAt10 += parentRecallAtK(parents, parentRelevant, 10)
+		quality.RelevantChunksMean += float64(len(chunkRelevant))
+		quality.RelevantParentsMean += float64(len(parentRelevant))
+		quality.MaxAchievableChunkRecallAt5 += maxAchievableRecall(len(chunkRelevant), 5)
+		quality.MaxAchievableChunkRecallAt10 += maxAchievableRecall(len(chunkRelevant), 10)
+		quality.MaxAchievableParentRecallAt5 += maxAchievableRecall(len(parentRelevant), 5)
+		quality.MaxAchievableParentRecallAt10 += maxAchievableRecall(len(parentRelevant), 10)
 	}
 	queryCount := float64(len(manifest.Queries))
 	quality.PrecisionAt5 /= queryCount
@@ -420,6 +430,12 @@ func recomputeQdrantCellEvidence(cell qdrantComparisonCell, manifest application
 	quality.ChunkRecallAt10 /= queryCount
 	quality.ParentRecallAt5 /= queryCount
 	quality.ParentRecallAt10 /= queryCount
+	quality.RelevantChunksMean /= queryCount
+	quality.RelevantParentsMean /= queryCount
+	quality.MaxAchievableChunkRecallAt5 /= queryCount
+	quality.MaxAchievableChunkRecallAt10 /= queryCount
+	quality.MaxAchievableParentRecallAt5 /= queryCount
+	quality.MaxAchievableParentRecallAt10 /= queryCount
 	quality.AttributionMode = "qdrant_native_route"
 	return latencies, quality, nil
 }
