@@ -62,6 +62,19 @@ func TestValidateComparisonPathsRejectsAliases(t *testing.T) {
 			t.Fatal("accepted symlink alias")
 		}
 	}
+	danglingTarget := filepath.Join(dir, "comparison.md")
+	danglingLink := filepath.Join(dir, "comparison.json")
+	if err := os.Symlink(danglingTarget, danglingLink); err == nil {
+		if err := validateComparisonPaths(danglingLink, danglingTarget); err == nil {
+			t.Fatal("accepted dangling output symlink alias")
+		}
+	}
+	hardLink := filepath.Join(dir, "input-hardlink.json")
+	if err := os.Link(input, hardLink); err == nil {
+		if err := validateComparisonPaths(input, hardLink); err == nil {
+			t.Fatal("accepted hard-link alias")
+		}
+	}
 	if err := validateComparisonPaths(input, filepath.Join(dir, "output.json"), filepath.Join(dir, "report.md")); err != nil {
 		t.Fatalf("rejected distinct paths: %v", err)
 	}

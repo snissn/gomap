@@ -1040,20 +1040,60 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 	return nil
 }
 
+func canonicalComparisonPath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	for range 32 {
+		info, statErr := os.Lstat(absolute)
+		if statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			target, readErr := os.Readlink(absolute)
+			if readErr != nil {
+				return "", readErr
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(absolute), target)
+			}
+			absolute = filepath.Clean(target)
+			continue
+		}
+		if statErr != nil && !os.IsNotExist(statErr) {
+			return "", statErr
+		}
+		if statErr == nil {
+			return filepath.EvalSymlinks(absolute)
+		}
+		parent, parentErr := filepath.EvalSymlinks(filepath.Dir(absolute))
+		if parentErr != nil {
+			return "", fmt.Errorf("resolve comparison path %s: %w", path, parentErr)
+		}
+		return filepath.Join(parent, filepath.Base(absolute)), nil
+	}
+	return "", fmt.Errorf("resolve comparison path %s: too many symbolic links", path)
+}
+
 func validateComparisonPaths(paths ...string) error {
 	seen := make(map[string]string, len(paths))
+	type existingPath struct {
+		path string
+		info os.FileInfo
+	}
+	var existing []existingPath
 	for _, path := range paths {
-		absolute, err := filepath.Abs(path)
+		canonical, err := canonicalComparisonPath(path)
 		if err != nil {
 			return err
 		}
-		canonical, err := filepath.EvalSymlinks(absolute)
-		if err != nil {
-			parent, parentErr := filepath.EvalSymlinks(filepath.Dir(absolute))
-			if parentErr != nil {
-				return fmt.Errorf("resolve comparison path %s: %w", path, err)
+		if info, statErr := os.Stat(canonical); statErr == nil {
+			for _, prior := range existing {
+				if os.SameFile(prior.info, info) {
+					return fmt.Errorf("comparison paths alias: %s and %s", prior.path, path)
+				}
 			}
-			canonical = filepath.Join(parent, filepath.Base(absolute))
+			existing = append(existing, existingPath{path: path, info: info})
+		} else if !os.IsNotExist(statErr) {
+			return statErr
 		}
 		key := canonical
 		if runtime.GOOS == "windows" {
