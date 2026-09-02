@@ -47,6 +47,25 @@ func TestQdrantClientLockDigestIsBound(t *testing.T) {
 		t.Fatalf("Qdrant client lock SHA-256=%s, want %s", got, qdrantClientLockSHA256)
 	}
 }
+func TestValidateComparisonPathsRejectsAliases(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "input.json")
+	if err := os.WriteFile(input, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateComparisonPaths(input, filepath.Join(dir, ".", "input.json")); err == nil {
+		t.Fatal("accepted relative alias")
+	}
+	link := filepath.Join(dir, "input-link.json")
+	if err := os.Symlink(input, link); err == nil {
+		if err := validateComparisonPaths(input, link); err == nil {
+			t.Fatal("accepted symlink alias")
+		}
+	}
+	if err := validateComparisonPaths(input, filepath.Join(dir, "output.json"), filepath.Join(dir, "report.md")); err != nil {
+		t.Fatalf("rejected distinct paths: %v", err)
+	}
+}
 
 func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest, string, qdrantComparisonArtifact) {
 	t.Helper()

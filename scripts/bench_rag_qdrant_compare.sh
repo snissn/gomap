@@ -76,13 +76,14 @@ stop_qdrant() {
 cleanup() {
 	stop_qdrant || true
 }
-trap cleanup EXIT
 mkdir -p "$RUN_DIR"
 if [[ -e "$QDRANT_STORAGE_PATH" ]]; then
 	echo "Qdrant comparison storage path must be absent: $QDRANT_STORAGE_PATH" >&2
 	exit 2
 fi
 mkdir -p "$QDRANT_STORAGE_PATH"
+: >"$PID_FILE"
+trap cleanup EXIT
 : >"$PHASE_STATUS"
 "$PYTHON" -m venv "$VENV"
 "$VENV/bin/python" -c 'import platform,sys; assert sys.version_info[:2] == (3,13) and platform.system() == "Darwin" and platform.machine() == "arm64", "Qdrant lock requires CPython 3.13 on macOS arm64"'

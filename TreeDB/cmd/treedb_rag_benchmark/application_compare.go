@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1038,8 +1040,38 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 	return nil
 }
 
+func validateComparisonPaths(paths ...string) error {
+	seen := make(map[string]string, len(paths))
+	for _, path := range paths {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		canonical, err := filepath.EvalSymlinks(absolute)
+		if err != nil {
+			parent, parentErr := filepath.EvalSymlinks(filepath.Dir(absolute))
+			if parentErr != nil {
+				return fmt.Errorf("resolve comparison path %s: %w", path, err)
+			}
+			canonical = filepath.Join(parent, filepath.Base(absolute))
+		}
+		key := canonical
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(key)
+		}
+		if prior, exists := seen[key]; exists {
+			return fmt.Errorf("comparison paths alias: %s and %s", prior, path)
+		}
+		seen[key] = path
+	}
+	return nil
+}
 func compareApplicationEvidence(manifestPath, treePath, qdrantPath, treeStoragePath, qdrantStoragePath, outputPath, markdownPath string) error {
+
 	var manifest applicationComparisonManifest
+	if err := validateComparisonPaths(manifestPath, treePath, qdrantPath, treeStoragePath, qdrantStoragePath, outputPath, markdownPath); err != nil {
+		return err
+	}
 	rawManifest, err := readJSONFile(manifestPath, &manifest)
 	if err != nil {
 		return err
