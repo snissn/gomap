@@ -58,7 +58,11 @@ def filter_for(models, spec):
 def authorized(payload, spec):
     return (not spec.get("tenant") or payload.get("tenant") == spec["tenant"]) and (not spec.get("workspace") or payload.get("workspace") == spec["workspace"]) and (not spec.get("updated_year_gte") or payload.get("updated_year", 0) >= spec["updated_year_gte"])
 def percentile(values, q):
-    ordered = sorted(values); return ordered[max(0, math.ceil(q * len(ordered)) - 1)]
+    ordered = sorted(values)
+    rank = q * (len(ordered) - 1)
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    return ordered[lower] + (rank - lower) * (ordered[upper] - ordered[lower])
 def quality(ids, parents, chunks, relevant_parents):
     relevant, relevantp = set(chunks), set(relevant_parents)
     precision = lambda k: sum(value in relevant for value in ids[:k]) / k
@@ -69,7 +73,8 @@ def quality(ids, parents, chunks, relevant_parents):
         return actual / ideal
     rank = next((i + 1 for i, value in enumerate(ids[:10]) if value in relevant), 0)
     parent_recall = lambda k: len({value for value in parents[:k] if value in relevantp}) / len(relevantp)
-    achievable = lambda relevant_count, k: min(relevant_count, k) / relevant_count
+    def achievable(relevant_count, k):
+        return min(relevant_count, k) / relevant_count
     parent_counts = Counter(parents)
     return {"precision_at_5": precision(5), "precision_at_10": precision(10), "ndcg_at_5": ndcg(5), "ndcg_at_10": ndcg(10), "mrr_at_10": 1 / rank if rank else 0, "hit_rate_at_10": 1 if rank else 0, "chunk_recall_at_5": recall(5), "chunk_recall_at_10": recall(10), "parent_recall_at_5": parent_recall(5), "parent_recall_at_10": parent_recall(10), "relevant_chunks_mean": len(relevant), "relevant_parents_mean": len(relevantp), "max_achievable_chunk_recall_at_5": achievable(len(relevant), 5), "max_achievable_chunk_recall_at_10": achievable(len(relevant), 10), "max_achievable_parent_recall_at_5": achievable(len(relevantp), 5), "max_achievable_parent_recall_at_10": achievable(len(relevantp), 10), "max_per_parent_results": max(parent_counts.values(), default=0)}
 def mean_quality(rows):
@@ -105,8 +110,7 @@ class Runner:
         m, c = self.models, self.client
         started = time.monotonic()
         if c.collection_exists(self.args.collection):
-            if not self.args.allow_drop: raise RuntimeError("collection exists; --allow-drop required")
-            c.delete_collection(self.args.collection, timeout=90)
+            raise RuntimeError("comparison collection already exists; use a fresh owned namespace")
         c.create_collection(collection_name=self.args.collection, vectors_config={self.config["dense_vector_name"]: m.VectorParams(size=384, distance=m.Distance.COSINE)}, sparse_vectors_config={self.config["sparse_vector_name"]: m.SparseVectorParams(index=m.SparseIndexParams(on_disk=False))}, hnsw_config=m.HnswConfigDiff(m=16, ef_construct=100, full_scan_threshold=10), optimizers_config=m.OptimizersConfigDiff(indexing_threshold=1, max_optimization_threads=1), timeout=90)
         c.create_payload_index(self.args.collection, "tenant", m.PayloadSchemaType.KEYWORD, wait=True); c.create_payload_index(self.args.collection, "workspace", m.PayloadSchemaType.KEYWORD, wait=True); c.create_payload_index(self.args.collection, "updated_year", m.PayloadSchemaType.INTEGER, wait=True)
         points = []
@@ -129,28 +133,55 @@ class Runner:
         self.process_samples.append(process_stats(self.args.server_pid))
         self.client.close()
         restarted = subprocess.run([str(self.args.restart_hook)], check=True, capture_output=True, text=True, timeout=90)
-        try: self.args.server_pid = int(restarted.stdout.splitlines()[-1])
-        except (IndexError, ValueError) as exc: raise RuntimeError("standalone restart hook did not return authoritative PID") from exc
+        try:
+            self.args.server_pid = int(restarted.stdout.splitlines()[-1])
+        except (IndexError, ValueError) as exc:
+            raise RuntimeError("standalone restart hook did not return authoritative PID") from exc
         self.args.server_identity += f"|reopened_pid:{self.args.server_pid}"
         self.process_samples.append(process_stats(self.args.server_pid))
-        deadline, last = time.monotonic() + 90, None
+        deadline = time.monotonic() + 90
+        last = None
+        trigger_client = None
         while time.monotonic() < deadline:
+            candidate = None
             try:
-                server = server_info(self.args.url); self.client = self.factory(); self.client.get_collection(self.args.collection)
+                server_info(self.args.url)
+                candidate = self.factory()
+                candidate.get_collection(self.args.collection)
+                trigger_client = candidate
                 break
-            except Exception as exc: last = exc; time.sleep(.2)
+            except Exception as exc:
+                last = exc
+                if candidate is not None:
+                    candidate.close()
+                time.sleep(.2)
         else:
             raise RuntimeError(f"reopen connection failed: {last}")
-        self.client.update_collection(self.args.collection, optimizers_config=self.models.OptimizersConfigDiff())
-        self.reopen["optimizer_update_triggered"] = True
+        try:
+            trigger_client.update_collection(self.args.collection, optimizers_config=self.models.OptimizersConfigDiff())
+            self.reopen["optimizer_update_triggered"] = True
+        finally:
+            trigger_client.close()
         while time.monotonic() < deadline:
+            candidate = None
             try:
-                server = server_info(self.args.url); collection = self.client.get_collection(self.args.collection)
-                count = int(getattr(collection, "points_count", -1)); indexed = int(getattr(collection, "indexed_vectors_count", -1))
-                status = str(getattr(collection, "status", "")).lower(); payload_indexes = sorted((getattr(collection, "payload_schema", {}) or {}).keys())
-                if count != 54 or indexed < 54 or not status.endswith("green") or payload_indexes != ["tenant", "updated_year", "workspace"]: raise RuntimeError(f"reopen index proof count={count} indexed={indexed} status={status} payload={payload_indexes}")
-                self.reopen.update(attempted=True, succeeded=True, version=server["version"], status="green", point_count=count, indexed_vectors_count=indexed, payload_indexes=payload_indexes, seconds=time.monotonic() - started); return
-            except Exception as exc: last = exc; time.sleep(.2)
+                server = server_info(self.args.url)
+                candidate = self.factory()
+                collection = candidate.get_collection(self.args.collection)
+                count = int(getattr(collection, "points_count", -1))
+                indexed = int(getattr(collection, "indexed_vectors_count", -1))
+                status = str(getattr(collection, "status", "")).lower()
+                payload_indexes = sorted((getattr(collection, "payload_schema", {}) or {}).keys())
+                if count != 54 or indexed < 54 or not status.endswith("green") or payload_indexes != ["tenant", "updated_year", "workspace"]:
+                    raise RuntimeError(f"reopen index proof count={count} indexed={indexed} status={status} payload={payload_indexes}")
+                self.client = candidate
+                self.reopen.update(attempted=True, succeeded=True, version=server["version"], status="green", point_count=count, indexed_vectors_count=indexed, payload_indexes=payload_indexes, seconds=time.monotonic() - started)
+                return
+            except Exception as exc:
+                last = exc
+                if candidate is not None:
+                    candidate.close()
+                time.sleep(.2)
         raise RuntimeError(f"reopen failed: {last}")
     def query(self, route, query, filter_id):
         m, c, filt = self.models, self.client, filter_for(self.models, self.filters[filter_id]); sparse = self.sparse_queries[query["id"]]
@@ -171,15 +202,20 @@ class Runner:
             samples, repetitions, last, leakage, fetch_max = [], [], {}, 0, 0
             for ordinal in range(self.config["warmups_per_cell"]): self.query(route, self.manifest["queries"][ordinal % 3], filter_id)
             for repetition in range(self.config["repetitions"]):
+              order = "reverse" if repetition % 2 else "forward"
               repetition_started = time.monotonic_ns()
               for ordinal in range(self.config["samples_per_cell"]):
-                total_started = time.monotonic_ns(); query = self.manifest["queries"][ordinal % 3]
+                total_started = time.monotonic_ns()
+                query_index = ordinal % len(self.manifest["queries"])
+                if order == "reverse":
+                    query_index = len(self.manifest["queries"]) - 1 - query_index
+                query = self.manifest["queries"][query_index]
                 ids, payloads, search_ms, fetch_ms = self.query(route, query, filter_id)
                 leakage += sum(not authorized(row, self.filters[filter_id]) for row in payloads); fetch_max = max(fetch_max, len(payloads)); last[query["id"]] = (ids, [row["parent_id"] for row in payloads])
                 sample = {"repetition": repetition, "ordinal": ordinal, "query_id": query["id"], "search_ms": search_ms, "fetch_ms": fetch_ms, "total_ms": 0, "result_ids": ids, "fetched_count": len(payloads), "fetched_bytes": len(canonical(payloads))}
                 samples.append(sample); sample["total_ms"] = (time.monotonic_ns() - total_started) / 1e6
               wall = (time.monotonic_ns() - repetition_started) / 1e9
-              repetitions.append({"repetition": repetition, "samples": self.config["samples_per_cell"], "wall_seconds": wall, "qps": self.config["samples_per_cell"] / wall})
+              repetitions.append({"repetition": repetition, "order": order, "samples": self.config["samples_per_cell"], "wall_seconds": wall, "qps": self.config["samples_per_cell"] / wall})
             metrics = []
             for query in self.manifest["queries"]:
                 judgment = next(row for row in query["cases"] if row["filter"] == filter_id); ids, parents = last[query["id"]]; metrics.append(quality(ids, parents, judgment["relevant_chunks"], judgment["relevant_parents"]))
@@ -197,7 +233,7 @@ class Runner:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name, kwargs in [("--manifest", {"type": Path, "required": True}), ("--output", {"type": Path, "required": True}), ("--url", {"required": True}), ("--collection", {"required": True}), ("--server-identity", {"required": True}), ("--harness-revision", {"required": True}), ("--storage-path", {"type": Path, "required": True}), ("--restart-hook", {"type": Path, "required": True}), ("--server-binary", {"type": Path, "required": True}), ("--server-pid", {"type": int, "required": True})]: parser.add_argument(name, **kwargs)
-    parser.add_argument("--allow-drop", action="store_true"); args = parser.parse_args()
+    args = parser.parse_args()
     raw = args.manifest.read_bytes(); manifest = json.loads(raw)
     if manifest.get("schema") != SCHEMA or importlib.metadata.version("qdrant-client") != VERSION: raise RuntimeError("manifest or qdrant-client identity mismatch")
     if not re.fullmatch(r"[0-9a-f]{40}", args.harness_revision): raise RuntimeError("full harness revision required")

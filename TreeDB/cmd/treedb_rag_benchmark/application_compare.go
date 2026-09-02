@@ -20,6 +20,7 @@ const (
 )
 
 var qdrantSparseTokenPattern = regexp.MustCompile(`[a-z0-9]+`)
+var qdrantServerIdentityPattern = regexp.MustCompile(`^pid:([1-9][0-9]*):.+\|reopened_pid:([1-9][0-9]*)$`)
 
 type qdrantPythonFloat float64
 
@@ -111,6 +112,7 @@ type qdrantComparisonSample struct {
 
 type qdrantComparisonRepetition struct {
 	Repetition  int     `json:"repetition"`
+	Order       string  `json:"order"`
 	Samples     int     `json:"samples"`
 	WallSeconds float64 `json:"wall_seconds"`
 	QPS         float64 `json:"qps"`
@@ -445,11 +447,17 @@ func comparisonFloatMatches(got, want float64) bool {
 	return math.Abs(got-want) <= 1e-9*math.Max(1, math.Abs(want))
 }
 
-func qdrantNearestRank(values []float64, quantile float64) float64 {
-	ordered := append([]float64(nil), values...)
-	sort.Float64s(ordered)
-	index := max(0, int(math.Ceil(quantile*float64(len(ordered))))-1)
-	return ordered[index]
+func qdrantServerIdentityPIDs(identity string) ([2]int, error) {
+	matches := qdrantServerIdentityPattern.FindStringSubmatch(identity)
+	if len(matches) != 3 {
+		return [2]int{}, fmt.Errorf("invalid Qdrant server identity")
+	}
+	initial, initialErr := strconv.Atoi(matches[1])
+	reopened, reopenedErr := strconv.Atoi(matches[2])
+	if initialErr != nil || reopenedErr != nil || initial == reopened {
+		return [2]int{}, fmt.Errorf("invalid Qdrant server identity PIDs")
+	}
+	return [2]int{initial, reopened}, nil
 }
 
 func qdrantQualityMatches(got, want qualityMetrics) bool {
@@ -502,7 +510,11 @@ func recomputeQdrantCellEvidence(cell qdrantComparisonCell, manifest application
 	for sampleIndex, sample := range cell.Samples {
 		wantRepetition := sampleIndex / manifest.Config.SamplesPerCell
 		wantOrdinal := sampleIndex % manifest.Config.SamplesPerCell
-		wantQuery := manifest.Queries[wantOrdinal%len(manifest.Queries)].ID
+		wantQueryIndex := wantOrdinal % len(manifest.Queries)
+		if wantRepetition%2 == 1 {
+			wantQueryIndex = len(manifest.Queries) - 1 - wantQueryIndex
+		}
+		wantQuery := manifest.Queries[wantQueryIndex].ID
 		if sample.Repetition != wantRepetition || sample.Ordinal != wantOrdinal || sample.QueryID != wantQuery ||
 			sample.SearchMS <= 0 || sample.FetchMS <= 0 ||
 			sample.TotalMS+1e-9 < sample.SearchMS+sample.FetchMS ||
@@ -758,7 +770,6 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 	hnswM, hnswMOK := artifact.Server.Config["hnsw_m"].(float64)
 	indexingThreshold, indexingThresholdOK := artifact.Server.Config["indexing_threshold"].(float64)
 	if artifact.Server.Version != manifest.Config.QdrantServerVersion || artifact.Server.LocalMode ||
-		artifact.Server.Identity == "" || !strings.Contains(artifact.Server.Identity, "|reopened_pid:") ||
 		artifact.Server.Deployment != "standalone" ||
 		artifact.Server.BinarySHA256 != manifest.Config.QdrantBinarySHA256 ||
 		artifact.Server.Config["dense"] != manifest.Config.DenseVectorName ||
@@ -768,6 +779,10 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		!hnswMOK || hnswM != 16 || !indexingThresholdOK || indexingThreshold != 1 ||
 		artifact.Server.IndexProof.IndexedVectorsCount < len(manifest.Chunks) {
 		return fmt.Errorf("Qdrant artifact lacks pinned standalone server/index configuration")
+	}
+	identityPIDs, err := qdrantServerIdentityPIDs(artifact.Server.Identity)
+	if err != nil {
+		return fmt.Errorf("Qdrant artifact lacks pinned standalone process identity: %w", err)
 	}
 	if len(artifact.Server.IndexProof.FilterCardinalities) != len(manifest.Filters) {
 		return fmt.Errorf("Qdrant artifact lacks exact filter-cardinality proof")
@@ -811,6 +826,7 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 	var lastCPU float64
 	var lastCapture int64
 	var peakRSS int64
+	processPIDOrder := make([]int, 0, 2)
 	cpuTotal := 0.0
 	for sampleIndex, sample := range artifact.Resources.ProcessSamples {
 		if sample.PID <= 0 || sample.RSSBytes <= 0 || sample.CPUSeconds < 0 ||
@@ -832,13 +848,16 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 				retiredProcesses[lastPID] = true
 			}
 			lastPID = sample.PID
+			processPIDOrder = append(processPIDOrder, sample.PID)
 		}
 		processCounts[sample.PID]++
 		lastCPU = sample.CPUSeconds
 		lastCapture = sample.CapturedUnixNanos
 		peakRSS = max(peakRSS, sample.RSSBytes)
 	}
-	if len(processCounts) != 2 || peakRSS != artifact.Resources.PeakObservedRSSBytes ||
+	if len(processCounts) != 2 || len(processPIDOrder) != 2 ||
+		processPIDOrder[0] != identityPIDs[0] || processPIDOrder[1] != identityPIDs[1] ||
+		peakRSS != artifact.Resources.PeakObservedRSSBytes ||
 		!comparisonFloatMatches(artifact.Resources.CPUSeconds, cpuTotal) {
 		return fmt.Errorf("Qdrant artifact process aggregate/restart evidence mismatch")
 	}
@@ -870,9 +889,12 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		if err != nil {
 			return fmt.Errorf("Qdrant artifact cell %s/%s sample evidence: %w", cell.Route, cell.Filter, err)
 		}
-		if !comparisonFloatMatches(cell.Summary.LatencyMSP50, qdrantNearestRank(latencies, .50)) ||
-			!comparisonFloatMatches(cell.Summary.LatencyMSP95, qdrantNearestRank(latencies, .95)) ||
-			!comparisonFloatMatches(cell.Summary.LatencyMSP99, qdrantNearestRank(latencies, .99)) {
+		p50, _ := percentile(latencies, 50)
+		p95, _ := percentile(latencies, 95)
+		p99, _ := percentile(latencies, 99)
+		if !comparisonFloatMatches(cell.Summary.LatencyMSP50, p50) ||
+			!comparisonFloatMatches(cell.Summary.LatencyMSP95, p95) ||
+			!comparisonFloatMatches(cell.Summary.LatencyMSP99, p99) {
 			return fmt.Errorf("Qdrant artifact cell %s/%s latency summary does not match raw samples", cell.Route, cell.Filter)
 		}
 		if !qdrantQualityMatches(cell.Quality, quality) {
@@ -881,7 +903,12 @@ func validateQdrantComparisonArtifact(artifact *qdrantComparisonArtifact, manife
 		qpsMean := 0.0
 		for rep, performance := range cell.RepetitionPerformance {
 			expectedQPS := float64(manifest.Config.SamplesPerCell) / performance.WallSeconds
-			if performance.Repetition != rep || performance.Samples != manifest.Config.SamplesPerCell ||
+			expectedOrder := "forward"
+			if rep%2 == 1 {
+				expectedOrder = "reverse"
+			}
+			if performance.Repetition != rep || performance.Order != expectedOrder ||
+				performance.Samples != manifest.Config.SamplesPerCell ||
 				performance.WallSeconds <= 0 || !comparisonFloatMatches(performance.QPS, expectedQPS) {
 				return fmt.Errorf("Qdrant artifact cell %s/%s has invalid repetition wall evidence", cell.Route, cell.Filter)
 			}

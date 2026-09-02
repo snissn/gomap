@@ -123,7 +123,7 @@ run_90s qdrant-build-query-reopen "$VENV/bin/python" benchmarks/vector_db_compar
 	--manifest "$MANIFEST" --output "$QDRANT_ARTIFACT" --url "$URL" \
 	--collection "$QDRANT_COLLECTION" --server-identity "$SERVER_IDENTITY" \
 	--harness-revision "$HARNESS_REVISION" --storage-path "$QDRANT_STORAGE_PATH" \
-	--restart-hook "$RESTART_HOOK" --server-pid "$PID" --server-binary "$QDRANT_BIN" --allow-drop
+	--restart-hook "$RESTART_HOOK" --server-pid "$PID" --server-binary "$QDRANT_BIN"
 run_90s consolidation "$COMPARATOR_BIN" \
 	-application-comparison-manifest "$MANIFEST" \
 	-application-comparison-treedb "$TREEDB_ARTIFACT" \

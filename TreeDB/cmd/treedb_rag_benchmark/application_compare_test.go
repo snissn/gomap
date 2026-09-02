@@ -64,7 +64,7 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 		SparseVectorSHA256: sparseVectorSHA, ConfigSHA256: manifest.ConfigSHA256,
 		SourceCount: 18, ChunkCount: 54, QueryCount: 3,
 		Server: qdrantComparisonServer{
-			Version: "1.19.0", Deployment: "standalone", BinarySHA256: manifest.Config.QdrantBinarySHA256, Identity: "pid:1|reopened_pid:2",
+			Version: "1.19.0", Deployment: "standalone", BinarySHA256: manifest.Config.QdrantBinarySHA256, Identity: "pid:1:Tue Sep  1 22:55:00 2026 /qdrant|reopened_pid:2",
 			Config: map[string]any{
 				"dense": manifest.Config.DenseVectorName, "sparse": manifest.Config.SparseVectorName, "exact": false,
 				"full_scan_threshold": float64(10), "full_scan_threshold_unit": "KiB",
@@ -119,12 +119,20 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 				RouteProof: qdrantComparisonRouteProof{API: "qdrant.query_points", NamedVectors: vectors, BoundedFetch: true},
 			}
 			for repetition := range manifest.Config.Repetitions {
-				cell.RepetitionPerformance = append(cell.RepetitionPerformance, qdrantComparisonRepetition{Repetition: repetition, Samples: 100, WallSeconds: 1, QPS: 100})
+				order := "forward"
+				if repetition%2 == 1 {
+					order = "reverse"
+				}
+				cell.RepetitionPerformance = append(cell.RepetitionPerformance, qdrantComparisonRepetition{Repetition: repetition, Order: order, Samples: 100, WallSeconds: 1, QPS: 100})
 				for ordinal := range manifest.Config.SamplesPerCell {
+					queryIndex := ordinal % len(manifest.Queries)
+					if order == "reverse" {
+						queryIndex = len(manifest.Queries) - 1 - queryIndex
+					}
 					cell.Samples = append(cell.Samples, qdrantComparisonSample{
 						Repetition: repetition, Ordinal: ordinal,
-						QueryID:  manifest.Queries[ordinal%len(manifest.Queries)].ID,
-						SearchMS: 1, FetchMS: 1, TotalMS: 2.1, ResultIDs: []string{resultID},
+						QueryID:  manifest.Queries[queryIndex].ID,
+						SearchMS: 1, FetchMS: 1, TotalMS: 2.1 + float64(repetition*manifest.Config.SamplesPerCell+ordinal), ResultIDs: []string{resultID},
 						FetchedCount: 1, FetchedBytes: 1,
 					})
 				}
@@ -134,9 +142,9 @@ func validQdrantComparisonArtifact(t *testing.T) (applicationComparisonManifest,
 			if err != nil {
 				t.Fatal(err)
 			}
-			cell.Summary.LatencyMSP50 = qdrantNearestRank(latencies, .50)
-			cell.Summary.LatencyMSP95 = qdrantNearestRank(latencies, .95)
-			cell.Summary.LatencyMSP99 = qdrantNearestRank(latencies, .99)
+			cell.Summary.LatencyMSP50, _ = percentile(latencies, 50)
+			cell.Summary.LatencyMSP95, _ = percentile(latencies, 95)
+			cell.Summary.LatencyMSP99, _ = percentile(latencies, 99)
 			cell.Quality = quality
 			if route == "hybrid" {
 				cell.RouteProof.Fusion = "rrf"
@@ -181,6 +189,9 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		{"Docker deployment", func(a *qdrantComparisonArtifact) { a.Server.Deployment = "docker" }},
 		{"missing identity", func(a *qdrantComparisonArtifact) { a.Server.Identity = "" }},
 		{"wrong binary hash", func(a *qdrantComparisonArtifact) { a.Server.BinarySHA256 = strings.Repeat("0", 64) }},
+		{"malformed identity", func(a *qdrantComparisonArtifact) { a.Server.Identity = "pid:1|reopened_pid:2" }},
+		{"identity initial PID mismatch", func(a *qdrantComparisonArtifact) { a.Server.Identity = "pid:3:identity|reopened_pid:2" }},
+		{"identity reopened PID mismatch", func(a *qdrantComparisonArtifact) { a.Server.Identity = "pid:1:identity|reopened_pid:3" }},
 		{"exact search", func(a *qdrantComparisonArtifact) { a.Server.Config["exact"] = true }},
 		{"full scan threshold", func(a *qdrantComparisonArtifact) { a.Server.Config["full_scan_threshold"] = float64(1) }},
 		{"wrong HNSW M", func(a *qdrantComparisonArtifact) { a.Server.Config["hnsw_m"] = float64(15) }},
@@ -197,6 +208,8 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		{"query timeout", func(a *qdrantComparisonArtifact) { a.QuerySeconds = 91 }},
 		{"reopen failure", func(a *qdrantComparisonArtifact) { a.Reopen.Succeeded = false }},
 		{"reopen optimizer update missing", func(a *qdrantComparisonArtifact) { a.Reopen.OptimizerUpdateTriggered = false }},
+		{"wrong repetition order", func(a *qdrantComparisonArtifact) { a.Cells[0].RepetitionPerformance[1].Order = "forward" }},
+		{"wrong reverse query mix", func(a *qdrantComparisonArtifact) { a.Cells[0].Samples[100].QueryID = a.Cells[0].Samples[99].QueryID }},
 		{"reopen timeout", func(a *qdrantComparisonArtifact) { a.Reopen.Seconds = 91 }},
 		{"reopen not green", func(a *qdrantComparisonArtifact) { a.Reopen.Status = "yellow" }},
 		{"reopen index missing", func(a *qdrantComparisonArtifact) { a.Reopen.IndexedVectorsCount = 53 }},
@@ -216,6 +229,7 @@ func TestQdrantComparisonValidatorRejectsInvalidEvidence(t *testing.T) {
 		{"wrong warmups", func(a *qdrantComparisonArtifact) { a.Cells[0].Warmups = 60 }},
 		{"wrong timing semantics", func(a *qdrantComparisonArtifact) { a.Cells[0].TimingSemantics = "search only" }},
 		{"missing total work", func(a *qdrantComparisonArtifact) { a.Cells[0].Samples[0].TotalMS = 1 }},
+		{"nearest-rank latency", func(a *qdrantComparisonArtifact) { a.Cells[0].Summary.LatencyMSP99 = a.Cells[0].Samples[296].TotalMS }},
 		{"missing repetition wall", func(a *qdrantComparisonArtifact) { a.Cells[0].RepetitionPerformance[0].WallSeconds = 0 }},
 		{"wrong QPS mean", func(a *qdrantComparisonArtifact) { a.Cells[0].Summary.QPS = 99 }},
 		{"wrong latency summary", func(a *qdrantComparisonArtifact) { a.Cells[0].Summary.LatencyMSP95++ }},
@@ -249,5 +263,29 @@ func TestQdrantComparisonValidatorAcceptsCompleteEvidence(t *testing.T) {
 	manifest, manifestSHA, artifact := validQdrantComparisonArtifact(t)
 	if err := validateQdrantComparisonArtifact(&artifact, manifest, manifestSHA, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestQdrantComparisonPercentilesMatchTreeDBInterpolation(t *testing.T) {
+	manifest, manifestSHA, artifact := validQdrantComparisonArtifact(t)
+	cell := &artifact.Cells[0]
+	latencies, _, err := recomputeQdrantCellEvidence(*cell, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := percentile(latencies, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !comparisonFloatMatches(cell.Summary.LatencyMSP99, want) {
+		t.Fatalf("Qdrant p99=%v want TreeDB interpolation %v", cell.Summary.LatencyMSP99, want)
+	}
+	nearestRank := cell.Samples[296].TotalMS
+	if comparisonFloatMatches(want, nearestRank) {
+		t.Fatalf("fixture does not distinguish interpolation %v from nearest-rank %v", want, nearestRank)
+	}
+	cell.Summary.LatencyMSP99 = nearestRank
+	if err := validateQdrantComparisonArtifact(&artifact, manifest, manifestSHA, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err == nil {
+		t.Fatal("nearest-rank Qdrant percentile accepted")
 	}
 }
