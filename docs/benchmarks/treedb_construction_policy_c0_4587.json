@@ -1,5 +1,5 @@
 {
-  "schema_version": "treedb-construction-policy-4587/v3",
+  "schema_version": "treedb-construction-policy-4587/v4",
   "authority": "FROZEN_AUTHORITATIVE",
   "engineering_status": "QUALIFIED",
   "execution_validity": "REQUIRES_FINAL_EXTERNAL_AUTHORIZATION",
@@ -154,7 +154,8 @@
       ],
       "screening_promotion_requires": "all GO gates except 1M projection, applied to the selection partition against the efConstruction=300 screening control, including at least 30% adjacency reduction",
       "no_screening_winner": "C0_NO_GO; do not inspect holdout and do not run 1M",
-      "holdout_failure": "C0_NO_GO; no retuning or rerun; C1 may be designed only after recording the complete C0 disposition"
+      "holdout_failure": "C0_NO_GO; no retuning or rerun; C1 may be designed only after recording the complete C0 disposition",
+      "winner_selection_event": "after every ordered 250K lifecycle completes, validate the checksum-bound screening rows and write one checksum-bound selection event; neither 1M lifecycle may start until after that event"
     },
     "isolation_and_noise": {
       "lock_path": "/mnt/fast4tb/treedb-4587-c0.lock",
@@ -233,6 +234,14 @@
       "python3", "scripts/treedb_construction_policy_4587.py",
       "docs/benchmarks/treedb_construction_policy_c0_4587.json",
       "--authorization", "/mnt/fast4tb/treedb-4587-c0-evidence/execution-authorization.json"
+    ],
+    "screening_runs_file": "/mnt/fast4tb/treedb-4587-c0-evidence/screening-runs.json",
+    "winner_selection_generate_argv_template": [
+      "python3", "scripts/treedb_construction_policy_4587.py",
+      "docs/benchmarks/treedb_construction_policy_c0_4587.json",
+      "--authorization", "/mnt/fast4tb/treedb-4587-c0-evidence/execution-authorization.json",
+      "--screening-runs", "/mnt/fast4tb/treedb-4587-c0-evidence/screening-runs.json",
+      "--generate-winner-selection", "/mnt/fast4tb/treedb-4587-c0-evidence/winner-selection.json"
     ],
     "lifecycle_harness_argv_template": [
       "python3", "scripts/treedb_vectordbbench_artifact.py",
@@ -412,19 +421,39 @@
       }
     }
   },
+  "measurement_schema": {
+    "schema_version": "treedb-construction-policy-4587-measurements/v2",
+    "exact_keys": [
+      "schema_version", "origin", "phase_seconds", "cpu_utilization_logical_cores",
+      "determinism", "diagnostic_work_profile", "resources",
+      "projected_10m_adjacency_reduction_fraction"
+    ],
+    "origin_exact_keys": [
+      "run_id", "artifact_root", "execution_commit", "dataset_sha256", "scale",
+      "role", "partition", "ef_construction", "lifecycle_sha256",
+      "lifecycle_started_at", "lifecycle_completed_at"
+    ],
+    "timing_source": "checksum-bound lifecycle JSONL startup and teardown events"
+  },
   "result_schema": {
-    "schema_version": "treedb-construction-policy-4587-results/v3",
+    "schema_version": "treedb-construction-policy-4587-results/v4",
     "allowed_verdicts": ["GO", "C0_NO_GO"],
     "decision_exact_keys": [
-      "schema_version", "execution_commit", "contract_sha256", "authorization", "verdict", "runs"
+      "schema_version", "execution_commit", "contract_sha256", "authorization",
+      "winner_selection", "verdict", "runs"
     ],
     "authorization_binding": {
       "exact_keys": ["path", "sha256"],
       "path": "absolute or relative to commands.artifact_root"
     },
+    "winner_selection_binding": {
+      "exact_keys": ["path", "sha256"],
+      "schema_version": "treedb-construction-policy-4587-winner-selection/v1",
+      "no_winner_value": null
+    },
     "run_roles": ["screening_candidate", "screening_control", "decision_candidate", "decision_control"],
-    "run_cardinality": "exactly four ordered 250K rows, then either stop or exactly matched 1M control and selected winner",
-    "evidence_binding": "all runs must verify one service-binary SHA-256 equal to the external authorization; the authorization, manifests, isolation/measurement documents, index metadata, and canonical VectorDBBench results are checksum-bound; unknown or extra result rows are rejected",
+    "run_cardinality": "exactly four ordered 250K rows, then either stop with a null winner_selection or bind one selection event and exactly matched 1M control and selected winner",
+    "evidence_binding": "every measurement binds its originating run, dataset digest, artifact root, scale, role, partition, coordinate, execution commit, and checksum-bound lifecycle timing; all runs verify one service-binary SHA-256 equal to the external authorization; the authorization, winner selection, manifests, isolation/measurement documents, index metadata, and canonical VectorDBBench results are checksum-bound; unknown or extra result rows are rejected",
     "runs": []
   }
 }

@@ -106,7 +106,9 @@ def validate_diagnostic(response: dict[str, Any], args: argparse.Namespace) -> N
     stats = response.get("stats")
     if not isinstance(stats, dict):
         fail("diagnostic response is missing stats")
-    if stats.get("documents_fetched", 0) != 0 or stats.get("document_bytes", 0) != 0:
+    if not {"documents_fetched", "document_bytes"} <= set(stats):
+        fail("diagnostic response is missing document counters")
+    if stats["documents_fetched"] != 0 or stats["document_bytes"] != 0:
         fail("diagnostic response fetched or materialized documents")
     if args.route == "scalar_u8_rerank":
         calls = positive_int(stats.get("quantized_rerank_exact_score_calls"), "exact rerank calls")

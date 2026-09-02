@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 from pathlib import Path
@@ -15,6 +16,11 @@ HERE = Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("policy4587", HERE / "treedb_construction_policy_4587.py")
 assert SPEC and SPEC.loader
 policy = importlib.util.module_from_spec(SPEC)
+SEARCH_SPEC = importlib.util.spec_from_file_location(
+    "search_existing_index", HERE / "treedb_vdbbench_search_existing_index.py")
+assert SEARCH_SPEC and SEARCH_SPEC.loader
+search_existing_index = importlib.util.module_from_spec(SEARCH_SPEC)
+SEARCH_SPEC.loader.exec_module(search_existing_index)
 SPEC.loader.exec_module(policy)
 CONTRACT_PATH = HERE.parent / "docs/benchmarks/treedb_construction_policy_c0_4587.json"
 COMMIT = "1" * 40
@@ -24,6 +30,7 @@ class DecisionFixture:
     def __init__(self, root: Path):
         self.root = root
         self.contract = json.loads(CONTRACT_PATH.read_text())
+        self.contract["commands"]["artifact_root"] = str(root.resolve())
         self.counter = 0
         self.service_binary = root / "treedb-document-service"
         self.service_binary.write_bytes(b"fixture service binary\n")
@@ -38,7 +45,7 @@ class DecisionFixture:
         return {"path": path.name, "sha256": policy.sha256_file(path)}
 
     def reset_authorization(self) -> dict[str, str]:
-        source_root = Path(self.contract["source_identity"]["gomap_root"])
+        source_root = HERE.parent
         authorization = {
             "schema_version": policy.AUTHORIZATION_SCHEMA,
             "authorization_kind": "COORDINATOR_REVIEW_PROVENANCE",
@@ -170,6 +177,27 @@ class DecisionFixture:
         self.counter += 1
         root = self.root / f"run-{self.counter}-{scale}-ef{ef}"
         root.mkdir(parents=True)
+        started = datetime(2026, 9, 2, tzinfo=timezone.utc) + timedelta(minutes=10 * self.counter)
+        completed = started + timedelta(minutes=5)
+        lifecycle_path = root / "lifecycle.jsonl"
+        lifecycle_events = [
+            {
+                "schema_version": "treedb-vectordbbench-lifecycle-event/v1",
+                "sequence": 0,
+                "stage": "startup",
+                "timestamp": started.isoformat(),
+                "state": {},
+            },
+            {
+                "schema_version": "treedb-vectordbbench-lifecycle-event/v1",
+                "sequence": 1,
+                "stage": "teardown",
+                "timestamp": completed.isoformat(),
+                "state": {},
+            },
+        ]
+        lifecycle_path.write_text("".join(
+            json.dumps(event, sort_keys=True) + "\n" for event in lifecycle_events))
         binary_sha = binary_sha or self.binary_sha
         dataset = policy.dataset_expected(self.contract, scale, partition)
         config = {
@@ -197,6 +225,9 @@ class DecisionFixture:
                 "data_dir": str((root / "treedb-data").resolve()),
             },
             "lifecycle": {
+                "schema_version": "treedb-vectordbbench-lifecycle/v1",
+                "file": lifecycle_path.name,
+                "sha256": policy.sha256_file(lifecycle_path),
                 "result_status": "completed",
                 "expected_rows": scale,
                 "identity": {
@@ -232,6 +263,19 @@ class DecisionFixture:
         resources["cumulative_allocated_bytes"] = allocated
         measurements = {
             "schema_version": policy.MEASUREMENT_SCHEMA,
+            "origin": {
+                "run_id": f"run-{self.counter}",
+                "artifact_root": str(root.resolve()),
+                "execution_commit": COMMIT,
+                "dataset_sha256": policy.canonical_sha256(dataset),
+                "scale": scale,
+                "role": role,
+                "partition": partition,
+                "ef_construction": ef,
+                "lifecycle_sha256": policy.sha256_file(lifecycle_path),
+                "lifecycle_started_at": started.isoformat(),
+                "lifecycle_completed_at": completed.isoformat(),
+            },
             "phase_seconds": {"adjacency": adjacency, "optimize": adjacency + 10},
             "cpu_utilization_logical_cores": 6.0,
             "determinism": {
@@ -266,6 +310,33 @@ class DecisionFixture:
             "search_evidence": search,
         }
 
+    def winner_selection(self, runs: list[dict], winner: int, authorization_sha256: str,
+                         selected_at: datetime | None = None) -> dict[str, str]:
+        screening_rows = []
+        completed = []
+        for run in runs[:4]:
+            measurement_path = Path(run["artifact"]["root"]) / run["measurement_evidence"]["path"]
+            origin = json.loads(measurement_path.read_text())["origin"]
+            completed.append(policy.utc_timestamp(origin["lifecycle_completed_at"], "fixture completion"))
+            screening_rows.append({
+                "run_id": run["run_id"],
+                "artifact_root": run["artifact"]["root"],
+                "measurement_sha256": run["measurement_evidence"]["sha256"],
+                "lifecycle_sha256": origin["lifecycle_sha256"],
+                "completed_at": origin["lifecycle_completed_at"],
+            })
+        selected_at = selected_at or max(completed) + timedelta(minutes=1)
+        event = {
+            "schema_version": policy.WINNER_SELECTION_SCHEMA,
+            "execution_commit": COMMIT,
+            "contract_sha256": policy.canonical_sha256(self.contract),
+            "authorization_sha256": authorization_sha256,
+            "screening_runs": screening_rows,
+            "selected_ef_construction": winner,
+            "selected_at": selected_at.isoformat(),
+        }
+        return self._write(self.root / "winner-selection.json", event)
+
     def no_go_packet(self) -> dict:
         runs = [
             self.run(128, 250000, "screening_candidate", "selection", adjacency=95),
@@ -275,7 +346,7 @@ class DecisionFixture:
         ]
         return {"schema_version": policy.RESULT_SCHEMA, "execution_commit": COMMIT,
                 "contract_sha256": policy.canonical_sha256(self.contract),
-                "authorization": self.reset_authorization(),
+                "authorization": self.reset_authorization(), "winner_selection": None,
                 "verdict": "C0_NO_GO", "runs": runs}
 
     def go_packet(self) -> dict:
@@ -287,13 +358,25 @@ class DecisionFixture:
             self.run(300, 1000000, "decision_control", "holdout", adjacency=100, projection=0.0),
             self.run(128, 1000000, "decision_candidate", "holdout", adjacency=60, projection=0.4),
         ]
+        authorization = self.reset_authorization()
         return {"schema_version": policy.RESULT_SCHEMA, "execution_commit": COMMIT,
                 "contract_sha256": policy.canonical_sha256(self.contract),
-                "authorization": self.reset_authorization(),
+                "authorization": authorization,
+                "winner_selection": self.winner_selection(runs, 128, authorization["sha256"]),
                 "verdict": "GO", "runs": runs}
 
     def validate(self, packet: dict) -> dict:
         return policy.validate_decision(packet, self.contract, run_base_validator=False, require_clean_head=False)
+
+
+
+    def rewrite_winner_selection(self, packet: dict, mutate) -> None:
+        binding = packet["winner_selection"]
+        path = self.root / binding["path"]
+        value = json.loads(path.read_text())
+        mutate(value)
+        path.write_text(json.dumps(value, sort_keys=True) + "\n")
+        binding["sha256"] = policy.sha256_file(path)
 
     def rewrite_bound(self, run: dict, binding: dict, mutate) -> None:
         path = Path(run["artifact"]["root"]) / binding["path"]
@@ -344,7 +427,7 @@ class ValidatorMutations(unittest.TestCase):
         self.assert_invalid(packet, "execution authorization keys")
 
     def test_authorization_rejects_post_review_protocol_file_drift(self) -> None:
-        source_root = Path(self.fixture.contract["source_identity"]["gomap_root"])
+        source_root = HERE.parent
         original_sha256_file = policy.sha256_file
         for path in policy.PROTOCOL_PATHS:
             with self.subTest(path=path):
@@ -473,6 +556,91 @@ class ValidatorMutations(unittest.TestCase):
         )
         self.assert_invalid(packet, "graph/config checksum binding")
 
+    def test_measurement_origin_binding(self) -> None:
+        mutations = [
+            {"run_id": "other-run"},
+            {"artifact_root": "/tmp/wrong-root"},
+            {"execution_commit": "2" * 40},
+            {"dataset_sha256": "0" * 64},
+            {"scale": 1000000},
+            {"role": "decision_candidate"},
+            {"partition": "holdout"},
+            {"ef_construction": 192},
+            {"lifecycle_sha256": "0" * 64},
+            {"lifecycle_started_at": "2026-09-02T00:00:00+00:00"},
+            {"lifecycle_completed_at": "2026-09-02T00:01:00+00:00"},
+        ]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                packet = self.fixture.no_go_packet()
+                run = packet["runs"][0]
+                self.fixture.rewrite_bound(
+                    run, run["measurement_evidence"],
+                    lambda value, mutation=mutation: value["origin"].update(mutation),
+                )
+                self.assert_invalid(packet, "measurement originating run binding")
+
+    def test_winner_selection_chronology(self) -> None:
+        packet = self.fixture.go_packet()
+        screening_measurement = Path(packet["runs"][3]["artifact"]["root"]) / "measurements.json"
+        screening_completed = json.loads(screening_measurement.read_text())["origin"]["lifecycle_completed_at"]
+        self.fixture.rewrite_winner_selection(
+            packet, lambda value: value.update({"selected_at": screening_completed}))
+        self.assert_invalid(packet, "after all screening lifecycles")
+
+        packet = self.fixture.go_packet()
+        holdout_measurement = Path(packet["runs"][4]["artifact"]["root"]) / "measurements.json"
+        holdout_started = json.loads(holdout_measurement.read_text())["origin"]["lifecycle_started_at"]
+        self.fixture.rewrite_winner_selection(
+            packet, lambda value: value.update({"selected_at": holdout_started}))
+        self.assert_invalid(packet, "holdout lifecycle must start after")
+
+    def test_zero_production_qps_and_p99_are_invalid(self) -> None:
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_bound(
+            run, run["search_evidence"][1]["result"],
+            lambda value: value["results"][0]["metrics"].update({"qps": 0.0}),
+        )
+        self.assert_invalid(packet, "qps must be a finite positive number")
+
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_bound(
+            run, run["search_evidence"][1]["result"],
+            lambda value: value["results"][0]["metrics"].update({"conc_latency_p99_list": [0.0]}),
+        )
+        self.assert_invalid(packet, "p99 must be a finite positive number")
+
+    def test_missing_document_counters_are_invalid_at_both_sites(self) -> None:
+        packet = self.fixture.no_go_packet()
+        run = packet["runs"][0]
+        self.fixture.rewrite_bound(
+            run, run["search_evidence"][0]["response"],
+            lambda value: value["stats"].pop("documents_fetched"),
+        )
+        self.assert_invalid(packet, "document counters are required")
+
+        response = {
+            "no_documents": True,
+            "query_mode": "exact",
+            "results": [{"id": "0"}],
+            "diagnostics": {
+                "fallback_reason": "none",
+                "route": "exact_hnsw_search_pack_v1",
+            },
+            "stats": {"document_bytes": 0},
+        }
+        args = search_existing_index.argparse.Namespace(
+            route="exact", top_k=1, effective_rerank_candidates=192)
+        with self.assertRaisesRegex(ValueError, "missing document counters"):
+            search_existing_index.validate_diagnostic(response, args)
+
+    def test_frozen_go_gate_policy_drift_is_invalid(self) -> None:
+        packet = self.fixture.no_go_packet()
+        self.fixture.contract["experiment"]["go_gates"]["minimum_production_qps_ratio"] = 0.90
+        self.assert_invalid(packet, "frozen GO gate policy")
+
     def test_winner_tie_break_uses_both_routes(self) -> None:
         runs = [
             self.fixture.run(128, 250000, "screening_candidate", "selection", adjacency=60),
@@ -494,11 +662,13 @@ class ValidatorMutations(unittest.TestCase):
             binding,
             lambda value: value["results"][0]["metrics"].update({"recall": 0.939, "ndcg": 0.949}),
         )
+        authorization = self.fixture.reset_authorization()
         packet = {
             "schema_version": policy.RESULT_SCHEMA,
             "execution_commit": COMMIT,
             "contract_sha256": policy.canonical_sha256(self.fixture.contract),
-            "authorization": self.fixture.reset_authorization(),
+            "authorization": authorization,
+            "winner_selection": self.fixture.winner_selection(runs, 192, authorization["sha256"]),
             "verdict": "GO",
             "runs": runs,
         }
@@ -506,8 +676,9 @@ class ValidatorMutations(unittest.TestCase):
 
     def test_holdout_wrong_winner(self) -> None:
         packet = self.fixture.go_packet()
-        packet["runs"][5]["ef_construction"] = 192
-        self.assert_invalid(packet, "configuration|holdout cardinality")
+        packet["runs"][5] = self.fixture.run(
+            192, 1000000, "decision_candidate", "holdout", adjacency=60, projection=0.4)
+        self.assert_invalid(packet, "holdout cardinality and order")
 
 
 if __name__ == "__main__":

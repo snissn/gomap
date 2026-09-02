@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
@@ -14,11 +15,12 @@ import subprocess
 import sys
 from typing import Any
 
-SCHEMA = "treedb-construction-policy-4587/v3"
-RESULT_SCHEMA = "treedb-construction-policy-4587-results/v3"
+SCHEMA = "treedb-construction-policy-4587/v4"
+RESULT_SCHEMA = "treedb-construction-policy-4587-results/v4"
 AUTHORIZATION_SCHEMA = "treedb-construction-policy-4587-execution-authorization/v1"
-MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v1"
+MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v2"
 ISOLATION_SCHEMA = "treedb-construction-policy-4587-isolation/v1"
+WINNER_SELECTION_SCHEMA = "treedb-construction-policy-4587-winner-selection/v1"
 COORDINATES = [128, 192, 256, 300]
 CONTROL = 300
 HISTORY_PATH = "docs/benchmarks/treedb_construction_policy_history_2026-09-02.md"
@@ -50,13 +52,31 @@ DETERMINISM_KEYS = {
     "tie_row_order_digest_a", "tie_row_order_digest_b",
 }
 MEASUREMENT_KEYS = {
-    "schema_version", "phase_seconds", "cpu_utilization_logical_cores", "determinism",
-    "diagnostic_work_profile", "resources", "projected_10m_adjacency_reduction_fraction",
+    "schema_version", "origin", "phase_seconds", "cpu_utilization_logical_cores",
+    "determinism", "diagnostic_work_profile", "resources",
+    "projected_10m_adjacency_reduction_fraction",
+}
+MEASUREMENT_ORIGIN_KEYS = {
+    "run_id", "artifact_root", "execution_commit", "dataset_sha256", "scale",
+    "role", "partition", "ef_construction", "lifecycle_sha256",
+    "lifecycle_started_at", "lifecycle_completed_at",
 }
 RUN_KEYS = {
     "run_id", "scale", "role", "partition", "ef_construction",
     "execution_commit", "dataset", "configuration", "artifact",
     "isolation_evidence", "measurement_evidence", "search_evidence",
+}
+GO_GATES = {
+    "minimum_adjacency_reduction_fraction": 0.30,
+    "maximum_absolute_recall_loss": 0.002,
+    "maximum_absolute_ndcg_loss": 0.002,
+    "minimum_production_qps_ratio": 0.95,
+    "maximum_concurrent_p99_ratio": 1.05,
+    "maximum_peak_rss_ratio": 1.0,
+    "maximum_unexplained_persisted_or_allocation_increase_bytes": 0,
+    "minimum_projected_10m_adjacency_reduction_fraction": 0.30,
+    "require_deterministic_identity": True,
+    "require_all_route_and_reopen_guardrails": True,
 }
 SEARCH_ORDER = [
     ("diagnostic", "exact"),
@@ -110,6 +130,13 @@ def nonnegative_number(value: Any, name: str) -> float:
     return float(value)
 
 
+def positive_number(value: Any, name: str) -> float:
+    result = nonnegative_number(value, name)
+    if result <= 0:
+        fail(f"{name} must be a finite positive number")
+    return result
+
+
 def positive_int(value: Any, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         fail(f"{name} must be a positive integer")
@@ -120,6 +147,26 @@ def full_sha(value: Any, name: str, length: int = 40) -> str:
     if not isinstance(value, str) or re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is None:
         fail(f"{name} must be a {length}-character lowercase hexadecimal digest")
     return value
+
+
+def utc_timestamp(value: Any, name: str) -> datetime:
+    if not isinstance(value, str) or re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+        value,
+    ) is None:
+        fail(f"{name} must be an RFC3339 timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be an RFC3339 timestamp") from exc
+    return parsed.astimezone(timezone.utc)
+
+
+def validate_go_gates(contract: dict[str, Any]) -> dict[str, Any]:
+    gates = object_at(contract["experiment"]["go_gates"], "experiment.go_gates")
+    exact_keys(gates, set(GO_GATES), "GO gate policy")
+    exact(gates, GO_GATES, "frozen GO gate policy")
+    return gates
 
 
 def read_bound_json(root: Path, binding: Any, name: str) -> tuple[dict[str, Any], Path]:
@@ -137,6 +184,62 @@ def read_bound_json(root: Path, binding: Any, name: str) -> tuple[dict[str, Any]
     exact(sha256_file(path), bound["sha256"], f"{name} SHA-256")
     value = json.loads(path.read_text())
     return object_at(value, name), path
+
+
+def lifecycle_timing(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    lifecycle = object_at(manifest.get("lifecycle"), "manifest.lifecycle")
+    exact(lifecycle.get("schema_version"), "treedb-vectordbbench-lifecycle/v1",
+          "manifest.lifecycle schema")
+    relative_value = lifecycle.get("file")
+    if not isinstance(relative_value, str):
+        fail("manifest.lifecycle.file must be artifact-root relative")
+    relative = Path(relative_value)
+    if relative.is_absolute() or ".." in relative.parts:
+        fail("manifest.lifecycle.file must be artifact-root relative")
+    path = (root / relative).resolve()
+    try:
+        path.relative_to(root.resolve())
+    except ValueError:
+        fail("manifest.lifecycle.file escapes artifact root")
+    expected_sha = full_sha(lifecycle.get("sha256"), "manifest.lifecycle.sha256", 64)
+    exact(sha256_file(path), expected_sha, "lifecycle SHA-256")
+    raw = path.read_text()
+    if not raw or not raw.endswith("\n"):
+        fail("lifecycle JSONL must be complete and newline terminated")
+    events: list[dict[str, Any]] = []
+    prior_sequence = -1
+    prior_timestamp: datetime | None = None
+    for position, line in enumerate(raw.splitlines()):
+        event = object_at(json.loads(line), f"lifecycle event {position}")
+        exact_keys(event, {"schema_version", "sequence", "stage", "timestamp", "state"},
+                   f"lifecycle event {position}")
+        exact(event["schema_version"], "treedb-vectordbbench-lifecycle-event/v1",
+              f"lifecycle event {position} schema")
+        sequence = event["sequence"]
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence != prior_sequence + 1:
+            fail("lifecycle event sequence must be contiguous from zero")
+        timestamp = utc_timestamp(event["timestamp"], f"lifecycle event {position}.timestamp")
+        if prior_timestamp is not None and timestamp < prior_timestamp:
+            fail("lifecycle event timestamps must be chronological")
+        object_at(event["state"], f"lifecycle event {position}.state")
+        prior_sequence = sequence
+        prior_timestamp = timestamp
+        events.append(event)
+    starts = [event for event in events if event["stage"] == "startup"]
+    completions = [event for event in events if event["stage"] == "teardown"]
+    if len(starts) != 1 or len(completions) != 1:
+        fail("lifecycle must contain exactly one startup and teardown event")
+    started_at = utc_timestamp(starts[0]["timestamp"], "lifecycle startup timestamp")
+    completed_at = utc_timestamp(completions[0]["timestamp"], "lifecycle teardown timestamp")
+    if started_at >= completed_at:
+        fail("lifecycle teardown must occur after startup")
+    return {
+        "sha256": expected_sha,
+        "started_at": starts[0]["timestamp"],
+        "completed_at": completions[0]["timestamp"],
+        "started": started_at,
+        "completed": completed_at,
+    }
 
 
 def verify_git_identity(root: Path, source: dict[str, Any], allow_draft: bool) -> dict[str, Any]:
@@ -367,6 +470,20 @@ def validate_contract(contract: dict[str, Any], allow_draft: bool,
     required = contract["experiment"]["required_metrics_per_run"]
     exact(required["cpu_utilization"], "cpu_utilization_logical_cores", "required CPU utilization metric")
     exact(set(required["determinism"]), DETERMINISM_KEYS, "required deterministic identity metrics")
+    validate_go_gates(contract)
+    measurement_schema = object_at(contract["measurement_schema"], "measurement_schema")
+    exact(measurement_schema["schema_version"], MEASUREMENT_SCHEMA, "measurement contract schema")
+    exact(set(measurement_schema["exact_keys"]), MEASUREMENT_KEYS, "measurement contract keys")
+    exact(set(measurement_schema["origin_exact_keys"]), MEASUREMENT_ORIGIN_KEYS,
+          "measurement origin contract keys")
+    result_schema = object_at(contract["result_schema"], "result_schema")
+    exact(result_schema["schema_version"], RESULT_SCHEMA, "result contract schema")
+    exact(result_schema["decision_exact_keys"], [
+        "schema_version", "execution_commit", "contract_sha256", "authorization",
+        "winner_selection", "verdict", "runs",
+    ], "decision contract keys")
+    exact(result_schema["winner_selection_binding"]["schema_version"], WINNER_SELECTION_SCHEMA,
+          "winner selection contract schema")
     gomap = verify_git_identity(Path(source["gomap_root"]), source, allow_draft)
     external = verify_external_git(source)
     datasets = verify_datasets(contract)
@@ -505,7 +622,9 @@ def validate_search_evidence(run_row: dict[str, Any], root: Path) -> dict[str, d
             exact(diagnostics.get("fallback_reason") or "none", "none",
                   f"search_evidence[{position}] fallback reason")
             stats = object_at(response.get("stats"), f"search_evidence[{position}].stats")
-            exact((stats.get("documents_fetched", 0), stats.get("document_bytes", 0)), (0, 0),
+            if not {"documents_fetched", "document_bytes"} <= set(stats):
+                fail(f"search_evidence[{position}] document counters are required")
+            exact((stats["documents_fetched"], stats["document_bytes"]), (0, 0),
                   f"search_evidence[{position}] document boundary")
             expected_route = "exact_hnsw_search_pack_v1" if expected_mode == "exact" else "quantized_rerank"
             exact(diagnostics.get("route"), expected_route, f"search_evidence[{position}] intended route")
@@ -528,8 +647,8 @@ def validate_search_evidence(run_row: dict[str, Any], root: Path) -> dict[str, d
             production[item["route"]] = {
                 "recall": nonnegative_number(metrics.get("recall"), f"search_evidence[{position}].recall"),
                 "ndcg": nonnegative_number(metrics.get("ndcg"), f"search_evidence[{position}].ndcg"),
-                "qps": nonnegative_number(metrics.get("qps"), f"search_evidence[{position}].qps"),
-                "concurrent_p99_ms": 1000 * nonnegative_number(conc[0], f"search_evidence[{position}].p99"),
+                "qps": positive_number(metrics.get("qps"), f"search_evidence[{position}].qps"),
+                "concurrent_p99_ms": 1000 * positive_number(conc[0], f"search_evidence[{position}].p99"),
             }
     if len(identities) != 1:
         fail("diagnostic and production search rows do not bind one exact existing index identity")
@@ -581,6 +700,8 @@ def validate_manifest(run_row: dict[str, Any], root: Path, manifest: dict[str, A
 def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: str,
                  run_base_validator: bool) -> dict[str, Any]:
     exact_keys(row, RUN_KEYS, "run")
+    if not isinstance(row["run_id"], str) or not row["run_id"]:
+        fail("run.run_id must be a non-empty string")
     if row["ef_construction"] not in COORDINATES:
         fail("run ef_construction is outside C0")
     exact(row["execution_commit"], packet_commit, "run execution commit")
@@ -596,6 +717,8 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
     exact(row["configuration"], expected_config, "run configuration")
     artifact = object_at(row["artifact"], "run.artifact")
     exact_keys(artifact, {"root", "manifest_sha256"}, "run.artifact")
+    if not isinstance(artifact["root"], str) or not artifact["root"]:
+        fail("run.artifact.root must be a non-empty path")
     root = Path(artifact["root"]).resolve()
     manifest_path = root / "manifest.json"
     full_sha(artifact["manifest_sha256"], "run.artifact.manifest_sha256", 64)
@@ -603,6 +726,7 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
     manifest = object_at(json.loads(manifest_path.read_text()), "manifest")
     service_binary_sha256 = validate_manifest(
         row, root, manifest, contract, packet_commit, run_base_validator)
+    timing = lifecycle_timing(root, manifest)
     isolation, _ = read_bound_json(root, row["isolation_evidence"], "run.isolation_evidence")
     exact(isolation.get("schema_version"), ISOLATION_SCHEMA, "isolation schema")
     exact(isolation.get("artifact_root"), str(root), "isolation artifact root")
@@ -615,6 +739,21 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
     measurements, _ = read_bound_json(root, row["measurement_evidence"], "run.measurement_evidence")
     exact(measurements.get("schema_version"), MEASUREMENT_SCHEMA, "measurement schema")
     exact_keys(measurements, MEASUREMENT_KEYS, "measurements")
+    origin = object_at(measurements.get("origin"), "measurements.origin")
+    exact_keys(origin, MEASUREMENT_ORIGIN_KEYS, "measurements.origin")
+    exact(origin, {
+        "run_id": row["run_id"],
+        "artifact_root": str(root),
+        "execution_commit": row["execution_commit"],
+        "dataset_sha256": canonical_sha256(row["dataset"]),
+        "scale": row["scale"],
+        "role": row["role"],
+        "partition": row["partition"],
+        "ef_construction": row["ef_construction"],
+        "lifecycle_sha256": timing["sha256"],
+        "lifecycle_started_at": timing["started_at"],
+        "lifecycle_completed_at": timing["completed_at"],
+    }, "measurement originating run binding")
     cpu_utilization = nonnegative_number(
         measurements.get("cpu_utilization_logical_cores"), "measurements.cpu_utilization_logical_cores")
     if cpu_utilization <= 0 or cpu_utilization > contract["source_identity"]["runtime"]["logical_cpus"]:
@@ -650,37 +789,97 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
         nonnegative_number(projection, "projected 10M adjacency reduction")
     production = validate_search_evidence(row, root)
     return {"row": row, "phases": phases, "resources": resources, "production": production,
-            "projection": projection, "service_binary_sha256": service_binary_sha256}
+            "projection": projection, "service_binary_sha256": service_binary_sha256,
+            "timing": timing}
 
 
-def clears_gates(candidate: dict[str, Any], control: dict[str, Any], require_projection: bool) -> bool:
+def clears_gates(candidate: dict[str, Any], control: dict[str, Any], require_projection: bool,
+                 gates: dict[str, Any]) -> bool:
     cand_exact, ctrl_exact = candidate["production"]["exact"], control["production"]["exact"]
     cand_prod, ctrl_prod = candidate["production"]["scalar_u8_rerank"], control["production"]["scalar_u8_rerank"]
     reduction = 1 - candidate["phases"]["adjacency"] / control["phases"]["adjacency"]
+    increase = gates["maximum_unexplained_persisted_or_allocation_increase_bytes"]
     checks = [
-        reduction >= 0.30,
-        ctrl_exact["recall"] - cand_exact["recall"] <= 0.002,
-        ctrl_exact["ndcg"] - cand_exact["ndcg"] <= 0.002,
-        ctrl_prod["recall"] - cand_prod["recall"] <= 0.002,
-        ctrl_prod["ndcg"] - cand_prod["ndcg"] <= 0.002,
-        cand_prod["qps"] >= 0.95 * ctrl_prod["qps"],
-        cand_prod["concurrent_p99_ms"] <= 1.05 * ctrl_prod["concurrent_p99_ms"],
-        candidate["resources"]["peak_rss_bytes"] <= control["resources"]["peak_rss_bytes"],
-        candidate["resources"]["persisted_bytes"] <= control["resources"]["persisted_bytes"],
-        candidate["resources"]["cumulative_allocated_bytes"] <= control["resources"]["cumulative_allocated_bytes"],
+        reduction >= gates["minimum_adjacency_reduction_fraction"],
+        ctrl_exact["recall"] - cand_exact["recall"] <= gates["maximum_absolute_recall_loss"],
+        ctrl_exact["ndcg"] - cand_exact["ndcg"] <= gates["maximum_absolute_ndcg_loss"],
+        ctrl_prod["recall"] - cand_prod["recall"] <= gates["maximum_absolute_recall_loss"],
+        ctrl_prod["ndcg"] - cand_prod["ndcg"] <= gates["maximum_absolute_ndcg_loss"],
+        cand_prod["qps"] >= gates["minimum_production_qps_ratio"] * ctrl_prod["qps"],
+        cand_prod["concurrent_p99_ms"]
+        <= gates["maximum_concurrent_p99_ratio"] * ctrl_prod["concurrent_p99_ms"],
+        candidate["resources"]["peak_rss_bytes"]
+        <= gates["maximum_peak_rss_ratio"] * control["resources"]["peak_rss_bytes"],
+        candidate["resources"]["persisted_bytes"] <= control["resources"]["persisted_bytes"] + increase,
+        candidate["resources"]["cumulative_allocated_bytes"]
+        <= control["resources"]["cumulative_allocated_bytes"] + increase,
     ]
     if require_projection:
-        checks.append(candidate["projection"] is not None and candidate["projection"] >= 0.30)
+        checks.append(
+            candidate["projection"] is not None
+            and candidate["projection"] >= gates["minimum_projected_10m_adjacency_reduction_fraction"]
+        )
     return all(checks)
+
+
+def select_screening_winner(screening: list[dict[str, Any]], gates: dict[str, Any]) -> dict[str, Any] | None:
+    control = screening[-1]
+    eligible = [item for item in screening[:-1] if clears_gates(item, control, False, gates)]
+    if not eligible:
+        return None
+    return sorted(eligible, key=lambda item: (
+        -(1 - item["phases"]["adjacency"] / control["phases"]["adjacency"]),
+        max(
+            control["production"]["exact"]["recall"] - item["production"]["exact"]["recall"],
+            control["production"]["exact"]["ndcg"] - item["production"]["exact"]["ndcg"],
+            control["production"]["scalar_u8_rerank"]["recall"]
+            - item["production"]["scalar_u8_rerank"]["recall"],
+            control["production"]["scalar_u8_rerank"]["ndcg"]
+            - item["production"]["scalar_u8_rerank"]["ndcg"],
+        ),
+        item["row"]["ef_construction"],
+    ))[0]
+
+
+def validate_winner_selection(binding: Any, contract: dict[str, Any], authorization_sha256: str,
+                              screening: list[dict[str, Any]], winner: dict[str, Any]) -> datetime:
+    event, _ = read_bound_json(
+        Path(contract["commands"]["artifact_root"]), binding, "decision.winner_selection")
+    exact_keys(event, {
+        "schema_version", "execution_commit", "contract_sha256", "authorization_sha256",
+        "screening_runs", "selected_ef_construction", "selected_at",
+    }, "winner selection event")
+    exact(event["schema_version"], WINNER_SELECTION_SCHEMA, "winner selection schema")
+    exact(event["execution_commit"], winner["row"]["execution_commit"],
+          "winner selection execution commit")
+    exact(event["contract_sha256"], canonical_sha256(contract), "winner selection contract SHA-256")
+    exact(event["authorization_sha256"], authorization_sha256,
+          "winner selection authorization SHA-256")
+    expected_runs = [{
+        "run_id": item["row"]["run_id"],
+        "artifact_root": item["row"]["artifact"]["root"],
+        "measurement_sha256": item["row"]["measurement_evidence"]["sha256"],
+        "lifecycle_sha256": item["timing"]["sha256"],
+        "completed_at": item["timing"]["completed_at"],
+    } for item in screening]
+    exact(event["screening_runs"], expected_runs, "winner selection screening evidence")
+    exact(event["selected_ef_construction"], winner["row"]["ef_construction"],
+          "winner selection coordinate")
+    selected_at = utc_timestamp(event["selected_at"], "winner selection timestamp")
+    if any(item["timing"]["completed"] >= selected_at for item in screening):
+        fail("winner selection must occur after all screening lifecycles complete")
+    return selected_at
 
 
 def validate_decision(packet: dict[str, Any], contract: dict[str, Any], *, run_base_validator: bool = True,
                       require_clean_head: bool = True,
                       expected_authorization: dict[str, Any] | None = None) -> dict[str, Any]:
     exact_keys(packet, {
-        "schema_version", "execution_commit", "contract_sha256", "authorization", "verdict", "runs",
+        "schema_version", "execution_commit", "contract_sha256", "authorization",
+        "winner_selection", "verdict", "runs",
     }, "decision")
     exact(packet.get("schema_version"), RESULT_SCHEMA, "result schema_version")
+    gates = validate_go_gates(contract)
     if packet.get("verdict") not in {"GO", "C0_NO_GO"}:
         fail("result verdict must be GO or C0_NO_GO")
     commit = full_sha(packet.get("execution_commit"), "decision.execution_commit")
@@ -718,37 +917,90 @@ def validate_decision(packet: dict[str, Any], contract: dict[str, Any], *, run_b
            (250000, 192, "selection", "screening_candidate"),
            (250000, 256, "selection", "screening_candidate"),
            (250000, 300, "selection", "screening_control")], "screening cardinality and order")
-    control = screening[-1]
-    eligible = [item for item in screening[:-1] if clears_gates(item, control, False)]
-    if not eligible:
+    winner = select_screening_winner(screening, gates)
+    if winner is None:
+        exact(packet["winner_selection"], None, "no-winner selection event")
         exact(len(validated), 4, "no-winner run cardinality")
         exact(packet["verdict"], "C0_NO_GO", "no-winner verdict")
         return {"verdict": "C0_NO_GO", "winner": None, "performance_gate": "NO-GO",
                 "service_binary_sha256": authorization["service_binary_sha256"]}
-    winner = sorted(eligible, key=lambda item: (
-        -(1 - item["phases"]["adjacency"] / control["phases"]["adjacency"]),
-        max(
-            control["production"]["exact"]["recall"] - item["production"]["exact"]["recall"],
-            control["production"]["exact"]["ndcg"] - item["production"]["exact"]["ndcg"],
-            control["production"]["scalar_u8_rerank"]["recall"]
-            - item["production"]["scalar_u8_rerank"]["recall"],
-            control["production"]["scalar_u8_rerank"]["ndcg"]
-            - item["production"]["scalar_u8_rerank"]["ndcg"],
-        ),
-        item["row"]["ef_construction"],
-    ))[0]
     exact(len(validated), 6, "winner run cardinality")
+    selected_at = validate_winner_selection(
+        packet["winner_selection"], contract, expected_checksum, screening, winner)
     decision = validated[4:]
     exact([(item["row"]["scale"], item["row"]["ef_construction"], item["row"]["partition"], item["row"]["role"])
            for item in decision],
           [(1000000, 300, "holdout", "decision_control"),
            (1000000, winner["row"]["ef_construction"], "holdout", "decision_candidate")],
           "holdout cardinality and order")
-    passed = clears_gates(decision[1], decision[0], True)
+    if any(item["timing"]["started"] <= selected_at for item in decision):
+        fail("holdout lifecycle must start after the checksum-bound winner selection")
+    passed = clears_gates(decision[1], decision[0], True, gates)
     exact(packet["verdict"], "GO" if passed else "C0_NO_GO", "computed verdict")
     return {"verdict": packet["verdict"], "winner": winner["row"]["ef_construction"],
             "performance_gate": "GO" if passed else "NO-GO",
             "service_binary_sha256": authorization["service_binary_sha256"]}
+
+
+def generate_winner_selection(contract: dict[str, Any], runs_path: Path, output_path: Path,
+                              authorization_path: Path) -> dict[str, str]:
+    authorization = validate_authorization(contract, authorization_path)
+    rows = json.loads(runs_path.read_text())
+    if not isinstance(rows, list) or len(rows) != 4:
+        fail("screening runs file must contain exactly four rows")
+    commit = authorization["execution_commit"]
+    screening = [
+        validate_run(object_at(row, f"screening runs[{index}]"), contract, commit, True)
+        for index, row in enumerate(rows)
+    ]
+    roots = [item["row"]["artifact"]["root"] for item in screening]
+    run_ids = [item["row"]["run_id"] for item in screening]
+    if len(set(roots)) != 4 or len(set(run_ids)) != 4:
+        fail("screening artifact roots and run IDs must be unique")
+    exact([
+        (item["row"]["scale"], item["row"]["ef_construction"], item["row"]["partition"], item["row"]["role"])
+        for item in screening
+    ], [
+        (250000, 128, "selection", "screening_candidate"),
+        (250000, 192, "selection", "screening_candidate"),
+        (250000, 256, "selection", "screening_candidate"),
+        (250000, 300, "selection", "screening_control"),
+    ], "screening cardinality and order")
+    exact(
+        {item["service_binary_sha256"] for item in screening},
+        {authorization["service_binary_sha256"]},
+        "one authorized service binary across screening runs",
+    )
+    winner = select_screening_winner(screening, validate_go_gates(contract))
+    if winner is None:
+        fail("screening has no winner; holdout execution is forbidden")
+    selected_at = datetime.now(timezone.utc)
+    if any(item["timing"]["completed"] >= selected_at for item in screening):
+        fail("winner selection timestamp does not follow all screening lifecycles")
+    root = Path(contract["commands"]["artifact_root"]).resolve()
+    output_path = output_path.resolve()
+    try:
+        relative = output_path.relative_to(root)
+    except ValueError:
+        fail("winner selection output must be inside commands.artifact_root")
+    event = {
+        "schema_version": WINNER_SELECTION_SCHEMA,
+        "execution_commit": commit,
+        "contract_sha256": canonical_sha256(contract),
+        "authorization_sha256": authorization["sha256"],
+        "screening_runs": [{
+            "run_id": item["row"]["run_id"],
+            "artifact_root": item["row"]["artifact"]["root"],
+            "measurement_sha256": item["row"]["measurement_evidence"]["sha256"],
+            "lifecycle_sha256": item["timing"]["sha256"],
+            "completed_at": item["timing"]["completed_at"],
+        } for item in screening],
+        "selected_ef_construction": winner["row"]["ef_construction"],
+        "selected_at": selected_at.isoformat(),
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(event, indent=2, sort_keys=True) + "\n")
+    return {"path": relative.as_posix(), "sha256": sha256_file(output_path)}
 
 
 def print_screening_commands(contract: dict[str, Any]) -> None:
@@ -774,6 +1026,8 @@ def main() -> int:
     parser.add_argument("--generate-authorization", type=Path)
     parser.add_argument("--service-binary", type=Path)
     parser.add_argument("--reviewed-head")
+    parser.add_argument("--generate-winner-selection", type=Path)
+    parser.add_argument("--screening-runs", type=Path)
     parser.add_argument("--decision", type=Path)
     parser.add_argument("--print-screening-commands", action="store_true")
     args = parser.parse_args()
@@ -781,12 +1035,24 @@ def main() -> int:
         contract = json.loads(args.contract.read_text())
         if args.generate_authorization:
             if (args.draft or args.decision or args.authorization or args.print_screening_commands
+                    or args.generate_winner_selection or args.screening_runs
                     or not args.service_binary or not args.reviewed_head):
                 fail("--generate-authorization requires --service-binary and --reviewed-head only")
             generated = generate_authorization(
                 contract, args.generate_authorization, args.service_binary, args.reviewed_head)
             print(json.dumps({"authorization": generated}, indent=2, sort_keys=True))
             return 0
+        if args.generate_winner_selection:
+            if (args.draft or args.decision or args.print_screening_commands or args.service_binary
+                    or args.reviewed_head or not args.authorization or not args.screening_runs):
+                fail("--generate-winner-selection requires --authorization and --screening-runs only")
+            validate_contract(contract, False, args.authorization)
+            binding = generate_winner_selection(
+                contract, args.screening_runs, args.generate_winner_selection, args.authorization)
+            print(json.dumps({"winner_selection": binding}, indent=2, sort_keys=True))
+            return 0
+        if args.screening_runs:
+            fail("--screening-runs requires --generate-winner-selection")
         decision = json.loads(args.decision.read_text()) if args.decision else None
         authorization_path = args.authorization
         if decision is not None and authorization_path is None:
