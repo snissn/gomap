@@ -880,6 +880,51 @@ class ValidatorMutations(unittest.TestCase):
     def test_valid_no_go(self) -> None:
         self.assertEqual(self.fixture.validate(self.fixture.no_go_packet())["verdict"], "C0_NO_GO")
 
+    def test_partition_rows_must_match_canonical_ordinals(self) -> None:
+        import pyarrow as arrow
+        import pyarrow.parquet as parquet
+
+        source = self.fixture.contract["datasets"]["canonical_query_source"]
+        canonical_test = parquet.read_table(source["test_path"])
+        canonical_neighbors = parquet.read_table(source["neighbors_path"])
+        ids = canonical_test.column("id").to_pylist()
+        selection, holdout = policy.partition_ordinals(
+            ids, self.fixture.contract["datasets"]["partition"]["seed"])
+        for corrupted_file in ("test.parquet", "neighbors.parquet"):
+            with self.subTest(corrupted_file=corrupted_file):
+                contract = copy.deepcopy(self.fixture.contract)
+                for name, ordinals in (("screening", selection), ("decision", holdout)):
+                    directory = self.fixture.root / f"{corrupted_file}-{name}"
+                    directory.mkdir(parents=True)
+                    test_rows = canonical_test.take(arrow.array(ordinals))
+                    neighbor_rows = canonical_neighbors.take(arrow.array(ordinals))
+                    if name == "screening":
+                        wrong_ordinals = list(ordinals)
+                        wrong_ordinals[0] = holdout[0]
+                        if corrupted_file == "test.parquet":
+                            wrong = canonical_test.take(arrow.array(wrong_ordinals))
+                            id_index = wrong.schema.get_field_index("id")
+                            test_rows = wrong.set_column(
+                                id_index, wrong.schema.field(id_index),
+                                test_rows.column("id"))
+                        else:
+                            wrong = canonical_neighbors.take(arrow.array(wrong_ordinals))
+                            id_index = wrong.schema.get_field_index("id")
+                            neighbor_rows = wrong.set_column(
+                                id_index, wrong.schema.field(id_index),
+                                neighbor_rows.column("id"))
+                    parquet.write_table(test_rows, directory / "test.parquet")
+                    parquet.write_table(neighbor_rows, directory / "neighbors.parquet")
+                    config = contract["datasets"][name]
+                    config["directory"] = str(directory)
+                    config["files"] = {
+                        filename: policy.sha256_file(directory / filename)
+                        for filename in ("test.parquet", "neighbors.parquet")
+                    }
+
+                with self.assertRaisesRegex(ValueError, "rows do not match canonical"):
+                    policy.verify_datasets(contract)
+
     def test_wrong_source_and_dirty_identity(self) -> None:
         packet = self.fixture.no_go_packet()
         packet["runs"][0]["execution_commit"] = "3" * 40

@@ -405,6 +405,7 @@ def partition_ordinals(ids: list[int], seed: str) -> tuple[list[int], list[int]]
 
 def verify_datasets(contract: dict[str, Any]) -> dict[str, Any]:
     try:
+        import pyarrow as arrow
         import pyarrow.parquet as parquet
     except ImportError as exc:
         fail(f"pyarrow is required for query-partition verification: {exc}")
@@ -436,6 +437,11 @@ def verify_datasets(contract: dict[str, Any]) -> dict[str, Any]:
         expected_ids = [ids[index] for index in ordinals]
         exact(split_test.column("id").to_pylist(), expected_ids, f"{name} test IDs")
         exact(split_neighbors.column("id").to_pylist(), expected_ids, f"{name} neighbors IDs")
+        ordinal_array = arrow.array(ordinals)
+        if not split_test.equals(tests.take(ordinal_array)):
+            fail(f"{name} test rows do not match canonical partition ordinals")
+        if not split_neighbors.equals(neighbors.take(ordinal_array)):
+            fail(f"{name} neighbor rows do not match canonical partition ordinals")
     return {"canonical_queries": len(ids), "selection_rows": len(selection), "holdout_rows": len(holdout),
             "selection_digest": canonical_sha256(selection), "holdout_digest": canonical_sha256(holdout)}
 
