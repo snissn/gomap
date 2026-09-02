@@ -530,6 +530,16 @@ class DecisionFixture:
         })
         measurement_path.write_text(json.dumps(measurement, sort_keys=True) + "\n")
         run["measurement_evidence"]["sha256"] = policy.sha256_file(measurement_path)
+        started_at = policy.utc_timestamp(started, "fixture lifecycle start")
+        completed_at = policy.utc_timestamp(completed, "fixture lifecycle completion")
+        isolation_path = root / run["isolation_evidence"]["path"]
+        isolation = json.loads(isolation_path.read_text())
+        isolation["lock_acquired_at"] = (started_at - timedelta(seconds=1)).isoformat()
+        isolation["coverage_completed_at"] = (completed_at + timedelta(seconds=1)).isoformat()
+        isolation["samples"][0]["timestamp"] = isolation["lock_acquired_at"]
+        isolation["samples"][-1]["timestamp"] = isolation["coverage_completed_at"]
+        isolation_path.write_text(json.dumps(isolation, sort_keys=True) + "\n")
+        run["isolation_evidence"]["sha256"] = policy.sha256_file(isolation_path)
         for entry in run["search_evidence"]:
             origin_path = root / entry["origin"]["path"]
             origin = json.loads(origin_path.read_text())
@@ -936,7 +946,7 @@ class ValidatorMutations(unittest.TestCase):
             run, run["measurement_evidence"],
             lambda value: value.update({"projected_10m_adjacency_reduction_fraction": 1.01}),
         )
-        self.assert_invalid(packet, "projected 10M adjacency reduction must be in")
+        self.assert_invalid(packet, "projected 10M adjacency reduction must be a finite number in")
 
     def test_runtime_identity_is_bound(self) -> None:
         packet = self.fixture.no_go_packet()
