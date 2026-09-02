@@ -1072,6 +1072,14 @@ func canonicalComparisonPath(path string) (string, error) {
 	return "", fmt.Errorf("resolve comparison path %s: too many symbolic links", path)
 }
 
+func comparisonPathContains(parent, child string) bool {
+	relative, err := filepath.Rel(parent, child)
+	if err != nil || relative == "." {
+		return false
+	}
+	return relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
+}
+
 func validateComparisonPaths(paths ...string) error {
 	seen := make(map[string]string, len(paths))
 	type existingPath struct {
@@ -1079,6 +1087,11 @@ func validateComparisonPaths(paths ...string) error {
 		info os.FileInfo
 	}
 	var existing []existingPath
+	type canonicalPath struct {
+		path string
+		key  string
+	}
+	var canonicalPaths []canonicalPath
 	for _, path := range paths {
 		canonical, err := canonicalComparisonPath(path)
 		if err != nil {
@@ -1101,6 +1114,12 @@ func validateComparisonPaths(paths ...string) error {
 			return fmt.Errorf("comparison paths alias: %s and %s", prior, path)
 		}
 		seen[key] = path
+		for _, prior := range canonicalPaths {
+			if comparisonPathContains(prior.key, key) || comparisonPathContains(key, prior.key) {
+				return fmt.Errorf("comparison paths overlap: %s and %s", prior.path, path)
+			}
+		}
+		canonicalPaths = append(canonicalPaths, canonicalPath{path: path, key: key})
 	}
 	return nil
 }

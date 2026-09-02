@@ -78,6 +78,13 @@ func TestValidateComparisonPathsRejectsAliases(t *testing.T) {
 	if err := validateComparisonPaths(filepath.Join(dir, "comparison.JSON"), filepath.Join(dir, "comparison.json")); err == nil {
 		t.Fatal("accepted case-only output alias")
 	}
+	storage := filepath.Join(dir, "qdrant-storage")
+	if err := os.Mkdir(storage, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateComparisonPaths(input, storage, filepath.Join(storage, "comparison.json")); err == nil {
+		t.Fatal("accepted output nested in storage path")
+	}
 	if err := validateComparisonPaths(input, filepath.Join(dir, "output.json"), filepath.Join(dir, "report.md")); err != nil {
 		t.Fatalf("rejected distinct paths: %v", err)
 	}
