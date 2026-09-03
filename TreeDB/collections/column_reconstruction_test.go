@@ -163,16 +163,8 @@ func TestColumnDocumentReconstructionBytesAsIntegerArray2010(t *testing.T) {
 }
 
 func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) {
-	raw := []byte(`{"title":"escaped\\ttext","embedding":[`)
-	for i := 0; i < 64; i++ {
-		if i != 0 {
-			raw = append(raw, ',')
-		}
-		raw = append(raw, `{"n":1,"nested":[true,null,{"value":"x"}]}`...)
-	}
-	raw = append(raw, `],"nested":{"array":[1,2,3],"object":{"ok":true}},"none":null,"number":1.25e3}`...)
+	raw, projection := projectJSONDocumentFixture4608()
 	source := append([]byte(nil), raw...)
-	projection := &documentProjection{exclude: map[string]struct{}{"embedding": {}}}
 
 	var stats DocumentMaterializationStats
 	got, err := projectJSONDocument(raw, projection, &stats)
@@ -185,6 +177,9 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 		"none":   nil,
 		"number": float64(1250),
 	})
+	if want := []byte(`{"nested":{"array":[1,2,3],"object":{"ok":true}},"none":null,"number":1.25e3,"title":"escaped\\ttext"}`); !bytes.Equal(got, want) {
+		t.Fatalf("deterministic projection=%q want=%q", got, want)
+	}
 	if stats.FieldsReconstructed != 4 || stats.FieldsSkipped != 1 {
 		t.Fatalf("stats=%+v want four reconstructed and one skipped", stats)
 	}
@@ -245,8 +240,8 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 			panic(err)
 		}
 	})
-	if allocs > 64 {
-		t.Fatalf("top-level projection allocs/run=%0.0f want <=64", allocs)
+	if allocs > 32 {
+		t.Fatalf("top-level projection allocs/run=%0.0f want <=32", allocs)
 	}
 
 	for _, input := range [][]byte{[]byte(`{"title":1,"title":2,"embedding":3}`), []byte(`{"title":`), []byte(`{"title":1} {}`), []byte(`[]`)} {
@@ -262,6 +257,30 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 			t.Fatalf("invalid input %q projected successfully", input)
 		}
 	}
+}
+
+func BenchmarkProjectJSONDocument4608(b *testing.B) {
+	raw, projection := projectJSONDocumentFixture4608()
+	b.ReportAllocs()
+	b.SetBytes(int64(len(raw)))
+	b.ResetTimer()
+	for range b.N {
+		if _, err := projectJSONDocument(raw, projection, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func projectJSONDocumentFixture4608() ([]byte, *documentProjection) {
+	raw := []byte(`{"title":"escaped\\ttext","embedding":[`)
+	for i := 0; i < 64; i++ {
+		if i != 0 {
+			raw = append(raw, ',')
+		}
+		raw = append(raw, `{"n":1,"nested":[true,null,{"value":"x"}]}`...)
+	}
+	raw = append(raw, `],"nested":{"array":[1,2,3],"object":{"ok":true}},"none":null,"number":1.25e3}`...)
+	return raw, &documentProjection{exclude: map[string]struct{}{"embedding": {}}}
 }
 
 func columnReconstructionArenaTestConfig1888() ColumnStoreConfig {
