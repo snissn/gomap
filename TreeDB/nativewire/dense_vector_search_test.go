@@ -128,6 +128,11 @@ func TestDenseVectorSearchNativewireParityAndBorrowing(t *testing.T) {
 	if _, err = client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1}); !isRemoteError(err, iwire.ErrResourceExhausted) {
 		t.Fatalf("frame limit err=%v want resource exhausted", err)
 	}
+	server.limits.MaxFrameSize = iwire.DefaultLimits().MaxFrameSize
+	server.limits.MaxSections = 2
+	if _, err = client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1}); !isRemoteError(err, iwire.ErrResourceExhausted) {
+		t.Fatalf("section count limit err=%v want resource exhausted", err)
+	}
 }
 
 func TestDenseVectorSearchCodecFailsClosed(t *testing.T) {
@@ -154,6 +159,21 @@ func TestDenseVectorSearchCodecFailsClosed(t *testing.T) {
 	if _, _, err := decodeDenseVectorSearchRequest(raw[:len(raw)-1], limits, nil, &root, nil); err == nil {
 		t.Fatal("truncated dense request decoded")
 	}
+	tightLimits := limits
+	tightLimits.MaxByteVectorItems = 4
+	request.Filter = nil
+	request.EfSearch = tightLimits.MaxByteVectorItems + 1
+	if _, err := appendDenseVectorSearchRequest(nil, request, tightLimits); nativeCodeOf(err) != iwire.ErrResourceExhausted {
+		t.Fatalf("oversized ef_search error=%v code=%d", err, nativeCodeOf(err))
+	}
+	raw, err = appendDenseVectorSearchRequest(nil, request, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := decodeDenseVectorSearchRequest(raw, tightLimits, nil, &root, nil); nativeCodeOf(err) != iwire.ErrResourceExhausted {
+		t.Fatalf("decoded oversized ef_search error=%v code=%d", err, nativeCodeOf(err))
+	}
+	request.EfSearch = 8
 	request.Filter = nil
 	request.TopK = limits.MaxByteVectorItems + 1
 	if _, err := appendDenseVectorSearchRequest(nil, request, limits); nativeCodeOf(err) != iwire.ErrResourceExhausted {

@@ -116,6 +116,9 @@ func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, 
 	if s.documentService == nil {
 		return nil, protocolError(iwire.ErrUnsupportedFeature, "dense document service is not configured")
 	}
+	if err := s.checkResponseSectionCount(3); err != nil {
+		return nil, err
+	}
 	raw, ok, err := singletonSection(sections, iwire.SectionDenseSearchRequest)
 	if err != nil || !ok {
 		if err == nil {
@@ -255,6 +258,9 @@ func appendDenseVectorSearchRequest(dst []byte, request DenseVectorSearchRequest
 	}
 	if request.TopK > limits.MaxByteVectorItems {
 		return nil, protocolError(iwire.ErrResourceExhausted, "dense top_k %d exceeds limit %d", request.TopK, limits.MaxByteVectorItems)
+	}
+	if request.EfSearch > limits.MaxByteVectorItems {
+		return nil, protocolError(iwire.ErrResourceExhausted, "dense ef_search %d exceeds limit %d", request.EfSearch, limits.MaxByteVectorItems)
 	}
 	if uint64(len(request.Index)) > limits.MaxDeterministicNameBytes {
 		return nil, protocolError(iwire.ErrResourceExhausted, "dense index name exceeds limit")
@@ -454,6 +460,9 @@ func decodeDenseVectorSearchRequest(src []byte, limits iwire.Limits, query []flo
 	efSearch, err := readDenseInt(src, &off, "ef_search")
 	if err != nil {
 		return request, leaves, err
+	}
+	if efSearch > limits.MaxByteVectorItems {
+		return request, leaves, protocolError(iwire.ErrResourceExhausted, "dense ef_search %d exceeds limit %d", efSearch, limits.MaxByteVectorItems)
 	}
 	request.EfSearch = efSearch
 	request.ExpectedGeneration, err = readUvarintField(src, &off, "expected_generation")
