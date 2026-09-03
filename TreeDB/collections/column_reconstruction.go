@@ -585,7 +585,9 @@ func projectJSONDocument(raw []byte, projection *documentProjection, stats *Docu
 			}
 			if bytes.Contains(value, []byte(`\u`)) {
 				var decoded any
-				if err := json.Unmarshal(value, &decoded); err != nil {
+				decoder := json.NewDecoder(bytes.NewReader(value))
+				decoder.UseNumber()
+				if err := decoder.Decode(&decoded); err != nil {
 					return nil, err
 				}
 				value, err := json.Marshal(decoded)

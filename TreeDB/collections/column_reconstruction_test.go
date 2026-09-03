@@ -219,6 +219,14 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 	if want := []byte(`{"title":"�"}`); !bytes.Equal(projected, want) {
 		t.Fatalf("escaped surrogate projection=%q want=%q", projected, want)
 	}
+	numericSurrogate := []byte(`{"nested":{"s":"\ud800","large":9007199254740993,"exp":1e400},"embedding":[1]}`)
+	projected, err = projectJSONDocument(numericSurrogate, projection, nil)
+	if err != nil {
+		t.Fatalf("project escaped surrogate with numbers: %v", err)
+	}
+	if want := []byte(`{"nested":{"exp":1e400,"large":9007199254740993,"s":"�"}}`); !bytes.Equal(projected, want) {
+		t.Fatalf("escaped surrogate numeric projection=%q want=%q", projected, want)
+	}
 	for _, tc := range []struct {
 		input string
 		want  map[string]any
