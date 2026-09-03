@@ -939,6 +939,10 @@ func TestNativeScalarANNSeedsEligibleRegionBeyondGlobalFrontier(t *testing.T) {
 			lowerInclusive: true, upperInclusive: true,
 		}},
 	}
+	matcher, err := bindNativeScalarMatcher(plan, columns, len(nodes), "base")
+	if err != nil {
+		t.Fatal(err)
+	}
 	query := []float32{1, 0}
 	view := &vectorIndexSearchView{
 		metric: VectorMetricCosine, encoding: VectorIndexEncodingFloat32,
@@ -954,7 +958,7 @@ func TestNativeScalarANNSeedsEligibleRegionBeyondGlobalFrontier(t *testing.T) {
 	ordinary := runtime.searchCandidatesLocked(query, 1, nil, explorationLimit, &ordinaryScratch)
 	for _, candidate := range ordinary {
 		node := &nodes[candidate.nodeID]
-		if plan.matches(columns, candidate.nodeID, node.documentID) {
+		if matcher.matches(candidate.nodeID, node.documentID) {
 			t.Fatalf("ordinary bounded global frontier unexpectedly reached eligible row %d", candidate.nodeID)
 		}
 	}
@@ -967,7 +971,7 @@ func TestNativeScalarANNSeedsEligibleRegionBeyondGlobalFrontier(t *testing.T) {
 	}
 	got, work, err := searchVectorIndexViewPlaneNativeScalar(
 		query, 1, nil, topK, efSearch,
-		nodes, 0, 0, columns, nil, plan, view, false,
+		nodes, 0, 0, &matcher, nil, plan, view, false,
 		&seedBudget, &scratch, &results, &resultIDBytes,
 	)
 	if err != nil {
@@ -982,7 +986,7 @@ func TestNativeScalarANNSeedsEligibleRegionBeyondGlobalFrontier(t *testing.T) {
 			t.Fatalf("rank %d id=%q want=%q results=%+v", rank, result.ID, want, got)
 		}
 		nodeID := bridgeEnd + rank
-		if !plan.matches(columns, nodeID, nodes[nodeID].documentID) {
+		if !matcher.matches(nodeID, nodes[nodeID].documentID) {
 			t.Fatalf("rank %d leaked nonmatching tenant id=%q", rank, result.ID)
 		}
 	}
@@ -1033,9 +1037,10 @@ func TestNativeScalarANNReducedSeedBudgetSpansWholeGraph(t *testing.T) {
 	var scratch vectorIndexSearchScratch
 	var results []VectorIndexSearchResult
 	var ids []byte
+	matcher := nativeScalarBoundMatcher{plan: plan, columns: [4]vectorIndexScalarColumn{column}}
 	got, work, err := searchVectorIndexViewPlaneNativeScalar(
 		[]float32{1, 0}, 1, nil, 1, 1, nodes, 0, 0,
-		map[string]vectorIndexScalarColumn{"tenant_idx": column}, nil,
+		&matcher, nil,
 		plan, view, false, &budget, &scratch, &results, &ids,
 	)
 	if err != nil || len(got) != 1 {
@@ -1146,9 +1151,10 @@ func TestNativeScalarANNReservesLayerZeroExpansion(t *testing.T) {
 	var scratch vectorIndexSearchScratch
 	var results []VectorIndexSearchResult
 	var ids []byte
+	matcher := nativeScalarBoundMatcher{plan: plan, columns: [4]vectorIndexScalarColumn{column}}
 	got, work, err := searchVectorIndexViewPlaneNativeScalar(
 		[]float32{1, 0}, 1, nil, 1, 1, nodes, 0, 1,
-		map[string]vectorIndexScalarColumn{"tenant_idx": column}, nil,
+		&matcher, nil,
 		plan, view, false, &budget, &scratch, &results, &ids,
 	)
 	if err != nil || len(got) != 1 || string(got[0].ID) != "doc-16" {
