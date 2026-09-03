@@ -2,12 +2,14 @@ package valuelog
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -153,6 +155,46 @@ func TestFileReadAppend_VerifiedCompressedGroupedFallbackUsesFrameCache(t *testi
 	}
 	if gotCRC := f.ReadStats().RecordCRCChecks - crcBefore; gotCRC != 3 {
 		t.Fatalf("record CRC checks after corruption=%d want 3", gotCRC)
+	}
+}
+
+func TestFileReadAppend_VerifiedGroupedFallbackRejectsZeroRIDAfterCacheWarmup(t *testing.T) {
+	f, ptrs, _ := openGroupedCompressedFileReadFallbackFixture(t)
+	f.setGroupedFrameCacheEntries(4)
+	mapped := []byte{0}
+	f.mmapData.Store(mapped)
+	f.deadMappingsCount.Store(uint64(effectiveMaxDeadMappings(len(mapped))))
+
+	if _, err := f.ReadAppend(ptrs[0], true, nil); err != nil {
+		t.Fatalf("warm ReadAppend: %v", err)
+	}
+
+	start := int64(ptrs[0].Offset - 4)
+	var header [HeaderSize]byte
+	if _, err := f.File.ReadAt(header[:], start); err != nil {
+		t.Fatalf("read header: %v", err)
+	}
+	payload := make([]byte, binary.LittleEndian.Uint32(header[16:20]))
+	if _, err := f.File.ReadAt(payload, start+HeaderSize); err != nil {
+		t.Fatalf("read payload: %v", err)
+	}
+	clear(payload[FrameHeaderSize : FrameHeaderSize+8])
+	binary.LittleEndian.PutUint32(header[:4], crc.ChecksumParts(header[4:], payload))
+
+	corrupt, err := os.OpenFile(f.Path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open for corruption: %v", err)
+	}
+	if _, err := corrupt.WriteAt(append(header[:], payload...), start); err != nil {
+		_ = corrupt.Close()
+		t.Fatalf("write corrupt record: %v", err)
+	}
+	if err := corrupt.Close(); err != nil {
+		t.Fatalf("close corrupt source: %v", err)
+	}
+
+	if _, err := f.ReadAppend(ptrs[0], true, nil); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("ReadAppend valid-CRC zero-RID error=%v want ErrCorrupt", err)
 	}
 }
 

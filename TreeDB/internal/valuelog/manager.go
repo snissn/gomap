@@ -859,6 +859,11 @@ func (f *File) readGroupedCompressedFromFileToVerify(ptr page.ValuePtr, verifyCR
 			return nil, false, err, true
 		}
 	}
+	for ridOff, i := FrameHeaderSize, 0; i < k; i, ridOff = i+1, ridOff+8 {
+		if binary.LittleEndian.Uint64(prefix[ridOff:ridOff+8]) == 0 {
+			return nil, false, ErrCorrupt, true
+		}
+	}
 
 	var offsets [MaxFrameK + 1]uint32
 	prev := uint32(0)
