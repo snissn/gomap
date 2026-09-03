@@ -1165,6 +1165,39 @@ class ValidatorMutations(unittest.TestCase):
             generated["storage_audit_binary_sha256"],
             policy.sha256_file(storage_audit_binary))
 
+    def test_winner_generation_binds_authorized_storage_audit(self) -> None:
+        packet = self.fixture.go_packet()
+        rows = packet["runs"][:4]
+        authorization = policy.validate_authorization(
+            self.fixture.contract, self.fixture.authorization_path,
+            require_clean_head=False,
+        )
+        validated = [
+            policy.validate_run(
+                row, self.fixture.contract, COMMIT, False,
+                authorization["protocol_files"][policy.SEARCH_HELPER_PATH],
+                authorization["storage_audit_binary_sha256"],
+            )
+            for row in rows
+        ]
+        runs_path = self.fixture.root / "screening-runs-source.json"
+        runs_path.write_text(json.dumps(rows, sort_keys=True) + "\n")
+        output_path = self.fixture.root / "generated-winner-selection.json"
+        with mock.patch.object(
+            policy, "validate_authorization", return_value=authorization,
+        ), mock.patch.object(policy, "validate_run", side_effect=validated) as validate_run:
+            binding = policy.generate_winner_selection(
+                self.fixture.contract, runs_path, output_path,
+                self.fixture.authorization_path,
+            )
+        event = json.loads(output_path.read_text())
+        self.assertEqual(event["selected_ef_construction"], 128)
+        self.assertEqual(binding["sha256"], policy.sha256_file(output_path))
+        self.assertEqual(validate_run.call_count, 4)
+        for call in validate_run.call_args_list:
+            self.assertEqual(
+                call.args[5], authorization["storage_audit_binary_sha256"])
+
     def test_partition_rows_must_match_canonical_ordinals(self) -> None:
         import pyarrow as arrow
         import pyarrow.parquet as parquet

@@ -2144,7 +2144,8 @@ def generate_winner_selection(contract: dict[str, Any], runs_path: Path, output_
     screening = [
         validate_run(
             object_at(row, f"screening runs[{index}]"), contract, commit, True,
-            authorization["protocol_files"][SEARCH_HELPER_PATH])
+            authorization["protocol_files"][SEARCH_HELPER_PATH],
+            authorization["storage_audit_binary_sha256"])
         for index, row in enumerate(rows)
     ]
     roots = [item["row"]["artifact"]["root"] for item in screening]
