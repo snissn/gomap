@@ -1115,10 +1115,10 @@ func (view *vectorIndexSearchView) searchWithNativeScalarFilterBuffer(query []fl
 		return nil, nativeScalarSearchWork{}, err
 	}
 	queryNorm, preparedQuery, preparedCosine, err := prepareVectorIndexGraphOnlyQuery(query, view.metric, view.dimensions)
-	plan.refineMixed(view, &baseMatcher, &deltaMatcher)
 	if err != nil {
 		return nil, nativeScalarSearchWork{}, err
 	}
+	plan.refineMixed(view, &baseMatcher, &deltaMatcher)
 	var prepared *preparedFloat32CosineQuery
 	if preparedCosine {
 		prepared = &preparedQuery
