@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -576,8 +577,11 @@ func projectJSONDocument(raw []byte, projection *documentProjection, stats *Docu
 	if obj == nil {
 		return nil, errors.New("collections: column retained payload root must be a JSON object")
 	}
-	for key := range obj {
+	for key, value := range obj {
 		if projection.wantsPath(key) {
+			if !utf8.Valid(value) {
+				obj[key] = bytes.ToValidUTF8(value, []byte("\uFFFD"))
+			}
 			continue
 		}
 		delete(obj, key)
