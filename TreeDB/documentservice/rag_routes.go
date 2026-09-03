@@ -365,8 +365,8 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 		}
 		diagnostics := search.Diagnostics()
 		if len(search.Results) <= cap(dst) {
-			if len(search.Results) < len(dst) {
-				clear(dst[len(search.Results):])
+			if len(search.Results) < cap(dst) {
+				clear(dst[len(search.Results):cap(dst)])
 			}
 			dst = dst[:len(search.Results)]
 		} else {

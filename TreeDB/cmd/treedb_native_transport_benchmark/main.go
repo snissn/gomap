@@ -110,18 +110,29 @@ func run(ctx context.Context, addr, index string, queryCount, clientCount int) (
 	parts := make([][]float64, clientCount)
 	bytesByWorker := make([]uint64, clientCount)
 	errs := make(chan error, clientCount)
+	clients := make([]*nativewire.Client, clientCount)
+	for i := range clients {
+		client, err := dial(ctx, addr)
+		if err != nil {
+			for _, opened := range clients[:i] {
+				_ = opened.Close()
+			}
+			return artifact{}, err
+		}
+		clients[i] = client
+	}
+	defer func() {
+		for _, client := range clients {
+			_ = client.Close()
+		}
+	}()
 	var wg sync.WaitGroup
 	started := time.Now()
 	for worker := range clientCount {
 		wg.Add(1)
 		go func(worker int) {
 			defer wg.Done()
-			client, err := dial(ctx, addr)
-			if err != nil {
-				errs <- err
-				return
-			}
-			defer client.Close()
+			client := clients[worker]
 			samples := make([]float64, 0, (queryCount+clientCount-1)/clientCount)
 			var payloadBytes uint64
 			for ordinal := worker; ordinal < queryCount; ordinal += clientCount {

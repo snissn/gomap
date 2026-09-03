@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"math"
-	"reflect"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -69,6 +68,16 @@ func TestDenseVectorSearchNativewireParityAndBorrowing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		wantRawResults, err := svc.SearchDenseVectorNativeRaw(ctx, request.Index, documentservice.DenseVectorSearchRequest{
+			QueryEmbedding: request.Query,
+			TopK:           request.TopK,
+			EfSearch:       request.EfSearch,
+			Route:          documentservice.RouteAnn,
+			Filter:         request.Filter,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 		want, err := svc.SearchDenseVector(ctx, request.Index, documentservice.DenseVectorSearchRequest{
 			QueryEmbedding: request.Query,
 			TopK:           request.TopK,
@@ -87,21 +96,10 @@ func TestDenseVectorSearchNativewireParityAndBorrowing(t *testing.T) {
 		}
 		for i := range got.Results {
 			wantDoc := want.Documents[i]
+			wantRaw := wantRawResults.Results[i]
 			wantScore := *wantDoc.Score
-			wantDoc.Score = nil
-			wantRaw, err := json.Marshal(wantDoc)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var gotJSON, wantJSON any
-			if err := json.Unmarshal(got.Results[i].Document, &gotJSON); err != nil {
-				t.Fatal(err)
-			}
-			if err := json.Unmarshal(wantRaw, &wantJSON); err != nil {
-				t.Fatal(err)
-			}
-			if string(got.Results[i].ID) != wantDoc.ID || math.Abs(got.Results[i].Score-wantScore) > 1e-12 || !reflect.DeepEqual(gotJSON, wantJSON) {
-				t.Fatalf("result[%d]=%q/%g/%s want %q/%g/%s", i, got.Results[i].ID, got.Results[i].Score, got.Results[i].Document, wantDoc.ID, wantScore, wantRaw)
+			if string(got.Results[i].ID) != wantDoc.ID || math.Abs(got.Results[i].Score-wantScore) > 1e-12 || !bytes.Equal(got.Results[i].ID, wantRaw.ID) || !bytes.Equal(got.Results[i].Document, wantRaw.Document) {
+				t.Fatalf("result[%d]=%q/%g/%s want %q/%g/%s", i, got.Results[i].ID, got.Results[i].Score, got.Results[i].Document, wantRaw.ID, wantRaw.Score, wantRaw.Document)
 			}
 			if bytes.Contains(got.Results[i].Document, []byte(`"embedding"`)) {
 				t.Fatalf("result[%d] retained excluded embedding: %s", i, got.Results[i].Document)
@@ -120,6 +118,15 @@ func TestDenseVectorSearchNativewireParityAndBorrowing(t *testing.T) {
 		}},
 	}); nativeCodeOf(err) != iwire.ErrUnsupportedFeature {
 		t.Fatalf("OR filter error=%v code=%d", err, nativeCodeOf(err))
+	}
+	server.limits.MaxByteVectorBytes = 1
+	if _, err = client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1}); !isRemoteError(err, iwire.ErrResourceExhausted) {
+		t.Fatalf("byte-vector limit err=%v want resource exhausted", err)
+	}
+	server.limits.MaxByteVectorBytes = iwire.DefaultLimits().MaxByteVectorBytes
+	server.limits.MaxFrameSize = 96
+	if _, err = client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1}); !isRemoteError(err, iwire.ErrResourceExhausted) {
+		t.Fatalf("frame limit err=%v want resource exhausted", err)
 	}
 }
 
@@ -147,6 +154,12 @@ func TestDenseVectorSearchCodecFailsClosed(t *testing.T) {
 	if _, _, err := decodeDenseVectorSearchRequest(raw[:len(raw)-1], limits, nil, &root, nil); err == nil {
 		t.Fatal("truncated dense request decoded")
 	}
+	request.Filter = nil
+	request.TopK = limits.MaxByteVectorItems + 1
+	if _, err := appendDenseVectorSearchRequest(nil, request, limits); nativeCodeOf(err) != iwire.ErrResourceExhausted {
+		t.Fatalf("oversized top_k error=%v code=%d", err, nativeCodeOf(err))
+	}
+	request.TopK = 3
 	tooMany := make([]documentservice.Filter, denseFilterMaxLeaves+1)
 	for i := range tooMany {
 		tooMany[i] = documentservice.Filter{Field: "meta.x", Operator: "==", Value: "x"}
@@ -174,5 +187,39 @@ func TestDenseVectorSearchUnconfiguredFailsClosed(t *testing.T) {
 	_ = client.Hello(ctx)
 	if _, err = client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1}, TopK: 1}); err == nil {
 		t.Fatal("unconfigured search succeeded")
+	}
+}
+
+func TestClearDenseVectorSearchScratchReleasesPointers(t *testing.T) {
+	state := connState{
+		denseResults: make([]documentservice.RawDenseVectorResult, 1, 2),
+		idsScratch:   make([][]byte, 1, 2),
+		docsScratch:  make([][]byte, 1, 2),
+	}
+	state.denseResults[0] = documentservice.RawDenseVectorResult{ID: []byte("id"), Document: []byte("document")}
+	state.idsScratch[0] = []byte("id")
+	state.docsScratch[0] = []byte("document")
+
+	clearDenseVectorSearchScratch(&state)
+	if len(state.denseResults) != 0 || len(state.idsScratch) != 0 || len(state.docsScratch) != 0 {
+		t.Fatalf("scratch lengths results=%d ids=%d docs=%d want zero", len(state.denseResults), len(state.idsScratch), len(state.docsScratch))
+	}
+	if cap(state.denseResults) != 2 || cap(state.idsScratch) != 2 || cap(state.docsScratch) != 2 {
+		t.Fatalf("scratch capacities results=%d ids=%d docs=%d want two", cap(state.denseResults), cap(state.idsScratch), cap(state.docsScratch))
+	}
+	for _, result := range state.denseResults[:cap(state.denseResults)] {
+		if result.ID != nil || result.Document != nil {
+			t.Fatalf("retained dense result pointers: %+v", result)
+		}
+	}
+	for _, ids := range state.idsScratch[:cap(state.idsScratch)] {
+		if ids != nil {
+			t.Fatalf("retained ID pointer: %q", ids)
+		}
+	}
+	for _, docs := range state.docsScratch[:cap(state.docsScratch)] {
+		if docs != nil {
+			t.Fatalf("retained document pointer: %q", docs)
+		}
 	}
 }

@@ -108,7 +108,11 @@ func TestServiceRawDenseSearchPinsCollectionForScalarPlanReuse(t *testing.T) {
 	}
 
 	reader := New(collections.NewCollectionManager(db))
-	defer reader.Close()
+	t.Cleanup(func() {
+		if err := reader.Close(); err != nil {
+			t.Errorf("close reader: %v", err)
+		}
+	})
 	req := DenseVectorSearchRequest{
 		QueryEmbedding: []float32{1, 0},
 		TopK:           1,

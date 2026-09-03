@@ -129,6 +129,7 @@ func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, 
 	}
 	state.vectorQuery = request.Query[:0]
 	state.denseFilters = leaves[:0]
+	defer clearDenseVectorSearchScratch(state)
 	response, err := s.documentService.SearchDenseVectorNativeRawInto(ctx, request.Index, documentservice.DenseVectorSearchRequest{
 		ExpectedGeneration: request.ExpectedGeneration,
 		QueryEmbedding:     request.Query,
@@ -152,6 +153,14 @@ func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, 
 	state.denseMeta = appendDenseVectorSearchResponse(state.denseMeta[:0], response)
 	idLen := iwire.ByteVectorEncodedLen(state.idsScratch)
 	docLen := iwire.ByteVectorEncodedLen(state.docsScratch)
+	idBytes, err := denseByteVectorPayloadLen(state.idsScratch)
+	if err != nil {
+		return nil, err
+	}
+	docBytes, err := denseByteVectorPayloadLen(state.docsScratch)
+	if err != nil {
+		return nil, err
+	}
 	if err := s.checkResponseSectionLen("dense ids", idLen); err != nil {
 		return nil, err
 	}
@@ -159,6 +168,29 @@ func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, 
 		return nil, err
 	}
 	if err := s.checkResponseSectionLen("dense metadata", len(state.denseMeta)); err != nil {
+		return nil, err
+	}
+	if err := s.checkResponseByteVectorLen("dense ids", idBytes); err != nil {
+		return nil, err
+	}
+	if err := s.checkResponseByteVectorLen("dense documents", docBytes); err != nil {
+		return nil, err
+	}
+	bodyLen := uint64(0)
+	for _, section := range []struct {
+		id     iwire.SectionID
+		length int
+	}{{iwire.SectionDocumentIDs, idLen}, {iwire.SectionDocuments, docLen}, {iwire.SectionDenseSearchResponse, len(state.denseMeta)}} {
+		sectionLen, err := responseSectionBodyLen(section.id, section.length)
+		if err != nil {
+			return nil, err
+		}
+		bodyLen, err = addResponseLen(bodyLen, sectionLen)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := s.checkResponseBodyLen(bodyLen); err != nil {
 		return nil, err
 	}
 	for _, section := range []struct {
@@ -185,6 +217,27 @@ func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, 
 	return dst, nil
 }
 
+func clearDenseVectorSearchScratch(state *connState) {
+	clear(state.denseResults[:cap(state.denseResults)])
+	state.denseResults = state.denseResults[:0]
+	clear(state.idsScratch[:cap(state.idsScratch)])
+	state.idsScratch = state.idsScratch[:0]
+	clear(state.docsScratch[:cap(state.docsScratch)])
+	state.docsScratch = state.docsScratch[:0]
+}
+
+func denseByteVectorPayloadLen(items [][]byte) (int, error) {
+	total := 0
+	for _, item := range items {
+		var ok bool
+		total, ok = addPayloadLen(total, len(item))
+		if !ok {
+			return 0, protocolError(iwire.ErrResourceExhausted, "dense byte-vector length exceeds int capacity")
+		}
+	}
+	return total, nil
+}
+
 func resizeByteSlices(dst [][]byte, count int) [][]byte {
 	if count <= cap(dst) {
 		if count < len(dst) {
@@ -199,6 +252,9 @@ func appendDenseVectorSearchRequest(dst []byte, request DenseVectorSearchRequest
 	limits = denseDefaultLimits(limits)
 	if request.Index == "" || request.TopK <= 0 || request.EfSearch < 0 || len(request.Query) == 0 {
 		return nil, protocolError(iwire.ErrInvalidCommand, "dense search requires index, query, positive top_k, and non-negative ef_search")
+	}
+	if request.TopK > limits.MaxByteVectorItems {
+		return nil, protocolError(iwire.ErrResourceExhausted, "dense top_k %d exceeds limit %d", request.TopK, limits.MaxByteVectorItems)
 	}
 	if uint64(len(request.Index)) > limits.MaxDeterministicNameBytes {
 		return nil, protocolError(iwire.ErrResourceExhausted, "dense index name exceeds limit")
@@ -390,6 +446,9 @@ func decodeDenseVectorSearchRequest(src []byte, limits iwire.Limits, query []flo
 	topK, err := readDenseInt(src, &off, "top_k")
 	if err != nil || topK <= 0 {
 		return request, leaves, denseDecodeError(err, "dense top_k must be positive")
+	}
+	if topK > limits.MaxByteVectorItems {
+		return request, leaves, protocolError(iwire.ErrResourceExhausted, "dense top_k %d exceeds limit %d", topK, limits.MaxByteVectorItems)
 	}
 	request.TopK = topK
 	efSearch, err := readDenseInt(src, &off, "ef_search")
