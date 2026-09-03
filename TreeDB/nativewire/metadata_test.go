@@ -537,6 +537,45 @@ func TestMetadataIdempotencyReplayPrecedesCatalogGuard(t *testing.T) {
 	}
 }
 
+func TestMetadataIndexMutationsRememberCommittedResponses(t *testing.T) {
+	client, _, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	createCtx := WithExpectedCatalogVersion(WithIdempotencyKey(ctx, []byte("create-email")), clientCatalogVersion(t, client, ctx))
+	definition := collections.IndexDefinition{Name: "email", Field: "email", ValueType: collections.IndexValueString}
+	first, err := client.CreateIndex(createCtx, "users", definition)
+	if err != nil {
+		t.Fatalf("CreateIndex first: %v", err)
+	}
+	second, err := client.CreateIndex(createCtx, "users", definition)
+	if err != nil {
+		t.Fatalf("CreateIndex replay: %v", err)
+	}
+	if !reflect.DeepEqual(second, first) {
+		t.Fatalf("CreateIndex replay=%+v want %+v", second, first)
+	}
+
+	dropCtx := WithExpectedCatalogVersion(WithIdempotencyKey(ctx, []byte("drop-email")), clientCatalogVersion(t, client, ctx))
+	first, err = client.DropIndex(dropCtx, "users", "email")
+	if err != nil {
+		t.Fatalf("DropIndex first: %v", err)
+	}
+	second, err = client.DropIndex(dropCtx, "users", "email")
+	if err != nil {
+		t.Fatalf("DropIndex replay: %v", err)
+	}
+	if !reflect.DeepEqual(second, first) {
+		t.Fatalf("DropIndex replay=%+v want %+v", second, first)
+	}
+}
+
 func TestMetadataIdempotencyCacheEvictsOldestEntry(t *testing.T) {
 	server := NewServer(ServerOptions{MaxMetadataIdempotencyEntries: 2})
 	for i := 0; i < 3; i++ {
