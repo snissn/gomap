@@ -4281,10 +4281,9 @@ func (idx *VectorIndex) searchCandidatesResumableLocked(query []float32, queryNo
 func (idx *VectorIndex) continueResumableCandidatesLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, limit int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
 	visited := scratch.visitedEpochs
 	mark := scratch.resumeVisitedMark
+
+search:
 	for len(scratch.queue) > 0 {
-		if scratch.checkContext() {
-			break
-		}
 		current := scratch.queue[0]
 		if len(scratch.best) >= limit && vectorIndexCandidateWorse(current, scratch.best[0]) {
 			break
@@ -4301,6 +4300,12 @@ func (idx *VectorIndex) continueResumableCandidatesLocked(query []float32, query
 			visited[neighborID] = mark
 			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighborID)
 			scratch.explored++
+			if scratch.explored&63 == 0 && scratch.context != nil {
+				scratch.contextErr = scratch.context.Err()
+				if scratch.contextErr != nil {
+					break search
+				}
+			}
 			if math.IsInf(float64(distance), 1) {
 				continue
 			}
@@ -4452,9 +4457,6 @@ func (idx *VectorIndex) searchLayerWithScratchModeObservedLocked(query []float32
 	}
 search:
 	for len(queue) > 0 {
-		if scratch.checkContext() {
-			break search
-		}
 		current := queue.pop()
 		if len(best) >= explorationLimit && vectorIndexCandidateWorse(current, best[0]) {
 			break
@@ -4476,6 +4478,12 @@ search:
 			}
 			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighborID)
 			scratch.explored++
+			if scratch.explored&63 == 0 && scratch.context != nil {
+				scratch.contextErr = scratch.context.Err()
+				if scratch.contextErr != nil {
+					break search
+				}
+			}
 			if math.IsInf(float64(distance), 1) {
 				continue
 			}
@@ -5457,7 +5465,6 @@ type vectorIndexCandidate struct {
 type vectorIndexSearchScratch struct {
 	context           context.Context
 	contextErr        error
-	contextChecks     uint32
 	visitedEpochs     []uint32
 	visitedEpoch      uint32
 	explorationLimit  int
@@ -5477,25 +5484,11 @@ type vectorIndexSearchScratch struct {
 func (scratch *vectorIndexSearchScratch) setContext(ctx context.Context) {
 	scratch.context = ctx
 	scratch.contextErr = nil
-	scratch.contextChecks = 0
 }
 
 func (scratch *vectorIndexSearchScratch) clearContext() {
 	scratch.context = nil
 	scratch.contextErr = nil
-	scratch.contextChecks = 0
-}
-
-func (scratch *vectorIndexSearchScratch) checkContext() bool {
-	if scratch == nil || scratch.context == nil || scratch.contextErr != nil {
-		return scratch != nil && scratch.contextErr != nil
-	}
-	scratch.contextChecks++
-	if scratch.contextChecks&63 != 0 {
-		return false
-	}
-	scratch.contextErr = scratch.context.Err()
-	return scratch.contextErr != nil
 }
 
 func (scratch *vectorIndexSearchScratch) finalContextErr() error {

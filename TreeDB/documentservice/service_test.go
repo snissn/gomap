@@ -1979,7 +1979,7 @@ func TestServiceDenseNativeRuntimeSearchStopsDuringTraversal(t *testing.T) {
 	}
 	ctx := &cancelAfterContextChecks{Context: base, cancelAfter: 3}
 	_, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: 1, EfSearch: len(docs)})
-	if !errors.Is(err, context.Canceled) || ctx.checks < ctx.cancelAfter {
+	if !errors.Is(err, context.Canceled) || ctx.checks != ctx.cancelAfter {
 		t.Fatalf("traversal cancellation err=%v checks=%d", err, ctx.checks)
 	}
 }
