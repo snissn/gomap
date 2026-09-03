@@ -139,6 +139,7 @@ func (c *Client) roundTripLockedStream(ctx context.Context, streamID uint64, typ
 	if c == nil {
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
+	c.clearBorrowedResponseViews()
 	if c.local != nil {
 		header, response, err := c.local.roundTrip(ctx, streamID, typ, c.nextReq.Add(1), body, want, c.limits, c.readBody, true)
 		c.readBody = response[:0]
@@ -194,6 +195,7 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 	if c == nil {
 		return io.ErrClosedPipe
 	}
+	c.clearBorrowedResponseViews()
 	if c.local != nil {
 		_, _, err := c.local.roundTrip(ctx, 0, typ, c.nextReq.Add(1), body, want, c.limits, nil, false)
 		return err
@@ -241,6 +243,17 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 		return c.closeOnProtocolError(protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want))
 	}
 	return nil
+}
+
+func (c *Client) clearBorrowedResponseViews() {
+	clear(c.vectorSections[:cap(c.vectorSections)])
+	c.vectorSections = c.vectorSections[:0]
+	clear(c.denseIDs[:cap(c.denseIDs)])
+	c.denseIDs = c.denseIDs[:0]
+	clear(c.denseDocuments[:cap(c.denseDocuments)])
+	c.denseDocuments = c.denseDocuments[:0]
+	clear(c.denseResults[:cap(c.denseResults)])
+	c.denseResults = c.denseResults[:0]
 }
 
 func (c *Client) interruptDeadlineOnContextCancel(ctx context.Context) func() {

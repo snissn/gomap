@@ -42,6 +42,7 @@ func TestDenseVectorSearchNativewireParityAndBorrowing(t *testing.T) {
 		{ID: "a", Content: "a", Embedding: []float32{1, 0}, Meta: map[string]any{"user_id": "alpha", "rank": int64(2)}},
 		{ID: "b", Content: "b", Embedding: []float32{0, 1}, Meta: map[string]any{"user_id": "beta", "rank": int64(1)}},
 		{ID: "c", Content: "c", Embedding: []float32{0.8, 0.2}, Meta: map[string]any{"user_id": "alpha", "rank": int64(3)}},
+		{ID: "d", Content: string(bytes.Repeat([]byte("x"), 1024)), Embedding: []float32{-1, 0}, Meta: map[string]any{"user_id": "beta", "rank": int64(0)}},
 	}
 	if _, err = svc.UpsertDocuments(ctx, "docs", documentservice.UpsertDocumentsRequest{Documents: documents}); err != nil {
 		t.Fatal(err)
@@ -104,6 +105,40 @@ func TestDenseVectorSearchNativewireParityAndBorrowing(t *testing.T) {
 			if bytes.Contains(got.Results[i].Document, []byte(`"embedding"`)) {
 				t.Fatalf("result[%d] retained excluded embedding: %s", i, got.Results[i].Document)
 			}
+		}
+	}
+	if cap(client.readBody) == 0 {
+		t.Fatal("dense response buffer is empty")
+	}
+	oldBody := client.readBody[:cap(client.readBody)]
+	oldBodyPtr := &oldBody[0]
+	if _, _, err = client.GetMany(ctx, "docs", [][]byte{[]byte("d")}); err != nil {
+		t.Fatal(err)
+	}
+	if cap(client.readBody) == 0 || &client.readBody[:cap(client.readBody)][0] == oldBodyPtr {
+		t.Fatal("non-dense response did not replace dense response buffer")
+	}
+	if len(client.denseIDs) != 0 || len(client.denseDocuments) != 0 || len(client.denseResults) != 0 || len(client.vectorSections) != 0 {
+		t.Fatalf("retained dense views ids=%d docs=%d results=%d sections=%d", len(client.denseIDs), len(client.denseDocuments), len(client.denseResults), len(client.vectorSections))
+	}
+	for _, ids := range client.denseIDs[:cap(client.denseIDs)] {
+		if ids != nil {
+			t.Fatalf("retained dense ID view: %q", ids)
+		}
+	}
+	for _, docs := range client.denseDocuments[:cap(client.denseDocuments)] {
+		if docs != nil {
+			t.Fatalf("retained dense document view: %q", docs)
+		}
+	}
+	for _, result := range client.denseResults[:cap(client.denseResults)] {
+		if result.ID != nil || result.Document != nil {
+			t.Fatalf("retained dense result view: %+v", result)
+		}
+	}
+	for _, section := range client.vectorSections[:cap(client.vectorSections)] {
+		if section.Bytes != nil {
+			t.Fatalf("retained response section view: %+v", section)
 		}
 	}
 
