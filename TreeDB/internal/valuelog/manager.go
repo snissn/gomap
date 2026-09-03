@@ -781,7 +781,8 @@ func (f *File) readGroupedCompressedFromFileToVerify(ptr page.ValuePtr, verifyCR
 	}
 
 	start := int64(ptr.Offset - 4)
-	var header [HeaderSize]byte
+	header := getHeaderScratch()
+	defer putHeaderScratch(header)
 	if _, err := f.File.ReadAt(header[:], start); err != nil {
 		return nil, false, err, true
 	}
