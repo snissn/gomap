@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 
 SCHEMA = "treedb-construction-policy-4587/v8"
 RESULT_SCHEMA = "treedb-construction-policy-4587-results/v5"
-AUTHORIZATION_SCHEMA = "treedb-construction-policy-4587-execution-authorization/v2"
+AUTHORIZATION_SCHEMA = "treedb-construction-policy-4587-execution-authorization/v3"
 MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v4"
 ISOLATION_SCHEMA = "treedb-construction-policy-4587-isolation/v2"
 WINNER_SELECTION_SCHEMA = "treedb-construction-policy-4587-winner-selection/v2"
@@ -487,6 +487,7 @@ def validate_authorization(contract: dict[str, Any], path: Path, *,
     exact_keys(authorization, {
         "schema_version", "authorization_kind", "artifact_root", "execution_commit",
         "contract_sha256", "protocol_files", "source_identity", "service_binary",
+        "storage_audit_binary",
     }, "execution authorization")
     exact(authorization["schema_version"], AUTHORIZATION_SCHEMA, "authorization schema")
     exact(authorization["authorization_kind"], "COORDINATOR_REVIEW_PROVENANCE",
@@ -530,12 +531,34 @@ def validate_authorization(contract: dict[str, Any], path: Path, *,
           "authorization Go toolchain version")
     expected_binary_sha = full_sha(binary["sha256"], "authorization.service_binary.sha256", 64)
     exact(sha256_file(binary_path), expected_binary_sha, "authorized service binary SHA-256")
+    audit_binary = object_at(
+        authorization["storage_audit_binary"], "authorization.storage_audit_binary")
+    exact_keys(audit_binary, {
+        "path", "sha256", "build_argv", "build_environment", "go_version",
+    }, "authorization.storage_audit_binary")
+    audit_binary_path = Path(audit_binary.get("path", ""))
+    if not audit_binary_path.is_absolute():
+        fail("authorization.storage_audit_binary.path must be absolute")
+    exact(audit_binary_path.resolve(),
+          Path(contract["commands"]["storage_audit_binary"]).resolve(),
+          "authorization storage-audit binary path")
+    exact(audit_binary["build_argv"], contract["commands"]["storage_audit_build_argv"],
+          "authorization storage-audit build argv")
+    exact(audit_binary["build_environment"], expected_build_environment(contract),
+          "authorization storage-audit build environment")
+    exact(audit_binary["go_version"], f"go version {contract['source_identity']['runtime']['go']}",
+          "authorization storage-audit Go toolchain version")
+    expected_audit_binary_sha = full_sha(
+        audit_binary["sha256"], "authorization.storage_audit_binary.sha256", 64)
+    exact(sha256_file(audit_binary_path), expected_audit_binary_sha,
+          "authorized storage-audit binary SHA-256")
     return {
         "path": str(path),
         "sha256": checksum,
         "execution_commit": commit,
         "protocol_files": protocol_files,
         "service_binary_sha256": expected_binary_sha,
+        "storage_audit_binary_sha256": expected_audit_binary_sha,
     }
 
 
@@ -587,8 +610,10 @@ def expected_build_environment(contract: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def generate_authorization(contract: dict[str, Any], path: Path, service_binary: Path,
-                           reviewed_head: str) -> dict[str, Any]:
+def generate_authorization(
+    contract: dict[str, Any], path: Path, service_binary: Path,
+    storage_audit_binary: Path, reviewed_head: str,
+) -> dict[str, Any]:
     validate_contract(contract, True)
     root = Path(contract["source_identity"]["gomap_root"])
     head = run("git", "rev-parse", "HEAD", cwd=root)
@@ -600,7 +625,13 @@ def generate_authorization(contract: dict[str, Any], path: Path, service_binary:
     exact(service_binary.resolve(), expected_binary,
           "authorization service binary output path")
     service_binary = expected_binary
+    storage_audit_binary = storage_audit_binary.resolve()
+    expected_audit_binary = Path(contract["commands"]["storage_audit_binary"]).resolve()
+    exact(storage_audit_binary, expected_audit_binary,
+          "authorization storage-audit binary output path")
+    storage_audit_binary = expected_audit_binary
     service_binary.parent.mkdir(parents=True, exist_ok=True)
+    storage_audit_binary.parent.mkdir(parents=True, exist_ok=True)
     build_environment = expected_build_environment(contract)
     for variable in ("GOCACHE", "TMPDIR"):
         Path(build_environment[variable]).mkdir(parents=True, exist_ok=True)
@@ -612,6 +643,7 @@ def generate_authorization(contract: dict[str, Any], path: Path, service_binary:
     run(contract["commands"]["build_argv"][0], "mod", "verify",
         cwd=root, env=build_environment)
     run(*contract["commands"]["build_argv"], cwd=root, env=build_environment)
+    run(*contract["commands"]["storage_audit_build_argv"], cwd=root, env=build_environment)
     authorization = {
         "schema_version": AUTHORIZATION_SCHEMA,
         "authorization_kind": "COORDINATOR_REVIEW_PROVENANCE",
@@ -626,6 +658,13 @@ def generate_authorization(contract: dict[str, Any], path: Path, service_binary:
             "path": str(service_binary),
             "sha256": sha256_file(service_binary),
             "build_argv": contract["commands"]["build_argv"],
+            "build_environment": build_environment,
+            "go_version": go_version,
+        },
+        "storage_audit_binary": {
+            "path": str(storage_audit_binary),
+            "sha256": sha256_file(storage_audit_binary),
+            "build_argv": contract["commands"]["storage_audit_build_argv"],
             "build_environment": build_environment,
             "go_version": go_version,
         },
@@ -664,6 +703,12 @@ def validate_python_command_contract(contract: dict[str, Any]) -> None:
     ]
     exact(commands.get("build_argv"), expected_build_argv,
           "authorization service build argv")
+    expected_audit_build_argv = [
+        go_executable, "build", "-trimpath", "-buildvcs=false",
+        "-o", commands.get("storage_audit_binary"), "./cmd/treedb_column_section_audit",
+    ]
+    exact(commands.get("storage_audit_build_argv"), expected_audit_build_argv,
+          "authorization storage-audit build argv")
     exact(commands.get("build_environment"), expected_build_environment(contract),
           "authorization service build environment")
     python_commands = {
@@ -1333,8 +1378,11 @@ def validate_nonoverlapping_lifecycles(rows: list[dict[str, Any]], name: str) ->
             fail(f"{name} lifecycle order must be strictly non-overlapping")
 
 
-def validate_manifest(run_row: dict[str, Any], root: Path, manifest: dict[str, Any], contract: dict[str, Any],
-                      packet_commit: str, run_base_validator: bool) -> str:
+def validate_manifest(
+    run_row: dict[str, Any], root: Path, manifest: dict[str, Any],
+    contract: dict[str, Any], packet_commit: str, run_base_validator: bool,
+    expected_storage_audit_sha256: str,
+) -> str:
     if run_base_validator:
         harness = Path(contract["source_identity"]["gomap_root"]) / "scripts/treedb_vectordbbench_artifact.py"
         result = subprocess.run([sys.executable, str(harness), "--validate-lifecycle", str(root)], text=True,
@@ -1373,9 +1421,13 @@ def validate_manifest(run_row: dict[str, Any], root: Path, manifest: dict[str, A
           "lifecycle VectorDBBench commit")
     dataset = object_at(lifecycle.get("dataset"), "lifecycle.dataset")
     expected_dataset = run_row["dataset"]
-    exact((dataset.get("name"), dataset.get("vectors"), dataset.get("dimensions"), dataset.get("sha256")),
-          (expected_dataset["name"], expected_dataset["vectors"], expected_dataset["dimensions"],
-           expected_dataset["train_sha256"]), "lifecycle dataset")
+    exact(
+        (dataset.get("name"), dataset.get("vectors"), dataset.get("dimensions"),
+         dataset.get("sha256"), dataset.get("sha256_after")),
+        (expected_dataset["name"], expected_dataset["vectors"], expected_dataset["dimensions"],
+         expected_dataset["train_sha256"], expected_dataset["train_sha256"]),
+        "lifecycle dataset",
+    )
     harness_cfg = object_at(manifest.get("harness"), "manifest.harness")
     exact(harness_cfg.get("construction_decision_diagnostics"), True,
           "lifecycle construction-decision diagnostics")
@@ -1385,6 +1437,16 @@ def validate_manifest(run_row: dict[str, Any], root: Path, manifest: dict[str, A
         (runtime["python_executable"], runtime["python_sha256"], "off"),
         "lifecycle harness Python environment",
     )
+    audit_binary = object_at(
+        harness_cfg.get("storage_audit_binary"), "lifecycle storage-audit binary")
+    exact_keys(audit_binary, {"path", "bytes", "sha256"},
+               "lifecycle storage-audit binary")
+    exact(Path(audit_binary.get("path", "")).resolve(),
+          Path(contract["commands"]["storage_audit_binary"]).resolve(),
+          "lifecycle storage-audit binary path")
+    positive_int(audit_binary.get("bytes"), "lifecycle storage-audit binary bytes")
+    exact(full_sha(audit_binary.get("sha256"), "lifecycle storage-audit binary SHA-256", 64),
+          expected_storage_audit_sha256, "lifecycle authorized storage-audit binary")
     commands = contract["commands"]
     exact(harness_cfg.get("service_environment"),
           commands["lifecycle_service_environment"],
@@ -1781,8 +1843,11 @@ def measurement_source_values(
 
 
 
-def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: str,
-                 run_base_validator: bool, authorized_helper_sha256: str) -> dict[str, Any]:
+def validate_run(
+    row: dict[str, Any], contract: dict[str, Any], packet_commit: str,
+    run_base_validator: bool, authorized_helper_sha256: str,
+    authorized_storage_audit_sha256: str,
+) -> dict[str, Any]:
     exact_keys(row, RUN_KEYS, "run")
     if not isinstance(row["run_id"], str) or not row["run_id"]:
         fail("run.run_id must be a non-empty string")
@@ -1808,9 +1873,10 @@ def validate_run(row: dict[str, Any], contract: dict[str, Any], packet_commit: s
     full_sha(artifact["manifest_sha256"], "run.artifact.manifest_sha256", 64)
     exact(sha256_file(manifest_path), artifact["manifest_sha256"], "artifact manifest SHA-256")
     manifest = object_at(json.loads(manifest_path.read_text()), "manifest")
-    service_binary_sha256 = validate_manifest(
-        row, root, manifest, contract, packet_commit, run_base_validator)
     construction_decisions, producer_phases = validate_construction_evidence(root, manifest)
+    service_binary_sha256 = validate_manifest(
+        row, root, manifest, contract, packet_commit, run_base_validator,
+        authorized_storage_audit_sha256)
     timing = lifecycle_timing(root, manifest)
     isolation, _ = read_bound_json(root, row["isolation_evidence"], "run.isolation_evidence")
     exact_keys(isolation, ISOLATION_KEYS, "isolation")
@@ -2010,7 +2076,8 @@ def validate_decision(packet: dict[str, Any], contract: dict[str, Any], *, run_b
     validated = [
         validate_run(
             object_at(row, f"runs[{index}]"), contract, commit, run_base_validator,
-            authorization["protocol_files"][SEARCH_HELPER_PATH])
+            authorization["protocol_files"][SEARCH_HELPER_PATH],
+            authorization["storage_audit_binary_sha256"])
         for index, row in enumerate(runs)
     ]
     binary_digests = {item["service_binary_sha256"] for item in validated}
@@ -2167,6 +2234,7 @@ def main() -> int:
                         help="external authorization path; defaults to commands.authorization_manifest")
     parser.add_argument("--generate-authorization", type=Path)
     parser.add_argument("--service-binary", type=Path)
+    parser.add_argument("--storage-audit-binary", type=Path)
     parser.add_argument("--reviewed-head")
     parser.add_argument("--generate-winner-selection", type=Path)
     parser.add_argument("--screening-runs", type=Path)
@@ -2178,15 +2246,18 @@ def main() -> int:
         if args.generate_authorization:
             if (args.draft or args.decision or args.authorization or args.print_screening_commands
                     or args.generate_winner_selection or args.screening_runs
-                    or not args.service_binary or not args.reviewed_head):
-                fail("--generate-authorization requires --service-binary and --reviewed-head only")
+                    or not args.service_binary or not args.storage_audit_binary
+                    or not args.reviewed_head):
+                fail("--generate-authorization requires --service-binary, --storage-audit-binary, and --reviewed-head only")
             generated = generate_authorization(
-                contract, args.generate_authorization, args.service_binary, args.reviewed_head)
+                contract, args.generate_authorization, args.service_binary,
+                args.storage_audit_binary, args.reviewed_head)
             print(json.dumps({"authorization": generated}, indent=2, sort_keys=True))
             return 0
         if args.generate_winner_selection:
             if (args.draft or args.decision or args.print_screening_commands or args.service_binary
-                    or args.reviewed_head or not args.authorization or not args.screening_runs):
+                    or args.storage_audit_binary or args.reviewed_head
+                    or not args.authorization or not args.screening_runs):
                 fail("--generate-winner-selection requires --authorization and --screening-runs only")
             validate_contract(contract, False, args.authorization)
             binding = generate_winner_selection(

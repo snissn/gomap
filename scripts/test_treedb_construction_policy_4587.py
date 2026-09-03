@@ -88,6 +88,22 @@ class DecisionFixture:
             "build", "-trimpath", "-buildvcs=false", "-o",
             commands["binary"], "./cmd/treedb-document-service",
         ]
+        self.storage_audit_binary = root / "treedb-column-section-audit"
+        self.storage_audit_binary.write_bytes(b"fixture storage audit binary\n")
+        self.storage_audit_binary_sha = policy.sha256_file(self.storage_audit_binary)
+        commands["storage_audit_binary"] = str(self.storage_audit_binary.resolve())
+        commands["storage_audit_build_argv"] = [
+            self.contract["source_identity"]["runtime"]["go_executable"],
+            "build", "-trimpath", "-buildvcs=false", "-o",
+            commands["storage_audit_binary"], "./cmd/treedb_column_section_audit",
+        ]
+        authorization_argv = commands["authorization_generate_argv_template"]
+        authorization_argv[authorization_argv.index("--service-binary") + 1] = commands["binary"]
+        authorization_argv[authorization_argv.index("--storage-audit-binary") + 1] = (
+            commands["storage_audit_binary"])
+        lifecycle_argv[lifecycle_argv.index("--service-bin") + 1] = commands["binary"]
+        lifecycle_argv[lifecycle_argv.index("--storage-audit-bin") + 1] = (
+            commands["storage_audit_binary"])
         commands["build_environment"] = policy.expected_build_environment(self.contract)
         self.authorization_path = root / "execution-authorization.json"
         self.reset_authorization()
@@ -114,6 +130,13 @@ class DecisionFixture:
                 "path": str(self.service_binary.resolve()),
                 "sha256": self.binary_sha,
                 "build_argv": self.contract["commands"]["build_argv"],
+                "build_environment": self.contract["commands"]["build_environment"],
+                "go_version": f"go version {self.contract['source_identity']['runtime']['go']}",
+            },
+            "storage_audit_binary": {
+                "path": str(self.storage_audit_binary.resolve()),
+                "sha256": self.storage_audit_binary_sha,
+                "build_argv": self.contract["commands"]["storage_audit_build_argv"],
                 "build_environment": self.contract["commands"]["build_environment"],
                 "go_version": f"go version {self.contract['source_identity']['runtime']['go']}",
             },
@@ -346,6 +369,7 @@ class DecisionFixture:
                     "vectors": dataset["vectors"],
                     "dimensions": dataset["dimensions"],
                     "sha256": dataset["train_sha256"],
+                    "sha256_after": dataset["train_sha256"],
                 },
             },
             "harness": {
@@ -356,6 +380,11 @@ class DecisionFixture:
                 "python_executable": self.contract["source_identity"]["runtime"]["python_executable"],
                 "python_sha256": self.contract["source_identity"]["runtime"]["python_sha256"],
                 "use_uv": "off",
+                "storage_audit_binary": {
+                    "path": str(self.storage_audit_binary.resolve()),
+                    "bytes": self.storage_audit_binary.stat().st_size,
+                    "sha256": self.storage_audit_binary_sha,
+                },
                 "service_environment": self.contract[
                     "commands"]["lifecycle_service_environment"],
                 "vdbbench_environments": {
@@ -1074,6 +1103,13 @@ class ValidatorMutations(unittest.TestCase):
             "build", "-trimpath", "-buildvcs=false", "-o", str(service_binary),
             "./cmd/treedb-document-service",
         ]
+        storage_audit_binary = self.fixture.root / "built-storage-audit"
+        contract["commands"]["storage_audit_binary"] = str(storage_audit_binary)
+        contract["commands"]["storage_audit_build_argv"] = [
+            contract["source_identity"]["runtime"]["go_executable"],
+            "build", "-trimpath", "-buildvcs=false", "-o", str(storage_audit_binary),
+            "./cmd/treedb_column_section_audit",
+        ]
         contract["commands"]["build_environment"] = policy.expected_build_environment(contract)
         calls = []
 
@@ -1094,6 +1130,10 @@ class ValidatorMutations(unittest.TestCase):
                 self.assertEqual(env, contract["commands"]["build_environment"])
                 service_binary.write_bytes(b"binary built by frozen command\n")
                 return ""
+            if argv == tuple(contract["commands"]["storage_audit_build_argv"]):
+                self.assertEqual(env, contract["commands"]["build_environment"])
+                storage_audit_binary.write_bytes(b"audit binary built by frozen command\n")
+                return ""
             raise AssertionError(f"unexpected command: {argv}")
 
         authorization_path = self.fixture.root / "generated-authorization.json"
@@ -1101,9 +1141,13 @@ class ValidatorMutations(unittest.TestCase):
             policy, "run", side_effect=execute
         ):
             generated = policy.generate_authorization(
-                contract, authorization_path, service_binary, COMMIT)
+                contract, authorization_path, service_binary, storage_audit_binary, COMMIT)
         self.assertIn(
             (tuple(contract["commands"]["build_argv"]),
+             contract["commands"]["build_environment"]),
+            calls)
+        self.assertIn(
+            (tuple(contract["commands"]["storage_audit_build_argv"]),
              contract["commands"]["build_environment"]),
             calls)
         verify_call = (
@@ -1117,6 +1161,9 @@ class ValidatorMutations(unittest.TestCase):
         self.assertEqual(generated["execution_commit"], COMMIT)
         self.assertEqual(
             generated["service_binary_sha256"], policy.sha256_file(service_binary))
+        self.assertEqual(
+            generated["storage_audit_binary_sha256"],
+            policy.sha256_file(storage_audit_binary))
 
     def test_partition_rows_must_match_canonical_ordinals(self) -> None:
         import pyarrow as arrow
@@ -1225,6 +1272,15 @@ class ValidatorMutations(unittest.TestCase):
                 "build_environment"].update({"GOFLAGS": "-overlay=/tmp/unreviewed.json"})),
             ("authorization Go toolchain version", lambda value: value["service_binary"].update(
                 {"go_version": "go version go1.25.0 linux/amd64"})),
+            ("authorized storage-audit binary SHA-256", lambda value: value["storage_audit_binary"].update(
+                {"sha256": "0" * 64})),
+            ("authorization storage-audit build argv", lambda value: value["storage_audit_binary"][
+                "build_argv"].append("-race")),
+            ("authorization storage-audit build environment", lambda value: value["storage_audit_binary"][
+                "build_environment"].update({"GOFLAGS": "-overlay=/tmp/unreviewed.json"})),
+            ("authorization storage-audit Go toolchain version",
+             lambda value: value["storage_audit_binary"].update(
+                 {"go_version": "go version go1.25.0 linux/amd64"})),
         ]
         for pattern, mutate in mutations:
             with self.subTest(pattern=pattern):

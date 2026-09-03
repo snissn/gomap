@@ -412,6 +412,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         "dataset": {
             "name": "cohere-50k",
             "sha256": harness.sha256_file(dataset_path),
+            "sha256_after": harness.sha256_file(dataset_path),
             "dimensions": 768,
             "vectors": 50_000,
         },
@@ -2196,6 +2197,7 @@ class LifecycleValidatorTest(unittest.TestCase):
             manifest["vdbbench"][0]["load_metrics"] = metrics
             set_fixture_vdbbench_command(manifest, "exact")
             manifest["lifecycle"]["dataset"]["sha256"] = harness.sha256_file(dataset_file)
+            manifest["lifecycle"]["dataset"]["sha256_after"] = harness.sha256_file(dataset_file)
             manifest["lifecycle"]["task_config_binding"] = {
                 key: metrics[key] for key in ("result_file", "result_sha256", "task_config_sha256")
             }
@@ -2204,6 +2206,14 @@ class LifecycleValidatorTest(unittest.TestCase):
 
             got = harness.validate_lifecycle_artifact(root)
             self.assertTrue(got["complete"], got)
+            dataset_file.write_bytes(b"mutated after load")
+            tampered = harness.validate_lifecycle_artifact(root)
+            self.assertFalse(tampered["analyzable"], tampered)
+            self.assertTrue(
+                any("dataset checksum" in error for error in tampered["errors"]),
+                tampered,
+            )
+            dataset_file.write_bytes(b"cohere vectors")
 
             sidecar = root / "adapter-lifecycle.jsonl"
             records = [json.loads(line) for line in sidecar.read_text(encoding="utf-8").splitlines()]

@@ -658,7 +658,15 @@ def build_service(state: HarnessState, gomap_root: Path, service_bin: str | None
     return bin_path
 
 
-def build_storage_audit(state: HarnessState, gomap_root: Path) -> Path:
+def build_storage_audit(
+    state: HarnessState, gomap_root: Path, storage_audit_bin: str | None,
+) -> Path:
+    if storage_audit_bin:
+        path = Path(storage_audit_bin).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(
+                f"TREEDB_VDBBENCH_STORAGE_AUDIT_BIN does not exist: {path}")
+        return path
     bin_path = state.root / "bin" / "treedb-column-section-audit"
     bin_path.parent.mkdir(parents=True, exist_ok=True)
     run_command(
@@ -1868,6 +1876,14 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     dataset_sha256 = dataset.get("sha256")
     if not isinstance(dataset_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", dataset_sha256):
         errors.append("lifecycle.dataset.sha256 must be a lowercase SHA-256")
+    dataset_sha256_after = dataset.get("sha256_after")
+    if (lifecycle.get("result_status") == "completed"
+            and (not isinstance(dataset_sha256_after, str)
+                 or not re.fullmatch(r"[0-9a-f]{64}", dataset_sha256_after))):
+        errors.append("completed lifecycle.dataset.sha256_after must be a lowercase SHA-256")
+    if (isinstance(dataset_sha256_after, str)
+            and dataset_sha256_after != dataset_sha256):
+        errors.append("lifecycle dataset changed during VectorDBBench load")
     dimensions = _nonnegative_int(dataset.get("dimensions"), "lifecycle.dataset.dimensions", errors)
     if dimensions == 0:
         errors.append("lifecycle.dataset.dimensions must be positive")
@@ -4348,6 +4364,10 @@ def complete_lifecycle(
     expected_rows, dimensions = lifecycle_dataset_shape(args)
     if adapter["client_sent"] != expected_rows or adapter["server_accepted"] != expected_rows:
         raise RuntimeError(f"adapter lifecycle counts do not equal expected rows: {adapter}")
+    dataset_sha256_after = sha256_file(args.lifecycle_dataset_file)
+    state.lifecycle["dataset"]["sha256_after"] = dataset_sha256_after
+    if dataset_sha256_after != state.lifecycle["dataset"]["sha256"]:
+        raise RuntimeError("lifecycle dataset changed during VectorDBBench load")
     task_config_binding = bind_lifecycle_task_config(
         state, args, expected_rows, dimensions
     )
@@ -4724,6 +4744,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--profile", default=env_text("TREEDB_VDBBENCH_PROFILE", "command_wal_durable"))
     parser.add_argument("--service-bin", default=os.environ.get("TREEDB_VDBBENCH_SERVICE_BIN", ""), help="existing treedb-document-service binary")
     parser.add_argument(
+        "--storage-audit-bin",
+        default=os.environ.get("TREEDB_VDBBENCH_STORAGE_AUDIT_BIN", ""),
+        help="existing authorized treedb-column-section-audit binary",
+    )
+    parser.add_argument(
         "--construction-decision-diagnostics",
         action="store_true",
         help="enable service construction-decision diagnostics for every launch",
@@ -4862,6 +4887,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     if not python_path.is_file():
         parser.error(f"python executable is not a regular file: {python_path}")
     args.python = str(python_path)
+    if args.storage_audit_bin:
+        storage_audit_path = Path(args.storage_audit_bin).expanduser().resolve()
+        if not storage_audit_path.is_file():
+            parser.error(f"storage-audit binary is not a regular file: {storage_audit_path}")
+        args.storage_audit_bin = str(storage_audit_path)
     args.out = Path(args.out).expanduser().resolve()
     args.validate_lifecycle = None
     args.vectordbbench_dir = Path(args.vectordbbench_dir).expanduser().resolve() if args.vectordbbench_dir else None
@@ -5013,7 +5043,10 @@ def main(argv: list[str]) -> int:
     try:
         service_bin = build_service(state, gomap_root, args.service_bin or None)
         state.service_binary = file_identity(service_bin)
-        storage_audit_bin = build_storage_audit(state, gomap_root) if args.lifecycle else None
+        storage_audit_bin = (
+            build_storage_audit(state, gomap_root, args.storage_audit_bin or None)
+            if args.lifecycle else None
+        )
         state.storage_audit_binary = file_identity(storage_audit_bin) if storage_audit_bin else None
         service_proc, health, service_command = start_service(
             state,

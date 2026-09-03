@@ -226,6 +226,8 @@
     "authorization_manifest": "/mnt/fast4tb/treedb-4587-c0-evidence/execution-authorization.json",
     "binary": "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
     "build_argv": ["/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin/go", "build", "-trimpath", "-buildvcs=false", "-o", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service", "./cmd/treedb-document-service"],
+    "storage_audit_binary": "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-column-section-audit",
+    "storage_audit_build_argv": ["/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin/go", "build", "-trimpath", "-buildvcs=false", "-o", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-column-section-audit", "./cmd/treedb_column_section_audit"],
     "build_environment": {
       "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin",
       "GOROOT": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64",
@@ -255,6 +257,7 @@
       "docs/benchmarks/treedb_construction_policy_c0_4587.json",
       "--generate-authorization", "/mnt/fast4tb/treedb-4587-c0-evidence/execution-authorization.json",
       "--service-binary", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
+      "--storage-audit-binary", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-column-section-audit",
       "--reviewed-head", "{final_reviewed_head}"
     ],
     "authorized_preflight_argv": [
@@ -288,6 +291,7 @@
       "--out", "{artifact_root}",
       "--vectordbbench-dir", "/mnt/fast4tb/codex-vectordbbench-4545",
       "--service-bin", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
+      "--storage-audit-bin", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-column-section-audit",
       "--run-tests", "off", "--run-vdbbench", "--rows", "scalar", "--lifecycle",
       "--construction-decision-diagnostics",
       "--measurement-run-id", "{run_id}",
@@ -391,7 +395,7 @@
   },
   "execution_authorization_schema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "$id": "treedb-construction-policy-4587-execution-authorization/v2",
+    "$id": "treedb-construction-policy-4587-execution-authorization/v3",
     "type": "object",
     "additionalProperties": false,
     "required": [
@@ -402,11 +406,12 @@
       "contract_sha256",
       "protocol_files",
       "source_identity",
-      "service_binary"
+      "service_binary",
+      "storage_audit_binary"
     ],
     "properties": {
       "schema_version": {
-        "const": "treedb-construction-policy-4587-execution-authorization/v2"
+        "const": "treedb-construction-policy-4587-execution-authorization/v3"
       },
       "authorization_kind": {
         "const": "COORDINATOR_REVIEW_PROVENANCE"
@@ -499,6 +504,31 @@
         ]
       },
       "service_binary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "build_argv", "build_environment", "go_version"],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "build_argv": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "build_environment": {
+            "type": "object",
+            "additionalProperties": {"type": "string"}
+          },
+          "go_version": {
+            "const": "go version go1.26.0 linux/amd64"
+          }
+        }
+      },
+      "storage_audit_binary": {
         "type": "object",
         "additionalProperties": false,
         "required": ["path", "sha256", "build_argv", "build_environment", "go_version"],
