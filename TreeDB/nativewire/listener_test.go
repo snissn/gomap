@@ -189,6 +189,28 @@ func TestServerRejectsOversizedResponseFrameBeforeWrite(t *testing.T) {
 	}
 }
 
+func TestServerBufferedResponseScratchBoundsCapacity(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	state := &connState{}
+	var output bytes.Buffer
+
+	small := make([]byte, maxBufferedWriteFrameBody)
+	if err := server.writeSimpleFrameBuffered(&output, state, iwire.Header{Type: iwire.FrameResponse}, small); err != nil {
+		t.Fatalf("write small response: %v", err)
+	}
+	if len(state.responseBody) != 0 || cap(state.responseBody) != maxBufferedWriteFrameBody {
+		t.Fatalf("small response scratch=%d/%d want 0/%d", len(state.responseBody), cap(state.responseBody), maxBufferedWriteFrameBody)
+	}
+
+	large := make([]byte, maxBufferedWriteFrameBody+1)
+	if err := server.writeSimpleFrameBuffered(&output, state, iwire.Header{Type: iwire.FrameResponse}, large); err != nil {
+		t.Fatalf("write large response: %v", err)
+	}
+	if state.responseBody != nil {
+		t.Fatalf("retained oversized response scratch cap=%d", cap(state.responseBody))
+	}
+}
+
 func TestInProcessRoundTripRejectsOversizedRequestFrame(t *testing.T) {
 	maxFrameSize := uint64(iwire.FrameHeaderLenV1) + 128
 	server := NewServer(ServerOptions{Limits: iwire.Limits{MaxFrameSize: maxFrameSize}})

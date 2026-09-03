@@ -381,17 +381,17 @@ func TestClearDenseVectorSearchScratchReleasesPointers(t *testing.T) {
 	}
 }
 
-func TestRetainDensePayloadScratchBoundsCapacity(t *testing.T) {
+func TestRetainSmallPayloadScratchBoundsCapacity(t *testing.T) {
 	client := Client{
 		denseRequest: make([]byte, 1, maxRetainedGetManyPayloadBytes),
 		requestBody:  make([]byte, 1, maxRetainedGetManyPayloadBytes),
 	}
-	client.denseRequest = retainDensePayloadScratch(client.denseRequest)
-	client.requestBody = retainDensePayloadScratch(client.requestBody)
+	client.denseRequest = retainSmallPayloadScratch(client.denseRequest)
+	client.requestBody = retainSmallPayloadScratch(client.requestBody)
 	if len(client.denseRequest) != 0 || cap(client.denseRequest) != maxRetainedGetManyPayloadBytes || len(client.requestBody) != 0 || cap(client.requestBody) != maxRetainedGetManyPayloadBytes {
 		t.Fatalf("threshold scratch retained dense=%d/%d body=%d/%d", len(client.denseRequest), cap(client.denseRequest), len(client.requestBody), cap(client.requestBody))
 	}
-	if got := retainDensePayloadScratch(make([]byte, 1, maxRetainedGetManyPayloadBytes+1)); got != nil {
+	if got := retainSmallPayloadScratch(make([]byte, 1, maxRetainedGetManyPayloadBytes+1)); got != nil {
 		t.Fatalf("oversized payload retained cap=%d", cap(got))
 	}
 }

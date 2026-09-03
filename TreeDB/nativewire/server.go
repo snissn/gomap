@@ -728,9 +728,6 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 				return s.writeError(w, header, err)
 			}
 			s.counters.incRequestsCompleted()
-			if state != nil {
-				state.responseBody = responseBody[:0]
-			}
 			requestErr = s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
 			return requestErr
 		} else if err != nil {
@@ -841,9 +838,6 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		}
 	}
 	s.counters.incRequestsCompleted()
-	if state != nil {
-		state.responseBody = responseBody[:0]
-	}
 	requestErr = s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
 	return requestErr
 }
@@ -1010,6 +1004,9 @@ func (s *Server) writeSimpleFrameBuffered(w io.Writer, state *connState, header 
 		state.writeBody, err = writeFrameBuffered(w, header, body, state.writeBody)
 	} else {
 		err = writeFrame(w, header, body)
+	}
+	if state != nil {
+		state.responseBody = retainSmallPayloadScratch(body)
 	}
 	if err != nil {
 		return err
