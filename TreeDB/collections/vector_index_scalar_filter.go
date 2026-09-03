@@ -423,6 +423,14 @@ type nativeScalarFilterExecution struct {
 	exactScoring         bool
 }
 
+// nativeScalarBoundMatcher holds the immutable columns for one graph plane.
+// Keeping the map lookup out of the row loop is material for broad ANN walks.
+type nativeScalarBoundMatcher struct {
+	plan     *nativeScalarFilterExecution
+	columns  [4]vectorIndexScalarColumn
+	overflow []vectorIndexScalarColumn
+}
+
 type nativeScalarPlanCacheKey struct {
 	vectorIndex       *VectorIndex
 	sourceGeneration  uint64
@@ -699,18 +707,30 @@ func (c *Collection) nativeScalarPlanCachePut(key nativeScalarPlanCacheKey, plan
 	return cloneNativeScalarPlanForQuery(plan), c.nativeScalarPlanCacheSnapshotLocked(stats)
 }
 
-func (p *nativeScalarFilterExecution) matches(columns map[string]vectorIndexScalarColumn, row int, id []byte) bool {
-	if p == nil {
+func (m *nativeScalarBoundMatcher) matches(row int, id []byte) bool {
+	if m.plan == nil {
 		return true
 	}
-	if p.finiteIDs != nil {
-		if _, ok := p.finiteIDs[string(id)]; !ok {
+	if m.plan.finiteIDs != nil {
+		if _, ok := m.plan.finiteIDs[string(id)]; !ok {
 			return false
 		}
 	}
-	for _, clause := range p.clauses {
-		column, ok := columns[clause.indexName]
-		if !ok || column.rows <= row {
+	return m.matchesKnownFinite(row)
+}
+
+func (m *nativeScalarBoundMatcher) matchesKnownFinite(row int) bool {
+	if m.plan == nil {
+		return true
+	}
+	for i, clause := range m.plan.clauses {
+		var column vectorIndexScalarColumn
+		if i < len(m.columns) {
+			column = m.columns[i]
+		} else {
+			column = m.overflow[i-len(m.columns)]
+		}
+		if column.rows <= row {
 			return false
 		}
 		if !clause.matches(column.value(row)) {
@@ -1030,7 +1050,7 @@ func (idx *VectorIndex) searchGraphOnlyWithNativeScalarFilterBuffer(query []floa
 	}
 	return results, state, work, err
 }
-func (p *nativeScalarFilterExecution) refineMixed(view *vectorIndexSearchView) {
+func (p *nativeScalarFilterExecution) refineMixed(view *vectorIndexSearchView, base, delta *nativeScalarBoundMatcher) {
 	if p == nil || p.identity != NativeScalarFilterPlanMixed {
 		return
 	}
@@ -1038,12 +1058,12 @@ func (p *nativeScalarFilterExecution) refineMixed(view *vectorIndexSearchView) {
 		matched := false
 		if nodeID, ok := view.deltaCurrentNode[id]; ok && nodeID >= 0 && nodeID < len(view.deltaNodes) {
 			node := &view.deltaNodes[nodeID]
-			matched = !node.deleted && p.matches(view.deltaScalarColumns, nodeID, node.documentID)
+			matched = !node.deleted && delta.matchesKnownFinite(nodeID)
 		}
 		if !matched {
 			if nodeID, ok := view.currentNode[id]; ok && nodeID >= 0 && nodeID < len(view.nodes) {
 				node := &view.nodes[nodeID]
-				matched = !node.deleted && p.matches(view.scalarColumns, nodeID, node.documentID)
+				matched = !node.deleted && base.matchesKnownFinite(nodeID)
 			}
 		}
 		if !matched {
@@ -1055,31 +1075,47 @@ func (p *nativeScalarFilterExecution) refineMixed(view *vectorIndexSearchView) {
 	p.exactScoring = len(p.finiteIDs) <= nativeScalarExactSafetyCap
 }
 
-func (view *vectorIndexSearchView) validateNativeScalarColumns(plan *nativeScalarFilterExecution) error {
-	for _, clause := range plan.clauses {
-		column, ok := view.scalarColumns[clause.indexName]
-		if !ok || column.rows != len(view.nodes) {
-			return fmt.Errorf("%w: native scalar base column %q is missing or misaligned", ErrVectorIndexSearchUnavailable, clause.indexName)
+func bindNativeScalarMatcher(plan *nativeScalarFilterExecution, columns map[string]vectorIndexScalarColumn, rows int, plane string) (nativeScalarBoundMatcher, error) {
+	matcher := nativeScalarBoundMatcher{plan: plan}
+	for i, clause := range plan.clauses {
+		column, ok := columns[clause.indexName]
+		if !ok || column.rows != rows {
+			return nativeScalarBoundMatcher{}, fmt.Errorf("%w: native scalar %s column %q is missing or misaligned", ErrVectorIndexSearchUnavailable, plane, clause.indexName)
 		}
-		if len(view.deltaNodes) > 0 {
-			delta, ok := view.deltaScalarColumns[clause.indexName]
-			if !ok || delta.rows != len(view.deltaNodes) {
-				return fmt.Errorf("%w: native scalar delta column %q is missing or misaligned", ErrVectorIndexSearchUnavailable, clause.indexName)
-			}
+		if i < len(matcher.columns) {
+			matcher.columns[i] = column
+		} else {
+			matcher.overflow = append(matcher.overflow, column)
 		}
 	}
-	return nil
+	return matcher, nil
+}
+
+func (view *vectorIndexSearchView) bindNativeScalarMatchers(plan *nativeScalarFilterExecution) (nativeScalarBoundMatcher, nativeScalarBoundMatcher, error) {
+	base, err := bindNativeScalarMatcher(plan, view.scalarColumns, len(view.nodes), "base")
+	if err != nil {
+		return nativeScalarBoundMatcher{}, nativeScalarBoundMatcher{}, err
+	}
+	if len(view.deltaNodes) == 0 {
+		return base, nativeScalarBoundMatcher{}, nil
+	}
+	delta, err := bindNativeScalarMatcher(plan, view.deltaScalarColumns, len(view.deltaNodes), "delta")
+	if err != nil {
+		return nativeScalarBoundMatcher{}, nativeScalarBoundMatcher{}, err
+	}
+	return base, delta, nil
 }
 
 func (view *vectorIndexSearchView) searchWithNativeScalarFilterBuffer(query []float32, topK, efSearch int, plan *nativeScalarFilterExecution, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, nativeScalarSearchWork, error) {
 	if !view.sourceDocumentRootsValid {
 		return nil, nativeScalarSearchWork{}, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, view.name)
 	}
-	if err := view.validateNativeScalarColumns(plan); err != nil {
+	baseMatcher, deltaMatcher, err := view.bindNativeScalarMatchers(plan)
+	if err != nil {
 		return nil, nativeScalarSearchWork{}, err
 	}
 	queryNorm, preparedQuery, preparedCosine, err := prepareVectorIndexGraphOnlyQuery(query, view.metric, view.dimensions)
-	plan.refineMixed(view)
+	plan.refineMixed(view, &baseMatcher, &deltaMatcher)
 	if err != nil {
 		return nil, nativeScalarSearchWork{}, err
 	}
@@ -1091,15 +1127,15 @@ func (view *vectorIndexSearchView) searchWithNativeScalarFilterBuffer(query []fl
 		rows: nativeScalarANNSeedProbeLimit, scores: nativeScalarANNSeedLimit, planesRemaining: 1,
 	}
 	if len(view.deltaNodes) == 0 {
-		results, work, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.scalarColumns, view.currentNode, plan, view, plan.exact(), &seedBudget, &buffer.nativeSearchScratch, &buffer.results, &buffer.idBytes)
+		results, work, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, &baseMatcher, view.currentNode, plan, view, plan.exact(), &seedBudget, &buffer.nativeSearchScratch, &buffer.results, &buffer.idBytes)
 		return results, work, err
 	}
 	seedBudget.planesRemaining = 2
-	base, baseWork, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.scalarColumns, view.currentNode, plan, view, plan.exact(), &seedBudget, &buffer.nativeSearchScratch, &buffer.baseResults, &buffer.baseIDBytes)
+	base, baseWork, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, &baseMatcher, view.currentNode, plan, view, plan.exact(), &seedBudget, &buffer.nativeSearchScratch, &buffer.baseResults, &buffer.baseIDBytes)
 	if err != nil {
 		return nil, baseWork, err
 	}
-	delta, deltaWork, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaScalarColumns, view.deltaCurrentNode, plan, view, plan.exact(), &seedBudget, &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
+	delta, deltaWork, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, &deltaMatcher, view.deltaCurrentNode, plan, view, plan.exact(), &seedBudget, &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
 	if err != nil {
 		return nil, baseWork, err
 	}
@@ -1115,7 +1151,7 @@ func (view *vectorIndexSearchView) searchWithNativeScalarFilterBuffer(query []fl
 	return merged, work, err
 }
 
-func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, nodes []vectorIndexNode, entry, maxLevel int, columns map[string]vectorIndexScalarColumn, currentNode map[string]int, plan *nativeScalarFilterExecution, view *vectorIndexSearchView, exact bool, seedBudget *nativeScalarSeedBudget, scratch *vectorIndexSearchScratch, results *[]VectorIndexSearchResult, resultIDBytes *[]byte) ([]VectorIndexSearchResult, nativeScalarSearchWork, error) {
+func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, nodes []vectorIndexNode, entry, maxLevel int, matcher *nativeScalarBoundMatcher, currentNode map[string]int, plan *nativeScalarFilterExecution, view *vectorIndexSearchView, exact bool, seedBudget *nativeScalarSeedBudget, scratch *vectorIndexSearchScratch, results *[]VectorIndexSearchResult, resultIDBytes *[]byte) ([]VectorIndexSearchResult, nativeScalarSearchWork, error) {
 	runtimeIndex := VectorIndex{metric: view.metric, encoding: view.encoding, dimensions: view.dimensions, m: view.m, efSearch: view.efSearch, nodes: nodes, entry: entry, maxLevel: maxLevel}
 	var candidates []vectorIndexCandidate
 	work := nativeScalarSearchWork{}
@@ -1132,7 +1168,7 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 				continue
 			}
 			node := &nodes[nodeID]
-			if node.deleted || !plan.matches(columns, nodeID, node.documentID) {
+			if node.deleted || !matcher.matches(nodeID, node.documentID) {
 				continue
 			}
 			work.visited++
@@ -1154,7 +1190,7 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 		scratch.out = candidates
 	} else {
 		var err error
-		candidates, work, err = runtimeIndex.searchNativeScalarCandidatesLocked(query, queryNorm, prepared, topK, efSearch, columns, currentNode, plan, seedBudget, scratch)
+		candidates, work, err = runtimeIndex.searchNativeScalarCandidatesLocked(query, queryNorm, prepared, topK, efSearch, matcher, currentNode, plan, seedBudget, scratch)
 		if err != nil {
 			return nil, work, err
 		}
@@ -1162,7 +1198,7 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 	matched, idBytes := 0, 0
 	for _, candidate := range candidates {
 		node := nodes[candidate.nodeID]
-		if node.deleted || !plan.matches(columns, candidate.nodeID, node.documentID) {
+		if node.deleted || !matcher.matches(candidate.nodeID, node.documentID) {
 			continue
 		}
 		var err error
@@ -1177,7 +1213,7 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 	resultRow, offset := 0, 0
 	for _, candidate := range candidates {
 		node := nodes[candidate.nodeID]
-		if node.deleted || !plan.matches(columns, candidate.nodeID, node.documentID) {
+		if node.deleted || !matcher.matches(candidate.nodeID, node.documentID) {
 			continue
 		}
 		next := offset + len(node.documentID)
@@ -1192,7 +1228,7 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 	return *results, work, nil
 }
 
-func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, columns map[string]vectorIndexScalarColumn, currentNode map[string]int, plan *nativeScalarFilterExecution, seedBudget *nativeScalarSeedBudget, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, nativeScalarSearchWork, error) {
+func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, matcher *nativeScalarBoundMatcher, currentNode map[string]int, plan *nativeScalarFilterExecution, seedBudget *nativeScalarSeedBudget, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, nativeScalarSearchWork, error) {
 	work := nativeScalarSearchWork{}
 	if idx.entry < 0 || len(idx.nodes) == 0 || topK <= 0 {
 		return nil, work, nil
@@ -1249,7 +1285,7 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 				continue
 			}
 			node := &idx.nodes[nodeID]
-			if node.deleted || !plan.matches(columns, nodeID, node.documentID) {
+			if node.deleted || !matcher.matches(nodeID, node.documentID) {
 				continue
 			}
 			visited[nodeID] = mark
@@ -1279,7 +1315,7 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 				seedBudget.rows--
 				planeRowsRemaining--
 				node := &idx.nodes[nodeID]
-				if node.deleted || !plan.matches(columns, nodeID, node.documentID) {
+				if node.deleted || !matcher.matches(nodeID, node.documentID) {
 					continue
 				}
 				clusterStart := nodeID
@@ -1289,7 +1325,7 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 					seedBudget.rows--
 					planeRowsRemaining--
 					previousNode := &idx.nodes[previous]
-					if previousNode.deleted || !plan.matches(columns, previous, previousNode.documentID) {
+					if previousNode.deleted || !matcher.matches(previous, previousNode.documentID) {
 						break
 					}
 					clusterStart = previous
@@ -1307,7 +1343,7 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 						planeRowsRemaining--
 					}
 					candidateNode := &idx.nodes[candidateID]
-					if candidateNode.deleted || !plan.matches(columns, candidateID, candidateNode.documentID) {
+					if candidateNode.deleted || !matcher.matches(candidateID, candidateNode.documentID) {
 						break
 					}
 					if visited[candidateID] == mark {
@@ -1358,7 +1394,7 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 			queue.push(entryCandidate)
 			navigation.pushBounded(entryCandidate, explorationLimit)
 			node := &idx.nodes[entryPoint]
-			if !node.deleted && plan.matches(columns, entryPoint, node.documentID) {
+			if !node.deleted && matcher.matches(entryPoint, node.documentID) {
 				eligible.pushBounded(entryCandidate, topK)
 			}
 		}
@@ -1390,7 +1426,7 @@ search:
 				navigation.pushBounded(candidate, explorationLimit)
 			}
 			node := &idx.nodes[nodeID]
-			if !node.deleted && plan.matches(columns, nodeID, node.documentID) {
+			if !node.deleted && matcher.matches(nodeID, node.documentID) {
 				eligible.pushBounded(candidate, topK)
 			}
 		}
