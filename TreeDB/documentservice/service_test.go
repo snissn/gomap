@@ -1944,6 +1944,95 @@ func TestServiceDenseNativeRuntimeSearchMaterializesOneStableSnapshot(t *testing
 	}
 }
 
+type cancelAfterContextChecks struct {
+	context.Context
+	checks, cancelAfter int
+}
+
+func (ctx *cancelAfterContextChecks) Err() error {
+	ctx.checks++
+	if ctx.checks >= ctx.cancelAfter {
+		return context.Canceled
+	}
+	return nil
+}
+
+type cancelDuringMaterializationContext struct {
+	context.Context
+	armed               bool
+	checks, cancelAfter int
+}
+
+func (ctx *cancelDuringMaterializationContext) Err() error {
+	if !ctx.armed {
+		return nil
+	}
+	ctx.checks++
+	if ctx.checks >= ctx.cancelAfter {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestServiceDenseNativeRuntimeSearchStopsDuringTraversal(t *testing.T) {
+	base := context.Background()
+	svc, db := newTestService(t)
+	defer db.Close()
+	create := CreateIndexRequest{
+		Name:               "native_cancel",
+		Dimension:          2,
+		Metric:             MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
+	}
+	if _, err := svc.CreateIndex(base, create); err != nil {
+		t.Fatal(err)
+	}
+	docs := make([]Document, 128)
+	for i := range docs {
+		docs[i] = Document{ID: fmt.Sprintf("doc-%03d", i), Content: "document", Embedding: []float32{1, float32(i + 1)}}
+	}
+	if _, err := svc.UpsertDocuments(base, create.Name, UpsertDocumentsRequest{Documents: docs, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := &cancelAfterContextChecks{Context: base, cancelAfter: 3}
+	_, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: 1, EfSearch: len(docs)})
+	if !errors.Is(err, context.Canceled) || ctx.checks != ctx.cancelAfter {
+		t.Fatalf("traversal cancellation err=%v checks=%d", err, ctx.checks)
+	}
+}
+
+func TestServiceDenseNativeRuntimeSearchStopsDuringDocumentMaterialization(t *testing.T) {
+	base := context.Background()
+	svc, db := newTestService(t)
+	defer db.Close()
+	create := CreateIndexRequest{
+		Name:               "native_fetch_cancel",
+		Dimension:          2,
+		Metric:             MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
+	}
+	if _, err := svc.CreateIndex(base, create); err != nil {
+		t.Fatal(err)
+	}
+	docs := make([]Document, 4)
+	for i := range docs {
+		docs[i] = Document{ID: fmt.Sprintf("doc-%03d", i), Content: "document", Embedding: []float32{1, float32(i + 1)}}
+	}
+	if _, err := svc.UpsertDocuments(base, create.Name, UpsertDocumentsRequest{Documents: docs, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := &cancelDuringMaterializationContext{Context: base, cancelAfter: 9}
+	svc.denseVectorNativeAfterSearch = func(int, collections.VectorIndexSearchResponse) error {
+		ctx.armed = true
+		ctx.checks = 0
+		return nil
+	}
+	_, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: len(docs), EfSearch: len(docs)})
+	if !errors.Is(err, context.Canceled) || ctx.checks != ctx.cancelAfter+1 {
+		t.Fatalf("document materialization cancellation err=%v checks=%d", err, ctx.checks)
+	}
+}
+
 func TestServiceDenseNativeRuntimeCloseWaitsForPooledSearch(t *testing.T) {
 	ctx := context.Background()
 	svc, db := newTestService(t)

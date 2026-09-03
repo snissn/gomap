@@ -41,7 +41,7 @@ type counters struct {
 	clusterSubmitNanos                 atomic.Uint64
 
 	errorCodes [maxTrackedErrorCode + 1]atomic.Uint64
-	commands   [64]commandCounters
+	commands   [iwire.CommandDenseVectorSearch + 1]commandCounters
 	mu         sync.Mutex
 	values     map[string]uint64
 }
@@ -348,6 +348,8 @@ func commandCounterName(id iwire.CommandID) string {
 		return "vector_search_pinned"
 	case iwire.CommandVectorClosePinnedSnapshot:
 		return "vector_close_pinned_snapshot"
+	case iwire.CommandDenseVectorSearch:
+		return "dense_vector_search"
 	default:
 		return ""
 	}

@@ -28,6 +28,10 @@ type Client struct {
 	writeBody             []byte
 	readBody              []byte
 	vectorSections        []iwire.Section
+	denseRequest          []byte
+	denseIDs              [][]byte
+	denseDocuments        [][]byte
+	denseResults          []DenseVectorSearchResult
 }
 
 // NewClient returns a native-wire client that owns conn until Close.
@@ -135,6 +139,8 @@ func (c *Client) roundTripLockedStream(ctx context.Context, streamID uint64, typ
 	if c == nil {
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
+	c.clearBorrowedResponseViews()
+	c.readBody = retainSmallPayloadScratch(c.readBody)
 	if c.local != nil {
 		header, response, err := c.local.roundTrip(ctx, streamID, typ, c.nextReq.Add(1), body, want, c.limits, c.readBody, true)
 		c.readBody = response[:0]
@@ -190,6 +196,8 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 	if c == nil {
 		return io.ErrClosedPipe
 	}
+	c.clearBorrowedResponseViews()
+	c.readBody = retainSmallPayloadScratch(c.readBody)
 	if c.local != nil {
 		_, _, err := c.local.roundTrip(ctx, 0, typ, c.nextReq.Add(1), body, want, c.limits, nil, false)
 		return err
@@ -237,6 +245,29 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 		return c.closeOnProtocolError(protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want))
 	}
 	return nil
+}
+
+func (c *Client) clearBorrowedResponseViews() {
+	clear(c.vectorSections[:cap(c.vectorSections)])
+	c.vectorSections = c.vectorSections[:0]
+	clear(c.denseIDs[:cap(c.denseIDs)])
+	if cap(c.denseIDs) > maxRetainedGetManyScratchItems {
+		c.denseIDs = nil
+	} else {
+		c.denseIDs = c.denseIDs[:0]
+	}
+	clear(c.denseDocuments[:cap(c.denseDocuments)])
+	if cap(c.denseDocuments) > maxRetainedGetManyScratchItems {
+		c.denseDocuments = nil
+	} else {
+		c.denseDocuments = c.denseDocuments[:0]
+	}
+	clear(c.denseResults[:cap(c.denseResults)])
+	if cap(c.denseResults) > maxRetainedGetManyScratchItems {
+		c.denseResults = nil
+	} else {
+		c.denseResults = c.denseResults[:0]
+	}
 }
 
 func (c *Client) interruptDeadlineOnContextCancel(ctx context.Context) func() {

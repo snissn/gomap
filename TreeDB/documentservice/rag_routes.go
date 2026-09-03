@@ -199,132 +199,210 @@ func (s *Service) searchDenseVectorAnn(ctx context.Context, col *collections.Col
 }
 
 func (s *Service) searchDenseVectorNative(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest) (DenseVectorSearchResponse, error) {
+	raw, err := s.searchDenseVectorNativeRaw(ctx, col, info, req, nil)
+	if err != nil {
+		return DenseVectorSearchResponse{}, err
+	}
+	docs := make([]Document, 0, len(raw.Results))
+	for _, result := range raw.Results {
+		doc, err := decodeStoredDocument(result.ID, result.Document)
+		if err != nil {
+			return DenseVectorSearchResponse{}, err
+		}
+		if !req.ReturnEmbedding {
+			doc.Embedding = nil
+		}
+		doc.Score = scorePtr(result.Score)
+		docs = append(docs, doc)
+	}
+	return raw.response(docs), nil
+}
+
+// RawDenseVectorResult is the native ANN result before document JSON decoding.
+type RawDenseVectorResult struct {
+	ID       []byte
+	Score    float64
+	Document []byte
+}
+
+// RawDenseVectorSearchResponse reuses caller-provided result storage when
+// supplied; each ID and Document is response-owned.
+type RawDenseVectorSearchResponse struct {
+	Results                   []RawDenseVectorResult
+	Route                     Route
+	Candidates                int
+	NativeBasePlusLiveDelta   bool
+	ExactFallbacks            uint64
+	FullDocumentScanFallbacks uint64
+	info                      IndexInfo
+	searchStats               collections.VectorIndexSearchStats
+	fetchedStats              collections.DocumentMaterializationStats
+	attempts                  int
+}
+
+func (r RawDenseVectorSearchResponse) response(docs []Document) DenseVectorSearchResponse {
+	stats := r.searchStats
+	return DenseVectorSearchResponse{
+		Index:                                   r.info,
+		Documents:                               docs,
+		Metric:                                  r.info.Metric,
+		Route:                                   r.Route,
+		Candidates:                              r.Candidates,
+		NativeBasePlusLiveDelta:                 r.NativeBasePlusLiveDelta,
+		ScalarFilterMembershipSource:            denseNativeScalarMembershipSource(stats.ScalarFilterPlan),
+		ScalarFilterPlan:                        stats.ScalarFilterPlan,
+		ScalarFilterProbeIDs:                    stats.ScalarFilterProbeIDs,
+		ScalarFilterProbeTruncated:              stats.ScalarFilterProbeTruncated,
+		ScalarFilterCandidates:                  stats.ScalarFilterCandidates,
+		ScalarFilterCandidateIDs:                stats.ScalarFilterCandidateIDs,
+		ScalarFilterRetainedCandidateIDs:        stats.ScalarFilterRetainedCandidateIDs,
+		ScalarFilterRefinedCandidateIDs:         stats.ScalarFilterRefinedCandidateIDs,
+		ScalarFilterVisited:                     stats.ScalarFilterVisited,
+		ScalarFilterScored:                      stats.ScalarFilterScored,
+		ScalarFilterAdmitted:                    stats.ScalarFilterAdmitted,
+		ScalarFilterExactScoring:                stats.ScalarFilterExactScoring > 0,
+		ScalarFilterUnderfill:                   stats.ScalarFilterUnderfill > 0,
+		ScalarFilterPlanCacheHits:               stats.ScalarFilterPlanCacheHits,
+		ScalarFilterPlanCacheMisses:             stats.ScalarFilterPlanCacheMisses,
+		ScalarFilterPlanCacheInvalidations:      stats.ScalarFilterPlanCacheInvalidations,
+		ScalarFilterPlanCacheGenerationBypasses: stats.ScalarFilterPlanCacheGenerationBypasses,
+		ScalarFilterPlanCacheEvictions:          stats.ScalarFilterPlanCacheEvictions,
+		ScalarFilterPlanCacheEntries:            stats.ScalarFilterPlanCacheEntries,
+		ScalarFilterPlanCacheRetainedBytes:      stats.ScalarFilterPlanCacheRetainedBytes,
+		ExactFallbacks:                          r.ExactFallbacks,
+		FullDocumentScanFallbacks:               r.FullDocumentScanFallbacks,
+		AllowedIDMaterializationRows:            stats.ScalarFilterRetainedCandidateIDs,
+		DocumentMaterializationRows:             r.fetchedStats.DocumentsFetched,
+		VisibilityMismatchCount:                 uint64(r.attempts),
+		VisibilityRetryCount:                    uint64(r.attempts),
+	}
+}
+
+// SearchDenseVectorNativeRaw exposes the existing native_runtime snapshot/search/fetch path without decoding stored documents.
+func (s *Service) SearchDenseVectorNativeRaw(ctx context.Context, index string, req DenseVectorSearchRequest) (RawDenseVectorSearchResponse, error) {
+	return s.SearchDenseVectorNativeRawInto(ctx, index, req, nil)
+}
+
+// SearchDenseVectorNativeRawInto reuses dst for the returned result envelope.
+func (s *Service) SearchDenseVectorNativeRawInto(ctx context.Context, index string, req DenseVectorSearchRequest, dst []RawDenseVectorResult) (RawDenseVectorSearchResponse, error) {
+	col, info, release, err := s.acquireBenchmarkSearchIndex(ctx, index, req.ExpectedGeneration)
+	if err != nil {
+		return RawDenseVectorSearchResponse{}, err
+	}
+	defer release()
+	if req.TopK <= 0 {
+		return RawDenseVectorSearchResponse{}, serviceError(CodeInvalidRequest, "top_k must be positive")
+	}
+	if err := validateEmbedding("query_embedding", req.QueryEmbedding, info.Dimension, info.Metric); err != nil {
+		return RawDenseVectorSearchResponse{}, err
+	}
+	if req.EfSearch < 0 {
+		return RawDenseVectorSearchResponse{}, serviceError(CodeInvalidRequest, "ef_search must be non-negative")
+	}
+	route, err := resolveDenseSearchRoute(req, info)
+	if err != nil {
+		return RawDenseVectorSearchResponse{}, err
+	}
+	if route != RouteAnn || info.VectorStrategy != collections.VectorIndexStrategyNativeRuntime || !info.Capabilities.NoDocumentVectorSearch {
+		return RawDenseVectorSearchResponse{}, serviceError(CodeUnsupported, "dense nativewire search requires a cosine float32 native_runtime vector index")
+	}
+	return s.searchDenseVectorNativeRawLocked(ctx, col, info, req, dst)
+}
+
+func (s *Service) searchDenseVectorNativeRaw(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest, dst []RawDenseVectorResult) (RawDenseVectorSearchResponse, error) {
+	s.benchmarkSearchCacheMu.RLock()
+	defer s.benchmarkSearchCacheMu.RUnlock()
+	if s.closed {
+		return RawDenseVectorSearchResponse{}, serviceClosedError()
+	}
+	return s.searchDenseVectorNativeRawLocked(ctx, col, info, req, dst)
+}
+
+func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest, dst []RawDenseVectorResult) (RawDenseVectorSearchResponse, error) {
 	if req.Filter != nil {
 		if err := req.Filter.Validate(); err != nil {
-			return DenseVectorSearchResponse{}, err
+			return RawDenseVectorSearchResponse{}, err
 		}
 	}
 	scalarFilter, err := translateScalarFilter(req.Filter, newScalarSchema(info.ScalarFields))
 	if err != nil {
-		return DenseVectorSearchResponse{}, err
-	}
-	s.benchmarkSearchCacheMu.RLock()
-	if s.closed {
-		s.benchmarkSearchCacheMu.RUnlock()
-		return DenseVectorSearchResponse{}, serviceClosedError()
+		return RawDenseVectorSearchResponse{}, err
 	}
 	buffer := s.benchmarkSearchBufferPool.Get().(*collections.VectorIndexSearchBuffer)
-	defer func() {
-		buffer.Reset()
-		s.benchmarkSearchBufferPool.Put(buffer)
-		s.benchmarkSearchCacheMu.RUnlock()
-	}()
+	defer func() { buffer.Reset(); s.benchmarkSearchBufferPool.Put(buffer) }()
 	for attempt := range denseVectorNativeSnapshotAttempts {
 		if err := ctxErr(ctx); err != nil {
-			return DenseVectorSearchResponse{}, err
+			return RawDenseVectorSearchResponse{}, err
 		}
-		search, view, err := col.SearchVectorIndexWithBufferReadView(collections.VectorIndexSearchOptions{
-			IndexName:            defaultVectorIndexName,
-			Query:                req.QueryEmbedding,
-			QueryMode:            collections.VectorIndexQueryModeExact,
-			TopK:                 req.TopK,
-			EfSearch:             req.EfSearch,
-			StatsMode:            collections.VectorIndexSearchStatsModeProduction,
-			DeclaredScalarFilter: scalarFilter,
-		}, buffer)
+		search, view, err := col.SearchVectorIndexWithBufferReadView(collections.VectorIndexSearchOptions{Context: ctx, IndexName: defaultVectorIndexName, Query: req.QueryEmbedding, QueryMode: collections.VectorIndexQueryModeExact, TopK: req.TopK, EfSearch: req.EfSearch, StatsMode: collections.VectorIndexSearchStatsModeProduction, DeclaredScalarFilter: scalarFilter}, buffer)
 		if err != nil {
 			if errors.Is(err, collections.ErrVectorIndexSnapshotMismatch) {
 				buffer.Reset()
 				continue
 			}
-			return DenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search", err)
+			return RawDenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search", err)
 		}
 		if err := validateDenseNativeVectorSearchRoute(search); err != nil {
 			_ = view.Close()
-			return DenseVectorSearchResponse{}, err
+			return RawDenseVectorSearchResponse{}, err
 		}
 		if s.denseVectorNativeAfterSearch != nil {
 			if err := s.denseVectorNativeAfterSearch(attempt, search); err != nil {
 				_ = view.Close()
-				return DenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search hook", err)
+				return RawDenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search hook", err)
 			}
 		}
-		fetched, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(search.Results, serviceDocumentFetchOptions(req.ReturnEmbedding))
+		if err := ctxErr(ctx); err != nil {
+			_ = view.Close()
+			return RawDenseVectorSearchResponse{}, err
+		}
+		fetchOptions := serviceDocumentFetchOptions(req.ReturnEmbedding)
+		fetchOptions.Context = ctx
+		fetched, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(search.Results, fetchOptions)
 		closeErr := view.Close()
+		if err := ctxErr(ctx); err != nil {
+			return RawDenseVectorSearchResponse{}, err
+		}
 		if fetchErr != nil {
-			return DenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann document fetch", errors.Join(fetchErr, closeErr))
+			return RawDenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann document fetch", errors.Join(fetchErr, closeErr))
 		}
 		if closeErr != nil {
-			return DenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann document read view close", closeErr)
+			return RawDenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann document read view close", closeErr)
 		}
-		if fetched.Stats.DocumentsRequested != uint64(len(search.Results)) ||
-			fetched.Stats.DocumentsFetched != uint64(len(search.Results)) ||
-			fetched.Stats.DocumentsMissing != 0 ||
-			len(fetched.Results) != len(search.Results) {
-			return DenseVectorSearchResponse{}, serviceErrorf(
-				CodeIndexUnavailable,
-				"native ann document fetch did not materialize exactly the returned candidates: candidates=%d requested=%d fetched=%d missing=%d results=%d",
-				len(search.Results),
-				fetched.Stats.DocumentsRequested,
-				fetched.Stats.DocumentsFetched,
-				fetched.Stats.DocumentsMissing,
-				len(fetched.Results),
-			)
+		if fetched.Stats.DocumentsRequested != uint64(len(search.Results)) || fetched.Stats.DocumentsFetched != uint64(len(search.Results)) || fetched.Stats.DocumentsMissing != 0 || len(fetched.Results) != len(search.Results) {
+			return RawDenseVectorSearchResponse{}, serviceErrorf(CodeIndexUnavailable, "native ann document fetch did not materialize exactly the returned candidates: candidates=%d requested=%d fetched=%d missing=%d results=%d", len(search.Results), fetched.Stats.DocumentsRequested, fetched.Stats.DocumentsFetched, fetched.Stats.DocumentsMissing, len(fetched.Results))
 		}
-		docs := make([]Document, 0, len(search.Results))
+		diagnostics := search.Diagnostics()
+		if len(search.Results) <= cap(dst) {
+			if len(search.Results) < cap(dst) {
+				clear(dst[len(search.Results):cap(dst)])
+			}
+			dst = dst[:len(search.Results)]
+		} else {
+			dst = make([]RawDenseVectorResult, len(search.Results))
+		}
+		out := RawDenseVectorSearchResponse{
+			Results:                   dst,
+			Route:                     RouteAnn,
+			Candidates:                len(search.Results),
+			NativeBasePlusLiveDelta:   true,
+			ExactFallbacks:            diagnostics.LiveANN.ExactFallbacks,
+			FullDocumentScanFallbacks: 0,
+			info:                      info,
+			searchStats:               search.Stats,
+			fetchedStats:              fetched.Stats,
+			attempts:                  attempt,
+		}
 		for i, result := range search.Results {
-			materialized := fetched.Results[i]
-			if !materialized.Found || len(materialized.Document) == 0 || !bytes.Equal(materialized.ID, result.ID) {
-				return DenseVectorSearchResponse{}, serviceErrorf(CodeIndexUnavailable, "native ann vector result %q was not materialized from the matching read view", string(result.ID))
+			m := fetched.Results[i]
+			if !m.Found || len(m.Document) == 0 || !bytes.Equal(m.ID, result.ID) {
+				return RawDenseVectorSearchResponse{}, serviceErrorf(CodeIndexUnavailable, "native ann vector result %q was not materialized from the matching read view", string(result.ID))
 			}
-			doc, err := decodeStoredDocument(result.ID, materialized.Document)
-			if err != nil {
-				return DenseVectorSearchResponse{}, err
-			}
-			if !req.ReturnEmbedding {
-				doc.Embedding = nil
-			}
-			doc.Score = scorePtr(result.Score)
-			docs = append(docs, doc)
+			out.Results[i] = RawDenseVectorResult{ID: m.ID, Score: result.Score, Document: m.Document}
 		}
-		return DenseVectorSearchResponse{
-			Index:                                   info,
-			Documents:                               docs,
-			Metric:                                  info.Metric,
-			Route:                                   RouteAnn,
-			Exact:                                   false,
-			Candidates:                              len(search.Results),
-			NativeBasePlusLiveDelta:                 true,
-			ScalarFilterMembershipSource:            denseNativeScalarMembershipSource(search.Stats.ScalarFilterPlan),
-			ScalarFilterPlan:                        search.Stats.ScalarFilterPlan,
-			ScalarFilterProbeIDs:                    search.Stats.ScalarFilterProbeIDs,
-			ScalarFilterProbeTruncated:              search.Stats.ScalarFilterProbeTruncated,
-			ScalarFilterCandidates:                  search.Stats.ScalarFilterCandidates,
-			ScalarFilterCandidateIDs:                search.Stats.ScalarFilterCandidateIDs,
-			ScalarFilterRetainedCandidateIDs:        search.Stats.ScalarFilterRetainedCandidateIDs,
-			ScalarFilterRefinedCandidateIDs:         search.Stats.ScalarFilterRefinedCandidateIDs,
-			ScalarFilterVisited:                     search.Stats.ScalarFilterVisited,
-			ScalarFilterScored:                      search.Stats.ScalarFilterScored,
-			ScalarFilterAdmitted:                    search.Stats.ScalarFilterAdmitted,
-			ScalarFilterExactScoring:                search.Stats.ScalarFilterExactScoring > 0,
-			ScalarFilterUnderfill:                   search.Stats.ScalarFilterUnderfill > 0,
-			ScalarFilterPlanCacheHits:               search.Stats.ScalarFilterPlanCacheHits,
-			ScalarFilterPlanCacheMisses:             search.Stats.ScalarFilterPlanCacheMisses,
-			ScalarFilterPlanCacheInvalidations:      search.Stats.ScalarFilterPlanCacheInvalidations,
-			ScalarFilterPlanCacheGenerationBypasses: search.Stats.ScalarFilterPlanCacheGenerationBypasses,
-			ScalarFilterPlanCacheEvictions:          search.Stats.ScalarFilterPlanCacheEvictions,
-			ScalarFilterPlanCacheEntries:            search.Stats.ScalarFilterPlanCacheEntries,
-			ScalarFilterPlanCacheRetainedBytes:      search.Stats.ScalarFilterPlanCacheRetainedBytes,
-			AllowedIDMaterializationRows:            search.Stats.ScalarFilterRetainedCandidateIDs,
-			DocumentMaterializationRows:             fetched.Stats.DocumentsFetched,
-			VisibilityMismatchCount:                 uint64(attempt),
-			VisibilityRetryCount:                    uint64(attempt),
-		}, nil
+		return out, nil
 	}
-	return DenseVectorSearchResponse{}, mapVectorIndexSearchError(
-		"native ann vector search",
-		fmt.Errorf("%w after %d attempts", collections.ErrVectorIndexSnapshotMismatch, denseVectorNativeSnapshotAttempts),
-	)
+	return RawDenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search", fmt.Errorf("%w after %d attempts", collections.ErrVectorIndexSnapshotMismatch, denseVectorNativeSnapshotAttempts))
 }
 
 func denseNativeScalarMembershipSource(plan collections.NativeScalarFilterPlan) string {

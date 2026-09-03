@@ -330,6 +330,18 @@
       "notes": "Native-wire fast vector searches are not replicated command identity and must not append a local command-WAL frame."
     },
     {
+      "nativewire_command": "CommandDenseVectorSearch",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Native-wire dense vector searches are not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
       "nativewire_command": "CommandVectorPinSearchSnapshot",
       "nativewire_fixture": "",
       "nativewire_fixture_sha256": "",

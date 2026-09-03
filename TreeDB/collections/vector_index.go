@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -269,6 +270,8 @@ const (
 // and call FetchDocumentsForVectorIndexSearchResults as an explicit, separately
 // measured fetch phase.
 type VectorIndexSearchOptions struct {
+	// Context optionally interrupts native_runtime traversal.
+	Context context.Context
 	// IndexName is used by collection-level physical column_graph search.
 	IndexName string
 	// Query is used by collection-level physical column_graph search.
@@ -3813,6 +3816,9 @@ func prepareVectorIndexGraphOnlyQuery(query []float32, metric VectorMetric, dime
 }
 
 func (idx *VectorIndex) searchGraphOnlyCandidatesWithPreparedQueryLocked(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch, liveDocs int, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, error) {
+	if err := scratch.finalContextErr(); err != nil {
+		return nil, err
+	}
 	if topK == 0 {
 		return nil, nil
 	}
@@ -3834,6 +3840,9 @@ func (idx *VectorIndex) searchGraphOnlyCandidatesWithPreparedQueryLocked(query [
 		candidates = idx.searchCandidatesResumableLocked(query, queryNorm, prepared, limit, scratch)
 	} else {
 		candidates = idx.searchCurrentCandidatesWithLiveDocsLocked(query, queryNorm, prepared, limit, liveDocs, scratch)
+	}
+	if err := scratch.finalContextErr(); err != nil {
+		return nil, err
 	}
 	if target := minInt(topK, liveDocs); len(candidates) < target {
 		return nil, fmt.Errorf("%w: native graph search returned %d of %d live candidates within bounded traversal; rebuild the vector index", ErrVectorIndexSearchUnavailable, len(candidates), target)
@@ -4272,6 +4281,8 @@ func (idx *VectorIndex) searchCandidatesResumableLocked(query []float32, queryNo
 func (idx *VectorIndex) continueResumableCandidatesLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, limit int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
 	visited := scratch.visitedEpochs
 	mark := scratch.resumeVisitedMark
+
+search:
 	for len(scratch.queue) > 0 {
 		current := scratch.queue[0]
 		if len(scratch.best) >= limit && vectorIndexCandidateWorse(current, scratch.best[0]) {
@@ -4289,6 +4300,12 @@ func (idx *VectorIndex) continueResumableCandidatesLocked(query []float32, query
 			visited[neighborID] = mark
 			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighborID)
 			scratch.explored++
+			if scratch.explored&63 == 0 && scratch.context != nil {
+				scratch.contextErr = scratch.context.Err()
+				if scratch.contextErr != nil {
+					break search
+				}
+			}
 			if math.IsInf(float64(distance), 1) {
 				continue
 			}
@@ -4461,6 +4478,12 @@ search:
 			}
 			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighborID)
 			scratch.explored++
+			if scratch.explored&63 == 0 && scratch.context != nil {
+				scratch.contextErr = scratch.context.Err()
+				if scratch.contextErr != nil {
+					break search
+				}
+			}
 			if math.IsInf(float64(distance), 1) {
 				continue
 			}
@@ -5440,6 +5463,8 @@ type vectorIndexCandidate struct {
 }
 
 type vectorIndexSearchScratch struct {
+	context           context.Context
+	contextErr        error
 	visitedEpochs     []uint32
 	visitedEpoch      uint32
 	explorationLimit  int
@@ -5454,6 +5479,29 @@ type vectorIndexSearchScratch struct {
 	resumeEnabled     bool
 	resumeRequested   bool
 	resumed           bool
+}
+
+func (scratch *vectorIndexSearchScratch) setContext(ctx context.Context) {
+	scratch.context = ctx
+	scratch.contextErr = nil
+}
+
+func (scratch *vectorIndexSearchScratch) clearContext() {
+	scratch.context = nil
+	scratch.contextErr = nil
+}
+
+func (scratch *vectorIndexSearchScratch) finalContextErr() error {
+	if scratch == nil || scratch.contextErr != nil {
+		if scratch == nil {
+			return nil
+		}
+		return scratch.contextErr
+	}
+	if scratch.context != nil {
+		scratch.contextErr = scratch.context.Err()
+	}
+	return scratch.contextErr
 }
 
 func (scratch *vectorIndexSearchScratch) startResumableSearch() {

@@ -78,6 +78,7 @@ func AllCommandRowsV1() []CommandRowV1 {
 		nativewire.CommandVectorPinSearchSnapshot,
 		nativewire.CommandVectorSearchPinned,
 		nativewire.CommandVectorClosePinnedSnapshot,
+		nativewire.CommandDenseVectorSearch,
 	}
 	rows := make([]CommandRowV1, 0, len(ids))
 	for _, id := range ids {
@@ -127,6 +128,7 @@ var commandRowsV1 = map[nativewire.CommandID]CommandRowV1{
 	nativewire.CommandVectorPinSearchSnapshot:   rejectedRow(nativewire.CommandVectorPinSearchSnapshot, "CommandVectorPinSearchSnapshot", "vector_pin_search_snapshot", "read-only", "none", "read_rejected_v1", "vector snapshot pins are connection-local read state"),
 	nativewire.CommandVectorSearchPinned:        rejectedRow(nativewire.CommandVectorSearchPinned, "CommandVectorSearchPinned", "vector_search_pinned", "read-only", "none", "read_rejected_v1", "pinned vector searches are connection-local read state"),
 	nativewire.CommandVectorClosePinnedSnapshot: rejectedRow(nativewire.CommandVectorClosePinnedSnapshot, "CommandVectorClosePinnedSnapshot", "vector_close_pinned_snapshot", "read-only", "none", "read_rejected_v1", "vector snapshot close is connection-local read state"),
+	nativewire.CommandDenseVectorSearch:         rejectedRow(nativewire.CommandDenseVectorSearch, "CommandDenseVectorSearch", "dense_vector_search", "read-only", "none", "read_rejected_v1", "dense vector searches are not replicated mutations"),
 }
 
 func acceptedRow(id nativewire.CommandID, nativeWireCommand, commandName, walKind, bytes, reason string) CommandRowV1 {

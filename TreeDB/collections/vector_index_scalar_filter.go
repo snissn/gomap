@@ -1174,6 +1174,12 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 			work.visited++
 			distance := runtimeIndex.distanceToNodeWithPreparedQueryLocked(query, queryNorm, prepared, nodeID)
 			work.scored++
+			if work.scored&63 == 0 && scratch.context != nil {
+				scratch.contextErr = scratch.context.Err()
+				if scratch.contextErr != nil {
+					return nil, work, scratch.contextErr
+				}
+			}
 			if !math.IsInf(float64(distance), 1) {
 				candidates = append(candidates, vectorIndexCandidate{nodeID: nodeID, distance: distance})
 			}
@@ -1225,6 +1231,9 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 	}
 	work.admitted = len(*results)
 	work.underfill = len(*results) < topK
+	if err := scratch.finalContextErr(); err != nil {
+		return nil, work, err
+	}
 	return *results, work, nil
 }
 
@@ -1291,6 +1300,12 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 			visited[nodeID] = mark
 			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNorm, prepared, nodeID)
 			work.scored++
+			if work.scored&63 == 0 && scratch.context != nil {
+				scratch.contextErr = scratch.context.Err()
+				if scratch.contextErr != nil {
+					return nil, work, scratch.contextErr
+				}
+			}
 			seedScores++
 			seedBudget.scores--
 			if math.IsInf(float64(distance), 1) {
@@ -1312,6 +1327,12 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 				// evenly covers the full immutable ordinal space for large graphs.
 				nodeID := int(uint64(probe) * uint64(len(idx.nodes)) / uint64(probeRows))
 				work.seedRowsVisited++
+				if work.seedRowsVisited&63 == 0 && scratch.context != nil {
+					scratch.contextErr = scratch.context.Err()
+					if scratch.contextErr != nil {
+						return nil, work, scratch.contextErr
+					}
+				}
 				seedBudget.rows--
 				planeRowsRemaining--
 				node := &idx.nodes[nodeID]
@@ -1322,6 +1343,12 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 				for clusterStart > 0 && seedBudget.rows > 0 && planeRowsRemaining > 0 {
 					previous := clusterStart - 1
 					work.seedRowsVisited++
+					if work.seedRowsVisited&63 == 0 && scratch.context != nil {
+						scratch.contextErr = scratch.context.Err()
+						if scratch.contextErr != nil {
+							return nil, work, scratch.contextErr
+						}
+					}
 					seedBudget.rows--
 					planeRowsRemaining--
 					previousNode := &idx.nodes[previous]
@@ -1339,6 +1366,12 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 							break
 						}
 						work.seedRowsVisited++
+						if work.seedRowsVisited&63 == 0 && scratch.context != nil {
+							scratch.contextErr = scratch.context.Err()
+							if scratch.contextErr != nil {
+								return nil, work, scratch.contextErr
+							}
+						}
 						seedBudget.rows--
 						planeRowsRemaining--
 					}
@@ -1352,6 +1385,12 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 					visited[candidateID] = mark
 					distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNorm, prepared, candidateID)
 					work.scored++
+					if work.scored&63 == 0 && scratch.context != nil {
+						scratch.contextErr = scratch.context.Err()
+						if scratch.contextErr != nil {
+							return nil, work, scratch.contextErr
+						}
+					}
 					seedScores++
 					clusterScores++
 					seedBudget.scores--
@@ -1417,6 +1456,12 @@ search:
 			visited[nodeID] = mark
 			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNorm, prepared, nodeID)
 			work.scored++
+			if work.scored&63 == 0 && scratch.context != nil {
+				scratch.contextErr = scratch.context.Err()
+				if scratch.contextErr != nil {
+					break search
+				}
+			}
 			if math.IsInf(float64(distance), 1) {
 				continue
 			}
@@ -1440,5 +1485,8 @@ search:
 	out = append(out, eligible...)
 	scratch.out = out
 	sortVectorIndexCandidates(out)
+	if err := scratch.finalContextErr(); err != nil {
+		return nil, work, err
+	}
 	return out, work, nil
 }

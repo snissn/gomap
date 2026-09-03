@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -46,6 +47,11 @@ func TestCollectionReadViewFetchDocumentsByIDUsesBatchViewForOwnedRetainedPayloa
 	if err != nil {
 		_ = view.Close()
 		t.Fatalf("FetchDocumentsByID: %v", err)
+	}
+	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 8}
+	if _, err := view.FetchDocumentsByID([][]byte{[]byte("a"), []byte("b"), []byte("a"), []byte("b")}, DocumentFetchOptions{Context: ctx}); !errors.Is(err, context.Canceled) || ctx.calls != ctx.cancelAfter {
+		_ = view.Close()
+		t.Fatalf("FetchDocumentsByID cancellation err=%v calls=%d", err, ctx.calls)
 	}
 	if err := view.Close(); err != nil {
 		t.Fatalf("Close view: %v", err)
@@ -235,6 +241,33 @@ func TestCollectionReadViewFetchDocumentsByIDColumnReconstructionParity(t *testi
 	badRef.RowIndex++
 	if _, err := view.FetchDocumentsByRowRef([]DocumentRowRef{badRef}, DocumentFetchOptions{}); err == nil || !strings.Contains(err.Error(), "row_index") {
 		t.Fatalf("bad row ref err=%v want row_index mismatch", err)
+	}
+}
+
+func TestCollectionReadViewFetchDocumentsByIDCancelsDuringColumnVisibilityScan(t *testing.T) {
+	d, col := newDocumentMaterializerTestCollection(t)
+	defer func() { _ = d.Close() }()
+	const rows = 64
+	ids := make([][]byte, rows)
+	docs := make([][]byte, rows)
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("doc-%03d", i))
+		docs[i] = []byte(fmt.Sprintf(`{"row_id":%d,"kind":"kind","score":1}`, i))
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+
+	// The first six checks occur before the physical-row visitor. The seventh
+	// is its 64-row poll; the final check maps the scan abort back to ctx.Err.
+	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 7}
+	if _, err := view.FetchDocumentsByID([][]byte{ids[0]}, DocumentFetchOptions{Context: ctx}); !errors.Is(err, context.Canceled) || ctx.calls != 8 {
+		t.Fatalf("FetchDocumentsByID cancellation err=%v calls=%d want context canceled after row scan", err, ctx.calls)
 	}
 }
 

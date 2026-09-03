@@ -154,6 +154,7 @@ func TestCommandWALSupportMatrixCoversNativeWireReadOnlyCommands(t *testing.T) {
 		"CommandVectorStatus",
 		"CommandVectorSearchStrict",
 		"CommandVectorSearchFast",
+		"CommandDenseVectorSearch",
 		"CommandVectorPinSearchSnapshot",
 		"CommandVectorSearchPinned",
 		"CommandVectorClosePinnedSnapshot",

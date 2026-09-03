@@ -1472,6 +1472,12 @@ func (s *Service) finishDeferredColumnGraphMutation(name string, col *collection
 	return entry.collection.CloseVectorIndexPreparedSearchCache()
 }
 
+// InvalidatePreparedSearchCache removes an index's prepared search cache after
+// an external schema mutation.
+func (s *Service) InvalidatePreparedSearchCache(index string) error {
+	return s.invalidateBenchmarkSearchCache(index)
+}
+
 func (s *Service) invalidateBenchmarkSearchCache(name string) error {
 	if s == nil {
 		return nil

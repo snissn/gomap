@@ -111,6 +111,9 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 		return nil, metadataWrap(err)
 	}
 	s.bumpCatalogVersionIfCatalogMetadataChanged(before, beforeOK)
+	if s.documentService != nil {
+		_ = s.documentService.InvalidatePreparedSearchCache(name)
+	}
 	if state != nil {
 		state.cacheCollection(name, collection, s.maxCachedCollections)
 	}
@@ -164,6 +167,9 @@ func (s *Server) handleDropIndex(state *connState, sections []iwire.Section) ([]
 		return nil, metadataWrap(err)
 	}
 	s.bumpCatalogVersionIfCatalogMetadataChanged(before, beforeOK)
+	if s.documentService != nil {
+		_ = s.documentService.InvalidatePreparedSearchCache(name)
+	}
 	if state != nil {
 		state.cacheCollection(name, collection, s.maxCachedCollections)
 	}

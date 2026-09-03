@@ -44,3 +44,21 @@ func TestCountersErrorCodeSnapshotUsesTrackedAndFallbackCounters(t *testing.T) {
 		t.Fatalf("zero tracked error code was emitted: %v", got)
 	}
 }
+
+func TestCountersDenseCommandUsesAtomicStorage(t *testing.T) {
+	var c counters
+	c.incCommandRequest(iwire.CommandDenseVectorSearch, "dense_vector_search")
+	c.incCommandError(iwire.CommandDenseVectorSearch, "dense_vector_search")
+	requests := c.commands[iwire.CommandDenseVectorSearch].requests.Load()
+	errors := c.commands[iwire.CommandDenseVectorSearch].errors.Load()
+	if requests != 1 || errors != 1 {
+		t.Fatalf("dense atomic counters requests=%d errors=%d", requests, errors)
+	}
+	if c.values != nil {
+		t.Fatalf("dense counters used fallback map: %v", c.values)
+	}
+	got := c.snapshot()
+	if got["commands.dense_vector_search.requests_total"] != 1 || got["commands.dense_vector_search.errors_total"] != 1 {
+		t.Fatalf("dense counter snapshot=%v", got)
+	}
+}
