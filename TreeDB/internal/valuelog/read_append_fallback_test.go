@@ -144,6 +144,65 @@ func TestFileReadAppend_VerifiedCompressedGroupedFallbackUsesFrameCache(t *testi
 	}
 }
 
+func TestFileReadAppend_VerifiedGroupedUncompressedFallbackChecksCRCOnce(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	records := []Record{{RID: 1, Value: []byte("first")}, {RID: 2, Value: []byte("second")}}
+	ptrs, _, err := writer.AppendFrameWithStatsInto(0, nil, records, make([]page.ValuePtr, len(records)))
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("AppendFrameWithStatsInto: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+	f := m.files[fileID]
+	mapped := []byte{0}
+	f.mmapData.Store(mapped)
+	f.deadMappingsCount.Store(uint64(effectiveMaxDeadMappings(len(mapped))))
+
+	var frameHeader [FrameHeaderSize]byte
+	if _, err := f.File.ReadAt(frameHeader[:], int64(ptrs[0].Offset-4+HeaderSize)); err != nil {
+		t.Fatalf("read frame header: %v", err)
+	}
+	if frameHeader[1]&FrameFlagCompressed != 0 {
+		t.Fatal("expected grouped uncompressed frame")
+	}
+
+	prefix := []byte("caller-prefix:")
+	backing := make([]byte, len(prefix), len(prefix)+len(records[1].Value))
+	copy(backing, prefix)
+	crcBefore := f.ReadStats().RecordCRCChecks
+	got, err := f.ReadAppend(ptrs[1], true, backing[:len(prefix)])
+	if err != nil {
+		t.Fatalf("ReadAppend: %v", err)
+	}
+	if want := append(prefix, records[1].Value...); !bytes.Equal(got, want) || &got[0] != &backing[0] {
+		t.Fatalf("ReadAppend did not preserve bytes/prefix/dst ownership")
+	}
+	if gotCRC := f.ReadStats().RecordCRCChecks - crcBefore; gotCRC != 1 {
+		t.Fatalf("record CRC checks=%d want 1", gotCRC)
+	}
+	if hits, _, entries, _ := f.groupedFrameCacheStats(); hits != 0 || entries != 0 {
+		t.Fatalf("uncompressed fallback populated grouped frame cache: hits=%d entries=%d", hits, entries)
+	}
+}
+
 func BenchmarkFileReadAppend_VerifiedCompressedGroupedFallback(b *testing.B) {
 	f, ptrs, want := openGroupedCompressedFileReadFallbackFixture(b)
 	f.setGroupedFrameCacheEntries(64)
@@ -160,7 +219,12 @@ func BenchmarkFileReadAppend_VerifiedCompressedGroupedFallback(b *testing.B) {
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			dst := make([]byte, 0, len(want[0]))
+			if _, err := f.ReadAppend(tc.ptr(0), true, dst[:0]); err != nil {
+				b.Fatalf("warm ReadAppend: %v", err)
+			}
+			hitsBefore, _, _, _ := f.groupedFrameCacheStats()
 			b.ReportAllocs()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				got, err := f.ReadAppend(tc.ptr(i), true, dst[:0])
 				if err != nil {
@@ -170,6 +234,9 @@ func BenchmarkFileReadAppend_VerifiedCompressedGroupedFallback(b *testing.B) {
 					b.Fatalf("ReadAppend len=%d want %d", len(got), len(want[0]))
 				}
 			}
+			b.StopTimer()
+			hitsAfter, _, _, _ := f.groupedFrameCacheStats()
+			b.ReportMetric(float64(hitsAfter-hitsBefore)/float64(b.N), "cache_hits/op")
 		})
 	}
 }

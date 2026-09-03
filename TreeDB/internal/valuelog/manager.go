@@ -833,7 +833,8 @@ func (f *File) readGroupedCompressedFromFileToVerify(ptr page.ValuePtr, verifyCR
 	if k <= 0 || k > MaxFrameK {
 		return nil, false, ErrCorrupt, true
 	}
-	if frameHeader[1]&FrameFlagCompressed == 0 {
+	compressed := frameHeader[1]&FrameFlagCompressed != 0
+	if !compressed && !verifyCRC {
 		return nil, false, nil, false
 	}
 
@@ -879,9 +880,11 @@ func (f *File) readGroupedCompressedFromFileToVerify(ptr page.ValuePtr, verifyCR
 	if valEnd < valStart || valEnd > rawLen {
 		return nil, false, ErrCorrupt, true
 	}
-	cacheableRaw := f.groupedFrameCacheAllowsRaw(int(rawLen))
-	if out, usedDst, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, &offsets, rawLen, subIndex, dst); hit {
-		return out, usedDst, err, true
+	cacheableRaw := compressed && f.groupedFrameCacheAllowsRaw(int(rawLen))
+	if compressed {
+		if out, usedDst, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, &offsets, rawLen, subIndex, dst); hit {
+			return out, usedDst, err, true
+		}
 	}
 
 	frame := FrameHeader{
@@ -909,9 +912,14 @@ func (f *File) readGroupedCompressedFromFileToVerify(ptr page.ValuePtr, verifyCR
 		}
 	}
 
-	raw := f.takeDecodeScratch(int(rawLen))
-	pooledRaw := true
-	raw, err := decodeFramePayloadTo(frame, framePayload, f.dictLookup, rawLen, raw)
+	raw := framePayload
+	pooledRaw := false
+	var err error
+	if compressed {
+		raw = f.takeDecodeScratch(int(rawLen))
+		pooledRaw = true
+		raw, err = decodeFramePayloadTo(frame, framePayload, f.dictLookup, rawLen, raw)
+	}
 	if payloadScratch != nil {
 		putDecodeScratch(payloadScratch)
 	}
