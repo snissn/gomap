@@ -770,6 +770,11 @@ func (s *Server) rejectClusterRoutedLocalMetadataRead(command iwire.CommandID) e
 			iwire.ErrReadOnly,
 			"nativewire routed-cluster metadata read is disabled until authoritative catalog metadata is bound to the route provider",
 		)
+	case iwire.CommandDenseVectorSearch:
+		return protocolError(
+			iwire.ErrReadOnly,
+			"nativewire routed-cluster dense vector search is disabled until an authoritative search route is bound to the route provider",
+		)
 	default:
 		return nil
 	}

@@ -76,7 +76,7 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	}
 	_, response, err := c.roundTripLocked(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
 	c.denseRequest = retainDensePayloadScratch(payload)
-	c.requestBody = body[:0]
+	c.requestBody = retainDensePayloadScratch(body)
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
 	}

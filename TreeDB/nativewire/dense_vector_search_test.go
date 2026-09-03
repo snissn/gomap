@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"net"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -245,6 +247,30 @@ func TestDenseVectorSearchUnconfiguredFailsClosed(t *testing.T) {
 	}
 }
 
+func TestDenseVectorSearchRoutedClusterFailsClosedBeforeLocalSearch(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	svc := documentservice.New(mgr)
+	routeProvider := &routingClusterSubmitter{fakeClusterSubmitter: &fakeClusterSubmitter{}}
+	server := NewServer(ServerOptions{Collections: mgr, Backend: db, ClusterSubmitter: routeProvider, DocumentService: svc})
+	t.Cleanup(func() { _ = server.Close(); _ = svc.Close(); _ = db.Close() })
+	ctx := context.Background()
+	client, cleanup, err := NewInProcessClient(ctx, server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if _, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1}); !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "dense vector search") {
+		t.Fatalf("routed dense search err=%v want read-only route rejection", err)
+	}
+	if routes := routeProvider.snapshotRoutes(); len(routes) != 0 {
+		t.Fatalf("routed dense search reached route provider: %+v", routes)
+	}
+}
+
 func TestDenseVectorSearchInvalidatesPreparedCacheOnNativeIndexMetadataMutation(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -356,11 +382,47 @@ func TestClearDenseVectorSearchScratchReleasesPointers(t *testing.T) {
 }
 
 func TestRetainDensePayloadScratchBoundsCapacity(t *testing.T) {
-	if got := retainDensePayloadScratch(make([]byte, 1, maxRetainedGetManyPayloadBytes)); len(got) != 0 || cap(got) != maxRetainedGetManyPayloadBytes {
-		t.Fatalf("threshold payload retained len=%d cap=%d", len(got), cap(got))
+	client := Client{
+		denseRequest: make([]byte, 1, maxRetainedGetManyPayloadBytes),
+		requestBody:  make([]byte, 1, maxRetainedGetManyPayloadBytes),
+	}
+	client.denseRequest = retainDensePayloadScratch(client.denseRequest)
+	client.requestBody = retainDensePayloadScratch(client.requestBody)
+	if len(client.denseRequest) != 0 || cap(client.denseRequest) != maxRetainedGetManyPayloadBytes || len(client.requestBody) != 0 || cap(client.requestBody) != maxRetainedGetManyPayloadBytes {
+		t.Fatalf("threshold scratch retained dense=%d/%d body=%d/%d", len(client.denseRequest), cap(client.denseRequest), len(client.requestBody), cap(client.requestBody))
 	}
 	if got := retainDensePayloadScratch(make([]byte, 1, maxRetainedGetManyPayloadBytes+1)); got != nil {
 		t.Fatalf("oversized payload retained cap=%d", cap(got))
+	}
+}
+
+func TestDenseVectorSearchBoundsOversizedRequestScratch(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	client := NewClient(clientConn)
+	t.Cleanup(func() { _ = client.Close(); _ = serverConn.Close() })
+	serverErr := make(chan error, 1)
+	go func() {
+		header, _, err := readFrame(serverConn, iwire.DefaultLimits())
+		if err == nil {
+			body, appendErr := iwire.AppendSection(nil, iwire.Section{ID: iwire.SectionError, Bytes: appendErrorPayload(nil, iwire.ErrInvalidCommand, false, "test")})
+			if appendErr != nil {
+				err = appendErr
+			} else {
+				err = writeFrame(serverConn, iwire.Header{Type: iwire.FrameError, RequestID: header.RequestID}, body)
+			}
+		}
+		serverErr <- err
+	}()
+	if _, err := client.DenseVectorSearch(context.Background(), DenseVectorSearchRequest{
+		Index: "docs", Query: make([]float32, maxRetainedGetManyPayloadBytes/4+1), TopK: 1,
+	}); err == nil {
+		t.Fatal("dense search unexpectedly succeeded")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("fake server: %v", err)
+	}
+	if client.denseRequest != nil || client.requestBody != nil {
+		t.Fatalf("oversized request scratch retained dense=%d body=%d", cap(client.denseRequest), cap(client.requestBody))
 	}
 }
 
