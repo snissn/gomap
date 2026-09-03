@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"math"
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -25,7 +27,7 @@ func TestDenseVectorSearchNativewireParityAndBorrowing(t *testing.T) {
 	svc := documentservice.New(mgr)
 	server := NewServer(ServerOptions{Collections: mgr, Backend: db, DocumentService: svc})
 	t.Cleanup(func() { _ = server.Close(); _ = svc.Close(); _ = db.Close() })
-	ctx := context.Background()
+	ctx := denseSearchTestContext(t)
 	_, err = svc.CreateIndex(ctx, documentservice.CreateIndexRequest{
 		Name:      "docs",
 		Dimension: 2,
@@ -236,7 +238,7 @@ func TestDenseVectorSearchCodecFailsClosed(t *testing.T) {
 func TestDenseVectorSearchUnconfiguredFailsClosed(t *testing.T) {
 	server := NewServer(ServerOptions{})
 	defer server.Close()
-	ctx := context.Background()
+	ctx := denseSearchTestContext(t)
 	client, cleanup, err := NewInProcessClient(ctx, server)
 	if err != nil {
 		t.Fatal(err)
@@ -258,7 +260,7 @@ func TestDenseVectorSearchRoutedClusterFailsClosedBeforeLocalSearch(t *testing.T
 	routeProvider := &routingClusterSubmitter{fakeClusterSubmitter: &fakeClusterSubmitter{}}
 	server := NewServer(ServerOptions{Collections: mgr, Backend: db, ClusterSubmitter: routeProvider, DocumentService: svc})
 	t.Cleanup(func() { _ = server.Close(); _ = svc.Close(); _ = db.Close() })
-	ctx := context.Background()
+	ctx := denseSearchTestContext(t)
 	client, cleanup, err := NewInProcessClient(ctx, server)
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +283,7 @@ func TestDenseVectorSearchInvalidatesPreparedCacheOnNativeIndexMetadataMutation(
 	svc := documentservice.New(mgr)
 	server := NewServer(ServerOptions{Collections: mgr, Backend: db, DocumentService: svc})
 	t.Cleanup(func() { _ = server.Close(); _ = svc.Close(); _ = db.Close() })
-	ctx := context.Background()
+	ctx := denseSearchTestContext(t)
 	if _, err := svc.CreateIndex(ctx, documentservice.CreateIndexRequest{
 		Name:      "docs",
 		Dimension: 2,
@@ -414,7 +416,7 @@ func TestDenseVectorSearchBoundsOversizedRequestScratch(t *testing.T) {
 		}
 		serverErr <- err
 	}()
-	if _, err := client.DenseVectorSearch(context.Background(), DenseVectorSearchRequest{
+	if _, err := client.DenseVectorSearch(denseSearchTestContext(t), DenseVectorSearchRequest{
 		Index: "docs", Query: make([]float32, maxRetainedGetManyPayloadBytes/4+1), TopK: 1,
 	}); err == nil {
 		t.Fatal("dense search unexpectedly succeeded")
@@ -469,7 +471,7 @@ func TestDenseVectorSearchReleasesRejectedOversizedResponse(t *testing.T) {
 		}
 		errCh <- err
 	}()
-	if _, err := client.DenseVectorSearch(context.Background(), DenseVectorSearchRequest{Index: "docs", Query: []float32{1}, TopK: 1}); err == nil {
+	if _, err := client.DenseVectorSearch(denseSearchTestContext(t), DenseVectorSearchRequest{Index: "docs", Query: []float32{1}, TopK: 1}); err == nil {
 		t.Fatal("invalid dense route proof succeeded")
 	}
 	if err := <-errCh; err != nil {
@@ -485,6 +487,30 @@ func TestDenseVectorSearchReleasesRejectedOversizedResponse(t *testing.T) {
 		if section.Bytes != nil {
 			t.Fatalf("retained rejected response section: %+v", section)
 		}
+	}
+}
+
+func denseSearchTestContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func TestDenseVectorSearchExpiredDeadlineStopsBeforeSearch(t *testing.T) {
+	request, err := appendDenseVectorSearchRequest(nil, DenseVectorSearchRequest{Index: "docs", Query: []float32{1}, TopK: 1}, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := binary.AppendUvarint(nil, uint64(time.Now().Add(-time.Second).UnixNano()))
+	server := NewServer(ServerOptions{})
+	defer server.Close()
+	_, err = server.handleDenseVectorSearch(context.Background(), &connState{}, []iwire.Section{
+		{ID: iwire.SectionDenseSearchRequest, Bytes: request},
+		{ID: iwire.SectionDeadline, Bytes: deadline},
+	}, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired dense search error=%v want deadline exceeded", err)
 	}
 }
 

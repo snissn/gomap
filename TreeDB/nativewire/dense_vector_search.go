@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/documentservice"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -65,12 +66,22 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return DenseVectorSearchResponse{}, protocolError(iwire.ErrInvalidCommand, "bounded dense search deadline is required")
+	}
 
 	payload, err := appendDenseVectorSearchRequest(c.denseRequest[:0], request, c.limits)
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
 	}
-	body, err := appendCommandRequestBody(c.requestBody[:0], iwire.CommandDenseVectorSearch, iwire.Section{ID: iwire.SectionDenseSearchRequest, Bytes: payload})
+	body, err := appendCommandRequestBody(c.requestBody[:0], iwire.CommandDenseVectorSearch,
+		iwire.Section{ID: iwire.SectionDenseSearchRequest, Bytes: payload},
+		iwire.Section{ID: iwire.SectionDeadline, Bytes: binary.AppendUvarint(nil, uint64(deadline.UnixNano()))},
+	)
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
 	}
@@ -122,6 +133,21 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 
 func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, sections []iwire.Section, dst []byte) ([]byte, error) {
 	defer clearDenseVectorSearchScratch(state)
+	deadline, err := deadlineUnixNanosFromSections(sections)
+	if err != nil {
+		return nil, err
+	}
+	if deadline <= 0 {
+		return nil, protocolError(iwire.ErrInvalidCommand, "positive dense search deadline is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithDeadline(ctx, time.Unix(0, deadline))
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if s.documentService == nil {
 		return nil, protocolError(iwire.ErrUnsupportedFeature, "dense document service is not configured")
 	}

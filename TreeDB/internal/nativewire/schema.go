@@ -642,7 +642,10 @@ func v1CommandSchemas() []CommandSchema {
 			Name:      "dense_vector_search",
 			Kind:      CommandKindRead,
 			LocalOnly: true,
-			Sections:  []SectionRule{{ID: SectionDenseSearchRequest, Name: "dense_search_request", Required: true}},
+			Sections: []SectionRule{
+				{ID: SectionDeadline, Name: "deadline", Required: true},
+				{ID: SectionDenseSearchRequest, Name: "dense_search_request", Required: true},
+			},
 		},
 		{
 			ID:        CommandVectorStatus,
