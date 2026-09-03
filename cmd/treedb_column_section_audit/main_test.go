@@ -11,16 +11,20 @@ func TestIsNonLeafValueLogFileIncludesEveryRegularLane(t *testing.T) {
 		sequenceBits     = 23
 		reservedLeafLane = 255
 	)
+	segmentID := func(lane uint32) uint32 {
+		return lane<<sequenceBits | 1
+	}
 	fileID := func(lane uint32) uint32 {
-		return page.ValueLogFileID(lane<<sequenceBits | 1)
+		return page.ValueLogFileID(segmentID(lane))
 	}
 	ids := map[uint32]uint32{
 		0: fileID(0),
 		1: fileID(1),
 		2: fileID(2),
 	}
-	leafID := fileID(reservedLeafLane)
-	leafIDs := map[uint32]struct{}{leafID: {}}
+	leafSegmentID := segmentID(reservedLeafLane)
+	leafID := page.ValueLogFileID(leafSegmentID)
+	leafIDs := map[uint32]struct{}{leafSegmentID: {}}
 
 	for lane, id := range ids {
 		if !isNonLeafValueLogFile(id, leafIDs) {

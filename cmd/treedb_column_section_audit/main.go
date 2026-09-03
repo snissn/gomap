@@ -35,7 +35,7 @@ func isNonLeafValueLogFile(id uint32, leafIDs map[uint32]struct{}) bool {
 	if !page.IsValueLogFileID(id) {
 		return false
 	}
-	_, leaf := leafIDs[id]
+	_, leaf := leafIDs[page.ValueLogSegmentID(id)]
 	return !leaf
 }
 

@@ -35,7 +35,7 @@
     },
     "harness_blobs": {
       "scripts/treedb_vectordbbench_artifact.py": "eae8a3ce940829fdab2ea7fb38db6a3f921c701d",
-      "cmd/treedb_column_section_audit/main.go": "864a30ae97fa83614283e69c3ec18643bf1eca87"
+      "cmd/treedb_column_section_audit/main.go": "4c8687f5f12868283dd3b005104e461cb5547fcf"
     },
     "vectordbbench": {
       "root": "/mnt/fast4tb/codex-vectordbbench-4545",
