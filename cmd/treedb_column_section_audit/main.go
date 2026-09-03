@@ -31,6 +31,14 @@ func valueLogLaneAndSequence(fileID uint32) (uint32, uint32) {
 	return segmentID >> sequenceBits, segmentID & ((1 << sequenceBits) - 1)
 }
 
+func isNonLeafValueLogFile(id uint32, leafIDs map[uint32]struct{}) bool {
+	if !page.IsValueLogFileID(id) {
+		return false
+	}
+	_, leaf := leafIDs[id]
+	return !leaf
+}
+
 type columnSectionAuditResult struct {
 	SchemaVersion      string                                    `json:"schema_version"`
 	Status             string                                    `json:"status"`
@@ -182,13 +190,22 @@ func collectOwnedFiles(
 		}
 	}
 
+	leafIDs := make(map[uint32]struct{})
+	for _, generation := range storagePlan.LeafGenerationPlan.Generations {
+		for _, id := range generation.FileIDs {
+			if _, duplicate := leafIDs[id]; duplicate {
+				return nil, fmt.Errorf("duplicate leaf-log file id %d", id)
+			}
+			leafIDs[id] = struct{}{}
+		}
+	}
+
 	state := db.State()
 	if state == nil || state.ValueLogSet == nil {
 		return nil, errors.New("value-log state unavailable")
 	}
 	for id, file := range state.ValueLogSet.Files {
-		lane, _ := valueLogLaneAndSequence(id)
-		if !page.IsValueLogFileID(id) || lane != 0 {
+		if !isNonLeafValueLogFile(id, leafIDs) {
 			continue
 		}
 		stats, err := db.ValueLogGC(ctx, backenddb.ValueLogGCOptions{
@@ -210,13 +227,9 @@ func collectOwnedFiles(
 		}
 	}
 
-	leafIDs := make(map[uint32]struct{})
 	for _, generation := range storagePlan.LeafGenerationPlan.Generations {
 		var generationBytes int64
 		for _, id := range generation.FileIDs {
-			if _, duplicate := leafIDs[id]; duplicate {
-				return nil, fmt.Errorf("duplicate leaf-log file id %d", id)
-			}
 			lane, sequence := valueLogLaneAndSequence(id)
 			path := filepath.Join(
 				domainPaths["leaf_vlog"],
@@ -226,7 +239,6 @@ func collectOwnedFiles(
 				return nil, err
 			}
 			generationBytes += info.Size()
-			leafIDs[id] = struct{}{}
 			if err := add(path, "leaf_vlog", info.Size()); err != nil {
 				return nil, err
 			}
