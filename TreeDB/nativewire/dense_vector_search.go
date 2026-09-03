@@ -75,7 +75,7 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 		return DenseVectorSearchResponse{}, err
 	}
 	_, response, err := c.roundTripLocked(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
-	c.denseRequest = payload[:0]
+	c.denseRequest = retainDensePayloadScratch(payload)
 	c.requestBody = body[:0]
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
@@ -221,6 +221,7 @@ func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, 
 }
 
 func clearDenseVectorSearchScratch(state *connState) {
+	state.denseMeta = retainDensePayloadScratch(state.denseMeta)
 	clear(state.denseResults[:cap(state.denseResults)])
 	if cap(state.denseResults) > maxRetainedGetManyScratchItems {
 		state.denseResults = nil
@@ -247,6 +248,13 @@ func clearDenseVectorSearchScratch(state *connState) {
 	clear(state.denseFilters[:cap(state.denseFilters)])
 	state.denseFilters = state.denseFilters[:0]
 	state.denseFilter = documentservice.Filter{}
+}
+
+func retainDensePayloadScratch(payload []byte) []byte {
+	if cap(payload) > maxRetainedGetManyPayloadBytes {
+		return nil
+	}
+	return payload[:0]
 }
 
 func denseByteVectorPayloadLen(items [][]byte) (int, error) {

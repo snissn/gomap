@@ -247,6 +247,7 @@ func TestDenseVectorSearchUnconfiguredFailsClosed(t *testing.T) {
 
 func TestClearDenseVectorSearchScratchReleasesPointers(t *testing.T) {
 	state := connState{
+		denseMeta:    make([]byte, 1, 2),
 		denseResults: make([]documentservice.RawDenseVectorResult, 1, 2),
 		idsScratch:   make([][]byte, 1, 2),
 		docsScratch:  make([][]byte, 1, 2),
@@ -262,8 +263,8 @@ func TestClearDenseVectorSearchScratchReleasesPointers(t *testing.T) {
 	if len(state.denseResults) != 0 || len(state.idsScratch) != 0 || len(state.docsScratch) != 0 || len(state.denseFilters) != 0 {
 		t.Fatalf("scratch lengths results=%d ids=%d docs=%d filters=%d want zero", len(state.denseResults), len(state.idsScratch), len(state.docsScratch), len(state.denseFilters))
 	}
-	if cap(state.denseResults) != 2 || cap(state.idsScratch) != 2 || cap(state.docsScratch) != 2 || cap(state.denseFilters) != 2 {
-		t.Fatalf("scratch capacities results=%d ids=%d docs=%d filters=%d want two", cap(state.denseResults), cap(state.idsScratch), cap(state.docsScratch), cap(state.denseFilters))
+	if cap(state.denseMeta) != 2 || cap(state.denseResults) != 2 || cap(state.idsScratch) != 2 || cap(state.docsScratch) != 2 || cap(state.denseFilters) != 2 {
+		t.Fatalf("scratch capacities meta=%d results=%d ids=%d docs=%d filters=%d want two", cap(state.denseMeta), cap(state.denseResults), cap(state.idsScratch), cap(state.docsScratch), cap(state.denseFilters))
 	}
 	for _, result := range state.denseResults[:cap(state.denseResults)] {
 		if result.ID != nil || result.Document != nil {
@@ -293,12 +294,22 @@ func TestClearDenseVectorSearchScratchReleasesPointers(t *testing.T) {
 	state.idsScratch = make([][]byte, 1, maxRetainedGetManyScratchItems+1)
 	state.docsScratch = make([][]byte, 1, maxRetainedGetManyScratchItems+1)
 	state.vectorQuery = make([]float32, 1, maxRetainedGetManyScratchItems+1)
+	state.denseMeta = make([]byte, 1, maxRetainedGetManyPayloadBytes+1)
 	state.denseResults[0] = documentservice.RawDenseVectorResult{ID: []byte("id"), Document: []byte("document")}
 	state.idsScratch[0] = []byte("id")
 	state.docsScratch[0] = []byte("document")
 	clearDenseVectorSearchScratch(&state)
-	if state.denseResults != nil || state.idsScratch != nil || state.docsScratch != nil || state.vectorQuery != nil {
-		t.Fatalf("oversized scratch retained results=%d ids=%d docs=%d query=%d", cap(state.denseResults), cap(state.idsScratch), cap(state.docsScratch), cap(state.vectorQuery))
+	if state.denseMeta != nil || state.denseResults != nil || state.idsScratch != nil || state.docsScratch != nil || state.vectorQuery != nil {
+		t.Fatalf("oversized scratch retained meta=%d results=%d ids=%d docs=%d query=%d", cap(state.denseMeta), cap(state.denseResults), cap(state.idsScratch), cap(state.docsScratch), cap(state.vectorQuery))
+	}
+}
+
+func TestRetainDensePayloadScratchBoundsCapacity(t *testing.T) {
+	if got := retainDensePayloadScratch(make([]byte, 1, maxRetainedGetManyPayloadBytes)); len(got) != 0 || cap(got) != maxRetainedGetManyPayloadBytes {
+		t.Fatalf("threshold payload retained len=%d cap=%d", len(got), cap(got))
+	}
+	if got := retainDensePayloadScratch(make([]byte, 1, maxRetainedGetManyPayloadBytes+1)); got != nil {
+		t.Fatalf("oversized payload retained cap=%d", cap(got))
 	}
 }
 
