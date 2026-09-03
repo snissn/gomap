@@ -180,6 +180,9 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 	if want := []byte(`{"nested":{"array":[1,2,3],"object":{"ok":true}},"none":null,"number":1.25e3,"title":"escaped\\ttext"}`); !bytes.Equal(got, want) {
 		t.Fatalf("deterministic projection=%q want=%q", got, want)
 	}
+	if cap(got) > len(got)+64 {
+		t.Fatalf("projected capacity=%d want bounded near output length=%d", cap(got), len(got))
+	}
 	if stats.FieldsReconstructed != 4 || stats.FieldsSkipped != 1 {
 		t.Fatalf("stats=%+v want four reconstructed and one skipped", stats)
 	}

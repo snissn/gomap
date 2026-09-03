@@ -576,13 +576,13 @@ func projectJSONDocument(raw []byte, projection *documentProjection, stats *Docu
 	}
 	obj := make(map[string]json.RawMessage)
 	if err := jsonparser.ObjectEach(raw, func(key, value []byte, valueType jsonparser.ValueType, valueEndOffset int) error {
-		keyString := string(key)
-		if !utf8.ValidString(keyString) {
-			keyString = string([]rune(keyString))
-		}
 		value, err := columnRetainedSemanticStreamV1JSONParserRawValue(raw, value, valueType, valueEndOffset)
 		if err != nil {
 			return err
+		}
+		keyString := string(key)
+		if !utf8.ValidString(keyString) {
+			keyString = string([]rune(keyString))
 		}
 		obj[keyString] = value
 		return nil
@@ -593,6 +593,7 @@ func projectJSONDocument(raw []byte, projection *documentProjection, stats *Docu
 		}
 	}
 	keys := make([]string, 0, len(obj))
+	outCap := 2
 	for key := range obj {
 		if !projection.wantsPath(key) {
 			delete(obj, key)
@@ -601,10 +602,14 @@ func projectJSONDocument(raw []byte, projection *documentProjection, stats *Docu
 			}
 			continue
 		}
+		if len(keys) > 0 {
+			outCap++
+		}
+		outCap += len(key) + len(obj[key]) + 3
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	out := make([]byte, 0, len(raw))
+	out := make([]byte, 0, outCap)
 	out = append(out, '{')
 	for i, key := range keys {
 		if i != 0 {
