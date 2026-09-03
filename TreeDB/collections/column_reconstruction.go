@@ -576,17 +576,21 @@ func projectJSONDocument(raw []byte, projection *documentProjection, stats *Docu
 	}
 	obj := make(map[string]json.RawMessage)
 	if err := jsonparser.ObjectEach(raw, func(key, value []byte, valueType jsonparser.ValueType, valueEndOffset int) error {
-		if !utf8.Valid(key) {
-			key = []byte(strings.ToValidUTF8(string(key), "\uFFfd"))
+		keyString := string(key)
+		if !utf8.ValidString(keyString) {
+			keyString = string([]rune(keyString))
 		}
 		value, err := columnRetainedSemanticStreamV1JSONParserRawValue(raw, value, valueType, valueEndOffset)
 		if err != nil {
 			return err
 		}
-		obj[string(key)] = value
+		obj[keyString] = value
 		return nil
 	}); err != nil {
-		return nil, errors.New("collections: column retained payload root must be a JSON object")
+		obj = make(map[string]json.RawMessage)
+		if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+			return nil, errors.New("collections: column retained payload root must be a JSON object")
+		}
 	}
 	keys := make([]string, 0, len(obj))
 	for key := range obj {
