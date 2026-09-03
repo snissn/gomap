@@ -4115,35 +4115,28 @@ def audited_data_files(
     data_dir: Path,
     data_files: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    owned_paths = {
-        item["path"] for item in data_files
-        if item["path"] == "maindb/index.db"
-        or item["path"].startswith((
-            "maindb/wal/",
-            "maindb/value_vlog/",
-            "maindb/leaf_vlog/",
-        ))
-    }
-    lifecycle = _object(audit.get("asset_lifecycle"), "storage ownership asset lifecycle", [])
-    reachability = _object(
-        lifecycle.get("reachability"), "storage ownership asset reachability", [])
-    segments = reachability.get("SegmentEntries")
-    if not isinstance(segments, list):
-        raise RuntimeError("storage ownership audit has no segment ledger")
-    for position, item in enumerate(segments):
-        item = _object(item, f"storage ownership segment[{position}]", [])
-        path = Path(str(item.get("Path", ""))).resolve()
+    raw_owned = audit.get("owned_files")
+    if not isinstance(raw_owned, list) or not raw_owned:
+        raise RuntimeError("storage ownership audit has no owned file ledger")
+    by_path = {item["path"]: item for item in data_files}
+    owned_paths: set[str] = set()
+    for position, item in enumerate(raw_owned):
+        item = _object(item, f"storage ownership owned_files[{position}]", [])
+        path = Path(str(item.get("path", ""))).resolve()
         try:
-            owned_paths.add(path.relative_to(data_dir.resolve()).as_posix())
+            relative = path.relative_to(data_dir.resolve()).as_posix()
         except ValueError as exc:
             raise RuntimeError(
-                "storage ownership segment path escapes the data root") from exc
-    selected = [item for item in data_files if item["path"] in owned_paths]
-    if {item["path"] for item in selected} != owned_paths:
-        raise RuntimeError("storage ownership audit references a missing data file")
-    if not selected:
-        raise RuntimeError("storage ownership audit produced an empty measured ledger")
-    return selected
+                "storage ownership owned file path escapes the data root") from exc
+        if relative in owned_paths:
+            raise RuntimeError("storage ownership audit repeats an owned file")
+        source = by_path.get(relative)
+        if source is None:
+            raise RuntimeError("storage ownership audit references a missing data file")
+        if source["size"] != item.get("bytes"):
+            raise RuntimeError("storage ownership audit owned file size changed")
+        owned_paths.add(relative)
+    return [item for item in data_files if item["path"] in owned_paths]
 
 
 def run_storage_ownership_audit(

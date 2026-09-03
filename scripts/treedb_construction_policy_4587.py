@@ -1443,8 +1443,9 @@ def validate_storage_ownership_audit(
     exact_keys(audit, {
         "schema_version", "status", "collection", "detailed_sections",
         "read_integrity", "physical_accounting", "storage_plan", "asset_lifecycle",
+        "owned_files",
     }, "storage ownership audit")
-    exact(audit["schema_version"], "treedb-column-section-audit/v1",
+    exact(audit["schema_version"], "treedb-column-section-audit/v2",
           "storage ownership audit schema")
     exact(audit["status"], "passed", "storage ownership audit status")
     exact(audit["detailed_sections"], False, "storage ownership audit detailed sections")
@@ -1498,7 +1499,6 @@ def validate_storage_ownership_audit(
             relative: size for relative, size in ledger.items()
             if relative == prefix or relative.startswith(prefix)
         }
-        audited_paths.update(matches)
         domain = domains[name]
         exact(Path(domain["path"]).resolve(),
               (data_root / prefix.rstrip("/")).resolve(),
@@ -1570,9 +1570,63 @@ def validate_storage_ownership_audit(
         and "/assets/segments/" in relative and relative.endswith(".tca")
     }
     exact(audited_segments, physical_segments, "storage ownership complete column segment ledger")
-    audited_paths.update(audited_segments)
-    if not audited_paths:
-        fail("storage ownership audit produced an empty measured ledger")
+    owned_files = audit["owned_files"]
+    if not isinstance(owned_files, list) or not owned_files:
+        fail("storage ownership audit owned_files must be a non-empty list")
+    owned_by_domain: dict[str, set[str]] = {}
+    audited_paths: set[str] = set()
+    previous_path = ""
+    for position, item in enumerate(owned_files):
+        item = object_at(item, f"storage ownership owned_files[{position}]")
+        exact_keys(item, {"path", "bytes", "domain"},
+                   f"storage ownership owned_files[{position}]")
+        path = Path(item["path"]).resolve()
+        try:
+            relative = path.relative_to(data_root).as_posix()
+        except ValueError:
+            fail("storage ownership owned file path must remain inside data root")
+        if previous_path and item["path"] <= previous_path:
+            fail("storage ownership owned_files must be path-sorted and unique")
+        previous_path = item["path"]
+        exact(ledger.get(relative),
+              nonnegative_int(item["bytes"], f"storage ownership owned_files[{position}].bytes"),
+              f"storage ownership owned file bytes for {relative}")
+        domain = item["domain"]
+        if domain not in {"index", "value_vlog", "leaf_vlog", "column_assets"}:
+            fail(f"storage ownership owned file domain is unsupported: {domain!r}")
+        owned_by_domain.setdefault(domain, set()).add(relative)
+        if relative in audited_paths:
+            fail(f"storage ownership owned file is duplicated: {relative}")
+        audited_paths.add(relative)
+
+    exact(owned_by_domain.get("index"), {"maindb/index.db"},
+          "storage ownership owned index files")
+    exact(sum(ledger[path] for path in owned_by_domain.get("index", set())),
+          nonnegative_int(domains["index"]["bytes"], "storage ownership index bytes"),
+          "storage ownership owned index bytes")
+    exact(len(owned_by_domain.get("value_vlog", set())),
+          nonnegative_int(value_log_gc.get("SegmentsReferenced"),
+                          "storage ownership referenced value-log segments"),
+          "storage ownership owned value-log segments")
+    exact(sum(ledger[path] for path in owned_by_domain.get("value_vlog", set())),
+          nonnegative_int(value_log_gc.get("BytesReferenced"),
+                          "storage ownership referenced value-log bytes"),
+          "storage ownership owned value-log bytes")
+    leaf_generations = object_at(storage_plan.get("leaf_generation_plan"),
+                                 "storage ownership leaf generation plan").get("Generations")
+    if not isinstance(leaf_generations, list):
+        fail("storage ownership leaf generations must be a list")
+    exact(len(owned_by_domain.get("leaf_vlog", set())),
+          sum(len(object_at(generation, "storage ownership leaf generation").get("FileIDs", []))
+              for generation in leaf_generations),
+          "storage ownership owned leaf-log files")
+    exact(sum(ledger[path] for path in owned_by_domain.get("leaf_vlog", set())),
+          sum(nonnegative_int(object_at(generation, "storage ownership leaf generation").get("BytesTotal"),
+                              "storage ownership leaf generation bytes")
+              for generation in leaf_generations),
+          "storage ownership owned leaf-log bytes")
+    exact(owned_by_domain.get("column_assets", set()), audited_segments,
+          "storage ownership owned column segments")
     return audited_paths
 
 

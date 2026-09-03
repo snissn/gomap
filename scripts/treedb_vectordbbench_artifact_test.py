@@ -4400,11 +4400,16 @@ class ProtocolMeasurementProducerTest(unittest.TestCase):
             )
             harness.write_json(root / "isolation.json", {"complete": True})
             storage_audit = {
-                "schema_version": "treedb-column-section-audit/v1",
+                "schema_version": "treedb-column-section-audit/v2",
                 "status": "passed",
                 "collection": "fixture-index",
                 "detailed_sections": False,
                 "read_integrity": "verify",
+                "owned_files": [{
+                    "path": str((data_dir / "maindb/index.db").resolve()),
+                    "bytes": 10,
+                    "domain": "index",
+                }],
                 "physical_accounting": {
                     "complete": True,
                     "collection": "fixture-index",
@@ -4430,7 +4435,11 @@ class ProtocolMeasurementProducerTest(unittest.TestCase):
                             ("total", "maindb"),
                         )
                     ],
-                    "value_log_gc": {"BytesTotal": 0, "SegmentsTotal": 0},
+                    "value_log_gc": {
+                        "BytesTotal": 0, "SegmentsTotal": 0,
+                        "BytesReferenced": 0, "SegmentsReferenced": 0,
+                    },
+                    "leaf_generation_plan": {"Generations": []},
                 },
                 "asset_lifecycle": {
                     "reachability_complete": True,

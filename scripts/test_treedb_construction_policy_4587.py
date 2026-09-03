@@ -398,11 +398,16 @@ class DecisionFixture:
         data_file = data_root / "maindb" / "index.db"
         data_file.write_bytes(b"x" * int(persisted))
         audit = {
-            "schema_version": "treedb-column-section-audit/v1",
+            "schema_version": "treedb-column-section-audit/v2",
             "status": "passed",
             "collection": "fixture-index",
             "detailed_sections": False,
             "read_integrity": "verify",
+            "owned_files": [{
+                "path": str(data_file.resolve()),
+                "bytes": data_file.stat().st_size,
+                "domain": "index",
+            }],
             "physical_accounting": {
                 "complete": True,
                 "collection": "fixture-index",
@@ -428,7 +433,11 @@ class DecisionFixture:
                         ("total", "maindb"),
                     )
                 ],
-                "value_log_gc": {"BytesTotal": 0, "SegmentsTotal": 0},
+                "value_log_gc": {
+                    "BytesTotal": 0, "SegmentsTotal": 0,
+                    "BytesReferenced": 0, "SegmentsReferenced": 0,
+                },
+                "leaf_generation_plan": {"Generations": []},
             },
             "asset_lifecycle": {
                 "reachability_complete": True,
