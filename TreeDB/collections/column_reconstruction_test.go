@@ -193,13 +193,13 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 	if !bytes.Equal(got, owned) {
 		t.Fatalf("projected document aliases caller input: got=%q want=%q", got, owned)
 	}
-	invalidUTF8 := append([]byte(`{"title":"`), 0xff)
+	invalidUTF8 := append([]byte(`{"title":"`), 0xff, 0xff)
 	invalidUTF8 = append(invalidUTF8, `","embedding":[1]}`...)
 	projected, err := projectJSONDocument(invalidUTF8, projection, nil)
 	if err != nil {
 		t.Fatalf("project invalid UTF-8: %v", err)
 	}
-	if want := []byte(`{"title":"�"}`); !bytes.Equal(projected, want) {
+	if want := []byte(`{"title":"��"}`); !bytes.Equal(projected, want) {
 		t.Fatalf("invalid UTF-8 projection=%q want=%q", projected, want)
 	}
 

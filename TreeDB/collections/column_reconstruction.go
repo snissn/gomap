@@ -580,7 +580,7 @@ func projectJSONDocument(raw []byte, projection *documentProjection, stats *Docu
 	for key, value := range obj {
 		if projection.wantsPath(key) {
 			if !utf8.Valid(value) {
-				obj[key] = bytes.ToValidUTF8(value, []byte("\uFFFD"))
+				obj[key] = json.RawMessage(string([]rune(string(value))))
 			}
 			continue
 		}
