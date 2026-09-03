@@ -998,6 +998,10 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 			if !usedDst {
 				noteGrowReadAppendCompressedFallback(len(val))
 				noteGrowReadAppendCompressedFallbackDst(dst, len(val))
+				if len(dst) == 0 {
+					out, _, _, err := f.maybeDecodeLeafLogPayloadTo(val, nil)
+					return out, err
+				}
 			}
 			return f.appendMaybeDecodeLeafLogPayload(dst, val)
 		}

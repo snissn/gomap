@@ -76,6 +76,18 @@ func TestFileReadAppend_CompressedFallbackNilDstAvoidsExtraGrow(t *testing.T) {
 	if delta := after.ReadAppendCompressedFallbackCallsTotal - before.ReadAppendCompressedFallbackCallsTotal; delta != 1 {
 		t.Fatalf("compressed fallback calls delta=%d want 1", delta)
 	}
+	directAllocs := testing.AllocsPerRun(100, func() {
+		if _, _, err, ok := f.readGroupedCompressedFromFileToVerify(ptrs[3], true, nil); err != nil || !ok {
+			t.Fatalf("readGroupedCompressedFromFileToVerify: ok=%v err=%v", ok, err)
+		}
+	})
+	if allocs := testing.AllocsPerRun(100, func() {
+		if _, err := f.ReadAppend(ptrs[3], true, nil); err != nil {
+			t.Fatalf("ReadAppend: %v", err)
+		}
+	}); allocs != directAllocs {
+		t.Fatalf("ReadAppend allocations=%v want direct-read allocations=%v", allocs, directAllocs)
+	}
 }
 
 func TestFileReadAppend_VerifiedCompressedGroupedFallbackUsesFrameCache(t *testing.T) {
