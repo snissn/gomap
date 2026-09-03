@@ -162,6 +162,108 @@ func TestColumnDocumentReconstructionBytesAsIntegerArray2010(t *testing.T) {
 	})
 }
 
+func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) {
+	raw := []byte(`{"title":"escaped\\ttext","embedding":[`)
+	for i := 0; i < 64; i++ {
+		if i != 0 {
+			raw = append(raw, ',')
+		}
+		raw = append(raw, `{"n":1,"nested":[true,null,{"value":"x"}]}`...)
+	}
+	raw = append(raw, `],"nested":{"array":[1,2,3],"object":{"ok":true}},"none":null,"number":1.25e3}`...)
+	source := append([]byte(nil), raw...)
+	projection := &documentProjection{exclude: map[string]struct{}{"embedding": {}}}
+
+	var stats DocumentMaterializationStats
+	got, err := projectJSONDocument(raw, projection, &stats)
+	if err != nil {
+		t.Fatalf("projectJSONDocument: %v", err)
+	}
+	assertJSONMapEqual1875(t, got, map[string]any{
+		"title":  "escaped\\ttext",
+		"nested": map[string]any{"array": []any{float64(1), float64(2), float64(3)}, "object": map[string]any{"ok": true}},
+		"none":   nil,
+		"number": float64(1250),
+	})
+	if stats.FieldsReconstructed != 4 || stats.FieldsSkipped != 1 {
+		t.Fatalf("stats=%+v want four reconstructed and one skipped", stats)
+	}
+	owned := append([]byte(nil), got...)
+	raw[0] = '['
+	if !bytes.Equal(got, owned) {
+		t.Fatalf("projected document aliases caller input: got=%q want=%q", got, owned)
+	}
+	invalidUTF8 := append([]byte(`{"title":"`), 0xff, 0xff)
+	invalidUTF8 = append(invalidUTF8, `","embedding":[1]}`...)
+	projected, err := projectJSONDocument(invalidUTF8, projection, nil)
+	if err != nil {
+		t.Fatalf("project invalid UTF-8: %v", err)
+	}
+	if want := []byte(`{"title":"��"}`); !bytes.Equal(projected, want) {
+		t.Fatalf("invalid UTF-8 projection=%q want=%q", projected, want)
+	}
+	mixedInvalid := append([]byte(`{"title":"`), 0xff)
+	mixedInvalid = append(mixedInvalid, `\ud800","embedding":[1]}`...)
+	projected, err = projectJSONDocument(mixedInvalid, projection, nil)
+	if err != nil {
+		t.Fatalf("project mixed invalid Unicode: %v", err)
+	}
+	if want := []byte(`{"title":"��"}`); !bytes.Equal(projected, want) {
+		t.Fatalf("mixed invalid Unicode projection=%q want=%q", projected, want)
+	}
+	escapedSurrogate := []byte(`{"title":"\ud800","embedding":[1]}`)
+	projected, err = projectJSONDocument(escapedSurrogate, projection, nil)
+	if err != nil {
+		t.Fatalf("project escaped surrogate: %v", err)
+	}
+	if want := []byte(`{"title":"�"}`); !bytes.Equal(projected, want) {
+		t.Fatalf("escaped surrogate projection=%q want=%q", projected, want)
+	}
+	numericSurrogate := []byte(`{"nested":{"s":"\ud800","large":9007199254740993,"exp":1e400},"embedding":[1]}`)
+	projected, err = projectJSONDocument(numericSurrogate, projection, nil)
+	if err != nil {
+		t.Fatalf("project escaped surrogate with numbers: %v", err)
+	}
+	if want := []byte(`{"nested":{"exp":1e400,"large":9007199254740993,"s":"�"}}`); !bytes.Equal(projected, want) {
+		t.Fatalf("escaped surrogate numeric projection=%q want=%q", projected, want)
+	}
+	for _, tc := range []struct {
+		input string
+		want  map[string]any
+	}{
+		{`{"nested":{"a":1,"a":2},"embedding":[1]}`, map[string]any{"nested": map[string]any{"a": float64(2)}}},
+	} {
+		projected, err := projectJSONDocument([]byte(tc.input), projection, nil)
+		if err != nil {
+			t.Fatalf("project semantic case %q: %v", tc.input, err)
+		}
+		assertJSONMapEqual1875(t, projected, tc.want)
+	}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		if _, err := projectJSONDocument(source, projection, nil); err != nil {
+			panic(err)
+		}
+	})
+	if allocs > 64 {
+		t.Fatalf("top-level projection allocs/run=%0.0f want <=64", allocs)
+	}
+
+	for _, input := range [][]byte{[]byte(`{"title":1,"title":2,"embedding":3}`), []byte(`{"title":`), []byte(`{"title":1} {}`), []byte(`[]`)} {
+		projected, err := projectJSONDocument(input, projection, nil)
+		if bytes.Equal(input, []byte(`{"title":1,"title":2,"embedding":3}`)) {
+			if err != nil {
+				t.Fatalf("duplicate keys: %v", err)
+			}
+			assertJSONMapEqual1875(t, projected, map[string]any{"title": float64(2)})
+			continue
+		}
+		if err == nil {
+			t.Fatalf("invalid input %q projected successfully", input)
+		}
+	}
+}
+
 func columnReconstructionArenaTestConfig1888() ColumnStoreConfig {
 	return ColumnStoreConfig{Columns: []ColumnStoreColumn{
 		{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
