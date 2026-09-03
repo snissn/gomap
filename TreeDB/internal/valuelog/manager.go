@@ -946,6 +946,15 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		f.mmapReadHits.Add(1)
 		return val, err
 	}
+	if !verifyCRC {
+		if val, _, err, ok := f.readGroupedCompressedFromFileTo(ptr, dst[len(dst):cap(dst)]); ok {
+			f.mmapReadFallbackReadAt.Add(1)
+			if err != nil {
+				return nil, err
+			}
+			return f.appendMaybeDecodeLeafLogPayload(dst, val)
+		}
+	}
 	// Fast path (bench/unsafe reads): grouped + uncompressed + no CRC.
 	if !verifyCRC && page.ValuePtrIsGrouped(ptr) && ptr.Offset >= 4 {
 		f.mmapReadFallbackReadAt.Add(1)

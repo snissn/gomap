@@ -75,3 +75,72 @@ func TestFileReadAppend_CompressedFallbackNilDstAvoidsExtraGrow(t *testing.T) {
 		t.Fatalf("compressed fallback calls delta=%d want 1", delta)
 	}
 }
+
+func TestFileReadAppend_UnverifiedCompressedGroupedFallbackUsesFrameCache(t *testing.T) {
+	f, ptrs, want := openGroupedCompressedFileReadFallbackFixture(t)
+	f.setGroupedFrameCacheEntries(4)
+
+	// Force the file-read fallback rather than a mmap path.
+	mapped := []byte{0}
+	f.mmapData.Store(mapped)
+	f.deadMappingsCount.Store(uint64(effectiveMaxDeadMappings(len(mapped))))
+
+	prefix := []byte("caller-prefix:")
+	backing := make([]byte, len(prefix), len(prefix)+len(want[0]))
+	copy(backing, prefix)
+	expected := append(append([]byte(nil), prefix...), want[0]...)
+
+	got, err := f.ReadAppend(ptrs[0], false, backing[:len(prefix)])
+	if err != nil {
+		t.Fatalf("first ReadAppend: %v", err)
+	}
+	if !bytes.Equal(got, expected) || &got[0] != &backing[0] {
+		t.Fatalf("first ReadAppend did not preserve prefix/dst ownership")
+	}
+	hitsBefore, _, entriesBefore, _ := f.groupedFrameCacheStats()
+	if entriesBefore != 1 {
+		t.Fatalf("first ReadAppend cached entries=%d want 1", entriesBefore)
+	}
+
+	got, err = f.ReadAppend(ptrs[0], false, backing[:len(prefix)])
+	if err != nil {
+		t.Fatalf("second ReadAppend: %v", err)
+	}
+	hitsAfter, _, _, _ := f.groupedFrameCacheStats()
+	if hitsAfter != hitsBefore+1 {
+		t.Fatalf("second ReadAppend cache hits=%d want %d", hitsAfter, hitsBefore+1)
+	}
+	if !bytes.Equal(got, expected) || &got[0] != &backing[0] {
+		t.Fatalf("second ReadAppend did not preserve prefix/dst ownership")
+	}
+}
+
+func BenchmarkFileReadAppend_UnverifiedCompressedGroupedFallback(b *testing.B) {
+	f, ptrs, want := openGroupedCompressedFileReadFallbackFixture(b)
+	f.setGroupedFrameCacheEntries(64)
+	mapped := []byte{0}
+	f.mmapData.Store(mapped)
+	f.deadMappingsCount.Store(uint64(effectiveMaxDeadMappings(len(mapped))))
+
+	for _, tc := range []struct {
+		name string
+		ptr  func(int) page.ValuePtr
+	}{
+		{"same_entry", func(int) page.ValuePtr { return ptrs[0] }},
+		{"working_set", func(i int) page.ValuePtr { return ptrs[i%len(ptrs)] }},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			dst := make([]byte, 0, len(want[0]))
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				got, err := f.ReadAppend(tc.ptr(i), false, dst[:0])
+				if err != nil {
+					b.Fatalf("ReadAppend: %v", err)
+				}
+				if len(got) != len(want[0]) {
+					b.Fatalf("ReadAppend len=%d want %d", len(got), len(want[0]))
+				}
+			}
+		})
+	}
+}
