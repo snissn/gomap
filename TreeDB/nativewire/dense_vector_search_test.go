@@ -3,6 +3,7 @@ package nativewire
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"math"
 	"net"
@@ -423,6 +424,67 @@ func TestDenseVectorSearchBoundsOversizedRequestScratch(t *testing.T) {
 	}
 	if client.denseRequest != nil || client.requestBody != nil {
 		t.Fatalf("oversized request scratch retained dense=%d body=%d", cap(client.denseRequest), cap(client.requestBody))
+	}
+}
+
+func TestDenseVectorSearchReleasesRejectedOversizedResponse(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	client := NewClient(clientConn)
+	t.Cleanup(func() { _ = client.Close(); _ = serverConn.Close() })
+	const count = maxRetainedGetManyScratchItems + 1
+	ids := make([][]byte, count)
+	docs := make([][]byte, count)
+	for i := range ids {
+		ids[i] = []byte("id")
+		docs[i] = []byte("document")
+	}
+	meta := []byte{0}
+	meta = binary.AppendUvarint(meta, count)
+	meta = binary.AppendUvarint(meta, 0)
+	meta = binary.AppendUvarint(meta, 0)
+	meta = binary.AppendUvarint(meta, count)
+	for range count {
+		meta = binary.LittleEndian.AppendUint64(meta, math.Float64bits(0))
+	}
+	response, err := iwire.AppendSection(nil, iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err = iwire.AppendSection(response, iwire.Section{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, docs...)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err = iwire.AppendSection(response, iwire.Section{ID: iwire.SectionDenseSearchResponse, Bytes: meta})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response) <= maxBufferedWriteFrameBody {
+		t.Fatalf("response length=%d want >%d", len(response), maxBufferedWriteFrameBody)
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		header, _, err := readFrame(serverConn, iwire.DefaultLimits())
+		if err == nil {
+			err = writeFrame(serverConn, iwire.Header{Type: iwire.FrameResponse, RequestID: header.RequestID}, response)
+		}
+		errCh <- err
+	}()
+	if _, err := client.DenseVectorSearch(context.Background(), DenseVectorSearchRequest{Index: "docs", Query: []float32{1}, TopK: 1}); err == nil {
+		t.Fatal("invalid dense route proof succeeded")
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("server response: %v", err)
+	}
+	if client.readBody != nil || client.denseIDs != nil || client.denseDocuments != nil || client.denseResults != nil {
+		t.Fatalf("retained rejected response body=%d ids=%d docs=%d results=%d", cap(client.readBody), cap(client.denseIDs), cap(client.denseDocuments), cap(client.denseResults))
+	}
+	if len(client.vectorSections) != 0 {
+		t.Fatalf("retained rejected response sections=%d", len(client.vectorSections))
+	}
+	for _, section := range client.vectorSections[:cap(client.vectorSections)] {
+		if section.Bytes != nil {
+			t.Fatalf("retained rejected response section: %+v", section)
+		}
 	}
 }
 

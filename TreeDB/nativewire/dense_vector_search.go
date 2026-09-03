@@ -80,6 +80,13 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
 	}
+	decoded := false
+	defer func() {
+		if !decoded {
+			c.clearBorrowedResponseViews()
+			c.readBody = retainSmallPayloadScratch(c.readBody)
+		}
+	}()
 	c.vectorSections, err = iwire.DecodeSectionsInto(c.vectorSections[:0], response, c.limits)
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
@@ -109,6 +116,7 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	out, c.denseIDs, c.denseDocuments, c.denseResults, err = decodeDenseVectorSearchResponse(
 		ids, docs, meta, c.limits, c.denseIDs, c.denseDocuments, c.denseResults,
 	)
+	decoded = err == nil
 	return out, err
 }
 
