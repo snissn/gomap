@@ -220,6 +220,7 @@ func (e *localEndpoint) roundTrip(ctx context.Context, streamID uint64, typ iwir
 		copy(responseDst, response)
 		response = responseDst
 	}
+	e.frame = retainSmallPayloadScratch(e.frame)
 	if header.Type == iwire.FrameError {
 		return header, response, decodeWireError(response, limits)
 	}

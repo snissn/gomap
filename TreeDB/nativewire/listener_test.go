@@ -211,6 +211,51 @@ func TestServerBufferedResponseScratchBoundsCapacity(t *testing.T) {
 	}
 }
 
+func TestClientRoundTripBoundsReleasedResponseBuffer(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	client := NewClient(clientConn)
+	t.Cleanup(func() { _ = client.Close(); _ = serverConn.Close() })
+	client.readBody = make([]byte, 0, maxBufferedWriteFrameBody+1)
+	old := client.readBody[:cap(client.readBody)]
+	oldPtr := &old[0]
+	errCh := make(chan error, 1)
+	go func() {
+		header, _, err := readFrame(serverConn, iwire.DefaultLimits())
+		if err == nil {
+			err = writeFrame(serverConn, iwire.Header{Type: iwire.FramePong, RequestID: header.RequestID}, []byte{1})
+		}
+		errCh <- err
+	}()
+	if err := client.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("server response: %v", err)
+	}
+	if cap(client.readBody) > maxBufferedWriteFrameBody {
+		t.Fatalf("retained oversized client response buffer cap=%d", cap(client.readBody))
+	}
+	if cap(client.readBody) != 0 && &client.readBody[:cap(client.readBody)][0] == oldPtr {
+		t.Fatal("small response reused released oversized client response buffer")
+	}
+}
+
+func TestLocalEndpointBoundsConsumedFrame(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	endpoint, ok := newLocalEndpoint(server)
+	if !ok {
+		t.Fatal("newLocalEndpoint rejected connection")
+	}
+	t.Cleanup(func() { _ = endpoint.close(); _ = server.Close() })
+	endpoint.frame = make([]byte, 0, maxBufferedWriteFrameBody+1)
+	if _, _, err := endpoint.roundTrip(context.Background(), 0, iwire.FramePing, 1, nil, iwire.FramePong, iwire.DefaultLimits(), nil, false); err != nil {
+		t.Fatalf("roundTrip: %v", err)
+	}
+	if cap(endpoint.frame) > maxBufferedWriteFrameBody {
+		t.Fatalf("retained oversized local frame cap=%d", cap(endpoint.frame))
+	}
+}
+
 func TestInProcessRoundTripRejectsOversizedRequestFrame(t *testing.T) {
 	maxFrameSize := uint64(iwire.FrameHeaderLenV1) + 128
 	server := NewServer(ServerOptions{Limits: iwire.Limits{MaxFrameSize: maxFrameSize}})
