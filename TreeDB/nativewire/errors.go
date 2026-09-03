@@ -238,6 +238,12 @@ func errorCodeFor(err error) iwire.ErrorCode {
 	if code, ok := iwire.ErrorCodeOf(err); ok {
 		return code
 	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return iwire.ErrCanceled
+	case errors.Is(err, context.DeadlineExceeded):
+		return iwire.ErrTimeout
+	}
 	switch documentservice.ErrorCodeOf(err) {
 	case documentservice.CodeInvalidRequest, documentservice.CodeMalformedJSON:
 		return iwire.ErrInvalidCommand
@@ -251,10 +257,6 @@ func errorCodeFor(err error) iwire.ErrorCode {
 		return iwire.ErrUnsupportedFeature
 	}
 	switch {
-	case errors.Is(err, context.Canceled):
-		return iwire.ErrCanceled
-	case errors.Is(err, context.DeadlineExceeded):
-		return iwire.ErrTimeout
 	case errors.Is(err, collections.ErrCollectionNotFound):
 		return iwire.ErrCollectionNotFound
 	case errors.Is(err, collections.ErrIndexNotFound):

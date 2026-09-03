@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -269,6 +270,8 @@ const (
 // and call FetchDocumentsForVectorIndexSearchResults as an explicit, separately
 // measured fetch phase.
 type VectorIndexSearchOptions struct {
+	// Context optionally interrupts native_runtime traversal.
+	Context context.Context
 	// IndexName is used by collection-level physical column_graph search.
 	IndexName string
 	// Query is used by collection-level physical column_graph search.
@@ -3813,6 +3816,9 @@ func prepareVectorIndexGraphOnlyQuery(query []float32, metric VectorMetric, dime
 }
 
 func (idx *VectorIndex) searchGraphOnlyCandidatesWithPreparedQueryLocked(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch, liveDocs int, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, error) {
+	if err := scratch.finalContextErr(); err != nil {
+		return nil, err
+	}
 	if topK == 0 {
 		return nil, nil
 	}
@@ -3834,6 +3840,9 @@ func (idx *VectorIndex) searchGraphOnlyCandidatesWithPreparedQueryLocked(query [
 		candidates = idx.searchCandidatesResumableLocked(query, queryNorm, prepared, limit, scratch)
 	} else {
 		candidates = idx.searchCurrentCandidatesWithLiveDocsLocked(query, queryNorm, prepared, limit, liveDocs, scratch)
+	}
+	if err := scratch.finalContextErr(); err != nil {
+		return nil, err
 	}
 	if target := minInt(topK, liveDocs); len(candidates) < target {
 		return nil, fmt.Errorf("%w: native graph search returned %d of %d live candidates within bounded traversal; rebuild the vector index", ErrVectorIndexSearchUnavailable, len(candidates), target)
@@ -4273,6 +4282,9 @@ func (idx *VectorIndex) continueResumableCandidatesLocked(query []float32, query
 	visited := scratch.visitedEpochs
 	mark := scratch.resumeVisitedMark
 	for len(scratch.queue) > 0 {
+		if scratch.checkContext() {
+			break
+		}
 		current := scratch.queue[0]
 		if len(scratch.best) >= limit && vectorIndexCandidateWorse(current, scratch.best[0]) {
 			break
@@ -4440,6 +4452,9 @@ func (idx *VectorIndex) searchLayerWithScratchModeObservedLocked(query []float32
 	}
 search:
 	for len(queue) > 0 {
+		if scratch.checkContext() {
+			break search
+		}
 		current := queue.pop()
 		if len(best) >= explorationLimit && vectorIndexCandidateWorse(current, best[0]) {
 			break
@@ -5440,6 +5455,9 @@ type vectorIndexCandidate struct {
 }
 
 type vectorIndexSearchScratch struct {
+	context           context.Context
+	contextErr        error
+	contextChecks     uint32
 	visitedEpochs     []uint32
 	visitedEpoch      uint32
 	explorationLimit  int
@@ -5454,6 +5472,43 @@ type vectorIndexSearchScratch struct {
 	resumeEnabled     bool
 	resumeRequested   bool
 	resumed           bool
+}
+
+func (scratch *vectorIndexSearchScratch) setContext(ctx context.Context) {
+	scratch.context = ctx
+	scratch.contextErr = nil
+	scratch.contextChecks = 0
+}
+
+func (scratch *vectorIndexSearchScratch) clearContext() {
+	scratch.context = nil
+	scratch.contextErr = nil
+	scratch.contextChecks = 0
+}
+
+func (scratch *vectorIndexSearchScratch) checkContext() bool {
+	if scratch == nil || scratch.context == nil || scratch.contextErr != nil {
+		return scratch != nil && scratch.contextErr != nil
+	}
+	scratch.contextChecks++
+	if scratch.contextChecks&63 != 0 {
+		return false
+	}
+	scratch.contextErr = scratch.context.Err()
+	return scratch.contextErr != nil
+}
+
+func (scratch *vectorIndexSearchScratch) finalContextErr() error {
+	if scratch == nil || scratch.contextErr != nil {
+		if scratch == nil {
+			return nil
+		}
+		return scratch.contextErr
+	}
+	if scratch.context != nil {
+		scratch.contextErr = scratch.context.Err()
+	}
+	return scratch.contextErr
 }
 
 func (scratch *vectorIndexSearchScratch) startResumableSearch() {

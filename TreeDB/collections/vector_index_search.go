@@ -1465,6 +1465,8 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBufferCoverage(def Vector
 		endForegroundRead = c.db.BeginForegroundRead()
 	}
 	defer endForegroundRead()
+	buffer.nativeSearchScratch.setContext(opts.Context)
+	defer buffer.nativeSearchScratch.clearContext()
 	if def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
 		buffer.Reset()
 		return response, fmt.Errorf("%w: native_runtime vector index %q buffered search supports only cosine float32", ErrVectorIndexSearchUnavailable, def.Name)

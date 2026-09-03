@@ -334,7 +334,7 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 		if err := ctxErr(ctx); err != nil {
 			return RawDenseVectorSearchResponse{}, err
 		}
-		search, view, err := col.SearchVectorIndexWithBufferReadView(collections.VectorIndexSearchOptions{IndexName: defaultVectorIndexName, Query: req.QueryEmbedding, QueryMode: collections.VectorIndexQueryModeExact, TopK: req.TopK, EfSearch: req.EfSearch, StatsMode: collections.VectorIndexSearchStatsModeProduction, DeclaredScalarFilter: scalarFilter}, buffer)
+		search, view, err := col.SearchVectorIndexWithBufferReadView(collections.VectorIndexSearchOptions{Context: ctx, IndexName: defaultVectorIndexName, Query: req.QueryEmbedding, QueryMode: collections.VectorIndexQueryModeExact, TopK: req.TopK, EfSearch: req.EfSearch, StatsMode: collections.VectorIndexSearchStatsModeProduction, DeclaredScalarFilter: scalarFilter}, buffer)
 		if err != nil {
 			if errors.Is(err, collections.ErrVectorIndexSnapshotMismatch) {
 				buffer.Reset()
@@ -352,8 +352,15 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 				return RawDenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search hook", err)
 			}
 		}
+		if err := ctxErr(ctx); err != nil {
+			_ = view.Close()
+			return RawDenseVectorSearchResponse{}, err
+		}
 		fetched, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(search.Results, serviceDocumentFetchOptions(req.ReturnEmbedding))
 		closeErr := view.Close()
+		if err := ctxErr(ctx); err != nil {
+			return RawDenseVectorSearchResponse{}, err
+		}
 		if fetchErr != nil {
 			return RawDenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann document fetch", errors.Join(fetchErr, closeErr))
 		}

@@ -1163,6 +1163,9 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 		sort.Strings(ids)
 		candidates = scratch.out[:0]
 		for _, id := range ids {
+			if scratch.checkContext() {
+				return nil, work, scratch.finalContextErr()
+			}
 			nodeID, ok := currentNode[id]
 			if !ok || nodeID < 0 || nodeID >= len(nodes) {
 				continue
@@ -1225,6 +1228,9 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 	}
 	work.admitted = len(*results)
 	work.underfill = len(*results) < topK
+	if err := scratch.finalContextErr(); err != nil {
+		return nil, work, err
+	}
 	return *results, work, nil
 }
 
@@ -1277,6 +1283,9 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 		}
 		seedScores := 0
 		for _, id := range plan.seedIDs {
+			if scratch.checkContext() {
+				return nil, work, scratch.finalContextErr()
+			}
 			if seedScores >= seedScoreLimit || seedBudget.scores <= 0 {
 				break
 			}
@@ -1304,10 +1313,16 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 		}
 		for ordinal := 0; ordinal < seedBuckets && seedScores < seedScoreLimit &&
 			seedBudget.rows > 0 && planeRowsRemaining > 0; ordinal++ {
+			if scratch.checkContext() {
+				return nil, work, scratch.finalContextErr()
+			}
 			bucket := ordinal * stride % seedBuckets
 			start := bucket * probeRows / seedBuckets
 			end := (bucket + 1) * probeRows / seedBuckets
 			for probe := start; probe < end && seedBudget.rows > 0 && planeRowsRemaining > 0; probe++ {
+				if scratch.checkContext() {
+					return nil, work, scratch.finalContextErr()
+				}
 				// Integer stratification visits every row for small graphs and
 				// evenly covers the full immutable ordinal space for large graphs.
 				nodeID := int(uint64(probe) * uint64(len(idx.nodes)) / uint64(probeRows))
@@ -1334,6 +1349,9 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 				clusterScores := 0
 				for candidateID := clusterStart; candidateID < len(idx.nodes) &&
 					clusterScores < clusterScoreLimit; candidateID++ {
+					if scratch.checkContext() {
+						return nil, work, scratch.finalContextErr()
+					}
 					if candidateID > nodeID {
 						if seedBudget.rows <= 0 || planeRowsRemaining <= 0 {
 							break
@@ -1402,11 +1420,17 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 
 search:
 	for len(queue) > 0 {
+		if scratch.checkContext() {
+			break search
+		}
 		current := queue.pop()
 		if len(navigation) >= explorationLimit && vectorIndexCandidateWorse(current, navigation[0]) {
 			break
 		}
 		for _, neighbor := range idx.layerNeighborsLocked(current.nodeID, 0) {
+			if scratch.checkContext() {
+				break search
+			}
 			nodeID := neighbor.nodeID
 			if nodeID < 0 || nodeID >= len(idx.nodes) || visited[nodeID] == mark {
 				continue
@@ -1440,5 +1464,8 @@ search:
 	out = append(out, eligible...)
 	scratch.out = out
 	sortVectorIndexCandidates(out)
+	if err := scratch.finalContextErr(); err != nil {
+		return nil, work, err
+	}
 	return out, work, nil
 }
