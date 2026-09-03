@@ -642,6 +642,9 @@ func projectJSONDocument(raw []byte, projection *documentProjection, stats *Docu
 		out = append(out, value...)
 	}
 	out = append(out, '}')
+	if cap(out) > len(out)+64 {
+		out = bytes.Clone(out)
+	}
 	if stats != nil {
 		stats.FieldsReconstructed += uint64(len(keys))
 	}

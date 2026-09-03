@@ -183,6 +183,21 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 	if cap(got) > len(got)+64 {
 		t.Fatalf("projected capacity=%d want bounded near output length=%d", cap(got), len(got))
 	}
+	whitespace := bytes.Repeat([]byte(" "), 1<<20)
+	whitespaceDocument := append([]byte(`{"title":[`), whitespace...)
+	whitespaceDocument = append(whitespaceDocument, `1`...)
+	whitespaceDocument = append(whitespaceDocument, whitespace...)
+	whitespaceDocument = append(whitespaceDocument, `],"embedding":2}`...)
+	projected, err := projectJSONDocument(whitespaceDocument, projection, nil)
+	if err != nil {
+		t.Fatalf("project whitespace document: %v", err)
+	}
+	if want := []byte(`{"title":[1]}`); !bytes.Equal(projected, want) {
+		t.Fatalf("whitespace projection=%q want=%q", projected, want)
+	}
+	if cap(projected) > len(projected)+64 {
+		t.Fatalf("whitespace projected capacity=%d want bounded near output length=%d", cap(projected), len(projected))
+	}
 	if stats.FieldsReconstructed != 4 || stats.FieldsSkipped != 1 {
 		t.Fatalf("stats=%+v want four reconstructed and one skipped", stats)
 	}
@@ -193,7 +208,7 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 	}
 	invalidUTF8 := append([]byte(`{"title":"`), 0xff, 0xff)
 	invalidUTF8 = append(invalidUTF8, `","embedding":[1]}`...)
-	projected, err := projectJSONDocument(invalidUTF8, projection, nil)
+	projected, err = projectJSONDocument(invalidUTF8, projection, nil)
 	if err != nil {
 		t.Fatalf("project invalid UTF-8: %v", err)
 	}
