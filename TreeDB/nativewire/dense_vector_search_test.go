@@ -245,6 +245,57 @@ func TestDenseVectorSearchUnconfiguredFailsClosed(t *testing.T) {
 	}
 }
 
+func TestDenseVectorSearchInvalidatesPreparedCacheOnNativeIndexMetadataMutation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	svc := documentservice.New(mgr)
+	server := NewServer(ServerOptions{Collections: mgr, Backend: db, DocumentService: svc})
+	t.Cleanup(func() { _ = server.Close(); _ = svc.Close(); _ = db.Close() })
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, documentservice.CreateIndexRequest{
+		Name:      "docs",
+		Dimension: 2,
+		Metric:    documentservice.MetricCosine,
+		VectorIndexOptions: &documentservice.BenchmarkVectorIndexOptions{
+			Strategy: collections.VectorIndexStrategyNativeRuntime,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "docs", documentservice.UpsertDocumentsRequest{Documents: []documentservice.Document{{
+		ID: "alpha", Content: "alpha", Embedding: []float32{1, 0}, Meta: map[string]any{"user_id": "alpha"},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	client, cleanup, err := NewInProcessClient(ctx, server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if _, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 8}); err != nil {
+		t.Fatalf("warm dense search: %v", err)
+	}
+	if _, err := client.CreateIndex(ctx, "docs", collections.IndexDefinition{Name: "meta_user_id", Field: "meta.user_id", ValueType: collections.IndexValueString}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	filtered := DenseVectorSearchRequest{
+		Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 8,
+		Filter: &documentservice.Filter{Field: "meta.user_id", Operator: "==", Value: "alpha"},
+	}
+	if _, err := client.DenseVectorSearch(ctx, filtered); err != nil && !isRemoteError(err, iwire.ErrConsistencyUnavailable) {
+		t.Fatalf("filtered search after create err=%v; new scalar schema was not observed", err)
+	}
+	if _, err := client.DropIndex(ctx, "docs", "meta_user_id"); err != nil {
+		t.Fatalf("DropIndex: %v", err)
+	}
+	if _, err := client.DenseVectorSearch(ctx, filtered); !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("filtered search after drop err=%v want invalid command", err)
+	}
+}
+
 func TestClearDenseVectorSearchScratchReleasesPointers(t *testing.T) {
 	state := connState{
 		denseMeta:    make([]byte, 1, 2),
