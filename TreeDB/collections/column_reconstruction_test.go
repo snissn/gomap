@@ -202,6 +202,19 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 	if want := []byte(`{"title":"��"}`); !bytes.Equal(projected, want) {
 		t.Fatalf("invalid UTF-8 projection=%q want=%q", projected, want)
 	}
+	for _, tc := range []struct {
+		input string
+		want  map[string]any
+	}{
+		{`{"title":"\ud800","embedding":[1]}`, map[string]any{"title": "�"}},
+		{`{"nested":{"a":1,"a":2},"embedding":[1]}`, map[string]any{"nested": map[string]any{"a": float64(2)}}},
+	} {
+		projected, err := projectJSONDocument([]byte(tc.input), projection, nil)
+		if err != nil {
+			t.Fatalf("project semantic case %q: %v", tc.input, err)
+		}
+		assertJSONMapEqual1875(t, projected, tc.want)
+	}
 
 	allocs := testing.AllocsPerRun(100, func() {
 		if _, err := projectJSONDocument(source, projection, nil); err != nil {
