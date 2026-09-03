@@ -163,16 +163,8 @@ func TestColumnDocumentReconstructionBytesAsIntegerArray2010(t *testing.T) {
 }
 
 func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) {
-	raw := []byte(`{"title":"escaped\\ttext","embedding":[`)
-	for i := 0; i < 64; i++ {
-		if i != 0 {
-			raw = append(raw, ',')
-		}
-		raw = append(raw, `{"n":1,"nested":[true,null,{"value":"x"}]}`...)
-	}
-	raw = append(raw, `],"nested":{"array":[1,2,3],"object":{"ok":true}},"none":null,"number":1.25e3}`...)
+	raw, projection := projectJSONDocumentFixture4608()
 	source := append([]byte(nil), raw...)
-	projection := &documentProjection{exclude: map[string]struct{}{"embedding": {}}}
 
 	var stats DocumentMaterializationStats
 	got, err := projectJSONDocument(raw, projection, &stats)
@@ -185,6 +177,27 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 		"none":   nil,
 		"number": float64(1250),
 	})
+	if want := []byte(`{"nested":{"array":[1,2,3],"object":{"ok":true}},"none":null,"number":1.25e3,"title":"escaped\\ttext"}`); !bytes.Equal(got, want) {
+		t.Fatalf("deterministic projection=%q want=%q", got, want)
+	}
+	if cap(got) > len(got)+64 {
+		t.Fatalf("projected capacity=%d want bounded near output length=%d", cap(got), len(got))
+	}
+	whitespace := bytes.Repeat([]byte(" "), 1<<20)
+	whitespaceDocument := append([]byte(`{"title":[`), whitespace...)
+	whitespaceDocument = append(whitespaceDocument, `1`...)
+	whitespaceDocument = append(whitespaceDocument, whitespace...)
+	whitespaceDocument = append(whitespaceDocument, `],"embedding":2}`...)
+	projected, err := projectJSONDocument(whitespaceDocument, projection, nil)
+	if err != nil {
+		t.Fatalf("project whitespace document: %v", err)
+	}
+	if want := []byte(`{"title":[1]}`); !bytes.Equal(projected, want) {
+		t.Fatalf("whitespace projection=%q want=%q", projected, want)
+	}
+	if cap(projected) > len(projected)+64 {
+		t.Fatalf("whitespace projected capacity=%d want bounded near output length=%d", cap(projected), len(projected))
+	}
 	if stats.FieldsReconstructed != 4 || stats.FieldsSkipped != 1 {
 		t.Fatalf("stats=%+v want four reconstructed and one skipped", stats)
 	}
@@ -195,7 +208,7 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 	}
 	invalidUTF8 := append([]byte(`{"title":"`), 0xff, 0xff)
 	invalidUTF8 = append(invalidUTF8, `","embedding":[1]}`...)
-	projected, err := projectJSONDocument(invalidUTF8, projection, nil)
+	projected, err = projectJSONDocument(invalidUTF8, projection, nil)
 	if err != nil {
 		t.Fatalf("project invalid UTF-8: %v", err)
 	}
@@ -227,6 +240,21 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 	if want := []byte(`{"nested":{"exp":1e400,"large":9007199254740993,"s":"�"}}`); !bytes.Equal(projected, want) {
 		t.Fatalf("escaped surrogate numeric projection=%q want=%q", projected, want)
 	}
+	invalidKeyBytes := []byte{'{', '"', 0xff, 0xff, '"', ':', '1', ',', '"', 0xef, 0xbf, 0xbd, '"', ':', '2', ',', '"', 'e', 'm', 'b', 'e', 'd', 'd', 'i', 'n', 'g', '"', ':', '3', '}'}
+	projected, err = projectJSONDocument(invalidKeyBytes, projection, nil)
+	if err != nil {
+		t.Fatalf("project invalid UTF-8 keys: %v", err)
+	}
+	if want := []byte(`{"�":2,"��":1}`); !bytes.Equal(projected, want) {
+		t.Fatalf("invalid UTF-8 key projection=%q want=%q", projected, want)
+	}
+	projected, err = projectJSONDocument([]byte(`{"\ud800":1,"embedding":3}`), projection, nil)
+	if err != nil {
+		t.Fatalf("project lone surrogate key: %v", err)
+	}
+	if want := []byte(`{"�":1}`); !bytes.Equal(projected, want) {
+		t.Fatalf("lone surrogate key projection=%q want=%q", projected, want)
+	}
 	for _, tc := range []struct {
 		input string
 		want  map[string]any
@@ -238,15 +266,6 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 			t.Fatalf("project semantic case %q: %v", tc.input, err)
 		}
 		assertJSONMapEqual1875(t, projected, tc.want)
-	}
-
-	allocs := testing.AllocsPerRun(100, func() {
-		if _, err := projectJSONDocument(source, projection, nil); err != nil {
-			panic(err)
-		}
-	})
-	if allocs > 64 {
-		t.Fatalf("top-level projection allocs/run=%0.0f want <=64", allocs)
 	}
 
 	for _, input := range [][]byte{[]byte(`{"title":1,"title":2,"embedding":3}`), []byte(`{"title":`), []byte(`{"title":1} {}`), []byte(`[]`)} {
@@ -262,6 +281,41 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 			t.Fatalf("invalid input %q projected successfully", input)
 		}
 	}
+	if collectionsRaceEnabled {
+		return
+	}
+	allocs := testing.AllocsPerRun(100, func() {
+		if _, err := projectJSONDocument(source, projection, nil); err != nil {
+			panic(err)
+		}
+	})
+	if allocs > 32 {
+		t.Fatalf("top-level projection allocs/run=%0.0f want <=32", allocs)
+	}
+}
+
+func BenchmarkProjectJSONDocument4608(b *testing.B) {
+	raw, projection := projectJSONDocumentFixture4608()
+	b.ReportAllocs()
+	b.SetBytes(int64(len(raw)))
+	b.ResetTimer()
+	for range b.N {
+		if _, err := projectJSONDocument(raw, projection, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func projectJSONDocumentFixture4608() ([]byte, *documentProjection) {
+	raw := []byte(`{"title":"escaped\\ttext","embedding":[`)
+	for i := 0; i < 64; i++ {
+		if i != 0 {
+			raw = append(raw, ',')
+		}
+		raw = append(raw, `{"n":1,"nested":[true,null,{"value":"x"}]}`...)
+	}
+	raw = append(raw, `],"nested":{"array":[1,2,3],"object":{"ok":true}},"none":null,"number":1.25e3}`...)
+	return raw, &documentProjection{exclude: map[string]struct{}{"embedding": {}}}
 }
 
 func columnReconstructionArenaTestConfig1888() ColumnStoreConfig {

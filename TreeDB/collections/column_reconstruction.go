@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/buger/jsonparser"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
@@ -570,45 +571,82 @@ func marshalColumnReconstructedJSONObjectProjectedInto(arena []byte, cfg ColumnS
 }
 
 func projectJSONDocument(raw []byte, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
+	if !json.Valid(raw) {
+		return nil, errors.New("collections: invalid JSON document for column retained payload")
+	}
 	obj := make(map[string]json.RawMessage)
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return nil, fmt.Errorf("collections: invalid JSON document for column retained payload: %w", err)
+	if err := jsonparser.ObjectEach(raw, func(key, value []byte, valueType jsonparser.ValueType, valueEndOffset int) error {
+		value, err := columnRetainedSemanticStreamV1JSONParserRawValue(raw, value, valueType, valueEndOffset)
+		if err != nil {
+			return err
+		}
+		keyString := string(key)
+		if !utf8.ValidString(keyString) {
+			keyString = string([]rune(keyString))
+		}
+		obj[keyString] = value
+		return nil
+	}); err != nil {
+		obj = make(map[string]json.RawMessage)
+		if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+			return nil, errors.New("collections: column retained payload root must be a JSON object")
+		}
 	}
-	if obj == nil {
-		return nil, errors.New("collections: column retained payload root must be a JSON object")
-	}
-	for key, value := range obj {
-		if projection.wantsPath(key) {
-			if !utf8.Valid(value) {
-				value = json.RawMessage(string([]rune(string(value))))
-				obj[key] = value
-			}
-			if bytes.Contains(value, []byte(`\u`)) {
-				var decoded any
-				decoder := json.NewDecoder(bytes.NewReader(value))
-				decoder.UseNumber()
-				if err := decoder.Decode(&decoded); err != nil {
-					return nil, err
-				}
-				value, err := json.Marshal(decoded)
-				if err != nil {
-					return nil, err
-				}
-				obj[key] = value
+	keys := make([]string, 0, len(obj))
+	outCap := 2
+	for key := range obj {
+		if !projection.wantsPath(key) {
+			delete(obj, key)
+			if stats != nil {
+				stats.FieldsSkipped++
 			}
 			continue
 		}
-		delete(obj, key)
-		if stats != nil {
-			stats.FieldsSkipped++
+		if len(keys) > 0 {
+			outCap++
 		}
+		outCap += len(key) + len(obj[key]) + 3
+		keys = append(keys, key)
 	}
-	out, err := json.Marshal(obj)
-	if err != nil {
-		return nil, err
+	sort.Strings(keys)
+	out := make([]byte, 0, outCap)
+	out = append(out, '{')
+	for i, key := range keys {
+		if i != 0 {
+			out = append(out, ',')
+		}
+		keyJSON, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, keyJSON...)
+		out = append(out, ':')
+		value := obj[key]
+		if !utf8.Valid(value) || bytes.Contains(value, []byte(`\u`)) {
+			var decoded any
+			decoder := json.NewDecoder(bytes.NewReader(value))
+			decoder.UseNumber()
+			if err := decoder.Decode(&decoded); err != nil {
+				return nil, err
+			}
+			value, err = json.Marshal(decoded)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			value, err = json.Marshal(value)
+			if err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, value...)
+	}
+	out = append(out, '}')
+	if cap(out) > len(out)+64 {
+		out = bytes.Clone(out)
 	}
 	if stats != nil {
-		stats.FieldsReconstructed += uint64(len(obj))
+		stats.FieldsReconstructed += uint64(len(keys))
 	}
 	return out, nil
 }
