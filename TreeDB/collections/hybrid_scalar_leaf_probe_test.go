@@ -170,3 +170,93 @@ func BenchmarkHybridScalarLeafProbe4475(b *testing.B) {
 	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "ops/s")
 	b.ReportMetric(float64(inputIDs), "input_ids/op")
 }
+
+func TestHybridScalarAllowSetProbeCacheHits4476(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Indexes: []IndexDefinition{
+			{Name: "tag", Field: "tags", ValueType: IndexValueString, MultiKey: true},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"tags":["a","b"]}`),
+			[]byte(`{"tags":["a"]}`),
+			[]byte(`{"tags":["z"]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert documents: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	plan := hybridSearchExecutionPlan{
+		scalarFilter:      &HybridScalarFilter{IndexName: "tag", Value: "a"},
+		scalarLookupLimit: 10,
+		topK:              10,
+	}
+	set1, stats1, err := col.hybridScalarAllowSet(plan)
+	if err != nil {
+		t.Fatalf("first allow set: %v", err)
+	}
+	if len(set1) != 2 {
+		t.Fatalf("first set=%v want 2 ids", set1)
+	}
+	hits, misses := col.scalarProbeCacheStats()
+	if hits != 0 || misses != 1 {
+		t.Fatalf("after first probe hits=%d misses=%d want 0/1", hits, misses)
+	}
+
+	set2, stats2, err := col.hybridScalarAllowSet(plan)
+	if err != nil {
+		t.Fatalf("second allow set: %v", err)
+	}
+	if len(set2) != len(set1) {
+		t.Fatalf("second set=%v first set=%v", set2, set1)
+	}
+	for id := range set1 {
+		if _, ok := set2[id]; !ok {
+			t.Fatalf("second set missing id %q", id)
+		}
+	}
+	if stats2.ScalarFilterInputIDs != stats1.ScalarFilterInputIDs {
+		t.Fatalf("replayed input ids %d != %d", stats2.ScalarFilterInputIDs, stats1.ScalarFilterInputIDs)
+	}
+	hits, misses = col.scalarProbeCacheStats()
+	if hits != 1 || misses != 1 {
+		t.Fatalf("after repeat probe hits=%d misses=%d want 1/1", hits, misses)
+	}
+
+	if _, err := col.Insert([]byte("d"), []byte(`{"tags":["a"]}`)); err != nil {
+		t.Fatalf("insert new document: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush after insert: %v", err)
+	}
+	set3, _, err := col.hybridScalarAllowSet(plan)
+	if err != nil {
+		t.Fatalf("third allow set: %v", err)
+	}
+	if len(set3) != 3 {
+		t.Fatalf("after insert set=%v want 3 ids (stale cache?)", set3)
+	}
+	hits, misses = col.scalarProbeCacheStats()
+	if hits != 1 || misses != 2 {
+		t.Fatalf("after mutation hits=%d misses=%d want 1/2", hits, misses)
+	}
+}

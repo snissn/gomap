@@ -494,6 +494,17 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 		filters = []HybridScalarFilter{*plan.scalarFilter}
 	}
 	stats := HybridSearchStats{}
+	probeCacheKey, probeCacheOK := c.scalarProbeCacheKeyForPlan(plan, limit, filters)
+	if probeCacheOK {
+		if entry, ok := c.scalarProbeCacheLookup(probeCacheKey); ok {
+			stats.ScalarFilterLookups = entry.lookups
+			stats.ScalarFilterInputIDs = entry.inputIDs
+			stats.ScalarFilterFinalIDs = entry.finalIDs
+			stats.ScalarPrefilterIDs = entry.prefilter
+			stats.ScalarFilterIntersectionSteps = entry.intersectionSteps
+			return entry.set, stats, nil
+		}
+	}
 	if len(filters) == 1 {
 		stats.ScalarFilterLookups = 1
 		set, inputIDs, truncated, err := c.hybridScalarLeafAllowSet(filters[0], limit)
@@ -508,6 +519,7 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 		if plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter {
 			stats.ScalarPrefilterIDs = uint64(len(set))
 		}
+		c.scalarProbeCacheStoreForResult(probeCacheKey, probeCacheOK, set, stats)
 		return set, stats, nil
 	}
 	view, err := c.openHybridScalarLookupView()
@@ -550,6 +562,7 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 	if plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter {
 		stats.ScalarPrefilterIDs = uint64(len(allowSet))
 	}
+	c.scalarProbeCacheStoreForResult(probeCacheKey, probeCacheOK, allowSet, stats)
 	return allowSet, stats, nil
 }
 

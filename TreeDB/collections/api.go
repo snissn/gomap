@@ -445,6 +445,14 @@ type Collection struct {
 	nativeScalarPlanCacheOrder  []nativeScalarPlanCacheKey
 	nativeScalarPlanCacheBytes  uint64
 
+	scalarProbeCacheMu        sync.Mutex
+	scalarProbeCache          map[scalarProbeCacheKey]scalarProbeCacheEntry
+	scalarProbeCacheOrder     []scalarProbeCacheKey
+	scalarProbeCacheBytes     uint64
+	scalarProbeCacheHits      uint64
+	scalarProbeCacheMisses    uint64
+	scalarProbeCacheEvictions uint64
+
 	vectorBufferedSearchMu            sync.Mutex
 	vectorBufferedSearch              map[collectionVectorIndexPreparedSearchCacheSlot]*collectionVectorIndexPreparedSearchCacheEntry
 	vectorBufferedSearchHits          uint64
