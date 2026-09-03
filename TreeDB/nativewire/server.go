@@ -15,6 +15,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/documentservice"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
@@ -96,6 +97,7 @@ type ServerOptions struct {
 	VectorPartitionOperations       *public.OperationsV1
 	VectorPartitionNodeConfigSHA256 string
 	ConnectionIdleTimeout           time.Duration
+	DocumentService                 *documentservice.Service
 }
 
 // Server serves native-wire control and command frames for TreeDB.
@@ -122,6 +124,7 @@ type Server struct {
 	vectorPartitionOperations       *public.OperationsV1
 	vectorPartitionNodeConfigSHA256 string
 	connectionIdleTimeout           time.Duration
+	documentService                 *documentservice.Service
 	catalogVersion                  atomic.Uint64
 	insertBatchCombiner             nativewireInsertBatchCombiner
 
@@ -184,6 +187,10 @@ type connState struct {
 	updateFields    []collections.BSONSetField
 	vectorQuery     []float32
 	vectorPinned    *public.PinnedSearchSnapshotV1
+	denseFilter     documentservice.Filter
+	denseFilters    []documentservice.Filter
+	denseMeta       []byte
+	denseResults    []documentservice.RawDenseVectorResult
 }
 
 func (s *connState) closeVectorPinned() error {
@@ -403,6 +410,7 @@ func NewServer(opts ServerOptions) *Server {
 		vectorPartitionOperations:       opts.VectorPartitionOperations,
 		vectorPartitionNodeConfigSHA256: opts.VectorPartitionNodeConfigSHA256,
 		connectionIdleTimeout:           max(opts.ConnectionIdleTimeout, 0),
+		documentService:                 opts.DocumentService,
 		cursorReaperDone:                make(chan struct{}),
 	}
 	server.catalogVersion.Store(initialCatalogVersion(opts.Backend))
@@ -798,6 +806,9 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 			iwire.CommandCursorNext,
 			iwire.CommandCursorClose:
 			responseSections, responseBody, responseBodySet, err = s.handleRead(ctx, header, state, cmd)
+		case iwire.CommandDenseVectorSearch:
+			responseBody, err = s.handleDenseVectorSearch(ctx, state, cmd.Known, state.responseScratch())
+			responseBodySet = true
 		case iwire.CommandStats:
 			responseSections = []iwire.Section{{ID: iwire.SectionResponseMeta, Bytes: appendStringMap(nil, s.Stats())}}
 		case iwire.CommandVectorStatus,

@@ -84,6 +84,51 @@ func TestServiceBenchmarkVectorSearchCacheWarmOnOptimizeAndReuse(t *testing.T) {
 	assertBenchmarkCacheHit(t, second, "second search")
 }
 
+func TestServiceRawDenseSearchPinsCollectionForScalarPlanReuse(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{
+		Name:               "raw_dense_cache",
+		Dimension:          2,
+		Metric:             MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
+		ScalarFields:       []ScalarFieldDeclaration{{Field: "meta.user_id", ValueType: ScalarFieldString}},
+	}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "raw_dense_cache", UpsertDocumentsRequest{Documents: []Document{
+		{ID: "a", Embedding: []float32{1, 0}, Meta: map[string]any{"user_id": "alpha"}},
+		{ID: "b", Embedding: []float32{0, 1}, Meta: map[string]any{"user_id": "beta"}},
+	}}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	if _, err := svc.OptimizeIndex(ctx, "raw_dense_cache", OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("OptimizeIndex: %v", err)
+	}
+
+	reader := New(collections.NewCollectionManager(db))
+	defer reader.Close()
+	req := DenseVectorSearchRequest{
+		QueryEmbedding: []float32{1, 0},
+		TopK:           1,
+		EfSearch:       8,
+		Route:          RouteAnn,
+		Filter:         &Filter{Field: "meta.user_id", Operator: "==", Value: "alpha"},
+	}
+	first, err := reader.SearchDenseVectorNativeRaw(ctx, "raw_dense_cache", req)
+	if err != nil {
+		t.Fatalf("first raw search: %v", err)
+	}
+	second, err := reader.SearchDenseVectorNativeRaw(ctx, "raw_dense_cache", req)
+	if err != nil {
+		t.Fatalf("second raw search: %v", err)
+	}
+	if first.searchStats.ScalarFilterPlanCacheMisses != 1 || second.searchStats.ScalarFilterPlanCacheHits != 1 {
+		t.Fatalf("scalar plan cache first misses=%d second hits=%d", first.searchStats.ScalarFilterPlanCacheMisses, second.searchStats.ScalarFilterPlanCacheHits)
+	}
+}
+
 func TestServiceDeferredColumnGraphLoadPrimesAndReusesCachedHandle(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()

@@ -12,6 +12,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/documentservice"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
@@ -236,6 +237,18 @@ func errorCodeFor(err error) iwire.ErrorCode {
 	}
 	if code, ok := iwire.ErrorCodeOf(err); ok {
 		return code
+	}
+	switch documentservice.ErrorCodeOf(err) {
+	case documentservice.CodeInvalidRequest, documentservice.CodeMalformedJSON:
+		return iwire.ErrInvalidCommand
+	case documentservice.CodeIndexNotFound:
+		return iwire.ErrIndexNotFound
+	case documentservice.CodeIndexUnavailable:
+		return iwire.ErrConsistencyUnavailable
+	case documentservice.CodeIndexStale, documentservice.CodeSnapshotMismatch, documentservice.CodeConflict:
+		return iwire.ErrCatalogChanged
+	case documentservice.CodeUnsupported:
+		return iwire.ErrUnsupportedFeature
 	}
 	switch {
 	case errors.Is(err, context.Canceled):

@@ -28,6 +28,10 @@ type Client struct {
 	writeBody             []byte
 	readBody              []byte
 	vectorSections        []iwire.Section
+	denseRequest          []byte
+	denseIDs              [][]byte
+	denseDocuments        [][]byte
+	denseResults          []DenseVectorSearchResult
 }
 
 // NewClient returns a native-wire client that owns conn until Close.

@@ -16,6 +16,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/documentservice"
 	"github.com/snissn/gomap/TreeDB/nativewire"
 )
 
@@ -61,9 +62,12 @@ func main() {
 	defer func() { _ = cleanup() }()
 
 	manager := collections.NewCollectionManager(database)
+	service := documentservice.New(manager)
+	defer service.Close()
 	server := nativewire.NewServer(nativewire.ServerOptions{
-		Collections: manager,
-		Backend:     database,
+		Collections:     manager,
+		Backend:         database,
+		DocumentService: service,
 	})
 
 	ln, err := net.Listen("tcp", *addr)

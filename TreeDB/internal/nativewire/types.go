@@ -82,6 +82,8 @@ const (
 	SectionVectorSearchResponse   SectionID = 126
 	SectionVectorFastEvidence     SectionID = 127
 	SectionVectorStatus           SectionID = 128
+	SectionDenseSearchRequest     SectionID = 129
+	SectionDenseSearchResponse    SectionID = 130
 )
 
 type CommandID uint64
@@ -119,6 +121,7 @@ const (
 	CommandVectorPinSearchSnapshot   CommandID = 61
 	CommandVectorSearchPinned        CommandID = 62
 	CommandVectorClosePinnedSnapshot CommandID = 63
+	CommandDenseVectorSearch         CommandID = 64
 )
 
 type DocumentFormat uint64
