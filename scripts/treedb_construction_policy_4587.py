@@ -1679,14 +1679,23 @@ def validate_storage_ownership_audit(
                                  "storage ownership leaf generation plan").get("Generations")
     if not isinstance(leaf_generations, list):
         fail("storage ownership leaf generations must be a list")
+    owned_leaf_generations = []
+    for position, generation in enumerate(leaf_generations):
+        generation = object_at(
+            generation, f"storage ownership leaf generation[{position}]")
+        gc_eligible = generation.get("WholeGenerationGCEligible")
+        if not isinstance(gc_eligible, bool):
+            fail("storage ownership leaf generation GC eligibility must be boolean")
+        if not gc_eligible:
+            owned_leaf_generations.append(generation)
     exact(len(owned_by_domain.get("leaf_vlog", set())),
-          sum(len(object_at(generation, "storage ownership leaf generation").get("FileIDs", []))
-              for generation in leaf_generations),
+          sum(len(generation.get("FileIDs", []))
+              for generation in owned_leaf_generations),
           "storage ownership owned leaf-log files")
     exact(sum(ledger[path] for path in owned_by_domain.get("leaf_vlog", set())),
-          sum(nonnegative_int(object_at(generation, "storage ownership leaf generation").get("BytesTotal"),
+          sum(nonnegative_int(generation.get("BytesTotal"),
                               "storage ownership leaf generation bytes")
-              for generation in leaf_generations),
+              for generation in owned_leaf_generations),
           "storage ownership owned leaf-log bytes")
     exact(owned_by_domain.get("column_assets", set()), audited_segments,
           "storage ownership owned column segments")

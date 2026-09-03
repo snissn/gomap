@@ -39,6 +39,10 @@ func isNonLeafValueLogFile(id uint32, leafIDs map[uint32]struct{}) bool {
 	return !leaf
 }
 
+func leafGenerationOwnsStorage(generation backenddb.LeafGenerationPlanGeneration) bool {
+	return !generation.WholeGenerationGCEligible
+}
+
 type columnSectionAuditResult struct {
 	SchemaVersion      string                                    `json:"schema_version"`
 	Status             string                                    `json:"status"`
@@ -239,8 +243,10 @@ func collectOwnedFiles(
 				return nil, err
 			}
 			generationBytes += info.Size()
-			if err := add(path, "leaf_vlog", info.Size()); err != nil {
-				return nil, err
+			if leafGenerationOwnsStorage(generation) {
+				if err := add(path, "leaf_vlog", info.Size()); err != nil {
+					return nil, err
+				}
 			}
 		}
 		if generationBytes != generation.BytesTotal {

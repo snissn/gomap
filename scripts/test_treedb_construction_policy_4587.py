@@ -1071,6 +1071,43 @@ class ValidatorMutations(unittest.TestCase):
             policy.validate_storage_ownership_audit(
                 root, binding, manifest, data_root, data_files)
 
+    def test_storage_ownership_excludes_whole_generation_gc_candidates(self) -> None:
+        root, binding, manifest, data_root, data_files = self.storage_audit_inputs()
+        leaf_file = data_root / "maindb" / "leaf_vlog" / "value-l255-000018.log"
+        leaf_file.parent.mkdir(parents=True)
+        leaf_file.write_bytes(b"unreachable leaf generation")
+        data_files.append({
+            "path": leaf_file.relative_to(data_root).as_posix(),
+            "size": leaf_file.stat().st_size,
+            "sha256": policy.sha256_file(leaf_file),
+        })
+
+        audit_path = root / binding["path"]
+        audit = json.loads(audit_path.read_text())
+        for domain in audit["storage_plan"]["before"]:
+            if domain["name"] == "leaf_vlog":
+                domain["bytes"] = leaf_file.stat().st_size
+                domain["files"] = 1
+            elif domain["name"] == "total":
+                domain["bytes"] += leaf_file.stat().st_size
+                domain["files"] += 1
+        audit["storage_plan"]["leaf_generation_plan"]["Generations"] = [{
+            "GenerationID": 18,
+            "FileIDs": [(255 << 23) | 18],
+            "BytesTotal": leaf_file.stat().st_size,
+            "WholeGenerationGCEligible": True,
+        }]
+        audit_path.write_text(json.dumps(audit, sort_keys=True) + "\n")
+        binding["sha256"] = policy.sha256_file(audit_path)
+        next(item for item in manifest["lifecycle"]["raw_artifacts"]
+             if item["path"] == binding["path"])["sha256"] = binding["sha256"]
+
+        self.assertEqual(
+            policy.validate_storage_ownership_audit(
+                root, binding, manifest, data_root, data_files),
+            {"maindb/index.db"},
+        )
+
     def test_valid_no_go(self) -> None:
         self.assertEqual(self.fixture.validate(self.fixture.no_go_packet())["verdict"], "C0_NO_GO")
 

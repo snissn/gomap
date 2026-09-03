@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -36,5 +37,16 @@ func TestIsNonLeafValueLogFileIncludesEveryRegularLane(t *testing.T) {
 	}
 	if isNonLeafValueLogFile(0, leafIDs) {
 		t.Error("non-value-log file included")
+	}
+}
+
+func TestLeafGenerationOwnsStorageExcludesWholeGenerationGCCandidates(t *testing.T) {
+	if !leafGenerationOwnsStorage(backenddb.LeafGenerationPlanGeneration{}) {
+		t.Error("reachable leaf generation excluded")
+	}
+	if leafGenerationOwnsStorage(backenddb.LeafGenerationPlanGeneration{
+		WholeGenerationGCEligible: true,
+	}) {
+		t.Error("unreachable whole-generation GC candidate included")
 	}
 }
