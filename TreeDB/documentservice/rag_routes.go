@@ -356,7 +356,9 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 			_ = view.Close()
 			return RawDenseVectorSearchResponse{}, err
 		}
-		fetched, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(search.Results, serviceDocumentFetchOptions(req.ReturnEmbedding))
+		fetchOptions := serviceDocumentFetchOptions(req.ReturnEmbedding)
+		fetchOptions.Context = ctx
+		fetched, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(search.Results, fetchOptions)
 		closeErr := view.Close()
 		if err := ctxErr(ctx); err != nil {
 			return RawDenseVectorSearchResponse{}, err

@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -23,6 +24,8 @@ var ErrVectorIndexSnapshotMismatch = errors.New("collections: vector index searc
 // same projection contract is applied to retained payload fields, typed-row
 // asset fields, and typed-column-part fields.
 type DocumentFetchOptions struct {
+	// Context optionally cancels batch document materialization.
+	Context context.Context
 	// IncludePaths is an optional allowlist of top-level JSON fields to return.
 	// When non-empty, fields not listed here are skipped. Nested projection paths
 	// are intentionally unsupported for this pre-alpha API and fail closed.
@@ -863,6 +866,9 @@ func (v *CollectionReadView) fetchDocumentsByResolvedRowRef(refs []DocumentRowRe
 }
 
 func (v *CollectionReadView) fetchDocumentsByRowRef(refs []DocumentRowRef, opts DocumentFetchOptions, locatorResolvedAtView bool) (DocumentFetchResponse, error) {
+	if err := documentFetchContextErr(opts.Context); err != nil {
+		return DocumentFetchResponse{}, err
+	}
 	if err := v.validateOpen(); err != nil {
 		return DocumentFetchResponse{}, err
 	}
@@ -884,7 +890,7 @@ func (v *CollectionReadView) fetchDocumentsByRowRef(refs []DocumentRowRef, opts 
 		}
 		ids[i] = refs[i].DocumentID
 	}
-	response, retained, foundCount, err := v.fetchRetainedPayloadsByID(ids)
+	response, retained, foundCount, err := v.fetchRetainedPayloadsByID(ids, opts.Context)
 	if err != nil {
 		return response, err
 	}
@@ -900,6 +906,9 @@ func (v *CollectionReadView) fetchDocumentsByRowRef(refs []DocumentRowRef, opts 
 }
 
 func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
+	if err := documentFetchContextErr(opts.Context); err != nil {
+		return DocumentFetchResponse{}, err
+	}
 	if err := v.validateOpen(); err != nil {
 		return DocumentFetchResponse{}, err
 	}
@@ -913,7 +922,7 @@ func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*Docume
 	if err != nil {
 		return DocumentFetchResponse{}, err
 	}
-	response, retained, foundCount, err := v.fetchRetainedPayloadsByID(ids)
+	response, retained, foundCount, err := v.fetchRetainedPayloadsByID(ids, opts.Context)
 	if err != nil {
 		return response, err
 	}
@@ -926,6 +935,9 @@ func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*Docume
 	if !columnStoreCanReconstructDocument(v.catalog.meta) {
 		var documentArena []byte
 		for i := range response.Results {
+			if err := documentFetchContextErr(opts.Context); err != nil {
+				return response, err
+			}
 			if !response.Results[i].Found {
 				continue
 			}
@@ -951,7 +963,10 @@ func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*Docume
 	return v.fetchColumnStoreDocumentsByID(response, ids, retained, expected, opts, projection)
 }
 
-func (v *CollectionReadView) fetchRetainedPayloadsByID(ids [][]byte) (DocumentFetchResponse, [][]byte, int, error) {
+func (v *CollectionReadView) fetchRetainedPayloadsByID(ids [][]byte, ctx context.Context) (DocumentFetchResponse, [][]byte, int, error) {
+	if err := documentFetchContextErr(ctx); err != nil {
+		return DocumentFetchResponse{}, nil, 0, err
+	}
 	response := DocumentFetchResponse{
 		Results: make([]DocumentFetchResult, len(ids)),
 		Stats: DocumentMaterializationStats{
@@ -978,6 +993,9 @@ func (v *CollectionReadView) fetchRetainedPayloadsByID(ids [][]byte) (DocumentFe
 		resolveRetained = columnStoreRetainedPayloadUsesSemanticStreamV1(&cfg)
 	}
 	err := collectionGetManyViewAtCatalogRoot(v.snapshot, v.catalog, collectionPrimaryRootName(v.catalog.meta.Name), ids, func(i int, _ []byte, value []byte, found bool) error {
+		if err := documentFetchContextErr(ctx); err != nil {
+			return err
+		}
 		if i < 0 || i >= len(ids) {
 			return fmt.Errorf("collections: GetManyView callback index %d outside %d ids", i, len(ids))
 		}
@@ -1009,6 +1027,13 @@ func (v *CollectionReadView) fetchRetainedPayloadsByID(ids [][]byte) (DocumentFe
 		return response, retained, foundCount, err
 	}
 	return response, retained, foundCount, nil
+}
+
+func documentFetchContextErr(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Err()
 }
 
 func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response DocumentFetchResponse, refs []DocumentRowRef, retained [][]byte, opts DocumentFetchOptions, projection *documentProjection, locatorResolvedAtView bool) (out DocumentFetchResponse, err error) {
@@ -1044,6 +1069,9 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 	var rowScratch columnPhysicalRowReaderScratch
 	var documentArena []byte
 	for i := range out.Results {
+		if err := documentFetchContextErr(opts.Context); err != nil {
+			return out, err
+		}
 		if !out.Results[i].Found {
 			out.Stats.RowRefValidationFailures++
 			return out, fmt.Errorf("collections: document row ref for id %q is not visible in primary root", string(out.Results[i].ID))
@@ -1116,6 +1144,9 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 	selectedColumns := documentProjectionSelectedColumns(cfg, projection)
 	rowProjection := documentProjectionRowAssetColumns(cfg, selectedColumns)
 	typedProjection := documentProjectionTypedColumnPartSelection(cfg, selectedColumns)
+	if err := documentFetchContextErr(opts.Context); err != nil {
+		return out, err
+	}
 	visibleStart := time.Now()
 	visible, err := v.collection.scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCache(
 		v.snapshot,
@@ -1148,6 +1179,9 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 	retainedTemplateResolver := columnRetainedPayloadTemplateResolver(v.snapshot, v.catalog)
 	var documentArena []byte
 	for i := range out.Results {
+		if err := documentFetchContextErr(opts.Context); err != nil {
+			return out, err
+		}
 		if !out.Results[i].Found {
 			continue
 		}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -46,6 +47,11 @@ func TestCollectionReadViewFetchDocumentsByIDUsesBatchViewForOwnedRetainedPayloa
 	if err != nil {
 		_ = view.Close()
 		t.Fatalf("FetchDocumentsByID: %v", err)
+	}
+	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 8}
+	if _, err := view.FetchDocumentsByID([][]byte{[]byte("a"), []byte("b"), []byte("a"), []byte("b")}, DocumentFetchOptions{Context: ctx}); !errors.Is(err, context.Canceled) || ctx.calls != ctx.cancelAfter {
+		_ = view.Close()
+		t.Fatalf("FetchDocumentsByID cancellation err=%v calls=%d", err, ctx.calls)
 	}
 	if err := view.Close(); err != nil {
 		t.Fatalf("Close view: %v", err)

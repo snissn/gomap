@@ -17,6 +17,9 @@ package collections
 // VectorIndexSearchBuffer; do not reuse or reset that buffer until this helper
 // returns if those IDs are the fetch input.
 func (v *CollectionReadView) FetchDocumentsForVectorIndexSearchResults(results []VectorIndexSearchResult, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
+	if err := documentFetchContextErr(opts.Context); err != nil {
+		return DocumentFetchResponse{}, err
+	}
 	ids := make([][]byte, len(results))
 	for i := range results {
 		ids[i] = results[i].ID
