@@ -5098,14 +5098,20 @@ class LifecycleIntegrationTest(unittest.TestCase):
             sidecar.write_text(
                 "".join(json.dumps(record) + "\n" for record in records[:-1]), encoding="utf-8"
             )
+            initial_dataset_sha = state.lifecycle["dataset"]["sha256"]
+            args.lifecycle_dataset_file.write_bytes(b"mutated after failed load")
+            mutated_dataset_sha = harness.sha256_file(args.lifecycle_dataset_file)
 
             harness.finalize_partial_lifecycle(state, args, sampler)
             stages = [
                 json.loads(line)["stage"]
                 for line in (root / "lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
             ]
+            captured_dataset_sha = state.lifecycle["dataset"]["sha256_after"]
 
         self.assertEqual(state.lifecycle["result_status"], "partial")
+        self.assertEqual(captured_dataset_sha, mutated_dataset_sha)
+        self.assertNotEqual(captured_dataset_sha, initial_dataset_sha)
         self.assertEqual(stages, [
             "startup", "reset", "load_start", "load_end", "optimize_start",
             "optimize_end", "cache_prime",

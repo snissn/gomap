@@ -1877,12 +1877,10 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     if not isinstance(dataset_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", dataset_sha256):
         errors.append("lifecycle.dataset.sha256 must be a lowercase SHA-256")
     dataset_sha256_after = dataset.get("sha256_after")
-    if (lifecycle.get("result_status") == "completed"
-            and (not isinstance(dataset_sha256_after, str)
-                 or not re.fullmatch(r"[0-9a-f]{64}", dataset_sha256_after))):
-        errors.append("completed lifecycle.dataset.sha256_after must be a lowercase SHA-256")
-    if (isinstance(dataset_sha256_after, str)
-            and dataset_sha256_after != dataset_sha256):
+    if (not isinstance(dataset_sha256_after, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", dataset_sha256_after)):
+        errors.append("lifecycle.dataset.sha256_after must be a lowercase SHA-256")
+    elif dataset_sha256_after != dataset_sha256:
         errors.append("lifecycle dataset changed during VectorDBBench load")
     dimensions = _nonnegative_int(dataset.get("dimensions"), "lifecycle.dataset.dimensions", errors)
     if dimensions == 0:
@@ -3780,6 +3778,10 @@ def finalize_partial_lifecycle(
     if result_status not in {"partial", "interrupted"}:
         raise ValueError(f"unsupported incomplete lifecycle status {result_status!r}")
     state.lifecycle["result_status"] = result_status
+    try:
+        state.lifecycle["dataset"]["sha256_after"] = sha256_file(args.lifecycle_dataset_file)
+    except OSError:
+        state.lifecycle["dataset"]["sha256_after"] = None
     if sampler is not None:
         sampler.stop()
         state.diagnostics = list(sampler.samples)

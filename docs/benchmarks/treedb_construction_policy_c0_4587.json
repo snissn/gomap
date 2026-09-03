@@ -34,7 +34,7 @@
       "TreeDB/collections/vector_index_rebuild.go": "21bed0f84ae5301d17619ed2753300be73cf422c"
     },
     "harness_blobs": {
-      "scripts/treedb_vectordbbench_artifact.py": "0a7692b3f1e77ba73859261b141397af6fd27b2e",
+      "scripts/treedb_vectordbbench_artifact.py": "eae8a3ce940829fdab2ea7fb38db6a3f921c701d",
       "cmd/treedb_column_section_audit/main.go": "7849060e82654c9bfd4ac522ee8a5dad2e7f5de4"
     },
     "vectordbbench": {
