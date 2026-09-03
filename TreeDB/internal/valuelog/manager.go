@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -766,8 +767,12 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 // non-mmap fallback path while reusing File grouped-frame cache entries.
 //
 // ok=false means the caller should fall back to the generic ReadAtWithDictTo
-// decoder path (for non-grouped / uncompressed / checksum-verified cases).
+// decoder path (for non-grouped or uncompressed cases).
 func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error, bool) {
+	return f.readGroupedCompressedFromFileToVerify(ptr, false, dst)
+}
+
+func (f *File) readGroupedCompressedFromFileToVerify(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, bool, error, bool) {
 	if f == nil || f.File == nil {
 		return nil, false, errors.New("valuelog: nil file"), true
 	}
@@ -796,6 +801,20 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	}
 	if int(valueLen) < FrameHeaderSize {
 		return nil, false, ErrCorrupt, true
+	}
+	if verifyCRC {
+		payloadScratch := getDecodeScratch(int(valueLen))
+		payload := payloadScratch[:valueLen]
+		if _, err := f.File.ReadAt(payload, start+HeaderSize); err != nil {
+			putDecodeScratch(payloadScratch)
+			return nil, false, err, true
+		}
+		f.noteRecordCRCCheck()
+		if crc.ChecksumParts(header[4:], payload) != binary.LittleEndian.Uint32(header[:4]) {
+			putDecodeScratch(payloadScratch)
+			return nil, false, ErrCorrupt, true
+		}
+		putDecodeScratch(payloadScratch)
 	}
 
 	frameOff := start + HeaderSize
@@ -853,7 +872,7 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 		return nil, false, ErrCorrupt, true
 	}
 	cacheableRaw := f.groupedFrameCacheAllowsRaw(int(rawLen))
-	if out, usedDst, err, hit := f.groupedFrameCacheReadTo(start, false, k, &offsets, rawLen, subIndex, dst); hit {
+	if out, usedDst, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, &offsets, rawLen, subIndex, dst); hit {
 		return out, usedDst, err, true
 	}
 
@@ -897,7 +916,7 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 		encoded := append([]byte(nil), val...)
 		cachedRaw := false
 		if cacheableRaw {
-			cachedRaw = f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+			cachedRaw = f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, pooledRaw)
 		}
 		if pooledRaw && !cachedRaw {
 			f.releaseDecodeScratch(raw)
@@ -916,7 +935,7 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 		copy(out, val)
 		cachedRaw := false
 		if cacheableRaw {
-			cachedRaw = f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+			cachedRaw = f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, pooledRaw)
 		}
 		if pooledRaw && !cachedRaw {
 			f.releaseDecodeScratch(raw)
@@ -927,7 +946,7 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	copy(out, val)
 	cachedRaw := false
 	if cacheableRaw {
-		cachedRaw = f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+		cachedRaw = f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, pooledRaw)
 	}
 	if pooledRaw && !cachedRaw {
 		f.releaseDecodeScratch(raw)
@@ -945,6 +964,19 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 	if val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst); ok {
 		f.mmapReadHits.Add(1)
 		return val, err
+	}
+	if verifyCRC {
+		if val, usedDst, err, ok := f.readGroupedCompressedFromFileToVerify(ptr, true, dst[len(dst):cap(dst)]); ok {
+			f.mmapReadFallbackReadAt.Add(1)
+			if err != nil {
+				return nil, err
+			}
+			if !usedDst {
+				noteGrowReadAppendCompressedFallback(len(val))
+				noteGrowReadAppendCompressedFallbackDst(dst, len(val))
+			}
+			return f.appendMaybeDecodeLeafLogPayload(dst, val)
+		}
 	}
 	// Fast path (bench/unsafe reads): grouped + uncompressed + no CRC.
 	if !verifyCRC && page.ValuePtrIsGrouped(ptr) && ptr.Offset >= 4 {

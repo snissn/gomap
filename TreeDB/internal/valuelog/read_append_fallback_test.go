@@ -2,7 +2,9 @@ package valuelog
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -73,5 +75,101 @@ func TestFileReadAppend_CompressedFallbackNilDstAvoidsExtraGrow(t *testing.T) {
 	}
 	if delta := after.ReadAppendCompressedFallbackCallsTotal - before.ReadAppendCompressedFallbackCallsTotal; delta != 1 {
 		t.Fatalf("compressed fallback calls delta=%d want 1", delta)
+	}
+}
+
+func TestFileReadAppend_VerifiedCompressedGroupedFallbackUsesFrameCache(t *testing.T) {
+	f, ptrs, want := openGroupedCompressedFileReadFallbackFixture(t)
+	f.setGroupedFrameCacheEntries(4)
+	mapped := []byte{0}
+	f.mmapData.Store(mapped)
+	f.deadMappingsCount.Store(uint64(effectiveMaxDeadMappings(len(mapped))))
+
+	prefix := []byte("caller-prefix:")
+	backing := make([]byte, len(prefix), len(prefix)+len(want[0]))
+	copy(backing, prefix)
+	expected := append(append([]byte(nil), prefix...), want[0]...)
+	crcBefore := f.ReadStats().RecordCRCChecks
+
+	got, err := f.ReadAppend(ptrs[0], true, backing[:len(prefix)])
+	if err != nil {
+		t.Fatalf("first ReadAppend: %v", err)
+	}
+	if !bytes.Equal(got, expected) || &got[0] != &backing[0] {
+		t.Fatalf("first ReadAppend did not preserve prefix/dst ownership")
+	}
+	hitsBefore, _, entriesBefore, _ := f.groupedFrameCacheStats()
+	if entriesBefore != 1 {
+		t.Fatalf("first ReadAppend cached entries=%d want 1", entriesBefore)
+	}
+
+	got, err = f.ReadAppend(ptrs[1], true, backing[:len(prefix)])
+	if err != nil {
+		t.Fatalf("second ReadAppend: %v", err)
+	}
+	hitsAfter, _, _, _ := f.groupedFrameCacheStats()
+	if hitsAfter != hitsBefore+1 {
+		t.Fatalf("second ReadAppend cache hits=%d want %d", hitsAfter, hitsBefore+1)
+	}
+	if gotCRC := f.ReadStats().RecordCRCChecks - crcBefore; gotCRC != 2 {
+		t.Fatalf("record CRC checks=%d want 2", gotCRC)
+	}
+	if !bytes.Equal(got, append(prefix, want[1]...)) || &got[0] != &backing[0] {
+		t.Fatalf("second ReadAppend did not preserve prefix/dst ownership")
+	}
+
+	corrupt, err := os.OpenFile(f.Path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open for corruption: %v", err)
+	}
+	corruptAt := int64(ptrs[0].Offset - 4 + HeaderSize + FrameHeaderSize)
+	var byteAt [1]byte
+	if _, err := corrupt.ReadAt(byteAt[:], corruptAt); err != nil {
+		_ = corrupt.Close()
+		t.Fatalf("read source for corruption: %v", err)
+	}
+	byteAt[0] ^= 0xff
+	if _, err := corrupt.WriteAt(byteAt[:], corruptAt); err != nil {
+		_ = corrupt.Close()
+		t.Fatalf("corrupt source: %v", err)
+	}
+	if err := corrupt.Close(); err != nil {
+		t.Fatalf("close corrupt source: %v", err)
+	}
+	if _, err := f.ReadAppend(ptrs[0], true, backing[:len(prefix)]); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("ReadAppend after cache warmup error=%v want ErrCorrupt", err)
+	}
+	if gotCRC := f.ReadStats().RecordCRCChecks - crcBefore; gotCRC != 3 {
+		t.Fatalf("record CRC checks after corruption=%d want 3", gotCRC)
+	}
+}
+
+func BenchmarkFileReadAppend_VerifiedCompressedGroupedFallback(b *testing.B) {
+	f, ptrs, want := openGroupedCompressedFileReadFallbackFixture(b)
+	f.setGroupedFrameCacheEntries(64)
+	mapped := []byte{0}
+	f.mmapData.Store(mapped)
+	f.deadMappingsCount.Store(uint64(effectiveMaxDeadMappings(len(mapped))))
+
+	for _, tc := range []struct {
+		name string
+		ptr  func(int) page.ValuePtr
+	}{
+		{"same_entry", func(int) page.ValuePtr { return ptrs[0] }},
+		{"same_frame_subrecords", func(i int) page.ValuePtr { return ptrs[i%len(ptrs)] }},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			dst := make([]byte, 0, len(want[0]))
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				got, err := f.ReadAppend(tc.ptr(i), true, dst[:0])
+				if err != nil {
+					b.Fatalf("ReadAppend: %v", err)
+				}
+				if len(got) != len(want[0]) {
+					b.Fatalf("ReadAppend len=%d want %d", len(got), len(want[0]))
+				}
+			}
+		})
 	}
 }
