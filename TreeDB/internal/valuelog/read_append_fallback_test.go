@@ -127,7 +127,7 @@ func BenchmarkFileReadAppend_UnverifiedCompressedGroupedFallback(b *testing.B) {
 		ptr  func(int) page.ValuePtr
 	}{
 		{"same_entry", func(int) page.ValuePtr { return ptrs[0] }},
-		{"working_set", func(i int) page.ValuePtr { return ptrs[i%len(ptrs)] }},
+		{"same_frame_subrecords", func(i int) page.ValuePtr { return ptrs[i%len(ptrs)] }},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			dst := make([]byte, 0, len(want[0]))
