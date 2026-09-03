@@ -202,11 +202,18 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 	if want := []byte(`{"title":"��"}`); !bytes.Equal(projected, want) {
 		t.Fatalf("invalid UTF-8 projection=%q want=%q", projected, want)
 	}
+	escapedSurrogate := []byte(`{"title":"\ud800","embedding":[1]}`)
+	projected, err = projectJSONDocument(escapedSurrogate, projection, nil)
+	if err != nil {
+		t.Fatalf("project escaped surrogate: %v", err)
+	}
+	if want := []byte(`{"title":"�"}`); !bytes.Equal(projected, want) {
+		t.Fatalf("escaped surrogate projection=%q want=%q", projected, want)
+	}
 	for _, tc := range []struct {
 		input string
 		want  map[string]any
 	}{
-		{`{"title":"\ud800","embedding":[1]}`, map[string]any{"title": "�"}},
 		{`{"nested":{"a":1,"a":2},"embedding":[1]}`, map[string]any{"nested": map[string]any{"a": float64(2)}}},
 	} {
 		projected, err := projectJSONDocument([]byte(tc.input), projection, nil)

@@ -581,6 +581,16 @@ func projectJSONDocument(raw []byte, projection *documentProjection, stats *Docu
 		if projection.wantsPath(key) {
 			if !utf8.Valid(value) {
 				obj[key] = json.RawMessage(string([]rune(string(value))))
+			} else if bytes.Contains(value, []byte(`\u`)) {
+				var decoded any
+				if err := json.Unmarshal(value, &decoded); err != nil {
+					return nil, err
+				}
+				value, err := json.Marshal(decoded)
+				if err != nil {
+					return nil, err
+				}
+				obj[key] = value
 			}
 			continue
 		}
