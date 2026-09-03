@@ -1158,6 +1158,7 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 		newColumnPhysicalVisibilityTargetIDs(ids),
 		rowProjection,
 		readIntegrity,
+		opts.Context,
 		v.rowAssetReadCache,
 	)
 	out.Stats.VisibilityNanos = time.Since(visibleStart).Nanoseconds()

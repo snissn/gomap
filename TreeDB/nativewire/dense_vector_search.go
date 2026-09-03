@@ -125,7 +125,7 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	}
 	var out DenseVectorSearchResponse
 	out, c.denseIDs, c.denseDocuments, c.denseResults, err = decodeDenseVectorSearchResponse(
-		ids, docs, meta, c.limits, c.denseIDs, c.denseDocuments, c.denseResults,
+		ids, docs, meta, request.TopK, c.limits, c.denseIDs, c.denseDocuments, c.denseResults,
 	)
 	decoded = err == nil
 	return out, err
@@ -675,19 +675,11 @@ func appendDenseVectorSearchResponse(dst []byte, response documentservice.RawDen
 	return dst
 }
 
-func decodeDenseVectorSearchResponse(idsRaw, docsRaw, meta []byte, limits iwire.Limits, ids, docs [][]byte, results []DenseVectorSearchResult) (DenseVectorSearchResponse, [][]byte, [][]byte, []DenseVectorSearchResult, error) {
+func decodeDenseVectorSearchResponse(idsRaw, docsRaw, meta []byte, topK int, limits iwire.Limits, ids, docs [][]byte, results []DenseVectorSearchResult) (DenseVectorSearchResponse, [][]byte, [][]byte, []DenseVectorSearchResult, error) {
 	limits = denseDefaultLimits(limits)
 	var response DenseVectorSearchResponse
 	var err error
-	ids, err = iwire.DecodeByteVectorItemsInto(ids[:0], idsRaw, limits)
-	if err != nil {
-		return response, ids, docs, results, err
-	}
-	docs, err = iwire.DecodeByteVectorItemsInto(docs[:0], docsRaw, limits)
-	if err != nil {
-		return response, ids, docs, results, err
-	}
-	if len(meta) == 0 || (meta[0] != 0 && meta[0] != 1) {
+	if topK <= 0 || len(meta) == 0 || (meta[0] != 0 && meta[0] != 1) {
 		return response, ids, docs, results, protocolError(iwire.ErrMalformedFrame, "dense route proof is invalid")
 	}
 	response.Route = documentservice.RouteAnn
@@ -706,8 +698,19 @@ func decodeDenseVectorSearchResponse(idsRaw, docsRaw, meta []byte, limits iwire.
 		return response, ids, docs, results, err
 	}
 	count, err := readUvarintField(meta, &off, "result_count")
-	if err != nil || count != uint64(len(ids)) || len(ids) != len(docs) || count > uint64(limits.MaxByteVectorItems) || count > uint64((len(meta)-off)/8) || len(meta)-off != int(count)*8 {
+	if err != nil || count > uint64(topK) || count > uint64(limits.MaxByteVectorItems) || count > uint64((len(meta)-off)/8) || len(meta)-off != int(count)*8 {
 		return response, ids, docs, results, denseDecodeError(err, "dense response lengths do not match")
+	}
+	ids, err = iwire.DecodeByteVectorItemsInto(ids[:0], idsRaw, limits)
+	if err != nil {
+		return response, ids, docs, results, err
+	}
+	docs, err = iwire.DecodeByteVectorItemsInto(docs[:0], docsRaw, limits)
+	if err != nil {
+		return response, ids, docs, results, err
+	}
+	if count != uint64(len(ids)) || len(ids) != len(docs) {
+		return response, ids, docs, results, protocolError(iwire.ErrMalformedFrame, "dense response lengths do not match")
 	}
 	if int(count) <= cap(results) {
 		if int(count) < len(results) {

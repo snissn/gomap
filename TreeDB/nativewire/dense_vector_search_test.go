@@ -440,7 +440,7 @@ func TestDenseVectorSearchReleasesRejectedOversizedResponse(t *testing.T) {
 		ids[i] = []byte("id")
 		docs[i] = []byte("document")
 	}
-	meta := []byte{0}
+	meta := []byte{1}
 	meta = binary.AppendUvarint(meta, count)
 	meta = binary.AppendUvarint(meta, 0)
 	meta = binary.AppendUvarint(meta, 0)
@@ -471,8 +471,8 @@ func TestDenseVectorSearchReleasesRejectedOversizedResponse(t *testing.T) {
 		}
 		errCh <- err
 	}()
-	if _, err := client.DenseVectorSearch(denseSearchTestContext(t), DenseVectorSearchRequest{Index: "docs", Query: []float32{1}, TopK: 1}); err == nil {
-		t.Fatal("invalid dense route proof succeeded")
+	if _, err := client.DenseVectorSearch(denseSearchTestContext(t), DenseVectorSearchRequest{Index: "docs", Query: []float32{1}, TopK: 1}); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("dense response err=%v want malformed frame", err)
 	}
 	if err := <-errCh; err != nil {
 		t.Fatalf("server response: %v", err)

@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"sort"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -110,7 +111,7 @@ func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadIn
 	projected []string,
 	readIntegrity ColumnAssetReadIntegrity,
 ) (columnPhysicalVisibilityResult, error) {
-	return c.scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCache(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, targets, projected, readIntegrity, nil)
+	return c.scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCache(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, targets, projected, readIntegrity, nil, nil)
 }
 
 func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCache(
@@ -123,14 +124,34 @@ func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCa
 	targets *columnPhysicalVisibilityTargetIDs,
 	projected []string,
 	readIntegrity ColumnAssetReadIntegrity,
+	ctx context.Context,
 	readCache *columnPhysicalAssetReadCache,
 ) (columnPhysicalVisibilityResult, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return columnPhysicalVisibilityResult{}, err
+		}
+	}
+	var shouldCancel func() bool
+	if ctx != nil {
+		shouldCancel = func() bool { return ctx.Err() != nil }
+	}
+	rowsSinceContextCheck := 0
 	var latest columnPhysicalVisibilityIndex
 	diag, err := c.scanColumnPhysicalRowsAtSnapshot(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, columnPhysicalScanRequest{
 		ProjectedColumns: projected,
 		ReadIntegrity:    readIntegrity,
 		ReadCache:        readCache,
+		ShouldCancel:     shouldCancel,
 		Visitor: func(row columnPhysicalScanRowView) error {
+			if ctx != nil {
+				rowsSinceContextCheck++
+				if rowsSinceContextCheck&63 == 0 {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+				}
+			}
 			if targets != nil && !targets.contains(row.ID) {
 				return nil
 			}
@@ -139,6 +160,11 @@ func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCa
 		},
 	})
 	if err != nil {
+		if ctx != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return columnPhysicalVisibilityResult{Diagnostics: diag}, ctxErr
+			}
+		}
 		return columnPhysicalVisibilityResult{Diagnostics: diag}, err
 	}
 	rows := latest.rows
