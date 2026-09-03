@@ -113,6 +113,7 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 }
 
 func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, sections []iwire.Section, dst []byte) ([]byte, error) {
+	defer clearDenseVectorSearchScratch(state)
 	if s.documentService == nil {
 		return nil, protocolError(iwire.ErrUnsupportedFeature, "dense document service is not configured")
 	}
@@ -132,7 +133,6 @@ func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, 
 	}
 	state.vectorQuery = request.Query[:0]
 	state.denseFilters = leaves[:0]
-	defer clearDenseVectorSearchScratch(state)
 	response, err := s.documentService.SearchDenseVectorNativeRawInto(ctx, request.Index, documentservice.DenseVectorSearchRequest{
 		ExpectedGeneration: request.ExpectedGeneration,
 		QueryEmbedding:     request.Query,
@@ -227,6 +227,9 @@ func clearDenseVectorSearchScratch(state *connState) {
 	state.idsScratch = state.idsScratch[:0]
 	clear(state.docsScratch[:cap(state.docsScratch)])
 	state.docsScratch = state.docsScratch[:0]
+	clear(state.denseFilters[:cap(state.denseFilters)])
+	state.denseFilters = state.denseFilters[:0]
+	state.denseFilter = documentservice.Filter{}
 }
 
 func denseByteVectorPayloadLen(items [][]byte) (int, error) {

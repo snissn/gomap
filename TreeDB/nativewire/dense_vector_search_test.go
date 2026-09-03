@@ -215,17 +215,20 @@ func TestClearDenseVectorSearchScratchReleasesPointers(t *testing.T) {
 		denseResults: make([]documentservice.RawDenseVectorResult, 1, 2),
 		idsScratch:   make([][]byte, 1, 2),
 		docsScratch:  make([][]byte, 1, 2),
+		denseFilters: make([]documentservice.Filter, 1, 2),
 	}
 	state.denseResults[0] = documentservice.RawDenseVectorResult{ID: []byte("id"), Document: []byte("document")}
 	state.idsScratch[0] = []byte("id")
 	state.docsScratch[0] = []byte("document")
+	state.denseFilters[0] = documentservice.Filter{Field: "meta.name", Operator: "==", Value: "retained"}
+	state.denseFilter = documentservice.Filter{Operator: "AND", Conditions: state.denseFilters[:1]}
 
 	clearDenseVectorSearchScratch(&state)
-	if len(state.denseResults) != 0 || len(state.idsScratch) != 0 || len(state.docsScratch) != 0 {
-		t.Fatalf("scratch lengths results=%d ids=%d docs=%d want zero", len(state.denseResults), len(state.idsScratch), len(state.docsScratch))
+	if len(state.denseResults) != 0 || len(state.idsScratch) != 0 || len(state.docsScratch) != 0 || len(state.denseFilters) != 0 {
+		t.Fatalf("scratch lengths results=%d ids=%d docs=%d filters=%d want zero", len(state.denseResults), len(state.idsScratch), len(state.docsScratch), len(state.denseFilters))
 	}
-	if cap(state.denseResults) != 2 || cap(state.idsScratch) != 2 || cap(state.docsScratch) != 2 {
-		t.Fatalf("scratch capacities results=%d ids=%d docs=%d want two", cap(state.denseResults), cap(state.idsScratch), cap(state.docsScratch))
+	if cap(state.denseResults) != 2 || cap(state.idsScratch) != 2 || cap(state.docsScratch) != 2 || cap(state.denseFilters) != 2 {
+		t.Fatalf("scratch capacities results=%d ids=%d docs=%d filters=%d want two", cap(state.denseResults), cap(state.idsScratch), cap(state.docsScratch), cap(state.denseFilters))
 	}
 	for _, result := range state.denseResults[:cap(state.denseResults)] {
 		if result.ID != nil || result.Document != nil {
@@ -241,5 +244,13 @@ func TestClearDenseVectorSearchScratchReleasesPointers(t *testing.T) {
 		if docs != nil {
 			t.Fatalf("retained document pointer: %q", docs)
 		}
+	}
+	for _, filter := range state.denseFilters[:cap(state.denseFilters)] {
+		if filter.Field != "" || filter.Operator != "" || filter.Value != nil || len(filter.Conditions) != 0 {
+			t.Fatalf("retained filter: %+v", filter)
+		}
+	}
+	if state.denseFilter.Field != "" || state.denseFilter.Operator != "" || state.denseFilter.Value != nil || len(state.denseFilter.Conditions) != 0 {
+		t.Fatalf("retained root filter: %+v", state.denseFilter)
 	}
 }
