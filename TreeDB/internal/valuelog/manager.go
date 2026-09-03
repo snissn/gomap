@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -766,8 +767,12 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 // non-mmap fallback path while reusing File grouped-frame cache entries.
 //
 // ok=false means the caller should fall back to the generic ReadAtWithDictTo
-// decoder path (for non-grouped / uncompressed / checksum-verified cases).
+// decoder path (for non-grouped or uncompressed cases).
 func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error, bool) {
+	return f.readGroupedCompressedFromFileToVerify(ptr, false, dst)
+}
+
+func (f *File) readGroupedCompressedFromFileToVerify(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, bool, error, bool) {
 	if f == nil || f.File == nil {
 		return nil, false, errors.New("valuelog: nil file"), true
 	}
@@ -776,7 +781,8 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	}
 
 	start := int64(ptr.Offset - 4)
-	var header [HeaderSize]byte
+	header := getHeaderScratch()
+	defer putHeaderScratch(header)
 	if _, err := f.File.ReadAt(header[:], start); err != nil {
 		return nil, false, err, true
 	}
@@ -797,11 +803,28 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	if int(valueLen) < FrameHeaderSize {
 		return nil, false, ErrCorrupt, true
 	}
+	var verifiedPayload []byte
+	if verifyCRC {
+		payloadScratch := getDecodeScratch(int(valueLen))
+		verifiedPayload = payloadScratch[:valueLen]
+		defer putDecodeScratch(payloadScratch)
+		if _, err := f.File.ReadAt(verifiedPayload, start+HeaderSize); err != nil {
+			return nil, false, err, true
+		}
+		f.noteRecordCRCCheck()
+		if crc.ChecksumParts(header[4:], verifiedPayload) != binary.LittleEndian.Uint32(header[:4]) {
+			return nil, false, ErrCorrupt, true
+		}
+	}
 
 	frameOff := start + HeaderSize
 	var frameHeader [FrameHeaderSize]byte
-	if _, err := f.File.ReadAt(frameHeader[:], frameOff); err != nil {
-		return nil, false, err, true
+	if verifyCRC {
+		copy(frameHeader[:], verifiedPayload[:FrameHeaderSize])
+	} else {
+		if _, err := f.File.ReadAt(frameHeader[:], frameOff); err != nil {
+			return nil, false, err, true
+		}
 	}
 	if frameHeader[0] != FrameVersion {
 		return nil, false, ErrCorrupt, true
@@ -810,7 +833,8 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	if k <= 0 || k > MaxFrameK {
 		return nil, false, ErrCorrupt, true
 	}
-	if frameHeader[1]&FrameFlagCompressed == 0 {
+	compressed := frameHeader[1]&FrameFlagCompressed != 0
+	if !compressed && !verifyCRC {
 		return nil, false, nil, false
 	}
 
@@ -828,8 +852,17 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	off := FrameHeaderSize + ridBytes
 	const maxPrefixLen = FrameHeaderSize + (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
 	var prefix [maxPrefixLen]byte
-	if _, err := f.File.ReadAt(prefix[:prefixLen], frameOff); err != nil {
-		return nil, false, err, true
+	if verifyCRC {
+		copy(prefix[:prefixLen], verifiedPayload[:prefixLen])
+	} else {
+		if _, err := f.File.ReadAt(prefix[:prefixLen], frameOff); err != nil {
+			return nil, false, err, true
+		}
+	}
+	for ridOff, i := FrameHeaderSize, 0; i < k; i, ridOff = i+1, ridOff+8 {
+		if binary.LittleEndian.Uint64(prefix[ridOff:ridOff+8]) == 0 {
+			return nil, false, ErrCorrupt, true
+		}
 	}
 
 	var offsets [MaxFrameK + 1]uint32
@@ -852,9 +885,11 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	if valEnd < valStart || valEnd > rawLen {
 		return nil, false, ErrCorrupt, true
 	}
-	cacheableRaw := f.groupedFrameCacheAllowsRaw(int(rawLen))
-	if out, usedDst, err, hit := f.groupedFrameCacheReadTo(start, false, k, &offsets, rawLen, subIndex, dst); hit {
-		return out, usedDst, err, true
+	cacheableRaw := compressed && f.groupedFrameCacheAllowsRaw(int(rawLen))
+	if compressed {
+		if out, usedDst, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, &offsets, rawLen, subIndex, dst); hit {
+			return out, usedDst, err, true
+		}
 	}
 
 	frame := FrameHeader{
@@ -869,17 +904,30 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	if framePayloadLen < 0 {
 		return nil, false, ErrCorrupt, true
 	}
-	payloadScratch := getDecodeScratch(framePayloadLen)
-	framePayload := payloadScratch[:framePayloadLen]
-	if _, err := f.File.ReadAt(framePayload, frameOff+int64(prefixLen)); err != nil {
-		putDecodeScratch(payloadScratch)
-		return nil, false, err, true
+	var framePayload []byte
+	var payloadScratch []byte
+	if verifyCRC {
+		framePayload = verifiedPayload[prefixLen:]
+	} else {
+		payloadScratch = getDecodeScratch(framePayloadLen)
+		framePayload = payloadScratch[:framePayloadLen]
+		if _, err := f.File.ReadAt(framePayload, frameOff+int64(prefixLen)); err != nil {
+			putDecodeScratch(payloadScratch)
+			return nil, false, err, true
+		}
 	}
 
-	raw := f.takeDecodeScratch(int(rawLen))
-	pooledRaw := true
-	raw, err := decodeFramePayloadTo(frame, framePayload, f.dictLookup, rawLen, raw)
-	putDecodeScratch(payloadScratch)
+	raw := framePayload
+	pooledRaw := false
+	var err error
+	if compressed {
+		raw = f.takeDecodeScratch(int(rawLen))
+		pooledRaw = true
+		raw, err = decodeFramePayloadTo(frame, framePayload, f.dictLookup, rawLen, raw)
+	}
+	if payloadScratch != nil {
+		putDecodeScratch(payloadScratch)
+	}
 	if err != nil {
 		if pooledRaw {
 			f.releaseDecodeScratch(raw)
@@ -897,7 +945,7 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 		encoded := append([]byte(nil), val...)
 		cachedRaw := false
 		if cacheableRaw {
-			cachedRaw = f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+			cachedRaw = f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, pooledRaw)
 		}
 		if pooledRaw && !cachedRaw {
 			f.releaseDecodeScratch(raw)
@@ -916,7 +964,7 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 		copy(out, val)
 		cachedRaw := false
 		if cacheableRaw {
-			cachedRaw = f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+			cachedRaw = f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, pooledRaw)
 		}
 		if pooledRaw && !cachedRaw {
 			f.releaseDecodeScratch(raw)
@@ -927,7 +975,7 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	copy(out, val)
 	cachedRaw := false
 	if cacheableRaw {
-		cachedRaw = f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+		cachedRaw = f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, pooledRaw)
 	}
 	if pooledRaw && !cachedRaw {
 		f.releaseDecodeScratch(raw)
@@ -945,6 +993,23 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 	if val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst); ok {
 		f.mmapReadHits.Add(1)
 		return val, err
+	}
+	if verifyCRC {
+		if val, usedDst, err, ok := f.readGroupedCompressedFromFileToVerify(ptr, true, dst[len(dst):cap(dst)]); ok {
+			f.mmapReadFallbackReadAt.Add(1)
+			if err != nil {
+				return nil, err
+			}
+			if !usedDst {
+				noteGrowReadAppendCompressedFallback(len(val))
+				noteGrowReadAppendCompressedFallbackDst(dst, len(val))
+				if len(dst) == 0 {
+					out, _, _, err := f.maybeDecodeLeafLogPayloadTo(val, nil)
+					return out, err
+				}
+			}
+			return f.appendMaybeDecodeLeafLogPayload(dst, val)
+		}
 	}
 	// Fast path (bench/unsafe reads): grouped + uncompressed + no CRC.
 	if !verifyCRC && page.ValuePtrIsGrouped(ptr) && ptr.Offset >= 4 {
