@@ -34,8 +34,8 @@
       "TreeDB/collections/vector_index_rebuild.go": "21bed0f84ae5301d17619ed2753300be73cf422c"
     },
     "harness_blobs": {
-      "scripts/treedb_vectordbbench_artifact.py": "d6b5f5cf1e7447cb541d3ec38af100b5ed18c418",
-      "cmd/treedb_column_section_audit/main.go": "c22478631e79d76339190b2c94b99bda3db8a2a3"
+      "scripts/treedb_vectordbbench_artifact.py": "0a7692b3f1e77ba73859261b141397af6fd27b2e",
+      "cmd/treedb_column_section_audit/main.go": "7849060e82654c9bfd4ac522ee8a5dad2e7f5de4"
     },
     "vectordbbench": {
       "root": "/mnt/fast4tb/codex-vectordbbench-4545",
