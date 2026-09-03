@@ -268,15 +268,6 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 		assertJSONMapEqual1875(t, projected, tc.want)
 	}
 
-	allocs := testing.AllocsPerRun(100, func() {
-		if _, err := projectJSONDocument(source, projection, nil); err != nil {
-			panic(err)
-		}
-	})
-	if allocs > 32 {
-		t.Fatalf("top-level projection allocs/run=%0.0f want <=32", allocs)
-	}
-
 	for _, input := range [][]byte{[]byte(`{"title":1,"title":2,"embedding":3}`), []byte(`{"title":`), []byte(`{"title":1} {}`), []byte(`[]`)} {
 		projected, err := projectJSONDocument(input, projection, nil)
 		if bytes.Equal(input, []byte(`{"title":1,"title":2,"embedding":3}`)) {
@@ -289,6 +280,17 @@ func TestProjectJSONDocumentTopLevelProjectionParityAndAllocs4606(t *testing.T) 
 		if err == nil {
 			t.Fatalf("invalid input %q projected successfully", input)
 		}
+	}
+	if collectionsRaceEnabled {
+		return
+	}
+	allocs := testing.AllocsPerRun(100, func() {
+		if _, err := projectJSONDocument(source, projection, nil); err != nil {
+			panic(err)
+		}
+	})
+	if allocs > 32 {
+		t.Fatalf("top-level projection allocs/run=%0.0f want <=32", allocs)
 	}
 }
 
