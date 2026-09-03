@@ -288,4 +288,47 @@ func TestClearDenseVectorSearchScratchReleasesPointers(t *testing.T) {
 	if state.denseFilter.Field != "" || state.denseFilter.Operator != "" || state.denseFilter.Value != nil || len(state.denseFilter.Conditions) != 0 {
 		t.Fatalf("retained root filter: %+v", state.denseFilter)
 	}
+
+	state.denseResults = make([]documentservice.RawDenseVectorResult, 1, maxRetainedGetManyScratchItems+1)
+	state.idsScratch = make([][]byte, 1, maxRetainedGetManyScratchItems+1)
+	state.docsScratch = make([][]byte, 1, maxRetainedGetManyScratchItems+1)
+	state.vectorQuery = make([]float32, 1, maxRetainedGetManyScratchItems+1)
+	state.denseResults[0] = documentservice.RawDenseVectorResult{ID: []byte("id"), Document: []byte("document")}
+	state.idsScratch[0] = []byte("id")
+	state.docsScratch[0] = []byte("document")
+	clearDenseVectorSearchScratch(&state)
+	if state.denseResults != nil || state.idsScratch != nil || state.docsScratch != nil || state.vectorQuery != nil {
+		t.Fatalf("oversized scratch retained results=%d ids=%d docs=%d query=%d", cap(state.denseResults), cap(state.idsScratch), cap(state.docsScratch), cap(state.vectorQuery))
+	}
+}
+
+func TestClientClearBorrowedResponseViewsBoundsDenseTables(t *testing.T) {
+	client := Client{
+		vectorSections: make([]iwire.Section, 1, 2),
+		denseIDs:       make([][]byte, 1, 2),
+		denseDocuments: make([][]byte, 1, 2),
+		denseResults:   make([]DenseVectorSearchResult, 1, 2),
+	}
+	client.vectorSections[0].Bytes = []byte("section")
+	client.denseIDs[0] = []byte("id")
+	client.denseDocuments[0] = []byte("document")
+	client.denseResults[0] = DenseVectorSearchResult{ID: []byte("id"), Document: []byte("document")}
+	client.clearBorrowedResponseViews()
+	if len(client.vectorSections) != 0 || len(client.denseIDs) != 0 || len(client.denseDocuments) != 0 || len(client.denseResults) != 0 {
+		t.Fatalf("retained client views sections=%d ids=%d docs=%d results=%d", len(client.vectorSections), len(client.denseIDs), len(client.denseDocuments), len(client.denseResults))
+	}
+	if cap(client.vectorSections) != 2 || cap(client.denseIDs) != 2 || cap(client.denseDocuments) != 2 || cap(client.denseResults) != 2 {
+		t.Fatalf("client scratch capacities sections=%d ids=%d docs=%d results=%d want two", cap(client.vectorSections), cap(client.denseIDs), cap(client.denseDocuments), cap(client.denseResults))
+	}
+
+	client.denseIDs = make([][]byte, 1, maxRetainedGetManyScratchItems+1)
+	client.denseDocuments = make([][]byte, 1, maxRetainedGetManyScratchItems+1)
+	client.denseResults = make([]DenseVectorSearchResult, 1, maxRetainedGetManyScratchItems+1)
+	client.denseIDs[0] = []byte("id")
+	client.denseDocuments[0] = []byte("document")
+	client.denseResults[0] = DenseVectorSearchResult{ID: []byte("id"), Document: []byte("document")}
+	client.clearBorrowedResponseViews()
+	if client.denseIDs != nil || client.denseDocuments != nil || client.denseResults != nil {
+		t.Fatalf("oversized client views retained ids=%d docs=%d results=%d", cap(client.denseIDs), cap(client.denseDocuments), cap(client.denseResults))
+	}
 }

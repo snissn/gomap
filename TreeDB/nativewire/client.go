@@ -249,11 +249,23 @@ func (c *Client) clearBorrowedResponseViews() {
 	clear(c.vectorSections[:cap(c.vectorSections)])
 	c.vectorSections = c.vectorSections[:0]
 	clear(c.denseIDs[:cap(c.denseIDs)])
-	c.denseIDs = c.denseIDs[:0]
+	if cap(c.denseIDs) > maxRetainedGetManyScratchItems {
+		c.denseIDs = nil
+	} else {
+		c.denseIDs = c.denseIDs[:0]
+	}
 	clear(c.denseDocuments[:cap(c.denseDocuments)])
-	c.denseDocuments = c.denseDocuments[:0]
+	if cap(c.denseDocuments) > maxRetainedGetManyScratchItems {
+		c.denseDocuments = nil
+	} else {
+		c.denseDocuments = c.denseDocuments[:0]
+	}
 	clear(c.denseResults[:cap(c.denseResults)])
-	c.denseResults = c.denseResults[:0]
+	if cap(c.denseResults) > maxRetainedGetManyScratchItems {
+		c.denseResults = nil
+	} else {
+		c.denseResults = c.denseResults[:0]
+	}
 }
 
 func (c *Client) interruptDeadlineOnContextCancel(ctx context.Context) func() {

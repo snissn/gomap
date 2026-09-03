@@ -222,11 +222,28 @@ func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, 
 
 func clearDenseVectorSearchScratch(state *connState) {
 	clear(state.denseResults[:cap(state.denseResults)])
-	state.denseResults = state.denseResults[:0]
+	if cap(state.denseResults) > maxRetainedGetManyScratchItems {
+		state.denseResults = nil
+	} else {
+		state.denseResults = state.denseResults[:0]
+	}
 	clear(state.idsScratch[:cap(state.idsScratch)])
-	state.idsScratch = state.idsScratch[:0]
+	if cap(state.idsScratch) > maxRetainedGetManyScratchItems {
+		state.idsScratch = nil
+	} else {
+		state.idsScratch = state.idsScratch[:0]
+	}
 	clear(state.docsScratch[:cap(state.docsScratch)])
-	state.docsScratch = state.docsScratch[:0]
+	if cap(state.docsScratch) > maxRetainedGetManyScratchItems {
+		state.docsScratch = nil
+	} else {
+		state.docsScratch = state.docsScratch[:0]
+	}
+	if cap(state.vectorQuery) > maxRetainedGetManyScratchItems {
+		state.vectorQuery = nil
+	} else {
+		state.vectorQuery = state.vectorQuery[:0]
+	}
 	clear(state.denseFilters[:cap(state.denseFilters)])
 	state.denseFilters = state.denseFilters[:0]
 	state.denseFilter = documentservice.Filter{}
