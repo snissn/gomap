@@ -53,8 +53,7 @@ type artifact struct {
 	ResultScores       [2][]float64 `json:"result_scores"`
 	DocumentSHA256     [2]string    `json:"document_sha256"`
 	Route              string       `json:"route"`
-	ExactFallbacks     uint64       `json:"exact_fallbacks"`
-	FullScanFallbacks  uint64       `json:"full_document_scan_fallbacks"`
+	ValidatedRoutes    int          `json:"native_route_queries_validated"`
 }
 
 func main() {
@@ -172,6 +171,7 @@ func run(ctx context.Context, addr, index string, queryCount, clientCount int) (
 		LatencyMillisP99:   percentile(all, 0.99),
 		ResultPayloadBytes: payloadBytes,
 		Route:              string(documentservice.RouteAnn),
+		ValidatedRoutes:    len(all),
 	}
 	for scenario := range expected {
 		hash := sha256.New()
