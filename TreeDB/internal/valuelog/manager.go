@@ -802,25 +802,28 @@ func (f *File) readGroupedCompressedFromFileToVerify(ptr page.ValuePtr, verifyCR
 	if int(valueLen) < FrameHeaderSize {
 		return nil, false, ErrCorrupt, true
 	}
+	var verifiedPayload []byte
 	if verifyCRC {
 		payloadScratch := getDecodeScratch(int(valueLen))
-		payload := payloadScratch[:valueLen]
-		if _, err := f.File.ReadAt(payload, start+HeaderSize); err != nil {
-			putDecodeScratch(payloadScratch)
+		verifiedPayload = payloadScratch[:valueLen]
+		defer putDecodeScratch(payloadScratch)
+		if _, err := f.File.ReadAt(verifiedPayload, start+HeaderSize); err != nil {
 			return nil, false, err, true
 		}
 		f.noteRecordCRCCheck()
-		if crc.ChecksumParts(header[4:], payload) != binary.LittleEndian.Uint32(header[:4]) {
-			putDecodeScratch(payloadScratch)
+		if crc.ChecksumParts(header[4:], verifiedPayload) != binary.LittleEndian.Uint32(header[:4]) {
 			return nil, false, ErrCorrupt, true
 		}
-		putDecodeScratch(payloadScratch)
 	}
 
 	frameOff := start + HeaderSize
 	var frameHeader [FrameHeaderSize]byte
-	if _, err := f.File.ReadAt(frameHeader[:], frameOff); err != nil {
-		return nil, false, err, true
+	if verifyCRC {
+		copy(frameHeader[:], verifiedPayload[:FrameHeaderSize])
+	} else {
+		if _, err := f.File.ReadAt(frameHeader[:], frameOff); err != nil {
+			return nil, false, err, true
+		}
 	}
 	if frameHeader[0] != FrameVersion {
 		return nil, false, ErrCorrupt, true
@@ -847,8 +850,12 @@ func (f *File) readGroupedCompressedFromFileToVerify(ptr page.ValuePtr, verifyCR
 	off := FrameHeaderSize + ridBytes
 	const maxPrefixLen = FrameHeaderSize + (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
 	var prefix [maxPrefixLen]byte
-	if _, err := f.File.ReadAt(prefix[:prefixLen], frameOff); err != nil {
-		return nil, false, err, true
+	if verifyCRC {
+		copy(prefix[:prefixLen], verifiedPayload[:prefixLen])
+	} else {
+		if _, err := f.File.ReadAt(prefix[:prefixLen], frameOff); err != nil {
+			return nil, false, err, true
+		}
 	}
 
 	var offsets [MaxFrameK + 1]uint32
@@ -888,17 +895,25 @@ func (f *File) readGroupedCompressedFromFileToVerify(ptr page.ValuePtr, verifyCR
 	if framePayloadLen < 0 {
 		return nil, false, ErrCorrupt, true
 	}
-	payloadScratch := getDecodeScratch(framePayloadLen)
-	framePayload := payloadScratch[:framePayloadLen]
-	if _, err := f.File.ReadAt(framePayload, frameOff+int64(prefixLen)); err != nil {
-		putDecodeScratch(payloadScratch)
-		return nil, false, err, true
+	var framePayload []byte
+	var payloadScratch []byte
+	if verifyCRC {
+		framePayload = verifiedPayload[prefixLen:]
+	} else {
+		payloadScratch = getDecodeScratch(framePayloadLen)
+		framePayload = payloadScratch[:framePayloadLen]
+		if _, err := f.File.ReadAt(framePayload, frameOff+int64(prefixLen)); err != nil {
+			putDecodeScratch(payloadScratch)
+			return nil, false, err, true
+		}
 	}
 
 	raw := f.takeDecodeScratch(int(rawLen))
 	pooledRaw := true
 	raw, err := decodeFramePayloadTo(frame, framePayload, f.dictLookup, rawLen, raw)
-	putDecodeScratch(payloadScratch)
+	if payloadScratch != nil {
+		putDecodeScratch(payloadScratch)
+	}
 	if err != nil {
 		if pooledRaw {
 			f.releaseDecodeScratch(raw)
