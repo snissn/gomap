@@ -197,6 +197,44 @@ Acceptance:
 - rejection tests for non-deterministic sections, duplicate singleton sections,
   unsupported command versions, local handles, and missing guards.
 
+### R3a. Deterministic Apply Harness
+
+Before wiring a Raft library, implement the state-machine boundary tracked in
+https://github.com/snissn/gomap/issues/1654.
+
+R3a accepts deterministic replicated command-entry bytes, decodes them without
+reconstructing native-wire requests, lowers supported entries to local
+user-command WAL payloads, and applies them through the normal TreeDB executor.
+It is an in-process harness, not a networked Raft group.
+
+The initial R3a allowlist is limited to command kinds that are both deterministic
+and `WAL-supported` in the command-WAL support matrix:
+
+- create collection;
+- insert batch by explicit document ID;
+- replace/update-as-final-replacement batch by explicit document ID;
+- delete batch by explicit document ID.
+
+R3a must reject unsupported command kinds before local WAL append or visible
+mutation. In particular, create/drop index, drop collection, query-wide
+update/delete, flush/checkpoint barriers, column-store file publish, and
+physical maintenance remain outside the replicated command-entry surface until
+their command-WAL semantics and deterministic guards are explicit.
+
+Acceptance:
+
+- the same deterministic entry sequence applied to two fresh DBs produces the
+  same logical state digest;
+- request metadata such as request ID, acknowledgement policy, deadlines,
+  tracing, compression, and response shaping does not affect deterministic
+  command-entry bytes or the logical digest;
+- unsupported replicated command kinds fail before local command WAL append,
+  `AppliedLSN` advancement, or visible state mutation;
+- the apply path uses the existing local command-WAL/recovery discipline instead
+  of a Raft-specific mutation bypass;
+- the harness exposes the future applied-index/idempotency metadata boundary and
+  documents that those records must not advance past local recoverability.
+
 ### R3. Raft MVP for Writes
 
 Add Raft around the deterministic write set only.
@@ -211,11 +249,14 @@ selected local command-WAL/`AppliedLSN` recoverability boundary.
 
 Replicate:
 
-- collection create/drop metadata,
-- index create/drop metadata,
+- collection create metadata,
 - insert/replace/delete batches,
 - deterministic schema/catalog guards,
 - idempotency records.
+
+Replicate collection drop and index create/drop only after those command kinds
+become `WAL-supported` and have deterministic guard/recovery tests. Until then,
+they are request-layer rejections in cluster write mode.
 
 Do not replicate:
 
@@ -562,6 +603,8 @@ affect routing, snapshots, or catch-up behavior.
 
 ### Raft TODO
 
+- Land the #1654 R3a deterministic apply harness before choosing a Raft library
+  or committing to a log-store boundary.
 - Choose Raft library or implementation boundary.
 - Define `CommandEntryV1` bytes.
 - Define idempotency record storage.

@@ -2,6 +2,7 @@
   "version": 1,
   "owner": "TreeDB/docs/spec/user-command-wal.md",
   "tracker": "https://github.com/snissn/gomap/issues/1529",
+  "raft_r3a_tracker": "https://github.com/snissn/gomap/issues/1654",
   "relationship_values": [
     "lowered_equivalent_v1",
     "lowered_kind_only_v1",
@@ -9,6 +10,11 @@
     "local_only_rejected_v1",
     "local_only_barrier_v1",
     "read_rejected_v1"
+  ],
+  "raft_r3a_harness_values": [
+    "eligible_v1",
+    "rejected_until_wal_supported_v1",
+    "local_only_not_replicated_v1"
   ],
   "ack_recoverability": {
     "visible": "process-visible after local command-WAL recoverability and normal-executor install; does not require root publication or AppliedLSN advancement",
@@ -26,6 +32,7 @@
       "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_catalog_create_collection.hex",
       "local_fixture_sha256": "899bbf33a586e70b727e4014941455447248070f26950357d039dc25f399f76e",
       "support_matrix_status": "WAL-supported",
+      "raft_r3a_harness": "eligible_v1",
       "relationship": "lowered_kind_only_v1",
       "notes": "Kind-only alignment: native-wire deterministic-entry fixtures and local command-WAL fixtures pin create-collection support and acknowledgement semantics, but they encode collection metadata with different wire payload shapes. A future equivalence fixture must use matched metadata payloads before claiming lowered_equivalent_v1."
     },
@@ -38,6 +45,7 @@
       "local_fixture": "",
       "local_fixture_sha256": "",
       "support_matrix_status": "WAL-rejected",
+      "raft_r3a_harness": "rejected_until_wal_supported_v1",
       "relationship": "future_rejected_v1",
       "notes": "Native-wire deterministic bytes are pinned, but local command WAL must reject index DDL until catalog index command payloads and recovery tests land."
     },
@@ -50,6 +58,7 @@
       "local_fixture": "",
       "local_fixture_sha256": "",
       "support_matrix_status": "WAL-rejected",
+      "raft_r3a_harness": "rejected_until_wal_supported_v1",
       "relationship": "future_rejected_v1",
       "notes": "Native-wire deterministic bytes are pinned, but local command WAL must reject index DDL until catalog index command payloads and recovery tests land."
     },
@@ -62,6 +71,7 @@
       "local_fixture": "",
       "local_fixture_sha256": "",
       "support_matrix_status": "WAL-rejected",
+      "raft_r3a_harness": "rejected_until_wal_supported_v1",
       "relationship": "local_only_rejected_v1",
       "notes": "CommandDropCollection is a local-only native-wire mutation today and has no deterministic-entry fixture. Local command WAL rejects it until collection-drop catalog payloads and recovery tests land."
     },
@@ -74,6 +84,7 @@
       "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_insert_by_id.hex",
       "local_fixture_sha256": "795c4684ea76e21db16a236a7e4de2662e6597e2e77adbf54825a59ffb9c6df7",
       "support_matrix_status": "WAL-supported",
+      "raft_r3a_harness": "eligible_v1",
       "relationship": "lowered_kind_only_v1",
       "notes": "Kind-only alignment: native-wire deterministic-entry fixtures and local command-WAL fixtures pin the same command kind and supported surface, but they are not byte-equivalent and currently use different logical fixture inputs. A future equivalence fixture must use matched collection/id/document inputs before claiming lowered_equivalent_v1."
     },
@@ -86,6 +97,7 @@
       "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_update_by_id.hex",
       "local_fixture_sha256": "21247138f1d50b019f59b63e9abb74dc65784f9f70bfcb5a27f8f363910a3ec7",
       "support_matrix_status": "WAL-supported",
+      "raft_r3a_harness": "eligible_v1",
       "relationship": "lowered_kind_only_v1",
       "notes": "Kind-only alignment: native-wire deterministic-entry fixtures and local command-WAL fixtures pin the same command kind and supported surface, but they are not byte-equivalent and currently use different logical fixture inputs. A future equivalence fixture must use matched collection/id/document inputs before claiming lowered_equivalent_v1."
     },
@@ -110,6 +122,7 @@
       "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_delete_by_id.hex",
       "local_fixture_sha256": "f62392ace88464fdf58a3eb9a92818c54a59aaeb3a53abc7ad54a0e674e87541",
       "support_matrix_status": "WAL-supported",
+      "raft_r3a_harness": "eligible_v1",
       "relationship": "lowered_kind_only_v1",
       "notes": "Kind-only alignment: native-wire deterministic-entry fixtures and local command-WAL fixtures pin the same command kind and supported surface, but they are not byte-equivalent and currently use different logical fixture inputs. A future equivalence fixture must use matched collection/id/document inputs before claiming lowered_equivalent_v1."
     },
@@ -122,6 +135,7 @@
       "local_fixture": "",
       "local_fixture_sha256": "",
       "support_matrix_status": "WAL-supported",
+      "raft_r3a_harness": "local_only_not_replicated_v1",
       "relationship": "local_only_barrier_v1",
       "notes": "CommandFlushCollection is a local-only durability barrier, not replicated command identity. It must observe command-WAL root and AppliedLSN boundaries but does not add a replayable user command payload."
     },
@@ -134,6 +148,7 @@
       "local_fixture": "",
       "local_fixture_sha256": "",
       "support_matrix_status": "WAL-supported",
+      "raft_r3a_harness": "local_only_not_replicated_v1",
       "relationship": "local_only_barrier_v1",
       "notes": "CommandFlushAll is a local-only durability barrier, not replicated command identity. It must observe command-WAL root and AppliedLSN boundaries but does not add a replayable user command payload."
     },
@@ -146,6 +161,7 @@
       "local_fixture": "",
       "local_fixture_sha256": "",
       "support_matrix_status": "WAL-supported",
+      "raft_r3a_harness": "local_only_not_replicated_v1",
       "relationship": "local_only_barrier_v1",
       "notes": "CommandCheckpoint is a local-only durability barrier, not replicated command identity. It must observe command-WAL root and AppliedLSN boundaries but does not add a replayable user command payload."
     },

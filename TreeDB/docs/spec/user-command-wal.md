@@ -7,6 +7,7 @@ collection-specific physical/root-delta WAL target in
 `collection-wal-durability-plan.md` for future implementation work.
 
 Tracker: https://github.com/snissn/gomap/issues/1529
+Raft R3a tracker: https://github.com/snissn/gomap/issues/1654
 
 TreeDB is pre-alpha. On-disk formats and public APIs may change. This freedom
 must not create fail-open recovery behavior: once a directory advertises a
@@ -170,6 +171,11 @@ different logical inputs and must not be treated as payload-equivalence proof.
 Entries marked `future_rejected_v1` have pinned native-wire deterministic bytes
 but remain explicitly rejected by local command WAL until the matching command
 kind and recovery tests land.
+
+The same manifest also records the R3a Raft-apply harness eligibility for each
+native-wire mutation. R3a may use only entries that are deterministic and
+currently `WAL-supported`; rejected or local-only barrier commands must fail
+before local command WAL append when presented as replicated command entries.
 
 This is a compatibility-breaking WAL format transition. TreeDB is pre-alpha, so
 the command WAL implementation may require old directories to be cleanly
@@ -686,6 +692,14 @@ superset. A Raft node may not advertise a command as locally recoverable until
 its local apply/durability rule is satisfied. Local page IDs/root IDs are not a
 portable consensus state root; a future cluster state digest must be defined
 separately if consensus requires byte-independent state equality.
+
+The first Raft-facing implementation slice is the R3a deterministic apply
+harness in https://github.com/snissn/gomap/issues/1654. That harness is not a
+Raft log/store implementation. It should decode deterministic command-entry
+bytes, lower supported entries to local command WAL payloads, apply through the
+normal executor, and prove logical convergence across fresh DBs. It must not
+replicate local command WAL frames, physical root IDs, page IDs, checkpoint
+barriers, or reconstructed native-wire requests.
 
 Native-wire deterministic command entries are the canonical schema source for
 wire-exposed mutations. The local command WAL should reuse those deterministic
