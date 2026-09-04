@@ -1,5 +1,10 @@
 # Vector DB Comparison
 
+For the separate Minima client/service lifecycle benchmark, use the
+[Minima runbook](../../TreeDB/docs/benchmarks/treedb_rag_benchmark_runbook.md#minima-native-path-development-4614).
+Its bounded 50K/250K modes are diagnostics, not full qualification or evidence
+that mutable `column_graph` is already supported.
+
 This benchmark compares persistent database-tier ANN search:
 
 - TreeDB native persisted HNSW via `cmd/treedb_vector_search_demo`

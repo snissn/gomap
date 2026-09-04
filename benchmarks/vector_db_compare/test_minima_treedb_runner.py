@@ -143,6 +143,15 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                     check=True, capture_output=True, text=True,
                 )
 
+    def test_column_graph_unavailable_before_loading_or_launching(self) -> None:
+        with mock.patch.object(runner, "parse_args", return_value=SimpleNamespace(strategy="column_graph")), \
+             mock.patch.object(common, "load_manifest") as load, \
+             mock.patch.object(runner, "ServiceController") as controller:
+            with self.assertRaisesRegex(SystemExit, "column_graph Minima execution unavailable"):
+                runner.main()
+        load.assert_not_called()
+        controller.assert_not_called()
+
     def test_repository_commit_binds_head_after_clean_status(self) -> None:
         commit = "a" * 40
         with mock.patch.object(
@@ -1010,7 +1019,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 "failures": list(workload.evidence.failures),
                 "phase_attribution": workload._finish_phase_attribution(),
             }
-            args = SimpleNamespace(
+            args = SimpleNamespace(strategy="native_runtime",
                 manifest=root / "manifest.json", output=output, service_bin=root / "service",
                 url="http://127.0.0.1:17120", data_dir=root / "data",
                 profile="command_wal_durable", startup_timeout=3600,
@@ -1147,7 +1156,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 "failures": list(workload.evidence.failures),
                 "phase_attribution": workload._finish_phase_attribution(),
             }
-            args = SimpleNamespace(
+            args = SimpleNamespace(strategy="native_runtime",
                 manifest=root / "manifest.json", output=output, service_bin=root / "service",
                 url="http://127.0.0.1:17120", data_dir=root / "data",
                 profile="command_wal_durable", startup_timeout=3600,
@@ -1190,7 +1199,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
     def test_script_guards_empty_diagnostic_array_for_bash_nounset(self) -> None:
         script = (Path(__file__).parents[2] / "scripts/bench_minima_qualification.sh").read_text(encoding="utf-8")
         guarded = '${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"}'
-        self.assertEqual(script.count(guarded), 2)
+        self.assertEqual(script.count(guarded), 3)
         self.assertNotIn('"${treedb_diagnostic_args[@]}" ||', script)
 
     def test_service_log_evidence_is_bounded_and_keeps_path(self) -> None:
@@ -1254,7 +1263,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             (data_dir / "compatible").touch()
             output = root / "output-directory"
             output.mkdir()
-            args = SimpleNamespace(
+            args = SimpleNamespace(strategy="native_runtime",
                 manifest=root / "manifest.json", output=output, service_bin=binary,
                 url=f"http://127.0.0.1:{port}", data_dir=data_dir, profile="test",
                 startup_timeout=2, collection="owned", operation_timeout=1, ef_search=1, small=False,
@@ -1353,6 +1362,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.url = "http://127.0.0.1:1"
         workload.collection = "owned"
         workload.config = {"dimension": 8, "metric": "cosine"}
+        workload.manifest = {"schema": common.MANIFEST_SCHEMA}
         workload.ef_search = 64
         workload.effective_collection = {
             "dimension": 8,

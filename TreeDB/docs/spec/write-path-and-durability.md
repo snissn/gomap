@@ -130,12 +130,12 @@ not a public acknowledgement contract.
 
 This document owns the canonical durability-mode matrix. Other docs may
 summarize these modes but should not maintain independent durability matrices.
-Before user-command WAL coverage lands, collection APIs have an additional
-write-domain distinction: acknowledged collection writes can remain
-flush-boundary durable rather than durable-at-ack. That current behavior is
-owned by `collections-write-domain.md`. The active target for extending
-durable-at-ack coverage is the user-command WAL in `user-command-wal.md`; the
-older collection root-delta WAL plan is deprecated historical context.
+Supported collection commands use this same profile matrix even when their
+process-visible writes are buffered and root publication follows later. See
+`collections-write-domain.md` for staging, visibility and replay coverage;
+unsupported commands must fail before admission rather than weaken a durable
+profile. `user-command-wal.md` owns command coverage and encoding. The older
+collection root-delta WAL plan is deprecated historical context.
 
 ## 2. Value Placement (Inline vs Pointer)
 

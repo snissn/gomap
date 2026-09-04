@@ -654,6 +654,26 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertEqual((evidence.errors["small"], evidence.timeouts["small"]), (2, 1))
         self.assertEqual([row["kind"] for row in evidence.events], ["timeout", "error"])
 
+    def test_peak_rss_is_kernel_highwater_and_missing_is_unavailable(self) -> None:
+        with mock.patch.object(Path, "read_text", side_effect=["Name:\ttest\nVmHWM:\t4096 kB\n", "1 (test) " + " ".join(["0"] * 19 + ["123"]) ]):
+            peak = runner.process_peak_rss(123)
+        self.assertEqual(peak["bytes"], 4096 * 1024)
+        self.assertEqual(peak["pid"], 123)
+        self.assertEqual(peak["availability"], "measured")
+        with mock.patch.object(Path, "read_text", side_effect=OSError("unsupported")):
+            peak = runner.process_peak_rss(123)
+        self.assertIsNone(peak["bytes"])
+        self.assertEqual(peak["availability"], "unavailable")
+
+    def test_qdrant_cli_rejects_bounded_before_client_or_server_access(self) -> None:
+        with mock.patch.object(runner, "parse_args", return_value=SimpleNamespace(server_pid=123, storage_path=Path("."), manifest=Path("manifest"))), \
+             mock.patch.object(runner, "validate_qdrant_evidence_inputs"), \
+             mock.patch.object(runner, "load_manifest", return_value={"schema": runner.BOUNDED_MANIFEST_SCHEMA}), \
+             mock.patch.object(runner.importlib.metadata, "version") as version:
+            with self.assertRaisesRegex(SystemExit, "bounded Minima Qdrant execution unavailable"):
+                runner.main()
+        version.assert_not_called()
+
     def test_unowned_server_resources_are_not_claimed(self) -> None:
         resource = runner.server_resource_usage(None, None, "Qdrant")
         self.assertFalse(resource["captured"])
@@ -1003,7 +1023,7 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
             qdrant_module = SimpleNamespace(QdrantClient=object, models=object)
             with (
                 mock.patch.object(runner, "parse_args", return_value=args),
-                mock.patch.object(runner, "load_manifest", return_value={}),
+                mock.patch.object(runner, "load_manifest", return_value={"schema": runner.MANIFEST_SCHEMA}),
                 mock.patch.object(runner.importlib.metadata, "version", return_value=runner.CLIENT_VERSION),
                 mock.patch.object(runner, "server_info", return_value={"version": runner.SERVER_VERSION}),
                 mock.patch.object(runner, "QdrantMinimaRunner", FailingRunner),

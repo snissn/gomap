@@ -1,5 +1,64 @@
 # TreeDB retained RAG application baseline runbook (#4289)
 
+## Minima native-path development (#4614)
+
+Minima is a separate workload from the retained application baseline below.
+Its execution contract is
+[minima-native-execution.md](../spec/minima-native-execution.md). The Go command
+owns manifests and evidence validation; the Python runner executes real client
+requests against the document service. M0 adds bounded diagnostics, not mutable
+`column_graph` support or a new performance result.
+
+Use a clean, committed checkout and a writable `/mnt/fast4tb` mount:
+
+```sh
+mountpoint -q /mnt/fast4tb && test -w /mnt/fast4tb
+MINIMA_RUN=$(mktemp -d /mnt/fast4tb/gomap-minima-bounded-XXXXXX)
+mkdir -p "$MINIMA_RUN/tmp"
+TMPDIR="$MINIMA_RUN/tmp" GOWORK=off MODE=bounded-50k \
+  RUN_DIR="$MINIMA_RUN" MINIMA_WALL_SECONDS=600 \
+  scripts/bench_minima_qualification.sh
+```
+
+Linux GNU `timeout` bounds the entire command, including builds, to 600 seconds
+plus a 10-second forced-stop grace period. Individual service requests and
+startup are bounded at 120 seconds. A timeout/failure is incomplete evidence,
+not permission to reuse a previous output. Use a fresh run directory every time.
+`MODE=bounded-250k` selects 250,000 total rows; `MINIMA_WALL_SECONDS` sets an
+explicit run budget. These totals span all scenarios. They preserve the 4,097
+cutoff but not the full fixture's <1% sparse case. Both emit a diagnostic schema
+that cannot pass full qualification. `MODE=representative` retains the frozen
+full workload and its existing validation.
+
+The M0 runner still executes `native_runtime`. An explicit
+`TREEDB_STRATEGY=column_graph` request fails as unavailable until M4 connects the
+native lifecycle; null native counters do not mean zero fallback work. Keep
+the same client/transport, projections, durability and fixture for timing
+comparisons. For diagnostic overhead characterization, repeat three matched
+fresh-DB runs with diagnostics disabled/enabled in counterbalanced order; set
+`TREEDB_DIAGNOSTICS_DIR` beneath the run directory to enable existing diagnostics.
+Do not use this small lane as a full-scale speedup claim.
+
+`resource_measurement.peak_rss_bytes` is the maximum measured Linux service
+process-lifetime `VmHWM` through the captured segment endpoints. Per-process
+identity and source are retained. It is not the sum of peaks, whole-host memory,
+or a phase-specific peak. The historical `rss_bytes` field retains its old
+endpoint-growth meaning. Missing allocation, live-heap or client-memory evidence
+remains unavailable; use focused Go benchmarks/profiles for allocation budgets
+before optimizing each affected production feature.
+
+Focused harness validation:
+
+```sh
+GOWORK=off go test ./TreeDB/cmd/treedb_rag_benchmark \
+  -run '^TestMinima' -count=1 -timeout=120s
+python3 -m unittest discover -s benchmarks/vector_db_compare -p 'test_minima*runner.py'
+bash scripts/bench_minima_qualification_test.sh
+make docs-check
+```
+
+## Retained application baseline (not Minima)
+
 This runbook reproduces the repaired M1 application baseline. The historical
 C1 code is retained only as an unfiltered hashing regression cell; it is not a
 product or ingestion claim. The authoritative artifact schema is

@@ -17,6 +17,7 @@ TREEDB_DATA_DIR=${TREEDB_DATA_DIR:-$RUN_DIR/treedb-data}
 TREEDB_URL=${TREEDB_URL:-http://127.0.0.1:17120}
 TREEDB_COLLECTION=${TREEDB_COLLECTION:-gomap_minima_${RANDOM}_$$}
 TREEDB_PROFILE=${TREEDB_PROFILE:-command_wal_durable}
+TREEDB_STRATEGY=${TREEDB_STRATEGY:-native_runtime}
 TREEDB_EF_SEARCH=${TREEDB_EF_SEARCH:-128}
 TREEDB_OPERATION_TIMEOUT=${TREEDB_OPERATION_TIMEOUT:-120}
 TREEDB_STARTUP_TIMEOUT=${TREEDB_STARTUP_TIMEOUT:-3600}
@@ -50,6 +51,32 @@ fi
 mkdir -p "$RUN_DIR/bin"
 
 case "$MODE" in
+bounded-50k|bounded-250k)
+	if [[ "${MINIMA_BOUNDED_WRAPPED:-}" != "1" ]]; then
+		wall_seconds=${MINIMA_WALL_SECONDS:-600}
+		if [[ ! "$wall_seconds" =~ ^[1-9][0-9]*$ ]]; then
+			printf '%s\n' 'MINIMA_WALL_SECONDS must be a positive integer' >&2
+			exit 2
+		fi
+		export RUN_DIR MINIMA_BOUNDED_WRAPPED=1
+		exec timeout --signal=TERM --kill-after=10s "${wall_seconds}s" "$0"
+	fi
+	rows=50000
+	[[ "$MODE" != bounded-250k ]] || rows=250000
+	go build -o "$RUN_DIR/bin/treedb-document-service" -buildvcs=true ./cmd/treedb-document-service
+	go build -o "$RUN_DIR/bin/treedb-rag-benchmark" ./TreeDB/cmd/treedb_rag_benchmark
+	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -dump-minima-manifest "$MANIFEST_PATH" -minima-bounded-total-rows "$rows"
+	printf '%s\n' 'Bounded diagnostic: total rows across scenarios; 4097 crossover retained, full <1% sparse selectivity excluded; cannot qualify.' >&2
+	PYTHONPATH=clients/python/treedb_client/src "$PYTHON" benchmarks/vector_db_compare/minima_treedb_runner.py \
+		--manifest "$MANIFEST_PATH" --output "$TREEDB_EVIDENCE" \
+		--service-bin "$RUN_DIR/bin/treedb-document-service" --url "$TREEDB_URL" \
+		--data-dir "$TREEDB_DATA_DIR" --collection "$TREEDB_COLLECTION" --profile "$TREEDB_PROFILE" \
+		--strategy "$TREEDB_STRATEGY" --operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
+		--startup-timeout 120 --ef-search "$TREEDB_EF_SEARCH" \
+		${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"}
+	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -validate-minima-artifact "$TREEDB_EVIDENCE" -minima-expected-commit "$(git rev-parse HEAD)"
+	exit 0
+	;;
 representative)
 	EXPECTED_COMMIT=${MINIMA_EXPECTED_COMMIT:-$(git rev-parse origin/main)}
 	HEAD_COMMIT=$(git rev-parse HEAD)
@@ -81,6 +108,7 @@ small)
 	PYTHONPATH=clients/python/treedb_client/src "$PYTHON" \
 		benchmarks/vector_db_compare/minima_treedb_runner.py \
 		--small \
+		--strategy "$TREEDB_STRATEGY" \
 		--manifest "$MANIFEST_PATH" \
 		--output "$TREEDB_EVIDENCE" \
 		--service-bin "$RUN_DIR/bin/treedb-document-service" \
@@ -98,7 +126,7 @@ small)
 	exit "$treedb_status"
 	;;
 *)
-	printf 'unsupported MODE=%s (use small, representative, or diagnostic-resume)\n' "$MODE" >&2
+	printf 'unsupported MODE=%s (use small, representative, diagnostic-resume, bounded-50k, or bounded-250k)\n' "$MODE" >&2
 	exit 2
 	;;
 esac
@@ -113,6 +141,7 @@ go build -o "$RUN_DIR/bin/treedb-rag-benchmark" ./TreeDB/cmd/treedb_rag_benchmar
 treedb_status=0
 PYTHONPATH=clients/python/treedb_client/src "$PYTHON" \
 	benchmarks/vector_db_compare/minima_treedb_runner.py \
+	--strategy "$TREEDB_STRATEGY" \
 	--manifest "$MANIFEST_PATH" \
 	--output "$TREEDB_EVIDENCE" \
 	--service-bin "$RUN_DIR/bin/treedb-document-service" \

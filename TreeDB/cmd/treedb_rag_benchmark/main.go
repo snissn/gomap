@@ -32,6 +32,7 @@ func main() {
 		compareOutput        = flag.String("application-comparison-output", "", "validated #4331 comparison JSON")
 		compareReport        = flag.String("application-comparison-report", "", "validated #4331 comparison markdown")
 		dumpMinima           = flag.String("dump-minima-manifest", "", "write the frozen compact Minima fixture/operation manifest and exit")
+		minimaBoundedRows    = flag.Int("minima-bounded-total-rows", 0, "diagnostic manifest total rows: 50000 or 250000; zero preserves frozen full workload")
 		minimaTree           = flag.String("minima-treedb-evidence", "", "TreeDB partial backend evidence to compare and validate")
 		validateMinima       = flag.String("validate-minima-artifact", "", "validate one Minima JSON artifact fail closed and exit")
 		minimaQdrant         = flag.String("minima-qdrant-evidence", "", "Qdrant partial backend evidence to compare and validate")
@@ -42,6 +43,10 @@ func main() {
 		cellWorker           = flag.Bool("cell-worker", false, "serve long-lived JSON-line cell requests for per-cell interleaving")
 	)
 	flag.Parse()
+	if *minimaBoundedRows != 0 && (strings.TrimSpace(*workload) != "minima" || *dumpMinima == "") {
+		fmt.Fprintln(os.Stderr, "treedb_rag_benchmark: -minima-bounded-total-rows requires -workload=minima and -dump-minima-manifest")
+		os.Exit(2)
+	}
 	cfg.Workload = strings.TrimSpace(*workload)
 	switch cfg.Workload {
 	case "application":
@@ -51,7 +56,7 @@ func main() {
 		}
 	case "minima":
 		if *dumpMinima != "" {
-			if err := writeMinimaManifest(*dumpMinima); err != nil {
+			if err := writeMinimaManifestRows(*dumpMinima, *minimaBoundedRows); err != nil {
 				fmt.Fprintf(os.Stderr, "treedb_rag_benchmark: dump Minima manifest: %v\n", err)
 				os.Exit(1)
 			}

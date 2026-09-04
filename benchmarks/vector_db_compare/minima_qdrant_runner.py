@@ -37,6 +37,22 @@ RESOURCE_SEMANTICS = {
 }
 
 MANIFEST_SCHEMA = "treedb_rag_minima_manifest/v1"
+BOUNDED_MANIFEST_SCHEMA = "treedb_rag_minima_manifest/v2"
+BOUNDED_ARTIFACT_SCHEMA = "treedb_rag_application/minima_diagnostic_v1"
+BOUNDED_HASHES = {
+    "bounded-50k": {
+        "corpus_sha256": "fe6a67ffe7ef47ef7693bb4e92123c869c1f2085fc40ddeccd0dff1a2775afd4",
+        "query_sha256": "3ffa22e22db373654bb115dc71ec6ccb8938ef071983361023894fb9d40913c0",
+        "operation_sha256": "f3cecb4d218f516b41988c110677deacf246fbb827ae584faf3cb65c639795c0",
+        "expected_state_sha256": "e7dc514c5224bcbf5c900adb6912c97243848a70e4a8d6302b7c8c32d39fa965",
+    },
+    "bounded-250k": {
+        "corpus_sha256": "e672346a340c20e02f282e1d7ea64776730da4f8fbbf8ff3004a193ed7399d04",
+        "query_sha256": "32ca99fb253cfcba8188d9cc11a8a126cfc9f80b6ae5f27396238e2037af6652",
+        "operation_sha256": "8e1f611148f6e87258c3aa95307f96c82e72f47e36739cfc5765edabd1e515e7",
+        "expected_state_sha256": "30e35dbe357f46d0c1e6a05506af9ca6a6392b6f8e4ab795e526cc284ccc7878",
+    },
+}
 ARTIFACT_SCHEMA = "treedb_rag_application/minima_v4"
 SERVER_VERSION = CLIENT_VERSION = "1.19.0"
 READINESS_SNAPSHOT_LIMIT = 256
@@ -538,9 +554,14 @@ def validate_concurrent_mutation_plans(manifest: dict[str, Any]) -> list[dict[st
 
 
 def validate_manifest(manifest: dict[str, Any], *, require_frozen: bool = True) -> dict[str, Any]:
-    require_object(manifest, ["schema", "config", "corpora", "queries", "operations", "corpus_sha256", "query_sha256", "operation_sha256", "expected_state_sha256"], "manifest")
-    if manifest["schema"] != MANIFEST_SCHEMA:
+    require_object(manifest, ["schema", "fixture", "config", "corpora", "queries", "operations", "corpus_sha256", "query_sha256", "operation_sha256", "expected_state_sha256"], "manifest", {"fixture"})
+    bounded = manifest["schema"] == BOUNDED_MANIFEST_SCHEMA
+    if manifest["schema"] not in (MANIFEST_SCHEMA, BOUNDED_MANIFEST_SCHEMA):
         raise ValueError("unsupported Minima manifest schema")
+    if bounded and manifest.get("fixture") not in BOUNDED_HASHES:
+        raise ValueError("unknown bounded Minima fixture")
+    if not bounded and "fixture" in manifest:
+        raise ValueError("legacy manifest cannot select bounded fixture")
     config = require_object(manifest["config"], CONFIG_KEYS, "config")
     frozen_config = {
         "collection": "minima", "vector_field": "embedding", "content_field": "content", "dimension": 8,
@@ -611,7 +632,7 @@ def validate_manifest(manifest: dict[str, Any], *, require_frozen: bool = True) 
             require_object(document, DOCUMENT_KEYS, f"operation {ordinal} document")
     timed_plan = validate_timed_plan(manifest)
     validate_concurrent_mutation_plans(manifest)
-    if require_frozen and timed_execution_digest(timed_plan) != TIMED_EXECUTION_SHA256:
+    if require_frozen and not bounded and timed_execution_digest(timed_plan) != TIMED_EXECUTION_SHA256:
         raise ValueError("frozen timed execution digest mismatch")
     if require_frozen and reindex_trace_digest(expected_reindex_execution(manifest)) != REINDEX_EXECUTION_SHA256:
         raise ValueError("frozen reindex execution digest mismatch")
@@ -622,7 +643,7 @@ def validate_manifest(manifest: dict[str, Any], *, require_frozen: bool = True) 
     if manifest["expected_state_sha256"] != state_hash:
         raise ValueError(f"manifest expected_state_sha256 mismatch: got {manifest['expected_state_sha256']} recomputed {state_hash}")
     if require_frozen:
-        for key, expected in FROZEN_HASHES.items():
+        for key, expected in (BOUNDED_HASHES[manifest["fixture"]] if bounded else FROZEN_HASHES).items():
             if manifest[key] != expected:
                 raise ValueError(f"manifest {key} is not frozen: got {manifest[key]} want {expected}")
     return manifest
@@ -803,6 +824,29 @@ def cpu_time_seconds(value: str) -> float:
     return float(days) * 86400 + hours * 3600 + minutes * 60 + seconds
 
 
+def process_peak_rss(pid: int | None) -> dict[str, Any]:
+    """Kernel process-lifetime high water through this sample, never a phase peak."""
+    result = {"availability": "unavailable", "bytes": None, "pid": pid,
+              "process_identity": "", "source": "/proc/<pid>/status:VmHWM",
+              "scope": "process_lifetime_through_sample"}
+    if type(pid) is not int or pid <= 0:
+        return result
+    try:
+        status = Path(f"/proc/{pid}/status").read_text(encoding="utf-8")
+        stat_fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+        for line in status.splitlines():
+            if line.startswith("VmHWM:"):
+                _, value, unit = line.split()
+                if unit != "kB" or int(value) <= 0:
+                    break
+                result.update(availability="measured", bytes=int(value)*1024,
+                              process_identity=f"{pid}:{stat_fields[19]}")
+                break
+    except (OSError, ValueError, IndexError):
+        pass
+    return result
+
+
 def server_process_resource_usage(pid: int | None, server_name: str) -> dict[str, Any]:
     rss: int | None = None
     cpu: float | None = None
@@ -823,6 +867,7 @@ def server_process_resource_usage(pid: int | None, server_name: str) -> dict[str
         "captured": rss is not None and cpu is not None,
         "rss_bytes": rss or 0,
         "cpu_seconds": cpu or 0.0,
+        "peak_rss": process_peak_rss(pid),
         "availability": {
             "rss_bytes": f"{server_name} server PID {pid}" if rss is not None else "unavailable",
             "cpu_seconds": f"{server_name} server PID {pid}" if cpu is not None else "unavailable",
@@ -1170,8 +1215,13 @@ class QdrantMinimaRunner:
                     resource_delta(baseline, server_resource_usage(
                         self.server_pid, self.storage_path, self.resource_server_name))]
         captured = bool(segments) and all(segment["captured"] for segment in segments)
+        peaks = [segment["end"].get("peak_rss", {}) for segment in segments]
+        peaks_measured = bool(peaks) and all(p.get("availability") == "measured" for p in peaks)
         return {
             "captured": captured,
+            "peak_rss_bytes": max(p["bytes"] for p in peaks) if peaks_measured else None,
+            "peak_rss_availability": "measured" if peaks_measured else "unavailable",
+            "peak_rss_scope": "max_process_lifetime_highwater_through_segment_endpoints",
             "rss_bytes": sum(segment["rss_bytes"] for segment in segments) if captured else 0,
             "cpu_seconds": sum(segment["cpu_seconds"] for segment in segments) if captured else 0.0,
             "disk_bytes": sum(segment["disk_bytes"] for segment in segments) if captured else 0,
@@ -2120,6 +2170,8 @@ def main() -> int:
     args, manifest = parse_args(), None
     validate_qdrant_evidence_inputs(args.server_pid, args.storage_path)
     manifest = load_manifest(args.manifest)
+    if manifest["schema"] == BOUNDED_MANIFEST_SCHEMA:
+        raise SystemExit("bounded Minima Qdrant execution unavailable: M0 fixtures are TreeDB diagnostics; use the frozen v1 manifest for comparator evidence")
     installed = importlib.metadata.version("qdrant-client")
     if installed != CLIENT_VERSION:
         raise RuntimeError(f"qdrant-client must be exactly {CLIENT_VERSION}, got {installed}")

@@ -143,11 +143,12 @@ type minimaRawPhaseAttribution struct {
 }
 
 type minimaRawResourceSnapshot struct {
-	Captured     bool              `json:"captured"`
-	RSSBytes     int64             `json:"rss_bytes"`
-	CPUSeconds   float64           `json:"cpu_seconds"`
-	DiskBytes    int64             `json:"disk_bytes"`
-	Availability map[string]string `json:"availability,omitempty"`
+	Captured     bool                  `json:"captured"`
+	RSSBytes     int64                 `json:"rss_bytes"`
+	CPUSeconds   float64               `json:"cpu_seconds"`
+	DiskBytes    int64                 `json:"disk_bytes"`
+	Availability map[string]string     `json:"availability,omitempty"`
+	PeakRSS      *minimaProcessPeakRSS `json:"peak_rss,omitempty"`
 }
 
 type minimaRawResourceSemantics struct {
@@ -166,14 +167,26 @@ type minimaRawResourceSegment struct {
 }
 
 type minimaRawResourceMeasurement struct {
-	Captured   bool                       `json:"captured"`
-	RSSBytes   int64                      `json:"rss_bytes"`
-	CPUSeconds float64                    `json:"cpu_seconds"`
-	DiskBytes  int64                      `json:"disk_bytes"`
-	Semantics  minimaRawResourceSemantics `json:"semantics"`
-	Segments   []minimaRawResourceSegment `json:"segments"`
-	Baseline   *minimaRawResourceSnapshot `json:"baseline,omitempty"`
-	End        *minimaRawResourceSnapshot `json:"end,omitempty"`
+	Captured            bool                       `json:"captured"`
+	RSSBytes            int64                      `json:"rss_bytes"`
+	CPUSeconds          float64                    `json:"cpu_seconds"`
+	DiskBytes           int64                      `json:"disk_bytes"`
+	Semantics           minimaRawResourceSemantics `json:"semantics"`
+	Segments            []minimaRawResourceSegment `json:"segments"`
+	Baseline            *minimaRawResourceSnapshot `json:"baseline,omitempty"`
+	End                 *minimaRawResourceSnapshot `json:"end,omitempty"`
+	PeakRSSBytes        *int64                     `json:"peak_rss_bytes,omitempty"`
+	PeakRSSAvailability string                     `json:"peak_rss_availability,omitempty"`
+	PeakRSSScope        string                     `json:"peak_rss_scope,omitempty"`
+}
+
+type minimaProcessPeakRSS struct {
+	Availability    string `json:"availability"`
+	Bytes           *int64 `json:"bytes"`
+	PID             *int   `json:"pid"`
+	ProcessIdentity string `json:"process_identity"`
+	Source          string `json:"source"`
+	Scope           string `json:"scope"`
 }
 
 type minimaRawRestartBoundary struct {
@@ -637,6 +650,9 @@ func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution, resta
 }
 
 func validateMinimaResourceMeasurement(backend string, resource minimaRawResourceMeasurement) error {
+	if err := validateMinimaPeakRSS(resource); err != nil {
+		return err
+	}
 	if !resource.Captured || resource.RSSBytes < 0 || !finiteNonnegative(resource.CPUSeconds) || resource.DiskBytes < 0 {
 		return fmt.Errorf("minima artifact: %s raw resource evidence missing", backend)
 	}
