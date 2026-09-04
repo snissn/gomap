@@ -259,6 +259,11 @@ func columnHNSWPreparedScalarU8RerankFixture4227(tb testing.TB) (*columnVectorGr
 	if _, err := collection.RebuildVectorIndex(def.Name); err != nil {
 		tb.Fatalf("RebuildVectorIndex: %v", err)
 	}
+	// AllocsPerRun counts allocations from every goroutine, including deferred
+	// root publication from fixture writes. Drain that work before warmup.
+	if err := db.Checkpoint(); err != nil {
+		tb.Fatalf("Checkpoint rerank fixture: %v", err)
+	}
 	searcher, err := collection.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
 	if err != nil {
 		tb.Fatalf("OpenVectorIndexSearcher: %v", err)
