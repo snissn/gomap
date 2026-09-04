@@ -218,12 +218,29 @@ class ServiceController:
                 if process.poll() is None:
                     pid = process.pid
                     latest_process = common.server_process_resource_usage(pid, "TreeDB")
+                    peak_rss = None
+
+                    def retain_peak(sample: dict[str, Any]) -> bool:
+                        nonlocal peak_rss
+                        peak = sample.get("peak_rss", {})
+                        if peak.get("availability") != "measured":
+                            return True
+                        if peak.get("pid") != pid or not peak.get("process_identity"):
+                            return False
+                        if peak_rss is not None and peak["process_identity"] != peak_rss["process_identity"]:
+                            return False
+                        if peak_rss is None or peak["bytes"] > peak_rss["bytes"]:
+                            peak_rss = peak
+                        return True
+
+                    retain_peak(latest_process)
                     process.terminate()
                     deadline = time.monotonic() + self.shutdown_timeout
                     exited = False
                     while not exited:
                         sample = common.server_process_resource_usage(pid, "TreeDB")
-                        if sample["captured"] and (
+                        same_process = retain_peak(sample)
+                        if same_process and sample["captured"] and (
                             not latest_process["captured"]
                             or (
                                 sample["cpu_seconds"] >= latest_process["cpu_seconds"]
@@ -243,6 +260,10 @@ class ServiceController:
                         process.kill()
                         process.wait(timeout=min(5, self.shutdown_timeout))
                         timed_out = True
+                    # VmHWM can disappear before ps stops reporting CPU/RSS.
+                    # Keep the measured highwater independently of that endpoint.
+                    if peak_rss is not None:
+                        latest_process = {**latest_process, "peak_rss": peak_rss}
                     disk_available = self.data_dir.exists()
                     self.last_shutdown_resource_end = {
                         **latest_process,

@@ -908,6 +908,47 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         process.kill.assert_not_called()
         self.assertTrue(all(call.kwargs["timeout"] <= 0.05 for call in process.wait.call_args_list))
 
+    def test_shutdown_retains_peak_independently_of_final_cpu_and_rss(self) -> None:
+        unavailable = {"availability": "unavailable", "bytes": None, "pid": 55,
+                       "process_identity": "", "source": "/proc/<pid>/status:VmHWM",
+                       "scope": "process_lifetime_through_sample"}
+
+        def measured(value: int, identity: str = "55:123", pid: int = 55) -> dict[str, object]:
+            return {**unavailable, "availability": "measured", "bytes": value,
+                    "process_identity": identity, "pid": pid}
+
+        cases = (
+            ("terminal unavailable", [measured(100), measured(300), unavailable], 300),
+            ("lower later peak", [measured(300), measured(200), unavailable], 300),
+            ("different lifetime", [measured(100), measured(900, "55:999"), unavailable], 100),
+            ("different pid", [measured(100), measured(900, "56:123", 56), unavailable], 100),
+            ("never available", [unavailable, unavailable, unavailable], None),
+            ("first available during shutdown", [unavailable, measured(300), unavailable], 300),
+        )
+        for name, peaks, expected in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                controller = runner.ServiceController(
+                    Path("/service"), "http://127.0.0.1:17120", Path(directory),
+                    "command_wal_durable", 1, 1,
+                )
+                process = mock.MagicMock(pid=55)
+                process.poll.return_value = None
+                process.wait.side_effect = [runner.subprocess.TimeoutExpired("service", 0.05), 0]
+                controller.process = process
+                samples = [{"captured": True, "rss_bytes": 100 + i, "cpu_seconds": float(i + 1),
+                            "availability": {}, "peak_rss": peak} for i, peak in enumerate(peaks)]
+                with mock.patch.object(common, "server_process_resource_usage", side_effect=samples), \
+                     mock.patch.object(common, "disk_bytes", return_value=140):
+                    controller.stop()
+                endpoint = controller.last_shutdown_resource_end
+                self.assertEqual(endpoint["rss_bytes"], 102)
+                self.assertEqual(endpoint["cpu_seconds"], 3.0)
+                self.assertEqual(endpoint["peak_rss"]["bytes"], expected)
+                self.assertEqual(endpoint["peak_rss"]["availability"], "unavailable" if expected is None else "measured")
+                if expected is not None:
+                    self.assertEqual(endpoint["peak_rss"]["process_identity"], "55:123")
+                process.kill.assert_not_called()
+
     def test_shutdown_retains_positive_rss_when_terminal_cpu_is_equal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             data_dir = Path(directory) / "data"

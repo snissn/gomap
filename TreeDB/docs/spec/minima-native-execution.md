@@ -145,6 +145,14 @@ exercise ANN; intended broad/base and mutation-overlay scenarios need positive
 base/overlay work. Empty filters return empty results without a document scan.
 No `native_runtime`, whole-document-scan or undeclared exact fallback is allowed.
 
+M0's bounded-50k baseline exposed a concrete regression target: 1,000 eligible
+`broad_10pct` IDs, zero returned IDs, `complete_finite_ann`, 2,064 visited/scored.
+The existing runtime exact cap is 512; larger complete sets do not receive the
+eligible-region seeding used by `vector_aligned_ann`. Preserve this failing
+fixture. M2/M4 must test 512/513/1000/4096/4097 allow-set cardinalities, dispersed
+eligible nodes, and base/overlay mutations; passing the larger baseline does not
+discharge the small-set regression.
+
 The historical Python search call returns full client documents, then separately
 retrieves the winning IDs one by one via `filter_documents`. Search latency
 therefore already includes top-K materialization and response decoding; the

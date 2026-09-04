@@ -9,7 +9,10 @@ owns manifests and evidence validation; the Python runner executes real client
 requests against the document service. M0 adds bounded diagnostics, not mutable
 `column_graph` support or a new performance result.
 
-Use a clean, committed checkout and a writable `/mnt/fast4tb` mount:
+Use a clean, committed **standalone clone** and a writable `/mnt/fast4tb` mount.
+The Go 1.26.0 toolchain on the development runner omits VCS stamping in linked
+worktrees; the binary provenance check rejects those builds. Do not inject a
+revision string or disable validation to work around it.
 
 ```sh
 mountpoint -q /mnt/fast4tb && test -w /mnt/fast4tb
@@ -46,6 +49,18 @@ or a phase-specific peak. The historical `rss_bytes` field retains its old
 endpoint-growth meaning. Missing allocation, live-heap or client-memory evidence
 remains unavailable; use focused Go benchmarks/profiles for allocation budgets
 before optimizing each affected production feature.
+
+### M0 baseline limitation
+
+The first public bounded-50k run at `8eb50f829` (unchanged TreeDB production
+code from `c2781c147`) completed load in 10.627 seconds, then failed: the
+`broad_10pct` filter had 1,000 valid IDs but `complete_finite_ann` returned none
+(2,064 visited/scored, zero admitted). This is failed recall evidence, not a
+completed latency result. The old runtime exact cap is 512, and its complete
+finite branch lacks the eligible-region seeding used by its broad-filter branch.
+Keep this fixture/oracle as a native-path regression; do not retune it to hide
+the failure. The already-defined bounded-250k shape is the separate M0
+characterization candidate. Neither shape certifies the full sparse case.
 
 Focused harness validation:
 
