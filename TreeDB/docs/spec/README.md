@@ -70,6 +70,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 
 ### Canonical specs
 
+- `TreeDB/docs/spec/minima-native-execution.md`
+  - #4614/#4615 typed Minima implementation contract, ownership/reuse decisions,
+    mutable column-graph durability gates, and bounded-versus-full evidence.
 - `TreeDB/docs/spec/vector-partition-v1-contract.md`
   - #4013 admission contract separating snapshot-bound exact partition-union
     correctness from recall-qualified representative and partition-local HNSW

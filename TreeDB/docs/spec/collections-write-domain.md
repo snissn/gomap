@@ -2,17 +2,20 @@
 
 Status:
 
-- Current implementation: flush-boundary durable for pending collection-local
-  write-domain state.
-- Target durable-at-ack behavior: user-command WAL frames in the shared
-  commit-log WAL plus root publication and `AppliedLSN` advancement make
-  accepted deterministic collection commands durable before visibility. Indexed
-  write-domain durable-at-ack remains a later implementation gate; WAL-off
-  remains flush-boundary.
+- Supported command-WAL collection writes use the resolved production profile's
+  acknowledgement contract. `command_wal_durable` makes the complete command
+  frame recoverable before acknowledged write-domain visibility; root
+  publication and `AppliedLSN` may follow later.
+- Pending write-domain state itself is process-local. Without a durable command
+  frame, ordinary acknowledgement is not a crash-durable boundary. `Flush`
+  drains state; only the canonical profile's sync/checkpoint/close boundary
+  establishes durability.
 
 This document specifies collection-local write-domain behavior for indexed
-collections. It distinguishes the current shipped contract from the later
-user-command WAL target contract.
+collections. The normative profile/API matrix is owned by
+`write-path-and-durability.md` section 0.2; this document does not define a weaker
+independent durability profile. Unsupported command kinds fail closed before
+admission rather than silently downgrading acknowledgement guarantees.
 
 ## Indexed Write Memtables
 
@@ -79,28 +82,21 @@ rotating new immutable units while the background publisher is busy.
 
 ## Durability Boundary
 
-The current indexed write-domain contract is flush-boundary durable regardless
-of whether threshold publish is foreground or background.
+Foreground versus background threshold publication does not select the public
+durability guarantee. Supported indexed collection commands already use the
+shared command-WAL machinery: durable-profile intents request stable complete
+frame closure before staged visibility, while `AppliedLSN` advances with the
+corresponding root publication. Replay applies unapplied accepted commands
+through the collection executor. The indexed staging and replay tests in
+`TreeDB/collections/command_wal_test.go` cover this separation.
 
-An acknowledged collection write that is still only in mutable, queued, or
-publishing write-domain state is visible in-process through the owning manager,
-but callers MUST NOT treat that acknowledgement as a crash-durable boundary.
+`Collection.Flush` and `CollectionManager.FlushAll` drain mutable, queued and
+publishing state. They do not independently promise file or directory sync.
+Checkpoint and clean backend close are sealed-root durability boundaries;
+explicit sync operations follow the canonical profile matrix. A background
+publish completing early does not strengthen relaxed acknowledgement.
 
-Durability is established when one of these barriers returns successfully:
-
-- `Collection.Flush`,
-- `CollectionManager.FlushAll`,
-- backend `DB.Close` invoking the collection manager close hook,
-- a threshold-triggered synchronous publish path.
-
-A background async publish may complete before an explicit flush, but that is an
-implementation outcome, not a durable-at-ack API guarantee.
-
-If TreeDB later needs durable-at-ack async collection writes, it MUST add
-user-command WAL support for the relevant command category before advertising
-that stronger contract.
-
-In the V1 WAL-on contract, write-domain mutable/queued/publishing state is
+In `command_wal_durable`, write-domain mutable/queued/publishing state is
 process-local state, not a durable pending overlay. A WAL-supported collection
 command may return success or become owner-visible only after its command frame
 and required external refs are recoverable and the normal executor has installed
@@ -109,21 +105,25 @@ collection command whose command kind is not `WAL-supported` must fail before
 staging.
 
 In WAL-off relaxed mode, write-domain state is not backed by command WAL.
-Acknowledged pending writes are process-local until published. `Flush`,
-`FlushAll`, `Checkpoint`, and `Close` are the public persistence boundaries.
+Acknowledged pending writes may lead sealed-root publication. `Flush` and
+`FlushAll` drain visibility; `Checkpoint`, clean `Close`, and explicit sync
+operations establish the canonical sealed-root persistence boundary. Typed
+column writes require their supported command-WAL capability unless an explicit
+benchmark-only unsupported-production mode says otherwise.
 
 During private planning, canonical command payloads, external refs, uniqueness
 reservations, publish inputs, and schema/index barrier state are not reachable
 from any read, scan, uniqueness check, update/delete planner, queued unit,
 publishing unit, or pending-state merge. The writer prepares and protects
-required external refs, appends and syncs the typed command WAL frame through the
-shared commit-log journal, and applies through the normal executor. Only after
-the frame is recoverable may the mutation become visible or return success in V1
-WAL-on modes. Checkpoint, flush, close, synced ack, and recovery boundaries
-publish roots plus `AppliedLSN` before WAL cleanup. Durable pending overlays
+required external refs, appends the typed command WAL frame through the
+shared commit-log journal, and applies through the normal executor. In the
+durable profile, stable complete frame closure precedes visibility and success;
+the relaxed profile may lead sync as specified by the canonical matrix. WAL
+cleanup requires sealed-root coverage plus `AppliedLSN` and protection of both
+recoverable roots; a synced acknowledgement need not publish a root. Durable pending overlays
 that survive without replay are a future feature, not part of V1.
 
-In WAL-on modes for enabled command WAL capabilities, visibility implies
+In `command_wal_durable` for enabled command WAL capabilities, visibility implies
 recoverability. If command WAL append/commit fails, the mutation must leave no
 read-visible pending state and no uniqueness reservation. A concurrent reader or
 planner must never observe a write whose command frame is not

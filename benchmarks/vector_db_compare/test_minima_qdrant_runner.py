@@ -57,6 +57,9 @@ class SharedQdrant:
         self.query_filters: list[Model] = []
         self.lock = threading.Lock()
         self.writer_completed = threading.Event()
+        self.synchronize_overlap = True
+        self.overlap_barrier: threading.Barrier | None = None
+        self.overlap_readers: set[int] = set()
 
         self.restart_count = 0
 
@@ -128,7 +131,6 @@ class FakeClient:
         )
 
     def upsert(self, *, points: list[Model], **_: object) -> None:
-        time.sleep(0.002)
         with self.shared.lock:
             for point in points:
                 self.shared.points[point.id] = point
@@ -140,7 +142,15 @@ class FakeClient:
         return all(point.payload[condition.key] == condition.match.value for condition in filter_value.must)
 
     def query_points(self, *, query: list[float], query_filter: Model, using: str, limit: int, **_: object) -> Model:
-        time.sleep(0.002)
+        with self.shared.lock:
+            barrier = self.shared.overlap_barrier
+            reader = threading.get_ident()
+            if reader in self.shared.overlap_readers:
+                barrier = None
+            elif barrier is not None:
+                self.shared.overlap_readers.add(reader)
+        if barrier is not None:
+            barrier.wait(timeout=1)
         with self.shared.lock:
             self.shared.query_filters.append(query_filter)
             matches = [point for point in self.shared.points.values() if self._matches(point, query_filter)]
@@ -155,7 +165,6 @@ class FakeClient:
             return [self.shared.points[value] for value in ids if value in self.shared.points]
 
     def delete(self, *, points_selector: Model, **_: object) -> None:
-        time.sleep(0.002)
         with self.shared.lock:
             if hasattr(points_selector, "must"):
                 doomed = [key for key, point in self.shared.points.items() if self._matches(point, points_selector)]
@@ -300,12 +309,36 @@ def tiny_manifest(reader_concurrency: int = 1) -> dict[str, object]:
 
 
 def new_runner(manifest: dict[str, object], shared: SharedQdrant, allow_drop: bool = False) -> runner.QdrantMinimaRunner:
-    return runner.QdrantMinimaRunner(manifest, client_factory=shared.factory, models=Models, url="http://fake",
+    workload = runner.QdrantMinimaRunner(manifest, client_factory=shared.factory, models=Models, url="http://fake",
         collection="tiny", allow_drop=allow_drop, operation_timeout=1, optimizer_timeout=0.1,
         poll_interval=0, server_version="1.19.0", deployment="standalone", image="", storage_path=None,
         server_pid=1, restart_server=shared.restart, restart_identity="fake owned server",
         process_identity=lambda pid: f"fake-process-{pid}",
         process_running=lambda _pid: False, process_owns_endpoint=lambda _pid, _url, _port: True)
+    original_call = workload.evidence.call
+
+    def synchronized_call(operation, category, scenario, function, on_start=None):
+        if not shared.synchronize_overlap or category != "writer" or on_start is None:
+            return original_call(operation, category, scenario, function, on_start=on_start)
+        # Arrange overlap inside the real measured call, before releasing the
+        # production writer-start event. Each reader joins once per writer call.
+        barrier = threading.Barrier(manifest["config"]["reader_concurrency"] + 1)
+        with shared.lock:
+            shared.overlap_barrier = barrier
+            shared.overlap_readers.clear()
+
+        def write_after_readers_enter():
+            barrier.wait(timeout=1)
+            return function()
+
+        try:
+            return original_call(operation, category, scenario, write_after_readers_enter, on_start=on_start)
+        finally:
+            with shared.lock:
+                shared.overlap_barrier = None
+
+    workload.evidence.call = synchronized_call
+    return workload
 
 
 class MinimaQdrantRunnerTest(unittest.TestCase):
@@ -653,6 +686,76 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
             evidence.call("write", "writer", "small", lambda: (_ for _ in ()).throw(RuntimeError("bad")))
         self.assertEqual((evidence.errors["small"], evidence.timeouts["small"]), (2, 1))
         self.assertEqual([row["kind"] for row in evidence.events], ["timeout", "error"])
+
+    def test_peak_rss_is_kernel_highwater_and_missing_is_unavailable(self) -> None:
+        with mock.patch.object(Path, "read_text", return_value="Name:\ttest\nVmHWM:\t4096 kB\n"), \
+             mock.patch.object(runner, "linux_process_identity", return_value="123:10"):
+            peak = runner.process_peak_rss(123)
+        self.assertEqual(peak["bytes"], 4096 * 1024)
+        self.assertEqual(peak["pid"], 123)
+        self.assertEqual(peak["availability"], "measured")
+        with mock.patch.object(Path, "read_text", side_effect=OSError("unsupported")):
+            peak = runner.process_peak_rss(123)
+        self.assertIsNone(peak["bytes"])
+        self.assertEqual(peak["availability"], "unavailable")
+
+    def test_peak_rss_direct_identity_race_is_unavailable(self) -> None:
+        with mock.patch.object(Path, "read_text", return_value="VmHWM:\t4096 kB\n"), \
+             mock.patch.object(runner, "linux_process_identity", side_effect=["123:10", "123:20"]):
+            peak = runner.process_peak_rss(123)
+        self.assertEqual(peak["availability"], "unavailable")
+        self.assertIsNone(peak["bytes"])
+        self.assertEqual(peak["process_identity"], "")
+
+    def test_resource_peak_aggregate_accounts_for_both_endpoints(self) -> None:
+        for baseline_peak, end_peak, expected in (
+            ({"availability": "measured", "bytes": 300}, {"availability": "measured", "bytes": 200}, 300),
+            ({"availability": "measured", "bytes": 100}, {"availability": "measured", "bytes": 200}, 200),
+            (None, {"availability": "measured", "bytes": 200}, None),
+            ({"availability": "measured", "bytes": 100}, None, None),
+            ({"availability": "unavailable", "bytes": None}, {"availability": "measured", "bytes": 200}, None),
+        ):
+            with self.subTest(baseline=baseline_peak, end=end_peak):
+                workload = new_runner(tiny_manifest(), SharedQdrant())
+                snapshot = {"captured": True, "rss_bytes": 1, "cpu_seconds": 1, "disk_bytes": 1}
+                workload.resource_baseline = {**snapshot, "peak_rss": baseline_peak}
+                with mock.patch.object(runner, "server_resource_usage", return_value={**snapshot, "peak_rss": end_peak}):
+                    resource = workload.resource_evidence()
+                self.assertEqual(resource["peak_rss_bytes"], expected)
+                self.assertEqual(resource["peak_rss_availability"], "unavailable" if expected is None else "measured")
+
+    def test_restart_records_linux_lifetimes_separately_from_ps_identity(self) -> None:
+        shared = SharedQdrant()
+        workload = new_runner(tiny_manifest(), shared)
+        with mock.patch.object(runner, "linux_process_identity", side_effect=lambda pid: f"{pid}:{pid*100}"), \
+             mock.patch.object(runner, "server_resource_usage", return_value={}):
+            workload.capture_restart_origin()
+        # The old process has already stopped when TreeDB closes its aggregate
+        # client; /proc is no longer available when the restart hook is invoked.
+        with mock.patch.object(runner, "linux_process_identity", side_effect=lambda pid: "" if pid == 1 else "2:200"), \
+             mock.patch.object(runner, "server_resource_usage", return_value={}):
+            workload.restart_backend()
+        self.assertEqual(workload.restart_boundary["old_linux_process_identity"], "1:100")
+        self.assertEqual(workload.restart_boundary["new_linux_process_identity"], "2:200")
+        self.assertEqual(workload.restart_boundary["old_process_identity"], "fake-process-1")
+        self.assertEqual(workload.restart_boundary["new_process_identity"], "fake-process-2")
+
+    def test_resource_peak_identity_race_is_unavailable(self) -> None:
+        with mock.patch.object(runner, "linux_process_identity", return_value="123:10"), \
+             mock.patch.object(runner, "process_peak_rss", return_value={"availability":"measured", "bytes":4096, "pid":123, "process_identity":"123:20"}), \
+             mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(stdout="2048 00:01")):
+            resource = runner.server_process_resource_usage(123, "test")
+        self.assertEqual(resource["peak_rss"]["availability"], "unavailable")
+        self.assertIsNone(resource["peak_rss"]["bytes"])
+
+    def test_qdrant_cli_rejects_bounded_before_client_or_server_access(self) -> None:
+        with mock.patch.object(runner, "parse_args", return_value=SimpleNamespace(server_pid=123, storage_path=Path("."), manifest=Path("manifest"))), \
+             mock.patch.object(runner, "validate_qdrant_evidence_inputs"), \
+             mock.patch.object(runner, "load_manifest", return_value={"schema": runner.BOUNDED_MANIFEST_SCHEMA}), \
+             mock.patch.object(runner.importlib.metadata, "version") as version:
+            with self.assertRaisesRegex(SystemExit, "bounded Minima Qdrant execution unavailable"):
+                runner.main()
+        version.assert_not_called()
 
     def test_unowned_server_resources_are_not_claimed(self) -> None:
         resource = runner.server_resource_usage(None, None, "Qdrant")
@@ -1003,7 +1106,7 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
             qdrant_module = SimpleNamespace(QdrantClient=object, models=object)
             with (
                 mock.patch.object(runner, "parse_args", return_value=args),
-                mock.patch.object(runner, "load_manifest", return_value={}),
+                mock.patch.object(runner, "load_manifest", return_value={"schema": runner.MANIFEST_SCHEMA}),
                 mock.patch.object(runner.importlib.metadata, "version", return_value=runner.CLIENT_VERSION),
                 mock.patch.object(runner, "server_info", return_value={"version": runner.SERVER_VERSION}),
                 mock.patch.object(runner, "QdrantMinimaRunner", FailingRunner),
@@ -1055,6 +1158,7 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         for method_name, operation_ordinal in (("run_timed_overlap", 3), ("run_concurrent_mutation", 4)):
             with self.subTest(method=method_name):
                 shared = SharedQdrant()
+                shared.synchronize_overlap = False
                 workload = new_runner(manifest, shared)
                 workload.connect()
                 workload.create_owned_collection()

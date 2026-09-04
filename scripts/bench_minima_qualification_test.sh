@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TMP=$(mktemp -d)
 unrelated_pid=""
+
 replacement_pid=""
 cleanup() {
 	[[ -z "$replacement_pid" ]] || kill "$replacement_pid" >/dev/null 2>&1 || true
@@ -81,6 +82,11 @@ set -euo pipefail
 if [[ -n "${FAKE_PYTHON_ARGS:-}" ]]; then
 	printf '%s\n' "$@" >"$FAKE_PYTHON_ARGS"
 fi
+if [[ -n "${FAKE_HANG_CHILD_PID:-}" ]]; then
+	sleep 30 &
+	printf '%s\n' "$!" >"$FAKE_HANG_CHILD_PID"
+	wait "$!"
+fi
 output=""
 while (($#)); do
 	if [[ "$1" == --output ]]; then
@@ -100,6 +106,31 @@ set -euo pipefail
 printf '{}\n' >"$OUTPUT_PATH"
 EOF
 chmod +x "$REPO/scripts/bench_minima_qdrant.sh"
+
+for mode in bounded-50k bounded-250k; do
+	bounded_dir="$TMP/$mode"
+	output=$(PATH="$FAKE_BIN:$PATH" PYTHON="$FAKE_BIN/python" RUN_DIR="$bounded_dir" \
+		MODE="$mode" MINIMA_WALL_SECONDS=10 FAKE_PYTHON_ARGS="$TMP/$mode-args" \
+		"$REPO/scripts/bench_minima_qualification.sh" 2>&1)
+	[[ "$output" == *"total rows across scenarios"* ]]
+	[[ "$output" == *"full <1% sparse selectivity excluded; cannot qualify"* ]]
+	[[ -f "$bounded_dir/treedb_backend.json" ]]
+	[[ ! -f "$bounded_dir/qdrant_backend.json" ]]
+	grep -qx -- '--strategy' "$TMP/$mode-args"
+done
+
+set +e
+PATH="$FAKE_BIN:$PATH" PYTHON="$FAKE_BIN/python" RUN_DIR="$TMP/bounded-timeout" \
+	MODE=bounded-50k MINIMA_WALL_SECONDS=1 FAKE_HANG_CHILD_PID="$TMP/timed-child.pid" \
+	"$REPO/scripts/bench_minima_qualification.sh" >"$TMP/timeout.log" 2>&1
+timeout_status=$?
+set -e
+[[ "$timeout_status" == 124 ]]
+IFS= read -r timed_child_pid <"$TMP/timed-child.pid"
+# A killed child can briefly remain a zombie pending its init reaper. It must
+# never remain running after the timeout killed the owned process group.
+timed_child_state=$(ps -o stat= -p "$timed_child_pid" || true)
+[[ -z "$timed_child_state" || "$timed_child_state" == Z* ]]
 
 set +e
 output=$(PATH="$FAKE_BIN:$PATH" PYTHON="$FAKE_BIN/python" QDRANT_BIN=/bin/true RUN_DIR="$RUN_DIR" \

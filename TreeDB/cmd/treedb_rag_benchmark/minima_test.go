@@ -793,7 +793,10 @@ func TestMinimaProbeIDsUseAggregateLookupLimit(t *testing.T) {
 }
 
 func validMinimaArtifact() minimaArtifact {
-	manifest := buildMinimaManifest()
+	return validMinimaArtifactForManifest(buildMinimaManifest())
+}
+
+func validMinimaArtifactForManifest(manifest minimaManifest) minimaArtifact {
 	hashes := minimaManifestHashes{CorpusSHA256: manifest.CorpusSHA256, QuerySHA256: manifest.QuerySHA256, OperationSHA256: manifest.OperationSHA256}
 	timed := manifest.Operations[3].TimedPlan
 	timedTrace := minimaExpectedTimedExecution(&manifest)

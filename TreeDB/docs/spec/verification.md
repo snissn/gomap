@@ -2,6 +2,23 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+## Minima native-path contract (#4615)
+
+`minima-native-execution.md` defines the target, not current mutable graph
+support. `TreeDB/cmd/treedb_rag_benchmark/minima_bounded_test.go` and the existing
+`TestMinima` suite check versioned bounded fixtures, frozen full-manifest
+compatibility, rejection of measured native proof, and diagnostic-only
+qualification boundaries, completed lifecycle evidence, and process-lifetime
+high-water consistency. Native semantic counter validation belongs with its
+actual producers in #4619; M0 cannot qualify any native proof. The Python `test_minima*runner.py` suites and
+`scripts/bench_minima_qualification_test.sh` cover actual runner and bounded
+process execution. The runbook records their commands.
+
+Existing collection command-WAL indexed staging, typed-column replay without
+checkpoint, and mutation-asset tests establish reuse boundaries. They do not
+certify the future typed Minima overlay; #4616–#4619 must add typed admission,
+replay, snapshot, fold/crash and public-route tests as those features land.
+
 ## 0. Durability Evidence Taxonomy
 
 Durability evidence uses exactly one of these labels:

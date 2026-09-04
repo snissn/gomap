@@ -218,12 +218,29 @@ class ServiceController:
                 if process.poll() is None:
                     pid = process.pid
                     latest_process = common.server_process_resource_usage(pid, "TreeDB")
+                    peak_rss = None
+
+                    def retain_peak(sample: dict[str, Any]) -> bool:
+                        nonlocal peak_rss
+                        peak = sample.get("peak_rss", {})
+                        if peak.get("availability") != "measured":
+                            return True
+                        if peak.get("pid") != pid or not peak.get("process_identity"):
+                            return False
+                        if peak_rss is not None and peak["process_identity"] != peak_rss["process_identity"]:
+                            return False
+                        if peak_rss is None or peak["bytes"] > peak_rss["bytes"]:
+                            peak_rss = peak
+                        return True
+
+                    retain_peak(latest_process)
                     process.terminate()
                     deadline = time.monotonic() + self.shutdown_timeout
                     exited = False
                     while not exited:
                         sample = common.server_process_resource_usage(pid, "TreeDB")
-                        if sample["captured"] and (
+                        same_process = retain_peak(sample)
+                        if same_process and sample["captured"] and (
                             not latest_process["captured"]
                             or (
                                 sample["cpu_seconds"] >= latest_process["cpu_seconds"]
@@ -243,6 +260,10 @@ class ServiceController:
                         process.kill()
                         process.wait(timeout=min(5, self.shutdown_timeout))
                         timed_out = True
+                    # VmHWM can disappear before ps stops reporting CPU/RSS.
+                    # Keep the measured highwater independently of that endpoint.
+                    if peak_rss is not None:
+                        latest_process = {**latest_process, "peak_rss": peak_rss}
                     disk_available = self.data_dir.exists()
                     self.last_shutdown_resource_end = {
                         **latest_process,
@@ -515,6 +536,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         if type(old_pid) is not int or old_pid <= 0:
             raise RuntimeError("close/reopen requires the original TreeDB server PID")
         origin = (old_pid, self.process_identity(old_pid))
+        self.restart_origin_linux_identity = common.linux_process_identity(old_pid)
         self.restart_origin = origin
         self._controller_restart_origin = origin
         self.restart_origin_resource_end = None
@@ -1233,6 +1255,13 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
 
     def artifact(self) -> dict[str, Any]:
         artifact = super().artifact()
+        if self.manifest.get("schema") == common.BOUNDED_MANIFEST_SCHEMA:
+            artifact["schema"] = common.BOUNDED_ARTIFACT_SCHEMA
+            artifact["native_path_proof"] = {
+                "schema": "treedb_minima_native_path_proof/v1", "strategy": "native_runtime",
+                "availability": "unavailable", "counters": None,
+                "reason": "native baseline diagnostic; typed column_graph lifecycle counters require M1-M4; bounded sparse scenario does not preserve full <1% selectivity",
+            }
         resource = self.resource_evidence()
         backend = artifact["backends"][0]
         environment = {
@@ -1335,6 +1364,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--strategy", choices=("native_runtime", "column_graph"), default="native_runtime")
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--service-bin", type=Path, required=True)
@@ -1368,6 +1398,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.strategy == "column_graph":
+        raise SystemExit("column_graph Minima execution unavailable: typed ingest, mutable durable serving, and public route counters require #4616-#4619")
     manifest = common.load_manifest(args.manifest)
     diagnostics_dir = args.diagnostics_dir.resolve() if args.diagnostics_dir is not None else None
     controller = ServiceController(

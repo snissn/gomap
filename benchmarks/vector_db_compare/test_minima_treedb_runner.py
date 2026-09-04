@@ -143,6 +143,15 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                     check=True, capture_output=True, text=True,
                 )
 
+    def test_column_graph_unavailable_before_loading_or_launching(self) -> None:
+        with mock.patch.object(runner, "parse_args", return_value=SimpleNamespace(strategy="column_graph")), \
+             mock.patch.object(common, "load_manifest") as load, \
+             mock.patch.object(runner, "ServiceController") as controller:
+            with self.assertRaisesRegex(SystemExit, "column_graph Minima execution unavailable"):
+                runner.main()
+        load.assert_not_called()
+        controller.assert_not_called()
+
     def test_repository_commit_binds_head_after_clean_status(self) -> None:
         commit = "a" * 40
         with mock.patch.object(
@@ -298,6 +307,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload = object.__new__(runner.TreeDBMinimaRunner)
         workload.controller = Controller()
         workload.restart_origin = (100, "old-process")
+        workload.restart_origin_linux_identity = "100:10"
         workload._controller_restart_origin = (100, "old-process")
         workload.restart_origin_resource_end = None
         workload.resource_baseline = baseline
@@ -899,6 +909,47 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         process.kill.assert_not_called()
         self.assertTrue(all(call.kwargs["timeout"] <= 0.05 for call in process.wait.call_args_list))
 
+    def test_shutdown_retains_peak_independently_of_final_cpu_and_rss(self) -> None:
+        unavailable = {"availability": "unavailable", "bytes": None, "pid": 55,
+                       "process_identity": "", "source": "/proc/<pid>/status:VmHWM",
+                       "scope": "process_lifetime_through_sample"}
+
+        def measured(value: int, identity: str = "55:123", pid: int = 55) -> dict[str, object]:
+            return {**unavailable, "availability": "measured", "bytes": value,
+                    "process_identity": identity, "pid": pid}
+
+        cases = (
+            ("terminal unavailable", [measured(100), measured(300), unavailable], 300),
+            ("lower later peak", [measured(300), measured(200), unavailable], 300),
+            ("different lifetime", [measured(100), measured(900, "55:999"), unavailable], 100),
+            ("different pid", [measured(100), measured(900, "56:123", 56), unavailable], 100),
+            ("never available", [unavailable, unavailable, unavailable], None),
+            ("first available during shutdown", [unavailable, measured(300), unavailable], 300),
+        )
+        for name, peaks, expected in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                controller = runner.ServiceController(
+                    Path("/service"), "http://127.0.0.1:17120", Path(directory),
+                    "command_wal_durable", 1, 1,
+                )
+                process = mock.MagicMock(pid=55)
+                process.poll.return_value = None
+                process.wait.side_effect = [runner.subprocess.TimeoutExpired("service", 0.05), 0]
+                controller.process = process
+                samples = [{"captured": True, "rss_bytes": 100 + i, "cpu_seconds": float(i + 1),
+                            "availability": {}, "peak_rss": peak} for i, peak in enumerate(peaks)]
+                with mock.patch.object(common, "server_process_resource_usage", side_effect=samples), \
+                     mock.patch.object(common, "disk_bytes", return_value=140):
+                    controller.stop()
+                endpoint = controller.last_shutdown_resource_end
+                self.assertEqual(endpoint["rss_bytes"], 102)
+                self.assertEqual(endpoint["cpu_seconds"], 3.0)
+                self.assertEqual(endpoint["peak_rss"]["bytes"], expected)
+                self.assertEqual(endpoint["peak_rss"]["availability"], "unavailable" if expected is None else "measured")
+                if expected is not None:
+                    self.assertEqual(endpoint["peak_rss"]["process_identity"], "55:123")
+                process.kill.assert_not_called()
+
     def test_shutdown_retains_positive_rss_when_terminal_cpu_is_equal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             data_dir = Path(directory) / "data"
@@ -1010,7 +1061,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 "failures": list(workload.evidence.failures),
                 "phase_attribution": workload._finish_phase_attribution(),
             }
-            args = SimpleNamespace(
+            args = SimpleNamespace(strategy="native_runtime",
                 manifest=root / "manifest.json", output=output, service_bin=root / "service",
                 url="http://127.0.0.1:17120", data_dir=root / "data",
                 profile="command_wal_durable", startup_timeout=3600,
@@ -1147,7 +1198,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 "failures": list(workload.evidence.failures),
                 "phase_attribution": workload._finish_phase_attribution(),
             }
-            args = SimpleNamespace(
+            args = SimpleNamespace(strategy="native_runtime",
                 manifest=root / "manifest.json", output=output, service_bin=root / "service",
                 url="http://127.0.0.1:17120", data_dir=root / "data",
                 profile="command_wal_durable", startup_timeout=3600,
@@ -1190,7 +1241,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
     def test_script_guards_empty_diagnostic_array_for_bash_nounset(self) -> None:
         script = (Path(__file__).parents[2] / "scripts/bench_minima_qualification.sh").read_text(encoding="utf-8")
         guarded = '${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"}'
-        self.assertEqual(script.count(guarded), 2)
+        self.assertEqual(script.count(guarded), 3)
         self.assertNotIn('"${treedb_diagnostic_args[@]}" ||', script)
 
     def test_service_log_evidence_is_bounded_and_keeps_path(self) -> None:
@@ -1254,7 +1305,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             (data_dir / "compatible").touch()
             output = root / "output-directory"
             output.mkdir()
-            args = SimpleNamespace(
+            args = SimpleNamespace(strategy="native_runtime",
                 manifest=root / "manifest.json", output=output, service_bin=binary,
                 url=f"http://127.0.0.1:{port}", data_dir=data_dir, profile="test",
                 startup_timeout=2, collection="owned", operation_timeout=1, ef_search=1, small=False,
@@ -1353,6 +1404,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.url = "http://127.0.0.1:1"
         workload.collection = "owned"
         workload.config = {"dimension": 8, "metric": "cosine"}
+        workload.manifest = {"schema": common.MANIFEST_SCHEMA}
         workload.ef_search = 64
         workload.effective_collection = {
             "dimension": 8,
