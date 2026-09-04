@@ -77,19 +77,12 @@ func (r *columnVectorGraphPhysicalRowReader) searchRabitQCosinePreparedHNSWPack(
 	}
 	scratch.searchPlan.quantizedScorer = columnVectorGraphQuantizedScorer{kind: columnVectorGraphQuantizedScorerKindRabitQ1Bit, rabitq: scorer}
 	scratch.preparedQuantizedPlane.scorer = &scratch.searchPlan.quantizedScorer
-	traversalStatsMode := opts.StatsMode.normalized()
-	if traversalStatsMode == columnVectorGraphNativeSearchStatsModeMinimal {
-		// Preserve the existing quantized route counter contract in production mode:
-		// candidate/edge counters are part of the quantized traversal evidence even
-		// though exact FP32 pack search can omit them for minimal stats.
-		traversalStatsMode = columnVectorGraphNativeSearchStatsModeFullDiagnostics
-	}
 	traversalOpts := columnHNSWPreparedTraversalOptions{
 		TopK:                      opts.TopK,
 		EfSearch:                  opts.EfSearch,
 		RetainedCandidateLimit:    0,
 		ScoreBatchMode:            opts.ScoreBatchMode,
-		StatsMode:                 traversalStatsMode,
+		StatsMode:                 opts.StatsMode,
 		OmitResultMaterialization: opts.OmitResultMaterialization,
 	}
 	rerankCandidateLimit := 0
