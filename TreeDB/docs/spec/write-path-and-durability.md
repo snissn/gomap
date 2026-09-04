@@ -345,10 +345,11 @@ advance is a no-op.
 ### 5.4 Collection API Durability
 
 Collection mutators do not have separate `*Sync` Go methods. Their baseline
-acknowledgement is mode-dependent. Current shipped collection write-domain
-behavior is flush-boundary durable, as defined in
-`collections-write-domain.md`. The bullets below describe the target collection
-user-command WAL overlay for command kinds that have passed the support matrix:
+acknowledgement is profile-dependent, as defined in
+`collections-write-domain.md` and the normative matrix in section 0.2. The
+following guarantees apply to collection command kinds marked supported in
+`command-wal-support-matrix.json`; unsupported operations must fail closed rather
+than silently use a weaker flush-boundary guarantee:
 
 - `DurabilityDurable`: ordinary supported collection/catalog mutator success
   waits for the typed command and all required external refs to form a stable,

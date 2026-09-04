@@ -19,6 +19,50 @@ checkpoint, and mutation-asset tests establish reuse boundaries. They do not
 certify the future typed Minima overlay; #4616–#4619 must add typed admission,
 replay, snapshot, fold/crash and public-route tests as those features land.
 
+### Typed indexed-write substrate (#4616)
+
+The collection `TestTypedMinima*` tests exercise an 8-D FP32 typed column,
+three typed-row strings, two scalar indexes, and text postings:
+
+- `TestTypedMinimaAdmissionValidation`: mismatched carriers/counts, invalid
+  strings/vectors, duplicate IDs, and retained-field overlap reject.
+- `TestTypedMinimaInsertAndReplay`: unsorted batch IDs, reconstructed output,
+  scalar/text parity, and zero column-publication document extraction through
+  command-WAL replay.
+- `TestTypedMinimaGenericMutations`: existing update and delete APIs maintain
+  indexes immediately after typed admission, without an explicit caller flush.
+- `TestTypedMinimaReplacementReplayAndNoop`: replacement/no-op semantics,
+  reusable caller buffers, changed scalar/text values, and typed update replay.
+- `TestTypedMinimaInFlightPublicationMutation`: replace/delete while an asset
+  publication is paused; old text postings must not survive the mutation.
+- `TestTypedMinimaUniqueAdmission`: duplicate unique values and conflicting
+  replacements reject without changing the prior indexed row.
+- `TestTypedMinimaAdHocRuntimeAdmission`: separately registered document-based
+  vector runtimes reject typed admission rather than introducing a JSON path.
+- `TestTypedMinimaUnsupportedScalarSibling`: the new retained-payload/scalar
+  capability does not broaden unsupported sibling storage layouts.
+- `TestTypedMinimaReplaySemanticValidation`: schema and typed-value mismatches
+  fail replay projection validation.
+- `TestTypedMinimaVectorOnlyReplay`: vector-only schemas with no index, multiple
+  indexes, or a column name distinct from its field path survive replay rather
+  than being misclassified as the legacy single-index projection API.
+- `TestTypedMinimaCrashAndPublicationCuts`: explicit `command_wal_durable`
+  admission, subprocess exit after acknowledgement, pre-append failure, and
+  post-sync ambiguity followed by normal reopen. Assigned command LSNs must be
+  accounted for even when the append call returns an error.
+- `TestTypedMinimaCatalogPostSyncAmbiguity`: collection creation classifies a
+  post-sync failure using the actual published intent and recovers on reopen.
+- `TestTypedMinimaAmbiguousMutationNotRetried`: commit ambiguity takes precedence
+  over a wrapped retryable mutation error, preventing duplicate execution.
+
+The frame-copy replay fixtures preserve a checkpointed catalog and replay subsequent
+command frames through normal open. They prove command replay, not modeled or
+physical power-loss survival. The subprocess exit case is `process-crash`
+evidence; neither it nor an injected sync cut is physical power-loss proof.
+Typed vector authority and asset readback do not
+by themselves prove mutable prepared-graph serving or the Minima service route;
+those remain #4617–#4619 gates.
+
 ## 0. Durability Evidence Taxonomy
 
 Durability evidence uses exactly one of these labels:

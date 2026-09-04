@@ -10,7 +10,89 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
+
+func TestValidatedFloat32ProjectionCommandWALPreservesAuthority(t *testing.T) {
+	for _, policy := range []ColumnRetainedPayloadPolicy{ColumnRetainedPayloadFull, ColumnRetainedPayloadNonColumn} {
+		t.Run(string(policy), func(t *testing.T) { testValidatedProjectionReplayAuthority(t, policy, nil, true) })
+	}
+	t.Run("legacy_duplicate_retained_id", func(t *testing.T) {
+		testValidatedProjectionReplayAuthority(t, ColumnRetainedPayloadNonColumn, []byte(`{"id":"a","id":"a"}`), true)
+	})
+	t.Run("legacy_derived_retained", func(t *testing.T) {
+		testValidatedProjectionReplayAuthority(t, ColumnRetainedPayloadNonColumn, nil, false)
+	})
+}
+
+func testValidatedProjectionReplayAuthority(t *testing.T, policy ColumnRetainedPayloadPolicy, retained []byte, supplyRetained bool) {
+	dir, d, col := openValidatedFloat32ProjectionCollectionWithPolicy(t, 3, policy)
+	defer d.Close()
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	replayDir := t.TempDir()
+	copyColumnStoreCommandWALReplayBenchmarkDirM10C(t, dir, replayDir)
+	ids := [][]byte{[]byte("a")}
+	// Both a conflicting document vector and a missing retained vector must
+	// replay the accepted typed projection into the physical vector column.
+	documents := [][]byte{[]byte(`{"id":"a","embedding":[0,1,0]}`)}
+	var retainedOption [][][]byte
+	if policy == ColumnRetainedPayloadNonColumn && supplyRetained {
+		if retained == nil {
+			retained = []byte(`{"id":"a"}`)
+		}
+		retainedOption = append(retainedOption, [][]byte{retained})
+	}
+	if _, _, err := col.InsertBatchWithStatsValidatedFloat32Projection(ids, documents, "embedding", VectorMetricCosine, [][]float32{{1, 0, 0}}, retainedOption...); err != nil {
+		t.Fatal(err)
+	}
+	acceptedDocument, err := col.Get(ids[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var replayed bool
+	for _, frame := range collectionCommandWALFrames(t, dir) {
+		if frame.Kind != commitlog.CommandKindCollectionInsertBatchByID {
+			continue
+		}
+		writeCollectionCommandWALFrame(t, replayDir, frame.LSN, frame.Kind, frame.PayloadFormat, frame.Payload)
+		replayed = true
+	}
+	if !replayed {
+		t.Fatal("no admitted insert frame")
+	}
+	replayDB := openCollectionCommandWALDB(t, replayDir)
+	defer replayDB.Close()
+	replayCol, err := NewCollectionManager(replayDB).OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := replayCol.RebuildVectorIndex("embedding_graph"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := replayCol.SearchVectorIndex(VectorIndexSearchOptions{IndexName: "embedding_graph", Query: []float32{1, 0, 0}, TopK: 1, EfSearch: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Results) != 1 || result.Results[0].Score < 0.99 {
+		t.Fatalf("replayed vector lost authority: %+v", result.Results)
+	}
+	replayedDocument, err := replayCol.Get(ids[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(acceptedDocument, replayedDocument) {
+		t.Fatalf("replay changed public document: before=%s after=%s", acceptedDocument, replayedDocument)
+	}
+	if policy == ColumnRetainedPayloadNonColumn {
+		got, err := replayCol.Get(ids[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertJSONEqualM13C(t, got, []byte(`{"id":"a","embedding":[1,0,0]}`))
+	}
+}
 
 func TestInsertBatchWithStatsValidatedFloat32ProjectionOwnsAndPublishesVectors(t *testing.T) {
 	dir, d, col := openValidatedFloat32ProjectionCollection(t, 3)

@@ -267,6 +267,8 @@ type UpdateBatchItem struct {
 
 type updateBatchItem struct {
 	UpdateBatchItem
+	typedProjection               *trustedFloat32Projection
+	typedRetained                 []byte
 	bsonSet                       bsonSetUpdate
 	hasBSONSet                    bool
 	allowTemplateV1StoredDocument bool
@@ -374,6 +376,7 @@ func collectionPlannerOptionsForDB(db *backenddb.DB, meta CollectionMeta) (colle
 		return collectionOptions{}, err
 	}
 	return collectionOptions{
+		db:                      db,
 		allowArrayValuesInIndex: meta.Options.AllowArrayValuesInIndex,
 		documentFormat:          documentFormat,
 		dataStoragePolicy:       dataPolicy,
@@ -3618,7 +3621,7 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 		if err != nil {
 			return nil, false, err
 		}
-		err = m.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
+		err = m.withCommandWALPublishCoordinatorForIntent(intent, func() error {
 			_, _, publishErr := m.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(ordered, preflight, intent, func(_ backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 				return buildSystemDelta(rootIDs)
 			})
@@ -5547,10 +5550,10 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 			unlockCommandWALRawStage = c.db.LockCommandWALStaging()
 		}
 		lsn, appendErr := c.db.AppendStagedCommandWALIntent(commandWALStageIntent, false)
+		commandWALStageAppended = commandWALStageIntent.AssignedLSN() != 0
 		if appendErr != nil {
 			return 0, appendErr
 		}
-		commandWALStageAppended = lsn != 0
 		return lsn, nil
 	}
 	defer func() {
@@ -11556,7 +11559,7 @@ func isRetriableCollectionMutationError(err error) bool {
 	// Once publication ownership transferred, running a logical mutation again
 	// can apply it twice. Callers with operation-specific reconciliation must
 	// handle this status before consulting ordinary pre-publication retry classes.
-	if backenddb.CommitPublicationAccepted(err) {
+	if backenddb.CommitPublicationAccepted(err) || errors.Is(err, ErrCommitAmbiguous) {
 		return false
 	}
 	return errors.Is(err, ErrConcurrentMutation) ||
@@ -11647,6 +11650,12 @@ func prepareInsertBatchPlanRetainedPayload(meta CollectionMeta, plan *insertBatc
 	}
 	plan.stats.RetainedPayloadPrepare += time.Since(start)
 	plan.stats.RetainedPayloadRows += len(retainedDocuments)
+	if projection != nil && projection.retainedJSON == nil {
+		projection.preparedRetainedByID = make(map[string][]byte, len(owned))
+		for row := range owned {
+			projection.preparedRetainedByID[string(owned[row].ID)] = retainedDocuments[row]
+		}
+	}
 
 	if direct := plan.directBufferedInsert; direct != nil && direct.primaryRootName == primaryRootName {
 		if len(direct.primaryEntries) != len(retainedDocuments) {
@@ -12044,6 +12053,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			}
 		}
 	}
+	plannerOptions.typedProjection = execOpts.trustedFloat32Projection
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
 	if len(meta.Indexes) == 0 && !commandWALIndexedBufferedMode {
@@ -12204,7 +12214,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 					fullDocumentOverlay = bufferedFullDocumentOverlay(fullRetainedPayloadDocuments)
 				}
 			}
-			bufferedCommandWALIntent, err = c.newCollectionInsertCommandWALIntent(docs, nil)
+			bufferedCommandWALIntent, err = c.newCollectionInsertCommandWALIntent(docs, nil, execOpts.trustedFloat32Projection)
 			if err != nil {
 				closePlanningSnapshot()
 				resetCollectionRunTables(plan.runs)
@@ -12294,7 +12304,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			}
 		}
 		commandWALDocuments = docs
-		commandWALIntent, err = c.newCollectionInsertCommandWALIntent(docs, nil)
+		commandWALIntent, err = c.newCollectionInsertCommandWALIntent(docs, nil, execOpts.trustedFloat32Projection)
 		if err != nil {
 			closePlanningSnapshot()
 			resetCollectionRunTables(plan.runs)
@@ -12883,13 +12893,6 @@ func (c *Collection) insertBatchNoIndex(
 		stats.ColumnPublishValidatedFloat32ProjectionRows = len(columnDocuments)
 	}
 	baseRoot := catalog.rootID(rootName)
-	if commandWALIntent == nil && c.commandWALActive(nil) {
-		commandWALIntent, err = c.newCollectionInsertCommandWALIntent(collectionDocumentsFromNoIndexEntries(entries), nil)
-		if err != nil {
-			_ = snap.Close()
-			return nil, err
-		}
-	}
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = snap.Close() }()
@@ -12951,6 +12954,18 @@ func (c *Collection) insertBatchNoIndex(
 		stats.RetainedPayloadSemanticStreamTableBuild = prepared.semanticStreamPrepareMetrics.TableBuild
 	}
 
+	if projection := execOpts.trustedFloat32Projection; projection != nil && projection.retainedJSON == nil && retainedDocuments != nil {
+		projection.preparedRetainedByID = make(map[string][]byte, len(entries))
+		for row := range entries {
+			projection.preparedRetainedByID[string(entries[row].id)] = retainedDocuments[row]
+		}
+	}
+	if commandWALIntent == nil && c.commandWALActive(nil) {
+		commandWALIntent, err = c.newCollectionInsertCommandWALIntent(collectionDocumentsFromNoIndexEntries(entries), nil, execOpts.trustedFloat32Projection)
+		if err != nil {
+			return nil, err
+		}
+	}
 	phaseStart = time.Now()
 	table := newCollectionRunTable(len(entries))
 	var rowRemainderBytes int64
@@ -15753,7 +15768,7 @@ func (c *Collection) prepareDirectUpdateCommandWALStage(plan *updateBatchPlan) (
 		len(plan.commandWALDocuments) == 0 {
 		return nil, nil
 	}
-	intent, err := c.newCollectionUpdateCommandWALIntent(plan.commandWALDocuments, nil)
+	intent, err := c.newCollectionUpdatePlanCommandWALIntent(plan)
 	if err != nil {
 		return nil, err
 	}
@@ -16603,7 +16618,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	indexStateChanged := false
 	if len(runtimes) > 0 {
 		phaseStart = updateBatchStatsNow(detailedStats)
-		oldState, err = indexStateForDocument(currentValue, runtimes, plannerOptions)
+		oldState, err = loadDeleteIndexState(snap, catalog, documentID, currentValue, runtimes, plannerOptions)
 		stats.IndexStateExtraction += updateBatchStatsSince(detailedStats, phaseStart)
 		if err != nil {
 			_ = snap.Close()
@@ -16991,6 +17006,7 @@ type preparedBatchUpdate struct {
 }
 
 type updateBatchPlan struct {
+	typedProjection             *trustedFloat32Projection
 	results                     []UpdateBatchResult
 	stats                       CollectionUpdateStats
 	meta                        CollectionMeta
@@ -17720,7 +17736,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 				if commandWALBufferedMode &&
 					plan.canStageDirectBufferedUpdateAfterCommandWALAppend() &&
 					len(plan.commandWALDocuments) > 0 {
-					intent, err := c.newCollectionUpdateCommandWALIntent(plan.commandWALDocuments, nil)
+					intent, err := c.newCollectionUpdatePlanCommandWALIntent(plan)
 					if err != nil {
 						return err
 					}
@@ -17851,7 +17867,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 					var publishErr error
 					publishIntent := commandWALIntent
 					if publishIntent == nil && c.commandWALActive(nil) && len(plan.commandWALDocuments) > 0 {
-						publishIntent, err = c.newCollectionUpdateCommandWALIntent(plan.commandWALDocuments, nil)
+						publishIntent, err = c.newCollectionUpdatePlanCommandWALIntent(plan)
 						if err != nil {
 							return err
 						}
@@ -17957,7 +17973,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 		}
 		publishIntent := commandWALIntent
 		if publishIntent == nil && c.commandWALActive(nil) && len(plan.commandWALDocuments) > 0 {
-			publishIntent, err = c.newCollectionUpdateCommandWALIntent(plan.commandWALDocuments, nil)
+			publishIntent, err = c.newCollectionUpdatePlanCommandWALIntent(plan)
 			if err != nil {
 				return err
 			}
@@ -18578,6 +18594,24 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	if updateBatchItemsAllowTemplateV1StoredDocuments(items) {
 		plannerOptions.allowTemplateV1Stored = true
 	}
+	if len(items) > 0 && items[0].typedProjection != nil {
+		plannerOptions.typedProjection = items[0].typedProjection
+		if err := validateTypedProjectionMeta(meta, plannerOptions.typedProjection); err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+		for _, item := range items {
+			if item.typedProjection != plannerOptions.typedProjection {
+				_ = snap.Close()
+				return nil, errors.New("collections: mixed typed replacement batch")
+			}
+		}
+	}
+	var typedOldView *CollectionReadView
+	if plannerOptions.typedProjection != nil {
+		typedOldView = newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
+		defer typedOldView.Close()
+	}
 	baseUserRoot := snapshotUserRoot(snap)
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
@@ -18716,7 +18750,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 				prepared.oldPrimaryValue = appendUpdateBatchPlanScratchDocument(scratch, current.value)
 			}
 		}
-		if columnStoreCanReconstructDocument(meta) {
+		if columnStoreCanReconstructDocument(meta) && item.typedProjection == nil {
 			current.value, err = c.reconstructColumnDocumentAtSnapshot(snap, catalog, item.DocumentID, current.value)
 			if err != nil {
 				_ = snap.Close()
@@ -18755,6 +18789,13 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 				phaseStart = updateBatchStatsNow(detailedStats)
 				if prepared.knownAffectedIndexes {
 					prepared.oldState, err = orderedIndexStateForKnownValidDocumentRuntimeMask(current.value, runtimes, prepared.affectedIndexRuntimeMask, plannerOptions, stateArena)
+				} else if columnStoreTypedScalarIndexesSupported(meta) {
+					var persisted documentIndexState
+					persisted, err = loadDeleteIndexState(snap, catalog, item.DocumentID, current.value, runtimes, plannerOptions)
+					prepared.oldState = stateArena.appendState(len(runtimes))
+					for runtimeIndex, runtime := range runtimes {
+						prepared.oldState[runtimeIndex] = persisted[runtime.def.name]
+					}
 				} else {
 					prepared.oldState, err = orderedIndexStateForDocumentWithArena(current.value, runtimes, plannerOptions, stateArena)
 				}
@@ -18767,7 +18808,17 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 				}
 			}
 		}
-		if !item.hasBSONSet {
+		if item.typedProjection != nil {
+			document, changedOne = item.typedRetained, true
+			if bytes.Equal(current.value, document) {
+				equal, compareErr := typedOldView.typedReplacementValuesEqual(item.DocumentID, item.typedProjection.typedRows[string(item.DocumentID)])
+				if compareErr != nil {
+					_ = snap.Close()
+					return nil, updateBatchItemError(i, compareErr)
+				}
+				changedOne = !equal
+			}
+		} else if !item.hasBSONSet {
 			phaseStart = updateBatchStatsNow(detailedStats)
 			document, changedOne, err = callCollectionUpdateCallback(item.Update, current.value)
 			stats.Callback += updateBatchStatsSince(detailedStats, phaseStart)
@@ -18860,7 +18911,9 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	}
 	var retainedPrimaryDocuments [][]byte
 	var retainedSemanticStreamBlocks memtable.Table
-	if columnStoreNeedsRetainedPayloadTransform(meta) {
+	if plannerOptions.typedProjection != nil {
+		retainedPrimaryDocuments = changedDocuments
+	} else if columnStoreNeedsRetainedPayloadTransform(meta) {
 		prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocuments(*meta.Options.ColumnStore, changedDocuments, columnRetainedPayloadTemplateResolver(snap, catalog))
 		if err != nil {
 			_ = snap.Close()
@@ -18886,7 +18939,9 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 				continue
 			}
 			phaseStart = updateBatchStatsNow(detailedStats)
-			if changed[i].knownAffectedIndexes {
+			if p := plannerOptions.typedProjection; p != nil {
+				changed[i].newState, err = typedIndexState(p.typedRows[string(changed[i].documentID)], p.columns, runtimes, stateArena)
+			} else if changed[i].knownAffectedIndexes {
 				changed[i].newState, err = orderedIndexStateForKnownValidDocumentRuntimeMask(changed[i].document, runtimes, changed[i].affectedIndexRuntimeMask, plannerOptions, stateArena)
 			} else {
 				changed[i].newState, err = orderedIndexStateForDocumentWithArena(changed[i].document, runtimes, plannerOptions, stateArena)
@@ -19274,6 +19329,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	stats = updateCollectionUpdateStatsCounts(stats, results, len(deltaTables))
 	*plan = updateBatchPlan{
 		results:                     results,
+		typedProjection:             plannerOptions.typedProjection,
 		stats:                       stats,
 		meta:                        meta,
 		catalog:                     catalog,
@@ -19338,6 +19394,17 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	if columnStoreWriteEnabled(plan.meta) {
+		columnDocuments := columnWriteDocumentsFromCommitLog(plan.commandWALDocuments)
+		if plan.typedProjection != nil {
+			ids := make([][]byte, len(columnDocuments))
+			for i := range columnDocuments {
+				ids[i] = columnDocuments[i].ID
+			}
+			if err := applyTypedProjectionSubset(ids, columnDocuments, plan.typedProjection); err != nil {
+				cleanupDeltas()
+				return nil, err
+			}
+		}
 		var publishMeta CollectionMeta
 		var publishRootNames []string
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
@@ -19351,7 +19418,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 				commandWALIntent:  commandWALIntent,
 				rawPublishLocked:  true,
 				operation:         ColumnPublishOperationUpdate,
-				documents:         columnWriteDocumentsFromCommitLog(plan.commandWALDocuments),
+				documents:         columnDocuments,
 				rows:              plan.stats.Modified,
 				rowRemainderBytes: plan.rowRemainderBytes,
 			})
@@ -19588,11 +19655,11 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 			return errCollectionDBNil
 		}
 		lsn, appendErr := c.db.AppendStagedCommandWALIntent(commandWALStageIntent, false)
+		commandWALStageAppended = commandWALStageIntent.AssignedLSN() != 0
 		if appendErr != nil {
 			return appendErr
 		}
 		plan.bufferedCommandWALLSN = lsn
-		commandWALStageAppended = lsn != 0
 		return nil
 	}
 	direct := plan.directBufferedUpdate
@@ -21602,6 +21669,9 @@ func loadDeleteIndexState(snap *backenddb.Snapshot, catalog *collectionCatalog, 
 		if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
 			return nil, err
 		}
+	}
+	if columnStoreTypedScalarIndexesSupported(catalog.meta) {
+		return nil, fmt.Errorf("collections: typed scalar old index state missing for %q", documentID)
 	}
 	return indexStateForDocument(document, runtimes, opts)
 }

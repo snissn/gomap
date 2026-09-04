@@ -550,6 +550,11 @@ it a ceiling and keep verified/cached-verify evidence nearby.
 ### Vector/RAG-style workload
 
 - **Persona/problem:** embeddings plus metadata and final source document fetch.
+- **Write-path check:** binary transport and typed storage metadata alone do not
+  prove native ingestion. Verify that scalar/text/vector indexing and replay
+  consume accepted typed values, rather than extracting them from retained JSON.
+  Profile insert, replacement, and deletion as well as search; old-value
+  reconstruction is still indexed-document work even when deferred to mutation.
 - **Recommended layout:** fixed-dimension `float32_vector` as typed-column dense
   section, metadata in typed-row or retained document, derived graph as a
   generation-bound accelerator.
@@ -560,6 +565,48 @@ it a ceiling and keep verified/cached-verify evidence nearby.
 - **Why:** keeps vector scoring/candidate traversal separate from document fetch.
 - **When not:** authoritative adjacency typed-column storage or SIMD kernels are
   required today; those are follow-ups.
+
+For the typed indexed-write substrate, run this bounded collection-level check
+from the repository root (place `TMPDIR` on the benchmark disk):
+
+```sh
+GOWORK=off go test ./TreeDB/collections -run '^$' \
+  -bench '^BenchmarkTypedMinimaPublic(Batch|Mutation)$' \
+  -benchmem -benchtime=1x -count=5 -timeout=120s
+```
+
+It compares JSON and typed inputs under the explicit `command_wal_durable`
+production profile, for equivalent typed-storage schemas and logical rows.
+Batch sizes are 1/32/128; `indexes0` through `indexes3` add two
+scalar indexes and then text indexing, with the vector column/index declaration
+present throughout. Fixture preparation and mutation seeding are outside the
+timer; admission plus the final collection flush are inside. Replacement and
+deletion include old indexed-state maintenance. Normalize `B/op` and `allocs/op`
+by batch size; repeated short samples can still vary with allocator/pool state.
+Disk growth is incremental file size, not peak process memory or reclaimed-space
+efficiency. These are write-substrate measurements, not prepared ANN readiness,
+query throughput, or end-to-end Minima qualification.
+
+Keep the existing vector-only guardrail in a separate process so combined-suite
+warm-up does not silently change its measurement boundary:
+
+```sh
+GOWORK=off go test ./TreeDB/collections -run '^$' \
+  -bench '^BenchmarkInsertBatchValidatedFloat32ProjectionCohere768RetainedPayload$' \
+  -benchmem -benchtime=1x -count=5 -timeout=120s
+```
+
+All three vector guardrail variants use the legacy validated-FP32 API; they are
+not generic `InsertBatch` measurements. This historical fixture uses an
+unprofiled backend with staged command-WAL append and excludes the final flush
+from its timer. It is a matched legacy guardrail, not durable-at-ack throughput;
+do not compare its absolute timings to the durable Minima batch benchmark.
+Full-retained compatibility mode must
+log the accepted FP32 plane independently of the document's vector, which can
+differ. That extra durable representation is a correctness cost, not the
+recommended new adapter layout. Supplying residual JSON, or using the complete
+typed batch API for indexed strings and vectors, avoids retaining a full JSON
+embedding solely as an intermediate representation.
 
 ### Performance-engineering workflow
 

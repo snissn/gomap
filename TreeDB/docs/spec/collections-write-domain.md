@@ -51,6 +51,14 @@ This applies to:
 - unique-index conflict checks,
 - update/delete planning that reads buffered state.
 
+For typed indexed fields, this precedence also governs old-value maintenance.
+Scalar keys may reuse the persisted index-state root; text maintenance can use
+the existing row-locator root and a snapshot-scoped typed point reader. Do not
+substitute retained non-column JSON for missing typed fields or scan every
+physical row for each changed ID. A point reader must share the mutation's
+planning snapshot and keep asset handles alive until its borrowed data has been
+consumed or copied. It must not force a per-row flush to recover visibility.
+
 Tombstones in pending runs MUST suppress older values from persisted roots or
 older pending runs.
 

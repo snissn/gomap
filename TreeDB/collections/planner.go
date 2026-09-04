@@ -55,6 +55,8 @@ const (
 )
 
 type collectionOptions struct {
+	db                      *backenddb.DB
+	typedProjection         *trustedFloat32Projection
 	allowArrayValuesInIndex bool
 	documentFormat          DocumentFormat
 	trustedBSONDocuments    bool
@@ -652,7 +654,7 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbes(items []insertBatchIte
 		valueRefs: make([][]byte, 0, estimateBatchIndexValueRefCount(items, len(runtimes))),
 	}
 	for i := range items {
-		state, err := orderedIndexStateForDocumentWithArena(items[i].document, runtimes, p.options, &encoder)
+		state, err := p.itemIndexState(items[i].id, items[i].document, runtimes, &encoder)
 		if err != nil {
 			return nil, err
 		}
@@ -682,7 +684,7 @@ func (p insertBatchPlanner) singleItemIndexStateAndUniqueProbeRuns(item *insertB
 		states:    make([][][]byte, 0, len(runtimes)),
 		valueRefs: make([][]byte, 0, len(runtimes)),
 	}
-	state, err := orderedIndexStateForDocumentWithArena(item.document, runtimes, p.options, &encoder)
+	state, err := p.itemIndexState(item.id, item.document, runtimes, &encoder)
 	if err != nil {
 		return nil, nil, err
 	}

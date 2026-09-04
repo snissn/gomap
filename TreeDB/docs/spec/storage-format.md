@@ -2337,9 +2337,9 @@ Current command kinds:
 | Value | Kind | Scope | Payload format | Status |
 |---:|---|---|---|---|
 | 1 | `RawKVBatch` | raw KV | `RawKVBatchV1` or `RawKVBatchV2` | typed raw key/value command batch |
-| 100 | `CollectionInsertBatchByID` | collection | `CollectionInsertBatchByIDV1` | deterministic collection insert/upsert-by-id batch |
+| 100 | `CollectionInsertBatchByID` | collection | `CollectionInsertBatchByIDV1` or `CollectionTypedBatchByIDV1` | deterministic collection insert/upsert-by-id batch |
 | 101 | `CollectionDeleteBatchByID` | collection | `CollectionDeleteBatchByIDV1` | deterministic collection delete-by-id batch |
-| 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` | deterministic collection update/replace-by-id batch |
+| 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` or `CollectionTypedBatchByIDV1` | deterministic collection update/replace-by-id batch |
 | 103 | `CollectionRebuildVectorIndex` | collection | `CollectionRebuildVectorIndexV1` | deterministic collection vector-index rebuild command |
 | 104 | `CollectionReplaceSourceByID` | collection | `CollectionReplaceSourceByIDV1` | one-source delete-and-reinsert command used by atomic `IngestSources` publication |
 | 200 | `CatalogCreateCollection` | catalog | `CatalogCreateCollectionV1` | deterministic catalog create-collection command; old placeholder name is an alias only |
@@ -2359,6 +2359,7 @@ Current payload format IDs:
 | 8 | `DurablePrefixBarrierV1` |
 | 9 | `RawKVBatchV2` |
 | 10 | `CollectionReplaceSourceByIDV1` |
+| 11 | `CollectionTypedBatchByIDV1` |
 
 `RawKVBatchV1` and `RawKVBatchV2` share this payload framing:
 
@@ -2603,6 +2604,65 @@ bytes Document[DocumentLen]
 `CollectionUpdateBatchByIDV1` uses the same canonical payload layout as
 `CollectionInsertBatchByIDV1`; each document is the final accepted replacement
 for the listed ID after user callbacks or declarative updates have resolved.
+
+`CollectionTypedBatchByIDV1` carries accepted typed values separately from
+retained JSON. It is a logical command payload in the existing journal, not a
+physical typed-asset image or a second collection log. Integers and FP32 bits
+are little-endian:
+
+```text
+u16 Version        // 1
+u64 SchemaHash     // nonzero declared column-store schema hash
+u32 ColumnCount
+u32 DocumentCount
+u8 Flags           // bit 0=LegacyProjection; other bits must be zero
+u32 CollectionLen
+bytes Collection[CollectionLen]
+Column[ColumnCount]
+Document[DocumentCount]
+
+Column:            // strictly increasing lexical field name
+u32 NameLen
+bytes Name[NameLen]
+u8 Type            // 1=string, 2=float32_vector
+u32 Dimensions     // zero for strings; positive for vectors
+
+Document:          // strictly increasing nonempty ID
+u32 IDLen
+bytes ID[IDLen]
+u32 RetainedLen
+bytes Retained[RetainedLen]
+Value[ColumnCount] // descriptor order
+
+StringValue:
+u32 ByteLen
+bytes String[ByteLen]
+
+VectorValue:
+u32 Float32Bits[Dimensions]
+```
+
+The fixed header is 23 bytes: flags are at offset 18 and the collection length
+starts at offset 19. `LegacyProjection` identifies the existing trusted FP32
+insert API and preserves its retained-document admission semantics. It requires
+exactly one FP32 vector descriptor and is valid only for insert kind `100`.
+Flags zero selects the general typed-batch admission contract; replay must not
+infer the originating API from the schema alone.
+
+The payload has no null/missing values or implicit numeric conversion. Unknown
+versions/types/flag bits, invalid dimensions, duplicate or unsorted descriptors/IDs,
+nonfinite vectors, truncated lengths, and trailing bytes fail closed. The
+append validator scans the payload without constructing typed rows; the owning
+decoder validates bounds before allocating row/value buffers. Collection
+admission additionally checks the configured schema and field ownership. A
+schema hash is not a new collection-incarnation identifier and does not permit
+unsupported drop/recreate operations or raw catalog replacement.
+
+Insert kind `100` and update kind `102` share this typed payload format.
+An update payload contains only accepted final replacements, not arbitrary
+callbacks or an instruction to read indexed values from retained JSON. Missing
+update IDs retain the collection API's no-op behavior and are not turned into
+inserts by replay.
 
 `CollectionDeleteBatchByIDV1` payload:
 

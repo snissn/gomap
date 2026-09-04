@@ -828,7 +828,7 @@ func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
 		ID:       []byte("e1"),
 		Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`),
 	}}
-	intent, err := col.newCollectionInsertCommandWALIntent(docs, nil)
+	intent, err := col.newCollectionInsertCommandWALIntent(docs, nil, nil)
 	if err != nil {
 		_ = d.Close()
 		t.Fatalf("newCollectionInsertCommandWALIntent: %v", err)
@@ -868,7 +868,7 @@ func TestColumnStoreInsertWithCommandWALIntentPreservesCallerPublishTimingM10B(t
 	col := openColumnStoreCollectionM10B(t, d, mgr)
 	ids := [][]byte{[]byte("timed-e1")}
 	docs := [][]byte{[]byte(`{"time_us":1,"kind":"like","did":"d1"}`)}
-	intent, err := col.newCollectionInsertCommandWALIntent([]commitlog.CollectionDocument{{ID: ids[0], Document: docs[0]}}, nil)
+	intent, err := col.newCollectionInsertCommandWALIntent([]commitlog.CollectionDocument{{ID: ids[0], Document: docs[0]}}, nil, nil)
 	if err != nil {
 		t.Fatalf("newCollectionInsertCommandWALIntent: %v", err)
 	}
@@ -949,7 +949,7 @@ func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testi
 			intent, err := stale.newCollectionInsertCommandWALIntent([]commitlog.CollectionDocument{{
 				ID:       []byte("stale"),
 				Document: []byte(`{"time_us":2,"kind":"post","did":"d2"}`),
-			}}, nil)
+			}}, nil, nil)
 			if err != nil {
 				t.Fatalf("newCollectionInsertCommandWALIntent: %v", err)
 			}
@@ -1160,7 +1160,7 @@ func TestColumnStoreAssignedForegroundIntentDoesNotBypassRelaxedDurabilityGateM1
 		ID:       []byte("e1"),
 		Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`),
 	}}
-	intent, err := col.newCollectionInsertCommandWALIntent(docs, nil)
+	intent, err := col.newCollectionInsertCommandWALIntent(docs, nil, nil)
 	if err != nil {
 		t.Fatalf("newCollectionInsertCommandWALIntent: %v", err)
 	}

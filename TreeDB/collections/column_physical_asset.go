@@ -45,10 +45,18 @@ type columnWriteDocument struct {
 }
 
 type trustedFloat32Projection struct {
+	columns      []ColumnStoreColumn
+	schemaHash   uint64
+	typedRows    map[string][]columnDeclaredValue
+	legacyTyped  bool
+	ids          [][]byte
 	column       string
 	metric       VectorMetric
 	vectors      [][]float32
 	retainedJSON [][]byte
+	// Per-admission prepared residuals, reused by WAL encoding without extracting
+	// the indexed vector a second time. This does not change output reconstruction.
+	preparedRetainedByID map[string][]byte
 }
 
 func newTrustedFloat32Projection(ids, documents [][]byte, column string, metric VectorMetric, vectors [][]float32, retainedJSON [][]byte) (*trustedFloat32Projection, error) {
@@ -78,12 +86,15 @@ func newTrustedFloat32Projection(ids, documents [][]byte, column string, metric 
 			return nil, fmt.Errorf("collections: validated float32 projection row %d has zero magnitude for cosine metric", row)
 		}
 	}
-	return &trustedFloat32Projection{column: column, metric: metric, vectors: owned, retainedJSON: retainedJSON}, nil
+	return &trustedFloat32Projection{ids: ids, column: column, metric: metric, vectors: owned, retainedJSON: retainedJSON}, nil
 }
 
 func validateTrustedFloat32ProjectionMeta(meta CollectionMeta, projection *trustedFloat32Projection) error {
 	if projection == nil {
 		return nil
+	}
+	if projection.typedRows != nil && !projection.legacyTyped {
+		return validateTypedProjectionMeta(meta, projection)
 	}
 	if normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON {
 		return fmt.Errorf("collections: validated float32 projection requires JSON document format, got %q", meta.Options.DocumentFormat)
@@ -141,13 +152,29 @@ func validateTrustedFloat32ProjectionMeta(meta CollectionMeta, projection *trust
 }
 
 func validateTrustedFloat32ProjectionRetainedJSON(ids [][]byte, projection *trustedFloat32Projection) (map[string][]byte, error) {
+	return validateTrustedFloat32ProjectionRetainedJSONWithOwnership(ids, projection, true)
+}
+
+// Validation-only callers have already checked IDs in typed admission or the
+// canonical command scanner. Publication requests owned retained documents.
+func validateTrustedFloat32ProjectionRetainedJSONWithOwnership(ids [][]byte, projection *trustedFloat32Projection, own bool) (map[string][]byte, error) {
 	if projection == nil || projection.retainedJSON == nil {
 		return nil, nil
 	}
 	if len(ids) != len(projection.retainedJSON) {
 		return nil, fmt.Errorf("collections: validated float32 projection ids=%d retained JSON=%d", len(ids), len(projection.retainedJSON))
 	}
-	owned := make(map[string][]byte, len(ids))
+	var owned map[string][]byte
+	if own {
+		owned = make(map[string][]byte, len(ids))
+	}
+	var paths [][]string
+	if projection.typedRows != nil && !projection.legacyTyped {
+		paths = make([][]string, len(projection.columns))
+		for i, col := range projection.columns {
+			paths[i] = strings.Split(col.Path, ".")
+		}
+	}
 	for row, document := range projection.retainedJSON {
 		trimmed := bytes.TrimSpace(document)
 		if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' || !json.Valid(trimmed) {
@@ -163,12 +190,32 @@ func validateTrustedFloat32ProjectionRetainedJSON(ids [][]byte, projection *trus
 		if _, exists := owned[id]; exists {
 			return nil, fmt.Errorf("collections: validated float32 projection retained JSON duplicate id at row %d", row)
 		}
-		if _, _, _, err := jsonparser.Get(trimmed, projection.column); err == nil {
+		if projection.typedRows != nil && !projection.legacyTyped {
+			idCount := 0
+			if err := jsonparser.ObjectEach(trimmed, func(key, _ []byte, _ jsonparser.ValueType, _ int) error {
+				if string(key) == "id" {
+					idCount++
+					if idCount > 1 {
+						return errors.New("collections: typed retained JSON has duplicate id")
+					}
+				}
+				return nil
+			}); err != nil {
+				return nil, err
+			}
+			for i, col := range projection.columns {
+				if err := validateTypedRetainedColumn(trimmed, col.Path, paths[i]); err != nil {
+					return nil, err
+				}
+			}
+		} else if _, _, _, err := jsonparser.Get(trimmed, projection.column); err == nil {
 			return nil, fmt.Errorf("collections: validated float32 projection retained JSON row %d contains declared column %q", row, projection.column)
 		} else if err != jsonparser.KeyPathNotFoundError {
 			return nil, fmt.Errorf("collections: validated float32 projection retained JSON row %d column %q: %w", row, projection.column, err)
 		}
-		owned[id] = bytes.Clone(trimmed)
+		if own {
+			owned[id] = bytes.Clone(trimmed)
+		}
 	}
 	return owned, nil
 }
@@ -176,6 +223,9 @@ func validateTrustedFloat32ProjectionRetainedJSON(ids [][]byte, projection *trus
 func applyTrustedFloat32Projection(ids [][]byte, documents []columnWriteDocument, projection *trustedFloat32Projection) error {
 	if projection == nil {
 		return nil
+	}
+	if projection.typedRows != nil {
+		return applyTypedProjection(ids, documents, projection)
 	}
 	if len(ids) != len(documents) || len(projection.vectors) != len(documents) {
 		return fmt.Errorf("collections: validated float32 projection ids=%d documents=%d vectors=%d", len(ids), len(documents), len(projection.vectors))

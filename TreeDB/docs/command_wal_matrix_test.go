@@ -86,6 +86,8 @@ func TestCommandWALSupportMatrixCoversCollectionMutators(t *testing.T) {
 		"Collection.CompactRootOverlays",
 		"Collection.Insert",
 		"Collection.InsertBatch",
+		"Collection.InsertTypedBatchWithStats",
+		"Collection.ReplaceTypedBatch",
 		"Collection.InsertBatchWithTemplateV1Encoder",
 		"Collection.InsertBatchValidatedBSON",
 		"Collection.Delete",
