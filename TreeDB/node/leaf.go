@@ -60,29 +60,6 @@ func compareLeafKey(a, b []byte) int {
 	return bytes.Compare(a, b)
 }
 
-func compareSmallBigEndian(a, b []byte) (int, bool) {
-	if len(a) != len(b) || len(a) > 8 {
-		return 0, false
-	}
-	if len(a) == 0 {
-		return 0, true
-	}
-
-	var av uint64
-	var bv uint64
-	for i := 0; i < len(a); i++ {
-		av = (av << 8) | uint64(a[i])
-		bv = (bv << 8) | uint64(b[i])
-	}
-	if av < bv {
-		return -1, true
-	}
-	if av > bv {
-		return 1, true
-	}
-	return 0, true
-}
-
 func composePrefixVirtualKeyU64(prev uint64, prefixLen int, suffix []byte) (uint64, bool) {
 	if prefixLen < 0 || prefixLen > 8 || len(suffix) != 8-prefixLen {
 		return 0, false
@@ -1542,48 +1519,6 @@ func (n *Node) searchLeafColumnarV2(key []byte) (uint16, bool, error) {
 	return uint16(i), false, nil
 }
 
-func compareLeafPrefixVirtualKey(prevKey []byte, prefixLen int, suffix []byte, target []byte) int {
-	// Compare prevKey[:prefixLen] + suffix against target without allocating.
-	n := prefixLen
-	if len(target) < n {
-		n = len(target)
-	}
-	if n > 0 {
-		if cmp, ok := compareSmallBigEndian(prevKey[:n], target[:n]); ok {
-			if cmp != 0 {
-				return cmp
-			}
-		} else if cmp := bytes.Compare(prevKey[:n], target[:n]); cmp != 0 {
-			return cmp
-		}
-	}
-	if len(target) < prefixLen {
-		// target is a strict prefix of the virtual key.
-		return 1
-	}
-	t := target[prefixLen:]
-	n = len(suffix)
-	if len(t) < n {
-		n = len(t)
-	}
-	if n > 0 {
-		if cmp, ok := compareSmallBigEndian(suffix[:n], t[:n]); ok {
-			if cmp != 0 {
-				return cmp
-			}
-		} else if cmp := bytes.Compare(suffix[:n], t[:n]); cmp != 0 {
-			return cmp
-		}
-	}
-	if len(t) < len(suffix) {
-		return 1
-	}
-	if len(t) > len(suffix) {
-		return -1
-	}
-	return 0
-}
-
 func (n *Node) leafRestartKeyViewAtIndex(index uint16) ([]byte, error) {
 	off, err := n.getOffset(index)
 	if err != nil {
@@ -1687,12 +1622,11 @@ func (n *Node) searchLeafPrefixBlock(blockStart, blockEnd uint16, target []byte)
 		}
 		suffix := n.data[keyStart:keyEnd]
 
-		cmp = compareLeafPrefixVirtualKey(prevKey, layout.prefixLen, suffix, target)
-		if cmp >= 0 {
-			return idx, cmp == 0, nil
-		}
-
 		if layout.prefixLen == 0 {
+			cmp = compareLeafKey(suffix, target)
+			if cmp >= 0 {
+				return idx, cmp == 0, nil
+			}
 			prevKey = suffix
 			continue
 		}
@@ -1707,6 +1641,10 @@ func (n *Node) searchLeafPrefixBlock(blockStart, blockEnd uint16, target []byte)
 		}
 		copy(cur[layout.prefixLen:], suffix)
 		prevKey = cur
+		cmp = compareLeafKey(prevKey, target)
+		if cmp >= 0 {
+			return idx, cmp == 0, nil
+		}
 	}
 
 	return blockEnd, false, nil
@@ -1925,12 +1863,11 @@ func (n *Node) searchLeafColumnarPrefixV2BlockWithMeta(data []byte, count uint16
 			return 0, false, ErrCorruptedNode
 		}
 
-		cmp = compareLeafPrefixVirtualKey(prevKey, prefixLen, suffix, target)
-		if cmp >= 0 {
-			return idx, cmp == 0, nil
-		}
-
 		if prefixLen == 0 {
+			cmp = compareLeafKey(suffix, target)
+			if cmp >= 0 {
+				return idx, cmp == 0, nil
+			}
 			prevKey = suffix
 			continue
 		}
@@ -1950,6 +1887,10 @@ func (n *Node) searchLeafColumnarPrefixV2BlockWithMeta(data []byte, count uint16
 		}
 		copy(cur[prefixLen:], suffix)
 		prevKey = cur
+		cmp = compareLeafKey(prevKey, target)
+		if cmp >= 0 {
+			return idx, cmp == 0, nil
+		}
 	}
 
 	return blockEnd, false, nil
