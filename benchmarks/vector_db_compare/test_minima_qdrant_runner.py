@@ -707,6 +707,23 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertIsNone(peak["bytes"])
         self.assertEqual(peak["process_identity"], "")
 
+    def test_resource_peak_aggregate_accounts_for_both_endpoints(self) -> None:
+        for baseline_peak, end_peak, expected in (
+            ({"availability": "measured", "bytes": 300}, {"availability": "measured", "bytes": 200}, 300),
+            ({"availability": "measured", "bytes": 100}, {"availability": "measured", "bytes": 200}, 200),
+            (None, {"availability": "measured", "bytes": 200}, None),
+            ({"availability": "measured", "bytes": 100}, None, None),
+            ({"availability": "unavailable", "bytes": None}, {"availability": "measured", "bytes": 200}, None),
+        ):
+            with self.subTest(baseline=baseline_peak, end=end_peak):
+                workload = new_runner(tiny_manifest(), SharedQdrant())
+                snapshot = {"captured": True, "rss_bytes": 1, "cpu_seconds": 1, "disk_bytes": 1}
+                workload.resource_baseline = {**snapshot, "peak_rss": baseline_peak}
+                with mock.patch.object(runner, "server_resource_usage", return_value={**snapshot, "peak_rss": end_peak}):
+                    resource = workload.resource_evidence()
+                self.assertEqual(resource["peak_rss_bytes"], expected)
+                self.assertEqual(resource["peak_rss_availability"], "unavailable" if expected is None else "measured")
+
     def test_restart_records_linux_lifetimes_separately_from_ps_identity(self) -> None:
         shared = SharedQdrant()
         workload = new_runner(tiny_manifest(), shared)

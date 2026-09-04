@@ -1182,7 +1182,7 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			}
 		}
 	}
-	if actualHashes["treedb"] == "" || actualHashes["treedb"] != actualHashes["qdrant"] {
+	if len(backends) > 1 && (actualHashes["treedb"] == "" || actualHashes["treedb"] != actualHashes["qdrant"]) {
 		return fmt.Errorf("minima artifact: backend actual full-state hashes differ")
 	}
 	return nil

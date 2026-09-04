@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -88,11 +89,184 @@ func TestMinimaCompletedBoundedRejectsFalseStrategyAndMissingPeak(t *testing.T) 
 	}
 }
 
+func TestMinimaCompletedBoundedValidatesLifecycle(t *testing.T) {
+	m, _ := buildMinimaBoundedManifest(50000)
+	base := validMinimaArtifactForManifest(m)
+	base.Schema, base.State, base.Passing, base.Recommendation = minimaBoundedArtifactSchema, "partial", false, "not_evaluated"
+	base.NativePathProof = &minimaNativePathProof{Schema: minimaNativeProofSchema, Strategy: "native_runtime", Availability: "unavailable", Reason: "M1-M4 required"}
+	base.Backends = base.Backends[:1]
+	base.Backends[0].Configuration["vector_strategy"] = "native_runtime"
+	base.Scenarios = base.Scenarios[:len(m.Corpora)]
+	delete(base.RawEvidence, "qdrant")
+	raw := base.RawEvidence["treedb"]
+	raw.ResourceMeasurement.PeakRSSAvailability = "unavailable"
+	raw.ResourceMeasurement.PeakRSSScope = "max_process_lifetime_highwater_through_segment_endpoints"
+	base.RawEvidence["treedb"] = raw
+	if err := validateMinimaArtifact(&base); err != nil {
+		t.Fatalf("valid completed bounded diagnostic: %v", err)
+	}
+	incomplete := cloneMinimaArtifact(t, base)
+	incomplete.Backends[0].Operations.ManifestOrdered = false
+	incomplete.Failures = []string{"final scroll failed; diagnostic execution incomplete"}
+	incompleteRaw := incomplete.RawEvidence["treedb"]
+	incompleteRaw.FinalScrollState = minimaRawFinalState{}
+	incomplete.RawEvidence["treedb"] = incompleteRaw
+	if err := validateMinimaArtifact(&incomplete); err != nil {
+		t.Fatalf("explicitly incomplete diagnostic: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*minimaArtifact)
+	}{
+		{"renamed_backend", func(a *minimaArtifact) { a.Backends[0].Name = "qdrant" }},
+		{"extra_backend", func(a *minimaArtifact) { a.Backends = append(a.Backends, a.Backends[0]) }},
+		{"removed_backend", func(a *minimaArtifact) { a.Backends = nil }},
+		{"false_completion_flag", func(a *minimaArtifact) { a.Backends[0].Operations.ManifestOrdered = false }},
+		{"false_completion_with_successful_scroll", func(a *minimaArtifact) {
+			a.Backends[0].Operations.ManifestOrdered = false
+			a.Failures = []string{"incomplete"}
+		}},
+		{"operation_flags", func(a *minimaArtifact) { a.Backends[0].Operations.ExplicitUpdateVisible = false }},
+		{"timed_count", func(a *minimaArtifact) { a.Backends[0].Operations.TimedQueriesExecuted = 0 }},
+		{"timed_trace", func(a *minimaArtifact) { a.Backends[0].Operations.TimedExecutionTrace.Queries = nil }},
+		{"reindex_trace", func(a *minimaArtifact) { a.Backends[0].Operations.ReindexExecutionTrace.Operations = nil }},
+		{"reopen", func(a *minimaArtifact) { a.Backends[0].Reopen = minimaReopenEvidence{} }},
+		{"backend_manifest", func(a *minimaArtifact) { a.Backends[0].Manifest.OperationSHA256 = "wrong" }},
+		{"raw_overlap", func(a *minimaArtifact) {
+			r := a.RawEvidence["treedb"]
+			r.TimedOverlap = minimaRawTimedOverlap{}
+			a.RawEvidence["treedb"] = r
+		}},
+		{"final_scroll", func(a *minimaArtifact) {
+			r := a.RawEvidence["treedb"]
+			r.FinalScrollState = minimaRawFinalState{}
+			a.RawEvidence["treedb"] = r
+		}},
+		{"batch_contract", func(a *minimaArtifact) {
+			r := a.RawEvidence["treedb"]
+			r.UpsertBatchCorrelationContract = nil
+			a.RawEvidence["treedb"] = r
+		}},
+		{"resource_summary", func(a *minimaArtifact) { a.Scenarios[0].Resource.RSSBytes++ }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := cloneMinimaArtifact(t, base)
+			tc.mutate(&a)
+			if err := validateMinimaArtifact(&a); err == nil {
+				t.Fatal("accepted incomplete completed bounded lifecycle")
+			}
+		})
+	}
+}
+
+func TestMinimaPreservedBoundedLifecycle(t *testing.T) {
+	paths := os.Getenv("MINIMA_CHARACTERIZE_ARTIFACTS")
+	if paths == "" {
+		t.Skip("optional preserved artifact lifecycle characterization")
+	}
+	for _, path := range filepath.SplitList(paths) {
+		t.Run(filepath.Base(filepath.Dir(path)), func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var a minimaArtifact
+			if err := json.Unmarshal(data, &a); err != nil {
+				t.Fatal(err)
+			}
+			if a.Schema != minimaBoundedArtifactSchema || len(a.Backends) != 1 {
+				t.Fatal("not single-backend bounded evidence")
+			}
+			if err := validateMinimaManifest(&a.Manifest); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateMinimaBackendLifecycle(a.Backends[0], &a.Manifest); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateMinimaRawEvidence(&a, map[string]minimaBackendEvidence{"treedb": a.Backends[0]}); err != nil {
+				t.Fatal(err)
+			}
+			// Inspect original evidence without migrating it. A pre-binding peak
+			// format must still fail the current full artifact validator.
+			if err := validateMinimaArtifact(&a); err != nil {
+				if !strings.Contains(err.Error(), "peak RSS") {
+					t.Fatal(err)
+				}
+				t.Logf("lifecycle valid; current peak binding rejects original artifact: %v", err)
+			}
+		})
+	}
+}
+
+func TestMinimaPeakRSSValidatesBothEndpoints(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*minimaRawBackendEvidence)
+		valid  bool
+	}{
+		{"valid", func(*minimaRawBackendEvidence) {}, true},
+		{"decreasing_peak", func(r *minimaRawBackendEvidence) { *r.ResourceMeasurement.Segments[0].Baseline.PeakRSS.Bytes = 300 }, false},
+		{"wrong_baseline_pid", func(r *minimaRawBackendEvidence) { *r.ResourceMeasurement.Segments[0].Baseline.PeakRSS.PID = 2 }, false},
+		{"wrong_baseline_lifetime", func(r *minimaRawBackendEvidence) {
+			r.ResourceMeasurement.Segments[0].Baseline.PeakRSS.ProcessIdentity = "1:999"
+		}, false},
+		{"wrong_baseline_source", func(r *minimaRawBackendEvidence) {
+			r.ResourceMeasurement.Segments[0].Baseline.PeakRSS.Source = "endpoint_rss"
+		}, false},
+		{"missing_baseline_bytes", func(r *minimaRawBackendEvidence) { r.ResourceMeasurement.Segments[0].Baseline.PeakRSS.Bytes = nil }, false},
+		{"unavailable_baseline_with_bytes", func(r *minimaRawBackendEvidence) {
+			r.ResourceMeasurement.Segments[0].Baseline.PeakRSS.Availability = "unavailable"
+		}, false},
+		{"missing_end_measured_aggregate", func(r *minimaRawBackendEvidence) { r.ResourceMeasurement.Segments[0].End.PeakRSS = nil }, false},
+		{"missing_end_unavailable_aggregate", func(r *minimaRawBackendEvidence) {
+			r.ResourceMeasurement.Segments[0].End.PeakRSS = nil
+			r.ResourceMeasurement.PeakRSSAvailability = "unavailable"
+			r.ResourceMeasurement.PeakRSSBytes = nil
+		}, true},
+		{"wrong_baseline_missing_end", func(r *minimaRawBackendEvidence) {
+			r.ResourceMeasurement.Segments[0].End.PeakRSS = nil
+			r.ResourceMeasurement.PeakRSSAvailability = "unavailable"
+			r.ResourceMeasurement.PeakRSSBytes = nil
+			r.ResourceMeasurement.Segments[0].Baseline.PeakRSS.ProcessIdentity = "1:999"
+		}, false},
+		{"missing_baseline_measured_aggregate", func(r *minimaRawBackendEvidence) { r.ResourceMeasurement.Segments[0].Baseline.PeakRSS = nil }, false},
+		{"missing_baseline_unavailable_aggregate", func(r *minimaRawBackendEvidence) {
+			r.ResourceMeasurement.Segments[0].Baseline.PeakRSS = nil
+			r.ResourceMeasurement.PeakRSSAvailability = "unavailable"
+			r.ResourceMeasurement.PeakRSSBytes = nil
+		}, true},
+		{"doctored_envelope", func(r *minimaRawBackendEvidence) {
+			copy := r.ResourceMeasurement.Segments[0].Baseline
+			copy.LinuxProcessIdentity = "1:999"
+			r.ResourceMeasurement.Baseline = &copy
+		}, false},
+		{"missing_aggregate_with_peak", func(r *minimaRawBackendEvidence) {
+			r.ResourceMeasurement.PeakRSSAvailability = ""
+			r.ResourceMeasurement.PeakRSSBytes = nil
+			r.ResourceMeasurement.PeakRSSScope = ""
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var r minimaRawBackendEvidence
+			if err := json.Unmarshal([]byte(`{"resource_measurement":{"peak_rss_bytes":200,"peak_rss_availability":"measured","peak_rss_scope":"max_process_lifetime_highwater_through_segment_endpoints","segments":[{"baseline":{"pid":1,"linux_process_identity":"1:10","peak_rss":{"availability":"measured","bytes":100,"pid":1,"process_identity":"1:10","source":"/proc/<pid>/status:VmHWM","scope":"process_lifetime_through_sample"}},"end":{"pid":1,"linux_process_identity":"1:10","peak_rss":{"availability":"measured","bytes":200,"pid":1,"process_identity":"1:10","source":"/proc/<pid>/status:VmHWM","scope":"process_lifetime_through_sample"}}}]}}`), &r); err != nil {
+				t.Fatal(err)
+			}
+			tc.mutate(&r)
+			if err := validateMinimaPeakRSSLifetimes(r); (err == nil) != tc.valid {
+				t.Fatalf("valid=%v err=%v", tc.valid, err)
+			}
+		})
+	}
+}
+
 func TestMinimaPeakRSSRejectsSummedAndUnavailableAsZero(t *testing.T) {
 	var resource minimaRawResourceMeasurement
 	raw := `{"peak_rss_bytes":200,"peak_rss_availability":"measured","peak_rss_scope":"max_process_lifetime_highwater_through_segment_endpoints","segments":[{"end":{"peak_rss":{"availability":"measured","bytes":100,"pid":1,"process_identity":"1:10","source":"/proc/<pid>/status:VmHWM","scope":"process_lifetime_through_sample"}}},{"end":{"peak_rss":{"availability":"measured","bytes":200,"pid":2,"process_identity":"2:20","source":"/proc/<pid>/status:VmHWM","scope":"process_lifetime_through_sample"}}}]}`
 	if err := json.Unmarshal([]byte(raw), &resource); err != nil {
 		t.Fatal(err)
+	}
+	for i := range resource.Segments {
+		resource.Segments[i].Baseline = resource.Segments[i].End
 	}
 	if err := validateMinimaPeakRSS(resource); err != nil {
 		t.Fatal(err)
@@ -165,6 +339,9 @@ func TestMinimaPeakRSSBindsOrderedRestartLifetimes(t *testing.T) {
 			var r minimaRawBackendEvidence
 			if err := json.Unmarshal([]byte(raw), &r); err != nil {
 				t.Fatal(err)
+			}
+			for i := range r.ResourceMeasurement.Segments {
+				r.ResourceMeasurement.Segments[i].Baseline.PeakRSS = r.ResourceMeasurement.Segments[i].End.PeakRSS
 			}
 			switch mutation {
 			case "unrelated":

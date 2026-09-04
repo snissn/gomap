@@ -1238,7 +1238,8 @@ class QdrantMinimaRunner:
                     resource_delta(baseline, server_resource_usage(
                         self.server_pid, self.storage_path, self.resource_server_name))]
         captured = bool(segments) and all(segment["captured"] for segment in segments)
-        peaks = [segment["end"].get("peak_rss", {}) for segment in segments]
+        peaks = [segment[endpoint].get("peak_rss") or {}
+                 for segment in segments for endpoint in ("baseline", "end")]
         peaks_measured = bool(peaks) and all(p.get("availability") == "measured" for p in peaks)
         return {
             "captured": captured,

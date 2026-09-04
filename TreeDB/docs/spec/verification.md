@@ -8,7 +8,8 @@ This document maps specification invariants to existing tests and harnesses.
 support. `TreeDB/cmd/treedb_rag_benchmark/minima_bounded_test.go` and the existing
 `TestMinima` suite check versioned bounded fixtures, frozen full-manifest
 compatibility, rejection of measured native proof, and diagnostic-only
-qualification boundaries. Native semantic counter validation belongs with its
+qualification boundaries, completed lifecycle evidence, and process-lifetime
+high-water consistency. Native semantic counter validation belongs with its
 actual producers in #4619; M0 cannot qualify any native proof. The Python `test_minima*runner.py` suites and
 `scripts/bench_minima_qualification_test.sh` cover actual runner and bounded
 process execution. The runbook records their commands.

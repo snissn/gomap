@@ -33,6 +33,10 @@ cutoff but not the full fixture's <1% sparse case. Both emit a diagnostic schema
 that cannot pass full qualification. `MODE=representative` retains the frozen
 full workload and its existing validation.
 
+A completed bounded artifact must still prove its manifest operations, timed
+reader/writer overlap, reindex/reopen, and final-state scroll. Diagnostic-only
+status prevents full qualification; it does not excuse missing lifecycle work.
+
 The M0 runner still executes `native_runtime`. An explicit
 `TREEDB_STRATEGY=column_graph` request fails as unavailable until M4 connects the
 native lifecycle; null native counters do not mean zero fallback work. Keep
@@ -46,7 +50,8 @@ Do not use this small lane as a full-scale speedup claim.
 process-lifetime `VmHWM` through the captured segment endpoints. Per-process
 identity and source are retained. Measured peaks bind to each segment's service
 PID and Linux start-time identity, and to the ordered old/new restart boundary;
-unrelated or reordered process samples are rejected. It is not the sum of peaks, whole-host memory,
+Both baseline and end samples belong to that same lifetime; contradictory or
+unrelated process samples are rejected. It is not the sum of peaks, whole-host memory,
 or a phase-specific peak. The historical `rss_bytes` field retains its old
 endpoint-growth meaning. Missing allocation, live-heap or client-memory evidence
 remains unavailable; use focused Go benchmarks/profiles for allocation budgets

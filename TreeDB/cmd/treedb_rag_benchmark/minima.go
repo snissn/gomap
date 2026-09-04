@@ -1303,6 +1303,19 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 		if artifact.NativePathProof.Strategy != "native_runtime" && artifact.NativePathProof.Strategy != "column_graph" {
 			return fmt.Errorf("minima artifact: unknown requested strategy")
 		}
+		if len(artifact.Backends) == 0 {
+			if len(artifact.Scenarios) != 0 || len(artifact.RawEvidence) != 0 {
+				return fmt.Errorf("minima bounded diagnostic: execution evidence has no backend")
+			}
+		} else {
+			if len(artifact.Backends) != 1 || artifact.Backends[0].Name != "treedb" {
+				return fmt.Errorf("minima bounded diagnostic: execution requires exactly one TreeDB backend")
+			}
+			if !artifact.Backends[0].Operations.ManifestOrdered &&
+				(strings.TrimSpace(strings.Join(artifact.Failures, "")) == "" || artifact.RawEvidence["treedb"].FinalScrollState.Match) {
+				return fmt.Errorf("minima bounded diagnostic: incomplete execution requires an explicit failure and cannot claim completed full-state parity")
+			}
+		}
 	} else if artifact.Manifest.Schema != minimaManifestSchema || artifact.NativePathProof != nil {
 		return fmt.Errorf("minima artifact: legacy schema cannot carry native/bounded contracts")
 	}
@@ -1325,9 +1338,7 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 				return fmt.Errorf("minima artifact: completed TreeDB partial evidence is missing raw evidence")
 			}
 			if artifact.Schema == minimaBoundedArtifactSchema {
-				if err := validateMinimaCompletedBounded(artifact, raw); err != nil {
-					return err
-				}
+				return validateMinimaCompletedBounded(artifact, raw)
 			}
 			if err := validateMinimaTreeDBProvenance(artifact.Backends[0]); err != nil {
 				return err
@@ -1355,42 +1366,8 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 		if _, exists := backends[backend.Name]; exists {
 			return fmt.Errorf("minima artifact: duplicate backend %q", backend.Name)
 		}
-		if backend.ServerVersion == "" || backend.ClientVersion == "" || backend.Durability == "" || len(backend.Configuration) == 0 || len(backend.Environment) == 0 {
-			return fmt.Errorf("minima artifact: %s missing environment/version/durability/config", backend.Name)
-		}
-		for _, key := range []string{"os", "arch", "cpu", "memory"} {
-			if backend.Environment[key] == "" {
-				return fmt.Errorf("minima artifact: %s missing environment %s", backend.Name, key)
-			}
-		}
-		if backend.Manifest.CorpusSHA256 != artifact.Manifest.CorpusSHA256 || backend.Manifest.QuerySHA256 != artifact.Manifest.QuerySHA256 || backend.Manifest.OperationSHA256 != artifact.Manifest.OperationSHA256 {
-			return fmt.Errorf("minima artifact: %s did not consume identical manifests", backend.Name)
-		}
-		timedPlan := artifact.Manifest.Operations[3].TimedPlan
-		observedTimedTrace := backend.Operations.TimedExecutionTrace
-		observedTimedDigest := minimaTimedExecutionDigest(observedTimedTrace)
-		expectedReindexTrace := minimaExpectedReindexExecution(&artifact.Manifest)
-		observedReindexTrace := backend.Operations.ReindexExecutionTrace
-		observedReindexDigest := minimaReindexExecutionDigest(observedReindexTrace)
-		if !backend.Operations.ManifestOrdered || !backend.Operations.BatchInsertDuringSearch || !backend.Operations.ReindexDeleteReplace || !backend.Operations.ExplicitUpdateVisible || !backend.Operations.ExplicitDeleteVisible || !backend.Operations.EmptyCasesChecked ||
-			backend.Operations.TimedQueriesExecuted != len(observedTimedTrace.Queries) ||
-			backend.Operations.TimedRoundsCompleted != len(observedTimedTrace.Rounds) ||
-			backend.Operations.TimedQueriesExecuted != timedPlan.QueryCount ||
-			backend.Operations.TimedRoundsCompleted != len(timedPlan.Rounds) ||
-			backend.Operations.TimedExecutionSHA256 != observedTimedDigest ||
-			backend.Operations.ReindexOperationsExecuted != len(observedReindexTrace.Operations) ||
-			backend.Operations.ReindexOperationsExecuted != len(expectedReindexTrace.Operations) ||
-			backend.Operations.ReindexExecutionSHA256 != observedReindexDigest {
-			return fmt.Errorf("minima artifact: %s missing or incomplete observed operation execution evidence", backend.Name)
-		}
-		if err := validateMinimaObservedTimedExecution(observedTimedTrace, &artifact.Manifest); err != nil {
-			return fmt.Errorf("minima artifact: %s: %w", backend.Name, err)
-		}
-		if err := validateMinimaObservedReindexExecution(observedReindexTrace, &artifact.Manifest); err != nil {
-			return fmt.Errorf("minima artifact: %s: %w", backend.Name, err)
-		}
-		if !backend.Reopen.Attempted || !backend.Reopen.CommittedParity || backend.Reopen.ResultManifestHash != artifact.Manifest.ExpectedStateSHA256 {
-			return fmt.Errorf("minima artifact: %s reopen state hash mismatch", backend.Name)
+		if err := validateMinimaBackendLifecycle(backend, &artifact.Manifest); err != nil {
+			return err
 		}
 		backends[backend.Name] = backend
 	}
@@ -1421,6 +1398,49 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 		return fmt.Errorf("minima artifact: missing per-backend scenario evidence")
 	}
 	return validateMinimaRawEvidence(artifact, backends)
+}
+
+// Shared by full comparisons and completed single-backend bounded diagnostics.
+// Counts, traces and hashes are derived from the supplied validated manifest.
+func validateMinimaBackendLifecycle(backend minimaBackendEvidence, manifest *minimaManifest) error {
+	if backend.ServerVersion == "" || backend.ClientVersion == "" || backend.Durability == "" || len(backend.Configuration) == 0 || len(backend.Environment) == 0 {
+		return fmt.Errorf("minima artifact: %s missing environment/version/durability/config", backend.Name)
+	}
+	for _, key := range []string{"os", "arch", "cpu", "memory"} {
+		if backend.Environment[key] == "" {
+			return fmt.Errorf("minima artifact: %s missing environment %s", backend.Name, key)
+		}
+	}
+	if backend.Manifest.CorpusSHA256 != manifest.CorpusSHA256 || backend.Manifest.QuerySHA256 != manifest.QuerySHA256 || backend.Manifest.OperationSHA256 != manifest.OperationSHA256 {
+		return fmt.Errorf("minima artifact: %s did not consume identical manifests", backend.Name)
+	}
+	timedPlan := manifest.Operations[3].TimedPlan
+	observedTimedTrace := backend.Operations.TimedExecutionTrace
+	observedTimedDigest := minimaTimedExecutionDigest(observedTimedTrace)
+	expectedReindexTrace := minimaExpectedReindexExecution(manifest)
+	observedReindexTrace := backend.Operations.ReindexExecutionTrace
+	observedReindexDigest := minimaReindexExecutionDigest(observedReindexTrace)
+	if !backend.Operations.ManifestOrdered || !backend.Operations.BatchInsertDuringSearch || !backend.Operations.ReindexDeleteReplace || !backend.Operations.ExplicitUpdateVisible || !backend.Operations.ExplicitDeleteVisible || !backend.Operations.EmptyCasesChecked ||
+		backend.Operations.TimedQueriesExecuted != len(observedTimedTrace.Queries) ||
+		backend.Operations.TimedRoundsCompleted != len(observedTimedTrace.Rounds) ||
+		backend.Operations.TimedQueriesExecuted != timedPlan.QueryCount ||
+		backend.Operations.TimedRoundsCompleted != len(timedPlan.Rounds) ||
+		backend.Operations.TimedExecutionSHA256 != observedTimedDigest ||
+		backend.Operations.ReindexOperationsExecuted != len(observedReindexTrace.Operations) ||
+		backend.Operations.ReindexOperationsExecuted != len(expectedReindexTrace.Operations) ||
+		backend.Operations.ReindexExecutionSHA256 != observedReindexDigest {
+		return fmt.Errorf("minima artifact: %s missing or incomplete observed operation execution evidence", backend.Name)
+	}
+	if err := validateMinimaObservedTimedExecution(observedTimedTrace, manifest); err != nil {
+		return fmt.Errorf("minima artifact: %s: %w", backend.Name, err)
+	}
+	if err := validateMinimaObservedReindexExecution(observedReindexTrace, manifest); err != nil {
+		return fmt.Errorf("minima artifact: %s: %w", backend.Name, err)
+	}
+	if !backend.Reopen.Attempted || !backend.Reopen.CommittedParity || backend.Reopen.ResultManifestHash != manifest.ExpectedStateSHA256 {
+		return fmt.Errorf("minima artifact: %s reopen state hash mismatch", backend.Name)
+	}
+	return nil
 }
 
 func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScenarioSpec, query minimaQuerySpec) error {
