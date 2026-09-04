@@ -420,6 +420,7 @@ const (
 	postFlushAppendOnlyMemLeaseKeep               = 24
 	postCheckpointAppendOnlyMemLeaseKeep          = 8
 	appendOnlyEntryPoolHighPressureDropBytes      = uint64(32 << 20)
+	appendOnlyKeyArenaPoolHighPressureDropBytes   = uint64(32 << 20)
 	appendOnlyValueArenaPoolHighPressureDropBytes = uint64(32 << 20)
 )
 
@@ -779,6 +780,7 @@ func maybeTrimEntrySliceLeasesUnderPressure(level poolPressureLevel, sampledAt t
 		entrySlicePoolTrimDropBytesTotal.Add(uint64(droppedBytes))
 	}
 	maybeDropAppendOnlyEntryPoolsUnderPressure(level)
+	maybeDropAppendOnlyKeyArenaPoolsUnderPressure(level)
 	maybeDropAppendOnlyValueArenaPoolsUnderPressure(level)
 }
 
@@ -795,6 +797,21 @@ func maybeDropAppendOnlyEntryPoolsUnderPressure(level poolPressureLevel) {
 		return
 	}
 	memtable.DropAppendOnlyEntryPools()
+}
+
+func maybeDropAppendOnlyKeyArenaPoolsUnderPressure(level poolPressureLevel) {
+	if level == poolPressureNormal {
+		return
+	}
+	stats := memtable.AppendOnlyKeyArenaPoolStatsSnapshot()
+	retainedBytes := stats.RetainedBytesEstimate
+	if retainedBytes == 0 {
+		return
+	}
+	if level != poolPressureCritical && retainedBytes < appendOnlyKeyArenaPoolHighPressureDropBytes {
+		return
+	}
+	memtable.DropAppendOnlyKeyArenaPools()
 }
 
 func maybeDropAppendOnlyValueArenaPoolsUnderPressure(level poolPressureLevel) {
@@ -11357,6 +11374,7 @@ func (db *DB) dropColdAppendOnlyPools() {
 	db.appendOnlyMemPool.Store(&sync.Pool{})
 	db.appendOnlyMemPoolDropTotal.Add(1)
 	memtable.DropAppendOnlyEntryPools()
+	memtable.DropAppendOnlyKeyArenaPools()
 	memtable.DropAppendOnlyValueArenaPools()
 }
 
@@ -32264,6 +32282,7 @@ func (db *DB) Stats() map[string]string {
 	appendOnlyMemNewAllocQueueBytes := db.appendOnlyMemNewAllocQueueBytes.Load()
 	appendOnlyMemPoolDropTotal := db.appendOnlyMemPoolDropTotal.Load()
 	appendOnlyEntryPoolStats := memtable.AppendOnlyEntryPoolStatsSnapshot()
+	appendOnlyKeyArenaPoolStats := memtable.AppendOnlyKeyArenaPoolStatsSnapshot()
 	appendOnlyValueArenaPoolStats := memtable.AppendOnlyValueArenaPoolStatsSnapshot()
 	appendOnlyEntryReserveStats := memtable.AppendOnlyEntryReserveStatsSnapshot()
 	appendOnlyMemLeaseCount, appendOnlyMemLeaseEntryCapacity, appendOnlyMemLeaseEntryBackingBytes, appendOnlyMemLeaseValueArena := db.appendOnlyMemLeaseStats()
@@ -32283,6 +32302,14 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.append_only.entry_pool_drop_bytes_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.DropBytesTotal)
 	stats["treedb.cache.append_only.entry_pool_admission_drops_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.AdmissionDropsTotal)
 	stats["treedb.cache.append_only.entry_pool_admission_drop_bytes_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.AdmissionDropBytesTotal)
+	stats["treedb.cache.append_only.key_arena_pool_retained_bytes_estimate"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.RetainedBytesEstimate)
+	stats["treedb.cache.append_only.key_arena_pool_retained_bytes_max_estimate"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.RetainedBytesMaxEstimate)
+	stats["treedb.cache.append_only.key_arena_pool_gets_total"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.GetsTotal)
+	stats["treedb.cache.append_only.key_arena_pool_puts_total"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.PutsTotal)
+	stats["treedb.cache.append_only.key_arena_pool_drops_total"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.DropsTotal)
+	stats["treedb.cache.append_only.key_arena_pool_drop_bytes_total"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.DropBytesTotal)
+	stats["treedb.cache.append_only.key_arena_pool_admission_drops_total"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.AdmissionDropsTotal)
+	stats["treedb.cache.append_only.key_arena_pool_admission_drop_bytes_total"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.AdmissionDropBytesTotal)
 	stats["treedb.cache.append_only.value_arena_pool_retained_bytes_estimate"] = fmt.Sprintf("%d", appendOnlyValueArenaPoolStats.RetainedBytesEstimate)
 	stats["treedb.cache.append_only.value_arena_pool_retained_bytes_max_estimate"] = fmt.Sprintf("%d", appendOnlyValueArenaPoolStats.RetainedBytesMaxEstimate)
 	stats["treedb.cache.append_only.value_arena_pool_gets_total"] = fmt.Sprintf("%d", appendOnlyValueArenaPoolStats.GetsTotal)
@@ -32333,6 +32360,14 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.append_only.entry_pool_drop_bytes_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.DropBytesTotal)
 	stats["treedb.process.append_only.entry_pool_admission_drops_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.AdmissionDropsTotal)
 	stats["treedb.process.append_only.entry_pool_admission_drop_bytes_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.AdmissionDropBytesTotal)
+	stats["treedb.process.append_only.key_arena_pool_retained_bytes_estimate"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.RetainedBytesEstimate)
+	stats["treedb.process.append_only.key_arena_pool_retained_bytes_max_estimate"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.RetainedBytesMaxEstimate)
+	stats["treedb.process.append_only.key_arena_pool_gets_total"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.GetsTotal)
+	stats["treedb.process.append_only.key_arena_pool_puts_total"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.PutsTotal)
+	stats["treedb.process.append_only.key_arena_pool_drops_total"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.DropsTotal)
+	stats["treedb.process.append_only.key_arena_pool_drop_bytes_total"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.DropBytesTotal)
+	stats["treedb.process.append_only.key_arena_pool_admission_drops_total"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.AdmissionDropsTotal)
+	stats["treedb.process.append_only.key_arena_pool_admission_drop_bytes_total"] = fmt.Sprintf("%d", appendOnlyKeyArenaPoolStats.AdmissionDropBytesTotal)
 	stats["treedb.process.append_only.value_arena_pool_retained_bytes_estimate"] = fmt.Sprintf("%d", appendOnlyValueArenaPoolStats.RetainedBytesEstimate)
 	stats["treedb.process.append_only.value_arena_pool_retained_bytes_max_estimate"] = fmt.Sprintf("%d", appendOnlyValueArenaPoolStats.RetainedBytesMaxEstimate)
 	stats["treedb.process.append_only.value_arena_pool_gets_total"] = fmt.Sprintf("%d", appendOnlyValueArenaPoolStats.GetsTotal)
