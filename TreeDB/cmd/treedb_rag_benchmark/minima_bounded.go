@@ -1,20 +1,14 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 const minimaBoundedManifestSchema = "treedb_rag_minima_manifest/v2"
 const minimaBoundedArtifactSchema = "treedb_rag_application/minima_diagnostic_v1"
 const minimaNativeProofSchema = "treedb_minima_native_path_proof/v1"
-
-// These counters describe the full lifecycle. Unavailable is never zero. M1-M4
-// must supply measured counters and per-scenario route evidence before a native
-// qualification schema can be enabled; this diagnostic schema cannot qualify.
-var minimaNativeCounterNames = []string{
-	"indexed_json_reads", "native_runtime_dispatches", "primary_document_scans",
-	"ann_base_searches", "base_candidates", "overlay_searches", "overlay_candidates",
-	"typed_exact_searches", "retained_payload_decodes", "documents_fetched",
-	"scalar_candidates", "text_index_updates", "copied_bytes", "fold_debt_rows",
-}
 
 type minimaNativePathProof struct {
 	Schema       string             `json:"schema"`
@@ -22,28 +16,6 @@ type minimaNativePathProof struct {
 	Availability string             `json:"availability"`
 	Reason       string             `json:"reason,omitempty"`
 	Counters     map[string]*uint64 `json:"counters"`
-}
-
-func validateMinimaNativePathProof(proof *minimaNativePathProof) error {
-	if proof == nil || proof.Schema != minimaNativeProofSchema || proof.Strategy != "column_graph" || proof.Availability != "measured" {
-		return fmt.Errorf("minima native path proof: measured column_graph counters unavailable")
-	}
-	for _, key := range minimaNativeCounterNames {
-		if proof.Counters[key] == nil {
-			return fmt.Errorf("minima native path proof: %s unavailable", key)
-		}
-	}
-	for _, key := range []string{"indexed_json_reads", "native_runtime_dispatches", "primary_document_scans"} {
-		if *proof.Counters[key] != 0 {
-			return fmt.Errorf("minima native path proof: forbidden %s", key)
-		}
-	}
-	for _, key := range []string{"ann_base_searches", "base_candidates", "overlay_searches", "overlay_candidates"} {
-		if *proof.Counters[key] == 0 {
-			return fmt.Errorf("minima native path proof: no positive %s", key)
-		}
-	}
-	return nil
 }
 
 func buildMinimaBoundedManifest(total int) (minimaManifest, error) {
@@ -83,6 +55,47 @@ func validateMinimaPeakRSS(resource minimaRawResourceMeasurement) error {
 		}
 	} else if resource.PeakRSSAvailability != "unavailable" || resource.PeakRSSBytes != nil {
 		return fmt.Errorf("minima peak RSS: incomplete process evidence")
+	}
+	return nil
+}
+
+func validateMinimaPeakRSSLifetimes(raw minimaRawBackendEvidence) error {
+	r := raw.ResourceMeasurement
+	if err := validateMinimaPeakRSS(r); err != nil {
+		return err
+	}
+	if r.PeakRSSAvailability == "" {
+		return nil
+	} // Historical no-peak artifacts.
+	restart := raw.RestartBoundary
+	for i, segment := range r.Segments {
+		peak := segment.End.PeakRSS
+		if peak == nil || peak.Availability != "measured" {
+			continue
+		}
+		pid, identity := segment.Baseline.PID, segment.Baseline.LinuxProcessIdentity
+		if (restart.OldPID != 0 || restart.NewPID != 0) && (!restart.Verified || !restart.PIDChanged || restart.OldPID == restart.NewPID) {
+			return fmt.Errorf("minima peak RSS: service restart is not verified")
+		}
+		if restart.Verified {
+			if len(r.Segments) != 2 {
+				return fmt.Errorf("minima peak RSS: restart requires ordered old/new resource segments")
+			}
+			pid, identity = restart.OldPID, restart.OldLinuxProcessIdentity
+			if i == 1 {
+				pid, identity = restart.NewPID, restart.NewLinuxProcessIdentity
+			}
+		} else if len(r.Segments) != 1 {
+			return fmt.Errorf("minima peak RSS: multiple lifetimes without verified restart")
+		}
+		prefix := fmt.Sprintf("%d:", pid)
+		ticks, err := strconv.ParseUint(strings.TrimPrefix(identity, prefix), 10, 64)
+		if pid <= 0 || !strings.HasPrefix(identity, prefix) || err != nil || ticks == 0 ||
+			segment.Baseline.PID != pid || segment.Baseline.LinuxProcessIdentity != identity ||
+			peak.PID == nil || *peak.PID != pid || peak.ProcessIdentity != identity ||
+			(segment.End.PID != 0 && segment.End.PID != pid) || (segment.End.LinuxProcessIdentity != "" && segment.End.LinuxProcessIdentity != identity) {
+			return fmt.Errorf("minima peak RSS: segment %d does not match service process lifetime", i)
+		}
 	}
 	return nil
 }

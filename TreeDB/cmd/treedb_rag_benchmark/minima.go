@@ -1310,7 +1310,7 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 		return err
 	}
 	for _, raw := range artifact.RawEvidence {
-		if err := validateMinimaPeakRSS(raw.ResourceMeasurement); err != nil {
+		if err := validateMinimaPeakRSSLifetimes(raw); err != nil {
 			return err
 		}
 	}

@@ -307,6 +307,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload = object.__new__(runner.TreeDBMinimaRunner)
         workload.controller = Controller()
         workload.restart_origin = (100, "old-process")
+        workload.restart_origin_linux_identity = "100:10"
         workload._controller_restart_origin = (100, "old-process")
         workload.restart_origin_resource_end = None
         workload.resource_baseline = baseline

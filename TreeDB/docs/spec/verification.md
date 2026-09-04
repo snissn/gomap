@@ -7,8 +7,9 @@ This document maps specification invariants to existing tests and harnesses.
 `minima-native-execution.md` defines the target, not current mutable graph
 support. `TreeDB/cmd/treedb_rag_benchmark/minima_bounded_test.go` and the existing
 `TestMinima` suite check versioned bounded fixtures, frozen full-manifest
-compatibility, unavailable-versus-zero native proof, and diagnostic-only
-qualification boundaries. The Python `test_minima*runner.py` suites and
+compatibility, rejection of measured native proof, and diagnostic-only
+qualification boundaries. Native semantic counter validation belongs with its
+actual producers in #4619; M0 cannot qualify any native proof. The Python `test_minima*runner.py` suites and
 `scripts/bench_minima_qualification_test.sh` cover actual runner and bounded
 process execution. The runbook records their commands.
 

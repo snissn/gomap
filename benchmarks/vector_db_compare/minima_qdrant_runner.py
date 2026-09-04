@@ -824,6 +824,16 @@ def cpu_time_seconds(value: str) -> float:
     return float(days) * 86400 + hours * 3600 + minutes * 60 + seconds
 
 
+def linux_process_identity(pid: int | None) -> str:
+    if type(pid) is not int or pid <= 0:
+        return ""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+        return f"{pid}:{int(fields[19])}"
+    except (OSError, ValueError, IndexError):
+        return ""
+
+
 def process_peak_rss(pid: int | None) -> dict[str, Any]:
     """Kernel process-lifetime high water through this sample, never a phase peak."""
     result = {"availability": "unavailable", "bytes": None, "pid": pid,
@@ -832,15 +842,17 @@ def process_peak_rss(pid: int | None) -> dict[str, Any]:
     if type(pid) is not int or pid <= 0:
         return result
     try:
+        identity = linux_process_identity(pid)
         status = Path(f"/proc/{pid}/status").read_text(encoding="utf-8")
-        stat_fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+        if not identity or linux_process_identity(pid) != identity:
+            return result
         for line in status.splitlines():
             if line.startswith("VmHWM:"):
                 _, value, unit = line.split()
-                if unit != "kB" or int(value) <= 0:
+                if unit != "kB" or int(value) <= 0 or not identity:
                     break
                 result.update(availability="measured", bytes=int(value)*1024,
-                              process_identity=f"{pid}:{stat_fields[19]}")
+                              process_identity=identity)
                 break
     except (OSError, ValueError, IndexError):
         pass
@@ -848,6 +860,7 @@ def process_peak_rss(pid: int | None) -> dict[str, Any]:
 
 
 def server_process_resource_usage(pid: int | None, server_name: str) -> dict[str, Any]:
+    identity = linux_process_identity(pid)
     rss: int | None = None
     cpu: float | None = None
     error = ""
@@ -863,11 +876,15 @@ def server_process_resource_usage(pid: int | None, server_name: str) -> dict[str
             rss, cpu = int(fields[0]) * 1024, cpu_time_seconds(fields[1])
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             error = f"{type(exc).__name__}: {exc}"
+    peak = process_peak_rss(pid)
+    if peak["availability"] == "measured" and (not identity or peak["process_identity"] != identity):
+        peak = {**peak, "availability": "unavailable", "bytes": None, "process_identity": ""}
     return {
         "captured": rss is not None and cpu is not None,
+        "pid": pid, "linux_process_identity": identity,
         "rss_bytes": rss or 0,
         "cpu_seconds": cpu or 0.0,
-        "peak_rss": process_peak_rss(pid),
+        "peak_rss": peak,
         "availability": {
             "rss_bytes": f"{server_name} server PID {pid}" if rss is not None else "unavailable",
             "cpu_seconds": f"{server_name} server PID {pid}" if cpu is not None else "unavailable",
@@ -1137,6 +1154,7 @@ class QdrantMinimaRunner:
         self.completed_resource_segments: list[dict[str, Any]] = []
         self.restart_boundary: dict[str, Any] = {}
         self.restart_origin: tuple[int, str] | None = None
+        self.restart_origin_linux_identity = ""
         self.restart_origin_resource_end: dict[str, Any] | None = None
         self.state_scroll: dict[str, Any] = {}
         self.effective_collection: dict[str, Any] = {}
@@ -1170,6 +1188,7 @@ class QdrantMinimaRunner:
         if type(old_pid) is not int or old_pid <= 0:
             raise RuntimeError("close/reopen requires the original backend server PID")
         old_process_identity = self.process_identity(old_pid)
+        self.restart_origin_linux_identity = linux_process_identity(old_pid)
         if self.resource_baseline is not None:
             self.restart_origin_resource_end = server_resource_usage(
                 old_pid, self.storage_path, self.resource_server_name,
@@ -1186,6 +1205,7 @@ class QdrantMinimaRunner:
             self.capture_restart_origin()
         old_pid, old_process_identity = self.restart_origin
         self.restart_origin = None
+        old_linux_identity = self.restart_origin_linux_identity
         new_pid = self.restart_server()
         if type(new_pid) is not int or new_pid <= 0:
             raise RuntimeError("backend restart hook must return the restarted Qdrant server PID")
@@ -1198,6 +1218,8 @@ class QdrantMinimaRunner:
             raise RuntimeError(f"restarted backend PID {new_pid} does not own listener port {listener}")
         new_process_identity = self.process_identity(new_pid)
         self.restart_boundary = {
+            "old_linux_process_identity": old_linux_identity,
+            "new_linux_process_identity": linux_process_identity(new_pid),
             "hook_identity": self.restart_identity,
             "old_pid": old_pid, "new_pid": new_pid,
             "old_process_identity": old_process_identity,
@@ -1207,6 +1229,7 @@ class QdrantMinimaRunner:
         self.server_pid = new_pid
         self.resource_baseline = server_resource_usage(
             self.server_pid, self.storage_path, self.resource_server_name)
+        self.restart_origin_linux_identity = ""
 
     def resource_evidence(self) -> dict[str, Any]:
         baseline = self.resource_baseline or server_resource_usage(

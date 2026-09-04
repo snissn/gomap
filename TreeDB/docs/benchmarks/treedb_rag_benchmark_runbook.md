@@ -44,7 +44,9 @@ Do not use this small lane as a full-scale speedup claim.
 
 `resource_measurement.peak_rss_bytes` is the maximum measured Linux service
 process-lifetime `VmHWM` through the captured segment endpoints. Per-process
-identity and source are retained. It is not the sum of peaks, whole-host memory,
+identity and source are retained. Measured peaks bind to each segment's service
+PID and Linux start-time identity, and to the ordered old/new restart boundary;
+unrelated or reordered process samples are rejected. It is not the sum of peaks, whole-host memory,
 or a phase-specific peak. The historical `rss_bytes` field retains its old
 endpoint-growth meaning. Missing allocation, live-heap or client-memory evidence
 remains unavailable; use focused Go benchmarks/profiles for allocation budgets

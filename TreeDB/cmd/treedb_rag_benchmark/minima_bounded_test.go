@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -112,29 +113,75 @@ func TestMinimaPeakRSSRejectsSummedAndUnavailableAsZero(t *testing.T) {
 	}
 }
 
-func TestMinimaNativeProofRejectsUnavailableAndZeroOnly(t *testing.T) {
-	proof := minimaNativePathProof{Schema: minimaNativeProofSchema, Strategy: "column_graph", Availability: "unavailable", Reason: "M1-M4 not implemented"}
-	if validateMinimaNativePathProof(&proof) == nil {
-		t.Fatal("unavailable counters passed")
+func TestMinimaDiagnosticArtifactRejectsMeasuredNativeProof(t *testing.T) {
+	m, _ := buildMinimaBoundedManifest(50000)
+	a := minimaArtifact{Schema: minimaBoundedArtifactSchema, Manifest: m, State: "partial", Recommendation: "not_evaluated", NativePathProof: &minimaNativePathProof{Schema: minimaNativeProofSchema, Strategy: "column_graph", Availability: "measured"}}
+	if validateMinimaArtifact(&a) == nil {
+		t.Fatal("current diagnostic validator accepted future measured proof")
 	}
-	proof.Availability = "measured"
-	proof.Counters = map[string]*uint64{}
-	for _, key := range minimaNativeCounterNames {
-		n := uint64(0)
-		proof.Counters[key] = &n
+}
+
+func TestMinimaPeakRSSLifetimesAcceptActualRunnerSnapshots(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux process lifetime highwater")
 	}
-	if validateMinimaNativePathProof(&proof) == nil {
-		t.Fatal("zero-only proof passed")
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
 	}
-	for _, key := range []string{"ann_base_searches", "base_candidates", "overlay_searches", "overlay_candidates"} {
-		n := uint64(1)
-		proof.Counters[key] = &n
+	cmd := exec.Command("python3", "-c", `import sys,os,json
+sys.path.insert(0, '../../../benchmarks/vector_db_compare')
+import minima_qdrant_runner as m
+from pathlib import Path
+w=object.__new__(m.QdrantMinimaRunner)
+w.server_pid=os.getpid(); w.storage_path=Path(sys.argv[1]); w.resource_server_name='test'
+w.completed_resource_segments=[]
+w.resource_baseline=m.server_resource_usage(w.server_pid,w.storage_path,w.resource_server_name)
+print(json.dumps({'resource_measurement':w.resource_evidence()}))`, t.TempDir())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("runner resource capture: %v %s", err, out)
 	}
-	if err := validateMinimaNativePathProof(&proof); err != nil {
+	var raw minimaRawBackendEvidence
+	if err := json.Unmarshal(out, &raw); err != nil {
 		t.Fatal(err)
 	}
-	proof.Counters["indexed_json_reads"] = nil
-	if validateMinimaNativePathProof(&proof) == nil {
-		t.Fatal("missing counter passed as zero")
+	if raw.ResourceMeasurement.PeakRSSAvailability != "measured" {
+		t.Fatal("real Linux peak unavailable")
+	}
+	a := minimaArtifact{Schema: minimaArtifactSchema, Manifest: buildMinimaManifest(), State: "partial", Recommendation: "not_evaluated", RawEvidence: map[string]minimaRawBackendEvidence{"treedb": raw}}
+	if err := validateMinimaArtifact(&a); err != nil {
+		t.Fatal(err)
+	}
+	*raw.ResourceMeasurement.Segments[0].End.PeakRSS.PID += 100
+	if validateMinimaArtifact(&a) == nil {
+		t.Fatal("artifact accepted unrelated sampled process")
+	}
+}
+
+func TestMinimaPeakRSSBindsOrderedRestartLifetimes(t *testing.T) {
+	const raw = `{"resource_measurement":{"peak_rss_bytes":200,"peak_rss_availability":"measured","peak_rss_scope":"max_process_lifetime_highwater_through_segment_endpoints","segments":[{"baseline":{"pid":1,"linux_process_identity":"1:10"},"end":{"pid":1,"linux_process_identity":"1:10","peak_rss":{"availability":"measured","bytes":100,"pid":1,"process_identity":"1:10","source":"/proc/<pid>/status:VmHWM","scope":"process_lifetime_through_sample"}}},{"baseline":{"pid":2,"linux_process_identity":"2:20"},"end":{"pid":2,"linux_process_identity":"2:20","peak_rss":{"availability":"measured","bytes":200,"pid":2,"process_identity":"2:20","source":"/proc/<pid>/status:VmHWM","scope":"process_lifetime_through_sample"}}}]},"restart_boundary":{"old_pid":1,"new_pid":2,"old_linux_process_identity":"1:10","new_linux_process_identity":"2:20","verified":true,"pid_changed":true}}`
+	for _, mutation := range []string{"valid", "unrelated", "reordered", "wrong_start_ticks", "missing_binding", "unverified"} {
+		t.Run(mutation, func(t *testing.T) {
+			var r minimaRawBackendEvidence
+			if err := json.Unmarshal([]byte(raw), &r); err != nil {
+				t.Fatal(err)
+			}
+			switch mutation {
+			case "unrelated":
+				*r.ResourceMeasurement.Segments[0].End.PeakRSS.PID = 99
+			case "reordered":
+				r.ResourceMeasurement.Segments[0], r.ResourceMeasurement.Segments[1] = r.ResourceMeasurement.Segments[1], r.ResourceMeasurement.Segments[0]
+			case "wrong_start_ticks":
+				r.ResourceMeasurement.Segments[1].End.PeakRSS.ProcessIdentity = "2:999"
+			case "missing_binding":
+				r.RestartBoundary = minimaRawRestartBoundary{}
+			case "unverified":
+				r.RestartBoundary.Verified = false
+			}
+			err := validateMinimaPeakRSSLifetimes(r)
+			if (err == nil) != (mutation == "valid") {
+				t.Fatalf("mutation=%s err=%v", mutation, err)
+			}
+		})
 	}
 }

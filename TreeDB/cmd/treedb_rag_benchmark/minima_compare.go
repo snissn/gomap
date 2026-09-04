@@ -143,12 +143,14 @@ type minimaRawPhaseAttribution struct {
 }
 
 type minimaRawResourceSnapshot struct {
-	Captured     bool                  `json:"captured"`
-	RSSBytes     int64                 `json:"rss_bytes"`
-	CPUSeconds   float64               `json:"cpu_seconds"`
-	DiskBytes    int64                 `json:"disk_bytes"`
-	Availability map[string]string     `json:"availability,omitempty"`
-	PeakRSS      *minimaProcessPeakRSS `json:"peak_rss,omitempty"`
+	PID                  int                   `json:"pid,omitempty"`
+	LinuxProcessIdentity string                `json:"linux_process_identity,omitempty"`
+	Captured             bool                  `json:"captured"`
+	RSSBytes             int64                 `json:"rss_bytes"`
+	CPUSeconds           float64               `json:"cpu_seconds"`
+	DiskBytes            int64                 `json:"disk_bytes"`
+	Availability         map[string]string     `json:"availability,omitempty"`
+	PeakRSS              *minimaProcessPeakRSS `json:"peak_rss,omitempty"`
 }
 
 type minimaRawResourceSemantics struct {
@@ -190,13 +192,15 @@ type minimaProcessPeakRSS struct {
 }
 
 type minimaRawRestartBoundary struct {
-	HookIdentity       string `json:"hook_identity"`
-	OldPID             int    `json:"old_pid"`
-	NewPID             int    `json:"new_pid"`
-	OldProcessIdentity string `json:"old_process_identity"`
-	NewProcessIdentity string `json:"new_process_identity"`
-	PIDChanged         bool   `json:"pid_changed"`
-	Verified           bool   `json:"verified"`
+	OldLinuxProcessIdentity string `json:"old_linux_process_identity,omitempty"`
+	NewLinuxProcessIdentity string `json:"new_linux_process_identity,omitempty"`
+	HookIdentity            string `json:"hook_identity"`
+	OldPID                  int    `json:"old_pid"`
+	NewPID                  int    `json:"new_pid"`
+	OldProcessIdentity      string `json:"old_process_identity"`
+	NewProcessIdentity      string `json:"new_process_identity"`
+	PIDChanged              bool   `json:"pid_changed"`
+	Verified                bool   `json:"verified"`
 }
 
 type minimaRawServiceLog struct {

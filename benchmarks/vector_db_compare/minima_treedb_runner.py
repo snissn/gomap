@@ -536,6 +536,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         if type(old_pid) is not int or old_pid <= 0:
             raise RuntimeError("close/reopen requires the original TreeDB server PID")
         origin = (old_pid, self.process_identity(old_pid))
+        self.restart_origin_linux_identity = common.linux_process_identity(old_pid)
         self.restart_origin = origin
         self._controller_restart_origin = origin
         self.restart_origin_resource_end = None
