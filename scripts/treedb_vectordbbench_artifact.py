@@ -14,6 +14,7 @@ import argparse
 import contextlib
 import datetime as _dt
 import gzip
+import fcntl
 import hashlib
 import ipaddress
 import json
@@ -43,6 +44,9 @@ ROUTE_PROOF_SCHEMA = "treedb-vectordbbench-route-proof/v2"
 LIFECYCLE_SCHEMA = "treedb-vectordbbench-lifecycle/v1"
 LIFECYCLE_EVENT_SCHEMA = "treedb-vectordbbench-lifecycle-event/v1"
 LIFECYCLE_VALIDATION_SCHEMA = "treedb-vectordbbench-lifecycle-validation/v1"
+MEASUREMENT_SCHEMA = "treedb-construction-policy-4587-measurements/v4"
+MEASUREMENT_SOURCE_SCHEMA = "treedb-construction-policy-4587-measurement-source/v4"
+LIFECYCLE_EXCLUSIVE_LOCK = Path("/mnt/fast4tb/treedb-4587-c0.lock")
 PPROF_PROFILE_KINDS = frozenset({"cpu", "heap", "allocs", "block", "mutex"})
 OPTIMIZED_ROUTE_NAMES = frozenset({"exact_hnsw_search_pack_v1", "quantized_rerank"})
 LIFECYCLE_STAGES = (
@@ -159,12 +163,15 @@ class HarnessState:
     skips: list[dict[str, str]] = field(default_factory=list)
     service_pid: int | None = None
     service_binary: dict[str, Any] | None = None
+    storage_audit_binary: dict[str, Any] | None = None
     health: dict[str, Any] | None = None
     route_proof: dict[str, Any] | None = None
     vdbbench: list[dict[str, Any]] = field(default_factory=list)
     lifecycle: dict[str, Any] | None = None
     lifecycle_started_ns: int | None = None
     diagnostics: list[dict[str, Any]] = field(default_factory=list)
+    service_environment: dict[str, str] | None = None
+    vdbbench_environments: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 def add_skip(state: HarnessState, name: str, reason: str) -> None:
@@ -300,6 +307,33 @@ def memory_bytes() -> int | None:
     return None
 
 
+def linux_process_metrics(pid: int) -> dict[str, int]:
+    stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    close = stat.rfind(")")
+    if close < 0:
+        raise RuntimeError(f"/proc/{pid}/stat has no command terminator")
+    fields = stat[close + 2:].split()
+    if len(fields) < 13:
+        raise RuntimeError(f"/proc/{pid}/stat is missing CPU fields")
+    ticks = int(fields[11]) + int(fields[12])
+    ticks_per_second = int(os.sysconf("SC_CLK_TCK"))
+    if ticks < 0 or ticks_per_second <= 0:
+        raise RuntimeError(f"/proc/{pid}/stat has invalid CPU counters")
+    peak_rss_bytes = None
+    for line in Path(f"/proc/{pid}/status").read_text(encoding="utf-8").splitlines():
+        if line.startswith("VmHWM:"):
+            parts = line.split()
+            if len(parts) == 3 and parts[2] == "kB":
+                peak_rss_bytes = int(parts[1]) * 1024
+            break
+    if peak_rss_bytes is None or peak_rss_bytes <= 0:
+        raise RuntimeError(f"/proc/{pid}/status has no positive VmHWM")
+    return {
+        "cpu_nanoseconds": ticks * 1_000_000_000 // ticks_per_second,
+        "peak_rss_bytes": peak_rss_bytes,
+    }
+
+
 def storage_context(path: Path) -> dict[str, Any]:
     resolved = path.resolve(strict=False)
     try:
@@ -394,6 +428,97 @@ def valid_storage_context(storage: Any) -> bool:
     )
 
 
+def swap_used_bytes() -> int:
+    fields: dict[str, int] = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        key, separator, value = line.partition(":")
+        if separator and key in {"SwapTotal", "SwapFree"}:
+            fields[key] = int(value.strip().split()[0]) * 1024
+    if set(fields) != {"SwapTotal", "SwapFree"}:
+        raise RuntimeError("/proc/meminfo did not expose swap counters")
+    return fields["SwapTotal"] - fields["SwapFree"]
+
+
+def competing_benchmark_processes() -> list[dict[str, Any]]:
+    result = subprocess.run(
+        ["ps", "-eo", "pid=,ppid=,args="], text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+    )
+    rows = []
+    for line in result.stdout.splitlines():
+        fields = line.strip().split(maxsplit=2)
+        if len(fields) == 3:
+            rows.append({"pid": int(fields[0]), "ppid": int(fields[1]), "command": fields[2]})
+    owned = {os.getpid()}
+    while True:
+        descendants = {row["pid"] for row in rows if row["ppid"] in owned}
+        if descendants <= owned:
+            break
+        owned.update(descendants)
+    parents = {row["pid"]: row["ppid"] for row in rows}
+    ancestor = parents.get(os.getpid())
+    while ancestor is not None and ancestor > 1:
+        owned.add(ancestor)
+        ancestor = parents.get(ancestor)
+    return [
+        row for row in rows
+        if row["pid"] not in owned
+        and ("treedb-document-service" in row["command"].lower()
+             or "vectordbbench" in row["command"].lower())
+    ]
+
+
+def isolation_sample() -> dict[str, Any]:
+    return {
+        "timestamp": iso_now(),
+        "swap_used_bytes": swap_used_bytes(),
+        "competing_processes": competing_benchmark_processes(),
+    }
+
+
+class IsolationMonitor:
+    def __init__(self, interval: float) -> None:
+        self.interval = interval
+        self.samples = [isolation_sample()]
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._run, name="isolation-monitor", daemon=True)
+        self._error: BaseException | None = None
+        self._stopped = False
+        self.thread.start()
+
+    def _run(self) -> None:
+        try:
+            while not self.stop_event.wait(self.interval):
+                self.samples.append(isolation_sample())
+        except BaseException as exc:
+            self._error = exc
+            self.stop_event.set()
+
+    def stop(self) -> list[dict[str, Any]]:
+        if not self._stopped:
+            self.stop_event.set()
+            self.thread.join()
+            if self._error is not None:
+                raise RuntimeError("isolation monitor failed") from self._error
+            self.samples.append(isolation_sample())
+            self._stopped = True
+        return self.samples
+
+
+def finalize_isolation(path: Path, monitor: IsolationMonitor | None) -> None:
+    if monitor is None:
+        return
+    samples = monitor.stop()
+    isolation = json.loads(path.read_text())
+    isolation["samples"] = samples
+    isolation["coverage_completed_at"] = samples[-1]["timestamp"]
+    isolation["competing_processes"] = [
+        process for sample in samples for process in sample["competing_processes"]
+    ]
+    isolation["peak_swap_used_bytes"] = max(sample["swap_used_bytes"] for sample in samples)
+    write_json(path, isolation)
+
+
 def collect_context(
     gomap_root: Path, vectordbbench_dir: Path | None, storage_path: Path | None = None
 ) -> dict[str, Any]:
@@ -409,6 +534,10 @@ def collect_context(
             "go": command_output(["go", "version"]),
             "uname": command_output(["uname", "-a"]),
             "cpu_brand": cpu_brand(),
+            "pyarrow": command_output(
+                [sys.executable, "-c", "import pyarrow; print(pyarrow.__version__)"]
+            ),
+            "gomaxprocs": os.environ.get("GOMAXPROCS", ""),
             "logical_cpu_count": os.cpu_count() or 1,
             "physical_cpu_count": physical_cpu_count(),
             "memory_bytes": memory_bytes(),
@@ -529,6 +658,37 @@ def build_service(state: HarnessState, gomap_root: Path, service_bin: str | None
     return bin_path
 
 
+def build_storage_audit(
+    state: HarnessState, gomap_root: Path, storage_audit_bin: str | None,
+) -> Path:
+    if storage_audit_bin:
+        path = Path(storage_audit_bin).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(
+                f"TREEDB_VDBBENCH_STORAGE_AUDIT_BIN does not exist: {path}")
+        return path
+    bin_path = state.root / "bin" / "treedb-column-section-audit"
+    bin_path.parent.mkdir(parents=True, exist_ok=True)
+    run_command(
+        state,
+        "go_build_treedb_column_section_audit",
+        [
+            "go", "build", "-trimpath", "-buildvcs=false", "-o", str(bin_path),
+            "./cmd/treedb_column_section_audit",
+        ],
+        cwd=gomap_root,
+        timeout=180,
+        required=True,
+    )
+    return bin_path
+
+
+def lifecycle_subprocess_environment() -> dict[str, str]:
+    """Return the complete, non-inherited base environment for lifecycle work."""
+    gomaxprocs = os.environ.get("GOMAXPROCS") or str(os.cpu_count() or 1)
+    return {"GOMAXPROCS": gomaxprocs}
+
+
 def start_service(
     state: HarnessState,
     *,
@@ -542,6 +702,7 @@ def start_service(
     construction_decision_diagnostics: bool = False,
     pprof_addr: str = "",
     append_log: bool = False,
+    environment: dict[str, str] | None = None,
 ) -> tuple[subprocess.Popen[str], dict[str, Any], list[str]]:
     service_log = state.root / "service.log"
     address = host_port(host, port)
@@ -552,12 +713,17 @@ def start_service(
         cmd.extend(["-pprof", pprof_addr])
     data_dir.mkdir(parents=True, exist_ok=True)
     log_fh = service_log.open("a" if append_log else "w", encoding="utf-8")
+    if environment is not None:
+        if state.service_environment is not None and state.service_environment != environment:
+            raise ValueError("lifecycle service environment changed between launches")
+        state.service_environment = dict(environment)
     proc = subprocess.Popen(
         cmd,
         cwd=str(gomap_root),
         stdout=log_fh,
         stderr=subprocess.STDOUT,
         text=True,
+        env=environment,
         start_new_session=True,
     )
     state.service_pid = proc.pid
@@ -875,10 +1041,15 @@ def run_route_proof_smoke(
     return proof
 
 
-def pythonpath_for(vectordbbench_dir: Path, gomap_root: Path) -> str:
-    parts = [str(vectordbbench_dir), str(gomap_root / "clients" / "python" / "treedb_client" / "src")]
+def pythonpath_for(
+    vectordbbench_dir: Path, gomap_root: Path, *, include_parent: bool = True,
+) -> str:
+    parts = [
+        str(vectordbbench_dir),
+        str(gomap_root / "clients" / "python" / "treedb_client" / "src"),
+    ]
     existing = os.environ.get("PYTHONPATH")
-    if existing:
+    if include_parent and existing:
         parts.append(existing)
     return os.pathsep.join(parts)
 
@@ -976,14 +1147,17 @@ def vdbbench_base_cmd(args: argparse.Namespace, base_url: str, index_name: str, 
 
 
 def vdbbench_row_env(args: argparse.Namespace, vectordbbench_dir: Path, gomap_root: Path, state: HarnessState, row: str = "") -> dict[str, str]:
-    env = os.environ.copy()
-    env["PYTHONPATH"] = pythonpath_for(vectordbbench_dir, gomap_root)
+    env = lifecycle_subprocess_environment() if args.lifecycle else os.environ.copy()
+    env["PYTHONPATH"] = pythonpath_for(
+        vectordbbench_dir, gomap_root, include_parent=not args.lifecycle,
+    )
     env["RESULTS_LOCAL_DIR"] = str(state.root / "vdbbench-results" / row) if row else str(state.root / "vdbbench-results")
     env["LOG_FILE"] = str(state.root / "vdbbench.log")
     env["NUM_PER_BATCH"] = str(args.num_per_batch)
     if getattr(args, "lifecycle", False):
         env["TREEDB_LIFECYCLE_SIDECAR"] = str(state.root / "adapter-lifecycle.jsonl")
         env["TREEDB_LIFECYCLE_BOUNDARY_ACK"] = str(state.root / "lifecycle-boundary-diagnostics.json")
+        state.vdbbench_environments[row or "default"] = dict(env)
     return env
 
 
@@ -1004,7 +1178,14 @@ def file_identity(path: Path) -> dict[str, Any]:
 
 
 def canonical_sha256(value: Any) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def protocol_canonical_sha256(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def lifecycle_config_sha256(manifest: dict[str, Any]) -> str:
@@ -1173,16 +1354,20 @@ class LifecycleJournal:
 class DiagnosticsSampler:
     """Persist bounded service snapshots while the blocking benchmark runs."""
 
-    def __init__(self, url: str, path: Path, interval: float, data_dir: Path):
+    def __init__(
+        self, url: str, path: Path, interval: float, data_dir: Path,
+        service_pid: int | None = None,
+    ):
         self.url = url
         self.path = path
         self.interval = interval
         self.data_dir = data_dir
-        self.samples: list[dict[str, Any]] = []
+        self.service_pid = service_pid
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._stopped = False
         self._sample_lock = threading.Lock()
+        self.samples: list[dict[str, Any]] = []
 
     def sample(self, *, boundary: str | None = None, boundary_timestamp_ns: int | None = None) -> dict[str, Any]:
         with self._sample_lock:
@@ -1203,6 +1388,8 @@ class DiagnosticsSampler:
                     "bytes": wal_bytes,
                 },
             }
+            if self.service_pid is not None:
+                record["process"] = linux_process_metrics(self.service_pid)
             if boundary is not None:
                 record["boundary"] = boundary
                 record["boundary_timestamp_ns"] = boundary_timestamp_ns
@@ -1689,6 +1876,12 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     dataset_sha256 = dataset.get("sha256")
     if not isinstance(dataset_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", dataset_sha256):
         errors.append("lifecycle.dataset.sha256 must be a lowercase SHA-256")
+    dataset_sha256_after = dataset.get("sha256_after")
+    if (not isinstance(dataset_sha256_after, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", dataset_sha256_after)):
+        errors.append("lifecycle.dataset.sha256_after must be a lowercase SHA-256")
+    elif dataset_sha256_after != dataset_sha256:
+        errors.append("lifecycle dataset changed during VectorDBBench load")
     dimensions = _nonnegative_int(dataset.get("dimensions"), "lifecycle.dataset.dimensions", errors)
     if dimensions == 0:
         errors.append("lifecycle.dataset.dimensions must be positive")
@@ -2537,6 +2730,34 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 errors.append(f"completed adapter lifecycle sidecar is invalid: {exc}")
         if adapter is not None:
             optimize_response = adapter["optimize_response"]
+            if construction_decision_diagnostics is True:
+                optimize_status = optimize_response.get("status")
+                column_graph_build = (
+                    optimize_status.get("column_graph_build")
+                    if isinstance(optimize_status, dict) else None
+                )
+                decisions = (
+                    column_graph_build.get("construction_decisions")
+                    if isinstance(column_graph_build, dict) else None
+                )
+                phases = (
+                    [decisions.get("planning"), decisions.get("reciprocal")]
+                    if isinstance(decisions, dict) else []
+                )
+                if (
+                    len(phases) != 2
+                    or any(not isinstance(phase, dict) for phase in phases)
+                    or any(
+                        isinstance(phase.get("decisions"), bool)
+                        or not isinstance(phase.get("decisions"), int)
+                        or phase["decisions"] <= 0
+                        for phase in phases
+                    )
+                    or any(phase.get("saturated") is not False for phase in phases)
+                ):
+                    completion_errors.append(
+                        "construction-decision diagnostics are missing, empty, or saturated"
+                    )
             optimize_index = optimize_response.get("index")
             response_index_name = (
                 optimize_index.get("name") if isinstance(optimize_index, dict) else None
@@ -3557,6 +3778,10 @@ def finalize_partial_lifecycle(
     if result_status not in {"partial", "interrupted"}:
         raise ValueError(f"unsupported incomplete lifecycle status {result_status!r}")
     state.lifecycle["result_status"] = result_status
+    try:
+        state.lifecycle["dataset"]["sha256_after"] = sha256_file(args.lifecycle_dataset_file)
+    except OSError:
+        state.lifecycle["dataset"]["sha256_after"] = None
     if sampler is not None:
         sampler.stop()
         state.diagnostics = list(sampler.samples)
@@ -3849,6 +4074,282 @@ def lifecycle_ready_asset(
     return f"{index_name}:{vector_index_name}", generation, expected_service_generation
 
 
+def nested_numeric_values(value: Any, key: str) -> list[float]:
+    found: list[float] = []
+    if isinstance(value, dict):
+        for current_key, current_value in value.items():
+            if current_key == key:
+                if isinstance(current_value, (int, float)) and not isinstance(current_value, bool):
+                    found.append(float(current_value))
+                elif isinstance(current_value, str) and re.fullmatch(r"\d+(?:\.\d+)?", current_value):
+                    found.append(float(current_value))
+            found.extend(nested_numeric_values(current_value, key))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(nested_numeric_values(item, key))
+    return found
+def require_positive_construction_work(decisions: dict[str, Any]) -> None:
+    for phase in ("planning", "reciprocal"):
+        phase_evidence = decisions.get(phase)
+        count = phase_evidence.get("decisions") if isinstance(phase_evidence, dict) else None
+        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+            raise RuntimeError(
+                f"protocol measurements require positive {phase} construction work"
+            )
+
+
+
+
+def data_file_state(data_dir: Path) -> list[dict[str, Any]]:
+    files = []
+    for path in sorted(data_dir.rglob("*")):
+        if path.is_file():
+            stat = path.stat()
+            files.append({
+                "path": path.relative_to(data_dir).as_posix(),
+                "size": stat.st_size,
+                "device": stat.st_dev,
+                "inode": stat.st_ino,
+                "mtime_ns": stat.st_mtime_ns,
+                "ctime_ns": stat.st_ctime_ns,
+            })
+    return files
+
+
+def data_file_ledger(data_dir: Path) -> list[dict[str, Any]]:
+    files = []
+    for path in sorted(data_dir.rglob("*")):
+        if path.is_file():
+            files.append({
+                "path": path.relative_to(data_dir).as_posix(),
+                "size": path.stat().st_size,
+                "sha256": sha256_file(path),
+            })
+    return files
+
+
+def audited_data_files(
+    audit: dict[str, Any],
+    data_dir: Path,
+    data_files: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    raw_owned = audit.get("owned_files")
+    if not isinstance(raw_owned, list) or not raw_owned:
+        raise RuntimeError("storage ownership audit has no owned file ledger")
+    by_path = {item["path"]: item for item in data_files}
+    owned_paths: set[str] = set()
+    for position, item in enumerate(raw_owned):
+        item = _object(item, f"storage ownership owned_files[{position}]", [])
+        path = Path(str(item.get("path", ""))).resolve()
+        try:
+            relative = path.relative_to(data_dir.resolve()).as_posix()
+        except ValueError as exc:
+            raise RuntimeError(
+                "storage ownership owned file path escapes the data root") from exc
+        if relative in owned_paths:
+            raise RuntimeError("storage ownership audit repeats an owned file")
+        source = by_path.get(relative)
+        if source is None:
+            raise RuntimeError("storage ownership audit references a missing data file")
+        if source["size"] != item.get("bytes"):
+            raise RuntimeError("storage ownership audit owned file size changed")
+        owned_paths.add(relative)
+    return [item for item in data_files if item["path"] in owned_paths]
+
+
+def run_storage_ownership_audit(
+    state: HarnessState,
+    *,
+    gomap_root: Path,
+    audit_bin: Path,
+    data_dir: Path,
+    collection: str,
+) -> Path:
+    before = data_file_state(data_dir)
+    record = run_command(
+        state,
+        "treedb_storage_ownership_audit",
+        [
+            str(audit_bin),
+            "-db-dir", str(data_dir),
+            "-collection", collection,
+            "-detailed-sections=false",
+            "-read-integrity=verify",
+        ],
+        cwd=gomap_root,
+        env=lifecycle_subprocess_environment(),
+        timeout=1800,
+        required=True,
+    )
+    if record.stdout is None:
+        raise RuntimeError("storage ownership audit did not retain stdout")
+    raw_path = state.root / record.stdout
+    audit = _object(_strict_json_loads(raw_path.read_text(encoding="utf-8")), "storage ownership audit", [])
+    if audit.get("status") != "passed":
+        raise RuntimeError(f"storage ownership audit failed: {audit}")
+    after = data_file_state(data_dir)
+    if after != before:
+        raise RuntimeError("read-only storage ownership audit changed TreeDB data files")
+    path = state.root / "storage-ownership-audit.json"
+    write_json(path, audit)
+    return path
+
+
+def write_protocol_measurements(
+    state: HarnessState,
+    args: argparse.Namespace,
+    execution_commit: str,
+) -> None:
+    adapter_path = state.root / "adapter-lifecycle.jsonl"
+    diagnostics_path = state.root / "diagnostics.jsonl"
+    lifecycle_path = state.root / "lifecycle.jsonl"
+    isolation_path = state.root / "isolation.json"
+    if not isolation_path.is_file():
+        raise RuntimeError("protocol measurement source requires finalized isolation evidence")
+    adapter = read_adapter_lifecycle_sidecar(adapter_path)
+    diagnostics = [
+        _object(_strict_json_loads(line), "diagnostic sample", [])
+        for line in diagnostics_path.read_text(encoding="utf-8").splitlines()
+    ]
+    boundaries = {
+        sample.get("boundary"): sample
+        for sample in diagnostics
+        if isinstance(sample.get("boundary"), str)
+    }
+    optimize_start = _object(
+        boundaries.get("optimize_start", {}).get("process"), "optimize start process", []
+    )
+    optimize_end = _object(
+        boundaries.get("optimize_end", {}).get("process"), "optimize end process", []
+    )
+    elapsed = (adapter["optimize_end_ns"] - adapter["optimize_start_ns"]) / 1_000_000_000
+    cpu_seconds = (
+        int(optimize_end["cpu_nanoseconds"]) - int(optimize_start["cpu_nanoseconds"])
+    ) / 1_000_000_000
+    if elapsed <= 0 or cpu_seconds <= 0:
+        raise RuntimeError("protocol measurement source has no positive optimize CPU interval")
+    allocated = [
+        metric
+        for sample in diagnostics
+        for metric in nested_numeric_values(
+            sample.get("snapshot"), "treedb.process.memory.total_alloc_bytes"
+        )
+    ]
+    if not allocated or max(allocated) <= 0:
+        raise RuntimeError("protocol measurement source has no positive allocation telemetry")
+    peak_rss = max(
+        int(sample["process"]["peak_rss_bytes"])
+        for sample in diagnostics
+        if isinstance(sample.get("process"), dict)
+    )
+    if peak_rss <= 0:
+        raise RuntimeError("protocol measurement source has no positive peak RSS")
+
+    data_files = data_file_ledger(args.data_dir)
+    if not data_files:
+        raise RuntimeError("protocol measurement source has no persisted data files")
+    audit = _object(
+        _strict_json_loads((state.root / "storage-ownership-audit.json").read_text(encoding="utf-8")),
+        "storage ownership audit",
+        [],
+    )
+    measured_data_files = audited_data_files(audit, args.data_dir, data_files)
+    source = {
+        "schema_version": MEASUREMENT_SOURCE_SCHEMA,
+        "adapter_lifecycle": {
+            "path": adapter_path.relative_to(state.root).as_posix(),
+            "sha256": sha256_file(adapter_path),
+        },
+        "diagnostics": {
+            "path": diagnostics_path.relative_to(state.root).as_posix(),
+            "sha256": sha256_file(diagnostics_path),
+        },
+        "isolation": {
+            "path": isolation_path.relative_to(state.root).as_posix(),
+            "sha256": sha256_file(isolation_path),
+        },
+        "storage_ownership_audit": {
+            "path": "storage-ownership-audit.json",
+            "sha256": sha256_file(state.root / "storage-ownership-audit.json"),
+        },
+        "data_root": str(args.data_dir.resolve()),
+        "data_files": data_files,
+        "audited_data_files": measured_data_files,
+    }
+    source_path = state.root / "measurement-source.json"
+    write_json(source_path, source)
+
+    events = [
+        _object(_strict_json_loads(line), "lifecycle event", [])
+        for line in lifecycle_path.read_text(encoding="utf-8").splitlines()
+    ]
+    starts = [event for event in events if event.get("stage") == "startup"]
+    completions = [event for event in events if event.get("stage") == "teardown"]
+    if len(starts) != 1 or len(completions) != 1:
+        raise RuntimeError("protocol measurements require one lifecycle startup and teardown")
+    optimize = _object(adapter["optimize_response"], "optimize response", [])
+    status = _object(optimize.get("status"), "optimize status", [])
+    column_graph = _object(status.get("column_graph_build"), "column graph build", [])
+    adjacency_nanos = column_graph.get("adjacency_build_nanos")
+    decisions = column_graph.get("construction_decisions")
+    if (
+        isinstance(adjacency_nanos, bool)
+        or not isinstance(adjacency_nanos, int)
+        or adjacency_nanos <= 0
+        or not isinstance(decisions, dict)
+    ):
+        raise RuntimeError("protocol measurements require raw construction-decision evidence")
+    require_positive_construction_work(decisions)
+    configuration = {
+        "dimensions": args.lifecycle_dimensions,
+        "metric": "cosine",
+        "m": args.m,
+        "ef_construction": args.ef_construction,
+        "ef_search": args.ef_search,
+        "configured_rerank_candidates": args.rerank_candidates,
+        "effective_rerank_candidates": min(args.rerank_candidates, args.ef_search),
+        "top_k": args.k,
+    }
+    measurements = {
+        "schema_version": MEASUREMENT_SCHEMA,
+        "source": {
+            "path": source_path.relative_to(state.root).as_posix(),
+            "sha256": sha256_file(source_path),
+        },
+        "origin": {
+            "run_id": args.measurement_run_id,
+            "artifact_root": str(state.root),
+            "execution_commit": execution_commit,
+            "dataset_sha256": args.measurement_dataset_sha256,
+            "scale": args.lifecycle_vectors,
+            "role": args.measurement_role,
+            "partition": args.measurement_partition,
+            "ef_construction": args.ef_construction,
+            "lifecycle_sha256": sha256_file(lifecycle_path),
+            "lifecycle_started_at": starts[0]["timestamp"],
+            "lifecycle_completed_at": completions[0]["timestamp"],
+        },
+        "phase_seconds": {
+            "adjacency": adjacency_nanos / 1_000_000_000,
+            "optimize": elapsed,
+        },
+        "cpu_utilization_logical_cores": cpu_seconds / elapsed,
+        "determinism": {
+            "graph_config_checksum": protocol_canonical_sha256(configuration),
+            "persisted_data_ledger_checksum": protocol_canonical_sha256(measured_data_files),
+            "adapter_lifecycle_checksum": sha256_file(adapter_path),
+        },
+        "diagnostic_work_profile": decisions,
+        "resources": {
+            "peak_rss_bytes": peak_rss,
+            "persisted_bytes": sum(item["size"] for item in measured_data_files),
+            "cumulative_allocated_bytes": max(allocated),
+        },
+        "projected_10m_adjacency_reduction_fraction": None,
+    }
+    write_json(state.root / "measurements.json", measurements)
+
+
 def complete_lifecycle(
     state: HarnessState,
     args: argparse.Namespace,
@@ -3856,6 +4357,7 @@ def complete_lifecycle(
     service_bin: Path,
     service_proc: subprocess.Popen[str],
     sampler: DiagnosticsSampler,
+    storage_audit_bin: Path | None = None,
 ) -> list[str]:
     adapter = read_adapter_lifecycle_sidecar(state.root / "adapter-lifecycle.jsonl")
     milestone_path = write_lifecycle_load_milestones(state, adapter["records"])
@@ -3864,6 +4366,10 @@ def complete_lifecycle(
     expected_rows, dimensions = lifecycle_dataset_shape(args)
     if adapter["client_sent"] != expected_rows or adapter["server_accepted"] != expected_rows:
         raise RuntimeError(f"adapter lifecycle counts do not equal expected rows: {adapter}")
+    dataset_sha256_after = sha256_file(args.lifecycle_dataset_file)
+    state.lifecycle["dataset"]["sha256_after"] = dataset_sha256_after
+    if dataset_sha256_after != state.lifecycle["dataset"]["sha256"]:
+        raise RuntimeError("lifecycle dataset changed during VectorDBBench load")
     task_config_binding = bind_lifecycle_task_config(
         state, args, expected_rows, dimensions
     )
@@ -3959,6 +4465,7 @@ def complete_lifecycle(
         pprof_addr=host_port(args.host, args.pprof_port),
         construction_decision_diagnostics=args.construction_decision_diagnostics,
         append_log=True,
+        environment=lifecycle_subprocess_environment(),
     )
     try:
         state.health = health
@@ -4019,17 +4526,29 @@ def complete_lifecycle(
         terminate_process_group(reopened_proc, graceful_timeout=args.service_close_timeout)
         raise
 
+    storage_audit_path = None
+    if storage_audit_bin is not None:
+        storage_audit_path = run_storage_ownership_audit(
+            state,
+            gomap_root=gomap_root,
+            audit_bin=storage_audit_bin,
+            data_dir=args.data_dir,
+            collection=index_name,
+        )
+
     profile_relative = str(profile_path.relative_to(state.root))
     profile_sha = sha256_file(profile_path)
+    audit_artifacts = [storage_audit_path] if storage_audit_path is not None else []
     raw_artifacts = lifecycle_raw_artifacts(state, [
-        profile_path,
-        state.root / "diagnostics.jsonl",
         state.root / "adapter-lifecycle.jsonl",
-        state.root / "lifecycle-boundary-diagnostics.json",
+        state.root / "diagnostics.jsonl",
+        state.root / "lifecycle.jsonl",
+        state.root / "isolation.json",
         milestone_path,
         state.root / "service.log",
         state.root / "lifecycle_count_response.json",
         state.root / "lifecycle_route_response.json",
+        *audit_artifacts,
     ])
     assert state.lifecycle is not None
     state.diagnostics = list(sampler.samples)
@@ -4044,9 +4563,12 @@ def complete_lifecycle(
                 "kind": "heap",
                 "before_sequence": 8,
                 "after_sequence": 9,
-            }
+            },
         ],
     })
+    if storage_audit_path is not None:
+        state.lifecycle["storage_ownership_audit"] = (
+            storage_audit_path.relative_to(state.root).as_posix())
     return command
 
 
@@ -4063,6 +4585,7 @@ def write_readme(state: HarnessState, args: argparse.Namespace) -> None:
             "- lifecycle: `lifecycle.jsonl`",
             "- cold-reopen route proof: `lifecycle_route_response.json` (also embedded in the `route_verify` lifecycle stage)",
             "- service log: `service.log`",
+            "- storage ownership audit: `storage-ownership-audit.json` (read-only physical accounting and reachability)",
             f"- data dir: `{args.data_dir}`",
             f"- VDBBench load batch: `{args.num_per_batch}` documents",
             "",
@@ -4173,6 +4696,12 @@ def write_manifest(
             "num_per_batch": args.num_per_batch,
             "vdbbench_dry_run": args.vdbbench_dry_run,
             "construction_decision_diagnostics": args.construction_decision_diagnostics,
+            "python_executable": args.python,
+            "python_sha256": sha256_file(Path(args.python)),
+            "use_uv": args.use_uv,
+            "service_environment": state.service_environment,
+            "vdbbench_environments": state.vdbbench_environments,
+            "storage_audit_binary": state.storage_audit_binary,
         },
         "commands": [asdict(record) for record in state.commands],
         "vdbbench": state.vdbbench,
@@ -4217,11 +4746,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--profile", default=env_text("TREEDB_VDBBENCH_PROFILE", "command_wal_durable"))
     parser.add_argument("--service-bin", default=os.environ.get("TREEDB_VDBBENCH_SERVICE_BIN", ""), help="existing treedb-document-service binary")
     parser.add_argument(
+        "--storage-audit-bin",
+        default=os.environ.get("TREEDB_VDBBENCH_STORAGE_AUDIT_BIN", ""),
+        help="existing authorized treedb-column-section-audit binary",
+    )
+    parser.add_argument(
         "--construction-decision-diagnostics",
         action="store_true",
         help="enable service construction-decision diagnostics for every launch",
     )
     parser.add_argument("--health-timeout", type=float, default=float(env_text("TREEDB_VDBBENCH_HEALTH_TIMEOUT", "60")))
+    parser.add_argument(
+        "--exclusive-lock",
+        default=os.environ.get("TREEDB_VDBBENCH_EXCLUSIVE_LOCK", ""),
+        help=f"policy-wide lifecycle lock; must be {LIFECYCLE_EXCLUSIVE_LOCK}",
+    )
     parser.add_argument("--python", default=env_text("TREEDB_VDBBENCH_PYTHON", sys.executable or "python3"))
     parser.add_argument("--use-uv", choices=["auto", "on", "off"], default=env_text("TREEDB_VDBBENCH_USE_UV", "auto"), help="use `uv run --with ...` for VectorDBBench Python commands")
     parser.add_argument("--run-vdbbench", action="store_true", default=env_flag("TREEDB_VDBBENCH_RUN_VDBBENCH", False), help="run selected VectorDBBench TreeDB rows")
@@ -4257,6 +4796,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--lifecycle-dataset-name", default="", help="stable dataset label recorded with its checksum")
     parser.add_argument("--lifecycle-vectors", type=int, default=0, help="custom-case vector count, verified against canonical task_config")
     parser.add_argument("--lifecycle-dimensions", type=int, default=0, help="custom-case dimensions, verified against canonical task_config")
+    parser.add_argument("--measurement-run-id", default="", help="protocol run identity; enables raw measurement output")
+    parser.add_argument("--measurement-dataset-sha256", default="", help="canonical protocol dataset identity")
+    parser.add_argument(
+        "--measurement-role",
+        choices=["", "screening_candidate", "screening_control", "decision_candidate", "decision_control"],
+        default="",
+    )
+    parser.add_argument("--measurement-partition", choices=["", "selection", "holdout"], default="")
     parser.add_argument("--diagnostics-interval", type=float, default=5.0, help="seconds between lifecycle service/filesystem snapshots")
     parser.add_argument(
         "--service-close-timeout",
@@ -4320,12 +4867,45 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             parser.error("diagnostics-interval must be positive")
         if args.service_close_timeout <= 0:
             parser.error("service-close-timeout must be positive")
+        measurement_origin = (
+            args.measurement_run_id,
+            args.measurement_dataset_sha256,
+            args.measurement_role,
+            args.measurement_partition,
+        )
+        if any(measurement_origin) and not all(measurement_origin):
+            parser.error("protocol measurement output requires every measurement-origin argument")
+        if args.measurement_run_id:
+            if not args.construction_decision_diagnostics:
+                parser.error("protocol measurement output requires construction-decision diagnostics")
+            if re.fullmatch(r"[0-9a-f]{64}", args.measurement_dataset_sha256) is None:
+                parser.error("measurement-dataset-sha256 must be a lowercase SHA-256")
+    python_path = Path(args.python).expanduser()
+    if not python_path.is_absolute():
+        resolved_python = shutil.which(args.python)
+        if resolved_python is None:
+            parser.error(f"python executable not found: {args.python}")
+        python_path = Path(resolved_python)
+    if not python_path.is_file():
+        parser.error(f"python executable is not a regular file: {python_path}")
+    args.python = str(python_path)
+    if args.storage_audit_bin:
+        storage_audit_path = Path(args.storage_audit_bin).expanduser().resolve()
+        if not storage_audit_path.is_file():
+            parser.error(f"storage-audit binary is not a regular file: {storage_audit_path}")
+        args.storage_audit_bin = str(storage_audit_path)
     args.out = Path(args.out).expanduser().resolve()
     args.validate_lifecycle = None
     args.vectordbbench_dir = Path(args.vectordbbench_dir).expanduser().resolve() if args.vectordbbench_dir else None
     args.lifecycle_dataset_file = (
         Path(args.lifecycle_dataset_file).expanduser().resolve() if args.lifecycle_dataset_file else None
     )
+    args.exclusive_lock = (
+        Path(args.exclusive_lock).expanduser().resolve()
+        if args.exclusive_lock else (LIFECYCLE_EXCLUSIVE_LOCK if args.lifecycle else None)
+    )
+    if args.lifecycle and args.exclusive_lock != LIFECYCLE_EXCLUSIVE_LOCK:
+        parser.error(f"lifecycle exclusive lock must be {LIFECYCLE_EXCLUSIVE_LOCK}")
     if args.lifecycle and (args.lifecycle_dataset_file is None or not args.lifecycle_dataset_file.is_file()):
         parser.error("lifecycle dataset file must exist and be a regular file")
     if args.port == 0:
@@ -4426,11 +5006,50 @@ def main(argv: list[str]) -> int:
             print("harness failed before start; error=clean source commit identity is unavailable", file=sys.stderr)
             return 2
     service_proc: subprocess.Popen[str] | None = None
+    lock_stream = None
+    isolation_monitor: IsolationMonitor | None = None
+    isolation_path = args.out / "isolation.json"
+    if args.lifecycle:
+        assert args.exclusive_lock is not None
+        args.exclusive_lock.parent.mkdir(parents=True, exist_ok=True)
+        lock_stream = args.exclusive_lock.open("a+")
+        try:
+            fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock_stream.close()
+            print(f"harness failed before start; error=exclusive lock is held: {args.exclusive_lock}",
+                  file=sys.stderr)
+            return 2
+        try:
+            lock_acquired_at = iso_now()
+            isolation_monitor = IsolationMonitor(args.diagnostics_interval)
+            write_json(isolation_path, {
+                "schema_version": "treedb-construction-policy-4587-isolation/v2",
+                "artifact_root": str(args.out),
+                "lock_path": str(args.exclusive_lock),
+                "lock_acquired_at": lock_acquired_at,
+                "lock_held_through_evidence": True,
+                "gomaxprocs": int(os.environ.get("GOMAXPROCS", "0")),
+                "competing_processes": isolation_monitor.samples[0]["competing_processes"],
+                "samples": isolation_monitor.samples,
+            })
+        except Exception as exc:  # noqa: BLE001
+            if isolation_monitor is not None:
+                isolation_monitor.stop()
+            fcntl.flock(lock_stream.fileno(), fcntl.LOCK_UN)
+            lock_stream.close()
+            print(f"harness failed before start; error={exc}", file=sys.stderr)
+            return 2
     service_command: list[str] | None = None
     sampler: DiagnosticsSampler | None = None
     try:
         service_bin = build_service(state, gomap_root, args.service_bin or None)
         state.service_binary = file_identity(service_bin)
+        storage_audit_bin = (
+            build_storage_audit(state, gomap_root, args.storage_audit_bin or None)
+            if args.lifecycle else None
+        )
+        state.storage_audit_binary = file_identity(storage_audit_bin) if storage_audit_bin else None
         service_proc, health, service_command = start_service(
             state,
             gomap_root=gomap_root,
@@ -4442,6 +5061,7 @@ def main(argv: list[str]) -> int:
             health_timeout=args.health_timeout,
             pprof_addr=host_port(args.host, args.pprof_port) if args.lifecycle else "",
             construction_decision_diagnostics=args.construction_decision_diagnostics,
+            environment=lifecycle_subprocess_environment() if args.lifecycle else None,
         )
         state.lifecycle_started_ns = time.time_ns()
         state.health = health
@@ -4452,6 +5072,7 @@ def main(argv: list[str]) -> int:
                 args.out / "diagnostics.jsonl",
                 args.diagnostics_interval,
                 args.data_dir,
+                service_proc.pid,
             )
             sampler.start()
             initialize_lifecycle_capture(state, args, sampler)
@@ -4467,9 +5088,19 @@ def main(argv: list[str]) -> int:
         )
         if args.lifecycle:
             assert sampler is not None
+            assert storage_audit_bin is not None
             service_command = complete_lifecycle(
-                state, args, gomap_root, service_bin, service_proc, sampler
+                state, args, gomap_root, service_bin, service_proc, sampler,
+                storage_audit_bin=storage_audit_bin,
             )
+            monitor = isolation_monitor
+            isolation_monitor = None
+            finalize_isolation(isolation_path, monitor)
+            if args.measurement_run_id:
+                execution_commit = context.get("gomap", {}).get("commit")
+                if not isinstance(execution_commit, str) or re.fullmatch(r"[0-9a-f]{40}", execution_commit) is None:
+                    raise RuntimeError("protocol measurements require an exact gomap commit")
+                write_protocol_measurements(state, args, execution_commit)
             service_proc = None
             sampler = None
         elif args.skip_route_proof:
@@ -4506,7 +5137,10 @@ def main(argv: list[str]) -> int:
         with contextlib.suppress(Exception):
             finalize_partial_lifecycle(state, args, sampler, result_status="interrupted")
             sampler = None
+        monitor = isolation_monitor
+        isolation_monitor = None
         with contextlib.suppress(Exception):
+            finalize_isolation(isolation_path, monitor)
             write_manifest(state, args=args, context=context, service_command=service_command)
         print(f"harness interrupted; artifact_root={args.out}", file=sys.stderr)
         return 130
@@ -4519,16 +5153,33 @@ def main(argv: list[str]) -> int:
         with contextlib.suppress(Exception):
             finalize_partial_lifecycle(state, args, sampler)
             sampler = None
+        monitor = isolation_monitor
+        isolation_monitor = None
+        with contextlib.suppress(Exception):
+            finalize_isolation(isolation_path, monitor)
         with contextlib.suppress(Exception):
             write_manifest(state, args=args, context=context, service_command=service_command)
         print(f"harness failed; artifact_root={args.out}; error={exc}", file=sys.stderr)
         return 1
     finally:
-        if sampler is not None:
-            sampler.stop()
-        if service_proc is not None:
-            terminate_process_group(service_proc, graceful_timeout=args.service_close_timeout)
-
+        monitor = isolation_monitor
+        isolation_monitor = None
+        try:
+            finalize_isolation(isolation_path, monitor)
+        finally:
+            try:
+                if sampler is not None:
+                    sampler.stop()
+            finally:
+                try:
+                    if service_proc is not None:
+                        terminate_process_group(
+                            service_proc, graceful_timeout=args.service_close_timeout,
+                        )
+                finally:
+                    if lock_stream is not None:
+                        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_UN)
+                        lock_stream.close()
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
