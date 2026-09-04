@@ -608,6 +608,12 @@ recommended new adapter layout. Supplying residual JSON, or using the complete
 typed batch API for indexed strings and vectors, avoids retaining a full JSON
 embedding solely as an intermediate representation.
 
+The legacy implicit-residual buffered path can expose its submitted full JSON
+while pending, then reconstruct from typed field owners after publication. A
+conflicting document vector is therefore not a stable output oracle for that
+transient state. Replay comparisons must check accepted typed values and compare
+published output; new typed adapters should supply residual-only payloads.
+
 ### Performance-engineering workflow
 
 - **Persona/problem:** engineer investigating a typed-column regression.

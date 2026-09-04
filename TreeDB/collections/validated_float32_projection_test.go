@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 
@@ -23,6 +24,109 @@ func TestValidatedFloat32ProjectionCommandWALPreservesAuthority(t *testing.T) {
 	t.Run("legacy_derived_retained", func(t *testing.T) {
 		testValidatedProjectionReplayAuthority(t, ColumnRetainedPayloadNonColumn, nil, false)
 	})
+}
+
+func TestValidatedFloat32ProjectionUnsortedCommandWALAlignment(t *testing.T) {
+	for _, route := range []struct {
+		limit    int
+		withText bool
+	}{{0, false}, {1, false}, {0, true}, {1, true}} {
+		for _, mode := range []string{"full", "implicit", "explicit"} {
+			t.Run(fmt.Sprintf("limit=%d/text=%t/%s", route.limit, route.withText, mode), func(t *testing.T) {
+				policy := ColumnRetainedPayloadNonColumn
+				if mode == "full" {
+					policy = ColumnRetainedPayloadFull
+				}
+				dir, d, col := openValidatedFloat32ProjectionCollectionWithPolicyAndBufferLimit(t, 3, policy, route.limit, route.withText)
+				defer d.Close()
+				if err := d.Checkpoint(); err != nil {
+					t.Fatal(err)
+				}
+				replayDir := t.TempDir()
+				copyColumnStoreCommandWALReplayBenchmarkDirM10C(t, dir, replayDir)
+				ids := [][]byte{[]byte("z"), []byte("a"), []byte("m")}
+				vectors := [][]float32{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}
+				documents := make([][]byte, len(ids))
+				retained := make([][]byte, len(ids))
+				for row, id := range ids {
+					documents[row] = []byte(fmt.Sprintf(`{"id":%q,"content":"row-%d","embedding":[1,1,1]}`, id, row))
+					retained[row] = []byte(fmt.Sprintf(`{"id":%q,"content":"row-%d"}`, id, row))
+				}
+				var retainedOption [][][]byte
+				if mode == "explicit" {
+					retainedOption = append(retainedOption, retained)
+				}
+				if _, _, err := col.InsertBatchWithStatsValidatedFloat32Projection(ids, documents, "embedding", VectorMetricCosine, vectors, retainedOption...); err != nil {
+					t.Fatal(err)
+				}
+				frames := collectionCommandWALFrames(t, dir)
+				accepted := make([][]byte, len(ids))
+				for row, id := range ids {
+					var err error
+					accepted[row], err = col.Get(id)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				found := false
+				for _, frame := range frames {
+					if frame.Kind != commitlog.CommandKindCollectionInsertBatchByID {
+						continue
+					}
+					found = true
+					payload, err := commitlog.DecodeCollectionTypedBatchPayload(frame.Payload)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(payload.Documents) != len(ids) {
+						t.Fatalf("WAL rows=%d", len(payload.Documents))
+					}
+					for _, doc := range payload.Documents {
+						row := bytes.IndexByte([]byte("zam"), doc.ID[0])
+						if row < 0 || len(doc.Values) != 1 || !slices.Equal(doc.Values[0].Vector, vectors[row]) {
+							t.Fatalf("misaligned WAL vector: %+v", doc)
+						}
+						want := retained[row]
+						if mode == "full" {
+							want = documents[row]
+						}
+						assertJSONEqualM13C(t, doc.Retained, want)
+					}
+					writeCollectionCommandWALFrame(t, replayDir, frame.LSN, frame.Kind, frame.PayloadFormat, frame.Payload)
+				}
+				if !found {
+					t.Fatal("no insert frame")
+				}
+				// Implicit residuals historically retain the original full JSON in
+				// the pending overlay. Compare replay with the published typed view.
+				if err := col.Flush(); err != nil {
+					t.Fatal(err)
+				}
+				for row, id := range ids {
+					published, err := col.Get(id)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !bytes.Equal(accepted[row], published) {
+						t.Logf("row %q pending=%s published=%s", id, accepted[row], published)
+					}
+					accepted[row] = published
+				}
+				replayDB := openCollectionCommandWALDB(t, replayDir)
+				defer replayDB.Close()
+				replayCol, err := NewCollectionManager(replayDB).OpenCollection("docs")
+				if err != nil {
+					t.Fatal(err)
+				}
+				for row, id := range ids {
+					got, err := replayCol.Get(id)
+					if err != nil || !bytes.Equal(got, accepted[row]) {
+						t.Fatalf("row %q replay=%s accepted=%s err=%v", id, got, accepted[row], err)
+					}
+				}
+			})
+		}
+	}
 }
 
 func testValidatedProjectionReplayAuthority(t *testing.T, policy ColumnRetainedPayloadPolicy, retained []byte, supplyRetained bool) {

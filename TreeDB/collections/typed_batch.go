@@ -390,14 +390,21 @@ func typedCommandPayload(meta CollectionMeta, docs []commitlog.CollectionDocumen
 			ordered = bytes.Equal(docs[i].ID, p.ids[i])
 		}
 		if !ordered {
-			legacyPositions = make(map[string]int, len(p.ids))
-			for i, id := range p.ids {
-				legacyPositions[string(id)] = i
+			var err error
+			legacyPositions, err = p.legacyVectorRows(p.ids)
+			if err != nil {
+				return commitlog.CollectionTypedBatchPayload{}, err
 			}
 		}
 	}
-	columns := append([]ColumnStoreColumn(nil), cfg.Columns...)
-	sort.Slice(columns, func(i, j int) bool { return columns[i].Name < columns[j].Name })
+	columns := cfg.Columns
+	if len(columns) > 1 {
+		columns = append([]ColumnStoreColumn(nil), columns...)
+		sort.Slice(columns, func(i, j int) bool { return columns[i].Name < columns[j].Name })
+	}
+	if p.preparedRetainedJSON != nil && (len(p.preparedRetainedJSON) != len(docs) || len(p.preparedRetainedDocuments) != len(docs)) {
+		return commitlog.CollectionTypedBatchPayload{}, errors.New("collections: typed command prepared retained row count mismatch")
+	}
 	payload := commitlog.CollectionTypedBatchPayload{LegacyProjection: p.columns == nil || p.legacyTyped, Collection: meta.Name, SchemaHash: cfg.SchemaHash, Columns: make([]commitlog.CollectionTypedColumn, len(columns)), Documents: make([]commitlog.CollectionTypedDocument, len(docs))}
 	positions := make([]int, len(columns))
 	for i, col := range columns {
@@ -445,12 +452,11 @@ func typedCommandPayload(meta CollectionMeta, docs []commitlog.CollectionDocumen
 		if cfg.RetainedPayload == ColumnRetainedPayloadNonColumn && p.columns == nil {
 			if p.retainedJSON != nil {
 				retained = p.retainedJSON[legacyRow]
-			} else if p.preparedRetainedByID != nil {
-				var ok bool
-				retained, ok = p.preparedRetainedByID[string(d.ID)]
-				if !ok {
-					return payload, errors.New("collections: typed command missing retained row")
+			} else if p.preparedRetainedJSON != nil {
+				if !bytes.Equal(p.preparedRetainedDocuments[row].ID, d.ID) {
+					return payload, errors.New("collections: typed command prepared retained row id mismatch")
 				}
+				retained = p.preparedRetainedJSON[row]
 			} else {
 				var err error
 				retained, err = columnRetainedPayloadJSONFromJSONDocument(*cfg, d.Document)

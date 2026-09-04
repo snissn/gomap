@@ -2612,7 +2612,7 @@ are little-endian:
 
 ```text
 u16 Version        // 1
-u64 SchemaHash     // nonzero declared column-store schema hash
+u64 SchemaHash     // nonzero declared typed-storage schema hash
 u32 ColumnCount
 u32 DocumentCount
 u8 Flags           // bit 0=LegacyProjection; other bits must be zero

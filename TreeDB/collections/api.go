@@ -11651,10 +11651,8 @@ func prepareInsertBatchPlanRetainedPayload(meta CollectionMeta, plan *insertBatc
 	plan.stats.RetainedPayloadPrepare += time.Since(start)
 	plan.stats.RetainedPayloadRows += len(retainedDocuments)
 	if projection != nil && projection.retainedJSON == nil {
-		projection.preparedRetainedByID = make(map[string][]byte, len(owned))
-		for row := range owned {
-			projection.preparedRetainedByID[string(owned[row].ID)] = retainedDocuments[row]
-		}
+		projection.preparedRetainedDocuments = owned
+		projection.preparedRetainedJSON = retainedDocuments
 	}
 
 	if direct := plan.directBufferedInsert; direct != nil && direct.primaryRootName == primaryRootName {
@@ -12954,14 +12952,13 @@ func (c *Collection) insertBatchNoIndex(
 		stats.RetainedPayloadSemanticStreamTableBuild = prepared.semanticStreamPrepareMetrics.TableBuild
 	}
 
-	if projection := execOpts.trustedFloat32Projection; projection != nil && projection.retainedJSON == nil && retainedDocuments != nil {
-		projection.preparedRetainedByID = make(map[string][]byte, len(entries))
-		for row := range entries {
-			projection.preparedRetainedByID[string(entries[row].id)] = retainedDocuments[row]
-		}
-	}
 	if commandWALIntent == nil && c.commandWALActive(nil) {
-		commandWALIntent, err = c.newCollectionInsertCommandWALIntent(collectionDocumentsFromNoIndexEntries(entries), nil, execOpts.trustedFloat32Projection)
+		commandDocuments := collectionDocumentsFromNoIndexEntries(entries)
+		if projection := execOpts.trustedFloat32Projection; projection != nil && projection.retainedJSON == nil && retainedDocuments != nil {
+			projection.preparedRetainedDocuments = commandDocuments
+			projection.preparedRetainedJSON = retainedDocuments
+		}
+		commandWALIntent, err = c.newCollectionInsertCommandWALIntent(commandDocuments, nil, execOpts.trustedFloat32Projection)
 		if err != nil {
 			return nil, err
 		}

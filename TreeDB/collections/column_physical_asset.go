@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/buger/jsonparser"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/tidwall/gjson"
 )
@@ -56,7 +57,9 @@ type trustedFloat32Projection struct {
 	retainedJSON [][]byte
 	// Per-admission prepared residuals, reused by WAL encoding without extracting
 	// the indexed vector a second time. This does not change output reconstruction.
-	preparedRetainedByID map[string][]byte
+	preparedRetainedDocuments []commitlog.CollectionDocument
+	preparedRetainedJSON      [][]byte
+	vectorRowsByID            map[string]int
 }
 
 func newTrustedFloat32Projection(ids, documents [][]byte, column string, metric VectorMetric, vectors [][]float32, retainedJSON [][]byte) (*trustedFloat32Projection, error) {
@@ -220,6 +223,22 @@ func validateTrustedFloat32ProjectionRetainedJSONWithOwnership(ids [][]byte, pro
 	return owned, nil
 }
 
+func (projection *trustedFloat32Projection) legacyVectorRows(ids [][]byte) (map[string]int, error) {
+	if projection.vectorRowsByID != nil {
+		return projection.vectorRowsByID, nil
+	}
+	rows := make(map[string]int, len(ids))
+	for row, id := range ids {
+		key := string(id)
+		if _, exists := rows[key]; exists {
+			return nil, fmt.Errorf("collections: validated float32 projection duplicate id at row %d", row)
+		}
+		rows[key] = row
+	}
+	projection.vectorRowsByID = rows
+	return rows, nil
+}
+
 func applyTrustedFloat32Projection(ids [][]byte, documents []columnWriteDocument, projection *trustedFloat32Projection) error {
 	if projection == nil {
 		return nil
@@ -230,23 +249,19 @@ func applyTrustedFloat32Projection(ids [][]byte, documents []columnWriteDocument
 	if len(ids) != len(documents) || len(projection.vectors) != len(documents) {
 		return fmt.Errorf("collections: validated float32 projection ids=%d documents=%d vectors=%d", len(ids), len(documents), len(projection.vectors))
 	}
-	vectorsByID := make(map[string][]float32, len(ids))
-	for row := range ids {
-		key := string(ids[row])
-		if _, exists := vectorsByID[key]; exists {
-			return fmt.Errorf("collections: validated float32 projection duplicate id at row %d", row)
-		}
-		vectorsByID[key] = projection.vectors[row]
+	vectorRows, err := projection.legacyVectorRows(ids)
+	if err != nil {
+		return err
 	}
 	for row := range documents {
-		vector, ok := vectorsByID[string(documents[row].ID)]
+		vectorRow, ok := vectorRows[string(documents[row].ID)]
 		if !ok {
 			return fmt.Errorf("collections: validated float32 projection document row %d id mismatch", row)
 		}
 		documents[row].declaredValues = []columnDeclaredValue{{
 			Type:          ColumnStoreValueFloat32Vector,
 			Present:       true,
-			Float32Vector: vector,
+			Float32Vector: projection.vectors[vectorRow],
 		}}
 		documents[row].declaredValuesReady = true
 		documents[row].reconstructFromRetained = projection.retainedJSON != nil

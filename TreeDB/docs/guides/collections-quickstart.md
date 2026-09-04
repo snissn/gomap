@@ -53,7 +53,7 @@ overlapping retained fields must be rejected before admission. Binary transport
 alone does not establish this contract: the write planner and WAL replay must
 consume those same typed inputs.
 
-For durable-at-acknowledgement writes, open the DB with the explicit
+Current behavior: for durable-at-acknowledgement writes, open the DB with the explicit
 `command_wal_durable` production profile. Merely enabling the command-WAL format
 feature on a low-level unprofiled backend is not an equivalent durability
 boundary. See [write-path and durability](../spec/write-path-and-durability.md).
