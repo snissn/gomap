@@ -3,6 +3,7 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"math/bits"
 	"testing"
 )
 
@@ -45,6 +46,49 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 		return HybridScalarFilter{IndexName: index, Range: &IndexRangeOptions{Lower: IndexRangeBound{Value: fmt.Sprintf("%05d", lo), Inclusive: true}, Upper: IndexRangeBound{Value: fmt.Sprintf("%05d", hi), Inclusive: true}}}
 	}
 	limits := typedGraphFilterLimits{SourceIDs: 20000, SourceBytes: 1 << 20, RetainedBytes: 1 << 20, MappingWork: 1 << 20, InspectedEntries: 20000}
+	t.Run("single_leaf_allocation_growth", func(t *testing.T) {
+		// Structural regression guard, not a latency/residency qualification:
+		// a borrowed single-leaf scan must not allocate one string per ID.
+		filter := rangeFilter("user", 0, 4096)
+		allocs := testing.AllocsPerRun(3, func() {
+			if _, err := prepareTypedGraphFilter(overlay, filter, limits); err != nil {
+				t.Fatal(err)
+			}
+		})
+		t.Logf("single-leaf 4097 IDs: allocations=%g", allocs)
+		if allocs >= 4097/2 {
+			t.Fatalf("single-leaf preparation retains per-ID allocation growth: %g", allocs)
+		}
+		limited := limits
+		const word = bits.UintSize / 8
+		limited.RetainedBytes = 4097 * word
+		plan, err := prepareTypedGraphFilter(overlay, filter, limited)
+		if err != nil || plan.retainedBytes > limited.RetainedBytes || plan.ordinalGrowthPeakBytes < plan.retainedBytes || plan.ordinalGrowthPeakBytes > 2*limited.RetainedBytes {
+			t.Fatalf("checked capacity/growth accounting: plan=%+v err=%v", plan, err)
+		}
+		limited.RetainedBytes--
+		if plan, err := prepareTypedGraphFilter(overlay, filter, limited); !errors.Is(err, errTypedGraphSearchBudget) || plan != nil {
+			t.Fatalf("capacity limit returned partial plan=%+v err=%v", plan, err)
+		}
+		// One matching row canonicalizes to a range, but its old backing
+		// capacity remains live while the exact ID-rank slice is copied.
+		one, err := prepareTypedGraphFilter(overlay, HybridScalarFilter{IndexName: "user", Value: "00000"}, limits)
+		if err != nil || one.count != 1 || one.ordinalGrowthPeakBytes < 65*word {
+			t.Fatalf("exact rank omitted live capacity: plan=%+v err=%v", one, err)
+		}
+		for _, bound := range []func(*typedGraphFilterLimits){
+			func(l *typedGraphFilterLimits) { l.SourceIDs = 4096 },
+			func(l *typedGraphFilterLimits) { l.SourceBytes = 1 },
+			func(l *typedGraphFilterLimits) { l.MappingWork = 1 },
+			func(l *typedGraphFilterLimits) { l.InspectedEntries = 4096 },
+		} {
+			limited := limits
+			bound(&limited)
+			if plan, err := prepareTypedGraphFilter(overlay, filter, limited); !errors.Is(err, errTypedGraphSearchBudget) || plan != nil {
+				t.Fatalf("single-leaf budget returned partial plan=%+v err=%v", plan, err)
+			}
+		}
+	})
 	for _, count := range []int{512, 513, 1000, 4096, 4097} {
 		plan, err := prepareTypedGraphFilter(overlay, rangeFilter("user", 0, count-1), limits)
 		if err != nil || plan.count != count || plan.base.Count() != count || len(plan.delta) != 0 || !plan.validFor(overlay) {

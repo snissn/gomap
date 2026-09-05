@@ -158,7 +158,12 @@ correctly produce a small exact intersection. Incomplete probes fail with an
 explicit budget error. Source ID count and bytes are checked before copying;
 physical inspected entries (including tombstones), mapping work and retained
 ordinal bytes have separate caller limits. Array/multikey dedupe is unsupported
-in this internal typed-scalar seam.
+in this internal typed-scalar seam. A single leaf streams borrowed posting IDs
+through a bounded 512-ID locator chunk, without an owning string set. Multiple
+leaves retain complete owning sets for intersection. Single-leaf ordinal slice
+capacity is checked before growth; the separate ordinal growth-peak counter
+includes old plus new buffers and the final exact-rank copy, including buffers
+released by all/range canonicalization. It is not a total Go heap bound.
 
 | Graph-search role | Owner / tier | Admission status | Prepared shape and query boundary | Evidence required |
 | --- | --- | --- | --- | --- |

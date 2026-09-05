@@ -23,6 +23,9 @@ type typedGraphPreparedFilter struct {
 	sourceIDs, sourceBytes, retainedBytes, mappingWork int
 	inspectedEntries                                   int
 	scratchIDBytes, scratchRows                        int
+	// Ordinal growth peak includes old and new backing arrays during copying;
+	// it is separate from retained capacity, not a total Go heap measurement.
+	ordinalGrowthPeakBytes int
 }
 
 func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScalarFilter, limits typedGraphFilterLimits) (*typedGraphPreparedFilter, error) {
@@ -47,6 +50,9 @@ func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScal
 		leaves = []HybridScalarFilter{filter}
 	}
 	lookup := hybridScalarLookupView{snapshot: overlay.current.snapshot, catalog: overlay.current.catalog}
+	if len(leaves) == 1 {
+		return prepareTypedGraphSingleLeaf(plan, lookup, leaves[0], limits)
+	}
 	var allowed hybridScalarAllowSet
 	for leafIndex, leaf := range leaves {
 		idx, ok := findIndex(overlay.current.catalog.meta.Indexes, leaf.IndexName)
@@ -126,19 +132,14 @@ func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScal
 			if !found {
 				return ErrVectorIndexSnapshotMismatch
 			}
-			i := sort.Search(len(overlay.rows), func(i int) bool { return bytes.Compare(overlay.rows[i].ID, ref.DocumentID) >= 0 })
-			if i < len(overlay.rows) && bytes.Equal(overlay.rows[i].ID, ref.DocumentID) {
-				row := overlay.rows[i]
-				if row.Deleted || row.Generation != ref.Generation || row.PartID != ref.PartID || row.RowIndex != ref.RowIndex || row.AppliedCommandLSN != ref.AppliedCommandLSN {
-					return ErrVectorIndexSnapshotMismatch
-				}
+			ordinal, delta, err := overlay.ordinalForCurrentRef(ref)
+			if err != nil {
+				return err
+			}
+			if delta {
 				deltaCount++
-				ordinals[len(ordinals)-deltaCount] = i
+				ordinals[len(ordinals)-deltaCount] = ordinal
 			} else {
-				ordinal, ok := inverse.ordinalForPhysicalRow(ref)
-				if !ok {
-					return ErrVectorIndexSnapshotMismatch
-				}
 				ordinals[baseCount] = ordinal
 				baseCount++
 			}
@@ -165,14 +166,21 @@ func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScal
 	if err := flush(); err != nil {
 		return nil, err
 	}
-	slices.Sort(ordinals[:baseCount])
+	return finishTypedGraphFilter(plan, ordinals[:baseCount:baseCount], ordinals[len(ordinals)-deltaCount:], limits)
+}
+
+func finishTypedGraphFilter(plan *typedGraphPreparedFilter, baseOrdinals, deltaOrdinals []int, limits typedGraphFilterLimits) (*typedGraphPreparedFilter, error) {
+	overlay := plan.overlay
+	liveOrdinalBytes := plan.retainedBytes
+	plan.ordinalGrowthPeakBytes = max(plan.ordinalGrowthPeakBytes, liveOrdinalBytes)
+	slices.Sort(baseOrdinals)
 	var err error
-	plan.base, err = typedcolumn.NewSparseRowSelectionNoCopy(inverse.rows, ordinals[:baseCount:baseCount])
+	plan.base, err = typedcolumn.NewSparseRowSelectionNoCopy(overlay.base.reader.rowRefSource.rows, baseOrdinals)
 	if err != nil {
 		return nil, err
 	}
-	if deltaCount > 0 {
-		plan.delta = ordinals[len(ordinals)-deltaCount:]
+	if len(deltaOrdinals) > 0 {
+		plan.delta = deltaOrdinals
 		slices.Sort(plan.delta)
 	}
 	// RetainedBytes was checked against the worst-case ordinal arena above.
@@ -181,10 +189,16 @@ func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScal
 		plan.retainedBytes = 0
 	}
 	if plan.count <= typedGraphScalarExactLimit {
+		rankBytes := len(baseOrdinals) * (bits.UintSize / 8)
+		if rankBytes > limits.RetainedBytes-plan.retainedBytes {
+			return nil, errTypedGraphSearchBudget
+		}
+		plan.ordinalGrowthPeakBytes = max(plan.ordinalGrowthPeakBytes, liveOrdinalBytes+rankBytes)
 		// Exact cutoff ties use document ID, not locality-ordered graph ordinal.
 		// Read mapped IDs only during bounded preparation; query heaps compare
 		// these ranks and translate back to graph ordinals for vector access.
-		plan.exactBaseByID = slices.Clone(ordinals[:baseCount])
+		plan.exactBaseByID = make([]int, len(baseOrdinals))
+		copy(plan.exactBaseByID, baseOrdinals)
 		for _, ordinal := range plan.exactBaseByID {
 			if _, ok := overlay.pack.documentIDForOrdinal(ordinal); !ok {
 				return nil, ErrVectorIndexSnapshotMismatch
@@ -205,6 +219,116 @@ func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScal
 		plan.retainedBytes += len(plan.exactBaseByID) * (bits.UintSize / 8)
 	}
 	return plan, nil
+}
+
+// One scalar leaf has unique posting IDs and needs no owning intersection map.
+// Keep only a bounded ID chunk and checked ordinal capacities. Conjunctions
+// deliberately retain the existing complete-set intersection path above.
+func prepareTypedGraphSingleLeaf(plan *typedGraphPreparedFilter, lookup hybridScalarLookupView, leaf HybridScalarFilter, limits typedGraphFilterLimits) (*typedGraphPreparedFilter, error) {
+	overlay := plan.overlay
+	idx, ok := findIndex(overlay.current.catalog.meta.Indexes, leaf.IndexName)
+	if !ok {
+		return nil, ErrHybridSearchIndexUnavailable
+	}
+	if shouldDedupeIndexDocumentIDs(idx, overlay.current.catalog.meta.Options) {
+		return nil, ErrHybridSearchUnsupported
+	}
+	inverse := overlay.base.reader.rowRefSource
+	perID := bits.Len(uint(inverse.rows)) + bits.Len(uint(len(overlay.rows))) + 2
+	const word = bits.UintSize / 8
+	var baseOrdinals, deltaOrdinals []int
+	appendOrdinal := func(dst *[]int, ordinal int) error {
+		if len(*dst) == cap(*dst) {
+			remaining := (limits.RetainedBytes - plan.retainedBytes) / word
+			if remaining == 0 {
+				return errTypedGraphSearchBudget
+			}
+			// Explicit capacity avoids append's unspecified growth. Charge before
+			// allocation; peak includes the still-live old buffer during copy.
+			growth := min(max(64, cap(*dst)), remaining)
+			newCapacity := cap(*dst) + growth
+			plan.ordinalGrowthPeakBytes = max(plan.ordinalGrowthPeakBytes, plan.retainedBytes+newCapacity*word)
+			grown := make([]int, len(*dst), newCapacity)
+			copy(grown, *dst)
+			*dst = grown
+			plan.retainedBytes += growth * word
+		}
+		*dst = append(*dst, ordinal)
+		return nil
+	}
+	ids := make([][]byte, 0, min(512, limits.SourceIDs))
+	var arena []byte
+	flush := func() error {
+		if len(ids) == 0 {
+			return nil
+		}
+		plan.scratchRows = max(plan.scratchRows, len(ids))
+		plan.scratchIDBytes = max(plan.scratchIDBytes, len(arena))
+		_, err := overlay.current.visitDocumentRowRefsByID(ids, func(_ []byte, ref DocumentRowRef, found bool) error {
+			if !found {
+				return ErrVectorIndexSnapshotMismatch
+			}
+			ordinal, delta, err := overlay.ordinalForCurrentRef(ref)
+			if err != nil {
+				return err
+			}
+			if delta {
+				return appendOrdinal(&deltaOrdinals, ordinal)
+			}
+			return appendOrdinal(&baseOrdinals, ordinal)
+		})
+		clear(ids)
+		ids = ids[:0]
+		arena = arena[:0]
+		return err
+	}
+	var callbackErr error
+	_, truncated, err := lookup.visitLeafIDs(leaf, limits.SourceIDs, limits.InspectedEntries, &plan.inspectedEntries, func(id []byte) error {
+		if plan.sourceIDs == limits.SourceIDs || len(id) > limits.SourceBytes-plan.sourceBytes || perID > limits.MappingWork-plan.mappingWork {
+			callbackErr = errTypedGraphSearchBudget
+			return callbackErr
+		}
+		plan.sourceIDs++
+		plan.sourceBytes += len(id)
+		plan.mappingWork += perID
+		start := len(arena)
+		arena = append(arena, id...)
+		ids = append(ids, arena[start:len(arena):len(arena)])
+		if len(ids) == cap(ids) {
+			callbackErr = flush()
+		}
+		return callbackErr
+	})
+	if callbackErr != nil {
+		return nil, callbackErr
+	}
+	if truncated {
+		return nil, errTypedGraphSearchBudget
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	plan.count = len(baseOrdinals) + len(deltaOrdinals)
+	return finishTypedGraphFilter(plan, baseOrdinals, deltaOrdinals, limits)
+}
+
+func (overlay *typedGraphOverlaySearch) ordinalForCurrentRef(ref DocumentRowRef) (ordinal int, delta bool, err error) {
+	i := sort.Search(len(overlay.rows), func(i int) bool { return bytes.Compare(overlay.rows[i].ID, ref.DocumentID) >= 0 })
+	if i < len(overlay.rows) && bytes.Equal(overlay.rows[i].ID, ref.DocumentID) {
+		row := overlay.rows[i]
+		if row.Deleted || row.Generation != ref.Generation || row.PartID != ref.PartID || row.RowIndex != ref.RowIndex || row.AppliedCommandLSN != ref.AppliedCommandLSN {
+			return 0, false, ErrVectorIndexSnapshotMismatch
+		}
+		return i, true, nil
+	}
+	ordinal, ok := overlay.base.reader.rowRefSource.ordinalForPhysicalRow(ref)
+	if !ok {
+		return 0, false, ErrVectorIndexSnapshotMismatch
+	}
+	return ordinal, false, nil
 }
 
 func (p *typedGraphPreparedFilter) validFor(overlay *typedGraphOverlaySearch) bool {
