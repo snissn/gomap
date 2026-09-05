@@ -356,6 +356,16 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 	if err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
 	}
+	return c.columnVectorGraphPhysicalRowReaderSnapshotViewAtCatalog(name, snap, catalog)
+}
+
+// The caller owns the snapshot. A captured base uses its explicitly loaded
+// catalog here, but passes the same manifest, graph and TVIS checks as the
+// ordinary current-catalog reader; it cannot substitute a current checksum.
+func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtCatalog(name string, snap *backenddb.Snapshot, catalog *collectionCatalog) (VectorIndexDefinition, columnVectorGraphManifestSnapshot, columnPhysicalScanSnapshotView, error) {
+	if c == nil || c.db == nil || snap == nil {
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, backenddb.ErrClosed
+	}
 	if catalog == nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, errCollectionNotFound
 	}
