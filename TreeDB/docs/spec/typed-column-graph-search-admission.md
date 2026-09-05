@@ -118,6 +118,28 @@ cause of the 5.5x visited-edge mismatch.
 | Legacy graph-specific adjacency sources | Quarantined `TCGA` or `TCGL` graph-specific adjacency-source metadata, `adjacency_layout`, `column_graph_layer0_adjacency`, and `column_graph_adjacency_layer`. | `adjacency_list` / `raw_uint32_offsets_list` compatibility selector | `unsupported/experimental` | `fallback-only` | No prepared shape for healthy search; the generic offsets/value mechanics must be consumed through `uint32_list` vector-index state instead. | Legacy compatibility only, outside healthy edge traversal evidence. | Compatibility fallback must be explicit and counted; healthy current-format search MUST NOT read graph-specific adjacency-source payloads or treat this row as admitted adjacency state. | Counters and tests include `adjacency_source_fallbacks/search`, `adjacency_legacy_fallbacks/search`, `adjacency_validation_failures/search`, #1989 quarantine tests, no new rebuild publication tests, and zero fallback assertions. | Compatibility benchmarks, if run, must be labeled legacy. Healthy #2037 adjacency evidence must use `uint32_list` prepared CSR state and report `ns/op`, `ops/sec`, `B/op`, `allocs/op`, edges/search, `adjacency_prepared_csr_mmap_direct/search`, generic typed-list fallback counters, and graph-row fallback counters. |
 | Legacy dense adjacency or row-image adjacency | Legacy dense `adjacency_list` row images, row-image adjacency, or row-asset adjacency compatibility payloads. | `adjacency_list` / `raw_uint32_dense` or physical row-image adjacency | `scratch_decode` for dense typed-column compatibility, otherwise not a #2047 typed-column tier | `fallback-only` | No prepared shape for healthy search; compatibility readers may scratch-decode old dense rows only when explicitly requested by old fixtures. | Legacy compatibility only, outside healthy edge traversal evidence. | Compatibility fallback must be explicit and counted; healthy current-format search MUST NOT use dense row-image adjacency as a silent fallback for missing typed-list state. | Counters and tests include `adjacency_legacy_fallbacks/search`, scratch-decode fallback counters, dense adjacency compatibility tests, quarantine tests, and zero fallback assertions on current-format rebuilds. | Compatibility benchmarks, if run, must be labeled legacy or diagnostic. No healthy #2037 promotion row may rely on this fallback for `ns/op`, `ops/sec`, `B/op`, or `allocs/op` claims. |
 
+## M2 internal typed mutation suffix (experimental)
+
+| Graph-search role | State key / owner | Canonical format | #2047 tier | Admission status | Prepared runtime shape | Hot-loop boundary | Fallback/fail-closed rule | Counters and tests | Benchmark/admission evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Typed mutation suffix | Existing published typed row/vector parts after the pinned graph base; no new durable state key. | Declared strings, FP32 vectors, and existing typed tombstone rows. | `heap_typed_view` for the bounded suffix only; immutable base requirements remain unchanged. | `experimental`, internal preparation only under #4617 | Newest-ID typed rows plus retained tombstones, prepared from a checked current manifest suffix while borrowing a validated old base pin and current query pin. | Setup only; no ordinary mutable graph search dispatch is enabled. | Reject changed graph/schema/index identity, missing or changed base assets, future parts, or cumulative source row/byte/tombstone limits. Never rebuild native heap HNSW or extract indexed retained JSON. | `TestTypedGraphOverlayExistingBaseMutation`, `TestTypedGraphOverlaySuffixLineageAndBounds`, and `TestTypedGraphOverlayRepeatedMutationAndSnapshot`; setup tracks cumulative rows, tombstones, and source bytes. | Preparation/search allocation, decoded working-set, retained residency, wall-time, and candidate-work evidence remain required before promotion. No healthy-route performance claim. |
+
+The current snapshot is the sole logical query view. The old snapshot is only
+an immutable graph accelerator, not an alternative scalar/text/document view.
+Original row and vector assets must remain exactly reachable; later append-only
+base parts count toward the suffix just like replacements and tombstones.
+Limits count overwritten versions too, before allocating the suffix ID map.
+Physical source bytes, decoder working space (including value headers), and
+retained payload are distinct accounting terms. Existing typed decoding owns
+FP32 output arrays; preparation reuses those arrays and row-header scratch.
+
+The internal preparation does not install a mutable graph route. M1 typed
+mutations remain durable under their selected profile, while ordinary graph
+search after mutation remains explicitly unavailable. M3 owns durable graph
+coverage/frontier installation, reopen, and fold lifecycle. Index drop/recreate
+is still rejected by the selected command-WAL root-publication barrier; this is
+not a claim that public recreate is supported or tested through completion.
+
 ## Evidence required to promote a row to `admitted`
 
 A descendant PR that changes a `pending`, `deferred`, or `experimental` row to
