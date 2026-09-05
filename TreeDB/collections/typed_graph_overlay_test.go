@@ -2,6 +2,7 @@ package collections
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -51,6 +52,100 @@ func TestTypedGraphOverlaySuffixLineageAndBounds(t *testing.T) {
 				t.Fatalf("got %v, want %v", err, test.want)
 			}
 		})
+	}
+}
+
+func TestTypedGraphOverlaySearchShadowsAndBudget(t *testing.T) {
+	_, db, col := openTypedMinimaCollection(t)
+	defer db.Close()
+	var ids, retained [][]byte
+	columns := []TypedColumnBatch{{Name: "embedding"}, {Name: "content"}, {Name: "user"}, {Name: "path"}}
+	for i := 0; i < 8; i++ {
+		id := fmt.Sprintf("base-%d", i)
+		ids = append(ids, []byte(id))
+		retained = append(retained, []byte(fmt.Sprintf(`{"id":%q}`, id)))
+		vector := []float32{1, float32(i) / 8, 0, 0, 0, 0, 0, 0}
+		columns[0].Float32Vectors = append(columns[0].Float32Vectors, vector)
+		for j := 1; j < len(columns); j++ {
+			columns[j].Strings = append(columns[j].Strings, id)
+		}
+	}
+	if _, _, err := col.InsertTypedBatchWithStats(ids, retained, columns); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+		t.Fatal(err)
+	}
+	base, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: "embedding_graph"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer base.Close()
+	if err := col.Delete(ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	replacement := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{-1, 0, 0, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"replacement"}}, {Name: "user", Strings: []string{"tenant"}}, {Name: "path", Strings: []string{"source"}}}
+	if _, err := col.ReplaceTypedBatch(ids[1:2], retained[1:2], replacement); err != nil {
+		t.Fatal(err)
+	}
+	current, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer current.Close()
+	limits := typedGraphOverlayLimits{Rows: 8, Tombstones: 8, Bytes: 1 << 20}
+	overlay, err := prepareTypedGraphOverlaySearch(base, current, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buffer VectorIndexSearchBuffer
+	query := []float32{1, 0, 0, 0, 0, 0, 0, 0}
+	results, stats, err := overlay.search(query, 2, 8, 32, &buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || string(results[0].ID) != "base-2" || string(results[1].ID) != "base-3" || stats.BaseShadowed != 2 {
+		t.Fatalf("shadowed original top two underfilled/leaked: %+v stats=%+v", results, stats)
+	}
+	if results, stats, err := overlay.search(query, 2, 4, 6, &buffer); !errors.Is(err, errTypedGraphOverlayFoldNeeded) || results != nil || stats.Base.Candidates != 4 {
+		t.Fatalf("candidate cap returned success/partial results: %+v candidates=%d err=%v", results, stats.Base.Candidates, err)
+	}
+	if len(buffer.results) != 0 {
+		t.Fatal("cap error retained previous response view")
+	}
+	results, _, err = overlay.search(query, 2, 8, 32, &buffer)
+	if err != nil || len(results) != 2 || string(results[0].ID) != "base-2" {
+		t.Fatalf("reuse after cap error: %+v %v", results, err)
+	}
+	if _, _, err := overlay.search(query[:1], 2, 8, 32, &buffer); err == nil || len(buffer.results) != 0 {
+		t.Fatalf("invalid query retained results: %v", err)
+	}
+	if _, _, err := overlay.search(query, 2, 8, 1, &buffer); !errors.Is(err, errTypedGraphOverlayFoldNeeded) || len(buffer.results) != 0 {
+		t.Fatalf("invalid budget retained results: %v", err)
+	}
+	searchAllocs := testing.AllocsPerRun(100, func() {
+		if _, _, err := overlay.search(query, 2, 8, 32, &buffer); err != nil {
+			t.Fatal(err)
+		}
+	})
+	prepareAllocs := testing.AllocsPerRun(3, func() {
+		if _, err := prepareTypedGraphOverlaySearch(base, current, limits); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Logf("diagnostic only: prepared base=8x8D suffix=2 rows; warmed buffered search %.0f allocs/op; preparation with existing pins/caches %.0f allocs/op", searchAllocs, prepareAllocs)
+	missing := *base
+	missingReader := *base.reader
+	missingReader.hnswSearchPack = nil
+	missing.reader = &missingReader
+	if _, err := prepareTypedGraphOverlaySearch(&missing, current, limits); !errors.Is(err, errColumnHNSWSearchPackSearchUnavailable) {
+		t.Fatalf("missing pack silently selected uncapped generic traversal: %v", err)
+	}
+	if err := current.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := overlay.search(query, 2, 8, 32, &buffer); !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		t.Fatalf("closed current view accepted: %v", err)
 	}
 }
 
@@ -119,6 +214,22 @@ func TestTypedGraphOverlayExistingBaseMutation(t *testing.T) {
 			}
 			if wantID != "" && (len(rows[0].Values) != 4 || len(rows[0].Values[0].Float32Vector) != 8 || rows[0].Values[0].Float32Vector[1] != 1 || rows[0].Values[1].String != "alpha") {
 				t.Fatalf("typed suffix lost vector/string authority: %+v", rows[0].Values)
+			}
+			overlay, err := prepareTypedGraphOverlaySearch(base, current, typedGraphOverlayLimits{Rows: 8, Tombstones: 8, Bytes: 1 << 20})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var buffer VectorIndexSearchBuffer
+			results, stats, err := overlay.search([]float32{0, 1, 0, 0, 0, 0, 0, 0}, 1, 8, 32, &buffer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if wantID == "" {
+				if len(results) != 0 || stats.BaseShadowed != 1 {
+					t.Fatalf("deleted base row leaked: %+v stats=%+v", results, stats)
+				}
+			} else if len(results) != 1 || string(results[0].ID) != wantID || results[0].Score < 0.999 || stats.DeltaScored != 1 {
+				t.Fatalf("internal merged search lost typed mutation: %+v stats=%+v", results, stats)
 			}
 			if _, err := prepareTypedGraphOverlaySuffix(base, current, typedGraphOverlayLimits{Rows: 8, Tombstones: 8, Bytes: 1}); !errors.Is(err, errTypedGraphOverlayFoldNeeded) {
 				t.Fatalf("byte bound: %v", err)
