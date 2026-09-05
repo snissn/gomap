@@ -276,6 +276,10 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, fmt.Errorf("collections: column asset rewrite durable requirements: %w", err)
 	}
+	durableRequirements, _, err = c.unionTypedGraphBaseRequirements(durableRequirements, state.catalog.typedGraphBase)
+	if err != nil {
+		return stats, err
+	}
 	durableResources := remap.stableResources
 	remap.stableResources = nil
 	newSystemRoot, rootIDs, err := c.publishColumnAssetRewriteManifestStateWithDurableClosure(state, updatedMeta, updatedIdentity, patchedRecords, durableResources, durableRequirements)

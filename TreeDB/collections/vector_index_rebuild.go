@@ -186,9 +186,18 @@ func takeColumnVectorGraphDurablePublication(prepared *columnVectorGraphPrepared
 	return resources, requirements, nil
 }
 
-func registerColumnVectorGraphDurablePublication(ctx backenddb.CommandWALPublishContext, prepared *columnVectorGraphPreparedPhysicalAsset, records []columnManifestRecord, activeGeneration uint64, namespace string) error {
+func (c *Collection) registerColumnVectorGraphDurablePublication(ctx backenddb.CommandWALPublishContext, prepared *columnVectorGraphPreparedPhysicalAsset, records []columnManifestRecord, activeGeneration uint64, namespace string, base *typedGraphBaseAlias) error {
 	resources, requirements, err := takeColumnVectorGraphDurablePublication(prepared, records, activeGeneration, namespace)
 	if err != nil {
+		return err
+	}
+	requirements, work, err := c.unionTypedGraphBaseRequirements(requirements, base)
+	if err != nil {
+		resources.Release()
+		return err
+	}
+	if err := ctx.RecordDurableLogicalObligationRequirementWork(work); err != nil {
+		resources.Release()
 		return err
 	}
 	if err := ctx.RegisterDurableLogicalObligationRequirements(requirements); err != nil {
@@ -418,7 +427,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 				return nil, metaErr
 			}
 			updatedMeta = updated
-			if err := registerColumnVectorGraphDurablePublication(ctx, &prepared, deltaRecords, nextIdentity.Generation, cfg.AssetManager.Namespace); err != nil {
+			if err := c.registerColumnVectorGraphDurablePublication(ctx, &prepared, deltaRecords, nextIdentity.Generation, cfg.AssetManager.Namespace, catalog.typedGraphBase); err != nil {
 				return nil, err
 			}
 			return []backenddb.OrderedRootDeltaPublishInput{ordered}, nil
@@ -730,7 +739,7 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 		if err != nil {
 			return nil, err
 		}
-		if err := registerColumnVectorGraphDurablePublication(ctx, &prepared, deltaRecords, nextIdentity.Generation, cfg.AssetManager.Namespace); err != nil {
+		if err := c.registerColumnVectorGraphDurablePublication(ctx, &prepared, deltaRecords, nextIdentity.Generation, cfg.AssetManager.Namespace, catalog.typedGraphBase); err != nil {
 			return nil, err
 		}
 		return []backenddb.OrderedRootDeltaPublishInput{ordered}, nil

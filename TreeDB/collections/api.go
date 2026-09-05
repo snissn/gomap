@@ -1290,6 +1290,7 @@ type collectionCatalog struct {
 	columnManifestRootName string
 	indexRuntimes          []indexRuntime
 	indexRuntimesErr       error
+	typedGraphBase         *typedGraphBaseAlias
 }
 
 type collectionRootOverlayFilter struct {
@@ -20785,6 +20786,7 @@ func cloneCatalogWithRootUpdates(base *collectionCatalog, meta CollectionMeta, r
 	catalog := newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(meta), roots, rootOverlays, rootOverlayFilters)
 	if base != nil {
 		catalog.pager = base.pager
+		catalog.typedGraphBase = base.typedGraphBase
 	}
 	return catalog
 }
@@ -20820,6 +20822,7 @@ func cloneCatalogWithRootOverlays(base *collectionCatalog, meta CollectionMeta, 
 	catalog := newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(meta), roots, rootOverlays, rootOverlayFilters)
 	if base != nil {
 		catalog.pager = base.pager
+		catalog.typedGraphBase = base.typedGraphBase
 	}
 	return catalog
 }
@@ -20854,6 +20857,7 @@ func cloneCatalogWithRootOverlayFilters(base *collectionCatalog, rootNames []str
 	}
 	catalog := newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(base.meta), roots, rootOverlays, rootOverlayFilters)
 	catalog.pager = base.pager
+	catalog.typedGraphBase = base.typedGraphBase
 	return catalog
 }
 
@@ -24133,6 +24137,10 @@ func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCa
 	}
 	catalog := newCollectionCatalogWithOverlays(meta, roots, rootOverlays)
 	catalog.pager = snap.Pager()
+	catalog.typedGraphBase, err = loadTypedGraphBaseAlias(snap, meta)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateColumnStoreCatalogRoot(snap, catalog); err != nil {
 		return nil, err
 	}

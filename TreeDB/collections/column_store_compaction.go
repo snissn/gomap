@@ -214,6 +214,11 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 		_ = deltaIter.Close()
 		return stats, cleanupPrepared(fmt.Errorf("collections: compaction durable requirements: %w", err))
 	}
+	durableRequirements, _, err = c.unionTypedGraphBaseRequirements(durableRequirements, state.catalog.typedGraphBase)
+	if err != nil {
+		_ = deltaIter.Close()
+		return stats, cleanupPrepared(err)
+	}
 	rootNames := []string{state.rootName}
 	baseRootIDs := map[string]uint64{state.rootName: state.baseRoot}
 	var locatorBaseRoot uint64

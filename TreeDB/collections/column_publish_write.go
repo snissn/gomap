@@ -823,7 +823,16 @@ func (c *Collection) prepareColumnPublishPlanLease(input columnWritePublishInput
 		return nil, err
 	}
 	plan.StageMetrics.DocumentExtraction += input.documentExtraction
-	return newColumnPublishPlanLease(c, plan)
+	lease, err := newColumnPublishPlanLease(c, plan)
+	if err != nil {
+		return nil, err
+	}
+	if input.catalog != nil {
+		if err := c.bindTypedGraphBasePlanClosure(lease, input.catalog.typedGraphBase); err != nil {
+			return nil, errors.Join(err, lease.Abandon())
+		}
+	}
+	return lease, nil
 }
 
 // installPrebuiltColumnPublishPlanDurability is the single stable-resource
