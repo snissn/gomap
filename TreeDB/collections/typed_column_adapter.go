@@ -1248,6 +1248,11 @@ func (p *typedColumnAdapterPart) buildImage() (typedcolumn.ColumnPartImage, erro
 	if p == nil || p.Part == nil {
 		return typedcolumn.ColumnPartImage{}, errors.New("collections: nil typed-column adapter part")
 	}
+	return typedcolumn.BuildColumnPartImage(p.Part, p.imageOptions())
+}
+
+// imageOptions is shared by the actual encoder and its encoded-size proof.
+func (p *typedColumnAdapterPart) imageOptions() typedcolumn.ColumnPartImageOptions {
 	// The adapter primary-id column is an internal row locator, not a declared
 	// ColumnStoreValueInt64 field. Leave it out of direct-view certification so
 	// fallback-only declared typed-column parts do not publish an internal
@@ -1274,7 +1279,7 @@ func (p *typedColumnAdapterPart) buildImage() (typedcolumn.ColumnPartImage, erro
 		imageOpts.PruningMetadataSectionCompression = p.Options.PruningSectionCompression
 		imageOpts.PruningMetadataSectionCompressionSet = true
 	}
-	return typedcolumn.BuildColumnPartImage(p.Part, imageOpts)
+	return imageOpts
 }
 
 func decodeTypedColumnPhysicalQuerySortedGroupedDistinctPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte, includePhysicalRows bool) (columnTypedColumnPhysicalQueryPart, error) {
