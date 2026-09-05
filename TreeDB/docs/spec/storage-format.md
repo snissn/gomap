@@ -3018,7 +3018,18 @@ schema/drop support must atomically reclaim the independent native roots;
 external typed-asset GC is not native index-page reclamation. Mutation and
 recapture retirement requirements are unchanged.
 
-This capture is not mutable graph serving or an off-lock fold. Name-only rebuild
+Synchronous rebuild capture is not mutable graph serving. The internal physical
+fold additionally writes compacted assets at the real captured generation T,
+with a fresh row part and typed part 2, and preserves post-T records under the
+current U manifest header. Its separately checksummed captured manifest and
+independent native roots describe T, not the current U scalar/primary authority.
+Installation uses the existing column-asset rewrite maintenance publisher and
+does not add a logical WAL command. Graph construction occurs outside collection
+admission, but current-root validation, locator merging and native root building
+do not. Process cuts before the fold seal recover the prior captured base;
+cuts after its explicit checkpoint recover the new base, with acknowledged
+post-T data preserved in either case. This is not power-loss qualification or
+public mutable serving admission. Name-only rebuild
 replay reconstructs a logically equivalent typed base. Process-crash tests hold
 the publication seal until acknowledged rebuild returns, then use normal Open;
 they do not simulate physical power loss. A raw snapshot alone does not retain

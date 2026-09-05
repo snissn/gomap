@@ -13,6 +13,7 @@ type chunkLifecycleLock struct {
 	refs  int
 }
 type collectionSchemaCoordinator struct {
+	typedGraphFoldActive    atomic.Bool // one unpublished candidate per collection, across managers
 	typedGraphOwners        typedGraphReadOwnerAccounting
 	typedPublication        atomic.Pointer[typedGraphPublicationState]
 	typedPublicationDebtMu  sync.Mutex

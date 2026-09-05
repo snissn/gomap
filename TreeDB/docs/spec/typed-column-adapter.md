@@ -447,10 +447,38 @@ also distinguishes source replacement's live rows from its same-generation
 tombstones. Ambiguous live parts and invalid role/reason/key identities fail
 closed. Fixture tests combine compacted T assets with real post-T mutations and
 exercise mixed-generation scan, locator coordinates, point fetch and typed
-reconstruction. This is not a maintenance installer or a public fold: candidate
-publication, graph/TVIS construction, stale-install rejection, durable closure,
-resource admission, and reclamation remain separate lifecycle gates. Prepared
-stable resources are retained until transfer or release, not deleted by age.
+reconstruction. Prepared stable resources are retained until transfer or
+release, not deleted by age.
+
+The internal `foldTypedGraph` maintenance operation now composes this producer
+with native HNSW/TVIS preparation and TGBA2 independent root replacement. It
+drains registered write domains for capture T, retains a snapshot and exact
+asset lease, then releases collection admission while materializing typed rows
+and constructing the candidate. Install drains again, rejects a changed base,
+schema or pager, and merges actual post-T part records under the latest U
+header. A sorted current-locator scan remaps surviving pre-T rows; post-T
+updates, deletes and reinserts retain their published coordinates. No per-row
+current point probes or indexed JSON reconstruction are used.
+
+The existing maintenance publisher atomically installs current manifest/locator
+roots and independent captured T primary/scalar/locator/manifest roots with
+the exact resource closure. Unchanged empty roots are retained, not submitted
+as no-op maintenance rewrites. No command-WAL frame or logical LSN is added.
+Derived publication state is fenced on success or ambiguous acceptance and
+reconciled after collection locks are released. One explicit checkpoint follows
+a successful install outside those locks. Old read owners keep their leases;
+they are never force-closed, and existing attempted encoded debt is not reset.
+
+Admission allows one candidate per collection across managers. Explicit input
+row, manifest, asset-byte and per-decoder-term limits apply to captured and
+install-time views; native root copy work uses the existing capture ceilings.
+These are not a summed transient heap or global disk guarantee. Both the
+current locator scan and native root construction remain N-dependent under
+write admission, and the publisher builds roots under its existing writer
+lock. Unpublished candidates release resource handles, leaving unreferenced
+physical output to existing reclamation. Global candidate/orphan accounting,
+qualified pause/storage bounds and public mutable-route activation remain
+separate gates; this internal operation does not enable public mutable search.
 
 Explicit internal cold reconciliation can bootstrap a captured base and its
 current typed suffix after normal `Open`, without replay instrumentation. It

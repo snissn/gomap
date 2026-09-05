@@ -212,6 +212,12 @@ func (it *typedGraphCaptureReplacementIterator) Close() error {
 }
 
 func (copy *typedGraphBaseCopy) inputs(identity [columnManifestIdentityRecordSize]byte, records []columnManifestRecord) (_ []backenddb.OrderedRootDeltaPublishInput, err error) {
+	return copy.inputsWithLocator(identity, records, nil)
+}
+
+// A physical fold changes captured row coordinates, but not captured primary
+// or scalar authority. The caller supplies the one replacement locator stream.
+func (copy *typedGraphBaseCopy) inputsWithLocator(identity [columnManifestIdentityRecordSize]byte, records []columnManifestRecord, locator iterator.UnsafeIterator) (_ []backenddb.OrderedRootDeltaPublishInput, err error) {
 	actual := uint64(len(columnManifestIdentityRecordKey) + len(identity) + 9)
 	for _, record := range records {
 		actual += uint64(len(record.key) + len(record.value) + 9)
@@ -229,7 +235,9 @@ func (copy *typedGraphBaseCopy) inputs(identity [columnManifestIdentityRecordSiz
 	}()
 	for _, name := range copy.names {
 		var next iterator.UnsafeIterator
-		if name == collectionColumnManifestRootName(copy.catalog.meta.Name) {
+		if locator != nil && name == collectionColumnRowLocatorRootName(copy.catalog.meta.Name) {
+			next = locator
+		} else if name == collectionColumnManifestRootName(copy.catalog.meta.Name) {
 			next = columnManifestRootRecordIteratorOwned(identity, records)
 		} else if root := copy.catalog.rootID(name); root != 0 {
 			next, err = copy.snap.IteratorAtRoot(root, nil, nil)
