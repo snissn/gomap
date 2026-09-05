@@ -28,7 +28,7 @@ func (c *Collection) prepareImmediateTypedGraphEncoded(input columnWritePublishI
 	if err != nil {
 		return input, noop, err
 	}
-	bound, err := typedGraphTypedAssetsEncodedBound(prepared)
+	bound, err := typedGraphColumnEncodedBound(prepared)
 	if err != nil {
 		return input, noop, err
 	}

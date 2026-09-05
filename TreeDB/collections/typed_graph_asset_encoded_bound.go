@@ -1,8 +1,8 @@
 package collections
 
-// Admission consumes owning declared rows already produced by typed planning.
+// Admission bounds typed assets and generated locator entries using owning rows.
 // No vector copies, value encoding, fake LSN, or retained JSON extraction.
-func typedGraphTypedAssetsEncodedBound(input columnWritePublishInput) (int64, error) {
+func typedGraphColumnEncodedBound(input columnWritePublishInput) (int64, error) {
 	cfg := input.meta.Options.ColumnStore
 	if cfg == nil || len(cfg.AggregateMetadata) != 0 {
 		return 0, ErrHybridSearchUnsupported
@@ -34,6 +34,13 @@ func typedGraphTypedAssetsEncodedBound(input columnWritePublishInput) (int64, er
 		one := [1]columnDeclaredRow{}
 		for i, doc := range documents {
 			one[0] = columnDeclaredRow{ID: doc.ID, Deleted: operation == ColumnPublishOperationDelete}
+			locatorBytes := columnPrimaryRowLocatorValueSize
+			if one[0].Deleted {
+				locatorBytes = 0
+			}
+			if err := typedGraphRootEncodedEntry(&total, len(doc.ID), locatorBytes); err != nil {
+				return err
+			}
 			if !one[0].Deleted {
 				rowValues := doc.declaredValues
 				ready := doc.declaredValuesReady

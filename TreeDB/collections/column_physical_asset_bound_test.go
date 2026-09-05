@@ -59,7 +59,7 @@ func TestColumnPhysicalAssetEncodedUpperBoundSelectedProducer(t *testing.T) {
 		for i, row := range rows {
 			documents[i] = columnWriteDocument{ID: row.ID, declaredValues: row.Values, declaredValuesReady: true}
 		}
-		combined, err := typedGraphTypedAssetsEncodedBound(columnWritePublishInput{meta: meta, operation: ColumnPublishOperationInsert, documents: documents})
+		combined, err := typedGraphColumnEncodedBound(columnWritePublishInput{meta: meta, operation: ColumnPublishOperationInsert, documents: documents})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -69,8 +69,16 @@ func TestColumnPhysicalAssetEncodedUpperBoundSelectedProducer(t *testing.T) {
 			t.Fatal(err)
 		}
 		rowImage, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{Collection: meta.Name, Namespace: cfg.AssetManager.Namespace, Generation: math.MaxUint64, PartID: math.MaxUint64, AppliedCommandLSN: math.MaxUint64, Operation: ColumnPublishOperationInsert, SchemaHash: cfg.SchemaHash, Columns: rowCfg.Columns, Rows: rowRows})
-		if err != nil || combined < int64(len(actual.Bytes)+len(rowImage)) {
-			t.Fatalf("combined actual producer=%d bound=%d err=%v", len(actual.Bytes)+len(rowImage), combined, err)
+		if err != nil {
+			t.Fatal(err)
+		}
+		locatorTable, err := buildColumnPrimaryRowLocatorTable(ColumnPublishPlan{Rows: count, Operation: ColumnPublishOperationInsert, UpdatedActiveManifest: ColumnManifestIdentity{Generation: math.MaxUint64}, AppliedCommandLSN: math.MaxUint64}, documents)
+		if err != nil {
+			t.Fatal(err)
+		}
+		locatorBytes, err := typedGraphTableEncodedBound(locatorTable)
+		if err != nil || combined < int64(len(actual.Bytes)+len(rowImage))+locatorBytes {
+			t.Fatalf("combined actual producer=%d locator=%d bound=%d err=%v", len(actual.Bytes)+len(rowImage), locatorBytes, combined, err)
 		}
 		bound, err := typedcolumn.FP32ImageEncodedUpperBound(part.Part.Options, count, imageOpts)
 		if err != nil {
