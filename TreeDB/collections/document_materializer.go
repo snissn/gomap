@@ -545,8 +545,8 @@ func (v *CollectionReadView) clearDerivedRowFetchCaches() {
 }
 
 // LookupDocumentRowRefsByID resolves document IDs to snapshot-visible typed-row
-// refs in input order. It builds or reuses a generic materializer row-locator
-// map for the read view; missing or deleted documents return Found=false.
+// refs in input order using the read view's persisted point locator. Missing
+// or deleted documents return Found=false.
 func (v *CollectionReadView) LookupDocumentRowRefsByID(ids [][]byte, opts DocumentFetchOptions) (DocumentRowRefLookupResponse, error) {
 	endForegroundRead := v.beginForegroundRead()
 	defer endForegroundRead()
@@ -554,6 +554,69 @@ func (v *CollectionReadView) LookupDocumentRowRefsByID(ids [][]byte, opts Docume
 	response, err := v.lookupDocumentRowRefsByID(ids, opts)
 	response.Stats.FetchNanos = time.Since(start).Nanoseconds()
 	return response, err
+}
+
+// visitDocumentRowRefsByID borrows IDs for synchronous consumption. Its caller
+// owns the read-view pin and foreground-read envelope for the whole operation.
+func (v *CollectionReadView) visitDocumentRowRefsByID(ids [][]byte, visit func([]byte, DocumentRowRef, bool) error) (DocumentMaterializationStats, error) {
+	if err := v.validateOpen(); err != nil {
+		return DocumentMaterializationStats{}, err
+	}
+	if len(ids) == 0 {
+		return DocumentMaterializationStats{}, nil
+	}
+	stats := DocumentMaterializationStats{DocumentsRequested: uint64(len(ids))}
+	if !columnStoreCanReconstructDocument(v.catalog.meta) {
+		stats.RowRefUnsupported++
+		return stats, errors.New("collections: document row ref lookup requires typed-storage reconstruction support")
+	}
+	for i, id := range ids {
+		if len(id) == 0 {
+			return stats, fmt.Errorf("collections: document id at position %d cannot be empty", i)
+		}
+	}
+	if visit == nil {
+		return stats, errors.New("collections: nil row ref visitor")
+	}
+	locatorRootName := collectionColumnRowLocatorRootName(v.catalog.meta.Name)
+	if v.catalog.rootID(locatorRootName) == 0 {
+		primaryRootName := collectionPrimaryRootName(v.catalog.meta.Name)
+		if v.catalog.rootID(primaryRootName) != 0 || len(v.catalog.overlayRootIDs(primaryRootName)) != 0 {
+			return stats, fmt.Errorf("collections: primary row locator root is absent for collection %q", v.catalog.meta.Name)
+		}
+		for _, id := range ids {
+			stats.RowLocatorLookups++
+			stats.RowLocatorMisses++
+			if err := visit(id, DocumentRowRef{}, false); err != nil {
+				return stats, err
+			}
+		}
+		return stats, nil
+	}
+	var scratch []byte
+	for _, id := range ids {
+		stats.RowLocatorLookups++
+		value, found, err := collectionGetAppendAtCatalogRoot(v.snapshot, v.catalog, locatorRootName, id, scratch[:0])
+		if err != nil {
+			return stats, fmt.Errorf("collections: primary row locator lookup for id %q: %w", string(id), err)
+		}
+		var ref DocumentRowRef
+		if found {
+			scratch = value
+			ref, err = decodeColumnPrimaryRowLocatorBorrowedID(id, value)
+			if err != nil {
+				return stats, err
+			}
+		} else {
+			stats.RowLocatorMisses++
+		}
+		// Neither the borrowed ID nor the reusable locator value escapes through
+		// the response. Internal visitors must consume the ref synchronously.
+		if err := visit(id, ref, found); err != nil {
+			return stats, err
+		}
+	}
+	return stats, nil
 }
 
 func (v *CollectionReadView) lookupDocumentRowRefsByID(ids [][]byte, opts DocumentFetchOptions) (DocumentRowRefLookupResponse, error) {
@@ -582,35 +645,19 @@ func (v *CollectionReadView) lookupDocumentRowRefsByID(ids [][]byte, opts Docume
 		idArena = append(idArena, id...)
 		response.Results[i].ID = idArena[idStart:len(idArena):len(idArena)]
 	}
-	locatorRootName := collectionColumnRowLocatorRootName(v.catalog.meta.Name)
-	if v.catalog.rootID(locatorRootName) == 0 {
-		primaryRootName := collectionPrimaryRootName(v.catalog.meta.Name)
-		if v.catalog.rootID(primaryRootName) == 0 && len(v.catalog.overlayRootIDs(primaryRootName)) == 0 {
-			response.Stats.RowLocatorLookups = uint64(len(ids))
-			response.Stats.RowLocatorMisses = uint64(len(ids))
-			return response, nil
+	i := 0
+	stats, err := v.visitDocumentRowRefsByID(ids, func(_ []byte, ref DocumentRowRef, found bool) error {
+		if found {
+			// Preserve the public API's two independently owned ID buffers.
+			ref.DocumentID = append([]byte(nil), response.Results[i].ID...)
+			response.Results[i].RowRef = ref
+			response.Results[i].Found = true
 		}
-		return response, fmt.Errorf("collections: primary row locator root is absent for collection %q", v.catalog.meta.Name)
-	}
-	for i := range response.Results {
-		ownedID := response.Results[i].ID
-		response.Stats.RowLocatorLookups++
-		value, found, err := collectionGetAppendAtCatalogRoot(v.snapshot, v.catalog, locatorRootName, ownedID, nil)
-		if err != nil {
-			return response, fmt.Errorf("collections: primary row locator lookup for id %q: %w", string(ownedID), err)
-		}
-		if !found {
-			response.Stats.RowLocatorMisses++
-			continue
-		}
-		rowRef, err := decodeColumnPrimaryRowLocator(ownedID, value)
-		if err != nil {
-			return response, err
-		}
-		response.Results[i].RowRef = rowRef
-		response.Results[i].Found = true
-	}
-	return response, nil
+		i++
+		return nil
+	})
+	response.Stats = stats
+	return response, err
 }
 
 func (v *CollectionReadView) materializerColumnSnapshotView(cfg ColumnStoreConfig) (columnPhysicalScanSnapshotView, error) {
@@ -722,7 +769,7 @@ func (v *CollectionReadView) validateDocumentRowRefLatest(ref DocumentRowRef, st
 		}
 		return fmt.Errorf("collections: document row ref for id %q is not visible in primary root", string(ref.DocumentID))
 	}
-	latest, err := decodeColumnPrimaryRowLocator(ref.DocumentID, value)
+	latest, err := decodeColumnPrimaryRowLocatorBorrowedID(ref.DocumentID, value)
 	if err != nil {
 		return err
 	}

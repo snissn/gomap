@@ -60,10 +60,23 @@ func (s *columnVectorGraphRowRefStateSource) ordinalForPhysicalRow(ref DocumentR
 	if !s.inversePermutationActive() {
 		return 0, false
 	}
+	// The owning searcher pins these already-certified slices. Validate handle
+	// lifetime once per lookup, not again for every binary-search comparison.
+	// This does not permit concurrent Close of the caller-owned searcher.
+	ordinals := s.ordinalsByPhysicalRow.Values
+	generations, parts, rows, lsns := s.generations.Values, s.partIDs.Values, s.rowIndexes.Values, s.appliedCommandLSNs.Values
+	at := func(index int) (int, DocumentRowRef, bool) {
+		ordinal := ordinals[index]
+		if ordinal < 0 || ordinal >= int64(s.rows) {
+			return 0, DocumentRowRef{}, false
+		}
+		candidate, err := columnVectorGraphRowRefFromPreparedValues(int(ordinal), generations[ordinal], parts[ordinal], rows[ordinal], lsns[ordinal])
+		return int(ordinal), candidate, err == nil
+	}
 	lo, hi := 0, s.rows
 	for lo < hi {
 		mid := lo + (hi-lo)/2
-		_, candidate, ok := s.inverseRef(mid)
+		_, candidate, ok := at(mid)
 		if !ok {
 			return 0, false
 		}
@@ -76,6 +89,6 @@ func (s *columnVectorGraphRowRefStateSource) ordinalForPhysicalRow(ref DocumentR
 	if lo == s.rows {
 		return 0, false
 	}
-	ordinal, candidate, ok := s.inverseRef(lo)
+	ordinal, candidate, ok := at(lo)
 	return ordinal, ok && compareColumnVectorGraphPhysicalRow(candidate, ref) == 0 && candidate.AppliedCommandLSN == ref.AppliedCommandLSN
 }

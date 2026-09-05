@@ -29,6 +29,8 @@ func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScal
 	if overlay == nil || overlay.base == nil || overlay.base.closed || overlay.current == nil || overlay.current.closed {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
+	endForegroundRead := overlay.current.beginForegroundRead()
+	defer endForegroundRead()
 	if limits.SourceIDs <= 0 || limits.SourceBytes <= 0 || limits.RetainedBytes <= 0 || limits.MappingWork <= 0 || limits.InspectedEntries <= 0 {
 		return nil, errTypedGraphSearchBudget
 	}
@@ -109,6 +111,7 @@ func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScal
 	// locator scratch has at most 512 rows. scratchIDBytes measures logical
 	// chunk payload, not the locator's geometric arena/header allocation cost.
 	ids := make([][]byte, 0, min(512, plan.count))
+	var idArena []byte
 	flush := func() error {
 		if len(ids) == 0 {
 			return nil
@@ -119,15 +122,10 @@ func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScal
 		}
 		plan.scratchIDBytes = max(plan.scratchIDBytes, bytesInChunk)
 		plan.scratchRows = max(plan.scratchRows, len(ids))
-		refs, err := overlay.current.LookupDocumentRowRefsByID(ids, DocumentFetchOptions{})
-		if err != nil {
-			return err
-		}
-		for _, result := range refs.Results {
-			if !result.Found {
+		_, err := overlay.current.visitDocumentRowRefsByID(ids, func(_ []byte, ref DocumentRowRef, found bool) error {
+			if !found {
 				return ErrVectorIndexSnapshotMismatch
 			}
-			ref := result.RowRef
 			i := sort.Search(len(overlay.rows), func(i int) bool { return bytes.Compare(overlay.rows[i].ID, ref.DocumentID) >= 0 })
 			if i < len(overlay.rows) && bytes.Equal(overlay.rows[i].ID, ref.DocumentID) {
 				row := overlay.rows[i]
@@ -144,13 +142,20 @@ func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScal
 				ordinals[baseCount] = ordinal
 				baseCount++
 			}
+			return nil
+		})
+		if err != nil {
+			return err
 		}
 		clear(ids)
 		ids = ids[:0]
+		idArena = idArena[:0]
 		return nil
 	}
 	for id := range allowed {
-		ids = append(ids, []byte(id))
+		start := len(idArena)
+		idArena = append(idArena, id...)
+		ids = append(ids, idArena[start:len(idArena):len(idArena)])
 		if len(ids) == cap(ids) {
 			if err := flush(); err != nil {
 				return nil, err

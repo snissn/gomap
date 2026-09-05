@@ -27,6 +27,17 @@ func encodeColumnPrimaryRowLocator(ref DocumentRowRef) []byte {
 }
 
 func decodeColumnPrimaryRowLocator(id, value []byte) (DocumentRowRef, error) {
+	ref, err := decodeColumnPrimaryRowLocatorBorrowedID(id, value)
+	if err != nil {
+		return DocumentRowRef{}, err
+	}
+	ref.DocumentID = append([]byte(nil), id...)
+	return ref, nil
+}
+
+// The caller must consume the row ref before reusing id. Coordinates are owned
+// scalar values; only DocumentID borrows, never the encoded locator bytes.
+func decodeColumnPrimaryRowLocatorBorrowedID(id, value []byte) (DocumentRowRef, error) {
 	if len(value) != columnPrimaryRowLocatorValueSize || string(value[:4]) != string(columnPrimaryRowLocatorMagic[:]) {
 		return DocumentRowRef{}, fmt.Errorf("collections: invalid primary row locator for id %q value=%x", string(id), value)
 	}
@@ -34,7 +45,7 @@ func decodeColumnPrimaryRowLocator(id, value []byte) (DocumentRowRef, error) {
 	if row > uint64(^uint(0)>>1) {
 		return DocumentRowRef{}, fmt.Errorf("collections: primary row locator for id %q row index overflows int", string(id))
 	}
-	ref := DocumentRowRef{DocumentID: append([]byte(nil), id...), Generation: binary.BigEndian.Uint64(value[4:]), PartID: binary.BigEndian.Uint64(value[12:]), RowIndex: int(row), AppliedCommandLSN: binary.BigEndian.Uint64(value[28:])}
+	ref := DocumentRowRef{DocumentID: id, Generation: binary.BigEndian.Uint64(value[4:]), PartID: binary.BigEndian.Uint64(value[12:]), RowIndex: int(row), AppliedCommandLSN: binary.BigEndian.Uint64(value[28:])}
 	if err := validateDocumentRowRefForPointFetch(0, ref); err != nil {
 		return DocumentRowRef{}, fmt.Errorf("collections: primary row locator: %w", err)
 	}
