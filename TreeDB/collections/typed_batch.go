@@ -145,7 +145,7 @@ func (c *Collection) InsertTypedBatchWithStats(ids, retained [][]byte, columns [
 func typedReplacementItems(ids, retained [][]byte, projection *trustedFloat32Projection) []updateBatchItem {
 	items := make([]updateBatchItem, len(ids))
 	for i := range ids {
-		items[i] = updateBatchItem{UpdateBatchItem: UpdateBatchItem{DocumentID: bytes.Clone(ids[i])}, typedProjection: projection, typedRetained: bytes.Clone(retained[i])}
+		items[i] = updateBatchItem{UpdateBatchItem: UpdateBatchItem{DocumentID: bytes.Clone(ids[i])}, typedProjection: projection, typedRetained: bytes.Clone(bytes.TrimSpace(retained[i]))}
 	}
 	return items
 }
@@ -212,7 +212,8 @@ func (v *CollectionReadView) typedReplacementValuesEqual(id []byte, wanted []col
 }
 
 // ReplaceTypedBatch replaces existing IDs using the same typed contract as
-// InsertTypedBatchWithStats. Missing IDs are unmatched; equal retained bytes and
+// InsertTypedBatchWithStats. Missing IDs are unmatched; equal retained bytes
+// after trimming surrounding whitespace (interior bytes remain significant) and
 // typed values (FP32 vectors compared bitwise) are unmodified. Unique checks and
 // all replacements are atomic.
 // A commit-ambiguous error can mean the durable mutation was accepted.

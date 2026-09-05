@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -263,7 +264,6 @@ func TestTypedMinimaReplaySemanticValidation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			mutate(&payload)
 			encoded, err := commitlog.EncodeCollectionTypedBatchPayload(payload)
 			if err != nil {
 				t.Fatal(err)
@@ -272,6 +272,8 @@ func TestTypedMinimaReplaySemanticValidation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Exercise collection semantics independently of codec rejection.
+			mutate(&decoded)
 			if _, _, _, err := typedProjectionFromPayload(col.Meta(), decoded); err == nil {
 				t.Fatal("accepted invalid replay values")
 			}
@@ -613,6 +615,92 @@ func TestTypedMinimaReplacementReplayAndNoop(t *testing.T) {
 				t.Fatalf("query %s: %+v %v", query, found, err)
 			}
 		}
+	}
+}
+
+func TestTypedMinimaReplacementRetainedWhitespace(t *testing.T) {
+	dir, d, col := openTypedMinimaCollection(t)
+	defer d.Close()
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	replayDir := t.TempDir()
+	copyColumnStoreCommandWALReplayBenchmarkDirM10C(t, dir, replayDir)
+	ids := [][]byte{[]byte("a")}
+	retained := [][]byte{[]byte(" \n{\"id\":\"a\", \"extra\": \"before\"}\t ")}
+	columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"alpha"}}, {Name: "user", Strings: []string{"u1"}}, {Name: "path", Strings: []string{"file1"}}}
+	if _, _, err := col.InsertTypedBatchWithStats(ids, retained, columns); err != nil {
+		t.Fatal(err)
+	}
+	checkReplacement := func(c *Collection, path string, modified bool) {
+		t.Helper()
+		before := countCollectionCommandWALFrames(t, path)
+		results, err := c.ReplaceTypedBatch(ids, retained, columns)
+		if err != nil || len(results) != 1 || !results[0].Matched || results[0].Modified != modified {
+			t.Fatalf("modified=%v replacement=%+v err=%v", modified, results, err)
+		}
+		frames := collectionCommandWALFrames(t, path)
+		wantCount := before + 1
+		if len(frames) != wantCount {
+			t.Fatalf("modified=%v frame count=%d want %d", modified, len(frames), wantCount)
+		}
+		frame := frames[len(frames)-1]
+		if frame.Kind != commitlog.CommandKindCollectionUpdateBatchByID {
+			t.Fatalf("unexpected replacement command kind: %v", frame.Kind)
+		}
+		if modified {
+			if frame.PayloadFormat != commitlog.PayloadFormatCollectionTypedBatchByIDV1 {
+				t.Fatalf("changed replacement format=%v", frame.PayloadFormat)
+			}
+			payload, err := commitlog.DecodeCollectionTypedBatchPayload(frame.Payload)
+			if err != nil || len(payload.Documents) != 1 || !bytes.Equal(payload.Documents[0].Retained, bytes.TrimSpace(retained[0])) {
+				t.Fatalf("replacement changed interior retained bytes: %+v err=%v", payload, err)
+			}
+		} else {
+			// Existing collection no-ops publish an empty V1 update to advance
+			// the command frontier, never a redundant typed replacement.
+			if frame.PayloadFormat != commitlog.PayloadFormatCollectionUpdateBatchByIDV1 {
+				t.Fatalf("noop replacement format=%v", frame.PayloadFormat)
+			}
+			payload, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(frame.Payload)
+			if err != nil || len(payload.Documents) != 0 {
+				t.Fatalf("noop update payload=%+v err=%v", payload, err)
+			}
+		}
+	}
+	checkReplacement(col, dir, false)
+	if err := col.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	checkReplacement(col, dir, false)
+	retained[0] = []byte("\r\n {\"id\":\"a\", \"extra\": \"after\"} \t")
+	checkReplacement(col, dir, true)
+	checkReplacement(col, dir, false)
+	// Interior whitespace is significant even when JSON meaning is unchanged.
+	retained[0] = []byte("\n {\"id\":\"a\",  \"extra\": \"after\"}\r ")
+	checkReplacement(col, dir, true)
+	checkReplacement(col, dir, false)
+	for _, frame := range collectionCommandWALFrames(t, dir) {
+		if frame.LSN > 1 {
+			writeCollectionCommandWALFrame(t, replayDir, frame.LSN, frame.Kind, frame.PayloadFormat, frame.Payload)
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{dir, replayDir} {
+		reopened := openTypedMinimaDB(t, path)
+		defer reopened.Close()
+		c, err := NewCollectionManager(reopened).OpenCollection("minima")
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkReplacement(c, path, false)
+		got, err := c.Get(ids[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertJSONEqualM13C(t, got, []byte(`{"id":"a","extra":"after","embedding":[1,0,0,0,0,0,0,0],"content":"alpha","meta":{"user_id":"u1","fpath":"file1"}}`))
 	}
 }
 

@@ -386,7 +386,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/validated_float32_projection_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 23, occurrences: 30},
 	// Typed admission reuses existing exported schema names and replay fixtures.
 	{path: "TreeDB/collections/typed_batch.go", classification: typedStorageLegacyCompatibility, matchingLines: 23, occurrences: 25},
-	{path: "TreeDB/collections/typed_batch_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 19, occurrences: 22},
+	{path: "TreeDB/collections/typed_batch_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 20, occurrences: 23},
 	{path: "TreeDB/collections/column_physical_predicate.go", classification: typedStorageLegacyDeferred, matchingLines: 3, occurrences: 3},
 	{path: "TreeDB/collections/column_physical_query.go", classification: typedStorageLegacyDeferred, matchingLines: 40, occurrences: 60},
 	{path: "TreeDB/collections/column_physical_query_1890_bench_test.go", classification: typedStorageLegacyDeferred, matchingLines: 1, occurrences: 2},
