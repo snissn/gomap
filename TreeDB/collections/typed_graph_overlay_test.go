@@ -101,7 +101,19 @@ func TestTypedGraphOverlaySearchShadowsAndBudget(t *testing.T) {
 	}
 	var buffer VectorIndexSearchBuffer
 	query := []float32{1, 0, 0, 0, 0, 0, 0, 0}
-	filtered, err := overlay.searchScalarExact(query, 2, HybridScalarFilter{IndexName: "user", Value: "tenant"}, 1000, &buffer)
+	plan, err := prepareTypedGraphFilter(overlay, HybridScalarFilter{IndexName: "user", Value: "tenant"}, typedGraphFilterLimits{SourceIDs: 100, SourceBytes: 10000, RetainedBytes: 10000, MappingWork: 1000, InspectedEntries: 1000})
+	if err != nil || plan.count != 1 || len(plan.delta) != 1 || plan.base.Count() != 0 {
+		t.Fatalf("prepared current filter=%+v err=%v", plan, err)
+	}
+	searchValue := func(value string) ([]VectorIndexSearchResult, error) {
+		p, err := prepareTypedGraphFilter(overlay, HybridScalarFilter{IndexName: "user", Value: value}, typedGraphFilterLimits{SourceIDs: 100, SourceBytes: 10000, RetainedBytes: 10000, MappingWork: 1000, InspectedEntries: 1000})
+		if err != nil {
+			return nil, err
+		}
+		results, _, err := overlay.searchPreparedFilter(p, query, 2, 8, 32, &buffer)
+		return results, err
+	}
+	filtered, _, err := overlay.searchPreparedFilter(plan, query, 2, 8, 32, &buffer)
 	if err != nil || len(filtered) != 1 || string(filtered[0].ID) != "base-1" || filtered[0].Score != -1 {
 		t.Fatalf("current scalar replacement authority: %+v %v", filtered, err)
 	}
@@ -110,17 +122,25 @@ func TestTypedGraphOverlaySearchShadowsAndBudget(t *testing.T) {
 		t.Fatalf("same-pin final materialization: %+v %v", fetched, err)
 	}
 	for _, old := range []string{"base-0", "base-1"} {
-		filtered, err = overlay.searchScalarExact(query, 2, HybridScalarFilter{IndexName: "user", Value: old}, 1000, &buffer)
+		filtered, err = searchValue(old)
 		if err != nil || len(filtered) != 0 {
 			t.Fatalf("old scalar posting %q leaked: %+v %v", old, filtered, err)
 		}
 	}
-	filtered, err = overlay.searchScalarExact(query, 2, HybridScalarFilter{IndexName: "user", Value: "base-2"}, 1000, &buffer)
+	filtered, err = searchValue("base-2")
 	if err != nil || len(filtered) != 1 || string(filtered[0].ID) != "base-2" {
 		t.Fatalf("direct base vector lookup: %+v %v", filtered, err)
 	}
-	if _, err := overlay.searchScalarExact(query, 2, HybridScalarFilter{IndexName: "user", Value: "base-2"}, 1, &buffer); !errors.Is(err, errTypedGraphSearchBudget) || len(buffer.results) != 0 {
-		t.Fatalf("mapping budget left stale results: %v", err)
+	allPlan, err := prepareTypedGraphFilter(overlay, HybridScalarFilter{IndexName: "user", Range: &IndexRangeOptions{Lower: IndexRangeBound{Value: "base-0", Inclusive: true}, Upper: IndexRangeBound{Value: "tenant", Inclusive: true}}}, typedGraphFilterLimits{SourceIDs: 100, SourceBytes: 10000, RetainedBytes: 10000, MappingWork: 1000, InspectedEntries: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tied, tieStats, err := overlay.searchPreparedFilter(allPlan, []float32{0, 0, 1, 0, 0, 0, 0, 0}, 2, 8, 32, &buffer)
+	if err != nil || len(tied) != 2 || string(tied[0].ID) != "base-1" || string(tied[1].ID) != "base-2" || tieStats.DeltaScored != 1 {
+		t.Fatalf("exact base/delta cutoff tie: %+v stats=%+v err=%v", tied, tieStats, err)
+	}
+	if _, _, err := overlay.searchPreparedFilter(plan, query, 2, 8, 0, &buffer); !errors.Is(err, errTypedGraphSearchBudget) || len(buffer.results) != 0 {
+		t.Fatalf("query budget left stale results: %v", err)
 	}
 	if err := col.Delete(ids[1]); err != nil {
 		t.Fatal(err)
@@ -133,7 +153,7 @@ func TestTypedGraphOverlaySearchShadowsAndBudget(t *testing.T) {
 	if err := col.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	filtered, err = overlay.searchScalarExact(query, 2, HybridScalarFilter{IndexName: "user", Value: "tenant"}, 1000, &buffer)
+	filtered, _, err = overlay.searchPreparedFilter(plan, query, 2, 8, 32, &buffer)
 	if err != nil || len(filtered) != 1 {
 		t.Fatalf("later delete/reinsert changed pinned postings: %+v %v", filtered, err)
 	}

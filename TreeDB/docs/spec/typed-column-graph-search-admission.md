@@ -150,16 +150,35 @@ expansion is bounded by the validated native degree plus the existing V3
 auxiliary bound. Search exhaustion is distinct from suffix fold debt: folding
 cannot necessarily cure a base ANN work cap.
 
-The separate internal scalar-exact primitive probes persisted scalar postings
-from the current pin, accepting only complete leaf sets of at most 4,096 IDs.
-It reuses current row locators and already-open typed FP32 parts, with no indexed
-JSON extraction or corpus ID map. Reverse-lookup work has an explicit
-caller-supplied bound.
-Larger or incomplete probes explicitly require filtered ANN mapping, not an
-exact fallback. Final-K materialization uses the same current read view, tested
-across subsequent delete/reinsert. Dispersed large-filter recall, filtered ANN,
-and memory/performance qualification remain pending; no public filtered route
-is claimed.
+The internal filtered consumer prepares complete persisted scalar posting sets
+once from the current pin. It intersects complete leaves before classifying the
+final set: at most 4,096 rows use typed exact scoring, larger sets use prepared
+pack ANN plus separately counted exact suffix work. Thus two large leaves may
+correctly produce a small exact intersection. Incomplete probes fail with an
+explicit budget error. Source ID count and bytes are checked before copying;
+physical inspected entries (including tombstones), mapping work and retained
+ordinal bytes have separate caller limits. Array/multikey dedupe is unsupported
+in this internal typed-scalar seam.
+
+| Graph-search role | Owner / tier | Admission status | Prepared shape and query boundary | Evidence required |
+| --- | --- | --- | --- | --- |
+| Current-pin scalar eligibility | Borrowed current read pin and checked base; `heap_typed_view`, no durable state key or global cache. | `experimental`, internal-only under #4617 | Compact base `RowSelection`, bounded suffix ordinals, and an exact-only ID-ranked ordinal slice of at most 4,096 entries. Queries reuse these without posting, locator or per-candidate ID reads. | `TestTypedGraphPreparedFilterFinalIntersectionAndBounds` and `TestTypedGraphOverlaySearchShadowsAndBudget`; preparation bytes/work, repeated-query allocation, residency, dispersed ANN recall and matched wall-time qualification remain required. |
+
+The exact ID-rank slice preserves document-ID cutoff ties through the existing
+ordinal heap comparator. Its extra word per base row is charged before
+allocation; mapped ID comparisons happen only during preparation. ANN retains
+the existing approximate traversal tie semantics. Ineligible graph nodes remain
+traversable but cannot enter retained results. A positional sparse/all/range
+cursor enumerates selected seeds without scanning the corpus: every inspected
+ordinal is already visited or immediately scored, so seed inspection is bounded
+by scored candidates. Candidate/seed exhaustion returns no partial result and
+preserves performed work counters. Wrong-overlay or closed-pin plans fail.
+
+Final-K materialization uses the same current read view, tested across later
+delete/reinsert. Source string payload and locator chunk payload counters are
+not total heap bounds: map headers and geometric locator scratch are separate
+measured costs. Large dispersed-filter recall and memory/performance
+qualification remain pending; no public filtered route is claimed.
 
 New rebuilds also publish optional `row_refs` asset
 `base_row_ref/ordinal_by_physical_row`: an `int64` / `raw_int64` graph-ordinal

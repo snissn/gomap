@@ -23214,6 +23214,9 @@ func scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt iterator.Unsaf
 }
 
 type scanMergedCollectionIndexIDOptions struct {
+	// Inspected receives physical work, including tombstones and shadowed keys.
+	// It is optional telemetry for callers sharing a cumulative preparation cap.
+	Inspected            *int
 	CloneDocumentID      bool
 	DedupeDocumentID     bool
 	StableDocumentIDTies bool
@@ -23260,11 +23263,17 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 		return false, errors.New("collections: max inspected index entries cannot be negative")
 	}
 	inspected := 0
+	if opts.Inspected != nil {
+		*opts.Inspected = 0
+	}
 	inspect := func(count int) bool {
 		if maxInspected > 0 && count > maxInspected-inspected {
 			return false
 		}
 		inspected += count
+		if opts.Inspected != nil {
+			*opts.Inspected = inspected
+		}
 		return true
 	}
 	if opts.StableDocumentIDTies {

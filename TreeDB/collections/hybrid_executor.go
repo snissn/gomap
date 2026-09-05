@@ -554,6 +554,12 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 }
 
 func (view *hybridScalarLookupView) leafProbe(filter HybridScalarFilter, limit int) (hybridScalarAllowSet, uint64, bool, error) {
+	return view.leafProbeBeforeCopy(filter, limit, 0, nil, nil)
+}
+
+// beforeCopy lets bounded prepared consumers charge borrowed posting IDs before
+// the existing owning set copies them. Ordinary lookup semantics are unchanged.
+func (view *hybridScalarLookupView) leafProbeBeforeCopy(filter HybridScalarFilter, limit, maxInspected int, inspected *int, beforeCopy func([]byte) error) (hybridScalarAllowSet, uint64, bool, error) {
 	if err := ValidateIndexName(filter.IndexName); err != nil {
 		return nil, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
 	}
@@ -614,8 +620,13 @@ func (view *hybridScalarLookupView) leafProbe(filter HybridScalarFilter, limit i
 	}
 	var set hybridScalarAllowSet
 	var inputIDs uint64
-	truncated, err := scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt, idx.ValueType, limit, shouldDedupeIndexDocumentIDs(idx, view.catalog.meta.Options), func(id []byte) (bool, error) {
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt, idx.ValueType, limit, false, maxInspected, scanMergedCollectionIndexIDOptions{DedupeDocumentID: shouldDedupeIndexDocumentIDs(idx, view.catalog.meta.Options), Inspected: inspected}, func(id []byte) (bool, error) {
 		inputIDs++
+		if beforeCopy != nil {
+			if err := beforeCopy(id); err != nil {
+				return false, err
+			}
+		}
 		if set == nil {
 			set = make(hybridScalarAllowSet, max(0, capacityHint))
 		}

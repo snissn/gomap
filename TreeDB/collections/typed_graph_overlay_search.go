@@ -3,7 +3,6 @@ package collections
 import (
 	"bytes"
 	"errors"
-	"math/bits"
 	"slices"
 	"sort"
 )
@@ -22,6 +21,8 @@ type typedGraphOverlaySearch struct {
 type typedGraphOverlaySearchStats struct {
 	Base                         columnVectorGraphNativeSearchStats
 	DeltaScored                  int
+	FilteredExact                bool
+	ExactBaseScored              int
 	BaseShadowed                 int
 	BaseResultIDs                int
 	PackMmapDirect, PackHeapCopy bool
@@ -73,132 +74,8 @@ func (v *typedGraphOverlaySearch) shadows(id []byte) bool {
 }
 
 var errTypedGraphSearchBudget = errors.New("collections: typed graph search work budget exhausted")
-var errTypedGraphFilteredANNRequired = errors.New("collections: typed graph filter requires ANN mapping")
 
 const typedGraphScalarExactLimit = 4096
-
-// searchScalarExact uses only the current pin's persisted postings and locator.
-// Incomplete probes never become an exact route. Larger filters require the
-// separate filtered ANN primitive; they cannot fall back to a corpus scan.
-func (v *typedGraphOverlaySearch) searchScalarExact(query []float32, topK int, filter HybridScalarFilter, mappingWorkLimit int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
-	completed := false
-	if buffer != nil {
-		buffer.resetView()
-		defer func() {
-			if !completed {
-				buffer.resetView()
-			}
-		}()
-	}
-	if v == nil || v.base == nil || v.base.closed || v.current == nil || v.current.closed || buffer == nil {
-		return nil, ErrVectorIndexSnapshotMismatch
-	}
-	if err := validateVectorIndexSearchRequest(topK, 0); err != nil {
-		return nil, err
-	}
-	if len(query) != v.base.reader.def.Dimensions {
-		return nil, errColumnVectorGraphNativeSearchQueryDimensionMismatch
-	}
-	queryNorm, err := columnVectorGraphInvNorm(query)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateHybridScalarFilter(filter); err != nil {
-		return nil, err
-	}
-	leaves := filter.And
-	if len(leaves) == 0 {
-		leaves = []HybridScalarFilter{filter}
-	}
-	// Borrowed view: nil domain deliberately excludes newer mutable buffers.
-	lookup := hybridScalarLookupView{snapshot: v.current.snapshot, catalog: v.current.catalog}
-	var allowed hybridScalarAllowSet
-	for _, leaf := range leaves {
-		set, _, truncated, err := lookup.leafProbe(leaf, typedGraphScalarExactLimit+1)
-		if err != nil {
-			return nil, err
-		}
-		if truncated || len(set) > typedGraphScalarExactLimit {
-			return nil, errTypedGraphFilteredANNRequired
-		}
-		if allowed == nil {
-			allowed = set
-		} else {
-			for id := range allowed {
-				if _, ok := set[id]; !ok {
-					delete(allowed, id)
-				}
-			}
-		}
-	}
-	inverse := v.base.reader.rowRefSource
-	if !inverse.inversePermutationActive() {
-		return nil, errTypedGraphInverseRequired
-	}
-	// Binary lookup is bounded independently of sparse physical row indexes.
-	perID := bits.Len(uint(inverse.rows)) + 1
-	if mappingWorkLimit <= 0 {
-		return nil, errTypedGraphSearchBudget
-	}
-	if perID > 0 && len(allowed) > mappingWorkLimit/perID {
-		return nil, errTypedGraphSearchBudget
-	}
-	ids := make([][]byte, 0, len(allowed))
-	for id := range allowed {
-		ids = append(ids, []byte(id))
-	}
-	refs, err := v.current.LookupDocumentRowRefsByID(ids, DocumentFetchOptions{})
-	if err != nil {
-		return nil, err
-	}
-	for _, result := range refs.Results {
-		if !result.Found {
-			return nil, ErrVectorIndexSnapshotMismatch
-		}
-		vector, err := v.vectorForCurrentRow(result.RowRef)
-		if err != nil {
-			return nil, err
-		}
-		norm, err := columnVectorGraphInvNorm(vector)
-		if err != nil {
-			return nil, err
-		}
-		score, err := columnVectorGraphNativeCosineScoreVector(query, queryNorm, 0, vector, norm)
-		if err != nil {
-			return nil, err
-		}
-		buffer.baseResults = append(buffer.baseResults, VectorIndexSearchResult{ID: result.ID, Score: score})
-	}
-	sort.Slice(buffer.baseResults, func(i, j int) bool {
-		return vectorIndexSearchResultBefore(buffer.baseResults[i], buffer.baseResults[j])
-	})
-	results, err := mergeVectorIndexViewResults(buffer.baseResults, nil, topK, buffer)
-	if err != nil {
-		return nil, err
-	}
-	completed = true
-	return results, nil
-}
-
-func (v *typedGraphOverlaySearch) vectorForCurrentRow(ref DocumentRowRef) ([]float32, error) {
-	i := sort.Search(len(v.rows), func(i int) bool { return bytes.Compare(v.rows[i].ID, ref.DocumentID) >= 0 })
-	if i < len(v.rows) && bytes.Equal(v.rows[i].ID, ref.DocumentID) {
-		row := v.rows[i]
-		if row.Deleted || row.Generation != ref.Generation || row.PartID != ref.PartID || row.RowIndex != ref.RowIndex || row.AppliedCommandLSN != ref.AppliedCommandLSN {
-			return nil, ErrVectorIndexSnapshotMismatch
-		}
-		return row.Values[v.vectorColumn].Float32Vector, nil
-	}
-	ordinal, ok := v.base.reader.rowRefSource.ordinalForPhysicalRow(ref)
-	if !ok {
-		return nil, ErrVectorIndexSnapshotMismatch
-	}
-	vector, _, _, ok := v.base.reader.typedVectorSource.vectorForOrdinal(ordinal)
-	if !ok {
-		return nil, ErrVectorIndexSnapshotMismatch
-	}
-	return vector, nil
-}
 
 // search is an internal unfiltered slice. Bounded exact suffix work is counted
 // separately from prepared-base ANN work. Filtering and public lifecycle
