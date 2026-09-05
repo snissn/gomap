@@ -54,18 +54,27 @@ func BenchmarkTypedGraphReadOwner(b *testing.B) {
 							b.Fatal(err)
 						}
 						defer s.Close()
+						view := newCollectionReadViewAtSnapshot(col, s.snapshot, s.catalog, false, "")
+						defer view.Close()
 						var buffer VectorIndexSearchBuffer
-						opts := VectorIndexSearcherSearchOptions{Query: query, TopK: 10, EfSearch: 128, IncludeDocuments: docs, StatsMode: VectorIndexSearchStatsModeMinimal}
-						if _, err := s.SearchWithBuffer(opts, &buffer); err != nil {
-							b.Fatal(err)
-						}
-						b.ReportAllocs()
-						b.ResetTimer()
-						for i := 0; i < b.N; i++ {
+						opts := VectorIndexSearcherSearchOptions{Query: query, TopK: 10, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeMinimal}
+						run := func() {
 							response, err := s.SearchWithBuffer(opts, &buffer)
 							if err != nil || len(response.Results) != 10 {
 								b.Fatalf("ordinary results=%d err=%v", len(response.Results), err)
 							}
+							if docs {
+								fetched, err := view.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
+								if err != nil || len(fetched.Results) != 10 {
+									b.Fatalf("documents=%d err=%v", len(fetched.Results), err)
+								}
+							}
+						}
+						run()
+						b.ReportAllocs()
+						b.ResetTimer()
+						for i := 0; i < b.N; i++ {
+							run()
 						}
 						b.StopTimer()
 					})
