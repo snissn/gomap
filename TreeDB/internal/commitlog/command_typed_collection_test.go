@@ -69,7 +69,7 @@ func TestCollectionTypedLegacyProjectionFlag(t *testing.T) {
 
 func TestCollectionTypedBatchPayload(t *testing.T) {
 	p := CollectionTypedBatchPayload{Collection: "docs", SchemaHash: 7, Columns: []CollectionTypedColumn{{Name: "a_embedding", Type: CollectionTypedFloat32Vector, Dimensions: 2}, {Name: "content", Type: CollectionTypedString}}, Documents: []CollectionTypedDocument{
-		{ID: []byte("b"), Retained: []byte(`{}`), Values: []CollectionTypedValue{{Vector: []float32{0, 1}}, {String: "second"}}},
+		{ID: []byte("b"), Retained: []byte{0xff}, Values: []CollectionTypedValue{{Vector: []float32{0, 1}}, {String: "second café 世界"}}},
 		{ID: []byte("a"), Retained: []byte(`{}`), Values: []CollectionTypedValue{{Vector: []float32{1, 0}}, {String: "first"}}},
 	}}
 	raw, err := EncodeCollectionTypedBatchPayload(p)
@@ -134,6 +134,7 @@ func TestCollectionTypedBatchPayload(t *testing.T) {
 	vectorOffset := rowOffset + 4 + len(p.Documents[0].ID) + 4 + len(p.Documents[0].Retained)
 	secondRowOffset := vectorOffset + int(p.Columns[0].Dimensions)*4 + 4 + len(p.Documents[0].Values[1].String)
 	for name, mutate := range map[string]func([]byte){
+		"invalid_utf8_string":  func(raw []byte) { raw[vectorOffset+int(p.Columns[0].Dimensions)*4+4] = 0xff },
 		"duplicate_id":         func(raw []byte) { raw[secondRowOffset+4] = raw[rowOffset+4] },
 		"unknown_flag":         func(raw []byte) { raw[18] = 2 },
 		"legacy_wrong_columns": func(raw []byte) { raw[18] = 1 },
@@ -148,8 +149,11 @@ func TestCollectionTypedBatchPayload(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			corrupt := bytes.Clone(raw)
 			mutate(corrupt)
+			if err := validateCollectionTypedBatchPayload(corrupt); !errors.Is(err, ErrCorrupt) {
+				t.Errorf("scanner error=%v want ErrCorrupt", err)
+			}
 			if _, err := DecodeCollectionTypedBatchPayload(corrupt); err == nil {
-				t.Fatal("decoder accepted malformed payload")
+				t.Error("decoder accepted malformed payload")
 			}
 			for _, kind := range []CommandKind{CommandKindCollectionInsertBatchByID, CommandKindCollectionUpdateBatchByID} {
 				if err := validateCommandEnvelopePayload(CommandEnvelope{Kind: kind, PayloadFormat: PayloadFormatCollectionTypedBatchByIDV1, Payload: corrupt}); err == nil {
@@ -172,6 +176,12 @@ func TestCollectionTypedBatchPayload(t *testing.T) {
 	if _, err := DecodeCollectionTypedBatchPayload(append(raw, 0)); err == nil {
 		t.Fatal("accepted trailing data")
 	}
+	previousString := p.Documents[0].Values[1].String
+	p.Documents[0].Values[1].String = "invalid\xff"
+	if _, err := EncodeCollectionTypedBatchPayload(p); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("invalid UTF-8 encode error=%v want ErrCorrupt", err)
+	}
+	p.Documents[0].Values[1].String = previousString
 	p.Documents[0].Values[0].Vector[0] = float32(math.Inf(1))
 	if _, err := EncodeCollectionTypedBatchPayload(p); err == nil {
 		t.Fatal("accepted nonfinite vector")

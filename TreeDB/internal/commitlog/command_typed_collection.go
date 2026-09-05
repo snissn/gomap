@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"math"
 	"sort"
+	"unicode/utf8"
 )
 
 // Typed collection payloads retain accepted values independently of JSON.
@@ -75,7 +76,7 @@ func validateCollectionTypedBatch(p CollectionTypedBatchPayload) error {
 		}
 		for i, v := range d.Values {
 			if p.Columns[i].Type == CollectionTypedString {
-				if len(v.Vector) != 0 {
+				if len(v.Vector) != 0 || !utf8.ValidString(v.String) {
 					return ErrCorrupt
 				}
 				continue
@@ -358,7 +359,7 @@ func validateCollectionTypedBatchPayload(raw []byte) error {
 			typ, dims := schema[0], binary.LittleEndian.Uint32(schema[1:])
 			schema = schema[5:]
 			if typ == CollectionTypedString {
-				if _, ok := readBytes(); !ok {
+				if value, ok := readBytes(); !ok || !utf8.Valid(value) {
 					return ErrCorrupt
 				}
 			} else {

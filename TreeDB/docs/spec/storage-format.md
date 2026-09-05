@@ -2636,7 +2636,7 @@ Value[ColumnCount] // descriptor order
 
 StringValue:
 u32 ByteLen
-bytes String[ByteLen]
+bytes String[ByteLen] // valid UTF-8
 
 VectorValue:
 u32 Float32Bits[Dimensions]
@@ -2650,8 +2650,9 @@ Flags zero selects the general typed-batch admission contract; replay must not
 infer the originating API from the schema alone.
 
 The payload has no null/missing values or implicit numeric conversion. Unknown
-versions/types/flag bits, zero row/column counts, invalid dimensions, duplicate or unsorted descriptors/IDs,
-nonfinite vectors, truncated lengths, and trailing bytes fail closed. The
+versions/types/flag bits, zero row/column counts, invalid dimensions, duplicate
+or unsorted descriptors/IDs, nonfinite vectors, invalid UTF-8 string values,
+truncated lengths, and trailing bytes fail closed. The
 append validator scans the payload without constructing typed rows; the owning
 decoder validates bounds before allocating row/value buffers. Collection
 admission additionally checks the configured schema and field ownership. A
