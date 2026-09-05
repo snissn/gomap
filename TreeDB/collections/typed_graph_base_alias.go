@@ -17,6 +17,7 @@ import (
 const (
 	typedGraphBaseControlPrefix   = "collections/typed-graph-base/v1/"
 	typedGraphBaseControlHeader   = 12
+	typedGraphBaseControlVersion  = 2 // Independent native index pages; v1 shared COW pages are rejected.
 	typedGraphBaseControlMaxBytes = 128 << 10
 	typedGraphBaseMaxRoots        = 64
 	// Same conservative leaf-entry/revision reserve as TVIS, including the key.
@@ -66,19 +67,6 @@ func validateTypedGraphBaseInlineControl(meta CollectionMeta, raw []byte) error 
 		}
 	}
 	return nil
-}
-
-func newTypedGraphBaseCapture(catalog *collectionCatalog, updated CollectionMeta, manifestRoot uint64) (*typedGraphBaseAlias, error) {
-	names, err := typedGraphBaseRootNames(updated)
-	if err != nil {
-		return nil, err
-	}
-	base := &typedGraphBaseAlias{meta: updated, roots: make(map[string]uint64, len(names))}
-	for _, name := range names {
-		base.roots[name] = catalog.rootID(name)
-	}
-	base.roots[collectionColumnManifestRootName(updated.Name)] = manifestRoot
-	return base, nil
 }
 
 func addTypedGraphBaseCaptureUpdates(updates map[string][]byte, base *typedGraphBaseAlias) error {
@@ -167,7 +155,7 @@ func encodeTypedGraphBaseControl(meta CollectionMeta) ([]byte, error) {
 	}
 	out := make([]byte, typedGraphBaseControlHeader+len(raw))
 	copy(out, "TGBA")
-	binary.LittleEndian.PutUint16(out[4:6], 1)
+	binary.LittleEndian.PutUint16(out[4:6], typedGraphBaseControlVersion)
 	binary.LittleEndian.PutUint16(out[6:8], uint16(len(roots)))
 	binary.LittleEndian.PutUint32(out[8:12], uint32(len(raw)))
 	copy(out[12:], raw)
@@ -175,7 +163,7 @@ func encodeTypedGraphBaseControl(meta CollectionMeta) ([]byte, error) {
 }
 
 func decodeTypedGraphBaseControl(raw []byte, collection string) (CollectionMeta, error) {
-	if len(raw) < typedGraphBaseControlHeader || len(raw) > typedGraphBaseControlMaxBytes || !bytes.Equal(raw[:4], []byte("TGBA")) || binary.LittleEndian.Uint16(raw[4:6]) != 1 {
+	if len(raw) < typedGraphBaseControlHeader || len(raw) > typedGraphBaseControlMaxBytes || !bytes.Equal(raw[:4], []byte("TGBA")) || binary.LittleEndian.Uint16(raw[4:6]) != typedGraphBaseControlVersion {
 		return CollectionMeta{}, errors.New("collections: invalid typed graph base control header")
 	}
 	count := int(binary.LittleEndian.Uint16(raw[6:8]))

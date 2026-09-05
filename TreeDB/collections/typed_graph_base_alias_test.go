@@ -13,7 +13,51 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
+
+func TestTypedGraphBaseCapturePagerPagesDisjoint(t *testing.T) {
+	col, reader, _, _, _, _ := openTypedGraphQualityFixture(t, 512)
+	defer reader.Close()
+	snap := col.db.AcquireSnapshot()
+	defer snap.Close()
+	catalog, err := loadCollectionCatalog(snap, col.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := catalog.typedGraphBase
+	if base == nil {
+		t.Fatal("missing captured base")
+	}
+	currentPages := make(map[uint64]string)
+	multiPage := false
+	for name := range base.roots {
+		pages, err := tree.New(snap.Pager(), nil, catalog.rootID(name)).CollectPageIDs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		multiPage = multiPage || len(pages) > 1
+		for _, id := range pages {
+			currentPages[id] = name
+		}
+	}
+	if !multiPage {
+		t.Fatal("fixture did not exercise multiple pager pages")
+	}
+	// CollectPageIDs intentionally excludes immutable leaf-log references.
+	// All mutable pager descendants, not only root IDs, must be independent.
+	for name, root := range base.roots {
+		pages, err := tree.New(snap.Pager(), nil, root).CollectPageIDs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range pages {
+			if current, shared := currentPages[id]; shared {
+				t.Errorf("captured %s shares mutable pager page %d with current %s", name, id, current)
+			}
+		}
+	}
+}
 
 func TestTypedGraphBaseControlBoundsAndIdentity(t *testing.T) {
 	_, db, col := openTypedMinimaCollection(t)
@@ -34,6 +78,7 @@ func TestTypedGraphBaseControlBoundsAndIdentity(t *testing.T) {
 		"short":            func(b []byte) []byte { return b[:typedGraphBaseControlHeader-1] },
 		"magic":            func(b []byte) []byte { b[0]++; return b },
 		"version":          func(b []byte) []byte { b[4]++; return b },
+		"shared-root-v1":   func(b []byte) []byte { b[4] = 1; return b },
 		"zero_roots":       func(b []byte) []byte { binary.LittleEndian.PutUint16(b[6:8], 0); return b },
 		"too_many_roots":   func(b []byte) []byte { binary.LittleEndian.PutUint16(b[6:8], typedGraphBaseMaxRoots+1); return b },
 		"wrong_root_count": func(b []byte) []byte { b[6]++; return b },
@@ -269,7 +314,7 @@ func testTypedGraphBaseAliasControlledFixtureReopen(t *testing.T, direct bool) {
 	updates := map[string][]byte{typedGraphBaseControlPrefix + col.Name(): control}
 	updates["typed-graph-base-fixture/unrelated"] = []byte("preserved")
 	for _, name := range names {
-		updates[systemCollectionRootKey(typedGraphBaseAliasRootName(col.Name(), name))] = encodeRootID(catalog.rootID(name))
+		updates[systemCollectionRootKey(typedGraphBaseAliasRootName(col.Name(), name))] = encodeRootID(catalog.typedGraphBase.roots[name])
 	}
 	records, err := loadColumnManifestRecordsFromRoot(snap, catalog.rootID(collectionColumnManifestRootName(col.Name())))
 	if err != nil {

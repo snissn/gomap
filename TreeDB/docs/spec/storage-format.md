@@ -2962,12 +2962,34 @@ the visible commit sequence alone never grant reuse.
 
 The current synchronous rebuild of a supported single typed `column_graph`
 atomically publishes `collections/typed-graph-base/v1/<collection>` with its
-graph manifest and one nonrecursive set of ordinary collection-root aliases.
-The control contains `TGBA`, little-endian uint16 version 1, uint16 root count,
+graph manifest and one nonrecursive set of independent captured index roots.
+The descriptor namespace retains `/v1/`, but the control contains `TGBA`,
+little-endian uint16 version 2, uint16 root count,
 uint32 metadata byte length, and canonical normalized collection metadata.
 The decoder limits the entire record to 128 KiB and the root count to 64 before
 decoding metadata. Root IDs remain ordinary root descriptors so physical
 maintenance can remap them; the control contains no page IDs or nested aliases.
+Version 1 controls are rejected: their shared mutable pager pages do not provide
+the independent-root ownership required here. No migration is supplied.
+
+Initial capture copies raw primary, scalar, locator, and manifest index entries
+into independent native B-trees. Persistent value pointers, entry revisions,
+and immutable typed/leaf-log assets are shared without resolving or regenerating
+their payloads. Subsequent capture replaces each prior independent tree through
+the ordinary delta publisher, including tombstones for old-only keys. This lets
+normal COW retirement reclaim superseded captured pages instead of orphaning an
+entire tree on every capture. Descriptor enumeration alone does not supply
+mutable COW-fork semantics; this is a collections ownership rule, not a general
+engine alias-retirement repair.
+
+The initial capture safety ceilings are 8,000,000 total old/new index records and
+512 MiB of encoded keys plus inline values or persistent pointers and entry
+headers. Pre-WAL checks include conservative graph/header growth from the actual
+built layer count and string lengths; the final prepared manifest is checked
+again. These are not measured operational capacity, heap, or disk limits.
+Publication owns additional batch/tree-build scratch and runs under its existing
+writer lock; capture is not constant-space streaming publication. Public mutable
+admission still requires the separate physical-output and fold resource gates.
 
 Producer admission is stricter than this corruption bound: the control key plus
 encoded value must fit `page.PageSize - page.PageHeaderSize - 256` bytes, and
@@ -2977,6 +2999,9 @@ including initially absent identities; installation rechecks the actual bytes.
 Schema changes remove the control and aliases with real tombstones. Exact
 publication obligations and maintenance reachability include the captured
 manifest closure; unchanged-base append certification remains available.
+Descriptor removal does not itself retire every page of an independent captured
+tree. Schema/drop native-page reclamation is a remaining M3 pre-activation gate;
+external typed-asset GC is not native index-page reclamation.
 
 This capture is not mutable graph serving or an off-lock fold. Name-only rebuild
 replay reconstructs a logically equivalent typed base. Process-crash tests hold
