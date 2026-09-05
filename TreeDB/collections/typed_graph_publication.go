@@ -250,9 +250,10 @@ type typedGraphPublicationCandidate struct {
 }
 
 // The existing typed projection and generic extractor produce owning values;
-// physical publication only reads them. Share those immutable values, copying
-// ID bytes and row headers only. StringBytes are normalized if a borrowed row
-// decoder supplied them. No retained JSON enters derived state.
+// physical publication only reads them. Share those immutable value headers and
+// payloads. Copy ID bytes and outer row headers only. A borrowed StringBytes
+// carrier requires a separate header slice before normalization; owning rows do
+// not. No retained JSON enters derived state.
 func (c *Collection) prepareTypedGraphPublication(input columnWritePublishInput) (*typedGraphPublicationCandidate, error) {
 	coord := c.collectionSchemaCoordinator()
 	if coord == nil {
@@ -293,7 +294,13 @@ func (c *Collection) prepareTypedGraphPublication(input columnWritePublishInput)
 			row.Operation = ColumnPublishOperationInsert
 		}
 		if !row.Deleted {
-			row.Values = slices.Clone(input.declaredRows[i].Values)
+			row.Values = input.declaredRows[i].Values
+			for _, value := range row.Values {
+				if value.StringBytes != nil {
+					row.Values = slices.Clone(row.Values)
+					break
+				}
+			}
 			for j := range row.Values {
 				if row.Values[j].StringBytes != nil {
 					row.Values[j].String = string(row.Values[j].StringBytes)

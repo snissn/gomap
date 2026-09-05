@@ -462,6 +462,33 @@ func TestTypedGraphPublicationDirectGroup(t *testing.T) {
 	}
 	_ = snap.Close()
 	columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"a"}}, {Name: "user", Strings: []string{"u"}}, {Name: "path", Strings: []string{"p"}}}
+	// The projection owns these headers and vectors; asset publication only
+	// reads them. Derived state may share them without cloning each row.
+	projection, err := newTrustedTypedProjection(catalog.meta, [][]byte{[]byte("a")}, [][]byte{[]byte(`{"id":"a"}`)}, columns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := projection.typedRows["a"]
+	input := columnWritePublishInput{meta: catalog.meta, catalog: catalog, operation: ColumnPublishOperationInsert, rows: 1, documents: []columnWriteDocument{{ID: []byte("a")}}, declaredRowsReady: true, declaredRows: []columnDeclaredRow{{ID: []byte("a"), Values: values}}}
+	candidate, err := col.prepareTypedGraphPublication(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if &candidate.next.rows[0].Values[0] != &values[0] {
+		t.Fatal("owning value headers were copied")
+	}
+	candidate.rejectBeforeAppend()
+	borrowed := []byte("borrowed")
+	values[1].StringBytes = borrowed
+	candidate, err = col.prepareTypedGraphPublication(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	borrowed[0] = 'X'
+	if candidate.next.rows[0].Values[1].String != "borrowed" || candidate.next.rows[0].Values[1].StringBytes != nil || values[1].StringBytes == nil {
+		t.Fatal("borrowed normalization changed input or retained borrowed bytes")
+	}
+	candidate.rejectBeforeAppend()
 	if _, _, err := col.InsertTypedBatchWithStats([][]byte{[]byte("a")}, [][]byte{[]byte(`{"id":"a"}`)}, columns); err != nil {
 		t.Fatal(err)
 	}
