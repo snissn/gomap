@@ -269,6 +269,23 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	if baseManifestRootID == 0 {
 		timing.Snapshot = collectionObservedElapsedSince(snapshotStarted)
 		rowsStarted := time.Now()
+		if columnStoreTypedScalarIndexesSupported(catalog.meta) {
+			it, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(baseMeta.Name), nil, nil, false)
+			if err != nil {
+				return VectorIndexStatus{}, err
+			}
+			if it != nil {
+				defer it.Close()
+				if it.Valid() {
+					return VectorIndexStatus{}, errors.New("collections: selected typed column_graph rebuild has primary rows without a physical manifest")
+				}
+				if err := it.Error(); err != nil {
+					return VectorIndexStatus{}, err
+				}
+			}
+			timing.RowExtraction = collectionObservedElapsedSince(rowsStarted)
+			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay, started, &timing)
+		}
 		rows, err := c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
 		timing.RowExtraction = collectionObservedElapsedSince(rowsStarted)
 		if err != nil {
@@ -301,6 +318,9 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	timing.Snapshot = collectionObservedElapsedSince(snapshotStarted)
 	rowsStarted := time.Now()
 	rows, typedSource, usedTypedColumns, err := c.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap, catalog, *cfg, records, manifest, def)
+	if err == nil && !usedTypedColumns && columnStoreTypedScalarIndexesSupported(catalog.meta) {
+		err = fmt.Errorf("%w: selected typed column_graph rebuild source unavailable", ErrColumnQueryPlanUnsupported)
+	}
 	if err == nil && !usedTypedColumns {
 		rows, err = c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
 	}
@@ -502,9 +522,6 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 	if err != nil {
 		return nil, nil, false, err
 	}
-	if mutationParts != 0 {
-		return nil, nil, false, nil
-	}
 	typedRefs, err := typedColumnPartRefsByGenerationFromManifestRecords(records, cfg.AssetManager.Namespace)
 	if err != nil {
 		return nil, nil, false, err
@@ -525,16 +542,22 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 	if err != nil {
 		return nil, nil, false, err
 	}
-	physicalLocations, scannedRowsByGeneration, err := c.columnVectorGraphTypedColumnPhysicalLocations(catalog.meta.Name, cfg, physicalRefs)
-	if errors.Is(err, errColumnVectorGraphTypedColumnMultipartDeferred) {
-		return nil, nil, false, nil
-	}
-	if err != nil {
-		return nil, nil, false, err
-	}
-	for generation, rows := range scannedRowsByGeneration {
-		if physicalRowsByGeneration[generation] != rows {
-			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild physical row count generation=%d scanned=%d manifest=%d", generation, rows, physicalRowsByGeneration[generation])
+	locatorRoot := collectionColumnRowLocatorRootName(catalog.meta.Name)
+	useLocator := catalog.rootID(locatorRoot) != 0
+	var physicalLocations map[string]columnVectorGraphTypedColumnPhysicalLocation
+	if !useLocator {
+		if mutationParts != 0 {
+			return nil, nil, false, errors.New("collections: column_graph typed rebuild requires latest row locator for mutated physical refs")
+		}
+		var scannedRowsByGeneration map[uint64]int
+		physicalLocations, scannedRowsByGeneration, err = c.columnVectorGraphTypedColumnPhysicalLocations(catalog.meta.Name, cfg, physicalRefs)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		for generation, rows := range scannedRowsByGeneration {
+			if physicalRowsByGeneration[generation] != rows {
+				return nil, nil, false, fmt.Errorf("collections: column_graph rebuild physical row count generation=%d scanned=%d manifest=%d", generation, rows, physicalRowsByGeneration[generation])
+			}
 		}
 	}
 
@@ -546,27 +569,32 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 		}
 	}()
 	parts := make(map[uint64]*columnVectorGraphTypedColumnVectorPart, len(typedRefs))
-	for generation, typedRef := range typedRefs {
-		physicalRows, exists := physicalRowsByGeneration[generation]
-		if !exists {
-			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild typed_column_part generation=%d has no physical rows", generation)
+	var locator iterator.UnsafeIterator
+	if useLocator {
+		locator, err = collectionIteratorAtCatalogRoot(snap, catalog, locatorRoot, nil, nil, false)
+		if err != nil {
+			return nil, nil, false, err
 		}
-		part, _, loadErr := c.loadColumnVectorGraphTypedColumnVectorPart(catalog.meta.Name, cfg, typedRef, physicalRows, field, adapterColumn, source.manager)
-		if loadErr != nil {
-			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild load typed_column_part generation=%d: %w", generation, loadErr)
+		if locator != nil {
+			defer locator.Close()
 		}
-		source.parts = append(source.parts, part)
-		parts[generation] = part
 	}
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), nil, nil, false)
 	if err != nil {
 		return nil, nil, false, err
 	}
 	if it == nil {
+		if locator != nil && (locator.Valid() || locator.Error() != nil) {
+			return nil, nil, false, errors.New("collections: column_graph rebuild row locator without primary rows")
+		}
+		success = true
 		return nil, source, true, nil
 	}
 	defer func() { _ = it.Close() }()
 	rows := make([]columnVectorGraphAssetRow, 0, len(physicalLocations))
+	// Locator values are consumed synchronously; only builder IDs are owned.
+	// The caller holds the snapshot throughout construction and source mappings
+	// remain pinned until the existing construction-matrix staging completes.
 	for it.Valid() {
 		if it.IsDeleted() {
 			it.Next()
@@ -574,6 +602,18 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 		}
 		id := bytes.Clone(it.UnsafeKey())
 		location, exists := physicalLocations[string(id)]
+		if useLocator {
+			if locator == nil || !locator.Valid() || !bytes.Equal(locator.UnsafeKey(), id) {
+				return nil, nil, false, fmt.Errorf("collections: column_graph rebuild primary/locator ID mismatch at %q", id)
+			}
+			ref, decodeErr := decodeColumnPrimaryRowLocatorBorrowedID(id, locator.UnsafeValue())
+			if decodeErr != nil {
+				return nil, nil, false, decodeErr
+			}
+			exists = true
+			location = columnVectorGraphTypedColumnPhysicalLocation{generation: ref.Generation, partID: ref.PartID, rowIndex: ref.RowIndex, appliedCommandLSN: ref.AppliedCommandLSN}
+			locator.Next()
+		}
 		if !exists {
 			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild missing physical row for document id %q", string(id))
 		}
@@ -581,6 +621,19 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild physical row document id %q generation=%d part mismatch", string(id), location.generation)
 		}
 		part := parts[location.generation]
+		if part == nil {
+			typedRef, found := typedRefs[location.generation]
+			if !found {
+				return nil, nil, false, fmt.Errorf("collections: column_graph rebuild missing typed_column_part generation=%d", location.generation)
+			}
+			var loadErr error
+			part, _, loadErr = c.loadColumnVectorGraphTypedColumnVectorPart(catalog.meta.Name, cfg, typedRef, physicalRowsByGeneration[location.generation], field, adapterColumn, source.manager)
+			if loadErr != nil {
+				return nil, nil, false, loadErr
+			}
+			source.parts = append(source.parts, part)
+			parts[location.generation] = part
+		}
 		if part == nil || location.rowIndex < 0 || location.rowIndex >= part.rows {
 			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild typed row document id %q generation=%d row_index=%d unavailable", string(id), location.generation, location.rowIndex)
 		}
@@ -609,7 +662,15 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 	if err := it.Error(); err != nil {
 		return nil, nil, false, err
 	}
-	if len(rows) != len(physicalLocations) {
+	if locator != nil {
+		if err := locator.Error(); err != nil {
+			return nil, nil, false, err
+		}
+		if locator.Valid() {
+			return nil, nil, false, errors.New("collections: column_graph rebuild extra row locator entries")
+		}
+	}
+	if !useLocator && len(rows) != len(physicalLocations) {
 		return nil, nil, false, fmt.Errorf("collections: column_graph rebuild physical rows=%d primary documents=%d", len(physicalLocations), len(rows))
 	}
 	success = true

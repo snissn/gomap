@@ -528,23 +528,23 @@ func validateColumnVectorGraphRowRefStateBounds(indexName string, ordinal int, r
 }
 
 func columnVectorGraphRowRefBasePartRows(records []columnManifestRecord, generation uint64, namespace string) (map[documentRowPartKey]int, error) {
-	physicalRefs, mutationParts, err := columnManifestAssetRefsFromRecordsForScan(records, generation, namespace)
+	physicalRefs, _, err := columnManifestAssetRefsFromRecordsForScan(records, generation, namespace)
 	if err != nil {
 		return nil, err
-	}
-	if mutationParts != 0 {
-		return nil, errors.New("collections: column_graph row-ref state requires insert-only base physical refs")
 	}
 	if len(physicalRefs) == 0 {
 		return nil, errors.New("collections: column_graph row-ref state missing base physical refs")
 	}
 	rows := make(map[documentRowPartKey]int, len(physicalRefs))
 	for _, asset := range physicalRefs {
+		if asset.Reason == ColumnPublishOperationDelete {
+			continue
+		}
 		if asset.Ref.Kind != ColumnAssetKindTCS1PartImage {
 			return nil, fmt.Errorf("collections: column_graph row-ref state physical ref kind=%q", asset.Ref.Kind)
 		}
-		if asset.Reason != ColumnPublishOperationInsert {
-			return nil, fmt.Errorf("collections: column_graph row-ref state requires insert-only physical refs, got %s", asset.Reason)
+		if asset.Reason != ColumnPublishOperationInsert && asset.Reason != ColumnPublishOperationUpdate {
+			return nil, fmt.Errorf("collections: column_graph row-ref state unsupported physical refs, got %s", asset.Reason)
 		}
 		key := documentRowPartKey{Generation: asset.Ref.Generation, PartID: asset.Ref.PartID}
 		if _, exists := rows[key]; exists {
