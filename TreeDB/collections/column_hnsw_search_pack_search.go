@@ -1188,7 +1188,9 @@ func (v *columnHNSWSearchPackPreparedView) fetchTopSearchResults(scratch *column
 		stats.ResultIDPreparedBytesViews = 1
 		stats.RowRefStatePreparedViews = 1
 		if v.status == columnHNSWSearchPackPreparedStatusDirect {
-			stats.RowRefStateMmapDirectFields = uint64(len(columnVectorGraphRowRefStateFields))
+			// The pack contains the four forward coordinates, not the optional
+			// inverse permutation stored in the separate row-ref asset family.
+			stats.RowRefStateMmapDirectFields = 4
 		}
 	}
 	for i, candidate := range scratch.top {

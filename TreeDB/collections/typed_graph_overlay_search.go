@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"math/bits"
 	"slices"
 	"sort"
 )
@@ -16,7 +17,6 @@ type typedGraphOverlaySearch struct {
 	rows         []columnPhysicalVisibleRow
 	invNorms     []float32
 	vectorColumn int
-	baseParts    []columnManifestAssetRefForScan
 }
 
 type typedGraphOverlaySearchStats struct {
@@ -42,7 +42,6 @@ func prepareTypedGraphOverlaySearch(base *VectorIndexSearcher, current *Collecti
 	}
 	slices.SortFunc(rows, func(a, b columnPhysicalVisibleRow) int { return bytes.Compare(a.ID, b.ID) })
 	view := &typedGraphOverlaySearch{base: base, pack: pack, current: current, rows: rows, vectorColumn: -1, invNorms: make([]float32, len(rows))}
-	view.baseParts = suffix.baseParts
 	for i, field := range suffix.view.FullConfig.Columns {
 		if field.Path == base.reader.def.Field {
 			view.vectorColumn = i
@@ -132,17 +131,15 @@ func (v *typedGraphOverlaySearch) searchScalarExact(query []float32, topK int, f
 			}
 		}
 	}
-	// The existing direct source has no inverse part lookup. Charge a
-	// conservative metadata-probe bound before locator/scoring work; no default
-	// budget is implied. A prepared inverse mapping can remove these scans later.
-	source := v.base.reader.typedVectorSource
-	if source == nil || source.closed {
-		return nil, ErrVectorIndexSnapshotMismatch
+	inverse := v.base.reader.rowRefSource
+	if !inverse.inversePermutationActive() {
+		return nil, errTypedGraphInverseRequired
 	}
-	if mappingWorkLimit <= 0 || len(v.baseParts) > mappingWorkLimit || len(source.parts) > mappingWorkLimit-len(v.baseParts) {
+	// Binary lookup is bounded independently of sparse physical row indexes.
+	perID := bits.Len(uint(inverse.rows)) + 1
+	if mappingWorkLimit <= 0 {
 		return nil, errTypedGraphSearchBudget
 	}
-	perID := len(v.baseParts) + len(source.parts)
 	if perID > 0 && len(allowed) > mappingWorkLimit/perID {
 		return nil, errTypedGraphSearchBudget
 	}
@@ -192,34 +189,15 @@ func (v *typedGraphOverlaySearch) vectorForCurrentRow(ref DocumentRowRef) ([]flo
 		}
 		return row.Values[v.vectorColumn].Float32Vector, nil
 	}
-	// Existing base preparation validates one physical and typed part per
-	// generation. Match the authoritative physical locator before borrowing its
-	// already-open FP32 matrix; never decode a whole part for one candidate.
-	valid := false
-	for _, part := range v.baseParts {
-		if part.Ref.Generation == ref.Generation && part.Ref.PartID == ref.PartID && ref.RowIndex >= 0 && ref.RowIndex < part.Rows {
-			valid = true
-			break
-		}
-	}
-	source := v.base.reader.typedVectorSource
-	if !valid || source == nil || source.closed {
+	ordinal, ok := v.base.reader.rowRefSource.ordinalForPhysicalRow(ref)
+	if !ok {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
-	for _, part := range source.parts {
-		if part.generation != ref.Generation {
-			continue
-		}
-		if ref.RowIndex >= part.rows || (part.handle != nil && part.handle.Released()) {
-			return nil, ErrVectorIndexSnapshotMismatch
-		}
-		start := ref.RowIndex * source.dims
-		if start < 0 || start > len(part.values)-source.dims {
-			return nil, ErrVectorIndexSnapshotMismatch
-		}
-		return part.values[start : start+source.dims], nil
+	vector, _, _, ok := v.base.reader.typedVectorSource.vectorForOrdinal(ordinal)
+	if !ok {
+		return nil, ErrVectorIndexSnapshotMismatch
 	}
-	return nil, ErrVectorIndexSnapshotMismatch
+	return vector, nil
 }
 
 // search is an internal unfiltered slice. Bounded exact suffix work is counted

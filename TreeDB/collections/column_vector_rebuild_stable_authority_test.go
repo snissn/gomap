@@ -496,15 +496,15 @@ func TestColumnVectorGraphStableAuthorityRejectsEachMissingTransitiveChild(t *te
 	for _, descriptor := range descriptors {
 		obligations = append(obligations, descriptor.LogicalObligations()...)
 	}
-	if len(descriptors) != 7 || len(obligations) != 11 || len(assets) != 11 {
+	if len(descriptors) != 7 || len(obligations) != 12 || len(assets) != 12 {
 		resources.Release()
 		_ = baselineDB.Close()
-		t.Fatalf("complete production closure descriptors=%d obligations=%d assets=%d want 7/11/11", len(descriptors), len(obligations), len(assets))
+		t.Fatalf("complete production closure descriptors=%d obligations=%d assets=%d want 7/12/12", len(descriptors), len(obligations), len(assets))
 	}
 	wantRoles := map[string]int{
 		columnVectorIndexStateAssetRoleAdjacency:      2,
 		columnVectorIndexStateAssetRoleInverseNorm:    1,
-		columnVectorIndexStateAssetRoleRowRefs:        4,
+		columnVectorIndexStateAssetRoleRowRefs:        5,
 		columnVectorIndexStateAssetRoleDocumentIDs:    1,
 		columnVectorIndexStateAssetRoleQuantizedCodes: 1,
 		columnVectorIndexStateAssetRoleQuantizedAlpha: 1,

@@ -153,13 +153,28 @@ cannot necessarily cure a base ANN work cap.
 The separate internal scalar-exact primitive probes persisted scalar postings
 from the current pin, accepting only complete leaf sets of at most 4,096 IDs.
 It reuses current row locators and already-open typed FP32 parts, with no indexed
-JSON extraction or corpus ID map. Part-metadata lookup work has an explicit
-caller-supplied bound; the current source lacks an inverse part/ordinal index.
+JSON extraction or corpus ID map. Reverse-lookup work has an explicit
+caller-supplied bound.
 Larger or incomplete probes explicitly require filtered ANN mapping, not an
 exact fallback. Final-K materialization uses the same current read view, tested
 across subsequent delete/reinsert. Dispersed large-filter recall, filtered ANN,
 and memory/performance qualification remain pending; no public filtered route
 is claimed.
+
+New rebuilds also publish optional `row_refs` asset
+`base_row_ref/ordinal_by_physical_row`: an `int64` / `raw_int64` graph-ordinal
+permutation sorted by `(generation, part_id, row_index)` through the existing
+forward coordinates. Its payload costs exactly eight bytes per graph row, plus
+existing typed-asset framing; sparse physical row indexes do not enlarge it.
+Writer and mapped open reject duplicate physical coordinates, out-of-range
+ordinals and non-strict order. Binary lookup additionally requires identical
+applied LSN. The asset uses the existing graph/schema/base-manifest identity and
+prepared handle ownership. Existing four-coordinate base readers remain valid;
+internal filtered search requires this inverse asset and otherwise requests a
+rebuild, never synthesizing a corpus heap map during queries. This new mapping
+role is experimental pending build/open/residency and filtered ANN evidence;
+the existing base-only admission rules are unchanged. Tests:
+`TestTypedGraphInversePermutation` and `TestTypedGraphInverseMappedAndOptional`.
 
 The internal preparation/search does not install a mutable graph route. M1 typed
 mutations remain durable under their selected profile, while ordinary graph

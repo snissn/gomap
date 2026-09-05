@@ -25,6 +25,26 @@ payload validation.
 
 ## Search usage
 
+### Optional reverse mapping (#4617)
+
+New rebuilds additionally write `base_row_ref/ordinal_by_physical_row` using the
+same `int64` / `raw_int64` asset codec and prepared ownership. The N entries are
+graph ordinals sorted by their forward `(generation, part_id, row_index)` tuple.
+This adds exactly `8*N` payload bytes plus normal typed-part framing; it does
+not allocate a dense array up to the largest physical row index.
+
+Build rejects duplicate physical tuples. Open checks ordinal bounds and strict
+tuple ordering, which proves a complete permutation without an auxiliary
+corpus-sized bitmap. Binary lookup requires exact tuple and applied-LSN equality.
+Graph/base/schema identities and mapped handle lifetime follow the existing
+row-ref owner. Four-coordinate assets remain sufficient for existing base-only
+readers. Internal filtered overlay search requires the reverse mapping and
+fails closed with a rebuild-needed error when absent; there is no query-time
+heap inverse synthesis. This experimental role has not yet qualified filtered
+ANN or its build/open/memory performance.
+
+### Forward mapping and final documents
+
 The typed-column vector source first uses `row_refs` state to map HNSW ordinals
 to base typed-column rows. If row-ref state is absent, legacy graph row ID scans
 remain an explicit compatibility fallback.
