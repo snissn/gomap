@@ -354,6 +354,27 @@ document JSON is used to construct this derived state. Public bootstrap,
 bounded physical folding, retirement, and mutable serving remain separate M3
 completion gates.
 
+The internal buffered-insert route can additionally reserve encoded output with
+an explicit positive `EncodedOutputBytes` limit. Zero preserves the earlier
+logical-only internal mode; it is not physical admission. Reservation uses the
+prepared retained primary/scalar output, selected typed-image bounds, and V2 text
+posting/position/block framing before primary value-log pointerization and WAL
+acknowledgement. Pointerization runs under the existing validated staging
+ownership in this enabled route. Flush checks its finished native tables against
+the reserved bound before appending typed assets or pointerizing those tables.
+The existing receipt carries only scalar costs, not another document copy.
+
+An attempted append keeps its encoded charge even if the append fails, its pins
+are released, publication is rejected, or logical reconciliation succeeds. A
+retry reserves another attempt; successful flush transfers logical pending debt
+without refunding encoded output. This is a conservative encoded-output ledger,
+not a disk quota: it excludes WAL, index/COW pages, segment padding, allocator
+scratch, and pre-existing unreachable storage. Buffered V2 reservations can
+duplicate tail and pending-ID costs across receipts. Immediate mutation routes,
+reopen reconstruction of physical debt, and reclamation-backed release remain
+unfinished admission gates; this partial internal route does not enable public
+mutable serving.
+
 An internal coherent owner can bind an already reconciled publication frontier
 to the persisted base aliases and one current snapshot. Cross-manager accepted
 buffers are drained at owner setup; exact authority mismatch remains unavailable.

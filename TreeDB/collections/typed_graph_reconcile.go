@@ -22,6 +22,9 @@ type typedGraphColdLimits struct {
 
 // Reconciliation is explicit cold setup, not a query or replay side effect.
 func (c *Collection) reconcileTypedGraphPublication(limits typedGraphPublicationLimits, cold typedGraphColdLimits) (err error) {
+	if limits.EncodedOutputBytes < 0 {
+		return ErrVectorIndexSnapshotMismatch
+	}
 	if c == nil || c.db == nil || !c.db.CommandWALEnabled() || limits.Rows <= 0 || limits.Tombstones < 0 || limits.ValueSlots <= 0 || limits.OwnedBytes <= 0 || cold.ManifestRecords <= 0 || cold.ManifestBytes <= 0 || cold.AssetBytes <= 0 || cold.DecodedTermBytes <= 0 {
 		return ErrVectorIndexSnapshotMismatch
 	}

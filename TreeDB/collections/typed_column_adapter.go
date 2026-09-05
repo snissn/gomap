@@ -948,21 +948,36 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 		return nil, err
 	}
 	metrics.DictionaryBuild += time.Since(dictionaryStart)
+	partBuildStart := time.Now()
+	partOpts, err := typedColumnAdapterPartOptions(opts, columns)
+	if err != nil {
+		return nil, err
+	}
+	part, err := typedcolumn.BuildColumnPart(opts.PartID, partOpts, batch)
+	if err != nil {
+		return nil, err
+	}
+	metrics.PartBuild += time.Since(partBuildStart)
+	return &typedColumnAdapterPart{Options: opts, Columns: columns, Part: part, Dictionary: typedColumnAdapterDictionaries(columns), Metrics: metrics}, nil
+}
+
+// Shared metadata-only producer options let admission use the actual codec
+// policy without building a second batch or encoding with a fabricated LSN.
+func typedColumnAdapterPartOptions(opts typedColumnAdapterOptions, columns []typedColumnAdapterColumn) (typedcolumn.Options, error) {
 	defs := make([]typedcolumn.ColumnDefinition, 0, len(columns)+1)
 	defs = append(defs, typedColumnAdapterPrimaryIDDefinition(opts))
 	for _, column := range columns {
 		defs = append(defs, column.Definition)
 	}
-	partBuildStart := time.Now()
 	rowsPerGranule := opts.RowsPerGranule
 	if rowsPerGranule == 0 {
 		rowsPerGranule = typedcolumn.DefaultRowsPerGranule
 	}
 	sortKey, err := typedColumnAdapterSortKey(opts, columns)
 	if err != nil {
-		return nil, err
+		return typedcolumn.Options{}, err
 	}
-	partOpts := typedcolumn.Options{
+	return typedcolumn.Options{
 		SchemaVersion: opts.SchemaVersion,
 		SchemaMode:    typedcolumn.ColumnSchemaFixed,
 		Columns:       defs,
@@ -972,13 +987,7 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 		SortKey:     typedcolumn.SortKey{Columns: sortKey},
 		PartPolicy:  typedcolumn.ColumnPartPolicy{RowsPerGranule: rowsPerGranule, AdaptiveMarkSizing: opts.AdaptiveMarkSizing},
 		Compression: typedcolumn.ColumnCompressionPolicy{Default: typedcolumn.CompressionNone},
-	}
-	part, err := typedcolumn.BuildColumnPart(opts.PartID, partOpts, batch)
-	if err != nil {
-		return nil, err
-	}
-	metrics.PartBuild += time.Since(partBuildStart)
-	return &typedColumnAdapterPart{Options: opts, Columns: columns, Part: part, Dictionary: typedColumnAdapterDictionaries(columns), Metrics: metrics}, nil
+	}, nil
 }
 
 func typedColumnAdapterPartFromBytes(opts typedColumnAdapterOptions, raw []byte) (*typedColumnAdapterPart, error) {
@@ -1252,6 +1261,31 @@ func (p *typedColumnAdapterPart) buildImage() (typedcolumn.ColumnPartImage, erro
 }
 
 // imageOptions is shared by the actual encoder and its encoded-size proof.
+func typedColumnPublicationFP32EncodedBound(cfg ColumnStoreConfig, rows int) (int64, error) {
+	fields := columnStoreTypedColumnPartFields(cfg)
+	if len(fields) != 1 || fields[0].ValueType != ColumnStoreValueFloat32Vector {
+		return 0, ErrHybridSearchUnsupported
+	}
+	sortKey, err := typedColumnPartPublicationSortKey(cfg, fields)
+	if err != nil {
+		return 0, err
+	}
+	opts, err := typedColumnPublicationAdapterOptionsFromConfig(cfg, typedColumnPartAssetPartID, fields, sortKey)
+	if err != nil {
+		return 0, err
+	}
+	columns, err := typedColumnAdapterColumnsForFieldsWithOptions(fields, opts)
+	if err != nil {
+		return 0, err
+	}
+	partOpts, err := typedColumnAdapterPartOptions(opts, columns)
+	if err != nil {
+		return 0, err
+	}
+	metadata := typedColumnAdapterPart{Options: opts, Columns: columns, Dictionary: typedColumnAdapterDictionaries(columns)}
+	return typedcolumn.FP32ImageEncodedUpperBound(partOpts, rows, metadata.imageOptions())
+}
+
 func (p *typedColumnAdapterPart) imageOptions() typedcolumn.ColumnPartImageOptions {
 	// The adapter primary-id column is an internal row locator, not a declared
 	// ColumnStoreValueInt64 field. Leave it out of direct-view certification so

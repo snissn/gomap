@@ -5513,7 +5513,7 @@ func isDefaultIndexedWriteMemtableMaxDocuments(opts CollectionOptions) bool {
 		opts.BufferedIndexedWriteMaxDocuments == DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
 }
 
-func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan, columnDocuments []columnWriteDocument, fullDocumentOverlay *bufferedPrimaryOverlay, preparedTextInserts []preparedTextIndexInsert, columnCommandBytes int64, commandWALStageIntent *backenddb.CommandWALIntent, rawStageLocked bool, releaseCommandWALRawStage func()) (elapsed time.Duration, err error) {
+func (c *Collection) bufferIndexedInsertPlanLocked(snap *backenddb.Snapshot, catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan, columnDocuments []columnWriteDocument, fullDocumentOverlay *bufferedPrimaryOverlay, preparedTextInserts []preparedTextIndexInsert, columnCommandBytes int64, commandWALStageIntent *backenddb.CommandWALIntent, rawStageLocked bool, releaseCommandWALRawStage func()) (elapsed time.Duration, err error) {
 	domain := c.writeDomain
 	if domain == nil {
 		return 0, errors.New("collections: missing write domain")
@@ -5573,9 +5573,27 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 			unlockCommandWALRawStage = c.db.LockCommandWALStaging()
 		}
 		var reserveErr error
-		typedReceipt, reserveErr = c.reserveBufferedTypedGraphPublication(columnDocuments)
+		if c.typedGraphEncodedAdmissionEnabled() {
+			encoded, boundErr := c.bufferedTypedGraphEncodedBound(snap, catalog, domain, plan, columnDocuments, preparedTextInserts)
+			if boundErr != nil {
+				return 0, boundErr
+			}
+			typedReceipt, reserveErr = c.reserveBufferedTypedGraphPublication(columnDocuments, encoded)
+		} else {
+			typedReceipt, reserveErr = c.reserveBufferedTypedGraphPublication(columnDocuments)
+		}
 		if reserveErr != nil {
 			return 0, reserveErr
+		}
+		if c.typedGraphEncodedAdmissionEnabled() {
+			if err := beginTypedGraphEncodedAttempt([]*typedGraphPublicationReceipt{typedReceipt}, true); err != nil {
+				return 0, err
+			}
+			// Reuses staging serialization already held here. The feature-off
+			// path retains its original earlier pointerization boundary.
+			if err := pointerizeDirectBufferedPrimaryEntries(c.db, catalog.meta, plan.directBufferedInsert); err != nil {
+				return 0, err
+			}
 		}
 		lsn, appendErr := c.db.AppendStagedCommandWALIntent(commandWALStageIntent, false)
 		commandWALStageAppended = commandWALStageIntent.AssignedLSN() != 0
@@ -9784,6 +9802,9 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		}
 		columnInput, err = prepareColumnWritePublishInputBeforeCommandWAL(columnInput)
 		if err == nil {
+			err = c.beginBufferedTypedGraphEncodedFlush(columnInput, work.flushUnit.rootRuns)
+		}
+		if err == nil {
 			columnInput.preparedPlan, err = c.prepareColumnPublishPlanLease(columnInput, work.catalog.rootID(collectionColumnManifestRootName(work.meta.Name)), work.commandWALLast)
 		}
 		if err != nil {
@@ -10517,6 +10538,12 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 		rootOverlays[rootName] = append([]uint64(nil), catalog.overlayRootIDs(rootName)...)
 	}
 	preflight := c.bufferedIndexedRootPublishPreflight(pin.Pager(), baseSystemRoot, baseCommitSeq, meta, rootNames, baseRootIDs)
+	if err := c.beginBufferedTypedGraphEncodedFlush(columnWritePublishInput{
+		meta: meta, catalog: pinnedCatalog, operation: ColumnPublishOperationInsert,
+		documents: flushUnit.columnDocuments, typedReceipts: flushUnit.typedReceipts,
+	}, flushUnit.rootRuns); err != nil {
+		return err
+	}
 	pointerizeStart := time.Now()
 	publishRootRuns, cleanupPointerizedRuns, err := pointerizeCollectionRootRunMapValues(c.db, meta, flushUnit.rootRuns)
 	domain.indexedFlushPointerizeTotalNs.Add(durationToAtomicNs(collectionObservedElapsedSince(pointerizeStart)))
@@ -11868,7 +11895,7 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 	updateInsertBatchBaseRootIDs(rootNames, baseRootIDs, currentCatalog)
 	pinCommitSeq := snapshotCommitSeq(pin)
 	pinSystemRoot := snapshotSystemRoot(pin)
-	bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, nil, nil, nil, 0, nil, false, nil)
+	bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(pin, currentCatalog, pinCommitSeq, pinSystemRoot, plan, nil, nil, nil, 0, nil, false, nil)
 	_ = pin.Close()
 	if err != nil {
 		resetCollectionRunTables(plan.runs)
@@ -12268,10 +12295,12 @@ func (c *Collection) insertBatchOnceWithLockState(
 				columnDocuments[i].Document = nil
 			}
 		}
-		if err := pointerizeDirectBufferedPrimaryEntries(c.db, meta, plan.directBufferedInsert); err != nil {
-			closePlanningSnapshot()
-			resetCollectionRunTables(plan.runs)
-			return nil, err
+		if !c.typedGraphEncodedAdmissionEnabled() {
+			if err := pointerizeDirectBufferedPrimaryEntries(c.db, meta, plan.directBufferedInsert); err != nil {
+				closePlanningSnapshot()
+				resetCollectionRunTables(plan.runs)
+				return nil, err
+			}
 		}
 		defer releaseDirectBufferedPrimaryPointers(c.db, plan.directBufferedInsert)
 		var unlockCommandWALRawStage func()
@@ -12305,7 +12334,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			}
 			defer unlockCommandWALStage()
 		}
-		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, columnDocuments, fullDocumentOverlay, preparedTextInserts, columnCommandBytes, bufferedCommandWALIntent, bufferedCommandWALIntent != nil && c.db != nil, releaseCommandWALRawStage)
+		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(pin, currentCatalog, pinCommitSeq, pinSystemRoot, plan, columnDocuments, fullDocumentOverlay, preparedTextInserts, columnCommandBytes, bufferedCommandWALIntent, bufferedCommandWALIntent != nil && c.db != nil, releaseCommandWALRawStage)
 		_ = pin.Close()
 		if err != nil {
 			resetCollectionRunTables(plan.runs)

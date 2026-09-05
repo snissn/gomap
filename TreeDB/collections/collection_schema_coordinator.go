@@ -31,6 +31,10 @@ type collectionSchemaCoordinator struct {
 	chunkLifecycles         map[string]*chunkLifecycleLock
 	chunkMutationOnce       sync.Once
 	chunkMutationToken      chan struct{}
+
+	// Includes reserved and attempted encoded output. Logical reconciliation
+	// and pointer-pin release are not physical reclamation and do not reset it.
+	typedPublicationEncodedBytes int64
 }
 
 type collectionDBSchemaCoordinators struct {

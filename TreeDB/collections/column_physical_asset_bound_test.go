@@ -54,6 +54,24 @@ func TestColumnPhysicalAssetEncodedUpperBoundSelectedProducer(t *testing.T) {
 			t.Fatal(err)
 		}
 		imageOpts := part.imageOptions()
+		meta.Options.ColumnStore = cfg
+		documents := make([]columnWriteDocument, len(rows))
+		for i, row := range rows {
+			documents[i] = columnWriteDocument{ID: row.ID, declaredValues: row.Values, declaredValuesReady: true}
+		}
+		combined, err := typedGraphTypedAssetsEncodedBound(columnWritePublishInput{meta: meta, operation: ColumnPublishOperationInsert, documents: documents})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rowCfg := columnStoreRowAssetConfig(*cfg)
+		rowRows, err := projectColumnDeclaredRowsForColumns(cfg.Columns, rowCfg.Columns, rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rowImage, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{Collection: meta.Name, Namespace: cfg.AssetManager.Namespace, Generation: math.MaxUint64, PartID: math.MaxUint64, AppliedCommandLSN: math.MaxUint64, Operation: ColumnPublishOperationInsert, SchemaHash: cfg.SchemaHash, Columns: rowCfg.Columns, Rows: rowRows})
+		if err != nil || combined < int64(len(actual.Bytes)+len(rowImage)) {
+			t.Fatalf("combined actual producer=%d bound=%d err=%v", len(actual.Bytes)+len(rowImage), combined, err)
+		}
 		bound, err := typedcolumn.FP32ImageEncodedUpperBound(part.Part.Options, count, imageOpts)
 		if err != nil {
 			t.Fatalf("actual selected options %+v image %+v: %v", part.Part.Options, imageOpts, err)

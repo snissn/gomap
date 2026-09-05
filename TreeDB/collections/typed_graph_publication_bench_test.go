@@ -9,6 +9,14 @@ import (
 // toggled. Ack-only excludes its final Flush; ack+Flush includes every Flush.
 // At 10x, eight rows per batch grow the physical suffix from 0 to 80 rows.
 func BenchmarkTypedGraphPublicationPublicWrite(b *testing.B) {
+	benchmarkTypedGraphPublicationPublicWrite(b, false)
+}
+
+func BenchmarkTypedGraphEncodedPublicWrite(b *testing.B) {
+	benchmarkTypedGraphPublicationPublicWrite(b, true)
+}
+
+func benchmarkTypedGraphPublicationPublicWrite(b *testing.B, encoded bool) {
 	for _, enabled := range []bool{false, true} {
 		for _, flush := range []bool{false, true} {
 			b.Run(fmt.Sprintf("enabled%t/flush%t", enabled, flush), func(b *testing.B) {
@@ -22,15 +30,15 @@ func BenchmarkTypedGraphPublicationPublicWrite(b *testing.B) {
 					b.Fatal(err)
 				}
 				if enabled {
-					snap := db.AcquireSnapshot()
-					catalog, err := col.catalogForSnapshot(snap)
-					if err != nil {
+					limits := typedGraphPublicationLimits{Rows: b.N * 8, Tombstones: b.N * 8, ValueSlots: b.N * 32, OwnedBytes: 1 << 20}
+					if encoded {
+						limits.EncodedOutputBytes = 16 << 20
+					}
+					// TGBA2 captures independent root IDs. Real bounded bootstrap,
+					// outside the timer, replaces the obsolete root-equality seed.
+					if err := col.reconcileTypedGraphPublication(limits, typedGraphColdLimits{ManifestRecords: 128, ManifestBytes: 128 << 10, AssetBytes: 4 << 20, DecodedTermBytes: 4 << 20}); err != nil {
 						b.Fatal(err)
 					}
-					if err := col.initializeTypedGraphPublication(catalog, typedGraphPublicationLimits{Rows: b.N * 8, Tombstones: b.N * 8, ValueSlots: b.N * 32, OwnedBytes: 1 << 20}); err != nil {
-						b.Fatal(err)
-					}
-					_ = snap.Close()
 				}
 				ids, retained := make([][][]byte, b.N), make([][][]byte, b.N)
 				columns := []TypedColumnBatch{{Name: "embedding"}, {Name: "content"}, {Name: "user"}, {Name: "path"}}
@@ -68,6 +76,9 @@ func BenchmarkTypedGraphPublicationPublicWrite(b *testing.B) {
 					state := col.typedGraphPublicationSnapshot()
 					if state.invalid || state.physicalRows != b.N*8 {
 						b.Fatal("incomplete measured publication")
+					}
+					if encoded {
+						b.ReportMetric(float64(col.collectionSchemaCoordinator().typedPublicationEncodedBytes)/float64(b.N), "reserved-encoded-B/batch")
 					}
 				}
 				b.ReportMetric(8, "rows/batch")

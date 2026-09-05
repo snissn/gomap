@@ -13,6 +13,9 @@ import (
 type typedGraphPublicationLimits struct {
 	Rows, Tombstones, ValueSlots int
 	OwnedBytes                   int64
+	// EncodedOutputBytes bounds admitted encoded output, not disk/COW or heap.
+	// Zero leaves this additional internal admission term disabled.
+	EncodedOutputBytes int64
 }
 
 // Scalar receipts follow the existing buffered document ownership. The debt
@@ -37,13 +40,15 @@ func (a *typedGraphPublicationCost) subtract(b typedGraphPublicationCost) {
 }
 
 type typedGraphPublicationReceipt struct {
-	coord     *collectionSchemaCoordinator
-	cost      typedGraphPublicationCost
-	documents []columnWriteDocument // borrowed immutable admitted headers, no payload copy
-	consumed  bool                  // protected by coord.typedPublicationDebtMu
+	coord                            *collectionSchemaCoordinator
+	cost                             typedGraphPublicationCost
+	documents                        []columnWriteDocument // borrowed immutable admitted headers, no payload copy
+	consumed                         bool                  // protected by coord.typedPublicationDebtMu
+	encoded                          typedGraphEncodedCost
+	primaryAttempted, flushAttempted bool // same debt lock; repeated attempts charge again
 }
 
-func (c *Collection) reserveTypedGraphPublication(cost typedGraphPublicationCost) (*typedGraphPublicationReceipt, error) {
+func (c *Collection) reserveTypedGraphPublication(cost typedGraphPublicationCost, encoded ...typedGraphEncodedCost) (*typedGraphPublicationReceipt, error) {
 	coord := c.collectionSchemaCoordinator()
 	if coord == nil || coord.typedPublication.Load() == nil {
 		return nil, nil
@@ -58,9 +63,27 @@ func (c *Collection) reserveTypedGraphPublication(cost typedGraphPublicationCost
 	if cost.rows < 0 || cost.tombstones < 0 || cost.slots < 0 || cost.bytes < 0 || cost.rows > l.Rows-d.rows || cost.tombstones > l.Tombstones-d.tombstones || cost.slots > l.ValueSlots-d.slots || cost.bytes > l.OwnedBytes-d.bytes {
 		return nil, errTypedGraphOverlayFoldNeeded
 	}
+	var physical typedGraphEncodedCost
+	if len(encoded) > 1 {
+		return nil, ErrHybridSearchUnsupported
+	}
+	if len(encoded) == 1 {
+		physical = encoded[0]
+	}
+	physicalBytes, err := physical.total()
+	if err != nil {
+		return nil, err
+	}
+	if l.EncodedOutputBytes > 0 && cost.rows > 0 && (len(encoded) != 1 || physicalBytes == 0) {
+		return nil, ErrHybridSearchUnsupported
+	}
+	if physicalBytes != 0 && (l.EncodedOutputBytes <= 0 || physicalBytes > l.EncodedOutputBytes-coord.typedPublicationEncodedBytes) {
+		return nil, errTypedGraphOverlayFoldNeeded
+	}
 	coord.typedPublicationDebt.add(cost)
 	coord.typedPublicationPending.add(cost)
-	return &typedGraphPublicationReceipt{coord: coord, cost: cost}, nil
+	coord.typedPublicationEncodedBytes += physicalBytes
+	return &typedGraphPublicationReceipt{coord: coord, cost: cost, encoded: physical}, nil
 }
 
 func (r *typedGraphPublicationReceipt) rejectBeforeAppend() {
@@ -72,6 +95,12 @@ func (r *typedGraphPublicationReceipt) rejectBeforeAppend() {
 	if !r.consumed {
 		r.coord.typedPublicationDebt.subtract(r.cost)
 		r.coord.typedPublicationPending.subtract(r.cost)
+		if !r.primaryAttempted {
+			r.coord.typedPublicationEncodedBytes -= r.encoded.primary
+		}
+		if !r.flushAttempted {
+			r.coord.typedPublicationEncodedBytes -= r.encoded.flush
+		}
 		r.consumed = true
 	}
 }
@@ -98,7 +127,7 @@ func (r *typedGraphPublicationReceipt) invalidate() {
 	}
 }
 
-func (c *Collection) reserveBufferedTypedGraphPublication(documents []columnWriteDocument) (*typedGraphPublicationReceipt, error) {
+func (c *Collection) reserveBufferedTypedGraphPublication(documents []columnWriteDocument, encoded ...typedGraphEncodedCost) (*typedGraphPublicationReceipt, error) {
 	coord := c.collectionSchemaCoordinator()
 	if coord == nil || coord.typedPublication.Load() == nil {
 		return nil, nil
@@ -108,7 +137,7 @@ func (c *Collection) reserveBufferedTypedGraphPublication(documents []columnWrit
 	if err != nil {
 		return nil, err
 	}
-	receipt, err := c.reserveTypedGraphPublication(cost)
+	receipt, err := c.reserveTypedGraphPublication(cost, encoded...)
 	if err == nil && receipt != nil {
 		receipt.documents = documents
 	}
@@ -188,6 +217,9 @@ type typedGraphPublicationState struct {
 // Only an exact freshly captured base can seed an empty suffix. Reopen with a
 // nonempty suffix will require the separately bounded cold bootstrap.
 func (c *Collection) initializeTypedGraphPublication(catalog *collectionCatalog, limits typedGraphPublicationLimits) error {
+	if limits.EncodedOutputBytes < 0 {
+		return ErrVectorIndexSnapshotMismatch
+	}
 	if c == nil || c.db == nil || !c.db.CommandWALEnabled() || catalog == nil || catalog.pager != c.db.Pager() || catalog.typedGraphBase == nil || limits.Rows <= 0 || limits.Tombstones < 0 || limits.ValueSlots <= 0 || limits.OwnedBytes <= 0 {
 		return ErrVectorIndexSnapshotMismatch
 	}
