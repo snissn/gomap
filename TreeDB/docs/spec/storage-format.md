@@ -2613,8 +2613,8 @@ are little-endian:
 ```text
 u16 Version        // 1
 u64 SchemaHash     // nonzero declared typed-storage schema hash
-u32 ColumnCount
-u32 DocumentCount
+u32 ColumnCount     // positive
+u32 DocumentCount   // positive; empty API batches do not emit typed frames
 u8 Flags           // bit 0=LegacyProjection; other bits must be zero
 u32 CollectionLen
 bytes Collection[CollectionLen]
@@ -2650,7 +2650,7 @@ Flags zero selects the general typed-batch admission contract; replay must not
 infer the originating API from the schema alone.
 
 The payload has no null/missing values or implicit numeric conversion. Unknown
-versions/types/flag bits, invalid dimensions, duplicate or unsorted descriptors/IDs,
+versions/types/flag bits, zero row/column counts, invalid dimensions, duplicate or unsorted descriptors/IDs,
 nonfinite vectors, truncated lengths, and trailing bytes fail closed. The
 append validator scans the payload without constructing typed rows; the owning
 decoder validates bounds before allocating row/value buffers. Collection
