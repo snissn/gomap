@@ -3,10 +3,51 @@ package commitlog
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"math"
 	"reflect"
 	"testing"
 )
+
+func TestCollectionTypedBatchHeaderValidation(t *testing.T) {
+	p := CollectionTypedBatchPayload{Collection: "docs", SchemaHash: 1, Columns: []CollectionTypedColumn{{Name: "content", Type: CollectionTypedString}}, Documents: []CollectionTypedDocument{{ID: []byte("a"), Retained: []byte(`{}`), Values: []CollectionTypedValue{{String: "value"}}}}}
+	raw, err := EncodeCollectionTypedBatchPayload(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+		want error
+	}{
+		{"empty_rows", func() []byte {
+			b := bytes.Clone(raw[:23+len(p.Collection)+9+len(p.Columns[0].Name)])
+			binary.LittleEndian.PutUint32(b[14:], 0)
+			return b
+		}(), ErrCorrupt},
+		{"unknown_version", func() []byte {
+			b := bytes.Clone(raw)
+			binary.LittleEndian.PutUint16(b, 2)
+			return b
+		}(), ErrCommandWALUnsupportedVersion},
+		{"short_header", raw[:1], ErrCorrupt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := DecodeCollectionTypedBatchPayload(tc.raw); !errors.Is(err, tc.want) {
+				t.Errorf("decode error=%v want %v", err, tc.want)
+			}
+			for _, kind := range []CommandKind{CommandKindCollectionInsertBatchByID, CommandKindCollectionUpdateBatchByID} {
+				if err := validateCommandEnvelopePayload(CommandEnvelope{Kind: kind, PayloadFormat: PayloadFormatCollectionTypedBatchByIDV1, Payload: tc.raw}); !errors.Is(err, tc.want) {
+					t.Errorf("kind %d error=%v want %v", kind, err, tc.want)
+				}
+			}
+		})
+	}
+	p.Documents = nil
+	if _, err := EncodeCollectionTypedBatchPayload(p); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("empty batch encode error=%v want %v", err, ErrCorrupt)
+	}
+}
 
 func TestCollectionTypedLegacyProjectionFlag(t *testing.T) {
 	p := CollectionTypedBatchPayload{Collection: "docs", SchemaHash: 1, LegacyProjection: true, Columns: []CollectionTypedColumn{{Name: "embedding", Type: CollectionTypedFloat32Vector, Dimensions: 1}}, Documents: []CollectionTypedDocument{{ID: []byte("a"), Retained: []byte(`{"id":"a","id":"a"}`), Values: []CollectionTypedValue{{Vector: []float32{1}}}}}}
@@ -91,7 +132,9 @@ func TestCollectionTypedBatchPayload(t *testing.T) {
 		rowOffset += 9 + len(col.Name)
 	}
 	vectorOffset := rowOffset + 4 + len(p.Documents[0].ID) + 4 + len(p.Documents[0].Retained)
+	secondRowOffset := vectorOffset + int(p.Columns[0].Dimensions)*4 + 4 + len(p.Documents[0].Values[1].String)
 	for name, mutate := range map[string]func([]byte){
+		"duplicate_id":         func(raw []byte) { raw[secondRowOffset+4] = raw[rowOffset+4] },
 		"unknown_flag":         func(raw []byte) { raw[18] = 2 },
 		"legacy_wrong_columns": func(raw []byte) { raw[18] = 1 },
 		"unknown_type":         func(raw []byte) { raw[typeOffset] = 255 },

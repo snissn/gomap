@@ -11,6 +11,11 @@ import (
 const (
 	CollectionTypedString        uint8 = 1
 	CollectionTypedFloat32Vector uint8 = 2
+
+	collectionTypedBatchFlagsOffset = 18
+	collectionTypedBatchPrefixSize  = collectionTypedBatchFlagsOffset + 1
+	collectionTypedBatchHeaderSize  = collectionTypedBatchPrefixSize + 4
+	collectionTypedBatchLegacyFlag  = byte(1)
 )
 
 type CollectionTypedColumn struct {
@@ -38,7 +43,7 @@ type CollectionTypedBatchPayload struct {
 }
 
 func validateCollectionTypedBatch(p CollectionTypedBatchPayload) error {
-	if p.Collection == "" || p.SchemaHash == 0 || len(p.Columns) == 0 {
+	if p.Collection == "" || p.SchemaHash == 0 || len(p.Columns) == 0 || len(p.Documents) == 0 {
 		return ErrCorrupt
 	}
 	if p.LegacyProjection && (len(p.Columns) != 1 || p.Columns[0].Type != CollectionTypedFloat32Vector) {
@@ -104,7 +109,7 @@ func EncodeCollectionTypedBatchPayload(p CollectionTypedBatchPayload) ([]byte, e
 			return nil, ErrCorrupt
 		}
 	}
-	total := uint64(23) + uint64(len(p.Collection))
+	total := uint64(collectionTypedBatchHeaderSize) + uint64(len(p.Collection))
 	for _, c := range p.Columns {
 		total += 9 + uint64(len(c.Name))
 	}
@@ -131,7 +136,7 @@ func EncodeCollectionTypedBatchPayload(p CollectionTypedBatchPayload) ([]byte, e
 	b = binary.LittleEndian.AppendUint32(b, uint32(len(rows)))
 	flags := byte(0)
 	if p.LegacyProjection {
-		flags = 1
+		flags = collectionTypedBatchLegacyFlag
 	}
 	b = append(b, flags)
 	b = appendTypedCommandBytes(b, []byte(p.Collection))
@@ -168,15 +173,12 @@ func DecodeCollectionTypedBatchPayload(raw []byte) (CollectionTypedBatchPayload,
 		return CollectionTypedBatchPayload{}, err
 	}
 	fail := func() (CollectionTypedBatchPayload, error) { return CollectionTypedBatchPayload{}, ErrCorrupt }
-	if len(raw) < 23 || binary.LittleEndian.Uint16(raw) != 1 || raw[18]&^byte(1) != 0 {
-		return fail()
-	}
-	p := CollectionTypedBatchPayload{SchemaHash: binary.LittleEndian.Uint64(raw[2:]), LegacyProjection: raw[18]&1 != 0}
+	p := CollectionTypedBatchPayload{SchemaHash: binary.LittleEndian.Uint64(raw[2:]), LegacyProjection: raw[collectionTypedBatchFlagsOffset]&collectionTypedBatchLegacyFlag != 0}
 	cols, rows := uint64(binary.LittleEndian.Uint32(raw[10:])), uint64(binary.LittleEndian.Uint32(raw[14:]))
 	if cols == 0 || cols > uint64(len(raw))/9 || rows > uint64(len(raw))/8 {
 		return fail()
 	}
-	raw = raw[19:]
+	raw = raw[collectionTypedBatchPrefixSize:]
 	readBytes := func() ([]byte, bool) {
 		if len(raw) < 4 {
 			return nil, false
@@ -212,9 +214,6 @@ func DecodeCollectionTypedBatchPayload(raw []byte) (CollectionTypedBatchPayload,
 		} else {
 			return fail()
 		}
-	}
-	if err := validateCollectionTypedBatch(p); err != nil {
-		return fail()
 	}
 	if rows > uint64(len(raw))/minRowBytes || rows*cols > uint64(len(raw))/4 {
 		return fail()
@@ -275,18 +274,24 @@ func DecodeCollectionTypedBatchPayload(raw []byte) (CollectionTypedBatchPayload,
 
 // Validation on the append/recovery boundary never materializes typed rows.
 func validateCollectionTypedBatchPayload(raw []byte) error {
-	if len(raw) < 23 || binary.LittleEndian.Uint16(raw) != 1 || binary.LittleEndian.Uint64(raw[2:]) == 0 || raw[18]&^byte(1) != 0 {
+	if len(raw) < collectionTypedBatchHeaderSize {
+		return ErrCorrupt
+	}
+	if binary.LittleEndian.Uint16(raw) != 1 {
+		return ErrCommandWALUnsupportedVersion
+	}
+	if binary.LittleEndian.Uint64(raw[2:]) == 0 || raw[collectionTypedBatchFlagsOffset]&^collectionTypedBatchLegacyFlag != 0 {
 		return ErrCorrupt
 	}
 	cols, rows := uint64(binary.LittleEndian.Uint32(raw[10:])), uint64(binary.LittleEndian.Uint32(raw[14:]))
-	if cols == 0 || cols > uint64(len(raw))/9 || rows > uint64(len(raw))/8 {
+	if cols == 0 || rows == 0 || cols > uint64(len(raw))/9 || rows > uint64(len(raw))/8 {
 		return ErrCorrupt
 	}
-	legacy := raw[18]&1 != 0
+	legacy := raw[collectionTypedBatchFlagsOffset]&collectionTypedBatchLegacyFlag != 0
 	if legacy && cols != 1 {
 		return ErrCorrupt
 	}
-	raw = raw[19:]
+	raw = raw[collectionTypedBatchPrefixSize:]
 	readBytes := func() ([]byte, bool) {
 		if len(raw) < 4 {
 			return nil, false

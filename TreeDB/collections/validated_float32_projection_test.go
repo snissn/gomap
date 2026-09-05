@@ -108,6 +108,9 @@ func TestValidatedFloat32ProjectionUnsortedCommandWALAlignment(t *testing.T) {
 						t.Fatal(err)
 					}
 					if !bytes.Equal(accepted[row], published) {
+						if mode != "implicit" {
+							t.Fatalf("row %q pending=%s published=%s", id, accepted[row], published)
+						}
 						t.Logf("row %q pending=%s published=%s", id, accepted[row], published)
 					}
 					accepted[row] = published

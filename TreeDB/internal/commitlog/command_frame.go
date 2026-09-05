@@ -2205,7 +2205,7 @@ func validateCommandEnvelopePayload(env CommandEnvelope) error {
 		return validateCollectionDeleteBatchByIDPayload(env.Payload)
 	case CommandKindCollectionUpdateBatchByID:
 		if env.PayloadFormat == PayloadFormatCollectionTypedBatchByIDV1 {
-			if len(env.Payload) < 19 || env.Payload[18] != 0 {
+			if len(env.Payload) < collectionTypedBatchPrefixSize || env.Payload[collectionTypedBatchFlagsOffset] != 0 {
 				return ErrCorrupt
 			}
 			return validateCollectionTypedBatchPayload(env.Payload)
