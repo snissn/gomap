@@ -46,6 +46,7 @@ type typedGraphPublicationReceipt struct {
 	consumed                         bool                  // protected by coord.typedPublicationDebtMu
 	encoded                          typedGraphEncodedCost
 	primaryAttempted, flushAttempted bool // same debt lock; repeated attempts charge again
+	immediate                        *typedGraphImmediateReceiptInput
 }
 
 func (c *Collection) reserveTypedGraphPublication(cost typedGraphPublicationCost, encoded ...typedGraphEncodedCost) (*typedGraphPublicationReceipt, error) {
@@ -437,6 +438,9 @@ func (p *typedGraphPublicationCandidate) preflight() error {
 // Buffered units preserve admitted document order and shallow header identity.
 // Check every slot, not only summed costs, before consuming receipt authority.
 func validateTypedGraphReceiptInput(coord *collectionSchemaCoordinator, input columnWritePublishInput, cost typedGraphPublicationCost) error {
+	if len(input.typedReceipts) == 1 && input.typedReceipts[0] != nil && input.typedReceipts[0].immediate != nil {
+		return validateTypedGraphImmediateReceiptInput(coord, input, cost)
+	}
 	if len(input.typedReceipts) == 0 || len(input.sourceDeleteDocuments) != 0 || input.operation != ColumnPublishOperationInsert || (input.declaredRowsReady && len(input.declaredRows) != len(input.documents)) {
 		return ErrVectorIndexSnapshotMismatch
 	}

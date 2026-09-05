@@ -12395,6 +12395,36 @@ func (c *Collection) insertBatchOnceWithLockState(
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = pin.Close() }()
+	var immediateColumnInput columnWritePublishInput
+	if columnStoreWriteEnabled(meta) {
+		columnDocuments := columnWriteDocumentsFromCommitLog(commandWALDocuments)
+		if err := applyTrustedFloat32Projection(ids, columnDocuments, execOpts.trustedFloat32Projection); err != nil {
+			resetCollectionRunTables(plan.runs)
+			return nil, err
+		}
+		if execOpts.trustedFloat32Projection != nil {
+			plan.stats.ColumnPublishValidatedFloat32ProjectionRows += len(columnDocuments)
+		}
+		immediateColumnInput = columnWritePublishInput{
+			meta: meta, catalog: currentCatalog, baseCommitSeq: baseCommitSeq, baseSystemRoot: baseSystemRoot,
+			rootNames: cloneColumnPublishRootNames(rootNames), baseRootIDs: insertBatchBaseRootIDMap(rootNames, baseRootIDs),
+			commandWALIntent: commandWALIntent, rawPublishLocked: true, operation: ColumnPublishOperationInsert,
+			documents: columnDocuments, rows: len(plan.resultIDs), insertStats: &plan.stats.CollectionInsertStats,
+		}
+		if c.typedGraphEncodedAdmissionEnabled() {
+			tables := make([]memtable.Table, len(plan.runs))
+			for i, run := range plan.runs {
+				tables[i] = run.table
+			}
+			var cleanup func()
+			immediateColumnInput, cleanup, err = c.prepareImmediateTypedGraphEncoded(immediateColumnInput, tables)
+			if err != nil {
+				resetCollectionRunTables(plan.runs)
+				return nil, err
+			}
+			defer cleanup()
+		}
+	}
 	obsoletePointerizedTables, err := pointerizeInsertBatchPlanRuns(c.db, meta, plan)
 	if err != nil {
 		return nil, err
@@ -12429,28 +12459,8 @@ func (c *Collection) insertBatchOnceWithLockState(
 	var publishMeta CollectionMeta
 	var publishRootNames []string
 	if columnStoreWriteEnabled(meta) {
-		columnDocuments := columnWriteDocumentsFromCommitLog(commandWALDocuments)
-		if err := applyTrustedFloat32Projection(ids, columnDocuments, execOpts.trustedFloat32Projection); err != nil {
-			return nil, err
-		}
-		if execOpts.trustedFloat32Projection != nil {
-			plan.stats.ColumnPublishValidatedFloat32ProjectionRows += len(columnDocuments)
-		}
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
-			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaGroupMaybeColumn(ordered, columnWritePublishInput{
-				meta:             meta,
-				catalog:          currentCatalog,
-				baseCommitSeq:    baseCommitSeq,
-				baseSystemRoot:   baseSystemRoot,
-				rootNames:        cloneColumnPublishRootNames(rootNames),
-				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDMap),
-				commandWALIntent: commandWALIntent,
-				rawPublishLocked: true,
-				operation:        ColumnPublishOperationInsert,
-				documents:        columnDocuments,
-				rows:             len(plan.resultIDs),
-				insertStats:      &plan.stats.CollectionInsertStats,
-			})
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaGroupMaybeColumn(ordered, immediateColumnInput)
 			return err
 		})
 	} else if commandWALIntent != nil {
@@ -13765,6 +13775,21 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	}
 	defer func() { _ = snap.Close() }()
 	defer func() { resetCollectionTables(deltaTables) }()
+	var immediateColumnInput columnWritePublishInput
+	if columnStoreWriteEnabled(c.meta) {
+		immediateColumnInput = columnWritePublishInput{
+			meta: c.meta, catalog: catalog, baseCommitSeq: baseCommitSeq, baseSystemRoot: baseSystemRoot,
+			rootNames: cloneColumnPublishRootNames(rootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(baseRootIDs),
+			commandWALIntent: commandWALIntent, rawPublishLocked: true, operation: ColumnPublishOperationDelete,
+			documents: columnWriteDocumentsFromIDs(deleteIDs), rows: len(existing),
+		}
+		var cleanup func()
+		immediateColumnInput, cleanup, err = c.prepareImmediateTypedGraphEncoded(immediateColumnInput, deltaTables)
+		if err != nil {
+			return 0, err
+		}
+		defer cleanup()
+	}
 	publishDeltaTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, c.meta, rootNames, deltaTables)
 	if err != nil {
 		return 0, err
@@ -13784,19 +13809,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		var publishMeta CollectionMeta
 		var publishRootNames []string
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
-			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, nil, columnWritePublishInput{
-				meta:             c.meta,
-				catalog:          catalog,
-				baseCommitSeq:    baseCommitSeq,
-				baseSystemRoot:   baseSystemRoot,
-				rootNames:        cloneColumnPublishRootNames(rootNames),
-				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
-				commandWALIntent: commandWALIntent,
-				rawPublishLocked: true,
-				operation:        ColumnPublishOperationDelete,
-				documents:        columnWriteDocumentsFromIDs(deleteIDs),
-				rows:             len(existing),
-			})
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, nil, immediateColumnInput)
 			return err
 		})
 		cleanupDeltas()
@@ -14058,6 +14071,21 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, predicate func(curren
 	defer func() {
 		resetCollectionTables(deltaTables)
 	}()
+	var immediateColumnInput columnWritePublishInput
+	if columnStoreWriteEnabled(c.meta) {
+		immediateColumnInput = columnWritePublishInput{
+			meta: c.meta, catalog: catalog, baseCommitSeq: baseCommitSeq, baseSystemRoot: baseSystemRoot,
+			rootNames: cloneColumnPublishRootNames(rootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(baseRootIDs),
+			commandWALIntent: commandWALIntent, rawPublishLocked: true, operation: ColumnPublishOperationDelete,
+			documents: columnWriteDocumentsFromIDs([][]byte{documentID}), rows: 1,
+		}
+		var cleanup func()
+		immediateColumnInput, cleanup, err = c.prepareImmediateTypedGraphEncoded(immediateColumnInput, deltaTables)
+		if err != nil {
+			return false, err
+		}
+		defer cleanup()
+	}
 	publishDeltaTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, c.meta, rootNames, deltaTables)
 	if err != nil {
 		return false, err
@@ -14077,19 +14105,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, predicate func(curren
 	var publishRootNames []string
 	if columnStoreWriteEnabled(c.meta) {
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
-			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, nil, columnWritePublishInput{
-				meta:             c.meta,
-				catalog:          catalog,
-				baseCommitSeq:    baseCommitSeq,
-				baseSystemRoot:   baseSystemRoot,
-				rootNames:        cloneColumnPublishRootNames(rootNames),
-				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
-				commandWALIntent: commandWALIntent,
-				rawPublishLocked: true,
-				operation:        ColumnPublishOperationDelete,
-				documents:        columnWriteDocumentsFromIDs([][]byte{documentID}),
-				rows:             1,
-			})
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, nil, immediateColumnInput)
 			return err
 		})
 	} else if commandWALIntent != nil {
@@ -16850,7 +16866,10 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	primaryTable := newCollectionRunTable(1)
 	setCollectionRunValue(primaryTable, bytes.Clone(documentID), primaryDocument)
 	primaryTable.Freeze()
-	if pointerizedPrimaryTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(c.db, c.meta, primaryRootName, primaryTable); err != nil {
+	if c.typedGraphEncodedAdmissionEnabled() {
+		// The complete prepared root tables are admitted together below.
+		deltaTables = append(deltaTables, primaryTable)
+	} else if pointerizedPrimaryTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(c.db, c.meta, primaryRootName, primaryTable); err != nil {
 		_ = snap.Close()
 		resetCollectionTables(append(deltaTables, primaryTable))
 		return false, false, err
@@ -16979,6 +16998,31 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		return false, false, err
 	}
 	defer cleanupCoalesced()
+	var commandWALIntent *backenddb.CommandWALIntent
+	var columnDocuments []columnWriteDocument
+	if columnStoreWriteEnabled(c.meta) && c.commandWALActive(nil) {
+		docs := []commitlog.CollectionDocument{{ID: bytes.Clone(documentID), Document: bytes.Clone(commandWALDocument)}}
+		columnDocuments = columnWriteDocumentsFromCommitLog(docs)
+		commandWALIntent, err = c.newCollectionUpdateCommandWALIntent(docs, nil)
+		if err != nil {
+			return false, false, err
+		}
+	}
+	var immediateColumnInput columnWritePublishInput
+	if columnStoreWriteEnabled(c.meta) {
+		immediateColumnInput = columnWritePublishInput{
+			meta: c.meta, catalog: catalog, baseCommitSeq: baseCommitSeq, baseSystemRoot: baseSystemRoot,
+			rootNames: cloneColumnPublishRootNames(coalescedRootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(baseRootIDs),
+			commandWALIntent: commandWALIntent, rawPublishLocked: true, operation: ColumnPublishOperationUpdate,
+			documents: columnDocuments, rows: 1, rowRemainderBytes: rowRemainderBytes,
+		}
+		var cleanup func()
+		immediateColumnInput, cleanup, err = c.prepareImmediateTypedGraphEncoded(immediateColumnInput, publishDeltaTables)
+		if err != nil {
+			return false, false, err
+		}
+		defer cleanup()
+	}
 	publishDeltaTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, c.meta, coalescedRootNames, publishDeltaTables)
 	if err != nil {
 		return false, false, err
@@ -16995,19 +17039,6 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(snap.Pager(), baseUserRoot, baseSystemRoot, baseCommitSeq)
 	}
-	var commandWALIntent *backenddb.CommandWALIntent
-	var columnDocuments []columnWriteDocument
-	if columnStoreWriteEnabled(c.meta) && c.commandWALActive(nil) {
-		docs := []commitlog.CollectionDocument{{
-			ID:       bytes.Clone(documentID),
-			Document: bytes.Clone(commandWALDocument),
-		}}
-		columnDocuments = columnWriteDocumentsFromCommitLog(docs)
-		commandWALIntent, err = c.newCollectionUpdateCommandWALIntent(docs, nil)
-		if err != nil {
-			return false, false, err
-		}
-	}
 	phaseStart = updateBatchStatsNow(detailedStats)
 	var newSystemRoot uint64
 	var rootIDs []uint64
@@ -17015,20 +17046,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	var publishRootNames []string
 	if columnStoreWriteEnabled(c.meta) {
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
-			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, columnWritePublishInput{
-				meta:              c.meta,
-				catalog:           catalog,
-				baseCommitSeq:     baseCommitSeq,
-				baseSystemRoot:    baseSystemRoot,
-				rootNames:         cloneColumnPublishRootNames(coalescedRootNames),
-				baseRootIDs:       cloneColumnPublishBaseRootIDs(baseRootIDs),
-				commandWALIntent:  commandWALIntent,
-				rawPublishLocked:  true,
-				operation:         ColumnPublishOperationUpdate,
-				documents:         columnDocuments,
-				rows:              1,
-				rowRemainderBytes: rowRemainderBytes,
-			})
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, immediateColumnInput)
 			return err
 		})
 	} else {
@@ -19445,6 +19463,31 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 		return nil, err
 	}
 	defer cleanupCoalesced()
+	var immediateColumnInput columnWritePublishInput
+	if columnStoreWriteEnabled(plan.meta) {
+		columnDocuments := columnWriteDocumentsFromCommitLog(plan.commandWALDocuments)
+		if plan.typedProjection != nil {
+			ids := make([][]byte, len(columnDocuments))
+			for i := range columnDocuments {
+				ids[i] = columnDocuments[i].ID
+			}
+			if err := applyTypedProjectionSubset(ids, columnDocuments, plan.typedProjection); err != nil {
+				return nil, err
+			}
+		}
+		immediateColumnInput = columnWritePublishInput{
+			meta: plan.meta, catalog: plan.catalog, baseCommitSeq: plan.baseCommitSeq, baseSystemRoot: plan.baseSystemRoot,
+			rootNames: cloneColumnPublishRootNames(coalescedRootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
+			commandWALIntent: commandWALIntent, rawPublishLocked: true, operation: ColumnPublishOperationUpdate,
+			documents: columnDocuments, rows: plan.stats.Modified, rowRemainderBytes: plan.rowRemainderBytes,
+		}
+		var cleanup func()
+		immediateColumnInput, cleanup, err = c.prepareImmediateTypedGraphEncoded(immediateColumnInput, publishTables)
+		if err != nil {
+			return nil, err
+		}
+		defer cleanup()
+	}
 	publishTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, plan.meta, coalescedRootNames, publishTables)
 	if err != nil {
 		return nil, err
@@ -19466,34 +19509,10 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	if columnStoreWriteEnabled(plan.meta) {
-		columnDocuments := columnWriteDocumentsFromCommitLog(plan.commandWALDocuments)
-		if plan.typedProjection != nil {
-			ids := make([][]byte, len(columnDocuments))
-			for i := range columnDocuments {
-				ids[i] = columnDocuments[i].ID
-			}
-			if err := applyTypedProjectionSubset(ids, columnDocuments, plan.typedProjection); err != nil {
-				cleanupDeltas()
-				return nil, err
-			}
-		}
 		var publishMeta CollectionMeta
 		var publishRootNames []string
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
-			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, columnWritePublishInput{
-				meta:              plan.meta,
-				catalog:           plan.catalog,
-				baseCommitSeq:     plan.baseCommitSeq,
-				baseSystemRoot:    plan.baseSystemRoot,
-				rootNames:         cloneColumnPublishRootNames(coalescedRootNames),
-				baseRootIDs:       cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
-				commandWALIntent:  commandWALIntent,
-				rawPublishLocked:  true,
-				operation:         ColumnPublishOperationUpdate,
-				documents:         columnDocuments,
-				rows:              plan.stats.Modified,
-				rowRemainderBytes: plan.rowRemainderBytes,
-			})
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, immediateColumnInput)
 			return err
 		})
 		cleanupDeltas()

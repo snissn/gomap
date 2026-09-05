@@ -505,6 +505,25 @@ func (c *Collection) publishSourceReplacementPlan(plan *sourceReplacementPlan, h
 		return err
 	}
 	defer cleanupCoalesced()
+	var immediateColumnInput columnWritePublishInput
+	if columnStoreWriteEnabled(plan.meta) {
+		operation := ColumnPublishOperationUpdate
+		if len(plan.deleteColumnDocs) == 0 {
+			operation = ColumnPublishOperationInsert
+		}
+		immediateColumnInput = columnWritePublishInput{
+			meta: plan.meta, catalog: plan.catalog, baseCommitSeq: plan.baseCommitSeq, baseSystemRoot: plan.baseSystemRoot,
+			rootNames: cloneColumnPublishRootNames(rootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
+			commandWALIntent: plan.commandWAL, rawPublishLocked: true, operation: operation,
+			documents: plan.insertColumnDocs, sourceDeleteDocuments: plan.deleteColumnDocs, rows: len(plan.insertColumnDocs),
+		}
+		var cleanup func()
+		immediateColumnInput, cleanup, err = c.prepareImmediateTypedGraphEncoded(immediateColumnInput, tables)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+	}
 	tables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, plan.meta, rootNames, tables)
 	if err != nil {
 		return err
@@ -529,24 +548,7 @@ func (c *Collection) publishSourceReplacementPlan(plan *sourceReplacementPlan, h
 	var publishRootNames = rootNames
 	publish := func() error {
 		if columnStoreWriteEnabled(plan.meta) {
-			columnOperation := ColumnPublishOperationUpdate
-			if len(plan.deleteColumnDocs) == 0 {
-				columnOperation = ColumnPublishOperationInsert
-			}
-			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, columnWritePublishInput{
-				meta:                  plan.meta,
-				catalog:               plan.catalog,
-				baseCommitSeq:         plan.baseCommitSeq,
-				baseSystemRoot:        plan.baseSystemRoot,
-				rootNames:             cloneColumnPublishRootNames(rootNames),
-				baseRootIDs:           cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
-				commandWALIntent:      plan.commandWAL,
-				rawPublishLocked:      true,
-				operation:             columnOperation,
-				documents:             plan.insertColumnDocs,
-				sourceDeleteDocuments: plan.deleteColumnDocs,
-				rows:                  len(plan.insertColumnDocs),
-			})
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, immediateColumnInput)
 			return err
 		}
 		input := columnWritePublishInput{

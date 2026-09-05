@@ -9,22 +9,33 @@ import (
 // toggled. Ack-only excludes its final Flush; ack+Flush includes every Flush.
 // At 10x, eight rows per batch grow the physical suffix from 0 to 80 rows.
 func BenchmarkTypedGraphPublicationPublicWrite(b *testing.B) {
-	benchmarkTypedGraphPublicationPublicWrite(b, false)
+	benchmarkTypedGraphPublicationPublicWrite(b, false, false)
 }
 
 func BenchmarkTypedGraphEncodedPublicWrite(b *testing.B) {
-	benchmarkTypedGraphPublicationPublicWrite(b, true)
+	benchmarkTypedGraphPublicationPublicWrite(b, true, false)
 }
 
-func benchmarkTypedGraphPublicationPublicWrite(b *testing.B, encoded bool) {
+func BenchmarkTypedGraphEncodedImmediateWrite(b *testing.B) {
+	benchmarkTypedGraphPublicationPublicWrite(b, true, true)
+}
+
+func benchmarkTypedGraphPublicationPublicWrite(b *testing.B, encoded, immediate bool) {
 	for _, enabled := range []bool{false, true} {
 		for _, flush := range []bool{false, true} {
+			if immediate && flush {
+				continue
+			} // Immediate acknowledgement already publishes.
 			b.Run(fmt.Sprintf("enabled%t/flush%t", enabled, flush), func(b *testing.B) {
 				if b.N > 64 {
 					b.Skip("bounded write diagnostic: use -benchtime=10x")
 				}
 				b.StopTimer()
-				_, db, col := openTypedMinimaCollection(b)
+				meta := typedMinimaCollectionMeta()
+				if immediate {
+					meta.TextIndexes = nil
+				}
+				_, db, col := openTypedMinimaCollectionMeta(b, meta)
 				defer db.Close()
 				if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
 					b.Fatal(err)

@@ -108,9 +108,25 @@ func (c *Collection) bufferedTypedGraphEncodedBound(snap *backenddb.Snapshot, ca
 		}
 	}
 	var pendingIDs int64
-	for _, receipt := range domain.typedReceipts {
-		for _, doc := range receipt.documents {
-			if err := addTypedGraphEncodedBytes(&pendingIDs, int64(len(doc.ID))); err != nil {
+	chargeReceipts := func(receipts []*typedGraphPublicationReceipt) error {
+		for _, receipt := range receipts {
+			for _, doc := range receipt.documents {
+				if err := addTypedGraphEncodedBytes(&pendingIDs, int64(len(doc.ID))); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := chargeReceipts(domain.typedReceipts); err != nil {
+		return cost, err
+	}
+	// Detached predecessors can still allocate V2 ordinals before this receipt.
+	// Existing domain ownership retains both queued and publishing units. A pin
+	// that already sees a publishing unit merely causes conservative double charge.
+	for _, units := range [][]indexedFlushUnit{domain.indexedFlushUnits, domain.indexedPublishingUnits} {
+		for _, unit := range units {
+			if err := chargeReceipts(unit.typedReceipts); err != nil {
 				return cost, err
 			}
 		}

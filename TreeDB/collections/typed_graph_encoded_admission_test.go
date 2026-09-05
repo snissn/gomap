@@ -14,7 +14,18 @@ import (
 )
 
 func TestTypedGraphEncodedAdmissionRetainedBeforeAppend(t *testing.T) {
-	dir, db, col := openTypedMinimaCollection(t)
+	testTypedGraphEncodedAdmissionRetainedBeforeAppend(t, typedMinimaCollectionMeta())
+}
+
+func TestTypedGraphEncodedImmediateRetainedBeforeAppend(t *testing.T) {
+	meta := typedMinimaCollectionMeta()
+	meta.TextIndexes = nil // Actual ordered-root group insert, not buffered staging.
+	testTypedGraphEncodedAdmissionRetainedBeforeAppend(t, meta)
+}
+
+func testTypedGraphEncodedAdmissionRetainedBeforeAppend(t *testing.T, meta CollectionMeta) {
+	t.Helper()
+	dir, db, col := openTypedMinimaCollectionMeta(t, meta)
 	defer db.Close()
 	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
 		t.Fatal(err)

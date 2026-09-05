@@ -368,12 +368,31 @@ An attempted append keeps its encoded charge even if the append fails, its pins
 are released, publication is rejected, or logical reconciliation succeeds. A
 retry reserves another attempt; successful flush transfers logical pending debt
 without refunding encoded output. This is a conservative encoded-output ledger,
-not a disk quota: it excludes WAL, index/COW pages, segment padding, allocator
-scratch, and pre-existing unreachable storage. Buffered V2 reservations can
-duplicate tail and pending-ID costs across receipts. Immediate mutation routes,
-reopen reconstruction of physical debt, and reclamation-backed release remain
-unfinished admission gates; this partial internal route does not enable public
-mutable serving.
+not a disk quota: it excludes later-generated locator/manifest/control output,
+WAL, index/COW pages, segment padding, allocator scratch, and pre-existing
+unreachable storage. It does not yet bound the entire encoded publication.
+Buffered V2 reservations can
+duplicate tail and pending-ID costs across receipts. Pending IDs include the
+active buffer plus queued and detached publishing units under existing domain
+ownership; a pin already reflecting a publishing unit is conservatively charged
+again rather than omitting a possible predecessor.
+
+Immediate insert, typed batch replacement, single-document replacement,
+delete/delete-batch and atomic source publication reserve the selected typed
+image bound plus their finished native table output before pointerization.
+Their receipt borrows the producing plan's exact document/source-delete order
+and prepared value-header identity through synchronous publication. Rejection
+before a command is assigned refunds logical pending debt, but not attempted
+encoded output; an assigned/ambiguous command retains its charge. Existing
+no-op command frames remain possible without new encoded-output debt.
+
+Typed projections pass their prepared rows directly. Legacy JSON replacement
+and source APIs move their existing one-time declared-row preparation earlier;
+this does not add another extraction, but those legacy producers are not
+zero-JSON. A typed atomic source producer and replay envelope remain required
+before selected mutable serving. Reopen reconstruction of physical debt and
+reclamation-backed release also remain unfinished admission gates. None of
+these internal paths enables public mutable serving.
 
 An internal coherent owner can bind an already reconciled publication frontier
 to the persisted base aliases and one current snapshot. Cross-manager accepted
