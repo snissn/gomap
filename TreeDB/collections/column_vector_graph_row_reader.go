@@ -29,6 +29,9 @@ type columnVectorGraphPhysicalRowReaderOptions struct {
 	// ownerPin is requested only by a top-level owner under the storage barrier.
 	// That owner closes the lease on all failure paths and after lazy consumers.
 	ownerPin **ColumnAssetLifecyclePinSet
+	// admitSources runs once before mapping/acquisition, with the validated
+	// shared-key length (zero for a nonshared source). It owns no snapshot.
+	admitSources func(sharedKeyBytes int) error
 }
 
 const (
@@ -127,6 +130,19 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderFromView(snap *backen
 		catalog = catalog.copy()
 		view.Catalog = catalog
 	}
+	sharedEligible := !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 && catalog != nil && view.VectorIndexStateFound && view.AssetNamespace != ""
+	var key string
+	if sharedEligible {
+		key, err = columnVectorGraphSharedPreparedSearchCacheKey(catalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if opts.admitSources != nil {
+		if err := opts.admitSources(len(key)); err != nil {
+			return nil, err
+		}
+	}
 	var reader *columnPhysicalRowReader
 	if columnVectorGraphManifestHasPhysicalAsset(graph) {
 		reader, err = newColumnPhysicalRowReaderFromSnapshotView(view, columnPhysicalRowReaderOptions{
@@ -155,12 +171,7 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderFromView(snap *backen
 		useResourceQuantizedAssets: opts.UseResourceQuantizedAssets,
 		skipQuantizedAssets:        opts.SkipQuantizedAssets,
 	}
-	if !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 && catalog != nil && view.VectorIndexStateFound && view.AssetNamespace != "" {
-		key, keyErr := columnVectorGraphSharedPreparedSearchCacheKey(catalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState)
-		if keyErr != nil {
-			_ = graphReader.Close()
-			return nil, keyErr
-		}
+	if sharedEligible {
 		shared, err := c.acquireColumnVectorGraphSharedPreparedSearch(key, func() (*columnVectorGraphSharedPreparedSearch, error) {
 			buildReader := &columnVectorGraphPhysicalRowReader{def: def, graph: graph, catalog: catalog, quantizedAssetStatus: make(map[string]columnVectorGraphQuantizedAssetLoadStatus), skipQuantizedAssets: true}
 			success := false

@@ -189,6 +189,36 @@ func TestTypedGraphReadOwnerSmallBase(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer owner.Close()
+			// Both an empty source and a shared singleton reject before acquiring
+			// any mapped source. The reader computes its key only once internally.
+			before := col.columnVectorGraphSharedPreparedSearchCacheSnapshot()
+			snap := db.AcquireSnapshot()
+			catalog, err := loadCollectionCatalog(snap, col.collectionName())
+			if err != nil {
+				t.Fatal(err)
+			}
+			graph, sourceView, err := catalog.typedGraphBase.readerView(col, snap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			r, admissionErr := col.openColumnVectorGraphPhysicalRowReaderFromView(snap, catalog.meta.VectorIndexes[0], graph, sourceView, columnVectorGraphPhysicalRowReaderOptions{admitSources: func(keyBytes int) error {
+				calls++
+				if (keyBytes == 0) != (n == 0) {
+					t.Errorf("unexpected key length %d for rows %d", keyBytes, n)
+				}
+				return errTypedGraphOwnerBudget
+			}})
+			if err := snap.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if r != nil || calls != 1 || !errors.Is(admissionErr, errTypedGraphOwnerBudget) {
+				t.Fatalf("source admission reader=%v calls=%d err=%v", r, calls, admissionErr)
+			}
+			after := col.columnVectorGraphSharedPreparedSearchCacheSnapshot()
+			if before.CacheBuilds != after.CacheBuilds || before.Refs != after.Refs {
+				t.Fatal("source admission rejection acquired resources")
+			}
 			if _, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{}); err != nil {
 				for _, pin := range mappedresource.GlobalPinSummary() {
 					if columnAssetMappedResourcePinMatchesRoot(pin, db.ColumnAssetRootDir()) {
@@ -286,7 +316,7 @@ func TestTypedGraphReadOwnerReopenRetirementAndLimits(t *testing.T) {
 	}
 	defer second.Close()
 	a := &col.collectionSchemaCoordinator().typedGraphOwners
-	if a.owners != 2 || len(a.states) != 1 || a.stateBytes != first.stateBytes || first.state != second.state {
+	if a.owners != 2 || len(a.states) != 1 || a.stateBytes != first.stateBytes+first.descriptorBytes+first.backingBytes+second.descriptorBytes+second.backingBytes || first.state != second.state {
 		t.Fatalf("same-state accounting: owners=%d states=%d bytes=%d", a.owners, len(a.states), a.stateBytes)
 	}
 	write("second-state")

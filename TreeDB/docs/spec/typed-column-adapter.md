@@ -376,10 +376,14 @@ against explicit owner/asset and known metadata-backing limits before mapping.
 Lease capacities, identity bytes, vector-location/ordinal/part arrays and
 layer/pack metadata are charged conservatively per keeper even when shared.
 Manager bookkeeping, allocator overhead and temporary decode work are not a
-claimed total heap bound. Keeper backing charges end when that keeper closes;
-old query references may still retain the shared holder. Summed retired-holder
-backing across those queries remains a unified lifecycle accounting gate, not
-covered by the keeper-only charge. Cache Close and existing manager/DB cleanup release
+claimed total heap bound. Read owners additionally reserve the same conservative
+holder backing bound and their known lease/key/owner descriptors before mapping,
+including repeated owners of one suffix state. Those charges survive keeper
+Close and are released only after the read owner's resources close. Suffix
+payloads remain charged once per immutable state; shared holder backing is
+deliberately charged per owner rather than deduplicated. This covers known
+retired-holder backing, not allocator overhead, temporary preparation or the
+remaining global physical/fold budget. Cache Close and existing manager/DB cleanup release
 the keeper; query owners independently retain their current pins and scratch.
 An empty base has no shared holder and this internal warm route is unavailable;
 the existing coherent empty/suffix-only owner remains supported. Warming is not

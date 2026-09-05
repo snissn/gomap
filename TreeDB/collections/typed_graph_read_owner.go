@@ -12,7 +12,8 @@ import (
 var errTypedGraphOwnerBudget = errors.New("collections: typed graph owner retention budget exhausted")
 
 // Explicit internal setup limits, not public production defaults. StateBytes
-// charges typed payload/header retention once per immutable publication state;
+// charges typed payload/header retention once per immutable publication state
+// plus known holder backing and owner/lease descriptors conservatively per owner;
 // AssetBytes conservatively charges each owner's complete union, even when
 // mapped handles are shared. Cold bounds metadata/decoded terms separately.
 type typedGraphReadOwnerLimits struct {
@@ -23,6 +24,7 @@ type typedGraphReadOwnerLimits struct {
 
 type typedGraphReadOwnerAccounting struct {
 	sync.Mutex
+	// stateBytes includes deduplicated suffix state and per-owner known backing.
 	limits                 typedGraphReadOwnerLimits
 	owners                 int
 	stateBytes, assetBytes int64
@@ -34,11 +36,12 @@ type typedGraphReadOwnerAccounting struct {
 }
 
 type typedGraphReadOwner struct {
-	overlay                *typedGraphOverlaySearch
-	accounting             *typedGraphReadOwnerAccounting
-	state                  *typedGraphPublicationState
-	stateBytes, assetBytes int64
-	closed                 bool
+	overlay                       *typedGraphOverlaySearch
+	accounting                    *typedGraphReadOwnerAccounting
+	state                         *typedGraphPublicationState
+	stateBytes, assetBytes        int64
+	descriptorBytes, backingBytes int64
+	closed                        bool
 }
 
 // Like VectorIndexSearcher.Close, Close is idempotent, not concurrently callable
@@ -58,6 +61,7 @@ func (o *typedGraphReadOwner) Close() error {
 		a.Lock()
 		a.owners--
 		a.assetBytes -= o.assetBytes
+		a.stateBytes -= o.descriptorBytes + o.backingBytes
 		if a.states[o.state]--; a.states[o.state] == 0 {
 			delete(a.states, o.state)
 			a.stateBytes -= o.stateBytes
@@ -79,7 +83,12 @@ func (o *typedGraphReadOwner) reserve(a *typedGraphReadOwnerAccounting, limits t
 		return ErrVectorIndexSnapshotMismatch
 	}
 	newState := a.states[o.state] == 0
-	if a.owners+a.baseOwners >= limits.Owners || o.assetBytes > limits.AssetBytes-a.assetBytes-a.baseAssetBytes || (newState && (len(a.states) >= limits.States || o.stateBytes > limits.StateBytes-a.stateBytes-a.baseDescriptorBytes-a.baseBackingBytes)) {
+	remaining := limits.StateBytes - a.stateBytes - a.baseDescriptorBytes - a.baseBackingBytes
+	if o.descriptorBytes < 0 || o.backingBytes < 0 || o.descriptorBytes > remaining || o.backingBytes > remaining-o.descriptorBytes {
+		return errTypedGraphOwnerBudget
+	}
+	remaining -= o.descriptorBytes + o.backingBytes
+	if a.owners+a.baseOwners >= limits.Owners || o.assetBytes > limits.AssetBytes-a.assetBytes-a.baseAssetBytes || (newState && (len(a.states) >= limits.States || o.stateBytes > remaining)) {
 		return errTypedGraphOwnerBudget
 	}
 	if a.states == nil {
@@ -88,6 +97,7 @@ func (o *typedGraphReadOwner) reserve(a *typedGraphReadOwnerAccounting, limits t
 	a.limits = limits
 	a.owners++
 	a.assetBytes += o.assetBytes
+	a.stateBytes += o.descriptorBytes + o.backingBytes
 	if newState {
 		a.stateBytes += o.stateBytes
 	}
@@ -195,16 +205,52 @@ func (c *Collection) openTypedGraphReadOwner(limits typedGraphReadOwnerLimits) (
 			}
 			candidate.assetBytes += int64(ref.Length)
 		}
-		if err := candidate.reserve(&coord.typedGraphOwners, limits); err != nil {
-			return err
+		// Per-owner duplicate charging keeps a shared holder covered after the
+		// snapshot-free keeper closes. No holder identity registry is required.
+		// Charge known backing/descriptors before mapping; temporary validation
+		// maps and allocator/manager bookkeeping are deliberately not claimed here.
+		addDescriptor := func(n int64, size uintptr) bool {
+			if n < 0 || size == 0 || n > (limits.StateBytes-candidate.descriptorBytes)/int64(size) {
+				return false
+			}
+			candidate.descriptorBytes += n * int64(size)
+			return true
 		}
-		base.lifecyclePin, err = c.acquireColumnAssetLifecyclePinSetOwned(ColumnAssetLifecyclePinSetOptions{Source: ColumnAssetLifecyclePinSourcePreparedQuery, Owner: "typed_graph_read_owner", Refs: refs})
+		for _, ref := range refs {
+			if !addDescriptor(int64(len(ref.Namespace)), 1) {
+				return errTypedGraphOwnerBudget
+			}
+		}
+		for _, size := range []uintptr{
+			reflect.TypeFor[typedGraphReadOwner]().Size(), reflect.TypeFor[typedGraphOverlaySearch]().Size(),
+			reflect.TypeFor[VectorIndexSearcher]().Size(), reflect.TypeFor[CollectionReadView]().Size(),
+			reflect.TypeFor[columnVectorGraphPhysicalRowReader]().Size(), reflect.TypeFor[columnVectorGraphSharedPreparedSearchRef]().Size(),
+			reflect.TypeFor[ColumnAssetLifecyclePinSet]().Size(),
+		} {
+			if !addDescriptor(1, size) {
+				return errTypedGraphOwnerBudget
+			}
+		}
+		if !addDescriptor(int64(cap(refs)), reflect.TypeFor[ColumnAssetRef]().Size()) {
+			return errTypedGraphOwnerBudget
+		}
+		candidate.backingBytes, err = typedGraphCapturedBaseBackingBound(graph.RowCount, len(baseView.graphOwnerRecords), graph.AdjacencyLayerCount, limits.StateBytes-candidate.descriptorBytes)
 		if err != nil {
 			return err
 		}
 		def := catalog.meta.VectorIndexes[0]
 		baseView.graphOwnerRecords = nil
-		base.reader, err = c.openColumnVectorGraphPhysicalRowReaderFromView(snap, def, graph, baseView, columnVectorGraphPhysicalRowReaderOptions{})
+		base.reader, err = c.openColumnVectorGraphPhysicalRowReaderFromView(snap, def, graph, baseView, columnVectorGraphPhysicalRowReaderOptions{admitSources: func(keyBytes int) error {
+			if !addDescriptor(int64(keyBytes), 2) {
+				return errTypedGraphOwnerBudget
+			}
+			if err := candidate.reserve(&coord.typedGraphOwners, limits); err != nil {
+				return err
+			}
+			var pinErr error
+			base.lifecyclePin, pinErr = c.acquireColumnAssetLifecyclePinSetOwned(ColumnAssetLifecyclePinSetOptions{Source: ColumnAssetLifecyclePinSourcePreparedQuery, Owner: "typed_graph_read_owner", Refs: refs})
+			return pinErr
+		}})
 		if err != nil {
 			return err
 		}

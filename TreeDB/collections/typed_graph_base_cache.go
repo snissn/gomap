@@ -149,15 +149,6 @@ func (c *Collection) openTypedGraphCapturedBaseCache(index string, limits typedG
 			return errTypedGraphOwnerBudget
 		}
 		r.descriptorBytes += fixed + int64(cap(refs))*refSize
-		identity, err := columnVectorGraphSharedPreparedSearchCacheKey(catalog.meta.Name, view.AssetNamespace, catalog.meta.VectorIndexes[0], graph, view.VectorIndexState)
-		if err != nil {
-			return err
-		}
-		// A cache hit may retain both the original holder key and this ref key.
-		if int64(len(identity)) > (limits.StateBytes-r.descriptorBytes)/2 {
-			return errTypedGraphOwnerBudget
-		}
-		r.descriptorBytes += 2 * int64(len(identity))
 		r.backingBytes, err = typedGraphCapturedBaseBackingBound(graph.RowCount, len(view.graphOwnerRecords), graph.AdjacencyLayerCount, limits.StateBytes-r.descriptorBytes)
 		if err != nil {
 			return err
@@ -166,15 +157,20 @@ func (c *Collection) openTypedGraphCapturedBaseCache(index string, limits typedG
 		if coord == nil {
 			return ErrVectorIndexSnapshotMismatch
 		}
-		if err := r.reserve(&coord.typedGraphOwners, limits); err != nil {
-			return err
-		}
-		r.pin, err = c.acquireColumnAssetLifecyclePinSetOwned(ColumnAssetLifecyclePinSetOptions{Source: ColumnAssetLifecyclePinSourcePreparedQuery, Owner: "typed_graph_captured_base_cache", Refs: refs})
-		if err != nil {
-			return err
-		}
 		view.graphOwnerRecords = nil
-		reader, err := c.openColumnVectorGraphPhysicalRowReaderFromView(snap, catalog.meta.VectorIndexes[0], graph, view, columnVectorGraphPhysicalRowReaderOptions{SkipQuantizedAssets: true})
+		reader, err := c.openColumnVectorGraphPhysicalRowReaderFromView(snap, catalog.meta.VectorIndexes[0], graph, view, columnVectorGraphPhysicalRowReaderOptions{SkipQuantizedAssets: true, admitSources: func(keyBytes int) error {
+			// A hit may retain both the original holder key and this ref key.
+			if int64(keyBytes) > (limits.StateBytes-r.descriptorBytes)/2 {
+				return errTypedGraphOwnerBudget
+			}
+			r.descriptorBytes += 2 * int64(keyBytes)
+			if err := r.reserve(&coord.typedGraphOwners, limits); err != nil {
+				return err
+			}
+			var pinErr error
+			r.pin, pinErr = c.acquireColumnAssetLifecyclePinSetOwned(ColumnAssetLifecyclePinSetOptions{Source: ColumnAssetLifecyclePinSourcePreparedQuery, Owner: "typed_graph_captured_base_cache", Refs: refs})
+			return pinErr
+		}})
 		if err != nil {
 			return err
 		}
@@ -198,7 +194,8 @@ func (c *Collection) openTypedGraphCapturedBaseCache(index string, limits typedG
 // pointer slices have exact capacities. Pack codec validates 8+2*layers sections
 // plus two optional navigation sections. This deliberately excludes manager
 // bookkeeping/allocator overhead and temporary decoder/validation maps; it is
-// not a total process heap ceiling. Shared holders are charged per keeper.
+// not a total process heap ceiling. Shared holders are charged conservatively
+// per keeper and per read owner, including owners surviving keeper retirement.
 func typedGraphCapturedBaseBackingBound(rows, records, layers int, limit int64) (int64, error) {
 	var total int64
 	add := func(count int, size uintptr) bool {
