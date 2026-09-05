@@ -11,7 +11,7 @@ import (
 )
 
 func TestTypedGraphEncodedImmediateFailureRetry(t *testing.T) {
-	for _, operation := range []string{"insert", "update", "replace", "delete", "delete-batch", "source-delete", "source-replace"} {
+	for _, operation := range []string{"insert", "update", "replace", "delete", "delete-batch", "source-delete", "source-replace", "typed-source"} {
 		for _, reject := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s/reject=%v", operation, reject), func(t *testing.T) {
 				meta := typedMinimaCollectionMeta()
@@ -65,6 +65,9 @@ func TestTypedGraphEncodedImmediateFailureRetry(t *testing.T) {
 						doc := []byte(fmt.Sprintf(`{"id":"a","embedding":[1,0,0,0,0,0,0,0],"content":"changed alpha","meta":{"user_id":"u","fpath":"p"},"remainder":%q}`, strings.Repeat("x", 64<<10)))
 						_, err := col.replaceSourceDocumentsWithCommandWALIntent([][]byte{id}, [][]byte{id}, [][]byte{doc}, nil, nil)
 						return err
+					case "typed-source":
+						_, err := col.ReplaceTypedSourceByID([][]byte{id}, [][]byte{id}, [][]byte{retained}, columns)
+						return err
 					default:
 						_, err := col.replaceSourceDocumentsWithCommandWALIntent([][]byte{id}, nil, nil, nil, nil)
 						return err
@@ -117,7 +120,7 @@ func TestTypedGraphEncodedImmediateFailureRetry(t *testing.T) {
 				after, pending := coord.typedPublicationEncodedBytes, coord.typedPublicationPending
 				coord.typedPublicationDebtMu.Unlock()
 				wantRows := 1
-				if operation == "source-replace" {
+				if operation == "source-replace" || operation == "typed-source" {
 					wantRows = 2
 				}
 				if after <= spent || pending != (typedGraphPublicationCost{}) || col.typedGraphPublicationSnapshot().physicalRows != wantRows {

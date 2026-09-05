@@ -2350,7 +2350,7 @@ Current command kinds:
 | 101 | `CollectionDeleteBatchByID` | collection | `CollectionDeleteBatchByIDV1` | deterministic collection delete-by-id batch |
 | 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` or `CollectionTypedBatchByIDV1` | deterministic collection update/replace-by-id batch |
 | 103 | `CollectionRebuildVectorIndex` | collection | `CollectionRebuildVectorIndexV1` | deterministic collection vector-index rebuild command |
-| 104 | `CollectionReplaceSourceByID` | collection | `CollectionReplaceSourceByIDV1` | one-source delete-and-reinsert command used by atomic `IngestSources` publication |
+| 104 | `CollectionReplaceSourceByID` | collection | `CollectionReplaceSourceByIDV1` or `CollectionTypedSourceByIDV1` | atomic explicit delete-and-reinsert source command |
 | 200 | `CatalogCreateCollection` | catalog | `CatalogCreateCollectionV1` | deterministic catalog create-collection command; old placeholder name is an alias only |
 | 300 | `DurablePrefixBarrier` | system | `DurablePrefixBarrierV1` | active V2 empty durable-frontier record used by explicit sync with no user mutation |
 
@@ -2369,6 +2369,7 @@ Current payload format IDs:
 | 9 | `RawKVBatchV2` |
 | 10 | `CollectionReplaceSourceByIDV1` |
 | 11 | `CollectionTypedBatchByIDV1` |
+| 12 | `CollectionTypedSourceByIDV1` |
 
 `RawKVBatchV1` and `RawKVBatchV2` share this payload framing:
 
@@ -2704,6 +2705,16 @@ bytes CollectionInsertBatchByIDV1[remaining payload]
 The frame is one logical source replacement. Recovery applies its delete set
 and complete parent/child document set through the same atomic multi-root
 publisher; it never exposes the nested operations as separate applied LSNs.
+
+`CollectionTypedSourceByIDV1` (format 12, same command kind 104) uses the same
+outer length framing, but its remaining section is `CollectionTypedBatchByIDV1`
+instead of an insert-JSON payload. The canonical delete and typed sections must
+name the same collection. The typed section must have flags zero and at least
+one inserted row; its version, schema hash, ordering, lengths and carrier
+validation remain unchanged. Unknown versions and malformed sections fail
+closed. Delete-only typed source calls use format 10 with no inserted documents;
+there is no indexed insertion payload to reconstruct. One frame and one applied
+LSN cover both sets, including same-ID delete/reinsert; insertion wins.
 
 `CollectionRebuildVectorIndexV1` payload:
 

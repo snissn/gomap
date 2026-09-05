@@ -487,7 +487,7 @@ func (c *Collection) replaceChunkedDocumentBatchLocked(plans []chunkedDocumentBa
 			}
 			return attemptDeleteIDs, nil
 		}
-		plan, err := c.buildSourceReplacementPlan(nil, insertIDs, insertDocs, deletePlanner, nil, nil)
+		plan, err := c.buildSourceReplacementPlan(nil, insertIDs, insertDocs, deletePlanner, nil, nil, nil)
 		if err != nil {
 			if isRetriableCollectionMutationError(err) {
 				lastErr = err

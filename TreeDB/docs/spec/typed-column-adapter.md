@@ -389,8 +389,14 @@ no-op command frames remain possible without new encoded-output debt.
 Typed projections pass their prepared rows directly. Legacy JSON replacement
 and source APIs move their existing one-time declared-row preparation earlier;
 this does not add another extraction, but those legacy producers are not
-zero-JSON. A typed atomic source producer and replay envelope remain required
-before selected mutable serving. Reopen reconstruction of physical debt and
+zero-JSON. `ReplaceTypedSourceByID` supplies explicit delete IDs and typed
+inserted rows to that same atomic source publisher. Its scalar/text planner and
+declared-row writer reuse the typed projection; format 12 carries those values
+through command replay without rebuilding indexed fields from retained JSON.
+The API uses the typed batch schema/carrier and input-ownership contract,
+validates admission before draining, and preserves one atomic same-ID
+delete/reinsert (insertion wins). Empty insertion permits nil columns and uses
+the existing delete-only source frame. Reopen reconstruction of physical debt and
 reclamation-backed release also remain unfinished admission gates. None of
 these internal paths enables public mutable serving.
 

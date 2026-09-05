@@ -208,6 +208,14 @@ The existing collection replay handler and applied-LSN publication own this
 operation; there is no independent typed-write journal or replay watermark.
 Unsupported payload versions and schema mismatches fail before visible install.
 
+Atomic typed source replacements use kind `CollectionReplaceSourceByID` with
+format 12 (`CollectionTypedSourceByIDV1`). Decode its canonical delete section
+and typed batch section, reject different collection names or legacy projection
+flags, validate the captured schema, and re-enter the same atomic source
+publisher with the typed projection. Delete and insertion are never separate
+commands or applied frontiers. Format 10 remains the legacy JSON/delete-only
+source encoding; no new recovery log or watermark is introduced.
+
 Legacy raw redo-journal replay is skipped only when durability mode is
 `DurabilityWALOffRelaxed`.
 

@@ -82,6 +82,10 @@ func (c *Collection) replaceSourceDocumentsAtomic(parentID []byte, deleteIDs, in
 	defer unlockSchema()
 	unlockCoverage := c.lockVectorIndexCoverageMutation()
 	defer unlockCoverage()
+	return c.replaceSourceDocumentsAtomicSchemaLocked(parentID, deleteIDs, insertIDs, insertDocs, replay, hooks, nil)
+}
+
+func (c *Collection) replaceSourceDocumentsAtomicSchemaLocked(parentID []byte, deleteIDs, insertIDs, insertDocs [][]byte, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection) (int, error) {
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
@@ -101,7 +105,7 @@ func (c *Collection) replaceSourceDocumentsAtomic(parentID []byte, deleteIDs, in
 
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
-		plan, err := c.buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs, nil, replay, hooks)
+		plan, err := c.buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs, nil, replay, hooks, projection)
 		if err != nil {
 			if isRetriableCollectionMutationError(err) {
 				lastErr = err
@@ -149,7 +153,7 @@ func (c *Collection) replaceSourceDocumentsAtomic(parentID []byte, deleteIDs, in
 	return 0, collectionMutationRetryExhausted(lastErr)
 }
 
-func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs [][]byte, deletePlanner sourceReplacementDeletePlanner, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks) (*sourceReplacementPlan, error) {
+func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs [][]byte, deletePlanner sourceReplacementDeletePlanner, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection) (*sourceReplacementPlan, error) {
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -176,6 +180,12 @@ func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs
 		return fail(err)
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	if projection != nil {
+		if err := validateTypedProjectionMeta(meta, projection); err != nil {
+			return fail(err)
+		}
+		plannerOptions.typedProjection = projection
+	}
 	if err := requireColumnStoreWriteOperationSupported(meta, ColumnPublishOperationDelete); err != nil {
 		return fail(err)
 	}
@@ -255,10 +265,15 @@ func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs
 		return fail(err)
 	}
 	plan.insertColumnDocs = columnWriteDocumentsFromCommitLog(docs)
+	if projection != nil {
+		if err := applyTypedProjection(insertIDs, plan.insertColumnDocs, projection); err != nil {
+			return fail(err)
+		}
+	}
 	if replay != nil {
 		plan.commandWAL = replay
 	} else if c.commandWALActive(nil) {
-		plan.commandWAL, err = c.newCollectionReplaceSourceCommandWALIntent(deleteIDs, docs, nil)
+		plan.commandWAL, err = c.newCollectionReplaceSourceCommandWALIntent(deleteIDs, docs, nil, projection)
 		if err != nil {
 			return fail(err)
 		}

@@ -94,21 +94,33 @@ func (c *Collection) newCollectionDeleteCommandWALIntent(ids [][]byte, replay *b
 	)
 }
 
-func (c *Collection) newCollectionReplaceSourceCommandWALIntent(deleteIDs [][]byte, docs []commitlog.CollectionDocument, replay *backenddb.CommandWALIntent) (*backenddb.CommandWALIntent, error) {
+func (c *Collection) newCollectionReplaceSourceCommandWALIntent(deleteIDs [][]byte, docs []commitlog.CollectionDocument, replay *backenddb.CommandWALIntent, projection *trustedFloat32Projection) (*backenddb.CommandWALIntent, error) {
 	if replay != nil {
 		return replay, nil
 	}
 	if c == nil || c.db == nil || !c.db.CommandWALEnabled() {
 		return nil, nil
 	}
-	payload, err := commitlog.EncodeCollectionReplaceSourceByIDPayload(c.meta.Name, deleteIDs, docs)
+	format := commitlog.PayloadFormatCollectionReplaceSourceByIDV1
+	var payload []byte
+	var err error
+	if projection != nil && len(docs) != 0 {
+		var typed commitlog.CollectionTypedBatchPayload
+		typed, err = typedCommandPayload(c.meta, docs, projection)
+		if err == nil {
+			payload, err = commitlog.EncodeCollectionTypedSourcePayload(deleteIDs, typed)
+		}
+		format = commitlog.PayloadFormatCollectionTypedSourceByIDV1
+	} else {
+		payload, err = commitlog.EncodeCollectionReplaceSourceByIDPayload(c.meta.Name, deleteIDs, docs)
+	}
 	if err != nil {
 		return nil, err
 	}
 	return c.db.NewTrustedCommandWALIntent(
 		commitlog.CommandKindCollectionReplaceSourceByID,
 		commitlog.CommandScopeCollection,
-		commitlog.PayloadFormatCollectionReplaceSourceByIDV1,
+		format,
 		payload,
 	)
 }
@@ -408,6 +420,30 @@ func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 }
 
 func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+	if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedSourceByIDV1 {
+		payload, err := commitlog.DecodeCollectionTypedSourcePayload(env.Payload)
+		if err != nil {
+			return err
+		}
+		intent, err := db.NewCommandWALReplayIntent(env)
+		if err != nil {
+			return err
+		}
+		collection, err := newCommandWALReplayCollectionManager(db).openCollectionWithCommandWALIntent(payload.Inserted.Collection, intent)
+		if err != nil {
+			return err
+		}
+		projection, ids, retained, err := typedProjectionFromPayload(collection.meta, payload.Inserted)
+		if err != nil {
+			return err
+		}
+		unlockSchema := collection.lockCollectionSchemaRead()
+		defer unlockSchema()
+		unlockCoverage := collection.lockVectorIndexCoverageMutation()
+		defer unlockCoverage()
+		_, err = collection.replaceSourceDocumentsAtomicSchemaLocked(nil, payload.DeleteIDs, ids, retained, intent, nil, projection)
+		return err
+	}
 	payload, err := commitlog.DecodeCollectionReplaceSourceByIDPayload(env.Payload)
 	if err != nil {
 		return err
