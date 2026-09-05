@@ -4178,7 +4178,7 @@ func (c *Collection) createIndexOnce(def IndexDefinition) (*CollectionMeta, erro
 		return nil, unexpectedOrderedRootCountError(newMeta.Name, len(plan.rootNames), len(rootIDs))
 	}
 	c.meta = newMeta
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, plan.rootNames, rootIDs)
+	nextCatalog := cloneCatalogAfterSchemaChange(catalog, newMeta, plan.rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return newMeta.copy(), nil
@@ -4294,7 +4294,7 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 		return nil, err
 	}
 	c.meta = newMeta
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, nil, nil)
+	nextCatalog := cloneCatalogAfterSchemaChange(catalog, newMeta, nil, nil)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	if coord := c.collectionSchemaCoordinator(); coord != nil {
@@ -4392,7 +4392,7 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 		return nil, err
 	}
 	c.meta = newMeta
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, clearedRootNames, []uint64{0})
+	nextCatalog := cloneCatalogAfterSchemaChange(catalog, newMeta, clearedRootNames, []uint64{0})
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	if coord := c.collectionSchemaCoordinator(); coord != nil {
@@ -4517,7 +4517,7 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	}
 	c.meta = newMeta
 	clearedRootIDs := make([]uint64, len(clearedRootNames))
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, clearedRootNames, clearedRootIDs)
+	nextCatalog := cloneCatalogAfterSchemaChange(catalog, newMeta, clearedRootNames, clearedRootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return newMeta.copy(), nil
@@ -21628,7 +21628,11 @@ func (c *Collection) buildSchemaAndRootDescriptorSystemIterator(
 	for i, rootName := range rootNames {
 		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
 	}
-	return buildSystemTargetIterator(current, updates)
+	it, err := buildSystemTargetIterator(current, updates)
+	if err != nil {
+		return nil, err
+	}
+	return clearTypedGraphBaseSchemaEntries(it, catalog.typedGraphBase), nil
 }
 
 func (c *Collection) buildSchemaOnlySystemDeltaIterator(baseMeta CollectionMeta, encodedMeta []byte, clearedRootNames []string) (iterator.UnsafeIterator, error) {
@@ -21653,7 +21657,11 @@ func (c *Collection) buildSchemaOnlySystemDeltaIterator(baseMeta CollectionMeta,
 	for _, rootName := range clearedRootNames {
 		updates[systemCollectionRootKey(rootName)] = encodeRootID(0)
 	}
-	return buildSystemDeltaIterator(updates)
+	it, err := buildSystemDeltaIterator(updates)
+	if err != nil {
+		return nil, err
+	}
+	return clearTypedGraphBaseSchemaEntries(it, catalog.typedGraphBase), nil
 }
 
 func loadDeleteIndexState(snap *backenddb.Snapshot, catalog *collectionCatalog, documentID, document []byte, runtimes []indexRuntime, opts collectionOptions) (documentIndexState, error) {

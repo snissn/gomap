@@ -132,6 +132,7 @@ func testTypedGraphBaseAliasControlledFixtureReopen(t *testing.T, direct bool) {
 		t.Fatal(err)
 	}
 	updates := map[string][]byte{typedGraphBaseControlPrefix + col.Name(): control}
+	updates["typed-graph-base-fixture/unrelated"] = []byte("preserved")
 	for _, name := range names {
 		updates[systemCollectionRootKey(typedGraphBaseAliasRootName(col.Name(), name))] = encodeRootID(catalog.rootID(name))
 	}
@@ -354,6 +355,114 @@ func testTypedGraphBaseAliasControlledFixtureReopen(t *testing.T, direct bool) {
 		// the direct supported debug route exposes actual publication work.
 		if direct && i == 2 && (work.FinalRequirementProofFastPath != 1 || work.FinalRequirementProofFallbacks != 0 || work.FinalRequirementObligationsMaterialized != 0) {
 			t.Fatalf("unchanged-base append did not regain mutation-local certification: %+v", work)
+		}
+	}
+	testTypedGraphBaseSchemaCleanup(t, col, direct)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db = openTypedMinimaDB(t, dir)
+	reopened := db.AcquireSnapshot()
+	defer reopened.Close()
+	after, err := loadCollectionCatalog(reopened, col.Name())
+	if err != nil || after == nil || after.typedGraphBase != nil {
+		t.Fatalf("schema cleanup reopen: catalog=%v err=%v", after, err)
+	}
+}
+
+func testTypedGraphBaseSchemaCleanup(t *testing.T, col *Collection, publishBackfill bool) {
+	t.Helper()
+	snap := col.db.AcquireSnapshot()
+	defer snap.Close()
+	catalog, err := loadCollectionCatalog(snap, col.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := copyCollectionMeta(catalog.meta)
+	changed.VectorIndexes = nil
+	encoded, err := encodeCollectionMeta(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{typedGraphBaseControlPrefix + col.Name()}
+	for root := range catalog.typedGraphBase.roots {
+		keys = append(keys, systemCollectionRootKey(typedGraphBaseAliasRootName(col.Name(), root)))
+	}
+	for _, backfill := range []bool{false, true} {
+		var it iterator.UnsafeIterator
+		if backfill {
+			it, err = col.buildSchemaAndRootDescriptorSystemIterator(catalog.meta, changed, nil, nil, nil)
+		} else {
+			it, err = col.buildSchemaOnlySystemDeltaIterator(catalog.meta, encoded, nil)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range keys {
+			it.Seek([]byte(key))
+			if !it.Valid() || string(it.UnsafeKey()) != key || !it.IsDeleted() {
+				t.Fatalf("schema backfill=%v did not tombstone %q", backfill, key)
+			}
+		}
+		_ = it.Close()
+	}
+	// The schema operation itself remains unsupported by public command WAL.
+	// Publish only this controlled fixture through the existing command context
+	// to prove actual deletion and catalog invalidation, not replay semantics.
+	intent, err := col.newCollectionUpdateCommandWALIntent(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := loadColumnManifestRecordsFromRoot(snap, catalog.rootID(collectionColumnManifestRootName(col.Name())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := catalog.meta.Options.ColumnStore
+	requirements, err := stableColumnManifestDurableRequirements(records, cfg.ActiveManifest.Generation, cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	systemRoot, _, err := col.db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(nil, nil, intent, func(ctx backenddb.CommandWALPublishContext, _ []uint64) (iterator.UnsafeIterator, error) {
+		if err := ctx.RegisterDurableLogicalObligationRequirements(requirements); err != nil {
+			return nil, err
+		}
+		if publishBackfill {
+			return col.buildSchemaAndRootDescriptorSystemIterator(catalog.meta, changed, nil, nil, nil)
+		}
+		return col.buildSchemaOnlySystemDeltaIterator(catalog.meta, encoded, nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	col.meta = changed
+	next := cloneCatalogAfterSchemaChange(catalog, changed, nil, nil)
+	if next.typedGraphBase != nil || catalog.typedGraphBase == nil {
+		t.Fatal("schema clone retained owner or mutated pinned source")
+	}
+	col.rememberCatalogAtSystemRoot(systemRoot, next)
+	col.noteWriteDomainCatalog(systemRoot, next)
+	current := col.db.AcquireSnapshot()
+	defer current.Close()
+	if value, found, err := getSystemValue(current, "typed-graph-base-fixture/unrelated"); err != nil || !found || string(value) != "preserved" {
+		t.Fatalf("schema cleanup lost unrelated system key: found=%v value=%q err=%v", found, value, err)
+	}
+	for _, key := range keys {
+		if _, found, err := getSystemValue(current, key); err != nil || found {
+			t.Fatalf("schema cleanup left key %q found=%v err=%v", key, found, err)
+		}
+	}
+	for _, load := range []func(*backenddb.Snapshot) (*collectionCatalog, error){col.catalogForSnapshot, func(s *backenddb.Snapshot) (*collectionCatalog, error) { return loadCollectionCatalog(s, col.Name()) }} {
+		after, err := load(current)
+		if err != nil || after == nil || after.typedGraphBase != nil {
+			t.Fatalf("schema cleanup catalog: %v", err)
+		}
+		for root, id := range catalog.roots {
+			if after.rootID(root) != id {
+				t.Fatalf("schema cleanup changed unrelated root %q", root)
+			}
 		}
 	}
 }

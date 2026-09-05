@@ -388,7 +388,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/typed_batch.go", classification: typedStorageLegacyCompatibility, matchingLines: 23, occurrences: 25},
 	{path: "TreeDB/collections/typed_batch_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 20, occurrences: 23},
 	{path: "TreeDB/collections/typed_graph_base_alias.go", classification: typedStorageLegacyCompatibility, matchingLines: 10, occurrences: 12},
-	{path: "TreeDB/collections/typed_graph_base_alias_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
+	{path: "TreeDB/collections/typed_graph_base_alias_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 5},
 	{path: "TreeDB/collections/typed_graph_base_closure.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/typed_graph_base_filter.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/typed_graph_lifecycle_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 5},

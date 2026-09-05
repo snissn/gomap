@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/node"
 )
 
 const (
@@ -24,6 +26,40 @@ const (
 type typedGraphBaseAlias struct {
 	meta  CollectionMeta
 	roots map[string]uint64
+}
+
+// Only schema publishers use this clone. Ordinary physical publication retains
+// the captured owner without adding a schema comparison to the write path.
+func cloneCatalogAfterSchemaChange(base *collectionCatalog, meta CollectionMeta, rootNames []string, rootIDs []uint64) *collectionCatalog {
+	catalog := cloneCatalogWithRootUpdates(base, meta, rootNames, rootIDs)
+	catalog.typedGraphBase = nil
+	return catalog
+}
+
+func clearTypedGraphBaseSchemaEntries(it iterator.UnsafeIterator, base *typedGraphBaseAlias) iterator.UnsafeIterator {
+	if base == nil {
+		return it
+	}
+	// Both schema builders produce this existing owned iterator. Updating its
+	// entries preserves unrelated system keys in the full-target variant.
+	target := it.(*systemTargetIterator)
+	deleted := make(map[string]bool, 1+len(base.roots))
+	deleted[typedGraphBaseControlPrefix+base.meta.Name] = true
+	for root := range base.roots {
+		deleted[systemCollectionRootKey(typedGraphBaseAliasRootName(base.meta.Name, root))] = true
+	}
+	for i := range target.entries {
+		entry := &target.entries[i]
+		if deleted[string(entry.key)] {
+			entry.value, entry.flags = nil, node.FlagTombstone
+			delete(deleted, string(entry.key))
+		}
+	}
+	for key := range deleted {
+		target.entries = append(target.entries, systemTargetEntry{key: []byte(key), flags: node.FlagTombstone})
+	}
+	sort.Slice(target.entries, func(i, j int) bool { return bytes.Compare(target.entries[i].key, target.entries[j].key) < 0 })
+	return target
 }
 
 func typedGraphBaseRootNames(meta CollectionMeta) ([]string, error) {
