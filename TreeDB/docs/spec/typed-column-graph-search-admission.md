@@ -165,6 +165,29 @@ capacity is checked before growth; the separate ordinal growth-peak counter
 includes old plus new buffers and the final exact-rank copy, including buffers
 released by all/range canonicalization. It is not a total Go heap bound.
 
+An additional experimental internal seam prepares a caller-owned immutable base
+filter from the searcher's existing snapshot and lazy document view. Current
+bindings borrow its base selection unchanged, map only bounded suffix IDs through
+the base locator/inverse, and evaluate owned compiled scalar string predicates on
+current typed values. No current posting scan or corpus selection subtraction is
+performed during binding. Count is base eligibility minus eligible shadows plus
+matching current suffix rows. Exact threshold transitions enumerate at most
+4,096 plus the bounded exclusions, under a separate enumeration limit. ANN uses
+bounded base-result overfetch before discarding shadows; expanded base result IDs
+are counted, not described as final-K-only reads. Delta-only sets at most4,096
+use typed exact scoring; larger sets without surviving eligible base rows remain
+unavailable rather than being relabeled ANN. Base work exhaustion is distinct
+from fold debt.
+
+The base plan owns encoded predicate bounds and pins logical scalar definitions;
+changed/missing definitions fail binding. Identical-definition physical scalar
+recreation does not alter predicate semantics and is not detected as a new
+incarnation (scalar definitions have no incarnation epoch). Existing graph and
+typed-asset lineage checks still reject graph/schema changes. Searcher, lazy view
+initialization, binding and Close retain the existing non-concurrent ownership
+contract. Cold preparation, bounded binding, same-pin query and complete
+changing-pin costs require separate evidence before promotion.
+
 | Graph-search role | Owner / tier | Admission status | Prepared shape and query boundary | Evidence required |
 | --- | --- | --- | --- | --- |
 | Current-pin scalar eligibility | Borrowed current read pin and checked base; `heap_typed_view`, no durable state key or global cache. | `experimental`, internal-only under #4617 | Compact base `RowSelection`, bounded suffix ordinals, and an exact-only ID-ranked ordinal slice of at most 4,096 entries. Queries reuse these without posting, locator or per-candidate ID reads. | `TestTypedGraphPreparedFilterFinalIntersectionAndBounds` and `TestTypedGraphOverlaySearchShadowsAndBudget`; preparation bytes/work, repeated-query allocation, residency, dispersed ANN recall and matched wall-time qualification remain required. |

@@ -25,7 +25,10 @@ type typedGraphPreparedFilter struct {
 	scratchIDBytes, scratchRows                        int
 	// Ordinal growth peak includes old and new backing arrays during copying;
 	// it is separate from retained capacity, not a total Go heap measurement.
-	ordinalGrowthPeakBytes int
+	ordinalGrowthPeakBytes                            int
+	borrowedBaseFilter                                *typedGraphBaseFilter
+	excludedBase                                      []int
+	predicateWork, predicateValueBytes, exactScanRows int
 }
 
 func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScalarFilter, limits typedGraphFilterLimits) (*typedGraphPreparedFilter, error) {
@@ -199,22 +202,8 @@ func finishTypedGraphFilter(plan *typedGraphPreparedFilter, baseOrdinals, deltaO
 		// these ranks and translate back to graph ordinals for vector access.
 		plan.exactBaseByID = make([]int, len(baseOrdinals))
 		copy(plan.exactBaseByID, baseOrdinals)
-		for _, ordinal := range plan.exactBaseByID {
-			if _, ok := overlay.pack.documentIDForOrdinal(ordinal); !ok {
-				return nil, ErrVectorIndexSnapshotMismatch
-			}
-		}
-		invalidID := false
-		slices.SortFunc(plan.exactBaseByID, func(a, b int) int {
-			aID, aOK := overlay.pack.documentIDForOrdinal(a)
-			bID, bOK := overlay.pack.documentIDForOrdinal(b)
-			if !aOK || !bOK {
-				invalidID = true
-			}
-			return bytes.Compare(aID, bID)
-		})
-		if invalidID {
-			return nil, ErrVectorIndexSnapshotMismatch
+		if err := sortTypedGraphExactRanks(plan); err != nil {
+			return nil, err
 		}
 		plan.retainedBytes += len(plan.exactBaseByID) * (bits.UintSize / 8)
 	}
@@ -332,5 +321,31 @@ func (overlay *typedGraphOverlaySearch) ordinalForCurrentRef(ref DocumentRowRef)
 }
 
 func (p *typedGraphPreparedFilter) validFor(overlay *typedGraphOverlaySearch) bool {
-	return p != nil && p.overlay == overlay && overlay != nil && overlay.base != nil && !overlay.base.closed && overlay.current != nil && !overlay.current.closed && overlay.base.reader.rowRefSource.inversePermutationActive()
+	return p != nil && p.overlay == overlay && overlay != nil && overlay.base != nil && !overlay.base.closed && overlay.current != nil && !overlay.current.closed && overlay.base.reader.rowRefSource.inversePermutationActive() && (p.borrowedBaseFilter == nil || p.borrowedBaseFilter.plan.validFor(p.borrowedBaseFilter.plan.overlay))
+}
+
+func (p *typedGraphPreparedFilter) excludesBaseOrdinal(ordinal int) bool {
+	_, found := slices.BinarySearch(p.excludedBase, ordinal)
+	return found
+}
+
+func sortTypedGraphExactRanks(plan *typedGraphPreparedFilter) error {
+	for _, ordinal := range plan.exactBaseByID {
+		if _, ok := plan.overlay.pack.documentIDForOrdinal(ordinal); !ok {
+			return ErrVectorIndexSnapshotMismatch
+		}
+	}
+	invalidID := false
+	slices.SortFunc(plan.exactBaseByID, func(a, b int) int {
+		aID, aOK := plan.overlay.pack.documentIDForOrdinal(a)
+		bID, bOK := plan.overlay.pack.documentIDForOrdinal(b)
+		if !aOK || !bOK {
+			invalidID = true
+		}
+		return bytes.Compare(aID, bID)
+	})
+	if invalidID {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	return nil
 }

@@ -44,7 +44,7 @@ func (v *typedGraphOverlaySearch) searchPreparedFilter(plan *typedGraphPreparedF
 		completed = true
 		return nil, stats, nil
 	}
-	baseK := min(topK, plan.base.Count())
+	baseK := min(topK, plan.base.Count()-len(plan.excludedBase))
 	if stats.FilteredExact {
 		if plan.count > candidateLimit {
 			return nil, stats, errTypedGraphSearchBudget
@@ -77,24 +77,30 @@ func (v *typedGraphOverlaySearch) searchPreparedFilter(plan *typedGraphPreparedF
 			}
 			buffer.baseResults = append(buffer.baseResults, VectorIndexSearchResult{ID: id, Score: candidate.score})
 		}
+		stats.BaseResultIDs = len(buffer.baseResults)
 	} else {
 		baseLimit := candidateLimit - len(plan.delta)
-		if baseK == 0 || baseLimit < baseK || efSearch > baseLimit {
+		if baseK == 0 || baseLimit < baseK || len(plan.excludedBase) > baseLimit-baseK || efSearch > baseLimit {
 			return nil, stats, errTypedGraphSearchBudget
 		}
+		baseRequestK := baseK + len(plan.excludedBase)
 		if efSearch == 0 {
 			efSearch = min(v.base.reader.def.EfSearch, baseLimit)
 		}
-		results, baseStats, err := v.pack.searchCosine(query, columnVectorGraphNativeSearchOptions{TopK: baseK, EfSearch: max(baseK, efSearch), CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true}, &buffer.searchScratch)
+		results, baseStats, err := v.pack.searchCosine(query, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: max(baseRequestK, efSearch), CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true}, &buffer.searchScratch)
 		stats.Base = baseStats
+		stats.BaseResultIDs = len(results)
 		if err != nil {
 			return nil, stats, err
 		}
 		for _, result := range results {
+			if plan.excludesBaseOrdinal(result.Ordinal) {
+				stats.BaseShadowed++
+				continue
+			}
 			buffer.baseResults = append(buffer.baseResults, VectorIndexSearchResult{ID: result.ID, Score: result.Score})
 		}
 	}
-	stats.BaseResultIDs = len(buffer.baseResults)
 	for _, i := range plan.delta {
 		row := v.rows[i]
 		score, err := columnVectorGraphNativeCosineScoreVector(query, queryNorm, i, row.Values[v.vectorColumn].Float32Vector, v.invNorms[i])

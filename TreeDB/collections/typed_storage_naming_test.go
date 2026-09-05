@@ -387,6 +387,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// Typed admission reuses existing exported schema names and replay fixtures.
 	{path: "TreeDB/collections/typed_batch.go", classification: typedStorageLegacyCompatibility, matchingLines: 23, occurrences: 25},
 	{path: "TreeDB/collections/typed_batch_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 20, occurrences: 23},
+	{path: "TreeDB/collections/typed_graph_base_filter.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/typed_graph_overlay.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
 	{path: "TreeDB/collections/typed_graph_overlay_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/column_physical_predicate.go", classification: typedStorageLegacyDeferred, matchingLines: 3, occurrences: 3},
