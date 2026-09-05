@@ -1320,6 +1320,7 @@ type noIndexBatchEntry struct {
 }
 
 type indexedFlushUnit struct {
+	typedReceipts       []*typedGraphPublicationReceipt
 	rootRuns            map[string][]memtable.Table
 	rootPolicies        map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs         map[string]uint64
@@ -1395,6 +1396,7 @@ func (lease *preparedIndexedCommandWALPublish) release() {
 }
 
 type bufferedIndexedCheckpoint struct {
+	typedReceipts          []*typedGraphPublicationReceipt
 	loaded                 bool
 	meta                   CollectionMeta
 	catalog                *collectionCatalog
@@ -1482,6 +1484,7 @@ type bufferedColumnDocumentIndex struct {
 }
 
 type collectionWriteDomain struct {
+	typedReceipts []*typedGraphPublicationReceipt
 	// mutationMu serializes root descriptor publishes for handles opened
 	// through the same manager so optimistic retries do not starve under
 	// sustained collection write contention.
@@ -5540,6 +5543,16 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	defer releaseLocalCommandWALRawStage()
 	defer releaseCommandWALRawStage()
 	commandWALStageAppended := false
+	var typedReceipt *typedGraphPublicationReceipt
+	defer func() {
+		if err != nil && typedReceipt != nil {
+			if commandWALStageAppended {
+				typedReceipt.invalidate()
+			} else {
+				typedReceipt.rejectBeforeAppend()
+			}
+		}
+	}()
 	appendCommandWALBeforeStage := func() (uint64, error) {
 		if commandWALStageIntent == nil {
 			return 0, nil
@@ -5549,6 +5562,11 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		}
 		if !rawStageLocked && unlockCommandWALRawStage == nil {
 			unlockCommandWALRawStage = c.db.LockCommandWALStaging()
+		}
+		var reserveErr error
+		typedReceipt, reserveErr = c.reserveBufferedTypedGraphPublication(columnDocuments)
+		if reserveErr != nil {
+			return 0, reserveErr
 		}
 		lsn, appendErr := c.db.AppendStagedCommandWALIntent(commandWALStageIntent, false)
 		commandWALStageAppended = commandWALStageIntent.AssignedLSN() != 0
@@ -5614,6 +5632,9 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	commandWALLSN, err := appendCommandWALBeforeStage()
 	if err != nil {
 		return 0, err
+	}
+	if typedReceipt != nil {
+		domain.typedReceipts = append(domain.typedReceipts, typedReceipt)
 	}
 	if plan.directBufferedInsert != nil {
 		return c.bufferDirectIndexedInsertPlanLocked(domain, catalog, plan, columnDocuments, fullDocumentOverlay, preparedTextInserts, columnCommandBytes, rawDocumentBytes, publicationBytes, commandWALLSN, releaseCommandWALRawStage)
@@ -5998,6 +6019,7 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.primaryOverlay = nil
 	domain.fullDocumentOverlay = nil
 	domain.columnDocuments = nil
+	domain.typedReceipts = nil
 	domain.columnDocumentIndex = nil
 	domain.reconstructionRows = 0
 	domain.preparedTextInserts = nil
@@ -7439,6 +7461,7 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		indexedMutableCommandWALFirst: domain.indexedMutableCommandWALFirst,
 		indexedMutableCommandWALLast:  domain.indexedMutableCommandWALLast,
 		columnDocuments:               append([]columnWriteDocument(nil), domain.columnDocuments...),
+		typedReceipts:                 append([]*typedGraphPublicationReceipt(nil), domain.typedReceipts...),
 		reconstructionRows:            domain.reconstructionRows,
 		preparedTextInserts:           clonePreparedTextIndexInserts(domain.preparedTextInserts),
 		columnCommandBytes:            domain.columnCommandBytes,
@@ -7486,6 +7509,7 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.indexedMutableCommandWALFirst = checkpoint.indexedMutableCommandWALFirst
 	domain.indexedMutableCommandWALLast = checkpoint.indexedMutableCommandWALLast
 	domain.columnDocuments = checkpoint.columnDocuments
+	domain.typedReceipts = checkpoint.typedReceipts
 	domain.columnDocumentIndex = nil
 	domain.reconstructionRows = checkpoint.reconstructionRows
 	domain.preparedTextInserts = checkpoint.preparedTextInserts
@@ -7534,6 +7558,7 @@ func cloneIndexedFlushUnits(in []indexedFlushUnit) []indexedFlushUnit {
 			byteCount:           unit.byteCount,
 			rootRunCount:        unit.rootRunCount,
 			columnDocuments:     append([]columnWriteDocument(nil), unit.columnDocuments...),
+			typedReceipts:       append([]*typedGraphPublicationReceipt(nil), unit.typedReceipts...),
 			reconstructionRows:  unit.reconstructionRows,
 			preparedTextInserts: clonePreparedTextIndexInserts(unit.preparedTextInserts),
 			columnCommandBytes:  unit.columnCommandBytes,
@@ -9743,7 +9768,8 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			return c.completePreparedIndexedFlush(work, 0, nil, fmt.Errorf("%w: typed-column indexed async publish missing command WAL interval", backenddb.ErrCommandWALContextMissingFrame), overlayMaterializeElapsed, overlayMaterializeElapsed, 0)
 		}
 		columnInput = columnWritePublishInput{
-			meta: work.meta, catalog: work.catalog, baseCommitSeq: work.baseCommitSeq, baseSystemRoot: work.baseSystemRoot,
+			typedReceipts: work.flushUnit.typedReceipts,
+			meta:          work.meta, catalog: work.catalog, baseCommitSeq: work.baseCommitSeq, baseSystemRoot: work.baseSystemRoot,
 			rootNames: cloneColumnPublishRootNames(work.rootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(work.rootBaseIDs),
 			operation: ColumnPublishOperationInsert, documents: work.flushUnit.columnDocuments, rows: len(work.flushUnit.columnDocuments), commandBytes: work.flushUnit.columnCommandBytes,
 		}
@@ -10444,6 +10470,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 		domain.rootValueArenas = nil
 		domain.primaryOverlay = nil
 		domain.columnDocuments = nil
+		domain.typedReceipts = nil
 		domain.columnDocumentIndex = nil
 		domain.reconstructionRows = 0
 		domain.preparedTextInserts = nil
@@ -10577,6 +10604,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 					documents:        flushUnit.columnDocuments,
 					rows:             len(flushUnit.columnDocuments),
 					commandBytes:     flushUnit.columnCommandBytes,
+					typedReceipts:    flushUnit.typedReceipts,
 				})
 			} else if commandWALIntent != nil {
 				newSystemRoot, rootIDs, err = c.publishBufferedOrderedRootDeltaBatchGroupWithCommandWAL(ordered, preflight, commandWALIntent, rawPublishLocked, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -10624,6 +10652,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	domain.primaryOverlay = nil
 	domain.fullDocumentOverlay = nil
 	domain.columnDocuments = nil
+	domain.typedReceipts = nil
 	domain.columnDocumentIndex = nil
 	domain.reconstructionRows = 0
 	domain.preparedTextInserts = nil
@@ -10711,6 +10740,7 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	freezeMutableIndexedRunMapsLocked(domain)
 	unit := indexedFlushUnit{
 		rootRuns:            domain.rootRuns,
+		typedReceipts:       domain.typedReceipts,
 		rootPolicies:        domain.rootPolicies,
 		rootBaseIDs:         domain.rootBaseIDs,
 		uniqueValueRuns:     domain.uniqueValueRuns,
@@ -10741,6 +10771,7 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.columnDocuments = nil
+	domain.typedReceipts = nil
 	domain.columnDocumentIndex = nil
 	domain.reconstructionRows = 0
 	domain.fullDocumentOverlay = nil
@@ -10764,6 +10795,7 @@ func rotateIndexedMutableToFlushUnitForAsyncLocked(domain *collectionWriteDomain
 	}
 	unit := indexedFlushUnit{
 		rootRuns:            domain.rootRuns,
+		typedReceipts:       domain.typedReceipts,
 		rootPolicies:        domain.rootPolicies,
 		rootBaseIDs:         domain.rootBaseIDs,
 		uniqueValueRuns:     domain.uniqueValueRuns,
@@ -10797,6 +10829,7 @@ func rotateIndexedMutableToFlushUnitForAsyncLocked(domain *collectionWriteDomain
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.columnDocuments = nil
+	domain.typedReceipts = nil
 	domain.columnDocumentIndex = nil
 	domain.reconstructionRows = 0
 	domain.preparedTextInserts = nil
@@ -10939,6 +10972,7 @@ func mergedIndexedFlushUnitLocked(domain *collectionWriteDomain) indexedFlushUni
 		mergeIndexedFlushUnit(&unit, pending)
 	}
 	mergeIndexedFlushUnit(&unit, indexedFlushUnit{
+		typedReceipts:       domain.typedReceipts,
 		rootRuns:            domain.rootRuns,
 		rootPolicies:        domain.rootPolicies,
 		rootBaseIDs:         domain.rootBaseIDs,
@@ -10990,6 +11024,7 @@ func mergedIndexedFlushUnitForSyncLocked(meta CollectionMeta, domain *collection
 		return indexedFlushUnit{}, nil, err
 	}
 	mergeIndexedFlushUnit(&unit, indexedFlushUnit{
+		typedReceipts:       domain.typedReceipts,
 		rootRuns:            domain.rootRuns,
 		rootPolicies:        domain.rootPolicies,
 		rootBaseIDs:         domain.rootBaseIDs,
@@ -11039,6 +11074,7 @@ func mergeIndexedFlushUnit(dst *indexedFlushUnit, src indexedFlushUnit) {
 	dst.byteCount = saturatingAddNonNegativeInt64(dst.byteCount, src.byteCount)
 	dst.rootRunCount = saturatingAddNonNegativeInt(dst.rootRunCount, indexedFlushUnitRootRunCount(src))
 	dst.columnDocuments = append(dst.columnDocuments, src.columnDocuments...)
+	dst.typedReceipts = append(dst.typedReceipts, src.typedReceipts...)
 	dst.columnDocumentIndex = nil
 	dst.reconstructionRows = saturatingAddNonNegativeInt(dst.reconstructionRows, src.reconstructionRows)
 	appendPreparedTextIndexInserts(&dst.preparedTextInserts, src.preparedTextInserts)
@@ -20713,6 +20749,7 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.primaryOverlay = nil
 	domain.fullDocumentOverlay = nil
 	domain.columnDocuments = nil
+	domain.typedReceipts = nil
 	domain.columnDocumentIndex = nil
 	domain.reconstructionRows = 0
 	domain.preparedTextInserts = nil

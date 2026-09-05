@@ -326,6 +326,34 @@ they preserve 0-alloc/near-0-alloc decode and scan paths or introduce an explici
 benchmarked fallback. These allocation targets do not relax checksum, lifetime,
 schema, or fail-closed validation.
 
+## Internal typed graph publication checkpoint (#4618)
+
+The internal, explicitly initialized publication seam maintains a derived typed
+suffix at the accepted collection frontier. It is not public mutable graph
+serving or automatic reopen initialization. Both ordered-root publication
+variants share the seam; recovery tests may initialize it through isolated
+test instrumentation before the real typed replay executor.
+
+Buffered durable acknowledgements reserve cumulative physical rows, tombstones,
+declared-value slots, and ID/string/FP32 payload bytes before WAL append. Scalar
+receipts follow the existing buffered document owners through synchronous and
+asynchronous publication. Pending-to-installed transfer does not release the
+total admission charge. Proven pre-append rejection releases its reservation;
+uncertain accepted work retains debt and invalidates derived readiness. An
+invalid initialized state cannot be mistaken for a disabled feature. Encoded
+asset bytes are measured after installation, not claimed as a pre-WAL physical
+byte bound. These internal limits are explicit fixture/admission inputs, not
+production defaults.
+
+The DB/collection coordinator owns the immutable frontier across collection
+managers. Exact predecessor, pager, schema, and collection root-role checks
+prevent reuse across an accepted-root/install gap. Unrelated collection commits
+do not alone invalidate it. Changed rows reuse owned typed payloads; bounded
+suffix row headers are merged and unchanged vector norms reused. No retained
+document JSON is used to construct this derived state. Public bootstrap,
+bounded physical folding, retirement, and mutable serving remain separate M3
+completion gates.
+
 ## Boundary
 
 Production `TreeDB/collections` imports of `TreeDB/internal/typedcolumn` stay

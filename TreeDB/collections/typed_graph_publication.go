@@ -1,0 +1,457 @@
+package collections
+
+import (
+	"bytes"
+	"fmt"
+	"maps"
+	"slices"
+	"sync"
+)
+
+// This is internal derived publication state only. No public reader or writer
+// enables it; lifecycle admission/retirement/fold bounds remain separate gates.
+type typedGraphPublicationLimits struct {
+	Rows, Tombstones, ValueSlots int
+	OwnedBytes                   int64
+}
+
+// Scalar receipts follow the existing buffered document ownership. The debt
+// lock protects accounting only; it never encloses backend or snapshot calls.
+type typedGraphPublicationCost struct {
+	rows, tombstones, slots int
+	bytes                   int64
+}
+
+func (a *typedGraphPublicationCost) add(b typedGraphPublicationCost) {
+	a.rows += b.rows
+	a.tombstones += b.tombstones
+	a.slots += b.slots
+	a.bytes += b.bytes
+}
+
+func (a *typedGraphPublicationCost) subtract(b typedGraphPublicationCost) {
+	a.rows -= b.rows
+	a.tombstones -= b.tombstones
+	a.slots -= b.slots
+	a.bytes -= b.bytes
+}
+
+type typedGraphPublicationReceipt struct {
+	coord    *collectionSchemaCoordinator
+	cost     typedGraphPublicationCost
+	consumed bool // protected by coord.typedPublicationDebtMu
+}
+
+func (c *Collection) reserveTypedGraphPublication(cost typedGraphPublicationCost) (*typedGraphPublicationReceipt, error) {
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil || coord.typedPublication.Load() == nil {
+		return nil, nil
+	}
+	coord.typedPublicationDebtMu.Lock()
+	defer coord.typedPublicationDebtMu.Unlock()
+	state := coord.typedPublication.Load()
+	if state == nil || state.invalid {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	l, d := state.limits, coord.typedPublicationDebt
+	if cost.rows < 0 || cost.tombstones < 0 || cost.slots < 0 || cost.bytes < 0 || cost.rows > l.Rows-d.rows || cost.tombstones > l.Tombstones-d.tombstones || cost.slots > l.ValueSlots-d.slots || cost.bytes > l.OwnedBytes-d.bytes {
+		return nil, errTypedGraphOverlayFoldNeeded
+	}
+	coord.typedPublicationDebt.add(cost)
+	coord.typedPublicationPending.add(cost)
+	return &typedGraphPublicationReceipt{coord: coord, cost: cost}, nil
+}
+
+func (r *typedGraphPublicationReceipt) rejectBeforeAppend() {
+	if r == nil {
+		return
+	}
+	r.coord.typedPublicationDebtMu.Lock()
+	defer r.coord.typedPublicationDebtMu.Unlock()
+	if !r.consumed {
+		r.coord.typedPublicationDebt.subtract(r.cost)
+		r.coord.typedPublicationPending.subtract(r.cost)
+		r.consumed = true
+	}
+}
+
+func (r *typedGraphPublicationReceipt) invalidate() {
+	if r == nil {
+		return
+	}
+	r.coord.typedPublicationDebtMu.Lock()
+	defer r.coord.typedPublicationDebtMu.Unlock()
+	if r.consumed {
+		return
+	}
+	for {
+		state := r.coord.typedPublication.Load()
+		if state == nil || state.invalid {
+			return
+		}
+		invalid := *state
+		invalid.invalid = true
+		if r.coord.typedPublication.CompareAndSwap(state, &invalid) {
+			return
+		}
+	}
+}
+
+func (c *Collection) reserveBufferedTypedGraphPublication(documents []columnWriteDocument) (*typedGraphPublicationReceipt, error) {
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil || coord.typedPublication.Load() == nil {
+		return nil, nil
+	}
+	state := coord.typedPublication.Load()
+	cost, err := typedGraphPublicationInputCost(columnWritePublishInput{documents: documents, operation: ColumnPublishOperationInsert}, state.limits)
+	if err != nil {
+		return nil, err
+	}
+	return c.reserveTypedGraphPublication(cost)
+}
+
+func typedGraphPublicationInputCost(input columnWritePublishInput, limits typedGraphPublicationLimits) (typedGraphPublicationCost, error) {
+	var cost typedGraphPublicationCost
+	if len(input.documents) > limits.Rows || len(input.sourceDeleteDocuments) > limits.Rows-len(input.documents) {
+		return cost, errTypedGraphOverlayFoldNeeded
+	}
+	cost.rows = len(input.documents) + len(input.sourceDeleteDocuments)
+	cost.tombstones = len(input.sourceDeleteDocuments)
+	if input.operation == ColumnPublishOperationDelete {
+		cost.tombstones += len(input.documents)
+	}
+	if cost.tombstones > limits.Tombstones {
+		return cost, errTypedGraphOverlayFoldNeeded
+	}
+	charge := func(n int64) bool {
+		if n < 0 || n > limits.OwnedBytes-cost.bytes {
+			return false
+		}
+		cost.bytes += n
+		return true
+	}
+	for _, doc := range input.sourceDeleteDocuments {
+		if !charge(int64(len(doc.ID))) {
+			return cost, errTypedGraphOverlayFoldNeeded
+		}
+	}
+	for i, doc := range input.documents {
+		if !charge(int64(len(doc.ID))) {
+			return cost, errTypedGraphOverlayFoldNeeded
+		}
+		if input.operation == ColumnPublishOperationDelete {
+			continue
+		}
+		values := doc.declaredValues
+		if input.declaredRowsReady {
+			if len(input.declaredRows) != len(input.documents) {
+				return cost, ErrVectorIndexSnapshotMismatch
+			}
+			values = input.declaredRows[i].Values
+		} else if !doc.declaredValuesReady {
+			return cost, ErrVectorIndexSnapshotMismatch
+		}
+		if len(values) > limits.ValueSlots-cost.slots {
+			return cost, errTypedGraphOverlayFoldNeeded
+		}
+		cost.slots += len(values)
+		for _, value := range values {
+			if value.Type != ColumnStoreValueString && value.Type != ColumnStoreValueFloat32Vector {
+				return cost, ErrHybridSearchUnsupported
+			}
+			if !charge(int64(len(value.String)) + int64(len(value.StringBytes)) + int64(len(value.Float32Vector))*4) {
+				return cost, errTypedGraphOverlayFoldNeeded
+			}
+		}
+	}
+	return cost, nil
+}
+
+type typedGraphPublicationState struct {
+	catalog                  *collectionCatalog
+	limits                   typedGraphPublicationLimits
+	rows                     []columnPhysicalVisibleRow
+	invNorms                 []float32
+	physicalRows, tombstones int
+	valueSlots               int
+	admittedPayloadBytes     int64
+	installedAssetBytes      int64
+	invalid                  bool
+}
+
+// Only an exact freshly captured base can seed an empty suffix. Reopen with a
+// nonempty suffix will require the separately bounded cold bootstrap.
+func (c *Collection) initializeTypedGraphPublication(catalog *collectionCatalog, limits typedGraphPublicationLimits) error {
+	if c == nil || c.db == nil || !c.db.CommandWALEnabled() || catalog == nil || catalog.pager != c.db.Pager() || catalog.typedGraphBase == nil || limits.Rows <= 0 || limits.Tombstones < 0 || limits.ValueSlots <= 0 || limits.OwnedBytes <= 0 {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	// Initialization is top-level only: exclude admissions and drain every
+	// manager's already admitted work before checking the supplied base.
+	unlock := c.lockCollectionSchemaWrite()
+	defer unlock()
+	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
+		return err
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	defer snap.Close()
+	current, err := loadCollectionCatalog(snap, catalog.meta.Name)
+	if err != nil {
+		return err
+	}
+	if !(&typedGraphPublicationState{catalog: catalog}).matches(current) {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	if catalog.meta.Options.ColumnStore == nil || len(catalog.meta.VectorIndexes) != 1 {
+		return ErrHybridSearchUnsupported
+	}
+	if err := validateTypedGraphOverlayVectorOwners(*catalog.meta.Options.ColumnStore); err != nil {
+		return err
+	}
+	base := catalog.typedGraphBase
+	if !collectionMetaValuesEqual(base.meta, catalog.meta) {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	for name, root := range base.roots {
+		if catalog.rootID(name) != root {
+			return ErrVectorIndexSnapshotMismatch
+		}
+	}
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	if !coord.typedPublication.CompareAndSwap(nil, &typedGraphPublicationState{catalog: catalog, limits: limits}) {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	return nil
+}
+
+func (c *Collection) typedGraphPublicationSnapshot() *typedGraphPublicationState {
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil {
+		return nil
+	}
+	return coord.typedPublication.Load()
+}
+
+func (s *typedGraphPublicationState) matches(catalog *collectionCatalog) bool {
+	return s != nil && !s.invalid && catalog != nil && s.catalog.pager == catalog.pager && collectionMetaValuesEqual(s.catalog.meta, catalog.meta) && maps.Equal(s.catalog.roots, catalog.roots) && len(catalog.rootOverlays) == 0
+}
+
+type typedGraphPublicationCandidate struct {
+	coord      *collectionSchemaCoordinator
+	before     *typedGraphPublicationState
+	next       *typedGraphPublicationState
+	receipts   []*typedGraphPublicationReceipt
+	ownReceipt bool
+}
+
+// The existing typed projection and generic extractor produce owning values;
+// physical publication only reads them. Share those immutable values, copying
+// ID bytes and row headers only. StringBytes are normalized if a borrowed row
+// decoder supplied them. No retained JSON enters derived state.
+func (c *Collection) prepareTypedGraphPublication(input columnWritePublishInput) (*typedGraphPublicationCandidate, error) {
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil {
+		return nil, nil
+	}
+	before := coord.typedPublication.Load()
+	if before == nil {
+		return nil, nil
+	}
+	if before.invalid {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	if !before.matches(input.catalog) {
+		return nil, fmt.Errorf("%w: typed graph publication frontier mismatch", ErrConcurrentMutation)
+	}
+	remaining := typedGraphPublicationLimits{Rows: before.limits.Rows - before.physicalRows, Tombstones: before.limits.Tombstones - before.tombstones, ValueSlots: before.limits.ValueSlots - before.valueSlots, OwnedBytes: before.limits.OwnedBytes - before.admittedPayloadBytes}
+	cost, err := typedGraphPublicationInputCost(input, remaining)
+	if err != nil {
+		return nil, err
+	}
+	count, tombstones, slots, payload := cost.rows, cost.tombstones, cost.slots, cost.bytes
+	next := *before
+	next.physicalRows += count
+	next.tombstones += tombstones
+	next.admittedPayloadBytes += payload
+	next.valueSlots += slots
+	changed := make([]columnPhysicalVisibleRow, 0, count)
+	for i, d := range input.sourceDeleteDocuments {
+		changed = append(changed, columnPhysicalVisibleRow{ID: bytes.Clone(d.ID), Deleted: true, Operation: ColumnPublishOperationDelete, RowIndex: i, PartID: columnPhysicalRowAssetPartID})
+	}
+	for i, d := range input.documents {
+		partID := columnPhysicalRowAssetPartID + input.partIDOffset
+		if len(input.sourceDeleteDocuments) != 0 {
+			partID = columnPhysicalRowAssetPartID + 1<<32
+		}
+		row := columnPhysicalVisibleRow{ID: bytes.Clone(d.ID), Deleted: input.operation == ColumnPublishOperationDelete, Operation: input.operation, RowIndex: i, PartID: partID}
+		if len(input.sourceDeleteDocuments) != 0 {
+			row.Operation = ColumnPublishOperationInsert
+		}
+		if !row.Deleted {
+			row.Values = slices.Clone(input.declaredRows[i].Values)
+			for j := range row.Values {
+				if row.Values[j].StringBytes != nil {
+					row.Values[j].String = string(row.Values[j].StringBytes)
+					row.Values[j].StringBytes = nil
+				}
+			}
+		}
+		changed = append(changed, row)
+	}
+	// Stable sort makes a source replacement's inserted row win its same-ID
+	// tombstone. All physical versions were charged before this coalescing.
+	slices.SortStableFunc(changed, func(a, b columnPhysicalVisibleRow) int { return bytes.Compare(a.ID, b.ID) })
+	unique := changed[:0]
+	for _, row := range changed {
+		if len(unique) > 0 && bytes.Equal(unique[len(unique)-1].ID, row.ID) {
+			unique[len(unique)-1] = row
+		} else {
+			unique = append(unique, row)
+		}
+	}
+	next.rows = make([]columnPhysicalVisibleRow, 0, len(before.rows)+len(unique))
+	next.invNorms = make([]float32, 0, cap(next.rows))
+	vectorColumn := -1
+	if len(input.meta.VectorIndexes) != 1 {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	for i, column := range input.meta.Options.ColumnStore.Columns {
+		if column.Path == input.meta.VectorIndexes[0].Field {
+			vectorColumn = i
+			break
+		}
+	}
+	if vectorColumn < 0 {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	old := 0
+	for _, row := range unique {
+		for old < len(before.rows) && bytes.Compare(before.rows[old].ID, row.ID) < 0 {
+			next.rows = append(next.rows, before.rows[old])
+			next.invNorms = append(next.invNorms, before.invNorms[old])
+			old++
+		}
+		if old < len(before.rows) && bytes.Equal(before.rows[old].ID, row.ID) {
+			old++
+		}
+		var norm float32
+		if !row.Deleted {
+			if vectorColumn >= len(row.Values) {
+				return nil, ErrVectorIndexSnapshotMismatch
+			}
+			var err error
+			norm, err = columnVectorGraphInvNorm(row.Values[vectorColumn].Float32Vector)
+			if err != nil {
+				return nil, err
+			}
+		}
+		next.rows = append(next.rows, row)
+		next.invNorms = append(next.invNorms, norm)
+	}
+	next.rows = append(next.rows, before.rows[old:]...)
+	next.invNorms = append(next.invNorms, before.invNorms[old:]...)
+	receipts := input.typedReceipts
+	ownReceipt := len(receipts) == 0
+	if ownReceipt {
+		receipt, err := c.reserveTypedGraphPublication(cost)
+		if err != nil {
+			return nil, err
+		}
+		receipts = []*typedGraphPublicationReceipt{receipt}
+	} else {
+		coord.typedPublicationDebtMu.Lock()
+		var reserved typedGraphPublicationCost
+		valid := true
+		for _, receipt := range receipts {
+			if receipt == nil || receipt.coord != coord || receipt.consumed {
+				valid = false
+				break
+			}
+			reserved.add(receipt.cost)
+		}
+		coord.typedPublicationDebtMu.Unlock()
+		if !valid || reserved != cost {
+			return nil, ErrVectorIndexSnapshotMismatch
+		}
+	}
+	return &typedGraphPublicationCandidate{coord: coord, before: before, next: &next, receipts: receipts, ownReceipt: ownReceipt}, nil
+}
+
+func (p *typedGraphPublicationCandidate) preflight() error {
+	if p != nil && p.coord.typedPublication.Load() != p.before {
+		return fmt.Errorf("%w: typed graph publication predecessor changed", ErrConcurrentMutation)
+	}
+	return nil
+}
+
+func (p *typedGraphPublicationCandidate) invalidate() {
+	if p == nil {
+		return
+	}
+	// Assigned live LSN can mean append/reservation ambiguity, not proof that
+	// roots installed. Replay LSN is already assigned before this attempt.
+	// In either uncertain case retain the charge and fail closed.
+	p.ownReceipt = false
+	invalid := *p.before
+	invalid.invalid = true
+	p.coord.typedPublication.CompareAndSwap(p.before, &invalid)
+}
+
+func (p *typedGraphPublicationCandidate) rejectBeforeAppend() {
+	if p != nil && p.ownReceipt {
+		for _, r := range p.receipts {
+			r.rejectBeforeAppend()
+		}
+	}
+}
+
+func (p *typedGraphPublicationCandidate) install(meta CollectionMeta, rootNames []string, rootIDs []uint64, plan ColumnPublishPlan) {
+	if p == nil {
+		return
+	}
+	p.ownReceipt = false
+	p.next.catalog = cloneCatalogWithRootUpdates(p.before.catalog, meta, rootNames, rootIDs)
+	for _, asset := range plan.PreparedAssets {
+		p.next.installedAssetBytes = saturatingAddNonNegativeInt64(p.next.installedAssetBytes, asset.Bytes)
+	}
+	for i := range p.next.rows {
+		// New rows are the only headers with an unassigned publication frontier.
+		if p.next.rows[i].AppliedCommandLSN == 0 {
+			p.next.rows[i].AppliedCommandLSN = plan.AppliedCommandLSN
+			p.next.rows[i].Generation = plan.UpdatedActiveManifest.Generation
+		}
+	}
+	typedGraphPublicationAfterAcceptedHook.RLock()
+	fn := typedGraphPublicationAfterAcceptedHook.fn
+	typedGraphPublicationAfterAcceptedHook.RUnlock()
+	if fn != nil {
+		fn(p)
+	}
+	p.coord.typedPublicationDebtMu.Lock()
+	defer p.coord.typedPublicationDebtMu.Unlock()
+	if p.coord.typedPublication.CompareAndSwap(p.before, p.next) {
+		for _, r := range p.receipts {
+			if !r.consumed {
+				p.coord.typedPublicationPending.subtract(r.cost)
+				r.consumed = true
+			}
+		}
+	}
+}
+
+var typedGraphPublicationAfterAcceptedHook struct {
+	sync.RWMutex
+	fn func(*typedGraphPublicationCandidate)
+}
+
+// Test-only replay instrumentation; unset in production. Bootstrap remains a
+// separate lifecycle gate, not a side effect of observing a replay frame.
+var typedGraphPublicationReplayOpenHook struct {
+	sync.RWMutex
+	fn func(*Collection) error
+}

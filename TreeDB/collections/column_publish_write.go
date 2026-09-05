@@ -50,6 +50,7 @@ type columnWritePublishInput struct {
 	declaredRows          []columnDeclaredRow
 	declaredRowsReady     bool
 	partIDOffset          uint64
+	typedReceipts         []*typedGraphPublicationReceipt
 	documentExtraction    time.Duration
 	commandBytes          int64
 	rowRemainderBytes     int64
@@ -162,6 +163,13 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	input = preparedInput
+	derived, err := c.prepareTypedGraphPublication(input)
+	if err != nil {
+		return 0, nil, CollectionMeta{}, nil, err
+	}
+	if derived != nil {
+		defer derived.rejectBeforeAppend()
+	}
 	columnRootName := collectionColumnManifestRootName(input.meta.Name)
 	columnBaseRoot := uint64(0)
 	if input.catalog != nil {
@@ -181,6 +189,9 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		return 0, nil, CollectionMeta{}, nil, appendErr
 	}
 	preflight := c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs)
+	if derived != nil {
+		preflight = combineOrderedRootGroupPreflight(preflight, derived.preflight)
+	}
 	var plan ColumnPublishPlan
 	var planLease *columnPublishPlanLease
 	var updatedMeta CollectionMeta
@@ -272,20 +283,29 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	recordColumnPublishCommit(input.insertStats, time.Since(commitStart))
 	recordColumnPublishTiming(input.insertStats, publishTiming)
 	if err != nil {
+		if input.commandWALIntent.AssignedLSN() != 0 {
+			derived.invalidate()
+		} else {
+			derived.rejectBeforeAppend()
+		}
 		if planLease != nil {
 			err = errors.Join(err, planLease.finishFailure(err))
 		}
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if planLease == nil {
+		derived.invalidate()
 		return 0, nil, CollectionMeta{}, nil, errors.New("collections: column publish completed without a prepared plan lease")
 	}
 	if err := planLease.finishCommit(); err != nil {
+		derived.invalidate()
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if updatedMeta.Name == "" {
+		derived.invalidate()
 		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("collections: column publish did not prepare updated metadata collection=%q operation=%s", input.meta.Name, input.operation)
 	}
+	derived.install(updatedMeta, rootNames, rootIDs, plan)
 	return newSystemRoot, rootIDs, updatedMeta, rootNames, nil
 }
 
@@ -308,6 +328,13 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	input = preparedInput
+	derived, err := c.prepareTypedGraphPublication(input)
+	if err != nil {
+		return 0, nil, CollectionMeta{}, nil, err
+	}
+	if derived != nil {
+		defer derived.rejectBeforeAppend()
+	}
 	columnRootName := collectionColumnManifestRootName(input.meta.Name)
 	columnBaseRoot := uint64(0)
 	if input.catalog != nil {
@@ -327,6 +354,9 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		return 0, nil, CollectionMeta{}, nil, appendErr
 	}
 	preflight = combineOrderedRootGroupPreflight(preflight, c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs))
+	if derived != nil {
+		preflight = combineOrderedRootGroupPreflight(preflight, derived.preflight)
+	}
 	var plan ColumnPublishPlan
 	var planLease *columnPublishPlanLease
 	var updatedMeta CollectionMeta
@@ -432,15 +462,22 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	recordColumnPublishTiming(input.insertStats, publishTiming)
 	if err != nil {
 		// The DB publish helper owns context-built batch deltas on publish errors.
+		if input.commandWALIntent.AssignedLSN() != 0 {
+			derived.invalidate()
+		} else {
+			derived.rejectBeforeAppend()
+		}
 		if planLease != nil {
 			err = errors.Join(err, planLease.finishFailure(err))
 		}
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if planLease == nil {
+		derived.invalidate()
 		return 0, nil, CollectionMeta{}, nil, errors.New("collections: column publish completed without a prepared plan lease")
 	}
 	if err := planLease.finishCommit(); err != nil {
+		derived.invalidate()
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if cleanupColumnDelta != nil {
@@ -448,8 +485,10 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		cleanupColumnDelta = nil
 	}
 	if updatedMeta.Name == "" {
+		derived.invalidate()
 		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("collections: column publish did not prepare updated metadata collection=%q operation=%s", input.meta.Name, input.operation)
 	}
+	derived.install(updatedMeta, rootNames, rootIDs, plan)
 	return newSystemRoot, rootIDs, updatedMeta, rootNames, nil
 }
 

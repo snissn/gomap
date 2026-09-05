@@ -13,6 +13,10 @@ type chunkLifecycleLock struct {
 	refs  int
 }
 type collectionSchemaCoordinator struct {
+	typedPublication        atomic.Pointer[typedGraphPublicationState]
+	typedPublicationDebtMu  sync.Mutex
+	typedPublicationDebt    typedGraphPublicationCost
+	typedPublicationPending typedGraphPublicationCost
 	schemaMu                sync.RWMutex
 	nativeVectorAdmissionMu sync.RWMutex
 	nativeVectorBaseline    atomic.Pointer[uint64]

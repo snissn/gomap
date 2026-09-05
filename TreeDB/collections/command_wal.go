@@ -344,6 +344,14 @@ func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		if err != nil {
 			return err
 		}
+		typedGraphPublicationReplayOpenHook.RLock()
+		hook := typedGraphPublicationReplayOpenHook.fn
+		typedGraphPublicationReplayOpenHook.RUnlock()
+		if hook != nil {
+			if err := hook(collection); err != nil {
+				return err
+			}
+		}
 		projection, ids, docs, err := typedProjectionFromPayload(collection.meta, payload)
 		if err != nil {
 			return err
