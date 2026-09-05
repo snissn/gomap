@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -166,6 +167,9 @@ func TestTypedGraphLifecycleEmptyRebuild(t *testing.T) {
 			if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
 				t.Fatal(err)
 			}
+			if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+				t.Fatalf("repeat empty rebuild: %v", err)
+			}
 			if canonicalScans.Load() != 0 {
 				t.Fatal("empty typed rebuild entered JSON source")
 			}
@@ -178,11 +182,85 @@ func TestTypedGraphLifecycleEmptyRebuild(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+				t.Fatalf("repeat empty rebuild after reopen: %v", err)
+			}
 			response, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: "embedding_graph", Query: []float32{1, 0, 0, 0, 0, 0, 0, 0}, TopK: 1})
 			if err != nil || len(response.Results) != 0 {
 				t.Fatalf("empty rebuilt graph results=%v err=%v", response.Results, err)
 			}
 		})
+	}
+}
+
+func TestTypedGraphLifecycleCloseFirstBufferedFlush(t *testing.T) {
+	dir, db, col := openTypedMinimaCollection(t)
+	defer func() { _ = db.Close() }()
+	columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"first buffered write"}}, {Name: "user", Strings: []string{"tenant"}}, {Name: "path", Strings: []string{"source"}}}
+	if _, _, err := col.InsertTypedBatchWithStats([][]byte{[]byte("a")}, [][]byte{[]byte(`{"id":"a"}`)}, columns); err != nil {
+		t.Fatal(err)
+	}
+	// No graph rebuild, read, or explicit Flush initializes asset ownership.
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close must flush the acknowledged typed batch: %v", err)
+	}
+	if id := columnAssetLifecycleRegistryProcessDBID(db); id != 0 {
+		t.Fatalf("closed DB retained registry identity %d", id)
+	}
+	db = openTypedMinimaDB(t, dir)
+	var err error
+	col, err = NewCollectionManager(db).OpenCollection("minima")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := col.Get([]byte("a"))
+	if err != nil || !bytes.Contains(document, []byte("first buffered write")) {
+		t.Fatalf("acknowledged row after Close/reopen: %s, %v", document, err)
+	}
+}
+
+func TestTypedGraphLifecycleRegistryManagerCloseRace(t *testing.T) {
+	_, db, _ := openTypedMinimaCollection(t)
+	defer db.Close()
+	id := columnAssetLifecycleRegistryProcessDBID(db)
+	if id == 0 {
+		t.Fatal("open manager has no registry cleanup owner")
+	}
+	_ = NewCollectionManager(db)
+	if got := columnAssetLifecycleRegistryProcessDBID(db); got != id {
+		t.Fatalf("managers split registry identity: %d / %d", id, got)
+	}
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			_ = NewCollectionManager(db)
+		}()
+	}
+	close(start)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	workers.Wait()
+	closed := NewCollectionManager(db)
+	if !closed.isClosing() || closed.closeUnregister != nil || closed.commandWALRawUnregister != nil {
+		t.Fatal("failed closed construction retained manager hooks")
+	}
+	if err := ensureColumnAssetLifecycleRegistryDB(db); err == nil {
+		t.Fatal("closed backend admitted registry ownership")
+	}
+	columnAssetLifecycleProcessRegistries.Lock()
+	defer columnAssetLifecycleProcessRegistries.Unlock()
+	if _, found := columnAssetLifecycleProcessRegistries.dbIDs[db]; found {
+		t.Fatal("closed manager race leaked registry DB identity")
+	}
+	for _, record := range columnAssetLifecycleProcessRegistries.records {
+		if record.Scope.dbID == id {
+			t.Fatalf("closed manager race leaked registry record %d", record.ID)
+		}
 	}
 }
 
@@ -330,9 +408,15 @@ func assertTypedGraphLifecycleRebuildSource(t *testing.T, col *Collection) {
 		}
 	}
 	if len(rows) != 0 {
+		if err := validateColumnVectorGraphEmptyTypedSource(view.snapshot, catalog); err == nil {
+			t.Fatal("empty-source proof accepted a live primary")
+		}
 		badCatalog := *catalog
 		badCatalog.roots = maps.Clone(catalog.roots)
 		badCatalog.roots[collectionPrimaryRootName(catalog.meta.Name)] = 0
+		if err := validateColumnVectorGraphEmptyTypedSource(view.snapshot, &badCatalog); err == nil || !strings.Contains(err.Error(), collectionColumnRowLocatorRootName(catalog.meta.Name)) {
+			t.Fatalf("empty-source proof accepted extra locator: %v", err)
+		}
 		_, badSource, _, err := col.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(view.snapshot, &badCatalog, *catalog.meta.Options.ColumnStore, records, manifest, def)
 		if badSource != nil {
 			badSource.Close()

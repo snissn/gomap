@@ -372,6 +372,15 @@ during decoding; final catalog verification and installation use the storage
 maintenance barrier. Unchanged-frontier reuse avoids suffix decoding. This is
 explicit internal setup, not automatic public reopening or per-query rebuilding.
 
+Collection manager construction establishes the existing DB-owned asset-registry
+cleanup hook while the backend still accepts registration. A first buffered
+typed flush during `Close` therefore uses that owner instead of registering a
+hook after shutdown begins; failed closed construction admits no new manager
+hooks. Managers share the DB identity and cleanup removes it after their flushes.
+An empty typed graph rebuild verifies both primary and row-locator roots are
+empty, including repeated rebuilds and reopen, rather than falling back to JSON
+or trusting a zero manifest row count alone.
+
 ## Boundary
 
 Production `TreeDB/collections` imports of `TreeDB/internal/typedcolumn` stay

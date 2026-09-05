@@ -340,30 +340,42 @@ func columnAssetLifecycleRegisterProcessRegistryRecord(db *backenddb.DB, record 
 		}
 		columnAssetLifecycleProcessRegistries.Unlock()
 
-		registeredDB := db
-		var registeredDBID uint64
-		_, ok := registeredDB.RegisterCloseHookIfOpenAfter(func() bool {
-			columnAssetLifecycleProcessRegistries.Lock()
-			defer columnAssetLifecycleProcessRegistries.Unlock()
-			if columnAssetLifecycleProcessRegistries.dbIDs == nil {
-				columnAssetLifecycleProcessRegistries.dbIDs = make(map[*backenddb.DB]uint64)
-			}
-			if existingDBID, ok := columnAssetLifecycleProcessRegistries.dbIDs[registeredDB]; ok {
-				registeredDBID = existingDBID
-				return false
-			}
-			columnAssetLifecycleProcessRegistries.nextDBID++
-			registeredDBID = columnAssetLifecycleProcessRegistries.nextDBID
-			columnAssetLifecycleProcessRegistries.dbIDs[registeredDB] = registeredDBID
-			return true
-		}, func() error {
-			columnAssetLifecycleReleaseProcessRegistryRecordsForDB(registeredDB, registeredDBID)
-			return nil
-		})
-		if !ok {
-			return 0, errors.New("collections: column asset lifecycle registry requires an open backend DB")
+		if err := ensureColumnAssetLifecycleRegistryDB(db); err != nil {
+			return 0, err
 		}
 	}
+}
+
+// Register cleanup while open, before a manager can accept buffered writes.
+// Before-close flushes can then insert records without registering new hooks.
+func ensureColumnAssetLifecycleRegistryDB(db *backenddb.DB) error {
+	if db == nil {
+		return errCollectionDBNil
+	}
+	registeredDB := db
+	var registeredDBID uint64
+	_, ok := registeredDB.RegisterCloseHookIfOpenAfter(func() bool {
+		columnAssetLifecycleProcessRegistries.Lock()
+		defer columnAssetLifecycleProcessRegistries.Unlock()
+		if columnAssetLifecycleProcessRegistries.dbIDs == nil {
+			columnAssetLifecycleProcessRegistries.dbIDs = make(map[*backenddb.DB]uint64)
+		}
+		if existingDBID, ok := columnAssetLifecycleProcessRegistries.dbIDs[registeredDB]; ok {
+			registeredDBID = existingDBID
+			return false
+		}
+		columnAssetLifecycleProcessRegistries.nextDBID++
+		registeredDBID = columnAssetLifecycleProcessRegistries.nextDBID
+		columnAssetLifecycleProcessRegistries.dbIDs[registeredDB] = registeredDBID
+		return true
+	}, func() error {
+		columnAssetLifecycleReleaseProcessRegistryRecordsForDB(registeredDB, registeredDBID)
+		return nil
+	})
+	if !ok {
+		return errors.New("collections: column asset lifecycle registry requires an open backend DB")
+	}
+	return nil
 }
 
 func columnAssetLifecycleStoreProcessRegistryRecordLocked(record columnAssetLifecycleRegistryRecord) uint64 {

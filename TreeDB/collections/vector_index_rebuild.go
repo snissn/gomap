@@ -283,18 +283,8 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		timing.Snapshot = collectionObservedElapsedSince(snapshotStarted)
 		rowsStarted := time.Now()
 		if columnStoreTypedScalarIndexesSupported(catalog.meta) {
-			it, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(baseMeta.Name), nil, nil, false)
-			if err != nil {
+			if err := validateColumnVectorGraphEmptyTypedSource(snap, catalog); err != nil {
 				return VectorIndexStatus{}, err
-			}
-			if it != nil {
-				defer it.Close()
-				if it.Valid() {
-					return VectorIndexStatus{}, errors.New("collections: selected typed column_graph rebuild has primary rows without a physical manifest")
-				}
-				if err := it.Error(); err != nil {
-					return VectorIndexStatus{}, err
-				}
 			}
 			timing.RowExtraction = collectionObservedElapsedSince(rowsStarted)
 			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay, started, &timing, capture)
@@ -532,6 +522,30 @@ func (c *Collection) rebuildNativeVectorIndexPrepared(def VectorIndexDefinition,
 	}, nil
 }
 
+func validateColumnVectorGraphEmptyTypedSource(snap *backenddb.Snapshot, catalog *collectionCatalog) error {
+	for _, root := range []string{collectionPrimaryRootName(catalog.meta.Name), collectionColumnRowLocatorRootName(catalog.meta.Name)} {
+		it, err := collectionIteratorAtCatalogRoot(snap, catalog, root, nil, nil, false)
+		if err != nil {
+			return err
+		}
+		if it == nil {
+			continue
+		}
+		nonempty, scanErr := it.Valid(), it.Error()
+		closeErr := it.Close()
+		if scanErr != nil {
+			return scanErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if nonempty {
+			return fmt.Errorf("collections: empty typed graph source has live entries in %s", root)
+		}
+	}
+	return nil
+}
+
 // columnVectorGraphRowsFromTypedColumnCatalogSnapshot is the narrow rebuild
 // source fast path for the currently certified publication shape. It retains
 // manifest validation at its caller and falls back only for shapes the typed
@@ -560,7 +574,10 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 	}
 	if len(typedRefs) == 0 {
 		if manifest.RowCount == 0 {
-			return nil, nil, false, nil
+			if err := validateColumnVectorGraphEmptyTypedSource(snap, catalog); err != nil {
+				return nil, nil, false, err
+			}
+			return nil, nil, true, nil
 		}
 		return nil, nil, false, errors.New("collections: column_graph rebuild missing typed_column_part refs")
 	}

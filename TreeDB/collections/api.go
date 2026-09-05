@@ -1696,6 +1696,10 @@ func NewCollectionManager(database *backenddb.DB) *CollectionManager {
 func newCollectionManager(database *backenddb.DB, opts collectionManagerOptions) *CollectionManager {
 	manager := &CollectionManager{db: database}
 	if database != nil {
+		if err := ensureColumnAssetLifecycleRegistryDB(database); err != nil {
+			manager.closing.Store(true)
+			return manager
+		}
 		manager.commandWALCoordinator = collectionCommandWALCoordinatorForDB(database)
 		if opts.registerBackendHooks {
 			manager.commandWALRawUnregister = database.RegisterCommandWALRawPublishBarrier(manager.flushPendingCommandWALBeforeRawPublish)
