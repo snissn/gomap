@@ -10,12 +10,14 @@ import (
 // This view borrows its two pins; current is the logical query authority and
 // base is solely an immutable accelerator. No collection route installs it.
 type typedGraphOverlaySearch struct {
-	base         *VectorIndexSearcher
-	pack         *columnHNSWSearchPackPreparedView
-	current      *CollectionReadView
-	rows         []columnPhysicalVisibleRow
-	invNorms     []float32
-	vectorColumn int
+	base                         *VectorIndexSearcher
+	pack                         *columnHNSWSearchPackPreparedView
+	current                      *CollectionReadView
+	rows                         []columnPhysicalVisibleRow
+	invNorms                     []float32
+	vectorColumn                 int
+	sourceRows, sourceTombstones int
+	sourceBytes                  int64
 }
 
 type typedGraphOverlaySearchStats struct {
@@ -42,7 +44,7 @@ func prepareTypedGraphOverlaySearch(base *VectorIndexSearcher, current *Collecti
 		return nil, err
 	}
 	slices.SortFunc(rows, func(a, b columnPhysicalVisibleRow) int { return bytes.Compare(a.ID, b.ID) })
-	view := &typedGraphOverlaySearch{base: base, pack: pack, current: current, rows: rows, vectorColumn: -1, invNorms: make([]float32, len(rows))}
+	view := &typedGraphOverlaySearch{base: base, pack: pack, current: current, rows: rows, vectorColumn: -1, invNorms: make([]float32, len(rows)), sourceRows: suffix.rows, sourceTombstones: suffix.tombstones, sourceBytes: suffix.bytes}
 	for i, field := range suffix.view.FullConfig.Columns {
 		if field.Path == base.reader.def.Field {
 			view.vectorColumn = i

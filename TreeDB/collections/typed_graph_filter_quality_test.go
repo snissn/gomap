@@ -12,6 +12,11 @@ import (
 // It is deliberately separate from the frozen Minima application manifest.
 func openTypedGraphQualityFixture(t testing.TB, n int) (*Collection, *VectorIndexSearcher, [][]byte, [][]byte, []TypedColumnBatch, []int) {
 	t.Helper()
+	return openTypedGraphQualityFixtureWithNarrowPaths(t, n, 0)
+}
+
+func openTypedGraphQualityFixtureWithNarrowPaths(t testing.TB, n, narrowPaths int) (*Collection, *VectorIndexSearcher, [][]byte, [][]byte, []TypedColumnBatch, []int) {
+	t.Helper()
 	started := time.Now()
 	meta := typedMinimaCollectionMeta()
 	meta.VectorIndexes[0].M = 16
@@ -27,7 +32,11 @@ func openTypedGraphQualityFixture(t testing.TB, n int) (*Collection, *VectorInde
 		columns[1].Strings = append(columns[1].Strings, "content")
 		ranks[i] = (i * 7919) % n
 		columns[2].Strings = append(columns[2].Strings, fmt.Sprintf("%05d", ranks[i]))
-		columns[3].Strings = append(columns[3].Strings, "source")
+		path := "source"
+		if i < narrowPaths {
+			path = "narrow"
+		}
+		columns[3].Strings = append(columns[3].Strings, path)
 	}
 	if _, _, err := col.InsertTypedBatchWithStats(ids, retained, columns); err != nil {
 		t.Fatal(err)
