@@ -437,6 +437,21 @@ an identity handshake: a concurrent base cutover can require a fresh owner to
 build another holder. It does not authorize stale serving or remove current
 owner setup costs, and does not yet connect the public mutable search route.
 
+Unpublished captured-frontier asset preparation reuses the ordinary row/typed
+encoder with an explicit captured generation and real applied command LSN. It
+chooses a row part beyond the captured part IDs (overflow is rejected) while
+preserving the reader-required typed part ID 2. The ordinary command wrapper
+still advances its predecessor generation. Reconstruction identifies the unique
+non-delete row part in each generation, rather than assuming row part 1; this
+also distinguishes source replacement's live rows from its same-generation
+tombstones. Ambiguous live parts and invalid role/reason/key identities fail
+closed. Fixture tests combine compacted T assets with real post-T mutations and
+exercise mixed-generation scan, locator coordinates, point fetch and typed
+reconstruction. This is not a maintenance installer or a public fold: candidate
+publication, graph/TVIS construction, stale-install rejection, durable closure,
+resource admission, and reclamation remain separate lifecycle gates. Prepared
+stable resources are retained until transfer or release, not deleted by age.
+
 Explicit internal cold reconciliation can bootstrap a captured base and its
 current typed suffix after normal `Open`, without replay instrumentation. It
 drains pre-existing feature-off buffers before enabling limits. Once enabled,

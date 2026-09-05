@@ -1027,6 +1027,21 @@ func mergeSourceColumnPreparedAssets(deleted, inserted ColumnPublishPreparedAsse
 }
 
 func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow) (_ ColumnPublishPreparedAssets, retErr error) {
+	generation := uint64(1)
+	if hookInput.CurrentManifest != nil {
+		generation = hookInput.CurrentManifest.Generation + 1
+	}
+	return c.prepareColumnPhysicalAssetRowsAtIdentity(prepared, input, hookInput, rows, generation, columnPhysicalRowAssetPartID+input.partIDOffset, typedColumnPartAssetPartID)
+}
+
+// prepareColumnPhysicalAssetRowsAtIdentity shares the ordinary encoder without
+// manufacturing a predecessor manifest or command LSN for maintenance builds.
+// Its caller owns collision admission; the normal command wrapper advances the
+// generation, while captured-frontier preparation reserves a fresh row part.
+func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow, generation, rowPartID, typedPartID uint64) (_ ColumnPublishPreparedAssets, retErr error) {
+	if generation == 0 || rowPartID == 0 || typedPartID == 0 || rowPartID == typedPartID {
+		return ColumnPublishPreparedAssets{}, errors.New("collections: invalid column physical asset identity")
+	}
 	cleanupAssets := make([]ColumnPreparedAsset, 0, 8)
 	defer func() {
 		if retErr != nil {
@@ -1045,12 +1060,6 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	trackCleanupAsset := func(ref ColumnAssetRef) {
 		cleanupAssets = append(cleanupAssets, ColumnPreparedAsset{Ref: ref})
 	}
-	generation := uint64(1)
-	if hookInput.CurrentManifest != nil {
-		generation = hookInput.CurrentManifest.Generation + 1
-	}
-	rowPartID := columnPhysicalRowAssetPartID + input.partIDOffset
-	typedPartID := uint64(typedColumnPartAssetPartID)
 	role := columnManifestPartRoleForPublish(hookInput.Operation)
 	type pendingColumnAsset struct {
 		payload  []byte

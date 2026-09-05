@@ -677,9 +677,23 @@ func typedColumnPartSetsByGenerationFromManifestRecords(records []columnManifest
 			if ref.Generation != keyGeneration || ref.PartID != keyPartID {
 				return nil, nil, fmt.Errorf("collections: typed-row manifest key generation/part mismatch")
 			}
-			if ref.PartID == columnPhysicalRowAssetPartID {
-				physicalRowsByGeneration[ref.Generation] = rows
+			operation, ok := columnPhysicalScanOperationFromBytes(reason)
+			if !ok {
+				return nil, nil, fmt.Errorf("collections: unsupported typed-row manifest reason %q", string(reason))
 			}
+			if _, err := decodeColumnManifestPartRoleForScan(record.value, ref, reason); err != nil {
+				return nil, nil, err
+			}
+			if operation == ColumnPublishOperationDelete {
+				continue
+			}
+			// Match the graph source's unique live row-part rule. Physical
+			// maintenance uses fresh IDs; source replacement also places live
+			// rows apart from part1 tombstones in the same generation.
+			if _, exists := physicalRowsByGeneration[ref.Generation]; exists {
+				return nil, nil, fmt.Errorf("%w: generation=%d has multiple physical row parts", errColumnVectorGraphTypedColumnMultipartDeferred, ref.Generation)
+			}
+			physicalRowsByGeneration[ref.Generation] = rows
 			continue
 		case ColumnAssetKindTCS1TypedColumnPart:
 		default:
