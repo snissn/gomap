@@ -650,6 +650,11 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #1848 keeps vector graph candidate filtering on the shared row-selection
 		// substrate without exposing generic scalar typed-column scans.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_search.go")): {},
+		// #4617 reuses RowSelection for internal prepared scalar eligibility
+		// and bounded filtered-pack candidate admission/seed enumeration. These
+		// consumers do not own publication or introduce a new durable data plane.
+		filepath.Clean(filepath.Join(collectionsDir, "typed_graph_filter.go")):        {},
+		filepath.Clean(filepath.Join(collectionsDir, "typed_graph_filtered_pack.go")): {},
 		// #1949 is the scoped production typed-column SortKey mark-pruning planner
 		// that consumes validated section marks without publishing a new data plane.
 		filepath.Clean(filepath.Join(collectionsDir, "column_physical_sortkey_pruning.go")): {},
@@ -697,7 +702,7 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 			if _, ok := allowedImports[filepath.Clean(path)]; ok {
 				continue
 			}
-			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in approved seams (#1754 adapter, #1782 vector graph, #1949 sort-key pruning, #1993 row-ref state, #2013 document-ID state, #2041 prepared views, #2118 physical accounting, #3698 query-ready generation open, #3699 query-ready encoded execution, #3700 query-ready build handoff)", path)
+			t.Fatalf("production collections import typedcolumn in %s; imports must stay in the exact approved seams (#1754 adapter, #1782 vector graph, #1949 sort-key pruning, #1993 row-ref state, #2013 document-ID state, #2041 prepared views, #2118 physical accounting, #3698 query-ready generation open, #3699 query-ready encoded execution, #3700 query-ready build handoff, #4617 internal RowSelection consumers without publication ownership)", path)
 		}
 		return nil
 	})

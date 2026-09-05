@@ -2069,6 +2069,15 @@ vector-index derived records so stale-state checks compare against authoritative
 collection data. See `vector-index-state-manifest.md` and
 `vector-index-row-ref-state-1993.md` for validation and fail-closed rules.
 
+New graph rebuilds include the optional `row_refs` asset
+`base_row_ref/ordinal_by_physical_row`: N raw-int64 graph ordinals sorted by
+forward `(generation, part_id, row_index)` coordinates, adding `8*N` payload
+bytes. Open validates ordinal bounds and strict physical-coordinate ordering;
+reverse lookup also checks applied LSN. Existing four-coordinate base readers
+remain valid without this asset. Internal filtered overlays require it. Its
+identity, checksum, alignment and handle lifetime use the existing typed row-ref
+asset contract; no new log or datastore is introduced.
+
 As of the #1895 pre-alpha format update, newly written `typed_column_part` images
 carry a writer-built `layout_contract` section. The contract may mark only raw
 non-null uncompressed `raw_int64`, native `raw_float32`, native `raw_float64`,

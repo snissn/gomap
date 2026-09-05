@@ -122,13 +122,37 @@ func TestDocs_GraphSearchAdmissionCoversVectorIndexStateRoles(t *testing.T) {
 				t.Fatalf("%s admission status=%q, want deferred or experimental", contract.role, cells[4])
 			}
 		case "hnsw_search_pack":
-			if !graphSearchAdmissionCellHasStatus(cells[4], "deferred") && !graphSearchAdmissionCellHasStatus(cells[4], "experimental") && !graphSearchAdmissionCellHasStatus(cells[4], "prepared_view_only") {
-				t.Fatalf("%s admission status=%q, want deferred, experimental, or prepared_view_only", contract.role, cells[4])
+			if !graphSearchAdmissionCellHasStatus(cells[4], "admitted") {
+				t.Fatalf("%s admission status=%q, want admitted existing eligible base-only route", contract.role, cells[4])
 			}
+			assertAdmissionCellContains(t, contract.role, "boundary", cells[6], "hnswSearchPackSearchWithBufferRoute")
+			assertAdmissionCellContains(t, contract.role, "status", cells[4], "base-only")
 		default:
 			if !graphSearchAdmissionCellHasStatus(cells[4], "pending") && !graphSearchAdmissionCellHasStatus(cells[4], "admitted") {
 				t.Fatalf("state role %q admission status=%q, want pending or admitted", contract.role, cells[4])
 			}
+		}
+	}
+}
+
+func TestDocs_GraphSearchTypedMutationSeamRemainsInternal(t *testing.T) {
+	treeRoot, _ := repoRoots(t)
+	data, err := os.ReadFile(filepath.Join(treeRoot, "docs", "spec", "typed-column-graph-search-admission.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cells := findGraphSearchAdmissionRow(t, graphSearchAdmissionRows(string(data)), "Typed mutation suffix")
+	assertAdmissionCellContains(t, "Typed mutation suffix", "tier", cells[3], "heap_typed_view")
+	assertAdmissionCellContains(t, "Typed mutation suffix", "status", cells[4], "experimental")
+	assertAdmissionCellContains(t, "Typed mutation suffix", "status", cells[4], "internal-only")
+	for _, name := range []string{"typed_graph_overlay.go", "typed_graph_base_filter.go", "typed_graph_filter_search.go"} {
+		if _, err := os.Stat(filepath.Join(treeRoot, "collections", name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, boundary := range []string{"no ordinary mutable graph dispatch", "incremental current-pin publication", "fold policy", "no public filtered route"} {
+		if !strings.Contains(string(data), boundary) {
+			t.Fatalf("missing internal admission boundary %q", boundary)
 		}
 	}
 }

@@ -61,7 +61,7 @@ func columnVectorGraphPreparedSearchMmapPrerequisitesPresent(reader *columnVecto
 	if !columnVectorGraphPreparedSearchAdjacencyMmapPrerequisitePresent(reader.adjacencyLayerSources) {
 		return false
 	}
-	if reader.rowRefSource != nil && reader.rowRefSource.preparedViewActive() && reader.rowRefSource.mmapDirectFieldCount() != uint64(len(columnVectorGraphRowRefStateFields)) {
+	if reader.rowRefSource != nil && reader.rowRefSource.preparedViewActive() && reader.rowRefSource.baseMmapDirectFieldCount() != 4 {
 		return false
 	}
 	if reader.documentIDSource != nil && reader.documentIDSource.preparedViewActive() && !columnVectorGraphDocumentIDSourceMmapDirect(reader.documentIDSource) {
@@ -250,7 +250,7 @@ func (v *columnVectorGraphPreparedSearchView) validateLive() error {
 	if v.rowRefs == nil || !v.rowRefs.preparedViewActive() {
 		return errors.New("row-ref prepared view is not active")
 	}
-	if got, want := v.rowRefs.mmapDirectFieldCount(), uint64(len(columnVectorGraphRowRefStateFields)); got != want {
+	if got, want := v.rowRefs.baseMmapDirectFieldCount(), uint64(4); got != want {
 		return fmt.Errorf("row-ref prepared mmap fields=%d want %d", got, want)
 	}
 	if v.documentIDs == nil || !v.documentIDs.preparedViewActive() {

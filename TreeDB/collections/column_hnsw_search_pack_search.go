@@ -134,7 +134,14 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 		return nil, stats, errColumnHNSWSearchPackSearchUnsupportedMode
 	}
 	if opts.HasCandidateRows {
-		return nil, stats, errColumnHNSWSearchPackSearchCandidateRows
+		if opts.CandidateLimit <= 0 || opts.CandidateRows.Rows() != v.Header.Rows {
+			return nil, stats, errColumnHNSWSearchPackSearchCandidateRows
+		}
+		if opts.CandidateRows.Count() > 0 {
+			if _, ok := typedGraphFilterOrdinalAt(opts.CandidateRows, 0); !ok {
+				return nil, stats, errColumnHNSWSearchPackSearchCandidateRows
+			}
+		}
 	}
 	statsMode := opts.StatsMode.normalized()
 	if !columnHNSWSearchPackStatsModeSupportedForSearch(statsMode) {
@@ -158,6 +165,13 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 		return nil, stats, nil
 	}
 	stats.CandidateRows = uint64(rowCount)
+	if opts.HasCandidateRows {
+		stats.CandidateRows = uint64(opts.CandidateRows.Count())
+		if opts.CandidateRows.IsEmpty() {
+			return nil, stats, nil
+		}
+		topK = min(topK, opts.CandidateRows.Count())
+	}
 	if candidateLimit == 0 || candidateLimit > rowCount {
 		candidateLimit = rowCount
 	}
@@ -175,6 +189,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 	}
 	if efSearch > candidateLimit {
 		efSearch = candidateLimit
+	}
+	if opts.HasCandidateRows {
+		efSearch = min(efSearch, opts.CandidateRows.Count())
 	}
 	degree, err := v.layer0ExpansionDegreeV1()
 	if err != nil {
@@ -230,10 +247,16 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 	visitEpoch := scratch.visitEpoch
 	visitMarks[entryOrdinal] = visitEpoch
 
-	if err := v.scoreAndPushFrontierVisitedFast(normalizedQuery, entryOrdinal, efSearch, opts.ScoreBatchMode, scratch, &stats, &visitedCandidates); err != nil {
+	if opts.HasCandidateRows {
+		err = v.scoreFilteredSeed(normalizedQuery, entryOrdinal, efSearch, opts, scratch, &stats, &visitedCandidates)
+	} else {
+		err = v.scoreAndPushFrontierVisitedFast(normalizedQuery, entryOrdinal, efSearch, opts.ScoreBatchMode, scratch, &stats, &visitedCandidates)
+	}
+	if err != nil {
 		return nil, stats, err
 	}
 	nextSeed := 0
+	selectedSeed := 0
 	rowCount64 := uint64(rowCount)
 	traversalSteps := 0
 	for {
@@ -251,7 +274,37 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 			if len(scratch.top) >= efSearch {
 				break
 			}
-			seed, seedOK, err := columnHNSWSearchPackNextCandidateSeedWithContext(ctx, nextSeed, rowCount, visitMarks, visitEpoch)
+			var seed int
+			var seedOK bool
+			if opts.HasCandidateRows {
+				for selectedSeed < opts.CandidateRows.Count() {
+					if stats.FilteredSeedInspections >= uint64(candidateLimit) {
+						stats.Candidates = visitedCandidates
+						if countLoopEdges {
+							stats.Edges, stats.VisitedEdges = loopEdgeVisits, loopEdgeVisits
+						}
+						columnVectorGraphNativeSearchFinishGraphTraversal(&stats, traversalStart, traversalDistanceBefore)
+						return nil, stats, errTypedGraphSearchBudget
+					}
+					if selectedSeed&63 == 0 {
+						if err := ctx.Err(); err != nil {
+							return nil, stats, err
+						}
+					}
+					stats.FilteredSeedInspections++
+					seed, seedOK = typedGraphFilterOrdinalAt(opts.CandidateRows, selectedSeed)
+					selectedSeed++
+					if !seedOK {
+						return nil, stats, errColumnHNSWSearchPackSearchCandidateRows
+					}
+					if visitMarks[seed] != visitEpoch {
+						break
+					}
+					seedOK = false
+				}
+			} else {
+				seed, seedOK, err = columnHNSWSearchPackNextCandidateSeedWithContext(ctx, nextSeed, rowCount, visitMarks, visitEpoch)
+			}
 			if err != nil {
 				return nil, stats, err
 			}
@@ -261,7 +314,12 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 			nextSeed = seed + 1
 			visitMarks[seed] = visitEpoch
 
-			if err := v.scoreAndPushFrontierVisitedFast(normalizedQuery, seed, efSearch, opts.ScoreBatchMode, scratch, &stats, &visitedCandidates); err != nil {
+			if opts.HasCandidateRows {
+				err = v.scoreFilteredSeed(normalizedQuery, seed, efSearch, opts, scratch, &stats, &visitedCandidates)
+			} else {
+				err = v.scoreAndPushFrontierVisitedFast(normalizedQuery, seed, efSearch, opts.ScoreBatchMode, scratch, &stats, &visitedCandidates)
+			}
+			if err != nil {
 				return nil, stats, err
 			}
 			continue
@@ -314,7 +372,12 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 		}
 
 		if len(tile) != 0 {
-			if err := v.scoreAndPushFrontierVisitedTileFast(normalizedQuery, tile, efSearch, opts.ScoreBatchMode, scratch, &stats, &visitedCandidates); err != nil {
+			if opts.HasCandidateRows {
+				err = v.scoreFilteredTile(normalizedQuery, tile, efSearch, opts, scratch, &stats, &visitedCandidates)
+			} else {
+				err = v.scoreAndPushFrontierVisitedTileFast(normalizedQuery, tile, efSearch, opts.ScoreBatchMode, scratch, &stats, &visitedCandidates)
+			}
+			if err != nil {
 				return nil, stats, err
 			}
 			if err := ctx.Err(); err != nil {
@@ -351,7 +414,12 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 
 		if len(tile) != 0 {
 			beforeCandidates, beforeFrontier := visitedCandidates, len(scratch.frontier)
-			if err := v.scoreAndPushFrontierVisitedTileFast(normalizedQuery, tile, efSearch, opts.ScoreBatchMode, scratch, &stats, &visitedCandidates); err != nil {
+			if opts.HasCandidateRows {
+				err = v.scoreFilteredTile(normalizedQuery, tile, efSearch, opts, scratch, &stats, &visitedCandidates)
+			} else {
+				err = v.scoreAndPushFrontierVisitedTileFast(normalizedQuery, tile, efSearch, opts.ScoreBatchMode, scratch, &stats, &visitedCandidates)
+			}
+			if err != nil {
 				return nil, stats, err
 			}
 			if countLoopEdges {
@@ -373,6 +441,12 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 		stats.VisitedEdges = loopEdgeVisits
 	}
 	columnVectorGraphNativeSearchFinishGraphTraversal(&stats, traversalStart, traversalDistanceBefore)
+	if opts.HasCandidateRows && candidateLimit < rowCount && visitedCandidates >= uint64(candidateLimit) {
+		return nil, stats, errTypedGraphSearchBudget
+	}
+	if opts.HasCandidateRows && len(scratch.top) < min(opts.TopK, opts.CandidateRows.Count()) {
+		return nil, stats, errTypedGraphSearchBudget
+	}
 	if len(scratch.top) == 0 {
 		return scratch.results, stats, nil
 	}
@@ -1188,7 +1262,9 @@ func (v *columnHNSWSearchPackPreparedView) fetchTopSearchResults(scratch *column
 		stats.ResultIDPreparedBytesViews = 1
 		stats.RowRefStatePreparedViews = 1
 		if v.status == columnHNSWSearchPackPreparedStatusDirect {
-			stats.RowRefStateMmapDirectFields = uint64(len(columnVectorGraphRowRefStateFields))
+			// The pack contains the four forward coordinates, not the optional
+			// inverse permutation stored in the separate row-ref asset family.
+			stats.RowRefStateMmapDirectFields = 4
 		}
 	}
 	for i, candidate := range scratch.top {

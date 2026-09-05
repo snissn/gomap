@@ -19,6 +19,32 @@ checkpoint, and mutation-asset tests establish reuse boundaries. They do not
 certify the future typed Minima overlay; #4616–#4619 must add typed admission,
 replay, snapshot, fold/crash and public-route tests as those features land.
 
+### Internal mutable graph consumer (#4617)
+
+`TestTypedGraphOverlay*` covers checked base/current lineage, insert/replacement/
+delete visibility, cumulative physical bounds and the still-gated public route.
+`TestTypedGraphInverse*` covers the optional mapped inverse, coordinate/LSN
+validation, corruption and handle lifetime. `TestTypedGraphLocatorVisitorOwnership`
+checks the shared borrowed lookup boundary and unchanged owning public results.
+`TestTypedGraphPreparedFilterFinalIntersectionAndBounds` preserves complete
+512/513/1,000/4,096/4,097 classification and large-leaf/small-intersection behavior;
+`TestTypedGraphPreparedFilterDispersedQuality` supplies a separate 50,000-row
+exact-oracle/ANN-recall engine diagnostic, not final Minima qualification.
+
+`TestTypedGraphBaseFilter*` covers immutable predicate ownership, bounded current
+binding, eligibility transitions, shadow overfetch, new IDs, output from the
+current pin, closure and independent readers during publication. The separate
+representative suffix residency test reports logical payload and signed GC heap
+measurements without equating them. `BenchmarkTypedGraphBaseFilterBindingBoundaries`
+separates cold setup, bounded binding, warm query and actual new-pin reads;
+write/ack and final materialization are explicitly excluded from that benchmark.
+Existing `TestNativeScalarPlanCache*` remains an affected guardrail for shared
+scalar scanning. The maintained admission tests keep the suffix experimental
+and distinguish the already-supported base-only prepared-pack route.
+
+No public mutable serving/fold/crash readiness follows from these tests. M3 owns
+installation and bounded lifecycle; M4/M5 own the final application evidence.
+
 ### Typed indexed-write substrate (#4616)
 
 The collection `TestTypedMinima*` tests exercise an 8-D FP32 typed column,

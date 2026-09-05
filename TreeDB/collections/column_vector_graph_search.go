@@ -358,6 +358,9 @@ func (c *columnVectorGraphAdjacencySourceCounterSnapshot) addOutcome(adjacencyLe
 }
 
 type columnVectorGraphNativeSearchStats struct {
+	FilteredSeedInspections              uint64
+	FilteredIneligibleScores             uint64
+	FilteredFrontierPeak                 uint64
 	CandidateRows                        uint64
 	Candidates                           uint64
 	Edges                                uint64
