@@ -356,10 +356,12 @@ than silently use a weaker flush-boundary guarantee:
   dependency-complete command-WAL prefix. It is power-loss durable without an
   immediate backend-root checkpoint.
 - `DurabilityWALOnRelaxed`: in the command-WAL relaxed profile, ordinary
-  collection/catalog success may lead the
-  stable WAL frontier. An explicit sync/barrier persists the typed prefix and
-  required external refs; recent ordinary acknowledgements may lose only a
-  complete suffix.
+  collection/catalog success may lead the stable WAL frontier. A successful
+  backend `DB.Checkpoint` or clean `DB.Close` waits for a sealed complete root
+  covering its captured frontier, including required external dependencies.
+  `Collection.Flush` and `CollectionManager.FlushAll` only drain visibility;
+  neither establishes power-loss durability. Until a durable boundary covers
+  them, recent ordinary acknowledgements may lose only a complete suffix.
 - `DurabilityWALOffRelaxed`: under production `no_wal_fast`, ordinary success
   may lead sealed-root publication and an explicit sync waits for a sealed root
   covering the call. `Flush` and `FlushAll` remain visibility/drain operations;

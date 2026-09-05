@@ -228,8 +228,8 @@ and does not satisfy the native-write contract.
 `InsertTypedBatchWithStats` and `ReplaceTypedBatch` accept row-aligned
 `TypedColumnBatch` carriers for all declared columns. Their initial supported
 schema is non-null UTF-8 string typed-row fields and finite, fixed-dimensional
-FP32 typed-column vectors, with JSON document format and non-column JSON retained
-payload. Scalar indexes must be single-field string indexes (not multikey or
+FP32 typed-column vectors, with a JSON document format and a retained non-column
+JSON payload. Scalar indexes must be single-field string indexes (not multikey or
 composite); text fields must refer to declared strings; vector indexes must use
 matching `column_graph` fields/dimensions. Cosine vectors must have nonzero
 magnitude. Unsupported schemas fail closed rather than selecting a JSON fallback.
