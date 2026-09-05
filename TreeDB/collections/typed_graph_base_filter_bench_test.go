@@ -166,7 +166,7 @@ func BenchmarkTypedGraphBaseFilterBindingBoundaries(b *testing.B) {
 			b.Run(tc.name+"/"+boundary, func(b *testing.B) {
 				b.StopTimer()
 				if boundary == "newpin_overlay_bind_query" && b.N > 64 {
-					b.Fatal("bounded turnover diagnostic: use -benchtime=10x")
+					b.Skip("bounded turnover diagnostic excludes unbounded calibration; use -benchtime=10x")
 				}
 				plan, err := bindTypedGraphBaseFilter(cold, overlay, bindLimits)
 				if err != nil {

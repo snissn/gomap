@@ -10,6 +10,113 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
+func TestTypedGraphOverlayRejectsClosedBorrowedPins(t *testing.T) {
+	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
+	columns[1].Strings[0] = "changed"
+	row := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: columns[1].Strings[:1]}, {Name: "user", Strings: columns[2].Strings[:1]}, {Name: "path", Strings: columns[3].Strings[:1]}}
+	if _, err := col.ReplaceTypedBatch(ids[:1], retained[:1], row); err != nil {
+		t.Fatal(err)
+	}
+	current, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer current.Close()
+	borrowed := newCollectionReadViewAtSnapshot(col, current.snapshot, current.catalog, false, "")
+	defer borrowed.closeAssetReadCaches()
+	limits := typedGraphOverlayLimits{Rows: 8, Tombstones: 8, Bytes: 1 << 20}
+	suffix, err := prepareTypedGraphOverlaySuffix(base, borrowed, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := suffix.prepareRows(borrowed, limits.Bytes); err != nil {
+		t.Fatal(err)
+	}
+	manager := borrowed.assetManager
+	if manager == nil {
+		t.Fatal("fixture did not create asset manager")
+	}
+	if err := borrowed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if borrowed.snapshot == nil || borrowed.ownsSnap || !borrowed.closed || manager.Stats().ActiveHandles != 0 {
+		t.Fatal("invalid closed borrowed fixture")
+	}
+	for _, call := range []struct {
+		name string
+		run  func() error
+	}{
+		{"suffix", func() error { _, err := prepareTypedGraphOverlaySuffix(base, borrowed, limits); return err }},
+		{"search", func() error { _, err := prepareTypedGraphOverlaySearch(base, borrowed, limits); return err }},
+		{"rows", func() error { _, err := suffix.prepareRows(borrowed, limits.Bytes); return err }},
+	} {
+		t.Run(call.name, func(t *testing.T) {
+			if err := call.run(); !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+				t.Errorf("closed borrowed view accepted: %v", err)
+			}
+			if borrowed.assetManager != manager || borrowed.rowAssetReadCache != nil || borrowed.typedColumnAssetReadCache != nil || manager.Stats().ActiveHandles != 0 {
+				t.Error("closed view recreated caches/handles")
+			}
+		})
+	}
+	// Keep the owning current pin alive; closing only the accelerator must also
+	// fail at admission, before current-view caches can be opened.
+	if err := base.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepareTypedGraphOverlaySuffix(base, current, limits); !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		t.Errorf("closed base suffix: %v", err)
+	}
+	if _, err := prepareTypedGraphOverlaySearch(base, current, limits); !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		t.Errorf("closed base search: %v", err)
+	}
+	if current.assetManager != nil || current.rowAssetReadCache != nil || current.typedColumnAssetReadCache != nil {
+		t.Fatal("closed base opened current caches")
+	}
+}
+
+func TestTypedGraphOverlayRejectsRowOwnedExtraVector(t *testing.T) {
+	meta := typedMinimaCollectionMeta()
+	meta.Indexes, meta.TextIndexes = nil, nil
+	meta.Options.ColumnStore.Columns = append(meta.Options.ColumnStore.Columns, ColumnStoreColumn{Name: "extra", Path: "extra", ValueType: ColumnStoreValueFloat32Vector, Owner: TypedStorageOwnerRowAsset, VectorDims: 8})
+	_, db, col := openTypedMinimaCollectionMeta(t, meta)
+	defer db.Close()
+	doc := func(id string) []byte {
+		return []byte(fmt.Sprintf(`{"id":%q,"embedding":[1,0,0,0,0,0,0,0],"extra":[0,1,0,0,0,0,0,0],"content":"content","meta":{"user_id":"user","fpath":"path"}}`, id))
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("base")}, [][]byte{doc("base")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+		t.Fatal(err)
+	}
+	base, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: "embedding_graph"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer base.Close()
+	if _, err := col.InsertBatch([][]byte{[]byte("new")}, [][]byte{doc("new")}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer current.Close()
+	if _, err := prepareTypedGraphOverlaySuffix(base, current, typedGraphOverlayLimits{Rows: 8, Tombstones: 8, Bytes: 1 << 20}); !errors.Is(err, ErrHybridSearchUnsupported) {
+		t.Errorf("row-owned extra vector admitted: %v", err)
+	}
+	// Direct decoder admission must reject the same normalized schema before
+	// constructing a row reader or opening any current-view asset caches.
+	suffix := typedGraphOverlaySuffix{view: columnPhysicalScanSnapshotView{Catalog: current.catalog, FullConfig: *current.catalog.meta.Options.ColumnStore}}
+	if _, err := suffix.prepareRows(current, 1<<20); !errors.Is(err, ErrHybridSearchUnsupported) {
+		t.Errorf("row decoder schema admitted: %v", err)
+	}
+	if current.assetManager != nil || current.rowAssetReadCache != nil || current.typedColumnAssetReadCache != nil {
+		t.Fatal("unsupported schema opened caches")
+	}
+}
+
 func TestTypedGraphOverlaySuffixLineageAndBounds(t *testing.T) {
 	part := func(generation uint64, kind ColumnAssetKind, reason ColumnPublishOperation, role ColumnManifestPartRole) columnManifestAssetRefForScan {
 		return columnManifestAssetRefForScan{Ref: ColumnAssetRef{Kind: kind, Namespace: "test", Generation: generation, PartID: generation, Length: 10, Checksum: uint32(generation)}, Rows: 1, Reason: reason, Role: role}

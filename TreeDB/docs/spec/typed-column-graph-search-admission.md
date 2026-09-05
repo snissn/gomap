@@ -188,6 +188,13 @@ initialization, binding and Close retain the existing non-concurrent ownership
 contract. Cold preparation, bounded binding, same-pin query and complete
 changing-pin costs require separate evidence before promotion.
 
+Preparation rejects closed base/current views before scans or cache creation,
+including borrowed views whose underlying snapshot is still open. All FP32
+columns in the suffix schema must be owned by `typed_column_part`; extra
+row-asset-owned FP32 columns are unsupported because their decoded vectors borrow
+row-reader scratch. Supported typed-part vectors retain their owning decoder
+storage without an additional clone.
+
 | Graph-search role | Owner / tier | Admission status | Prepared shape and query boundary | Evidence required |
 | --- | --- | --- | --- | --- |
 | Current-pin scalar eligibility | Borrowed current read pin and checked base; `heap_typed_view`, no durable state key or global cache. | `experimental`, internal-only under #4617 | Compact base `RowSelection`, bounded suffix ordinals, and an exact-only ID-ranked ordinal slice of at most 4,096 entries. Queries reuse these without posting, locator or per-candidate ID reads. | `TestTypedGraphPreparedFilterFinalIntersectionAndBounds` and `TestTypedGraphOverlaySearchShadowsAndBudget`; preparation bytes/work, repeated-query allocation, residency, dispersed ANN recall and matched wall-time qualification remain required. |

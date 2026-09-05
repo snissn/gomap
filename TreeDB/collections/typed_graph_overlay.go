@@ -11,8 +11,12 @@ import (
 // reconstruction codec directly, never retained JSON. The returned newest-ID
 // rows are owned; tombstones remain present to shadow immutable base entries.
 func (suffix typedGraphOverlaySuffix) prepareRows(current *CollectionReadView, maxOwnedBytes int64) ([]columnPhysicalVisibleRow, error) {
-	if current == nil || current.snapshot == nil || current.catalog != suffix.view.Catalog || maxOwnedBytes <= 0 {
+	if current == nil || current.closed || current.snapshot == nil || current.catalog == nil || current.catalog != suffix.view.Catalog || maxOwnedBytes <= 0 {
 		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	cfg := suffix.view.FullConfig
+	if err := validateTypedGraphOverlayVectorOwners(cfg); err != nil {
+		return nil, err
 	}
 	reader, err := newColumnPhysicalRowReaderFromSnapshotView(suffix.view, columnPhysicalRowReaderOptions{})
 	if err != nil {
@@ -22,7 +26,6 @@ func (suffix typedGraphOverlaySuffix) prepareRows(current *CollectionReadView, m
 	if reader.RowCount() != suffix.rows {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
-	cfg := suffix.view.FullConfig
 	// Validate the worst-case FP32 plane from schema/count metadata before the
 	// existing decoder allocates its matrix. Source bytes, decoded value/header
 	// working space, and retained payload are distinct accounting terms.
@@ -121,6 +124,20 @@ func (suffix typedGraphOverlaySuffix) prepareRows(current *CollectionReadView, m
 
 var errTypedGraphOverlayFoldNeeded = errors.New("collections: typed graph overlay requires fold")
 
+func validateTypedGraphOverlayVectorOwners(cfg ColumnStoreConfig) error {
+	for _, column := range cfg.Columns {
+		if column.ValueType == ColumnStoreValueFloat32Vector {
+			owner, err := columnStoreColumnOwner(column)
+			if err != nil || owner != TypedStorageOwnerColumnPart {
+				// Row-owned FP32 views borrow the physical reader's scratch.
+				// Only typed-part decoder-owned vectors can transfer unchanged.
+				return ErrHybridSearchUnsupported
+			}
+		}
+	}
+	return nil
+}
+
 // Limits apply to cumulative physical work, including overwritten rows and
 // tombstones, not just the surviving delta. There are deliberately no defaults
 // or public admission route: production lifecycle installation belongs to M3.
@@ -141,7 +158,7 @@ type typedGraphOverlaySuffix struct {
 // asset lineage must remain reachable. Callers keep both pins open throughout
 // use. This does not install an overlay or change ordinary search admission.
 func prepareTypedGraphOverlaySuffix(base *VectorIndexSearcher, current *CollectionReadView, limits typedGraphOverlayLimits) (typedGraphOverlaySuffix, error) {
-	if base == nil || base.reader == nil || base.snapshot == nil || base.catalog == nil || current == nil || current.snapshot == nil || current.catalog == nil || base.collection == nil || base.collection != current.collection {
+	if base == nil || base.closed || base.reader == nil || base.snapshot == nil || base.catalog == nil || current == nil || current.closed || current.snapshot == nil || current.catalog == nil || base.collection == nil || base.collection != current.collection {
 		return typedGraphOverlaySuffix{}, ErrVectorIndexSnapshotMismatch
 	}
 	baseCfg := base.catalog.meta.Options.ColumnStore
@@ -149,6 +166,9 @@ func prepareTypedGraphOverlaySuffix(base *VectorIndexSearcher, current *Collecti
 	def, found := findVectorIndex(current.catalog.meta.VectorIndexes, base.reader.def.Name)
 	if !found || !vectorIndexDefinitionValuesEqual(base.reader.def, def) || baseCfg == nil || currentCfg == nil || baseCfg.SchemaHash != currentCfg.SchemaHash || base.catalog.meta.Name != current.catalog.meta.Name || !reflect.DeepEqual(baseCfg.Columns, currentCfg.Columns) {
 		return typedGraphOverlaySuffix{}, ErrVectorIndexSnapshotMismatch
+	}
+	if err := validateTypedGraphOverlayVectorOwners(*currentCfg); err != nil {
+		return typedGraphOverlaySuffix{}, err
 	}
 	collection := base.collection
 	baseView, err := collection.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(base.snapshot, base.catalog, base.catalog.meta.Name, base.catalog.rootID(collectionColumnManifestRootName(base.catalog.meta.Name)), *baseCfg, true, columnManifestScanNoSidecars())
