@@ -215,6 +215,7 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 		dims:           graph.Dimensions,
 		locationSource: locationSource,
 		locations:      locations,
+		parts:          make([]*columnVectorGraphTypedColumnVectorPart, 0, len(usedGenerations)),
 		manager:        mappedresource.NewManager(),
 	}
 	success := false

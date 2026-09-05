@@ -367,6 +367,26 @@ Metadata and decoded working terms have separate setup bounds. This internal
 seam does not enable public mutable graph serving; physical pre-ack admission,
 bounded folding, and unified lifecycle resource limits remain prerequisites.
 
+An internal captured-base slot in the existing collection prepared-search cache
+can retain an immutable shared graph reference and exact typed-asset lease,
+without a snapshot, catalog, or suffix. Warm acquisition runs outside the
+storage barrier; single-build waiters hold neither that barrier nor the cache
+mutex. Refresh overlaps predecessor and successor references, charging both
+against explicit owner/asset and known metadata-backing limits before mapping.
+Lease capacities, identity bytes, vector-location/ordinal/part arrays and
+layer/pack metadata are charged conservatively per keeper even when shared.
+Manager bookkeeping, allocator overhead and temporary decode work are not a
+claimed total heap bound. Keeper backing charges end when that keeper closes;
+old query references may still retain the shared holder. Summed retired-holder
+backing across those queries remains a unified lifecycle accounting gate, not
+covered by the keeper-only charge. Cache Close and existing manager/DB cleanup release
+the keeper; query owners independently retain their current pins and scratch.
+An empty base has no shared holder and this internal warm route is unavailable;
+the existing coherent empty/suffix-only owner remains supported. Warming is not
+an identity handshake: a concurrent base cutover can require a fresh owner to
+build another holder. It does not authorize stale serving or remove current
+owner setup costs, and does not yet connect the public mutable search route.
+
 Explicit internal cold reconciliation can bootstrap a captured base and its
 current typed suffix after normal `Open`, without replay instrumentation. It
 drains pre-existing feature-off buffers before enabling limits. Once enabled,

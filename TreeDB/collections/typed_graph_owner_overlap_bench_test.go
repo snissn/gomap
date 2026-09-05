@@ -11,6 +11,16 @@ import (
 // queries reuse its pin/scratch. Keeper is a real old coherent owner here, NOT
 // a proposed service lifetime: it retains an old snapshot and must be accounted.
 func BenchmarkTypedGraphOwnerOverlap(b *testing.B) {
+	benchmarkTypedGraphOwnerOverlap(b, false)
+}
+
+// Same fixture/output boundary with the snapshot-free cache keeper. OpenClose
+// includes the internal cache hit check; cold warm/build is outside the timer.
+func BenchmarkTypedGraphOwnerCachedBase(b *testing.B) {
+	benchmarkTypedGraphOwnerOverlap(b, true)
+}
+
+func benchmarkTypedGraphOwnerOverlap(b *testing.B, cached bool) {
 	for _, d := range []int{0, 32, 256} {
 		b.Run(fmt.Sprintf("suffix%d", d), func(b *testing.B) {
 			col, fixtureBase, ids, retained, columns, _ := openTypedGraphQualityFixture(b, 1024)
@@ -21,11 +31,42 @@ func BenchmarkTypedGraphOwnerOverlap(b *testing.B) {
 			if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 512, Tombstones: 512, ValueSlots: 2048, OwnedBytes: 8 << 20}, limits.Cold); err != nil {
 				b.Fatal(err)
 			}
-			keeper, err := col.openTypedGraphReadOwner(limits)
-			if err != nil {
-				b.Fatal(err)
+			if cached && d == 0 {
+				b.Run("coldCache/OpenClose", func(b *testing.B) {
+					before := col.columnVectorGraphSharedPreparedSearchCacheSnapshot()
+					b.ReportAllocs()
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						if _, err := col.acquireTypedGraphCapturedBaseCache("embedding_graph", limits); err != nil {
+							b.Fatal(err)
+						}
+						if err := col.CloseVectorIndexPreparedSearchCache(); err != nil {
+							b.Fatal(err)
+						}
+					}
+					b.StopTimer()
+					after := col.columnVectorGraphSharedPreparedSearchCacheSnapshot()
+					if after.CacheBuilds-before.CacheBuilds != uint64(b.N) || after.Refs != 0 {
+						b.Fatal("cold cache did not build/release once per op")
+					}
+				})
 			}
-			defer keeper.Close()
+			var closeKeeper func() error
+			if cached {
+				keeper, err := col.acquireTypedGraphCapturedBaseCache("embedding_graph", limits)
+				if err != nil {
+					b.Fatal(err)
+				}
+				checkTypedGraphCapturedBacking(b, keeper.capturedBase)
+				closeKeeper = col.CloseVectorIndexPreparedSearchCache
+			} else {
+				keeper, err := col.openTypedGraphReadOwner(limits)
+				if err != nil {
+					b.Fatal(err)
+				}
+				closeKeeper = keeper.Close
+			}
+			defer closeKeeper()
 			if d > 0 {
 				changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:d]}, {Name: "content", Strings: make([]string, d)}, {Name: "user", Strings: columns[2].Strings[:d]}, {Name: "path", Strings: columns[3].Strings[:d]}}
 				for i := range changed[1].Strings {
@@ -38,11 +79,21 @@ func BenchmarkTypedGraphOwnerOverlap(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
+			if cached {
+				if _, err := col.acquireTypedGraphCapturedBaseCache("embedding_graph", limits); err != nil {
+					b.Fatal(err)
+				}
+			}
 			b.Run("overlap/OpenClose", func(b *testing.B) {
 				before := col.columnVectorGraphSharedPreparedSearchCacheSnapshot()
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
+					if cached {
+						if _, err := col.acquireTypedGraphCapturedBaseCache("embedding_graph", limits); err != nil {
+							b.Fatal(err)
+						}
+					}
 					owner, err := col.openTypedGraphReadOwner(limits)
 					if err != nil {
 						b.Fatal(err)
@@ -88,7 +139,7 @@ func BenchmarkTypedGraphOwnerOverlap(b *testing.B) {
 					b.StopTimer()
 				})
 			}
-			if err := keeper.Close(); err != nil {
+			if err := closeKeeper(); err != nil {
 				b.Fatal(err)
 			}
 			b.Run("noKeeper/OpenClose", func(b *testing.B) {

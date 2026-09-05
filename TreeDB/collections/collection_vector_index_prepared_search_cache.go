@@ -15,6 +15,7 @@ type collectionVectorIndexPreparedSearchFamily uint8
 const (
 	collectionVectorIndexPreparedSearchFamilyExactHNSWPack collectionVectorIndexPreparedSearchFamily = iota + 1
 	collectionVectorIndexPreparedSearchFamilyQuantized
+	collectionVectorIndexPreparedSearchFamilyCapturedBase
 )
 
 type collectionVectorIndexPreparedSearchCacheSlot struct {
@@ -50,6 +51,7 @@ type collectionVectorIndexPreparedSearch struct {
 	pack                 *columnHNSWSearchPackPreparedView
 	packStatus           columnHNSWSearchPackPreparedStatus
 	searcher             *VectorIndexSearcher
+	capturedBase         *typedGraphCapturedBaseResources
 	searchStartedForTest func()
 
 	quantizedReadersMu        sync.Mutex
@@ -174,6 +176,14 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndex
 		return nil, response, acquireStats, err
 	}
 	slot := collectionVectorIndexPreparedSearchCacheSlotForOptions(opts, queryMode)
+	return c.acquireCollectionVectorIndexPreparedSearchSlot(opts, slot, nil)
+}
+
+// The internal captured-base builder acquires its storage barrier only after
+// winning this singleflight. Callers must not hold that barrier while waiting.
+func (c *Collection) acquireCollectionVectorIndexPreparedSearchSlot(opts VectorIndexSearchOptions, slot collectionVectorIndexPreparedSearchCacheSlot, build func() (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, error)) (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, collectionVectorIndexPreparedSearchAcquireStats, error) {
+	var response VectorIndexSearchResponse
+	var acquireStats collectionVectorIndexPreparedSearchAcquireStats
 	if c == nil {
 		return nil, response, acquireStats, errCollectionNil
 	}
@@ -244,12 +254,22 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndex
 		acquireStats.HNSWSearchPackCacheBuilds++
 		c.vectorBufferedSearchMu.Unlock()
 
-		if oldPrepared != nil {
+		if oldPrepared != nil && slot.family != collectionVectorIndexPreparedSearchFamilyCapturedBase {
 			_ = oldPrepared.Close()
 		}
 
 		callCollectionVectorIndexPreparedSearchBuildHookForTest(opts.IndexName)
-		prepared, buildResponse, buildErr := c.openCollectionVectorIndexPreparedSearch(opts)
+		var prepared *collectionVectorIndexPreparedSearch
+		var buildResponse VectorIndexSearchResponse
+		var buildErr error
+		if build != nil {
+			prepared, buildResponse, buildErr = build()
+		} else {
+			prepared, buildResponse, buildErr = c.openCollectionVectorIndexPreparedSearch(opts)
+		}
+		if oldPrepared != nil && slot.family == collectionVectorIndexPreparedSearchFamilyCapturedBase {
+			buildErr = errors.Join(buildErr, oldPrepared.Close())
+		}
 		if prepared != nil {
 			entry.commitSeq = prepared.commitSeq
 			entry.systemRoot = prepared.systemRoot
@@ -280,7 +300,11 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndex
 		c.vectorBufferedSearchMu.Unlock()
 
 		if !stored && prepared != nil {
-			_ = prepared.Close()
+			if slot.family == collectionVectorIndexPreparedSearchFamilyCapturedBase {
+				buildErr = errors.Join(buildErr, prepared.Close())
+			} else {
+				_ = prepared.Close()
+			}
 		}
 		if buildErr != nil {
 			return nil, buildResponse, acquireStats, buildErr
@@ -696,6 +720,8 @@ func (p *collectionVectorIndexPreparedSearch) readyForCurrentSearch() bool {
 		return false
 	}
 	switch p.family {
+	case collectionVectorIndexPreparedSearchFamilyCapturedBase:
+		return p.capturedBase != nil && p.capturedBase.ref != nil && p.capturedBase.ref.holder.ready()
 	case collectionVectorIndexPreparedSearchFamilyQuantized:
 		if p.searcher == nil || p.searcher.closed || p.searcher.snapshot == nil {
 			return false
@@ -1012,6 +1038,10 @@ func (p *collectionVectorIndexPreparedSearch) Close() error {
 	}
 	p.closed = true
 	var err error
+	if p.capturedBase != nil {
+		err = errors.Join(err, p.capturedBase.Close())
+		p.capturedBase = nil
+	}
 	if p.pack != nil {
 		err = errors.Join(err, p.pack.Close())
 		p.pack = nil
@@ -1052,6 +1082,9 @@ func (p *collectionVectorIndexPreparedSearch) stats() mappedresource.Stats {
 	}
 	if p.pack != nil && p.pack.manager != nil {
 		add(p.pack.manager.Stats())
+	}
+	if p.capturedBase != nil && p.capturedBase.ref != nil {
+		add(p.capturedBase.ref.holder.stats())
 	}
 	if p.searcher != nil && p.searcher.reader != nil {
 		reader := p.searcher.reader

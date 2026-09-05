@@ -27,6 +27,10 @@ type typedGraphReadOwnerAccounting struct {
 	owners                 int
 	stateBytes, assetBytes int64
 	states                 map[*typedGraphPublicationState]int
+	baseOwners             int
+	baseAssetBytes         int64
+	baseDescriptorBytes    int64
+	baseBackingBytes       int64
 }
 
 type typedGraphReadOwner struct {
@@ -58,7 +62,7 @@ func (o *typedGraphReadOwner) Close() error {
 			delete(a.states, o.state)
 			a.stateBytes -= o.stateBytes
 		}
-		if a.owners == 0 {
+		if a.owners == 0 && a.baseOwners == 0 {
 			a.states = nil
 			a.limits = typedGraphReadOwnerLimits{}
 		}
@@ -71,11 +75,11 @@ func (o *typedGraphReadOwner) Close() error {
 func (o *typedGraphReadOwner) reserve(a *typedGraphReadOwnerAccounting, limits typedGraphReadOwnerLimits) error {
 	a.Lock()
 	defer a.Unlock()
-	if a.owners != 0 && a.limits != limits {
+	if (a.owners != 0 || a.baseOwners != 0) && a.limits != limits {
 		return ErrVectorIndexSnapshotMismatch
 	}
 	newState := a.states[o.state] == 0
-	if a.owners >= limits.Owners || o.assetBytes > limits.AssetBytes-a.assetBytes || (newState && (len(a.states) >= limits.States || o.stateBytes > limits.StateBytes-a.stateBytes)) {
+	if a.owners+a.baseOwners >= limits.Owners || o.assetBytes > limits.AssetBytes-a.assetBytes-a.baseAssetBytes || (newState && (len(a.states) >= limits.States || o.stateBytes > limits.StateBytes-a.stateBytes-a.baseDescriptorBytes-a.baseBackingBytes)) {
 		return errTypedGraphOwnerBudget
 	}
 	if a.states == nil {
