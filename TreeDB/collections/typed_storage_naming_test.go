@@ -397,6 +397,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/typed_graph_publication.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
 	{path: "TreeDB/collections/typed_graph_publication_bench_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
 	{path: "TreeDB/collections/typed_graph_reconcile.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
+	{path: "TreeDB/collections/typed_graph_read_owner.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/column_physical_predicate.go", classification: typedStorageLegacyDeferred, matchingLines: 3, occurrences: 3},
 	{path: "TreeDB/collections/column_physical_query.go", classification: typedStorageLegacyDeferred, matchingLines: 40, occurrences: 60},
 	{path: "TreeDB/collections/column_physical_query_1890_bench_test.go", classification: typedStorageLegacyDeferred, matchingLines: 1, occurrences: 2},

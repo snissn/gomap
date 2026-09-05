@@ -306,7 +306,7 @@ func TestTypedGraphOwnerEmptyAdjacencyPinClassification(t *testing.T) {
 	parent.Key.Offset, parent.Key.Length, parent.Bytes = 2056, 16, 16
 	parent.Key.Section.Kind, parent.Key.Section.Name = "column_offsets", "offsets"
 	parent.Key.Section.Category = "declared_column_offsets"
-	if ref, ok := columnAssetRefForEmptyAdjacencyPin(pin, []mappedresource.Pin{parent}); !ok || ref.Length != 16 || ref.Offset != 2056 {
+	if ref, ok := columnAssetRefForEmptyGraphValuesPin(pin, []mappedresource.Pin{parent}); !ok || ref.Length != 16 || ref.Offset != 2056 {
 		t.Fatal("valid empty section did not reuse real offsets extent")
 	}
 	for name, mutate := range map[string]func(*mappedresource.Pin){
@@ -327,21 +327,21 @@ func TestTypedGraphOwnerEmptyAdjacencyPinClassification(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			bad := pin
 			mutate(&bad)
-			if _, ok := columnAssetRefForEmptyAdjacencyPin(bad, []mappedresource.Pin{parent}); ok {
+			if _, ok := columnAssetRefForEmptyGraphValuesPin(bad, []mappedresource.Pin{parent}); ok {
 				t.Fatal("malformed section admitted")
 			}
 		})
 	}
-	if _, ok := columnAssetRefForEmptyAdjacencyPin(pin, nil); ok {
+	if _, ok := columnAssetRefForEmptyGraphValuesPin(pin, nil); ok {
 		t.Fatal("unpaired empty section admitted")
 	}
 	badParent := parent
 	badParent.Key.Offset = int64(^uint64(0) >> 1)
-	if _, ok := columnAssetRefForEmptyAdjacencyPin(pin, []mappedresource.Pin{badParent}); ok {
+	if _, ok := columnAssetRefForEmptyGraphValuesPin(pin, []mappedresource.Pin{badParent}); ok {
 		t.Fatal("overflowing parent extent admitted")
 	}
 	parent.Key.Length, parent.Bytes = 0, 0
-	if _, ok := columnAssetRefForEmptyAdjacencyPin(pin, []mappedresource.Pin{parent}); ok {
+	if _, ok := columnAssetRefForEmptyGraphValuesPin(pin, []mappedresource.Pin{parent}); ok {
 		t.Fatal("zero-byte parent admitted")
 	}
 }

@@ -350,6 +350,9 @@ func (v *CollectionReadView) validateOpen() error {
 	if v.closed {
 		return errors.New("collections: collection read view is closed")
 	}
+	if v.collection.db == nil || v.collection.db.IsClosing() {
+		return backenddb.ErrClosed
+	}
 	if v.snapshot == nil || v.catalog == nil {
 		return errors.New("collections: nil collection read view")
 	}

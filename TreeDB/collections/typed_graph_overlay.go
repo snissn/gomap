@@ -15,7 +15,7 @@ func (suffix typedGraphOverlaySuffix) prepareRows(current *CollectionReadView, m
 }
 
 func (suffix typedGraphOverlaySuffix) prepareRowsWithAccounting(current *CollectionReadView, maxOwnedBytes int64, maxSlots int, accounting *typedGraphPublicationCost) ([]columnPhysicalVisibleRow, error) {
-	if current == nil || current.closed || current.snapshot == nil || current.catalog == nil || current.catalog != suffix.view.Catalog || maxOwnedBytes <= 0 {
+	if current == nil || current.validateOpen() != nil || current.catalog != suffix.view.Catalog || maxOwnedBytes <= 0 {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
 	cfg := suffix.view.FullConfig
@@ -179,7 +179,7 @@ type typedGraphOverlaySuffix struct {
 // asset lineage must remain reachable. Callers keep both pins open throughout
 // use. This does not install an overlay or change ordinary search admission.
 func prepareTypedGraphOverlaySuffix(base *VectorIndexSearcher, current *CollectionReadView, limits typedGraphOverlayLimits) (typedGraphOverlaySuffix, error) {
-	if base == nil || base.closed || base.reader == nil || base.snapshot == nil || base.catalog == nil || current == nil || current.closed || current.snapshot == nil || current.catalog == nil || base.collection == nil || base.collection != current.collection {
+	if base == nil || base.closed || base.reader == nil || base.snapshot == nil || base.catalog == nil || current == nil || current.validateOpen() != nil || base.collection == nil || base.collection != current.collection {
 		return typedGraphOverlaySuffix{}, ErrVectorIndexSnapshotMismatch
 	}
 	baseCfg := base.catalog.meta.Options.ColumnStore

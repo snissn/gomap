@@ -354,6 +354,19 @@ document JSON is used to construct this derived state. Public bootstrap,
 bounded physical folding, retirement, and mutable serving remain separate M3
 completion gates.
 
+An internal coherent owner can bind an already reconciled publication frontier
+to the persisted base aliases and one current snapshot. Cross-manager accepted
+buffers are drained at owner setup; exact authority mismatch remains unavailable.
+The owner shares immutable suffix rows and norms without decoding them again,
+reuses the existing prepared graph, and pins the whole base/current typed asset
+union through lazy final-result materialization. Explicit owner/state/asset
+limits count owner-retained state once per shared frontier and retain its charge
+until the last owner closes. These are scoped owner charges, not a claim to bound
+unowned current state, pending assets, caches, or total physical retirement.
+Metadata and decoded working terms have separate setup bounds. This internal
+seam does not enable public mutable graph serving; physical pre-ack admission,
+bounded folding, and unified lifecycle resource limits remain prerequisites.
+
 Explicit internal cold reconciliation can bootstrap a captured base and its
 current typed suffix after normal `Open`, without replay instrumentation. It
 drains pre-existing feature-off buffers before enabling limits. Once enabled,

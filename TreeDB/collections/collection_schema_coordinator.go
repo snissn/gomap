@@ -13,6 +13,7 @@ type chunkLifecycleLock struct {
 	refs  int
 }
 type collectionSchemaCoordinator struct {
+	typedGraphOwners        typedGraphReadOwnerAccounting
 	typedPublication        atomic.Pointer[typedGraphPublicationState]
 	typedPublicationDebtMu  sync.Mutex
 	typedPublicationDebt    typedGraphPublicationCost

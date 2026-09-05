@@ -113,6 +113,15 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 	if err != nil {
 		return nil, err
 	}
+	return c.openColumnVectorGraphPhysicalRowReaderFromView(snap, def, graph, view, opts)
+}
+
+// Both current-catalog and captured-base owners use the same validated source
+// assembly and shared prepared-reader lifetime. This function does not acquire
+// a storage barrier or own the caller's snapshot.
+func (c *Collection) openColumnVectorGraphPhysicalRowReaderFromView(snap *backenddb.Snapshot, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, view columnPhysicalScanSnapshotView, opts columnVectorGraphPhysicalRowReaderOptions) (*columnVectorGraphPhysicalRowReader, error) {
+	var err error
+	view.graphOwnerRecords = nil // setup parser ownership must not escape into reader caches
 	catalog := view.Catalog
 	if opts.detachCatalog && catalog != nil {
 		catalog = catalog.copy()
@@ -474,6 +483,7 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtCatalogWith
 		})
 	}
 	view := columnPhysicalScanSnapshotView{
+		graphOwnerRecords:     records,
 		CollectionName:        catalog.meta.Name,
 		Catalog:               catalog,
 		Config:                graphCfg,

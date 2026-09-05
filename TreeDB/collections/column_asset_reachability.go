@@ -522,7 +522,7 @@ func columnAssetReachabilityMappedResourcePins(rootDir, namespace string) ([]Col
 		}
 		ref, ok := columnAssetRefForMappedResourceKey(pin.Key)
 		if !ok {
-			ref, ok = columnAssetRefForEmptyAdjacencyPin(pin, pins)
+			ref, ok = columnAssetRefForEmptyGraphValuesPin(pin, pins)
 		}
 		if !ok {
 			stats.UnconvertiblePins++
@@ -538,17 +538,19 @@ func columnAssetReachabilityMappedResourcePins(rootDir, namespace string) ([]Col
 	return refs, stats
 }
 
-// A certified empty CSR values section owns no bytes. Its positive offsets
+// A certified empty graph adjacency/document-ID values section owns no bytes. Its positive offsets
 // handle still protects the physical segment. Return that actual extent, never
 // fabricate a positive extent for the empty section or ignore arbitrary pins.
-func columnAssetRefForEmptyAdjacencyPin(pin mappedresource.Pin, pins []mappedresource.Pin) (ColumnAssetRef, bool) {
+func columnAssetRefForEmptyGraphValuesPin(pin mappedresource.Pin, pins []mappedresource.Pin) (ColumnAssetRef, bool) {
 	k := pin.Key
+	known := (pin.Scope.ID == columnVectorGraphAdjacencyStateSourceScopeID && k.Encoding == typedcolumn.EncodingRawUint32OffsetsList.String() && k.Section.Column == "adjacency") ||
+		(pin.Scope.ID == columnVectorGraphDocumentIDStateScopeID && k.Encoding == typedcolumn.EncodingRawBytesOffsets.String() && k.Section.Column == columnVectorGraphDocumentIDStateColumnName)
 	if k.Validate() != nil || k.Class != mappedresource.ClassTypedColumnAsset || k.Kind != string(ColumnAssetKindTCS1TypedColumnPart) ||
 		k.Length != 0 || k.Checksum != 0 || pin.Bytes != 0 ||
 		(pin.Source != mappedresource.SourceMapped && pin.Source != mappedresource.SourceHeapCopy) ||
-		k.Encoding != typedcolumn.EncodingRawUint32OffsetsList.String() || k.Section.Kind != string(typedcolumn.ColumnPartImageSectionColumnValues) ||
-		k.Section.Name != "values" || k.Section.Category != string(typedcolumn.ColumnPartImageCategoryDeclaredColumnValues) || k.Section.Column != "adjacency" ||
-		pin.Scope.ID != columnVectorGraphAdjacencyStateSourceScopeID || pin.Root == "" || pin.Path == "" {
+		!known || k.Section.Kind != string(typedcolumn.ColumnPartImageSectionColumnValues) ||
+		k.Section.Name != "values" || k.Section.Category != string(typedcolumn.ColumnPartImageCategoryDeclaredColumnValues) ||
+		pin.Root == "" || pin.Path == "" {
 		return ColumnAssetRef{}, false
 	}
 	// ponytail: cold O(empty sections * active pins); no second pin index.

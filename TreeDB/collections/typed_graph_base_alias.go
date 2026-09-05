@@ -258,27 +258,32 @@ func loadTypedGraphBaseAlias(snap *backenddb.Snapshot, current CollectionMeta) (
 }
 
 func (base *typedGraphBaseAlias) catalog(c *Collection, snap *backenddb.Snapshot) (*collectionCatalog, error) {
+	_, view, err := base.readerView(c, snap)
+	return view.Catalog, err
+}
+
+func (base *typedGraphBaseAlias) readerView(c *Collection, snap *backenddb.Snapshot) (columnVectorGraphManifestSnapshot, columnPhysicalScanSnapshotView, error) {
 	if base == nil || snap == nil {
-		return nil, ErrVectorIndexSnapshotMismatch
+		return columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, ErrVectorIndexSnapshotMismatch
 	}
 	catalog := newCollectionCatalogWithOverlays(base.meta, base.roots, nil)
 	catalog.pager = snap.Pager()
 	if err := validateColumnStoreCatalogRoot(snap, catalog); err != nil {
-		return nil, err
+		return columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
 	}
 	if len(base.meta.VectorIndexes) != 1 {
-		return nil, ErrVectorIndexSnapshotMismatch
+		return columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, ErrVectorIndexSnapshotMismatch
 	}
-	_, graph, _, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtCatalog(base.meta.VectorIndexes[0].Name, snap, catalog)
+	_, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtCatalog(base.meta.VectorIndexes[0].Name, snap, catalog)
 	if err != nil {
-		return nil, err
+		return columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
 	}
 	if graph.RowCount > 0 {
 		for name, root := range base.roots {
 			if root == 0 {
-				return nil, fmt.Errorf("collections: nonempty typed graph base has empty root %q", name)
+				return columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: nonempty typed graph base has empty root %q", name)
 			}
 		}
 	}
-	return catalog, nil
+	return graph, view, nil
 }

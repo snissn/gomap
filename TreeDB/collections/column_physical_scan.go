@@ -214,6 +214,7 @@ func columnManifestScanPartPreallocCapacity(expectedParts uint64) int {
 }
 
 type columnPhysicalScanSnapshotView struct {
+	graphOwnerRecords     []columnManifestRecord // validated graph-owner setup only; never decoded row payloads
 	CollectionName        string
 	Catalog               *collectionCatalog
 	Config                ColumnStoreConfig

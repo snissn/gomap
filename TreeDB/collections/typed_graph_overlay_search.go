@@ -30,6 +30,10 @@ type typedGraphOverlaySearchStats struct {
 	PackMmapDirect, PackHeapCopy bool
 }
 
+func (v *typedGraphOverlaySearch) validOpen() bool {
+	return v != nil && v.base != nil && !v.base.closed && v.base.reader != nil && v.current != nil && v.current.validateOpen() == nil
+}
+
 func prepareTypedGraphOverlaySearch(base *VectorIndexSearcher, current *CollectionReadView, limits typedGraphOverlayLimits) (*typedGraphOverlaySearch, error) {
 	suffix, err := prepareTypedGraphOverlaySuffix(base, current, limits)
 	if err != nil {
@@ -93,7 +97,7 @@ func (v *typedGraphOverlaySearch) search(query []float32, topK, efSearch, candid
 			}
 		}()
 	}
-	if v == nil || v.base == nil || v.base.closed || v.current == nil || v.current.closed || v.current.snapshot == nil || buffer == nil {
+	if !v.validOpen() || buffer == nil {
 		return nil, stats, ErrVectorIndexSnapshotMismatch
 	}
 	switch v.pack.fastStatus("") {
