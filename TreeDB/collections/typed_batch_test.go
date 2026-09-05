@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,10 +32,9 @@ func TestTypedMinimaCatalogPostSyncAmbiguity(t *testing.T) {
 	}
 	d := openTypedMinimaDB(t, dir)
 	injected := errors.New("catalog post-sync cut")
-	fired := false
+	var fired atomic.Bool
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if !fired && event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyFileSync {
-			fired = true
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyFileSync && fired.CompareAndSwap(false, true) {
 			return injected
 		}
 		return nil
@@ -42,8 +42,8 @@ func TestTypedMinimaCatalogPostSyncAmbiguity(t *testing.T) {
 	meta := typedMinimaCollectionMeta()
 	_, err := NewCollectionManager(d).CreateCollection(&meta)
 	restore()
-	if !fired || !errors.Is(err, ErrCommitAmbiguous) || !errors.Is(err, injected) {
-		t.Fatalf("catalog cut fired=%t err=%v", fired, err)
+	if !fired.Load() || !errors.Is(err, ErrCommitAmbiguous) || !errors.Is(err, injected) {
+		t.Fatalf("catalog cut fired=%t err=%v", fired.Load(), err)
 	}
 	_ = d.Close()
 	reopened := openTypedMinimaDB(t, dir)
@@ -62,7 +62,7 @@ func TestTypedMinimaCrashAndPublicationCuts(t *testing.T) {
 		}
 		mode := os.Getenv("GOMAP_TYPED_MINIMA_CRASH_MODE")
 		injected := errors.New("typed command WAL injected failure")
-		fired := false
+		var fired atomic.Bool
 		ids := [][]byte{[]byte("b"), []byte("a")}
 		retained := [][]byte{[]byte(`{"id":"b"}`), []byte(`{"id":"a"}`)}
 		columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}, {0, 1, 0, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"alpha", "beta"}}, {Name: "user", Strings: []string{"u1", "u2"}}, {Name: "path", Strings: []string{"file1", "file2"}}}
@@ -80,8 +80,7 @@ func TestTypedMinimaCrashAndPublicationCuts(t *testing.T) {
 				point = durabilitycut.AfterDependencyFileSync
 			}
 			durabilitycut.Install(func(event durabilitycut.Event) error {
-				if !fired && event.Resource == durabilitycut.ResourceCommandWAL && event.Point == point {
-					fired = true
+				if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == point && fired.CompareAndSwap(false, true) {
 					return injected
 				}
 				return nil
@@ -101,8 +100,8 @@ func TestTypedMinimaCrashAndPublicationCuts(t *testing.T) {
 				t.Fatal(err)
 			}
 		} else {
-			if !fired || !errors.Is(err, injected) {
-				t.Fatalf("cut fired=%t err=%v", fired, err)
+			if !fired.Load() || !errors.Is(err, injected) {
+				t.Fatalf("cut fired=%t err=%v", fired.Load(), err)
 			}
 			if strings.HasSuffix(mode, "after_sync") && !errors.Is(err, ErrCommitAmbiguous) {
 				t.Fatalf("post-sync error is not commit ambiguous: %v", err)
