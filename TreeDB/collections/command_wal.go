@@ -45,12 +45,23 @@ func (c *Collection) commandWALActive(intent *backenddb.CommandWALIntent) bool {
 	return intent != nil || (c != nil && c.db != nil && c.db.CommandWALEnabled())
 }
 
-func (c *Collection) newCollectionInsertCommandWALIntent(docs []commitlog.CollectionDocument, replay *backenddb.CommandWALIntent) (*backenddb.CommandWALIntent, error) {
+func (c *Collection) newCollectionInsertCommandWALIntent(docs []commitlog.CollectionDocument, replay *backenddb.CommandWALIntent, projection *trustedFloat32Projection) (*backenddb.CommandWALIntent, error) {
 	if replay != nil {
 		return replay, nil
 	}
 	if c == nil || c.db == nil || !c.db.CommandWALEnabled() {
 		return nil, nil
+	}
+	if projection != nil {
+		p, err := typedCommandPayload(c.meta, docs, projection)
+		if err != nil {
+			return nil, err
+		}
+		payload, err := commitlog.EncodeCollectionTypedBatchPayload(p)
+		if err != nil {
+			return nil, err
+		}
+		return c.db.NewTrustedCommandWALIntent(commitlog.CommandKindCollectionInsertBatchByID, commitlog.CommandScopeCollection, commitlog.PayloadFormatCollectionTypedBatchByIDV1, payload)
 	}
 	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload(c.meta.Name, docs)
 	if err != nil {
@@ -119,6 +130,21 @@ func (c *Collection) newCollectionUpdateCommandWALIntent(docs []commitlog.Collec
 		commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
 		payload,
 	)
+}
+
+func (c *Collection) newCollectionUpdatePlanCommandWALIntent(plan *updateBatchPlan) (*backenddb.CommandWALIntent, error) {
+	if plan.typedProjection == nil {
+		return c.newCollectionUpdateCommandWALIntent(plan.commandWALDocuments, nil)
+	}
+	payload, err := typedCommandPayload(plan.meta, plan.commandWALDocuments, plan.typedProjection)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := commitlog.EncodeCollectionTypedBatchPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+	return c.db.NewTrustedCommandWALIntent(commitlog.CommandKindCollectionUpdateBatchByID, commitlog.CommandScopeCollection, commitlog.PayloadFormatCollectionTypedBatchByIDV1, raw)
 }
 
 func (c *Collection) newCollectionRebuildVectorIndexCommandWALIntent(indexName string, replay *backenddb.CommandWALIntent) (*backenddb.CommandWALIntent, error) {
@@ -305,6 +331,26 @@ func collectionDocumentsFromBatchUpdateDocuments(changed []preparedBatchUpdate, 
 }
 
 func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+	if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedBatchByIDV1 {
+		payload, err := commitlog.DecodeCollectionTypedBatchPayload(env.Payload)
+		if err != nil {
+			return err
+		}
+		intent, err := db.NewCommandWALReplayIntent(env)
+		if err != nil {
+			return err
+		}
+		collection, err := newCommandWALReplayCollectionManager(db).openCollectionWithCommandWALIntent(payload.Collection, intent)
+		if err != nil {
+			return err
+		}
+		projection, ids, docs, err := typedProjectionFromPayload(collection.meta, payload)
+		if err != nil {
+			return err
+		}
+		_, err = collection.insertBatchWithCommandWALIntent(ids, docs, false, nil, intent, insertBatchExecutionOptions{returnResultIDs: true, trustedFloat32Projection: projection})
+		return err
+	}
 	payload, err := commitlog.DecodeCollectionInsertBatchByIDPayload(env.Payload)
 	if err != nil {
 		return err
@@ -377,6 +423,26 @@ func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog
 }
 
 func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+	if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedBatchByIDV1 {
+		payload, err := commitlog.DecodeCollectionTypedBatchPayload(env.Payload)
+		if err != nil {
+			return err
+		}
+		intent, err := db.NewCommandWALReplayIntent(env)
+		if err != nil {
+			return err
+		}
+		collection, err := newCommandWALReplayCollectionManager(db).openCollectionWithCommandWALIntent(payload.Collection, intent)
+		if err != nil {
+			return err
+		}
+		projection, ids, retained, err := typedProjectionFromPayload(collection.meta, payload)
+		if err != nil {
+			return err
+		}
+		_, _, err = collection.updateBatchOwnedItemsWithCommandWALIntent(typedReplacementItems(ids, retained, projection), updateBatchModeAny, intent)
+		return err
+	}
 	payload, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(env.Payload)
 	if err != nil {
 		return err

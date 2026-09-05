@@ -345,20 +345,23 @@ advance is a no-op.
 ### 5.4 Collection API Durability
 
 Collection mutators do not have separate `*Sync` Go methods. Their baseline
-acknowledgement is mode-dependent. Current shipped collection write-domain
-behavior is flush-boundary durable, as defined in
-`collections-write-domain.md`. The bullets below describe the target collection
-user-command WAL overlay for command kinds that have passed the support matrix:
+acknowledgement is profile-dependent, as defined in
+`collections-write-domain.md` and the normative matrix in section 0.2. The
+following guarantees apply to collection command kinds marked supported in
+`command-wal-support-matrix.json`; unsupported operations must fail closed rather
+than silently use a weaker flush-boundary guarantee:
 
 - `DurabilityDurable`: ordinary supported collection/catalog mutator success
   waits for the typed command and all required external refs to form a stable,
   dependency-complete command-WAL prefix. It is power-loss durable without an
   immediate backend-root checkpoint.
 - `DurabilityWALOnRelaxed`: in the command-WAL relaxed profile, ordinary
-  collection/catalog success may lead the
-  stable WAL frontier. An explicit sync/barrier persists the typed prefix and
-  required external refs; recent ordinary acknowledgements may lose only a
-  complete suffix.
+  collection/catalog success may lead the stable WAL frontier. A successful
+  backend `DB.Checkpoint` or clean `DB.Close` waits for a sealed complete root
+  covering its captured frontier, including required external dependencies.
+  `Collection.Flush` and `CollectionManager.FlushAll` only drain visibility;
+  neither establishes power-loss durability. Until a durable boundary covers
+  them, recent ordinary acknowledgements may lose only a complete suffix.
 - `DurabilityWALOffRelaxed`: under production `no_wal_fast`, ordinary success
   may lead sealed-root publication and an explicit sync waits for a sealed root
   covering the call. `Flush` and `FlushAll` remain visibility/drain operations;

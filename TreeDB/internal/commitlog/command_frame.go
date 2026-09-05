@@ -106,6 +106,7 @@ const (
 	PayloadFormatDurablePrefixBarrierV1         PayloadFormat = 8
 	PayloadFormatRawKVBatchV2                   PayloadFormat = 9
 	PayloadFormatCollectionReplaceSourceByIDV1  PayloadFormat = 10
+	PayloadFormatCollectionTypedBatchByIDV1     PayloadFormat = 11
 )
 
 // RawKVOp is a deterministic raw key/value mutation inside a RawKVBatch
@@ -2162,7 +2163,7 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 			return ErrCommandWALUnsupportedVersion
 		}
 	case CommandKindCollectionInsertBatchByID:
-		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionInsertBatchByIDV1 {
+		if env.Scope != CommandScopeCollection || (env.PayloadFormat != PayloadFormatCollectionInsertBatchByIDV1 && env.PayloadFormat != PayloadFormatCollectionTypedBatchByIDV1) {
 			return ErrCorrupt
 		}
 	case CommandKindCollectionDeleteBatchByID:
@@ -2170,7 +2171,7 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 			return ErrCorrupt
 		}
 	case CommandKindCollectionUpdateBatchByID:
-		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1 {
+		if env.Scope != CommandScopeCollection || (env.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1 && env.PayloadFormat != PayloadFormatCollectionTypedBatchByIDV1) {
 			return ErrCorrupt
 		}
 	case CommandKindCollectionReplaceSourceByID:
@@ -2196,10 +2197,19 @@ func validateCommandEnvelopePayload(env CommandEnvelope) error {
 	case CommandKindRawKVBatch:
 		return validateRawKVBatchPayloadForFormat(env.PayloadFormat, env.Payload)
 	case CommandKindCollectionInsertBatchByID:
+		if env.PayloadFormat == PayloadFormatCollectionTypedBatchByIDV1 {
+			return validateCollectionTypedBatchPayload(env.Payload)
+		}
 		return validateCollectionInsertBatchByIDPayload(env.Payload)
 	case CommandKindCollectionDeleteBatchByID:
 		return validateCollectionDeleteBatchByIDPayload(env.Payload)
 	case CommandKindCollectionUpdateBatchByID:
+		if env.PayloadFormat == PayloadFormatCollectionTypedBatchByIDV1 {
+			if len(env.Payload) < collectionTypedBatchPrefixSize || env.Payload[collectionTypedBatchFlagsOffset] != 0 {
+				return ErrCorrupt
+			}
+			return validateCollectionTypedBatchPayload(env.Payload)
+		}
 		return validateCollectionInsertBatchByIDPayload(env.Payload)
 	case CommandKindCollectionReplaceSourceByID:
 		_, err := DecodeCollectionReplaceSourceByIDPayload(env.Payload)

@@ -194,6 +194,20 @@ command frames is recovery corruption.
 
 ## 4. Replay Algorithm
 
+Collection insert/update frames may use `CollectionTypedBatchByIDV1` (payload format
+11). Decode the accepted string/FP32 values and retained bytes separately,
+validate the typed schema against the opened collection, and pass the typed
+values into the normal collection planner. Do not reconstruct indexed values
+from retained JSON: it may omit them, and a legacy trusted-vector caller may
+have supplied an authoritative FP32 projection different from its document.
+The explicit `LegacyProjection` flag preserves that insert API's retained-JSON
+admission semantics; it is not inferred from a one-vector schema. General typed
+batches use flags zero and their stricter residual-field ownership validation.
+Unknown flag bits and legacy-origin update frames fail closed.
+The existing collection replay handler and applied-LSN publication own this
+operation; there is no independent typed-write journal or replay watermark.
+Unsupported payload versions and schema mismatches fail before visible install.
+
 Legacy raw redo-journal replay is skipped only when durability mode is
 `DurabilityWALOffRelaxed`.
 

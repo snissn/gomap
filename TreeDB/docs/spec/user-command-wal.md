@@ -366,6 +366,32 @@ package before `db.Open` recovery runs, or call
 binary without those handlers must fail closed on collection command kinds
 rather than skipping frames.
 
+### Typed indexed collection batches
+
+Typed insert and replacement use the existing `CollectionInsertBatchByID` and
+`CollectionUpdateBatchByID` command kinds with payload format 11
+(`CollectionTypedBatchByIDV1`), not a parallel journal. The payload includes
+accepted strings and FP32 vectors, residual retained JSON, explicit IDs, column
+descriptors, and the column schema hash. Recovery feeds those values into the
+normal collection planner; it must not recover indexed fields from retained
+JSON. The existing trusted FP32 projection also logs its accepted vector rather
+than substituting a possibly different vector from its document representation.
+An explicit insert-only `LegacyProjection` flag preserves that existing API's
+retained-document semantics without weakening general typed-batch validation.
+
+Replacement logs final changed rows, not callbacks. Missing IDs and equal rows
+remain no-ops. Existing scalar index state and snapshot-bound typed row/column
+reads supply prior indexed values for maintenance. Batch atomicity, durability
+profile, commit-ambiguous errors, and applied-LSN publication remain the existing
+collection contract. Format 11 is a collection executor capability, not blanket
+support for every native-wire or Raft entry point. The executable support matrix
+continues to govern those separate surfaces.
+
+See [storage-format.md](storage-format.md) for canonical encoding and validation,
+and [typed-column-adapter.md](typed-column-adapter.md) for field authority and
+ownership. A schema hash is not a new collection incarnation ID: unsupported
+drop/recreate operations are not made replay-safe by this payload.
+
 ### 6.1 Batch Atomicity
 
 V1 batch commands are atomic at the command-frame level. `RawKVBatch`,

@@ -10,9 +10,13 @@ Status:
 - Target conditional raw-KV behavior is tracked by issue
   https://github.com/snissn/gomap/issues/3420 and its child stack. It is not
   current behavior until the named implementation and verification gates land.
-- Target durable-at-ack collection behavior is the user-command WAL contract in
-  `user-command-wal.md`. It is not current behavior until the named
-  implementation and verification gates land.
+- Supported collection commands follow the selected production profile's
+  acknowledgement boundary in `write-path-and-durability.md` and
+  `collections-write-domain.md`. In `command_wal_durable`, the complete command
+  is recoverable before acknowledged write-domain visibility; root publication
+  and `AppliedLSN` may follow later. See `command-wal-support-matrix.json` for
+  supported entry points; planned commands in `user-command-wal.md` are not
+  supported merely because they appear in that design.
 
 ## 1. Key Model
 

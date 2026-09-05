@@ -209,6 +209,60 @@ manager is supplied.
 retained-payload split/restore helpers as an internal test seam. It does not alter
 production retained-payload behavior.
 
+### Typed indexed-write authority
+
+Selecting a typed storage owner is not sufficient to prove a typed ingestion
+path: document-based insertion may still extract declared/indexed fields from
+JSON before publication. For a schema-aware writer, the accepted typed values
+must feed scalar keys, text analysis, vector storage, and command-WAL replay.
+Retained non-column JSON is residual response data, not an alternate index-value
+source. Reject overlapping retained fields instead of choosing one copy silently.
+
+The Minima representation uses `typed_row_asset` strings for `content`,
+`meta.user_id`, and `meta.fpath`, and a `typed_column_part` FP32 vector for
+`embedding`. Updating or deleting a row must use its latest visible typed
+generation or persisted derived index state to remove old postings. Rebuilding
+JSON solely to rediscover those old values moves the same cost into maintenance
+and does not satisfy the native-write contract.
+
+`InsertTypedBatchWithStats` and `ReplaceTypedBatch` accept row-aligned
+`TypedColumnBatch` carriers for all declared columns. Their initial supported
+schema is non-null UTF-8 string typed-row fields and finite, fixed-dimensional
+FP32 typed-column vectors, with a JSON document format and a retained non-column
+JSON payload. Scalar indexes must be single-field string indexes (not multikey or
+composite); text fields must refer to declared strings; vector indexes must use
+matching `column_graph` fields/dimensions. Cosine vectors must have nonzero
+magnitude. Unsupported schemas fail closed rather than selecting a JSON fallback.
+These restrictions apply to these typed-input methods, not to every storage
+type or generic collection API.
+
+Separately registered ad-hoc runtime vector indexes are not `column_graph`
+metadata declarations. Their write-maintenance path may reconstruct documents;
+the typed-input APIs therefore reject that combination before admission rather
+than silently maintaining a second runtime index through JSON. Use the declared
+`column_graph` strategy for this contract. Generic collection APIs retain their
+separate supported behavior.
+
+The call validates against current collection metadata under the existing schema
+read lock and takes ownership of accepted input bytes before returning. There
+is no reusable caller-prepared handle whose lifetime can outlast schema changes.
+Callers must not mutate input concurrently with admission. Replacement is a
+complete row replacement for matched IDs; missing IDs are not inserted, and
+unchanged rows report no modification. Unchanged means identical retained bytes
+after trimming surrounding whitespace, string values, and FP32 vector bits;
+interior JSON bytes remain significant, and changing only a vector element's
+sign of zero is a modification. The existing command-WAL no-op record may still
+advance the applied LSN without replacing a row. Use the existing explicit-ID
+delete APIs to remove rows.
+
+Keep reconstruction at explicit output boundaries, including a document-returning
+read or a caller's document update callback. A callback is executed once at
+admission; recovery consumes its accepted final replacement, never the callback.
+Typed writes retain the existing command-frame atomicity and durability profile;
+they do not create a separate durable overlay or bypass duplicate/unique checks.
+See [Minima native execution](minima-native-execution.md) for the required path
+proof and [storage format](storage-format.md) for typed command bytes.
+
 ## Fixed-Width Payload Safety (#1737/#1756)
 
 When `fixed_width_encoding: "little_endian"` is selected on non-null scalar

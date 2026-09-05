@@ -428,10 +428,15 @@ func (m *CollectionManager) withCommandWALPublishCoordinator(fn func() error) er
 	return fn()
 }
 
-func (m *CollectionManager) withCommandWALPublishCoordinatorForIntent(intent *backenddb.CommandWALIntent, fn func() error) error {
+func (m *CollectionManager) withCommandWALPublishCoordinatorForIntent(intent *backenddb.CommandWALIntent, fn func() error) (err error) {
 	if fn == nil {
 		return nil
 	}
+	var db *backenddb.DB
+	if m != nil {
+		db = m.db
+	}
+	defer func() { err = collectionCommandWALPublicationError(db, intent, err) }()
 	if intent == nil || !intent.StagedForPublish() {
 		return m.withCommandWALPublishCoordinator(fn)
 	}
@@ -468,10 +473,15 @@ func (c *Collection) withCommandWALPublishCoordinator(fn func() error) error {
 	return fn()
 }
 
-func (c *Collection) withCommandWALPublishCoordinatorForIntent(intent *backenddb.CommandWALIntent, fn func() error) error {
+func (c *Collection) withCommandWALPublishCoordinatorForIntent(intent *backenddb.CommandWALIntent, fn func() error) (err error) {
 	if fn == nil {
 		return nil
 	}
+	var db *backenddb.DB
+	if c != nil {
+		db = c.db
+	}
+	defer func() { err = collectionCommandWALPublicationError(db, intent, err) }()
 	if intent == nil || !intent.StagedForPublish() {
 		return c.withCommandWALPublishCoordinator(fn)
 	}
@@ -481,6 +491,19 @@ func (c *Collection) withCommandWALPublishCoordinatorForIntent(intent *backenddb
 	}
 	defer unlock()
 	return fn()
+}
+
+func collectionCommandWALPublicationError(db *backenddb.DB, intent *backenddb.CommandWALIntent, err error) error {
+	if err == nil || intent == nil || intent.AssignedLSN() == 0 {
+		return err
+	}
+	if _, replay := intent.ReplayAssignedLSN(); replay {
+		return err
+	}
+	if db != nil {
+		db.MarkCommandWALIntentRecoveryRequired(intent)
+	}
+	return commitAmbiguousError("command WAL collection publication", err)
 }
 
 func (domain *collectionWriteDomain) recordPendingCommandWALLSNLocked(db *backenddb.DB, lsn uint64) error {

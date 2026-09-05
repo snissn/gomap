@@ -12,6 +12,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 )
 
 func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
@@ -415,6 +416,59 @@ func writeColumnStoreCommandWALReplayFramesM10C(path string, baseAppliedLSN uint
 	return totalDocs, totalEncodedPayloadBytes, nil
 }
 
+func TestReplayFixtureCopyOmitsCoordinationLocks(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	lock, err := lockfile.Acquire(filepath.Join(src, "LOCK"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := lock.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	owner, err := commitlog.AcquireJournalOwner(backenddb.WALDirPath(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := owner.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	files := map[string]string{
+		"MANIFEST":                              "manifest bytes",
+		"wal/command.log":                       "command bytes",
+		"values/data":                           "value bytes",
+		"nested/LOCK":                           "not the root coordination file",
+		"wal/LOCK":                              "not the root coordination file either",
+		"command-wal-journal-owner.lock":        "not in the WAL directory",
+		"nested/command-wal-journal-owner.lock": "not a fixture journal owner",
+		"wal/application.lock":                  "ordinary application bytes",
+	}
+	for name, content := range files {
+		path := filepath.Join(src, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	copyColumnStoreCommandWALReplayBenchmarkDirM10C(t, src, dst)
+	for _, name := range []string{"LOCK", "wal/command-wal-journal-owner.lock"} {
+		if _, err := os.Stat(filepath.Join(dst, filepath.FromSlash(name))); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("coordination file %s copied: %v", name, err)
+		}
+	}
+	for name, want := range files {
+		got, err := os.ReadFile(filepath.Join(dst, filepath.FromSlash(name)))
+		if err != nil || string(got) != want {
+			t.Fatalf("fixture %s: got=%q want=%q err=%v", name, got, want, err)
+		}
+	}
+}
+
 func copyColumnStoreCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst string) {
 	tb.Helper()
 	if err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -438,6 +492,13 @@ func copyColumnStoreCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst str
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("non-regular entries are not supported in replay benchmark fixtures: %s", path)
+		}
+		// These are the two process locks acquired by this single-DB fixture:
+		// db.Open owns LOCK; OpenCommandJournal owns the lock under WALDirPath.
+		// Their locked bytes are unreadable on Windows, and reopening recreates
+		// them. Do not exclude similarly named files at arbitrary paths.
+		if rel == "LOCK" || rel == filepath.Join("wal", "command-wal-journal-owner.lock") {
+			return nil
 		}
 		return copyColumnStoreCommandWALReplayBenchmarkFileM10C(path, target, info.Mode().Perm())
 	}); err != nil {

@@ -209,6 +209,10 @@ func appendSingleTextV2IndexMutationDeltas(
 	sort.Slice(orderedMutations, func(i, j int) bool {
 		return bytes.Compare(orderedMutations[i].documentID, orderedMutations[j].documentID) < 0
 	})
+	typedOldStates, err := loadTypedTextOldStates(snap, catalog, opts, def, orderedMutations)
+	if err != nil {
+		return err
+	}
 
 	docIDRootName := collectionTextV2DocIDRootName(catalog.meta.Name, def.Name)
 	docMapRootName := collectionTextV2DocMapRootName(catalog.meta.Name, def.Name)
@@ -243,7 +247,7 @@ func appendSingleTextV2IndexMutationDeltas(
 		return errMalformedTextStorage("text-v2 root generation overflow")
 	}
 
-	for _, mutation := range orderedMutations {
+	for mutationIndex, mutation := range orderedMutations {
 		if len(mutation.documentID) == 0 {
 			return errors.New("collections: text-v2 index maintenance document id cannot be empty")
 		}
@@ -259,20 +263,24 @@ func appendSingleTextV2IndexMutationDeltas(
 			if !hasCurrent || current.tombstoned() {
 				return errMalformedTextStorage("missing live text-v2 ordinal for delete collection %q index %q document %q", catalog.meta.Name, def.Name, string(mutation.documentID))
 			}
-			oldDocument, err := loadTextV2StoredDocumentForMutation(snap, catalog, mutation.documentID, mutation.oldDocument)
-			if err != nil {
-				return err
-			}
-			oldState, err = analyzeTextIndexStoredDocument(def, oldDocument, opts)
-			if err != nil {
-				return err
+			if typedOldStates != nil {
+				oldState = typedOldStates[mutationIndex]
+			} else {
+				oldDocument, err := loadTextV2StoredDocumentForMutation(snap, catalog, mutation.documentID, mutation.oldDocument)
+				if err != nil {
+					return err
+				}
+				oldState, err = analyzeTextIndexStoredDocument(def, oldDocument, opts)
+				if err != nil {
+					return err
+				}
 			}
 		}
 		if mutation.setNew {
 			if mutation.preparedNew != nil {
 				newState = *mutation.preparedNew
 			} else {
-				newState, newAnalysis, err = analyzeTextIndexStoredDocumentWithAnalysis(def, mutation.newDocument, opts)
+				newState, newAnalysis, err = textMutationNewStateAndAnalysis(def, mutation, opts)
 				if err != nil {
 					return err
 				}
@@ -651,6 +659,14 @@ func textMutationNewStateAndAnalysis(def TextIndexDefinition, mutation textDocum
 	if mutation.preparedNew != nil {
 		return *mutation.preparedNew, textAnalysisFromDocumentState(*mutation.preparedNew), nil
 	}
+	if p := opts.typedProjection; p != nil && p.typedRows != nil && !p.legacyTyped {
+		values, ok := p.typedRows[string(mutation.documentID)]
+		if !ok {
+			return textDocumentStateValue{}, textAnalyzedDocument{}, errors.New("collections: typed text row missing")
+		}
+		analysis, err := typedTextAnalysis(def, values, p.columns)
+		return textDocumentStateValueFromAnalysis(analysis), analysis, err
+	}
 	return analyzeTextIndexStoredDocumentWithAnalysis(def, mutation.newDocument, opts)
 }
 
@@ -965,7 +981,7 @@ func prepareTextIndexInsertDocuments(meta CollectionMeta, opts collectionOptions
 			states:    make([]textDocumentStateValue, len(documents)),
 		}
 		for row := range documents {
-			state, err := analyzeTextIndexStoredDocument(def, documents[row].Document, opts)
+			state, _, err := textMutationNewStateAndAnalysis(def, textDocumentMutation{documentID: documents[row].ID, newDocument: documents[row].Document}, opts)
 			if err != nil {
 				return nil, err
 			}

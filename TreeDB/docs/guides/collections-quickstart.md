@@ -36,6 +36,68 @@ Avoid overlapping authoritative ownership. Compatibility retained-payload modes
 may duplicate bytes for reconstruction, but do not treat duplicated retained
 payload as a second source of truth for a typed field.
 
+### Schema-aware indexed writes
+
+Storage ownership and input encoding are separate decisions. A JSON-based
+`InsertBatch` can publish typed assets while still parsing JSON to obtain their
+values. For indexed RAG data, supply the declared strings and FP32 vectors
+directly; keep residual JSON free of the declared fields. Do not stringify a
+vector merely to pass it through a document adapter, and do not keep a second
+authoritative JSON copy of indexed metadata.
+
+The [Minima native contract](../spec/minima-native-execution.md) selects
+typed-row strings for `content`, `meta.user_id`, and `meta.fpath`, and a fixed
+FP32 typed column for `embedding`. A complete typed batch supplies every declared
+field; unsupported types, null/missing values, dimensional mismatches, and
+overlapping retained fields must be rejected before admission. Binary transport
+alone does not establish this contract: the write planner and WAL replay must
+consume those same typed inputs.
+
+Current behavior: for durable-at-acknowledgement writes, open the DB with the explicit
+`command_wal_durable` production profile. Merely enabling the command-WAL format
+feature on a low-level unprofiled backend is not an equivalent durability
+boundary. See [write-path and durability](../spec/write-path-and-durability.md).
+
+Illustrative snippet for an already-created collection with declared column
+names `embedding`, `content`, `user`, and `path` (the latter two have paths
+`meta.user_id` and `meta.fpath`), non-column retained JSON, and an 8-D vector:
+
+```go
+ids := [][]byte{[]byte("chunk-1")}
+retained := [][]byte{[]byte(`{"id":"chunk-1","source":"manual"}`)}
+columns := []collections.TypedColumnBatch{
+    {Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}}},
+    {Name: "content", Strings: []string{"TreeDB stores indexed values natively."}},
+    {Name: "user", Strings: []string{"reader-1"}},
+    {Name: "path", Strings: []string{"manual/intro"}},
+}
+_, stats, err := col.InsertTypedBatchWithStats(ids, retained, columns)
+if err != nil {
+    return err
+}
+_ = stats // Inspect ingestion statistics separately from graph readiness.
+
+columns[1].Strings[0] = "Updated native indexed content."
+results, err := col.ReplaceTypedBatch(ids, retained, columns)
+if err != nil {
+    return err
+}
+_ = results // Per-ID Matched/Modified; missing IDs are not inserted.
+```
+
+Column carriers align by row with `ids`; column `Name` identifies the declared
+column, not its JSON path. Supply every declared column on replacement, including
+unchanged ones. Inputs are borrowed only for the call and may be reused after
+return; do not mutate them concurrently with the call. Ordinary duplicate and
+unique-index checks still apply. Typed ingestion is not an assertion that a
+collection is empty, nor a shortcut around those checks. Graph build/readiness
+is a separate operation; these calls alone do not promise mutable ANN serving.
+
+For document-shaped applications, the JSON/template examples below remain valid.
+Choose them for their document contract, not as proof of JSON-free indexing.
+See the [typed-storage performance guide](typed-storage-performance.md) for
+separate load, mutation, query, and output measurement boundaries.
+
 ## Illustrative metadata snippets
 
 These snippets show the shape of the current metadata. The runnable end-to-end
