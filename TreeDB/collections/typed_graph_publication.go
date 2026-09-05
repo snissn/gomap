@@ -211,6 +211,9 @@ type typedGraphPublicationState struct {
 	valueSlots               int
 	admittedPayloadBytes     int64
 	installedAssetBytes      int64
+	controlEncodedBytes      int64    // schema-time bound; no metadata encoding on writes
+	manifestEncodedBytes     [3]int64 // insert/update/delete including header and identity
+	deletePartEncodedBytes   int64    // additional source-removal part
 	invalid                  bool
 	reconciling              *typedGraphReconcileToken
 }
@@ -262,7 +265,11 @@ func (c *Collection) initializeTypedGraphPublication(catalog *collectionCatalog,
 	if coord == nil {
 		return ErrVectorIndexSnapshotMismatch
 	}
-	if !coord.typedPublication.CompareAndSwap(nil, &typedGraphPublicationState{catalog: catalog, limits: limits}) {
+	next := &typedGraphPublicationState{catalog: catalog, limits: limits}
+	if err := next.prepareEncodedBounds(); err != nil {
+		return err
+	}
+	if !coord.typedPublication.CompareAndSwap(nil, next) {
 		return ErrVectorIndexSnapshotMismatch
 	}
 	return nil

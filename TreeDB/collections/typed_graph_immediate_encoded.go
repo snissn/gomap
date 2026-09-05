@@ -28,7 +28,8 @@ func (c *Collection) prepareImmediateTypedGraphEncoded(input columnWritePublishI
 	if err != nil {
 		return input, noop, err
 	}
-	bound, err := typedGraphColumnEncodedBound(prepared)
+	state := c.typedGraphPublicationSnapshot()
+	bound, err := typedGraphWriteEncodedBound(prepared, state)
 	if err != nil {
 		return input, noop, err
 	}
@@ -40,10 +41,6 @@ func (c *Collection) prepareImmediateTypedGraphEncoded(input columnWritePublishI
 		if err := addTypedGraphEncodedBytes(&bound, n); err != nil {
 			return input, noop, err
 		}
-	}
-	state := c.collectionSchemaCoordinator().typedPublication.Load()
-	if state == nil {
-		return input, noop, ErrVectorIndexSnapshotMismatch
 	}
 	cost, err := typedGraphPublicationInputCost(prepared, state.limits)
 	if err != nil {

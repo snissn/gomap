@@ -184,6 +184,9 @@ func (c *Collection) reconcileTypedGraphPublication(limits typedGraphPublication
 	}
 	slices.SortFunc(rows, func(a, b columnPhysicalVisibleRow) int { return bytes.Compare(a.ID, b.ID) })
 	next := &typedGraphPublicationState{catalog: current.catalog, limits: limits, rows: rows, invNorms: make([]float32, len(rows)), physicalRows: cost.rows, tombstones: cost.tombstones, valueSlots: cost.slots, admittedPayloadBytes: cost.bytes, installedAssetBytes: suffix.bytes}
+	if err := next.prepareEncodedBounds(); err != nil {
+		return err
+	}
 	vectorColumn := -1
 	for i, column := range current.catalog.meta.Options.ColumnStore.Columns {
 		if column.Path == current.catalog.meta.VectorIndexes[0].Field {

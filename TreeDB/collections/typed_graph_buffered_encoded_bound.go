@@ -52,7 +52,7 @@ func (c *Collection) bufferedTypedGraphEncodedBound(snap *backenddb.Snapshot, ca
 	if snap == nil || catalog == nil || normalizedDocumentFormat(catalog.meta.Options.DocumentFormat) != DocumentFormatJSON || columnStoreRetainedPayloadUsesTemplateV1(catalog.meta.Options.ColumnStore) || columnStoreRetainedPayloadUsesSemanticStreamV1(catalog.meta.Options.ColumnStore) {
 		return cost, ErrHybridSearchUnsupported
 	}
-	typed, err := typedGraphColumnEncodedBound(columnWritePublishInput{meta: catalog.meta, documents: docs, operation: ColumnPublishOperationInsert})
+	typed, err := typedGraphWriteEncodedBound(columnWritePublishInput{meta: catalog.meta, documents: docs, operation: ColumnPublishOperationInsert}, c.typedGraphPublicationSnapshot())
 	if err != nil {
 		return cost, err
 	}
@@ -175,7 +175,7 @@ func (c *Collection) beginBufferedTypedGraphEncodedFlush(input columnWritePublis
 	if err := validateTypedGraphReceiptInput(coord, input, logical); err != nil {
 		return err
 	}
-	actual, err := typedGraphColumnEncodedBound(input)
+	actual, err := typedGraphWriteEncodedBound(input, state)
 	if err != nil {
 		return err
 	}

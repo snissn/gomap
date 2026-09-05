@@ -148,6 +148,9 @@ func TestTypedGraphEncodedDetachedPredecessorIDs(t *testing.T) {
 	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
 		t.Fatal(err)
 	}
+	if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 128, Tombstones: 128, ValueSlots: 512, OwnedBytes: 1 << 20, EncodedOutputBytes: 16 << 20}, typedGraphColdLimits{ManifestRecords: 128, ManifestBytes: 128 << 10, AssetBytes: 1 << 20, DecodedTermBytes: 1 << 20}); err != nil {
+		t.Fatal(err)
+	}
 	snap := db.AcquireSnapshot()
 	defer snap.Close()
 	catalog, err := col.catalogForSnapshot(snap)

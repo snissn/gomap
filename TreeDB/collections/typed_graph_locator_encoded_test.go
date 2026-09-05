@@ -59,4 +59,25 @@ func TestTypedGraphGeneratedLocatorEncodedBound(t *testing.T) {
 	if got, err := typedGraphColumnEncodedBound(columnWritePublishInput{meta: meta}); err != nil || got != 0 {
 		t.Fatalf("empty bound=%d err=%v", got, err)
 	}
+	state := &typedGraphPublicationState{catalog: &collectionCatalog{meta: meta}, limits: typedGraphPublicationLimits{EncodedOutputBytes: 1 << 20}}
+	if err := state.prepareEncodedBounds(); err != nil {
+		t.Fatal(err)
+	}
+	input := columnWritePublishInput{meta: meta, operation: ColumnPublishOperationInsert, documents: []columnWriteDocument{{ID: []byte("x"), declaredValues: values, declaredValuesReady: true}}}
+	baseAllocs := testing.AllocsPerRun(10, func() {
+		if _, err := typedGraphColumnEncodedBound(input); err != nil {
+			t.Fatal(err)
+		}
+	})
+	fullAllocs := testing.AllocsPerRun(10, func() {
+		if _, err := typedGraphWriteEncodedBound(input, state); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if fullAllocs != baseAllocs {
+		t.Fatalf("generated metadata adds per-write allocations: assets=%v complete=%v", baseAllocs, fullAllocs)
+	}
+	if got, err := typedGraphWriteEncodedBound(columnWritePublishInput{meta: meta}, state); err != nil || got != 0 {
+		t.Fatalf("empty write bound=%d err=%v", got, err)
+	}
 }

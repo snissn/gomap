@@ -358,7 +358,7 @@ The internal buffered-insert route can additionally reserve encoded output with
 an explicit positive `EncodedOutputBytes` limit. Zero preserves the earlier
 logical-only internal mode; it is not physical admission. Reservation uses the
 prepared retained primary/scalar output, selected typed-image and generated
-locator bounds, and V2 text
+locator/manifest/control bounds, and V2 text
 posting/position/block framing before primary value-log pointerization and WAL
 acknowledgement. Pointerization runs under the existing validated staging
 ownership in this enabled route. Flush checks its finished native tables against
@@ -369,9 +369,9 @@ An attempted append keeps its encoded charge even if the append fails, its pins
 are released, publication is rejected, or logical reconciliation succeeds. A
 retry reserves another attempt; successful flush transfers logical pending debt
 without refunding encoded output. This is a conservative encoded-output ledger,
-not a disk quota: it excludes later-generated manifest/control output,
-WAL, index/COW pages, segment padding, allocator scratch, and pre-existing
-unreachable storage. It does not yet bound the entire encoded publication.
+not a disk quota: it excludes WAL, index/COW pages, segment padding, allocator
+scratch, and pre-existing unreachable storage. Fold output and global physical
+residency/reclamation remain separate admission obligations.
 Buffered V2 reservations can
 duplicate tail and pending-ID costs across receipts. Pending IDs include the
 active buffer plus queued and detached publishing units under existing domain
@@ -384,6 +384,13 @@ image and generated locator bounds plus their finished native table output
 before pointerization. Locator admission includes each ID, fixed-width live
 coordinates or a deletion tombstone, and root-entry framing. Source replacement
 conservatively charges both removals and inserts, including overlapping IDs.
+Generated manifest and system-control sizes are prepared once at lifecycle
+initialization/reconciliation and carried as scalar costs in the existing
+immutable publication state. Control metadata includes maximum-width future
+identities, command frontier and mutation counters, plus root descriptors and
+document generation. Normal writes add these costs without marshaling another
+metadata image or scanning the retained manifest; only newly emitted manifest
+records are charged. Actual control metadata remains JSON, not indexed data.
 Their receipt borrows the producing plan's exact document/source-delete order
 and prepared value-header identity through synchronous publication. Rejection
 before a command is assigned refunds logical pending debt, but not attempted
