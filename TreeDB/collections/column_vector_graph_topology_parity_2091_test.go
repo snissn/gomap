@@ -278,7 +278,7 @@ func publishColumnVectorGraphCurrentPreparedTopologyParityCollection2091(tb test
 		if updatedMeta.Name == "" {
 			return nil, fmt.Errorf("collections: topology-parity prepared manifest did not prepare updated metadata at applied_lsn=%d", ctx.AppliedCommandLSN)
 		}
-		return col.buildColumnGraphRebuildSystemDeltaIterator(baseMeta, updatedMeta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+		return col.buildColumnGraphRebuildSystemDeltaIterator(baseMeta, updatedMeta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs, nil)
 	}
 	if _, _, err := d.PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(nil, intent, buildContextDeltas, buildSystemDelta); err != nil {
 		_ = d.Close()

@@ -11,6 +11,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
@@ -18,6 +19,8 @@ const (
 	typedGraphBaseControlHeader   = 12
 	typedGraphBaseControlMaxBytes = 128 << 10
 	typedGraphBaseMaxRoots        = 64
+	// Same conservative leaf-entry/revision reserve as TVIS, including the key.
+	typedGraphBaseMaxInlineBytes = page.PageSize - page.PageHeaderSize - 256
 )
 
 // Only bounded metadata is owned here. Page IDs live in ordinary collection
@@ -26,6 +29,74 @@ const (
 type typedGraphBaseAlias struct {
 	meta  CollectionMeta
 	roots map[string]uint64
+}
+
+func typedGraphBaseCaptureAdmission(meta CollectionMeta) (bool, error) {
+	if !columnStoreTypedScalarIndexesSupported(meta) || len(meta.VectorIndexes) != 1 || meta.VectorIndexes[0].Strategy != VectorIndexStrategyColumnGraph {
+		return false, nil // Existing nonselected rebuild behavior is unchanged.
+	}
+	// Initial empty metadata may omit both identities. Account for their full
+	// future representation, not only growth of existing decimal LSN fields.
+	identity := ColumnManifestIdentity{Generation: ^uint64(0), Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: ^uint64(0)}
+	future, err := columnGraphRebuildUpdatedMeta(meta, identity, ^uint64(0))
+	if err != nil {
+		return false, err
+	}
+	raw, err := encodeTypedGraphBaseControl(future)
+	if err != nil {
+		return false, err
+	}
+	if err := validateTypedGraphBaseInlineControl(future, raw); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func validateTypedGraphBaseInlineControl(meta CollectionMeta, raw []byte) error {
+	if len(typedGraphBaseControlPrefix)+len(meta.Name)+len(raw) > typedGraphBaseMaxInlineBytes {
+		return errors.New("collections: typed graph base control exceeds inline publication budget")
+	}
+	names, err := typedGraphBaseRootNames(meta)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if len(systemCollectionRootKey(typedGraphBaseAliasRootName(meta.Name, name)))+8 > typedGraphBaseMaxInlineBytes {
+			return errors.New("collections: typed graph base descriptor exceeds inline publication budget")
+		}
+	}
+	return nil
+}
+
+func newTypedGraphBaseCapture(catalog *collectionCatalog, updated CollectionMeta, manifestRoot uint64) (*typedGraphBaseAlias, error) {
+	names, err := typedGraphBaseRootNames(updated)
+	if err != nil {
+		return nil, err
+	}
+	base := &typedGraphBaseAlias{meta: updated, roots: make(map[string]uint64, len(names))}
+	for _, name := range names {
+		base.roots[name] = catalog.rootID(name)
+	}
+	base.roots[collectionColumnManifestRootName(updated.Name)] = manifestRoot
+	return base, nil
+}
+
+func addTypedGraphBaseCaptureUpdates(updates map[string][]byte, base *typedGraphBaseAlias) error {
+	if base == nil {
+		return nil
+	}
+	raw, err := encodeTypedGraphBaseControl(base.meta)
+	if err != nil {
+		return err
+	}
+	if err := validateTypedGraphBaseInlineControl(base.meta, raw); err != nil {
+		return err
+	}
+	updates[typedGraphBaseControlPrefix+base.meta.Name] = raw
+	for root, id := range base.roots {
+		updates[systemCollectionRootKey(typedGraphBaseAliasRootName(base.meta.Name, root))] = encodeRootID(id)
+	}
+	return nil
 }
 
 // Only schema publishers use this clone. Ordinary physical publication retains

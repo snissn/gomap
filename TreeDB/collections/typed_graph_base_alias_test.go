@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -98,6 +99,140 @@ func TestTypedGraphBaseAliasControlledFixtureReopen(t *testing.T) {
 	}
 }
 
+func TestTypedGraphBaseCaptureRejectsCrossManagerStaleBeforeWAL(t *testing.T) {
+	dir, db, col := openTypedMinimaCollection(t)
+	defer db.Close()
+	columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"original"}}, {Name: "user", Strings: []string{"tenant"}}, {Name: "path", Strings: []string{"source"}}}
+	if _, _, err := col.InsertTypedBatchWithStats([][]byte{[]byte("base")}, [][]byte{[]byte(`{"id":"base"}`)}, columns); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+		t.Fatal(err)
+	}
+	other, err := NewCollectionManager(db).OpenCollection(col.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var afterWriteFrames int
+	restore := setColumnVectorGraphRebuildBeforeBuildTestHook(func() {
+		if _, _, err := other.InsertTypedBatchWithStats([][]byte{[]byte("new")}, [][]byte{[]byte(`{"id":"new"}`)}, columns); err != nil {
+			t.Fatal(err)
+		}
+		if err := other.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		afterWriteFrames = countCollectionCommandWALFrames(t, dir)
+	})
+	defer restore()
+	_, err = col.RebuildVectorIndex("embedding_graph")
+	if err == nil || errors.Is(err, ErrCommitAmbiguous) {
+		t.Fatalf("stale build must fail before WAL admission: %v", err)
+	}
+	if got := countCollectionCommandWALFrames(t, dir); got != afterWriteFrames {
+		t.Fatalf("stale build appended command frame: before=%d after=%d", afterWriteFrames, got)
+	}
+	if document, err := other.Get([]byte("new")); err != nil || len(document) == 0 {
+		t.Fatalf("intervening authoritative write missing: %s %v", document, err)
+	}
+	restore()
+	meta := typedMinimaCollectionMeta()
+	meta.Name = "unrelated"
+	manager := NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&meta); err != nil {
+		t.Fatal(err)
+	}
+	unrelated, err := manager.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoreUnrelated := setColumnVectorGraphRebuildBeforeBuildTestHook(func() {
+		if _, _, err := unrelated.InsertTypedBatchWithStats([][]byte{[]byte("elsewhere")}, [][]byte{[]byte(`{"id":"elsewhere"}`)}, columns); err != nil {
+			t.Fatal(err)
+		}
+		if err := unrelated.Flush(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	defer restoreUnrelated()
+	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+		t.Fatalf("unrelated collection publication rejected valid source: %v", err)
+	}
+}
+
+func TestTypedGraphBaseAutomaticCapture(t *testing.T) {
+	for _, populated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("populated=%v", populated), func(t *testing.T) {
+			_, db, col := openTypedMinimaCollection(t)
+			defer db.Close()
+			if populated {
+				columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"original"}}, {Name: "user", Strings: []string{"tenant"}}, {Name: "path", Strings: []string{"source"}}}
+				if _, _, err := col.InsertTypedBatchWithStats([][]byte{[]byte("base")}, [][]byte{[]byte(`{"id":"base"}`)}, columns); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+				t.Fatal(err)
+			}
+			snap := db.AcquireSnapshot()
+			defer snap.Close()
+			catalog, err := loadCollectionCatalog(snap, col.Name())
+			if err != nil || catalog == nil || catalog.typedGraphBase == nil {
+				t.Fatalf("rebuild did not atomically capture base: %v", err)
+			}
+			if !collectionMetaValuesEqual(catalog.meta, catalog.typedGraphBase.meta) {
+				t.Fatal("capture identity differs from rebuilt current graph")
+			}
+			if _, err := catalog.typedGraphBase.catalog(col, snap); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestTypedGraphBaseCaptureInlineAdmissionBeforeWAL(t *testing.T) {
+	dir, db, _ := openTypedMinimaCollection(t)
+	defer db.Close()
+	meta := typedMinimaCollectionMeta() // No active/recovery manifest yet.
+	meta.Name = "wide-control"
+	found := false
+	for n := 0; n < 64; n++ {
+		name := fmt.Sprintf("extra_%02d", n)
+		column := meta.Options.ColumnStore.Columns[1]
+		column.Name, column.Path = name, name
+		meta.Options.ColumnStore.Columns = append(meta.Options.ColumnStore.Columns, column)
+		normalized, err := normalizeCollectionMeta(meta)
+		if err != nil {
+			t.Fatalf("invalid inline-boundary fixture: %v", err)
+		}
+		meta = normalized
+		if _, err := typedGraphBaseCaptureAdmission(meta); err != nil {
+			if !strings.Contains(err.Error(), "inline publication budget") {
+				t.Fatalf("unexpected capture admission failure: %v", err)
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("failed to construct bounded inline rejection")
+	}
+	manager := NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&meta); err != nil {
+		t.Fatalf("original metadata should fit before larger capture control: %v", err)
+	}
+	col, err := manager.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := countCollectionCommandWALFrames(t, dir)
+	if _, err := col.RebuildVectorIndex("embedding_graph"); err == nil || errors.Is(err, ErrCommitAmbiguous) {
+		t.Fatalf("oversized capture must reject before admission: %v", err)
+	}
+	if after := countCollectionCommandWALFrames(t, dir); after != before {
+		t.Fatalf("oversized capture appended frame: before=%d after=%d", before, after)
+	}
+}
+
 func testTypedGraphBaseAliasControlledFixtureReopen(t *testing.T, direct bool) {
 	meta := typedMinimaCollectionMeta()
 	meta.Options.DisableIndexedWriteMemtables = direct
@@ -116,8 +251,8 @@ func testTypedGraphBaseAliasControlledFixtureReopen(t *testing.T, direct bool) {
 	}
 	defer snap.Close()
 	_, found, err := getSystemValue(snap, "collections/typed-graph-base/v1/minima")
-	if err != nil || found {
-		t.Fatalf("automatic capture must remain gated until closure integration: found=%v err=%v", found, err)
+	if err != nil || !found {
+		t.Fatalf("rebuild did not capture base: found=%v err=%v", found, err)
 	}
 	catalog, err := loadCollectionCatalog(snap, col.Name())
 	if err != nil {
@@ -148,16 +283,20 @@ func testTypedGraphBaseAliasControlledFixtureReopen(t *testing.T, direct bool) {
 	// This test installs an explicit fixture through the ordinary root publisher.
 	// Its empty update intent is NOT a replayable capture command: checkpoint
 	// and normal reopen below test the cold loader, not automatic lifecycle/WAL.
-	intent, err := col.newCollectionUpdateCommandWALIntent(nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _, err = db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(nil, nil, intent, func(ctx backenddb.CommandWALPublishContext, _ []uint64) (iterator.UnsafeIterator, error) {
-		if err := ctx.RegisterDurableLogicalObligationRequirements(requirements); err != nil {
-			return nil, err
+	installFixture := func(requirements rootpublication.StableLogicalObligationRequirements) error {
+		intent, err := col.newCollectionUpdateCommandWALIntent(nil, nil)
+		if err != nil {
+			return err
 		}
-		return buildSystemDeltaIterator(updates)
-	})
+		_, _, err = db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(nil, nil, intent, func(ctx backenddb.CommandWALPublishContext, _ []uint64) (iterator.UnsafeIterator, error) {
+			if err := ctx.RegisterDurableLogicalObligationRequirements(requirements); err != nil {
+				return nil, err
+			}
+			return buildSystemDeltaIterator(updates)
+		})
+		return err
+	}
+	err = installFixture(requirements)
 	_ = snap.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -170,11 +309,8 @@ func testTypedGraphBaseAliasControlledFixtureReopen(t *testing.T, direct bool) {
 	if err := col.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	// Rebuilding current graph state retires prior graph/TVIS references from
-	// the current manifest; the captured base remains their independent owner.
-	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
-		t.Fatal(err)
-	}
+	// Do not rebuild here: automatic rebuild now replaces the captured base.
+	// This fixture exercises the unchanged-base alias source independently.
 	if err := db.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
@@ -209,35 +345,26 @@ func testTypedGraphBaseAliasControlledFixtureReopen(t *testing.T, direct bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var baseOnly []ColumnAssetRef
+	var capturedRefs []ColumnAssetRef
 	for _, original := range requirements.Obligations {
-		shared := false
-		for _, live := range currentRequirements.Obligations {
-			if original == live {
-				shared = true
-				break
-			}
-		}
-		if !shared {
-			baseOnly = append(baseOnly, ColumnAssetRef{Kind: ColumnAssetKind(original.Kind), Namespace: original.Namespace, Generation: original.Generation, PartID: original.PartID, FileID: uint32(original.FileID), Offset: original.Offset, Length: original.Length, Checksum: original.Checksum})
-		}
+		capturedRefs = append(capturedRefs, ColumnAssetRef{Kind: ColumnAssetKind(original.Kind), Namespace: original.Namespace, Generation: original.Generation, PartID: original.PartID, FileID: uint32(original.FileID), Offset: original.Offset, Length: original.Length, Checksum: original.Checksum})
 	}
-	if len(baseOnly) == 0 {
-		t.Fatal("fixture has no base-only external references")
+	if len(capturedRefs) == 0 {
+		t.Fatal("fixture has no captured external references")
 	}
-	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true, CandidateRefs: baseOnly})
+	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true, CandidateRefs: capturedRefs})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ref := range baseOnly {
+	for _, ref := range capturedRefs {
 		protected := false
 		for _, entry := range plan.Entries {
-			if entry.Ref == ref && entry.Status == ColumnAssetReachabilityProtected {
+			if entry.Ref == ref && entry.Status == ColumnAssetReachabilityProtected && slices.Contains(entry.Sources, ColumnAssetReachabilitySourcePinnedSnapshot) {
 				protected = true
 			}
 		}
 		if !protected {
-			t.Fatalf("captured base-only reference is not persistently protected after reopen: %+v", ref)
+			t.Fatalf("captured reference missing independent alias protection after reopen: %+v", ref)
 		}
 	}
 	for _, pair := range []struct {
@@ -279,7 +406,16 @@ func testTypedGraphBaseAliasControlledFixtureReopen(t *testing.T, direct bool) {
 	}
 	// Exact destructive plans must not claim removal of a reference still in
 	// the alias union. Append preparation must not eagerly run its fallback.
-	exact := &columnPublishPlanLease{collection: col, plan: ColumnPublishPlan{durableResourceRequirements: currentRequirements, durableResourceMutation: rootpublication.StableLogicalObligationMutation{Removed: requirements.Obligations}}}
+	// Remove captured obligations from this synthetic current requirement set:
+	// the lower exact-union seam must supply them solely from persistent aliases.
+	exactCurrent := currentRequirements
+	exactCurrent.Obligations = nil
+	for _, obligation := range currentRequirements.Obligations {
+		if !slices.Contains(requirements.Obligations, obligation) {
+			exactCurrent.Obligations = append(exactCurrent.Obligations, obligation)
+		}
+	}
+	exact := &columnPublishPlanLease{collection: col, plan: ColumnPublishPlan{durableResourceRequirements: exactCurrent, durableResourceMutation: rootpublication.StableLogicalObligationMutation{Removed: requirements.Obligations}}}
 	if err := col.bindTypedGraphBasePlanClosure(exact, base); err != nil {
 		t.Fatal(err)
 	}
@@ -320,13 +456,13 @@ func testTypedGraphBaseAliasControlledFixtureReopen(t *testing.T, direct bool) {
 		t.Fatalf("cold descriptor refresh reused stale owner roots: %v", err)
 	}
 	_ = snap.Close() // No process read-view pin may be the reason GC retains refs.
-	gc, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{Detailed: true, CandidateRefs: baseOnly})
+	gc, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{Detailed: true, CandidateRefs: capturedRefs})
 	if err != nil || gc.SegmentsDeleted != 0 {
-		t.Fatalf("base-only GC: %+v err=%v", gc, err)
+		t.Fatalf("captured-ref GC: %+v err=%v", gc, err)
 	}
-	rewrite, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{Detailed: true, CandidateRefs: baseOnly})
+	rewrite, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{Detailed: true, CandidateRefs: capturedRefs})
 	if err != nil || rewrite.RefsEligible != 0 {
-		t.Fatalf("base-only rewrite: %+v err=%v", rewrite, err)
+		t.Fatalf("captured-ref rewrite: %+v err=%v", rewrite, err)
 	}
 	if _, err := col.DropVectorIndex("embedding_graph"); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
 		t.Fatalf("captured schema drop crossed existing barrier: %v", err)

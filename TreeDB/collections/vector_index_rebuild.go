@@ -266,6 +266,10 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	if normalizedDocumentFormat(baseMeta.Options.DocumentFormat) != DocumentFormatJSON {
 		return VectorIndexStatus{}, fmt.Errorf("collections: column_graph rebuild for %q requires JSON documents, got %q", name, baseMeta.Options.DocumentFormat)
 	}
+	capture, err := typedGraphBaseCaptureAdmission(baseMeta)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
 
 	state, ok := snap.StateToken()
 	if !ok {
@@ -293,7 +297,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 				}
 			}
 			timing.RowExtraction = collectionObservedElapsedSince(rowsStarted)
-			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay, started, &timing)
+			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay, started, &timing, capture)
 		}
 		rows, err := c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
 		timing.RowExtraction = collectionObservedElapsedSince(rowsStarted)
@@ -301,7 +305,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 			return VectorIndexStatus{}, err
 		}
 		if len(rows) == 0 {
-			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay, started, &timing)
+			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay, started, &timing, capture)
 		}
 		return VectorIndexStatus{}, fmt.Errorf("collections: column_graph rebuild for %q requires an initial physical column manifest root before rebuilding %d documents", name, len(rows))
 	}
@@ -382,6 +386,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
+	var captured *typedGraphBaseAlias
 	if intent != nil {
 		var prepared columnVectorGraphPreparedPhysicalAsset
 		defer func() { prepared.releaseStableResources() }()
@@ -427,7 +432,11 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 				return nil, metaErr
 			}
 			updatedMeta = updated
-			if err := c.registerColumnVectorGraphDurablePublication(ctx, &prepared, deltaRecords, nextIdentity.Generation, cfg.AssetManager.Namespace, catalog.typedGraphBase); err != nil {
+			retainedBase := catalog.typedGraphBase
+			if capture {
+				retainedBase = nil // Atomic cutover aliases the new complete manifest.
+			}
+			if err := c.registerColumnVectorGraphDurablePublication(ctx, &prepared, deltaRecords, nextIdentity.Generation, cfg.AssetManager.Namespace, retainedBase); err != nil {
 				return nil, err
 			}
 			return []backenddb.OrderedRootDeltaPublishInput{ordered}, nil
@@ -439,10 +448,21 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 			if updatedMeta.Name == "" {
 				return nil, errors.New("collections: column_graph rebuild did not prepare updated metadata")
 			}
-			return c.buildColumnGraphRebuildSystemDeltaIterator(baseMeta, updatedMeta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+			if capture {
+				if len(rootIDs) != 1 || rootIDs[0] == 0 {
+					return nil, unexpectedOrderedRootCountError(baseMeta.Name, 1, len(rootIDs))
+				}
+				var err error
+				captured, err = newTypedGraphBaseCapture(catalog, updatedMeta, rootIDs[0])
+				if err != nil {
+					return nil, err
+				}
+			}
+			return c.buildColumnGraphRebuildSystemDeltaIterator(baseMeta, updatedMeta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs, captured)
 		}
 		publicationStarted := time.Now()
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(nil, intent, buildContextDeltas, buildSystemDelta)
+		preflight := func() error { return c.validateColumnGraphRebuildSource(catalog, baseCommitSeq, baseSystemRoot) }
+		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(nil, preflight, intent, buildContextDeltas, buildSystemDelta)
 		timing.Publication = collectionObservedElapsedSince(publicationStarted)
 		if err != nil {
 			return VectorIndexStatus{}, err
@@ -455,6 +475,9 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		return VectorIndexStatus{}, unexpectedOrderedRootCountError(baseMeta.Name, 1, len(rootIDs))
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
+	if captured != nil {
+		nextCatalog.typedGraphBase = captured
+	}
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	status, err = c.columnGraphVectorIndexStatus(def.Name)
@@ -686,7 +709,7 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 	return rows, source, true, nil
 }
 
-func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name string, catalog *collectionCatalog, baseMeta CollectionMeta, def VectorIndexDefinition, cfg ColumnStoreConfig, baseCommitSeq, baseSystemRoot uint64, rootName string, replay *backenddb.CommandWALIntent, started time.Time, timing *ColumnGraphBuildTiming) (VectorIndexStatus, error) {
+func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name string, catalog *collectionCatalog, baseMeta CollectionMeta, def VectorIndexDefinition, cfg ColumnStoreConfig, baseCommitSeq, baseSystemRoot uint64, rootName string, replay *backenddb.CommandWALIntent, started time.Time, timing *ColumnGraphBuildTiming, capture bool) (VectorIndexStatus, error) {
 	intent, err := c.newCollectionRebuildVectorIndexCommandWALIntent(name, replay)
 	if err != nil {
 		return VectorIndexStatus{}, err
@@ -698,6 +721,7 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 	rootNames := []string{rootName}
 	baseRootIDs := map[string]uint64{rootName: 0}
 	var updatedMeta CollectionMeta
+	var captured *typedGraphBaseAlias
 	var prepared columnVectorGraphPreparedPhysicalAsset
 	defer func() { prepared.releaseStableResources() }()
 	buildContextDeltas := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaPublishInput, error) {
@@ -739,7 +763,11 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 		if err != nil {
 			return nil, err
 		}
-		if err := c.registerColumnVectorGraphDurablePublication(ctx, &prepared, deltaRecords, nextIdentity.Generation, cfg.AssetManager.Namespace, catalog.typedGraphBase); err != nil {
+		retainedBase := catalog.typedGraphBase
+		if capture {
+			retainedBase = nil
+		}
+		if err := c.registerColumnVectorGraphDurablePublication(ctx, &prepared, deltaRecords, nextIdentity.Generation, cfg.AssetManager.Namespace, retainedBase); err != nil {
 			return nil, err
 		}
 		return []backenddb.OrderedRootDeltaPublishInput{ordered}, nil
@@ -748,10 +776,21 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 		if updatedMeta.Name == "" {
 			return nil, errors.New("collections: empty column_graph rebuild did not prepare updated metadata")
 		}
-		return c.buildColumnGraphRebuildSystemDeltaIterator(baseMeta, updatedMeta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+		if capture {
+			if len(rootIDs) != 1 || rootIDs[0] == 0 {
+				return nil, unexpectedOrderedRootCountError(baseMeta.Name, 1, len(rootIDs))
+			}
+			var err error
+			captured, err = newTypedGraphBaseCapture(catalog, updatedMeta, rootIDs[0])
+			if err != nil {
+				return nil, err
+			}
+		}
+		return c.buildColumnGraphRebuildSystemDeltaIterator(baseMeta, updatedMeta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs, captured)
 	}
 	publicationStarted := time.Now()
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(nil, intent, buildContextDeltas, buildSystemDelta)
+	preflight := func() error { return c.validateColumnGraphRebuildSource(catalog, baseCommitSeq, baseSystemRoot) }
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(nil, preflight, intent, buildContextDeltas, buildSystemDelta)
 	if timing != nil {
 		timing.Publication = collectionObservedElapsedSince(publicationStarted)
 	}
@@ -763,6 +802,9 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 	}
 	c.meta = updatedMeta
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, updatedMeta, rootNames, rootIDs)
+	if captured != nil {
+		nextCatalog.typedGraphBase = captured
+	}
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	status, err := c.columnGraphVectorIndexStatus(def.Name)
@@ -1904,7 +1946,22 @@ func columnGraphRebuildUpdatedMeta(base CollectionMeta, identity ColumnManifestI
 	return normalizeCollectionMeta(updated)
 }
 
-func (c *Collection) buildColumnGraphRebuildSystemDeltaIterator(baseMeta, updatedMeta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+func (c *Collection) validateColumnGraphRebuildSource(catalog *collectionCatalog, expectedCommitSeq, expectedSystemRoot uint64) error {
+	if c.db.Pager() != catalog.pager {
+		return fmt.Errorf("%w: concurrent index generation replacement detected", ErrConcurrentMutation)
+	}
+	// The mutation lock is write-domain scoped: another manager can publish
+	// while construction reads its pinned source. Check all authority roots,
+	// tolerating unrelated commits, under the publisher lock before WAL append.
+	names := collectionRootNames(catalog.meta)
+	rootIDs := make(map[string]uint64, len(names))
+	for _, name := range names {
+		rootIDs[name] = catalog.rootID(name) // Missing optional roots are exactly zero.
+	}
+	return c.validateRootDescriptorSystemDeltaForMeta(catalog.meta, expectedCommitSeq, expectedSystemRoot, names, rootIDs)
+}
+
+func (c *Collection) buildColumnGraphRebuildSystemDeltaIterator(baseMeta, updatedMeta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64, captured *typedGraphBaseAlias) (iterator.UnsafeIterator, error) {
 	if len(rootIDs) != len(rootNames) {
 		return nil, unexpectedOrderedRootCountError(baseMeta.Name, len(rootNames), len(rootIDs))
 	}
@@ -1922,6 +1979,9 @@ func (c *Collection) buildColumnGraphRebuildSystemDeltaIterator(baseMeta, update
 			return nil, fmt.Errorf("collections: ordered root publish returned zero root for %q", rootName)
 		}
 		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
+	}
+	if err := addTypedGraphBaseCaptureUpdates(updates, captured); err != nil {
+		return nil, err
 	}
 	return buildSystemDeltaIterator(updates)
 }

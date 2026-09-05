@@ -2957,3 +2957,31 @@ poisoned, and shutdown candidates retain ownership until confirmed durable
 publication. Reopen reconstructs surviving ownership from the selected
 generation and its durable reservation record; elapsed time, `KeepRecent`, and
 the visible commit sequence alone never grant reuse.
+
+## Captured typed graph base control (M3)
+
+The current synchronous rebuild of a supported single typed `column_graph`
+atomically publishes `collections/typed-graph-base/v1/<collection>` with its
+graph manifest and one nonrecursive set of ordinary collection-root aliases.
+The control contains `TGBA`, little-endian uint16 version 1, uint16 root count,
+uint32 metadata byte length, and canonical normalized collection metadata.
+The decoder limits the entire record to 128 KiB and the root count to 64 before
+decoding metadata. Root IDs remain ordinary root descriptors so physical
+maintenance can remap them; the control contains no page IDs or nested aliases.
+
+Producer admission is stricter than this corruption bound: the control key plus
+encoded value must fit `page.PageSize - page.PageHeaderSize - 256` bytes, and
+each alias descriptor must meet the same inline bound. Before command-WAL
+admission, rebuild checks the maximum-width future manifest identities and LSN,
+including initially absent identities; installation rechecks the actual bytes.
+Schema changes remove the control and aliases with real tombstones. Exact
+publication obligations and maintenance reachability include the captured
+manifest closure; unchanged-base append certification remains available.
+
+This capture is not mutable graph serving or an off-lock fold. Name-only rebuild
+replay reconstructs a logically equivalent typed base. Process-crash tests hold
+the publication seal until acknowledged rebuild returns, then use normal Open;
+they do not simulate physical power loss. A raw snapshot alone does not retain
+unopened typed assets after their recoverable roots retire. An explicit graph
+owner lease protects that closure; safe public snapshot-to-owner acquisition is
+a separate lifecycle obligation.
