@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"errors"
 	"slices"
 	"sort"
 )
@@ -15,6 +16,7 @@ type typedGraphOverlaySearch struct {
 	rows         []columnPhysicalVisibleRow
 	invNorms     []float32
 	vectorColumn int
+	baseParts    []columnManifestAssetRefForScan
 }
 
 type typedGraphOverlaySearchStats struct {
@@ -40,6 +42,7 @@ func prepareTypedGraphOverlaySearch(base *VectorIndexSearcher, current *Collecti
 	}
 	slices.SortFunc(rows, func(a, b columnPhysicalVisibleRow) int { return bytes.Compare(a.ID, b.ID) })
 	view := &typedGraphOverlaySearch{base: base, pack: pack, current: current, rows: rows, vectorColumn: -1, invNorms: make([]float32, len(rows))}
+	view.baseParts = suffix.baseParts
 	for i, field := range suffix.view.FullConfig.Columns {
 		if field.Path == base.reader.def.Field {
 			view.vectorColumn = i
@@ -68,6 +71,155 @@ func prepareTypedGraphOverlaySearch(base *VectorIndexSearcher, current *Collecti
 func (v *typedGraphOverlaySearch) shadows(id []byte) bool {
 	i := sort.Search(len(v.rows), func(i int) bool { return bytes.Compare(v.rows[i].ID, id) >= 0 })
 	return i < len(v.rows) && bytes.Equal(v.rows[i].ID, id)
+}
+
+var errTypedGraphSearchBudget = errors.New("collections: typed graph search work budget exhausted")
+var errTypedGraphFilteredANNRequired = errors.New("collections: typed graph filter requires ANN mapping")
+
+const typedGraphScalarExactLimit = 4096
+
+// searchScalarExact uses only the current pin's persisted postings and locator.
+// Incomplete probes never become an exact route. Larger filters require the
+// separate filtered ANN primitive; they cannot fall back to a corpus scan.
+func (v *typedGraphOverlaySearch) searchScalarExact(query []float32, topK int, filter HybridScalarFilter, mappingWorkLimit int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
+	completed := false
+	if buffer != nil {
+		buffer.resetView()
+		defer func() {
+			if !completed {
+				buffer.resetView()
+			}
+		}()
+	}
+	if v == nil || v.base == nil || v.base.closed || v.current == nil || v.current.closed || buffer == nil {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	if err := validateVectorIndexSearchRequest(topK, 0); err != nil {
+		return nil, err
+	}
+	if len(query) != v.base.reader.def.Dimensions {
+		return nil, errColumnVectorGraphNativeSearchQueryDimensionMismatch
+	}
+	queryNorm, err := columnVectorGraphInvNorm(query)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateHybridScalarFilter(filter); err != nil {
+		return nil, err
+	}
+	leaves := filter.And
+	if len(leaves) == 0 {
+		leaves = []HybridScalarFilter{filter}
+	}
+	// Borrowed view: nil domain deliberately excludes newer mutable buffers.
+	lookup := hybridScalarLookupView{snapshot: v.current.snapshot, catalog: v.current.catalog}
+	var allowed hybridScalarAllowSet
+	for _, leaf := range leaves {
+		set, _, truncated, err := lookup.leafProbe(leaf, typedGraphScalarExactLimit+1)
+		if err != nil {
+			return nil, err
+		}
+		if truncated || len(set) > typedGraphScalarExactLimit {
+			return nil, errTypedGraphFilteredANNRequired
+		}
+		if allowed == nil {
+			allowed = set
+		} else {
+			for id := range allowed {
+				if _, ok := set[id]; !ok {
+					delete(allowed, id)
+				}
+			}
+		}
+	}
+	// The existing direct source has no inverse part lookup. Charge a
+	// conservative metadata-probe bound before locator/scoring work; no default
+	// budget is implied. A prepared inverse mapping can remove these scans later.
+	source := v.base.reader.typedVectorSource
+	if source == nil || source.closed {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	if mappingWorkLimit <= 0 || len(v.baseParts) > mappingWorkLimit || len(source.parts) > mappingWorkLimit-len(v.baseParts) {
+		return nil, errTypedGraphSearchBudget
+	}
+	perID := len(v.baseParts) + len(source.parts)
+	if perID > 0 && len(allowed) > mappingWorkLimit/perID {
+		return nil, errTypedGraphSearchBudget
+	}
+	ids := make([][]byte, 0, len(allowed))
+	for id := range allowed {
+		ids = append(ids, []byte(id))
+	}
+	refs, err := v.current.LookupDocumentRowRefsByID(ids, DocumentFetchOptions{})
+	if err != nil {
+		return nil, err
+	}
+	for _, result := range refs.Results {
+		if !result.Found {
+			return nil, ErrVectorIndexSnapshotMismatch
+		}
+		vector, err := v.vectorForCurrentRow(result.RowRef)
+		if err != nil {
+			return nil, err
+		}
+		norm, err := columnVectorGraphInvNorm(vector)
+		if err != nil {
+			return nil, err
+		}
+		score, err := columnVectorGraphNativeCosineScoreVector(query, queryNorm, 0, vector, norm)
+		if err != nil {
+			return nil, err
+		}
+		buffer.baseResults = append(buffer.baseResults, VectorIndexSearchResult{ID: result.ID, Score: score})
+	}
+	sort.Slice(buffer.baseResults, func(i, j int) bool {
+		return vectorIndexSearchResultBefore(buffer.baseResults[i], buffer.baseResults[j])
+	})
+	results, err := mergeVectorIndexViewResults(buffer.baseResults, nil, topK, buffer)
+	if err != nil {
+		return nil, err
+	}
+	completed = true
+	return results, nil
+}
+
+func (v *typedGraphOverlaySearch) vectorForCurrentRow(ref DocumentRowRef) ([]float32, error) {
+	i := sort.Search(len(v.rows), func(i int) bool { return bytes.Compare(v.rows[i].ID, ref.DocumentID) >= 0 })
+	if i < len(v.rows) && bytes.Equal(v.rows[i].ID, ref.DocumentID) {
+		row := v.rows[i]
+		if row.Deleted || row.Generation != ref.Generation || row.PartID != ref.PartID || row.RowIndex != ref.RowIndex || row.AppliedCommandLSN != ref.AppliedCommandLSN {
+			return nil, ErrVectorIndexSnapshotMismatch
+		}
+		return row.Values[v.vectorColumn].Float32Vector, nil
+	}
+	// Existing base preparation validates one physical and typed part per
+	// generation. Match the authoritative physical locator before borrowing its
+	// already-open FP32 matrix; never decode a whole part for one candidate.
+	valid := false
+	for _, part := range v.baseParts {
+		if part.Ref.Generation == ref.Generation && part.Ref.PartID == ref.PartID && ref.RowIndex >= 0 && ref.RowIndex < part.Rows {
+			valid = true
+			break
+		}
+	}
+	source := v.base.reader.typedVectorSource
+	if !valid || source == nil || source.closed {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	for _, part := range source.parts {
+		if part.generation != ref.Generation {
+			continue
+		}
+		if ref.RowIndex >= part.rows || (part.handle != nil && part.handle.Released()) {
+			return nil, ErrVectorIndexSnapshotMismatch
+		}
+		start := ref.RowIndex * source.dims
+		if start < 0 || start > len(part.values)-source.dims {
+			return nil, ErrVectorIndexSnapshotMismatch
+		}
+		return part.values[start : start+source.dims], nil
+	}
+	return nil, ErrVectorIndexSnapshotMismatch
 }
 
 // search is an internal unfiltered slice. Bounded exact suffix work is counted
@@ -99,7 +251,7 @@ func (v *typedGraphOverlaySearch) search(query []float32, topK, efSearch, candid
 		return nil, stats, err
 	}
 	if candidateLimit <= len(v.rows) || topK > candidateLimit-len(v.rows) || efSearch > candidateLimit-len(v.rows) {
-		return nil, stats, errTypedGraphOverlayFoldNeeded
+		return nil, stats, errTypedGraphSearchBudget
 	}
 	if len(query) != v.base.reader.def.Dimensions {
 		return nil, stats, errColumnVectorGraphNativeSearchQueryDimensionMismatch
@@ -117,7 +269,7 @@ func (v *typedGraphOverlaySearch) search(query []float32, topK, efSearch, candid
 	baseLimit := candidateLimit - len(v.rows)
 	baseTopK := topK + len(v.rows)
 	if baseTopK > baseLimit {
-		return nil, stats, errTypedGraphOverlayFoldNeeded
+		return nil, stats, errTypedGraphSearchBudget
 	}
 	if efSearch == 0 {
 		efSearch = min(v.base.reader.def.EfSearch, baseLimit)
@@ -132,7 +284,7 @@ func (v *typedGraphOverlaySearch) search(query []float32, topK, efSearch, candid
 	// Conservatively reject a reached cap below corpus size, even if K results
 	// happened to be collected. Never silently return cap-truncated output.
 	if baseLimit < v.pack.Header.Rows && baseStats.Candidates >= uint64(baseLimit) {
-		return nil, stats, errTypedGraphOverlayFoldNeeded
+		return nil, stats, errTypedGraphSearchBudget
 	}
 	for _, result := range baseResults {
 		if v.shadows(result.ID) {

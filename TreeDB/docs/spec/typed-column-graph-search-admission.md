@@ -143,12 +143,23 @@ Suffix scoring is bounded exact work, counted separately from base graph work.
 A positive pack candidate limit uses its existing bounded layer-0 regime and
 skips upper-layer greedy descent. This is not algorithmically identical to the
 default base-only search benchmark. Hitting a cap below corpus size returns an
-explicit fold-needed error, with the output buffer invalidated, even if K rows
+explicit search-budget error, with the output buffer invalidated, even if K rows
 were collected. Candidate counts, native/auxiliary edge counts, result-ID work,
 and mmap-direct versus heap-copy residency are separate evidence. Per-node
 expansion is bounded by the validated native degree plus the existing V3
-auxiliary bound. Dispersed large-filter recall, current-view filtering, and
-memory/performance qualification remain pending; no filtered route is claimed.
+auxiliary bound. Search exhaustion is distinct from suffix fold debt: folding
+cannot necessarily cure a base ANN work cap.
+
+The separate internal scalar-exact primitive probes persisted scalar postings
+from the current pin, accepting only complete leaf sets of at most 4,096 IDs.
+It reuses current row locators and already-open typed FP32 parts, with no indexed
+JSON extraction or corpus ID map. Part-metadata lookup work has an explicit
+caller-supplied bound; the current source lacks an inverse part/ordinal index.
+Larger or incomplete probes explicitly require filtered ANN mapping, not an
+exact fallback. Final-K materialization uses the same current read view, tested
+across subsequent delete/reinsert. Dispersed large-filter recall, filtered ANN,
+and memory/performance qualification remain pending; no public filtered route
+is claimed.
 
 The internal preparation/search does not install a mutable graph route. M1 typed
 mutations remain durable under their selected profile, while ordinary graph

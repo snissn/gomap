@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"slices"
@@ -100,6 +101,46 @@ func TestTypedGraphOverlaySearchShadowsAndBudget(t *testing.T) {
 	}
 	var buffer VectorIndexSearchBuffer
 	query := []float32{1, 0, 0, 0, 0, 0, 0, 0}
+	filtered, err := overlay.searchScalarExact(query, 2, HybridScalarFilter{IndexName: "user", Value: "tenant"}, 1000, &buffer)
+	if err != nil || len(filtered) != 1 || string(filtered[0].ID) != "base-1" || filtered[0].Score != -1 {
+		t.Fatalf("current scalar replacement authority: %+v %v", filtered, err)
+	}
+	fetched, err := current.FetchDocumentsForVectorIndexSearchResults(filtered, DocumentFetchOptions{})
+	if err != nil || len(fetched.Results) != 1 || !fetched.Results[0].Found || !bytes.Contains(fetched.Results[0].Document, []byte(`"content":"replacement"`)) {
+		t.Fatalf("same-pin final materialization: %+v %v", fetched, err)
+	}
+	for _, old := range []string{"base-0", "base-1"} {
+		filtered, err = overlay.searchScalarExact(query, 2, HybridScalarFilter{IndexName: "user", Value: old}, 1000, &buffer)
+		if err != nil || len(filtered) != 0 {
+			t.Fatalf("old scalar posting %q leaked: %+v %v", old, filtered, err)
+		}
+	}
+	filtered, err = overlay.searchScalarExact(query, 2, HybridScalarFilter{IndexName: "user", Value: "base-2"}, 1000, &buffer)
+	if err != nil || len(filtered) != 1 || string(filtered[0].ID) != "base-2" {
+		t.Fatalf("direct base vector lookup: %+v %v", filtered, err)
+	}
+	if _, err := overlay.searchScalarExact(query, 2, HybridScalarFilter{IndexName: "user", Value: "base-2"}, 1, &buffer); !errors.Is(err, errTypedGraphSearchBudget) || len(buffer.results) != 0 {
+		t.Fatalf("mapping budget left stale results: %v", err)
+	}
+	if err := col.Delete(ids[1]); err != nil {
+		t.Fatal(err)
+	}
+	replacement[1].Strings[0] = "future reinsert"
+	replacement[2].Strings[0] = "future"
+	if _, _, err := col.InsertTypedBatchWithStats(ids[1:2], retained[1:2], replacement); err != nil {
+		t.Fatal(err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	filtered, err = overlay.searchScalarExact(query, 2, HybridScalarFilter{IndexName: "user", Value: "tenant"}, 1000, &buffer)
+	if err != nil || len(filtered) != 1 {
+		t.Fatalf("later delete/reinsert changed pinned postings: %+v %v", filtered, err)
+	}
+	fetched, err = current.FetchDocumentsForVectorIndexSearchResults(filtered, DocumentFetchOptions{})
+	if err != nil || len(fetched.Results) != 1 || !bytes.Contains(fetched.Results[0].Document, []byte(`"content":"replacement"`)) {
+		t.Fatalf("later write changed pinned final document: %+v %v", fetched, err)
+	}
 	results, stats, err := overlay.search(query, 2, 8, 32, &buffer)
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +148,7 @@ func TestTypedGraphOverlaySearchShadowsAndBudget(t *testing.T) {
 	if len(results) != 2 || string(results[0].ID) != "base-2" || string(results[1].ID) != "base-3" || stats.BaseShadowed != 2 {
 		t.Fatalf("shadowed original top two underfilled/leaked: %+v stats=%+v", results, stats)
 	}
-	if results, stats, err := overlay.search(query, 2, 4, 6, &buffer); !errors.Is(err, errTypedGraphOverlayFoldNeeded) || results != nil || stats.Base.Candidates != 4 {
+	if results, stats, err := overlay.search(query, 2, 4, 6, &buffer); !errors.Is(err, errTypedGraphSearchBudget) || results != nil || stats.Base.Candidates != 4 {
 		t.Fatalf("candidate cap returned success/partial results: %+v candidates=%d err=%v", results, stats.Base.Candidates, err)
 	}
 	if len(buffer.results) != 0 {
@@ -120,7 +161,7 @@ func TestTypedGraphOverlaySearchShadowsAndBudget(t *testing.T) {
 	if _, _, err := overlay.search(query[:1], 2, 8, 32, &buffer); err == nil || len(buffer.results) != 0 {
 		t.Fatalf("invalid query retained results: %v", err)
 	}
-	if _, _, err := overlay.search(query, 2, 8, 1, &buffer); !errors.Is(err, errTypedGraphOverlayFoldNeeded) || len(buffer.results) != 0 {
+	if _, _, err := overlay.search(query, 2, 8, 1, &buffer); !errors.Is(err, errTypedGraphSearchBudget) || len(buffer.results) != 0 {
 		t.Fatalf("invalid budget retained results: %v", err)
 	}
 	searchAllocs := testing.AllocsPerRun(100, func() {

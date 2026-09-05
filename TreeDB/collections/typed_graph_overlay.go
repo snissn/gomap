@@ -131,6 +131,7 @@ type typedGraphOverlayLimits struct {
 
 type typedGraphOverlaySuffix struct {
 	view       columnPhysicalScanSnapshotView
+	baseParts  []columnManifestAssetRefForScan
 	rows       int
 	tombstones int
 	bytes      int64
@@ -190,7 +191,7 @@ func checkedTypedGraphOverlaySuffix(base, current columnPhysicalScanSnapshotView
 	if current.FullConfig.ActiveManifest.Generation < generation {
 		return typedGraphOverlaySuffix{}, ErrVectorIndexSnapshotMismatch
 	}
-	result := typedGraphOverlaySuffix{view: current}
+	result := typedGraphOverlaySuffix{view: current, baseParts: base.AssetRefs}
 	// Records are already in canonical manifest key order. Check identity and
 	// cumulative bounds before allocating suffix slices or touching row data.
 	check := func(old, now []columnManifestAssetRefForScan, rowAssets bool) error {
