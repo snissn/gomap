@@ -220,6 +220,10 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 	}
 	flush = func(lvl int) error {
 		lb := levels[lvl]
+		// An entry that cannot fit an empty page cannot make progress by promotion.
+		if lb.builder.Count() == 0 {
+			return node.ErrNodeFull
+		}
 		n := lb.builder.Finish()
 		childID := lb.builder.PageID()
 		key := lb.startKey
