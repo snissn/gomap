@@ -11,6 +11,10 @@ import (
 // reconstruction codec directly, never retained JSON. The returned newest-ID
 // rows are owned; tombstones remain present to shadow immutable base entries.
 func (suffix typedGraphOverlaySuffix) prepareRows(current *CollectionReadView, maxOwnedBytes int64) ([]columnPhysicalVisibleRow, error) {
+	return suffix.prepareRowsWithAccounting(current, maxOwnedBytes, 0, nil)
+}
+
+func (suffix typedGraphOverlaySuffix) prepareRowsWithAccounting(current *CollectionReadView, maxOwnedBytes int64, maxSlots int, accounting *typedGraphPublicationCost) ([]columnPhysicalVisibleRow, error) {
 	if current == nil || current.closed || current.snapshot == nil || current.catalog == nil || current.catalog != suffix.view.Catalog || maxOwnedBytes <= 0 {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
@@ -67,7 +71,8 @@ func (suffix typedGraphOverlaySuffix) prepareRows(current *CollectionReadView, m
 		}
 		row := columnPhysicalVisibleRowFromReaderRow(physical)
 		index, exists := byID[string(row.ID)]
-		if exists && !columnPhysicalVisibleRowNewer(row, rows[index]) {
+		older := exists && !columnPhysicalVisibleRowNewer(row, rows[index])
+		if older && accounting == nil {
 			continue
 		}
 		if !row.Deleted {
@@ -81,6 +86,16 @@ func (suffix typedGraphOverlaySuffix) prepareRows(current *CollectionReadView, m
 				return nil, err
 			}
 			mergedScratch = row.Values
+		}
+		if accounting != nil {
+			if len(row.Values) > maxSlots-accounting.slots {
+				return nil, errTypedGraphOverlayFoldNeeded
+			}
+			accounting.rows++
+			if row.Deleted {
+				accounting.tombstones++
+			}
+			accounting.slots += len(row.Values)
 		}
 		// Charge every retained version before cloning, including overwritten
 		// versions. Row/header/map counts are separately bounded by suffix.rows.
@@ -101,6 +116,12 @@ func (suffix typedGraphOverlaySuffix) prepareRows(current *CollectionReadView, m
 			if !charge(int64(len(value.String)) + int64(len(value.StringBytes)) + int64(len(value.Float32Vector))*4) {
 				return nil, errTypedGraphOverlayFoldNeeded
 			}
+		}
+		if accounting != nil {
+			accounting.bytes = ownedBytes
+		}
+		if older {
+			continue
 		}
 		row.ID = bytes.Clone(row.ID)
 		values := make([]columnDeclaredValue, len(row.Values))

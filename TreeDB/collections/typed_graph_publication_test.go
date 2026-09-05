@@ -10,8 +10,279 @@ import (
 	"testing"
 	"time"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
+
+func TestTypedGraphPublicationColdReopen(t *testing.T) {
+	dir, db, col := openTypedMinimaCollection(t)
+	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+		t.Fatal(err)
+	}
+	columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{0, 2, 0, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"after base"}}, {Name: "user", Strings: []string{"u"}}, {Name: "path", Strings: []string{"p"}}}
+	if _, _, err := col.InsertTypedBatchWithStats([][]byte{[]byte("a")}, [][]byte{[]byte(`{"id":"a"}`)}, columns); err != nil {
+		t.Fatal(err)
+	}
+	columns[1].Strings[0] = "replacement"
+	if _, err := col.ReplaceTypedBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"id":"a"}`)}, columns); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.DeleteBatch([][]byte{[]byte("a")}); err != nil {
+		t.Fatal(err)
+	}
+	columns[0].Float32Vectors[0] = []float32{0, 0, 3, 0, 0, 0, 0, 0}
+	columns[1].Strings[0] = "reinsert"
+	if _, _, err := col.InsertTypedBatchWithStats([][]byte{[]byte("a")}, [][]byte{[]byte(`{"id":"a"}`)}, columns); err != nil {
+		t.Fatal(err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Normal Open has no replay seeding hook. Bootstrap must use the captured
+	// alias and the actual current typed suffix, not require an empty suffix.
+	db = openTypedMinimaDB(t, dir)
+	defer db.Close()
+	col, err := NewCollectionManager(db).OpenCollection("minima")
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := typedGraphPublicationLimits{Rows: 8, Tombstones: 8, ValueSlots: 32, OwnedBytes: 4096}
+	cold := typedGraphColdLimits{ManifestRecords: 128, ManifestBytes: 128 << 10, AssetBytes: 1 << 20, DecodedTermBytes: 1 << 20}
+	for _, term := range []string{"records", "metadata", "assets", "decoded"} {
+		t.Run(term, func(t *testing.T) {
+			bounded := cold
+			switch term {
+			case "records":
+				bounded.ManifestRecords = 1
+			case "metadata":
+				bounded.ManifestBytes = 1
+			case "assets":
+				bounded.AssetBytes = 1
+			case "decoded":
+				bounded.DecodedTermBytes = 1
+			}
+			if err := col.reconcileTypedGraphPublication(limits, bounded); !errors.Is(err, errTypedGraphOverlayFoldNeeded) {
+				t.Fatalf("cold budget did not reject: %v", err)
+			}
+			if state := col.typedGraphPublicationSnapshot(); state == nil || !state.invalid || state.reconciling != nil {
+				t.Fatal("failed bootstrap disabled limits or retained drain authority")
+			}
+		})
+	}
+	if err := col.reconcileTypedGraphPublication(limits, cold); err != nil {
+		t.Fatalf("cold typed bootstrap after normal Open: %v", err)
+	}
+	state := col.typedGraphPublicationSnapshot()
+	if state.physicalRows != 4 || state.tombstones != 1 || state.valueSlots != 12 || len(state.rows) != 1 || state.rows[0].Values[0].Float32Vector[2] != 3 || state.rows[0].Values[1].String != "reinsert" {
+		t.Fatalf("cold suffix state: %+v", state)
+	}
+}
+
+func TestTypedGraphPublicationReconcilePendingFailure(t *testing.T) {
+	_, db, col := openTypedMinimaCollection(t)
+	defer db.Close()
+	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+		t.Fatal(err)
+	}
+	limits := typedGraphPublicationLimits{Rows: 8, Tombstones: 8, ValueSlots: 32, OwnedBytes: 4096}
+	cold := typedGraphColdLimits{ManifestRecords: 128, ManifestBytes: 128 << 10, AssetBytes: 1 << 20, DecodedTermBytes: 1 << 20}
+	if err := col.reconcileTypedGraphPublication(limits, cold); err != nil {
+		t.Fatal(err)
+	}
+	columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"pending"}}, {Name: "user", Strings: []string{"u"}}, {Name: "path", Strings: []string{"p"}}}
+	if _, _, err := col.InsertTypedBatchWithStats([][]byte{[]byte("a")}, [][]byte{[]byte(`{"id":"a"}`)}, columns); err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("reconcile pending physical preparation cut")
+	restore := setColumnPhysicalAssetPreparationAfterPrepareTestHook(func(ColumnPublishPreparedAssets) error { return injected })
+	err := col.Flush()
+	restore()
+	if err == nil {
+		t.Fatal("physical failure not injected")
+	}
+	state := col.typedGraphPublicationSnapshot()
+	if !state.invalid {
+		t.Fatalf("uncertain staged publication did not invalidate: %v", err)
+	}
+	coord := col.collectionSchemaCoordinator()
+	coord.typedPublicationDebtMu.Lock()
+	pending := coord.typedPublicationPending.rows
+	coord.typedPublicationDebtMu.Unlock()
+	if pending != 1 {
+		t.Fatalf("lost pending debt: %d", pending)
+	}
+	if err := col.reconcileTypedGraphPublication(limits, cold); !errors.Is(err, backenddb.ErrRecoveryRequired) {
+		t.Fatalf("recovery fence bypassed: %v", err)
+	}
+	coord.typedPublicationDebtMu.Lock()
+	debt, remaining := coord.typedPublicationDebt, coord.typedPublicationPending
+	coord.typedPublicationDebtMu.Unlock()
+	if remaining.rows != 1 || debt.rows != 1 {
+		t.Fatalf("failed reconciliation lost debt: %+v / %+v", debt, remaining)
+	}
+	if state := col.typedGraphPublicationSnapshot(); !state.invalid || state.reconciling != nil {
+		t.Fatal("failed reconciliation left authority token or enabled state")
+	}
+}
+
+func TestTypedGraphPublicationReconcileInvalidPending(t *testing.T) {
+	_, db, col := openTypedMinimaCollection(t)
+	defer db.Close()
+	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+		t.Fatal(err)
+	}
+	limits := typedGraphPublicationLimits{Rows: 8, Tombstones: 8, ValueSlots: 32, OwnedBytes: 4096}
+	cold := typedGraphColdLimits{ManifestRecords: 128, ManifestBytes: 128 << 10, AssetBytes: 1 << 20, DecodedTermBytes: 1 << 20}
+	if err := col.reconcileTypedGraphPublication(limits, cold); err != nil {
+		t.Fatal(err)
+	}
+	columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"pending"}}, {Name: "user", Strings: []string{"u"}}, {Name: "path", Strings: []string{"p"}}}
+	if _, _, err := col.InsertTypedBatchWithStats([][]byte{[]byte("a")}, [][]byte{[]byte(`{"id":"a"}`)}, columns); err != nil {
+		t.Fatal(err)
+	}
+	coord := col.collectionSchemaCoordinator()
+	col.writeDomain.mu.Lock()
+	documents := append([]columnWriteDocument(nil), col.writeDomain.columnDocuments...)
+	receipts := append([]*typedGraphPublicationReceipt(nil), col.writeDomain.typedReceipts...)
+	col.writeDomain.mu.Unlock()
+	input := columnWritePublishInput{operation: ColumnPublishOperationInsert, documents: documents, typedReceipts: receipts}
+	cost, err := typedGraphPublicationInputCost(input, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTypedGraphReceiptInput(coord, input, cost); err != nil {
+		t.Fatal(err)
+	}
+	documents[0].ID = []byte("b") // identical cost is not authority for a different ID
+	if err := validateTypedGraphReceiptInput(coord, input, cost); !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		t.Fatalf("forged receipt input accepted: %v", err)
+	}
+	documents[0] = receipts[0].documents[0]
+	input.declaredRowsReady = true
+	input.declaredRows = []columnDeclaredRow{{Values: append([]columnDeclaredValue(nil), documents[0].declaredValues...)}}
+	if err := validateTypedGraphReceiptInput(coord, input, cost); !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		t.Fatalf("substituted prepared values accepted: %v", err)
+	}
+	input.declaredRows[0].Values = documents[0].declaredValues
+	if err := validateTypedGraphReceiptInput(coord, input, cost); err != nil {
+		t.Fatal(err)
+	}
+	input.declaredRowsReady, input.declaredRows = false, nil
+	duplicate := columnWritePublishInput{operation: ColumnPublishOperationInsert, documents: append(documents, documents[0]), typedReceipts: append(receipts, receipts[0])}
+	duplicateCost := cost
+	duplicateCost.add(cost)
+	if err := validateTypedGraphReceiptInput(coord, duplicate, duplicateCost); !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		t.Fatalf("duplicate receipt accepted: %v", err)
+	}
+	// Derived-only invalidation is an internal readiness condition, not an
+	// attempt to clear the backend's independently tested recovery fence.
+	before := coord.typedPublication.Load()
+	invalid := *before
+	invalid.invalid = true
+	if !coord.typedPublication.CompareAndSwap(before, &invalid) {
+		t.Fatal("fixture invalidation raced")
+	}
+	if err := col.Flush(); !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		t.Fatalf("ordinary flush bypassed invalid state: %v", err)
+	}
+	tooSmall := cold
+	tooSmall.ManifestRecords = 1
+	if err := col.reconcileTypedGraphPublication(limits, tooSmall); !errors.Is(err, errTypedGraphOverlayFoldNeeded) {
+		t.Fatalf("post-drain cold budget: %v", err)
+	}
+	coord.typedPublicationDebtMu.Lock()
+	debt, pending := coord.typedPublicationDebt, coord.typedPublicationPending
+	coord.typedPublicationDebtMu.Unlock()
+	if pending.rows != 0 || debt.rows != 1 {
+		t.Fatalf("partial reconcile lost installed charge: %+v / %+v", debt, pending)
+	}
+	if state := col.typedGraphPublicationSnapshot(); !state.invalid || state.reconciling != nil {
+		t.Fatal("failed cold phase left ready state or drain authority")
+	}
+	if err := col.reconcileTypedGraphPublication(limits, cold); err != nil {
+		t.Fatal(err)
+	}
+	state := col.typedGraphPublicationSnapshot()
+	if state.invalid || state.physicalRows != 1 || len(state.rows) != 1 {
+		t.Fatalf("reconciled state: %+v", state)
+	}
+	if err := validateTypedGraphReceiptInput(coord, input, cost); !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		t.Fatalf("consumed receipt reused: %v", err)
+	}
+	coord.typedPublicationDebtMu.Lock()
+	defer coord.typedPublicationDebtMu.Unlock()
+	if coord.typedPublicationPending.rows != 0 || coord.typedPublicationDebt.rows != 1 {
+		t.Fatalf("debt after reconciliation: total=%+v pending=%+v", coord.typedPublicationDebt, coord.typedPublicationPending)
+	}
+}
+
+func TestTypedGraphPublicationReconcileCapsAndManagers(t *testing.T) {
+	_, db, col := openTypedMinimaCollection(t)
+	defer db.Close()
+	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+		t.Fatal(err)
+	}
+	limits := typedGraphPublicationLimits{Rows: 8, Tombstones: 8, ValueSlots: 32, OwnedBytes: 4096}
+	cold := typedGraphColdLimits{ManifestRecords: 1, ManifestBytes: 128 << 10, AssetBytes: 1 << 20, DecodedTermBytes: 1 << 20}
+	if err := col.reconcileTypedGraphPublication(limits, cold); !errors.Is(err, errTypedGraphOverlayFoldNeeded) {
+		t.Fatalf("metadata budget: %v", err)
+	}
+	failed := col.typedGraphPublicationSnapshot()
+	if failed == nil || !failed.invalid || failed.reconciling != nil {
+		t.Fatal("initial failed bootstrap did not stay fail-closed")
+	}
+	cold.ManifestRecords = 128
+	other, err := NewCollectionManager(db).OpenCollection("minima")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, c := range []*Collection{col, other} {
+		go func(c *Collection) { <-start; results <- c.reconcileTypedGraphPublication(limits, cold) }(c)
+	}
+	close(start)
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("concurrent reconcile blocked")
+		}
+	}
+	ready := col.typedGraphPublicationSnapshot()
+	if ready == nil || ready.invalid || other.typedGraphPublicationSnapshot() != ready {
+		t.Fatal("managers did not converge")
+	}
+	if err := other.reconcileTypedGraphPublication(limits, cold); err != nil {
+		t.Fatal(err)
+	}
+	if col.typedGraphPublicationSnapshot() != ready {
+		t.Fatal("same frontier was rebuilt")
+	}
+	columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"cutover"}}, {Name: "user", Strings: []string{"u"}}, {Name: "path", Strings: []string{"p"}}}
+	if _, _, err := other.InsertTypedBatchWithStats([][]byte{[]byte("a")}, [][]byte{[]byte(`{"id":"a"}`)}, columns); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	ready = col.typedGraphPublicationSnapshot()
+	if _, err := other.RebuildVectorIndex("embedding_graph"); err != nil {
+		t.Fatal(err)
+	}
+	if err := col.reconcileTypedGraphPublication(limits, cold); err != nil {
+		t.Fatal(err)
+	}
+	if col.typedGraphPublicationSnapshot() == ready || col.typedGraphPublicationSnapshot().physicalRows != 0 {
+		t.Fatal("base cutover reused old frontier")
+	}
+}
 
 func TestTypedGraphPublicationInstrumentedReplay(t *testing.T) {
 	const childEnv = "GOMAP_TYPED_PUBLICATION_REPLAY_DIR"

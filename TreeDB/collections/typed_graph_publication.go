@@ -37,9 +37,10 @@ func (a *typedGraphPublicationCost) subtract(b typedGraphPublicationCost) {
 }
 
 type typedGraphPublicationReceipt struct {
-	coord    *collectionSchemaCoordinator
-	cost     typedGraphPublicationCost
-	consumed bool // protected by coord.typedPublicationDebtMu
+	coord     *collectionSchemaCoordinator
+	cost      typedGraphPublicationCost
+	documents []columnWriteDocument // borrowed immutable admitted headers, no payload copy
+	consumed  bool                  // protected by coord.typedPublicationDebtMu
 }
 
 func (c *Collection) reserveTypedGraphPublication(cost typedGraphPublicationCost) (*typedGraphPublicationReceipt, error) {
@@ -107,7 +108,11 @@ func (c *Collection) reserveBufferedTypedGraphPublication(documents []columnWrit
 	if err != nil {
 		return nil, err
 	}
-	return c.reserveTypedGraphPublication(cost)
+	receipt, err := c.reserveTypedGraphPublication(cost)
+	if err == nil && receipt != nil {
+		receipt.documents = documents
+	}
+	return receipt, err
 }
 
 func typedGraphPublicationInputCost(input columnWritePublishInput, limits typedGraphPublicationLimits) (typedGraphPublicationCost, error) {
@@ -177,6 +182,7 @@ type typedGraphPublicationState struct {
 	admittedPayloadBytes     int64
 	installedAssetBytes      int64
 	invalid                  bool
+	reconciling              *typedGraphReconcileToken
 }
 
 // Only an exact freshly captured base can seed an empty suffix. Reopen with a
@@ -242,11 +248,12 @@ func (s *typedGraphPublicationState) matches(catalog *collectionCatalog) bool {
 }
 
 type typedGraphPublicationCandidate struct {
-	coord      *collectionSchemaCoordinator
-	before     *typedGraphPublicationState
-	next       *typedGraphPublicationState
-	receipts   []*typedGraphPublicationReceipt
-	ownReceipt bool
+	coord       *collectionSchemaCoordinator
+	before      *typedGraphPublicationState
+	next        *typedGraphPublicationState
+	receipts    []*typedGraphPublicationReceipt
+	ownReceipt  bool
+	reconciling bool
 }
 
 // The existing typed projection and generic extractor produce owning values;
@@ -264,6 +271,16 @@ func (c *Collection) prepareTypedGraphPublication(input columnWritePublishInput)
 		return nil, nil
 	}
 	if before.invalid {
+		if c.typedGraphReconcile != nil && before.reconciling == c.typedGraphReconcile {
+			cost, err := typedGraphPublicationInputCost(input, before.limits)
+			if err != nil {
+				return nil, err
+			}
+			if err := validateTypedGraphReceiptInput(coord, input, cost); err != nil {
+				return nil, err
+			}
+			return &typedGraphPublicationCandidate{coord: coord, before: before, receipts: input.typedReceipts, reconciling: true}, nil
+		}
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
 	if !before.matches(input.catalog) {
@@ -371,19 +388,8 @@ func (c *Collection) prepareTypedGraphPublication(input columnWritePublishInput)
 		}
 		receipts = []*typedGraphPublicationReceipt{receipt}
 	} else {
-		coord.typedPublicationDebtMu.Lock()
-		var reserved typedGraphPublicationCost
-		valid := true
-		for _, receipt := range receipts {
-			if receipt == nil || receipt.coord != coord || receipt.consumed {
-				valid = false
-				break
-			}
-			reserved.add(receipt.cost)
-		}
-		coord.typedPublicationDebtMu.Unlock()
-		if !valid || reserved != cost {
-			return nil, ErrVectorIndexSnapshotMismatch
+		if err := validateTypedGraphReceiptInput(coord, input, cost); err != nil {
+			return nil, err
 		}
 	}
 	return &typedGraphPublicationCandidate{coord: coord, before: before, next: &next, receipts: receipts, ownReceipt: ownReceipt}, nil
@@ -392,6 +398,55 @@ func (c *Collection) prepareTypedGraphPublication(input columnWritePublishInput)
 func (p *typedGraphPublicationCandidate) preflight() error {
 	if p != nil && p.coord.typedPublication.Load() != p.before {
 		return fmt.Errorf("%w: typed graph publication predecessor changed", ErrConcurrentMutation)
+	}
+	return nil
+}
+
+// Buffered units preserve admitted document order and shallow header identity.
+// Check every slot, not only summed costs, before consuming receipt authority.
+func validateTypedGraphReceiptInput(coord *collectionSchemaCoordinator, input columnWritePublishInput, cost typedGraphPublicationCost) error {
+	if len(input.typedReceipts) == 0 || len(input.sourceDeleteDocuments) != 0 || input.operation != ColumnPublishOperationInsert || (input.declaredRowsReady && len(input.declaredRows) != len(input.documents)) {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	coord.typedPublicationDebtMu.Lock()
+	defer coord.typedPublicationDebtMu.Unlock()
+	var seen map[*typedGraphPublicationReceipt]struct{}
+	if len(input.typedReceipts) > 1 {
+		seen = make(map[*typedGraphPublicationReceipt]struct{}, len(input.typedReceipts))
+	}
+	position := 0
+	var reserved typedGraphPublicationCost
+	for _, receipt := range input.typedReceipts {
+		if receipt == nil || receipt.coord != coord || receipt.consumed || len(receipt.documents) > len(input.documents)-position {
+			return ErrVectorIndexSnapshotMismatch
+		}
+		if seen != nil {
+			if _, duplicate := seen[receipt]; duplicate {
+				return ErrVectorIndexSnapshotMismatch
+			}
+			seen[receipt] = struct{}{}
+		}
+		for i, admitted := range receipt.documents {
+			d := input.documents[position+i]
+			if !bytes.Equal(d.ID, admitted.ID) || len(d.declaredValues) != len(admitted.declaredValues) || len(d.declaredValues) == 0 || &d.declaredValues[0] != &admitted.declaredValues[0] {
+				return ErrVectorIndexSnapshotMismatch
+			}
+			if input.declaredRowsReady {
+				values := input.declaredRows[position+i].Values
+				if len(values) != len(admitted.declaredValues) || &values[0] != &admitted.declaredValues[0] {
+					return ErrVectorIndexSnapshotMismatch
+				}
+			}
+		}
+		position += len(receipt.documents)
+		reserved.add(receipt.cost)
+	}
+	state := coord.typedPublication.Load()
+	if state == nil || position != len(input.documents) {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	if cost != reserved {
+		return ErrVectorIndexSnapshotMismatch
 	}
 	return nil
 }
@@ -422,6 +477,20 @@ func (p *typedGraphPublicationCandidate) install(meta CollectionMeta, rootNames 
 		return
 	}
 	p.ownReceipt = false
+	if p.reconciling {
+		p.coord.typedPublicationDebtMu.Lock()
+		defer p.coord.typedPublicationDebtMu.Unlock()
+		if p.coord.typedPublication.Load() != p.before {
+			return
+		}
+		for _, receipt := range p.receipts {
+			if !receipt.consumed {
+				p.coord.typedPublicationPending.subtract(receipt.cost)
+				receipt.consumed = true
+			}
+		}
+		return
+	}
 	p.next.catalog = cloneCatalogWithRootUpdates(p.before.catalog, meta, rootNames, rootIDs)
 	for _, asset := range plan.PreparedAssets {
 		p.next.installedAssetBytes = saturatingAddNonNegativeInt64(p.next.installedAssetBytes, asset.Bytes)

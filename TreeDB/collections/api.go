@@ -416,6 +416,7 @@ type collectionManagerOptions struct {
 }
 
 type Collection struct {
+	typedGraphReconcile         *typedGraphReconcileToken
 	db                          *backenddb.DB
 	manager                     *CollectionManager
 	writeDomain                 *collectionWriteDomain
@@ -3329,10 +3330,14 @@ func flushCollectionWriteDomainWithHeldCommandWALRawPublishLock(db *backenddb.DB
 }
 
 func flushCollectionWriteDomainWithRawPublishState(db *backenddb.DB, domain *collectionWriteDomain, rawPublishLocked bool) error {
+	return flushCollectionWriteDomainWithTypedReconcile(db, domain, rawPublishLocked, nil)
+}
+
+func flushCollectionWriteDomainWithTypedReconcile(db *backenddb.DB, domain *collectionWriteDomain, rawPublishLocked bool, token *typedGraphReconcileToken) error {
 	if db == nil || domain == nil {
 		return nil
 	}
-	collection := &Collection{db: db, writeDomain: domain, commandWALRawPublishLocked: rawPublishLocked}
+	collection := &Collection{db: db, writeDomain: domain, commandWALRawPublishLocked: rawPublishLocked, typedGraphReconcile: token}
 	unlockAdmission := collection.lockVectorIndexSynchronousPublicationAdmission()
 	defer unlockAdmission()
 	unlockMutation := lockCollectionDomainMutation(domain)

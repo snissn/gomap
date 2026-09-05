@@ -354,6 +354,24 @@ document JSON is used to construct this derived state. Public bootstrap,
 bounded physical folding, retirement, and mutable serving remain separate M3
 completion gates.
 
+Explicit internal cold reconciliation can bootstrap a captured base and its
+current typed suffix after normal `Open`, without replay instrumentation. It
+drains pre-existing feature-off buffers before enabling limits. Once enabled,
+failure leaves a nonnil invalid marker; backend recovery-required errors remain
+fenced. Only a synthetic drainer carrying the schema-exclusive caller's token
+may publish acknowledged pending receipts through invalid derived state. Receipt
+coverage checks admitted ID order and immutable value-header ownership, not just
+aggregate counts. A successful drain consumes pending charges once; failed cold
+preparation retains the total charge until authoritative reconciliation succeeds.
+
+Cold setup bounds each manifest's record count and encoded metadata bytes before
+decoding, cumulative suffix asset bytes, physical versions/tombstones/value slots,
+and each decoded payload/header term. These separate term limits are not a summed
+process-heap ceiling. Temporary existing lifecycle leases protect suffix assets
+during decoding; final catalog verification and installation use the storage
+maintenance barrier. Unchanged-frontier reuse avoids suffix decoding. This is
+explicit internal setup, not automatic public reopening or per-query rebuilding.
+
 ## Boundary
 
 Production `TreeDB/collections` imports of `TreeDB/internal/typedcolumn` stay
