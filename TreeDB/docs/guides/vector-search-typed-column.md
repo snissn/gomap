@@ -11,6 +11,16 @@ changes.
 
 ## Recommended layout
 
+Current mutation boundary: the #4617 typed base-plus-suffix search consumer is
+internal and experimental. Public typed batch writes preserve their selected
+durability profile, but they do not automatically make an existing graph ready
+for mutable search. Ordinary stale-base search remains unavailable pending the
+M3 installation/fold lifecycle. The internal consumer reuses an immutable graph
+and cold scalar plan, binds bounded current typed changes, and materializes only
+results from that current pin. Its explicitly labeled exact path covers complete
+eligible sets up to 4,096; larger supported sets use bounded ANN, with exhaustion
+reported as an error. See the [admission and ownership contract](../spec/typed-column-graph-search-admission.md).
+
 | Data | Recommended owner | Why |
 | --- | --- | --- |
 | Embedding/vector payload | `typed_column_part` fixed-dimension `float32_vector` | Contiguous row-major `float32` sections can be viewed directly after validation. |

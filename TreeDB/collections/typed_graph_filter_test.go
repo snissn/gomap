@@ -5,7 +5,40 @@ import (
 	"fmt"
 	"math/bits"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
+
+func TestTypedGraphPreparedFilterDisconnectedSelectedSeeds(t *testing.T) {
+	input := testColumnHNSWSearchPackInput2312()
+	input.EntryOrdinal, input.MaxLayer = 1, 0
+	input.Levels = []uint16{0, 0, 0}
+	input.AdjacencyLayers = []columnHNSWSearchPackLayerInput{{Offsets: []uint64{0, 0, 0, 0}}}
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack, _ := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity)
+	defer pack.Close()
+	selection, err := typedcolumn.NewSparseRowSelectionNoCopy(3, []int{0, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var scratch columnVectorGraphNativeSearchScratch
+	for _, cap := range []int{3, 2, 3} {
+		results, stats, err := pack.searchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: 2, CandidateLimit: cap, CandidateRows: selection, HasCandidateRows: true}, &scratch)
+		if cap == 2 {
+			if !errors.Is(err, errTypedGraphSearchBudget) || len(results) != 0 || stats.Candidates != 2 || stats.FilteredSeedInspections != 1 {
+				t.Fatalf("cap results=%+v stats=%+v err=%v", results, stats, err)
+			}
+			continue
+		}
+		if err != nil || len(results) != 2 || results[0].Ordinal != 0 || results[1].Ordinal != 2 || stats.Candidates != 3 || stats.FilteredSeedInspections != 2 || stats.FilteredIneligibleScores != 1 || stats.Edges != 0 {
+			t.Fatalf("selected seeds results=%+v stats=%+v err=%v", results, stats, err)
+		}
+	}
+}
 
 func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 	_, db, col := openTypedMinimaCollection(t)

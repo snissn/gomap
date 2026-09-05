@@ -72,6 +72,33 @@ Normative boundaries:
 
 ## Common certification rules
 
+### Experimental typed suffix and bound scalar filter (#4617)
+
+The internal mutable consumer borrows two physical pins representing one logical
+current view: immutable graph/schema/base identity must match checked lineage,
+while current typed values, scalar visibility and output come from the current
+pin. New graph builds include a compact sorted physical-row-to-ordinal
+permutation in the existing row-ref asset (`8 * base_rows` payload bytes).
+Filtered suffix preparation requires this mapped inverse and exact row-ref LSN;
+an older base-only reader may omit it. Missing inverse state requires rebuild,
+not a query-time corpus ID map.
+
+A caller-owned cold scalar plan owns encoded string bounds and borrows a compact
+base selection. Each current binding maps only bounded changed IDs, retains
+bounded exclusions and matching suffix ordinals, and computes the complete final
+count. Exact ranking owns at most 4,096 ID-ranked ordinals; ANN overfetch counts
+expanded result IDs before shadow removal. Reusable query scratch is invalidated
+on every error, and output remains buffer/pin-bound. Final materialization uses
+the same current view, never the old accelerator's document state.
+
+This `heap_typed_view` suffix is an explicitly experimental role in the
+[admission table](typed-column-graph-search-admission.md); it does not weaken
+immutable base-role requirements or install a public mutable route. Independent
+workers own their searchers, plans and buffers; concurrent Close/lazy preparation
+of one searcher is not supported. Source rows/bytes/tombstones, bound ownership,
+predicate work, exact enumeration and graph candidate work have separate limits.
+Fold debt and base search-budget exhaustion are different errors.
+
 A current-format searcher may expose a prepared runtime view only after it has
 certified all common conditions below for the immutable snapshot/manifest it is
 bound to:

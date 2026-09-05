@@ -122,7 +122,7 @@ cause of the 5.5x visited-edge mismatch.
 
 | Graph-search role | State key / owner | Canonical format | #2047 tier | Admission status | Prepared runtime shape | Hot-loop boundary | Fallback/fail-closed rule | Counters and tests | Benchmark/admission evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Typed mutation suffix | Existing published typed row/vector parts after the pinned graph base; no new durable state key. | Declared strings, FP32 vectors, and existing typed tombstone rows. | `heap_typed_view` for the bounded suffix only; immutable base requirements remain unchanged. | `experimental`, internal-only under #4617 | Newest-ID typed rows plus retained tombstones, prepared from a checked current suffix while borrowing the old accelerator and current query pins. | Internal unfiltered prepared-pack search, bounded exact suffix scoring, and buffered result merge; no ordinary mutable graph dispatch. | Reject graph/schema/index or base-asset mismatch, future parts, source limits, missing pack, and exhausted candidate budget. No native heap HNSW or indexed retained-JSON extraction. | `TestTypedGraphOverlayExistingBaseMutation`, `TestTypedGraphOverlaySuffixLineageAndBounds`, `TestTypedGraphOverlayRepeatedMutationAndSnapshot`, and `TestTypedGraphOverlaySearchShadowsAndBudget`; separate cumulative source, delta-score, base-work, and residency counters. | Preparation/search allocation, decoded working-set, retained residency, wall-time, candidate-work, and large-filter recall evidence remain required before promotion. No healthy-route performance claim. |
+| Typed mutation suffix | Existing published typed row/vector parts after the pinned graph base; no new durable state key. | Declared strings, FP32 vectors, and existing typed tombstone rows. | `heap_typed_view` for the bounded suffix only; immutable base requirements remain unchanged. | `experimental`, internal-only under #4617 | Newest-ID typed rows plus retained tombstones, prepared from a checked current suffix while borrowing the old accelerator and current query pins. | Internal prepared-pack search and bound scalar filtering, bounded exact suffix scoring, and buffered result merge; no ordinary mutable graph dispatch. | Fail closed on graph/schema/index or base-asset mismatch, future parts, source limits, missing pack, and exhausted candidate budget. MUST NOT use native heap HNSW or indexed retained-JSON extraction. | `TestTypedGraphOverlayExistingBaseMutation`, `TestTypedGraphOverlaySuffixLineageAndBounds`, `TestTypedGraphOverlayRepeatedMutationAndSnapshot`, and `TestTypedGraphOverlaySearchShadowsAndBudget`; separate cumulative source, delta-score, base-work, and residency counters. | Preparation/search allocation, decoded working-set, retained residency, wall-time, candidate-work, and large-filter recall evidence remain required before promotion. No healthy-route performance claim. |
 
 The current snapshot is the sole logical query view. The old snapshot is only
 an immutable graph accelerator, not an alternative scalar/text/document view.
@@ -203,10 +203,27 @@ by scored candidates. Candidate/seed exhaustion returns no partial result and
 preserves performed work counters. Wrong-overlay or closed-pin plans fail.
 
 Final-K materialization uses the same current read view, tested across later
-delete/reinsert. Source string payload and locator chunk payload counters are
-not total heap bounds: map headers and geometric locator scratch are separate
-measured costs. Large dispersed-filter recall and memory/performance
-qualification remain pending; no public filtered route is claimed.
+delete/reinsert and publication. `TestTypedGraphBaseFilterBindingNewIDAndCurrentOutput`
+checks new-ID and conjunctive eligibility against current postings and verifies
+content, metadata, residual output and FP32 bits from the held query pin after a
+later write. `TestTypedGraphBaseFilterIndependentReadersDuringPublication` uses
+independently owned searchers, plans and buffers; it does not promise concurrent
+use or Close of one searcher. `TestTypedGraphBaseFilterBindingDeltaOnlyThreshold`
+distinguishes 4,096 typed-exact suffix results from unavailable delta-only ANN.
+
+`BenchmarkTypedGraphBaseFilterBindingBoundaries` separates cold preparation,
+overlay preparation, bounded binding, warm query and actual new-pin reads. The
+new-pin boundary excludes preceding write/ack and final document materialization;
+its ordered cumulative physical versions are not matched cross-filter samples.
+`TestTypedGraphBaseFilterRepresentativeSuffixResidency` covers empty, 16-row,
+256-row and 128-tombstone suffixes, source-cap failures, genuine base graph work,
+query allocations and separately retained preparation copies. Its signed live
+heap deltas include pool/GC effects and must not be interpreted as negative
+memory use. Source string payload, ordinal capacities and locator chunk payload
+are not total heap bounds. The dispersed 50,000-row engine quality diagnostic
+does not replace final Minima application qualification. Public installation,
+incremental current-pin publication and fold policy remain separate M3 work;
+no public filtered route or concurrent-writer latency qualification is claimed.
 
 New rebuilds also publish optional `row_refs` asset
 `base_row_ref/ordinal_by_physical_row`: an `int64` / `raw_int64` graph-ordinal

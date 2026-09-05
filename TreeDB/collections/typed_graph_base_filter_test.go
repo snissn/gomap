@@ -10,11 +10,14 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestTypedGraphBaseFilterIndependentReadersDuringPublication(t *testing.T) {
 	col, _, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 64)
 	const readers, rounds = 2, 8
+	var roundTrip, activeRead [readers][rounds]time.Duration
+	var writeAck [rounds]time.Duration
 	bases := make([]*VectorIndexSearcher, readers)
 	cold := make([]*typedGraphBaseFilter, readers)
 	for i := range readers {
@@ -46,6 +49,7 @@ func TestTypedGraphBaseFilterIndependentReadersDuringPublication(t *testing.T) {
 			var buffer VectorIndexSearchBuffer
 			for round := range rounds {
 				err := func() error {
+					started := time.Now()
 					current, err := col.OpenCollectionReadView()
 					if err != nil {
 						return err
@@ -71,11 +75,13 @@ func TestTypedGraphBaseFilterIndependentReadersDuringPublication(t *testing.T) {
 						return err
 					}
 					ready <- struct{}{}
+					firstRead := time.Since(started)
 					select {
 					case <-published[round]:
 					case <-ctx.Done():
 						return ctx.Err()
 					}
+					resumed := time.Now()
 					after, err := current.FetchDocumentsForVectorIndexSearchResults(results[:1], DocumentFetchOptions{})
 					if err != nil {
 						return err
@@ -83,6 +89,8 @@ func TestTypedGraphBaseFilterIndependentReadersDuringPublication(t *testing.T) {
 					if len(before.Results) != 1 || len(after.Results) != 1 || !before.Results[0].Found || !after.Results[0].Found || !bytes.Equal(before.Results[0].Document, after.Results[0].Document) {
 						return fmt.Errorf("worker %d round %d pin changed across publication", worker, round)
 					}
+					activeRead[worker][round] = firstRead + time.Since(resumed)
+					roundTrip[worker][round] = time.Since(started)
 					return nil
 				}()
 				if err != nil {
@@ -102,9 +110,11 @@ func TestTypedGraphBaseFilterIndependentReadersDuringPublication(t *testing.T) {
 			}
 		}
 		row := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: []string{fmt.Sprintf("published-%d", round)}}, {Name: "user", Strings: columns[2].Strings[:1]}, {Name: "path", Strings: columns[3].Strings[:1]}}
+		started := time.Now()
 		if _, err := col.ReplaceTypedBatch(ids[:1], retained[:1], row); err != nil {
 			t.Fatal(err)
 		}
+		writeAck[round] = time.Since(started)
 		close(published[round])
 	}
 	wg.Wait()
@@ -112,6 +122,17 @@ func TestTypedGraphBaseFilterIndependentReadersDuringPublication(t *testing.T) {
 	case err := <-failures:
 		t.Fatal(err)
 	default:
+	}
+	// Small forced-interleaving samples, not stable production tail estimates.
+	// Round trip includes barrier scheduling and the writer's complete ack;
+	// active reads exclude that wait. Both exclude current-pin Close.
+	for _, sample := range []struct {
+		name   string
+		values []time.Duration
+	}{{"pin_through_postpublication_fetch", append(slices.Clone(roundTrip[0][:]), roundTrip[1][:]...)}, {"active_read_segments", append(slices.Clone(activeRead[0][:]), activeRead[1][:]...)}, {"writer_replace_ack", slices.Clone(writeAck[:])}} {
+		slices.Sort(sample.values)
+		percentile := func(p int) time.Duration { return sample.values[(len(sample.values)*p+99)/100-1] }
+		t.Logf("%s samples=%d p50=%s p95=%s p99=%s sorted_durations=%v", sample.name, len(sample.values), percentile(50), percentile(95), percentile(99), sample.values)
 	}
 }
 

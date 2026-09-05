@@ -56,6 +56,25 @@ summarizes the promoted `scalar_u8` and `rabitq_1bit` prepared fast paths in
 
 ## Quickstart
 
+### Mutable typed state: current internal boundary (#4617)
+
+The experimental collection-internal consumer combines one immutable prepared
+base with a checked, bounded suffix of authoritative typed rows and tombstones.
+The current read pin owns scalar eligibility and final document materialization;
+the older graph is only an accelerator. Replacements shadow old vectors and
+deletes remain visible as exclusions. It does not select `native_runtime`, add
+a durable log, or extract indexed values from retained JSON.
+
+This is not installed by ordinary mutable `column_graph` search. Existing typed
+writes retain their selected durability profile, but a stale graph search remains
+unavailable until the M3 lifecycle installs a coherent consumer/fold. Do not
+infer public mutable search readiness from the base-only quickstart below.
+Complete eligible sets of at most 4,096 use explicitly labeled typed exact
+scoring; larger supported sets require genuine bounded graph work. Resource
+exhaustion returns an error rather than partial success. See the
+[admission contract](typed-column-graph-search-admission.md) for pin ownership,
+base-filter reuse, bounded shadow overfetch and qualification boundaries.
+
 Declare a collection with JSON documents, physical column storage for the vector
 field, and an explicit `column_graph` vector index:
 
