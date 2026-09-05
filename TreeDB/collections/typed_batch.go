@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"strings"
@@ -200,7 +201,7 @@ func (v *CollectionReadView) typedReplacementValuesEqual(id []byte, wanted []col
 				return false, nil
 			}
 		case ColumnStoreValueFloat32Vector:
-			if !slices.Equal(value.Float32Vector, wanted[i].Float32Vector) {
+			if !slices.EqualFunc(value.Float32Vector, wanted[i].Float32Vector, func(a, b float32) bool { return math.Float32bits(a) == math.Float32bits(b) }) {
 				return false, nil
 			}
 		default:
@@ -212,7 +213,8 @@ func (v *CollectionReadView) typedReplacementValuesEqual(id []byte, wanted []col
 
 // ReplaceTypedBatch replaces existing IDs using the same typed contract as
 // InsertTypedBatchWithStats. Missing IDs are unmatched; equal retained bytes and
-// typed values are unmodified. Unique checks and all replacements are atomic.
+// typed values (FP32 vectors compared bitwise) are unmodified. Unique checks and
+// all replacements are atomic.
 // A commit-ambiguous error can mean the durable mutation was accepted.
 func (c *Collection) ReplaceTypedBatch(ids, retained [][]byte, columns []TypedColumnBatch) ([]UpdateBatchResult, error) {
 	if c == nil || c.db == nil {

@@ -1,7 +1,9 @@
 package collections
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"os/exec"
@@ -611,6 +613,61 @@ func TestTypedMinimaReplacementReplayAndNoop(t *testing.T) {
 				t.Fatalf("query %s: %+v %v", query, found, err)
 			}
 		}
+	}
+}
+
+func TestTypedMinimaReplacementSignedZero(t *testing.T) {
+	for _, initialBits := range []uint32{0, 0x80000000} {
+		t.Run(fmt.Sprintf("initial=%08x", initialBits), func(t *testing.T) {
+			dir, d, col := openTypedMinimaCollection(t)
+			defer d.Close()
+			if err := d.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			replayDir := t.TempDir()
+			copyColumnStoreCommandWALReplayBenchmarkDirM10C(t, dir, replayDir)
+			ids, retained := [][]byte{[]byte("a")}, [][]byte{[]byte(`{"id":"a"}`)}
+			columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{1, math.Float32frombits(initialBits), 0, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"alpha"}}, {Name: "user", Strings: []string{"u1"}}, {Name: "path", Strings: []string{"file1"}}}
+			if _, _, err := col.InsertTypedBatchWithStats(ids, retained, columns); err != nil {
+				t.Fatal(err)
+			}
+			wantBits := initialBits ^ 0x80000000
+			columns[0].Float32Vectors[0][1] = math.Float32frombits(wantBits)
+			results, err := col.ReplaceTypedBatch(ids, retained, columns)
+			if err != nil || len(results) != 1 || !results[0].Matched || !results[0].Modified {
+				t.Fatalf("signed-zero replacement=%+v err=%v", results, err)
+			}
+			results, err = col.ReplaceTypedBatch(ids, retained, columns)
+			if err != nil || len(results) != 1 || !results[0].Matched || results[0].Modified {
+				t.Fatalf("identical-bit replacement=%+v err=%v", results, err)
+			}
+			for _, frame := range collectionCommandWALFrames(t, dir) {
+				if frame.LSN > 1 {
+					writeCollectionCommandWALFrame(t, replayDir, frame.LSN, frame.Kind, frame.PayloadFormat, frame.Payload)
+				}
+			}
+			reopened := openTypedMinimaDB(t, replayDir)
+			defer reopened.Close()
+			replayed, err := NewCollectionManager(reopened).OpenCollection("minima")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, c := range []*Collection{col, replayed} {
+				got, err := c.Get(ids[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				var document struct {
+					Embedding []float32 `json:"embedding"`
+				}
+				if err := json.Unmarshal(got, &document); err != nil {
+					t.Fatal(err)
+				}
+				if len(document.Embedding) != 8 || math.Float32bits(document.Embedding[1]) != wantBits {
+					t.Fatalf("readback lost signed zero: %s, want bits %08x", got, wantBits)
+				}
+			}
+		})
 	}
 }
 

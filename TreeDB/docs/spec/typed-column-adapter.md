@@ -248,8 +248,9 @@ read lock and takes ownership of accepted input bytes before returning. There
 is no reusable caller-prepared handle whose lifetime can outlast schema changes.
 Callers must not mutate input concurrently with admission. Replacement is a
 complete row replacement for matched IDs; missing IDs are not inserted, and
-unchanged rows report no modification. Use the existing explicit-ID delete APIs
-to remove rows.
+unchanged rows report no modification. Unchanged means identical retained bytes,
+string values, and FP32 vector bits; changing only a vector element's sign of
+zero is a modification. Use the existing explicit-ID delete APIs to remove rows.
 
 Keep reconstruction at explicit output boundaries, including a document-returning
 read or a caller's document update callback. A callback is executed once at
