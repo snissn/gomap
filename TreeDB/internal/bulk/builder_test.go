@@ -75,6 +75,25 @@ func TestBuildWithOptionsRejectsUnfittableEntryWithoutPromotion(t *testing.T) {
 	}
 }
 
+func TestBuildRejectsUnfittableParentSeparator(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	// A zero-value leaf entry has a nine-byte header; the internal child
+	// header needs ten. This key fits a leaf but not its parent separator.
+	key := bytes.Repeat([]byte("a"), page.PageSize-node.NodeHeaderSize-node.DirectoryEntrySize-9)
+	next := bytes.Clone(key)
+	next[len(next)-1] = 'b'
+	alloc := &cappedAllocator{Allocator: &MockAllocator{p: p}, remaining: 16}
+	it := &mockKVIterator{keys: [][]byte{key, next}, values: [][]byte{nil, nil}}
+	root, err := Build(it, alloc, p)
+	if root != 0 || !errors.Is(err, node.ErrNodeFull) || alloc.remaining != 14 {
+		t.Fatalf("root=%d err=%v allocations=%d; want node-full at first parent", root, err, 16-alloc.remaining)
+	}
+}
+
 // MockIterator
 type MockIterator struct {
 	keys [][]byte
