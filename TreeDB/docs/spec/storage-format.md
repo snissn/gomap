@@ -3000,8 +3000,12 @@ Schema changes remove the control and aliases with real tombstones. Exact
 publication obligations and maintenance reachability include the captured
 manifest closure; unchanged-base append certification remains available.
 Descriptor removal does not itself retire every page of an independent captured
-tree. Schema/drop native-page reclamation is a remaining M3 pre-activation gate;
-external typed-asset GC is not native index-page reclamation.
+tree. The supported command-WAL profile rejects scalar/text schema changes and
+unlogged vector create/drop publication before capture cleanup. Reopening with
+WAL disabled does not bypass the persisted command-WAL requirement. Future
+schema/drop support must atomically reclaim the independent native roots;
+external typed-asset GC is not native index-page reclamation. Mutation and
+recapture retirement requirements are unchanged.
 
 This capture is not mutable graph serving or an off-lock fold. Name-only rebuild
 replay reconstructs a logically equivalent typed base. Process-crash tests hold
