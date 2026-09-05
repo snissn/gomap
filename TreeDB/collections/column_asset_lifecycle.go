@@ -150,6 +150,14 @@ func (p *ColumnAssetLifecyclePinSet) Close() error {
 // by lifecycle reports and GC/rewrite. It does not itself serialize snapshot
 // capture with destructive maintenance; owner admission must provide that gate.
 func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecyclePinSetOptions) (*ColumnAssetLifecyclePinSet, error) {
+	opts.Refs = append([]ColumnAssetRef(nil), opts.Refs...)
+	return c.acquireColumnAssetLifecyclePinSetOwned(opts)
+}
+
+// acquireColumnAssetLifecyclePinSetOwned takes a fresh caller-owned refs slice.
+// After transfer it is immutable and shared by the registry and returned lease;
+// the caller must neither retain nor mutate it. Public admission clones first.
+func (c *Collection) acquireColumnAssetLifecyclePinSetOwned(opts ColumnAssetLifecyclePinSetOptions) (*ColumnAssetLifecyclePinSet, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -162,7 +170,7 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 	if opts.Owner == "" {
 		return nil, errors.New("collections: column asset lifecycle pin set owner is required")
 	}
-	refs := append([]ColumnAssetRef(nil), opts.Refs...)
+	refs := opts.Refs
 	// One immutable owned slice is shared by the lease and registry. Caller
 	// input, Refs(), and report snapshots remain defensive-copy boundaries.
 	collectionNamespace := columnAssetLifecycleNamespace(c)

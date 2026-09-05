@@ -2987,7 +2987,12 @@ owner lease protects that closure. Public graph searcher acquisition now takes
 the existing DB-root storage barrier from snapshot capture through validated
 mapping and whole-manifest lease registration. The lease includes lazily fetched
 document fields and lasts through searcher Close; no query-time manifest scan is
-added. Shared quantized workers borrow their searcher's lease. The exact buffered
+added. Registration reuses the validated selected graph/TVIS objects and ordinary
+asset-reference decoders, not durable-publication obligation normalization. The
+fresh reference slice transfers to the immutable lease/registry; public pin
+inputs and ref-report outputs remain defensive copies. Other index refs are
+retained too, preserving the whole-manifest ownership boundary.
+Shared quantized workers borrow their searcher's lease. The exact buffered
 pack-only owner has no retained snapshot or lazy document consumer and retains
 its mapped physical pack handle instead. Low-level partition readers do not
 reacquire the non-reentrant barrier.

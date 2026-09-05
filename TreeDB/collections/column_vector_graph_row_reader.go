@@ -494,7 +494,7 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtCatalogWith
 		AssetNamespace:     graphCfg.AssetManager.Namespace,
 	}
 	if owner != nil {
-		*owner, err = c.acquireTypedGraphOwnerPin(records, cfg.ActiveManifest.Generation, cfg.AssetManager.Namespace)
+		*owner, err = c.acquireTypedGraphOwnerPin(records, cfg.ActiveManifest.Generation, cfg.AssetManager.Namespace, graph, vectorState)
 		if err != nil {
 			return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
 		}

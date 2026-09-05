@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -145,6 +146,52 @@ func TestTypedGraphOwnerLeaseLifetime(t *testing.T) {
 			if len(refs) != len(requirements.Obligations) {
 				t.Fatalf("owner closure refs=%d want=%d", len(refs), len(requirements.Obligations))
 			}
+			for _, o := range requirements.Obligations {
+				want := ColumnAssetRef{Kind: ColumnAssetKind(o.Kind), Namespace: o.Namespace, Generation: o.Generation, PartID: o.PartID, FileID: uint32(o.FileID), Offset: o.Offset, Length: o.Length, Checksum: o.Checksum}
+				if !slices.Contains(refs, want) {
+					t.Fatalf("owner missing authoritative ref %+v", want)
+				}
+			}
+			if !closeDB {
+				records, err := loadColumnManifestRecordsFromRoot(s.snapshot, s.catalog.rootID(collectionColumnManifestRootName(col.Name())))
+				if err != nil {
+					t.Fatal(err)
+				}
+				stateRecord, ok := findColumnVectorIndexStateRecord(records, s.indexName)
+				if !ok {
+					t.Fatal("missing fixture TVIS")
+				}
+				state, err := decodeColumnVectorIndexStateRecord(stateRecord.value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				otherState := state
+				otherState.IndexName = "other"
+				otherState.Assets = slices.Clone(state.Assets)
+				for i := range otherState.Assets {
+					otherState.Assets[i].Ref.FileID += 1000
+				}
+				otherRaw, err := encodeColumnVectorIndexStateRecord(otherState)
+				if err != nil {
+					t.Fatal(err)
+				}
+				otherGraph := s.reader.graph
+				otherGraph.IndexName = "other"
+				otherGraphRaw, err := encodeColumnVectorGraphManifestRecord(otherGraph)
+				if err != nil {
+					t.Fatal(err)
+				}
+				records = append(records, columnManifestRecord{key: columnVectorIndexStateRecordKey("other"), value: otherRaw}, columnManifestRecord{key: columnVectorGraphManifestRecordKey("other"), value: otherGraphRaw})
+				whole, err := typedGraphOwnerRefs(records, state.BaseManifestGeneration, refs[0].Namespace, s.reader.graph, state)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, asset := range otherState.Assets {
+					if !slices.Contains(whole, asset.Ref) {
+						t.Fatalf("owner omitted other index ref %+v", asset.Ref)
+					}
+				}
+			}
 			owned := refs[0]
 			probe, err := col.AcquireColumnAssetLifecyclePinSet(ColumnAssetLifecyclePinSetOptions{Source: ColumnAssetLifecyclePinSourcePreparedQuery, Owner: "copy-isolation", Refs: refs[:1]})
 			if err != nil {
@@ -201,6 +248,54 @@ func TestTypedGraphOwnerLeaseLifetime(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestTypedGraphOwnerRefsSidecars(t *testing.T) {
+	var records []columnManifestRecord
+	var want []ColumnAssetRef
+	for i, kind := range []ColumnAssetKind{ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1TypedColumnPart, ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1DictionaryCodes, ColumnAssetKindTCS1Int64Values} {
+		ref := ColumnAssetRef{Kind: kind, Namespace: "owner", Generation: 1, PartID: 1, FileID: 1, Offset: int64(i * 64), Length: 64, Checksum: uint32(i + 1)}
+		key, reason := columnManifestPartRecordKey(1, 1), "insert"
+		switch kind {
+		case ColumnAssetKindTCS1AggregateMetadata:
+			key, reason = columnManifestAggregateMetadataRecordKey(1, 1, "stats"), "stats"
+		case ColumnAssetKindTCS1DictionaryCodes:
+			key, reason = columnManifestDictionaryCodesRecordKey(1, 1, "user"), "user"
+		case ColumnAssetKindTCS1Int64Values:
+			key, reason = columnManifestInt64ValuesRecordKey(1, 1, "number"), "number"
+		case ColumnAssetKindTCS1TypedColumnPart:
+			ref.PartID = 2
+			key = columnManifestPartRecordKey(1, 2)
+		}
+		value, err := encodeColumnManifestPartRecord(ColumnPreparedAsset{Ref: ref, Rows: 1, Bytes: ref.Length, Reason: reason})
+		if err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, columnManifestRecord{key: key, value: value})
+		want = append(want, ref)
+	}
+	refs, err := typedGraphOwnerRefs(records, 1, "owner", columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.SortFunc(want, compareColumnAssetRefs)
+	if !slices.Equal(refs, want) {
+		t.Fatalf("whole ordinary/sidecar closure=%+v want=%+v", refs, want)
+	}
+	if _, err := typedGraphOwnerRefs(records, 0, "owner", columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}); err == nil {
+		t.Fatal("accepted future ordinary refs")
+	}
+	if _, err := typedGraphOwnerRefs(records, 1, "foreign", columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}); err == nil {
+		t.Fatal("accepted foreign namespace refs")
+	}
+	// The borrowed field decoder returns canonical/owned identity strings, not
+	// bytes backed by record storage. Releasing that setup storage is safe.
+	for _, record := range records {
+		clear(record.value)
+	}
+	if !slices.Equal(refs, want) {
+		t.Fatal("owner refs borrowed record byte storage")
 	}
 }
 
