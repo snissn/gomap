@@ -13,6 +13,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 // ColumnAssetReachabilityOptions controls protect-only reachability planning.
@@ -521,6 +522,9 @@ func columnAssetReachabilityMappedResourcePins(rootDir, namespace string) ([]Col
 		}
 		ref, ok := columnAssetRefForMappedResourceKey(pin.Key)
 		if !ok {
+			ref, ok = columnAssetRefForEmptyAdjacencyPin(pin, pins)
+		}
+		if !ok {
 			stats.UnconvertiblePins++
 			continue
 		}
@@ -532,6 +536,38 @@ func columnAssetReachabilityMappedResourcePins(rootDir, namespace string) ([]Col
 		stats.PinnedRefs++
 	}
 	return refs, stats
+}
+
+// A certified empty CSR values section owns no bytes. Its positive offsets
+// handle still protects the physical segment. Return that actual extent, never
+// fabricate a positive extent for the empty section or ignore arbitrary pins.
+func columnAssetRefForEmptyAdjacencyPin(pin mappedresource.Pin, pins []mappedresource.Pin) (ColumnAssetRef, bool) {
+	k := pin.Key
+	if k.Validate() != nil || k.Class != mappedresource.ClassTypedColumnAsset || k.Kind != string(ColumnAssetKindTCS1TypedColumnPart) ||
+		k.Length != 0 || k.Checksum != 0 || pin.Bytes != 0 ||
+		(pin.Source != mappedresource.SourceMapped && pin.Source != mappedresource.SourceHeapCopy) ||
+		k.Encoding != typedcolumn.EncodingRawUint32OffsetsList.String() || k.Section.Kind != string(typedcolumn.ColumnPartImageSectionColumnValues) ||
+		k.Section.Name != "values" || k.Section.Category != string(typedcolumn.ColumnPartImageCategoryDeclaredColumnValues) || k.Section.Column != "adjacency" ||
+		pin.Scope.ID != columnVectorGraphAdjacencyStateSourceScopeID || pin.Root == "" || pin.Path == "" {
+		return ColumnAssetRef{}, false
+	}
+	// ponytail: cold O(empty sections * active pins); no second pin index.
+	for _, parent := range pins {
+		p := parent.Key
+		if parent.Root != pin.Root || parent.Path != pin.Path || parent.Scope != pin.Scope ||
+			(parent.Source != mappedresource.SourceMapped && parent.Source != mappedresource.SourceHeapCopy) || parent.Bytes != p.Length ||
+			p.Class != k.Class || p.Namespace != k.Namespace || p.Kind != k.Kind || p.Generation != k.Generation ||
+			p.PartID != k.PartID || p.FileID != k.FileID || p.Version != k.Version || p.Encoding != k.Encoding ||
+			p.Section.Kind != string(typedcolumn.ColumnPartImageSectionColumnOffsets) || p.Section.Name != "offsets" || p.Section.Category != string(typedcolumn.ColumnPartImageCategoryDeclaredColumnOffsets) ||
+			p.Section.Column != k.Section.Column || p.Section.Ordinal != k.Section.Ordinal ||
+			p.Length < 8 || p.Length%8 != 0 || p.Validate() != nil || p.Offset+p.Length > k.Offset {
+			continue
+		}
+		if ref, ok := columnAssetRefForMappedResourceKey(p); ok {
+			return ref, true
+		}
+	}
+	return ColumnAssetRef{}, false
 }
 
 func columnAssetMappedResourcePinMatchesNamespace(pin mappedresource.Pin, namespace string) bool {

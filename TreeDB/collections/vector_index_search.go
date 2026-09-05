@@ -955,6 +955,7 @@ type VectorIndexSearcher struct {
 	catalog      *collectionCatalog
 	reader       *columnVectorGraphPhysicalRowReader
 	documentView *CollectionReadView
+	lifecyclePin *ColumnAssetLifecyclePinSet
 	scratch      columnVectorGraphNativeSearchScratch
 	readerLast   columnPhysicalRowReaderStats
 	routeStats   vectorIndexSearchRouteStats
@@ -2050,14 +2051,30 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 	if err := c.flushBufferedWrites(); err != nil {
 		return nil, response, err
 	}
+	var searcher *VectorIndexSearcher
+	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		var err error
+		searcher, response, err = c.openVectorIndexSearcherUnderStorageBarrier(opts)
+		return err
+	})
+	return searcher, response, err
+}
+
+// The root barrier is non-reentrant. Only this public owner boundary takes it;
+// low-level readers also serve partition operations already holding the gate.
+func (c *Collection) openVectorIndexSearcherUnderStorageBarrier(opts VectorIndexSearcherOptions) (*VectorIndexSearcher, VectorIndexSearchResponse, error) {
+	var response VectorIndexSearchResponse
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, response, backenddb.ErrClosed
 	}
+	runTypedGraphOwnerAfterSnapshotHook(c)
 	closeOnErr := true
+	var lifecyclePin *ColumnAssetLifecyclePinSet
 	defer func() {
 		if closeOnErr {
 			_ = snap.Close()
+			_ = lifecyclePin.Close()
 		}
 	}()
 	catalog, err := c.catalogForSnapshot(snap)
@@ -2103,6 +2120,7 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 	}
 	reader, err := c.openColumnVectorGraphPhysicalRowReaderAtSnapshot(def.Name, snap, columnVectorGraphPhysicalRowReaderOptions{
 		MaxDecodedBlocks: opts.MaxDecodedBlocks,
+		ownerPin:         &lifecyclePin,
 	})
 	if err != nil {
 		status, statusErr := c.columnGraphVectorIndexStatusAtSnapshot(def.Name, snap)
@@ -2127,16 +2145,17 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 	}
 	response.Path = VectorIndexSearchPathColumnGraphNativeReader
 	searcher := &VectorIndexSearcher{
-		collection: c,
-		indexName:  response.IndexName,
-		strategy:   response.Strategy,
-		path:       response.Path,
-		status:     response.Status,
-		snapshot:   snap,
-		catalog:    readerCatalog,
-		reader:     reader,
-		readerLast: reader.Stats(),
-		routeStats: vectorIndexSearchRouteStatsForColumnGraphReader(reader),
+		collection:   c,
+		indexName:    response.IndexName,
+		strategy:     response.Strategy,
+		path:         response.Path,
+		status:       response.Status,
+		snapshot:     snap,
+		catalog:      readerCatalog,
+		reader:       reader,
+		lifecyclePin: lifecyclePin,
+		readerLast:   reader.Stats(),
+		routeStats:   vectorIndexSearchRouteStatsForColumnGraphReader(reader),
 	}
 	snap.DetachForegroundRead()
 	closeOnErr = false
@@ -2619,12 +2638,17 @@ func multiplyVectorIndexSearchByteTotal(n, count, limit int, label string) (int,
 	return n * count, nil
 }
 
-// Close releases the searcher's bound physical reader and snapshot.
+// Close releases the searcher's document view, physical reader, snapshot, and
+// whole typed-asset closure lease. It is idempotent, not concurrency-safe.
 func (s *VectorIndexSearcher) Close() error {
 	if s == nil || s.closed {
 		return nil
 	}
 	s.closed = true
+	defer func() {
+		_ = s.lifecyclePin.Close()
+		s.lifecyclePin = nil
+	}()
 	var closeErr error
 	if s.documentView != nil {
 		if err := s.documentView.Close(); err != nil {

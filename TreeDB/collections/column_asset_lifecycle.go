@@ -44,8 +44,8 @@ const (
 )
 
 // ColumnAssetLifecyclePinSetOptions describes an explicit process-local pin set
-// lease. It is intentionally in-memory/report-only in slice 1; callers must not
-// assume this changes destructive maintenance behavior yet.
+// lease. Prepared-query and pinned-snapshot sources are consumed by typed asset
+// GC/rewrite reachability; callers must acquire them before assets can retire.
 type ColumnAssetLifecyclePinSetOptions struct {
 	Source ColumnAssetLifecyclePinSource `json:"source"`
 	Owner  string                        `json:"owner"`
@@ -54,7 +54,7 @@ type ColumnAssetLifecyclePinSetOptions struct {
 }
 
 // ColumnAssetLifecyclePinSet is a process-local lease over a caller-supplied set
-// of column asset refs. Close releases the lease from lifecycle reports.
+// of column asset refs. Close releases report visibility and GC/rewrite protection.
 type ColumnAssetLifecyclePinSet struct {
 	mu     sync.Mutex
 	id     uint64
@@ -146,8 +146,9 @@ func (p *ColumnAssetLifecyclePinSet) Close() error {
 	return nil
 }
 
-// AcquireColumnAssetLifecyclePinSet registers a report-visible process-local pin
-// set. Slice 1 deliberately does not make GC/rewrite consume this registry.
+// AcquireColumnAssetLifecyclePinSet registers a process-local pin set consumed
+// by lifecycle reports and GC/rewrite. It does not itself serialize snapshot
+// capture with destructive maintenance; owner admission must provide that gate.
 func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecyclePinSetOptions) (*ColumnAssetLifecyclePinSet, error) {
 	if c == nil {
 		return nil, errCollectionNil
@@ -162,6 +163,8 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 		return nil, errors.New("collections: column asset lifecycle pin set owner is required")
 	}
 	refs := append([]ColumnAssetRef(nil), opts.Refs...)
+	// One immutable owned slice is shared by the lease and registry. Caller
+	// input, Refs(), and report snapshots remain defensive-copy boundaries.
 	collectionNamespace := columnAssetLifecycleNamespace(c)
 	if collectionNamespace == "" {
 		return nil, errors.New("collections: column asset lifecycle pin set requires collection asset namespace")
@@ -184,7 +187,7 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 		Source:     opts.Source,
 		Owner:      opts.Owner,
 		Reason:     opts.Reason,
-		Refs:       append([]ColumnAssetRef(nil), refs...),
+		Refs:       refs,
 		Bytes:      bytes,
 	}
 	id, err := columnAssetLifecycleRegisterProcessPin(c.db, record)
@@ -196,7 +199,7 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 		source: opts.Source,
 		owner:  opts.Owner,
 		reason: opts.Reason,
-		refs:   append([]ColumnAssetRef(nil), refs...),
+		refs:   refs,
 	}, nil
 }
 
@@ -243,7 +246,6 @@ func columnAssetLifecycleRegisterProcessPin(db *backenddb.DB, record columnAsset
 func columnAssetLifecycleStoreProcessPinLocked(record columnAssetLifecyclePinSetRecord) uint64 {
 	columnAssetLifecycleProcessPins.nextID++
 	record.ID = columnAssetLifecycleProcessPins.nextID
-	record.Refs = append([]ColumnAssetRef(nil), record.Refs...)
 	if columnAssetLifecycleProcessPins.pins == nil {
 		columnAssetLifecycleProcessPins.pins = make(map[uint64]columnAssetLifecyclePinSetRecord)
 	}

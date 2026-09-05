@@ -294,10 +294,26 @@ func (c *Collection) openCollectionVectorIndexPreparedSearch(opts VectorIndexSea
 	if err != nil {
 		return nil, VectorIndexSearchResponse{}, err
 	}
-	if queryMode.quantized() {
-		return c.openCollectionVectorIndexPreparedQuantizedSearch(opts, queryMode)
+	if c == nil {
+		return nil, VectorIndexSearchResponse{}, errCollectionNil
 	}
-	return c.openCollectionVectorIndexPreparedExactSearch(opts)
+	if c.db == nil {
+		return nil, VectorIndexSearchResponse{}, errCollectionDBNil
+	}
+	var prepared *collectionVectorIndexPreparedSearch
+	var response VectorIndexSearchResponse
+	err = WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		var err error
+		if queryMode.quantized() {
+			prepared, response, err = c.openCollectionVectorIndexPreparedQuantizedSearch(opts, queryMode)
+		} else {
+			// This cache has no snapshot/lazy document consumer: its mapped pack
+			// supplies physical lifetime protection after this acquisition gate.
+			prepared, response, err = c.openCollectionVectorIndexPreparedExactSearch(opts)
+		}
+		return err
+	})
+	return prepared, response, err
 }
 
 func (c *Collection) openCollectionVectorIndexPreparedExactSearch(opts VectorIndexSearchOptions) (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, error) {
@@ -425,9 +441,11 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		return nil, response, backenddb.ErrClosed
 	}
 	closeSnapOnErr := true
+	var lifecyclePin *ColumnAssetLifecyclePinSet
 	defer func() {
 		if closeSnapOnErr {
 			_ = snap.Close()
+			_ = lifecyclePin.Close()
 		}
 	}()
 
@@ -458,7 +476,7 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer quantized mode requires cosine column_graph state; got metric %q", ErrVectorIndexSearchUnavailable, def.Name, def.Metric)
 	}
 
-	def, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(def.Name, snap)
+	def, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshotWithOwner(def.Name, snap, &lifecyclePin)
 	if err != nil {
 		status, statusErr := c.columnGraphVectorIndexStatusAtSnapshot(def.Name, snap)
 		if statusErr != nil {
@@ -524,14 +542,15 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 	key = collectionVectorIndexPreparedSearchSnapshotCacheKey(key, snapshotCommitSeq(snap), snapshotSystemRoot(snap))
 	sharedQuantizedAssets := promoteCollectionVectorIndexPreparedScalarU8QuantizedAssets(reader)
 	searcher := &VectorIndexSearcher{
-		collection: c,
-		indexName:  response.IndexName,
-		strategy:   response.Strategy,
-		path:       response.Path,
-		status:     response.Status,
-		snapshot:   snap,
-		catalog:    reader.catalog,
-		routeStats: routeStats,
+		collection:   c,
+		indexName:    response.IndexName,
+		strategy:     response.Strategy,
+		path:         response.Path,
+		status:       response.Status,
+		snapshot:     snap,
+		lifecyclePin: lifecyclePin,
+		catalog:      reader.catalog,
+		routeStats:   routeStats,
 	}
 	snap.DetachForegroundRead()
 	closeSnapOnErr = false

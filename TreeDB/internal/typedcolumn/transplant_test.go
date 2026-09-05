@@ -655,6 +655,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// consumers do not own publication or introduce a new durable data plane.
 		filepath.Clean(filepath.Join(collectionsDir, "typed_graph_filter.go")):        {},
 		filepath.Clean(filepath.Join(collectionsDir, "typed_graph_filtered_pack.go")): {},
+		// #4618 classifies an empty adjacency section against its positive
+		// offsets companion using existing codec constants; no publication.
+		filepath.Clean(filepath.Join(collectionsDir, "column_asset_reachability.go")): {},
 		// #1949 is the scoped production typed-column SortKey mark-pruning planner
 		// that consumes validated section marks without publishing a new data plane.
 		filepath.Clean(filepath.Join(collectionsDir, "column_physical_sortkey_pruning.go")): {},

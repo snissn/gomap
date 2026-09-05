@@ -2983,5 +2983,17 @@ replay reconstructs a logically equivalent typed base. Process-crash tests hold
 the publication seal until acknowledged rebuild returns, then use normal Open;
 they do not simulate physical power loss. A raw snapshot alone does not retain
 unopened typed assets after their recoverable roots retire. An explicit graph
-owner lease protects that closure; safe public snapshot-to-owner acquisition is
-a separate lifecycle obligation.
+owner lease protects that closure. Public graph searcher acquisition now takes
+the existing DB-root storage barrier from snapshot capture through validated
+mapping and whole-manifest lease registration. The lease includes lazily fetched
+document fields and lasts through searcher Close; no query-time manifest scan is
+added. Shared quantized workers borrow their searcher's lease. The exact buffered
+pack-only owner has no retained snapshot or lazy document consumer and retains
+its mapped physical pack handle instead. Low-level partition readers do not
+reacquire the non-reentrant barrier.
+
+A zero-byte CSR adjacency values section has no positive physical extent. Typed
+asset reachability resolves that specific pin only to an existing, validated,
+positive offsets-section pin with matching physical identity and scope; it never
+fabricates an extent or ignores an unknown/malformed pin. This rare cold path
+scans active pins for the companion and does not add a second registry.
