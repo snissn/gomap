@@ -40,15 +40,8 @@ TreeDB.
 - Crash recovery tiers: `TreeDB/recovery_spec_test.go`
 - Leaf key compression density: `TreeDB/node/leaf_density_test.go` (`BenchmarkLeafPageDensity`)
 
-## Benchmark + Profiling Tooling Contract
+## Benchmark and profiling guidance
 
-- Prefer `-profile-dir` captures with `unified-bench`; analyze with `benchprof`.
-- Expect these profile artifacts under the profile dir:
-  - `cpu_<test>_<db>.pprof`
-  - `allocs_<test>_<db>.pprof`
-  - `checkpoint_cpu_checkpoint_<test>_<db>.pprof`
-  - `block.pprof`, `mutex.pprof`, `trace.out`
-- If TreeDB benchmark tests or profiling outputs change, update:
-  - `cmd/unified_bench/main.go` + `cmd/unified_bench/profile_artifact_dir_test.go`
-  - `cmd/benchprof/main.go` + `cmd/benchprof/main_test.go`
-  - `cmd/unified_bench/README.md` + `cmd/benchprof/README.md`
+Use the shared [profiling workflow](../CONTRIBUTING.md#benchmark-profiling-workflow)
+for capture commands, artifact/parser contracts and collection insert profiling.
+Keep producer, analyzer, tests and tool READMEs in sync when that contract changes.

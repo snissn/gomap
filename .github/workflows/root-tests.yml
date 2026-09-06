@@ -82,3 +82,27 @@ jobs:
             GOMEMLIMIT=4GiB GOMAXPROCS=2 xargs go test -p 1 < "$package_file"
           fi
           rm -f "$package_file"
+
+  nativewire-feature:
+    name: native-wire feature (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOMEMLIMIT: 4GiB
+      GOMAXPROCS: "2"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Makefile workflow contract
+        run: make workflow-check
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Native-wire feature check
+        run: make check-nativewire
