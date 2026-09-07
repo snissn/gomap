@@ -24,6 +24,7 @@ func TestCollectionReadViewFreshViewsReuseRowIndex(t *testing.T) {
 			}
 			before := workstats.Read().RowIndexCache
 			var first []int
+			var stableIdentity bool
 			for phase := range 3 {
 				fresh, err := NewCollectionManager(db).OpenCollection("docs")
 				if err != nil {
@@ -44,10 +45,13 @@ func TestCollectionReadViewFreshViewsReuseRowIndex(t *testing.T) {
 				if len(view.pointRowBlocks) != 1 {
 					t.Fatalf("blocks=%d", len(view.pointRowBlocks))
 				}
+				if phase == 0 {
+					stableIdentity = rowIndexReadCacheHasStableIdentityForTest(view.rowAssetReadCache)
+				}
 				for _, block := range view.pointRowBlocks {
 					if phase == 0 {
 						first = block.rowOffsets
-					} else if &first[0] != &block.rowOffsets[0] {
+					} else if stableIdentity && &first[0] != &block.rowOffsets[0] {
 						t.Fatal("fresh view rebuilt immutable row offsets")
 					}
 				}
@@ -56,11 +60,35 @@ func TestCollectionReadViewFreshViewsReuseRowIndex(t *testing.T) {
 				}
 			}
 			after := workstats.Read().RowIndexCache
-			if after.Builds-before.Builds != 1 || after.RowsVisited-before.RowsVisited != 2 {
+			wantBuilds := uint64(3)
+			if stableIdentity {
+				wantBuilds = 1
+			}
+			if after.Builds-before.Builds != wantBuilds || after.RowsVisited-before.RowsVisited != 2*wantBuilds {
 				t.Fatalf("before=%+v after=%+v", before, after)
+			}
+			if !stableIdentity && (after.Hits != before.Hits || after.Misses != before.Misses) {
+				t.Fatal("unsupported identity used row memo")
 			}
 		})
 	}
+}
+
+func rowIndexReadCacheHasStableIdentityForTest(cache *columnPhysicalAssetReadCache) bool {
+	found := false
+	if cache.file != nil {
+		found = true
+		if !cache.file.identity.valid {
+			return false
+		}
+	}
+	for _, file := range cache.files {
+		found = true
+		if !file.identity.valid {
+			return false
+		}
+	}
+	return found
 }
 
 func TestColumnPhysicalRowReaderFreshReadersReuseRowIndex(t *testing.T) {
@@ -71,6 +99,7 @@ func TestColumnPhysicalRowReaderFreshReadersReuseRowIndex(t *testing.T) {
 	view := columnPhysicalRowReaderViewForTestV1(root, cfg, ref)
 	before := workstats.Read().RowIndexCache
 	var offsets []int
+	var stableIdentity bool
 	for range 3 {
 		reader, err := newColumnPhysicalRowReaderFromSnapshotView(view, columnPhysicalRowReaderOptions{})
 		if err != nil {
@@ -87,7 +116,8 @@ func TestColumnPhysicalRowReaderFreshReadersReuseRowIndex(t *testing.T) {
 		current := reader.blocks[0].rowOffsets
 		if offsets == nil {
 			offsets = current
-		} else if &offsets[0] != &current[0] {
+			stableIdentity = rowIndexReadCacheHasStableIdentityForTest(&reader.readCache)
+		} else if stableIdentity && &offsets[0] != &current[0] {
 			t.Fatal("generic reader rebuilt row offsets")
 		}
 		if err := reader.Close(); err != nil {
@@ -95,8 +125,36 @@ func TestColumnPhysicalRowReaderFreshReadersReuseRowIndex(t *testing.T) {
 		}
 	}
 	after := workstats.Read().RowIndexCache
-	if after.Builds-before.Builds != 1 || after.Hits-before.Hits != 2 {
+	wantBuilds, wantHits := uint64(3), uint64(0)
+	if stableIdentity {
+		wantBuilds, wantHits = 1, 2
+	}
+	if after.Builds-before.Builds != wantBuilds || after.Hits-before.Hits != wantHits {
 		t.Fatalf("before=%+v after=%+v", before, after)
+	}
+	// Exercise the unsupported-identity fallback even on this host.
+	before = workstats.Read().RowIndexCache
+	for range 2 {
+		reader, err := newColumnPhysicalRowReaderFromSnapshotView(view, columnPhysicalRowReaderOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reader.readCache.file != nil {
+			reader.readCache.file.identity = columnAssetVerifiedChecksumFileIdentity{}
+		}
+		for _, file := range reader.readCache.files {
+			file.identity = columnAssetVerifiedChecksumFileIdentity{}
+		}
+		var scratch columnPhysicalRowReaderScratch
+		row, err := reader.FetchRow(1, &scratch)
+		if err != nil || string(row.ID) != "doc-001" {
+			t.Fatalf("identity fallback row=%+v err=%v", row, err)
+		}
+		reader.Close()
+	}
+	after = workstats.Read().RowIndexCache
+	if after.Builds-before.Builds != 2 || after.RowsVisited-before.RowsVisited != 6 || after.Hits != before.Hits || after.Misses != before.Misses {
+		t.Fatalf("identity fallback before=%+v after=%+v", before, after)
 	}
 	// A warm memo does not bypass a fresh schema/header validation.
 	badView := view
@@ -138,7 +196,10 @@ func TestColumnAssetRowIndexCacheBudgetAndProofIndependence(t *testing.T) {
 	identity := columnAssetVerifiedChecksumFileIdentity{valid: true, dev: 1, ino: 2, size: 3, modTimeUnixNano: 4}
 	ref := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "memo", Generation: 1, PartID: 1, FileID: 1, Length: 3, Checksum: 5}
 	key := columnAssetVerifiedChecksumKeyForRef("memo-root", ref, identity)
-	memo := &columnAssetVerifiedRowIndex{version: 6, offsets: make([]int, 2_500_000)}
+	// Four 20 MB tables exceed 64 MiB on both 32-bit and 64-bit platforms.
+	const tableBytes = 20_000_000
+	tableRows := tableBytes / int(unsafe.Sizeof(int(0)))
+	memo := &columnAssetVerifiedRowIndex{version: 6, offsets: make([]int, tableRows)}
 	memo.offsets[0] = 42
 	storeColumnAssetRowIndex(key, memo)
 	if columnAssetVerifiedChecksumCacheContains("memo-root", ref, identity) {
@@ -181,7 +242,7 @@ func TestColumnAssetRowIndexCacheBudgetAndProofIndependence(t *testing.T) {
 			continue
 		}
 		used[slot] = true
-		storeColumnAssetRowIndex(next, &columnAssetVerifiedRowIndex{version: 6, offsets: make([]int, 2_500_000)})
+		storeColumnAssetRowIndex(next, &columnAssetVerifiedRowIndex{version: 6, offsets: make([]int, tableRows)})
 	}
 	after := workstats.Read().RowIndexCache
 	if after.RetainedBytes > columnAssetRowIndexCacheMaxBytes || after.Entries >= 4 || after.Evictions <= before.Evictions {
