@@ -1,6 +1,8 @@
 package collections
 
 import (
+	"context"
+
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -98,7 +100,7 @@ func (c *Collection) bindTypedGraphBasePlanClosure(lease *columnPublishPlanLease
 	return nil
 }
 
-func (c *Collection) typedGraphBaseReachabilityRefs() ([]ColumnAssetRef, error) {
+func (c *Collection) typedGraphBaseReachabilityRefsWithBudget(ctx context.Context, maxRecords int, maxBytes int64) ([]ColumnAssetRef, error) {
 	if c == nil || c.db == nil {
 		return nil, nil
 	}
@@ -113,6 +115,12 @@ func (c *Collection) typedGraphBaseReachabilityRefs() ([]ColumnAssetRef, error) 
 	}
 	if catalog == nil || catalog.typedGraphBase == nil {
 		return nil, nil
+	}
+	if maxRecords != 0 || maxBytes != 0 {
+		root := catalog.typedGraphBase.roots[collectionColumnManifestRootName(catalog.meta.Name)]
+		if err := validateColumnManifestScanBudget(ctx, snap, root, maxRecords, maxBytes); err != nil {
+			return nil, err
+		}
 	}
 	requirements, _, err := catalog.typedGraphBase.requirementsAtSnapshot(snap)
 	if err != nil {

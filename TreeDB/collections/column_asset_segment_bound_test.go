@@ -34,6 +34,10 @@ func TestColumnAssetReachabilitySegmentEntryBudget(t *testing.T) {
 		if !errors.Is(err, ErrColumnAssetReachabilitySegmentLimit) || plan.Complete || !plan.ProtectOnly || len(plan.SegmentEntries) != 0 {
 			t.Fatalf("limit%d: err=%v complete=%v entries=%d", limit, err, plan.Complete, len(plan.SegmentEntries))
 		}
+		stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{MaxSegmentEntries: limit})
+		if !errors.Is(err, ErrColumnAssetReachabilitySegmentLimit) || stats.SegmentsDeleted != 0 {
+			t.Fatalf("GC segment budget: err=%v deleted=%d", err, stats.SegmentsDeleted)
+		}
 	}
 	for _, limit := range []int{0, len(entries), len(entries) + 1} {
 		plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{MaxSegmentEntries: limit, SegmentDetails: true})
@@ -94,6 +98,99 @@ func BenchmarkColumnAssetSegmentDiscovery(b *testing.B) {
 				segments, err := listColumnAssetReachabilitySegmentsWithLimit(context.Background(), dir, tc.limit)
 				if err != nil || len(segments) != 257 {
 					b.Fatalf("entries%d err=%v", len(segments), err)
+				}
+			}
+		})
+	}
+}
+
+func TestColumnAssetReachabilityManifestBudget(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	db := openCollectionCommandWALDB(t, dir)
+	defer db.Close()
+	col := openColumnStoreCollectionM10B(t, db)
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, limits := range []struct {
+		records int
+		bytes   int64
+	}{{1, 1 << 20}, {4096, 1}, {-1, 1024}, {0, 1024}, {4096, 0}} {
+		plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{MaxManifestRecords: limits.records, MaxManifestBytes: limits.bytes})
+		if !errors.Is(err, ErrColumnAssetReachabilityManifestLimit) || plan.Complete || len(plan.SegmentEntries) != 0 {
+			t.Fatalf("manifest limit %+v returned err=%v complete=%v", limits, err, plan.Complete)
+		}
+		stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{MaxManifestRecords: limits.records, MaxManifestBytes: limits.bytes})
+		if !errors.Is(err, ErrColumnAssetReachabilityManifestLimit) || stats.SegmentsDeleted != 0 || stats.BytesDeleted != 0 {
+			t.Fatalf("GC manifest limit %+v: err=%v deleted=%d/%d", limits, err, stats.SegmentsDeleted, stats.BytesDeleted)
+		}
+	}
+	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{MaxManifestRecords: 4096, MaxManifestBytes: 1 << 20})
+	if err != nil || !plan.Complete {
+		t.Fatalf("adequate manifest budget: err=%v complete=%v", err, plan.Complete)
+	}
+	// Publication happens during the preflight's first context check, after
+	// snapshot/catalog acquisition. Decoding must still use the admitted root.
+	beforeSeq, _ := dbCommitSeqAndSystemRoot(db)
+	ctx := &columnAssetDiscoveryCheckContext{Context: context.Background(), at: 4, check: func() {
+		if _, err := col.Insert([]byte("e2"), []byte(`{"time_us":2,"kind":"like","did":"d2"}`)); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	view, closeView, err := col.prepareColumnPhysicalScanSnapshotViewWithContextAndSidecarsAndBudget(ctx, columnManifestScanAllSidecars(), 4096, 1<<20)
+	if closeView != nil {
+		defer closeView()
+	}
+	afterSeq, _ := dbCommitSeqAndSystemRoot(db)
+	if err != nil || ctx.calls < ctx.at || afterSeq <= beforeSeq || view.CommitSeq != beforeSeq || view.Diagnostics.ManifestGeneration != plan.ActiveManifestGeneration {
+		t.Fatalf("snapshot changed between preflight/decode: err=%v checks=%d before=%d view=%d after=%d", err, ctx.calls, beforeSeq, view.CommitSeq, afterSeq)
+	}
+}
+
+type columnAssetDiscoveryCheckContext struct {
+	context.Context
+	calls, at int
+	check     func()
+}
+
+func (c *columnAssetDiscoveryCheckContext) Err() error {
+	c.calls++
+	if c.calls == c.at {
+		c.check()
+	}
+	return c.Context.Err()
+}
+
+func TestColumnAssetReachabilityCapturedManifestBudget(t *testing.T) {
+	col, _, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
+	if refs, err := col.typedGraphBaseReachabilityRefsWithBudget(context.Background(), 1, 1<<20); !errors.Is(err, ErrColumnAssetReachabilityManifestLimit) || len(refs) != 0 {
+		t.Fatalf("captured manifest escaped input budget: refs=%d err=%v", len(refs), err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if refs, err := col.typedGraphBaseReachabilityRefsWithBudget(ctx, 4096, 1<<20); !errors.Is(err, context.Canceled) || len(refs) != 0 {
+		t.Fatalf("captured preflight ignored cancellation: refs=%d err=%v", len(refs), err)
+	}
+	if refs, err := col.typedGraphBaseReachabilityRefsWithBudget(context.Background(), 4096, 1<<20); err != nil || len(refs) == 0 {
+		t.Fatalf("adequate captured budget: refs=%d err=%v", len(refs), err)
+	}
+}
+
+func BenchmarkColumnAssetReachabilityDiscoveryBudget(b *testing.B) {
+	col, _, _, _, _, _ := openTypedGraphQualityFixture(b, 1024)
+	for _, tc := range []struct {
+		name string
+		opts ColumnAssetReachabilityOptions
+	}{
+		{"default", ColumnAssetReachabilityOptions{}},
+		{"bounded", ColumnAssetReachabilityOptions{MaxSegmentEntries: 4096, MaxManifestRecords: 4096, MaxManifestBytes: 4 << 20}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				plan, err := col.PlanColumnAssetReachability(context.Background(), tc.opts)
+				if err != nil || !plan.Complete {
+					b.Fatalf("complete=%v err=%v", plan.Complete, err)
 				}
 			}
 		})

@@ -28,6 +28,10 @@ type ColumnAssetReachabilityOptions struct {
 	// MaxSegmentEntries bounds directory entries retained during discovery.
 	// Zero preserves unbounded reporting. This does not bound manifest decoding.
 	MaxSegmentEntries int
+	// MaxManifestRecords and MaxManifestBytes bound encoded manifest input on
+	// the planning snapshot before decoding. Set both positive, or both zero.
+	MaxManifestRecords int
+	MaxManifestBytes   int64
 	// ProtectCandidateRefsForOlderSnapshots conservatively treats candidate
 	// refs as pinned while any active TreeDB snapshot predates the planning
 	// snapshot. Destructive GC enables this; non-destructive rewrite leaves it
@@ -45,6 +49,9 @@ type ColumnAssetReachabilityOptions struct {
 
 // ErrColumnAssetReachabilitySegmentLimit reports an invalid or exceeded discovery limit.
 var ErrColumnAssetReachabilitySegmentLimit = errors.New("collections: column asset segment entry budget exceeded or invalid")
+
+// ErrColumnAssetReachabilityManifestLimit reports invalid or exceeded manifest input limits.
+var ErrColumnAssetReachabilityManifestLimit = errors.New("collections: column asset manifest input budget exceeded or invalid")
 
 type columnAssetReachabilityOptionsInternal struct {
 	ColumnAssetReachabilityOptions
@@ -305,11 +312,11 @@ const columnAssetReachabilityContextCheckInterval = 256
 // plan for the collection's isolated column asset namespace. It never deletes,
 // rewrites, or remaps assets; uncertain or untracked bytes are retained.
 func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts ColumnAssetReachabilityOptions) (ColumnAssetReachabilityPlan, error) {
-	if opts.MaxSegmentEntries < 0 {
-		return ColumnAssetReachabilityPlan{ProtectOnly: true}, ErrColumnAssetReachabilitySegmentLimit
+	if err := opts.validateDiscoveryLimits(); err != nil {
+		return ColumnAssetReachabilityPlan{ProtectOnly: true}, err
 	}
 	var err error
-	opts, err = c.columnAssetLifecycleAugmentReachabilityOptions(opts)
+	opts, err = c.columnAssetLifecycleAugmentReachabilityOptionsWithContext(ctx, opts)
 	if err != nil {
 		return ColumnAssetReachabilityPlan{ProtectOnly: true}, err
 	}
@@ -319,14 +326,27 @@ func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts Colum
 	return plan, err
 }
 
+func (opts ColumnAssetReachabilityOptions) validateDiscoveryLimits() error {
+	if opts.MaxSegmentEntries < 0 {
+		return ErrColumnAssetReachabilitySegmentLimit
+	}
+	if opts.MaxManifestRecords < 0 || opts.MaxManifestBytes < 0 || (opts.MaxManifestRecords == 0) != (opts.MaxManifestBytes == 0) {
+		return ErrColumnAssetReachabilityManifestLimit
+	}
+	return nil
+}
+
 func (c *Collection) planColumnAssetReachability(ctx context.Context, opts columnAssetReachabilityOptionsInternal) (ColumnAssetReachabilityPlan, map[ColumnAssetRef]columnAssetReachabilitySourceMask, error) {
+	if err := opts.validateDiscoveryLimits(); err != nil {
+		return ColumnAssetReachabilityPlan{ProtectOnly: true}, nil, err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return ColumnAssetReachabilityPlan{ProtectOnly: true}, nil, err
 	}
-	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithContext(ctx)
+	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithContextAndSidecarsAndBudget(ctx, columnManifestScanAllSidecars(), opts.MaxManifestRecords, opts.MaxManifestBytes)
 	if closeView != nil {
 		defer closeView()
 	}

@@ -563,7 +563,20 @@ func columnAssetLifecycleNamespace(c *Collection) string {
 }
 
 func (c *Collection) columnAssetLifecycleAugmentReachabilityOptions(opts ColumnAssetReachabilityOptions) (ColumnAssetReachabilityOptions, error) {
-	baseRefs, err := c.typedGraphBaseReachabilityRefs()
+	return c.columnAssetLifecycleAugmentReachabilityOptionsWithContext(context.Background(), opts)
+}
+
+func (c *Collection) columnAssetLifecycleAugmentReachabilityOptionsWithContext(ctx context.Context, opts ColumnAssetReachabilityOptions) (ColumnAssetReachabilityOptions, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := opts.validateDiscoveryLimits(); err != nil {
+		return opts, err
+	}
+	if err := ctx.Err(); err != nil {
+		return opts, err
+	}
+	baseRefs, err := c.typedGraphBaseReachabilityRefsWithBudget(ctx, opts.MaxManifestRecords, opts.MaxManifestBytes)
 	if err != nil {
 		return opts, err
 	}

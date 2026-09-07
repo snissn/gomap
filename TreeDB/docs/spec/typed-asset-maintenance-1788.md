@@ -42,6 +42,22 @@ retention, not manifest decoding, caller-supplied refs, total planner memory, or
 disk usage. It does not change GC authority or permit deletion from an
 incomplete plan.
 
+`MaxManifestRecords` and `MaxManifestBytes` must both be positive or both zero
+(the unchanged default). Positive limits preflight encoded manifest input before
+decoding: the active manifest and captured typed-graph base are each checked on
+the same snapshot/root subsequently decoded. All keys count, including unknown
+records, and declared part counts cannot exceed the record cap. Preflight checks
+cancellation while scanning and returns `ErrColumnAssetReachabilityManifestLimit`
+when input exceeds the cap. These are per-manifest input limits, not an estimate
+of decoded heap or a combined working-set cap. Existing vector-partition lifecycle
+limits and caller/process pin inventories remain separate.
+
+`ColumnAssetGCOptions` forwards all three discovery limits to the same planner.
+Over-budget or incomplete discovery cannot authorize deletion. Internal lifecycle
+consumers refreshing accounting must keep the existing storage-mutation epoch
+across successful GC, fresh bounded inventory and accounting refresh. Failed or
+partially completed cleanup statistics are not reclamation credit.
+
 ## Active mappedresource pins
 
 Every `mappedresource.Manager` contributes to a process-wide active pin summary.

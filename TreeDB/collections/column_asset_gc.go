@@ -16,6 +16,10 @@ import (
 // ColumnAssetGCOptions controls safe M15B column asset segment reclamation.
 type ColumnAssetGCOptions struct {
 	DryRun bool
+	// Discovery limits have the same semantics as ColumnAssetReachabilityOptions.
+	MaxSegmentEntries  int
+	MaxManifestRecords int
+	MaxManifestBytes   int64
 	// Detailed keeps detailed ref and segment entries in the returned plan.
 	Detailed bool
 	// SegmentDetails keeps segment-level entries in the returned plan without
@@ -313,12 +317,18 @@ func (c *Collection) ColumnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	return c.columnAssetGC(ctx, opts)
 }
 
+// Destructive callers must hold withVectorPartitionStorageMutationV1 across
+// planning, deletion and any accounting refresh. A successful return includes
+// required directory sync; partial deletion stats on error are not refund credit.
 func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOptions) (stats ColumnAssetGCStats, err error) {
 	defer func() {
 		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed, opts.SegmentDetails)
 	}()
 	needSegmentEntries := !opts.DryRun || opts.Detailed || opts.SegmentDetails
-	planOpts, err := c.columnAssetLifecycleAugmentReachabilityOptions(ColumnAssetReachabilityOptions{
+	planOpts, err := c.columnAssetLifecycleAugmentReachabilityOptionsWithContext(ctx, ColumnAssetReachabilityOptions{
+		MaxSegmentEntries:                     opts.MaxSegmentEntries,
+		MaxManifestRecords:                    opts.MaxManifestRecords,
+		MaxManifestBytes:                      opts.MaxManifestBytes,
 		Detailed:                              opts.Detailed,
 		SegmentDetails:                        needSegmentEntries,
 		ProtectCandidateRefsForOlderSnapshots: true,

@@ -299,6 +299,10 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewWithSidecars(filter co
 }
 
 func (c *Collection) prepareColumnPhysicalScanSnapshotViewWithContextAndSidecars(ctx context.Context, filter columnManifestScanSidecarFilter) (columnPhysicalScanSnapshotView, func(), error) {
+	return c.prepareColumnPhysicalScanSnapshotViewWithContextAndSidecarsAndBudget(ctx, filter, 0, 0)
+}
+
+func (c *Collection) prepareColumnPhysicalScanSnapshotViewWithContextAndSidecarsAndBudget(ctx context.Context, filter columnManifestScanSidecarFilter, maxRecords int, maxBytes int64) (columnPhysicalScanSnapshotView, func(), error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -348,6 +352,12 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewWithContextAndSidecars
 	}
 	rootID := catalog.rootID(rootName)
 
+	if maxRecords != 0 || maxBytes != 0 {
+		if err := validateColumnManifestScanBudget(ctx, snap, rootID, maxRecords, maxBytes); err != nil {
+			closeView()
+			return columnPhysicalScanSnapshotView{}, nil, err
+		}
+	}
 	view, err := c.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, filter)
 	if err != nil {
 		closeView()
@@ -643,6 +653,55 @@ func validateColumnManifestIdentityAtRoot(snap *backenddb.Snapshot, rootID uint6
 		return fmt.Errorf("collections: column manifest identity mismatch root=%+v active=%+v", record, identity)
 	}
 	return nil
+}
+
+// Validate input before any manifest decoder allocations, on the same snapshot
+// and root subsequently decoded. Counts all records, including unknown keys.
+func validateColumnManifestScanBudget(ctx context.Context, snap *backenddb.Snapshot, root uint64, maxRecords int, maxBytes int64) error {
+	if root == 0 {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	if maxRecords <= 0 || maxBytes <= 0 {
+		return ErrColumnAssetReachabilityManifestLimit
+	}
+	it, err := snap.IteratorAtRoot(root, nil, nil)
+	if err != nil {
+		return err
+	}
+	defer it.Close()
+	count, size := 0, int64(0)
+	for it.Valid() {
+		if count%columnAssetReachabilityContextCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		value, _, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer != 0 {
+			return ErrVectorIndexSnapshotMismatch
+		}
+		key := it.UnsafeKey()
+		if count == maxRecords || int64(len(key)) > maxBytes-size {
+			return ErrColumnAssetReachabilityManifestLimit
+		}
+		size += int64(len(key))
+		if int64(len(value)) > maxBytes-size {
+			return ErrColumnAssetReachabilityManifestLimit
+		}
+		size += int64(len(value))
+		count++
+		if bytes.Equal(key, columnManifestHeaderRecordKeyBytes) {
+			header, err := decodeColumnManifestHeaderRecordForScan(value)
+			if err != nil {
+				return err
+			}
+			if header.expectedParts > uint64(maxRecords) {
+				return ErrColumnAssetReachabilityManifestLimit
+			}
+		}
+		it.Next()
+	}
+	return errors.Join(it.Error(), ctx.Err())
 }
 
 func loadColumnManifestRecordsFromRoot(snap *backenddb.Snapshot, rootID uint64) ([]columnManifestRecord, error) {

@@ -2,11 +2,12 @@ package collections
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"reflect"
 	"slices"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/node"
 )
 
 // A token exists only on the synthetic synchronous drainer while its caller
@@ -235,40 +236,9 @@ func typedGraphDeclaredValueHeaderBytes() uintptr {
 }
 
 func validateTypedGraphColdManifestBudget(snap *backenddb.Snapshot, root uint64, limits typedGraphColdLimits) error {
-	if root == 0 {
-		return ErrVectorIndexSnapshotMismatch
+	err := validateColumnManifestScanBudget(context.Background(), snap, root, limits.ManifestRecords, limits.ManifestBytes)
+	if errors.Is(err, ErrColumnAssetReachabilityManifestLimit) {
+		return errTypedGraphOverlayFoldNeeded
 	}
-	it, err := snap.IteratorAtRoot(root, nil, nil)
-	if err != nil {
-		return err
-	}
-	defer it.Close()
-	count, size := 0, int64(0)
-	for it.Valid() {
-		value, _, flags := it.UnsafeEntry()
-		if flags&node.FlagPointer != 0 {
-			return ErrVectorIndexSnapshotMismatch
-		}
-		key := it.UnsafeKey()
-		if count == limits.ManifestRecords || int64(len(key)) > limits.ManifestBytes-size {
-			return errTypedGraphOverlayFoldNeeded
-		}
-		size += int64(len(key))
-		if int64(len(value)) > limits.ManifestBytes-size {
-			return errTypedGraphOverlayFoldNeeded
-		}
-		size += int64(len(value))
-		count++
-		if bytes.Equal(key, columnManifestHeaderRecordKeyBytes) {
-			header, err := decodeColumnManifestHeaderRecordForScan(value)
-			if err != nil {
-				return err
-			}
-			if header.expectedParts > uint64(limits.ManifestRecords) {
-				return errTypedGraphOverlayFoldNeeded
-			}
-		}
-		it.Next()
-	}
-	return it.Error()
+	return err
 }
