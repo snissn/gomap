@@ -151,6 +151,13 @@ func TestTypedColumnPointFP32OwnershipAndBounds(t *testing.T) {
 func TestTypedColumnPointReadAtRetainsVectorsAcrossGenerations(t *testing.T) {
 	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 128)
 	defer base.Close()
+	// Read-at scratch ownership is required even on hosts without prepared
+	// holders. Also retain selected-serving coverage where it is supported.
+	if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		if err := col.EnsureColumnGraphServing(context.Background(), base.indexName, typedGraphPublicTestOptions()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{9, 8, 7, 6, 5, 4, 3, 2}}}, {Name: "content", Strings: []string{"replaced"}}, {Name: "user", Strings: []string{"new"}}, {Name: "path", Strings: []string{"new"}}}
 	if _, err := col.ReplaceTypedBatch(ids[:1], retained[:1], changed); err != nil {
 		t.Fatal(err)
