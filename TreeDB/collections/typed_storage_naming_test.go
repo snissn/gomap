@@ -426,9 +426,10 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// The plan-lease tests reuse compatibility configuration and fixture helpers
 	// while exercising publication ownership; they introduce no storage format.
 	{path: "TreeDB/collections/column_publish_plan_lease_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 15, occurrences: 15},
-	{path: "TreeDB/collections/column_publish_write.go", classification: typedStorageLegacyCompatibility, matchingLines: 58, occurrences: 65},
+	{path: "TreeDB/collections/column_publish_write.go", classification: typedStorageLegacyCompatibility, matchingLines: 60, occurrences: 67},
 	{path: "TreeDB/collections/column_publish_write_bench_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 36, occurrences: 38},
-	{path: "TreeDB/collections/column_publish_write_path_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 220, occurrences: 245},
+	{path: "TreeDB/collections/column_publish_write_path_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 222, occurrences: 248},
+	{path: "TreeDB/collections/typed_source_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/column_retained_json_cursor.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/column_retained_json_cursor_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 23, occurrences: 23},
 	{path: "TreeDB/collections/column_row_sidecar_assets.go", classification: typedStorageLegacyDerived, matchingLines: 4, occurrences: 4},

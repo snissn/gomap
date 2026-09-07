@@ -34,7 +34,9 @@ func setColumnPhysicalAssetPreparationAfterPrepareTestHook(hook func(ColumnPubli
 }
 
 type columnWritePublishInput struct {
-	candidateAdmission    *typedGraphFoldAssetAdmission
+	candidateAdmission *typedGraphFoldAssetAdmission
+	// Only the second half of one source attempt may reuse its still-owned output.
+	sourcePreparedOutput  *ColumnPublishPreparedAssets
 	meta                  CollectionMeta
 	catalog               *collectionCatalog
 	baseCommitSeq         uint64
@@ -936,6 +938,9 @@ func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePubl
 		insertInput.operation = ColumnPublishOperationInsert
 		insertInput.sourceDeleteDocuments = nil
 		insertInput.partIDOffset = 1 << 32
+		if columnStoreTypedScalarIndexesSupported(input.meta) && columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore) {
+			insertInput.sourcePreparedOutput = &deleted
+		}
 		insertHook := hookInput
 		insertHook.Operation = ColumnPublishOperationInsert
 		inserted, err := c.prepareColumnPhysicalAssetsForCommand(insertInput, insertHook)
@@ -1043,6 +1048,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPub
 	if generation == 0 || rowPartID == 0 || typedPartID == 0 || rowPartID == typedPartID {
 		return ColumnPublishPreparedAssets{}, errors.New("collections: invalid column physical asset identity")
 	}
+	isolatedTypedOutput := columnStoreTypedScalarIndexesSupported(input.meta) && columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore)
 	cleanupAssets := make([]ColumnPreparedAsset, 0, 8)
 	defer func() {
 		if retErr != nil {
@@ -1144,6 +1150,36 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPub
 					retErr = errors.Join(retErr, session.abort())
 				}
 			}()
+			if isolatedTypedOutput {
+				if !prepared.stableResourcesRequired {
+					return fmt.Errorf("%w: isolated typed output requires stable namespace creation", rootpublication.ErrNamespacePersistenceUnsupported)
+				}
+				var fileID uint32
+				if prior := input.sourcePreparedOutput; prior != nil {
+					if !prior.stableResourcesRequired || prior.stableResources == nil || len(prior.Assets) == 0 {
+						return errors.New("collections: source output reuse requires retained prepared authority")
+					}
+					fileID = prior.Assets[0].Ref.FileID
+					for _, asset := range prior.Assets {
+						if asset.Ref.FileID != fileID || asset.Ref.Generation != generation || asset.Ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace {
+							return errors.New("collections: source output reuse identity mismatch")
+						}
+					}
+				} else {
+					start := time.Now()
+					appender, err := session.freshAppender()
+					appendOpenDuration += time.Since(start)
+					if err != nil {
+						return err
+					}
+					fileID = appender.fileID
+				}
+				for i := range pendingAssets {
+					if !pendingAssets[i].hasRef {
+						pendingAssets[i].fileID = fileID
+					}
+				}
+			}
 		}
 		var appendedBytes int64
 		var appendedCount int
@@ -1384,9 +1420,9 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPub
 	prepared.AssetMetrics.RowAssetBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.RowAssetBytes, int64(len(rowAsset.encoded)))
 	prepared.AssetMetrics.RowAssetCount++
 	rowFileID := uint32(columnAssetM12ASegmentFileID)
-	if columnStoreTypedScalarIndexesSupported(input.meta) && columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore) {
-		// Keep selected typed row metadata with its generation's typed image so
-		// captured bases do not retain a cross-generation row-image segment.
+	if isolatedTypedOutput {
+		// Validate the existing generation bound; the flush assigns a fresh
+		// physical segment shared only within this logical source attempt.
 		rowFileID, err = directViewTypedColumnSegmentFileID(generation)
 		if err != nil {
 			return ColumnPublishPreparedAssets{}, err
@@ -1421,7 +1457,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPub
 					if err := validateTypedColumnRef(ref); err != nil {
 						return err
 					}
-					if ref.FileID != directFileID {
+					if !isolatedTypedOutput && ref.FileID != directFileID {
 						return fmt.Errorf("collections: invalid direct-view typed-column part asset file_id=%d want %d", ref.FileID, directFileID)
 					}
 					if ref.Offset%typedColumnPartDirectViewAssetAlignment != 0 {

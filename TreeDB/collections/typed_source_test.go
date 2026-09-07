@@ -1,6 +1,8 @@
 package collections
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -11,6 +13,95 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
+
+func TestTypedSourceSecondStageOutputFailure(t *testing.T) {
+	dir, d, col := openTypedMinimaCollection(t)
+	defer d.Close()
+	ids := [][]byte{[]byte("a")}
+	retained := [][]byte{[]byte(`{"id":"a"}`)}
+	columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"before"}}, {Name: "user", Strings: []string{"u"}}, {Name: "path", Strings: []string{"p"}}}
+	if _, err := col.ReplaceTypedSourceByID(nil, ids, retained, columns); err != nil {
+		t.Fatal(err)
+	}
+	meta := col.Meta()
+	namespace, err := columnAssetManagerNamespaceForRoot(d.ColumnAssetRootDir(), meta.Options.ColumnStore.AssetManager.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeEntries, err := os.ReadDir(namespace.SegmentDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeNames := make(map[string]bool)
+	for _, entry := range beforeEntries {
+		beforeNames[entry.Name()] = true
+	}
+	seq, root := dbCommitSeqAndSystemRoot(d)
+	originalSync := syncColumnAssetSegmentFileForPublish
+	t.Cleanup(func() { syncColumnAssetSegmentFileForPublish = originalSync })
+	injected := errors.New("source insert stage sync failure")
+	var calls int
+	syncColumnAssetSegmentFileForPublish = func(f *os.File) error {
+		calls++
+		if calls == 2 {
+			return injected
+		}
+		return originalSync(f)
+	}
+	columns[1].Strings[0] = "after"
+	if _, err := col.ReplaceTypedSourceByID(ids, ids, retained, columns); !errors.Is(err, injected) {
+		t.Fatalf("second-stage failure calls=%d err=%v", calls, err)
+	}
+	syncColumnAssetSegmentFileForPublish = originalSync
+	if afterSeq, afterRoot := dbCommitSeqAndSystemRoot(d); afterSeq != seq || afterRoot != root {
+		t.Fatal("failed source changed authority")
+	}
+	got, err := col.Get(ids[0])
+	if err != nil || !bytes.Contains(got, []byte(`"content":"before"`)) {
+		t.Fatalf("failed source lost old row: %s %v", got, err)
+	}
+	entries, err := os.ReadDir(namespace.SegmentDir)
+	if err != nil || len(entries) != len(beforeEntries)+1 {
+		t.Fatalf("source attempt must use one new file: before=%d after=%d err=%v", len(beforeEntries), len(entries), err)
+	}
+	var failedPath string
+	for _, entry := range entries {
+		if !beforeNames[entry.Name()] {
+			failedPath = namespace.SegmentDir + string(os.PathSeparator) + entry.Name()
+		}
+	}
+	failedBytes, err := os.ReadFile(failedPath)
+	if err != nil || len(failedBytes) == 0 {
+		t.Fatalf("failed output bytes=%d err=%v", len(failedBytes), err)
+	}
+	// A post-WAL failure requires normal recovery, not an in-process retry.
+	// Replay prepares the same next manifest generation from its old root.
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d = openTypedMinimaDB(t, dir)
+	defer d.Close()
+	col, err = NewCollectionManager(d).OpenCollection("minima")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(failedPath)
+	if err != nil || !bytes.Equal(after, failedBytes) {
+		t.Fatal("retry mutated failed output")
+	}
+	entries, err = os.ReadDir(namespace.SegmentDir)
+	if err != nil || len(entries) != len(beforeEntries)+2 {
+		t.Fatalf("source retry must use one separate file: entries=%d err=%v", len(entries), err)
+	}
+	got, err = col.Get(ids[0])
+	if err != nil || !bytes.Contains(got, []byte(`"content":"after"`)) {
+		t.Fatalf("retry source row: %s %v", got, err)
+	}
+	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{})
+	if err != nil || !plan.Complete || plan.Segments.Unknown != 0 {
+		t.Fatalf("retry reachability=%+v err=%v", plan, err)
+	}
+}
 
 func TestTypedSourceNativeAuthority(t *testing.T) {
 	dir, d, c := openTypedMinimaCollection(t)

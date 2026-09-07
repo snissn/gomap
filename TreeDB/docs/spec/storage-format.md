@@ -3030,13 +3030,21 @@ fold additionally writes compacted assets at the real captured generation T,
 with a fresh row part and typed part 2, and preserves post-T records under the
 current U manifest header. Its separately checksummed captured manifest and
 independent native roots describe T, not the current U scalar/primary authority.
-For the supported non-column-retained typed FP32 schema, row images share the
-existing generation-derived direct-view segment with typed-column images.
-Delete-only row images use that same generation-derived placement. Same-generation
-folds/retries append immutable ranges; typed-image alignment and padding remain
-unchanged. Other schemas and sidecar placement are unchanged. This avoids one
-constant row-image segment accumulating obsolete bytes across generations; it
-does not change reachability or permit deleting captured/fallback/reader assets.
+For the supported non-column-retained typed FP32 schema, each physical batch or
+fold attempt puts row metadata and aligned typed images in one fresh O_EXCL
+segment from the existing manager allocator. Atomic source delete/insert stages
+share that attempt's file only while the first stage's prepared authority is
+still held. Delete-only output and same-generation retries also start fresh;
+logical generation/part identities and typed alignment/padding are unchanged.
+The file ID is no longer derived from generation for this selected path; other
+schemas retain their existing placement. Failed output remains persistent but
+cannot become an unknown prefix of a later live attempt. Reachability and exact
+captured/fallback/reader protection are unchanged.
+
+The reused allocator reserves IDs below 1,048,576 and fails closed at exhaustion.
+Its process-local high-water cache is monotonic even after lower segments are
+reclaimed; this is a finite allocation ceiling, not indefinitely renewable
+physical capacity. No new free-ID allocator or incarnation scheme is implied.
 Installation uses the existing column-asset rewrite maintenance publisher and
 does not add a logical WAL command. Graph construction occurs outside collection
 admission, but current-root validation, locator merging and native root building

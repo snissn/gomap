@@ -190,6 +190,9 @@ func TestTypedGraphFoldProcessCut(t *testing.T) {
 			if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 128, Tombstones: 128, ValueSlots: 512, OwnedBytes: 8 << 20}, limits.Cold); err != nil {
 				t.Fatal(err)
 			}
+			if maintenance, err := col.renewTypedGraphWorkEpoch(context.Background(), typedGraphTestWorkEpochLimits()); err != nil {
+				t.Fatalf("post-process-loss renewal: %v; columns=%+v", err, maintenance.Columns)
+			}
 			owner, err := col.openTypedGraphReadOwner(limits)
 			if err != nil {
 				t.Fatal(err)

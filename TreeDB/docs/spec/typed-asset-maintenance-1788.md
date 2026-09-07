@@ -94,14 +94,20 @@ The maintenance plan reports active handle accounting:
 
 ## Destructive actions
 
-Selected native typed FP32 producers co-locate typed-row metadata and aligned
-typed-column images in the existing generation-derived segment, including
-delete-only metadata and same-generation fold output. This lets whole-segment
-GC retire old generations without rewriting bytes protected by a captured base.
-Same-generation obsolete ranges remain mixed debt until that generation retires.
-No captured, fallback, or reader protection is weakened. The bounded eight-cycle
-equal-width fixture demonstrates a column-byte plateau, not a whole-database
-quota or restart/orphan cleanup certification.
+Selected native typed FP32 producers co-locate metadata and aligned typed images
+in one fresh existing-manager segment per batch/fold attempt. A source replacement
+shares its delete/insert output only within the same still-owned attempt.
+Nonempty failed and superseded outputs therefore remain whole-file candidates rather than
+unknown prefixes inside live files, including after process-local registry loss.
+No captured, fallback, reader, or unknown-plan protection is weakened. Before/
+after-seal and unsealed-suffix process cuts exercise complete post-reopen cleanup;
+these are not physical power-loss tests. The eight-cycle equal-width fixture
+demonstrates a column-byte plateau, not a whole-database quota. The reused
+allocator's finite below-1,048,576 file-ID band remains a fail-closed ceiling;
+reclaiming lower files does not reset its cached allocation frontier.
+Zero-output failure cleanup and sustained allocator reuse remain blocking
+qualification gates; the successful nonempty/process-cut fixtures do not waive
+them or activate public mutable serving.
 
 `ColumnAssetGC` may delete only canonical whole segments whose bytes are wholly
 reclaimable and whose plan is complete. Mixed live/dead segments become rewrite

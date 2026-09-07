@@ -12,11 +12,17 @@ changes.
 ## Recommended layout
 
 Use the supported typed schema and native batch APIs for indexed values. The
-producer keeps typed-row metadata beside its generation's aligned FP32 image,
-so obsolete generations can be reclaimed without a forever-growing shared row
-file. Do not add a separate JSON-indexed or side-copy store to manage that
+producer keeps typed-row metadata beside its aligned FP32 image in a fresh
+batch/fold output, so obsolete or failed attempts can be reclaimed without
+leaving unknown prefixes in live files. Do not add a separate JSON-indexed or side-copy store to manage that
 lifecycle. Captured bases and active readers still retain their exact assets;
 generation placement does not itself enable public mutable graph serving.
+The existing manager has a finite file-ID allocation ceiling; bounded maintenance
+and backpressure remain necessary, even when retained column bytes plateau.
+Append metrics named `SharedSegmentAppend*` and `DirectViewSegmentAppend*`
+classify physical file-ID bands, not optimized-reader capability. Selected fresh
+files use the regular band and still carry aligned, directly readable FP32;
+a nonzero shared-band append count is not evidence of a JSON or copied reader.
 
 Current mutation boundary: the #4617 typed base-plus-suffix search consumer is
 internal and experimental. Public typed batch writes preserve their selected

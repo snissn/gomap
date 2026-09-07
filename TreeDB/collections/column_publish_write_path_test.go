@@ -1590,6 +1590,56 @@ func TestPrepareColumnPhysicalAssetRowsKeepsPendingAssetOrder3236(t *testing.T) 
 	}
 }
 
+func TestPrepareTypedAssetFailedPrefixRetry(t *testing.T) {
+	_, d, col := openTypedMinimaCollection(t)
+	defer d.Close()
+	meta := col.Meta()
+	prepare := func() (ColumnPublishPreparedAssets, error) {
+		return col.prepareColumnPhysicalAssetRowsAtIdentity(ColumnPublishPreparedAssets{}, columnWritePublishInput{meta: meta, operation: ColumnPublishOperationDelete, rows: 1},
+			ColumnPublishAssetPrepareInput{Collection: meta.Name, ColumnStore: *meta.Options.ColumnStore, Operation: ColumnPublishOperationDelete, AppliedCommandLSN: 77},
+			[]columnDeclaredRow{{ID: []byte("a"), Deleted: true}}, 7, columnPhysicalRowAssetPartID, typedColumnPartAssetPartID)
+	}
+	injected := errors.New("selected output sync failure")
+	originalSync := syncColumnAssetSegmentFileForPublish
+	t.Cleanup(func() { syncColumnAssetSegmentFileForPublish = originalSync })
+	syncColumnAssetSegmentFileForPublish = func(*os.File) error { return injected }
+	if _, err := prepare(); !errors.Is(err, injected) {
+		t.Fatalf("failed output: %v", err)
+	}
+	syncColumnAssetSegmentFileForPublish = originalSync
+	namespace, err := columnAssetManagerNamespaceForRoot(d.ColumnAssetRootDir(), meta.Options.ColumnStore.AssetManager.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(namespace.SegmentDir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("retained failed output entries=%d err=%v", len(entries), err)
+	}
+	failedPath := namespace.SegmentDir + string(os.PathSeparator) + entries[0].Name()
+	failedBytes, err := os.ReadFile(failedPath)
+	if err != nil || len(failedBytes) == 0 {
+		t.Fatalf("failed prefix bytes=%d err=%v", len(failedBytes), err)
+	}
+	retry, err := prepare()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.stableResources != nil {
+		defer retry.stableResources.Release()
+	}
+	if len(retry.Assets) != 1 || retry.Assets[0].Ref.Offset != 0 {
+		t.Fatalf("retry appended to failed prefix: %+v", retry.Assets)
+	}
+	after, err := os.ReadFile(failedPath)
+	if err != nil || !bytes.Equal(after, failedBytes) {
+		t.Fatalf("failed output changed on retry: bytes=%d err=%v", len(after), err)
+	}
+	entries, err = os.ReadDir(namespace.SegmentDir)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("isolated retry entries=%d err=%v", len(entries), err)
+	}
+}
+
 func TestPrepareColumnPhysicalAssetRowsTypedGenerationPlacement(t *testing.T) {
 	_, d, col := openTypedMinimaCollection(t)
 	defer d.Close()
@@ -1600,7 +1650,7 @@ func TestPrepareColumnPhysicalAssetRowsTypedGenerationPlacement(t *testing.T) {
 		{Type: ColumnStoreValueString, Present: true, String: "user"},
 		{Type: ColumnStoreValueString, Present: true, String: "path"},
 	}}}
-	var previousEnd int64
+	seenFiles := make(map[uint32]bool)
 	for _, operation := range []ColumnPublishOperation{ColumnPublishOperationInsert, ColumnPublishOperationUpdate, ColumnPublishOperationDelete, ColumnPublishOperationInsert} {
 		inputRows := rows
 		if operation == ColumnPublishOperationDelete {
@@ -1615,10 +1665,15 @@ func TestPrepareColumnPhysicalAssetRowsTypedGenerationPlacement(t *testing.T) {
 		if prepared.stableResources != nil {
 			defer prepared.stableResources.Release()
 		}
-		fileID, err := directViewTypedColumnSegmentFileID(7)
-		if err != nil {
-			t.Fatal(err)
+		if len(prepared.Assets) == 0 {
+			t.Fatal("missing prepared output")
 		}
+		fileID := prepared.Assets[0].Ref.FileID
+		if fileID == 0 || seenFiles[fileID] || prepared.Assets[0].Ref.Offset != 0 {
+			t.Fatalf("output reused another attempt: %+v", prepared.Assets[0].Ref)
+		}
+		seenFiles[fileID] = true
+		var previousEnd int64
 		var sawRow, sawTyped bool
 		for _, asset := range prepared.Assets {
 			ref := asset.Ref
@@ -1640,10 +1695,10 @@ func TestPrepareColumnPhysicalAssetRowsTypedGenerationPlacement(t *testing.T) {
 			t.Fatalf("%s row=%t typed=%t", operation, sawRow, sawTyped)
 		}
 		metrics := prepared.AssetMetrics
-		if metrics.SharedAppendCloseCount != 1 || metrics.SharedAppendFileSyncCount != 1 || metrics.SharedAppendSyncEpochCount != 1 || metrics.SharedSegmentAppendCount != 0 {
+		if metrics.SharedAppendCloseCount != 1 || metrics.SharedAppendFileSyncCount != 1 || metrics.SharedAppendSyncEpochCount != 1 || metrics.SharedSegmentAppendCount != len(prepared.Assets) {
 			t.Fatalf("%s append metrics=%+v", operation, metrics)
 		}
-		t.Logf("operation=%s appends=%d close=%d sync=%d bytes=%d", operation, metrics.SharedAppendCount, metrics.SharedAppendCloseCount, metrics.SharedAppendFileSyncCount, metrics.DirectViewSegmentAppendBytes)
+		t.Logf("operation=%s appends=%d close=%d sync=%d bytes=%d", operation, metrics.SharedAppendCount, metrics.SharedAppendCloseCount, metrics.SharedAppendFileSyncCount, metrics.SharedSegmentAppendBytes)
 	}
 	prepared, err := col.prepareColumnPhysicalAssetRowsAtIdentity(ColumnPublishPreparedAssets{}, columnWritePublishInput{
 		meta: meta, operation: ColumnPublishOperationDelete, rows: 1,

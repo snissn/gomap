@@ -15,6 +15,15 @@ root remain pinned. Missing or incompatible roots disable that optimization;
 schema hash is not a collection incarnation ID. See
 `recoverable-root-set-maintenance-3681.md` for the maintenance boundary.
 
+Selected typed FP32 batch/fold output uses fresh existing-manager segments, not
+cross-attempt generation-file appends. A failed source's delete/insert stages may
+share one still-owned file, but normal replay writes into a new attempt's file.
+Post-command-WAL publication failures still require normal reopen/recovery;
+in-process retry is not authorized by this placement rule. Failed outputs are
+retained safely, and exact fallback roots remain protected during subsequent
+whole-segment GC. Process-cut tests cover complete cleanup after before-seal,
+after-seal, and unsealed-suffix recovery, not physical power-loss qualification.
+
 ## 1. Recovery Entry Points
 
 Recovery is executed during `Open` for read-write handles.

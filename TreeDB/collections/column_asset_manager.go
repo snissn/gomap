@@ -1118,6 +1118,25 @@ func (s *columnPhysicalAssetAppendSession) appender(fileID uint32) (*columnPhysi
 	return appender, nil
 }
 
+// freshAppender adopts one existing-manager O_EXCL output into this session.
+// Admission precedes creation; normal close/abort retains the same authority.
+func (s *columnPhysicalAssetAppendSession) freshAppender() (*columnPhysicalAssetSegmentAppender, error) {
+	if s == nil || s.active != nil || s.stableRegistry == nil {
+		return nil, errors.New("collections: fresh output requires an empty stable append session")
+	}
+	if err := s.candidateAdmission.charge(0, 1); err != nil {
+		return nil, err
+	}
+	appender, err := newNextColumnPhysicalAssetSegmentAppenderWithStableResources(s.rootDir, s.cfg, s.stableRegistry)
+	if err != nil {
+		return nil, err
+	}
+	appender.candidateAdmission = s.candidateAdmission
+	appender.stableRecoveryRetainer = s.stableRecoveryRetainer
+	s.active, s.activeFile = appender, appender.fileID
+	return appender, nil
+}
+
 func (s *columnPhysicalAssetAppendSession) appendKinds(fileID uint32, items []columnPhysicalAssetAppendItem) ([]ColumnAssetRef, error) {
 	refs, _, _, err := s.appendKindsMeasured(fileID, items)
 	return refs, err

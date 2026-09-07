@@ -11,9 +11,15 @@ asset afterward, and reopens the same native directory with an unapplied typed
 replacement command. These are bounded maintenance/replay gates, not a claim of
 whole-database storage plateau or public mutable Minima activation.
 
-`TestPrepareColumnPhysicalAssetRowsTypedGenerationPlacement` checks same-generation
-insert/update/delete/retry appends, typed-image alignment, one shared close/sync
-epoch, and rejection of an out-of-range deletion generation. Existing generic
+`TestPrepareColumnPhysicalAssetRowsTypedGenerationPlacement` checks isolated
+same-generation insert/update/delete/retry outputs, typed-image alignment, one
+close/sync epoch, and rejection of an out-of-range deletion generation.
+`TestPrepareTypedAssetFailedPrefixRetry` retains failed sync bytes unchanged while
+retrying into a fresh file. `TestTypedSourceSecondStageOutputFailure` checks
+second-stage failure preserves the old row/root and normal replay atomically
+installs a separate output with complete reachability. `TestTypedGraphFoldProcessCut`
+also requires complete bounded cleanup after each real process cut and reopen.
+Existing generic
 producer tests keep their prior file placement and sync expectations. The eight
 real maintenance cycles also assert equal-width retained column bytes plateau
 and cross-generation mixed row debt stays bounded; pager/WAL growth is separate.
