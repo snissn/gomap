@@ -30,6 +30,9 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 	if c == nil || c.db == nil || !c.db.CommandWALEnabled() || maxRows <= 0 || cold.ManifestRecords <= 0 || cold.ManifestBytes <= 0 || cold.AssetBytes <= 0 || cold.DecodedTermBytes <= 0 {
 		return ErrVectorIndexSnapshotMismatch
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	coord := c.collectionSchemaCoordinator()
 	if coord == nil || !coord.typedGraphFoldActive.CompareAndSwap(false, true) {
 		return ErrConcurrentMutation
@@ -47,9 +50,12 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 		}
 	}()
 	unlock := c.lockCollectionSchemaWrite()
-	err = c.flushCollectionWriteDomainsForSchemaMutation()
+	err = ctx.Err()
 	if err == nil {
-		err = WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		err = c.flushCollectionWriteDomainsForSchemaMutation()
+	}
+	if err == nil {
+		err = WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() error {
 			var e error
 			captured, _, e = c.loadColumnStoreCompactionStateWithBudget(ctx, &cold)
 			if e != nil {
@@ -95,6 +101,9 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 		timing.RowExtraction = time.Since(stage)
 	}
 	if err != nil {
+		return err
+	}
+	if err = ctx.Err(); err != nil {
 		return err
 	}
 	stage = time.Now()
@@ -147,7 +156,13 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 		locators[i] = systemTargetEntry{key: row.ID, value: encodeColumnPrimaryRowLocator(ref)}
 	}
 	sort.Slice(locators, func(i, j int) bool { return bytes.Compare(locators[i].key, locators[j].key) < 0 })
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	if err = buildColumnVectorGraphAdjacencyTimed(graphRows, def, timing); err != nil {
+		return err
+	}
+	if err = ctx.Err(); err != nil {
 		return err
 	}
 	if err = copy.reserveManifest(def, graphRows); err != nil {
@@ -170,9 +185,12 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 		return err
 	}
 	unlock = c.lockCollectionSchemaWrite()
-	err = c.flushCollectionWriteDomainsForSchemaMutation()
+	err = ctx.Err()
 	if err == nil {
-		err = WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		err = c.flushCollectionWriteDomainsForSchemaMutation()
+	}
+	if err == nil {
+		err = WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() error {
 			return c.installTypedGraphFold(ctx, captured, copy, cold, maxRows, records, identity, baseMeta, locators, &prepared, &graph, timing)
 		})
 	}

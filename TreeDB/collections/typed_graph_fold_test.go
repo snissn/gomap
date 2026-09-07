@@ -5,7 +5,94 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
+
+func TestTypedGraphFoldCanceledStorageBarrier(t *testing.T) {
+	for _, phase := range []string{"capture", "install"} {
+		t.Run(phase, func(t *testing.T) {
+			col, _, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
+			root, err := canonicalVectorPartitionStorageRootV1(col.db.Dir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			release := make(chan struct{})
+			held := make(chan struct{})
+			holderDone := make(chan error, 1)
+			hold := func() error {
+				go func() {
+					holderDone <- WithVectorPartitionStorageBarrierV1(root, func() error { close(held); <-release; return nil })
+				}()
+				select {
+				case <-held:
+					return nil
+				case <-time.After(5 * time.Second):
+					return errors.New("barrier holder timed out")
+				}
+			}
+			defer func() {
+				close(release)
+				select {
+				case err := <-holderDone:
+					if err != nil {
+						t.Error(err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Error("barrier holder did not exit")
+				}
+			}()
+			var afterCapture func() error
+			if phase == "capture" {
+				if err := hold(); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				afterCapture = hold
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			seq, system := dbCommitSeqAndSystemRoot(col.db)
+			done := make(chan error, 1)
+			go func() { done <- col.foldTypedGraph(ctx, typedGraphOverlapLimits().Cold, 128, afterCapture) }()
+			// Observe the actual barrier waiter, not elapsed time or goroutine scheduling.
+			deadline := time.NewTimer(5 * time.Second)
+			defer deadline.Stop()
+			tick := time.NewTicker(time.Millisecond)
+			defer tick.Stop()
+			for {
+				vectorPartitionStorageBarriersV1.Lock()
+				entry := vectorPartitionStorageBarriersV1.entries[root]
+				waiting := entry != nil && entry.refs == 2
+				vectorPartitionStorageBarriersV1.Unlock()
+				if waiting {
+					break
+				}
+				select {
+				case err := <-done:
+					t.Fatalf("fold exited before barrier wait: %v", err)
+				case <-deadline.C:
+					t.Fatal("fold did not reach held barrier")
+				case <-tick.C:
+				}
+			}
+			cancel()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancel: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("fold ignored cancellation while storage barrier remained held")
+			}
+			if col.collectionSchemaCoordinator().typedGraphFoldActive.Load() {
+				t.Fatal("canceled fold retained builder admission")
+			}
+			if afterSeq, afterSystem := dbCommitSeqAndSystemRoot(col.db); afterSeq != seq || afterSystem != system {
+				t.Fatal("canceled fold changed publication authority")
+			}
+		})
+	}
+}
 
 func TestTypedGraphFoldKeepsPostCaptureMutation(t *testing.T) {
 	col, _, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)

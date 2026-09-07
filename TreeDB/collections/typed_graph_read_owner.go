@@ -12,7 +12,7 @@ import (
 var errTypedGraphOwnerBudget = errors.New("collections: typed graph owner retention budget exhausted")
 
 // Explicit internal setup limits, not public production defaults. StateBytes
-// charges typed payload/header retention once per immutable publication state
+// charges the state object and typed payload/header retention once per state
 // plus known holder backing and owner/lease descriptors conservatively per owner;
 // AssetBytes conservatively charges each owner's complete union, even when
 // mapped handles are shared. Cold bounds metadata/decoded terms separately.
@@ -156,7 +156,7 @@ func (c *Collection) openTypedGraphReadOwner(limits typedGraphReadOwnerLimits) (
 			candidate.stateBytes += n * size
 			return true
 		}
-		if candidate.stateBytes < 0 || candidate.stateBytes > limits.StateBytes || !charge(int64(cap(state.rows)), int64(reflect.TypeFor[columnPhysicalVisibleRow]().Size())) || !charge(int64(state.valueSlots), int64(reflect.TypeFor[columnDeclaredValue]().Size())) || !charge(int64(cap(state.invNorms)), 4) {
+		if candidate.stateBytes < 0 || candidate.stateBytes > limits.StateBytes || !charge(1, int64(reflect.TypeFor[typedGraphPublicationState]().Size())) || !charge(int64(cap(state.rows)), int64(reflect.TypeFor[columnPhysicalVisibleRow]().Size())) || !charge(int64(state.valueSlots), int64(reflect.TypeFor[columnDeclaredValue]().Size())) || !charge(int64(cap(state.invNorms)), 4) {
 			return errTypedGraphOwnerBudget
 		}
 		root := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))

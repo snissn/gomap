@@ -64,18 +64,22 @@ func TestTypedGraphGeneratedLocatorEncodedBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := columnWritePublishInput{meta: meta, operation: ColumnPublishOperationInsert, documents: []columnWriteDocument{{ID: []byte("x"), declaredValues: values, declaredValuesReady: true}}}
-	baseAllocs := testing.AllocsPerRun(10, func() {
-		if _, err := typedGraphColumnEncodedBound(input); err != nil {
-			t.Fatal(err)
+	// Race instrumentation deliberately drops pooled allocations; keep the
+	// semantic bounds above/below under race, not allocator comparisons.
+	if !collectionsRaceEnabled {
+		baseAllocs := testing.AllocsPerRun(10, func() {
+			if _, err := typedGraphColumnEncodedBound(input); err != nil {
+				t.Fatal(err)
+			}
+		})
+		fullAllocs := testing.AllocsPerRun(10, func() {
+			if _, err := typedGraphWriteEncodedBound(input, state); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if fullAllocs > baseAllocs {
+			t.Fatalf("generated metadata adds per-write allocations: assets=%v complete=%v", baseAllocs, fullAllocs)
 		}
-	})
-	fullAllocs := testing.AllocsPerRun(10, func() {
-		if _, err := typedGraphWriteEncodedBound(input, state); err != nil {
-			t.Fatal(err)
-		}
-	})
-	if fullAllocs != baseAllocs {
-		t.Fatalf("generated metadata adds per-write allocations: assets=%v complete=%v", baseAllocs, fullAllocs)
 	}
 	if got, err := typedGraphWriteEncodedBound(columnWritePublishInput{meta: meta}, state); err != nil || got != 0 {
 		t.Fatalf("empty write bound=%d err=%v", got, err)

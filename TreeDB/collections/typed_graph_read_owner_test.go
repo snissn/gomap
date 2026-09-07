@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -73,6 +74,46 @@ func TestTypedGraphReadOwnerPublishedSuffix(t *testing.T) {
 	owner.overlay.base.reader.rowRefSource = inverse
 	if !errors.Is(inverseErr, errTypedGraphInverseRequired) {
 		t.Fatalf("nonempty missing inverse admitted: %v", inverseErr)
+	}
+}
+
+func TestTypedGraphReadOwnerStateObjectCharge(t *testing.T) {
+	col, base, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
+	defer base.Close()
+	limits := typedGraphOverlapLimits()
+	if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 32, Tombstones: 32, ValueSlots: 128, OwnedBytes: 1 << 20}, limits.Cold); err != nil {
+		t.Fatal(err)
+	}
+	first, err := col.openTypedGraphReadOwner(limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	state := first.state
+	want := int64(reflect.TypeFor[typedGraphPublicationState]().Size()) + state.admittedPayloadBytes + int64(cap(state.rows))*int64(reflect.TypeFor[columnPhysicalVisibleRow]().Size()) + int64(state.valueSlots)*int64(reflect.TypeFor[columnDeclaredValue]().Size()) + int64(cap(state.invNorms))*4
+	if first.stateBytes != want {
+		t.Fatalf("state charge=%d want%d including object=%d", first.stateBytes, want, reflect.TypeFor[typedGraphPublicationState]().Size())
+	}
+	second, err := col.openTypedGraphReadOwner(limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	a := &col.collectionSchemaCoordinator().typedGraphOwners
+	if first.state != second.state || a.stateBytes != want+first.descriptorBytes+first.backingBytes+second.descriptorBytes+second.backingBytes {
+		t.Fatal("shared state object must be charged once")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if a.stateBytes != want+second.descriptorBytes+second.backingBytes {
+		t.Fatal("state charge released while another owner retained it")
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if a.stateBytes != 0 {
+		t.Fatal("state charge retained after last owner")
 	}
 }
 
