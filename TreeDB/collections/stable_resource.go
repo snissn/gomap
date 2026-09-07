@@ -103,7 +103,10 @@ func stableColumnManifestDurableRequirementRecord(key []byte) bool {
 
 func stableColumnManifestDurableRequirementsWithWork(records []columnManifestRecord, activeGeneration uint64, expectedNamespace string, work *rootpublication.StableResourceClosureWork) (rootpublication.StableLogicalObligationRequirements, error) {
 	requirements := rootpublication.StableLogicalObligationRequirements{
-		ScopedFields: append([]rootpublication.ReachabilityField(nil), stableColumnDurableRequirementFields...),
+		ScopedNamespaces: make([]rootpublication.StableLogicalObligationNamespaceScope, 0, len(stableColumnDurableRequirementFields)),
+	}
+	for _, field := range stableColumnDurableRequirementFields {
+		requirements.ScopedNamespaces = append(requirements.ScopedNamespaces, rootpublication.StableLogicalObligationNamespaceScope{Field: field, Namespace: expectedNamespace})
 	}
 	appendRef := func(ref ColumnAssetRef, reachability rootpublication.ReachabilityField) error {
 		if ref.Namespace != expectedNamespace || ref.Generation == 0 || ref.Generation > activeGeneration {

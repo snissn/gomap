@@ -232,7 +232,7 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 			Documents:               []Document{{ID: id, Embedding: []float32{1, 0}}},
 			DeferVectorIndexRebuild: true,
 		}); err != nil {
-			t.Fatalf("deferred upsert %s/%s: %v", index, id, err)
+			t.Fatalf("deferred upsert %s/%s: %v; cause: %v", index, id, err, errors.Unwrap(err))
 		}
 	}
 	assertActive := func(want bool) {
@@ -342,7 +342,7 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 
 	deferInsert("docs", "f")
 	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "normal", Embedding: []float32{1, 0}}}}); err != nil {
-		t.Fatalf("non-deferred UpsertDocuments: %v", err)
+		t.Fatalf("non-deferred UpsertDocuments: %v; cause: %v", err, errors.Unwrap(err))
 	}
 	assertActive(false)
 
@@ -382,7 +382,7 @@ func TestServiceDeferredVectorBuildMaintenanceDoesNotSpanManagers(t *testing.T) 
 		t.Fatalf("first service epoch active=%q want true", got)
 	}
 	if _, err := second.UpsertDocuments(ctx, "docs", request("second")); err != nil {
-		t.Fatalf("second deferred upsert: %v", err)
+		t.Fatalf("second deferred upsert: %v; cause: %v", err, errors.Unwrap(err))
 	}
 	if err := second.Close(); err != nil {
 		t.Fatalf("close second service: %v", err)

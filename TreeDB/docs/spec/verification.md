@@ -125,6 +125,16 @@ checkpoint, and mutation-asset tests establish reuse boundaries. They do not
 certify the future typed Minima overlay; #4616–#4619 must add typed admission,
 replay, snapshot, fold/crash and public-route tests as those features land.
 
+`TestStableLogicalObligationNamespace*` checks empty namespace replacement on a
+shared physical token, unrelated-namespace retention, scope normalization and
+copy ownership, malformed/overlapping scopes, missing/stale obligations, and
+declining the whole-field completeness certificate. The DB
+`TestCaptureDurableRootNamespaceScopeCannotBypassAppendFallback` covers empty
+namespace registration alongside append evidence. The service
+`TestServiceColumnGraphCrossCollectionClosure` exercises A→B→A rebuilds with a
+held read view, current full fetch and ordinary reopen. The existing deferred
+maintenance lifecycle/manager/crash tests remain regression gates.
+
 ### Internal mutable graph consumer (#4617)
 
 `TestTypedGraphOverlay*` covers checked base/current lineage, insert/replacement/

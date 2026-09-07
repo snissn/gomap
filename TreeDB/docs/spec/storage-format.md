@@ -3047,6 +3047,17 @@ including initially absent identities; installation rechecks the actual bytes.
 Schema changes remove the control and aliases with real tombstones. Exact
 publication obligations and maintenance reachability include the captured
 manifest closure; unchanged-base append certification remains available.
+Exact column publication requirements are scoped by reachability field **and
+logical asset namespace**, including declared empty scopes. Recapturing one
+collection replaces only that collection's obligations; other namespaces stay
+retained, even when their obligations share one physical resource token.
+The shared closure API retains legacy whole-field scopes, but rejects overlap
+between whole-field and namespace-local scopes for the same field. Namespace
+identifiers are nonempty opaque logical IDs, not filesystem basenames. This is
+an in-memory publication contract, not an on-disk format change. Namespace-local
+replacement uses exact filtering and validation rather than the whole-field
+complete-final mutation certificate; the existing true append-only proof is
+unchanged. Missing or stale obligations inside the declared scopes fail closed.
 Descriptor removal does not itself retire every page of an independent captured
 tree. The supported command-WAL profile rejects scalar/text schema changes and
 unlogged vector create/drop publication before capture cleanup. Reopening with
