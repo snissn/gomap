@@ -12,6 +12,13 @@ cleaning, compacting, or rewriting the directory. Typed-column image,
 descriptor, manifest, and schema evolution follows the fail-closed policy in
 `typed-column-schema-evolution.md`.
 
+Column manifest generation is not a command LSN or an incarnation identifier.
+Managed writes advance it; physical maintenance can preserve it. A replay
+candidate below all compatible captured root generations can be excluded only
+under the managed durable continuity contract in
+`recoverable-root-set-maintenance-3681.md`. This changes no disk format and never
+overrides exact root-reference or stable file-identity protection.
+
 The canonical production profiles are `command_wal_durable`,
 `command_wal_relaxed`, and `no_wal_fast`; `bench_unsafe` is benchmark/test only.
 The resolved profile is immutable at open. Main DB `format.json` version 4

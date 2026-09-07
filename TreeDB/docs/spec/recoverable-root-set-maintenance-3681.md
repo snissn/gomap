@@ -7,6 +7,24 @@ validated durable meta slots, the visible and queued publication frontiers,
 publication resource manifests, snapshot/history pins, the oldest protected
 commit sequence, and the applied command-WAL frontier of each root.
 
+For continuously managed collections under `command_wal_durable`, column GC
+computes a minimum generation during the existing validated per-root manifest
+pass. Only candidates in the matching namespace with generation strictly below
+that minimum omit the *additional replay-candidate* pin. Each captured root's
+actual refs remain pinned independently, including older physical generations.
+Equality remains conservative because maintenance may replace assets without
+advancing generation. The existing per-visible-root LSN/generation/schema tuples
+remain paired; global LSN ordering is not used to infer generation ordering.
+
+This optimization is disabled if any captured root lacks a collection or valid
+nonzero active/recovery manifest, or has incompatible metadata, schema hash, or
+namespace, and for non-durable or WAL-off profiles. Supported managed APIs do
+not provide collection drop/recreate; incompatible create is rejected, and a
+persisted profile cannot silently switch to WAL-off and back. This restricted
+continuity contract does not make schema hash an incarnation ID or certify
+unsupported catalog replacement. Future drop/recreate support must revisit the
+predicate. No new manifest scan, registry, or on-disk identity is introduced.
+
 A destructive plan MUST capture the capability after maintenance admission and
 MUST revalidate that same instance immediately before its first mutation. A
 stale capability deletes nothing. Callers MAY release exact resource pins after

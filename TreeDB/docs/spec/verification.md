@@ -2,6 +2,15 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+`TestRecoverableColumnAssetReplayStrictFloor` checks exact excluded identities,
+strict equality retention, namespace mismatch, and disabled-floor behavior.
+`TestRecoverableColumnAssetReplayFloorUnknownAuthority` checks missing/zero and
+incompatible authority plus WAL-off rejection. `TestTypedGraphWorkEpochRepeatedMaintenance`
+exercises eight real typed write/fold/GC cycles, reads every captured fallback
+asset afterward, and reopens the same native directory with an unapplied typed
+replacement command. These are bounded maintenance/replay gates, not a claim of
+whole-database storage plateau or public mutable Minima activation.
+
 ## Minima native-path contract (#4615)
 
 `minima-native-execution.md` defines the target, not current mutable graph

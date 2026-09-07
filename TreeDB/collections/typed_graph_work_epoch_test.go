@@ -7,7 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 func typedGraphTestWorkEpochLimits() typedGraphWorkEpochLimits {
@@ -80,6 +83,12 @@ func TestTypedGraphWorkEpochRepeatedMaintenance(t *testing.T) {
 		}
 		deleted += stats.Columns.SegmentsDeleted
 		t.Logf("cycle=%d native_bytes=%d entries=%d pager_pages=%d reusable=%d column_deleted=%d retained=%d", cycle, stats.Native.Bytes, stats.Native.Entries, stats.Pager.TotalPages, stats.Pager.FreelistReclaimable, stats.Columns.SegmentsDeleted, stats.Columns.BytesRetained)
+		if cycle >= 3 {
+			plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{})
+			if err != nil || plan.Segments.BytesWholeReclaimable > 100000 {
+				t.Fatalf("historical whole-segment replay retention: bytes=%d err=%v", plan.Segments.BytesWholeReclaimable, err)
+			}
+		}
 	}
 	if deleted == 0 {
 		t.Fatal("repeated maintenance reclaimed no real segments")
@@ -88,6 +97,107 @@ func TestTypedGraphWorkEpochRepeatedMaintenance(t *testing.T) {
 	t.Logf("native_reuse_alloc_pages_total=%d->%d", reuseBefore, reuseAfter)
 	if err != nil || reuseAfter <= reuseBefore {
 		t.Fatalf("native page reuse=%d->%d err=%v", reuseBefore, reuseAfter, err)
+	}
+	// Exact fallback roots remain readable after historical candidates were
+	// reclaimed. Eligibility is not permission to remove an actual root ref.
+	roots, err := col.db.CaptureRecoverableRootSet(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		defer roots.Release()
+		var fallbackRefs int
+		for _, root := range roots.Roots() {
+			snapshot := roots.AcquireSnapshotForRoot(root)
+			if snapshot == nil {
+				t.Fatal("missing recovery snapshot")
+			}
+			catalog, err := loadCollectionCatalog(snapshot, "minima")
+			if err != nil || catalog == nil {
+				snapshot.Close()
+				t.Fatalf("recovery catalog=%v err=%v", catalog, err)
+			}
+			view, err := col.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(snapshot, catalog, "minima", catalog.rootID(catalog.columnManifestRootName), *catalog.meta.Options.ColumnStore, true, columnManifestScanAllSidecars())
+			if err == nil && catalog.typedGraphBase != nil {
+				requirements, _, baseErr := catalog.typedGraphBase.requirementsAtSnapshot(snapshot)
+				if baseErr != nil {
+					snapshot.Close()
+					t.Fatal(baseErr)
+				}
+				for _, obligation := range requirements.Obligations {
+					ref := ColumnAssetRef{Kind: ColumnAssetKind(obligation.Kind), Namespace: obligation.Namespace, Generation: obligation.Generation, PartID: obligation.PartID, FileID: uint32(obligation.FileID), Offset: obligation.Offset, Length: obligation.Length, Checksum: obligation.Checksum}
+					if _, err := readColumnPhysicalAssetFromManager(col.db.ColumnAssetRootDir(), ref); err != nil {
+						snapshot.Close()
+						t.Fatalf("captured fallback base ref=%+v err=%v", ref, err)
+					}
+					if root.Durable && !root.Visible {
+						fallbackRefs++
+					}
+				}
+			}
+			snapshot.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, ref := range columnPhysicalScanSnapshotViewAssetRefs(view) {
+				if _, err := readColumnPhysicalAssetFromManager(col.db.ColumnAssetRootDir(), ref); err != nil {
+					t.Fatalf("recovery root=%+v ref=%+v err=%v", root, ref, err)
+				}
+				if root.Durable && !root.Visible {
+					fallbackRefs++
+				}
+			}
+		}
+		if fallbackRefs == 0 {
+			t.Fatal("fixture did not exercise fallback asset closure")
+		}
+		t.Logf("post-GC readable fallback refs=%d", fallbackRefs)
+	}()
+	// Reopen the post-GC native directory with a real unapplied typed command.
+	// This exercises native replay, not reconstruction from retained JSON.
+	if err := col.db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	replayLSN := col.db.State().AppliedCommandLSN
+	replayDir := col.db.Dir()
+	var payload commitlog.CollectionTypedBatchPayload
+	for _, frame := range collectionCommandWALFrames(t, col.db.Dir()) {
+		if frame.Kind == commitlog.CommandKindCollectionUpdateBatchByID && frame.PayloadFormat == commitlog.PayloadFormatCollectionTypedBatchByIDV1 {
+			payload, err = commitlog.DecodeCollectionTypedBatchPayload(frame.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(payload.Documents) != len(ids) {
+		t.Fatal("missing typed replacement payload")
+	}
+	for i, column := range payload.Columns {
+		if column.Name == "content" {
+			for j := range payload.Documents {
+				payload.Documents[j].Values[i].String = "post-gc-replay"
+			}
+		}
+	}
+	encoded, err := commitlog.EncodeCollectionTypedBatchPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := col.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writeCollectionCommandWALFrame(t, replayDir, replayLSN+1, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.PayloadFormatCollectionTypedBatchByIDV1, encoded)
+	reopened := openTypedMinimaDB(t, replayDir)
+	defer reopened.Close()
+	replayed, err := NewCollectionManager(reopened).OpenCollection("minima")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		got, err := replayed.Get(id)
+		if err != nil || !strings.Contains(string(got), "post-gc-replay") {
+			t.Fatalf("post-GC replay id=%s value=%s err=%v", id, got, err)
+		}
 	}
 }
 

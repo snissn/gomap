@@ -8,6 +8,13 @@ Recovery follows the immutable canonical profile selected at open:
 TreeDB is pre-alpha, persisted feature/profile conflicts fail closed with a
 rebuild-required error; recovery does not infer a weaker hybrid contract.
 
+Column GC's managed `command_wal_durable` optimization excludes an extra replay
+candidate pin only when its generation is strictly below every compatible,
+nonzero captured collection manifest. Actual assets referenced by any captured
+root remain pinned. Missing or incompatible roots disable that optimization;
+schema hash is not a collection incarnation ID. See
+`recoverable-root-set-maintenance-3681.md` for the maintenance boundary.
+
 ## 1. Recovery Entry Points
 
 Recovery is executed during `Open` for read-write handles.
