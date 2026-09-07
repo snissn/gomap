@@ -1,14 +1,36 @@
 import unittest
 import socket
+import json
+from types import SimpleNamespace
 from unittest import mock
 
 import _support
 from treedb_client import TreeDBClient
 from treedb_client.errors import TreeDBConfigError, TreeDBProtocolError, TreeDBTimeoutError, TreeDBTransportError, UnsupportedError
-from treedb_client._native import _HEADER, _NativeConnection, _dense_request, _dense_response, _decode_vector, _read_uint, _section, _sections, _string_map, _uint, _vector
+from treedb_client._native import _HEADER, _NativeConnection, _dense_request, _dense_response, _decode_vector, _read_uint, _section, _sections, _string_map, _uint, _vector, _typed_upsert_request, _typed_upsert_response
 
 
 class NativeCodecTests(unittest.TestCase):
+    def test_typed_upsert_golden_residual_and_validation(self):
+        info = SimpleNamespace(dimension=2, generation=1, scalar_fields=[])
+        row = {"id": "a", "content": "text", "embedding": [1, 0], "meta": {"extra": "owned"}}
+        payload, ids = _typed_upsert_request("a", [row], info)
+        sections = _sections(payload, {102, 103, 131})
+        self.assertEqual(sections[131].hex(), "01610101020000803f000000000107636f6e74656e740474657874")
+        self.assertEqual(ids, ["a"])
+        self.assertEqual(json.loads(_decode_vector(sections[103], 1)[0]), {"id": "a", "meta": {"extra": "owned"}})
+        info.scalar_fields = [SimpleNamespace(field="meta.extra", value_type="string")]
+        payload, _ = _typed_upsert_request("a", [row], info)
+        self.assertEqual(json.loads(_decode_vector(_sections(payload, {102, 103, 131})[103], 1)[0]), {"id": "a", "meta": {}})
+        self.assertEqual(row["meta"]["extra"], "owned")
+        for rows in ([], [row, row], [dict(row, embedding=[1])], [dict(row, embedding=[float("nan"), 0])], [dict(row, meta={})]):
+            with self.subTest(rows=rows), self.assertRaises(TreeDBConfigError):
+                _typed_upsert_request("a", rows, info)
+        self.assertEqual(_typed_upsert_response(_section(132, b"\x01\x02\x01\x01"), 1, 2), (1, 1))
+        for raw in (b"", b"\x02\x02\x01\x01", b"\x01\x02\x00\x01", b"\x01\x02\x01\x01\x00"):
+            with self.subTest(raw=raw), self.assertRaises(TreeDBProtocolError):
+                _typed_upsert_response(_section(132, raw), 1, 2)
+
     def test_native_address_rejects_hostnames_before_networking(self):
         with mock.patch("socket.getaddrinfo", side_effect=AssertionError("resolver called")):
             for address in ("localhost:12", "example.org:12", "[localhost]:12", "[::1:12", "::1:12", "[fe80::1%eth0]:12"):
@@ -79,7 +101,9 @@ class NativeCodecTests(unittest.TestCase):
         client = TreeDBClient("http://localhost:1", native_address="127.0.0.1:2")
         self.addCleanup(client.close)
         with mock.patch.object(client, "_request", side_effect=AssertionError("HTTP fallback")):
-            for call in (lambda: client.upsert_documents("a", []), lambda: client.delete_documents("a", []),
+            with self.assertRaises(TreeDBConfigError):
+                client.upsert_documents("a", [])
+            for call in (lambda: client.delete_documents("a", []),
                          lambda: client.delete_by_filter("a", {"field": "meta.x", "operator": "==", "value": "x"})):
                 with self.assertRaises(UnsupportedError):
                     call()

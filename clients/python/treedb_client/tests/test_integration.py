@@ -11,6 +11,7 @@ import time
 import tracemalloc
 import unittest
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -156,7 +157,11 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                     rows = [Document(id=str(i), content=f"text {i}", embedding=[1, i / 32],
                                      meta={"user_id": "owner", "fpath": f"path/{i}"})
                             for i in range(32)]
-                    self.assertEqual(client.upsert_documents("typed", rows, defer_vector_index_rebuild=True).upserted, 32)
+                    with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as writer:
+                        self.assertEqual(writer.upsert_documents("typed", rows, index_info=info).upserted, 32)
+                    with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as stale:
+                        with self.assertRaises(TreeDBClientError):
+                            stale.upsert_documents("typed", rows[:1], index_info=replace(info, generation=info.generation + 1))
                     client.optimize_index("typed", column_graph_serving=limits)
                     with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as native:
                         native_response = native.query_by_embedding("typed", [1, 0], 4, wanted, return_embedding=True, index_info=info)
@@ -187,11 +192,17 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                     self.assertEqual(response.documents[0].embedding, [1.0, 0.0])
                     changed = Document(id="0", content="replacement", embedding=[0, 1],
                                        meta={"user_id": "changed", "fpath": "new/path"})
-                    self.assertEqual(client.upsert_documents("typed", [changed]).upserted, 1)
+                    with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as writer:
+                        extra = Document(id="extra", content="inserted", embedding=[1, 0], meta={"user_id": "owner", "fpath": "extra/path"})
+                        mixed = writer.upsert_documents("typed", [rows[3], changed, extra], index_info=info)
+                        self.assertEqual((mixed.upserted, mixed.updated, mixed.inserted), (3, 2, 1))
+                        self.assertEqual(writer.get_many("typed", ["extra"])[0].content, "inserted")
+                    self.assertEqual(client.delete_documents("typed", ["extra"]).deleted, 1)
                     self.assertEqual(client.delete_documents("typed", ["1"]).deleted, 1)
                     self.assertEqual(client.delete_by_filter("typed", {
                         "field": "meta.fpath", "operator": "==", "value": "path/2"}).deleted, 1)
-                    self.assertEqual(client.upsert_documents("typed", [rows[1]]).upserted, 1)
+                    with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as writer:
+                        self.assertEqual(writer.upsert_documents("typed", [rows[1]], index_info=info).inserted, 1)
                     self.assertEqual(client.count_documents("typed").count, 31)
                     client.optimize_index("typed", column_graph_action="fold")
             finally:

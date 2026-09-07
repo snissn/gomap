@@ -6,6 +6,9 @@ import math
 import struct
 import threading
 import time
+import copy
+import json
+from collections.abc import Mapping
 
 from .errors import TreeDBConfigError, TreeDBProtocolError, TreeDBTimeoutError, TreeDBTransportError
 
@@ -72,6 +75,83 @@ def _sections(body, known):
 
 def _vector(values):
     return _uint(len(values)) + b"".join(_uint(len(v)) for v in values) + b"".join(values)
+
+
+def _typed_upsert_request(index, documents, info):
+    """Serialize declared carriers directly; JSON contains residual fields only."""
+    from .models import Document
+    rows, dims = len(documents), info.dimension
+    if rows <= 0 or dims <= 0 or dims > 65536 or rows * dims * 4 > _MAX_FRAME:
+        raise TreeDBConfigError("typed batch dimensions exceed frame bounds")
+    fields = [field.field for field in info.scalar_fields]
+    if len(set(fields)) != len(fields) or any(field.value_type != "string" or not field.field.startswith("meta.") for field in info.scalar_fields):
+        raise TreeDBConfigError("typed scalar schema requires unique declared metadata strings")
+    ids, residuals = [], []
+    columns = [("content", [])] + [(field, []) for field in fields]
+    packed = bytearray(rows * dims * 4)
+    packer = struct.Struct("<" + "f" * dims)
+    for i, document in enumerate(documents):
+        if isinstance(document, Document):
+            name, content, embedding, meta = document.id, document.content, document.embedding, document.meta
+            compact = document.embedding_f32_le_b64
+        elif isinstance(document, Mapping):
+            if set(document) - {"id", "content", "embedding", "meta", "score", "embedding_f32_le_b64"}:
+                raise TreeDBConfigError("unknown document field")
+            name, content, embedding, meta = document.get("id"), document.get("content", ""), document.get("embedding"), document.get("meta", {})
+            compact = document.get("embedding_f32_le_b64")
+        else:
+            raise TreeDBConfigError("typed document must be Document or Mapping")
+        if not isinstance(name, str) or not name or not isinstance(content, str) or not isinstance(meta, Mapping):
+            raise TreeDBConfigError("invalid typed document ID/content/meta")
+        if compact is not None or embedding is None or len(embedding) != dims:
+            raise TreeDBConfigError("native upsert requires dimension-matched numeric embedding, not base64")
+        try:
+            if not all(math.isfinite(v) for v in embedding):
+                raise ValueError("nonfinite embedding")
+            packer.pack_into(packed, i * dims * 4, *embedding)
+        except (ValueError, TypeError, OverflowError, struct.error) as exc:
+            raise TreeDBConfigError("invalid FP32 embedding") from exc
+        ids.append(name)
+        columns[0][1].append(content)
+        residual = copy.deepcopy(dict(meta))
+        for n, field in enumerate(fields):
+            parent = residual
+            path = field[5:].split(".")
+            for part in path[:-1]:
+                parent = parent.get(part) if isinstance(parent, Mapping) else None
+            if not isinstance(parent, dict) or not isinstance(parent.get(path[-1]), str):
+                raise TreeDBConfigError("missing declared string scalar")
+            columns[n + 1][1].append(parent.pop(path[-1]))
+        try:
+            residuals.append(json.dumps({"id": name, "meta": residual}, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+        except (ValueError, TypeError) as exc:
+            raise TreeDBConfigError("invalid residual metadata") from exc
+    if len(set(ids)) != rows:
+        raise TreeDBConfigError("duplicate typed document IDs")
+    payload = bytearray(_bytes(index.encode("utf-8")) + _uint(info.generation) + _uint(rows) + _uint(dims))
+    payload.extend(packed)
+    payload.extend(_uint(len(columns)))
+    for name, values in columns:
+        payload.extend(_bytes(name.encode("utf-8")))
+        for value in values:
+            payload.extend(_bytes(value.encode("utf-8")))
+    sections = _section(131, payload) + _section(102, _vector([name.encode("utf-8") for name in ids])) + _section(103, _vector(residuals))
+    if len(sections) + 128 > _MAX_FRAME:
+        raise TreeDBConfigError("typed batch exceeds frame bounds")
+    return sections, ids
+
+
+def _typed_upsert_response(body, generation, rows):
+    sections = _sections(body, {132})
+    if 132 not in sections:
+        raise TreeDBProtocolError("typed upsert response missing")
+    raw, offset, values = sections[132], 0, []
+    for _ in range(4):
+        value, offset = _read_uint(raw, offset)
+        values.append(value)
+    if offset != len(raw) or values[0] != generation or values[1] != rows or values[2] + values[3] != rows:
+        raise TreeDBProtocolError("typed upsert response generation/count mismatch")
+    return values[2], values[3]
 
 
 def _decode_vector(data, expected):

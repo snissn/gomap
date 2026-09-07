@@ -34,7 +34,7 @@ Not supported:
 
 TreeDB and this client are pre-alpha; APIs may change with the service contract.
 
-## Optional native read transport
+## Optional native typed transport
 
 Start the same service with `-native-addr 127.0.0.1:7121`; its native and HTTP
 listeners share one backend, manager and service. Close the client and drain
@@ -44,8 +44,8 @@ both listeners before database cleanup.
 native capabilities lazily. `query_by_embedding(..., index_info=info)` uses
 dense 64/v2 only for caller-held selected typed `IndexInfo` returned by HTTP
 create/open/ensure. Its generation is sent as the server guard; conflicting
-explicit generations fail. Initial ingestion/build/admission and reopen
-re-admission remain explicit HTTP control operations. Dense results include
+explicit generations fail. Create/build/admission and reopen re-admission
+remain explicit HTTP control operations. Dense results include
 full payloads from the same search owner and are Python-owned after return.
 
 Native addresses must be numeric IPv4 literals (`127.0.0.1:7121`) or bracketed
@@ -60,8 +60,17 @@ fetch and has no generation guard or batch-wide snapshot promise. The current
 server still performs per-ID reconstruction setup; shared typed batch-view
 materialization remains an allocation follow-up before M4 qualification.
 
-Native upsert/delete/filter-delete are not yet implemented and fail explicitly;
-use a separate HTTP client for ingestion in this read-only milestone. Other
+`upsert_documents(index, documents, index_info=info)` uses negotiated local-only
+65/v1: packed FP32, declared content/scalar strings, and residual-only JSON. It
+does not serialize indexed values to JSON or look up each ID before upsert.
+Generation and persisted typed schema are checked by the service. Existing and
+new IDs publish atomically; unchanged matches count as updated without an extra
+write. Supply numeric embeddings (not base64); build/admission is still explicit,
+including when `defer_vector_index_rebuild` is false. Successful mutations use
+the service's configured durability, not a new wire acknowledgment guarantee.
+
+Native delete/filter-delete remain unsupported; use an explicit HTTP control
+client for these operations. Other
 existing HTTP APIs retain their existing transport. There is no native request
 retry or HTTP fallback after a native error. `native_command_version=2` is
 dispatch identity only; default-zero legacy work fields are unavailable typed
@@ -335,8 +344,9 @@ with action `"ensure"` and the same limits. Ensure does not rebuild.
 Selected `query_by_embedding(..., route="ann")` supports declared scalar filters
 and full payload fetch under one read owner. A bounded typed exact filter plan
 is valid on that route; legacy document-scan `route="exact"` is not. Search before
-admission fails closed. This HTTP capability is not yet the native Minima runner
-route or a completed zero-JSON/performance qualification.
+admission fails closed. The optional native client above supports typed ingestion
+and search; complete Minima runner integration and measured zero-indexed-JSON /
+performance qualification remain separate unfinished gates.
 
 ## Error mapping
 

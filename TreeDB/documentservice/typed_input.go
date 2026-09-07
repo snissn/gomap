@@ -10,6 +10,79 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 )
 
+// TypedDocumentsRequest carries declared values separately from residual JSON.
+// All slices are borrowed only for the synchronous call; the core planner owns
+// published values. ExpectedGeneration is mandatory for this native boundary.
+type TypedDocumentsRequest struct {
+	ExpectedGeneration uint64
+	IDs                [][]byte
+	Retained           [][]byte
+	Columns            []collections.TypedColumnBatch
+}
+
+// UpsertTypedDocuments performs one atomic mixed upsert without reconstructing
+// indexed JSON. It has the same durability and unchanged-row counting contract
+// as UpsertDocuments; graph build/admission remains explicit.
+func (s *Service) UpsertTypedDocuments(ctx context.Context, index string, req TypedDocumentsRequest) (UpsertDocumentsResponse, error) {
+	if s == nil {
+		return UpsertDocumentsResponse{}, serviceError(CodeInternal, "service is nil")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if req.ExpectedGeneration == 0 {
+		return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "typed upsert requires expected generation")
+	}
+	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
+	if err != nil {
+		return UpsertDocumentsResponse{}, err
+	}
+	if !info.TypedInput {
+		return UpsertDocumentsResponse{}, serviceError(CodeUnsupported, "typed upsert requires declared typed input")
+	}
+	if len(req.IDs) == 0 || len(req.IDs) != len(req.Retained) || len(req.Columns) != 2+len(info.ScalarFields) {
+		return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "typed upsert shape does not match schema")
+	}
+	names := make([]string, len(req.IDs))
+	for i, id := range req.IDs {
+		names[i] = string(id)
+	}
+	if _, err := validateDocumentIDs(names); err != nil {
+		return UpsertDocumentsResponse{}, err
+	}
+	seen := make(map[string]bool, len(req.Columns))
+	for _, column := range req.Columns {
+		if seen[column.Name] {
+			return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "duplicate typed column")
+		}
+		seen[column.Name] = true
+		if column.Name == defaultEmbeddingField {
+			if len(column.Float32Vectors) != len(req.IDs) || len(column.Strings) != 0 {
+				return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "invalid typed vector shape")
+			}
+			for _, vector := range column.Float32Vectors {
+				if err := ctxErr(ctx); err != nil {
+					return UpsertDocumentsResponse{}, err
+				}
+				if err := validateEmbedding("embedding", vector, info.Dimension, info.Metric); err != nil {
+					return UpsertDocumentsResponse{}, err
+				}
+			}
+		} else {
+			valid := column.Name == defaultTextField
+			for _, field := range info.ScalarFields {
+				valid = valid || column.Name == field.Field
+			}
+			if !valid || len(column.Strings) != len(req.IDs) || len(column.Float32Vectors) != 0 {
+				return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "invalid typed string column")
+			}
+		}
+	}
+	if err := ctxErr(ctx); err != nil {
+		return UpsertDocumentsResponse{}, err
+	}
+	return finishTypedDocuments(col, info, req.IDs, req.Retained, req.Columns, names, 0)
+}
+
 func (s *Service) optimizeTypedInput(ctx context.Context, col *collections.Collection, info IndexInfo, req OptimizeIndexRequest) (OptimizeIndexResponse, error) {
 	started := time.Now()
 	action := req.ColumnGraphAction
@@ -123,6 +196,10 @@ func (s *Service) upsertTypedDocuments(ctx context.Context, col *collections.Col
 			return UpsertDocumentsResponse{}, wrapServiceError(CodeInvalidRequest, "retained metadata is not JSON-serializable", err)
 		}
 	}
+	return finishTypedDocuments(col, info, ids, retained, columns, names, compact)
+}
+
+func finishTypedDocuments(col *collections.Collection, info IndexInfo, ids, retained [][]byte, columns []collections.TypedColumnBatch, names []string, compact int) (UpsertDocumentsResponse, error) {
 	updated, err := col.UpsertTypedBatch(ids, retained, columns)
 	if err != nil {
 		return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "typed upsert failed", err)

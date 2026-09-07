@@ -833,6 +833,45 @@ These extensible capability-map entries do not change existing frame versions.
 GetMany (50/v1) remains unchanged: it is a batched transport over local per-ID
 reads, without an expected-generation guard or a batch-wide snapshot promise.
 
+### Typed document upsert (65/v1, LocalOnly)
+
+`typed_document_upsert` is a separate local mutation, never a deterministic
+replicated entry or a reinterpretation of insert-batch. Hello advertises
+`typed_document_upsert_versions=1` only with a registered command and configured
+standalone document service. Cluster submission rejects it before mutation.
+
+Required sections are deadline (4), IDs (102), documents (103), and
+`typed_upsert_request` (131). IDs and documents use existing byte-vector encoding;
+documents here contain **only residual JSON** with matching ID, never declared
+embedding, content, or scalar values. Section 131 contains, in order:
+
+- Length-prefixed UTF-8 index name; positive uvarint expected generation.
+- Positive uvarint row count and dimensions; row-major little-endian FP32 values.
+- Positive uvarint string-column count; for each column, a length-prefixed UTF-8
+  name followed by exactly row-count length-prefixed UTF-8 string values.
+
+The vector column is implicitly named `embedding`; named string columns must
+exactly match persisted `content` and declared string scalars. Duplicate,
+missing, unknown columns, dimension/count mismatch, invalid values, residual
+ownership violations and stale generations fail closed. Existing frame/vector
+limits bound decoding; dimensions are additionally capped at 65536. No trailing
+bytes are permitted. Deadline bounds use the existing context-aware service
+and synchronous core mutation; no arbitrary decoder/lock preemption is claimed.
+
+The decoder borrows IDs/residual bytes only during the synchronous call and
+owns one flat FP32 allocation with capped row views. The existing typed planner
+owns published data and performs one atomic mixed upsert, without per-ID
+existence requests or whole-document JSON reconstruction. Unchanged matches
+count as updated but do not create additional row/WAL changes.
+
+Response section `typed_upsert_response` (132) contains four uvarints:
+generation, upserted count, inserted count, updated count. The latter two sum to
+the request row count, as does upserted. No IDs are echoed; callers retain their
+request IDs. Success has the configured service/core durability contract, not
+an implied wire `synced` or Raft acknowledgment. Initial graph build and
+admission remain explicit separate operations. Versions 50/v1 and 64/v1,v2 are
+unchanged. Dispatch identity does not certify measured indexed-JSON counters.
+
 ## 11. Typed Scalars
 
 Index and query scalar codes:

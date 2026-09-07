@@ -659,6 +659,15 @@ func v1CommandSchemas() []CommandSchema {
 			},
 		},
 		{
+			ID: CommandTypedDocumentUpsert, Version: 1, Name: "typed_document_upsert", Kind: CommandKindMutation, LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionDeadline, Name: "deadline", Required: true},
+				{ID: SectionDocumentIDs, Name: "document_ids", Required: true},
+				{ID: SectionDocuments, Name: "documents", Required: true},
+				{ID: SectionTypedUpsertRequest, Name: "typed_upsert_request", Required: true},
+			},
+		},
+		{
 			ID:        CommandVectorStatus,
 			Version:   1,
 			Name:      "vector_status",

@@ -84,6 +84,8 @@ const (
 	SectionVectorStatus           SectionID = 128
 	SectionDenseSearchRequest     SectionID = 129
 	SectionDenseSearchResponse    SectionID = 130
+	SectionTypedUpsertRequest     SectionID = 131
+	SectionTypedUpsertResponse    SectionID = 132
 )
 
 type CommandID uint64
@@ -122,6 +124,7 @@ const (
 	CommandVectorSearchPinned        CommandID = 62
 	CommandVectorClosePinnedSnapshot CommandID = 63
 	CommandDenseVectorSearch         CommandID = 64
+	CommandTypedDocumentUpsert       CommandID = 65
 )
 
 type DocumentFormat uint64

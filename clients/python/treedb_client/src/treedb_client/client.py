@@ -257,11 +257,21 @@ class TreeDBClient:
         *,
         expected_generation: Optional[int] = None,
         defer_vector_index_rebuild: bool = False,
+        index_info: Optional[IndexInfo] = None,
     ) -> UpsertDocumentsResponse:
         """Write or replace documents in an index."""
 
         if self._native is not None:
-            raise UnsupportedError("unsupported", "native typed upsert is not yet negotiated; use an explicit HTTP control client")
+            from ._native import _section, _uint, _typed_upsert_request, _typed_upsert_response
+            if (index_info is None or index_info.name != index or index_info.extra.get("typed_input") is not True
+                    or index_info.vector_strategy != "column_graph" or index_info.generation <= 0
+                    or (expected_generation is not None and expected_generation != index_info.generation)):
+                raise TreeDBConfigError("native typed upsert requires matching typed IndexInfo and generation")
+            sections, ids = _typed_upsert_request(index, documents, index_info)
+            sections += _section(4, _uint(time.time_ns() + int(self.timeout * 1e9)))
+            body = self._native.command(65, 1, sections, "typed_document_upsert_versions")
+            inserted, updated = _typed_upsert_response(body, index_info.generation, len(ids))
+            return UpsertDocumentsResponse(index=index_info, upserted=len(ids), inserted=inserted, updated=updated, ids=ids)
 
         request: dict[str, Any] = {"documents": [_document_for_write(doc) for doc in documents]}
         _add_expected_generation(request, expected_generation)
