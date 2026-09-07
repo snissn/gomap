@@ -233,6 +233,24 @@ value pointers plus outer leaves, multi-lane value-log configuration, and
 segment rotation. Every fixture is checkpointed, captured, materialized from
 stable state only, and reopened through normal public read-only `Open`.
 
+Publication metadata reuse (#4627) has additional production DB witnesses:
+
+- `TestDurableRootMetadataReuseLowPlacementAndFallback4627` holds an old
+  snapshot through publication, verifies bounded-fixture high-water stability
+  and low metadata/auxiliary placement, decodes both slots, and reopens the
+  exact older slot after corrupting the newest meta.
+- `TestDurableRootMetadataReuseMultipageManifest4627` reuses a two-page,
+  24-dependency manifest and verifies all values after ordinary and fallback
+  reopen.
+- `TestDurableRootMetadataReuseProcessCut4627` exits without `Close` before a
+  reused seal write and after acknowledged publication, then validates the
+  old/new tuple and both retained slots. This is process death, not a substitute
+  for the power-loss oracle's stable-writeback permutations.
+- Freelist-level `4627` tests cover capability-derived free capacity, observed
+  auxiliary claim races, arbitrary-sink rollback, real pager failed-tail gaps,
+  low placement sizing and bounded search starvation. They do not prove every
+  workload plateaus: requests larger than a fitting chunk retain tail fallback.
+
 Pure scenario-validator unit tests under
 `TreeDB/internal/powerlossoracle/scenario_test.go` cover durable acknowledgement
 loss, relaxed non-suffix loss, invalid selected roots, and key-state mismatch.
