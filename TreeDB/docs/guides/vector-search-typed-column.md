@@ -17,8 +17,10 @@ batch/fold output, so obsolete or failed attempts can be reclaimed without
 leaving unknown prefixes in live files. Do not add a separate JSON-indexed or side-copy store to manage that
 lifecycle. Captured bases and active readers still retain their exact assets;
 generation placement does not itself enable public mutable graph serving.
-The existing manager has a finite file-ID allocation ceiling; bounded maintenance
-and backpressure remain necessary, even when retained column bytes plateau.
+The existing manager rescans for reclaimed low-band IDs at high-water exhaustion;
+exclusive creation still protects occupied files. A fully occupied band fails
+closed. Bounded maintenance and backpressure remain necessary even when retained
+column bytes plateau; ID reuse is not a physical-capacity guarantee.
 Append metrics named `SharedSegmentAppend*` and `DirectViewSegmentAppend*`
 classify physical file-ID bands, not optimized-reader capability. Selected fresh
 files use the regular band and still carry aligned, directly readable FP32;

@@ -3041,10 +3041,14 @@ schemas retain their existing placement. Failed output remains persistent but
 cannot become an unknown prefix of a later live attempt. Reachability and exact
 captured/fallback/reader protection are unchanged.
 
-The reused allocator reserves IDs below 1,048,576 and fails closed at exhaustion.
-Its process-local high-water cache is monotonic even after lower segments are
-reclaimed; this is a finite allocation ceiling, not indefinitely renewable
-physical capacity. No new free-ID allocator or incarnation scheme is implied.
+The reused allocator uses IDs 2 through 1,048,575, excluding legacy file 1 and
+the direct-view reserved band. Its high-water cache is only a hint. On exhaustion,
+the existing sorted listing finds an absent low-band ID; exclusive creation
+rechecks occupancy, including nonregular entries. Exact GC must release old
+files before reuse: numeric file IDs are not incarnation identities. Logical
+generation/part/checksum and exact physical reader/deletion identities remain
+unchanged. Fully occupied capacity still fails closed. No new free-ID store or
+incarnation scheme is introduced.
 Installation uses the existing column-asset rewrite maintenance publisher and
 does not add a logical WAL command. Graph construction occurs outside collection
 admission, but current-root validation, locator merging and native root building

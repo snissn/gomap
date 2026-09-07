@@ -103,8 +103,10 @@ No captured, fallback, reader, or unknown-plan protection is weakened. Before/
 after-seal and unsealed-suffix process cuts exercise complete post-reopen cleanup;
 these are not physical power-loss tests. The eight-cycle equal-width fixture
 demonstrates a column-byte plateau, not a whole-database quota. The reused
-allocator's finite below-1,048,576 file-ID band remains a fail-closed ceiling;
-reclaiming lower files does not reset its cached allocation frontier.
+allocator uses IDs 2 through 1,048,575. At high-water exhaustion it rescans the
+existing sorted namespace listing for an absent ID; `O_EXCL` remains authority.
+GC must first remove protected-free files before those IDs can be reused. A
+fully occupied band still fails closed; file 1 and the direct-view band are excluded.
 Canonical zero-byte files without asset refs are also whole-segment candidates
 when discovery captured an exact regular-file identity. Construction pins still
 block deletion. Referenced-empty corruption, canonical-named directories or
@@ -112,8 +114,8 @@ symlinks, unknown names, and legacy identities remain fail-closed; explicit
 empty quarantine stays protected. Deletion rechecks exact identity, file length,
 root closure, and link authority. Empty removal increments segment counts, not
 deleted-byte counts. This permits an epoch to recover from byte denial before
-the first write. Sustained allocator reuse remains a blocking qualification gate;
-these cleanup tests do not activate public mutable serving.
+the first write. Neither ID reuse nor these cleanup tests activate public mutable
+serving or certify a universal physical capacity bound.
 
 `ColumnAssetGC` may delete only canonical whole segments whose bytes are wholly
 reclaimable and whose plan is complete. Mixed live/dead segments become rewrite

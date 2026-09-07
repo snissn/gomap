@@ -25,6 +25,15 @@ first write leaves unchanged authority and can renew after zero-byte cleanup.
 after release; `TestColumnAssetGCEmptyReferencedOrChanged` rejects referenced
 emptiness and post-plan growth. `TestColumnAssetGCEmptyNonregularAndQuarantine`
 preserves directories, symlinks, unknown names, and explicit empty quarantine.
+
+Allocator tests `TestColumnAssetAllocatorReusesExhaustedHint` and
+`TestColumnAssetAllocatorSmallCompleteBoundary` cover cold/exhausted hints and
+fully occupied bounded ID selection. `TestColumnAssetAllocatorReusesOnlyAfterReaderAndExactGC`
+holds a mapped reader, performs exact cleanup after release, then reuses the ID
+at the same generation with checksum rejection of a stale ref.
+`TestColumnAssetAllocatorHoleCollisionAndConcurrent` covers occupied nonregular
+entries and concurrent exclusive creation. These are not public serving qualification.
+
 Existing generic
 producer tests keep their prior file placement and sync expectations. The eight
 real maintenance cycles also assert equal-width retained column bytes plateau

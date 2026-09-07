@@ -677,9 +677,15 @@ func nextColumnAssetSegmentFileID(namespace columnAssetManagerNamespace) (uint32
 	if err != nil {
 		return 0, err
 	}
+	return nextColumnAssetSegmentFileIDFromSorted(segments, columnAssetDirectViewSegmentFileIDBase)
+}
+
+// Prefer the high-water path. On exhaustion, reuse only absent low-band IDs;
+// the caller's exclusive create, not this directory snapshot, grants authority.
+func nextColumnAssetSegmentFileIDFromSorted(segments []columnAssetReachabilitySegment, upperExclusive uint32) (uint32, error) {
 	maxFileID := uint32(0)
 	for _, segment := range segments {
-		if segment.fileID >= columnAssetDirectViewSegmentFileIDBase {
+		if segment.fileID >= upperExclusive {
 			continue
 		}
 		if segment.fileID > maxFileID {
@@ -689,10 +695,26 @@ func nextColumnAssetSegmentFileID(namespace columnAssetManagerNamespace) (uint32
 	if maxFileID < columnAssetM12ASegmentFileID {
 		maxFileID = columnAssetM12ASegmentFileID
 	}
-	if maxFileID >= columnAssetDirectViewSegmentFileIDBase-1 {
-		return 0, errors.New("collections: column asset segment file_id exhausted before direct-view reserved band")
+	if maxFileID+1 < upperExclusive {
+		return maxFileID + 1, nil
 	}
-	return maxFileID + 1, nil
+	next := columnAssetM12ASegmentFileID + 1
+	for _, segment := range segments {
+		if next >= upperExclusive {
+			break
+		}
+		if segment.fileID < next {
+			continue
+		}
+		if segment.fileID != next {
+			break
+		}
+		next++
+	}
+	if next < upperExclusive {
+		return next, nil
+	}
+	return 0, errors.New("collections: column asset segment file_id exhausted before direct-view reserved band")
 }
 
 func newNextColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig) (*columnPhysicalAssetSegmentAppender, error) {
@@ -796,8 +818,7 @@ func newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string
 func nextColumnAssetSegmentFileIDCached(namespace columnAssetManagerNamespace, cleanSegmentDir string, cache *columnAssetSegmentAllocationCache) (uint32, error) {
 	if cache != nil && cache.valid && cache.segmentDir == cleanSegmentDir {
 		if cache.nextFileID == 0 || cache.nextFileID >= columnAssetDirectViewSegmentFileIDBase {
-			cache.nextFileID = 0
-			return 0, errors.New("collections: column asset segment file_id exhausted before direct-view reserved band")
+			return resetColumnAssetSegmentFileIDCache(namespace, cleanSegmentDir, cache)
 		}
 		return cache.nextFileID, nil
 	}
