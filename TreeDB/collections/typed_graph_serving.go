@@ -214,10 +214,13 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 	workstats.Graph.Requests.Attempts.Add(1)
 	var stats typedGraphOverlaySearchStats
 	var filterWork ColumnGraphFilterWork
+	var snapshot ColumnGraphQuerySnapshot
 	defer func() {
 		workstats.Graph.Requests.Finish(err == nil)
 		response.Stats.ColumnGraphWork = stats.work()
+		response.Stats.ColumnGraphWork.Completed = err == nil
 		response.Stats.ColumnGraphWork.Filter = filterWork
+		response.Stats.ColumnGraphWork.Snapshot = snapshot
 	}()
 	if err = validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
 		return
@@ -245,6 +248,7 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 	if err != nil {
 		return response, nil, err
 	}
+	snapshot = owner.querySnapshot()
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, owner.Close())

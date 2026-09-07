@@ -272,6 +272,14 @@ read or a caller's document update callback. A callback is executed once at
 admission; recovery consumes its accepted final replacement, never the callback.
 Typed writes retain the existing command-frame atomicity and durability profile;
 they do not create a separate durable overlay or bypass duplicate/unique checks.
+Selected dense service calls expose an owned versioned `dense_work` containing
+actual graph/filter/output work and the acquired owner's schema, base/current
+manifest identities and coverage. Error prefixes preserve acquired identity;
+unavailable proof never certifies zero. This uses the existing search owner and
+materializer stats without another authority registry or per-request process
+snapshot. Native 64/v2 and HTTP/Python carry the same proof; separate GetMany
+continues to work without graph admission and retains process phase accounting.
+
 See [Minima native execution](minima-native-execution.md) for the required path
 proof and [storage format](storage-format.md) for typed command bytes.
 

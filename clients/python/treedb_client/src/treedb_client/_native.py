@@ -237,10 +237,37 @@ def _dense_request(index, query, top_k, ef_search, generation, return_embedding,
     return bytes(out)
 
 
+def _dense_work(raw):
+    from ._dense_work import DenseSearchWork
+    values, offset = [], 0
+    for _ in range(38):
+        value, offset = _read_uint(raw, offset)
+        values.append(value)
+    if offset != len(raw) or values[1] > 255 or values[2] > 3 or values[24] > 1 or values[28] > 1:
+        raise TreeDBProtocolError("invalid native dense work fields or length")
+    flag = lambda bit: bool(values[1] & (1 << bit))
+    manifest = lambda start: dict(zip(("generation", "format", "version", "checksum"),
+                                      (values[start], ("", "tcs1")[values[start + 1]], values[start + 2], values[start + 3])))
+    filter = dict(zip(("eligible_rows", "source_ids", "source_bytes", "inspected_entries", "mapping_work_charged",
+                       "retained_bytes", "scratch_id_bytes", "scratch_rows", "ordinal_growth_peak_bytes"), values[10:19]))
+    filter.update(attempted=flag(3), completed=flag(4))
+    snapshot = dict(zip(("schema_hash", "schema_generation", "base_coverage_lsn", "current_coverage_lsn"), values[19:23]))
+    snapshot.update(available=flag(5), base_manifest=manifest(23), current_manifest=manifest(27))
+    graph = dict(zip(("base_ann_scored", "base_candidates", "base_edges", "delta_scored", "exact_base_scored", "base_shadowed", "base_result_ids"), values[3:10]))
+    graph.update(available=flag(1), completed=flag(2), route=("", "typed_empty", "typed_exact", "typed_hnsw")[values[2]], filter=filter, snapshot=snapshot)
+    output = dict(zip(("requested", "fetched", "missing", "output_bytes", "retained_payload_fetches", "json_reconstruction_rows", "typed_column_rows"), values[31:38]))
+    output.update(attempted=flag(6), completed=flag(7))
+    try:
+        return DenseSearchWork.from_dict(dict(version=values[0], completed=flag(0), graph=graph, output=output))
+    except (ValueError, TypeError, KeyError) as exc:
+        raise TreeDBProtocolError("invalid native dense work proof") from exc
+
+
 def _dense_response(body, top_k):
-    sections = _sections(body, {102, 103, 130})
-    if not {102, 103, 130} <= sections.keys():
+    sections = _sections(body, {102, 103, 130, 134})
+    if not {102, 103, 130, 134} <= sections.keys():
         raise TreeDBProtocolError("native dense response sections missing")
+    work = _dense_work(sections[134])
     meta = sections[130]
     if not meta or meta[0] != 2:
         raise TreeDBProtocolError("typed dense v2 route tag missing")
@@ -253,7 +280,10 @@ def _dense_response(body, top_k):
     scores = struct.unpack(f"<{count}d", meta[offset:])
     if not all(math.isfinite(score) for score in scores):
         raise TreeDBProtocolError("native dense response has nonfinite score")
-    return _decode_vector(sections[102], count), _decode_vector(sections[103], count), scores, candidates
+    ids, docs = _decode_vector(sections[102], count), _decode_vector(sections[103], count)
+    if not work.completed or work.output.fetched != count or work.output.output_bytes != sum(map(len, docs)):
+        raise TreeDBProtocolError("native dense work does not match documents")
+    return ids, docs, scores, candidates, work
 
 
 class _NativeConnection:
@@ -301,7 +331,7 @@ class _NativeConnection:
             result.extend(part)
         return bytes(result)
 
-    def _round_trip(self, frame_type, body, response_type, deadline):
+    def _round_trip(self, frame_type, body, response_type, deadline, *, dense_proof=False):
         if len(body) + _HEADER.size > self.limit:
             raise TreeDBConfigError("native request exceeds frame limit")
         self.request_id += 1
@@ -315,7 +345,9 @@ class _NativeConnection:
             raise TreeDBProtocolError("invalid native response header")
         payload = self._read(count, deadline)
         if kind == 6:
-            sections = _sections(payload, {2})
+            sections = _sections(payload, {2, 134} if dense_proof else {2})
+            if 134 in sections and not dense_proof:
+                raise TreeDBProtocolError("unexpected native dense error work")
             if 2 not in sections:
                 raise TreeDBProtocolError("native error section missing")
             error = sections[2]
@@ -325,7 +357,8 @@ class _NativeConnection:
             size, offset = _read_uint(error, offset + 1)
             if size != len(error) - offset:
                 raise TreeDBProtocolError("invalid native error message")
-            raise TreeDBProtocolError(f"native error {code}: {error[offset:].decode('utf-8', errors='replace')}")
+            work = _dense_work(sections[134]) if 134 in sections else None
+            raise TreeDBProtocolError(f"native error {code}: {error[offset:].decode('utf-8', errors='replace')}", dense_work=work)
         if kind != response_type:
             raise TreeDBProtocolError("unexpected native response frame")
         return payload
@@ -361,7 +394,7 @@ class _NativeConnection:
                 if str(version) not in self.capabilities.get(capability, "").split(","):
                     raise TreeDBProtocolError(f"native capability {capability}/{version} unavailable")
                 body = _section(1, _uint(command_id) + _uint(version) + b"\x00") + sections
-                return self._round_trip(3, body, 4, deadline)
+                return self._round_trip(3, body, 4, deadline, dense_proof=(command_id, version) == (64, 2))
             except TimeoutError as exc:
                 self.close()
                 raise TreeDBTimeoutError(str(exc)) from exc

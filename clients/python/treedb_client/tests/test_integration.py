@@ -11,7 +11,7 @@ import time
 import tracemalloc
 import unittest
 from contextlib import closing
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Optional
 
@@ -177,6 +177,24 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                         self.assertFalse(native_response.native_base_plus_live_delta)
                         self.assertEqual(native_response.documents[0].id, "0")
                         self.assertEqual(native_response.documents[0].content, "text 0")
+                        proof = native_response.dense_work
+                        self.assertTrue(proof.completed)
+                        self.assertEqual(proof.graph.route, "typed_exact")
+                        self.assertEqual(proof.graph.exact_base_scored, 32)
+                        self.assertEqual(proof.graph.filter.eligible_rows, 32)
+                        self.assertEqual(proof.graph.snapshot.schema_generation, info.generation)
+                        self.assertEqual(proof.output.fetched, 4)
+                        self.assertGreater(proof.output.output_bytes, 0)
+                        retained_proof = asdict(proof)
+                        empty = native.query_by_embedding("typed", [1, 0], 4, {
+                            "field": "meta.user_id", "operator": "==", "value": "absent"}, index_info=info)
+                        self.assertEqual(empty.documents, [])
+                        self.assertEqual(empty.dense_work.graph.route, "typed_empty")
+                        self.assertEqual(empty.dense_work.output.fetched, 0)
+                        self.assertEqual(empty.dense_work.graph.base_ann_scored, 0)
+                        self.assertEqual(empty.dense_work.graph.exact_base_scored, 0)
+                        self.assertTrue(empty.dense_work.completed)
+                        self.assertEqual(asdict(proof), retained_proof)
                         retrieved = native.get_many("typed", ["0", "missing", "0"], index_info=info)
                         self.assertEqual([d.id if d else None for d in retrieved], ["0", None, "0"])
                         self.assertEqual(retrieved[0].content, "text 0")
@@ -197,6 +215,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                     self.assertEqual(response.documents[0].id, "0")
                     self.assertEqual(response.documents[0].content, "text 0")
                     self.assertEqual(response.documents[0].embedding, [1.0, 0.0])
+                    self.assertEqual(asdict(response.dense_work), retained_proof)
                     changed = Document(id="0", content="replacement", embedding=[0, 1],
                                        meta={"user_id": "changed", "fpath": "new/path"})
                     with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as writer:
@@ -238,6 +257,11 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                         self.assertEqual([doc.id for doc in latest.documents], ["0"])
                         self.assertEqual(latest.documents[0].content, "replacement")
                         self.assertEqual(latest.documents[0].meta["fpath"], "new/path")
+                        self.assertTrue(latest.dense_work.completed)
+                        self.assertEqual(latest.dense_work, response.dense_work)
+                        self.assertNotEqual(latest.dense_work.graph.snapshot.current_manifest,
+                                            proof.graph.snapshot.current_manifest)
+                        self.assertEqual(asdict(proof), retained_proof)
                         self.assertEqual(native.get_many("typed", ["2"], index_info=info), [None])
             finally:
                 reopened.stop()

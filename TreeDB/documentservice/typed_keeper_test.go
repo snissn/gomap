@@ -76,6 +76,14 @@ func TestServiceTypedPreparedHandleLifecycle(t *testing.T) {
 			if err != nil || !raw.TypedColumnGraph || raw.Route != RouteAnn || len(raw.Results) != 1 {
 				t.Fatalf("native=%+v err=%v", raw, err)
 			}
+			for _, proof := range []*DenseSearchWork{httpOut.DenseWork, raw.DenseWork} {
+				if proof == nil || !proof.Completed || !proof.Graph.Completed || !proof.Graph.Snapshot.Available || proof.Graph.Snapshot.SchemaGeneration != info.Generation || proof.Graph.Route != "typed_hnsw" || proof.Graph.BaseANNScored == 0 || !proof.Output.Completed || proof.Output.Fetched != 1 || proof.Output.OutputBytes != uint64(len(raw.Results[0].Document)) {
+					t.Fatalf("public owned work=%+v", proof)
+				}
+			}
+			if *httpOut.DenseWork != *raw.DenseWork {
+				t.Fatalf("HTTP and native proof differ: %+v / %+v", httpOut.DenseWork, raw.DenseWork)
+			}
 			afterOutput := workstats.Output.Search.Read()
 			if !raw.searchStats.ColumnGraphWork.Available || afterOutput.Attempts-beforeOutput.Attempts != 1 || afterOutput.Completed-beforeOutput.Completed != 1 || afterOutput.Fetched-beforeOutput.Fetched != 1 || afterOutput.OutputBytes-beforeOutput.OutputBytes != uint64(len(raw.Results[0].Document)) {
 				t.Fatalf("search output before=%+v after=%+v", beforeOutput, afterOutput)

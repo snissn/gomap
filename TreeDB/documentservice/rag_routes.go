@@ -211,7 +211,7 @@ func (s *Service) searchDenseVectorNative(ctx context.Context, col *collections.
 	for _, result := range raw.Results {
 		doc, err := decodeStoredDocument(result.ID, result.Document)
 		if err != nil {
-			return DenseVectorSearchResponse{}, err
+			return DenseVectorSearchResponse{}, withDenseSearchWork(err, raw.DenseWork)
 		}
 		if !req.ReturnEmbedding {
 			doc.Embedding = nil
@@ -232,6 +232,7 @@ type RawDenseVectorResult struct {
 // RawDenseVectorSearchResponse reuses caller-provided result storage when
 // supplied; each ID and Document is response-owned.
 type RawDenseVectorSearchResponse struct {
+	DenseWork *DenseSearchWork
 	// TypedColumnGraph identifies the validated selected route, not a work proof.
 	TypedColumnGraph          bool
 	Results                   []RawDenseVectorResult
@@ -249,6 +250,7 @@ type RawDenseVectorSearchResponse struct {
 func (r RawDenseVectorSearchResponse) response(docs []Document) DenseVectorSearchResponse {
 	stats := r.searchStats
 	return DenseVectorSearchResponse{
+		DenseWork:                               r.DenseWork,
 		Index:                                   r.info,
 		ColumnGraphPreparedSearch:               stats.SearchRouteColumnGraphPrepared,
 		ColumnGraphDeltaScored:                  stats.ColumnGraphDeltaScored,
@@ -327,7 +329,24 @@ func (s *Service) searchDenseVectorNativeRaw(ctx context.Context, col *collectio
 	return s.searchDenseVectorNativeRawLocked(ctx, col, info, req, dst)
 }
 
-func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest, dst []RawDenseVectorResult) (_ RawDenseVectorSearchResponse, err error) {
+func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest, dst []RawDenseVectorResult) (response RawDenseVectorSearchResponse, err error) {
+	var proof *DenseSearchWork
+	if info.TypedInput {
+		proof = &DenseSearchWork{Version: 1}
+	}
+	defer func() {
+		if proof == nil {
+			return
+		}
+		if err != nil {
+			clear(dst[:cap(dst)])
+			response = RawDenseVectorSearchResponse{}
+			err = withDenseSearchWork(err, proof)
+			return
+		}
+		proof.Completed = true
+		response.DenseWork = proof
+	}()
 	workstats.Output.Search.Attempts.Add(1)
 	defer func() { workstats.Output.Search.Finish(err == nil) }()
 	if req.Filter != nil {
@@ -346,6 +365,9 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 			return RawDenseVectorSearchResponse{}, err
 		}
 		search, view, err := col.SearchVectorIndexWithBufferReadView(collections.VectorIndexSearchOptions{Context: ctx, IndexName: defaultVectorIndexName, Query: req.QueryEmbedding, QueryMode: collections.VectorIndexQueryModeExact, TopK: req.TopK, EfSearch: req.EfSearch, StatsMode: collections.VectorIndexSearchStatsModeProduction, DeclaredScalarFilter: scalarFilter}, buffer)
+		if proof != nil {
+			proof.Graph = search.Stats.ColumnGraphWork
+		}
 		if err != nil {
 			if !info.TypedInput && errors.Is(err, collections.ErrVectorIndexSnapshotMismatch) {
 				buffer.Reset()
@@ -374,6 +396,13 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 		fetchOptions := serviceDocumentFetchOptions(req.ReturnEmbedding)
 		fetchOptions.Context = ctx
 		fetched, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(search.Results, fetchOptions)
+		if proof != nil {
+			stats := fetched.Stats
+			proof.Output = DenseSearchOutputWork{Attempted: true, Completed: fetchErr == nil,
+				Requested: uint64(len(search.Results)), Fetched: stats.DocumentsFetched, Missing: stats.DocumentsMissing,
+				OutputBytes: stats.OutputBytes, RetainedPayloadFetches: stats.RetainedPayloadFetches,
+				JSONReconstructionRows: stats.JSONReconstructionRows, TypedColumnRows: stats.TypedColumnRows}
+		}
 		work := serviceMaterializationWork(fetched.Stats)
 		work.Requested = uint64(len(search.Results))
 		workstats.Output.Search.Add(work)

@@ -821,8 +821,50 @@ uvarint candidates, exact-fallbacks, full-document-scan-fallbacks, result count,
 then one little-endian float64 score per result. Version 1 retains its legacy
 native-runtime bool byte (successful route `1`). Version 2 requires route tag
 `2`. Cross-version tags are rejected. Tag 2 identifies validated dispatch,
-**not measured execution-work evidence**; no typed phase counters are implied.
+**not measured execution-work evidence**. Version 2 additionally requires the
+critical `dense_search_work` section (134), independently versioned below.
 Full documents are fetched from the search's same read owner before release.
+
+Section 134 version 1 contains exactly 38 minimal uint64 uvarints, in this order:
+
+| Positions (zero-based) | Values |
+|---|---|
+| 0–2 | proof version (`1`), flags, executed route |
+| 3–9 | base ANN scored, base candidates, base edges, delta scored, exact base scored, base shadowed, base result IDs |
+| 10–18 | filter eligible rows, source IDs, source bytes, inspected entries, mapping work charged, retained bytes, scratch ID bytes, scratch rows, ordinal growth peak bytes |
+| 19–22 | captured schema hash, schema generation, base coverage LSN, current coverage LSN |
+| 23–26 | base manifest generation, format tag, version, checksum |
+| 27–30 | current manifest generation, format tag, version, checksum |
+| 31–37 | output requested, fetched, missing, output bytes, retained payload fetches, JSON reconstruction rows, typed column rows |
+
+Flags bits 0–7 respectively mean service completed, graph available, graph
+completed, filter attempted, filter completed, captured snapshot available,
+output attempted, output completed. Other bits are invalid. Route tags are
+`0` no executed branch, `1` typed empty, `2` typed exact, `3` typed HNSW.
+Manifest format tags are `0` empty and `1` `tcs1`; manifest version fits uint16.
+Unknown versions/tags, missing or duplicate sections, nonminimal/overflowing
+integers, truncation and trailing bytes fail closed. Unavailable/unattempted
+groups contain zero values. Successful responses require completed graph and
+output, fetched=requested=result count, no missing rows, and output bytes equal
+the sum of materialized document byte lengths. Output bytes exclude framing.
+
+The snapshot comes from the actual acquired owner, including base/current
+manifest identities and coverage, and remains owned after owner close or client
+buffer reuse. It is not the requested generation or a later diagnostics read.
+Schema generation is the acquired vector definition's generation; the service's
+expected-generation guard can also include a newer text-index generation.
+Filter cardinality is final only on completed preparation; mapping work is an
+admitted bound, retained/growth bytes measure ordinal capacity, and scratch
+rows/ID bytes are logical peaks. Other work fields count actual producer work,
+including prefixes before an error. No per-request process snapshot is taken.
+
+The existing FrameError may also carry this same critical section beside its
+unchanged error section (2), only for 64/v2. Pre-service failures may omit it;
+omission means unavailable. A later native encoding failure preserves completed
+service/graph/output evidence. This completion does not certify wire delivery.
+Version 1 never emits or accepts section 134 and retains its response/error
+bytes. The Go response owns its fixed proof value independently of borrowed
+result documents; `WireError.DenseWork` is optional owned error detail.
 
 Hello capabilities advertise `dense_vector_search_versions` as a comma-separated
 set derived from registered command versions and an available standalone

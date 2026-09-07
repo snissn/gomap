@@ -2,6 +2,8 @@ package documentservice
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"runtime"
 	"testing"
 
@@ -91,6 +93,7 @@ func TestServiceTypedInputServingLifecycle(t *testing.T) {
 		t.Fatal("unadmitted search succeeded")
 	}
 	options := typedServiceTestOptions()
+	options.SearchCandidates = 1
 	if _, err := svc.OptimizeIndex(ctx, create.Name, OptimizeIndexRequest{}); ErrorCodeOf(err) != CodeInvalidRequest {
 		t.Fatalf("missing limits accepted: %v", err)
 	}
@@ -109,6 +112,32 @@ func TestServiceTypedInputServingLifecycle(t *testing.T) {
 	if out.NativeBasePlusLiveDelta || out.ColumnGraphPreparedSearch != 1 {
 		t.Fatalf("wrong route proof: %+v", out)
 	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var public map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &public); err != nil || len(public["dense_work"]) == 0 {
+		t.Fatalf("selected public response omitted local work proof: %s err=%v", encoded, err)
+	}
+	work := out.DenseWork
+	if work == nil || !work.Completed || !work.Graph.Completed || work.Graph.Route != "typed_exact" || work.Graph.ExactBaseScored != 1 || !work.Graph.Filter.Completed || work.Graph.Filter.EligibleRows != 1 || !work.Graph.Snapshot.Available || work.Graph.Snapshot.SchemaHash == 0 || work.Output.Fetched != 1 || !work.Output.Completed || work.Output.OutputBytes == 0 {
+		t.Fatalf("missing exact/snapshot/output work: %+v", work)
+	}
+	unfiltered := query
+	unfiltered.Filter = nil
+	failed, err := svc.SearchDenseVector(ctx, create.Name, unfiltered)
+	var observed *Error
+	if !errors.Is(err, collections.ErrColumnGraphSearchBudget) || len(failed.Documents) != 0 || !errors.As(err, &observed) || observed.DenseWork == nil || observed.DenseWork.Completed || observed.DenseWork.Graph.Completed || observed.DenseWork.Graph.BaseCandidates != 1 || observed.DenseWork.Graph.BaseANNScored != 1 || observed.DenseWork.Graph.Route != "typed_hnsw" || !observed.DenseWork.Graph.Snapshot.Available || observed.DenseWork.Output.Attempted {
+		t.Fatalf("candidate-budget error lost local prefix: response=%+v err=%+v", failed, err)
+	}
+	// Failure after successful scoring retains graph completion and no output.
+	svc.denseVectorNativeAfterSearch = func(_ int, _ collections.VectorIndexSearchResponse) error { return context.Canceled }
+	failed, err = svc.SearchDenseVector(ctx, create.Name, query)
+	svc.denseVectorNativeAfterSearch = nil
+	if !errors.Is(err, context.Canceled) || len(failed.Documents) != 0 || !errors.As(err, &observed) || observed.DenseWork == nil || observed.DenseWork.Completed || !observed.DenseWork.Graph.Completed || observed.DenseWork.Graph.ExactBaseScored != 1 || observed.DenseWork.Output.Attempted {
+		t.Fatalf("post-search failure lost completed graph: response=%+v err=%+v", failed, err)
+	}
 	// A publication between search and fetch cannot replace the returned
 	// view's authority. The existing hook runs with the real owner still held.
 	svc.denseVectorNativeAfterSearch = func(_ int, _ collections.VectorIndexSearchResponse) error {
@@ -120,6 +149,9 @@ func TestServiceTypedInputServingLifecycle(t *testing.T) {
 	svc.denseVectorNativeAfterSearch = nil
 	if err != nil || len(out.Documents) != 1 || out.Documents[0].Content != "alpha" {
 		t.Fatalf("held view changed: %+v %v", out, err)
+	}
+	if out.DenseWork == nil || out.DenseWork.Graph.Snapshot != work.Graph.Snapshot {
+		t.Fatalf("held response proof followed newer publication: before=%+v after=%+v", work, out.DenseWork)
 	}
 	docs[0].Content = "updated"
 	if out, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{Documents: docs[:1]}); err != nil || out.Updated != 1 {

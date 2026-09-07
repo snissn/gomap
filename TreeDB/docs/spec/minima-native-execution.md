@@ -30,9 +30,15 @@ Missing admission fails closed at search; no request-side reconciliation or
 native_runtime/document-scan fallback is used. Public `route=ann` permits the
 typed engine's bounded exact filter plan; legacy document-scan `route=exact` is
 unsupported for selected input. Search and full fetch share the returned owner.
-The Python HTTP client exposes this lifecycle; the benchmark runner and framed
-typed transport are not yet activated. Prepared-route and delta-scored counters
-are actual engine counters, not complete indexed-JSON or final phase proof.
+The ordinary Python client and benchmark runner select this lifecycle through
+HTTP controls and native 64/v2 dense, 65/v1 typed upsert and 50/v2 GetMany.
+Selected dense HTTP/native responses expose versioned owned `dense_work`:
+executed graph/filter work, captured owner identities/coverage and requested
+output materialization, including service error prefixes. Dispatch tags alone
+remain insufficient. Process-lifetime diagnostics cover indexed JSON, replay,
+scans and separate GetMany work; per-query proofs do not sample process totals.
+The final artifact validator and workload qualification remain separate gates;
+this product contract does not certify final phase evidence or performance.
 
 The frozen workload is filtered **dense** cosine search: eight-dimensional
 vectors, TopK 5, batches of 256, four readers and one writer, 32 warmup and

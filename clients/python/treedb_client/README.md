@@ -79,6 +79,25 @@ retry or HTTP fallback after a native error. `native_command_version=2` is
 dispatch identity only; default-zero legacy work fields are unavailable typed
 phase evidence, not proof of zero indexed JSON extraction.
 
+Selected typed dense responses expose `response.dense_work`, an owned frozen
+`DenseSearchWork` dataclass tree (version 1). It records the actual empty/exact/
+HNSW branch, graph/filter work, captured schema/base/current identities and
+coverage, and full search-output materialization. Use
+`dataclasses.asdict(response.dense_work)` for JSON-ready evidence. Completion
+and availability flags scope counts; missing proof is `None`, never fabricated
+zero work. This proof is mandatory on native 64/v2 success and optional on HTTP
+for compatibility with older/unavailable routes.
+
+Existing service/protocol exceptions expose optional `.dense_work`. Service
+errors retain actual work prefixes without returning partial documents. A
+native encoding or client document-decoding error after completed service work
+preserves those producer completion flags; they do not mean delivery succeeded.
+Malformed proof is rejected without attaching it as trustworthy detail. Proof
+fields and proof-bearing HTTP envelopes reject missing/unknown/duplicate fields,
+invalid types and out-of-range integers. Retained proofs remain valid after
+later requests, mutations and connection close. GetMany's ordinary list return
+is unchanged; its separate process output counters support phase accounting.
+
 ## Install for local development
 
 From the repository root, use a virtual environment for editable installs

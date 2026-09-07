@@ -362,7 +362,17 @@ func decodeWireError(body []byte, limits iwire.Limits) error {
 	if err != nil {
 		return err
 	}
-	return &WireError{Code: code, Retryable: retryable, Message: message}
+	out := &WireError{Code: code, Retryable: retryable, Message: message}
+	if raw, found, err := singletonSection(sections, iwire.SectionDenseSearchWork); err != nil {
+		return err
+	} else if found {
+		work, err := decodeDenseWork(raw)
+		if err != nil {
+			return err
+		}
+		out.DenseWork = &work
+	}
+	return out
 }
 
 func ctxDeadline(ctx context.Context) (time.Time, bool) {

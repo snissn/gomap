@@ -99,11 +99,27 @@ without live suffix report `typed_empty`; bounded scalar exact or suffix-only
 scoring report `typed_exact`; actual base traversal reports `typed_hnsw`. An
 empty route means no scoring branch executed. Filter cardinality is final only
 when filter preparation completed. Mapping work is a charged bound; retained
-and scratch fields are capacities/peaks. The selected pack explicitly uses its
+bytes measure ordinal capacity, while scratch rows/ID bytes are logical peaks. The selected pack explicitly uses its
 existing FullDiagnostics counters without enabling work-accounting timers.
-This engine proof is excluded from JSON serialization; measured wire/Python
-response contracts remain a separate versioned change. Process memory is still
-sampled only for diagnostics, never per query.
+Selected typed dense HTTP responses now carry optional `dense_work` version 1,
+with `completed`, `graph` (including `filter` and captured `snapshot`), and
+`output`. All fields, including zeros, are present within this fixed schema.
+The proof copies these owner-local counters and the fetch's actual requested,
+fetched, missing, materialized bytes, retained-payload fetches, reconstructed
+JSON rows and typed-column rows. Captured schema/base/current identities and
+coverage come from that search owner, even if a writer publishes before fetch.
+
+Existing error envelopes may carry the same `error.dense_work` after service
+work began. Search/fetch errors preserve partial work and return no partial
+documents; service-side document decoding failure marks service completion
+false. Graph/output completion remain separately observable. Missing proof or
+unavailable groups cannot certify zero work. Legacy routes have no typed proof.
+The [native protocol](../TreeDB/docs/spec/native-wire-protocol.md#101-document-service-dense-search)
+uses the same fixed values in a bounded 64/v2 section. Python exposes an owned
+frozen `response.dense_work` or `exception.dense_work`, serializable with
+`dataclasses.asdict`. Process memory is still sampled only for diagnostics,
+never per query. Separate GetMany retains its list API and process output group;
+these request proofs do not certify full workload phases or final qualification.
 
 ## Scope and honesty
 

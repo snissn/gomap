@@ -940,6 +940,27 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 	if sectionErr != nil {
 		return sectionErr
 	}
+	var observed *denseWorkError
+	if errors.As(err, &observed) {
+		var scratch [380]byte
+		proof, proofErr := appendDenseWork(scratch[:0], observed.work)
+		if proofErr != nil {
+			return proofErr
+		}
+		if err := s.checkResponseSectionCount(2); err != nil {
+			return err
+		}
+		if err := s.checkResponseSectionLen("dense work", len(proof)); err != nil {
+			return err
+		}
+		body, proofErr = iwire.AppendSection(body, iwire.Section{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: proof})
+		if proofErr != nil {
+			return proofErr
+		}
+		if err := s.checkResponseBodyLen(uint64(len(body))); err != nil {
+			return err
+		}
+	}
 	s.counters.incErrorsTotal()
 	s.counters.incErrorCode(code)
 	return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameError, StreamID: request.StreamID, RequestID: request.RequestID}, body)

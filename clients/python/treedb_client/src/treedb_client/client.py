@@ -411,7 +411,7 @@ class TreeDBClient:
             payload = _dense_request(index, query_embedding, top_k, ef_search_value or 0, index_info.generation, return_embedding, normalize_filter(filter) if filter is not None else None)
             deadline = _uint(time.time_ns() + int(self.timeout * 1_000_000_000))
             raw = self._native.command(64, 2, _section(129, payload) + _section(4, deadline), "dense_vector_search_versions")
-            ids, payloads, scores, candidates = _dense_response(raw, top_k)
+            ids, payloads, scores, candidates, work = _dense_response(raw, top_k)
             documents = []
             for item_id, document_raw, score in zip(ids, payloads, scores):
                 try:
@@ -420,11 +420,11 @@ class TreeDBClient:
                         raise ValueError("document ID mismatch")
                     document.score = score
                 except (ValueError, KeyError, TypeError) as exc:
-                    raise TreeDBProtocolError("invalid native dense document") from exc
+                    raise TreeDBProtocolError("invalid native dense document", dense_work=work) from exc
                 documents.append(document)
             return DenseVectorSearchResponse(index=index_info, documents=documents, metric=index_info.metric,
                                              exact=False, candidates=candidates, route="ann",
-                                             native_base_plus_live_delta=False, native_command_version=2)
+                                             native_base_plus_live_delta=False, native_command_version=2, dense_work=work)
         request: dict[str, Any] = {
             "query_embedding": [float(value) for value in query_embedding],
             "top_k": top_k,
@@ -699,7 +699,7 @@ class TreeDBClient:
             if isinstance(error, Mapping):
                 code = str(error.get("code", "internal"))
                 message = str(error.get("message", ""))
-                raise service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body))
+                raise service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error))
             raise TreeDBProtocolError("error envelope must contain an object", status_code=status_code, response_body=_body_to_text(body))
         return decoded
 
@@ -720,7 +720,7 @@ class TreeDBClient:
             )
         code = str(error.get("code", "internal"))
         message = str(error.get("message", ""))
-        return service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body))
+        return service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error))
 
 
 def _normalize_base_url(base_url: str) -> str:
@@ -958,14 +958,40 @@ def _expect_mapping(payload: Any, label: str) -> Mapping[str, Any]:
 
 def _decode_json_body(body: bytes, *, status_code: int) -> Any:
     text = _body_to_text(body)
+    duplicate = False
+    proof_envelope = False
+
+    def object_pairs(pairs):
+        nonlocal duplicate, proof_envelope
+        # The root object is decoded last. Inspect pairs before duplicate keys
+        # collapse, including an error envelope overwritten by a duplicate key.
+        proof_envelope = any(key == "dense_work" or (key == "error" and isinstance(value, dict) and "dense_work" in value)
+                             for key, value in pairs)
+        out = {}
+        for key, value in pairs:
+            duplicate |= key in out
+            out[key] = value
+        return out
+
     try:
-        return json.loads(text) if text else {}
+        decoded = json.loads(text, object_pairs_hook=object_pairs) if text else {}
+        if isinstance(decoded, dict) and proof_envelope and duplicate:
+            raise TreeDBProtocolError("duplicate field in dense proof envelope", status_code=status_code, response_body=text)
+        return decoded
     except json.JSONDecodeError as exc:
         raise TreeDBProtocolError(
             f"TreeDB service returned malformed JSON for HTTP {status_code}: {exc}",
             status_code=status_code,
             response_body=text,
         ) from exc
+
+
+def _error_dense_work(error):
+    from ._dense_work import optional_dense_work
+    try:
+        return optional_dense_work(error.get("dense_work"))
+    except (ValueError, TypeError, KeyError) as exc:
+        raise TreeDBProtocolError("invalid dense error work proof") from exc
 
 
 def _body_to_text(body: bytes) -> str:

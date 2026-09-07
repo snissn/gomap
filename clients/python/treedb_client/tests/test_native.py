@@ -1,12 +1,17 @@
 import unittest
 import socket
 import json
+import copy
+from dataclasses import asdict, FrozenInstanceError
 from types import SimpleNamespace
 from unittest import mock
 
 import _support
 from treedb_client import TreeDBClient
 from treedb_client.errors import TreeDBConfigError, TreeDBProtocolError, TreeDBTimeoutError, TreeDBTransportError, UnsupportedError
+from treedb_client._native import _dense_work
+from treedb_client._dense_work import DenseSearchWork
+from treedb_client.client import _decode_json_body
 from treedb_client._native import _HEADER, _NativeConnection, _dense_request, _dense_response, _decode_vector, _read_uint, _section, _sections, _string_map, _uint, _vector, _typed_upsert_request, _typed_upsert_response
 
 
@@ -76,13 +81,62 @@ class NativeCodecTests(unittest.TestCase):
 
     def test_typed_response_golden_and_version_rejection(self):
         meta = bytes.fromhex("0201000001000000000000f03f")
-        sections = _section(102, _vector([b"a"])) + _section(103, _vector([b"{}"]))
-        self.assertEqual(_dense_response(sections + _section(130, meta), 1), ([b"a"], [b"{}"], (1.0,), 1))
+        raw_work = bytes.fromhex((_support.REPO_ROOT / "TreeDB/nativewire/testdata/dense_work_v1.hex").read_text().strip())
+        sections = _section(102, _vector([b"a"])) + _section(103, _vector([b"{}"])) + _section(134, raw_work)
+        self.assertEqual(_dense_response(sections + _section(130, meta), 1), ([b"a"], [b"{}"], (1.0,), 1, _dense_work(raw_work)))
         for tag in (0, 1, 3):
             with self.subTest(tag=tag), self.assertRaises(TreeDBProtocolError):
                 _dense_response(sections + _section(130, bytes([tag]) + meta[1:]), 1)
         with self.assertRaises(TreeDBProtocolError):
             _dense_response(sections + _section(130, meta), 0)
+
+    def test_dense_work_strict_owned_and_error_envelopes(self):
+        raw = bytes.fromhex((_support.REPO_ROOT / "TreeDB/nativewire/testdata/dense_work_v1.hex").read_text().strip())
+        work = _dense_work(raw)
+        data = asdict(work)
+        self.assertEqual(DenseSearchWork.from_dict(data), work)
+        data["graph"]["snapshot"]["base_manifest"]["format"] = "changed"
+        self.assertEqual(work.graph.snapshot.base_manifest.format, "tcs1")
+        with self.assertRaises(FrozenInstanceError):
+            work.graph.route = "bad"
+        for cut in range(len(raw)):
+            with self.subTest(cut=cut), self.assertRaises(TreeDBProtocolError):
+                _dense_work(raw[:cut])
+        for candidate in (raw + b"\x00", b"\x02" + raw[1:], b"\x81\x00" + raw[1:], b"\xff" * 10 + raw[1:]):
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_work(candidate)
+        for action in (lambda d: d.pop("version"), lambda d: d.update(extra=0), lambda d: d.update(version=True),
+                       lambda d: d["graph"].update(base_edges=-1), lambda d: d["graph"].update(base_edges=1 << 64),
+                       lambda d: d["output"].pop("missing"), lambda d: d["graph"].update(route="ann")):
+            candidate = copy.deepcopy(asdict(work))
+            action(candidate)
+            with self.assertRaises((ValueError, TypeError)):
+                DenseSearchWork.from_dict(candidate)
+        envelope = json.dumps({"error": {"code": "index_unavailable", "message": "budget", "dense_work": asdict(work)}}).encode()
+        client = TreeDBClient("http://127.0.0.1:1")
+        try:
+            error = client._decode_error(503, envelope)
+            self.assertEqual(error.dense_work, work)
+            duplicate = envelope.replace(b'"version": 1', b'"version": 1, "version": 1')
+            with self.assertRaises(TreeDBProtocolError):
+                client._decode_error(503, duplicate)
+            self.assertEqual(_decode_json_body(b'{"legacy":1,"legacy":2}', status_code=200), {"legacy": 2})
+        finally:
+            client.close()
+
+        # Existing exceptions retain decoded proof if client document parsing fails.
+        body = _section(102, _vector([b"a"])) + _section(103, _vector([b"{}"])) + _section(130, bytes.fromhex("0201000001000000000000f03f")) + _section(134, raw)
+        client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
+        # Aggregate service generation may exceed the captured vector generation
+        # after text-index recreation. The service owns expected-generation admission.
+        info = SimpleNamespace(name="a", dimension=2, generation=2, vector_strategy="column_graph", metric="cosine", extra={"typed_input": True})
+        try:
+            with mock.patch.object(client._native, "command", return_value=body), self.assertRaises(TreeDBProtocolError) as caught:
+                client.query_by_embedding("a", [1, 0], 1, index_info=info)
+            self.assertEqual(caught.exception.dense_work, work)
+            self.assertIsNotNone(caught.exception.__cause__)
+        finally:
+            client.close()
 
     def test_malformed_bounded_codecs(self):
         for value in (b"", b"\x80", b"\x80\x00", b"\xff" * 10):

@@ -230,6 +230,7 @@ type DenseVectorSearchRequest struct {
 }
 
 type DenseVectorSearchResponse struct {
+	DenseWork                               *DenseSearchWork                   `json:"dense_work,omitempty"`
 	ColumnGraphPreparedSearch               uint64                             `json:"column_graph_prepared_search,omitempty"`
 	ColumnGraphDeltaScored                  uint64                             `json:"column_graph_delta_scored,omitempty"`
 	Index                                   IndexInfo                          `json:"index"`

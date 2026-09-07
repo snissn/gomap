@@ -178,6 +178,15 @@ Changing an existing golden fixture is a protocol change. Prefer adding a new
 fixture or a new command version unless the old fixture intentionally documents
 a pre-alpha break.
 
+The unreleased selected dense 64/v2 response additionally requires versioned
+section 134, shared with its existing error envelope. Keep its fixed proof owned
+across buffer reuse, propagate actual local error prefixes and captured owner
+identity, and preserve completed service work on later transport encoding errors.
+Do not sample process counters per request. Shared Go/Python golden, strict
+presence/duplicate/numeric checks, zero-allocation Go proof decoding and real
+service/client lifecycle controls cover this boundary. Legacy 64/v1 bytes and
+GetMany's separate list/result contract remain unchanged.
+
 Fuzz tests should target frame and section decoding, byte vectors, compression
 boundaries, and command normalization. Fuzzers must use memory and frame-size
 caps so malformed input cannot turn into unbounded allocation.
