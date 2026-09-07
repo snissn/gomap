@@ -124,6 +124,11 @@ captured-base keeper is released without closing newer cache entries or held
 read views. Explicit setup retry is a caller lifecycle decision, not a query
 fallback.
 
+Final prepared-cache warming in Ensure and Fold honors the caller context while
+waiting for the storage barrier or another cache builder. Canceling a waiter
+does not cancel or invalidate another caller's builder. Cancellation is not a
+rollback of earlier successful publication or maintenance work.
+
 Renewal may reject a stale recovery-root plan when concurrent database
 publication changes its authority. An explicit subsequent full renewal obtains
 a fresh plan; keep this bounded by the caller's maintenance deadline and count

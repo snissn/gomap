@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"errors"
 	"reflect"
 )
@@ -64,14 +65,24 @@ func (r *typedGraphCapturedBaseResources) reserve(a *typedGraphReadOwnerAccounti
 // next current owner build a different holder. Current authority stays checked
 // by openTypedGraphReadOwner; warming cannot authorize stale serving.
 func (c *Collection) acquireTypedGraphCapturedBaseCache(index string, limits typedGraphReadOwnerLimits) (*collectionVectorIndexPreparedSearch, error) {
+	return c.acquireTypedGraphCapturedBaseCacheWithContext(context.Background(), index, limits)
+}
+
+func (c *Collection) acquireTypedGraphCapturedBaseCacheWithContext(ctx context.Context, index string, limits typedGraphReadOwnerLimits) (*collectionVectorIndexPreparedSearch, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := ValidateIndexName(index); err != nil {
 		return nil, err
 	}
 	if limits.Owners <= 0 || limits.States <= 0 || limits.StateBytes <= 0 || limits.AssetBytes <= 0 || limits.Cold.ManifestRecords <= 0 || limits.Cold.ManifestBytes <= 0 || limits.Cold.AssetBytes <= 0 || limits.Cold.DecodedTermBytes <= 0 {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
-	prepared, _, _, err := c.acquireCollectionVectorIndexPreparedSearchSlot(VectorIndexSearchOptions{IndexName: index}, collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}, func() (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, error) {
-		p, err := c.openTypedGraphCapturedBaseCache(index, limits)
+	prepared, _, _, err := c.acquireCollectionVectorIndexPreparedSearchSlot(VectorIndexSearchOptions{IndexName: index, Context: ctx}, collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}, func() (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, error) {
+		p, err := c.openTypedGraphCapturedBaseCache(ctx, index, limits)
 		return p, VectorIndexSearchResponse{}, err
 	})
 	if err != nil {
@@ -92,8 +103,8 @@ func (c *Collection) acquireTypedGraphCapturedBaseCache(index string, limits typ
 	return prepared, nil
 }
 
-func (c *Collection) openTypedGraphCapturedBaseCache(index string, limits typedGraphReadOwnerLimits) (prepared *collectionVectorIndexPreparedSearch, err error) {
-	err = WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() (err error) {
+func (c *Collection) openTypedGraphCapturedBaseCache(ctx context.Context, index string, limits typedGraphReadOwnerLimits) (prepared *collectionVectorIndexPreparedSearch, err error) {
+	err = WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() (err error) {
 		snap := c.db.AcquireSnapshot()
 		if snap == nil {
 			return ErrVectorIndexSnapshotMismatch

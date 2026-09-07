@@ -200,6 +200,11 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearchSlot(opts VectorI
 	}
 
 	for {
+		if opts.Context != nil {
+			if err := opts.Context.Err(); err != nil {
+				return nil, response, acquireStats, err
+			}
+		}
 		var oldPrepared *collectionVectorIndexPreparedSearch
 		c.vectorBufferedSearchMu.Lock()
 		if c.vectorBufferedSearch == nil {
@@ -211,7 +216,15 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearchSlot(opts VectorI
 			c.vectorBufferedSearchWaits++
 			acquireStats.HNSWSearchPackCacheWaits++
 			c.vectorBufferedSearchMu.Unlock()
-			<-ready
+			if opts.Context == nil {
+				<-ready
+			} else {
+				select {
+				case <-ready:
+				case <-opts.Context.Done():
+					return nil, response, acquireStats, opts.Context.Err()
+				}
+			}
 			commitSeq, systemRoot = dbCommitSeqAndSystemRoot(c.db)
 			if commitSeq == 0 || systemRoot == 0 || c.db.IsClosing() {
 				return nil, response, acquireStats, backenddb.ErrClosed

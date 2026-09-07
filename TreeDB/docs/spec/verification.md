@@ -27,6 +27,13 @@ build across a second empty fold and checks the late keeper is also released.
 neither waits for nor removes a newer building entry, while broad invalidation
 still waits for installation and closes the replacement.
 
+`TestColumnAssetLifecycleSharedCopyBudgetCountsRecords` checks the common
+pre-copy budget across input refs, pin records, and registry records, including
+exact fit and exhausted-budget rejection. `TestTypedGraphPublicFinalWarmBarrierCancellation`
+checks cancellation while the final Ensure/Fold warmer waits on the actual
+storage barrier. `TestTypedGraphCapturedCacheCanceledWaiterPreservesBuilder`
+checks that a canceled coalesced waiter leaves the other builder's keeper valid.
+
 Explicit typed graph serving: `TestTypedGraphPublicSameOwnerServing` covers public
 ensure, typed mutation, same-owner filtered search/full fetch, fold, independent
 manager and normal reopen. `TestTypedGraphPublicServingPressureAndOptions` covers

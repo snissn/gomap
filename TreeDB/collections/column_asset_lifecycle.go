@@ -603,25 +603,17 @@ func (c *Collection) columnAssetLifecycleAugmentReachabilityOptionsWithContext(c
 	}
 	opts.PreparedRefs = append(opts.PreparedRefs, prepared...)
 	opts.PinnedRefs = append(opts.PinnedRefs, pinned...)
-	pins, err := c.columnAssetLifecyclePinSetSnapshotWithLimit(opts.MaxLifecycleEntries)
-	if err != nil {
-		return opts, err
-	}
-	registryRecords, err := c.columnAssetLifecycleRegistrySnapshotWithLimit(opts.MaxLifecycleEntries)
-	if err != nil {
-		return opts, err
-	}
+	var copyBudget *int
 	if opts.MaxLifecycleEntries > 0 {
-		for _, pin := range pins {
-			if err := consumeColumnAssetLifecycleEntries(&remaining, len(pin.Refs)); err != nil {
-				return opts, err
-			}
-		}
-		for _, record := range registryRecords {
-			if err := consumeColumnAssetLifecycleEntries(&remaining, len(record.Refs), len(record.Segments)); err != nil {
-				return opts, err
-			}
-		}
+		copyBudget = &remaining
+	}
+	pins, err := c.columnAssetLifecyclePinSetSnapshotWithBudget(copyBudget)
+	if err != nil {
+		return opts, err
+	}
+	registryRecords, err := c.columnAssetLifecycleRegistrySnapshotWithBudget(copyBudget)
+	if err != nil {
+		return opts, err
 	}
 	refs := columnAssetLifecycleReachabilityRefs(ColumnAssetLifecycleOptions{
 		CandidateRefs:      opts.CandidateRefs,
@@ -699,6 +691,15 @@ func (c *Collection) columnAssetLifecyclePinSetSnapshotWithLimit(maxEntries int)
 	if maxEntries < 0 {
 		return nil, ErrColumnAssetReachabilityLifecycleLimit
 	}
+	if maxEntries == 0 {
+		return c.columnAssetLifecyclePinSetSnapshotWithBudget(nil)
+	}
+	return c.columnAssetLifecyclePinSetSnapshotWithBudget(&maxEntries)
+}
+
+// A nil budget preserves the unlimited caller. A nonnil zero budget is
+// exhausted; charge every record and ref before allocating snapshot copies.
+func (c *Collection) columnAssetLifecyclePinSetSnapshotWithBudget(remaining *int) ([]columnAssetLifecyclePinSetRecord, error) {
 	if c == nil || c.db == nil {
 		return nil, nil
 	}
@@ -713,14 +714,13 @@ func (c *Collection) columnAssetLifecyclePinSetSnapshotWithLimit(maxEntries int)
 		return nil, nil
 	}
 	capacity := len(columnAssetLifecycleProcessPins.pins)
-	if maxEntries > 0 {
-		remaining := maxEntries
+	if remaining != nil {
 		capacity = 0
 		for _, record := range columnAssetLifecycleProcessPins.pins {
 			if record.Scope != scope {
 				continue
 			}
-			if err := consumeColumnAssetLifecycleEntries(&remaining, 1, len(record.Refs)); err != nil {
+			if err := consumeColumnAssetLifecycleEntries(remaining, 1, len(record.Refs)); err != nil {
 				return nil, err
 			}
 			capacity++

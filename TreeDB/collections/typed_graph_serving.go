@@ -113,7 +113,7 @@ func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string,
 	// decision to the validated immutable state rather than a cache result.
 	var warmed *collectionVectorIndexPreparedSearch
 	if prepared.servingBase.graph.RowCount != 0 {
-		warmed, err = c.acquireTypedGraphCapturedBaseCache(index, o)
+		warmed, err = c.acquireTypedGraphCapturedBaseCacheWithContext(ctx, index, o)
 		if err != nil {
 			return err
 		}
@@ -156,7 +156,7 @@ func (c *Collection) FoldColumnGraphServing(ctx context.Context, index string) e
 		c.invalidateTypedGraphEmptyBaseKeeper(index)
 		return nil
 	}
-	_, err := c.acquireTypedGraphCapturedBaseCache(index, p.options.Owners)
+	_, err := c.acquireTypedGraphCapturedBaseCacheWithContext(ctx, index, p.options.Owners)
 	if err == nil {
 		// A concurrent empty fold may have passed cleanup while this build
 		// was in flight. Recheck after installing our optional keeper.

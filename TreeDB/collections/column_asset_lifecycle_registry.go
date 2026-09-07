@@ -426,6 +426,13 @@ func (c *Collection) columnAssetLifecycleRegistrySnapshotWithLimit(maxEntries in
 	if maxEntries < 0 {
 		return nil, ErrColumnAssetReachabilityLifecycleLimit
 	}
+	if maxEntries == 0 {
+		return c.columnAssetLifecycleRegistrySnapshotWithBudget(nil)
+	}
+	return c.columnAssetLifecycleRegistrySnapshotWithBudget(&maxEntries)
+}
+
+func (c *Collection) columnAssetLifecycleRegistrySnapshotWithBudget(remaining *int) ([]columnAssetLifecycleRegistryRecord, error) {
 	if c == nil || c.db == nil {
 		return nil, nil
 	}
@@ -440,14 +447,13 @@ func (c *Collection) columnAssetLifecycleRegistrySnapshotWithLimit(maxEntries in
 		return nil, nil
 	}
 	capacity := len(columnAssetLifecycleProcessRegistries.records)
-	if maxEntries > 0 {
-		remaining := maxEntries
+	if remaining != nil {
 		capacity = 0
 		for _, record := range columnAssetLifecycleProcessRegistries.records {
 			if record.Scope != scope {
 				continue
 			}
-			if err := consumeColumnAssetLifecycleEntries(&remaining, 1, len(record.Refs), len(record.Segments)); err != nil {
+			if err := consumeColumnAssetLifecycleEntries(remaining, 1, len(record.Refs), len(record.Segments)); err != nil {
 				return nil, err
 			}
 			capacity++
