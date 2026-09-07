@@ -99,6 +99,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                  client: FakeClient | None = None) -> runner.TreeDBMinimaRunner:
         workload = object.__new__(runner.TreeDBMinimaRunner)
         workload.client = client or FakeClient(response)
+        workload.strategy, workload.transport = "native_runtime", "http"
         workload.collection = "owned"
         workload.config = {"top_k": 5, "batch_size": 3}
         workload.ef_search = 64
@@ -143,11 +144,11 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                     check=True, capture_output=True, text=True,
                 )
 
-    def test_column_graph_unavailable_before_loading_or_launching(self) -> None:
-        with mock.patch.object(runner, "parse_args", return_value=SimpleNamespace(strategy="column_graph")), \
+    def test_column_graph_requires_explicit_limits_before_loading_or_launching(self) -> None:
+        with mock.patch.object(runner, "parse_args", return_value=SimpleNamespace(strategy="column_graph", column_graph_serving=None)), \
              mock.patch.object(common, "load_manifest") as load, \
              mock.patch.object(runner, "ServiceController") as controller:
-            with self.assertRaisesRegex(SystemExit, "column_graph Minima execution unavailable"):
+            with self.assertRaisesRegex(SystemExit, "column_graph requires --column-graph-serving"):
                 runner.main()
         load.assert_not_called()
         controller.assert_not_called()
@@ -1388,6 +1389,8 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             log_evidence=lambda: {"path": "/tmp/service.log", "tail": "test", "max_tail_bytes": 64 << 10},
         )
         workload.source_commit = "a" * 40
+        workload.strategy, workload.transport = "native_runtime", "http"
+        workload.column_graph_serving = None
         workload.runner_sha256 = "b" * 64
         workload.service_binary_sha256 = "c" * 64
         workload.service_binary_vcs_revision = "a" * 40
@@ -1488,6 +1491,79 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertEqual(artifact["scenarios"][0]["route"]["visited_candidates"], 41)
         self.assertEqual(raw["native_route_responses"]["small"]["candidates"], 41)
         self.assertEqual(raw["native_route_responses"]["small"]["candidate_ids"], 5)
+
+
+class MinimaTypedRunnerTest(unittest.TestCase):
+    workload = MinimaTreeDBRunnerTest.workload
+    response = MinimaTreeDBRunnerTest.response
+
+    def test_native_and_control_clients_share_shutdown_ownership(self) -> None:
+        controller = SimpleNamespace(native_address="127.0.0.1:17122", stop=mock.Mock())
+        control, native = mock.Mock(), mock.Mock()
+        with mock.patch.object(runner, "TreeDBClient", side_effect=[control, native]) as factory:
+            clients = runner.ThreadLocalClients("http://127.0.0.1:17120", 3, controller)
+            self.assertIs(clients.current(), control)
+            self.assertIs(clients.native, native)
+            self.assertIs(clients.native, native)
+            self.assertEqual(factory.call_count, 2)
+            self.assertEqual(factory.call_args.kwargs["native_address"], controller.native_address)
+            clients.close()
+        control.close.assert_called_once()
+        native.close.assert_called_once()
+        controller.stop.assert_called_once()
+
+    def test_reopen_ensures_existing_graph_before_queries(self) -> None:
+        workload = self.workload(self.response())
+        workload.strategy = "column_graph"
+        workload._graph_built = True
+        workload.column_graph_serving = {"SearchCandidates": 4096}
+        workload.controller.start = mock.Mock()
+        workload.clients = mock.Mock()
+        workload.ensure_compatible = mock.Mock()
+        workload.connect()
+        workload.ensure_compatible.assert_called_once()
+        workload.clients.optimize_index.assert_called_once_with(
+            "owned", column_graph_action="ensure", column_graph_serving=workload.column_graph_serving)
+    def test_typed_runner_uses_native_batches_and_snapshot_fetch(self) -> None:
+        info = SimpleNamespace(name="owned", generation=7, dimension=2, metric="cosine",
+                               vector_strategy="column_graph", extra={"typed_input": True},
+                               scalar_fields=[SimpleNamespace(field=f"meta.{name}", value_type="string")
+                                              for name in ("user_id", "fpath")],
+                               to_dict=lambda: {"typed_input": True, "generation": 7})
+        response = self.response(native_base_plus_live_delta=False, native_command_version=2, index=info)
+        workload = self.workload(response)
+        workload.strategy, workload.transport = "column_graph", "native"
+        workload.config.update(dimension=2, metric="cosine")
+        workload.column_graph_serving = {"SearchCandidates": 4096}
+        workload._graph_built = False
+        workload.index_info = None
+        control, native = mock.Mock(), mock.Mock()
+        workload.client = control
+        workload.clients = SimpleNamespace(native=native)
+        control.ensure_index.return_value = info
+        native.query_by_embedding.return_value = response
+        native.upsert_documents.return_value = SimpleNamespace(upserted=1, ids=["d"])
+        native.get_many.return_value = [response.documents[0], None, response.documents[0]]
+        workload.create_owned_collection()
+        self.assertTrue(control.ensure_index.call_args.kwargs["typed_input"])
+        self.assertEqual(control.ensure_index.call_args.kwargs["vector_index_options"], {"strategy": "column_graph"})
+        document = {"id": "d", "content": "c", "vector": [1., 0.], "user_id": "u", "fpath": "/a"}
+        workload.upsert("insert", "mixed", [document])
+        self.assertIs(native.upsert_documents.call_args.kwargs["index_info"], info)
+        control.upsert_documents.assert_not_called()
+        workload.initial_load_to_query_boundary()
+        self.assertEqual(control.optimize_index.call_args.kwargs["column_graph_action"], "build")
+        self.assertEqual(workload.search("query", "mixed"), (["d"], [1.]))
+        self.assertIs(native.query_by_embedding.call_args.kwargs["index_info"], info)
+        control.query_by_embedding.assert_not_called()
+        fetched = workload.retrieve("retrieve", "mixed", ["d", "missing", "d"])
+        self.assertEqual([row.payload["id"] for row in fetched], ["d", "d"])
+        native.get_many.assert_called_once_with("owned", ["d", "missing", "d"], index_info=info)
+        control.filter_documents.assert_not_called()
+        self.assertEqual(sum(s["category"] == "fetch" for s in workload.evidence.samples), 1)
+        native.query_by_embedding.return_value = self.response(index=info, native_command_version=1)
+        with self.assertRaisesRegex(RuntimeError, "left required native route"):
+            workload.search("wrong_dispatch", "mixed")
 
 
 if __name__ == "__main__":

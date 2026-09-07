@@ -37,11 +37,50 @@ A completed bounded artifact must still prove its manifest operations, timed
 reader/writer overlap, reindex/reopen, and final-state scroll. Diagnostic-only
 status prevents full qualification; it does not excuse missing lifecycle work.
 
-The M0 runner still executes `native_runtime`. An explicit
-`TREEDB_STRATEGY=column_graph` request fails as unavailable until M4 connects the
-native lifecycle; null native counters do not mean zero fallback work. Keep
-the same client/transport, projections, durability and fixture for timing
-comparisons. For diagnostic overhead characterization, repeat three matched
+The historical shell lane defaults to `native_runtime` for baseline reproduction.
+The Python runner also supports explicit `--strategy column_graph` with declared
+typed input and native binary hot-path transport. Supply
+`--column-graph-serving /path/to/serving.json`: an explicit JSON object matching
+the public `column_graph_serving` options, sized for the fixture. Missing limits
+fail before service launch. The runner builds/adopts the graph after initial
+load, folds before close, and ensures existing graph assets after reopen; it
+does not substitute an exact document scan or recreate an in-memory runtime.
+
+For this development lane, invoke the Python runner directly with the same
+manifest, service binary and source provenance as the baseline:
+
+```sh
+PYTHONPATH=clients/python/treedb_client/src python3 \
+  benchmarks/vector_db_compare/minima_treedb_runner.py \
+  --strategy column_graph --transport native \
+  --column-graph-serving "$MINIMA_SERVING_LIMITS" \
+  --native-address 127.0.0.1:17122 \
+  --manifest "$MINIMA_MANIFEST" --service-bin "$MINIMA_SERVICE_BINARY" \
+  --data-dir "$MINIMA_TYPED_RUN/db" --output "$MINIMA_TYPED_RUN/result.json" \
+  --collection minima --operation-timeout 120 --startup-timeout 120
+```
+
+Set these paths explicitly first; use a fresh task directory on `/mnt/fast4tb`,
+a committed clean source/binary pair and a bounded manifest, never the final
+holdout for calibration. Wrap the invocation in the same bounded wall deadline
+as above. `--transport http` is the typed-storage HTTP bridge: use a separate
+fresh database with identical fixture and serving limits. Control-plane create,
+maintenance, count, ID/filter delete and final-state scroll remain explicit HTTP
+calls. Native batch upsert carries indexed FP32/string fields without JSON;
+search and separate batch retrieval return the requested full documents. Flexible
+residual payload and final document decoding may still use JSON. Each thread
+owns its native connection, and the aggregate client closes both transports
+before the single shared service is stopped.
+
+Native retrieval is one `GetMany` request, unlike the historical per-ID HTTP
+retrieve loop. Preserve fetched IDs/content/metadata and report that granularity
+change rather than attributing it solely to storage. Current typed diagnostic
+artifacts label dispatch identity but keep work counters unavailable; they are
+not measured native proof and cannot qualify under M0's legacy-only validator.
+Final producer/schema and shell-harness alignment are M4 exit requirements.
+Null native counters do not mean zero fallback work. Keep projections,
+durability and fixture matched for comparisons, and label transport separately.
+For diagnostic overhead characterization, repeat three matched
 fresh-DB runs with diagnostics disabled/enabled in counterbalanced order; set
 `TREEDB_DIAGNOSTICS_DIR` beneath the run directory to enable existing diagnostics.
 Do not use this small lane as a full-scale speedup claim.

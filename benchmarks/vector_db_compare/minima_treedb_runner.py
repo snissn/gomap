@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute the frozen Minima operation manifest through TreeDB's public HTTP client."""
+"""Execute the Minima operation manifest through TreeDB's ordinary public client."""
 
 from __future__ import annotations
 
@@ -120,13 +120,15 @@ class ServiceController:
     def __init__(self, binary: Path, url: str, data_dir: Path, profile: str,
                  startup_timeout: float, shutdown_timeout: float, *,
                  diagnostics_url: str | None = None, block_profile_rate: int = 1,
-                 mutex_profile_fraction: int = 1, diagnostics_timeout: float = 2) -> None:
+                 mutex_profile_fraction: int = 1, diagnostics_timeout: float = 2,
+                 native_address: str | None = None) -> None:
         self.binary, self.url, self.data_dir, self.profile = binary, url.rstrip("/"), data_dir, profile
         self.startup_timeout, self.shutdown_timeout = startup_timeout, shutdown_timeout
         self.diagnostics_url = diagnostics_url.rstrip("/") if diagnostics_url else None
         self.block_profile_rate = block_profile_rate
         self.mutex_profile_fraction = mutex_profile_fraction
         self.diagnostics_timeout = diagnostics_timeout
+        self.native_address = native_address
         self.process: subprocess.Popen[str] | None = None
         self.log_path = data_dir.parent / "treedb-document-service.log"
         self.log_file: Any | None = None
@@ -174,6 +176,8 @@ class ServiceController:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         address = self._listen_address(self.url, "service")
         argv = [str(self.binary), "-addr", address, "-dir", str(self.data_dir), "-profile", self.profile]
+        if self.native_address is not None:
+            argv.extend(["-native-addr", self.native_address])
         if self.diagnostics_url is not None:
             argv.extend([
                 "-pprof", self._listen_address(self.diagnostics_url, "diagnostics"),
@@ -387,6 +391,18 @@ class ThreadLocalClients:
                 self.clients.append(client)
         return client
 
+    @property
+    def native(self) -> TreeDBClient:
+        if self.controller.native_address is None:
+            raise RuntimeError("native Minima transport requires an explicit listener")
+        client = getattr(self.local, "native", None)
+        if client is None:
+            client = TreeDBClient(self.url, timeout=self.timeout, native_address=self.controller.native_address)
+            self.local.native = client
+            with self.lock:
+                self.clients.append(client)
+        return client
+
     def __getattr__(self, name: str) -> Any:
         return getattr(self.current(), name)
 
@@ -407,7 +423,21 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
     def __init__(self, manifest: dict[str, Any], *, controller: ServiceController, collection: str,
                  operation_timeout: float, ef_search: int, diagnostics_dir: Path | None = None,
                  diagnostic_slow_seconds: float = 30, diagnostic_profile_seconds: int = 5,
-                 diagnostic_capture_timeout: float = 10) -> None:
+                 diagnostic_capture_timeout: float = 10, strategy: str = "native_runtime",
+                 transport: str | None = None, column_graph_serving: dict[str, Any] | None = None) -> None:
+        self.strategy = strategy
+        self.transport = transport or ("native" if strategy == "column_graph" else "http")
+        if strategy not in ("native_runtime", "column_graph") or self.transport not in ("http", "native"):
+            raise ValueError("unsupported Minima strategy or transport")
+        if strategy == "native_runtime" and self.transport != "http":
+            raise ValueError("legacy Minima baseline requires HTTP transport")
+        if strategy == "column_graph" and not column_graph_serving:
+            raise ValueError("column_graph requires explicit serving limits")
+        if self.transport == "native" and not controller.native_address:
+            raise ValueError("native Minima transport requires an explicit listener")
+        self.column_graph_serving = column_graph_serving
+        self.index_info = None
+        self._graph_built = False
         self._phase_total_start: int | None = None
         self._phase_start: int | None = None
         self._phase_name: str | None = None
@@ -558,6 +588,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             raise RuntimeError(f"unknown TreeDB attribution phase {name!r}")
         if self._phase_start is None or self._phase_name is None or self._phase_resource_start is None:
             raise RuntimeError("TreeDB phase attribution was not started")
+        if name == "pre_close_queries" and self.strategy == "column_graph":
+            self._fold_graph()
         phase_end = time.monotonic_ns()
         end_process = self._phase_process_snapshot()
         disk = self._phase_disk_snapshot()
@@ -682,16 +714,14 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
     def connect(self) -> None:
         self.controller.start()
         self.client = self.clients
+        if self.strategy == "column_graph" and self._graph_built:
+            self.ensure_compatible()
+            self.evidence.call("column_graph_reopen_ensure", "writer_wait", "all", lambda: self.client.optimize_index(
+                self.collection, column_graph_action="ensure", column_graph_serving=self.column_graph_serving))
 
     def create_owned_collection(self) -> None:
         assert self.client is not None
-        self.evidence.call("ensure_compatible_collection", "writer", "all", lambda: self.client.ensure_index(
-            self.collection, self.config["dimension"], self.config["metric"],
-            scalar_fields=[{"field": "meta.user_id", "value_type": "string"},
-                           {"field": "meta.fpath", "value_type": "string"}],
-            vector_index_options={"strategy": "native_runtime"},
-        ))
-        self.ensure_compatible()
+        self.evidence.call("ensure_compatible_collection", "writer", "all", self.ensure_compatible)
 
     def ensure_compatible(self) -> None:
         assert self.client is not None
@@ -699,18 +729,34 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             self.collection, self.config["dimension"], self.config["metric"],
             scalar_fields=[{"field": "meta.user_id", "value_type": "string"},
                            {"field": "meta.fpath", "value_type": "string"}],
-            vector_index_options={"strategy": "native_runtime"},
+            vector_index_options={"strategy": self.strategy},
+            **({"typed_input": True} if self.strategy == "column_graph" else {}),
         )
         fields = {(row.field, row.value_type) for row in info.scalar_fields}
         if (info.dimension, info.metric, info.vector_strategy, fields) != (
-            self.config["dimension"], self.config["metric"], "native_runtime",
+            self.config["dimension"], self.config["metric"], self.strategy,
             {("meta.user_id", "string"), ("meta.fpath", "string")},
         ):
-            raise RuntimeError("TreeDB index is not the compatible native_runtime Minima schema")
+            raise RuntimeError("TreeDB index is not the compatible selected Minima schema")
+        if self.strategy == "column_graph" and info.extra.get("typed_input") is not True:
+            raise RuntimeError("TreeDB column_graph index lacks authoritative typed input")
+        self.index_info = info
         self.effective_collection = info.to_dict()
 
     def initial_load_to_query_boundary(self) -> None:
-        pass
+        if self.strategy == "column_graph":
+            self.evidence.call("column_graph_initial_build", "writer_wait", "all", lambda: self.client.optimize_index(
+                self.collection, column_graph_action="build", column_graph_serving=self.column_graph_serving))
+            self._graph_built = True
+
+    def _upsert_batch(self, batch: list[dict[str, Any]]) -> Any:
+        if self.transport == "native":
+            return self.clients.native.upsert_documents(self.collection, batch, index_info=self.index_info)
+        return self.client.upsert_documents(self.collection, batch, defer_vector_index_rebuild=True)
+
+    def _fold_graph(self) -> None:
+        self.evidence.call("column_graph_fold", "writer_wait", "all", lambda: self.client.optimize_index(
+            self.collection, column_graph_action="fold"))
 
     def wait_ready(self, expected_count: int | None = None,
                    phase: str = "mutation_visibility") -> None:
@@ -843,9 +889,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             if self.diagnostics_dir is None:
                 response = self.evidence.call(
                     operation, "writer", scenario,
-                    lambda batch=batch: self.client.upsert_documents(
-                        self.collection, batch, defer_vector_index_rebuild=True,
-                    ),
+                    lambda batch=batch: self._upsert_batch(batch),
                     on_start=on_writer_start,
                 )
                 if response.upserted != len(batch) or response.ids != [row["id"] for row in batch]:
@@ -925,9 +969,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             try:
                 response = self.evidence.call(
                     operation, "writer", scenario,
-                    lambda batch=batch: self.client.upsert_documents(
-                        self.collection, batch, defer_vector_index_rebuild=True,
-                    ),
+                    lambda batch=batch: self._upsert_batch(batch),
                     on_start=on_writer_start,
                 )
                 if response.upserted != len(batch) or response.ids != [row["id"] for row in batch]:
@@ -1124,13 +1166,21 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         if interval is not None:
             interval["started_monotonic_ns"] = time.monotonic_ns()
         try:
-            response = self.evidence.call(operation, "search", scenario, lambda: self.client.query_by_embedding(
+            client = self.clients.native if self.transport == "native" else self.client
+            response = self.evidence.call(operation, "search", scenario, lambda: client.query_by_embedding(
                 self.collection, query["vector"], self.config["top_k"], scalar_filter(spec),
-                route="ann", ef_search=self.ef_search))
+                route="ann", ef_search=self.ef_search,
+                **({"index_info": self.index_info} if self.transport == "native" else {})))
         finally:
             if interval is not None:
                 interval["ended_monotonic_ns"] = time.monotonic_ns()
-        if response.route != "ann" or not response.native_base_plus_live_delta or response.exact_fallbacks != 0 or response.full_document_scan_fallbacks != 0:
+        selected = response.native_base_plus_live_delta
+        if self.strategy == "column_graph":
+            selected = (not response.native_base_plus_live_delta
+                        and response.index.vector_strategy == "column_graph"
+                        and response.index.generation == self.index_info.generation
+                        and (self.transport != "native" or response.native_command_version == 2))
+        if response.route != "ann" or not selected or response.exact_fallbacks != 0 or response.full_document_scan_fallbacks != 0:
             raise RuntimeError(f"TreeDB query left required native route: {response!r}")
         self.route_evidence[scenario] = response
         started, ids, scores = time.monotonic_ns(), [], []
@@ -1148,6 +1198,11 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
 
     def retrieve(self, operation: str, scenario: str, ids: list[str]) -> list[Any]:
         assert self.client is not None
+        if self.transport == "native":
+            documents = self.evidence.call(operation, "fetch", scenario, lambda: self.clients.native.get_many(
+                self.collection, ids, index_info=self.index_info))
+            return [SimpleNamespace(payload={"id": row.id, "content": row.content, **row.meta})
+                    for row in documents if row is not None]
         rows = []
         for identifier in ids:
             result = self.evidence.call(operation, "fetch", scenario, lambda identifier=identifier: self.client.filter_documents(
@@ -1222,6 +1277,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         spec = self.specs["small"]
         documents = [common.generated_document(spec, ordinal) for ordinal in range(spec["corpus_rows"])]
         self.upsert("small_initial_batch_insert", "small", documents)
+        self.initial_load_to_query_boundary()
         initial = self.search("small_initial_oracle", "small")
         self.evidence.initial["small"] = initial
         self.compare_oracle("initial", "small", initial)
@@ -1234,6 +1290,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         delete = self.manifest["operations"][9]
         self.delete_ids(delete)
         self.operations["explicit_delete_visible"] = True
+        if self.strategy == "column_graph":
+            self._fold_graph()
         self.evidence.preclose["small"] = self.search("small_preclose", "small")
         assert self.client is not None
         self.capture_restart_origin()
@@ -1262,6 +1320,12 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 "availability": "unavailable", "counters": None,
                 "reason": "native baseline diagnostic; typed column_graph lifecycle counters require M1-M4; bounded sparse scenario does not preserve full <1% selectivity",
             }
+        if self.strategy == "column_graph":
+            artifact["native_path_proof"] = {
+                "schema": "treedb_minima_native_path_proof/v1", "strategy": "column_graph",
+                "availability": "unavailable", "counters": None,
+                "reason": "typed public dispatch diagnostic only; phase and replay producer evidence is not yet captured",
+            }
         resource = self.resource_evidence()
         backend = artifact["backends"][0]
         environment = {
@@ -1277,7 +1341,9 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             "durability": f"TreeDB {self.controller.profile}; owned service restart on the same data directory",
             "configuration": {"url": self.url, "collection": self.collection, "dimension": str(self.config["dimension"]),
                               "metric": self.config["metric"], "scalar_fields": "meta.user_id,meta.fpath",
-                              "vector_strategy": "native_runtime", "ef_search": str(self.ef_search),
+                              "vector_strategy": self.strategy, "transport": self.transport,
+                              "control_transport": "http", "ef_search": str(self.ef_search),
+                              "column_graph_serving": json.dumps(self.column_graph_serving, sort_keys=True),
                               "profile": self.controller.profile, "service_binary": str(self.controller.binary),
                               "service_binary_sha256": self.service_binary_sha256,
                               "service_binary_vcs_revision": self.service_binary_vcs_revision,
@@ -1320,6 +1386,11 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             row["resource"] = {"captured": resource["captured"], "bytes_per_op": None, "allocs_per_op": None,
                                "allocation_availability": "unavailable", "rss_bytes": resource["rss_bytes"],
                                "cpu_seconds": resource["cpu_seconds"], "disk_bytes": resource["disk_bytes"]}
+            if self.strategy == "column_graph":
+                row["route"] = {"identity": "typed_column_graph_dispatch",
+                                "native_command_version": route.native_command_version,
+                                "work_counters_availability": "unavailable"}
+                row["visibility"] = {"generation_consistent": route.index.generation == self.index_info.generation}
         raw = artifact["backend_raw_evidence"].pop("qdrant")
         artifact["backend_raw_evidence"]["treedb"] = raw
         raw.pop("collection_configuration_transition", None)
@@ -1338,6 +1409,12 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             for scenario, value in self.route_evidence.items()
         }
         raw["resource_measurement"] = resource
+        if self.strategy == "column_graph":
+            raw["native_route_responses"] = {
+                scenario: {"native_command_version": value.native_command_version,
+                           "generation": value.index.generation, "work_counters_availability": "unavailable"}
+                for scenario, value in self.route_evidence.items()
+            }
         raw["service_log"] = self.controller.log_evidence()
         raw["upsert_batch_correlations"] = self.batch_correlations
         raw["upsert_batch_correlation_contract"] = self._batch_correlation_contract()
@@ -1365,6 +1442,9 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--strategy", choices=("native_runtime", "column_graph"), default="native_runtime")
+    parser.add_argument("--transport", choices=("http", "native"), help="column_graph defaults to native; HTTP enables the bridge comparison")
+    parser.add_argument("--native-address", default="127.0.0.1:17122")
+    parser.add_argument("--column-graph-serving", type=Path, help="explicit JSON serving limits for column_graph")
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--service-bin", type=Path, required=True)
@@ -1398,14 +1478,21 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    serving = None
     if args.strategy == "column_graph":
-        raise SystemExit("column_graph Minima execution unavailable: typed ingest, mutable durable serving, and public route counters require #4616-#4619")
+        if args.column_graph_serving is None:
+            raise SystemExit("column_graph requires --column-graph-serving with explicit limits")
+        serving = json.loads(args.column_graph_serving.read_text(encoding="utf-8"))
+        if not isinstance(serving, dict) or not serving:
+            raise SystemExit("column_graph serving limits must be a nonempty JSON object")
+    transport = getattr(args, "transport", None) or ("native" if args.strategy == "column_graph" else "http")
     manifest = common.load_manifest(args.manifest)
     diagnostics_dir = args.diagnostics_dir.resolve() if args.diagnostics_dir is not None else None
     controller = ServiceController(
         args.service_bin.resolve(), args.url, args.data_dir.resolve(), args.profile,
         args.startup_timeout, args.operation_timeout,
         diagnostics_url=args.diagnostics_url if diagnostics_dir is not None else None,
+        native_address=args.native_address if transport == "native" else None,
     )
     runner = TreeDBMinimaRunner(
         manifest, controller=controller, collection=args.collection,
@@ -1413,6 +1500,7 @@ def main() -> int:
         diagnostics_dir=diagnostics_dir, diagnostic_slow_seconds=args.diagnostic_slow_seconds,
         diagnostic_profile_seconds=args.diagnostic_profile_seconds,
         diagnostic_capture_timeout=args.diagnostic_capture_timeout,
+        strategy=args.strategy, transport=transport, column_graph_serving=serving,
     )
     exit_code = 0
     try:
