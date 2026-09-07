@@ -5,8 +5,51 @@ import (
 	"github.com/snissn/gomap/TreeDB/pager"
 	"math"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
+
+func TestMetadataEmissionPreservesSharedDirtyBranches4627(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		name := "success"
+		if fail {
+			name = "partial-write-failure"
+		}
+		t.Run(name, func(t *testing.T) {
+			var free []uint64
+			for id := uint64(2); id < 200; id++ {
+				free = append(free, id, id+512)
+			}
+			store := NewMemoryPageStoreV1()
+			base := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 1024, free, nil), 2, store)
+			txn := NewFreelistTxn(base, NewReservationLedger())
+			for _, id := range []uint64{190, 600} {
+				if err := txn.ReservePage(id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// A rollback snapshot can retain both unmaterialized branches.
+			held := txn.root
+			before := detachUnmaterialized(held, 0)
+			var sink AppendPageSink = store
+			if fail {
+				// The selected chunk and leaf write first; fail while emitting
+				// the sibling after its identity/checksum have been assigned.
+				sink = &overwritingMetadataSink4627{store: store, remaining: 2}
+			}
+			_, err := txn.MaterializeCandidate(3, 3, candidateIDFromString(name), sink)
+			if (err != nil) != fail {
+				t.Fatalf("materialize error=%v want failure=%v", err, fail)
+			}
+			if !reflect.DeepEqual(held, before) {
+				t.Fatal("emission changed retained selected/sibling identities, checksums or state")
+			}
+			if lookupChunk(held, 0).pageID != 0 || lookupChunk(held, 2).pageID != 0 {
+				t.Fatal("fixture must retain both dirty branches")
+			}
+		})
+	}
+}
 
 type overwritingMetadataSink4627 struct {
 	store     *MemoryPageStoreV1

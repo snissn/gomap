@@ -726,7 +726,13 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	// or failure consumes this transaction; retry must begin from the immutable
 	// base so a partial sink failure cannot retain unwritten page identities.
 	t.consumed = true
-	t.root = detachUnmaterialized(t.root, 0)
+	if reusedMetadata {
+		// tryReusedMetadata just copied this complete, nonempty path. Isolate
+		// only its dirty siblings before emission assigns page identities.
+		t.root = detachMetadataSiblings(t.root, 0, metadataStart>>freelistChunkShift)
+	} else {
+		t.root = detachUnmaterialized(t.root, 0)
+	}
 	if t.root.pageID != 0 {
 		t.replacedMetadata[t.root.pageID] = struct{}{}
 		// The selected generation's root is exact-generation authority. A

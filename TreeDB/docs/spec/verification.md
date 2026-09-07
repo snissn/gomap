@@ -250,6 +250,13 @@ Publication metadata reuse (#4627) has additional production DB witnesses:
   auxiliary claim races, arbitrary-sink rollback, real pager failed-tail gaps,
   low placement sizing and bounded search starvation. They do not prove every
   workload plateaus: requests larger than a fitting chunk retain tail fallback.
+- Metadata sizing rejects impossible runs without allocating and leaves a
+  losing claimant's staged state intact. Emission retains the freshly copied
+  selected path but isolates dirty siblings; success and partial-write failure
+  tests verify retained branches' identities, checksums and contents unchanged.
+- The vacuum M0 fixture manufactures explicit retired user-tree debt with
+  fixed append-only compactions, recorded in its parameters. Its minimum 50%
+  reclaimable-page and 40% shrink checks must not depend on metadata leakage.
 
 Pure scenario-validator unit tests under
 `TreeDB/internal/powerlossoracle/scenario_test.go` cover durable acknowledgement
