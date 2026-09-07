@@ -18,6 +18,9 @@ The internal empty prepared-cache seam still rejects without retaining a holder;
 public empty cutover releases its obsolete keeper without closing held owners.
 `TestTypedGraphPublicEmptyFoldLateKeeper` pauses a nonempty fold's captured-cache
 build across a second empty fold and checks the late keeper is also released.
+`TestPreparedSearchInvalidationReplacementBuild` checks exact-old invalidation
+neither waits for nor removes a newer building entry, while broad invalidation
+still waits for installation and closes the replacement.
 
 Explicit typed graph serving: `TestTypedGraphPublicSameOwnerServing` covers public
 ensure, typed mutation, same-owner filtered search/full fetch, fold, independent

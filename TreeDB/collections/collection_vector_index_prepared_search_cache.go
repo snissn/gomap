@@ -1151,6 +1151,12 @@ func (c *Collection) invalidateCollectionVectorIndexPreparedSearch(slot collecti
 		var closePrepared *collectionVectorIndexPreparedSearch
 		c.vectorBufferedSearchMu.Lock()
 		entry := c.vectorBufferedSearch[slot]
+		// Exact-object invalidation has no ownership of a replacement build.
+		// New building entries have no prepared object until installation.
+		if prepared != nil && (entry == nil || entry.prepared != prepared) {
+			c.vectorBufferedSearchMu.Unlock()
+			return
+		}
 		if entry != nil && entry.building {
 			ready := entry.ready
 			c.vectorBufferedSearchWaits++
