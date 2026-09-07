@@ -11,6 +11,13 @@ asset afterward, and reopens the same native directory with an unapplied typed
 replacement command. These are bounded maintenance/replay gates, not a claim of
 whole-database storage plateau or public mutable Minima activation.
 
+`TestPrepareColumnPhysicalAssetRowsTypedGenerationPlacement` checks same-generation
+insert/update/delete/retry appends, typed-image alignment, one shared close/sync
+epoch, and rejection of an out-of-range deletion generation. Existing generic
+producer tests keep their prior file placement and sync expectations. The eight
+real maintenance cycles also assert equal-width retained column bytes plateau
+and cross-generation mixed row debt stays bounded; pager/WAL growth is separate.
+
 ## Minima native-path contract (#4615)
 
 `minima-native-execution.md` defines the target, not current mutable graph

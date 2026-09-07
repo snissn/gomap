@@ -11,6 +11,13 @@ changes.
 
 ## Recommended layout
 
+Use the supported typed schema and native batch APIs for indexed values. The
+producer keeps typed-row metadata beside its generation's aligned FP32 image,
+so obsolete generations can be reclaimed without a forever-growing shared row
+file. Do not add a separate JSON-indexed or side-copy store to manage that
+lifecycle. Captured bases and active readers still retain their exact assets;
+generation placement does not itself enable public mutable graph serving.
+
 Current mutation boundary: the #4617 typed base-plus-suffix search consumer is
 internal and experimental. Public typed batch writes preserve their selected
 durability profile, but they do not automatically make an existing graph ready

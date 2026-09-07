@@ -94,6 +94,15 @@ The maintenance plan reports active handle accounting:
 
 ## Destructive actions
 
+Selected native typed FP32 producers co-locate typed-row metadata and aligned
+typed-column images in the existing generation-derived segment, including
+delete-only metadata and same-generation fold output. This lets whole-segment
+GC retire old generations without rewriting bytes protected by a captured base.
+Same-generation obsolete ranges remain mixed debt until that generation retires.
+No captured, fallback, or reader protection is weakened. The bounded eight-cycle
+equal-width fixture demonstrates a column-byte plateau, not a whole-database
+quota or restart/orphan cleanup certification.
+
 `ColumnAssetGC` may delete only canonical whole segments whose bytes are wholly
 reclaimable and whose plan is complete. Mixed live/dead segments become rewrite
 debt and are retained.

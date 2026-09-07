@@ -53,6 +53,7 @@ func TestTypedGraphWorkEpochRepeatedMaintenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	var deleted int
+	var steadyColumnBytes int64
 	for cycle := 0; cycle < 8; cycle++ {
 		// This small fixture disables background pruning. Exercise existing
 		// caller-owned native maintenance; renewal itself never calls Prune.
@@ -82,11 +83,19 @@ func TestTypedGraphWorkEpochRepeatedMaintenance(t *testing.T) {
 			t.Fatal("renewal changed logical authority")
 		}
 		deleted += stats.Columns.SegmentsDeleted
+		if cycle == 1 {
+			steadyColumnBytes = stats.Columns.BytesRetained
+		} else if cycle > 1 && stats.Columns.BytesRetained != steadyColumnBytes {
+			t.Fatalf("equal-width generation column storage did not plateau: %d want %d", stats.Columns.BytesRetained, steadyColumnBytes)
+		}
 		t.Logf("cycle=%d native_bytes=%d entries=%d pager_pages=%d reusable=%d column_deleted=%d retained=%d", cycle, stats.Native.Bytes, stats.Native.Entries, stats.Pager.TotalPages, stats.Pager.FreelistReclaimable, stats.Columns.SegmentsDeleted, stats.Columns.BytesRetained)
 		if cycle >= 3 {
 			plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{})
 			if err != nil || plan.Segments.BytesWholeReclaimable > 100000 {
 				t.Fatalf("historical whole-segment replay retention: bytes=%d err=%v", plan.Segments.BytesWholeReclaimable, err)
+			}
+			if plan.RewriteDebtBytes > 20000 {
+				t.Fatalf("cross-generation mixed row storage growth: bytes=%d", plan.RewriteDebtBytes)
 			}
 		}
 	}

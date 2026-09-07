@@ -1590,6 +1590,69 @@ func TestPrepareColumnPhysicalAssetRowsKeepsPendingAssetOrder3236(t *testing.T) 
 	}
 }
 
+func TestPrepareColumnPhysicalAssetRowsTypedGenerationPlacement(t *testing.T) {
+	_, d, col := openTypedMinimaCollection(t)
+	defer d.Close()
+	meta := col.Meta()
+	rows := []columnDeclaredRow{{ID: []byte("a"), Values: []columnDeclaredValue{
+		{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{1, 0, 0, 0, 0, 0, 0, 0}},
+		{Type: ColumnStoreValueString, Present: true, String: "content"},
+		{Type: ColumnStoreValueString, Present: true, String: "user"},
+		{Type: ColumnStoreValueString, Present: true, String: "path"},
+	}}}
+	var previousEnd int64
+	for _, operation := range []ColumnPublishOperation{ColumnPublishOperationInsert, ColumnPublishOperationUpdate, ColumnPublishOperationDelete, ColumnPublishOperationInsert} {
+		inputRows := rows
+		if operation == ColumnPublishOperationDelete {
+			inputRows = []columnDeclaredRow{{ID: []byte("a"), Deleted: true}}
+		}
+		prepared, err := col.prepareColumnPhysicalAssetRowsAtIdentity(ColumnPublishPreparedAssets{}, columnWritePublishInput{
+			meta: meta, operation: operation, rows: len(inputRows), declaredRows: inputRows, declaredRowsReady: true,
+		}, ColumnPublishAssetPrepareInput{Collection: meta.Name, ColumnStore: *meta.Options.ColumnStore, Operation: operation, AppliedCommandLSN: 77}, inputRows, 7, columnPhysicalRowAssetPartID, typedColumnPartAssetPartID)
+		if err != nil {
+			t.Fatalf("%s: %v", operation, err)
+		}
+		if prepared.stableResources != nil {
+			defer prepared.stableResources.Release()
+		}
+		fileID, err := directViewTypedColumnSegmentFileID(7)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sawRow, sawTyped bool
+		for _, asset := range prepared.Assets {
+			ref := asset.Ref
+			if ref.FileID != fileID || ref.Generation != 7 || ref.Offset < previousEnd {
+				t.Fatalf("%s generation append ref=%+v previous_end=%d", operation, ref, previousEnd)
+			}
+			previousEnd = ref.Offset + ref.Length
+			switch ref.Kind {
+			case ColumnAssetKindTCS1PartImage:
+				sawRow = true
+			case ColumnAssetKindTCS1TypedColumnPart:
+				sawTyped = true
+				if ref.Offset%typedColumnPartDirectViewAssetAlignment != 0 {
+					t.Fatalf("unaligned typed ref=%+v", ref)
+				}
+			}
+		}
+		if !sawRow || sawTyped != (operation != ColumnPublishOperationDelete) {
+			t.Fatalf("%s row=%t typed=%t", operation, sawRow, sawTyped)
+		}
+		metrics := prepared.AssetMetrics
+		if metrics.SharedAppendCloseCount != 1 || metrics.SharedAppendFileSyncCount != 1 || metrics.SharedAppendSyncEpochCount != 1 || metrics.SharedSegmentAppendCount != 0 {
+			t.Fatalf("%s append metrics=%+v", operation, metrics)
+		}
+		t.Logf("operation=%s appends=%d close=%d sync=%d bytes=%d", operation, metrics.SharedAppendCount, metrics.SharedAppendCloseCount, metrics.SharedAppendFileSyncCount, metrics.DirectViewSegmentAppendBytes)
+	}
+	prepared, err := col.prepareColumnPhysicalAssetRowsAtIdentity(ColumnPublishPreparedAssets{}, columnWritePublishInput{
+		meta: meta, operation: ColumnPublishOperationDelete, rows: 1,
+	}, ColumnPublishAssetPrepareInput{Collection: meta.Name, ColumnStore: *meta.Options.ColumnStore, Operation: ColumnPublishOperationDelete, AppliedCommandLSN: 77}, []columnDeclaredRow{{ID: []byte("a"), Deleted: true}}, 1<<32, columnPhysicalRowAssetPartID, typedColumnPartAssetPartID)
+	if err == nil || len(prepared.Assets) != 0 {
+		t.Fatalf("out-of-range delete generation prepared=%+v err=%v", prepared, err)
+	}
+}
+
 func TestPrepareColumnPhysicalAssetRowsCountsDirectViewTypedColumnSync3151(t *testing.T) {
 	cfg, err := normalizeColumnStoreConfig("events", &ColumnStoreConfig{
 		Enabled: true,

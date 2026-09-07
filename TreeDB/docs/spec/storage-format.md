@@ -3030,6 +3030,13 @@ fold additionally writes compacted assets at the real captured generation T,
 with a fresh row part and typed part 2, and preserves post-T records under the
 current U manifest header. Its separately checksummed captured manifest and
 independent native roots describe T, not the current U scalar/primary authority.
+For the supported non-column-retained typed FP32 schema, row images share the
+existing generation-derived direct-view segment with typed-column images.
+Delete-only row images use that same generation-derived placement. Same-generation
+folds/retries append immutable ranges; typed-image alignment and padding remain
+unchanged. Other schemas and sidecar placement are unchanged. This avoids one
+constant row-image segment accumulating obsolete bytes across generations; it
+does not change reachability or permit deleting captured/fallback/reader assets.
 Installation uses the existing column-asset rewrite maintenance publisher and
 does not add a logical WAL command. Graph construction occurs outside collection
 admission, but current-root validation, locator merging and native root building

@@ -1383,7 +1383,16 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPub
 	prepared.AssetMetrics.RowAssetDuration += rowAsset.duration
 	prepared.AssetMetrics.RowAssetBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.RowAssetBytes, int64(len(rowAsset.encoded)))
 	prepared.AssetMetrics.RowAssetCount++
-	queueRegularManifestAsset(rowAsset.encoded, ColumnAssetKindTCS1PartImage, rowPartID, rowAsset.summary.RowCount, string(input.operation), role, "", func(ref ColumnAssetRef) error {
+	rowFileID := uint32(columnAssetM12ASegmentFileID)
+	if columnStoreTypedScalarIndexesSupported(input.meta) && columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore) {
+		// Keep selected typed row metadata with its generation's typed image so
+		// captured bases do not retain a cross-generation row-image segment.
+		rowFileID, err = directViewTypedColumnSegmentFileID(generation)
+		if err != nil {
+			return ColumnPublishPreparedAssets{}, err
+		}
+	}
+	queueRegularManifestAssetToFile(rowAsset.encoded, ColumnAssetKindTCS1PartImage, rowPartID, rowAsset.summary.RowCount, string(input.operation), role, "", rowFileID, func(ref ColumnAssetRef) error {
 		return validateColumnPhysicalAssetPreparedRefForManifest(ref, rowAsset.config, generation, rowPartID, len(rowAsset.encoded))
 	})
 	typedGranuleRowOrder := typedColumn.build.TypedGranuleRowOrder
