@@ -22,6 +22,7 @@ type typedGraphOverlaySearch struct {
 }
 
 type typedGraphOverlaySearchStats struct {
+	Route                        string
 	Base                         columnVectorGraphNativeSearchStats
 	DeltaScored                  int
 	FilteredExact                bool
@@ -89,6 +90,7 @@ const typedGraphScalarExactLimit = 4096
 // installation are deliberately not inferred from this primitive.
 func (v *typedGraphOverlaySearch) search(query []float32, topK, efSearch, candidateLimit int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, typedGraphOverlaySearchStats, error) {
 	var stats typedGraphOverlaySearchStats
+	defer stats.recordWork()
 	completed := false
 	if buffer != nil {
 		buffer.resetView()
@@ -123,6 +125,7 @@ func (v *typedGraphOverlaySearch) search(query []float32, topK, efSearch, candid
 		return nil, stats, err
 	}
 	if topK == 0 {
+		stats.Route = "typed_empty"
 		return nil, stats, nil
 	}
 	// Retrieving K plus every possible shadow prevents filtering an already
@@ -136,7 +139,12 @@ func (v *typedGraphOverlaySearch) search(query []float32, topK, efSearch, candid
 	if efSearch == 0 {
 		efSearch = min(v.base.reader.def.EfSearch, baseLimit)
 	}
-	baseResults, baseStats, err := v.pack.searchCosine(query, columnVectorGraphNativeSearchOptions{TopK: baseTopK, EfSearch: max(efSearch, baseTopK), CandidateLimit: baseLimit}, &buffer.searchScratch)
+	if v.pack.Header.Rows > 0 {
+		stats.Route = "typed_hnsw"
+	} else {
+		stats.Route = "typed_empty"
+	}
+	baseResults, baseStats, err := v.pack.searchCosine(query, columnVectorGraphNativeSearchOptions{TopK: baseTopK, EfSearch: max(efSearch, baseTopK), CandidateLimit: baseLimit, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
 	stats.Base = baseStats
 	stats.BaseResultIDs = len(baseResults)
 	if err != nil {
@@ -158,6 +166,9 @@ func (v *typedGraphOverlaySearch) search(query []float32, topK, efSearch, candid
 	for i, row := range v.rows {
 		if row.Deleted {
 			continue
+		}
+		if stats.Route == "typed_empty" {
+			stats.Route = "typed_exact"
 		}
 		score, err := columnVectorGraphNativeCosineScoreVector(query, queryInvNorm, i, row.Values[v.vectorColumn].Float32Vector, v.invNorms[i])
 		if err != nil {

@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 func TestTypedGraphPublicEmptyLifecycle(t *testing.T) {
@@ -44,6 +46,7 @@ func TestTypedGraphPublicEmptyLifecycle(t *testing.T) {
 						q.DeclaredScalarFilter = &HybridScalarFilter{IndexName: "path", Value: "source"}
 					}
 					var buffer VectorIndexSearchBuffer
+					beforeGraph := workstats.Read().Graph
 					response, view, err := col.SearchVectorIndexWithBufferReadView(q, &buffer)
 					if err != nil {
 						t.Fatal(err)
@@ -56,6 +59,23 @@ func TestTypedGraphPublicEmptyLifecycle(t *testing.T) {
 					count := 0
 					if want != "" {
 						count = 1
+					}
+					work := response.Stats.ColumnGraphWork
+					afterGraph := workstats.Read().Graph
+					if !work.Available || afterGraph.Requests.Attempts-beforeGraph.Requests.Attempts != 1 || afterGraph.Requests.Completed-beforeGraph.Requests.Completed != 1 || afterGraph.Requests.Errors != beforeGraph.Requests.Errors || afterGraph.DeltaScored-beforeGraph.DeltaScored != work.DeltaScored || afterGraph.ExactBaseScored-beforeGraph.ExactBaseScored != work.ExactBaseScored || afterGraph.BaseANNScored-beforeGraph.BaseANNScored != work.BaseANNScored {
+						t.Fatalf("public work=%+v before=%+v after=%+v", work, beforeGraph, afterGraph)
+					}
+					if count == 0 && (work.Route != "typed_empty" || work.BaseANNScored+work.ExactBaseScored+work.DeltaScored != 0) {
+						t.Fatalf("empty proof=%+v", work)
+					}
+					if count == 1 && work.BaseANNScored+work.ExactBaseScored+work.DeltaScored == 0 {
+						t.Fatalf("nonempty proof=%+v", work)
+					}
+					if filtered && (!work.Filter.Attempted || !work.Filter.Completed || work.Filter.EligibleRows != uint64(count)) {
+						t.Fatalf("filter proof=%+v", work.Filter)
+					}
+					if count == 0 && response.Stats.SearchRouteHNSWSearchPack != 0 {
+						t.Fatalf("empty query reported executed HNSW: %+v", response.Stats)
 					}
 					if len(docs.Results) != count {
 						t.Fatalf("count=%d want%d", len(docs.Results), count)
@@ -75,6 +95,25 @@ func TestTypedGraphPublicEmptyLifecycle(t *testing.T) {
 			check("")
 			insert("original")
 			check("original")
+			for _, noMatch := range []bool{false, true} {
+				q := query
+				if noMatch {
+					q.DeclaredScalarFilter = &HybridScalarFilter{IndexName: "path", Value: "missing"}
+				} else {
+					q.TopK = 0
+				}
+				var buffer VectorIndexSearchBuffer
+				response, view, err := col.SearchVectorIndexWithBufferReadView(q, &buffer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(response.Results) != 0 || response.Stats.ColumnGraphWork.Route != "typed_empty" || response.Stats.ColumnGraphWork.DeltaScored != 0 {
+					t.Fatalf("empty branch=%+v", response.Stats.ColumnGraphWork)
+				}
+				if err := view.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := col.FoldColumnGraphServing(ctx, "embedding_graph"); err != nil {
 				t.Fatal(err)
 			}

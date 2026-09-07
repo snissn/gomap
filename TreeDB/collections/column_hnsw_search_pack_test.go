@@ -2494,3 +2494,36 @@ func testColumnHNSWSearchPackRechecksumDirectory2312(raw []byte) {
 	dirLen := int(binary.LittleEndian.Uint64(raw[columnHNSWSearchPackHeaderDirectoryLengthOffset:]))
 	binary.LittleEndian.PutUint32(raw[columnHNSWSearchPackHeaderDirectoryChecksumOffset:], page.Checksum(raw[dirOff:dirOff+dirLen]))
 }
+
+// A failed scalar batch has completed real scores before the invalid ordinal;
+// all three consumers must retain that prefix while rejecting result output.
+func TestColumnHNSWSearchPackScoreBatchErrorPrefix(t *testing.T) {
+	input := testColumnHNSWSearchPackInput2312()
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack, _ := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity)
+	defer pack.Close()
+	rows := []uint32{0, uint32(pack.Header.Rows)}
+	for _, mode := range []string{"filtered", "fast", "trace"} {
+		t.Run(mode, func(t *testing.T) {
+			var scratch columnVectorGraphNativeSearchScratch
+			var stats columnVectorGraphNativeSearchStats
+			var visited uint64
+			query := make([]float32, pack.Header.VectorStride)
+			query[0] = 1
+			switch mode {
+			case "filtered":
+				err = pack.scoreFilteredTile(query, rows, 1, columnVectorGraphNativeSearchOptions{ScoreBatchMode: columnVectorGraphScoreBatchModeScalar}, &scratch, &stats, &visited)
+			case "fast":
+				err = pack.scoreAndPushFrontierVisitedTileFast(query, rows, 1, columnVectorGraphScoreBatchModeScalar, &scratch, &stats, &visited)
+			case "trace":
+				err = pack.scoreAndPushFrontierVisitedTile(query, rows, 1, columnVectorGraphScoreBatchModeScalar, &scratch, &stats, &visited, &columnHNSWSearchPackAttributionTrace{}, nil)
+			}
+			if err == nil || stats.PreparedScoreCalls != 1 || visited != 1 || len(scratch.top) != 0 {
+				t.Fatalf("partial batch err=%v stats=%+v visited=%d", err, stats, visited)
+			}
+		})
+	}
+}

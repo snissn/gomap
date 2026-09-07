@@ -6,6 +6,7 @@ import "slices"
 // owns eligibility; the older base is only a checked vector/graph accelerator.
 func (v *typedGraphOverlaySearch) searchPreparedFilter(plan *typedGraphPreparedFilter, query []float32, topK, efSearch, candidateLimit int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, typedGraphOverlaySearchStats, error) {
 	var stats typedGraphOverlaySearchStats
+	defer stats.recordWork()
 	completed := false
 	if buffer != nil {
 		buffer.resetView()
@@ -41,6 +42,7 @@ func (v *typedGraphOverlaySearch) searchPreparedFilter(plan *typedGraphPreparedF
 		return nil, stats, errTypedGraphSearchBudget
 	}
 	if topK == 0 || plan.count == 0 {
+		stats.Route = "typed_empty"
 		completed = true
 		return nil, stats, nil
 	}
@@ -49,6 +51,7 @@ func (v *typedGraphOverlaySearch) searchPreparedFilter(plan *typedGraphPreparedF
 		if plan.count > candidateLimit {
 			return nil, stats, errTypedGraphSearchBudget
 		}
+		stats.Route = "typed_exact"
 		// Retain only K scored ordinals; document IDs are read at the result
 		// boundary, not for every eligible candidate.
 		scratch := &buffer.searchScratch
@@ -87,7 +90,8 @@ func (v *typedGraphOverlaySearch) searchPreparedFilter(plan *typedGraphPreparedF
 		if efSearch == 0 {
 			efSearch = min(v.base.reader.def.EfSearch, baseLimit)
 		}
-		results, baseStats, err := v.pack.searchCosine(query, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: max(baseRequestK, efSearch), CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true}, &buffer.searchScratch)
+		stats.Route = "typed_hnsw"
+		results, baseStats, err := v.pack.searchCosine(query, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: max(baseRequestK, efSearch), CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
 		stats.Base = baseStats
 		stats.BaseResultIDs = len(results)
 		if err != nil {

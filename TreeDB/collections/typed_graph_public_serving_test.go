@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // The pause is after the old captured holder exists and its snapshot/barrier
@@ -184,6 +185,7 @@ func TestTypedGraphPublicFoldPublicationAvailability(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer oldView.Close()
+	beforeFold := workstats.Read().Fold
 	var observed bool
 	typedGraphPublicationAfterAcceptedHook.Lock()
 	typedGraphPublicationAfterAcceptedHook.foldAfterInstall = func(c *Collection) {
@@ -191,6 +193,10 @@ func TestTypedGraphPublicFoldPublicationAvailability(t *testing.T) {
 			return
 		}
 		observed = true
+		atInstall := workstats.Read().Fold
+		if atInstall.Publications-beforeFold.Publications != 1 || atInstall.Public.Completed != beforeFold.Public.Completed {
+			t.Errorf("publication and return conflated: before=%+v atInstall=%+v", beforeFold, atInstall)
+		}
 		query := VectorIndexSearchOptions{IndexName: base.indexName, Query: columns[0].Float32Vectors[0], TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeMinimal, DeclaredScalarFilter: &HybridScalarFilter{IndexName: "path", Value: "new"}}
 		var buffer VectorIndexSearchBuffer
 		response, view, err := c.SearchVectorIndexWithBufferReadView(query, &buffer)
@@ -216,6 +222,10 @@ func TestTypedGraphPublicFoldPublicationAvailability(t *testing.T) {
 	}()
 	if err := col.FoldColumnGraphServing(context.Background(), base.indexName); err != nil {
 		t.Fatal(err)
+	}
+	afterFold := workstats.Read().Fold
+	if afterFold.Public.Completed-beforeFold.Public.Completed != 1 || afterFold.Public.Errors != beforeFold.Public.Errors || afterFold.Renew.Completed-beforeFold.Renew.Completed != 1 {
+		t.Fatalf("fold completion=%+v before=%+v", afterFold, beforeFold)
 	}
 	if !observed {
 		t.Fatal("missing actual post-install boundary")

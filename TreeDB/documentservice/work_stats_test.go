@@ -123,8 +123,23 @@ func TestWorkStatsDiagnosticsLifetimeAndAvailability(t *testing.T) {
 	}
 	for _, key := range []string{"graph", "output", "fold"} {
 		value, ok := available[key]
-		if !ok || value {
-			t.Fatalf("unimplemented group %s=%t present=%t", key, value, ok)
+		if !ok || !value {
+			t.Fatalf("implemented group %s=%t present=%t", key, value, ok)
+		}
+	}
+	var graphFields map[string]json.RawMessage
+	if err := json.Unmarshal(work["graph"], &graphFields); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"base_result_ids", "filter_source_ids", "base_ann_scored", "delta_scored", "exact_base_scored"} {
+		if len(graphFields[key]) == 0 {
+			t.Fatalf("missing graph field %s", key)
+		}
+	}
+	// Complete groups serialize their zero and nonzero values explicitly.
+	for _, key := range []string{"graph", "output", "fold"} {
+		if len(work[key]) == 0 {
+			t.Fatalf("missing available group %s", key)
 		}
 	}
 	if !after.Available.IndexedJSON || !after.Available.Typed || !after.Available.Replay || !after.Available.RuntimeQuery || !after.Available.AttributedScans || !after.Available.RowIndexCache {

@@ -56,6 +56,10 @@ boundaries before comparing related totals.
 | `scans` | Dispatches and visited rows for service dense exact, filtered count, filtered retrieval, mutation matching, cursor, ID-only count, and collection exact search (full or index-restricted). Filtered count scans cover predicates outside declared scalar EQ/AND. Cursor/retrieval work is not automatically forbidden. Internal maintenance iterators are outside this group. |
 | `memory` | One `runtime.ReadMemStats` sample before diagnostics serialization: cumulative `total_alloc`/`mallocs` and current `heap_alloc`/`heap_sys`, plus `sys`/`num_gc`. Totals include startup and recovery. Per-operation allocation claims require an externally bounded phase and matching process lifetime. |
 | `row_index_cache` | Generic variable-row offset memo hits/misses, index build attempts, actual rows visited (including a failed prefix), evictions and oversized bypasses. `entries` and `retained_bytes` are current cache-owned metadata gauges; `byte_limit` is 64 MiB. Fixed/dense ID indexing is outside this group. |
+| `graph` | Public selected typed serving attempts/completions/errors. Separate internal overlay/filter producers count executed empty/exact/HNSW branches, prepared-base FP32 scores, exact-base/suffix scores, shadowed/result IDs, actual posting IDs/bytes/inspected entries and charged mapping bounds, including error prefixes. Direct internal overlay consumers contribute work but are not public requests. Generic legacy graph search and construction scores are outside this group. |
+| `output` | `materialization` counts shared collection by-ID/by-ref fetches once; `search` attributes the admitted native-runtime/typed dense service path; `get_many` attributes typed service fetches. Each separates attempts, successful returns, errors, requested/fetched/missing rows, materialized bytes, retained payload fetches, reconstructed JSON rows and typed-column rows. Completed prefixes survive errors. Keyword/hybrid fetches contribute to common materialization. These are document bytes, not serialized response/frame bytes. |
+| `fold` | Internal build attempts/completions/errors, durable publications, public Fold returns, and internal epoch-renewal attempts/completions/errors are separate. Renewal also runs during Ensure/Fold. Candidate bytes and appender attempts are charged work, not measured file output. Publication remains counted if later install/checkpoint/maintenance/warming fails. |
+
 
 The row-offset memo extends the existing process checksum cache. Each request
 still strictly verifies asset bytes and validates the captured schema/header;
@@ -65,15 +69,37 @@ snapshot. The 64 MiB ceiling covers cache-owned offset capacity and descriptors;
 it excludes slices still held by active readers after eviction, transient builds,
 fixed slot overhead and source mappings. It is separate from graph `StateBytes`.
 Oversized tables use ordinary uncached indexing. Typed GetMany benefits without
-graph admission. Graph/output/fold proof availability remains unchanged.
+graph admission.
 
 Zero fields remain present. `available` describes instrumented producer groups,
-not acceptance of a workload. Graph work, output work and fold proof groups are
-explicitly unavailable in this revision. Missing/unavailable counters cannot
-certify zero work. Indexed JSON positive controls and typed/replay positive work
+not acceptance of a workload. Graph/output/fold are available for the explicitly
+scoped producers above. Missing/unavailable counters cannot certify zero work. Indexed JSON positive controls and typed/replay positive work
 are needed alongside zero forbidden counts; selecting a typed route alone is
 insufficient. This diagnostics addition does not change the historical Minima
 artifact schema or certify the complete Minima path.
+
+`last_opened.typed_graph`, when present, copies one existing cached handle's
+immutable publication/base/current identities and coverage LSNs, suffix counts,
+charged debt, epoch, and owner/asset retention gauges. It never opens a snapshot,
+read owner or asset, warms a cache, or creates serving authority. Publication
+fields share one immutable state; `publication_unchanged` reports whether that
+pointer remained current during the copy. Debt and owner gauges use their
+existing locks but are not a transactional serving frontier. Absent cached or
+selected state is omitted, not certified as zero. No snapshot scans a corpus or
+asset registry. Graph admission gauges do not include the generic row-index memo.
+
+The Go engine's `VectorIndexSearchStats.ColumnGraphWork` preserves owner-local
+selected work in Minimal and Production modes, including filter error prefixes.
+Its route is assigned by the executed branch: top-K zero/no matches/empty base
+without live suffix report `typed_empty`; bounded scalar exact or suffix-only
+scoring report `typed_exact`; actual base traversal reports `typed_hnsw`. An
+empty route means no scoring branch executed. Filter cardinality is final only
+when filter preparation completed. Mapping work is a charged bound; retained
+and scratch fields are capacities/peaks. The selected pack explicitly uses its
+existing FullDiagnostics counters without enabling work-accounting timers.
+This engine proof is excluded from JSON serialization; measured wire/Python
+response contracts remain a separate versioned change. Process memory is still
+sampled only for diagnostics, never per query.
 
 ## Scope and honesty
 

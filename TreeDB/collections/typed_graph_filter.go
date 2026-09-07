@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 type typedGraphFilterLimits struct {
@@ -32,6 +33,23 @@ type typedGraphPreparedFilter struct {
 }
 
 func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScalarFilter, limits typedGraphFilterLimits) (*typedGraphPreparedFilter, error) {
+	return prepareTypedGraphFilterWithWork(overlay, filter, limits, nil)
+}
+
+func prepareTypedGraphFilterWithWork(overlay *typedGraphOverlaySearch, filter HybridScalarFilter, limits typedGraphFilterLimits, workOut *ColumnGraphFilterWork) (_ *typedGraphPreparedFilter, err error) {
+	var plan *typedGraphPreparedFilter
+	workstats.Graph.Filters.Attempts.Add(1)
+	defer func() {
+		w := plan.work(err == nil)
+		if workOut != nil {
+			*workOut = w
+		}
+		workstats.Graph.Filters.Finish(err == nil)
+		workstats.Graph.FilterSourceIDs.Add(w.SourceIDs)
+		workstats.Graph.FilterSourceBytes.Add(w.SourceBytes)
+		workstats.Graph.FilterInspectedEntries.Add(w.InspectedEntries)
+		workstats.Graph.FilterMappingWorkCharged.Add(w.MappingWorkCharged)
+	}()
 	if !overlay.validOpen() {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
@@ -46,7 +64,7 @@ func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScal
 	if !overlay.baseInverseReady() {
 		return nil, errTypedGraphInverseRequired
 	}
-	plan := &typedGraphPreparedFilter{overlay: overlay}
+	plan = &typedGraphPreparedFilter{overlay: overlay}
 	leaves := filter.And
 	if len(leaves) == 0 {
 		leaves = []HybridScalarFilter{filter}
@@ -201,10 +219,10 @@ func finishTypedGraphFilter(plan *typedGraphPreparedFilter, baseOrdinals, deltaO
 		// these ranks and translate back to graph ordinals for vector access.
 		plan.exactBaseByID = make([]int, len(baseOrdinals))
 		copy(plan.exactBaseByID, baseOrdinals)
+		plan.retainedBytes += len(plan.exactBaseByID) * (bits.UintSize / 8)
 		if err := sortTypedGraphExactRanks(plan); err != nil {
 			return nil, err
 		}
-		plan.retainedBytes += len(plan.exactBaseByID) * (bits.UintSize / 8)
 	}
 	return plan, nil
 }

@@ -133,6 +133,8 @@ type VectorIndexSearchResult struct {
 // counters describe bound reader setup performed before Search or collection-level
 // one-shot open/setup performed inside SearchVectorIndex.
 type VectorIndexSearchStats struct {
+	// Engine-local proof; versioned wire exposure is handled separately.
+	ColumnGraphWork ColumnGraphQueryWork `json:"-"`
 	// Typed-owner acquisition includes drain, snapshot binding and resource admission.
 	ColumnGraphOwnerAcquireNanos int64  `json:"column_graph_owner_acquire_nanos,omitempty"`
 	ColumnGraphDeltaScored       uint64 `json:"column_graph_delta_scored,omitempty"`

@@ -11,6 +11,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // foldTypedGraph is explicit internal maintenance. The callback is an internal
@@ -21,6 +22,8 @@ func (c *Collection) foldTypedGraph(ctx context.Context, cold typedGraphColdLimi
 }
 
 func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphColdLimits, maxRows int, assetLimits typedGraphFoldAssetLimits, afterCapture func() error, timing *ColumnGraphBuildTiming) (err error) {
+	workstats.Fold.Build.Attempts.Add(1)
+	defer func() { workstats.Fold.Build.Finish(err == nil) }()
 	started := time.Now()
 	defer func() {
 		if timing != nil {
@@ -460,6 +463,9 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 	if err != nil {
 		return err
 	}
+	// Durable publication succeeded, even if the following in-memory install or
+	// later checkpoint/maintenance/warm fails. Never roll this observation back.
+	workstats.Fold.Publications.Add(1)
 	next := cloneCatalogWithRootUpdates(latest.catalog, updated, rootNames, roots[currentStart:])
 	next.typedGraphBase = installed
 	c.meta = updated

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // searchKeywordWithScalarFilter serves filtered keyword search through the
@@ -326,7 +327,9 @@ func (s *Service) searchDenseVectorNativeRaw(ctx context.Context, col *collectio
 	return s.searchDenseVectorNativeRawLocked(ctx, col, info, req, dst)
 }
 
-func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest, dst []RawDenseVectorResult) (RawDenseVectorSearchResponse, error) {
+func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest, dst []RawDenseVectorResult) (_ RawDenseVectorSearchResponse, err error) {
+	workstats.Output.Search.Attempts.Add(1)
+	defer func() { workstats.Output.Search.Finish(err == nil) }()
 	if req.Filter != nil {
 		if err := req.Filter.Validate(); err != nil {
 			return RawDenseVectorSearchResponse{}, err
@@ -371,6 +374,9 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 		fetchOptions := serviceDocumentFetchOptions(req.ReturnEmbedding)
 		fetchOptions.Context = ctx
 		fetched, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(search.Results, fetchOptions)
+		work := serviceMaterializationWork(fetched.Stats)
+		work.Requested = uint64(len(search.Results))
+		workstats.Output.Search.Add(work)
 		closeErr := view.Close()
 		if err := ctxErr(ctx); err != nil {
 			return RawDenseVectorSearchResponse{}, err

@@ -9,6 +9,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 func TestServiceTypedPreparedHandleLifecycle(t *testing.T) {
@@ -19,6 +20,7 @@ func TestServiceTypedPreparedHandleLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := New(collections.NewCollectionManager(db))
+	_ = svc.DiagnosticsHandler(nil)
 	defer func() { _ = svc.Close(); _ = db.Close() }()
 	create := CreateIndexRequest{Name: "keeper", Dimension: 8, TypedInput: true, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph, M: 2}, ScalarFields: []ScalarFieldDeclaration{{Field: "meta.user_id", ValueType: ScalarFieldString}}}
 	info, err := svc.CreateIndex(ctx, create)
@@ -44,6 +46,22 @@ func TestServiceTypedPreparedHandleLifecycle(t *testing.T) {
 		return entry.collection
 	}
 	handle := cached()
+	beforeState, ok := handle.ColumnGraphServingSnapshot()
+	if !ok || !beforeState.ServingReady || beforeState.BaseRows != 2 || beforeState.BaseCoverageLSN == 0 {
+		t.Fatalf("serving snapshot=%+v available=%v", beforeState, ok)
+	}
+	beforeWork := workstats.Read()
+	for range 3 {
+		snapshot := svc.DiagnosticsSnapshot(nil)
+		if snapshot.LastOpened == nil || snapshot.LastOpened.TypedGraph == nil || !reflect.DeepEqual(*snapshot.LastOpened.TypedGraph, beforeState) {
+			t.Fatalf("cached diagnostics=%+v state=%+v", snapshot.LastOpened, beforeState)
+		}
+	}
+	afterWork := workstats.Read()
+	afterState, _ := handle.ColumnGraphServingSnapshot()
+	if !reflect.DeepEqual(beforeState, afterState) || beforeWork.Graph.Requests != afterWork.Graph.Requests || beforeWork.Fold != afterWork.Fold || beforeWork.RowIndexCache.Builds != afterWork.RowIndexCache.Builds {
+		t.Fatal("diagnostics changed serving state or started work")
+	}
 	query := DenseVectorSearchRequest{QueryEmbedding: docs[0].Embedding, TopK: 1, EfSearch: 8, ReturnEmbedding: true, ExpectedGeneration: info.Generation}
 	check := func(content string) {
 		t.Helper()
@@ -53,9 +71,14 @@ func TestServiceTypedPreparedHandleLifecycle(t *testing.T) {
 			if httpOut.Route != RouteAnn || len(httpOut.Documents) != 1 {
 				t.Fatalf("HTTP=%+v", httpOut)
 			}
+			beforeOutput := workstats.Output.Search.Read()
 			raw, err := svc.SearchDenseVectorNativeRaw(ctx, create.Name, query)
 			if err != nil || !raw.TypedColumnGraph || raw.Route != RouteAnn || len(raw.Results) != 1 {
 				t.Fatalf("native=%+v err=%v", raw, err)
+			}
+			afterOutput := workstats.Output.Search.Read()
+			if !raw.searchStats.ColumnGraphWork.Available || afterOutput.Attempts-beforeOutput.Attempts != 1 || afterOutput.Completed-beforeOutput.Completed != 1 || afterOutput.Fetched-beforeOutput.Fetched != 1 || afterOutput.OutputBytes-beforeOutput.OutputBytes != uint64(len(raw.Results[0].Document)) {
+				t.Fatalf("search output before=%+v after=%+v", beforeOutput, afterOutput)
 			}
 			var nativeDoc Document
 			if err := json.Unmarshal(raw.Results[0].Document, &nativeDoc); err != nil {

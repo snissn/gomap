@@ -5,11 +5,19 @@ import (
 	"errors"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // FetchTypedDocuments returns owned full documents from one ordinary read view.
 // It requires matching captured schema generation, but no graph admission.
 func (s *Service) FetchTypedDocuments(ctx context.Context, index string, expectedGeneration uint64, ids [][]byte) (out collections.DocumentFetchResponse, err error) {
+	workstats.Output.GetMany.Attempts.Add(1)
+	defer func() {
+		w := serviceMaterializationWork(out.Stats)
+		w.Requested = uint64(len(ids))
+		workstats.Output.GetMany.Add(w)
+		workstats.Output.GetMany.Finish(err == nil)
+	}()
 	if expectedGeneration == 0 {
 		return out, serviceError(CodeInvalidRequest, "typed fetch requires expected generation")
 	}
@@ -44,4 +52,9 @@ func fetchTypedDocumentsFromView(ctx context.Context, view *collections.Collecti
 		return collections.DocumentFetchResponse{}, serviceErrorf(CodeIndexStale, "captured generation %d does not match expected_generation %d", info.Generation, expectedGeneration)
 	}
 	return view.FetchDocumentsByID(ids, collections.DocumentFetchOptions{Context: ctx})
+}
+
+func serviceMaterializationWork(s collections.DocumentMaterializationStats) workstats.OutputStats {
+	return workstats.OutputStats{Requested: s.DocumentsRequested, Fetched: s.DocumentsFetched, Missing: s.DocumentsMissing,
+		OutputBytes: s.OutputBytes, RetainedPayloadFetches: s.RetainedPayloadFetches, JSONReconstructionRows: s.JSONReconstructionRows, TypedColumnRows: s.TypedColumnRows}
 }

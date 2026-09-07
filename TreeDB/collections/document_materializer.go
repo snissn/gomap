@@ -10,6 +10,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // ErrVectorIndexSnapshotMismatch reports that a buffered native vector search
@@ -957,7 +958,14 @@ func (v *CollectionReadView) fetchDocumentsByResolvedRowRef(refs []DocumentRowRe
 	return v.fetchDocumentsByRowRef(refs, opts, true)
 }
 
-func (v *CollectionReadView) fetchDocumentsByRowRef(refs []DocumentRowRef, opts DocumentFetchOptions, locatorResolvedAtView bool) (DocumentFetchResponse, error) {
+func (v *CollectionReadView) fetchDocumentsByRowRef(refs []DocumentRowRef, opts DocumentFetchOptions, locatorResolvedAtView bool) (out DocumentFetchResponse, err error) {
+	workstats.Output.Materialization.Attempts.Add(1)
+	defer func() {
+		w := documentMaterializationWork(out.Stats)
+		w.Requested = uint64(len(refs))
+		workstats.Output.Materialization.Add(w)
+		workstats.Output.Materialization.Finish(err == nil)
+	}()
 	if err := documentFetchContextErr(opts.Context); err != nil {
 		return DocumentFetchResponse{}, err
 	}
@@ -997,7 +1005,14 @@ func (v *CollectionReadView) fetchDocumentsByRowRef(refs []DocumentRowRef, opts 
 	return v.fetchColumnStoreDocumentsByRowRef(response, refs, retained, opts, projection, locatorResolvedAtView)
 }
 
-func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
+func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions) (out DocumentFetchResponse, err error) {
+	workstats.Output.Materialization.Attempts.Add(1)
+	defer func() {
+		w := documentMaterializationWork(out.Stats)
+		w.Requested = uint64(len(ids))
+		workstats.Output.Materialization.Add(w)
+		workstats.Output.Materialization.Finish(err == nil)
+	}()
 	if err := documentFetchContextErr(opts.Context); err != nil {
 		return DocumentFetchResponse{}, err
 	}
@@ -1502,4 +1517,9 @@ func maxInt64ForMetric(n, floor int64) int64 {
 		return floor
 	}
 	return n
+}
+
+func documentMaterializationWork(s DocumentMaterializationStats) workstats.OutputStats {
+	return workstats.OutputStats{Requested: s.DocumentsRequested, Fetched: s.DocumentsFetched, Missing: s.DocumentsMissing,
+		OutputBytes: s.OutputBytes, RetainedPayloadFetches: s.RetainedPayloadFetches, JSONReconstructionRows: s.JSONReconstructionRows, TypedColumnRows: s.TypedColumnRows}
 }

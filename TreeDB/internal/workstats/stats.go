@@ -128,7 +128,7 @@ type ScanWorkStats struct {
 }
 
 // Availability describes implemented producer coverage, not a workload verdict.
-// Graph/output/fold work is intentionally unavailable in this schema revision.
+// Graph is the selected typed route; Output and Fold have explicit sub-scopes.
 type Availability struct {
 	IndexedJSON     bool `json:"indexed_json"`
 	Typed           bool `json:"typed"`
@@ -158,6 +158,9 @@ type MemoryStats struct {
 // related totals. A new process has a new origin; never subtract across
 // origins. The caller must independently bind PID to executable/start identity.
 type Snapshot struct {
+	Graph            GraphStats         `json:"graph"`
+	Output           OutputWorkStats    `json:"output"`
+	Fold             FoldStats          `json:"fold"`
 	Memory           MemoryStats        `json:"memory"`
 	SchemaVersion    string             `json:"schema_version"`
 	Scope            string             `json:"scope"`
@@ -178,10 +181,12 @@ func Read() Snapshot {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 	return Snapshot{
+		Graph: readGraph(), Fold: readFold(),
+		Output:        OutputWorkStats{Output.Materialization.Read(), Output.Search.Read(), Output.GetMany.Read()},
 		Memory:        MemoryStats{TotalAlloc: mem.TotalAlloc, Mallocs: mem.Mallocs, HeapAlloc: mem.HeapAlloc, HeapSys: mem.HeapSys, Sys: mem.Sys, NumGC: mem.NumGC},
 		SchemaVersion: "treedb-work-v1", Scope: "process", PID: os.Getpid(),
 		OriginKind: "go_package_init", OriginUnixNano: origin.UnixNano(), SnapshotUnixNano: time.Now().UnixNano(),
-		Available: Availability{IndexedJSON: true, Typed: true, RuntimeQuery: true, Replay: true, AttributedScans: true, RowIndexCache: true},
+		Available: Availability{IndexedJSON: true, Typed: true, RuntimeQuery: true, Replay: true, AttributedScans: true, RowIndexCache: true, Graph: true, Output: true, Fold: true},
 		RowIndexCache: RowIndexCacheStats{
 			Entries: RowIndexCache.Entries.Load(), RetainedBytes: RowIndexCache.RetainedBytes.Load(), ByteLimit: RowIndexCache.ByteLimit.Load(),
 			Hits: RowIndexCache.Hits.Load(), Misses: RowIndexCache.Misses.Load(), Builds: RowIndexCache.Builds.Load(), RowsVisited: RowIndexCache.RowsVisited.Load(),

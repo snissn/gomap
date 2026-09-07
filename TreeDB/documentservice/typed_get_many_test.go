@@ -3,10 +3,11 @@ package documentservice
 import (
 	"bytes"
 	"context"
+	"testing"
+
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
-	"testing"
 )
 
 func TestTypedGetManyCapturedMetadataAndValues(t *testing.T) {
@@ -49,9 +50,16 @@ func TestTypedGetManyCapturedMetadataAndValues(t *testing.T) {
 		t.Fatalf("held=%+v %v", held, err)
 	}
 	beforeCurrentCache := workstats.Read().RowIndexCache
+	beforeOutput := workstats.Output.GetMany.Read()
+	beforeMaterialization := workstats.Output.Materialization.Read()
 	current, err := s.FetchTypedDocuments(ctx, info.Name, info.Generation, ids)
 	if err != nil || !bytes.Contains(current.Results[0].Document, []byte(`"new"`)) {
 		t.Fatalf("current=%+v %v", current, err)
+	}
+	afterOutput := workstats.Output.GetMany.Read()
+	afterMaterialization := workstats.Output.Materialization.Read()
+	if afterOutput.Attempts-beforeOutput.Attempts != 1 || afterOutput.Completed-beforeOutput.Completed != 1 || afterOutput.Fetched-beforeOutput.Fetched != 2 || afterOutput.Missing-beforeOutput.Missing != 1 || afterOutput.Requested-beforeOutput.Requested != 3 || afterOutput.OutputBytes-beforeOutput.OutputBytes != current.Stats.OutputBytes || afterMaterialization.Fetched-beforeMaterialization.Fetched != 2 {
+		t.Fatalf("GetMany work before=%+v after=%+v materialization=%+v", beforeOutput, afterOutput, afterMaterialization)
 	}
 	// No graph Ensure/Build has occurred. Fresh ordinary service read views
 	// reuse immutable offsets while retaining current locator visibility.
@@ -87,8 +95,13 @@ func TestTypedGetManyCapturedMetadataAndValues(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
+	beforeError := workstats.Output.GetMany.Read()
 	if _, err := s.FetchTypedDocuments(canceled, info.Name, info.Generation, ids); err == nil {
 		t.Fatal("canceled fetch accepted")
+	}
+	afterError := workstats.Output.GetMany.Read()
+	if afterError.Errors-beforeError.Errors != 1 || afterError.Completed != beforeError.Completed || afterError.Fetched != beforeError.Fetched {
+		t.Fatalf("failed GetMany before=%+v after=%+v", beforeError, afterError)
 	}
 }
 
