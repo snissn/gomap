@@ -96,8 +96,9 @@ entries and concurrent exclusive creation. These are not public serving qualific
 
 Existing generic
 producer tests keep their prior file placement and sync expectations. The eight
-real maintenance cycles also assert equal-width retained column bytes plateau
-and cross-generation mixed row debt stays bounded; pager/WAL growth is separate.
+real maintenance cycles also assert equal-width retained column bytes stay below
+the warm-cycle ceiling (further reclamation may shrink them) and cross-generation
+mixed row debt stays bounded; pager/WAL growth is separate.
 
 ## Minima native-path contract (#4615)
 

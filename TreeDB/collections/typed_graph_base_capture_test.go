@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestTypedGraphBaseCaptureAckBeforeSealReplay(t *testing.T) {
@@ -158,7 +160,11 @@ func TestTypedGraphBaseCutoverProtectsLeasedLazyOldReader(t *testing.T) {
 		}
 	}
 	gc, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{Detailed: true})
-	if err != nil {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || gc.SegmentsDeleted != 0 {
+			t.Fatalf("unsupported destructive GC must preserve assets: stats=%+v err=%v", gc, err)
+		}
+	} else if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("default GC deleted=%d", gc.SegmentsDeleted)

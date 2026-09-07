@@ -242,7 +242,8 @@ unknown prefixes inside live files, including after process-local registry loss.
 No captured, fallback, reader, or unknown-plan protection is weakened. Before/
 after-seal and unsealed-suffix process cuts exercise complete post-reopen cleanup;
 these are not physical power-loss tests. The eight-cycle equal-width fixture
-demonstrates a column-byte plateau, not a whole-database quota. The reused
+checks a warm-cycle column-byte ceiling, allowing further reclamation to shrink
+storage; it does not establish a whole-database quota. The reused
 allocator uses IDs 2 through 1,048,575. At high-water exhaustion it rescans the
 existing sorted namespace listing for an absent ID; `O_EXCL` remains authority.
 GC must first remove protected-free files before those IDs can be reused. A

@@ -3,11 +3,13 @@ package collections
 import (
 	"bytes"
 	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestTypedGraphOwnerCaptureCutoverDefaultGC(t *testing.T) {
@@ -66,7 +68,14 @@ func TestTypedGraphOwnerCaptureCutoverDefaultGC(t *testing.T) {
 				return
 			}
 		}
-		_, err := other.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
+		stats, err := other.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
+		if !rootpublication.StableRelativeNamespaceSupported() {
+			if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || stats.SegmentsDeleted != 0 {
+				t.Errorf("unsupported destructive GC must preserve assets: stats=%+v err=%v", stats, err)
+			} else {
+				err = nil
+			}
+		}
 		if err != nil {
 			for _, pin := range mappedresource.GlobalPinSummary() {
 				if columnAssetMappedResourcePinMatchesRoot(pin, db.ColumnAssetRootDir()) {
@@ -375,7 +384,11 @@ func TestTypedGraphOwnerPackOnlyLifetime(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{}); err != nil {
+	if stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{}); !rootpublication.StableRelativeNamespaceSupported() {
+		if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || stats.SegmentsDeleted != 0 {
+			t.Fatalf("unsupported destructive GC must preserve assets: stats=%+v err=%v", stats, err)
+		}
+	} else if err != nil {
 		t.Fatal(err)
 	}
 	var buffer VectorIndexSearchBuffer

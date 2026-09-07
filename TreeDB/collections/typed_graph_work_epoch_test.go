@@ -55,7 +55,7 @@ func TestTypedGraphWorkEpochRepeatedMaintenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	var deleted int
-	var steadyColumnBytes int64
+	var columnBytesCeiling int64
 	for cycle := 0; cycle < 8; cycle++ {
 		// This small fixture disables background pruning. Exercise existing
 		// caller-owned native maintenance; renewal itself never calls Prune.
@@ -86,9 +86,11 @@ func TestTypedGraphWorkEpochRepeatedMaintenance(t *testing.T) {
 		}
 		deleted += stats.Columns.SegmentsDeleted
 		if cycle == 1 {
-			steadyColumnBytes = stats.Columns.BytesRetained
-		} else if cycle > 1 && stats.Columns.BytesRetained != steadyColumnBytes {
-			t.Fatalf("equal-width generation column storage did not plateau: %d want %d", stats.Columns.BytesRetained, steadyColumnBytes)
+			columnBytesCeiling = stats.Columns.BytesRetained
+		} else if cycle > 1 && stats.Columns.BytesRetained > columnBytesCeiling {
+			// Recovery-root retirement can release extra segments; shrinking is
+			// valid, while later generations must not exceed the warm ceiling.
+			t.Fatalf("equal-width generation column storage grew: %d exceeds %d", stats.Columns.BytesRetained, columnBytesCeiling)
 		}
 		t.Logf("cycle=%d native_bytes=%d entries=%d pager_pages=%d reusable=%d column_deleted=%d retained=%d", cycle, stats.Native.Bytes, stats.Native.Entries, stats.Pager.TotalPages, stats.Pager.FreelistReclaimable, stats.Columns.SegmentsDeleted, stats.Columns.BytesRetained)
 		if cycle >= 3 {

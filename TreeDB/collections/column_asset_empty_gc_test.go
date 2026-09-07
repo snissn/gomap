@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestTypedGraphWorkEpochEmptyDeniedOutput(t *testing.T) {
@@ -30,7 +32,14 @@ func TestTypedGraphWorkEpochEmptyDeniedOutput(t *testing.T) {
 	if coord.typedGraphCandidateAttempts != 1 || coord.typedGraphCandidateBytes != 0 {
 		t.Fatalf("empty output debt attempts=%d bytes=%d", coord.typedGraphCandidateAttempts, coord.typedGraphCandidateBytes)
 	}
+	epoch := coord.typedGraphWorkEpoch
 	stats, err := col.renewTypedGraphWorkEpoch(context.Background(), limits)
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		if !errors.Is(err, ErrColumnAssetReachabilityIncomplete) || stats.Columns.SegmentsDeleted != 0 || coord.typedGraphCandidateAttempts != 1 || coord.typedGraphWorkEpoch != epoch {
+			t.Fatalf("unverifiable empty output must retain debt and authority: stats=%+v err=%v", stats, err)
+		}
+		return
+	}
 	if err != nil || stats.Columns.SegmentsDeleted != 1 || stats.Columns.BytesDeleted != 0 {
 		t.Fatalf("empty denied output renewal=%+v err=%v", stats, err)
 	}
