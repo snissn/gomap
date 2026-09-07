@@ -19,6 +19,12 @@ retrying into a fresh file. `TestTypedSourceSecondStageOutputFailure` checks
 second-stage failure preserves the old row/root and normal replay atomically
 installs a separate output with complete reachability. `TestTypedGraphFoldProcessCut`
 also requires complete bounded cleanup after each real process cut and reopen.
+`TestTypedGraphWorkEpochEmptyDeniedOutput` proves actual fold byte denial before
+first write leaves unchanged authority and can renew after zero-byte cleanup.
+`TestColumnAssetGCEmptyConstructionPin` protects a live creator then reclaims
+after release; `TestColumnAssetGCEmptyReferencedOrChanged` rejects referenced
+emptiness and post-plan growth. `TestColumnAssetGCEmptyNonregularAndQuarantine`
+preserves directories, symlinks, unknown names, and explicit empty quarantine.
 Existing generic
 producer tests keep their prior file placement and sync expectations. The eight
 real maintenance cycles also assert equal-width retained column bytes plateau

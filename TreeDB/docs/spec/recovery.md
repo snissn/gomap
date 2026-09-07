@@ -23,6 +23,11 @@ in-process retry is not authorized by this placement rule. Failed outputs are
 retained safely, and exact fallback roots remain protected during subsequent
 whole-segment GC. Process-cut tests cover complete cleanup after before-seal,
 after-seal, and unsealed-suffix recovery, not physical power-loss qualification.
+An abandoned zero-output file needs no fabricated asset ref: exact-identity
+discovery can classify an unreferenced canonical regular empty file for existing
+whole-segment GC. A live construction pin or changed post-plan frontier prevents
+deletion; referenced-empty corruption and uncertain/nonregular entries remain
+fail-closed. Explicit quarantine protects an empty file as well.
 
 ## 1. Recovery Entry Points
 

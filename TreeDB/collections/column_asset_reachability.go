@@ -800,7 +800,7 @@ func (in *columnAssetReachabilityInput) addQuarantineSegments(ctx context.Contex
 		if in.quarantineSegments == nil {
 			in.quarantineSegments = make(map[uint32]int64)
 		}
-		if bytes > in.quarantineSegments[normalized.FileID] {
+		if previous, present := in.quarantineSegments[normalized.FileID]; !present || bytes > previous {
 			in.quarantineSegments[normalized.FileID] = bytes
 		}
 		in.sourceCounts.QuarantineSegmentRecords++
@@ -1016,6 +1016,9 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		plan.Segments.Total++
 		plan.Segments.BytesTotal = addColumnAssetReachabilityBytes(plan.Segments.BytesTotal, segment.bytes)
 		segmentPlan := classifyColumnAssetReachabilitySegmentSet(segment, rangeSet)
+		if _, quarantined := input.quarantineSegments[segment.fileID]; quarantined && segment.bytes == 0 && segmentPlan.status == ColumnAssetReachabilitySegmentReclaimable {
+			segmentPlan.status = ColumnAssetReachabilitySegmentProtected
+		}
 		if segmentPlan.outOfBoundsRefs != 0 {
 			plan.Segments.OutOfBoundsRefs += segmentPlan.outOfBoundsRefs
 			plan.Complete = false
@@ -1182,7 +1185,12 @@ type columnAssetReachabilitySegmentPlan struct {
 }
 
 func classifyColumnAssetReachabilitySegment(segment columnAssetReachabilitySegment, ranges []columnAssetReachabilityRange) columnAssetReachabilitySegmentPlan {
-	if len(ranges) == 0 && segment.fileID != 0 && segment.bytes > 0 {
+	// A canonical no-ref empty file can be left by a denied/crashed creator.
+	// Empty entries require the exact regular-file identity captured by discovery;
+	// canonical-named directories/symlinks and legacy unknown identities stay unknown.
+	// Destructive GC still checks construction pins, roots and that same identity.
+	if len(ranges) == 0 && segment.fileID != 0 && (segment.bytes > 0 ||
+		(segment.bytes == 0 && rootpublication.SamePhysicalIdentity(segment.childIdentity, segment.childIdentity))) {
 		return columnAssetReachabilitySegmentPlan{
 			status:           ColumnAssetReachabilitySegmentReclaimable,
 			reclaimableBytes: segment.bytes,
