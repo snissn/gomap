@@ -766,7 +766,8 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         with mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(stdout="2048 01:02.5")):
             self.assertFalse(runner.server_resource_usage(123, None, "Qdrant")["captured"])
         with tempfile.TemporaryDirectory() as directory:
-            with mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(stdout="2048 01:02.5")):
+            with mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(stdout="2048 01:02.5")), \
+                 mock.patch.object(runner, "linux_process_identity", return_value="123:10"):
                 owned = runner.server_resource_usage(123, Path(directory), "Qdrant")
         self.assertTrue(owned["captured"])
         self.assertEqual(owned["rss_bytes"], 2048 * 1024)
@@ -777,6 +778,28 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         end = {**owned, "rss_bytes": 4096, "cpu_seconds": 2.5, "disk_bytes": 250}
         delta = runner.resource_delta(baseline, end)
         self.assertEqual((delta["rss_bytes"], delta["cpu_seconds"], delta["disk_bytes"]), (3072, 1.5, 150))
+
+    def test_process_resources_reject_pid_reuse_during_ps(self) -> None:
+        for identities in (["123:10", "123:20"], ["", "123:20"], ["123:10", ""]):
+            with self.subTest(identities=identities), \
+                 mock.patch.object(runner, "linux_process_identity", side_effect=identities), \
+                 mock.patch.object(runner, "process_peak_rss", return_value={"availability": "unavailable", "bytes": None}), \
+                 mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(stdout="2048 00:01")):
+                resource = runner.server_process_resource_usage(123, "test")
+                self.assertFalse(resource["captured"])
+                self.assertEqual(resource["availability"]["rss_bytes"], "unavailable")
+                self.assertEqual(resource["availability"]["cpu_seconds"], "unavailable")
+
+    def test_resource_delta_requires_same_process_lifetime(self) -> None:
+        baseline = {"captured": True, "pid": 123, "linux_process_identity": "123:10",
+                    "rss_bytes": 100, "cpu_seconds": 1.0, "disk_bytes": 1000}
+        for pid, identity in ((123, "123:20"), (124, "123:10"), (123, "")):
+            with self.subTest(pid=pid, identity=identity):
+                end = {**baseline, "pid": pid, "linux_process_identity": identity,
+                       "rss_bytes": 200, "cpu_seconds": 2.0, "disk_bytes": 2000}
+                delta = runner.resource_delta(baseline, end)
+                self.assertFalse(delta["captured"])
+                self.assertEqual((delta["rss_bytes"], delta["cpu_seconds"]), (0, 0.0))
 
     def test_shared_disk_snapshot_tolerates_disappearing_files_only(self) -> None:
         class Entries:
