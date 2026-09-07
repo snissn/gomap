@@ -381,6 +381,14 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 	}
 	currentStart = len(inputs)
 	locatorName := collectionColumnRowLocatorRootName(latest.meta.Name)
+	manifestPolicy, err := columnStoreCompactionManifestRootStoragePolicy(latest)
+	if err != nil {
+		return err
+	}
+	locatorPolicy, err := collectionRootStoragePolicyForDB(c.db, latest.meta, locatorName)
+	if err != nil {
+		return err
+	}
 	requirements, err := stableColumnManifestDurableRequirements(currentRecords, identity.Generation, latest.cfg.AssetManager.Namespace)
 	if err != nil {
 		return err
@@ -398,12 +406,12 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 	}
 	// Every captured asset is also in currentRecords. Thus this exact closure
 	// covers current U and captured T without consulting retired base aliases.
-	inputs = append(inputs, backenddb.StorageMaintenanceRootDeltaPublishInput{BaseRoot: latest.baseRoot, Iter: columnStoreCompactionManifestDeltaIterator(encodeColumnManifestIdentityRecordArray(identity), latest.records, currentRecords), StoragePolicy: backenddb.OrderedRootStoragePagerLeaves, DurableResources: prepared.stableResources, DurableResourceRequirements: requirements})
+	inputs = append(inputs, backenddb.StorageMaintenanceRootDeltaPublishInput{BaseRoot: latest.baseRoot, Iter: columnStoreCompactionManifestDeltaIterator(encodeColumnManifestIdentityRecordArray(identity), latest.records, currentRecords), StoragePolicy: manifestPolicy, DurableResources: prepared.stableResources, DurableResourceRequirements: requirements})
 	prepared.stableResources = nil
 	rootNames := []string{latest.rootName}
 	oldRoots := map[string]uint64{latest.rootName: latest.baseRoot, locatorName: latest.catalog.rootID(locatorName)}
 	if remapped.Valid() || latest.catalog.rootID(locatorName) == 0 {
-		inputs = append(inputs, backenddb.StorageMaintenanceRootDeltaPublishInput{BaseRoot: latest.catalog.rootID(locatorName), Iter: remapped, StoragePolicy: backenddb.OrderedRootStoragePagerLeaves})
+		inputs = append(inputs, backenddb.StorageMaintenanceRootDeltaPublishInput{BaseRoot: latest.catalog.rootID(locatorName), Iter: remapped, StoragePolicy: locatorPolicy})
 		rootNames = append(rootNames, locatorName)
 	} else if e := errors.Join(remapped.Error(), remapped.Close()); e != nil {
 		return e

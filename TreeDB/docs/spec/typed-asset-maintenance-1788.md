@@ -139,6 +139,15 @@ consumers refreshing accounting must keep the existing storage-mutation epoch
 across successful GC, fresh bounded inventory and accounting refresh. Failed or
 partially completed cleanup statistics are not reclamation credit.
 
+### Fold control-root placement
+
+Fold preserves the configured storage policy of the current column manifest
+and row-locator roots, using the same policy resolution as ordinary mutations.
+The default therefore continues to inherit the database's native leaf policy;
+explicit fast/compressed controls remain fast/compressed across fold. Independent
+captured-base copies remain pager-backed and have separate ownership. This is
+not support for changing an existing collection's immutable storage policy.
+
 ### Internal fold: simultaneous known workspace
 
 The existing one-fold/renewal fence prevents two maintenance workspaces from
