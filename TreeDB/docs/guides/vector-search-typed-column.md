@@ -26,15 +26,57 @@ classify physical file-ID bands, not optimized-reader capability. Selected fresh
 files use the regular band and still carry aligned, directly readable FP32;
 a nonzero shared-band append count is not evidence of a JSON or copied reader.
 
-Current mutation boundary: the #4617 typed base-plus-suffix search consumer is
-internal and experimental. Public typed batch writes preserve their selected
-durability profile, but they do not automatically make an existing graph ready
-for mutable search. Ordinary stale-base search remains unavailable pending the
-M3 installation/fold lifecycle. The internal consumer reuses an immutable graph
+Current mutation boundary: explicit experimental public admission is available
+through `EnsureColumnGraphServing`; typed writes alone do not activate it.
+The selected consumer reuses an immutable graph
 and cold scalar plan, binds bounded current typed changes, and materializes only
 results from that current pin. Its explicitly labeled exact path covers complete
 eligible sets up to 4,096; larger supported sets use bounded ANN, with exhaustion
 reported as an error. See the [admission and ownership contract](../spec/typed-column-graph-search-admission.md).
+
+## Explicit mutable serving lifecycle
+
+For the selected command-WAL durable schema, load typed batches and explicitly
+build the declared graph with `RebuildVectorIndex` before calling
+`EnsureColumnGraphServing(ctx, index, limits)`. Initial loading/building remains
+part of query-ready time and peak memory; it is not retroactively covered by
+ongoing-work admission. This route supports the selected string/FP32 schema,
+not every schema illustrated elsewhere in this guide.
+
+Supply positive `ColumnGraphServingOptions` limits for publication, owners and
+cold discovery, candidate output, maintenance, filtering, fold rows, and search
+candidates. Zero is not an automatic default. Size these from workload evidence;
+the runnable `TestTypedGraphPublicSameOwnerServing` fixture shows all limit
+groups and the full lifecycle. Configuration is process-local, shared across
+collection handles, and immutable until DB close. Reapply the same explicit
+policy after reopen. A failed setup can leave that policy selected with writes
+and queries fenced; fix the cause and retry setup, not a different fallback.
+
+Search with explicit `QueryMode: VectorIndexQueryModeExact` and
+`StatsMode: VectorIndexSearchStatsModeMinimal` (or production stats). The selected
+route rejects quantized modes and unsupported controls rather than ignoring
+them. For full documents use `SearchVectorIndexWithBufferReadView`, fetch from
+the **returned view**, and close it after fetching. Do not open a fresh view
+between search and fetch: publication can change the current collection in
+between. Buffered IDs remain buffer-owned; plain `SearchVectorIndex` returns
+owned results. Indexed filtering/scoring stays typed; retained flexible payloads
+may be decoded when fetching final results.
+
+Use `FoldColumnGraphServing` explicitly when the suffix needs folding and
+`RenewColumnGraphServing` for an admitted maintenance/work epoch. Configured
+`RebuildVectorIndex` follows the fold route. Use `errors.Is` with
+`ErrColumnGraphFoldNeeded`, `ErrColumnGraphOwnerBudget`, and
+`ErrColumnGraphSearchBudget` to distinguish maintenance, caller-held reader
+pressure, and query work. Releasing readers is not interchangeable with folding.
+Fold publication followed by serving admission currently has a fail-closed
+not-ready window; queries do not reconcile or silently search stale authority.
+
+This is an experimental API checkpoint, not completed minima qualification.
+Public request allocations still grow materially with corpus size; durable
+process-cut integration, forced stale lifecycle installation, and foreground
+cutover pause gates remain open. See the
+[operational contract](../spec/typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission)
+and `BenchmarkTypedGraphPublicServing` for the current measured boundary.
 
 | Data | Recommended owner | Why |
 | --- | --- | --- |

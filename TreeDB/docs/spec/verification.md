@@ -2,6 +2,16 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+Explicit typed graph serving: `TestTypedGraphPublicSameOwnerServing` covers public
+ensure, typed mutation, same-owner filtered search/full fetch, fold, independent
+manager and normal reopen. `TestTypedGraphPublicServingPressureAndOptions` covers
+owner lifetime, unsupported controls and fail-closed missing metadata;
+`TestTypedGraphPublicEnsureCancellationAndFailedAdmission` covers held-barrier
+cancellation and rejected writes after partial setup. `BenchmarkTypedGraphPublicServing`
+includes public acquisition/filter/search/full fetch/Close with a live suffix and
+tombstone at 128/1024 rows. It is bounded diagnostic evidence, not final Minima
+throughput or crash-at-ack qualification. See [serving admission](typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission).
+
 `TestRecoverableColumnAssetReplayStrictFloor` checks exact excluded identities,
 strict equality retention, namespace mismatch, and disabled-floor behavior.
 `TestRecoverableColumnAssetReplayFloorUnknownAuthority` checks missing/zero and

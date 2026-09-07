@@ -10,6 +10,64 @@ compatibility `column_assets` manager. Maintenance operates on asset refs and
 segment inventory; it must not scan logical rows or decode full typed-column
 part images merely to compute reachability.
 
+## Explicit typed column_graph serving admission
+
+`Collection.EnsureColumnGraphServing(ctx, index, options)` enables the selected
+durable, single-vector-index, row-string/typed-FP32 path. Create the collection,
+load typed data and run the first `RebuildVectorIndex` explicitly before ensure.
+Offline initialization remains part of query-ready/load time and peak evidence;
+ongoing-work limits do not retroactively budget it.
+
+`ColumnGraphServingOptions` requires positive publication, owner, cold metadata,
+candidate-output, maintenance-inventory and scalar-filter limit groups, plus
+fold-row/search-candidate limits. These expose existing admission mechanisms,
+not a second quota/cache. Encoded bytes are attempted work per renewable epoch,
+not physical disk size. Native file/pager residual ceilings remain separate.
+Zero does not request an unbounded default. Policy is process-local, shared by
+all collection managers on the DB, immutable until DB close, and must be reapplied
+after reopen. Failed setup gates queries and new writes rather than restoring
+feature-off writes. Ensure performs bounded cold reconciliation and maintenance
+and may reclaim unreachable assets. Unchanged admitted-state ensure is idempotent
+and does not renew attempted-work debt. A race at final state admission fails
+explicitly; no blind retry installs stale metadata.
+
+Use `SearchVectorIndexWithBufferReadView` with exact query mode and explicit
+`minimal`/`production` stats. Native declared scalar equality/range AND filtering,
+ANN/delta search and full fetch share the same current owner. Close the returned
+view on every path; later writes cannot change its fetched documents. Buffered
+IDs last until buffer reset/reuse; plain search owns its result backing. Callback,
+legacy range, quantized/rerank, in-search document fetch and unsupported controls
+fail closed, without JSON search, unfiltered search or native_runtime fallback.
+Retained documents and final serialization may still use JSON; indexed values do
+not require JSON reconstruction for this ANN/scalar path.
+
+Warm acquisition consumes immutable metadata on the exact publication state,
+never query-side reconciliation or full manifest scans. Metadata retains no
+snapshot; each owner binds the current pin and complete captured/current asset
+union. Acquisition still includes drain, snapshot/catalog binding and mapping
+admission. `ColumnGraphOwnerAcquireNanos` and `ColumnGraphDeltaScored` expose
+these boundaries; reused-handle timings do not measure public acquisition, and
+full fetch includes its typed materializer setup.
+
+Configured `RebuildVectorIndex` and `FoldColumnGraphServing` use bounded fold and
+explicit re-admission. Requests fail closed between physical cutover and ready
+state installation; zero-pause availability is not promised.
+`RenewColumnGraphServing` reclaims and renews work without folding or closing
+readers. Use `errors.Is` with `ErrColumnGraphFoldNeeded`,
+`ErrColumnGraphOwnerBudget` and `ErrColumnGraphSearchBudget` to distinguish
+maintenance, held-reader pressure and query-work pressure. Folding cannot free
+caller-held readers. Pre-append admission rejection does not commit; later native
+publication errors retain the existing commit-ambiguity/recovery-required
+contract and must not be blindly retried. Context interrupts storage-barrier
+waits and is checked at boundaries; schema mutex waits and all native/decoder
+inner instructions are not individually interruptible.
+
+Current public tests cover typed mutation, same-owner full fetch, fold,
+independent handles, normal reopen, options, held-owner pressure and canceled
+setup. Public process-cut durable-at-ack integration, forced stale lifecycle
+cutover and foreground pause qualification remain separate M3 acceptance gates.
+This API checkpoint does not certify the end-to-end Minima workload.
+
 ## Reachability roots
 
 Typed asset reachability includes all refs exposed by the column manifest view:

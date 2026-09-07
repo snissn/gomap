@@ -8,7 +8,8 @@ import (
 )
 
 // This view borrows its two pins; current is the logical query authority and
-// base is solely an immutable accelerator. No collection route installs it.
+// base is solely an immutable accelerator. Explicit serving admission installs
+// this route without changing the current snapshot's logical authority.
 type typedGraphOverlaySearch struct {
 	base                         *VectorIndexSearcher
 	pack                         *columnHNSWSearchPackPreparedView

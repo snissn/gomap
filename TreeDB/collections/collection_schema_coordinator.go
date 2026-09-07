@@ -16,6 +16,7 @@ type collectionSchemaCoordinator struct {
 	typedGraphFoldActive    atomic.Bool // one unpublished candidate per collection, across managers
 	typedGraphOwners        typedGraphReadOwnerAccounting
 	typedPublication        atomic.Pointer[typedGraphPublicationState]
+	typedGraphServing       atomic.Pointer[typedGraphServingPolicy]
 	typedPublicationDebtMu  sync.Mutex
 	typedPublicationDebt    typedGraphPublicationCost
 	typedPublicationPending typedGraphPublicationCost

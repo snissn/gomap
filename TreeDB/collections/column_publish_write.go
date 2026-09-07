@@ -221,6 +221,9 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 			return nil, err
 		}
 		recordColumnPublishPlanStats(input.insertStats, plan)
+		if err := derived.prepareServingPlan(plan); err != nil {
+			return nil, err
+		}
 		materializeStart := time.Now()
 		columnDelta, err := plan.RootDelta.OrderedRootDeltaPublishInput()
 		recordColumnPublishRootDeltaMaterialization(input.insertStats, time.Since(materializeStart))
@@ -385,6 +388,9 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 			return nil, err
 		}
 		recordColumnPublishPlanStats(input.insertStats, plan)
+		if err := derived.prepareServingPlan(plan); err != nil {
+			return nil, err
+		}
 		materializeStart := time.Now()
 		columnDelta, cleanup, err := plan.RootDelta.OrderedRootDeltaBatchPublishInput()
 		recordColumnPublishRootDeltaMaterialization(input.insertStats, time.Since(materializeStart))

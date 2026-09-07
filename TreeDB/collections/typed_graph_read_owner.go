@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"slices"
@@ -107,11 +108,19 @@ func (o *typedGraphReadOwner) reserve(a *typedGraphReadOwnerAccounting, limits t
 }
 
 // Open consumes already installed derived state. It never bootstraps, decodes a
-// suffix, repairs an invalid state, or changes the public mutable serving gate.
+// suffix or repairs an invalid state. Public admission additionally requires
+// ready metadata on this exact installed state, never the cold fallback below.
 // The existing schema-exclusive cross-domain drain is outside the non-reentrant
 // storage barrier, and released before mapping. It includes pre-open accepted
 // buffered work from every manager. Later writes may linearize after this read.
 func (c *Collection) openTypedGraphReadOwner(limits typedGraphReadOwnerLimits) (owner *typedGraphReadOwner, err error) {
+	return c.openTypedGraphReadOwnerWithContext(context.Background(), limits)
+}
+
+func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, limits typedGraphReadOwnerLimits) (owner *typedGraphReadOwner, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if c == nil || c.db == nil || c.db.IsClosing() || limits.Owners <= 0 || limits.States <= 0 || limits.StateBytes <= 0 || limits.AssetBytes <= 0 || limits.Cold.ManifestRecords <= 0 || limits.Cold.ManifestBytes <= 0 || limits.Cold.AssetBytes <= 0 || limits.Cold.DecodedTermBytes <= 0 {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
@@ -125,7 +134,7 @@ func (c *Collection) openTypedGraphReadOwner(limits typedGraphReadOwnerLimits) (
 	if coord == nil {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
-	err = WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() (err error) {
+	err = WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() (err error) {
 		snap := c.db.AcquireSnapshot()
 		if snap == nil {
 			return ErrVectorIndexSnapshotMismatch
@@ -142,13 +151,16 @@ func (c *Collection) openTypedGraphReadOwner(limits typedGraphReadOwnerLimits) (
 			return err
 		}
 		state := coord.typedPublication.Load()
+		if coord.typedGraphServing.Load() != nil && (state == nil || state.servingBase == nil || !state.servingAdmitted) {
+			return ErrVectorIndexSnapshotMismatch
+		}
 		if !state.matches(catalog) || catalog.typedGraphBase == nil || len(catalog.meta.VectorIndexes) != 1 || !typedGraphBaseSchemaMatches(catalog.typedGraphBase.meta, catalog.meta) {
 			return ErrVectorIndexSnapshotMismatch
 		}
 		candidate.state = state
 		// Cumulative admitted bytes/slots upper-bound retained payloads; unchanged
 		// headers/norms are shared, not cloned or recomputed here.
-		candidate.stateBytes = state.admittedPayloadBytes
+		candidate.stateBytes = state.admittedPayloadBytes + state.servingMetadataBytes
 		charge := func(n, size int64) bool {
 			if n < 0 || size <= 0 || n > (limits.StateBytes-candidate.stateBytes)/size {
 				return false
@@ -161,15 +173,24 @@ func (c *Collection) openTypedGraphReadOwner(limits typedGraphReadOwnerLimits) (
 		}
 		root := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
 		baseRoot := catalog.typedGraphBase.roots[collectionColumnManifestRootName(catalog.meta.Name)]
-		if err := validateTypedGraphColdManifestBudget(snap, root, limits.Cold); err != nil {
-			return err
-		}
-		if root != baseRoot {
-			if err := validateTypedGraphColdManifestBudget(snap, baseRoot, limits.Cold); err != nil {
+		if state.servingBase == nil {
+			if err := validateTypedGraphColdManifestBudget(snap, root, limits.Cold); err != nil {
 				return err
 			}
+			if root != baseRoot {
+				if err := validateTypedGraphColdManifestBudget(snap, baseRoot, limits.Cold); err != nil {
+					return err
+				}
+			}
 		}
-		graph, baseView, err := catalog.typedGraphBase.readerView(c, snap)
+		var graph columnVectorGraphManifestSnapshot
+		var baseView columnPhysicalScanSnapshotView
+		if state.servingBase != nil {
+			graph, baseView = state.servingBase.graph, state.servingBase.view
+			baseView.snapshot = snap
+		} else {
+			graph, baseView, err = catalog.typedGraphBase.readerView(c, snap)
+		}
 		if err != nil {
 			return err
 		}
@@ -182,22 +203,25 @@ func (c *Collection) openTypedGraphReadOwner(limits typedGraphReadOwnerLimits) (
 			}
 		}
 		cfg := catalog.meta.Options.ColumnStore
-		refs, err := typedGraphOwnerRefs(baseView.graphOwnerRecords, baseView.Config.ActiveManifest.Generation, baseView.AssetNamespace, graph, baseView.VectorIndexState)
-		if err != nil {
-			return err
-		}
-		if root != baseRoot {
-			records, err := loadColumnManifestRecordsFromRoot(snap, root)
+		refs := state.servingRefs
+		if state.servingBase == nil {
+			refs, err = typedGraphOwnerRefs(baseView.graphOwnerRecords, baseView.Config.ActiveManifest.Generation, baseView.AssetNamespace, graph, baseView.VectorIndexState)
 			if err != nil {
 				return err
 			}
-			currentRefs, err := typedGraphOwnerRefs(records, cfg.ActiveManifest.Generation, cfg.AssetManager.Namespace, graph, baseView.VectorIndexState)
-			if err != nil {
-				return err
+			if root != baseRoot {
+				records, err := loadColumnManifestRecordsFromRoot(snap, root)
+				if err != nil {
+					return err
+				}
+				currentRefs, err := typedGraphOwnerRefs(records, cfg.ActiveManifest.Generation, cfg.AssetManager.Namespace, graph, baseView.VectorIndexState)
+				if err != nil {
+					return err
+				}
+				refs = append(refs, currentRefs...)
+				slices.SortFunc(refs, compareColumnAssetRefs)
+				refs = slices.Compact(refs)
 			}
-			refs = append(refs, currentRefs...)
-			slices.SortFunc(refs, compareColumnAssetRefs)
-			refs = slices.Compact(refs)
 		}
 		for _, ref := range refs {
 			if ref.Length <= 0 || ref.Length > limits.Cold.AssetBytes-candidate.assetBytes {
@@ -234,7 +258,11 @@ func (c *Collection) openTypedGraphReadOwner(limits typedGraphReadOwnerLimits) (
 		if !addDescriptor(int64(cap(refs)), reflect.TypeFor[ColumnAssetRef]().Size()) {
 			return errTypedGraphOwnerBudget
 		}
-		candidate.backingBytes, err = typedGraphCapturedBaseBackingBound(graph.RowCount, len(baseView.graphOwnerRecords), graph.AdjacencyLayerCount, limits.StateBytes-candidate.descriptorBytes)
+		recordCount := len(baseView.graphOwnerRecords)
+		if state.servingBase != nil {
+			recordCount = state.servingBase.recordCount
+		}
+		candidate.backingBytes, err = typedGraphCapturedBaseBackingBound(graph.RowCount, recordCount, graph.AdjacencyLayerCount, limits.StateBytes-candidate.descriptorBytes)
 		if err != nil {
 			return err
 		}

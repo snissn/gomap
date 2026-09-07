@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -71,6 +72,12 @@ func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
 // operational maintenance call: collection writes wait while the rebuild scans
 // and publishes so the replacement graph cannot miss committed mutations.
 func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) {
+	if policy := c.typedGraphServingPolicy(); policy != nil {
+		if err := c.FoldColumnGraphServing(context.Background(), name); err != nil {
+			return VectorIndexStatus{}, err
+		}
+		return c.vectorIndexStatus(name, false)
+	}
 	return c.rebuildVectorIndexWithCommandWALIntent(name, nil)
 }
 

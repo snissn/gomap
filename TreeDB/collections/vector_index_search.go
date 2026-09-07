@@ -132,6 +132,9 @@ type VectorIndexSearchResult struct {
 // counters describe bound reader setup performed before Search or collection-level
 // one-shot open/setup performed inside SearchVectorIndex.
 type VectorIndexSearchStats struct {
+	// Typed-owner acquisition includes drain, snapshot binding and resource admission.
+	ColumnGraphOwnerAcquireNanos int64  `json:"column_graph_owner_acquire_nanos,omitempty"`
+	ColumnGraphDeltaScored       uint64 `json:"column_graph_delta_scored,omitempty"`
 	// GraphRows is the number of legacy physical graph rows resident in the bound reader. Healthy current typed-column search reports zero.
 	GraphRows uint64 `json:"graph_rows,omitempty"`
 	// CandidateRows is the candidate row domain after any internal row-selection/visibility composition.
@@ -1136,9 +1139,21 @@ func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 // split search/fetch shape can run a no-document search first, then use
 // CollectionReadView.FetchDocumentsForVectorIndexSearchResults as a separate
 // materialization phase with separate counters.
-// DeclaredScalarFilter is native-runtime buffered-only; this convenience path
-// fails closed rather than forwarding it to an unfiltered owned/one-shot route.
+// Explicitly admitted typed column_graph serving supports native declared
+// filtering here; otherwise the legacy native-runtime buffered-only contract
+// remains fail closed rather than forwarding to an unfiltered one-shot route.
 func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
+	if c.typedGraphServingPolicy() != nil {
+		var buffer VectorIndexSearchBuffer
+		response, view, err := c.searchTypedGraphServing(opts, &buffer)
+		if err != nil {
+			return response, err
+		}
+		// This unpooled local buffer is never reused. Its result/ID backing
+		// transfers directly to the response, without retaining search scratch.
+		markVectorIndexSearchResponseOwnedResultAllocs(&response)
+		return response, view.Close()
+	}
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
 		return VectorIndexSearchResponse{}, err
 	}
@@ -1325,6 +1340,13 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 }
 
 func (c *Collection) searchVectorIndexWithBuffer(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, coverageLocked bool) (VectorIndexSearchResponse, error) {
+	if c.typedGraphServingPolicy() != nil {
+		response, view, err := c.searchTypedGraphServing(opts, buffer)
+		if err != nil {
+			return response, err
+		}
+		return response, view.Close()
+	}
 	if err := validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
 		return VectorIndexSearchResponse{}, err
 	}

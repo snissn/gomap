@@ -2,6 +2,11 @@
 
 This document defines startup recovery behavior.
 
+Typed `column_graph` public serving admission is process-local: after ordinary
+replay/open, explicitly call `EnsureColumnGraphServing` with positive limits.
+Queries do not bootstrap/reconcile manifests. A failed ensure stays fail closed
+for queries and new selected writes. See the [operational admission contract](typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission).
+
 Recovery follows the immutable canonical profile selected at open:
 `command_wal_durable`, `command_wal_relaxed`, or production no-WAL
 `no_wal_fast`. `bench_unsafe` has no production recovery guarantee. Because

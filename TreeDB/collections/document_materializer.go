@@ -165,11 +165,12 @@ type documentRowLocatorCandidate struct {
 // is not concurrency-safe; callers that fetch concurrently should open one view
 // per worker or synchronize externally.
 type CollectionReadView struct {
-	collection *Collection
-	snapshot   *backenddb.Snapshot
-	catalog    *collectionCatalog
-	ownsSnap   bool
-	closed     bool
+	collection      *Collection
+	snapshot        *backenddb.Snapshot
+	catalog         *collectionCatalog
+	ownsSnap        bool
+	closed          bool
+	typedGraphOwner *typedGraphReadOwner
 
 	assetScopeKind                  mappedresource.ScopeKind
 	assetScopeID                    string
@@ -276,6 +277,9 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 // SearchVectorIndexWithBufferReadView searches and opens the matching document
 // snapshot while excluding coverage mutations across the combined operation.
 func (c *Collection) SearchVectorIndexWithBufferReadView(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, *CollectionReadView, error) {
+	if c.typedGraphServingPolicy() != nil {
+		return c.searchTypedGraphServing(opts, buffer)
+	}
 	unlock := c.lockVectorIndexCoveragePersistence()
 	defer unlock()
 	response, err := c.searchVectorIndexWithBuffer(opts, buffer, true)
@@ -329,7 +333,12 @@ func (v *CollectionReadView) Close() error {
 		snapErr = v.snapshot.Close()
 		v.snapshot = nil
 	}
-	return errors.Join(cacheErr, snapErr)
+	var ownerErr error
+	if owner := v.typedGraphOwner; owner != nil {
+		v.typedGraphOwner = nil
+		ownerErr = owner.Close()
+	}
+	return errors.Join(cacheErr, snapErr, ownerErr)
 }
 
 // FetchDocumentsByID materializes full documents for ids in input order. Missing

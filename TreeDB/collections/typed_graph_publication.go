@@ -8,8 +8,8 @@ import (
 	"sync"
 )
 
-// This is internal derived publication state only. No public reader or writer
-// enables it; lifecycle admission/retirement/fold bounds remain separate gates.
+// Derived publication limits are shared by explicit public serving admission
+// and internal lifecycle tests. They are not a lifetime physical disk quota.
 type typedGraphPublicationLimits struct {
 	Rows, Tombstones, ValueSlots int
 	OwnedBytes                   int64
@@ -53,12 +53,18 @@ type typedGraphPublicationReceipt struct {
 func (c *Collection) reserveTypedGraphPublication(cost typedGraphPublicationCost, encoded ...typedGraphEncodedCost) (*typedGraphPublicationReceipt, error) {
 	coord := c.collectionSchemaCoordinator()
 	if coord == nil || coord.typedPublication.Load() == nil {
+		if coord != nil && coord.typedGraphServing.Load() != nil {
+			return nil, ErrVectorIndexSnapshotMismatch
+		}
 		return nil, nil
 	}
 	coord.typedPublicationDebtMu.Lock()
 	defer coord.typedPublicationDebtMu.Unlock()
 	state := coord.typedPublication.Load()
 	if state == nil || state.invalid {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	if coord.typedGraphServing.Load() != nil && !state.servingAdmitted {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
 	l, d := state.limits, coord.typedPublicationDebt
@@ -132,6 +138,9 @@ func (r *typedGraphPublicationReceipt) invalidate() {
 func (c *Collection) reserveBufferedTypedGraphPublication(documents []columnWriteDocument, encoded ...typedGraphEncodedCost) (*typedGraphPublicationReceipt, error) {
 	coord := c.collectionSchemaCoordinator()
 	if coord == nil || coord.typedPublication.Load() == nil {
+		if coord != nil && coord.typedGraphServing.Load() != nil {
+			return nil, ErrVectorIndexSnapshotMismatch
+		}
 		return nil, nil
 	}
 	state := coord.typedPublication.Load()
@@ -204,6 +213,10 @@ func typedGraphPublicationInputCost(input columnWritePublishInput, limits typedG
 }
 
 type typedGraphPublicationState struct {
+	servingBase              *typedGraphServingBaseMetadata
+	servingRefs              []ColumnAssetRef
+	servingMetadataBytes     int64
+	servingAdmitted          bool
 	catalog                  *collectionCatalog
 	limits                   typedGraphPublicationLimits
 	rows                     []columnPhysicalVisibleRow
@@ -217,63 +230,6 @@ type typedGraphPublicationState struct {
 	deletePartEncodedBytes   int64    // additional source-removal part
 	invalid                  bool
 	reconciling              *typedGraphReconcileToken
-}
-
-// Only an exact freshly captured base can seed an empty suffix. Reopen with a
-// nonempty suffix will require the separately bounded cold bootstrap.
-func (c *Collection) initializeTypedGraphPublication(catalog *collectionCatalog, limits typedGraphPublicationLimits) error {
-	if limits.EncodedOutputBytes < 0 {
-		return ErrVectorIndexSnapshotMismatch
-	}
-	if c == nil || c.db == nil || !c.db.CommandWALEnabled() || catalog == nil || catalog.pager != c.db.Pager() || catalog.typedGraphBase == nil || limits.Rows <= 0 || limits.Tombstones < 0 || limits.ValueSlots <= 0 || limits.OwnedBytes <= 0 {
-		return ErrVectorIndexSnapshotMismatch
-	}
-	// Initialization is top-level only: exclude admissions and drain every
-	// manager's already admitted work before checking the supplied base.
-	unlock := c.lockCollectionSchemaWrite()
-	defer unlock()
-	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
-		return err
-	}
-	snap := c.db.AcquireSnapshot()
-	if snap == nil {
-		return ErrVectorIndexSnapshotMismatch
-	}
-	defer snap.Close()
-	current, err := loadCollectionCatalog(snap, catalog.meta.Name)
-	if err != nil {
-		return err
-	}
-	if !(&typedGraphPublicationState{catalog: catalog}).matches(current) {
-		return ErrVectorIndexSnapshotMismatch
-	}
-	if catalog.meta.Options.ColumnStore == nil || len(catalog.meta.VectorIndexes) != 1 {
-		return ErrHybridSearchUnsupported
-	}
-	if err := validateTypedGraphOverlayVectorOwners(*catalog.meta.Options.ColumnStore); err != nil {
-		return err
-	}
-	base := catalog.typedGraphBase
-	if !collectionMetaValuesEqual(base.meta, catalog.meta) {
-		return ErrVectorIndexSnapshotMismatch
-	}
-	for name, root := range base.roots {
-		if catalog.rootID(name) != root {
-			return ErrVectorIndexSnapshotMismatch
-		}
-	}
-	coord := c.collectionSchemaCoordinator()
-	if coord == nil {
-		return ErrVectorIndexSnapshotMismatch
-	}
-	next := &typedGraphPublicationState{catalog: catalog, limits: limits}
-	if err := next.prepareEncodedBounds(); err != nil {
-		return err
-	}
-	if !coord.typedPublication.CompareAndSwap(nil, next) {
-		return ErrVectorIndexSnapshotMismatch
-	}
-	return nil
 }
 
 func (c *Collection) typedGraphPublicationSnapshot() *typedGraphPublicationState {
@@ -309,6 +265,9 @@ func (c *Collection) prepareTypedGraphPublication(input columnWritePublishInput)
 	}
 	before := coord.typedPublication.Load()
 	if before == nil {
+		if coord.typedGraphServing.Load() != nil {
+			return nil, ErrVectorIndexSnapshotMismatch
+		}
 		return nil, nil
 	}
 	if before.invalid {

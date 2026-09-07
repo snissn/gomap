@@ -23,6 +23,13 @@ type typedGraphColdLimits struct {
 
 // Reconciliation is explicit cold setup, not a query or replay side effect.
 func (c *Collection) reconcileTypedGraphPublication(limits typedGraphPublicationLimits, cold typedGraphColdLimits) (err error) {
+	return c.reconcileTypedGraphPublicationWithContext(context.Background(), limits, cold)
+}
+
+func (c *Collection) reconcileTypedGraphPublicationWithContext(ctx context.Context, limits typedGraphPublicationLimits, cold typedGraphColdLimits) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if limits.EncodedOutputBytes < 0 {
 		return ErrVectorIndexSnapshotMismatch
 	}
@@ -85,7 +92,7 @@ func (c *Collection) reconcileTypedGraphPublication(limits typedGraphPublication
 			_ = snap.Close()
 		}
 	}()
-	err = WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+	err = WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() error {
 		snap = c.db.AcquireSnapshot()
 		if snap == nil {
 			return backenddb.ErrClosed
@@ -207,7 +214,7 @@ func (c *Collection) reconcileTypedGraphPublication(limits typedGraphPublication
 			return err
 		}
 	}
-	return WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+	return WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() error {
 		check := c.db.AcquireSnapshot()
 		if check == nil {
 			return backenddb.ErrClosed

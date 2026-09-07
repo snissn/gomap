@@ -237,7 +237,7 @@ func typedGraphWorkEpochRetainedAdmission(coord *collectionSchemaCoordinator, li
 		n += count * size
 		return true
 	}
-	if !charge(state.admittedPayloadBytes, 1) || !charge(1, int64(reflect.TypeFor[typedGraphPublicationState]().Size())) || !charge(int64(cap(state.rows)), int64(reflect.TypeFor[columnPhysicalVisibleRow]().Size())) || !charge(int64(state.valueSlots), int64(reflect.TypeFor[columnDeclaredValue]().Size())) || !charge(int64(cap(state.invNorms)), 4) {
+	if !charge(state.servingMetadataBytes, 1) || !charge(state.admittedPayloadBytes, 1) || !charge(1, int64(reflect.TypeFor[typedGraphPublicationState]().Size())) || !charge(int64(cap(state.rows)), int64(reflect.TypeFor[columnPhysicalVisibleRow]().Size())) || !charge(int64(state.valueSlots), int64(reflect.TypeFor[columnDeclaredValue]().Size())) || !charge(int64(cap(state.invNorms)), 4) {
 		return errTypedGraphOwnerBudget
 	}
 	a := &coord.typedGraphOwners

@@ -362,10 +362,8 @@ func TestTypedGraphPublicationInstrumentedReplay(t *testing.T) {
 		if catalog == nil || catalog.typedGraphBase == nil || !collectionMetaValuesEqual(catalog.meta, catalog.typedGraphBase.meta) {
 			return fmt.Errorf("replay fixture is not captured empty base")
 		}
-		for name, root := range catalog.typedGraphBase.roots {
-			if catalog.rootID(name) != root {
-				return fmt.Errorf("replay fixture base root %q differs", name)
-			}
+		if err := assertTypedGraphCapturedRootContents(snap, catalog); err != nil {
+			return err
 		}
 		// Recovery is the sole owner here; do not recursively take the public
 		// schema/drain admission lock. This is instrumentation, not bootstrap.

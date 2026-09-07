@@ -21,6 +21,12 @@ type typedGraphImmediateReceiptInput struct {
 // at publication; that compatibility route is not a zero-JSON producer.
 func (c *Collection) prepareImmediateTypedGraphEncoded(input columnWritePublishInput, tables []memtable.Table) (columnWritePublishInput, func(), error) {
 	noop := func() {}
+	if c.typedGraphServingPolicy() != nil {
+		state := c.typedGraphPublicationSnapshot()
+		if state == nil || !state.servingAdmitted || state.invalid {
+			return input, noop, ErrVectorIndexSnapshotMismatch
+		}
+	}
 	if !c.typedGraphEncodedAdmissionEnabled() {
 		return input, noop, nil
 	}
