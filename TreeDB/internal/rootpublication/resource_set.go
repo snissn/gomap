@@ -2964,6 +2964,9 @@ func indexStableLogicalObligationRequirements(requirements StableLogicalObligati
 	if err != nil {
 		return stableLogicalObligationRequirementIndex{}, err
 	}
+	if len(normalized.ScopedFields) == 0 && len(normalized.ScopedNamespaces) == 0 {
+		return stableLogicalObligationRequirementIndex{}, nil
+	}
 	index := stableLogicalObligationRequirementIndex{
 		scoped:     make(map[ReachabilityField]struct{}, len(normalized.ScopedFields)),
 		desired:    make(map[ReachabilityField]map[StableLogicalObligation]struct{}, len(normalized.ScopedFields)),
