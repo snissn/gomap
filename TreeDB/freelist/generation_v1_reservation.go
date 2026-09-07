@@ -2,10 +2,11 @@ package freelist
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -50,14 +51,14 @@ func (r ReservationRecordV1) Entries() []ReservationExtentV1 {
 
 func normalizeExtents(extents []ReservationExtentV1) ([]ReservationExtentV1, error) {
 	out := append([]ReservationExtentV1(nil), extents...)
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].StartPageID != out[j].StartPageID {
-			return out[i].StartPageID < out[j].StartPageID
+	slices.SortFunc(out, func(a, b ReservationExtentV1) int {
+		if a.StartPageID != b.StartPageID {
+			return cmp.Compare(a.StartPageID, b.StartPageID)
 		}
-		if out[i].Kind != out[j].Kind {
-			return out[i].Kind < out[j].Kind
+		if a.Kind != b.Kind {
+			return cmp.Compare(a.Kind, b.Kind)
 		}
-		return out[i].LastReachableCommitSeq < out[j].LastReachableCommitSeq
+		return cmp.Compare(a.LastReachableCommitSeq, b.LastReachableCommitSeq)
 	})
 	merged := out[:0]
 	for _, extent := range out {

@@ -741,15 +741,15 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 		return nil, ErrNoAllocatablePage
 	}
 	var err error
-	dataIDs := make([]uint64, 0, len(t.allocated))
-	for _, allocation := range t.allocated {
-		dataIDs = append(dataIDs, allocation.id)
-	}
 	statePageCount := countUnmaterializedStatePages(t.root, 0)
 	if t.root.freeCount+t.root.retiredCount == 0 {
 		statePageCount = 1
 	}
 	if !reusedMetadata {
+		dataIDs := make([]uint64, 0, len(t.allocated))
+		for _, allocation := range t.allocated {
+			dataIDs = append(dataIDs, allocation.id)
+		}
 		extents, err = t.reservationExtents()
 		if err != nil {
 			return nil, err
@@ -838,7 +838,7 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	t.stats.FreeIDs, t.stats.RetiredIDs = g.root.freeCount, g.root.retiredCount
 	t.stats.GenerationID = generationID
 	t.stats.ReservationRecords = uint64(len(record.pageIDs))
-	t.stats.Reservations = uint64(len(dataIDs)) + (next - metadataStart)
+	t.stats.Reservations = uint64(len(t.allocated)) + (next - metadataStart)
 	t.stats.PendingMetadataRetirements = uint64(len(record.pendingMetadata()))
 	dirty := make([]uint64, len(recorded.pages))
 	for i := range recorded.pages {
