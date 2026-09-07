@@ -74,6 +74,15 @@ contract and must not be blindly retried. Context interrupts storage-barrier
 waits and is checked at boundaries; schema mutex waits and all native/decoder
 inner instructions are not individually interruptible.
 
+Concurrent database publication can invalidate a captured recovery-root set
+during renewal. `db.ErrRecoverableRootSetStale` requires a fresh maintenance
+plan: callers may explicitly invoke the full renewal again within their work
+deadline, never reuse the stale deletion capability. A rejected renewal does
+not advance the work epoch or reset attempted-work debt; earlier safe cleanup
+may already have occurred. This is not permission to retry ambiguous writes or
+ignore recovery-required errors. Report maintenance rejections separately from
+successful renewal latency in workload telemetry.
+
 Current public tests cover typed mutation, same-owner full fetch, fold,
 independent handles, normal reopen, options, held-owner pressure and canceled
 setup, acknowledged-write process cuts, rejected stale keeper release and

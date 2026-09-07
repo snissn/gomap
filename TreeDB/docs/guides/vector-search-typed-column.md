@@ -116,6 +116,12 @@ captured-base keeper is released without closing newer cache entries or held
 read views. Explicit setup retry is a caller lifecycle decision, not a query
 fallback.
 
+Renewal may reject a stale recovery-root plan when concurrent database
+publication changes its authority. An explicit subsequent full renewal obtains
+a fresh plan; keep this bounded by the caller's maintenance deadline and count
+the rejection. Never retry an ambiguous write on that basis. See the
+[maintenance error contract](../spec/typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission).
+
 This is an experimental API checkpoint, not completed minima qualification.
 Public request allocations still grow with corpus size. Ensure-enabled
 insert/replace/delete/reinsert acknowledgements now have subprocess-exit replay
