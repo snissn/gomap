@@ -2,11 +2,200 @@ package collections
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
+
+// The first row is always unchanged; the second changes and the third is new
+// when the initial two-row fixture is upserted as a complete batch.
+func typedUpsertRecoveryBatch(word string, count int) ([][]byte, [][]byte, []TypedColumnBatch) {
+	ids := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
+	retained := [][]byte{[]byte(`{"id":"a"}`), []byte(`{"id":"b"}`), []byte(`{"id":"c"}`)}
+	columns := []TypedColumnBatch{
+		{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}, {0, 1, 0, 0, 0, 0, 0, 0}, {0, 0, 1, 0, 0, 0, 0, 0}}[:count]},
+		{Name: "content", Strings: []string{"stable", word, word}[:count]},
+		{Name: "user", Strings: []string{"stable", word, word}[:count]},
+		{Name: "path", Strings: []string{"p1", "p2", "p3"}[:count]},
+	}
+	return ids[:count], retained[:count], columns
+}
+
+func TestTypedUpsertCrashReplay(t *testing.T) {
+	if dir := os.Getenv("GOMAP_TYPED_UPSERT_CRASH_DIR"); dir != "" {
+		db := openTypedMinimaDB(t, dir)
+		col, err := NewCollectionManager(db).OpenCollection("minima")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mode := os.Getenv("GOMAP_TYPED_UPSERT_CRASH_MODE")
+		injected := errors.New("typed upsert WAL cut")
+		var fired atomic.Bool
+		if mode != "ack" {
+			point := durabilitycut.BeforeDependencyAppend
+			if mode == "after_sync" {
+				point = durabilitycut.AfterDependencyFileSync
+			}
+			durabilitycut.Install(func(e durabilitycut.Event) error {
+				if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == point && fired.CompareAndSwap(false, true) {
+					return injected
+				}
+				return nil
+			})
+		}
+		matched, err := col.UpsertTypedBatch(typedUpsertRecoveryBatch("beta", 3))
+		if mode == "ack" {
+			if err != nil || matched != 2 {
+				t.Fatalf("ack matched=%d err=%v", matched, err)
+			}
+		} else if !fired.Load() || !errors.Is(err, injected) || errors.Is(err, ErrCommitAmbiguous) != (mode == "after_sync") {
+			t.Fatalf("cut fired=%t err=%v", fired.Load(), err)
+		}
+		os.Exit(0) // Process loss: intentionally no Close or cleanup.
+	}
+	for _, mode := range []string{"before_append", "after_sync", "ack"} {
+		t.Run(mode, func(t *testing.T) {
+			dir, db, col := openTypedMinimaCollection(t)
+			if _, err := col.UpsertTypedBatch(typedUpsertRecoveryBatch("alpha", 2)); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestTypedUpsertCrashReplay$")
+			cmd.Env = append(os.Environ(), "GOMAP_TYPED_UPSERT_CRASH_DIR="+dir, "GOMAP_TYPED_UPSERT_CRASH_MODE="+mode)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("child: %v\n%s", err, out)
+			}
+			db = openTypedMinimaDB(t, dir)
+			defer db.Close()
+			col, err := NewCollectionManager(db).OpenCollection("minima")
+			if err != nil {
+				t.Fatal(err)
+			}
+			word, count := "beta", 3
+			if mode == "before_append" {
+				word, count = "alpha", 2
+			}
+			ids, _, columns := typedUpsertRecoveryBatch(word, 3)
+			for i, id := range ids {
+				doc, err := col.Get(id)
+				if err != nil || (i >= count && doc != nil) {
+					t.Fatalf("recovered %s=%s err=%v", id, doc, err)
+				}
+				if i < count {
+					want, err := json.Marshal(map[string]any{"id": string(id), "content": columns[1].Strings[i], "embedding": columns[0].Float32Vectors[i], "meta": map[string]any{"user_id": columns[2].Strings[i], "fpath": columns[3].Strings[i]}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					assertJSONEqualM13C(t, doc, want)
+				}
+			}
+			found, err := col.FindByIndex("user", word)
+			if err != nil || len(found) != count-1 {
+				t.Fatalf("scalar count=%d want=%d err=%v", len(found), count-1, err)
+			}
+			text, err := col.SearchText(TextSearchOptions{IndexName: "content", Query: word, TopK: 3})
+			if err != nil || len(text.Results) != count-1 {
+				t.Fatalf("text=%+v err=%v", text, err)
+			}
+		})
+	}
+}
+
+func TestTypedUpsertOverlappingBatches(t *testing.T) {
+	dir, db, col := openTypedMinimaCollection(t)
+	defer db.Close()
+	if _, err := col.UpsertTypedBatch(typedUpsertRecoveryBatch("alpha", 2)); err != nil {
+		t.Fatal(err)
+	}
+	other, err := NewCollectionManager(db).OpenCollection("minima")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+	frames := len(collectionCommandWALFrames(t, dir))
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	var held atomic.Bool
+	restore := durabilitycut.Install(func(e durabilitycut.Event) error {
+		if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.BeforeDependencyAppend && held.CompareAndSwap(false, true) {
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return nil
+	})
+	defer restore()
+	done := make(chan error, 2)
+	write := func(c *Collection, word string, want int) {
+		n, err := c.UpsertTypedBatch(typedUpsertRecoveryBatch(word, 3))
+		if err == nil && n != want {
+			err = fmt.Errorf("%s matched=%d want=%d", word, n, want)
+		}
+		done <- err
+	}
+	go write(col, "beta", 2)
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("first writer did not reach WAL boundary")
+	}
+	secondStarted := make(chan struct{})
+	go func() { close(secondStarted); write(other, "gamma", 3) }()
+	<-secondStarted
+	unblock()
+	for range 2 {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-ctx.Done():
+			t.Fatal("overlapping upserts did not complete")
+		}
+	}
+	if n := len(collectionCommandWALFrames(t, dir)); n != frames+2 {
+		t.Fatalf("WAL frames=%d want=%d", n, frames+2)
+	}
+	ids, _, _ := typedUpsertRecoveryBatch("gamma", 3)
+	old, err := view.FetchDocumentsByID(ids, DocumentFetchOptions{})
+	if err != nil || len(old.Results) != 3 || !old.Results[0].Found || !old.Results[1].Found || old.Results[2].Found || !bytes.Contains(old.Results[1].Document, []byte(`"content":"alpha"`)) {
+		t.Fatalf("old view=%+v err=%v", old, err)
+	}
+	for _, id := range ids[1:] {
+		doc, err := col.Get(id)
+		if err != nil || !bytes.Contains(doc, []byte(`"content":"gamma"`)) {
+			t.Fatalf("latest %s=%s err=%v", id, doc, err)
+		}
+	}
+	if found, err := col.FindByIndex("user", "beta"); err != nil || len(found) != 0 {
+		t.Fatalf("stale scalar rows=%d err=%v", len(found), err)
+	}
+}
 
 func TestTypedUpsertNoopAndMixedAtomicity(t *testing.T) {
 	meta := typedMinimaCollectionMeta()
