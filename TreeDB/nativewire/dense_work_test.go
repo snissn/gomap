@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"net"
 	"os"
 	"runtime"
 	"strings"
@@ -130,7 +131,7 @@ func TestDenseWorkNativeServiceAndEncodingErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	var remote *WireError
-	if err := decodeWireError(payload, iwire.DefaultLimits()); !errors.As(err, &remote) || remote.DenseWork == nil || !remote.DenseWork.Completed {
+	if err := decodeWireError(payload, iwire.DefaultLimits(), true); !errors.As(err, &remote) || remote.DenseWork == nil || !remote.DenseWork.Completed {
 		t.Fatalf("wire error lost owned details: %+v", err)
 	}
 	// The same error envelope carries an actual bounded-search prefix.
@@ -154,12 +155,32 @@ func TestDenseWorkNativeServiceAndEncodingErrors(t *testing.T) {
 			t.Fatal(err)
 		}
 		var remote *WireError
-		if err := decodeWireError(payload, iwire.DefaultLimits()); !errors.As(err, &remote) || remote.DenseWork == nil {
+		if err := decodeWireError(payload, iwire.DefaultLimits(), true); !errors.As(err, &remote) || remote.DenseWork == nil {
 			t.Fatalf("missing error proof: %v", err)
 		}
 		w := remote.DenseWork
 		if w.Completed || w.Graph.Completed || w.Graph.BaseANNScored != 1 || w.Graph.BaseCandidates != 1 || !w.Graph.Snapshot.Available || w.Output.Attempted {
 			t.Fatalf("incorrect error prefix: %+v", w)
+		}
+		client, cleanup, err := NewInProcessClient(clientContext, bounded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cleanup()
+		if err := client.Hello(clientContext); err != nil {
+			t.Fatal(err)
+		}
+		_, err = client.DenseVectorSearch(clientContext, DenseVectorSearchRequest{Index: "batch", Query: []float32{1, 0}, TopK: 1, ExpectedGeneration: 1, TypedColumnGraph: true})
+		if !errors.As(err, &remote) || remote.DenseWork == nil || *remote.DenseWork != *w {
+			t.Fatalf("in-process typed error lost proof: %v", err)
+		}
+		genericBody, err := appendVersionedCommandRequestBody(nil, iwire.CommandDenseVectorSearch, 2, sections...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = client.roundTrip(clientContext, iwire.FrameRequest, genericBody, iwire.FrameResponse)
+		if errors.As(err, &remote) || nativeCodeOf(err) != iwire.ErrMalformedFrame {
+			t.Fatalf("in-process generic call accepted dense proof: %v", err)
 		}
 	})
 	// A v1 mismatch/error still has exactly the old error section.
@@ -172,5 +193,102 @@ func TestDenseWorkNativeServiceAndEncodingErrors(t *testing.T) {
 	decoded, _ = iwire.DecodeSections(payload, iwire.DefaultLimits())
 	if len(decoded) != 1 || decoded[0].ID != iwire.SectionError {
 		t.Fatalf("legacy error gained proof: %+v", decoded)
+	}
+}
+
+func TestDenseWorkErrorCallScope(t *testing.T) {
+	encoded, err := os.ReadFile("testdata/dense_work_v1.hex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := hex.DecodeString(strings.TrimSpace(string(encoded)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := iwire.AppendSection(nil, iwire.Section{ID: iwire.SectionError, Bytes: appendErrorPayload(nil, iwire.ErrInternal, false, "original")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	errorOnly := bytes.Clone(body)
+	body, err = iwire.AppendSection(body, iwire.Section{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: proof})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Early typed errors retain the ordinary error; extensions remain optional.
+	for _, raw := range [][]byte{errorOnly, body} {
+		for _, flags := range []uint64{0, iwire.SectionFlagCritical} {
+			extended, err := iwire.AppendSection(bytes.Clone(raw), iwire.Section{ID: 999, Flags: flags})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := decodeWireError(extended, iwire.DefaultLimits(), true)
+			var remote *WireError
+			if flags == 0 {
+				if !errors.As(got, &remote) || remote.Code != iwire.ErrInternal || remote.Retryable || remote.Message != "original" || (remote.DenseWork != nil) != bytes.Equal(raw, body) {
+					t.Fatalf("ordinary error changed: %v", got)
+				}
+			} else if nativeCodeOf(got) != iwire.ErrUnsupportedFeature {
+				t.Fatalf("critical error extension accepted: %v", got)
+			}
+		}
+	}
+	for _, malformed := range []bool{false, true} {
+		raw, content := bytes.Clone(body), proof
+		if malformed {
+			raw, content = bytes.Clone(errorOnly), []byte{1}
+		}
+		raw, err = iwire.AppendSection(raw, iwire.Section{ID: iwire.SectionDenseSearchWork, Bytes: content})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var remote *WireError
+		if got := decodeWireError(raw, iwire.DefaultLimits(), true); errors.As(got, &remote) || got == nil {
+			t.Fatalf("bad proof accepted: %v", got)
+		}
+		if got := decodeWireError(raw, iwire.DefaultLimits(), false); nativeCodeOf(got) != iwire.ErrMalformedFrame {
+			t.Fatalf("unrelated proof accepted: %v", got)
+		}
+	}
+	for _, call := range []string{"hello", "get_many", "generic", "discard", "legacy_dense", "typed_dense"} {
+		t.Run(call, func(t *testing.T) {
+			left, right := net.Pipe()
+			client := NewClient(left)
+			defer client.Close()
+			defer right.Close()
+			client.denseTypedNegotiated = true
+			done := make(chan error, 1)
+			go func() {
+				header, _, err := readFrame(right, iwire.DefaultLimits())
+				if err == nil {
+					err = writeFrame(right, iwire.Header{Type: iwire.FrameError, RequestID: header.RequestID}, body)
+				}
+				done <- err
+			}()
+			ctx := denseSearchTestContext(t)
+			var got error
+			switch call {
+			case "hello":
+				got = client.Hello(ctx)
+			case "get_many":
+				_, _, got = client.GetMany(ctx, "docs", [][]byte{[]byte("a")})
+			case "generic":
+				_, _, got = client.roundTrip(ctx, iwire.FrameRequest, nil, iwire.FrameResponse)
+			case "discard":
+				got = client.roundTripLockedDiscardResponse(ctx, iwire.FrameRequest, nil, iwire.FrameResponse)
+			default:
+				_, got = client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1}, TopK: 1, TypedColumnGraph: call == "typed_dense"})
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			var remote *WireError
+			if call == "typed_dense" {
+				if !errors.As(got, &remote) || remote.DenseWork == nil || remote.Message != "original" {
+					t.Fatalf("typed error=%v", got)
+				}
+			} else if errors.As(got, &remote) || nativeCodeOf(got) != iwire.ErrMalformedFrame {
+				t.Fatalf("unrelated call accepted dense work: %v", got)
+			}
+		})
 	}
 }

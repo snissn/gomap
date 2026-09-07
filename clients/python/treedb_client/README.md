@@ -93,9 +93,10 @@ errors retain actual work prefixes without returning partial documents. A
 native encoding or client document-decoding error after completed service work
 preserves those producer completion flags; they do not mean delivery succeeded.
 Malformed proof is rejected without attaching it as trustworthy detail. Proof
-fields and proof-bearing HTTP envelopes reject missing/unknown/duplicate fields,
-invalid types and out-of-range integers. Retained proofs remain valid after
-later requests, mutations and connection close. GetMany's ordinary list return
+objects reject missing/unknown fields, invalid types and out-of-range integers.
+Dense HTTP proof-bearing envelopes also reject duplicate keys; unrelated
+envelope extension fields retain their existing compatibility. Retained proofs
+remain valid after later requests, mutations and connection close. GetMany's ordinary list return
 is unchanged; its separate process output counters support phase accounting.
 
 ## Install for local development

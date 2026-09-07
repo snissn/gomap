@@ -419,7 +419,7 @@ class TreeDBClient:
                     if document.id.encode("utf-8") != item_id:
                         raise ValueError("document ID mismatch")
                     document.score = score
-                except (ValueError, KeyError, TypeError) as exc:
+                except (ValueError, KeyError, TypeError, OverflowError) as exc:
                     raise TreeDBProtocolError("invalid native dense document", dense_work=work) from exc
                 documents.append(document)
             return DenseVectorSearchResponse(index=index_info, documents=documents, metric=index_info.metric,
@@ -436,7 +436,7 @@ class TreeDBClient:
             request["ef_search"] = ef_search_value
         _add_filter(request, filter)
         _add_expected_generation(request, expected_generation)
-        payload = self._request("POST", self._index_path(index, "search", "vector"), request)
+        payload = self._request("POST", self._index_path(index, "search", "vector"), request, dense_proof=True)
         return _parse_response("vector search response", DenseVectorSearchResponse.from_dict, payload)
 
     def search_vector_index(
@@ -595,7 +595,7 @@ class TreeDBClient:
         return f"/v1/indexes/{encoded}"
 
     def _request(
-        self, method: str, path: str, body: Optional[Mapping[str, Any]] = None, *, retry_broken_connection: bool = False
+        self, method: str, path: str, body: Optional[Mapping[str, Any]] = None, *, retry_broken_connection: bool = False, dense_proof: bool = False
     ) -> Any:
         data: Optional[bytes] = None
         headers = {"Accept": "application/json"}
@@ -605,7 +605,7 @@ class TreeDBClient:
             except (TypeError, ValueError) as exc:
                 raise InvalidRequestError("invalid_request", f"request payload is not JSON-serializable: {exc}") from exc
             headers["Content-Type"] = "application/json"
-        return self._send_request(method, path, data, headers, retry_broken_connection=retry_broken_connection)
+        return self._send_request(method, path, data, headers, retry_broken_connection=retry_broken_connection, dense_proof=dense_proof)
 
     def _request_bytes(
         self,
@@ -623,7 +623,7 @@ class TreeDBClient:
         return self._send_request(method, path, body, headers, retry_broken_connection=retry_broken_connection)
 
     def _send_request(
-        self, method: str, path: str, data: Optional[bytes], headers: Mapping[str, str], *, retry_broken_connection: bool = False
+        self, method: str, path: str, data: Optional[bytes], headers: Mapping[str, str], *, retry_broken_connection: bool = False, dense_proof: bool = False
     ) -> Any:
         url = self.base_url + path
         if not retry_broken_connection or self._benchmark_uses_proxy:
@@ -632,7 +632,7 @@ class TreeDBClient:
                 try:
                     with self._opener.open(request, timeout=self.timeout) as response:
                         response_body = response.read()
-                        return self._decode_success(response.getcode(), response_body)
+                        return self._decode_success(response.getcode(), response_body, dense_proof=dense_proof)
                 except urllib.error.HTTPError as exc:
                     try:
                         try:
@@ -645,7 +645,7 @@ class TreeDBClient:
                             raise TreeDBTransportError(f"TreeDB request to {url} failed: {read_exc}") from read_exc
                     finally:
                         exc.close()
-                    raise self._decode_error(exc.code, response_body) from None
+                    raise self._decode_error(exc.code, response_body, dense_proof=dense_proof) from None
                 except urllib.error.URLError as exc:
                     if retry_broken_connection and attempt == 0 and _is_broken_connection(exc.reason):
                         continue
@@ -665,8 +665,8 @@ class TreeDBClient:
                 try:
                     response_body = response.read()
                     if 200 <= response.status < 300:
-                        return self._decode_success(response.status, response_body)
-                    raise self._decode_error(response.status, response_body)
+                        return self._decode_success(response.status, response_body, dense_proof=dense_proof)
+                    raise self._decode_error(response.status, response_body, dense_proof=dense_proof)
                 finally:
                     response.close()
             except (
@@ -692,19 +692,19 @@ class TreeDBClient:
                 self._connection.close()
                 raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc}") from exc
 
-    def _decode_success(self, status_code: int, body: bytes) -> Any:
-        decoded = _decode_json_body(body, status_code=status_code)
+    def _decode_success(self, status_code: int, body: bytes, *, dense_proof: bool = False) -> Any:
+        decoded = _decode_json_body(body, status_code=status_code, dense_proof=dense_proof)
         if isinstance(decoded, Mapping) and "error" in decoded:
             error = decoded.get("error")
             if isinstance(error, Mapping):
                 code = str(error.get("code", "internal"))
                 message = str(error.get("message", ""))
-                raise service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error))
+                raise service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error) if dense_proof else None)
             raise TreeDBProtocolError("error envelope must contain an object", status_code=status_code, response_body=_body_to_text(body))
         return decoded
 
-    def _decode_error(self, status_code: int, body: bytes) -> Exception:
-        decoded = _decode_json_body(body, status_code=status_code)
+    def _decode_error(self, status_code: int, body: bytes, *, dense_proof: bool = False) -> Exception:
+        decoded = _decode_json_body(body, status_code=status_code, dense_proof=dense_proof)
         if not isinstance(decoded, Mapping):
             return TreeDBProtocolError(
                 f"TreeDB service returned HTTP {status_code} with a non-object JSON body",
@@ -720,7 +720,7 @@ class TreeDBClient:
             )
         code = str(error.get("code", "internal"))
         message = str(error.get("message", ""))
-        return service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error))
+        return service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error) if dense_proof else None)
 
 
 def _normalize_base_url(base_url: str) -> str:
@@ -956,24 +956,26 @@ def _expect_mapping(payload: Any, label: str) -> Mapping[str, Any]:
     return payload
 
 
-def _decode_json_body(body: bytes, *, status_code: int) -> Any:
+def _decode_json_body(body: bytes, *, status_code: int, dense_proof: bool = False) -> Any:
     text = _body_to_text(body)
-    duplicate = False
-    proof_envelope = False
-
-    def object_pairs(pairs):
-        nonlocal duplicate, proof_envelope
-        # The root object is decoded last. Inspect pairs before duplicate keys
-        # collapse, including an error envelope overwritten by a duplicate key.
-        proof_envelope = any(key == "dense_work" or (key == "error" and isinstance(value, dict) and "dense_work" in value)
-                             for key, value in pairs)
-        out = {}
-        for key, value in pairs:
-            duplicate |= key in out
-            out[key] = value
-        return out
-
     try:
+        if not dense_proof:
+            return json.loads(text) if text else {}
+        duplicate = False
+        proof_envelope = False
+
+        def object_pairs(pairs):
+            nonlocal duplicate, proof_envelope
+            # The root object is decoded last. Inspect pairs before duplicate
+            # keys collapse, including overwritten proof-bearing error keys.
+            proof_envelope = any(key == "dense_work" or (key == "error" and isinstance(value, dict) and "dense_work" in value)
+                                 for key, value in pairs)
+            out = {}
+            for key, value in pairs:
+                duplicate |= key in out
+                out[key] = value
+            return out
+
         decoded = json.loads(text, object_pairs_hook=object_pairs) if text else {}
         if isinstance(decoded, dict) and proof_envelope and duplicate:
             raise TreeDBProtocolError("duplicate field in dense proof envelope", status_code=status_code, response_body=text)

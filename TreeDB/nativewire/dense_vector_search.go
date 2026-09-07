@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"io"
 	"math"
 	"strings"
@@ -97,14 +96,10 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
 	}
-	_, response, err := c.roundTripLocked(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	_, response, err := c.roundTripLockedStream(ctx, 0, iwire.FrameRequest, body, iwire.FrameResponse, version == iwire.DenseVectorSearchTypedVersion)
 	c.denseRequest = retainSmallPayloadScratch(payload)
 	c.requestBody = retainSmallPayloadScratch(body)
 	if err != nil {
-		var remote *WireError
-		if version == iwire.DenseVectorSearchLegacyVersion && errors.As(err, &remote) && remote.DenseWork != nil {
-			return DenseVectorSearchResponse{}, protocolError(iwire.ErrMalformedFrame, "legacy dense error carried typed work")
-		}
 		return DenseVectorSearchResponse{}, err
 	}
 	decoded := false

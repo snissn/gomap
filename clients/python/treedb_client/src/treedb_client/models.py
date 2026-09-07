@@ -705,7 +705,7 @@ class DenseVectorSearchResponse:
                                      or out.index.extra.get("typed_input") is not True):
                 raise ValueError("dense work does not match selected response")
             return out
-        except (ValueError, TypeError, KeyError) as exc:
+        except (ValueError, TypeError, KeyError, OverflowError) as exc:
             raise TreeDBProtocolError("invalid dense response document or metadata", dense_work=work) from exc
 
 

@@ -115,12 +115,19 @@ class NativeCodecTests(unittest.TestCase):
         envelope = json.dumps({"error": {"code": "index_unavailable", "message": "budget", "dense_work": asdict(work)}}).encode()
         client = TreeDBClient("http://127.0.0.1:1")
         try:
-            error = client._decode_error(503, envelope)
+            error = client._decode_error(503, envelope, dense_proof=True)
             self.assertEqual(error.dense_work, work)
             duplicate = envelope.replace(b'"version": 1', b'"version": 1, "version": 1')
             with self.assertRaises(TreeDBProtocolError):
-                client._decode_error(503, duplicate)
+                client._decode_error(503, duplicate, dense_proof=True)
             self.assertEqual(_decode_json_body(b'{"legacy":1,"legacy":2}', status_code=200), {"legacy": 2})
+            with mock.patch("treedb_client.client.json.loads", wraps=json.loads) as parse:
+                self.assertEqual(client._decode_success(200, b'{"legacy":1,"legacy":2}'), {"legacy": 2})
+                self.assertNotIn("object_pairs_hook", parse.call_args.kwargs)
+            with mock.patch("treedb_client.client.json.loads", wraps=json.loads) as parse:
+                error = client._decode_error(503, duplicate)
+                self.assertIsNone(error.dense_work)
+                self.assertNotIn("object_pairs_hook", parse.call_args.kwargs)
         finally:
             client.close()
 
@@ -137,6 +144,42 @@ class NativeCodecTests(unittest.TestCase):
             self.assertIsNotNone(caught.exception.__cause__)
         finally:
             client.close()
+
+    def test_dense_document_overflow_preserves_proof(self):
+        from test_client import FixtureServer, SAMPLE_INDEX
+        raw_work = bytes.fromhex((_support.REPO_ROOT / "TreeDB/nativewire/testdata/dense_work_v1.hex").read_text().strip())
+        document = {"id": "a", "embedding": [10 ** 400]}
+        raw_doc = json.dumps(document).encode()
+        values, offset = [], 0
+        for _ in range(38):
+            value, offset = _read_uint(raw_work, offset)
+            values.append(value)
+        values[34] = len(raw_doc)
+        raw_work = b"".join(map(_uint, values))
+        work = _dense_work(raw_work)
+        body = _section(102, _vector([b"a"])) + _section(103, _vector([raw_doc])) + _section(130, bytes.fromhex("0201000001000000000000f03f")) + _section(134, raw_work)
+        client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
+        info = SimpleNamespace(name="a", dimension=2, generation=1, vector_strategy="column_graph", metric="cosine", extra={"typed_input": True})
+        try:
+            with mock.patch.object(client._native, "command", return_value=body), self.assertRaises(TreeDBProtocolError) as caught:
+                client.query_by_embedding("a", [1, 0], 1, index_info=info)
+            self.assertEqual(caught.exception.dense_work, work)
+            self.assertIsInstance(caught.exception.__cause__, OverflowError)
+        finally:
+            client.close()
+        payload = dict(index=dict(SAMPLE_INDEX, typed_input=True), documents=[document], metric="cosine", exact=False,
+                       candidates=1, route="ann", dense_work=asdict(work))
+        with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, payload, 0)}) as server:
+            client = TreeDBClient(server.base_url)
+            try:
+                with mock.patch("treedb_client.client.json.loads", wraps=json.loads) as parse, self.assertRaises(TreeDBProtocolError) as caught:
+                    client.query_by_embedding("docs", [1, 0], 1)
+                self.assertEqual(parse.call_count, 1)
+                self.assertIn("object_pairs_hook", parse.call_args.kwargs)
+                self.assertEqual(caught.exception.dense_work, work)
+                self.assertIsInstance(caught.exception.__cause__, OverflowError)
+            finally:
+                client.close()
 
     def test_malformed_bounded_codecs(self):
         for value in (b"", b"\x80", b"\x80\x00", b"\xff" * 10):

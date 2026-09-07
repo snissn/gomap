@@ -299,7 +299,7 @@ func benchmarkDispatchRequestError(server *Server, state *connState, sink *bench
 		return nil, fmt.Errorf("decode response header: %w", err)
 	}
 	if responseHeader.Type == iwire.FrameError {
-		return nil, fmt.Errorf("server returned error frame: %w", decodeWireError(sink.frame[iwire.FrameHeaderLenV1:], server.limits))
+		return nil, fmt.Errorf("server returned error frame: %w", decodeWireError(sink.frame[iwire.FrameHeaderLenV1:], server.limits, false))
 	}
 	if responseHeader.Type != iwire.FrameResponse {
 		return nil, fmt.Errorf("response type=%d want %d", responseHeader.Type, iwire.FrameResponse)
