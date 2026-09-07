@@ -5,9 +5,9 @@ package freelist
 const metadataReuseChunkAttempts = 4
 
 type metadataChunkSearch struct {
-	initial, lower uint64
-	wrapped        bool
-	attempts       int
+	initial, lower, last uint64
+	wrapped              bool
+	attempts             int
 }
 
 func (t *FreelistTxn) metadataChunkSearch() metadataChunkSearch {
@@ -31,14 +31,31 @@ func (s *metadataChunkSearch) next(t *FreelistTxn) *stateChunk {
 	}
 	// Chunk IDs use at most 56 bits, so the successor sentinel fits uint64.
 	s.lower = chunk.chunkNo + 1
+	s.last = chunk.chunkNo
 	s.attempts++
 	return chunk
+}
+
+func (s *metadataChunkSearch) finish(t *FreelistTxn, success bool) {
+	if s.attempts == 0 {
+		return
+	}
+	hint := s.last
+	if !success {
+		hint++
+	}
+	t.ledger.mu.Lock()
+	defer t.ledger.mu.Unlock()
+	// Advisory compare/update: preserve another search's changed hint.
+	// Numeric ABA only affects placement, never reservation authority.
+	if t.ledger.nextReuseChunk == s.initial {
+		t.ledger.nextReuseChunk = hint
+	}
 }
 
 func (t *FreelistTxn) reusableChunkRun(chunk *stateChunk) (start, count uint64) {
 	t.ledger.mu.Lock()
 	defer t.ledger.mu.Unlock()
-	t.ledger.nextReuseChunk = chunk.chunkNo + 1
 	var run, runStart uint64
 	for offset := uint64(0); offset < freelistChunkSize; offset++ {
 		id := chunk.chunkNo<<freelistChunkShift | offset
@@ -105,6 +122,8 @@ func (l *ReservationLedger) claimReusedMetadata(candidate CandidateIDV1, start, 
 
 func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64, []ReservationExtentV1, bool) {
 	search := t.metadataChunkSearch()
+	success := false
+	defer func() { search.finish(t, success) }()
 	for chunk := search.next(t); chunk != nil; chunk = search.next(t) {
 		start, run := t.reusableChunkRun(chunk)
 		// Keep the chunk alive throughout sizing and final mutation.
@@ -149,6 +168,7 @@ func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64
 			continue
 		}
 		*t = *planned
+		success = true
 		return start, count, extents, true
 	}
 	return 0, 0, nil, false
@@ -159,6 +179,8 @@ func (t *FreelistTxn) allocateReusedRange(count int) ([]uint64, bool) {
 		return nil, false
 	}
 	search := t.metadataChunkSearch()
+	success := false
+	defer func() { search.finish(t, success) }()
 	for chunk := search.next(t); chunk != nil; chunk = search.next(t) {
 		start, run := t.reusableChunkRun(chunk)
 		if uint64(count) > run {
@@ -175,6 +197,7 @@ func (t *FreelistTxn) allocateReusedRange(count int) ([]uint64, bool) {
 			t.allocated = append(t.allocated, allocatedPage{id, ReservationReusedData})
 		}
 		t.stats.ReuseAllocations += uint64(count)
+		success = true
 		return ids, true
 	}
 	return nil, false

@@ -54,8 +54,9 @@ Publication metadata and auxiliary output can reuse capability-certified
 contiguous free intervals (#4627); observing old auxiliary IDs allocated again
 is not by itself a retention leak. Placement examines at most four 256-page
 chunks and otherwise falls back to the existing tail path. It avoids repeatedly
-inspecting a fragmented prefix by advancing a transient
-ledger hint after every observed chunk, including failed placements. Metadata
+inspecting a fragmented prefix by advancing a transient ledger hint past the
+last observed chunk after a failed search; success keeps its chunk for locality.
+Updates apply only if the initial hint remains unchanged. Metadata
 and auxiliary searches share this hint; each attempt wraps at most once and
 does not repeat chunks. This changes placement only, never reclamation authority.
 This is not a full free-extent search, physical shrink, or a replacement

@@ -2933,9 +2933,11 @@ graph, bounds below high-water, summary counts, and semantic digest.
 Freelist metadata first attempts a bounded reusable interval: at most four
 free radix chunks, each containing 256 page bits, are inspected. The interval
 search starts from a transient next-chunk hint in the existing reservation
-ledger, shared with auxiliary placement. Each observed chunk advances the hint;
-an attempt wraps at most once without revisiting a chunk. This avoids repeatedly
-starting at the same fragmented prefix. The hint is not persisted or rolled
+ledger, shared with auxiliary placement. A completed failed search proposes the
+successor of its last observed chunk; success keeps its chunk to preserve COW
+locality. The proposal applies only if the initial hint is unchanged. An attempt
+wraps at most once without revisiting a chunk. This avoids repeatedly starting
+at the same fragmented prefix. The hint is not persisted or rolled
 back and grants no ownership or reuse authority; reopening may reset placement.
 The selected interval
 must fit in one chunk and leave that chunk nonempty, so clearing the chosen

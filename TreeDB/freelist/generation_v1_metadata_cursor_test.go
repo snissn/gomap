@@ -76,6 +76,39 @@ type capabilityCheckedMetadataSink4627 struct {
 	safe  *FreelistGenerationV1
 }
 
+func TestMetadataCursorCompletionPolicy4627(t *testing.T) {
+	ledger := NewReservationLedger()
+	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 1024, []uint64{258, 514}, nil), ledger)
+	ledger.nextReuseChunk = 1
+	search := txn.metadataChunkSearch()
+	if chunk := search.next(txn); chunk == nil || chunk.chunkNo != 1 {
+		t.Fatal("first chunk")
+	}
+	search.finish(txn, true)
+	if ledger.nextReuseChunk != 1 {
+		t.Fatal("successful chunk must stay sticky")
+	}
+	search = txn.metadataChunkSearch()
+	search.next(txn)
+	ledger.nextReuseChunk = 9 // Another completed search changes the hint.
+	search.finish(txn, false)
+	if ledger.nextReuseChunk != 9 {
+		t.Fatal("overwrote concurrent hint")
+	}
+	search = txn.metadataChunkSearch()
+	search.finish(txn, false)
+	if ledger.nextReuseChunk != 9 {
+		t.Fatal("empty observation changed hint")
+	}
+	search = txn.metadataChunkSearch()
+	for search.next(txn) != nil {
+	}
+	search.finish(txn, false)
+	if ledger.nextReuseChunk != 3 {
+		t.Fatalf("wrapped failure lost last observation: %d", ledger.nextReuseChunk)
+	}
+}
+
 func (s capabilityCheckedMetadataSink4627) WritePage(id uint64, data []byte) error {
 	if _, exists := s.store.Pages[id]; exists && !s.safe.Allocatable(id) {
 		return fmt.Errorf("overwrite page %d without staged capability", id)
@@ -136,7 +169,7 @@ func TestMetadataAuxiliarySharesCursor4627(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.GenerationRef().HeaderPageID>>freelistChunkShift != 1 {
+	if c.GenerationRef().HeaderPageID>>freelistChunkShift != 0 {
 		t.Fatalf("metadata failed to follow auxiliary cursor: %d", c.GenerationRef().HeaderPageID)
 	}
 }
