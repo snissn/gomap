@@ -4,6 +4,8 @@ import (
 	"context"
 	"reflect"
 	"slices"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 // Snapshot-free metadata belongs to installed publication state, not a query
@@ -14,6 +16,16 @@ type typedGraphServingBaseMetadata struct {
 	refs        []ColumnAssetRef
 	recordCount int
 	bytes       int64
+	preparedKey string
+}
+
+func (b *typedGraphServingBaseMetadata) openPhysicalReader(c *Collection, snap *backenddb.Snapshot, opts columnVectorGraphPhysicalRowReaderOptions) (*columnVectorGraphPhysicalRowReader, error) {
+	if b == nil || b.view.Catalog == nil || len(b.view.Catalog.meta.VectorIndexes) != 1 || columnVectorGraphSharedPreparedEligible(b.graph, b.view) != (b.preparedKey != "") {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	view := b.view
+	view.snapshot = snap
+	return c.openColumnVectorGraphPhysicalRowReaderWithBoundKey(snap, view.Catalog.meta.VectorIndexes[0], b.graph, view, opts, b.preparedKey)
 }
 
 func (c *Collection) prepareTypedGraphServingMetadata(ctx context.Context, cold typedGraphColdLimits) error {
@@ -93,6 +105,15 @@ func prepareTypedGraphServingBaseMetadata(graph columnVectorGraphManifestSnapsho
 		return nil, err
 	}
 	metadata := &typedGraphServingBaseMetadata{graph: graph, view: view, refs: refs, recordCount: len(view.graphOwnerRecords)}
+	if columnVectorGraphSharedPreparedEligible(graph, view) {
+		if len(view.Catalog.meta.VectorIndexes) != 1 {
+			return nil, ErrVectorIndexSnapshotMismatch
+		}
+		metadata.preparedKey, err = columnVectorGraphSharedPreparedSearchCacheKey(view.Catalog.meta.Name, view.AssetNamespace, view.Catalog.meta.VectorIndexes[0], graph, view.VectorIndexState)
+		if err != nil {
+			return nil, err
+		}
+	}
 	metadata.bytes, err = typedGraphServingMetadataBytes(metadata, cold.DecodedTermBytes)
 	if err != nil {
 		return nil, err
@@ -113,6 +134,9 @@ func typedGraphServingMetadataBytes(b *typedGraphServingBaseMetadata, limit int6
 		return true
 	}
 	v := b.view
+	if !add(len(b.preparedKey), 1) {
+		return 0, errTypedGraphOwnerBudget
+	}
 	for _, term := range []struct {
 		count int
 		size  uintptr

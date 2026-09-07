@@ -274,7 +274,7 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 		}
 		def := catalog.meta.VectorIndexes[0]
 		baseView.graphOwnerRecords = nil
-		base.reader, err = c.openColumnVectorGraphPhysicalRowReaderFromView(snap, def, graph, baseView, columnVectorGraphPhysicalRowReaderOptions{admitSources: func(keyBytes int) error {
+		readerOptions := columnVectorGraphPhysicalRowReaderOptions{admitSources: func(keyBytes int) error {
 			if !addDescriptor(int64(keyBytes), 2) {
 				return errTypedGraphOwnerBudget
 			}
@@ -284,7 +284,12 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 			var pinErr error
 			base.lifecyclePin, pinErr = c.acquireColumnAssetLifecyclePinSetOwned(ColumnAssetLifecyclePinSetOptions{Source: ColumnAssetLifecyclePinSourcePreparedQuery, Owner: "typed_graph_read_owner", Refs: refs})
 			return pinErr
-		}})
+		}}
+		if state.servingBase != nil {
+			base.reader, err = state.servingBase.openPhysicalReader(c, snap, readerOptions)
+		} else {
+			base.reader, err = c.openColumnVectorGraphPhysicalRowReaderFromView(snap, def, graph, baseView, readerOptions)
+		}
 		if err != nil {
 			return err
 		}

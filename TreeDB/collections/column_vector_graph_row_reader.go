@@ -123,6 +123,24 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 // assembly and shared prepared-reader lifetime. This function does not acquire
 // a storage barrier or own the caller's snapshot.
 func (c *Collection) openColumnVectorGraphPhysicalRowReaderFromView(snap *backenddb.Snapshot, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, view columnPhysicalScanSnapshotView, opts columnVectorGraphPhysicalRowReaderOptions) (*columnVectorGraphPhysicalRowReader, error) {
+	var key string
+	if columnVectorGraphSharedPreparedEligible(graph, view) {
+		var err error
+		key, err = columnVectorGraphSharedPreparedSearchCacheKey(view.Catalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return c.openColumnVectorGraphPhysicalRowReaderWithBoundKey(snap, def, graph, view, opts, key)
+}
+
+func columnVectorGraphSharedPreparedEligible(graph columnVectorGraphManifestSnapshot, view columnPhysicalScanSnapshotView) bool {
+	return !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 && view.Catalog != nil && view.VectorIndexStateFound && view.AssetNamespace != ""
+}
+
+// Only the ordinary validated view path and immutable serving metadata bind
+// keys here. The key is not a caller option or independent source authority.
+func (c *Collection) openColumnVectorGraphPhysicalRowReaderWithBoundKey(snap *backenddb.Snapshot, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, view columnPhysicalScanSnapshotView, opts columnVectorGraphPhysicalRowReaderOptions, key string) (*columnVectorGraphPhysicalRowReader, error) {
 	var err error
 	view.graphOwnerRecords = nil // setup parser ownership must not escape into reader caches
 	catalog := view.Catalog
@@ -130,14 +148,7 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderFromView(snap *backen
 		catalog = catalog.copy()
 		view.Catalog = catalog
 	}
-	sharedEligible := !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 && catalog != nil && view.VectorIndexStateFound && view.AssetNamespace != ""
-	var key string
-	if sharedEligible {
-		key, err = columnVectorGraphSharedPreparedSearchCacheKey(catalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState)
-		if err != nil {
-			return nil, err
-		}
-	}
+	sharedEligible := key != ""
 	if opts.admitSources != nil {
 		if err := opts.admitSources(len(key)); err != nil {
 			return nil, err

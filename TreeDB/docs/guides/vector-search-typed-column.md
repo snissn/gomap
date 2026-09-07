@@ -538,6 +538,12 @@ go tool pprof -top -alloc_space -nodecount=40 "$OUT/mem.pprof" > "$OUT/alloc_spa
 
 ## Search/fetch timing boundary
 
+Selected admitted graph owners reuse the existing prepared-reader identity key
+from immutable base metadata. It is constructed at setup/fold, charged as
+retained metadata, and rebuilt for a new base or reopen. This does not replace
+snapshot validation or extend the lifetime of a caller's read view. Ordinary
+and quantized prepared-reader paths retain their existing key construction.
+
 Typed point reconstruction validates the complete primary-ID sequence. Identity
 row order uses an implicit locator instead of a per-row reverse map; physically
 permuted parts retain the validated reverse-map path. This does not eliminate
