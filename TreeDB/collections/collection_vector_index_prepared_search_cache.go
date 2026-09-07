@@ -346,7 +346,7 @@ func (c *Collection) openCollectionVectorIndexPreparedSearch(opts VectorIndexSea
 	}
 	var prepared *collectionVectorIndexPreparedSearch
 	var response VectorIndexSearchResponse
-	err = WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+	err = WithVectorPartitionStorageBarrierWithContextV1(opts.Context, c.db.Dir(), func() error {
 		var err error
 		if queryMode.quantized() {
 			prepared, response, err = c.openCollectionVectorIndexPreparedQuantizedSearch(opts, queryMode)

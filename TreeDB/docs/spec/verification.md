@@ -36,6 +36,9 @@ checks that a canceled coalesced waiter leaves the other builder's keeper valid.
 `TestTypedGraphColdManifestScanCancellation` cancels on the second periodic
 context check in a real multi-interval manifest preflight and preserves the
 existing over-budget error translation.
+`TestPreparedSearchBuilderBarrierCancellation` holds the actual storage barrier
+while public warm/buffered callers build exact and quantized prepared state,
+then checks cancellation, cache cleanup, and healthy nil-context retry.
 
 Explicit typed graph serving: `TestTypedGraphPublicSameOwnerServing` covers public
 ensure, typed mutation, same-owner filtered search/full fetch, fold, independent

@@ -131,6 +131,9 @@ rollback of earlier successful publication or maintenance work.
 Cold manifest-budget preflights also retain that context and check it every
 256 records and at scan completion. This does not promise preemption inside
 every subsequent synchronous decoder operation.
+Ordinary `WarmVectorIndexPreparedSearch` and buffered prepared searches likewise
+honor `VectorIndexSearchOptions.Context` while their exact or quantized builder
+waits for the storage barrier; canceling that wait leaves no installed cache entry.
 
 Renewal may reject a stale recovery-root plan when concurrent database
 publication changes its authority. An explicit subsequent full renewal obtains
