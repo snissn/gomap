@@ -10,7 +10,7 @@ import (
 // candidate. It neither installs a manifest nor advances logical authority.
 // The caller retains the validated captured snapshot and owns returned stable
 // resources through publication or release. Rows are encoder-ready owned values.
-func (c *Collection) prepareTypedGraphCapturedAssets(state columnStoreCompactionState, rows []columnDeclaredRow) (ColumnPublishPreparedAssets, error) {
+func (c *Collection) prepareTypedGraphCapturedAssets(state columnStoreCompactionState, rows []columnDeclaredRow, admission *typedGraphFoldAssetAdmission) (ColumnPublishPreparedAssets, error) {
 	generation := state.manifest.Generation
 	if generation == 0 || state.cfg.ActiveManifest == nil || state.cfg.ActiveManifest.Generation != generation || state.manifest.AppliedCommandLSN == 0 || state.manifest.AppliedCommandLSN != state.cfg.RecoveryAuthoritativeAppliedCommandLSN {
 		return ColumnPublishPreparedAssets{}, errors.New("collections: captured typed assets require exact manifest frontier")
@@ -38,6 +38,7 @@ func (c *Collection) prepareTypedGraphCapturedAssets(state columnStoreCompaction
 		return prepared, nil
 	}
 	input := columnWritePublishInput{meta: state.meta, operation: ColumnPublishOperationInsert, rows: len(rows), declaredRows: rows, declaredRowsReady: true}
+	input.candidateAdmission = admission
 	return c.prepareColumnPhysicalAssetRowsAtIdentity(prepared, input, ColumnPublishAssetPrepareInput{
 		Collection: state.meta.Name, ColumnStore: state.cfg, Operation: ColumnPublishOperationInsert,
 		AppliedCommandLSN: state.manifest.AppliedCommandLSN, CurrentManifest: state.cfg.ActiveManifest,

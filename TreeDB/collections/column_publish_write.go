@@ -34,6 +34,7 @@ func setColumnPhysicalAssetPreparationAfterPrepareTestHook(hook func(ColumnPubli
 }
 
 type columnWritePublishInput struct {
+	candidateAdmission    *typedGraphFoldAssetAdmission
 	meta                  CollectionMeta
 	catalog               *collectionCatalog
 	baseCommitSeq         uint64
@@ -1137,6 +1138,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPub
 				session = newColumnPhysicalAssetAppendSession(c.db.ColumnAssetRootDir(), hookInput.ColumnStore)
 			}
 			appendOpenDuration += time.Since(appendStart)
+			session.candidateAdmission = input.candidateAdmission
 			defer func() {
 				if retErr != nil && !closed {
 					retErr = errors.Join(retErr, session.abort())

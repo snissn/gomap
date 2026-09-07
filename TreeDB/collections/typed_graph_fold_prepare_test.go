@@ -20,12 +20,12 @@ func TestTypedGraphCapturedAssetIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	producer, ok := any(col).(interface {
-		prepareTypedGraphCapturedAssets(columnStoreCompactionState, []columnDeclaredRow) (ColumnPublishPreparedAssets, error)
+		prepareTypedGraphCapturedAssets(columnStoreCompactionState, []columnDeclaredRow, *typedGraphFoldAssetAdmission) (ColumnPublishPreparedAssets, error)
 	})
 	if !ok {
 		t.Fatal("captured-frontier asset preparation unavailable; ordinary producer advances generation")
 	}
-	prepared, err := producer.prepareTypedGraphCapturedAssets(state, rows)
+	prepared, err := producer.prepareTypedGraphCapturedAssets(state, rows, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestTypedGraphCapturedMixedGenerationReaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := col.prepareTypedGraphCapturedAssets(state, rows)
+	prepared, err := col.prepareTypedGraphCapturedAssets(state, rows, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestTypedGraphCapturedIdentityRejectsOverflow(t *testing.T) {
 	}
 	defer done()
 	state.records = append(cloneColumnManifestRecords(state.records), columnManifestRecord{key: columnManifestPartRecordKey(state.manifest.Generation, math.MaxUint64)})
-	if _, err := col.prepareTypedGraphCapturedAssets(state, nil); err == nil {
+	if _, err := col.prepareTypedGraphCapturedAssets(state, nil, nil); err == nil {
 		t.Fatal("accepted exhausted part ID before empty candidate")
 	}
 }
@@ -271,7 +271,7 @@ func TestTypedGraphCapturedEmptyAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer done()
-	prepared, err := col.prepareTypedGraphCapturedAssets(state, nil)
+	prepared, err := col.prepareTypedGraphCapturedAssets(state, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestTypedGraphCapturedEmptyAssets(t *testing.T) {
 	}
 	bad := state
 	bad.manifest.AppliedCommandLSN++
-	if _, err := col.prepareTypedGraphCapturedAssets(bad, nil); err == nil {
+	if _, err := col.prepareTypedGraphCapturedAssets(bad, nil, nil); err == nil {
 		t.Fatal("mismatched LSN accepted for empty capture")
 	}
 	columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{vectorBenchmarkEmbedding(0, 8)}}, {Name: "content", Strings: []string{"first"}}, {Name: "user", Strings: []string{"user"}}, {Name: "path", Strings: []string{"path"}}}

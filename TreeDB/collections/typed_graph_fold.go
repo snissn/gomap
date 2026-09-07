@@ -16,11 +16,11 @@ import (
 // foldTypedGraph is explicit internal maintenance. The callback is an internal
 // observation seam after capture admission is released, not a publication hook.
 // Cold limits bound individual input/decoder terms; they are not a disk quota.
-func (c *Collection) foldTypedGraph(ctx context.Context, cold typedGraphColdLimits, maxRows int, afterCapture func() error) (err error) {
-	return c.foldTypedGraphTimed(ctx, cold, maxRows, afterCapture, nil)
+func (c *Collection) foldTypedGraph(ctx context.Context, cold typedGraphColdLimits, maxRows int, assetLimits typedGraphFoldAssetLimits, afterCapture func() error) (err error) {
+	return c.foldTypedGraphTimed(ctx, cold, maxRows, assetLimits, afterCapture, nil)
 }
 
-func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphColdLimits, maxRows int, afterCapture func() error, timing *ColumnGraphBuildTiming) (err error) {
+func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphColdLimits, maxRows int, assetLimits typedGraphFoldAssetLimits, afterCapture func() error, timing *ColumnGraphBuildTiming) (err error) {
 	started := time.Now()
 	defer func() {
 		if timing != nil {
@@ -38,6 +38,10 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 		return ErrConcurrentMutation
 	}
 	defer coord.typedGraphFoldActive.Store(false)
+	admission, err := coord.bindTypedGraphFoldAssetAdmission(assetLimits)
+	if err != nil {
+		return err
+	}
 	var captured columnStoreCompactionState
 	var lease *ColumnAssetLifecyclePinSet
 	var copy *typedGraphBaseCopy
@@ -107,7 +111,7 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 		return err
 	}
 	stage = time.Now()
-	prepared, err := c.prepareTypedGraphCapturedAssets(captured, rows)
+	prepared, err := c.prepareTypedGraphCapturedAssets(captured, rows, admission)
 	if timing != nil {
 		timing.AssetPreparation = time.Since(stage)
 	}
@@ -169,7 +173,7 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 		return err
 	}
 	stage = time.Now()
-	graph, records, identity, err := prepareColumnVectorGraphRebuildManifestForPublicationTimed(captured.meta.Name, captured.cfg, captured.meta.VectorIndexes, def, baseHeader, baseManifest.Records, captured.manifest.AppliedCommandLSN, graphRows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), timing)
+	graph, records, identity, err := prepareColumnVectorGraphRebuildManifestForPublicationTimed(captured.meta.Name, captured.cfg, captured.meta.VectorIndexes, def, baseHeader, baseManifest.Records, captured.manifest.AppliedCommandLSN, graphRows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), timing, admission)
 	if timing != nil {
 		timing.AssetPreparation += time.Since(stage)
 	}

@@ -53,7 +53,9 @@ func TestTypedGraphFoldCanceledStorageBarrier(t *testing.T) {
 			defer cancel()
 			seq, system := dbCommitSeqAndSystemRoot(col.db)
 			done := make(chan error, 1)
-			go func() { done <- col.foldTypedGraph(ctx, typedGraphOverlapLimits().Cold, 128, afterCapture) }()
+			go func() {
+				done <- col.foldTypedGraph(ctx, typedGraphOverlapLimits().Cold, 128, typedGraphFoldTestAssetLimits(), afterCapture)
+			}()
 			// Observe the actual barrier waiter, not elapsed time or goroutine scheduling.
 			deadline := time.NewTimer(5 * time.Second)
 			defer deadline.Stop()
@@ -106,7 +108,7 @@ func TestTypedGraphFoldKeepsPostCaptureMutation(t *testing.T) {
 	}
 	defer oldOwner.Close()
 	folder, ok := any(col).(interface {
-		foldTypedGraph(context.Context, typedGraphColdLimits, int, func() error) error
+		foldTypedGraph(context.Context, typedGraphColdLimits, int, typedGraphFoldAssetLimits, func() error) error
 	})
 	if !ok {
 		t.Fatal("internal captured-frontier fold is unavailable")
@@ -117,7 +119,7 @@ func TestTypedGraphFoldKeepsPostCaptureMutation(t *testing.T) {
 	}
 	defer closeBefore()
 	var latestLSN uint64
-	err = folder.foldTypedGraph(context.Background(), typedGraphColdLimits{ManifestRecords: 4096, ManifestBytes: 4 << 20, AssetBytes: 64 << 20, DecodedTermBytes: 64 << 20}, 128, func() error {
+	err = folder.foldTypedGraph(context.Background(), typedGraphColdLimits{ManifestRecords: 4096, ManifestBytes: 4 << 20, AssetBytes: 64 << 20, DecodedTermBytes: 64 << 20}, 128, typedGraphFoldTestAssetLimits(), func() error {
 		changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: []string{"fold-after-capture"}}, {Name: "user", Strings: []string{"new-user"}}, {Name: "path", Strings: []string{"new-path"}}}
 		if _, err := col.ReplaceTypedBatch(ids[:1], retained[:1], changed); err != nil {
 			return err
@@ -184,7 +186,7 @@ func TestTypedGraphFoldSourceSuffixAndStaleCandidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: []string{"new-source"}}, {Name: "user", Strings: []string{"new-user"}}, {Name: "path", Strings: []string{"new-path"}}}
-	if err := col.foldTypedGraph(context.Background(), limits.Cold, 128, func() error {
+	if err := col.foldTypedGraph(context.Background(), limits.Cold, 128, typedGraphFoldTestAssetLimits(), func() error {
 		if _, err := other.DeleteBatch(ids[:2]); err != nil {
 			return err
 		}
@@ -217,12 +219,16 @@ func TestTypedGraphFoldSourceSuffixAndStaleCandidate(t *testing.T) {
 	if err := owner.Close(); err != nil {
 		t.Fatal(err)
 	}
-	err = col.foldTypedGraph(context.Background(), limits.Cold, 128, func() error {
+	beforeDebt := col.collectionSchemaCoordinator().typedGraphCandidateBytes
+	err = col.foldTypedGraph(context.Background(), limits.Cold, 128, typedGraphFoldTestAssetLimits(), func() error {
 		_, err := other.RebuildVectorIndex("embedding_graph")
 		return err
 	})
 	if !errors.Is(err, ErrConcurrentMutation) {
 		t.Fatalf("stale captured base: %v", err)
+	}
+	if col.collectionSchemaCoordinator().typedGraphCandidateBytes <= beforeDebt {
+		t.Fatal("stale install discarded candidate output debt")
 	}
 }
 
@@ -232,7 +238,7 @@ func TestTypedGraphFoldEmptyRepeatAndCancel(t *testing.T) {
 			col, _, _, _, _, _ := openTypedGraphQualityFixture(t, n)
 			limits := typedGraphOverlapLimits()
 			for i := 0; i < 2; i++ {
-				if err := col.foldTypedGraph(context.Background(), limits.Cold, 128, nil); err != nil {
+				if err := col.foldTypedGraph(context.Background(), limits.Cold, 128, typedGraphFoldTestAssetLimits(), nil); err != nil {
 					t.Fatalf("fold%d: %v", i, err)
 				}
 				if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 128, Tombstones: 128, ValueSlots: 512, OwnedBytes: 8 << 20}, limits.Cold); err != nil {
@@ -251,12 +257,12 @@ func TestTypedGraphFoldEmptyRepeatAndCancel(t *testing.T) {
 			}
 			before := col.typedGraphPublicationSnapshot()
 			ctx, cancel := context.WithCancel(context.Background())
-			err := col.foldTypedGraph(ctx, limits.Cold, 128, func() error { cancel(); return nil })
+			err := col.foldTypedGraph(ctx, limits.Cold, 128, typedGraphFoldTestAssetLimits(), func() error { cancel(); return nil })
 			if !errors.Is(err, context.Canceled) || col.typedGraphPublicationSnapshot() != before {
 				t.Fatalf("cancel err=%v changed state=%v", err, col.typedGraphPublicationSnapshot() != before)
 			}
-			err = col.foldTypedGraph(context.Background(), limits.Cold, 128, func() error {
-				return col.foldTypedGraph(context.Background(), limits.Cold, 128, nil)
+			err = col.foldTypedGraph(context.Background(), limits.Cold, 128, typedGraphFoldTestAssetLimits(), func() error {
+				return col.foldTypedGraph(context.Background(), limits.Cold, 128, typedGraphFoldTestAssetLimits(), nil)
 			})
 			if !errors.Is(err, ErrConcurrentMutation) {
 				t.Fatalf("second builder: %v", err)
@@ -275,7 +281,7 @@ func TestTypedGraphFoldBoundsBeforeCaptureAndInstall(t *testing.T) {
 		{ManifestRecords: cold.ManifestRecords, ManifestBytes: cold.ManifestBytes, AssetBytes: 1, DecodedTermBytes: cold.DecodedTermBytes},
 		{ManifestRecords: cold.ManifestRecords, ManifestBytes: cold.ManifestBytes, AssetBytes: cold.AssetBytes, DecodedTermBytes: 1},
 	} {
-		if err := col.foldTypedGraph(context.Background(), limit, 128, nil); !errors.Is(err, errTypedGraphOverlayFoldNeeded) {
+		if err := col.foldTypedGraph(context.Background(), limit, 128, typedGraphFoldTestAssetLimits(), nil); !errors.Is(err, errTypedGraphOverlayFoldNeeded) {
 			t.Fatalf("tiny cap: %v", err)
 		}
 		if afterSeq, afterRoot := dbCommitSeqAndSystemRoot(col.db); afterSeq != seq || afterRoot != root {
@@ -283,7 +289,7 @@ func TestTypedGraphFoldBoundsBeforeCaptureAndInstall(t *testing.T) {
 		}
 	}
 	var latestSeq, latestRoot uint64
-	err := col.foldTypedGraph(context.Background(), cold, 8, func() error {
+	err := col.foldTypedGraph(context.Background(), cold, 8, typedGraphFoldTestAssetLimits(), func() error {
 		changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: []string{"after-capture"}}, {Name: "user", Strings: []string{"user"}}, {Name: "path", Strings: []string{"path"}}}
 		if _, err := col.ReplaceTypedBatch(ids[:1], retained[:1], changed); err != nil {
 			return err

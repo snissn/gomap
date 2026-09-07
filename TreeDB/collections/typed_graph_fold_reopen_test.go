@@ -41,7 +41,7 @@ func TestTypedGraphFoldProcessCut(t *testing.T) {
 		entered, blocked := make(chan struct{}), make(chan struct{})
 		var fired atomic.Bool
 		run := func() error {
-			return col.foldTypedGraph(context.Background(), typedGraphOverlapLimits().Cold, 128, func() error {
+			return col.foldTypedGraph(context.Background(), typedGraphOverlapLimits().Cold, 128, typedGraphFoldTestAssetLimits(), func() error {
 				if mode == "unsealed_suffix" {
 					durabilitycut.Install(func(event durabilitycut.Event) error {
 						if event.Root == dir && event.Resource == durabilitycut.ResourceSeal && event.Point == durabilitycut.BeforePublicationSealWrite && fired.CompareAndSwap(false, true) {

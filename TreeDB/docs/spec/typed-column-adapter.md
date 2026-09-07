@@ -487,9 +487,21 @@ These are not a summed transient heap or global disk guarantee. Both the
 current locator scan and native root construction remain N-dependent under
 write admission, and the publisher builds roots under its existing writer
 lock. Unpublished candidates release resource handles, leaving unreferenced
-physical output to existing reclamation. Global candidate/orphan accounting,
-qualified pause/storage bounds and public mutable-route activation remain
-separate gates; this internal operation does not enable public mutable search.
+physical output to existing reclamation.
+
+Internal fold callers must also supply positive candidate-output byte and
+appender-attempt limits. Their identity is fixed for the collection coordinator
+across attempts and managers. Existing row append sessions and graph resource
+owners share one admission receipt: it charges exact padded bytes before each
+write (before combined batch-buffer allocation), and charges an appender attempt
+before opening/creating a segment. The latter also bounds empty files left by
+rejected retries. Attempted charges survive partial writes, stale/canceled
+candidates, logical reconciliation and handle closure; they are separate from
+ordinary mixed encoded-output debt. No successful or failed GC counter refunds
+these charges. They do not include pre-existing/reopened inventory, encoder
+scratch, pager output or whole-process memory. Coherent inventory/reclamation,
+combined transient bounds, qualified pause/storage bounds and public mutable
+activation remain separate gates; this does not enable public mutable search.
 
 Explicit internal cold reconciliation can bootstrap a captured base and its
 current typed suffix after normal `Open`, without replay instrumentation. It

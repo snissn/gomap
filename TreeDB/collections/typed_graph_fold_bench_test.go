@@ -24,6 +24,7 @@ func BenchmarkTypedGraphFold(b *testing.B) {
 			b.StopTimer()
 			var build, publication, capture time.Duration
 			var growth int64
+			var candidateBytes, appenderAttempts int64
 			b.ReportAllocs()
 			for iteration := 0; iteration < b.N; iteration++ {
 				col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(b, 1024)
@@ -56,7 +57,7 @@ func BenchmarkTypedGraphFold(b *testing.B) {
 				before := directoryBytes()
 				var timing ColumnGraphBuildTiming
 				b.StartTimer()
-				err := col.foldTypedGraphTimed(context.Background(), cold, 4096, func() error {
+				err := col.foldTypedGraphTimed(context.Background(), cold, 4096, typedGraphFoldTestAssetLimits(), func() error {
 					if !suffix {
 						return nil
 					}
@@ -74,6 +75,8 @@ func BenchmarkTypedGraphFold(b *testing.B) {
 				build += timing.RowExtraction + timing.AdjacencyBuild + timing.AssetPreparation
 				publication += timing.Publication
 				growth += directoryBytes() - before
+				candidateBytes += col.collectionSchemaCoordinator().typedGraphCandidateBytes
+				appenderAttempts += col.collectionSchemaCoordinator().typedGraphCandidateAttempts
 				if err := col.db.Close(); err != nil {
 					b.Fatal(err)
 				}
@@ -82,6 +85,8 @@ func BenchmarkTypedGraphFold(b *testing.B) {
 			b.ReportMetric(float64(build.Nanoseconds())/float64(b.N), "off-admission-build-ns/op")
 			b.ReportMetric(float64(publication.Nanoseconds())/float64(b.N), "publisher-call-ns/op")
 			b.ReportMetric(float64(growth)/float64(b.N), "all-files-growth-B/op")
+			b.ReportMetric(float64(candidateBytes)/float64(b.N), "candidate-attempted-B/op")
+			b.ReportMetric(float64(appenderAttempts)/float64(b.N), "candidate-appender-opens/op")
 		})
 	}
 }
@@ -92,7 +97,7 @@ func BenchmarkTypedGraphFoldWarmQuery(b *testing.B) {
 		b.Fatal(err)
 	}
 	limits := typedGraphOverlapLimits()
-	if err := col.foldTypedGraph(context.Background(), limits.Cold, 4096, nil); err != nil {
+	if err := col.foldTypedGraph(context.Background(), limits.Cold, 4096, typedGraphFoldTestAssetLimits(), nil); err != nil {
 		b.Fatal(err)
 	}
 	if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 128, Tombstones: 128, ValueSlots: 512, OwnedBytes: 8 << 20}, limits.Cold); err != nil {

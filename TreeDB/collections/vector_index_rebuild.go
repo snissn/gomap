@@ -397,7 +397,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 			var deltaRecords []columnManifestRecord
 			var nextIdentity ColumnManifestIdentity
 			prepareStarted := time.Now()
-			preparedAsset, preparedRecords, preparedIdentity, prepareErr := prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource(baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), typedSource, &timing)
+			preparedAsset, preparedRecords, preparedIdentity, prepareErr := prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource(baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), typedSource, &timing, nil)
 			timing.AssetPreparation = collectionObservedElapsedSince(prepareStarted)
 			if prepareErr != nil {
 				return nil, prepareErr
@@ -780,7 +780,7 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 			return nil, err
 		}
 		prepareStarted := time.Now()
-		preparedAsset, deltaRecords, nextIdentity, err := prepareColumnVectorGraphRebuildManifestForPublicationTimed(baseMeta.Name, cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, nil, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), timing)
+		preparedAsset, deltaRecords, nextIdentity, err := prepareColumnVectorGraphRebuildManifestForPublicationTimed(baseMeta.Name, cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, nil, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), timing, nil)
 		if timing != nil {
 			timing.AssetPreparation = collectionObservedElapsedSince(prepareStarted)
 		}
@@ -1621,22 +1621,23 @@ func prepareColumnVectorGraphRebuildManifestWithStableResources(collection strin
 }
 
 func prepareColumnVectorGraphRebuildManifestForPublication(collection string, cfg ColumnStoreConfig, activeVectorIndexes []VectorIndexDefinition, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, appliedCommandLSN uint64, rows []columnVectorGraphAssetRow, assetRootDir string, registry *rootpublication.IdentityPinRegistry) (columnVectorGraphPreparedPhysicalAsset, []columnManifestRecord, ColumnManifestIdentity, error) {
-	return prepareColumnVectorGraphRebuildManifestForPublicationTimed(collection, cfg, activeVectorIndexes, def, manifest, records, appliedCommandLSN, rows, assetRootDir, registry, nil)
+	return prepareColumnVectorGraphRebuildManifestForPublicationTimed(collection, cfg, activeVectorIndexes, def, manifest, records, appliedCommandLSN, rows, assetRootDir, registry, nil, nil)
 }
 
-func prepareColumnVectorGraphRebuildManifestForPublicationTimed(collection string, cfg ColumnStoreConfig, activeVectorIndexes []VectorIndexDefinition, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, appliedCommandLSN uint64, rows []columnVectorGraphAssetRow, assetRootDir string, registry *rootpublication.IdentityPinRegistry, timing *ColumnGraphBuildTiming) (columnVectorGraphPreparedPhysicalAsset, []columnManifestRecord, ColumnManifestIdentity, error) {
-	return prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource(collection, cfg, activeVectorIndexes, def, manifest, records, appliedCommandLSN, rows, assetRootDir, registry, nil, timing)
+func prepareColumnVectorGraphRebuildManifestForPublicationTimed(collection string, cfg ColumnStoreConfig, activeVectorIndexes []VectorIndexDefinition, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, appliedCommandLSN uint64, rows []columnVectorGraphAssetRow, assetRootDir string, registry *rootpublication.IdentityPinRegistry, timing *ColumnGraphBuildTiming, admission *typedGraphFoldAssetAdmission) (columnVectorGraphPreparedPhysicalAsset, []columnManifestRecord, ColumnManifestIdentity, error) {
+	return prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource(collection, cfg, activeVectorIndexes, def, manifest, records, appliedCommandLSN, rows, assetRootDir, registry, nil, timing, admission)
 }
 
 // prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource
 // keeps a rebuild-local typed source alive while rows are consumed, then closes
 // it after pack emission and before the pack validation mapping is acquired.
-func prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource(collection string, cfg ColumnStoreConfig, activeVectorIndexes []VectorIndexDefinition, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, appliedCommandLSN uint64, rows []columnVectorGraphAssetRow, assetRootDir string, registry *rootpublication.IdentityPinRegistry, typedSource *columnVectorGraphTypedColumnVectorSource, timing *ColumnGraphBuildTiming) (columnVectorGraphPreparedPhysicalAsset, []columnManifestRecord, ColumnManifestIdentity, error) {
+func prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource(collection string, cfg ColumnStoreConfig, activeVectorIndexes []VectorIndexDefinition, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, appliedCommandLSN uint64, rows []columnVectorGraphAssetRow, assetRootDir string, registry *rootpublication.IdentityPinRegistry, typedSource *columnVectorGraphTypedColumnVectorSource, timing *ColumnGraphBuildTiming, admission *typedGraphFoldAssetAdmission) (columnVectorGraphPreparedPhysicalAsset, []columnManifestRecord, ColumnManifestIdentity, error) {
 	if ordinaryColumnStableAuthorityEnabled() {
 		authority, err := newColumnVectorGraphStableResourceAccumulator(registry)
 		if err != nil {
 			return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 		}
+		authority.candidateAdmission = admission
 		prepared, nextRecords, identity, err := prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection, cfg, activeVectorIndexes, def, manifest, records, appliedCommandLSN, rows, assetRootDir, authority, typedSource, timing)
 		if err != nil {
 			authority.abandon()
@@ -1644,6 +1645,9 @@ func prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource(c
 			return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 		}
 		return prepared, nextRecords, identity, nil
+	}
+	if admission != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, ErrHybridSearchUnsupported
 	}
 	return prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection, cfg, activeVectorIndexes, def, manifest, records, appliedCommandLSN, rows, assetRootDir, nil, typedSource, timing)
 }

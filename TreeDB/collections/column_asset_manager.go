@@ -835,6 +835,7 @@ func advanceColumnAssetSegmentFileIDCache(cleanSegmentDir string, cache *columnA
 }
 
 type columnPhysicalAssetSegmentAppender struct {
+	candidateAdmission         *typedGraphFoldAssetAdmission
 	cfg                        ColumnStoreConfig
 	namespace                  columnAssetManagerNamespace
 	fileID                     uint32
@@ -1051,6 +1052,7 @@ func (s columnPhysicalAssetSegmentCloseStatBucket) CleanupDuration() time.Durati
 }
 
 type columnPhysicalAssetAppendSession struct {
+	candidateAdmission     *typedGraphFoldAssetAdmission
 	rootDir                string
 	cfg                    ColumnStoreConfig
 	active                 *columnPhysicalAssetSegmentAppender
@@ -1098,6 +1100,9 @@ func (s *columnPhysicalAssetAppendSession) appender(fileID uint32) (*columnPhysi
 	}
 	var appender *columnPhysicalAssetSegmentAppender
 	var err error
+	if err := s.candidateAdmission.charge(0, 1); err != nil {
+		return nil, err
+	}
 	if s.stableRegistry != nil {
 		appender, err = newColumnPhysicalAssetSegmentAppendWriterWithStableResources(s.rootDir, s.cfg, fileID, s.stableRegistry)
 	} else {
@@ -1107,6 +1112,7 @@ func (s *columnPhysicalAssetAppendSession) appender(fileID uint32) (*columnPhysi
 		return nil, err
 	}
 	appender.stableRecoveryRetainer = s.stableRecoveryRetainer
+	appender.candidateAdmission = s.candidateAdmission
 	s.active = appender
 	s.activeFile = fileID
 	return appender, nil
@@ -1560,6 +1566,12 @@ func (a *columnPhysicalAssetSegmentAppender) appendKindWithAlignment(payload []b
 		}
 	}
 	padding := columnAssetSegmentPrefixPadding(a.offset, alignment)
+	if int64(len(payload)) > int64(1<<63-1)-int64(padding) {
+		return ColumnAssetRef{}, errors.New("collections: asset length overflow")
+	}
+	if err := a.candidateAdmission.charge(int64(padding)+int64(len(payload)), 0); err != nil {
+		return ColumnAssetRef{}, err
+	}
 	if padding > 0 {
 		written, err := writeColumnAssetSegmentZeroPadding(a.file, padding)
 		a.offset += int64(written)
@@ -1632,7 +1644,14 @@ func (a *columnPhysicalAssetSegmentAppender) appendKindWithReservedPayload(lengt
 			return ColumnAssetRef{}, err
 		}
 	}
-	if padding := columnAssetSegmentPrefixPadding(a.offset, alignment); padding > 0 {
+	padding := columnAssetSegmentPrefixPadding(a.offset, alignment)
+	if length > int64(1<<63-1)-int64(padding) {
+		return ColumnAssetRef{}, errors.New("collections: reserved asset length overflow")
+	}
+	if err := a.candidateAdmission.charge(int64(padding)+length, 0); err != nil {
+		return ColumnAssetRef{}, err
+	}
+	if padding > 0 {
 		n, err := writeColumnAssetSegmentZeroPadding(a.file, padding)
 		a.offset += int64(n)
 		if err != nil || n != padding {
@@ -1785,6 +1804,9 @@ func (a *columnPhysicalAssetSegmentAppender) appendKinds(items []columnPhysicalA
 		}
 		nextOffset += int64(len(item.payload))
 		totalLength += padding + len(item.payload)
+	}
+	if err := a.candidateAdmission.charge(int64(totalLength), 0); err != nil {
+		return nil, err
 	}
 	payload := make([]byte, 0, totalLength)
 	cursor := a.offset
