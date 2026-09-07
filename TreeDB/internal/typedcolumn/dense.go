@@ -256,13 +256,13 @@ func validateDensePayloadBytes(rawBytes int, rows int, elementsPerRow int, eleme
 	if err := validateGranuleDecodeRows(rows); err != nil {
 		return err
 	}
-	elements, err := checkedMulInt(rows, elementsPerRow, name+" elements")
+	elements, err := checkedMulInt(rows, elementsPerRow, "elements")
 	if err != nil {
-		return err
+		return fmt.Errorf("%s %w", name, err)
 	}
-	wantBytes, err := checkedMulInt(elements, elementBytes, name+" raw bytes")
+	wantBytes, err := checkedMulInt(elements, elementBytes, "raw bytes")
 	if err != nil {
-		return err
+		return fmt.Errorf("%s %w", name, err)
 	}
 	if rawBytes != wantBytes {
 		return fmt.Errorf("typedcolumn: %s raw bytes=%d want=%d", name, rawBytes, wantBytes)

@@ -507,7 +507,8 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/command_wal_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 9, occurrences: 11},
 	{path: "TreeDB/collections/column_physical_sortkey_pruning.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 7},
 	{path: "TreeDB/collections/column_physical_sortkey_pruning_1949_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
-	{path: "TreeDB/collections/typed_column_adapter.go", classification: typedStorageLegacyCompatibility, matchingLines: 97, occurrences: 99},
+	{path: "TreeDB/collections/typed_column_adapter.go", classification: typedStorageLegacyCompatibility, matchingLines: 99, occurrences: 101},
+	{path: "TreeDB/collections/typed_column_point_reconstruction_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	// #4618 reuses the existing configuration, producer and compaction APIs.
 	{path: "TreeDB/collections/typed_graph_fold_admission_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/typed_graph_control_encoded.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},

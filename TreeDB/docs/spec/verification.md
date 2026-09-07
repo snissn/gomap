@@ -2,6 +2,15 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+Point FP32 reconstruction: `TestTypedColumnPointFetchDoesNotExpandFP32Part`
+checks four public results against 128/1024-row parts without whole-column FP32
+union expansion. `TestTypedColumnPointFP32OwnershipAndBounds` checks constant
+requested-row decoder allocations, owned results, overwritten source bytes, and
+invalid row/payload/locator rejection. `TestTypedColumnPointReadAtRetainsVectorsAcrossGenerations`
+forces real read-at scratch reuse across base/replacement generations and checks
+deletion. Descriptor/primary-ID setup is still part-sized; these are not whole
+public-request constant-allocation claims.
+
 Explicit typed graph serving: `TestTypedGraphPublicSameOwnerServing` covers public
 ensure, typed mutation, same-owner filtered search/full fetch, fold, independent
 manager and normal reopen. `TestTypedGraphPublicServingPressureAndOptions` covers

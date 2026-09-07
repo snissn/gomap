@@ -62,6 +62,15 @@ between. Buffered IDs remain buffer-owned; plain `SearchVectorIndex` returns
 owned results. Indexed filtering/scoring stays typed; retained flexible payloads
 may be decoded when fetching final results.
 
+Point reconstruction of nonnullable raw FP32 columns decodes only requested
+vector rows, not an entire part into per-row union values. The existing per-view
+reconstruction entry retains validated raw descriptors: mapped bytes remain
+pinned by that view's read cache; read-at fallback owns just the retained raw
+vector blocks because its source scratch is reusable. Returned vectors/documents
+own their output. Primary-ID permutation and descriptor setup still scale with
+part rows, and other column types retain their existing reconstruction paths;
+this is not an O(top-k) claim for the entire public request.
+
 Use `FoldColumnGraphServing` explicitly when the suffix needs folding and
 `RenewColumnGraphServing` for an admitted maintenance/work epoch. Configured
 `RebuildVectorIndex` follows the fold route. Use `errors.Is` with
