@@ -1,6 +1,13 @@
 package collections
 
-import backenddb "github.com/snissn/gomap/TreeDB/db"
+import (
+	"sync/atomic"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+)
+
+// Test-only observation before shared vector mutation admission.
+var typedSourceBeforeAdmissionTestHook atomic.Pointer[func(*Collection)]
 
 // ReplaceTypedSourceByID atomically deletes the explicit old ID set and inserts
 // a complete typed replacement. Insert wins for IDs in both sets; the return
@@ -30,6 +37,9 @@ func (c *Collection) replaceTypedSourceByID(deleteIDs, insertIDs, retained [][]b
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
+	if hook := typedSourceBeforeAdmissionTestHook.Load(); hook != nil {
+		(*hook)(c)
+	}
 	unlockCoverage := c.lockVectorIndexCoverageMutation()
 	defer unlockCoverage()
 	if err := c.requireTypedBatchVectorAdmission(); err != nil {

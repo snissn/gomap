@@ -164,9 +164,22 @@ func TestTypedUpsertOverlappingBatches(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("first writer did not reach WAL boundary")
 	}
-	secondStarted := make(chan struct{})
-	go func() { close(secondStarted); write(other, "gamma", 3) }()
-	<-secondStarted
+	secondAdmission := make(chan struct{})
+	hook := func(c *Collection) {
+		if c == other {
+			close(secondAdmission)
+		}
+	}
+	if !typedSourceBeforeAdmissionTestHook.CompareAndSwap(nil, &hook) {
+		t.Fatal("typed source admission hook already installed")
+	}
+	defer typedSourceBeforeAdmissionTestHook.CompareAndSwap(&hook, nil)
+	go write(other, "gamma", 3)
+	select {
+	case <-secondAdmission:
+	case <-ctx.Done():
+		t.Fatal("second writer did not reach shared mutation admission")
+	}
 	unblock()
 	for range 2 {
 		select {
