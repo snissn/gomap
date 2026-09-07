@@ -8,7 +8,8 @@ import (
 )
 
 // This view borrows its two pins; current is the logical query authority and
-// base is solely an immutable accelerator. No collection route installs it.
+// base is solely an immutable accelerator. Explicit serving admission installs
+// this route without changing the current snapshot's logical authority.
 type typedGraphOverlaySearch struct {
 	base                         *VectorIndexSearcher
 	pack                         *columnHNSWSearchPackPreparedView
@@ -28,6 +29,10 @@ type typedGraphOverlaySearchStats struct {
 	BaseShadowed                 int
 	BaseResultIDs                int
 	PackMmapDirect, PackHeapCopy bool
+}
+
+func (v *typedGraphOverlaySearch) validOpen() bool {
+	return v != nil && v.base != nil && !v.base.closed && v.base.reader != nil && v.current != nil && v.current.validateOpen() == nil
 }
 
 func prepareTypedGraphOverlaySearch(base *VectorIndexSearcher, current *CollectionReadView, limits typedGraphOverlayLimits) (*typedGraphOverlaySearch, error) {
@@ -93,7 +98,7 @@ func (v *typedGraphOverlaySearch) search(query []float32, topK, efSearch, candid
 			}
 		}()
 	}
-	if v == nil || v.base == nil || v.base.closed || v.current == nil || v.current.closed || v.current.snapshot == nil || buffer == nil {
+	if !v.validOpen() || buffer == nil {
 		return nil, stats, ErrVectorIndexSnapshotMismatch
 	}
 	switch v.pack.fastStatus("") {

@@ -94,6 +94,31 @@ func TestGlobalPinSummaryAndStatsTrackActiveHandles(t *testing.T) {
 	}
 }
 
+func TestGlobalPinSummaryLimit(t *testing.T) {
+	mgr := NewManager()
+	for i := 0; i < 2; i++ {
+		h, err := mgr.AcquireBytes(testKey(), testScope(), SourceHeapCopy, []byte("0123456789abcdef"), AcquireOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer h.Release()
+	}
+	for _, limit := range []int{1, -1} {
+		if pins, err := GlobalPinSummaryWithLimit(limit); !errors.Is(err, ErrPinSummaryLimit) || len(pins) != 0 {
+			t.Fatalf("limit%d copied%d pins err=%v", limit, len(pins), err)
+		}
+	}
+	if allocs := testing.AllocsPerRun(20, func() { _, _ = GlobalPinSummaryWithLimit(1) }); allocs != 0 {
+		t.Fatalf("rejected summary allocated: %v", allocs)
+	}
+	want := len(GlobalPinSummary())
+	for _, limit := range []int{0, want, want + 1} {
+		if pins, err := GlobalPinSummaryWithLimit(limit); err != nil || len(pins) != want {
+			t.Fatalf("limit%d copied%d want%d err=%v", limit, len(pins), want, err)
+		}
+	}
+}
+
 func TestMappedResourceStatsSnapshotIsDeepCopy(t *testing.T) {
 	mgr := NewManager()
 	h, err := mgr.AcquireBytes(testKey(), testScope(), SourceHeapCopy, []byte("0123456789abcdef"), AcquireOptions{

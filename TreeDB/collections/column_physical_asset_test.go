@@ -2020,14 +2020,14 @@ func TestColumnAssetSegmentAllocationCacheStopsBeforeDirectViewReservedBandM1849
 	if cache.nextFileID != 0 {
 		t.Fatalf("advanced cached next_file_id=%d want exhausted before direct-view band", cache.nextFileID)
 	}
-	if _, err := nextColumnAssetSegmentFileIDCached(namespace, cleanSegmentDir, cache); err == nil {
-		t.Fatal("nextColumnAssetSegmentFileIDCached err=nil want exhausted before direct-view band")
+	if id, err := nextColumnAssetSegmentFileIDCached(namespace, cleanSegmentDir, cache); err != nil || id != columnAssetM12ASegmentFileID+1 {
+		t.Fatalf("exhausted hint must rescan without entering reserved band: id=%d err=%v", id, err)
 	}
 
 	cache.nextFileID = columnAssetDirectViewSegmentFileIDBase
 	cache.valid = true
-	if _, err := nextColumnAssetSegmentFileIDCached(namespace, cleanSegmentDir, cache); err == nil {
-		t.Fatal("nextColumnAssetSegmentFileIDCached accepted reserved direct-view file id")
+	if id, err := nextColumnAssetSegmentFileIDCached(namespace, cleanSegmentDir, cache); err != nil || id != columnAssetM12ASegmentFileID+1 {
+		t.Fatalf("reserved hint must rescan: id=%d err=%v", id, err)
 	}
 }
 

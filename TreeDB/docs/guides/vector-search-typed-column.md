@@ -11,15 +11,147 @@ changes.
 
 ## Recommended layout
 
-Current mutation boundary: the #4617 typed base-plus-suffix search consumer is
-internal and experimental. Public typed batch writes preserve their selected
-durability profile, but they do not automatically make an existing graph ready
-for mutable search. Ordinary stale-base search remains unavailable pending the
-M3 installation/fold lifecycle. The internal consumer reuses an immutable graph
+Use the supported typed schema and native batch APIs for indexed values. The
+producer keeps typed-row metadata beside its aligned FP32 image in a fresh
+batch/fold output, so obsolete or failed attempts can be reclaimed without
+leaving unknown prefixes in live files. Do not add a separate JSON-indexed or side-copy store to manage that
+lifecycle. Captured bases and active readers still retain their exact assets;
+generation placement does not itself enable public mutable graph serving.
+The existing manager rescans for reclaimed low-band IDs at high-water exhaustion;
+exclusive creation still protects occupied files. A fully occupied band fails
+closed. Bounded maintenance and backpressure remain necessary even when retained
+column bytes plateau; ID reuse is not a physical-capacity guarantee.
+Append metrics named `SharedSegmentAppend*` and `DirectViewSegmentAppend*`
+classify physical file-ID bands, not optimized-reader capability. Selected fresh
+files use the regular band and still carry aligned, directly readable FP32;
+a nonzero shared-band append count is not evidence of a JSON or copied reader.
+
+Current mutation boundary: explicit experimental public admission is available
+through `EnsureColumnGraphServing`; typed writes alone do not activate it.
+The selected consumer reuses an immutable graph
 and cold scalar plan, binds bounded current typed changes, and materializes only
 results from that current pin. Its explicitly labeled exact path covers complete
 eligible sets up to 4,096; larger supported sets use bounded ANN, with exhaustion
 reported as an error. See the [admission and ownership contract](../spec/typed-column-graph-search-admission.md).
+
+## Explicit mutable serving lifecycle
+
+Open native collection-root callers through the public TreeDB wrapper. Use
+`treedb.OptionsFor(treedb.ProfileCommandWALDurable, rootDir)` and
+`treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance`, as
+in `cmd/treedb-document-service/main.go`. This returns the backend root APIs with
+the cached leaf-log wiring, live statistics, and deferred-build maintenance
+control. `OpenBackendWithCachedLeafLog` is the simpler helper when those
+additional controls are not needed. Keep the returned cleanup function and
+original root directory: close request views and cached search resources, drain
+collection writes, then call cleanup; reopen the original root directory, not
+the backend's resolved `maindb` directory. Stop using live statistics before
+cleanup.
+
+Setting `backenddb.Options.ResolvedProfile` alone does **not** apply public
+profile tuning or cached-layer wiring. In particular, a raw command-WAL backend
+can produce native collection DATA-root leaf-log records while global leaf
+generation tracking/maintenance is disabled. Do not use that configuration as
+a substitute for the service profile in performance or storage qualification.
+Check the opened database's `treedb.leaf_generation.enabled` statistic, and
+report actual maintenance activity separately from enabled capability. The
+public open helper does not itself admit mutable graph serving or prove bounded
+steady-state storage.
+
+For the selected command-WAL durable schema, load typed batches and explicitly
+build the declared graph with `RebuildVectorIndex` before calling
+`EnsureColumnGraphServing(ctx, index, limits)`. Initial loading/building remains
+part of query-ready time and peak memory; it is not retroactively covered by
+ongoing-work admission. This route supports the selected string/FP32 schema,
+not every schema illustrated elsewhere in this guide.
+
+The complete selected lifecycle also requires mmap-direct prepared graph views
+and exact relative namespace authority for destructive asset maintenance.
+Windows currently provides neither capability: ordinary typed read-at fallback
+is still available, but is not evidence for this prepared serving lifecycle.
+Do not ignore admission or maintenance errors to claim the optimized route is
+ready. Unsupported destructive maintenance deletes nothing and does not renew
+the attempted-work allowance.
+
+An empty built graph can be ensured and searched (zero results), then receive
+typed inserts. Deleting all rows and folding back to an empty base is also
+supported, including reopen and re-ensure. Empty bases need no optional prepared
+search cache holder; admission, same-owner fetch lifetime, and positive limits
+still apply. See `TestTypedGraphPublicEmptyLifecycle`.
+
+Supply positive `ColumnGraphServingOptions` limits for publication, owners and
+cold discovery, candidate output, maintenance, filtering, fold rows, and search
+candidates. Zero is not an automatic default. Size these from workload evidence;
+the runnable `TestTypedGraphPublicSameOwnerServing` fixture shows all limit
+groups and the full lifecycle. Configuration is process-local, shared across
+collection handles, and immutable until DB close. Reapply the same explicit
+policy after reopen. A failed setup can leave that policy selected with writes
+and queries fenced; fix the cause and retry setup, not a different fallback.
+
+Search with explicit `QueryMode: VectorIndexQueryModeExact` and
+`StatsMode: VectorIndexSearchStatsModeMinimal` (or production stats). The selected
+route rejects quantized modes and unsupported controls rather than ignoring
+them. For full documents use `SearchVectorIndexWithBufferReadView`, fetch from
+the **returned view**, and close it after fetching. Do not open a fresh view
+between search and fetch: publication can change the current collection in
+between. Buffered IDs remain buffer-owned; plain `SearchVectorIndex` returns
+owned results. Indexed filtering/scoring stays typed; retained flexible payloads
+may be decoded when fetching final results.
+
+Point reconstruction of nonnullable raw FP32 columns decodes only requested
+vector rows, not an entire part into per-row union values. The existing per-view
+reconstruction entry retains validated raw descriptors: mapped bytes remain
+pinned by that view's read cache; read-at fallback owns just the retained raw
+vector blocks because its source scratch is reusable. Returned vectors/documents
+own their output. Primary-ID permutation and descriptor setup still scale with
+part rows, and other column types retain their existing reconstruction paths;
+this is not an O(top-k) claim for the entire public request.
+
+Use `FoldColumnGraphServing` explicitly when the suffix needs folding and
+`RenewColumnGraphServing` for an admitted maintenance/work epoch. Configured
+`RebuildVectorIndex` follows the fold route. Use `errors.Is` with
+`ErrColumnGraphFoldNeeded`, `ErrColumnGraphOwnerBudget`, and
+`ErrColumnGraphSearchBudget` to distinguish maintenance, caller-held reader
+pressure, and query work. Releasing readers is not interchangeable with folding.
+Successful fold publication installs the ready immutable typed state within the
+existing publication exclusion. Checkpointing and bounded epoch maintenance stay
+outside that exclusion; healthy requests are not rejected merely because those
+steps remain in progress. They may wait for existing admission locks. Actual
+ambiguous publication failures remain fenced and require explicit recovery;
+queries never reconcile or silently search stale authority.
+An overlapping setup may return `ErrConcurrentMutation`; its exact rejected
+captured-base keeper is released without closing newer cache entries or held
+read views. Explicit setup retry is a caller lifecycle decision, not a query
+fallback.
+
+Final prepared-cache warming in Ensure and Fold honors the caller context while
+waiting for the storage barrier or another cache builder. Canceling a waiter
+does not cancel or invalidate another caller's builder. Cancellation is not a
+rollback of earlier successful publication or maintenance work.
+Cold manifest-budget preflights also retain that context and check it every
+256 records and at scan completion. This does not promise preemption inside
+every subsequent synchronous decoder operation.
+Ordinary `WarmVectorIndexPreparedSearch` and buffered prepared searches likewise
+honor `VectorIndexSearchOptions.Context` while their exact or quantized builder
+waits for the storage barrier; canceling that wait leaves no installed cache entry.
+
+Renewal may reject a stale recovery-root plan when concurrent database
+publication changes its authority. An explicit subsequent full renewal obtains
+a fresh plan; keep this bounded by the caller's maintenance deadline and count
+the rejection. Never retry an ambiguous write on that basis. See the
+[maintenance error contract](../spec/typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission).
+
+This is an experimental API checkpoint, not completed minima qualification.
+Public request allocations still grow with corpus size. Ensure-enabled
+insert/replace/delete/reinsert acknowledgements now have subprocess-exit replay
+coverage through ordinary open, re-ensure, filtered/unfiltered search and full
+fetch. A forced post-capture stale setup test covers exact keeper release and
+held-owner readability. These are process-death tests, not power-loss or full
+fold-cutover qualification. Deterministic post-publication read/write and blocked-
+seal replay tests cover the cutover boundary; scaled foreground latency and
+end-to-end qualification still require measured gates. See the
+[operational contract](../spec/typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission)
+and `BenchmarkTypedGraphPublicServing` for the current measured boundary.
 
 | Data | Recommended owner | Why |
 | --- | --- | --- |
@@ -458,6 +590,18 @@ go tool pprof -top -alloc_space -nodecount=40 "$OUT/mem.pprof" > "$OUT/alloc_spa
 ```
 
 ## Search/fetch timing boundary
+
+Selected admitted graph owners reuse the existing prepared-reader identity key
+from immutable base metadata. It is constructed at setup/fold, charged as
+retained metadata, and rebuilt for a new base or reopen. This does not replace
+snapshot validation or extend the lifetime of a caller's read view. Ordinary
+and quantized prepared-reader paths retain their existing key construction.
+
+Typed point reconstruction validates the complete primary-ID sequence. Identity
+row order uses an implicit locator instead of a per-row reverse map; physically
+permuted parts retain the validated reverse-map path. This does not eliminate
+primary-column decoding or other part setup, and is not a claim that full fetch
+allocation is independent of part size.
 
 Recommended service/query flow:
 

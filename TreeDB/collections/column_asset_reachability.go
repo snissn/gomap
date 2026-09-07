@@ -3,6 +3,7 @@ package collections
 import (
 	"context"
 	"errors"
+	"io"
 	"math"
 	"math/bits"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 // ColumnAssetReachabilityOptions controls protect-only reachability planning.
@@ -23,6 +25,16 @@ import (
 type ColumnAssetReachabilityOptions struct {
 	Detailed       bool
 	SegmentDetails bool
+	// MaxSegmentEntries bounds directory entries retained during discovery.
+	// Zero preserves unbounded reporting. This does not bound manifest decoding.
+	MaxSegmentEntries int
+	// MaxManifestRecords and MaxManifestBytes bound encoded manifest input on
+	// the planning snapshot before decoding. Set both positive, or both zero.
+	MaxManifestRecords int
+	MaxManifestBytes   int64
+	// MaxLifecycleEntries caps lifecycle snapshot records plus refs/segments,
+	// expanded input refs, and process-wide mapped pin copies. Zero is unlimited.
+	MaxLifecycleEntries int
 	// ProtectCandidateRefsForOlderSnapshots conservatively treats candidate
 	// refs as pinned while any active TreeDB snapshot predates the planning
 	// snapshot. Destructive GC enables this; non-destructive rewrite leaves it
@@ -37,6 +49,15 @@ type ColumnAssetReachabilityOptions struct {
 	PinnedRefs                            []ColumnAssetRef
 	releaseVectorPartitionReclaimIDs      map[string]struct{}
 }
+
+// ErrColumnAssetReachabilitySegmentLimit reports an invalid or exceeded discovery limit.
+var ErrColumnAssetReachabilitySegmentLimit = errors.New("collections: column asset segment entry budget exceeded or invalid")
+
+// ErrColumnAssetReachabilityManifestLimit reports invalid or exceeded manifest input limits.
+var ErrColumnAssetReachabilityManifestLimit = errors.New("collections: column asset manifest input budget exceeded or invalid")
+
+// ErrColumnAssetReachabilityLifecycleLimit reports a lifecycle copy limit failure.
+var ErrColumnAssetReachabilityLifecycleLimit = errors.New("collections: column asset lifecycle copy limit exceeded or invalid")
 
 type columnAssetReachabilityOptionsInternal struct {
 	ColumnAssetReachabilityOptions
@@ -297,8 +318,11 @@ const columnAssetReachabilityContextCheckInterval = 256
 // plan for the collection's isolated column asset namespace. It never deletes,
 // rewrites, or remaps assets; uncertain or untracked bytes are retained.
 func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts ColumnAssetReachabilityOptions) (ColumnAssetReachabilityPlan, error) {
+	if err := opts.validateDiscoveryLimits(); err != nil {
+		return ColumnAssetReachabilityPlan{ProtectOnly: true}, err
+	}
 	var err error
-	opts, err = c.columnAssetLifecycleAugmentReachabilityOptions(opts)
+	opts, err = c.columnAssetLifecycleAugmentReachabilityOptionsWithContext(ctx, opts)
 	if err != nil {
 		return ColumnAssetReachabilityPlan{ProtectOnly: true}, err
 	}
@@ -308,14 +332,30 @@ func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts Colum
 	return plan, err
 }
 
+func (opts ColumnAssetReachabilityOptions) validateDiscoveryLimits() error {
+	if opts.MaxLifecycleEntries < 0 {
+		return ErrColumnAssetReachabilityLifecycleLimit
+	}
+	if opts.MaxSegmentEntries < 0 {
+		return ErrColumnAssetReachabilitySegmentLimit
+	}
+	if opts.MaxManifestRecords < 0 || opts.MaxManifestBytes < 0 || (opts.MaxManifestRecords == 0) != (opts.MaxManifestBytes == 0) {
+		return ErrColumnAssetReachabilityManifestLimit
+	}
+	return nil
+}
+
 func (c *Collection) planColumnAssetReachability(ctx context.Context, opts columnAssetReachabilityOptionsInternal) (ColumnAssetReachabilityPlan, map[ColumnAssetRef]columnAssetReachabilitySourceMask, error) {
+	if err := opts.validateDiscoveryLimits(); err != nil {
+		return ColumnAssetReachabilityPlan{ProtectOnly: true}, nil, err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return ColumnAssetReachabilityPlan{ProtectOnly: true}, nil, err
 	}
-	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithContext(ctx)
+	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithContextAndSidecarsAndBudget(ctx, columnManifestScanAllSidecars(), opts.MaxManifestRecords, opts.MaxManifestBytes)
 	if closeView != nil {
 		defer closeView()
 	}
@@ -442,7 +482,10 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 	if err := input.addQuarantineSegments(ctx, opts.QuarantineSegments); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
-	activePinnedRefs, mappedResourceStats := columnAssetReachabilityMappedResourcePins(input.rootDir, input.namespace)
+	activePinnedRefs, mappedResourceStats, err := columnAssetReachabilityMappedResourcePinsWithLimit(input.rootDir, input.namespace, opts.MaxLifecycleEntries)
+	if err != nil {
+		return columnAssetReachabilityPlanIdentity(input), input.refs, err
+	}
 	input.mappedResources = mappedResourceStats
 	if mappedResourceStats.UnconvertiblePins != 0 {
 		input.pinStateIncomplete = true
@@ -470,23 +513,24 @@ func (c *Collection) columnAssetReachabilityOlderSnapshotPinned(planCommitSeq ui
 func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapshotView, opts columnAssetReachabilityOptionsInternal) columnAssetReachabilityInput {
 	expectedRefs := len(view.AssetRefs) + len(view.TypedColumnPartRefs) + len(view.AggregateMetadata) + len(view.DictionaryCodes) + len(view.Int64Values) + len(view.GraphAssetRefs) + len(opts.CandidateRefs) + len(opts.PendingRefs) + len(opts.PreparedRefs) + len(opts.PreparedQueryRefs) + len(opts.QuarantineRefs) + len(opts.PinnedRefs)
 	input := columnAssetReachabilityInput{
-		rootDir:          view.ColumnAssetRootDir,
-		collection:       view.CollectionName,
-		namespace:        view.AssetNamespace,
-		manifestRootName: view.Diagnostics.ManifestRootName,
-		manifestRootID:   view.Diagnostics.ManifestRoot,
-		systemRoot:       view.SystemRoot,
-		planCommitSeq:    view.CommitSeq,
-		activeGen:        view.Diagnostics.ManifestGeneration,
-		activeChecksum:   view.Diagnostics.ActiveManifestChecksum,
-		recoveryGen:      view.Diagnostics.RecoveryManifestGeneration,
-		recoveryChecksum: view.Diagnostics.RecoveryManifestChecksum,
-		manifestRecs:     view.Diagnostics.ManifestRecords,
-		manifestBytes:    view.ManifestCatalogBytes,
-		detailed:         opts.Detailed,
-		segmentDetails:   opts.Detailed || opts.SegmentDetails,
-		omitSources:      opts.omitDetailedEntrySources,
-		omitSort:         opts.omitDetailedEntrySort,
+		rootDir:           view.ColumnAssetRootDir,
+		collection:        view.CollectionName,
+		namespace:         view.AssetNamespace,
+		manifestRootName:  view.Diagnostics.ManifestRootName,
+		manifestRootID:    view.Diagnostics.ManifestRoot,
+		systemRoot:        view.SystemRoot,
+		planCommitSeq:     view.CommitSeq,
+		activeGen:         view.Diagnostics.ManifestGeneration,
+		activeChecksum:    view.Diagnostics.ActiveManifestChecksum,
+		recoveryGen:       view.Diagnostics.RecoveryManifestGeneration,
+		recoveryChecksum:  view.Diagnostics.RecoveryManifestChecksum,
+		manifestRecs:      view.Diagnostics.ManifestRecords,
+		manifestBytes:     view.ManifestCatalogBytes,
+		detailed:          opts.Detailed,
+		segmentDetails:    opts.Detailed || opts.SegmentDetails,
+		maxSegmentEntries: opts.MaxSegmentEntries,
+		omitSources:       opts.omitDetailedEntrySources,
+		omitSort:          opts.omitDetailedEntrySort,
 	}
 	if expectedRefs > 0 {
 		input.refs = make(map[ColumnAssetRef]columnAssetReachabilitySourceMask, expectedRefs)
@@ -495,14 +539,22 @@ func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapsho
 }
 
 func columnAssetReachabilityMappedResourcePins(rootDir, namespace string) ([]ColumnAssetRef, ColumnAssetReachabilityMappedResourceStats) {
+	refs, stats, _ := columnAssetReachabilityMappedResourcePinsWithLimit(rootDir, namespace, 0)
+	return refs, stats
+}
+
+func columnAssetReachabilityMappedResourcePinsWithLimit(rootDir, namespace string, maxPins int) ([]ColumnAssetRef, ColumnAssetReachabilityMappedResourceStats, error) {
 	globalStats := mappedresource.GlobalStats()
 	stats := ColumnAssetReachabilityMappedResourceStats{
 		DeniedResources: sumMappedResourceDenied(globalStats.DeniedByReason),
 		FallbackReads:   globalStats.FallbackReads,
 	}
-	pins := mappedresource.GlobalPinSummary()
+	pins, err := mappedresource.GlobalPinSummaryWithLimit(maxPins)
+	if err != nil {
+		return nil, stats, errors.Join(ErrColumnAssetReachabilityLifecycleLimit, err)
+	}
 	if len(pins) == 0 {
-		return nil, stats
+		return nil, stats, nil
 	}
 	refs := make([]ColumnAssetRef, 0, len(pins))
 	for _, pin := range pins {
@@ -521,6 +573,9 @@ func columnAssetReachabilityMappedResourcePins(rootDir, namespace string) ([]Col
 		}
 		ref, ok := columnAssetRefForMappedResourceKey(pin.Key)
 		if !ok {
+			ref, ok = columnAssetRefForEmptyGraphValuesPin(pin, pins)
+		}
+		if !ok {
 			stats.UnconvertiblePins++
 			continue
 		}
@@ -531,7 +586,41 @@ func columnAssetReachabilityMappedResourcePins(rootDir, namespace string) ([]Col
 		refs = append(refs, ref)
 		stats.PinnedRefs++
 	}
-	return refs, stats
+	return refs, stats, nil
+}
+
+// A certified empty graph adjacency/document-ID values section owns no bytes. Its positive offsets
+// handle still protects the physical segment. Return that actual extent, never
+// fabricate a positive extent for the empty section or ignore arbitrary pins.
+func columnAssetRefForEmptyGraphValuesPin(pin mappedresource.Pin, pins []mappedresource.Pin) (ColumnAssetRef, bool) {
+	k := pin.Key
+	known := (pin.Scope.ID == columnVectorGraphAdjacencyStateSourceScopeID && k.Encoding == typedcolumn.EncodingRawUint32OffsetsList.String() && k.Section.Column == "adjacency") ||
+		(pin.Scope.ID == columnVectorGraphDocumentIDStateScopeID && k.Encoding == typedcolumn.EncodingRawBytesOffsets.String() && k.Section.Column == columnVectorGraphDocumentIDStateColumnName)
+	if k.Validate() != nil || k.Class != mappedresource.ClassTypedColumnAsset || k.Kind != string(ColumnAssetKindTCS1TypedColumnPart) ||
+		k.Length != 0 || k.Checksum != 0 || pin.Bytes != 0 ||
+		(pin.Source != mappedresource.SourceMapped && pin.Source != mappedresource.SourceHeapCopy) ||
+		!known || k.Section.Kind != string(typedcolumn.ColumnPartImageSectionColumnValues) ||
+		k.Section.Name != "values" || k.Section.Category != string(typedcolumn.ColumnPartImageCategoryDeclaredColumnValues) ||
+		pin.Root == "" || pin.Path == "" {
+		return ColumnAssetRef{}, false
+	}
+	// ponytail: cold O(empty sections * active pins); no second pin index.
+	for _, parent := range pins {
+		p := parent.Key
+		if parent.Root != pin.Root || parent.Path != pin.Path || parent.Scope != pin.Scope ||
+			(parent.Source != mappedresource.SourceMapped && parent.Source != mappedresource.SourceHeapCopy) || parent.Bytes != p.Length ||
+			p.Class != k.Class || p.Namespace != k.Namespace || p.Kind != k.Kind || p.Generation != k.Generation ||
+			p.PartID != k.PartID || p.FileID != k.FileID || p.Version != k.Version || p.Encoding != k.Encoding ||
+			p.Section.Kind != string(typedcolumn.ColumnPartImageSectionColumnOffsets) || p.Section.Name != "offsets" || p.Section.Category != string(typedcolumn.ColumnPartImageCategoryDeclaredColumnOffsets) ||
+			p.Section.Column != k.Section.Column || p.Section.Ordinal != k.Section.Ordinal ||
+			p.Length < 8 || p.Length%8 != 0 || p.Validate() != nil || p.Offset+p.Length > k.Offset {
+			continue
+		}
+		if ref, ok := columnAssetRefForMappedResourceKey(p); ok {
+			return ref, true
+		}
+	}
+	return ColumnAssetRef{}, false
 }
 
 func columnAssetMappedResourcePinMatchesNamespace(pin mappedresource.Pin, namespace string) bool {
@@ -623,6 +712,7 @@ func sumMappedResourceDenied(in map[mappedresource.DenyReason]uint64) uint64 {
 }
 
 type columnAssetReachabilityInput struct {
+	maxSegmentEntries  int
 	rootDir            string
 	collection         string
 	namespace          string
@@ -710,7 +800,7 @@ func (in *columnAssetReachabilityInput) addQuarantineSegments(ctx context.Contex
 		if in.quarantineSegments == nil {
 			in.quarantineSegments = make(map[uint32]int64)
 		}
-		if bytes > in.quarantineSegments[normalized.FileID] {
+		if previous, present := in.quarantineSegments[normalized.FileID]; !present || bytes > previous {
 			in.quarantineSegments[normalized.FileID] = bytes
 		}
 		in.sourceCounts.QuarantineSegmentRecords++
@@ -777,7 +867,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		plan.Complete = false
 		return plan, err
 	}
-	segments, err := listColumnAssetReachabilitySegments(ctx, namespace.SegmentDir)
+	segments, err := listColumnAssetReachabilitySegmentsWithLimit(ctx, namespace.SegmentDir, input.maxSegmentEntries)
 	if err != nil {
 		plan.Complete = false
 		return plan, err
@@ -926,6 +1016,9 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		plan.Segments.Total++
 		plan.Segments.BytesTotal = addColumnAssetReachabilityBytes(plan.Segments.BytesTotal, segment.bytes)
 		segmentPlan := classifyColumnAssetReachabilitySegmentSet(segment, rangeSet)
+		if _, quarantined := input.quarantineSegments[segment.fileID]; quarantined && segment.bytes == 0 && segmentPlan.status == ColumnAssetReachabilitySegmentReclaimable {
+			segmentPlan.status = ColumnAssetReachabilitySegmentProtected
+		}
 		if segmentPlan.outOfBoundsRefs != 0 {
 			plan.Segments.OutOfBoundsRefs += segmentPlan.outOfBoundsRefs
 			plan.Complete = false
@@ -1092,7 +1185,12 @@ type columnAssetReachabilitySegmentPlan struct {
 }
 
 func classifyColumnAssetReachabilitySegment(segment columnAssetReachabilitySegment, ranges []columnAssetReachabilityRange) columnAssetReachabilitySegmentPlan {
-	if len(ranges) == 0 && segment.fileID != 0 && segment.bytes > 0 {
+	// A canonical no-ref empty file can be left by a denied/crashed creator.
+	// Empty entries require the exact regular-file identity captured by discovery;
+	// canonical-named directories/symlinks and legacy unknown identities stay unknown.
+	// Destructive GC still checks construction pins, roots and that same identity.
+	if len(ranges) == 0 && segment.fileID != 0 && (segment.bytes > 0 ||
+		(segment.bytes == 0 && rootpublication.SamePhysicalIdentity(segment.childIdentity, segment.childIdentity))) {
 		return columnAssetReachabilitySegmentPlan{
 			status:           ColumnAssetReachabilitySegmentReclaimable,
 			reclaimableBytes: segment.bytes,
@@ -1309,8 +1407,15 @@ func columnAssetReachabilitySourceMaskCount(mask columnAssetReachabilitySourceMa
 }
 
 func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string) (_ []columnAssetReachabilitySegment, retErr error) {
+	return listColumnAssetReachabilitySegmentsWithLimit(ctx, segmentDir, 0)
+}
+
+func listColumnAssetReachabilitySegmentsWithLimit(ctx context.Context, segmentDir string, maxEntries int) (_ []columnAssetReachabilitySegment, retErr error) {
+	if maxEntries < 0 {
+		return nil, ErrColumnAssetReachabilitySegmentLimit
+	}
 	if !rootpublication.StableRelativeNamespaceSupported() {
-		return listColumnAssetReachabilitySegmentsLegacy(ctx, segmentDir)
+		return listColumnAssetReachabilitySegmentsLegacy(ctx, segmentDir, maxEntries)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -1330,7 +1435,7 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 	if err != nil {
 		return nil, err
 	}
-	infos, readErr := dir.Readdir(-1)
+	infos, readErr := readColumnAssetReachabilityDirectory(ctx, dir, maxEntries)
 	if readErr != nil {
 		return nil, readErr
 	}
@@ -1408,7 +1513,7 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 // reporting available where exact relative namespace primitives do not exist.
 // It deliberately returns no stable identities and therefore cannot authorize
 // destructive GC.
-func listColumnAssetReachabilitySegmentsLegacy(ctx context.Context, segmentDir string) ([]columnAssetReachabilitySegment, error) {
+func listColumnAssetReachabilitySegmentsLegacy(ctx context.Context, segmentDir string, maxEntries int) ([]columnAssetReachabilitySegment, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1422,7 +1527,7 @@ func listColumnAssetReachabilitySegmentsLegacy(ctx context.Context, segmentDir s
 		}
 		return nil, err
 	}
-	infos, readErr := dir.Readdir(-1)
+	infos, readErr := readColumnAssetReachabilityDirectory(ctx, dir, maxEntries)
 	closeErr := dir.Close()
 	if err := errors.Join(readErr, closeErr); err != nil {
 		return nil, err
@@ -1467,6 +1572,39 @@ func listColumnAssetReachabilitySegmentsLegacy(ctx context.Context, segmentDir s
 		return strings.Compare(a.name, b.name)
 	})
 	return segments, ctx.Err()
+}
+
+// Read at most one extra entry to detect overflow before retaining an
+// unbounded listing. Count every entry, including unknown names and empty files.
+func readColumnAssetReachabilityDirectory(ctx context.Context, dir *os.File, maxEntries int) ([]os.FileInfo, error) {
+	if maxEntries < 0 {
+		return nil, ErrColumnAssetReachabilitySegmentLimit
+	}
+	if maxEntries == 0 {
+		return dir.Readdir(-1)
+	}
+	var infos []os.FileInfo
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		remaining := maxEntries - len(infos)
+		batch := columnAssetReachabilityContextCheckInterval
+		if remaining < batch {
+			batch = remaining + 1
+		}
+		next, err := dir.Readdir(batch)
+		if len(next) > remaining {
+			return nil, ErrColumnAssetReachabilitySegmentLimit
+		}
+		infos = append(infos, next...)
+		if errors.Is(err, io.EOF) {
+			return infos, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 }
 
 func columnAssetReachabilitySegmentPath(segmentDir, name string) string {

@@ -26,6 +26,12 @@ type columnVectorGraphPhysicalRowReaderOptions struct {
 	// detachCatalog copies immutable catalog metadata for readers returned after
 	// their assembly snapshot closes.
 	detachCatalog bool
+	// ownerPin is requested only by a top-level owner under the storage barrier.
+	// That owner closes the lease on all failure paths and after lazy consumers.
+	ownerPin **ColumnAssetLifecyclePinSet
+	// admitSources runs once before mapping/acquisition, with the validated
+	// shared-key length (zero for a nonshared source). It owns no snapshot.
+	admitSources func(sharedKeyBytes int) error
 }
 
 const (
@@ -106,14 +112,47 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReader(name string, opts co
 // the caller-owned snapshot unless opts.detachCatalog requests an owned catalog
 // copy for readers returned after snapshot close.
 func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name string, snap *backenddb.Snapshot, opts columnVectorGraphPhysicalRowReaderOptions) (*columnVectorGraphPhysicalRowReader, error) {
-	def, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(name, snap)
+	def, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshotWithOwner(name, snap, opts.ownerPin)
 	if err != nil {
 		return nil, err
 	}
+	return c.openColumnVectorGraphPhysicalRowReaderFromView(snap, def, graph, view, opts)
+}
+
+// Both current-catalog and captured-base owners use the same validated source
+// assembly and shared prepared-reader lifetime. This function does not acquire
+// a storage barrier or own the caller's snapshot.
+func (c *Collection) openColumnVectorGraphPhysicalRowReaderFromView(snap *backenddb.Snapshot, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, view columnPhysicalScanSnapshotView, opts columnVectorGraphPhysicalRowReaderOptions) (*columnVectorGraphPhysicalRowReader, error) {
+	var key string
+	if columnVectorGraphSharedPreparedEligible(graph, view) {
+		var err error
+		key, err = columnVectorGraphSharedPreparedSearchCacheKey(view.Catalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return c.openColumnVectorGraphPhysicalRowReaderWithBoundKey(snap, def, graph, view, opts, key)
+}
+
+func columnVectorGraphSharedPreparedEligible(graph columnVectorGraphManifestSnapshot, view columnPhysicalScanSnapshotView) bool {
+	return !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 && view.Catalog != nil && view.VectorIndexStateFound && view.AssetNamespace != ""
+}
+
+// Only the ordinary validated view path and immutable serving metadata bind
+// keys here. The key is not a caller option or independent source authority.
+func (c *Collection) openColumnVectorGraphPhysicalRowReaderWithBoundKey(snap *backenddb.Snapshot, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, view columnPhysicalScanSnapshotView, opts columnVectorGraphPhysicalRowReaderOptions, key string) (*columnVectorGraphPhysicalRowReader, error) {
+	var err error
+	view.graphOwnerRecords = nil // setup parser ownership must not escape into reader caches
 	catalog := view.Catalog
 	if opts.detachCatalog && catalog != nil {
 		catalog = catalog.copy()
 		view.Catalog = catalog
+	}
+	sharedEligible := key != ""
+	if opts.admitSources != nil {
+		if err := opts.admitSources(len(key)); err != nil {
+			return nil, err
+		}
 	}
 	var reader *columnPhysicalRowReader
 	if columnVectorGraphManifestHasPhysicalAsset(graph) {
@@ -143,12 +182,7 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 		useResourceQuantizedAssets: opts.UseResourceQuantizedAssets,
 		skipQuantizedAssets:        opts.SkipQuantizedAssets,
 	}
-	if !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 && catalog != nil && view.VectorIndexStateFound && view.AssetNamespace != "" {
-		key, keyErr := columnVectorGraphSharedPreparedSearchCacheKey(catalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState)
-		if keyErr != nil {
-			_ = graphReader.Close()
-			return nil, keyErr
-		}
+	if sharedEligible {
 		shared, err := c.acquireColumnVectorGraphSharedPreparedSearch(key, func() (*columnVectorGraphSharedPreparedSearch, error) {
 			buildReader := &columnVectorGraphPhysicalRowReader{def: def, graph: graph, catalog: catalog, quantizedAssetStatus: make(map[string]columnVectorGraphQuantizedAssetLoadStatus), skipQuantizedAssets: true}
 			success := false
@@ -343,6 +377,10 @@ func (c *Collection) acquireColumnVectorGraphPhysicalRowReaderSnapshot() (*backe
 }
 
 func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(name string, snap *backenddb.Snapshot) (VectorIndexDefinition, columnVectorGraphManifestSnapshot, columnPhysicalScanSnapshotView, error) {
+	return c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshotWithOwner(name, snap, nil)
+}
+
+func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshotWithOwner(name string, snap *backenddb.Snapshot, owner **ColumnAssetLifecyclePinSet) (VectorIndexDefinition, columnVectorGraphManifestSnapshot, columnPhysicalScanSnapshotView, error) {
 	if c == nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, errCollectionNil
 	}
@@ -355,6 +393,20 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
+	}
+	return c.columnVectorGraphPhysicalRowReaderSnapshotViewAtCatalogWithOwner(name, snap, catalog, owner)
+}
+
+// The caller owns the snapshot. A captured base uses its explicitly loaded
+// catalog here, but passes the same manifest, graph and TVIS checks as the
+// ordinary current-catalog reader; it cannot substitute a current checksum.
+func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtCatalog(name string, snap *backenddb.Snapshot, catalog *collectionCatalog) (VectorIndexDefinition, columnVectorGraphManifestSnapshot, columnPhysicalScanSnapshotView, error) {
+	return c.columnVectorGraphPhysicalRowReaderSnapshotViewAtCatalogWithOwner(name, snap, catalog, nil)
+}
+
+func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtCatalogWithOwner(name string, snap *backenddb.Snapshot, catalog *collectionCatalog, owner **ColumnAssetLifecyclePinSet) (VectorIndexDefinition, columnVectorGraphManifestSnapshot, columnPhysicalScanSnapshotView, error) {
+	if c == nil || c.db == nil || snap == nil {
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, backenddb.ErrClosed
 	}
 	if catalog == nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, errCollectionNotFound
@@ -387,6 +439,21 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 	if err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
 	}
+	state, ok := snap.StateToken()
+	if !ok {
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, backenddb.ErrClosed
+	}
+	def, graph, view, err := c.columnVectorGraphPhysicalRowReaderViewFromRecords(def, catalog, records, owner)
+	view.CommitSeq = state.CommitSeq
+	return def, graph, view, err
+}
+
+// Decode the same validated producer records without manufacturing snapshot or
+// root authority. The snapshot wrapper above validates physical root identity;
+// fold binds its eventual installed catalog only after successful publication.
+func (c *Collection) columnVectorGraphPhysicalRowReaderViewFromRecords(def VectorIndexDefinition, catalog *collectionCatalog, records []columnManifestRecord, owner **ColumnAssetLifecyclePinSet) (VectorIndexDefinition, columnVectorGraphManifestSnapshot, columnPhysicalScanSnapshotView, error) {
+	cfg := catalog.meta.Options.ColumnStore
+	rootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
 	manifest, err := decodeColumnManifestSnapshotForScan(records)
 	if err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
@@ -441,10 +508,6 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 	graphCfg.ActiveManifest = cfg.ActiveManifest
 	graphCfg.RecoveryAuthoritativeManifest = cfg.RecoveryAuthoritativeManifest
 	graphCfg.RecoveryAuthoritativeAppliedCommandLSN = cfg.RecoveryAuthoritativeAppliedCommandLSN
-	state, ok := snap.StateToken()
-	if !ok {
-		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, backenddb.ErrClosed
-	}
 	assetRefs := make([]columnManifestAssetRefForScan, 0, 1)
 	if columnVectorGraphManifestHasPhysicalAsset(graph) {
 		assetRefs = append(assetRefs, columnManifestAssetRefForScan{
@@ -453,11 +516,11 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 		})
 	}
 	view := columnPhysicalScanSnapshotView{
+		graphOwnerRecords:     records,
 		CollectionName:        catalog.meta.Name,
 		Catalog:               catalog,
 		Config:                graphCfg,
 		ColumnStoreEnabled:    true,
-		CommitSeq:             state.CommitSeq,
 		VectorIndexState:      vectorState,
 		VectorIndexStateFound: true,
 		AssetRefs:             assetRefs,
@@ -471,6 +534,12 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 		},
 		ColumnAssetRootDir: c.db.ColumnAssetRootDir(),
 		AssetNamespace:     graphCfg.AssetManager.Namespace,
+	}
+	if owner != nil {
+		*owner, err = c.acquireTypedGraphOwnerPin(records, cfg.ActiveManifest.Generation, cfg.AssetManager.Namespace, graph, vectorState)
+		if err != nil {
+			return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
+		}
 	}
 	return def, graph, view, nil
 }

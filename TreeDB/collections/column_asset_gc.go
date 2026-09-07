@@ -15,7 +15,13 @@ import (
 
 // ColumnAssetGCOptions controls safe M15B column asset segment reclamation.
 type ColumnAssetGCOptions struct {
-	DryRun bool
+	DryRun              bool
+	maxReplayAssetBytes int64 // internal bounded epoch input; zero preserves existing callers
+	// Discovery limits have the same semantics as ColumnAssetReachabilityOptions.
+	MaxSegmentEntries   int
+	MaxManifestRecords  int
+	MaxManifestBytes    int64
+	MaxLifecycleEntries int
 	// Detailed keeps detailed ref and segment entries in the returned plan.
 	Detailed bool
 	// SegmentDetails keeps segment-level entries in the returned plan without
@@ -313,12 +319,19 @@ func (c *Collection) ColumnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	return c.columnAssetGC(ctx, opts)
 }
 
+// Destructive callers must hold withVectorPartitionStorageMutationV1 across
+// planning, deletion and any accounting refresh. A successful return includes
+// required directory sync; partial deletion stats on error are not refund credit.
 func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOptions) (stats ColumnAssetGCStats, err error) {
 	defer func() {
 		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed, opts.SegmentDetails)
 	}()
 	needSegmentEntries := !opts.DryRun || opts.Detailed || opts.SegmentDetails
-	planOpts, err := c.columnAssetLifecycleAugmentReachabilityOptions(ColumnAssetReachabilityOptions{
+	planOpts, err := c.columnAssetLifecycleAugmentReachabilityOptionsWithContext(ctx, ColumnAssetReachabilityOptions{
+		MaxSegmentEntries:                     opts.MaxSegmentEntries,
+		MaxManifestRecords:                    opts.MaxManifestRecords,
+		MaxManifestBytes:                      opts.MaxManifestBytes,
+		MaxLifecycleEntries:                   opts.MaxLifecycleEntries,
 		Detailed:                              opts.Detailed,
 		SegmentDetails:                        needSegmentEntries,
 		ProtectCandidateRefsForOlderSnapshots: true,
@@ -440,7 +453,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		return stats, err
 	}
 	defer recoverableRoots.Release()
-	if err := c.pinRecoverableColumnAssetSegments(ctx, recoverableRoots, opts.CandidateRefs); err != nil {
+	if err := c.pinRecoverableColumnAssetSegments(ctx, recoverableRoots, planOpts.CandidateRefs, opts); err != nil {
 		return stats, err
 	}
 	if hook := columnAssetStableDeleteAfterPlanHook(); hook != nil {
@@ -496,6 +509,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 }
 
 type recoverableColumnAssetReplayBasis struct {
+	minimumGeneration  uint64
 	appliedCommandLSN  uint64
 	manifestGeneration uint64
 	collection         string
@@ -519,6 +533,9 @@ func recoverableColumnAssetReplayRefs(
 			continue
 		}
 		for _, basis := range bases {
+			if basis.minimumGeneration != 0 && ref.Generation < basis.minimumGeneration && basis.config.AssetManager != nil && ref.Namespace == basis.config.AssetManager.Namespace {
+				continue
+			}
 			if basis.appliedCommandLSN == 0 || basis.manifestGeneration == 0 ||
 				ref.Generation > basis.manifestGeneration || !requiresReplayBefore(basis.appliedCommandLSN) {
 				continue
@@ -536,12 +553,18 @@ func recoverableColumnAssetReplayRefs(
 	return replayRefs, nil
 }
 
-func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, roots *backenddb.RecoverableRootSet, candidateRefs []ColumnAssetRef) error {
+func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, roots *backenddb.RecoverableRootSet, candidateRefs []ColumnAssetRef, opts ColumnAssetGCOptions) error {
 	if c == nil || c.db == nil || roots == nil {
 		return backenddb.ErrRecoverableRootSetStale
 	}
 	seenPaths := make(map[string]struct{})
 	visibleReplayBases := make([]recoverableColumnAssetReplayBasis, 0, 2)
+	// This lower bound is valid only for the supported continuously managed
+	// command-WAL collection. Missing or incompatible roots disable it; never
+	// infer an incarnation from a schema hash or skip an unknown predecessor.
+	floorKnown := c.db.CommandWALEnabled() && c.db.ResolvedProfile() == backenddb.ProfileCommandWALDurable
+	var minimumGeneration uint64
+	var floorMeta *CollectionMeta
 	pinRefs := func(refs []ColumnAssetRef) error {
 		for _, ref := range refs {
 			path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), ref)
@@ -551,6 +574,9 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 			path = filepath.Clean(path)
 			if _, ok := seenPaths[path]; ok {
 				continue
+			}
+			if opts.MaxLifecycleEntries > 0 && len(seenPaths) >= opts.MaxLifecycleEntries {
+				return ErrColumnAssetReachabilityLifecycleLimit
 			}
 			file, err := os.Open(path)
 			if err != nil {
@@ -583,21 +609,25 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 		if err != nil {
 			_ = snapshot.Close()
 			if errors.Is(err, errCollectionNotFound) {
+				floorKnown = false
 				continue
 			}
 			return fmt.Errorf("collections: capture recoverable column catalog at commit_seq=%d: %w", root.CommitSeq, err)
 		}
 		if catalog == nil {
+			floorKnown = false
 			_ = snapshot.Close()
 			continue
 		}
 		cfgPtr := catalog.meta.Options.ColumnStore
 		if cfgPtr == nil || !cfgPtr.Enabled {
+			floorKnown = false
 			_ = snapshot.Close()
 			continue
 		}
 		cfg := *cfgPtr
 		if cfg.ActiveManifest == nil {
+			floorKnown = false
 			if cfg.RecoveryAuthoritativeManifest != nil {
 				_ = snapshot.Close()
 				return fmt.Errorf("collections: recoverable column catalog at commit_seq=%d has recovery manifest without active manifest", root.CommitSeq)
@@ -611,6 +641,12 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 		}
 		if rootName == "" {
 			rootName = collectionColumnManifestRootName(catalog.meta.Name)
+		}
+		if opts.MaxManifestRecords > 0 || opts.MaxManifestBytes > 0 {
+			if err := validateColumnManifestScanBudget(ctx, snapshot, catalog.rootID(rootName), opts.MaxManifestRecords, opts.MaxManifestBytes); err != nil {
+				_ = snapshot.Close()
+				return err
+			}
 		}
 		view, viewErr := c.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(
 			snapshot,
@@ -627,6 +663,17 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 		}
 		if closeErr != nil {
 			return closeErr
+		}
+		if !recoverableColumnAssetReplayFloorCompatible(floorKnown, floorMeta, &catalog.meta) {
+			floorKnown = false
+		} else {
+			if floorMeta == nil {
+				meta := catalog.meta
+				floorMeta = &meta
+			}
+			if minimumGeneration == 0 || cfg.ActiveManifest.Generation < minimumGeneration {
+				minimumGeneration = cfg.ActiveManifest.Generation
+			}
 		}
 		if root.Visible {
 			if identity := view.FullConfig.RecoveryAuthoritativeManifest; identity != nil &&
@@ -647,11 +694,19 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 	// authoritative generations that the corresponding visible manifest has
 	// since superseded. Preserve each root's LSN, generation, collection, and
 	// configuration as one basis so candidate parsing never mixes authorities.
+	if floorKnown {
+		for i := range visibleReplayBases {
+			visibleReplayBases[i].minimumGeneration = minimumGeneration
+		}
+	}
 	replayRefs, err := recoverableColumnAssetReplayRefs(
 		candidateRefs,
 		visibleReplayBases,
 		roots.RequiresReplayBefore,
 		func(ref ColumnAssetRef, basis recoverableColumnAssetReplayBasis) (bool, error) {
+			if opts.maxReplayAssetBytes > 0 && (ref.Length < 0 || ref.Length > opts.maxReplayAssetBytes) {
+				return false, errTypedGraphOverlayFoldNeeded
+			}
 			return recoverableColumnAssetReplayCandidate(
 				c.db.ColumnAssetRootDir(), ref, basis.collection, basis.config, basis.appliedCommandLSN,
 			)
@@ -664,6 +719,21 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 		return err
 	}
 	return roots.Revalidate()
+}
+
+func recoverableColumnAssetReplayFloorCompatible(managedCommandWAL bool, first, next *CollectionMeta) bool {
+	if !managedCommandWAL || next == nil {
+		return false
+	}
+	cfg := next.Options.ColumnStore
+	if cfg == nil || !cfg.Enabled || cfg.ActiveManifest == nil || cfg.ActiveManifest.Generation == 0 || cfg.RecoveryAuthoritativeManifest == nil || cfg.RecoveryAuthoritativeManifest.Generation == 0 || cfg.RecoveryAuthoritativeAppliedCommandLSN == 0 || cfg.AssetManager == nil || cfg.AssetManager.Namespace == "" {
+		return false
+	}
+	if first == nil {
+		return true
+	}
+	previous := first.Options.ColumnStore
+	return previous != nil && previous.AssetManager != nil && previous.SchemaHash == cfg.SchemaHash && previous.AssetManager.Namespace == cfg.AssetManager.Namespace && sameCollectionMetaIgnoringColumnManifestProgress(*first, *next)
 }
 
 func recoverableColumnAssetReplayCandidate(rootDir string, ref ColumnAssetRef, collection string, cfg ColumnStoreConfig, visibleRecoveryLSN uint64) (bool, error) {
@@ -709,7 +779,7 @@ func columnAssetGCSegmentEligibleForDelete(segmentDir string, entry ColumnAssetR
 	if entry.Status != ColumnAssetReachabilitySegmentReclaimable ||
 		entry.FileID == 0 ||
 		entry.Path == "" ||
-		entry.Bytes <= 0 ||
+		entry.Bytes < 0 ||
 		entry.ProtectedBytes != 0 ||
 		entry.UnknownBytes != 0 ||
 		entry.ReclaimableBytes != entry.Bytes {

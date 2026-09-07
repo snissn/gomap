@@ -18,6 +18,7 @@ const (
 	ColumnAssetLifecycleRegistryPendingPublish ColumnAssetLifecycleRegistryClass = "pending_publish"
 	ColumnAssetLifecycleRegistryPreparedAsset  ColumnAssetLifecycleRegistryClass = "prepared_asset"
 	ColumnAssetLifecycleRegistryQuarantine     ColumnAssetLifecycleRegistryClass = "quarantine"
+	columnAssetLifecycleRegistryRetired        ColumnAssetLifecycleRegistryClass = "retired"
 )
 
 // ColumnAssetPendingPublishRegistrationOptions registers refs that are staged
@@ -288,7 +289,8 @@ func validateColumnAssetLifecycleRegistryClass(class ColumnAssetLifecycleRegistr
 	switch class {
 	case ColumnAssetLifecycleRegistryPendingPublish,
 		ColumnAssetLifecycleRegistryPreparedAsset,
-		ColumnAssetLifecycleRegistryQuarantine:
+		ColumnAssetLifecycleRegistryQuarantine,
+		columnAssetLifecycleRegistryRetired:
 		return nil
 	case "":
 		return errors.New("collections: column asset lifecycle registry class is required")
@@ -340,30 +342,42 @@ func columnAssetLifecycleRegisterProcessRegistryRecord(db *backenddb.DB, record 
 		}
 		columnAssetLifecycleProcessRegistries.Unlock()
 
-		registeredDB := db
-		var registeredDBID uint64
-		_, ok := registeredDB.RegisterCloseHookIfOpenAfter(func() bool {
-			columnAssetLifecycleProcessRegistries.Lock()
-			defer columnAssetLifecycleProcessRegistries.Unlock()
-			if columnAssetLifecycleProcessRegistries.dbIDs == nil {
-				columnAssetLifecycleProcessRegistries.dbIDs = make(map[*backenddb.DB]uint64)
-			}
-			if existingDBID, ok := columnAssetLifecycleProcessRegistries.dbIDs[registeredDB]; ok {
-				registeredDBID = existingDBID
-				return false
-			}
-			columnAssetLifecycleProcessRegistries.nextDBID++
-			registeredDBID = columnAssetLifecycleProcessRegistries.nextDBID
-			columnAssetLifecycleProcessRegistries.dbIDs[registeredDB] = registeredDBID
-			return true
-		}, func() error {
-			columnAssetLifecycleReleaseProcessRegistryRecordsForDB(registeredDB, registeredDBID)
-			return nil
-		})
-		if !ok {
-			return 0, errors.New("collections: column asset lifecycle registry requires an open backend DB")
+		if err := ensureColumnAssetLifecycleRegistryDB(db); err != nil {
+			return 0, err
 		}
 	}
+}
+
+// Register cleanup while open, before a manager can accept buffered writes.
+// Before-close flushes can then insert records without registering new hooks.
+func ensureColumnAssetLifecycleRegistryDB(db *backenddb.DB) error {
+	if db == nil {
+		return errCollectionDBNil
+	}
+	registeredDB := db
+	var registeredDBID uint64
+	_, ok := registeredDB.RegisterCloseHookIfOpenAfter(func() bool {
+		columnAssetLifecycleProcessRegistries.Lock()
+		defer columnAssetLifecycleProcessRegistries.Unlock()
+		if columnAssetLifecycleProcessRegistries.dbIDs == nil {
+			columnAssetLifecycleProcessRegistries.dbIDs = make(map[*backenddb.DB]uint64)
+		}
+		if existingDBID, ok := columnAssetLifecycleProcessRegistries.dbIDs[registeredDB]; ok {
+			registeredDBID = existingDBID
+			return false
+		}
+		columnAssetLifecycleProcessRegistries.nextDBID++
+		registeredDBID = columnAssetLifecycleProcessRegistries.nextDBID
+		columnAssetLifecycleProcessRegistries.dbIDs[registeredDB] = registeredDBID
+		return true
+	}, func() error {
+		columnAssetLifecycleReleaseProcessRegistryRecordsForDB(registeredDB, registeredDBID)
+		return nil
+	})
+	if !ok {
+		return errors.New("collections: column asset lifecycle registry requires an open backend DB")
+	}
+	return nil
 }
 
 func columnAssetLifecycleStoreProcessRegistryRecordLocked(record columnAssetLifecycleRegistryRecord) uint64 {
@@ -404,20 +418,48 @@ func columnAssetLifecycleReleaseProcessRegistryRecordsForDB(db *backenddb.DB, db
 }
 
 func (c *Collection) columnAssetLifecycleRegistrySnapshot() []columnAssetLifecycleRegistryRecord {
+	records, _ := c.columnAssetLifecycleRegistrySnapshotWithLimit(0)
+	return records
+}
+
+func (c *Collection) columnAssetLifecycleRegistrySnapshotWithLimit(maxEntries int) ([]columnAssetLifecycleRegistryRecord, error) {
+	if maxEntries < 0 {
+		return nil, ErrColumnAssetReachabilityLifecycleLimit
+	}
+	if maxEntries == 0 {
+		return c.columnAssetLifecycleRegistrySnapshotWithBudget(nil)
+	}
+	return c.columnAssetLifecycleRegistrySnapshotWithBudget(&maxEntries)
+}
+
+func (c *Collection) columnAssetLifecycleRegistrySnapshotWithBudget(remaining *int) ([]columnAssetLifecycleRegistryRecord, error) {
 	if c == nil || c.db == nil {
-		return nil
+		return nil, nil
 	}
 	dbID := columnAssetLifecycleRegistryProcessDBID(c.db)
 	if dbID == 0 {
-		return nil
+		return nil, nil
 	}
 	scope := columnAssetLifecyclePinScope{dbID: dbID, collection: c.meta.Name, namespace: columnAssetLifecycleNamespace(c)}
 	columnAssetLifecycleProcessRegistries.Lock()
 	defer columnAssetLifecycleProcessRegistries.Unlock()
 	if len(columnAssetLifecycleProcessRegistries.records) == 0 {
-		return nil
+		return nil, nil
 	}
-	out := make([]columnAssetLifecycleRegistryRecord, 0, len(columnAssetLifecycleProcessRegistries.records))
+	capacity := len(columnAssetLifecycleProcessRegistries.records)
+	if remaining != nil {
+		capacity = 0
+		for _, record := range columnAssetLifecycleProcessRegistries.records {
+			if record.Scope != scope {
+				continue
+			}
+			if err := consumeColumnAssetLifecycleEntries(remaining, 1, len(record.Refs), len(record.Segments)); err != nil {
+				return nil, err
+			}
+			capacity++
+		}
+	}
+	out := make([]columnAssetLifecycleRegistryRecord, 0, capacity)
 	for _, record := range columnAssetLifecycleProcessRegistries.records {
 		if record.Scope != scope {
 			continue
@@ -429,7 +471,7 @@ func (c *Collection) columnAssetLifecycleRegistrySnapshot() []columnAssetLifecyc
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].ID < out[j].ID
 	})
-	return out
+	return out, nil
 }
 
 func summarizeColumnAssetLifecycleRegistries(records []columnAssetLifecycleRegistryRecord) columnAssetLifecycleRegistrySummaries {

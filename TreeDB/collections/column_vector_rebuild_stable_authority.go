@@ -13,13 +13,14 @@ import (
 // by every fresh vector/HNSW segment until the complete transitive union can be
 // frozen against the state record that will make those refs reachable.
 type columnVectorGraphStableResourceAccumulator struct {
-	registry       *rootpublication.IdentityPinRegistry
-	builder        *rootpublication.StableResourceSetBuilder
-	segments       uint64
-	contentSyncs   uint64
-	namespaceSyncs uint64
-	fileSync       time.Duration
-	namespaceSync  time.Duration
+	candidateAdmission *typedGraphFoldAssetAdmission
+	registry           *rootpublication.IdentityPinRegistry
+	builder            *rootpublication.StableResourceSetBuilder
+	segments           uint64
+	contentSyncs       uint64
+	namespaceSyncs     uint64
+	fileSync           time.Duration
+	namespaceSync      time.Duration
 }
 
 func newColumnVectorGraphStableResourceAccumulator(registry *rootpublication.IdentityPinRegistry) (*columnVectorGraphStableResourceAccumulator, error) {
@@ -39,11 +40,15 @@ func (authority *columnVectorGraphStableResourceAccumulator) newAppender(rootDir
 	if authority == nil || authority.builder == nil || authority.registry == nil {
 		return nil, errors.New("collections: column vector rebuild stable authority is unavailable")
 	}
+	if err := authority.candidateAdmission.charge(0, 1); err != nil {
+		return nil, err
+	}
 	appender, err := newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir, cfg, authority.registry)
 	if err != nil {
 		return nil, err
 	}
 	appender.stableVectorGraphAuthority = true
+	appender.candidateAdmission = authority.candidateAdmission
 	return appender, nil
 }
 

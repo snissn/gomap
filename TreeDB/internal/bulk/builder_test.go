@@ -28,6 +28,72 @@ func (m *MockAllocator) Alloc(hint uint64) (uint64, error) {
 	return m.p.Alloc(1)
 }
 
+// Bound a no-progress regression without exhausting the process stack or disk.
+type cappedAllocator struct {
+	Allocator
+	remaining int
+}
+
+func (a *cappedAllocator) Alloc(hint uint64) (uint64, error) {
+	if a.remaining == 0 {
+		return 0, errors.New("bulk test allocation cap reached")
+	}
+	a.remaining--
+	return a.Allocator.Alloc(hint)
+}
+
+func TestBuildWithOptionsRejectsUnfittableEntryWithoutPromotion(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts BuildOptions
+	}{
+		{"plain", BuildOptions{}},
+		{"prefix", BuildOptions{LeafPrefixCompression: true}},
+		{"columnar", BuildOptions{LeafColumnar: true}},
+		{"internal_delta", BuildOptions{InternalBaseDelta: true}},
+		{"leaf_log", BuildOptions{LeafPageLog: &mockLeafPageLog{}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			alloc := &cappedAllocator{Allocator: &MockAllocator{p: p}, remaining: 16}
+			it := &mockKVIterator{keys: [][]byte{bytes.Repeat([]byte("k"), 2*page.PageSize)}, values: [][]byte{[]byte("v")}}
+			root, err := BuildWithOptions(it, alloc, p, tc.opts)
+			if !errors.Is(err, node.ErrNodeFull) || root != 0 {
+				t.Fatalf("root=%d err=%v remaining allocations=%d; want node-full before allocation cap", root, err, alloc.remaining)
+			}
+			if alloc.remaining < 15 {
+				t.Fatalf("unfittable first entry allocated %d pages", 16-alloc.remaining)
+			}
+			if log, ok := tc.opts.LeafPageLog.(*mockLeafPageLog); ok && len(log.pages) != 0 {
+				t.Fatalf("unfittable first entry appended %d leaf pages", len(log.pages))
+			}
+		})
+	}
+}
+
+func TestBuildRejectsUnfittableParentSeparator(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	// A zero-value leaf entry has a nine-byte header; the internal child
+	// header needs ten. This key fits a leaf but not its parent separator.
+	key := bytes.Repeat([]byte("a"), page.PageSize-node.NodeHeaderSize-node.DirectoryEntrySize-9)
+	next := bytes.Clone(key)
+	next[len(next)-1] = 'b'
+	alloc := &cappedAllocator{Allocator: &MockAllocator{p: p}, remaining: 16}
+	it := &mockKVIterator{keys: [][]byte{key, next}, values: [][]byte{nil, nil}}
+	root, err := Build(it, alloc, p)
+	if root != 0 || !errors.Is(err, node.ErrNodeFull) || alloc.remaining != 14 {
+		t.Fatalf("root=%d err=%v allocations=%d; want node-full at first parent", root, err, 16-alloc.remaining)
+	}
+}
+
 // MockIterator
 type MockIterator struct {
 	keys [][]byte

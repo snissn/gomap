@@ -127,7 +127,7 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 	if err != nil {
 		return nil, err
 	}
-	if mutationParts != 0 {
+	if mutationParts != 0 && reader.rowRefSource == nil {
 		return nil, errors.New("collections: column_graph typed-column vector source requires insert-only base physical refs")
 	}
 	typedRefs, err := typedColumnPartRefsByGenerationFromManifestRecords(records, cfg.AssetManager.Namespace)
@@ -146,9 +146,9 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 	if err != nil {
 		return nil, err
 	}
-	// The #1782/#1993 vector source is intentionally limited to the current
-	// insert-only publication shape: one physical row asset and one
-	// typed_column_part per manifest generation. Multipart lifecycle/compaction is
+	// One physical row asset and one typed_column_part per manifest generation
+	// are supported, including updates selected by captured row-ref state.
+	// Tombstone parts cannot supply vectors. Multipart lifecycle/compaction is
 	// deferred to #1787; row-ref state and manifest refs fail closed if the
 	// manifest violates that shape.
 	usedGenerations := make(map[uint64]struct{})
@@ -215,6 +215,7 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 		dims:           graph.Dimensions,
 		locationSource: locationSource,
 		locations:      locations,
+		parts:          make([]*columnVectorGraphTypedColumnVectorPart, 0, len(usedGenerations)),
 		manager:        mappedresource.NewManager(),
 	}
 	success := false
@@ -332,11 +333,14 @@ func columnVectorGraphTypedColumnPhysicalRowsByGenerationFromRefs(refs []columnM
 	rowsByGeneration := make(map[uint64]int, len(refs))
 	partByGeneration := make(map[uint64]uint64, len(refs))
 	for _, asset := range refs {
+		if asset.Reason == ColumnPublishOperationDelete {
+			continue
+		}
 		if asset.Ref.Kind != ColumnAssetKindTCS1PartImage {
 			return nil, nil, fmt.Errorf("collections: column_graph typed-column vector source physical ref kind=%q", asset.Ref.Kind)
 		}
-		if asset.Reason != ColumnPublishOperationInsert {
-			return nil, nil, fmt.Errorf("collections: column_graph typed-column vector source requires insert-only physical refs, got %s", asset.Reason)
+		if asset.Reason != ColumnPublishOperationInsert && asset.Reason != ColumnPublishOperationUpdate {
+			return nil, nil, fmt.Errorf("collections: column_graph typed-column vector source unsupported physical refs, got %s", asset.Reason)
 		}
 		if _, exists := rowsByGeneration[asset.Ref.Generation]; exists {
 			return nil, nil, fmt.Errorf("%w: generation=%d has multiple physical row parts", errColumnVectorGraphTypedColumnMultipartDeferred, asset.Ref.Generation)
@@ -405,8 +409,8 @@ func (c *Collection) loadColumnVectorGraphTypedColumnVectorPart(collection strin
 	if typedRef.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
 		return nil, 0, fmt.Errorf("typed ref kind=%q want %q", typedRef.Ref.Kind, ColumnAssetKindTCS1TypedColumnPart)
 	}
-	if typedRef.Reason != ColumnPublishOperationInsert {
-		return nil, 0, fmt.Errorf("typed_column_part reason=%s want insert", typedRef.Reason)
+	if typedRef.Reason != ColumnPublishOperationInsert && typedRef.Reason != ColumnPublishOperationUpdate {
+		return nil, 0, fmt.Errorf("typed_column_part reason=%s want insert or update", typedRef.Reason)
 	}
 	if typedRef.Rows != physicalRows {
 		return nil, 0, fmt.Errorf("typed_column_part rows=%d physical_rows=%d", typedRef.Rows, physicalRows)

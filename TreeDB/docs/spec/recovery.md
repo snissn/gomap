@@ -2,11 +2,37 @@
 
 This document defines startup recovery behavior.
 
+Typed `column_graph` public serving admission is process-local: after ordinary
+replay/open, explicitly call `EnsureColumnGraphServing` with positive limits.
+Queries do not bootstrap/reconcile manifests. A failed ensure stays fail closed
+for queries and new selected writes. See the [operational admission contract](typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission).
+
 Recovery follows the immutable canonical profile selected at open:
 `command_wal_durable`, `command_wal_relaxed`, or production no-WAL
 `no_wal_fast`. `bench_unsafe` has no production recovery guarantee. Because
 TreeDB is pre-alpha, persisted feature/profile conflicts fail closed with a
 rebuild-required error; recovery does not infer a weaker hybrid contract.
+
+Column GC's managed `command_wal_durable` optimization excludes an extra replay
+candidate pin only when its generation is strictly below every compatible,
+nonzero captured collection manifest. Actual assets referenced by any captured
+root remain pinned. Missing or incompatible roots disable that optimization;
+schema hash is not a collection incarnation ID. See
+`recoverable-root-set-maintenance-3681.md` for the maintenance boundary.
+
+Selected typed FP32 batch/fold output uses fresh existing-manager segments, not
+cross-attempt generation-file appends. A failed source's delete/insert stages may
+share one still-owned file, but normal replay writes into a new attempt's file.
+Post-command-WAL publication failures still require normal reopen/recovery;
+in-process retry is not authorized by this placement rule. Failed outputs are
+retained safely, and exact fallback roots remain protected during subsequent
+whole-segment GC. Process-cut tests cover complete cleanup after before-seal,
+after-seal, and unsealed-suffix recovery, not physical power-loss qualification.
+An abandoned zero-output file needs no fabricated asset ref: exact-identity
+discovery can classify an unreferenced canonical regular empty file for existing
+whole-segment GC. A live construction pin or changed post-plan frontier prevents
+deletion; referenced-empty corruption and uncertain/nonregular entries remain
+fail-closed. Explicit quarantine protects an empty file as well.
 
 ## 1. Recovery Entry Points
 
@@ -215,6 +241,14 @@ Unknown flag bits and legacy-origin update frames fail closed.
 The existing collection replay handler and applied-LSN publication own this
 operation; there is no independent typed-write journal or replay watermark.
 Unsupported payload versions and schema mismatches fail before visible install.
+
+Atomic typed source replacements use kind `CollectionReplaceSourceByID` with
+format 12 (`CollectionTypedSourceByIDV1`). Decode its canonical delete section
+and typed batch section, reject different collection names or legacy projection
+flags, validate the captured schema, and re-enter the same atomic source
+publisher with the typed projection. Delete and insertion are never separate
+commands or applied frontiers. Format 10 remains the legacy JSON/delete-only
+source encoding; no new recovery log or watermark is introduced.
 
 Legacy raw redo-journal replay is skipped only when durability mode is
 `DurabilityWALOffRelaxed`.

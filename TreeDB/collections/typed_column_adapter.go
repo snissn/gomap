@@ -307,6 +307,9 @@ type typedColumnPartDecodedValues struct {
 	PrimaryIDs     []int64
 	RowByPrimaryID []int
 	Values         [][]columnDeclaredValue
+	// RawFloat32Columns avoids expanding every vector for point reconstruction.
+	// Payloads either belong to the read cache's pinned mapping or are owned.
+	RawFloat32Columns []typedcolumn.ColumnPartColumn
 }
 
 type typedColumnAdapterResourceReader struct {
@@ -948,21 +951,36 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 		return nil, err
 	}
 	metrics.DictionaryBuild += time.Since(dictionaryStart)
+	partBuildStart := time.Now()
+	partOpts, err := typedColumnAdapterPartOptions(opts, columns)
+	if err != nil {
+		return nil, err
+	}
+	part, err := typedcolumn.BuildColumnPart(opts.PartID, partOpts, batch)
+	if err != nil {
+		return nil, err
+	}
+	metrics.PartBuild += time.Since(partBuildStart)
+	return &typedColumnAdapterPart{Options: opts, Columns: columns, Part: part, Dictionary: typedColumnAdapterDictionaries(columns), Metrics: metrics}, nil
+}
+
+// Shared metadata-only producer options let admission use the actual codec
+// policy without building a second batch or encoding with a fabricated LSN.
+func typedColumnAdapterPartOptions(opts typedColumnAdapterOptions, columns []typedColumnAdapterColumn) (typedcolumn.Options, error) {
 	defs := make([]typedcolumn.ColumnDefinition, 0, len(columns)+1)
 	defs = append(defs, typedColumnAdapterPrimaryIDDefinition(opts))
 	for _, column := range columns {
 		defs = append(defs, column.Definition)
 	}
-	partBuildStart := time.Now()
 	rowsPerGranule := opts.RowsPerGranule
 	if rowsPerGranule == 0 {
 		rowsPerGranule = typedcolumn.DefaultRowsPerGranule
 	}
 	sortKey, err := typedColumnAdapterSortKey(opts, columns)
 	if err != nil {
-		return nil, err
+		return typedcolumn.Options{}, err
 	}
-	partOpts := typedcolumn.Options{
+	return typedcolumn.Options{
 		SchemaVersion: opts.SchemaVersion,
 		SchemaMode:    typedcolumn.ColumnSchemaFixed,
 		Columns:       defs,
@@ -972,13 +990,7 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 		SortKey:     typedcolumn.SortKey{Columns: sortKey},
 		PartPolicy:  typedcolumn.ColumnPartPolicy{RowsPerGranule: rowsPerGranule, AdaptiveMarkSizing: opts.AdaptiveMarkSizing},
 		Compression: typedcolumn.ColumnCompressionPolicy{Default: typedcolumn.CompressionNone},
-	}
-	part, err := typedcolumn.BuildColumnPart(opts.PartID, partOpts, batch)
-	if err != nil {
-		return nil, err
-	}
-	metrics.PartBuild += time.Since(partBuildStart)
-	return &typedColumnAdapterPart{Options: opts, Columns: columns, Part: part, Dictionary: typedColumnAdapterDictionaries(columns), Metrics: metrics}, nil
+	}, nil
 }
 
 func typedColumnAdapterPartFromBytes(opts typedColumnAdapterOptions, raw []byte) (*typedColumnAdapterPart, error) {
@@ -1248,6 +1260,36 @@ func (p *typedColumnAdapterPart) buildImage() (typedcolumn.ColumnPartImage, erro
 	if p == nil || p.Part == nil {
 		return typedcolumn.ColumnPartImage{}, errors.New("collections: nil typed-column adapter part")
 	}
+	return typedcolumn.BuildColumnPartImage(p.Part, p.imageOptions())
+}
+
+// imageOptions is shared by the actual encoder and its encoded-size proof.
+func typedColumnPublicationFP32EncodedBound(cfg ColumnStoreConfig, rows int) (int64, error) {
+	fields := columnStoreTypedColumnPartFields(cfg)
+	if len(fields) != 1 || fields[0].ValueType != ColumnStoreValueFloat32Vector {
+		return 0, ErrHybridSearchUnsupported
+	}
+	sortKey, err := typedColumnPartPublicationSortKey(cfg, fields)
+	if err != nil {
+		return 0, err
+	}
+	opts, err := typedColumnPublicationAdapterOptionsFromConfig(cfg, typedColumnPartAssetPartID, fields, sortKey)
+	if err != nil {
+		return 0, err
+	}
+	columns, err := typedColumnAdapterColumnsForFieldsWithOptions(fields, opts)
+	if err != nil {
+		return 0, err
+	}
+	partOpts, err := typedColumnAdapterPartOptions(opts, columns)
+	if err != nil {
+		return 0, err
+	}
+	metadata := typedColumnAdapterPart{Options: opts, Columns: columns, Dictionary: typedColumnAdapterDictionaries(columns)}
+	return typedcolumn.FP32ImageEncodedUpperBound(partOpts, rows, metadata.imageOptions())
+}
+
+func (p *typedColumnAdapterPart) imageOptions() typedcolumn.ColumnPartImageOptions {
 	// The adapter primary-id column is an internal row locator, not a declared
 	// ColumnStoreValueInt64 field. Leave it out of direct-view certification so
 	// fallback-only declared typed-column parts do not publish an internal
@@ -1274,7 +1316,7 @@ func (p *typedColumnAdapterPart) buildImage() (typedcolumn.ColumnPartImage, erro
 		imageOpts.PruningMetadataSectionCompression = p.Options.PruningSectionCompression
 		imageOpts.PruningMetadataSectionCompressionSet = true
 	}
-	return typedcolumn.BuildColumnPartImage(p.Part, imageOpts)
+	return imageOpts
 }
 
 func decodeTypedColumnPhysicalQuerySortedGroupedDistinctPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte, includePhysicalRows bool) (columnTypedColumnPhysicalQueryPart, error) {
@@ -5654,8 +5696,95 @@ func (p *typedColumnAdapterPart) scanDecodedValuesSelected(selected []bool) (typ
 	return p.scanDecodedValuesSelectedWithPrimaryLocator(selected, false)
 }
 
-func (p *typedColumnAdapterPart) scanDecodedValuesSelectedForReconstruction(selected []bool) (typedColumnPartDecodedValues, error) {
-	return p.scanDecodedValuesSelectedWithPrimaryLocator(selected, true)
+// borrowMapped requires the caller's read-cache mapping to outlive the decoded
+// entry. Otherwise only retained raw vector payloads are copied, never unrelated
+// image sections or the read-at cache's reusable scratch.
+func (p *typedColumnAdapterPart) scanDecodedValuesSelectedForReconstruction(selected []bool, borrowMapped bool) (typedColumnPartDecodedValues, error) {
+	if p == nil || p.Part == nil || selected != nil && len(selected) != len(p.Columns) {
+		return p.scanDecodedValuesSelectedWithPrimaryLocator(selected, true)
+	}
+	var rawColumns []typedcolumn.ColumnPartColumn
+	decodeSelection := selected
+	for i, column := range p.Columns {
+		if selected != nil && !selected[i] || column.Field.Nullable || column.Field.ValueType != ColumnStoreValueFloat32Vector || column.Definition.Encoding != typedcolumn.EncodingRawFloat32Vector || column.Definition.Compression != typedcolumn.CompressionNone {
+			continue
+		}
+		raw, ok := p.Part.Columns[column.Definition.Name]
+		if !ok {
+			return typedColumnPartDecodedValues{}, fmt.Errorf("collections: point reconstruction missing vector column %q", column.Definition.Name)
+		}
+		if err := validateTypedColumnPointFloat32(raw, p.Part.Descriptor.RowCount); err != nil {
+			return typedColumnPartDecodedValues{}, err
+		}
+		if rawColumns == nil {
+			rawColumns = make([]typedcolumn.ColumnPartColumn, len(p.Columns))
+			decodeSelection = make([]bool, len(p.Columns))
+			for j := range decodeSelection {
+				decodeSelection[j] = selected == nil || selected[j]
+			}
+		}
+		if !borrowMapped {
+			raw.Blocks = slices.Clone(raw.Blocks)
+			for j := range raw.Blocks {
+				raw.Blocks[j].Granule.Payload = bytes.Clone(raw.Blocks[j].Granule.Payload)
+			}
+		}
+		rawColumns[i] = raw
+		decodeSelection[i] = false
+	}
+	decoded, err := p.scanDecodedValuesSelectedWithPrimaryLocator(decodeSelection, true)
+	if err != nil {
+		return typedColumnPartDecodedValues{}, err
+	}
+	decoded.RawFloat32Columns = rawColumns
+	return decoded, nil
+}
+
+func validateTypedColumnPointFloat32(column typedcolumn.ColumnPartColumn, rows int) error {
+	if rows < 0 || column.Definition.Type != typedcolumn.ColumnTypeFloat32Vector || column.Definition.Encoding != typedcolumn.EncodingRawFloat32Vector || column.Definition.Compression != typedcolumn.CompressionNone {
+		return fmt.Errorf("collections: point vector column %q schema mismatch", column.Definition.Name)
+	}
+	next := 0
+	for i, block := range column.Blocks {
+		count := block.Descriptor.RowCount
+		if count <= 0 || block.Descriptor.FirstRow != next || next > rows-count {
+			return fmt.Errorf("collections: point vector column %q block %d invalid row span", column.Definition.Name, i)
+		}
+		g := block.Granule
+		if _, err := typedcolumn.DenseFixedWidthViewFromBytes(g.Payload, count, column.Definition.FixedWidthElements, 4); err != nil {
+			return err
+		}
+		want := len(g.Payload)
+		if block.Descriptor.Encoding != typedcolumn.EncodingRawFloat32Vector || block.Descriptor.Compression != typedcolumn.CompressionNone || block.Descriptor.RawBytes != want || block.Descriptor.StoredBytes != want || g.Encoding != typedcolumn.EncodingRawFloat32Vector || g.Compression != typedcolumn.CompressionNone || g.Rows != count || g.RawBytes != want || g.StoredBytes != want || g.NullCount != 0 || g.DefaultCount != 0 || g.HasMinMax || g.PayloadRef.Kind != typedcolumn.PayloadRefInline || g.PayloadRef.Offset != 0 || g.PayloadRef.Length != want {
+			return fmt.Errorf("collections: point vector column %q block %d payload mismatch", column.Definition.Name, i)
+		}
+		next += count
+	}
+	if next != rows {
+		return fmt.Errorf("collections: point vector column %q rows=%d want %d", column.Definition.Name, next, rows)
+	}
+	return nil
+}
+
+func typedColumnPointFloat32Vector(column typedcolumn.ColumnPartColumn, row int) ([]float32, error) {
+	idx := sort.Search(len(column.Blocks), func(i int) bool {
+		block := column.Blocks[i].Descriptor
+		return row < block.FirstRow || row-block.FirstRow < block.RowCount
+	})
+	if idx == len(column.Blocks) || row < column.Blocks[idx].Descriptor.FirstRow {
+		return nil, fmt.Errorf("collections: point vector row=%d outside column %q", row, column.Definition.Name)
+	}
+	block := column.Blocks[idx]
+	rowBytes, err := typedColumnAdapterDenseBytes(1, column.Definition.FixedWidthElements, 4)
+	if err != nil {
+		return nil, err
+	}
+	local := row - block.Descriptor.FirstRow
+	if local < 0 || rowBytes > len(block.Granule.Payload) || local > (len(block.Granule.Payload)-rowBytes)/rowBytes {
+		return nil, fmt.Errorf("collections: point vector row=%d payload out of bounds", row)
+	}
+	start := local * rowBytes
+	return typedcolumn.DecodeRawFloat32VectorPayload(nil, block.Granule.Payload[start:start+rowBytes], 1, column.Definition.FixedWidthElements)
 }
 
 func (p *typedColumnAdapterPart) scanDecodedValuesSelectedRows(selected []bool, rows []int) (typedColumnPartDecodedValues, typedcolumn.PartScanDiagnostics, error) {
@@ -5742,6 +5871,16 @@ func (p *typedColumnAdapterPart) scanDecodedValuesSelectedWithPrimaryLocator(sel
 }
 
 func typedColumnAdapterRowsByPrimaryID(ids []int64) ([]int, error) {
+	identity := true
+	for row, id := range ids {
+		if id != int64(row) {
+			identity = false
+			break
+		}
+	}
+	if identity {
+		return nil, nil
+	}
 	rowByPrimaryID := make([]int, len(ids))
 	for i := range rowByPrimaryID {
 		rowByPrimaryID[i] = -1
@@ -5783,6 +5922,14 @@ func (d typedColumnPartDecodedValues) valuesForRowInto(rowIdx int, dst []columnD
 		dst = dst[:len(d.Values)]
 	}
 	for i := range d.Values {
+		if i < len(d.RawFloat32Columns) && d.RawFloat32Columns[i].Definition.Type == typedcolumn.ColumnTypeFloat32Vector {
+			vector, err := typedColumnPointFloat32Vector(d.RawFloat32Columns[i], partRow)
+			if err != nil {
+				return nil, err
+			}
+			dst[i] = columnDeclaredValue{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: vector}
+			continue
+		}
 		if d.Values[i] == nil {
 			dst[i] = columnDeclaredValue{}
 			continue

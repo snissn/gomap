@@ -533,9 +533,18 @@ func TestTypedMinimaGenericMutations(t *testing.T) {
 				if err != nil || len(text.Results) != 1 {
 					t.Fatalf("new text: %+v %v", text, err)
 				}
-				if _, err := col.RebuildVectorIndex("embedding_graph"); err == nil || !strings.Contains(err.Error(), "requires insert-only base physical refs") {
-					t.Fatalf("M2 mutable graph gate changed: %v", err)
+				var canonicalScans atomic.Uint64
+				restore := setColumnVectorGraphCanonicalRowsTestHook(func() { canonicalScans.Add(1) })
+				_, rebuildErr := col.RebuildVectorIndex("embedding_graph")
+				restore()
+				if rebuildErr != nil || canonicalScans.Load() != 0 {
+					t.Fatalf("native mutated rebuild: err=%v canonical scans=%d", rebuildErr, canonicalScans.Load())
 				}
+				result, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: "embedding_graph", Query: []float32{0, 1, 0, 0, 0, 0, 0, 0}, TopK: 1, EfSearch: 8, IncludeDocuments: true})
+				if err != nil || len(result.Results) != 1 || string(result.Results[0].ID) != "a" || result.Results[0].Score < .999 {
+					t.Fatalf("rebuilt mutation result=%+v err=%v", result.Results, err)
+				}
+				assertJSONEqualM13C(t, result.Results[0].Document, replacement)
 				view, err := col.OpenCollectionReadView()
 				if err != nil {
 					t.Fatal(err)

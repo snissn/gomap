@@ -2424,14 +2424,23 @@ func cloneStableResourceSetKindView(source *StableResourceSet, excluded ...Resou
 	return set, true, nil
 }
 
-// StableLogicalObligationRequirements scopes an exact logical-reference
-// closure for a later root publication. ScopedFields distinguishes "this
-// publication has no references for this field" from "this publication did
-// not supply requirements for this field". Obligations must belong to one of
-// the scoped fields.
+// StableLogicalObligationNamespaceScope identifies one exact logical namespace
+// within a reachability field. Namespace is a nonempty opaque identifier, not a
+// filesystem basename (for example, "docs/column-assets" is valid).
+type StableLogicalObligationNamespaceScope struct {
+	Field     ReachabilityField
+	Namespace string
+}
+
+// StableLogicalObligationRequirements scopes an exact logical-reference closure
+// for a later root publication. ScopedFields replaces a complete field across
+// all namespaces; ScopedNamespaces replaces only the named field/namespace.
+// An empty declared scope removes its old obligations, whereas an undeclared
+// scope is retained. The two forms must not overlap on the same field.
 type StableLogicalObligationRequirements struct {
-	ScopedFields []ReachabilityField
-	Obligations  []StableLogicalObligation
+	ScopedFields     []ReachabilityField
+	ScopedNamespaces []StableLogicalObligationNamespaceScope
+	Obligations      []StableLogicalObligation
 	// commitments is derived at the normalization boundary and remains an
 	// immutable-by-convention proof of the complete per-field requirement set.
 	// It is intentionally package-private so callers cannot forge fast-path
@@ -2506,6 +2515,22 @@ func ValidateStableLogicalObligationMutationFinalRequirements(mutation StableLog
 	for _, field := range requirements.ScopedFields {
 		requirementFields[field] = struct{}{}
 	}
+	for _, scope := range requirements.ScopedNamespaces {
+		requirementFields[scope.Field] = struct{}{}
+	}
+	inScope := func(obligation StableLogicalObligation) bool {
+		for _, field := range requirements.ScopedFields {
+			if field == obligation.Reachability {
+				return true
+			}
+		}
+		for _, scope := range requirements.ScopedNamespaces {
+			if scope.Field == obligation.Reachability && scope.Namespace == obligation.Namespace {
+				return true
+			}
+		}
+		return false
+	}
 	for _, field := range normalized.ScopedFields {
 		if _, ok := requirementFields[field]; !ok {
 			return fmt.Errorf("%w: mutation field %q absent from final requirements", ErrUnresolvedResource, field)
@@ -2524,11 +2549,14 @@ func ValidateStableLogicalObligationMutationFinalRequirements(mutation StableLog
 		return position < end && requirements.Obligations[position] == target
 	}
 	for _, obligation := range normalized.Added {
-		if !contains(obligation) {
+		if !inScope(obligation) || !contains(obligation) {
 			return fmt.Errorf("%w: added mutation obligation absent from final requirements %+v", ErrUnresolvedResource, obligation)
 		}
 	}
 	for _, obligation := range normalized.Removed {
+		if !inScope(obligation) {
+			return fmt.Errorf("%w: removed mutation obligation outside final scopes %+v", ErrResourceConflict, obligation)
+		}
 		if contains(obligation) {
 			return fmt.Errorf("%w: removed mutation obligation retained by final requirements %+v", ErrResourceConflict, obligation)
 		}
@@ -2546,6 +2574,11 @@ func CertifyStableLogicalObligationMutationFinalRequirements(source *StableResou
 	normalizedMutation, err := NormalizeStableLogicalObligationMutation(mutation)
 	if err != nil {
 		return false, err
+	}
+	// Per-field commitments cannot certify a namespace-local replacement.
+	// Keep the exact filter/validation fallback for these requirements.
+	if len(requirements.ScopedNamespaces) != 0 {
+		return false, nil
 	}
 	if len(normalizedMutation.ScopedFields) == 0 {
 		return false, nil
@@ -2831,7 +2864,23 @@ func NormalizeStableLogicalObligationRequirements(requirements StableLogicalObli
 			uniqueFields = append(uniqueFields, field)
 		}
 	}
-	if len(uniqueFields) == 0 {
+	namespaces := append([]StableLogicalObligationNamespaceScope(nil), requirements.ScopedNamespaces...)
+	sort.Slice(namespaces, func(i, j int) bool {
+		if namespaces[i].Field != namespaces[j].Field {
+			return namespaces[i].Field < namespaces[j].Field
+		}
+		return namespaces[i].Namespace < namespaces[j].Namespace
+	})
+	uniqueNamespaces := namespaces[:0]
+	for _, scope := range namespaces {
+		if scope.Field == "" || scope.Namespace == "" {
+			return StableLogicalObligationRequirements{}, fmt.Errorf("%w: incomplete logical-obligation namespace scope", ErrUnresolvedResource)
+		}
+		if len(uniqueNamespaces) == 0 || uniqueNamespaces[len(uniqueNamespaces)-1] != scope {
+			uniqueNamespaces = append(uniqueNamespaces, scope)
+		}
+	}
+	if len(uniqueFields) == 0 && len(uniqueNamespaces) == 0 {
 		if len(requirements.Obligations) != 0 {
 			return StableLogicalObligationRequirements{}, fmt.Errorf("%w: logical obligations have no scoped fields", ErrUnresolvedResource)
 		}
@@ -2842,24 +2891,46 @@ func NormalizeStableLogicalObligationRequirements(requirements StableLogicalObli
 	for _, field := range uniqueFields {
 		scoped[field] = struct{}{}
 	}
+	namespaceScopes := make(map[StableLogicalObligationNamespaceScope]struct{}, len(uniqueNamespaces))
+	allFields := uniqueFields
+	if len(uniqueNamespaces) != 0 {
+		allFields = append([]ReachabilityField(nil), uniqueFields...)
+	}
+	for _, scope := range uniqueNamespaces {
+		if _, global := scoped[scope.Field]; global {
+			return StableLogicalObligationRequirements{}, fmt.Errorf("%w: overlapping global and namespace scope for %q", ErrResourceConflict, scope.Field)
+		}
+		namespaceScopes[scope] = struct{}{}
+		if len(allFields) == 0 || allFields[len(allFields)-1] != scope.Field {
+			allFields = append(allFields, scope.Field)
+		}
+	}
+	sort.Slice(allFields, func(i, j int) bool { return allFields[i] < allFields[j] })
 	for _, obligation := range requirements.Obligations {
-		if _, ok := scoped[obligation.Reachability]; !ok {
+		_, global := scoped[obligation.Reachability]
+		_, local := namespaceScopes[StableLogicalObligationNamespaceScope{Field: obligation.Reachability, Namespace: obligation.Namespace}]
+		if !global && !local {
 			return StableLogicalObligationRequirements{}, fmt.Errorf("%w: logical obligation field %q is not scoped", ErrResourceConflict, obligation.Reachability)
 		}
 		byField[obligation.Reachability] = append(byField[obligation.Reachability], obligation)
 	}
 	normalized := make([]StableLogicalObligation, 0, len(requirements.Obligations))
-	for _, field := range uniqueFields {
+	for _, field := range allFields {
 		obligations, err := normalizeStableLogicalObligations(byField[field], field)
 		if err != nil {
 			return StableLogicalObligationRequirements{}, err
 		}
 		normalized = append(normalized, obligations...)
 	}
+	var commitments map[ReachabilityField]stableLogicalObligationCommitment
+	if len(uniqueNamespaces) == 0 {
+		commitments = stableLogicalObligationRequirementCommitments(uniqueFields, normalized)
+	}
 	return StableLogicalObligationRequirements{
-		ScopedFields: append([]ReachabilityField(nil), uniqueFields...),
-		Obligations:  append([]StableLogicalObligation(nil), normalized...),
-		commitments:  stableLogicalObligationRequirementCommitments(uniqueFields, normalized),
+		ScopedFields:     append([]ReachabilityField(nil), uniqueFields...),
+		ScopedNamespaces: uniqueNamespaces,
+		Obligations:      append([]StableLogicalObligation(nil), normalized...),
+		commitments:      commitments,
 	}, nil
 }
 
@@ -2867,14 +2938,25 @@ func NormalizeStableLogicalObligationRequirements(requirements StableLogicalObli
 // independently supplied requirement sets.
 func MergeStableLogicalObligationRequirements(left, right StableLogicalObligationRequirements) (StableLogicalObligationRequirements, error) {
 	return NormalizeStableLogicalObligationRequirements(StableLogicalObligationRequirements{
-		ScopedFields: append(append([]ReachabilityField(nil), left.ScopedFields...), right.ScopedFields...),
-		Obligations:  append(append([]StableLogicalObligation(nil), left.Obligations...), right.Obligations...),
+		ScopedFields:     append(append([]ReachabilityField(nil), left.ScopedFields...), right.ScopedFields...),
+		ScopedNamespaces: append(append([]StableLogicalObligationNamespaceScope(nil), left.ScopedNamespaces...), right.ScopedNamespaces...),
+		Obligations:      append(append([]StableLogicalObligation(nil), left.Obligations...), right.Obligations...),
 	})
 }
 
 type stableLogicalObligationRequirementIndex struct {
-	scoped  map[ReachabilityField]struct{}
-	desired map[ReachabilityField]map[StableLogicalObligation]struct{}
+	scoped     map[ReachabilityField]struct{}
+	global     map[ReachabilityField]struct{}
+	namespaces map[StableLogicalObligationNamespaceScope]struct{}
+	desired    map[ReachabilityField]map[StableLogicalObligation]struct{}
+}
+
+func (index stableLogicalObligationRequirementIndex) containsScope(obligation StableLogicalObligation) bool {
+	if _, ok := index.global[obligation.Reachability]; ok {
+		return true
+	}
+	_, ok := index.namespaces[StableLogicalObligationNamespaceScope{Field: obligation.Reachability, Namespace: obligation.Namespace}]
+	return ok
 }
 
 func indexStableLogicalObligationRequirements(requirements StableLogicalObligationRequirements) (stableLogicalObligationRequirementIndex, error) {
@@ -2882,13 +2964,26 @@ func indexStableLogicalObligationRequirements(requirements StableLogicalObligati
 	if err != nil {
 		return stableLogicalObligationRequirementIndex{}, err
 	}
+	if len(normalized.ScopedFields) == 0 && len(normalized.ScopedNamespaces) == 0 {
+		return stableLogicalObligationRequirementIndex{}, nil
+	}
 	index := stableLogicalObligationRequirementIndex{
-		scoped:  make(map[ReachabilityField]struct{}, len(normalized.ScopedFields)),
-		desired: make(map[ReachabilityField]map[StableLogicalObligation]struct{}, len(normalized.ScopedFields)),
+		scoped:     make(map[ReachabilityField]struct{}, len(normalized.ScopedFields)),
+		desired:    make(map[ReachabilityField]map[StableLogicalObligation]struct{}, len(normalized.ScopedFields)),
+		global:     make(map[ReachabilityField]struct{}, len(normalized.ScopedFields)),
+		namespaces: make(map[StableLogicalObligationNamespaceScope]struct{}, len(normalized.ScopedNamespaces)),
 	}
 	for _, field := range normalized.ScopedFields {
+		index.global[field] = struct{}{}
 		index.scoped[field] = struct{}{}
 		index.desired[field] = make(map[StableLogicalObligation]struct{})
+	}
+	for _, scope := range normalized.ScopedNamespaces {
+		index.scoped[scope.Field] = struct{}{}
+		index.namespaces[scope] = struct{}{}
+		if index.desired[scope.Field] == nil {
+			index.desired[scope.Field] = make(map[StableLogicalObligation]struct{})
+		}
 	}
 	for _, obligation := range normalized.Obligations {
 		index.desired[obligation.Reachability][obligation] = struct{}{}
@@ -3217,7 +3312,7 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 	if source == nil {
 		return nil, work, nil
 	}
-	if len(requirements.ScopedFields) == 0 && len(requirements.Obligations) == 0 {
+	if len(requirements.ScopedFields) == 0 && len(requirements.ScopedNamespaces) == 0 && len(requirements.Obligations) == 0 {
 		cloned, shared, err := cloneStableResourceSetKindView(source, excluded...)
 		if err != nil {
 			return nil, work, err
@@ -3227,7 +3322,7 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 			return cloned, work, nil
 		}
 	}
-	work.RequirementFieldsInspected = uint64(len(requirements.ScopedFields))
+	work.RequirementFieldsInspected = uint64(len(requirements.ScopedFields) + len(requirements.ScopedNamespaces))
 	work.RequirementObligationsInspected = uint64(len(requirements.Obligations))
 	requirementIndex, err := indexStableLogicalObligationRequirements(requirements)
 	if err != nil {
@@ -3293,7 +3388,7 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 					if obligation.Reachability != field {
 						return true
 					}
-					if scoped {
+					if requirementIndex.containsScope(obligation) {
 						if _, desired := requirementIndex.desired[field][obligation]; !desired {
 							return true
 						}
@@ -3512,7 +3607,7 @@ func ValidateStableResourceSetLogicalObligations(resources *StableResourceSet, r
 // intentional and must remain visible in performance evidence.
 func ValidateStableResourceSetLogicalObligationsWithWork(resources *StableResourceSet, requirements StableLogicalObligationRequirements) (StableResourceClosureWork, error) {
 	work := StableResourceClosureWork{
-		RequirementFieldsInspected:      uint64(len(requirements.ScopedFields)),
+		RequirementFieldsInspected:      uint64(len(requirements.ScopedFields) + len(requirements.ScopedNamespaces)),
 		RequirementObligationsInspected: uint64(len(requirements.Obligations)),
 		LogicalObligationNormalizations: uint64(len(requirements.Obligations)),
 		FullClosureValidations:          1,
@@ -3549,6 +3644,9 @@ func ValidateStableResourceSetLogicalObligationsWithWork(resources *StableResour
 						return true
 					}
 					foundForField = true
+					if !index.containsScope(obligation) {
+						return true
+					}
 					if _, desired := index.desired[field][obligation]; !desired {
 						visitErr = fmt.Errorf("%w: stale logical obligation %+v", ErrResourceConflict, obligation)
 						return false

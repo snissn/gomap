@@ -32,7 +32,7 @@ type typedGraphPreparedFilter struct {
 }
 
 func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScalarFilter, limits typedGraphFilterLimits) (*typedGraphPreparedFilter, error) {
-	if overlay == nil || overlay.base == nil || overlay.base.closed || overlay.current == nil || overlay.current.closed {
+	if !overlay.validOpen() {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
 	endForegroundRead := overlay.current.beginForegroundRead()
@@ -43,8 +43,7 @@ func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScal
 	if err := validateHybridScalarFilter(filter); err != nil {
 		return nil, err
 	}
-	inverse := overlay.base.reader.rowRefSource
-	if !inverse.inversePermutationActive() {
+	if !overlay.baseInverseReady() {
 		return nil, errTypedGraphInverseRequired
 	}
 	plan := &typedGraphPreparedFilter{overlay: overlay}
@@ -108,7 +107,7 @@ func prepareTypedGraphFilter(overlay *typedGraphOverlaySearch, filter HybridScal
 		return nil, errTypedGraphSearchBudget
 	}
 	plan.retainedBytes = plan.count * (bits.UintSize / 8)
-	perID := bits.Len(uint(inverse.rows)) + bits.Len(uint(len(overlay.rows))) + 2
+	perID := bits.Len(uint(overlay.base.reader.graph.RowCount)) + bits.Len(uint(len(overlay.rows))) + 2
 	if plan.count > limits.MappingWork/perID {
 		return nil, errTypedGraphSearchBudget
 	}
@@ -178,7 +177,7 @@ func finishTypedGraphFilter(plan *typedGraphPreparedFilter, baseOrdinals, deltaO
 	plan.ordinalGrowthPeakBytes = max(plan.ordinalGrowthPeakBytes, liveOrdinalBytes)
 	slices.Sort(baseOrdinals)
 	var err error
-	plan.base, err = typedcolumn.NewSparseRowSelectionNoCopy(overlay.base.reader.rowRefSource.rows, baseOrdinals)
+	plan.base, err = typedcolumn.NewSparseRowSelectionNoCopy(overlay.base.reader.graph.RowCount, baseOrdinals)
 	if err != nil {
 		return nil, err
 	}
@@ -222,8 +221,7 @@ func prepareTypedGraphSingleLeaf(plan *typedGraphPreparedFilter, lookup hybridSc
 	if shouldDedupeIndexDocumentIDs(idx, overlay.current.catalog.meta.Options) {
 		return nil, ErrHybridSearchUnsupported
 	}
-	inverse := overlay.base.reader.rowRefSource
-	perID := bits.Len(uint(inverse.rows)) + bits.Len(uint(len(overlay.rows))) + 2
+	perID := bits.Len(uint(overlay.base.reader.graph.RowCount)) + bits.Len(uint(len(overlay.rows))) + 2
 	const word = bits.UintSize / 8
 	var baseOrdinals, deltaOrdinals []int
 	appendOrdinal := func(dst *[]int, ordinal int) error {
@@ -321,7 +319,13 @@ func (overlay *typedGraphOverlaySearch) ordinalForCurrentRef(ref DocumentRowRef)
 }
 
 func (p *typedGraphPreparedFilter) validFor(overlay *typedGraphOverlaySearch) bool {
-	return p != nil && p.overlay == overlay && overlay != nil && overlay.base != nil && !overlay.base.closed && overlay.current != nil && !overlay.current.closed && overlay.base.reader.rowRefSource.inversePermutationActive() && (p.borrowedBaseFilter == nil || p.borrowedBaseFilter.plan.validFor(p.borrowedBaseFilter.plan.overlay))
+	return p != nil && p.overlay == overlay && overlay.validOpen() && overlay.baseInverseReady() && (p.borrowedBaseFilter == nil || p.borrowedBaseFilter.plan.validFor(p.borrowedBaseFilter.plan.overlay))
+}
+
+func (v *typedGraphOverlaySearch) baseInverseReady() bool {
+	// A validated empty graph has no physical rows to invert. Never synthesize
+	// a mapping or exempt a nonempty graph from its persisted inverse contract.
+	return v.base.reader.graph.RowCount == 0 || v.base.reader.rowRefSource.inversePermutationActive()
 }
 
 func (p *typedGraphPreparedFilter) excludesBaseOrdinal(ordinal int) bool {

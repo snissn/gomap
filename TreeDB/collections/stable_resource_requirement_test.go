@@ -32,7 +32,7 @@ func TestStableColumnAppendRequirementProofWorkIsMutationLocal(t *testing.T) {
 	if len(mutation.Added) != 1 || len(mutation.Removed) != 0 {
 		t.Fatalf("mutation added=%d removed=%d", len(mutation.Added), len(mutation.Removed))
 	}
-	if len(requirements.ScopedFields) != 0 || fallback == nil {
+	if len(requirements.ScopedFields) != 0 || len(requirements.ScopedNamespaces) != 0 || fallback == nil {
 		t.Fatalf("certified append eagerly materialized requirements=%d fallback_nil=%t", len(requirements.Obligations), fallback == nil)
 	}
 	if work.FinalRequirementRecordsDecoded > 1 || work.FinalRequirementObligationsMaterialized != 0 {
@@ -55,8 +55,13 @@ func TestStableColumnRemovalKeepsExactRequirements4366(t *testing.T) {
 	if fallback != nil || len(mutation.Removed) != 1 || len(mutation.Added) != 0 {
 		t.Fatalf("removal mutation added=%d removed=%d fallback_nil=%t", len(mutation.Added), len(mutation.Removed), fallback == nil)
 	}
-	if len(requirements.ScopedFields) == 0 || len(requirements.Obligations) != 0 {
-		t.Fatalf("removal exact requirements fields=%d obligations=%d", len(requirements.ScopedFields), len(requirements.Obligations))
+	if len(requirements.ScopedFields) != 0 || len(requirements.ScopedNamespaces) != len(stableColumnDurableRequirementFields) || len(requirements.Obligations) != 0 {
+		t.Fatalf("removal exact requirements fields=%d namespace_scopes=%d obligations=%d", len(requirements.ScopedFields), len(requirements.ScopedNamespaces), len(requirements.Obligations))
+	}
+	for _, scope := range requirements.ScopedNamespaces {
+		if scope.Namespace != "events/column-assets" {
+			t.Fatalf("unexpected namespace scope %+v", scope)
+		}
 	}
 	if work.FinalRequirementRecordsDecoded != 1 || work.FinalRequirementObligationsMaterialized != 0 {
 		t.Fatalf("removal exact work=%+v", work)

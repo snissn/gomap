@@ -214,6 +214,11 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 		_ = deltaIter.Close()
 		return stats, cleanupPrepared(fmt.Errorf("collections: compaction durable requirements: %w", err))
 	}
+	durableRequirements, _, err = c.unionTypedGraphBaseRequirements(durableRequirements, state.catalog.typedGraphBase)
+	if err != nil {
+		_ = deltaIter.Close()
+		return stats, cleanupPrepared(err)
+	}
 	rootNames := []string{state.rootName}
 	baseRootIDs := map[string]uint64{state.rootName: state.baseRoot}
 	var locatorBaseRoot uint64
@@ -302,6 +307,10 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 }
 
 func (c *Collection) loadColumnStoreCompactionState(ctx context.Context) (columnStoreCompactionState, func(), error) {
+	return c.loadColumnStoreCompactionStateWithBudget(ctx, nil)
+}
+
+func (c *Collection) loadColumnStoreCompactionStateWithBudget(ctx context.Context, cold *typedGraphColdLimits) (columnStoreCompactionState, func(), error) {
 	if err := ctx.Err(); err != nil {
 		return columnStoreCompactionState{}, nil, err
 	}
@@ -357,6 +366,12 @@ func (c *Collection) loadColumnStoreCompactionState(ctx context.Context) (column
 	if cfg.RecoveryAuthoritativeAppliedCommandLSN == 0 {
 		closeState()
 		return columnStoreCompactionState{}, nil, errors.New("collections: column store compaction requires recovery-authoritative AppliedCommandLSN")
+	}
+	if cold != nil {
+		if err := validateTypedGraphColdManifestBudget(ctx, snap, baseRoot, *cold); err != nil {
+			closeState()
+			return columnStoreCompactionState{}, nil, err
+		}
 	}
 	records, err := loadColumnManifestRecordsFromRoot(snap, baseRoot)
 	if err != nil {

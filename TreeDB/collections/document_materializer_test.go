@@ -137,6 +137,14 @@ func TestCollectionReadViewLookupDocumentRowRefsByIDMissingLocatorWithPrimaryFai
 		!strings.Contains(err.Error(), "primary row locator root is absent") {
 		t.Fatalf("LookupDocumentRowRefsByID err=%v want absent-locator fail-closed error", err)
 	}
+	if _, err := view.FetchDocumentsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{}); err == nil || !strings.Contains(err.Error(), "primary row locator root is absent") {
+		t.Fatalf("FetchDocumentsByID err=%v want absent-locator rejection", err)
+	}
+	// A present but malformed locator must not trigger a visibility fallback.
+	catalogWithoutLocator.roots[collectionColumnRowLocatorRootName(view.catalog.meta.Name)] = catalogWithoutLocator.rootID(collectionPrimaryRootName(view.catalog.meta.Name))
+	if _, err := view.FetchDocumentsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{}); err == nil || !strings.Contains(err.Error(), "invalid primary row locator") {
+		t.Fatalf("FetchDocumentsByID err=%v want malformed-locator rejection", err)
+	}
 }
 
 func TestCollectionReadViewLookupDocumentRowRefsByIDMissingLocatorWithPrimaryOverlayFailsClosedP3890(t *testing.T) {
@@ -223,8 +231,8 @@ func TestCollectionReadViewFetchDocumentsByIDColumnReconstructionParity(t *testi
 	if got.Stats.DocumentsRequested != 4 || got.Stats.DocumentsFetched != 3 || got.Stats.DocumentsMissing != 1 {
 		t.Fatalf("stats=%+v want requested=4 fetched=3 missing=1", got.Stats)
 	}
-	if got.Stats.RetainedPayloadFetches != 3 || got.Stats.VisibilityScans != 1 || got.Stats.VisibilityRowsScanned != 2 || got.Stats.VisibilityRows != 2 || got.Stats.JSONReconstructionRows != 3 {
-		t.Fatalf("stats=%+v want retained fetches, one visibility scan over two row-asset rows, three reconstructions", got.Stats)
+	if got.Stats.RetainedPayloadFetches != 3 || got.Stats.VisibilityScans != 0 || got.Stats.VisibilityRowsScanned != 0 || got.Stats.PointRowFetches != 3 || got.Stats.JSONReconstructionRows != 3 {
+		t.Fatalf("stats=%+v want retained fetches, three point rows and reconstructions, no visibility scan", got.Stats)
 	}
 	if got.Stats.TypedColumnRows != 3 || got.Stats.TypedColumnPartLoads == 0 || got.Stats.TypedColumnPartDecodes == 0 {
 		t.Fatalf("stats=%+v want typed_column_part reconstruction counters", got.Stats)
@@ -242,9 +250,65 @@ func TestCollectionReadViewFetchDocumentsByIDColumnReconstructionParity(t *testi
 	if _, err := view.FetchDocumentsByRowRef([]DocumentRowRef{badRef}, DocumentFetchOptions{}); err == nil || !strings.Contains(err.Error(), "row_index") {
 		t.Fatalf("bad row ref err=%v want row_index mismatch", err)
 	}
+	if _, err := view.fetchDocumentsByID([][]byte{[]byte("e2")}, []*DocumentRowRef{&badRef}, DocumentFetchOptions{}); err == nil || !strings.Contains(err.Error(), "row_index") {
+		t.Fatalf("expected row ref err=%v want row_index mismatch", err)
+	}
 }
 
-func TestCollectionReadViewFetchDocumentsByIDCancelsDuringColumnVisibilityScan(t *testing.T) {
+func TestCollectionReadViewPointIDFetchMutationReopen(t *testing.T) {
+	d, col := newDocumentMaterializerTestCollection(t)
+	defer func() { _ = d.Close() }()
+	dir := d.Dir()
+	ids := [][]byte{[]byte("a"), []byte("b")}
+	if _, err := col.InsertBatch(ids, [][]byte{[]byte(`{"row_id":1,"kind":"old","score":1}`), []byte(`{"row_id":2,"kind":"gone","score":2}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := col.Update(ids[0], func([]byte) ([]byte, bool, error) { return []byte(`{"row_id":1,"kind":"new","score":3}`), true, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := col.Delete(ids[1]); err != nil {
+		t.Fatal(err)
+	}
+	for phase := 0; phase < 2; phase++ {
+		if phase == 1 {
+			if err := d.Close(); err != nil {
+				t.Fatal(err)
+			}
+			d = openCollectionCommandWALDB(t, dir)
+			var err error
+			col, err = NewCollectionManager(d).OpenCollection("docs")
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		view, err := col.OpenCollectionReadView()
+		if err != nil {
+			t.Fatal(err)
+		}
+		query := [][]byte{[]byte("b"), []byte("a"), []byte("missing"), []byte("a")}
+		got, err := view.FetchDocumentsByID(query, DocumentFetchOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Results) != 4 || got.Results[0].Found || got.Results[2].Found || !bytes.Contains(got.Results[1].Document, []byte(`"new"`)) || !bytes.Equal(got.Results[1].Document, got.Results[3].Document) || got.Stats.PointRowFetches != 2 || got.Stats.VisibilityScans != 0 || got.Stats.RowLocatorLookups != 4 {
+			t.Fatalf("phase%d response=%+v", phase, got)
+		}
+		query[1][0] = 'x'
+		if string(got.Results[1].ID) != "a" || string(got.Results[1].RowRef.DocumentID) != "a" {
+			t.Fatal("result ID borrowed caller input")
+		}
+		got.Results[1].Document[0] = '['
+		fresh, err := view.FetchDocumentsByID([][]byte{[]byte("a")}, DocumentFetchOptions{})
+		if err != nil || fresh.Results[0].Document[0] != '{' || fresh.Stats.TypedColumnPartDecodes != 0 {
+			t.Fatalf("owned cached repeat: %+v err=%v", fresh, err)
+		}
+		if err := view.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestCollectionReadViewFetchDocumentsByIDCancelsBeforePointRowFetch(t *testing.T) {
 	d, col := newDocumentMaterializerTestCollection(t)
 	defer func() { _ = d.Close() }()
 	const rows = 64
@@ -263,11 +327,11 @@ func TestCollectionReadViewFetchDocumentsByIDCancelsDuringColumnVisibilityScan(t
 	}
 	defer func() { _ = view.Close() }()
 
-	// The first six checks occur before the physical-row visitor. The seventh
-	// is its 64-row poll; the final check maps the scan abort back to ctx.Err.
-	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 7}
-	if _, err := view.FetchDocumentsByID([][]byte{ids[0]}, DocumentFetchOptions{Context: ctx}); !errors.Is(err, context.Canceled) || ctx.calls != 8 {
-		t.Fatalf("FetchDocumentsByID cancellation err=%v calls=%d want context canceled after row scan", err, ctx.calls)
+	// Cancel after primary and locator resolution, before the point-row read.
+	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 5}
+	got, err := view.FetchDocumentsByID([][]byte{ids[0]}, DocumentFetchOptions{Context: ctx})
+	if !errors.Is(err, context.Canceled) || ctx.calls != 5 || got.Stats.PointRowFetches != 0 || got.Stats.DocumentsFetched != 0 {
+		t.Fatalf("FetchDocumentsByID cancellation err=%v calls=%d stats=%+v", err, ctx.calls, got.Stats)
 	}
 }
 
@@ -371,9 +435,9 @@ func TestCollectionReadViewReusesMappedAssetViewsAcrossFetches(t *testing.T) {
 		_ = view.Close()
 		t.Fatalf("second stats=%+v want reusable read caches without file opens", second.Stats)
 	}
-	if second.Stats.AssetMmapHits == 0 || second.Stats.AssetActiveHandles == 0 {
+	if second.Stats.AssetMmapHits != 0 || second.Stats.AssetActiveHandles == 0 || second.Stats.TypedColumnPartDecodes != 0 || second.Stats.PointRowFetches != 2 {
 		_ = view.Close()
-		t.Fatalf("second stats=%+v want mmap hits and active handles", second.Stats)
+		t.Fatalf("second stats=%+v want cached point rows, retained handles, no remap or typed decode", second.Stats)
 	}
 	for i := range first.Results {
 		if !first.Results[i].Found || !second.Results[i].Found || !bytes.Equal(first.Results[i].Document, second.Results[i].Document) {
@@ -420,8 +484,8 @@ func TestCollectionReadViewForcedReadAtFallbackReturnsIdenticalDocuments(t *test
 	if err != nil {
 		t.Fatalf("second FetchDocumentsByID: %v", err)
 	}
-	if first.Stats.AssetMmapHits != 0 || second.Stats.AssetMmapHits != 0 || first.Stats.AssetReadAtFallbacks == 0 || second.Stats.AssetReadAtFallbacks == 0 {
-		t.Fatalf("fallback stats first=%+v second=%+v want forced read-at fallback only", first.Stats, second.Stats)
+	if first.Stats.AssetMmapHits != 0 || second.Stats.AssetMmapHits != 0 || first.Stats.AssetReadAtFallbacks == 0 || second.Stats.AssetReadAtFallbacks != 0 || second.Stats.PointRowFetches != 2 {
+		t.Fatalf("fallback stats first=%+v second=%+v want first read-at then cached point rows", first.Stats, second.Stats)
 	}
 	if second.Stats.AssetFileOpens != 0 {
 		t.Fatalf("second stats=%+v want fallback read caches reused", second.Stats)

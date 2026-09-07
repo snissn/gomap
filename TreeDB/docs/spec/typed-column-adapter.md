@@ -326,6 +326,249 @@ they preserve 0-alloc/near-0-alloc decode and scan paths or introduce an explici
 benchmarked fallback. These allocation targets do not relax checksum, lifetime,
 schema, or fail-closed validation.
 
+## Typed graph publication and lifecycle (#4618)
+
+The internal, explicitly initialized publication seam maintains a derived typed
+suffix at the accepted collection frontier. Public mutable graph serving composes
+this seam through explicit
+[`EnsureColumnGraphServing`](typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission),
+including re-ensure after reopen; typed writes alone do not activate it.
+Both ordered-root publication
+variants share the seam; recovery tests may initialize it through isolated
+test instrumentation before the real typed replay executor.
+
+Buffered durable acknowledgements reserve cumulative physical rows, tombstones,
+declared-value slots, and ID/string/FP32 payload bytes before WAL append. Scalar
+receipts follow the existing buffered document owners through synchronous and
+asynchronous publication. Pending-to-installed transfer does not release the
+total admission charge. Proven pre-append rejection releases its reservation;
+uncertain accepted work retains debt and invalidates derived readiness. An
+invalid initialized state cannot be mistaken for a disabled feature. Encoded
+asset bytes are measured after installation, not claimed as a pre-WAL physical
+byte bound. These internal limits are explicit fixture/admission inputs, not
+production defaults.
+
+The DB/collection coordinator owns the immutable frontier across collection
+managers. Exact predecessor, pager, schema, and collection root-role checks
+prevent reuse across an accepted-root/install gap. Unrelated collection commits
+do not alone invalidate it. Changed rows reuse owned typed payloads; bounded
+suffix row headers are merged and unchanged vector norms reused. No retained
+document JSON is used to construct this derived state. Public bootstrap,
+bounded physical folding and retirement compose the lifecycle mechanisms below;
+none follows merely from maintaining a suffix.
+
+The internal buffered-insert route can additionally reserve encoded output with
+an explicit positive `EncodedOutputBytes` limit. Zero preserves the earlier
+logical-only internal mode; it is not physical admission. Reservation uses the
+prepared retained primary/scalar output, selected typed-image and generated
+locator/manifest/control bounds, and V2 text
+posting/position/block framing before primary value-log pointerization and WAL
+acknowledgement. Pointerization runs under the existing validated staging
+ownership in this enabled route. Flush checks its finished native tables against
+the reserved bound before appending typed assets or pointerizing those tables.
+The existing receipt carries only scalar costs, not another document copy.
+
+An attempted append keeps its encoded charge even if the append fails, its pins
+are released, publication is rejected, or logical reconciliation succeeds. A
+retry reserves another attempt; successful flush transfers logical pending debt
+without refunding encoded output. This is a conservative encoded-output ledger,
+not a disk quota: it excludes WAL, index/COW pages, segment padding, allocator
+scratch, and pre-existing unreachable storage. Fold output and global physical
+residency/reclamation remain separate admission obligations.
+Buffered V2 reservations can
+duplicate tail and pending-ID costs across receipts. Pending IDs include the
+active buffer plus queued and detached publishing units under existing domain
+ownership; a pin already reflecting a publishing unit is conservatively charged
+again rather than omitting a possible predecessor.
+
+Immediate insert, typed batch replacement, single-document replacement,
+delete/delete-batch and atomic source publication reserve the selected typed
+image and generated locator bounds plus their finished native table output
+before pointerization. Locator admission includes each ID, fixed-width live
+coordinates or a deletion tombstone, and root-entry framing. Source replacement
+conservatively charges both removals and inserts, including overlapping IDs.
+Generated manifest and system-control sizes are prepared once at lifecycle
+initialization/reconciliation and carried as scalar costs in the existing
+immutable publication state. Control metadata includes maximum-width future
+identities, command frontier and mutation counters, plus root descriptors and
+document generation. Normal writes add these costs without marshaling another
+metadata image or scanning the retained manifest; only newly emitted manifest
+records are charged. Actual control metadata remains JSON, not indexed data.
+Their receipt borrows the producing plan's exact document/source-delete order
+and prepared value-header identity through synchronous publication. Rejection
+before a command is assigned refunds logical pending debt, but not attempted
+encoded output; an assigned/ambiguous command retains its charge. Existing
+no-op command frames remain possible without new encoded-output debt.
+
+Typed projections pass their prepared rows directly. Legacy JSON replacement
+and source APIs move their existing one-time declared-row preparation earlier;
+this does not add another extraction, but those legacy producers are not
+zero-JSON. `ReplaceTypedSourceByID` supplies explicit delete IDs and typed
+inserted rows to that same atomic source publisher. Its scalar/text planner and
+declared-row writer reuse the typed projection; format 12 carries those values
+through command replay without rebuilding indexed fields from retained JSON.
+The API uses the typed batch schema/carrier and input-ownership contract,
+validates admission before draining, and preserves one atomic same-ID
+delete/reinsert (insertion wins). Empty insertion permits nil columns and uses
+the existing delete-only source frame. Public setup reconstructs bounded retained
+inventory after reopen; attempted-work renewal requires successful reclamation
+and inventory through the maintenance contract. This producer alone does not
+enable public mutable serving.
+
+An internal coherent owner can bind an already reconciled publication frontier
+to the persisted base aliases and one current snapshot. Cross-manager accepted
+buffers are drained at owner setup; exact authority mismatch remains unavailable.
+The owner shares immutable suffix rows and norms without decoding them again,
+reuses the existing prepared graph, and pins the whole base/current typed asset
+union through lazy final-result materialization. Explicit owner/state/asset
+limits count owner-retained state once per shared frontier and retain its charge
+until the last owner closes. These are scoped owner charges, not a claim to bound
+unowned current state, pending assets, caches, or total physical retirement.
+Metadata and decoded working terms have separate setup bounds. This internal
+seam alone does not enable public mutable graph serving; public Ensure composes
+physical pre-ack admission, bounded folding, and lifecycle resource limits.
+
+An internal captured-base slot in the existing collection prepared-search cache
+can retain an immutable shared graph reference and exact typed-asset lease,
+without a snapshot, catalog, or suffix. Warm acquisition runs outside the
+storage barrier; single-build waiters hold neither that barrier nor the cache
+mutex. Refresh overlaps predecessor and successor references, charging both
+against explicit owner/asset and known metadata-backing limits before mapping.
+Lease capacities, identity bytes, vector-location/ordinal/part arrays and
+layer/pack metadata are charged conservatively per keeper even when shared.
+Manager bookkeeping, allocator overhead and temporary decode work are not a
+claimed total heap bound. Read owners additionally reserve the same conservative
+holder backing bound and their known lease/key/owner descriptors before mapping,
+including repeated owners of one suffix state. Those charges survive keeper
+Close and are released only after the read owner's resources close. Suffix
+payloads remain charged once per immutable state; shared holder backing is
+deliberately charged per owner rather than deduplicated. This covers known
+retired-holder backing, not allocator overhead, temporary preparation or the
+remaining global physical/fold budget. Cache Close and existing manager/DB cleanup release
+the keeper; query owners independently retain their current pins and scratch.
+An empty base has no shared holder and this internal warm route is unavailable;
+the existing coherent empty/suffix-only owner remains supported. Warming is not
+an identity handshake: a concurrent base cutover can require a fresh owner to
+build another holder. It does not authorize stale serving or remove current
+owner setup costs. The admitted public mutable route reuses this same keeper.
+
+Unpublished captured-frontier asset preparation reuses the ordinary row/typed
+encoder with an explicit captured generation and real applied command LSN. It
+chooses a row part beyond the captured part IDs (overflow is rejected) while
+preserving the reader-required typed part ID 2. The ordinary command wrapper
+still advances its predecessor generation. Reconstruction identifies the unique
+non-delete row part in each generation, rather than assuming row part 1; this
+also distinguishes source replacement's live rows from its same-generation
+tombstones. Ambiguous live parts and invalid role/reason/key identities fail
+closed. Fixture tests combine compacted T assets with real post-T mutations and
+exercise mixed-generation scan, locator coordinates, point fetch and typed
+reconstruction. Prepared stable resources are retained until transfer or
+release, not deleted by age.
+
+The internal `foldTypedGraph` maintenance operation now composes this producer
+with native HNSW/TVIS preparation and TGBA2 independent root replacement. It
+drains registered write domains for capture T, retains a snapshot and exact
+asset lease, then releases collection admission while materializing typed rows
+and constructing the candidate. Install drains again, rejects a changed base,
+schema or pager, and merges actual post-T part records under the latest U
+header. A sorted current-locator scan remaps surviving pre-T rows; post-T
+updates, deletes and reinserts retain their published coordinates. No per-row
+current point probes or indexed JSON reconstruction are used.
+
+The existing maintenance publisher atomically installs current manifest/locator
+roots and independent captured T primary/scalar/locator/manifest roots with
+the exact resource closure. Unchanged empty roots are retained, not submitted
+as no-op maintenance rewrites. No command-WAL frame or logical LSN is added.
+Derived publication state is fenced on success or ambiguous acceptance and
+reconciled after collection locks are released. One explicit checkpoint follows
+a successful install outside those locks. Old read owners keep their leases;
+they are never force-closed, and existing attempted encoded debt is not reset.
+
+Admission allows one candidate per collection across managers. Explicit input
+row, manifest, asset-byte and per-decoder-term limits apply to captured and
+install-time views; native root copy work uses the existing capture ceilings.
+These are not a summed transient heap or global disk guarantee. Both the
+current locator scan and native root construction remain N-dependent under
+write admission, and the publisher builds roots under its existing writer
+lock. Unpublished candidates release resource handles, leaving unreferenced
+physical output to existing reclamation.
+
+Internal fold callers must also supply positive candidate-output byte and
+appender-attempt limits. Their identity is fixed for the collection coordinator
+across attempts and managers. Existing row append sessions and graph resource
+owners share one admission receipt: it charges exact padded bytes before each
+write (before combined batch-buffer allocation), and charges an appender attempt
+before opening/creating a segment. The latter also bounds empty files left by
+rejected retries. Attempted charges survive partial writes, stale/canceled
+candidates, logical reconciliation and handle closure; they are separate from
+ordinary mixed encoded-output debt. No successful or failed GC counter refunds
+these charges. They do not include pre-existing/reopened inventory, encoder
+scratch, pager output or whole-process memory. Public admission also requires
+coherent inventory/reclamation and combined known-workspace bounds; attempted
+output accounting alone establishes neither public activation nor qualified
+pause/storage bounds.
+
+The internal `renewTypedGraphWorkEpoch` boundary can renew both attempted-work
+allowances after successful bounded column reclamation and a complete retained
+inventory. It excludes folds across managers, drains under schema admission,
+then takes the existing storage barrier and mutation lock. Pending receipts must
+be zero; current state objects, typed payload/header ownership and retained read
+owners must fit the admitted retained budget. Open owners are never force-closed.
+Fixed coordinator limits cannot be raised on a rejected retry. Cancellation,
+incomplete planning, cleanup failure and residual pressure retain attempted debt;
+GC byte counters are never subtracted from mixed encoded work.
+
+Configure this boundary before the first participating fold. Configured folds
+retain captured asset references as internal candidates in the existing lifecycle
+registry before releasing capture ownership; these are cleanup provenance, not
+new live pins. Current roots, recoverable roots and real readers still protect
+them. Successful GC prunes only references whose files are absent under the same
+storage authority, preserving mixed and pinned survivors. Recovery-root manifest
+decoding uses the same input preflight, and replay-candidate reads have an
+explicit input-byte ceiling. This provenance is process-local. Restart cleanup
+uses persisted root/replay closure and bounded inventory; fresh per-attempt
+output prevents failed prefixes from becoming part of later live files. This is
+not permission to mark/sweep unknown files or discard unproven prefix gaps.
+
+Native policy is deliberately finite: bounded streaming directory inspection
+counts unknown and empty entries and file lengths, and the existing cheap
+freelist snapshot distinguishes total index pages from reusable space. Above the
+configured residual envelope, renewal fails closed before any native full scan.
+Callers may perform existing explicit native maintenance and retry. Renewal does
+not invoke `CompactStorage`, `Prune`, or a new reclamation engine. Directory file
+lengths are not allocated blocks, and encoded-work allowances do not predict
+index/COW amplification or provide a physical quota. Nonempty vector-partition
+state is outside this selected path. Public Ensure also configures combined
+fold/discovery workspace admission. Measured sustained resource behavior is a
+separate qualification obligation, not a consequence of renewing counters.
+
+Explicit internal cold reconciliation can bootstrap a captured base and its
+current typed suffix after normal `Open`, without replay instrumentation. It
+drains pre-existing feature-off buffers before enabling limits. Once enabled,
+failure leaves a nonnil invalid marker; backend recovery-required errors remain
+fenced. Only a synthetic drainer carrying the schema-exclusive caller's token
+may publish acknowledged pending receipts through invalid derived state. Receipt
+coverage checks admitted ID order and immutable value-header ownership, not just
+aggregate counts. A successful drain consumes pending charges once; failed cold
+preparation retains the total charge until authoritative reconciliation succeeds.
+
+Cold setup bounds each manifest's record count and encoded metadata bytes before
+decoding, cumulative suffix asset bytes, physical versions/tombstones/value slots,
+and each decoded payload/header term. These separate term limits are not a summed
+process-heap ceiling. Temporary existing lifecycle leases protect suffix assets
+during decoding; final catalog verification and installation use the storage
+maintenance barrier. Unchanged-frontier reuse avoids suffix decoding. This is
+explicit internal setup, not automatic public reopening or per-query rebuilding.
+
+Collection manager construction establishes the existing DB-owned asset-registry
+cleanup hook while the backend still accepts registration. A first buffered
+typed flush during `Close` therefore uses that owner instead of registering a
+hook after shutdown begins; failed closed construction admits no new manager
+hooks. Managers share the DB identity and cleanup removes it after their flushes.
+An empty typed graph rebuild verifies both primary and row-locator roots are
+empty, including repeated rebuilds and reopen, rather than falling back to JSON
+or trusting a zero manifest row count alone.
+
 ## Boundary
 
 Production `TreeDB/collections` imports of `TreeDB/internal/typedcolumn` stay

@@ -164,6 +164,12 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 		}
 	}
 
+	return encodeColumnManifestAtGeneration(input, generation)
+}
+
+// Maintenance can replace physical assets at an already captured logical
+// generation. Ordinary writes enforce advancement before reaching this codec.
+func encodeColumnManifestAtGeneration(input ColumnPublishManifestEncodeInput, generation uint64) (ColumnPublishManifestEncodeResult, error) {
 	records := make([]columnManifestRecord, 0, 1+len(input.CurrentManifestRecords)+len(input.Prepared.Assets))
 	header, err := encodeColumnManifestHeaderRecord(input, generation)
 	if err != nil {

@@ -293,8 +293,9 @@ type VectorIndexSearchOptions struct {
 	Filter                    func(DocumentRecord) (bool, error)
 	IndexRangeFilter          *VectorIndexRangeFilter
 	// DeclaredScalarFilter is the bounded equality/range AND grammar backed by
-	// declared scalar indexes. It is supported only by native_runtime buffered
-	// search and is intentionally distinct from the legacy callback filters.
+	// declared scalar indexes. It is supported by native_runtime buffered search
+	// and explicitly admitted typed column_graph serving. It is intentionally
+	// distinct from legacy callback filters.
 	DeclaredScalarFilter *HybridScalarFilter
 	ExactFilterMaxDocs   int
 	DisableExactFallback bool

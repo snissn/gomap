@@ -12,6 +12,13 @@ cleaning, compacting, or rewriting the directory. Typed-column image,
 descriptor, manifest, and schema evolution follows the fail-closed policy in
 `typed-column-schema-evolution.md`.
 
+Column manifest generation is not a command LSN or an incarnation identifier.
+Managed writes advance it; physical maintenance can preserve it. A replay
+candidate below all compatible captured root generations can be excluded only
+under the managed durable continuity contract in
+`recoverable-root-set-maintenance-3681.md`. This changes no disk format and never
+overrides exact root-reference or stable file-identity protection.
+
 The canonical production profiles are `command_wal_durable`,
 `command_wal_relaxed`, and `no_wal_fast`; `bench_unsafe` is benchmark/test only.
 The resolved profile is immutable at open. Main DB `format.json` version 4
@@ -2350,7 +2357,7 @@ Current command kinds:
 | 101 | `CollectionDeleteBatchByID` | collection | `CollectionDeleteBatchByIDV1` | deterministic collection delete-by-id batch |
 | 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` or `CollectionTypedBatchByIDV1` | deterministic collection update/replace-by-id batch |
 | 103 | `CollectionRebuildVectorIndex` | collection | `CollectionRebuildVectorIndexV1` | deterministic collection vector-index rebuild command |
-| 104 | `CollectionReplaceSourceByID` | collection | `CollectionReplaceSourceByIDV1` | one-source delete-and-reinsert command used by atomic `IngestSources` publication |
+| 104 | `CollectionReplaceSourceByID` | collection | `CollectionReplaceSourceByIDV1` or `CollectionTypedSourceByIDV1` | atomic explicit delete-and-reinsert source command |
 | 200 | `CatalogCreateCollection` | catalog | `CatalogCreateCollectionV1` | deterministic catalog create-collection command; old placeholder name is an alias only |
 | 300 | `DurablePrefixBarrier` | system | `DurablePrefixBarrierV1` | active V2 empty durable-frontier record used by explicit sync with no user mutation |
 
@@ -2369,6 +2376,7 @@ Current payload format IDs:
 | 9 | `RawKVBatchV2` |
 | 10 | `CollectionReplaceSourceByIDV1` |
 | 11 | `CollectionTypedBatchByIDV1` |
+| 12 | `CollectionTypedSourceByIDV1` |
 
 `RawKVBatchV1` and `RawKVBatchV2` share this payload framing:
 
@@ -2705,6 +2713,16 @@ The frame is one logical source replacement. Recovery applies its delete set
 and complete parent/child document set through the same atomic multi-root
 publisher; it never exposes the nested operations as separate applied LSNs.
 
+`CollectionTypedSourceByIDV1` (format 12, same command kind 104) uses the same
+outer length framing, but its remaining section is `CollectionTypedBatchByIDV1`
+instead of an insert-JSON payload. The canonical delete and typed sections must
+name the same collection. The typed section must have flags zero and at least
+one inserted row; its version, schema hash, ordering, lengths and carrier
+validation remain unchanged. Unknown versions and malformed sections fail
+closed. Delete-only typed source calls use format 10 with no inserted documents;
+there is no indexed insertion payload to reconstruct. One frame and one applied
+LSN cover both sets, including same-ID delete/reinsert; insertion wins.
+
 `CollectionRebuildVectorIndexV1` payload:
 
 ```text
@@ -2986,3 +3004,119 @@ poisoned, and shutdown candidates retain ownership until confirmed durable
 publication. Reopen reconstructs surviving ownership from the selected
 generation and its durable reservation record; elapsed time, `KeepRecent`, and
 the visible commit sequence alone never grant reuse.
+
+## Captured typed graph base control (M3)
+
+The current synchronous rebuild of a supported single typed `column_graph`
+atomically publishes `collections/typed-graph-base/v1/<collection>` with its
+graph manifest and one nonrecursive set of independent captured index roots.
+The descriptor namespace retains `/v1/`, but the control contains `TGBA`,
+little-endian uint16 version 2, uint16 root count,
+uint32 metadata byte length, and canonical normalized collection metadata.
+The decoder limits the entire record to 128 KiB and the root count to 64 before
+decoding metadata. Root IDs remain ordinary root descriptors so physical
+maintenance can remap them; the control contains no page IDs or nested aliases.
+Version 1 controls are rejected: their shared mutable pager pages do not provide
+the independent-root ownership required here. No migration is supplied.
+
+Initial capture copies raw primary, scalar, locator, and manifest index entries
+into independent native B-trees. Persistent value pointers, entry revisions,
+and immutable typed/leaf-log assets are shared without resolving or regenerating
+their payloads. Subsequent capture replaces each prior independent tree through
+the ordinary delta publisher, including tombstones for old-only keys. This lets
+normal COW retirement reclaim superseded captured pages instead of orphaning an
+entire tree on every capture. Descriptor enumeration alone does not supply
+mutable COW-fork semantics; this is a collections ownership rule, not a general
+engine alias-retirement repair.
+
+The initial capture safety ceilings are 8,000,000 total old/new index records and
+512 MiB of encoded keys plus inline values or persistent pointers and entry
+headers. Pre-WAL checks include conservative graph/header growth from the actual
+built layer count and string lengths; the final prepared manifest is checked
+again. These are not measured operational capacity, heap, or disk limits.
+Publication owns additional batch/tree-build scratch and runs under its existing
+writer lock; capture is not constant-space streaming publication. Public mutable
+admission composes the separate physical-output and fold resource gates through
+[`EnsureColumnGraphServing`](typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission).
+
+Producer admission is stricter than this corruption bound: the control key plus
+encoded value must fit `page.PageSize - page.PageHeaderSize - 256` bytes, and
+each alias descriptor must meet the same inline bound. Before command-WAL
+admission, rebuild checks the maximum-width future manifest identities and LSN,
+including initially absent identities; installation rechecks the actual bytes.
+Schema changes remove the control and aliases with real tombstones. Exact
+publication obligations and maintenance reachability include the captured
+manifest closure; unchanged-base append certification remains available.
+Exact column publication requirements are scoped by reachability field **and
+logical asset namespace**, including declared empty scopes. Recapturing one
+collection replaces only that collection's obligations; other namespaces stay
+retained, even when their obligations share one physical resource token.
+The shared closure API retains legacy whole-field scopes, but rejects overlap
+between whole-field and namespace-local scopes for the same field. Namespace
+identifiers are nonempty opaque logical IDs, not filesystem basenames. This is
+an in-memory publication contract, not an on-disk format change. Namespace-local
+replacement uses exact filtering and validation rather than the whole-field
+complete-final mutation certificate; the existing true append-only proof is
+unchanged. Missing or stale obligations inside the declared scopes fail closed.
+Descriptor removal does not itself retire every page of an independent captured
+tree. The supported command-WAL profile rejects scalar/text schema changes and
+unlogged vector create/drop publication before capture cleanup. Reopening with
+WAL disabled does not bypass the persisted command-WAL requirement. Future
+schema/drop support must atomically reclaim the independent native roots;
+external typed-asset GC is not native index-page reclamation. Mutation and
+recapture retirement requirements are unchanged.
+
+Synchronous rebuild capture is not mutable graph serving. The internal physical
+fold additionally writes compacted assets at the real captured generation T,
+with a fresh row part and typed part 2, and preserves post-T records under the
+current U manifest header. Its separately checksummed captured manifest and
+independent native roots describe T, not the current U scalar/primary authority.
+For the supported non-column-retained typed FP32 schema, each physical batch or
+fold attempt puts row metadata and aligned typed images in one fresh O_EXCL
+segment from the existing manager allocator. Atomic source delete/insert stages
+share that attempt's file only while the first stage's prepared authority is
+still held. Delete-only output and same-generation retries also start fresh;
+logical generation/part identities and typed alignment/padding are unchanged.
+The file ID is no longer derived from generation for this selected path; other
+schemas retain their existing placement. Failed output remains persistent but
+cannot become an unknown prefix of a later live attempt. Reachability and exact
+captured/fallback/reader protection are unchanged.
+
+The reused allocator uses IDs 2 through 1,048,575, excluding legacy file 1 and
+the direct-view reserved band. Its high-water cache is only a hint. On exhaustion,
+the existing sorted listing finds an absent low-band ID; exclusive creation
+rechecks occupancy, including nonregular entries. Exact GC must release old
+files before reuse: numeric file IDs are not incarnation identities. Logical
+generation/part/checksum and exact physical reader/deletion identities remain
+unchanged. Fully occupied capacity still fails closed. No new free-ID store or
+incarnation scheme is introduced.
+Installation uses the existing column-asset rewrite maintenance publisher and
+does not add a logical WAL command. Graph construction occurs outside collection
+admission, but current-root validation, locator merging and native root building
+do not. Process cuts before the fold seal recover the prior captured base;
+cuts after its explicit checkpoint recover the new base, with acknowledged
+post-T data preserved in either case. This is not power-loss qualification;
+public mutable serving additionally requires explicit admission above. Name-only rebuild
+replay reconstructs a logically equivalent typed base. Process-crash tests hold
+the publication seal until acknowledged rebuild returns, then use normal Open;
+they do not simulate physical power loss. A raw snapshot alone does not retain
+unopened typed assets after their recoverable roots retire. An explicit graph
+owner lease protects that closure. Public graph searcher acquisition now takes
+the existing DB-root storage barrier from snapshot capture through validated
+mapping and whole-manifest lease registration. The lease includes lazily fetched
+document fields and lasts through searcher Close; no query-time manifest scan is
+added. Registration reuses the validated selected graph/TVIS objects and ordinary
+asset-reference decoders, not durable-publication obligation normalization. The
+fresh reference slice transfers to the immutable lease/registry; public pin
+inputs and ref-report outputs remain defensive copies. Other index refs are
+retained too, preserving the whole-manifest ownership boundary.
+Shared quantized workers borrow their searcher's lease. The exact buffered
+pack-only owner has no retained snapshot or lazy document consumer and retains
+its mapped physical pack handle instead. Low-level partition readers do not
+reacquire the non-reentrant barrier.
+
+A zero-byte CSR adjacency values section has no positive physical extent. Typed
+asset reachability resolves that specific pin only to an existing, validated,
+positive offsets-section pin with matching physical identity and scope; it never
+fabricates an extent or ignores an unknown/malformed pin. This rare cold path
+scans active pins for the companion and does not add a second registry.

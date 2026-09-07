@@ -2,7 +2,127 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+Point FP32 reconstruction: `TestTypedColumnPointFetchDoesNotExpandFP32Part`
+checks four public results against 128/1024-row parts without whole-column FP32
+union expansion. `TestTypedColumnPointFP32OwnershipAndBounds` checks constant
+requested-row decoder allocations, owned results, overwritten source bytes, and
+invalid row/payload/locator rejection. `TestTypedColumnPointReadAtRetainsVectorsAcrossGenerations`
+forces real read-at scratch reuse across base/replacement generations and checks
+deletion. Descriptor/primary-ID setup is still part-sized; these are not whole
+public-request constant-allocation claims.
+
+`TestTypedGraphPublicFoldControlRootPolicy` uses the public command-WAL durable
+opening helper with native leaf generation enabled. Default, fast, and compressed
+control policies cover fold followed by an ordinary typed replacement, exact
+held/current full fetch, and ordinary wrapper close/reopen/re-Ensure.
+
+`TestTypedGraphPublicEmptyLifecycle` exercises empty Ensure, filtered/unfiltered
+search, insert, delete-all/fold, held-owner fetch, ordinary reopen/re-ensure and
+reinsert with identical M2/M16 schemas and zero canonical-row reconstruction.
+The internal empty prepared-cache seam still rejects without retaining a holder;
+public empty cutover releases its obsolete keeper without closing held owners.
+`TestTypedGraphPublicEmptyFoldLateKeeper` pauses a nonempty fold's captured-cache
+build across a second empty fold and checks the late keeper is also released.
+`TestPreparedSearchInvalidationReplacementBuild` checks exact-old invalidation
+neither waits for nor removes a newer building entry, while broad invalidation
+still waits for installation and closes the replacement.
+
+`TestColumnAssetLifecycleSharedCopyBudgetCountsRecords` checks the common
+pre-copy budget across input refs, pin records, and registry records, including
+exact fit and exhausted-budget rejection. `TestTypedGraphPublicFinalWarmBarrierCancellation`
+checks cancellation while the final Ensure/Fold warmer waits on the actual
+storage barrier. `TestTypedGraphCapturedCacheCanceledWaiterPreservesBuilder`
+checks that a canceled coalesced waiter leaves the other builder's keeper valid.
+`TestTypedGraphColdManifestScanCancellation` cancels on the second periodic
+context check in a real multi-interval manifest preflight and preserves the
+existing over-budget error translation.
+`TestPreparedSearchBuilderBarrierCancellation` holds the actual storage barrier
+while public warm/buffered callers build exact and quantized prepared state,
+then checks cancellation, cache cleanup, and healthy nil-context retry.
+
+Explicit typed graph serving: `TestTypedGraphPublicSameOwnerServing` covers public
+ensure, typed mutation, same-owner filtered search/full fetch, fold, independent
+manager and normal reopen. `TestTypedGraphPublicServingPressureAndOptions` covers
+owner lifetime, unsupported controls and fail-closed missing metadata;
+`TestTypedGraphPublicEnsureCancellationAndFailedAdmission` covers held-barrier
+cancellation and rejected writes after partial setup. `BenchmarkTypedGraphPublicServing`
+includes public acquisition/filter/search/full fetch/Close with a live suffix and
+tombstone at 128/1024 rows. It is bounded diagnostic evidence, not final Minima
+throughput qualification. `TestTypedGraphLifecyclePublicMutationAndReopen`'s
+`serving_crash_reopen` cases enable public Ensure before acknowledged
+insert/replace/delete/reinsert, exit without Close/Flush, then ordinary-open and
+re-ensure for filtered/unfiltered same-owner search/full fetch. Indexed canonical
+JSON extraction stays zero; the old unconfigured compatibility cases remain.
+`TestTypedGraphPublicEnsureStaleCapturedKeeper` pauses after captured resources
+exist but before cache installation, interleaves another handle's public fold,
+and checks conflict, exact keeper accounting/pin release, accepted suffix and
+held old-view readability. These do not prove power-loss or foreground fold
+availability. See [serving admission](typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission).
+
+`TestTypedGraphPublicFoldPublicationAvailability` exercises public filtered
+search/full fetch and replacement after physical install but before checkpoint,
+including an old held view. `TestTypedGraphPublicFoldPostInstallAckCrash` blocks
+publication seal writes, acknowledges a public replacement after fold install,
+exits without Close, and proves ordinary replay from the pre-fold base plus latest
+same-owner filtered full fetch with zero indexed JSON extraction.
+`TestTypedGraphPublicFoldPostCaptureSuffixAndDebt` covers replacement, delete,
+reinsert and a growing-base insert during construction, exact logical/pending
+costs and unchanged attempted-output debt at install.
+`TestTypedGraphPublicHealthyEnsureConcurrentOwner` forces acquisition between
+drain and storage capture while unchanged Ensure holds schema admission.
+`TestTypedGraphPublicFoldStateInstallConflictFencesWrites` injects a derived-state
+CAS conflict after physical apply, asserts public write rejection, then explicit
+Ensure recovery. These are deterministic correctness gates, not latency targets
+or power-loss qualification.
+
+`TestRecoverableColumnAssetReplayStrictFloor` checks exact excluded identities,
+strict equality retention, namespace mismatch, and disabled-floor behavior.
+`TestRecoverableColumnAssetReplayFloorUnknownAuthority` checks missing/zero and
+incompatible authority plus WAL-off rejection. `TestTypedGraphWorkEpochRepeatedMaintenance`
+exercises eight real typed write/fold/GC cycles, reads every captured fallback
+asset afterward, and reopens the same native directory with an unapplied typed
+replacement command. These are bounded maintenance/replay gates, not a claim of
+whole-database storage plateau or public mutable Minima activation.
+
+`TestPrepareColumnPhysicalAssetRowsTypedGenerationPlacement` checks isolated
+same-generation insert/update/delete/retry outputs, typed-image alignment, one
+close/sync epoch, and rejection of an out-of-range deletion generation.
+`TestPrepareTypedAssetFailedPrefixRetry` retains failed sync bytes unchanged while
+retrying into a fresh file. `TestTypedSourceSecondStageOutputFailure` checks
+second-stage failure preserves the old row/root and normal replay atomically
+installs a separate output with complete reachability. `TestTypedGraphFoldProcessCut`
+also requires complete bounded cleanup after each real process cut and reopen.
+`TestTypedGraphWorkEpochEmptyDeniedOutput` proves actual fold byte denial before
+first write leaves unchanged authority and can renew after zero-byte cleanup.
+`TestColumnAssetGCEmptyConstructionPin` protects a live creator then reclaims
+after release; `TestColumnAssetGCEmptyReferencedOrChanged` rejects referenced
+emptiness and post-plan growth. `TestColumnAssetGCEmptyNonregularAndQuarantine`
+preserves directories, symlinks, unknown names, and explicit empty quarantine.
+
+Allocator tests `TestColumnAssetAllocatorReusesExhaustedHint` and
+`TestColumnAssetAllocatorSmallCompleteBoundary` cover cold/exhausted hints and
+fully occupied bounded ID selection. `TestColumnAssetAllocatorReusesOnlyAfterReaderAndExactGC`
+holds a mapped reader, performs exact cleanup after release, then reuses the ID
+at the same generation with checksum rejection of a stale ref.
+`TestColumnAssetAllocatorHoleCollisionAndConcurrent` covers occupied nonregular
+entries and concurrent exclusive creation. These are not public serving qualification.
+
+Existing generic
+producer tests keep their prior file placement and sync expectations. The eight
+real maintenance cycles also assert equal-width retained column bytes stay below
+the warm-cycle ceiling (further reclamation may shrink them) and cross-generation
+mixed row debt stays bounded; pager/WAL growth is separate.
+
 ## Minima native-path contract (#4615)
+
+`TestTypedGraphContiguousProjectionWorkspace` checks the internal synchronous
+borrow, capped slice capacity, unchanged input, fixed allocation count, and
+unchanged noncontiguous/reordered/error behavior. Allocation-only checks follow
+the existing non-race convention; semantic checks still run under race.
+`TestTypedGraphFoldConstructionWorkspaceAdmission` rejects overflow/degree,
+planning and reciprocal logical workspace excess before graph allocation, while
+admitting the existing 16K/M16 limits without treating EF as an allocation count.
+These checks do not certify a process-wide heap bound or activate public serving.
 
 `minima-native-execution.md` defines the target, not current mutable graph
 support. `TreeDB/cmd/treedb_rag_benchmark/minima_bounded_test.go` and the existing
@@ -18,6 +138,16 @@ Existing collection command-WAL indexed staging, typed-column replay without
 checkpoint, and mutation-asset tests establish reuse boundaries. They do not
 certify the future typed Minima overlay; #4616–#4619 must add typed admission,
 replay, snapshot, fold/crash and public-route tests as those features land.
+
+`TestStableLogicalObligationNamespace*` checks empty namespace replacement on a
+shared physical token, unrelated-namespace retention, scope normalization and
+copy ownership, malformed/overlapping scopes, missing/stale obligations, and
+declining the whole-field completeness certificate. The DB
+`TestCaptureDurableRootNamespaceScopeCannotBypassAppendFallback` covers empty
+namespace registration alongside append evidence. The service
+`TestServiceColumnGraphCrossCollectionClosure` exercises A→B→A rebuilds with a
+held read view, current full fetch and ordinary reopen. The existing deferred
+maintenance lifecycle/manager/crash tests remain regression gates.
 
 ### Internal mutable graph consumer (#4617)
 

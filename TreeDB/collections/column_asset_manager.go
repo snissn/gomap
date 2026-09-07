@@ -677,9 +677,15 @@ func nextColumnAssetSegmentFileID(namespace columnAssetManagerNamespace) (uint32
 	if err != nil {
 		return 0, err
 	}
+	return nextColumnAssetSegmentFileIDFromSorted(segments, columnAssetDirectViewSegmentFileIDBase)
+}
+
+// Prefer the high-water path. On exhaustion, reuse only absent low-band IDs;
+// the caller's exclusive create, not this directory snapshot, grants authority.
+func nextColumnAssetSegmentFileIDFromSorted(segments []columnAssetReachabilitySegment, upperExclusive uint32) (uint32, error) {
 	maxFileID := uint32(0)
 	for _, segment := range segments {
-		if segment.fileID >= columnAssetDirectViewSegmentFileIDBase {
+		if segment.fileID >= upperExclusive {
 			continue
 		}
 		if segment.fileID > maxFileID {
@@ -689,10 +695,26 @@ func nextColumnAssetSegmentFileID(namespace columnAssetManagerNamespace) (uint32
 	if maxFileID < columnAssetM12ASegmentFileID {
 		maxFileID = columnAssetM12ASegmentFileID
 	}
-	if maxFileID >= columnAssetDirectViewSegmentFileIDBase-1 {
-		return 0, errors.New("collections: column asset segment file_id exhausted before direct-view reserved band")
+	if maxFileID+1 < upperExclusive {
+		return maxFileID + 1, nil
 	}
-	return maxFileID + 1, nil
+	next := columnAssetM12ASegmentFileID + 1
+	for _, segment := range segments {
+		if next >= upperExclusive {
+			break
+		}
+		if segment.fileID < next {
+			continue
+		}
+		if segment.fileID != next {
+			break
+		}
+		next++
+	}
+	if next < upperExclusive {
+		return next, nil
+	}
+	return 0, errors.New("collections: column asset segment file_id exhausted before direct-view reserved band")
 }
 
 func newNextColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig) (*columnPhysicalAssetSegmentAppender, error) {
@@ -796,8 +818,7 @@ func newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string
 func nextColumnAssetSegmentFileIDCached(namespace columnAssetManagerNamespace, cleanSegmentDir string, cache *columnAssetSegmentAllocationCache) (uint32, error) {
 	if cache != nil && cache.valid && cache.segmentDir == cleanSegmentDir {
 		if cache.nextFileID == 0 || cache.nextFileID >= columnAssetDirectViewSegmentFileIDBase {
-			cache.nextFileID = 0
-			return 0, errors.New("collections: column asset segment file_id exhausted before direct-view reserved band")
+			return resetColumnAssetSegmentFileIDCache(namespace, cleanSegmentDir, cache)
 		}
 		return cache.nextFileID, nil
 	}
@@ -835,6 +856,7 @@ func advanceColumnAssetSegmentFileIDCache(cleanSegmentDir string, cache *columnA
 }
 
 type columnPhysicalAssetSegmentAppender struct {
+	candidateAdmission         *typedGraphFoldAssetAdmission
 	cfg                        ColumnStoreConfig
 	namespace                  columnAssetManagerNamespace
 	fileID                     uint32
@@ -1051,6 +1073,7 @@ func (s columnPhysicalAssetSegmentCloseStatBucket) CleanupDuration() time.Durati
 }
 
 type columnPhysicalAssetAppendSession struct {
+	candidateAdmission     *typedGraphFoldAssetAdmission
 	rootDir                string
 	cfg                    ColumnStoreConfig
 	active                 *columnPhysicalAssetSegmentAppender
@@ -1098,6 +1121,9 @@ func (s *columnPhysicalAssetAppendSession) appender(fileID uint32) (*columnPhysi
 	}
 	var appender *columnPhysicalAssetSegmentAppender
 	var err error
+	if err := s.candidateAdmission.charge(0, 1); err != nil {
+		return nil, err
+	}
 	if s.stableRegistry != nil {
 		appender, err = newColumnPhysicalAssetSegmentAppendWriterWithStableResources(s.rootDir, s.cfg, fileID, s.stableRegistry)
 	} else {
@@ -1107,8 +1133,28 @@ func (s *columnPhysicalAssetAppendSession) appender(fileID uint32) (*columnPhysi
 		return nil, err
 	}
 	appender.stableRecoveryRetainer = s.stableRecoveryRetainer
+	appender.candidateAdmission = s.candidateAdmission
 	s.active = appender
 	s.activeFile = fileID
+	return appender, nil
+}
+
+// freshAppender adopts one existing-manager O_EXCL output into this session.
+// Admission precedes creation; normal close/abort retains the same authority.
+func (s *columnPhysicalAssetAppendSession) freshAppender() (*columnPhysicalAssetSegmentAppender, error) {
+	if s == nil || s.active != nil || s.stableRegistry == nil {
+		return nil, errors.New("collections: fresh output requires an empty stable append session")
+	}
+	if err := s.candidateAdmission.charge(0, 1); err != nil {
+		return nil, err
+	}
+	appender, err := newNextColumnPhysicalAssetSegmentAppenderWithStableResources(s.rootDir, s.cfg, s.stableRegistry)
+	if err != nil {
+		return nil, err
+	}
+	appender.candidateAdmission = s.candidateAdmission
+	appender.stableRecoveryRetainer = s.stableRecoveryRetainer
+	s.active, s.activeFile = appender, appender.fileID
 	return appender, nil
 }
 
@@ -1560,6 +1606,12 @@ func (a *columnPhysicalAssetSegmentAppender) appendKindWithAlignment(payload []b
 		}
 	}
 	padding := columnAssetSegmentPrefixPadding(a.offset, alignment)
+	if int64(len(payload)) > int64(1<<63-1)-int64(padding) {
+		return ColumnAssetRef{}, errors.New("collections: asset length overflow")
+	}
+	if err := a.candidateAdmission.charge(int64(padding)+int64(len(payload)), 0); err != nil {
+		return ColumnAssetRef{}, err
+	}
 	if padding > 0 {
 		written, err := writeColumnAssetSegmentZeroPadding(a.file, padding)
 		a.offset += int64(written)
@@ -1632,7 +1684,14 @@ func (a *columnPhysicalAssetSegmentAppender) appendKindWithReservedPayload(lengt
 			return ColumnAssetRef{}, err
 		}
 	}
-	if padding := columnAssetSegmentPrefixPadding(a.offset, alignment); padding > 0 {
+	padding := columnAssetSegmentPrefixPadding(a.offset, alignment)
+	if length > int64(1<<63-1)-int64(padding) {
+		return ColumnAssetRef{}, errors.New("collections: reserved asset length overflow")
+	}
+	if err := a.candidateAdmission.charge(int64(padding)+length, 0); err != nil {
+		return ColumnAssetRef{}, err
+	}
+	if padding > 0 {
 		n, err := writeColumnAssetSegmentZeroPadding(a.file, padding)
 		a.offset += int64(n)
 		if err != nil || n != padding {
@@ -1785,6 +1844,9 @@ func (a *columnPhysicalAssetSegmentAppender) appendKinds(items []columnPhysicalA
 		}
 		nextOffset += int64(len(item.payload))
 		totalLength += padding + len(item.payload)
+	}
+	if err := a.candidateAdmission.charge(int64(totalLength), 0); err != nil {
+		return nil, err
 	}
 	payload := make([]byte, 0, totalLength)
 	cursor := a.offset

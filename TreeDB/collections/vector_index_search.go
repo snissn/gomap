@@ -132,6 +132,9 @@ type VectorIndexSearchResult struct {
 // counters describe bound reader setup performed before Search or collection-level
 // one-shot open/setup performed inside SearchVectorIndex.
 type VectorIndexSearchStats struct {
+	// Typed-owner acquisition includes drain, snapshot binding and resource admission.
+	ColumnGraphOwnerAcquireNanos int64  `json:"column_graph_owner_acquire_nanos,omitempty"`
+	ColumnGraphDeltaScored       uint64 `json:"column_graph_delta_scored,omitempty"`
 	// GraphRows is the number of legacy physical graph rows resident in the bound reader. Healthy current typed-column search reports zero.
 	GraphRows uint64 `json:"graph_rows,omitempty"`
 	// CandidateRows is the candidate row domain after any internal row-selection/visibility composition.
@@ -955,6 +958,7 @@ type VectorIndexSearcher struct {
 	catalog      *collectionCatalog
 	reader       *columnVectorGraphPhysicalRowReader
 	documentView *CollectionReadView
+	lifecyclePin *ColumnAssetLifecyclePinSet
 	scratch      columnVectorGraphNativeSearchScratch
 	readerLast   columnPhysicalRowReaderStats
 	routeStats   vectorIndexSearchRouteStats
@@ -1135,9 +1139,21 @@ func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 // split search/fetch shape can run a no-document search first, then use
 // CollectionReadView.FetchDocumentsForVectorIndexSearchResults as a separate
 // materialization phase with separate counters.
-// DeclaredScalarFilter is native-runtime buffered-only; this convenience path
-// fails closed rather than forwarding it to an unfiltered owned/one-shot route.
+// Explicitly admitted typed column_graph serving supports native declared
+// filtering here; otherwise the legacy native-runtime buffered-only contract
+// remains fail closed rather than forwarding to an unfiltered one-shot route.
 func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
+	if c.typedGraphServingPolicy() != nil {
+		var buffer VectorIndexSearchBuffer
+		response, view, err := c.searchTypedGraphServing(opts, &buffer)
+		if err != nil {
+			return response, err
+		}
+		// This unpooled local buffer is never reused. Its result/ID backing
+		// transfers directly to the response, without retaining search scratch.
+		markVectorIndexSearchResponseOwnedResultAllocs(&response)
+		return response, view.Close()
+	}
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
 		return VectorIndexSearchResponse{}, err
 	}
@@ -1324,6 +1340,13 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 }
 
 func (c *Collection) searchVectorIndexWithBuffer(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, coverageLocked bool) (VectorIndexSearchResponse, error) {
+	if c.typedGraphServingPolicy() != nil {
+		response, view, err := c.searchTypedGraphServing(opts, buffer)
+		if err != nil {
+			return response, err
+		}
+		return response, view.Close()
+	}
 	if err := validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
 		return VectorIndexSearchResponse{}, err
 	}
@@ -2050,14 +2073,30 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 	if err := c.flushBufferedWrites(); err != nil {
 		return nil, response, err
 	}
+	var searcher *VectorIndexSearcher
+	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		var err error
+		searcher, response, err = c.openVectorIndexSearcherUnderStorageBarrier(opts)
+		return err
+	})
+	return searcher, response, err
+}
+
+// The root barrier is non-reentrant. Only this public owner boundary takes it;
+// low-level readers also serve partition operations already holding the gate.
+func (c *Collection) openVectorIndexSearcherUnderStorageBarrier(opts VectorIndexSearcherOptions) (*VectorIndexSearcher, VectorIndexSearchResponse, error) {
+	var response VectorIndexSearchResponse
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, response, backenddb.ErrClosed
 	}
+	runTypedGraphOwnerAfterSnapshotHook(c)
 	closeOnErr := true
+	var lifecyclePin *ColumnAssetLifecyclePinSet
 	defer func() {
 		if closeOnErr {
 			_ = snap.Close()
+			_ = lifecyclePin.Close()
 		}
 	}()
 	catalog, err := c.catalogForSnapshot(snap)
@@ -2103,6 +2142,7 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 	}
 	reader, err := c.openColumnVectorGraphPhysicalRowReaderAtSnapshot(def.Name, snap, columnVectorGraphPhysicalRowReaderOptions{
 		MaxDecodedBlocks: opts.MaxDecodedBlocks,
+		ownerPin:         &lifecyclePin,
 	})
 	if err != nil {
 		status, statusErr := c.columnGraphVectorIndexStatusAtSnapshot(def.Name, snap)
@@ -2127,16 +2167,17 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 	}
 	response.Path = VectorIndexSearchPathColumnGraphNativeReader
 	searcher := &VectorIndexSearcher{
-		collection: c,
-		indexName:  response.IndexName,
-		strategy:   response.Strategy,
-		path:       response.Path,
-		status:     response.Status,
-		snapshot:   snap,
-		catalog:    readerCatalog,
-		reader:     reader,
-		readerLast: reader.Stats(),
-		routeStats: vectorIndexSearchRouteStatsForColumnGraphReader(reader),
+		collection:   c,
+		indexName:    response.IndexName,
+		strategy:     response.Strategy,
+		path:         response.Path,
+		status:       response.Status,
+		snapshot:     snap,
+		catalog:      readerCatalog,
+		reader:       reader,
+		lifecyclePin: lifecyclePin,
+		readerLast:   reader.Stats(),
+		routeStats:   vectorIndexSearchRouteStatsForColumnGraphReader(reader),
 	}
 	snap.DetachForegroundRead()
 	closeOnErr = false
@@ -2619,12 +2660,17 @@ func multiplyVectorIndexSearchByteTotal(n, count, limit int, label string) (int,
 	return n * count, nil
 }
 
-// Close releases the searcher's bound physical reader and snapshot.
+// Close releases the searcher's document view, physical reader, snapshot, and
+// whole typed-asset closure lease. It is idempotent, not concurrency-safe.
 func (s *VectorIndexSearcher) Close() error {
 	if s == nil || s.closed {
 		return nil
 	}
 	s.closed = true
+	defer func() {
+		_ = s.lifecyclePin.Close()
+		s.lifecyclePin = nil
+	}()
 	var closeErr error
 	if s.documentView != nil {
 		if err := s.documentView.Close(); err != nil {

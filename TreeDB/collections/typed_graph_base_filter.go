@@ -31,7 +31,7 @@ type typedGraphScalarPredicate struct {
 }
 
 func prepareTypedGraphBaseFilter(base *VectorIndexSearcher, filter HybridScalarFilter, limits typedGraphBaseFilterLimits) (*typedGraphBaseFilter, error) {
-	if base == nil || base.closed || base.snapshot == nil || base.catalog == nil || base.reader == nil {
+	if base == nil || base.closed || base.snapshot == nil || base.catalog == nil || base.reader == nil || base.collection == nil || base.collection.db == nil || base.collection.db.IsClosing() {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
 	if limits.Clauses <= 0 || limits.PredicateBytes <= 0 {
@@ -129,7 +129,7 @@ func prepareTypedGraphBaseFilter(base *VectorIndexSearcher, filter HybridScalarF
 }
 
 func bindTypedGraphBaseFilter(base *typedGraphBaseFilter, overlay *typedGraphOverlaySearch, limits typedGraphFilterBindLimits) (*typedGraphPreparedFilter, error) {
-	if base == nil || base.plan == nil || !base.plan.validFor(base.plan.overlay) || overlay == nil || overlay.base != base.plan.overlay.base || overlay.current == nil || overlay.current.closed {
+	if base == nil || base.plan == nil || !base.plan.validFor(base.plan.overlay) || !overlay.validOpen() || overlay.base != base.plan.overlay.base {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
 	if limits.Rows <= 0 || limits.IDBytes <= 0 || limits.ValueBytes <= 0 || limits.MappingWork <= 0 || limits.PredicateWork <= 0 || limits.RetainedBytes <= 0 || limits.ExactScanRows <= 0 || len(overlay.rows) > limits.Rows {
@@ -155,7 +155,7 @@ func bindTypedGraphBaseFilter(base *typedGraphBaseFilter, overlay *typedGraphOve
 	ids := make([][]byte, 0, min(512, d))
 	// Include inverse lookup, selection membership and bounded exclusion-sort
 	// comparisons. Exact enumeration is separately counted below.
-	perID := bits.Len(uint(overlay.base.reader.rowRefSource.rows)) + bits.Len(uint(plan.base.Count())) + bits.Len(uint(d)) + 2
+	perID := bits.Len(uint(overlay.base.reader.graph.RowCount)) + bits.Len(uint(plan.base.Count())) + bits.Len(uint(d)) + 2
 	for start := 0; start < d; {
 		ids = ids[:0]
 		for start < d && len(ids) < cap(ids) {

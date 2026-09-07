@@ -44,8 +44,8 @@ const (
 )
 
 // ColumnAssetLifecyclePinSetOptions describes an explicit process-local pin set
-// lease. It is intentionally in-memory/report-only in slice 1; callers must not
-// assume this changes destructive maintenance behavior yet.
+// lease. Prepared-query and pinned-snapshot sources are consumed by typed asset
+// GC/rewrite reachability; callers must acquire them before assets can retire.
 type ColumnAssetLifecyclePinSetOptions struct {
 	Source ColumnAssetLifecyclePinSource `json:"source"`
 	Owner  string                        `json:"owner"`
@@ -54,7 +54,7 @@ type ColumnAssetLifecyclePinSetOptions struct {
 }
 
 // ColumnAssetLifecyclePinSet is a process-local lease over a caller-supplied set
-// of column asset refs. Close releases the lease from lifecycle reports.
+// of column asset refs. Close releases report visibility and GC/rewrite protection.
 type ColumnAssetLifecyclePinSet struct {
 	mu     sync.Mutex
 	id     uint64
@@ -146,9 +146,18 @@ func (p *ColumnAssetLifecyclePinSet) Close() error {
 	return nil
 }
 
-// AcquireColumnAssetLifecyclePinSet registers a report-visible process-local pin
-// set. Slice 1 deliberately does not make GC/rewrite consume this registry.
+// AcquireColumnAssetLifecyclePinSet registers a process-local pin set consumed
+// by lifecycle reports and GC/rewrite. It does not itself serialize snapshot
+// capture with destructive maintenance; owner admission must provide that gate.
 func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecyclePinSetOptions) (*ColumnAssetLifecyclePinSet, error) {
+	opts.Refs = append([]ColumnAssetRef(nil), opts.Refs...)
+	return c.acquireColumnAssetLifecyclePinSetOwned(opts)
+}
+
+// acquireColumnAssetLifecyclePinSetOwned takes a fresh caller-owned refs slice.
+// After transfer it is immutable and shared by the registry and returned lease;
+// the caller must neither retain nor mutate it. Public admission clones first.
+func (c *Collection) acquireColumnAssetLifecyclePinSetOwned(opts ColumnAssetLifecyclePinSetOptions) (*ColumnAssetLifecyclePinSet, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -161,7 +170,9 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 	if opts.Owner == "" {
 		return nil, errors.New("collections: column asset lifecycle pin set owner is required")
 	}
-	refs := append([]ColumnAssetRef(nil), opts.Refs...)
+	refs := opts.Refs
+	// One immutable owned slice is shared by the lease and registry. Caller
+	// input, Refs(), and report snapshots remain defensive-copy boundaries.
 	collectionNamespace := columnAssetLifecycleNamespace(c)
 	if collectionNamespace == "" {
 		return nil, errors.New("collections: column asset lifecycle pin set requires collection asset namespace")
@@ -184,7 +195,7 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 		Source:     opts.Source,
 		Owner:      opts.Owner,
 		Reason:     opts.Reason,
-		Refs:       append([]ColumnAssetRef(nil), refs...),
+		Refs:       refs,
 		Bytes:      bytes,
 	}
 	id, err := columnAssetLifecycleRegisterProcessPin(c.db, record)
@@ -196,7 +207,7 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 		source: opts.Source,
 		owner:  opts.Owner,
 		reason: opts.Reason,
-		refs:   append([]ColumnAssetRef(nil), refs...),
+		refs:   refs,
 	}, nil
 }
 
@@ -243,7 +254,6 @@ func columnAssetLifecycleRegisterProcessPin(db *backenddb.DB, record columnAsset
 func columnAssetLifecycleStoreProcessPinLocked(record columnAssetLifecyclePinSetRecord) uint64 {
 	columnAssetLifecycleProcessPins.nextID++
 	record.ID = columnAssetLifecycleProcessPins.nextID
-	record.Refs = append([]ColumnAssetRef(nil), record.Refs...)
 	if columnAssetLifecycleProcessPins.pins == nil {
 		columnAssetLifecycleProcessPins.pins = make(map[uint64]columnAssetLifecyclePinSetRecord)
 	}
@@ -553,14 +563,58 @@ func columnAssetLifecycleNamespace(c *Collection) string {
 }
 
 func (c *Collection) columnAssetLifecycleAugmentReachabilityOptions(opts ColumnAssetReachabilityOptions) (ColumnAssetReachabilityOptions, error) {
+	return c.columnAssetLifecycleAugmentReachabilityOptionsWithContext(context.Background(), opts)
+}
+
+func (c *Collection) columnAssetLifecycleAugmentReachabilityOptionsWithContext(ctx context.Context, opts ColumnAssetReachabilityOptions) (ColumnAssetReachabilityOptions, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := opts.validateDiscoveryLimits(); err != nil {
+		return opts, err
+	}
+	if err := ctx.Err(); err != nil {
+		return opts, err
+	}
+	remaining := opts.MaxLifecycleEntries
+	if opts.MaxLifecycleEntries > 0 {
+		if err := consumeColumnAssetLifecycleEntries(&remaining, len(opts.CandidateRefs), len(opts.PendingRefs), len(opts.PreparedRefs), len(opts.PreparedQueryRefs), len(opts.QuarantineRefs), len(opts.QuarantineSegments), len(opts.PinnedRefs)); err != nil {
+			return opts, err
+		}
+	}
+	baseRefs, err := c.typedGraphBaseReachabilityRefsWithBudget(ctx, opts.MaxManifestRecords, opts.MaxManifestBytes)
+	if err != nil {
+		return opts, err
+	}
+	if opts.MaxLifecycleEntries > 0 {
+		if err := consumeColumnAssetLifecycleEntries(&remaining, len(baseRefs)); err != nil {
+			return opts, err
+		}
+	}
+	opts.PinnedRefs = append(opts.PinnedRefs, baseRefs...)
 	prepared, pinned, err := c.vectorPartitionReachabilityRefsV1(opts.releaseVectorPartitionReclaimIDs)
 	if err != nil {
 		return opts, err
 	}
+	if opts.MaxLifecycleEntries > 0 {
+		if err := consumeColumnAssetLifecycleEntries(&remaining, len(prepared), len(pinned)); err != nil {
+			return opts, err
+		}
+	}
 	opts.PreparedRefs = append(opts.PreparedRefs, prepared...)
 	opts.PinnedRefs = append(opts.PinnedRefs, pinned...)
-	pins := c.columnAssetLifecyclePinSetSnapshot()
-	registryRecords := c.columnAssetLifecycleRegistrySnapshot()
+	var copyBudget *int
+	if opts.MaxLifecycleEntries > 0 {
+		copyBudget = &remaining
+	}
+	pins, err := c.columnAssetLifecyclePinSetSnapshotWithBudget(copyBudget)
+	if err != nil {
+		return opts, err
+	}
+	registryRecords, err := c.columnAssetLifecycleRegistrySnapshotWithBudget(copyBudget)
+	if err != nil {
+		return opts, err
+	}
 	refs := columnAssetLifecycleReachabilityRefs(ColumnAssetLifecycleOptions{
 		CandidateRefs:      opts.CandidateRefs,
 		PendingRefs:        opts.PendingRefs,
@@ -592,6 +646,8 @@ func columnAssetLifecycleReachabilityRefs(opts ColumnAssetLifecycleOptions, pins
 	}
 	for _, record := range registryRecords {
 		switch record.Class {
+		case columnAssetLifecycleRegistryRetired:
+			refs.candidate = append(refs.candidate, record.Refs...)
 		case ColumnAssetLifecycleRegistryPendingPublish:
 			refs.pending = append(refs.pending, record.Refs...)
 		case ColumnAssetLifecycleRegistryPreparedAsset:
@@ -617,20 +673,60 @@ func columnAssetLifecycleReachabilityRefs(opts ColumnAssetLifecycleOptions, pins
 }
 
 func (c *Collection) columnAssetLifecyclePinSetSnapshot() []columnAssetLifecyclePinSetRecord {
+	records, _ := c.columnAssetLifecyclePinSetSnapshotWithLimit(0)
+	return records
+}
+
+func consumeColumnAssetLifecycleEntries(remaining *int, counts ...int) error {
+	for _, count := range counts {
+		if count < 0 || count > *remaining {
+			return ErrColumnAssetReachabilityLifecycleLimit
+		}
+		*remaining -= count
+	}
+	return nil
+}
+
+func (c *Collection) columnAssetLifecyclePinSetSnapshotWithLimit(maxEntries int) ([]columnAssetLifecyclePinSetRecord, error) {
+	if maxEntries < 0 {
+		return nil, ErrColumnAssetReachabilityLifecycleLimit
+	}
+	if maxEntries == 0 {
+		return c.columnAssetLifecyclePinSetSnapshotWithBudget(nil)
+	}
+	return c.columnAssetLifecyclePinSetSnapshotWithBudget(&maxEntries)
+}
+
+// A nil budget preserves the unlimited caller. A nonnil zero budget is
+// exhausted; charge every record and ref before allocating snapshot copies.
+func (c *Collection) columnAssetLifecyclePinSetSnapshotWithBudget(remaining *int) ([]columnAssetLifecyclePinSetRecord, error) {
 	if c == nil || c.db == nil {
-		return nil
+		return nil, nil
 	}
 	dbID := columnAssetLifecycleProcessDBID(c.db)
 	if dbID == 0 {
-		return nil
+		return nil, nil
 	}
 	scope := columnAssetLifecyclePinScope{dbID: dbID, collection: c.meta.Name, namespace: columnAssetLifecycleNamespace(c)}
 	columnAssetLifecycleProcessPins.Lock()
 	defer columnAssetLifecycleProcessPins.Unlock()
 	if len(columnAssetLifecycleProcessPins.pins) == 0 {
-		return nil
+		return nil, nil
 	}
-	out := make([]columnAssetLifecyclePinSetRecord, 0, len(columnAssetLifecycleProcessPins.pins))
+	capacity := len(columnAssetLifecycleProcessPins.pins)
+	if remaining != nil {
+		capacity = 0
+		for _, record := range columnAssetLifecycleProcessPins.pins {
+			if record.Scope != scope {
+				continue
+			}
+			if err := consumeColumnAssetLifecycleEntries(remaining, 1, len(record.Refs)); err != nil {
+				return nil, err
+			}
+			capacity++
+		}
+	}
+	out := make([]columnAssetLifecyclePinSetRecord, 0, capacity)
 	for _, record := range columnAssetLifecycleProcessPins.pins {
 		if record.Scope != scope {
 			continue
@@ -641,7 +737,7 @@ func (c *Collection) columnAssetLifecyclePinSetSnapshot() []columnAssetLifecycle
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].ID < out[j].ID
 	})
-	return out
+	return out, nil
 }
 
 func summarizeColumnAssetLifecyclePins(pins []columnAssetLifecyclePinSetRecord) ColumnAssetLifecyclePinSummary {

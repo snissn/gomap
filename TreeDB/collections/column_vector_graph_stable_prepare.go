@@ -269,7 +269,7 @@ func (c *Collection) PrepareVectorIndexStableClosure(name string) (*ColumnVector
 	}
 	prepared, _, _, err := prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource(
 		baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records,
-		manifest.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), typedSource, nil,
+		manifest.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), typedSource, nil, nil,
 	)
 	if err != nil {
 		return nil, err

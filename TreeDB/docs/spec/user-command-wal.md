@@ -388,7 +388,12 @@ support for every native-wire or Raft entry point. The executable support matrix
 continues to govern those separate surfaces.
 
 See [storage-format.md](storage-format.md) for canonical encoding and validation,
-and [typed-column-adapter.md](typed-column-adapter.md) for field authority and
+including format 12 (`CollectionTypedSourceByIDV1`) for
+`ReplaceTypedSourceByID`. That method combines the canonical explicit delete set
+and typed inserted batch under the existing source command kind and atomic
+publisher. Scalar/text maintenance and replay consume typed authority, not
+indexed JSON. Delete-only calls retain format 10 with an empty insert section.
+See [typed-column-adapter.md](typed-column-adapter.md) for field authority and
 ownership. A schema hash is not a new collection incarnation ID: unsupported
 drop/recreate operations are not made replay-safe by this payload.
 

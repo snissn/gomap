@@ -751,7 +751,7 @@ func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.Met
 			mutation = mergedMutation
 			return nil
 		}
-		mixedGenericRegistration := len(requirements.ScopedFields) != 0 || len(requirements.Obligations) != 0 || len(mutation.ScopedFields) != 0 || len(mutation.Added) != 0 || len(mutation.Removed) != 0
+		mixedGenericRegistration := len(requirements.ScopedFields) != 0 || len(requirements.ScopedNamespaces) != 0 || len(requirements.Obligations) != 0 || len(mutation.ScopedFields) != 0 || len(mutation.Added) != 0 || len(mutation.Removed) != 0
 		if mixedGenericRegistration || len(appendMutation.ScopedFields) == 0 || len(appendMutation.Removed) != 0 {
 			if err := materializeRequirements(); err != nil {
 				return nil, err

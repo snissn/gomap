@@ -143,7 +143,7 @@ func (c *Collection) createTextIndexOnce(def TextIndexDefinition) (*CollectionMe
 		return nil, emptyStats, unexpectedOrderedRootCountError(newMeta.Name, len(plan.rootNames), len(rootIDs))
 	}
 	c.meta = newMeta
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, plan.rootNames, rootIDs)
+	nextCatalog := cloneCatalogAfterSchemaChange(catalog, newMeta, plan.rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return newMeta.copy(), plan.stats, nil
@@ -265,7 +265,7 @@ func (c *Collection) dropTextIndexOnce(name string) (*CollectionMeta, error) {
 	}
 	c.meta = newMeta
 	clearedRootIDs := make([]uint64, len(clearedRootNames))
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, clearedRootNames, clearedRootIDs)
+	nextCatalog := cloneCatalogAfterSchemaChange(catalog, newMeta, clearedRootNames, clearedRootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return newMeta.copy(), nil

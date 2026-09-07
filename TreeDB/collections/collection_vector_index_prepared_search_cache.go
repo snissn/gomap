@@ -15,6 +15,7 @@ type collectionVectorIndexPreparedSearchFamily uint8
 const (
 	collectionVectorIndexPreparedSearchFamilyExactHNSWPack collectionVectorIndexPreparedSearchFamily = iota + 1
 	collectionVectorIndexPreparedSearchFamilyQuantized
+	collectionVectorIndexPreparedSearchFamilyCapturedBase
 )
 
 type collectionVectorIndexPreparedSearchCacheSlot struct {
@@ -50,6 +51,7 @@ type collectionVectorIndexPreparedSearch struct {
 	pack                 *columnHNSWSearchPackPreparedView
 	packStatus           columnHNSWSearchPackPreparedStatus
 	searcher             *VectorIndexSearcher
+	capturedBase         *typedGraphCapturedBaseResources
 	searchStartedForTest func()
 
 	quantizedReadersMu        sync.Mutex
@@ -97,8 +99,9 @@ func (s collectionVectorIndexPreparedSearchAcquireStats) apply(stats *VectorInde
 var noCollectionForegroundReadEnd = func() {}
 
 var collectionVectorIndexPreparedSearchBuildHookForTest struct {
-	mu sync.Mutex
-	fn func(indexName string)
+	mu         sync.Mutex
+	fn         func(indexName string)
+	afterBuild func(*collectionVectorIndexPreparedSearch)
 }
 
 func callCollectionVectorIndexPreparedSearchBuildHookForTest(indexName string) {
@@ -174,6 +177,14 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndex
 		return nil, response, acquireStats, err
 	}
 	slot := collectionVectorIndexPreparedSearchCacheSlotForOptions(opts, queryMode)
+	return c.acquireCollectionVectorIndexPreparedSearchSlot(opts, slot, nil)
+}
+
+// The internal captured-base builder acquires its storage barrier only after
+// winning this singleflight. Callers must not hold that barrier while waiting.
+func (c *Collection) acquireCollectionVectorIndexPreparedSearchSlot(opts VectorIndexSearchOptions, slot collectionVectorIndexPreparedSearchCacheSlot, build func() (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, error)) (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, collectionVectorIndexPreparedSearchAcquireStats, error) {
+	var response VectorIndexSearchResponse
+	var acquireStats collectionVectorIndexPreparedSearchAcquireStats
 	if c == nil {
 		return nil, response, acquireStats, errCollectionNil
 	}
@@ -189,6 +200,11 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndex
 	}
 
 	for {
+		if opts.Context != nil {
+			if err := opts.Context.Err(); err != nil {
+				return nil, response, acquireStats, err
+			}
+		}
 		var oldPrepared *collectionVectorIndexPreparedSearch
 		c.vectorBufferedSearchMu.Lock()
 		if c.vectorBufferedSearch == nil {
@@ -200,7 +216,15 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndex
 			c.vectorBufferedSearchWaits++
 			acquireStats.HNSWSearchPackCacheWaits++
 			c.vectorBufferedSearchMu.Unlock()
-			<-ready
+			if opts.Context == nil {
+				<-ready
+			} else {
+				select {
+				case <-ready:
+				case <-opts.Context.Done():
+					return nil, response, acquireStats, opts.Context.Err()
+				}
+			}
 			commitSeq, systemRoot = dbCommitSeqAndSystemRoot(c.db)
 			if commitSeq == 0 || systemRoot == 0 || c.db.IsClosing() {
 				return nil, response, acquireStats, backenddb.ErrClosed
@@ -244,12 +268,28 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndex
 		acquireStats.HNSWSearchPackCacheBuilds++
 		c.vectorBufferedSearchMu.Unlock()
 
-		if oldPrepared != nil {
+		if oldPrepared != nil && slot.family != collectionVectorIndexPreparedSearchFamilyCapturedBase {
 			_ = oldPrepared.Close()
 		}
 
 		callCollectionVectorIndexPreparedSearchBuildHookForTest(opts.IndexName)
-		prepared, buildResponse, buildErr := c.openCollectionVectorIndexPreparedSearch(opts)
+		var prepared *collectionVectorIndexPreparedSearch
+		var buildResponse VectorIndexSearchResponse
+		var buildErr error
+		if build != nil {
+			prepared, buildResponse, buildErr = build()
+		} else {
+			prepared, buildResponse, buildErr = c.openCollectionVectorIndexPreparedSearch(opts)
+		}
+		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Lock()
+		afterBuild := collectionVectorIndexPreparedSearchBuildHookForTest.afterBuild
+		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Unlock()
+		if afterBuild != nil && buildErr == nil {
+			afterBuild(prepared)
+		}
+		if oldPrepared != nil && slot.family == collectionVectorIndexPreparedSearchFamilyCapturedBase {
+			buildErr = errors.Join(buildErr, oldPrepared.Close())
+		}
 		if prepared != nil {
 			entry.commitSeq = prepared.commitSeq
 			entry.systemRoot = prepared.systemRoot
@@ -280,7 +320,11 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndex
 		c.vectorBufferedSearchMu.Unlock()
 
 		if !stored && prepared != nil {
-			_ = prepared.Close()
+			if slot.family == collectionVectorIndexPreparedSearchFamilyCapturedBase {
+				buildErr = errors.Join(buildErr, prepared.Close())
+			} else {
+				_ = prepared.Close()
+			}
 		}
 		if buildErr != nil {
 			return nil, buildResponse, acquireStats, buildErr
@@ -294,10 +338,26 @@ func (c *Collection) openCollectionVectorIndexPreparedSearch(opts VectorIndexSea
 	if err != nil {
 		return nil, VectorIndexSearchResponse{}, err
 	}
-	if queryMode.quantized() {
-		return c.openCollectionVectorIndexPreparedQuantizedSearch(opts, queryMode)
+	if c == nil {
+		return nil, VectorIndexSearchResponse{}, errCollectionNil
 	}
-	return c.openCollectionVectorIndexPreparedExactSearch(opts)
+	if c.db == nil {
+		return nil, VectorIndexSearchResponse{}, errCollectionDBNil
+	}
+	var prepared *collectionVectorIndexPreparedSearch
+	var response VectorIndexSearchResponse
+	err = WithVectorPartitionStorageBarrierWithContextV1(opts.Context, c.db.Dir(), func() error {
+		var err error
+		if queryMode.quantized() {
+			prepared, response, err = c.openCollectionVectorIndexPreparedQuantizedSearch(opts, queryMode)
+		} else {
+			// This cache has no snapshot/lazy document consumer: its mapped pack
+			// supplies physical lifetime protection after this acquisition gate.
+			prepared, response, err = c.openCollectionVectorIndexPreparedExactSearch(opts)
+		}
+		return err
+	})
+	return prepared, response, err
 }
 
 func (c *Collection) openCollectionVectorIndexPreparedExactSearch(opts VectorIndexSearchOptions) (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, error) {
@@ -425,9 +485,11 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		return nil, response, backenddb.ErrClosed
 	}
 	closeSnapOnErr := true
+	var lifecyclePin *ColumnAssetLifecyclePinSet
 	defer func() {
 		if closeSnapOnErr {
 			_ = snap.Close()
+			_ = lifecyclePin.Close()
 		}
 	}()
 
@@ -458,7 +520,7 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer quantized mode requires cosine column_graph state; got metric %q", ErrVectorIndexSearchUnavailable, def.Name, def.Metric)
 	}
 
-	def, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(def.Name, snap)
+	def, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshotWithOwner(def.Name, snap, &lifecyclePin)
 	if err != nil {
 		status, statusErr := c.columnGraphVectorIndexStatusAtSnapshot(def.Name, snap)
 		if statusErr != nil {
@@ -524,14 +586,15 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 	key = collectionVectorIndexPreparedSearchSnapshotCacheKey(key, snapshotCommitSeq(snap), snapshotSystemRoot(snap))
 	sharedQuantizedAssets := promoteCollectionVectorIndexPreparedScalarU8QuantizedAssets(reader)
 	searcher := &VectorIndexSearcher{
-		collection: c,
-		indexName:  response.IndexName,
-		strategy:   response.Strategy,
-		path:       response.Path,
-		status:     response.Status,
-		snapshot:   snap,
-		catalog:    reader.catalog,
-		routeStats: routeStats,
+		collection:   c,
+		indexName:    response.IndexName,
+		strategy:     response.Strategy,
+		path:         response.Path,
+		status:       response.Status,
+		snapshot:     snap,
+		lifecyclePin: lifecyclePin,
+		catalog:      reader.catalog,
+		routeStats:   routeStats,
 	}
 	snap.DetachForegroundRead()
 	closeSnapOnErr = false
@@ -677,6 +740,8 @@ func (p *collectionVectorIndexPreparedSearch) readyForCurrentSearch() bool {
 		return false
 	}
 	switch p.family {
+	case collectionVectorIndexPreparedSearchFamilyCapturedBase:
+		return p.capturedBase != nil && p.capturedBase.ref != nil && p.capturedBase.ref.holder.ready()
 	case collectionVectorIndexPreparedSearchFamilyQuantized:
 		if p.searcher == nil || p.searcher.closed || p.searcher.snapshot == nil {
 			return false
@@ -993,6 +1058,10 @@ func (p *collectionVectorIndexPreparedSearch) Close() error {
 	}
 	p.closed = true
 	var err error
+	if p.capturedBase != nil {
+		err = errors.Join(err, p.capturedBase.Close())
+		p.capturedBase = nil
+	}
 	if p.pack != nil {
 		err = errors.Join(err, p.pack.Close())
 		p.pack = nil
@@ -1033,6 +1102,9 @@ func (p *collectionVectorIndexPreparedSearch) stats() mappedresource.Stats {
 	}
 	if p.pack != nil && p.pack.manager != nil {
 		add(p.pack.manager.Stats())
+	}
+	if p.capturedBase != nil && p.capturedBase.ref != nil {
+		add(p.capturedBase.ref.holder.stats())
 	}
 	if p.searcher != nil && p.searcher.reader != nil {
 		reader := p.searcher.reader
@@ -1092,6 +1164,12 @@ func (c *Collection) invalidateCollectionVectorIndexPreparedSearch(slot collecti
 		var closePrepared *collectionVectorIndexPreparedSearch
 		c.vectorBufferedSearchMu.Lock()
 		entry := c.vectorBufferedSearch[slot]
+		// Exact-object invalidation has no ownership of a replacement build.
+		// New building entries have no prepared object until installation.
+		if prepared != nil && (entry == nil || entry.prepared != prepared) {
+			c.vectorBufferedSearchMu.Unlock()
+			return
+		}
 		if entry != nil && entry.building {
 			ready := entry.ready
 			c.vectorBufferedSearchWaits++

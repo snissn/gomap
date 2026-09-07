@@ -292,6 +292,11 @@ func (r *columnVectorGraphPhysicalRowReader) attachSharedPreparedSearch(ref *col
 }
 
 func (r *columnVectorGraphPhysicalRowReader) releaseSharedPreparedSearch() error {
+	return r.detachSharedPreparedSearch().release()
+}
+
+// Transfer only the immutable resource ref, never the reader's catalog/snapshot.
+func (r *columnVectorGraphPhysicalRowReader) detachSharedPreparedSearch() *columnVectorGraphSharedPreparedSearchRef {
 	if r == nil || r.sharedPreparedSearch == nil {
 		return nil
 	}
@@ -305,7 +310,7 @@ func (r *columnVectorGraphPhysicalRowReader) releaseSharedPreparedSearch() error
 	r.adjacencyLayerSources = nil
 	r.layer0AdjacencySource = nil
 	r.preparedSearch = nil
-	return ref.release()
+	return ref
 }
 
 func (c *Collection) columnVectorGraphSharedPreparedSearchCacheSnapshot() columnVectorGraphSharedPreparedSearchCacheSnapshot {

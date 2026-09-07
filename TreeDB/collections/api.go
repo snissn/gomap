@@ -416,6 +416,7 @@ type collectionManagerOptions struct {
 }
 
 type Collection struct {
+	typedGraphReconcile         *typedGraphReconcileToken
 	db                          *backenddb.DB
 	manager                     *CollectionManager
 	writeDomain                 *collectionWriteDomain
@@ -1290,6 +1291,7 @@ type collectionCatalog struct {
 	columnManifestRootName string
 	indexRuntimes          []indexRuntime
 	indexRuntimesErr       error
+	typedGraphBase         *typedGraphBaseAlias
 }
 
 type collectionRootOverlayFilter struct {
@@ -1319,6 +1321,7 @@ type noIndexBatchEntry struct {
 }
 
 type indexedFlushUnit struct {
+	typedReceipts       []*typedGraphPublicationReceipt
 	rootRuns            map[string][]memtable.Table
 	rootPolicies        map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs         map[string]uint64
@@ -1394,6 +1397,7 @@ func (lease *preparedIndexedCommandWALPublish) release() {
 }
 
 type bufferedIndexedCheckpoint struct {
+	typedReceipts          []*typedGraphPublicationReceipt
 	loaded                 bool
 	meta                   CollectionMeta
 	catalog                *collectionCatalog
@@ -1481,6 +1485,7 @@ type bufferedColumnDocumentIndex struct {
 }
 
 type collectionWriteDomain struct {
+	typedReceipts []*typedGraphPublicationReceipt
 	// mutationMu serializes root descriptor publishes for handles opened
 	// through the same manager so optimistic retries do not starve under
 	// sustained collection write contention.
@@ -1691,6 +1696,10 @@ func NewCollectionManager(database *backenddb.DB) *CollectionManager {
 func newCollectionManager(database *backenddb.DB, opts collectionManagerOptions) *CollectionManager {
 	manager := &CollectionManager{db: database}
 	if database != nil {
+		if err := ensureColumnAssetLifecycleRegistryDB(database); err != nil {
+			manager.closing.Store(true)
+			return manager
+		}
 		manager.commandWALCoordinator = collectionCommandWALCoordinatorForDB(database)
 		if opts.registerBackendHooks {
 			manager.commandWALRawUnregister = database.RegisterCommandWALRawPublishBarrier(manager.flushPendingCommandWALBeforeRawPublish)
@@ -3325,10 +3334,14 @@ func flushCollectionWriteDomainWithHeldCommandWALRawPublishLock(db *backenddb.DB
 }
 
 func flushCollectionWriteDomainWithRawPublishState(db *backenddb.DB, domain *collectionWriteDomain, rawPublishLocked bool) error {
+	return flushCollectionWriteDomainWithTypedReconcile(db, domain, rawPublishLocked, nil)
+}
+
+func flushCollectionWriteDomainWithTypedReconcile(db *backenddb.DB, domain *collectionWriteDomain, rawPublishLocked bool, token *typedGraphReconcileToken) error {
 	if db == nil || domain == nil {
 		return nil
 	}
-	collection := &Collection{db: db, writeDomain: domain, commandWALRawPublishLocked: rawPublishLocked}
+	collection := &Collection{db: db, writeDomain: domain, commandWALRawPublishLocked: rawPublishLocked, typedGraphReconcile: token}
 	unlockAdmission := collection.lockVectorIndexSynchronousPublicationAdmission()
 	defer unlockAdmission()
 	unlockMutation := lockCollectionDomainMutation(domain)
@@ -4177,7 +4190,7 @@ func (c *Collection) createIndexOnce(def IndexDefinition) (*CollectionMeta, erro
 		return nil, unexpectedOrderedRootCountError(newMeta.Name, len(plan.rootNames), len(rootIDs))
 	}
 	c.meta = newMeta
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, plan.rootNames, rootIDs)
+	nextCatalog := cloneCatalogAfterSchemaChange(catalog, newMeta, plan.rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return newMeta.copy(), nil
@@ -4293,7 +4306,7 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 		return nil, err
 	}
 	c.meta = newMeta
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, nil, nil)
+	nextCatalog := cloneCatalogAfterSchemaChange(catalog, newMeta, nil, nil)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	if coord := c.collectionSchemaCoordinator(); coord != nil {
@@ -4391,7 +4404,7 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 		return nil, err
 	}
 	c.meta = newMeta
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, clearedRootNames, []uint64{0})
+	nextCatalog := cloneCatalogAfterSchemaChange(catalog, newMeta, clearedRootNames, []uint64{0})
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	if coord := c.collectionSchemaCoordinator(); coord != nil {
@@ -4516,7 +4529,7 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	}
 	c.meta = newMeta
 	clearedRootIDs := make([]uint64, len(clearedRootNames))
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, clearedRootNames, clearedRootIDs)
+	nextCatalog := cloneCatalogAfterSchemaChange(catalog, newMeta, clearedRootNames, clearedRootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return newMeta.copy(), nil
@@ -5500,7 +5513,7 @@ func isDefaultIndexedWriteMemtableMaxDocuments(opts CollectionOptions) bool {
 		opts.BufferedIndexedWriteMaxDocuments == DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
 }
 
-func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan, columnDocuments []columnWriteDocument, fullDocumentOverlay *bufferedPrimaryOverlay, preparedTextInserts []preparedTextIndexInsert, columnCommandBytes int64, commandWALStageIntent *backenddb.CommandWALIntent, rawStageLocked bool, releaseCommandWALRawStage func()) (elapsed time.Duration, err error) {
+func (c *Collection) bufferIndexedInsertPlanLocked(snap *backenddb.Snapshot, catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan, columnDocuments []columnWriteDocument, fullDocumentOverlay *bufferedPrimaryOverlay, preparedTextInserts []preparedTextIndexInsert, columnCommandBytes int64, commandWALStageIntent *backenddb.CommandWALIntent, rawStageLocked bool, releaseCommandWALRawStage func()) (elapsed time.Duration, err error) {
 	domain := c.writeDomain
 	if domain == nil {
 		return 0, errors.New("collections: missing write domain")
@@ -5539,6 +5552,16 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	defer releaseLocalCommandWALRawStage()
 	defer releaseCommandWALRawStage()
 	commandWALStageAppended := false
+	var typedReceipt *typedGraphPublicationReceipt
+	defer func() {
+		if err != nil && typedReceipt != nil {
+			if commandWALStageAppended {
+				typedReceipt.invalidate()
+			} else {
+				typedReceipt.rejectBeforeAppend()
+			}
+		}
+	}()
 	appendCommandWALBeforeStage := func() (uint64, error) {
 		if commandWALStageIntent == nil {
 			return 0, nil
@@ -5548,6 +5571,29 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		}
 		if !rawStageLocked && unlockCommandWALRawStage == nil {
 			unlockCommandWALRawStage = c.db.LockCommandWALStaging()
+		}
+		var reserveErr error
+		if c.typedGraphEncodedAdmissionEnabled() {
+			encoded, boundErr := c.bufferedTypedGraphEncodedBound(snap, catalog, domain, plan, columnDocuments, preparedTextInserts)
+			if boundErr != nil {
+				return 0, boundErr
+			}
+			typedReceipt, reserveErr = c.reserveBufferedTypedGraphPublication(columnDocuments, encoded)
+		} else {
+			typedReceipt, reserveErr = c.reserveBufferedTypedGraphPublication(columnDocuments)
+		}
+		if reserveErr != nil {
+			return 0, reserveErr
+		}
+		if c.typedGraphEncodedAdmissionEnabled() {
+			if err := beginTypedGraphEncodedAttempt([]*typedGraphPublicationReceipt{typedReceipt}, true); err != nil {
+				return 0, err
+			}
+			// Reuses staging serialization already held here. The feature-off
+			// path retains its original earlier pointerization boundary.
+			if err := pointerizeDirectBufferedPrimaryEntries(c.db, catalog.meta, plan.directBufferedInsert); err != nil {
+				return 0, err
+			}
 		}
 		lsn, appendErr := c.db.AppendStagedCommandWALIntent(commandWALStageIntent, false)
 		commandWALStageAppended = commandWALStageIntent.AssignedLSN() != 0
@@ -5613,6 +5659,9 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	commandWALLSN, err := appendCommandWALBeforeStage()
 	if err != nil {
 		return 0, err
+	}
+	if typedReceipt != nil {
+		domain.typedReceipts = append(domain.typedReceipts, typedReceipt)
 	}
 	if plan.directBufferedInsert != nil {
 		return c.bufferDirectIndexedInsertPlanLocked(domain, catalog, plan, columnDocuments, fullDocumentOverlay, preparedTextInserts, columnCommandBytes, rawDocumentBytes, publicationBytes, commandWALLSN, releaseCommandWALRawStage)
@@ -5997,6 +6046,7 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.primaryOverlay = nil
 	domain.fullDocumentOverlay = nil
 	domain.columnDocuments = nil
+	domain.typedReceipts = nil
 	domain.columnDocumentIndex = nil
 	domain.reconstructionRows = 0
 	domain.preparedTextInserts = nil
@@ -7438,6 +7488,7 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		indexedMutableCommandWALFirst: domain.indexedMutableCommandWALFirst,
 		indexedMutableCommandWALLast:  domain.indexedMutableCommandWALLast,
 		columnDocuments:               append([]columnWriteDocument(nil), domain.columnDocuments...),
+		typedReceipts:                 append([]*typedGraphPublicationReceipt(nil), domain.typedReceipts...),
 		reconstructionRows:            domain.reconstructionRows,
 		preparedTextInserts:           clonePreparedTextIndexInserts(domain.preparedTextInserts),
 		columnCommandBytes:            domain.columnCommandBytes,
@@ -7485,6 +7536,7 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.indexedMutableCommandWALFirst = checkpoint.indexedMutableCommandWALFirst
 	domain.indexedMutableCommandWALLast = checkpoint.indexedMutableCommandWALLast
 	domain.columnDocuments = checkpoint.columnDocuments
+	domain.typedReceipts = checkpoint.typedReceipts
 	domain.columnDocumentIndex = nil
 	domain.reconstructionRows = checkpoint.reconstructionRows
 	domain.preparedTextInserts = checkpoint.preparedTextInserts
@@ -7533,6 +7585,7 @@ func cloneIndexedFlushUnits(in []indexedFlushUnit) []indexedFlushUnit {
 			byteCount:           unit.byteCount,
 			rootRunCount:        unit.rootRunCount,
 			columnDocuments:     append([]columnWriteDocument(nil), unit.columnDocuments...),
+			typedReceipts:       append([]*typedGraphPublicationReceipt(nil), unit.typedReceipts...),
 			reconstructionRows:  unit.reconstructionRows,
 			preparedTextInserts: clonePreparedTextIndexInserts(unit.preparedTextInserts),
 			columnCommandBytes:  unit.columnCommandBytes,
@@ -9742,11 +9795,15 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			return c.completePreparedIndexedFlush(work, 0, nil, fmt.Errorf("%w: typed-column indexed async publish missing command WAL interval", backenddb.ErrCommandWALContextMissingFrame), overlayMaterializeElapsed, overlayMaterializeElapsed, 0)
 		}
 		columnInput = columnWritePublishInput{
-			meta: work.meta, catalog: work.catalog, baseCommitSeq: work.baseCommitSeq, baseSystemRoot: work.baseSystemRoot,
+			typedReceipts: work.flushUnit.typedReceipts,
+			meta:          work.meta, catalog: work.catalog, baseCommitSeq: work.baseCommitSeq, baseSystemRoot: work.baseSystemRoot,
 			rootNames: cloneColumnPublishRootNames(work.rootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(work.rootBaseIDs),
 			operation: ColumnPublishOperationInsert, documents: work.flushUnit.columnDocuments, rows: len(work.flushUnit.columnDocuments), commandBytes: work.flushUnit.columnCommandBytes,
 		}
 		columnInput, err = prepareColumnWritePublishInputBeforeCommandWAL(columnInput)
+		if err == nil {
+			err = c.beginBufferedTypedGraphEncodedFlush(columnInput, work.flushUnit.rootRuns)
+		}
 		if err == nil {
 			columnInput.preparedPlan, err = c.prepareColumnPublishPlanLease(columnInput, work.catalog.rootID(collectionColumnManifestRootName(work.meta.Name)), work.commandWALLast)
 		}
@@ -10443,6 +10500,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 		domain.rootValueArenas = nil
 		domain.primaryOverlay = nil
 		domain.columnDocuments = nil
+		domain.typedReceipts = nil
 		domain.columnDocumentIndex = nil
 		domain.reconstructionRows = 0
 		domain.preparedTextInserts = nil
@@ -10480,6 +10538,12 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 		rootOverlays[rootName] = append([]uint64(nil), catalog.overlayRootIDs(rootName)...)
 	}
 	preflight := c.bufferedIndexedRootPublishPreflight(pin.Pager(), baseSystemRoot, baseCommitSeq, meta, rootNames, baseRootIDs)
+	if err := c.beginBufferedTypedGraphEncodedFlush(columnWritePublishInput{
+		meta: meta, catalog: pinnedCatalog, operation: ColumnPublishOperationInsert,
+		documents: flushUnit.columnDocuments, typedReceipts: flushUnit.typedReceipts,
+	}, flushUnit.rootRuns); err != nil {
+		return err
+	}
 	pointerizeStart := time.Now()
 	publishRootRuns, cleanupPointerizedRuns, err := pointerizeCollectionRootRunMapValues(c.db, meta, flushUnit.rootRuns)
 	domain.indexedFlushPointerizeTotalNs.Add(durationToAtomicNs(collectionObservedElapsedSince(pointerizeStart)))
@@ -10576,6 +10640,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 					documents:        flushUnit.columnDocuments,
 					rows:             len(flushUnit.columnDocuments),
 					commandBytes:     flushUnit.columnCommandBytes,
+					typedReceipts:    flushUnit.typedReceipts,
 				})
 			} else if commandWALIntent != nil {
 				newSystemRoot, rootIDs, err = c.publishBufferedOrderedRootDeltaBatchGroupWithCommandWAL(ordered, preflight, commandWALIntent, rawPublishLocked, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -10623,6 +10688,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	domain.primaryOverlay = nil
 	domain.fullDocumentOverlay = nil
 	domain.columnDocuments = nil
+	domain.typedReceipts = nil
 	domain.columnDocumentIndex = nil
 	domain.reconstructionRows = 0
 	domain.preparedTextInserts = nil
@@ -10710,6 +10776,7 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	freezeMutableIndexedRunMapsLocked(domain)
 	unit := indexedFlushUnit{
 		rootRuns:            domain.rootRuns,
+		typedReceipts:       domain.typedReceipts,
 		rootPolicies:        domain.rootPolicies,
 		rootBaseIDs:         domain.rootBaseIDs,
 		uniqueValueRuns:     domain.uniqueValueRuns,
@@ -10740,6 +10807,7 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.columnDocuments = nil
+	domain.typedReceipts = nil
 	domain.columnDocumentIndex = nil
 	domain.reconstructionRows = 0
 	domain.fullDocumentOverlay = nil
@@ -10763,6 +10831,7 @@ func rotateIndexedMutableToFlushUnitForAsyncLocked(domain *collectionWriteDomain
 	}
 	unit := indexedFlushUnit{
 		rootRuns:            domain.rootRuns,
+		typedReceipts:       domain.typedReceipts,
 		rootPolicies:        domain.rootPolicies,
 		rootBaseIDs:         domain.rootBaseIDs,
 		uniqueValueRuns:     domain.uniqueValueRuns,
@@ -10796,6 +10865,7 @@ func rotateIndexedMutableToFlushUnitForAsyncLocked(domain *collectionWriteDomain
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.columnDocuments = nil
+	domain.typedReceipts = nil
 	domain.columnDocumentIndex = nil
 	domain.reconstructionRows = 0
 	domain.preparedTextInserts = nil
@@ -10938,6 +11008,7 @@ func mergedIndexedFlushUnitLocked(domain *collectionWriteDomain) indexedFlushUni
 		mergeIndexedFlushUnit(&unit, pending)
 	}
 	mergeIndexedFlushUnit(&unit, indexedFlushUnit{
+		typedReceipts:       domain.typedReceipts,
 		rootRuns:            domain.rootRuns,
 		rootPolicies:        domain.rootPolicies,
 		rootBaseIDs:         domain.rootBaseIDs,
@@ -10989,6 +11060,7 @@ func mergedIndexedFlushUnitForSyncLocked(meta CollectionMeta, domain *collection
 		return indexedFlushUnit{}, nil, err
 	}
 	mergeIndexedFlushUnit(&unit, indexedFlushUnit{
+		typedReceipts:       domain.typedReceipts,
 		rootRuns:            domain.rootRuns,
 		rootPolicies:        domain.rootPolicies,
 		rootBaseIDs:         domain.rootBaseIDs,
@@ -11038,6 +11110,7 @@ func mergeIndexedFlushUnit(dst *indexedFlushUnit, src indexedFlushUnit) {
 	dst.byteCount = saturatingAddNonNegativeInt64(dst.byteCount, src.byteCount)
 	dst.rootRunCount = saturatingAddNonNegativeInt(dst.rootRunCount, indexedFlushUnitRootRunCount(src))
 	dst.columnDocuments = append(dst.columnDocuments, src.columnDocuments...)
+	dst.typedReceipts = append(dst.typedReceipts, src.typedReceipts...)
 	dst.columnDocumentIndex = nil
 	dst.reconstructionRows = saturatingAddNonNegativeInt(dst.reconstructionRows, src.reconstructionRows)
 	appendPreparedTextIndexInserts(&dst.preparedTextInserts, src.preparedTextInserts)
@@ -11822,7 +11895,7 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 	updateInsertBatchBaseRootIDs(rootNames, baseRootIDs, currentCatalog)
 	pinCommitSeq := snapshotCommitSeq(pin)
 	pinSystemRoot := snapshotSystemRoot(pin)
-	bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, nil, nil, nil, 0, nil, false, nil)
+	bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(pin, currentCatalog, pinCommitSeq, pinSystemRoot, plan, nil, nil, nil, 0, nil, false, nil)
 	_ = pin.Close()
 	if err != nil {
 		resetCollectionRunTables(plan.runs)
@@ -12222,10 +12295,12 @@ func (c *Collection) insertBatchOnceWithLockState(
 				columnDocuments[i].Document = nil
 			}
 		}
-		if err := pointerizeDirectBufferedPrimaryEntries(c.db, meta, plan.directBufferedInsert); err != nil {
-			closePlanningSnapshot()
-			resetCollectionRunTables(plan.runs)
-			return nil, err
+		if !c.typedGraphEncodedAdmissionEnabled() {
+			if err := pointerizeDirectBufferedPrimaryEntries(c.db, meta, plan.directBufferedInsert); err != nil {
+				closePlanningSnapshot()
+				resetCollectionRunTables(plan.runs)
+				return nil, err
+			}
 		}
 		defer releaseDirectBufferedPrimaryPointers(c.db, plan.directBufferedInsert)
 		var unlockCommandWALRawStage func()
@@ -12259,7 +12334,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			}
 			defer unlockCommandWALStage()
 		}
-		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, columnDocuments, fullDocumentOverlay, preparedTextInserts, columnCommandBytes, bufferedCommandWALIntent, bufferedCommandWALIntent != nil && c.db != nil, releaseCommandWALRawStage)
+		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(pin, currentCatalog, pinCommitSeq, pinSystemRoot, plan, columnDocuments, fullDocumentOverlay, preparedTextInserts, columnCommandBytes, bufferedCommandWALIntent, bufferedCommandWALIntent != nil && c.db != nil, releaseCommandWALRawStage)
 		_ = pin.Close()
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
@@ -12320,6 +12395,36 @@ func (c *Collection) insertBatchOnceWithLockState(
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = pin.Close() }()
+	var immediateColumnInput columnWritePublishInput
+	if columnStoreWriteEnabled(meta) {
+		columnDocuments := columnWriteDocumentsFromCommitLog(commandWALDocuments)
+		if err := applyTrustedFloat32Projection(ids, columnDocuments, execOpts.trustedFloat32Projection); err != nil {
+			resetCollectionRunTables(plan.runs)
+			return nil, err
+		}
+		if execOpts.trustedFloat32Projection != nil {
+			plan.stats.ColumnPublishValidatedFloat32ProjectionRows += len(columnDocuments)
+		}
+		immediateColumnInput = columnWritePublishInput{
+			meta: meta, catalog: currentCatalog, baseCommitSeq: baseCommitSeq, baseSystemRoot: baseSystemRoot,
+			rootNames: cloneColumnPublishRootNames(rootNames), baseRootIDs: insertBatchBaseRootIDMap(rootNames, baseRootIDs),
+			commandWALIntent: commandWALIntent, rawPublishLocked: true, operation: ColumnPublishOperationInsert,
+			documents: columnDocuments, rows: len(plan.resultIDs), insertStats: &plan.stats.CollectionInsertStats,
+		}
+		if c.typedGraphEncodedAdmissionEnabled() {
+			tables := make([]memtable.Table, len(plan.runs))
+			for i, run := range plan.runs {
+				tables[i] = run.table
+			}
+			var cleanup func()
+			immediateColumnInput, cleanup, err = c.prepareImmediateTypedGraphEncoded(immediateColumnInput, tables)
+			if err != nil {
+				resetCollectionRunTables(plan.runs)
+				return nil, err
+			}
+			defer cleanup()
+		}
+	}
 	obsoletePointerizedTables, err := pointerizeInsertBatchPlanRuns(c.db, meta, plan)
 	if err != nil {
 		return nil, err
@@ -12354,28 +12459,8 @@ func (c *Collection) insertBatchOnceWithLockState(
 	var publishMeta CollectionMeta
 	var publishRootNames []string
 	if columnStoreWriteEnabled(meta) {
-		columnDocuments := columnWriteDocumentsFromCommitLog(commandWALDocuments)
-		if err := applyTrustedFloat32Projection(ids, columnDocuments, execOpts.trustedFloat32Projection); err != nil {
-			return nil, err
-		}
-		if execOpts.trustedFloat32Projection != nil {
-			plan.stats.ColumnPublishValidatedFloat32ProjectionRows += len(columnDocuments)
-		}
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
-			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaGroupMaybeColumn(ordered, columnWritePublishInput{
-				meta:             meta,
-				catalog:          currentCatalog,
-				baseCommitSeq:    baseCommitSeq,
-				baseSystemRoot:   baseSystemRoot,
-				rootNames:        cloneColumnPublishRootNames(rootNames),
-				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDMap),
-				commandWALIntent: commandWALIntent,
-				rawPublishLocked: true,
-				operation:        ColumnPublishOperationInsert,
-				documents:        columnDocuments,
-				rows:             len(plan.resultIDs),
-				insertStats:      &plan.stats.CollectionInsertStats,
-			})
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaGroupMaybeColumn(ordered, immediateColumnInput)
 			return err
 		})
 	} else if commandWALIntent != nil {
@@ -13690,6 +13775,21 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	}
 	defer func() { _ = snap.Close() }()
 	defer func() { resetCollectionTables(deltaTables) }()
+	var immediateColumnInput columnWritePublishInput
+	if columnStoreWriteEnabled(c.meta) {
+		immediateColumnInput = columnWritePublishInput{
+			meta: c.meta, catalog: catalog, baseCommitSeq: baseCommitSeq, baseSystemRoot: baseSystemRoot,
+			rootNames: cloneColumnPublishRootNames(rootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(baseRootIDs),
+			commandWALIntent: commandWALIntent, rawPublishLocked: true, operation: ColumnPublishOperationDelete,
+			documents: columnWriteDocumentsFromIDs(deleteIDs), rows: len(existing),
+		}
+		var cleanup func()
+		immediateColumnInput, cleanup, err = c.prepareImmediateTypedGraphEncoded(immediateColumnInput, deltaTables)
+		if err != nil {
+			return 0, err
+		}
+		defer cleanup()
+	}
 	publishDeltaTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, c.meta, rootNames, deltaTables)
 	if err != nil {
 		return 0, err
@@ -13709,19 +13809,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		var publishMeta CollectionMeta
 		var publishRootNames []string
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
-			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, nil, columnWritePublishInput{
-				meta:             c.meta,
-				catalog:          catalog,
-				baseCommitSeq:    baseCommitSeq,
-				baseSystemRoot:   baseSystemRoot,
-				rootNames:        cloneColumnPublishRootNames(rootNames),
-				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
-				commandWALIntent: commandWALIntent,
-				rawPublishLocked: true,
-				operation:        ColumnPublishOperationDelete,
-				documents:        columnWriteDocumentsFromIDs(deleteIDs),
-				rows:             len(existing),
-			})
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, nil, immediateColumnInput)
 			return err
 		})
 		cleanupDeltas()
@@ -13983,6 +14071,21 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, predicate func(curren
 	defer func() {
 		resetCollectionTables(deltaTables)
 	}()
+	var immediateColumnInput columnWritePublishInput
+	if columnStoreWriteEnabled(c.meta) {
+		immediateColumnInput = columnWritePublishInput{
+			meta: c.meta, catalog: catalog, baseCommitSeq: baseCommitSeq, baseSystemRoot: baseSystemRoot,
+			rootNames: cloneColumnPublishRootNames(rootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(baseRootIDs),
+			commandWALIntent: commandWALIntent, rawPublishLocked: true, operation: ColumnPublishOperationDelete,
+			documents: columnWriteDocumentsFromIDs([][]byte{documentID}), rows: 1,
+		}
+		var cleanup func()
+		immediateColumnInput, cleanup, err = c.prepareImmediateTypedGraphEncoded(immediateColumnInput, deltaTables)
+		if err != nil {
+			return false, err
+		}
+		defer cleanup()
+	}
 	publishDeltaTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, c.meta, rootNames, deltaTables)
 	if err != nil {
 		return false, err
@@ -14002,19 +14105,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, predicate func(curren
 	var publishRootNames []string
 	if columnStoreWriteEnabled(c.meta) {
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
-			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, nil, columnWritePublishInput{
-				meta:             c.meta,
-				catalog:          catalog,
-				baseCommitSeq:    baseCommitSeq,
-				baseSystemRoot:   baseSystemRoot,
-				rootNames:        cloneColumnPublishRootNames(rootNames),
-				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
-				commandWALIntent: commandWALIntent,
-				rawPublishLocked: true,
-				operation:        ColumnPublishOperationDelete,
-				documents:        columnWriteDocumentsFromIDs([][]byte{documentID}),
-				rows:             1,
-			})
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, nil, immediateColumnInput)
 			return err
 		})
 	} else if commandWALIntent != nil {
@@ -16775,7 +16866,10 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	primaryTable := newCollectionRunTable(1)
 	setCollectionRunValue(primaryTable, bytes.Clone(documentID), primaryDocument)
 	primaryTable.Freeze()
-	if pointerizedPrimaryTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(c.db, c.meta, primaryRootName, primaryTable); err != nil {
+	if c.typedGraphEncodedAdmissionEnabled() {
+		// The complete prepared root tables are admitted together below.
+		deltaTables = append(deltaTables, primaryTable)
+	} else if pointerizedPrimaryTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(c.db, c.meta, primaryRootName, primaryTable); err != nil {
 		_ = snap.Close()
 		resetCollectionTables(append(deltaTables, primaryTable))
 		return false, false, err
@@ -16904,6 +16998,31 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		return false, false, err
 	}
 	defer cleanupCoalesced()
+	var commandWALIntent *backenddb.CommandWALIntent
+	var columnDocuments []columnWriteDocument
+	if columnStoreWriteEnabled(c.meta) && c.commandWALActive(nil) {
+		docs := []commitlog.CollectionDocument{{ID: bytes.Clone(documentID), Document: bytes.Clone(commandWALDocument)}}
+		columnDocuments = columnWriteDocumentsFromCommitLog(docs)
+		commandWALIntent, err = c.newCollectionUpdateCommandWALIntent(docs, nil)
+		if err != nil {
+			return false, false, err
+		}
+	}
+	var immediateColumnInput columnWritePublishInput
+	if columnStoreWriteEnabled(c.meta) {
+		immediateColumnInput = columnWritePublishInput{
+			meta: c.meta, catalog: catalog, baseCommitSeq: baseCommitSeq, baseSystemRoot: baseSystemRoot,
+			rootNames: cloneColumnPublishRootNames(coalescedRootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(baseRootIDs),
+			commandWALIntent: commandWALIntent, rawPublishLocked: true, operation: ColumnPublishOperationUpdate,
+			documents: columnDocuments, rows: 1, rowRemainderBytes: rowRemainderBytes,
+		}
+		var cleanup func()
+		immediateColumnInput, cleanup, err = c.prepareImmediateTypedGraphEncoded(immediateColumnInput, publishDeltaTables)
+		if err != nil {
+			return false, false, err
+		}
+		defer cleanup()
+	}
 	publishDeltaTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, c.meta, coalescedRootNames, publishDeltaTables)
 	if err != nil {
 		return false, false, err
@@ -16920,19 +17039,6 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(snap.Pager(), baseUserRoot, baseSystemRoot, baseCommitSeq)
 	}
-	var commandWALIntent *backenddb.CommandWALIntent
-	var columnDocuments []columnWriteDocument
-	if columnStoreWriteEnabled(c.meta) && c.commandWALActive(nil) {
-		docs := []commitlog.CollectionDocument{{
-			ID:       bytes.Clone(documentID),
-			Document: bytes.Clone(commandWALDocument),
-		}}
-		columnDocuments = columnWriteDocumentsFromCommitLog(docs)
-		commandWALIntent, err = c.newCollectionUpdateCommandWALIntent(docs, nil)
-		if err != nil {
-			return false, false, err
-		}
-	}
 	phaseStart = updateBatchStatsNow(detailedStats)
 	var newSystemRoot uint64
 	var rootIDs []uint64
@@ -16940,20 +17046,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	var publishRootNames []string
 	if columnStoreWriteEnabled(c.meta) {
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
-			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, columnWritePublishInput{
-				meta:              c.meta,
-				catalog:           catalog,
-				baseCommitSeq:     baseCommitSeq,
-				baseSystemRoot:    baseSystemRoot,
-				rootNames:         cloneColumnPublishRootNames(coalescedRootNames),
-				baseRootIDs:       cloneColumnPublishBaseRootIDs(baseRootIDs),
-				commandWALIntent:  commandWALIntent,
-				rawPublishLocked:  true,
-				operation:         ColumnPublishOperationUpdate,
-				documents:         columnDocuments,
-				rows:              1,
-				rowRemainderBytes: rowRemainderBytes,
-			})
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, immediateColumnInput)
 			return err
 		})
 	} else {
@@ -19370,6 +19463,31 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 		return nil, err
 	}
 	defer cleanupCoalesced()
+	var immediateColumnInput columnWritePublishInput
+	if columnStoreWriteEnabled(plan.meta) {
+		columnDocuments := columnWriteDocumentsFromCommitLog(plan.commandWALDocuments)
+		if plan.typedProjection != nil {
+			ids := make([][]byte, len(columnDocuments))
+			for i := range columnDocuments {
+				ids[i] = columnDocuments[i].ID
+			}
+			if err := applyTypedProjectionSubset(ids, columnDocuments, plan.typedProjection); err != nil {
+				return nil, err
+			}
+		}
+		immediateColumnInput = columnWritePublishInput{
+			meta: plan.meta, catalog: plan.catalog, baseCommitSeq: plan.baseCommitSeq, baseSystemRoot: plan.baseSystemRoot,
+			rootNames: cloneColumnPublishRootNames(coalescedRootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
+			commandWALIntent: commandWALIntent, rawPublishLocked: true, operation: ColumnPublishOperationUpdate,
+			documents: columnDocuments, rows: plan.stats.Modified, rowRemainderBytes: plan.rowRemainderBytes,
+		}
+		var cleanup func()
+		immediateColumnInput, cleanup, err = c.prepareImmediateTypedGraphEncoded(immediateColumnInput, publishTables)
+		if err != nil {
+			return nil, err
+		}
+		defer cleanup()
+	}
 	publishTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, plan.meta, coalescedRootNames, publishTables)
 	if err != nil {
 		return nil, err
@@ -19391,34 +19509,10 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	if columnStoreWriteEnabled(plan.meta) {
-		columnDocuments := columnWriteDocumentsFromCommitLog(plan.commandWALDocuments)
-		if plan.typedProjection != nil {
-			ids := make([][]byte, len(columnDocuments))
-			for i := range columnDocuments {
-				ids[i] = columnDocuments[i].ID
-			}
-			if err := applyTypedProjectionSubset(ids, columnDocuments, plan.typedProjection); err != nil {
-				cleanupDeltas()
-				return nil, err
-			}
-		}
 		var publishMeta CollectionMeta
 		var publishRootNames []string
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
-			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, columnWritePublishInput{
-				meta:              plan.meta,
-				catalog:           plan.catalog,
-				baseCommitSeq:     plan.baseCommitSeq,
-				baseSystemRoot:    plan.baseSystemRoot,
-				rootNames:         cloneColumnPublishRootNames(coalescedRootNames),
-				baseRootIDs:       cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
-				commandWALIntent:  commandWALIntent,
-				rawPublishLocked:  true,
-				operation:         ColumnPublishOperationUpdate,
-				documents:         columnDocuments,
-				rows:              plan.stats.Modified,
-				rowRemainderBytes: plan.rowRemainderBytes,
-			})
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, immediateColumnInput)
 			return err
 		})
 		cleanupDeltas()
@@ -20712,6 +20806,7 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.primaryOverlay = nil
 	domain.fullDocumentOverlay = nil
 	domain.columnDocuments = nil
+	domain.typedReceipts = nil
 	domain.columnDocumentIndex = nil
 	domain.reconstructionRows = 0
 	domain.preparedTextInserts = nil
@@ -20785,6 +20880,7 @@ func cloneCatalogWithRootUpdates(base *collectionCatalog, meta CollectionMeta, r
 	catalog := newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(meta), roots, rootOverlays, rootOverlayFilters)
 	if base != nil {
 		catalog.pager = base.pager
+		catalog.typedGraphBase = base.typedGraphBase
 	}
 	return catalog
 }
@@ -20820,6 +20916,7 @@ func cloneCatalogWithRootOverlays(base *collectionCatalog, meta CollectionMeta, 
 	catalog := newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(meta), roots, rootOverlays, rootOverlayFilters)
 	if base != nil {
 		catalog.pager = base.pager
+		catalog.typedGraphBase = base.typedGraphBase
 	}
 	return catalog
 }
@@ -20854,6 +20951,7 @@ func cloneCatalogWithRootOverlayFilters(base *collectionCatalog, rootNames []str
 	}
 	catalog := newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(base.meta), roots, rootOverlays, rootOverlayFilters)
 	catalog.pager = base.pager
+	catalog.typedGraphBase = base.typedGraphBase
 	return catalog
 }
 
@@ -21624,7 +21722,11 @@ func (c *Collection) buildSchemaAndRootDescriptorSystemIterator(
 	for i, rootName := range rootNames {
 		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
 	}
-	return buildSystemTargetIterator(current, updates)
+	it, err := buildSystemTargetIterator(current, updates)
+	if err != nil {
+		return nil, err
+	}
+	return clearTypedGraphBaseSchemaEntries(it, catalog.typedGraphBase), nil
 }
 
 func (c *Collection) buildSchemaOnlySystemDeltaIterator(baseMeta CollectionMeta, encodedMeta []byte, clearedRootNames []string) (iterator.UnsafeIterator, error) {
@@ -21649,7 +21751,11 @@ func (c *Collection) buildSchemaOnlySystemDeltaIterator(baseMeta CollectionMeta,
 	for _, rootName := range clearedRootNames {
 		updates[systemCollectionRootKey(rootName)] = encodeRootID(0)
 	}
-	return buildSystemDeltaIterator(updates)
+	it, err := buildSystemDeltaIterator(updates)
+	if err != nil {
+		return nil, err
+	}
+	return clearTypedGraphBaseSchemaEntries(it, catalog.typedGraphBase), nil
 }
 
 func loadDeleteIndexState(snap *backenddb.Snapshot, catalog *collectionCatalog, documentID, document []byte, runtimes []indexRuntime, opts collectionOptions) (documentIndexState, error) {
@@ -24133,6 +24239,10 @@ func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCa
 	}
 	catalog := newCollectionCatalogWithOverlays(meta, roots, rootOverlays)
 	catalog.pager = snap.Pager()
+	catalog.typedGraphBase, err = loadTypedGraphBaseAlias(snap, meta)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateColumnStoreCatalogRoot(snap, catalog); err != nil {
 		return nil, err
 	}

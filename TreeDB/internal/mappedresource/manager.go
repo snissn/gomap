@@ -455,13 +455,26 @@ func GlobalStats() Stats {
 // destructive maintenance. Callers must still filter by resource class,
 // namespace, and subsystem-specific identity before acting.
 func GlobalPinSummary() []Pin {
+	pins, _ := GlobalPinSummaryWithLimit(0)
+	return pins
+}
+
+// ErrPinSummaryLimit reports an invalid or exceeded pin-copy limit.
+var ErrPinSummaryLimit = errors.New("mappedresource: pin summary limit exceeded or invalid")
+
+// GlobalPinSummaryWithLimit bounds the process-wide pin copy before allocation.
+// Zero preserves unbounded reporting; negative limits fail closed.
+func GlobalPinSummaryWithLimit(maxPins int) ([]Pin, error) {
 	globalResourceState.mu.Lock()
 	defer globalResourceState.mu.Unlock()
+	if maxPins < 0 || (maxPins > 0 && len(globalResourceState.active) > maxPins) {
+		return nil, ErrPinSummaryLimit
+	}
 	out := make([]Pin, 0, len(globalResourceState.active))
 	for _, pin := range globalResourceState.active {
 		out = append(out, pin)
 	}
-	return out
+	return out, nil
 }
 
 // RecordHit records an adapter cache hit.

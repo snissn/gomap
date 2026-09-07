@@ -34,6 +34,9 @@ func setColumnPhysicalAssetPreparationAfterPrepareTestHook(hook func(ColumnPubli
 }
 
 type columnWritePublishInput struct {
+	candidateAdmission *typedGraphFoldAssetAdmission
+	// Only the second half of one source attempt may reuse its still-owned output.
+	sourcePreparedOutput  *ColumnPublishPreparedAssets
 	meta                  CollectionMeta
 	catalog               *collectionCatalog
 	baseCommitSeq         uint64
@@ -50,6 +53,7 @@ type columnWritePublishInput struct {
 	declaredRows          []columnDeclaredRow
 	declaredRowsReady     bool
 	partIDOffset          uint64
+	typedReceipts         []*typedGraphPublicationReceipt
 	documentExtraction    time.Duration
 	commandBytes          int64
 	rowRemainderBytes     int64
@@ -162,6 +166,13 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	input = preparedInput
+	derived, err := c.prepareTypedGraphPublication(input)
+	if err != nil {
+		return 0, nil, CollectionMeta{}, nil, err
+	}
+	if derived != nil {
+		defer derived.rejectBeforeAppend()
+	}
 	columnRootName := collectionColumnManifestRootName(input.meta.Name)
 	columnBaseRoot := uint64(0)
 	if input.catalog != nil {
@@ -181,6 +192,9 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		return 0, nil, CollectionMeta{}, nil, appendErr
 	}
 	preflight := c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs)
+	if derived != nil {
+		preflight = combineOrderedRootGroupPreflight(preflight, derived.preflight)
+	}
 	var plan ColumnPublishPlan
 	var planLease *columnPublishPlanLease
 	var updatedMeta CollectionMeta
@@ -207,6 +221,9 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 			return nil, err
 		}
 		recordColumnPublishPlanStats(input.insertStats, plan)
+		if err := derived.prepareServingPlan(plan); err != nil {
+			return nil, err
+		}
 		materializeStart := time.Now()
 		columnDelta, err := plan.RootDelta.OrderedRootDeltaPublishInput()
 		recordColumnPublishRootDeltaMaterialization(input.insertStats, time.Since(materializeStart))
@@ -272,20 +289,29 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	recordColumnPublishCommit(input.insertStats, time.Since(commitStart))
 	recordColumnPublishTiming(input.insertStats, publishTiming)
 	if err != nil {
+		if input.commandWALIntent.AssignedLSN() != 0 {
+			derived.invalidate()
+		} else {
+			derived.rejectBeforeAppend()
+		}
 		if planLease != nil {
 			err = errors.Join(err, planLease.finishFailure(err))
 		}
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if planLease == nil {
+		derived.invalidate()
 		return 0, nil, CollectionMeta{}, nil, errors.New("collections: column publish completed without a prepared plan lease")
 	}
 	if err := planLease.finishCommit(); err != nil {
+		derived.invalidate()
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if updatedMeta.Name == "" {
+		derived.invalidate()
 		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("collections: column publish did not prepare updated metadata collection=%q operation=%s", input.meta.Name, input.operation)
 	}
+	derived.install(updatedMeta, rootNames, rootIDs, plan)
 	return newSystemRoot, rootIDs, updatedMeta, rootNames, nil
 }
 
@@ -308,6 +334,13 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	input = preparedInput
+	derived, err := c.prepareTypedGraphPublication(input)
+	if err != nil {
+		return 0, nil, CollectionMeta{}, nil, err
+	}
+	if derived != nil {
+		defer derived.rejectBeforeAppend()
+	}
 	columnRootName := collectionColumnManifestRootName(input.meta.Name)
 	columnBaseRoot := uint64(0)
 	if input.catalog != nil {
@@ -327,6 +360,9 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		return 0, nil, CollectionMeta{}, nil, appendErr
 	}
 	preflight = combineOrderedRootGroupPreflight(preflight, c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs))
+	if derived != nil {
+		preflight = combineOrderedRootGroupPreflight(preflight, derived.preflight)
+	}
 	var plan ColumnPublishPlan
 	var planLease *columnPublishPlanLease
 	var updatedMeta CollectionMeta
@@ -352,6 +388,9 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 			return nil, err
 		}
 		recordColumnPublishPlanStats(input.insertStats, plan)
+		if err := derived.prepareServingPlan(plan); err != nil {
+			return nil, err
+		}
 		materializeStart := time.Now()
 		columnDelta, cleanup, err := plan.RootDelta.OrderedRootDeltaBatchPublishInput()
 		recordColumnPublishRootDeltaMaterialization(input.insertStats, time.Since(materializeStart))
@@ -432,15 +471,22 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	recordColumnPublishTiming(input.insertStats, publishTiming)
 	if err != nil {
 		// The DB publish helper owns context-built batch deltas on publish errors.
+		if input.commandWALIntent.AssignedLSN() != 0 {
+			derived.invalidate()
+		} else {
+			derived.rejectBeforeAppend()
+		}
 		if planLease != nil {
 			err = errors.Join(err, planLease.finishFailure(err))
 		}
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if planLease == nil {
+		derived.invalidate()
 		return 0, nil, CollectionMeta{}, nil, errors.New("collections: column publish completed without a prepared plan lease")
 	}
 	if err := planLease.finishCommit(); err != nil {
+		derived.invalidate()
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if cleanupColumnDelta != nil {
@@ -448,8 +494,10 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		cleanupColumnDelta = nil
 	}
 	if updatedMeta.Name == "" {
+		derived.invalidate()
 		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("collections: column publish did not prepare updated metadata collection=%q operation=%s", input.meta.Name, input.operation)
 	}
+	derived.install(updatedMeta, rootNames, rootIDs, plan)
 	return newSystemRoot, rootIDs, updatedMeta, rootNames, nil
 }
 
@@ -823,7 +871,16 @@ func (c *Collection) prepareColumnPublishPlanLease(input columnWritePublishInput
 		return nil, err
 	}
 	plan.StageMetrics.DocumentExtraction += input.documentExtraction
-	return newColumnPublishPlanLease(c, plan)
+	lease, err := newColumnPublishPlanLease(c, plan)
+	if err != nil {
+		return nil, err
+	}
+	if input.catalog != nil {
+		if err := c.bindTypedGraphBasePlanClosure(lease, input.catalog.typedGraphBase); err != nil {
+			return nil, errors.Join(err, lease.Abandon())
+		}
+	}
+	return lease, nil
 }
 
 // installPrebuiltColumnPublishPlanDurability is the single stable-resource
@@ -887,6 +944,9 @@ func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePubl
 		insertInput.operation = ColumnPublishOperationInsert
 		insertInput.sourceDeleteDocuments = nil
 		insertInput.partIDOffset = 1 << 32
+		if columnStoreTypedScalarIndexesSupported(input.meta) && columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore) {
+			insertInput.sourcePreparedOutput = &deleted
+		}
 		insertHook := hookInput
 		insertHook.Operation = ColumnPublishOperationInsert
 		inserted, err := c.prepareColumnPhysicalAssetsForCommand(insertInput, insertHook)
@@ -979,6 +1039,22 @@ func mergeSourceColumnPreparedAssets(deleted, inserted ColumnPublishPreparedAsse
 }
 
 func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow) (_ ColumnPublishPreparedAssets, retErr error) {
+	generation := uint64(1)
+	if hookInput.CurrentManifest != nil {
+		generation = hookInput.CurrentManifest.Generation + 1
+	}
+	return c.prepareColumnPhysicalAssetRowsAtIdentity(prepared, input, hookInput, rows, generation, columnPhysicalRowAssetPartID+input.partIDOffset, typedColumnPartAssetPartID)
+}
+
+// prepareColumnPhysicalAssetRowsAtIdentity shares the ordinary encoder without
+// manufacturing a predecessor manifest or command LSN for maintenance builds.
+// Its caller owns collision admission; the normal command wrapper advances the
+// generation, while captured-frontier preparation reserves a fresh row part.
+func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow, generation, rowPartID, typedPartID uint64) (_ ColumnPublishPreparedAssets, retErr error) {
+	if generation == 0 || rowPartID == 0 || typedPartID == 0 || rowPartID == typedPartID {
+		return ColumnPublishPreparedAssets{}, errors.New("collections: invalid column physical asset identity")
+	}
+	isolatedTypedOutput := columnStoreTypedScalarIndexesSupported(input.meta) && columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore)
 	cleanupAssets := make([]ColumnPreparedAsset, 0, 8)
 	defer func() {
 		if retErr != nil {
@@ -997,12 +1073,6 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	trackCleanupAsset := func(ref ColumnAssetRef) {
 		cleanupAssets = append(cleanupAssets, ColumnPreparedAsset{Ref: ref})
 	}
-	generation := uint64(1)
-	if hookInput.CurrentManifest != nil {
-		generation = hookInput.CurrentManifest.Generation + 1
-	}
-	rowPartID := columnPhysicalRowAssetPartID + input.partIDOffset
-	typedPartID := uint64(typedColumnPartAssetPartID)
 	role := columnManifestPartRoleForPublish(hookInput.Operation)
 	type pendingColumnAsset struct {
 		payload  []byte
@@ -1080,11 +1150,42 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				session = newColumnPhysicalAssetAppendSession(c.db.ColumnAssetRootDir(), hookInput.ColumnStore)
 			}
 			appendOpenDuration += time.Since(appendStart)
+			session.candidateAdmission = input.candidateAdmission
 			defer func() {
 				if retErr != nil && !closed {
 					retErr = errors.Join(retErr, session.abort())
 				}
 			}()
+			if isolatedTypedOutput {
+				if !prepared.stableResourcesRequired {
+					return fmt.Errorf("%w: isolated typed output requires stable namespace creation", rootpublication.ErrNamespacePersistenceUnsupported)
+				}
+				var fileID uint32
+				if prior := input.sourcePreparedOutput; prior != nil {
+					if !prior.stableResourcesRequired || prior.stableResources == nil || len(prior.Assets) == 0 {
+						return errors.New("collections: source output reuse requires retained prepared authority")
+					}
+					fileID = prior.Assets[0].Ref.FileID
+					for _, asset := range prior.Assets {
+						if asset.Ref.FileID != fileID || asset.Ref.Generation != generation || asset.Ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace {
+							return errors.New("collections: source output reuse identity mismatch")
+						}
+					}
+				} else {
+					start := time.Now()
+					appender, err := session.freshAppender()
+					appendOpenDuration += time.Since(start)
+					if err != nil {
+						return err
+					}
+					fileID = appender.fileID
+				}
+				for i := range pendingAssets {
+					if !pendingAssets[i].hasRef {
+						pendingAssets[i].fileID = fileID
+					}
+				}
+			}
 		}
 		var appendedBytes int64
 		var appendedCount int
@@ -1324,7 +1425,16 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	prepared.AssetMetrics.RowAssetDuration += rowAsset.duration
 	prepared.AssetMetrics.RowAssetBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.RowAssetBytes, int64(len(rowAsset.encoded)))
 	prepared.AssetMetrics.RowAssetCount++
-	queueRegularManifestAsset(rowAsset.encoded, ColumnAssetKindTCS1PartImage, rowPartID, rowAsset.summary.RowCount, string(input.operation), role, "", func(ref ColumnAssetRef) error {
+	rowFileID := uint32(columnAssetM12ASegmentFileID)
+	if isolatedTypedOutput {
+		// Validate the existing generation bound; the flush assigns a fresh
+		// physical segment shared only within this logical source attempt.
+		rowFileID, err = directViewTypedColumnSegmentFileID(generation)
+		if err != nil {
+			return ColumnPublishPreparedAssets{}, err
+		}
+	}
+	queueRegularManifestAssetToFile(rowAsset.encoded, ColumnAssetKindTCS1PartImage, rowPartID, rowAsset.summary.RowCount, string(input.operation), role, "", rowFileID, func(ref ColumnAssetRef) error {
 		return validateColumnPhysicalAssetPreparedRefForManifest(ref, rowAsset.config, generation, rowPartID, len(rowAsset.encoded))
 	})
 	typedGranuleRowOrder := typedColumn.build.TypedGranuleRowOrder
@@ -1353,7 +1463,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 					if err := validateTypedColumnRef(ref); err != nil {
 						return err
 					}
-					if ref.FileID != directFileID {
+					if !isolatedTypedOutput && ref.FileID != directFileID {
 						return fmt.Errorf("collections: invalid direct-view typed-column part asset file_id=%d want %d", ref.FileID, directFileID)
 					}
 					if ref.Offset%typedColumnPartDirectViewAssetAlignment != 0 {

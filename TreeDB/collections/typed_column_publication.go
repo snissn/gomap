@@ -161,6 +161,9 @@ func columnStoreColumnNameSet(columns []ColumnStoreColumn) map[string]struct{} {
 	return present
 }
 
+// Projection is an internal read-only view consumed synchronously by encoders
+// and sidecar builders. All-column, empty and contiguous projections borrow
+// input storage; callers must keep rows alive and unchanged through consumption.
 func projectColumnDeclaredRowsForColumns(allColumns, selected []ColumnStoreColumn, rows []columnDeclaredRow) ([]columnDeclaredRow, error) {
 	if len(selected) == 0 {
 		out := make([]columnDeclaredRow, len(rows))
@@ -191,14 +194,30 @@ func projectColumnDeclaredRowsForColumns(allColumns, selected []ColumnStoreColum
 	for i, col := range allColumns {
 		indexByName[col.Name] = i
 	}
+	start, contiguous := indexByName[selected[0].Name]
+	for i, col := range selected {
+		index, ok := indexByName[col.Name]
+		if !ok || index != start+i {
+			contiguous = false
+			break
+		}
+	}
 	out := make([]columnDeclaredRow, len(rows))
 	for rowIdx, row := range rows {
-		out[rowIdx] = columnDeclaredRow{ID: bytes.Clone(row.ID), Deleted: row.Deleted}
+		out[rowIdx] = columnDeclaredRow{ID: row.ID, Deleted: row.Deleted}
+		if !contiguous {
+			out[rowIdx].ID = bytes.Clone(row.ID)
+		}
 		if row.Deleted {
 			continue
 		}
 		if len(row.Values) != len(allColumns) {
 			return nil, fmt.Errorf("collections: typed-storage row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(allColumns))
+		}
+		if contiguous {
+			end := start + len(selected)
+			out[rowIdx].Values = row.Values[start:end:end]
+			continue
 		}
 		out[rowIdx].Values = make([]columnDeclaredValue, len(selected))
 		for selectedIdx, col := range selected {
@@ -561,7 +580,9 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCachePr
 			}
 			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction decode generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, err)
 		}
-		decoded, err = part.scanDecodedValuesSelectedForReconstruction(selected)
+		// Only mapped payloads remain stable across read-cache calls. The read-at
+		// fallback reuses scratch, so reconstruction owns its raw vector blocks.
+		decoded, err = part.scanDecodedValuesSelectedForReconstruction(selected, !closeReadCache && readCache.lastView)
 		var closeErr error
 		if closeReadCache {
 			closeErr = readCache.close()
@@ -677,9 +698,23 @@ func typedColumnPartSetsByGenerationFromManifestRecords(records []columnManifest
 			if ref.Generation != keyGeneration || ref.PartID != keyPartID {
 				return nil, nil, fmt.Errorf("collections: typed-row manifest key generation/part mismatch")
 			}
-			if ref.PartID == columnPhysicalRowAssetPartID {
-				physicalRowsByGeneration[ref.Generation] = rows
+			operation, ok := columnPhysicalScanOperationFromBytes(reason)
+			if !ok {
+				return nil, nil, fmt.Errorf("collections: unsupported typed-row manifest reason %q", string(reason))
 			}
+			if _, err := decodeColumnManifestPartRoleForScan(record.value, ref, reason); err != nil {
+				return nil, nil, err
+			}
+			if operation == ColumnPublishOperationDelete {
+				continue
+			}
+			// Match the graph source's unique live row-part rule. Physical
+			// maintenance uses fresh IDs; source replacement also places live
+			// rows apart from part1 tombstones in the same generation.
+			if _, exists := physicalRowsByGeneration[ref.Generation]; exists {
+				return nil, nil, fmt.Errorf("%w: generation=%d has multiple physical row parts", errColumnVectorGraphTypedColumnMultipartDeferred, ref.Generation)
+			}
+			physicalRowsByGeneration[ref.Generation] = rows
 			continue
 		case ColumnAssetKindTCS1TypedColumnPart:
 		default:

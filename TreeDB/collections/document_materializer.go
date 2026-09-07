@@ -165,11 +165,12 @@ type documentRowLocatorCandidate struct {
 // is not concurrency-safe; callers that fetch concurrently should open one view
 // per worker or synchronize externally.
 type CollectionReadView struct {
-	collection *Collection
-	snapshot   *backenddb.Snapshot
-	catalog    *collectionCatalog
-	ownsSnap   bool
-	closed     bool
+	collection      *Collection
+	snapshot        *backenddb.Snapshot
+	catalog         *collectionCatalog
+	ownsSnap        bool
+	closed          bool
+	typedGraphOwner *typedGraphReadOwner
 
 	assetScopeKind                  mappedresource.ScopeKind
 	assetScopeID                    string
@@ -276,6 +277,9 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 // SearchVectorIndexWithBufferReadView searches and opens the matching document
 // snapshot while excluding coverage mutations across the combined operation.
 func (c *Collection) SearchVectorIndexWithBufferReadView(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, *CollectionReadView, error) {
+	if c.typedGraphServingPolicy() != nil {
+		return c.searchTypedGraphServing(opts, buffer)
+	}
 	unlock := c.lockVectorIndexCoveragePersistence()
 	defer unlock()
 	response, err := c.searchVectorIndexWithBuffer(opts, buffer, true)
@@ -329,7 +333,12 @@ func (v *CollectionReadView) Close() error {
 		snapErr = v.snapshot.Close()
 		v.snapshot = nil
 	}
-	return errors.Join(cacheErr, snapErr)
+	var ownerErr error
+	if owner := v.typedGraphOwner; owner != nil {
+		v.typedGraphOwner = nil
+		ownerErr = owner.Close()
+	}
+	return errors.Join(cacheErr, snapErr, ownerErr)
 }
 
 // FetchDocumentsByID materializes full documents for ids in input order. Missing
@@ -349,6 +358,9 @@ func (v *CollectionReadView) validateOpen() error {
 	}
 	if v.closed {
 		return errors.New("collections: collection read view is closed")
+	}
+	if v.collection.db == nil || v.collection.db.IsClosing() {
+		return backenddb.ErrClosed
 	}
 	if v.snapshot == nil || v.catalog == nil {
 		return errors.New("collections: nil collection read view")
@@ -1120,8 +1132,9 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 			return out, err
 		}
 		if !out.Results[i].Found {
-			out.Stats.RowRefValidationFailures++
-			return out, fmt.Errorf("collections: document row ref for id %q is not visible in primary root", string(out.Results[i].ID))
+			// ID fetch preserves missing entries. Explicit row-ref callers already
+			// require every primary row to exist before entering this shared loop.
+			continue
 		}
 		if !locatorResolvedAtView {
 			if err := v.validateDocumentRowRefLatest(refs[i], &out.Stats); err != nil {
@@ -1174,116 +1187,40 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 	return out, nil
 }
 
-func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetchResponse, ids [][]byte, retained [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions, projection *documentProjection) (out DocumentFetchResponse, err error) {
-	out = response
-	cfg := v.catalog.meta.Options.ColumnStore.copy()
-	readIntegrity := opts.ColumnAssetReadIntegrity
-	if readIntegrity == "" {
-		readIntegrity = ColumnAssetReadIntegrityVerify
-	}
-	if err := v.ensureAssetReadCaches(cfg, readIntegrity); err != nil {
-		return out, err
-	}
-	assetCountersBefore := v.assetCounters()
-	defer func() {
-		addDocumentMaterializerAssetCounterDeltas(&out.Stats, assetCountersBefore, v.assetCounters())
-	}()
-	selectedColumns := documentProjectionSelectedColumns(cfg, projection)
-	rowProjection := documentProjectionRowAssetColumns(cfg, selectedColumns)
-	typedProjection := documentProjectionTypedColumnPartSelection(cfg, selectedColumns)
-	if err := documentFetchContextErr(opts.Context); err != nil {
-		return out, err
-	}
-	visibleStart := time.Now()
-	visible, err := v.collection.scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCache(
-		v.snapshot,
-		v.catalog,
-		v.catalog.meta.Name,
-		v.catalog.rootID(collectionColumnManifestRootName(v.catalog.meta.Name)),
-		cfg,
-		true,
-		newColumnPhysicalVisibilityTargetIDs(ids),
-		rowProjection,
-		readIntegrity,
-		opts.Context,
-		v.rowAssetReadCache,
-	)
-	out.Stats.VisibilityNanos = time.Since(visibleStart).Nanoseconds()
-	out.Stats.VisibilityScans++
-	out.Stats.VisibilityRowsScanned = uint64(visible.Diagnostics.RowsScanned)
-	out.Stats.VisibilityRows = uint64(len(visible.Rows))
-	out.Stats.VisibilityPhysicalBytes = visible.Diagnostics.PhysicalBytesScanned
-	if err != nil {
-		return out, err
-	}
-	visibleByID := make(map[string]columnPhysicalVisibleRow, len(visible.Rows))
-	for _, row := range visible.Rows {
-		visibleByID[string(row.ID)] = row
-	}
-	typedColumnCache := v.typedColumnReconstructionCacheForConfig(cfg)
-	manifestRootID := v.catalog.rootID(collectionColumnManifestRootName(v.catalog.meta.Name))
-	typedScratch := make([]columnDeclaredValue, 0, len(columnStoreTypedColumnPartFields(cfg)))
-	mergeScratch := make([]columnDeclaredValue, 0, len(cfg.Columns))
-	retainedTemplateResolver := columnRetainedPayloadTemplateResolver(v.snapshot, v.catalog)
-	var documentArena []byte
-	for i := range out.Results {
+func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetchResponse, ids [][]byte, retained [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions, projection *documentProjection) (DocumentFetchResponse, error) {
+	// The primary payloads are already fetched and owned by response. Resolve
+	// only final requested IDs on this same pin; do not rebuild visibility arenas.
+	refs := make([]DocumentRowRef, len(ids))
+	position := 0
+	stats, err := v.visitDocumentRowRefsByID(ids, func(_ []byte, ref DocumentRowRef, found bool) error {
+		i := position
+		position++
 		if err := documentFetchContextErr(opts.Context); err != nil {
-			return out, err
+			return err
 		}
-		if !out.Results[i].Found {
-			continue
+		if found != response.Results[i].Found {
+			response.Stats.RowRefValidationFailures++
+			return fmt.Errorf("collections: primary row locator visibility disagrees for id %q", ids[i])
 		}
-		row, ok := visibleByID[string(out.Results[i].ID)]
-		if !ok {
-			return out, fmt.Errorf("collections: column reconstruction missing visible physical row for id %q", string(out.Results[i].ID))
+		if !found {
+			return nil
 		}
-		if row.Deleted {
-			return out, fmt.Errorf("collections: column reconstruction latest physical row is deleted for id %q", string(out.Results[i].ID))
-		}
-		rowRef := documentRowRefFromVisibleRow(row)
+		ref.DocumentID = response.Results[i].ID
 		if expected != nil && expected[i] != nil {
-			if err := validateDocumentRowRefMatchesVisibleRow(*expected[i], row); err != nil {
-				return out, err
+			if err := validateDocumentRowRefMatchesRowRef(*expected[i], ref); err != nil {
+				response.Stats.RowRefValidationFailures++
+				return err
 			}
-			rowRef.DocumentID = append(rowRef.DocumentID[:0], expected[i].DocumentID...)
 		}
-		out.Results[i].RowRef = rowRef
-
-		beforeCacheHits, beforeCacheMisses, beforePartLoads, beforePartDecodes := typedColumnCacheCounters(typedColumnCache)
-		typedStart := time.Now()
-		typedValues, err := v.collection.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCacheProjected(v.snapshot, manifestRootID, cfg, row, typedColumnCache, typedScratch, typedProjection)
-		typedElapsed := time.Since(typedStart)
-		if err != nil {
-			return out, err
-		}
-		if documentProjectionHasSelectedTypedColumn(typedProjection) && (len(typedValues.Values) > 0 || columnStoreHasTypedColumnPartOwners(cfg)) {
-			out.Stats.TypedColumnRows++
-		}
-		afterCacheHits, afterCacheMisses, afterPartLoads, afterPartDecodes := typedColumnCacheCounters(typedColumnCache)
-		out.Stats.TypedColumnCacheHits += deltaUint64(beforeCacheHits, afterCacheHits)
-		out.Stats.TypedColumnCacheMisses += deltaUint64(beforeCacheMisses, afterCacheMisses)
-		out.Stats.TypedColumnPartLoads += deltaUint64(beforePartLoads, afterPartLoads)
-		out.Stats.TypedColumnPartDecodes += deltaUint64(beforePartDecodes, afterPartDecodes)
-		out.Stats.TypedColumnNanos += typedElapsed.Nanoseconds()
-
-		reconstructStart := time.Now()
-		fullValues, err := mergeColumnReconstructionValuesProjectedInto(cfg, row.Values, typedValues.Values, selectedColumns, mergeScratch)
-		if err != nil {
-			return out, err
-		}
-		var document []byte
-		documentArena, document, err = reconstructColumnDocumentFromVisibleRowValuesProjectedIntoWithResolver(documentArena, cfg, retained[i], row, fullValues, projection, &out.Stats, retainedTemplateResolver)
-		if err != nil {
-			return out, err
-		}
-		out.Stats.JSONReconstructionNanos += time.Since(reconstructStart).Nanoseconds()
-		out.Stats.JSONReconstructionRows++
-		out.Results[i].Document = document
-		out.Stats.DocumentsFetched++
-		out.Stats.DocumentBytes += uint64(len(out.Results[i].Document))
-		out.Stats.OutputBytes += uint64(len(out.Results[i].Document))
+		refs[i] = ref
+		return nil
+	})
+	response.Stats.RowLocatorLookups += stats.RowLocatorLookups
+	response.Stats.RowLocatorMisses += stats.RowLocatorMisses
+	if err != nil {
+		return response, err
 	}
-	return out, nil
+	return v.fetchColumnStoreDocumentsByRowRef(response, refs, retained, opts, projection, true)
 }
 
 func appendDocumentFetchOwnedBytes(arena []byte, src []byte, result *DocumentFetchResult) []byte {

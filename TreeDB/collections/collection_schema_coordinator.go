@@ -13,6 +13,13 @@ type chunkLifecycleLock struct {
 	refs  int
 }
 type collectionSchemaCoordinator struct {
+	typedGraphFoldActive    atomic.Bool // one unpublished candidate per collection, across managers
+	typedGraphOwners        typedGraphReadOwnerAccounting
+	typedPublication        atomic.Pointer[typedGraphPublicationState]
+	typedGraphServing       atomic.Pointer[typedGraphServingPolicy]
+	typedPublicationDebtMu  sync.Mutex
+	typedPublicationDebt    typedGraphPublicationCost
+	typedPublicationPending typedGraphPublicationCost
 	schemaMu                sync.RWMutex
 	nativeVectorAdmissionMu sync.RWMutex
 	nativeVectorBaseline    atomic.Pointer[uint64]
@@ -26,6 +33,15 @@ type collectionSchemaCoordinator struct {
 	chunkLifecycles         map[string]*chunkLifecycleLock
 	chunkMutationOnce       sync.Once
 	chunkMutationToken      chan struct{}
+
+	// Includes reserved and attempted encoded work within the current explicit
+	// maintenance epoch. Reconciliation and pointer-pin release do not renew it.
+	typedPublicationEncodedBytes int64
+	typedGraphCandidateLimits    typedGraphFoldAssetLimits
+	typedGraphCandidateBytes     int64
+	typedGraphCandidateAttempts  int64
+	typedGraphWorkEpochLimits    *typedGraphWorkEpochLimits
+	typedGraphWorkEpoch          uint64
 }
 
 type collectionDBSchemaCoordinators struct {
