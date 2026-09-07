@@ -9,6 +9,7 @@ import (
 )
 
 func TestTypedGraphServingRetainsExactPreparedKey(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
 	index := base.indexName
 	if err := base.Close(); err != nil {
