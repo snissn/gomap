@@ -329,11 +329,9 @@ func (t *FreelistTxn) allocateAppend() (uint64, error) {
 	return id, nil
 }
 
-// allocateAppendedRange reserves one contiguous data-page extent above the
-// transaction high-water. Durable dependency manifests use this for their
-// positional page chain; ordinary allocations should continue to use
-// Allocate so reusable pages remain available to index writers.
-func (t *FreelistTxn) allocateAppendedRange(count int) ([]uint64, error) {
+// allocateContiguousRange first tries a bounded reusable extent, then appends.
+// Durable dependency manifests require the returned positional page chain.
+func (t *FreelistTxn) allocateContiguousRange(count int) ([]uint64, error) {
 	if err := t.valid(); err != nil {
 		return nil, err
 	}
@@ -342,6 +340,9 @@ func (t *FreelistTxn) allocateAppendedRange(count int) ([]uint64, error) {
 	}
 	if count == 0 {
 		return nil, nil
+	}
+	if ids, ok := t.allocateReusedRange(count); ok {
+		return ids, nil
 	}
 	width := uint64(count)
 	start := t.highWater
@@ -686,6 +687,27 @@ func countUnmaterializedStatePages(n *stateNode, depth int) uint64 {
 	return count
 }
 
+func (t *FreelistTxn) reservationExtents() ([]ReservationExtentV1, error) {
+	var reused, appended []uint64
+	for _, allocation := range t.allocated {
+		if allocation.kind == ReservationReusedData {
+			reused = append(reused, allocation.id)
+		} else {
+			appended = append(appended, allocation.id)
+		}
+	}
+	var extents []ReservationExtentV1
+	extents = appendIDExtents(extents, reused, ReservationReusedData, 0)
+	extents = appendIDExtents(extents, appended, ReservationAppendedData, 0)
+	extents = append(extents, t.abandonedAppends...)
+	replaced := make([]uint64, 0, len(t.replacedMetadata))
+	for id := range t.replacedMetadata {
+		replaced = append(replaced, id)
+	}
+	extents = appendIDExtents(extents, replaced, ReservationPendingMetadataRetirement, t.base.commitSeq)
+	return normalizeExtents(extents)
+}
+
 func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candidateID CandidateIDV1, sink AppendPageSink) (*FreelistCandidateV1, error) {
 	if err := t.valid(); err != nil {
 		return nil, err
@@ -699,6 +721,7 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	if t.base.ref.HeaderPageID != 0 && generationID <= t.base.generationID {
 		return nil, ErrGenerationParent
 	}
+	metadataStart, reservedMetadataCount, reusedMetadata := t.tryReusedMetadata(candidateID)
 	// Page IDs are assigned while writing. Once materialization starts, success
 	// or failure consumes this transaction; retry must begin from the immutable
 	// base so a partial sink failure cannot retain unwritten page identities.
@@ -710,33 +733,18 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 		// no-COW transaction may share descendants, but must publish a new root.
 		t.root = cloneStateNode(t.root)
 	}
-	var reused, appended []uint64
 	dataIDs := make([]uint64, 0, len(t.allocated))
 	for _, allocation := range t.allocated {
 		dataIDs = append(dataIDs, allocation.id)
-		if allocation.kind == ReservationReusedData {
-			reused = append(reused, allocation.id)
-		} else {
-			appended = append(appended, allocation.id)
-		}
 	}
-	var extents []ReservationExtentV1
-	extents = appendIDExtents(extents, reused, ReservationReusedData, 0)
-	extents = appendIDExtents(extents, appended, ReservationAppendedData, 0)
-	extents = append(extents, t.abandonedAppends...)
 	// The target metadata extent includes the COW pages, the reservation chain,
 	// and the generation header. Its count does not change the number of
 	// normalized reservation extents, so compute the chain length first.
-	replaced := make([]uint64, 0, len(t.replacedMetadata))
-	for id := range t.replacedMetadata {
-		replaced = append(replaced, id)
-	}
-	extents = appendIDExtents(extents, replaced, ReservationPendingMetadataRetirement, t.base.commitSeq)
 	minimumMetadataStart := t.highWater
-	if minimumMetadataStart == math.MaxUint64 {
+	if minimumMetadataStart == math.MaxUint64 && !reusedMetadata {
 		return nil, ErrNoAllocatablePage
 	}
-	extents, err := normalizeExtents(extents)
+	extents, err := t.reservationExtents()
 	if err != nil {
 		return nil, err
 	}
@@ -744,9 +752,11 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	if t.root.freeCount+t.root.retiredCount == 0 {
 		statePageCount = 1
 	}
-	metadataStart, reservedMetadataCount, err := t.ledger.reserveTail(candidateID, minimumMetadataStart, statePageCount, dataIDs, extents)
-	if err != nil {
-		return nil, err
+	if !reusedMetadata {
+		metadataStart, reservedMetadataCount, err = t.ledger.reserveTail(candidateID, minimumMetadataStart, statePageCount, dataIDs, extents)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if metadataStart > minimumMetadataStart {
 		extents = appendReservationRange(extents, minimumMetadataStart, metadataStart-minimumMetadataStart, ReservationAbandonedAppend, 0)
@@ -791,6 +801,10 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 			break
 		}
 	}
+	extents, err = normalizeExtents(extents)
+	if err != nil {
+		return nil, err
+	}
 	record := ReservationRecordV1{CandidateID: candidateID, GenerationID: generationID, BaseID: t.base.generationID, BaseDigest: t.base.ref.Digest, Extents: extents}
 	recordPages, record, err := encodeNormalizedReservationPages(reservationID, record)
 	if err != nil {
@@ -801,7 +815,7 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 			return nil, err
 		}
 	}
-	g := &FreelistGenerationV1{generationID: generationID, commitSeq: commitSeq, parentGenerationID: t.base.generationID, parentCommitSeq: t.base.commitSeq, highWater: next, root: t.root, record: record}
+	g := &FreelistGenerationV1{generationID: generationID, commitSeq: commitSeq, parentGenerationID: t.base.generationID, parentCommitSeq: t.base.commitSeq, highWater: max(t.highWater, next), root: t.root, record: record}
 	g.metadataPages = make([]uint64, 0, next-metadataStart)
 	for id := metadataStart; id < next; id++ {
 		g.metadataPages = append(g.metadataPages, id)
@@ -811,7 +825,7 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 		return nil, err
 	}
 	copy(g.ref.Digest[:], header[152:184])
-	g.ref = GenerationRefV1{HeaderPageID: headerID, GenerationID: generationID, CommitSeq: commitSeq, HighWater: next, Digest: g.ref.Digest}
+	g.ref = GenerationRefV1{HeaderPageID: headerID, GenerationID: generationID, CommitSeq: commitSeq, HighWater: g.highWater, Digest: g.ref.Digest}
 	t.stats.LogicalDelta = uint64(len(t.changedChunks))
 	t.stats.COWChunks = uint64(len(t.changedChunks))
 	t.stats.COWPages = uint64(len(recorded.pages))

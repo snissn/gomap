@@ -712,6 +712,10 @@ func TestFreelistGenerationV1_OneChunkDeltaEmitsOnlyOnePath(t *testing.T) {
 	if _, err := txn.Allocate(700_000); err != nil {
 		t.Fatal(err)
 	}
+	allocationVisits := txn.Stats().PageVisits
+	if allocationVisits > uint64((chunkTrieDepth+1)*4) {
+		t.Fatalf("allocation visited %d pages", allocationVisits)
+	}
 	candidate, err := txn.MaterializeCandidate(3, 3, candidateIDFromString("delta"), store)
 	if err != nil {
 		t.Fatal(err)
@@ -720,8 +724,8 @@ func TestFreelistGenerationV1_OneChunkDeltaEmitsOnlyOnePath(t *testing.T) {
 	if stats.COWChunks != 1 || stats.COWPages > chunkTrieDepth+4 {
 		t.Fatalf("unexpected delta stats: %+v", stats)
 	}
-	if stats.PageVisits > uint64((chunkTrieDepth+1)*4) {
-		t.Fatalf("allocation visited %d pages", stats.PageVisits)
+	if stats.PageVisits-allocationVisits > uint64(metadataReuseChunkAttempts*(chunkTrieDepth+1)*2) {
+		t.Fatalf("metadata bounded search visited %d pages", stats.PageVisits-allocationVisits)
 	}
 	if len(candidate.DirtyPageIDs()) != int(stats.COWPages) {
 		t.Fatalf("dirty pages=%d stats=%d", len(candidate.DirtyPageIDs()), stats.COWPages)
@@ -766,6 +770,9 @@ func TestFreelistGenerationV1_BatchedPruneMutatesEachChunkOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	txn.PruneWithCapability(capability)
+	if txn.root.freeCount != uint64(len(retired)) {
+		t.Fatalf("prune free count=%d want%d", txn.root.freeCount, len(retired))
+	}
 
 	stats := txn.Stats()
 	if stats.StateMutationPaths != 1 || stats.StateMutationItems != uint64(len(retired)) {
@@ -776,8 +783,17 @@ func TestFreelistGenerationV1_BatchedPruneMutatesEachChunkOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := candidate.Generation().FreeCount(); got != uint64(len(retired)) {
-		t.Fatalf("free count=%d want %d", got, len(retired))
+	reusedMetadata := uint64(0)
+	for _, id := range candidate.DirtyPageIDs() {
+		if _, wasRetired := retired[id]; wasRetired {
+			reusedMetadata++
+		}
+		if candidate.Generation().Allocatable(id) {
+			t.Fatalf("metadata page%d is free", id)
+		}
+	}
+	if got := candidate.Generation().FreeCount(); got+reusedMetadata != uint64(len(retired)) {
+		t.Fatalf("free count=%d reusedmetadata=%d wanttotal%d", got, reusedMetadata, len(retired))
 	}
 }
 

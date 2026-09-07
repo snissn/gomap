@@ -278,6 +278,7 @@ type reservation struct {
 	ids                []uint64
 	tailReserved       bool
 	tailWriteAttempted bool
+	reusedMetadata     bool // interval is recovery-safe free space, not appended tail
 	tailStart          uint64
 	tailCount          uint64
 	abandonedCoverage  []reservationInterval
@@ -568,7 +569,7 @@ func (l *ReservationLedger) Fail(c CandidateIDV1) error {
 	for _, id := range r.ids {
 		delete(l.owners, id)
 	}
-	if r.tailReserved && r.tailWriteAttempted {
+	if r.tailReserved && r.tailWriteAttempted && !r.reusedMetadata {
 		l.burnedTails = append(l.burnedTails, reservationInterval{start: r.tailStart, count: r.tailCount})
 	}
 	delete(l.candidates, c)
@@ -592,7 +593,7 @@ func (l *ReservationLedger) RollbackPreVisible(c CandidateIDV1) error {
 	for _, id := range r.ids {
 		delete(l.owners, id)
 	}
-	if r.tailReserved && r.tailWriteAttempted {
+	if r.tailReserved && r.tailWriteAttempted && !r.reusedMetadata {
 		l.burnedTails = append(l.burnedTails, reservationInterval{start: r.tailStart, count: r.tailCount})
 	}
 	delete(l.candidates, c)
