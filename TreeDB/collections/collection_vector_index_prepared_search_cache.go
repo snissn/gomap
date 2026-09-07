@@ -401,7 +401,7 @@ func (c *Collection) openCollectionVectorIndexPreparedExactSearch(opts VectorInd
 		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires cosine column_graph state; got metric %q", ErrVectorIndexSearchUnavailable, def.Name, def.Metric)
 	}
 
-	def, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(def.Name, snap)
+	readerDef, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(def.Name, snap)
 	if err != nil {
 		status, statusErr := c.columnGraphVectorIndexStatusAtSnapshot(def.Name, snap)
 		if statusErr != nil {
@@ -414,6 +414,7 @@ func (c *Collection) openCollectionVectorIndexPreparedExactSearch(opts VectorInd
 		response.Status = status
 		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires loaded column_graph state: state=%s reason=%s", ErrVectorIndexSearchUnavailable, def.Name, status.State, status.Reason)
 	}
+	def = readerDef
 	readerCatalog := view.Catalog
 	if readerCatalog == nil || readerCatalog.meta.Options.ColumnStore == nil {
 		return nil, response, errors.New("collections: column_graph prepared collection search missing snapshot catalog")
@@ -520,7 +521,7 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer quantized mode requires cosine column_graph state; got metric %q", ErrVectorIndexSearchUnavailable, def.Name, def.Metric)
 	}
 
-	def, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshotWithOwner(def.Name, snap, &lifecyclePin)
+	readerDef, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshotWithOwner(def.Name, snap, &lifecyclePin)
 	if err != nil {
 		status, statusErr := c.columnGraphVectorIndexStatusAtSnapshot(def.Name, snap)
 		if statusErr != nil {
@@ -533,6 +534,7 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		response.Status = status
 		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer quantized mode requires loaded column_graph state: state=%s reason=%s", ErrVectorIndexSearchUnavailable, def.Name, status.State, status.Reason)
 	}
+	def = readerDef
 	readerCatalog := view.Catalog
 	if readerCatalog == nil || readerCatalog.meta.Options.ColumnStore == nil {
 		return nil, response, errors.New("collections: column_graph prepared quantized collection search missing snapshot catalog")

@@ -149,9 +149,9 @@ func TestNativeScalarHybridVectorValidationPreservesFailureStats(t *testing.T) {
 		CandidateLimit: 3,
 		EfSearch:       -1,
 	}
-	got, err := (&Collection{}).searchHybridVectorCandidatesNativeScalar(query, nil)
+	got, err := (&Collection{}).searchHybridVectorCandidatesDeclaredScalar(query, nil)
 	if !errors.Is(err, ErrHybridSearchUnsupported) {
-		t.Fatalf("searchHybridVectorCandidatesNativeScalar err=%v want ErrHybridSearchUnsupported", err)
+		t.Fatalf("searchHybridVectorCandidatesDeclaredScalar err=%v want ErrHybridSearchUnsupported", err)
 	}
 	if len(got.Candidates) != 0 ||
 		got.Stats.VectorCandidatesRequested != uint64(query.CandidateLimit) ||

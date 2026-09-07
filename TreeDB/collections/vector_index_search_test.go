@@ -2877,8 +2877,8 @@ func TestSearchVectorIndexWithBufferPreparedCacheInvalidatesOnMutationAndRefresh
 	insertColumnGraphRebuildRowsV2A(t, col, []columnGraphRebuildInputRowV2A{{id: "doc-c", vector: []float32{0, 0, 1}}})
 	staleOpts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 0, 1}, TopK: 1, EfSearch: len(rows) + 1, MaxDecodedBlocks: 1}
 	stale, err := col.SearchVectorIndexWithBuffer(staleOpts, &buffer)
-	if !errors.Is(err, ErrIndexNotFound) || !strings.Contains(err.Error(), "SearchVectorIndexWithBuffer requires a declared vector index") {
-		t.Fatalf("stale SearchVectorIndexWithBuffer response=%+v err=%v want fail-closed declared-index error", stale, err)
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || !strings.Contains(err.Error(), def.Name) {
+		t.Fatalf("stale SearchVectorIndexWithBuffer response=%+v err=%v want fail-closed named graph error", stale, err)
 	}
 	if len(stale.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
 		t.Fatalf("stale search left results response=%d bufferResults=%d idBytes=%d", len(stale.Results), len(buffer.results), len(buffer.idBytes))
@@ -3202,11 +3202,16 @@ func TestSearchVectorIndexWithBufferMissingIndexStateFailsClosed2408(t *testing.
 	}
 
 	got, err := col.SearchVectorIndexWithBuffer(base, &buffer)
-	if !errors.Is(err, ErrIndexNotFound) || !strings.Contains(err.Error(), "SearchVectorIndexWithBuffer requires a declared vector index") || strings.Contains(err.Error(), "manifest") {
-		t.Fatalf("SearchVectorIndexWithBuffer missing state response=%+v err=%v want stable fail-closed declared-index error", got, err)
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || !strings.Contains(err.Error(), def.Name) || got.Status.Loaded || !got.Status.RebuildNeeded {
+		t.Fatalf("SearchVectorIndexWithBuffer missing state status=%+v err=%v want named rebuild-needed error", got.Status, err)
 	}
 	if len(got.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
 		t.Fatalf("missing state left results: returned=%d bufferResults=%d idBytes=%d", len(got.Results), len(buffer.results), len(buffer.idBytes))
+	}
+	base.IndexName = "undeclared"
+	got, err = col.SearchVectorIndexWithBuffer(base, &buffer)
+	if !errors.Is(err, ErrIndexNotFound) || !strings.Contains(err.Error(), base.IndexName) || len(got.Results) != 0 {
+		t.Fatalf("undeclared index response=%+v err=%v", got, err)
 	}
 }
 

@@ -756,12 +756,15 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 	var textResponse, vectorResponse HybridCandidateResponse
 	var textErr, vectorErr error
 	searchVector := func() (HybridCandidateResponse, error) {
-		if plan.nativeVectorRuntime {
+		selectedTyped := c.typedGraphServingPolicy() != nil
+		if plan.nativeVectorRuntime || selectedTyped {
 			var filter *HybridScalarFilter
-			if plan.nativeVectorScalar {
+			// Keep prefilter admission/order in the executor, but let the
+			// selected owner search its captured base and current mutations.
+			if plan.nativeVectorScalar || selectedTyped && allowSet != nil {
 				filter = plan.scalarFilter
 			}
-			return c.searchHybridVectorCandidatesNativeScalar(*plan.vector, filter)
+			return c.searchHybridVectorCandidatesDeclaredScalar(*plan.vector, filter)
 		}
 		return c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
 	}

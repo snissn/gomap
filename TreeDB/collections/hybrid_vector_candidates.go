@@ -21,11 +21,10 @@ var errHybridVectorAllowSetScanBudgetExceeded = errors.New("collections: hybrid 
 // ranks, and fails closed if the backing vector path reports any document
 // materialization or unavailable vector-index state.
 func (c *Collection) SearchHybridVectorCandidates(query HybridVectorQuery) (HybridCandidateResponse, error) {
-	return c.searchHybridVectorCandidates(query, nil)
-}
-
-func (c *Collection) searchHybridVectorCandidates(query HybridVectorQuery, allowSet hybridScalarAllowSet) (HybridCandidateResponse, error) {
-	return c.searchHybridVectorCandidatesWithAllowSetBudget(query, allowSet, query.CandidateLimit)
+	if c.typedGraphServingPolicy() != nil {
+		return c.searchHybridVectorCandidatesDeclaredScalar(query, nil)
+	}
+	return c.searchHybridVectorCandidatesWithAllowSetBudget(query, nil, query.CandidateLimit)
 }
 
 func (c *Collection) searchHybridVectorCandidatesWithAllowSetBudget(query HybridVectorQuery, allowSet hybridScalarAllowSet, allowSetBudget int) (HybridCandidateResponse, error) {
@@ -67,7 +66,7 @@ func (c *Collection) searchHybridVectorCandidatesWithAllowSetBudget(query Hybrid
 
 	return hybridVectorCandidatesFromSearchResponse(requested, query.IndexName, vectorResponse)
 }
-func (c *Collection) searchHybridVectorCandidatesNativeScalar(query HybridVectorQuery, filter *HybridScalarFilter) (HybridCandidateResponse, error) {
+func (c *Collection) searchHybridVectorCandidatesDeclaredScalar(query HybridVectorQuery, filter *HybridScalarFilter) (HybridCandidateResponse, error) {
 	requested := query.CandidateLimit
 	if err := validateHybridVectorCandidateQuery(query); err != nil {
 		response := HybridCandidateResponse{Stats: hybridVectorCandidateStatsFromSearch(requested, VectorIndexSearchStats{}, 0)}
