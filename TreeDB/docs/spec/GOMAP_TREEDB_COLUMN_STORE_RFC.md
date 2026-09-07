@@ -77,9 +77,11 @@ design:
   durable-at-ack. Pending mutable, queued, or publishing collection writes are
   visible in-process, but crash durability is established by `Collection.Flush`,
   `CollectionManager.FlushAll`, close, or a synchronous publish path.
-- Collection storage policies already distinguish fast pager leaves from
-  compressed value-log leaves:
-  `RootStorageFast` and `RootStorageCompressed`.
+- Root storage policies distinguish pager leaves (`RootStorageFast`) from
+  value-log leaves (`RootStorageCompressed`). Collection DATA roots are an
+  exception: default/fast selects value-log leaves when the backend has a value
+  log appender (`backendCollectionDataRootStoragePolicy`). Do not generalize
+  this DATA-root override to secondary-index or state roots.
 - TreeDB already stores B-tree outer leaves in the value log as `TOL2` blocks
   with restart points, checksums, optional snappy/lz4, and typed blob-ref
   entries.

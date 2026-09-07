@@ -36,6 +36,28 @@ reported as an error. See the [admission and ownership contract](../spec/typed-c
 
 ## Explicit mutable serving lifecycle
 
+Open native collection-root callers through the public TreeDB wrapper. Use
+`treedb.OptionsFor(treedb.ProfileCommandWALDurable, rootDir)` and
+`treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance`, as
+in `cmd/treedb-document-service/main.go`. This returns the backend root APIs with
+the cached leaf-log wiring, live statistics, and deferred-build maintenance
+control. `OpenBackendWithCachedLeafLog` is the simpler helper when those
+additional controls are not needed. Keep the returned cleanup function and
+original root directory: close request views and cached search resources, drain
+collection writes, then call cleanup; reopen the original root directory, not
+the backend's resolved `maindb` directory. Stop using live statistics before
+cleanup.
+
+Setting `backenddb.Options.ResolvedProfile` alone does **not** apply public
+profile tuning or cached-layer wiring. In particular, a raw command-WAL backend
+can produce native collection DATA-root leaf-log records while global leaf
+generation tracking/maintenance is disabled. Do not use that configuration as
+a substitute for the service profile in performance or storage qualification.
+Check the opened database's `treedb.leaf_generation.enabled` statistic, and
+report actual maintenance activity separately from enabled capability. The
+public open helper does not itself admit mutable graph serving or prove bounded
+steady-state storage.
+
 For the selected command-WAL durable schema, load typed batches and explicitly
 build the declared graph with `RebuildVectorIndex` before calling
 `EnsureColumnGraphServing(ctx, index, limits)`. Initial loading/building remains
