@@ -1691,6 +1691,11 @@ func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
 		// The selected native planner may choose bounded exact scoring, but the
 		// separate public document-scan route is intentionally unavailable.
 		capabilities.ExactDenseScoring = false
+	} else if cfg := meta.Options.ColumnStore; vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph && cfg != nil && cfg.PhysicalMutationParts > 0 {
+		// Legacy graphs cover an insert-only base. Persisted mutation parts make
+		// them unavailable for automatic ANN selection, including after reopen.
+		// Explicit ANN still reaches the engine's fail-closed graph validation.
+		capabilities.NoDocumentVectorSearch = false
 	}
 	capabilities.KeywordMetadataFilters = len(scalarFields) > 0
 	capabilities.HybridMetadataFilters = len(scalarFields) > 0

@@ -1343,6 +1343,86 @@ func TestServicePersistenceReopenDocumentsAndEmbeddings(t *testing.T) {
 	}
 }
 
+func TestServiceLegacyColumnGraphMutationDefaultRouteAndReopen(t *testing.T) {
+	for _, mutation := range []string{"update", "delete_ids", "delete_filter"} {
+		t.Run(mutation, func(t *testing.T) {
+			dir := t.TempDir()
+			ctx := context.Background()
+			open := func() (*Service, *backenddb.DB) {
+				db, err := backenddb.Open(testBackendOptions(dir))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return New(collections.NewCollectionManager(db)), db
+			}
+			svc, db := open()
+			defer func() { _ = svc.Close(); _ = db.Close() }()
+			if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
+				t.Fatal(err)
+			}
+			docs := []Document{
+				{ID: "a", Content: "alpha", Embedding: []float32{1, 0}},
+				{ID: "b", Content: "beta", Embedding: []float32{0, 1}},
+			}
+			if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: docs}); err != nil {
+				t.Fatal(err)
+			}
+			query := DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 2, ReturnEmbedding: true}
+			initial, err := svc.SearchDenseVector(ctx, "docs", query)
+			if err != nil || initial.Route != RouteAnn || !initial.Index.Capabilities.NoDocumentVectorSearch {
+				t.Fatalf("fresh graph response=%+v err=%v", initial, err)
+			}
+			switch mutation {
+			case "update":
+				docs[1].Content, docs[1].Embedding = "replacement", []float32{0.6, 0.8}
+				_, err = svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: docs[1:]})
+			case "delete_ids":
+				_, err = svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{IDs: []string{"b"}})
+				docs = docs[:1]
+			case "delete_filter":
+				_, err = svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{Filter: &Filter{Field: "content", Operator: "==", Value: "beta"}})
+				docs = docs[:1]
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			check := func() {
+				t.Helper()
+				info, err := svc.OpenIndex(ctx, "docs")
+				if err != nil || info.Capabilities.NoDocumentVectorSearch {
+					t.Fatalf("mutated graph info=%+v err=%v", info, err)
+				}
+				got, err := svc.SearchDenseVector(ctx, "docs", query)
+				if err != nil || got.Route != RouteExact || !got.Exact || len(got.Documents) != len(docs) {
+					t.Fatalf("mutated graph response=%+v err=%v", got, err)
+				}
+				for i, want := range docs {
+					if doc := got.Documents[i]; doc.ID != want.ID || doc.Content != want.Content || !reflect.DeepEqual(doc.Embedding, want.Embedding) {
+						t.Fatalf("document=%+v want %+v", doc, want)
+					}
+				}
+				explicit := query
+				explicit.Route = RouteAnn
+				if _, err := svc.SearchDenseVector(ctx, "docs", explicit); ErrorCodeOf(err) != CodeIndexUnavailable {
+					t.Fatalf("explicit stale ann err=%v", err)
+				}
+				if _, err := svc.SearchBenchmarkVector(ctx, "docs", BenchmarkVectorSearchRequest{QueryEmbedding: query.QueryEmbedding, TopK: 1}); ErrorCodeOf(err) != CodeIndexUnavailable {
+					t.Fatalf("stale no-document search err=%v", err)
+				}
+			}
+			check()
+			if err := svc.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			svc, db = open()
+			check()
+		})
+	}
+}
+
 func TestServiceErrorCasesDimensionStaleUnavailable(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()

@@ -495,6 +495,15 @@ Omit `route` (or use `route=ann`) for default graph traversal when the index
 supports it. ANN responses report `route=ann` and `exact=false`; declared scalar
 filters use `native_runtime` filtered ANN, while unsupported shapes fail closed
 instead of silently switching to a scan.
+
+Legacy `column_graph` indexes with persisted update/delete parts report
+`no_document_vector_search=false`: an omitted route selects the existing bounded
+exact document scan and echoes `route=exact`, including after reopen. Explicit
+`route=ann` and no-document benchmark searches still fail closed for that stale
+graph. Fresh insert-only legacy graphs retain automatic ANN selection. Selected
+`typed_input=true` indexes keep their admitted graph route across mutations and
+require explicit re-admission after reopen; they never use this document scan.
+
 Tie order is deterministic: higher score first, then document ID ascending.
 
 ## Keyword search
