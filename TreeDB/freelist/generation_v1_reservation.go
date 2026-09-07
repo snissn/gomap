@@ -295,6 +295,8 @@ type ReservationLedger struct {
 	owners      map[uint64]CandidateIDV1
 	candidates  map[CandidateIDV1]*reservation
 	burnedTails []reservationInterval
+	// Placement hint only; free bits and atomic claims remain authority.
+	nextReuseChunk uint64
 }
 
 func NewReservationLedger() *ReservationLedger {

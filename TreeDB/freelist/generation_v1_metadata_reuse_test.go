@@ -205,7 +205,10 @@ func TestFreelistGenerationV1_MetadataReusesRetiredCapacity4627(t *testing.T) {
 			t.Fatalf("insufficient safe capacity: %d", txn.root.freeCount)
 		}
 		candidateID := candidateIDFromString(benchmarkSizeName(int(cycle + 100)))
-		candidate, err := txn.MaterializeCandidate(base.GenerationID()+1, base.CommitSeq()+1, candidateID, store)
+		// Capture the immutable post-capability free state before materialization
+		// clears its chosen pages. Older certified metadata can now be reused.
+		safe := &FreelistGenerationV1{root: txn.root, highWater: txn.highWater}
+		candidate, err := txn.MaterializeCandidate(base.GenerationID()+1, base.CommitSeq()+1, candidateID, capabilityCheckedMetadataSink4627{store, safe})
 		if err != nil {
 			t.Fatal(err)
 		}

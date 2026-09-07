@@ -53,8 +53,12 @@ recovery state and therefore do not consume the capability:
 Publication metadata and auxiliary output can reuse capability-certified
 contiguous free intervals (#4627); observing old auxiliary IDs allocated again
 is not by itself a retention leak. Placement examines at most four 256-page
-chunks and otherwise falls back to the existing tail path. It avoids some
-growth but is not a full free-extent search, physical shrink, or a replacement
+chunks and otherwise falls back to the existing tail path. It avoids repeatedly
+inspecting a fragmented prefix by advancing a transient
+ledger hint after every observed chunk, including failed placements. Metadata
+and auxiliary searches share this hint; each attempt wraps at most once and
+does not repeat chunks. This changes placement only, never reclamation authority.
+This is not a full free-extent search, physical shrink, or a replacement
 for vacuum when fragmentation or oversized requests require it. Recovery and
 snapshot eligibility are unchanged.
 
