@@ -56,9 +56,12 @@ HTTP URL hostname support is unchanged.
 
 `get_many(index, ids)` uses unchanged GetMany 50/v1, returning owned Documents
 or `None` in request order, including repeated IDs. It is separate from search
-fetch and has no generation guard or batch-wide snapshot promise. The current
-server still performs per-ID reconstruction setup; shared typed batch-view
-materialization remains an allocation follow-up before M4 qualification.
+fetch and has no generation guard or batch-wide snapshot promise.
+`get_many(index, ids, index_info=info)` instead negotiates selected typed 50/v2:
+one captured collection view validates the caller's generation and typed schema,
+then materializes the whole batch. It works before graph build/admission and
+after reopen before re-admission. Missing or stale capability fails closed;
+there is no hidden metadata request or fallback to v1.
 
 `upsert_documents(index, documents, index_info=info)` uses negotiated local-only
 65/v1: packed FP32, declared content/scalar strings, and residual-only JSON. It

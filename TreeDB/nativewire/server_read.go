@@ -10,6 +10,13 @@ import (
 )
 
 func (s *Server) handleRead(ctx context.Context, header iwire.Header, state *connState, cmd iwire.ValidatedCommand) ([]iwire.Section, []byte, bool, error) {
+	if cmd.Header.ID == iwire.CommandGetMany && cmd.Header.Version == 2 {
+		if err := rejectUnsupportedReadConsistencyPolicy(cmd); err != nil {
+			return nil, nil, false, err
+		}
+		body, err := s.handleTypedGetManyBody(ctx, state, cmd.Known, state.responseScratch())
+		return nil, body, true, err
+	}
 	var readMeta ReadMetadata
 	var err error
 	if cmd.Header.ID != iwire.CommandCursorNext {
@@ -56,6 +63,65 @@ func (s *Server) handleRead(ctx context.Context, header iwire.Header, state *con
 		return nil, nil, false, err
 	}
 	return responseSections, nil, false, nil
+}
+
+func (s *Server) handleTypedGetManyBody(ctx context.Context, state *connState, sections []iwire.Section, dst []byte) ([]byte, error) {
+	if s.documentService == nil {
+		return nil, protocolError(iwire.ErrUnsupportedFeature, "typed document service is not configured")
+	}
+	deadline, err := deadlineUnixNanosFromSections(sections)
+	if err != nil || deadline <= 0 {
+		return nil, denseDecodeError(err, "positive typed fetch deadline required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithDeadline(ctx, time.Unix(0, deadline))
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	name, err := collectionNameFromSections(sections)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := metadataSection(sections, iwire.SectionExpectedGeneration)
+	if err != nil {
+		return nil, err
+	}
+	off := 0
+	generation, err := readUvarintField(raw, &off, "generation")
+	if err != nil || generation == 0 || off != len(raw) {
+		return nil, denseDecodeError(err, "invalid expected generation")
+	}
+	rawIDs, err := metadataSection(sections, iwire.SectionDocumentIDs)
+	if err != nil {
+		return nil, err
+	}
+	ids, err := decodeByteVectorBorrowedInto(state.idsScratch, rawIDs, s.limits)
+	if err != nil {
+		return nil, err
+	}
+	state.idsScratch = ids
+	fetched, err := s.documentService.FetchTypedDocuments(ctx, name, generation, ids)
+	if err != nil {
+		return nil, err
+	}
+	lengths := getManyLengthsScratch(state, len(ids))
+	presence := getManyPresenceScratch(state, len(ids))
+	payload := getManyPayloadScratch(state, len(ids), s.limits)
+	for i, result := range fetched.Results {
+		if !result.Found {
+			continue
+		}
+		if uint64(len(result.Document)) > s.limits.MaxByteVectorBytes-uint64(len(payload)) {
+			return nil, protocolError(iwire.ErrResourceExhausted, "typed document payload exceeds limit")
+		}
+		presence[i/8] |= 1 << uint(i%8)
+		lengths[i] = len(result.Document)
+		payload = append(payload, result.Document...)
+	}
+	return s.appendGetManyBody(state, dst, lengths, presence, payload, ReadMetadata{})
 }
 
 func (s *Server) appendReadMetaSection(sections []iwire.Section, meta ReadMetadata) ([]iwire.Section, error) {
@@ -302,6 +368,10 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 		payload = append(payload, doc...)
 	}
 
+	return s.appendGetManyBody(state, dst, lengths, presence, payload, readMeta)
+}
+
+func (s *Server) appendGetManyBody(state *connState, dst []byte, lengths []int, presence, payload []byte, readMeta ReadMetadata) ([]byte, error) {
 	docSectionLen, err := iwire.ByteVectorPayloadEncodedLen(lengths, len(payload))
 	if err != nil {
 		return nil, err

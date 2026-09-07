@@ -93,15 +93,16 @@ class TreeDBClient:
         if connection is not None:
             connection.close()
 
-    def get_many(self, index: str, ids: Sequence[str]) -> list[Optional[Document]]:
-        """Fetch owned full documents in request order using native GetMany v1.
+    def get_many(self, index: str, ids: Sequence[str], *, index_info: Optional[IndexInfo] = None) -> list[Optional[Document]]:
+        """Fetch owned full documents in request order using native GetMany.
 
-        Missing IDs yield None. This local read has no generation guard and is
-        separate from the same-owner search/full-fetch response.
+        Missing IDs yield None. Typed IndexInfo selects generation-checked v2
+        with one batch view, without requiring graph admission. Omission keeps
+        generic v1 per-ID semantics. This is separate from search/full-fetch.
         """
         if self._native is None:
             raise UnsupportedError("unsupported", "get_many requires native_address")
-        from ._native import _decode_vector, _section, _sections, _vector
+        from ._native import _decode_vector, _section, _sections, _vector, _uint
         if not isinstance(index, str) or not index:
             raise TreeDBConfigError("native collection name is required")
         if isinstance(ids, (str, bytes)) or len(ids) > 1_000_000:
@@ -116,7 +117,15 @@ class TreeDBClient:
             if encoded_bytes > self._native.limit:
                 raise TreeDBConfigError("native GetMany request exceeds frame limit")
             encoded.append(encoded_id)
-        response = self._native.command(50, 1, _section(100, b"\x01" + index.encode("utf-8")) + _section(102, _vector(encoded)), "get_many_versions")
+        version = 1
+        request = _section(100, b"\x01" + index.encode("utf-8")) + _section(102, _vector(encoded))
+        if index_info is not None:
+            if (index_info.name != index or index_info.extra.get("typed_input") is not True
+                    or index_info.vector_strategy != "column_graph" or index_info.generation <= 0):
+                raise TreeDBConfigError("typed GetMany requires matching typed IndexInfo")
+            version = 2
+            request += _section(133, _uint(index_info.generation)) + _section(4, _uint(time.time_ns() + int(self.timeout * 1e9)))
+        response = self._native.command(50, version, request, "get_many_versions")
         sections = _sections(response, {103, 116, 11})
         if 103 not in sections or 116 not in sections or len(sections[116]) != (len(ids) + 7) // 8:
             raise TreeDBProtocolError("native GetMany response sections mismatch")

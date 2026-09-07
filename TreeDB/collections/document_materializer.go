@@ -188,6 +188,16 @@ type CollectionReadView struct {
 	forceAssetReadAtFallbackForTest bool
 }
 
+// Meta returns an owned copy of metadata from this view's captured catalog,
+// not the collection handle's latest catalog. It remains bound to this view
+// across subsequent data and schema publications.
+func (v *CollectionReadView) Meta() (CollectionMeta, error) {
+	if err := v.validateOpen(); err != nil {
+		return CollectionMeta{}, err
+	}
+	return *v.catalog.meta.copy(), nil
+}
+
 // OpenCollectionReadView opens a snapshot-bound document materializer. Buffered
 // writes are flushed before the snapshot is acquired so the view matches normal
 // Collection.Get visibility at open time; later writes are not visible through

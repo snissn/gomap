@@ -86,6 +86,7 @@ const (
 	SectionDenseSearchResponse    SectionID = 130
 	SectionTypedUpsertRequest     SectionID = 131
 	SectionTypedUpsertResponse    SectionID = 132
+	SectionExpectedGeneration     SectionID = 133
 )
 
 type CommandID uint64

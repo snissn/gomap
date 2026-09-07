@@ -833,6 +833,22 @@ These extensible capability-map entries do not change existing frame versions.
 GetMany (50/v1) remains unchanged: it is a batched transport over local per-ID
 reads, without an expected-generation guard or a batch-wide snapshot promise.
 
+### Selected typed GetMany (50/v2, LocalOnly)
+
+Hello adds `2` to `get_many_versions` only when that version is registered and
+the standalone document service is configured. Required sections are deadline
+(4), named collection reference (100), document IDs (102), and
+`expected_generation` (133: one positive uvarint, no trailing bytes). Handles,
+cluster submission, and explicit read-consistency policies are unsupported.
+
+The service captures one collection read view, validates selected typed schema
+and generation against that captured catalog, and materializes all IDs on the
+same view. Existing buffered-write flushing is retained. Graph build/admission
+is not required. The owned response encoding is unchanged from 50/v1, including
+request order, duplicate IDs, and missing-document presence bits. The view is
+closed before return. This is a separate retrieval snapshot, not the preceding
+search owner's snapshot; it does not claim execution-work instrumentation.
+
 ### Typed document upsert (65/v1, LocalOnly)
 
 `typed_document_upsert` is a separate local mutation, never a deterministic

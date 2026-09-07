@@ -159,9 +159,16 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                             for i in range(32)]
                     with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as writer:
                         self.assertEqual(writer.upsert_documents("typed", rows, index_info=info).upserted, 32)
+                        # Typed batch retrieval does not require graph admission.
+                        before_build = writer.get_many("typed", ["0", "missing", "0"], index_info=info)
+                        self.assertEqual([doc.id if doc else None for doc in before_build], ["0", None, "0"])
+                        self.assertEqual(before_build[0].content, "text 0")
                     with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as stale:
                         with self.assertRaises(TreeDBClientError):
                             stale.upsert_documents("typed", rows[:1], index_info=replace(info, generation=info.generation + 1))
+                    with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as stale:
+                        with self.assertRaises(TreeDBClientError):
+                            stale.get_many("typed", ["0"], index_info=replace(info, generation=info.generation + 1))
                     client.optimize_index("typed", column_graph_serving=limits)
                     with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as native:
                         native_response = native.query_by_embedding("typed", [1, 0], 4, wanted, return_embedding=True, index_info=info)
@@ -170,7 +177,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                         self.assertFalse(native_response.native_base_plus_live_delta)
                         self.assertEqual(native_response.documents[0].id, "0")
                         self.assertEqual(native_response.documents[0].content, "text 0")
-                        retrieved = native.get_many("typed", ["0", "missing", "0"])
+                        retrieved = native.get_many("typed", ["0", "missing", "0"], index_info=info)
                         self.assertEqual([d.id if d else None for d in retrieved], ["0", None, "0"])
                         self.assertEqual(retrieved[0].content, "text 0")
                         if os.environ.get("TREEDB_CLIENT_NATIVE_PROFILE") == "1":
@@ -196,7 +203,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                         extra = Document(id="extra", content="inserted", embedding=[1, 0], meta={"user_id": "owner", "fpath": "extra/path"})
                         mixed = writer.upsert_documents("typed", [rows[3], changed, extra], index_info=info)
                         self.assertEqual((mixed.upserted, mixed.updated, mixed.inserted), (3, 2, 1))
-                        self.assertEqual(writer.get_many("typed", ["extra"])[0].content, "inserted")
+                        self.assertEqual(writer.get_many("typed", ["extra"], index_info=info)[0].content, "inserted")
                     self.assertEqual(client.delete_documents("typed", ["extra"]).deleted, 1)
                     self.assertEqual(client.delete_documents("typed", ["1"]).deleted, 1)
                     self.assertEqual(client.delete_by_filter("typed", {
@@ -213,6 +220,8 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                 with closing(TreeDBClient(reopened.base_url, timeout=10)) as client:
                     with self.assertRaises(TreeDBClientError):
                         client.query_by_embedding("typed", [0, 1], 1, route="ann")
+                    with closing(TreeDBClient(reopened.base_url, timeout=10, native_address=reopened.native_addr)) as native:
+                        self.assertEqual(native.get_many("typed", ["0"], index_info=info)[0].content, "replacement")
                     info = client.ensure_index("typed", 2, scalar_fields=declarations, typed_input=True, column_graph_serving=limits,
                                         vector_index_options={"strategy": "column_graph"})
                     response = client.query_by_embedding("typed", [0, 1], 1, {
@@ -229,7 +238,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                         self.assertEqual([doc.id for doc in latest.documents], ["0"])
                         self.assertEqual(latest.documents[0].content, "replacement")
                         self.assertEqual(latest.documents[0].meta["fpath"], "new/path")
-                        self.assertEqual(native.get_many("typed", ["2"]), [None])
+                        self.assertEqual(native.get_many("typed", ["2"], index_info=info), [None])
             finally:
                 reopened.stop()
 

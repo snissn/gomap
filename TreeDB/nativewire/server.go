@@ -753,7 +753,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	responseBodySet := false
 	if err = s.rejectClusterRoutedLocalMetadataRead(cmd.Header.ID); err != nil {
 		// The common error path below records command/request counters.
-	} else if s.clusterSubmitter != nil && cmd.Header.ID == iwire.CommandTypedDocumentUpsert {
+	} else if s.clusterSubmitter != nil && (cmd.Header.ID == iwire.CommandTypedDocumentUpsert || (cmd.Header.ID == iwire.CommandGetMany && cmd.Header.Version == 2)) {
 		err = protocolError(iwire.ErrUnsupportedFeature, "local-only command is unavailable through cluster submission")
 	} else if s.clusterSubmitter != nil && cmd.Schema.Kind == iwire.CommandKindMutation {
 		responseSections, err = s.handleClusterMutation(ctx, header, cmd)
@@ -867,6 +867,13 @@ func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState
 		}
 	}
 	if s.clusterSubmitter == nil && s.documentService != nil {
+		if _, ok := s.registry.LookupCommand(iwire.CommandGetMany, 2); ok {
+			if caps["get_many_versions"] != "" {
+				caps["get_many_versions"] += ",2"
+			} else {
+				caps["get_many_versions"] = "2"
+			}
+		}
 		if _, ok := s.registry.LookupCommand(iwire.CommandTypedDocumentUpsert, 1); ok {
 			caps["typed_document_upsert_versions"] = "1"
 		}

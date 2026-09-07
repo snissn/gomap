@@ -574,6 +574,15 @@ func v1CommandSchemas() []CommandSchema {
 			},
 		},
 		{
+			ID: CommandGetMany, Version: 2, Name: "get_many", Kind: CommandKindRead, LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionCollectionRef, Name: "collection_ref", Required: true},
+				{ID: SectionDocumentIDs, Name: "document_ids", Required: true},
+				{ID: SectionExpectedGeneration, Name: "expected_generation", Required: true},
+				{ID: SectionDeadline, Name: "deadline", Required: true},
+			},
+		},
+		{
 			ID:                CommandIndexLookup,
 			Version:           1,
 			Name:              "index_lookup",
