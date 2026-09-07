@@ -499,6 +499,22 @@ they are never force-closed, and existing attempted encoded debt is not reset.
 Admission allows one candidate per collection across managers. Explicit input
 row, manifest, asset-byte and per-decoder-term limits apply to captured and
 install-time views; native root copy work uses the existing capture ceilings.
+The shared initial/rebuild/fold/replay ceilings are 32,000,000 raw entries and
+4 GiB of charged key/value/flags/revision work. Current and prior captured roots
+are charged separately even when identical, including tombstones; fold also
+charges its latest locator and reserves manifest growth. Persistent value
+pointers charge their descriptor without resolving the payload.
+
+The declared Minima envelope allows at most 2.6M raw entries in each primary,
+locator and two single-valued scalar roots at every current/prior/latest
+boundary, with at most 128 charged bytes per row entry. Each raw manifest stream
+separately allows 65,537 entries and 64 MiB of key/value bytes. For its declared
+identities and 33 graph layers, the pinned arithmetic including manifest growth
+is 23,531,078 entries and 3,130,614,880 charged bytes. These conditions include
+retained deletes and changed scalar keys; live-row or live-manifest limits alone
+do not establish them. Wider values, more indexes or accumulated raw history
+remain subject to the same finite ceilings and can fail closed.
+
 These are not a summed transient heap or global disk guarantee. Both the
 current locator scan and native root construction remain N-dependent under
 write admission, and the publisher builds roots under its existing writer

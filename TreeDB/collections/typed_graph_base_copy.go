@@ -11,10 +11,12 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-// Initial capture safety ceilings, not qualified workload capacity or a total
-// heap/disk limit. The publisher additionally owns batch and tree-build scratch.
-const typedGraphCaptureMaxRecords = 8_000_000
-const typedGraphCaptureMaxBytes = 512 << 20
+// Finite aggregate raw-entry work ceilings shared by initial/rebuild/fold/replay
+// capture. Current/prior roots (including tombstones), the fold's latest locator
+// and reserved manifest growth all charge them. These are not heap/RSS/disk or
+// qualified workload-capacity limits; publisher scratch has its own lifetime.
+const typedGraphCaptureMaxRecords = 32_000_000
+const typedGraphCaptureMaxBytes = 4 << 30
 
 var errTypedGraphCaptureBudget = errors.New("collections: typed graph captured index budget exceeded")
 
