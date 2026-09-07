@@ -106,7 +106,9 @@ func TestTypedColumnPointFP32OwnershipAndBounds(t *testing.T) {
 					t.Fatalf("four vector point reads allocated %g times at rows=%d", allocs, rows)
 				}
 			}
-			decoded.RowByPrimaryID[0] = -1
+			// Identity parts may omit the locator; explicitly supply a corrupt
+			// locator to retain the malformed-nonidentity rejection check.
+			decoded.RowByPrimaryID = []int{-1}
 			if _, err := decoded.valuesForRowInto(0, nil); err == nil {
 				t.Fatal("accepted missing primary locator")
 			}

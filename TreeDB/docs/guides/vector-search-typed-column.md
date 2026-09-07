@@ -538,6 +538,12 @@ go tool pprof -top -alloc_space -nodecount=40 "$OUT/mem.pprof" > "$OUT/alloc_spa
 
 ## Search/fetch timing boundary
 
+Typed point reconstruction validates the complete primary-ID sequence. Identity
+row order uses an implicit locator instead of a per-row reverse map; physically
+permuted parts retain the validated reverse-map path. This does not eliminate
+primary-column decoding or other part setup, and is not a claim that full fetch
+allocation is independent of part size.
+
 Recommended service/query flow:
 
 1. Build or load the vector graph for the current generation.

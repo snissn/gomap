@@ -5871,6 +5871,16 @@ func (p *typedColumnAdapterPart) scanDecodedValuesSelectedWithPrimaryLocator(sel
 }
 
 func typedColumnAdapterRowsByPrimaryID(ids []int64) ([]int, error) {
+	identity := true
+	for row, id := range ids {
+		if id != int64(row) {
+			identity = false
+			break
+		}
+	}
+	if identity {
+		return nil, nil
+	}
 	rowByPrimaryID := make([]int, len(ids))
 	for i := range rowByPrimaryID {
 		rowByPrimaryID[i] = -1
