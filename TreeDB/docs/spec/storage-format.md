@@ -3036,7 +3036,8 @@ built layer count and string lengths; the final prepared manifest is checked
 again. These are not measured operational capacity, heap, or disk limits.
 Publication owns additional batch/tree-build scratch and runs under its existing
 writer lock; capture is not constant-space streaming publication. Public mutable
-admission still requires the separate physical-output and fold resource gates.
+admission composes the separate physical-output and fold resource gates through
+[`EnsureColumnGraphServing`](typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission).
 
 Producer admission is stricter than this corruption bound: the control key plus
 encoded value must fit `page.PageSize - page.PageHeaderSize - 256` bytes, and
@@ -3083,8 +3084,8 @@ does not add a logical WAL command. Graph construction occurs outside collection
 admission, but current-root validation, locator merging and native root building
 do not. Process cuts before the fold seal recover the prior captured base;
 cuts after its explicit checkpoint recover the new base, with acknowledged
-post-T data preserved in either case. This is not power-loss qualification or
-public mutable serving admission. Name-only rebuild
+post-T data preserved in either case. This is not power-loss qualification;
+public mutable serving additionally requires explicit admission above. Name-only rebuild
 replay reconstructs a logically equivalent typed base. Process-crash tests hold
 the publication seal until acknowledged rebuild returns, then use normal Open;
 they do not simulate physical power loss. A raw snapshot alone does not retain

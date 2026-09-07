@@ -326,11 +326,14 @@ they preserve 0-alloc/near-0-alloc decode and scan paths or introduce an explici
 benchmarked fallback. These allocation targets do not relax checksum, lifetime,
 schema, or fail-closed validation.
 
-## Internal typed graph publication checkpoint (#4618)
+## Typed graph publication and lifecycle (#4618)
 
 The internal, explicitly initialized publication seam maintains a derived typed
-suffix at the accepted collection frontier. It is not public mutable graph
-serving or automatic reopen initialization. Both ordered-root publication
+suffix at the accepted collection frontier. Public mutable graph serving composes
+this seam through explicit
+[`EnsureColumnGraphServing`](typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission),
+including re-ensure after reopen; typed writes alone do not activate it.
+Both ordered-root publication
 variants share the seam; recovery tests may initialize it through isolated
 test instrumentation before the real typed replay executor.
 
@@ -351,8 +354,8 @@ prevent reuse across an accepted-root/install gap. Unrelated collection commits
 do not alone invalidate it. Changed rows reuse owned typed payloads; bounded
 suffix row headers are merged and unchanged vector norms reused. No retained
 document JSON is used to construct this derived state. Public bootstrap,
-bounded physical folding, retirement, and mutable serving remain separate M3
-completion gates.
+bounded physical folding and retirement compose the lifecycle mechanisms below;
+none follows merely from maintaining a suffix.
 
 The internal buffered-insert route can additionally reserve encoded output with
 an explicit positive `EncodedOutputBytes` limit. Zero preserves the earlier
@@ -407,9 +410,10 @@ through command replay without rebuilding indexed fields from retained JSON.
 The API uses the typed batch schema/carrier and input-ownership contract,
 validates admission before draining, and preserves one atomic same-ID
 delete/reinsert (insertion wins). Empty insertion permits nil columns and uses
-the existing delete-only source frame. Reopen reconstruction of physical debt and
-reclamation-backed release also remain unfinished admission gates. None of
-these internal paths enables public mutable serving.
+the existing delete-only source frame. Public setup reconstructs bounded retained
+inventory after reopen; attempted-work renewal requires successful reclamation
+and inventory through the maintenance contract. This producer alone does not
+enable public mutable serving.
 
 An internal coherent owner can bind an already reconciled publication frontier
 to the persisted base aliases and one current snapshot. Cross-manager accepted
@@ -421,8 +425,8 @@ limits count owner-retained state once per shared frontier and retain its charge
 until the last owner closes. These are scoped owner charges, not a claim to bound
 unowned current state, pending assets, caches, or total physical retirement.
 Metadata and decoded working terms have separate setup bounds. This internal
-seam does not enable public mutable graph serving; physical pre-ack admission,
-bounded folding, and unified lifecycle resource limits remain prerequisites.
+seam alone does not enable public mutable graph serving; public Ensure composes
+physical pre-ack admission, bounded folding, and lifecycle resource limits.
 
 An internal captured-base slot in the existing collection prepared-search cache
 can retain an immutable shared graph reference and exact typed-asset lease,
@@ -446,7 +450,7 @@ An empty base has no shared holder and this internal warm route is unavailable;
 the existing coherent empty/suffix-only owner remains supported. Warming is not
 an identity handshake: a concurrent base cutover can require a fresh owner to
 build another holder. It does not authorize stale serving or remove current
-owner setup costs, and does not yet connect the public mutable search route.
+owner setup costs. The admitted public mutable route reuses this same keeper.
 
 Unpublished captured-frontier asset preparation reuses the ordinary row/typed
 encoder with an explicit captured generation and real applied command LSN. It
@@ -499,9 +503,10 @@ rejected retries. Attempted charges survive partial writes, stale/canceled
 candidates, logical reconciliation and handle closure; they are separate from
 ordinary mixed encoded-output debt. No successful or failed GC counter refunds
 these charges. They do not include pre-existing/reopened inventory, encoder
-scratch, pager output or whole-process memory. Coherent inventory/reclamation,
-combined transient bounds, qualified pause/storage bounds and public mutable
-activation remain separate gates; this does not enable public mutable search.
+scratch, pager output or whole-process memory. Public admission also requires
+coherent inventory/reclamation and combined known-workspace bounds; attempted
+output accounting alone establishes neither public activation nor qualified
+pause/storage bounds.
 
 The internal `renewTypedGraphWorkEpoch` boundary can renew both attempted-work
 allowances after successful bounded column reclamation and a complete retained
@@ -520,9 +525,10 @@ new live pins. Current roots, recoverable roots and real readers still protect
 them. Successful GC prunes only references whose files are absent under the same
 storage authority, preserving mixed and pinned survivors. Recovery-root manifest
 decoding uses the same input preflight, and replay-candidate reads have an
-explicit input-byte ceiling. This provenance is process-local: restart cleanup
-and failed partial-output discovery remain separate gates, not silently enabled
-mark/sweep of unknown files.
+explicit input-byte ceiling. This provenance is process-local. Restart cleanup
+uses persisted root/replay closure and bounded inventory; fresh per-attempt
+output prevents failed prefixes from becoming part of later live files. This is
+not permission to mark/sweep unknown files or discard unproven prefix gaps.
 
 Native policy is deliberately finite: bounded streaming directory inspection
 counts unknown and empty entries and file lengths, and the existing cheap
@@ -532,9 +538,9 @@ Callers may perform existing explicit native maintenance and retry. Renewal does
 not invoke `CompactStorage`, `Prune`, or a new reclamation engine. Directory file
 lengths are not allocated blocks, and encoded-work allowances do not predict
 index/COW amplification or provide a physical quota. Nonempty vector-partition
-state is outside this selected path. Combined fold/discovery workspace admission
-and measured sustained resource behavior remain prerequisites to public mutable
-activation, not consequences of renewing counters.
+state is outside this selected path. Public Ensure also configures combined
+fold/discovery workspace admission. Measured sustained resource behavior is a
+separate qualification obligation, not a consequence of renewing counters.
 
 Explicit internal cold reconciliation can bootstrap a captured base and its
 current typed suffix after normal `Open`, without replay instrumentation. It

@@ -53,7 +53,13 @@ Each current state record contains:
 - zero or more typed-column asset refs.
 
 A reader validates the state identity against the declared vector-index
-definition and the current active base manifest before trusting any asset ref.
+definition and its owning base manifest before trusting any asset ref.
+For ordinary immutable graph reads this is the current active base manifest.
+The explicitly admitted mutable typed route instead validates the persisted
+captured base and binds the current typed suffix through the same read owner;
+it must not reinterpret old graph ordinals against the newer current manifest.
+See [captured base ownership](storage-format.md#captured-typed-graph-base-control-m3)
+and [mutable serving admission](typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission).
 Generation, checksum, schema, index-definition, or row-count mismatches fail
 closed and require rebuild/fallback instead of silently reading stale bytes.
 

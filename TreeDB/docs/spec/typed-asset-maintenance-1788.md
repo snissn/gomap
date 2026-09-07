@@ -77,8 +77,9 @@ inner instructions are not individually interruptible.
 Current public tests cover typed mutation, same-owner full fetch, fold,
 independent handles, normal reopen, options, held-owner pressure and canceled
 setup, acknowledged-write process cuts, rejected stale keeper release and
-deterministic fold/unchanged-ensure overlap. Scaled foreground latency and
-end-to-end qualification remain separate M3 acceptance gates.
+deterministic fold/unchanged-ensure overlap. M3 owns bounded foreground latency
+and resource calibration; M4 owns service/transport integration and M5 owns
+the frozen end-to-end qualification run.
 This API checkpoint does not certify the end-to-end Minima workload.
 
 ## Reachability roots
