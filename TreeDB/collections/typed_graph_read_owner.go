@@ -130,6 +130,12 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 	if drainErr != nil {
 		return nil, drainErr
 	}
+	typedGraphOwnerAfterSnapshotHook.RLock()
+	afterDrain := typedGraphOwnerAfterSnapshotHook.afterDrain
+	typedGraphOwnerAfterSnapshotHook.RUnlock()
+	if afterDrain != nil {
+		afterDrain(c)
+	}
 	coord := c.collectionSchemaCoordinator()
 	if coord == nil {
 		return nil, ErrVectorIndexSnapshotMismatch

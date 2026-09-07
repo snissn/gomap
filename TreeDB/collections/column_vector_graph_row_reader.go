@@ -428,6 +428,21 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtCatalogWith
 	if err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
 	}
+	state, ok := snap.StateToken()
+	if !ok {
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, backenddb.ErrClosed
+	}
+	def, graph, view, err := c.columnVectorGraphPhysicalRowReaderViewFromRecords(def, catalog, records, owner)
+	view.CommitSeq = state.CommitSeq
+	return def, graph, view, err
+}
+
+// Decode the same validated producer records without manufacturing snapshot or
+// root authority. The snapshot wrapper above validates physical root identity;
+// fold binds its eventual installed catalog only after successful publication.
+func (c *Collection) columnVectorGraphPhysicalRowReaderViewFromRecords(def VectorIndexDefinition, catalog *collectionCatalog, records []columnManifestRecord, owner **ColumnAssetLifecyclePinSet) (VectorIndexDefinition, columnVectorGraphManifestSnapshot, columnPhysicalScanSnapshotView, error) {
+	cfg := catalog.meta.Options.ColumnStore
+	rootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
 	manifest, err := decodeColumnManifestSnapshotForScan(records)
 	if err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
@@ -482,10 +497,6 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtCatalogWith
 	graphCfg.ActiveManifest = cfg.ActiveManifest
 	graphCfg.RecoveryAuthoritativeManifest = cfg.RecoveryAuthoritativeManifest
 	graphCfg.RecoveryAuthoritativeAppliedCommandLSN = cfg.RecoveryAuthoritativeAppliedCommandLSN
-	state, ok := snap.StateToken()
-	if !ok {
-		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, backenddb.ErrClosed
-	}
 	assetRefs := make([]columnManifestAssetRefForScan, 0, 1)
 	if columnVectorGraphManifestHasPhysicalAsset(graph) {
 		assetRefs = append(assetRefs, columnManifestAssetRefForScan{
@@ -499,7 +510,6 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtCatalogWith
 		Catalog:               catalog,
 		Config:                graphCfg,
 		ColumnStoreEnabled:    true,
-		CommitSeq:             state.CommitSeq,
 		VectorIndexState:      vectorState,
 		VectorIndexStateFound: true,
 		AssetRefs:             assetRefs,

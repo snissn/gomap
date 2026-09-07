@@ -45,6 +45,7 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 	var captured columnStoreCompactionState
 	var lease *ColumnAssetLifecyclePinSet
 	var copy *typedGraphBaseCopy
+	var serving *typedGraphFoldServing
 	defer func() {
 		if lease != nil {
 			err = errors.Join(err, lease.Close())
@@ -67,6 +68,19 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 			}
 			if captured.catalog.typedGraphBase == nil || len(captured.meta.VectorIndexes) != 1 || captured.meta.VectorIndexes[0].Strategy != VectorIndexStrategyColumnGraph {
 				return ErrHybridSearchUnsupported
+			}
+			if coord.typedGraphServing.Load() != nil {
+				state := coord.typedPublication.Load()
+				if !state.matches(captured.catalog) || !state.servingAdmitted {
+					return ErrVectorIndexSnapshotMismatch
+				}
+				coord.typedPublicationDebtMu.Lock()
+				pending := coord.typedPublicationPending
+				coord.typedPublicationDebtMu.Unlock()
+				if pending != (typedGraphPublicationCost{}) {
+					return ErrConcurrentMutation
+				}
+				serving = &typedGraphFoldServing{capturedCost: typedGraphStateCost(state), capturedAssetBytes: state.installedAssetBytes}
 			}
 			view, e := c.prepareColumnPhysicalScanSnapshotViewAtSnapshot(captured.snap, captured.catalog, captured.meta.Name, captured.baseRoot, captured.cfg, true)
 			if e != nil {
@@ -98,6 +112,12 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 		if err = afterCapture(); err != nil {
 			return err
 		}
+	}
+	typedGraphPublicationAfterAcceptedHook.RLock()
+	capturedHook := typedGraphPublicationAfterAcceptedHook.foldAfterCapture
+	typedGraphPublicationAfterAcceptedHook.RUnlock()
+	if capturedHook != nil {
+		capturedHook(c)
 	}
 	if err = ctx.Err(); err != nil {
 		return err
@@ -188,6 +208,20 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 	if err != nil {
 		return err
 	}
+	if serving != nil {
+		if len(records) > cold.ManifestRecords || columnManifestRecordsBytes(records) > cold.ManifestBytes {
+			return errTypedGraphOverlayFoldNeeded
+		}
+		catalog := newCollectionCatalogWithOverlays(baseMeta, nil, nil)
+		_, baseGraph, baseView, e := c.columnVectorGraphPhysicalRowReaderViewFromRecords(def, catalog, records, nil)
+		if e != nil {
+			return e
+		}
+		serving.metadata, e = prepareTypedGraphServingBaseMetadata(baseGraph, baseView, cold)
+		if e != nil {
+			return e
+		}
+	}
 	if err = ctx.Err(); err != nil {
 		return err
 	}
@@ -198,7 +232,7 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 	}
 	if err == nil {
 		err = WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() error {
-			return c.installTypedGraphFold(ctx, captured, copy, cold, maxRows, records, identity, baseMeta, locators, &prepared, &graph, timing)
+			return c.installTypedGraphFold(ctx, captured, copy, cold, maxRows, records, identity, baseMeta, locators, &prepared, &graph, timing, serving)
 		})
 	}
 	unlock()
@@ -206,8 +240,17 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 		return err
 	}
 	// Seal once for explicit maintenance, never under collection admission.
+	typedGraphPublicationAfterAcceptedHook.RLock()
+	afterInstall := typedGraphPublicationAfterAcceptedHook.foldAfterInstall
+	typedGraphPublicationAfterAcceptedHook.RUnlock()
+	if afterInstall != nil {
+		afterInstall(c)
+	}
 	if err = c.db.Checkpoint(); err != nil {
 		return err
+	}
+	if serving != nil {
+		return nil
 	}
 	if state := coord.typedPublication.Load(); state != nil {
 		return c.reconcileTypedGraphPublication(state.limits, cold)
@@ -215,7 +258,7 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 	return nil
 }
 
-func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnStoreCompactionState, copy *typedGraphBaseCopy, cold typedGraphColdLimits, maxRows int, baseRecords []columnManifestRecord, baseIdentity ColumnManifestIdentity, baseMeta CollectionMeta, locators []systemTargetEntry, prepared *ColumnPublishPreparedAssets, graph *columnVectorGraphPreparedPhysicalAsset, timing *ColumnGraphBuildTiming) (err error) {
+func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnStoreCompactionState, copy *typedGraphBaseCopy, cold typedGraphColdLimits, maxRows int, baseRecords []columnManifestRecord, baseIdentity ColumnManifestIdentity, baseMeta CollectionMeta, locators []systemTargetEntry, prepared *ColumnPublishPreparedAssets, graph *columnVectorGraphPreparedPhysicalAsset, timing *ColumnGraphBuildTiming, serving *typedGraphFoldServing) (err error) {
 	latest, _, err := c.loadColumnStoreCompactionStateWithBudget(ctx, &cold)
 	if err != nil {
 		return err
@@ -276,6 +319,24 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 		return err
 	}
 	updated.Options.ColumnStore.PhysicalMutationParts = uint64(mutationParts)
+	coord := c.collectionSchemaCoordinator()
+	before := coord.typedPublication.Load()
+	var nextState *typedGraphPublicationState
+	if serving != nil {
+		if !before.matches(latest.catalog) || !before.servingAdmitted {
+			return ErrVectorIndexSnapshotMismatch
+		}
+		coord.typedPublicationDebtMu.Lock()
+		pending := coord.typedPublicationPending
+		coord.typedPublicationDebtMu.Unlock()
+		if pending != (typedGraphPublicationCost{}) {
+			return ErrConcurrentMutation
+		}
+		nextState, err = serving.prepareNext(before, captured.manifest.Generation, currentRecords, identity, cold)
+		if err != nil {
+			return err
+		}
+	}
 	aliasInputs, err := copy.inputsWithLocator(encodeColumnManifestIdentityRecordArray(baseIdentity), baseRecords, &systemTargetIterator{entries: locators})
 	if err != nil {
 		return err
@@ -378,12 +439,14 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 	}
 	// A changed physical frontier fences derived state, including an ambiguous
 	// accepted result. It never releases attempted encoded-output debt.
-	coord := c.collectionSchemaCoordinator()
-	if err == nil || !columnAssetRewritePublishFailedBeforeApply(err) {
+	if (err == nil && serving == nil) || (err != nil && !columnAssetRewritePublishFailedBeforeApply(err)) {
 		if state := coord.typedPublication.Load(); state != nil {
 			invalid := *state
 			invalid.invalid = true
-			coord.typedPublication.CompareAndSwap(state, &invalid)
+			// Schema and storage admission exclude actual publishers. A late
+			// Ensure CAS may only clone old authority; a definitive fence makes
+			// that stale CAS fail instead of racing a best-effort invalidation.
+			coord.typedPublication.Store(&invalid)
 		}
 	}
 	if err != nil {
@@ -394,6 +457,33 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 	c.meta = updated
 	c.rememberCatalogAtSystemRoot(system, next)
 	c.noteWriteDomainCatalog(system, next)
+	if nextState != nil {
+		typedGraphPublicationAfterAcceptedHook.RLock()
+		beforeStateInstall := typedGraphPublicationAfterAcceptedHook.foldBeforeStateInstall
+		typedGraphPublicationAfterAcceptedHook.RUnlock()
+		if beforeStateInstall != nil {
+			beforeStateInstall(c)
+		}
+		nextState.catalog = next
+		baseCatalog := newCollectionCatalogWithOverlays(installed.meta, installed.roots, nil)
+		baseCatalog.pager = next.pager
+		nextState.servingBase.view.Catalog = baseCatalog
+		nextState.servingBase.view.Diagnostics.ManifestRoot = baseCatalog.rootID(collectionColumnManifestRootName(baseCatalog.meta.Name))
+		coord.typedPublicationDebtMu.Lock()
+		ok := coord.typedPublication.CompareAndSwap(before, nextState)
+		if ok {
+			coord.typedPublicationDebt = typedGraphStateCost(nextState)
+		}
+		coord.typedPublicationDebtMu.Unlock()
+		if !ok {
+			if current := coord.typedPublication.Load(); current != nil && !current.matches(next) {
+				invalid := *current
+				invalid.invalid = true
+				coord.typedPublication.Store(&invalid)
+			}
+			return ErrConcurrentMutation
+		}
+	}
 	return nil
 }
 

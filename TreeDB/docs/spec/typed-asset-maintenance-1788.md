@@ -31,6 +31,18 @@ and may reclaim unreachable assets. Unchanged admitted-state ensure is idempoten
 and does not renew attempted-work debt. A race at final state admission fails
 explicitly; no blind retry installs stale metadata.
 
+Configured folds prepare next-base metadata from the same producer records and
+retain only post-capture owned suffix rows before physical publication. Exact
+installed catalog/root identity and the ready derived state become visible under
+the existing schema/storage exclusion, before checkpoint. Same-authority Ensure
+does not install a temporary invalid marker. Healthy foreground operations may
+wait on admission but must not receive a false snapshot mismatch during cutover.
+Post-capture delete/reinsert coordinates and costs remain current; only folded
+logical suffix debt is rebased. Encoded/candidate attempted work is not refunded
+until successful existing epoch renewal. An uncertain physical result or failed
+derived-state installation definitively fences new writes; it does not weaken
+snapshot matching or invalidate independently held read owners.
+
 Use `SearchVectorIndexWithBufferReadView` with exact query mode and explicit
 `minimal`/`production` stats. Native declared scalar equality/range AND filtering,
 ANN/delta search and full fetch share the same current owner. Close the returned
@@ -50,8 +62,8 @@ these boundaries; reused-handle timings do not measure public acquisition, and
 full fetch includes its typed materializer setup.
 
 Configured `RebuildVectorIndex` and `FoldColumnGraphServing` use bounded fold and
-explicit re-admission. Requests fail closed between physical cutover and ready
-state installation; zero-pause availability is not promised.
+coherent ready-state installation, followed by explicit maintenance. Existing
+admission locks can pause requests; zero-pause availability is not promised.
 `RenewColumnGraphServing` reclaims and renews work without folding or closing
 readers. Use `errors.Is` with `ErrColumnGraphFoldNeeded`,
 `ErrColumnGraphOwnerBudget` and `ErrColumnGraphSearchBudget` to distinguish
@@ -64,8 +76,9 @@ inner instructions are not individually interruptible.
 
 Current public tests cover typed mutation, same-owner full fetch, fold,
 independent handles, normal reopen, options, held-owner pressure and canceled
-setup. Public process-cut durable-at-ack integration, forced stale lifecycle
-cutover and foreground pause qualification remain separate M3 acceptance gates.
+setup, acknowledged-write process cuts, rejected stale keeper release and
+deterministic fold/unchanged-ensure overlap. Scaled foreground latency and
+end-to-end qualification remain separate M3 acceptance gates.
 This API checkpoint does not certify the end-to-end Minima workload.
 
 ## Reachability roots

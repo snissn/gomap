@@ -95,7 +95,10 @@ func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string,
 	if err := c.prepareTypedGraphServingMetadata(ctx, o.Cold); err != nil {
 		return err
 	}
-	if wasReady && coord.typedPublication.Load() == before {
+	// Metadata preparation just validated exact catalog authority under the
+	// existing exclusion. A concurrent admitted suffix/fold may advance the
+	// immutable pointer without requiring another cold activation or debt reset.
+	if state := coord.typedPublication.Load(); wasReady && state != nil && !state.invalid && state.servingAdmitted && state.servingBase != nil {
 		return nil
 	}
 	prepared := coord.typedPublication.Load()
@@ -128,7 +131,14 @@ func (c *Collection) FoldColumnGraphServing(ctx context.Context, index string) e
 	if err := c.foldTypedGraph(ctx, p.options.Owners.Cold, p.options.FoldRows, p.options.CandidateOutput, nil); err != nil {
 		return err
 	}
-	return c.EnsureColumnGraphServing(ctx, index, p.options)
+	// Publication already installed its ready immutable state. Checkpoint and
+	// work-epoch reclamation remain outside install admission; neither is a
+	// reason to expose an invalid serving frontier.
+	if _, err := c.renewTypedGraphWorkEpoch(ctx, p.options.Maintenance); err != nil {
+		return err
+	}
+	_, err := c.acquireTypedGraphCapturedBaseCache(index, p.options.Owners)
+	return err
 }
 
 // RenewColumnGraphServing renews attempted-work allowance only after successful

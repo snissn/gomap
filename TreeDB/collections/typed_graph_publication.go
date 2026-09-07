@@ -525,7 +525,11 @@ func (p *typedGraphPublicationCandidate) install(meta CollectionMeta, rootNames 
 
 var typedGraphPublicationAfterAcceptedHook struct {
 	sync.RWMutex
-	fn func(*typedGraphPublicationCandidate)
+	fn                     func(*typedGraphPublicationCandidate)
+	foldAfterInstall       func(*Collection)
+	foldAfterCapture       func(*Collection)
+	foldBeforeStateInstall func(*Collection)
+	reconcileBeforeCapture func(*Collection)
 }
 
 // Test-only replay instrumentation; unset in production. Bootstrap remains a

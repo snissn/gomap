@@ -64,18 +64,10 @@ func (c *Collection) prepareTypedGraphServingMetadata(ctx context.Context, cold 
 		if err != nil {
 			return err
 		}
-		refs, err := typedGraphOwnerRefs(view.graphOwnerRecords, view.Config.ActiveManifest.Generation, view.AssetNamespace, graph, view.VectorIndexState)
+		metadata, err := prepareTypedGraphServingBaseMetadata(graph, view, cold)
 		if err != nil {
 			return err
 		}
-		metadata := &typedGraphServingBaseMetadata{graph: graph, view: view, refs: refs, recordCount: len(view.graphOwnerRecords)}
-		metadata.bytes, err = typedGraphServingMetadataBytes(metadata, cold.DecodedTermBytes)
-		if err != nil {
-			return err
-		}
-		metadata.view.snapshot = nil
-		metadata.view.graphOwnerRecords = nil
-		metadata.view.CommitSeq, metadata.view.SystemRoot = 0, 0
 		records, err := loadColumnManifestRecordsFromRoot(snap, catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name)))
 		if err != nil {
 			return err
@@ -90,6 +82,25 @@ func (c *Collection) prepareTypedGraphServingMetadata(ctx context.Context, cold 
 		}
 		return nil
 	})
+}
+
+func prepareTypedGraphServingBaseMetadata(graph columnVectorGraphManifestSnapshot, view columnPhysicalScanSnapshotView, cold typedGraphColdLimits) (*typedGraphServingBaseMetadata, error) {
+	if len(view.graphOwnerRecords) > cold.ManifestRecords || columnManifestRecordsBytes(view.graphOwnerRecords) > cold.ManifestBytes {
+		return nil, errTypedGraphOverlayFoldNeeded
+	}
+	refs, err := typedGraphOwnerRefs(view.graphOwnerRecords, view.Config.ActiveManifest.Generation, view.AssetNamespace, graph, view.VectorIndexState)
+	if err != nil {
+		return nil, err
+	}
+	metadata := &typedGraphServingBaseMetadata{graph: graph, view: view, refs: refs, recordCount: len(view.graphOwnerRecords)}
+	metadata.bytes, err = typedGraphServingMetadataBytes(metadata, cold.DecodedTermBytes)
+	if err != nil {
+		return nil, err
+	}
+	metadata.view.snapshot = nil
+	metadata.view.graphOwnerRecords = nil
+	metadata.view.CommitSeq, metadata.view.SystemRoot = 0, 0
+	return metadata, nil
 }
 
 func typedGraphServingMetadataBytes(b *typedGraphServingBaseMetadata, limit int64) (int64, error) {

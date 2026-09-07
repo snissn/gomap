@@ -60,8 +60,11 @@ func (c *Collection) reconcileTypedGraphPublicationWithContext(ctx context.Conte
 		*marker = *before
 		marker.invalid, marker.reconciling = true, token
 	}
-	if !coord.typedPublication.CompareAndSwap(before, marker) {
-		return ErrVectorIndexSnapshotMismatch
+	marked := before == nil || before.invalid
+	if marked {
+		if !coord.typedPublication.CompareAndSwap(before, marker) {
+			return ErrVectorIndexSnapshotMismatch
+		}
 	}
 	defer func() {
 		if state := coord.typedPublication.Load(); state != nil && state.reconciling == token {
@@ -76,6 +79,12 @@ func (c *Collection) reconcileTypedGraphPublicationWithContext(ctx context.Conte
 				return err
 			}
 		}
+	}
+	typedGraphPublicationAfterAcceptedHook.RLock()
+	beforeCapture := typedGraphPublicationAfterAcceptedHook.reconcileBeforeCapture
+	typedGraphPublicationAfterAcceptedHook.RUnlock()
+	if beforeCapture != nil {
+		beforeCapture(c)
 	}
 	var snap *backenddb.Snapshot
 	var current *CollectionReadView
@@ -106,8 +115,13 @@ func (c *Collection) reconcileTypedGraphPublicationWithContext(ctx context.Conte
 		}
 		if before != nil && !before.invalid && before.matches(catalog) {
 			// No pending work and same exact authority: no manifest/asset decode.
-			coord.typedPublication.CompareAndSwap(marker, before)
 			return nil
+		}
+		if !marked {
+			if !coord.typedPublication.CompareAndSwap(before, marker) {
+				return ErrVectorIndexSnapshotMismatch
+			}
+			marked = true
 		}
 		cfg := *catalog.meta.Options.ColumnStore
 		if len(cfg.Columns) == 0 || len(cfg.Columns) > limits.ValueSlots {

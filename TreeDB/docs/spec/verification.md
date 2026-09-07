@@ -30,6 +30,22 @@ and checks conflict, exact keeper accounting/pin release, accepted suffix and
 held old-view readability. These do not prove power-loss or foreground fold
 availability. See [serving admission](typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission).
 
+`TestTypedGraphPublicFoldPublicationAvailability` exercises public filtered
+search/full fetch and replacement after physical install but before checkpoint,
+including an old held view. `TestTypedGraphPublicFoldPostInstallAckCrash` blocks
+publication seal writes, acknowledges a public replacement after fold install,
+exits without Close, and proves ordinary replay from the pre-fold base plus latest
+same-owner filtered full fetch with zero indexed JSON extraction.
+`TestTypedGraphPublicFoldPostCaptureSuffixAndDebt` covers replacement, delete,
+reinsert and a growing-base insert during construction, exact logical/pending
+costs and unchanged attempted-output debt at install.
+`TestTypedGraphPublicHealthyEnsureConcurrentOwner` forces acquisition between
+drain and storage capture while unchanged Ensure holds schema admission.
+`TestTypedGraphPublicFoldStateInstallConflictFencesWrites` injects a derived-state
+CAS conflict after physical apply, asserts public write rejection, then explicit
+Ensure recovery. These are deterministic correctness gates, not latency targets
+or power-loss qualification.
+
 `TestRecoverableColumnAssetReplayStrictFloor` checks exact excluded identities,
 strict equality retention, namespace mismatch, and disabled-floor behavior.
 `TestRecoverableColumnAssetReplayFloorUnknownAuthority` checks missing/zero and

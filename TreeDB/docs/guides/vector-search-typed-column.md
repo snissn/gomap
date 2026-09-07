@@ -77,8 +77,12 @@ Use `FoldColumnGraphServing` explicitly when the suffix needs folding and
 `ErrColumnGraphFoldNeeded`, `ErrColumnGraphOwnerBudget`, and
 `ErrColumnGraphSearchBudget` to distinguish maintenance, caller-held reader
 pressure, and query work. Releasing readers is not interchangeable with folding.
-Fold publication followed by serving admission currently has a fail-closed
-not-ready window; queries do not reconcile or silently search stale authority.
+Successful fold publication installs the ready immutable typed state within the
+existing publication exclusion. Checkpointing and bounded epoch maintenance stay
+outside that exclusion; healthy requests are not rejected merely because those
+steps remain in progress. They may wait for existing admission locks. Actual
+ambiguous publication failures remain fenced and require explicit recovery;
+queries never reconcile or silently search stale authority.
 An overlapping setup may return `ErrConcurrentMutation`; its exact rejected
 captured-base keeper is released without closing newer cache entries or held
 read views. Explicit setup retry is a caller lifecycle decision, not a query
@@ -90,7 +94,9 @@ insert/replace/delete/reinsert acknowledgements now have subprocess-exit replay
 coverage through ordinary open, re-ensure, filtered/unfiltered search and full
 fetch. A forced post-capture stale setup test covers exact keeper release and
 held-owner readability. These are process-death tests, not power-loss or full
-fold-cutover qualification; foreground availability/pause gates remain open. See the
+fold-cutover qualification. Deterministic post-publication read/write and blocked-
+seal replay tests cover the cutover boundary; scaled foreground latency and
+end-to-end qualification still require measured gates. See the
 [operational contract](../spec/typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission)
 and `BenchmarkTypedGraphPublicServing` for the current measured boundary.
 
