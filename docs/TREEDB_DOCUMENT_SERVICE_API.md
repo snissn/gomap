@@ -544,6 +544,13 @@ graph. Fresh insert-only legacy graphs retain automatic ANN selection. Selected
 `typed_input=true` indexes keep their admitted graph route across mutations and
 require explicit re-admission after reopen; they never use this document scan.
 
+Successful typed build/ensure/fold retains the prepared base on the service's
+collection handle; creating an index with serving limits does the same. Repeated
+explicit ensure preserves admitted limits and work debt. Each query still
+captures current document visibility. Service close or explicit cache
+invalidation releases the retained preparation; explicit ensure warms the next
+handle.
+
 Tie order is deterministic: higher score first, then document ID ascending.
 
 ## Keyword search

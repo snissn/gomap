@@ -134,6 +134,13 @@ func (s *Service) optimizeTypedInput(ctx context.Context, col *collections.Colle
 			return OptimizeIndexResponse{}, mapCollectionMaintenanceError("typed graph status", err)
 		}
 	}
+	// Keep the handle that explicit build/ensure/fold warmed. Query dispatch
+	// reuses this existing service owner without retaining a current read view.
+	if action != "renew" {
+		if err := s.primeBenchmarkSearchCache(info.Name, col, info); err != nil {
+			return OptimizeIndexResponse{}, err
+		}
+	}
 	return OptimizeIndexResponse{Index: info, VectorIndexName: info.VectorIndexName, Status: vectorIndexMaintenanceStatus(status), Timing: OptimizeIndexTiming{TotalNanos: time.Since(started).Nanoseconds()}}, nil
 }
 

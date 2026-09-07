@@ -710,6 +710,20 @@ func TestTypedGraphPublicServingPressureAndOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := read.typedGraphOwner
+	// A newly opened handle must propagate keeper admission failure without
+	// changing the already admitted authority or leaking the failed warm.
+	other, err := NewCollectionManager(col.db).OpenCollection(col.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.CloseVectorIndexPreparedSearchCache()
+	admitted := col.collectionSchemaCoordinator().typedPublication.Load()
+	if err := other.EnsureColumnGraphServing(context.Background(), base.indexName, opts); !errors.Is(err, ErrColumnGraphOwnerBudget) {
+		t.Fatalf("new handle keeper pressure=%v", err)
+	}
+	if col.collectionSchemaCoordinator().typedPublication.Load() != admitted {
+		t.Fatal("failed warm changed admitted authority")
+	}
 	var secondBuffer VectorIndexSearchBuffer
 	if _, err := col.SearchVectorIndexWithBuffer(query, &secondBuffer); !errors.Is(err, ErrColumnGraphOwnerBudget) {
 		t.Fatalf("held owner pressure=%v", err)

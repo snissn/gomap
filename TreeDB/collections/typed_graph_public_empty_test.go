@@ -130,6 +130,14 @@ func TestTypedGraphPublicEmptyLifecycle(t *testing.T) {
 }
 
 func TestTypedGraphPublicEmptyFoldLateKeeper(t *testing.T) {
+	testTypedGraphPublicEmptyLateKeeper(t, false)
+}
+
+func TestTypedGraphPublicEmptyEnsureLateKeeper(t *testing.T) {
+	testTypedGraphPublicEmptyLateKeeper(t, true)
+}
+
+func testTypedGraphPublicEmptyLateKeeper(t *testing.T, ensure bool) {
 	requireTypedGraphPublicServingTest(t)
 	col, base, ids, _, _, _ := openTypedGraphQualityFixture(t, 8)
 	defer col.db.Close()
@@ -140,6 +148,11 @@ func TestTypedGraphPublicEmptyFoldLateKeeper(t *testing.T) {
 	const index = "embedding_graph"
 	if err := col.EnsureColumnGraphServing(ctx, index, typedGraphPublicTestOptions()); err != nil {
 		t.Fatal(err)
+	}
+	if ensure {
+		if err := col.CloseVectorIndexPreparedSearchCache(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	captured, release := make(chan struct{}, 1), make(chan struct{})
 	var paused, released atomic.Bool
@@ -160,11 +173,17 @@ func TestTypedGraphPublicEmptyFoldLateKeeper(t *testing.T) {
 		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Unlock()
 	}()
 	done := make(chan error, 1)
-	go func() { done <- col.FoldColumnGraphServing(ctx, index) }()
+	go func() {
+		if ensure {
+			done <- col.EnsureColumnGraphServing(ctx, index, typedGraphPublicTestOptions())
+		} else {
+			done <- col.FoldColumnGraphServing(ctx, index)
+		}
+	}()
 	select {
 	case <-captured:
 	case <-time.After(10 * time.Second):
-		t.Fatal("nonempty fold did not capture a keeper")
+		t.Fatal("nonempty setup did not capture a keeper")
 	}
 	if _, err := col.DeleteBatch(ids); err != nil {
 		t.Fatal(err)
@@ -177,15 +196,15 @@ func TestTypedGraphPublicEmptyFoldLateKeeper(t *testing.T) {
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("late nonempty fold: %v", err)
+			t.Fatalf("late nonempty setup: %v", err)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("late nonempty fold blocked")
+		t.Fatal("late nonempty setup blocked")
 	}
 	a := &col.collectionSchemaCoordinator().typedGraphOwners
 	a.Lock()
 	defer a.Unlock()
 	if a.baseOwners != 0 || a.baseAssetBytes != 0 || a.baseDescriptorBytes != 0 || a.baseBackingBytes != 0 {
-		t.Fatal("late fold installed an obsolete keeper after empty cutover")
+		t.Fatal("late setup installed an obsolete keeper after empty cutover")
 	}
 }

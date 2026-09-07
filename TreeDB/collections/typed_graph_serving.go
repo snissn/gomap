@@ -99,7 +99,18 @@ func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string,
 	// existing exclusion. A concurrent admitted suffix/fold may advance the
 	// immutable pointer without requiring another cold activation or debt reset.
 	if state := coord.typedPublication.Load(); wasReady && state != nil && !state.invalid && state.servingAdmitted && state.servingBase != nil {
-		return nil
+		// Admission belongs to the shared authority, but its optional prepared
+		// keeper belongs to this handle. Explicit Ensure warms new handles too.
+		if state.servingBase.graph.RowCount == 0 {
+			c.invalidateTypedGraphEmptyBaseKeeper(index)
+			return nil
+		}
+		_, err := c.acquireTypedGraphCapturedBaseCacheWithContext(ctx, index, o)
+		if err == nil {
+			// A concurrent empty fold may have passed cleanup during the warm.
+			c.invalidateTypedGraphEmptyBaseKeeper(index)
+		}
+		return err
 	}
 	prepared := coord.typedPublication.Load()
 	if prepared == nil || prepared.invalid || prepared.servingBase == nil {

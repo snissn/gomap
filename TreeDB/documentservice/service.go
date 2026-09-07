@@ -186,6 +186,9 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 	if err != nil {
 		return IndexInfo{}, mapVectorIndexSearchError("ensure typed graph serving", err)
 	}
+	if err := s.primeBenchmarkSearchCache(req.Name, col, info); err != nil {
+		return IndexInfo{}, err
+	}
 	return info, nil
 }
 
@@ -1489,6 +1492,9 @@ func (s *Service) primeBenchmarkSearchCache(name string, col *collections.Collec
 }
 
 func (s *Service) finishVectorMutation(name string, col *collections.Collection, info IndexInfo) error {
+	if info.TypedInput && info.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
+		return s.primeBenchmarkSearchCache(name, col, info)
+	}
 	if info.VectorStrategy != collections.VectorIndexStrategyNativeRuntime || !info.Capabilities.NoDocumentVectorSearch {
 		return s.invalidateBenchmarkSearchCache(name)
 	}
