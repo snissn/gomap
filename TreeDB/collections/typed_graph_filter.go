@@ -124,13 +124,13 @@ func prepareTypedGraphFilterWithWork(overlay *typedGraphOverlaySearch, filter Hy
 	if plan.count > limits.RetainedBytes/bytesPerRow {
 		return nil, errTypedGraphSearchBudget
 	}
-	plan.retainedBytes = plan.count * (bits.UintSize / 8)
 	perID := bits.Len(uint(overlay.base.reader.graph.RowCount)) + bits.Len(uint(len(overlay.rows))) + 2
 	if plan.count > limits.MappingWork/perID {
 		return nil, errTypedGraphSearchBudget
 	}
 	plan.mappingWork = plan.count * perID
 	ordinals := make([]int, plan.count)
+	plan.retainedBytes = plan.count * (bits.UintSize / 8)
 	baseCount, deltaCount := 0, 0
 	// Only the bounded locator chunk owns temporary ID copies. The map's
 	// cumulative string payload is bounded before copying by SourceBytes;
@@ -263,6 +263,11 @@ func prepareTypedGraphSingleLeaf(plan *typedGraphPreparedFilter, lookup hybridSc
 	}
 	ids := make([][]byte, 0, min(512, limits.SourceIDs))
 	var arena []byte
+	defer func() {
+		// Admission can reject a partially copied chunk before it is flushed.
+		plan.scratchRows = max(plan.scratchRows, len(ids))
+		plan.scratchIDBytes = max(plan.scratchIDBytes, len(arena))
+	}()
 	flush := func() error {
 		if len(ids) == 0 {
 			return nil

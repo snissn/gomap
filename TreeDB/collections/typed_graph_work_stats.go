@@ -16,7 +16,8 @@ type ColumnGraphQueryWork struct {
 
 // Filter cardinality is final only when Completed is true. MappingWorkCharged
 // is the admitted upper bound, not a measured number of comparisons. Retained
-// and scratch fields are per-call capacities/peaks, not cumulative allocation.
+// bytes and ordinal growth measure per-call ordinal capacity. Scratch fields
+// measure logical peak rows/ID bytes, not Go capacity or cumulative allocation.
 type ColumnGraphFilterWork struct {
 	Attempted, Completed                                                       bool
 	EligibleRows, SourceIDs, SourceBytes, InspectedEntries, MappingWorkCharged uint64

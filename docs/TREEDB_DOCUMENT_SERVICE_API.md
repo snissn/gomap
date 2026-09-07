@@ -78,7 +78,11 @@ are needed alongside zero forbidden counts; selecting a typed route alone is
 insufficient. This diagnostics addition does not change the historical Minima
 artifact schema or certify the complete Minima path.
 
-`last_opened.typed_graph`, when present, copies one existing cached handle's
+Owner-local filter work separates retained ordinal capacity and its growth peak
+from logical peak scratch rows and ID bytes. Scratch peaks include a copied
+chunk rejected before lookup; they do not measure Go allocation capacity.
+
+`last_opened_index.typed_graph`, when present, copies one existing cached handle's
 immutable publication/base/current identities and coverage LSNs, suffix counts,
 charged debt, epoch, and owner/asset retention gauges. It never opens a snapshot,
 read owner or asset, warms a cache, or creates serving authority. Publication

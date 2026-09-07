@@ -134,6 +134,16 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 			}
 		}
 	})
+	t.Run("single_leaf_pending_error_prefix", func(t *testing.T) {
+		limited := limits
+		const accepted = 3
+		limited.SourceBytes = accepted * len(ids[0])
+		var work ColumnGraphFilterWork
+		got, err := prepareTypedGraphFilterWithWork(overlay, rangeFilter("user", 0, 4096), limited, &work)
+		if !errors.Is(err, errTypedGraphSearchBudget) || got != nil || !work.Attempted || work.Completed || work.SourceIDs != accepted || work.SourceBytes != uint64(limited.SourceBytes) || work.ScratchRows != accepted || work.ScratchIDBytes != work.SourceBytes || work.RetainedBytes != 0 {
+			t.Fatalf("pending chunk error prefix: plan=%+v work=%+v err=%v", got, work, err)
+		}
+	})
 	for _, count := range []int{512, 513, 1000, 4096, 4097} {
 		plan, err := prepareTypedGraphFilter(overlay, rangeFilter("user", 0, count-1), limits)
 		if err != nil || plan.count != count || plan.base.Count() != count || len(plan.delta) != 0 || !plan.validFor(overlay) {
@@ -225,8 +235,9 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 		t.Run(bound.name, func(t *testing.T) {
 			limited := limits
 			bound.mutate(&limited)
-			if got, err := prepareTypedGraphFilter(overlay, filter, limited); !errors.Is(err, errTypedGraphSearchBudget) || got != nil {
-				t.Fatalf("budget returned partial plan=%+v err=%v", got, err)
+			var work ColumnGraphFilterWork
+			if got, err := prepareTypedGraphFilterWithWork(overlay, filter, limited, &work); !errors.Is(err, errTypedGraphSearchBudget) || got != nil || !work.Attempted || work.Completed || work.RetainedBytes != 0 {
+				t.Fatalf("budget returned partial plan=%+v work=%+v err=%v", got, work, err)
 			}
 		})
 	}
