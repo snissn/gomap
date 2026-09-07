@@ -33,12 +33,14 @@ type collectionSchemaCoordinator struct {
 	chunkMutationOnce       sync.Once
 	chunkMutationToken      chan struct{}
 
-	// Includes reserved and attempted encoded output. Logical reconciliation
-	// and pointer-pin release are not physical reclamation and do not reset it.
+	// Includes reserved and attempted encoded work within the current explicit
+	// maintenance epoch. Reconciliation and pointer-pin release do not renew it.
 	typedPublicationEncodedBytes int64
 	typedGraphCandidateLimits    typedGraphFoldAssetLimits
 	typedGraphCandidateBytes     int64
 	typedGraphCandidateAttempts  int64
+	typedGraphWorkEpochLimits    *typedGraphWorkEpochLimits
+	typedGraphWorkEpoch          uint64
 }
 
 type collectionDBSchemaCoordinators struct {

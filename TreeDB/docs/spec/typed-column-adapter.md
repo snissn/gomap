@@ -503,6 +503,39 @@ scratch, pager output or whole-process memory. Coherent inventory/reclamation,
 combined transient bounds, qualified pause/storage bounds and public mutable
 activation remain separate gates; this does not enable public mutable search.
 
+The internal `renewTypedGraphWorkEpoch` boundary can renew both attempted-work
+allowances after successful bounded column reclamation and a complete retained
+inventory. It excludes folds across managers, drains under schema admission,
+then takes the existing storage barrier and mutation lock. Pending receipts must
+be zero; current state objects, typed payload/header ownership and retained read
+owners must fit the admitted retained budget. Open owners are never force-closed.
+Fixed coordinator limits cannot be raised on a rejected retry. Cancellation,
+incomplete planning, cleanup failure and residual pressure retain attempted debt;
+GC byte counters are never subtracted from mixed encoded work.
+
+Configure this boundary before the first participating fold. Configured folds
+retain captured asset references as internal candidates in the existing lifecycle
+registry before releasing capture ownership; these are cleanup provenance, not
+new live pins. Current roots, recoverable roots and real readers still protect
+them. Successful GC prunes only references whose files are absent under the same
+storage authority, preserving mixed and pinned survivors. Recovery-root manifest
+decoding uses the same input preflight, and replay-candidate reads have an
+explicit input-byte ceiling. This provenance is process-local: restart cleanup
+and failed partial-output discovery remain separate gates, not silently enabled
+mark/sweep of unknown files.
+
+Native policy is deliberately finite: bounded streaming directory inspection
+counts unknown and empty entries and file lengths, and the existing cheap
+freelist snapshot distinguishes total index pages from reusable space. Above the
+configured residual envelope, renewal fails closed before any native full scan.
+Callers may perform existing explicit native maintenance and retry. Renewal does
+not invoke `CompactStorage`, `Prune`, or a new reclamation engine. Directory file
+lengths are not allocated blocks, and encoded-work allowances do not predict
+index/COW amplification or provide a physical quota. Nonempty vector-partition
+state is outside this selected path. Combined fold/discovery workspace admission
+and measured sustained resource behavior remain prerequisites to public mutable
+activation, not consequences of renewing counters.
+
 Explicit internal cold reconciliation can bootstrap a captured base and its
 current typed suffix after normal `Open`, without replay instrumentation. It
 drains pre-existing feature-off buffers before enabling limits. Once enabled,

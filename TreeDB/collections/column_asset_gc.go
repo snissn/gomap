@@ -15,7 +15,8 @@ import (
 
 // ColumnAssetGCOptions controls safe M15B column asset segment reclamation.
 type ColumnAssetGCOptions struct {
-	DryRun bool
+	DryRun              bool
+	maxReplayAssetBytes int64 // internal bounded epoch input; zero preserves existing callers
 	// Discovery limits have the same semantics as ColumnAssetReachabilityOptions.
 	MaxSegmentEntries   int
 	MaxManifestRecords  int
@@ -452,7 +453,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		return stats, err
 	}
 	defer recoverableRoots.Release()
-	if err := c.pinRecoverableColumnAssetSegments(ctx, recoverableRoots, opts.CandidateRefs); err != nil {
+	if err := c.pinRecoverableColumnAssetSegments(ctx, recoverableRoots, planOpts.CandidateRefs, opts); err != nil {
 		return stats, err
 	}
 	if hook := columnAssetStableDeleteAfterPlanHook(); hook != nil {
@@ -548,7 +549,7 @@ func recoverableColumnAssetReplayRefs(
 	return replayRefs, nil
 }
 
-func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, roots *backenddb.RecoverableRootSet, candidateRefs []ColumnAssetRef) error {
+func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, roots *backenddb.RecoverableRootSet, candidateRefs []ColumnAssetRef, opts ColumnAssetGCOptions) error {
 	if c == nil || c.db == nil || roots == nil {
 		return backenddb.ErrRecoverableRootSetStale
 	}
@@ -563,6 +564,9 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 			path = filepath.Clean(path)
 			if _, ok := seenPaths[path]; ok {
 				continue
+			}
+			if opts.MaxLifecycleEntries > 0 && len(seenPaths) >= opts.MaxLifecycleEntries {
+				return ErrColumnAssetReachabilityLifecycleLimit
 			}
 			file, err := os.Open(path)
 			if err != nil {
@@ -624,6 +628,12 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 		if rootName == "" {
 			rootName = collectionColumnManifestRootName(catalog.meta.Name)
 		}
+		if opts.MaxManifestRecords > 0 || opts.MaxManifestBytes > 0 {
+			if err := validateColumnManifestScanBudget(ctx, snapshot, catalog.rootID(rootName), opts.MaxManifestRecords, opts.MaxManifestBytes); err != nil {
+				_ = snapshot.Close()
+				return err
+			}
+		}
 		view, viewErr := c.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(
 			snapshot,
 			catalog,
@@ -664,6 +674,9 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 		visibleReplayBases,
 		roots.RequiresReplayBefore,
 		func(ref ColumnAssetRef, basis recoverableColumnAssetReplayBasis) (bool, error) {
+			if opts.maxReplayAssetBytes > 0 && (ref.Length < 0 || ref.Length > opts.maxReplayAssetBytes) {
+				return false, errTypedGraphOverlayFoldNeeded
+			}
 			return recoverableColumnAssetReplayCandidate(
 				c.db.ColumnAssetRootDir(), ref, basis.collection, basis.config, basis.appliedCommandLSN,
 			)

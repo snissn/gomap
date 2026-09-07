@@ -654,6 +654,8 @@ func columnAssetLifecycleReachabilityRefs(opts ColumnAssetLifecycleOptions, pins
 	}
 	for _, record := range registryRecords {
 		switch record.Class {
+		case columnAssetLifecycleRegistryRetired:
+			refs.candidate = append(refs.candidate, record.Refs...)
 		case ColumnAssetLifecycleRegistryPendingPublish:
 			refs.pending = append(refs.pending, record.Refs...)
 		case ColumnAssetLifecycleRegistryPreparedAsset:

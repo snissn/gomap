@@ -76,6 +76,9 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 			if e != nil {
 				return e
 			}
+			if e = c.retainTypedGraphRetiredCandidates(refs); e != nil {
+				return e
+			}
 			lease, e = c.acquireColumnAssetLifecyclePinSetOwned(ColumnAssetLifecyclePinSetOptions{Source: ColumnAssetLifecyclePinSourcePreparedQuery, Owner: "typed_graph_fold", Refs: refs})
 			if e != nil {
 				return e

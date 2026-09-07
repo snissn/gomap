@@ -1,6 +1,6 @@
 package collections
 
-// Explicit internal limits bound cumulative attempted candidate output and
+// Explicit internal limits bound epoch-cumulative attempted candidate output and
 // appender opens, not existing disk inventory or encoder scratch. An open can
 // leave an empty segment even when payload admission fails.
 type typedGraphFoldAssetLimits struct {
@@ -36,8 +36,8 @@ func (a *typedGraphFoldAssetAdmission) charge(bytes, opens int64) error {
 	if bytes < 0 || opens < 0 || bytes > c.typedGraphCandidateLimits.Bytes-c.typedGraphCandidateBytes || opens > c.typedGraphCandidateLimits.AppenderAttempts-c.typedGraphCandidateAttempts {
 		return errTypedGraphOverlayFoldNeeded
 	}
-	// No refund: partial writes, canceled/stale candidates and handle release do
-	// not establish physical reclamation. Reopen inventory is a separate gate.
+	// No within-epoch refund: partial writes, canceled/stale candidates and
+	// handle release do not establish the explicit maintenance renewal boundary.
 	c.typedGraphCandidateBytes += bytes
 	c.typedGraphCandidateAttempts += opens
 	return nil

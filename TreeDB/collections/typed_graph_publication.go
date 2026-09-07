@@ -13,7 +13,8 @@ import (
 type typedGraphPublicationLimits struct {
 	Rows, Tombstones, ValueSlots int
 	OwnedBytes                   int64
-	// EncodedOutputBytes bounds admitted encoded output, not disk/COW or heap.
+	// EncodedOutputBytes bounds attempted encoded work in a maintenance epoch,
+	// not disk/COW or heap. Only explicit successful lifecycle renewal refills it.
 	// Zero leaves this additional internal admission term disabled.
 	EncodedOutputBytes int64
 }

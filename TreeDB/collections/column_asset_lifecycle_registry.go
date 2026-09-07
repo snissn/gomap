@@ -18,6 +18,7 @@ const (
 	ColumnAssetLifecycleRegistryPendingPublish ColumnAssetLifecycleRegistryClass = "pending_publish"
 	ColumnAssetLifecycleRegistryPreparedAsset  ColumnAssetLifecycleRegistryClass = "prepared_asset"
 	ColumnAssetLifecycleRegistryQuarantine     ColumnAssetLifecycleRegistryClass = "quarantine"
+	columnAssetLifecycleRegistryRetired        ColumnAssetLifecycleRegistryClass = "retired"
 )
 
 // ColumnAssetPendingPublishRegistrationOptions registers refs that are staged
@@ -288,7 +289,8 @@ func validateColumnAssetLifecycleRegistryClass(class ColumnAssetLifecycleRegistr
 	switch class {
 	case ColumnAssetLifecycleRegistryPendingPublish,
 		ColumnAssetLifecycleRegistryPreparedAsset,
-		ColumnAssetLifecycleRegistryQuarantine:
+		ColumnAssetLifecycleRegistryQuarantine,
+		columnAssetLifecycleRegistryRetired:
 		return nil
 	case "":
 		return errors.New("collections: column asset lifecycle registry class is required")
