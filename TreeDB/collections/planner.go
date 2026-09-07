@@ -17,6 +17,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -1796,6 +1797,7 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 	default:
 		return nil, fmt.Errorf("collections: unsupported document format %q", opts.documentFormat)
 	}
+	workstats.IndexedJSON.ScalarRows.Add(1)
 	if state, ok, err := orderedJSONRootIndexStateForDocumentFastPath(document, runtimes, opts, encoder); ok || err != nil {
 		return state, err
 	}

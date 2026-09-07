@@ -19,6 +19,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/vectorops"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -5958,10 +5959,14 @@ func vectorFromStoredDocument(materializer *StoredDocumentJSONMaterializer, docu
 	if materializer == nil {
 		return nil, false, errors.New("collections: nil stored document materializer")
 	}
+	if materializer.DocumentFormat() != DocumentFormatJSON {
+		workstats.IndexedJSON.MaterializationRows.Add(1)
+	}
 	jsonDoc, err := materializer.StoredDocumentJSON(document)
 	if err != nil {
 		return nil, false, err
 	}
+	workstats.IndexedJSON.VectorRows.Add(1)
 	return vectorFromJSONField(jsonDoc, fieldPath)
 }
 

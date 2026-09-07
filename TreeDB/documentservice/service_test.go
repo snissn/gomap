@@ -18,6 +18,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 func TestVectorIndexUnavailablePreservesDiagnosticCause(t *testing.T) {
@@ -1865,6 +1866,14 @@ func TestServiceBenchmarkNativeRuntimeLiveMutationRoute(t *testing.T) {
 }
 
 func TestServiceDenseNativeRuntimeOrdinaryRouteLifecycleAndReopen(t *testing.T) {
+	beforeWork := workstats.Read()
+	defer func() {
+		after := workstats.Read()
+		if after.Runtime.QueryAttempts <= beforeWork.Runtime.QueryAttempts || after.Runtime.QueriesCompleted <= beforeWork.Runtime.QueriesCompleted || after.IndexedJSON.VectorRows <= beforeWork.IndexedJSON.VectorRows {
+			t.Errorf("native producer control: before=%+v after=%+v", beforeWork, after)
+		}
+	}()
+
 	dir := t.TempDir()
 	ctx := context.Background()
 	open := func() (*Service, *backenddb.DB) {

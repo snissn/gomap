@@ -30,6 +30,40 @@ cd clients/python/treedb_client
 PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
+## Process work diagnostics
+
+The optional `-pprof` listener exposes `GET /debug/treedb/stats`; its `work`
+block uses schema `treedb-work-v1`. Observation starts at Go package
+initialization, before backend command replay and before the service exists.
+Counters are always enabled and survive manager/service recreation. They cover
+all databases in the process, have no reset operation, and are independent of
+the existing opt-in service upsert timings.
+
+`pid`, `origin_kind=go_package_init`, `origin_unix_nano`, and
+`snapshot_unix_nano` identify the observation lifetime. The origin is not a
+kernel process-start claim. Bind snapshots independently to the executable and
+OS process identity. Compare cumulative totals only within one lifetime; the
+first snapshot after reopen already includes startup/replay work. Individual
+atomic loads are not a transaction snapshot: drain operations at phase
+boundaries before comparing related totals.
+
+| Group | Observed work |
+| --- | --- |
+| `indexed_json` | Scalar, text, physical-column and vector extraction row attempts, including fast parsers and failures. Column batches charge only the attempted prefix. `materialization_rows` counts non-JSON stored-format conversion attempts for indexed extraction. Ordinary final output reconstruction is separate. |
+| `typed` | Typed scalar/text row attempts, successfully encoded scalar values/analyzed text fields, and old text rows analyzed for mutations. Rows are operations, not unique documents. |
+| `runtime` | Actual native-runtime graph query dispatch attempts, including retries, and successful completions. This does not count native-runtime build/mutation work. |
+| `replay` | Backend replay frame attempts, successful applications and failures, including panic failures. Typed payload frame attempts may contain a legacy projection; decoded typed rows and legacy-projection rows are separate. `legacy_collection_frames` covers legacy insert/update/source payload attempts; deletes have their own frame counter. These totals are observations, not durable coverage authority. |
+| `scans` | Dispatches and visited rows for service dense exact, filtered count, filtered retrieval, mutation matching, cursor, ID-only count, and collection exact search (full or index-restricted). A filtered count is a full document scan today. Cursor/retrieval work is not automatically forbidden. Internal maintenance iterators are outside this group. |
+| `memory` | One `runtime.ReadMemStats` sample before diagnostics serialization: cumulative `total_alloc`/`mallocs` and current `heap_alloc`/`heap_sys`, plus `sys`/`num_gc`. Totals include startup and recovery. Per-operation allocation claims require an externally bounded phase and matching process lifetime. |
+
+Zero fields remain present. `available` describes instrumented producer groups,
+not acceptance of a workload. Graph work, output work and fold proof groups are
+explicitly unavailable in this revision. Missing/unavailable counters cannot
+certify zero work. Indexed JSON positive controls and typed/replay positive work
+are needed alongside zero forbidden counts; selecting a typed route alone is
+insufficient. This diagnostics addition does not change the historical Minima
+artifact schema or certify the complete Minima path.
+
 ## Scope and honesty
 
 Supported now:

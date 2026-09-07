@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -38,6 +39,7 @@ func TestCollectionSearchVectorsExactTopKAndTieOrder(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
+	beforeWork := workstats.Read()
 	results, err := col.SearchVectorsExact([]float32{0, 1}, VectorSearchOptions{
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -50,6 +52,11 @@ func TestCollectionSearchVectorsExactTopKAndTieOrder(t *testing.T) {
 	if results[0].Distance != 0 || results[1].Distance != 0 {
 		t.Fatalf("distances=%v,%v want exact zero ties", results[0].Distance, results[1].Distance)
 	}
+	afterWork := workstats.Read()
+	if afterWork.Scans.CollectionExact.Starts-beforeWork.Scans.CollectionExact.Starts != 1 || afterWork.Scans.CollectionExact.Rows-beforeWork.Scans.CollectionExact.Rows != 4 || afterWork.IndexedJSON.VectorRows-beforeWork.IndexedJSON.VectorRows != 4 {
+		t.Fatalf("before=%+v after=%+v", beforeWork, afterWork)
+	}
+
 }
 
 func TestVectorFromBSONFieldPropagatesMalformedTraversal(t *testing.T) {
@@ -156,6 +163,7 @@ func TestCollectionSearchVectorsExactIndexRangeFilter(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
+	beforeWork := workstats.Read()
 	results, err := col.SearchVectorsExact([]float32{1, 0}, VectorSearchOptions{
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -172,6 +180,11 @@ func TestCollectionSearchVectorsExactIndexRangeFilter(t *testing.T) {
 		t.Fatalf("search vectors: %v", err)
 	}
 	requireVectorResultIDs(t, results, "a", "c")
+	afterWork := workstats.Read()
+	if afterWork.Scans.CollectionIndexedExact.Starts-beforeWork.Scans.CollectionIndexedExact.Starts != 1 || afterWork.Scans.CollectionIndexedExact.Rows-beforeWork.Scans.CollectionIndexedExact.Rows != 2 || afterWork.IndexedJSON.VectorRows-beforeWork.IndexedJSON.VectorRows != 2 {
+		t.Fatalf("before=%+v after=%+v", beforeWork, afterWork)
+	}
+
 }
 
 func TestCollectionSearchVectorsExactReopen(t *testing.T) {

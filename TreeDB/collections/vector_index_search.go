@@ -8,6 +8,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // ErrVectorIndexSearchUnavailable reports that the requested vector index is
@@ -1544,6 +1545,7 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBufferCoverage(def Vector
 		}
 		var searchState vectorIndexNativeSearchState
 		var scalarWork nativeScalarSearchWork
+		workstats.Runtime.QueryAttempts.Add(1)
 		if scalarPlan == nil {
 			response.Results, searchState, err = index.searchGraphOnlyWithBuffer(opts.Query, opts.TopK, opts.EfSearch, buffer)
 		} else {
@@ -1562,6 +1564,7 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBufferCoverage(def Vector
 			response.Status.NativeRootLoaded = load.RootID != 0
 			response.Status.NativeRootBytes = load.BytesDisk
 			response.Status.RebuildNeeded = searchState.rebuildNeeded
+			workstats.Runtime.QueriesCompleted.Add(1)
 			response.Stats.SearchRouteNativeRuntime = 1
 			response.Stats.NativeRuntimeFullRebuilds = searchState.fullRebuilds
 			response.Stats.CandidateRows = uint64(searchState.liveDocs)

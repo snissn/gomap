@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // DiagnosticsSnapshot is the bounded, operator-only service snapshot exposed
 // by the optional diagnostics listener. It contains no document or vector data.
 type DiagnosticsSnapshot struct {
 	ContractVersion string                 `json:"contract_version"`
+	Work            workstats.Snapshot     `json:"work"`
 	ServiceClosed   bool                   `json:"service_closed"`
 	Database        map[string]string      `json:"database,omitempty"`
 	Collections     map[string]string      `json:"collections,omitempty"`
@@ -79,7 +81,7 @@ type diagnosticsActiveIndex struct {
 // DiagnosticsSnapshot copies existing stats without taking the service write
 // lock or touching collection mutation/persistence paths.
 func (s *Service) DiagnosticsSnapshot(databaseStats func() map[string]string) DiagnosticsSnapshot {
-	out := DiagnosticsSnapshot{ContractVersion: ContractVersion}
+	out := DiagnosticsSnapshot{ContractVersion: ContractVersion, Work: workstats.Read()}
 	if s == nil {
 		return out
 	}

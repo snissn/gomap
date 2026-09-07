@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 func TestServiceTypedInputOwnership(t *testing.T) {
@@ -61,6 +62,18 @@ func TestServiceTypedInputServingLifecycle(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("selected serving fixture requires Linux namespace authority and mmap")
 	}
+
+	beforeWork := workstats.Read()
+	defer func() {
+		after := workstats.Read()
+		if after.IndexedJSON != beforeWork.IndexedJSON || after.Runtime != beforeWork.Runtime || after.Scans.DenseExact != beforeWork.Scans.DenseExact {
+			t.Errorf("selected route performed forbidden work: before=%+v after=%+v", beforeWork, after)
+		}
+		if after.Typed.ScalarRows <= beforeWork.Typed.ScalarRows || after.Typed.TextRows <= beforeWork.Typed.TextRows || after.Typed.TextOldRows <= beforeWork.Typed.TextOldRows {
+			t.Errorf("typed producers did not observe lifecycle: before=%+v after=%+v", beforeWork.Typed, after.Typed)
+		}
+	}()
+
 	svc, db := newTestService(t)
 	defer db.Close()
 	defer svc.Close()

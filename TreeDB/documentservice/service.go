@@ -18,6 +18,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -731,7 +732,9 @@ func (s *Service) CountDocuments(ctx context.Context, index string, req CountDoc
 			return CountDocumentsResponse{}, err
 		}
 		count := 0
+		workstats.Scans.CountIDs.Starts.Add(1)
 		_, err = col.ScanDocumentIDsFunc(maxServiceScanDocuments, func([]byte) (bool, error) {
+			workstats.Scans.CountIDs.Rows.Add(1)
 			if err := ctxErr(ctx); err != nil {
 				return false, err
 			}
@@ -750,7 +753,7 @@ func (s *Service) CountDocuments(ctx context.Context, index string, req CountDoc
 		return CountDocumentsResponse{}, err
 	}
 	count := 0
-	err = s.scanDocuments(ctx, col, func(doc Document) error {
+	err = s.scanDocuments(ctx, col, &workstats.Scans.FilteredCount, func(doc Document) error {
 		ok, err := matchFilter(req.Filter, doc)
 		if err != nil || !ok {
 			return err
@@ -790,7 +793,7 @@ func (s *Service) FilterDocuments(ctx context.Context, index string, req FilterD
 		if scanBudget < maxServiceScanDocuments {
 			scanBudget++
 		}
-		truncated, err := s.scanDocumentsAfter(ctx, col, req.AfterID, scanBudget, func(doc Document) error {
+		truncated, err := s.scanDocumentsAfter(ctx, col, req.AfterID, scanBudget, &workstats.Scans.Cursor, func(doc Document) error {
 			lastScanned = doc.ID
 			ok, err := matchFilter(req.Filter, doc)
 			if err != nil || !ok {
@@ -843,7 +846,7 @@ func (s *Service) FilterDocuments(ctx context.Context, index string, req FilterD
 	}
 	var docs []Document
 	matched := 0
-	err = s.scanDocuments(ctx, col, func(doc Document) error {
+	err = s.scanDocuments(ctx, col, &workstats.Scans.FilteredRetrieval, func(doc Document) error {
 		ok, err := matchFilter(req.Filter, doc)
 		if err != nil || !ok {
 			return err
@@ -914,7 +917,7 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 	}
 	var candidates []scoredDocument
 	candidateCount := 0
-	err = s.scanDocuments(ctx, col, func(doc Document) error {
+	err = s.scanDocuments(ctx, col, &workstats.Scans.DenseExact, func(doc Document) error {
 		ok, err := matchFilter(req.Filter, doc)
 		if err != nil || !ok {
 			return err
@@ -2011,7 +2014,7 @@ func (s *Service) collectMatchingIDs(ctx context.Context, col *collections.Colle
 		return ids, err
 	}
 	var ids []string
-	err := s.scanDocuments(ctx, col, func(doc Document) error {
+	err := s.scanDocuments(ctx, col, &workstats.Scans.MutationMatch, func(doc Document) error {
 		ok, err := matchFilter(filter, doc)
 		if err != nil || !ok {
 			return err
@@ -2112,8 +2115,8 @@ func collectMatchingIDsFromScalarIndexes(ctx context.Context, col *collections.C
 	return out, true, nil
 }
 
-func (s *Service) scanDocuments(ctx context.Context, col *collections.Collection, fn func(Document) error) error {
-	_, err := s.scanDocumentsAfter(ctx, col, "", maxServiceScanDocuments, fn)
+func (s *Service) scanDocuments(ctx context.Context, col *collections.Collection, scan *workstats.ScanCounter, fn func(Document) error) error {
+	_, err := s.scanDocumentsAfter(ctx, col, "", maxServiceScanDocuments, scan, fn)
 	return err
 }
 
@@ -2162,7 +2165,7 @@ func (s *Service) getStoredDocument(ctx context.Context, col *collections.Collec
 	return doc, true, nil
 }
 
-func (s *Service) scanDocumentsAfter(ctx context.Context, col *collections.Collection, afterID string, maxDocuments int, fn func(Document) error) (bool, error) {
+func (s *Service) scanDocumentsAfter(ctx context.Context, col *collections.Collection, afterID string, maxDocuments int, scan *workstats.ScanCounter, fn func(Document) error) (bool, error) {
 	if err := ctxErr(ctx); err != nil {
 		return false, err
 	}
@@ -2177,7 +2180,9 @@ func (s *Service) scanDocumentsAfter(ctx context.Context, col *collections.Colle
 		return false, wrapServiceError(CodeIndexUnavailable, "document materializer unavailable", err)
 	}
 	defer func() { _ = materializer.Close() }()
+	scan.Starts.Add(1)
 	truncated, err := col.ScanDocumentsAfterFunc([]byte(afterID), maxDocuments, func(record collections.DocumentRecord) (bool, error) {
+		scan.Rows.Add(1)
 		if err := ctxErr(ctx); err != nil {
 			return false, err
 		}

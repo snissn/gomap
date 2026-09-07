@@ -18,6 +18,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -303,7 +304,12 @@ func TestCollectionCommandWALInsertBatchByIDReplayRecoversUnappliedFrame(t *test
 	}
 	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
 
+	beforeWork := workstats.Read()
 	reopen := openCollectionCommandWALDB(t, dir)
+	afterWork := workstats.Read()
+	if afterWork.Replay.LegacyCollectionFrames-beforeWork.Replay.LegacyCollectionFrames != 1 || afterWork.Replay.FramesApplied-beforeWork.Replay.FramesApplied != 1 {
+		t.Fatalf("legacy replay before=%+v after=%+v", beforeWork.Replay, afterWork.Replay)
+	}
 	defer func() { _ = reopen.Close() }()
 	col, err := NewCollectionManager(reopen).OpenCollection("users")
 	if err != nil {
