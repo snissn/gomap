@@ -721,7 +721,7 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	if t.base.ref.HeaderPageID != 0 && generationID <= t.base.generationID {
 		return nil, ErrGenerationParent
 	}
-	metadataStart, reservedMetadataCount, reusedMetadata := t.tryReusedMetadata(candidateID)
+	metadataStart, reservedMetadataCount, extents, reusedMetadata := t.tryReusedMetadata(candidateID)
 	// Page IDs are assigned while writing. Once materialization starts, success
 	// or failure consumes this transaction; retry must begin from the immutable
 	// base so a partial sink failure cannot retain unwritten page identities.
@@ -733,10 +733,6 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 		// no-COW transaction may share descendants, but must publish a new root.
 		t.root = cloneStateNode(t.root)
 	}
-	dataIDs := make([]uint64, 0, len(t.allocated))
-	for _, allocation := range t.allocated {
-		dataIDs = append(dataIDs, allocation.id)
-	}
 	// The target metadata extent includes the COW pages, the reservation chain,
 	// and the generation header. Its count does not change the number of
 	// normalized reservation extents, so compute the chain length first.
@@ -744,15 +740,20 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	if minimumMetadataStart == math.MaxUint64 && !reusedMetadata {
 		return nil, ErrNoAllocatablePage
 	}
-	extents, err := t.reservationExtents()
-	if err != nil {
-		return nil, err
+	var err error
+	dataIDs := make([]uint64, 0, len(t.allocated))
+	for _, allocation := range t.allocated {
+		dataIDs = append(dataIDs, allocation.id)
 	}
 	statePageCount := countUnmaterializedStatePages(t.root, 0)
 	if t.root.freeCount+t.root.retiredCount == 0 {
 		statePageCount = 1
 	}
 	if !reusedMetadata {
+		extents, err = t.reservationExtents()
+		if err != nil {
+			return nil, err
+		}
 		metadataStart, reservedMetadataCount, err = t.ledger.reserveTail(candidateID, minimumMetadataStart, statePageCount, dataIDs, extents)
 		if err != nil {
 			return nil, err

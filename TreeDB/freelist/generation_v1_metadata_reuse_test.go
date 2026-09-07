@@ -13,6 +13,138 @@ type overwritingMetadataSink4627 struct {
 	remaining int
 }
 
+type pagerFailureSink4627 struct {
+	p      *pager.Pager
+	writes int
+}
+
+func (s *pagerFailureSink4627) WritePage(id uint64, data []byte) error {
+	if s.writes == 1 {
+		return errors.New("injected failure after physical tail write")
+	}
+	if id >= s.p.PageCount() {
+		if err := s.p.Truncate(id + 1); err != nil {
+			return err
+		}
+	}
+	if err := s.p.Write(id, data); err != nil {
+		return err
+	}
+	s.writes++
+	return nil
+}
+
+func TestFreelistMetadataReuseAfterPhysicalTailFailure4627(t *testing.T) {
+	for _, gap := range []bool{false, true} {
+		name := "contiguous"
+		if gap {
+			name = "abandoned-earlier-reservation"
+		}
+		t.Run(name, func(t *testing.T) { testMetadataPhysicalTailFailure4627(t, gap) })
+	}
+}
+
+func testMetadataPhysicalTailFailure4627(t *testing.T, gap bool) {
+	path := filepath.Join(t.TempDir(), "index.db")
+	p, err := pager.Open(path, 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(512); err != nil {
+		t.Fatal(err)
+	}
+	var free []uint64
+	for id := uint64(2); id < 200; id++ {
+		free = append(free, id)
+	}
+	ledger := NewReservationLedger()
+	earlier := candidateIDFromString("earlier-unwritten-tail")
+	if gap {
+		if _, _, err := ledger.reserveTail(earlier, 512, 100, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	blocker := candidateIDFromString("occupy-holes")
+	if err := ledger.reserve(blocker, free); err != nil {
+		t.Fatal(err)
+	}
+	a := New(p, 0)
+	if err := a.EnableCOWV1(MustNewFreelistGenerationV1(1, 512, free, nil), ledger); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := NewReuseCapability(1, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &pagerFailureSink4627{p: p}
+	if _, err := a.PrepareCOWCandidateV1(2, 2, candidateIDFromString("tail-fails"), capability, 0, sink); err == nil {
+		t.Fatal("expected physical failure")
+	}
+	if sink.writes != 1 || p.PageCount() <= 512 {
+		t.Fatal("fixture did not extend physical pager")
+	}
+	if err := ledger.Abandon(blocker); err != nil {
+		t.Fatal(err)
+	}
+	if gap {
+		if err := ledger.Abandon(earlier); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prepared, err := a.PrepareCOWCandidateV1(3, 3, candidateIDFromString("reuse-only"), capability, 0, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := prepared.Candidate().Generation()
+	failedPhysicalEnd := p.PageCount()
+	t.Logf("physical pages=%d logical high-water=%d header=%d burned intervals=%d", p.PageCount(), g.HighWater(), g.GenerationRef().HeaderPageID, len(ledger.burnedTails))
+	// Exact existing compatibility publication seam in durable_root_runtime.go.
+	if err := p.Truncate(g.HighWater()); err != nil {
+		t.Fatalf("reuse-only publication after physical rollback: %v", err)
+	}
+	materializeAllocatorCOWCandidateForTest(t, p, prepared)
+	if err := p.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.PublishCOWCandidateV1(prepared, capability); err != nil {
+		t.Fatal(err)
+	}
+	if len(ledger.burnedTails) != 0 {
+		t.Fatal("publication stranded burned tail")
+	}
+	ref := prepared.Candidate().GenerationRef()
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	p, err = pager.Open(path, 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	loaded, err := LoadGenerationV1(p, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	covered := false
+	for _, extent := range loaded.record.Extents {
+		if extent.Kind == ReservationAbandonedAppend && extent.StartPageID <= 512 && extent.StartPageID+uint64(extent.Count) >= failedPhysicalEnd {
+			covered = true
+		}
+	}
+	if !covered {
+		t.Fatal("reopened generation lost failed physical output coverage")
+	}
+	next := NewFreelistTxn(loaded, NewReservationLedger())
+	candidate, err := next.MaterializeCandidate(4, 4, candidateIDFromString("reuse-resumes"), NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Generation().HighWater() != loaded.HighWater() || candidate.GenerationRef().HeaderPageID >= 512 {
+		t.Fatal("eligible reuse did not resume")
+	}
+}
+
 func (s *overwritingMetadataSink4627) WritePage(id uint64, data []byte) error {
 	if s.remaining == 0 {
 		return errors.New("injected physical write failure")
@@ -221,19 +353,19 @@ func TestFreelistMetadataReuseMaximumHighWater4627(t *testing.T) {
 func TestFreelistMetadataReuseAtomicClaim4627(t *testing.T) {
 	ledger := NewReservationLedger()
 	one, two := candidateIDFromString("one"), candidateIDFromString("two")
-	if ledger.claimReusedMetadata(one, 20, 4, []allocatedPage{{21, ReservationReusedData}}, nil) {
+	if ledger.claimReusedMetadata(one, 20, 4, 512, []allocatedPage{{21, ReservationReusedData}}, nil) {
 		t.Fatal("own data overlaps metadata")
 	}
-	if !ledger.claimReusedMetadata(one, 20, 4, nil, nil) {
+	if !ledger.claimReusedMetadata(one, 20, 4, 512, nil, nil) {
 		t.Fatal("first claim")
 	}
-	if ledger.claimReusedMetadata(two, 22, 4, nil, nil) {
+	if ledger.claimReusedMetadata(two, 22, 4, 512, nil, nil) {
 		t.Fatal("overlapping candidate")
 	}
 	if err := ledger.RollbackPreVisible(one); err != nil {
 		t.Fatal(err)
 	}
-	if !ledger.claimReusedMetadata(two, 22, 4, nil, nil) {
+	if !ledger.claimReusedMetadata(two, 22, 4, 512, nil, nil) {
 		t.Fatal("released interval unavailable")
 	}
 }
@@ -281,6 +413,141 @@ func TestFreelistMetadataReuseStagedAllocatorRollback4627(t *testing.T) {
 		t.Fatal("staged retry appended")
 	}
 	materializeAllocatorCOWCandidateForTest(t, p, prepared)
+}
+
+func TestFreelistMetadataReuseAuxiliaryClaimConflict4627(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(512); err != nil {
+		t.Fatal(err)
+	}
+	var free []uint64
+	for id := uint64(2); id < 200; id++ {
+		free = append(free, id)
+	}
+	ledger := NewReservationLedger()
+	a := New(p, 0)
+	if err := a.EnableCOWV1(MustNewFreelistGenerationV1(1, 512, free, nil), ledger); err != nil {
+		t.Fatal(err)
+	}
+	// Observe and stage the actual contiguous auxiliary selection before its
+	// eventual combined claim, then let another candidate win those pages.
+	aux, err := a.cow.txn.allocateContiguousRange(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := candidateIDFromString("aux-winner")
+	if err := ledger.reserve(other, aux); err != nil {
+		t.Fatal(err)
+	}
+	beforeTxn, beforeStats := a.cow.txn, a.Counters()
+	capability, err := NewReuseCapability(1, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := NewMemoryPageStoreV1()
+	_, err = a.PrepareCOWCandidateV1(2, 2, candidateIDFromString("aux-loser"), capability, 0, sink)
+	if !errors.Is(err, ErrPageReserved) {
+		t.Fatalf("claim conflict=%v", err)
+	}
+	if len(sink.Pages) != 0 {
+		t.Fatal("conflicting candidate wrote before rejection")
+	}
+	if a.cow.txn != beforeTxn || a.Counters() != beforeStats || a.cow.prepared != nil {
+		t.Fatal("allocator rollback lost original state")
+	}
+	for _, id := range aux {
+		if ledger.owners[id] != other {
+			t.Fatal("loser rollback released winner")
+		}
+	}
+}
+
+func TestFreelistMetadataTailPlacementAfterBurn4627(t *testing.T) {
+	t.Run("no-burn-unchanged", func(t *testing.T) {
+		ledger := NewReservationLedger()
+		start, count, err := ledger.reserveTail(candidateIDFromString("plain"), 512, 16, nil, nil)
+		if err != nil || start != 512 || count != 18 {
+			t.Fatalf("placement=%d+%d err=%v", start, count, err)
+		}
+	})
+	t.Run("live-tail-remains-owned", func(t *testing.T) {
+		ledger := NewReservationLedger()
+		first := candidateIDFromString("live")
+		start, count, err := ledger.reserveTail(first, 512, 16, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second := candidateIDFromString("later")
+		next, _, err := ledger.reserveTail(second, 512, 16, nil, nil)
+		if err != nil || next != start+count {
+			t.Fatalf("conflict placement=%d err=%v", next, err)
+		}
+		if err := ledger.RollbackPreVisible(second); err != nil {
+			t.Fatal(err)
+		}
+		if !ledger.Reserved(start) || ledger.candidates[first] == nil {
+			t.Fatal("lost live ownership")
+		}
+	})
+	t.Run("overflow-rejected-without-claim", func(t *testing.T) {
+		ledger := NewReservationLedger()
+		ledger.burnedTails = []reservationInterval{{start: math.MaxUint64 - 1, count: 3}}
+		id := candidateIDFromString("overflow")
+		if _, _, err := ledger.reserveTail(id, 512, 16, nil, nil); !errors.Is(err, ErrNoAllocatablePage) {
+			t.Fatalf("overflow=%v", err)
+		}
+		if ledger.candidates[id] != nil {
+			t.Fatal("invalid interval claimed candidate")
+		}
+	})
+}
+
+func TestFreelistMetadataReuseMixedDirtySiblingSizing4627(t *testing.T) {
+	var free []uint64
+	for id := uint64(2); id < 200; id++ {
+		free = append(free, id)
+	}
+	for id := uint64(512); id < 700; id++ {
+		free = append(free, id)
+	}
+	store := NewMemoryPageStoreV1()
+	base := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 1024, free, nil), 2, store)
+	txn := NewFreelistTxn(base, NewReservationLedger())
+	if err := txn.ReservePage(600); err != nil {
+		t.Fatal(err)
+	}
+	var visits uint64
+	selected := findFreeGE(txn.root, 0, 0, &visits)
+	if selected == nil || selected.chunkNo != 0 || selected.pageID == 0 {
+		t.Fatal("fixture needs materialized selected chunk beside dirty sibling")
+	}
+	candidate, err := txn.MaterializeCandidate(3, 3, candidateIDFromString("mixed-sibling"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.GenerationRef().HeaderPageID >= 256 {
+		t.Fatal("metadata did not use selected materialized chunk")
+	}
+	decoded, err := LoadGenerationV1(store, candidate.GenerationRef())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Allocatable(600) {
+		t.Fatal("dirty sibling allocation lost")
+	}
+	var emitted uint64
+	for _, extent := range candidate.ReservationRecord().Entries() {
+		if extent.Kind == ReservationTargetMetadata {
+			emitted += uint64(extent.Count)
+		}
+	}
+	if emitted != uint64(candidate.PageCount()) {
+		t.Fatalf("planned/emitted metadata=%d/%d", emitted, candidate.PageCount())
+	}
 }
 
 func TestFreelistMetadataReusePublishesBurnedCoverage4627(t *testing.T) {

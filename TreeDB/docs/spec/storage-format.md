@@ -2947,11 +2947,19 @@ after any page-sink failure, retry starts from the immutable base rather than
 reusing a partially assigned COW tree. Once the first metadata write is
 attempted, ordinary abandonment cannot release its reservation. Pre-visible
 failure or rollback can release reused metadata holes, which were already
-proven free in the immutable base; they are not burned append space. Tail
+certified free in the staged transaction by the reuse capability (they may
+still be retired in its immutable base); they are not burned append space. Tail
 failure converts the
 complete reserved tail into process-owned burned space; a later candidate skips
 it, records the skipped range as abandoned append space, and releases the
 process reservation only after that replacement record is durably published.
+If burned tail ownership extends beyond the transaction's high-water, reusable
+metadata placement is rejected under the ledger claim lock. The existing tail
+fallback starts beyond the checked ends of all ledger-owned burned intervals,
+including those beyond an abandoned earlier reservation. Its original minimum
+still determines the skipped-prefix coverage before publication; a retry
+cannot leave its logical extent behind a failed physical write merely because
+it found a low free interval. Eligible reuse resumes after coverage publishes.
 Replaced parent header,
 reservation-chain, chunk, and index pages are recorded with the parent's commit
 sequence and imported as retired state by the next candidate; they are not

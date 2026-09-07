@@ -27,9 +27,17 @@ func (t *FreelistTxn) reusableChunkRun(chunk *stateChunk) (start, count uint64) 
 
 // claimReusedMetadata atomically owns data plus the metadata interval. Even
 // this candidate's own data reservations cannot overlap its metadata.
-func (l *ReservationLedger) claimReusedMetadata(candidate CandidateIDV1, start, count uint64, data []allocatedPage, abandoned []ReservationExtentV1) bool {
+func (l *ReservationLedger) claimReusedMetadata(candidate CandidateIDV1, start, count, highWater uint64, data []allocatedPage, abandoned []ReservationExtentV1) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// A failed physical tail write may be ahead of this transaction. Let the
+	// existing tail reservation encode and discharge that abandoned coverage.
+	// Check under the claim lock, not merely during speculative placement.
+	for _, burned := range l.burnedTails {
+		if burned.start >= highWater || burned.count > highWater-burned.start {
+			return false
+		}
+	}
 	r := l.candidates[candidate]
 	if count == 0 || start < 2 || start+count < start || (r != nil && (r.state != CandidatePreVisible || r.tailReserved)) {
 		return false
@@ -63,7 +71,7 @@ func (l *ReservationLedger) claimReusedMetadata(candidate CandidateIDV1, start, 
 	return true
 }
 
-func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64, bool) {
+func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64, []ReservationExtentV1, bool) {
 	var lower uint64
 	for attempt := 0; attempt < metadataReuseChunkAttempts; attempt++ {
 		chunk := findFreeGE(t.root, lower, 0, &t.stats.PageVisits)
@@ -78,14 +86,30 @@ func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64
 		}
 		planned, err := t.cloneForAllocatorPrepare()
 		if err != nil {
-			return 0, 0, false
+			return 0, 0, nil, false
 		}
-		planned.mutate(chunk.chunkNo, func(c *stateChunk) { c.setFree(start&(freelistChunkSize-1), false) })
+		// Count the exact additional dirty path without cloning it for sizing.
+		// The selected chunk stays nonempty, so the eventual mutation neither
+		// creates nor removes a node; already dirty nodes are counted once.
+		statePages := countUnmaterializedStatePages(planned.root, 0)
+		for n, depth := planned.root, 0; n != nil; depth++ {
+			if n.pageID != 0 {
+				statePages++
+			}
+			if depth == chunkTrieDepth {
+				if n.chunk.pageID != 0 {
+					statePages++
+				}
+				break
+			}
+			n = n.child[chunkNibble(chunk.chunkNo, depth)]
+		}
+		planned.markReplacedPath(chunk.chunkNo)
 		extents, err := planned.reservationExtents()
 		if err != nil {
-			return 0, 0, false
+			return 0, 0, nil, false
 		}
-		count := countUnmaterializedStatePages(planned.root, 0) + reservationPagesForEntries(uint64(len(extents))+1) + 1
+		count := statePages + reservationPagesForEntries(uint64(len(extents))+1) + 1
 		if count > run || count >= chunk.freeCount() {
 			continue
 		}
@@ -94,13 +118,13 @@ func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64
 				c.setFree(id&(freelistChunkSize-1), false)
 			}
 		})
-		if !t.ledger.claimReusedMetadata(candidate, start, count, planned.allocated, planned.abandonedAppends) {
+		if !t.ledger.claimReusedMetadata(candidate, start, count, planned.highWater, planned.allocated, planned.abandonedAppends) {
 			continue
 		}
 		*t = *planned
-		return start, count, true
+		return start, count, extents, true
 	}
-	return 0, 0, false
+	return 0, 0, nil, false
 }
 
 func (t *FreelistTxn) allocateReusedRange(count int) ([]uint64, bool) {

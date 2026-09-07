@@ -405,6 +405,16 @@ func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, s
 		}
 	}
 	start := minimumStart
+	// A failed sink may have extended the physical pager beyond an unowned
+	// gap. Start beyond all burned output, not merely the first intersecting
+	// reservation. Keep minimumStart so the existing skipped-prefix record
+	// accounts for that gap and releases burned ownership on publication.
+	for _, burned := range l.burnedTails {
+		if burned.count > ^uint64(0)-burned.start {
+			return 0, 0, ErrNoAllocatablePage
+		}
+		start = max(start, burned.start+burned.count)
+	}
 	baseExtentCount := uint64(len(baseExtents))
 	var count uint64
 	for {
