@@ -2,10 +2,11 @@ package freelist
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -50,14 +51,14 @@ func (r ReservationRecordV1) Entries() []ReservationExtentV1 {
 
 func normalizeExtents(extents []ReservationExtentV1) ([]ReservationExtentV1, error) {
 	out := append([]ReservationExtentV1(nil), extents...)
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].StartPageID != out[j].StartPageID {
-			return out[i].StartPageID < out[j].StartPageID
+	slices.SortFunc(out, func(a, b ReservationExtentV1) int {
+		if a.StartPageID != b.StartPageID {
+			return cmp.Compare(a.StartPageID, b.StartPageID)
 		}
-		if out[i].Kind != out[j].Kind {
-			return out[i].Kind < out[j].Kind
+		if a.Kind != b.Kind {
+			return cmp.Compare(a.Kind, b.Kind)
 		}
-		return out[i].LastReachableCommitSeq < out[j].LastReachableCommitSeq
+		return cmp.Compare(a.LastReachableCommitSeq, b.LastReachableCommitSeq)
 	})
 	merged := out[:0]
 	for _, extent := range out {
@@ -278,6 +279,7 @@ type reservation struct {
 	ids                []uint64
 	tailReserved       bool
 	tailWriteAttempted bool
+	reusedMetadata     bool // interval is recovery-safe free space, not appended tail
 	tailStart          uint64
 	tailCount          uint64
 	abandonedCoverage  []reservationInterval
@@ -293,6 +295,8 @@ type ReservationLedger struct {
 	owners      map[uint64]CandidateIDV1
 	candidates  map[CandidateIDV1]*reservation
 	burnedTails []reservationInterval
+	// Placement hint only; free bits and atomic claims remain authority.
+	nextReuseChunk uint64
 }
 
 func NewReservationLedger() *ReservationLedger {
@@ -404,6 +408,16 @@ func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, s
 		}
 	}
 	start := minimumStart
+	// A failed sink may have extended the physical pager beyond an unowned
+	// gap. Start beyond all burned output, not merely the first intersecting
+	// reservation. Keep minimumStart so the existing skipped-prefix record
+	// accounts for that gap and releases burned ownership on publication.
+	for _, burned := range l.burnedTails {
+		if burned.count > ^uint64(0)-burned.start {
+			return 0, 0, ErrNoAllocatablePage
+		}
+		start = max(start, burned.start+burned.count)
+	}
 	baseExtentCount := uint64(len(baseExtents))
 	var count uint64
 	for {
@@ -568,7 +582,7 @@ func (l *ReservationLedger) Fail(c CandidateIDV1) error {
 	for _, id := range r.ids {
 		delete(l.owners, id)
 	}
-	if r.tailReserved && r.tailWriteAttempted {
+	if r.tailReserved && r.tailWriteAttempted && !r.reusedMetadata {
 		l.burnedTails = append(l.burnedTails, reservationInterval{start: r.tailStart, count: r.tailCount})
 	}
 	delete(l.candidates, c)
@@ -592,7 +606,7 @@ func (l *ReservationLedger) RollbackPreVisible(c CandidateIDV1) error {
 	for _, id := range r.ids {
 		delete(l.owners, id)
 	}
-	if r.tailReserved && r.tailWriteAttempted {
+	if r.tailReserved && r.tailWriteAttempted && !r.reusedMetadata {
 		l.burnedTails = append(l.burnedTails, reservationInterval{start: r.tailStart, count: r.tailCount})
 	}
 	delete(l.candidates, c)

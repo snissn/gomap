@@ -50,6 +50,19 @@ recovery state and therefore do not consume the capability:
 
 ## Failure and convergence contract
 
+Publication metadata and auxiliary output can reuse capability-certified
+contiguous free intervals (#4627); observing old auxiliary IDs allocated again
+is not by itself a retention leak. Placement examines at most four 256-page
+chunks and otherwise falls back to the existing tail path. It avoids repeatedly
+inspecting a fragmented prefix by advancing a transient ledger hint past the
+last observed chunk after a failed search; success keeps its chunk for locality.
+Updates apply only if the initial hint remains unchanged. Metadata
+and auxiliary searches share this hint; each attempt wraps at most once and
+does not repeat chunks. This changes placement only, never reclamation authority.
+This is not a full free-extent search, physical shrink, or a replacement
+for vacuum when fragmentation or oversized requests require it. Recovery and
+snapshot eligibility are unchanged.
+
 - Candidate enqueue, durable-meta rotation, system-root publication, index
   replacement, or publication-resource debt changes invalidate the capability.
 - An invalid capability returns `ErrRecoverableRootSetStale`; destructive paths

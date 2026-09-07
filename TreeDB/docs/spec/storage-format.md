@@ -2930,8 +2930,22 @@ successor links. Every decoder validates the pager ID/type/CRC, magic/version,
 canonical zero tail, chain order and cardinality, sorted entries, acyclic page
 graph, bounds below high-water, summary counts, and semantic digest.
 
-Freelist metadata pages are allocated only from the candidate-owned high-water
-tail. Before any metadata page is written, the process reservation ledger
+Freelist metadata first attempts a bounded reusable interval: at most four
+free radix chunks, each containing 256 page bits, are inspected. The interval
+search starts from a transient next-chunk hint in the existing reservation
+ledger, shared with auxiliary placement. A completed failed search proposes the
+successor of its last observed chunk; success keeps its chunk to preserve COW
+locality. The proposal applies only if the initial hint is unchanged. An attempt
+wraps at most once without revisiting a chunk. This avoids repeatedly starting
+at the same fragmented prefix. The hint is not persisted or rolled
+back and grants no ownership or reuse authority; reopening may reset placement.
+The selected interval
+must fit in one chunk and leave that chunk nonempty, so clearing the chosen
+bits cannot change the already computed COW path size. Ordered auxiliary
+publication pages use the same bounded contiguous-hole search. Fragmented,
+oversized, or contended requests retain the candidate-owned high-water tail
+fallback; this is not a complete free-extent search or a universal plateau
+guarantee. Before any metadata page is written, the process reservation ledger
 atomically owns the candidate's complete contiguous metadata range as well as
 its data-page allocations. A competing candidate skips an owned tail range;
 its durable reservation record classifies the skipped prefix as abandoned
@@ -2939,16 +2953,31 @@ append space instead of silently treating those page IDs as its own data or
 metadata. A candidate transaction is single-use once materialization begins:
 after any page-sink failure, retry starts from the immutable base rather than
 reusing a partially assigned COW tree. Once the first metadata write is
-attempted, ordinary abandonment cannot release that tail. Failure converts the
+attempted, ordinary abandonment cannot release its reservation. Pre-visible
+failure or rollback can release reused metadata holes, which were already
+certified free in the staged transaction by the reuse capability (they may
+still be retired in its immutable base); they are not burned append space. Tail
+failure converts the
 complete reserved tail into process-owned burned space; a later candidate skips
 it, records the skipped range as abandoned append space, and releases the
 process reservation only after that replacement record is durably published.
+If burned tail ownership extends beyond the transaction's high-water, reusable
+metadata placement is rejected under the ledger claim lock. The existing tail
+fallback starts beyond the checked ends of all ledger-owned burned intervals,
+including those beyond an abandoned earlier reservation. Its original minimum
+still determines the skipped-prefix coverage before publication; a retry
+cannot leave its logical extent behind a failed physical write merely because
+it found a low free interval. Eligible reuse resumes after coverage publishes.
 Replaced parent header,
 reservation-chain, chunk, and index pages are recorded with the parent's commit
 sequence and imported as retired state by the next candidate; they are not
-recursively inserted into the generation that replaces them. Physical
-file-length convergence is consequently a #3681 vacuum/rewrite property, not a
-claim of this high-water-only codec.
+recursively inserted into the generation that replaces them. Reused metadata
+is removed from the candidate free bitmap, encoded as target metadata rather
+than data, and sorted with the other reservation extents. Both generation and
+reference high-water retain the complete logical extent when placement is
+lower. Reuse avoids some extension; physical file shrink still requires the
+existing vacuum/rewrite mechanism. Issue #4627 additionally qualifies real
+durable-slot and process-failure integration before sustained-workload claims.
 
 Pages enter the free set only through an explicit recovery capability. Their
 `lastReachableCommitSeq` must be strictly before the oldest recoverable root,

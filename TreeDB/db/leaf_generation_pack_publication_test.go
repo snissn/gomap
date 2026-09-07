@@ -71,8 +71,24 @@ func TestLeafGenerationPackPublishAllocatorSharesCOWHighWater(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareCOWCandidateV1: %v", err)
 	}
-	if got := prepared.AuxiliaryPageIDs(); len(got) != 1 || got[0] <= 13 {
-		t.Fatalf("durable-root auxiliary pages=%v overlap rolled-back publish pages %v", got, publishedPages)
+	auxiliary := prepared.AuxiliaryPageIDs()
+	if len(auxiliary) != 1 {
+		t.Fatalf("durable-root auxiliary pages=%v want one page", auxiliary)
+	}
+	// Certified free pages below the tail are valid placements. Neither the
+	// auxiliary nor freelist metadata may overlap the retired publish pages.
+	for _, id := range publishedPages {
+		if auxiliary[0] == id {
+			t.Fatalf("durable-root auxiliary pages=%v overlap rolled-back publish pages %v", auxiliary, publishedPages)
+		}
+		for _, metadataID := range prepared.Candidate().DirtyPageIDs() {
+			if metadataID == id {
+				t.Fatalf("freelist metadata page=%d overlaps rolled-back publish pages %v", metadataID, publishedPages)
+			}
+		}
+		if generation := prepared.Candidate().Generation(); generation.HighWater() <= id || generation.Allocatable(id) {
+			t.Fatalf("rolled-back page %d lost high-water/retirement protection", id)
+		}
 	}
 	if got := prepared.Candidate().Generation().RetiredCount(); got != 2 {
 		t.Fatalf("retired unpublished pages=%d want 2", got)
