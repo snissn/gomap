@@ -74,7 +74,7 @@ func TestWorkStatsDiagnosticsLifetimeAndAvailability(t *testing.T) {
 	if before.PID != after.PID || before.OriginUnixNano != after.OriginUnixNano || before.Scope != "process" || before.OriginKind != "go_package_init" || before.OriginUnixNano <= 0 {
 		t.Fatalf("before=%+v after=%+v", before, after)
 	}
-	if before.IndexedJSON != after.IndexedJSON || before.Typed != after.Typed || before.Replay != after.Replay || before.Scans != after.Scans || before.Runtime != after.Runtime {
+	if before.IndexedJSON != after.IndexedJSON || before.Typed != after.Typed || before.Replay != after.Replay || before.Scans != after.Scans || before.Runtime != after.Runtime || before.RowIndexCache != after.RowIndexCache {
 		t.Fatal("diagnostics or manager creation recorded work")
 	}
 	// A real retained allocation advances runtime lifetime totals before JSON serialization.
@@ -101,7 +101,7 @@ func TestWorkStatsDiagnosticsLifetimeAndAvailability(t *testing.T) {
 	if err = json.Unmarshal(obj["work"], &work); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"schema_version", "scope", "pid", "origin_kind", "origin_unix_nano", "snapshot_unix_nano", "available", "indexed_json", "typed", "runtime", "replay", "scans", "memory"} {
+	for _, key := range []string{"schema_version", "scope", "pid", "origin_kind", "origin_unix_nano", "snapshot_unix_nano", "available", "indexed_json", "typed", "runtime", "replay", "scans", "memory", "row_index_cache"} {
 		if _, ok := work[key]; !ok {
 			t.Fatalf("missing %s", key)
 		}
@@ -113,6 +113,10 @@ func TestWorkStatsDiagnosticsLifetimeAndAvailability(t *testing.T) {
 	if decodedMemory != observed.Work.Memory {
 		t.Fatal("serialization did not preserve sampled memory totals")
 	}
+	var decodedCache workstats.RowIndexCacheStats
+	if err = json.Unmarshal(work["row_index_cache"], &decodedCache); err != nil || decodedCache != observed.Work.RowIndexCache || decodedCache.ByteLimit != 64<<20 {
+		t.Fatalf("cache serialization=%+v err=%v", decodedCache, err)
+	}
 	var available map[string]bool
 	if err = json.Unmarshal(work["available"], &available); err != nil {
 		t.Fatal(err)
@@ -123,7 +127,7 @@ func TestWorkStatsDiagnosticsLifetimeAndAvailability(t *testing.T) {
 			t.Fatalf("unimplemented group %s=%t present=%t", key, value, ok)
 		}
 	}
-	if !after.Available.IndexedJSON || !after.Available.Typed || !after.Available.Replay || !after.Available.RuntimeQuery || !after.Available.AttributedScans {
+	if !after.Available.IndexedJSON || !after.Available.Typed || !after.Available.Replay || !after.Available.RuntimeQuery || !after.Available.AttributedScans || !after.Available.RowIndexCache {
 		t.Fatalf("missing implemented producer: %+v", after.Available)
 	}
 }

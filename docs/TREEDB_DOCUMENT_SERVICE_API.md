@@ -55,6 +55,17 @@ boundaries before comparing related totals.
 | `replay` | Backend replay frame attempts, successful applications and failures, including panic failures. Typed payload frame attempts may contain a legacy projection; decoded typed rows and legacy-projection rows are separate. `legacy_collection_frames` covers legacy insert/update/source payload attempts; deletes have their own frame counter. These totals are observations, not durable coverage authority. |
 | `scans` | Dispatches and visited rows for service dense exact, filtered count, filtered retrieval, mutation matching, cursor, ID-only count, and collection exact search (full or index-restricted). Filtered count scans cover predicates outside declared scalar EQ/AND. Cursor/retrieval work is not automatically forbidden. Internal maintenance iterators are outside this group. |
 | `memory` | One `runtime.ReadMemStats` sample before diagnostics serialization: cumulative `total_alloc`/`mallocs` and current `heap_alloc`/`heap_sys`, plus `sys`/`num_gc`. Totals include startup and recovery. Per-operation allocation claims require an externally bounded phase and matching process lifetime. |
+| `row_index_cache` | Generic variable-row offset memo hits/misses, index build attempts, actual rows visited (including a failed prefix), evictions and oversized bypasses. `entries` and `retained_bytes` are current cache-owned metadata gauges; `byte_limit` is 64 MiB. Fixed/dense ID indexing is outside this group. |
+
+The row-offset memo extends the existing process checksum cache. Each request
+still strictly verifies asset bytes and validates the captured schema/header;
+`cached_verify` and `skip_checksums` do not use the memo. Immutable offsets can
+survive reader eviction, while each reader owns its own asset bytes and current
+snapshot. The 64 MiB ceiling covers cache-owned offset capacity and descriptors;
+it excludes slices still held by active readers after eviction, transient builds,
+fixed slot overhead and source mappings. It is separate from graph `StateBytes`.
+Oversized tables use ordinary uncached indexing. Typed GetMany benefits without
+graph admission. Graph/output/fold proof availability remains unchanged.
 
 Zero fields remain present. `available` describes instrumented producer groups,
 not acceptance of a workload. Graph work, output work and fold proof groups are

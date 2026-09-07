@@ -1565,14 +1565,17 @@ func TestColumnAssetReadIntegrityCachedVerifyRejectsRecreatedSegmentM1634(t *tes
 
 func resetColumnAssetVerifiedChecksumCacheForTest(t *testing.T) {
 	t.Helper()
-	columnAssetVerifiedChecksumCache.Lock()
-	columnAssetVerifiedChecksumCache.entries = [columnAssetVerifiedChecksumCacheSlots]columnAssetVerifiedChecksumEntry{}
-	columnAssetVerifiedChecksumCache.Unlock()
-	t.Cleanup(func() {
+	reset := func() {
 		columnAssetVerifiedChecksumCache.Lock()
 		columnAssetVerifiedChecksumCache.entries = [columnAssetVerifiedChecksumCacheSlots]columnAssetVerifiedChecksumEntry{}
+		columnAssetVerifiedChecksumCache.rowIndexBytes = 0
+		columnAssetVerifiedChecksumCache.rowIndexEntries = 0
+		columnAssetVerifiedChecksumCache.rowIndexEvictNext = 0
+		publishColumnAssetRowIndexResidencyLocked()
 		columnAssetVerifiedChecksumCache.Unlock()
-	})
+	}
+	reset()
+	t.Cleanup(reset)
 }
 
 func corruptColumnAssetPayloadByte(t *testing.T, root string, ref ColumnAssetRef) {

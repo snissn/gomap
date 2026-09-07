@@ -7,6 +7,8 @@ import (
 	"math"
 	"strconv"
 	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 const defaultColumnPhysicalRowReaderMaxDecodedBlocks = 4
@@ -413,15 +415,19 @@ func (r *columnPhysicalRowReader) loadBlock(rowRange columnPhysicalRowReaderRang
 			raw = dst
 		}
 	}
-	rowIndex, err := indexColumnPhysicalAssetReaderRows(raw, rowRange.version, rowRange.rowsOffset, rowRange.header, &r.view.Config)
+	header, version, rowsOffset, err := parseColumnPhysicalAssetScanHeader(raw, rowRange.ref, r.view.CollectionName, &r.view.Config, r.view.AssetRefs[assetOrdinal].Reason)
+	if err != nil {
+		return nil, fmt.Errorf("collections: physical column row reader header generation=%d part_id=%d: %w", rowRange.ref.Generation, rowRange.ref.PartID, err)
+	}
+	rowIndex, err := r.readCache.indexRows(raw, rowRange.ref, version, rowsOffset, header, &r.view.Config)
 	if err != nil {
 		return nil, fmt.Errorf("collections: physical column row reader index generation=%d part_id=%d: %w", rowRange.ref.Generation, rowRange.ref.PartID, err)
 	}
 	block := &columnPhysicalRowReaderBlock{
 		assetOrdinal: assetOrdinal,
 		raw:          raw,
-		version:      rowRange.version,
-		header:       rowRange.header,
+		version:      version,
+		header:       header,
 		rowOffsets:   rowIndex.offsets,
 		rowEncoding:  rowIndex.rowEncoding,
 		fixedIDWidth: rowIndex.fixedIDWidth,
@@ -612,7 +618,33 @@ func (r *columnPhysicalRowReader) decodeDenseIDRangeRowFromBlock(block *columnPh
 	}, nil
 }
 
+// The caller has parsed and validated the header against its captured schema.
+// Only a successful strict read of this exact ref can reuse structural offsets.
+func (c *columnPhysicalAssetReadCache) indexRows(raw []byte, ref ColumnAssetRef, version uint16, rowsOffset int, header columnPhysicalAssetScanHeader, cfg *ColumnStoreConfig) (columnPhysicalAssetReaderRowIndex, error) {
+	eligible := c != nil && c.hasVerifiedRowIndexKey && c.verifiedRowIndexRef == ref && c.readIntegrity == ColumnAssetReadIntegrityVerify && version < columnPhysicalAssetVersionV7
+	if c != nil {
+		c.hasVerifiedRowIndexKey = false
+	}
+	if eligible {
+		if memo := lookupColumnAssetRowIndex(c.verifiedRowIndexKey, version, rowsOffset, header); memo != nil {
+			return columnPhysicalAssetReaderRowIndex{offsets: memo.offsets}, nil
+		}
+	}
+	rowIndex, err := indexColumnPhysicalAssetReaderRows(raw, version, rowsOffset, header, cfg)
+	if err != nil || !eligible {
+		return rowIndex, err
+	}
+	memo := storeColumnAssetRowIndex(c.verifiedRowIndexKey, &columnAssetVerifiedRowIndex{version: version, rowsOffset: rowsOffset, schemaHash: header.SchemaHash, operation: header.Operation, offsets: rowIndex.offsets})
+	rowIndex.offsets = memo.offsets
+	return rowIndex, nil
+}
+
 func indexColumnPhysicalAssetReaderRows(raw []byte, version uint16, rowsOffset int, header columnPhysicalAssetScanHeader, cfg *ColumnStoreConfig) (columnPhysicalAssetReaderRowIndex, error) {
+	var visited uint64
+	if version < columnPhysicalAssetVersionV7 {
+		workstats.RowIndexCache.Builds.Add(1)
+		defer func() { workstats.RowIndexCache.RowsVisited.Add(visited) }()
+	}
 	if rowsOffset < 0 || rowsOffset > len(raw) {
 		return columnPhysicalAssetReaderRowIndex{}, fmt.Errorf("column physical asset invalid rows offset=%d len=%d", rowsOffset, len(raw))
 	}
@@ -622,6 +654,7 @@ func indexColumnPhysicalAssetReaderRows(raw []byte, version uint16, rowsOffset i
 	offsets := make([]int, header.RowCount)
 	cur := manifestCursor{raw: raw, pos: rowsOffset}
 	for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {
+		visited++
 		offsets[rowIdx] = cur.pos
 		_ = cur.bytesView()
 		deleted := false

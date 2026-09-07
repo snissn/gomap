@@ -5,6 +5,7 @@ import (
 	"context"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"testing"
 )
 
@@ -50,6 +51,19 @@ func TestTypedGetManyCapturedMetadataAndValues(t *testing.T) {
 	current, err := s.FetchTypedDocuments(ctx, info.Name, info.Generation, ids)
 	if err != nil || !bytes.Contains(current.Results[0].Document, []byte(`"new"`)) {
 		t.Fatalf("current=%+v %v", current, err)
+	}
+	// No graph Ensure/Build has occurred. Fresh ordinary service read views
+	// reuse immutable offsets while retaining current locator visibility.
+	beforeCache := workstats.Read().RowIndexCache
+	for range 3 {
+		again, err := s.FetchTypedDocuments(ctx, info.Name, info.Generation, ids)
+		if err != nil || !bytes.Equal(again.Results[0].Document, current.Results[0].Document) {
+			t.Fatalf("repeated fetch=%+v err=%v", again, err)
+		}
+	}
+	afterCache := s.DiagnosticsSnapshot(nil).Work.RowIndexCache
+	if afterCache.Builds != beforeCache.Builds || afterCache.Hits-beforeCache.Hits != 3 {
+		t.Fatalf("fresh ordinary fetch before=%+v after=%+v", beforeCache, afterCache)
 	}
 	if err := view.Close(); err != nil {
 		t.Fatal(err)

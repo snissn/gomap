@@ -58,6 +58,26 @@ var Runtime struct {
 	QueriesCompleted atomic.Uint64
 }
 
+// RowIndexCache observes the generic immutable row-offset memo. Residency is
+// cache-owned metadata only; live readers can retain evicted slices separately.
+var RowIndexCache struct {
+	Entries, RetainedBytes, ByteLimit atomic.Uint64
+	Hits, Misses, Builds, RowsVisited atomic.Uint64
+	Evictions, OversizedBypasses      atomic.Uint64
+}
+
+type RowIndexCacheStats struct {
+	Entries           uint64 `json:"entries"`
+	RetainedBytes     uint64 `json:"retained_bytes"`
+	ByteLimit         uint64 `json:"byte_limit"`
+	Hits              uint64 `json:"hits"`
+	Misses            uint64 `json:"misses"`
+	Builds            uint64 `json:"builds"`
+	RowsVisited       uint64 `json:"rows_visited"`
+	Evictions         uint64 `json:"evictions"`
+	OversizedBypasses uint64 `json:"oversized_bypasses"`
+}
+
 type RuntimeStats struct {
 	QueryAttempts    uint64 `json:"query_attempts"`
 	QueriesCompleted uint64 `json:"queries_completed"`
@@ -115,6 +135,7 @@ type Availability struct {
 	RuntimeQuery    bool `json:"runtime_query"`
 	Replay          bool `json:"replay"`
 	AttributedScans bool `json:"attributed_scans"`
+	RowIndexCache   bool `json:"row_index_cache"`
 	Graph           bool `json:"graph"`
 	Output          bool `json:"output"`
 	Fold            bool `json:"fold"`
@@ -132,23 +153,25 @@ type MemoryStats struct {
 	NumGC      uint32 `json:"num_gc"`
 }
 
-// Snapshot is a monotonic, nontransactional observation. Drain operations before
-// comparing related totals. A new process has a new origin; never subtract across
+// Snapshot is nontransactional: cumulative counters are monotonic, while memory
+// and cache residency gauges can decrease. Drain operations before comparing
+// related totals. A new process has a new origin; never subtract across
 // origins. The caller must independently bind PID to executable/start identity.
 type Snapshot struct {
-	Memory           MemoryStats      `json:"memory"`
-	SchemaVersion    string           `json:"schema_version"`
-	Scope            string           `json:"scope"`
-	PID              int              `json:"pid"`
-	OriginKind       string           `json:"origin_kind"`
-	OriginUnixNano   int64            `json:"origin_unix_nano"`
-	SnapshotUnixNano int64            `json:"snapshot_unix_nano"`
-	Available        Availability     `json:"available"`
-	IndexedJSON      IndexedJSONStats `json:"indexed_json"`
-	Typed            TypedStats       `json:"typed"`
-	Runtime          RuntimeStats     `json:"runtime"`
-	Replay           ReplayStats      `json:"replay"`
-	Scans            ScanWorkStats    `json:"scans"`
+	Memory           MemoryStats        `json:"memory"`
+	SchemaVersion    string             `json:"schema_version"`
+	Scope            string             `json:"scope"`
+	PID              int                `json:"pid"`
+	OriginKind       string             `json:"origin_kind"`
+	OriginUnixNano   int64              `json:"origin_unix_nano"`
+	SnapshotUnixNano int64              `json:"snapshot_unix_nano"`
+	Available        Availability       `json:"available"`
+	IndexedJSON      IndexedJSONStats   `json:"indexed_json"`
+	Typed            TypedStats         `json:"typed"`
+	Runtime          RuntimeStats       `json:"runtime"`
+	Replay           ReplayStats        `json:"replay"`
+	Scans            ScanWorkStats      `json:"scans"`
+	RowIndexCache    RowIndexCacheStats `json:"row_index_cache"`
 }
 
 func Read() Snapshot {
@@ -158,7 +181,12 @@ func Read() Snapshot {
 		Memory:        MemoryStats{TotalAlloc: mem.TotalAlloc, Mallocs: mem.Mallocs, HeapAlloc: mem.HeapAlloc, HeapSys: mem.HeapSys, Sys: mem.Sys, NumGC: mem.NumGC},
 		SchemaVersion: "treedb-work-v1", Scope: "process", PID: os.Getpid(),
 		OriginKind: "go_package_init", OriginUnixNano: origin.UnixNano(), SnapshotUnixNano: time.Now().UnixNano(),
-		Available: Availability{IndexedJSON: true, Typed: true, RuntimeQuery: true, Replay: true, AttributedScans: true},
+		Available: Availability{IndexedJSON: true, Typed: true, RuntimeQuery: true, Replay: true, AttributedScans: true, RowIndexCache: true},
+		RowIndexCache: RowIndexCacheStats{
+			Entries: RowIndexCache.Entries.Load(), RetainedBytes: RowIndexCache.RetainedBytes.Load(), ByteLimit: RowIndexCache.ByteLimit.Load(),
+			Hits: RowIndexCache.Hits.Load(), Misses: RowIndexCache.Misses.Load(), Builds: RowIndexCache.Builds.Load(), RowsVisited: RowIndexCache.RowsVisited.Load(),
+			Evictions: RowIndexCache.Evictions.Load(), OversizedBypasses: RowIndexCache.OversizedBypasses.Load(),
+		},
 		IndexedJSON: IndexedJSONStats{
 			ScalarRows:          IndexedJSON.ScalarRows.Load(),
 			TextRows:            IndexedJSON.TextRows.Load(),

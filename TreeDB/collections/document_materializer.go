@@ -898,7 +898,7 @@ func (v *CollectionReadView) loadPointRowBlock(view columnPhysicalScanSnapshotVi
 		return nil, fmt.Errorf("collections: document row point fetch header generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
 	}
 	header = cloneColumnPhysicalAssetScanHeader(header)
-	rowIndex, err := indexColumnPhysicalAssetReaderRows(raw, version, rowsOffset, header, &view.Config)
+	rowIndex, err := v.rowAssetReadCache.indexRows(raw, assetRef.Ref, version, rowsOffset, header, &view.Config)
 	if err != nil {
 		return nil, fmt.Errorf("collections: document row point fetch index generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
 	}
