@@ -294,8 +294,10 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertEqual(segments[1]["end"]["cpu_seconds"], 3.0)
 
     def test_restart_controller_uses_shutdown_endpoint_for_phase_and_aggregate(self) -> None:
-        baseline = {"captured": True, "rss_bytes": 10, "cpu_seconds": 1.0, "disk_bytes": 100}
-        shutdown_end = {"captured": True, "rss_bytes": 15, "cpu_seconds": 3.0, "disk_bytes": 140}
+        baseline = {"captured": True, "rss_bytes": 10, "cpu_seconds": 1.0, "disk_bytes": 100,
+                    "pid": 100, "linux_process_identity": "100:10"}
+        shutdown_end = {"captured": True, "rss_bytes": 15, "cpu_seconds": 3.0, "disk_bytes": 140,
+                        "pid": 100, "linux_process_identity": "100:10"}
 
         class Controller:
             pid = 100
@@ -1355,17 +1357,19 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with mock.patch.object(
                 common.subprocess, "run", return_value=SimpleNamespace(stdout="2048 00:02.5")
-            ):
+            ), mock.patch.object(common, "linux_process_identity", return_value="321:10"):
                 resource = common.server_resource_usage(321, Path(directory), "TreeDB")
         self.assertEqual(resource["availability"]["rss_bytes"], "TreeDB server PID 321")
         self.assertEqual(resource["availability"]["cpu_seconds"], "TreeDB server PID 321")
 
     def test_artifact_uses_shared_segment_delta_resource_semantics(self) -> None:
         baseline = {
+            "pid": 321, "linux_process_identity": "321:10",
             "captured": True, "rss_bytes": 100, "cpu_seconds": 1.0, "disk_bytes": 1000,
             "availability": {"rss_bytes": "test", "cpu_seconds": "test", "disk_bytes": "test"},
         }
         end = {
+            "pid": 321, "linux_process_identity": "321:10",
             "captured": True, "rss_bytes": 125, "cpu_seconds": 2.5, "disk_bytes": 1100,
             "availability": {"rss_bytes": "test", "cpu_seconds": "test", "disk_bytes": "test"},
         }

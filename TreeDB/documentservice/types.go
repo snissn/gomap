@@ -102,6 +102,7 @@ type QuantizedIndexInfo struct {
 
 // IndexInfo is returned by create/open and echoed by operation responses.
 type IndexInfo struct {
+	TypedInput           bool                            `json:"typed_input,omitempty"`
 	Name                 string                          `json:"name"`
 	Dimension            int                             `json:"dimension"`
 	Metric               Metric                          `json:"metric"`
@@ -135,6 +136,9 @@ type BenchmarkVectorIndexOptions struct {
 // CreateIndexRequest creates or opens a service index. Existing compatible
 // indexes are returned idempotently; incompatible existing collections fail.
 type CreateIndexRequest struct {
+	// TypedInput selects persisted declared ownership for indexed content,
+	// scalar strings and the FP32 embedding. It does not imply readiness.
+	TypedInput         bool                         `json:"typed_input,omitempty"`
 	Name               string                       `json:"name"`
 	Dimension          int                          `json:"dimension"`
 	Metric             Metric                       `json:"metric,omitempty"`

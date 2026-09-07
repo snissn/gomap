@@ -236,6 +236,18 @@ magnitude. Unsupported schemas fail closed rather than selecting a JSON fallback
 These restrictions apply to these typed-input methods, not to every storage
 type or generic collection API.
 
+`UpsertTypedBatch` uses the same carriers and atomically combines existing-ID
+replacement with missing-ID insertion through the existing source publisher.
+Its return count includes all previously present IDs, including unchanged rows.
+Equal retained bytes (after outer-whitespace trimming) and bitwise-equal typed
+values are omitted from both sides of the publication and replay payload. An
+all-unchanged batch appends no WAL frame and publishes no new version; a mixed
+batch uses one existing typed-source frame for changed/new rows. Uniqueness is
+checked against the final batch state, including swaps. Duplicate input IDs are
+rejected before publication. Ambiguous accepted errors must not be retried
+blindly. Explicit `ReplaceTypedSourceByID` keeps its existing replacement
+semantics; it does not acquire this no-op optimization implicitly.
+
 Separately registered ad-hoc runtime vector indexes are not `column_graph`
 metadata declarations. Their write-maintenance path may reconstruct documents;
 the typed-input APIs therefore reject that combination before admission rather

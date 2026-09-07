@@ -204,9 +204,17 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 		return IndexInfo{}, err
 	}
 	options := collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}
+	if req.TypedInput && vectorOptions.strategy != collections.VectorIndexStrategyColumnGraph {
+		return IndexInfo{}, serviceError(CodeInvalidRequest, "typed input requires column_graph")
+	}
 	if vectorOptions.strategy == collections.VectorIndexStrategyColumnGraph {
 		options.ColumnStore = serviceColumnStoreConfig(req.Dimension)
-		if len(scalarDeclarations) != 0 {
+		if req.TypedInput {
+			options.ColumnStore, err = serviceTypedInputConfig(req.Dimension, scalarDeclarations)
+			if err != nil {
+				return IndexInfo{}, err
+			}
+		} else if len(scalarDeclarations) != 0 {
 			// Retained-payload reconstruction is intentionally fail-closed for
 			// collection secondary indexes until their mutation paths consume
 			// reconstructed documents.
@@ -252,6 +260,9 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 		existing, openErr := s.manager.OpenCollection(req.Name)
 		switch {
 		case openErr == nil:
+			if req.TypedInput != serviceUsesTypedInput(existing.Meta()) {
+				return IndexInfo{}, serviceError(CodeConflict, "existing index has incompatible typed input ownership")
+			}
 			existingOptions := existing.Meta().Options
 			if existingOptions.ColumnStore != nil && existingOptions.ColumnStore.Enabled &&
 				(len(scalarDeclarations) == 0 || existingOptions.ColumnStore.RetainedPayload == collections.ColumnRetainedPayloadFull) {
@@ -417,6 +428,9 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 	}
 	if len(req.Documents) == 0 {
 		return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "documents must not be empty")
+	}
+	if info.TypedInput {
+		return UpsertDocumentsResponse{}, serviceError(CodeUnsupported, "typed input mutation admission is not yet available")
 	}
 	startPhase(&upsertStats.PrepareNanos)
 	prepareRetainedJSON := sharedCandidate && req.DeferVectorIndexRebuild && serviceUsesTrustedNonColumnRetainedJSON(col.MetaView())
@@ -1646,6 +1660,7 @@ func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
 	capabilities.KeywordMetadataFilters = len(scalarFields) > 0
 	capabilities.HybridMetadataFilters = len(scalarFields) > 0
 	return IndexInfo{
+		TypedInput:           serviceUsesTypedInput(meta),
 		Name:                 meta.Name,
 		Dimension:            vectorDef.Dimensions,
 		Metric:               metric,

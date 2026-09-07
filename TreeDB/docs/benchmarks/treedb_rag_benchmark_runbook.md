@@ -50,6 +50,10 @@ Do not use this small lane as a full-scale speedup claim.
 process-lifetime `VmHWM` through the captured segment endpoints. Per-process
 identity and source are retained. Measured peaks bind to each segment's service
 PID and Linux start-time identity, and to the ordered old/new restart boundary;
+CPU/RSS `ps` samples additionally require the same nonempty Linux PID/start-time
+identity before and after sampling. Deltas require matching PIDs and lifetime
+identities at both endpoints; unavailable or changed lifetimes are not valid
+zero-cost samples.
 Both baseline and end samples belong to that same lifetime; contradictory or
 unrelated process samples are rejected. It is not the sum of peaks, whole-host memory,
 or a phase-specific peak. The historical `rss_bytes` field retains its old

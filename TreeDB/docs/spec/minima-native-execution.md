@@ -14,6 +14,15 @@ workload using `benchmarks/vector_db_compare/minima_treedb_runner.py`, the
 Python `TreeDBClient`, and `TreeDB/documentservice`. Changing a Go benchmark
 helper or adding a native-wire operation alone does not change this path.
 
+M4's incremental service schema selection is `typed_input=true` on create.
+It persists the declared vector, scalar-string and indexed-content ownership
+defined below and is echoed from collection metadata by create/open, including across
+independent managers. Reopening with incompatible ownership is a conflict, not
+a migration or permission to use retained JSON. Selection is separate from
+process-local graph admission and is not a readiness claim. During the initial
+M4 schema checkpoint, selected service writes remain explicitly unsupported;
+the existing Python runner and transport are not yet activated for this schema.
+
 The frozen workload is filtered **dense** cosine search: eight-dimensional
 vectors, TopK 5, batches of 256, four readers and one writer, 32 warmup and
 1,024 timed searches. Scalar filters are equality on `meta.user_id` and
