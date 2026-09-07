@@ -19,9 +19,20 @@ It persists the declared vector, scalar-string and indexed-content ownership
 defined below and is echoed from collection metadata by create/open, including across
 independent managers. Reopening with incompatible ownership is a conflict, not
 a migration or permission to use retained JSON. Selection is separate from
-process-local graph admission and is not a readiness claim. During the initial
-M4 schema checkpoint, selected service writes remain explicitly unsupported;
-the existing Python runner and transport are not yet activated for this schema.
+process-local graph admission and is not a readiness claim. Selected HTTP writes
+use one `UpsertTypedBatch`, with declared carriers for indexed values and JSON
+serialization only for residual metadata. Initial load does not rebuild per batch.
+`optimize` with positive `column_graph_serving` options explicitly builds then
+admits; `column_graph_action=ensure` re-admits without rebuilding, while `fold`
+and `renew` use the existing admitted limits. Compatible create with those options
+re-admits after reopen. Limits are process-local and immutable until DB close.
+Missing admission fails closed at search; no request-side reconciliation or
+native_runtime/document-scan fallback is used. Public `route=ann` permits the
+typed engine's bounded exact filter plan; legacy document-scan `route=exact` is
+unsupported for selected input. Search and full fetch share the returned owner.
+The Python HTTP client exposes this lifecycle; the benchmark runner and framed
+typed transport are not yet activated. Prepared-route and delta-scored counters
+are actual engine counters, not complete indexed-JSON or final phase proof.
 
 The frozen workload is filtered **dense** cosine search: eight-dimensional
 vectors, TopK 5, batches of 256, four readers and one writer, 32 warmup and

@@ -98,10 +98,16 @@ class TreeDBClient:
         *,
         scalar_fields: Optional[ScalarFieldDeclarationsLike] = None,
         vector_index_options: Optional[VectorIndexOptionsLike] = None,
+        typed_input: bool = False,
+        column_graph_serving: Optional[Mapping[str, Any]] = None,
     ) -> IndexInfo:
         """Create or idempotently open a compatible document index."""
 
         request: dict[str, Any] = {"name": name, "dimension": dimension}
+        if typed_input:
+            request["typed_input"] = True
+        if column_graph_serving is not None:
+            request["column_graph_serving"] = dict(column_graph_serving)
         _add_optional_non_empty_string(request, "metric", metric, "metric")
         _add_scalar_fields(request, scalar_fields)
         _add_vector_index_options(request, vector_index_options)
@@ -115,6 +121,8 @@ class TreeDBClient:
         *,
         scalar_fields: Optional[ScalarFieldDeclarationsLike] = None,
         vector_index_options: Optional[VectorIndexOptionsLike] = None,
+        typed_input: bool = False,
+        column_graph_serving: Optional[Mapping[str, Any]] = None,
     ) -> IndexInfo:
         """Ensure a compatible index exists.
 
@@ -128,6 +136,8 @@ class TreeDBClient:
             metric,
             scalar_fields=scalar_fields,
             vector_index_options=vector_index_options,
+            typed_input=typed_input,
+            column_graph_serving=column_graph_serving,
         )
 
 
@@ -161,10 +171,16 @@ class TreeDBClient:
         *,
         vector_index_name: Optional[str] = None,
         expected_generation: Optional[int] = None,
+        column_graph_serving: Optional[Mapping[str, Any]] = None,
+        column_graph_action: Optional[str] = None,
     ) -> OptimizeIndexResponse:
         """Rebuild service vector assets after a benchmark load phase."""
 
         request: dict[str, Any] = {}
+        if column_graph_serving is not None:
+            request["column_graph_serving"] = dict(column_graph_serving)
+        if column_graph_action is not None:
+            request["column_graph_action"] = column_graph_action
         _add_expected_generation(request, expected_generation)
         if vector_index_name:
             request["vector_index_name"] = vector_index_name

@@ -1,6 +1,134 @@
 package documentservice
 
-import "github.com/snissn/gomap/TreeDB/collections"
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/collections"
+)
+
+func (s *Service) optimizeTypedInput(ctx context.Context, col *collections.Collection, info IndexInfo, req OptimizeIndexRequest) (OptimizeIndexResponse, error) {
+	started := time.Now()
+	action := req.ColumnGraphAction
+	if action == "" {
+		action = "build"
+	}
+	if (action == "build" || action == "ensure") && req.ColumnGraphServing == nil {
+		return OptimizeIndexResponse{}, serviceError(CodeInvalidRequest, "typed build/ensure requires positive column_graph_serving limits")
+	}
+	if action != "build" && action != "ensure" && action != "fold" && action != "renew" {
+		return OptimizeIndexResponse{}, serviceError(CodeInvalidRequest, "unknown column_graph_action")
+	}
+	if (action == "fold" || action == "renew") && req.ColumnGraphServing != nil {
+		return OptimizeIndexResponse{}, serviceError(CodeInvalidRequest, "fold/renew uses previously admitted limits")
+	}
+	var status collections.VectorIndexStatus
+	work := func() error {
+		var err error
+		switch action {
+		case "build":
+			status, err = col.RebuildVectorIndex(info.VectorIndexName)
+			if err == nil {
+				err = col.EnsureColumnGraphServing(ctx, info.VectorIndexName, *req.ColumnGraphServing)
+			}
+		case "ensure":
+			err = col.EnsureColumnGraphServing(ctx, info.VectorIndexName, *req.ColumnGraphServing)
+		case "fold":
+			err = col.FoldColumnGraphServing(ctx, info.VectorIndexName)
+		case "renew":
+			_, err = col.RenewColumnGraphServing(ctx, info.VectorIndexName)
+		}
+		return err
+	}
+	var err error
+	if s.deferredVectorBuildMaintenance != nil {
+		err = s.deferredVectorBuildMaintenance.Finalize(ctx, info.Name, info.Generation, s.manager.FlushAll, work)
+	} else {
+		_, err = s.manager.SyncForStandaloneWriteConcern()
+		if err == nil {
+			err = work()
+		}
+	}
+	if err != nil {
+		return OptimizeIndexResponse{}, mapCollectionMaintenanceError("typed graph "+action, err)
+	}
+	if action != "build" {
+		status, err = col.VectorIndexStatus(info.VectorIndexName)
+		if err != nil {
+			return OptimizeIndexResponse{}, mapCollectionMaintenanceError("typed graph status", err)
+		}
+	}
+	return OptimizeIndexResponse{Index: info, VectorIndexName: info.VectorIndexName, Status: vectorIndexMaintenanceStatus(status), Timing: OptimizeIndexTiming{TotalNanos: time.Since(started).Nanoseconds()}}, nil
+}
+
+func (s *Service) upsertTypedDocuments(ctx context.Context, col *collections.Collection, info IndexInfo, req UpsertDocumentsRequest) (UpsertDocumentsResponse, error) {
+	names := make([]string, len(req.Documents))
+	for i := range req.Documents {
+		names[i] = req.Documents[i].ID
+	}
+	if _, err := validateDocumentIDs(names); err != nil {
+		return UpsertDocumentsResponse{}, err
+	}
+	ids := make([][]byte, len(names))
+	retained := make([][]byte, len(names))
+	columns := make([]collections.TypedColumnBatch, 2+len(info.ScalarFields))
+	columns[0] = collections.TypedColumnBatch{Name: defaultEmbeddingField, Float32Vectors: make([][]float32, len(names))}
+	columns[1] = collections.TypedColumnBatch{Name: defaultTextField, Strings: make([]string, len(names))}
+	for j, field := range info.ScalarFields {
+		columns[j+2] = collections.TypedColumnBatch{Name: field.Field, Strings: make([]string, len(names))}
+	}
+	compact := 0
+	for i, doc := range req.Documents {
+		if err := ctxErr(ctx); err != nil {
+			return UpsertDocumentsResponse{}, err
+		}
+		encoded, err := normalizeDocumentEmbedding(&doc, i)
+		if err != nil {
+			return UpsertDocumentsResponse{}, err
+		}
+		if encoded {
+			compact++
+		}
+		if err := validateEmbedding(fmt.Sprintf("documents[%d].embedding", i), doc.Embedding, info.Dimension, info.Metric); err != nil {
+			return UpsertDocumentsResponse{}, err
+		}
+		ids[i] = []byte(doc.ID)
+		columns[0].Float32Vectors[i] = doc.Embedding
+		columns[1].Strings[i] = doc.Content
+		residual := cloneMeta(doc.Meta)
+		for j, field := range info.ScalarFields {
+			value, ok := lookupFilterField(doc, field.Field)
+			str, stringOK := value.(string)
+			if !ok || !stringOK {
+				return UpsertDocumentsResponse{}, serviceErrorf(CodeInvalidRequest, "documents[%d].%s must be a string", i, field.Field)
+			}
+			columns[j+2].Strings[i] = str
+			path := strings.Split(strings.TrimPrefix(field.Field, "meta."), ".")
+			parent := residual
+			for _, part := range path[:len(path)-1] {
+				parent, _ = parent[part].(map[string]any)
+			}
+			delete(parent, path[len(path)-1])
+		}
+		// Only flexible residual payload is serialized; indexed values stay in
+		// declared carriers and are never extracted from this JSON by the planner.
+		retained[i], err = json.Marshal(struct {
+			ID   string         `json:"id"`
+			Meta map[string]any `json:"meta,omitempty"`
+		}{doc.ID, residual})
+		if err != nil {
+			return UpsertDocumentsResponse{}, wrapServiceError(CodeInvalidRequest, "retained metadata is not JSON-serializable", err)
+		}
+	}
+	updated, err := col.UpsertTypedBatch(ids, retained, columns)
+	if err != nil {
+		return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "typed upsert failed", err)
+	}
+	return UpsertDocumentsResponse{Index: info, Upserted: len(ids), Inserted: len(ids) - updated, Updated: updated, IDs: names, CompactEmbeddings: compact}, nil
+}
 
 // The schema, not a process-local flag, identifies selected typed input after
 // reopen. Operational graph admission remains a separate lifecycle action.

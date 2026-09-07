@@ -158,6 +158,9 @@ func serviceClosedError() error {
 
 // CreateIndex creates or opens a compatible document service index.
 func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (IndexInfo, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if s == nil {
 		return IndexInfo{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
 	}
@@ -168,7 +171,21 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 			return IndexInfo{}, err
 		}
 	}
-	return s.createIndexLocked(ctx, req)
+	if req.ColumnGraphServing != nil && !req.TypedInput {
+		return IndexInfo{}, serviceError(CodeInvalidRequest, "column_graph_serving requires typed_input")
+	}
+	info, err := s.createIndexLocked(ctx, req)
+	if err != nil || req.ColumnGraphServing == nil {
+		return info, err
+	}
+	col, _, err := s.openIndex(ctx, req.Name, 0)
+	if err == nil {
+		err = col.EnsureColumnGraphServing(ctx, info.VectorIndexName, *req.ColumnGraphServing)
+	}
+	if err != nil {
+		return IndexInfo{}, mapVectorIndexSearchError("ensure typed graph serving", err)
+	}
+	return info, nil
 }
 
 func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest) (IndexInfo, error) {
@@ -265,7 +282,7 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 			}
 			existingOptions := existing.Meta().Options
 			if existingOptions.ColumnStore != nil && existingOptions.ColumnStore.Enabled &&
-				(len(scalarDeclarations) == 0 || existingOptions.ColumnStore.RetainedPayload == collections.ColumnRetainedPayloadFull) {
+				(req.TypedInput || len(scalarDeclarations) == 0 || existingOptions.ColumnStore.RetainedPayload == collections.ColumnRetainedPayloadFull) {
 				meta.Options.ColumnStore = existingOptions.ColumnStore
 			}
 			meta.Options.DisableBufferedIndexedAsyncFlush = existingOptions.DisableBufferedIndexedAsyncFlush
@@ -430,7 +447,7 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 		return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "documents must not be empty")
 	}
 	if info.TypedInput {
-		return UpsertDocumentsResponse{}, serviceError(CodeUnsupported, "typed input mutation admission is not yet available")
+		return s.upsertTypedDocuments(ctx, col, info, req)
 	}
 	startPhase(&upsertStats.PrepareNanos)
 	prepareRetainedJSON := sharedCandidate && req.DeferVectorIndexRebuild && serviceUsesTrustedNonColumnRetainedJSON(col.MetaView())
@@ -944,6 +961,13 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 // index declares a compatible no-document vector route, including declared
 // scalar filters on native_runtime, and exact otherwise.
 func resolveDenseSearchRoute(req DenseVectorSearchRequest, info IndexInfo) (Route, error) {
+	if info.TypedInput {
+		route := Route(strings.TrimSpace(strings.ToLower(string(req.Route))))
+		if route == "" || route == RouteAnn {
+			return RouteAnn, nil
+		}
+		return "", serviceError(CodeUnsupported, "typed input requires the admitted graph route; document-scan exact is unavailable")
+	}
 	switch Route(strings.TrimSpace(strings.ToLower(string(req.Route)))) {
 	case "":
 		if info.Capabilities.NoDocumentVectorSearch &&
@@ -1064,6 +1088,12 @@ func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeI
 	}
 	if vectorIndexName != info.VectorIndexName {
 		return OptimizeIndexResponse{}, serviceErrorf(CodeInvalidRequest, "unsupported vector_index_name %q", req.VectorIndexName)
+	}
+	if info.TypedInput {
+		return s.optimizeTypedInput(ctx, col, info, req)
+	}
+	if req.ColumnGraphServing != nil || req.ColumnGraphAction != "" {
+		return OptimizeIndexResponse{}, serviceError(CodeInvalidRequest, "typed graph lifecycle requires typed_input")
 	}
 
 	var maintenance VectorIndexMaintenanceStatus

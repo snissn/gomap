@@ -281,6 +281,30 @@ without partial ranking or a local/primary document scan. Truncation raises
 expose lookup count, per-lookup and aggregate bounds, input IDs, intersection
 steps, and final IDs. The client never broadens a filter into a local scan.
 
+## Selected typed column graph lifecycle
+
+`create_index` / `ensure_index` accept `typed_input=True` together with
+`vector_index_options={"strategy": "column_graph"}` and declared string scalar
+fields. Indexed content, scalar strings and FP32 vectors use typed ownership;
+undeclared metadata remains flexible residual JSON. The selected flag is echoed
+in `IndexInfo.extra["typed_input"]` and checked against persisted schema.
+
+Bulk `upsert_documents` uses one mixed typed batch, including unchanged existing
+IDs in the updated count without rewriting their values. It does not implicitly
+build a graph. Call `optimize_index(..., column_graph_serving=limits)` after load:
+`limits` contains the explicit positive `ColumnGraphServingOptions` groups from
+the TreeDB typed-vector guide (`Publication`, `Owners`, `CandidateOutput`,
+`Maintenance`, `Filter`, `FoldRows`, `SearchCandidates`). No unbounded defaults
+are supplied. Later use `column_graph_action="fold"` or `"renew"`; after reopen
+use `ensure_index(..., typed_input=True, column_graph_serving=limits)` or optimize
+with action `"ensure"` and the same limits. Ensure does not rebuild.
+
+Selected `query_by_embedding(..., route="ann")` supports declared scalar filters
+and full payload fetch under one read owner. A bounded typed exact filter plan
+is valid on that route; legacy document-scan `route="exact"` is not. Search before
+admission fails closed. This HTTP capability is not yet the native Minima runner
+route or a completed zero-JSON/performance qualification.
+
 ## Error mapping
 
 Service error envelopes are mapped to typed exceptions:

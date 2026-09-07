@@ -136,6 +136,7 @@ type BenchmarkVectorIndexOptions struct {
 // CreateIndexRequest creates or opens a service index. Existing compatible
 // indexes are returned idempotently; incompatible existing collections fail.
 type CreateIndexRequest struct {
+	ColumnGraphServing *collections.ColumnGraphServingOptions `json:"column_graph_serving,omitempty"`
 	// TypedInput selects persisted declared ownership for indexed content,
 	// scalar strings and the FP32 embedding. It does not imply readiness.
 	TypedInput         bool                         `json:"typed_input,omitempty"`
@@ -229,6 +230,8 @@ type DenseVectorSearchRequest struct {
 }
 
 type DenseVectorSearchResponse struct {
+	ColumnGraphPreparedSearch               uint64                             `json:"column_graph_prepared_search,omitempty"`
+	ColumnGraphDeltaScored                  uint64                             `json:"column_graph_delta_scored,omitempty"`
 	Index                                   IndexInfo                          `json:"index"`
 	Documents                               []Document                         `json:"documents"`
 	Metric                                  Metric                             `json:"metric"`
@@ -295,6 +298,9 @@ type ResetIndexResponse struct {
 
 // OptimizeIndexRequest rebuilds service vector assets after benchmark load.
 type OptimizeIndexRequest struct {
+	ColumnGraphServing *collections.ColumnGraphServingOptions `json:"column_graph_serving,omitempty"`
+	// Selected typed lifecycle: build (default), ensure, fold, or renew.
+	ColumnGraphAction  string `json:"column_graph_action,omitempty"`
 	ExpectedGeneration uint64 `json:"expected_generation,omitempty"`
 	VectorIndexName    string `json:"vector_index_name,omitempty"`
 }
