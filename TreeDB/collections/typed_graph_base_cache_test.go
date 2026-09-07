@@ -8,6 +8,7 @@ import (
 )
 
 func TestTypedGraphCapturedBaseCache(t *testing.T) {
+	requireTypedGraphPreparedHolderTest(t)
 	col, fixture, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 1024)
 	if err := fixture.Close(); err != nil {
 		t.Fatal(err)
@@ -128,6 +129,7 @@ func checkTypedGraphCapturedBacking(t testing.TB, r *typedGraphCapturedBaseResou
 }
 
 func TestTypedGraphCapturedBaseCacheCrossManagerAndFailure(t *testing.T) {
+	requireTypedGraphPreparedHolderTest(t)
 	col, fixture, _, _, _, _ := openTypedGraphQualityFixture(t, 128)
 	if err := fixture.Close(); err != nil {
 		t.Fatal(err)
@@ -184,6 +186,7 @@ func TestTypedGraphCapturedBaseCacheCrossManagerAndFailure(t *testing.T) {
 }
 
 func TestTypedGraphCapturedBaseCacheConcurrentAndBudget(t *testing.T) {
+	requireTypedGraphPreparedHolderTest(t)
 	col, fixture, _, _, _, _ := openTypedGraphQualityFixture(t, 1024)
 	if err := fixture.Close(); err != nil {
 		t.Fatal(err)

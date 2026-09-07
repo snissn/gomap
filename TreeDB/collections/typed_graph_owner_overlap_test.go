@@ -10,7 +10,15 @@ func typedGraphOverlapLimits() typedGraphReadOwnerLimits {
 	return typedGraphReadOwnerLimits{Owners: 4, States: 4, StateBytes: 16 << 20, AssetBytes: 64 << 20, Cold: typedGraphColdLimits{ManifestRecords: 4096, ManifestBytes: 4 << 20, AssetBytes: 32 << 20, DecodedTermBytes: 32 << 20}}
 }
 
+func requireTypedGraphPreparedHolderTest(t testing.TB) {
+	t.Helper()
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("captured prepared holder requires mmap_direct support")
+	}
+}
+
 func TestTypedGraphReadOwnerPreparedOverlap(t *testing.T) {
+	requireTypedGraphPreparedHolderTest(t)
 	col, fixtureBase, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 1024)
 	if err := fixtureBase.Close(); err != nil {
 		t.Fatal(err)

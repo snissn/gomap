@@ -10,6 +10,7 @@ import (
 )
 
 func TestTypedGraphPublicEmptyLifecycle(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	for _, degree := range []int{2, 16} {
 		t.Run(fmt.Sprintf("M%d", degree), func(t *testing.T) {
 			meta := typedMinimaCollectionMeta()
@@ -129,6 +130,7 @@ func TestTypedGraphPublicEmptyLifecycle(t *testing.T) {
 }
 
 func TestTypedGraphPublicEmptyFoldLateKeeper(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	col, base, ids, _, _, _ := openTypedGraphQualityFixture(t, 8)
 	defer col.db.Close()
 	if err := base.Close(); err != nil {

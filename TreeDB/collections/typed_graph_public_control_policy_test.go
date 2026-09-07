@@ -10,6 +10,7 @@ import (
 )
 
 func TestTypedGraphPublicFoldControlRootPolicy(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	for _, policy := range []RootStoragePolicy{RootStorageDefault, RootStorageFast, RootStorageCompressed} {
 		t.Run(fmt.Sprintf("policy_%s", policy), func(t *testing.T) {
 			openOpts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())

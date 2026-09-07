@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestTypedGraphReadOwnerPublishedSuffix(t *testing.T) {
@@ -393,7 +394,11 @@ func TestTypedGraphReadOwnerReopenRetirementAndLimits(t *testing.T) {
 		}
 		write("after-cutover")
 	}
-	if _, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{}); err != nil {
+	if stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{}); !rootpublication.StableRelativeNamespaceSupported() {
+		if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || stats.SegmentsDeleted != 0 {
+			t.Fatalf("unsupported destructive GC: %+v err=%v", stats, err)
+		}
+	} else if err != nil {
 		t.Fatal(err)
 	}
 	fetched, err := first.overlay.current.FetchDocumentsByID(ids[:1], DocumentFetchOptions{})

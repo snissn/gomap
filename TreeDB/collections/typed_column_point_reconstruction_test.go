@@ -9,6 +9,7 @@ import (
 )
 
 func TestTypedColumnPointFetchDoesNotExpandFP32Part(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	for _, rows := range []int{128, 1024} {
 		t.Run(fmt.Sprint(rows), func(t *testing.T) {
 			col, base, _, _, columns, _ := openTypedGraphQualityFixture(t, rows)
@@ -150,9 +151,6 @@ func TestTypedColumnPointFP32OwnershipAndBounds(t *testing.T) {
 func TestTypedColumnPointReadAtRetainsVectorsAcrossGenerations(t *testing.T) {
 	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 128)
 	defer base.Close()
-	if err := col.EnsureColumnGraphServing(context.Background(), base.indexName, typedGraphPublicTestOptions()); err != nil {
-		t.Fatal(err)
-	}
 	changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{9, 8, 7, 6, 5, 4, 3, 2}}}, {Name: "content", Strings: []string{"replaced"}}, {Name: "user", Strings: []string{"new"}}, {Name: "path", Strings: []string{"new"}}}
 	if _, err := col.ReplaceTypedBatch(ids[:1], retained[:1], changed); err != nil {
 		t.Fatal(err)

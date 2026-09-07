@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestTypedGraphFoldProcessCut(t *testing.T) {
@@ -190,7 +192,11 @@ func TestTypedGraphFoldProcessCut(t *testing.T) {
 			if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 128, Tombstones: 128, ValueSlots: 512, OwnedBytes: 8 << 20}, limits.Cold); err != nil {
 				t.Fatal(err)
 			}
-			if maintenance, err := col.renewTypedGraphWorkEpoch(context.Background(), typedGraphTestWorkEpochLimits()); err != nil {
+			if maintenance, err := col.renewTypedGraphWorkEpoch(context.Background(), typedGraphTestWorkEpochLimits()); !rootpublication.StableRelativeNamespaceSupported() {
+				if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || maintenance.Columns.SegmentsDeleted != 0 {
+					t.Fatalf("unsupported destructive renewal: %v; columns=%+v", err, maintenance.Columns)
+				}
+			} else if err != nil {
 				t.Fatalf("post-process-loss renewal: %v; columns=%+v", err, maintenance.Columns)
 			}
 			owner, err := col.openTypedGraphReadOwner(limits)

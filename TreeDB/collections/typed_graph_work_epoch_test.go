@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func typedGraphTestWorkEpochLimits() typedGraphWorkEpochLimits {
@@ -36,6 +37,7 @@ func TestTypedGraphWorkEpochRecoverableManifestBudget(t *testing.T) {
 }
 
 func TestTypedGraphWorkEpochRepeatedMaintenance(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 32)
 	if err := base.Close(); err != nil {
 		t.Fatal(err)
@@ -285,12 +287,17 @@ func TestTypedGraphWorkEpochPinnedPressure(t *testing.T) {
 	if err := owner.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := col.renewTypedGraphWorkEpoch(context.Background(), limits); err != nil {
+	if stats, err := col.renewTypedGraphWorkEpoch(context.Background(), limits); !rootpublication.StableRelativeNamespaceSupported() {
+		if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || stats.Columns.SegmentsDeleted != 0 || coord.typedGraphCandidateBytes != debt || coord.typedGraphWorkEpoch != 1 {
+			t.Fatalf("unsupported renewal changed debt/epoch or deleted assets: %+v err=%v", stats, err)
+		}
+	} else if err != nil {
 		t.Fatalf("released owner renewal: %v", err)
 	}
 }
 
 func TestTypedGraphWorkEpochCleanupFailure(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	col, base, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
 	if err := base.Close(); err != nil {
 		t.Fatal(err)
@@ -339,6 +346,7 @@ func TestTypedGraphWorkEpochCleanupFailure(t *testing.T) {
 }
 
 func TestTypedGraphWorkEpochOldOwnerRetainsCandidates(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	col, base, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
 	if err := base.Close(); err != nil {
 		t.Fatal(err)

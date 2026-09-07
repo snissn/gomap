@@ -7,6 +7,7 @@ import (
 )
 
 func TestTypedGraphRetiredOwnerCharge(t *testing.T) {
+	requireTypedGraphPreparedHolderTest(t)
 	for _, rows := range []int{128, 1024} {
 		t.Run(strconv.Itoa(rows), func(t *testing.T) { testTypedGraphRetiredOwnerCharge(t, rows) })
 	}

@@ -17,6 +17,7 @@ import (
 // The pause is after the old captured holder exists and its snapshot/barrier
 // have closed, but before it is installed in this handle's cache.
 func TestTypedGraphPublicEnsureStaleCapturedKeeper(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
 	dir, name, index := col.db.Dir(), col.Name(), base.indexName
 	if err := base.Close(); err != nil {
@@ -131,7 +132,43 @@ func typedGraphPublicTestOptions() ColumnGraphServingOptions {
 	return opts
 }
 
+func requireTypedGraphPublicServingTest(t testing.TB) {
+	t.Helper()
+	requireTypedGraphPreparedHolderTest(t)
+	requireColumnAssetExactDestructiveGCTest(t)
+}
+
+func TestTypedGraphPublicUnsupportedPreparedAdmission(t *testing.T) {
+	if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("exercises hosts without mmap_direct prepared holders")
+	}
+	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
+	defer base.Close()
+	if err := col.EnsureColumnGraphServing(context.Background(), base.indexName, typedGraphPublicTestOptions()); !errors.Is(err, errColumnVectorGraphSharedPreparedSearchNotEligible) {
+		t.Fatalf("unsupported prepared admission: %v", err)
+	}
+	coord := col.collectionSchemaCoordinator()
+	if state := coord.typedPublication.Load(); state != nil && state.servingAdmitted {
+		t.Fatal("unsupported prepared holder admitted serving")
+	}
+	seq, system := dbCommitSeqAndSystemRoot(col.db)
+	changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: []string{"reject"}}, {Name: "user", Strings: []string{"reject"}}, {Name: "path", Strings: []string{"reject"}}}
+	if _, err := col.ReplaceTypedBatch(ids[:1], retained[:1], changed); !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		t.Fatalf("unsupported admission allowed mutation: %v", err)
+	}
+	if next, root := dbCommitSeqAndSystemRoot(col.db); next != seq || root != system {
+		t.Fatal("rejected write changed authority")
+	}
+	account := &coord.typedGraphOwners
+	account.Lock()
+	defer account.Unlock()
+	if account.baseOwners != 0 || account.baseAssetBytes != 0 || account.baseDescriptorBytes != 0 || account.baseBackingBytes != 0 {
+		t.Fatal("unsupported prepared holder retained accounting")
+	}
+}
+
 func TestTypedGraphPublicFoldPublicationAvailability(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
 	if err := col.EnsureColumnGraphServing(context.Background(), base.indexName, typedGraphPublicTestOptions()); err != nil {
@@ -194,6 +231,7 @@ func TestTypedGraphPublicFoldPublicationAvailability(t *testing.T) {
 }
 
 func TestTypedGraphPublicFoldPostInstallAckCrash(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	const childEnv = "GOMAP_PUBLIC_FOLD_POST_INSTALL_ACK_DIR"
 	if dir := os.Getenv(childEnv); dir != "" {
 		var indexedJSON atomic.Uint64
@@ -298,6 +336,7 @@ func TestTypedGraphPublicFoldPostInstallAckCrash(t *testing.T) {
 }
 
 func TestTypedGraphPublicHealthyEnsureConcurrentOwner(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	col, base, _, _, columns, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
 	opts := typedGraphPublicTestOptions()
@@ -384,6 +423,7 @@ func TestTypedGraphPublicHealthyEnsureConcurrentOwner(t *testing.T) {
 }
 
 func TestTypedGraphPublicFoldStateInstallConflictFencesWrites(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
 	opts := typedGraphPublicTestOptions()
@@ -419,6 +459,7 @@ func TestTypedGraphPublicFoldStateInstallConflictFencesWrites(t *testing.T) {
 }
 
 func TestTypedGraphPublicFoldPostCaptureSuffixAndDebt(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
 	if err := col.EnsureColumnGraphServing(context.Background(), base.indexName, typedGraphPublicTestOptions()); err != nil {
@@ -549,6 +590,7 @@ func TestTypedGraphPublicFoldPostCaptureSuffixAndDebt(t *testing.T) {
 }
 
 func TestTypedGraphPublicSameOwnerServing(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 32)
 	defer base.Close()
 	opts := typedGraphPublicTestOptions()
@@ -653,6 +695,7 @@ func TestTypedGraphPublicSameOwnerServing(t *testing.T) {
 }
 
 func TestTypedGraphPublicServingPressureAndOptions(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	col, base, _, _, columns, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
 	opts := typedGraphPublicTestOptions()

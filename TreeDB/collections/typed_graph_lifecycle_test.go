@@ -68,6 +68,9 @@ func TestTypedGraphLifecyclePublicMutationAndReopen(t *testing.T) {
 	for _, boundary := range []string{"live", "crash_reopen", "rebuild", "serving_crash_reopen"} {
 		for _, operation := range []string{"insert", "replace", "delete", "reinsert"} {
 			t.Run(boundary+"/"+operation, func(t *testing.T) {
+				if boundary == "serving_crash_reopen" {
+					requireTypedGraphPublicServingTest(t)
+				}
 				var publicScans atomic.Uint64
 				if boundary == "serving_crash_reopen" {
 					restore := setColumnVectorGraphCanonicalRowsTestHook(func() { publicScans.Add(1) })
