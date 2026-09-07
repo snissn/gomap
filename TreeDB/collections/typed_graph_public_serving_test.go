@@ -5,9 +5,120 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// The pause is after the old captured holder exists and its snapshot/barrier
+// have closed, but before it is installed in this handle's cache.
+func TestTypedGraphPublicEnsureStaleCapturedKeeper(t *testing.T) {
+	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
+	dir, name, index := col.db.Dir(), col.Name(), base.indexName
+	if err := base.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := col.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db := openTypedMinimaDB(t, dir)
+	defer db.Close()
+	old, err := NewCollectionManager(db).OpenCollection(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := NewCollectionManager(db).OpenCollection(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := typedGraphPublicTestOptions()
+	captured := make(chan *collectionVectorIndexPreparedSearch, 1)
+	release := make(chan struct{})
+	var released, paused atomic.Bool
+	defer func() {
+		if released.CompareAndSwap(false, true) {
+			close(release)
+		}
+	}()
+	collectionVectorIndexPreparedSearchBuildHookForTest.mu.Lock()
+	collectionVectorIndexPreparedSearchBuildHookForTest.afterBuild = func(p *collectionVectorIndexPreparedSearch) {
+		if p != nil && p.collection == old && paused.CompareAndSwap(false, true) {
+			captured <- p
+			<-release
+		}
+	}
+	collectionVectorIndexPreparedSearchBuildHookForTest.mu.Unlock()
+	defer func() {
+		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Lock()
+		collectionVectorIndexPreparedSearchBuildHookForTest.afterBuild = nil
+		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Unlock()
+	}()
+	done := make(chan error, 1)
+	go func() { done <- old.EnsureColumnGraphServing(context.Background(), index, opts) }()
+	var rejected *collectionVectorIndexPreparedSearch
+	select {
+	case rejected = <-captured:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no post-capture pause")
+	}
+	resources := rejected.capturedBase
+	if err := current.EnsureColumnGraphServing(context.Background(), index, opts); err != nil {
+		t.Fatal(err)
+	}
+	query := VectorIndexSearchOptions{IndexName: index, Query: columns[0].Float32Vectors[0], TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeMinimal}
+	var buffer VectorIndexSearchBuffer
+	response, held, err := current.SearchVectorIndexWithBufferReadView(query, &buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: []string{"accepted-suffix"}}, {Name: "user", Strings: []string{"new"}}, {Name: "path", Strings: []string{"new"}}}
+	if _, err := current.ReplaceTypedBatch(ids[:1], retained[:1], changed); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.FoldColumnGraphServing(context.Background(), index); err != nil {
+		t.Fatal(err)
+	}
+	accounting := resources.accounting
+	accounting.Lock()
+	ownersBefore, bytesBefore := accounting.baseOwners, accounting.baseAssetBytes
+	descriptorsBefore, backingBefore := accounting.baseDescriptorBytes, accounting.baseBackingBytes
+	accounting.Unlock()
+	released.Store(true)
+	close(release)
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrConcurrentMutation) {
+			t.Fatalf("stale ensure=%v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("stale ensure blocked")
+	}
+	if !rejected.closed || resources.accounting != nil || resources.pin != nil || resources.ref != nil {
+		t.Fatal("rejected captured keeper retained its pin/accounting")
+	}
+	accounting.Lock()
+	releasedExactly := accounting.baseOwners == ownersBefore-1 && accounting.baseAssetBytes == bytesBefore-resources.assetBytes && accounting.baseDescriptorBytes == descriptorsBefore-resources.descriptorBytes && accounting.baseBackingBytes == backingBefore-resources.backingBytes
+	accounting.Unlock()
+	if !releasedExactly {
+		t.Fatal("stale ensure failed to release exactly its own accounted keeper")
+	}
+	fetched, err := held.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
+	if err != nil || len(fetched.Results) != 1 || bytes.Contains(fetched.Results[0].Document, []byte("accepted-suffix")) {
+		t.Fatalf("held old owner=%+v err=%v", fetched.Results, err)
+	}
+	query.DeclaredScalarFilter = &HybridScalarFilter{IndexName: "path", Value: "new"}
+	var latestBuffer VectorIndexSearchBuffer
+	latest, view, err := current.SearchVectorIndexWithBufferReadView(query, &latestBuffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+	docs, err := view.FetchDocumentsForVectorIndexSearchResults(latest.Results, DocumentFetchOptions{})
+	if err != nil || len(docs.Results) != 1 || !bytes.Equal(docs.Results[0].ID, ids[0]) || !bytes.Contains(docs.Results[0].Document, []byte("accepted-suffix")) {
+		t.Fatalf("current owner=%+v err=%v", docs.Results, err)
+	}
+}
 
 func typedGraphPublicTestOptions() ColumnGraphServingOptions {
 	opts := ColumnGraphServingOptions{Publication: ColumnGraphPublicationLimits{Rows: 128, Tombstones: 128, ValueSlots: 512, OwnedBytes: 4 << 20, EncodedOutputBytes: 1 << 20}, Owners: typedGraphOverlapLimits(), CandidateOutput: typedGraphFoldTestAssetLimits(), Maintenance: typedGraphTestWorkEpochLimits(), Filter: ColumnGraphFilterLimits{SourceIDs: 1024, SourceBytes: 1 << 20, RetainedBytes: 1 << 20, MappingWork: 100000, InspectedEntries: 1024}, FoldRows: 128, SearchCandidates: 1024}

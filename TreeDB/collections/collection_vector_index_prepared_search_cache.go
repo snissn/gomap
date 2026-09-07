@@ -99,8 +99,9 @@ func (s collectionVectorIndexPreparedSearchAcquireStats) apply(stats *VectorInde
 var noCollectionForegroundReadEnd = func() {}
 
 var collectionVectorIndexPreparedSearchBuildHookForTest struct {
-	mu sync.Mutex
-	fn func(indexName string)
+	mu         sync.Mutex
+	fn         func(indexName string)
+	afterBuild func(*collectionVectorIndexPreparedSearch)
 }
 
 func callCollectionVectorIndexPreparedSearchBuildHookForTest(indexName string) {
@@ -266,6 +267,12 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearchSlot(opts VectorI
 			prepared, buildResponse, buildErr = build()
 		} else {
 			prepared, buildResponse, buildErr = c.openCollectionVectorIndexPreparedSearch(opts)
+		}
+		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Lock()
+		afterBuild := collectionVectorIndexPreparedSearchBuildHookForTest.afterBuild
+		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Unlock()
+		if afterBuild != nil && buildErr == nil {
+			afterBuild(prepared)
 		}
 		if oldPrepared != nil && slot.family == collectionVectorIndexPreparedSearchFamilyCapturedBase {
 			buildErr = errors.Join(buildErr, oldPrepared.Close())

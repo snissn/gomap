@@ -102,12 +102,17 @@ func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string,
 	if _, err := c.renewTypedGraphWorkEpoch(ctx, m); err != nil {
 		return err
 	}
-	if _, err := c.acquireTypedGraphCapturedBaseCache(index, o); err != nil {
+	warmed, err := c.acquireTypedGraphCapturedBaseCache(index, o)
+	if err != nil {
 		return err
 	}
 	ready := *prepared
 	ready.servingAdmitted = true
 	if !coord.typedPublication.CompareAndSwap(prepared, &ready) {
+		// A late captured-base build is only an accelerator, never authority.
+		// Release this rejected keeper without invalidating a newer cache entry
+		// or any independently retained read-view owner.
+		c.invalidateCollectionVectorIndexPreparedSearch(collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}, warmed)
 		return ErrConcurrentMutation
 	}
 	return nil

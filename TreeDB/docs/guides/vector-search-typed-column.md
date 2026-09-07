@@ -79,11 +79,18 @@ Use `FoldColumnGraphServing` explicitly when the suffix needs folding and
 pressure, and query work. Releasing readers is not interchangeable with folding.
 Fold publication followed by serving admission currently has a fail-closed
 not-ready window; queries do not reconcile or silently search stale authority.
+An overlapping setup may return `ErrConcurrentMutation`; its exact rejected
+captured-base keeper is released without closing newer cache entries or held
+read views. Explicit setup retry is a caller lifecycle decision, not a query
+fallback.
 
 This is an experimental API checkpoint, not completed minima qualification.
-Public request allocations still grow materially with corpus size; durable
-process-cut integration, forced stale lifecycle installation, and foreground
-cutover pause gates remain open. See the
+Public request allocations still grow with corpus size. Ensure-enabled
+insert/replace/delete/reinsert acknowledgements now have subprocess-exit replay
+coverage through ordinary open, re-ensure, filtered/unfiltered search and full
+fetch. A forced post-capture stale setup test covers exact keeper release and
+held-owner readability. These are process-death tests, not power-loss or full
+fold-cutover qualification; foreground availability/pause gates remain open. See the
 [operational contract](../spec/typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission)
 and `BenchmarkTypedGraphPublicServing` for the current measured boundary.
 

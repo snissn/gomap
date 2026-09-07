@@ -19,7 +19,16 @@ owner lifetime, unsupported controls and fail-closed missing metadata;
 cancellation and rejected writes after partial setup. `BenchmarkTypedGraphPublicServing`
 includes public acquisition/filter/search/full fetch/Close with a live suffix and
 tombstone at 128/1024 rows. It is bounded diagnostic evidence, not final Minima
-throughput or crash-at-ack qualification. See [serving admission](typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission).
+throughput qualification. `TestTypedGraphLifecyclePublicMutationAndReopen`'s
+`serving_crash_reopen` cases enable public Ensure before acknowledged
+insert/replace/delete/reinsert, exit without Close/Flush, then ordinary-open and
+re-ensure for filtered/unfiltered same-owner search/full fetch. Indexed canonical
+JSON extraction stays zero; the old unconfigured compatibility cases remain.
+`TestTypedGraphPublicEnsureStaleCapturedKeeper` pauses after captured resources
+exist but before cache installation, interleaves another handle's public fold,
+and checks conflict, exact keeper accounting/pin release, accepted suffix and
+held old-view readability. These do not prove power-loss or foreground fold
+availability. See [serving admission](typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission).
 
 `TestRecoverableColumnAssetReplayStrictFloor` checks exact excluded identities,
 strict equality retention, namespace mismatch, and disabled-floor behavior.

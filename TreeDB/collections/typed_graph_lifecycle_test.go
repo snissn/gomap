@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -44,17 +45,34 @@ func TestTypedGraphLifecyclePublicMutationAndReopen(t *testing.T) {
 		}
 	}
 	if dir := os.Getenv("GOMAP_TYPED_GRAPH_LIFECYCLE_CRASH_DIR"); dir != "" {
+		var indexedJSON atomic.Uint64
+		if os.Getenv("GOMAP_TYPED_GRAPH_LIFECYCLE_SERVING") == "1" {
+			setColumnVectorGraphCanonicalRowsTestHook(func() { indexedJSON.Add(1) })
+		}
 		db := openTypedMinimaDB(t, dir)
 		col, err := NewCollectionManager(db).OpenCollection("minima")
 		if err != nil {
 			t.Fatal(err)
 		}
+		if os.Getenv("GOMAP_TYPED_GRAPH_LIFECYCLE_SERVING") == "1" {
+			if err := col.EnsureColumnGraphServing(context.Background(), "embedding_graph", typedGraphPublicTestOptions()); err != nil {
+				t.Fatal(err)
+			}
+		}
 		mutate(t, col, os.Getenv("GOMAP_TYPED_GRAPH_LIFECYCLE_OPERATION"))
+		if indexedJSON.Load() != 0 {
+			t.Fatal("selected acknowledged mutation entered indexed JSON extraction")
+		}
 		os.Exit(0)
 	}
-	for _, boundary := range []string{"live", "crash_reopen", "rebuild"} {
+	for _, boundary := range []string{"live", "crash_reopen", "rebuild", "serving_crash_reopen"} {
 		for _, operation := range []string{"insert", "replace", "delete", "reinsert"} {
 			t.Run(boundary+"/"+operation, func(t *testing.T) {
+				var publicScans atomic.Uint64
+				if boundary == "serving_crash_reopen" {
+					restore := setColumnVectorGraphCanonicalRowsTestHook(func() { publicScans.Add(1) })
+					defer restore()
+				}
 				dir, db, col := openTypedMinimaCollection(t)
 				defer func() { _ = db.Close() }()
 				ids := [][]byte{[]byte("base"), []byte("other")}
@@ -66,7 +84,7 @@ func TestTypedGraphLifecyclePublicMutationAndReopen(t *testing.T) {
 				if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
 					t.Fatal(err)
 				}
-				if boundary == "crash_reopen" {
+				if boundary == "crash_reopen" || boundary == "serving_crash_reopen" {
 					if err := db.Checkpoint(); err != nil {
 						t.Fatal(err)
 					}
@@ -75,6 +93,9 @@ func TestTypedGraphLifecyclePublicMutationAndReopen(t *testing.T) {
 					}
 					cmd := exec.Command(os.Args[0], "-test.run=^TestTypedGraphLifecyclePublicMutationAndReopen$")
 					cmd.Env = append(os.Environ(), "GOMAP_TYPED_GRAPH_LIFECYCLE_CRASH_DIR="+dir, "GOMAP_TYPED_GRAPH_LIFECYCLE_OPERATION="+operation)
+					if boundary == "serving_crash_reopen" {
+						cmd.Env = append(cmd.Env, "GOMAP_TYPED_GRAPH_LIFECYCLE_SERVING=1")
+					}
 					if output, err := cmd.CombinedOutput(); err != nil {
 						t.Fatalf("crash helper: %v\n%s", err, output)
 					}
@@ -97,6 +118,34 @@ func TestTypedGraphLifecyclePublicMutationAndReopen(t *testing.T) {
 				}
 				if operation == "delete" {
 					wantID = "other"
+				}
+				if boundary == "serving_crash_reopen" {
+					if err := col.EnsureColumnGraphServing(context.Background(), "embedding_graph", typedGraphPublicTestOptions()); err != nil {
+						t.Fatal(err)
+					}
+					for _, filtered := range []bool{false, true} {
+						query := VectorIndexSearchOptions{IndexName: "embedding_graph", Query: []float32{0, 1, 0, 0, 0, 0, 0, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeMinimal}
+						if filtered {
+							query.DeclaredScalarFilter = &HybridScalarFilter{IndexName: "path", Value: "source"}
+						}
+						var buffer VectorIndexSearchBuffer
+						response, view, err := col.SearchVectorIndexWithBufferReadView(query, &buffer)
+						if err != nil {
+							t.Fatal(err)
+						}
+						fetched, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
+						closeErr := view.Close()
+						if fetchErr != nil || closeErr != nil || len(fetched.Results) != 1 || string(fetched.Results[0].ID) != wantID {
+							t.Fatalf("public recovered results=%+v fetch=%v close=%v", fetched.Results, fetchErr, closeErr)
+						}
+						if operation != "delete" && !bytes.Contains(fetched.Results[0].Document, []byte(`"content":"changed"`)) {
+							t.Fatalf("stale document: %s", fetched.Results[0].Document)
+						}
+					}
+					if publicScans.Load() != 0 {
+						t.Fatal("public recovery entered indexed JSON extraction")
+					}
+					return
 				}
 				if boundary == "rebuild" {
 					assertTypedGraphLifecycleRebuildSource(t, col)
