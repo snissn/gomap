@@ -130,11 +130,11 @@ func (c *Collection) reconcileTypedGraphPublicationWithContext(ctx context.Conte
 		base := catalog.typedGraphBase
 		root := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
 		baseRoot := base.roots[collectionColumnManifestRootName(catalog.meta.Name)]
-		if err := validateTypedGraphColdManifestBudget(snap, root, cold); err != nil {
+		if err := validateTypedGraphColdManifestBudget(ctx, snap, root, cold); err != nil {
 			return err
 		}
 		if baseRoot != root {
-			if err := validateTypedGraphColdManifestBudget(snap, baseRoot, cold); err != nil {
+			if err := validateTypedGraphColdManifestBudget(ctx, snap, baseRoot, cold); err != nil {
 				return err
 			}
 		}
@@ -256,8 +256,8 @@ func typedGraphDeclaredValueHeaderBytes() uintptr {
 	return reflect.TypeFor[columnDeclaredValue]().Size()
 }
 
-func validateTypedGraphColdManifestBudget(snap *backenddb.Snapshot, root uint64, limits typedGraphColdLimits) error {
-	err := validateColumnManifestScanBudget(context.Background(), snap, root, limits.ManifestRecords, limits.ManifestBytes)
+func validateTypedGraphColdManifestBudget(ctx context.Context, snap *backenddb.Snapshot, root uint64, limits typedGraphColdLimits) error {
+	err := validateColumnManifestScanBudget(ctx, snap, root, limits.ManifestRecords, limits.ManifestBytes)
 	if errors.Is(err, ErrColumnAssetReachabilityManifestLimit) {
 		return errTypedGraphOverlayFoldNeeded
 	}

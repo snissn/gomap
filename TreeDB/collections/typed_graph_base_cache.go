@@ -118,7 +118,7 @@ func (c *Collection) openTypedGraphCapturedBaseCache(ctx context.Context, index 
 			return ErrVectorIndexSnapshotMismatch
 		}
 		base := catalog.typedGraphBase
-		if err := validateTypedGraphColdManifestBudget(snap, base.roots[collectionColumnManifestRootName(catalog.meta.Name)], limits.Cold); err != nil {
+		if err := validateTypedGraphColdManifestBudget(ctx, snap, base.roots[collectionColumnManifestRootName(catalog.meta.Name)], limits.Cold); err != nil {
 			return err
 		}
 		graph, view, err := base.readerView(c, snap)

@@ -180,11 +180,11 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 		root := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
 		baseRoot := catalog.typedGraphBase.roots[collectionColumnManifestRootName(catalog.meta.Name)]
 		if state.servingBase == nil {
-			if err := validateTypedGraphColdManifestBudget(snap, root, limits.Cold); err != nil {
+			if err := validateTypedGraphColdManifestBudget(ctx, snap, root, limits.Cold); err != nil {
 				return err
 			}
 			if root != baseRoot {
-				if err := validateTypedGraphColdManifestBudget(snap, baseRoot, limits.Cold); err != nil {
+				if err := validateTypedGraphColdManifestBudget(ctx, snap, baseRoot, limits.Cold); err != nil {
 					return err
 				}
 			}

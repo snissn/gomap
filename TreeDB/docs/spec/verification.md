@@ -33,6 +33,9 @@ exact fit and exhausted-budget rejection. `TestTypedGraphPublicFinalWarmBarrierC
 checks cancellation while the final Ensure/Fold warmer waits on the actual
 storage barrier. `TestTypedGraphCapturedCacheCanceledWaiterPreservesBuilder`
 checks that a canceled coalesced waiter leaves the other builder's keeper valid.
+`TestTypedGraphColdManifestScanCancellation` cancels on the second periodic
+context check in a real multi-interval manifest preflight and preserves the
+existing over-budget error translation.
 
 Explicit typed graph serving: `TestTypedGraphPublicSameOwnerServing` covers public
 ensure, typed mutation, same-owner filtered search/full fetch, fold, independent

@@ -68,7 +68,7 @@ func (c *Collection) prepareTypedGraphServingMetadata(ctx context.Context, cold 
 			return err
 		}
 		for _, root := range []uint64{catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name)), base.roots[collectionColumnManifestRootName(catalog.meta.Name)]} {
-			if err := validateTypedGraphColdManifestBudget(snap, root, cold); err != nil {
+			if err := validateTypedGraphColdManifestBudget(ctx, snap, root, cold); err != nil {
 				return err
 			}
 		}
