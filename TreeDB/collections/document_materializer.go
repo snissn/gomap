@@ -198,6 +198,29 @@ func (v *CollectionReadView) Meta() (CollectionMeta, error) {
 	return *v.catalog.meta.copy(), nil
 }
 
+// VisitIndexValueIDs visits every ID equal to value in the captured scalar
+// index. IDs are borrowed until the callback returns. Callback errors stop the
+// scan and are returned; a missing index is an error, not an empty result.
+func (v *CollectionReadView) VisitIndexValueIDs(indexName string, value any, visit func([]byte) error) error {
+	if err := v.validateOpen(); err != nil {
+		return err
+	}
+	if visit == nil {
+		return errors.New("collections: nil index ID visitor")
+	}
+	endForegroundRead := v.beginForegroundRead()
+	defer endForegroundRead()
+	lookup := hybridScalarLookupView{snapshot: v.snapshot, catalog: v.catalog}
+	_, truncated, err := lookup.visitLeafIDs(HybridScalarFilter{IndexName: indexName, Value: value}, 0, 0, nil, visit)
+	if err != nil {
+		return err
+	}
+	if truncated {
+		return errors.New("collections: index ID visit was truncated")
+	}
+	return nil
+}
+
 // OpenCollectionReadView opens a snapshot-bound document materializer. Buffered
 // writes are flushed before the snapshot is acquired so the view matches normal
 // Collection.Get visibility at open time; later writes are not visible through

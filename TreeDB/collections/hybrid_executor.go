@@ -586,7 +586,7 @@ func (view *hybridScalarLookupView) leafProbeBeforeCopy(filter HybridScalarFilte
 // leaf probe and bounded prepared consumer share the same iterator contract.
 func (view *hybridScalarLookupView) visitLeafIDs(filter HybridScalarFilter, limit, maxInspected int, inspected *int, visit func([]byte) error) (uint64, bool, error) {
 	if err := ValidateIndexName(filter.IndexName); err != nil {
-		return 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+		return 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
 	}
 	idx, ok := findIndex(view.catalog.meta.Indexes, filter.IndexName)
 	if !ok {
@@ -606,14 +606,14 @@ func (view *hybridScalarLookupView) visitLeafIDs(filter HybridScalarFilter, limi
 	}
 	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
 	if err != nil {
-		return 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+		return 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
 	}
 	if empty {
 		return 0, false, nil
 	}
 	exactPrefix, exactPrefixScan, err := exactIndexRangePrefix(idx.ValueType, opts)
 	if err != nil {
-		return 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+		return 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
 	}
 	var bufferedTable memtable.Table
 	if exactPrefixScan {
@@ -622,7 +622,7 @@ func (view *hybridScalarLookupView) visitLeafIDs(filter HybridScalarFilter, limi
 		bufferedTable, err = bufferedIndexRangeTableLocked(view.domain, view.catalog.meta.Name, filter.IndexName, start, end, 0, nil)
 	}
 	if err != nil {
-		return 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+		return 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
 	}
 	if bufferedTable != nil {
 		defer resetCollectionRunTable(bufferedTable)
@@ -634,7 +634,7 @@ func (view *hybridScalarLookupView) visitLeafIDs(filter HybridScalarFilter, limi
 	}
 	persistedIt, err := collectionIteratorAtCatalogRoot(view.snapshot, view.catalog, collectionSecondaryRootName(view.catalog.meta.Name, idx.Name), start, end, true)
 	if err != nil {
-		return 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+		return 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
 	}
 	if persistedIt != nil {
 		defer func() { _ = persistedIt.Close() }()
@@ -646,7 +646,7 @@ func (view *hybridScalarLookupView) visitLeafIDs(filter HybridScalarFilter, limi
 		return err == nil, err
 	})
 	if err != nil {
-		return inputIDs, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+		return inputIDs, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
 	}
 	return inputIDs, truncated, nil
 }

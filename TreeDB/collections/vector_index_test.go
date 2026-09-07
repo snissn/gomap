@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 func TestCollectionVectorIndexSearchReranksCanonicalRows(t *testing.T) {
@@ -40,9 +41,20 @@ func TestCollectionVectorIndexSearchReranksCanonicalRows(t *testing.T) {
 		t.Fatalf("build vector index: %v", err)
 	}
 
+	beforeWork := workstats.Read().Runtime
 	results, trace, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
 	if err != nil {
 		t.Fatalf("search vector index: %v", err)
+	}
+	afterWork := workstats.Read().Runtime
+	if afterWork.QueryAttempts-beforeWork.QueryAttempts != 1 || afterWork.QueriesCompleted-beforeWork.QueriesCompleted != 1 {
+		t.Fatalf("resident runtime before=%+v after=%+v", beforeWork, afterWork)
+	}
+	if _, _, err := index.Search(nil, VectorIndexSearchOptions{TopK: 1}); err == nil {
+		t.Fatal("invalid query accepted")
+	}
+	if workstats.Read().Runtime != afterWork {
+		t.Fatal("validation dispatched runtime query")
 	}
 	requireVectorResultIDs(t, results, "a", "c")
 	if trace.Strategy != "ann_graph" || trace.CandidatesExamined == 0 || trace.RerankCount == 0 || trace.ReturnedCount != 2 {
@@ -98,6 +110,16 @@ func TestCollectionVectorIndexSearchRejectsMixedDocumentGenerationRerank(t *test
 	if !hasLiveDelta {
 		t.Fatal("expected live delta before stale-generation search")
 	}
+	beforeWork := workstats.Read().Runtime
+	liveResults, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireVectorResultIDs(t, liveResults, "a")
+	afterWork := workstats.Read().Runtime
+	if afterWork.QueryAttempts-beforeWork.QueryAttempts != 1 || afterWork.QueriesCompleted-beforeWork.QueriesCompleted != 1 {
+		t.Fatalf("live runtime before=%+v after=%+v", beforeWork, afterWork)
+	}
 	published := index.searchView.Load()
 	if published == nil {
 		t.Fatal("published search view is nil")
@@ -116,6 +138,10 @@ func TestCollectionVectorIndexSearchRejectsMixedDocumentGenerationRerank(t *test
 		t.Fatalf("disabled exact fallback trace=%+v err=%v want stale-document unavailable", trace, err)
 	}
 
+	failedWork := workstats.Read().Runtime
+	if failedWork.QueryAttempts-afterWork.QueryAttempts != 1 || failedWork.QueriesCompleted != afterWork.QueriesCompleted {
+		t.Fatalf("failed runtime before=%+v after=%+v", afterWork, failedWork)
+	}
 	results, trace, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, FetchMultiplier: 1})
 	if err != nil {
 		t.Fatalf("search stale immutable generation: %v", err)

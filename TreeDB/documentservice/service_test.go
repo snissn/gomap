@@ -62,9 +62,37 @@ func TestCollectMatchingIDsUsesDeclaredScalarEqualityConjunction(t *testing.T) {
 		{Field: "meta.user_id", Operator: "==", Value: "shared"},
 		{Field: "meta.fpath", Operator: "==", Value: "/target"},
 	}}
-	ids, indexed, err := collectMatchingIDsFromScalarIndexes(ctx, col, filter, newScalarSchema(info.ScalarFields))
+	ids, indexed, _, err := collectMatchingIDsFromScalarIndexes(ctx, col, filter, info.Generation)
 	if err != nil || !indexed || !reflect.DeepEqual(ids, []string{"a"}) {
 		t.Fatalf("ids=%v indexed=%v err=%v", ids, indexed, err)
+	}
+
+	// A separate service publishes between captured leaf reads. Every AND leaf
+	// and the service intersection must continue to use the held catalog/root.
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+	var first []string
+	scalarUser, _ := newScalarSchema(info.ScalarFields).lookup("meta.user_id")
+	if err := view.VisitIndexValueIDs(scalarUser.indexName, "shared", func(id []byte) error { first = append(first, string(id)); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	other := New(collections.NewCollectionManager(db))
+	defer other.Close()
+	documents[0].Meta["user_id"] = "other"
+	documents[1].Meta["fpath"] = "/target"
+	if _, err := other.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{Documents: documents[:2]}); err != nil {
+		t.Fatal(err)
+	}
+	ids, indexed, err = collectMatchingIDsFromScalarReadView(ctx, view, filter, newScalarSchema(info.ScalarFields))
+	if err != nil || !indexed || !reflect.DeepEqual(ids, []string{"a"}) || !reflect.DeepEqual(first, []string{"a", "b"}) {
+		t.Fatalf("held ids=%v first=%v indexed=%v err=%v", ids, first, indexed, err)
+	}
+	ids, indexed, _, err = collectMatchingIDsFromScalarIndexes(ctx, col, filter, info.Generation)
+	if err != nil || !indexed || !reflect.DeepEqual(ids, []string{"b"}) {
+		t.Fatalf("latest ids=%v indexed=%v err=%v", ids, indexed, err)
 	}
 }
 

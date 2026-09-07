@@ -3491,6 +3491,8 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 	trace.FetchMultiplier = fetchMultiplier
 	idx.mu.RUnlock()
 
+	workstats.Runtime.QueryAttempts.Add(1)
+
 	var rangeIDs [][]byte
 	var rangeFilter func(DocumentRecord) (bool, error)
 	if opts.IndexRangeFilter != nil {
@@ -3515,6 +3517,7 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 				results = results[:opts.TopK]
 			}
 			trace.ReturnedCount = len(results)
+			workstats.Runtime.QueriesCompleted.Add(1)
 			return results, trace, nil
 		}
 		rangeIDs, _, err = idx.collection.vectorSearchIndexRangeDocumentIDs(opts.IndexRangeFilter, 0)
@@ -3626,8 +3629,10 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 			return nil, trace, err
 		}
 		trace.ReturnedCount = len(exact)
+		workstats.Runtime.QueriesCompleted.Add(1)
 		return exact, trace, nil
 	}
+	workstats.Runtime.QueriesCompleted.Add(1)
 	return results, trace, nil
 }
 

@@ -51,9 +51,9 @@ boundaries before comparing related totals.
 | --- | --- |
 | `indexed_json` | Scalar, text, physical-column and vector extraction row attempts, including fast parsers and failures. Column batches charge only the attempted prefix. `materialization_rows` counts non-JSON stored-format conversion attempts for indexed extraction. Ordinary final output reconstruction is separate. |
 | `typed` | Typed scalar/text row attempts, successfully encoded scalar values/analyzed text fields, and old text rows analyzed for mutations. Rows are operations, not unique documents. |
-| `runtime` | Actual native-runtime graph query dispatch attempts, including retries, and successful completions. This does not count native-runtime build/mutation work. |
+| `runtime` | Native-runtime query dispatch attempts through direct `VectorIndex.Search` or the buffered collection route (including retries), and successful completions. A selected scalar exact route or exact fallback also belongs to that dispatched query; these counters do not measure graph scores or build/mutation work. |
 | `replay` | Backend replay frame attempts, successful applications and failures, including panic failures. Typed payload frame attempts may contain a legacy projection; decoded typed rows and legacy-projection rows are separate. `legacy_collection_frames` covers legacy insert/update/source payload attempts; deletes have their own frame counter. These totals are observations, not durable coverage authority. |
-| `scans` | Dispatches and visited rows for service dense exact, filtered count, filtered retrieval, mutation matching, cursor, ID-only count, and collection exact search (full or index-restricted). A filtered count is a full document scan today. Cursor/retrieval work is not automatically forbidden. Internal maintenance iterators are outside this group. |
+| `scans` | Dispatches and visited rows for service dense exact, filtered count, filtered retrieval, mutation matching, cursor, ID-only count, and collection exact search (full or index-restricted). Filtered count scans cover predicates outside declared scalar EQ/AND. Cursor/retrieval work is not automatically forbidden. Internal maintenance iterators are outside this group. |
 | `memory` | One `runtime.ReadMemStats` sample before diagnostics serialization: cumulative `total_alloc`/`mallocs` and current `heap_alloc`/`heap_sys`, plus `sys`/`num_gc`. Totals include startup and recovery. Per-operation allocation claims require an externally bounded phase and matching process lifetime. |
 
 Zero fields remain present. `available` describes instrumented producer groups,
@@ -284,6 +284,12 @@ POST /v1/indexes/{index}/documents/count
 ```json
 {"filter": {"field": "meta.language", "operator": "==", "value": "go"}}
 ```
+
+Counts over declared scalar equality predicates, including AND conjunctions, use
+one captured scalar-index snapshot and do not materialize documents. Delete by
+filter shares this lookup. A missing declared index or invalid declared value
+fails closed; unsupported operators and undeclared fields retain document-scan
+behavior. An indexed predicate with no matches returns zero.
 
 Filter/list:
 

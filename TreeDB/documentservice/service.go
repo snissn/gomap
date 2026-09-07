@@ -695,7 +695,7 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 		if err := req.Filter.Validate(); err != nil {
 			return DeleteDocumentsResponse{}, err
 		}
-		ids, err = s.collectMatchingIDs(ctx, col, req.Filter, info.ScalarFields)
+		ids, err = s.collectMatchingIDs(ctx, col, req.Filter, info.Generation)
 		if err != nil {
 			return DeleteDocumentsResponse{}, err
 		}
@@ -751,6 +751,12 @@ func (s *Service) CountDocuments(ctx context.Context, index string, req CountDoc
 	}
 	if err := req.Filter.Validate(); err != nil {
 		return CountDocumentsResponse{}, err
+	}
+	if ids, indexed, capturedInfo, err := collectMatchingIDsFromScalarIndexes(ctx, col, req.Filter, req.ExpectedGeneration); indexed || err != nil {
+		if err != nil {
+			return CountDocumentsResponse{}, err
+		}
+		return CountDocumentsResponse{Index: capturedInfo, Count: len(ids)}, nil
 	}
 	count := 0
 	err = s.scanDocuments(ctx, col, &workstats.Scans.FilteredCount, func(doc Document) error {
@@ -1041,7 +1047,7 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 		return ResetIndexResponse{}, err
 	}
 
-	ids, err := s.collectMatchingIDs(ctx, existingCol, nil, nil)
+	ids, err := s.collectMatchingIDs(ctx, existingCol, nil, 0)
 	if err != nil {
 		return ResetIndexResponse{}, err
 	}
@@ -2009,8 +2015,8 @@ func validateDocumentIDs(ids []string) ([]string, error) {
 	return out, nil
 }
 
-func (s *Service) collectMatchingIDs(ctx context.Context, col *collections.Collection, filter *Filter, scalarFields []ScalarFieldInfo) ([]string, error) {
-	if ids, indexed, err := collectMatchingIDsFromScalarIndexes(ctx, col, filter, newScalarSchema(scalarFields)); indexed || err != nil {
+func (s *Service) collectMatchingIDs(ctx context.Context, col *collections.Collection, filter *Filter, expectedGeneration uint64) ([]string, error) {
+	if ids, indexed, _, err := collectMatchingIDsFromScalarIndexes(ctx, col, filter, expectedGeneration); indexed || err != nil {
 		return ids, err
 	}
 	var ids []string
@@ -2025,7 +2031,35 @@ func (s *Service) collectMatchingIDs(ctx context.Context, col *collections.Colle
 	return ids, err
 }
 
-func collectMatchingIDsFromScalarIndexes(ctx context.Context, col *collections.Collection, filter *Filter, schema scalarSchema) ([]string, bool, error) {
+// Scalar predicates and all posting leaves use the same captured catalog/root.
+func collectMatchingIDsFromScalarIndexes(ctx context.Context, col *collections.Collection, filter *Filter, expectedGeneration uint64) (ids []string, indexed bool, info IndexInfo, err error) {
+	if filter == nil {
+		return
+	}
+	if err = ctxErr(ctx); err != nil {
+		return
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		return nil, false, info, mapDocumentScanError(err)
+	}
+	defer func() { err = errors.Join(err, view.Close()) }()
+	meta, err := view.Meta()
+	if err != nil {
+		return nil, false, info, mapDocumentScanError(err)
+	}
+	info, err = indexInfoFromMeta(meta)
+	if err != nil {
+		return nil, false, info, err
+	}
+	if expectedGeneration != 0 && info.Generation != expectedGeneration {
+		return nil, false, info, serviceErrorf(CodeIndexStale, "captured generation %d does not match expected_generation %d", info.Generation, expectedGeneration)
+	}
+	ids, indexed, err = collectMatchingIDsFromScalarReadView(ctx, view, filter, newScalarSchema(info.ScalarFields))
+	return
+}
+
+func collectMatchingIDsFromScalarReadView(ctx context.Context, view *collections.CollectionReadView, filter *Filter, schema scalarSchema) ([]string, bool, error) {
 	if filter == nil {
 		return nil, false, nil
 	}
@@ -2071,33 +2105,24 @@ func collectMatchingIDsFromScalarIndexes(ctx context.Context, col *collections.C
 		if err := ctxErr(ctx); err != nil {
 			return nil, true, err
 		}
-		ids, err := col.FindByIndexValue(predicate.filter.IndexName, predicate.filter.Value)
-		if err != nil {
-			return nil, true, mapDocumentScanError(err)
-		}
-		if candidates == nil {
-			candidates = make(map[string]struct{}, len(ids))
-			for i, id := range ids {
-				if i&1023 == 0 {
-					if err := ctxErr(ctx); err != nil {
-						return nil, true, err
-					}
-				}
-				candidates[string(id)] = struct{}{}
+		matches := make(map[string]struct{})
+		err := view.VisitIndexValueIDs(predicate.filter.IndexName, predicate.filter.Value, func(id []byte) error {
+			if err := ctxErr(ctx); err != nil {
+				return err
 			}
-			continue
-		}
-		matches := make(map[string]struct{}, min(len(candidates), len(ids)))
-		for i, id := range ids {
-			if i&1023 == 0 {
-				if err := ctxErr(ctx); err != nil {
-					return nil, true, err
-				}
-			}
-			key := string(id)
-			if _, ok := candidates[key]; ok {
+			key := string(id) // Own IDs beyond the borrowed callback lifetime.
+			if candidates == nil {
+				matches[key] = struct{}{}
+			} else if _, ok := candidates[key]; ok {
 				matches[key] = struct{}{}
 			}
+			return nil
+		})
+		if err != nil {
+			if errors.Is(err, collections.ErrHybridSearchIndexUnavailable) {
+				return nil, true, mapHybridSearchError(err)
+			}
+			return nil, true, mapDocumentScanError(err)
 		}
 		candidates = matches
 	}
