@@ -316,9 +316,15 @@ func openVacuumM0Fixture(tb testing.TB, opts Options) (*DB, vacuumM0Fixture) {
 			tb.Fatalf("publish collection delta roots=%v err=%v", roots, err)
 		}
 	}
-	if err := d.CompactIndex(); err != nil {
-		_ = d.Close()
-		tb.Fatalf("compact collection fixture index: %v", err)
+	// Manufacture debt from replaced user trees, not incidental publication
+	// metadata growth: metadata can itself reuse free pages. CompactIndex's
+	// append-only rebuild leaves genuine retired tree pages for vacuum.
+	const debtCompactions = 16
+	for generation := 0; generation < debtCompactions; generation++ {
+		if err := d.CompactIndex(); err != nil {
+			_ = d.Close()
+			tb.Fatalf("compact collection fixture index generation=%d: %v", generation, err)
+		}
 	}
 	for generation := 0; generation < 2; generation++ {
 		if err := d.SetSync([]byte("m0/user/0001"), bytes.Repeat([]byte{byte(220 + generation)}, 96)); err != nil {
@@ -337,6 +343,7 @@ func openVacuumM0Fixture(tb testing.TB, opts Options) (*DB, vacuumM0Fixture) {
 		tb.Fatalf("freelist stats: %v", err)
 	}
 	fixture := vacuumM0Fixture{SchemaVersion: vacuumM0ArtifactSchemaVersion, Status: "offline-ceiling", Fixture: "m0-index-debt", Parameters: map[string]int{"chunk_size": int(opts.ChunkSize), "pointer_threshold": opts.ValueLog.PointerThreshold, "user_keys": 384, "collection_documents": 128, "user_generations": 3, "collection_generations": 3}, LogicalDigest: vacuumM0Digest(tb, d), KeyCount: 512, CollectionRootSpan: len(roots), IndexBytes: vacuumM0FileBytes(tb, vacuumM0IndexPath(opts.Dir)), ValueLogBytes: vacuumM0DirBytes(tb, vacuumM0StoragePath(opts.Dir, "value_vlog")), LeafLogBytes: vacuumM0DirBytes(tb, vacuumM0StoragePath(opts.Dir, "leaf_vlog")), LivePages: pages - free.FreeIDs, ReclaimablePages: free.FreeIDs}
+	fixture.Parameters["debt_compactions"] = debtCompactions
 	if pages > 0 {
 		fixture.ReclaimablePagePercent = float64(free.FreeIDs) * 100 / float64(pages)
 	}

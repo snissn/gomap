@@ -52,6 +52,10 @@ The fixed consequences are:
 - `visibleCommitSeq`, `durableCommitSeq`, and
   `oldestRecoverableCommitSeq` are distinct. Candidate visibility does not make
   a meta recoverable and cannot move the reclamation horizon.
+- Reusing low freelist/manifest/record pages does not change this order. A
+  capability-certified interval is reserved before output; both recoverable
+  slots and snapshot horizons still prevent premature reuse. See the bounded
+  placement and pre-visible failed-tail rules in `storage-format.md` (#4627).
 - Composite and nested roots carry the deterministic transitive union of their
   child dependencies. Publication does not rediscover dependency closure by
   scanning filenames.

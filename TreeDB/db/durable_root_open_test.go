@@ -948,7 +948,12 @@ func TestDurableRootAlternatingSlotsRetireAuxiliaryHistory(t *testing.T) {
 	}
 
 	var steadyRetired []uint64
+	reusedInitial := make(map[uint64]uint64)
 	for lsn := uint64(1); lsn <= 64; lsn++ {
+		oldest, err := oldestRecoverableSlotCommitV1(database.durableRoot.slotCommit)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := database.publishCommandWALRoots(
 			state.RootPageID,
 			state.SystemRootPageID,
@@ -961,11 +966,27 @@ func TestDurableRootAlternatingSlotsRetireAuxiliaryHistory(t *testing.T) {
 		if lsn > 32 {
 			steadyRetired = append(steadyRetired, database.idx.Load().allocator.COWGenerationV1().RetiredCount())
 		}
+		generation := database.idx.Load().allocator.COWGenerationV1()
+		for _, extent := range generation.ReservationRecord().Entries() {
+			if extent.Kind != freelist.ReservationTargetMetadata && extent.Kind != freelist.ReservationReusedData {
+				continue
+			}
+			for _, pageID := range initialAuxiliary {
+				if pageID < extent.StartPageID || pageID-extent.StartPageID >= uint64(extent.Count) || reusedInitial[pageID] != 0 {
+					continue
+				}
+				if oldest <= state.CommitSeq {
+					t.Fatalf("initial auxiliary %d reused before strict recovery horizon: %d", pageID, oldest)
+				}
+				reusedInitial[pageID] = generation.CommitSeq()
+				t.Logf("initial auxiliary=%d reused as kind=%d at commit=%d oldest-recoverable=%d", pageID, extent.Kind, generation.CommitSeq(), oldest)
+			}
+		}
 	}
 	generation := database.idx.Load().allocator.COWGenerationV1()
 	for _, pageID := range initialAuxiliary {
-		if !generation.Allocatable(pageID) {
-			t.Fatalf("overwritten slot auxiliary page %d remains retained after the recovery horizon advanced", pageID)
+		if !generation.Allocatable(pageID) && reusedInitial[pageID] == 0 {
+			t.Fatalf("overwritten slot auxiliary page %d is neither free nor demonstrably reused after the recovery horizon advanced", pageID)
 		}
 	}
 	minimum, maximum := steadyRetired[0], steadyRetired[0]

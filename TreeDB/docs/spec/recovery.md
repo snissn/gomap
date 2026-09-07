@@ -170,6 +170,14 @@ From the chosen durable-root tuple:
 - retain the exact external-resource closures and auxiliary-page inventories
   for both independently complete slots.
 
+Freelist and contiguous publication-auxiliary pages may occupy recycled low
+page IDs (#4627). Parentage and recovery order come from the sealed records,
+sequences and digests, not increasing physical page numbers. Both independently
+complete slots and old snapshot horizons retain their existing protection.
+The bounded placement search and failed-tail coverage rules are specified in
+[storage-format.md](storage-format.md); reuse does not imply file shrink or
+universal steady-state convergence.
+
 ## 3. WAL Segment Discovery
 
 Before a writable value-log manager scans a segment directory, it reconciles

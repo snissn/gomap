@@ -293,7 +293,7 @@ func (a *Allocator) PrepareCOWCandidateRetiringV1(generationID, commitSeq uint64
 	// retry returns it above instead of applying a fresher capability after the
 	// caller releases its reader-admission gate.
 	a.cow.txn.PruneWithCapability(capability)
-	auxiliary, err := a.cow.txn.allocateAppendedRange(auxiliaryPageCount)
+	auxiliary, err := a.cow.txn.allocateContiguousRange(auxiliaryPageCount)
 	if err != nil {
 		return rollback(err)
 	}
