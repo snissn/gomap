@@ -32,6 +32,16 @@ Candidate-only refs are reclaimable. Any unknown source, malformed ref,
 non-canonical segment, missing segment, out-of-bounds range, or unconvertible
 active pin makes the plan incomplete and destructive maintenance fails closed.
 
+`PlanColumnAssetReachability` accepts `MaxSegmentEntries` for bounded directory
+discovery. A positive limit counts every listed entry, including empty files and
+unknown names; excess entries return `ErrColumnAssetReachabilitySegmentLimit`
+with an incomplete plan and no partial segment inventory. Negative limits are
+invalid; zero preserves existing unlimited reporting. Discovery reads bounded
+batches and checks cancellation between them. This bounds directory-listing
+retention, not manifest decoding, caller-supplied refs, total planner memory, or
+disk usage. It does not change GC authority or permit deletion from an
+incomplete plan.
+
 ## Active mappedresource pins
 
 Every `mappedresource.Manager` contributes to a process-wide active pin summary.

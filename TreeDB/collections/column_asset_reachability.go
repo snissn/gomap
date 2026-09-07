@@ -3,6 +3,7 @@ package collections
 import (
 	"context"
 	"errors"
+	"io"
 	"math"
 	"math/bits"
 	"os"
@@ -24,6 +25,9 @@ import (
 type ColumnAssetReachabilityOptions struct {
 	Detailed       bool
 	SegmentDetails bool
+	// MaxSegmentEntries bounds directory entries retained during discovery.
+	// Zero preserves unbounded reporting. This does not bound manifest decoding.
+	MaxSegmentEntries int
 	// ProtectCandidateRefsForOlderSnapshots conservatively treats candidate
 	// refs as pinned while any active TreeDB snapshot predates the planning
 	// snapshot. Destructive GC enables this; non-destructive rewrite leaves it
@@ -38,6 +42,9 @@ type ColumnAssetReachabilityOptions struct {
 	PinnedRefs                            []ColumnAssetRef
 	releaseVectorPartitionReclaimIDs      map[string]struct{}
 }
+
+// ErrColumnAssetReachabilitySegmentLimit reports an invalid or exceeded discovery limit.
+var ErrColumnAssetReachabilitySegmentLimit = errors.New("collections: column asset segment entry budget exceeded or invalid")
 
 type columnAssetReachabilityOptionsInternal struct {
 	ColumnAssetReachabilityOptions
@@ -298,6 +305,9 @@ const columnAssetReachabilityContextCheckInterval = 256
 // plan for the collection's isolated column asset namespace. It never deletes,
 // rewrites, or remaps assets; uncertain or untracked bytes are retained.
 func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts ColumnAssetReachabilityOptions) (ColumnAssetReachabilityPlan, error) {
+	if opts.MaxSegmentEntries < 0 {
+		return ColumnAssetReachabilityPlan{ProtectOnly: true}, ErrColumnAssetReachabilitySegmentLimit
+	}
 	var err error
 	opts, err = c.columnAssetLifecycleAugmentReachabilityOptions(opts)
 	if err != nil {
@@ -471,23 +481,24 @@ func (c *Collection) columnAssetReachabilityOlderSnapshotPinned(planCommitSeq ui
 func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapshotView, opts columnAssetReachabilityOptionsInternal) columnAssetReachabilityInput {
 	expectedRefs := len(view.AssetRefs) + len(view.TypedColumnPartRefs) + len(view.AggregateMetadata) + len(view.DictionaryCodes) + len(view.Int64Values) + len(view.GraphAssetRefs) + len(opts.CandidateRefs) + len(opts.PendingRefs) + len(opts.PreparedRefs) + len(opts.PreparedQueryRefs) + len(opts.QuarantineRefs) + len(opts.PinnedRefs)
 	input := columnAssetReachabilityInput{
-		rootDir:          view.ColumnAssetRootDir,
-		collection:       view.CollectionName,
-		namespace:        view.AssetNamespace,
-		manifestRootName: view.Diagnostics.ManifestRootName,
-		manifestRootID:   view.Diagnostics.ManifestRoot,
-		systemRoot:       view.SystemRoot,
-		planCommitSeq:    view.CommitSeq,
-		activeGen:        view.Diagnostics.ManifestGeneration,
-		activeChecksum:   view.Diagnostics.ActiveManifestChecksum,
-		recoveryGen:      view.Diagnostics.RecoveryManifestGeneration,
-		recoveryChecksum: view.Diagnostics.RecoveryManifestChecksum,
-		manifestRecs:     view.Diagnostics.ManifestRecords,
-		manifestBytes:    view.ManifestCatalogBytes,
-		detailed:         opts.Detailed,
-		segmentDetails:   opts.Detailed || opts.SegmentDetails,
-		omitSources:      opts.omitDetailedEntrySources,
-		omitSort:         opts.omitDetailedEntrySort,
+		rootDir:           view.ColumnAssetRootDir,
+		collection:        view.CollectionName,
+		namespace:         view.AssetNamespace,
+		manifestRootName:  view.Diagnostics.ManifestRootName,
+		manifestRootID:    view.Diagnostics.ManifestRoot,
+		systemRoot:        view.SystemRoot,
+		planCommitSeq:     view.CommitSeq,
+		activeGen:         view.Diagnostics.ManifestGeneration,
+		activeChecksum:    view.Diagnostics.ActiveManifestChecksum,
+		recoveryGen:       view.Diagnostics.RecoveryManifestGeneration,
+		recoveryChecksum:  view.Diagnostics.RecoveryManifestChecksum,
+		manifestRecs:      view.Diagnostics.ManifestRecords,
+		manifestBytes:     view.ManifestCatalogBytes,
+		detailed:          opts.Detailed,
+		segmentDetails:    opts.Detailed || opts.SegmentDetails,
+		maxSegmentEntries: opts.MaxSegmentEntries,
+		omitSources:       opts.omitDetailedEntrySources,
+		omitSort:          opts.omitDetailedEntrySort,
 	}
 	if expectedRefs > 0 {
 		input.refs = make(map[ColumnAssetRef]columnAssetReachabilitySourceMask, expectedRefs)
@@ -661,6 +672,7 @@ func sumMappedResourceDenied(in map[mappedresource.DenyReason]uint64) uint64 {
 }
 
 type columnAssetReachabilityInput struct {
+	maxSegmentEntries  int
 	rootDir            string
 	collection         string
 	namespace          string
@@ -815,7 +827,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		plan.Complete = false
 		return plan, err
 	}
-	segments, err := listColumnAssetReachabilitySegments(ctx, namespace.SegmentDir)
+	segments, err := listColumnAssetReachabilitySegmentsWithLimit(ctx, namespace.SegmentDir, input.maxSegmentEntries)
 	if err != nil {
 		plan.Complete = false
 		return plan, err
@@ -1347,8 +1359,15 @@ func columnAssetReachabilitySourceMaskCount(mask columnAssetReachabilitySourceMa
 }
 
 func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string) (_ []columnAssetReachabilitySegment, retErr error) {
+	return listColumnAssetReachabilitySegmentsWithLimit(ctx, segmentDir, 0)
+}
+
+func listColumnAssetReachabilitySegmentsWithLimit(ctx context.Context, segmentDir string, maxEntries int) (_ []columnAssetReachabilitySegment, retErr error) {
+	if maxEntries < 0 {
+		return nil, ErrColumnAssetReachabilitySegmentLimit
+	}
 	if !rootpublication.StableRelativeNamespaceSupported() {
-		return listColumnAssetReachabilitySegmentsLegacy(ctx, segmentDir)
+		return listColumnAssetReachabilitySegmentsLegacy(ctx, segmentDir, maxEntries)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -1368,7 +1387,7 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 	if err != nil {
 		return nil, err
 	}
-	infos, readErr := dir.Readdir(-1)
+	infos, readErr := readColumnAssetReachabilityDirectory(ctx, dir, maxEntries)
 	if readErr != nil {
 		return nil, readErr
 	}
@@ -1446,7 +1465,7 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 // reporting available where exact relative namespace primitives do not exist.
 // It deliberately returns no stable identities and therefore cannot authorize
 // destructive GC.
-func listColumnAssetReachabilitySegmentsLegacy(ctx context.Context, segmentDir string) ([]columnAssetReachabilitySegment, error) {
+func listColumnAssetReachabilitySegmentsLegacy(ctx context.Context, segmentDir string, maxEntries int) ([]columnAssetReachabilitySegment, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1460,7 +1479,7 @@ func listColumnAssetReachabilitySegmentsLegacy(ctx context.Context, segmentDir s
 		}
 		return nil, err
 	}
-	infos, readErr := dir.Readdir(-1)
+	infos, readErr := readColumnAssetReachabilityDirectory(ctx, dir, maxEntries)
 	closeErr := dir.Close()
 	if err := errors.Join(readErr, closeErr); err != nil {
 		return nil, err
@@ -1505,6 +1524,39 @@ func listColumnAssetReachabilitySegmentsLegacy(ctx context.Context, segmentDir s
 		return strings.Compare(a.name, b.name)
 	})
 	return segments, ctx.Err()
+}
+
+// Read at most one extra entry to detect overflow before retaining an
+// unbounded listing. Count every entry, including unknown names and empty files.
+func readColumnAssetReachabilityDirectory(ctx context.Context, dir *os.File, maxEntries int) ([]os.FileInfo, error) {
+	if maxEntries < 0 {
+		return nil, ErrColumnAssetReachabilitySegmentLimit
+	}
+	if maxEntries == 0 {
+		return dir.Readdir(-1)
+	}
+	var infos []os.FileInfo
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		remaining := maxEntries - len(infos)
+		batch := columnAssetReachabilityContextCheckInterval
+		if remaining < batch {
+			batch = remaining + 1
+		}
+		next, err := dir.Readdir(batch)
+		if len(next) > remaining {
+			return nil, ErrColumnAssetReachabilitySegmentLimit
+		}
+		infos = append(infos, next...)
+		if errors.Is(err, io.EOF) {
+			return infos, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 }
 
 func columnAssetReachabilitySegmentPath(segmentDir, name string) string {
