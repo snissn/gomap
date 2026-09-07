@@ -1,6 +1,7 @@
 """Private bounded native-wire transport for TreeDBClient (no HTTP fallback)."""
 
 import socket
+import ipaddress
 import math
 import struct
 import threading
@@ -180,13 +181,19 @@ class _NativeConnection:
         if timeout is None or timeout <= 0:
             raise TreeDBConfigError("native transport requires a positive timeout")
         try:
-            host, port = address.rsplit(":", 1)
+            if address.startswith("["):
+                host, port = address[1:].split("]:")
+                ip = ipaddress.IPv6Address(host)
+            else:
+                host, port = address.split(":")
+                ip = ipaddress.IPv4Address(host)
             port = int(port)
-            if not host or not 0 < port <= 65535:
+            if "%" in host or not 0 < port <= 65535:
                 raise ValueError()
         except (AttributeError, ValueError):
-            raise TreeDBConfigError("native_address must be host:port") from None
-        self.address = (host.strip("[]"), port)
+            raise TreeDBConfigError("native_address requires numeric IPv4:port or [IPv6]:port without a zone") from None
+        self.family = socket.AF_INET if ip.version == 4 else socket.AF_INET6
+        self.address = (str(ip), port) if ip.version == 4 else (str(ip), port, 0, 0)
         self.timeout = timeout
         self.socket = None
         self.closed = False
@@ -253,10 +260,14 @@ class _NativeConnection:
                 raise TreeDBTransportError("native connection is closed")
             try:
                 if self.socket is None:
+                    # Numeric literal + one explicit family: no resolver or
+                    # per-address retry can escape the single request deadline.
+                    self.socket = socket.socket(self.family, socket.SOCK_STREAM)
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise TimeoutError("native connection deadline expired")
-                    self.socket = socket.create_connection(self.address, remaining)
+                    self.socket.settimeout(remaining)
+                    self.socket.connect(self.address)
                     hello = _sections(self._round_trip(1, b"", 2, deadline), {3})
                     if 3 not in hello:
                         raise TreeDBProtocolError("native hello capabilities missing")

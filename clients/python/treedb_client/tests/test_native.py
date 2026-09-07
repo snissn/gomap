@@ -1,4 +1,5 @@
 import unittest
+import socket
 from unittest import mock
 
 import _support
@@ -8,6 +9,42 @@ from treedb_client._native import _HEADER, _NativeConnection, _dense_request, _d
 
 
 class NativeCodecTests(unittest.TestCase):
+    def test_native_address_rejects_hostnames_before_networking(self):
+        with mock.patch("socket.getaddrinfo", side_effect=AssertionError("resolver called")):
+            for address in ("localhost:12", "example.org:12", "[localhost]:12", "[::1:12", "::1:12", "[fe80::1%eth0]:12"):
+                with self.subTest(address=address), self.assertRaises(TreeDBConfigError):
+                    _NativeConnection(address, 1)
+
+    def test_numeric_connect_uses_one_socket_and_remaining_deadline(self):
+        for address, family, endpoint in (("127.0.0.1:12", socket.AF_INET, ("127.0.0.1", 12)),
+                                          ("[::1]:12", socket.AF_INET6, ("::1", 12, 0, 0))):
+            with self.subTest(address=address):
+                sock = mock.Mock()
+                sock.connect.side_effect = TimeoutError("connect deadline")
+                connection = _NativeConnection(address, 1)
+                with mock.patch("socket.getaddrinfo", side_effect=AssertionError("resolver called")), \
+                     mock.patch("socket.create_connection", side_effect=AssertionError("multi-address dial called")), \
+                     mock.patch("socket.socket", return_value=sock) as create, \
+                     mock.patch("time.monotonic", side_effect=[10.0, 10.25]):
+                    with self.assertRaises(TreeDBTimeoutError):
+                        connection.command(50, 1, b"", "get_many_versions")
+                create.assert_called_once_with(family, socket.SOCK_STREAM)
+                sock.settimeout.assert_called_once_with(.75)
+                sock.connect.assert_called_once_with(endpoint)
+                sock.close.assert_called_once()
+                self.assertTrue(connection.closed)
+
+    def test_expired_connect_budget_closes_socket_without_connecting(self):
+        connection = _NativeConnection("127.0.0.1:12", 1)
+        sock = mock.Mock()
+        with mock.patch("socket.socket", return_value=sock), \
+             mock.patch("time.monotonic", side_effect=[10.0, 11.0]):
+            with self.assertRaises(TreeDBTimeoutError):
+                connection.command(50, 1, b"", "get_many_versions")
+        sock.connect.assert_not_called()
+        sock.close.assert_called_once()
+        self.assertTrue(connection.closed)
+
     def test_frame_and_dense_request_goldens(self):
         self.assertEqual(_HEADER.pack(b"TDB1", 40, 1, 0, 1, 0, 0, 1, 0).hex(),
                          "54444231280001000000010000000000000000000000000001000000000000000000000000000000")
@@ -39,7 +76,7 @@ class NativeCodecTests(unittest.TestCase):
             _string_map(b"\x01\x02a")
 
     def test_native_mutations_do_not_fall_back_to_http(self):
-        client = TreeDBClient("http://localhost:1", native_address="localhost:2")
+        client = TreeDBClient("http://localhost:1", native_address="127.0.0.1:2")
         self.addCleanup(client.close)
         with mock.patch.object(client, "_request", side_effect=AssertionError("HTTP fallback")):
             for call in (lambda: client.upsert_documents("a", []), lambda: client.delete_documents("a", []),
@@ -64,8 +101,8 @@ class NativeCodecTests(unittest.TestCase):
             with self.subTest(incoming=incoming):
                 sock = mock.Mock()
                 sock.recv.side_effect = [incoming] if not isinstance(incoming, Exception) else incoming
-                connection = _NativeConnection("localhost:1", 1)
-                with mock.patch("socket.create_connection", return_value=sock) as dial:
+                connection = _NativeConnection("127.0.0.1:1", 1)
+                with mock.patch("socket.socket", return_value=sock) as dial:
                     with self.assertRaises(error):
                         connection.command(50, 1, b"", "get_many_versions")
                     self.assertTrue(connection.closed)
@@ -75,7 +112,7 @@ class NativeCodecTests(unittest.TestCase):
                     dial.assert_called_once()
 
     def test_busy_waiter_deadline_does_not_close_holder(self):
-        connection = _NativeConnection("localhost:1", .01)
+        connection = _NativeConnection("127.0.0.1:1", .01)
         connection.lock.acquire()
         try:
             with self.assertRaises(TreeDBTimeoutError):

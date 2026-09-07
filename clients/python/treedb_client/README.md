@@ -48,6 +48,12 @@ explicit generations fail. Initial ingestion/build/admission and reopen
 re-admission remain explicit HTTP control operations. Dense results include
 full payloads from the same search owner and are Python-owned after return.
 
+Native addresses must be numeric IPv4 literals (`127.0.0.1:7121`) or bracketed
+numeric IPv6 literals (`[::1]:7121`), without zone identifiers. Hostnames are
+rejected before networking: one family-specific socket connects with the
+remaining monotonic request budget, with no DNS or multi-address retry.
+HTTP URL hostname support is unchanged.
+
 `get_many(index, ids)` uses unchanged GetMany 50/v1, returning owned Documents
 or `None` in request order, including repeated IDs. It is separate from search
 fetch and has no generation guard or batch-wide snapshot promise. The current
