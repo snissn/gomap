@@ -8,6 +8,7 @@ import json
 import socket
 import ssl
 import struct
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,6 +21,7 @@ from .errors import (
     TreeDBProtocolError,
     TreeDBTimeoutError,
     TreeDBTransportError,
+    UnsupportedError,
     service_error_from_code,
 )
 from .filters import FilterLike, InvalidFilterError, normalize_filter
@@ -60,9 +62,13 @@ class TreeDBClient:
     service; unsupported filters raise locally or fail closed on the service.
     """
 
-    def __init__(self, base_url: str, timeout: Optional[float] = 30.0) -> None:
+    def __init__(self, base_url: str, timeout: Optional[float] = 30.0, *, native_address: Optional[str] = None) -> None:
         self.base_url = _normalize_base_url(base_url)
         self.timeout = _normalize_timeout(timeout)
+        self._native = None
+        if native_address is not None:
+            from ._native import _NativeConnection
+            self._native = _NativeConnection(native_address, self.timeout)
         parsed = urllib.parse.urlparse(self.base_url)
         self._request_prefix = parsed.path + (";" + parsed.params if parsed.params else "")
         connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
@@ -76,11 +82,60 @@ class TreeDBClient:
         """Close this client's reusable HTTP connection."""
 
         self._connection.close()
+        if self._native is not None:
+            self._native.close()
 
     def __del__(self) -> None:
+        native = getattr(self, "_native", None)
+        if native is not None:
+            native.close()
         connection = getattr(self, "_connection", None)
         if connection is not None:
             connection.close()
+
+    def get_many(self, index: str, ids: Sequence[str]) -> list[Optional[Document]]:
+        """Fetch owned full documents in request order using native GetMany v1.
+
+        Missing IDs yield None. This local read has no generation guard and is
+        separate from the same-owner search/full-fetch response.
+        """
+        if self._native is None:
+            raise UnsupportedError("unsupported", "get_many requires native_address")
+        from ._native import _decode_vector, _section, _sections, _vector
+        if not isinstance(index, str) or not index:
+            raise TreeDBConfigError("native collection name is required")
+        if isinstance(ids, (str, bytes)) or len(ids) > 1_000_000:
+            raise TreeDBConfigError("native ids must be a bounded sequence")
+        encoded = []
+        encoded_bytes = len(index.encode("utf-8")) + 128
+        for item in ids:
+            if not isinstance(item, str) or not item:
+                raise TreeDBConfigError("native IDs must be nonempty strings")
+            encoded_id = item.encode("utf-8")
+            encoded_bytes += len(encoded_id) + 10
+            if encoded_bytes > self._native.limit:
+                raise TreeDBConfigError("native GetMany request exceeds frame limit")
+            encoded.append(encoded_id)
+        response = self._native.command(50, 1, _section(100, b"\x01" + index.encode("utf-8")) + _section(102, _vector(encoded)), "get_many_versions")
+        sections = _sections(response, {103, 116, 11})
+        if 103 not in sections or 116 not in sections or len(sections[116]) != (len(ids) + 7) // 8:
+            raise TreeDBProtocolError("native GetMany response sections mismatch")
+        payloads = _decode_vector(sections[103], len(ids))
+        documents = []
+        for i, payload in enumerate(payloads):
+            if not sections[116][i // 8] & (1 << (i % 8)):
+                if payload:
+                    raise TreeDBProtocolError("missing native document has payload")
+                documents.append(None)
+                continue
+            try:
+                document = Document.from_dict(json.loads(payload))
+            except (ValueError, KeyError, TypeError) as exc:
+                raise TreeDBProtocolError("invalid native document payload") from exc
+            if document.id != ids[i]:
+                raise TreeDBProtocolError("native document ID mismatch")
+            documents.append(document)
+        return documents
 
     def health(self) -> Mapping[str, Any]:
         """Return the service health payload from `GET /v1/health`."""
@@ -159,6 +214,8 @@ class TreeDBClient:
         when creating a missing index or when compatibility should be enforced.
         """
 
+        if self._native is not None:
+            raise UnsupportedError("unsupported", "reset requires an explicit HTTP control client")
         request: dict[str, Any] = {"dimension": dimension, "drop_old": bool(drop_old)}
         _add_optional_non_empty_string(request, "metric", metric, "metric")
         _add_vector_index_options(request, vector_index_options)
@@ -203,6 +260,9 @@ class TreeDBClient:
     ) -> UpsertDocumentsResponse:
         """Write or replace documents in an index."""
 
+        if self._native is not None:
+            raise UnsupportedError("unsupported", "native typed upsert is not yet negotiated; use an explicit HTTP control client")
+
         request: dict[str, Any] = {"documents": [_document_for_write(doc) for doc in documents]}
         _add_expected_generation(request, expected_generation)
         if defer_vector_index_rebuild:
@@ -223,6 +283,8 @@ class TreeDBClient:
         service-supported metadata-filter delete path.
         """
 
+        if self._native is not None:
+            raise UnsupportedError("unsupported", "native delete is not implemented")
         request: dict[str, Any] = {"ids": _list_of_strings(ids, "ids")}
         _add_expected_generation(request, expected_generation)
         payload = self._request("POST", self._index_path(index, "documents", "delete"), request)
@@ -240,6 +302,8 @@ class TreeDBClient:
         The client never scans locally to emulate unsupported delete behavior.
         """
 
+        if self._native is not None:
+            raise UnsupportedError("unsupported", "native filter delete is not implemented")
         normalized = normalize_filter(filter)
         if normalized is None:
             raise InvalidFilterError("delete_by_filter requires a filter")
@@ -300,6 +364,7 @@ class TreeDBClient:
         ef_search: Optional[int] = None,
         return_embedding: bool = False,
         expected_generation: Optional[int] = None,
+        index_info: Optional[IndexInfo] = None,
     ) -> DenseVectorSearchResponse:
         """Score a query embedding through the TreeDB dense search route.
 
@@ -316,6 +381,31 @@ class TreeDBClient:
         ef_search_value = None
         if ef_search is not None:
             ef_search_value = _validate_binary_int_query_param(ef_search, "ef_search", minimum=0)
+        if self._native is not None:
+            from ._native import _dense_request, _dense_response, _section, _uint
+            if (index_info is None or index_info.name != index or index_info.extra.get("typed_input") is not True
+                    or index_info.vector_strategy != "column_graph" or index_info.metric != "cosine"
+                    or index_info.generation <= 0 or len(query_embedding) != index_info.dimension):
+                raise TreeDBConfigError("native dense search requires matching selected typed IndexInfo")
+            if route not in (None, "ann") or (expected_generation is not None and expected_generation != index_info.generation):
+                raise TreeDBConfigError("native dense route or generation conflicts with IndexInfo")
+            payload = _dense_request(index, query_embedding, top_k, ef_search_value or 0, index_info.generation, return_embedding, normalize_filter(filter) if filter is not None else None)
+            deadline = _uint(time.time_ns() + int(self.timeout * 1_000_000_000))
+            raw = self._native.command(64, 2, _section(129, payload) + _section(4, deadline), "dense_vector_search_versions")
+            ids, payloads, scores, candidates = _dense_response(raw, top_k)
+            documents = []
+            for item_id, document_raw, score in zip(ids, payloads, scores):
+                try:
+                    document = Document.from_dict(json.loads(document_raw))
+                    if document.id.encode("utf-8") != item_id:
+                        raise ValueError("document ID mismatch")
+                    document.score = score
+                except (ValueError, KeyError, TypeError) as exc:
+                    raise TreeDBProtocolError("invalid native dense document") from exc
+                documents.append(document)
+            return DenseVectorSearchResponse(index=index_info, documents=documents, metric=index_info.metric,
+                                             exact=False, candidates=candidates, route="ann",
+                                             native_base_plus_live_delta=False, native_command_version=2)
         request: dict[str, Any] = {
             "query_embedding": [float(value) for value in query_embedding],
             "top_k": top_k,

@@ -632,6 +632,8 @@ class DenseVectorSearchResponse:
     metric: str
     exact: bool
     candidates: int
+    # Negotiated dispatch version, not measured execution-work evidence.
+    native_command_version: int = 0
     # v1alpha2: execution route echo ("ann" | "exact"). Empty/absent means the
     # legacy exact scan path.
     route: Optional[str] = None

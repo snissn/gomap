@@ -34,6 +34,33 @@ Not supported:
 
 TreeDB and this client are pre-alpha; APIs may change with the service contract.
 
+## Optional native read transport
+
+Start the same service with `-native-addr 127.0.0.1:7121`; its native and HTTP
+listeners share one backend, manager and service. Close the client and drain
+both listeners before database cleanup.
+
+`TreeDBClient(http_url, native_address="127.0.0.1:7121", timeout=10)` negotiates
+native capabilities lazily. `query_by_embedding(..., index_info=info)` uses
+dense 64/v2 only for caller-held selected typed `IndexInfo` returned by HTTP
+create/open/ensure. Its generation is sent as the server guard; conflicting
+explicit generations fail. Initial ingestion/build/admission and reopen
+re-admission remain explicit HTTP control operations. Dense results include
+full payloads from the same search owner and are Python-owned after return.
+
+`get_many(index, ids)` uses unchanged GetMany 50/v1, returning owned Documents
+or `None` in request order, including repeated IDs. It is separate from search
+fetch and has no generation guard or batch-wide snapshot promise. The current
+server still performs per-ID reconstruction setup; shared typed batch-view
+materialization remains an allocation follow-up before M4 qualification.
+
+Native upsert/delete/filter-delete are not yet implemented and fail explicitly;
+use a separate HTTP client for ingestion in this read-only milestone. Other
+existing HTTP APIs retain their existing transport. There is no native request
+retry or HTTP fallback after a native error. `native_command_version=2` is
+dispatch identity only; default-zero legacy work fields are unavailable typed
+phase evidence, not proof of zero indexed JSON extraction.
+
 ## Install for local development
 
 From the repository root, use a virtual environment for editable installs

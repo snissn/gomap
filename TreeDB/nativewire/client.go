@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,6 +33,7 @@ type Client struct {
 	denseIDs              [][]byte
 	denseDocuments        [][]byte
 	denseResults          []DenseVectorSearchResult
+	denseTypedNegotiated  bool
 }
 
 // NewClient returns a native-wire client that owns conn until Close.
@@ -64,8 +66,37 @@ func (c *Client) Close() error {
 
 // Hello performs the native-wire hello handshake.
 func (c *Client) Hello(ctx context.Context) error {
-	_, _, err := c.roundTrip(ctx, iwire.FrameHello, nil, iwire.FrameHelloOK)
-	return err
+	if c == nil {
+		return io.ErrClosedPipe
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.denseTypedNegotiated = false
+	_, response, err := c.roundTripLocked(ctx, iwire.FrameHello, nil, iwire.FrameHelloOK)
+	if err != nil {
+		return err
+	}
+	sections, err := iwire.DecodeSections(response, c.limits)
+	if err != nil {
+		return err
+	}
+	raw, found, err := singletonSection(sections, iwire.SectionCapabilitySet)
+	if err != nil || !found {
+		return err
+	}
+	caps, err := decodeStringMap(raw)
+	if err != nil {
+		return err
+	}
+	for _, version := range strings.Split(caps["dense_vector_search_versions"], ",") {
+		if version == "2" {
+			c.denseTypedNegotiated = true
+		}
+	}
+	return nil
 }
 
 // Ping sends a ping frame and waits for a pong response.

@@ -1687,6 +1687,11 @@ func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
 	hybridSearch := vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
 	scalarFields := scalarFieldsFromCollectionIndexes(meta.Indexes)
 	capabilities := indexCapabilities(vectorDef, hybridSearch)
+	if serviceUsesTypedInput(meta) {
+		// The selected native planner may choose bounded exact scoring, but the
+		// separate public document-scan route is intentionally unavailable.
+		capabilities.ExactDenseScoring = false
+	}
 	capabilities.KeywordMetadataFilters = len(scalarFields) > 0
 	capabilities.HybridMetadataFilters = len(scalarFields) > 0
 	return IndexInfo{

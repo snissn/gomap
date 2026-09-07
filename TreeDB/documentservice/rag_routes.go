@@ -231,6 +231,8 @@ type RawDenseVectorResult struct {
 // RawDenseVectorSearchResponse reuses caller-provided result storage when
 // supplied; each ID and Document is response-owned.
 type RawDenseVectorSearchResponse struct {
+	// TypedColumnGraph identifies the validated selected route, not a work proof.
+	TypedColumnGraph          bool
 	Results                   []RawDenseVectorResult
 	Route                     Route
 	Candidates                int
@@ -392,6 +394,7 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 			dst = make([]RawDenseVectorResult, len(search.Results))
 		}
 		out := RawDenseVectorSearchResponse{
+			TypedColumnGraph:          info.TypedInput,
 			Results:                   dst,
 			Route:                     RouteAnn,
 			Candidates:                len(search.Results),

@@ -797,6 +797,42 @@ the close command or by connection teardown. Strict, fast, and pinned searches
 retain their public `vectorpartition.OperationsV1` consistency and validation
 semantics; native wire changes only the transport representation.
 
+### 10.1. Document-service dense search
+
+Command `64 dense_vector_search` is a LocalOnly read, never a deterministic
+mutation or command-WAL entry. Version 1 selects the cosine float32
+`native_runtime` service route. Version 2 selects the explicitly admitted,
+persisted typed-input `column_graph` service route. A mismatched strategy fails
+closed; neither version permits the legacy full-document scan route. Typed
+native filter planning may choose bounded exact scoring internally.
+
+Both versions require `deadline` (4) and `dense_search_request` (129). Request
+payload order is: length-prefixed UTF-8 index name; uvarint top-K, efSearch and
+expected generation; one-byte return-embedding bool; uvarint dimensions then
+packed little-endian FP32 query; uvarint filter-leaf count then AND-conjoined
+leaves. Each leaf contains a length-prefixed field, one-byte operator
+(`1 ==`, `2 >`, `3 >=`, `4 <`, `5 <=`), and a typed value: `1` UTF-8 string,
+`2` bool, `3` signed zigzag int64, or `4` little-endian float64. Existing bounds
+include 16 filter levels and 64 leaves; unsupported operators fail closed.
+
+Response sections are ordered IDs (102), full JSON documents (103), and
+`dense_search_response` (130). The metadata payload contains one route byte,
+uvarint candidates, exact-fallbacks, full-document-scan-fallbacks, result count,
+then one little-endian float64 score per result. Version 1 retains its legacy
+native-runtime bool byte (successful route `1`). Version 2 requires route tag
+`2`. Cross-version tags are rejected. Tag 2 identifies validated dispatch,
+**not measured execution-work evidence**; no typed phase counters are implied.
+Full documents are fetched from the search's same read owner before release.
+
+Hello capabilities advertise `dense_vector_search_versions` as a comma-separated
+set derived from registered command versions and an available standalone
+document service. `get_many_versions=1` similarly requires its registered
+standalone collection read implementation. `max_frame_size` reports the server
+frame bound. Missing capability is not support; new clients must fail closed.
+These extensible capability-map entries do not change existing frame versions.
+GetMany (50/v1) remains unchanged: it is a batched transport over local per-ID
+reads, without an expected-generation guard or a batch-wide snapshot promise.
+
 ## 11. Typed Scalars
 
 Index and query scalar codes:

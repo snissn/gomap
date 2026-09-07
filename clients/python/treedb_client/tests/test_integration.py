@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tracemalloc
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -25,10 +26,11 @@ def _free_addr() -> str:
 
 
 class TreeDBServiceProcess:
-    def __init__(self, repo_root: Path, data_dir: str) -> None:
+    def __init__(self, repo_root: Path, data_dir: str, *, native: bool = False) -> None:
         self.repo_root = repo_root
         self.data_dir = data_dir
         self.addr = _free_addr()
+        self.native_addr = _free_addr() if native else None
         self.log = tempfile.NamedTemporaryFile("w+", prefix="treedb_document_service_", suffix=".log", delete=False)
         self.proc: Optional[subprocess.Popen[str]] = None
 
@@ -48,6 +50,8 @@ class TreeDBServiceProcess:
             "-profile",
             "command_wal_durable",
         ]
+        if self.native_addr is not None:
+            cmd.extend(["-native-addr", self.native_addr])
         self.proc = subprocess.Popen(
             cmd,
             cwd=str(self.repo_root),
@@ -105,11 +109,30 @@ class TreeDBServiceProcess:
     "set TREEDB_CLIENT_RUN_INTEGRATION=1 and install Go to run TreeDB service integration tests",
 )
 class TreeDBClientIntegrationTests(unittest.TestCase):
+    def test_native_public_listener_and_client_capability(self) -> None:
+        """The native listener must belong to the same running public service."""
+        with tempfile.TemporaryDirectory(prefix="treedb_native_client_") as data_dir:
+            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            try:
+                service.start()
+                with closing(TreeDBClient(service.base_url, timeout=10)) as control:
+                    control.ensure_index("native_docs", 2)
+                    control.upsert_documents("native_docs", [Document(id="a", content="owned", embedding=[1, 0])])
+                with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as client:
+                    self.assertTrue(client.health()["ok"])
+                    documents = client.get_many("native_docs", ["a", "missing", "a"])
+                    self.assertEqual([doc.id if doc else None for doc in documents], ["a", None, "a"])
+                    self.assertEqual(documents[0].content, "owned")
+                    client.get_many("native_docs", ["missing"])
+                    self.assertEqual(documents[0].content, "owned")
+            finally:
+                service.stop()
+
     @unittest.skipUnless(sys.platform.startswith("linux"), "selected serving fixture requires Linux namespace authority and mmap")
     def test_column_graph_declared_scalar_lifecycle(self) -> None:
         """Exercise the real public client; no mocked transport or exact fallback."""
         with tempfile.TemporaryDirectory(prefix="treedb_typed_client_") as data_dir:
-            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir)
+            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
             declarations = [{"field": "meta.user_id", "value_type": "string"},
                             {"field": "meta.fpath", "value_type": "string"}]
             wanted = {"field": "meta.user_id", "operator": "==", "value": "owner"}
@@ -135,6 +158,26 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                             for i in range(32)]
                     self.assertEqual(client.upsert_documents("typed", rows, defer_vector_index_rebuild=True).upserted, 32)
                     client.optimize_index("typed", column_graph_serving=limits)
+                    with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as native:
+                        native_response = native.query_by_embedding("typed", [1, 0], 4, wanted, return_embedding=True, index_info=info)
+                        self.assertEqual(len(native_response.documents), 4)
+                        self.assertEqual(native_response.native_command_version, 2)
+                        self.assertFalse(native_response.native_base_plus_live_delta)
+                        self.assertEqual(native_response.documents[0].id, "0")
+                        self.assertEqual(native_response.documents[0].content, "text 0")
+                        retrieved = native.get_many("typed", ["0", "missing", "0"])
+                        self.assertEqual([d.id if d else None for d in retrieved], ["0", None, "0"])
+                        self.assertEqual(retrieved[0].content, "text 0")
+                        if os.environ.get("TREEDB_CLIENT_NATIVE_PROFILE") == "1":
+                            tracemalloc.start()
+                            start = time.perf_counter_ns()
+                            for _ in range(32):
+                                measured = native.query_by_embedding("typed", [1, 0], 4, wanted, return_embedding=True, index_info=info)
+                                self.assertEqual(len(measured.documents), 4)
+                            elapsed = time.perf_counter_ns() - start
+                            current, peak = tracemalloc.get_traced_memory()
+                            tracemalloc.stop()
+                            print(f"native_public_warm32 ns_per_query={elapsed // 32} python_current_B={current} python_peak_B={peak}")
                     response = client.query_by_embedding("typed", [1, 0], 4, wanted,
                                                          route="ann", return_embedding=True)
                     self.assertEqual(response.route, "ann")
@@ -153,13 +196,13 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                     client.optimize_index("typed", column_graph_action="fold")
             finally:
                 service.stop()
-            reopened = TreeDBServiceProcess(_support.REPO_ROOT, data_dir)
+            reopened = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
             try:
                 reopened.start()
                 with closing(TreeDBClient(reopened.base_url, timeout=10)) as client:
                     with self.assertRaises(TreeDBClientError):
                         client.query_by_embedding("typed", [0, 1], 1, route="ann")
-                    client.ensure_index("typed", 2, scalar_fields=declarations, typed_input=True, column_graph_serving=limits,
+                    info = client.ensure_index("typed", 2, scalar_fields=declarations, typed_input=True, column_graph_serving=limits,
                                         vector_index_options={"strategy": "column_graph"})
                     response = client.query_by_embedding("typed", [0, 1], 1, {
                         "field": "meta.user_id", "operator": "==", "value": "changed"},
@@ -168,6 +211,14 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                     self.assertEqual(response.documents[0].content, "replacement")
                     self.assertEqual(response.documents[0].meta["fpath"], "new/path")
                     self.assertEqual(response.documents[0].embedding, [0.0, 1.0])
+                    with closing(TreeDBClient(reopened.base_url, timeout=10, native_address=reopened.native_addr)) as native:
+                        latest = native.query_by_embedding("typed", [0, 1], 1, {
+                            "field": "meta.user_id", "operator": "==", "value": "changed"},
+                            index_info=info, return_embedding=True)
+                        self.assertEqual([doc.id for doc in latest.documents], ["0"])
+                        self.assertEqual(latest.documents[0].content, "replacement")
+                        self.assertEqual(latest.documents[0].meta["fpath"], "new/path")
+                        self.assertEqual(native.get_many("typed", ["2"]), [None])
             finally:
                 reopened.stop()
 

@@ -12,7 +12,34 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/documentservice"
+	"github.com/snissn/gomap/TreeDB/nativewire"
 )
+
+func TestShutdownClosesNativeBeforeDatabaseCleanup(t *testing.T) {
+	server := nativewire.NewServer(nativewire.ServerOptions{})
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, release, err := nativewire.NewInProcessClient(ctx, server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cleaned := false
+	err = shutdownDocumentService(ctx, nil, nil, nil, func() error {
+		cleaned = true
+		if err := client.Ping(ctx); err == nil {
+			t.Error("native client survived into database cleanup")
+		}
+		return nil
+	}, server)
+	if err != nil || !cleaned {
+		t.Fatalf("shutdown err=%v cleaned=%v", err, cleaned)
+	}
+}
 
 func TestParsePublicProfileFlagDocumentService(t *testing.T) {
 	profile, err := parsePublicProfileFlag("command_wal_relaxed")

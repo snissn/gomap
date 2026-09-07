@@ -126,6 +126,13 @@ const (
 
 type DocumentFormat uint64
 
+// Dense search versions identify disjoint service routes, not measured work.
+const (
+	DenseVectorSearchLegacyVersion = uint64(1)
+	DenseVectorSearchTypedVersion  = uint64(2)
+	DenseVectorSearchTypedRouteTag = byte(2)
+)
+
 const (
 	DocumentFormatDefault    DocumentFormat = 0
 	DocumentFormatJSON       DocumentFormat = 1

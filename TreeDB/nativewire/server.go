@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -804,7 +805,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 			iwire.CommandCursorClose:
 			responseSections, responseBody, responseBodySet, err = s.handleRead(ctx, header, state, cmd)
 		case iwire.CommandDenseVectorSearch:
-			responseBody, err = s.handleDenseVectorSearch(ctx, state, cmd.Known, state.responseScratch())
+			responseBody, err = s.handleVersionedDenseVectorSearch(ctx, state, cmd.Header.Version, cmd.Known, state.responseScratch())
 			responseBodySet = true
 		case iwire.CommandStats:
 			responseSections = []iwire.Section{{ID: iwire.SectionResponseMeta, Bytes: appendStringMap(nil, s.Stats())}}
@@ -854,6 +855,23 @@ func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState
 		"protocol_minor":     strconv.Itoa(int(iwire.ProtocolMinorV0)),
 		"connection_id":      strconv.FormatUint(connectionID, 10),
 		"default_ack_policy": strconv.FormatUint(uint64(s.defaultAckPolicy), 10),
+	}
+	caps["max_frame_size"] = strconv.FormatUint(s.limits.MaxFrameSize, 10)
+	if s.clusterSubmitter == nil && s.collections != nil {
+		if _, ok := s.registry.LookupCommand(iwire.CommandGetMany, 1); ok {
+			caps["get_many_versions"] = "1"
+		}
+	}
+	if s.clusterSubmitter == nil && s.documentService != nil {
+		var versions []string
+		for _, version := range []uint64{iwire.DenseVectorSearchLegacyVersion, iwire.DenseVectorSearchTypedVersion} {
+			if _, ok := s.registry.LookupCommand(iwire.CommandDenseVectorSearch, version); ok {
+				versions = append(versions, strconv.FormatUint(version, 10))
+			}
+		}
+		if len(versions) > 0 {
+			caps["dense_vector_search_versions"] = strings.Join(versions, ",")
+		}
 	}
 	body, err := iwire.AppendSection(nil, iwire.Section{ID: iwire.SectionCapabilitySet, Bytes: appendStringMap(nil, caps)})
 	if err != nil {

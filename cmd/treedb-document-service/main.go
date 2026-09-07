@@ -19,6 +19,7 @@ import (
 	"github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/documentservice"
+	"github.com/snissn/gomap/TreeDB/nativewire"
 )
 
 func main() {
@@ -30,6 +31,7 @@ func main() {
 	}()
 
 	addr := flag.String("addr", "127.0.0.1:7120", "HTTP address to listen on")
+	nativeAddr := flag.String("native-addr", "", "optional native-wire TCP address using the same document service")
 	dataDir := flag.String("dir", "/tmp/treedb-document-service", "TreeDB data directory")
 	profile := flag.String("profile", string(treedb.ProfileCommandWALDurable), "TreeDB profile: "+treedb.ProfileFlagHelp)
 	pprofAddr := flag.String("pprof", "", "optional net/http/pprof listen address, e.g. 127.0.0.1:6060")
@@ -61,6 +63,8 @@ func main() {
 	service := documentservice.NewWithDeferredVectorBuildMaintenance(manager, deferredMaintenance)
 	appServer := &http.Server{Addr: *addr, Handler: documentservice.NewHandler(service), ReadHeaderTimeout: 5 * time.Second}
 	var diagnosticsServer *http.Server
+	var nativeServer *nativewire.Server
+	nativeErrors := make(chan error, 1)
 	var shutdownMu sync.Mutex
 	shutdownComplete := false
 	shutdown := func() {
@@ -71,7 +75,7 @@ func main() {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := shutdownDocumentService(ctx, appServer, diagnosticsServer, service, cleanup); err != nil {
+		if err := shutdownDocumentService(ctx, appServer, diagnosticsServer, service, cleanup, nativeServer); err != nil {
 			log.Printf("TreeDB Document Service shutdown incomplete: %v", err)
 			return
 		}
@@ -110,6 +114,23 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *nativeAddr != "" {
+		nativeListener, err := net.Listen("tcp", *nativeAddr)
+		if err != nil {
+			_ = listener.Close()
+			log.Printf("Failed to listen for native wire on %s: %v", *nativeAddr, err)
+			exitCode = 1
+			return
+		}
+		nativeServer = nativewire.NewServer(nativewire.ServerOptions{Collections: manager, Backend: database, DocumentService: service})
+		go func() {
+			if err := nativeServer.Serve(ctx, nativeListener); err != nil && !errors.Is(err, context.Canceled) {
+				nativeErrors <- err
+				stop()
+			}
+		}()
+		fmt.Printf("TreeDB Document Service native wire listening on %s\n", *nativeAddr)
+	}
 	go func() {
 		<-ctx.Done()
 		shutdown()
@@ -123,13 +144,24 @@ func main() {
 		exitCode = 1
 		return
 	}
+	select {
+	case err := <-nativeErrors:
+		log.Printf("Native server error: %v", err)
+		exitCode = 1
+	default:
+	}
 }
 
 // shutdownDocumentService preserves callback lifetime: stop request admission,
 // drain diagnostics, then release service state and its database.
-func shutdownDocumentService(ctx context.Context, appServer, diagnosticsServer *http.Server, service *documentservice.Service, cleanup func() error) error {
+func shutdownDocumentService(ctx context.Context, appServer, diagnosticsServer *http.Server, service *documentservice.Service, cleanup func() error, nativeServers ...*nativewire.Server) error {
 	if appServer != nil {
 		if err := appServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+	}
+	for _, server := range nativeServers {
+		if err := server.Close(); err != nil {
 			return err
 		}
 	}

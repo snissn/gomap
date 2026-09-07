@@ -60,6 +60,9 @@ func TestDenseVectorSearchNativewireParityAndBorrowing(t *testing.T) {
 	if err = client.Hello(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1, TypedColumnGraph: true}); err == nil {
+		t.Fatal("typed command accepted legacy native-runtime index")
+	}
 
 	filters := []*documentservice.Filter{
 		{Field: "meta.user_id", Operator: "==", Value: "alpha"},
