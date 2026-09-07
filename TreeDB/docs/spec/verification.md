@@ -11,6 +11,14 @@ forces real read-at scratch reuse across base/replacement generations and checks
 deletion. Descriptor/primary-ID setup is still part-sized; these are not whole
 public-request constant-allocation claims.
 
+`TestTypedGraphPublicEmptyLifecycle` exercises empty Ensure, filtered/unfiltered
+search, insert, delete-all/fold, held-owner fetch, ordinary reopen/re-ensure and
+reinsert with identical M2/M16 schemas and zero canonical-row reconstruction.
+The internal empty prepared-cache seam still rejects without retaining a holder;
+public empty cutover releases its obsolete keeper without closing held owners.
+`TestTypedGraphPublicEmptyFoldLateKeeper` pauses a nonempty fold's captured-cache
+build across a second empty fold and checks the late keeper is also released.
+
 Explicit typed graph serving: `TestTypedGraphPublicSameOwnerServing` covers public
 ensure, typed mutation, same-owner filtered search/full fetch, fold, independent
 manager and normal reopen. `TestTypedGraphPublicServingPressureAndOptions` covers

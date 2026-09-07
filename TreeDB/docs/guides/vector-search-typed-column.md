@@ -43,6 +43,12 @@ part of query-ready time and peak memory; it is not retroactively covered by
 ongoing-work admission. This route supports the selected string/FP32 schema,
 not every schema illustrated elsewhere in this guide.
 
+An empty built graph can be ensured and searched (zero results), then receive
+typed inserts. Deleting all rows and folding back to an empty base is also
+supported, including reopen and re-ensure. Empty bases need no optional prepared
+search cache holder; admission, same-owner fetch lifetime, and positive limits
+still apply. See `TestTypedGraphPublicEmptyLifecycle`.
+
 Supply positive `ColumnGraphServingOptions` limits for publication, owners and
 cold discovery, candidate output, maintenance, filtering, fold rows, and search
 candidates. Zero is not an automatic default. Size these from workload evidence;

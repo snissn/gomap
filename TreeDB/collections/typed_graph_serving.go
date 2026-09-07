@@ -102,12 +102,21 @@ func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string,
 		return nil
 	}
 	prepared := coord.typedPublication.Load()
+	if prepared == nil || prepared.invalid || prepared.servingBase == nil {
+		return ErrVectorIndexSnapshotMismatch
+	}
 	if _, err := c.renewTypedGraphWorkEpoch(ctx, m); err != nil {
 		return err
 	}
-	warmed, err := c.acquireTypedGraphCapturedBaseCache(index, o)
-	if err != nil {
-		return err
+	// An exact empty base has no shared prepared search holder to warm. Its
+	// coherent owner still serves the mutable suffix; the CAS below binds this
+	// decision to the validated immutable state rather than a cache result.
+	var warmed *collectionVectorIndexPreparedSearch
+	if prepared.servingBase.graph.RowCount != 0 {
+		warmed, err = c.acquireTypedGraphCapturedBaseCache(index, o)
+		if err != nil {
+			return err
+		}
 	}
 	ready := *prepared
 	ready.servingAdmitted = true
@@ -115,8 +124,13 @@ func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string,
 		// A late captured-base build is only an accelerator, never authority.
 		// Release this rejected keeper without invalidating a newer cache entry
 		// or any independently retained read-view owner.
-		c.invalidateCollectionVectorIndexPreparedSearch(collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}, warmed)
+		if warmed != nil {
+			c.invalidateCollectionVectorIndexPreparedSearch(collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}, warmed)
+		}
 		return ErrConcurrentMutation
+	}
+	if ready.servingBase.graph.RowCount == 0 {
+		c.invalidateTypedGraphEmptyBaseKeeper(index)
 	}
 	return nil
 }
@@ -137,8 +151,38 @@ func (c *Collection) FoldColumnGraphServing(ctx context.Context, index string) e
 	if _, err := c.renewTypedGraphWorkEpoch(ctx, p.options.Maintenance); err != nil {
 		return err
 	}
+	if state := c.collectionSchemaCoordinator().typedPublication.Load(); state != nil && !state.invalid && state.servingAdmitted && state.servingBase != nil && state.servingBase.graph.RowCount == 0 {
+		// Empty publication needs no optional shared prepared search holder.
+		c.invalidateTypedGraphEmptyBaseKeeper(index)
+		return nil
+	}
 	_, err := c.acquireTypedGraphCapturedBaseCache(index, p.options.Owners)
+	if err == nil {
+		// A concurrent empty fold may have passed cleanup while this build
+		// was in flight. Recheck after installing our optional keeper.
+		c.invalidateTypedGraphEmptyBaseKeeper(index)
+	}
 	return err
+}
+
+// Without a replacement warm, an empty base must release its previous keeper.
+// Observe the exact cache object only while the installed state is healthy and
+// empty. A later nonempty publication/cache replacement cannot be invalidated
+// by this exact-object cleanup; independent read-owner refs remain alive.
+func (c *Collection) invalidateTypedGraphEmptyBaseKeeper(index string) {
+	slot := collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}
+	coord := c.collectionSchemaCoordinator()
+	var old *collectionVectorIndexPreparedSearch
+	c.vectorBufferedSearchMu.Lock()
+	if state := coord.typedPublication.Load(); state != nil && !state.invalid && state.servingAdmitted && state.servingBase != nil && state.servingBase.graph.RowCount == 0 {
+		if entry := c.vectorBufferedSearch[slot]; entry != nil && !entry.building {
+			old = entry.prepared
+		}
+	}
+	c.vectorBufferedSearchMu.Unlock()
+	if old != nil {
+		c.invalidateCollectionVectorIndexPreparedSearch(slot, old)
+	}
 }
 
 // RenewColumnGraphServing renews attempted-work allowance only after successful
