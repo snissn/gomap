@@ -416,20 +416,42 @@ func columnAssetLifecycleReleaseProcessRegistryRecordsForDB(db *backenddb.DB, db
 }
 
 func (c *Collection) columnAssetLifecycleRegistrySnapshot() []columnAssetLifecycleRegistryRecord {
+	records, _ := c.columnAssetLifecycleRegistrySnapshotWithLimit(0)
+	return records
+}
+
+func (c *Collection) columnAssetLifecycleRegistrySnapshotWithLimit(maxEntries int) ([]columnAssetLifecycleRegistryRecord, error) {
+	if maxEntries < 0 {
+		return nil, ErrColumnAssetReachabilityLifecycleLimit
+	}
 	if c == nil || c.db == nil {
-		return nil
+		return nil, nil
 	}
 	dbID := columnAssetLifecycleRegistryProcessDBID(c.db)
 	if dbID == 0 {
-		return nil
+		return nil, nil
 	}
 	scope := columnAssetLifecyclePinScope{dbID: dbID, collection: c.meta.Name, namespace: columnAssetLifecycleNamespace(c)}
 	columnAssetLifecycleProcessRegistries.Lock()
 	defer columnAssetLifecycleProcessRegistries.Unlock()
 	if len(columnAssetLifecycleProcessRegistries.records) == 0 {
-		return nil
+		return nil, nil
 	}
-	out := make([]columnAssetLifecycleRegistryRecord, 0, len(columnAssetLifecycleProcessRegistries.records))
+	capacity := len(columnAssetLifecycleProcessRegistries.records)
+	if maxEntries > 0 {
+		remaining := maxEntries
+		capacity = 0
+		for _, record := range columnAssetLifecycleProcessRegistries.records {
+			if record.Scope != scope {
+				continue
+			}
+			if err := consumeColumnAssetLifecycleEntries(&remaining, 1, len(record.Refs), len(record.Segments)); err != nil {
+				return nil, err
+			}
+			capacity++
+		}
+	}
+	out := make([]columnAssetLifecycleRegistryRecord, 0, capacity)
 	for _, record := range columnAssetLifecycleProcessRegistries.records {
 		if record.Scope != scope {
 			continue
@@ -441,7 +463,7 @@ func (c *Collection) columnAssetLifecycleRegistrySnapshot() []columnAssetLifecyc
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].ID < out[j].ID
 	})
-	return out
+	return out, nil
 }
 
 func summarizeColumnAssetLifecycleRegistries(records []columnAssetLifecycleRegistryRecord) columnAssetLifecycleRegistrySummaries {

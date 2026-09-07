@@ -183,7 +183,7 @@ func BenchmarkColumnAssetReachabilityDiscoveryBudget(b *testing.B) {
 		opts ColumnAssetReachabilityOptions
 	}{
 		{"default", ColumnAssetReachabilityOptions{}},
-		{"bounded", ColumnAssetReachabilityOptions{MaxSegmentEntries: 4096, MaxManifestRecords: 4096, MaxManifestBytes: 4 << 20}},
+		{"bounded", ColumnAssetReachabilityOptions{MaxSegmentEntries: 4096, MaxManifestRecords: 4096, MaxManifestBytes: 4 << 20, MaxLifecycleEntries: 4096}},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
@@ -194,5 +194,49 @@ func BenchmarkColumnAssetReachabilityDiscoveryBudget(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+func TestColumnAssetReachabilityLifecycleCopyBudget(t *testing.T) {
+	col, _, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
+	refs, err := col.typedGraphBaseReachabilityRefsWithBudget(context.Background(), 4096, 4<<20)
+	if err != nil || len(refs) < 2 {
+		t.Fatalf("refs%d err=%v", len(refs), err)
+	}
+	pin, err := col.AcquireColumnAssetLifecyclePinSet(ColumnAssetLifecyclePinSetOptions{Source: ColumnAssetLifecyclePinSourcePreparedQuery, Owner: "copy-budget", Refs: refs[:2]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pin.Close()
+	registry, err := col.RegisterColumnAssetPreparedAsset(ColumnAssetPreparedAssetRegistrationOptions{Owner: "copy-budget", Source: "test", Refs: refs[:2]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	for _, limit := range []int{-1, 1, 2} {
+		if entries, err := col.columnAssetLifecyclePinSetSnapshotWithLimit(limit); !errors.Is(err, ErrColumnAssetReachabilityLifecycleLimit) || len(entries) != 0 {
+			t.Fatalf("pin limit%d: entries%d err=%v", limit, len(entries), err)
+		}
+		if entries, err := col.columnAssetLifecycleRegistrySnapshotWithLimit(limit); !errors.Is(err, ErrColumnAssetReachabilityLifecycleLimit) || len(entries) != 0 {
+			t.Fatalf("registry limit%d: entries%d err=%v", limit, len(entries), err)
+		}
+		stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{MaxLifecycleEntries: limit})
+		if !errors.Is(err, ErrColumnAssetReachabilityLifecycleLimit) || stats.SegmentsDeleted != 0 {
+			t.Fatalf("GC limit%d: deleted%d err=%v", limit, stats.SegmentsDeleted, err)
+		}
+	}
+	for _, limit := range []int{0, 65536} {
+		pins, err := col.columnAssetLifecyclePinSetSnapshotWithLimit(limit)
+		if err != nil || len(pins) == 0 {
+			t.Fatalf("pins limit%d: %v", limit, err)
+		}
+		records, err := col.columnAssetLifecycleRegistrySnapshotWithLimit(limit)
+		if err != nil || len(records) == 0 {
+			t.Fatalf("records limit%d: %v", limit, err)
+		}
+		plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{MaxLifecycleEntries: limit})
+		if err != nil || !plan.Complete {
+			t.Fatalf("plan limit%d complete%v err=%v", limit, plan.Complete, err)
+		}
 	}
 }

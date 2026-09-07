@@ -52,7 +52,17 @@ when input exceeds the cap. These are per-manifest input limits, not an estimate
 of decoded heap or a combined working-set cap. Existing vector-partition lifecycle
 limits and caller/process pin inventories remain separate.
 
-`ColumnAssetGCOptions` forwards all three discovery limits to the same planner.
+`MaxLifecycleEntries` optionally bounds each lifecycle snapshot's matching records
+plus refs and quarantine segments before copying under its existing registry lock.
+It also bounds the combined expanded lifecycle input refs/segments and the
+process-wide mapped-pin copy before filtering by database. Excess fails with
+`ErrColumnAssetReachabilityLifecycleLimit`; zero retains unlimited reporting.
+Copied strings retain their existing immutable backing; the cap covers slice
+entries, not all process memory, decoder scratch, or vector-partition loading.
+Several bounded snapshots/expanded lists can coexist, so a caller reserving
+maintenance workspace must include their combined backing, not just one list.
+
+`ColumnAssetGCOptions` forwards these discovery limits to the same planner.
 Over-budget or incomplete discovery cannot authorize deletion. Internal lifecycle
 consumers refreshing accounting must keep the existing storage-mutation epoch
 across successful GC, fresh bounded inventory and accounting refresh. Failed or

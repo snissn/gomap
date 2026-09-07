@@ -17,9 +17,10 @@ import (
 type ColumnAssetGCOptions struct {
 	DryRun bool
 	// Discovery limits have the same semantics as ColumnAssetReachabilityOptions.
-	MaxSegmentEntries  int
-	MaxManifestRecords int
-	MaxManifestBytes   int64
+	MaxSegmentEntries   int
+	MaxManifestRecords  int
+	MaxManifestBytes    int64
+	MaxLifecycleEntries int
 	// Detailed keeps detailed ref and segment entries in the returned plan.
 	Detailed bool
 	// SegmentDetails keeps segment-level entries in the returned plan without
@@ -329,6 +330,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		MaxSegmentEntries:                     opts.MaxSegmentEntries,
 		MaxManifestRecords:                    opts.MaxManifestRecords,
 		MaxManifestBytes:                      opts.MaxManifestBytes,
+		MaxLifecycleEntries:                   opts.MaxLifecycleEntries,
 		Detailed:                              opts.Detailed,
 		SegmentDetails:                        needSegmentEntries,
 		ProtectCandidateRefsForOlderSnapshots: true,

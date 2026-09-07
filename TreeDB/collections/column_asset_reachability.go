@@ -32,6 +32,9 @@ type ColumnAssetReachabilityOptions struct {
 	// the planning snapshot before decoding. Set both positive, or both zero.
 	MaxManifestRecords int
 	MaxManifestBytes   int64
+	// MaxLifecycleEntries caps lifecycle snapshot records plus refs/segments,
+	// expanded input refs, and process-wide mapped pin copies. Zero is unlimited.
+	MaxLifecycleEntries int
 	// ProtectCandidateRefsForOlderSnapshots conservatively treats candidate
 	// refs as pinned while any active TreeDB snapshot predates the planning
 	// snapshot. Destructive GC enables this; non-destructive rewrite leaves it
@@ -52,6 +55,9 @@ var ErrColumnAssetReachabilitySegmentLimit = errors.New("collections: column ass
 
 // ErrColumnAssetReachabilityManifestLimit reports invalid or exceeded manifest input limits.
 var ErrColumnAssetReachabilityManifestLimit = errors.New("collections: column asset manifest input budget exceeded or invalid")
+
+// ErrColumnAssetReachabilityLifecycleLimit reports a lifecycle copy limit failure.
+var ErrColumnAssetReachabilityLifecycleLimit = errors.New("collections: column asset lifecycle copy limit exceeded or invalid")
 
 type columnAssetReachabilityOptionsInternal struct {
 	ColumnAssetReachabilityOptions
@@ -327,6 +333,9 @@ func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts Colum
 }
 
 func (opts ColumnAssetReachabilityOptions) validateDiscoveryLimits() error {
+	if opts.MaxLifecycleEntries < 0 {
+		return ErrColumnAssetReachabilityLifecycleLimit
+	}
 	if opts.MaxSegmentEntries < 0 {
 		return ErrColumnAssetReachabilitySegmentLimit
 	}
@@ -473,7 +482,10 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 	if err := input.addQuarantineSegments(ctx, opts.QuarantineSegments); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
-	activePinnedRefs, mappedResourceStats := columnAssetReachabilityMappedResourcePins(input.rootDir, input.namespace)
+	activePinnedRefs, mappedResourceStats, err := columnAssetReachabilityMappedResourcePinsWithLimit(input.rootDir, input.namespace, opts.MaxLifecycleEntries)
+	if err != nil {
+		return columnAssetReachabilityPlanIdentity(input), input.refs, err
+	}
 	input.mappedResources = mappedResourceStats
 	if mappedResourceStats.UnconvertiblePins != 0 {
 		input.pinStateIncomplete = true
@@ -527,14 +539,22 @@ func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapsho
 }
 
 func columnAssetReachabilityMappedResourcePins(rootDir, namespace string) ([]ColumnAssetRef, ColumnAssetReachabilityMappedResourceStats) {
+	refs, stats, _ := columnAssetReachabilityMappedResourcePinsWithLimit(rootDir, namespace, 0)
+	return refs, stats
+}
+
+func columnAssetReachabilityMappedResourcePinsWithLimit(rootDir, namespace string, maxPins int) ([]ColumnAssetRef, ColumnAssetReachabilityMappedResourceStats, error) {
 	globalStats := mappedresource.GlobalStats()
 	stats := ColumnAssetReachabilityMappedResourceStats{
 		DeniedResources: sumMappedResourceDenied(globalStats.DeniedByReason),
 		FallbackReads:   globalStats.FallbackReads,
 	}
-	pins := mappedresource.GlobalPinSummary()
+	pins, err := mappedresource.GlobalPinSummaryWithLimit(maxPins)
+	if err != nil {
+		return nil, stats, errors.Join(ErrColumnAssetReachabilityLifecycleLimit, err)
+	}
 	if len(pins) == 0 {
-		return nil, stats
+		return nil, stats, nil
 	}
 	refs := make([]ColumnAssetRef, 0, len(pins))
 	for _, pin := range pins {
@@ -566,7 +586,7 @@ func columnAssetReachabilityMappedResourcePins(rootDir, namespace string) ([]Col
 		refs = append(refs, ref)
 		stats.PinnedRefs++
 	}
-	return refs, stats
+	return refs, stats, nil
 }
 
 // A certified empty graph adjacency/document-ID values section owns no bytes. Its positive offsets

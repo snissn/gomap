@@ -576,19 +576,53 @@ func (c *Collection) columnAssetLifecycleAugmentReachabilityOptionsWithContext(c
 	if err := ctx.Err(); err != nil {
 		return opts, err
 	}
+	remaining := opts.MaxLifecycleEntries
+	if opts.MaxLifecycleEntries > 0 {
+		if err := consumeColumnAssetLifecycleEntries(&remaining, len(opts.CandidateRefs), len(opts.PendingRefs), len(opts.PreparedRefs), len(opts.PreparedQueryRefs), len(opts.QuarantineRefs), len(opts.QuarantineSegments), len(opts.PinnedRefs)); err != nil {
+			return opts, err
+		}
+	}
 	baseRefs, err := c.typedGraphBaseReachabilityRefsWithBudget(ctx, opts.MaxManifestRecords, opts.MaxManifestBytes)
 	if err != nil {
 		return opts, err
+	}
+	if opts.MaxLifecycleEntries > 0 {
+		if err := consumeColumnAssetLifecycleEntries(&remaining, len(baseRefs)); err != nil {
+			return opts, err
+		}
 	}
 	opts.PinnedRefs = append(opts.PinnedRefs, baseRefs...)
 	prepared, pinned, err := c.vectorPartitionReachabilityRefsV1(opts.releaseVectorPartitionReclaimIDs)
 	if err != nil {
 		return opts, err
 	}
+	if opts.MaxLifecycleEntries > 0 {
+		if err := consumeColumnAssetLifecycleEntries(&remaining, len(prepared), len(pinned)); err != nil {
+			return opts, err
+		}
+	}
 	opts.PreparedRefs = append(opts.PreparedRefs, prepared...)
 	opts.PinnedRefs = append(opts.PinnedRefs, pinned...)
-	pins := c.columnAssetLifecyclePinSetSnapshot()
-	registryRecords := c.columnAssetLifecycleRegistrySnapshot()
+	pins, err := c.columnAssetLifecyclePinSetSnapshotWithLimit(opts.MaxLifecycleEntries)
+	if err != nil {
+		return opts, err
+	}
+	registryRecords, err := c.columnAssetLifecycleRegistrySnapshotWithLimit(opts.MaxLifecycleEntries)
+	if err != nil {
+		return opts, err
+	}
+	if opts.MaxLifecycleEntries > 0 {
+		for _, pin := range pins {
+			if err := consumeColumnAssetLifecycleEntries(&remaining, len(pin.Refs)); err != nil {
+				return opts, err
+			}
+		}
+		for _, record := range registryRecords {
+			if err := consumeColumnAssetLifecycleEntries(&remaining, len(record.Refs), len(record.Segments)); err != nil {
+				return opts, err
+			}
+		}
+	}
 	refs := columnAssetLifecycleReachabilityRefs(ColumnAssetLifecycleOptions{
 		CandidateRefs:      opts.CandidateRefs,
 		PendingRefs:        opts.PendingRefs,
@@ -645,20 +679,52 @@ func columnAssetLifecycleReachabilityRefs(opts ColumnAssetLifecycleOptions, pins
 }
 
 func (c *Collection) columnAssetLifecyclePinSetSnapshot() []columnAssetLifecyclePinSetRecord {
+	records, _ := c.columnAssetLifecyclePinSetSnapshotWithLimit(0)
+	return records
+}
+
+func consumeColumnAssetLifecycleEntries(remaining *int, counts ...int) error {
+	for _, count := range counts {
+		if count < 0 || count > *remaining {
+			return ErrColumnAssetReachabilityLifecycleLimit
+		}
+		*remaining -= count
+	}
+	return nil
+}
+
+func (c *Collection) columnAssetLifecyclePinSetSnapshotWithLimit(maxEntries int) ([]columnAssetLifecyclePinSetRecord, error) {
+	if maxEntries < 0 {
+		return nil, ErrColumnAssetReachabilityLifecycleLimit
+	}
 	if c == nil || c.db == nil {
-		return nil
+		return nil, nil
 	}
 	dbID := columnAssetLifecycleProcessDBID(c.db)
 	if dbID == 0 {
-		return nil
+		return nil, nil
 	}
 	scope := columnAssetLifecyclePinScope{dbID: dbID, collection: c.meta.Name, namespace: columnAssetLifecycleNamespace(c)}
 	columnAssetLifecycleProcessPins.Lock()
 	defer columnAssetLifecycleProcessPins.Unlock()
 	if len(columnAssetLifecycleProcessPins.pins) == 0 {
-		return nil
+		return nil, nil
 	}
-	out := make([]columnAssetLifecyclePinSetRecord, 0, len(columnAssetLifecycleProcessPins.pins))
+	capacity := len(columnAssetLifecycleProcessPins.pins)
+	if maxEntries > 0 {
+		remaining := maxEntries
+		capacity = 0
+		for _, record := range columnAssetLifecycleProcessPins.pins {
+			if record.Scope != scope {
+				continue
+			}
+			if err := consumeColumnAssetLifecycleEntries(&remaining, 1, len(record.Refs)); err != nil {
+				return nil, err
+			}
+			capacity++
+		}
+	}
+	out := make([]columnAssetLifecyclePinSetRecord, 0, capacity)
 	for _, record := range columnAssetLifecycleProcessPins.pins {
 		if record.Scope != scope {
 			continue
@@ -669,7 +735,7 @@ func (c *Collection) columnAssetLifecyclePinSetSnapshot() []columnAssetLifecycle
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].ID < out[j].ID
 	})
-	return out
+	return out, nil
 }
 
 func summarizeColumnAssetLifecyclePins(pins []columnAssetLifecyclePinSetRecord) ColumnAssetLifecyclePinSummary {
