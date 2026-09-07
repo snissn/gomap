@@ -161,6 +161,9 @@ func columnStoreColumnNameSet(columns []ColumnStoreColumn) map[string]struct{} {
 	return present
 }
 
+// Projection is an internal read-only view consumed synchronously by encoders
+// and sidecar builders. All-column, empty and contiguous projections borrow
+// input storage; callers must keep rows alive and unchanged through consumption.
 func projectColumnDeclaredRowsForColumns(allColumns, selected []ColumnStoreColumn, rows []columnDeclaredRow) ([]columnDeclaredRow, error) {
 	if len(selected) == 0 {
 		out := make([]columnDeclaredRow, len(rows))
@@ -191,14 +194,30 @@ func projectColumnDeclaredRowsForColumns(allColumns, selected []ColumnStoreColum
 	for i, col := range allColumns {
 		indexByName[col.Name] = i
 	}
+	start, contiguous := indexByName[selected[0].Name]
+	for i, col := range selected {
+		index, ok := indexByName[col.Name]
+		if !ok || index != start+i {
+			contiguous = false
+			break
+		}
+	}
 	out := make([]columnDeclaredRow, len(rows))
 	for rowIdx, row := range rows {
-		out[rowIdx] = columnDeclaredRow{ID: bytes.Clone(row.ID), Deleted: row.Deleted}
+		out[rowIdx] = columnDeclaredRow{ID: row.ID, Deleted: row.Deleted}
+		if !contiguous {
+			out[rowIdx].ID = bytes.Clone(row.ID)
+		}
 		if row.Deleted {
 			continue
 		}
 		if len(row.Values) != len(allColumns) {
 			return nil, fmt.Errorf("collections: typed-storage row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(allColumns))
+		}
+		if contiguous {
+			end := start + len(selected)
+			out[rowIdx].Values = row.Values[start:end:end]
+			continue
 		}
 		out[rowIdx].Values = make([]columnDeclaredValue, len(selected))
 		for selectedIdx, col := range selected {

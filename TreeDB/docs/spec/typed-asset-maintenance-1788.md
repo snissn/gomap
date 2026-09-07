@@ -68,6 +68,56 @@ consumers refreshing accounting must keep the existing storage-mutation epoch
 across successful GC, fresh bounded inventory and accounting refresh. Failed or
 partially completed cleanup statistics are not reclamation credit.
 
+### Internal fold: simultaneous known workspace
+
+The existing one-fold/renewal fence prevents two maintenance workspaces from
+overlapping. Ordinary writes and retained readers can overlap a fold, so their
+existing current/pending/retired ownership limits remain additive, not replaced
+by the fold's cold limits. No new resource counter is needed to express this sum.
+For admitted physical rows `N`, columns `C`, degree `M` (default 16), cold decoded
+term limit `T`, and the existing manifest/asset/discovery limits, track:
+
+| Coexisting term | Existing ownership and limit basis |
+| --- | --- |
+| Current/pending/retired typed state and reader resources | Publication receipts, owner state/asset limits; epoch retained admission includes current and retained owners, while pending receipts must be zero at renewal |
+| Captured/latest manifests and lifecycle refs | Each raw manifest is preflighted; captured/current and expanded refs coexist, so add their record headers and backing rather than taking their maximum |
+| Visibility rows, full reconstruction, FP32 values | `N` row headers, `N*C` union headers, and `N*dims*4` are individually bounded by `T`; raw asset bytes have a separate summed limit |
+| Row projection | Contiguous selected columns now borrow capped value slices and IDs synchronously; only projected row headers are new. Noncontiguous/reordered selections retain their existing copies |
+| Native construction | Five logical terms are each checked against `T` before materialization/output: node headers; 33 layer headers per node; `N*34*M` neighbor entries; at most 16 concurrent planning populations; reciprocal groups bounded by `min(33*N,16*34*M)` with degree-plus-batch scratch |
+| Candidate output and publication | Encoded attempted-work and appender-attempt admission remain separate from buffer allocation. Owned rows, encoded row/typed images, graph output, locators and native publisher scratch can coexist |
+| Discovery | Native entry, segment, manifest and lifecycle cardinality caps bound the selected epoch's inventories; several snapshot/expanded/map representations coexist |
+
+Native levels are capped at 32 by `levelForDocumentID`; layer 0 has `2M` neighbors
+and upper layers `M`. Planning width is at most 16 (8 for the M=8 specialization),
+not an assumed `GOMAXPROCS`. Reciprocal workers are bounded by their group count
+even if `GOMAXPROCS` changes. EF does not preallocate EF entries; visited/candidate
+populations are bounded by N. Division checks reject degree/product overflow and
+planning/reciprocal pressure without allocating graph buffers. The profiled
+16K/M16 fixture remains admitted by its existing 512MiB per-term limit.
+
+The combined **known logical storage** is the sum of the rows in this table,
+not `T` alone (the five native terms alone can sum to `5*T`). This is not an exact
+Go heap ceiling: slice capacity growth, old/new buffers during growth, maps,
+allocator rounding, pooled spare search buffers and native publisher scratch
+must be added for a heap/RSS estimate. The temporary native construction index
+owns its `sync.Pool`; at most 16 active planning searches does not bound spare
+pool backing. That index is not installed as a serving index or retained by the
+fold result; reclamation follows normal GC/pool cleanup, not synchronous release
+on return. Raw asset limits do not by
+themselves bound every decoded expansion.
+The selected row-string/FP32 schema avoids generic dictionary/list expansion;
+broader schemas need their own decoder limits. Likewise, inherited allocator
+cache-reset scans use the existing listing, not the optional planner cap:
+bounded epoch inventory plus admitted managed output gives a finite selected
+namespace envelope only while other producers/external directory mutation are
+excluded. Public admission must establish those conditions; this checkpoint
+does not close arbitrary-schema/process-wide workspace qualification.
+
+Materialization still clones typed-cache-backed payloads before closing the
+cache. Removing that copy merely because projection can borrow would violate a
+different lifetime. The projection optimization changes neither codec validation
+nor the captured/current/fallback asset union.
+
 ## Active mappedresource pins
 
 Every `mappedresource.Manager` contributes to a process-wide active pin summary.

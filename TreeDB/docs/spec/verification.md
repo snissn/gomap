@@ -41,6 +41,15 @@ and cross-generation mixed row debt stays bounded; pager/WAL growth is separate.
 
 ## Minima native-path contract (#4615)
 
+`TestTypedGraphContiguousProjectionWorkspace` checks the internal synchronous
+borrow, capped slice capacity, unchanged input, fixed allocation count, and
+unchanged noncontiguous/reordered/error behavior. Allocation-only checks follow
+the existing non-race convention; semantic checks still run under race.
+`TestTypedGraphFoldConstructionWorkspaceAdmission` rejects overflow/degree,
+planning and reciprocal logical workspace excess before graph allocation, while
+admitting the existing 16K/M16 limits without treating EF as an allocation count.
+These checks do not certify a process-wide heap bound or activate public serving.
+
 `minima-native-execution.md` defines the target, not current mutable graph
 support. `TreeDB/cmd/treedb_rag_benchmark/minima_bounded_test.go` and the existing
 `TestMinima` suite check versioned bounded fixtures, frozen full-manifest

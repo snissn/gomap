@@ -72,7 +72,7 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 			if e != nil {
 				return e
 			}
-			refs, e := validateTypedGraphFoldView(view, cold, maxRows)
+			refs, e := validateTypedGraphFoldView(view, cold, maxRows, captured.meta.VectorIndexes[0])
 			if e != nil {
 				return e
 			}
@@ -229,7 +229,7 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 	if err != nil {
 		return err
 	}
-	if _, err := validateTypedGraphFoldView(view, cold, maxRows); err != nil {
+	if _, err := validateTypedGraphFoldView(view, cold, maxRows, latest.meta.VectorIndexes[0]); err != nil {
 		return err
 	}
 	// The lock-held current locator stream is independently charged. A valid
@@ -397,7 +397,7 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 	return nil
 }
 
-func validateTypedGraphFoldView(view columnPhysicalScanSnapshotView, cold typedGraphColdLimits, maxRows int) ([]ColumnAssetRef, error) {
+func validateTypedGraphFoldView(view columnPhysicalScanSnapshotView, cold typedGraphColdLimits, maxRows int, def VectorIndexDefinition) ([]ColumnAssetRef, error) {
 	if err := validateTypedGraphOverlayVectorOwners(view.FullConfig); err != nil {
 		return nil, err
 	}
@@ -409,6 +409,48 @@ func validateTypedGraphFoldView(view columnPhysicalScanSnapshotView, cold typedG
 		physicalRows += ref.Rows
 	}
 	if int64(physicalRows) > cold.DecodedTermBytes/int64(reflect.TypeFor[columnPhysicalVisibleRow]().Size()) || int64(len(view.FullConfig.Columns)) > cold.DecodedTermBytes/int64(typedGraphDeclaredValueHeaderBytes())/int64(max(physicalRows, 1)) {
+		return nil, errTypedGraphOverlayFoldNeeded
+	}
+	// Bound logical native construction terms before materialization or output.
+	// levelForDocumentID caps at 32; layer 0 has 2M edges and 32 upper
+	// layers have M each. These are element budgets, not Go heap/RSS bounds.
+	n, m := int64(physicalRows), int64(def.M)
+	if m <= 0 {
+		m = defaultVectorIndexM
+	}
+	fits := func(factors ...int64) bool {
+		remaining := cold.DecodedTermBytes
+		for _, factor := range factors {
+			if factor < 0 {
+				return false
+			}
+			if factor == 0 {
+				return true
+			}
+			remaining /= factor
+		}
+		return remaining > 0
+	}
+	neighborBytes := int64(reflect.TypeFor[vectorIndexNeighbor]().Size())
+	candidateBytes := int64(reflect.TypeFor[vectorIndexCandidate]().Size())
+	if !fits(max(n, 1), 34, m, neighborBytes) ||
+		!fits(max(n, 1), 33, int64(reflect.TypeFor[[]vectorIndexNeighbor]().Size())) ||
+		!fits(max(n, 1), int64(reflect.TypeFor[vectorIndexNode]().Size())) {
+		return nil, errTypedGraphOverlayFoldNeeded
+	}
+	// Planning has at most 16 concurrent searches. EF does not allocate by
+	// value: visited and candidate populations are bounded by the N-node graph.
+	batch := int64(nativeVectorFrozenPrefixBatchWidth)
+	if !fits(max(n, 64), min(n, batch), 8*candidateBytes+4) {
+		return nil, errTypedGraphOverlayFoldNeeded
+	}
+	// Reciprocal work can use more workers than planning. Bound by distinct
+	// (node,layer) groups and batch links, never an assumed GOMAXPROCS value.
+	if !fits(n, 33) || !fits(batch, 34, m) || cold.DecodedTermBytes < batch || m > (cold.DecodedTermBytes-batch)/2 {
+		return nil, errTypedGraphOverlayFoldNeeded
+	}
+	groups := min(n*33, batch*34*m) // direct checks above, independent of struct sizes
+	if !fits(groups, 2*m+batch, 4*neighborBytes+8) {
 		return nil, errTypedGraphOverlayFoldNeeded
 	}
 	for _, column := range view.FullConfig.Columns {
