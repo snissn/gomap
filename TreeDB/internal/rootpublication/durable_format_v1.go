@@ -67,9 +67,10 @@ type DependencyManifestRefV1 struct {
 type DependencyManifestV1 struct {
 	// The slice is owned; its values hold immutable normalized metadata shared
 	// with retained entry caches. They contain no resource handles or pins.
-	entries []*dependencyManifestEncodedEntryV1
-	payload []byte
-	digest  [32]byte
+	entries    []*dependencyManifestEncodedEntryV1
+	payload    []byte
+	byteLength int
+	digest     [32]byte
 }
 
 // DependencyManifestBuildWorkV1 reports canonical entry encoding work. Payload
@@ -101,11 +102,8 @@ func NewDependencyManifestV1WithWork(entries []DependencyManifestEntryV1) (*Depe
 		work.EntriesEncoded++
 		work.BytesEncoded += uint64(len(raw))
 	}
-	manifest, err := newDependencyManifestV1FromEncoded(encoded)
-	// This constructor owns these values exclusively until return. Its raw
-	// encodings were needed only for assembly; retain the normalized metadata
-	// without also retaining a second copy of the payload. Shared cache values
-	// in StableResourceSet.DependencyManifestV1 are never cleared this way.
+	manifest, err := newDependencyManifestV1FromEncoded(encoded, false)
+	// These encodings are exclusively owned and needed only for assembly.
 	for i := range owned {
 		owned[i].encoded = nil
 	}
@@ -118,8 +116,9 @@ type dependencyManifestEncodedEntryV1 struct {
 }
 
 // newDependencyManifestV1FromEncoded consumes the pointer slice. Its normalized
-// metadata must remain immutable; encoded bytes need only survive this call.
-func newDependencyManifestV1FromEncoded(encoded []*dependencyManifestEncodedEntryV1) (*DependencyManifestV1, error) {
+// metadata remains immutable. retainEncoded is true only for shared cache values;
+// otherwise the caller may discard its exclusively owned encodings after assembly.
+func newDependencyManifestV1FromEncoded(encoded []*dependencyManifestEncodedEntryV1, retainEncoded bool) (*DependencyManifestV1, error) {
 	sort.Slice(encoded, func(i, j int) bool {
 		return bytes.Compare(encoded[i].encoded, encoded[j].encoded) < 0
 	})
@@ -133,16 +132,61 @@ func newDependencyManifestV1FromEncoded(encoded []*dependencyManifestEncodedEntr
 		}
 		payloadBytes += 4 + len(encoded[i].encoded)
 	}
-	payload := make([]byte, 16, payloadBytes)
-	copy(payload[0:8], dependencyManifestBodyMagicV1[:])
-	binary.LittleEndian.PutUint16(payload[8:10], 1)
-	binary.LittleEndian.PutUint16(payload[10:12], 16)
-	binary.LittleEndian.PutUint32(payload[12:16], uint32(len(encoded)))
-	for i := range encoded {
-		payload = appendU32V1(payload, uint32(len(encoded[i].encoded)))
-		payload = append(payload, encoded[i].encoded...)
+	manifest := &DependencyManifestV1{entries: encoded, byteLength: payloadBytes}
+	if !retainEncoded {
+		payload := make([]byte, 16, payloadBytes)
+		copy(payload[0:8], dependencyManifestBodyMagicV1[:])
+		binary.LittleEndian.PutUint16(payload[8:10], 1)
+		binary.LittleEndian.PutUint16(payload[10:12], 16)
+		binary.LittleEndian.PutUint32(payload[12:16], uint32(len(encoded)))
+		for i := range encoded {
+			payload = appendU32V1(payload, uint32(len(encoded[i].encoded)))
+			payload = append(payload, encoded[i].encoded...)
+		}
+		manifest.payload = payload
+		manifest.digest = sha256.Sum256(payload)
+		return manifest, nil
 	}
-	return &DependencyManifestV1{entries: encoded, payload: payload, digest: sha256.Sum256(payload)}, nil
+	hash := sha256.New()
+	cursor := dependencyManifestCursorV1{entries: encoded}
+	for chunk := cursor.next(); chunk != nil; chunk = cursor.next() {
+		_, _ = hash.Write(chunk)
+	}
+	hash.Sum(manifest.digest[:0])
+	return manifest, nil
+}
+
+// dependencyManifestCursorV1 borrows immutable encodings. Returned header and
+// length segments are valid only until next is called again.
+type dependencyManifestCursorV1 struct {
+	entries []*dependencyManifestEncodedEntryV1
+	index   int
+	phase   uint8
+	header  [16]byte
+	length  [4]byte
+}
+
+func (cursor *dependencyManifestCursorV1) next() []byte {
+	if cursor.phase == 0 {
+		copy(cursor.header[:8], dependencyManifestBodyMagicV1[:])
+		binary.LittleEndian.PutUint16(cursor.header[8:10], 1)
+		binary.LittleEndian.PutUint16(cursor.header[10:12], 16)
+		binary.LittleEndian.PutUint32(cursor.header[12:16], uint32(len(cursor.entries)))
+		cursor.phase = 1
+		return cursor.header[:]
+	}
+	if cursor.index == len(cursor.entries) {
+		return nil
+	}
+	entry := cursor.entries[cursor.index]
+	if cursor.phase == 1 {
+		binary.LittleEndian.PutUint32(cursor.length[:], uint32(len(entry.encoded)))
+		cursor.phase = 2
+		return cursor.length[:]
+	}
+	cursor.index++
+	cursor.phase = 1
+	return entry.encoded
 }
 
 func normalizeDependencyManifestEntryV1(entry DependencyManifestEntryV1) (DependencyManifestEntryV1, error) {
@@ -237,10 +281,10 @@ func (manifest *DependencyManifestV1) Entries() []DependencyManifestEntryV1 {
 }
 
 func (manifest *DependencyManifestV1) PageCount() uint32 {
-	if manifest == nil || len(manifest.payload) == 0 {
+	if manifest == nil || manifest.byteLength == 0 {
 		return 0
 	}
-	return uint32((len(manifest.payload) + dependencyManifestPayloadV1 - 1) / dependencyManifestPayloadV1)
+	return uint32((manifest.byteLength + dependencyManifestPayloadV1 - 1) / dependencyManifestPayloadV1)
 }
 
 // Reference binds the immutable manifest to a page interval without encoding
@@ -254,7 +298,7 @@ func (manifest *DependencyManifestV1) Reference(firstPageID uint64) (DependencyM
 		return DependencyManifestRefV1{}, ErrDependencyManifestFormat
 	}
 	return DependencyManifestRefV1{
-		FirstPageID: firstPageID, ByteLength: uint64(len(manifest.payload)),
+		FirstPageID: firstPageID, ByteLength: uint64(manifest.byteLength),
 		EntryCount: uint32(len(manifest.entries)), PageCount: pageCount, Digest: manifest.digest,
 	}, nil
 }
@@ -268,14 +312,26 @@ func (manifest *DependencyManifestV1) Materialize(firstPageID uint64, sink freel
 		return DependencyManifestRefV1{}, err
 	}
 	pageCount := ref.PageCount
+	cursor := dependencyManifestCursorV1{entries: manifest.entries}
+	var chunk []byte
 	for index := uint32(0); index < pageCount; index++ {
-		pageID := firstPageID + uint64(index)
 		start := int(index) * dependencyManifestPayloadV1
-		end := start + dependencyManifestPayloadV1
-		if end > len(manifest.payload) {
-			end = len(manifest.payload)
-		}
+		end := min(start+dependencyManifestPayloadV1, manifest.byteLength)
 		image := make([]byte, page.PageSize)
+		body := image[dependencyManifestPageHeaderV1 : dependencyManifestPageHeaderV1+end-start]
+		if manifest.payload != nil {
+			copy(body, manifest.payload[start:end])
+		} else {
+			for len(body) != 0 {
+				if len(chunk) == 0 {
+					chunk = cursor.next()
+				}
+				n := copy(body, chunk)
+				body = body[n:]
+				chunk = chunk[n:]
+			}
+		}
+		pageID := firstPageID + uint64(index)
 		pageHeader := page.PageHeader{PageID: pageID, Flags: uint16(page.PageTypeDependencyManifest)}
 		pageHeader.Encode(image)
 		copy(image[16:24], dependencyManifestPageMagicV1[:])
@@ -290,7 +346,6 @@ func (manifest *DependencyManifestV1) Materialize(firstPageID uint64, sink freel
 		}
 		copy(image[56:88], ref.Digest[:])
 		binary.LittleEndian.PutUint32(image[88:92], uint32(end-start))
-		copy(image[dependencyManifestPageHeaderV1:], manifest.payload[start:end])
 		page.UpdateChecksum(image)
 		if err := sink.WritePage(pageID, image); err != nil {
 			return DependencyManifestRefV1{}, fmt.Errorf("materialize dependency manifest page %d: %w", pageID, err)

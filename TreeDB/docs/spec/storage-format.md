@@ -712,9 +712,13 @@ and deterministic re-encoding. The selected manifest is the exact external
 resource closure that must remain present for that root generation.
 
 In-memory assembly can retain immutable normalized entry encodings through an
-owned reference slice. These metadata references do not retain physical pins or
-replace live resource validation. The full V1 payload and digest are still
-assembled for each manifest, and entry accessors return independent deep copies.
+owned reference slice. These metadata references do not retain physical pins
+or replace live resource validation. For cached entries, canonical V1 bytes
+are streamed from these encodings for digest calculation and page
+materialization, without a second contiguous payload copy. The public cold
+constructor instead assembles one contiguous canonical payload and discards
+its temporary entry encodings. Sink pages remain independently owned, and
+entry accessors return independent deep copies.
 
 Recovery decodes the two physical meta slots independently and attempts
 checksum-valid candidates in descending commit order. Two byte-identical metas

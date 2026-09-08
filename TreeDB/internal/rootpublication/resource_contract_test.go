@@ -151,10 +151,10 @@ func TestStableResourceSetDependencyManifestEncodingReusesRetainedEntries(t *tes
 	if secondWork.EntriesVisited != entries || secondWork.EntriesEncoded != 0 || secondWork.BytesEncoded != 0 {
 		t.Fatalf("cached manifest work=%+v", secondWork)
 	}
-	if !bytes.Equal(first.payload, second.payload) || first.digest != second.digest {
+	if !bytes.Equal(dependencyManifestPayloadForTest(t, first), dependencyManifestPayloadForTest(t, second)) || first.digest != second.digest {
 		t.Fatal("cached manifest changed canonical V1 encoding")
 	}
-	// Reassembly must pay for the canonical payload and compact references, not
+	// Reassembly must stay within the existing payload-sized budget, not
 	// copy every wide normalized entry again. Allow payload size-class rounding
 	// and bounded sorting/traversal overhead without timing the operation.
 	const builds = 4
@@ -168,8 +168,8 @@ func TestStableResourceSetDependencyManifestEncodingReusesRetainedEntries(t *tes
 	}
 	runtime.ReadMemStats(&after)
 	bytesPerBuild := (after.TotalAlloc - before.TotalAlloc) / builds
-	byteLimit := uint64(2*len(first.payload) + 32*entries + 64<<10)
-	t.Logf("cached manifest assembly: entries=%d payload=%d bytes/build=%d limit=%d", entries, len(first.payload), bytesPerBuild, byteLimit)
+	byteLimit := uint64(2*first.byteLength + 32*entries + 64<<10)
+	t.Logf("cached manifest assembly: entries=%d payload=%d bytes/build=%d limit=%d", entries, first.byteLength, bytesPerBuild, byteLimit)
 	if bytesPerBuild > byteLimit {
 		t.Fatalf("cached manifest assembly allocated %d bytes/build, limit %d", bytesPerBuild, byteLimit)
 	}
@@ -223,7 +223,7 @@ func TestStableResourceSetDependencyManifestSurvivesCoalescingAndRelease(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantEntries, wantPayload, wantDigest := manifest.Entries(), bytes.Clone(manifest.payload), manifest.digest
+	wantEntries, wantPayload, wantDigest := manifest.Entries(), dependencyManifestPayloadForTest(t, manifest), manifest.digest
 	inherited, err := CloneStableResourceSetExcludingKinds(source)
 	if err != nil {
 		t.Fatal(err)
@@ -254,11 +254,11 @@ func TestStableResourceSetDependencyManifestSurvivesCoalescingAndRelease(t *test
 	if ResourceOwnerState(first.owner.Load()) != ResourceOwnerReleased || ResourceOwnerState(advanced.owner.Load()) != ResourceOwnerReleased {
 		t.Fatal("manifest retained physical pins after resource owners released")
 	}
-	if !reflect.DeepEqual(manifest.Entries(), wantEntries) || !bytes.Equal(manifest.payload, wantPayload) || manifest.digest != wantDigest {
+	if !reflect.DeepEqual(manifest.Entries(), wantEntries) || !bytes.Equal(dependencyManifestPayloadForTest(t, manifest), wantPayload) || manifest.digest != wantDigest {
 		t.Fatal("coalescing/release changed the old immutable manifest")
 	}
 	uncached, err := NewDependencyManifestV1(manifest.Entries())
-	if err != nil || uncached.digest != wantDigest || !bytes.Equal(uncached.payload, wantPayload) {
+	if err != nil || uncached.digest != wantDigest || !bytes.Equal(dependencyManifestPayloadForTest(t, uncached), wantPayload) {
 		t.Fatalf("cached/uncached canonical encoding differs after release: %v", err)
 	}
 }
