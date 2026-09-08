@@ -31,15 +31,29 @@ func TestCoordinatorEnqueueRetainedClosureAllocation(t *testing.T) {
 			}
 			frontier := NewRIDFrontier(rids)
 			frontier.Bytes, frontier.MaxLSN = uint64(i+1), uint64(i+1)
+			// Retained files repeat their complete ref set across candidates;
+			// one append file adds a ref while retaining a larger exact prefix.
+			obligationCount := 2
+			if j == entries-1 {
+				obligationCount = 256 + i
+			}
+			obligations := make([]StableLogicalObligation, obligationCount)
+			for k := range obligations {
+				obligations[k] = stableLogicalObligationFixture(uint64(k+1), uint32(k+1), fmt.Sprint(k))
+				obligations[k].FileID = uint64(j + 1)
+			}
 			token, err := NewStableResourceToken(StableResourceSpec{
 				Kind: ResourceQueryReadyAsset, LogicalLane: "retained", ResourceID: fmt.Sprint(j), Generation: 1,
 				DiagnosticPath: "retained.bin", File: file, Frontier: frontier, ContentSynced: true,
 				StableIdentityOverride: StableIdentity{Platform: "count-test", ObjectID: identity},
 				Reachability:           ReachabilityQueryReadyBase,
-				LogicalObligations:     []StableLogicalObligation{stableLogicalObligationFixture(uint64(i+1), uint32(i+1), fmt.Sprint(i))},
+				LogicalObligations:     obligations,
 			})
 			if err != nil {
 				t.Fatal(err)
+			}
+			if got := len(token.LogicalObligations()); got != obligationCount {
+				t.Fatalf("registered obligations=%d want %d", got, obligationCount)
 			}
 			if err := builder.Add(token); err != nil {
 				t.Fatal(err)

@@ -714,64 +714,43 @@ func activeEntryToken(entry stableResourceEntry) *StableResourceToken {
 }
 
 func mergeStableLogicalObligations(target *stableLogicalObligationView, incoming stableLogicalObligationView) error {
-	targetValues := target.slice()
-	incomingValues := incoming.slice()
-	if len(targetValues)+len(incomingValues) > stableLogicalObligationLinearLimit {
-		byKey := make(map[stableLogicalObligationIndex]StableLogicalObligation, len(targetValues)+len(incomingValues))
-		for _, obligation := range targetValues {
-			byKey[stableLogicalObligationKey(obligation)] = obligation
-		}
-		// Preflight the complete incoming batch before mutating the live builder.
-		// Add is atomic: a later conflict must not leave an earlier obligation
-		// appended to the existing resource entry.
-		for _, obligation := range incomingValues {
-			key := stableLogicalObligationKey(obligation)
-			if existing, ok := byKey[key]; ok {
-				if existing != obligation {
-					return fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, key)
-				}
-			}
-		}
-		for _, obligation := range incomingValues {
-			key := stableLogicalObligationKey(obligation)
-			if _, ok := byKey[key]; ok {
-				continue
-			}
-			byKey[key] = obligation
-			targetValues = append(targetValues, obligation)
-		}
-		*target = newStableLogicalObligationView(targetValues)
+	if incoming.count == 0 {
 		return nil
 	}
-	// The small-set path deliberately stays allocation-free. Its first pass is
-	// conflict-only; the second pass applies additions after the whole batch is
-	// known compatible.
-	for _, obligation := range incomingValues {
-		key := stableLogicalObligationKey(obligation)
-		for _, existing := range targetValues {
-			if stableLogicalObligationKey(existing) != key {
-				continue
-			}
+	base := *target
+	if base.index == nil && base.count != 0 {
+		base = newStableLogicalObligationView(base.slice())
+	}
+	// Both views own immutable, normalized obligations. Probe the existing index
+	// and retain only additions instead of copying and hashing the full retained
+	// payload again on each closure merge.
+	var added []StableLogicalObligation
+	var conflict error
+	incoming.rangeValues(func(obligation StableLogicalObligation) bool {
+		if existing, ok := findStableLogicalObligationIndex(base.index, obligation, nil); ok {
 			if existing != obligation {
-				return fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, key)
+				conflict = fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, stableLogicalObligationKey(obligation))
+				return false
 			}
-			break
+			return true
 		}
+		added = append(added, obligation)
+		return true
+	})
+	// A late conflict must leave the target unchanged, including additions seen
+	// earlier in this incoming batch. appendCertified path-copies the index and
+	// commitments only after the complete preflight succeeds.
+	if conflict != nil {
+		return conflict
 	}
-	for _, obligation := range incomingValues {
-		key := stableLogicalObligationKey(obligation)
-		duplicate := false
-		for _, existing := range targetValues {
-			if stableLogicalObligationKey(existing) == key {
-				duplicate = true
-				break
-			}
-		}
-		if !duplicate {
-			targetValues = append(targetValues, obligation)
-		}
+	if len(added) == 0 {
+		return nil
 	}
-	*target = newStableLogicalObligationView(targetValues)
+	next, err := base.appendCertified(added, nil)
+	if err != nil {
+		return err
+	}
+	*target = next
 	return nil
 }
 
