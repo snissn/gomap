@@ -979,17 +979,15 @@ func (p *columnVectorGraphSearchPlan) recordPreparedMinimalScoreBatch(counters *
 	p.preparedSearch.recordIndexedScoreBatchMinimalCounters(counters, ordinals)
 }
 
-func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedAdjacency(adjacencyLen int) {
+func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedAdjacency(adjacencyLen int, outcome columnVectorGraphLayer0AdjacencySourceOutcome) {
 	if c == nil {
 		return
 	}
 	c.ExpansionFetches++
 	c.AdjacencyExpansions++
-	c.AdjacencyBytesRead += uint64(adjacencyLen) * 4
-	c.AdjacencyDirectViews++
-	c.AdjacencyMmapDirectViews++
-	c.AdjacencyPreparedCSRDirectViews++
-	c.AdjacencyPreparedCSRMmapDirectViews++
+	var counters columnVectorGraphAdjacencySourceCounterSnapshot
+	counters.addOutcome(adjacencyLen, outcome)
+	c.recordAdjacencyCounterSnapshot(counters)
 }
 
 func (c *columnVectorGraphPreparedMinimalSearchCounters) recordAdjacencyCounterSnapshot(counters columnVectorGraphAdjacencySourceCounterSnapshot) {
@@ -2503,7 +2501,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreOrdinalLegacy(plan *columnVect
 
 func (r *columnVectorGraphPhysicalRowReader) expandCandidateAdjacencyLayer(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, ordinal int, layer int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, preparedMinimal *columnVectorGraphPreparedMinimalSearchCounters, debugCounters *columnVectorGraphNativeSearchDebugCounters) ([]uint32, error) {
 	if plan != nil && plan.preparedSearch != nil {
-		layerAdjacency, _, err := plan.preparedSearch.adjacencyLayerForOrdinal(ordinal, layer)
+		layerAdjacency, outcome, err := plan.preparedSearch.adjacencyLayerForOrdinal(ordinal, layer)
 		if err != nil {
 			return nil, err
 		}
@@ -2511,11 +2509,11 @@ func (r *columnVectorGraphPhysicalRowReader) expandCandidateAdjacencyLayer(plan 
 			debugCounters.recordAdjacencyLayerLoad(layer, len(layerAdjacency))
 		}
 		if preparedMinimal != nil {
-			preparedMinimal.recordPreparedAdjacency(len(layerAdjacency))
+			preparedMinimal.recordPreparedAdjacency(len(layerAdjacency), outcome)
 		} else if stats != nil {
 			stats.ExpansionFetches++
 			stats.AdjacencyExpansions++
-			recordColumnVectorGraphPreparedCSRAdjacencyStats(stats, len(layerAdjacency))
+			recordColumnVectorGraphAdjacencySourceOutcomeStats(stats, len(layerAdjacency), outcome)
 			stats.BlockViewHits = plan.hits
 			stats.BlockViewMisses = plan.misses
 			stats.BlockViewBuilds = plan.builds
@@ -2646,17 +2644,6 @@ func recordColumnVectorGraphAdjacencySourceStats(stats *columnVectorGraphNativeS
 		return
 	}
 	stats.AdjacencyScratchDecodes++
-}
-
-func recordColumnVectorGraphPreparedCSRAdjacencyStats(stats *columnVectorGraphNativeSearchStats, adjacencyLen int) {
-	if stats == nil {
-		return
-	}
-	stats.AdjacencyBytesRead += uint64(adjacencyLen) * 4
-	stats.AdjacencyDirectViews++
-	stats.AdjacencyMmapDirectViews++
-	stats.AdjacencyPreparedCSRDirectViews++
-	stats.AdjacencyPreparedCSRMmapDirectViews++
 }
 
 func recordColumnVectorGraphAdjacencySourceOutcomeStats(stats *columnVectorGraphNativeSearchStats, adjacencyLen int, outcome columnVectorGraphLayer0AdjacencySourceOutcome) {

@@ -1287,6 +1287,15 @@ func TestColumnHNSWSearchPackNativeMetadataProviders(t *testing.T) {
 		if !reflect.DeepEqual(got.Results, want.Results) {
 			t.Fatalf("native results=%+v want=%+v", got.Results, want.Results)
 		}
+		if reader.preparedSearch != nil {
+			stats := got.Stats
+			if stats.PreparedGraphSearchViews != 1 || stats.AdjacencyMmapDirectViews == 0 || stats.AdjacencyPreparedCSRDirectViews != 0 || stats.AdjacencyPreparedCSRMmapDirectViews != 0 {
+				t.Errorf("native mode=%v combined=%d mmap=%d TCIM_CSR=%d/%d", mode, stats.PreparedGraphSearchViews, stats.AdjacencyMmapDirectViews, stats.AdjacencyPreparedCSRDirectViews, stats.AdjacencyPreparedCSRMmapDirectViews)
+			}
+			if stats.AdjacencyBytesRead == 0 || stats.AdjacencyBytesRead != want.Stats.AdjacencyBytesRead || stats.ExpansionFetches != want.Stats.ExpansionFetches || stats.AdjacencyDirectViews != want.Stats.AdjacencyDirectViews || stats.AdjacencyMmapDirectViews != want.Stats.AdjacencyMmapDirectViews {
+				t.Errorf("native mode=%v changed bytes/expansions/direct views: got=%d/%d/%d/%d want=%d/%d/%d/%d", mode, stats.AdjacencyBytesRead, stats.ExpansionFetches, stats.AdjacencyDirectViews, stats.AdjacencyMmapDirectViews, want.Stats.AdjacencyBytesRead, want.Stats.ExpansionFetches, want.Stats.AdjacencyDirectViews, want.Stats.AdjacencyMmapDirectViews)
+			}
+		}
 		var buf VectorIndexSearchBuffer
 		got, err = searcher.SearchWithBuffer(opts, &buf)
 		if err != nil {
