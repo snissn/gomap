@@ -215,3 +215,55 @@ func TestTypedGraphInversePermutation(t *testing.T) {
 		t.Fatal("duplicate physical coordinate accepted")
 	}
 }
+
+func BenchmarkTypedGraphInverseLookup(b *testing.B) {
+	rows := make([]columnGraphRebuildInputRowV2A, 4097)
+	for i := range rows {
+		rows[i] = columnGraphRebuildInputRowV2A{id: fmt.Sprintf("doc-%05d", (i*7919)%len(rows)), vector: []float32{1, float32(i + 1)}}
+	}
+	_, db, col, def := openColumnGraphTypedColumnVectorTestCollection1782(b, 2, 2, rows)
+	defer db.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		b.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		b.Fatal(err)
+	}
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(b, db, "docs")
+	state := columnVectorIndexStateFromRecords1987(b, records, def)
+	graph := graphManifestFromRecords1918(b, records, def)
+	source, err := newColumnVectorGraphRowRefStateSourceFromRoot(db.ColumnAssetRootDir(), "docs", *cfg, def, graph, state, records)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer source.Close()
+	refs := make([]DocumentRowRef, source.rows)
+	for i := range refs {
+		var ok bool
+		refs[i], ok = source.rowRefForOrdinal(i)
+		if !ok {
+			b.Fatal("missing forward row")
+		}
+	}
+	for _, mode := range []string{"hit", "missing", "stale_lsn"} {
+		b.Run(mode, func(b *testing.B) {
+			queries := slices.Clone(refs)
+			for i := range queries {
+				if mode == "missing" {
+					queries[i].Generation += 100
+				} else if mode == "stale_lsn" {
+					queries[i].AppliedCommandLSN++
+				}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				row := (i * 7919) % len(queries)
+				ordinal, ok := source.ordinalForPhysicalRow(queries[row])
+				if ok != (mode == "hit") || (ok && ordinal != row) {
+					b.Fatal("inverse result mismatch")
+				}
+			}
+		})
+	}
+}
