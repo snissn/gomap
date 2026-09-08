@@ -298,7 +298,7 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 				}
 			}
 			results, stats, err = overlay.pack.searchCosine([]float32{1, .5, 0, 0, 0, 0, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 128, CandidateLimit: 16, CandidateRows: plan.base, HasCandidateRows: true}, &scratch)
-			if !errors.Is(err, errTypedGraphSearchBudget) || len(results) != 0 || stats.Candidates != 16 || stats.Edges == 0 || stats.PreparedScoreCalls == 0 {
+			if !errors.Is(err, errTypedGraphSearchBudget) || len(results) != 0 || stats.PreparedScoreCalls != 16 || stats.Candidates > stats.PreparedScoreCalls || stats.Edges == 0 {
 				t.Fatalf("filtered cap lost work/returned partial results: n=%d stats=%+v err=%v", len(results), stats, err)
 			}
 		}
@@ -352,6 +352,9 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 			response, view, err := col.SearchVectorIndexWithBufferReadView(q, &buffer)
 			after := workstats.Read().Graph
 			work := response.Stats.ColumnGraphWork
+			if after.BaseANNScored-before.BaseANNScored != work.BaseANNScored || after.BaseCandidates-before.BaseCandidates != work.BaseCandidates || work.BaseANNScored+work.DeltaScored > uint64(opts.SearchCandidates) {
+				t.Fatalf("public total score allowance/local process proof mismatch: %+v", work)
+			}
 			if !work.Available || after.Requests.Attempts-before.Requests.Attempts != 1 {
 				t.Fatalf("missing public proof=%+v err=%v", work, err)
 			}
@@ -366,6 +369,9 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 			}
 			if err := view.Close(); err != nil {
 				t.Fatal(err)
+			}
+			if count == 0 && (work.BaseANNScored != response.Stats.PreparedScoreCalls || work.BaseCandidates != response.Stats.Candidates || work.BaseANNScored <= work.BaseCandidates) {
+				t.Fatalf("public proof omitted upper scorer work: work=%+v scores=%d layer0=%d", work, response.Stats.PreparedScoreCalls, response.Stats.Candidates)
 			}
 			if count == 0 && (work.Route != "typed_hnsw" || work.BaseANNScored == 0 || work.BaseEdges == 0) || count == 4096 && (work.Route != "typed_exact" || work.ExactBaseScored != 4096 || work.BaseANNScored != 0) {
 				t.Fatalf("public Minimal proof=%+v", work)

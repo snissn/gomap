@@ -275,8 +275,8 @@ func TestTypedGraphOverlaySearchShadowsAndBudget(t *testing.T) {
 	if len(results) != 2 || string(results[0].ID) != "base-2" || string(results[1].ID) != "base-3" || stats.BaseShadowed != 2 {
 		t.Fatalf("shadowed original top two underfilled/leaked: %+v stats=%+v", results, stats)
 	}
-	if results, stats, err := overlay.search(query, 2, 4, 6, &buffer); !errors.Is(err, errTypedGraphSearchBudget) || results != nil || stats.Base.Candidates != 4 {
-		t.Fatalf("candidate cap returned success/partial results: %+v candidates=%d err=%v", results, stats.Base.Candidates, err)
+	if results, stats, err := overlay.search(query, 2, 4, 6, &buffer); !errors.Is(err, errTypedGraphSearchBudget) || results != nil || stats.Base.PreparedScoreCalls != 4 || stats.Base.Candidates > stats.Base.PreparedScoreCalls || stats.DeltaScored != 0 {
+		t.Fatalf("candidate cap returned success/partial results: %+v scores=%d layer0=%d delta=%d err=%v", results, stats.Base.PreparedScoreCalls, stats.Base.Candidates, stats.DeltaScored, err)
 	}
 	if len(buffer.results) != 0 {
 		t.Fatal("cap error retained previous response view")
