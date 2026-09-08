@@ -38,8 +38,9 @@ func (db *DB) prepareCollectionRelocation(snap *Snapshot, next *pager.Pager, roo
 		return nil, rootpublication.ErrResourcePinned
 	}
 	if db.collectionRelocation == nil {
-		db.collectionRelocationMu.Unlock()
-		return func(bool) {}, nil
+		// First registration must also wait for this cutover; otherwise it can
+		// install old-pager collection authority after the empty prepare.
+		return func(bool) { db.collectionRelocationMu.Unlock() }, nil
 	}
 	finish, err := db.collectionRelocation(snap, next, roots)
 	if err != nil {
