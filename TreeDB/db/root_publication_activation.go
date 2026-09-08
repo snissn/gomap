@@ -639,15 +639,11 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	return candidate, nil
 }
 
-func rootPublicationDependencyBytesV1(resources *rootpublication.StableResourceSet) uint64 {
-	var total uint64
-	for _, stats := range resources.Stats(time.Now()) {
-		if ^uint64(0)-total < stats.PendingBytes {
-			return ^uint64(0)
-		}
-		total += stats.PendingBytes
-	}
-	return total
+// rootPublicationDependencyBytesV1 runs under durablePublishMu and rootReuseMu,
+// the same locks that install a successfully published durable slot. Visible
+// predecessors and producer-synced content cannot substitute for that authority.
+func (db *DB) rootPublicationDependencyBytesV1(resources *rootpublication.StableResourceSet) (uint64, error) {
+	return resources.BytesNotCoveredBy(db.durableRoot.slotResources[db.durableRoot.slot])
 }
 
 // finalizeQueuedRootPublicationV1 transfers one fully built logical root from
@@ -735,7 +731,10 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		}
 	}()
 
-	dependencyBytes := rootPublicationDependencyBytesV1(resources)
+	dependencyBytes, err := db.rootPublicationDependencyBytesV1(resources)
+	if err != nil {
+		return post, prePublishErr(fmt.Errorf("account unpublished root dependencies: %w", err))
+	}
 	if forced := db.testRootPublicationDependencyBytes.Load(); forced != 0 {
 		dependencyBytes = forced
 	}
@@ -1021,7 +1020,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	next := member.next
 	next.TotalPages = generation.HighWater()
 	next.FreelistHeadID = 0
-	manifestRef, err := manifest.Materialize(auxiliary[0], freelist.NewMemoryPageStoreV1())
+	manifestRef, err := manifest.Reference(auxiliary[0])
 	if err != nil {
 		return err
 	}

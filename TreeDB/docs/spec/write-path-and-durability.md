@@ -39,6 +39,17 @@ and userspace `Flush` affect only volatile state. File sync promotes the covered
 file bytes. Directory sync promotes creation, rename, and unlink of names in
 that directory. A file sync cannot substitute for the required directory sync.
 
+Root-publication admission charges dependency bytes not fully covered by the
+selected durable root's owned closure, plus the candidate's new COW index pages.
+Credit requires matching physical identity, generation, digest, namespace and
+logical obligations, with coverage of the complete byte/LSN/exact-RID frontier.
+An advanced or unmatched dependency is conservatively charged in full. Producer
+file sync and membership in an in-flight visible root do not establish durable
+publication. The complete resource closure, pins and sync/validation sequence
+remain unchanged. Pending candidates may conservatively charge overlapping new
+bytes until their selected durable baseline advances; the soft/hard limits are
+unchanged.
+
 The fixed consequences are:
 
 - A relaxed acknowledgement may lose a recent complete suffix after power
@@ -59,6 +70,11 @@ The fixed consequences are:
 - Composite and nested roots carry the deterministic transitive union of their
   child dependencies. Publication does not rediscover dependency closure by
   scanning filenames.
+  Coordinator admission checks union compatibility and counts against the
+  owned frozen entries without materializing another durable closure. It
+  preserves identity, namespace and accumulated logical-reference conflicts;
+  frontier validation remains at entry construction. Publication, sync,
+  reachability and recovery retain the complete dependency union and pins.
 - `Checkpoint`, clean `Close`, and every public `*Sync` operation are durable
   boundaries in every production profile. Command-WAL `*Sync` may stop at a
   stable complete frame closure without forcing a backend root; journal-free `*Sync`

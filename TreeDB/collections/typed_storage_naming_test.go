@@ -525,6 +525,8 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/typed_graph_fold_admission_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/typed_graph_control_encoded.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/typed_graph_control_encoded_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 6},
+	// Locator grouping uses the retained compatibility configuration API.
+	{path: "TreeDB/collections/typed_graph_locator_visit_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
 	{path: "TreeDB/collections/typed_graph_locator_encoded_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 7},
 	{path: "TreeDB/collections/typed_graph_manifest_encoded.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/column_physical_asset_bound.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},

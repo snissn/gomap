@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"sync"
@@ -153,6 +154,25 @@ func TestStableResourceSetDependencyManifestEncodingReusesRetainedEntries(t *tes
 	if !bytes.Equal(first.payload, second.payload) || first.digest != second.digest {
 		t.Fatal("cached manifest changed canonical V1 encoding")
 	}
+	// Reassembly must pay for the canonical payload and compact references, not
+	// copy every wide normalized entry again. Allow payload size-class rounding
+	// and bounded sorting/traversal overhead without timing the operation.
+	const builds = 4
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range builds {
+		manifest, work, err := source.DependencyManifestV1()
+		if err != nil || work.EntriesEncoded != 0 || manifest.digest != first.digest {
+			t.Fatalf("cached reassembly: work=%+v err=%v", work, err)
+		}
+	}
+	runtime.ReadMemStats(&after)
+	bytesPerBuild := (after.TotalAlloc - before.TotalAlloc) / builds
+	byteLimit := uint64(2*len(first.payload) + 32*entries + 64<<10)
+	t.Logf("cached manifest assembly: entries=%d payload=%d bytes/build=%d limit=%d", entries, len(first.payload), bytesPerBuild, byteLimit)
+	if bytesPerBuild > byteLimit {
+		t.Fatalf("cached manifest assembly allocated %d bytes/build, limit %d", bytesPerBuild, byteLimit)
+	}
 
 	childBuilder := NewStableResourceSetBuilder()
 	if err := childBuilder.Add(makeToken(entries + 1)); err != nil {
@@ -184,6 +204,62 @@ func TestStableResourceSetDependencyManifestEncodingReusesRetainedEntries(t *tes
 	}
 	if candidateWork.EntriesVisited != entries+1 || candidateWork.EntriesEncoded != 1 || candidateWork.BytesEncoded == 0 {
 		t.Fatalf("one-entry append manifest work=%+v", candidateWork)
+	}
+}
+
+func TestStableResourceSetDependencyManifestSurvivesCoalescingAndRelease(t *testing.T) {
+	dir := t.TempDir()
+	first := stableTokenFixture(t, dir, "first.vlog", 1, 8, ReachabilityValueLogPointer, "same-header")
+	builder := NewStableResourceSetBuilder()
+	if err := builder.Add(first); err != nil {
+		t.Fatal(err)
+	}
+	source, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Release()
+	manifest, _, err := source.DependencyManifestV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEntries, wantPayload, wantDigest := manifest.Entries(), bytes.Clone(manifest.payload), manifest.digest
+	inherited, err := CloneStableResourceSetExcludingKinds(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advanced := stableTokenFixture(t, dir, "advanced.vlog", 1, 16, ReachabilityValueLogPointer, "same-header", func(spec *StableResourceSpec) {
+		spec.StableIdentityOverride = first.Identity()
+		spec.ResourceID = "first.vlog"
+	})
+	next := NewStableResourceSetBuilder()
+	if err := next.Merge(inherited); err != nil {
+		t.Fatal(err)
+	}
+	if err := next.Add(advanced); err != nil {
+		next.Abandon()
+		t.Fatal(err)
+	}
+	candidate, err := next.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Release()
+	updated, work, err := candidate.DependencyManifestV1()
+	if err != nil || work.EntriesEncoded != 1 || updated.Entries()[0].Frontier.Bytes != 16 {
+		t.Fatalf("advanced manifest: work=%+v err=%v", work, err)
+	}
+	source.Release()
+	candidate.Release()
+	if ResourceOwnerState(first.owner.Load()) != ResourceOwnerReleased || ResourceOwnerState(advanced.owner.Load()) != ResourceOwnerReleased {
+		t.Fatal("manifest retained physical pins after resource owners released")
+	}
+	if !reflect.DeepEqual(manifest.Entries(), wantEntries) || !bytes.Equal(manifest.payload, wantPayload) || manifest.digest != wantDigest {
+		t.Fatal("coalescing/release changed the old immutable manifest")
+	}
+	uncached, err := NewDependencyManifestV1(manifest.Entries())
+	if err != nil || uncached.digest != wantDigest || !bytes.Equal(uncached.payload, wantPayload) {
+		t.Fatalf("cached/uncached canonical encoding differs after release: %v", err)
 	}
 }
 
@@ -1263,6 +1339,48 @@ func TestStableResourceSetAlreadySyncedTokenDoesNotCoverAdvancedCoalescedFrontie
 			}
 			if got := syncedBytes.Load(); got != 16 {
 				t.Fatalf("synced bytes=%d want 16", got)
+			}
+		})
+	}
+}
+
+func TestStableResourceTokenSyncedRIDCoverage(t *testing.T) {
+	stable := NewRIDFrontier([]uint64{2, 8, 20})
+	stable.Bytes, stable.MaxLSN = 8, 5
+	for _, tc := range []struct {
+		name       string
+		rids       []uint64
+		bytes, lsn uint64
+		wantSync   bool
+	}{
+		{"equal", []uint64{2, 8, 20}, 8, 5, false},
+		{"subset", []uint64{8, 20}, 8, 5, false},
+		{"empty", nil, 8, 5, false},
+		{"same summary bounds different member", []uint64{2, 9, 20}, 8, 5, true},
+		{"higher RID", []uint64{21}, 8, 5, true},
+		{"advanced bytes", []uint64{2, 8, 20}, 9, 5, true},
+		{"advanced LSN", []uint64{2, 8, 20}, 8, 6, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int
+			token := stableTokenFixture(t, t.TempDir(), "synced-rids.vlog", 1, 8, ReachabilityValueLogPointer, "same-header", func(spec *StableResourceSpec) {
+				spec.Frontier, spec.ContentSynced = stable, true
+				spec.SyncThrough = func(_ *os.File, frontier DurableFrontier) error {
+					calls++
+					if frontier.Bytes != tc.bytes || frontier.MaxLSN != tc.lsn || !slices.Equal(frontier.RIDs(), tc.rids) {
+						t.Fatal("sync lost requested frontier")
+					}
+					return nil
+				}
+			})
+			defer token.Release()
+			required := NewRIDFrontier(tc.rids)
+			required.Bytes, required.MaxLSN = tc.bytes, tc.lsn
+			if err := token.syncThrough(required); err != nil {
+				t.Fatal(err)
+			}
+			if (calls == 1) != tc.wantSync || calls > 1 {
+				t.Fatalf("sync calls=%d want sync=%t", calls, tc.wantSync)
 			}
 		})
 	}
@@ -3089,5 +3207,261 @@ func TestStableResourceTokenPinnedReadRemainsUsable(t *testing.T) {
 	buf := make([]byte, 4)
 	if _, err := token.ReadAt(buf, 0); err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("ReadAt: %v", err)
+	}
+}
+
+func TestStableResourcePublicationDebtCoverage(t *testing.T) {
+	file := writeStableResourceFixture(t, t.TempDir(), "debt.vlog", "12345678901234567890123456789012")
+	frontier := NewRIDFrontier([]uint64{2, 8})
+	frontier.Bytes, frontier.MaxLSN = 16, 5
+	baseSpec := StableResourceSpec{Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "debt", Generation: 1,
+		DiagnosticPath: "debt.vlog", File: file, Frontier: frontier,
+		Digest: sha256.Sum256([]byte("header")), Reachability: ReachabilityValueLogPointer, ContentSynced: true}
+	makeSet := func(specs ...StableResourceSpec) *StableResourceSet {
+		builder := NewStableResourceSetBuilder()
+		defer builder.Abandon()
+		for _, spec := range specs {
+			token, err := NewStableResourceToken(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := builder.Add(token); err != nil {
+				token.Release()
+				t.Fatal(err)
+			}
+		}
+		set, err := builder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(set.Release)
+		return set
+	}
+	published := makeSet(baseSpec)
+	tests := []struct {
+		name   string
+		change func(*StableResourceSpec)
+		extra  bool
+		want   uint64
+	}{
+		{name: "covered"},
+		{name: "covered RID subset", change: func(s *StableResourceSpec) {
+			s.Frontier = NewRIDFrontier([]uint64{8})
+			s.Frontier.Bytes, s.Frontier.MaxLSN = 12, 4
+		}},
+		{name: "advanced bytes", change: func(s *StableResourceSpec) { s.Frontier.Bytes = 20 }, want: 20},
+		{name: "advanced LSN", change: func(s *StableResourceSpec) { s.Frontier.MaxLSN++ }, want: 16},
+		{name: "same maximum different RID", change: func(s *StableResourceSpec) {
+			s.Frontier = NewRIDFrontier([]uint64{3, 8})
+			s.Frontier.Bytes, s.Frontier.MaxLSN = 16, 5
+		}, want: 16},
+		{name: "different generation", change: func(s *StableResourceSpec) { s.Generation++ }, want: 16},
+		{name: "different digest", change: func(s *StableResourceSpec) { s.Digest[0]++ }, want: 16},
+		{name: "logical alias", change: func(s *StableResourceSpec) { s.ResourceID = "alias" }, want: 16},
+		{name: "different identity same path", change: func(s *StableResourceSpec) {
+			s.StableIdentityOverride = published.Tokens()[0].Identity()
+			s.StableIdentityOverride.ObjectID[0] ^= 1
+		}, want: 16},
+		{name: "cross kind", change: func(s *StableResourceSpec) {
+			s.Kind, s.Reachability = ResourceOuterLeafLog, ReachabilityOuterLeafRawPointer
+		}, want: 16},
+		{name: "advanced coalesced entry", change: func(s *StableResourceSpec) { s.Frontier.Bytes = 20 }, extra: true, want: 20},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := baseSpec
+			if tc.change != nil {
+				tc.change(&spec)
+			}
+			specs := []StableResourceSpec{spec}
+			if tc.extra {
+				specs = append([]StableResourceSpec{baseSpec}, specs...)
+			}
+			candidate := makeSet(specs...)
+			before := candidate.Descriptors()
+			got, err := candidate.BytesNotCoveredBy(published)
+			if err != nil || got != tc.want {
+				t.Fatalf("debt=%d err=%v want=%d", got, err, tc.want)
+			}
+			if !reflect.DeepEqual(before, candidate.Descriptors()) {
+				t.Fatal("accounting mutated the full closure")
+			}
+			if got, err := candidate.BytesNotCoveredBy(nil); err != nil || got != before[0].Frontier().Bytes {
+				t.Fatalf("unpublished pre-synced debt=%d err=%v", got, err)
+			}
+		})
+	}
+	// Alias and logical coverage is directional, independently of byte coverage.
+	prior := &stableResourceEntry{token: &StableResourceToken{kind: ResourceColumnAsset, generation: 1, stability: ResourceMutableAppend}, frontier: DurableFrontier{Bytes: 16}, reachability: map[ReachabilityField]struct{}{ReachabilityColumnManifest: {}}}
+	candidate := *prior
+	candidate.token = &StableResourceToken{kind: ResourceColumnAsset, generation: 1, stability: ResourceMutableAppend}
+	candidate.token.namespace = &StableNamespaceToken{operation: NamespaceCreate, newName: "new", hasLinkedResource: true}
+	if stableResourceEntryCoversPublication(prior, &candidate) {
+		t.Fatal("new namespace credited by namespace-free baseline")
+	}
+	prior.token.namespace = &StableNamespaceToken{operation: NamespaceCreate, newName: "new", hasLinkedResource: true}
+	if !stableResourceEntryCoversPublication(prior, &candidate) {
+		t.Fatal("equal namespace not covered")
+	}
+	for _, change := range []func(*StableNamespaceToken){
+		func(n *StableNamespaceToken) { n.operation = NamespaceRename },
+		func(n *StableNamespaceToken) { n.oldName = "old" },
+		func(n *StableNamespaceToken) { n.newName = "other" },
+		func(n *StableNamespaceToken) { n.parentIdentity.Generation++ },
+		func(n *StableNamespaceToken) { n.linkedResourceIdentity.ObjectID[0]++ },
+	} {
+		candidate.token.namespace = &StableNamespaceToken{operation: NamespaceCreate, newName: "new", hasLinkedResource: true}
+		change(candidate.token.namespace)
+		if stableResourceEntryCoversPublication(prior, &candidate) {
+			t.Fatal("different namespace credited")
+		}
+	}
+	candidate.token.namespace = nil
+	candidate.reachability = map[ReachabilityField]struct{}{ReachabilityTypedColumnValue: {}}
+	if stableResourceEntryCoversPublication(prior, &candidate) {
+		t.Fatal("new reachability credited")
+	}
+	candidate.reachability = prior.reachability
+	obligation := StableLogicalObligation{Class: "asset", Kind: "rows", Namespace: "new", Generation: 1, PartID: 1, FileID: 1, Length: 1, Reachability: ReachabilityColumnManifest}
+	candidate.logicalObligations = newStableLogicalObligationView([]StableLogicalObligation{obligation})
+	if stableResourceEntryCoversPublication(prior, &candidate) {
+		t.Fatal("new logical obligation credited")
+	}
+	prior.logicalObligations = newStableLogicalObligationView([]StableLogicalObligation{obligation})
+	if !stableResourceEntryCoversPublication(prior, &candidate) {
+		t.Fatal("equal logical obligation not covered")
+	}
+	obligation.Checksum++
+	candidate.logicalObligations = newStableLogicalObligationView([]StableLogicalObligation{obligation})
+	if stableResourceEntryCoversPublication(prior, &candidate) {
+		t.Fatal("different logical checksum credited")
+	}
+}
+
+func TestStableResourcePublicationDebtRetainsIndexedOwnership(t *testing.T) {
+	file := writeStableResourceFixture(t, t.TempDir(), "debt-index.bin", "x")
+	builder := NewStableResourceSetBuilder()
+	defer builder.Abandon()
+	for id := uint64(1); id <= 128; id++ {
+		if err := builder.Add(distinctPhysicalTokenFixture(t, file, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	published, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer published.Release()
+	candidate, err := CloneStableResourceSetExcludingKinds(published)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Release()
+	allocs := testing.AllocsPerRun(10, func() {
+		got, err := candidate.BytesNotCoveredBy(published)
+		if err != nil || got != 0 {
+			t.Fatalf("debt=%d err=%v", got, err)
+		}
+	})
+	t.Logf("128 retained entries: %.0f allocations/accounting call", allocs)
+	// Only a wrapper and small per-kind maps are needed; no per-entry copies.
+	if allocs > 32 {
+		t.Fatalf("accounting allocations=%g exceed fixed-container allowance 32", allocs)
+	}
+	// Exercise exact sparse membership too: empty frontiers do not detect
+	// per-entry RID copies or repeated digest reconstruction during accounting.
+	rids := make([]uint64, 512)
+	for i := range rids {
+		rids[i] = uint64(i+1) * 2
+	}
+	makeRIDSet := func(t *testing.T, members []uint64) *StableResourceSet {
+		t.Helper()
+		frontier := NewRIDFrontier(members)
+		frontier.Bytes = 1
+		builder := NewStableResourceSetBuilder()
+		defer builder.Abandon()
+		for id := uint64(1); id <= 128; id++ {
+			var objectID [16]byte
+			binary.LittleEndian.PutUint64(objectID[:], id)
+			token, err := NewStableResourceToken(StableResourceSpec{
+				Kind: ResourceValueLog, LogicalLane: "main", ResourceID: fmt.Sprint(id), Generation: 1,
+				DiagnosticPath: "debt-index.bin", File: file, Frontier: frontier,
+				Reachability: ReachabilityValueLogPointer, ContentSynced: true,
+				StableIdentityOverride: StableIdentity{Platform: "scale-test", ObjectID: objectID},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := builder.Add(token); err != nil {
+				token.Release()
+				t.Fatal(err)
+			}
+		}
+		set, err := builder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(set.Release)
+		return set
+	}
+	ridPublished := makeRIDSet(t, rids)
+	different := slices.Clone(rids)
+	different[1]++ // Same count/min/max, different exact membership.
+	for _, tc := range []struct {
+		name    string
+		members []uint64
+		want    uint64
+	}{
+		{"equal", rids, 0},
+		{"subset", rids[256:], 0},
+		{"different", different, 128},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ridCandidate := makeRIDSet(t, tc.members)
+			allocs := testing.AllocsPerRun(10, func() {
+				got, err := ridCandidate.BytesNotCoveredBy(ridPublished)
+				if err != nil || got != tc.want {
+					t.Fatalf("debt=%d err=%v want=%d", got, err, tc.want)
+				}
+			})
+			t.Logf("128 entries with %d/%d required/durable RIDs: %.0f allocations/accounting call", len(tc.members), len(rids), allocs)
+			if allocs > 32 {
+				t.Fatalf("RID accounting allocations=%g exceed fixed-container allowance 32", allocs)
+			}
+		})
+	}
+	ridConcurrent, err := CloneStableResourceSetExcludingKinds(ridPublished)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ridConcurrent.Release()
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(reverse bool) {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				left, right := ridConcurrent, ridPublished
+				if reverse {
+					left, right = right, left
+				}
+				if got, err := left.BytesNotCoveredBy(right); err != nil || got != 0 {
+					t.Errorf("concurrent debt=%d err=%v", got, err)
+					return
+				}
+			}
+		}(i == 1)
+	}
+	wg.Wait()
+	published.Release()
+	if _, err := candidate.BytesNotCoveredBy(published); !errors.Is(err, ErrResourceOwnership) {
+		t.Fatalf("released baseline error=%v", err)
+	}
+	if got, err := candidate.BytesNotCoveredBy(nil); err != nil || got != 128 {
+		t.Fatalf("independent owner debt=%d err=%v", got, err)
+	}
+	candidate.Release()
+	if _, err := candidate.BytesNotCoveredBy(nil); !errors.Is(err, ErrResourceOwnership) {
+		t.Fatalf("released candidate error=%v", err)
 	}
 }

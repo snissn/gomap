@@ -65,7 +65,9 @@ type DependencyManifestRefV1 struct {
 }
 
 type DependencyManifestV1 struct {
-	entries []DependencyManifestEntryV1
+	// The slice is owned; its values hold immutable normalized metadata shared
+	// with retained entry caches. They contain no resource handles or pins.
+	entries []*dependencyManifestEncodedEntryV1
 	payload []byte
 	digest  [32]byte
 }
@@ -86,18 +88,27 @@ func NewDependencyManifestV1(entries []DependencyManifestEntryV1) (*DependencyMa
 // NewDependencyManifestV1WithWork is NewDependencyManifestV1 with entry-encoding counters.
 func NewDependencyManifestV1WithWork(entries []DependencyManifestEntryV1) (*DependencyManifestV1, DependencyManifestBuildWorkV1, error) {
 	work := DependencyManifestBuildWorkV1{EntriesVisited: uint64(len(entries))}
-	encoded := make([]dependencyManifestEncodedEntryV1, len(entries))
+	owned := make([]dependencyManifestEncodedEntryV1, len(entries))
+	encoded := make([]*dependencyManifestEncodedEntryV1, len(entries))
 	for i := range entries {
 		entry, err := normalizeDependencyManifestEntryV1(entries[i])
 		if err != nil {
 			return nil, work, err
 		}
 		raw := encodeDependencyManifestEntryV1(entry)
-		encoded[i] = dependencyManifestEncodedEntryV1{entry: entry, encoded: raw}
+		owned[i] = dependencyManifestEncodedEntryV1{entry: entry, encoded: raw}
+		encoded[i] = &owned[i]
 		work.EntriesEncoded++
 		work.BytesEncoded += uint64(len(raw))
 	}
 	manifest, err := newDependencyManifestV1FromEncoded(encoded)
+	// This constructor owns these values exclusively until return. Its raw
+	// encodings were needed only for assembly; retain the normalized metadata
+	// without also retaining a second copy of the payload. Shared cache values
+	// in StableResourceSet.DependencyManifestV1 are never cleared this way.
+	for i := range owned {
+		owned[i].encoded = nil
+	}
 	return manifest, work, err
 }
 
@@ -106,7 +117,9 @@ type dependencyManifestEncodedEntryV1 struct {
 	encoded []byte
 }
 
-func newDependencyManifestV1FromEncoded(encoded []dependencyManifestEncodedEntryV1) (*DependencyManifestV1, error) {
+// newDependencyManifestV1FromEncoded consumes the pointer slice. Its normalized
+// metadata must remain immutable; encoded bytes need only survive this call.
+func newDependencyManifestV1FromEncoded(encoded []*dependencyManifestEncodedEntryV1) (*DependencyManifestV1, error) {
 	sort.Slice(encoded, func(i, j int) bool {
 		return bytes.Compare(encoded[i].encoded, encoded[j].encoded) < 0
 	})
@@ -120,18 +133,16 @@ func newDependencyManifestV1FromEncoded(encoded []dependencyManifestEncodedEntry
 		}
 		payloadBytes += 4 + len(encoded[i].encoded)
 	}
-	entries := make([]DependencyManifestEntryV1, len(encoded))
 	payload := make([]byte, 16, payloadBytes)
 	copy(payload[0:8], dependencyManifestBodyMagicV1[:])
 	binary.LittleEndian.PutUint16(payload[8:10], 1)
 	binary.LittleEndian.PutUint16(payload[10:12], 16)
 	binary.LittleEndian.PutUint32(payload[12:16], uint32(len(encoded)))
 	for i := range encoded {
-		entries[i] = encoded[i].entry
 		payload = appendU32V1(payload, uint32(len(encoded[i].encoded)))
 		payload = append(payload, encoded[i].encoded...)
 	}
-	return &DependencyManifestV1{entries: entries, payload: payload, digest: sha256.Sum256(payload)}, nil
+	return &DependencyManifestV1{entries: encoded, payload: payload, digest: sha256.Sum256(payload)}, nil
 }
 
 func normalizeDependencyManifestEntryV1(entry DependencyManifestEntryV1) (DependencyManifestEntryV1, error) {
@@ -211,7 +222,8 @@ func (manifest *DependencyManifestV1) Entries() []DependencyManifestEntryV1 {
 		return nil
 	}
 	out := make([]DependencyManifestEntryV1, len(manifest.entries))
-	for i, entry := range manifest.entries {
+	for i, encoded := range manifest.entries {
+		entry := encoded.entry
 		entry.Frontier = cloneDurableFrontier(entry.Frontier)
 		entry.Reachability = append([]ReachabilityField(nil), entry.Reachability...)
 		entry.LogicalObligations = cloneStableLogicalObligations(entry.LogicalObligations)
@@ -231,18 +243,31 @@ func (manifest *DependencyManifestV1) PageCount() uint32 {
 	return uint32((len(manifest.payload) + dependencyManifestPayloadV1 - 1) / dependencyManifestPayloadV1)
 }
 
-func (manifest *DependencyManifestV1) Materialize(firstPageID uint64, sink freelist.AppendPageSink) (DependencyManifestRefV1, error) {
-	if manifest == nil || sink == nil || firstPageID < 2 || manifest.PageCount() == 0 {
+// Reference binds the immutable manifest to a page interval without encoding
+// pages. Preparation can use it before Materialize performs the actual writes.
+func (manifest *DependencyManifestV1) Reference(firstPageID uint64) (DependencyManifestRefV1, error) {
+	if manifest == nil || firstPageID < 2 || manifest.PageCount() == 0 {
 		return DependencyManifestRefV1{}, ErrDependencyManifestFormat
 	}
 	pageCount := manifest.PageCount()
 	if firstPageID > ^uint64(0)-uint64(pageCount-1) {
 		return DependencyManifestRefV1{}, ErrDependencyManifestFormat
 	}
-	ref := DependencyManifestRefV1{
+	return DependencyManifestRefV1{
 		FirstPageID: firstPageID, ByteLength: uint64(len(manifest.payload)),
 		EntryCount: uint32(len(manifest.entries)), PageCount: pageCount, Digest: manifest.digest,
+	}, nil
+}
+
+func (manifest *DependencyManifestV1) Materialize(firstPageID uint64, sink freelist.AppendPageSink) (DependencyManifestRefV1, error) {
+	if sink == nil {
+		return DependencyManifestRefV1{}, ErrDependencyManifestFormat
 	}
+	ref, err := manifest.Reference(firstPageID)
+	if err != nil {
+		return DependencyManifestRefV1{}, err
+	}
+	pageCount := ref.PageCount
 	for index := uint32(0); index < pageCount; index++ {
 		pageID := firstPageID + uint64(index)
 		start := int(index) * dependencyManifestPayloadV1

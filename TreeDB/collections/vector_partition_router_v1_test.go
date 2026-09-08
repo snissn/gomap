@@ -589,15 +589,29 @@ func TestPartitionRouterCandidateLimitIsHardV1(t *testing.T) {
 		t, testColumnHNSWSearchPackRaw2312(t), mappedresource.SourceHeapCopy, input.BaseIdentity,
 	)
 	defer view.Close()
-	var scratch columnVectorGraphNativeSearchScratch
-	_, stats, err := view.searchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{
-		TopK: 2, EfSearch: 4, CandidateLimit: 2,
-	}, &scratch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stats.Candidates > 2 {
-		t.Fatalf("candidates=%d exceeded hard limit=2", stats.Candidates)
+	for _, mode := range []string{"fast", "minimal", "trace"} {
+		t.Run(mode, func(t *testing.T) {
+			var scratch columnVectorGraphNativeSearchScratch
+			opts := columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: 4, CandidateLimit: 2}
+			if mode == "minimal" {
+				opts.StatsMode = columnVectorGraphNativeSearchStatsModeMinimal
+			}
+			var results []columnVectorGraphNativeSearchResult
+			var stats columnVectorGraphNativeSearchStats
+			var err error
+			if mode == "trace" {
+				var trace columnHNSWSearchPackAttributionTrace
+				results, stats, err = view.searchCosineWithContextTrace(context.Background(), []float32{1, 0, 0}, opts, &scratch, &trace)
+				if len(trace.LevelOrdinals) != 0 || len(trace.ScoreOrdinals) != 2 {
+					t.Fatalf("default capped policy performed upper navigation: %+v", trace)
+				}
+			} else {
+				results, stats, err = view.searchCosine([]float32{1, 0, 0}, opts, &scratch)
+			}
+			if err != nil || len(results) != 2 || stats.Candidates != 2 || stats.PreparedScoreCalls != 2 {
+				t.Fatalf("default capped approximate result: count=%d candidates=%d scores=%d err=%v", len(results), stats.Candidates, stats.PreparedScoreCalls, err)
+			}
+		})
 	}
 	if _, err := rankVectorPartitionRouterCandidatesV1(
 		[]internalrouter.RouterRepresentativeV1{{PartitionID: 1}},

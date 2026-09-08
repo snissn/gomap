@@ -365,6 +365,16 @@ stable state only, and reopened through normal public read-only `Open`.
 
 Publication metadata reuse (#4627) has additional production DB witnesses:
 
+- `TestDependencyManifestV1DeterministicMultiPageRoundTrip` checks that reference
+  preparation allocates no pages and matches actual materialization, including
+  the last legal page interval, rejected overflow, and a partial sink failure.
+  `TestDependencyManifestV1ReferenceEmptyAndNil` distinguishes a valid manifest
+  with no entries from an uninitialized manifest and preserves nil-sink errors.
+- `TestStableResourceSetDependencyManifestEncodingReusesRetainedEntries` bounds
+  cached assembly allocations to payload/reference storage, and
+  `TestStableResourceSetDependencyManifestSurvivesCoalescingAndRelease` checks
+  immutable metadata after coalescing and last-pin release. The multi-page
+  round trip also checks constructor/accessor ownership and normalization errors.
 - `TestDurableRootMetadataReuseLowPlacementAndFallback4627` holds an old
   snapshot through publication, verifies bounded-fixture high-water stability
   and low metadata/auxiliary placement, decodes both slots, and reopens the

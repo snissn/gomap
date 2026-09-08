@@ -5096,6 +5096,15 @@ func TestVlogGenerationRewriteQueue_PrefersUnpenalizedLedgerBeforeExpiredPenalty
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
+	// Own this explicit pass's follow-up runner while checking its selection.
+	// Otherwise the legitimate remaining [33] rewrite races recordedRewrite.
+	if !db.vlogGenerationRewriteQueueRunning.CompareAndSwap(false, true) {
+		t.Fatal("rewrite queue runner already active")
+	}
+	t.Cleanup(func() {
+		db.vlogGenerationRewriteQueuePending.Store(false)
+		db.vlogGenerationRewriteQueueRunning.Store(false)
+	})
 	runRewriteQueueMaintenanceForTest(db)
 
 	opts, calls := recorder.recordedRewrite()
@@ -5104,6 +5113,10 @@ func TestVlogGenerationRewriteQueue_PrefersUnpenalizedLedgerBeforeExpiredPenalty
 	}
 	if got, want := opts.SourceFileIDs, []uint32{22, 11}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
+	}
+	remaining, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil || len(remaining) != 1 || remaining[0] != 33 || !db.vlogGenerationRewriteQueuePending.Load() {
+		t.Fatalf("remaining queue=%v pending=%t err=%v", remaining, db.vlogGenerationRewriteQueuePending.Load(), err)
 	}
 }
 

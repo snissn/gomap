@@ -711,6 +711,11 @@ page count, contiguous page IDs, per-page checksums, complete-payload digest,
 and deterministic re-encoding. The selected manifest is the exact external
 resource closure that must remain present for that root generation.
 
+In-memory assembly can retain immutable normalized entry encodings through an
+owned reference slice. These metadata references do not retain physical pins or
+replace live resource validation. The full V1 payload and digest are still
+assembled for each manifest, and entry accessors return independent deep copies.
+
 Recovery decodes the two physical meta slots independently and attempts
 checksum-valid candidates in descending commit order. Two byte-identical metas
 for the same commit count as one recoverable generation, not two; the second is
@@ -744,6 +749,11 @@ One synchronous publication executes in this order:
 6. sync that exact meta page through the same stable index handle,
 7. install visible state and only then advance frontiers or release overwritten
    generation ownership.
+
+Preparation derives the dependency-manifest reference directly from its
+immutable payload and reserved page interval. It does not encode disposable
+pages to obtain that reference. Actual materialization still writes the complete
+V1 stream with the same page checksums and dependency, index, and meta barriers.
 
 Dependency, index, and meta syncs run outside DB, write, commit, and root-build
 locks. The narrow root-reuse admission fence remains exclusively held: it is

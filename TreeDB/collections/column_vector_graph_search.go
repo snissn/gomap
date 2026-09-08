@@ -225,11 +225,15 @@ func (m columnVectorGraphNativeSearchQueryMode) String() string {
 type columnVectorGraphNativeSearchOptions struct {
 	TopK     int
 	EfSearch int
-	// CandidateLimit is an optional hard bound on distinct layer-0 rows scored
-	// by prepared HNSW search. Zero preserves the full row-domain behavior.
-	// Callers that set it accept entry-at-layer-0 traversal so upper-layer
-	// greedy scoring cannot escape the explicit budget.
+	// CandidateLimit bounds distinct layer-0 scores in prepared HNSW search.
+	// A positive limit starts at layer 0; unfiltered searches may return
+	// approximate results at the cap. Zero preserves ordinary upper traversal.
 	CandidateLimit int
+	// StrictScoreBudget makes a positive CandidateLimit bound all actual score
+	// invocations, including repeated upper-layer scores. Upper descent consumes
+	// the allowance before layer 0, and exhaustion returns no partial results.
+	// Typed serving opts in; the partition router retains the default policy.
+	StrictScoreBudget bool
 
 	ScoreBatchMode columnVectorGraphScoreBatchMode
 	QueryMode      columnVectorGraphNativeSearchQueryMode

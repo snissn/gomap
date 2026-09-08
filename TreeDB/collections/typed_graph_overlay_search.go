@@ -155,16 +155,16 @@ func (v *typedGraphOverlaySearch) searchWithContext(ctx context.Context, query [
 	} else {
 		stats.Route = "typed_empty"
 	}
-	baseResults, baseStats, err := v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseTopK, EfSearch: max(efSearch, baseTopK), CandidateLimit: baseLimit, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
+	baseResults, baseStats, err := v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseTopK, EfSearch: max(efSearch, baseTopK), StrictScoreBudget: true, CandidateLimit: baseLimit, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
 	stats.Base = baseStats
 	stats.BaseResultIDs = len(baseResults)
 	if err != nil {
 		return nil, stats, err
 	}
-	// The pack currently exposes work counts, not a completion certificate.
-	// Conservatively reject a reached cap below corpus size, even if K results
-	// happened to be collected. Never silently return cap-truncated output.
-	if baseLimit < v.pack.Header.Rows && baseStats.Candidates >= uint64(baseLimit) {
+	// The pack rejects truncated traversal. Check the aggregate allowance in
+	// actual score invocations, including upper repeats; suffix rows were
+	// reserved from candidateLimit before the base call.
+	if baseStats.PreparedScoreCalls > uint64(baseLimit) {
 		return nil, stats, errTypedGraphSearchBudget
 	}
 	for i, result := range baseResults {

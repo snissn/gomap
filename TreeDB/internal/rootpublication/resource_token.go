@@ -689,14 +689,19 @@ func (token *StableResourceToken) syncThrough(frontier DurableFrontier) error {
 	return err
 }
 
+// durableFrontierCovers reads already-validated, privately owned frontiers.
+// Keep RIDs() as the owned-copy boundary for callers outside this package.
 func durableFrontierCovers(stable, required DurableFrontier) bool {
 	if stable.Bytes < required.Bytes || stable.MaxLSN < required.MaxLSN {
 		return false
 	}
-	stableRIDs, requiredRIDs := stable.RIDs(), required.RIDs()
-	if len(requiredRIDs) == 0 {
+	if required.exactRIDs == nil || len(required.exactRIDs.values) == 0 {
 		return true
 	}
+	if stable.exactRIDs == nil {
+		return false
+	}
+	stableRIDs, requiredRIDs := stable.exactRIDs.values, required.exactRIDs.values
 	i := 0
 	for _, requiredRID := range requiredRIDs {
 		for i < len(stableRIDs) && stableRIDs[i] < requiredRID {

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"sync/atomic"
@@ -206,6 +207,78 @@ func TestStableLogicalObligationAppendIsExactSetUnion(t *testing.T) {
 	}
 }
 
+func TestStableLogicalObligationMergePreservesSharedViews(t *testing.T) {
+	for _, count := range []int{2, stableLogicalObligationLinearLimit + 1} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			values := make([]StableLogicalObligation, count)
+			for i := range values {
+				values[i] = appendMutationTestObligation(uint64(i + 1))
+			}
+			base := newStableLogicalObligationView(values)
+			baseCommitments := cloneStableLogicalObligationCommitments(base.commitments)
+			firstAdded := appendMutationTestObligation(uint64(count + 1))
+			lastAdded := appendMutationTestObligation(uint64(count + 2))
+			lastAdded.Reachability = ReachabilityTypedColumnValue
+			conflict := values[count-1]
+			conflict.Checksum++
+			for _, tc := range []struct {
+				name      string
+				incoming  []StableLogicalObligation
+				added     []StableLogicalObligation
+				conflicts bool
+				indexless bool
+			}{
+				{name: "empty"},
+				{name: "subset", incoming: values[:1]},
+				{name: "equal", incoming: values},
+				{name: "overlap", incoming: []StableLogicalObligation{firstAdded, values[0], lastAdded}, added: []StableLogicalObligation{firstAdded, lastAdded}},
+				{name: "late_conflict", incoming: []StableLogicalObligation{firstAdded, conflict}, conflicts: true},
+				{name: "indexless", incoming: []StableLogicalObligation{firstAdded, values[0]}, added: []StableLogicalObligation{firstAdded}, indexless: true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					// Candidate branches may merge concurrently from one immutable
+					// retained view; their additions and commitments must stay local.
+					t.Parallel()
+					incoming := newStableLogicalObligationView(tc.incoming)
+					incomingCommitments := cloneStableLogicalObligationCommitments(incoming.commitments)
+					target := base
+					if tc.indexless {
+						target.index = nil
+					}
+					before := target
+					err := mergeStableLogicalObligations(&target, incoming)
+					if tc.conflicts {
+						want := fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, stableLogicalObligationKey(conflict))
+						if !errors.Is(err, ErrResourceConflict) || err.Error() != want.Error() {
+							t.Fatalf("merge error=%v want %v", err, want)
+						}
+						if target.index != before.index || target.tail != before.tail || target.count != before.count || !maps.Equal(target.commitments, baseCommitments) {
+							t.Fatal("rejected merge changed target")
+						}
+					} else {
+						if err != nil {
+							t.Fatal(err)
+						}
+						want := append(slices.Clone(values), tc.added...)
+						if got := target.slice(); !slices.Equal(got, want) || target.count != len(want) || !maps.Equal(target.commitments, stableLogicalObligationCommitments(want)) {
+							t.Fatalf("merged obligations=%+v count=%d want %+v", got, target.count, want)
+						}
+						if len(tc.added) == 0 && (target.index != before.index || target.tail != before.tail) {
+							t.Fatal("unchanged closure rebuilt retained obligations")
+						}
+					}
+					if !slices.Equal(base.slice(), values) || !maps.Equal(base.commitments, baseCommitments) {
+						t.Fatal("merge mutated shared base")
+					}
+					if !slices.Equal(incoming.slice(), tc.incoming) || !maps.Equal(incoming.commitments, incomingCommitments) {
+						t.Fatal("merge mutated incoming view")
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestAppendOnlyPhysicalClosureCloneIsMutationLocal(t *testing.T) {
 	// The certified append-only path must retain the immutable physical closure
 	// itself. Re-cloning every retained entry makes repeated root publication
@@ -359,6 +432,18 @@ func TestAppendOnlyPhysicalClosureCompositePreservesSetContractAndLastRelease(t 
 	}
 	if candidate.Len() != 33 || len(candidate.Descriptors()) != 33 || len(candidate.PhysicalDescriptors()) != 33 || len(candidate.Tokens()) != 33 {
 		t.Fatalf("composite set views disagree: len=%d descriptors=%d physical=%d tokens=%d", candidate.Len(), len(candidate.Descriptors()), len(candidate.PhysicalDescriptors()), len(candidate.Tokens()))
+	}
+	physical := make(map[StableResourcePhysicalDescriptor]int)
+	for _, descriptor := range candidate.PhysicalDescriptors() {
+		physical[descriptor]++
+	}
+	for _, descriptor := range candidate.Descriptors() {
+		physical[StableResourcePhysicalDescriptor{Kind: descriptor.Kind(), Generation: descriptor.Generation()}]--
+	}
+	for descriptor, count := range physical {
+		if count != 0 {
+			t.Fatalf("physical/full projection differs for %+v: %d", descriptor, count)
+		}
 	}
 	if !candidate.covers(ReachabilityColumnManifest) || candidate.FrontierFor(candidate.Tokens()[32].identity, 1).Bytes != 1 {
 		t.Fatal("composite set lost reachability or frontier")

@@ -117,7 +117,7 @@ func (v *typedGraphOverlaySearch) searchPreparedFilterWithContext(ctx context.Co
 			efSearch = min(v.base.reader.def.EfSearch, baseLimit)
 		}
 		stats.Route = "typed_hnsw"
-		results, baseStats, err := v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: max(baseRequestK, efSearch), CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
+		results, baseStats, err := v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: max(baseRequestK, efSearch), StrictScoreBudget: true, CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
 		stats.Base = baseStats
 		stats.BaseResultIDs = len(results)
 		if err != nil {
