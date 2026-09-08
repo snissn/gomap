@@ -146,6 +146,9 @@ func TestTypedGraphFoldKeepsPostCaptureMutation(t *testing.T) {
 	if after.catalog.typedGraphBase == nil || after.catalog.typedGraphBase.meta.Options.ColumnStore.RecoveryAuthoritativeAppliedCommandLSN != before.manifest.AppliedCommandLSN {
 		t.Fatal("fold did not install exact captured base frontier")
 	}
+	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, col.db, col.Name())
+	state := columnVectorIndexStateFromRecords1987(t, records, col.Meta().VectorIndexes[0])
+	assertTypedGraphSelectedMetadataInventory(t, state.Assets, state.RowCount, 0)
 	owner, err := col.openTypedGraphReadOwner(limits)
 	if err != nil {
 		t.Fatal(err)

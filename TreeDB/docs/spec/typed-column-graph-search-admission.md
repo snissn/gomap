@@ -74,10 +74,13 @@ when the duplicate TCIM carriers are wholly omitted, as specified by
 The existing pack reader's mmap/heap validation supplies the provider tier;
 borrowed slices do not claim TCIM certification. Raw vectors, inverse norms,
 persisted inverse lookup, owning-base coordinate validation and live shared
-ownership remain required. This reader-only extension leaves writer emission
-and query/statistics admission unchanged and does not promote a performance
-claim. Missing/corrupt required pack data fails closed, while complete TCIM
-providers retain the existing missing/stale-pack compatibility behavior.
+ownership remain required. The common writer selects this representation from
+typed-base capture admission in collection metadata, independently of serving
+policy and candidate budgets. It omits duplicate TCIM metadata for selected
+Rebuild, Fold and stable-closure preparation; unselected emission is unchanged.
+Query/statistics admission is unchanged, with no performance claim.
+Missing/corrupt required pack data fails closed, while complete TCIM providers
+retain the existing missing/stale-pack compatibility behavior.
 
 Evidence counters for #2045:
 

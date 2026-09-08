@@ -14,11 +14,12 @@ import (
 )
 
 type columnHNSWSearchPackPreparedAsset struct {
-	Present    bool
-	Ref        ColumnAssetRef
-	Bytes      int64
-	Rows       int
-	SchemaHash uint64
+	AdjacencyLayerCount int // From the already-built native pack input; not a second graph reconstruction.
+	Present             bool
+	Ref                 ColumnAssetRef
+	Bytes               int64
+	Rows                int
+	SchemaHash          uint64
 }
 
 func prepareColumnHNSWSearchPackAsset(assetRootDir string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, generation, partID uint64, rows []columnVectorGraphAssetRow) (columnHNSWSearchPackPreparedAsset, error) {
@@ -82,11 +83,12 @@ func writeColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir string, cfg 
 		return columnHNSWSearchPackPreparedAsset{}, closeErr
 	}
 	prepared := columnHNSWSearchPackPreparedAsset{
-		Present:    true,
-		Ref:        ref,
-		Bytes:      ref.Length,
-		Rows:       len(rows),
-		SchemaHash: cfg.SchemaHash,
+		AdjacencyLayerCount: len(input.AdjacencyLayers),
+		Present:             true,
+		Ref:                 ref,
+		Bytes:               ref.Length,
+		Rows:                len(rows),
+		SchemaHash:          cfg.SchemaHash,
 	}
 	return prepared, nil
 }

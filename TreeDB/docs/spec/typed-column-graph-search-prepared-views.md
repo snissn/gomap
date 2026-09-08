@@ -51,12 +51,19 @@ Provider structs borrow the reader/holder's pack and close only their own TCIM
 handles. Combined/shared readiness requires live pack-dependent providers and
 the inverse. Pack residency is counted once by its existing owner; generic
 mmap/heap adjacency outcomes describe actual access, without claiming TCIM CSR
-certification for pack slices. The writer still emits the existing TCIM carriers
-in this reader-only step. Focused controls are
-`TestColumnHNSWSearchPackNativeMetadataProviders`,
-`TestColumnHNSWSearchPackNativeMetadataHighestNonemptyLayer`, and
-`TestTypedGraphInverseMappedAndOptional`; these are correctness/ownership
-controls, not storage or performance qualification.
+certification for pack slices. The common writer omits duplicate TCIM adjacency,
+IDs and forward coordinates for metadata-admitted typed-base capture, including
+Rebuild, Fold and stable-closure preparation. Unselected emission is unchanged.
+No query/statistics mode gains admission from this storage choice.
+
+Focused controls include `TestColumnHNSWSearchPackNativeMetadataProviders`,
+`TestColumnHNSWSearchPackNativeMetadataHighestNonemptyLayer`,
+`TestTypedGraphInverseMappedAndOptional`, `TestTypedGraphBaseAutomaticCapture`,
+`TestColumnGraphRebuildUnselectedMetadataInventory`,
+`TestTypedGraphLifecyclePublicMutationAndReopen`, and
+`TestTypedGraphFoldKeepsPostCaptureMutation`. These check emitted inventory,
+ordinary/native fallback results and ownership; they do not qualify storage or
+performance at workload scale.
 
 ## #2043 closeout status
 

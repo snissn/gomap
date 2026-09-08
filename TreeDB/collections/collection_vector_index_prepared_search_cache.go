@@ -429,7 +429,7 @@ func (c *Collection) openCollectionVectorIndexPreparedExactSearch(opts VectorInd
 		return nil, response, err
 	}
 	key = collectionVectorIndexPreparedSearchSnapshotCacheKey(key, snapshotCommitSeq(snap), snapshotSystemRoot(snap))
-	if !columnVectorGraphDocumentIDStatePresent(view.VectorIndexState) {
+	if !columnVectorGraphDocumentIDProviderPresent(view.VectorIndexState) {
 		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires vector-index document-id state for no-document result IDs; rebuild the vector index", ErrVectorIndexSearchUnavailable, def.Name)
 	}
 	if err := validateColumnVectorGraphDocumentIDStateAssetPayload(c.db.ColumnAssetRootDir(), readerCatalog.meta.Name, *readerCatalog.meta.Options.ColumnStore, def, graph, view.VectorIndexState); err != nil {
@@ -543,7 +543,7 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 	response.Strategy = def.Strategy
 	response.Path = VectorIndexSearchPathColumnGraphNativeReader
 	response.Status = VectorIndexStatus{Name: def.Name, Strategy: def.Strategy, State: VectorIndexStateColumnGraphLoaded, Loaded: true}
-	if !columnVectorGraphDocumentIDStatePresent(view.VectorIndexState) {
+	if !columnVectorGraphDocumentIDProviderPresent(view.VectorIndexState) {
 		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer quantized mode requires vector-index document-id state for no-document result IDs; rebuild the vector index", ErrVectorIndexSearchUnavailable, def.Name)
 	}
 	if err := validateColumnVectorGraphDocumentIDStateAssetPayload(c.db.ColumnAssetRootDir(), readerCatalog.meta.Name, *readerCatalog.meta.Options.ColumnStore, def, graph, view.VectorIndexState); err != nil {

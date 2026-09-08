@@ -1,8 +1,8 @@
 # Vector-index row reference state (#1993)
 
 TreeDB column-graph search publishes vector-index state for ordinal-to-base-row
-references. This remains separate from returned document IDs, which are now
-owned by vector-index `document_ids` bytes state.
+references. Returned document IDs remain separate opaque bytes, supplied by
+vector-index `document_ids` state or the existing graph pack.
 
 ## Healthy path
 
@@ -57,7 +57,11 @@ mutated manifest. Closing the pack or inverse makes dependent lookups
 unavailable. The row-ref source closes only its own TCIM handles; its pack
 reference borrows the reader/shared holder's lifetime. Pack arrays are not TCIM
 certifications, and the mapped-field counters count only actual TCIM fields.
-Writer emission is unchanged by this reader support.
+The common writer uses these providers for collections admitted to typed-base
+capture: Rebuild, Fold and stable-closure preparation omit the four forward
+TCIM assets and retain only the inverse for nonempty bases. Unselected
+collections still emit the complete TCIM coordinate set. Empty selected bases
+need no inverse asset.
 
 ### Forward mapping and final documents
 
@@ -67,8 +71,8 @@ remain an explicit compatibility fallback.
 
 Top-K document materialization uses row refs from vector-index state directly
 when available, avoiding an ID-to-row-ref locator lookup. Returned IDs are
-fetched from `document_ids` typed-column bytes state on the healthy path; legacy
-graph row ID bytes are compatibility fallback only.
+fetched from `document_ids` typed-column bytes state or the validated pack on the
+healthy path; legacy graph row ID bytes are compatibility fallback only.
 
 ## Opaque document IDs
 

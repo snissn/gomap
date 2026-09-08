@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -205,9 +206,14 @@ func TestTypedGraphBaseCaptureRejectsCrossManagerStaleBeforeWAL(t *testing.T) {
 }
 
 func TestTypedGraphBaseAutomaticCapture(t *testing.T) {
-	for _, populated := range []bool{false, true} {
-		t.Run(fmt.Sprintf("populated=%v", populated), func(t *testing.T) {
-			_, db, col := openTypedMinimaCollection(t)
+	for _, fixture := range []struct{ populated, quantized bool }{{}, {populated: true}, {populated: true, quantized: true}} {
+		t.Run(fmt.Sprintf("populated=%v/quantized=%v", fixture.populated, fixture.quantized), func(t *testing.T) {
+			populated := fixture.populated
+			meta := typedMinimaCollectionMeta()
+			if fixture.quantized {
+				meta.VectorIndexes[0].QuantizedIndexes = []QuantizedVectorIndexDefinition{{Name: "embedding.scalar_u8.fast"}}
+			}
+			_, db, col := openTypedMinimaCollectionMeta(t, meta)
 			defer db.Close()
 			if populated {
 				columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"original"}}, {Name: "user", Strings: []string{"tenant"}}, {Name: "path", Strings: []string{"source"}}}
@@ -227,10 +233,89 @@ func TestTypedGraphBaseAutomaticCapture(t *testing.T) {
 			if !collectionMetaValuesEqual(catalog.meta, catalog.typedGraphBase.meta) {
 				t.Fatal("capture identity differs from rebuilt current graph")
 			}
+			records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, db, col.Name())
+			def := col.Meta().VectorIndexes[0]
+			state := columnVectorIndexStateFromRecords1987(t, records, def)
+			assertTypedGraphSelectedMetadataInventory(t, state.Assets, state.RowCount, len(def.QuantizedIndexes))
+			_, _, pack := loadColumnHNSWSearchPackForTest2313(t, db, def, graphManifestFromRecords1918(t, records, def), state)
+			if state.AdjacencyLayerCount != pack.Header.AdjacencyLayerCount {
+				t.Errorf("selected TVIS layers=%d pack=%d", state.AdjacencyLayerCount, pack.Header.AdjacencyLayerCount)
+			}
 			if _, err := catalog.typedGraphBase.catalog(col, snap); err != nil {
 				t.Fatal(err)
 			}
+			status, err := col.VectorIndexStatus(def.Name)
+			if err != nil || !status.Loaded {
+				t.Errorf("selected status=%+v err=%v", status, err)
+			}
+			if populated {
+				opts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0, 0, 0, 0, 0, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}
+				modes := []VectorIndexQueryMode{VectorIndexQueryModeExact}
+				if fixture.quantized {
+					modes = append(modes, VectorIndexQueryModeQuantizedOnly, VectorIndexQueryModeQuantizedRerank)
+				}
+				for _, mode := range modes {
+					opts.QueryMode = mode
+					if mode != VectorIndexQueryModeExact {
+						opts.QuantizedIndexName = def.QuantizedIndexes[0].Name
+					}
+					if mode == VectorIndexQueryModeQuantizedRerank {
+						opts.QuantizedRerankCandidates = 1
+					}
+					var buffer VectorIndexSearchBuffer
+					response, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+					if err != nil || len(response.Results) != 1 || string(response.Results[0].ID) != "base" || response.Results[0].Score < .99 {
+						t.Errorf("selected buffered mode=%s results=%+v err=%v", mode, response.Results, err)
+					}
+				}
+			}
+			if rootpublication.StableRelativeNamespaceSupported() {
+				calls := 0
+				restore := setColumnVectorGraphStableAuthorityTestHook(func(resources *rootpublication.StableResourceSet, assets []columnVectorIndexStateAssetSnapshot) error {
+					calls++
+					assertTypedGraphSelectedMetadataInventory(t, assets, state.RowCount, len(def.QuantizedIndexes))
+					var obligations int
+					for _, descriptor := range resources.Descriptors() {
+						obligations += len(descriptor.LogicalObligations())
+					}
+					if obligations != len(assets) {
+						t.Errorf("stable obligations=%d actual assets=%d", obligations, len(assets))
+					}
+					return nil
+				})
+				defer restore()
+				closure, err := col.PrepareVectorIndexStableClosure(def.Name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				closure.Release()
+				if calls != 1 {
+					t.Fatalf("selected stable preparation calls=%d", calls)
+				}
+			}
 		})
+	}
+}
+
+func assertTypedGraphSelectedMetadataInventory(t *testing.T, assets []columnVectorIndexStateAssetSnapshot, rows, quantized int) {
+	t.Helper()
+	want := map[string]int{columnVectorIndexStateAssetRoleHNSWSearchPack: 1}
+	if rows > 0 {
+		want[columnVectorIndexStateAssetRoleInverseNorm] = 1
+		want[columnVectorIndexStateAssetRoleRowRefs] = 1
+		if quantized > 0 {
+			want[columnVectorIndexStateAssetRoleQuantizedCodes] = quantized
+		}
+	}
+	got := make(map[string]int)
+	for _, asset := range assets {
+		got[asset.Role]++
+		if asset.Role == columnVectorIndexStateAssetRoleRowRefs && asset.AssetID != columnVectorGraphRowRefStateAssetID(columnVectorGraphRowRefStateFieldOrdinalByPhysicalRow) {
+			t.Errorf("selected writer emitted duplicate forward ref %q", asset.AssetID)
+		}
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("selected asset inventory=%v want=%v", got, want)
 	}
 }
 

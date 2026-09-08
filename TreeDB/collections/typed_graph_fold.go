@@ -48,6 +48,7 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 	var captured columnStoreCompactionState
 	var lease *ColumnAssetLifecyclePinSet
 	var copy *typedGraphBaseCopy
+	var capture bool
 	var serving *typedGraphFoldServing
 	defer func() {
 		if lease != nil {
@@ -69,7 +70,11 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 			if e != nil {
 				return e
 			}
-			if captured.catalog.typedGraphBase == nil || len(captured.meta.VectorIndexes) != 1 || captured.meta.VectorIndexes[0].Strategy != VectorIndexStrategyColumnGraph {
+			capture, e = typedGraphBaseCaptureAdmission(captured.meta)
+			if e != nil {
+				return e
+			}
+			if !capture || captured.catalog.typedGraphBase == nil || len(captured.meta.VectorIndexes) != 1 || captured.meta.VectorIndexes[0].Strategy != VectorIndexStrategyColumnGraph {
 				return ErrHybridSearchUnsupported
 			}
 			if coord.typedGraphServing.Load() != nil {
@@ -199,7 +204,7 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 		return err
 	}
 	stage = time.Now()
-	graph, records, identity, err := prepareColumnVectorGraphRebuildManifestForPublicationTimed(captured.meta.Name, captured.cfg, captured.meta.VectorIndexes, def, baseHeader, baseManifest.Records, captured.manifest.AppliedCommandLSN, graphRows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), timing, admission)
+	graph, records, identity, err := prepareColumnVectorGraphRebuildManifestForPublicationTimed(captured.meta.Name, captured.cfg, captured.meta.VectorIndexes, def, baseHeader, baseManifest.Records, captured.manifest.AppliedCommandLSN, graphRows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), timing, admission, capture)
 	if timing != nil {
 		timing.AssetPreparation += time.Since(stage)
 	}

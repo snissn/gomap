@@ -150,11 +150,11 @@ func columnVectorGraphRowRefStateColumnStoreConfig(collection string, base Colum
 }
 
 func prepareColumnVectorGraphRowRefStateAssets(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow) ([]columnVectorGraphPreparedRowRefStateAsset, error) {
-	return prepareColumnVectorGraphRowRefStateAssetsWithStableAuthority(assetRootDir, collection, base, def, generation, firstPartID, rows, nil)
+	return prepareColumnVectorGraphRowRefStateAssetsWithStableAuthority(assetRootDir, collection, base, def, generation, firstPartID, rows, nil, false)
 }
 
-func prepareColumnVectorGraphRowRefStateAssetsWithStableAuthority(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator) ([]columnVectorGraphPreparedRowRefStateAsset, error) {
-	payloads, err := prepareColumnVectorGraphRowRefStatePayloads(collection, base, def, generation, firstPartID, rows)
+func prepareColumnVectorGraphRowRefStateAssetsWithStableAuthority(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator, inverseOnly bool) ([]columnVectorGraphPreparedRowRefStateAsset, error) {
+	payloads, err := prepareColumnVectorGraphRowRefStatePayloads(collection, base, def, generation, firstPartID, rows, inverseOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -176,16 +176,20 @@ func prepareColumnVectorGraphRowRefStateAssetsWithStableAuthority(assetRootDir, 
 	return assets, closeErr
 }
 
-func prepareColumnVectorGraphRowRefStatePayloads(collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow) ([]columnVectorGraphPreparedRowRefStatePayload, error) {
+func prepareColumnVectorGraphRowRefStatePayloads(collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow, inverseOnly bool) ([]columnVectorGraphPreparedRowRefStatePayload, error) {
 	if len(rows) == 0 {
 		return nil, nil
 	}
 	if generation == 0 || firstPartID == 0 {
 		return nil, errors.New("collections: column_graph row-ref state requires generation and first part_id")
 	}
-	payloads := make([]columnVectorGraphPreparedRowRefStatePayload, 0, len(columnVectorGraphRowRefStateFields))
+	fields := columnVectorGraphRowRefStateFields
+	if inverseOnly {
+		fields = fields[len(fields)-1:] // Pack owns the four forward coordinates.
+	}
+	payloads := make([]columnVectorGraphPreparedRowRefStatePayload, 0, len(fields))
 	partID := firstPartID
-	for i, field := range columnVectorGraphRowRefStateFields {
+	for i, field := range fields {
 		values, err := columnVectorGraphRowRefStateValues(field, rows, generation)
 		if err != nil {
 			return nil, err
@@ -195,7 +199,7 @@ func prepareColumnVectorGraphRowRefStatePayloads(collection string, base ColumnS
 			return nil, err
 		}
 		payloads = append(payloads, payload)
-		if i != len(columnVectorGraphRowRefStateFields)-1 {
+		if i != len(fields)-1 {
 			if partID == ^uint64(0) {
 				return nil, errors.New("collections: column_graph row-ref state part_id overflow")
 			}

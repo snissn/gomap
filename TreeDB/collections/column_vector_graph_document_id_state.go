@@ -291,6 +291,17 @@ func columnVectorGraphDocumentIDStatePresent(state columnVectorIndexStateSnapsho
 	return found
 }
 
+// columnVectorGraphDocumentIDProviderPresent is a manifest admission check.
+// Present TCIM still requires its own payload validation; an omitted carrier
+// requires the existing pack open/validation before its IDs can be consumed.
+func columnVectorGraphDocumentIDProviderPresent(state columnVectorIndexStateSnapshot) bool {
+	if columnVectorGraphDocumentIDStatePresent(state) {
+		return true
+	}
+	_, found, err := findColumnHNSWSearchPackStateAsset(state)
+	return found && err == nil
+}
+
 func validateColumnVectorGraphDocumentIDStateManifestAsset(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot) error {
 	asset, found, err := findColumnVectorGraphDocumentIDStateAsset(state)
 	if err != nil || !found {

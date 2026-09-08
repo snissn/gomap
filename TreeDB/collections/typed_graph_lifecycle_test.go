@@ -193,6 +193,28 @@ func TestTypedGraphLifecyclePublicMutationAndReopen(t *testing.T) {
 				if err != nil || len(reopened.Results) != 1 || string(reopened.Results[0].ID) != wantID || reopened.Results[0].Score != response.Results[0].Score || !bytes.Equal(reopened.Results[0].Document, response.Results[0].Document) {
 					t.Fatalf("mixed-source reopen result=%+v err=%v", reopened.Results, err)
 				}
+				searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: "embedding_graph"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer searcher.Close()
+				for _, mode := range []VectorIndexSearchStatsMode{VectorIndexSearchStatsModeFullDiagnostics, VectorIndexSearchStatsModeMinimal, VectorIndexSearchStatsModeBenchmarkDebug} {
+					opts := VectorIndexSearcherSearchOptions{Query: []float32{0, 1, 0, 0, 0, 0, 0, 0}, TopK: 1, EfSearch: 8, IncludeDocuments: true, StatsMode: mode}
+					ordinary, err := searcher.Search(opts)
+					if err != nil || len(ordinary.Results) != 1 || !bytes.Equal(ordinary.Results[0].ID, reopened.Results[0].ID) || ordinary.Results[0].Score != reopened.Results[0].Score || !bytes.Equal(ordinary.Results[0].Document, reopened.Results[0].Document) {
+						t.Fatalf("ordinary mode=%s result=%+v err=%v", mode, ordinary.Results, err)
+					}
+					opts.IncludeDocuments = false
+					var buffer VectorIndexSearchBuffer
+					buffered, err := searcher.SearchWithBuffer(opts, &buffer)
+					if err != nil || len(buffered.Results) != 1 || !bytes.Equal(buffered.Results[0].ID, reopened.Results[0].ID) || buffered.Results[0].Score != reopened.Results[0].Score {
+						t.Fatalf("buffered mode=%s result=%+v err=%v", mode, buffered.Results, err)
+					}
+					if mode == VectorIndexSearchStatsModeBenchmarkDebug && buffered.Stats.SearchRouteHNSWSearchPack != 0 {
+						t.Fatal("unsupported pack stats mode bypassed native fallback")
+					}
+				}
+
 			})
 		}
 	}
