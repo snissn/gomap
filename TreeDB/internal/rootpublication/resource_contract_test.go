@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"sync"
@@ -153,6 +154,25 @@ func TestStableResourceSetDependencyManifestEncodingReusesRetainedEntries(t *tes
 	if !bytes.Equal(first.payload, second.payload) || first.digest != second.digest {
 		t.Fatal("cached manifest changed canonical V1 encoding")
 	}
+	// Reassembly must pay for the canonical payload and compact references, not
+	// copy every wide normalized entry again. Allow payload size-class rounding
+	// and bounded sorting/traversal overhead without timing the operation.
+	const builds = 4
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range builds {
+		manifest, work, err := source.DependencyManifestV1()
+		if err != nil || work.EntriesEncoded != 0 || manifest.digest != first.digest {
+			t.Fatalf("cached reassembly: work=%+v err=%v", work, err)
+		}
+	}
+	runtime.ReadMemStats(&after)
+	bytesPerBuild := (after.TotalAlloc - before.TotalAlloc) / builds
+	byteLimit := uint64(2*len(first.payload) + 32*entries + 64<<10)
+	t.Logf("cached manifest assembly: entries=%d payload=%d bytes/build=%d limit=%d", entries, len(first.payload), bytesPerBuild, byteLimit)
+	if bytesPerBuild > byteLimit {
+		t.Fatalf("cached manifest assembly allocated %d bytes/build, limit %d", bytesPerBuild, byteLimit)
+	}
 
 	childBuilder := NewStableResourceSetBuilder()
 	if err := childBuilder.Add(makeToken(entries + 1)); err != nil {
@@ -184,6 +204,62 @@ func TestStableResourceSetDependencyManifestEncodingReusesRetainedEntries(t *tes
 	}
 	if candidateWork.EntriesVisited != entries+1 || candidateWork.EntriesEncoded != 1 || candidateWork.BytesEncoded == 0 {
 		t.Fatalf("one-entry append manifest work=%+v", candidateWork)
+	}
+}
+
+func TestStableResourceSetDependencyManifestSurvivesCoalescingAndRelease(t *testing.T) {
+	dir := t.TempDir()
+	first := stableTokenFixture(t, dir, "first.vlog", 1, 8, ReachabilityValueLogPointer, "same-header")
+	builder := NewStableResourceSetBuilder()
+	if err := builder.Add(first); err != nil {
+		t.Fatal(err)
+	}
+	source, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Release()
+	manifest, _, err := source.DependencyManifestV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEntries, wantPayload, wantDigest := manifest.Entries(), bytes.Clone(manifest.payload), manifest.digest
+	inherited, err := CloneStableResourceSetExcludingKinds(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advanced := stableTokenFixture(t, dir, "advanced.vlog", 1, 16, ReachabilityValueLogPointer, "same-header", func(spec *StableResourceSpec) {
+		spec.StableIdentityOverride = first.Identity()
+		spec.ResourceID = "first.vlog"
+	})
+	next := NewStableResourceSetBuilder()
+	if err := next.Merge(inherited); err != nil {
+		t.Fatal(err)
+	}
+	if err := next.Add(advanced); err != nil {
+		next.Abandon()
+		t.Fatal(err)
+	}
+	candidate, err := next.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Release()
+	updated, work, err := candidate.DependencyManifestV1()
+	if err != nil || work.EntriesEncoded != 1 || updated.Entries()[0].Frontier.Bytes != 16 {
+		t.Fatalf("advanced manifest: work=%+v err=%v", work, err)
+	}
+	source.Release()
+	candidate.Release()
+	if ResourceOwnerState(first.owner.Load()) != ResourceOwnerReleased || ResourceOwnerState(advanced.owner.Load()) != ResourceOwnerReleased {
+		t.Fatal("manifest retained physical pins after resource owners released")
+	}
+	if !reflect.DeepEqual(manifest.Entries(), wantEntries) || !bytes.Equal(manifest.payload, wantPayload) || manifest.digest != wantDigest {
+		t.Fatal("coalescing/release changed the old immutable manifest")
+	}
+	uncached, err := NewDependencyManifestV1(manifest.Entries())
+	if err != nil || uncached.digest != wantDigest || !bytes.Equal(uncached.payload, wantPayload) {
+		t.Fatalf("cached/uncached canonical encoding differs after release: %v", err)
 	}
 }
 

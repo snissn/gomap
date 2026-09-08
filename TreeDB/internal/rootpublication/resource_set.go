@@ -3227,7 +3227,7 @@ func (set *StableResourceSet) DependencyManifestV1() (*DependencyManifestV1, Dep
 		return NewDependencyManifestV1WithWork(nil)
 	}
 	work := DependencyManifestBuildWorkV1{}
-	encoded := make([]dependencyManifestEncodedEntryV1, 0, set.Len())
+	encoded := make([]*dependencyManifestEncodedEntryV1, 0, set.Len())
 	var buildErr error
 	set.rangeEntries(func(entry *stableResourceEntry) bool {
 		work.EntriesVisited++
@@ -3249,7 +3249,9 @@ func (set *StableResourceSet) DependencyManifestV1() (*DependencyManifestV1, Dep
 			work.EntriesEncoded++
 			work.BytesEncoded += uint64(len(raw))
 		}
-		encoded = append(encoded, *cache.value)
+		// Cache invalidation replaces the value; it never mutates a published
+		// encoding. The manifest owns these references independently of pins.
+		encoded = append(encoded, cache.value)
 		cache.mu.Unlock()
 		return true
 	})

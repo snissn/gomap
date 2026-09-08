@@ -15,11 +15,13 @@ func TestDependencyManifestV1DeterministicMultiPageRoundTrip(t *testing.T) {
 	entries := make([]DependencyManifestEntryV1, 0, 48)
 	for i := 47; i >= 0; i-- {
 		logicalDigest := sha256.Sum256([]byte(fmt.Sprintf("logical-%d", i)))
+		frontier := NewRIDFrontier([]uint64{uint64(i + 1), uint64(i + 101)})
+		frontier.Bytes = uint64((i + 1) * 4096)
 		entries = append(entries, DependencyManifestEntryV1{
 			Kind: ResourceValueLog, LogicalLane: "main", ResourceID: fmt.Sprintf("segment-%03d", i),
 			DiagnosticPath: fmt.Sprintf("value_vlog/%03d-%s.vlog", i, string(make([]byte, 96))),
 			Identity:       StableIdentity{Platform: "unix", VolumeID: 9, ObjectID: [16]byte{byte(i + 1)}, Generation: uint64(i + 1)},
-			Generation:     uint64(i + 1), Digest: sha256.Sum256([]byte(fmt.Sprintf("segment-%d", i))), Frontier: DurableFrontier{Bytes: uint64((i + 1) * 4096)},
+			Generation:     uint64(i + 1), Digest: sha256.Sum256([]byte(fmt.Sprintf("segment-%d", i))), Frontier: frontier,
 			Reachability: []ReachabilityField{ReachabilityValueLogPointer},
 			LogicalObligations: []StableLogicalObligation{{
 				Class: "fixture", Kind: "value-log-ref", Namespace: "main", Generation: uint64(i + 1),
@@ -35,6 +37,27 @@ func TestDependencyManifestV1DeterministicMultiPageRoundTrip(t *testing.T) {
 	manifest, err := NewDependencyManifestV1(entries)
 	if err != nil {
 		t.Fatal(err)
+	}
+	wantEntries := manifest.Entries()
+	// Both constructor input and Entries results may be reused or mutated;
+	// normalized cache values must remain independent at every nested field.
+	for _, borrowed := range [][]DependencyManifestEntryV1{entries, manifest.Entries()} {
+		borrowed[0].ResourceID = "changed"
+		borrowed[0].Frontier.exactRIDs.values[0] = 999
+		borrowed[0].Reachability[0] = ReachabilityColumnManifest
+		borrowed[0].LogicalObligations[0].PartID++
+		borrowed[0].Namespace.NewName = "changed"
+	}
+	if !reflect.DeepEqual(manifest.Entries(), wantEntries) {
+		t.Fatal("manifest aliases constructor input or returned Entries")
+	}
+	if _, err := NewDependencyManifestV1([]DependencyManifestEntryV1{wantEntries[0], wantEntries[0]}); !errors.Is(err, ErrDependencyManifestFormat) {
+		t.Fatalf("duplicate entry error=%v", err)
+	}
+	invalid := wantEntries[1]
+	invalid.Generation = 0
+	if got, work, err := NewDependencyManifestV1WithWork([]DependencyManifestEntryV1{wantEntries[0], invalid}); !errors.Is(err, ErrDependencyManifestFormat) || got != nil || work.EntriesVisited != 2 || work.EntriesEncoded != 1 || work.BytesEncoded == 0 {
+		t.Fatalf("normalization failure lost its completed prefix: manifest=%v work=%+v err=%v", got, work, err)
 	}
 	if manifest.PageCount() < 2 {
 		t.Fatalf("page count=%d want multi-page fixture", manifest.PageCount())

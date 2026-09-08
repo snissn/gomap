@@ -711,6 +711,11 @@ page count, contiguous page IDs, per-page checksums, complete-payload digest,
 and deterministic re-encoding. The selected manifest is the exact external
 resource closure that must remain present for that root generation.
 
+In-memory assembly can retain immutable normalized entry encodings through an
+owned reference slice. These metadata references do not retain physical pins or
+replace live resource validation. The full V1 payload and digest are still
+assembled for each manifest, and entry accessors return independent deep copies.
+
 Recovery decodes the two physical meta slots independently and attempts
 checksum-valid candidates in descending commit order. Two byte-identical metas
 for the same commit count as one recoverable generation, not two; the second is
