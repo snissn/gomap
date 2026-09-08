@@ -537,11 +537,11 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 		additional bool
 	}{{resources: base}, {resources: additional, additional: true}} {
 		resources := item.resources
-		for _, descriptor := range resources.Descriptors() {
-			switch descriptor.Kind() {
+		for _, descriptor := range resources.PhysicalDescriptors() {
+			switch descriptor.Kind {
 			case rootpublication.ResourceValueLog, rootpublication.ResourceOuterLeafLog:
-				if descriptor.Generation() <= uint64(^uint32(0)) {
-					fileID := uint32(descriptor.Generation())
+				if descriptor.Generation <= uint64(^uint32(0)) {
+					fileID := uint32(descriptor.Generation)
 					known[fileID] = struct{}{}
 					if item.additional {
 						additionalReferences[fileID] = struct{}{}
@@ -1122,9 +1122,9 @@ func (db *DB) captureRebuiltIndexDurableResourcesWithWorkV1(p *pager.Pager, meta
 	work.ExactCandidateScan = true
 	work.UniqueScannedExternalSegments = uint64(len(references))
 	exactPackedFileIDs := make(map[uint32]struct{})
-	for _, descriptor := range source.Descriptors() {
-		if descriptor.Kind() == rootpublication.ResourceOuterLeafPack && descriptor.Generation() <= uint64(^uint32(0)) {
-			exactPackedFileIDs[uint32(descriptor.Generation())] = struct{}{}
+	for _, descriptor := range source.PhysicalDescriptors() {
+		if descriptor.Kind == rootpublication.ResourceOuterLeafPack && descriptor.Generation <= uint64(^uint32(0)) {
+			exactPackedFileIDs[uint32(descriptor.Generation)] = struct{}{}
 		}
 	}
 	for fileID := range exactPackedFileIDs {
@@ -1280,7 +1280,7 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 	if durableSeq > next.CommitSeq {
 		return nil, errors.New("durable root publication sequence exceeds commit frontier")
 	}
-	manifestRef, err := manifest.Materialize(auxiliary[0], freelist.NewMemoryPageStoreV1())
+	manifestRef, err := manifest.Reference(auxiliary[0])
 	if err != nil {
 		return nil, err
 	}

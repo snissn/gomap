@@ -745,6 +745,11 @@ One synchronous publication executes in this order:
 7. install visible state and only then advance frontiers or release overwritten
    generation ownership.
 
+Preparation derives the dependency-manifest reference directly from its
+immutable payload and reserved page interval. It does not encode disposable
+pages to obtain that reference. Actual materialization still writes the complete
+V1 stream with the same page checksums and dependency, index, and meta barriers.
+
 Dependency, index, and meta syncs run outside DB, write, commit, and root-build
 locks. The narrow root-reuse admission fence remains exclusively held: it is
 not a root-construction lock, and it prevents a new reader from capturing the

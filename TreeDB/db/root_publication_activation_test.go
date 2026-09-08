@@ -273,6 +273,12 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 	plannerBase := stableContractResourceSet(t, stableContractDescriptor{
 		generation: uint64(leafLog.fileID), kind: rootpublication.ResourceOuterLeafLog,
 		reachability: rootpublication.ReachabilityOuterLeafRawPointer, frontier: 4096,
+	}, stableContractDescriptor{
+		generation: 777, kind: rootpublication.ResourceOuterLeafManifest,
+		reachability: rootpublication.ReachabilityOuterLeafGeneration, frontier: 4096,
+	}, stableContractDescriptor{
+		generation: 1<<32 + 777, kind: rootpublication.ResourceOuterLeafLog,
+		reachability: rootpublication.ReachabilityOuterLeafRawPointer, frontier: 4096,
 	})
 	defer plannerBase.Release()
 	plannerAdditional := stableContractResourceSet(t, stableContractDescriptor{
@@ -292,6 +298,8 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 		t.Fatal("net-zero pointer replacement did not reuse predecessor dependencies")
 	} else if _, ok := references[netZeroFileID]; !ok {
 		t.Fatalf("net-zero pointer replacement references=%v, want positive membership for file %d", references, netZeroFileID)
+	} else if len(references) != 2 {
+		t.Fatalf("physical routing admitted unrelated kind or overflowing generation: %v", references)
 	}
 
 	destructive := newValueLogRefDelta()

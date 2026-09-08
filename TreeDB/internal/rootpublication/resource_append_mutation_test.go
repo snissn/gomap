@@ -360,6 +360,18 @@ func TestAppendOnlyPhysicalClosureCompositePreservesSetContractAndLastRelease(t 
 	if candidate.Len() != 33 || len(candidate.Descriptors()) != 33 || len(candidate.PhysicalDescriptors()) != 33 || len(candidate.Tokens()) != 33 {
 		t.Fatalf("composite set views disagree: len=%d descriptors=%d physical=%d tokens=%d", candidate.Len(), len(candidate.Descriptors()), len(candidate.PhysicalDescriptors()), len(candidate.Tokens()))
 	}
+	physical := make(map[StableResourcePhysicalDescriptor]int)
+	for _, descriptor := range candidate.PhysicalDescriptors() {
+		physical[descriptor]++
+	}
+	for _, descriptor := range candidate.Descriptors() {
+		physical[StableResourcePhysicalDescriptor{Kind: descriptor.Kind(), Generation: descriptor.Generation()}]--
+	}
+	for descriptor, count := range physical {
+		if count != 0 {
+			t.Fatalf("physical/full projection differs for %+v: %d", descriptor, count)
+		}
+	}
 	if !candidate.covers(ReachabilityColumnManifest) || candidate.FrontierFor(candidate.Tokens()[32].identity, 1).Bytes != 1 {
 		t.Fatal("composite set lost reachability or frontier")
 	}

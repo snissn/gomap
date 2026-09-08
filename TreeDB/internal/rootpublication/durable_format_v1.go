@@ -231,18 +231,31 @@ func (manifest *DependencyManifestV1) PageCount() uint32 {
 	return uint32((len(manifest.payload) + dependencyManifestPayloadV1 - 1) / dependencyManifestPayloadV1)
 }
 
-func (manifest *DependencyManifestV1) Materialize(firstPageID uint64, sink freelist.AppendPageSink) (DependencyManifestRefV1, error) {
-	if manifest == nil || sink == nil || firstPageID < 2 || manifest.PageCount() == 0 {
+// Reference binds the immutable manifest to a page interval without encoding
+// pages. Preparation can use it before Materialize performs the actual writes.
+func (manifest *DependencyManifestV1) Reference(firstPageID uint64) (DependencyManifestRefV1, error) {
+	if manifest == nil || firstPageID < 2 || manifest.PageCount() == 0 {
 		return DependencyManifestRefV1{}, ErrDependencyManifestFormat
 	}
 	pageCount := manifest.PageCount()
 	if firstPageID > ^uint64(0)-uint64(pageCount-1) {
 		return DependencyManifestRefV1{}, ErrDependencyManifestFormat
 	}
-	ref := DependencyManifestRefV1{
+	return DependencyManifestRefV1{
 		FirstPageID: firstPageID, ByteLength: uint64(len(manifest.payload)),
 		EntryCount: uint32(len(manifest.entries)), PageCount: pageCount, Digest: manifest.digest,
+	}, nil
+}
+
+func (manifest *DependencyManifestV1) Materialize(firstPageID uint64, sink freelist.AppendPageSink) (DependencyManifestRefV1, error) {
+	if sink == nil {
+		return DependencyManifestRefV1{}, ErrDependencyManifestFormat
 	}
+	ref, err := manifest.Reference(firstPageID)
+	if err != nil {
+		return DependencyManifestRefV1{}, err
+	}
+	pageCount := ref.PageCount
 	for index := uint32(0); index < pageCount; index++ {
 		pageID := firstPageID + uint64(index)
 		start := int(index) * dependencyManifestPayloadV1

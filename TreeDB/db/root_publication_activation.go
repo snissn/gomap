@@ -1021,7 +1021,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	next := member.next
 	next.TotalPages = generation.HighWater()
 	next.FreelistHeadID = 0
-	manifestRef, err := manifest.Materialize(auxiliary[0], freelist.NewMemoryPageStoreV1())
+	manifestRef, err := manifest.Reference(auxiliary[0])
 	if err != nil {
 		return err
 	}
