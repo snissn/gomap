@@ -95,7 +95,7 @@ func TestTypedGraphPreparedFilterBudgetPreservesUpperNavigationV1(t *testing.T) 
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var scratch columnVectorGraphNativeSearchScratch
-			opts := columnVectorGraphNativeSearchOptions{TopK: 5, EfSearch: ef, CandidateLimit: tc.cap}
+			opts := columnVectorGraphNativeSearchOptions{TopK: 5, EfSearch: ef, StrictScoreBudget: tc.cap > 0, CandidateLimit: tc.cap}
 			if tc.filtered {
 				opts.CandidateRows, opts.HasCandidateRows = selected, true
 			}
@@ -137,7 +137,7 @@ func TestTypedGraphPreparedFilterUpperBudgetPrefixV1(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			var scratch columnVectorGraphNativeSearchScratch
 			run := func(ctx context.Context, limit int) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
-				opts := columnVectorGraphNativeSearchOptions{TopK: 3, EfSearch: 2048, CandidateLimit: limit}
+				opts := columnVectorGraphNativeSearchOptions{TopK: 3, EfSearch: 2048, StrictScoreBudget: true, CandidateLimit: limit}
 				if mode == "filtered" {
 					opts.CandidateRows, opts.HasCandidateRows = selected, true
 				}
@@ -204,7 +204,7 @@ func TestTypedGraphPreparedFilterPreservesIneligibleBridgeV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	var scratch columnVectorGraphNativeSearchScratch
-	got, stats, err := pack.searchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 2048, CandidateLimit: 3, CandidateRows: selected, HasCandidateRows: true}, &scratch)
+	got, stats, err := pack.searchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 2048, StrictScoreBudget: true, CandidateLimit: 3, CandidateRows: selected, HasCandidateRows: true}, &scratch)
 	if err != nil || len(got) != 1 || string(got[0].ID) != "doc-c" || stats.Candidates != 3 || stats.FilteredIneligibleScores != 2 || stats.FilteredSeedInspections != 0 {
 		t.Fatalf("ineligible bridge results=%v stats=%+v err=%v", got, stats, err)
 	}
@@ -222,7 +222,7 @@ func TestTypedGraphPreparedFilterUpperTileBudgetPrefixV1(t *testing.T) {
 	defer pack.Close()
 	for _, traced := range []bool{false, true} {
 		var scratch columnVectorGraphNativeSearchScratch
-		opts := columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 2048, CandidateLimit: 2}
+		opts := columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 2048, StrictScoreBudget: true, CandidateLimit: 2}
 		var got []columnVectorGraphNativeSearchResult
 		var stats columnVectorGraphNativeSearchStats
 		var trace columnHNSWSearchPackAttributionTrace

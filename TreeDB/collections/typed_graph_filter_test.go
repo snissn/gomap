@@ -29,7 +29,7 @@ func TestTypedGraphPreparedFilterDisconnectedSelectedSeeds(t *testing.T) {
 	}
 	var scratch columnVectorGraphNativeSearchScratch
 	for _, cap := range []int{3, 2, 3} {
-		results, stats, err := pack.searchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: 2, CandidateLimit: cap, CandidateRows: selection, HasCandidateRows: true}, &scratch)
+		results, stats, err := pack.searchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: 2, StrictScoreBudget: true, CandidateLimit: cap, CandidateRows: selection, HasCandidateRows: true}, &scratch)
 		if cap == 2 {
 			if !errors.Is(err, errTypedGraphSearchBudget) || len(results) != 0 || stats.Candidates != 2 || stats.FilteredSeedInspections != 1 {
 				t.Fatalf("cap results=%+v stats=%+v err=%v", results, stats, err)
@@ -288,7 +288,7 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 		t.Logf("prepared count=%d repeat query allocs=%g source_ids=%d source_bytes=%d retained_ordinal_bytes=%d inspected=%d mapping_bound=%d", count, allocs, plan.sourceIDs, plan.sourceBytes, plan.retainedBytes, plan.inspectedEntries, plan.mappingWork)
 		if count == 4097 {
 			var scratch columnVectorGraphNativeSearchScratch
-			results, stats, err := overlay.pack.searchCosine([]float32{1, .5, 0, 0, 0, 0, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 128, CandidateLimit: n, CandidateRows: plan.base, HasCandidateRows: true}, &scratch)
+			results, stats, err := overlay.pack.searchCosine([]float32{1, .5, 0, 0, 0, 0, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 128, StrictScoreBudget: true, CandidateLimit: n, CandidateRows: plan.base, HasCandidateRows: true}, &scratch)
 			if err != nil || len(results) != 10 || stats.Candidates == 0 || stats.Edges == 0 {
 				t.Fatalf("filtered ANN unavailable/no graph work: n=%d stats=%+v err=%v", len(results), stats, err)
 			}
@@ -297,7 +297,7 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 					t.Fatalf("ineligible ordinal %d", result.Ordinal)
 				}
 			}
-			results, stats, err = overlay.pack.searchCosine([]float32{1, .5, 0, 0, 0, 0, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 128, CandidateLimit: 16, CandidateRows: plan.base, HasCandidateRows: true}, &scratch)
+			results, stats, err = overlay.pack.searchCosine([]float32{1, .5, 0, 0, 0, 0, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 128, StrictScoreBudget: true, CandidateLimit: 16, CandidateRows: plan.base, HasCandidateRows: true}, &scratch)
 			if !errors.Is(err, errTypedGraphSearchBudget) || len(results) != 0 || stats.PreparedScoreCalls != 16 || stats.Candidates > stats.PreparedScoreCalls || stats.Edges == 0 {
 				t.Fatalf("filtered cap lost work/returned partial results: n=%d stats=%+v err=%v", len(results), stats, err)
 			}

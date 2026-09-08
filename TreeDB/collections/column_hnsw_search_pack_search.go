@@ -232,7 +232,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 entry ordinal=%d outside rows=%d", entryOrdinal, rowCount)
 	}
 	traversalStart, traversalDistanceBefore := columnVectorGraphNativeSearchStartGraphTraversal(&stats)
-	{
+	if opts.CandidateLimit == 0 || opts.StrictScoreBudget {
 		maxLayer, err := v.maxLayerForOrdinal(entryOrdinal)
 		if err != nil {
 			return nil, stats, err
@@ -247,7 +247,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 			}
 		}
 	}
-	if opts.CandidateLimit > 0 {
+	if opts.StrictScoreBudget && opts.CandidateLimit > 0 {
 		// Upper layers may score a row repeatedly. Charge every invocation,
 		// then preserve the existing distinct layer-0 candidate counter.
 		candidateLimit = opts.CandidateLimit - int(stats.PreparedScoreCalls)
@@ -453,7 +453,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 		stats.VisitedEdges = loopEdgeVisits
 	}
 	columnVectorGraphNativeSearchFinishGraphTraversal(&stats, traversalStart, traversalDistanceBefore)
-	if opts.CandidateLimit > 0 && candidateLimit < rowCount && visitedCandidates >= uint64(candidateLimit) {
+	if (opts.StrictScoreBudget || opts.HasCandidateRows) && opts.CandidateLimit > 0 && candidateLimit < rowCount && visitedCandidates >= uint64(candidateLimit) {
 		return nil, stats, errTypedGraphSearchBudget
 	}
 	if opts.HasCandidateRows && len(scratch.top) < min(opts.TopK, opts.CandidateRows.Count()) {
@@ -599,7 +599,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 entry ordinal=%d outside rows=%d", entryOrdinal, rowCount)
 	}
 	traversalStart, traversalDistanceBefore := columnVectorGraphNativeSearchStartGraphTraversal(&stats)
-	{
+	if opts.CandidateLimit == 0 || opts.StrictScoreBudget {
 		trace.LevelOrdinals = append(trace.LevelOrdinals, uint32(entryOrdinal))
 		maxLayer, err := v.maxLayerForOrdinal(entryOrdinal)
 		if err != nil {
@@ -615,7 +615,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 			}
 		}
 	}
-	if opts.CandidateLimit > 0 {
+	if opts.StrictScoreBudget && opts.CandidateLimit > 0 {
 		// Upper layers may score a row repeatedly. Charge every invocation,
 		// then preserve the existing distinct layer-0 candidate counter.
 		candidateLimit = opts.CandidateLimit - int(stats.PreparedScoreCalls)
@@ -786,7 +786,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 		stats.VisitedEdges = loopEdgeVisits
 	}
 	columnVectorGraphNativeSearchFinishGraphTraversal(&stats, traversalStart, traversalDistanceBefore)
-	if opts.CandidateLimit > 0 && candidateLimit < rowCount && visitedCandidates >= uint64(candidateLimit) {
+	if opts.StrictScoreBudget && opts.CandidateLimit > 0 && candidateLimit < rowCount && visitedCandidates >= uint64(candidateLimit) {
 		return nil, stats, errTypedGraphSearchBudget
 	}
 	if len(scratch.top) == 0 {

@@ -155,7 +155,7 @@ func (v *typedGraphOverlaySearch) searchWithContext(ctx context.Context, query [
 	} else {
 		stats.Route = "typed_empty"
 	}
-	baseResults, baseStats, err := v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseTopK, EfSearch: max(efSearch, baseTopK), CandidateLimit: baseLimit, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
+	baseResults, baseStats, err := v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseTopK, EfSearch: max(efSearch, baseTopK), StrictScoreBudget: true, CandidateLimit: baseLimit, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
 	stats.Base = baseStats
 	stats.BaseResultIDs = len(baseResults)
 	if err != nil {

@@ -182,7 +182,8 @@ exercise ANN; intended broad/base and mutation-overlay scenarios need positive
 base/overlay work. Empty filters return empty results without a document scan.
 No `native_runtime`, whole-document-scan or undeclared exact fallback is allowed.
 
-Positive `SearchCandidates` bounds actual ANN score invocations, including
+Typed Minima serving explicitly selects the private strict-score policy. Its
+positive `SearchCandidates` bounds actual ANN score invocations, including
 repeated upper-layer greedy scores and distinct layer-0 scores. Upper descent
 uses the same allowance before layer 0; the typed caller reserves suffix work
 before calling the base. Exhaustion returns an error without partial successful
@@ -191,6 +192,8 @@ output. `base_ann_scored` records all actual base score calls;
 limit keeps ordinary unbudgeted traversal. A finite full-corpus allowance is
 permission for work, not a guarantee of sufficient budget or exact ANN recall;
 upper repeats consume allowance even when the row domain fits within the cap.
+The shared pack default retains the partition router's distinct layer-0 cap,
+entry-at-layer-0 traversal, and permitted approximate success at that cap.
 
 M0's bounded-50k baseline exposed a concrete regression target: 1,000 eligible
 `broad_10pct` IDs, zero returned IDs, `complete_finite_ann`, 2,064 visited/scored.
