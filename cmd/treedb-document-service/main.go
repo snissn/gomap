@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -65,21 +66,12 @@ func main() {
 	var diagnosticsServer *http.Server
 	var nativeServer *nativewire.Server
 	nativeErrors := make(chan error, 1)
-	var shutdownMu sync.Mutex
-	shutdownComplete := false
+	var shutdownState documentServiceShutdownState
 	shutdown := func() {
-		shutdownMu.Lock()
-		defer shutdownMu.Unlock()
-		if shutdownComplete {
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := shutdownDocumentService(ctx, appServer, diagnosticsServer, service, cleanup, nativeServer); err != nil {
+		if err := shutdownState.run(nil, appServer, diagnosticsServer, service, cleanup, log.Default(), nativeServer); err != nil {
 			log.Printf("TreeDB Document Service shutdown incomplete: %v", err)
 			return
 		}
-		shutdownComplete = true
 	}
 	defer shutdown()
 	var diagnosticsHandler http.Handler
@@ -150,6 +142,49 @@ func main() {
 		exitCode = 1
 	default:
 	}
+}
+
+// documentServiceShutdownState is the shared signal/deferred shutdown owner.
+// Failure history stays under the same lock as completion; a successful retry
+// must not erase an earlier failed drain or cleanup from terminal evidence.
+type documentServiceShutdownState struct {
+	mu       sync.Mutex
+	complete bool
+	failures uint64
+}
+
+func (s *documentServiceShutdownState) run(ctx context.Context, appServer, diagnosticsServer *http.Server, service *documentservice.Service, cleanup func() error, logger *log.Logger, nativeServers ...*nativewire.Server) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.complete {
+		return nil
+	}
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+	}
+	if err := shutdownDocumentService(ctx, appServer, diagnosticsServer, service, cleanup, nativeServers...); err != nil {
+		s.failures++
+		return err
+	}
+	s.complete = true
+	if diagnosticsServer != nil {
+		// The listener and DB are closed. Never call the former DB stats
+		// callback here. Work retains its original package-init process origin;
+		// its memory sample precedes this record's serialization/logging.
+		snapshot := service.DiagnosticsSnapshot(nil)
+		record, err := json.Marshal(map[string]any{
+			"event": "treedb_document_service_terminal_work", "version": 1,
+			"contract_version": snapshot.ContractVersion, "cleanup_completed": true,
+			"shutdown_failures": s.failures, "work": snapshot.Work,
+		})
+		if err != nil {
+			return fmt.Errorf("encode terminal work: %w", err)
+		}
+		logger.Printf("%s", record)
+	}
+	return nil
 }
 
 // shutdownDocumentService preserves callback lifetime: stop request admission,

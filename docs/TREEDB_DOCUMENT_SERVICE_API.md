@@ -47,6 +47,23 @@ first snapshot after reopen already includes startup/replay work. Individual
 atomic loads are not a transaction snapshot: drain operations at phase
 boundaries before comparing related totals.
 
+With `-pprof` enabled, the CLI emits one JSON record through its standard logger
+after successful HTTP/native/diagnostics drain, service close and database
+cleanup. Its `event` is `treedb_document_service_terminal_work`, `version` is
+`1`, and it carries `contract_version`, `cleanup_completed: true`,
+`shutdown_failures` and the unchanged `work` object. The usual log prefix
+precedes the JSON. No database stats callback runs after cleanup. A failed
+shutdown attempt emits no completed record; a later successful retry retains
+the earlier failure count. Repeated successful shutdown calls emit nothing.
+
+This terminal sample covers work from the original package-init origin through
+completed database cleanup, including close-time flushes. Its memory sample
+precedes terminal serialization and logging; it is not through-exit allocation
+accounting. Bind it to the same process lifetime as live snapshots. A missing,
+malformed, duplicate or wrong-origin record, or nonzero `shutdown_failures`,
+cannot establish a clean measured shutdown. Diagnostics-disabled mode emits no
+terminal work record.
+
 | Group | Observed work |
 | --- | --- |
 | `indexed_json` | Scalar, text, physical-column and vector extraction row attempts, including fast parsers and failures. Column batches charge only the attempted prefix. `materialization_rows` counts non-JSON stored-format conversion attempts for indexed extraction. Ordinary final output reconstruction is separate. |
