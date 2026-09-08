@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict, replace
 import io
 import os
 import socket
@@ -15,6 +16,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parents[2] / "clients/python/treedb_client/src"))
 import minima_qdrant_runner as common
 import minima_treedb_runner as runner
+from treedb_client import DenseSearchWork, TreeDBProtocolError, TreeDBServiceError
+from treedb_client._native import _dense_work
+
+
+def public_dense_work() -> DenseSearchWork:
+    golden = Path(__file__).parents[2] / "TreeDB/nativewire/testdata/dense_work_v1.hex"
+    return _dense_work(bytes.fromhex(golden.read_text()))
 
 
 class FakeClient:
@@ -58,6 +66,8 @@ def write_health_service(binary: Path) -> None:
 import argparse
 import json
 import os
+import signal
+import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -65,6 +75,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument("-addr", required=True)
 parser.add_argument("-dir", required=True)
 parser.add_argument("-profile")
+parser.add_argument("-pprof")
+parser.add_argument("-block-profile-rate")
+parser.add_argument("-mutex-profile-fraction")
 args = parser.parse_args()
 data_dir = Path(args.dir)
 data_dir.mkdir(parents=True, exist_ok=True)
@@ -73,7 +86,7 @@ data_dir.mkdir(parents=True, exist_ok=True)
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         contract = "{runner.SERVICE_CONTRACT}" if (data_dir / "compatible").exists() else "wrong"
-        body = json.dumps({{"ok": True, "contract_version": contract}}).encode()
+        body = json.dumps({{"ok": True, "contract_version": contract, "work": work}}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -86,6 +99,20 @@ class Handler(BaseHTTPRequestHandler):
 class Server(HTTPServer):
     allow_reuse_address = True
 
+work = {{"pid": os.getpid(), "schema_version": "treedb-work-v1", "scope": "process",
+        "origin_kind": "go_package_init", "origin_unix_nano": 7, "fixture_cleanup": False}}
+def stop(*_args):
+    # The controller must retain work emitted after the last live stats read.
+    work["fixture_cleanup"] = True
+    print(json.dumps({{"event": "treedb_document_service_terminal_work", "version": 1,
+        "contract_version": "{runner.SERVICE_CONTRACT}", "cleanup_completed": True,
+        "shutdown_failures": 0, "work": work}}), flush=True)
+    raise SystemExit(0)
+signal.signal(signal.SIGTERM, stop)
+if args.pprof:
+    host, port = args.pprof.rsplit(":", 1)
+    diagnostics = Server((host, int(port)), Handler)
+    threading.Thread(target=diagnostics.serve_forever, daemon=True).start()
 host, port = args.addr.rsplit(":", 1)
 Server((host, int(port)), Handler).serve_forever()
 """, encoding="utf-8")
@@ -220,6 +247,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload._phase_boundaries = []
         workload._phase_attribution = None
         workload.controller = SimpleNamespace(pid=123)
+        workload._batch_prepared = True
         workload.storage_path = Path(".")
         workload.process_identity = lambda pid: f"process-{pid}"
         workload.resource_server_name = "TreeDB"
@@ -1318,11 +1346,16 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 diagnostic_resume_start=None,
             )
             controllers: list[runner.ServiceController] = []
+            retained_request = {"request_sequence": 1, "outcome": "error", "error": "earlier query failed",
+                                "dense_work": asdict(public_dense_work())}
 
             class FakeRunner:
+                artifact_calls = 0
                 def __init__(self, _manifest: object, *, controller: runner.ServiceController, **_kwargs: object) -> None:
                     self.controller = controller
-                    self.evidence = SimpleNamespace(failures=[])
+                    self.evidence = SimpleNamespace(failures=["earlier query failed"], requests=[retained_request])
+                    self.setup_interval = {"started_monotonic_ns": 1, "ended_monotonic_ns": 2}
+                    self._phase_boundaries = [{"name": "warmup_search", "start_nanos": 3, "end_nanos": 4}]
                     controller.start()
                     controllers.append(controller)
 
@@ -1330,16 +1363,31 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                     pass
 
                 def artifact(self) -> dict[str, object]:
-                    return {}
+                    FakeRunner.artifact_calls += 1
+                    if self.controller.pid is None:
+                        raise AssertionError("artifact was not constructed at the live endpoint")
+                    raise ValueError("artifact construction failed")
 
                 def close(self) -> None:
                     raise RuntimeError("cleanup noise")
 
             with mock.patch.object(runner, "parse_args", return_value=args), \
                  mock.patch.object(common, "load_manifest", return_value={}), \
-                 mock.patch.object(runner, "TreeDBMinimaRunner", FakeRunner):
+                 mock.patch.object(runner, "TreeDBMinimaRunner", FakeRunner), \
+                 mock.patch.object(Path, "write_text", autospec=True, side_effect=Path.write_text) as write:
                 with self.assertRaises(IsADirectoryError):
                     runner.main()
+            write.assert_called_once()
+            failed = json.loads(write.call_args.args[1])
+            self.assertEqual(failed["failures"], ["earlier query failed",
+                "artifact construction failed: ValueError: artifact construction failed",
+                "cleanup failed: RuntimeError: cleanup noise"])
+            raw = failed["backend_raw_evidence"]["treedb"]
+            self.assertEqual(raw["request_evidence"], [retained_request])
+            self.assertEqual(raw["setup_interval"], {"started_monotonic_ns": 1, "ended_monotonic_ns": 2})
+            self.assertEqual(raw["phase_attribution"]["phases"][0]["name"], "warmup_search")
+            self.assertNotIn("total_end_nanos", raw["phase_attribution"])
+            self.assertEqual(FakeRunner.artifact_calls, 1)
             controller = controllers[0]
             self.assertEqual(controller.startup_timeout, 2)
             self.assertEqual(controller.shutdown_timeout, 1)
@@ -1452,6 +1500,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             "backends": [{"configuration": {"initial_upload_hnsw": "qdrant-only"}}],
             "scenarios": [{"scenario": "small"}],
             "backend_raw_evidence": {"qdrant": {
+                "resource_measurement": resource,
                 "collection_configuration_transition": {"attempted": False},
                 "readiness": {"sessions": []},
             }},
@@ -1460,7 +1509,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
              mock.patch.object(common, "server_process_resource_usage", return_value=baseline), \
              mock.patch.object(common, "disk_bytes", return_value=1100) as disk_bytes:
             artifact = workload.artifact()
-        disk_bytes.assert_called_once_with(workload.storage_path)
+        disk_bytes.assert_not_called()
         configuration = artifact["backends"][0]["configuration"]
         self.assertEqual(configuration["scalar_fields"], "meta.user_id,meta.fpath")
         self.assertEqual(json.loads(configuration["effective_collection"]), workload.effective_collection)
@@ -1564,6 +1613,261 @@ class MinimaTypedRunnerTest(unittest.TestCase):
         native.query_by_embedding.return_value = self.response(index=info, native_command_version=1)
         with self.assertRaisesRegex(RuntimeError, "left required native route"):
             workload.search("wrong_dispatch", "mixed")
+
+
+class MinimaMeasuredRunnerTest(unittest.TestCase):
+    workload = MinimaTreeDBRunnerTest.workload
+    response = MinimaTreeDBRunnerTest.response
+
+    def test_measured_treedb_restart_uses_inherited_owner_checks_without_docker(self) -> None:
+        workload = self.workload(self.response())
+        old_end = {"captured": True, "rss_bytes": 15, "cpu_seconds": 3.0, "disk_bytes": 140}
+        first_work = {"work": {"pid": 101, "origin_unix_nano": 8}}
+        workload.controller = SimpleNamespace(pid=None, last_shutdown_resource_end=old_end,
+            lifetimes=[{"ordinal": 0, "linux_process_identity": "100:7", "last_live_work": {"work": {"pid": 100}}}])
+        def start():
+            workload.controller.pid = 101
+            workload.controller.lifetimes.append({"ordinal": 1, "first_work": first_work})
+        workload.controller.start = mock.Mock(side_effect=start)
+        workload.measured, workload.deployment = True, "owned_process"
+        workload.resource_server_name, workload.server_pid = "TreeDB", 100
+        workload.url, workload.server_listener_port = "http://127.0.0.1:17120", None
+        workload.storage_path = Path("/data")
+        workload.restart_server, workload.restart_identity = workload.restart_controller, "owned controller"
+        workload.restart_origin = workload._controller_restart_origin = (100, "old")
+        workload.restart_origin_linux_identity = "100:7"
+        workload.resource_baseline = old_end
+        workload.completed_resource_segments = []
+        workload.lifetime_ordinal = 0
+        workload.process_running = mock.Mock(return_value=False)
+        workload.process_owns_endpoint = mock.Mock(return_value=True)
+        workload.process_identity = mock.Mock(return_value="new")
+        workload.measurement_configuration = {"cpu_affinity": "0"}
+        workload._verify_measured_server_affinity = mock.Mock()
+        workload._verify_measured_docker_runtime = mock.Mock(side_effect=AssertionError("TreeDB entered Docker verification"))
+        with mock.patch.object(common, "linux_process_identity", return_value="101:8"), \
+             mock.patch.object(common, "server_resource_usage", return_value=dict(old_end)):
+            workload.restart_backend()
+        workload.controller.start.assert_called_once_with()
+        workload.process_running.assert_called_once_with(100)
+        workload.process_owns_endpoint.assert_called_once_with(101, workload.url, None)
+        workload._verify_measured_server_affinity.assert_called_once_with("0")
+        workload._verify_measured_docker_runtime.assert_not_called()
+        self.assertEqual(workload.server_pid, 101)
+        self.assertEqual(workload.lifetime_ordinal, 1)
+        self.assertIs(workload.controller.lifetimes[1]["first_work"], first_work)
+        self.assertEqual(workload.resource_baseline["cpu_seconds"], 0.0)
+        self.assertEqual(workload.resource_baseline["disk_bytes"], old_end["disk_bytes"])
+
+    def test_outer_query_timer_ends_before_owned_proof_normalization(self) -> None:
+        interval = {}
+        proof = public_dense_work()
+        def normalize(value):
+            self.assertIs(value, proof)
+            self.assertEqual(interval["ended_monotonic_ns"], 40)
+            return asdict(value)
+        response = self.response(dense_work=proof)
+        workload = self.workload(response)
+        workload.measured = True
+        workload.index_info = SimpleNamespace(generation=7)
+        workload.evidence.request_context = lambda: {
+            "phase": "warmup_search", "lifetime_ordinal": 0, "transport": "http"}
+        with mock.patch.object(runner.time, "monotonic_ns", side_effect=[10, 20, 30, 40, 50, 60]), \
+             mock.patch.object(runner, "asdict", side_effect=normalize):
+            self.assertEqual(workload.search("warmup_search", "mixed", interval), (["d"], [1.]))
+        record = workload.evidence.requests[0]
+        self.assertEqual(interval, {"started_monotonic_ns": 10, "ended_monotonic_ns": 40,
+                                    "request_sequence": 1})
+        self.assertEqual(record["dense_work"], asdict(proof))
+        self.assertEqual(record["result_count"], 1)
+        self.assertEqual(workload.evidence.samples[0]["duration_nanos"], 10)
+        self.assertEqual(record["ended_monotonic_ns"] - record["started_monotonic_ns"], 30)
+
+    def test_service_and_post_decode_failures_keep_owned_proof(self) -> None:
+        for failure_kind in ("service", "client_decode", "runner_decode"):
+            with self.subTest(failure_kind=failure_kind):
+                proof = public_dense_work()
+                if failure_kind == "service":
+                    proof = replace(proof, completed=False,
+                                    graph=replace(proof.graph, completed=False, base_result_ids=256))
+                proof = DenseSearchWork.from_dict(asdict(proof))
+                response = self.response(dense_work=proof)
+                workload = self.workload(response)
+                workload.measured = True
+                workload.index_info = SimpleNamespace(generation=7)
+                workload.evidence.request_context = lambda: {
+                    "phase": "timed_search_write_overlap", "lifetime_ordinal": 0, "transport": "http"}
+                if failure_kind == "runner_decode":
+                    response.documents[0].score = None
+                    error_type = RuntimeError
+                else:
+                    failure = (TreeDBServiceError("internal", "cancelled after work", dense_work=proof)
+                               if failure_kind == "service" else
+                               TreeDBProtocolError("invalid document", dense_work=proof))
+                    workload.client.query_by_embedding = mock.Mock(side_effect=failure)
+                    error_type = type(failure)
+                with self.assertRaises(error_type):
+                    workload.search("timed_search_with_batch_insert", "mixed", {})
+                record = workload.evidence.requests[0]
+                self.assertEqual(record["dense_work"], asdict(proof))
+                self.assertEqual(record["outcome"], "error")
+                self.assertTrue(record["error"])
+                self.assertGreaterEqual(record["ended_monotonic_ns"], record["started_monotonic_ns"])
+
+    def test_legacy_control_preserves_client_decode_without_normalizing_proof(self) -> None:
+        workload = self.workload(self.response(dense_work=public_dense_work()))
+        workload.measured = False
+        with mock.patch.object(runner, "asdict",
+                               side_effect=AssertionError("added capture in legacy control")) as normalize:
+            self.assertEqual(workload.search("warmup_search", "mixed", {}), (["d"], [1.]))
+            normalize.assert_not_called()
+        self.assertEqual(workload.evidence.requests, [])
+        self.assertEqual(len(workload.evidence.samples), 2)
+
+    def test_measured_wait4_is_exclusive_and_retains_shutdown_peak(self) -> None:
+        controller = runner.ServiceController(Path("service"), "http://127.0.0.1:1", Path("data"),
+                                              "test", 1, 1, measured=True)
+        process = SimpleNamespace(pid=4321, returncode=None,
+                                  poll=mock.Mock(side_effect=AssertionError("poll reaped child")),
+                                  wait=mock.Mock(side_effect=AssertionError("wait reaped child")))
+        controller.process = process
+        controller._owned_identity = "4321:77"
+        controller.lifetimes = [{"exit": {"availability": "unavailable"}}]
+        with mock.patch.object(runner.os, "wait4", side_effect=[
+                (0, 0, None), (4321, 0, SimpleNamespace(ru_maxrss=32768))]) as wait4:
+            self.assertEqual(controller.pid, 4321)
+            self.assertIsNone(controller.pid)
+            self.assertEqual(controller._reap_owned(), 0)
+        self.assertEqual(wait4.call_count, 2)
+        self.assertEqual(process.returncode, 0)
+        exit_record = controller.lifetimes[0]["exit"]
+        self.assertEqual(exit_record["peak_rss_bytes"], 32768 * 1024)
+        self.assertEqual(exit_record["scope"], "owned_process_start_through_exit")
+        self.assertEqual(exit_record["linux_process_identity"], "4321:77")
+        for failure in (ChildProcessError("already reaped"), (99, 0, SimpleNamespace(ru_maxrss=1)),
+                        (4321, 0, SimpleNamespace(ru_maxrss=None))):
+            process.returncode = None
+            controller.lifetimes[0]["exit"] = {"availability": "unavailable"}
+            with mock.patch.object(runner.os, "wait4", side_effect=failure if isinstance(failure, Exception) else None,
+                                   return_value=failure):
+                self.assertEqual(controller._reap_owned(), 255)
+            self.assertEqual(controller.lifetimes[0]["exit"]["availability"], "unavailable")
+            self.assertNotIn("peak_rss_bytes", controller.lifetimes[0]["exit"])
+
+    @unittest.skipUnless(sys.platform == "linux" and hasattr(os, "wait4"), "owned wait4 is Linux-only")
+    def test_measured_real_child_cleanup_startup_and_measurement_failures(self) -> None:
+        for failure in (None, "startup", "measurement"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                binary = root/"service"
+                write_health_service(binary)
+                ports = []
+                for _ in range(2):
+                    with socket.socket() as listener:
+                        listener.bind(("127.0.0.1", 0))
+                        ports.append(listener.getsockname()[1])
+                data = root/"data"
+                data.mkdir()
+                if failure != "startup":
+                    (data/"compatible").touch()
+                controller = runner.ServiceController(binary, f"http://127.0.0.1:{ports[0]}", data,
+                    "test", 0.3 if failure == "startup" else 2, 2,
+                    diagnostics_url=f"http://127.0.0.1:{ports[1]}", measured=True)
+                try:
+                    if failure == "startup":
+                        with self.assertRaises(TimeoutError):
+                            controller.start()
+                    else:
+                        controller.start()
+                        child = controller.process
+                        self.assertEqual(controller.lifetimes[0]["first_work"]["availability"], "measured")
+                        with mock.patch.object(child, "poll", side_effect=AssertionError("Popen poll reaps")), \
+                             mock.patch.object(child, "wait", side_effect=AssertionError("Popen wait reaps")):
+                            if failure == "measurement":
+                                with mock.patch.object(common, "server_process_resource_usage", side_effect=RuntimeError("resource failed")):
+                                    with self.assertRaisesRegex(RuntimeError, "resource failed"):
+                                        controller.stop()
+                            else:
+                                controller.stop()
+                    lifetime = controller.lifetimes[0]
+                    self.assertIsNone(controller.process)
+                    self.assertEqual(lifetime["exit"]["availability"], "measured")
+                    self.assertEqual(lifetime["exit"]["exit_code"], 0)
+                    self.assertGreater(lifetime["exit"]["peak_rss_bytes"], 0)
+                    self.assertTrue(lifetime["terminal_work"]["work"]["fixture_cleanup"])
+                    self.assertEqual(lifetime["terminal_work"]["work"]["origin_unix_nano"], 7)
+                    self.assertFalse(common.server_process_running(lifetime["pid"]))
+                    if failure != "startup":
+                        self.assertFalse(lifetime["last_live_work"]["work"]["fixture_cleanup"])
+                finally:
+                    controller.stop()
+
+    def test_terminal_collection_uses_only_owned_region_and_rejects_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = runner.ServiceController(Path("service"), "http://127.0.0.1:1",
+                                                  Path(directory)/"data", "test", 1, 1, measured=True)
+            row = {"event": "treedb_document_service_terminal_work", "version": 1,
+                   "contract_version": runner.SERVICE_CONTRACT, "cleanup_completed": True,
+                   "shutdown_failures": 0, "work": {"pid": 123, "origin_unix_nano": 7}}
+            line = ("service: " + json.dumps(row) + "\n").encode()
+            controller.log_path.write_bytes(line)
+            controller._log_region_start = len(line)
+            controller.lifetimes = [{}]
+            with controller.log_path.open("ab") as stream:
+                stream.write(b"ordinary log\n" + line)
+            controller._terminal_work()
+            self.assertEqual(controller.lifetimes[0]["terminal_work"], row)
+            with controller.log_path.open("ab") as stream:
+                stream.write(line)
+            controller.lifetimes = [{}]
+            controller._terminal_work()
+            self.assertIn("got 2", controller.lifetimes[0]["terminal_error"])
+            self.assertEqual(controller.lifetimes[0]["terminal_work"], row)
+            # A second record stops parsing immediately, retaining only the first.
+            with controller.log_path.open("ab") as stream:
+                stream.write(b"treedb_document_service_terminal_work {invalid JSON\n")
+            controller.lifetimes = [{}]
+            controller._terminal_work()
+            self.assertIn("got 2", controller.lifetimes[0]["terminal_error"])
+            self.assertEqual(controller.lifetimes[0]["terminal_work"], row)
+            for prefix in (b"", line):
+                with self.subTest(prefix=bool(prefix)):
+                    controller.log_path.write_bytes(prefix + b"x" * 1025 + b"\n" + line)
+                    controller._log_region_start = 0
+                    controller.lifetimes = [{}]
+                    with mock.patch.object(runner, "DIAGNOSTIC_STATS_BYTES", 1024):
+                        controller._terminal_work()
+                    self.assertIn("exceeds bound", controller.lifetimes[0]["terminal_error"])
+                    self.assertEqual(controller.lifetimes[0].get("terminal_work"), row if prefix else None)
+
+    def test_effective_control_flag_disables_added_listener_and_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            serving = root/"serving.json"
+            serving.write_text('{"SearchCandidates":4096}')
+            argv = ["runner", "--manifest", str(root/"manifest"), "--output", str(root/"out"),
+                    "--service-bin", str(root/"service"), "--data-dir", str(root/"data"),
+                    "--collection", "owned", "--strategy", "column_graph", "--transport", "http",
+                    "--column-graph-serving", str(serving), "--measured", "--legacy-diagnostic-control",
+                    "--freeze", str(root/"freeze"), "--expected-freeze-sha256", "f"*64,
+                    "--comparator-bin", str(root/"comparator")]
+            fake = mock.Mock()
+            fake.artifact.return_value = {"failures": []}
+            with mock.patch.object(sys, "argv", argv), \
+                 mock.patch.object(common, "load_manifest", return_value={}), \
+                 mock.patch.object(common, "load_measured_freeze", return_value={"reviewed_product_commit":"a"*40}), \
+                 mock.patch.object(common, "measured_source_configuration", return_value={}), \
+                 mock.patch.object(runner, "ServiceController") as controller, \
+                 mock.patch.object(runner, "TreeDBMinimaRunner", return_value=fake):
+                self.assertEqual(runner.main(), 0)
+            self.assertIsNone(controller.call_args.kwargs["diagnostics_url"])
+            self.assertFalse(controller.call_args.kwargs["measured"])
+            self.assertEqual(controller.call_args.kwargs["block_profile_rate"], 0)
+            self.assertEqual(controller.call_args.kwargs["mutex_profile_fraction"], 0)
+            self.assertFalse(fake.measured)
+            self.assertIsNone(fake.evidence.request_context)
+            controller.return_value.stop.assert_called_once()
+            self.assertIn("measurement_control", json.loads((root/"out").read_text()))
 
 
 if __name__ == "__main__":

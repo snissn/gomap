@@ -6,8 +6,9 @@ Minima is a separate workload from the retained application baseline below.
 Its execution contract is
 [minima-native-execution.md](../spec/minima-native-execution.md). The Go command
 owns manifests and evidence validation; the Python runner executes real client
-requests against the document service. M0 adds bounded diagnostics, not mutable
-`column_graph` support or a new performance result.
+requests against the document service. The selected `column_graph` product and
+the measured harness have separate review and evidence gates; neither a harness
+change nor a bounded diagnostic is a full-scale performance result.
 
 Use a clean, committed **standalone clone** and a writable `/mnt/fast4tb` mount.
 The Go 1.26.0 toolchain on the development runner omits VCS stamping in linked
@@ -82,23 +83,86 @@ also fetches stored embeddings; the historical runner normalizes retrieval to
 payload fields and its HTTP retrieve loop omits embedding echo. Explicitly
 match/document projections when comparing these operations.
 
-The product exposes owned per-request `dense_work` and process work producers.
-The historical diagnostic artifact envelope retains dispatch-only proof with
-unavailable native counters; the final measured schema/validator and shell
-forwarding remain separate M4 work. Null historical counters do not mean zero
-fallback work or qualify under the legacy validator. Keep projections,
-durability and fixture matched, and label transport separately.
+### Measured collection and trusted comparison
 
-For diagnostic overhead characterization, retain three matched fresh-DB runs
-with diagnostics disabled/enabled in counterbalanced order after the measured
-harness is reviewed. On the direct Python invocation above, add
-`--diagnostics-dir "$MINIMA_TYPED_RUN/diagnostics"` to enable existing diagnostics;
-`TREEDB_DIAGNOSTICS_DIR` is a shell-wrapper setting and alone does not affect the
-direct Python command. Do not use this development lane as a full-scale speedup
-claim.
+The separate `treedb_rag_application/minima_measured_v1` envelope records actual
+owned `dense_work`, public-operation request sequences, drained phase work and
+process lifetimes. Historical diagnostic envelopes retain dispatch-only proof
+with unavailable counters. They do not satisfy the measured contract.
 
-`resource_measurement.peak_rss_bytes` is the maximum measured Linux service
-process-lifetime `VmHWM` through the captured segment endpoints. Per-process
+`MODE=measured` uses supplied manifest bytes, a pinned existing Python environment
+and prebuilt naturally stamped service/comparator binaries. It does not generate
+another manifest, build binaries or install packages. The run and backend output
+directories must be fresh. For example, with all inputs and options fixed by the
+reviewed collection plan:
+
+```sh
+taskset --cpu-list "$MINIMA_CPU_AFFINITY" env \
+  MODE=measured RUN_DIR="$MINIMA_MEASURED_RUN" \
+  MANIFEST_PATH="$MINIMA_MANIFEST" \
+  VENV="$MINIMA_PINNED_VENV" \
+  TREEDB_SERVICE_BIN="$MINIMA_SERVICE_BINARY" \
+  MINIMA_COMPARATOR_BIN="$MINIMA_COMPARATOR_BINARY" \
+  MINIMA_EXPECTED_COMMIT="$MINIMA_HARNESS_COMMIT" \
+  MINIMA_FREEZE="$MINIMA_FREEZE_FILE" \
+  MINIMA_EXPECTED_FREEZE_SHA256="$MINIMA_FREEZE_SHA256" \
+  TREEDB_STRATEGY=column_graph TREEDB_TRANSPORT=native \
+  TREEDB_NATIVE_ADDRESS=127.0.0.1:17122 \
+  TREEDB_COLUMN_GRAPH_SERVING="$MINIMA_SERVING_LIMITS" \
+  TREEDB_EF_SEARCH="$MINIMA_EF_SEARCH" \
+  QDRANT_CPUSET_CPUS="$MINIMA_CPU_AFFINITY" \
+  MINIMA_WALL_SECONDS="$MINIMA_WALL_SECONDS" \
+  scripts/bench_minima_qualification.sh
+```
+
+The externally reviewed freeze file binds the manifest's exact input hash and
+semantic hashes, clean harness/product ancestry, client and harness source hashes,
+natural binary hashes, serving JSON, transport, affinity and backend options.
+The comparator receives both `-minima-freeze` and
+`-minima-expected-freeze-sha256`; an artifact cannot supply its own trust anchor.
+A pending calibration freeze is allowed only for bounded, nonqualifying runs.
+A full freeze requires three distinct reviewed bounded-pair hashes and the
+reviewed overhead disposition. The merged product commit is the Git ancestor;
+a reviewed pre-squash product commit is not necessarily an ancestor.
+
+Measured Qdrant supports the launcher's owned Docker deployment only. The runner
+checks the actual container PID, image ID, repository digest and durable storage
+mount, brackets the observation with Linux process identity and repeats it after
+restart. Both servers' actual CPU affinities must equal the freeze; a Go thread
+setting alone is not an allocation of CPUs. Legacy standalone/external modes
+remain available outside measured collection.
+
+Setup ends before initial ingestion; load includes fixture-dependent batch
+preparation, durable writes and Build/readiness. Restart includes shutdown,
+open/replay, reconnect and Ensure, and ends before parity queries. Request records
+represent declared wrapped public operations: readiness may poll several RPCs.
+The final scroll retains raw full-state/full-vector results and TreeDB per-page
+call samples; internal Qdrant scroll RPCs are not separate ledger entries. Native
+retrieval is separately counted from search materialization. The
+live final disk/resource endpoint is captured once before cleanup; actual
+terminal work and owned exit evidence are attached afterward.
+
+The accepted bounded characterization contains **four full lifecycle runs and
+six separate bridge lifetimes**: three measured native lifecycle baselines, one
+additional fresh lifecycle with added capture disabled, and three measured/control
+bridge pairs. Each bridge compares HTTP/native searches and explicitly matched
+full-vector retrieval on the completed final DB, with counterbalanced transport
+order. This does not measure HTTP ingestion or replicated load overhead. The
+single full-lifecycle overhead pair is one observation. Keep bridge artifacts
+separate from the already completed lifecycle ledger.
+
+For the control, the direct TreeDB runner accepts `--measured` and
+`--legacy-diagnostic-control` with the same pinned inputs. It disables only added
+work/listener/proof normalization capture; ordinary product proof decoding,
+legacy phase/resource sampling and correctness checks remain. Block and mutex
+sampling rates are zero on both sides. Unless historical `--diagnostics-dir` is
+explicitly requested, the control starts no stats listener. Missing control work,
+allocation and terminal proof remains unavailable. No numerical allocation or
+noise allowance is established by this collection plan.
+
+In the historical diagnostic envelope, `resource_measurement.peak_rss_bytes`
+is the maximum measured Linux service process-lifetime `VmHWM` through the
+captured segment endpoints. Per-process
 identity and source are retained. Measured peaks bind to each segment's service
 PID and Linux start-time identity, and to the ordered old/new restart boundary;
 CPU/RSS `ps` samples additionally require the same nonempty Linux PID/start-time
@@ -111,6 +175,14 @@ or a phase-specific peak. The historical `rss_bytes` field retains its old
 endpoint-growth meaning. Missing allocation, live-heap or client-memory evidence
 remains unavailable; use focused Go benchmarks/profiles for allocation budgets
 before optimizing each affected production feature.
+
+The measured TreeDB peak gate instead uses the maximum exclusive Linux `wait4`
+`ru_maxrss` across both owned service lifetimes, through actual exit. The
+controller does not use `Popen.poll`/`wait` to reap those children. Missing exit,
+terminal cleanup, process identity or required producer availability fails
+qualification. Cumulative work and `TotalAlloc`/`Mallocs` use same-origin deltas;
+startup's absolute package-init totals remain separately visible. Heap and cache
+gauges may decrease and are not treated as cumulative counters.
 
 ### M0 baseline limitation
 
@@ -131,6 +203,7 @@ GOWORK=off go test ./TreeDB/cmd/treedb_rag_benchmark \
   -run '^TestMinima' -count=1 -timeout=120s
 python3 -m unittest discover -s benchmarks/vector_db_compare -p 'test_minima*runner.py'
 bash scripts/bench_minima_qualification_test.sh
+bash scripts/bench_minima_qdrant_test.sh
 make docs-check
 ```
 

@@ -16,6 +16,7 @@ import importlib.metadata
 import json
 import math
 import os
+import re
 import socket
 import platform
 import stat
@@ -54,6 +55,7 @@ BOUNDED_HASHES = {
     },
 }
 ARTIFACT_SCHEMA = "treedb_rag_application/minima_v4"
+MEASURED_SCHEMA = "treedb_rag_application/minima_measured_v1"
 SERVER_VERSION = CLIENT_VERSION = "1.19.0"
 READINESS_SNAPSHOT_LIMIT = 256
 READINESS_RESOURCE_INTERVAL_SECONDS = 5.0
@@ -1043,10 +1045,133 @@ def latency_distribution(values: list[int]) -> dict[str, int]:
     }
 
 
+PHASE_UNATTRIBUTED_RULE = "total_duration_nanos = sum(phase.duration_nanos) + unattributed_nanos; unattributed_nanos <= max(60000000000, total_duration_nanos / 100); unattributed covers only runner bookkeeping between declared boundaries"
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def source_files_sha256(root: Path, paths: Iterable[Path]) -> str:
+    """Owned source bytes, sorted relative names, framed without ambiguities."""
+    digest = hashlib.sha256()
+    for path in sorted(paths, key=lambda p: p.relative_to(root).as_posix()):
+        name = path.relative_to(root).as_posix().encode()
+        data = path.read_bytes()
+        digest.update(name + b"\0" + str(len(data)).encode() + b"\0" + data)
+    return digest.hexdigest()
+
+
+def load_measured_freeze(path: Path | None, expected: str | None,
+                         manifest_path: Path, manifest: dict[str, Any]) -> dict[str, Any] | None:
+    if path is None and expected is None:
+        return None
+    def digest_string(value: Any, size: int = 64) -> bool:
+        return type(value) is str and len(value) == size and all(c in "0123456789abcdef" for c in value)
+    if path is None or not digest_string(expected):
+        raise ValueError("measured freeze requires path and external SHA256 pin")
+    with path.open("rb") as stream:
+        raw = stream.read((1 << 20) + 1)
+    if len(raw) > 1 << 20 or hashlib.sha256(raw).hexdigest() != expected:
+        raise ValueError("measured freeze bytes do not match external pin")
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate freeze field: {key}")
+            result[key] = value
+        return result
+    freeze = json.loads(raw, object_pairs_hook=unique_object)
+    if type(freeze) is not dict or set(freeze) != {
+            "version", "harness_commit", "reviewed_product_commit", "manifest", "configuration",
+            "calibration_status", "bounded_pair_sha256", "overhead_disposition_sha256"}:
+        raise ValueError("measured freeze has missing/unknown fields")
+    if (type(freeze["version"]) is not int or freeze["version"] != 1
+            or not digest_string(freeze["harness_commit"], 40)
+            or not digest_string(freeze["reviewed_product_commit"], 40)
+            or type(freeze["manifest"]) is not dict
+            or set(freeze["manifest"]) != {"schema", "fixture", "input_sha256", "corpus_sha256",
+                "query_sha256", "operation_sha256", "expected_state_sha256"}
+            or freeze["manifest"]["input_sha256"] != file_sha256(manifest_path)):
+        raise ValueError("measured freeze version/input bytes mismatch")
+    configuration = freeze["configuration"]
+    if (type(configuration) is not dict or set(configuration) != {"treedb", "qdrant"}
+            or any(type(config) is not dict or not config
+                   or any(type(value) is not str or not value for value in config.values())
+                   for config in configuration.values())):
+        raise ValueError("measured freeze backend configuration missing/invalid")
+    for key in ("schema", "corpus_sha256", "query_sha256", "operation_sha256", "expected_state_sha256"):
+        if freeze["manifest"].get(key) != manifest[key]:
+            raise ValueError(f"measured freeze manifest {key} mismatch")
+    if freeze["manifest"].get("fixture") != manifest.get("fixture", ""):
+        raise ValueError("measured freeze fixture mismatch")
+    pairs, overhead = freeze["bounded_pair_sha256"], freeze["overhead_disposition_sha256"]
+    if freeze["calibration_status"] == "reviewed":
+        if (type(pairs) is not list or len(pairs) != 3 or any(not digest_string(v) for v in pairs)
+                or len(set(pairs)) != 3 or not digest_string(overhead)):
+            raise ValueError("reviewed freeze requires three distinct pairs and overhead disposition")
+    elif (freeze["calibration_status"] != "pending" or manifest["schema"] != BOUNDED_MANIFEST_SCHEMA
+          or pairs != [] or overhead != ""):
+        raise ValueError("only bounded collection permits pending calibration without result hashes")
+    freeze["sha256"] = expected
+    return freeze
+
+
+def measured_source_configuration(backend: str, manifest_path: Path,
+                                  comparator: Path, reviewed_product: str) -> dict[str, str]:
+    root = Path(__file__).resolve().parents[2]
+    status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=normal"], cwd=root,
+                            check=True, text=True, capture_output=True).stdout
+    if status.strip():
+        raise RuntimeError("measured collection requires a clean source tree")
+    commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
+                            check=True, text=True, capture_output=True).stdout.strip()
+    # The merged product is the actual ancestor. A reviewed pre-squash SHA is
+    # evidence of equal trees, not a required Git ancestor of the harness.
+    subprocess.run(["git", "merge-base", "--is-ancestor", reviewed_product, commit],
+                   cwd=root, check=True, capture_output=True)
+    files = subprocess.run(["git", "ls-files", "-z"], cwd=root,
+                           check=True, capture_output=True).stdout.decode().split("\0")
+    harness_names = {"benchmarks/vector_db_compare/minima_treedb_runner.py",
+                     "benchmarks/vector_db_compare/minima_qdrant_runner.py",
+                     "scripts/bench_minima_qualification.sh", "scripts/bench_minima_qdrant.sh",
+                     "scripts/restart_minima_qdrant_backend.sh"}
+    harness = [root / p for p in files if p and
+               (p.startswith("TreeDB/cmd/treedb_rag_benchmark/") or p in harness_names)]
+    product = [root / p for p in files if p and
+               (p.startswith("TreeDB/") and not p.startswith("TreeDB/cmd/treedb_rag_benchmark/")
+                or p.startswith("cmd/treedb-document-service/") or p.startswith("internal/"))]
+    if backend == "treedb":
+        import treedb_client
+        client_root = Path(treedb_client.__file__).resolve().parent
+    else:
+        import qdrant_client
+        client_root = Path(qdrant_client.__file__).resolve().parent
+    return {"harness_commit": commit, "reviewed_product_commit": reviewed_product,
+            "manifest_file_sha256": file_sha256(manifest_path),
+            "runner_sha256": file_sha256(root / f"benchmarks/vector_db_compare/minima_{backend}_runner.py"),
+            "shared_runner_sha256": file_sha256(Path(__file__).resolve()),
+            "client_sha256": source_files_sha256(client_root, client_root.rglob("*.py")),
+            "product_source_sha256": source_files_sha256(root, product),
+            "harness_source_sha256": source_files_sha256(root, harness),
+            "comparator_binary_sha256": file_sha256(comparator),
+            "gomaxprocs": os.environ.get("GOMAXPROCS", "unset"),
+            "cpu_affinity": ",".join(map(str, sorted(os.sched_getaffinity(0)))),
+            "measurement_mode": "measured"}
+
+
 class Evidence:
     def __init__(self, manifest: dict[str, Any]) -> None:
         names = [row["name"] for row in manifest["corpora"]]
         self.samples: list[dict[str, Any]] = []
+        self.requests: list[dict[str, Any]] = []
+        self.request_context: Callable[[], dict[str, Any]] | None = None
+        self._request_lock = threading.Lock()
+        self._call_depth = threading.local()
         self.events: list[dict[str, Any]] = []
         self.failures: list[str] = []
         self.errors = dict.fromkeys(names, 0)
@@ -1061,13 +1186,34 @@ class Evidence:
         self.stale_delete = dict.fromkeys(names, 0)
 
     def call(self, operation: str, category: str, scenario: str, function: Callable[[], Any],
-             on_start: Callable[[], None] | None = None) -> Any:
+             on_start: Callable[[], None] | None = None,
+             record: dict[str, Any] | None = None) -> Any:
+        # The ledger counts top-level public operations, not nested wrappers or
+        # physical RPCs hidden inside a public readiness operation.
+        measuring = self.request_context is not None
+        depth = getattr(self._call_depth, "value", 0) if measuring else 0
+        if measuring:
+            self._call_depth.value = depth + 1
+        capture = measuring and depth == 0
         start = time.monotonic_ns()
+        if capture:
+            owned = record if record is not None else {}
+            for key, value in self.request_context().items():
+                owned.setdefault(key, value)
+            owned.update({"operation": owned.get("operation", "search" if category == "search" else
+                          "write" if category == "writer" else "control"),
+                          "operation_name": operation, "scenario": scenario,
+                          "started_monotonic_ns": start, "outcome": "success"})
+            with self._request_lock:
+                owned["request_sequence"] = len(self.requests) + 1
+                self.requests.append(owned)
         try:
             if on_start is not None:
                 on_start()
             return function()
         except BaseException as exc:
+            if capture:
+                owned.update(outcome="error", error=f"{type(exc).__name__}: {exc}")
             if scenario in self.errors:
                 self.errors[scenario] += 1
                 self.timeouts[scenario] += int(is_timeout(exc))
@@ -1075,6 +1221,10 @@ class Evidence:
             raise
         finally:
             end = time.monotonic_ns()
+            if measuring:
+                self._call_depth.value = depth
+            if capture:
+                owned["ended_monotonic_ns"] = end
             self.samples.append({"operation": operation, "scenario": scenario, "category": category,
                                  "start_nanos": start, "end_nanos": end, "duration_nanos": end - start})
 
@@ -1131,7 +1281,7 @@ class QdrantMinimaRunner:
                  process_identity: Callable[[int], str] = server_process_identity,
                  process_running: Callable[[int], bool] = server_process_running,
                  process_owns_endpoint: Callable[[int, str, int | None], bool] = server_process_owns_endpoint,
-                 resource_server_name: str = "Qdrant") -> None:
+                 resource_server_name: str = "Qdrant", container: str = "") -> None:
         self.manifest, self.config = manifest, manifest["config"]
         self.specs, self.queries = scenario_map(manifest), {row["scenario"]: row for row in manifest["queries"]}
         self.mutation_vectors = {
@@ -1144,11 +1294,22 @@ class QdrantMinimaRunner:
         self.operation_timeout, self.optimizer_timeout, self.poll_interval = operation_timeout, optimizer_timeout, poll_interval
         self.server_version, self.deployment, self.image, self.storage_path = server_version, deployment, image, storage_path
         self.server_pid, self.resource_server_name = server_pid, resource_server_name
+        self.container = container
         self.restart_server, self.restart_identity, self.process_identity = restart_server, restart_identity, process_identity
         self.process_running, self.process_owns_endpoint = process_running, process_owns_endpoint
         self.server_listener_port = 6333 if deployment == "docker" else None
         self.client: Any | None = None
         self.evidence = Evidence(manifest)
+        self.measured = False
+        self.freeze: dict[str, Any] | None = None
+        self.measurement_configuration: dict[str, str] = {}
+        self.lifetime_ordinal = 0
+        if not hasattr(self, "_phase_start"):
+            self._phase_start = self._phase_total_start = None
+            self._phase_name = None
+            self._phase_resource_start = None
+            self._phase_boundaries = []
+            self._phase_attribution = None
         self.operations = {
             "manifest_ordered": False, "batch_insert_during_search": False,
             "timed_queries_executed": 0, "timed_rounds_completed": 0, "timed_execution_sha256": "",
@@ -1182,14 +1343,156 @@ class QdrantMinimaRunner:
             if deployment == "standalone" and storage_path is not None else None
         )
 
+    def configure_measurement(self, freeze: dict[str, Any], source: dict[str, str], backend: str) -> None:
+        config = {**source, "collection": self.collection, "dimension": str(self.config["dimension"]),
+                  "metric": self.config["metric"], "scalar_fields": ",".join(self.config["scalar_fields"]),
+                  "top_k": str(self.config["top_k"]), "batch_size": str(self.config["batch_size"]),
+                  "operation_timeout_seconds": str(self.operation_timeout),
+                  "reader_concurrency": str(self.config["reader_concurrency"]),
+                  "writer_concurrency": str(self.config["writer_concurrency"])}
+        if backend == "qdrant":
+            observed_image = self._verify_measured_docker_runtime()
+            config.update(server_version=self.server_version, client_version=CLIENT_VERSION,
+                optimizer_timeout_seconds=str(self.optimizer_timeout), write_wait="true",
+                point_id_mapping="uuid5(NAMESPACE_URL,snissn/gomap/minima-qdrant/v1/<manifest-id>)",
+                deployment=self.deployment, image=observed_image,
+                initial_upload_hnsw=json.dumps(INITIAL_UPLOAD_HNSW_CONFIG, sort_keys=True, separators=(",", ":")),
+                initial_upload_optimizers=json.dumps(INITIAL_UPLOAD_OPTIMIZERS_CONFIG, sort_keys=True, separators=(",", ":")),
+                production_hnsw=json.dumps(PRODUCTION_HNSW_CONFIG, sort_keys=True, separators=(",", ":")),
+                production_optimizers=json.dumps(PRODUCTION_OPTIMIZERS_CONFIG, sort_keys=True, separators=(",", ":")))
+        else:
+            config.update(self._measured_settings())
+        expected = freeze["configuration"][backend]
+        self._verify_measured_server_affinity(expected["cpu_affinity"])
+        if config != expected:
+            differences = sorted(key for key in config.keys() | expected.keys() if config.get(key) != expected.get(key))
+            raise RuntimeError(f"observed {backend} configuration does not match freeze: {differences}")
+        if source["harness_commit"] != freeze["harness_commit"]:
+            raise RuntimeError("natural source revision differs from freeze")
+        self.freeze, self.measurement_configuration, self.measured = freeze, config, True
+        self.evidence.request_context = self._request_context
+
+    def _verify_measured_docker_runtime(self) -> str:
+        if (self.deployment != "docker" or not self.container or
+                not re.fullmatch(r"[^@]+@sha256:[0-9a-f]{64}", self.image)):
+            raise RuntimeError("measured Qdrant requires owned Docker with a digest-pinned image")
+        identity = linux_process_identity(self.server_pid)
+
+        def inspect(*arguments: str) -> dict[str, Any]:
+            result = subprocess.run(["docker", *arguments], check=True, capture_output=True,
+                                    text=True, timeout=self.operation_timeout)
+            values = json.loads(result.stdout)
+            if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], dict):
+                raise RuntimeError("Docker inspection did not identify exactly one owned resource")
+            return values[0]
+
+        container = inspect("inspect", self.container)
+        state = container.get("State", {})
+        image_id = container.get("Image", "")
+        if (state.get("Running") is not True or type(state.get("Pid")) is not int or
+                state["Pid"] != self.server_pid or container.get("Name") != "/" + self.container or
+                container.get("Config", {}).get("Image") != self.image or
+                not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id)):
+            raise RuntimeError("inspected Docker PID/image differs from the owned measured runtime")
+        expected_storage = str(self.storage_path.resolve())
+        if not any(m.get("Type") == "bind" and m.get("Source") == expected_storage and
+                   m.get("Destination") == "/qdrant/storage" and m.get("RW") is True
+                   for m in container.get("Mounts", [])):
+            raise RuntimeError("owned Docker storage mount differs from measured storage path")
+        url = urllib.parse.urlsplit(self.url)
+        bindings = container.get("NetworkSettings", {}).get("Ports", {}).get("6333/tcp") or []
+        if (url.scheme != "http" or url.hostname != "127.0.0.1" or url.port is None or
+                url.path not in ("", "/") or url.query or url.fragment or url.username or url.password or
+                not any(binding.get("HostIp") == url.hostname and binding.get("HostPort") == str(url.port)
+                        for binding in bindings)):
+            raise RuntimeError("owned Docker mapped listener differs from measured loopback HTTP URL")
+        image = inspect("image", "inspect", image_id)
+        repository, digest = self.image.split("@")
+        prefix, _, name = repository.rpartition("/")
+        repository = (prefix + "/" if prefix else "") + name.split(":", 1)[0]
+        observed_pin = repository + "@" + digest
+        if image.get("Id") != image_id or observed_pin not in image.get("RepoDigests", []):
+            raise RuntimeError("actual Docker image does not carry the frozen repository digest")
+        # Re-read both identities after inspection; a concurrent replacement or
+        # restart cannot make a label attest to a different running process.
+        final = inspect("inspect", self.container)
+        if (final.get("Id") != container.get("Id") or final.get("Image") != image_id or
+                final.get("State", {}).get("Running") is not True or
+                final.get("State", {}).get("Pid") != self.server_pid or
+                final.get("NetworkSettings", {}).get("Ports", {}).get("6333/tcp") != bindings or
+                linux_process_identity(self.server_pid) != identity):
+            raise RuntimeError("owned Docker identity changed during runtime verification")
+        return container["Config"]["Image"]
+
+    def _verify_measured_server_affinity(self, expected: str) -> None:
+        identity = linux_process_identity(self.server_pid)
+        observed = ",".join(map(str, sorted(os.sched_getaffinity(self.server_pid))))
+        if observed != expected or linux_process_identity(self.server_pid) != identity:
+            raise RuntimeError("owned server CPU affinity/identity differs from frozen allocation")
+
     def connect(self) -> None:
         self.client = self.client_factory()
 
-    def begin_phase_attribution(self) -> None:
-        pass
+    def _measured_endpoint(self, resource: dict[str, Any] | None = None) -> dict[str, Any]:
+        self._verify_measured_server_affinity(self.measurement_configuration["cpu_affinity"])
+        result = dict(resource) if resource is not None else server_resource_usage(
+            self.server_pid, self.storage_path, self.resource_server_name)
+        result.update(pid=self.server_pid, process_identity=self.process_identity(self.server_pid),
+                      lifetime_ordinal=self.lifetime_ordinal)
+        return result
 
-    def phase_transition(self, _name: str) -> None:
-        pass
+    def begin_phase_attribution(self) -> None:
+        if not self.measured:
+            return
+        self._phase_resource_start = self._measured_endpoint()
+        self._phase_start = self._phase_total_start = time.monotonic_ns()
+        self.setup_interval["ended_monotonic_ns"] = self._phase_start
+        self._phase_name = "initial_durable_load"
+
+    def phase_transition(self, name: str) -> None:
+        if not self.measured:
+            return
+        self._append_measured_phase()
+        self._phase_resource_start = self._measured_endpoint()
+        self._phase_start, self._phase_name = time.monotonic_ns(), name
+
+    def _append_measured_phase(self) -> None:
+        end = time.monotonic_ns()
+        endpoint = self._measured_endpoint(getattr(self, "_artifact_resource_end", None))
+        segments = [{"start": self._phase_resource_start, "end": endpoint}]
+        if self._phase_name == "restart_open_readiness":
+            old = {**self.restart_origin_resource_end,
+                   "pid": self.restart_boundary["old_pid"],
+                   "process_identity": self.restart_boundary["old_process_identity"],
+                   "lifetime_ordinal": 0}
+            fresh = {**endpoint, "rss_bytes": 0, "cpu_seconds": 0.0,
+                     "disk_bytes": old["disk_bytes"]}
+            segments = [{"start": self._phase_resource_start, "end": old},
+                        {"start": fresh, "end": endpoint}]
+        samples = [s for s in self.evidence.samples
+                   if self._phase_start <= s["start_nanos"] <= s["end_nanos"] <= end]
+        self._phase_boundaries.append({
+            "name": self._phase_name,
+            "classification": "qualification_only" if self._phase_name == "final_state_scroll_artifact_work" else "production_path",
+            "start_nanos": self._phase_start, "end_nanos": end,
+            "duration_nanos": end - self._phase_start, "resource_segments": segments,
+            "sample_count": len(samples), "sample_duration_nanos": sum(s["duration_nanos"] for s in samples)})
+
+    def _finish_measured_phases(self) -> dict[str, Any]:
+        if self._phase_attribution is None:
+            self._append_measured_phase()
+            end = time.monotonic_ns()
+            total = end - self._phase_total_start
+            self._phase_attribution = {"clock": "time.monotonic_ns",
+                "total_start_nanos": self._phase_total_start, "total_end_nanos": end,
+                "total_duration_nanos": total,
+                "unattributed_nanos": total - sum(p["duration_nanos"] for p in self._phase_boundaries),
+                "unattributed_rule": PHASE_UNATTRIBUTED_RULE, "phases": self._phase_boundaries}
+        return self._phase_attribution
+
+    def _request_context(self) -> dict[str, Any]:
+        return {"phase": self._phase_name or "setup", "lifetime_ordinal": self.lifetime_ordinal,
+                "transport": "http"}
 
     def capture_restart_origin(self) -> None:
         old_pid = self.server_pid
@@ -1235,6 +1538,11 @@ class QdrantMinimaRunner:
             "pid_changed": True, "verified": True,
         }
         self.server_pid = new_pid
+        self.lifetime_ordinal += 1
+        if self.measured:
+            if self.resource_server_name == "Qdrant":
+                self._verify_measured_docker_runtime()
+            self._verify_measured_server_affinity(self.measurement_configuration["cpu_affinity"])
         self.resource_baseline = server_resource_usage(
             self.server_pid, self.storage_path, self.resource_server_name)
         self.restart_origin_linux_identity = ""
@@ -1358,7 +1666,10 @@ class QdrantMinimaRunner:
         )
 
     def initial_load_to_query_boundary(self) -> None:
-        self.restore_production_configuration()
+        if self.measured:
+            self.evidence.call("restore_production_configuration", "control", "all", self.restore_production_configuration)
+        else:
+            self.restore_production_configuration()
 
 
 
@@ -1535,6 +1846,16 @@ class QdrantMinimaRunner:
             f"disposition={session['disposition']}; last={last}"
         )
 
+    def _batch_start(self, scenario: str, documents: list[dict[str, Any]], local_start: int) -> int:
+        prefix = f"minima/{scenario}/"
+        try:
+            ordinals = [int(row["id"].removeprefix(prefix)) for row in documents]
+        except (KeyError, TypeError, ValueError):
+            return local_start
+        if all(row["id"].startswith(prefix) for row in documents) and ordinals == list(range(ordinals[0], ordinals[0] + len(ordinals))):
+            return ordinals[0]
+        return local_start
+
     def point(self, document: dict[str, Any]) -> Any:
         return self.models.PointStruct(id=point_id(document["id"]), vector={self.config["vector_field"]: document["vector"]},
             payload={key: document[key] for key in ("id", "content", "user_id", "fpath")})
@@ -1544,17 +1865,24 @@ class QdrantMinimaRunner:
         assert self.client is not None
         for start in range(0, len(documents), self.config["batch_size"]):
             points = [self.point(row) for row in documents[start:start + self.config["batch_size"]]]
+            record = {"batch_start": self._batch_start(scenario, documents[start:start + len(points)], start),
+                      "requested_count": len(points)} if self.measured else None
             self.evidence.call(operation, "writer", scenario, lambda points=points: self.client.upsert(
                 collection_name=self.collection, points=points, wait=True, timeout=self.operation_timeout),
-                on_start=on_writer_start)
+                on_start=on_writer_start, record=record)
         if wait_ready:
             self.evidence.call(operation, "writer_wait", scenario, self.wait_ready)
 
     def insert_ranges(self, name: str, ranges: list[dict[str, Any]], wait_each: bool) -> None:
         for insertion in ranges:
             spec = self.specs[insertion["scenario"]]
-            documents = [generated_document(spec, ordinal) for ordinal in range(insertion["start"], insertion["start"] + insertion["rows"])]
-            self.upsert(name, spec["name"], documents, wait_each)
+            end = insertion["start"] + insertion["rows"]
+            if insertion["rows"] == 0:
+                self.upsert(name, spec["name"], [], wait_each)
+            for start in range(insertion["start"], end, self.config["batch_size"]):
+                stop = min(start + self.config["batch_size"], end)
+                documents = [generated_document(spec, ordinal) for ordinal in range(start, stop)]
+                self.upsert(name, spec["name"], documents, wait_each and stop == end)
         if ranges and not wait_each:
             if name == "initial_batch_insert":
                 self.initial_load_to_query_boundary()
@@ -1565,35 +1893,61 @@ class QdrantMinimaRunner:
                 lambda: self.wait_ready(expected_count=expected_count, phase=phase),
             )
             if name == "initial_batch_insert":
-                self.ensure_compatible()
+                if self.measured:
+                    self.evidence.call(name, "control", "all", self.ensure_compatible)
+                else:
+                    self.ensure_compatible()
 
     def search(self, operation: str, scenario: str, interval: dict[str, int] | None = None) -> tuple[list[str], list[float]]:
         assert self.client is not None
         spec, query = self.specs[scenario], self.queries[scenario]
-        if interval is not None:
-            interval["started_monotonic_ns"] = time.monotonic_ns()
+        measured = getattr(self, "measured", False)
+        owned: dict[str, Any] | None = {} if measured else None
+        outer = interval if interval is not None else {} if measured else None
+        if outer is not None:
+            outer["started_monotonic_ns"] = time.monotonic_ns()
+        failure = None
+        response = None
         try:
             response = self.evidence.call(operation, "search", scenario, lambda: self.client.query_points(
                 collection_name=self.collection, query=query["vector"], using=self.config["vector_field"],
                 query_filter=payload_filter(self.models, spec), limit=self.config["top_k"], with_payload=True,
-                with_vectors=False, timeout=self.operation_timeout))
+                with_vectors=False, timeout=self.operation_timeout), record=owned)
+        except BaseException as exc:
+            failure = exc
         finally:
-            if interval is not None:
-                interval["ended_monotonic_ns"] = time.monotonic_ns()
-        started, ids, scores = time.monotonic_ns(), [], []
-        for point in getattr(response, "points", response):
-            payload = getattr(point, "payload", None) or {}
-            identifier = payload.get("id")
-            if not isinstance(identifier, str) or not isinstance(payload.get("content"), str):
-                raise RuntimeError("Qdrant result is missing canonical ID/content payload")
-            if payload.get("user_id") != spec.get("user_id") or (spec["filter"] == "user_id+fpath" and payload.get("fpath") != spec.get("fpath")):
-                self.evidence.cross_user[scenario] += 1
-            ids.append(identifier)
-            scores.append(float(getattr(point, "score")))
-        ended = time.monotonic_ns()
-        self.evidence.samples.append({"operation": operation, "scenario": scenario, "category": "decode",
-                                      "start_nanos": started, "end_nanos": ended, "duration_nanos": ended - started})
-        return ids, scores
+            if outer is not None:
+                outer["ended_monotonic_ns"] = time.monotonic_ns()
+        # Ordinary client selection, request and response decoding are inside the
+        # outer timer. Owned proof normalization deliberately begins after it.
+        try:
+            if measured:
+                owned.update(outer)
+                if interval is not None:
+                    interval["request_sequence"] = owned["request_sequence"]
+                if response is not None:
+                    owned["result_count"] = len(getattr(response, "points", response))
+            if failure is not None:
+                raise failure
+            started, ids, scores = time.monotonic_ns(), [], []
+            for point in getattr(response, "points", response):
+                payload = getattr(point, "payload", None) or {}
+                identifier = payload.get("id")
+                if not isinstance(identifier, str) or not isinstance(payload.get("content"), str):
+                    raise RuntimeError("Qdrant result is missing canonical ID/content payload")
+                if payload.get("user_id") != spec.get("user_id") or (spec["filter"] == "user_id+fpath" and payload.get("fpath") != spec.get("fpath")):
+                    self.evidence.cross_user[scenario] += 1
+                ids.append(identifier)
+                scores.append(float(getattr(point, "score")))
+            ended = time.monotonic_ns()
+            self.evidence.samples.append({"operation": operation, "scenario": scenario, "category": "decode",
+                                          "start_nanos": started, "end_nanos": ended, "duration_nanos": ended - started})
+            return ids, scores
+
+        except BaseException as exc:
+            if measured:
+                owned.update(outcome="error", error=f"{type(exc).__name__}: {exc}")
+            raise
 
     def compare_oracle(self, phase: str, scenario: str, result: tuple[list[str], list[float]]) -> bool:
         ids, scores = result
@@ -1624,9 +1978,23 @@ class QdrantMinimaRunner:
 
     def retrieve(self, operation: str, scenario: str, ids: list[str]) -> list[Any]:
         assert self.client is not None
-        return self.evidence.call(operation, "fetch", scenario, lambda: self.client.retrieve(
-            collection_name=self.collection, ids=[point_id(value) for value in ids], with_payload=True,
-            with_vectors=False, timeout=self.operation_timeout))
+        record = None
+        try:
+            record = {"operation": "fetch", "requested_count": len(ids), "requested_ids": ids,
+                      "projection": "payload_only_batch"} if self.measured else None
+            result = self.evidence.call(operation, "fetch", scenario, lambda: self.client.retrieve(
+                collection_name=self.collection, ids=[point_id(value) for value in ids], with_payload=True,
+                with_vectors=False, timeout=self.operation_timeout), record=record)
+            if getattr(self, "measured", False):
+                actual = [(getattr(row, "payload", None) or {}).get("id") for row in result]
+                record.update(operation="fetch", requested_count=len(ids), result_count=len(result),
+                              missing_count=len(ids)-len(result), requested_ids=ids, result_ids=actual,
+                              projection="payload_only_batch")
+            return result
+        except BaseException as exc:
+            if record is not None:
+                record.update(outcome="error", error=f"{type(exc).__name__}: {exc}")
+            raise
 
     def delete_filter(self, operation: dict[str, Any],
                       on_writer_start: Callable[[], None] | None = None) -> None:
@@ -1637,9 +2005,12 @@ class QdrantMinimaRunner:
             collection_name=self.collection, points_selector=selector, wait=True, timeout=self.operation_timeout),
             on_start=on_writer_start)
         self.evidence.call(name, "writer_wait", scenario, self.wait_ready)
+        record = {} if self.measured else None
         result = self.evidence.call(name, "fetch", scenario, lambda: self.client.count(
-            collection_name=self.collection, count_filter=selector, exact=True, timeout=self.operation_timeout))
+            collection_name=self.collection, count_filter=selector, exact=True, timeout=self.operation_timeout), record=record)
         remaining = int(getattr(result, "count", result))
+        if record is not None:
+            record["result_count"] = remaining
         self.evidence.stale_delete[scenario] += remaining
         if remaining:
             raise RuntimeError(f"filtered reindex delete left {remaining} matching rows")
@@ -1940,6 +2311,7 @@ class QdrantMinimaRunner:
                 }
 
     def run(self) -> None:
+        self.setup_interval = {"started_monotonic_ns": time.monotonic_ns()}
         self.resource_baseline = server_resource_usage(
             self.server_pid, self.storage_path, self.resource_server_name)
         for ordinal, operation in enumerate(self.manifest["operations"]):
@@ -1952,7 +2324,6 @@ class QdrantMinimaRunner:
                 "warmup_search": "warmup_search",
                 "timed_search_with_batch_insert": "timed_search_write_overlap",
                 "reindex_delete_by_user_and_fpath_while_reading": "lifecycle_mutations",
-                "reopen": "post_reopen",
                 "final_manifest_and_oracle_comparison": "final_state_scroll_artifact_work",
             }.get(name)
             if phase is not None:
@@ -2004,9 +2375,17 @@ class QdrantMinimaRunner:
             elif name == "reopen":
                 self.reopen_attempted = True
                 self.connect()
+                if self.measured and self.restart_requires_configuration_reassertion:
+                    readiness = "idempotent_ensure_after_reopen"
+                    self.evidence.call(readiness, "writer", "all", self.reassert_production_configuration_after_restart)
+                    self.evidence.call(readiness, "fetch", "all", self.ensure_compatible)
+                    self.evidence.call(readiness, "fetch", "all", self.wait_ready)
+                self.phase_transition("post_reopen")
                 for scenario in self.specs:
                     self.evidence.reopen[scenario] = self.search("post_reopen_parity", scenario)
             elif name == "idempotent_ensure_after_reopen":
+                if self.measured and self.restart_requires_configuration_reassertion:
+                    continue  # The same readiness step completed before measured parity.
                 if self.restart_requires_configuration_reassertion:
                     self.evidence.call(name, "writer", "all", self.reassert_production_configuration_after_restart)
                 self.evidence.call(name, "fetch", "all", self.ensure_compatible)
@@ -2106,7 +2485,7 @@ class QdrantMinimaRunner:
             "effective_collection": json.dumps(self.effective_collection, sort_keys=True, separators=(",", ":"))}
         environment = {"os": platform.system() + " " + platform.release(), "arch": platform.machine() or "unavailable",
             "cpu": platform.processor() or "unavailable", "memory": memory_bytes(), "python": platform.python_version()}
-        return {"schema": ARTIFACT_SCHEMA, "state": "partial", "passing": False, "manifest": self.manifest,
+        artifact = {"schema": ARTIFACT_SCHEMA, "state": "partial", "passing": False, "manifest": self.manifest,
             "backends": [{"name": "qdrant", "server_version": self.server_version, "client_version": CLIENT_VERSION,
                 "durability": "Qdrant wait=true; effective WAL/optimizer collection config recorded", "configuration": configuration,
                 "environment": environment, "manifest": {key: self.manifest[key] for key in ("corpus_sha256", "query_sha256", "operation_sha256")},
@@ -2133,10 +2512,37 @@ class QdrantMinimaRunner:
                 },
             }}}
 
+        if self.measured:
+            artifact["schema"] = MEASURED_SCHEMA
+            artifact["freeze_sha256"] = self.freeze["sha256"]
+            configuration.update(self.measurement_configuration)
+            raw = artifact["backend_raw_evidence"]["qdrant"]
+            raw["request_evidence"] = self.evidence.requests
+            raw["setup_interval"] = self.setup_interval
+            if self.resource_server_name == "Qdrant":
+                self._artifact_resource_end = resource["end"]
+                raw["phase_attribution"] = self._finish_measured_phases()
+        return artifact
+
     def close(self) -> None:
         if self.client is not None:
             self.client.close()
             self.client = None
+
+
+def retained_partial_evidence(workload: Any) -> dict[str, Any]:
+    """Keep already owned evidence when artifact construction fails; observe nothing."""
+    raw = {}
+    evidence = getattr(workload, "evidence", None)
+    if hasattr(evidence, "requests"):
+        raw["request_evidence"] = evidence.requests
+    if hasattr(workload, "setup_interval"):
+        raw["setup_interval"] = workload.setup_interval
+    if getattr(workload, "_phase_attribution", None) is not None:
+        raw["phase_attribution"] = workload._phase_attribution
+    elif hasattr(workload, "_phase_boundaries"):
+        raw["phase_attribution"] = {"phases": workload._phase_boundaries}
+    return raw
 
 
 def server_info(url: str, api_key: str) -> dict[str, Any]:
@@ -2182,6 +2588,10 @@ def validate_qdrant_evidence_inputs(server_pid: int | None, storage_path: Path |
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--measured", action="store_true")
+    parser.add_argument("--freeze", type=Path)
+    parser.add_argument("--expected-freeze-sha256")
+    parser.add_argument("--comparator-bin", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--url", required=True)
     parser.add_argument("--api-key", default=os.environ.get("QDRANT_API_KEY", ""))
@@ -2192,6 +2602,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--poll-interval", type=float, default=0.25)
     parser.add_argument("--deployment", choices=("external", "standalone", "docker"), required=True)
     parser.add_argument("--image", default="")
+    parser.add_argument("--container", default="", help="Owned Docker container required by measured mode")
     parser.add_argument("--storage-path", type=Path, required=True)
     parser.add_argument("--restart-hook", type=Path, required=True)
     parser.add_argument("--server-pid", type=int, required=True)
@@ -2200,9 +2611,16 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args, manifest = parse_args(), None
+    for name, default in (("measured", False), ("freeze", None),
+                          ("expected_freeze_sha256", None), ("comparator_bin", None), ("container", "")):
+        if not hasattr(args, name):
+            setattr(args, name, default)
     validate_qdrant_evidence_inputs(args.server_pid, args.storage_path)
     manifest = load_manifest(args.manifest)
-    if manifest["schema"] == BOUNDED_MANIFEST_SCHEMA:
+    freeze = load_measured_freeze(args.freeze, args.expected_freeze_sha256, args.manifest, manifest)
+    if args.measured and (freeze is None or args.comparator_bin is None):
+        raise SystemExit("measured collection requires trusted freeze and comparator binary")
+    if manifest["schema"] == BOUNDED_MANIFEST_SCHEMA and not args.measured:
         raise SystemExit("bounded Minima Qdrant execution unavailable: M0 fixtures are TreeDB diagnostics; use the frozen v1 manifest for comparator evidence")
     installed = importlib.metadata.version("qdrant-client")
     if installed != CLIENT_VERSION:
@@ -2217,22 +2635,39 @@ def main() -> int:
         poll_interval=args.poll_interval, server_version=str(info["version"]), deployment=args.deployment,
         image=args.image, storage_path=args.storage_path, server_pid=args.server_pid,
         restart_server=lambda: restart_from_hook(args.restart_hook, args.url, args.api_key, args.optimizer_timeout),
-        restart_identity=str(args.restart_hook))
+        restart_identity=str(args.restart_hook), container=args.container)
     exit_code = 0
     try:
+        if args.measured:
+            runner.configure_measurement(freeze, measured_source_configuration(
+                "qdrant", args.manifest, args.comparator_bin, freeze["reviewed_product_commit"]), "qdrant")
         runner.run()
     except BaseException as exc:
         runner.evidence.failures.append(f"{type(exc).__name__}: {exc}")
         exit_code = 1
     finally:
         try:
+            artifact = runner.artifact()
+            if not isinstance(artifact, dict) or not isinstance(artifact.get("failures", []), list):
+                raise RuntimeError("artifact construction returned an invalid envelope")
+        except BaseException as exc:
+            artifact = {"schema": MEASURED_SCHEMA if args.measured else ARTIFACT_SCHEMA,
+                        "state": "partial", "passing": False, "manifest": manifest,
+                        "backends": [], "scenarios": [],
+                        "backend_raw_evidence": {"qdrant": retained_partial_evidence(runner)},
+                        "failures": [*runner.evidence.failures,
+                                     f"artifact construction failed: {type(exc).__name__}: {exc}"],
+                        "readiness_recommendation": "not_evaluated"}
+            if freeze is not None:
+                artifact["freeze_sha256"] = freeze["sha256"]
+            exit_code = 1
+        try:
             runner.close()
         except BaseException as exc:
-            runner.evidence.failures.append(f"{type(exc).__name__}: {exc}")
+            artifact.setdefault("failures", []).append(f"{type(exc).__name__}: {exc}")
             exit_code = 1
-        finally:
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(json.dumps(runner.artifact(), indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(artifact, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
     return exit_code
 
 

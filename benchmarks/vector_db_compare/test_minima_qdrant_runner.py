@@ -317,9 +317,9 @@ def new_runner(manifest: dict[str, object], shared: SharedQdrant, allow_drop: bo
         process_running=lambda _pid: False, process_owns_endpoint=lambda _pid, _url, _port: True)
     original_call = workload.evidence.call
 
-    def synchronized_call(operation, category, scenario, function, on_start=None):
+    def synchronized_call(operation, category, scenario, function, on_start=None, record=None):
         if not shared.synchronize_overlap or category != "writer" or on_start is None:
-            return original_call(operation, category, scenario, function, on_start=on_start)
+            return original_call(operation, category, scenario, function, on_start=on_start, record=record)
         # Arrange overlap inside the real measured call, before releasing the
         # production writer-start event. Each reader joins once per writer call.
         barrier = threading.Barrier(manifest["config"]["reader_concurrency"] + 1)
@@ -332,7 +332,8 @@ def new_runner(manifest: dict[str, object], shared: SharedQdrant, allow_drop: bo
             return function()
 
         try:
-            return original_call(operation, category, scenario, write_after_readers_enter, on_start=on_start)
+            return original_call(operation, category, scenario, write_after_readers_enter,
+                                 on_start=on_start, record=record)
         finally:
             with shared.lock:
                 shared.overlap_barrier = None
@@ -342,6 +343,155 @@ def new_runner(manifest: dict[str, object], shared: SharedQdrant, allow_drop: bo
 
 
 class MinimaQdrantRunnerTest(unittest.TestCase):
+    def test_measured_ledger_owns_concurrent_records_and_skips_nested_wrappers(self) -> None:
+        evidence = runner.Evidence({"corpora": [{"name": "small"}]})
+        evidence.request_context = lambda: {"phase": "warmup_search", "lifetime_ordinal": 0,
+                                           "transport": "http"}
+        barrier = threading.Barrier(2)
+        records = [{}, {}]
+        def call(index):
+            def operation():
+                barrier.wait(timeout=1)
+                return evidence.call("nested", "fetch", "small", lambda: index)
+            return evidence.call("outer", "search", "small", operation, record=records[index])
+        with runner.ThreadPoolExecutor(max_workers=2) as pool:
+            self.assertEqual(list(pool.map(call, range(2))), [0, 1])
+        self.assertEqual(sorted(r["request_sequence"] for r in records), [1, 2])
+        self.assertEqual(len(evidence.requests), 2)
+        self.assertEqual(len(evidence.samples), 4)
+        self.assertTrue(all(r["operation_name"] == "outer" for r in evidence.requests))
+        self.assertTrue(all(r["outcome"] == "success" for r in records))
+
+    def test_insert_ranges_streams_existing_batch_size_and_waits_once_per_range(self) -> None:
+        workload = new_runner(tiny_manifest(), SharedQdrant())
+        workload.config["batch_size"] = 256
+        generated, submitted, waits = [], [], []
+        def generate(spec, ordinal):
+            generated.append(ordinal)
+            self.assertLessEqual(len(generated) - sum(len(batch) for batch in submitted), 256)
+            return {"id": str(ordinal)}
+        def upsert(_name, _scenario, docs, wait):
+            submitted.append([int(row["id"]) for row in docs])
+            waits.append(wait)
+        workload.upsert = upsert
+        ranges = [{"scenario": "small", "start": 7, "rows": 600},
+                  {"scenario": "small", "start": 900, "rows": 0}]
+        with mock.patch.object(runner, "generated_document", side_effect=generate):
+            workload.insert_ranges("replacement", ranges, True)
+        self.assertEqual([len(batch) for batch in submitted], [256, 256, 88, 0])
+        self.assertEqual(waits, [False, False, True, True])
+        self.assertEqual([i for batch in submitted for i in batch], list(range(7, 607)))
+        workload.initial_load_to_query_boundary = mock.Mock()
+        workload.wait_ready = mock.Mock()
+        workload.ensure_compatible = mock.Mock()
+        workload.insert_ranges("initial_batch_insert", ranges[-1:], False)
+        workload.initial_load_to_query_boundary.assert_called_once_with()
+        workload.wait_ready.assert_called_once_with(expected_count=0, phase="initial_load_to_query")
+        workload.ensure_compatible.assert_called_once_with()
+
+    def test_measured_qdrant_lifecycle_keeps_setup_restart_and_live_final_boundary(self) -> None:
+        workload = new_runner(tiny_manifest(), SharedQdrant())
+        workload.measured = True
+        workload.freeze = {"sha256": "f"*64}
+        workload.measurement_configuration = {"cpu_affinity": "0"}
+        workload._verify_measured_server_affinity = mock.Mock()
+        workload._verify_measured_docker_runtime = mock.Mock()
+        workload.evidence.request_context = workload._request_context
+        workload.run()
+        with mock.patch.object(workload, "resource_evidence", wraps=workload.resource_evidence) as resource:
+            artifact = workload.artifact()
+        resource.assert_called_once_with()
+        raw = artifact["backend_raw_evidence"]["qdrant"]
+        phases = raw["phase_attribution"]["phases"]
+        self.assertEqual([p["name"] for p in phases], [
+            "initial_durable_load", "warmup_search", "timed_search_write_overlap",
+            "lifecycle_mutations", "pre_close_queries", "restart_open_readiness",
+            "post_reopen", "final_state_scroll_artifact_work"])
+        requests = raw["request_evidence"]
+        counts = [r for r in requests if r["operation_name"] == "reindex_delete_by_user_and_fpath_while_reading"
+                  and r["operation"] == "control" and "result_count" in r]
+        self.assertEqual([r["result_count"] for r in counts], [0])
+        self.assertFalse(any(r["operation"] == "fetch" and r["operation_name"] == counts[0]["operation_name"]
+                             for r in requests))
+        setup = [r for r in requests if r["phase"] == "setup"]
+        self.assertEqual([r["operation_name"] for r in setup], ["ensure_compatible_collection"])
+        self.assertLessEqual(setup[0]["ended_monotonic_ns"], raw["setup_interval"]["ended_monotonic_ns"])
+        readiness = [r for r in requests if r["operation_name"] == "idempotent_ensure_after_reopen"]
+        self.assertEqual(len(readiness), 3)
+        self.assertTrue(all(r["phase"] == "restart_open_readiness" and r["lifetime_ordinal"] == 1
+                            for r in readiness))
+        parity = [r for r in requests if r["operation_name"] == "post_reopen_parity"]
+        self.assertLessEqual(max(r["ended_monotonic_ns"] for r in readiness),
+                             min(r["started_monotonic_ns"] for r in parity))
+        self.assertEqual(phases[-1]["resource_segments"][-1]["end"]["disk_bytes"],
+                         raw["resource_measurement"]["end"]["disk_bytes"])
+        workload.close()
+
+    def test_measured_docker_runtime_binds_actual_pid_image_storage_and_restart(self) -> None:
+        workload = new_runner(tiny_manifest(), SharedQdrant())
+        workload.deployment, workload.container = "docker", "owned"
+        workload.image = "qdrant/qdrant:v1.19.0@sha256:" + "d"*64
+        workload.storage_path = Path("/measured/storage")
+        workload.url = "http://127.0.0.1:19333"
+        image_id = "sha256:" + "e"*64
+        container = {"Id": "container-id", "Name": "/owned", "Image": image_id,
+                     "Config": {"Image": workload.image}, "State": {"Running": True, "Pid": 1},
+                     "NetworkSettings": {"Ports": {"6333/tcp": [{"HostIp": "127.0.0.1", "HostPort": "19333"}]}},
+                     "Mounts": [{"Type": "bind", "Source": "/measured/storage",
+                                 "Destination": "/qdrant/storage", "RW": True}]}
+        image = {"Id": image_id, "RepoDigests": ["qdrant/qdrant@sha256:" + "d"*64]}
+        for change in ("valid", "label", "pid", "image_id", "digest", "mount", "replacement", "identity",
+                       "port", "host", "missing_mapping", "changed_mapping"):
+            with self.subTest(change=change):
+                first, actual_image, final = copy.deepcopy(container), copy.deepcopy(image), copy.deepcopy(container)
+                identities = ["1:7", "1:7"]
+                if change == "label": first["Config"]["Image"] = "unverified-label"
+                if change == "pid": first["State"]["Pid"] = 2
+                if change == "image_id": actual_image["Id"] = "sha256:" + "f"*64
+                if change == "digest": actual_image["RepoDigests"] = []
+                if change == "mount": first["Mounts"][0]["Source"] = "/other"
+                if change == "replacement": final["Id"] = "another-container"
+                if change == "identity": identities[-1] = "1:8"
+                if change == "port": first["NetworkSettings"]["Ports"]["6333/tcp"][0]["HostPort"] = "19334"
+                if change == "host": first["NetworkSettings"]["Ports"]["6333/tcp"][0]["HostIp"] = "127.0.0.2"
+                if change == "missing_mapping": first["NetworkSettings"]["Ports"] = {}
+                if change == "changed_mapping": final["NetworkSettings"]["Ports"] = {}
+                outputs = [SimpleNamespace(stdout=runner.json.dumps([row])) for row in (first, actual_image, final)]
+                with mock.patch.object(runner.subprocess, "run", side_effect=outputs) as inspect, \
+                     mock.patch.object(runner, "linux_process_identity", side_effect=identities):
+                    if change == "valid":
+                        self.assertEqual(workload._verify_measured_docker_runtime(), workload.image)
+                        self.assertEqual(inspect.call_args_list[1].args[0], ["docker", "image", "inspect", image_id])
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            workload._verify_measured_docker_runtime()
+        for deployment in ("standalone", "external"):
+            workload.deployment = deployment
+            with self.assertRaisesRegex(RuntimeError, "owned Docker"):
+                workload._verify_measured_docker_runtime()
+        workload.deployment = "docker"
+        workload.measured = True
+        workload.measurement_configuration = {"cpu_affinity": "0"}
+        workload._verify_measured_docker_runtime = mock.Mock(side_effect=RuntimeError("changed restart image"))
+        workload._verify_measured_server_affinity = mock.Mock()
+        with self.assertRaisesRegex(RuntimeError, "changed restart image"):
+            workload.restart_backend()
+        workload._verify_measured_docker_runtime.assert_called_once_with()
+
+    def test_measured_server_affinity_is_actual_and_identity_bracketed(self) -> None:
+        workload = new_runner(tiny_manifest(), SharedQdrant())
+        for identities, cpus, passing in ((["1:7", "1:7"], {2, 4}, True),
+                                         (["1:7", "1:8"], {2, 4}, False),
+                                         (["1:7", "1:7"], {2}, False)):
+            with mock.patch.object(runner, "linux_process_identity", side_effect=identities), \
+                 mock.patch.object(runner.os, "sched_getaffinity", return_value=cpus) as affinity:
+                if passing:
+                    workload._verify_measured_server_affinity("2,4")
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "affinity/identity"):
+                        workload._verify_measured_server_affinity("2,4")
+                affinity.assert_called_once_with(workload.server_pid)
+
     def test_concurrent_future_errors_prefer_root_cause_over_broken_barrier(self) -> None:
         broken = mock.Mock()
         broken.result.side_effect = threading.BrokenBarrierError()
@@ -1115,7 +1265,10 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
 
             class FailingRunner:
                 def __init__(self, *_args: object, **_kwargs: object) -> None:
-                    self.evidence = SimpleNamespace(failures=[])
+                    self.evidence = SimpleNamespace(failures=[], requests=[{
+                        "request_sequence": 1, "outcome": "error", "error": "query failed"}])
+                    self.setup_interval = {"started_monotonic_ns": 1, "ended_monotonic_ns": 2}
+                    self._phase_boundaries = [{"name": "initial_durable_load", "start_nanos": 3, "end_nanos": 4}]
 
                 def run(self) -> None:
                     raise ValueError("workload failed")
@@ -1136,7 +1289,20 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
                 mock.patch.dict(sys.modules, {"qdrant_client": qdrant_module}),
             ):
                 self.assertEqual(runner.main(), 1)
-            artifact = runner.json.loads(output.read_text(encoding="utf-8"))
+                artifact = runner.json.loads(output.read_text(encoding="utf-8"))
+                with mock.patch.object(FailingRunner, "artifact", side_effect=ValueError("artifact failed")) as build, \
+                     mock.patch.object(FailingRunner, "close") as close:
+                    self.assertEqual(runner.main(), 1)
+                    build.assert_called_once_with()
+                    close.assert_called_once_with()
+                failed = runner.json.loads(output.read_text(encoding="utf-8"))
+                self.assertIn("artifact construction failed: ValueError: artifact failed", failed["failures"])
+                self.assertIn("ValueError: workload failed", failed["failures"])
+                raw = failed["backend_raw_evidence"]["qdrant"]
+                self.assertEqual(raw["request_evidence"], [{"request_sequence": 1, "outcome": "error", "error": "query failed"}])
+                self.assertEqual(raw["setup_interval"], {"started_monotonic_ns": 1, "ended_monotonic_ns": 2})
+                self.assertEqual(raw["phase_attribution"]["phases"][0]["name"], "initial_durable_load")
+                self.assertNotIn("total_end_nanos", raw["phase_attribution"])
             self.assertEqual(artifact["failures"], [
                 "ValueError: workload failed",
                 "RuntimeError: close failed",

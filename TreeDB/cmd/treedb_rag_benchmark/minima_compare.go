@@ -105,13 +105,16 @@ type minimaRawLatencyDistribution struct {
 }
 
 type minimaRawPhaseResourceEndpoint struct {
-	Captured        bool              `json:"captured"`
-	RSSBytes        int64             `json:"rss_bytes"`
-	CPUSeconds      float64           `json:"cpu_seconds"`
-	DiskBytes       int64             `json:"disk_bytes"`
-	Availability    map[string]string `json:"availability,omitempty"`
-	PID             int               `json:"pid"`
-	ProcessIdentity string            `json:"process_identity"`
+	LifetimeOrdinal      *int                   `json:"lifetime_ordinal,omitempty"`
+	LinuxProcessIdentity string                 `json:"linux_process_identity,omitempty"`
+	WorkSnapshot         *minimaWorkObservation `json:"work_snapshot,omitempty"`
+	Captured             bool                   `json:"captured"`
+	RSSBytes             int64                  `json:"rss_bytes"`
+	CPUSeconds           float64                `json:"cpu_seconds"`
+	DiskBytes            int64                  `json:"disk_bytes"`
+	Availability         map[string]string      `json:"availability,omitempty"`
+	PID                  int                    `json:"pid"`
+	ProcessIdentity      string                 `json:"process_identity"`
 }
 
 type minimaRawPhaseResourceSegment struct {
@@ -277,6 +280,9 @@ type minimaRawBatchCorrelationContract struct {
 	FullStatsRetention      []string `json:"full_stats_retention"`
 }
 type minimaRawBackendEvidence struct {
+	SetupInterval                     *minimaMeasuredInterval                 `json:"setup_interval,omitempty"`
+	RequestEvidence                   []minimaMeasuredRequest                 `json:"request_evidence,omitempty"`
+	ProcessLifetimes                  []minimaProcessLifetime                 `json:"process_lifetimes,omitempty"`
 	PhaseLatencyDistributions         map[string]minimaRawLatencyDistribution `json:"phase_latency_distributions,omitempty"`
 	Events                            []json.RawMessage                       `json:"events,omitempty"`
 	TimedOverlap                      minimaRawTimedOverlap                   `json:"timed_overlap"`
@@ -412,10 +418,15 @@ func readMinimaArtifact(path string) (minimaArtifact, error) {
 	if err := json.Unmarshal(raw, &artifact); err != nil {
 		return artifact, err
 	}
+	if artifact.Schema == minimaMeasuredSchema {
+		if err := minimaMeasuredPresence(raw); err != nil {
+			return artifact, err
+		}
+	}
 	return artifact, nil
 }
 
-func readMinimaBackendEvidence(path, backend string) (minimaArtifact, error) {
+func readMinimaBackendEvidence(path, backend string, trusted ...*minimaMeasuredFreeze) (minimaArtifact, error) {
 	artifact, err := readMinimaArtifact(path)
 	if err != nil {
 		return artifact, fmt.Errorf("decode %s evidence: %w", backend, err)
@@ -423,10 +434,10 @@ func readMinimaBackendEvidence(path, backend string) (minimaArtifact, error) {
 	if artifact.State != "partial" || artifact.Passing || artifact.Recommendation != "not_evaluated" {
 		return artifact, fmt.Errorf("%s evidence is not fail-closed partial evidence", backend)
 	}
-	if err := validateMinimaArtifact(&artifact); err != nil {
+	if err := validateMinimaArtifact(&artifact, trusted...); err != nil {
 		return artifact, fmt.Errorf("validate %s partial evidence: %w", backend, err)
 	}
-	if len(artifact.Backends) != 1 || artifact.Backends[0].Name != backend {
+	if len(artifact.Backends) != 1 || artifact.Backends[0].Name != backend || (artifact.Schema == minimaMeasuredSchema && !artifact.Backends[0].Operations.ManifestOrdered) {
 		return artifact, fmt.Errorf("%s evidence has wrong backend envelope", backend)
 	}
 	for _, scenario := range artifact.Scenarios {
@@ -450,6 +461,17 @@ func combineMinimaEvidence(treedb, qdrant minimaArtifact, recommendation string)
 		Scenarios:      append(append([]minimaScenarioEvidence(nil), treedb.Scenarios...), qdrant.Scenarios...),
 		Recommendation: recommendation,
 		RawEvidence:    make(map[string]minimaRawBackendEvidence, 2),
+	}
+
+	if treedb.Schema == minimaMeasuredSchema || qdrant.Schema == minimaMeasuredSchema {
+		combined.Schema = minimaMeasuredSchema
+		combined.FreezeSHA256 = treedb.FreezeSHA256
+		if treedb.Schema != qdrant.Schema || treedb.FreezeSHA256 != qdrant.FreezeSHA256 || !reflect.DeepEqual(treedb.Manifest, qdrant.Manifest) {
+			combined.Failures = append(combined.Failures, "measured inputs differ in schema/freeze/manifest")
+		}
+		if treedb.Manifest.Schema == minimaBoundedManifestSchema {
+			combined.State, combined.Passing, combined.Recommendation = "partial", false, "not_evaluated"
+		}
 	}
 	for name, evidence := range treedb.RawEvidence {
 		combined.RawEvidence[name] = evidence
@@ -1133,7 +1155,7 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			if raw.ServiceLog.Path == "" || raw.ServiceLog.Tail == "" || raw.ServiceLog.MaxTailBytes != 64<<10 {
 				return fmt.Errorf("minima artifact: TreeDB bounded service log evidence missing")
 			}
-			if len(raw.NativeRouteResponses) != len(artifact.Manifest.Corpora) {
+			if artifact.Schema != minimaMeasuredSchema && len(raw.NativeRouteResponses) != len(artifact.Manifest.Corpora) {
 				return fmt.Errorf("minima artifact: TreeDB raw route responses are incomplete")
 			}
 			if err := validateMinimaTreeDBProvenance(backend); err != nil {
@@ -1145,8 +1167,20 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			if err := validateMinimaTreeDBPhaseAttribution(*raw.PhaseAttribution, raw.RestartBoundary); err != nil {
 				return err
 			}
+			batchDiagnosticsURL := backend.Configuration["diagnostics_url"]
+			if artifact.Schema == minimaMeasuredSchema {
+				var diagnostics struct {
+					Enabled bool `json:"enabled"`
+				}
+				if err := json.Unmarshal(raw.Diagnostics, &diagnostics); err != nil {
+					return err
+				}
+				if !diagnostics.Enabled {
+					batchDiagnosticsURL = "disabled"
+				}
+			}
 			if err := validateMinimaTreeDBBatchCorrelations(
-				artifact.Manifest, raw, true, backend.Configuration["diagnostics_url"],
+				artifact.Manifest, raw, true, batchDiagnosticsURL,
 			); err != nil {
 				return err
 			}
@@ -1175,7 +1209,7 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 				row.Resource.DiskBytes != resource.DiskBytes {
 				return fmt.Errorf("minima artifact: %s scenario resource summary does not match raw measurement", name)
 			}
-			if name == "treedb" {
+			if name == "treedb" && artifact.Schema != minimaMeasuredSchema {
 				if err := validateMinimaNativeRouteResponse(raw.NativeRouteResponses, row); err != nil {
 					return err
 				}
@@ -1214,6 +1248,18 @@ func writeMinimaComparisonArtifacts(artifact minimaArtifact, jsonPath, reportPat
 		}
 		report.WriteByte('\n')
 	}
+	if artifact.Schema == minimaMeasuredSchema {
+		report.WriteString("Measured schema; bounded evidence cannot qualify. Allocation caps remain unavailable.\n\n")
+		if gates, err := minimaMeasuredGates(&artifact); err == nil {
+			report.WriteString("| TreeDB gate | Observed | Inclusive cap | Within cap |\n|---|---:|---:|---|\n")
+			for _, gate := range gates {
+				fmt.Fprintf(&report, "| %s | %d | %d | %t |\n", gate.Name, gate.Value, gate.Cap, gate.Value <= gate.Cap)
+			}
+			report.WriteByte('\n')
+		} else {
+			fmt.Fprintf(&report, "Five-gate derivation unavailable: %v\n\n", err)
+		}
+	}
 	report.WriteString("## Scenario evidence\n\n| Backend | Scenario | Plan | Membership | Recall | Overlap | Search ms |\n|---|---|---|---|---:|---:|---:|\n")
 	for _, row := range artifact.Scenarios {
 		fmt.Fprintf(&report, "| %s | %s | %s | %s | %.3f | %.3f | %.3f |\n",
@@ -1223,17 +1269,15 @@ func writeMinimaComparisonArtifacts(artifact minimaArtifact, jsonPath, reportPat
 	return os.WriteFile(reportPath, []byte(report.String()), 0o644)
 }
 
-func compareMinimaEvidence(treedbPath, qdrantPath, jsonPath, reportPath, recommendation, expectedCommit string) error {
-	treedb, err := readMinimaBackendEvidence(treedbPath, "treedb")
-	if err != nil {
-		return err
-	}
-	qdrant, err := readMinimaBackendEvidence(qdrantPath, "qdrant")
-	if err != nil {
-		return err
+func compareMinimaEvidence(treedbPath, qdrantPath, jsonPath, reportPath, recommendation, expectedCommit string, trusted ...*minimaMeasuredFreeze) error {
+	treedb, treeErr := readMinimaBackendEvidence(treedbPath, "treedb", trusted...)
+	qdrant, qdrantErr := readMinimaBackendEvidence(qdrantPath, "qdrant", trusted...)
+	inputErr := errors.Join(treeErr, qdrantErr)
+	if inputErr != nil && treedb.Schema != minimaMeasuredSchema && qdrant.Schema != minimaMeasuredSchema {
+		return inputErr
 	}
 	combined := combineMinimaEvidence(treedb, qdrant, recommendation)
-	validationErr := validateMinimaArtifact(&combined)
+	validationErr := errors.Join(inputErr, validateMinimaArtifact(&combined, trusted...))
 	if validationErr == nil {
 		validationErr = validateMinimaExpectedCommit(&combined, expectedCommit, true)
 	}
@@ -1246,6 +1290,9 @@ func compareMinimaEvidence(treedbPath, qdrantPath, jsonPath, reportPath, recomme
 	}
 	if validationErr != nil {
 		return validationErr
+	}
+	if combined.Schema == minimaMeasuredSchema && combined.Manifest.Schema == minimaBoundedManifestSchema && len(combined.Failures) == 0 {
+		return nil
 	}
 	if combined.State != "pass" || !combined.Passing {
 		return fmt.Errorf("Minima qualification is not a clean pass: state=%q passing=%t failures=%d", combined.State, combined.Passing, len(combined.Failures))

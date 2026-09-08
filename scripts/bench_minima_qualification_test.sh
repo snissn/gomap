@@ -103,6 +103,9 @@ chmod +x "$FAKE_BIN/python"
 cat >"$REPO/scripts/bench_minima_qdrant.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "${FAKE_QDRANT_INPUTS:-}" ]]; then
+	printf '%s\n' "$MINIMA_MEASURED" "$MANIFEST_PATH" "$MINIMA_FREEZE" "$MINIMA_EXPECTED_FREEZE_SHA256" "$MINIMA_COMPARATOR_BIN" "$VENV" >"$FAKE_QDRANT_INPUTS"
+fi
 printf '{}\n' >"$OUTPUT_PATH"
 EOF
 chmod +x "$REPO/scripts/bench_minima_qdrant.sh"
@@ -154,6 +157,50 @@ grep -qx -- '120' "$TMP/treedb-args"
 grep -qx -- '--startup-timeout' "$TMP/treedb-args"
 grep -qx -- '987' "$TMP/treedb-args"
 [[ "$(<"$TMP/expected-commit")" == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]]
+
+# Measured matched mode consumes pinned inputs, including a bounded manifest;
+# legacy bounded modes above still intentionally collect only TreeDB.
+mkdir -p "$TMP/pinned-venv/bin"
+ln -s "$FAKE_BIN/python" "$TMP/pinned-venv/bin/python"
+cp "$RUN_DIR/bin/treedb-rag-benchmark" "$TMP/comparator"
+cp "$RUN_DIR/bin/treedb-document-service" "$TMP/service"
+printf '{"schema":"treedb_minima_manifest/v2","fixture":"bounded-50000"}\n' >"$TMP/supplied-manifest"
+printf '{}\n' >"$TMP/freeze"
+printf '{}\n' >"$TMP/serving"
+manifest_before=$(cat "$TMP/supplied-manifest")
+set +e
+PATH="$FAKE_BIN:$PATH" MODE=measured RUN_DIR="$TMP/measured" \
+	MANIFEST_PATH="$TMP/supplied-manifest" MINIMA_FREEZE="$TMP/freeze" \
+	MINIMA_EXPECTED_FREEZE_SHA256=$(printf '%064d' 0) VENV="$TMP/pinned-venv" \
+	TREEDB_SERVICE_BIN="$TMP/service" MINIMA_COMPARATOR_BIN="$TMP/comparator" \
+	TREEDB_STRATEGY=column_graph TREEDB_TRANSPORT=native TREEDB_NATIVE_ADDRESS=127.0.0.1:17122 \
+	TREEDB_COLUMN_GRAPH_SERVING="$TMP/serving" TREEDB_DIAGNOSTICS_URL=http://127.0.0.1:17123 \
+	FAKE_GO_INVOKED="$TMP/measured-go" FAKE_PYTHON_ARGS="$TMP/measured-args" \
+	FAKE_QDRANT_INPUTS="$TMP/measured-qdrant-inputs" \
+	"$REPO/scripts/bench_minima_qualification.sh" >"$TMP/measured.log" 2>&1
+measured_status=$?
+set -e
+[[ "$measured_status" == 1 ]] # the deliberately failing comparator is retained
+[[ ! -e "$TMP/measured-go" && ! -d "$TMP/measured/bin" ]]
+[[ -f "$TMP/measured/treedb_backend.json" && -f "$TMP/measured/qdrant_backend.json" ]]
+[[ "$(cat "$TMP/supplied-manifest")" == "$manifest_before" ]]
+grep -qx -- '--measured' "$TMP/measured-args"
+grep -qx -- '--native-address' "$TMP/measured-args"
+grep -qx -- 'http://127.0.0.1:17123' "$TMP/measured-args"
+grep -qx -- "$TMP/supplied-manifest" "$TMP/measured-qdrant-inputs"
+grep -qx -- "$TMP/pinned-venv" "$TMP/measured-qdrant-inputs"
+grep -qx -- 'true' "$TMP/measured-qdrant-inputs"
+
+set +e
+PATH="$FAKE_BIN:$PATH" MODE=measured RUN_DIR="$TMP/measured" \
+	MANIFEST_PATH="$TMP/supplied-manifest" MINIMA_FREEZE="$TMP/freeze" \
+	MINIMA_EXPECTED_FREEZE_SHA256=$(printf '%064d' 0) VENV="$TMP/pinned-venv" \
+	TREEDB_SERVICE_BIN="$TMP/service" MINIMA_COMPARATOR_BIN="$TMP/comparator" \
+	"$REPO/scripts/bench_minima_qualification.sh" >"$TMP/measured-reuse.log" 2>&1
+reuse_status=$?
+set -e
+[[ "$reuse_status" == 2 ]]
+grep -q 'fresh empty RUN_DIR' "$TMP/measured-reuse.log"
 
 for mode in representative small diagnostic-resume; do
 	build_marker="$TMP/override-$mode-build"
