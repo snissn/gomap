@@ -9,7 +9,7 @@ import (
 )
 
 // Relocation joins existing admission only at the committed index cutover. Busy
-// foreground work defers vacuum; it is never cancelled or retried by this hook.
+// typed-publication work defers vacuum; it is never cancelled by this hook.
 func (d *collectionDBSchemaCoordinators) prepareRootRelocation(root string) backenddb.CollectionRootRelocationPrepare {
 	return func(snap *backenddb.Snapshot, nextPager *pager.Pager, roots map[uint64]uint64) (func(bool), error) {
 		var releases []func()
@@ -19,12 +19,26 @@ func (d *collectionDBSchemaCoordinators) prepareRootRelocation(root string) back
 			}
 		}
 		busy := func() (func(bool), error) { release(); return nil, rootpublication.ErrResourcePinned }
+		// This also pairs read-owner snapshots with immutable publication state and
+		// excludes Ensure's final readiness CAS after its potentially slow warmup.
+		unlockStorage, ok := tryVectorPartitionStorageBarrier(root)
+		if !ok {
+			return busy()
+		}
+		releases = append(releases, unlockStorage)
 		// Coordinator membership cannot grow while its publication owners are gated.
 		if !d.mu.TryLock() {
 			return busy()
 		}
 		releases = append(releases, d.mu.Unlock)
 		for _, coord := range d.collections {
+			// Ordinary schema backfills have no derived typed authority to rebind;
+			// they already retry captured plans after a real pager replacement.
+			// Holding the storage barrier first prevents a nil publication from
+			// becoming healthy while this cutover skips its admission gates.
+			if coord.typedPublication.Load() == nil {
+				continue
+			}
 			// Schema admission spans synchronous prepare through publication install.
 			if !coord.schemaMu.TryLock() {
 				return busy()
@@ -56,13 +70,6 @@ func (d *collectionDBSchemaCoordinators) prepareRootRelocation(root string) back
 				}
 			}
 		}
-		// This also pairs read-owner snapshots with immutable publication state and
-		// excludes Ensure's final readiness CAS after its potentially slow warmup.
-		unlockStorage, ok := tryVectorPartitionStorageBarrier(root)
-		if !ok {
-			return busy()
-		}
-		releases = append(releases, unlockStorage)
 		replacements := make(map[*collectionSchemaCoordinator]*typedGraphPublicationState)
 		for name, coord := range d.collections {
 			before := coord.typedPublication.Load()

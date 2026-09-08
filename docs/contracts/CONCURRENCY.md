@@ -27,10 +27,11 @@
 
 Online index vacuum preserves admitted typed graph authority by replacing
 immutable publication coordinates through the certified physical root mapping.
-Held read views retain their old generation. At cutover, a busy collection
-publication or snapshot gate defers vacuum without cancelling accepted writes;
-these gates are not held during the copy phase. Stale logical authority remains
-a snapshot mismatch rather than being repaired by relocation.
+Held read views retain their old generation. At cutover, a busy typed-publication
+or snapshot gate defers vacuum without cancelling accepted writes. These gates
+are not held during the copy phase. Collections without typed publication keep
+their existing schema-backfill retry after pager replacement. Stale logical
+authority remains a snapshot mismatch rather than being repaired by relocation.
 
 ## HashDB
 
