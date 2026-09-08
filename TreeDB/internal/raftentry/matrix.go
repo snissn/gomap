@@ -79,6 +79,7 @@ func AllCommandRowsV1() []CommandRowV1 {
 		nativewire.CommandVectorSearchPinned,
 		nativewire.CommandVectorClosePinnedSnapshot,
 		nativewire.CommandDenseVectorSearch,
+		nativewire.CommandTypedDocumentUpsert,
 	}
 	rows := make([]CommandRowV1, 0, len(ids))
 	for _, id := range ids {
@@ -105,6 +106,8 @@ var commandRowsV1 = map[nativewire.CommandID]CommandRowV1{
 	nativewire.CommandReplaceBatch:  acceptedRow(nativewire.CommandReplaceBatch, "CommandReplaceBatch", "replace_batch", "CollectionUpdateBatchByID", "native-wire deterministic entry fixture", "accepted mutation widening slice; existing-only replacements lower to collection update command-WAL payload"),
 	nativewire.CommandDeleteBatch:   acceptedRow(nativewire.CommandDeleteBatch, "CommandDeleteBatch", "delete_batch", "CollectionDeleteBatchByID", "native-wire deterministic entry fixture", "accepted mutation widening slice; deterministic IDs lower to collection command-WAL payload"),
 	nativewire.CommandUpdateBSONSet: acceptedRow(nativewire.CommandUpdateBSONSet, "CommandUpdateBSONSet", "update_bson_set", "CollectionUpdateBatchByID", "native-wire deterministic entry fixture", "accepted mutation widening slice; structured top-level BSON $set lowers to deterministic replacement command-WAL payload"),
+
+	nativewire.CommandTypedDocumentUpsert: rejectedRow(nativewire.CommandTypedDocumentUpsert, "CommandTypedDocumentUpsert", "typed_document_upsert", "WAL-supported", "CollectionReplaceSourceByID (typed format 12)", "local_only_mutation_v1", "typed upsert has a local atomic command-WAL/replay contract but no replicated deterministic-entry contract"),
 
 	nativewire.CommandFlushCollection: rejectedRow(nativewire.CommandFlushCollection, "CommandFlushCollection", "flush_collection", "WAL-supported", "local durability barrier", "local_only_barrier_v1", "local durability barriers are not replicated command identity"),
 	nativewire.CommandFlushAll:        rejectedRow(nativewire.CommandFlushAll, "CommandFlushAll", "flush_all", "WAL-supported", "local durability barrier", "local_only_barrier_v1", "local durability barriers are not replicated command identity"),

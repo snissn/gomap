@@ -252,9 +252,9 @@ func TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema(t *testi
 			if entry.SupportMatrixStatus != "WAL-rejected" {
 				t.Fatalf("%s local-only rejected entry must document rejection: %+v", entry.NativeWireCommand, entry)
 			}
-		case "local_only_barrier_v1":
+		case "local_only_barrier_v1", "local_only_mutation_v1":
 			if entry.SupportMatrixStatus != "WAL-supported" {
-				t.Fatalf("%s local-only barrier entry must document barrier semantics: %+v", entry.NativeWireCommand, entry)
+				t.Fatalf("%s local-only WAL-supported entry must document local semantics: %+v", entry.NativeWireCommand, entry)
 			}
 		case "read_rejected_v1":
 			if entry.SupportMatrixStatus != "read-only" {

@@ -3,14 +3,15 @@ package documentservice
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
@@ -63,10 +64,22 @@ func typedServiceTestOptions() collections.ColumnGraphServingOptions {
 	}
 }
 
-func TestServiceTypedInputServingLifecycle(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("selected serving fixture requires Linux namespace authority and mmap")
+func requireTypedServiceServingTest(t testing.TB) {
+	t.Helper()
+	// Exact namespace support and column asset mmap share the supported Unix
+	// platforms; prepared numeric views also require native little-endian data.
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("selected serving requires exact relative namespace support")
 	}
+	var native [2]byte
+	binary.NativeEndian.PutUint16(native[:], 1)
+	if native[0] != 1 {
+		t.Skip("selected serving requires little-endian mmap-direct prepared views")
+	}
+}
+
+func TestServiceTypedInputServingLifecycle(t *testing.T) {
+	requireTypedServiceServingTest(t)
 
 	beforeWork := workstats.Read()
 	defer func() {

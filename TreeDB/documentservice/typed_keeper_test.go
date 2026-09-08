@@ -13,6 +13,7 @@ import (
 )
 
 func TestServiceTypedPreparedHandleLifecycle(t *testing.T) {
+	requireTypedServiceServingTest(t)
 	ctx := context.Background()
 	dir := t.TempDir()
 	db, err := backenddb.Open(testBackendOptions(dir))

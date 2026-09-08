@@ -16,6 +16,9 @@ func TestServiceScalarCountLifecycle(t *testing.T) {
 			name = "typed"
 		}
 		t.Run(name, func(t *testing.T) {
+			if typed {
+				requireTypedServiceServingTest(t)
+			}
 			ctx := context.Background()
 			dir := t.TempDir()
 			db, err := backenddb.Open(testBackendOptions(dir))
