@@ -1080,7 +1080,19 @@ func stableResourcesCoalesce(existing, incoming *StableResourceToken) (bool, err
 	}
 }
 
-func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryLookup, incoming stableResourceEntry, retainSourcePins bool, work *StableResourceClosureWork) error {
+// The validated-count mode is private to coordinator admission. Its inputs
+// are owned frozen candidate entries whose frontiers were validated and cloned
+// at construction. It still reconciles identities, namespaces and accumulated
+// logical obligations, but never builds a resource view for publication or sync.
+type stableResourceViewMode uint8
+
+const (
+	stableResourceViewUnpinned stableResourceViewMode = iota
+	stableResourceViewPinned
+	stableResourceViewValidatedCount
+)
+
+func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryLookup, incoming stableResourceEntry, mode stableResourceViewMode, work *StableResourceClosureWork) error {
 	logicalKey := incoming.token.logicalKey()
 	if work != nil {
 		work.PhysicalEntryLookupProbes++
@@ -1112,18 +1124,20 @@ func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryL
 		if !coalesce {
 			continue
 		}
-		if !existing.namespaceCompatible(incoming.token) || !frontierCompatible(entry.frontier, incoming.frontier) {
+		if !existing.namespaceCompatible(incoming.token) || (mode != stableResourceViewValidatedCount && !frontierCompatible(entry.frontier, incoming.frontier)) {
 			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 		}
 		if err := mergeStableLogicalObligations(&entry.logicalObligations, incoming.logicalObligations); err != nil {
 			return err
 		}
-		entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
-		mergeStableResourceDescriptorIdentity(entry, incoming.logicalLane, incoming.resourceID, incoming.diagnosticPath)
-		for field := range incoming.reachability {
-			entry.reachability[field] = struct{}{}
+		if mode != stableResourceViewValidatedCount {
+			entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
+			mergeStableResourceDescriptorIdentity(entry, incoming.logicalLane, incoming.resourceID, incoming.diagnosticPath)
+			for field := range incoming.reachability {
+				entry.reachability[field] = struct{}{}
+			}
 		}
-		if retainSourcePins {
+		if mode == stableResourceViewPinned {
 			if len(entry.pins) == 0 {
 				entry.pins = []*StableResourceToken{entry.token}
 			}
@@ -1136,14 +1150,18 @@ func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryL
 		if existing.namespace == nil && incoming.token.namespace != nil {
 			entry.token = incoming.token
 			lookup.replaceRepresentative(i, existing, incoming.token)
-			if !retainSourcePins {
+			if mode != stableResourceViewPinned {
 				entry.pins = nil
 				entry.pinIndex = nil
 			}
 		}
 		return nil
 	}
-	*entries = append(*entries, cloneStableResourceEntry(incoming))
+	if mode == stableResourceViewValidatedCount {
+		*entries = append(*entries, stableResourceEntry{token: incoming.token, logicalObligations: incoming.logicalObligations})
+	} else {
+		*entries = append(*entries, cloneStableResourceEntry(incoming))
+	}
 	lookup.add(*entries, len(*entries)-1)
 	if work != nil {
 		work.PhysicalEntryLookupAdmissions++
@@ -1151,7 +1169,7 @@ func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryL
 	return nil
 }
 
-func mergeViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourceEntry, retainSourcePins bool, work *StableResourceClosureWork) error {
+func mergeViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourceEntry, mode stableResourceViewMode, work *StableResourceClosureWork) error {
 	logicalKey := incoming.token.logicalKey()
 	if work != nil {
 		work.PhysicalEntryLookupProbes++
@@ -1172,18 +1190,20 @@ func mergeViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourc
 		if !coalesce {
 			continue
 		}
-		if !existing.namespaceCompatible(incoming.token) || !frontierCompatible(entry.frontier, incoming.frontier) {
+		if !existing.namespaceCompatible(incoming.token) || (mode != stableResourceViewValidatedCount && !frontierCompatible(entry.frontier, incoming.frontier)) {
 			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 		}
 		if err := mergeStableLogicalObligations(&entry.logicalObligations, incoming.logicalObligations); err != nil {
 			return err
 		}
-		entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
-		mergeStableResourceDescriptorIdentity(entry, incoming.logicalLane, incoming.resourceID, incoming.diagnosticPath)
-		for field := range incoming.reachability {
-			entry.reachability[field] = struct{}{}
+		if mode != stableResourceViewValidatedCount {
+			entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
+			mergeStableResourceDescriptorIdentity(entry, incoming.logicalLane, incoming.resourceID, incoming.diagnosticPath)
+			for field := range incoming.reachability {
+				entry.reachability[field] = struct{}{}
+			}
 		}
-		if retainSourcePins {
+		if mode == stableResourceViewPinned {
 			if len(entry.pins) == 0 {
 				entry.pins = []*StableResourceToken{entry.token}
 			}
@@ -1195,14 +1215,18 @@ func mergeViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourc
 		}
 		if existing.namespace == nil && incoming.token.namespace != nil {
 			entry.token = incoming.token
-			if !retainSourcePins {
+			if mode != stableResourceViewPinned {
 				entry.pins = nil
 				entry.pinIndex = nil
 			}
 		}
 		return nil
 	}
-	*entries = append(*entries, cloneStableResourceEntry(incoming))
+	if mode == stableResourceViewValidatedCount {
+		*entries = append(*entries, stableResourceEntry{token: incoming.token, logicalObligations: incoming.logicalObligations})
+	} else {
+		*entries = append(*entries, cloneStableResourceEntry(incoming))
+	}
 	if work != nil {
 		work.PhysicalEntryLookupAdmissions++
 	}
@@ -1405,9 +1429,9 @@ func (builder *StableResourceSetBuilder) mergeViewSet(child *StableResourceSet) 
 		for _, entry := range incoming {
 			var err error
 			if lookup.logical == nil {
-				err = mergeViewEntryLinear(&merged, entry, false, nil)
+				err = mergeViewEntryLinear(&merged, entry, stableResourceViewUnpinned, nil)
 			} else {
-				err = mergeViewEntry(&merged, &lookup, entry, false, &indexedWork)
+				err = mergeViewEntry(&merged, &lookup, entry, stableResourceViewUnpinned, &indexedWork)
 			}
 			if err != nil {
 				temporary.mu.Unlock()
@@ -1540,9 +1564,9 @@ func (builder *StableResourceSetBuilder) Merge(child *StableResourceSet) error {
 	for _, entry := range child.entries {
 		var err error
 		if lookup.logical == nil {
-			err = mergeViewEntryLinear(&merged, entry, false, nil)
+			err = mergeViewEntryLinear(&merged, entry, stableResourceViewUnpinned, nil)
 		} else {
-			err = mergeViewEntry(&merged, &lookup, entry, false, &indexedWork)
+			err = mergeViewEntry(&merged, &lookup, entry, stableResourceViewUnpinned, &indexedWork)
 		}
 		if err != nil {
 			child.mu.Unlock()
@@ -3908,6 +3932,21 @@ func stableUnionLogicalMembershipEvidence(entries []stableResourceEntry, candida
 }
 
 func UnionStableResourceSets(sets ...*StableResourceSet) (*StableResourceSet, error) {
+	return unionStableResourceSets(stableResourceViewPinned, sets...)
+}
+
+// validatedStableResourceUnionCount borrows privately owned candidate entries
+// for the duration of enqueue under the coordinator lock. No resulting view or
+// pin escapes; full union consumers retain their normal validation and output.
+func validatedStableResourceUnionCount(sets ...*StableResourceSet) (int, error) {
+	view, err := unionStableResourceSets(stableResourceViewValidatedCount, sets...)
+	if err != nil {
+		return 0, err
+	}
+	return len(view.entries), nil
+}
+
+func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourceSet) (*StableResourceSet, error) {
 	view := &StableResourceSet{}
 	view.owner.Store(uint32(ResourceOwnerView))
 	lookup := stableResourceEntryLookup{}
@@ -3917,17 +3956,19 @@ func UnionStableResourceSets(sets ...*StableResourceSet) (*StableResourceSet, er
 			continue
 		}
 		set.mu.Lock()
-		evidenceCandidates = appendStableLogicalMembershipEvidenceCandidates(evidenceCandidates, set)
+		if mode != stableResourceViewValidatedCount {
+			evidenceCandidates = appendStableLogicalMembershipEvidenceCandidates(evidenceCandidates, set)
+		}
 		var mergeErr error
 		set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 			var err error
 			if lookup.logical == nil && len(view.entries) < stableResourceEntryLinearLookupLimit {
-				err = mergeViewEntryLinear(&view.entries, *entry, true, nil)
+				err = mergeViewEntryLinear(&view.entries, *entry, mode, nil)
 			} else {
 				if lookup.logical == nil {
 					lookup = newStableResourceEntryLookup(view.entries)
 				}
-				err = mergeViewEntry(&view.entries, &lookup, *entry, true, nil)
+				err = mergeViewEntry(&view.entries, &lookup, *entry, mode, nil)
 			}
 			if err != nil {
 				mergeErr = err
@@ -3939,6 +3980,9 @@ func UnionStableResourceSets(sets ...*StableResourceSet) (*StableResourceSet, er
 		if mergeErr != nil {
 			return nil, mergeErr
 		}
+	}
+	if mode == stableResourceViewValidatedCount {
+		return view, nil
 	}
 	sortStableResourceEntries(view.entries)
 	if len(evidenceCandidates) != 0 {

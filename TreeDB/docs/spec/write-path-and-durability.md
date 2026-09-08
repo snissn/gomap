@@ -70,6 +70,11 @@ The fixed consequences are:
 - Composite and nested roots carry the deterministic transitive union of their
   child dependencies. Publication does not rediscover dependency closure by
   scanning filenames.
+  Coordinator admission checks union compatibility and counts against the
+  owned frozen entries without materializing another durable closure. It
+  preserves identity, namespace and accumulated logical-reference conflicts;
+  frontier validation remains at entry construction. Publication, sync,
+  reachability and recovery retain the complete dependency union and pins.
 - `Checkpoint`, clean `Close`, and every public `*Sync` operation are durable
   boundaries in every production profile. Command-WAL `*Sync` may stop at a
   stable complete frame closure without forcing a backend root; journal-free `*Sync`

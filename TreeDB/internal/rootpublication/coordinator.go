@@ -239,7 +239,7 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 			}
 		}
 		sets = append(sets, candidateSet)
-		union, err := UnionStableResourceSets(sets...)
+		unionCount, err := validatedStableResourceUnionCount(sets...)
 		if err != nil {
 			c.rejectedCandidates++
 			if resourceSetConflict(err) {
@@ -247,8 +247,8 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 			}
 			return enqueueDecision{}, err
 		}
-		if physical := stableSetPhysicalCount(sets); physical > union.Len() {
-			c.resourceCoalesces = saturatingAdd(c.resourceCoalesces, uint64(physical-union.Len()))
+		if physical := stableSetPhysicalCount(sets); physical > unionCount {
+			c.resourceCoalesces = saturatingAdd(c.resourceCoalesces, uint64(physical-unionCount))
 		}
 		if err := candidateSet.transfer(ResourceOwnerCandidate, ResourceOwnerCoordinator); err != nil {
 			c.rejectedCandidates++
