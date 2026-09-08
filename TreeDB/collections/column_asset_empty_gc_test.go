@@ -12,6 +12,11 @@ import (
 func TestTypedGraphWorkEpochEmptyDeniedOutput(t *testing.T) {
 	col, base, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
+	// Fixture writes are visible before deferred root publication finishes.
+	// Settle the recovery roots before testing destructive GC.
+	if err := col.db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
 	cold := typedGraphOverlapLimits().Cold
 	if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 128, Tombstones: 128, ValueSlots: 512, OwnedBytes: 4 << 20}, cold); err != nil {
 		t.Fatal(err)
@@ -52,6 +57,11 @@ func TestColumnAssetGCEmptyConstructionPin(t *testing.T) {
 	requireColumnAssetExactDestructiveGCTest(t)
 	col, base, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
+	// Fixture writes are visible before deferred root publication finishes.
+	// Settle the recovery roots before testing destructive GC.
+	if err := col.db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
 	appender, err := newNextColumnPhysicalAssetSegmentAppenderWithStableResources(col.db.ColumnAssetRootDir(), *col.Meta().Options.ColumnStore, col.db.StableResourceIdentityPinRegistry())
 	if err != nil {
 		t.Fatal(err)
@@ -83,6 +93,11 @@ func TestColumnAssetGCEmptyReferencedOrChanged(t *testing.T) {
 			requireColumnAssetExactDestructiveGCTest(t)
 			col, base, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
 			defer base.Close()
+			// Fixture writes are visible before deferred root publication finishes.
+			// Settle the recovery roots before testing destructive GC.
+			if err := col.db.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
 			appender, err := newNextColumnPhysicalAssetSegmentAppenderWithStableResources(col.db.ColumnAssetRootDir(), *col.Meta().Options.ColumnStore, col.db.StableResourceIdentityPinRegistry())
 			if err != nil {
 				t.Fatal(err)
@@ -121,6 +136,11 @@ func TestColumnAssetGCEmptyNonregularAndQuarantine(t *testing.T) {
 			requireColumnAssetExactDestructiveGCTest(t)
 			col, base, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
 			defer base.Close()
+			// Fixture writes are visible before deferred root publication finishes.
+			// Settle the recovery roots before testing destructive GC.
+			if err := col.db.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
 			appender, err := newNextColumnPhysicalAssetSegmentAppenderWithStableResources(col.db.ColumnAssetRootDir(), *col.Meta().Options.ColumnStore, col.db.StableResourceIdentityPinRegistry())
 			if err != nil {
 				t.Fatal(err)
