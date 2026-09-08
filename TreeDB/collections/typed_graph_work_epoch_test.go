@@ -173,14 +173,19 @@ func TestTypedGraphWorkEpochRepeatedMaintenance(t *testing.T) {
 	}
 	replayLSN := col.db.State().AppliedCommandLSN
 	replayDir := col.db.Dir()
-	var payload commitlog.CollectionTypedBatchPayload
-	for _, frame := range collectionCommandWALFrames(t, col.db.Dir()) {
-		if frame.Kind == commitlog.CommandKindCollectionUpdateBatchByID && frame.PayloadFormat == commitlog.PayloadFormatCollectionTypedBatchByIDV1 {
-			payload, err = commitlog.DecodeCollectionTypedBatchPayload(frame.Payload)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
+	// Checkpoint may delete covered command-WAL segments. Build the unapplied
+	// command from owned typed input instead of relying on historical WAL files.
+	projection, err := newTrustedTypedProjection(col.Meta(), ids, retained, columns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	documents := make([]commitlog.CollectionDocument, len(ids))
+	for i, id := range ids {
+		documents[i] = commitlog.CollectionDocument{ID: id, Document: retained[i]}
+	}
+	payload, err := typedCommandPayload(col.Meta(), documents, projection)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(payload.Documents) != len(ids) {
 		t.Fatal("missing typed replacement payload")
