@@ -138,14 +138,19 @@ func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string,
 	}
 	ready := *prepared
 	ready.servingAdmitted = true
-	if !coord.typedPublication.CompareAndSwap(prepared, &ready) {
+	if err := WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() error {
+		if !coord.typedPublication.CompareAndSwap(prepared, &ready) {
+			return ErrConcurrentMutation
+		}
+		return nil
+	}); err != nil {
 		// A late captured-base build is only an accelerator, never authority.
 		// Release this rejected keeper without invalidating a newer cache entry
 		// or any independently retained read-view owner.
 		if warmed != nil {
 			c.invalidateCollectionVectorIndexPreparedSearch(collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}, warmed)
 		}
-		return ErrConcurrentMutation
+		return err
 	}
 	if ready.servingBase.graph.RowCount == 0 {
 		c.invalidateTypedGraphEmptyBaseKeeper(index)

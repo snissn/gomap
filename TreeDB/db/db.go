@@ -687,6 +687,9 @@ type DB struct {
 	commandWALRawBarrierNextID uint64
 	commandWALRawBarriers      []*commandWALRawBarrier
 	closing                    atomic.Bool
+	collectionRelocationMu     sync.Mutex
+	collectionRelocationID     uint64
+	collectionRelocation       CollectionRootRelocationPrepare
 }
 
 // These hooks let package tests attach producer-side fixtures to the exact DB

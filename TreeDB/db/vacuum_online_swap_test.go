@@ -78,6 +78,18 @@ func TestVacuumIndexOnlineRefreshFailureLeavesOldIndexAuthoritative(t *testing.T
 		t.Fatalf("install refresh failure fixture: %v", err)
 	}
 
+	prepared, aborted := 0, 0
+	unregister := d.RegisterCollectionRootRelocation(func(snap *Snapshot, next *pager.Pager, roots map[uint64]uint64) (func(bool), error) {
+		prepared++
+		return func(committed bool) {
+			if committed {
+				t.Error("failed cutover installed relocation")
+			} else {
+				aborted++
+			}
+		}, nil
+	})
+	defer unregister()
 	vacuumErr := d.VacuumIndexOnline(context.Background())
 	removeErr := os.Remove(vlogDir)
 	restoreErr := os.Rename(parkedVlogDir, vlogDir)
@@ -92,6 +104,11 @@ func TestVacuumIndexOnlineRefreshFailureLeavesOldIndexAuthoritative(t *testing.T
 	if !errors.Is(vacuumErr, syscall.ENOTDIR) {
 		t.Logf("vacuum returned platform refresh error: %v", vacuumErr)
 	}
+	if prepared != 1 || aborted != 1 {
+		t.Fatalf("relocation completion: prepared=%d aborted=%d", prepared, aborted)
+	}
+	// Unregister must complete after abort released the relocation registry.
+	unregister()
 	afterInfo, err := os.Stat(indexPath)
 	if err != nil {
 		_ = d.Close()

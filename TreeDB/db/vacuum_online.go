@@ -1347,6 +1347,18 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 				return err
 			}
 		}
+		relocationFinish, err := db.prepareCollectionRelocation(basis.snapshot, newPager, basis.sourceToDest)
+		if err != nil {
+			unlockCutover(false)
+			cleanupNewPager()
+			return err
+		}
+		relocationCommitted := false
+		defer func() {
+			if !relocationCommitted {
+				relocationFinish(false)
+			}
+		}()
 		// A fallback directory scan can fail. Complete it before renaming index.db
 		// so an error cannot leave the live generation backed by an unlinked file.
 		if !leafPageLogSegmentsRegistered {
@@ -1489,6 +1501,8 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		db.mu.Unlock()
 		db.clearLeafGenerationReachabilityCaches()
 
+		relocationFinish(true)
+		relocationCommitted = true
 		unlockCutover(true)
 		publicationCompleted = true
 		runStats.SwapPublishDuration += time.Since(swapPublishStarted)

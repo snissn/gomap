@@ -187,10 +187,15 @@ func collectionDBSchemaCoordinatorForDB(db *backenddb.DB) *collectionDBSchemaCoo
 	coord := &collectionDBSchemaCoordinators{}
 	var actual any
 	var loaded bool
+	var unregisterRelocation func()
 	if _, ok := db.RegisterCloseHookIfOpenAfter(func() bool {
 		actual, loaded = collectionSchemaCoordinators.LoadOrStore(db, coord)
+		if !loaded {
+			unregisterRelocation = db.RegisterCollectionRootRelocation(coord.prepareRootRelocation(db.Dir()))
+		}
 		return !loaded
 	}, func() error {
+		unregisterRelocation()
 		collectionSchemaCoordinators.Delete(db)
 		return nil
 	}); !ok {
