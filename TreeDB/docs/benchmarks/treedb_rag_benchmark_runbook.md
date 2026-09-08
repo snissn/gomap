@@ -10,6 +10,10 @@ requests against the document service. The selected `column_graph` product and
 the measured harness have separate review and evidence gates; neither a harness
 change nor a bounded diagnostic is a full-scale performance result.
 
+The [retained full qualification report](../evidence/minima-native-qualification-4620/README.md)
+records the failed, incomplete a0992241 attempt and the earlier failure. Neither
+provides full qualification; M4/M5 remain open and D1 requires an actual M5 pass.
+
 Use a clean, committed **standalone clone** and a writable `/mnt/fast4tb` mount.
 The Go 1.26.0 toolchain on the development runner omits VCS stamping in linked
 worktrees; the binary provenance check rejects those builds. Do not inject a
