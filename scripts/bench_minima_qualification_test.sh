@@ -79,10 +79,18 @@ chmod +x "$FAKE_BIN/git"
 cat >"$FAKE_BIN/python" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+case "$1" in
+  -c) echo 19333; exit 0 ;;
+  -) cat >/dev/null; exit 0 ;;
+esac
+if [[ -n "${FAKE_PYTHON_CALLS:-}" ]]; then
+	printf '%s\n' "$1" >>"$FAKE_PYTHON_CALLS"
+fi
 if [[ -n "${FAKE_PYTHON_ARGS:-}" ]]; then
 	printf '%s\n' "$@" >"$FAKE_PYTHON_ARGS"
 fi
-if [[ -n "${FAKE_HANG_CHILD_PID:-}" ]]; then
+if [[ -n "${FAKE_HANG_CHILD_PID:-}" &&
+	( -z "${FAKE_HANG_STAGE:-}" || "$1" == *"minima_${FAKE_HANG_STAGE}_runner.py" ) ]]; then
 	sleep 30 &
 	printf '%s\n' "$!" >"$FAKE_HANG_CHILD_PID"
 	wait "$!"
@@ -168,6 +176,66 @@ printf '{"schema":"treedb_minima_manifest/v2","fixture":"bounded-50000"}\n' >"$T
 printf '{}\n' >"$TMP/freeze"
 printf '{}\n' >"$TMP/serving"
 manifest_before=$(cat "$TMP/supplied-manifest")
+measured_env=(env PATH="$FAKE_BIN:$PATH" MODE=measured
+	MANIFEST_PATH="$TMP/supplied-manifest" MINIMA_FREEZE="$TMP/freeze"
+	MINIMA_EXPECTED_FREEZE_SHA256="$(printf '%064d' 0)" VENV="$TMP/pinned-venv"
+	TREEDB_SERVICE_BIN="$TMP/service" MINIMA_COMPARATOR_BIN="$TMP/comparator"
+	TREEDB_STRATEGY=column_graph TREEDB_TRANSPORT=native TREEDB_NATIVE_ADDRESS=127.0.0.1:17122
+	TREEDB_COLUMN_GRAPH_SERVING="$TMP/serving")
+for wall in 0 -1 1.5 invalid; do
+	set +e
+	"${measured_env[@]}" RUN_DIR="$TMP/invalid-wall-$wall" MINIMA_WALL_SECONDS="$wall" \
+		FAKE_PYTHON_CALLS="$TMP/invalid-wall.calls" \
+		"$REPO/scripts/bench_minima_qualification.sh" >"$TMP/invalid-wall.log" 2>&1
+	wall_status=$?
+	set -e
+	[[ "$wall_status" == 2 ]]
+	grep -q 'MINIMA_WALL_SECONDS must be a positive integer' "$TMP/invalid-wall.log"
+	[[ ! -e "$TMP/invalid-wall.calls" ]]
+done
+
+# GNU timeout must terminate the owned process group at either backend stage,
+# including the real Qdrant launcher's existing Docker cleanup trap.
+mv "$REPO/scripts/bench_minima_qdrant.sh" "$TMP/qdrant-stub"
+cp "$ROOT/scripts/bench_minima_qdrant.sh" "$REPO/scripts/bench_minima_qdrant.sh"
+cat >"$FAKE_BIN/docker" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_DOCKER_CALLS"
+case "$1" in
+  run) echo owned-container ;;
+  inspect) echo 12345 ;;
+esac
+EOF
+chmod +x "$FAKE_BIN/docker"
+sleep 30 &
+unrelated_pid=$!
+for stage in treedb qdrant; do
+	set +e
+	"${measured_env[@]}" RUN_DIR="$TMP/measured-timeout-$stage" MINIMA_WALL_SECONDS=1 \
+		FAKE_HANG_STAGE="$stage" FAKE_HANG_CHILD_PID="$TMP/$stage-timeout.pid" \
+		FAKE_PYTHON_CALLS="$TMP/$stage-timeout.calls" FAKE_DOCKER_CALLS="$TMP/$stage-docker.calls" \
+		QDRANT_URL= QDRANT_BIN= QDRANT_RESTART_HOOK= QDRANT_CPUSET_CPUS=2,4 \
+		"$REPO/scripts/bench_minima_qualification.sh" >"$TMP/$stage-timeout.log" 2>&1
+	timeout_status=$?
+	set -e
+	[[ "$timeout_status" == 124 ]]
+	IFS= read -r timed_child_pid <"$TMP/$stage-timeout.pid"
+	timed_child_state=$(ps -o stat= -p "$timed_child_pid" || true)
+	[[ -z "$timed_child_state" || "$timed_child_state" == Z* ]]
+	kill -0 "$unrelated_pid"
+	[[ "$(grep -c 'minima_treedb_runner.py' "$TMP/$stage-timeout.calls")" == 1 ]]
+	if [[ "$stage" == qdrant ]]; then
+		[[ "$(grep -c 'minima_qdrant_runner.py' "$TMP/$stage-timeout.calls")" == 1 ]]
+		[[ "$(tail -1 "$TMP/$stage-docker.calls")" == 'rm -f gomap-minima-qdrant-'* ]]
+	else
+		[[ ! -e "$TMP/$stage-docker.calls" ]]
+	fi
+done
+kill "$unrelated_pid"
+wait "$unrelated_pid" 2>/dev/null || true
+unrelated_pid=""
+mv "$TMP/qdrant-stub" "$REPO/scripts/bench_minima_qdrant.sh"
+
 set +e
 PATH="$FAKE_BIN:$PATH" MODE=measured RUN_DIR="$TMP/measured" \
 	MANIFEST_PATH="$TMP/supplied-manifest" MINIMA_FREEZE="$TMP/freeze" \
@@ -190,6 +258,22 @@ grep -qx -- 'http://127.0.0.1:17123' "$TMP/measured-args"
 grep -qx -- "$TMP/supplied-manifest" "$TMP/measured-qdrant-inputs"
 grep -qx -- "$TMP/pinned-venv" "$TMP/measured-qdrant-inputs"
 grep -qx -- 'true' "$TMP/measured-qdrant-inputs"
+
+# The wrapper changes to the repository root before re-exec; a caller's
+# relative script path must still resolve to the same launcher exactly once.
+set +e
+(
+	cd "$REPO/scripts"
+	"${measured_env[@]}" RUN_DIR="$TMP/measured-relative" MINIMA_WALL_SECONDS=10 \
+		FAKE_PYTHON_CALLS="$TMP/measured-relative.calls" \
+		./bench_minima_qualification.sh
+) >"$TMP/measured-relative.log" 2>&1
+relative_status=$?
+set -e
+[[ "$relative_status" == 1 ]] # the deliberately failing comparator is retained
+[[ -f "$TMP/measured-relative/minima_qualification.json" ]]
+[[ "$(grep -c 'minima_treedb_runner.py' "$TMP/measured-relative.calls")" == 1 ]]
+grep -q 'qualification failed: TreeDB=0 Qdrant=0 comparator=7' "$TMP/measured-relative.log"
 
 set +e
 PATH="$FAKE_BIN:$PATH" MODE=measured RUN_DIR="$TMP/measured" \

@@ -93,8 +93,11 @@ with unavailable counters. They do not satisfy the measured contract.
 `MODE=measured` uses supplied manifest bytes, a pinned existing Python environment
 and prebuilt naturally stamped service/comparator binaries. It does not generate
 another manifest, build binaries or install packages. The run and backend output
-directories must be fresh. For example, with all inputs and options fixed by the
-reviewed collection plan:
+directories must be fresh. GNU `timeout` bounds the entire measured invocation,
+including both backends and comparison, using positive-integer
+`MINIMA_WALL_SECONDS` (default 600 seconds) with a 10-second kill grace after TERM.
+A timeout is incomplete evidence. The frozen collection plan sets its explicit
+deadline. For example, with all inputs and options fixed by that plan:
 
 ```sh
 taskset --cpu-list "$MINIMA_CPU_AFFINITY" env \

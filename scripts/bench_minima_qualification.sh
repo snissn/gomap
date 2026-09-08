@@ -42,6 +42,22 @@ if [[ "$TREEDB_OPERATION_TIMEOUT" != "120" ]]; then
 	exit 2
 fi
 
+# Re-exec before measured setup populates its output directories. Export the
+# chosen run directory so automatic temporary paths survive the one wrapper.
+case "$MODE" in
+bounded-50k|bounded-250k|measured)
+	wall_seconds=${MINIMA_WALL_SECONDS:-600}
+	if [[ ! "$wall_seconds" =~ ^[1-9][0-9]*$ ]]; then
+		printf '%s\n' 'MINIMA_WALL_SECONDS must be a positive integer' >&2
+		exit 2
+	fi
+	if [[ "${MINIMA_WALL_WRAPPED:-}" != "1" ]]; then
+		export RUN_DIR MINIMA_WALL_WRAPPED=1
+		exec timeout --signal=TERM --kill-after=10s "${wall_seconds}s" "$ROOT/scripts/bench_minima_qualification.sh"
+	fi
+	;;
+esac
+
 treedb_diagnostic_args=()
 if [[ -n "$TREEDB_DIAGNOSTICS_DIR" ]]; then
 	treedb_diagnostic_args+=(
@@ -94,15 +110,6 @@ fi
 
 case "$MODE" in
 bounded-50k|bounded-250k)
-	if [[ "${MINIMA_BOUNDED_WRAPPED:-}" != "1" ]]; then
-		wall_seconds=${MINIMA_WALL_SECONDS:-600}
-		if [[ ! "$wall_seconds" =~ ^[1-9][0-9]*$ ]]; then
-			printf '%s\n' 'MINIMA_WALL_SECONDS must be a positive integer' >&2
-			exit 2
-		fi
-		export RUN_DIR MINIMA_BOUNDED_WRAPPED=1
-		exec timeout --signal=TERM --kill-after=10s "${wall_seconds}s" "$0"
-	fi
 	rows=50000
 	[[ "$MODE" != bounded-250k ]] || rows=250000
 	go build -o "$RUN_DIR/bin/treedb-document-service" -buildvcs=true ./cmd/treedb-document-service
