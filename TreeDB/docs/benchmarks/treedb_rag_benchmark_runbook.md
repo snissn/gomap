@@ -125,8 +125,9 @@ A full freeze requires three distinct reviewed bounded-pair hashes and the
 reviewed overhead disposition. The merged product commit is the Git ancestor;
 a reviewed pre-squash product commit is not necessarily an ancestor.
 
-Measured Qdrant supports the launcher's owned Docker deployment only. The runner
-checks the actual container PID, image ID, repository digest, mapped HTTP port
+Measured Qdrant supports the launcher's owned Docker deployment only and requires
+an explicit `QDRANT_CPUSET_CPUS` before launch. The runner checks the actual
+container PID, image ID, repository digest, mapped HTTP port
 and durable storage mount. The container runs `/qdrant/qdrant` directly under the
 collector's numeric UID:GID so the measured PID owns the executable and listener
 and permits host process inspection. Snapshot and initialization paths stay
@@ -145,6 +146,13 @@ call samples; internal Qdrant scroll RPCs are not separate ledger entries. Nativ
 retrieval is separately counted from search materialization. The
 live final disk/resource endpoint is captured once before cleanup; actual
 terminal work and owned exit evidence are attached afterward.
+
+Qdrant's CPU/RSS/disk restart segments use the last pre-stop sample and the
+actual post-startup-ready baseline. Costs in that resource observation gap are
+unavailable; the wall timer still includes the full restart. The explicit
+`resource_availability.restart` marker also leaves Qdrant through-exit peak RSS
+unavailable. TreeDB's numeric restart origin remains derived zero CPU/RSS plus
+old-end disk, separate from its actual first-work and owned `wait4` evidence.
 
 The accepted bounded characterization contains **four full lifecycle runs and
 six separate bridge lifetimes**: three measured native lifecycle baselines, one

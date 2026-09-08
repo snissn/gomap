@@ -31,6 +31,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+QDRANT_RESTART_RESOURCE_BOUNDARY = "endpoint_only_pre_stop_to_post_startup_ready; shutdown/startup resource costs unavailable"
+
 RESOURCE_SEMANTICS = {
     "rss_bytes": "sum of positive per-process end-minus-baseline RSS growth; endpoint delta, not peak RSS",
     "cpu_seconds": "sum of positive per-process end-minus-baseline CPU seconds",
@@ -1477,8 +1479,12 @@ class QdrantMinimaRunner:
                    "pid": self.restart_boundary["old_pid"],
                    "process_identity": self.restart_boundary["old_process_identity"],
                    "lifetime_ordinal": 0}
-            fresh = {**endpoint, "rss_bytes": 0, "cpu_seconds": 0.0,
-                     "disk_bytes": old["disk_bytes"]}
+            if self.resource_baseline is None:
+                raise RuntimeError("measured Qdrant restart lacks the actual post-startup resource baseline")
+            # The restart hook's post-startup sample also owns the aggregate
+            # segment baseline. Numeric resource deltas exclude the unsampled
+            # shutdown/startup gap; the phase wall timer still includes it.
+            fresh = self._measured_endpoint(self.resource_baseline)
             segments = [{"start": self._phase_resource_start, "end": old},
                         {"start": fresh, "end": endpoint}]
         samples = [s for s in self.evidence.samples
@@ -2532,6 +2538,10 @@ class QdrantMinimaRunner:
             raw["request_evidence"] = self.evidence.requests
             raw["setup_interval"] = self.setup_interval
             if self.resource_server_name == "Qdrant":
+                raw["resource_availability"]["restart"] = {
+                    "cpu_rss_disk": QDRANT_RESTART_RESOURCE_BOUNDARY,
+                    "through_exit_peak_rss": "unavailable",
+                }
                 self._artifact_resource_end = resource["end"]
                 raw["phase_attribution"] = self._finish_measured_phases()
         return artifact

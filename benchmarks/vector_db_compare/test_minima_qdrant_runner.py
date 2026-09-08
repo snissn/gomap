@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import copy
+import json
 import os
 import subprocess
 import threading
@@ -389,6 +390,38 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         workload.wait_ready.assert_called_once_with(expected_count=0, phase="initial_load_to_query")
         workload.ensure_compatible.assert_called_once_with()
 
+    def test_measured_restart_phase_uses_actual_postready_resource_baseline(self) -> None:
+        # Retained f0a292e4 actual endpoint fields, not a fresh workload or a
+        # rewritten archived artifact. The original phase has virtual-zero RSS.
+        fixture = json.loads((Path(__file__).resolve().parents[2] /
+            "TreeDB/cmd/treedb_rag_benchmark/testdata/minima_measured_qdrant_restart.json").read_text())
+        workload = new_runner(tiny_manifest(), SharedQdrant())
+        original = fixture["phase"]
+        workload._phase_name = original["name"]
+        workload._phase_start = original["start_nanos"]
+        workload._phase_resource_start = original["resource_segments"][0]["start"]
+        workload.restart_origin_resource_end = original["resource_segments"][0]["end"]
+        workload.restart_boundary = fixture["restart_boundary"]
+        workload.resource_baseline = fixture["actual_new_baseline"]
+        endpoint = original["resource_segments"][1]["end"]
+        def captured(resource=None):
+            return {**(endpoint if resource is None else resource), "lifetime_ordinal": 1,
+                    "process_identity": workload.restart_boundary["new_process_identity"]}
+        workload._measured_endpoint = mock.Mock(side_effect=captured)
+        with mock.patch.object(runner.time, "monotonic_ns", return_value=original["end_nanos"]):
+            workload._append_measured_phase()
+        phase, = workload._phase_boundaries
+        self.assertEqual(phase["duration_nanos"], original["duration_nanos"])
+        self.assertEqual(phase["resource_segments"][0], original["resource_segments"][0])
+        fresh = phase["resource_segments"][1]["start"]
+        self.assertEqual(fresh, captured(fixture["actual_new_baseline"]))
+        self.assertEqual(fresh["rss_bytes"], 273063936)
+        self.assertEqual(fresh["disk_bytes"], 320518814)
+        self.assertNotEqual(fresh["disk_bytes"], phase["resource_segments"][0]["end"]["disk_bytes"])
+        workload.resource_baseline = None
+        with self.assertRaisesRegex(RuntimeError, "actual post-startup"):
+            workload._append_measured_phase()
+
     def test_measured_qdrant_lifecycle_keeps_setup_restart_and_live_final_boundary(self) -> None:
         workload = new_runner(tiny_manifest(), SharedQdrant())
         workload.measured = True
@@ -425,6 +458,13 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
                              min(r["started_monotonic_ns"] for r in parity))
         self.assertEqual(phases[-1]["resource_segments"][-1]["end"]["disk_bytes"],
                          raw["resource_measurement"]["end"]["disk_bytes"])
+        self.assertEqual(raw["resource_availability"]["restart"], {
+            "cpu_rss_disk": runner.QDRANT_RESTART_RESOURCE_BOUNDARY,
+            "through_exit_peak_rss": "unavailable"})
+        fresh = phases[5]["resource_segments"][1]["start"]
+        baseline = raw["resource_measurement"]["segments"][1]["baseline"]
+        for key in ("pid", "linux_process_identity", "rss_bytes", "cpu_seconds", "disk_bytes", "peak_rss"):
+            self.assertEqual(fresh[key], baseline[key])
         workload.close()
 
     def test_measured_docker_runtime_binds_actual_pid_image_storage_and_restart(self) -> None:

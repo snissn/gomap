@@ -37,11 +37,23 @@ kill -0 "$unrelated_pid"
 # Even a matching stale file belongs to another invocation in external mode.
 ps -o lstart= -o command= -p "$unrelated_pid" >"$TMP/identity"
 printf '%s\n%s\n' "$unrelated_pid" "$(cat "$TMP/identity")" >"$RUN_DIR/qdrant.pid"
-if RUN_DIR="$RUN_DIR" QDRANT_URL=http://127.0.0.1:1 QDRANT_BIN= \
+mkdir -p "$TMP/external-storage"
+cat >"$TMP/setup-python" <<'PYTHON'
+#!/usr/bin/env bash
+echo 'intentional external setup failure' >&2
+exit 73
+PYTHON
+chmod +x "$TMP/setup-python"
+set +e
+RUN_DIR="$RUN_DIR" MINIMA_MEASURED=false PYTHON="$TMP/setup-python" VENV="$TMP/external-venv" \
+	QDRANT_URL=http://127.0.0.1:1 QDRANT_BIN= \
 	QDRANT_RESTART_HOOK="$TMP/restart" QDRANT_SERVER_PID="$unrelated_pid" \
-	QDRANT_STORAGE_PATH= bash "$ROOT/scripts/bench_minima_qdrant.sh" >"$TMP/retry.log" 2>&1; then
-	exit 1
-fi
+	QDRANT_STORAGE_PATH="$TMP/external-storage" \
+	bash "$ROOT/scripts/bench_minima_qdrant.sh" >"$TMP/retry.log" 2>&1
+status=$?
+set -e
+[[ "$status" == 73 ]]
+[[ "$(cat "$TMP/retry.log")" == *"intentional external setup failure"* ]]
 kill -0 "$unrelated_pid"
 
 # Measured mode consumes existing inputs and delegates runtime inspection to
@@ -75,12 +87,22 @@ printf '{}\n' >"$TMP/manifest.json"
 printf '{}\n' >"$TMP/freeze.json"
 cp "$TMP/restart" "$TMP/comparator"
 export DOCKER_CALLS="$TMP/docker.calls" RUNNER_CALLS="$TMP/runner.calls"
+if PATH="$TMP/stubs:$PATH" RUN_DIR="$TMP/no-cpuset" VENV="$TMP/pinned" MINIMA_MEASURED=true \
+  MANIFEST_PATH="$TMP/manifest.json" MINIMA_FREEZE="$TMP/freeze.json" \
+  MINIMA_EXPECTED_FREEZE_SHA256="$(printf 'f%.0s' {1..64})" MINIMA_COMPARATOR_BIN="$TMP/comparator" \
+  QDRANT_URL= QDRANT_BIN= QDRANT_RESTART_HOOK= QDRANT_CPUSET_CPUS= \
+  bash "$ROOT/scripts/bench_minima_qdrant.sh" >"$TMP/cpuset.log" 2>&1; then
+  exit 1
+fi
+[[ "$(cat "$TMP/cpuset.log")" == *"explicit QDRANT_CPUSET_CPUS"* ]]
+[[ ! -e "$DOCKER_CALLS" && ! -e "$RUNNER_CALLS" ]]
 mkdir -p "$TMP/reused-storage"
 printf 'retained data\n' >"$TMP/reused-storage/existing"
 if PATH="$TMP/stubs:$PATH" RUN_DIR="$TMP/fresh-run" VENV="$TMP/pinned" MINIMA_MEASURED=true \
   MANIFEST_PATH="$TMP/manifest.json" MINIMA_FREEZE="$TMP/freeze.json" \
   MINIMA_EXPECTED_FREEZE_SHA256="$(printf 'f%.0s' {1..64})" MINIMA_COMPARATOR_BIN="$TMP/comparator" \
-  QDRANT_URL= QDRANT_BIN= QDRANT_RESTART_HOOK= QDRANT_STORAGE_PATH="$TMP/reused-storage" \
+  QDRANT_URL= QDRANT_BIN= QDRANT_RESTART_HOOK= QDRANT_CPUSET_CPUS=2,4 \
+  QDRANT_STORAGE_PATH="$TMP/reused-storage" \
   bash "$ROOT/scripts/bench_minima_qdrant.sh" >"$TMP/storage.log" 2>&1; then
   exit 1
 fi

@@ -1444,6 +1444,9 @@ func minimaMeasuredGates(a *minimaArtifact) ([]minimaMeasuredGate, error) {
 	slices.Sort(times)
 	return []minimaMeasuredGate{{"load_readiness_ns", durations["initial_durable_load"], minimaMeasuredLoadCap}, {"restart_readiness_ns", durations["restart_open_readiness"], minimaMeasuredRestartCap}, {"through_exit_peak_rss_bytes", peak, minimaMeasuredRSSCap}, {"all_1024_outer_search_p50_ns", times[511], minimaMeasuredSearchCap}, {"final_live_disk_bytes", raw.ResourceMeasurement.End.DiskBytes, minimaMeasuredDiskCap}}, nil
 }
+
+const minimaQdrantRestartResourceBoundary = "endpoint_only_pre_stop_to_post_startup_ready; shutdown/startup resource costs unavailable"
+
 func validateMinimaMeasuredArtifact(a *minimaArtifact, f *minimaMeasuredFreeze) error {
 	if a.NativePathProof != nil {
 		return errors.New("measured schema cannot use historical native proof")
@@ -1492,8 +1495,33 @@ func validateMinimaMeasuredArtifact(a *minimaArtifact, f *minimaMeasuredFreeze) 
 		if raw.PhaseAttribution == nil {
 			return errors.New("measured phase attribution missing")
 		}
-		if err := validateMinimaTreeDBPhaseAttribution(*raw.PhaseAttribution, raw.RestartBoundary); err != nil {
+		if b.Name == "qdrant" {
+			scope := raw.ResourceAvailability["restart"]
+			if scope["cpu_rss_disk"] != minimaQdrantRestartResourceBoundary || scope["through_exit_peak_rss"] != "unavailable" {
+				return errors.New("measured Qdrant restart resource boundary is not endpoint-only")
+			}
+		}
+		if err := validateMinimaPhaseAttribution(*raw.PhaseAttribution, raw.RestartBoundary, b.Name == "qdrant"); err != nil {
 			return err
+		}
+		if b.Name == "qdrant" {
+			if len(raw.ResourceMeasurement.Segments) != 2 {
+				return errors.New("measured Qdrant restart aggregate segments are incomplete")
+			}
+			restart := raw.PhaseAttribution.Phases[minimaTreeDBRestartOrdinal].ResourceSegments
+			for ordinal, endpoint := range []minimaRawPhaseResourceEndpoint{restart[0].End, restart[1].Start} {
+				snapshot := raw.ResourceMeasurement.Segments[0].End
+				pid, identity := raw.RestartBoundary.OldPID, raw.RestartBoundary.OldLinuxProcessIdentity
+				if ordinal == 1 {
+					snapshot = raw.ResourceMeasurement.Segments[1].Baseline
+					pid, identity = raw.RestartBoundary.NewPID, raw.RestartBoundary.NewLinuxProcessIdentity
+				}
+				if identity == "" || endpoint.LifetimeOrdinal == nil || *endpoint.LifetimeOrdinal != ordinal ||
+					endpoint.PID != pid || snapshot.PID != pid ||
+					endpoint.LinuxProcessIdentity != identity || snapshot.LinuxProcessIdentity != identity {
+					return errors.New("measured Qdrant phase and aggregate restart identities disagree")
+				}
+			}
 		}
 		if b.Name == "treedb" {
 			if err := validateMinimaMeasuredLifetimes(raw, b.Configuration["transport"] == "native"); err != nil {

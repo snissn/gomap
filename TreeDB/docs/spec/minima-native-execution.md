@@ -255,6 +255,17 @@ coverage cannot stand in for measured zero. The public ledger includes actual
 batch writes, readiness, visibility fetch/count and maintenance controls, with
 causal completion checks; concurrent searches retain their permitted overlap.
 
+Measured Qdrant restart CPU/RSS/disk deltas are endpoint-only: the old
+sample precedes stop, and the new baseline is the actual post-startup-ready
+sample also retained by the aggregate resource segment. Shutdown/startup
+resource costs between those samples are unavailable. The raw
+`resource_availability.restart` records this gap and marks through-exit peak
+RSS unavailable; sampled `VmHWM` is still only a lifetime highwater through its
+live endpoint. The restart wall timer includes stop/open/reconnect/readiness.
+TreeDB retains its derived numeric restart origin (zero CPU/RSS and old-end
+disk), independently of actual first-work snapshots and owned `wait4` evidence.
+These resource conventions do not change either backend's wall-time boundary.
+
 The five adopted inclusive full-scale caps use these exact raw boundaries:
 
 | Gate | Cap | Raw measurement |

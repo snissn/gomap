@@ -582,6 +582,10 @@ func minimaPhaseUnattributedLimit(totalDurationNanos int64) int64 {
 }
 
 func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution, restart minimaRawRestartBoundary) error {
+	return validateMinimaPhaseAttribution(value, restart, false)
+}
+
+func validateMinimaPhaseAttribution(value minimaRawPhaseAttribution, restart minimaRawRestartBoundary, measuredQdrant bool) error {
 	if value.Clock != "time.monotonic_ns" ||
 		value.UnattributedRule != minimaPhaseUnattributedRule ||
 		value.TotalStartNanos <= 0 ||
@@ -657,8 +661,8 @@ func validateMinimaTreeDBPhaseAttribution(value minimaRawPhaseAttribution, resta
 				old.Start.PID != restart.OldPID || old.Start.ProcessIdentity != restart.OldProcessIdentity ||
 				fresh.Start.PID != restart.NewPID || fresh.Start.ProcessIdentity != restart.NewProcessIdentity ||
 				old.Start.PID == fresh.Start.PID ||
-				fresh.Start.RSSBytes != 0 || fresh.Start.CPUSeconds != 0 ||
-				fresh.Start.DiskBytes != old.End.DiskBytes {
+				(!measuredQdrant && (fresh.Start.RSSBytes != 0 || fresh.Start.CPUSeconds != 0 ||
+					fresh.Start.DiskBytes != old.End.DiskBytes)) {
 				return errors.New("minima artifact: TreeDB restart phase resource split is invalid")
 			}
 		}
@@ -1194,7 +1198,7 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 		if err := validateMinimaResourceMeasurement(name, resource); err != nil {
 			return err
 		}
-		if name == "treedb" {
+		if name == "treedb" || (artifact.Schema == minimaMeasuredSchema && name == "qdrant") {
 			if err := validateMinimaTreeDBResourceReconciliation(*raw.PhaseAttribution, resource); err != nil {
 				return err
 			}

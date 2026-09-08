@@ -71,6 +71,10 @@ if [[ "$MINIMA_MEASURED" == true ]]; then
 		echo "Measured Qdrant requires this launcher's owned Docker deployment" >&2
 		exit 2
 	fi
+	if [[ -z "${QDRANT_CPUSET_CPUS:-}" ]]; then
+		echo "Measured Qdrant requires explicit QDRANT_CPUSET_CPUS" >&2
+		exit 2
+	fi
 	if [[ -z "$MANIFEST_PATH_INPUT" || ! -f "$MANIFEST_PATH" ||
 		-z "${MINIMA_FREEZE:-}" || ! -f "$MINIMA_FREEZE" ||
 		! "${MINIMA_EXPECTED_FREEZE_SHA256:-}" =~ ^[0-9a-f]{64}$ ||

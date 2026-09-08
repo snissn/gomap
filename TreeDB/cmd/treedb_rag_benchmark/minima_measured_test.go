@@ -165,6 +165,32 @@ func measuredTestArtifact(t *testing.T) (minimaArtifact, *minimaMeasuredFreeze) 
 		phases.TotalDurationNanos = phases.TotalEndNanos - phases.TotalStartNanos
 		phases.UnattributedNanos = phases.TotalDurationNanos - 8*20_000_000
 		raw.PhaseAttribution = &phases
+		if b.Name == "qdrant" {
+			// Endpoint-only Qdrant resource segments retain the actual nonzero
+			// post-startup baseline, independently of the inclusive wall timer.
+			raw.ResourceAvailability["restart"] = map[string]string{
+				"cpu_rss_disk":          "endpoint_only_pre_stop_to_post_startup_ready; shutdown/startup resource costs unavailable",
+				"through_exit_peak_rss": "unavailable",
+			}
+			resource := minimaTestTreeDBResourceMeasurement()
+			resource.Segments[0].End.PID = raw.RestartBoundary.OldPID
+			resource.Segments[0].End.LinuxProcessIdentity = "linux-old"
+			resource.Segments[1].Baseline.PID = raw.RestartBoundary.NewPID
+			resource.Segments[1].Baseline.LinuxProcessIdentity = "linux-new"
+			resource.Segments[1].Baseline.RSSBytes = 50
+			resource.Segments[1].Baseline.CPUSeconds = 1
+			resource.Segments[1].Baseline.DiskBytes = 1050
+			resource.RSSBytes, resource.CPUSeconds, resource.DiskBytes = 75, 1.5, 50
+			resource.Segments[1].RSSBytes, resource.Segments[1].CPUSeconds, resource.Segments[1].DiskBytes = 75, 1.5, 50
+			raw.ResourceMeasurement = resource
+			fresh := &phases.Phases[5].ResourceSegments[1].Start
+			fresh.RSSBytes, fresh.CPUSeconds, fresh.DiskBytes = 50, 1, 1050
+			for i := range a.Scenarios {
+				if a.Scenarios[i].Backend == "qdrant" {
+					a.Scenarios[i].Resource.RSSBytes, a.Scenarios[i].Resource.CPUSeconds, a.Scenarios[i].Resource.DiskBytes = 75, 1.5, 50
+				}
+			}
+		}
 		raw.SetupInterval = &minimaMeasuredInterval{StartedMonotonicNS: 100, EndedMonotonicNS: 1000}
 		// Keep existing observed ordering and writer-overlap intervals; offset each
 		// existing trace into its phase, without generating any new workload schedule.
@@ -548,6 +574,61 @@ func measuredTestArtifact(t *testing.T) (minimaArtifact, *minimaMeasuredFreeze) 
 		a.RawEvidence[b.Name] = raw
 	}
 	return a, f
+}
+
+func TestMinimaMeasuredQdrantRestartResourceBoundary(t *testing.T) {
+	a, freeze := measuredTestArtifact(t)
+	if err := validateMinimaMeasuredArtifact(&a, freeze); err != nil {
+		t.Fatalf("actual post-startup Qdrant baseline rejected: %v", err)
+	}
+	raw := a.RawEvidence["qdrant"]
+	if err := validateMinimaTreeDBPhaseAttribution(*raw.PhaseAttribution, raw.RestartBoundary); err == nil {
+		t.Fatal("legacy/TreeDB virtual-zero resource rule was weakened")
+	}
+	for _, change := range []string{"synthetic", "rss", "cpu", "disk", "old_end", "scope", "through_exit",
+		"old_linux_identity", "new_linux_identity", "old_aggregate_pid", "new_aggregate_pid",
+		"new_aggregate_linux_identity", "missing_lifetime", "wrong_lifetime"} {
+		t.Run(change, func(t *testing.T) {
+			copy := cloneMinimaArtifact(t, a)
+			raw := copy.RawEvidence["qdrant"]
+			fresh := &raw.PhaseAttribution.Phases[5].ResourceSegments[1].Start
+			switch change {
+			case "synthetic":
+				fresh.RSSBytes, fresh.CPUSeconds = 0, 0
+				fresh.DiskBytes = raw.PhaseAttribution.Phases[5].ResourceSegments[0].End.DiskBytes
+			case "rss":
+				fresh.RSSBytes++
+			case "cpu":
+				fresh.CPUSeconds += 0.25
+			case "disk":
+				fresh.DiskBytes++
+			case "old_end":
+				raw.PhaseAttribution.Phases[5].ResourceSegments[0].End.DiskBytes++
+			case "scope":
+				delete(raw.ResourceAvailability, "restart")
+			case "through_exit":
+				raw.ResourceAvailability["restart"]["through_exit_peak_rss"] = "measured"
+			case "old_linux_identity":
+				raw.PhaseAttribution.Phases[5].ResourceSegments[0].End.LinuxProcessIdentity = "other"
+			case "new_linux_identity":
+				fresh.LinuxProcessIdentity = "other"
+			case "old_aggregate_pid":
+				raw.ResourceMeasurement.Segments[0].End.PID++
+			case "new_aggregate_pid":
+				raw.ResourceMeasurement.Segments[1].Baseline.PID++
+			case "new_aggregate_linux_identity":
+				raw.ResourceMeasurement.Segments[1].Baseline.LinuxProcessIdentity = "other"
+			case "missing_lifetime":
+				fresh.LifetimeOrdinal = nil
+			case "wrong_lifetime":
+				fresh.LifetimeOrdinal = measuredTestPointer(0)
+			}
+			copy.RawEvidence["qdrant"] = raw
+			if err := validateMinimaMeasuredArtifact(&copy, freeze); err == nil {
+				t.Fatal("mismatched or overclaimed Qdrant restart resources accepted")
+			}
+		})
+	}
 }
 
 func TestMinimaMeasuredProducerPresence(t *testing.T) {

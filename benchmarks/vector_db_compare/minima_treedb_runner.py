@@ -438,7 +438,13 @@ class ServiceController:
                             and sample["cpu_seconds"] >= self.last_shutdown_resource_end["cpu_seconds"]):
                         # Preserve legacy live endpoint semantics separately from
                         # the final qualification storage endpoint already frozen.
-                        self.last_shutdown_resource_end.update(sample)
+                        self.last_shutdown_resource_end.update({
+                            **sample, "captured": self.last_shutdown_resource_end["captured"],
+                            "availability": {
+                                **self.last_shutdown_resource_end["availability"],
+                                **sample["availability"],
+                            },
+                        })
                     time.sleep(0.01)
                 if self._reap_owned() is None:
                     os.kill(process.pid, signal.SIGKILL)
@@ -448,6 +454,8 @@ class ServiceController:
                     failure = TimeoutError("measured graceful shutdown timed out")
                 if self.last_shutdown_resource_end is not None:
                     self.last_shutdown_resource_end["disk_bytes"] = common.disk_bytes(self.data_dir)
+                    self.last_shutdown_resource_end["captured"] = (
+                        self.last_shutdown_resource_end["captured"] and self.data_dir.exists())
             self._terminal_work()
             lifetime = self.lifetimes[-1]
             if lifetime["exit"].get("exit_code") != 0 or lifetime["exit"].get("availability") != "measured":
@@ -696,10 +704,6 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 "shutdown_timeout_seconds": str(self.controller.shutdown_timeout),
                 "block_profile_rate": str(self.controller.block_profile_rate),
                 "mutex_profile_fraction": str(self.controller.mutex_profile_fraction)}
-
-    def _request_context(self) -> dict[str, Any]:
-        return {"phase": self._phase_name or "setup", "lifetime_ordinal": self.lifetime_ordinal,
-                "transport": "http"}
 
     def restart_controller(self) -> int:
         if self._controller_restart_origin is None:
@@ -1327,6 +1331,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         batch_size = self.config["batch_size"]
         if batch_size != 256:
             raise RuntimeError(f"diagnostic exact resume requires the frozen 256-document batch size, got {batch_size}")
+        self._prepare_batch_correlations()
         operation = next(row for row in self.manifest["operations"] if row["name"] == "initial_batch_insert")
         ranges = [
             row for row in operation.get("insert_ranges", [])

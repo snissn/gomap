@@ -388,7 +388,11 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 "insert_ranges": [{"scenario": "resume", "start": 0, "rows": 1024}],
             }],
         }
-        workload._expected_insert_batches = {("initial_batch_insert", "resume", 512): 768}
+        # Match the constructor's unprepared state: diagnostic resume does not
+        # enter normal phase attribution before selecting its frozen batch.
+        workload._batch_prepared = False
+        workload._batch_correlation_expected_identities = set()
+        workload._batch_correlation_max_records = 0
         workload.storage_path = directory
         workload.resource_server_name = "TreeDB"
         workload.controller.pid = 123
@@ -819,6 +823,15 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 self.assertEqual(workload.diagnostic_resume["present_ids_after"], 256)
                 self.assertEqual(workload.diagnostic_resume["visible_rows_after"], 768)
                 self.assertEqual(workload.batch_correlations[0]["accumulated_expected_rows"], 768)
+                self.assertTrue(workload._batch_prepared)
+                expected_batches = {
+                    ("initial_batch_insert", "resume", start): start + 256
+                    for start in range(0, 1024, 256)
+                }
+                self.assertEqual(workload._expected_insert_batches, expected_batches)
+                workload._prepare_batch_correlations()
+                self.assertEqual(workload._expected_insert_batches, expected_batches)
+                self.assertEqual(workload._batch_correlation_max_records, 4)
 
     def test_exact_resume_rejects_matching_count_with_prefix_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as directory, \
@@ -1618,6 +1631,47 @@ class MinimaTypedRunnerTest(unittest.TestCase):
 class MinimaMeasuredRunnerTest(unittest.TestCase):
     workload = MinimaTreeDBRunnerTest.workload
     response = MinimaTreeDBRunnerTest.response
+
+    def test_measured_shutdown_live_sample_preserves_disk_availability(self) -> None:
+        for initial_exists, final_exists in ((True, True), (False, True), (True, False)):
+            with self.subTest(initial_exists=initial_exists, final_exists=final_exists), \
+                 tempfile.TemporaryDirectory() as directory:
+                data_dir = Path(directory)
+                controller = runner.ServiceController(Path("service"), "http://127.0.0.1:1",
+                                                      data_dir, "test", 1, 1, measured=True)
+                process = SimpleNamespace(pid=4321, returncode=None)
+                controller.process = process
+                controller._owned_identity = "4321:77"
+                controller.lifetimes = [{"exit": {"availability": "measured", "exit_code": 0}}]
+                reaps = iter((None, None, 0, 0))
+                def reap():
+                    result = next(reaps)
+                    process.returncode = result
+                    return result
+                samples = [{"captured": True, "linux_process_identity": "4321:77",
+                            "cpu_seconds": cpu, "rss_bytes": 100 + cpu,
+                            "availability": {"cpu_seconds": source, "rss_bytes": source}}
+                           for cpu, source in ((1, "first live sample"), (2, "later live sample"))]
+                with mock.patch.object(controller, "_reap_owned", side_effect=reap), \
+                     mock.patch.object(controller, "work_snapshot"), \
+                     mock.patch.object(controller, "_terminal_work"), \
+                     mock.patch.object(common, "server_process_resource_usage", side_effect=samples), \
+                     mock.patch.object(common, "linux_process_identity", return_value="4321:77"), \
+                     mock.patch.object(common, "disk_bytes", side_effect=(10, 20)), \
+                     mock.patch.object(Path, "exists", side_effect=(initial_exists, final_exists)), \
+                     mock.patch.object(runner.os, "kill") as kill, \
+                     mock.patch.object(runner.time, "sleep"):
+                    controller._stop_measured()
+                kill.assert_called_once_with(4321, runner.signal.SIGTERM)
+                self.assertIsNone(controller.process)
+                endpoint = controller.last_shutdown_resource_end
+                self.assertEqual(endpoint["captured"], initial_exists and final_exists)
+                self.assertEqual(endpoint["cpu_seconds"], 2)
+                self.assertEqual(endpoint["disk_bytes"], 20)
+                self.assertEqual(endpoint["availability"], {
+                    "cpu_seconds": "later live sample", "rss_bytes": "later live sample",
+                    "disk_bytes": str(data_dir),
+                })
 
     def test_measured_treedb_restart_uses_inherited_owner_checks_without_docker(self) -> None:
         workload = self.workload(self.response())
