@@ -6,12 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"reflect"
 	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"go.mongodb.org/mongo-driver/v2/bson"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 func TestCollectionReadViewFetchDocumentsByIDUsesBatchViewForOwnedRetainedPayloads2242(t *testing.T) {
@@ -333,6 +334,15 @@ func TestCollectionReadViewFetchDocumentsByIDCancelsBeforePointRowFetch(t *testi
 	if !errors.Is(err, context.Canceled) || ctx.calls != 5 || got.Stats.PointRowFetches != 0 || got.Stats.DocumentsFetched != 0 {
 		t.Fatalf("FetchDocumentsByID cancellation err=%v calls=%d stats=%+v", err, ctx.calls, got.Stats)
 	}
+	// The same real fixture cancels after exactly one completed output row.
+	before := workstats.Output.Materialization.Read()
+	ctx = &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 8}
+	partial, err := view.FetchDocumentsByID(ids[:2], DocumentFetchOptions{Context: ctx})
+	after := workstats.Output.Materialization.Read()
+	if !errors.Is(err, context.Canceled) || partial.Stats.DocumentsFetched != 1 || partial.Stats.JSONReconstructionRows != 1 || partial.Stats.OutputBytes == 0 || after.Errors-before.Errors != 1 || after.Completed != before.Completed || after.Fetched-before.Fetched != 1 || after.JSONReconstructionRows-before.JSONReconstructionRows != 1 || after.OutputBytes-before.OutputBytes != partial.Stats.OutputBytes {
+		t.Fatalf("partial output stats=%+v before=%+v after=%+v err=%v", partial.Stats, before, after, err)
+	}
+
 }
 
 func TestCollectionReadViewForegroundLifetimeIdleAndOperations(t *testing.T) {

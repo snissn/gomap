@@ -8,6 +8,7 @@ import json
 import socket
 import ssl
 import struct
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,6 +21,7 @@ from .errors import (
     TreeDBProtocolError,
     TreeDBTimeoutError,
     TreeDBTransportError,
+    UnsupportedError,
     service_error_from_code,
 )
 from .filters import FilterLike, InvalidFilterError, normalize_filter
@@ -60,9 +62,13 @@ class TreeDBClient:
     service; unsupported filters raise locally or fail closed on the service.
     """
 
-    def __init__(self, base_url: str, timeout: Optional[float] = 30.0) -> None:
+    def __init__(self, base_url: str, timeout: Optional[float] = 30.0, *, native_address: Optional[str] = None) -> None:
         self.base_url = _normalize_base_url(base_url)
         self.timeout = _normalize_timeout(timeout)
+        self._native = None
+        if native_address is not None:
+            from ._native import _NativeConnection
+            self._native = _NativeConnection(native_address, self.timeout)
         parsed = urllib.parse.urlparse(self.base_url)
         self._request_prefix = parsed.path + (";" + parsed.params if parsed.params else "")
         connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
@@ -76,11 +82,69 @@ class TreeDBClient:
         """Close this client's reusable HTTP connection."""
 
         self._connection.close()
+        if self._native is not None:
+            self._native.close()
 
     def __del__(self) -> None:
+        native = getattr(self, "_native", None)
+        if native is not None:
+            native.close()
         connection = getattr(self, "_connection", None)
         if connection is not None:
             connection.close()
+
+    def get_many(self, index: str, ids: Sequence[str], *, index_info: Optional[IndexInfo] = None) -> list[Optional[Document]]:
+        """Fetch owned full documents in request order using native GetMany.
+
+        Missing IDs yield None. Typed IndexInfo selects generation-checked v2
+        with one batch view, without requiring graph admission. Omission keeps
+        generic v1 per-ID semantics. This is separate from search/full-fetch.
+        """
+        if self._native is None:
+            raise UnsupportedError("unsupported", "get_many requires native_address")
+        from ._native import _decode_vector, _section, _sections, _vector, _uint
+        if not isinstance(index, str) or not index:
+            raise TreeDBConfigError("native collection name is required")
+        if isinstance(ids, (str, bytes)) or len(ids) > 1_000_000:
+            raise TreeDBConfigError("native ids must be a bounded sequence")
+        encoded = []
+        encoded_bytes = len(index.encode("utf-8")) + 128
+        for item in ids:
+            if not isinstance(item, str) or not item:
+                raise TreeDBConfigError("native IDs must be nonempty strings")
+            encoded_id = item.encode("utf-8")
+            encoded_bytes += len(encoded_id) + 10
+            if encoded_bytes > self._native.limit:
+                raise TreeDBConfigError("native GetMany request exceeds frame limit")
+            encoded.append(encoded_id)
+        version = 1
+        request = _section(100, b"\x01" + index.encode("utf-8")) + _section(102, _vector(encoded))
+        if index_info is not None:
+            if (index_info.name != index or index_info.extra.get("typed_input") is not True
+                    or index_info.vector_strategy != "column_graph" or index_info.generation <= 0):
+                raise TreeDBConfigError("typed GetMany requires matching typed IndexInfo")
+            version = 2
+            request += _section(133, _uint(index_info.generation)) + _section(4, _uint(time.time_ns() + int(self.timeout * 1e9)))
+        response = self._native.command(50, version, request, "get_many_versions")
+        sections = _sections(response, {103, 116, 11})
+        if 103 not in sections or 116 not in sections or len(sections[116]) != (len(ids) + 7) // 8:
+            raise TreeDBProtocolError("native GetMany response sections mismatch")
+        payloads = _decode_vector(sections[103], len(ids))
+        documents = []
+        for i, payload in enumerate(payloads):
+            if not sections[116][i // 8] & (1 << (i % 8)):
+                if payload:
+                    raise TreeDBProtocolError("missing native document has payload")
+                documents.append(None)
+                continue
+            try:
+                document = Document.from_dict(json.loads(payload))
+            except (ValueError, KeyError, TypeError) as exc:
+                raise TreeDBProtocolError("invalid native document payload") from exc
+            if document.id != ids[i]:
+                raise TreeDBProtocolError("native document ID mismatch")
+            documents.append(document)
+        return documents
 
     def health(self) -> Mapping[str, Any]:
         """Return the service health payload from `GET /v1/health`."""
@@ -98,10 +162,16 @@ class TreeDBClient:
         *,
         scalar_fields: Optional[ScalarFieldDeclarationsLike] = None,
         vector_index_options: Optional[VectorIndexOptionsLike] = None,
+        typed_input: bool = False,
+        column_graph_serving: Optional[Mapping[str, Any]] = None,
     ) -> IndexInfo:
         """Create or idempotently open a compatible document index."""
 
         request: dict[str, Any] = {"name": name, "dimension": dimension}
+        if typed_input:
+            request["typed_input"] = True
+        if column_graph_serving is not None:
+            request["column_graph_serving"] = dict(column_graph_serving)
         _add_optional_non_empty_string(request, "metric", metric, "metric")
         _add_scalar_fields(request, scalar_fields)
         _add_vector_index_options(request, vector_index_options)
@@ -115,6 +185,8 @@ class TreeDBClient:
         *,
         scalar_fields: Optional[ScalarFieldDeclarationsLike] = None,
         vector_index_options: Optional[VectorIndexOptionsLike] = None,
+        typed_input: bool = False,
+        column_graph_serving: Optional[Mapping[str, Any]] = None,
     ) -> IndexInfo:
         """Ensure a compatible index exists.
 
@@ -128,6 +200,8 @@ class TreeDBClient:
             metric,
             scalar_fields=scalar_fields,
             vector_index_options=vector_index_options,
+            typed_input=typed_input,
+            column_graph_serving=column_graph_serving,
         )
 
 
@@ -149,6 +223,8 @@ class TreeDBClient:
         when creating a missing index or when compatibility should be enforced.
         """
 
+        if self._native is not None:
+            raise UnsupportedError("unsupported", "reset requires an explicit HTTP control client")
         request: dict[str, Any] = {"dimension": dimension, "drop_old": bool(drop_old)}
         _add_optional_non_empty_string(request, "metric", metric, "metric")
         _add_vector_index_options(request, vector_index_options)
@@ -161,10 +237,16 @@ class TreeDBClient:
         *,
         vector_index_name: Optional[str] = None,
         expected_generation: Optional[int] = None,
+        column_graph_serving: Optional[Mapping[str, Any]] = None,
+        column_graph_action: Optional[str] = None,
     ) -> OptimizeIndexResponse:
         """Rebuild service vector assets after a benchmark load phase."""
 
         request: dict[str, Any] = {}
+        if column_graph_serving is not None:
+            request["column_graph_serving"] = dict(column_graph_serving)
+        if column_graph_action is not None:
+            request["column_graph_action"] = column_graph_action
         _add_expected_generation(request, expected_generation)
         if vector_index_name:
             request["vector_index_name"] = vector_index_name
@@ -184,8 +266,21 @@ class TreeDBClient:
         *,
         expected_generation: Optional[int] = None,
         defer_vector_index_rebuild: bool = False,
+        index_info: Optional[IndexInfo] = None,
     ) -> UpsertDocumentsResponse:
         """Write or replace documents in an index."""
+
+        if self._native is not None:
+            from ._native import _section, _uint, _typed_upsert_request, _typed_upsert_response
+            if (index_info is None or index_info.name != index or index_info.extra.get("typed_input") is not True
+                    or index_info.vector_strategy != "column_graph" or index_info.generation <= 0
+                    or (expected_generation is not None and expected_generation != index_info.generation)):
+                raise TreeDBConfigError("native typed upsert requires matching typed IndexInfo and generation")
+            sections, ids = _typed_upsert_request(index, documents, index_info)
+            sections += _section(4, _uint(time.time_ns() + int(self.timeout * 1e9)))
+            body = self._native.command(65, 1, sections, "typed_document_upsert_versions")
+            inserted, updated = _typed_upsert_response(body, index_info.generation, len(ids))
+            return UpsertDocumentsResponse(index=index_info, upserted=len(ids), inserted=inserted, updated=updated, ids=ids)
 
         request: dict[str, Any] = {"documents": [_document_for_write(doc) for doc in documents]}
         _add_expected_generation(request, expected_generation)
@@ -207,6 +302,8 @@ class TreeDBClient:
         service-supported metadata-filter delete path.
         """
 
+        if self._native is not None:
+            raise UnsupportedError("unsupported", "native delete is not implemented")
         request: dict[str, Any] = {"ids": _list_of_strings(ids, "ids")}
         _add_expected_generation(request, expected_generation)
         payload = self._request("POST", self._index_path(index, "documents", "delete"), request)
@@ -224,6 +321,8 @@ class TreeDBClient:
         The client never scans locally to emulate unsupported delete behavior.
         """
 
+        if self._native is not None:
+            raise UnsupportedError("unsupported", "native filter delete is not implemented")
         normalized = normalize_filter(filter)
         if normalized is None:
             raise InvalidFilterError("delete_by_filter requires a filter")
@@ -284,15 +383,20 @@ class TreeDBClient:
         ef_search: Optional[int] = None,
         return_embedding: bool = False,
         expected_generation: Optional[int] = None,
+        index_info: Optional[IndexInfo] = None,
     ) -> DenseVectorSearchResponse:
         """Score a query embedding through the TreeDB dense search route.
 
-        ``route`` selects the execution path (v1alpha2): ``"ann"`` uses a
-        compatible native_runtime or column_graph vector index; ``"exact"``
-        keeps the bounded filtered scan. Declared scalar filters are supported
-        by native_runtime ANN and expose route/work diagnostics in the response.
-        Unsupported filter shapes fail closed; neither the client nor service
-        silently downgrades an ANN request to exact search.
+        Selected typed column_graph indexes accept an omitted route or
+        ``"ann"`` after explicit admission, including declared string equality/range
+        leaves joined by AND. ``dense_work.graph.route`` identifies executed
+        empty, typed exact (complete eligible sets up to 4096), or HNSW work
+        independently of the public ``ann`` tag. Selected ``"exact"`` rejects rather than scanning.
+        Legacy ``"exact"`` scans documents and applies an optional filter;
+        compatible native_runtime ANN also supports declared scalar filters.
+        Unsupported ANN shapes fail closed without a document-scan fallback.
+        Embedding echo is opt-in via ``return_embedding=True`` on either
+        transport. Native dense requires caller-held selected typed IndexInfo.
         """
 
         if route is not None and route not in ("ann", "exact"):
@@ -300,6 +404,31 @@ class TreeDBClient:
         ef_search_value = None
         if ef_search is not None:
             ef_search_value = _validate_binary_int_query_param(ef_search, "ef_search", minimum=0)
+        if self._native is not None:
+            from ._native import _dense_request, _dense_response, _section, _uint
+            if (index_info is None or index_info.name != index or index_info.extra.get("typed_input") is not True
+                    or index_info.vector_strategy != "column_graph" or index_info.metric != "cosine"
+                    or index_info.generation <= 0 or len(query_embedding) != index_info.dimension):
+                raise TreeDBConfigError("native dense search requires matching selected typed IndexInfo")
+            if route not in (None, "ann") or (expected_generation is not None and expected_generation != index_info.generation):
+                raise TreeDBConfigError("native dense route or generation conflicts with IndexInfo")
+            payload = _dense_request(index, query_embedding, top_k, ef_search_value or 0, index_info.generation, return_embedding, normalize_filter(filter) if filter is not None else None)
+            deadline = _uint(time.time_ns() + int(self.timeout * 1_000_000_000))
+            raw = self._native.command(64, 2, _section(129, payload) + _section(4, deadline), "dense_vector_search_versions")
+            ids, payloads, scores, candidates, work = _dense_response(raw, top_k)
+            documents = []
+            for item_id, document_raw, score in zip(ids, payloads, scores):
+                try:
+                    document = Document.from_dict(json.loads(document_raw))
+                    if document.id.encode("utf-8") != item_id:
+                        raise ValueError("document ID mismatch")
+                    document.score = score
+                except (ValueError, KeyError, TypeError, OverflowError) as exc:
+                    raise TreeDBProtocolError("invalid native dense document", dense_work=work) from exc
+                documents.append(document)
+            return DenseVectorSearchResponse(index=index_info, documents=documents, metric=index_info.metric,
+                                             exact=False, candidates=candidates, route="ann",
+                                             native_base_plus_live_delta=False, native_command_version=2, dense_work=work)
         request: dict[str, Any] = {
             "query_embedding": [float(value) for value in query_embedding],
             "top_k": top_k,
@@ -311,7 +440,7 @@ class TreeDBClient:
             request["ef_search"] = ef_search_value
         _add_filter(request, filter)
         _add_expected_generation(request, expected_generation)
-        payload = self._request("POST", self._index_path(index, "search", "vector"), request)
+        payload = self._request("POST", self._index_path(index, "search", "vector"), request, dense_proof=True)
         return _parse_response("vector search response", DenseVectorSearchResponse.from_dict, payload)
 
     def search_vector_index(
@@ -470,7 +599,7 @@ class TreeDBClient:
         return f"/v1/indexes/{encoded}"
 
     def _request(
-        self, method: str, path: str, body: Optional[Mapping[str, Any]] = None, *, retry_broken_connection: bool = False
+        self, method: str, path: str, body: Optional[Mapping[str, Any]] = None, *, retry_broken_connection: bool = False, dense_proof: bool = False
     ) -> Any:
         data: Optional[bytes] = None
         headers = {"Accept": "application/json"}
@@ -480,7 +609,7 @@ class TreeDBClient:
             except (TypeError, ValueError) as exc:
                 raise InvalidRequestError("invalid_request", f"request payload is not JSON-serializable: {exc}") from exc
             headers["Content-Type"] = "application/json"
-        return self._send_request(method, path, data, headers, retry_broken_connection=retry_broken_connection)
+        return self._send_request(method, path, data, headers, retry_broken_connection=retry_broken_connection, dense_proof=dense_proof)
 
     def _request_bytes(
         self,
@@ -498,7 +627,7 @@ class TreeDBClient:
         return self._send_request(method, path, body, headers, retry_broken_connection=retry_broken_connection)
 
     def _send_request(
-        self, method: str, path: str, data: Optional[bytes], headers: Mapping[str, str], *, retry_broken_connection: bool = False
+        self, method: str, path: str, data: Optional[bytes], headers: Mapping[str, str], *, retry_broken_connection: bool = False, dense_proof: bool = False
     ) -> Any:
         url = self.base_url + path
         if not retry_broken_connection or self._benchmark_uses_proxy:
@@ -507,7 +636,7 @@ class TreeDBClient:
                 try:
                     with self._opener.open(request, timeout=self.timeout) as response:
                         response_body = response.read()
-                        return self._decode_success(response.getcode(), response_body)
+                        return self._decode_success(response.getcode(), response_body, dense_proof=dense_proof)
                 except urllib.error.HTTPError as exc:
                     try:
                         try:
@@ -520,7 +649,7 @@ class TreeDBClient:
                             raise TreeDBTransportError(f"TreeDB request to {url} failed: {read_exc}") from read_exc
                     finally:
                         exc.close()
-                    raise self._decode_error(exc.code, response_body) from None
+                    raise self._decode_error(exc.code, response_body, dense_proof=dense_proof) from None
                 except urllib.error.URLError as exc:
                     if retry_broken_connection and attempt == 0 and _is_broken_connection(exc.reason):
                         continue
@@ -540,8 +669,8 @@ class TreeDBClient:
                 try:
                     response_body = response.read()
                     if 200 <= response.status < 300:
-                        return self._decode_success(response.status, response_body)
-                    raise self._decode_error(response.status, response_body)
+                        return self._decode_success(response.status, response_body, dense_proof=dense_proof)
+                    raise self._decode_error(response.status, response_body, dense_proof=dense_proof)
                 finally:
                     response.close()
             except (
@@ -567,19 +696,19 @@ class TreeDBClient:
                 self._connection.close()
                 raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc}") from exc
 
-    def _decode_success(self, status_code: int, body: bytes) -> Any:
-        decoded = _decode_json_body(body, status_code=status_code)
+    def _decode_success(self, status_code: int, body: bytes, *, dense_proof: bool = False) -> Any:
+        decoded = _decode_json_body(body, status_code=status_code, dense_proof=dense_proof)
         if isinstance(decoded, Mapping) and "error" in decoded:
             error = decoded.get("error")
             if isinstance(error, Mapping):
                 code = str(error.get("code", "internal"))
                 message = str(error.get("message", ""))
-                raise service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body))
+                raise service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error) if dense_proof else None)
             raise TreeDBProtocolError("error envelope must contain an object", status_code=status_code, response_body=_body_to_text(body))
         return decoded
 
-    def _decode_error(self, status_code: int, body: bytes) -> Exception:
-        decoded = _decode_json_body(body, status_code=status_code)
+    def _decode_error(self, status_code: int, body: bytes, *, dense_proof: bool = False) -> Exception:
+        decoded = _decode_json_body(body, status_code=status_code, dense_proof=dense_proof)
         if not isinstance(decoded, Mapping):
             return TreeDBProtocolError(
                 f"TreeDB service returned HTTP {status_code} with a non-object JSON body",
@@ -595,7 +724,7 @@ class TreeDBClient:
             )
         code = str(error.get("code", "internal"))
         message = str(error.get("message", ""))
-        return service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body))
+        return service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error) if dense_proof else None)
 
 
 def _normalize_base_url(base_url: str) -> str:
@@ -831,16 +960,44 @@ def _expect_mapping(payload: Any, label: str) -> Mapping[str, Any]:
     return payload
 
 
-def _decode_json_body(body: bytes, *, status_code: int) -> Any:
+def _decode_json_body(body: bytes, *, status_code: int, dense_proof: bool = False) -> Any:
     text = _body_to_text(body)
     try:
-        return json.loads(text) if text else {}
+        if not dense_proof:
+            return json.loads(text) if text else {}
+        duplicate = False
+        proof_envelope = False
+
+        def object_pairs(pairs):
+            nonlocal duplicate, proof_envelope
+            # The root object is decoded last. Inspect pairs before duplicate
+            # keys collapse, including overwritten proof-bearing error keys.
+            proof_envelope = any(key == "dense_work" or (key == "error" and isinstance(value, dict) and "dense_work" in value)
+                                 for key, value in pairs)
+            out = {}
+            for key, value in pairs:
+                duplicate |= key in out
+                out[key] = value
+            return out
+
+        decoded = json.loads(text, object_pairs_hook=object_pairs) if text else {}
+        if isinstance(decoded, dict) and proof_envelope and duplicate:
+            raise TreeDBProtocolError("duplicate field in dense proof envelope", status_code=status_code, response_body=text)
+        return decoded
     except json.JSONDecodeError as exc:
         raise TreeDBProtocolError(
             f"TreeDB service returned malformed JSON for HTTP {status_code}: {exc}",
             status_code=status_code,
             response_body=text,
         ) from exc
+
+
+def _error_dense_work(error):
+    from ._dense_work import optional_dense_work
+    try:
+        return optional_dense_work(error.get("dense_work"))
+    except (ValueError, TypeError, KeyError) as exc:
+        raise TreeDBProtocolError("invalid dense error work proof") from exc
 
 
 def _body_to_text(body: bytes) -> str:

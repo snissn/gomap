@@ -1,9 +1,12 @@
 package collections
 
 import (
+	"encoding/binary"
 	"fmt"
 	"slices"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
 func BenchmarkTypedGraphInversePermutation(b *testing.B) {
@@ -95,6 +98,100 @@ func TestTypedGraphInverseMappedAndOptional(t *testing.T) {
 	if !old.preparedViewActive() || old.inversePermutationActive() {
 		t.Fatal("optional field confused base/inverse readiness")
 	}
+	t.Run("pack_forward_with_persisted_inverse", func(t *testing.T) {
+		pack, _, _, err := col.openColumnHNSWSearchPackPreparedViewForReader("docs", *cfg, def, graph, state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pack.Close()
+		omitted := state
+		omitted.Assets = slices.DeleteFunc(slices.Clone(state.Assets), func(a columnVectorIndexStateAssetSnapshot) bool {
+			return a.Role == columnVectorIndexStateAssetRoleRowRefs && a.AssetID != columnVectorGraphRowRefStateAssetID(columnVectorGraphRowRefStateFieldOrdinalByPhysicalRow)
+		})
+		open := func(pack *columnHNSWSearchPackPreparedView) (*columnVectorGraphRowRefStateSource, error) {
+			return newColumnVectorGraphRowRefStateSourceFromRootWithPack(db.ColumnAssetRootDir(), "docs", *cfg, def, graph, omitted, records, pack)
+		}
+		borrowed, err := open(pack)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer borrowed.Close()
+		for ordinal := 0; ordinal < source.rows; ordinal++ {
+			ref, _ := source.rowRefForOrdinal(ordinal)
+			if got, ok := borrowed.ordinalForPhysicalRow(ref); !ok || got != ordinal {
+				t.Fatalf("pack inverse=%d/%v want=%d", got, ok, ordinal)
+			}
+		}
+		if borrowed.baseMmapDirectFieldCount() != 0 || borrowed.generations.Alive() {
+			t.Fatal("borrowed pack reported TCIM forward views")
+		}
+		if allocs := testing.AllocsPerRun(100, func() {
+			if _, ok := borrowed.ordinalForPhysicalRow(ref); !ok {
+				panic("pack inverse")
+			}
+		}); allocs != 0 {
+			t.Fatalf("pack inverse allocated %g", allocs)
+		}
+		for _, bad := range [][]int64{{0, 0, 0}, {-1, 1, 2}, {0, 1, 3}} {
+			copy := *borrowed
+			copy.ordinalsByPhysicalRow.Values = slices.Clone(bad)
+			if err := copy.validateInversePermutation(); err == nil {
+				t.Fatalf("pack accepted inverse %v", bad)
+			}
+		}
+		asset, raw, decoded := loadColumnHNSWSearchPackForTest2313(t, db, def, graph, state)
+		for _, tc := range []struct {
+			name       string
+			kind       columnHNSWSearchPackSectionKind
+			value      uint64
+			lookupOnly bool
+		}{
+			{"absent_part", columnHNSWSearchPackSectionRowRefPartID, ref.PartID + 100, false},
+			{"row_bounds", columnHNSWSearchPackSectionRowRefRowIndex, 1<<63 - 1, false},
+			{"newer_generation", columnHNSWSearchPackSectionRowRefGeneration, graph.BaseManifestGeneration + 1, false},
+			{"wrong_lsn", columnHNSWSearchPackSectionRowRefAppliedLSN, ref.AppliedCommandLSN + 1, true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				changed := slices.Clone(raw)
+				section := mustColumnHNSWSearchPackSectionForTest4429(t, decoded.Sections, tc.kind, 0)
+				binary.LittleEndian.PutUint64(changed[section.Offset:], tc.value)
+				rewriteColumnHNSWSearchPackChecksumsForTest4429(t, changed, asset.Ref, decoded.Sections)
+				candidate, _, err := testColumnHNSWSearchPackPreparedViewFromBytesAllowErr2314(changed, mappedresource.SourceHeapCopy, columnHNSWSearchPackBaseIdentity{ManifestGeneration: graph.BaseManifestGeneration, ManifestChecksum: graph.BaseManifestChecksum, SchemaHash: graph.BaseSchemaHash})
+				if err != nil {
+					if tc.name != "newer_generation" {
+						t.Fatal(err)
+					}
+					return
+				}
+				defer candidate.Close()
+				s, err := open(candidate)
+				if tc.lookupOnly {
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer s.Close()
+					if _, ok := s.ordinalForPhysicalRow(ref); ok {
+						t.Fatal("accepted different LSN")
+					}
+				} else if err == nil {
+					s.Close()
+					t.Fatal("accepted invalid captured coordinate")
+				}
+			})
+		}
+		if err := borrowed.ordinalsByPhysicalRow.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if borrowed.preparedViewActive() || borrowed.inversePermutationActive() {
+			t.Fatal("closed required inverse remained active")
+		}
+		if _, ok := borrowed.rowRefForOrdinal(0); ok {
+			t.Fatal("forward provider survived required inverse release")
+		}
+		if !pack.metadataAlive() {
+			t.Fatal("inverse close released borrowed pack")
+		}
+	})
 	if err := source.Close(); err != nil {
 		t.Fatal(err)
 	}

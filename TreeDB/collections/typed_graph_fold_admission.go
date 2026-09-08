@@ -1,5 +1,7 @@
 package collections
 
+import "github.com/snissn/gomap/TreeDB/internal/workstats"
+
 // Explicit internal limits bound epoch-cumulative attempted candidate output and
 // appender opens, not existing disk inventory or encoder scratch. An open can
 // leave an empty segment even when payload admission fails.
@@ -38,6 +40,8 @@ func (a *typedGraphFoldAssetAdmission) charge(bytes, opens int64) error {
 	}
 	// No within-epoch refund: partial writes, canceled/stale candidates and
 	// handle release do not establish the explicit maintenance renewal boundary.
+	workstats.Fold.CandidateBytesCharged.Add(uint64(bytes))
+	workstats.Fold.AppenderAttemptsCharged.Add(uint64(opens))
 	c.typedGraphCandidateBytes += bytes
 	c.typedGraphCandidateAttempts += opens
 	return nil

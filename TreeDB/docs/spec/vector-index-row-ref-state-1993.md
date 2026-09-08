@@ -1,8 +1,8 @@
 # Vector-index row reference state (#1993)
 
 TreeDB column-graph search publishes vector-index state for ordinal-to-base-row
-references. This remains separate from returned document IDs, which are now
-owned by vector-index `document_ids` bytes state.
+references. Returned document IDs remain separate opaque bytes, supplied by
+vector-index `document_ids` state or the existing graph pack.
 
 ## Healthy path
 
@@ -43,6 +43,26 @@ fails closed with a rebuild-needed error when absent; there is no query-time
 heap inverse synthesis. This experimental role has not yet qualified filtered
 ANN or its build/open/memory performance.
 
+### Existing pack forward provider (#4619)
+
+When all four forward TCIM assets are omitted, readers may borrow the equivalent
+four int64 arrays from the existing validated graph pack. The persisted inverse
+TCIM asset is still required. Complete forward TCIM sets retain their original
+validation; partial or corrupt present sets cannot fall back to the pack.
+
+The same checked coordinate conversion, owning-base part membership, row bounds,
+strict inverse permutation and applied-LSN equality apply to either provider.
+The owning manifest may be the captured immutable base rather than the current
+mutated manifest. Closing the pack or inverse makes dependent lookups
+unavailable. The row-ref source closes only its own TCIM handles; its pack
+reference borrows the reader/shared holder's lifetime. Pack arrays are not TCIM
+certifications, and the mapped-field counters count only actual TCIM fields.
+The common writer uses these providers for collections admitted to typed-base
+capture: Rebuild, Fold and stable-closure preparation omit the four forward
+TCIM assets and retain only the inverse for nonempty bases. Unselected
+collections still emit the complete TCIM coordinate set. Empty selected bases
+need no inverse asset.
+
 ### Forward mapping and final documents
 
 The typed-column vector source first uses `row_refs` state to map HNSW ordinals
@@ -51,8 +71,8 @@ remain an explicit compatibility fallback.
 
 Top-K document materialization uses row refs from vector-index state directly
 when available, avoiding an ID-to-row-ref locator lookup. Returned IDs are
-fetched from `document_ids` typed-column bytes state on the healthy path; legacy
-graph row ID bytes are compatibility fallback only.
+fetched from `document_ids` typed-column bytes state or the validated pack on the
+healthy path; legacy graph row ID bytes are compatibility fallback only.
 
 ## Opaque document IDs
 

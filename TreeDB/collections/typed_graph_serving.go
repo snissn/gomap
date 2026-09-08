@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // ColumnGraphServingOptions is explicit process-local admission for the selected
@@ -23,6 +25,11 @@ type ColumnGraphReadOwnerLimits = typedGraphReadOwnerLimits
 type ColumnGraphColdLimits = typedGraphColdLimits
 type ColumnGraphCandidateOutputLimits = typedGraphFoldAssetLimits
 type ColumnGraphMaintenanceLimits = typedGraphWorkEpochLimits
+
+// ColumnGraphFilterLimits bounds cumulative preparation work, including selective
+// discovery and any full fallback. MappingWork admits ordinal-mapping bounds,
+// secondary point requests and temporary encoded-prefix/key payload byte bounds;
+// it is not a comparison count or a total Go heap bound.
 type ColumnGraphFilterLimits = typedGraphFilterLimits
 type ColumnGraphMaintenanceStats = typedGraphWorkEpochStats
 
@@ -99,7 +106,18 @@ func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string,
 	// existing exclusion. A concurrent admitted suffix/fold may advance the
 	// immutable pointer without requiring another cold activation or debt reset.
 	if state := coord.typedPublication.Load(); wasReady && state != nil && !state.invalid && state.servingAdmitted && state.servingBase != nil {
-		return nil
+		// Admission belongs to the shared authority, but its optional prepared
+		// keeper belongs to this handle. Explicit Ensure warms new handles too.
+		if state.servingBase.graph.RowCount == 0 {
+			c.invalidateTypedGraphEmptyBaseKeeper(index)
+			return nil
+		}
+		_, err := c.acquireTypedGraphCapturedBaseCacheWithContext(ctx, index, o)
+		if err == nil {
+			// A concurrent empty fold may have passed cleanup during the warm.
+			c.invalidateTypedGraphEmptyBaseKeeper(index)
+		}
+		return err
 	}
 	prepared := coord.typedPublication.Load()
 	if prepared == nil || prepared.invalid || prepared.servingBase == nil {
@@ -137,7 +155,9 @@ func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string,
 
 // FoldColumnGraphServing performs explicit bounded rebuild and maintenance.
 // Errors preserve fail-closed state and are never hidden by a retry loop.
-func (c *Collection) FoldColumnGraphServing(ctx context.Context, index string) error {
+func (c *Collection) FoldColumnGraphServing(ctx context.Context, index string) (err error) {
+	workstats.Fold.Public.Attempts.Add(1)
+	defer func() { workstats.Fold.Public.Finish(err == nil) }()
 	p := c.typedGraphServingPolicy()
 	if p == nil || p.index != index || ctx == nil {
 		return ErrVectorIndexSearchUnavailable
@@ -156,7 +176,7 @@ func (c *Collection) FoldColumnGraphServing(ctx context.Context, index string) e
 		c.invalidateTypedGraphEmptyBaseKeeper(index)
 		return nil
 	}
-	_, err := c.acquireTypedGraphCapturedBaseCacheWithContext(ctx, index, p.options.Owners)
+	_, err = c.acquireTypedGraphCapturedBaseCacheWithContext(ctx, index, p.options.Owners)
 	if err == nil {
 		// A concurrent empty fold may have passed cleanup while this build
 		// was in flight. Recheck after installing our optional keeper.
@@ -196,6 +216,17 @@ func (c *Collection) RenewColumnGraphServing(ctx context.Context, index string) 
 }
 
 func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (response VectorIndexSearchResponse, view *CollectionReadView, err error) {
+	workstats.Graph.Requests.Attempts.Add(1)
+	var stats typedGraphOverlaySearchStats
+	var filterWork ColumnGraphFilterWork
+	var snapshot ColumnGraphQuerySnapshot
+	defer func() {
+		workstats.Graph.Requests.Finish(err == nil)
+		response.Stats.ColumnGraphWork = stats.work()
+		response.Stats.ColumnGraphWork.Completed = err == nil
+		response.Stats.ColumnGraphWork.Filter = filterWork
+		response.Stats.ColumnGraphWork.Snapshot = snapshot
+	}()
 	if err = validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
 		return
 	}
@@ -222,20 +253,21 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 	if err != nil {
 		return response, nil, err
 	}
+	snapshot = owner.querySnapshot()
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, owner.Close())
 			buffer.Reset()
+			response.Results = nil
 		}
 	}()
-	var stats typedGraphOverlaySearchStats
 	if opts.DeclaredScalarFilter == nil {
-		response.Results, stats, err = owner.overlay.search(opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
+		response.Results, stats, err = owner.overlay.searchWithContext(ctx, opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
 	} else {
 		var filter *typedGraphPreparedFilter
-		filter, err = prepareTypedGraphFilter(owner.overlay, *opts.DeclaredScalarFilter, p.options.Filter)
+		filter, err = prepareTypedGraphFilterWithContext(ctx, owner.overlay, *opts.DeclaredScalarFilter, p.options.Filter, &filterWork)
 		if err == nil {
-			response.Results, stats, err = owner.overlay.searchPreparedFilter(filter, opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
+			response.Results, stats, err = owner.overlay.searchPreparedFilterWithContext(ctx, filter, opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
 		}
 	}
 	if err != nil {
@@ -254,7 +286,7 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 	if stats.PackMmapDirect {
 		response.Stats.HNSWSearchPackMmapDirect = 1
 	}
-	if !stats.FilteredExact {
+	if stats.Route == "typed_hnsw" {
 		response.Stats.SearchRouteHNSWSearchPack = 1
 	}
 	response.Status = VectorIndexStatus{Name: p.index, Definition: owner.overlay.base.reader.def, Strategy: response.Strategy, Loaded: true, State: VectorIndexStateColumnGraphLoaded}

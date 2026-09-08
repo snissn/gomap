@@ -27,6 +27,18 @@ vector typed-column placement is covered by
 
 Hybrid candidate generation must not fetch full documents. Newly-created text indexes use text-v2 by default; set `TextIndexDefinition.Version: TextIndexVersionV1` only for the legacy compatibility path. Text candidates are score-only by default; set `HybridTextQuery.IncludeTextMatches=true` only when a bounded compact field/term summary is needed. Use `ResultMode` to choose `score_only`, `compact`, or `full`; documents are fetched only in full mode (or legacy `IncludeDocuments=true`) after fusion/filtering and are bounded by final `TopK`.
 
+For explicitly admitted typed `column_graph` collections, hybrid vector
+candidates use the same captured base and current mutation overlay as ordinary
+vector queries. Keyword postings and combined hybrid results reflect typed
+updates, deletes, and inserts before fold; after reopen, explicitly ensure graph
+serving again. The document service supports declared string EQ/AND filters and
+full current payloads, including requested embeddings, on this selected lane.
+Keyword queries do not require graph admission. Hybrid scalar admission and
+typed graph filter/work limits both apply; prefilter runs within the vector
+source, while postfilter keeps its existing position after source ranking.
+Candidate generation uses production statistics and fetches no documents.
+These are correctness contracts, separate from dense-query performance results.
+
 ## Index creation sketch
 
 ```go

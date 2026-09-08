@@ -797,6 +797,151 @@ the close command or by connection teardown. Strict, fast, and pinned searches
 retain their public `vectorpartition.OperationsV1` consistency and validation
 semantics; native wire changes only the transport representation.
 
+### 10.1. Document-service dense search
+
+Command `64 dense_vector_search` is a LocalOnly read, never a deterministic
+mutation or command-WAL entry. Version 1 selects the cosine float32
+`native_runtime` service route. Version 2 selects the explicitly admitted,
+persisted typed-input `column_graph` service route. A mismatched strategy fails
+closed; neither version permits the legacy full-document scan route. Typed
+native filter planning may choose bounded exact scoring internally.
+
+Both versions require `deadline` (4) and `dense_search_request` (129). Request
+payload order is: length-prefixed UTF-8 index name; uvarint top-K, efSearch and
+expected generation; one-byte return-embedding bool; uvarint dimensions then
+packed little-endian FP32 query; uvarint filter-leaf count then AND-conjoined
+leaves. Each leaf contains a length-prefixed field, one-byte operator
+(`1 ==`, `2 >`, `3 >=`, `4 <`, `5 <=`), and a typed value: `1` UTF-8 string,
+`2` bool, `3` signed zigzag int64, or `4` little-endian float64. Existing bounds
+include 16 filter levels and 64 leaves; unsupported operators fail closed.
+
+Response sections are ordered IDs (102), requested JSON documents (103), and
+`dense_search_response` (130). The metadata payload contains one route byte,
+uvarint candidates, exact-fallbacks, full-document-scan-fallbacks, result count,
+then one little-endian float64 score per result. Version 1 retains its legacy
+native-runtime bool byte (successful route `1`). Version 2 requires route tag
+`2`. Cross-version tags are rejected. Tag 2 identifies validated dispatch,
+**not measured execution-work evidence**. Version 2 additionally requires the
+critical `dense_search_work` section (134), independently versioned below.
+Requested documents are fetched from the search's same read owner before
+release. Content/meta are returned; embedding echo is opt-in through the
+return-embedding bool (default false), as on HTTP. Stored FP32 embeddings are
+reconstructed as JSON numbers, not packed result vectors. Command 64 packs the
+query and command 65 packs ingest vectors; document response sections remain JSON.
+
+Section 134 version 1 contains exactly 38 minimal uint64 uvarints, in this order:
+
+| Positions (zero-based) | Values |
+|---|---|
+| 0–2 | proof version (`1`), flags, executed route |
+| 3–9 | base ANN scored, base candidates, base edges, delta scored, exact base scored, base shadowed, base result IDs |
+| 10–18 | filter eligible rows, source IDs, source bytes, inspected entries, mapping work charged, retained bytes, scratch ID bytes, scratch rows, ordinal growth peak bytes |
+| 19–22 | captured schema hash, schema generation, base coverage LSN, current coverage LSN |
+| 23–26 | base manifest generation, format tag, version, checksum |
+| 27–30 | current manifest generation, format tag, version, checksum |
+| 31–37 | output requested, fetched, missing, output bytes, retained payload fetches, JSON reconstruction rows, typed column rows |
+
+Flags bits 0–7 respectively mean service completed, graph available, graph
+completed, filter attempted, filter completed, captured snapshot available,
+output attempted, output completed. Other bits are invalid. Route tags are
+`0` no executed branch, `1` typed empty, `2` typed exact, `3` typed HNSW.
+Manifest format tags are `0` empty and `1` `tcs1`; manifest version fits uint16.
+Unknown versions/tags, missing or duplicate sections, nonminimal/overflowing
+integers, truncation and trailing bytes fail closed. Unavailable/unattempted
+groups contain zero values. Successful responses require completed graph and
+output, fetched=requested=result count, no missing rows, and output bytes equal
+the sum of materialized document byte lengths. Output bytes exclude framing.
+
+The snapshot comes from the actual acquired owner, including base/current
+manifest identities and coverage, and remains owned after owner close or client
+buffer reuse. It is not the requested generation or a later diagnostics read.
+Schema generation is the acquired vector definition's generation; the service's
+expected-generation guard can also include a newer text-index generation.
+Filter cardinality is final only on completed preparation; mapping work is an
+admitted composite bound: ordinal mapping, submitted secondary point requests,
+and temporary encoded-prefix/key payload bounds for selective string EQ AND.
+Posting source counts include probes and fallback rereads, excluding point keys
+and rejected lookahead IDs; physical inspection includes lookahead and tombstones.
+Retained/growth bytes measure ordinal capacity, and scratch rows/ID bytes are
+logical peaks. Other work fields count actual producer work,
+including prefixes before an error. No per-request process snapshot is taken.
+
+The existing FrameError may also carry this same critical section beside its
+unchanged error section (2), only for 64/v2. Pre-service failures may omit it;
+omission means unavailable. A later native encoding failure preserves completed
+service/graph/output evidence. This completion does not certify wire delivery.
+Version 1 never emits or accepts section 134 and retains its response/error
+bytes. The Go response owns its fixed proof value independently of borrowed
+result documents; `WireError.DenseWork` is optional owned error detail.
+
+Hello capabilities advertise `dense_vector_search_versions` as a comma-separated
+set derived from registered command versions and an available standalone
+document service. `get_many_versions=1` similarly requires its registered
+standalone collection read implementation. `max_frame_size` reports the server
+frame bound. Missing capability is not support; new clients must fail closed.
+These extensible capability-map entries do not change existing frame versions.
+GetMany (50/v1) remains unchanged: it is a batched transport over local per-ID
+reads, without an expected-generation guard or a batch-wide snapshot promise.
+
+### Selected typed GetMany (50/v2, LocalOnly)
+
+Hello adds `2` to `get_many_versions` only when that version is registered and
+the standalone document service is configured. Required sections are deadline
+(4), named collection reference (100), document IDs (102), and
+`expected_generation` (133: one positive uvarint, no trailing bytes). Handles,
+cluster submission, and explicit read-consistency policies are unsupported.
+
+The service captures one collection read view, validates selected typed schema
+and generation against that captured catalog, and materializes all IDs on the
+same view. Existing buffered-write flushing is retained. Graph build/admission
+is not required. The owned response encoding is unchanged from 50/v1, including
+request order, duplicate IDs, and missing-document presence bits. The view is
+closed before return. This is a separate retrieval snapshot, not the preceding
+search owner's snapshot. Full documents include stored FP32 embeddings as JSON
+numbers, with no embedding-projection argument. There is no response-local
+`dense_work` section or changed list/result contract; process
+`work.output.get_many` observes selected attempts/completions/errors and actual
+output prefixes.
+
+### Typed document upsert (65/v1, LocalOnly)
+
+`typed_document_upsert` is a separate local mutation, never a deterministic
+replicated entry or a reinterpretation of insert-batch. Hello advertises
+`typed_document_upsert_versions=1` only with a registered command and configured
+standalone document service. Cluster submission rejects it before mutation.
+
+Required sections are deadline (4), IDs (102), documents (103), and
+`typed_upsert_request` (131). IDs and documents use existing byte-vector encoding;
+documents here contain **only residual JSON** with matching ID, never declared
+embedding, content, or scalar values. Section 131 contains, in order:
+
+- Length-prefixed UTF-8 index name; positive uvarint expected generation.
+- Positive uvarint row count and dimensions; row-major little-endian FP32 values.
+- Positive uvarint string-column count; for each column, a length-prefixed UTF-8
+  name followed by exactly row-count length-prefixed UTF-8 string values.
+
+The vector column is implicitly named `embedding`; named string columns must
+exactly match persisted `content` and declared string scalars. Duplicate,
+missing, unknown columns, dimension/count mismatch, invalid values, residual
+ownership violations and stale generations fail closed. Existing frame/vector
+limits bound decoding; dimensions are additionally capped at 65536. No trailing
+bytes are permitted. Deadline bounds use the existing context-aware service
+and synchronous core mutation; no arbitrary decoder/lock preemption is claimed.
+
+The decoder borrows IDs/residual bytes only during the synchronous call and
+owns one flat FP32 allocation with capped row views. The existing typed planner
+owns published data and performs one atomic mixed upsert, without per-ID
+existence requests or whole-document JSON reconstruction. Unchanged matches
+count as updated but do not create additional row/WAL changes.
+
+Response section `typed_upsert_response` (132) contains four uvarints:
+generation, upserted count, inserted count, updated count. The latter two sum to
+the request row count, as does upserted. No IDs are echoed; callers retain their
+request IDs. Success has the configured service/core durability contract, not
+an implied wire `synced` or Raft acknowledgment. Initial graph build and
+admission remain explicit separate operations. Versions 50/v1 and 64/v1,v2 are
+unchanged. Dispatch identity does not certify measured indexed-JSON counters.
+
 ## 11. Typed Scalars
 
 Index and query scalar codes:

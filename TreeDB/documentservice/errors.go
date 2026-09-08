@@ -27,9 +27,10 @@ const (
 // Error is a structured service error. Callers should branch on Code rather
 // than matching message text.
 type Error struct {
-	Code    ErrorCode `json:"code"`
-	Message string    `json:"message"`
-	Err     error     `json:"-"`
+	DenseWork *DenseSearchWork `json:"dense_work,omitempty"`
+	Code      ErrorCode        `json:"code"`
+	Message   string           `json:"message"`
+	Err       error            `json:"-"`
 }
 
 func (e *Error) Error() string {

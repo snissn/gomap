@@ -18,6 +18,50 @@ type typedGraphCopyTestIterator struct {
 	err    error
 }
 
+func TestTypedGraphCaptureDefaultRawWorkEnvelope(t *testing.T) {
+	// Finite policy arithmetic, not a corpus fixture or capacity measurement.
+	// Each current/old primary, locator and two scalar roots includes raw
+	// tombstones/history; the independently checked latest locator is ninth.
+	const rawRows uint64 = 2_600_000
+	const rowStreams = 2*(1+1+2) + 1
+	const manifestRecords uint64 = 65_537
+	const rowRecords = rowStreams * rawRows
+	const records = rowRecords + 2*manifestRecords + 4
+	const bytes = rowRecords*128 + 2*(64<<20+9*manifestRecords) + 17_486
+	if records != 23_531_078 || bytes != 3_130_614_880 {
+		t.Fatal("raw envelope arithmetic changed")
+	}
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine}
+	const namespace = "minima/column-assets"
+	if bound := typedGraphCaptureGraphRecordBound(def, namespace, 33); bound != 13_369 {
+		t.Fatalf("graph metadata bound=%d; revisit declared envelope", bound)
+	}
+	copy := typedGraphBaseCopy{
+		catalog:   &collectionCatalog{meta: CollectionMeta{Name: "minima", Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{AssetManager: &ColumnAssetManagerConfig{Namespace: namespace}}}}},
+		remaining: typedGraphCaptureBudget{records: typedGraphCaptureMaxRecords, bytes: typedGraphCaptureMaxBytes},
+	}
+	initial := copy.remaining
+	// Leave graph-control growth to the real producer, including header,
+	// identity, record keys/framing and the complete inline vector state.
+	if err := copy.remaining.charge(records-4, bytes-17_486); err != nil {
+		t.Fatalf("default raw capture ceiling cannot admit declared envelope: budget=%+v need_records=%d need_bytes=%d: %v", copy.remaining, records, bytes, err)
+	}
+	adjacency := make([]uint32, 35) // 33 empty layers, maximal admitted level 32.
+	adjacency[0], adjacency[1] = columnVectorGraphLayeredAdjacencyMagic, 32
+	if err := copy.reserveManifest(def, []columnVectorGraphAssetRow{{Adjacency: adjacency}}); err != nil {
+		t.Fatal(err)
+	}
+	if copy.manifestLimit != 17_486 || copy.remaining.records != initial.records-records || copy.remaining.bytes != initial.bytes-bytes {
+		t.Fatalf("remaining/growth=%+v manifest=%d", copy.remaining, copy.manifestLimit)
+	}
+	before := copy.remaining
+	for _, extra := range []typedGraphCaptureBudget{{records: before.records + 1}, {bytes: before.bytes + 1}} {
+		if err := copy.remaining.charge(extra.records, extra.bytes); !errors.Is(err, errTypedGraphCaptureBudget) || copy.remaining != before {
+			t.Fatalf("over-limit charge changed remaining budget: %+v err=%v", copy.remaining, err)
+		}
+	}
+}
+
 func TestTypedGraphBaseRecaptureDeletesAndEmpty(t *testing.T) {
 	col, reader, ids, _, _, _ := openTypedGraphQualityFixture(t, 512)
 	defer reader.Close()

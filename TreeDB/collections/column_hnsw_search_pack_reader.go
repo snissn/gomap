@@ -874,6 +874,12 @@ func (v *columnHNSWSearchPackPreparedView) validateLive() error {
 	return nil
 }
 
+// Metadata providers borrow the same validated mapping; they never own or
+// certify its slices as separate TCIM views.
+func (v *columnHNSWSearchPackPreparedView) metadataAlive() bool {
+	return v != nil && !v.closed.Load() && v.handle != nil && !v.handle.Released()
+}
+
 func (v *columnHNSWSearchPackPreparedView) Close() error {
 	if v == nil {
 		return nil

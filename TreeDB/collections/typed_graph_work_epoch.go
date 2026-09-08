@@ -9,6 +9,7 @@ import (
 	"reflect"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // Renewable work admission is deliberately distinct from a lifetime disk
@@ -29,6 +30,8 @@ type typedGraphWorkEpochStats struct {
 }
 
 func (c *Collection) renewTypedGraphWorkEpoch(ctx context.Context, limits typedGraphWorkEpochLimits) (out typedGraphWorkEpochStats, err error) {
+	workstats.Fold.Renew.Attempts.Add(1)
+	defer func() { workstats.Fold.Renew.Finish(err == nil) }()
 	if c == nil || c.db == nil || ctx == nil || limits.NativeEntries <= 0 || limits.ColumnSegments <= 0 || limits.ManifestRecords <= 0 || limits.LifecycleEntries <= 0 || limits.NativeBytes <= 0 || limits.ColumnBytes <= 0 || limits.ManifestBytes <= 0 || limits.RetainedBytes <= 0 || limits.PagerPages == 0 {
 		return out, ErrVectorIndexSnapshotMismatch
 	}

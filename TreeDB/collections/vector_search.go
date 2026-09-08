@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/buger/jsonparser"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
@@ -145,6 +146,11 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 	}
 	defer func() { _ = materializer.Close() }()
 
+	scan := &workstats.Scans.CollectionExact
+	if opts.IndexRangeFilter != nil {
+		scan = &workstats.Scans.CollectionIndexedExact
+	}
+	scan.Starts.Add(1)
 	matches := make([]VectorSearchResult, 0, opts.TopK)
 	addMatch := func(record DocumentRecord, distance float32) {
 		matches = appendBoundedVectorSearchResult(matches, VectorSearchResult{
@@ -154,6 +160,7 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 		}, opts.TopK)
 	}
 	processRecord := func(record DocumentRecord) error {
+		scan.Rows.Add(1)
 		if opts.Filter != nil {
 			include, err := opts.Filter(record)
 			if err != nil || !include {

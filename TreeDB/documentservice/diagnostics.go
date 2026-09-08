@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // DiagnosticsSnapshot is the bounded, operator-only service snapshot exposed
 // by the optional diagnostics listener. It contains no document or vector data.
 type DiagnosticsSnapshot struct {
 	ContractVersion string                 `json:"contract_version"`
+	Work            workstats.Snapshot     `json:"work"`
 	ServiceClosed   bool                   `json:"service_closed"`
 	Database        map[string]string      `json:"database,omitempty"`
 	Collections     map[string]string      `json:"collections,omitempty"`
@@ -65,9 +67,11 @@ func (s *Service) snapshotDiagnosticsUpsert() UpsertDiagnosticsStats {
 // LastOpenedIndexStats identifies the most recently opened service index and its
 // last completed insert. Build subphase counters are deliberately owned by O2.
 type LastOpenedIndexStats struct {
-	Name       string                            `json:"name"`
-	Generation uint64                            `json:"generation"`
-	Insert     collections.CollectionInsertStats `json:"insert"`
+	// Present only for an already cached selected handle with matching generation.
+	TypedGraph *collections.ColumnGraphServingStats `json:"typed_graph,omitempty"`
+	Name       string                               `json:"name"`
+	Generation uint64                               `json:"generation"`
+	Insert     collections.CollectionInsertStats    `json:"insert"`
 }
 
 type diagnosticsActiveIndex struct {
@@ -79,7 +83,7 @@ type diagnosticsActiveIndex struct {
 // DiagnosticsSnapshot copies existing stats without taking the service write
 // lock or touching collection mutation/persistence paths.
 func (s *Service) DiagnosticsSnapshot(databaseStats func() map[string]string) DiagnosticsSnapshot {
-	out := DiagnosticsSnapshot{ContractVersion: ContractVersion}
+	out := DiagnosticsSnapshot{ContractVersion: ContractVersion, Work: workstats.Read()}
 	if s == nil {
 		return out
 	}
@@ -94,6 +98,13 @@ func (s *Service) DiagnosticsSnapshot(databaseStats func() map[string]string) Di
 	}
 	if active := s.diagnosticsActive.Load(); active != nil {
 		out.LastOpened = &LastOpenedIndexStats{Name: active.name, Generation: active.info.Generation, Insert: cloneDiagnosticsInsertStats(active.insert)}
+		s.benchmarkSearchCacheMu.RLock()
+		if entry := s.benchmarkSearchCache[active.name]; !s.closed && entry.matches(active.name) && entry.info.Generation == active.info.Generation {
+			if state, ok := entry.collection.ColumnGraphServingSnapshot(); ok {
+				out.LastOpened.TypedGraph = &state
+			}
+		}
+		s.benchmarkSearchCacheMu.RUnlock()
 	}
 	out.Upsert = s.snapshotDiagnosticsUpsert()
 	return out

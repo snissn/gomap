@@ -12,6 +12,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 func TestTypedSourceSecondStageOutputFailure(t *testing.T) {
@@ -288,8 +289,17 @@ func TestTypedSourceCrashReplay(t *testing.T) {
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("child: %v\n%s", err, out)
 			}
+			beforeWork := workstats.Read()
 			reopened := openTypedMinimaDB(t, dir)
 			defer reopened.Close()
+			afterWork := workstats.Read()
+			if afterWork.IndexedJSON != beforeWork.IndexedJSON {
+				t.Fatal("typed source replay extracted indexed JSON")
+			}
+			if mode == "after_sync" && (afterWork.Replay.TypedRowsDecoded <= beforeWork.Replay.TypedRowsDecoded || afterWork.Typed.TextOldRows <= beforeWork.Typed.TextOldRows) {
+				t.Fatalf("source replay producers before=%+v after=%+v", beforeWork, afterWork)
+			}
+
 			c, err = NewCollectionManager(reopened).OpenCollection("minima")
 			if err != nil {
 				t.Fatal(err)

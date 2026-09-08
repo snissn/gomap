@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -134,6 +137,7 @@ func TestColumnManifestScanLoaderRejectsChecksumMismatchM1634(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "physical column scan manifest checksum") {
 		t.Fatalf("loadColumnManifestSnapshotViewForScanFromRoot err=%v want checksum mismatch", err)
 	}
+	assertColumnManifestOwnedDecoderParity(t, snap, rootID, *cfg, manifest.Identity, "events", tampered, columnManifestScanAllSidecars(), false, nil)
 }
 
 func columnManifestPartRecordBytesOffsetForScanTestM1634(t testing.TB, raw []byte) int {
@@ -907,6 +911,7 @@ func TestColumnManifestSnapshotSidecarFilterStillValidatesSkippedRecordsM1634(t 
 	if err == nil || !strings.Contains(err.Error(), "matching live part") {
 		t.Fatalf("loadColumnManifestSnapshotViewForScanFromRootWithSidecars err=%v want skipped sidecar validation failure", err)
 	}
+	assertColumnManifestOwnedDecoderParity(t, snap, rootID, *cfg, manifest.Identity, "events", manifest.Records, columnManifestScanSidecarFilter{Int64Values: true}, false, nil)
 }
 
 func TestColumnManifestPlannerCapabilitiesRejectActivePartCountMismatchM14A(t *testing.T) {
@@ -1000,6 +1005,7 @@ func TestColumnManifestScanRejectsHugeExpectedPartsWithoutPreallocM1634(t *testi
 	if err == nil || !strings.Contains(err.Error(), "invalid column manifest part count=1 want 18446744073709551615") {
 		t.Fatalf("loadColumnManifestSnapshotViewForScanFromRootWithSidecars err=%v want huge active part-count mismatch", err)
 	}
+	assertColumnManifestOwnedDecoderParity(t, snap, rootID, *cfg, tamperedIdentity, "events", tampered, columnManifestScanAllSidecars(), false, nil)
 }
 
 func TestColumnManifestPlannerCapabilitiesRejectChecksumMismatchM14A(t *testing.T) {
@@ -1258,4 +1264,25 @@ func prepareColumnPhysicalScannerCorruptionFixtureM13A(t *testing.T) (string, Co
 		t.Fatalf("Close: %v", err)
 	}
 	return dir, physicalRefs[0]
+}
+
+// Reverse the record order to exercise the owned adapter's private header sort;
+// both successful values and failure prefixes must match the root decoder.
+func assertColumnManifestOwnedDecoderParity(t *testing.T, snap *backenddb.Snapshot, root uint64, cfg ColumnStoreConfig, identity ColumnManifestIdentity, collection string, records []columnManifestRecord, filter columnManifestScanSidecarFilter, known bool, defs []VectorIndexDefinition) []columnManifestAssetRefForScan {
+	t.Helper()
+	m, r, typed, g, mutations, count, err := loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap, root, cfg, identity, collection, filter, known, defs)
+	owned := slices.Clone(records)
+	slices.Reverse(owned)
+	before := cloneColumnManifestRecords(owned)
+	iter := columnManifestRootRecordIteratorOwned(encodeColumnManifestIdentityRecordArray(identity), owned)
+	defer iter.Close()
+	iter.Seek(columnManifestHeaderRecordKeyBytes)
+	om, or, ot, og, omutations, ocount, oerr := decodeColumnManifestSnapshotViewForScanFromIterator(iter, cfg, identity, collection, filter, known, defs)
+	if !reflect.DeepEqual([]any{m, r, typed, g, mutations, count, fmt.Sprint(err)}, []any{om, or, ot, og, omutations, ocount, fmt.Sprint(oerr)}) {
+		t.Fatalf("root/owned full decoder mismatch: root=%v owned=%v", err, oerr)
+	}
+	if !reflect.DeepEqual(before, owned) {
+		t.Fatal("owned adapter changed source records")
+	}
+	return ot
 }

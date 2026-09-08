@@ -61,7 +61,7 @@ func columnVectorGraphPreparedSearchMmapPrerequisitesPresent(reader *columnVecto
 	if !columnVectorGraphPreparedSearchAdjacencyMmapPrerequisitePresent(reader.adjacencyLayerSources) {
 		return false
 	}
-	if reader.rowRefSource != nil && reader.rowRefSource.preparedViewActive() && reader.rowRefSource.baseMmapDirectFieldCount() != 4 {
+	if reader.rowRefSource != nil && reader.rowRefSource.preparedViewActive() && !reader.rowRefSource.forwardMmapDirect() {
 		return false
 	}
 	if reader.documentIDSource != nil && reader.documentIDSource.preparedViewActive() && !columnVectorGraphDocumentIDSourceMmapDirect(reader.documentIDSource) {
@@ -109,6 +109,9 @@ func columnVectorGraphPreparedSearchNormMmapPrerequisitePresent(source *columnVe
 func columnVectorGraphPreparedSearchAdjacencyMmapPrerequisitePresent(group *columnVectorGraphAdjacencyDirectSources) bool {
 	if group == nil || group.closed {
 		return true
+	}
+	if group.pack != nil {
+		return !group.pack.metadataAlive() || group.pack.status == columnHNSWSearchPackPreparedStatusDirect
 	}
 	for _, source := range group.sources {
 		if source == nil || source.closed {
@@ -171,7 +174,10 @@ func prepareColumnVectorGraphPreparedSearchView(reader *columnVectorGraphPhysica
 }
 
 func (v *columnVectorGraphPreparedSearchView) ready() bool {
-	return v != nil && v.rows >= 0 && v.dims > 0 && v.vector.ready() && v.norm.ready() && v.adjacency != nil && v.rowRefs != nil && v.documentIDs != nil
+	return v != nil && v.rows >= 0 && v.dims > 0 && v.vector.ready() && v.norm.ready() &&
+		v.adjacency != nil && !v.adjacency.closed && (v.adjacency.pack == nil || v.adjacency.pack.metadataAlive()) &&
+		v.rowRefs != nil && (v.rowRefs.pack == nil || v.rowRefs.preparedViewActive()) &&
+		v.documentIDs != nil && (v.documentIDs.pack == nil || v.documentIDs.preparedViewActive())
 }
 
 func (v *columnVectorGraphPreparedSearchView) indexedScoringDefaultEligible() bool {
@@ -250,8 +256,8 @@ func (v *columnVectorGraphPreparedSearchView) validateLive() error {
 	if v.rowRefs == nil || !v.rowRefs.preparedViewActive() {
 		return errors.New("row-ref prepared view is not active")
 	}
-	if got, want := v.rowRefs.baseMmapDirectFieldCount(), uint64(4); got != want {
-		return fmt.Errorf("row-ref prepared mmap fields=%d want %d", got, want)
+	if !v.rowRefs.forwardMmapDirect() {
+		return errors.New("row-ref prepared forward view is not mmap_direct")
 	}
 	if v.documentIDs == nil || !v.documentIDs.preparedViewActive() {
 		return errors.New("document-id prepared bytes view is not active")
@@ -333,8 +339,17 @@ func (v *columnVectorGraphPreparedSearchView) validateNormLive() error {
 }
 
 func validateColumnVectorGraphPreparedSearchAdjacency(group *columnVectorGraphAdjacencyDirectSources, rows int) error {
-	if group == nil || group.closed || !group.allLayers || len(group.sources) == 0 {
+	if group == nil || group.closed || !group.allLayers || group.layerCount() == 0 {
 		return errors.New("adjacency prepared CSR view is not active for all layers")
+	}
+	if group.pack != nil {
+		if err := group.pack.validateLive(); err != nil {
+			return err
+		}
+		if group.pack.Header.Rows != rows || group.pack.status != columnHNSWSearchPackPreparedStatusDirect {
+			return errors.New("adjacency pack rows/mapping mismatch")
+		}
+		return nil
 	}
 	for layer, source := range group.sources {
 		if source == nil || source.closed {
@@ -354,6 +369,9 @@ func validateColumnVectorGraphPreparedSearchAdjacency(group *columnVectorGraphAd
 }
 
 func columnVectorGraphDocumentIDSourceMmapDirect(source *columnVectorGraphDocumentIDStateSource) bool {
+	if source != nil && source.pack != nil {
+		return source.preparedViewActive() && source.pack.status == columnHNSWSearchPackPreparedStatusDirect
+	}
 	if source == nil || source.manager == nil || !source.preparedViewActive() {
 		return false
 	}
@@ -843,7 +861,11 @@ func (v *columnVectorGraphPreparedSearchView) adjacencyLayerForOrdinal(ordinal i
 	if !ok {
 		return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, fmt.Errorf("collections: column_graph prepared adjacency ordinal=%d layer=%d unavailable reason=%s", ordinal, layer, reason)
 	}
-	return neighbors, columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect, nil
+	outcome := columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect
+	if v.adjacency.pack != nil {
+		outcome = columnVectorGraphLayer0AdjacencySourceOutcomeMmapDirect
+	}
+	return neighbors, outcome, nil
 }
 
 func (v *columnVectorGraphPreparedSearchView) documentIDForOrdinal(ordinal int) ([]byte, bool) {

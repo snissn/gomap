@@ -10,6 +10,7 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -744,7 +745,12 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 		return columnManifestSnapshot{}, nil, nil, nil, 0, 0, fmt.Errorf("collections: column manifest root %d unreadable: %w", rootID, err)
 	}
 	defer func() { _ = iter.Close() }()
+	return decodeColumnManifestSnapshotViewForScanFromIterator(iter, cfg, identity, collection, filter, activeVectorIndexesKnown, activeVectorIndexes)
+}
 
+// Both persisted roots and already-owned publication records use this full
+// decoder. The caller positions the iterator at the manifest header.
+func decodeColumnManifestSnapshotViewForScanFromIterator(iter iterator.UnsafeIterator, cfg ColumnStoreConfig, identity ColumnManifestIdentity, collection string, filter columnManifestScanSidecarFilter, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) (columnManifestSnapshot, []columnManifestAssetRefForScan, []columnManifestAssetRefForScan, []ColumnAssetRef, int, int, error) {
 	var snapshot columnManifestSnapshot
 	var d xxhash.Digest
 	d.Reset()

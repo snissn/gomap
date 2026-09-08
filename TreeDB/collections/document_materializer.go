@@ -10,6 +10,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // ErrVectorIndexSnapshotMismatch reports that a buffered native vector search
@@ -186,6 +187,39 @@ type CollectionReadView struct {
 	pointRowBlocks                  map[documentRowPartKey]*columnPhysicalRowReaderBlock
 	pointRowProjection              *columnPhysicalScanProjection
 	forceAssetReadAtFallbackForTest bool
+}
+
+// Meta returns an owned copy of metadata from this view's captured catalog,
+// not the collection handle's latest catalog. It remains bound to this view
+// across subsequent data and schema publications.
+func (v *CollectionReadView) Meta() (CollectionMeta, error) {
+	if err := v.validateOpen(); err != nil {
+		return CollectionMeta{}, err
+	}
+	return *v.catalog.meta.copy(), nil
+}
+
+// VisitIndexValueIDs visits every ID equal to value in the captured scalar
+// index. IDs are borrowed until the callback returns. Callback errors stop the
+// scan and are returned; a missing index is an error, not an empty result.
+func (v *CollectionReadView) VisitIndexValueIDs(indexName string, value any, visit func([]byte) error) error {
+	if err := v.validateOpen(); err != nil {
+		return err
+	}
+	if visit == nil {
+		return errors.New("collections: nil index ID visitor")
+	}
+	endForegroundRead := v.beginForegroundRead()
+	defer endForegroundRead()
+	lookup := hybridScalarLookupView{snapshot: v.snapshot, catalog: v.catalog}
+	_, truncated, err := lookup.visitLeafIDs(HybridScalarFilter{IndexName: indexName, Value: value}, 0, 0, nil, visit)
+	if err != nil {
+		return err
+	}
+	if truncated {
+		return errors.New("collections: index ID visit was truncated")
+	}
+	return nil
 }
 
 // OpenCollectionReadView opens a snapshot-bound document materializer. Buffered
@@ -865,7 +899,7 @@ func (v *CollectionReadView) loadPointRowBlock(view columnPhysicalScanSnapshotVi
 		return nil, fmt.Errorf("collections: document row point fetch header generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
 	}
 	header = cloneColumnPhysicalAssetScanHeader(header)
-	rowIndex, err := indexColumnPhysicalAssetReaderRows(raw, version, rowsOffset, header, &view.Config)
+	rowIndex, err := v.rowAssetReadCache.indexRows(raw, assetRef.Ref, version, rowsOffset, header, &view.Config)
 	if err != nil {
 		return nil, fmt.Errorf("collections: document row point fetch index generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
 	}
@@ -924,7 +958,14 @@ func (v *CollectionReadView) fetchDocumentsByResolvedRowRef(refs []DocumentRowRe
 	return v.fetchDocumentsByRowRef(refs, opts, true)
 }
 
-func (v *CollectionReadView) fetchDocumentsByRowRef(refs []DocumentRowRef, opts DocumentFetchOptions, locatorResolvedAtView bool) (DocumentFetchResponse, error) {
+func (v *CollectionReadView) fetchDocumentsByRowRef(refs []DocumentRowRef, opts DocumentFetchOptions, locatorResolvedAtView bool) (out DocumentFetchResponse, err error) {
+	workstats.Output.Materialization.Attempts.Add(1)
+	defer func() {
+		w := documentMaterializationWork(out.Stats)
+		w.Requested = uint64(len(refs))
+		workstats.Output.Materialization.Add(w)
+		workstats.Output.Materialization.Finish(err == nil)
+	}()
 	if err := documentFetchContextErr(opts.Context); err != nil {
 		return DocumentFetchResponse{}, err
 	}
@@ -964,7 +1005,14 @@ func (v *CollectionReadView) fetchDocumentsByRowRef(refs []DocumentRowRef, opts 
 	return v.fetchColumnStoreDocumentsByRowRef(response, refs, retained, opts, projection, locatorResolvedAtView)
 }
 
-func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
+func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions) (out DocumentFetchResponse, err error) {
+	workstats.Output.Materialization.Attempts.Add(1)
+	defer func() {
+		w := documentMaterializationWork(out.Stats)
+		w.Requested = uint64(len(ids))
+		workstats.Output.Materialization.Add(w)
+		workstats.Output.Materialization.Finish(err == nil)
+	}()
 	if err := documentFetchContextErr(opts.Context); err != nil {
 		return DocumentFetchResponse{}, err
 	}
@@ -1469,4 +1517,9 @@ func maxInt64ForMetric(n, floor int64) int64 {
 		return floor
 	}
 	return n
+}
+
+func documentMaterializationWork(s DocumentMaterializationStats) workstats.OutputStats {
+	return workstats.OutputStats{Requested: s.DocumentsRequested, Fetched: s.DocumentsFetched, Missing: s.DocumentsMissing,
+		OutputBytes: s.OutputBytes, RetainedPayloadFetches: s.RetainedPayloadFetches, JSONReconstructionRows: s.JSONReconstructionRows, TypedColumnRows: s.TypedColumnRows}
 }

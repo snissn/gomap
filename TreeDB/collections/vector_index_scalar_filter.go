@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 const (
@@ -211,6 +212,9 @@ func (idx *VectorIndex) nativeScalarRow(materializer *StoredDocumentJSONMaterial
 	scalarDocument := document
 	documentFormat := normalizedDocumentFormat(materializer.DocumentFormat())
 	if documentFormat != DocumentFormatBSON {
+		if documentFormat != DocumentFormatJSON {
+			workstats.IndexedJSON.MaterializationRows.Add(1)
+		}
 		var err error
 		scalarDocument, err = materializer.StoredDocumentJSON(document)
 		if err != nil {

@@ -193,7 +193,7 @@ func TestServerRejectsMalformedHelloBody(t *testing.T) {
 	if header.Type != iwire.FrameError {
 		t.Fatalf("malformed hello response type=%d want error", header.Type)
 	}
-	if !isRemoteError(decodeWireError(response, iwire.DefaultLimits()), iwire.ErrMalformedFrame) {
+	if !isRemoteError(decodeWireError(response, iwire.DefaultLimits(), false), iwire.ErrMalformedFrame) {
 		t.Fatalf("malformed hello body did not decode as malformed frame")
 	}
 
@@ -208,7 +208,7 @@ func TestServerRejectsMalformedHelloBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read request error: %v", err)
 	}
-	if header.Type != iwire.FrameError || !isRemoteError(decodeWireError(response, iwire.DefaultLimits()), iwire.ErrInvalidCommand) {
+	if header.Type != iwire.FrameError || !isRemoteError(decodeWireError(response, iwire.DefaultLimits(), false), iwire.ErrInvalidCommand) {
 		t.Fatalf("request after bad hello response type=%d body=%x", header.Type, response)
 	}
 	_ = left.Close()
@@ -287,7 +287,7 @@ func TestServerClosesPostHandshakeUnsupportedVersion(t *testing.T) {
 	if header.Type != iwire.FrameError {
 		t.Fatalf("bad-version response type=%d want error", header.Type)
 	}
-	if !isRemoteError(decodeWireError(body, iwire.DefaultLimits()), iwire.ErrUnsupportedVersion) {
+	if !isRemoteError(decodeWireError(body, iwire.DefaultLimits(), false), iwire.ErrUnsupportedVersion) {
 		t.Fatalf("bad-version body did not decode as unsupported version")
 	}
 	select {

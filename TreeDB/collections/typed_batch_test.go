@@ -17,6 +17,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 func TestTypedMinimaAmbiguousMutationNotRetried(t *testing.T) {
@@ -129,8 +130,23 @@ func TestTypedMinimaCrashAndPublicationCuts(t *testing.T) {
 			if output, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("crash helper: %v\n%s", err, output)
 			}
+			beforeWork := workstats.Read()
 			reopened := openTypedMinimaDB(t, dir)
 			defer reopened.Close()
+			afterWork := workstats.Read()
+			if afterWork.IndexedJSON != beforeWork.IndexedJSON {
+				t.Fatalf("typed recovery extracted indexed JSON: before=%+v after=%+v", beforeWork.IndexedJSON, afterWork.IndexedJSON)
+			}
+			if mode != "before_append" && afterWork.Replay.FramesApplied <= beforeWork.Replay.FramesApplied {
+				t.Fatal("recovery applied work was not observed")
+			}
+			if mode == "replace_after_sync" && afterWork.Replay.TypedRowsDecoded <= beforeWork.Replay.TypedRowsDecoded {
+				t.Fatal("typed replacement replay was not observed")
+			}
+			if mode == "delete_after_sync" && afterWork.Replay.DeleteFrames <= beforeWork.Replay.DeleteFrames {
+				t.Fatal("delete replay was not observed")
+			}
+
 			col, err := NewCollectionManager(reopened).OpenCollection("minima")
 			if err != nil {
 				t.Fatal(err)

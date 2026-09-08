@@ -236,6 +236,18 @@ magnitude. Unsupported schemas fail closed rather than selecting a JSON fallback
 These restrictions apply to these typed-input methods, not to every storage
 type or generic collection API.
 
+`UpsertTypedBatch` uses the same carriers and atomically combines existing-ID
+replacement with missing-ID insertion through the existing source publisher.
+Its return count includes all previously present IDs, including unchanged rows.
+Equal retained bytes (after outer-whitespace trimming) and bitwise-equal typed
+values are omitted from both sides of the publication and replay payload. An
+all-unchanged batch appends no WAL frame and publishes no new version; a mixed
+batch uses one existing typed-source frame for changed/new rows. Uniqueness is
+checked against the final batch state, including swaps. Duplicate input IDs are
+rejected before publication. Ambiguous accepted errors must not be retried
+blindly. Explicit `ReplaceTypedSourceByID` keeps its existing replacement
+semantics; it does not acquire this no-op optimization implicitly.
+
 Separately registered ad-hoc runtime vector indexes are not `column_graph`
 metadata declarations. Their write-maintenance path may reconstruct documents;
 the typed-input APIs therefore reject that combination before admission rather
@@ -260,6 +272,14 @@ read or a caller's document update callback. A callback is executed once at
 admission; recovery consumes its accepted final replacement, never the callback.
 Typed writes retain the existing command-frame atomicity and durability profile;
 they do not create a separate durable overlay or bypass duplicate/unique checks.
+Selected dense service calls expose an owned versioned `dense_work` containing
+actual graph/filter/output work and the acquired owner's schema, base/current
+manifest identities and coverage. Error prefixes preserve acquired identity;
+unavailable proof never certifies zero. This uses the existing search owner and
+materializer stats without another authority registry or per-request process
+snapshot. Native 64/v2 and HTTP/Python carry the same proof; separate GetMany
+continues to work without graph admission and retains process phase accounting.
+
 See [Minima native execution](minima-native-execution.md) for the required path
 proof and [storage format](storage-format.md) for typed command bytes.
 
@@ -487,6 +507,22 @@ they are never force-closed, and existing attempted encoded debt is not reset.
 Admission allows one candidate per collection across managers. Explicit input
 row, manifest, asset-byte and per-decoder-term limits apply to captured and
 install-time views; native root copy work uses the existing capture ceilings.
+The shared initial/rebuild/fold/replay ceilings are 32,000,000 raw entries and
+4 GiB of charged key/value/flags/revision work. Current and prior captured roots
+are charged separately even when identical, including tombstones; fold also
+charges its latest locator and reserves manifest growth. Persistent value
+pointers charge their descriptor without resolving the payload.
+
+The declared Minima envelope allows at most 2.6M raw entries in each primary,
+locator and two single-valued scalar roots at every current/prior/latest
+boundary, with at most 128 charged bytes per row entry. Each raw manifest stream
+separately allows 65,537 entries and 64 MiB of key/value bytes. For its declared
+identities and 33 graph layers, the pinned arithmetic including manifest growth
+is 23,531,078 entries and 3,130,614,880 charged bytes. These conditions include
+retained deletes and changed scalar keys; live-row or live-manifest limits alone
+do not establish them. Wider values, more indexes or accumulated raw history
+remain subject to the same finite ceilings and can fail closed.
+
 These are not a summed transient heap or global disk guarantee. Both the
 current locator scan and native root construction remain N-dependent under
 write admission, and the publisher builds roots under its existing writer

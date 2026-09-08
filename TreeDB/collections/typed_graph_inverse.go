@@ -64,7 +64,7 @@ func (s *columnVectorGraphRowRefStateSource) ordinalForPhysicalRow(ref DocumentR
 	// lifetime once per lookup, not again for every binary-search comparison.
 	// This does not permit concurrent Close of the caller-owned searcher.
 	ordinals := s.ordinalsByPhysicalRow.Values
-	generations, parts, rows, lsns := s.generations.Values, s.partIDs.Values, s.rowIndexes.Values, s.appliedCommandLSNs.Values
+	generations, parts, rows, lsns := s.forwardValues()
 	at := func(index int) (int, DocumentRowRef, bool) {
 		ordinal := ordinals[index]
 		if ordinal < 0 || ordinal >= int64(s.rows) {

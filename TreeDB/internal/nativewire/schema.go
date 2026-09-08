@@ -574,6 +574,15 @@ func v1CommandSchemas() []CommandSchema {
 			},
 		},
 		{
+			ID: CommandGetMany, Version: 2, Name: "get_many", Kind: CommandKindRead, LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionCollectionRef, Name: "collection_ref", Required: true},
+				{ID: SectionDocumentIDs, Name: "document_ids", Required: true},
+				{ID: SectionExpectedGeneration, Name: "expected_generation", Required: true},
+				{ID: SectionDeadline, Name: "deadline", Required: true},
+			},
+		},
+		{
 			ID:                CommandIndexLookup,
 			Version:           1,
 			Name:              "index_lookup",
@@ -645,6 +654,26 @@ func v1CommandSchemas() []CommandSchema {
 			Sections: []SectionRule{
 				{ID: SectionDeadline, Name: "deadline", Required: true},
 				{ID: SectionDenseSearchRequest, Name: "dense_search_request", Required: true},
+			},
+		},
+		{
+			ID:        CommandDenseVectorSearch,
+			Version:   DenseVectorSearchTypedVersion,
+			Name:      "dense_vector_search",
+			Kind:      CommandKindRead,
+			LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionDeadline, Name: "deadline", Required: true},
+				{ID: SectionDenseSearchRequest, Name: "dense_search_request", Required: true},
+			},
+		},
+		{
+			ID: CommandTypedDocumentUpsert, Version: 1, Name: "typed_document_upsert", Kind: CommandKindMutation, LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionDeadline, Name: "deadline", Required: true},
+				{ID: SectionDocumentIDs, Name: "document_ids", Required: true},
+				{ID: SectionDocuments, Name: "documents", Required: true},
+				{ID: SectionTypedUpsertRequest, Name: "typed_upsert_request", Required: true},
 			},
 		},
 		{

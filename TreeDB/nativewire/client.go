@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,6 +33,7 @@ type Client struct {
 	denseIDs              [][]byte
 	denseDocuments        [][]byte
 	denseResults          []DenseVectorSearchResult
+	denseTypedNegotiated  bool
 }
 
 // NewClient returns a native-wire client that owns conn until Close.
@@ -64,8 +66,37 @@ func (c *Client) Close() error {
 
 // Hello performs the native-wire hello handshake.
 func (c *Client) Hello(ctx context.Context) error {
-	_, _, err := c.roundTrip(ctx, iwire.FrameHello, nil, iwire.FrameHelloOK)
-	return err
+	if c == nil {
+		return io.ErrClosedPipe
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.denseTypedNegotiated = false
+	_, response, err := c.roundTripLocked(ctx, iwire.FrameHello, nil, iwire.FrameHelloOK)
+	if err != nil {
+		return err
+	}
+	sections, err := iwire.DecodeSections(response, c.limits)
+	if err != nil {
+		return err
+	}
+	raw, found, err := singletonSection(sections, iwire.SectionCapabilitySet)
+	if err != nil || !found {
+		return err
+	}
+	caps, err := decodeStringMap(raw)
+	if err != nil {
+		return err
+	}
+	for _, version := range strings.Split(caps["dense_vector_search_versions"], ",") {
+		if version == "2" {
+			c.denseTypedNegotiated = true
+		}
+	}
+	return nil
 }
 
 // Ping sends a ping frame and waits for a pong response.
@@ -128,21 +159,21 @@ func (c *Client) roundTripStream(ctx context.Context, streamID uint64, typ iwire
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.roundTripLockedStream(ctx, streamID, typ, body, want)
+	return c.roundTripLockedStream(ctx, streamID, typ, body, want, false)
 }
 
 func (c *Client) roundTripLocked(ctx context.Context, typ iwire.FrameType, body []byte, want iwire.FrameType) (iwire.Header, []byte, error) {
-	return c.roundTripLockedStream(ctx, 0, typ, body, want)
+	return c.roundTripLockedStream(ctx, 0, typ, body, want, false)
 }
 
-func (c *Client) roundTripLockedStream(ctx context.Context, streamID uint64, typ iwire.FrameType, body []byte, want iwire.FrameType) (iwire.Header, []byte, error) {
+func (c *Client) roundTripLockedStream(ctx context.Context, streamID uint64, typ iwire.FrameType, body []byte, want iwire.FrameType, denseWorkAllowed bool) (iwire.Header, []byte, error) {
 	if c == nil {
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
 	c.clearBorrowedResponseViews()
 	c.readBody = retainSmallPayloadScratch(c.readBody)
 	if c.local != nil {
-		header, response, err := c.local.roundTrip(ctx, streamID, typ, c.nextReq.Add(1), body, want, c.limits, c.readBody, true)
+		header, response, err := c.local.roundTrip(ctx, streamID, typ, c.nextReq.Add(1), body, want, c.limits, c.readBody, true, denseWorkAllowed)
 		c.readBody = response[:0]
 		return header, response, err
 	}
@@ -184,7 +215,7 @@ func (c *Client) roundTripLockedStream(ctx context.Context, streamID uint64, typ
 		return header, response, c.closeOnProtocolError(protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID))
 	}
 	if header.Type == iwire.FrameError {
-		return header, response, c.closeOnProtocolError(decodeWireError(response, c.limits))
+		return header, response, c.closeOnProtocolError(decodeWireError(response, c.limits, denseWorkAllowed))
 	}
 	if header.Type != want {
 		return header, response, c.closeOnProtocolError(protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want))
@@ -199,7 +230,7 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 	c.clearBorrowedResponseViews()
 	c.readBody = retainSmallPayloadScratch(c.readBody)
 	if c.local != nil {
-		_, _, err := c.local.roundTrip(ctx, 0, typ, c.nextReq.Add(1), body, want, c.limits, nil, false)
+		_, _, err := c.local.roundTrip(ctx, 0, typ, c.nextReq.Add(1), body, want, c.limits, nil, false, false)
 		return err
 	}
 	if c.conn == nil {
@@ -239,7 +270,7 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 		return c.closeOnProtocolError(protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID))
 	}
 	if header.Type == iwire.FrameError {
-		return decodeWireError(response, c.limits)
+		return decodeWireError(response, c.limits, false)
 	}
 	if header.Type != want {
 		return c.closeOnProtocolError(protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want))
@@ -315,10 +346,18 @@ func (c *Client) closeOnProtocolError(err error) error {
 	return err
 }
 
-func decodeWireError(body []byte, limits iwire.Limits) error {
+func decodeWireError(body []byte, limits iwire.Limits, denseWorkAllowed bool) error {
 	sections, err := iwire.DecodeSections(body, limits)
 	if err != nil {
 		return err
+	}
+	for _, section := range sections {
+		if section.ID == iwire.SectionDenseSearchWork && !denseWorkAllowed {
+			return protocolError(iwire.ErrMalformedFrame, "dense error work is unavailable for this call")
+		}
+		if denseWorkAllowed && section.ID != iwire.SectionError && section.ID != iwire.SectionDenseSearchWork && section.Flags&iwire.SectionFlagCritical != 0 {
+			return protocolError(iwire.ErrUnsupportedFeature, "unknown critical dense error section")
+		}
 	}
 	payload, ok, err := singletonSection(sections, iwire.SectionError)
 	if err != nil {
@@ -331,7 +370,17 @@ func decodeWireError(body []byte, limits iwire.Limits) error {
 	if err != nil {
 		return err
 	}
-	return &WireError{Code: code, Retryable: retryable, Message: message}
+	out := &WireError{Code: code, Retryable: retryable, Message: message}
+	if raw, found, err := singletonSection(sections, iwire.SectionDenseSearchWork); err != nil {
+		return err
+	} else if found {
+		work, err := decodeDenseWork(raw)
+		if err != nil {
+			return err
+		}
+		out.DenseWork = &work
+	}
+	return out
 }
 
 func ctxDeadline(ctx context.Context) (time.Time, bool) {

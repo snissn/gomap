@@ -100,8 +100,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContext(ctx context.C
 	return v.searchCosineWithContextFast(ctx, query, opts, scratch)
 }
 
-func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx context.Context, query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
-	var stats columnVectorGraphNativeSearchStats
+func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx context.Context, query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) (_ []columnVectorGraphNativeSearchResult, stats columnVectorGraphNativeSearchStats, err error) {
 
 	if ctx == nil {
 		ctx = context.Background()
@@ -222,6 +221,12 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 	countLoopEdges := !statsMode.minimal()
 	var loopEdgeVisits uint64
 	var visitedCandidates uint64
+	defer func() {
+		stats.Candidates = visitedCandidates
+		if countLoopEdges {
+			stats.Edges, stats.VisitedEdges = loopEdgeVisits, loopEdgeVisits
+		}
+	}()
 	entryOrdinal := v.Header.EntryOrdinal
 	if entryOrdinal < 0 || entryOrdinal >= rowCount {
 		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 entry ordinal=%d outside rows=%d", entryOrdinal, rowCount)
@@ -1032,11 +1037,11 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTile(norma
 	}
 	scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(rowIDs))
 	scores, err := v.scoreRowIDs(normalizedQuery, rowIDs, scratch.scoreTileScores, scoreBatchMode, scratch, stats)
+	if visitedCandidates != nil {
+		*visitedCandidates += uint64(len(scores))
+	}
 	if err != nil {
 		return err
-	}
-	if visitedCandidates != nil {
-		*visitedCandidates += uint64(len(rowIDs))
 	}
 	for i, rowID := range rowIDs {
 		candidate := columnVectorGraphSearchCandidate{ordinal: int(rowID), score: scores[i]}
@@ -1082,11 +1087,11 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTileFast(n
 	}
 	scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(rowIDs))
 	scores, err := v.scoreRowIDs(normalizedQuery, rowIDs, scratch.scoreTileScores, scoreBatchMode, scratch, stats)
+	if visitedCandidates != nil {
+		*visitedCandidates += uint64(len(scores))
+	}
 	if err != nil {
 		return err
-	}
-	if visitedCandidates != nil {
-		*visitedCandidates += uint64(len(rowIDs))
 	}
 	for i, rowID := range rowIDs {
 		candidate := columnVectorGraphSearchCandidate{ordinal: int(rowID), score: scores[i]}
@@ -1146,6 +1151,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreRowIDs(normalizedQuery []float32
 		score, err := v.scoreOrdinal(normalizedQuery, int(rowID), scoreBatchMode, scratch, nil)
 		if err != nil {
 			columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
+			v.recordScoreStats(stats, i)
 			return dst[:i], err
 		}
 		dst[i] = score

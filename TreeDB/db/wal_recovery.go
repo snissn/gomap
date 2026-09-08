@@ -17,6 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -712,7 +713,29 @@ func commandWALRawSetNeedsReplayValueLog(db *DB, key, value []byte) bool {
 	return len(value) > resolveBatchInlineThresholdForKey(threshold, key, domains)
 }
 
-func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayRIDMap commandWALReplayRIDMapFunc, ensureReplayLogSupport commandWALReplayLogSupportFunc) error {
+func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayRIDMap commandWALReplayRIDMapFunc, ensureReplayLogSupport commandWALReplayLogSupportFunc) (err error) {
+	workstats.Replay.FramesAttempted.Add(1)
+	defer func() {
+		if p := recover(); p != nil {
+			workstats.Replay.FrameErrors.Add(1)
+			panic(p)
+		}
+		if err != nil {
+			workstats.Replay.FrameErrors.Add(1)
+		} else {
+			workstats.Replay.FramesApplied.Add(1)
+		}
+	}()
+	switch env.Kind {
+	case commitlog.CommandKindCollectionDeleteBatchByID:
+		workstats.Replay.DeleteFrames.Add(1)
+	case commitlog.CommandKindCollectionInsertBatchByID, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.CommandKindCollectionReplaceSourceByID:
+		if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedBatchByIDV1 || env.PayloadFormat == commitlog.PayloadFormatCollectionTypedSourceByIDV1 {
+			workstats.Replay.TypedPayloadFrames.Add(1)
+		} else {
+			workstats.Replay.LegacyCollectionFrames.Add(1)
+		}
+	}
 	switch env.Kind {
 	case commitlog.CommandKindRawKVBatch:
 		return applyRawKVCommandWALFrame(db, env, ridMap, inlineAppender, ensureReplayRIDMap, ensureReplayLogSupport)

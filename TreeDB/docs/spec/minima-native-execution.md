@@ -14,6 +14,43 @@ workload using `benchmarks/vector_db_compare/minima_treedb_runner.py`, the
 Python `TreeDBClient`, and `TreeDB/documentservice`. Changing a Go benchmark
 helper or adding a native-wire operation alone does not change this path.
 
+M4's incremental service schema selection is `typed_input=true` on create.
+It persists the declared vector, scalar-string and indexed-content ownership
+defined below and is echoed from collection metadata by create/open, including across
+independent managers. Reopening with incompatible ownership is a conflict, not
+a migration or permission to use retained JSON. Selection is separate from
+process-local graph admission and is not a readiness claim. Selected HTTP writes
+use one `UpsertTypedBatch`, with declared carriers for indexed values and JSON
+serialization only for residual metadata. Initial load does not rebuild per batch.
+`optimize` with positive `column_graph_serving` options explicitly builds then
+admits; `column_graph_action=ensure` re-admits without rebuilding, while `fold`
+and `renew` use the existing admitted limits. Compatible create with those options
+re-admits after reopen. Limits are process-local and immutable until DB close.
+Missing admission fails closed at search; no request-side reconciliation or
+native_runtime/document-scan fallback is used. Public `route=ann` permits the
+typed engine's bounded exact filter plan; legacy document-scan `route=exact` is
+unsupported for selected input. Search and full fetch share the returned owner.
+
+Serving admission prepares full materializer metadata through the same manifest
+decoder used by ordinary fetches. The existing publication owner retains this
+snapshot-free metadata, including typed-part sort keys, under the cold decoded
+metadata budget; temporary record-adapter headers include the identity entry.
+An admitted read owner reuses it only when captured and current collection
+metadata are fully equal, then binds its own snapshot and manifest-root header.
+Independent captured/current root pages need not be equal. Mutation or
+concurrent-tail coverage uses the current full loader; asset-cache integrity or
+namespace invalidation and Close retain their existing behavior.
+
+The ordinary Python client and benchmark runner select this lifecycle through
+HTTP controls and native 64/v2 dense, 65/v1 typed upsert and 50/v2 GetMany.
+Selected dense HTTP/native responses expose versioned owned `dense_work`:
+executed graph/filter work, captured owner identities/coverage and requested
+output materialization, including service error prefixes. Dispatch tags alone
+remain insufficient. Process-lifetime diagnostics cover indexed JSON, replay,
+scans and separate GetMany work; per-query proofs do not sample process totals.
+The final artifact validator and workload qualification remain separate gates;
+this product contract does not certify final phase evidence or performance.
+
 The frozen workload is filtered **dense** cosine search: eight-dimensional
 vectors, TopK 5, batches of 256, four readers and one writer, 32 warmup and
 1,024 timed searches. Scalar filters are equality on `meta.user_id` and

@@ -63,6 +63,35 @@ and [mutable serving admission](typed-asset-maintenance-1788.md#explicit-typed-c
 Generation, checksum, schema, index-definition, or row-count mismatches fail
 closed and require rebuild/fallback instead of silently reading stale bytes.
 
+## Existing pack metadata providers (#4619)
+
+Readers also accept an existing, validated `hnsw_search_pack` as the provider for
+wholly omitted adjacency assets, document-ID assets, or all four forward
+row-reference assets. Forward-reference omission requires the persisted
+`base_row_ref/ordinal_by_physical_row` TCIM inverse. Partial forward/adjacency
+sets and corrupt present TCIM references still fail validation; a pack does not
+mask them. The pack's native adjacency, opaque ID bytes and coordinates belong
+to the same captured base identity as the original providers.
+
+For collections selected by the existing typed-base capture admission,
+Rebuild, Fold and stable-closure preparation omit the duplicate TCIM adjacency,
+document IDs and four forward coordinates. Selection comes from collection
+metadata before physical preparation, independently of serving options and
+candidate budgets. Other collections retain the full TCIM emission.
+
+Nonempty selected bases retain raw FP32 parts, inverse norms and the inverse
+permutation, plus any configured quantized assets. Empty selected bases emit
+only the graph pack in TVIS, with zero adjacency layers. The selected layer count
+comes from the already-built pack input. Part IDs, asset references, durability
+obligations and candidate output charges describe only emitted assets. Existing
+snapshot and recovery ownership still governs when older assets can be reclaimed;
+this changes neither GC nor checkpoint cadence.
+
+Status remains a manifest/ref check; opening a reader validates and maps the
+pack once, including coordinate membership and row bounds against its owning
+base manifest. See
+[prepared provider ownership](typed-column-graph-search-prepared-views.md#existing-pack-metadata-providers-4619).
+
 ## Typed-column asset references
 
 Each asset ref records:

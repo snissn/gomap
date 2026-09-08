@@ -14,6 +14,7 @@ import (
 	"github.com/buger/jsonparser"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/tidwall/gjson"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -509,6 +510,9 @@ func buildCreateTextV2IndexBackfillPlan(
 }
 
 func materializeTextBackfillDocumentJSON(document []byte, opts collectionOptions) ([]byte, error) {
+	if format := normalizedDocumentFormat(opts.documentFormat); format == DocumentFormatBSON || format == DocumentFormatTemplateV1 {
+		workstats.IndexedJSON.MaterializationRows.Add(1)
+	}
 	switch normalizedDocumentFormat(opts.documentFormat) {
 	case DocumentFormatJSON:
 		return document, nil
@@ -526,6 +530,9 @@ func materializeTextBackfillDocumentJSON(document []byte, opts collectionOptions
 }
 
 func analyzeTextIndexDocument(def TextIndexDefinition, jsonDocument []byte) (textAnalyzedDocument, error) {
+	if len(def.Fields) > 0 {
+		workstats.IndexedJSON.TextRows.Add(1)
+	}
 	if out, ok, err := analyzeTextIndexDocumentJSONRootFastPath(def, jsonDocument); ok || err != nil {
 		return out, err
 	}

@@ -314,6 +314,11 @@ Acceptance:
 
 ### R5. Local Advanced Queries
 
+The document-service dense read (64/v2) exposes the admitted typed column-graph
+route locally using the existing request/response framing. Like 64/v1 it is
+LocalOnly, not a distributed or deterministic-entry contract. The v2 route tag
+does not complete measured typed-work/phase evidence qualification.
+
 Implement richer single-node reads only after the core read/write and cursor
 model is stable:
 

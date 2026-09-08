@@ -48,10 +48,10 @@ func (v *columnHNSWSearchPackPreparedView) scoreFilteredSeed(query []float32, or
 func (v *columnHNSWSearchPackPreparedView) scoreFilteredTile(query []float32, rowIDs []uint32, topK int, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, visited *uint64) error {
 	scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(rowIDs))
 	scores, err := v.scoreRowIDs(query, rowIDs, scratch.scoreTileScores, opts.ScoreBatchMode, scratch, stats)
+	*visited += uint64(len(scores))
 	if err != nil {
 		return err
 	}
-	*visited += uint64(len(rowIDs))
 	for i, ordinal := range rowIDs {
 		typedGraphFilteredAdmit(columnVectorGraphSearchCandidate{ordinal: int(ordinal), score: scores[i]}, opts.CandidateRows, topK, scratch, stats)
 	}

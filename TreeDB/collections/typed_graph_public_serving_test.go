@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // The pause is after the old captured holder exists and its snapshot/barrier
@@ -184,6 +185,7 @@ func TestTypedGraphPublicFoldPublicationAvailability(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer oldView.Close()
+	beforeFold := workstats.Read().Fold
 	var observed bool
 	typedGraphPublicationAfterAcceptedHook.Lock()
 	typedGraphPublicationAfterAcceptedHook.foldAfterInstall = func(c *Collection) {
@@ -191,12 +193,17 @@ func TestTypedGraphPublicFoldPublicationAvailability(t *testing.T) {
 			return
 		}
 		observed = true
+		atInstall := workstats.Read().Fold
+		if atInstall.Publications-beforeFold.Publications != 1 || atInstall.Public.Completed != beforeFold.Public.Completed {
+			t.Errorf("publication and return conflated: before=%+v atInstall=%+v", beforeFold, atInstall)
+		}
 		query := VectorIndexSearchOptions{IndexName: base.indexName, Query: columns[0].Float32Vectors[0], TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeMinimal, DeclaredScalarFilter: &HybridScalarFilter{IndexName: "path", Value: "new"}}
 		var buffer VectorIndexSearchBuffer
 		response, view, err := c.SearchVectorIndexWithBufferReadView(query, &buffer)
 		if err != nil {
 			t.Errorf("public read between install and checkpoint: %v", err)
 		} else {
+			assertTypedGraphMaterializerReuse(t, view, true)
 			fetched, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
 			closeErr := view.Close()
 			if fetchErr != nil || closeErr != nil || len(fetched.Results) != 1 || !bytes.Contains(fetched.Results[0].Document, []byte("before-fold")) {
@@ -216,6 +223,10 @@ func TestTypedGraphPublicFoldPublicationAvailability(t *testing.T) {
 	}()
 	if err := col.FoldColumnGraphServing(context.Background(), base.indexName); err != nil {
 		t.Fatal(err)
+	}
+	afterFold := workstats.Read().Fold
+	if afterFold.Public.Completed-beforeFold.Public.Completed != 1 || afterFold.Public.Errors != beforeFold.Public.Errors || afterFold.Renew.Completed-beforeFold.Renew.Completed != 1 {
+		t.Fatalf("fold completion=%+v before=%+v", afterFold, beforeFold)
 	}
 	if !observed {
 		t.Fatal("missing actual post-install boundary")
@@ -543,6 +554,7 @@ func TestTypedGraphPublicFoldPostCaptureSuffixAndDebt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer view.Close()
+	assertTypedGraphMaterializerReuse(t, view, false)
 	docs, err := view.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
 	want := map[string]bool{string(ids[0]): true, string(ids[2]): true, "growing": true, "growing-again": true}
 	if err != nil || len(docs.Results) != len(want) {
@@ -607,6 +619,7 @@ func TestTypedGraphPublicSameOwnerServing(t *testing.T) {
 		t.Fatalf("public mutable filtered search: %v", err)
 	}
 	defer view.Close()
+	assertTypedGraphMaterializerReuse(t, view, false)
 	if len(response.Results) != 1 || !bytes.Equal(response.Results[0].ID, ids[0]) {
 		t.Fatalf("results=%+v", response.Results)
 	}
@@ -660,6 +673,7 @@ func TestTypedGraphPublicSameOwnerServing(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer read.Close()
+		assertTypedGraphMaterializerReuse(t, read, true)
 		docs, err := read.FetchDocumentsForVectorIndexSearchResults(res.Results, DocumentFetchOptions{})
 		if err != nil || len(docs.Results) != 1 || !bytes.Contains(docs.Results[0].Document, []byte(`"content":"later-content"`)) {
 			t.Fatalf("latest fetch=%+v err=%v", docs.Results, err)
@@ -710,6 +724,20 @@ func TestTypedGraphPublicServingPressureAndOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := read.typedGraphOwner
+	// A newly opened handle must propagate keeper admission failure without
+	// changing the already admitted authority or leaking the failed warm.
+	other, err := NewCollectionManager(col.db).OpenCollection(col.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.CloseVectorIndexPreparedSearchCache()
+	admitted := col.collectionSchemaCoordinator().typedPublication.Load()
+	if err := other.EnsureColumnGraphServing(context.Background(), base.indexName, opts); !errors.Is(err, ErrColumnGraphOwnerBudget) {
+		t.Fatalf("new handle keeper pressure=%v", err)
+	}
+	if col.collectionSchemaCoordinator().typedPublication.Load() != admitted {
+		t.Fatal("failed warm changed admitted authority")
+	}
 	var secondBuffer VectorIndexSearchBuffer
 	if _, err := col.SearchVectorIndexWithBuffer(query, &secondBuffer); !errors.Is(err, ErrColumnGraphOwnerBudget) {
 		t.Fatalf("held owner pressure=%v", err)

@@ -68,6 +68,20 @@ current-format open/search path fails closed or uses an explicitly labeled
 compatibility path; it must not silently dispatch back to graph-row selectors in
 the healthy loop.
 
+The reader also accepts equivalent native metadata from the existing graph pack
+when the duplicate TCIM carriers are wholly omitted, as specified by
+[pack provider ownership](typed-column-graph-search-prepared-views.md#existing-pack-metadata-providers-4619).
+The existing pack reader's mmap/heap validation supplies the provider tier;
+borrowed slices do not claim TCIM certification. Raw vectors, inverse norms,
+persisted inverse lookup, owning-base coordinate validation and live shared
+ownership remain required. The common writer selects this representation from
+typed-base capture admission in collection metadata, independently of serving
+policy and candidate budgets. It omits duplicate TCIM metadata for selected
+Rebuild, Fold and stable-closure preparation; unselected emission is unchanged.
+Query/statistics admission is unchanged, with no performance claim.
+Missing/corrupt required pack data fails closed, while complete TCIM providers
+retain the existing missing/stale-pack compatibility behavior.
+
 Evidence counters for #2045:
 
 - `prepared_graph_search_views/search=1` for healthy current-format searches;
@@ -150,19 +164,37 @@ expansion is bounded by the validated native degree plus the existing V3
 auxiliary bound. Search exhaustion is distinct from suffix fold debt: folding
 cannot necessarily cure a base ANN work cap.
 
-The internal filtered consumer prepares complete persisted scalar posting sets
-once from the current pin. It intersects complete leaves before classifying the
-final set: at most 4,096 rows use typed exact scoring, larger sets use prepared
-pack ANN plus separately counted exact suffix work. Thus two large leaves may
-correctly produce a small exact intersection. Incomplete probes fail with an
-explicit budget error. Source ID count and bytes are checked before copying;
-physical inspected entries (including tombstones), mapping work and retained
-ordinal bytes have separate caller limits. Array/multikey dedupe is unsupported
-in this internal typed-scalar seam. A single leaf streams borrowed posting IDs
-through a bounded 512-ID locator chunk, without an owning string set. Multiple
-leaves retain complete owning sets for intersection. Single-leaf ordinal slice
-capacity is checked before growth; the separate ordinal growth-peak counter
-includes old plus new buffers and the final exact-rank copy, including buffers
+The filtered consumer prepares complete scalar eligibility from the current pin
+before classifying the final set: at most 4,096 rows use typed exact scoring,
+larger sets use prepared pack ANN plus separately counted exact suffix work.
+Thus two large leaves may correctly produce a small exact intersection.
+
+For string EQ conjunctions, it validates every leaf first, then probes at most
+512 copied IDs per leaf. A 513th live ID is inspected without copying and marks
+only that probe incomplete; physical truncation, cancellation and other errors
+fail closed. The smallest complete leaf supplies the driver. Remaining leaves
+are checked by at most 512 secondary point keys against the same captured roots,
+using index membership rather than document extraction. A validated complete
+empty leaf can return immediately. If no probe completes, full intersection runs
+under the remaining cumulative limits, including every probe and fallback read.
+Range and other scalar encodings keep their existing complete-leaf path.
+
+Source ID count and bytes are checked before copying and include actual probe
+and fallback posting IDs. They exclude rejected lookahead IDs and point keys.
+Physical inspected entries include lookahead, tombstones and shadowed entries;
+point requests are not posting inspections. `MappingWork` and
+`mapping_work_charged` sum admitted ordinal-mapping bounds, submitted secondary
+point requests (one unit each), and temporary encoded-prefix/key payload byte
+bounds admitted before allocation. String prefix bounds include escaping and
+the existing visitor's repeated prefix preparation. Submitted batches remain
+charged on callback failure; rejected allocations and requests are not charged.
+This composite admission bound is not a comparison/page count or total Go heap
+measurement. Retained ordinal bytes have a separate limit. Array/multikey dedupe
+is unsupported in this typed-scalar seam. A single leaf streams borrowed posting
+IDs through a bounded 512-ID locator chunk, without an owning string set.
+Single-leaf ordinal slice capacity is checked before growth; the separate ordinal
+growth-peak counter includes old plus new buffers and the final exact-rank copy,
+including buffers
 released by all/range canonicalization. It is not a total Go heap bound.
 
 An additional experimental internal seam prepares a caller-owned immutable base

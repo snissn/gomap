@@ -299,6 +299,10 @@ func writeError(w http.ResponseWriter, err error) {
 		log.Printf("document service handled error: status=%d code=%s chain=%s", status, ErrorCodeOf(err), formatErrorChain(err))
 	}
 	var out *Error
+	var observed *Error
+	if errors.As(err, &observed) && observed.DenseWork != nil {
+		out = observed
+	}
 	if serviceCode := ErrorCodeOf(err); serviceCode != CodeInternal {
 		var serviceErr *Error
 		if errors.As(err, &serviceErr) {

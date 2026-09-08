@@ -874,6 +874,10 @@ def server_process_resource_usage(pid: int | None, server_name: str) -> dict[str
             if len(fields) != 2:
                 raise ValueError(f"unexpected ps output {result.stdout!r}")
             rss, cpu = int(fields[0]) * 1024, cpu_time_seconds(fields[1])
+            identity_after = linux_process_identity(pid)
+            if not identity or identity_after != identity:
+                rss = cpu = None
+                error = "server process lifetime unavailable or changed during ps"
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             error = f"{type(exc).__name__}: {exc}"
     peak = process_peak_rss(pid)
@@ -1009,7 +1013,11 @@ def server_process_owns_endpoint(pid: int, url: str, listener_port: int | None =
 
 
 def resource_delta(baseline: dict[str, Any], end: dict[str, Any]) -> dict[str, Any]:
-    captured = baseline["captured"] and end["captured"]
+    captured = (baseline["captured"] and end["captured"]
+                and bool(baseline.get("linux_process_identity"))
+                and baseline.get("linux_process_identity") == end.get("linux_process_identity")
+                and type(baseline.get("pid")) is int and baseline["pid"] > 0
+                and baseline["pid"] == end.get("pid"))
     return {
         "captured": captured,
         "rss_bytes": max(0, end["rss_bytes"] - baseline["rss_bytes"]) if captured else 0,

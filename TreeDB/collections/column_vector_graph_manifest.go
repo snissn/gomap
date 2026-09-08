@@ -974,7 +974,7 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 			status.RebuildNeeded = true
 			return status, nil
 		}
-		if !columnVectorGraphRowRefStatePresent(*loadedState) || !columnVectorGraphDocumentIDStatePresent(*loadedState) {
+		if !columnVectorGraphRowRefStatePresent(*loadedState) || !columnVectorGraphDocumentIDProviderPresent(*loadedState) {
 			status.State = VectorIndexStateColumnGraphRebuildNeeded
 			status.Reason = VectorIndexReasonColumnGraphAssetMismatch
 			status.RebuildNeeded = true

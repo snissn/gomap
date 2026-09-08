@@ -7,6 +7,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, TypeVar
 
+from ._dense_work import DenseSearchWork, optional_dense_work
+from .errors import TreeDBProtocolError
+
 
 _T = TypeVar("_T")
 
@@ -632,6 +635,9 @@ class DenseVectorSearchResponse:
     metric: str
     exact: bool
     candidates: int
+    dense_work: Optional[DenseSearchWork] = None
+    # Negotiated dispatch version, not measured execution-work evidence.
+    native_command_version: int = 0
     # v1alpha2: execution route echo ("ann" | "exact"). Empty/absent means the
     # legacy exact scan path.
     route: Optional[str] = None
@@ -661,36 +667,46 @@ class DenseVectorSearchResponse:
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "DenseVectorSearchResponse":
         data = _as_mapping(data, "vector search response")
-        return cls(
-            index=IndexInfo.from_dict(data["index"]),
-            documents=[Document.from_dict(item) for item in data.get("documents", [])],
-            metric=_as_str(data["metric"], "metric"),
-            exact=_as_bool(data["exact"], "exact"),
-            candidates=_as_int(data["candidates"], "candidates"),
-            route=_as_optional_str_default(data.get("route"), "vector search response.route"),
-            native_base_plus_live_delta=_as_bool(data.get("native_base_plus_live_delta", False), "native_base_plus_live_delta"),
-            scalar_filter_membership_source=_as_str(data.get("scalar_filter_membership_source", ""), "scalar_filter_membership_source"),
-            scalar_filter_plan=_as_str(data.get("scalar_filter_plan", ""), "scalar_filter_plan"),
-            scalar_filter_probe_ids=_as_int(data.get("scalar_filter_probe_ids", 0), "scalar_filter_probe_ids"),
-            scalar_filter_probe_truncated=_as_int(data.get("scalar_filter_probe_truncated", 0), "scalar_filter_probe_truncated"),
-            scalar_filter_candidates=_as_int(data.get("scalar_filter_candidates", 0), "scalar_filter_candidates"),
-            scalar_filter_candidate_ids=_as_int(data.get("scalar_filter_candidate_ids", 0), "scalar_filter_candidate_ids"),
-            scalar_filter_retained_candidate_ids=_as_int(data.get("scalar_filter_retained_candidate_ids", 0), "scalar_filter_retained_candidate_ids"),
-            scalar_filter_refined_candidate_ids=_as_int(data.get("scalar_filter_refined_candidate_ids", 0), "scalar_filter_refined_candidate_ids"),
-            scalar_filter_visited=_as_int(data.get("scalar_filter_visited", 0), "scalar_filter_visited"),
-            scalar_filter_scored=_as_int(data.get("scalar_filter_scored", 0), "scalar_filter_scored"),
-            scalar_filter_admitted=_as_int(data.get("scalar_filter_admitted", 0), "scalar_filter_admitted"),
-            scalar_filter_exact_scoring=_as_bool(data.get("scalar_filter_exact_scoring", False), "scalar_filter_exact_scoring"),
-            scalar_filter_underfill=_as_bool(data.get("scalar_filter_underfill", False), "scalar_filter_underfill"),
-            scalar_filter_unbounded=_as_int(data.get("scalar_filter_unbounded", 0), "scalar_filter_unbounded"),
-            exact_fallbacks=_as_int(data.get("exact_fallbacks", 0), "exact_fallbacks"),
-            full_document_scan_fallbacks=_as_int(data.get("full_document_scan_fallbacks", 0), "full_document_scan_fallbacks"),
-            allowed_id_materialization_rows=_as_int(data.get("allowed_id_materialization_rows", 0), "allowed_id_materialization_rows"),
-            primary_document_scans=_as_int(data.get("primary_document_scans", 0), "primary_document_scans"),
-            document_materialization_rows=_as_int(data.get("document_materialization_rows", 0), "document_materialization_rows"),
-            visibility_mismatch_count=_as_int(data.get("visibility_mismatch_count", 0), "visibility_mismatch_count"),
-            visibility_retry_count=_as_int(data.get("visibility_retry_count", 0), "visibility_retry_count"),
-        )
+        work = optional_dense_work(data.get("dense_work"))
+        try:
+            out = cls(
+                dense_work=work,
+                index=IndexInfo.from_dict(data["index"]),
+                documents=[Document.from_dict(item) for item in data.get("documents", [])],
+                metric=_as_str(data["metric"], "metric"),
+                exact=_as_bool(data["exact"], "exact"),
+                candidates=_as_int(data["candidates"], "candidates"),
+                route=_as_optional_str_default(data.get("route"), "vector search response.route"),
+                native_base_plus_live_delta=_as_bool(data.get("native_base_plus_live_delta", False), "native_base_plus_live_delta"),
+                scalar_filter_membership_source=_as_str(data.get("scalar_filter_membership_source", ""), "scalar_filter_membership_source"),
+                scalar_filter_plan=_as_str(data.get("scalar_filter_plan", ""), "scalar_filter_plan"),
+                scalar_filter_probe_ids=_as_int(data.get("scalar_filter_probe_ids", 0), "scalar_filter_probe_ids"),
+                scalar_filter_probe_truncated=_as_int(data.get("scalar_filter_probe_truncated", 0), "scalar_filter_probe_truncated"),
+                scalar_filter_candidates=_as_int(data.get("scalar_filter_candidates", 0), "scalar_filter_candidates"),
+                scalar_filter_candidate_ids=_as_int(data.get("scalar_filter_candidate_ids", 0), "scalar_filter_candidate_ids"),
+                scalar_filter_retained_candidate_ids=_as_int(data.get("scalar_filter_retained_candidate_ids", 0), "scalar_filter_retained_candidate_ids"),
+                scalar_filter_refined_candidate_ids=_as_int(data.get("scalar_filter_refined_candidate_ids", 0), "scalar_filter_refined_candidate_ids"),
+                scalar_filter_visited=_as_int(data.get("scalar_filter_visited", 0), "scalar_filter_visited"),
+                scalar_filter_scored=_as_int(data.get("scalar_filter_scored", 0), "scalar_filter_scored"),
+                scalar_filter_admitted=_as_int(data.get("scalar_filter_admitted", 0), "scalar_filter_admitted"),
+                scalar_filter_exact_scoring=_as_bool(data.get("scalar_filter_exact_scoring", False), "scalar_filter_exact_scoring"),
+                scalar_filter_underfill=_as_bool(data.get("scalar_filter_underfill", False), "scalar_filter_underfill"),
+                scalar_filter_unbounded=_as_int(data.get("scalar_filter_unbounded", 0), "scalar_filter_unbounded"),
+                exact_fallbacks=_as_int(data.get("exact_fallbacks", 0), "exact_fallbacks"),
+                full_document_scan_fallbacks=_as_int(data.get("full_document_scan_fallbacks", 0), "full_document_scan_fallbacks"),
+                allowed_id_materialization_rows=_as_int(data.get("allowed_id_materialization_rows", 0), "allowed_id_materialization_rows"),
+                primary_document_scans=_as_int(data.get("primary_document_scans", 0), "primary_document_scans"),
+                document_materialization_rows=_as_int(data.get("document_materialization_rows", 0), "document_materialization_rows"),
+                visibility_mismatch_count=_as_int(data.get("visibility_mismatch_count", 0), "visibility_mismatch_count"),
+                visibility_retry_count=_as_int(data.get("visibility_retry_count", 0), "visibility_retry_count"),
+            )
+            if work is not None and (not work.completed or work.output.fetched != len(out.documents)
+                                     or out.route != "ann" or out.index.vector_strategy != "column_graph"
+                                     or out.index.extra.get("typed_input") is not True):
+                raise ValueError("dense work does not match selected response")
+            return out
+        except (ValueError, TypeError, KeyError, OverflowError) as exc:
+            raise TreeDBProtocolError("invalid dense response document or metadata", dense_work=work) from exc
 
 
 @dataclass(frozen=True)

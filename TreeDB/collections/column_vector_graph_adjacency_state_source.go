@@ -30,6 +30,9 @@ func openColumnVectorGraphAdjacencyStateSourcesFromRoot(rootDir, collection stri
 	if err != nil {
 		return nil, reason, err
 	}
+	if len(assets) == 0 {
+		return nil, "", nil
+	}
 	group := &columnVectorGraphAdjacencyDirectSources{sources: make([]*columnVectorGraphLayer0AdjacencyDirectSource, 0, len(assets)), allLayers: true}
 	for layer, asset := range assets {
 		source, sourceReason, sourceErr := newColumnVectorGraphAdjacencyStateDirectSourceFromRoot(rootDir, collection, cfg, def, graph, state, asset, layer)
@@ -65,6 +68,9 @@ func columnVectorGraphAdjacencyStateAssetsByLayer(state columnVectorIndexStateSn
 		}
 	}
 	if len(seen) == 0 {
+		if _, found, err := findColumnHNSWSearchPackStateAsset(state); err == nil && found {
+			return nil, "", nil
+		}
 		return nil, typeddecode.ReasonValidationFailed, errors.New("collections: vector-index state missing adjacency uint32_list assets")
 	}
 	expectedLayers := state.AdjacencyLayerCount

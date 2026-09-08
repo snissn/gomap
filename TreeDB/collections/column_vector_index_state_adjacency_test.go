@@ -3,6 +3,7 @@ package collections
 import (
 	"encoding/binary"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -73,6 +74,35 @@ func TestColumnGraphRebuildPublishesUint32ListAdjacencyState1987(t *testing.T) {
 		state := columnVectorIndexStateFromRecords1987(t, records, def)
 		assertColumnVectorIndexStateAdjacencyAssetsMatchScanned1987(t, d, "docs", cfg, def, graph, state, scanned)
 	})
+}
+
+func TestColumnGraphRebuildUnselectedMetadataInventory(t *testing.T) {
+	for _, n := range []int{0, 1} {
+		t.Run(fmt.Sprintf("rows=%d", n), func(t *testing.T) {
+			_, db, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, columnGraphRebuildSyntheticRowsV2A(n, 3))
+			defer db.Close()
+			if capture, err := typedGraphBaseCaptureAdmission(col.Meta()); err != nil || capture {
+				t.Fatalf("unselected fixture capture=%v err=%v", capture, err)
+			}
+			if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+				t.Fatal(err)
+			}
+			records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, db, col.Name())
+			state := columnVectorIndexStateFromRecords1987(t, records, def)
+			want := map[string]int{columnVectorIndexStateAssetRoleHNSWSearchPack: 1, columnVectorIndexStateAssetRoleAdjacency: 1, columnVectorIndexStateAssetRoleDocumentIDs: 1}
+			if n > 0 {
+				want[columnVectorIndexStateAssetRoleInverseNorm] = 1
+				want[columnVectorIndexStateAssetRoleRowRefs] = 5
+			}
+			got := make(map[string]int)
+			for _, asset := range state.Assets {
+				got[asset.Role]++
+			}
+			if !maps.Equal(got, want) || state.AdjacencyLayerCount != 1 {
+				t.Fatalf("unselected inventory=%v layers=%d want=%v layers=1", got, state.AdjacencyLayerCount, want)
+			}
+		})
+	}
 }
 
 func TestBuildColumnVectorIndexStateAdjacencyListsPresizesValues4521(t *testing.T) {

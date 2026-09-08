@@ -23320,6 +23320,8 @@ func scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt iterator.Unsaf
 }
 
 type scanMergedCollectionIndexIDOptions struct {
+	// Context is optional; cancellation covers physical entries, including tombstones and shadows.
+	Context context.Context
 	// Inspected receives physical work, including tombstones and shadowed keys.
 	// It is optional telemetry for callers sharing a cumulative preparation cap.
 	Inspected            *int
@@ -23361,7 +23363,7 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirection(bufferedIt, persistedIt
 // variant used by public direct scans. maxInspected counts physical index
 // entries examined, including tombstones and duplicate/shadowed overlay keys;
 // zero leaves the historical internal callers unbounded.
-func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, reverse bool, maxInspected int, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
+func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, reverse bool, maxInspected int, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (truncated bool, err error) {
 	if maxResults < 0 {
 		return false, errors.New("collections: max index results cannot be negative")
 	}
@@ -23372,7 +23374,23 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 	if opts.Inspected != nil {
 		*opts.Inspected = 0
 	}
+	var contextErr error
+	nextContextCheck := 0
+	defer func() {
+		if contextErr != nil {
+			// Cancellation is an error, never a work-cap truncation certificate.
+			truncated = false
+			err = errors.Join(err, contextErr)
+		}
+	}()
 	inspect := func(count int) bool {
+		if opts.Context != nil && inspected >= nextContextCheck {
+			contextErr = opts.Context.Err()
+			if contextErr != nil {
+				return false
+			}
+			nextContextCheck = inspected + 256
+		}
 		if maxInspected > 0 && count > maxInspected-inspected {
 			return false
 		}

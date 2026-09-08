@@ -30,6 +30,118 @@ cd clients/python/treedb_client
 PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
+## Process work diagnostics
+
+The optional `-pprof` listener exposes `GET /debug/treedb/stats`; its `work`
+block uses schema `treedb-work-v1`. Observation starts at Go package
+initialization, before backend command replay and before the service exists.
+Counters are always enabled and survive manager/service recreation. They cover
+all databases in the process, have no reset operation, and are independent of
+the existing opt-in service upsert timings.
+
+`pid`, `origin_kind=go_package_init`, `origin_unix_nano`, and
+`snapshot_unix_nano` identify the observation lifetime. The origin is not a
+kernel process-start claim. Bind snapshots independently to the executable and
+OS process identity. Compare cumulative totals only within one lifetime; the
+first snapshot after reopen already includes startup/replay work. Individual
+atomic loads are not a transaction snapshot: drain operations at phase
+boundaries before comparing related totals.
+
+With `-pprof` enabled, the CLI emits one JSON record through its standard logger
+after successful HTTP/native/diagnostics drain, service close and database
+cleanup. Its `event` is `treedb_document_service_terminal_work`, `version` is
+`1`, and it carries `contract_version`, `cleanup_completed: true`,
+`shutdown_failures` and the unchanged `work` object. The usual log prefix
+precedes the JSON. No database stats callback runs after cleanup. A failed
+shutdown attempt emits no completed record; a later successful retry retains
+the earlier failure count. Repeated successful shutdown calls emit nothing.
+
+This terminal sample covers work from the original package-init origin through
+completed database cleanup, including close-time flushes. Its memory sample
+precedes terminal serialization and logging; it is not through-exit allocation
+accounting. Bind it to the same process lifetime as live snapshots. A missing,
+malformed, duplicate or wrong-origin record, or nonzero `shutdown_failures`,
+cannot establish a clean measured shutdown. Diagnostics-disabled mode emits no
+terminal work record.
+
+| Group | Observed work |
+| --- | --- |
+| `indexed_json` | Scalar, text, physical-column and vector extraction row attempts, including fast parsers and failures. Column batches charge only the attempted prefix. `materialization_rows` counts non-JSON stored-format conversion attempts for indexed extraction. Ordinary final output reconstruction is separate. |
+| `typed` | Typed scalar/text row attempts, successfully encoded scalar values/analyzed text fields, and old text rows analyzed for mutations. Rows are operations, not unique documents. |
+| `runtime` | Native-runtime query dispatch attempts through direct `VectorIndex.Search` or the buffered collection route (including retries), and successful completions. A selected scalar exact route or exact fallback also belongs to that dispatched query; these counters do not measure graph scores or build/mutation work. |
+| `replay` | Backend replay frame attempts, successful applications and failures, including panic failures. Typed payload frame attempts may contain a legacy projection; decoded typed rows and legacy-projection rows are separate. `legacy_collection_frames` covers legacy insert/update/source payload attempts; deletes have their own frame counter. These totals are observations, not durable coverage authority. |
+| `scans` | Dispatches and visited rows for service dense exact, filtered count, filtered retrieval, mutation matching, cursor, ID-only count, and collection exact search (full or index-restricted). Filtered count scans cover predicates outside declared scalar EQ/AND. Cursor/retrieval work is not automatically forbidden. Internal maintenance iterators are outside this group. |
+| `memory` | One `runtime.ReadMemStats` sample before diagnostics serialization: cumulative `total_alloc`/`mallocs` and current `heap_alloc`/`heap_sys`, plus `sys`/`num_gc`. Totals include startup and recovery. Per-operation allocation claims require an externally bounded phase and matching process lifetime. |
+| `row_index_cache` | Generic variable-row offset memo hits/misses, index build attempts, actual rows visited (including a failed prefix), evictions and oversized bypasses. `entries` and `retained_bytes` are current cache-owned metadata gauges; `byte_limit` is 64 MiB. Fixed/dense ID indexing is outside this group. |
+| `graph` | Public selected typed serving attempts/completions/errors. Separate internal overlay/filter producers count executed empty/exact/HNSW branches, prepared-base FP32 scores, exact-base/suffix scores, shadowed/result IDs, actual posting IDs/bytes/inspected entries and charged mapping bounds, including error prefixes. Direct internal overlay consumers contribute work but are not public requests. Generic legacy graph search and construction scores are outside this group. |
+| `output` | `materialization` counts shared collection by-ID/by-ref fetches once; `search` attributes the admitted native-runtime/typed dense service path; `get_many` attributes typed service fetches. Each separates attempts, successful returns, errors, requested/fetched/missing rows, materialized bytes, retained payload fetches, reconstructed JSON rows and typed-column rows. Completed prefixes survive errors. Keyword/hybrid fetches contribute to common materialization. These are document bytes, not serialized response/frame bytes. |
+| `fold` | Internal build attempts/completions/errors, durable publications, public Fold returns, and internal epoch-renewal attempts/completions/errors are separate. Renewal also runs during Ensure/Fold. Candidate bytes and appender attempts are charged work, not measured file output. Publication remains counted if later install/checkpoint/maintenance/warming fails. |
+
+
+The row-offset memo extends the existing process checksum cache. Each request
+still strictly verifies asset bytes and validates the captured schema/header;
+`cached_verify` and `skip_checksums` do not use the memo. Immutable offsets can
+survive reader eviction, while each reader owns its own asset bytes and current
+snapshot. The 64 MiB ceiling covers cache-owned offset capacity and descriptors;
+it excludes slices still held by active readers after eviction, transient builds,
+fixed slot overhead and source mappings. It is separate from graph `StateBytes`.
+Oversized tables use ordinary uncached indexing. Typed GetMany benefits without
+graph admission.
+
+Zero fields remain present. `available` describes instrumented producer groups,
+not acceptance of a workload. Graph/output/fold are available for the explicitly
+scoped producers above. Missing/unavailable counters cannot certify zero work. Indexed JSON positive controls and typed/replay positive work
+are needed alongside zero forbidden counts; selecting a typed route alone is
+insufficient. This diagnostics addition does not change the historical Minima
+artifact schema or certify the complete Minima path.
+
+Owner-local filter work separates retained ordinal capacity and its growth peak
+from logical peak scratch rows and ID bytes. Scratch peaks include a copied
+chunk rejected before lookup; they do not measure Go allocation capacity.
+
+`last_opened_index.typed_graph`, when present, copies one existing cached handle's
+immutable publication/base/current identities and coverage LSNs, suffix counts,
+charged debt, epoch, and owner/asset retention gauges. It never opens a snapshot,
+read owner or asset, warms a cache, or creates serving authority. Publication
+fields share one immutable state; `publication_unchanged` reports whether that
+pointer remained current during the copy. Debt and owner gauges use their
+existing locks but are not a transactional serving frontier. Absent cached or
+selected state is omitted, not certified as zero. No snapshot scans a corpus or
+asset registry. Graph admission gauges do not include the generic row-index memo.
+
+The Go engine's `VectorIndexSearchStats.ColumnGraphWork` preserves owner-local
+selected work in Minimal and Production modes, including filter error prefixes.
+Its route is assigned by the executed branch: top-K zero/no matches/empty base
+without live suffix report `typed_empty`; bounded scalar exact or suffix-only
+scoring report `typed_exact`; actual base traversal reports `typed_hnsw`. An
+empty route means no scoring branch executed. Filter cardinality is final only
+when filter preparation completed. Mapping work is a charged composite bound:
+ordinal mapping, submitted secondary point requests, and temporary encoded-prefix/
+key payload bounds for selective string EQ conjunctions. Posting source counts
+include probes and fallback rereads; point keys and rejected lookahead IDs are
+excluded. Retained bytes measure ordinal capacity, while scratch rows/ID bytes
+are logical peaks. The selected pack explicitly uses its
+existing FullDiagnostics counters without enabling work-accounting timers.
+Selected typed dense HTTP responses now carry optional `dense_work` version 1,
+with `completed`, `graph` (including `filter` and captured `snapshot`), and
+`output`. All fields, including zeros, are present within this fixed schema.
+The proof copies these owner-local counters and the fetch's actual requested,
+fetched, missing, materialized bytes, retained-payload fetches, reconstructed
+JSON rows and typed-column rows. Captured schema/base/current identities and
+coverage come from that search owner, even if a writer publishes before fetch.
+
+Existing error envelopes may carry the same `error.dense_work` after service
+work began. Search/fetch errors preserve partial work and return no partial
+documents; service-side document decoding failure marks service completion
+false. Graph/output completion remain separately observable. Missing proof or
+unavailable groups cannot certify zero work. Legacy routes have no typed proof.
+The [native protocol](../TreeDB/docs/spec/native-wire-protocol.md#101-document-service-dense-search)
+uses the same fixed values in a bounded 64/v2 section. Python exposes an owned
+frozen `response.dense_work` or `exception.dense_work`, serializable with
+`dataclasses.asdict`. Process memory is still sampled only for diagnostics,
+never per query. Separate GetMany retains its list API and process output group;
+these request proofs do not certify full workload phases or final qualification.
+
 ## Scope and honesty
 
 Supported now:
@@ -39,9 +151,10 @@ Supported now:
 - upsert Haystack-style documents;
 - delete by ID or metadata filter;
 - count/filter/list documents;
-- exact dense-vector search with metadata filters;
+- legacy exact dense-vector search with optional metadata filters;
 - dense `route=ann` search through compatible `native_runtime` and
-  `column_graph` vector indexes, including declared scalar filters on `native_runtime`;
+  `column_graph` vector indexes, including declared scalar filters on
+  `native_runtime` and selected typed `column_graph`;
 - ranked keyword search over the declared `content` text index, including
   declared-field metadata filters;
 - TreeDB collection-native hybrid search over text and/or vector sources,
@@ -55,11 +168,19 @@ Not supported now:
   missing, stale, corrupt, or unavailable;
 - unsupported scalar shapes on filtered `route=ann` dense requests.
 
-Dense `route=ann` uses graph traversal and returns exact scores for its bounded
-candidate set. Declared scalar filters on `native_runtime` expose plan,
-membership, candidate-work, fallback, materialization, and visibility-retry
-diagnostics. `route=exact` scans only documents matching a bounded metadata
-filter. Neither route silently substitutes a primary-document scan.
+Dense `route=ann` uses a compatible vector index and exact scores for its
+candidates. Selected `typed_input=true` indexes accept an omitted route or
+`ann`, including declared string equality/range leaves joined by `AND`. Their
+executed branch can be empty, typed exact for a complete eligible set of at most 4,096, or HNSW;
+`route="ann"` and `exact=false` alone do not prove graph traversal. Inspect
+`dense_work.graph.route` for that distinction. Selected `route=exact` rejects,
+including before build/admission.
+
+Declared scalar filters on legacy `native_runtime` expose plan, membership,
+candidate-work, fallback, materialization, and visibility-retry diagnostics.
+Legacy `route=exact` explicitly scans documents and evaluates the optional
+metadata predicate before scoring matches; it permits an absent filter.
+An ANN request never silently becomes that document scan.
 
 ## Haystack document mapping
 
@@ -143,7 +264,40 @@ is reported false until the collection vector path can serve that metric safely.
 Metadata filters on keyword/hybrid routes require fields declared in
 `scalar_fields`; undeclared or unbounded filters fail closed.
 
-Open/read index metadata:
+### Selected typed input
+
+For persisted typed ownership of indexed content, FP32 embeddings and declared
+scalar strings, create a cosine `column_graph` index with `typed_input=true`:
+
+```json
+{
+  "name": "typed_docs",
+  "dimension": 2,
+  "metric": "cosine",
+  "typed_input": true,
+  "vector_index_options": {"strategy": "column_graph"},
+  "scalar_fields": [
+    {"field": "user_id", "value_type": "string"},
+    {"field": "fpath", "value_type": "string"}
+  ]
+}
+```
+
+The response echoes `index.typed_input=true`. Undeclared metadata remains
+residual JSON. Creation without `column_graph_serving` declares the schema; it
+does not build or admit the graph. Load typed documents, then use the explicit
+[optimize actions](#selected-typed-optimize-actions) below. A compatible create
+request with limits can admit existing assets, including after reopen; merely
+reading/opening index metadata cannot.
+
+The [typed-vector lifecycle](../TreeDB/docs/guides/vector-search-typed-column.md#explicit-mutable-serving-lifecycle)
+describes the positive limits and ownership contract. Limits are process-local,
+shared across collection handles and immutable until DB close; reapply them
+after reopen. Complete mutable serving requires mmap-direct prepared readers
+and exact destructive namespace authority. Generic typed GetMany fallback
+support on another platform does not establish this full lifecycle.
+
+### Read index metadata
 
 ```http
 GET /v1/indexes/{index}
@@ -250,6 +404,12 @@ POST /v1/indexes/{index}/documents/count
 ```json
 {"filter": {"field": "meta.language", "operator": "==", "value": "go"}}
 ```
+
+Counts over declared scalar equality predicates, including AND conjunctions, use
+one captured scalar-index snapshot and do not materialize documents. Delete by
+filter shares this lookup. A missing declared index or invalid declared value
+fails closed; unsupported operators and undeclared fields retain document-scan
+behavior. An indexed predicate with no matches returns zero.
 
 Filter/list:
 
@@ -377,11 +537,13 @@ collection-truncate/WAL format just for benchmark reset and preserves TreeDB's
 insert-only graph rebuild boundary. Compatible non-`column_graph` indexes may be
 cleared with existing document deletes.
 
-Bulk loaders may pass `"defer_vector_index_rebuild": true` on document upserts
-to avoid rebuilding column-graph vector assets after every inserted batch.
+Legacy bulk loaders may pass `"defer_vector_index_rebuild": true` on document
+upserts to avoid rebuilding column-graph vector assets after every inserted batch.
 When rebuild is deferred, `/search/vector-index` fails closed until optimize has
 built the assets for the loaded documents. The exact document route
 `/search/vector` remains readable from stored documents before optimize.
+Selected typed upserts never implicitly build; their dense search requires
+explicit admission and rejects the document-scan route.
 
 Optimize/rebuild after load:
 
@@ -393,7 +555,25 @@ POST /v1/indexes/{index}/optimize
 {"vector_index_name": "embedding", "expected_generation": 1}
 ```
 
-No-document vector-index benchmark search:
+### Selected typed optimize actions
+
+For selected typed input, the same endpoint accepts `column_graph_action` and
+`column_graph_serving`. The legacy request above is insufficient for a selected
+build/ensure: supply the full positive limits object from the
+[serving contract](../TreeDB/docs/guides/vector-search-typed-column.md#explicit-mutable-serving-lifecycle).
+
+| `column_graph_action` | Behavior | `column_graph_serving` |
+| --- | --- | --- |
+| omitted or `build` | Rebuild assets, then ensure serving | Required |
+| `ensure` | Admit existing assets without rebuilding | Required |
+| `fold` | Fold current typed mutations under the admitted policy | Must be omitted |
+| `renew` | Renew the existing attempted-work allowance after maintenance | Must be omitted |
+
+For example, after admission, `{"column_graph_action":"fold"}` folds without
+replacing its limits. For create/upsert/build/search/fetch/reopen calls through
+the public client, see the [Python lifecycle example](../clients/python/treedb_client/README.md#selected-typed-column-graph-lifecycle).
+
+### No-document vector-index benchmark search
 
 ```http
 POST /v1/indexes/{index}/search/vector-index
@@ -458,6 +638,11 @@ are documented in
 
 ## Dense-vector search
 
+The explicit document-scan example below is for legacy indexes. Selected typed
+indexes use an omitted route or `ann` after admission. Both HTTP and native
+dense search return content/meta, with embedding echo opt-in through
+`return_embedding=true` (Python `True`); the default is false.
+
 ```http
 POST /v1/indexes/{index}/search/vector
 ```
@@ -491,10 +676,27 @@ Response:
 }
 ```
 
-Omit `route` (or use `route=ann`) for default graph traversal when the index
-supports it. ANN responses report `route=ann` and `exact=false`; declared scalar
-filters use `native_runtime` filtered ANN, while unsupported shapes fail closed
-instead of silently switching to a scan.
+Omit `route` (or use `route=ann`) to select the compatible vector-index route.
+ANN responses report `route=ann` and `exact=false`. Declared scalar filters are
+supported by `native_runtime` and selected typed `column_graph`; unsupported
+shapes fail closed. Selected executed empty/exact/HNSW behavior is reported in
+`dense_work.graph.route`, independently of the top-level route tag.
+
+Legacy `column_graph` indexes with persisted update/delete parts report
+`no_document_vector_search=false`: an omitted route selects the existing
+exact document scan and echoes `route=exact`, including after reopen. Explicit
+`route=ann` and no-document benchmark searches still fail closed for that stale
+graph. Fresh insert-only legacy graphs retain automatic ANN selection. Selected
+`typed_input=true` indexes keep their admitted graph route across mutations and
+require explicit re-admission after reopen; they never use this document scan.
+
+Successful typed build/ensure/fold retains the prepared base on the service's
+collection handle; creating an index with serving limits does the same. Repeated
+explicit ensure preserves admitted limits and work debt. Each query still
+captures current document visibility. Service close or explicit cache
+invalidation releases the retained preparation; explicit ensure warms the next
+handle.
+
 Tie order is deterministic: higher score first, then document ID ascending.
 
 ## Keyword search
@@ -707,13 +909,14 @@ exhaustion, corrupt index state, and bounded document-fetch failures return a
 service error (`index_unavailable`, `index_stale`, or `unsupported`) rather than
 empty success or a scan fallback.
 
-Pre-alpha caveat: cosine service indexes attempt to refresh the `column_graph`
-vector index after insert-only upserts. Updates/deletes can currently leave the
-vector graph rebuild-needed in collection core; hybrid requests that need the
-vector source then fail closed until that core mutation/rebuild path is available.
-Keyword and hybrid retrieval now use their bounded indexed-filter paths; exact
-dense scoring remains the explicit filtered correctness path. Any unavailable
-or stale source still fails closed.
+Legacy cosine service indexes attempt to refresh the `column_graph` vector
+index after insert-only upserts. Updates/deletes can leave that legacy graph
+rebuild-needed; hybrid requests requiring it fail closed. Selected typed keyword
+and hybrid results reflect updates, deletes and inserts before Fold; hybrid
+vector sources require explicit re-admission after reopen. Keyword search does
+not require graph admission. See the [hybrid contract](../TreeDB/docs/guides/hybrid-search.md).
+Unavailable or stale sources still fail closed; keyword/hybrid correctness does
+not establish dense or hybrid performance qualification.
 
 ## Error envelope
 

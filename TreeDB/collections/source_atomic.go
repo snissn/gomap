@@ -33,6 +33,8 @@ type sourceReplacementPlan struct {
 	policies         []backenddb.OrderedRootStoragePolicy
 	deltaTables      []memtable.Table
 	deleteCount      int
+	unchangedCount   int
+	unchanged        []bool
 	oldTextDocuments map[string][]byte
 	deleteColumnDocs []columnWriteDocument
 	insertColumnDocs []columnWriteDocument
@@ -86,6 +88,10 @@ func (c *Collection) replaceSourceDocumentsAtomic(parentID []byte, deleteIDs, in
 }
 
 func (c *Collection) replaceSourceDocumentsAtomicSchemaLocked(parentID []byte, deleteIDs, insertIDs, insertDocs [][]byte, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection) (int, error) {
+	return c.replaceSourceDocumentsAtomicModeSchemaLocked(parentID, deleteIDs, insertIDs, insertDocs, replay, hooks, projection, false)
+}
+
+func (c *Collection) replaceSourceDocumentsAtomicModeSchemaLocked(parentID []byte, deleteIDs, insertIDs, insertDocs [][]byte, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection, upsert bool) (int, error) {
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
@@ -105,7 +111,7 @@ func (c *Collection) replaceSourceDocumentsAtomicSchemaLocked(parentID []byte, d
 
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
-		plan, err := c.buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs, nil, replay, hooks, projection)
+		plan, err := c.buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs, nil, replay, hooks, projection, upsert)
 		if err != nil {
 			if isRetriableCollectionMutationError(err) {
 				lastErr = err
@@ -114,7 +120,11 @@ func (c *Collection) replaceSourceDocumentsAtomicSchemaLocked(parentID []byte, d
 			}
 			return 0, err
 		}
-		deleted := plan.deleteCount
+		deleted := plan.deleteCount + plan.unchangedCount
+		if upsert && plan.unchangedCount == len(insertIDs) {
+			plan.close()
+			return deleted, nil
+		}
 		publishErr := c.publishSourceReplacementPlan(plan, hooks)
 		plan.close()
 		if isRetriableCollectionMutationError(publishErr) {
@@ -153,7 +163,7 @@ func (c *Collection) replaceSourceDocumentsAtomicSchemaLocked(parentID []byte, d
 	return 0, collectionMutationRetryExhausted(lastErr)
 }
 
-func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs [][]byte, deletePlanner sourceReplacementDeletePlanner, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection) (*sourceReplacementPlan, error) {
+func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs [][]byte, deletePlanner sourceReplacementDeletePlanner, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection, upsert bool) (*sourceReplacementPlan, error) {
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -206,8 +216,27 @@ func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs
 		}
 	}
 
-	if err := c.appendSourceDeleteDeltas(plan, deleteIDs, plannerOptions); err != nil {
+	var upsertDocuments [][]byte
+	if upsert {
+		upsertDocuments = insertDocs
+	}
+	if err := c.appendSourceDeleteDeltas(plan, deleteIDs, plannerOptions, upsertDocuments); err != nil {
 		return fail(err)
+	}
+	if upsert && plan.unchangedCount == len(insertIDs) {
+		return plan, nil
+	}
+	if plan.unchangedCount != 0 {
+		changedIDs := make([][]byte, 0, len(insertIDs)-plan.unchangedCount)
+		changedDocs := make([][]byte, 0, len(insertDocs)-plan.unchangedCount)
+		for i, id := range insertIDs {
+			if !plan.unchanged[i] {
+				changedIDs = append(changedIDs, id)
+				changedDocs = append(changedDocs, insertDocs[i])
+			}
+		}
+		insertIDs, insertDocs = changedIDs, changedDocs
+		deleteIDs = changedIDs
 	}
 	if hooks != nil && hooks.afterDeletePlan != nil {
 		if err := hooks.afterDeletePlan(); err != nil {
@@ -266,7 +295,11 @@ func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs
 	}
 	plan.insertColumnDocs = columnWriteDocumentsFromCommitLog(docs)
 	if projection != nil {
-		if err := applyTypedProjection(insertIDs, plan.insertColumnDocs, projection); err != nil {
+		apply := applyTypedProjection
+		if plan.unchangedCount != 0 {
+			apply = applyTypedProjectionSubset
+		}
+		if err := apply(insertIDs, plan.insertColumnDocs, projection); err != nil {
 			return fail(err)
 		}
 	}
@@ -284,7 +317,7 @@ func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs
 	return plan, nil
 }
 
-func (c *Collection) appendSourceDeleteDeltas(plan *sourceReplacementPlan, documentIDs [][]byte, plannerOptions collectionOptions) error {
+func (c *Collection) appendSourceDeleteDeltas(plan *sourceReplacementPlan, documentIDs [][]byte, plannerOptions collectionOptions, upsertDocuments [][]byte) error {
 	if plan == nil || plan.snap == nil || plan.catalog == nil || len(documentIDs) == 0 {
 		return nil
 	}
@@ -304,7 +337,12 @@ func (c *Collection) appendSourceDeleteDeltas(plan *sourceReplacementPlan, docum
 		primaryValue []byte
 	}
 	existing := make([]existingDelete, 0, len(documentIDs))
-	for _, documentID := range documentIDs {
+	var typedOldView *CollectionReadView
+	if upsertDocuments != nil {
+		typedOldView = newCollectionReadViewAtSnapshot(c, plan.snap, plan.catalog, false, "")
+		defer typedOldView.Close()
+	}
+	for documentIndex, documentID := range documentIDs {
 		entry, _, err := collectionGetEntryAtCatalogRoot(plan.snap, plan.catalog, primaryRootName, documentID)
 		if errors.Is(err, tree.ErrKeyNotFound) {
 			continue
@@ -325,13 +363,27 @@ func (c *Collection) appendSourceDeleteDeltas(plan *sourceReplacementPlan, docum
 				item.primaryValue = primaryValue
 			}
 		}
-		if len(plan.meta.TextIndexes) > 0 {
+		if len(plan.meta.TextIndexes) > 0 || typedOldView != nil {
 			document, found, err := collectionGetAppendAtCatalogRoot(plan.snap, plan.catalog, primaryRootName, documentID, nil)
 			if err != nil {
 				return err
 			}
 			if found {
 				item.document = document
+			}
+		}
+		if typedOldView != nil && bytes.Equal(item.document, bytes.TrimSpace(upsertDocuments[documentIndex])) {
+			equal, err := typedOldView.typedReplacementValuesEqual(documentID, plannerOptions.typedProjection.typedRows[string(documentID)])
+			if err != nil {
+				return err
+			}
+			if equal {
+				if plan.unchanged == nil {
+					plan.unchanged = make([]bool, len(documentIDs))
+				}
+				plan.unchanged[documentIndex] = true
+				plan.unchangedCount++
+				continue
 			}
 		}
 		if len(runtimes) > 0 {

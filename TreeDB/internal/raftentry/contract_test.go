@@ -189,6 +189,7 @@ func TestDecodeCommandEntryV1RejectsDDLBarriersReadsAndUnknowns(t *testing.T) {
 	}
 	for _, command := range []nativewire.CommandID{
 		nativewire.CommandDropCollection,
+		nativewire.CommandTypedDocumentUpsert,
 		nativewire.CommandFlushCollection,
 		nativewire.CommandFlushAll,
 		nativewire.CommandCheckpoint,
@@ -200,6 +201,10 @@ func TestDecodeCommandEntryV1RejectsDDLBarriersReadsAndUnknowns(t *testing.T) {
 		if !row.Known || row.Decision != DecisionRejected {
 			t.Fatalf("command %d row=%+v, want known rejected row", command, row)
 		}
+	}
+	typed := appendDeterministicEntryRaw(nativewire.CommandTypedDocumentUpsert, nil)
+	if _, err := DecodeCommandEntryV1(typed, DecodeOptions{}); codeOf(err) != ErrorUnsupportedCommandV1 {
+		t.Fatalf("local-only typed mutation err=%v code=%s, want unsupported command", err, codeOf(err))
 	}
 	if row := ClassifyNativeWireCommandV1(nativewire.CommandID(9999)); row.Known {
 		t.Fatalf("unknown command classified as known: %+v", row)
@@ -214,7 +219,15 @@ func TestDecodeCommandEntryV1MapsReadOnlyNativeWireRejection(t *testing.T) {
 	if _, err := DecodeCommandEntryV1(readOnly, DecodeOptions{}); codeOf(err) != ErrorReadOnlyV1 {
 		t.Fatalf("read-only command err=%v code=%s", err, codeOf(err))
 	}
-	readOnlyFutureVersion := appendDeterministicEntryRawWithHeader(nativewire.DeterministicEntryVersion, nativewire.CommandGetMany, 2, 0, []nativewire.Section{
+	for _, command := range []nativewire.CommandID{nativewire.CommandGetMany, nativewire.CommandDenseVectorSearch} {
+		for _, version := range []uint64{1, 2} {
+			raw := appendDeterministicEntryRawWithHeader(nativewire.DeterministicEntryVersion, command, version, 0, nil)
+			if _, err := DecodeCommandEntryV1(raw, DecodeOptions{}); codeOf(err) != ErrorReadOnlyV1 {
+				t.Fatalf("read-only command %d/v%d err=%v code=%s", command, version, err, codeOf(err))
+			}
+		}
+	}
+	readOnlyFutureVersion := appendDeterministicEntryRawWithHeader(nativewire.DeterministicEntryVersion, nativewire.CommandGetMany, 3, 0, []nativewire.Section{
 		{ID: nativewire.SectionCollectionRef, Bytes: []byte{1, 'c'}},
 		{ID: nativewire.SectionDocumentIDs, Bytes: nativewire.AppendByteVector(nil, []byte("a"))},
 	})
@@ -381,6 +394,9 @@ func TestR3aAllowlistCoversNativeWireV1CommandsAndDocsMatrix(t *testing.T) {
 		row := ClassifyNativeWireCommandV1(schema.ID)
 		if !row.Known {
 			t.Fatalf("missing row for schema %+v", schema)
+		}
+		if schema.LocalOnly && row.Decision != DecisionRejected {
+			t.Fatalf("local-only schema admitted for replication: schema=%+v row=%+v", schema, row)
 		}
 	}
 	alignment := loadAlignment(t)

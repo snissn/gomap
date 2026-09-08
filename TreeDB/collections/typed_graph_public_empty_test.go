@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 func TestTypedGraphPublicEmptyLifecycle(t *testing.T) {
@@ -44,6 +46,7 @@ func TestTypedGraphPublicEmptyLifecycle(t *testing.T) {
 						q.DeclaredScalarFilter = &HybridScalarFilter{IndexName: "path", Value: "source"}
 					}
 					var buffer VectorIndexSearchBuffer
+					beforeGraph := workstats.Read().Graph
 					response, view, err := col.SearchVectorIndexWithBufferReadView(q, &buffer)
 					if err != nil {
 						t.Fatal(err)
@@ -56,6 +59,23 @@ func TestTypedGraphPublicEmptyLifecycle(t *testing.T) {
 					count := 0
 					if want != "" {
 						count = 1
+					}
+					work := response.Stats.ColumnGraphWork
+					afterGraph := workstats.Read().Graph
+					if !work.Available || afterGraph.Requests.Attempts-beforeGraph.Requests.Attempts != 1 || afterGraph.Requests.Completed-beforeGraph.Requests.Completed != 1 || afterGraph.Requests.Errors != beforeGraph.Requests.Errors || afterGraph.DeltaScored-beforeGraph.DeltaScored != work.DeltaScored || afterGraph.ExactBaseScored-beforeGraph.ExactBaseScored != work.ExactBaseScored || afterGraph.BaseANNScored-beforeGraph.BaseANNScored != work.BaseANNScored {
+						t.Fatalf("public work=%+v before=%+v after=%+v", work, beforeGraph, afterGraph)
+					}
+					if count == 0 && (work.Route != "typed_empty" || work.BaseANNScored+work.ExactBaseScored+work.DeltaScored != 0) {
+						t.Fatalf("empty proof=%+v", work)
+					}
+					if count == 1 && work.BaseANNScored+work.ExactBaseScored+work.DeltaScored == 0 {
+						t.Fatalf("nonempty proof=%+v", work)
+					}
+					if filtered && (!work.Filter.Attempted || !work.Filter.Completed || work.Filter.EligibleRows != uint64(count)) {
+						t.Fatalf("filter proof=%+v", work.Filter)
+					}
+					if count == 0 && response.Stats.SearchRouteHNSWSearchPack != 0 {
+						t.Fatalf("empty query reported executed HNSW: %+v", response.Stats)
 					}
 					if len(docs.Results) != count {
 						t.Fatalf("count=%d want%d", len(docs.Results), count)
@@ -75,6 +95,25 @@ func TestTypedGraphPublicEmptyLifecycle(t *testing.T) {
 			check("")
 			insert("original")
 			check("original")
+			for _, noMatch := range []bool{false, true} {
+				q := query
+				if noMatch {
+					q.DeclaredScalarFilter = &HybridScalarFilter{IndexName: "path", Value: "missing"}
+				} else {
+					q.TopK = 0
+				}
+				var buffer VectorIndexSearchBuffer
+				response, view, err := col.SearchVectorIndexWithBufferReadView(q, &buffer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(response.Results) != 0 || response.Stats.ColumnGraphWork.Route != "typed_empty" || response.Stats.ColumnGraphWork.DeltaScored != 0 {
+					t.Fatalf("empty branch=%+v", response.Stats.ColumnGraphWork)
+				}
+				if err := view.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := col.FoldColumnGraphServing(ctx, "embedding_graph"); err != nil {
 				t.Fatal(err)
 			}
@@ -130,6 +169,14 @@ func TestTypedGraphPublicEmptyLifecycle(t *testing.T) {
 }
 
 func TestTypedGraphPublicEmptyFoldLateKeeper(t *testing.T) {
+	testTypedGraphPublicEmptyLateKeeper(t, false)
+}
+
+func TestTypedGraphPublicEmptyEnsureLateKeeper(t *testing.T) {
+	testTypedGraphPublicEmptyLateKeeper(t, true)
+}
+
+func testTypedGraphPublicEmptyLateKeeper(t *testing.T, ensure bool) {
 	requireTypedGraphPublicServingTest(t)
 	col, base, ids, _, _, _ := openTypedGraphQualityFixture(t, 8)
 	defer col.db.Close()
@@ -140,6 +187,11 @@ func TestTypedGraphPublicEmptyFoldLateKeeper(t *testing.T) {
 	const index = "embedding_graph"
 	if err := col.EnsureColumnGraphServing(ctx, index, typedGraphPublicTestOptions()); err != nil {
 		t.Fatal(err)
+	}
+	if ensure {
+		if err := col.CloseVectorIndexPreparedSearchCache(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	captured, release := make(chan struct{}, 1), make(chan struct{})
 	var paused, released atomic.Bool
@@ -160,11 +212,17 @@ func TestTypedGraphPublicEmptyFoldLateKeeper(t *testing.T) {
 		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Unlock()
 	}()
 	done := make(chan error, 1)
-	go func() { done <- col.FoldColumnGraphServing(ctx, index) }()
+	go func() {
+		if ensure {
+			done <- col.EnsureColumnGraphServing(ctx, index, typedGraphPublicTestOptions())
+		} else {
+			done <- col.FoldColumnGraphServing(ctx, index)
+		}
+	}()
 	select {
 	case <-captured:
 	case <-time.After(10 * time.Second):
-		t.Fatal("nonempty fold did not capture a keeper")
+		t.Fatal("nonempty setup did not capture a keeper")
 	}
 	if _, err := col.DeleteBatch(ids); err != nil {
 		t.Fatal(err)
@@ -177,15 +235,15 @@ func TestTypedGraphPublicEmptyFoldLateKeeper(t *testing.T) {
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("late nonempty fold: %v", err)
+			t.Fatalf("late nonempty setup: %v", err)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("late nonempty fold blocked")
+		t.Fatal("late nonempty setup blocked")
 	}
 	a := &col.collectionSchemaCoordinator().typedGraphOwners
 	a.Lock()
 	defer a.Unlock()
 	if a.baseOwners != 0 || a.baseAssetBytes != 0 || a.baseDescriptorBytes != 0 || a.baseBackingBytes != 0 {
-		t.Fatal("late fold installed an obsolete keeper after empty cutover")
+		t.Fatal("late setup installed an obsolete keeper after empty cutover")
 	}
 }

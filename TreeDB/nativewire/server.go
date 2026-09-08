@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -752,6 +753,8 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	responseBodySet := false
 	if err = s.rejectClusterRoutedLocalMetadataRead(cmd.Header.ID); err != nil {
 		// The common error path below records command/request counters.
+	} else if s.clusterSubmitter != nil && (cmd.Header.ID == iwire.CommandTypedDocumentUpsert || (cmd.Header.ID == iwire.CommandGetMany && cmd.Header.Version == 2)) {
+		err = protocolError(iwire.ErrUnsupportedFeature, "local-only command is unavailable through cluster submission")
 	} else if s.clusterSubmitter != nil && cmd.Schema.Kind == iwire.CommandKindMutation {
 		responseSections, err = s.handleClusterMutation(ctx, header, cmd)
 	} else {
@@ -804,8 +807,10 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 			iwire.CommandCursorClose:
 			responseSections, responseBody, responseBodySet, err = s.handleRead(ctx, header, state, cmd)
 		case iwire.CommandDenseVectorSearch:
-			responseBody, err = s.handleDenseVectorSearch(ctx, state, cmd.Known, state.responseScratch())
+			responseBody, err = s.handleVersionedDenseVectorSearch(ctx, state, cmd.Header.Version, cmd.Known, state.responseScratch())
 			responseBodySet = true
+		case iwire.CommandTypedDocumentUpsert:
+			responseSections, err = s.handleTypedDocumentUpsert(ctx, cmd.Known)
 		case iwire.CommandStats:
 			responseSections = []iwire.Section{{ID: iwire.SectionResponseMeta, Bytes: appendStringMap(nil, s.Stats())}}
 		case iwire.CommandVectorStatus,
@@ -854,6 +859,33 @@ func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState
 		"protocol_minor":     strconv.Itoa(int(iwire.ProtocolMinorV0)),
 		"connection_id":      strconv.FormatUint(connectionID, 10),
 		"default_ack_policy": strconv.FormatUint(uint64(s.defaultAckPolicy), 10),
+	}
+	caps["max_frame_size"] = strconv.FormatUint(s.limits.MaxFrameSize, 10)
+	if s.clusterSubmitter == nil && s.collections != nil {
+		if _, ok := s.registry.LookupCommand(iwire.CommandGetMany, 1); ok {
+			caps["get_many_versions"] = "1"
+		}
+	}
+	if s.clusterSubmitter == nil && s.documentService != nil {
+		if _, ok := s.registry.LookupCommand(iwire.CommandGetMany, 2); ok {
+			if caps["get_many_versions"] != "" {
+				caps["get_many_versions"] += ",2"
+			} else {
+				caps["get_many_versions"] = "2"
+			}
+		}
+		if _, ok := s.registry.LookupCommand(iwire.CommandTypedDocumentUpsert, 1); ok {
+			caps["typed_document_upsert_versions"] = "1"
+		}
+		var versions []string
+		for _, version := range []uint64{iwire.DenseVectorSearchLegacyVersion, iwire.DenseVectorSearchTypedVersion} {
+			if _, ok := s.registry.LookupCommand(iwire.CommandDenseVectorSearch, version); ok {
+				versions = append(versions, strconv.FormatUint(version, 10))
+			}
+		}
+		if len(versions) > 0 {
+			caps["dense_vector_search_versions"] = strings.Join(versions, ",")
+		}
 	}
 	body, err := iwire.AppendSection(nil, iwire.Section{ID: iwire.SectionCapabilitySet, Bytes: appendStringMap(nil, caps)})
 	if err != nil {
@@ -907,6 +939,27 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 	})
 	if sectionErr != nil {
 		return sectionErr
+	}
+	var observed *denseWorkError
+	if errors.As(err, &observed) {
+		var scratch [380]byte
+		proof, proofErr := appendDenseWork(scratch[:0], observed.work)
+		if proofErr != nil {
+			return proofErr
+		}
+		if err := s.checkResponseSectionCount(2); err != nil {
+			return err
+		}
+		if err := s.checkResponseSectionLen("dense work", len(proof)); err != nil {
+			return err
+		}
+		body, proofErr = iwire.AppendSection(body, iwire.Section{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: proof})
+		if proofErr != nil {
+			return proofErr
+		}
+		if err := s.checkResponseBodyLen(uint64(len(body))); err != nil {
+			return err
+		}
 	}
 	s.counters.incErrorsTotal()
 	s.counters.incErrorCode(code)

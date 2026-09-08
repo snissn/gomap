@@ -212,6 +212,10 @@ func (c *Collection) PrepareVectorIndexStableClosure(name string) (*ColumnVector
 	if normalizedDocumentFormat(baseMeta.Options.DocumentFormat) != DocumentFormatJSON {
 		return nil, fmt.Errorf("collections: stable vector prepared closure for %q requires JSON documents", name)
 	}
+	capture, err := typedGraphBaseCaptureAdmission(baseMeta)
+	if err != nil {
+		return nil, err
+	}
 	rootID := catalog.rootID(collectionColumnManifestRootName(baseMeta.Name))
 	if rootID == 0 {
 		return nil, errors.New("collections: stable vector prepared closure requires an existing physical column manifest root")
@@ -269,7 +273,7 @@ func (c *Collection) PrepareVectorIndexStableClosure(name string) (*ColumnVector
 	}
 	prepared, _, _, err := prepareColumnVectorGraphRebuildManifestForPublicationTimedWithTypedSource(
 		baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records,
-		manifest.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), typedSource, nil, nil,
+		manifest.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), typedSource, nil, nil, capture,
 	)
 	if err != nil {
 		return nil, err

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 func typedGraphFoldTestAssetLimits() typedGraphFoldAssetLimits {
@@ -21,6 +23,7 @@ func TestTypedGraphFoldCandidateFailureDebt(t *testing.T) {
 	defer restore()
 	seq, root := dbCommitSeqAndSystemRoot(col.db)
 	beforeBytes, beforeFiles := typedGraphFoldTestDisk(t, col.db.ColumnAssetRootDir())
+	beforeWork := workstats.Read().Fold
 	var previousBytes int64
 	for i := 0; i < 6; i++ {
 		err := col.foldTypedGraph(context.Background(), typedGraphOverlapLimits().Cold, 128, limits, nil)
@@ -35,6 +38,10 @@ func TestTypedGraphFoldCandidateFailureDebt(t *testing.T) {
 		if coord.typedGraphFoldActive.Load() {
 			t.Fatal("failed candidate retained builder")
 		}
+	}
+	afterWork := workstats.Read().Fold
+	if afterWork.Build.Attempts-beforeWork.Build.Attempts != 6 || afterWork.Build.Errors-beforeWork.Build.Errors != 6 || afterWork.Build.Completed != beforeWork.Build.Completed || afterWork.Publications != beforeWork.Publications || afterWork.CandidateBytesCharged-beforeWork.CandidateBytesCharged != uint64(previousBytes) || afterWork.AppenderAttemptsCharged == beforeWork.AppenderAttemptsCharged {
+		t.Fatalf("failed candidate producer before=%+v after=%+v", beforeWork, afterWork)
 	}
 	afterBytes, afterFiles := typedGraphFoldTestDisk(t, col.db.ColumnAssetRootDir())
 	if afterBytes-beforeBytes > previousBytes || afterFiles-beforeFiles > limits.AppenderAttempts {

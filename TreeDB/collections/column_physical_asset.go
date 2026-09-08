@@ -13,6 +13,7 @@ import (
 
 	"github.com/buger/jsonparser"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/tidwall/gjson"
 )
@@ -359,6 +360,7 @@ func extractColumnDeclaredRowsFromJSONDocuments(cfg ColumnStoreConfig, docs []co
 	}
 	rows := make([]columnDeclaredRow, 0, len(docs))
 	for docIdx, doc := range docs {
+		workstats.IndexedJSON.ColumnRows.Add(1)
 		decoder := json.NewDecoder(bytes.NewReader(doc.Document))
 		decoder.UseNumber()
 		var root any
@@ -401,6 +403,7 @@ func extractColumnDeclaredRowsFromRootJSONDocumentsFastPath(cfg ColumnStoreConfi
 	}
 	rows := make([]columnDeclaredRow, 0, len(docs))
 	for docIdx, doc := range docs {
+		workstats.IndexedJSON.ColumnRows.Add(1)
 		if !gjson.ValidBytes(doc.Document) {
 			return nil, true, fmt.Errorf("%w: document[%d] invalid JSON: invalid JSON", ErrColumnDeclaredValueUnsupported, docIdx)
 		}

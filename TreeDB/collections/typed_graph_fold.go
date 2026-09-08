@@ -11,6 +11,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // foldTypedGraph is explicit internal maintenance. The callback is an internal
@@ -21,6 +22,8 @@ func (c *Collection) foldTypedGraph(ctx context.Context, cold typedGraphColdLimi
 }
 
 func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphColdLimits, maxRows int, assetLimits typedGraphFoldAssetLimits, afterCapture func() error, timing *ColumnGraphBuildTiming) (err error) {
+	workstats.Fold.Build.Attempts.Add(1)
+	defer func() { workstats.Fold.Build.Finish(err == nil) }()
 	started := time.Now()
 	defer func() {
 		if timing != nil {
@@ -45,6 +48,7 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 	var captured columnStoreCompactionState
 	var lease *ColumnAssetLifecyclePinSet
 	var copy *typedGraphBaseCopy
+	var capture bool
 	var serving *typedGraphFoldServing
 	defer func() {
 		if lease != nil {
@@ -66,7 +70,11 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 			if e != nil {
 				return e
 			}
-			if captured.catalog.typedGraphBase == nil || len(captured.meta.VectorIndexes) != 1 || captured.meta.VectorIndexes[0].Strategy != VectorIndexStrategyColumnGraph {
+			capture, e = typedGraphBaseCaptureAdmission(captured.meta)
+			if e != nil {
+				return e
+			}
+			if !capture || captured.catalog.typedGraphBase == nil || len(captured.meta.VectorIndexes) != 1 || captured.meta.VectorIndexes[0].Strategy != VectorIndexStrategyColumnGraph {
 				return ErrHybridSearchUnsupported
 			}
 			if coord.typedGraphServing.Load() != nil {
@@ -196,7 +204,7 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 		return err
 	}
 	stage = time.Now()
-	graph, records, identity, err := prepareColumnVectorGraphRebuildManifestForPublicationTimed(captured.meta.Name, captured.cfg, captured.meta.VectorIndexes, def, baseHeader, baseManifest.Records, captured.manifest.AppliedCommandLSN, graphRows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), timing, admission)
+	graph, records, identity, err := prepareColumnVectorGraphRebuildManifestForPublicationTimed(captured.meta.Name, captured.cfg, captured.meta.VectorIndexes, def, baseHeader, baseManifest.Records, captured.manifest.AppliedCommandLSN, graphRows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), timing, admission, capture)
 	if timing != nil {
 		timing.AssetPreparation += time.Since(stage)
 	}
@@ -460,6 +468,9 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 	if err != nil {
 		return err
 	}
+	// Durable publication succeeded, even if the following in-memory install or
+	// later checkpoint/maintenance/warm fails. Never roll this observation back.
+	workstats.Fold.Publications.Add(1)
 	next := cloneCatalogWithRootUpdates(latest.catalog, updated, rootNames, roots[currentStart:])
 	next.typedGraphBase = installed
 	c.meta = updated
@@ -476,6 +487,7 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 		baseCatalog := newCollectionCatalogWithOverlays(installed.meta, installed.roots, nil)
 		baseCatalog.pager = next.pager
 		nextState.servingBase.view.Catalog = baseCatalog
+		nextState.servingBase.materializerView.Catalog = baseCatalog
 		nextState.servingBase.view.Diagnostics.ManifestRoot = baseCatalog.rootID(collectionColumnManifestRootName(baseCatalog.meta.Name))
 		coord.typedPublicationDebtMu.Lock()
 		ok := coord.typedPublication.CompareAndSwap(before, nextState)

@@ -18,6 +18,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -158,6 +159,9 @@ func serviceClosedError() error {
 
 // CreateIndex creates or opens a compatible document service index.
 func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (IndexInfo, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if s == nil {
 		return IndexInfo{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
 	}
@@ -168,7 +172,24 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 			return IndexInfo{}, err
 		}
 	}
-	return s.createIndexLocked(ctx, req)
+	if req.ColumnGraphServing != nil && !req.TypedInput {
+		return IndexInfo{}, serviceError(CodeInvalidRequest, "column_graph_serving requires typed_input")
+	}
+	info, err := s.createIndexLocked(ctx, req)
+	if err != nil || req.ColumnGraphServing == nil {
+		return info, err
+	}
+	col, _, err := s.openIndex(ctx, req.Name, 0)
+	if err == nil {
+		err = col.EnsureColumnGraphServing(ctx, info.VectorIndexName, *req.ColumnGraphServing)
+	}
+	if err != nil {
+		return IndexInfo{}, mapVectorIndexSearchError("ensure typed graph serving", err)
+	}
+	if err := s.primeBenchmarkSearchCache(req.Name, col, info); err != nil {
+		return IndexInfo{}, err
+	}
+	return info, nil
 }
 
 func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest) (IndexInfo, error) {
@@ -204,9 +225,17 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 		return IndexInfo{}, err
 	}
 	options := collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}
+	if req.TypedInput && vectorOptions.strategy != collections.VectorIndexStrategyColumnGraph {
+		return IndexInfo{}, serviceError(CodeInvalidRequest, "typed input requires column_graph")
+	}
 	if vectorOptions.strategy == collections.VectorIndexStrategyColumnGraph {
 		options.ColumnStore = serviceColumnStoreConfig(req.Dimension)
-		if len(scalarDeclarations) != 0 {
+		if req.TypedInput {
+			options.ColumnStore, err = serviceTypedInputConfig(req.Dimension, scalarDeclarations)
+			if err != nil {
+				return IndexInfo{}, err
+			}
+		} else if len(scalarDeclarations) != 0 {
 			// Retained-payload reconstruction is intentionally fail-closed for
 			// collection secondary indexes until their mutation paths consume
 			// reconstructed documents.
@@ -252,9 +281,12 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 		existing, openErr := s.manager.OpenCollection(req.Name)
 		switch {
 		case openErr == nil:
+			if req.TypedInput != serviceUsesTypedInput(existing.Meta()) {
+				return IndexInfo{}, serviceError(CodeConflict, "existing index has incompatible typed input ownership")
+			}
 			existingOptions := existing.Meta().Options
 			if existingOptions.ColumnStore != nil && existingOptions.ColumnStore.Enabled &&
-				(len(scalarDeclarations) == 0 || existingOptions.ColumnStore.RetainedPayload == collections.ColumnRetainedPayloadFull) {
+				(req.TypedInput || len(scalarDeclarations) == 0 || existingOptions.ColumnStore.RetainedPayload == collections.ColumnRetainedPayloadFull) {
 				meta.Options.ColumnStore = existingOptions.ColumnStore
 			}
 			meta.Options.DisableBufferedIndexedAsyncFlush = existingOptions.DisableBufferedIndexedAsyncFlush
@@ -417,6 +449,9 @@ func (s *Service) upsertDocuments(ctx context.Context, index string, req UpsertD
 	}
 	if len(req.Documents) == 0 {
 		return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "documents must not be empty")
+	}
+	if info.TypedInput {
+		return s.upsertTypedDocuments(ctx, col, info, req)
 	}
 	startPhase(&upsertStats.PrepareNanos)
 	prepareRetainedJSON := sharedCandidate && req.DeferVectorIndexRebuild && serviceUsesTrustedNonColumnRetainedJSON(col.MetaView())
@@ -663,7 +698,7 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 		if err := req.Filter.Validate(); err != nil {
 			return DeleteDocumentsResponse{}, err
 		}
-		ids, err = s.collectMatchingIDs(ctx, col, req.Filter, info.ScalarFields)
+		ids, err = s.collectMatchingIDs(ctx, col, req.Filter, info.Generation)
 		if err != nil {
 			return DeleteDocumentsResponse{}, err
 		}
@@ -700,7 +735,9 @@ func (s *Service) CountDocuments(ctx context.Context, index string, req CountDoc
 			return CountDocumentsResponse{}, err
 		}
 		count := 0
+		workstats.Scans.CountIDs.Starts.Add(1)
 		_, err = col.ScanDocumentIDsFunc(maxServiceScanDocuments, func([]byte) (bool, error) {
+			workstats.Scans.CountIDs.Rows.Add(1)
 			if err := ctxErr(ctx); err != nil {
 				return false, err
 			}
@@ -718,8 +755,14 @@ func (s *Service) CountDocuments(ctx context.Context, index string, req CountDoc
 	if err := req.Filter.Validate(); err != nil {
 		return CountDocumentsResponse{}, err
 	}
+	if ids, indexed, capturedInfo, err := collectMatchingIDsFromScalarIndexes(ctx, col, req.Filter, req.ExpectedGeneration); indexed || err != nil {
+		if err != nil {
+			return CountDocumentsResponse{}, err
+		}
+		return CountDocumentsResponse{Index: capturedInfo, Count: len(ids)}, nil
+	}
 	count := 0
-	err = s.scanDocuments(ctx, col, func(doc Document) error {
+	err = s.scanDocuments(ctx, col, &workstats.Scans.FilteredCount, func(doc Document) error {
 		ok, err := matchFilter(req.Filter, doc)
 		if err != nil || !ok {
 			return err
@@ -759,7 +802,7 @@ func (s *Service) FilterDocuments(ctx context.Context, index string, req FilterD
 		if scanBudget < maxServiceScanDocuments {
 			scanBudget++
 		}
-		truncated, err := s.scanDocumentsAfter(ctx, col, req.AfterID, scanBudget, func(doc Document) error {
+		truncated, err := s.scanDocumentsAfter(ctx, col, req.AfterID, scanBudget, &workstats.Scans.Cursor, func(doc Document) error {
 			lastScanned = doc.ID
 			ok, err := matchFilter(req.Filter, doc)
 			if err != nil || !ok {
@@ -812,7 +855,7 @@ func (s *Service) FilterDocuments(ctx context.Context, index string, req FilterD
 	}
 	var docs []Document
 	matched := 0
-	err = s.scanDocuments(ctx, col, func(doc Document) error {
+	err = s.scanDocuments(ctx, col, &workstats.Scans.FilteredRetrieval, func(doc Document) error {
 		ok, err := matchFilter(req.Filter, doc)
 		if err != nil || !ok {
 			return err
@@ -883,7 +926,7 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 	}
 	var candidates []scoredDocument
 	candidateCount := 0
-	err = s.scanDocuments(ctx, col, func(doc Document) error {
+	err = s.scanDocuments(ctx, col, &workstats.Scans.DenseExact, func(doc Document) error {
 		ok, err := matchFilter(req.Filter, doc)
 		if err != nil || !ok {
 			return err
@@ -930,6 +973,13 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 // index declares a compatible no-document vector route, including declared
 // scalar filters on native_runtime, and exact otherwise.
 func resolveDenseSearchRoute(req DenseVectorSearchRequest, info IndexInfo) (Route, error) {
+	if info.TypedInput {
+		route := Route(strings.TrimSpace(strings.ToLower(string(req.Route))))
+		if route == "" || route == RouteAnn {
+			return RouteAnn, nil
+		}
+		return "", serviceError(CodeUnsupported, "typed input requires the admitted graph route; document-scan exact is unavailable")
+	}
 	switch Route(strings.TrimSpace(strings.ToLower(string(req.Route)))) {
 	case "":
 		if info.Capabilities.NoDocumentVectorSearch &&
@@ -1000,7 +1050,7 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 		return ResetIndexResponse{}, err
 	}
 
-	ids, err := s.collectMatchingIDs(ctx, existingCol, nil, nil)
+	ids, err := s.collectMatchingIDs(ctx, existingCol, nil, 0)
 	if err != nil {
 		return ResetIndexResponse{}, err
 	}
@@ -1050,6 +1100,12 @@ func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeI
 	}
 	if vectorIndexName != info.VectorIndexName {
 		return OptimizeIndexResponse{}, serviceErrorf(CodeInvalidRequest, "unsupported vector_index_name %q", req.VectorIndexName)
+	}
+	if info.TypedInput {
+		return s.optimizeTypedInput(ctx, col, info, req)
+	}
+	if req.ColumnGraphServing != nil || req.ColumnGraphAction != "" {
+		return OptimizeIndexResponse{}, serviceError(CodeInvalidRequest, "typed graph lifecycle requires typed_input")
 	}
 
 	var maintenance VectorIndexMaintenanceStatus
@@ -1436,6 +1492,9 @@ func (s *Service) primeBenchmarkSearchCache(name string, col *collections.Collec
 }
 
 func (s *Service) finishVectorMutation(name string, col *collections.Collection, info IndexInfo) error {
+	if info.TypedInput && info.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
+		return s.primeBenchmarkSearchCache(name, col, info)
+	}
 	if info.VectorStrategy != collections.VectorIndexStrategyNativeRuntime || !info.Capabilities.NoDocumentVectorSearch {
 		return s.invalidateBenchmarkSearchCache(name)
 	}
@@ -1643,9 +1702,20 @@ func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
 	hybridSearch := vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
 	scalarFields := scalarFieldsFromCollectionIndexes(meta.Indexes)
 	capabilities := indexCapabilities(vectorDef, hybridSearch)
+	if serviceUsesTypedInput(meta) {
+		// The selected native planner may choose bounded exact scoring, but the
+		// separate public document-scan route is intentionally unavailable.
+		capabilities.ExactDenseScoring = false
+	} else if cfg := meta.Options.ColumnStore; vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph && cfg != nil && cfg.PhysicalMutationParts > 0 {
+		// Legacy graphs cover an insert-only base. Persisted mutation parts make
+		// them unavailable for automatic ANN selection, including after reopen.
+		// Explicit ANN still reaches the engine's fail-closed graph validation.
+		capabilities.NoDocumentVectorSearch = false
+	}
 	capabilities.KeywordMetadataFilters = len(scalarFields) > 0
 	capabilities.HybridMetadataFilters = len(scalarFields) > 0
 	return IndexInfo{
+		TypedInput:           serviceUsesTypedInput(meta),
 		Name:                 meta.Name,
 		Dimension:            vectorDef.Dimensions,
 		Metric:               metric,
@@ -1951,12 +2021,12 @@ func validateDocumentIDs(ids []string) ([]string, error) {
 	return out, nil
 }
 
-func (s *Service) collectMatchingIDs(ctx context.Context, col *collections.Collection, filter *Filter, scalarFields []ScalarFieldInfo) ([]string, error) {
-	if ids, indexed, err := collectMatchingIDsFromScalarIndexes(ctx, col, filter, newScalarSchema(scalarFields)); indexed || err != nil {
+func (s *Service) collectMatchingIDs(ctx context.Context, col *collections.Collection, filter *Filter, expectedGeneration uint64) ([]string, error) {
+	if ids, indexed, _, err := collectMatchingIDsFromScalarIndexes(ctx, col, filter, expectedGeneration); indexed || err != nil {
 		return ids, err
 	}
 	var ids []string
-	err := s.scanDocuments(ctx, col, func(doc Document) error {
+	err := s.scanDocuments(ctx, col, &workstats.Scans.MutationMatch, func(doc Document) error {
 		ok, err := matchFilter(filter, doc)
 		if err != nil || !ok {
 			return err
@@ -1967,7 +2037,35 @@ func (s *Service) collectMatchingIDs(ctx context.Context, col *collections.Colle
 	return ids, err
 }
 
-func collectMatchingIDsFromScalarIndexes(ctx context.Context, col *collections.Collection, filter *Filter, schema scalarSchema) ([]string, bool, error) {
+// Scalar predicates and all posting leaves use the same captured catalog/root.
+func collectMatchingIDsFromScalarIndexes(ctx context.Context, col *collections.Collection, filter *Filter, expectedGeneration uint64) (ids []string, indexed bool, info IndexInfo, err error) {
+	if filter == nil {
+		return
+	}
+	if err = ctxErr(ctx); err != nil {
+		return
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		return nil, false, info, mapDocumentScanError(err)
+	}
+	defer func() { err = errors.Join(err, view.Close()) }()
+	meta, err := view.Meta()
+	if err != nil {
+		return nil, false, info, mapDocumentScanError(err)
+	}
+	info, err = indexInfoFromMeta(meta)
+	if err != nil {
+		return nil, false, info, err
+	}
+	if expectedGeneration != 0 && info.Generation != expectedGeneration {
+		return nil, false, info, serviceErrorf(CodeIndexStale, "captured generation %d does not match expected_generation %d", info.Generation, expectedGeneration)
+	}
+	ids, indexed, err = collectMatchingIDsFromScalarReadView(ctx, view, filter, newScalarSchema(info.ScalarFields))
+	return
+}
+
+func collectMatchingIDsFromScalarReadView(ctx context.Context, view *collections.CollectionReadView, filter *Filter, schema scalarSchema) ([]string, bool, error) {
 	if filter == nil {
 		return nil, false, nil
 	}
@@ -2013,33 +2111,24 @@ func collectMatchingIDsFromScalarIndexes(ctx context.Context, col *collections.C
 		if err := ctxErr(ctx); err != nil {
 			return nil, true, err
 		}
-		ids, err := col.FindByIndexValue(predicate.filter.IndexName, predicate.filter.Value)
-		if err != nil {
-			return nil, true, mapDocumentScanError(err)
-		}
-		if candidates == nil {
-			candidates = make(map[string]struct{}, len(ids))
-			for i, id := range ids {
-				if i&1023 == 0 {
-					if err := ctxErr(ctx); err != nil {
-						return nil, true, err
-					}
-				}
-				candidates[string(id)] = struct{}{}
+		matches := make(map[string]struct{})
+		err := view.VisitIndexValueIDs(predicate.filter.IndexName, predicate.filter.Value, func(id []byte) error {
+			if err := ctxErr(ctx); err != nil {
+				return err
 			}
-			continue
-		}
-		matches := make(map[string]struct{}, min(len(candidates), len(ids)))
-		for i, id := range ids {
-			if i&1023 == 0 {
-				if err := ctxErr(ctx); err != nil {
-					return nil, true, err
-				}
-			}
-			key := string(id)
-			if _, ok := candidates[key]; ok {
+			key := string(id) // Own IDs beyond the borrowed callback lifetime.
+			if candidates == nil {
+				matches[key] = struct{}{}
+			} else if _, ok := candidates[key]; ok {
 				matches[key] = struct{}{}
 			}
+			return nil
+		})
+		if err != nil {
+			if errors.Is(err, collections.ErrHybridSearchIndexUnavailable) {
+				return nil, true, mapHybridSearchError(err)
+			}
+			return nil, true, mapDocumentScanError(err)
 		}
 		candidates = matches
 	}
@@ -2057,8 +2146,8 @@ func collectMatchingIDsFromScalarIndexes(ctx context.Context, col *collections.C
 	return out, true, nil
 }
 
-func (s *Service) scanDocuments(ctx context.Context, col *collections.Collection, fn func(Document) error) error {
-	_, err := s.scanDocumentsAfter(ctx, col, "", maxServiceScanDocuments, fn)
+func (s *Service) scanDocuments(ctx context.Context, col *collections.Collection, scan *workstats.ScanCounter, fn func(Document) error) error {
+	_, err := s.scanDocumentsAfter(ctx, col, "", maxServiceScanDocuments, scan, fn)
 	return err
 }
 
@@ -2107,7 +2196,7 @@ func (s *Service) getStoredDocument(ctx context.Context, col *collections.Collec
 	return doc, true, nil
 }
 
-func (s *Service) scanDocumentsAfter(ctx context.Context, col *collections.Collection, afterID string, maxDocuments int, fn func(Document) error) (bool, error) {
+func (s *Service) scanDocumentsAfter(ctx context.Context, col *collections.Collection, afterID string, maxDocuments int, scan *workstats.ScanCounter, fn func(Document) error) (bool, error) {
 	if err := ctxErr(ctx); err != nil {
 		return false, err
 	}
@@ -2122,7 +2211,9 @@ func (s *Service) scanDocumentsAfter(ctx context.Context, col *collections.Colle
 		return false, wrapServiceError(CodeIndexUnavailable, "document materializer unavailable", err)
 	}
 	defer func() { _ = materializer.Close() }()
+	scan.Starts.Add(1)
 	truncated, err := col.ScanDocumentsAfterFunc([]byte(afterID), maxDocuments, func(record collections.DocumentRecord) (bool, error) {
+		scan.Rows.Add(1)
 		if err := ctxErr(ctx); err != nil {
 			return false, err
 		}

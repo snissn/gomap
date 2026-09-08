@@ -248,7 +248,7 @@ func TestLocalEndpointBoundsConsumedFrame(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = endpoint.close(); _ = server.Close() })
 	endpoint.frame = make([]byte, 0, maxBufferedWriteFrameBody+1)
-	if _, _, err := endpoint.roundTrip(context.Background(), 0, iwire.FramePing, 1, nil, iwire.FramePong, iwire.DefaultLimits(), nil, false); err != nil {
+	if _, _, err := endpoint.roundTrip(context.Background(), 0, iwire.FramePing, 1, nil, iwire.FramePong, iwire.DefaultLimits(), nil, false, false); err != nil {
 		t.Fatalf("roundTrip: %v", err)
 	}
 	if cap(endpoint.frame) > maxBufferedWriteFrameBody {

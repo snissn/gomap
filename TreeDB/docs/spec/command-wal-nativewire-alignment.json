@@ -8,6 +8,7 @@
     "future_rejected_v1",
     "local_only_rejected_v1",
     "local_only_barrier_v1",
+    "local_only_mutation_v1",
     "read_rejected_v1"
   ],
   "ack_recoverability": {
@@ -100,6 +101,18 @@
       "support_matrix_status": "WAL-supported",
       "relationship": "lowered_kind_only_v1",
       "notes": "Kind-only alignment: native-wire update_bson_set is a specialized top-level BSON field update entry point, while local command WAL records the resulting collection update-by-id command payload. Fixtures pin command support and recovery coverage, but they are not byte-equivalent."
+    },
+    {
+      "nativewire_command": "CommandTypedDocumentUpsert",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "CollectionReplaceSourceByID (typed format 12)",
+      "command_wal_payload_format": "CollectionTypedSourcePayload (format 12)",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "WAL-supported",
+      "relationship": "local_only_mutation_v1",
+      "notes": "Typed upsert uses one atomic local typed-source command-WAL frame and existing typed-source replay. The native command is local-only: deterministic entry encoding and Raft application reject it. No replicated payload equivalence is claimed."
     },
     {
       "nativewire_command": "CommandDeleteBatch",

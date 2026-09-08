@@ -1,11 +1,22 @@
 package collections
 
-import "slices"
+import (
+	"context"
+	"slices"
+)
 
 // searchPreparedFilter does no posting or locator work. The plan's current pin
 // owns eligibility; the older base is only a checked vector/graph accelerator.
 func (v *typedGraphOverlaySearch) searchPreparedFilter(plan *typedGraphPreparedFilter, query []float32, topK, efSearch, candidateLimit int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, typedGraphOverlaySearchStats, error) {
+	return v.searchPreparedFilterWithContext(context.Background(), plan, query, topK, efSearch, candidateLimit, buffer)
+}
+
+func (v *typedGraphOverlaySearch) searchPreparedFilterWithContext(ctx context.Context, plan *typedGraphPreparedFilter, query []float32, topK, efSearch, candidateLimit int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, typedGraphOverlaySearchStats, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var stats typedGraphOverlaySearchStats
+	defer stats.recordWork()
 	completed := false
 	if buffer != nil {
 		buffer.resetView()
@@ -40,7 +51,11 @@ func (v *typedGraphOverlaySearch) searchPreparedFilter(plan *typedGraphPreparedF
 	if candidateLimit <= 0 {
 		return nil, stats, errTypedGraphSearchBudget
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, stats, err
+	}
 	if topK == 0 || plan.count == 0 {
+		stats.Route = "typed_empty"
 		completed = true
 		return nil, stats, nil
 	}
@@ -49,11 +64,17 @@ func (v *typedGraphOverlaySearch) searchPreparedFilter(plan *typedGraphPreparedF
 		if plan.count > candidateLimit {
 			return nil, stats, errTypedGraphSearchBudget
 		}
+		stats.Route = "typed_exact"
 		// Retain only K scored ordinals; document IDs are read at the result
 		// boundary, not for every eligible candidate.
 		scratch := &buffer.searchScratch
 		scratch.top = scratch.top[:0]
 		for rank, ordinal := range plan.exactBaseByID {
+			if rank&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, stats, err
+				}
+			}
 			vector, _, _, ok := v.base.reader.typedVectorSource.vectorForOrdinal(ordinal)
 			if !ok {
 				return nil, stats, ErrVectorIndexSnapshotMismatch
@@ -69,15 +90,23 @@ func (v *typedGraphOverlaySearch) searchPreparedFilter(plan *typedGraphPreparedF
 			stats.ExactBaseScored++
 			scratch.insertTop(baseK, columnVectorGraphSearchCandidate{ordinal: rank, score: score})
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, stats, err
+		}
 		scratch.retainTopBestFirst(baseK)
-		for _, candidate := range scratch.top {
+		for i, candidate := range scratch.top {
+			if i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, stats, err
+				}
+			}
 			id, ok := v.pack.documentIDForOrdinal(plan.exactBaseByID[candidate.ordinal])
 			if !ok {
 				return nil, stats, ErrVectorIndexSnapshotMismatch
 			}
 			buffer.baseResults = append(buffer.baseResults, VectorIndexSearchResult{ID: id, Score: candidate.score})
+			stats.BaseResultIDs++
 		}
-		stats.BaseResultIDs = len(buffer.baseResults)
 	} else {
 		baseLimit := candidateLimit - len(plan.delta)
 		if baseK == 0 || baseLimit < baseK || len(plan.excludedBase) > baseLimit-baseK || efSearch > baseLimit {
@@ -87,13 +116,19 @@ func (v *typedGraphOverlaySearch) searchPreparedFilter(plan *typedGraphPreparedF
 		if efSearch == 0 {
 			efSearch = min(v.base.reader.def.EfSearch, baseLimit)
 		}
-		results, baseStats, err := v.pack.searchCosine(query, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: max(baseRequestK, efSearch), CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true}, &buffer.searchScratch)
+		stats.Route = "typed_hnsw"
+		results, baseStats, err := v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: max(baseRequestK, efSearch), CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
 		stats.Base = baseStats
 		stats.BaseResultIDs = len(results)
 		if err != nil {
 			return nil, stats, err
 		}
-		for _, result := range results {
+		for i, result := range results {
+			if i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, stats, err
+				}
+			}
 			if plan.excludesBaseOrdinal(result.Ordinal) {
 				stats.BaseShadowed++
 				continue
@@ -101,7 +136,12 @@ func (v *typedGraphOverlaySearch) searchPreparedFilter(plan *typedGraphPreparedF
 			buffer.baseResults = append(buffer.baseResults, VectorIndexSearchResult{ID: result.ID, Score: result.Score})
 		}
 	}
-	for _, i := range plan.delta {
+	for rank, i := range plan.delta {
+		if rank&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, stats, err
+			}
+		}
 		row := v.rows[i]
 		score, err := columnVectorGraphNativeCosineScoreVector(query, queryNorm, i, row.Values[v.vectorColumn].Float32Vector, v.invNorms[i])
 		if err != nil {
@@ -119,9 +159,15 @@ func (v *typedGraphOverlaySearch) searchPreparedFilter(plan *typedGraphPreparedF
 		}
 		return 0
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, stats, err
+	}
 	slices.SortFunc(buffer.baseResults, compare)
+	if err := ctx.Err(); err != nil {
+		return nil, stats, err
+	}
 	slices.SortFunc(buffer.deltaResults, compare)
-	results, err := mergeVectorIndexViewResults(buffer.baseResults, buffer.deltaResults, topK, buffer)
+	results, err := mergeVectorIndexViewResultsWithContext(ctx, buffer.baseResults, buffer.deltaResults, topK, buffer)
 	if err != nil {
 		return nil, stats, err
 	}

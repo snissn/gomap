@@ -14,11 +14,13 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -38,6 +40,10 @@ const (
 const columnAssetSegmentWriteLockStripes = 64
 const columnPhysicalAssetReadScratchPoolMaxRetainBytes = 16 << 20
 const columnAssetVerifiedChecksumCacheSlots = 4096
+
+// Cache-owned metadata only, excluding slices retained by active readers after
+// eviction. This admits three 2.5M-row native-int tables on amd64.
+const columnAssetRowIndexCacheMaxBytes = 64 << 20
 const typedColumnPartDirectViewAssetAlignment = 8
 const dictionaryCodesDirectViewAssetAlignment = columnDictionaryCodesPayloadAlignment
 const int64ValuesDirectViewAssetAlignment = columnInt64ValuesPayloadAlignment
@@ -62,8 +68,13 @@ var columnAssetSegmentAllocationCaches [columnAssetSegmentWriteLockStripes]colum
 
 var columnAssetVerifiedChecksumCache = struct {
 	sync.Mutex
-	entries [columnAssetVerifiedChecksumCacheSlots]columnAssetVerifiedChecksumEntry
+	entries           [columnAssetVerifiedChecksumCacheSlots]columnAssetVerifiedChecksumEntry
+	rowIndexBytes     uint64
+	rowIndexEntries   uint64
+	rowIndexEvictNext int
 }{}
+
+func init() { workstats.RowIndexCache.ByteLimit.Store(columnAssetRowIndexCacheMaxBytes) }
 
 var columnAssetManagerNamespacePathCaches [columnAssetSegmentWriteLockStripes]columnAssetManagerNamespacePathCache
 var columnAssetSegmentDirSyncCaches [columnAssetSegmentWriteLockStripes]columnAssetSegmentDirSyncCache
@@ -74,8 +85,92 @@ var stableColumnAssetResourceTokenForPublish = stableColumnAssetResourceToken
 var stableColumnAssetResourceTokenWithRegistryForPublish = stableColumnAssetResourceTokenWithRegistry
 
 type columnAssetVerifiedChecksumEntry struct {
-	key   columnAssetVerifiedChecksumKey
-	valid bool
+	key      columnAssetVerifiedChecksumKey
+	valid    bool
+	rowIndex *columnAssetVerifiedRowIndex
+}
+
+// No source bytes or snapshot state are retained. Offsets are immutable after
+// publication, and a reader can safely keep them after cache eviction.
+type columnAssetVerifiedRowIndex struct {
+	version    uint16
+	rowsOffset int
+	schemaHash uint64
+	operation  ColumnPublishOperation
+	offsets    []int
+}
+
+func (r *columnAssetVerifiedRowIndex) matches(version uint16, rowsOffset int, header columnPhysicalAssetScanHeader) bool {
+	return r != nil && r.version == version && r.rowsOffset == rowsOffset && r.schemaHash == header.SchemaHash && r.operation == header.Operation && len(r.offsets) == header.RowCount
+}
+
+func (r *columnAssetVerifiedRowIndex) retainedBytes() uint64 {
+	width, descriptor := uint64(unsafe.Sizeof(int(0))), uint64(unsafe.Sizeof(*r))
+	if uint64(cap(r.offsets)) > (^uint64(0)-descriptor)/width {
+		return ^uint64(0)
+	}
+	return uint64(cap(r.offsets))*width + descriptor
+}
+
+// Caller holds the existing checksum-cache mutex. Dropping a memo never
+// changes its independent checksum proof and never mutates a borrowed slice.
+func evictColumnAssetRowIndexLocked(entry *columnAssetVerifiedChecksumEntry) {
+	if entry.rowIndex == nil {
+		return
+	}
+	columnAssetVerifiedChecksumCache.rowIndexBytes -= entry.rowIndex.retainedBytes()
+	columnAssetVerifiedChecksumCache.rowIndexEntries--
+	entry.rowIndex = nil
+	workstats.RowIndexCache.Evictions.Add(1)
+}
+
+func publishColumnAssetRowIndexResidencyLocked() {
+	workstats.RowIndexCache.RetainedBytes.Store(columnAssetVerifiedChecksumCache.rowIndexBytes)
+	workstats.RowIndexCache.Entries.Store(columnAssetVerifiedChecksumCache.rowIndexEntries)
+}
+
+func lookupColumnAssetRowIndex(key columnAssetVerifiedChecksumKey, version uint16, rowsOffset int, header columnPhysicalAssetScanHeader) *columnAssetVerifiedRowIndex {
+	columnAssetVerifiedChecksumCache.Lock()
+	entry := &columnAssetVerifiedChecksumCache.entries[columnAssetVerifiedChecksumCacheIndex(key)]
+	var rowIndex *columnAssetVerifiedRowIndex
+	if entry.key == key && entry.rowIndex.matches(version, rowsOffset, header) {
+		rowIndex = entry.rowIndex
+	}
+	columnAssetVerifiedChecksumCache.Unlock()
+	if rowIndex != nil {
+		workstats.RowIndexCache.Hits.Add(1)
+	} else {
+		workstats.RowIndexCache.Misses.Add(1)
+	}
+	return rowIndex
+}
+
+func storeColumnAssetRowIndex(key columnAssetVerifiedChecksumKey, rowIndex *columnAssetVerifiedRowIndex) *columnAssetVerifiedRowIndex {
+	bytes := rowIndex.retainedBytes()
+	if bytes > columnAssetRowIndexCacheMaxBytes {
+		workstats.RowIndexCache.OversizedBypasses.Add(1)
+		return rowIndex
+	}
+	columnAssetVerifiedChecksumCache.Lock()
+	defer columnAssetVerifiedChecksumCache.Unlock()
+	entry := &columnAssetVerifiedChecksumCache.entries[columnAssetVerifiedChecksumCacheIndex(key)]
+	if entry.key == key && entry.rowIndex.matches(rowIndex.version, rowIndex.rowsOffset, columnPhysicalAssetScanHeader{SchemaHash: rowIndex.schemaHash, Operation: rowIndex.operation, RowCount: len(rowIndex.offsets)}) {
+		return entry.rowIndex
+	}
+	evictColumnAssetRowIndexLocked(entry)
+	if entry.key != key {
+		*entry = columnAssetVerifiedChecksumEntry{key: key}
+	}
+	for columnAssetVerifiedChecksumCache.rowIndexBytes > columnAssetRowIndexCacheMaxBytes-bytes {
+		victim := &columnAssetVerifiedChecksumCache.entries[columnAssetVerifiedChecksumCache.rowIndexEvictNext]
+		columnAssetVerifiedChecksumCache.rowIndexEvictNext = (columnAssetVerifiedChecksumCache.rowIndexEvictNext + 1) % columnAssetVerifiedChecksumCacheSlots
+		evictColumnAssetRowIndexLocked(victim)
+	}
+	entry.rowIndex = rowIndex
+	columnAssetVerifiedChecksumCache.rowIndexBytes += bytes
+	columnAssetVerifiedChecksumCache.rowIndexEntries++
+	publishColumnAssetRowIndexResidencyLocked()
+	return rowIndex
 }
 
 type columnAssetVerifiedChecksumFileIdentity struct {
@@ -2455,7 +2550,13 @@ func columnAssetVerifiedChecksumCacheStore(rootDir string, ref ColumnAssetRef, f
 	key := columnAssetVerifiedChecksumKeyForRef(rootDir, ref, fileIdentity)
 	idx := columnAssetVerifiedChecksumCacheIndex(key)
 	columnAssetVerifiedChecksumCache.Lock()
-	columnAssetVerifiedChecksumCache.entries[idx] = columnAssetVerifiedChecksumEntry{key: key, valid: true}
+	entry := &columnAssetVerifiedChecksumCache.entries[idx]
+	if entry.key != key {
+		evictColumnAssetRowIndexLocked(entry)
+		*entry = columnAssetVerifiedChecksumEntry{key: key}
+		publishColumnAssetRowIndexResidencyLocked()
+	}
+	entry.valid = true
 	columnAssetVerifiedChecksumCache.Unlock()
 }
 
@@ -2512,24 +2613,27 @@ func columnAssetVerifiedChecksumCacheHashUint64(h uint64, v uint64) uint64 {
 }
 
 type columnPhysicalAssetReadCache struct {
-	namespace           string
-	rootDir             string
-	segmentDir          string
-	readIntegrity       ColumnAssetReadIntegrity
-	verifyChecksum      bool
-	fileID              uint32
-	file                *columnPhysicalAssetSegmentReader
-	files               map[uint32]*columnPhysicalAssetSegmentReader
-	scratch             []byte
-	returnViews         bool
-	forceReadAtFallback bool
-	lastView            bool
-	hits                uint64
-	misses              uint64
-	mmapHits            uint64
-	readAtFallbacks     uint64
-	fileOpens           uint64
-	fileCloses          uint64
+	namespace              string
+	rootDir                string
+	segmentDir             string
+	readIntegrity          ColumnAssetReadIntegrity
+	verifyChecksum         bool
+	fileID                 uint32
+	file                   *columnPhysicalAssetSegmentReader
+	files                  map[uint32]*columnPhysicalAssetSegmentReader
+	scratch                []byte
+	returnViews            bool
+	forceReadAtFallback    bool
+	lastView               bool
+	verifiedRowIndexRef    ColumnAssetRef
+	verifiedRowIndexKey    columnAssetVerifiedChecksumKey
+	hasVerifiedRowIndexKey bool
+	hits                   uint64
+	misses                 uint64
+	mmapHits               uint64
+	readAtFallbacks        uint64
+	fileOpens              uint64
+	fileCloses             uint64
 	// trustCachedVerifyFileIdentity lets explicit prepared lifetimes reuse the
 	// identity captured when the segment reader was opened. Default read caches
 	// keep refreshing identity so existing fail-closed tests and non-prepared
@@ -2675,6 +2779,7 @@ func (c *columnPhysicalAssetReadCache) releaseResourceHandlesBySource(source map
 }
 
 func (c *columnPhysicalAssetReadCache) close() error {
+	c.hasVerifiedRowIndexKey = false
 	var closeErr error
 	if err := c.releaseResourceHandles(); err != nil {
 		closeErr = err
@@ -2711,6 +2816,7 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	if c == nil {
 		return nil, errors.New("collections: nil column physical asset read cache")
 	}
+	c.hasVerifiedRowIndexKey = false
 	if ref.Namespace != c.namespace {
 		return nil, fmt.Errorf("collections: column physical asset ref namespace=%q want %q", ref.Namespace, c.namespace)
 	}
@@ -2734,6 +2840,7 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 			}
 			c.mmapHits++
 			c.lastView = true
+			c.rememberVerifiedRowIndexRead(ref, reader)
 			return raw, nil
 		}
 		c.readAtFallbacks++
@@ -2761,7 +2868,19 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	if _, err := c.trackResourceRead(ref, raw, mappedresource.SourceHeapCopy, fallback); err != nil {
 		return nil, err
 	}
+	c.rememberVerifiedRowIndexRead(ref, reader)
 	return raw, nil
+}
+
+// Capture only the identity of the opened reader that supplied the verified
+// bytes. A failed, unchecked or subsequent read cannot authorize memo reuse.
+func (c *columnPhysicalAssetReadCache) rememberVerifiedRowIndexRead(ref ColumnAssetRef, reader *columnPhysicalAssetSegmentReader) {
+	if c.readIntegrity != ColumnAssetReadIntegrityVerify || !c.verifyChecksum || !reader.identity.valid {
+		return
+	}
+	c.verifiedRowIndexRef = ref
+	c.verifiedRowIndexKey = columnAssetVerifiedChecksumKeyForRef(c.rootDir, ref, reader.identity)
+	c.hasVerifiedRowIndexKey = true
 }
 
 func (c *columnPhysicalAssetReadCache) validateFullRef(ref ColumnAssetRef) (int, error) {
@@ -2804,6 +2923,7 @@ func (c *columnPhysicalAssetReadCache) readRangeHandle(ref ColumnAssetRef, relat
 	if c == nil {
 		return nil, nil, errors.New("collections: nil column physical asset read cache")
 	}
+	c.hasVerifiedRowIndexKey = false
 	if err := validateColumnAssetRefForPlan(ref); err != nil {
 		return nil, nil, err
 	}

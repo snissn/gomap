@@ -13,6 +13,7 @@ import (
 	"github.com/buger/jsonparser"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // TypedColumnBatch supplies one required, non-null declared column. Exactly one
@@ -376,6 +377,11 @@ func typedProjectionFromPayload(meta CollectionMeta, payload commitlog.Collectio
 			return nil, nil, nil, err
 		}
 	}
+	if p.legacyTyped {
+		workstats.Replay.LegacyProjectionRowsDecoded.Add(uint64(len(ids)))
+	} else {
+		workstats.Replay.TypedRowsDecoded.Add(uint64(len(ids)))
+	}
 	return p, ids, docs, nil
 }
 
@@ -510,6 +516,9 @@ func applyTypedProjectionSubset(ids [][]byte, documents []columnWriteDocument, p
 }
 
 func typedIndexState(values []columnDeclaredValue, columns []ColumnStoreColumn, runtimes []indexRuntime, encoder *indexEncodeArena) (orderedDocumentIndexState, error) {
+	if len(runtimes) > 0 {
+		workstats.Typed.ScalarRows.Add(1)
+	}
 	state := encoder.appendState(len(runtimes))
 	for i, runtime := range runtimes {
 		j := typedStringColumnIndex(columns, runtime.def.field)
@@ -519,11 +528,15 @@ func typedIndexState(values []columnDeclaredValue, columns []ColumnStoreColumn, 
 		start := len(encoder.buf)
 		encoder.buf = appendIndexStringComponent(encoder.buf, []byte(values[j].String))
 		state[i] = encoder.appendSingleValueRef(encoder.buf[start:])
+		workstats.Typed.ScalarValues.Add(1)
 	}
 	return state, nil
 }
 
 func typedTextAnalysis(def TextIndexDefinition, values []columnDeclaredValue, columns []ColumnStoreColumn) (textAnalyzedDocument, error) {
+	if len(def.Fields) > 0 {
+		workstats.Typed.TextRows.Add(1)
+	}
 	out := textAnalyzedDocument{Fields: make([]textAnalyzedField, 0, len(def.Fields))}
 	for _, f := range def.Fields {
 		i := typedStringColumnIndex(columns, f.Field)
@@ -538,6 +551,7 @@ func typedTextAnalysis(def TextIndexDefinition, values []columnDeclaredValue, co
 		if err != nil {
 			return out, err
 		}
+		workstats.Typed.TextFields.Add(1)
 		if ok {
 			out.Fields = append(out.Fields, field)
 		}
@@ -601,6 +615,7 @@ func loadTypedTextOldStates(snap *backenddb.Snapshot, catalog *collectionCatalog
 		if err != nil {
 			return nil, err
 		}
+		workstats.Typed.TextOldRows.Add(1)
 		analysis, err := typedTextAnalysis(def, row.Values, columns)
 		if err != nil {
 			return nil, err

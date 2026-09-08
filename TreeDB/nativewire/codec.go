@@ -111,10 +111,14 @@ func writeAll(w io.Writer, p []byte) error {
 }
 
 func appendCommandRequestBody(dst []byte, commandID iwire.CommandID, sections ...iwire.Section) ([]byte, error) {
+	return appendVersionedCommandRequestBody(dst, commandID, 1, sections...)
+}
+
+func appendVersionedCommandRequestBody(dst []byte, commandID iwire.CommandID, version uint64, sections ...iwire.Section) ([]byte, error) {
 	var commandHeader [16]byte
 	headerSection := iwire.Section{
 		ID:    iwire.SectionCommandHeader,
-		Bytes: iwire.AppendCommandHeader(commandHeader[:0], iwire.CommandHeader{ID: commandID, Version: 1}),
+		Bytes: iwire.AppendCommandHeader(commandHeader[:0], iwire.CommandHeader{ID: commandID, Version: version}),
 	}
 	total := iwire.SectionEncodedLen(headerSection)
 	for _, section := range sections {

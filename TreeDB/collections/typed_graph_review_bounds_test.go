@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 func TestColumnAssetLifecycleSharedCopyBudgetCountsRecords(t *testing.T) {
@@ -173,6 +175,7 @@ func TestTypedGraphPublicFinalWarmBarrierCancellation(t *testing.T) {
 			}()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
+			beforeFold := workstats.Read().Fold
 			done := make(chan error, 1)
 			go func() {
 				if fold {
@@ -210,6 +213,13 @@ func TestTypedGraphPublicFinalWarmBarrierCancellation(t *testing.T) {
 				t.Error("canceled final warmer remains blocked on storage barrier")
 				releaseOnce.Do(func() { close(release) })
 				<-done
+			}
+			if fold {
+				afterFold := workstats.Read().Fold
+				state, available := col.ColumnGraphServingSnapshot()
+				if afterFold.Publications-beforeFold.Publications != 1 || afterFold.Public.Completed != beforeFold.Public.Completed || afterFold.Public.Errors-beforeFold.Public.Errors != 1 || !available || !state.ServingReady || state.Invalid {
+					t.Errorf("postpublication cancellation before=%+v after=%+v state=%+v", beforeFold, afterFold, state)
+				}
 			}
 			releaseOnce.Do(func() { close(release) })
 			if err := <-holder; err != nil {

@@ -31,6 +31,8 @@ const (
 
 // DenseVectorSearchRequest is the ANN-only native document-service request.
 type DenseVectorSearchRequest struct {
+	// TypedColumnGraph requires hello-negotiated dense v2 and selected admission.
+	TypedColumnGraph   bool
 	Index              string
 	Query              []float32
 	TopK               int
@@ -49,8 +51,10 @@ type DenseVectorSearchResult struct {
 }
 
 // DenseVectorSearchResponse and its Results borrow from the client until its
-// next round trip.
+// next round trip. DenseWork is independently owned and remains valid afterward.
 type DenseVectorSearchResponse struct {
+	DenseWork                 documentservice.DenseSearchWork
+	TypedColumnGraph          bool
 	Results                   []DenseVectorSearchResult
 	Route                     documentservice.Route
 	Candidates                int
@@ -73,19 +77,26 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	if !ok {
 		return DenseVectorSearchResponse{}, protocolError(iwire.ErrInvalidCommand, "bounded dense search deadline is required")
 	}
+	version := iwire.DenseVectorSearchLegacyVersion
+	if request.TypedColumnGraph {
+		if !c.denseTypedNegotiated {
+			return DenseVectorSearchResponse{}, protocolError(iwire.ErrUnsupportedFeature, "hello did not negotiate typed dense search")
+		}
+		version = iwire.DenseVectorSearchTypedVersion
+	}
 
 	payload, err := appendDenseVectorSearchRequest(c.denseRequest[:0], request, c.limits)
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
 	}
-	body, err := appendCommandRequestBody(c.requestBody[:0], iwire.CommandDenseVectorSearch,
+	body, err := appendVersionedCommandRequestBody(c.requestBody[:0], iwire.CommandDenseVectorSearch, version,
 		iwire.Section{ID: iwire.SectionDenseSearchRequest, Bytes: payload},
 		iwire.Section{ID: iwire.SectionDeadline, Bytes: binary.AppendUvarint(nil, uint64(deadline.UnixNano()))},
 	)
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
 	}
-	_, response, err := c.roundTripLocked(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	_, response, err := c.roundTripLockedStream(ctx, 0, iwire.FrameRequest, body, iwire.FrameResponse, version == iwire.DenseVectorSearchTypedVersion)
 	c.denseRequest = retainSmallPayloadScratch(payload)
 	c.requestBody = retainSmallPayloadScratch(body)
 	if err != nil {
@@ -124,15 +135,39 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 		return DenseVectorSearchResponse{}, err
 	}
 	var out DenseVectorSearchResponse
-	out, c.denseIDs, c.denseDocuments, c.denseResults, err = decodeDenseVectorSearchResponse(
-		ids, docs, meta, request.TopK, c.limits, c.denseIDs, c.denseDocuments, c.denseResults,
+	out, c.denseIDs, c.denseDocuments, c.denseResults, err = decodeVersionedDenseVectorSearchResponse(
+		version, ids, docs, meta, request.TopK, c.limits, c.denseIDs, c.denseDocuments, c.denseResults,
 	)
+	if err == nil {
+		out.DenseWork, err = decodeDenseWorkSection(c.vectorSections, version == iwire.DenseVectorSearchTypedVersion)
+	}
+	if err == nil && version == iwire.DenseVectorSearchTypedVersion {
+		err = validateDenseWorkResults(out.DenseWork, out.Results)
+	}
 	decoded = err == nil
+	if err != nil {
+		return DenseVectorSearchResponse{}, err
+	}
 	return out, err
 }
 
 func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, sections []iwire.Section, dst []byte) ([]byte, error) {
+	return s.handleVersionedDenseVectorSearch(ctx, state, iwire.DenseVectorSearchLegacyVersion, sections, dst)
+}
+
+func (s *Server) handleVersionedDenseVectorSearch(ctx context.Context, state *connState, version uint64, sections []iwire.Section, dst []byte) (_ []byte, err error) {
 	defer clearDenseVectorSearchScratch(state)
+	var proof *documentservice.DenseSearchWork
+	defer func() {
+		if err != nil && version == iwire.DenseVectorSearchTypedVersion {
+			if proof == nil {
+				proof = denseServiceWork(err)
+			}
+			if proof != nil {
+				err = &denseWorkError{error: err, work: *proof}
+			}
+		}
+	}()
 	deadline, err := deadlineUnixNanosFromSections(sections)
 	if err != nil {
 		return nil, err
@@ -151,7 +186,11 @@ func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, 
 	if s.documentService == nil {
 		return nil, protocolError(iwire.ErrUnsupportedFeature, "dense document service is not configured")
 	}
-	if err := s.checkResponseSectionCount(3); err != nil {
+	sectionCount := 3
+	if version == iwire.DenseVectorSearchTypedVersion {
+		sectionCount++
+	}
+	if err := s.checkResponseSectionCount(sectionCount); err != nil {
 		return nil, err
 	}
 	raw, ok, err := singletonSection(sections, iwire.SectionDenseSearchRequest)
@@ -179,7 +218,11 @@ func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, 
 	if err != nil {
 		return nil, err
 	}
+	proof = response.DenseWork
 	state.denseResults = response.Results[:0]
+	if response.TypedColumnGraph != (version == iwire.DenseVectorSearchTypedVersion) {
+		return nil, protocolError(iwire.ErrUnsupportedFeature, "dense command version does not match index strategy")
+	}
 
 	state.idsScratch = resizeByteSlices(state.idsScratch, len(response.Results))
 	state.docsScratch = resizeByteSlices(state.docsScratch, len(response.Results))
@@ -188,6 +231,23 @@ func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, 
 		state.docsScratch[i] = response.Results[i].Document
 	}
 	state.denseMeta = appendDenseVectorSearchResponse(state.denseMeta[:0], response)
+	if version == iwire.DenseVectorSearchTypedVersion {
+		state.denseMeta[0] = iwire.DenseVectorSearchTypedRouteTag
+	}
+	var proofBytes []byte
+	var proofScratch [380]byte
+	if version == iwire.DenseVectorSearchTypedVersion {
+		if proof == nil || !proof.Completed {
+			return nil, protocolError(iwire.ErrConsistencyUnavailable, "selected dense work is unavailable")
+		}
+		proofBytes, err = appendDenseWork(proofScratch[:0], *proof)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.checkResponseSectionLen("dense work", len(proofBytes)); err != nil {
+			return nil, err
+		}
+	}
 	idLen := iwire.ByteVectorEncodedLen(state.idsScratch)
 	docLen := iwire.ByteVectorEncodedLen(state.docsScratch)
 	idBytes, err := denseByteVectorPayloadLen(state.idsScratch)
@@ -227,6 +287,16 @@ func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, 
 			return nil, err
 		}
 	}
+	if proofBytes != nil {
+		sectionLen, err := responseSectionBodyLen(iwire.SectionDenseSearchWork, len(proofBytes))
+		if err != nil {
+			return nil, err
+		}
+		bodyLen, err = addResponseLen(bodyLen, sectionLen)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if err := s.checkResponseBodyLen(bodyLen); err != nil {
 		return nil, err
 	}
@@ -249,6 +319,12 @@ func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, 
 			dst = iwire.AppendByteVectorWithEncodedLen(dst, docLen, state.docsScratch...)
 		default:
 			dst = append(dst, state.denseMeta...)
+		}
+	}
+	if proofBytes != nil {
+		dst, err = iwire.AppendSection(dst, iwire.Section{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: proofBytes})
+		if err != nil {
+			return nil, err
 		}
 	}
 	return dst, nil
@@ -676,14 +752,20 @@ func appendDenseVectorSearchResponse(dst []byte, response documentservice.RawDen
 }
 
 func decodeDenseVectorSearchResponse(idsRaw, docsRaw, meta []byte, topK int, limits iwire.Limits, ids, docs [][]byte, results []DenseVectorSearchResult) (DenseVectorSearchResponse, [][]byte, [][]byte, []DenseVectorSearchResult, error) {
+	return decodeVersionedDenseVectorSearchResponse(iwire.DenseVectorSearchLegacyVersion, idsRaw, docsRaw, meta, topK, limits, ids, docs, results)
+}
+
+func decodeVersionedDenseVectorSearchResponse(version uint64, idsRaw, docsRaw, meta []byte, topK int, limits iwire.Limits, ids, docs [][]byte, results []DenseVectorSearchResult) (DenseVectorSearchResponse, [][]byte, [][]byte, []DenseVectorSearchResult, error) {
 	limits = denseDefaultLimits(limits)
 	var response DenseVectorSearchResponse
 	var err error
-	if topK <= 0 || len(meta) == 0 || (meta[0] != 0 && meta[0] != 1) {
+	typed := version == iwire.DenseVectorSearchTypedVersion
+	if topK <= 0 || len(meta) == 0 || (typed && meta[0] != iwire.DenseVectorSearchTypedRouteTag) || (!typed && (version != iwire.DenseVectorSearchLegacyVersion || meta[0] > 1)) {
 		return response, ids, docs, results, protocolError(iwire.ErrMalformedFrame, "dense route proof is invalid")
 	}
 	response.Route = documentservice.RouteAnn
 	response.NativeBasePlusLiveDelta = meta[0] == 1
+	response.TypedColumnGraph = typed
 	off := 1
 	response.Candidates, err = readDenseInt(meta, &off, "candidates")
 	if err != nil {
@@ -728,7 +810,7 @@ func decodeDenseVectorSearchResponse(idsRaw, docsRaw, meta []byte, topK int, lim
 		results[i] = DenseVectorSearchResult{ID: ids[i], Score: score, Document: docs[i]}
 	}
 	response.Results = results
-	if !response.NativeBasePlusLiveDelta || response.ExactFallbacks != 0 || response.FullDocumentScanFallbacks != 0 || response.Candidates < len(results) {
+	if (!typed && !response.NativeBasePlusLiveDelta) || response.ExactFallbacks != 0 || response.FullDocumentScanFallbacks != 0 || response.Candidates < len(results) {
 		return DenseVectorSearchResponse{}, ids, docs, results, protocolError(iwire.ErrConsistencyUnavailable, "dense response did not prove the native route")
 	}
 	return response, ids, docs, results, nil

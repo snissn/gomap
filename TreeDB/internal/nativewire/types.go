@@ -84,6 +84,10 @@ const (
 	SectionVectorStatus           SectionID = 128
 	SectionDenseSearchRequest     SectionID = 129
 	SectionDenseSearchResponse    SectionID = 130
+	SectionTypedUpsertRequest     SectionID = 131
+	SectionTypedUpsertResponse    SectionID = 132
+	SectionExpectedGeneration     SectionID = 133
+	SectionDenseSearchWork        SectionID = 134
 )
 
 type CommandID uint64
@@ -122,9 +126,17 @@ const (
 	CommandVectorSearchPinned        CommandID = 62
 	CommandVectorClosePinnedSnapshot CommandID = 63
 	CommandDenseVectorSearch         CommandID = 64
+	CommandTypedDocumentUpsert       CommandID = 65
 )
 
 type DocumentFormat uint64
+
+// Dense search versions identify disjoint service routes, not measured work.
+const (
+	DenseVectorSearchLegacyVersion = uint64(1)
+	DenseVectorSearchTypedVersion  = uint64(2)
+	DenseVectorSearchTypedRouteTag = byte(2)
+)
 
 const (
 	DocumentFormatDefault    DocumentFormat = 0
