@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
@@ -901,5 +902,202 @@ func TestTypedGraphPublicEnsureCancellationAndFailedAdmission(t *testing.T) {
 	}
 	if next, root := dbCommitSeqAndSystemRoot(col.db); next != seq || root != system {
 		t.Fatal("rejected write changed authority")
+	}
+}
+
+func TestTypedGraphPublicNoWriteVacuumOwner(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
+	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
+	index := base.indexName
+	if err := base.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := col.EnsureColumnGraphServing(context.Background(), index, typedGraphPublicTestOptions()); err != nil {
+		t.Fatal(err)
+	}
+	search := func() (string, error) {
+		var buffer VectorIndexSearchBuffer
+		response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: index, Query: columns[0].Float32Vectors[0], TopK: 3, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction, DeclaredScalarFilter: &HybridScalarFilter{IndexName: "path", Value: "source"}}, &buffer)
+		if err != nil {
+			return "", fmt.Errorf("snapshot=%+v results=%d mismatch=%t: %w", response.Stats.ColumnGraphWork.Snapshot, len(response.Results), errors.Is(err, ErrVectorIndexSnapshotMismatch), err)
+		}
+		defer view.Close()
+		docs, err := view.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
+		if err != nil {
+			return "", err
+		}
+		if len(response.Results) != 3 || docs.Stats.DocumentsMissing != 0 || docs.Stats.DocumentsFetched != 3 {
+			return "", fmt.Errorf("incomplete results=%d fetched=%d missing=%d", len(response.Results), docs.Stats.DocumentsFetched, docs.Stats.DocumentsMissing)
+		}
+		signature := ""
+		for i, hit := range response.Results {
+			signature += fmt.Sprintf("%q:%g:%q;", hit.ID, hit.Score, docs.Results[i].Document)
+		}
+		return signature, nil
+	}
+	want, err := search()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep a real read owner across relocation and a subsequent accepted write.
+	var heldBuffer VectorIndexSearchBuffer
+	heldResponse, held, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: index, Query: columns[0].Float32Vectors[0], TopK: 3, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &heldBuffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	oldDocs, err := held.FetchDocumentsForVectorIndexSearchResults(heldResponse.Results, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := col.collectionSchemaCoordinator().typedPublication.Load()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := col.db.VacuumIndexOnline(ctx); err != nil {
+		t.Fatalf("actual vacuum rejected or blocked: %v", err)
+	}
+	got, err := search()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("changed result/document signature got=%s want=%s", got, want)
+	}
+	after := col.collectionSchemaCoordinator().typedPublication.Load()
+	if after == before || after.catalog.pager == before.catalog.pager || before.servingBase == after.servingBase {
+		t.Fatal("vacuum did not replace immutable publication coordinates")
+	}
+	changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: []string{"after-vacuum"}}, {Name: "user", Strings: []string{"new"}}, {Name: "path", Strings: []string{"source"}}}
+	// The write has already committed backend roots but has not installed its
+	// derived state. Maintenance must defer without disrupting that accepted write.
+	var cutoverErr error
+	var reachedInstall bool
+	typedGraphPublicationAfterAcceptedHook.Lock()
+	typedGraphPublicationAfterAcceptedHook.fn = func(p *typedGraphPublicationCandidate) {
+		if p.coord == col.collectionSchemaCoordinator() {
+			reachedInstall = true
+			cutoverErr = col.db.VacuumIndexOnline(ctx)
+		}
+	}
+	typedGraphPublicationAfterAcceptedHook.Unlock()
+	defer func() {
+		typedGraphPublicationAfterAcceptedHook.Lock()
+		typedGraphPublicationAfterAcceptedHook.fn = nil
+		typedGraphPublicationAfterAcceptedHook.Unlock()
+	}()
+	if _, err := col.ReplaceTypedBatch(ids[:1], retained[:1], changed); err != nil {
+		t.Fatal(err)
+	}
+	typedGraphPublicationAfterAcceptedHook.Lock()
+	typedGraphPublicationAfterAcceptedHook.fn = nil
+	typedGraphPublicationAfterAcceptedHook.Unlock()
+	if !reachedInstall || !errors.Is(cutoverErr, rootpublication.ErrResourcePinned) {
+		t.Fatalf("accepted publication cutover: reached=%t err=%v", reachedInstall, cutoverErr)
+	}
+	if _, err := search(); err != nil {
+		t.Fatal(err)
+	}
+	if err := col.FoldColumnGraphServing(context.Background(), index); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := search(); err != nil {
+		t.Fatal(err)
+	}
+	stillOld, err := held.FetchDocumentsForVectorIndexSearchResults(heldResponse.Results, DocumentFetchOptions{})
+	if err != nil || len(stillOld.Results) != len(oldDocs.Results) {
+		t.Fatalf("held fetch: %v", err)
+	}
+	for i := range oldDocs.Results {
+		if !bytes.Equal(stillOld.Results[i].Document, oldDocs.Results[i].Document) {
+			t.Fatal("held owner changed after relocation/write/fold")
+		}
+	}
+	// A real logical mutation made the pre-write state stale. Even though its
+	// captured-base roots remain reachable, relocation must not grant authority.
+	coord := col.collectionSchemaCoordinator()
+	coord.typedPublication.Store(after)
+	if err := col.db.VacuumIndexOnline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if coord.typedPublication.Load() != after {
+		t.Fatal("relocation repaired stale logical authority")
+	}
+	if _, err := search(); !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		t.Fatalf("stale authority: %v", err)
+	}
+
+}
+
+// Ensure may finish warming after vacuum has replaced its prepared authority.
+func TestTypedGraphPublicEnsureAcrossVacuum(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
+	col, base, _, _, columns, _ := openTypedGraphQualityFixture(t, 8)
+	index := base.indexName
+	if err := base.Close(); err != nil {
+		t.Fatal(err)
+	}
+	captured, release := make(chan struct{}, 1), make(chan struct{})
+	var paused, released atomic.Bool
+	defer func() {
+		if released.CompareAndSwap(false, true) {
+			close(release)
+		}
+	}()
+	collectionVectorIndexPreparedSearchBuildHookForTest.mu.Lock()
+	collectionVectorIndexPreparedSearchBuildHookForTest.afterBuild = func(p *collectionVectorIndexPreparedSearch) {
+		if p != nil && p.collection == col && paused.CompareAndSwap(false, true) {
+			captured <- struct{}{}
+			<-release
+		}
+	}
+	collectionVectorIndexPreparedSearchBuildHookForTest.mu.Unlock()
+	defer func() {
+		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Lock()
+		collectionVectorIndexPreparedSearchBuildHookForTest.afterBuild = nil
+		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Unlock()
+	}()
+	done := make(chan error, 1)
+	go func() {
+		done <- col.EnsureColumnGraphServing(context.Background(), index, typedGraphPublicTestOptions())
+	}()
+	select {
+	case <-captured:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Ensure did not reach post-capture boundary")
+	}
+	before := col.collectionSchemaCoordinator().typedPublication.Load()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := col.db.VacuumIndexOnline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after := col.collectionSchemaCoordinator().typedPublication.Load()
+	if after == before || after.catalog.pager == before.catalog.pager {
+		t.Fatal("no actual relocation")
+	}
+	released.Store(true)
+	close(release)
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrConcurrentMutation) {
+			t.Fatalf("late Ensure: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("late Ensure blocked")
+	}
+	if col.collectionSchemaCoordinator().typedPublication.Load() != after {
+		t.Fatal("late Ensure replaced relocated authority")
+	}
+	if err := col.EnsureColumnGraphServing(ctx, index, typedGraphPublicTestOptions()); err != nil {
+		t.Fatal(err)
+	}
+	var buffer VectorIndexSearchBuffer
+	response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: index, Query: columns[0].Float32Vectors[0], TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+	if len(response.Results) != 1 {
+		t.Fatalf("results=%d", len(response.Results))
 	}
 }

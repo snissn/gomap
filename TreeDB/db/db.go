@@ -369,6 +369,9 @@ type DB struct {
 	orderedRootDeltaGroupPublishPrepareErrors                   atomic.Uint64
 	orderedRootDeltaGroupFinalizeNs                             atomic.Uint64
 	orderedRootDeltaGroupFinalizeCalls                          atomic.Uint64
+	collectionRelocationMu                                      sync.Mutex
+	collectionRelocationID                                      uint64
+	collectionRelocation                                        CollectionRootRelocationPrepare
 	logicalOrderedRootObserverMu                                sync.Mutex
 	logicalOrderedRootObserverID                                uint64
 	logicalOrderedRootObserver                                  func()

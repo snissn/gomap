@@ -96,3 +96,35 @@ func canonicalVectorPartitionStorageRootV1(root string) (string, error) {
 	}
 	return canonical, nil
 }
+
+// tryVectorPartitionStorageBarrier admits maintenance only when no snapshot or
+// asset publication owns this root. Unlike the foreground helper it never waits.
+func tryVectorPartitionStorageBarrier(root string) (func(), bool) {
+	canonical, err := canonicalVectorPartitionStorageRootV1(root)
+	if err != nil || !vectorPartitionStorageBarriersV1.TryLock() {
+		return nil, false
+	}
+	entry := vectorPartitionStorageBarriersV1.entries[canonical]
+	if entry == nil {
+		entry = &vectorPartitionStorageBarrierEntryV1{gate: make(chan struct{}, 1)}
+		entry.gate <- struct{}{}
+		vectorPartitionStorageBarriersV1.entries[canonical] = entry
+	}
+	select {
+	case <-entry.gate:
+		entry.refs++
+		vectorPartitionStorageBarriersV1.Unlock()
+		return func() {
+			entry.gate <- struct{}{}
+			vectorPartitionStorageBarriersV1.Lock()
+			entry.refs--
+			if entry.refs == 0 {
+				delete(vectorPartitionStorageBarriersV1.entries, canonical)
+			}
+			vectorPartitionStorageBarriersV1.Unlock()
+		}, true
+	default:
+		vectorPartitionStorageBarriersV1.Unlock()
+		return nil, false
+	}
+}
