@@ -2712,10 +2712,7 @@ func (r *columnVectorGraphPhysicalRowReader) directAdjacencyLayerForOrdinal(ordi
 		return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, "", false
 	}
 	if group := r.adjacencyLayerSources; group != nil {
-		if group.closed || layer < 0 || layer >= len(group.sources) || group.sources[layer] == nil {
-			return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, "", false
-		}
-		return group.sources[layer].Neighbors(ordinal)
+		return group.Neighbors(layer, ordinal)
 	}
 	if layer == 0 && r.layer0AdjacencySource != nil {
 		return r.layer0AdjacencySource.Neighbors(ordinal)

@@ -63,6 +63,23 @@ and [mutable serving admission](typed-asset-maintenance-1788.md#explicit-typed-c
 Generation, checksum, schema, index-definition, or row-count mismatches fail
 closed and require rebuild/fallback instead of silently reading stale bytes.
 
+## Existing pack metadata providers (#4619)
+
+Readers also accept an existing, validated `hnsw_search_pack` as the provider for
+wholly omitted adjacency assets, document-ID assets, or all four forward
+row-reference assets. Forward-reference omission requires the persisted
+`base_row_ref/ordinal_by_physical_row` TCIM inverse. Partial forward/adjacency
+sets and corrupt present TCIM references still fail validation; a pack does not
+mask them. The pack's native adjacency, opaque ID bytes and coordinates belong
+to the same captured base identity as the original providers.
+
+This reader support does not change writer emission. Rebuilds still emit the
+existing TCIM carriers. Raw FP32 parts, inverse norms and the inverse permutation
+remain separate dependencies. Status remains a manifest/ref check; opening a
+reader validates and maps the pack once, including coordinate membership and
+row bounds against its owning base manifest. See
+[prepared provider ownership](typed-column-graph-search-prepared-views.md#existing-pack-metadata-providers-4619).
+
 ## Typed-column asset references
 
 Each asset ref records:

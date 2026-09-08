@@ -263,6 +263,14 @@ func (c *Collection) prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(
 		if !view.VectorIndexStateFound {
 			return fmt.Errorf("collections: column_graph %q missing vector-index state record: %w", def.Name, errColumnVectorGraphManifestMismatch)
 		}
+		// Open once; omitted metadata sources borrow this reader/holder-owned pack.
+		pack, packStatus, packOpenNanos, packErr := c.openColumnHNSWSearchPackPreparedViewForReader(catalog.meta.Name, *baseCfg, def, graph, state)
+		graphReader.hnswSearchPack = pack
+		graphReader.hnswSearchPackStatus = packStatus
+		graphReader.hnswSearchPackOpenNanos = packOpenNanos
+		if packErr != nil {
+			graphReader.hnswSearchPackStatus = columnHNSWSearchPackPreparedStatusInvalid
+		}
 		if sources, _, sourceErr := c.openColumnVectorGraphAdjacencyStateSourcesForReader(catalog.meta.Name, *baseCfg, def, graph, state); sourceErr != nil {
 			return sourceErr
 		} else if sources != nil {
@@ -270,8 +278,13 @@ func (c *Collection) prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(
 			if len(sources.sources) > 0 {
 				graphReader.layer0AdjacencySource = sources.sources[0]
 			}
+		} else if pack.metadataAlive() {
+			if (graph.AdjacencyLayerCount > 0 && pack.Header.AdjacencyLayerCount != graph.AdjacencyLayerCount) || (state.AdjacencyLayerCount > 0 && pack.Header.AdjacencyLayerCount != state.AdjacencyLayerCount) {
+				return fmt.Errorf("collections: graph pack adjacency layer count differs from owning state: %w", errColumnVectorGraphManifestMismatch)
+			}
+			graphReader.adjacencyLayerSources = &columnVectorGraphAdjacencyDirectSources{pack: pack, allLayers: true}
 		} else {
-			return fmt.Errorf("collections: column_graph %q missing vector-index adjacency state source: %w", def.Name, errColumnVectorGraphManifestMismatch)
+			return errors.Join(fmt.Errorf("collections: column_graph %q missing vector-index adjacency state source: %w", def.Name, errColumnVectorGraphManifestMismatch), packErr)
 		}
 		if _, ok := findColumnVectorGraphInvNormStateAsset(state); ok {
 			source, fallbackReason, sourceErr := c.openColumnVectorGraphInvNormStateSourceForReader(catalog.meta.Name, *baseCfg, def, graph, state)
@@ -288,7 +301,7 @@ func (c *Collection) prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(
 			if recordsErr != nil {
 				return recordsErr
 			}
-			source, sourceErr := c.openColumnVectorGraphRowRefStateSourceForReader(catalog.meta.Name, *baseCfg, def, graph, state, records)
+			source, sourceErr := c.openColumnVectorGraphRowRefStateSourceForReader(catalog.meta.Name, *baseCfg, def, graph, state, records, pack)
 			if sourceErr != nil {
 				return sourceErr
 			}
@@ -306,6 +319,8 @@ func (c *Collection) prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(
 			} else {
 				graphReader.documentIDSource = source
 			}
+		} else if pack.metadataAlive() {
+			graphReader.documentIDSource = &columnVectorGraphDocumentIDStateSource{rows: state.RowCount, pack: pack}
 		}
 		if _, _, typedVectorOwner, ownerErr := columnVectorGraphTypedColumnVectorField(*baseCfg, graph.Field, graph.Dimensions); ownerErr != nil {
 			graphReader.typedVectorFallbackReason = ownerErr.Error()
@@ -318,13 +333,6 @@ func (c *Collection) prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(
 			} else if fallbackReason != "" {
 				graphReader.typedVectorFallbackReason = fallbackReason
 			}
-		}
-		pack, packStatus, packOpenNanos, packErr := c.openColumnHNSWSearchPackPreparedViewForReader(catalog.meta.Name, *baseCfg, def, graph, state)
-		graphReader.hnswSearchPack = pack
-		graphReader.hnswSearchPackStatus = packStatus
-		graphReader.hnswSearchPackOpenNanos = packOpenNanos
-		if packErr != nil {
-			graphReader.hnswSearchPackStatus = columnHNSWSearchPackPreparedStatusInvalid
 		}
 		if !graphReader.skipQuantizedAssets {
 			c.prepareColumnVectorGraphQuantizedAssetsForReader(graphReader, view)

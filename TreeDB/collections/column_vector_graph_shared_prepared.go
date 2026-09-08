@@ -191,6 +191,9 @@ func newColumnVectorGraphSharedPreparedSearchFromReader(reader *columnVectorGrap
 	if !reader.preparedSearch.ready() {
 		return nil, errors.New("collections: column_graph shared prepared search requires ready combined prepared view")
 	}
+	if err := reader.preparedSearch.validateLive(); err != nil {
+		return nil, err
+	}
 	holder := &columnVectorGraphSharedPreparedSearch{
 		typedVectorSource:     reader.typedVectorSource,
 		invNormSource:         reader.invNormSource,
@@ -219,6 +222,8 @@ func newColumnVectorGraphSharedPreparedSearchFromReader(reader *columnVectorGrap
 }
 
 func (h *columnVectorGraphSharedPreparedSearch) ready() bool {
+	// Combined readiness includes any borrowed pack and persisted inverse.
+	// Pack presence alone cannot admit the native counted-source fallback.
 	return h != nil && h.typedVectorSource != nil && h.invNormSource != nil && h.rowRefSource != nil && h.documentIDSource != nil && h.adjacencyLayerSources != nil && h.preparedSearch != nil && h.preparedSearch.ready()
 }
 

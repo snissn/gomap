@@ -43,6 +43,22 @@ fails closed with a rebuild-needed error when absent; there is no query-time
 heap inverse synthesis. This experimental role has not yet qualified filtered
 ANN or its build/open/memory performance.
 
+### Existing pack forward provider (#4619)
+
+When all four forward TCIM assets are omitted, readers may borrow the equivalent
+four int64 arrays from the existing validated graph pack. The persisted inverse
+TCIM asset is still required. Complete forward TCIM sets retain their original
+validation; partial or corrupt present sets cannot fall back to the pack.
+
+The same checked coordinate conversion, owning-base part membership, row bounds,
+strict inverse permutation and applied-LSN equality apply to either provider.
+The owning manifest may be the captured immutable base rather than the current
+mutated manifest. Closing the pack or inverse makes dependent lookups
+unavailable. The row-ref source closes only its own TCIM handles; its pack
+reference borrows the reader/shared holder's lifetime. Pack arrays are not TCIM
+certifications, and the mapped-field counters count only actual TCIM fields.
+Writer emission is unchanged by this reader support.
+
 ### Forward mapping and final documents
 
 The typed-column vector source first uses `row_refs` state to map HNSW ordinals

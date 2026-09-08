@@ -30,6 +30,34 @@ authoritative typed-column and vector-index state assets
   -> optional final result-ID and document materialization
 ```
 
+## Existing pack metadata providers (#4619)
+
+The existing reader/shared holder may supply native adjacency, opaque IDs and
+four forward coordinates from its single validated graph-pack mapping when the
+corresponding TCIM carriers are wholly absent. Forward coordinates retain the
+persisted inverse TCIM dependency and all owning-base membership, bounds and
+permutation checks. Raw FP32 vectors and inverse norms remain the native scorer's
+inputs. The pack is not a substitute for missing or corrupt present TCIM fields.
+
+Both the combined prepared view and counted native accessors consume these
+providers. Ordinary `Search` and buffered native fallback preserve native
+highest-nonempty-layer traversal and scores; they do not substitute pack levels,
+auxiliary navigation, or normalized-vector scoring. Existing query/statistics
+mode admission is unchanged. Unsupported mmap prerequisites still return no
+combined view and use the existing counted compatibility path; corrupt or closed
+required providers fail closed.
+
+Provider structs borrow the reader/holder's pack and close only their own TCIM
+handles. Combined/shared readiness requires live pack-dependent providers and
+the inverse. Pack residency is counted once by its existing owner; generic
+mmap/heap adjacency outcomes describe actual access, without claiming TCIM CSR
+certification for pack slices. The writer still emits the existing TCIM carriers
+in this reader-only step. Focused controls are
+`TestColumnHNSWSearchPackNativeMetadataProviders`,
+`TestColumnHNSWSearchPackNativeMetadataHighestNonemptyLayer`, and
+`TestTypedGraphInverseMappedAndOptional`; these are correctness/ownership
+controls, not storage or performance qualification.
+
 ## #2043 closeout status
 
 The combined prepared view is the admitted primary healthy current-format

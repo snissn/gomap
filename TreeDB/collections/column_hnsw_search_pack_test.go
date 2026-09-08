@@ -1174,6 +1174,199 @@ func TestColumnHNSWSearchPackPreparedViewSharedReadersRelease2314(t *testing.T) 
 	}
 }
 
+func TestColumnHNSWSearchPackNativeMetadataProviders(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{{id: "a\x00\xff", vector: []float32{3, 0}}, {id: "b", vector: []float32{0, 7}}, {id: "c", vector: []float32{2, 2}}}
+	_, db, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 2, 2, rows)
+	defer db.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer searcher.Close()
+	opts := VectorIndexSearcherSearchOptions{Query: []float32{1, .05}, TopK: 3, EfSearch: 3, StatsMode: VectorIndexSearchStatsModeFullDiagnostics}
+	want, err := searcher.Search(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	docOpts := opts
+	docOpts.IncludeDocuments = true
+	docOpts.DocumentFetchOptions.IncludePaths = []string{"embedding", "title"}
+	wantDocs, err := searcher.Search(docOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := col.acquireColumnVectorGraphPhysicalRowReaderSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snap.Close()
+	_, graph, view, err := col.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(def.Name, snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := view.VectorIndexState
+	state.Assets = slices.DeleteFunc(slices.Clone(state.Assets), func(a columnVectorIndexStateAssetSnapshot) bool {
+		return a.Role == columnVectorIndexStateAssetRoleAdjacency || a.Role == columnVectorIndexStateAssetRoleDocumentIDs || (a.Role == columnVectorIndexStateAssetRoleRowRefs && a.AssetID != columnVectorGraphRowRefStateAssetID(columnVectorGraphRowRefStateFieldOrdinalByPhysicalRow))
+	})
+	for _, failure := range []string{"missing_pack", "missing_pack_file", "corrupt_pack_ref", "corrupt_present_forward"} {
+		t.Run(failure, func(t *testing.T) {
+			candidate := state
+			if failure == "corrupt_present_forward" {
+				candidate = view.VectorIndexState
+			}
+			candidate.Assets = slices.Clone(candidate.Assets)
+			if failure == "missing_pack" {
+				candidate.Assets = slices.DeleteFunc(candidate.Assets, func(a columnVectorIndexStateAssetSnapshot) bool {
+					return a.Role == columnVectorIndexStateAssetRoleHNSWSearchPack
+				})
+			} else {
+				for i := range candidate.Assets {
+					a := &candidate.Assets[i]
+					if failure == "corrupt_present_forward" {
+						if a.Role == columnVectorIndexStateAssetRoleRowRefs && a.AssetID == columnVectorGraphRowRefStateAssetID(columnVectorGraphRowRefStateFieldGeneration) {
+							a.Ref.Checksum ^= 1
+						}
+					} else if a.Role == columnVectorIndexStateAssetRoleHNSWSearchPack {
+						if failure == "missing_pack_file" {
+							a.Ref.FileID += 10_000
+						} else {
+							a.Ref.Checksum ^= 1
+						}
+					}
+				}
+			}
+			candidateView := view
+			candidateView.VectorIndexState = candidate
+			reader := &columnVectorGraphPhysicalRowReader{def: def, graph: graph, catalog: searcher.reader.catalog, skipQuantizedAssets: true}
+			err := col.prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(reader, snap, candidateView)
+			if closeErr := reader.Close(); closeErr != nil {
+				t.Fatal(closeErr)
+			}
+			if err == nil {
+				t.Fatal("unavailable required metadata admitted")
+			}
+		})
+	}
+	view.VectorIndexState = state
+	if err := validateColumnVectorIndexStateAssets(db.ColumnAssetRootDir(), "docs", *searcher.reader.catalog.meta.Options.ColumnStore, def, state, graph); err != nil {
+		t.Fatal(err)
+	}
+	reader := &columnVectorGraphPhysicalRowReader{def: def, graph: graph, catalog: searcher.reader.catalog, skipQuantizedAssets: true}
+	if err := col.prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(reader, snap, view); err != nil {
+		reader.Close()
+		t.Fatal(err)
+	}
+	if err := searcher.reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	searcher.reader = reader
+	if reader.preparedSearch != nil {
+		shared, err := col.acquireColumnVectorGraphSharedPreparedSearch("pack-metadata-fixture", func() (*columnVectorGraphSharedPreparedSearch, error) {
+			return newColumnVectorGraphSharedPreparedSearchFromReader(reader)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := reader.attachSharedPreparedSearch(shared); err != nil {
+			shared.release()
+			t.Fatal(err)
+		}
+		if !shared.holder.ready() {
+			t.Fatal("pack-backed shared holder unavailable")
+		}
+	}
+	for _, mode := range []VectorIndexSearchStatsMode{VectorIndexSearchStatsModeFullDiagnostics, VectorIndexSearchStatsModeMinimal, VectorIndexSearchStatsModeBenchmarkDebug} {
+		opts.StatsMode = mode
+		got, err := searcher.Search(opts)
+		if err != nil {
+			t.Fatalf("Search mode=%v: %v", mode, err)
+		}
+		if !reflect.DeepEqual(got.Results, want.Results) {
+			t.Fatalf("native results=%+v want=%+v", got.Results, want.Results)
+		}
+		var buf VectorIndexSearchBuffer
+		got, err = searcher.SearchWithBuffer(opts, &buf)
+		if err != nil {
+			t.Fatalf("buffer mode=%v: %v", mode, err)
+		}
+		for i := range want.Results {
+			if !bytes.Equal(got.Results[i].ID, want.Results[i].ID) || math.Abs(got.Results[i].Score-want.Results[i].Score) > 1e-6 {
+				t.Fatalf("buffer results=%+v want=%+v", got.Results, want.Results)
+			}
+		}
+		if mode == VectorIndexSearchStatsModeBenchmarkDebug && got.Stats.SearchRouteHNSWSearchPack != 0 {
+			t.Fatal("native metadata mislabeled pack traversal")
+		}
+	}
+	for i := range rows {
+		ref, ok := reader.rowRefForOrdinal(i)
+		if !ok {
+			t.Fatal("forward ref missing")
+		}
+		if ordinal, ok := reader.rowRefSource.ordinalForPhysicalRow(ref); !ok || ordinal != i {
+			t.Fatal("inverse mismatch")
+		}
+	}
+	gotDocs, err := searcher.Search(docOpts)
+	if err != nil || !reflect.DeepEqual(gotDocs.Results, wantDocs.Results) {
+		t.Fatalf("projected raw vectors/docs=%+v err=%v want=%+v", gotDocs.Results, err, wantDocs.Results)
+	}
+	// Exercise the native counted-source route independently of combined views.
+	prepared := reader.preparedSearch
+	reader.preparedSearch = nil
+	counted, err := searcher.Search(opts)
+	reader.preparedSearch = prepared
+	if err != nil || !reflect.DeepEqual(counted.Results, want.Results) || counted.Stats.AdjacencyBytesRead == 0 || counted.Stats.GraphRowFallbacks != 0 || counted.Stats.ResultIDGraphFallbacks != 0 {
+		t.Fatalf("counted native metadata results=%+v stats=%+v err=%v", counted.Results, counted.Stats, err)
+	}
+	if err := reader.hnswSearchPack.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reader.documentIDForOrdinal(0); ok {
+		t.Fatal("closed pack ID available")
+	}
+	if _, ok := reader.rowRefForOrdinal(0); ok {
+		t.Fatal("closed pack ref available")
+	}
+	if prepared != nil && (prepared.ready() || prepared.validateLive() == nil || reader.sharedPreparedSearch.holder.ready()) {
+		t.Fatal("closed borrowed pack remained ready")
+	}
+	if _, err := searcher.Search(opts); err == nil {
+		t.Fatal("closed required pack searched")
+	}
+}
+
+func TestColumnHNSWSearchPackNativeMetadataHighestNonemptyLayer(t *testing.T) {
+	input := testColumnHNSWSearchPackInput2312()
+	input.AdjacencyLayers[1] = columnHNSWSearchPackLayerInput{Offsets: []uint64{0, 0, 0, 0}}
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack, _ := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity)
+	defer pack.Close()
+	group := &columnVectorGraphAdjacencyDirectSources{pack: pack, allLayers: true}
+	layer, neighbors, counters, _, ok := group.MaxLayerForOrdinal(0)
+	if !ok || pack.Levels[0] != 1 || layer != 0 || !slices.Equal(neighbors, input.AdjacencyLayers[0].Neighbors[:2]) || counters.AdjacencyHeapCopyTypedViews != 2 || counters.AdjacencyBytesRead != 8 || counters.AdjacencyPreparedCSRDirectViews != 0 {
+		t.Fatalf("layer=%d neighbors=%v counters=%+v ok=%v", layer, neighbors, counters, ok)
+	}
+	if columnVectorGraphPreparedSearchAdjacencyMmapPrerequisitePresent(group) {
+		t.Fatal("heap pack admitted mmap combined view")
+	}
+	if err := group.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !pack.metadataAlive() {
+		t.Fatal("borrower released pack owner")
+	}
+	if _, _, _, _, ok := group.MaxLayerForOrdinal(0); ok {
+		t.Fatal("closed borrower remains available")
+	}
+}
+
 func TestColumnHNSWSearchPackRouteMatchesColumnGraph2315(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},

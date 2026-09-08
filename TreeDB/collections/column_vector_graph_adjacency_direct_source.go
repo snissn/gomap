@@ -72,6 +72,7 @@ type columnVectorGraphLayer0AdjacencyDirectSource struct {
 }
 
 type columnVectorGraphAdjacencyDirectSources struct {
+	pack      *columnHNSWSearchPackPreparedView // borrowed native layers, never auxiliary edges
 	sources   []*columnVectorGraphLayer0AdjacencyDirectSource
 	allLayers bool
 	closed    bool
@@ -361,7 +362,31 @@ func columnVectorGraphAdjacencyDirectSourceFromHandles(manager *mappedresource.M
 	return nil, status.Reason, fmt.Errorf("collections: %s direct-view validation: %s", label, status.String())
 }
 
+func (g *columnVectorGraphAdjacencyDirectSources) layerCount() int {
+	if g == nil {
+		return 0
+	}
+	if g.pack != nil {
+		return len(g.pack.AdjacencyLayers)
+	}
+	return len(g.sources)
+}
+
 func (g *columnVectorGraphAdjacencyDirectSources) Neighbors(layer, ordinal int) ([]uint32, columnVectorGraphLayer0AdjacencySourceOutcome, typeddecode.Reason, bool) {
+	if g != nil && g.pack != nil {
+		if g.closed || !g.pack.metadataAlive() {
+			return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, typeddecode.ReasonStaleHandle, false
+		}
+		neighbors, err := g.pack.adjacencyLayerForOrdinal(ordinal, layer, nil)
+		if err != nil {
+			return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, typeddecode.ReasonRowCountMismatch, false
+		}
+		outcome := columnVectorGraphLayer0AdjacencySourceOutcomeHeapCopyTypedView
+		if g.pack.status == columnHNSWSearchPackPreparedStatusDirect {
+			outcome = columnVectorGraphLayer0AdjacencySourceOutcomeMmapDirect
+		}
+		return neighbors, outcome, "", true
+	}
 	if g == nil || g.closed || layer < 0 || layer >= len(g.sources) || g.sources[layer] == nil {
 		return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, "", false
 	}
@@ -375,6 +400,13 @@ func (g *columnVectorGraphAdjacencyDirectSources) preparedCSRNeighbors(layer, or
 	if g.closed {
 		return nil, typeddecode.ReasonStaleHandle, false
 	}
+	if g.pack != nil {
+		if g.pack.status != columnHNSWSearchPackPreparedStatusDirect {
+			return nil, typeddecode.ReasonHandleSourceUnsupported, false
+		}
+		neighbors, _, reason, ok := g.Neighbors(layer, ordinal)
+		return neighbors, reason, ok
+	}
 	if layer < 0 || layer >= len(g.sources) || g.sources[layer] == nil {
 		return nil, typeddecode.ReasonRowCountMismatch, false
 	}
@@ -382,11 +414,11 @@ func (g *columnVectorGraphAdjacencyDirectSources) preparedCSRNeighbors(layer, or
 }
 
 func (g *columnVectorGraphAdjacencyDirectSources) MaxLayerForOrdinal(ordinal int) (int, []uint32, columnVectorGraphAdjacencySourceCounterSnapshot, typeddecode.Reason, bool) {
-	if g == nil || g.closed || len(g.sources) == 0 {
+	if g == nil || g.closed || g.layerCount() == 0 {
 		return 0, nil, columnVectorGraphAdjacencySourceCounterSnapshot{}, "", false
 	}
 	var counters columnVectorGraphAdjacencySourceCounterSnapshot
-	for layer := len(g.sources) - 1; layer >= 0; layer-- {
+	for layer := g.layerCount() - 1; layer >= 0; layer-- {
 		neighbors, outcome, reason, ok := g.Neighbors(layer, ordinal)
 		if !ok {
 			return 0, nil, counters, reason, false

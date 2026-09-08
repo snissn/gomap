@@ -428,7 +428,9 @@ func validateColumnVectorIndexStateAssetsWithMode(rootDir, collection string, cf
 		}
 	}
 	if len(seenAdjacencyLayers) == 0 {
-		return errors.New("collections: vector-index state missing adjacency uint32_list assets")
+		if _, found, err := findColumnHNSWSearchPackStateAsset(state); err != nil || !found {
+			return errors.Join(errors.New("collections: vector-index state missing adjacency uint32_list assets"), err)
+		}
 	}
 	expectedLayers := state.AdjacencyLayerCount
 	if expectedLayers <= 0 {
@@ -437,10 +439,10 @@ func validateColumnVectorIndexStateAssetsWithMode(rootDir, collection string, cf
 	if expectedLayers <= 0 {
 		expectedLayers = maxAdjacencyLayer + 1
 	}
-	if len(seenAdjacencyLayers) != expectedLayers {
+	if len(seenAdjacencyLayers) > 0 && len(seenAdjacencyLayers) != expectedLayers {
 		return fmt.Errorf("collections: vector-index state adjacency layers=%d want %d", len(seenAdjacencyLayers), expectedLayers)
 	}
-	for layer := 0; layer < expectedLayers; layer++ {
+	for layer := 0; len(seenAdjacencyLayers) > 0 && layer < expectedLayers; layer++ {
 		if _, ok := seenAdjacencyLayers[layer]; !ok {
 			return fmt.Errorf("collections: vector-index state missing adjacency layer %d", layer)
 		}

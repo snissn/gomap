@@ -68,6 +68,17 @@ current-format open/search path fails closed or uses an explicitly labeled
 compatibility path; it must not silently dispatch back to graph-row selectors in
 the healthy loop.
 
+The reader also accepts equivalent native metadata from the existing graph pack
+when the duplicate TCIM carriers are wholly omitted, as specified by
+[pack provider ownership](typed-column-graph-search-prepared-views.md#existing-pack-metadata-providers-4619).
+The existing pack reader's mmap/heap validation supplies the provider tier;
+borrowed slices do not claim TCIM certification. Raw vectors, inverse norms,
+persisted inverse lookup, owning-base coordinate validation and live shared
+ownership remain required. This reader-only extension leaves writer emission
+and query/statistics admission unchanged and does not promote a performance
+claim. Missing/corrupt required pack data fails closed, while complete TCIM
+providers retain the existing missing/stale-pack compatibility behavior.
+
 Evidence counters for #2045:
 
 - `prepared_graph_search_views/search=1` for healthy current-format searches;

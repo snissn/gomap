@@ -61,6 +61,7 @@ type columnVectorGraphPreparedRowRefStatePayload struct {
 }
 
 type columnVectorGraphRowRefStateSource struct {
+	pack                  *columnHNSWSearchPackPreparedView // borrowed forward coordinates; inverse remains owned TCIM
 	rows                  int
 	generations           typeddecode.PreparedInt64DirectView
 	partIDs               typeddecode.PreparedInt64DirectView
@@ -386,7 +387,7 @@ func validateColumnVectorGraphRowRefStateManifestAssets(collection string, cfg C
 	}
 	for _, field := range columnVectorGraphRowRefStateFields {
 		asset, present := assets[field]
-		if !present && field == columnVectorGraphRowRefStateFieldOrdinalByPhysicalRow {
+		if !present {
 			continue
 		}
 		sourceCfg, _, err := columnVectorGraphRowRefStateColumnStoreConfig(collection, cfg, def, field)
@@ -421,6 +422,13 @@ func columnVectorGraphRowRefStateAssetsByField(state columnVectorIndexStateSnaps
 	if len(assets) == 0 {
 		return nil, false, nil
 	}
+	if len(assets) == 1 {
+		if _, inverse := assets[columnVectorGraphRowRefStateFieldOrdinalByPhysicalRow]; inverse {
+			if _, found, err := findColumnHNSWSearchPackStateAsset(state); err == nil && found {
+				return assets, true, nil
+			}
+		}
+	}
 	if len(assets) != len(columnVectorGraphRowRefStateFields) {
 		missing := make([]string, 0, len(columnVectorGraphRowRefStateFields)-len(assets))
 		for _, field := range columnVectorGraphRowRefStateFields {
@@ -445,17 +453,21 @@ func columnVectorGraphRowRefStatePresent(state columnVectorIndexStateSnapshot) b
 	return found
 }
 
-func (c *Collection) openColumnVectorGraphRowRefStateSourceForReader(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, records []columnManifestRecord) (*columnVectorGraphRowRefStateSource, error) {
+func (c *Collection) openColumnVectorGraphRowRefStateSourceForReader(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, records []columnManifestRecord, pack *columnHNSWSearchPackPreparedView) (*columnVectorGraphRowRefStateSource, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
-	return newColumnVectorGraphRowRefStateSourceFromRoot(c.db.ColumnAssetRootDir(), collection, cfg, def, graph, state, records)
+	return newColumnVectorGraphRowRefStateSourceFromRootWithPack(c.db.ColumnAssetRootDir(), collection, cfg, def, graph, state, records, pack)
 }
 
 func newColumnVectorGraphRowRefStateSourceFromRoot(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, records []columnManifestRecord) (*columnVectorGraphRowRefStateSource, error) {
+	return newColumnVectorGraphRowRefStateSourceFromRootWithPack(rootDir, collection, cfg, def, graph, state, records, nil)
+}
+
+func newColumnVectorGraphRowRefStateSourceFromRootWithPack(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, records []columnManifestRecord, pack *columnHNSWSearchPackPreparedView) (*columnVectorGraphRowRefStateSource, error) {
 	assets, found, err := columnVectorGraphRowRefStateAssetsByField(state)
 	if err != nil || !found {
 		return nil, err
@@ -472,6 +484,15 @@ func newColumnVectorGraphRowRefStateSourceFromRoot(rootDir, collection string, c
 	}
 	manager := mappedresource.NewManager()
 	source := &columnVectorGraphRowRefStateSource{rows: state.RowCount, manager: manager}
+	if len(assets) == 1 {
+		if !pack.metadataAlive() || pack.Header.Rows != state.RowCount {
+			return nil, errors.New("collections: row-ref forward coordinates require live graph pack")
+		}
+		if pack.Header.BaseManifestGeneration != graph.BaseManifestGeneration || pack.Header.BaseManifestChecksum != graph.BaseManifestChecksum || pack.Header.BaseSchemaHash != graph.BaseSchemaHash {
+			return nil, errors.New("collections: row-ref forward graph pack identity mismatch")
+		}
+		source.pack = pack
+	}
 	success := false
 	defer func() {
 		if !success {
@@ -479,7 +500,7 @@ func newColumnVectorGraphRowRefStateSourceFromRoot(rootDir, collection string, c
 		}
 	}()
 	for _, field := range columnVectorGraphRowRefStateFields {
-		if _, present := assets[field]; !present && field == columnVectorGraphRowRefStateFieldOrdinalByPhysicalRow {
+		if _, present := assets[field]; !present {
 			continue
 		}
 		view, mmapDirect, err := openColumnVectorGraphRowRefStateFieldDirectView(rootDir, collection, cfg, def, state, assets[field], field, manager)
@@ -867,23 +888,8 @@ func (s *columnVectorGraphRowRefStateSource) rowRefForOrdinal(ordinal int) (Docu
 	if s == nil || s.closed || !s.preparedViewActive() || ordinal < 0 || ordinal >= s.rows {
 		return DocumentRowRef{}, false
 	}
-	generation, ok := s.generations.Value(ordinal)
-	if !ok {
-		return DocumentRowRef{}, false
-	}
-	partID, ok := s.partIDs.Value(ordinal)
-	if !ok {
-		return DocumentRowRef{}, false
-	}
-	rowIndex, ok := s.rowIndexes.Value(ordinal)
-	if !ok {
-		return DocumentRowRef{}, false
-	}
-	appliedLSN, ok := s.appliedCommandLSNs.Value(ordinal)
-	if !ok {
-		return DocumentRowRef{}, false
-	}
-	ref, err := columnVectorGraphRowRefFromPreparedValues(ordinal, generation, partID, rowIndex, appliedLSN)
+	generations, parts, rows, lsns := s.forwardValues()
+	ref, err := columnVectorGraphRowRefFromPreparedValues(ordinal, generations[ordinal], parts[ordinal], rows[ordinal], lsns[ordinal])
 	if err != nil {
 		return DocumentRowRef{}, false
 	}
@@ -905,7 +911,24 @@ func (s *columnVectorGraphRowRefStateSource) rowRefs() ([]DocumentRowRef, bool) 
 	return refs, true
 }
 
+func (s *columnVectorGraphRowRefStateSource) forwardValues() ([]int64, []int64, []int64, []int64) {
+	if s.pack != nil {
+		return s.pack.RowRefGenerations, s.pack.RowRefPartIDs, s.pack.RowRefRowIndexes, s.pack.RowRefAppliedLSNs
+	}
+	return s.generations.Values, s.partIDs.Values, s.rowIndexes.Values, s.appliedCommandLSNs.Values
+}
+
+func (s *columnVectorGraphRowRefStateSource) forwardMmapDirect() bool {
+	if s != nil && s.pack != nil {
+		return s.preparedViewActive() && s.pack.status == columnHNSWSearchPackPreparedStatusDirect
+	}
+	return s.baseMmapDirectFieldCount() == 4
+}
+
 func (s *columnVectorGraphRowRefStateSource) preparedViewActive() bool {
+	if s != nil && !s.closed && s.pack != nil {
+		return s.pack.metadataAlive() && s.pack.Header.Rows == s.rows && len(s.pack.RowRefGenerations) == s.rows && len(s.pack.RowRefPartIDs) == s.rows && len(s.pack.RowRefRowIndexes) == s.rows && len(s.pack.RowRefAppliedLSNs) == s.rows && s.ordinalsByPhysicalRow.Alive() && s.ordinalsByPhysicalRow.Rows == s.rows
+	}
 	return s != nil && !s.closed && s.generations.Alive() && s.partIDs.Alive() && s.rowIndexes.Alive() && s.appliedCommandLSNs.Alive() && s.generations.Rows == s.rows && s.partIDs.Rows == s.rows && s.rowIndexes.Rows == s.rows && s.appliedCommandLSNs.Rows == s.rows
 }
 

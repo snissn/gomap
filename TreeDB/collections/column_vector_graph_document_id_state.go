@@ -43,6 +43,7 @@ type columnVectorGraphPreparedDocumentIDStatePayload struct {
 }
 
 type columnVectorGraphDocumentIDStateSource struct {
+	pack *columnHNSWSearchPackPreparedView // borrowed; reader/shared holder owns its mapping
 	rows int
 	view typeddecode.PreparedBytesDirectView
 
@@ -486,8 +487,11 @@ func (r *columnVectorGraphPhysicalRowReader) documentIDForOrdinal(ordinal int) (
 }
 
 func (s *columnVectorGraphDocumentIDStateSource) documentIDForOrdinal(ordinal int) ([]byte, bool) {
-	if s == nil || s.closed || !s.view.Alive() || ordinal < 0 || ordinal >= s.rows {
+	if s == nil || !s.preparedViewActive() || ordinal < 0 || ordinal >= s.rows {
 		return nil, false
+	}
+	if s.pack != nil {
+		return s.pack.documentIDForOrdinal(ordinal)
 	}
 	id := s.view.Row(ordinal)
 	if len(id) == 0 {
@@ -497,13 +501,19 @@ func (s *columnVectorGraphDocumentIDStateSource) documentIDForOrdinal(ordinal in
 }
 
 func (s *columnVectorGraphDocumentIDStateSource) documentIDs() (typedcolumn.RawBytesOffsets, bool) {
-	if s == nil || s.closed || !s.view.Alive() || s.view.Rows != s.rows {
+	if !s.preparedViewActive() {
 		return typedcolumn.RawBytesOffsets{}, false
+	}
+	if s.pack != nil {
+		return typedcolumn.RawBytesOffsets{Rows: s.rows, Offsets: s.pack.DocumentIDOffsets, Values: s.pack.DocumentIDBytes}, true
 	}
 	return typedcolumn.RawBytesOffsets{Rows: s.rows, Offsets: s.view.Offsets, Values: s.view.Values}, true
 }
 
 func (s *columnVectorGraphDocumentIDStateSource) preparedViewActive() bool {
+	if s != nil && !s.closed && s.pack != nil {
+		return s.pack.metadataAlive() && s.pack.Header.Rows == s.rows
+	}
 	return s != nil && !s.closed && s.view.Alive() && s.view.Rows == s.rows
 }
 
