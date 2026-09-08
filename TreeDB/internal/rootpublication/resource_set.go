@@ -3993,6 +3993,76 @@ func (guard StableResourceDeletionGuard) Check(identity StableIdentity, generati
 	return nil
 }
 
+// BytesNotCoveredBy returns conservative publication debt against an already
+// published resource closure. Only fully covered entries receive credit; an
+// advanced frontier is charged in full. ContentSynced does not establish root
+// publication. The caller must supply its owned durable-root authority.
+// Neither closure, its pins, nor its ordinary resource statistics are changed.
+func (set *StableResourceSet) BytesNotCoveredBy(published *StableResourceSet) (uint64, error) {
+	if set == nil {
+		return 0, nil
+	}
+	// Retain the existing immutable indexes before locking set. Independent
+	// callers may compare the same sets in either order, or release a source.
+	baseline, _, err := cloneStableResourceSetKindView(published)
+	if err != nil {
+		return 0, err
+	}
+	defer baseline.Release()
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	if owner := ResourceOwnerState(set.owner.Load()); owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
+		return 0, ErrResourceOwnership
+	}
+	var total uint64
+	set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
+		var covered bool
+		if baseline != nil {
+			view := baseline.kindViews[entry.token.kind]
+			prior := findStableResourceLogical(view.logical, entry.token.logicalKey())
+			covered = stableResourceEntryCoversPublication(prior, entry)
+		}
+		if !covered {
+			total = saturatingAdd(total, entry.frontier.Bytes)
+		}
+		return true
+	})
+	return total, nil
+}
+
+func stableResourceEntryCoversPublication(prior, entry *stableResourceEntry) bool {
+	if prior == nil || prior.logicalLane != entry.logicalLane || prior.resourceID != entry.resourceID {
+		return false
+	}
+	coalesce, err := stableResourcesCoalesce(prior.token, entry.token)
+	if err != nil || !coalesce || prior.token.kind != entry.token.kind || entry.token.kind == ResourceIndex {
+		return false
+	}
+	// Namespace compatibility during union permits a missing operation on either
+	// side. Credit is directional: a new operation needs existing exact authority.
+	if entry.token.namespace != nil && (prior.token.namespace == nil || !prior.token.namespace.compatible(entry.token.namespace)) {
+		return false
+	}
+	if validateDurableFrontier(prior.frontier) != nil || validateDurableFrontier(entry.frontier) != nil || !durableFrontierCovers(prior.frontier, entry.frontier) {
+		return false
+	}
+	for field := range entry.reachability {
+		if _, exists := prior.reachability[field]; !exists {
+			return false
+		}
+	}
+	if prior.logicalObligations.index == entry.logicalObligations.index && prior.logicalObligations.count == entry.logicalObligations.count {
+		return true
+	}
+	covered := true
+	entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+		previous, exists := findStableLogicalObligationIndex(prior.logicalObligations.index, obligation, nil)
+		covered = exists && previous == obligation
+		return covered
+	})
+	return covered
+}
+
 func (set *StableResourceSet) Stats(now time.Time) []ResourceKindStats {
 	if set == nil {
 		return nil

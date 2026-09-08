@@ -3,6 +3,9 @@ package db
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -832,5 +835,80 @@ func TestRootPublicationBuildGroupAbortDiscardsStagedRoot(t *testing.T) {
 	}
 	if !bytes.Equal(got, survivorValue) {
 		t.Fatalf("reopened survivor=%q want %q", got, survivorValue)
+	}
+}
+
+func TestRootPublicationDependencyBytesExcludesSelectedDurableClosure(t *testing.T) {
+	const retained = rootpublication.HardPendingBytes + 1
+	const added = uint64(17)
+	dir := t.TempDir()
+	makeSet := func(includeAdded bool) *rootpublication.StableResourceSet {
+		builder := rootpublication.NewStableResourceSetBuilder()
+		defer builder.Abandon()
+		for i, size := range []uint64{retained, added} {
+			if i == 1 && !includeAdded {
+				break
+			}
+			name := "retained.vlog"
+			if i == 1 {
+				name = "new.vlog"
+			}
+			file, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_RDWR, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Sparse data keeps this an admission mechanism control, not a load fixture.
+			if err := file.Truncate(int64(size)); err != nil {
+				file.Close()
+				t.Fatal(err)
+			}
+			token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+				Kind: rootpublication.ResourceValueLog, LogicalLane: "main", ResourceID: name,
+				Generation: 1, DiagnosticPath: name, File: file,
+				Frontier:     rootpublication.DurableFrontier{Bytes: size},
+				Reachability: rootpublication.ReachabilityValueLogPointer, ContentSynced: true,
+			})
+			file.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := builder.Add(token); err != nil {
+				token.Release()
+				t.Fatal(err)
+			}
+		}
+		set, err := builder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(set.Release)
+		return set
+	}
+	published, resources := makeSet(false), makeSet(true)
+	database := &DB{durableRoot: durableRootRuntimeV1{slot: 1}}
+	database.durableRoot.slotResources[1] = published
+	before := resources.Descriptors()
+	got, err := database.rootPublicationDependencyBytesV1(resources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("full closure=%d selected durable=%d new bytes=%d actual debt=%d hard limit=%d", retained+added, retained, added, got, rootpublication.HardPendingBytes)
+	if got != added {
+		t.Fatalf("dependency debt=%d want only %d unpublished bytes", got, added)
+	}
+	if !reflect.DeepEqual(before, resources.Descriptors()) || published.Len() != 1 {
+		t.Fatal("accounting changed resource ownership")
+	}
+	// The same complete closure being visible does not make it durable. Nor
+	// does the non-selected slot supply the accounting baseline.
+	database.rootPublication = &rootPublicationRuntimeV1{visibleResources: resources}
+	database.durableRoot.slot = 0
+	if got, err := database.rootPublicationDependencyBytesV1(resources); err != nil || got != retained+added {
+		t.Fatalf("visible-only debt=%d err=%v want=%d", got, err, retained+added)
+	}
+	// A later successful durable installation makes the same resources covered.
+	database.durableRoot.slotResources[0] = resources
+	if got, err := database.rootPublicationDependencyBytesV1(resources); err != nil || got != 0 {
+		t.Fatalf("selected durable debt=%d err=%v want=0", got, err)
 	}
 }
