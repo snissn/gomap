@@ -112,7 +112,7 @@ cat >"$REPO/scripts/bench_minima_qdrant.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ -n "${FAKE_QDRANT_INPUTS:-}" ]]; then
-	printf '%s\n' "$MINIMA_MEASURED" "$MANIFEST_PATH" "$MINIMA_FREEZE" "$MINIMA_EXPECTED_FREEZE_SHA256" "$MINIMA_COMPARATOR_BIN" "$VENV" >"$FAKE_QDRANT_INPUTS"
+	printf '%s\n' "$MINIMA_MEASURED" "$MANIFEST_PATH" "$MINIMA_FREEZE" "$MINIMA_EXPECTED_FREEZE_SHA256" "$MINIMA_COMPARATOR_BIN" "$VENV" "${QDRANT_COLLECTION:-}" >"$FAKE_QDRANT_INPUTS"
 fi
 printf '{}\n' >"$OUTPUT_PATH"
 EOF
@@ -120,8 +120,8 @@ chmod +x "$REPO/scripts/bench_minima_qdrant.sh"
 
 for mode in bounded-50k bounded-250k; do
 	bounded_dir="$TMP/$mode"
-	output=$(PATH="$FAKE_BIN:$PATH" PYTHON="$FAKE_BIN/python" RUN_DIR="$bounded_dir" \
-		MODE="$mode" MINIMA_WALL_SECONDS=10 FAKE_PYTHON_ARGS="$TMP/$mode-args" \
+	output=$(env -u MINIMA_WALL_SECONDS PATH="$FAKE_BIN:$PATH" PYTHON="$FAKE_BIN/python" RUN_DIR="$bounded_dir" \
+		MODE="$mode" FAKE_PYTHON_ARGS="$TMP/$mode-args" \
 		"$REPO/scripts/bench_minima_qualification.sh" 2>&1)
 	[[ "$output" == *"total rows across scenarios"* ]]
 	[[ "$output" == *"full <1% sparse selectivity excluded; cannot qualify"* ]]
@@ -177,11 +177,47 @@ printf '{}\n' >"$TMP/freeze"
 printf '{}\n' >"$TMP/serving"
 manifest_before=$(cat "$TMP/supplied-manifest")
 measured_env=(env PATH="$FAKE_BIN:$PATH" MODE=measured
+	TREEDB_COLLECTION=frozen_treedb QDRANT_COLLECTION=frozen_qdrant
 	MANIFEST_PATH="$TMP/supplied-manifest" MINIMA_FREEZE="$TMP/freeze"
 	MINIMA_EXPECTED_FREEZE_SHA256="$(printf '%064d' 0)" VENV="$TMP/pinned-venv"
 	TREEDB_SERVICE_BIN="$TMP/service" MINIMA_COMPARATOR_BIN="$TMP/comparator"
 	TREEDB_STRATEGY=column_graph TREEDB_TRANSPORT=native TREEDB_NATIVE_ADDRESS=127.0.0.1:17122
 	TREEDB_COLUMN_GRAPH_SERVING="$TMP/serving")
+# Collection names are part of the exact frozen configuration.
+for collection in TREEDB_COLLECTION QDRANT_COLLECTION; do
+	set +e
+	"${measured_env[@]}" env -u "$collection" RUN_DIR="$TMP/missing-$collection" \
+		MINIMA_WALL_SECONDS=10 FAKE_GO_INVOKED="$TMP/missing-collection.build" \
+		FAKE_PYTHON_CALLS="$TMP/missing-collection.calls" \
+		FAKE_QDRANT_INPUTS="$TMP/missing-collection.qdrant" \
+		"$REPO/scripts/bench_minima_qualification.sh" >"$TMP/missing-collection.log" 2>&1
+	collection_status=$?
+	set -e
+	[[ "$collection_status" == 2 ]]
+	grep -q 'requires explicit TREEDB_COLLECTION and QDRANT_COLLECTION' "$TMP/missing-collection.log"
+	[[ ! -e "$TMP/missing-$collection" && ! -e "$TMP/missing-collection.build" &&
+		! -e "$TMP/missing-collection.calls" && ! -e "$TMP/missing-collection.qdrant" ]]
+done
+
+# A measured run must choose its whole-pipeline deadline explicitly. Reject
+# both an absent and an empty value before any backend or build work starts.
+for deadline in missing empty; do
+	deadline_env=(env -u MINIMA_WALL_SECONDS)
+	[[ "$deadline" != empty ]] || deadline_env+=(MINIMA_WALL_SECONDS=)
+	set +e
+	"${deadline_env[@]}" "${measured_env[@]}" RUN_DIR="$TMP/$deadline-wall" \
+		FAKE_GO_INVOKED="$TMP/$deadline-wall.build" \
+		FAKE_PYTHON_CALLS="$TMP/$deadline-wall.calls" \
+		FAKE_QDRANT_INPUTS="$TMP/$deadline-wall.qdrant" \
+		"$REPO/scripts/bench_minima_qualification.sh" >"$TMP/$deadline-wall.log" 2>&1
+	wall_status=$?
+	set -e
+	[[ "$wall_status" == 2 ]]
+	grep -q 'MINIMA_WALL_SECONDS must be a positive integer' "$TMP/$deadline-wall.log"
+	[[ ! -e "$TMP/$deadline-wall" && ! -e "$TMP/$deadline-wall.build" &&
+		! -e "$TMP/$deadline-wall.calls" && ! -e "$TMP/$deadline-wall.qdrant" ]]
+done
+
 for wall in 0 -1 1.5 invalid; do
 	set +e
 	"${measured_env[@]}" RUN_DIR="$TMP/invalid-wall-$wall" MINIMA_WALL_SECONDS="$wall" \
@@ -237,7 +273,8 @@ unrelated_pid=""
 mv "$TMP/qdrant-stub" "$REPO/scripts/bench_minima_qdrant.sh"
 
 set +e
-PATH="$FAKE_BIN:$PATH" MODE=measured RUN_DIR="$TMP/measured" \
+PATH="$FAKE_BIN:$PATH" MODE=measured RUN_DIR="$TMP/measured" MINIMA_WALL_SECONDS=10 \
+	TREEDB_COLLECTION=frozen_treedb QDRANT_COLLECTION=frozen_qdrant \
 	MANIFEST_PATH="$TMP/supplied-manifest" MINIMA_FREEZE="$TMP/freeze" \
 	MINIMA_EXPECTED_FREEZE_SHA256=$(printf '%064d' 0) VENV="$TMP/pinned-venv" \
 	TREEDB_SERVICE_BIN="$TMP/service" MINIMA_COMPARATOR_BIN="$TMP/comparator" \
@@ -258,6 +295,8 @@ grep -qx -- 'http://127.0.0.1:17123' "$TMP/measured-args"
 grep -qx -- "$TMP/supplied-manifest" "$TMP/measured-qdrant-inputs"
 grep -qx -- "$TMP/pinned-venv" "$TMP/measured-qdrant-inputs"
 grep -qx -- 'true' "$TMP/measured-qdrant-inputs"
+grep -qx -- 'frozen_treedb' "$TMP/measured-args"
+grep -qx -- 'frozen_qdrant' "$TMP/measured-qdrant-inputs"
 
 # The wrapper changes to the repository root before re-exec; a caller's
 # relative script path must still resolve to the same launcher exactly once.
@@ -276,7 +315,8 @@ set -e
 grep -q 'qualification failed: TreeDB=0 Qdrant=0 comparator=7' "$TMP/measured-relative.log"
 
 set +e
-PATH="$FAKE_BIN:$PATH" MODE=measured RUN_DIR="$TMP/measured" \
+PATH="$FAKE_BIN:$PATH" MODE=measured RUN_DIR="$TMP/measured" MINIMA_WALL_SECONDS=10 \
+	TREEDB_COLLECTION=frozen_treedb QDRANT_COLLECTION=frozen_qdrant \
 	MANIFEST_PATH="$TMP/supplied-manifest" MINIMA_FREEZE="$TMP/freeze" \
 	MINIMA_EXPECTED_FREEZE_SHA256=$(printf '%064d' 0) VENV="$TMP/pinned-venv" \
 	TREEDB_SERVICE_BIN="$TMP/service" MINIMA_COMPARATOR_BIN="$TMP/comparator" \

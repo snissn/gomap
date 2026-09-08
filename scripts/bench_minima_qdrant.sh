@@ -5,6 +5,10 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
 MINIMA_MEASURED=${MINIMA_MEASURED:-false}
+if [[ "$MINIMA_MEASURED" == true && -z "${QDRANT_COLLECTION:-}" ]]; then
+	echo "Measured Qdrant requires explicit QDRANT_COLLECTION" >&2
+	exit 2
+fi
 MANIFEST_PATH_INPUT=${MANIFEST_PATH:-}
 if [[ -z "${RUN_DIR:-}" ]]; then
 	RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gomap_minima_qdrant_XXXXXXXXXX")

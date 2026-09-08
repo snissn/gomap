@@ -1132,8 +1132,10 @@ def measured_source_configuration(backend: str, manifest_path: Path,
         raise RuntimeError("measured collection requires a clean source tree")
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
                             check=True, text=True, capture_output=True).stdout.strip()
-    # The merged product is the actual ancestor. A reviewed pre-squash SHA is
-    # evidence of equal trees, not a required Git ancestor of the harness.
+    # reviewed_product (freeze reviewed_product_commit) is the reviewed landed
+    # product commit, using the squash-merge SHA when applicable. A pre-squash
+    # review SHA belongs in separate equal-tree provenance checked before the
+    # freeze; it must not be passed as this required Git ancestor.
     subprocess.run(["git", "merge-base", "--is-ancestor", reviewed_product, commit],
                    cwd=root, check=True, capture_output=True)
     files = subprocess.run(["git", "ls-files", "-z"], cwd=root,

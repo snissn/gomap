@@ -87,7 +87,19 @@ printf '{}\n' >"$TMP/manifest.json"
 printf '{}\n' >"$TMP/freeze.json"
 cp "$TMP/restart" "$TMP/comparator"
 export DOCKER_CALLS="$TMP/docker.calls" RUNNER_CALLS="$TMP/runner.calls"
-if PATH="$TMP/stubs:$PATH" RUN_DIR="$TMP/no-cpuset" VENV="$TMP/pinned" MINIMA_MEASURED=true \
+set +e
+env -u QDRANT_COLLECTION PATH="$TMP/stubs:$PATH" RUN_DIR="$TMP/no-collection" \
+  VENV="$TMP/pinned" MINIMA_MEASURED=true MANIFEST_PATH="$TMP/manifest.json" \
+  MINIMA_FREEZE="$TMP/freeze.json" MINIMA_EXPECTED_FREEZE_SHA256="$(printf 'f%.0s' {1..64})" \
+  MINIMA_COMPARATOR_BIN="$TMP/comparator" QDRANT_CPUSET_CPUS=2,4 \
+  QDRANT_URL= QDRANT_BIN= QDRANT_RESTART_HOOK= \
+  bash "$ROOT/scripts/bench_minima_qdrant.sh" >"$TMP/collection.log" 2>&1
+status=$?
+set -e
+[[ "$status" == 2 ]]
+[[ "$(cat "$TMP/collection.log")" == *"requires explicit QDRANT_COLLECTION"* ]]
+[[ ! -e "$TMP/no-collection" && ! -e "$DOCKER_CALLS" && ! -e "$RUNNER_CALLS" ]]
+if PATH="$TMP/stubs:$PATH" RUN_DIR="$TMP/no-cpuset" VENV="$TMP/pinned" MINIMA_MEASURED=true QDRANT_COLLECTION=frozen_qdrant \
   MANIFEST_PATH="$TMP/manifest.json" MINIMA_FREEZE="$TMP/freeze.json" \
   MINIMA_EXPECTED_FREEZE_SHA256="$(printf 'f%.0s' {1..64})" MINIMA_COMPARATOR_BIN="$TMP/comparator" \
   QDRANT_URL= QDRANT_BIN= QDRANT_RESTART_HOOK= QDRANT_CPUSET_CPUS= \
@@ -98,7 +110,7 @@ fi
 [[ ! -e "$DOCKER_CALLS" && ! -e "$RUNNER_CALLS" ]]
 mkdir -p "$TMP/reused-storage"
 printf 'retained data\n' >"$TMP/reused-storage/existing"
-if PATH="$TMP/stubs:$PATH" RUN_DIR="$TMP/fresh-run" VENV="$TMP/pinned" MINIMA_MEASURED=true \
+if PATH="$TMP/stubs:$PATH" RUN_DIR="$TMP/fresh-run" VENV="$TMP/pinned" MINIMA_MEASURED=true QDRANT_COLLECTION=frozen_qdrant \
   MANIFEST_PATH="$TMP/manifest.json" MINIMA_FREEZE="$TMP/freeze.json" \
   MINIMA_EXPECTED_FREEZE_SHA256="$(printf 'f%.0s' {1..64})" MINIMA_COMPARATOR_BIN="$TMP/comparator" \
   QDRANT_URL= QDRANT_BIN= QDRANT_RESTART_HOOK= QDRANT_CPUSET_CPUS=2,4 \
@@ -110,7 +122,7 @@ fi
 [[ ! -e "$DOCKER_CALLS" && ! -e "$RUNNER_CALLS" ]]
 [[ "$(cat "$TMP/reused-storage/existing")" == 'retained data' ]]
 set +e
-PATH="$TMP/stubs:$PATH" RUN_DIR="$TMP/measured" VENV="$TMP/pinned" MINIMA_MEASURED=true \
+PATH="$TMP/stubs:$PATH" RUN_DIR="$TMP/measured" VENV="$TMP/pinned" MINIMA_MEASURED=true QDRANT_COLLECTION=frozen_qdrant \
   MANIFEST_PATH="$TMP/manifest.json" MINIMA_FREEZE="$TMP/freeze.json" \
   MINIMA_EXPECTED_FREEZE_SHA256="$(printf 'f%.0s' {1..64})" MINIMA_COMPARATOR_BIN="$TMP/comparator" \
   QDRANT_URL= QDRANT_BIN= QDRANT_RESTART_HOOK= QDRANT_CPUSET_CPUS=2,4 \
@@ -128,7 +140,8 @@ set -e
 [[ "$(cat "$RUNNER_CALLS")" == *$'--container\ngomap-minima-qdrant-'* ]]
 [[ "$(cat "$RUNNER_CALLS")" == *$'--manifest\n'"$TMP/manifest.json"* ]]
 [[ "$(cat "$RUNNER_CALLS")" == *$'--measured\n'* ]]
-if MINIMA_MEASURED=true RUN_DIR="$TMP/refuse" QDRANT_URL=http://external \
+[[ "$(cat "$RUNNER_CALLS")" == *$'--collection\nfrozen_qdrant\n'* ]]
+if MINIMA_MEASURED=true QDRANT_COLLECTION=frozen_qdrant RUN_DIR="$TMP/refuse" QDRANT_URL=http://external \
   bash "$ROOT/scripts/bench_minima_qdrant.sh" >"$TMP/refuse.log" 2>&1; then
   exit 1
 fi

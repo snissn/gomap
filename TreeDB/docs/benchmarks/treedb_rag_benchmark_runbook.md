@@ -93,15 +93,21 @@ with unavailable counters. They do not satisfy the measured contract.
 `MODE=measured` uses supplied manifest bytes, a pinned existing Python environment
 and prebuilt naturally stamped service/comparator binaries. It does not generate
 another manifest, build binaries or install packages. The run and backend output
-directories must be fresh. GNU `timeout` bounds the entire measured invocation,
-including both backends and comparison, using positive-integer
-`MINIMA_WALL_SECONDS` (default 600 seconds) with a 10-second kill grace after TERM.
-A timeout is incomplete evidence. The frozen collection plan sets its explicit
-deadline. For example, with all inputs and options fixed by that plan:
+directories must be fresh. Explicit `TREEDB_COLLECTION` and `QDRANT_COLLECTION`
+names must match the frozen configuration; measured launchers do not invent names.
+GNU `timeout` bounds the entire measured invocation, including both backends and
+comparison, with a 10-second kill grace after TERM. Measured mode requires an
+explicit positive-integer `MINIMA_WALL_SECONDS`; it has no default. The frozen
+collection plan must budget for the sequential TreeDB and Qdrant lifecycles plus
+comparison. The 600-second default applies only to legacy bounded diagnostics.
+A timeout is incomplete evidence. For example, with all inputs and options fixed
+by that plan:
 
 ```sh
 taskset --cpu-list "$MINIMA_CPU_AFFINITY" env \
   MODE=measured RUN_DIR="$MINIMA_MEASURED_RUN" \
+  TREEDB_COLLECTION="$MINIMA_TREEDB_COLLECTION" \
+  QDRANT_COLLECTION="$MINIMA_QDRANT_COLLECTION" \
   MANIFEST_PATH="$MINIMA_MANIFEST" \
   VENV="$MINIMA_PINNED_VENV" \
   TREEDB_SERVICE_BIN="$MINIMA_SERVICE_BINARY" \
@@ -114,7 +120,7 @@ taskset --cpu-list "$MINIMA_CPU_AFFINITY" env \
   TREEDB_COLUMN_GRAPH_SERVING="$MINIMA_SERVING_LIMITS" \
   TREEDB_EF_SEARCH="$MINIMA_EF_SEARCH" \
   QDRANT_CPUSET_CPUS="$MINIMA_CPU_AFFINITY" \
-  MINIMA_WALL_SECONDS="$MINIMA_WALL_SECONDS" \
+  MINIMA_WALL_SECONDS="${MINIMA_WALL_SECONDS:?set the reviewed deadline in seconds}" \
   scripts/bench_minima_qualification.sh
 ```
 
@@ -125,8 +131,11 @@ The comparator receives both `-minima-freeze` and
 `-minima-expected-freeze-sha256`; an artifact cannot supply its own trust anchor.
 A pending calibration freeze is allowed only for bounded, nonqualifying runs.
 A full freeze requires three distinct reviewed bounded-pair hashes and the
-reviewed overhead disposition. The merged product commit is the Git ancestor;
-a reviewed pre-squash product commit is not necessarily an ancestor.
+reviewed overhead disposition. The freeze's `reviewed_product_commit` identifies
+the reviewed landed product commit, using its squash-merge SHA when applicable.
+It must be a Git ancestor of the harness. A pre-squash review SHA is separate
+provenance: verify tree equality with the landed commit before freezing, and do
+not pass that review SHA as `reviewed_product_commit`.
 
 Measured Qdrant supports the launcher's owned Docker deployment only and requires
 an explicit `QDRANT_CPUSET_CPUS` before launch. The runner checks the actual

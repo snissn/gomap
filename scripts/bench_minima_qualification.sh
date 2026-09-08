@@ -5,6 +5,10 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
 MODE=${MODE:-representative}
+if [[ "$MODE" == measured && ( -z "${TREEDB_COLLECTION:-}" || -z "${QDRANT_COLLECTION:-}" ) ]]; then
+	printf '%s\n' 'MODE=measured requires explicit TREEDB_COLLECTION and QDRANT_COLLECTION' >&2
+	exit 2
+fi
 MANIFEST_PATH_INPUT=${MANIFEST_PATH:-}
 if [[ -z "${RUN_DIR:-}" ]]; then
 	RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gomap_minima_qualification_XXXXXXXXXX")
@@ -46,7 +50,10 @@ fi
 # chosen run directory so automatic temporary paths survive the one wrapper.
 case "$MODE" in
 bounded-50k|bounded-250k|measured)
-	wall_seconds=${MINIMA_WALL_SECONDS:-600}
+	wall_seconds=${MINIMA_WALL_SECONDS:-}
+	if [[ "$MODE" != measured ]]; then
+		wall_seconds=${wall_seconds:-600}
+	fi
 	if [[ ! "$wall_seconds" =~ ^[1-9][0-9]*$ ]]; then
 		printf '%s\n' 'MINIMA_WALL_SECONDS must be a positive integer' >&2
 		exit 2
