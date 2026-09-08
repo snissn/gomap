@@ -1,8 +1,9 @@
 # TreeDB Python client (pre-alpha)
 
 This package is a small synchronous Python client for TreeDB's pre-alpha
-HTTP/JSON document service. It is intended to be the shared base used by a later
-`treedb-haystack` package, but **does not import or require Haystack**.
+HTTP/JSON document service, with optional native typed transport. It is intended
+to be the shared base used by a later `treedb-haystack` package, but **does not
+import or require Haystack**.
 
 Service contract: [`docs/TREEDB_DOCUMENT_SERVICE_API.md`](../../../docs/TREEDB_DOCUMENT_SERVICE_API.md)
 
@@ -14,9 +15,10 @@ Service contract: [`docs/TREEDB_DOCUMENT_SERVICE_API.md`](../../../docs/TREEDB_D
 - delete by explicit IDs
 - delete by server-side metadata filter
 - count/filter/list documents
-- exact dense-vector search with optional metadata filters and embedding echo
+- legacy exact dense-vector search with optional metadata filters and embedding echo
 - `ann` dense-vector search through compatible `native_runtime` and
-  `column_graph` indexes; declared scalar filters use native filtered ANN
+  `column_graph` indexes; selected typed string equality/range filters joined
+  by `AND` may use empty, bounded typed exact, or HNSW execution within that route
 - benchmark lifecycle helpers for reset/create, vector-index optimize/rebuild, and fail-closed no-document vector-index search
 - explicit scalar_u8 + rerank benchmark request fields (`query_mode="quantized_rerank"`, quantized index name, rerank candidate count)
 - ranked keyword search over the service `content` text index, including declared-field metadata filters
@@ -45,8 +47,12 @@ native capabilities lazily. `query_by_embedding(..., index_info=info)` uses
 dense 64/v2 only for caller-held selected typed `IndexInfo` returned by HTTP
 create/open/ensure. Its generation is sent as the server guard; conflicting
 explicit generations fail. Create/build/admission and reopen re-admission
-remain explicit HTTP control operations. Dense results include
-full payloads from the same search owner and are Python-owned after return.
+remain explicit HTTP control operations. Dense results contain content/meta
+from the same search owner and are Python-owned after return. Embedding echo is
+opt-in with `return_embedding=True` on either HTTP or native; the default is
+false. Commands 64 and 65 pack query and ingest FP32 values respectively;
+document responses from commands 50 and 64 remain JSON, with stored FP32 values
+represented as JSON numbers and decoded Python floats.
 
 Native addresses must be numeric IPv4 literals (`127.0.0.1:7121`) or bracketed
 numeric IPv6 literals (`[::1]:7121`), without zone identifiers. Hostnames are
@@ -61,7 +67,11 @@ fetch and has no generation guard or batch-wide snapshot promise.
 one captured collection view validates the caller's generation and typed schema,
 then materializes the whole batch. It works before graph build/admission and
 after reopen before re-admission. Missing or stale capability fails closed;
-there is no hidden metadata request or fallback to v1.
+there is no hidden metadata request or fallback to v1. Selected GetMany returns
+full stored documents **including embeddings**, has no `return_embedding`
+argument, and uses a separate snapshot from the preceding search. For matching
+HTTP retrieval, call `filter_documents(..., return_embedding=True)` for each ID;
+those requests do not share the native batch snapshot.
 
 `upsert_documents(index, documents, index_info=info)` uses negotiated local-only
 65/v1: packed FP32, declared content/scalar strings, and residual-only JSON. It
@@ -331,10 +341,12 @@ Unsupported operators and the top-level `embedding` field filter raise
 `meta.embedding.provider` are allowed. The client does not broaden unsupported
 filters into local document scans.
 
-The full filter AST is supported by document count/filter/delete and exact dense
-vector search. Filtered keyword/hybrid methods intentionally accept only
-equality and one/two-sided range leaves, alone or nested under `AND`, and only
-when every field was declared in `scalar_fields` at index creation. Same-field
+The full filter AST is supported by document count/filter/delete and legacy
+exact dense-vector search. Selected typed dense supports declared string
+equality/range leaves joined by `AND` and rejects the document-scan route.
+Filtered keyword/hybrid methods accept equality and one- or two-sided range
+leaves, alone or nested under `AND`, only when every field was declared in
+`scalar_fields` at index creation. Same-field
 bounds merge; different fields resolve through bounded scalar indexes and
 intersect before text/vector work. `OR`, `NOT`, `!=`, `in`, and `not in` remain
 typed `UnsupportedError` results on keyword/hybrid routes even though the client
@@ -354,22 +366,78 @@ fields. Indexed content, scalar strings and FP32 vectors use typed ownership;
 undeclared metadata remains flexible residual JSON. The selected flag is echoed
 in `IndexInfo.extra["typed_input"]` and checked against persisted schema.
 
-Bulk `upsert_documents` uses one mixed typed batch, including unchanged existing
-IDs in the updated count without rewriting their values. It does not implicitly
-build a graph. Call `optimize_index(..., column_graph_serving=limits)` after load:
-`limits` contains the explicit positive `ColumnGraphServingOptions` groups from
-the TreeDB typed-vector guide (`Publication`, `Owners`, `CandidateOutput`,
-`Maintenance`, `Filter`, `FoldRows`, `SearchCandidates`). No unbounded defaults
-are supplied. Later use `column_graph_action="fold"` or `"renew"`; after reopen
-use `ensure_index(..., typed_input=True, column_graph_serving=limits)` or optimize
-with action `"ensure"` and the same limits. Ensure does not rebuild.
+Creation without limits declares schema only. Bulk `upsert_documents` uses one
+mixed typed batch, including unchanged existing IDs in the updated count without
+rewriting their values. It does not implicitly build a graph. After loading,
+call `optimize_index(..., column_graph_serving=limits)`; omitted action or
+`column_graph_action="build"` rebuilds and admits. `"ensure"` admits existing
+assets without rebuilding. Both require positive limits; `"fold"` and `"renew"`
+use the admitted policy and reject a supplied limits object.
 
-Selected `query_by_embedding(..., route="ann")` supports declared scalar filters
-and full payload fetch under one read owner. A bounded typed exact filter plan
-is valid on that route; legacy document-scan `route="exact"` is not. Search before
-admission fails closed. The optional native client above supports typed ingestion
-and search; complete Minima runner integration and measured zero-indexed-JSON /
-performance qualification remain separate unfinished gates.
+`limits` is the full `ColumnGraphServingOptions` object described in the
+[typed-vector lifecycle](../../../TreeDB/docs/guides/vector-search-typed-column.md#explicit-mutable-serving-lifecycle),
+with `Publication`, `Owners`, `CandidateOutput`, `Maintenance`, `Filter`,
+`FoldRows` and `SearchCandidates` groups. No unbounded defaults are supplied.
+The policy is process-local, shared across handles and immutable until DB close.
+Complete mutable serving requires mmap-direct readers and exact destructive
+namespace authority; ordinary typed read-at fallback does not establish that
+lifecycle on unsupported platforms.
+
+For example, with both service listeners running and a caller-sized positive
+`serving.json` (the [integration fixture](tests/test_integration.py) shows the
+complete small-fixture object):
+
+```python
+import json
+from contextlib import closing
+from pathlib import Path
+from treedb_client import Document, TreeDBClient
+
+limits = json.loads(Path("serving.json").read_text())
+http_url, native_address = "http://127.0.0.1:7120", "127.0.0.1:7121"
+with closing(TreeDBClient(http_url)) as control:
+    info = control.ensure_index(
+        "typed", 2, typed_input=True,
+        vector_index_options={"strategy": "column_graph"},
+        scalar_fields=[{"field": "user_id", "value_type": "string"}],
+    )
+    with closing(TreeDBClient(http_url, native_address=native_address)) as native:
+        native.upsert_documents("typed", [Document(
+            id="one", content="typed text", embedding=[1, 0],
+            meta={"user_id": "owner"},
+        )], index_info=info)
+        control.optimize_index("typed", column_graph_serving=limits)
+        response = native.query_by_embedding(
+            "typed", [1, 0], 1, index_info=info, return_embedding=True,
+        )
+        documents = native.get_many("typed", ["one", "missing"], index_info=info)
+        control.delete_documents("typed", ["one"])
+        control.optimize_index("typed", column_graph_action="fold")
+```
+
+Drain/stop the service and reopen the same database. Then re-admit its graph:
+
+```python
+with closing(TreeDBClient(http_url)) as control:
+    info = control.open_index("typed")  # Metadata alone does not admit serving.
+    control.optimize_index("typed", column_graph_action="ensure",
+                           column_graph_serving=limits)
+```
+
+Re-admission can also use compatible `ensure_index(..., typed_input=True,
+column_graph_serving=limits)` with the original schema. Selected dense accepts
+an omitted route or `route="ann"`, including declared string equality/range
+leaves joined by `AND`.
+Its `dense_work.graph.route` reports executed empty, typed exact (complete
+eligible sets up to 4,096), or HNSW work; `route="ann"`/`exact=False` is only the
+public route. `route="exact"` rejects even before admission. Search and its
+requested full payload use one read owner; separate GetMany has its own view.
+Selected keyword/hybrid results reflect typed mutations before Fold, with
+explicit graph re-admission for hybrid vector sources after reopen.
+
+Ordinary typed client/runner routing and owned dense/process work producers are
+implemented. The historical artifact envelope/validator and final measured
+qualification remain separate gates; this lifecycle is not a performance claim.
 
 ## Error mapping
 

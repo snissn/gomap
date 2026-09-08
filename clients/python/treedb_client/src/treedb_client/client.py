@@ -387,12 +387,16 @@ class TreeDBClient:
     ) -> DenseVectorSearchResponse:
         """Score a query embedding through the TreeDB dense search route.
 
-        ``route`` selects the execution path (v1alpha2): ``"ann"`` uses a
-        compatible native_runtime or column_graph vector index; ``"exact"``
-        keeps the bounded filtered scan. Declared scalar filters are supported
-        by native_runtime ANN and expose route/work diagnostics in the response.
-        Unsupported filter shapes fail closed; neither the client nor service
-        silently downgrades an ANN request to exact search.
+        Selected typed column_graph indexes accept an omitted route or
+        ``"ann"`` after explicit admission, including declared string equality/range
+        leaves joined by AND. ``dense_work.graph.route`` identifies executed
+        empty, typed exact (complete eligible sets up to 4096), or HNSW work
+        independently of the public ``ann`` tag. Selected ``"exact"`` rejects rather than scanning.
+        Legacy ``"exact"`` scans documents and applies an optional filter;
+        compatible native_runtime ANN also supports declared scalar filters.
+        Unsupported ANN shapes fail closed without a document-scan fallback.
+        Embedding echo is opt-in via ``return_embedding=True`` on either
+        transport. Native dense requires caller-held selected typed IndexInfo.
         """
 
         if route is not None and route not in ("ann", "exact"):

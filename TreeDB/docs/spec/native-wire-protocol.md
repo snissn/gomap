@@ -815,7 +815,7 @@ leaves. Each leaf contains a length-prefixed field, one-byte operator
 `2` bool, `3` signed zigzag int64, or `4` little-endian float64. Existing bounds
 include 16 filter levels and 64 leaves; unsupported operators fail closed.
 
-Response sections are ordered IDs (102), full JSON documents (103), and
+Response sections are ordered IDs (102), requested JSON documents (103), and
 `dense_search_response` (130). The metadata payload contains one route byte,
 uvarint candidates, exact-fallbacks, full-document-scan-fallbacks, result count,
 then one little-endian float64 score per result. Version 1 retains its legacy
@@ -823,7 +823,11 @@ native-runtime bool byte (successful route `1`). Version 2 requires route tag
 `2`. Cross-version tags are rejected. Tag 2 identifies validated dispatch,
 **not measured execution-work evidence**. Version 2 additionally requires the
 critical `dense_search_work` section (134), independently versioned below.
-Full documents are fetched from the search's same read owner before release.
+Requested documents are fetched from the search's same read owner before
+release. Content/meta are returned; embedding echo is opt-in through the
+return-embedding bool (default false), as on HTTP. Stored FP32 embeddings are
+reconstructed as JSON numbers, not packed result vectors. Command 64 packs the
+query and command 65 packs ingest vectors; document response sections remain JSON.
 
 Section 134 version 1 contains exactly 38 minimal uint64 uvarints, in this order:
 
@@ -893,7 +897,11 @@ same view. Existing buffered-write flushing is retained. Graph build/admission
 is not required. The owned response encoding is unchanged from 50/v1, including
 request order, duplicate IDs, and missing-document presence bits. The view is
 closed before return. This is a separate retrieval snapshot, not the preceding
-search owner's snapshot; it does not claim execution-work instrumentation.
+search owner's snapshot. Full documents include stored FP32 embeddings as JSON
+numbers, with no embedding-projection argument. There is no response-local
+`dense_work` section or changed list/result contract; process
+`work.output.get_many` observes selected attempts/completions/errors and actual
+output prefixes.
 
 ### Typed document upsert (65/v1, LocalOnly)
 

@@ -151,9 +151,10 @@ Supported now:
 - upsert Haystack-style documents;
 - delete by ID or metadata filter;
 - count/filter/list documents;
-- exact dense-vector search with metadata filters;
+- legacy exact dense-vector search with optional metadata filters;
 - dense `route=ann` search through compatible `native_runtime` and
-  `column_graph` vector indexes, including declared scalar filters on `native_runtime`;
+  `column_graph` vector indexes, including declared scalar filters on
+  `native_runtime` and selected typed `column_graph`;
 - ranked keyword search over the declared `content` text index, including
   declared-field metadata filters;
 - TreeDB collection-native hybrid search over text and/or vector sources,
@@ -167,11 +168,19 @@ Not supported now:
   missing, stale, corrupt, or unavailable;
 - unsupported scalar shapes on filtered `route=ann` dense requests.
 
-Dense `route=ann` uses graph traversal and returns exact scores for its bounded
-candidate set. Declared scalar filters on `native_runtime` expose plan,
-membership, candidate-work, fallback, materialization, and visibility-retry
-diagnostics. `route=exact` scans only documents matching a bounded metadata
-filter. Neither route silently substitutes a primary-document scan.
+Dense `route=ann` uses a compatible vector index and exact scores for its
+candidates. Selected `typed_input=true` indexes accept an omitted route or
+`ann`, including declared string equality/range leaves joined by `AND`. Their
+executed branch can be empty, typed exact for a complete eligible set of at most 4,096, or HNSW;
+`route="ann"` and `exact=false` alone do not prove graph traversal. Inspect
+`dense_work.graph.route` for that distinction. Selected `route=exact` rejects,
+including before build/admission.
+
+Declared scalar filters on legacy `native_runtime` expose plan, membership,
+candidate-work, fallback, materialization, and visibility-retry diagnostics.
+Legacy `route=exact` explicitly scans documents and evaluates the optional
+metadata predicate before scoring matches; it permits an absent filter.
+An ANN request never silently becomes that document scan.
 
 ## Haystack document mapping
 
@@ -255,7 +264,40 @@ is reported false until the collection vector path can serve that metric safely.
 Metadata filters on keyword/hybrid routes require fields declared in
 `scalar_fields`; undeclared or unbounded filters fail closed.
 
-Open/read index metadata:
+### Selected typed input
+
+For persisted typed ownership of indexed content, FP32 embeddings and declared
+scalar strings, create a cosine `column_graph` index with `typed_input=true`:
+
+```json
+{
+  "name": "typed_docs",
+  "dimension": 2,
+  "metric": "cosine",
+  "typed_input": true,
+  "vector_index_options": {"strategy": "column_graph"},
+  "scalar_fields": [
+    {"field": "user_id", "value_type": "string"},
+    {"field": "fpath", "value_type": "string"}
+  ]
+}
+```
+
+The response echoes `index.typed_input=true`. Undeclared metadata remains
+residual JSON. Creation without `column_graph_serving` declares the schema; it
+does not build or admit the graph. Load typed documents, then use the explicit
+[optimize actions](#selected-typed-optimize-actions) below. A compatible create
+request with limits can admit existing assets, including after reopen; merely
+reading/opening index metadata cannot.
+
+The [typed-vector lifecycle](../TreeDB/docs/guides/vector-search-typed-column.md#explicit-mutable-serving-lifecycle)
+describes the positive limits and ownership contract. Limits are process-local,
+shared across collection handles and immutable until DB close; reapply them
+after reopen. Complete mutable serving requires mmap-direct prepared readers
+and exact destructive namespace authority. Generic typed GetMany fallback
+support on another platform does not establish this full lifecycle.
+
+### Read index metadata
 
 ```http
 GET /v1/indexes/{index}
@@ -495,11 +537,13 @@ collection-truncate/WAL format just for benchmark reset and preserves TreeDB's
 insert-only graph rebuild boundary. Compatible non-`column_graph` indexes may be
 cleared with existing document deletes.
 
-Bulk loaders may pass `"defer_vector_index_rebuild": true` on document upserts
-to avoid rebuilding column-graph vector assets after every inserted batch.
+Legacy bulk loaders may pass `"defer_vector_index_rebuild": true` on document
+upserts to avoid rebuilding column-graph vector assets after every inserted batch.
 When rebuild is deferred, `/search/vector-index` fails closed until optimize has
 built the assets for the loaded documents. The exact document route
 `/search/vector` remains readable from stored documents before optimize.
+Selected typed upserts never implicitly build; their dense search requires
+explicit admission and rejects the document-scan route.
 
 Optimize/rebuild after load:
 
@@ -511,7 +555,25 @@ POST /v1/indexes/{index}/optimize
 {"vector_index_name": "embedding", "expected_generation": 1}
 ```
 
-No-document vector-index benchmark search:
+### Selected typed optimize actions
+
+For selected typed input, the same endpoint accepts `column_graph_action` and
+`column_graph_serving`. The legacy request above is insufficient for a selected
+build/ensure: supply the full positive limits object from the
+[serving contract](../TreeDB/docs/guides/vector-search-typed-column.md#explicit-mutable-serving-lifecycle).
+
+| `column_graph_action` | Behavior | `column_graph_serving` |
+| --- | --- | --- |
+| omitted or `build` | Rebuild assets, then ensure serving | Required |
+| `ensure` | Admit existing assets without rebuilding | Required |
+| `fold` | Fold current typed mutations under the admitted policy | Must be omitted |
+| `renew` | Renew the existing attempted-work allowance after maintenance | Must be omitted |
+
+For example, after admission, `{"column_graph_action":"fold"}` folds without
+replacing its limits. For create/upsert/build/search/fetch/reopen calls through
+the public client, see the [Python lifecycle example](../clients/python/treedb_client/README.md#selected-typed-column-graph-lifecycle).
+
+### No-document vector-index benchmark search
 
 ```http
 POST /v1/indexes/{index}/search/vector-index
@@ -576,6 +638,11 @@ are documented in
 
 ## Dense-vector search
 
+The explicit document-scan example below is for legacy indexes. Selected typed
+indexes use an omitted route or `ann` after admission. Both HTTP and native
+dense search return content/meta, with embedding echo opt-in through
+`return_embedding=true` (Python `True`); the default is false.
+
 ```http
 POST /v1/indexes/{index}/search/vector
 ```
@@ -609,13 +676,14 @@ Response:
 }
 ```
 
-Omit `route` (or use `route=ann`) for default graph traversal when the index
-supports it. ANN responses report `route=ann` and `exact=false`; declared scalar
-filters use `native_runtime` filtered ANN, while unsupported shapes fail closed
-instead of silently switching to a scan.
+Omit `route` (or use `route=ann`) to select the compatible vector-index route.
+ANN responses report `route=ann` and `exact=false`. Declared scalar filters are
+supported by `native_runtime` and selected typed `column_graph`; unsupported
+shapes fail closed. Selected executed empty/exact/HNSW behavior is reported in
+`dense_work.graph.route`, independently of the top-level route tag.
 
 Legacy `column_graph` indexes with persisted update/delete parts report
-`no_document_vector_search=false`: an omitted route selects the existing bounded
+`no_document_vector_search=false`: an omitted route selects the existing
 exact document scan and echoes `route=exact`, including after reopen. Explicit
 `route=ann` and no-document benchmark searches still fail closed for that stale
 graph. Fresh insert-only legacy graphs retain automatic ANN selection. Selected
@@ -841,13 +909,14 @@ exhaustion, corrupt index state, and bounded document-fetch failures return a
 service error (`index_unavailable`, `index_stale`, or `unsupported`) rather than
 empty success or a scan fallback.
 
-Pre-alpha caveat: cosine service indexes attempt to refresh the `column_graph`
-vector index after insert-only upserts. Updates/deletes can currently leave the
-vector graph rebuild-needed in collection core; hybrid requests that need the
-vector source then fail closed until that core mutation/rebuild path is available.
-Keyword and hybrid retrieval now use their bounded indexed-filter paths; exact
-dense scoring remains the explicit filtered correctness path. Any unavailable
-or stale source still fails closed.
+Legacy cosine service indexes attempt to refresh the `column_graph` vector
+index after insert-only upserts. Updates/deletes can leave that legacy graph
+rebuild-needed; hybrid requests requiring it fail closed. Selected typed keyword
+and hybrid results reflect updates, deletes and inserts before Fold; hybrid
+vector sources require explicit re-admission after reopen. Keyword search does
+not require graph admission. See the [hybrid contract](../TreeDB/docs/guides/hybrid-search.md).
+Unavailable or stale sources still fail closed; keyword/hybrid correctness does
+not establish dense or hybrid performance qualification.
 
 ## Error envelope
 

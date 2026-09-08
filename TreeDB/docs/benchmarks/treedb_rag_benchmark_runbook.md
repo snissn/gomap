@@ -53,14 +53,17 @@ manifest, service binary and source provenance as the baseline:
 PYTHONPATH=clients/python/treedb_client/src python3 \
   benchmarks/vector_db_compare/minima_treedb_runner.py \
   --strategy column_graph --transport native \
-  --column-graph-serving "$MINIMA_SERVING_LIMITS" \
+  --column-graph-serving "$MINIMA_SERVING_LIMITS" --ef-search "$MINIMA_EF_SEARCH" \
   --native-address 127.0.0.1:17122 \
   --manifest "$MINIMA_MANIFEST" --service-bin "$MINIMA_SERVICE_BINARY" \
   --data-dir "$MINIMA_TYPED_RUN/db" --output "$MINIMA_TYPED_RUN/result.json" \
   --collection minima --operation-timeout 120 --startup-timeout 120
 ```
 
-Set these paths explicitly first; use a fresh task directory on `/mnt/fast4tb`,
+Set these paths and `MINIMA_EF_SEARCH` explicitly before running. The parser's
+omitted-EF default is 128, not a qualified typed configuration: predeclare EF and
+limits, then complete whole-population semantic checks before repetitions. Do
+not tune an individual failed row. Use a fresh task directory on `/mnt/fast4tb`,
 a committed clean source/binary pair and a bounded manifest, never the final
 holdout for calibration. Wrap the invocation in the same bounded wall deadline
 as above. `--transport http` is the typed-storage HTTP bridge: use a separate
@@ -74,16 +77,25 @@ before the single shared service is stopped.
 
 Native retrieval is one `GetMany` request, unlike the historical per-ID HTTP
 retrieve loop. Preserve fetched IDs/content/metadata and report that granularity
-change rather than attributing it solely to storage. Current typed diagnostic
-artifacts label dispatch identity but keep work counters unavailable; they are
-not measured native proof and cannot qualify under M0's legacy-only validator.
-Final producer/schema and shell-harness alignment are M4 exit requirements.
-Null native counters do not mean zero fallback work. Keep projections,
-durability and fixture matched for comparisons, and label transport separately.
-For diagnostic overhead characterization, repeat three matched
-fresh-DB runs with diagnostics disabled/enabled in counterbalanced order; set
-`TREEDB_DIAGNOSTICS_DIR` beneath the run directory to enable existing diagnostics.
-Do not use this small lane as a full-scale speedup claim.
+change rather than attributing it solely to storage. Native selected GetMany
+also fetches stored embeddings; the historical runner normalizes retrieval to
+payload fields and its HTTP retrieve loop omits embedding echo. Explicitly
+match/document projections when comparing these operations.
+
+The product exposes owned per-request `dense_work` and process work producers.
+The historical diagnostic artifact envelope retains dispatch-only proof with
+unavailable native counters; the final measured schema/validator and shell
+forwarding remain separate M4 work. Null historical counters do not mean zero
+fallback work or qualify under the legacy validator. Keep projections,
+durability and fixture matched, and label transport separately.
+
+For diagnostic overhead characterization, retain three matched fresh-DB runs
+with diagnostics disabled/enabled in counterbalanced order after the measured
+harness is reviewed. On the direct Python invocation above, add
+`--diagnostics-dir "$MINIMA_TYPED_RUN/diagnostics"` to enable existing diagnostics;
+`TREEDB_DIAGNOSTICS_DIR` is a shell-wrapper setting and alone does not affect the
+direct Python command. Do not use this development lane as a full-scale speedup
+claim.
 
 `resource_measurement.peak_rss_bytes` is the maximum measured Linux service
 process-lifetime `VmHWM` through the captured segment endpoints. Per-process
