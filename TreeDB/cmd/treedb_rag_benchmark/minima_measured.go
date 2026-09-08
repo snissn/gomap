@@ -822,7 +822,10 @@ func validateMinimaDenseRequest(r minimaMeasuredRequest) error {
 	if s.SchemaHash == 0 || s.SchemaGeneration == 0 || s.CurrentCoverageLSN < s.BaseCoverageLSN || s.BaseManifest.Format != "tcs1" || s.CurrentManifest.Format != "tcs1" || s.BaseManifest.Version == 0 || s.CurrentManifest.Version == 0 {
 		return errors.New("search captured owner identity invalid")
 	}
-	if o.Requested != *r.ResultCount || o.Fetched != *r.ResultCount || o.Missing != 0 || o.RetainedPayloadFetches != 0 {
+	// Retained payload reads belong to final requested document assembly, with
+	// at most one successful read per returned row. Indexed JSON extraction is
+	// independently forbidden by the lifetime and phase producer snapshots.
+	if o.Requested != *r.ResultCount || o.Fetched != *r.ResultCount || o.Missing != 0 || o.RetainedPayloadFetches > o.Fetched {
 		return errors.New("search output work disagrees with returned results")
 	}
 	if *r.ResultCount > 0 && (o.OutputBytes == 0 || o.JSONReconstructionRows != *r.ResultCount) {

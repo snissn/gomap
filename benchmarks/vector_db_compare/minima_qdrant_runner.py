@@ -1394,6 +1394,15 @@ class QdrantMinimaRunner:
                 container.get("Config", {}).get("Image") != self.image or
                 not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id)):
             raise RuntimeError("inspected Docker PID/image differs from the owned measured runtime")
+        config = container.get("Config", {})
+        if (config.get("Entrypoint") != ["/qdrant/qdrant"] or config.get("Cmd") not in (None, []) or
+                config.get("User") != f"{os.geteuid()}:{os.getegid()}"):
+            raise RuntimeError("measured Docker must run Qdrant directly as the collector UID:GID")
+        for required in ("QDRANT__STORAGE__SNAPSHOTS_PATH=/qdrant/storage/snapshots",
+                         "QDRANT_INIT_FILE_PATH=/qdrant/storage/.qdrant-initialized"):
+            prefix = required.split("=", 1)[0] + "="
+            if [entry for entry in config.get("Env", []) if entry.startswith(prefix)] != [required]:
+                raise RuntimeError("measured Docker auxiliary paths must remain inside measured storage")
         expected_storage = str(self.storage_path.resolve())
         if not any(m.get("Type") == "bind" and m.get("Source") == expected_storage and
                    m.get("Destination") == "/qdrant/storage" and m.get("RW") is True
@@ -1413,6 +1422,9 @@ class QdrantMinimaRunner:
         observed_pin = repository + "@" + digest
         if image.get("Id") != image_id or observed_pin not in image.get("RepoDigests", []):
             raise RuntimeError("actual Docker image does not carry the frozen repository digest")
+        if (os.readlink(f"/proc/{self.server_pid}/exe") != "/qdrant/qdrant" or
+                not self.process_owns_endpoint(self.server_pid, self.url, 6333)):
+            raise RuntimeError("measured Docker PID is not the executable owning the Qdrant listener")
         # Re-read both identities after inspection; a concurrent replacement or
         # restart cannot make a label attest to a different running process.
         final = inspect("inspect", self.container)

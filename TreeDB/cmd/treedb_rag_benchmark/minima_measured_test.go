@@ -35,6 +35,75 @@ func measuredTestDense(eligible uint64, count int) *documentservice.DenseSearchW
 	}
 	return &documentservice.DenseSearchWork{Version: 1, Completed: true, Graph: graph, Output: documentservice.DenseSearchOutputWork{Attempted: true, Completed: true, Requested: uint64(count), Fetched: uint64(count), OutputBytes: uint64(count) * 50, JSONReconstructionRows: uint64(count)}}
 }
+
+func TestMinimaMeasuredRequestedOutputRetainedPayload(t *testing.T) {
+	// Exact request 200 from the actual 91106108 bounded native CLI. Its five
+	// requested documents use retained payload plus typed-row reconstruction.
+	raw, err := os.ReadFile("testdata/minima_measured_requested_output.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request minimaMeasuredRequest
+	if err := json.Unmarshal(raw, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.DenseWork.Output.RetainedPayloadFetches != 5 || request.DenseWork.Output.TypedColumnRows != 0 {
+		t.Fatal("fixture no longer exercises the actual requested-output producer")
+	}
+	if err := validateMinimaDenseRequest(request); err != nil {
+		t.Fatalf("actual retained requested output rejected: %v", err)
+	}
+	for _, change := range []string{"excess_retained", "requested", "fetched", "missing", "reconstruction", "output_bytes"} {
+		t.Run(change, func(t *testing.T) {
+			var r minimaMeasuredRequest
+			if err := json.Unmarshal(raw, &r); err != nil {
+				t.Fatal(err)
+			}
+			o := &r.DenseWork.Output
+			switch change {
+			case "excess_retained":
+				o.RetainedPayloadFetches = o.Fetched + 1
+			case "requested":
+				o.Requested++
+			case "fetched":
+				o.Fetched--
+			case "missing":
+				o.Missing++
+			case "reconstruction":
+				o.JSONReconstructionRows--
+			case "output_bytes":
+				o.OutputBytes = 0
+			}
+			if err := validateMinimaDenseRequest(r); err == nil {
+				t.Fatal("inconsistent requested output accepted")
+			}
+		})
+	}
+	// Output reads cannot substitute for the independent indexed JSON absence
+	// proof, nor can an uncharged request prefix borrow process output work.
+	w := measuredTestWork(123)
+	if err := validateMinimaWork(w, 123, 0); err != nil {
+		t.Fatal(err)
+	}
+	w.IndexedJSON.MaterializationRows = 1
+	if err := validateMinimaWork(w, 123, 0); err == nil || !strings.Contains(err.Error(), "forbidden indexed JSON") {
+		t.Fatalf("indexed JSON extraction accepted: %v", err)
+	}
+	a, _ := measuredTestArtifact(t)
+	evidence := a.RawEvidence["treedb"]
+	for i := range evidence.RequestEvidence {
+		r := &evidence.RequestEvidence[i]
+		if r.DenseWork != nil && r.DenseWork.Output.Fetched != 0 {
+			r.DenseWork.Output.RetainedPayloadFetches = 1
+			if err := validateMinimaMeasuredRequestTotals(evidence); err == nil {
+				t.Fatal("uncharged retained payload request prefix accepted")
+			}
+			return
+		}
+	}
+	t.Fatal("fixture has no positive output request")
+}
+
 func measuredTestArtifact(t *testing.T) (minimaArtifact, *minimaMeasuredFreeze) {
 	t.Helper()
 	manifest := buildMinimaManifestForRows(50000)

@@ -154,12 +154,17 @@ else
 	printf '#!/usr/bin/env bash\nexec %q docker %q\n' \
 		"$ROOT/scripts/restart_minima_qdrant_backend.sh" "$QDRANT_CONTAINER" >"$QDRANT_RESTART_HOOK"
 	chmod +x "$QDRANT_RESTART_HOOK"
-	docker_cpu_args=()
+	docker_runtime_args=()
 	if [[ -n "${QDRANT_CPUSET_CPUS:-}" ]]; then
-		docker_cpu_args+=(--cpuset-cpus "$QDRANT_CPUSET_CPUS")
+		docker_runtime_args+=(--cpuset-cpus "$QDRANT_CPUSET_CPUS")
+	fi
+	if [[ "$MINIMA_MEASURED" == true ]]; then
+		docker_runtime_args+=(--user "$(id -u):$(id -g)" --entrypoint /qdrant/qdrant
+			-e QDRANT__STORAGE__SNAPSHOTS_PATH=/qdrant/storage/snapshots
+			-e QDRANT_INIT_FILE_PATH=/qdrant/storage/.qdrant-initialized)
 	fi
 	docker run -d --rm \
-		${docker_cpu_args[@]+"${docker_cpu_args[@]}"} \
+		${docker_runtime_args[@]+"${docker_runtime_args[@]}"} \
 		--name "$QDRANT_CONTAINER" \
 		-p "127.0.0.1:${QDRANT_PORT}:6333" \
 		-v "$QDRANT_STORAGE_PATH:/qdrant/storage" \

@@ -126,11 +126,15 @@ reviewed overhead disposition. The merged product commit is the Git ancestor;
 a reviewed pre-squash product commit is not necessarily an ancestor.
 
 Measured Qdrant supports the launcher's owned Docker deployment only. The runner
-checks the actual container PID, image ID, repository digest and durable storage
-mount, brackets the observation with Linux process identity and repeats it after
-restart. Both servers' actual CPU affinities must equal the freeze; a Go thread
-setting alone is not an allocation of CPUs. Legacy standalone/external modes
-remain available outside measured collection.
+checks the actual container PID, image ID, repository digest, mapped HTTP port
+and durable storage mount. The container runs `/qdrant/qdrant` directly under the
+collector's numeric UID:GID so the measured PID owns the executable and listener
+and permits host process inspection. Snapshot and initialization paths stay
+inside `/qdrant/storage`. The runner verifies these facts before its first
+resource capture, brackets inspection with Linux process identity and repeats
+it after restart. Both servers' actual CPU affinities must equal the freeze; a
+Go thread setting alone is not an allocation of CPUs. Legacy deployments remain
+available outside measured collection.
 
 Setup ends before initial ingestion; load includes fixture-dependent batch
 preparation, durable writes and Build/readiness. Restart includes shutdown,

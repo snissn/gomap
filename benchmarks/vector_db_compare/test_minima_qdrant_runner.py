@@ -435,13 +435,18 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         workload.url = "http://127.0.0.1:19333"
         image_id = "sha256:" + "e"*64
         container = {"Id": "container-id", "Name": "/owned", "Image": image_id,
-                     "Config": {"Image": workload.image}, "State": {"Running": True, "Pid": 1},
+                     "Config": {"Image": workload.image, "User": "1000:1000",
+                                "Entrypoint": ["/qdrant/qdrant"], "Cmd": None,
+                                "Env": ["QDRANT__STORAGE__SNAPSHOTS_PATH=/qdrant/storage/snapshots",
+                                        "QDRANT_INIT_FILE_PATH=/qdrant/storage/.qdrant-initialized"]},
+                     "State": {"Running": True, "Pid": 1},
                      "NetworkSettings": {"Ports": {"6333/tcp": [{"HostIp": "127.0.0.1", "HostPort": "19333"}]}},
                      "Mounts": [{"Type": "bind", "Source": "/measured/storage",
                                  "Destination": "/qdrant/storage", "RW": True}]}
         image = {"Id": image_id, "RepoDigests": ["qdrant/qdrant@sha256:" + "d"*64]}
         for change in ("valid", "label", "pid", "image_id", "digest", "mount", "replacement", "identity",
-                       "port", "host", "missing_mapping", "changed_mapping"):
+                       "port", "host", "missing_mapping", "changed_mapping", "entrypoint", "cmd", "user",
+                       "snapshots", "init_file", "duplicate_env", "executable", "listener"):
             with self.subTest(change=change):
                 first, actual_image, final = copy.deepcopy(container), copy.deepcopy(image), copy.deepcopy(container)
                 identities = ["1:7", "1:7"]
@@ -456,12 +461,24 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
                 if change == "host": first["NetworkSettings"]["Ports"]["6333/tcp"][0]["HostIp"] = "127.0.0.2"
                 if change == "missing_mapping": first["NetworkSettings"]["Ports"] = {}
                 if change == "changed_mapping": final["NetworkSettings"]["Ports"] = {}
+                if change == "entrypoint": first["Config"]["Entrypoint"] = ["./entrypoint.sh"]
+                if change == "cmd": first["Config"]["Cmd"] = ["./entrypoint.sh"]
+                if change == "user": first["Config"]["User"] = "0:0"
+                if change == "snapshots": first["Config"]["Env"][0] = "QDRANT__STORAGE__SNAPSHOTS_PATH=/qdrant/snapshots"
+                if change == "init_file": first["Config"]["Env"][1] = "QDRANT_INIT_FILE_PATH=/qdrant/.qdrant-initialized"
+                if change == "duplicate_env": first["Config"]["Env"].append(first["Config"]["Env"][0])
                 outputs = [SimpleNamespace(stdout=runner.json.dumps([row])) for row in (first, actual_image, final)]
                 with mock.patch.object(runner.subprocess, "run", side_effect=outputs) as inspect, \
-                     mock.patch.object(runner, "linux_process_identity", side_effect=identities):
+                     mock.patch.object(runner, "linux_process_identity", side_effect=identities), \
+                     mock.patch.object(runner.os, "geteuid", return_value=1000, create=True), \
+                     mock.patch.object(runner.os, "getegid", return_value=1000, create=True), \
+                     mock.patch.object(runner.os, "readlink", return_value="/usr/bin/bash" if change == "executable" else "/qdrant/qdrant") as executable, \
+                     mock.patch.object(workload, "process_owns_endpoint", return_value=change != "listener") as listener:
                     if change == "valid":
                         self.assertEqual(workload._verify_measured_docker_runtime(), workload.image)
                         self.assertEqual(inspect.call_args_list[1].args[0], ["docker", "image", "inspect", image_id])
+                        executable.assert_called_once_with("/proc/1/exe")
+                        listener.assert_called_once_with(1, workload.url, 6333)
                     else:
                         with self.assertRaises(RuntimeError):
                             workload._verify_measured_docker_runtime()
