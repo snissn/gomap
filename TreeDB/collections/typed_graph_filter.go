@@ -84,62 +84,9 @@ func prepareTypedGraphFilterWithContext(ctx context.Context, overlay *typedGraph
 	if len(leaves) == 1 {
 		return prepareTypedGraphSingleLeaf(ctx, plan, lookup, leaves[0], limits)
 	}
-	var allowed hybridScalarAllowSet
-	for leafIndex, leaf := range leaves {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		idx, ok := findIndex(overlay.current.catalog.meta.Indexes, leaf.IndexName)
-		if !ok {
-			return nil, ErrHybridSearchIndexUnavailable
-		}
-		// Array/multikey dedupe owns IDs before the visitor. This internal typed
-		// scalar seam deliberately rejects that different admission contract.
-		if shouldDedupeIndexDocumentIDs(idx, overlay.current.catalog.meta.Options) {
-			return nil, ErrHybridSearchUnsupported
-		}
-		if plan.inspectedEntries == limits.InspectedEntries {
-			return nil, errTypedGraphSearchBudget
-		}
-		exhausted := false
-		inspected := 0
-		set, _, truncated, err := lookup.leafProbeBeforeCopy(leaf, limits.SourceIDs, limits.InspectedEntries-plan.inspectedEntries, &inspected, func(id []byte) error {
-			if plan.sourceIDs&255 == 0 {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-			}
-			if plan.sourceIDs == limits.SourceIDs || len(id) > limits.SourceBytes-plan.sourceBytes {
-				exhausted = true
-				return errTypedGraphSearchBudget
-			}
-			plan.sourceIDs++
-			plan.sourceBytes += len(id)
-			return nil
-		})
-		plan.inspectedEntries += inspected
-		if exhausted || truncated {
-			return nil, errTypedGraphSearchBudget
-		}
-		if err != nil {
-			return nil, err
-		}
-		if leafIndex == 0 {
-			allowed = set
-		} else {
-			checked := 0
-			for id := range allowed {
-				if checked&255 == 0 {
-					if err := ctx.Err(); err != nil {
-						return nil, err
-					}
-				}
-				checked++
-				if _, ok := set[id]; !ok {
-					delete(allowed, id)
-				}
-			}
-		}
+	allowed, err := prepareTypedGraphAND(ctx, plan, lookup, leaves, limits)
+	if err != nil {
+		return nil, err
 	}
 	// Final intersection, not individual leaf cardinality, chooses exact/ANN.
 	plan.count = len(allowed)
@@ -151,10 +98,10 @@ func prepareTypedGraphFilterWithContext(ctx context.Context, overlay *typedGraph
 		return nil, errTypedGraphSearchBudget
 	}
 	perID := bits.Len(uint(overlay.base.reader.graph.RowCount)) + bits.Len(uint(len(overlay.rows))) + 2
-	if plan.count > limits.MappingWork/perID {
+	if plan.count > (limits.MappingWork-plan.mappingWork)/perID {
 		return nil, errTypedGraphSearchBudget
 	}
-	plan.mappingWork = plan.count * perID
+	plan.mappingWork += plan.count * perID
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -286,7 +233,7 @@ func finishTypedGraphFilter(ctx context.Context, plan *typedGraphPreparedFilter,
 
 // One scalar leaf has unique posting IDs and needs no owning intersection map.
 // Keep only a bounded ID chunk and checked ordinal capacities. Conjunctions
-// deliberately retain the existing complete-set intersection path above.
+// use selective discovery or complete-set intersection before ordinal mapping.
 func prepareTypedGraphSingleLeaf(ctx context.Context, plan *typedGraphPreparedFilter, lookup hybridScalarLookupView, leaf HybridScalarFilter, limits typedGraphFilterLimits) (*typedGraphPreparedFilter, error) {
 	overlay := plan.overlay
 	idx, ok := findIndex(overlay.current.catalog.meta.Indexes, leaf.IndexName)

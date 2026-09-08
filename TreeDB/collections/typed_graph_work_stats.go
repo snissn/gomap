@@ -60,9 +60,12 @@ func (o *typedGraphReadOwner) querySnapshot() ColumnGraphQuerySnapshot {
 }
 
 // Filter cardinality is final only when Completed is true. MappingWorkCharged
-// is the admitted upper bound, not a measured number of comparisons. Retained
-// bytes and ordinal growth measure per-call ordinal capacity. Scratch fields
-// measure logical peak rows/ID bytes, not Go capacity or cumulative allocation.
+// sums admitted ordinal-mapping bounds, submitted secondary point requests,
+// and temporary encoded-prefix/key payload bounds for selective string EQ AND.
+// It is not a measured comparison/page/heap count. Posting source counts include
+// probes and fallback rereads, excluding point keys and rejected lookahead IDs.
+// Retained bytes and ordinal growth measure per-call ordinal capacity. Scratch
+// fields measure logical peak rows/ID bytes, not Go capacity or cumulative allocation.
 type ColumnGraphFilterWork struct {
 	Attempted              bool   `json:"attempted"`
 	Completed              bool   `json:"completed"`

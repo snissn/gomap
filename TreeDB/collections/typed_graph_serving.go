@@ -25,6 +25,11 @@ type ColumnGraphReadOwnerLimits = typedGraphReadOwnerLimits
 type ColumnGraphColdLimits = typedGraphColdLimits
 type ColumnGraphCandidateOutputLimits = typedGraphFoldAssetLimits
 type ColumnGraphMaintenanceLimits = typedGraphWorkEpochLimits
+
+// ColumnGraphFilterLimits bounds cumulative preparation work, including selective
+// discovery and any full fallback. MappingWork admits ordinal-mapping bounds,
+// secondary point requests and temporary encoded-prefix/key payload byte bounds;
+// it is not a comparison count or a total Go heap bound.
 type ColumnGraphFilterLimits = typedGraphFilterLimits
 type ColumnGraphMaintenanceStats = typedGraphWorkEpochStats
 

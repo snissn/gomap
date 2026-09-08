@@ -115,8 +115,12 @@ Its route is assigned by the executed branch: top-K zero/no matches/empty base
 without live suffix report `typed_empty`; bounded scalar exact or suffix-only
 scoring report `typed_exact`; actual base traversal reports `typed_hnsw`. An
 empty route means no scoring branch executed. Filter cardinality is final only
-when filter preparation completed. Mapping work is a charged bound; retained
-bytes measure ordinal capacity, while scratch rows/ID bytes are logical peaks. The selected pack explicitly uses its
+when filter preparation completed. Mapping work is a charged composite bound:
+ordinal mapping, submitted secondary point requests, and temporary encoded-prefix/
+key payload bounds for selective string EQ conjunctions. Posting source counts
+include probes and fallback rereads; point keys and rejected lookahead IDs are
+excluded. Retained bytes measure ordinal capacity, while scratch rows/ID bytes
+are logical peaks. The selected pack explicitly uses its
 existing FullDiagnostics counters without enabling work-accounting timers.
 Selected typed dense HTTP responses now carry optional `dense_work` version 1,
 with `completed`, `graph` (including `filter` and captured `snapshot`), and

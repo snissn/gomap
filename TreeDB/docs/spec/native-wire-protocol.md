@@ -854,8 +854,12 @@ buffer reuse. It is not the requested generation or a later diagnostics read.
 Schema generation is the acquired vector definition's generation; the service's
 expected-generation guard can also include a newer text-index generation.
 Filter cardinality is final only on completed preparation; mapping work is an
-admitted bound, retained/growth bytes measure ordinal capacity, and scratch
-rows/ID bytes are logical peaks. Other work fields count actual producer work,
+admitted composite bound: ordinal mapping, submitted secondary point requests,
+and temporary encoded-prefix/key payload bounds for selective string EQ AND.
+Posting source counts include probes and fallback rereads, excluding point keys
+and rejected lookahead IDs; physical inspection includes lookahead and tombstones.
+Retained/growth bytes measure ordinal capacity, and scratch rows/ID bytes are
+logical peaks. Other work fields count actual producer work,
 including prefixes before an error. No per-request process snapshot is taken.
 
 The existing FrameError may also carry this same critical section beside its
