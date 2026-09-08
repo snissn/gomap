@@ -21,6 +21,24 @@ func TestTypedColumnPartSortKeyTimeUSPersistsAscendingReopen1948(t *testing.T) {
 	d, col, closeFn := openTypedColumnSortKeyFixture1948(t, []ColumnSortKey{{Column: "time_us"}}, events)
 	defer closeFn()
 
+	read, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := *read.catalog.meta.Options.ColumnStore
+	root := read.catalog.rootID(collectionColumnManifestRootName(col.Name()))
+	records, err := loadColumnManifestRecordsFromRoot(read.snapshot, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typed := assertColumnManifestOwnedDecoderParity(t, read.snapshot, root, columnStoreRowAssetConfig(cfg), *cfg.ActiveManifest, col.Name(), records, columnManifestScanNoSidecars(), true, read.catalog.meta.VectorIndexes)
+	if len(typed) == 0 || len(typed[0].SortKey) != 1 || typed[0].SortKey[0].Column != "time_us" {
+		t.Fatalf("full decoder lost typed SortKey: %+v", typed)
+	}
+	if err := read.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	rows := typedColumnPartRowsForGeneration1778(t, d, col, 1)
 	assertTypedColumnSortKeyPrimaryIDs1948(t, rows, []int64{1, 3, 2, 0})
 	assertTypedColumnSortKeyManifestAndImage1948(t, d, col, []ColumnSortKey{{Column: "time_us"}}, []int64{1, 3, 2, 0})

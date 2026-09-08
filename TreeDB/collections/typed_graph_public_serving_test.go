@@ -203,6 +203,7 @@ func TestTypedGraphPublicFoldPublicationAvailability(t *testing.T) {
 		if err != nil {
 			t.Errorf("public read between install and checkpoint: %v", err)
 		} else {
+			assertTypedGraphMaterializerReuse(t, view, true)
 			fetched, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
 			closeErr := view.Close()
 			if fetchErr != nil || closeErr != nil || len(fetched.Results) != 1 || !bytes.Contains(fetched.Results[0].Document, []byte("before-fold")) {
@@ -553,6 +554,7 @@ func TestTypedGraphPublicFoldPostCaptureSuffixAndDebt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer view.Close()
+	assertTypedGraphMaterializerReuse(t, view, false)
 	docs, err := view.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
 	want := map[string]bool{string(ids[0]): true, string(ids[2]): true, "growing": true, "growing-again": true}
 	if err != nil || len(docs.Results) != len(want) {
@@ -617,6 +619,7 @@ func TestTypedGraphPublicSameOwnerServing(t *testing.T) {
 		t.Fatalf("public mutable filtered search: %v", err)
 	}
 	defer view.Close()
+	assertTypedGraphMaterializerReuse(t, view, false)
 	if len(response.Results) != 1 || !bytes.Equal(response.Results[0].ID, ids[0]) {
 		t.Fatalf("results=%+v", response.Results)
 	}
@@ -670,6 +673,7 @@ func TestTypedGraphPublicSameOwnerServing(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer read.Close()
+		assertTypedGraphMaterializerReuse(t, read, true)
 		docs, err := read.FetchDocumentsForVectorIndexSearchResults(res.Results, DocumentFetchOptions{})
 		if err != nil || len(docs.Results) != 1 || !bytes.Contains(docs.Results[0].Document, []byte(`"content":"later-content"`)) {
 			t.Fatalf("latest fetch=%+v err=%v", docs.Results, err)

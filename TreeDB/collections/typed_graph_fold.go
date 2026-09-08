@@ -487,6 +487,7 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 		baseCatalog := newCollectionCatalogWithOverlays(installed.meta, installed.roots, nil)
 		baseCatalog.pager = next.pager
 		nextState.servingBase.view.Catalog = baseCatalog
+		nextState.servingBase.materializerView.Catalog = baseCatalog
 		nextState.servingBase.view.Diagnostics.ManifestRoot = baseCatalog.rootID(collectionColumnManifestRootName(baseCatalog.meta.Name))
 		coord.typedPublicationDebtMu.Lock()
 		ok := coord.typedPublication.CompareAndSwap(before, nextState)

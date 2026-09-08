@@ -30,6 +30,17 @@ Missing admission fails closed at search; no request-side reconciliation or
 native_runtime/document-scan fallback is used. Public `route=ann` permits the
 typed engine's bounded exact filter plan; legacy document-scan `route=exact` is
 unsupported for selected input. Search and full fetch share the returned owner.
+
+Serving admission prepares full materializer metadata through the same manifest
+decoder used by ordinary fetches. The existing publication owner retains this
+snapshot-free metadata, including typed-part sort keys, under the cold decoded
+metadata budget; temporary record-adapter headers include the identity entry.
+An admitted read owner reuses it only when captured and current collection
+metadata are fully equal, then binds its own snapshot and manifest-root header.
+Independent captured/current root pages need not be equal. Mutation or
+concurrent-tail coverage uses the current full loader; asset-cache integrity or
+namespace invalidation and Close retain their existing behavior.
+
 The ordinary Python client and benchmark runner select this lifecycle through
 HTTP controls and native 64/v2 dense, 65/v1 typed upsert and 50/v2 GetMany.
 Selected dense HTTP/native responses expose versioned owned `dense_work`:
