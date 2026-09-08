@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict
 import argparse
 import hashlib
 import ipaddress
@@ -13,6 +14,8 @@ import os
 from pathlib import Path
 import platform
 import subprocess
+import signal
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -121,7 +124,7 @@ class ServiceController:
                  startup_timeout: float, shutdown_timeout: float, *,
                  diagnostics_url: str | None = None, block_profile_rate: int = 1,
                  mutex_profile_fraction: int = 1, diagnostics_timeout: float = 2,
-                 native_address: str | None = None) -> None:
+                 native_address: str | None = None, measured: bool = False) -> None:
         self.binary, self.url, self.data_dir, self.profile = binary, url.rstrip("/"), data_dir, profile
         self.startup_timeout, self.shutdown_timeout = startup_timeout, shutdown_timeout
         self.diagnostics_url = diagnostics_url.rstrip("/") if diagnostics_url else None
@@ -129,6 +132,10 @@ class ServiceController:
         self.mutex_profile_fraction = mutex_profile_fraction
         self.diagnostics_timeout = diagnostics_timeout
         self.native_address = native_address
+        self.measured = measured
+        self.lifetimes: list[dict[str, Any]] = []
+        self._log_region_start = 0
+        self._owned_identity = ""
         self.process: subprocess.Popen[str] | None = None
         self.log_path = data_dir.parent / "treedb-document-service.log"
         self.log_file: Any | None = None
@@ -136,7 +143,86 @@ class ServiceController:
 
     @property
     def pid(self) -> int | None:
-        return self.process.pid if self.process is not None and self.process.poll() is None else None
+        if self.process is None:
+            return None
+        running = self._reap_owned() is None if self.measured else self.process.poll() is None
+        return self.process.pid if running else None
+
+    def _reap_owned(self) -> int | None:
+        process = self.process
+        if process is None or process.returncode is not None:
+            return None if process is None else process.returncode
+        lifetime = self.lifetimes[-1]
+        try:
+            pid, status, usage = os.wait4(process.pid, os.WNOHANG)
+            if pid == 0:
+                return None
+            if pid != process.pid:
+                raise RuntimeError("wait4 returned an unowned child")
+            code = os.waitstatus_to_exitcode(status)
+            process.returncode = code  # Popen must never reap this child itself.
+            if type(usage.ru_maxrss) is not int or not 0 < usage.ru_maxrss <= ((1 << 63) - 1) // 1024:
+                raise RuntimeError("wait4 peak RSS is unavailable or out of range")
+            lifetime["exit"] = {
+                "availability": "measured", "pid": pid,
+                "linux_process_identity": self._owned_identity,
+                "observed_monotonic_ns": time.monotonic_ns(), "exit_code": code,
+                "peak_rss_bytes": int(usage.ru_maxrss) * 1024,
+                "source": "linux_wait4_ru_maxrss_kib_times_1024",
+                "scope": "owned_process_start_through_exit"}
+            return code
+        except (ChildProcessError, OSError, RuntimeError, AttributeError, TypeError, ValueError) as exc:
+            lifetime["exit"].update(availability="unavailable", reason=f"{type(exc).__name__}: {exc}")
+            # Ownership is lost; never substitute aggregate child usage or allow
+            # Popen to silently reap a different observation on destruction.
+            process.returncode = 255
+            return 255
+
+    def work_snapshot(self) -> dict[str, Any]:
+        start = time.monotonic_ns()
+        result: dict[str, Any] = {"availability": "unavailable", "started_monotonic_ns": start}
+        try:
+            pid = self.pid
+            before = common.linux_process_identity(pid)
+            if not before or before != self._owned_identity:
+                raise RuntimeError("owned Linux identity unavailable before work read")
+            work = self._read_json(DIAGNOSTICS_STATS_PATH)["work"]
+            after = common.linux_process_identity(pid)
+            if (after != before or work.get("pid") != pid
+                    or work.get("schema_version") != "treedb-work-v1"
+                    or work.get("scope") != "process" or work.get("origin_kind") != "go_package_init"):
+                raise RuntimeError("work snapshot identity/scope changed")
+            result.update(availability="measured", work=work)
+        except BaseException as exc:
+            result["reason"] = f"{type(exc).__name__}: {exc}"
+        result["ended_monotonic_ns"] = time.monotonic_ns()
+        if self.lifetimes:
+            self.lifetimes[-1]["last_live_work"] = result
+        return result
+
+    def _terminal_work(self) -> None:
+        lifetime = self.lifetimes[-1]
+        record = None
+        try:
+            with self.log_path.open("rb") as stream:
+                stream.seek(self._log_region_start)
+                # Bound every read, including ordinary lines, before allocation.
+                while line := stream.readline(DIAGNOSTIC_STATS_BYTES + 1):
+                    if len(line) > DIAGNOSTIC_STATS_BYTES:
+                        raise RuntimeError("owned service log line exceeds bound")
+                    if b"treedb_document_service_terminal_work" not in line:
+                        continue
+                    row = json.loads(line[line.index(b"{"):])
+                    if row.get("event") == "treedb_document_service_terminal_work":
+                        if record is not None:
+                            raise RuntimeError("expected one owned terminal work record, got 2")
+                        record = {key: row[key] for key in (
+                            "event", "version", "contract_version", "cleanup_completed", "shutdown_failures", "work")}
+                        lifetime["terminal_work"] = record
+            if record is None:
+                raise RuntimeError("expected one owned terminal work record, got 0")
+        except BaseException as exc:
+            lifetime["terminal_error"] = f"{type(exc).__name__}: {exc}"
 
     def _listen_address(self, url: str, label: str) -> str:
         parsed = urllib.parse.urlsplit(url)
@@ -172,6 +258,8 @@ class ServiceController:
     def start(self) -> None:
         if self.pid is not None:
             return
+        if self.measured and (sys.platform != "linux" or not hasattr(os, "wait4")):
+            raise RuntimeError("measured ownership requires Linux wait4")
         self.last_shutdown_resource_end = None
         self.data_dir.mkdir(parents=True, exist_ok=True)
         address = self._listen_address(self.url, "service")
@@ -185,14 +273,26 @@ class ServiceController:
                 "-mutex-profile-fraction", str(self.mutex_profile_fraction),
             ])
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._log_region_start = self.log_path.stat().st_size if self.log_path.exists() else 0
         self.log_file = self.log_path.open("a", encoding="utf-8", buffering=1)
         try:
             self.process = subprocess.Popen(
                 argv, stdout=self.log_file, stderr=subprocess.STDOUT, text=True,
             )
+            if self.measured:
+                self._owned_identity = common.linux_process_identity(self.process.pid)
+                unavailable = {"availability": "unavailable", "reason": "startup incomplete",
+                               "started_monotonic_ns": time.monotonic_ns(),
+                               "ended_monotonic_ns": time.monotonic_ns()}
+                self.lifetimes.append({"ordinal": len(self.lifetimes), "pid": self.process.pid,
+                    "linux_process_identity": self._owned_identity,
+                    "first_work": dict(unavailable), "last_live_work": dict(unavailable),
+                    "exit": {"availability": "unavailable", "reason": "process has not exited",
+                             "pid": self.process.pid, "linux_process_identity": self._owned_identity,
+                             "observed_monotonic_ns": time.monotonic_ns(), "source": "", "scope": ""}})
             deadline, last = time.monotonic() + self.startup_timeout, ""
             while time.monotonic() < deadline:
-                if self.process.poll() is not None:
+                if (self._reap_owned() if self.measured else self.process.poll()) is not None:
                     raise RuntimeError(f"TreeDB service exited during startup; log tail: {self.log_evidence()['tail']}")
                 try:
                     health = TreeDBClient(self.url, timeout=1).health()
@@ -201,6 +301,20 @@ class ServiceController:
                         stats = self._read_json(DIAGNOSTICS_STATS_PATH)
                         ready = stats.get("contract_version") == SERVICE_CONTRACT
                     if ready:
+                        if self.measured:
+                            identity = common.linux_process_identity(self.process.pid)
+                            endpoints = [self.url, self.diagnostics_url]
+                            if self.native_address:
+                                endpoints.append("http://" + self.native_address)
+                            if identity != self._owned_identity or any(
+                                endpoint is None or not common.server_process_owns_endpoint(self.process.pid, endpoint, None)
+                                for endpoint in endpoints
+                            ) or common.linux_process_identity(self.process.pid) != identity:
+                                raise RuntimeError("ready service does not own every measured listener")
+                            first = self.work_snapshot()
+                            if first["availability"] != "measured":
+                                raise RuntimeError(first["reason"])
+                            self.lifetimes[-1]["first_work"] = first
                         return
                     last = repr(health)
                 except BaseException as exc:
@@ -215,6 +329,9 @@ class ServiceController:
             raise
 
     def stop(self) -> None:
+        if self.measured:
+            self._stop_measured()
+            return
         try:
             timed_out = False
             if self.process is not None:
@@ -282,6 +399,75 @@ class ServiceController:
                 raise TimeoutError(f"TreeDB graceful shutdown exceeded {self.shutdown_timeout}s")
         finally:
             self.process = None
+            if self.log_file is not None:
+                self.log_file.close()
+                self.log_file = None
+
+    def _stop_measured(self) -> None:
+        if self.process is None:
+            return
+        process = self.process
+        failure = None
+        try:
+            if self._reap_owned() is None:
+                # This is the last real drained service observation. The terminal
+                # record will include additional close/flush work after it.
+                try:
+                    self.work_snapshot()
+                    latest = common.server_process_resource_usage(process.pid, "TreeDB")
+                    self.last_shutdown_resource_end = {
+                        **latest, "disk_bytes": common.disk_bytes(self.data_dir),
+                        "captured": latest["captured"] and self.data_dir.exists(),
+                        "availability": {**latest["availability"], "disk_bytes": str(self.data_dir)}}
+                except Exception as exc:
+                    # Failed measurement must not prevent cleanup of the same
+                    # still-owned child. Its unavailable evidence stays failed.
+                    failure = exc
+                if common.linux_process_identity(process.pid) != self._owned_identity:
+                    raise RuntimeError("owned process identity changed before shutdown")
+                os.kill(process.pid, signal.SIGTERM)
+                deadline = time.monotonic() + self.shutdown_timeout
+                while self._reap_owned() is None and time.monotonic() < deadline:
+                    try:
+                        sample = common.server_process_resource_usage(process.pid, "TreeDB")
+                    except Exception as exc:
+                        failure = failure or exc
+                        sample = {"captured": False}
+                    if (self.last_shutdown_resource_end is not None and sample["captured"]
+                            and sample.get("linux_process_identity") == self._owned_identity
+                            and sample["cpu_seconds"] >= self.last_shutdown_resource_end["cpu_seconds"]):
+                        # Preserve legacy live endpoint semantics separately from
+                        # the final qualification storage endpoint already frozen.
+                        self.last_shutdown_resource_end.update({
+                            **sample, "captured": self.last_shutdown_resource_end["captured"],
+                            "availability": {
+                                **self.last_shutdown_resource_end["availability"],
+                                **sample["availability"],
+                            },
+                        })
+                    time.sleep(0.01)
+                if self._reap_owned() is None:
+                    os.kill(process.pid, signal.SIGKILL)
+                    deadline = time.monotonic() + min(5, self.shutdown_timeout)
+                    while self._reap_owned() is None and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    failure = TimeoutError("measured graceful shutdown timed out")
+                if self.last_shutdown_resource_end is not None:
+                    self.last_shutdown_resource_end["disk_bytes"] = common.disk_bytes(self.data_dir)
+                    self.last_shutdown_resource_end["captured"] = (
+                        self.last_shutdown_resource_end["captured"] and self.data_dir.exists())
+            self._terminal_work()
+            lifetime = self.lifetimes[-1]
+            if lifetime["exit"].get("exit_code") != 0 or lifetime["exit"].get("availability") != "measured":
+                failure = failure or RuntimeError("owned service exit evidence failed")
+            if "terminal_error" in lifetime:
+                failure = failure or RuntimeError(lifetime["terminal_error"])
+            if failure is not None:
+                raise failure
+        finally:
+            # No Popen wait/poll/signal helper participates in measured reaping.
+            if process.returncode is not None:
+                self.process = None
             if self.log_file is not None:
                 self.log_file.close()
                 self.log_file = None
@@ -473,9 +659,18 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         self._diagnostic_lock = threading.Lock()
         self._expected_rows = 0
         self._expected_insert_batches: dict[tuple[str, str, int], int] = {}
+        self._batch_correlation_expected_identities: set[tuple[str, str, int, int]] = set()
+        self._batch_correlation_max_records = 0
+        self._batch_prepared = False
+        if diagnostics_dir is not None and controller.diagnostics_url is None:
+            raise ValueError("diagnostics_dir requires an enabled controller diagnostics URL")
+
+    def _prepare_batch_correlations(self) -> None:
+        if self._batch_prepared:
+            return
         expected_rows = 0
         self._batch_correlation_expected_identities: set[tuple[str, str, int, int]] = set()
-        for operation in manifest["operations"]:
+        for operation in self.manifest["operations"]:
             for insertion in operation.get("insert_ranges", []):
                 for start in range(insertion["start"], insertion["start"] + insertion["rows"], self.config["batch_size"]):
                     rows = min(self.config["batch_size"], insertion["start"] + insertion["rows"] - start)
@@ -494,8 +689,21 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                         (operation["name"], operation["target"], batch_start, len(batch))
                     )
         self._batch_correlation_max_records = len(self._batch_correlation_expected_identities)
-        if diagnostics_dir is not None and controller.diagnostics_url is None:
-            raise ValueError("diagnostics_dir requires an enabled controller diagnostics URL")
+        self._batch_prepared = True
+
+    def _measured_settings(self) -> dict[str, str]:
+        return {"scalar_fields": "meta.user_id,meta.fpath", "product_commit": self.source_commit,
+                "service_binary_sha256": self.service_binary_sha256,
+                "service_binary_vcs_revision": self.service_binary_vcs_revision,
+                "service_binary_vcs_modified": self.service_binary_vcs_modified,
+                "vector_strategy": self.strategy, "transport": self.transport, "control_transport": "http",
+                "ef_search": str(self.ef_search), "column_graph_serving": json.dumps(self.column_graph_serving, sort_keys=True),
+                "profile": self.controller.profile,
+                "operation_timeout_seconds": str(self.operation_timeout_seconds),
+                "startup_reopen_timeout_seconds": str(self.controller.startup_timeout),
+                "shutdown_timeout_seconds": str(self.controller.shutdown_timeout),
+                "block_profile_rate": str(self.controller.block_profile_rate),
+                "mutex_profile_fraction": str(self.controller.mutex_profile_fraction)}
 
     def restart_controller(self) -> int:
         if self._controller_restart_origin is None:
@@ -510,6 +718,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             "pid": old_pid,
             "process_identity": old_identity,
         }
+        if getattr(self, "measured", False):
+            lifetime = self.controller.lifetimes[-1]
+            self._phase_restart_old_end.update(lifetime_ordinal=lifetime["ordinal"],
+                linux_process_identity=lifetime["linux_process_identity"], work_snapshot=lifetime["last_live_work"])
         if self.resource_baseline is not None:
             self.completed_resource_segments.append(
                 common.resource_delta(self.resource_baseline, shutdown_end)
@@ -538,6 +750,11 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         snapshot = common.server_process_resource_usage(pid, self.resource_server_name)
         snapshot["pid"] = pid
         snapshot["process_identity"] = identity
+        if getattr(self, "measured", False):
+            self._verify_measured_server_affinity(self.measurement_configuration["cpu_affinity"])
+            snapshot["lifetime_ordinal"] = self.lifetime_ordinal
+            snapshot["linux_process_identity"] = common.linux_process_identity(pid)
+            snapshot["work_snapshot"] = self.controller.work_snapshot()
         return snapshot
 
     def _phase_disk_snapshot(self) -> dict[str, Any]:
@@ -580,8 +797,11 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         self._phase_resource_start = self._phase_resource_endpoint(process, disk)
         phase_start = time.monotonic_ns()
         self._phase_total_start = phase_start
+        if hasattr(self, "setup_interval"):
+            self.setup_interval["ended_monotonic_ns"] = phase_start
         self._phase_start = phase_start
         self._phase_name = "initial_durable_load"
+        self._prepare_batch_correlations()
 
     def phase_transition(self, name: str) -> None:
         if name not in PHASE_CLASSIFICATIONS:
@@ -608,6 +828,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 "cpu_seconds": 0.0,
                 "disk_bytes": old_end["disk_bytes"],
             }
+            if getattr(self, "measured", False):
+                new_start["work_snapshot"] = self.controller.lifetimes[-1]["first_work"]
             resource_segments = [
                 {"start": self._phase_resource_start, "end": old_end},
                 {"start": new_start, "end": resource_end},
@@ -655,7 +877,9 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         else:
             try:
                 end_process = self._phase_process_snapshot()
-                disk = self._phase_disk_snapshot()
+                final = getattr(self, "_artifact_resource_end", None)
+                disk = {"captured": final["captured"], "disk_bytes": final["disk_bytes"],
+                        "availability": {"disk_bytes": final["availability"]["disk_bytes"]}} if final is not None else self._phase_disk_snapshot()
                 endpoint = self._phase_resource_endpoint(end_process, disk)
                 if not endpoint["captured"]:
                     incomplete_reason = "resource_endpoint_unavailable"
@@ -715,7 +939,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         self.controller.start()
         self.client = self.clients
         if self.strategy == "column_graph" and self._graph_built:
-            self.ensure_compatible()
+            if getattr(self, "measured", False):
+                self.evidence.call("column_graph_reopen_schema", "control", "all", self.ensure_compatible)
+            else:
+                self.ensure_compatible()
             self.evidence.call("column_graph_reopen_ensure", "writer_wait", "all", lambda: self.client.optimize_index(
                 self.collection, column_graph_action="ensure", column_graph_serving=self.column_graph_serving))
 
@@ -765,16 +992,6 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             count = self.client.count_documents(self.collection).count
             if count != expected_count:
                 raise RuntimeError(f"TreeDB visible document count={count}, expected={expected_count}")
-
-    def _batch_start(self, scenario: str, documents: list[dict[str, Any]], local_start: int) -> int:
-        prefix = f"minima/{scenario}/"
-        try:
-            ordinals = [int(row["id"].removeprefix(prefix)) for row in documents]
-        except (KeyError, TypeError, ValueError):
-            return local_start
-        if all(row["id"].startswith(prefix) for row in documents) and ordinals == list(range(ordinals[0], ordinals[0] + len(ordinals))):
-            return ordinals[0]
-        return local_start
 
     def _capture_directory(self, correlation: dict[str, Any]) -> Path:
         assert self.diagnostics_dir is not None
@@ -886,13 +1103,23 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         for local_start in range(0, len(documents), batch_size):
             source_batch = documents[local_start:local_start + batch_size]
             batch = [service_document(row) for row in source_batch]
+            request = None
+            if getattr(self, "measured", False):
+                request = {"transport": self.transport, "requested_count": len(batch),
+                           "batch_start": self._batch_start(scenario, source_batch, local_start)}
+                if self.transport == "native":
+                    request.update(command_version=1, expected_generation=self.index_info.generation)
             if self.diagnostics_dir is None:
                 response = self.evidence.call(
                     operation, "writer", scenario,
                     lambda batch=batch: self._upsert_batch(batch),
-                    on_start=on_writer_start,
+                    on_start=on_writer_start, record=request,
                 )
+                if request is not None:
+                    request["result_count"] = response.upserted
                 if response.upserted != len(batch) or response.ids != [row["id"] for row in batch]:
+                    if request is not None:
+                        request.update(outcome="error", error="TreeDB upsert completion did not cover the submitted batch")
                     raise RuntimeError("TreeDB upsert completion did not cover the submitted batch")
                 continue
             batch_start = self._batch_start(scenario, source_batch, local_start)
@@ -970,8 +1197,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 response = self.evidence.call(
                     operation, "writer", scenario,
                     lambda batch=batch: self._upsert_batch(batch),
-                    on_start=on_writer_start,
+                    on_start=on_writer_start, record=request,
                 )
+                if request is not None:
+                    request["result_count"] = response.upserted
                 if response.upserted != len(batch) or response.ids != [row["id"] for row in batch]:
                     raise RuntimeError("TreeDB upsert completion did not cover the submitted batch")
                 if mapped_expected:
@@ -1102,6 +1331,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         batch_size = self.config["batch_size"]
         if batch_size != 256:
             raise RuntimeError(f"diagnostic exact resume requires the frozen 256-document batch size, got {batch_size}")
+        self._prepare_batch_correlations()
         operation = next(row for row in self.manifest["operations"] if row["name"] == "initial_batch_insert")
         ranges = [
             row for row in operation.get("insert_ranges", [])
@@ -1163,52 +1393,114 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
     def search(self, operation: str, scenario: str, interval: dict[str, int] | None = None) -> tuple[list[str], list[float]]:
         assert self.client is not None
         spec, query = self.specs[scenario], self.queries[scenario]
-        if interval is not None:
-            interval["started_monotonic_ns"] = time.monotonic_ns()
-        try:
+        measured = getattr(self, "measured", False)
+        owned: dict[str, Any] | None = {} if measured else None
+        outer = interval if interval is not None else {} if measured else None
+        if outer is not None:
+            outer["started_monotonic_ns"] = time.monotonic_ns()
+        failure = None
+        response = None
+        def query_request() -> Any:
             client = self.clients.native if self.transport == "native" else self.client
-            response = self.evidence.call(operation, "search", scenario, lambda: client.query_by_embedding(
+            return client.query_by_embedding(
                 self.collection, query["vector"], self.config["top_k"], scalar_filter(spec),
                 route="ann", ef_search=self.ef_search,
-                **({"index_info": self.index_info} if self.transport == "native" else {})))
+                **({"index_info": self.index_info} if self.transport == "native" else {}))
+        try:
+            response = self.evidence.call(operation, "search", scenario, query_request, record=owned)
+        except BaseException as exc:
+            failure = exc
         finally:
-            if interval is not None:
-                interval["ended_monotonic_ns"] = time.monotonic_ns()
-        selected = response.native_base_plus_live_delta
-        if self.strategy == "column_graph":
-            selected = (not response.native_base_plus_live_delta
-                        and response.index.vector_strategy == "column_graph"
-                        and response.index.generation == self.index_info.generation
-                        and (self.transport != "native" or response.native_command_version == 2))
-        if response.route != "ann" or not selected or response.exact_fallbacks != 0 or response.full_document_scan_fallbacks != 0:
-            raise RuntimeError(f"TreeDB query left required native route: {response!r}")
-        self.route_evidence[scenario] = response
-        started, ids, scores = time.monotonic_ns(), [], []
-        for document in response.documents:
-            if document.meta.get("user_id") != spec.get("user_id") or (spec["filter"] == "user_id+fpath" and document.meta.get("fpath") != spec.get("fpath")):
-                self.evidence.cross_user[scenario] += 1
-            ids.append(document.id)
-            if document.score is None:
-                raise RuntimeError("TreeDB ANN result omitted score")
-            scores.append(float(document.score))
-        ended = time.monotonic_ns()
-        self.evidence.samples.append({"operation": operation, "scenario": scenario, "category": "decode",
-                                      "start_nanos": started, "end_nanos": ended, "duration_nanos": ended - started})
-        return ids, scores
+            if outer is not None:
+                outer["ended_monotonic_ns"] = time.monotonic_ns()
+        # Ordinary client selection, request and response decoding are inside the
+        # outer timer. Owned proof normalization deliberately begins after it.
+        try:
+            if measured:
+                owned.update(outer)
+                if interval is not None:
+                    interval["request_sequence"] = owned["request_sequence"]
+                owned["transport"] = self.transport
+                owned["expected_generation"] = self.index_info.generation
+                if self.transport == "native":
+                    owned["command_version"] = 2
+                proof = getattr(failure if failure is not None else response, "dense_work", None)
+                if proof is not None:
+                    owned["dense_work"] = asdict(proof)
+                if response is not None:
+                    owned["result_count"] = len(response.documents)
+            if failure is not None:
+                raise failure
+            selected = response.native_base_plus_live_delta
+            if self.strategy == "column_graph":
+                selected = (not response.native_base_plus_live_delta
+                            and response.index.vector_strategy == "column_graph"
+                            and response.index.generation == self.index_info.generation
+                            and (self.transport != "native" or response.native_command_version == 2))
+            if response.route != "ann" or not selected or response.exact_fallbacks != 0 or response.full_document_scan_fallbacks != 0:
+                raise RuntimeError(f"TreeDB query left required native route: {response!r}")
+            self.route_evidence[scenario] = response
+            started, ids, scores = time.monotonic_ns(), [], []
+            for document in response.documents:
+                if document.meta.get("user_id") != spec.get("user_id") or (spec["filter"] == "user_id+fpath" and document.meta.get("fpath") != spec.get("fpath")):
+                    self.evidence.cross_user[scenario] += 1
+                ids.append(document.id)
+                if document.score is None:
+                    raise RuntimeError("TreeDB ANN result omitted score")
+                scores.append(float(document.score))
+            ended = time.monotonic_ns()
+            self.evidence.samples.append({"operation": operation, "scenario": scenario, "category": "decode",
+                                          "start_nanos": started, "end_nanos": ended, "duration_nanos": ended - started})
+            return ids, scores
+
+        except BaseException as exc:
+            if measured:
+                owned.update(outcome="error", error=f"{type(exc).__name__}: {exc}")
+            raise
 
     def retrieve(self, operation: str, scenario: str, ids: list[str]) -> list[Any]:
         assert self.client is not None
-        if self.transport == "native":
-            documents = self.evidence.call(operation, "fetch", scenario, lambda: self.clients.native.get_many(
-                self.collection, ids, index_info=self.index_info))
-            return [SimpleNamespace(payload={"id": row.id, "content": row.content, **row.meta})
-                    for row in documents if row is not None]
-        rows = []
-        for identifier in ids:
-            result = self.evidence.call(operation, "fetch", scenario, lambda identifier=identifier: self.client.filter_documents(
-                self.collection, {"field": "id", "operator": "==", "value": identifier}, limit=1))
-            rows.extend(SimpleNamespace(payload={"id": row.id, "content": row.content, **row.meta}) for row in result.documents)
-        return rows
+        record = None
+        try:
+            measured = getattr(self, "measured", False)
+            if self.transport == "native":
+                record = {"operation": "fetch", "transport": "native", "command_version": 2,
+                          "expected_generation": self.index_info.generation,
+                          "requested_count": len(ids), "requested_ids": ids,
+                          "projection": "full_fp32_document"} if measured else None
+                documents = self.evidence.call(operation, "fetch", scenario, lambda: self.clients.native.get_many(
+                    self.collection, ids, index_info=self.index_info), record=record)
+                if measured:
+                    actual = [row.id for row in documents if row is not None]
+                    record.update(operation="fetch", transport="native", command_version=2,
+                                  requested_count=len(ids), result_count=len(actual), missing_count=len(ids)-len(actual),
+                                  requested_ids=ids, result_ids=actual, projection="full_fp32_document")
+                    for row in documents:
+                        if row is not None:
+                            expected = self.expected_vector(row.id)
+                            actual_vector = common.normalized_f32_vector(row.embedding or [])
+                            if len(expected) != len(actual_vector) or any(abs(a-b) > self.config["score_tolerance"]
+                                    for a, b in zip(expected, actual_vector)):
+                                record.update(outcome="error", error="requested native GetMany vector mismatch")
+                                raise RuntimeError("requested native GetMany vector mismatch")
+                return [SimpleNamespace(payload={"id": row.id, "content": row.content, **row.meta})
+                        for row in documents if row is not None]
+            rows = []
+            for identifier in ids:
+                record = {"operation": "fetch", "requested_count": 1, "requested_ids": [identifier],
+                          "projection": "payload_only_per_id"} if measured else None
+                result = self.evidence.call(operation, "fetch", scenario, lambda identifier=identifier: self.client.filter_documents(
+                    self.collection, {"field": "id", "operator": "==", "value": identifier}, limit=1), record=record)
+                if measured:
+                    record.update(operation="fetch", requested_count=1, result_count=len(result.documents),
+                                  missing_count=1-len(result.documents), requested_ids=[identifier],
+                                  result_ids=[row.id for row in result.documents], projection="payload_only_per_id")
+                rows.extend(SimpleNamespace(payload={"id": row.id, "content": row.content, **row.meta}) for row in result.documents)
+            return rows
+        except BaseException as exc:
+            if record is not None:
+                record.update(outcome="error", error=f"{type(exc).__name__}: {exc}")
+            raise
 
     def delete_filter(self, operation: dict[str, Any],
                       on_writer_start: Callable[[], None] | None = None) -> None:
@@ -1217,7 +1509,11 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         filt = scalar_filter({**self.specs[scenario], **operation["filter"]})
         self.evidence.call(name, "writer", scenario, lambda: self.client.delete_by_filter(
             self.collection, filt), on_start=on_writer_start)
-        remaining = self.evidence.call(name, "fetch", scenario, lambda: self.client.count_documents(self.collection, filt)).count
+        record = {} if getattr(self, "measured", False) else None
+        remaining = self.evidence.call(name, "fetch", scenario, lambda: self.client.count_documents(
+            self.collection, filt), record=record).count
+        if record is not None:
+            record["result_count"] = remaining
         self.evidence.stale_delete[scenario] += remaining
         if remaining:
             raise RuntimeError(f"filtered reindex delete left {remaining} matching rows")
@@ -1238,10 +1534,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         accumulator, mismatches, maximum_delta = common.StateAccumulator(), 0, 0.0
         after_id: str | None = None
         while True:
-            result = self.client.filter_documents(
+            result = self.evidence.call("final_scroll_page", "control", "all", lambda: self.client.filter_documents(
                 self.collection, limit=STATE_SCROLL_PAGE_SIZE, return_embedding=True,
                 after_id=after_id, cursor_page=True,
-            )
+            ))
             if result.matched_count != len(result.documents) or len(result.documents) > STATE_SCROLL_PAGE_SIZE:
                 raise RuntimeError("TreeDB cursor page count exceeds its bounded response")
             for row in result.documents:
@@ -1271,6 +1567,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         """Exercise the real small-scenario lifecycle without claiming qualification."""
         self.resource_baseline = common.server_resource_usage(
             self.controller.pid, self.storage_path, self.resource_server_name)
+        self.setup_interval = {"started_monotonic_ns": time.monotonic_ns()}
         self.connect()
         self.create_owned_collection()
         self.begin_phase_attribution()
@@ -1278,9 +1575,11 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         documents = [common.generated_document(spec, ordinal) for ordinal in range(spec["corpus_rows"])]
         self.upsert("small_initial_batch_insert", "small", documents)
         self.initial_load_to_query_boundary()
+        self.phase_transition("warmup_search")
         initial = self.search("small_initial_oracle", "small")
         self.evidence.initial["small"] = initial
         self.compare_oracle("initial", "small", initial)
+        self.phase_transition("lifecycle_mutations")
         update = self.manifest["operations"][7]
         self.upsert(update["name"], "small", update["documents"])
         fetched = self.retrieve(update["name"], "small", [update["documents"][0]["id"]])
@@ -1290,10 +1589,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         delete = self.manifest["operations"][9]
         self.delete_ids(delete)
         self.operations["explicit_delete_visible"] = True
-        if self.strategy == "column_graph":
-            self._fold_graph()
+        self.phase_transition("pre_close_queries")
         self.evidence.preclose["small"] = self.search("small_preclose", "small")
         assert self.client is not None
+        self.phase_transition("restart_open_readiness")
         self.capture_restart_origin()
         self.client.close()
         self.client = None
@@ -1301,7 +1600,9 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         self.reopen_attempted = True
         self.connect()
         self.ensure_compatible()
+        self.phase_transition("post_reopen")
         self.evidence.reopen["small"] = self.search("small_reopen", "small")
+        self.phase_transition("final_state_scroll_artifact_work")
         final = self.search("small_final_oracle", "small")
         self.evidence.final["small"] = final
         self.compare_oracle("final", "small", final)
@@ -1326,7 +1627,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 "availability": "unavailable", "counters": None,
                 "reason": "typed public dispatch diagnostic only; phase and replay producer evidence is not yet captured",
             }
-        resource = self.resource_evidence()
+        resource = artifact["backend_raw_evidence"]["qdrant"]["resource_measurement"]
+        self._artifact_resource_end = resource["end"]
         backend = artifact["backends"][0]
         environment = {
             "os": platform.system() + " " + platform.release(),
@@ -1436,6 +1738,22 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         # qualification-only final phase; the final write and Go validator are outside the runner span.
         json.dumps(artifact, sort_keys=True, allow_nan=False)
         raw["phase_attribution"] = self._finish_phase_attribution()
+        if getattr(self, "measured", False):
+            artifact["schema"] = common.MEASURED_SCHEMA
+            artifact["freeze_sha256"] = self.freeze["sha256"]
+            artifact.pop("native_path_proof", None)
+            backend["configuration"].update(self.measurement_configuration)
+            raw.pop("native_route_responses", None)
+            raw["request_evidence"] = self.evidence.requests
+            for row in artifact["scenarios"]:
+                route = self.route_evidence.get(row["scenario"])
+                proof = getattr(route, "dense_work", None)
+                row["route"] = {"identity": "typed_column_graph_dispatch",
+                                "declared_scalar_filtering": True,
+                                "membership_source": "captured_typed_scalar",
+                                "plan": proof.graph.route if proof is not None else "unavailable"}
+                row["visibility"] = {"generation_consistent": route is not None and
+                                     route.index.generation == self.index_info.generation}
         return artifact
 
 
@@ -1446,6 +1764,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--native-address", default="127.0.0.1:17122")
     parser.add_argument("--column-graph-serving", type=Path, help="explicit JSON serving limits for column_graph")
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--measured", action="store_true")
+    parser.add_argument("--legacy-diagnostic-control", action="store_true",
+                        help="keep ordinary proof decoding/resources; disable only added measured capture")
+    parser.add_argument("--freeze", type=Path)
+    parser.add_argument("--expected-freeze-sha256")
+    parser.add_argument("--comparator-bin", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--service-bin", type=Path, required=True)
     parser.add_argument("--url", default="http://127.0.0.1:17120")
@@ -1478,6 +1802,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    for name, default in (("measured", False), ("legacy_diagnostic_control", False),
+                          ("freeze", None), ("expected_freeze_sha256", None), ("comparator_bin", None)):
+        if not hasattr(args, name):
+            setattr(args, name, default)
     serving = None
     if args.strategy == "column_graph":
         if args.column_graph_serving is None:
@@ -1487,23 +1815,39 @@ def main() -> int:
             raise SystemExit("column_graph serving limits must be a nonempty JSON object")
     transport = getattr(args, "transport", None) or ("native" if args.strategy == "column_graph" else "http")
     manifest = common.load_manifest(args.manifest)
+    freeze = common.load_measured_freeze(args.freeze, args.expected_freeze_sha256, args.manifest, manifest)
+    measured = args.measured and not args.legacy_diagnostic_control
+    if args.measured and (freeze is None or args.comparator_bin is None or args.strategy != "column_graph"):
+        raise SystemExit("measured collection requires selected typed route, trusted freeze and comparator binary")
+    source = common.measured_source_configuration("treedb", args.manifest, args.comparator_bin,
+        freeze["reviewed_product_commit"]) if args.measured else None
     diagnostics_dir = args.diagnostics_dir.resolve() if args.diagnostics_dir is not None else None
     controller = ServiceController(
         args.service_bin.resolve(), args.url, args.data_dir.resolve(), args.profile,
         args.startup_timeout, args.operation_timeout,
-        diagnostics_url=args.diagnostics_url if diagnostics_dir is not None else None,
+        diagnostics_url=args.diagnostics_url if diagnostics_dir is not None or measured else None,
+        block_profile_rate=0 if args.measured else 1,
+        mutex_profile_fraction=0 if args.measured else 1,
         native_address=args.native_address if transport == "native" else None,
+        measured=measured,
     )
-    runner = TreeDBMinimaRunner(
-        manifest, controller=controller, collection=args.collection,
-        operation_timeout=args.operation_timeout, ef_search=args.ef_search,
-        diagnostics_dir=diagnostics_dir, diagnostic_slow_seconds=args.diagnostic_slow_seconds,
-        diagnostic_profile_seconds=args.diagnostic_profile_seconds,
-        diagnostic_capture_timeout=args.diagnostic_capture_timeout,
-        strategy=args.strategy, transport=transport, column_graph_serving=serving,
-    )
+    runner = None
+    artifact = None
     exit_code = 0
     try:
+        runner = TreeDBMinimaRunner(
+            manifest, controller=controller, collection=args.collection,
+            operation_timeout=args.operation_timeout, ef_search=args.ef_search,
+            diagnostics_dir=diagnostics_dir, diagnostic_slow_seconds=args.diagnostic_slow_seconds,
+            diagnostic_profile_seconds=args.diagnostic_profile_seconds,
+            diagnostic_capture_timeout=args.diagnostic_capture_timeout,
+            strategy=args.strategy, transport=transport, column_graph_serving=serving,
+        )
+        if args.measured:
+            runner.configure_measurement(freeze, source, "treedb")
+            if args.legacy_diagnostic_control:
+                runner.measured = False
+                runner.evidence.request_context = None
         if args.diagnostic_resume_scenario is not None:
             runner.run_diagnostic_resume(args.diagnostic_resume_scenario, args.diagnostic_resume_start)
         elif args.small:
@@ -1511,29 +1855,47 @@ def main() -> int:
         else:
             runner.run()
     except BaseException as exc:
-        runner.evidence.failures.append(f"{type(exc).__name__}: {exc}")
+        if runner is not None:
+            runner.evidence.failures.append(f"{type(exc).__name__}: {exc}")
+        else:
+            artifact = {"schema": common.MEASURED_SCHEMA if measured else common.BOUNDED_ARTIFACT_SCHEMA,
+                        "state": "partial", "passing": False, "manifest": manifest,
+                        "backends": [], "scenarios": [], "backend_raw_evidence": {},
+                        "failures": [f"constructor failed: {type(exc).__name__}: {exc}"],
+                        "readiness_recommendation": "not_evaluated"}
+            if freeze is not None:
+                artifact["freeze_sha256"] = freeze["sha256"]
         exit_code = 1
     finally:
-        artifact_error: BaseException | None = None
         try:
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(json.dumps(runner.artifact(), indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
+            if artifact is None:
+                artifact = runner.artifact()  # Freeze the final live disk endpoint once.
+            if not isinstance(artifact, dict) or not isinstance(artifact.get("failures", []), list):
+                raise RuntimeError("artifact construction returned an invalid envelope")
         except BaseException as exc:
-            artifact_error = exc
-        cleanup_error: BaseException | None = None
-        try:
-            runner.close()
-        except BaseException as exc:
-            cleanup_error = exc
-        try:
-            controller.stop()
-        except BaseException as exc:
-            if cleanup_error is None:
-                cleanup_error = exc
-        if artifact_error is not None:
-            raise artifact_error
-        if cleanup_error is not None:
-            raise cleanup_error
+            artifact = {"schema": common.MEASURED_SCHEMA if measured else common.BOUNDED_ARTIFACT_SCHEMA,
+                        "state": "partial", "passing": False, "manifest": manifest,
+                        "backends": [], "scenarios": [],
+                        "backend_raw_evidence": {"treedb": common.retained_partial_evidence(runner)},
+                        "failures": [*(runner.evidence.failures if runner is not None else []),
+                                     f"artifact construction failed: {type(exc).__name__}: {exc}"],
+                        "readiness_recommendation": "not_evaluated"}
+            if freeze is not None:
+                artifact["freeze_sha256"] = freeze["sha256"]
+            exit_code = 1
+        for cleanup in ((runner.close,) if runner is not None else ()) + (controller.stop,):
+            try:
+                cleanup()
+            except BaseException as exc:
+                artifact.setdefault("failures", []).append(f"cleanup failed: {type(exc).__name__}: {exc}")
+                exit_code = 1
+        if measured:
+            raw = artifact["backend_raw_evidence"].setdefault("treedb", {})
+            raw["process_lifetimes"] = controller.lifetimes
+        if args.legacy_diagnostic_control:
+            artifact["measurement_control"] = "legacy_diagnostics_without_added_measured_capture"
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(artifact, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
     return exit_code
 
 

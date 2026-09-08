@@ -844,6 +844,7 @@ func validateMinimaConcurrentMutationPlans(manifest *minimaManifest) error {
 }
 
 type minimaTimedQueryObservation struct {
+	RequestSequence    uint64    `json:"request_sequence,omitempty"`
 	Ordinal            int       `json:"ordinal"`
 	Round              int       `json:"round"`
 	Reader             int       `json:"reader"`
@@ -985,6 +986,7 @@ func validateMinimaObservedTimedExecution(observed minimaTimedExecutionTrace, ma
 }
 
 type minimaObservedReindexQuery struct {
+	RequestSequence    uint64    `json:"request_sequence,omitempty"`
 	Reader             int       `json:"reader"`
 	QueryOrdinal       int       `json:"query_ordinal"`
 	Scenario           string    `json:"scenario"`
@@ -1277,6 +1279,7 @@ type minimaScenarioEvidence struct {
 }
 
 type minimaArtifact struct {
+	FreezeSHA256    string                              `json:"freeze_sha256,omitempty"`
 	Schema          string                              `json:"schema"`
 	State           string                              `json:"state"`
 	Passing         bool                                `json:"passing"`
@@ -1289,7 +1292,17 @@ type minimaArtifact struct {
 	NativePathProof *minimaNativePathProof              `json:"native_path_proof,omitempty"`
 }
 
-func validateMinimaArtifact(artifact *minimaArtifact) error {
+func validateMinimaArtifact(artifact *minimaArtifact, trusted ...*minimaMeasuredFreeze) error {
+	if len(trusted) == 1 && trusted[0] != nil && (artifact == nil || artifact.Schema != minimaMeasuredSchema) {
+		return fmt.Errorf("trusted measured freeze requires measured artifact schema")
+	}
+	if artifact != nil && artifact.Schema == minimaMeasuredSchema {
+		var freeze *minimaMeasuredFreeze
+		if len(trusted) == 1 {
+			freeze = trusted[0]
+		}
+		return validateMinimaMeasuredArtifact(artifact, freeze)
+	}
 	if artifact == nil || (artifact.Schema != minimaArtifactSchema && artifact.Schema != minimaBoundedArtifactSchema) {
 		return fmt.Errorf("minima artifact: missing schema")
 	}
@@ -1443,7 +1456,7 @@ func validateMinimaBackendLifecycle(backend minimaBackendEvidence, manifest *min
 	return nil
 }
 
-func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScenarioSpec, query minimaQuerySpec) error {
+func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScenarioSpec, query minimaQuerySpec, measured ...bool) error {
 	if row.CorpusRows != spec.CorpusRows || row.ExpectedMatches != spec.EligibleRows || row.Selectivity != spec.Selectivity {
 		return fmt.Errorf("missing or incorrect selectivity/cardinality")
 	}
@@ -1508,7 +1521,7 @@ func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScena
 	default:
 		return fmt.Errorf("unknown filter shape %q", spec.Filter)
 	}
-	if row.Backend == "treedb" {
+	if row.Backend == "treedb" && len(measured) == 0 {
 		routeCounters := []*int{
 			row.Route.FullDocumentScanFallbacks, row.Route.ScalarFilterUnbounded, row.Route.ProbeIDs,
 			row.Route.CandidateIDs, row.Route.RetainedCandidateIDs, row.Route.RefinedCandidateIDs,
@@ -1553,7 +1566,7 @@ func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScena
 	if !row.Visibility.GenerationConsistent {
 		return fmt.Errorf("mixed-generation result")
 	}
-	if row.Visibility.MismatchCount == nil || row.Visibility.RetryCount == nil {
+	if len(measured) == 0 && (row.Visibility.MismatchCount == nil || row.Visibility.RetryCount == nil) {
 		return fmt.Errorf("missing visibility mismatch/retry counters")
 	}
 	if !row.Timing.Captured || row.Timing.EmbeddingIncluded || row.Timing.LLMIncluded || !finiteNonnegative(row.Timing.WriterMillis) || !finiteNonnegative(row.Timing.SearchMillis) || !finiteNonnegative(row.Timing.FetchMillis) || !finiteNonnegative(row.Timing.DecodeMillis) {

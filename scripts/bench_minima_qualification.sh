@@ -5,6 +5,11 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
 MODE=${MODE:-representative}
+if [[ "$MODE" == measured && ( -z "${TREEDB_COLLECTION:-}" || -z "${QDRANT_COLLECTION:-}" ) ]]; then
+	printf '%s\n' 'MODE=measured requires explicit TREEDB_COLLECTION and QDRANT_COLLECTION' >&2
+	exit 2
+fi
+MANIFEST_PATH_INPUT=${MANIFEST_PATH:-}
 if [[ -z "${RUN_DIR:-}" ]]; then
 	RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gomap_minima_qualification_XXXXXXXXXX")
 fi
@@ -31,11 +36,34 @@ TREEDB_DIAGNOSTIC_RESUME_START=${TREEDB_DIAGNOSTIC_RESUME_START:-}
 RECOMMENDATION=${RECOMMENDATION:-ready_with_alpha_limitations}
 PYTHON=${PYTHON:-python3}
 EXPECTED_COMMIT=""
+TREEDB_SERVICE_BIN=${TREEDB_SERVICE_BIN:-$RUN_DIR/bin/treedb-document-service}
+MINIMA_COMPARATOR_BIN=${MINIMA_COMPARATOR_BIN:-$RUN_DIR/bin/treedb-rag-benchmark}
+treedb_measured_args=()
+comparator_measured_args=()
 if [[ "$TREEDB_OPERATION_TIMEOUT" != "120" ]]; then
 	printf 'TREEDB_OPERATION_TIMEOUT must be exactly 120 for Minima validation, got %q\n' \
 		"$TREEDB_OPERATION_TIMEOUT" >&2
 	exit 2
 fi
+
+# Re-exec before measured setup populates its output directories. Export the
+# chosen run directory so automatic temporary paths survive the one wrapper.
+case "$MODE" in
+bounded-50k|bounded-250k|measured)
+	wall_seconds=${MINIMA_WALL_SECONDS:-}
+	if [[ "$MODE" != measured ]]; then
+		wall_seconds=${wall_seconds:-600}
+	fi
+	if [[ ! "$wall_seconds" =~ ^[1-9][0-9]*$ ]]; then
+		printf '%s\n' 'MINIMA_WALL_SECONDS must be a positive integer' >&2
+		exit 2
+	fi
+	if [[ "${MINIMA_WALL_WRAPPED:-}" != "1" ]]; then
+		export RUN_DIR MINIMA_WALL_WRAPPED=1
+		exec timeout --signal=TERM --kill-after=10s "${wall_seconds}s" "$ROOT/scripts/bench_minima_qualification.sh"
+	fi
+	;;
+esac
 
 treedb_diagnostic_args=()
 if [[ -n "$TREEDB_DIAGNOSTICS_DIR" ]]; then
@@ -48,19 +76,47 @@ if [[ -n "$TREEDB_DIAGNOSTICS_DIR" ]]; then
 	)
 fi
 
-mkdir -p "$RUN_DIR/bin"
+if [[ "$MODE" == measured ]]; then
+	if [[ -z "$MANIFEST_PATH_INPUT" || ! -f "$MANIFEST_PATH" ||
+		-z "${MINIMA_FREEZE:-}" || ! -f "$MINIMA_FREEZE" ||
+		! "${MINIMA_EXPECTED_FREEZE_SHA256:-}" =~ ^[0-9a-f]{64}$ ||
+		! -x "$TREEDB_SERVICE_BIN" || ! -x "$MINIMA_COMPARATOR_BIN" ||
+		! -x "${VENV:-}/bin/python" ]]; then
+		printf '%s\n' 'MODE=measured requires supplied MANIFEST_PATH, MINIMA_FREEZE, MINIMA_EXPECTED_FREEZE_SHA256, prebuilt TREEDB_SERVICE_BIN/MINIMA_COMPARATOR_BIN and pinned VENV.' >&2
+		exit 2
+	fi
+	if [[ -e "$RUN_DIR" && ( ! -d "$RUN_DIR" || -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ) ]]; then
+		printf '%s\n' 'MODE=measured requires a fresh empty RUN_DIR; retained evidence must not be overwritten.' >&2
+		exit 2
+	fi
+	for destination in "$TREEDB_EVIDENCE" "$QDRANT_EVIDENCE" "$OUTPUT_PATH" "$REPORT_PATH" "$TREEDB_DATA_DIR"; do
+		if [[ -e "$destination" ]]; then
+			printf 'measured destination already exists: %s\n' "$destination" >&2
+			exit 2
+		fi
+	done
+	if [[ "$TREEDB_STRATEGY" != column_graph || ! "${TREEDB_TRANSPORT:-}" =~ ^(http|native)$ ||
+		-z "${TREEDB_COLUMN_GRAPH_SERVING:-}" || ! -f "$TREEDB_COLUMN_GRAPH_SERVING" ||
+		( "$TREEDB_TRANSPORT" == native && -z "${TREEDB_NATIVE_ADDRESS:-}" ) ]]; then
+		printf '%s\n' 'Measured TreeDB requires TREEDB_STRATEGY=column_graph, explicit TREEDB_TRANSPORT and TREEDB_COLUMN_GRAPH_SERVING; native also requires TREEDB_NATIVE_ADDRESS.' >&2
+		exit 2
+	fi
+	PYTHON="$VENV/bin/python"
+	treedb_measured_args=(--measured --freeze "$MINIMA_FREEZE"
+		--expected-freeze-sha256 "$MINIMA_EXPECTED_FREEZE_SHA256" --comparator-bin "$MINIMA_COMPARATOR_BIN"
+		--transport "$TREEDB_TRANSPORT" --column-graph-serving "$TREEDB_COLUMN_GRAPH_SERVING"
+		--diagnostics-url "$TREEDB_DIAGNOSTICS_URL")
+	if [[ "$TREEDB_TRANSPORT" == native ]]; then
+		treedb_measured_args+=(--native-address "$TREEDB_NATIVE_ADDRESS")
+	fi
+	comparator_measured_args=(-minima-freeze "$MINIMA_FREEZE" -minima-expected-freeze-sha256 "$MINIMA_EXPECTED_FREEZE_SHA256")
+	mkdir -p "$RUN_DIR"
+else
+	mkdir -p "$RUN_DIR/bin"
+fi
 
 case "$MODE" in
 bounded-50k|bounded-250k)
-	if [[ "${MINIMA_BOUNDED_WRAPPED:-}" != "1" ]]; then
-		wall_seconds=${MINIMA_WALL_SECONDS:-600}
-		if [[ ! "$wall_seconds" =~ ^[1-9][0-9]*$ ]]; then
-			printf '%s\n' 'MINIMA_WALL_SECONDS must be a positive integer' >&2
-			exit 2
-		fi
-		export RUN_DIR MINIMA_BOUNDED_WRAPPED=1
-		exec timeout --signal=TERM --kill-after=10s "${wall_seconds}s" "$0"
-	fi
 	rows=50000
 	[[ "$MODE" != bounded-250k ]] || rows=250000
 	go build -o "$RUN_DIR/bin/treedb-document-service" -buildvcs=true ./cmd/treedb-document-service
@@ -77,7 +133,7 @@ bounded-50k|bounded-250k)
 	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -validate-minima-artifact "$TREEDB_EVIDENCE" -minima-expected-commit "$(git rev-parse HEAD)"
 	exit 0
 	;;
-representative)
+representative|measured)
 	EXPECTED_COMMIT=${MINIMA_EXPECTED_COMMIT:-$(git rev-parse origin/main)}
 	HEAD_COMMIT=$(git rev-parse HEAD)
 	if [[ ! "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
@@ -126,7 +182,7 @@ small)
 	exit "$treedb_status"
 	;;
 *)
-	printf 'unsupported MODE=%s (use small, representative, diagnostic-resume, bounded-50k, or bounded-250k)\n' "$MODE" >&2
+	printf 'unsupported MODE=%s (use measured, small, representative, diagnostic-resume, bounded-50k, or bounded-250k)\n' "$MODE" >&2
 	exit 2
 	;;
 esac
@@ -134,9 +190,11 @@ esac
 # The representative workload is frozen at 500,000 rows per representative
 # scenario and 1,024 timed queries. Changing those values requires a new
 # preflight manifest and hashes rather than an environment-only override.
-go build -o "$RUN_DIR/bin/treedb-document-service" -buildvcs=true ./cmd/treedb-document-service
-go build -o "$RUN_DIR/bin/treedb-rag-benchmark" ./TreeDB/cmd/treedb_rag_benchmark
-"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -dump-minima-manifest "$MANIFEST_PATH"
+if [[ "$MODE" != measured ]]; then
+	go build -o "$TREEDB_SERVICE_BIN" -buildvcs=true ./cmd/treedb-document-service
+	go build -o "$MINIMA_COMPARATOR_BIN" ./TreeDB/cmd/treedb_rag_benchmark
+	"$MINIMA_COMPARATOR_BIN" -workload=minima -dump-minima-manifest "$MANIFEST_PATH"
+fi
 
 treedb_status=0
 PYTHONPATH=clients/python/treedb_client/src "$PYTHON" \
@@ -144,7 +202,7 @@ PYTHONPATH=clients/python/treedb_client/src "$PYTHON" \
 	--strategy "$TREEDB_STRATEGY" \
 	--manifest "$MANIFEST_PATH" \
 	--output "$TREEDB_EVIDENCE" \
-	--service-bin "$RUN_DIR/bin/treedb-document-service" \
+	--service-bin "$TREEDB_SERVICE_BIN" \
 	--url "$TREEDB_URL" \
 	--data-dir "$TREEDB_DATA_DIR" \
 	--collection "$TREEDB_COLLECTION" \
@@ -152,6 +210,7 @@ PYTHONPATH=clients/python/treedb_client/src "$PYTHON" \
 	--ef-search "$TREEDB_EF_SEARCH" \
 	--operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
 	--startup-timeout "$TREEDB_STARTUP_TIMEOUT" \
+	${treedb_measured_args[@]+"${treedb_measured_args[@]}"} \
 	${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"} ||
 	treedb_status=$?
 
@@ -167,6 +226,11 @@ if [[ "$(uname -s)" == "Darwin" && -z "${QDRANT_BIN:-}" && -z "${QDRANT_SERVER_P
 	qdrant_status=2
 else
 	RUN_DIR="$RUN_DIR/qdrant" \
+	MINIMA_MEASURED="$([[ "$MODE" == measured ]] && printf true || printf false)" \
+	MINIMA_COMPARATOR_BIN="$MINIMA_COMPARATOR_BIN" \
+	MINIMA_FREEZE="${MINIMA_FREEZE:-}" \
+	MINIMA_EXPECTED_FREEZE_SHA256="${MINIMA_EXPECTED_FREEZE_SHA256:-}" \
+	VENV="${VENV:-$RUN_DIR/qdrant/venv}" \
 	MANIFEST_PATH="$MANIFEST_PATH" \
 	OUTPUT_PATH="$QDRANT_EVIDENCE" \
 		scripts/bench_minima_qdrant.sh ||
@@ -175,14 +239,15 @@ fi
 
 comparator_status=0
 if [[ -f "$TREEDB_EVIDENCE" && -f "$QDRANT_EVIDENCE" ]]; then
-	"$RUN_DIR/bin/treedb-rag-benchmark" \
+	"$MINIMA_COMPARATOR_BIN" \
 		-workload=minima \
 		-minima-treedb-evidence "$TREEDB_EVIDENCE" \
 		-minima-qdrant-evidence "$QDRANT_EVIDENCE" \
 		-minima-output "$OUTPUT_PATH" \
 		-minima-report "$REPORT_PATH" \
 		-minima-recommendation "$RECOMMENDATION" \
-		-minima-expected-commit "$EXPECTED_COMMIT" ||
+		-minima-expected-commit "$EXPECTED_COMMIT" \
+		${comparator_measured_args[@]+"${comparator_measured_args[@]}"} ||
 		comparator_status=$?
 else
 	comparator_status=2

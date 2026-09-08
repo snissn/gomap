@@ -207,8 +207,8 @@ diagnostic only: 4,097 eligible rows at less than 1% selectivity needs more than
 409,700 rows in that scenario alone. Bounded fixtures retain the cutoff and
 selective/broad/empty/mixed predicates, but cannot certify the full sparse case.
 
-The native evidence schema must distinguish unavailable from measured zero.
-Required semantic counters, once their product support lands, cover:
+Native evidence distinguishes unavailable from measured zero. Product work
+producers cover:
 
 - indexed-field JSON reads by ingest/search/mutation/replay; retained-payload
   decode counts separately;
@@ -217,9 +217,9 @@ Required semantic counters, once their product support lands, cover:
 - overlay rows/bytes, fold debt and completion, graph readiness and coverage;
 - per-process CPU, allocation bytes/counts, live heap and actual peak RSS.
 
-Missing product support is an explicit unavailable reason, not zero-valued
-proof. The M0 harness may reject the new strategy as unavailable until M4. A
-new contract cannot weaken the frozen native-runtime validator.
+Missing producer support is an explicit unavailable reason, not zero-valued
+proof. Historical M0 evidence does not carry the measured contract. A new
+contract cannot weaken the frozen native-runtime validator.
 
 Report load, graph build, readiness, maintenance drain, warmup, steady search,
 restart/open/readiness, client/generator/transport, and qualification-only scroll
@@ -231,18 +231,63 @@ for search, with setup and retained state separately identified. Until measured,
 numeric allocation budgets are unavailable; zero indexed-field reconstruction
 is the structural gate, not an invented allocation measurement.
 
-The historical TreeDB-only partial full run at the base above took 4,184.834 s
-for initial load and 42.486 s for restart/open/readiness. Its largest sampled
-phase-end RSS was 16,680,931,328 bytes, **not peak RSS**; `rss_bytes` summed
-positive endpoint growth across process lifetimes and is also not a peak.
-New Linux RSS evidence uses each process's `VmHWM`, identifies every service
-lifetime, and takes the maximum across lifetimes, never their sum. This measures
-server process-lifetime peak, not a phase-specific or whole-host peak. Client
-memory and Go live heap need separate measurements; absence is unavailable.
+The historical combined TreeDB/Qdrant `c2781c147` run passed its then-current
+correctness/lifecycle contract; the individual raw envelopes were partial inputs
+to that comparison. TreeDB initial load took 4,184.834 s. Its 42.486 s restart
+interval excluded Ensure, which occurred in the separate 125.494 s post-reopen
+phase. These timings do not establish the new restart boundary. Its largest
+sampled phase-end RSS was 16,680,931,328 bytes, **not peak RSS**; `rss_bytes`
+summed positive endpoint growth across lifetimes and was also not a peak.
+Historical diagnostic `VmHWM` samples cover their recorded live endpoints.
+Measured TreeDB evidence requires exclusive Linux `wait4` through each owned
+exit, takes the maximum across lifetimes, and never sums their peaks. Client
+memory and Go live heap remain separate measurements.
+
+The measured schema is `treedb_rag_application/minima_measured_v1`. Its externally
+pinned freeze binds source, natural binaries, clients, manifest bytes/semantics
+and actual backend options. Full evidence requires reviewed bounded calibration;
+pending calibration is valid only for nonqualifying bounded runs. Complete raw
+TreeDB and Qdrant artifacts must satisfy the complete measured contract even
+when their envelopes are marked partial. Historical validators are unchanged.
+Missing fields, null counters, duplicate keys, unavailable producers, unjoined
+requests, inconsistent lifetime/phase intervals and incomplete terminal/exit
+coverage cannot stand in for measured zero. The public ledger includes actual
+batch writes, readiness, visibility fetch/count and maintenance controls, with
+causal completion checks; concurrent searches retain their permitted overlap.
+
+Measured Qdrant restart CPU/RSS/disk deltas are endpoint-only: the old
+sample precedes stop, and the new baseline is the actual post-startup-ready
+sample also retained by the aggregate resource segment. Shutdown/startup
+resource costs between those samples are unavailable. The raw
+`resource_availability.restart` records this gap and marks through-exit peak
+RSS unavailable; sampled `VmHWM` is still only a lifetime highwater through its
+live endpoint. The restart wall timer includes stop/open/reconnect/readiness.
+TreeDB retains its derived numeric restart origin (zero CPU/RSS and old-end
+disk), independently of actual first-work snapshots and owned `wait4` evidence.
+These resource conventions do not change either backend's wall-time boundary.
+
+The five adopted inclusive full-scale caps use these exact raw boundaries:
+
+| Gate | Cap | Raw measurement |
+| --- | ---: | --- |
+| Load plus readiness | 1,200,000,000,000 ns | Before initial batch preparation through durable load and Build/readiness |
+| Restart readiness | 20,000,000,000 ns | Before shutdown through open/replay, reconnect and Ensure |
+| Server peak RSS | 9,126,805,504 bytes | Maximum owned-process `wait4` peak through exit |
+| Timed search median | 2,127,956 ns | Nearest-rank p50 of all 1,024 outer client calls |
+| Final storage | 2,967,728,546 bytes | Live final regular-file logical lengths before cleanup |
+
+The median cap is the integer 10% allowance over the historical 1,934,506 ns
+outer-call population; the storage cap is the same allowance over 2,697,935,042
+bytes. The historical pooled inner-call median is not that population. Keep all
+scenarios, errors and tails. A failed semantic or completion gate cannot yield a
+qualifying subset. The live final disk endpoint includes WAL, persistent value
+log, indexes and metadata and excludes symlinks; extra GC/checkpoints, settling
+waits or post-cleanup measurements cannot replace it. Qdrant remains mandatory
+matched evidence but is not the denominator of these two relative caps.
 
 Prospective full-run targets remain: load plus readiness <=1,200 s,
-restart/open/readiness <=20 s, server peak RSS <=8.5 GiB, steady storage growth
-<=10%, and matched-quality search median regression <=10% versus the matched
+restart/open/readiness <=20 s, server peak RSS <=8.5 GiB, final storage <=10% above
+the adopted endpoint, and matched-quality search median regression <=10% versus the matched
 retained baseline. These are acceptance targets, **not achieved results** or
 direct comparisons to incorrectly labeled legacy peaks. Use identical work,
 durability, dimensions, concurrency, warmed/cold state and response projection;

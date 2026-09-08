@@ -4,6 +4,12 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
+MINIMA_MEASURED=${MINIMA_MEASURED:-false}
+if [[ "$MINIMA_MEASURED" == true && -z "${QDRANT_COLLECTION:-}" ]]; then
+	echo "Measured Qdrant requires explicit QDRANT_COLLECTION" >&2
+	exit 2
+fi
+MANIFEST_PATH_INPUT=${MANIFEST_PATH:-}
 if [[ -z "${RUN_DIR:-}" ]]; then
 	RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gomap_minima_qdrant_XXXXXXXXXX")
 fi
@@ -28,9 +34,10 @@ QDRANT_RESTART_HOOK="${QDRANT_RESTART_HOOK:-}"
 QDRANT_PID_FILE="$RUN_DIR/qdrant.pid"
 QDRANT_CONTAINER=""
 DEPLOYMENT=""
+OWNED_STANDALONE=false
 
 cleanup() {
-	if [[ -s "$QDRANT_PID_FILE" ]]; then
+	if [[ "$OWNED_STANDALONE" == true && -s "$QDRANT_PID_FILE" ]]; then
 		local expected_identity=""
 		{
 			IFS= read -r QDRANT_PID
@@ -59,6 +66,35 @@ case "$ALLOW_DROP" in
 	true|false) ;;
 	*) echo "ALLOW_DROP must be true or false" >&2; exit 2 ;;
 esac
+case "$MINIMA_MEASURED" in
+	true|false) ;;
+	*) echo "MINIMA_MEASURED must be true or false" >&2; exit 2 ;;
+esac
+if [[ "$MINIMA_MEASURED" == true ]]; then
+	if [[ -n "$QDRANT_URL" || -n "$QDRANT_BIN" || -n "$QDRANT_RESTART_HOOK" ]]; then
+		echo "Measured Qdrant requires this launcher's owned Docker deployment" >&2
+		exit 2
+	fi
+	if [[ -z "${QDRANT_CPUSET_CPUS:-}" ]]; then
+		echo "Measured Qdrant requires explicit QDRANT_CPUSET_CPUS" >&2
+		exit 2
+	fi
+	if [[ -z "$MANIFEST_PATH_INPUT" || ! -f "$MANIFEST_PATH" ||
+		-z "${MINIMA_FREEZE:-}" || ! -f "$MINIMA_FREEZE" ||
+		! "${MINIMA_EXPECTED_FREEZE_SHA256:-}" =~ ^[0-9a-f]{64}$ ||
+		! -x "${MINIMA_COMPARATOR_BIN:-}" || ! -x "$VENV/bin/python" ]]; then
+		echo "Measured Qdrant requires supplied manifest/freeze/hash, prebuilt comparator and pinned VENV" >&2
+		exit 2
+	fi
+	if [[ -e "$RUN_DIR" && ( ! -d "$RUN_DIR" || -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ) ]] || [[ -e "$OUTPUT_PATH" ]]; then
+		echo "Measured Qdrant requires fresh empty RUN_DIR and unused OUTPUT_PATH" >&2
+		exit 2
+	fi
+	if [[ -e "$QDRANT_STORAGE_PATH" || -L "$QDRANT_STORAGE_PATH" ]]; then
+		echo "Measured Qdrant requires unused QDRANT_STORAGE_PATH" >&2
+		exit 2
+	fi
+fi
 if [[ -n "$QDRANT_URL" && -n "$QDRANT_BIN" ]]; then
 	echo "Set only one of QDRANT_URL or QDRANT_BIN" >&2
 	exit 2
@@ -81,13 +117,14 @@ if [[ -n "$QDRANT_URL" ]]; then
 else
 	mkdir -p "$QDRANT_STORAGE_PATH"
 fi
-"$PYTHON" -m venv "$VENV"
-"$VENV/bin/python" -m pip install --disable-pip-version-check "qdrant-client==1.19.0"
-
-# The Go owner emits the compact fixture once. Both backend runners consume these bytes.
-go run ./TreeDB/cmd/treedb_rag_benchmark \
-	-workload=minima \
-	-dump-minima-manifest "$MANIFEST_PATH"
+if [[ "$MINIMA_MEASURED" != true ]]; then
+	"$PYTHON" -m venv "$VENV"
+	"$VENV/bin/python" -m pip install --disable-pip-version-check "qdrant-client==1.19.0"
+	# Historical convenience mode generates its own compact manifest.
+	go run ./TreeDB/cmd/treedb_rag_benchmark \
+		-workload=minima \
+		-dump-minima-manifest "$MANIFEST_PATH"
+fi
 
 if [[ -n "$QDRANT_URL" ]]; then
 	DEPLOYMENT=external
@@ -104,18 +141,10 @@ elif [[ -n "$QDRANT_BIN" ]]; then
 		"$ROOT/scripts/restart_minima_qdrant_backend.sh" "$QDRANT_BIN" "$QDRANT_PORT" \
 		"$QDRANT_STORAGE_PATH" "$RUN_DIR/qdrant.log" "$QDRANT_PID_FILE" >"$QDRANT_RESTART_HOOK"
 	chmod +x "$QDRANT_RESTART_HOOK"
-	QDRANT__SERVICE__HOST=127.0.0.1 \
-	QDRANT__SERVICE__HTTP_PORT="$QDRANT_PORT" \
-	QDRANT__STORAGE__STORAGE_PATH="$QDRANT_STORAGE_PATH" \
-		"$QDRANT_BIN" >"$RUN_DIR/qdrant.log" 2>&1 &
-	QDRANT_PID=$!
+	# The existing hook captures the stable post-exec identity on both starts.
+	OWNED_STANDALONE=true
+	QDRANT_PID=$("$QDRANT_RESTART_HOOK")
 	QDRANT_SERVER_PID="$QDRANT_PID"
-	QDRANT_PROCESS_IDENTITY=$(ps -o lstart= -o command= -p "$QDRANT_PID" 2>/dev/null || true)
-	if [[ -z "$QDRANT_PROCESS_IDENTITY" ]]; then
-		echo "standalone Qdrant exited before its process identity could be recorded" >&2
-		exit 1
-	fi
-	printf '%s\n%s\n' "$QDRANT_PID" "$QDRANT_PROCESS_IDENTITY" >"$QDRANT_PID_FILE"
 else
 	if [[ ! "$QDRANT_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]; then
 		echo "QDRANT_IMAGE must be digest-pinned, got: $QDRANT_IMAGE" >&2
@@ -133,7 +162,17 @@ else
 	printf '#!/usr/bin/env bash\nexec %q docker %q\n' \
 		"$ROOT/scripts/restart_minima_qdrant_backend.sh" "$QDRANT_CONTAINER" >"$QDRANT_RESTART_HOOK"
 	chmod +x "$QDRANT_RESTART_HOOK"
+	docker_runtime_args=()
+	if [[ -n "${QDRANT_CPUSET_CPUS:-}" ]]; then
+		docker_runtime_args+=(--cpuset-cpus "$QDRANT_CPUSET_CPUS")
+	fi
+	if [[ "$MINIMA_MEASURED" == true ]]; then
+		docker_runtime_args+=(--user "$(id -u):$(id -g)" --entrypoint /qdrant/qdrant
+			-e QDRANT__STORAGE__SNAPSHOTS_PATH=/qdrant/storage/snapshots
+			-e QDRANT_INIT_FILE_PATH=/qdrant/storage/.qdrant-initialized)
+	fi
 	docker run -d --rm \
+		${docker_runtime_args[@]+"${docker_runtime_args[@]}"} \
 		--name "$QDRANT_CONTAINER" \
 		-p "127.0.0.1:${QDRANT_PORT}:6333" \
 		-v "$QDRANT_STORAGE_PATH:/qdrant/storage" \
@@ -184,11 +223,15 @@ RUNNER_ARGS=(
 	--deployment "$DEPLOYMENT"
 	--restart-hook "$QDRANT_RESTART_HOOK"
 )
+if [[ "$MINIMA_MEASURED" == true ]]; then
+	RUNNER_ARGS+=(--measured --freeze "$MINIMA_FREEZE"
+		--expected-freeze-sha256 "$MINIMA_EXPECTED_FREEZE_SHA256" --comparator-bin "$MINIMA_COMPARATOR_BIN")
+fi
 if [[ "$ALLOW_DROP" == "true" ]]; then
 	RUNNER_ARGS+=(--allow-drop)
 fi
 if [[ "$DEPLOYMENT" == "docker" ]]; then
-	RUNNER_ARGS+=(--image "$QDRANT_IMAGE")
+	RUNNER_ARGS+=(--image "$QDRANT_IMAGE" --container "$QDRANT_CONTAINER")
 fi
 RUNNER_ARGS+=(--storage-path "$QDRANT_STORAGE_PATH")
 RUNNER_ARGS+=(--server-pid "$QDRANT_SERVER_PID")
