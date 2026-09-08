@@ -159,7 +159,9 @@ func TestDenseWorkNativeServiceAndEncodingErrors(t *testing.T) {
 			t.Fatalf("missing error proof: %v", err)
 		}
 		w := remote.DenseWork
-		if w.Completed || w.Graph.Completed || w.Graph.BaseANNScored != 1 || w.Graph.BaseCandidates != 1 || !w.Graph.Snapshot.Available || w.Output.Attempted {
+		// Strict typed serving spends this single score on the upper entry;
+		// no layer-zero candidate, edge or suffix score has run at rejection.
+		if w.Completed || w.Graph.Completed || w.Graph.BaseANNScored != 1 || w.Graph.BaseCandidates != 0 || w.Graph.BaseEdges != 0 || w.Graph.DeltaScored != 0 || !w.Graph.Snapshot.Available || w.Output.Attempted {
 			t.Fatalf("incorrect error prefix: %+v", w)
 		}
 		client, cleanup, err := NewInProcessClient(clientContext, bounded)
