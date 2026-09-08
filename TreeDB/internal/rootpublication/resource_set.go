@@ -3261,7 +3261,7 @@ func (set *StableResourceSet) DependencyManifestV1() (*DependencyManifestV1, Dep
 	if buildErr != nil {
 		return nil, work, buildErr
 	}
-	manifest, err := newDependencyManifestV1FromEncoded(encoded)
+	manifest, err := newDependencyManifestV1FromEncoded(encoded, true)
 	return manifest, work, err
 }
 
