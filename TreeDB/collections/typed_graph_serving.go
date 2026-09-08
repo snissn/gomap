@@ -257,12 +257,12 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 		}
 	}()
 	if opts.DeclaredScalarFilter == nil {
-		response.Results, stats, err = owner.overlay.search(opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
+		response.Results, stats, err = owner.overlay.searchWithContext(ctx, opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
 	} else {
 		var filter *typedGraphPreparedFilter
-		filter, err = prepareTypedGraphFilterWithWork(owner.overlay, *opts.DeclaredScalarFilter, p.options.Filter, &filterWork)
+		filter, err = prepareTypedGraphFilterWithContext(ctx, owner.overlay, *opts.DeclaredScalarFilter, p.options.Filter, &filterWork)
 		if err == nil {
-			response.Results, stats, err = owner.overlay.searchPreparedFilter(filter, opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
+			response.Results, stats, err = owner.overlay.searchPreparedFilterWithContext(ctx, filter, opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
 		}
 	}
 	if err != nil {

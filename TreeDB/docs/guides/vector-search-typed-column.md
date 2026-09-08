@@ -98,6 +98,16 @@ between. Buffered IDs remain buffer-owned; plain `SearchVectorIndex` returns
 owned results. Indexed filtering/scoring stays typed; retained flexible payloads
 may be decoded when fetching final results.
 
+Dense requests preserve their supplied context through the captured owner,
+scalar posting/locator preparation, prepared ANN traversal, exact scoring, and
+suffix/result merging. Physical scan checks include tombstones and shadowed
+entries, even when no live IDs are returned. Bounded loops check periodically;
+existing in-place sorts and individual storage/codec operations finish before
+the next check. Cancellation is not a hard wall-clock interrupt. It returns no
+partial results, releases the request owner, and preserves completed work in
+`dense_work` error prefixes. An absent context keeps the ordinary behavior.
+This does not add a context parameter to the public Hybrid API.
+
 Point reconstruction of nonnullable raw FP32 columns decodes only requested
 vector rows, not an entire part into per-row union values. The existing per-view
 reconstruction entry retains validated raw descriptors: mapped bytes remain

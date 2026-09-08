@@ -294,6 +294,40 @@ func TestTypedGraphBaseFilterBindingDeltaOnlyThreshold(t *testing.T) {
 		} else if err != nil || len(results) != 10 || !stats.FilteredExact || stats.DeltaScored != 4096 || stats.Base.Candidates != 0 || string(results[0].ID) != string(ids[0]) {
 			t.Fatalf("delta exact results=%+v stats=%+v err=%v", results, stats, err)
 		}
+		if count == 4096 {
+			for _, filtered := range []bool{false, true} {
+				search := func(ctx context.Context) ([]VectorIndexSearchResult, typedGraphOverlaySearchStats, error) {
+					if filtered {
+						return overlay.searchPreparedFilterWithContext(ctx, bound, columns[0].Float32Vectors[0], 10, 256, 16384, &buffer)
+					}
+					return overlay.searchWithContext(ctx, columns[0].Float32Vectors[0], 10, 256, 16384, &buffer)
+				}
+				ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: int(^uint(0) >> 1)}
+				_, full, err := search(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				partial := false
+				for check := 1; check < ctx.calls; check++ {
+					results, stats, err := search(&cancelAfterErrContextV1{Context: context.Background(), cancelAfter: check})
+					if !errors.Is(err, context.Canceled) || len(results) != 0 || len(buffer.results) != 0 || len(buffer.baseResults) != 0 || len(buffer.deltaResults) != 0 {
+						t.Fatalf("suffix canceled filtered=%t results=%v stats=%+v err=%v", filtered, results, stats, err)
+					}
+					if stats.DeltaScored > 0 && stats.DeltaScored < full.DeltaScored {
+						partial = true
+						break
+					}
+				}
+				if !partial {
+					t.Fatalf("no cancellable suffix prefix filtered=%t full=%+v", filtered, full)
+				}
+				results, stats, err := search(nil)
+				if err != nil || len(results) != 10 || stats.DeltaScored != full.DeltaScored {
+					t.Fatalf("suffix retry=%v %+v %v", results, stats, err)
+				}
+			}
+		}
+
 	}
 }
 

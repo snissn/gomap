@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -565,11 +566,25 @@ func searchVectorIndexViewPlane(query []float32, queryNorm float64, prepared *pr
 }
 
 func mergeVectorIndexViewResults(base, delta []VectorIndexSearchResult, topK int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
+	return mergeVectorIndexViewResultsWithContext(nil, base, delta, topK, buffer)
+}
+
+func mergeVectorIndexViewResultsWithContext(ctx context.Context, base, delta []VectorIndexSearchResult, topK int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
 	resultCount := minInt(topK, len(base)+len(delta))
 	buffer.results = resizeVectorIndexSearchResultBuffer(buffer.results, resultCount)
 	idByteCount := 0
 	baseIndex, deltaIndex, resultIndex := 0, 0, 0
 	for resultIndex < resultCount && (baseIndex < len(base) || deltaIndex < len(delta)) {
+		if ctx != nil && (baseIndex+deltaIndex)&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		candidate, nextBase, nextDelta := nextVectorIndexViewResult(base, delta, baseIndex, deltaIndex)
 		baseIndex, deltaIndex = nextBase, nextDelta
 		if vectorIndexViewResultAlreadySelected(buffer.results[:resultIndex], candidate.ID) {
@@ -587,11 +602,21 @@ func mergeVectorIndexViewResults(base, delta []VectorIndexSearchResult, topK int
 	buffer.idBytes = resizeVectorIndexSearchByteBuffer(buffer.idBytes, idByteCount)
 	idOffset := 0
 	for resultIndex := range buffer.results {
+		if ctx != nil && resultIndex&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		nextIDOffset := idOffset + len(buffer.results[resultIndex].ID)
 		id := buffer.idBytes[idOffset:nextIDOffset:nextIDOffset]
 		copy(id, buffer.results[resultIndex].ID)
 		buffer.results[resultIndex].ID = id
 		idOffset = nextIDOffset
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 	}
 	return buffer.results, nil
 }

@@ -1169,3 +1169,79 @@ func TestBSONCoreAppendStringUsesFullLength(t *testing.T) {
 		t.Fatalf("long BSON string=%q ok=%v", got, ok)
 	}
 }
+
+// A live-ID callback cannot observe cancellation in a tombstone-only range.
+// The shared scanner must check the actual inspected physical-entry stream.
+func TestScanMergedCompoundIndexIDsCancellationInspectsTombstones(t *testing.T) {
+	const rows = 1024
+	for _, mode := range []string{"persisted", "shadowed", "stable_reverse"} {
+		t.Run(mode, func(t *testing.T) {
+			persisted, buffered := newCollectionRunTable(rows), newCollectionRunTable(rows)
+			defer resetCollectionRunTable(persisted)
+			defer resetCollectionRunTable(buffered)
+			for i := 0; i < rows; i++ {
+				component, err := encodeBSONIndexKeyComponentV2(bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString("same")})
+				if err != nil {
+					t.Fatal(err)
+				}
+				key, err := bsonIndexEntryKeyV2(component, []byte(fmt.Sprintf("id-%04d", i)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				flags := byte(node.FlagInline)
+				if mode == "persisted" {
+					flags = node.FlagTombstone
+				}
+				persisted.SetEntry(key, nil, page.ValuePtr{}, flags)
+				buffered.SetEntry(key, nil, page.ValuePtr{}, node.FlagTombstone)
+			}
+			persisted.Freeze()
+			buffered.Freeze()
+			for _, cancel := range []bool{true, false} {
+				var ctx context.Context
+				if cancel {
+					ctx = &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 2}
+				}
+				pit := persisted.NewIterator(nil, nil)
+				bit := buffered.NewIterator(nil, nil)
+				if mode == "stable_reverse" {
+					_ = pit.Close()
+					_ = bit.Close()
+					pit = persisted.NewReverseIterator(nil, nil)
+					bit = buffered.NewReverseIterator(nil, nil)
+				}
+				if mode == "persisted" {
+					_ = bit.Close()
+					bit = nil
+				}
+				inspected, emitted := 0, 0
+				opts := scanMergedCollectionIndexIDOptions{Context: ctx, Inspected: &inspected}
+				if mode == "stable_reverse" {
+					opts.StableDocumentIDTies = true
+					opts.LogicalIndexKey = bsonIndexKeyValuePrefixV2
+				}
+				truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bit, pit, IndexValueBSONOrderedV2, 0, mode == "stable_reverse", 2*rows, opts, func([]byte) (bool, error) { emitted++; return true, nil })
+				if bit != nil {
+					_ = bit.Close()
+				}
+				_ = pit.Close()
+				if truncated || emitted != 0 {
+					t.Fatalf("tombstone scan truncated=%t emitted=%d err=%v", truncated, emitted, err)
+				}
+				if cancel {
+					if !errors.Is(err, context.Canceled) || inspected != 256 {
+						t.Fatalf("physical cancellation inspected=%d err=%v", inspected, err)
+					}
+				} else {
+					want := 2 * rows
+					if mode == "persisted" {
+						want = rows
+					}
+					if err != nil || inspected != want {
+						t.Fatalf("nil-context retry inspected=%d want=%d err=%v", inspected, want, err)
+					}
+				}
+			}
+		})
+	}
+}

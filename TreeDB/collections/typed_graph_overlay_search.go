@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"slices"
 	"sort"
@@ -89,6 +90,13 @@ const typedGraphScalarExactLimit = 4096
 // separately from prepared-base ANN work. Filtering and public lifecycle
 // installation are deliberately not inferred from this primitive.
 func (v *typedGraphOverlaySearch) search(query []float32, topK, efSearch, candidateLimit int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, typedGraphOverlaySearchStats, error) {
+	return v.searchWithContext(context.Background(), query, topK, efSearch, candidateLimit, buffer)
+}
+
+func (v *typedGraphOverlaySearch) searchWithContext(ctx context.Context, query []float32, topK, efSearch, candidateLimit int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, typedGraphOverlaySearchStats, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var stats typedGraphOverlaySearchStats
 	defer stats.recordWork()
 	completed := false
@@ -124,6 +132,9 @@ func (v *typedGraphOverlaySearch) search(query []float32, topK, efSearch, candid
 	if err != nil {
 		return nil, stats, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, stats, err
+	}
 	if topK == 0 {
 		stats.Route = "typed_empty"
 		return nil, stats, nil
@@ -144,7 +155,7 @@ func (v *typedGraphOverlaySearch) search(query []float32, topK, efSearch, candid
 	} else {
 		stats.Route = "typed_empty"
 	}
-	baseResults, baseStats, err := v.pack.searchCosine(query, columnVectorGraphNativeSearchOptions{TopK: baseTopK, EfSearch: max(efSearch, baseTopK), CandidateLimit: baseLimit, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
+	baseResults, baseStats, err := v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseTopK, EfSearch: max(efSearch, baseTopK), CandidateLimit: baseLimit, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
 	stats.Base = baseStats
 	stats.BaseResultIDs = len(baseResults)
 	if err != nil {
@@ -156,7 +167,12 @@ func (v *typedGraphOverlaySearch) search(query []float32, topK, efSearch, candid
 	if baseLimit < v.pack.Header.Rows && baseStats.Candidates >= uint64(baseLimit) {
 		return nil, stats, errTypedGraphSearchBudget
 	}
-	for _, result := range baseResults {
+	for i, result := range baseResults {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, stats, err
+			}
+		}
 		if v.shadows(result.ID) {
 			stats.BaseShadowed++
 			continue
@@ -164,6 +180,11 @@ func (v *typedGraphOverlaySearch) search(query []float32, topK, efSearch, candid
 		buffer.baseResults = append(buffer.baseResults, VectorIndexSearchResult{ID: result.ID, Score: result.Score})
 	}
 	for i, row := range v.rows {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, stats, err
+			}
+		}
 		if row.Deleted {
 			continue
 		}
@@ -186,9 +207,15 @@ func (v *typedGraphOverlaySearch) search(query []float32, topK, efSearch, candid
 		}
 		return 0
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, stats, err
+	}
 	slices.SortFunc(buffer.baseResults, compare)
+	if err := ctx.Err(); err != nil {
+		return nil, stats, err
+	}
 	slices.SortFunc(buffer.deltaResults, compare)
-	results, err := mergeVectorIndexViewResults(buffer.baseResults, buffer.deltaResults, topK, buffer)
+	results, err := mergeVectorIndexViewResultsWithContext(ctx, buffer.baseResults, buffer.deltaResults, topK, buffer)
 	if err != nil {
 		return nil, stats, err
 	}

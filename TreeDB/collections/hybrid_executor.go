@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -420,6 +421,7 @@ func hybridScalarLookupLimit(plan hybridSearchExecutionPlan) int {
 type hybridScalarAllowSet map[string]struct{}
 
 type hybridScalarLookupView struct {
+	context  context.Context
 	domain   *collectionWriteDomain
 	snapshot *backenddb.Snapshot
 	catalog  *collectionCatalog
@@ -640,7 +642,7 @@ func (view *hybridScalarLookupView) visitLeafIDs(filter HybridScalarFilter, limi
 		defer func() { _ = persistedIt.Close() }()
 	}
 	var inputIDs uint64
-	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt, idx.ValueType, limit, false, maxInspected, scanMergedCollectionIndexIDOptions{DedupeDocumentID: shouldDedupeIndexDocumentIDs(idx, view.catalog.meta.Options), Inspected: inspected}, func(id []byte) (bool, error) {
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt, idx.ValueType, limit, false, maxInspected, scanMergedCollectionIndexIDOptions{Context: view.context, DedupeDocumentID: shouldDedupeIndexDocumentIDs(idx, view.catalog.meta.Options), Inspected: inspected}, func(id []byte) (bool, error) {
 		inputIDs++
 		err := visit(id)
 		return err == nil, err

@@ -1,9 +1,12 @@
 package documentservice
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"testing"
 
@@ -123,6 +126,58 @@ func TestServiceTypedInputServingLifecycle(t *testing.T) {
 	work := out.DenseWork
 	if work == nil || !work.Completed || !work.Graph.Completed || work.Graph.Route != "typed_exact" || work.Graph.ExactBaseScored != 1 || !work.Graph.Filter.Completed || work.Graph.Filter.EligibleRows != 1 || !work.Graph.Snapshot.Available || work.Graph.Snapshot.SchemaHash == 0 || work.Output.Fetched != 1 || !work.Output.Completed || work.Output.OutputBytes == 0 {
 		t.Fatalf("missing exact/snapshot/output work: %+v", work)
+	}
+	// Reuse the service counting context to stop inside typed filter work.
+	// The ordinary HTTP handler must preserve that same request context and
+	// serialize the owned positive error prefix without partial documents.
+	counted := &cancelAfterContextChecks{Context: ctx, cancelAfter: int(^uint(0) >> 1)}
+	if _, err := svc.SearchDenseVector(counted, create.Name, query); err != nil {
+		t.Fatal(err)
+	}
+	prefixCheck := 0
+	for check := 1; check < counted.checks; check++ {
+		cancel := &cancelAfterContextChecks{Context: ctx, cancelAfter: check}
+		got, err := svc.SearchDenseVector(cancel, create.Name, query)
+		if !errors.Is(err, context.Canceled) || len(got.Documents) != 0 {
+			t.Fatalf("dense request cancellation check=%d err=%v result=%+v", check, err, got)
+		}
+		var observed *Error
+		if errors.As(err, &observed) && observed.DenseWork != nil {
+			work := observed.DenseWork
+			if work.Graph.Filter.SourceIDs > 0 && !work.Graph.Filter.Completed {
+				if work.Completed || work.Graph.Completed || work.Output.Attempted {
+					t.Fatalf("canceled filter claimed completion: %+v", work)
+				}
+				prefixCheck = check
+				break
+			}
+		}
+	}
+	if prefixCheck == 0 {
+		t.Fatalf("no service filter cancellation prefix in %d checks", counted.checks)
+	}
+	requestJSON, err := json.Marshal(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel := &cancelAfterContextChecks{Context: ctx, cancelAfter: prefixCheck}
+	httpRequest := httptest.NewRequestWithContext(cancel, http.MethodPost, "/v1/indexes/"+create.Name+"/search/vector", bytes.NewReader(requestJSON))
+	recorder := httptest.NewRecorder()
+	NewHandler(svc).ServeHTTP(recorder, httpRequest)
+	var errorEnvelope struct {
+		Error struct {
+			DenseWork *DenseSearchWork `json:"dense_work"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &errorEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	httpWork := errorEnvelope.Error.DenseWork
+	if recorder.Code < 400 || httpWork == nil || httpWork.Completed || httpWork.Graph.Completed || httpWork.Graph.Filter.Completed || httpWork.Graph.Filter.SourceIDs == 0 || httpWork.Output.Attempted {
+		t.Fatalf("HTTP canceled prefix: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if _, err := svc.SearchDenseVector(ctx, create.Name, query); err != nil {
+		t.Fatalf("retry after service/HTTP cancellation: %v", err)
 	}
 	unfiltered := query
 	unfiltered.Filter = nil

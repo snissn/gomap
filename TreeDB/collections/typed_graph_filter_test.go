@@ -134,6 +134,40 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 			}
 		}
 	})
+	t.Run("filter_cancellation_prefix", func(t *testing.T) {
+		leaf := rangeFilter("user", 0, 4095)
+		for _, filter := range []HybridScalarFilter{leaf, {And: []HybridScalarFilter{leaf, rangeFilter("path", 0, 4095)}}} {
+			ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: int(^uint(0) >> 1)}
+			var full ColumnGraphFilterWork
+			if _, err := prepareTypedGraphFilterWithContext(ctx, overlay, filter, limits, &full); err != nil {
+				t.Fatal(err)
+			}
+			partial := false
+			for check := 1; check < ctx.calls; check++ {
+				var work ColumnGraphFilterWork
+				cancel := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: check}
+				before := workstats.Read().Graph
+				got, err := prepareTypedGraphFilterWithContext(cancel, overlay, filter, limits, &work)
+				after := workstats.Read().Graph
+				if !errors.Is(err, context.Canceled) || got != nil || !work.Attempted || work.Completed || after.FilterSourceIDs-before.FilterSourceIDs != work.SourceIDs || after.FilterInspectedEntries-before.FilterInspectedEntries != work.InspectedEntries || after.Filters.Errors-before.Filters.Errors != 1 {
+					t.Fatalf("filter canceled plan=%+v work=%+v err=%v", got, work, err)
+				}
+				if work.SourceIDs > 0 && work.SourceIDs < full.SourceIDs {
+					if len(filter.And) == 0 && (work.ScratchRows != work.SourceIDs || work.ScratchIDBytes != work.SourceBytes) {
+						t.Fatalf("lost pending chunk prefix=%+v", work)
+					}
+					partial = true
+					break
+				}
+			}
+			if !partial {
+				t.Fatalf("no cancellable posting prefix in %d checks", ctx.calls)
+			}
+			if _, err := prepareTypedGraphFilterWithContext(nil, overlay, filter, limits, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
 	t.Run("single_leaf_pending_error_prefix", func(t *testing.T) {
 		limited := limits
 		const accepted = 3
@@ -183,6 +217,37 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 		if count > 4096 && (searchStats.ExactBaseScored != 0 || searchStats.Base.Candidates == 0 || searchStats.Base.Edges == 0) {
 			t.Fatalf("ANN route lacked graph work: %+v", searchStats)
 		}
+		if count == 4096 || count == 4097 {
+			// Prepared filtering must pass the same context to both exact scoring
+			// and selected ANN. Measure checks on this warm fixture, then stop in
+			// the first positive scoring prefix without relying on wall time.
+			query := []float32{1, .5, 0, 0, 0, 0, 0, 0}
+			ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: int(^uint(0) >> 1)}
+			_, full, err := overlay.searchPreparedFilterWithContext(ctx, plan, query, 10, 128, n, &buffer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			partial := false
+			for check := 1; check < ctx.calls; check++ {
+				cancel := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: check}
+				results, stats, err := overlay.searchPreparedFilterWithContext(cancel, plan, query, 10, 128, n, &buffer)
+				if !errors.Is(err, context.Canceled) || len(results) != 0 || len(buffer.results) != 0 || len(buffer.baseResults) != 0 || len(buffer.deltaResults) != 0 {
+					t.Fatalf("count=%d check=%d cancellation results=%v stats=%+v err=%v", count, check, results, stats, err)
+				}
+				if stats.ExactBaseScored > 0 && stats.ExactBaseScored < full.ExactBaseScored || stats.Base.PreparedScoreCalls > 0 && stats.Base.PreparedScoreCalls < full.Base.PreparedScoreCalls {
+					partial = true
+					break
+				}
+			}
+			if !partial {
+				t.Fatalf("no cancellable prepared scoring prefix count=%d checks=%d full=%+v", count, ctx.calls, full)
+			}
+			results, _, err := overlay.searchPreparedFilterWithContext(nil, plan, query, 10, 128, n, &buffer)
+			if err != nil || len(results) != 10 {
+				t.Fatalf("retry after scoring cancellation: %v %v", results, err)
+			}
+		}
+
 		if _, _, err := overlay.searchPreparedFilter(plan, []float32{1}, 10, 128, n, &buffer); err == nil || len(buffer.results) != 0 {
 			t.Fatalf("invalid query retained prior results: %v", err)
 		}
@@ -301,6 +366,91 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 		after := workstats.Read().Graph
 		if !errors.Is(err, context.Canceled) || view != nil || len(response.Results) != 0 || len(buffer.results) != 0 || response.Stats.ColumnGraphWork.BaseANNScored == 0 || after.Requests.Errors-before.Requests.Errors != 1 || after.Requests.Completed != before.Requests.Completed || after.BaseANNScored-before.BaseANNScored != response.Stats.ColumnGraphWork.BaseANNScored {
 			t.Fatalf("post-search cancellation err=%v work=%+v checks=%d", err, response.Stats.ColumnGraphWork, checks)
+		}
+
+		// Sweep the existing deterministic check-count context: cancellation
+		// must be observable during graph work, not only after all scoring.
+		q.Context = context.Background()
+		full, fullView, err := col.SearchVectorIndexWithBufferReadView(q, &buffer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fullView.Close(); err != nil {
+			t.Fatal(err)
+		}
+		partial := false
+		for check := 1; check < checks; check++ {
+			q.Context = &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: check}
+			before := workstats.Read().Graph
+			response, view, err := col.SearchVectorIndexWithBufferReadView(q, &buffer)
+			after := workstats.Read().Graph
+			if !errors.Is(err, context.Canceled) || view != nil || len(response.Results) != 0 || len(buffer.results) != 0 {
+				t.Fatalf("mid-search cancellation check=%d err=%v view=%v results=%d", check, err, view, len(response.Results))
+			}
+			work := response.Stats.ColumnGraphWork
+			if got := col.collectionSchemaCoordinator().typedGraphOwners.owners; got != 0 {
+				t.Fatalf("canceled query leaked %d owners", got)
+			}
+			if work.Completed || after.BaseANNScored-before.BaseANNScored != work.BaseANNScored || after.Requests.Errors-before.Requests.Errors != 1 {
+				t.Fatalf("canceled local/process prefix mismatch: %+v", work)
+			}
+			if work.BaseANNScored > 0 && work.BaseANNScored < full.Stats.ColumnGraphWork.BaseANNScored {
+				partial = true
+				break
+			}
+		}
+		if !partial {
+			t.Fatalf("no cancellable graph prefix in %d checks; completed work=%+v", checks, full.Stats.ColumnGraphWork)
+		}
+
+		// The public filtered route owns both preparation and exact-scoring
+		// prefixes, and must release its owner for cancellation in either stage.
+		filter := rangeFilter("user", 0, 4095)
+		q.DeclaredScalarFilter = &filter
+		counted := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: int(^uint(0) >> 1)}
+		q.Context = counted
+		_, measuredView, err := col.SearchVectorIndexWithBufferReadView(q, &buffer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := measuredView.Close(); err != nil {
+			t.Fatal(err)
+		}
+		filterPrefix, exactPrefix := false, false
+		for check := 1; check < counted.calls; check++ {
+			q.Context = &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: check}
+			response, view, err := col.SearchVectorIndexWithBufferReadView(q, &buffer)
+			if !errors.Is(err, context.Canceled) || view != nil || len(response.Results) != 0 || len(buffer.results) != 0 {
+				t.Fatalf("public filtered cancellation check=%d err=%v", check, err)
+			}
+			work := response.Stats.ColumnGraphWork
+			if got := col.collectionSchemaCoordinator().typedGraphOwners.owners; got != 0 {
+				t.Fatalf("filtered cancellation leaked %d owners", got)
+			}
+			if !work.Filter.Completed && work.Filter.SourceIDs > 0 && work.Filter.SourceIDs < 4096 {
+				filterPrefix = true
+			}
+			if work.Filter.Completed && work.ExactBaseScored > 0 && work.ExactBaseScored < 4096 {
+				exactPrefix = true
+			}
+			if filterPrefix && exactPrefix {
+				break
+			}
+		}
+		if !filterPrefix || !exactPrefix {
+			t.Fatalf("missing public cancellation prefix: filter=%t exact=%t checks=%d", filterPrefix, exactPrefix, counted.calls)
+		}
+
+		q.Context = nil
+		retry, retryView, err := col.SearchVectorIndexWithBufferReadView(q, &buffer)
+		if err != nil || len(retry.Results) != 10 {
+			t.Fatalf("public retry after cancellation: results=%d err=%v", len(retry.Results), err)
+		}
+		if err := retryView.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if got := col.collectionSchemaCoordinator().typedGraphOwners.owners; got != 0 {
+			t.Fatalf("retry leaked %d owners", got)
 		}
 
 	})
