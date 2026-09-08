@@ -605,6 +605,20 @@ An empty typed graph rebuild verifies both primary and row-locator roots are
 empty, including repeated rebuilds and reopen, rather than falling back to JSON
 or trusting a zero manifest row count alone.
 
+Typed document-ID locator resolution uses the captured catalog and snapshot.
+Requests of at least 64 IDs without locator overlays reuse the tree's grouped
+reader in chunks of at most 512 IDs; pager leaves use that reader's fallback.
+Smaller requests and overlay roots retain point reads. Only scalar coordinates
+are buffered, and callbacks are delivered in input order with borrowed IDs;
+public row-ref and full-document outputs retain their existing ownership.
+Delivery stops at the first callback error, including cancellation or an error
+wrapping a missing-key sentinel. Decode errors follow the earlier input prefix;
+a storage failure aborts delivery of its entire current chunk. Grouped lookup
+and miss counters include resolved read-ahead, even after the eventual callback
+stop, but do not count unfinished tree traversal as resolved locators. Mapping
+work remains separate and advances only through delivered callbacks. This does
+not weaken filter admission, root ownership, or full-output requirements.
+
 ## Boundary
 
 Production `TreeDB/collections` imports of `TreeDB/internal/typedcolumn` stay

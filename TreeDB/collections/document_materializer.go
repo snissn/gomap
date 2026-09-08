@@ -639,6 +639,11 @@ func (v *CollectionReadView) visitDocumentRowRefsByID(ids [][]byte, visit func([
 		}
 		return stats, nil
 	}
+	// Match the existing tree batch reader's minimum grouping size. Small final-K
+	// lookups and overlay roots retain their direct point-read path.
+	if len(ids) >= 64 && len(v.catalog.overlayRootIDs(locatorRootName)) == 0 {
+		return v.visitGroupedDocumentRowRefsByID(locatorRootName, ids, visit, stats)
+	}
 	var scratch []byte
 	for _, id := range ids {
 		stats.RowLocatorLookups++
@@ -660,6 +665,63 @@ func (v *CollectionReadView) visitDocumentRowRefsByID(ids [][]byte, visit func([
 		// the response. Internal visitors must consume the ref synchronously.
 		if err := visit(id, ref, found); err != nil {
 			return stats, err
+		}
+	}
+	return stats, nil
+}
+
+// visitGroupedDocumentRowRefsByID bounds read-ahead to one 512-ID chunk. Storage
+// callbacks may arrive out of order; only copied scalar coordinates survive them.
+// Lookup/miss counters include resolved read-ahead, not unfinished tree traversal.
+// Caller mapping work advances only during ordered delivery and stops at its
+// first error. A storage error aborts delivery of the current chunk.
+func (v *CollectionReadView) visitGroupedDocumentRowRefsByID(root string, ids [][]byte, visit func([]byte, DocumentRowRef, bool) error, stats DocumentMaterializationStats) (DocumentMaterializationStats, error) {
+	type coordinates struct {
+		generation, partID uint64
+		rowIndex           int
+		appliedCommandLSN  uint64
+	}
+	refs := make([]coordinates, min(512, len(ids)))
+	for start := 0; start < len(ids); start += len(refs) {
+		chunk := ids[start:min(start+len(refs), len(ids))]
+		clear(refs)
+		var decodeErr error
+		decodeErrIndex := len(chunk)
+		err := collectionGetManyViewAtCatalogRoot(v.snapshot, v.catalog, root, chunk, func(i int, id, value []byte, found bool) error {
+			stats.RowLocatorLookups++
+			if !found {
+				stats.RowLocatorMisses++
+				return nil
+			}
+			// Retain the earliest invalid input, not the first storage callback.
+			// Nothing after it can be delivered; earlier callbacks may still fail.
+			if i < decodeErrIndex {
+				ref, err := decodeColumnPrimaryRowLocatorBorrowedID(id, value)
+				if err != nil {
+					decodeErr, decodeErrIndex = err, i
+				} else {
+					refs[i] = coordinates{ref.Generation, ref.PartID, ref.RowIndex, ref.AppliedCommandLSN}
+				}
+			}
+			// Delivery errors never enter the helper's ErrKeyNotFound handling.
+			return nil
+		})
+		if err != nil {
+			return stats, fmt.Errorf("collections: primary row locator batch lookup: %w", err)
+		}
+		for i, id := range chunk {
+			if i == decodeErrIndex {
+				return stats, decodeErr
+			}
+			c := refs[i]
+			found := c.generation != 0 // Valid locators always have a generation.
+			var ref DocumentRowRef
+			if found {
+				ref = DocumentRowRef{DocumentID: id, Generation: c.generation, PartID: c.partID, RowIndex: c.rowIndex, AppliedCommandLSN: c.appliedCommandLSN}
+			}
+			if err := visit(id, ref, found); err != nil {
+				return stats, err
+			}
 		}
 	}
 	return stats, nil
