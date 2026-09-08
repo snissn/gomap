@@ -1344,6 +1344,48 @@ func TestStableResourceSetAlreadySyncedTokenDoesNotCoverAdvancedCoalescedFrontie
 	}
 }
 
+func TestStableResourceTokenSyncedRIDCoverage(t *testing.T) {
+	stable := NewRIDFrontier([]uint64{2, 8, 20})
+	stable.Bytes, stable.MaxLSN = 8, 5
+	for _, tc := range []struct {
+		name       string
+		rids       []uint64
+		bytes, lsn uint64
+		wantSync   bool
+	}{
+		{"equal", []uint64{2, 8, 20}, 8, 5, false},
+		{"subset", []uint64{8, 20}, 8, 5, false},
+		{"empty", nil, 8, 5, false},
+		{"same summary bounds different member", []uint64{2, 9, 20}, 8, 5, true},
+		{"higher RID", []uint64{21}, 8, 5, true},
+		{"advanced bytes", []uint64{2, 8, 20}, 9, 5, true},
+		{"advanced LSN", []uint64{2, 8, 20}, 8, 6, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int
+			token := stableTokenFixture(t, t.TempDir(), "synced-rids.vlog", 1, 8, ReachabilityValueLogPointer, "same-header", func(spec *StableResourceSpec) {
+				spec.Frontier, spec.ContentSynced = stable, true
+				spec.SyncThrough = func(_ *os.File, frontier DurableFrontier) error {
+					calls++
+					if frontier.Bytes != tc.bytes || frontier.MaxLSN != tc.lsn || !slices.Equal(frontier.RIDs(), tc.rids) {
+						t.Fatal("sync lost requested frontier")
+					}
+					return nil
+				}
+			})
+			defer token.Release()
+			required := NewRIDFrontier(tc.rids)
+			required.Bytes, required.MaxLSN = tc.bytes, tc.lsn
+			if err := token.syncThrough(required); err != nil {
+				t.Fatal(err)
+			}
+			if (calls == 1) != tc.wantSync || calls > 1 {
+				t.Fatalf("sync calls=%d want sync=%t", calls, tc.wantSync)
+			}
+		})
+	}
+}
+
 func TestStableResourceSetRejectsFrontierIdentityDigestAndGenerationConflicts(t *testing.T) {
 	dir := t.TempDir()
 	t.Run("frontier beyond file", func(t *testing.T) {
@@ -3326,13 +3368,80 @@ func TestStableResourcePublicationDebtRetainsIndexedOwnership(t *testing.T) {
 	if allocs > 32 {
 		t.Fatalf("accounting allocations=%g exceed fixed-container allowance 32", allocs)
 	}
+	// Exercise exact sparse membership too: empty frontiers do not detect
+	// per-entry RID copies or repeated digest reconstruction during accounting.
+	rids := make([]uint64, 512)
+	for i := range rids {
+		rids[i] = uint64(i+1) * 2
+	}
+	makeRIDSet := func(t *testing.T, members []uint64) *StableResourceSet {
+		t.Helper()
+		frontier := NewRIDFrontier(members)
+		frontier.Bytes = 1
+		builder := NewStableResourceSetBuilder()
+		defer builder.Abandon()
+		for id := uint64(1); id <= 128; id++ {
+			var objectID [16]byte
+			binary.LittleEndian.PutUint64(objectID[:], id)
+			token, err := NewStableResourceToken(StableResourceSpec{
+				Kind: ResourceValueLog, LogicalLane: "main", ResourceID: fmt.Sprint(id), Generation: 1,
+				DiagnosticPath: "debt-index.bin", File: file, Frontier: frontier,
+				Reachability: ReachabilityValueLogPointer, ContentSynced: true,
+				StableIdentityOverride: StableIdentity{Platform: "scale-test", ObjectID: objectID},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := builder.Add(token); err != nil {
+				token.Release()
+				t.Fatal(err)
+			}
+		}
+		set, err := builder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(set.Release)
+		return set
+	}
+	ridPublished := makeRIDSet(t, rids)
+	different := slices.Clone(rids)
+	different[1]++ // Same count/min/max, different exact membership.
+	for _, tc := range []struct {
+		name    string
+		members []uint64
+		want    uint64
+	}{
+		{"equal", rids, 0},
+		{"subset", rids[256:], 0},
+		{"different", different, 128},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ridCandidate := makeRIDSet(t, tc.members)
+			allocs := testing.AllocsPerRun(10, func() {
+				got, err := ridCandidate.BytesNotCoveredBy(ridPublished)
+				if err != nil || got != tc.want {
+					t.Fatalf("debt=%d err=%v want=%d", got, err, tc.want)
+				}
+			})
+			t.Logf("128 entries with %d/%d required/durable RIDs: %.0f allocations/accounting call", len(tc.members), len(rids), allocs)
+			if allocs > 32 {
+				t.Fatalf("RID accounting allocations=%g exceed fixed-container allowance 32", allocs)
+			}
+		})
+	}
+	ridConcurrent, err := CloneStableResourceSetExcludingKinds(ridPublished)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ridConcurrent.Release()
 	var wg sync.WaitGroup
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
 		go func(reverse bool) {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
-				left, right := candidate, published
+				left, right := ridConcurrent, ridPublished
 				if reverse {
 					left, right = right, left
 				}

@@ -4043,7 +4043,9 @@ func stableResourceEntryCoversPublication(prior, entry *stableResourceEntry) boo
 	if entry.token.namespace != nil && (prior.token.namespace == nil || !prior.token.namespace.compatible(entry.token.namespace)) {
 		return false
 	}
-	if validateDurableFrontier(prior.frontier) != nil || validateDurableFrontier(entry.frontier) != nil || !durableFrontierCovers(prior.frontier, entry.frontier) {
+	// Registration validates and owns frontiers; frozen entry updates only clone
+	// or union that state. Coverage need not rebuild their exact RID summaries.
+	if !durableFrontierCovers(prior.frontier, entry.frontier) {
 		return false
 	}
 	for field := range entry.reachability {
