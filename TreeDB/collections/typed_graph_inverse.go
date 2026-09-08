@@ -76,19 +76,20 @@ func (s *columnVectorGraphRowRefStateSource) ordinalForPhysicalRow(ref DocumentR
 	lo, hi := 0, s.rows
 	for lo < hi {
 		mid := lo + (hi-lo)/2
-		_, candidate, ok := at(mid)
+		ordinal, candidate, ok := at(mid)
 		if !ok {
 			return 0, false
 		}
-		if compareColumnVectorGraphPhysicalRow(candidate, ref) < 0 {
+		switch compareColumnVectorGraphPhysicalRow(candidate, ref) {
+		case -1:
 			lo = mid + 1
-		} else {
+		case 1:
 			hi = mid
+		default:
+			// Construction certifies unique physical coordinates. An exact
+			// hit needs no lower-bound search through unrelated pinned rows.
+			return ordinal, candidate.AppliedCommandLSN == ref.AppliedCommandLSN
 		}
 	}
-	if lo == s.rows {
-		return 0, false
-	}
-	ordinal, candidate, ok := at(lo)
-	return ordinal, ok && compareColumnVectorGraphPhysicalRow(candidate, ref) == 0 && candidate.AppliedCommandLSN == ref.AppliedCommandLSN
+	return 0, false
 }
