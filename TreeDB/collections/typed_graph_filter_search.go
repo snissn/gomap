@@ -105,8 +105,8 @@ func (v *typedGraphOverlaySearch) searchPreparedFilterWithContext(ctx context.Co
 				return nil, stats, ErrVectorIndexSnapshotMismatch
 			}
 			buffer.baseResults = append(buffer.baseResults, VectorIndexSearchResult{ID: id, Score: candidate.score})
+			stats.BaseResultIDs++
 		}
-		stats.BaseResultIDs = len(buffer.baseResults)
 	} else {
 		baseLimit := candidateLimit - len(plan.delta)
 		if baseK == 0 || baseLimit < baseK || len(plan.excludedBase) > baseLimit-baseK || efSearch > baseLimit {

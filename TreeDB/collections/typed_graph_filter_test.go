@@ -248,6 +248,31 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 			}
 		}
 
+		if count == 4096 {
+			t.Run("exact_invalid_id_prefix", func(t *testing.T) {
+				// A failed ID translation must retain earlier successful translations,
+				// independently of cancellation. Corrupt only an owned test offset
+				// table; the real prepared pack and mapped assets remain untouched.
+				badRank := 1
+				if plan.exactBaseByID[badRank] == 0 {
+					badRank++
+				}
+				badOrdinal := plan.exactBaseByID[badRank]
+				badOffsets := append([]uint64(nil), overlay.pack.DocumentIDOffsets...)
+				badOffsets[badOrdinal+1] = badOffsets[badOrdinal] - 1
+				badOverlay := *overlay
+				badOverlay.pack = &columnHNSWSearchPackPreparedView{Header: overlay.pack.Header, DocumentIDOffsets: badOffsets, DocumentIDBytes: overlay.pack.DocumentIDBytes, handle: overlay.pack.handle, status: overlay.pack.status}
+				badPlan := *plan
+				badPlan.overlay = &badOverlay
+				before := workstats.Read().Graph
+				got, work, err := badOverlay.searchPreparedFilter(&badPlan, []float32{0, 0, 1, 0, 0, 0, 0, 0}, 3, 128, n, &buffer)
+				after := workstats.Read().Graph
+				if !errors.Is(err, ErrVectorIndexSnapshotMismatch) || len(got) != 0 || len(buffer.results) != 0 || len(buffer.baseResults) != 0 || work.BaseResultIDs != badRank || after.BaseResultIDs-before.BaseResultIDs != uint64(badRank) {
+					t.Fatalf("invalid ID lost prefix: want=%d local=%d process=%d err=%v", badRank, work.BaseResultIDs, after.BaseResultIDs-before.BaseResultIDs, err)
+				}
+			})
+		}
+
 		if _, _, err := overlay.searchPreparedFilter(plan, []float32{1}, 10, 128, n, &buffer); err == nil || len(buffer.results) != 0 {
 			t.Fatalf("invalid query retained prior results: %v", err)
 		}
@@ -441,9 +466,50 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 			t.Fatalf("missing public cancellation prefix: filter=%t exact=%t checks=%d", filterPrefix, exactPrefix, counted.calls)
 		}
 
+		// TopK=257 reaches a second periodic ID-translation check after 256
+		// appends. Sweep the existing counting context to target that boundary
+		// without assuming how many owner/preparation checks precede it.
+		q.TopK, q.EfSearch = 257, 257
+		translated := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: int(^uint(0) >> 1)}
+		q.Context = translated
+		complete, completeView, err := col.SearchVectorIndexWithBufferReadView(q, &buffer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := completeView.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if complete.Stats.ColumnGraphWork.BaseResultIDs != 257 {
+			t.Fatalf("complete translation=%+v", complete.Stats.ColumnGraphWork)
+		}
+		idPrefix := false
+		for check := 1; check < translated.calls; check++ {
+			q.Context = &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: check}
+			before := workstats.Read().Graph
+			response, view, err := col.SearchVectorIndexWithBufferReadView(q, &buffer)
+			after := workstats.Read().Graph
+			work := response.Stats.ColumnGraphWork
+			if !errors.Is(err, context.Canceled) || view != nil || len(response.Results) != 0 || len(buffer.results) != 0 || len(buffer.baseResults) != 0 || len(buffer.deltaResults) != 0 || work.Completed || after.BaseResultIDs-before.BaseResultIDs != work.BaseResultIDs {
+				t.Fatalf("ID translation cancellation check=%d work=%+v err=%v", check, work, err)
+			}
+			if got := col.collectionSchemaCoordinator().typedGraphOwners.owners; got != 0 {
+				t.Fatalf("ID cancellation leaked %d owners", got)
+			}
+			if work.BaseResultIDs == 256 {
+				if work.ExactBaseScored != 4096 || !work.Filter.Completed {
+					t.Fatalf("ID prefix lacks completed scoring/filter work=%+v", work)
+				}
+				idPrefix = true
+				break
+			}
+		}
+		if !idPrefix {
+			t.Fatalf("missing 256 translated-ID prefix in %d checks", translated.calls)
+		}
+
 		q.Context = nil
 		retry, retryView, err := col.SearchVectorIndexWithBufferReadView(q, &buffer)
-		if err != nil || len(retry.Results) != 10 {
+		if err != nil || len(retry.Results) != 257 || retry.Stats.ColumnGraphWork.BaseResultIDs != 257 {
 			t.Fatalf("public retry after cancellation: results=%d err=%v", len(retry.Results), err)
 		}
 		if err := retryView.Close(); err != nil {
