@@ -80,7 +80,7 @@ func (s *Service) UpsertTypedDocuments(ctx context.Context, index string, req Ty
 	if err := ctxErr(ctx); err != nil {
 		return UpsertDocumentsResponse{}, err
 	}
-	return finishTypedDocuments(col, info, req.IDs, req.Retained, req.Columns, names, 0)
+	return s.finishTypedDocuments(col, info, req.IDs, req.Retained, req.Columns, names, 0)
 }
 
 func (s *Service) optimizeTypedInput(ctx context.Context, col *collections.Collection, info IndexInfo, req OptimizeIndexRequest) (OptimizeIndexResponse, error) {
@@ -203,11 +203,21 @@ func (s *Service) upsertTypedDocuments(ctx context.Context, col *collections.Col
 			return UpsertDocumentsResponse{}, wrapServiceError(CodeInvalidRequest, "retained metadata is not JSON-serializable", err)
 		}
 	}
-	return finishTypedDocuments(col, info, ids, retained, columns, names, compact)
+	return s.finishTypedDocuments(col, info, ids, retained, columns, names, compact)
 }
 
-func finishTypedDocuments(col *collections.Collection, info IndexInfo, ids, retained [][]byte, columns []collections.TypedColumnBatch, names []string, compact int) (UpsertDocumentsResponse, error) {
-	updated, err := col.UpsertTypedBatch(ids, retained, columns)
+func (s *Service) finishTypedDocuments(col *collections.Collection, info IndexInfo, ids, retained [][]byte, columns []collections.TypedColumnBatch, names []string, compact int) (UpsertDocumentsResponse, error) {
+	var updated int
+	var err error
+	if s.diagnosticsEnabled.Load() {
+		var stats collections.CollectionInsertStats
+		updated, stats, err = col.UpsertTypedBatchWithStats(ids, retained, columns)
+		if err == nil {
+			s.publishDiagnosticsInsert(info.Name, info, stats)
+		}
+	} else {
+		updated, err = col.UpsertTypedBatch(ids, retained, columns)
+	}
 	if err != nil {
 		return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "typed upsert failed", err)
 	}

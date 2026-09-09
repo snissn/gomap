@@ -661,8 +661,8 @@ func (work *ColumnPublishCandidateResourceWork) Add(other ColumnPublishCandidate
 	work.FinalRequirementObligationsMaterialized += other.FinalRequirementObligationsMaterialized
 }
 
-// CollectionInsertStats captures phase timings and counters from the most
-// recent successful InsertBatch call on a Collection handle.
+// CollectionInsertStats captures phase timings and counters from a completed
+// InsertBatch call or an optional diagnostics-enabled typed upsert.
 type CollectionInsertStats struct {
 	Documents                    int
 	Indexes                      int
@@ -791,12 +791,14 @@ type CollectionInsertStats struct {
 	PrimaryRunBuild                                    time.Duration
 	IndexStateRunBuild                                 time.Duration
 	SecondaryRunBuild                                  time.Duration
-	Publish                                            time.Duration
-	SecondaryEntries                                   int
-	SecondaryKeyBytes                                  int
-	SecondarySortedRuns                                int
-	SecondaryUnsortedRuns                              int
-	SecondaryRuns                                      []CollectionSecondaryRunStats
+	// SourceReplacementPlan includes buildSourceReplacementPlan across retries.
+	SourceReplacementPlan time.Duration
+	Publish               time.Duration
+	SecondaryEntries      int
+	SecondaryKeyBytes     int
+	SecondarySortedRuns   int
+	SecondaryUnsortedRuns int
+	SecondaryRuns         []CollectionSecondaryRunStats
 }
 
 // ColumnPublishCommitExclusiveTotal returns the non-overlapping DB publication

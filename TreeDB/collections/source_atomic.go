@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -88,10 +89,10 @@ func (c *Collection) replaceSourceDocumentsAtomic(parentID []byte, deleteIDs, in
 }
 
 func (c *Collection) replaceSourceDocumentsAtomicSchemaLocked(parentID []byte, deleteIDs, insertIDs, insertDocs [][]byte, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection) (int, error) {
-	return c.replaceSourceDocumentsAtomicModeSchemaLocked(parentID, deleteIDs, insertIDs, insertDocs, replay, hooks, projection, false)
+	return c.replaceSourceDocumentsAtomicModeSchemaLocked(parentID, deleteIDs, insertIDs, insertDocs, replay, hooks, projection, false, nil)
 }
 
-func (c *Collection) replaceSourceDocumentsAtomicModeSchemaLocked(parentID []byte, deleteIDs, insertIDs, insertDocs [][]byte, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection, upsert bool) (int, error) {
+func (c *Collection) replaceSourceDocumentsAtomicModeSchemaLocked(parentID []byte, deleteIDs, insertIDs, insertDocs [][]byte, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection, upsert bool, insertStats *CollectionInsertStats) (int, error) {
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
@@ -111,7 +112,14 @@ func (c *Collection) replaceSourceDocumentsAtomicModeSchemaLocked(parentID []byt
 
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
+		var planStarted time.Time
+		if insertStats != nil {
+			planStarted = time.Now()
+		}
 		plan, err := c.buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs, nil, replay, hooks, projection, upsert)
+		if insertStats != nil {
+			insertStats.SourceReplacementPlan += time.Since(planStarted)
+		}
 		if err != nil {
 			if isRetriableCollectionMutationError(err) {
 				lastErr = err
@@ -125,7 +133,14 @@ func (c *Collection) replaceSourceDocumentsAtomicModeSchemaLocked(parentID []byt
 			plan.close()
 			return deleted, nil
 		}
-		publishErr := c.publishSourceReplacementPlan(plan, hooks)
+		var publishStarted time.Time
+		if insertStats != nil {
+			publishStarted = time.Now()
+		}
+		publishErr := c.publishSourceReplacementPlan(plan, hooks, insertStats)
+		if insertStats != nil {
+			insertStats.Publish += time.Since(publishStarted)
+		}
 		plan.close()
 		if isRetriableCollectionMutationError(publishErr) {
 			lastErr = publishErr
@@ -563,7 +578,7 @@ func (plan *insertBatchPlan) checkPersistedConflictsReplacing(snap *backenddb.Sn
 	return nil
 }
 
-func (c *Collection) publishSourceReplacementPlan(plan *sourceReplacementPlan, hooks *sourcePublicationHooks) error {
+func (c *Collection) publishSourceReplacementPlan(plan *sourceReplacementPlan, hooks *sourcePublicationHooks, insertStats *CollectionInsertStats) error {
 	if plan == nil {
 		return errors.New("collections: missing source replacement plan")
 	}
@@ -582,7 +597,7 @@ func (c *Collection) publishSourceReplacementPlan(plan *sourceReplacementPlan, h
 			meta: plan.meta, catalog: plan.catalog, baseCommitSeq: plan.baseCommitSeq, baseSystemRoot: plan.baseSystemRoot,
 			rootNames: cloneColumnPublishRootNames(rootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
 			commandWALIntent: plan.commandWAL, rawPublishLocked: true, operation: operation,
-			documents: plan.insertColumnDocs, sourceDeleteDocuments: plan.deleteColumnDocs, rows: len(plan.insertColumnDocs),
+			documents: plan.insertColumnDocs, sourceDeleteDocuments: plan.deleteColumnDocs, rows: len(plan.insertColumnDocs), insertStats: insertStats,
 		}
 		var cleanup func()
 		immediateColumnInput, cleanup, err = c.prepareImmediateTypedGraphEncoded(immediateColumnInput, tables)

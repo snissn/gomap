@@ -16,7 +16,7 @@ var typedSourceBeforeAdmissionTestHook atomic.Pointer[func(*Collection)]
 // error must not be blindly retried. Empty insertion permits nil columns and
 // uses the existing delete-only source command payload.
 func (c *Collection) ReplaceTypedSourceByID(deleteIDs, insertIDs, retained [][]byte, columns []TypedColumnBatch) (int, error) {
-	return c.replaceTypedSourceByID(deleteIDs, insertIDs, retained, columns, false)
+	return c.replaceTypedSourceByID(deleteIDs, insertIDs, retained, columns, false, nil)
 }
 
 // UpsertTypedBatch atomically inserts missing IDs and replaces existing IDs.
@@ -25,10 +25,19 @@ func (c *Collection) ReplaceTypedSourceByID(deleteIDs, insertIDs, retained [][]b
 // Mixed changes use one source-replacement command-WAL frame; duplicate IDs and
 // unique-index conflicts fail before publication. Inputs may be reused on return.
 func (c *Collection) UpsertTypedBatch(ids, retained [][]byte, columns []TypedColumnBatch) (int, error) {
-	return c.replaceTypedSourceByID(ids, ids, retained, columns, true)
+	return c.replaceTypedSourceByID(ids, ids, retained, columns, true, nil)
 }
 
-func (c *Collection) replaceTypedSourceByID(deleteIDs, insertIDs, retained [][]byte, columns []TypedColumnBatch, upsert bool) (int, error) {
+// UpsertTypedBatchWithStats is UpsertTypedBatch with optional-path diagnostics
+// for the completed source plan and publication.
+func (c *Collection) UpsertTypedBatchWithStats(ids, retained [][]byte, columns []TypedColumnBatch) (int, CollectionInsertStats, error) {
+	var stats CollectionInsertStats
+	stats.Documents = len(ids)
+	updated, err := c.replaceTypedSourceByID(ids, ids, retained, columns, true, &stats)
+	return updated, stats, err
+}
+
+func (c *Collection) replaceTypedSourceByID(deleteIDs, insertIDs, retained [][]byte, columns []TypedColumnBatch, upsert bool, insertStats *CollectionInsertStats) (int, error) {
 	if c == nil || c.db == nil {
 		return 0, errCollectionNil
 	}
@@ -64,6 +73,6 @@ func (c *Collection) replaceTypedSourceByID(deleteIDs, insertIDs, retained [][]b
 	if err := c.requireColumnStoreCommandWAL(c.Meta(), nil); err != nil {
 		return 0, err
 	}
-	deleted, err := c.replaceSourceDocumentsAtomicModeSchemaLocked(nil, deleteIDs, insertIDs, retained, nil, nil, projection, upsert)
+	deleted, err := c.replaceSourceDocumentsAtomicModeSchemaLocked(nil, deleteIDs, insertIDs, retained, nil, nil, projection, upsert, insertStats)
 	return deleted, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
