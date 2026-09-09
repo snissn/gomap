@@ -929,6 +929,12 @@ func appendGoawayBody(dst []byte, lastAcceptedRequestID uint64) ([]byte, error) 
 func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error {
 	code := errorCodeFor(err)
 	logDebug("writeError: code=%d err=%v", code, err)
+	if debugLoggingEnabled() {
+		var ambiguous *collections.CommitAmbiguousError
+		if errors.As(err, &ambiguous) && ambiguous != nil {
+			logDebug("writeError: request_id=%d operation=%q inner=%T: %v", request.RequestID, ambiguous.Operation, ambiguous.Err, ambiguous.Err)
+		}
+	}
 	if code == 0 {
 		code = iwire.ErrInternal
 	}
