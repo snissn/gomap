@@ -9,10 +9,67 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+type blockingBaseLeafPageLog struct {
+	appendEntered chan struct{}
+	appendRelease chan struct{}
+	flushEntered  chan struct{}
+}
+
+func (l *blockingBaseLeafPageLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {
+	close(l.appendEntered)
+	<-l.appendRelease
+	return page.LeafLogPtr{}, nil
+}
+
+func (l *blockingBaseLeafPageLog) Flush() error {
+	close(l.flushEntered)
+	return nil
+}
+
+func (*blockingBaseLeafPageLog) Sync() error { return nil }
+
+func TestLeafPageLogLanes_BaseLogSerializesAppendAndFlush(t *testing.T) {
+	database := &DB{}
+	base := &blockingBaseLeafPageLog{
+		appendEntered: make(chan struct{}),
+		appendRelease: make(chan struct{}),
+		flushEntered:  make(chan struct{}),
+	}
+	database.SetLeafPageLog(base)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	defer wg.Wait()
+	defer close(base.appendRelease)
+	go func() {
+		defer wg.Done()
+		if _, err := database.leafPageLog.AppendLeafPage(nil); err != nil {
+			t.Errorf("append: %v", err)
+		}
+	}()
+	<-base.appendEntered
+
+	flushStarted := make(chan struct{})
+	go func() {
+		defer wg.Done()
+		close(flushStarted)
+		if err := database.leafPageLog.Flush(); err != nil {
+			t.Errorf("flush: %v", err)
+		}
+	}()
+	<-flushStarted
+	select {
+	case <-base.flushEntered:
+		t.Fatal("flush entered while append was active")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
 
 type leafLaneCountingLog struct {
 	inner  LeafPageLog
