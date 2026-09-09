@@ -183,9 +183,6 @@ func TestSyncPagesWithStableFileUsesPinnedIdentityAfterPathReplacement(t *testin
 }
 
 func TestSyncIndexDataRejectsWrongFileAndRetainsDirtyChunks(t *testing.T) {
-	if mappedRangeSyncRequired() {
-		t.Skip("file-only mapped durability policy")
-	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "index.db")
 	p, err := Open(path, syncPagesTestChunkSize(1))
@@ -205,16 +202,34 @@ func TestSyncIndexDataRejectsWrongFileAndRetainsDirtyChunks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pinned.Close()
-	if err := os.Rename(path, filepath.Join(dir, "original.db")); err != nil {
-		t.Fatal(err)
+	wrongPath := filepath.Join(dir, "wrong.db")
+	if runtime.GOOS != "windows" {
+		if err := os.Rename(path, filepath.Join(dir, "original.db")); err != nil {
+			t.Fatal(err)
+		}
+		wrongPath = path
 	}
-	wrong, err := os.Create(path)
+	wrong, err := os.Create(wrongPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer wrong.Close()
+	originalMapped, originalFile := syncMappedFileFn, syncPageFileFn
+	defer func() { syncMappedFileFn, syncPageFileFn = originalMapped, originalFile }()
+	mappedCalls, fileCalls := 0, 0
+	syncMappedFileFn = func(data []byte) error {
+		mappedCalls++
+		return originalMapped(data)
+	}
+	syncPageFileFn = func(file *os.File) error {
+		fileCalls++
+		return originalFile(file)
+	}
 	if err := p.SyncIndexDataWithStableFile(wrong); err == nil {
 		t.Fatal("rebound path handle accepted for mapped index durability")
+	}
+	if mappedCalls != 0 || fileCalls != 0 {
+		t.Fatalf("identity mismatch issued mapped=%d file=%d fences; want none", mappedCalls, fileCalls)
 	}
 	if len(p.dirtyChunks) == 0 {
 		t.Fatal("identity failure lost dirty chunks")
@@ -325,6 +340,14 @@ func TestSyncDirtyChunksMappedPolicyAndFlushFailure(t *testing.T) {
 	}
 	if !reflect.DeepEqual(order, []string{"mapped"}) {
 		t.Fatalf("flush-only order=%v", order)
+	}
+	order = nil
+	dirty()
+	if err := p.syncDirtyChunksWithFile(false, 0, nil); err != nil {
+		t.Fatalf("flush-only validated unused file target: %v", err)
+	}
+	if !reflect.DeepEqual(order, []string{"mapped"}) {
+		t.Fatalf("flush-only nil target order=%v", order)
 	}
 	order = nil
 	dirty()

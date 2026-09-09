@@ -863,7 +863,7 @@ func (p *Pager) syncDirtyChunksWithFile(syncFile bool, firstChunk int, syncTarge
 
 	var syncErr error
 	needsMappedSync := !syncFile || mappedRangeSyncRequired()
-	if !needsMappedSync && len(p.chunks) != 0 && (p.file == nil || syncTarget != p.file) {
+	if syncFile && len(p.chunks) != 0 && (p.file == nil || syncTarget != p.file) {
 		// File sync covers these live mappings only when it targets the same
 		// retained file. Never reopen the diagnostic path, which may be replaced.
 		if p.file == nil || syncTarget == nil {
@@ -879,7 +879,7 @@ func (p *Pager) syncDirtyChunksWithFile(syncFile bool, firstChunk int, syncTarge
 			}
 		}
 	}
-	if needsMappedSync {
+	if syncErr == nil && needsMappedSync {
 		concurrency := int(p.syncConcurrency.Load())
 		if concurrency <= 1 || len(toSync) <= 1 {
 			for _, idx := range toSync {
