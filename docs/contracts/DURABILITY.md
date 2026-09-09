@@ -110,3 +110,11 @@ Operational notes:
   shards.
 - Use TreeDB canonical production profiles when integrated command-WAL recovery,
   persistent value-log pointers, and stronger integrity checks are required.
+
+### Resource cloning and content certificates
+
+Freezing or cloning a resource set does not certify content durability. Clones
+preserve the source token's exact certified frontier (or its absence), independently
+of namespace stability, and retain producer-specific flush and sync callbacks. A
+coalesced frontier beyond that certificate still requires its physical barrier; a
+failed barrier remains retryable and cannot manufacture a stronger certificate.

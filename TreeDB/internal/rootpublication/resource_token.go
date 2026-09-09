@@ -578,8 +578,8 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 	return token, nil
 }
 
-// cloneSharedPinned retains already-certified immutable state without
-// re-opening, re-statting, or revalidating the exact pinned resource.
+// cloneSharedPinned retains immutable state and its actual content certificate
+// without re-opening, re-statting, or certifying a larger requested frontier.
 func (token *StableResourceToken) cloneSharedPinned(logicalLane, resourceID, diagnosticPath string, frontier DurableFrontier, reachability ReachabilityField, logicalObligations []StableLogicalObligation, onRelease func()) (*StableResourceToken, error) {
 	if err := token.retainPinned(); err != nil {
 		return nil, err
@@ -614,12 +614,15 @@ func (token *StableResourceToken) cloneSharedPinned(logicalLane, resourceID, dia
 		identity: token.identity, frontier: cloneDurableFrontier(frontier), digest: token.digest,
 		reachability: reachability, logicalObligations: stableLogicalObligationList(logicalObligations),
 		stability: token.stability, namespace: token.namespace, pinned: token.pinned, pinnedRefs: token.pinnedRefs,
-		flush: token.flush, sync: token.sync, syncedFrontier: cloneDurableFrontier(frontier), hasSyncedFrontier: true,
+		flush: token.flush, sync: token.sync,
+		syncedFrontier: cloneDurableFrontier(token.syncedFrontier), hasSyncedFrontier: token.hasSyncedFrontier,
 		onRelease: onRelease, identityPin: identityPin,
 	}
 	cloned.owner.Store(uint32(ResourceOwnerToken))
 	cloned.metrics.registeredNanos = time.Now().UnixNano()
-	cloned.metrics.physicalFileSyncs.Store(1)
+	if cloned.hasSyncedFrontier {
+		cloned.metrics.physicalFileSyncs.Store(1)
+	}
 	retainedPinned = false
 	return cloned, nil
 }
