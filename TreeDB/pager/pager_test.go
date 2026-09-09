@@ -290,6 +290,19 @@ func TestPagerTruncate(t *testing.T) {
 
 	}
 
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc after Truncate: %v", err)
+	}
+	if err := p.GrowTo(5); err != nil {
+		t.Fatalf("GrowTo already-covered target: %v", err)
+	}
+	if got := p.PageCount(); got != 6 {
+		t.Fatalf("GrowTo reduced page count to %d", got)
+	}
+	if err := p.Truncate(5); err == nil {
+		t.Fatal("Truncate accepted shrinking after GrowTo")
+	}
+
 	// Verify file size grew
 
 	info, _ := os.Stat(path)

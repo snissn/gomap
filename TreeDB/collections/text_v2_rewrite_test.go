@@ -390,7 +390,7 @@ func TestTextV2RewriteStorageMaintenanceAndValueLogGC2630(t *testing.T) {
 		t.Fatalf("CompactStorage: %v", err)
 	}
 	if !compactStats.FullyCompacted {
-		t.Fatalf("CompactStorage left text-v2 maintenance debt after snapshot release: leaf_gc=%+v remaining=%+v", compactStats.LeafGenerationGC, compactStats.RemainingDebt)
+		t.Fatalf("CompactStorage left text-v2 maintenance debt after snapshot release: leaf_gc=%+v remaining=%+v phases=%+v", compactStats.LeafGenerationGC, compactStats.RemainingDebt, compactStats.Phases)
 	}
 	if got, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "updated", TopK: 10, ResultMode: TextSearchResultModeScoreOnly}); err != nil || len(got.Results) != 8 {
 		t.Fatalf("post-maintenance updated response=%+v err=%v want 8", got, err)

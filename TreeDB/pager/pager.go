@@ -532,17 +532,24 @@ func (p *Pager) Truncate(targetPages uint64) error {
 	if targetPages < currentPages {
 		return fmt.Errorf("truncation (shrinking) is forbidden: current %d, target %d", currentPages, targetPages)
 	}
-	if targetPages == currentPages {
+	return p.GrowTo(targetPages)
+}
+
+// GrowTo ensures the pager contains at least targetPages pages.
+func (p *Pager) GrowTo(targetPages uint64) error {
+	if p.readOnly {
+		return ErrReadOnly
+	}
+	if targetPages <= p.numPages.Load() {
 		return nil
 	}
 	p.allocMu.Lock()
 	defer p.allocMu.Unlock()
-	currentPages = p.numPages.Load()
+	currentPages := p.numPages.Load()
 	if targetPages <= currentPages {
 		return nil
 	}
 
-	// diff is guaranteed positive
 	diff := int(targetPages - currentPages)
 	_, err := p.allocLocked(diff)
 	return err

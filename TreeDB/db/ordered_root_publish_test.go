@@ -5684,3 +5684,20 @@ func assertValueLogRefTrackerMatchesFullScan(t *testing.T, db *DB) {
 		t.Fatalf("incremental/full-scan mismatch: incremental=%v full=%v", incRefs, fullRefs)
 	}
 }
+
+func TestOrderedRootDeltaBatchGroupApplyErrorContext(t *testing.T) {
+	db := &DB{}
+	results, parallel := db.applyOrderedRootDeltaBatchGroupRoots(nil, []OrderedRootDeltaBatchPublishInput{{BaseRoot: 42}}, nil, nil, OrderedRootSpanNativeRouteCommandWALPublish, "test root apply", false)
+	if parallel || len(results) != 1 || results[0].err == nil {
+		t.Fatalf("results=%+v parallel=%t", results, parallel)
+	}
+	err := results[0].err
+	for _, want := range []string{"ordered root apply", "input=0", "base=42", "policy=0", "route=", "context=", "missing index"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error=%q missing %q", err, want)
+		}
+	}
+	if cause := errors.Unwrap(err); cause == nil || cause.Error() != "missing index" {
+		t.Fatalf("unwrapped error=%v", cause)
+	}
+}

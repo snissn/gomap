@@ -1,16 +1,57 @@
 package nativewire
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"net"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/documentservice"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
+
+func TestWriteErrorDebugLogPreservesCommitAmbiguousDetail(t *testing.T) {
+	previous := debugLogger
+	t.Cleanup(func() { debugLogger = previous })
+	var logOutput bytes.Buffer
+	debugLogger = log.New(&logOutput, "", 0)
+
+	inner := errors.New("post-publication bookkeeping failed")
+	err := &documentservice.Error{Code: documentservice.CodeInternal, Message: "typed upsert failed", Err: &collections.CommitAmbiguousError{Operation: "publish typed source", Err: inner}}
+	var frame bytes.Buffer
+	if writeErr := NewServer(ServerOptions{}).writeError(&frame, iwire.Header{RequestID: 17}, err); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	got := logOutput.String()
+	for _, want := range []string{"writeError:", "request_id=17", `operation="publish typed source"`, "*errors.errorString", inner.Error()} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("debug log %q missing %q", got, want)
+		}
+	}
+
+	_, body, decodeErr := readFrame(bytes.NewReader(frame.Bytes()), iwire.DefaultLimits())
+	if decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	sections, decodeErr := iwire.DecodeSections(body, iwire.DefaultLimits())
+	if decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	raw, ok, decodeErr := singletonSection(sections, iwire.SectionError)
+	if decodeErr != nil || !ok {
+		t.Fatalf("error section present=%v err=%v", ok, decodeErr)
+	}
+	code, _, message, decodeErr := decodeErrorPayload(raw)
+	if decodeErr != nil || code != iwire.ErrCommitAmbiguous || message != "commit ambiguous" {
+		t.Fatalf("wire error code=%d message=%q err=%v", code, message, decodeErr)
+	}
+}
 
 func servePipe(t testing.TB, server *Server) (*Client, <-chan error) {
 	t.Helper()

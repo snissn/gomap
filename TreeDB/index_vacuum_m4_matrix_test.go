@@ -374,6 +374,20 @@ func runIndexVacuumM4MatrixCell(t *testing.T, fixture indexVacuumM4Fixture, lane
 		cell.Details["persistent_log_contract"] = "whole CompactStorage owns value-log rewrite and leaf-generation pack; contract verdicts require the compacted database to reopen and resolve the original logical digest"
 	}
 	indexOnlyLane := !compactStorageLane
+	if indexOnlyLane && opts.IndexOuterLeavesInValueLog {
+		// Rebuilt system leaves may append records; existing persistent data
+		// must remain byte-for-byte intact.
+		var leafSegmentsBefore []indexVacuumM4PersistentFile
+		for _, source := range leafSourcesBefore {
+			name := filepath.Base(source.Path)
+			if strings.HasPrefix(name, "value-l") && strings.HasSuffix(name, ".log") {
+				leafSegmentsBefore = append(leafSegmentsBefore, source)
+			}
+		}
+		leafSourcesUnchanged := len(leafSegmentsBefore) > 0 && indexVacuumM4PersistentSourcePrefixesUnchanged(t, leafSegmentsBefore)
+		cell.Verdicts["leaf_log_contract"] = leafSourcesUnchanged
+		cell.Details["leaf_log_source_prefix_unchanged"] = strconv.FormatBool(leafSourcesUnchanged)
+	}
 	if indexOnlyLane && (!cell.Verdicts["value_log_contract"] || !cell.Verdicts["leaf_log_contract"]) {
 		t.Errorf("persistent log bytes changed: value=%d->%d leaf=%d->%d", cell.ValueBytesBefore, cell.ValueBytesAfter, cell.LeafBytesBefore, cell.LeafBytesAfter)
 	}

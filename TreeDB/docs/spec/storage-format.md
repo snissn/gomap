@@ -1508,6 +1508,10 @@ Notes:
   leaf-log child refs. Base-delta page-child encoding is disabled for these
   pages.
 
+System-root rebuilds in online and offline index vacuum preserve the configured
+outer-leaf policy. With `IndexOuterLeavesInValueLog`, rebuilt system leaves are
+appended to `leaf_vlog` and flushed and registered before resource capture.
+
 ## 7. Value-Log Record Format
 
 Each value-log record is:
@@ -1615,9 +1619,11 @@ publication consumes that exact stable token in `DependencyManifestV1`; the
 fixed `manifest.json` path is a compatibility view, not the selected revision's
 identity.
 
-If a prepared rewrite fails before publishing its meta slot, TreeDB abandons
-only that unpublished immutable revision after releasing its durable resource
-ownership. It verifies the exact physical identity before deletion and restores
+A prepared immutable revision may be abandoned only while no recoverable meta
+slot can name it. Vacuum retains prepared revisions on failure because a
+replacement-meta write may already have made them recoverable. For a proven
+unpublished revision, cleanup releases its durable resource ownership. It
+verifies the exact physical identity before deletion and restores
 the prior compatibility view only when the view still names the abandoned
 revision. A later view wins. Any ambiguous restore or cleanup poisons the live
 handle rather than guessing.
@@ -1627,6 +1633,17 @@ strict stable operation before creating a temporary file. The compatibility
 replacement path returns no stable token; durable-root publication must not
 accept it as certifying the strict namespace durability contract and fails
 closed when that namespace obligation is required.
+
+When vacuum appends system leaves, stable-manifest mode prepares one expanded
+immutable revision before writing replacement metas and replaces inherited
+manifest tokens in both replacement closures. Each closure independently binds
+its physical leaf resources; an older exact revision cannot stand in for newly
+appended files. This applies even when appends use an already-known file.
+
+Compatibility-mode vacuum is allowed only when neither replacement closure
+inherits an exact outer-leaf-manifest token. It persists the expanded
+compatibility view before replacement metas and retains the physical leaf
+resources without claiming an exact manifest token.
 
 ### 7.3 Typed Asset Manager, TCPA Typed-Row Assets, and Typed-Column Parts
 

@@ -362,7 +362,9 @@ for any measured reclaimable index debt. Apply re-probes immediately before the
 phase, invokes the RecoverableRootSet-fenced online replacement on supported
 writable platforms, and checkpoints only after a successful replacement.
 One bounded settle replacement runs when later GC/checkpoint phases create new
-policy debt; completion is based on the audit after that settle pass.
+policy debt. After a successful replacement, leaf pack/GC settles any debt from
+rewritten system leaves within the same run-wide `LeafPackMaxPasses` budget;
+completion is based on the subsequent audit.
 Transient stale/mutation races are `deferred`, Windows is `unsupported`, and
 permanent errors fail compaction. Deferred or unsupported required work keeps
 all completion flags false. `PolicyFullyCompacted` means selected planner debt

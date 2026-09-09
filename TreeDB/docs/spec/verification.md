@@ -27,6 +27,11 @@ build across a second empty fold and checks the late keeper is also released.
 neither waits for nor removes a newer building entry, while broad invalidation
 still waits for installation and closes the replacement.
 
+`TestColumnAssetLifecycleIdentityUsesImmutableCatalog` verifies that pin and
+registry admission and snapshots use one immutable catalog identity rather than
+mutable handle metadata. Concurrent typed upsert and Dense reads after vacuum
+are covered by `TestServiceTypedFreshUpsertConcurrentDenseAfterColumnGraphBuildAndVacuum`.
+
 `TestColumnAssetLifecycleSharedCopyBudgetCountsRecords` checks the common
 pre-copy budget across input refs, pin records, and registry records, including
 exact fit and exhausted-budget rejection. `TestTypedGraphPublicFinalWarmBarrierCancellation`
@@ -602,6 +607,8 @@ Coverage:
 
 Invariant:
 - Index rewrite/vacuum paths preserve data and handle pinned snapshots safely.
+- Online/offline vacuum preserves configured system-leaf placement and binds
+  appended leaf resources and their manifest authority in each replacement slot.
 - Full storage compaction preserves value visibility, removes reachable debt only
   through the documented lifecycle, serializes backend maintenance phases, and
   keeps cached-mode value-log writers from reusing backend-created segments.
@@ -610,6 +617,8 @@ Coverage:
 - `TreeDB/db/compact_index_test.go`
 - `TreeDB/db/compact_index_sequential_alloc_test.go`
 - `TreeDB/db/vacuum_online_swap_test.go`
+- `TreeDB/db/vacuum_system_leaf_policy_test.go`: system catalog warm writes,
+  exact manifest membership, and offline swap recovery.
 - `TreeDB/db/compact_storage_test.go`
   - `TestCompactStorageHoldsMaintenanceLockAcrossPhases`
 - `TreeDB/db/compact_storage_audit_test.go`
