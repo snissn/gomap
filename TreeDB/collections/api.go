@@ -722,8 +722,9 @@ type CollectionInsertStats struct {
 	ColumnPublishFinalizeCandidateCOWPrepare       time.Duration
 	ColumnPublishFinalizeCandidateOther            time.Duration
 	ColumnPublishFinalizeCandidateResourceWork     ColumnPublishCandidateResourceWork
-	// DependencyBytes and HardAdmissionCount are summed; Pending* are maxima.
+	// DependencyBytes, OwnedBytes and HardAdmissionCount sum accepted publications; Pending* are maxima.
 	ColumnPublishFinalizeCandidateDependencyBytes uint64
+	ColumnPublishFinalizeCandidateOwnedBytes      uint64
 	ColumnPublishFinalizeAdmissionPendingBytes    uint64
 	ColumnPublishFinalizeAdmissionPendingCommits  uint64
 	ColumnPublishFinalizeHardAdmissionCount       uint64

@@ -235,9 +235,10 @@ type CommandWALPublishTiming struct {
 	FinalizeCandidateCOWPrepare       time.Duration
 	FinalizeCandidateOther            time.Duration
 	FinalizeCandidateResourceWork     rootpublication.StableResourceClosureWork
-	// DependencyBytes and HardAdmissionCount are summed across publications.
+	// DependencyBytes, OwnedBytes and HardAdmissionCount are summed across accepted publications.
 	// AdmissionPending* retain the largest admission-time snapshot.
 	FinalizeCandidateDependencyBytes uint64
+	FinalizeCandidateOwnedBytes      uint64
 	FinalizeAdmissionPendingBytes    uint64
 	FinalizeAdmissionPendingCommits  uint64
 	FinalizeHardAdmissionCount       uint64
@@ -288,6 +289,7 @@ func (timing *CommandWALPublishTiming) Add(other CommandWALPublishTiming) {
 	timing.FinalizeCandidateOther += other.FinalizeCandidateOther
 	timing.FinalizeCandidateResourceWork.Add(other.FinalizeCandidateResourceWork)
 	timing.FinalizeCandidateDependencyBytes += other.FinalizeCandidateDependencyBytes
+	timing.FinalizeCandidateOwnedBytes += other.FinalizeCandidateOwnedBytes
 	timing.FinalizeAdmissionPendingBytes = max(timing.FinalizeAdmissionPendingBytes, other.FinalizeAdmissionPendingBytes)
 	timing.FinalizeAdmissionPendingCommits = max(timing.FinalizeAdmissionPendingCommits, other.FinalizeAdmissionPendingCommits)
 	timing.FinalizeHardAdmissionCount += other.FinalizeHardAdmissionCount

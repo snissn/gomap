@@ -738,9 +738,6 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	if forced := db.testRootPublicationDependencyBytes.Load(); forced != 0 {
 		dependencyBytes = forced
 	}
-	if opts.publishTiming != nil {
-		candidateTiming.FinalizeCandidateDependencyBytes = dependencyBytes
-	}
 	candidate, err := runtime.prepareVisibleCandidate(
 		next, retired, resources, install,
 		dependencyBytes, 0, &candidateTiming,
@@ -796,6 +793,8 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	}
 	candidateOwned = false
 	if opts.publishTiming != nil {
+		opts.publishTiming.FinalizeCandidateDependencyBytes += candidate.DependencyBytes()
+		opts.publishTiming.FinalizeCandidateOwnedBytes += candidate.OwnedBytes()
 		pendingBytes, pendingCommits, hard := receipt.AdmissionSnapshot()
 		opts.publishTiming.FinalizeAdmissionPendingBytes = max(opts.publishTiming.FinalizeAdmissionPendingBytes, pendingBytes)
 		opts.publishTiming.FinalizeAdmissionPendingCommits = max(opts.publishTiming.FinalizeAdmissionPendingCommits, pendingCommits)
