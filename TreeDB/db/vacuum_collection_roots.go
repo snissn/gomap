@@ -728,7 +728,15 @@ func vacuumCollectLeafRefChildrenIfComplete(p *pager.Pager, rootID uint64) ([]va
 	return out, true, nil
 }
 
-func vacuumBuildSystemRoot(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64, alloc vacuumAllocator, newPager *pager.Pager, opts bulk.BuildOptions, replacements []vacuumCollectionRootReplacement) (uint64, error) {
+func (db *DB) vacuumBuildSystemRoot(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64, alloc vacuumAllocator, newPager *pager.Pager, opts bulk.BuildOptions, replacements []vacuumCollectionRootReplacement) (uint64, bool, error) {
+	appendOuterLeaves := db != nil && db.indexOuterLeavesInValueLog
+	opts.LeafPageLog = nil
+	if appendOuterLeaves {
+		if db.leafPageLog == nil {
+			return 0, false, errors.New("vacuum: leaf page log not configured")
+		}
+		opts.LeafPageLog = db.leafPageLog
+	}
 	sysIter := tree.New(oldPager, reader, systemRootID).IteratorWithOptions(nil, nil, tree.IteratorOptions{
 		Mode: tree.IteratorModePointerProjection,
 	})
@@ -740,7 +748,20 @@ func vacuumBuildSystemRoot(oldPager *pager.Pager, reader tree.SlabReader, system
 	}
 	sysRoot, err := bulk.BuildWithOptions(sysIter, alloc, newPager, opts)
 	_ = sysIter.Close()
-	return sysRoot, err
+	if err != nil || !appendOuterLeaves {
+		return sysRoot, false, err
+	}
+	if err := db.leafPageLog.Flush(); err != nil {
+		return 0, false, err
+	}
+	registered, err := db.registerLeafPageLogSegmentsForPublish()
+	if err != nil {
+		return 0, false, err
+	}
+	if !registered {
+		return 0, false, errors.New("vacuum: leaf page log segment registration unavailable")
+	}
+	return sysRoot, true, nil
 }
 
 type vacuumSystemRootRewriteIterator struct {

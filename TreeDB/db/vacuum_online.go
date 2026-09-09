@@ -633,6 +633,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 	db.idxMu.Unlock()
 	newZ.SetParallelMergePressureSource(parallelMergePressureSource)
 
+	var systemLeavesAppended bool
 	var olderReplacement *rebuiltDurableRootV1
 	var olderReplacementSource rootpublication.DurableRootRecordV1
 	if recoverableRoots != nil {
@@ -649,6 +650,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		recordingAlloc := newVacuumRecordingAllocator(newAlloc)
 		rebuildStarted := time.Now()
 		rebuilt, resourceWork, rebuildErr := db.rebuildRecoverableRootV1(ctx, recoverableRoots, olderRoot, newPager, recordingAlloc)
+		systemLeavesAppended = systemLeavesAppended || resourceWork.SystemLeavesAppended
 		runStats.OlderRootRebuildDuration += time.Since(rebuildStarted)
 		runStats.OlderRootRebuilds++
 		runStats.OlderRootDurableResourceCaptureDuration += resourceWork.CaptureDuration
@@ -1050,6 +1052,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 					recordingAlloc := newVacuumRecordingAllocator(newAlloc)
 					rebuildStarted := time.Now()
 					rebuilt, resourceWork, rebuildErr := db.rebuildRecoverableRootV1(ctx, recoverableRoots, olderRoot, newPager, recordingAlloc)
+					systemLeavesAppended = systemLeavesAppended || resourceWork.SystemLeavesAppended
 					runStats.OlderRootRebuildDuration += time.Since(rebuildStarted)
 					runStats.OlderRootRebuilds++
 					runStats.OlderRootDurableResourceCaptureDuration += resourceWork.CaptureDuration
@@ -1138,12 +1141,13 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		}
 
 		var newSysRoot uint64
+		var systemLeafAppended bool
 		effectiveInternalBaseDelta := db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog
 		systemTreeStarted := time.Now()
 		if db.indexOuterLeavesInValueLog && len(collectionRootReplacements) == 0 {
 			newSysRoot, err = vacuumClonePagerTreeWithLeafRefs(basis.snapshot.idx.pager, basis.token.systemRootPageID, systemAlloc, newPager, effectiveInternalBaseDelta)
 		} else {
-			newSysRoot, err = vacuumBuildSystemRoot(basis.snapshot.idx.pager, &basis.snapshot.reader, basis.token.systemRootPageID, systemAlloc, newPager, bulk.BuildOptions{
+			newSysRoot, systemLeafAppended, err = db.vacuumBuildSystemRoot(basis.snapshot.idx.pager, &basis.snapshot.reader, basis.token.systemRootPageID, systemAlloc, newPager, bulk.BuildOptions{
 				LeafPrefixCompression: db.leafPrefixCompression,
 				LeafColumnar:          db.indexColumnarLeaves,
 				PackedValuePtr:        db.indexPackedValuePtr,
@@ -1155,6 +1159,9 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			cleanupNewPager()
 			return err
 		}
+		// Newly appended system leaves are outside the source resource closure.
+		rebuiltExternalClosureChanged = rebuiltExternalClosureChanged || systemLeafAppended
+		systemLeavesAppended = systemLeavesAppended || systemLeafAppended
 		if err := systemAlloc.ReleaseUnused(); err != nil {
 			unlockCutover(false)
 			cleanupNewPager()
@@ -1196,7 +1203,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 				cleanupNewPager()
 				return err
 			}
-			if changed {
+			if changed || systemLeavesAppended {
 				stagedLeafGenerationView = newLeafGenerationView(stagedLeafManifest)
 				leafGenerationChanged = true
 			}
@@ -1288,6 +1295,30 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		recordWriterHold()
 		cutoverLocked = false
 		db.writeMu.Unlock()
+		if leafGenerationChanged {
+			var olderResources *rootpublication.StableResourceSet
+			if olderReplacement != nil {
+				olderResources = olderReplacement.resources
+			}
+			persistedManifest, preparedCurrent, preparedOlder, prepareErr := db.prepareDurableRootManifestResourcesV1(
+				stagedLeafGenerationView.sourceManifest, durableResources, olderResources,
+			)
+			if prepareErr != nil {
+				db.writeMu.Lock()
+				cutoverLocked = true
+				holdStarted = time.Now()
+				holdActive = true
+				unlockCutover(false)
+				cleanupNewPager()
+				return prepareErr
+			}
+			durableResources = preparedCurrent
+			pendingDiagnosticResources = durableResources
+			if olderReplacement != nil {
+				olderReplacement.resources = preparedOlder
+			}
+			stagedLeafGenerationView = newLeafGenerationView(persistedManifest)
+		}
 		if hook := db.vacuumPagerSyncHook; hook != nil {
 			hook(vacuumPagerSyncFinal)
 		}
@@ -1473,6 +1504,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		leafGenerationView := oldState.LeafGenerations
 		if leafGenerationChanged {
 			leafGenerationView = stagedLeafGenerationView
+			db.leafGenerationManifest = stagedLeafGenerationView.sourceManifest
 		}
 		newState := &DBState{
 			CommitSeq:                  nextMeta.CommitSeq,
@@ -1564,6 +1596,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 }
 
 type rebuiltRecoverableRootWorkV1 struct {
+	SystemLeavesAppended          bool
 	CaptureDuration               time.Duration
 	Descriptors                   uint64
 	Bytes                         uint64
@@ -1630,10 +1663,11 @@ func (db *DB) rebuildRecoverableRootV1(ctx context.Context, roots *RecoverableRo
 		return rebuiltDurableRootV1{}, work, err
 	}
 	var systemRoot uint64
+	var systemLeafAppended bool
 	if db.indexOuterLeavesInValueLog && len(replacements) == 0 {
 		systemRoot, err = vacuumClonePagerTreeWithLeafRefs(snapshot.idx.pager, root.SystemRootPageID, alloc, newPager, effectiveInternalBaseDelta)
 	} else {
-		systemRoot, err = vacuumBuildSystemRoot(snapshot.idx.pager, &snapshot.reader, root.SystemRootPageID, alloc, newPager, bulk.BuildOptions{
+		systemRoot, systemLeafAppended, err = db.vacuumBuildSystemRoot(snapshot.idx.pager, &snapshot.reader, root.SystemRootPageID, alloc, newPager, bulk.BuildOptions{
 			LeafPrefixCompression: db.leafPrefixCompression,
 			LeafColumnar:          db.indexColumnarLeaves,
 			PackedValuePtr:        db.indexPackedValuePtr,
@@ -1652,9 +1686,14 @@ func (db *DB) rebuildRecoverableRootV1(ctx context.Context, roots *RecoverableRo
 	if err := ctx.Err(); err != nil {
 		return rebuiltDurableRootV1{}, work, err
 	}
+	work.SystemLeavesAppended = systemLeafAppended
 	sourceResources, sourceIndexID, sourceIndexIdentity, sourceExact := roots.resourcesForRootExact(root)
+	projectionBlockedReason := ""
+	if systemLeafAppended {
+		projectionBlockedReason = rebuiltDurableResourceFallbackOuterLeafDelta
+	}
 	resources, resourceWork, err := db.captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
-		sourceResources, sourceExact, "", snapshot.idx, sourceIndexID, sourceIndexIdentity, newPager, meta,
+		sourceResources, sourceExact, projectionBlockedReason, snapshot.idx, sourceIndexID, sourceIndexIdentity, newPager, meta,
 	)
 	if err == nil {
 		err = ctx.Err()

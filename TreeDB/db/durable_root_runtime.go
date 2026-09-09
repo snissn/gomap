@@ -37,6 +37,104 @@ var (
 
 const maxDurableRootPreMetaRetriesV1 = 64
 
+func replaceDurableRootManifestResourcesV1(base, manifest *rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, error) {
+	withoutManifest, err := rootpublication.CloneStableResourceSetExcludingKinds(base, rootpublication.ResourceOuterLeafManifest)
+	if err != nil {
+		return nil, err
+	}
+	manifestClone, err := rootpublication.CloneStableResourceSetExcludingKinds(manifest)
+	if err != nil {
+		withoutManifest.Release()
+		return nil, err
+	}
+	builder := rootpublication.NewStableResourceSetBuilder()
+	if err := builder.Merge(withoutManifest); err != nil {
+		withoutManifest.Release()
+		manifestClone.Release()
+		builder.Abandon()
+		return nil, err
+	}
+	if err := builder.Merge(manifestClone); err != nil {
+		manifestClone.Release()
+		builder.Abandon()
+		return nil, err
+	}
+	replaced, err := builder.Freeze()
+	if err != nil {
+		builder.Abandon()
+		return nil, err
+	}
+	return replaced, nil
+}
+
+func replaceDurableRootPairManifestResourcesV1(current, older, manifest *rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, *rootpublication.StableResourceSet, error) {
+	replacedCurrent, err := replaceDurableRootManifestResourcesV1(current, manifest)
+	if err != nil {
+		return nil, nil, err
+	}
+	if older == nil {
+		return replacedCurrent, nil, nil
+	}
+	replacedOlder, err := replaceDurableRootManifestResourcesV1(older, manifest)
+	if err != nil {
+		replacedCurrent.Release()
+		return nil, nil, err
+	}
+	return replacedCurrent, replacedOlder, nil
+}
+
+func stableResourceSetHasKindV1(resources *rootpublication.StableResourceSet, kind rootpublication.ResourceKind) bool {
+	if resources == nil {
+		return false
+	}
+	for _, descriptor := range resources.Descriptors() {
+		if descriptor.Kind() == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func (db *DB) prepareDurableRootManifestResourcesV1(candidate *leafGenerationManifest, current, older *rootpublication.StableResourceSet) (*leafGenerationManifest, *rootpublication.StableResourceSet, *rootpublication.StableResourceSet, error) {
+	if db == nil || candidate == nil || db.leafGenerationManifestStore == nil {
+		return nil, nil, nil, fmt.Errorf("%w: DB has no outer-leaf generation manifest producer", rootpublication.ErrUnresolvedResource)
+	}
+	if db.leafGenerationManifestStore.mode == leafGenerationManifestCompatibility {
+		if stableResourceSetHasKindV1(current, rootpublication.ResourceOuterLeafManifest) || stableResourceSetHasKindV1(older, rootpublication.ResourceOuterLeafManifest) {
+			return nil, nil, nil, fmt.Errorf("%w: compatibility manifest cannot replace exact durable-root authority", rootpublication.ErrResourceConflict)
+		}
+		persisted := candidate.clone()
+		if err := db.persistLeafGenerationManifestAndRecordLengthIndexes(persisted, nil); err != nil {
+			return nil, nil, nil, err
+		}
+		return persisted, current, older, nil
+	}
+	if db.leafGenerationManifestStore.mode != leafGenerationManifestStable {
+		return nil, nil, nil, fmt.Errorf("%w: unsupported leaf-generation manifest replacement mode", rootpublication.ErrNamespacePersistenceUnsupported)
+	}
+	closure, persisted, err := db.prepareLeafGenerationManifestStableCandidate(candidate)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	// Retain the immutable revision on failure: recovery may select a root whose
+	// exact resource closure names it after the durable-meta write begins.
+	defer closure.Release()
+	manifestResources, err := closure.TakeStableResources()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	replacedCurrent, replacedOlder, err := replaceDurableRootPairManifestResourcesV1(current, older, manifestResources)
+	manifestResources.Release()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	current.Release()
+	if older != nil {
+		older.Release()
+	}
+	return persisted, replacedCurrent, replacedOlder, nil
+}
+
 func (sink durablePagerSinkV1) WritePage(pageID uint64, image []byte) error {
 	if sink.pager == nil {
 		return errors.New("missing durable pager")

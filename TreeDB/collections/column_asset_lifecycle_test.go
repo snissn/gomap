@@ -216,6 +216,47 @@ func TestColumnAssetLifecycleProcessRegistriesFeedReport1954(t *testing.T) {
 	}
 }
 
+func TestColumnAssetLifecycleIdentityUsesImmutableCatalog(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnAssetLifecycleTestCollection1954(t, d)
+	ref := writeColumnAssetReachabilityCandidateM15A(t, d, col, 2, 99)
+
+	stale := *col.meta.copy()
+	stale.Name = "stale-events"
+	stale.Options.ColumnStore.AssetManager.Namespace = "stale/column-assets"
+	col.meta = stale
+
+	pin, err := col.AcquireColumnAssetLifecyclePinSet(ColumnAssetLifecyclePinSetOptions{
+		Source: ColumnAssetLifecyclePinSourcePreparedQuery,
+		Owner:  "identity-test",
+		Refs:   []ColumnAssetRef{ref},
+	})
+	if err != nil {
+		t.Fatalf("AcquireColumnAssetLifecyclePinSet: %v", err)
+	}
+	defer func() { _ = pin.Close() }()
+	lease, err := col.RegisterColumnAssetPendingPublish(ColumnAssetPendingPublishRegistrationOptions{
+		Owner:  "identity-test",
+		Source: "identity-test",
+		Refs:   []ColumnAssetRef{ref},
+	})
+	if err != nil {
+		t.Fatalf("RegisterColumnAssetPendingPublish: %v", err)
+	}
+	defer func() { _ = lease.Close() }()
+
+	pins := col.columnAssetLifecyclePinSetSnapshot()
+	registrations := col.columnAssetLifecycleRegistrySnapshot()
+	if len(pins) != 1 || pins[0].Collection != "events" || pins[0].Namespace != "events/column-assets" {
+		t.Fatalf("pin identity=%+v", pins)
+	}
+	if len(registrations) != 1 || registrations[0].Collection != "events" || registrations[0].Namespace != "events/column-assets" {
+		t.Fatalf("registry identity=%+v", registrations)
+	}
+}
+
 func TestColumnAssetLifecycleRegistryReleaseAndDBCloseCleanup1954(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)

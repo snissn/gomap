@@ -173,8 +173,8 @@ func (c *Collection) acquireColumnAssetLifecyclePinSetOwned(opts ColumnAssetLife
 	refs := opts.Refs
 	// One immutable owned slice is shared by the lease and registry. Caller
 	// input, Refs(), and report snapshots remain defensive-copy boundaries.
-	collectionNamespace := columnAssetLifecycleNamespace(c)
-	if collectionNamespace == "" {
+	scope := c.columnAssetLifecycleScope()
+	if scope.namespace == "" {
 		return nil, errors.New("collections: column asset lifecycle pin set requires collection asset namespace")
 	}
 	var bytes int64
@@ -182,12 +182,11 @@ func (c *Collection) acquireColumnAssetLifecyclePinSetOwned(opts ColumnAssetLife
 		if err := validateColumnAssetRefForPlan(ref); err != nil {
 			return nil, fmt.Errorf("collections: column asset lifecycle pin set ref: %w", err)
 		}
-		if collectionNamespace != "" && ref.Namespace != "" && ref.Namespace != collectionNamespace {
-			return nil, fmt.Errorf("collections: column asset lifecycle pin set ref namespace %q does not match collection namespace %q", ref.Namespace, collectionNamespace)
+		if ref.Namespace != "" && ref.Namespace != scope.namespace {
+			return nil, fmt.Errorf("collections: column asset lifecycle pin set ref namespace %q does not match collection namespace %q", ref.Namespace, scope.namespace)
 		}
 		bytes = addColumnAssetReachabilityBytes(bytes, positiveColumnAssetReachabilityLength(ref.Length))
 	}
-	scope := columnAssetLifecyclePinScope{collection: c.meta.Name, namespace: collectionNamespace}
 	record := columnAssetLifecyclePinSetRecord{
 		Scope:      scope,
 		Collection: scope.collection,
@@ -553,13 +552,21 @@ type columnAssetLifecycleReachabilityRefSets struct {
 	pinned             []ColumnAssetRef
 }
 
-func columnAssetLifecycleNamespace(c *Collection) string {
-	if c != nil {
-		if cfg := c.meta.Options.ColumnStore; cfg != nil && cfg.AssetManager != nil && cfg.AssetManager.Namespace != "" {
-			return cfg.AssetManager.Namespace
-		}
+func (c *Collection) columnAssetLifecycleScope() columnAssetLifecyclePinScope {
+	if c == nil {
+		return columnAssetLifecyclePinScope{}
 	}
-	return ""
+	c.catalogMu.RLock()
+	defer c.catalogMu.RUnlock()
+	if c.catalog == nil {
+		return columnAssetLifecyclePinScope{}
+	}
+	meta := &c.catalog.meta
+	scope := columnAssetLifecyclePinScope{collection: meta.Name}
+	if cfg := meta.Options.ColumnStore; cfg != nil && cfg.AssetManager != nil {
+		scope.namespace = cfg.AssetManager.Namespace
+	}
+	return scope
 }
 
 func (c *Collection) columnAssetLifecycleAugmentReachabilityOptions(opts ColumnAssetReachabilityOptions) (ColumnAssetReachabilityOptions, error) {
@@ -707,7 +714,8 @@ func (c *Collection) columnAssetLifecyclePinSetSnapshotWithBudget(remaining *int
 	if dbID == 0 {
 		return nil, nil
 	}
-	scope := columnAssetLifecyclePinScope{dbID: dbID, collection: c.meta.Name, namespace: columnAssetLifecycleNamespace(c)}
+	scope := c.columnAssetLifecycleScope()
+	scope.dbID = dbID
 	columnAssetLifecycleProcessPins.Lock()
 	defer columnAssetLifecycleProcessPins.Unlock()
 	if len(columnAssetLifecycleProcessPins.pins) == 0 {
