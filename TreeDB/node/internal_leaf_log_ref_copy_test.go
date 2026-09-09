@@ -2,6 +2,7 @@ package node
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -62,8 +63,30 @@ func TestBuilderAddInternalLeafLogChildFromNodeRejectsWrongSource(t *testing.T) 
 
 	dstBuilder := NewBuilder(make([]byte, page.PageSize), page.PageTypeInternal)
 	err := dstBuilder.AddInternalLeafLogChildFromNode(src, 0)
-	if err != ErrInvalidType {
+	if !errors.Is(err, ErrInvalidType) {
 		t.Fatalf("error=%v want %v", err, ErrInvalidType)
+	}
+	for _, want := range []string{"copy internal leaf-log child", "source does not contain internal leaf-log refs", "builder_page_id=0", "builder_type=3", "builder_count=0", "builder_leaf_log_refs=false", "builder_base_delta=false", "incoming_kind=1"} {
+		if !bytes.Contains([]byte(err.Error()), []byte(want)) {
+			t.Fatalf("error=%q missing %q", err, want)
+		}
+	}
+}
+
+func TestBuilderInternalChildTypeErrorDescribesMixedKinds(t *testing.T) {
+	b := NewBuilder(make([]byte, page.PageSize), page.PageTypeInternal)
+	b.SetPageID(42)
+	if err := b.AddInternalChild(nil, 7); err != nil {
+		t.Fatal(err)
+	}
+	err := b.AddInternalChildRef([]byte("next"), page.LeafLogChildRef(page.LogRecordRef{FileID: 1, Offset: 8}))
+	if !errors.Is(err, ErrInvalidType) {
+		t.Fatalf("error=%v want wrapped %v", err, ErrInvalidType)
+	}
+	for _, want := range []string{"add internal leaf-log child", "leaf-log child conflicts with existing page children", "builder_page_id=42", "builder_type=3", "builder_count=1", "builder_leaf_log_refs=false", "builder_base_delta=false", "incoming_kind=1"} {
+		if !bytes.Contains([]byte(err.Error()), []byte(want)) {
+			t.Fatalf("error=%q missing %q", err, want)
+		}
 	}
 }
 
