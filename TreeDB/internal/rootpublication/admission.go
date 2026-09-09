@@ -20,6 +20,8 @@ type BuilderHandoffReceipt struct {
 	coordinator       *Coordinator
 	sequence          uint64
 	failureGeneration uint64
+	pendingBytes      uint64
+	pendingCommits    uint64
 	hard              bool
 }
 
@@ -123,15 +125,26 @@ func (c *Coordinator) EnqueueBuilt(candidate *PreparedRootCandidate, token *Buil
 	lease.refs = 0
 	lease.released = true
 	c.activeBuilders--
+	receipt := &BuilderHandoffReceipt{
+		coordinator: c, sequence: decision.sequence,
+		failureGeneration: decision.failureGeneration,
+		pendingBytes:      c.pendingBytes, pendingCommits: uint64(len(c.pending)), hard: decision.hard,
+	}
 	c.notifyLocked()
 	c.mu.Unlock()
 	lease.mu.Unlock()
 	handle.mu.Unlock()
 	c.signal()
-	return &BuilderHandoffReceipt{
-		coordinator: c, sequence: decision.sequence,
-		failureGeneration: decision.failureGeneration, hard: decision.hard,
-	}, nil
+	return receipt, nil
+}
+
+// AdmissionSnapshot returns the immutable pending debt captured when the
+// coordinator accepted this handoff.
+func (receipt *BuilderHandoffReceipt) AdmissionSnapshot() (pendingBytes, pendingCommits uint64, hard bool) {
+	if receipt == nil {
+		return 0, 0, false
+	}
+	return receipt.pendingBytes, receipt.pendingCommits, receipt.hard
 }
 
 // WaitForAdmission completes the optional hard-admission wait associated with

@@ -180,12 +180,19 @@ func TestEnqueueBuiltAppendsBeforeFinalLeaseReleaseAndHardAdmissionWait(t *testi
 	if err != nil {
 		t.Fatalf("atomic hard-admission handoff: %v", err)
 	}
+	wantBytes := SoftPendingBytes + HardPendingBytes
+	if bytes, commits, hard := receipt.AdmissionSnapshot(); bytes != wantBytes || commits != 2 || !hard {
+		t.Fatalf("admission snapshot=(%d,%d,%t), want (%d,2,true)", bytes, commits, hard, wantBytes)
+	}
 	if err := coordinator.WaitForAdmission(context.Background(), receipt); err != nil {
 		t.Fatalf("hard-admission wait: %v", err)
 	}
 	published := waitForCall(t, calls)
 	if published.Frontier().CommitSeq() != 2 || coordinator.Stats().LastGroupSize != 2 {
 		t.Fatalf("publisher captured before built candidate: frontier=%d stats=%+v", published.Frontier().CommitSeq(), coordinator.Stats())
+	}
+	if bytes, commits, hard := receipt.AdmissionSnapshot(); bytes != wantBytes || commits != 2 || !hard {
+		t.Fatalf("publication changed admission snapshot=(%d,%d,%t)", bytes, commits, hard)
 	}
 	if coordinator.Stats().ActiveBuilders != 0 {
 		t.Fatalf("hard wait retained final lease: %+v", coordinator.Stats())

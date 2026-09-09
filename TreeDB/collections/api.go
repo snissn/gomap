@@ -722,16 +722,21 @@ type CollectionInsertStats struct {
 	ColumnPublishFinalizeCandidateCOWPrepare       time.Duration
 	ColumnPublishFinalizeCandidateOther            time.Duration
 	ColumnPublishFinalizeCandidateResourceWork     ColumnPublishCandidateResourceWork
-	ColumnPublishFinalizeEnqueueActivation         time.Duration
-	ColumnPublishFinalizeAdmissionWait             time.Duration
-	ColumnPublishFinalizeDurabilityWait            time.Duration
-	ColumnPublishPostFinalize                      time.Duration
-	ColumnPublishDocumentExtraction                time.Duration
-	ColumnPublishValidatedFloat32ProjectionRows    int
-	ColumnPublishDeclaredColumnEncoding            time.Duration
-	ColumnPublishAssetPreparation                  time.Duration
-	ColumnPublishRowAssetPreparation               time.Duration
-	ColumnPublishTypedColumnPreparation            time.Duration
+	// DependencyBytes and HardAdmissionCount are summed; Pending* are maxima.
+	ColumnPublishFinalizeCandidateDependencyBytes uint64
+	ColumnPublishFinalizeAdmissionPendingBytes    uint64
+	ColumnPublishFinalizeAdmissionPendingCommits  uint64
+	ColumnPublishFinalizeHardAdmissionCount       uint64
+	ColumnPublishFinalizeEnqueueActivation        time.Duration
+	ColumnPublishFinalizeAdmissionWait            time.Duration
+	ColumnPublishFinalizeDurabilityWait           time.Duration
+	ColumnPublishPostFinalize                     time.Duration
+	ColumnPublishDocumentExtraction               time.Duration
+	ColumnPublishValidatedFloat32ProjectionRows   int
+	ColumnPublishDeclaredColumnEncoding           time.Duration
+	ColumnPublishAssetPreparation                 time.Duration
+	ColumnPublishRowAssetPreparation              time.Duration
+	ColumnPublishTypedColumnPreparation           time.Duration
 
 	ColumnPublishTypedColumnDictionaryBuild    time.Duration
 	ColumnPublishTypedColumnRowMaterialization time.Duration
