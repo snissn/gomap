@@ -1083,10 +1083,8 @@ func (runtime *rootPublicationRuntimeV1) materializeSeal(seal *rootPublicationSe
 	if generation == nil {
 		return errors.New("missing root-publication seal generation")
 	}
-	if seal.idx.pager.PageCount() < generation.HighWater() {
-		if err := seal.idx.pager.Truncate(generation.HighWater()); err != nil {
-			return fmt.Errorf("grow root-publication index: %w", err)
-		}
+	if err := seal.idx.pager.GrowTo(generation.HighWater()); err != nil {
+		return fmt.Errorf("grow root-publication index: %w", err)
 	}
 	if err := seal.idx.allocator.ValidateCOWPhysicalTailV1(generation.HighWater()); err != nil {
 		return fmt.Errorf("validate root-publication physical tail: %w", err)
