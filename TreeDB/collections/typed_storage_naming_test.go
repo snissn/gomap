@@ -361,6 +361,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_asset_replay_floor_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 11, occurrences: 11},
 	{path: "TreeDB/collections/typed_graph_work_epoch_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/column_asset_lifecycle.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/column_asset_lifecycle_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/column_asset_manager.go", classification: typedStorageLegacyCompatibility, matchingLines: 31, occurrences: 52},
 	{path: "TreeDB/collections/column_asset_mappedresource_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 12, occurrences: 12},
 	{path: "TreeDB/collections/column_asset_persistent_orphan_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 12, occurrences: 13},

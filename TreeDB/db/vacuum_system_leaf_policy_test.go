@@ -61,9 +61,14 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 				d.SetLeafPageLog(log)
 			}
 			openDB()
-			_, rootIDs, err := d.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
-				Iter: mustFrozenSystemMemtable(t, vacuumTestDocumentKey, vacuumTestDocumentValue).NewIterator(nil, nil), StoragePolicy: OrderedRootStoragePagerLeaves,
-			}}, func(ids []uint64) (iterator.UnsafeIterator, error) {
+			// Publish the small target before a multi-page collection whose catalog
+			// key sorts first. Vacuum therefore rebuilds the padding collection first
+			// and cannot reuse the target's lower source page for its destination.
+			const paddingCollectionRootKey = "collections/root/aaa-padding/primary"
+			_, rootIDs, err := d.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{
+				{Iter: mustFrozenSystemMemtable(t, vacuumTestDocumentKey, vacuumTestDocumentValue).NewIterator(nil, nil), StoragePolicy: OrderedRootStoragePagerLeaves},
+				{Iter: mustFrozenSystemMemtable(t, systemRangeKVs(1024, nil)...).NewIterator(nil, nil), StoragePolicy: OrderedRootStoragePagerLeaves},
+			}, func(ids []uint64) (iterator.UnsafeIterator, error) {
 				mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
 				if err != nil {
 					return nil, err
@@ -72,8 +77,10 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 				for i := 0; i < len(kvs); i += 2 {
 					mt.Set([]byte(kvs[i]), []byte(kvs[i+1]))
 				}
-				ptr := appendCollectionRootDescriptorPointer(t, opts.Dir, ids[0])
-				mt.SetEntry([]byte(vacuumTestCollectionRootKey), nil, ptr, node.FlagPointer)
+				targetPtr := appendCollectionRootDescriptorPointer(t, opts.Dir, ids[0])
+				paddingPtr := appendCollectionRootDescriptorPointer(t, opts.Dir, ids[1])
+				mt.SetEntry([]byte(vacuumTestCollectionRootKey), nil, targetPtr, node.FlagPointer)
+				mt.SetEntry([]byte(paddingCollectionRootKey), nil, paddingPtr, node.FlagPointer)
 				mt.Freeze()
 				return mt.NewIterator(nil, nil), nil
 			})
@@ -82,7 +89,7 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 			}
 			// Move the collection root beyond the initial system allocation so
 			// vacuum must relocate its descriptor and rebuild the system tree.
-			moveCollection := func(baseRoot uint64) {
+			moveCollection := func(baseRoot uint64, descriptorKey string) uint64 {
 				deltaIter := mustFrozenSystemMemtable(t, "doc/u2", fmt.Sprintf("updated from root %d", baseRoot)).NewIterator(nil, nil)
 				delta, err := OrderedRootDeltaBatchFromIterator(deltaIter)
 				_ = deltaIter.Close()
@@ -93,7 +100,7 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 					BaseRoot: baseRoot, Delta: delta, StoragePolicy: OrderedRootStoragePagerLeaves,
 				}}, func(ids []uint64) (iterator.UnsafeIterator, error) {
 					ptr := appendCollectionRootDescriptorPointer(t, opts.Dir, ids[0])
-					return mustFrozenSystemPointerMemtable(t, vacuumTestCollectionRootKey, ptr).NewIterator(nil, nil), nil
+					return mustFrozenSystemPointerMemtable(t, descriptorKey, ptr).NewIterator(nil, nil), nil
 				})
 				_ = delta.Close()
 				if err != nil {
@@ -102,8 +109,12 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 				if movedRoots[0] == baseRoot {
 					t.Fatal("collection delta did not replace its root")
 				}
+				return movedRoots[0]
 			}
-			moveCollection(rootIDs[0])
+			// Give both recovery slots an application system tree while keeping
+			// the target below the padding tree in the source allocation order.
+			moveCollection(rootIDs[1], paddingCollectionRootKey)
+			seedCollectionRoot := rootIDs[0]
 			if err := d.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
@@ -122,6 +133,15 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 			if err := d.VacuumIndexOnline(context.Background()); err != nil {
 				t.Fatal(err)
 			}
+			seedSnap := d.AcquireSnapshot()
+			seedDescriptor, err := seedSnap.GetAtRoot(seedSnap.state.SystemRootPageID, []byte(vacuumTestCollectionRootKey))
+			_ = seedSnap.Close()
+			if err != nil || len(seedDescriptor) != 8 {
+				t.Fatalf("vacuum seed descriptor=%x err=%v", seedDescriptor, err)
+			}
+			if got := binary.BigEndian.Uint64(seedDescriptor); got == seedCollectionRoot {
+				t.Fatalf("seed vacuum did not relocate collection root %d", got)
+			}
 			for ptr := range collectLeafRefIDsFromRoot(t, d, d.State().SystemRootPageID) {
 				if !seedLeafFiles[ptr.FileID] {
 					t.Fatal("seed vacuum unexpectedly rotated the leaf segment")
@@ -136,7 +156,7 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 			if err != nil || len(descriptor) != 8 {
 				t.Fatalf("seed descriptor=%x err=%v", descriptor, err)
 			}
-			moveCollection(binary.BigEndian.Uint64(descriptor))
+			subjectCollectionRoot := moveCollection(binary.BigEndian.Uint64(descriptor), vacuumTestCollectionRootKey)
 			closeDB()
 			if t.Failed() {
 				return
@@ -213,6 +233,11 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 				return string(descriptor)
 			}
 			descriptorText := verify(false)
+			if mode == "online" || mode == "offline" || mode == string(vacuumFailAfterRenameOld) || mode == string(vacuumFailAfterRenameNew) {
+				if got := binary.BigEndian.Uint64([]byte(descriptorText)); got == subjectCollectionRoot {
+					t.Fatalf("subject vacuum did not relocate collection root %d", got)
+				}
+			}
 			kvs := append(systemRangeKVs(2048, map[int]string{1024: "updated"}), vacuumTestCollectionRootKey, descriptorText)
 			before := d.systemRootPublishStatsSnapshot()
 			if _, err := d.PublishSystemRootIterator(mustFrozenSystemMemtable(t, kvs...).NewIterator(nil, nil)); err != nil {
