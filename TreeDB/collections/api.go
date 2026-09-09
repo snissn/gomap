@@ -5293,6 +5293,13 @@ func (c *Collection) flushBufferedWritesWithRawPublishStateAndCoverage(rawPublis
 			domain.mu.Unlock()
 			continue
 		}
+		if domain.catalog != nil {
+			c.catalogMu.Lock()
+			if c.catalog == nil {
+				c.catalog = domain.catalog
+			}
+			c.catalogMu.Unlock()
+		}
 		if hasBufferedIndexedRootRuns(domain) {
 			domain.observeIndexedFlushForcedDrain()
 		}
@@ -9569,6 +9576,11 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	if err != nil {
 		return nil, err
 	}
+	c.catalogMu.Lock()
+	if c.catalog == nil {
+		c.catalog = catalog
+	}
+	c.catalogMu.Unlock()
 	meta := catalog.meta
 	c.meta = meta
 	pin := c.db.AcquireSnapshot()

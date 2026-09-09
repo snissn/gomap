@@ -11,6 +11,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -728,7 +729,15 @@ func vacuumCollectLeafRefChildrenIfComplete(p *pager.Pager, rootID uint64) ([]va
 	return out, true, nil
 }
 
-func vacuumBuildSystemRoot(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64, alloc vacuumAllocator, newPager *pager.Pager, opts bulk.BuildOptions, replacements []vacuumCollectionRootReplacement) (uint64, error) {
+func (db *DB) vacuumBuildSystemRoot(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64, alloc vacuumAllocator, newPager *pager.Pager, opts bulk.BuildOptions, replacements []vacuumCollectionRootReplacement) (uint64, bool, error) {
+	appendOuterLeaves := db != nil && db.indexOuterLeavesInValueLog
+	opts.LeafPageLog = nil
+	if appendOuterLeaves {
+		if db.leafPageLog == nil {
+			return 0, false, errors.New("vacuum: leaf page log not configured")
+		}
+		opts.LeafPageLog = db.leafPageLog
+	}
 	sysIter := tree.New(oldPager, reader, systemRootID).IteratorWithOptions(nil, nil, tree.IteratorOptions{
 		Mode: tree.IteratorModePointerProjection,
 	})
@@ -740,7 +749,37 @@ func vacuumBuildSystemRoot(oldPager *pager.Pager, reader tree.SlabReader, system
 	}
 	sysRoot, err := bulk.BuildWithOptions(sysIter, alloc, newPager, opts)
 	_ = sysIter.Close()
-	return sysRoot, err
+	if err != nil || !appendOuterLeaves {
+		return sysRoot, false, err
+	}
+	if err := db.leafPageLog.Flush(); err != nil {
+		return 0, false, err
+	}
+	registered, err := db.registerLeafPageLogSegmentsForPublish()
+	if err != nil {
+		return 0, false, err
+	}
+	if !registered {
+		if err := db.valueLogManager.Refresh(); err != nil {
+			return 0, false, err
+		}
+		// Segment reporting is optional. Recover the exact appended leaf IDs
+		// from the rebuilt tree so manifest staging includes them too.
+		references := make(map[uint32]struct{})
+		if err := leafrefscan.WalkRoots(context.Background(), []uint64{sysRoot}, newPager.Get, nil, func(ptr page.LeafLogPtr) error {
+			references[ptr.ValueLogFileID()] = struct{}{}
+			return nil
+		}); err != nil {
+			return 0, false, err
+		}
+		if err := db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {
+			return 0, false, err
+		}
+		for fileID := range references {
+			db.queueLeafGenerationWritableFileID(fileID)
+		}
+	}
+	return sysRoot, true, nil
 }
 
 type vacuumSystemRootRewriteIterator struct {

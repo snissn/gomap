@@ -32,6 +32,9 @@ or snapshot gate defers vacuum without cancelling accepted writes. These gates
 are not held during the copy phase. Collections without typed publication keep
 their existing schema-backfill retry after pager replacement. Stale logical
 authority remains a snapshot mismatch rather than being repaired by relocation.
+Concurrent root publication may grow the live pager during vacuum; materializing
+a prepared root therefore ensures its high-water mark without shrinking a
+newer allocation, then validates that the physical tail remains allocator-owned.
 
 ## HashDB
 

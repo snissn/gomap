@@ -38,7 +38,7 @@ func VacuumIndexOffline(opts Options) error {
 	return vacuumIndexOffline(opts, vacuumFailNone)
 }
 
-func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
+func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 	if opts.Dir == "" {
 		return errors.New("db dir required")
 	}
@@ -68,6 +68,22 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	d, err := openReadOnlyNoLock(opts)
 	if err != nil {
 		return err
+	}
+	var maintenanceLeafLog LeafPageLogCloser
+	if opts.IndexOuterLeavesInValueLog {
+		maintenanceLeafLog, err = NewStandaloneLeafPageLog(opts.Dir, StandaloneLeafPageLogOptions{
+			Compression: opts.ValueLog.Compression,
+			AutoPolicy:  opts.ValueLog.AutoPolicy,
+			BlockCodec:  opts.ValueLog.BlockCodec,
+		})
+		if err != nil {
+			_ = d.Close()
+			return err
+		}
+		d.SetLeafPageLog(maintenanceLeafLog)
+		defer func() {
+			retErr = errors.Join(retErr, maintenanceLeafLog.Close())
+		}()
 	}
 
 	state := d.State()
@@ -137,11 +153,18 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		PackedValuePtr:        opts.IndexPackedValuePtr,
 		InternalBaseDelta:     effectiveInternalBaseDelta,
 	}
-	sysRoot, err := vacuumBuildSystemRoot(d.Pager(), reader, state.SystemRootPageID, alloc, newPager, buildOpts, collectionRootReplacements)
+	sysRoot, systemLeafAppended, err := d.vacuumBuildSystemRoot(d.Pager(), reader, state.SystemRootPageID, alloc, newPager, buildOpts, collectionRootReplacements)
 	if err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
 		return err
+	}
+	if systemLeafAppended {
+		if err := maintenanceLeafLog.Sync(); err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return err
+		}
 	}
 
 	var userRoot uint64
@@ -197,13 +220,46 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	meta.FreelistHeadID = 0
 	meta.TotalPages = newPager.PageCount()
 
+	var stagedLeafManifest *leafGenerationManifest
+	if systemLeafAppended {
+		d.mu.RLock()
+		baseLeafManifest := d.leafGenerationManifest
+		d.mu.RUnlock()
+		if baseLeafManifest == nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return errors.New("vacuum: leaf generation manifest unavailable")
+		}
+		staged, err := d.stagedLeafGenerationManifestWithPendingResult(baseLeafManifest, 0, meta.CommitSeq)
+		if err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return err
+		}
+		stagedLeafManifest = staged.manifest
+	}
+
 	durableResources, err := d.captureRebuiltIndexDurableResourcesV1(newPager, meta)
 	if err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
 		return err
 	}
-	defer durableResources.Release()
+	defer func() { durableResources.Release() }()
+	if stagedLeafManifest != nil {
+		persistedManifest, preparedResources, _, err := d.prepareDurableRootManifestResourcesV1(
+			stagedLeafManifest, durableResources, nil,
+		)
+		if err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return err
+		}
+		durableResources = preparedResources
+		d.mu.Lock()
+		d.leafGenerationManifest = persistedManifest
+		d.mu.Unlock()
+	}
 	outputHasLeafLogRefs, err := vacuumOutputHasLeafLogRefs(newPager, reader, userRoot, sysRoot)
 	if err != nil {
 		_ = newPager.Close()

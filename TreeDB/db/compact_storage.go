@@ -702,7 +702,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	}
 
 	compactLeafPackPlanState.invalidate()
-	if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked, compactLeafLog, compactLeafPackCreatedFileIDs, leafPackPassesRemaining, auditSession, &compactLeafPackPlanState); err != nil {
+	if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked, compactLeafLog, compactLeafPackCreatedFileIDs, &leafPackPassesRemaining, auditSession, &compactLeafPackPlanState); err != nil {
 		return stats, err
 	}
 	if indexVacuumRetainedGuard && !indexDebt.IndexVacuumRequired {
@@ -771,6 +771,12 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 			if err := db.runCompactStoragePhase(&stats, "checkpoint-after-index-vacuum-settle", func() error {
 				return db.checkpoint(maintenanceLocked)
 			}); err != nil {
+				return stats, err
+			}
+			// Vacuum can append system leaves and leave their source generation
+			// packable. Settle that debt within the same run-wide pass budget.
+			compactLeafPackPlanState.invalidate()
+			if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked, compactLeafLog, compactLeafPackCreatedFileIDs, &leafPackPassesRemaining, auditSession, &compactLeafPackPlanState); err != nil {
 				return stats, err
 			}
 			if err := refreshFinalAudit(); err != nil {
@@ -932,7 +938,7 @@ func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWri
 	return true, nil
 }
 
-func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, compactLeafLog *rewriteWriter, ignoredLeafPackRawFileIDs map[uint32]struct{}, leafPackPassesRemaining int, auditSession *compactStorageAuditSession, leafPackPlanState *compactStorageLeafPackPlanState) error {
+func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, compactLeafLog *rewriteWriter, ignoredLeafPackRawFileIDs map[uint32]struct{}, leafPackPassesRemaining *int, auditSession *compactStorageAuditSession, leafPackPlanState *compactStorageLeafPackPlanState) error {
 	const maxSettlePasses = 4
 	for pass := 0; pass < maxSettlePasses; pass++ {
 		var audit CompactStorageStats
@@ -942,7 +948,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 			return err
 		}
 		addCompactStorageAuditStats(&stats.Audit, audit.Audit)
-		leafPackDebtActionable := debt.LeafPackGenerations > 0 && leafPackPassesRemaining > 0
+		leafPackDebtActionable := debt.LeafPackGenerations > 0 && *leafPackPassesRemaining > 0
 		if debt.ValueLogGCSegments == 0 && !leafPackDebtActionable && debt.LeafGCGenerations == 0 && len(fencedIDs) == 0 {
 			return nil
 		}
@@ -988,7 +994,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 			}
 		}
 		if leafPackDebtActionable {
-			leafPackPassesRemaining--
+			(*leafPackPassesRemaining)--
 			var pack LeafGenerationPackRunOnceStats
 			phaseName := fmt.Sprintf("settle-leaf-generation-pack-%d", pass+1)
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {

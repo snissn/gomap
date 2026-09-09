@@ -3,12 +3,18 @@ package node
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"sort"
 	"sync"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func (b *Builder) internalChildTypeError(operation, reason string, incoming page.ChildRefKind) error {
+	return fmt.Errorf("%s: %s: builder_page_id=%d builder_type=%d builder_count=%d builder_leaf_log_refs=%t builder_base_delta=%t incoming_kind=%d: %w",
+		operation, reason, b.pageID, b.pType, b.count, b.internalLeafLogRefs, b.internalBaseDelta, incoming, ErrInvalidType)
+}
 
 // Builder facilitates O(N) sequential construction of a node.
 // It avoids the O(log N) search and O(N) shift of standard insertion.
@@ -926,13 +932,13 @@ func (b *Builder) AddInternalChild(key []byte, childPageID uint64) error {
 // when segment sizing gives us a hard bound.
 func (b *Builder) AddInternalChildRef(key []byte, ref page.ChildRef) error {
 	if b.pType != page.PageTypeInternal {
-		return ErrInvalidType
+		return b.internalChildTypeError("add internal child ref", "builder is not internal", ref.Kind)
 	}
 	if ref.Kind == page.ChildRefLeafLog {
 		return b.addInternalLeafLogChild(key, ref.Log)
 	}
 	if b.internalLeafLogRefs {
-		return ErrInvalidType
+		return b.internalChildTypeError("add internal child ref", "page child conflicts with leaf-log children", ref.Kind)
 	}
 
 	if b.internalBaseDelta {
@@ -969,10 +975,10 @@ func (b *Builder) AddInternalChildRef(key []byte, ref page.ChildRef) error {
 
 func (b *Builder) addInternalLeafLogChild(key []byte, ref page.LogRecordRef) error {
 	if b.internalBaseDelta {
-		return ErrInvalidType
+		return b.internalChildTypeError("add internal leaf-log child", "leaf-log child conflicts with base-delta encoding", page.ChildRefLeafLog)
 	}
 	if b.count > 0 && !b.internalLeafLogRefs {
-		return ErrInvalidType
+		return b.internalChildTypeError("add internal leaf-log child", "leaf-log child conflicts with existing page children", page.ChildRefLeafLog)
 	}
 	b.internalLeafLogRefs = true
 
@@ -1007,13 +1013,19 @@ func (b *Builder) addInternalLeafLogChild(key []byte, ref page.LogRecordRef) err
 // encoded on-page representation exactly.
 func (b *Builder) AddInternalLeafLogChildFromNode(src *Node, index uint16) error {
 	if b.pType != page.PageTypeInternal || src == nil || !src.internalLeafLogRefs() {
-		return ErrInvalidType
+		reason := "source does not contain internal leaf-log refs"
+		if b.pType != page.PageTypeInternal {
+			reason = "builder is not internal"
+		} else if src == nil {
+			reason = "source is nil"
+		}
+		return b.internalChildTypeError("copy internal leaf-log child", reason, page.ChildRefLeafLog)
 	}
 	if b.internalBaseDelta {
-		return ErrInvalidType
+		return b.internalChildTypeError("copy internal leaf-log child", "leaf-log child conflicts with base-delta encoding", page.ChildRefLeafLog)
 	}
 	if b.count > 0 && !b.internalLeafLogRefs {
-		return ErrInvalidType
+		return b.internalChildTypeError("copy internal leaf-log child", "leaf-log child conflicts with existing page children", page.ChildRefLeafLog)
 	}
 
 	offset, err := src.getOffset(index)

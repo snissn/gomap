@@ -2753,7 +2753,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.systemApplyCalls++
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, fmt.Errorf("treedb: ordered root system apply base=%d: %w", baseSystemRoot, err)
 	}
 	touchedValueLogSegments = append(touchedValueLogSegments, systemTouched...)
 	newSystemRoot = rootID
@@ -2969,11 +2969,11 @@ func (db *DB) prepareOrderedRootDeltaBatchGroupReadOnly(idx *indexGen, ordered [
 		}
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[orderedIdx].StoragePolicy)
 		if err != nil {
-			return err
+			return fmt.Errorf("treedb: ordered root read-only prepare input=%d base=%d policy=%d: %w", orderedIdx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].StoragePolicy, err)
 		}
 		rootZipper, err := db.orderedRootZipperForOptionsWithAllocator(idx, opts, alloc)
 		if err != nil {
-			return err
+			return fmt.Errorf("treedb: ordered root read-only prepare input=%d base=%d policy=%d: %w", orderedIdx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].StoragePolicy, err)
 		}
 		applyOpts := db.orderedRootDeltaBatchApplyOptions(opts)
 		summary, workerSummary, prepareNs, validationFailed, err := db.runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, ordered[orderedIdx].ReadOnlyPrepareWorkers, applyOpts)
@@ -2985,7 +2985,7 @@ func (db *DB) prepareOrderedRootDeltaBatchGroupReadOnly(idx *indexGen, ordered [
 		}
 		db.observeOrderedRootSpanNativeReadOnlyPrepare(summary, deltaOps, err, validationFailed, opts)
 		if err != nil {
-			return err
+			return fmt.Errorf("treedb: ordered root read-only prepare input=%d base=%d policy=%d: %w", orderedIdx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].StoragePolicy, err)
 		}
 	}
 	return nil
@@ -2995,19 +2995,21 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 	results := make([]orderedRootDeltaBatchGroupApplyResult, len(ordered))
 	applyOne := func(orderedIdx int) orderedRootDeltaBatchGroupApplyResult {
 		result := orderedRootDeltaBatchGroupApplyResult{idx: orderedIdx}
+		route, context := orderedRootDeltaBatchInputSpanNativeRoute(ordered[orderedIdx], defaultRoute, defaultContext)
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[orderedIdx].StoragePolicy)
 		if err != nil {
-			result.err = err
+			result.err = fmt.Errorf("treedb: ordered root policy input=%d base=%d policy=%d route=%q context=%q: %w", orderedIdx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].StoragePolicy, route, context, err)
 			return result
 		}
-		route, context := orderedRootDeltaBatchInputSpanNativeRoute(ordered[orderedIdx], defaultRoute, defaultContext)
 		opts = opts.withSpanNativeRoute(route, context)
 		rootID, retired, metrics, applyResult, err := db.publishOrderedRootDeltaBatchWithAllocatorResult(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, alloc, coldBuildAlloc, ordered[orderedIdx].IncludeDeletedOnColdBuild, collectOldPointerRefs)
 		result.rootID = rootID
 		result.retired = retired
 		result.metrics = metrics
 		result.applyResult = applyResult
-		result.err = err
+		if err != nil {
+			result.err = fmt.Errorf("treedb: ordered root apply input=%d base=%d policy=%d route=%q context=%q: %w", orderedIdx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].StoragePolicy, route, context, err)
+		}
 		return result
 	}
 
@@ -3195,7 +3197,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			if iter != nil {
 				_ = iter.Close()
 			}
-			return 0, nil, false, err
+			return 0, nil, false, fmt.Errorf("treedb: ordered root optimistic system build base=%d: %w", systemBaseRoot, err)
 		}
 		if iter == nil {
 			return 0, nil, false, errors.New("nil system root delta iterator")
@@ -3212,7 +3214,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		phaseStats.systemApplyCalls++
 		if applyErr != nil {
 			_ = systemDelta.Close()
-			err = applyErr
+			err = fmt.Errorf("treedb: ordered root optimistic system apply base=%d: %w", systemBaseRoot, applyErr)
 			return 0, nil, false, err
 		}
 		systemTouched := appendOrderedRootDeltaBatchFinalTouchedValueLogSegments(systemDelta, nil)
@@ -3498,7 +3500,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		if iter != nil {
 			_ = iter.Close()
 		}
-		return 0, nil, err
+		return 0, nil, fmt.Errorf("treedb: ordered root system build base=%d: %w", baseSystemRoot, err)
 	}
 	if iter == nil {
 		return 0, nil, errors.New("nil system root delta iterator")
@@ -3510,7 +3512,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.systemApplyCalls++
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, fmt.Errorf("treedb: ordered root system apply base=%d: %w", baseSystemRoot, err)
 	}
 	touchedValueLogSegments = append(touchedValueLogSegments, systemTouched...)
 	newSystemRoot = rootID
@@ -3697,7 +3699,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		if buildErr != nil {
 			closeOrderedRootDeltaBatchPublishDeltas(contextOrdered)
 			contextOrdered = nil
-			err = buildErr
+			err = fmt.Errorf("treedb: ordered root context build base=%d: %w", baseSystemRoot, buildErr)
 			return 0, nil, err
 		}
 		if len(contextOrdered) != 0 {
@@ -3811,7 +3813,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		if iter != nil {
 			_ = iter.Close()
 		}
-		return 0, nil, err
+		return 0, nil, fmt.Errorf("treedb: ordered root command WAL system build base=%d: %w", baseSystemRoot, err)
 	}
 	if iter == nil {
 		err = errOrderedRootCommandWALContextNilSystemDeltaIterator()
@@ -3820,7 +3822,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	systemDelta, convertErr := orderedRootDeltaBatchFromIterator(iter)
 	_ = iter.Close()
 	if convertErr != nil {
-		return 0, nil, convertErr
+		return 0, nil, fmt.Errorf("treedb: ordered root command WAL system delta base=%d: %w", baseSystemRoot, convertErr)
 	}
 	defer systemDelta.Close()
 	var baseDescriptorEntries []collectionEntry
@@ -3841,7 +3843,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		if systemRefDelta != nil {
 			releaseValueLogRefDelta(systemRefDelta)
 		}
-		return 0, nil, err
+		return 0, nil, fmt.Errorf("treedb: ordered root command WAL system apply base=%d: %w", baseSystemRoot, err)
 	}
 	if systemRefDelta == nil {
 		exactValueLogRefDelta = false

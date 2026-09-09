@@ -77,12 +77,10 @@ func TestOfflineMaintenanceCommandWALGateBeforeSideStoreOpen(t *testing.T) {
 
 func TestVacuumIndexOffline_LoadsPersistedFormatConfig(t *testing.T) {
 	dir := t.TempDir()
-	opts := treedb.Options{
-		Dir:                   dir,
-		DisableSideStores:     true,
-		Durability:            treedb.DurabilityWALOffRelaxed,
-		LeafPrefixCompression: true,
-	}
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	opts.DisableSideStores = true
+	opts.LeafPrefixCompression = true
+	opts.IndexOuterLeavesInValueLog = false
 
 	db, err := treedb.Open(opts)
 	if err != nil {

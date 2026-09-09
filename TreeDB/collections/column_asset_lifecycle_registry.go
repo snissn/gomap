@@ -225,8 +225,8 @@ func (c *Collection) registerColumnAssetLifecycleRecord(class ColumnAssetLifecyc
 	if err := validateColumnAssetLifecycleRegistrySource(source); err != nil {
 		return nil, err
 	}
-	collectionNamespace := columnAssetLifecycleNamespace(c)
-	if collectionNamespace == "" {
+	scope := c.columnAssetLifecycleScope()
+	if scope.namespace == "" {
 		return nil, errors.New("collections: column asset lifecycle registry requires collection asset namespace")
 	}
 	refs = append([]ColumnAssetRef(nil), refs...)
@@ -242,21 +242,20 @@ func (c *Collection) registerColumnAssetLifecycleRecord(class ColumnAssetLifecyc
 		if err := validateColumnAssetRefForPlan(ref); err != nil {
 			return nil, fmt.Errorf("collections: column asset lifecycle registry ref: %w", err)
 		}
-		if ref.Namespace != collectionNamespace {
-			return nil, fmt.Errorf("collections: column asset lifecycle registry ref namespace %q does not match collection namespace %q", ref.Namespace, collectionNamespace)
+		if ref.Namespace != scope.namespace {
+			return nil, fmt.Errorf("collections: column asset lifecycle registry ref namespace %q does not match collection namespace %q", ref.Namespace, scope.namespace)
 		}
 		refBytes = addColumnAssetReachabilityBytes(refBytes, positiveColumnAssetReachabilityLength(ref.Length))
 	}
 	var segmentBytes int64
 	for i := range segments {
-		segment, bytes, err := normalizeColumnAssetQuarantineSegment(segments[i], collectionNamespace)
+		segment, bytes, err := normalizeColumnAssetQuarantineSegment(segments[i], scope.namespace)
 		if err != nil {
 			return nil, fmt.Errorf("collections: column asset lifecycle quarantine segment[%d]: %w", i, err)
 		}
 		segments[i] = segment
 		segmentBytes = addColumnAssetReachabilityBytes(segmentBytes, bytes)
 	}
-	scope := columnAssetLifecyclePinScope{collection: c.meta.Name, namespace: collectionNamespace}
 	record := columnAssetLifecycleRegistryRecord{
 		Scope:        scope,
 		Collection:   scope.collection,
@@ -440,7 +439,8 @@ func (c *Collection) columnAssetLifecycleRegistrySnapshotWithBudget(remaining *i
 	if dbID == 0 {
 		return nil, nil
 	}
-	scope := columnAssetLifecyclePinScope{dbID: dbID, collection: c.meta.Name, namespace: columnAssetLifecycleNamespace(c)}
+	scope := c.columnAssetLifecycleScope()
+	scope.dbID = dbID
 	columnAssetLifecycleProcessRegistries.Lock()
 	defer columnAssetLifecycleProcessRegistries.Unlock()
 	if len(columnAssetLifecycleProcessRegistries.records) == 0 {
