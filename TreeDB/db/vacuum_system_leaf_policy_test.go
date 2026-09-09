@@ -111,6 +111,11 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 				}
 				return movedRoots[0]
 			}
+			// Make the initial application state durable before publishing its
+			// successor; the coordinator may otherwise coalesce both publications.
+			if err := d.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
 			// Give both recovery slots an application system tree while keeping
 			// the target below the padding tree in the source allocation order.
 			moveCollection(rootIDs[1], paddingCollectionRootKey)
@@ -127,6 +132,11 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 			seedLeafFiles := make(map[uint32]bool)
 			for ptr := range collectLeafRefIDsFromRoot(t, d, d.State().SystemRootPageID) {
 				seedLeafFiles[ptr.FileID] = true
+			}
+			for slot, record := range d.durableRoot.slotRecord {
+				if record.CommitSeq <= 1 || len(collectLeafRefIDsFromRoot(t, d, record.SystemRootPageID)) < 2 {
+					t.Fatalf("seed slot %d is not a durable application system tree: %+v", slot, record)
+				}
 			}
 			// Seed both recovery slots through the production vacuum path. Its
 			// appends stay in the already registered current leaf segment.
