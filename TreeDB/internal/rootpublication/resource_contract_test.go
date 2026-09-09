@@ -1277,6 +1277,178 @@ func TestStableResourceSetSyncUsesCoalescedGreatestFrontier(t *testing.T) {
 	}
 }
 
+func TestStableResourceSetLogicalClonePreservesContentCertificate(t *testing.T) {
+	for _, scoped := range []bool{false, true} {
+		for _, certifiedBytes := range []uint64{0, 8, 16} {
+			t.Run(fmt.Sprintf("scoped=%t/certified=%d", scoped, certifiedBytes), func(t *testing.T) {
+				dir := t.TempDir()
+				file := writeStableResourceFixture(t, dir, "asset.bin", "0123456789abcdef")
+				obligation := StableLogicalObligation{
+					Class: "column-asset-ref-v1", Kind: "tcs1_part_image", Namespace: "columns",
+					Generation: 1, PartID: 1, FileID: 1, Length: 8, Checksum: 1,
+					Digest: sha256.Sum256([]byte("obligation")), Reachability: ReachabilityColumnManifest,
+				}
+				want := errors.New("producer sync failed")
+				var flushes, syncs atomic.Uint64
+				newToken := func(frontier uint64, certified bool) *StableResourceToken {
+					t.Helper()
+					required := NewRIDFrontier([]uint64{frontier})
+					required.Bytes, required.MaxLSN = frontier, frontier
+					token, err := NewStableResourceToken(StableResourceSpec{
+						Kind: ResourceColumnAsset, LogicalLane: "columns", ResourceID: "1", Generation: 1,
+						DiagnosticPath: "asset.bin", File: file, Frontier: required,
+						Digest: sha256.Sum256([]byte("header")), Reachability: ReachabilityColumnManifest,
+						LogicalObligations: []StableLogicalObligation{obligation}, ContentSynced: certified,
+						FlushThrough: func(_ *os.File, frontier DurableFrontier) error {
+							if frontier.Bytes != 16 {
+								t.Errorf("flush frontier=%d want16", frontier.Bytes)
+							}
+							flushes.Add(1)
+							return nil
+						},
+						SyncThrough: func(_ *os.File, frontier DurableFrontier) error {
+							if frontier.Bytes != 16 {
+								t.Errorf("sync frontier=%d want16", frontier.Bytes)
+							}
+							if syncs.Add(1) == 1 {
+								return want
+							}
+							return nil
+						},
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					return token
+				}
+				builder := NewStableResourceSetBuilder()
+				defer builder.Abandon()
+				if certifiedBytes != 0 {
+					if err := file.Sync(); err != nil {
+						t.Fatal(err)
+					}
+					if err := builder.Add(newToken(certifiedBytes, true)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if certifiedBytes != 16 {
+					if err := builder.Add(newToken(16, false)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				source, err := builder.Freeze()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer source.Release()
+				requirements := StableLogicalObligationRequirements{ScopedFields: []ReachabilityField{ReachabilityQueryReadyBase}}
+				if scoped {
+					requirements = StableLogicalObligationRequirements{ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Obligations: []StableLogicalObligation{obligation}}
+				}
+				clone, err := CloneStableResourceSetForLogicalObligations(source, requirements)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer clone.Release()
+				clone.mu.Lock()
+				entries := clone.entrySnapshotLocked()
+				clonedToken := activeEntryToken(entries[0])
+				certificate := cloneDurableFrontier(clonedToken.syncedFrontier)
+				hasCertificate := clonedToken.hasSyncedFrontier
+				clone.mu.Unlock()
+				if hasCertificate != (certifiedBytes != 0) || certificate.Bytes != certifiedBytes || certificate.MaxLSN != certifiedBytes {
+					t.Fatalf("clone changed certificate: present=%t frontier=%+v", hasCertificate, certificate)
+				}
+				if certifiedBytes != 0 && !slices.Equal(certificate.RIDs(), []uint64{certifiedBytes}) {
+					t.Fatalf("clone changed exact RID certificate: %v", certificate.RIDs())
+				}
+				stats := clone.Stats(time.Now())
+				wantPhysical := uint64(0)
+				if certifiedBytes != 0 {
+					wantPhysical = 1
+				}
+				if len(stats) != 1 || stats[0].PhysicalFileSyncs != wantPhysical {
+					t.Fatalf("clone manufactured physical sync metrics: %+v", stats)
+				}
+				source.Release()
+				if err := clone.FlushThrough(); err != nil {
+					t.Fatal(err)
+				}
+				if got := flushes.Load(); got != 1 {
+					t.Errorf("producer flush calls=%d want1", got)
+				}
+				err = clone.SyncThrough()
+				if certifiedBytes == 16 {
+					if err != nil || syncs.Load() != 0 {
+						t.Fatalf("covered clone sync=%v calls=%d", err, syncs.Load())
+					}
+					return
+				}
+				if !errors.Is(err, want) {
+					t.Fatalf("uncertified frontier sync error=%v want producer failure", err)
+				}
+				if err := clone.SyncThrough(); err != nil {
+					t.Fatal(err)
+				}
+				if got := syncs.Load(); got != 2 {
+					t.Fatalf("producer sync attempts=%d want2", got)
+				}
+			})
+		}
+	}
+}
+
+func TestStableResourceSetMergeFrozenUnsyncedChildPreservesSyncRequirement(t *testing.T) {
+	dir := t.TempDir()
+	var childSyncs, parentSyncs atomic.Uint64
+	childToken := stableTokenFixture(t, dir, "child.vlog", 1, 16, ReachabilityValueLogPointer, "child", func(spec *StableResourceSpec) {
+		spec.SyncThrough = func(_ *os.File, frontier DurableFrontier) error {
+			if frontier.Bytes != 16 {
+				t.Fatalf("child sync frontier=%d want16", frontier.Bytes)
+			}
+			childSyncs.Add(1)
+			return nil
+		}
+	})
+	childBuilder := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
+	defer childBuilder.Abandon()
+	if err := childBuilder.Add(childToken); err != nil {
+		t.Fatal(err)
+	}
+	child, err := childBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Release()
+	parent := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
+	defer parent.Abandon()
+	if err := parent.Add(stableTokenFixture(t, dir, "parent.vlog", 1, 8, ReachabilityValueLogPointer, "parent", func(spec *StableResourceSpec) {
+		spec.SyncThrough = func(_ *os.File, _ DurableFrontier) error {
+			parentSyncs.Add(1)
+			return nil
+		}
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.Merge(child); err != nil {
+		t.Fatal(err)
+	}
+	set, err := parent.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if err := set.SyncThrough(); err != nil {
+		t.Fatal(err)
+	}
+	if got := parentSyncs.Load(); got != 1 {
+		t.Errorf("unrelated parent sync calls=%d want1", got)
+	}
+	if got := childSyncs.Load(); got != 1 {
+		t.Errorf("unsynced child sync calls=%d want1 after frozen-child materialization", got)
+	}
+}
+
 func TestStableResourceSetAlreadySyncedTokenDoesNotCoverAdvancedCoalescedFrontier(t *testing.T) {
 	for _, syncedFirst := range []bool{true, false} {
 		t.Run(fmt.Sprintf("synced-first=%t", syncedFirst), func(t *testing.T) {

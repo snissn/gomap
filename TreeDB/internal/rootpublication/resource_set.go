@@ -3463,7 +3463,7 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 						Generation: token.generation, DiagnosticPath: entry.diagnosticPath,
 						File: file, Frontier: cloneDurableFrontier(entry.frontier), Digest: token.digest,
 						Reachability: field, Namespace: namespace, LogicalObligations: obligations,
-						ContentSynced: true, PinRegistry: registry,
+						FlushThrough: token.flush, SyncThrough: token.sync, PinRegistry: registry,
 						StableIdentityOverride: token.identity,
 						OnRelease: func() {
 							if registry != nil {
@@ -3471,6 +3471,13 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 							}
 						},
 					}, obligations)
+					if constructErr == nil {
+						cloned.syncedFrontier = cloneDurableFrontier(token.syncedFrontier)
+						cloned.hasSyncedFrontier = token.hasSyncedFrontier
+						if cloned.hasSyncedFrontier {
+							cloned.metrics.physicalFileSyncs.Store(1)
+						}
+					}
 					return constructErr
 				})
 				if err != nil {
