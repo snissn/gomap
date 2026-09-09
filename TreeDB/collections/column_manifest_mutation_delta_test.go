@@ -381,3 +381,63 @@ func formatColumnManifestRecords(records []columnManifestRecord) []string {
 	}
 	return out
 }
+
+func TestCheckedColumnManifestEncodersRejectRetainedKeyPayloadMismatch(t *testing.T) {
+	cfg, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const keyGeneration, payloadGeneration, partID = uint64(1), uint64(2), uint64(7)
+	cases := []struct {
+		name   string
+		kind   ColumnAssetKind
+		reason string
+		key    func(uint64, uint64, string) []byte
+	}{
+		{name: "part", kind: ColumnAssetKindTCS1PartImage, reason: string(ColumnPublishOperationInsert), key: func(generation, partID uint64, _ string) []byte {
+			return columnManifestPartRecordKey(generation, partID)
+		}},
+		{name: "aggregate", kind: ColumnAssetKindTCS1AggregateMetadata, reason: "score", key: columnManifestAggregateMetadataRecordKey},
+		{name: "dictionary", kind: ColumnAssetKindTCS1DictionaryCodes, reason: "status", key: columnManifestDictionaryCodesRecordKey},
+		{name: "int64", kind: ColumnAssetKindTCS1Int64Values, reason: "age", key: columnManifestInt64ValuesRecordKey},
+	}
+	encoders := []struct {
+		name string
+		call func(ColumnPublishManifestEncodeInput) error
+	}{
+		{name: "ordinary", call: func(input ColumnPublishManifestEncodeInput) error {
+			_, err := encodeColumnManifestForWrite(input)
+			return err
+		}},
+		{name: "at_generation", call: func(input ColumnPublishManifestEncodeInput) error {
+			_, err := encodeColumnManifestAtGeneration(input, payloadGeneration+1)
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			asset := testColumnPublishPreparedAssetM10A()
+			asset.Ref.Kind = tc.kind
+			asset.Ref.Generation = payloadGeneration
+			asset.Ref.PartID = partID
+			asset.GenerationID = payloadGeneration
+			asset.Reason = tc.reason
+			value, err := encodeColumnManifestPartRecord(asset)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input := ColumnPublishManifestEncodeInput{
+				Collection: "events", ColumnStore: *cfg, Operation: ColumnPublishOperationInsert,
+				AppliedCommandLSN: 3, CurrentManifest: &ColumnManifestIdentity{Generation: payloadGeneration},
+				CurrentManifestRecords: []columnManifestRecord{{key: tc.key(keyGeneration, partID, tc.reason), value: value}},
+			}
+			for _, encoder := range encoders {
+				t.Run(encoder.name, func(t *testing.T) {
+					if err := encoder.call(input); err == nil {
+						t.Fatal("accepted mismatched key and payload generation")
+					}
+				})
+			}
+		})
+	}
+}

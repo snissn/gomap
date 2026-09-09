@@ -50,7 +50,7 @@ func TestSourceReplacementPreparesDeleteAndTypedInsertAssetsInOneGeneration(t *t
 	if prepared.RowCount != 3 {
 		t.Fatalf("prepared rows=%d want 3", prepared.RowCount)
 	}
-	manifest, err := encodeColumnManifestIdentityForWrite(ColumnPublishManifestEncodeInput{
+	manifest, err := encodeValidatedColumnManifestIdentityForWrite(ColumnPublishManifestEncodeInput{
 		Collection: "docs", ColumnStore: *cfg, Operation: ColumnPublishOperationUpdate,
 		AppliedCommandLSN: 7, Prepared: prepared,
 	})

@@ -400,6 +400,9 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (_ ColumnPublishPlan, 
 	if err := validateColumnPublishPlanConfig(input.Collection, cfg); err != nil {
 		return ColumnPublishPlan{}, err
 	}
+	if err := validateCurrentColumnManifestRecords(input.Collection, *cfg, input.CurrentManifest, input.CurrentManifestRecords, "column publish"); err != nil {
+		return ColumnPublishPlan{}, err
+	}
 
 	var metrics ColumnPublishStageMetrics
 	if input.Hooks.ExtractDocuments != nil {

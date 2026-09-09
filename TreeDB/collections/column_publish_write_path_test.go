@@ -1462,7 +1462,7 @@ func TestAppendColumnManifestRootPublishBaseRejectsDuplicateColumnRootM10B(t *te
 }
 
 func TestEncodeColumnManifestIdentityForWriteRejectsNegativeBytesM10B(t *testing.T) {
-	_, err := encodeColumnManifestIdentityForWrite(ColumnPublishManifestEncodeInput{
+	_, err := encodeValidatedColumnManifestIdentityForWrite(ColumnPublishManifestEncodeInput{
 		Collection:        "events",
 		Operation:         ColumnPublishOperationInsert,
 		AppliedCommandLSN: 1,
@@ -1474,7 +1474,7 @@ func TestEncodeColumnManifestIdentityForWriteRejectsNegativeBytesM10B(t *testing
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "byte counts cannot be negative") {
-		t.Fatalf("encodeColumnManifestIdentityForWrite error=%v want negative byte count rejection", err)
+		t.Fatalf("encodeValidatedColumnManifestIdentityForWrite error=%v want negative byte count rejection", err)
 	}
 }
 

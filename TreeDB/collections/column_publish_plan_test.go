@@ -737,9 +737,24 @@ func TestColumnPublishPlanSnapshotsPreparedAssetsForClosureValidationM10A(t *tes
 func TestColumnPublishPlanCopiesCurrentManifestForHooksM10A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
-	current := ColumnManifestIdentity{Generation: 6, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabc123}
 	input := testColumnPublishPlanInputM10A(identity, asset)
+	currentAsset := testColumnPublishPreparedAssetForIdentityM10A(asset, ColumnManifestIdentity{Generation: 6})
+	currentManifest, err := encodeColumnManifestForWrite(ColumnPublishManifestEncodeInput{
+		Collection:        input.Collection,
+		ColumnStore:       *input.ColumnStore,
+		Operation:         input.Operation,
+		AppliedCommandLSN: 100,
+		Prepared:          ColumnPublishPreparedAssets{Assets: []ColumnPreparedAsset{currentAsset}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := currentManifest.Identity
 	input.CurrentManifest = &current
+	input.CurrentManifestRecords = currentManifest.Records
+	input.ColumnStore.ActiveManifest = &current
+	input.ColumnStore.RecoveryAuthoritativeManifest = &current
+	input.ColumnStore.RecoveryAuthoritativeAppliedCommandLSN = 100
 	var prepareSeen, manifestSeen ColumnManifestIdentity
 	input.Hooks.PrepareAssets = func(in ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
 		if in.CurrentManifest == nil {
@@ -1917,5 +1932,89 @@ func testColumnPublishPreparedAssetM10A() ColumnPreparedAsset {
 		PublishID:    3,
 		GenerationID: 7,
 		Reason:       string(ColumnPublishOperationInsert),
+	}
+}
+
+func TestColumnPublishPlanRejectsMalformedCurrentManifestBeforeAssetPreparation(t *testing.T) {
+	cfg, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := encodeColumnManifestForWrite(ColumnPublishManifestEncodeInput{
+		Collection:        "events",
+		ColumnStore:       *cfg,
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: 100,
+		Prepared: ColumnPublishPreparedAssets{Assets: []ColumnPreparedAsset{
+			testColumnPublishPreparedAssetForIdentityM10A(testColumnPublishPreparedAssetM10A(), ColumnManifestIdentity{Generation: 1}),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ActiveManifest = &base.Identity
+	cfg.RecoveryAuthoritativeManifest = &base.Identity
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 100
+	current := cloneColumnManifestRecords(base.Records)
+	for i := range current {
+		if bytes.HasPrefix(current[i].key, columnManifestPartRecordPrefixBytes) {
+			current[i].value = []byte("malformed")
+			break
+		}
+	}
+	prepared := false
+	_, err = BuildColumnPublishPlan(ColumnPublishPlanInput{
+		Collection:               "events",
+		ColumnStore:              cfg,
+		ColumnStoreNormalized:    true,
+		ActiveVectorIndexesKnown: true,
+		Operation:                ColumnPublishOperationInsert,
+		CurrentManifest:          &base.Identity,
+		CurrentManifestRecords:   current,
+		AppliedCommandLSN:        101,
+		BaseManifestRootID:       44,
+		Hooks: ColumnPublishPlanHooks{
+			PrepareAssets: func(ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
+				prepared = true
+				return ColumnPublishPreparedAssets{}, nil
+			},
+			EncodeManifest: encodeColumnManifestForWrite,
+		},
+	})
+	if err == nil {
+		t.Fatal("BuildColumnPublishPlan accepted malformed current manifest")
+	}
+	if prepared {
+		t.Fatal("asset preparation ran before current manifest validation")
+	}
+}
+
+func TestColumnPublishPlanRejectsMissingCurrentManifestRecordsBeforeAssetPreparation(t *testing.T) {
+	cfg, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := ColumnManifestIdentity{Generation: 1, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 1}
+	cfg.ActiveManifest = &identity
+	cfg.RecoveryAuthoritativeManifest = &identity
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 100
+	prepared := false
+	_, err = BuildColumnPublishPlan(ColumnPublishPlanInput{
+		Collection: "events", ColumnStore: cfg, ColumnStoreNormalized: true,
+		Operation: ColumnPublishOperationInsert, CurrentManifest: &identity,
+		BaseManifestRootID: 44, AppliedCommandLSN: 101,
+		Hooks: ColumnPublishPlanHooks{
+			PrepareAssets: func(ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
+				prepared = true
+				return ColumnPublishPreparedAssets{}, nil
+			},
+			EncodeManifest: encodeColumnManifestForWrite,
+		},
+	})
+	if err == nil {
+		t.Fatal("BuildColumnPublishPlan accepted missing current manifest records")
+	}
+	if prepared {
+		t.Fatal("asset preparation ran before missing current manifest records were rejected")
 	}
 }

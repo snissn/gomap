@@ -847,7 +847,7 @@ func (c *Collection) prepareColumnPublishPlanLease(input columnWritePublishInput
 			PrepareAssets: func(hookInput ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
 				return c.prepareColumnPhysicalAssetsForCommand(input, hookInput)
 			},
-			EncodeManifest: encodeColumnManifestIdentityForWrite,
+			EncodeManifest: encodeValidatedColumnManifestIdentityForWrite,
 			abandonPreparedAssets: func(assets []ColumnPreparedAsset, stable bool) error {
 				retained := columnPublishPlanPreparedRefs(ColumnPublishPlan{PreparedAssets: assets})
 				var cleanupErr error
@@ -915,13 +915,6 @@ func (c *Collection) loadColumnManifestRecordsForPublish(rootID uint64, collecti
 	records, err := loadColumnManifestRecordsFromRoot(snap, rootID)
 	if err != nil {
 		return nil, fmt.Errorf("collections: load existing column manifest records: %w", err)
-	}
-	manifest, err := decodeColumnManifestRecords(records)
-	if err != nil {
-		return nil, fmt.Errorf("collections: decode existing column manifest records for publish: %w", err)
-	}
-	if err := validateColumnManifestSnapshot(manifest, records, cfg, *cfg.ActiveManifest, collectionName, "column publish"); err != nil {
-		return nil, err
 	}
 	return records, nil
 }
@@ -1670,8 +1663,10 @@ func columnWriteDocumentsBytes(docs []columnWriteDocument) int64 {
 	return total
 }
 
-func encodeColumnManifestIdentityForWrite(input ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
-	return encodeColumnManifestForWrite(input)
+// encodeValidatedColumnManifestIdentityForWrite is the built-in plan hook. Its
+// current records were validated by BuildColumnPublishPlan before any hook ran.
+func encodeValidatedColumnManifestIdentityForWrite(input ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
+	return encodeColumnManifestForWriteValidated(input)
 }
 
 func appendColumnManifestRootPublishBase(rootNames []string, baseRootIDs map[string]uint64, columnRootName string, columnBaseRoot uint64) ([]string, map[string]uint64, error) {

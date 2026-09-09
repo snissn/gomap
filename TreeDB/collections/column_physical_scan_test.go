@@ -772,9 +772,23 @@ func TestColumnPublishRejectsTamperedExistingManifestBeforeCarryM13A(t *testing.
 		t.Fatalf("tampered manifest part records=%d want 1", tamperedCount)
 	}
 	corruptRootID := publishColumnManifestRecordsForScanTestM13A(t, d, manifest.Identity, tampered)
-	_, err = col.loadColumnManifestRecordsForPublish(corruptRootID, "events", *cfg)
+	corruptRecords, err := col.loadColumnManifestRecordsForPublish(corruptRootID, "events", *cfg)
+	if err != nil {
+		t.Fatalf("load corrupt manifest records: %v", err)
+	}
+	_, err = BuildColumnPublishPlan(ColumnPublishPlanInput{
+		Collection:               "events",
+		ColumnStore:              cfg,
+		ColumnStoreNormalized:    true,
+		ActiveVectorIndexesKnown: true,
+		Operation:                ColumnPublishOperationInsert,
+		CurrentManifest:          &active,
+		CurrentManifestRecords:   corruptRecords,
+		AppliedCommandLSN:        2,
+		BaseManifestRootID:       corruptRootID,
+	})
 	if err == nil || !strings.Contains(err.Error(), "column publish manifest checksum") {
-		t.Fatalf("load tampered manifest for publish err=%v want checksum rejection", err)
+		t.Fatalf("plan tampered manifest for publish err=%v want checksum rejection", err)
 	}
 }
 

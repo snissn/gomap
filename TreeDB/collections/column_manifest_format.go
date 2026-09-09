@@ -145,8 +145,27 @@ func columnManifestInt64ValuesRecordKey(generation, partID uint64, columnName st
 }
 
 func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
-	if err := validateColumnPublishPreparedAssets(input.Prepared); err != nil {
+	generation, err := columnManifestGenerationForWrite(input)
+	if err != nil {
 		return ColumnPublishManifestEncodeResult{}, err
+	}
+	if err := validateColumnManifestRecordsForRetention(input.CurrentManifestRecords, generation, input.ActiveVectorIndexesKnown, input.ActiveVectorIndexes); err != nil {
+		return ColumnPublishManifestEncodeResult{}, err
+	}
+	return encodeColumnManifestAtGenerationValidated(input, generation)
+}
+
+func encodeColumnManifestForWriteValidated(input ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
+	generation, err := columnManifestGenerationForWrite(input)
+	if err != nil {
+		return ColumnPublishManifestEncodeResult{}, err
+	}
+	return encodeColumnManifestAtGenerationValidated(input, generation)
+}
+
+func columnManifestGenerationForWrite(input ColumnPublishManifestEncodeInput) (uint64, error) {
+	if err := validateColumnPublishPreparedAssets(input.Prepared); err != nil {
+		return 0, err
 	}
 	generation := uint64(1)
 	if input.CurrentManifest != nil {
@@ -155,21 +174,28 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 	if len(input.Prepared.Assets) != 0 {
 		generation = input.Prepared.Assets[0].Ref.Generation
 		if input.CurrentManifest != nil && generation <= input.CurrentManifest.Generation {
-			return ColumnPublishManifestEncodeResult{}, fmt.Errorf("collections: column manifest generation=%d must advance current generation=%d", generation, input.CurrentManifest.Generation)
+			return 0, fmt.Errorf("collections: column manifest generation=%d must advance current generation=%d", generation, input.CurrentManifest.Generation)
 		}
 		for i, asset := range input.Prepared.Assets {
 			if asset.Ref.Generation != generation {
-				return ColumnPublishManifestEncodeResult{}, fmt.Errorf("collections: column manifest asset[%d] generation=%d does not match manifest generation=%d", i, asset.Ref.Generation, generation)
+				return 0, fmt.Errorf("collections: column manifest asset[%d] generation=%d does not match manifest generation=%d", i, asset.Ref.Generation, generation)
 			}
 		}
 	}
 
-	return encodeColumnManifestAtGeneration(input, generation)
+	return generation, nil
 }
 
 // Maintenance can replace physical assets at an already captured logical
 // generation. Ordinary writes enforce advancement before reaching this codec.
 func encodeColumnManifestAtGeneration(input ColumnPublishManifestEncodeInput, generation uint64) (ColumnPublishManifestEncodeResult, error) {
+	if err := validateColumnManifestRecordsForRetention(input.CurrentManifestRecords, generation, input.ActiveVectorIndexesKnown, input.ActiveVectorIndexes); err != nil {
+		return ColumnPublishManifestEncodeResult{}, err
+	}
+	return encodeColumnManifestAtGenerationValidated(input, generation)
+}
+
+func encodeColumnManifestAtGenerationValidated(input ColumnPublishManifestEncodeInput, generation uint64) (ColumnPublishManifestEncodeResult, error) {
 	records := make([]columnManifestRecord, 0, 1+len(input.CurrentManifestRecords)+len(input.Prepared.Assets))
 	header, err := encodeColumnManifestHeaderRecord(input, generation)
 	if err != nil {
@@ -179,7 +205,7 @@ func encodeColumnManifestAtGeneration(input ColumnPublishManifestEncodeInput, ge
 		key:   []byte(columnManifestHeaderRecordKey),
 		value: header,
 	})
-	retained, err := retainedColumnManifestRecordsForWrite(input.CurrentManifestRecords, generation, input.ActiveVectorIndexesKnown, input.ActiveVectorIndexes)
+	retained, err := retainedValidatedColumnManifestRecordsForWrite(input.CurrentManifestRecords, generation, input.ActiveVectorIndexesKnown, input.ActiveVectorIndexes)
 	if err != nil {
 		return ColumnPublishManifestEncodeResult{}, err
 	}
@@ -339,6 +365,57 @@ func columnManifestRootMutationBytes(mutations []columnManifestMutation) int64 {
 }
 
 func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, generation uint64, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) ([]columnManifestRecord, error) {
+	if err := validateColumnManifestRecordsForRetention(records, generation, activeVectorIndexesKnown, activeVectorIndexes); err != nil {
+		return nil, err
+	}
+	return retainedValidatedColumnManifestRecordsForWrite(records, generation, activeVectorIndexesKnown, activeVectorIndexes)
+}
+
+func validateColumnManifestRecordsForRetention(records []columnManifestRecord, generation uint64, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) error {
+	for _, record := range records {
+		switch {
+		case bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes):
+			if retainColumnManifestVectorGraphRecordForWrite(record.key, activeVectorIndexesKnown, activeVectorIndexes) {
+				if _, err := validateRetainedColumnManifestVectorGraphRecordForWrite(record, generation); err != nil {
+					return err
+				}
+			}
+		case bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes):
+			if retainColumnVectorIndexStateRecordForWrite(record.key, activeVectorIndexesKnown, activeVectorIndexes) {
+				if _, err := validateRetainedColumnVectorIndexStateRecordForWrite(record, generation); err != nil {
+					return err
+				}
+			}
+		case bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes):
+			keyGeneration, keyPartID, err := decodeColumnManifestPartRecordKey(record.key)
+			if err != nil {
+				return err
+			}
+			part, err := decodeColumnManifestPartRecord(record.value)
+			if err != nil {
+				return err
+			}
+			if part.AssetRef.Generation != keyGeneration || part.AssetRef.PartID != keyPartID {
+				return fmt.Errorf("collections: column manifest part key generation=%d part_id=%d does not match payload generation=%d part_id=%d", keyGeneration, keyPartID, part.AssetRef.Generation, part.AssetRef.PartID)
+			}
+		case bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes):
+			if _, err := decodeColumnManifestAggregateMetadataRecord(record.key, record.value); err != nil {
+				return err
+			}
+		case bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes):
+			if _, err := decodeColumnManifestDictionaryCodesRecord(record.key, record.value); err != nil {
+				return err
+			}
+		case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
+			if _, err := decodeColumnManifestInt64ValuesRecord(record.key, record.value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func retainedValidatedColumnManifestRecordsForWrite(records []columnManifestRecord, generation uint64, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) ([]columnManifestRecord, error) {
 	if len(records) == 0 {
 		return nil, nil
 	}
@@ -384,11 +461,11 @@ func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, gener
 			!bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes) {
 			continue
 		}
-		part, err := decodeColumnManifestPartRecord(record.value)
+		recordGeneration, err := columnManifestRecordGenerationForRetention(record.key)
 		if err != nil {
 			return nil, err
 		}
-		if part.AssetRef.Generation >= generation {
+		if recordGeneration >= generation {
 			continue
 		}
 		retained = append(retained, columnManifestRecord{
@@ -397,6 +474,40 @@ func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, gener
 		})
 	}
 	return retained, nil
+}
+
+func columnManifestRecordGenerationForRetention(key []byte) (uint64, error) {
+	for _, prefix := range [][]byte{
+		columnManifestPartRecordPrefixBytes,
+		columnManifestAggregateMetadataRecordPrefixBytes,
+		columnManifestDictionaryCodesRecordPrefixBytes,
+		columnManifestInt64ValuesRecordPrefixBytes,
+	} {
+		if bytes.HasPrefix(key, prefix) {
+			if len(key) < len(prefix)+16 {
+				return 0, fmt.Errorf("collections: invalid retained column manifest key length=%d", len(key))
+			}
+			return binary.BigEndian.Uint64(key[len(prefix):]), nil
+		}
+	}
+	return 0, fmt.Errorf("collections: unsupported retained column manifest key %q", key)
+}
+
+func validateCurrentColumnManifestRecords(collection string, cfg ColumnStoreConfig, identity *ColumnManifestIdentity, records []columnManifestRecord, context string) error {
+	if len(records) == 0 {
+		if identity != nil {
+			return fmt.Errorf("collections: %s current manifest identity requires records", context)
+		}
+		return nil
+	}
+	if identity == nil {
+		return fmt.Errorf("collections: %s current manifest records require identity", context)
+	}
+	manifest, err := decodeColumnManifestRecords(records)
+	if err != nil {
+		return fmt.Errorf("collections: decode current manifest records for %s: %w", context, err)
+	}
+	return validateColumnManifestSnapshot(manifest, records, cfg, *identity, collection, context)
 }
 
 func validateRetainedColumnManifestVectorGraphRecordForWrite(record columnManifestRecord, generation uint64) (bool, error) {
