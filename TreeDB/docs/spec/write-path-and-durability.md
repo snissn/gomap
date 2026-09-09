@@ -39,6 +39,14 @@ and userspace `Flush` affect only volatile state. File sync promotes the covered
 file bytes. Directory sync promotes creation, rename, and unlink of names in
 that directory. A file sync cannot substitute for the required directory sync.
 
+Full index sync follows the platform mapped-write policy: on Linux the exact
+backing-file data barrier also covers dirty shared mappings, so it does not need
+an additional chunk `MS_SYNC`. Other platforms retain their mapped-view flush.
+A distinct retained sync handle is checked against the live mapping's file
+identity; path replacement cannot redirect the fence. After unmapping/close,
+the retained handle still receives its file fence. Flush-only chunk operations
+continue to flush mappings explicitly, and failed barriers restore dirty debt.
+
 Root-publication admission charges dependency bytes not fully covered by the
 selected durable root's owned closure, plus the candidate's new COW index pages.
 Credit requires matching physical identity, generation, digest, namespace and

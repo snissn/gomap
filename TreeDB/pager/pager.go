@@ -788,7 +788,8 @@ func (p *Pager) FlushDirtyChunksFrom(firstChunk int) error {
 	return p.syncDirtyChunks(false, firstChunk)
 }
 
-// Sync msyncs the memory maps and syncs the backing file to disk.
+// Sync durably flushes mapped writes and the backing file. Platforms whose
+// file barrier covers mapped writes do not need a separate mapped-view flush.
 func (p *Pager) Sync() error {
 	return p.syncDirtyChunksWithFile(true, 0, p.file)
 }
@@ -803,7 +804,8 @@ func (p *Pager) SyncIndexData() error {
 
 // SyncIndexDataWithStableFile is the index-publication data barrier bound to
 // an exact retained index handle. While the pager is live it drains dirty mmap
-// chunks before syncing that handle. After Pager.Close has unmapped and closed
+// chunks using the platform mapped-write policy and syncs that exact handle.
+// After Pager.Close has unmapped and closed
 // the pager-owned descriptor, the retained handle still supplies the file
 // durability fence required by an outstanding stable-resource token.
 func (p *Pager) SyncIndexDataWithStableFile(file *os.File) error {
@@ -833,6 +835,8 @@ func (p *Pager) syncDirtyChunks(syncFile bool, firstChunk int) error {
 	return p.syncDirtyChunksWithFile(syncFile, firstChunk, p.file)
 }
 
+var syncMappedFileFn = msyncFile
+
 func (p *Pager) syncDirtyChunksWithFile(syncFile bool, firstChunk int, syncTarget *os.File) error {
 	if p.readOnly {
 		return ErrReadOnly
@@ -853,56 +857,74 @@ func (p *Pager) syncDirtyChunksWithFile(syncFile bool, firstChunk int, syncTarge
 	}
 	p.mu.Unlock()
 
-	// Perform msync under read lock
+	// Protect mappings and their backing identity through the complete barrier.
 	p.mu.RLock()
-	// We defer RUnlock to ensure we hold it during the entire sync process
-	// including file sync.
+	// Keep it through both mapped-view flushing and the final file fence.
 
 	var syncErr error
-	concurrency := int(p.syncConcurrency.Load())
-	if concurrency <= 1 || len(toSync) <= 1 {
-		for _, idx := range toSync {
-			if idx < len(p.chunks) {
-				if err := msyncFile(p.chunks[idx]); err != nil {
-					syncErr = err
-					break // Stop on first error
-				}
+	needsMappedSync := !syncFile || mappedRangeSyncRequired()
+	if !needsMappedSync && len(p.chunks) != 0 && (p.file == nil || syncTarget != p.file) {
+		// File sync covers these live mappings only when it targets the same
+		// retained file. Never reopen the diagnostic path, which may be replaced.
+		if p.file == nil || syncTarget == nil {
+			syncErr = errors.New("pager: stable index file unavailable")
+		} else {
+			ownedInfo, err := p.file.Stat()
+			if err != nil {
+				syncErr = err
+			} else if stableInfo, err := syncTarget.Stat(); err != nil {
+				syncErr = err
+			} else if !os.SameFile(ownedInfo, stableInfo) {
+				syncErr = errors.New("pager: stable index file identity mismatch")
 			}
 		}
-	} else {
-		if concurrency > len(toSync) {
-			concurrency = len(toSync)
-		}
-		var (
-			wg    sync.WaitGroup
-			jobs  = make(chan int)
-			errCh = make(chan error, 1)
-		)
-		for i := 0; i < concurrency; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for idx := range jobs {
-					if idx >= len(p.chunks) {
-						continue
-					}
-					if err := msyncFile(p.chunks[idx]); err != nil {
-						select {
-						case errCh <- err:
-						default:
-						}
+	}
+	if needsMappedSync {
+		concurrency := int(p.syncConcurrency.Load())
+		if concurrency <= 1 || len(toSync) <= 1 {
+			for _, idx := range toSync {
+				if idx < len(p.chunks) {
+					if err := syncMappedFileFn(p.chunks[idx]); err != nil {
+						syncErr = err
+						break // Stop on first error
 					}
 				}
-			}()
-		}
-		for _, idx := range toSync {
-			jobs <- idx
-		}
-		close(jobs)
-		wg.Wait()
-		select {
-		case syncErr = <-errCh:
-		default:
+			}
+		} else {
+			if concurrency > len(toSync) {
+				concurrency = len(toSync)
+			}
+			var (
+				wg    sync.WaitGroup
+				jobs  = make(chan int)
+				errCh = make(chan error, 1)
+			)
+			for i := 0; i < concurrency; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for idx := range jobs {
+						if idx >= len(p.chunks) {
+							continue
+						}
+						if err := syncMappedFileFn(p.chunks[idx]); err != nil {
+							select {
+							case errCh <- err:
+							default:
+							}
+						}
+					}
+				}()
+			}
+			for _, idx := range toSync {
+				jobs <- idx
+			}
+			close(jobs)
+			wg.Wait()
+			select {
+			case syncErr = <-errCh:
+			default:
+			}
 		}
 	}
 

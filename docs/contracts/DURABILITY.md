@@ -44,6 +44,13 @@ directory-sync, durable command-WAL, or sealed-root boundaries.
 - A command-WAL `*Sync` does not require a full backend `Checkpoint()` per
   write. A no-WAL production `*Sync` does require a sealed backend root.
 
+Full index publication retains an exact backing-file durability fence. Linux
+uses that file fence to cover dirty shared mappings without a duplicate mapped
+flush; other platforms retain the mapped-view flush required by their adapter.
+Distinct retained handles must match the live pager's file identity. Flush-only
+operations still flush mappings, and a failed barrier restores dirty bookkeeping.
+See [the write-path specification](../../TreeDB/docs/spec/write-path-and-durability.md).
+
 ### Collections and auxiliary assets
 
 Supported collection/catalog mutations and their dictionary/template,

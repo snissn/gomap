@@ -2,8 +2,10 @@ package pager
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 
@@ -106,8 +108,33 @@ func TestSyncIndexDataWithStableFileDrainsLiveMappingsAndSurvivesClose(t *testin
 	if err := p.Close(); err != nil {
 		t.Fatal(err)
 	}
+	originalFence := syncPageFileFn
+	retainedFences := 0
+	syncPageFileFn = func(file *os.File) error {
+		if file != stable {
+			t.Fatal("after-close fence lost retained handle")
+		}
+		retainedFences++
+		return originalFence(file)
+	}
+	defer func() { syncPageFileFn = originalFence }()
 	if err := p.SyncIndexDataWithStableFile(stable); err != nil {
 		t.Fatalf("retained stable-file barrier after pager close: %v", err)
+	}
+	if retainedFences != 1 {
+		t.Fatalf("after-close file fences=%d want1", retainedFences)
+	}
+	reopened, err := Open(path, syncPagesTestChunkSize(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	data, err := reopened.Get(pageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, bytes.Repeat([]byte{0xa5}, page.PageSize)) {
+		t.Fatal("mapped write lost after reopen")
 	}
 }
 
@@ -152,5 +179,170 @@ func TestSyncPagesWithStableFileUsesPinnedIdentityAfterPathReplacement(t *testin
 	}
 	if err := p.SyncPagesWithStableFile(pinned, []uint64{0}); err != nil {
 		t.Fatalf("pinned mapped-page barrier after path replacement: %v", err)
+	}
+}
+
+func TestSyncIndexDataRejectsWrongFileAndRetainsDirtyChunks(t *testing.T) {
+	if mappedRangeSyncRequired() {
+		t.Skip("file-only mapped durability policy")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index.db")
+	p, err := Open(path, syncPagesTestChunkSize(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	id, err := p.Alloc(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Write(id, bytes.Repeat([]byte{0x39}, page.PageSize)); err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pinned.Close()
+	if err := os.Rename(path, filepath.Join(dir, "original.db")); err != nil {
+		t.Fatal(err)
+	}
+	wrong, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wrong.Close()
+	if err := p.SyncIndexDataWithStableFile(wrong); err == nil {
+		t.Fatal("rebound path handle accepted for mapped index durability")
+	}
+	if len(p.dirtyChunks) == 0 {
+		t.Fatal("identity failure lost dirty chunks")
+	}
+	if err := p.SyncIndexDataWithStableFile(pinned); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.dirtyChunks) != 0 {
+		t.Fatal("successful retained identity sync left dirty chunks")
+	}
+}
+
+func TestSyncIndexDataFileFenceFailureAndEmptyRetry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+	p, err := Open(path, syncPagesTestChunkSize(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	id, err := p.Alloc(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Write(id, bytes.Repeat([]byte{0x74}, page.PageSize)); err != nil {
+		t.Fatal(err)
+	}
+	original := syncPageFileFn
+	defer func() { syncPageFileFn = original }()
+	want := errors.New("file fence failed")
+	calls := 0
+	syncPageFileFn = func(file *os.File) error {
+		calls++
+		if file != p.file {
+			t.Fatal("file fence target changed")
+		}
+		if calls == 1 {
+			return want
+		}
+		return original(file)
+	}
+	if err := p.SyncIndexData(); !errors.Is(err, want) {
+		t.Fatalf("sync error=%v", err)
+	}
+	if len(p.dirtyChunks) == 0 {
+		t.Fatal("file fence failure lost dirty chunks")
+	}
+	if err := p.SyncIndexData(); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.dirtyChunks) != 0 {
+		t.Fatal("retry did not drain chunks")
+	}
+	if err := p.SyncIndexData(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 {
+		t.Fatalf("file fences=%d want3 including empty dirty set", calls)
+	}
+}
+
+func TestSyncDirtyChunksMappedPolicyAndFlushFailure(t *testing.T) {
+	p, err := Open(filepath.Join(t.TempDir(), "index.db"), syncPagesTestChunkSize(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	id, err := p.Alloc(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirty := func() {
+		t.Helper()
+		if err := p.Write(id, bytes.Repeat([]byte{0x42}, page.PageSize)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	originalMapped, originalFile := syncMappedFileFn, syncPageFileFn
+	t.Cleanup(func() { syncMappedFileFn, syncPageFileFn = originalMapped, originalFile })
+	var order []string
+	failMapped := false
+	want := errors.New("mapped flush failed")
+	syncMappedFileFn = func(data []byte) error {
+		order = append(order, "mapped")
+		if failMapped {
+			return want
+		}
+		return originalMapped(data)
+	}
+	syncPageFileFn = func(file *os.File) error {
+		order = append(order, "file")
+		return originalFile(file)
+	}
+	dirty()
+	if err := p.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	expected := []string{"file"}
+	if mappedRangeSyncRequired() {
+		expected = []string{"mapped", "file"}
+	}
+	if !reflect.DeepEqual(order, expected) {
+		t.Fatalf("full sync order=%v want%v", order, expected)
+	}
+	order = nil
+	dirty()
+	if err := p.FlushDirtyChunksFrom(0); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(order, []string{"mapped"}) {
+		t.Fatalf("flush-only order=%v", order)
+	}
+	order = nil
+	dirty()
+	failMapped = true
+	if err := p.FlushDirtyChunksFrom(0); !errors.Is(err, want) {
+		t.Fatalf("mapped failure=%v", err)
+	}
+	if len(p.dirtyChunks) == 0 {
+		t.Fatal("failed mapped flush lost dirty chunks")
+	}
+	if !reflect.DeepEqual(order, []string{"mapped"}) {
+		t.Fatalf("failed flush order=%v", order)
+	}
+	failMapped = false
+	if err := p.FlushDirtyChunksFrom(0); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.dirtyChunks) != 0 {
+		t.Fatal("mapped retry did not drain chunks")
 	}
 }
