@@ -3465,3 +3465,181 @@ func TestStableResourcePublicationDebtRetainsIndexedOwnership(t *testing.T) {
 		t.Fatalf("released candidate error=%v", err)
 	}
 }
+
+// Original one-input reconciliation, retained as an exact representation oracle.
+func originalStableResourceUnionForTest(mode stableResourceViewMode, sets ...*StableResourceSet) (*StableResourceSet, error) {
+	view := &StableResourceSet{}
+	view.owner.Store(uint32(ResourceOwnerView))
+	lookup := stableResourceEntryLookup{}
+	var evidenceCandidates map[ResourceKind][]stableLogicalMembershipEvidence
+	for _, set := range sets {
+		if set == nil {
+			continue
+		}
+		set.mu.Lock()
+		if mode != stableResourceViewValidatedCount {
+			evidenceCandidates = appendStableLogicalMembershipEvidenceCandidates(evidenceCandidates, set)
+		}
+		var mergeErr error
+		set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
+			var err error
+			if lookup.logical == nil && len(view.entries) < stableResourceEntryLinearLookupLimit {
+				err = mergeViewEntryLinear(&view.entries, *entry, mode, nil)
+			} else {
+				if lookup.logical == nil {
+					lookup = newStableResourceEntryLookup(view.entries)
+				}
+				err = mergeViewEntry(&view.entries, &lookup, *entry, mode, nil)
+			}
+			if err != nil {
+				mergeErr = err
+				return false
+			}
+			return true
+		})
+		set.mu.Unlock()
+		if mergeErr != nil {
+			return nil, mergeErr
+		}
+	}
+	if mode == stableResourceViewValidatedCount {
+		return view, nil
+	}
+	sortStableResourceEntries(view.entries)
+	if len(evidenceCandidates) != 0 {
+		view.logicalMembershipEvidence = stableUnionLogicalMembershipEvidence(view.entries, evidenceCandidates)
+	}
+	view.pinHighWater = stableResourcePinCounts(view.entries)
+	return view, nil
+}
+
+func assertSingleStableResourceUnionParity(t *testing.T, source *StableResourceSet) (*StableResourceSet, *StableResourceSet) {
+	t.Helper()
+	// Shared caches are warmed once before comparing encoding work on both views.
+	if source != nil {
+		if _, _, err := source.DependencyManifestV1(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := UnionStableResourceSets(nil, source, nil)
+	want, wantErr := originalStableResourceUnionForTest(stableResourceViewPinned, source)
+	if err != nil || wantErr != nil {
+		t.Fatalf("union errors: %v / %v", err, wantErr)
+	}
+	assertStableResourceViewParity(t, got, want)
+	count, err := validatedStableResourceUnionCount(nil, source, nil)
+	countView, countErr := originalStableResourceUnionForTest(stableResourceViewValidatedCount, source)
+	if err != nil || countErr != nil || count != len(countView.entries) {
+		t.Fatalf("count=%d/%d errors=%v/%v", count, len(countView.entries), err, countErr)
+	}
+	return got, want
+}
+
+func assertStableResourceViewParity(t *testing.T, got, want *StableResourceSet) {
+	t.Helper()
+	if got.Owner() != ResourceOwnerView || got.kindViews != nil || !reflect.DeepEqual(got.entries, want.entries) || !reflect.DeepEqual(got.pinHighWater, want.pinHighWater) || !reflect.DeepEqual(got.logicalMembershipEvidence, want.logicalMembershipEvidence) {
+		t.Fatal("single union changed flat entry, pin or evidence representation")
+	}
+	for i := range got.entries {
+		if got.entries[i].token != want.entries[i].token || got.entries[i].dependencyManifestV1 != want.entries[i].dependencyManifestV1 {
+			t.Fatal("representative or cached encoding changed")
+		}
+	}
+	now := time.Unix(123, 0)
+	if !reflect.DeepEqual(got.Descriptors(), want.Descriptors()) || !reflect.DeepEqual(got.Stats(now), want.Stats(now)) {
+		t.Fatal("descriptor/stat parity")
+	}
+	gm, gw, ge := got.DependencyManifestV1()
+	wm, ww, we := want.DependencyManifestV1()
+	if ge != nil || we != nil || gw != ww || gm.digest != wm.digest || !bytes.Equal(dependencyManifestPayloadForTest(t, gm), dependencyManifestPayloadForTest(t, wm)) {
+		t.Fatalf("manifest parity: %v/%v work=%+v/%+v", ge, we, gw, ww)
+	}
+	for _, entry := range got.entries {
+		if ge, we := got.DeletionGuard().Check(entry.token.identity, entry.token.generation), want.DeletionGuard().Check(entry.token.identity, entry.token.generation); !errors.Is(ge, we) {
+			t.Fatalf("guard parity: %v/%v", ge, we)
+		}
+	}
+	gc, ge := CloneStableResourceSetExcludingKinds(got)
+	wc, we := CloneStableResourceSetExcludingKinds(want)
+	if !errors.Is(ge, we) {
+		t.Fatalf("clone parity: %v/%v", ge, we)
+	}
+	if gc != nil {
+		gc.Release()
+	}
+	if wc != nil {
+		wc.Release()
+	}
+}
+
+func TestSingleStableResourceUnionSnapshotParity(t *testing.T) {
+	for _, action := range []string{"release", "merge", "transfer"} {
+		t.Run(action, func(t *testing.T) {
+			file := writeStableResourceFixture(t, t.TempDir(), "single.pack", "x")
+			builder := NewStableResourceSetBuilder()
+			for id := uint64(1); id <= 32; id++ {
+				if err := builder.Add(distinctPhysicalTokenFixture(t, file, id)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			source, err := builder.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer source.Release()
+			if _, _, err := source.DependencyManifestV1(); err != nil {
+				t.Fatal(err)
+			}
+			got, want := assertSingleStableResourceUnionParity(t, source)
+			assertSingleStableResourceUnionParity(t, got) // canonical flat union chaining
+			before := got.Descriptors()
+			got.Release()
+			got.Release()
+			switch action {
+			case "release":
+				source.Release()
+			case "merge":
+				next := NewStableResourceSetBuilder()
+				if err := next.Merge(source); err != nil {
+					t.Fatal(err)
+				}
+				if err := next.Add(distinctPhysicalTokenFixture(t, file, 33)); err != nil {
+					t.Fatal(err)
+				}
+				merged, err := next.Freeze()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer merged.Release()
+				assertSingleStableResourceUnionParity(t, merged)
+			case "transfer":
+				if err := source.transfer(ResourceOwnerBuilder, ResourceOwnerRecovery); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !reflect.DeepEqual(before, got.Descriptors()) {
+				t.Fatal("source mutation changed captured metadata")
+			}
+			assertStableResourceViewParity(t, got, want)
+			assertSingleStableResourceUnionParity(t, source)
+		})
+	}
+	sets := duplicatePhysicalStableResourceSets(t, 3)
+	flat, err := UnionStableResourceSets(sets...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := flat.DependencyManifestV1(); err != nil {
+		t.Fatal(err)
+	}
+	assertSingleStableResourceUnionParity(t, flat) // all coalesced physical pins
+	// Noncanonical internal flat owners retain original reconciliation.
+	fallback := &StableResourceSet{entries: append(cloneStableResourceEntries(flat.entries), cloneStableResourceEntry(flat.entries[0]))}
+	fallback.owner.Store(uint32(ResourceOwnerBuilder))
+	got, err := UnionStableResourceSets(fallback)
+	want, wantErr := originalStableResourceUnionForTest(stableResourceViewPinned, fallback)
+	if err != nil || wantErr != nil || got.Len() != 1 || !reflect.DeepEqual(got.entries, want.entries) {
+		t.Fatalf("flat fallback: %v/%v", err, wantErr)
+	}
+	assertSingleStableResourceUnionParity(t, nil)
+}

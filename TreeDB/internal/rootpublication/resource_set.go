@@ -3918,6 +3918,9 @@ func UnionStableResourceSets(sets ...*StableResourceSet) (*StableResourceSet, er
 // for the duration of enqueue under the coordinator lock. No resulting view or
 // pin escapes; full union consumers retain their normal validation and output.
 func validatedStableResourceUnionCount(sets ...*StableResourceSet) (int, error) {
+	if set := singleStableResourceSet(sets); set != nil {
+		return set.Len(), nil
+	}
 	view, err := unionStableResourceSets(stableResourceViewValidatedCount, sets...)
 	if err != nil {
 		return 0, err
@@ -3925,9 +3928,25 @@ func validatedStableResourceUnionCount(sets ...*StableResourceSet) (int, error) 
 	return len(view.entries), nil
 }
 
+// singleStableResourceSet ignores nil inputs, but not empty sets.
+func singleStableResourceSet(sets []*StableResourceSet) *StableResourceSet {
+	var single *StableResourceSet
+	for _, set := range sets {
+		if set == nil {
+			continue
+		}
+		if single != nil {
+			return nil
+		}
+		single = set
+	}
+	return single
+}
+
 func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourceSet) (*StableResourceSet, error) {
 	view := &StableResourceSet{}
 	view.owner.Store(uint32(ResourceOwnerView))
+	single := singleStableResourceSet(sets)
 	lookup := stableResourceEntryLookup{}
 	var evidenceCandidates map[ResourceKind][]stableLogicalMembershipEvidence
 	for _, set := range sets {
@@ -3938,8 +3957,17 @@ func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourc
 		if mode != stableResourceViewValidatedCount {
 			evidenceCandidates = appendStableLogicalMembershipEvidenceCandidates(evidenceCandidates, set)
 		}
+		// Frozen kind views and prior flat unions are already canonical. Keep
+		// the same independent flat metadata snapshot, without reconciling it
+		// against itself or borrowing any root ownership.
+		direct := mode == stableResourceViewPinned && set == single &&
+			(set.kindViews != nil || set.Owner() == ResourceOwnerView)
 		var mergeErr error
 		set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
+			if direct {
+				view.entries = append(view.entries, cloneStableResourceEntry(*entry))
+				return true
+			}
 			var err error
 			if lookup.logical == nil && len(view.entries) < stableResourceEntryLinearLookupLimit {
 				err = mergeViewEntryLinear(&view.entries, *entry, mode, nil)
