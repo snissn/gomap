@@ -257,6 +257,56 @@ func TestColumnAssetLifecycleIdentityUsesImmutableCatalog(t *testing.T) {
 	}
 }
 
+func TestCollectionWriteDomainFlushBindsLifecycleCatalog(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnAssetLifecycleTestCollection1954(t, d)
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	ephemeral := &Collection{db: d, writeDomain: col.writeDomain}
+	if err := ephemeral.flushBufferedWrites(); err != nil {
+		t.Fatalf("ephemeral flush: %v", err)
+	}
+	if scope := ephemeral.columnAssetLifecycleScope(); scope.collection != "events" || scope.namespace != "events/column-assets" {
+		t.Fatalf("ephemeral lifecycle scope=%+v", scope)
+	}
+}
+
+func TestIndexedAsyncPublishBindsLifecycleCatalog(t *testing.T) {
+	_, d, col := openTypedMinimaCollection(t)
+	defer func() { _ = d.Close() }()
+	if _, _, err := col.InsertTypedBatchWithStats(
+		[][]byte{[]byte("a")},
+		[][]byte{[]byte(`{"id":"a"}`)},
+		[]TypedColumnBatch{
+			{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}}},
+			{Name: "content", Strings: []string{"alpha"}},
+			{Name: "user", Strings: []string{"u1"}},
+			{Name: "path", Strings: []string{"file1"}},
+		},
+	); err != nil {
+		t.Fatalf("InsertTypedBatchWithStats: %v", err)
+	}
+
+	ephemeral := &Collection{db: d, writeDomain: col.writeDomain}
+	work, err := ephemeral.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare indexed async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare indexed async publish returned nil work")
+	}
+	if err := ephemeral.publishPreparedIndexedFlush(work); err != nil {
+		t.Fatalf("publish indexed async flush: %v", err)
+	}
+	if scope := ephemeral.columnAssetLifecycleScope(); scope.collection != "minima" || scope.namespace == "" {
+		t.Fatalf("ephemeral lifecycle scope=%+v", scope)
+	}
+}
+
 func TestColumnAssetLifecycleRegistryReleaseAndDBCloseCleanup1954(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
