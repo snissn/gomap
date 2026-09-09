@@ -11,6 +11,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -759,7 +760,24 @@ func (db *DB) vacuumBuildSystemRoot(oldPager *pager.Pager, reader tree.SlabReade
 		return 0, false, err
 	}
 	if !registered {
-		return 0, false, errors.New("vacuum: leaf page log segment registration unavailable")
+		if err := db.valueLogManager.Refresh(); err != nil {
+			return 0, false, err
+		}
+		// Segment reporting is optional. Recover the exact appended leaf IDs
+		// from the rebuilt tree so manifest staging includes them too.
+		references := make(map[uint32]struct{})
+		if err := leafrefscan.WalkRoots(context.Background(), []uint64{sysRoot}, newPager.Get, nil, func(ptr page.LeafLogPtr) error {
+			references[ptr.ValueLogFileID()] = struct{}{}
+			return nil
+		}); err != nil {
+			return 0, false, err
+		}
+		if err := db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {
+			return 0, false, err
+		}
+		for fileID := range references {
+			db.queueLeafGenerationWritableFileID(fileID)
+		}
 	}
 	return sysRoot, true, nil
 }

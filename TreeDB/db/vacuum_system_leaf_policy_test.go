@@ -174,6 +174,8 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 			openDB()
 			seedFiles := vacuumSystemManifestFiles(t, d, false)
 			if mode == "online" {
+				// The base interface does not require optional segment reporting.
+				d.SetLeafPageLog(&countingLeafPageLog{inner: log})
 				before := d.Pager()
 				if err := d.VacuumIndexOnline(context.Background()); err != nil {
 					t.Fatal(err)
@@ -181,6 +183,7 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 				if d.Pager() == before {
 					t.Fatal("vacuum did not replace pager")
 				}
+				d.SetLeafPageLog(log)
 			} else {
 				closeDB()
 				if t.Failed() {
