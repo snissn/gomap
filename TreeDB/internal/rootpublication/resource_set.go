@@ -25,6 +25,7 @@ type stableResourceEntry struct {
 	reachability         map[ReachabilityField]struct{}
 	logicalObligations   stableLogicalObligationView
 	dependencyManifestV1 *dependencyManifestEntryCacheV1
+	contentCertified     bool
 }
 
 type dependencyManifestEntryCacheV1 struct {
@@ -672,6 +673,7 @@ func cloneStableResourceEntry(entry stableResourceEntry) stableResourceEntry {
 		// independently pinned visible/durable resource-set generations.
 		reachability: reachability, logicalObligations: entry.logicalObligations,
 		dependencyManifestV1: entry.dependencyManifestV1,
+		contentCertified:     entry.contentCertified,
 	}
 	if clone.dependencyManifestV1 == nil {
 		clone.dependencyManifestV1 = &dependencyManifestEntryCacheV1{}
@@ -680,6 +682,15 @@ func cloneStableResourceEntry(entry stableResourceEntry) stableResourceEntry {
 		clone.pins = append([]*StableResourceToken(nil), entry.pins...)
 	}
 	return clone
+}
+
+func tokenCertifiesFrontier(token *StableResourceToken, frontier DurableFrontier) bool {
+	return token != nil && token.hasSyncedFrontier && durableFrontierCovers(token.syncedFrontier, frontier)
+}
+
+func mergedEntryCertificate(leftCertified bool, left DurableFrontier, rightCertified bool, right, merged DurableFrontier) bool {
+	return leftCertified && durableFrontierCovers(left, merged) ||
+		rightCertified && durableFrontierCovers(right, merged)
 }
 
 func appendUniquePins(entry *stableResourceEntry, incoming ...*StableResourceToken) {
@@ -855,6 +866,7 @@ func (builder *StableResourceSetBuilder) addToViewsLocked(token *StableResourceT
 		reachability:         map[ReachabilityField]struct{}{token.reachability: {}},
 		logicalObligations:   newStableLogicalObligationView(token.logicalObligations),
 		dependencyManifestV1: &dependencyManifestEntryCacheV1{},
+		contentCertified:     tokenCertifiesFrontier(token, token.frontier),
 	}}
 	if !stableResourceViewsConflict(builder.kindViews, &incoming[0]) {
 		views, err := buildStableResourceKindViews(incoming)
@@ -927,7 +939,9 @@ func mergeOwnedTokenLinear(entries *[]stableResourceEntry, token *StableResource
 		if err := mergeStableLogicalObligations(&entry.logicalObligations, newStableLogicalObligationView(token.logicalObligations)); err != nil {
 			return err
 		}
-		entry.frontier = maxFrontier(entry.frontier, token.frontier)
+		mergedFrontier := maxFrontier(entry.frontier, token.frontier)
+		entry.contentCertified = mergedEntryCertificate(entry.contentCertified, entry.frontier, tokenCertifiesFrontier(token, token.frontier), token.frontier, mergedFrontier)
+		entry.frontier = mergedFrontier
 		entry.reachability[token.reachability] = struct{}{}
 		mergeStableResourceDescriptorIdentity(entry, token.logicalLane, token.resourceID, token.diagnosticPath)
 		if existing.namespace == nil && token.namespace != nil {
@@ -946,6 +960,7 @@ func mergeOwnedTokenLinear(entries *[]stableResourceEntry, token *StableResource
 		reachability:         map[ReachabilityField]struct{}{token.reachability: {}},
 		logicalObligations:   newStableLogicalObligationView(token.logicalObligations),
 		dependencyManifestV1: &dependencyManifestEntryCacheV1{},
+		contentCertified:     tokenCertifiesFrontier(token, token.frontier),
 	})
 	return nil
 }
@@ -984,7 +999,9 @@ func mergeOwnedToken(entries *[]stableResourceEntry, lookup *stableResourceEntry
 		if err := mergeStableLogicalObligations(&entry.logicalObligations, newStableLogicalObligationView(token.logicalObligations)); err != nil {
 			return err
 		}
-		entry.frontier = maxFrontier(entry.frontier, token.frontier)
+		mergedFrontier := maxFrontier(entry.frontier, token.frontier)
+		entry.contentCertified = mergedEntryCertificate(entry.contentCertified, entry.frontier, tokenCertifiesFrontier(token, token.frontier), token.frontier, mergedFrontier)
+		entry.frontier = mergedFrontier
 		entry.reachability[token.reachability] = struct{}{}
 		mergeStableResourceDescriptorIdentity(entry, token.logicalLane, token.resourceID, token.diagnosticPath)
 		if existing.namespace == nil && token.namespace != nil {
@@ -1006,6 +1023,7 @@ func mergeOwnedToken(entries *[]stableResourceEntry, lookup *stableResourceEntry
 		reachability:         map[ReachabilityField]struct{}{token.reachability: {}},
 		logicalObligations:   newStableLogicalObligationView(token.logicalObligations),
 		dependencyManifestV1: &dependencyManifestEntryCacheV1{},
+		contentCertified:     tokenCertifiesFrontier(token, token.frontier),
 	})
 	lookup.add(*entries, len(*entries)-1)
 	work.PhysicalEntryLookupAdmissions++
@@ -1110,7 +1128,9 @@ func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryL
 			return err
 		}
 		if mode != stableResourceViewValidatedCount {
-			entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
+			mergedFrontier := maxFrontier(entry.frontier, incoming.frontier)
+			entry.contentCertified = mergedEntryCertificate(entry.contentCertified, entry.frontier, incoming.contentCertified, incoming.frontier, mergedFrontier)
+			entry.frontier = mergedFrontier
 			mergeStableResourceDescriptorIdentity(entry, incoming.logicalLane, incoming.resourceID, incoming.diagnosticPath)
 			for field := range incoming.reachability {
 				entry.reachability[field] = struct{}{}
@@ -1176,7 +1196,9 @@ func mergeViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourc
 			return err
 		}
 		if mode != stableResourceViewValidatedCount {
-			entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
+			mergedFrontier := maxFrontier(entry.frontier, incoming.frontier)
+			entry.contentCertified = mergedEntryCertificate(entry.contentCertified, entry.frontier, incoming.contentCertified, incoming.frontier, mergedFrontier)
+			entry.frontier = mergedFrontier
 			mergeStableResourceDescriptorIdentity(entry, incoming.logicalLane, incoming.resourceID, incoming.diagnosticPath)
 			for field := range incoming.reachability {
 				entry.reachability[field] = struct{}{}
@@ -1234,7 +1256,9 @@ func mergeAppendOnlyViewEntryLinear(entries *[]stableResourceEntry, incoming sta
 		if err != nil {
 			return err
 		}
-		entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
+		mergedFrontier := maxFrontier(entry.frontier, incoming.frontier)
+		entry.contentCertified = mergedEntryCertificate(entry.contentCertified, entry.frontier, incoming.contentCertified, incoming.frontier, mergedFrontier)
+		entry.frontier = mergedFrontier
 		mergeStableResourceDescriptorIdentity(entry, incoming.logicalLane, incoming.resourceID, incoming.diagnosticPath)
 		for field := range incoming.reachability {
 			entry.reachability[field] = struct{}{}
@@ -1335,6 +1359,9 @@ func cloneStableResourceEntryIntoBuilder(builder *StableResourceSetBuilder, sour
 	if destination == nil {
 		return ErrUnresolvedResource
 	}
+	if source.contentCertified && durableFrontierCovers(source.frontier, destination.frontier) {
+		destination.contentCertified = true
+	}
 	for _, field := range fields {
 		destination.reachability[field] = struct{}{}
 	}
@@ -1343,6 +1370,31 @@ func cloneStableResourceEntryIntoBuilder(builder *StableResourceSetBuilder, sour
 		destination.dependencyManifestV1 = source.dependencyManifestV1
 	}
 	return nil
+}
+
+// stableResourceEntryForTokenLocked uses the builder's index at scale and the
+// bounded linear path before indexing is worthwhile.
+func stableResourceEntryForTokenLocked(builder *StableResourceSetBuilder, token *StableResourceToken) (*stableResourceEntry, error) {
+	if builder.indexed != nil {
+		iterator, err := builder.indexed.lookup.physicalIterator(builder.entries, token)
+		if err != nil {
+			return nil, err
+		}
+		if i, ok := iterator.Next(); ok {
+			return &builder.entries[i], nil
+		}
+		return nil, ErrUnresolvedResource
+	}
+	for i := range builder.entries {
+		coalesce, err := stableResourcesCoalesce(builder.entries[i].token, token)
+		if err != nil {
+			return nil, err
+		}
+		if coalesce {
+			return &builder.entries[i], nil
+		}
+	}
+	return nil, ErrUnresolvedResource
 }
 
 func cloneStableResourceViewsIntoBuilder(builder *StableResourceSetBuilder, views map[ResourceKind]stableResourceKindView) error {
@@ -1845,7 +1897,9 @@ func certifiedAppendOnlyPhysicalCoalesce(target, incoming map[ResourceKind]stabl
 			view.logicalCommitments = addStableLogicalObligationCommitments(commitments, nextEntry.logicalObligations.commitments)
 			view.logicalObligationCount += nextEntry.logicalObligations.count - existing.logicalObligations.count
 			replacedLogicalCommitments = true
-			nextEntry.frontier = maxFrontier(nextEntry.frontier, child.frontier)
+			mergedFrontier := maxFrontier(nextEntry.frontier, child.frontier)
+			nextEntry.contentCertified = mergedEntryCertificate(nextEntry.contentCertified, nextEntry.frontier, child.contentCertified, child.frontier, mergedFrontier)
+			nextEntry.frontier = mergedFrontier
 			mergeStableResourceDescriptorIdentity(&nextEntry, child.logicalLane, child.resourceID, child.diagnosticPath)
 			for field := range child.reachability {
 				nextEntry.reachability[field] = struct{}{}
@@ -2167,7 +2221,9 @@ func (builder *StableResourceSetBuilder) mergeAppendOnlyLogicalObligationsFlat(c
 			if err != nil {
 				break
 			}
-			entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
+			mergedFrontier := maxFrontier(entry.frontier, incoming.frontier)
+			entry.contentCertified = mergedEntryCertificate(entry.contentCertified, entry.frontier, incoming.contentCertified, incoming.frontier, mergedFrontier)
+			entry.frontier = mergedFrontier
 			mergeStableResourceDescriptorIdentity(entry, incoming.logicalLane, incoming.resourceID, incoming.diagnosticPath)
 			for field := range incoming.reachability {
 				entry.reachability[field] = struct{}{}
@@ -3488,24 +3544,41 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 					return nil, work, err
 				}
 			}
+			before := len(builder.entries)
 			if err := builder.Add(cloned); err != nil {
 				cloned.Release()
 				namespace.Release()
 				return nil, work, err
 			}
+			builder.mu.Lock()
+			var destination *stableResourceEntry
 			if allFieldsUnscoped {
 				// The source set is already physically coalesced, so Add necessarily
 				// appended one new destination entry. Restore its complete immutable
 				// logical and reachability views after constructing the one-field
 				// token used to duplicate the exact physical handle.
-				destination := &builder.entries[len(builder.entries)-1]
+				destination = &builder.entries[len(builder.entries)-1]
 				destination.logicalObligations = sharedObligations
 				destination.dependencyManifestV1 = entry.dependencyManifestV1
 				destination.reachability = make(map[ReachabilityField]struct{}, len(entry.reachability))
 				for retainedField := range entry.reachability {
 					destination.reachability[retainedField] = struct{}{}
 				}
+			} else if len(builder.entries) > before {
+				destination = &builder.entries[len(builder.entries)-1]
+			} else {
+				var destinationErr error
+				destination, destinationErr = stableResourceEntryForTokenLocked(builder, token)
+				if destinationErr != nil {
+					builder.mu.Unlock()
+					namespace.Release()
+					return nil, work, destinationErr
+				}
 			}
+			if entry.contentCertified && durableFrontierCovers(entry.frontier, destination.frontier) {
+				destination.contentCertified = true
+			}
+			builder.mu.Unlock()
 			namespace.Release()
 			if allFieldsUnscoped {
 				break
@@ -3772,7 +3845,7 @@ func (set *StableResourceSet) SyncThrough() error {
 			errs = append(errs, ErrResourceOwnership)
 			return true
 		}
-		if err := token.syncThrough(entry.frontier); err != nil {
+		if err := token.syncThroughCertified(entry.frontier, entry.contentCertified); err != nil {
 			errs = append(errs, fmt.Errorf("sync stable resource %+v: %w", token.logicalKey(), err))
 		}
 		return true
@@ -4153,7 +4226,11 @@ func (set *StableResourceSet) Stats(now time.Time) []ResourceKindStats {
 		stats.FlushDuration += time.Duration(token.metrics.flushNanos.Load())
 		stats.Syncs += token.metrics.syncs.Load()
 		stats.SyncDuration += time.Duration(token.metrics.syncNanos.Load())
-		stats.PhysicalFileSyncs += token.metrics.physicalFileSyncs.Load()
+		physicalFileSyncs := token.metrics.physicalFileSyncs.Load()
+		if entry.contentCertified && physicalFileSyncs == 0 {
+			physicalFileSyncs = 1
+		}
+		stats.PhysicalFileSyncs += physicalFileSyncs
 		stats.PhysicalFileSyncDuration += time.Duration(token.metrics.physicalFileSyncNanos.Load())
 		if token.namespace != nil {
 			if _, seen := seenNamespaces[token.namespace]; !seen {

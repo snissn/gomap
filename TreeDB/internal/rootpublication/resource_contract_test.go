@@ -17,7 +17,14 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 )
+
+func TestStableResourceEntrySize64Bit(t *testing.T) {
+	if unsafe.Sizeof(uintptr(0)) == 8 && unsafe.Sizeof(stableResourceEntry{}) != 232 {
+		t.Fatalf("stableResourceEntry size=%d want232", unsafe.Sizeof(stableResourceEntry{}))
+	}
+}
 
 func writeStableResourceFixture(t testing.TB, dir, name, contents string) *os.File {
 	t.Helper()
@@ -1513,6 +1520,217 @@ func TestStableResourceSetAlreadySyncedTokenDoesNotCoverAdvancedCoalescedFrontie
 				t.Fatalf("synced bytes=%d want 16", got)
 			}
 		})
+	}
+}
+
+func TestStableResourceSetStrongerProducerCertificateCoversCoalescedFrontier(t *testing.T) {
+	for _, certifiedFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("certified-first=%t", certifiedFirst), func(t *testing.T) {
+			dir := t.TempDir()
+			file, err := os.OpenFile(filepath.Join(dir, "shared.vlog"), os.O_CREATE|os.O_RDWR, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			if _, err := file.Write([]byte("12345678")); err != nil {
+				t.Fatal(err)
+			}
+			var syncCalls atomic.Uint64
+			obligation := StableLogicalObligation{
+				Class: "column-asset-ref-v1", Kind: "part", Namespace: "main", Generation: 1,
+				PartID: 1, FileID: 1, Length: 16, Checksum: 1,
+				Digest: sha256.Sum256([]byte("obligation")), Reachability: ReachabilityValueLogPointer,
+			}
+			newToken := func(frontier uint64, certified bool) *StableResourceToken {
+				t.Helper()
+				token, err := NewStableResourceToken(StableResourceSpec{
+					Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "shared", Generation: 1,
+					DiagnosticPath: "shared.vlog", File: file, Frontier: DurableFrontier{Bytes: frontier},
+					Digest: sha256.Sum256([]byte("same-header")), Reachability: ReachabilityValueLogPointer,
+					ContentSynced: certified, LogicalObligations: []StableLogicalObligation{obligation},
+					SyncThrough: func(_ *os.File, _ DurableFrontier) error {
+						syncCalls.Add(1)
+						return nil
+					},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return token
+			}
+			old := newToken(8, false)
+			if _, err := file.Write([]byte("abcdefgh")); err != nil {
+				t.Fatal(err)
+			}
+			if err := file.Sync(); err != nil {
+				t.Fatal(err)
+			}
+			certified := newToken(16, true)
+			ordered := []*StableResourceToken{old, certified}
+			if certifiedFirst {
+				ordered[0], ordered[1] = ordered[1], ordered[0]
+			}
+			builder := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
+			for _, token := range ordered {
+				if err := builder.Add(token); err != nil {
+					t.Fatal(err)
+				}
+			}
+			set, err := builder.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer set.Release()
+			if err := set.SyncThrough(); err != nil {
+				t.Fatal(err)
+			}
+			if got := syncCalls.Load(); got != 0 {
+				t.Fatalf("physical sync calls=%d want0", got)
+			}
+			stats := set.Stats(time.Now())
+			if len(stats) != 1 || stats[0].PhysicalFileSyncs != 1 || stats[0].PhysicalFileSyncDuration != 0 {
+				t.Fatalf("entry-certified stats=%+v want one retained barrier with no invented duration", stats)
+			}
+			for _, scoped := range []bool{false, true} {
+				requirements := StableLogicalObligationRequirements{ScopedFields: []ReachabilityField{ReachabilityQueryReadyBase}}
+				if scoped {
+					requirements = StableLogicalObligationRequirements{
+						ScopedFields: []ReachabilityField{ReachabilityValueLogPointer},
+						Obligations:  []StableLogicalObligation{obligation},
+					}
+				}
+				clone, err := CloneStableResourceSetForLogicalObligations(set, requirements)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := clone.SyncThrough(); err != nil {
+					clone.Release()
+					t.Fatal(err)
+				}
+				clone.Release()
+			}
+			if got := syncCalls.Load(); got != 0 {
+				t.Fatalf("physical sync calls after logical clones=%d want0", got)
+			}
+			parent := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
+			defer parent.Abandon()
+			if err := parent.Add(newToken(8, false)); err != nil {
+				t.Fatal(err)
+			}
+			if err := parent.Merge(set); err != nil {
+				t.Fatal(err)
+			}
+			merged, err := parent.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer merged.Release()
+			if err := merged.SyncThrough(); err != nil {
+				t.Fatal(err)
+			}
+			if got := syncCalls.Load(); got != 0 {
+				t.Fatalf("physical sync calls after generic materialization=%d want0", got)
+			}
+		})
+	}
+}
+
+func TestStableResourceSetDoesNotUnionIncomparableProducerCertificates(t *testing.T) {
+	file := writeStableResourceFixture(t, t.TempDir(), "shared.vlog", "0123456789abcdef")
+	defer file.Close()
+	left, right := NewRIDFrontier([]uint64{1}), NewRIDFrontier([]uint64{2})
+	left.Bytes, left.MaxLSN = 16, 1
+	right.Bytes, right.MaxLSN = 8, 2
+	var syncCalls atomic.Uint64
+	newToken := func(frontier DurableFrontier) *StableResourceToken {
+		t.Helper()
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "shared", Generation: 1,
+			DiagnosticPath: "shared.vlog", File: file, Frontier: frontier,
+			Digest: sha256.Sum256([]byte("same-header")), Reachability: ReachabilityValueLogPointer,
+			ContentSynced: true,
+			SyncThrough: func(_ *os.File, got DurableFrontier) error {
+				syncCalls.Add(1)
+				if got.Bytes != 16 || got.MaxLSN != 2 || !slices.Equal(got.RIDs(), []uint64{1, 2}) {
+					t.Fatalf("sync frontier=%+v rids=%v want bytes16 lsn2 rids[1 2]", got, got.RIDs())
+				}
+				return nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	builder := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
+	for _, token := range []*StableResourceToken{newToken(left), newToken(right)} {
+		if err := builder.Add(token); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if err := set.SyncThrough(); err != nil {
+		t.Fatal(err)
+	}
+	if syncCalls.Load() != 1 {
+		t.Fatalf("physical sync calls=%d want1", syncCalls.Load())
+	}
+}
+
+func TestStableResourceSetEntryCertificateDoesNotCoverLargerCloneDestination(t *testing.T) {
+	file := writeStableResourceFixture(t, t.TempDir(), "shared.vlog", "0123456789abcdefghij")
+	defer file.Close()
+	var syncCalls atomic.Uint64
+	newToken := func(frontier uint64, certified bool) *StableResourceToken {
+		t.Helper()
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "shared", Generation: 1,
+			DiagnosticPath: "shared.vlog", File: file, Frontier: DurableFrontier{Bytes: frontier},
+			Digest: sha256.Sum256([]byte("same-header")), Reachability: ReachabilityValueLogPointer,
+			ContentSynced: certified,
+			SyncThrough: func(_ *os.File, got DurableFrontier) error {
+				syncCalls.Add(1)
+				if got.Bytes != 20 {
+					t.Fatalf("sync frontier=%d want20", got.Bytes)
+				}
+				return nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	sourceBuilder := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
+	if err := sourceBuilder.Add(newToken(16, true)); err != nil {
+		t.Fatal(err)
+	}
+	source, err := sourceBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
+	defer destination.Abandon()
+	if err := destination.Add(newToken(20, false)); err != nil {
+		t.Fatal(err)
+	}
+	if err := destination.Merge(source); err != nil {
+		t.Fatal(err)
+	}
+	set, err := destination.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if err := set.SyncThrough(); err != nil {
+		t.Fatal(err)
+	}
+	if syncCalls.Load() != 1 {
+		t.Fatalf("physical sync calls=%d want1", syncCalls.Load())
 	}
 }
 

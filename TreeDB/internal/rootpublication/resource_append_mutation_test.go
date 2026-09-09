@@ -639,13 +639,15 @@ func TestMergeAppendOnlyLogicalObligationsPhysicalCollisionIsMutationLocal(t *te
 	// one existing physical identity forced a full retained-closure clone.
 	const retained = 4096
 	dir := t.TempDir()
-	file := writeStableResourceFixture(t, dir, "asset.bin", "x")
-	newToken := func(obligations ...StableLogicalObligation) *StableResourceToken {
+	file := writeStableResourceFixture(t, dir, "asset.bin", "xx")
+	var syncCalls atomic.Uint64
+	newToken := func(frontier uint64, certified bool, obligations ...StableLogicalObligation) *StableResourceToken {
 		token, err := NewStableResourceToken(StableResourceSpec{
 			Kind: ResourceColumnAsset, LogicalLane: "columns", ResourceID: "asset", Generation: 1,
-			DiagnosticPath: "columns/asset.bin", File: file, Frontier: DurableFrontier{Bytes: 1},
+			DiagnosticPath: "columns/asset.bin", File: file, Frontier: DurableFrontier{Bytes: frontier},
 			Digest: sha256.Sum256([]byte("asset")), Reachability: ReachabilityColumnManifest,
-			LogicalObligations: obligations, ContentSynced: true,
+			LogicalObligations: obligations, ContentSynced: certified,
+			SyncThrough: func(*os.File, DurableFrontier) error { syncCalls.Add(1); return nil },
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -659,7 +661,7 @@ func TestMergeAppendOnlyLogicalObligationsPhysicalCollisionIsMutationLocal(t *te
 			t.Fatal(err)
 		}
 	}
-	if err := parentBuilder.Add(newToken(baseObligation)); err != nil {
+	if err := parentBuilder.Add(newToken(1, false, baseObligation)); err != nil {
 		t.Fatal(err)
 	}
 	parent, err := parentBuilder.Freeze()
@@ -668,7 +670,7 @@ func TestMergeAppendOnlyLogicalObligationsPhysicalCollisionIsMutationLocal(t *te
 	}
 	defer parent.Release()
 	producerBuilder := NewStableResourceSetBuilder()
-	if err := producerBuilder.Add(newToken(baseObligation, added)); err != nil {
+	if err := producerBuilder.Add(newToken(2, true, baseObligation, added)); err != nil {
 		t.Fatal(err)
 	}
 	producer, err := producerBuilder.Freeze()
@@ -709,11 +711,20 @@ func TestMergeAppendOnlyLogicalObligationsPhysicalCollisionIsMutationLocal(t *te
 	merged.rangeEntries(func(entry *stableResourceEntry) bool {
 		if entry.token.ResourceID() == "asset" {
 			got = entry.logicalObligations.slice()
+			if entry.frontier.Bytes != 2 || !entry.contentCertified {
+				t.Fatalf("coalesced frontier=%+v certified=%t want bytes2 certified", entry.frontier, entry.contentCertified)
+			}
+			if err := activeEntryToken(*entry).syncThroughCertified(entry.frontier, entry.contentCertified); err != nil {
+				t.Fatal(err)
+			}
 		}
 		return true
 	})
 	if !slices.Equal(got, []StableLogicalObligation{baseObligation, added}) {
 		t.Fatalf("coalesced obligations=%+v want exact base+addition", got)
+	}
+	if syncCalls.Load() != 0 {
+		t.Fatalf("persistent collision physical sync calls=%d want0", syncCalls.Load())
 	}
 }
 

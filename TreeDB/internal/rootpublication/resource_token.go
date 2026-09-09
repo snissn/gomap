@@ -674,12 +674,16 @@ func (token *StableResourceToken) SyncThrough() error {
 }
 
 func (token *StableResourceToken) syncThrough(frontier DurableFrontier) error {
+	return token.syncThroughCertified(frontier, false)
+}
+
+func (token *StableResourceToken) syncThroughCertified(frontier DurableFrontier, contentCertified bool) error {
 	if token == nil || token.released.Load() {
 		return ErrResourceOwnership
 	}
 	started := time.Now()
 	var err error
-	if !token.hasSyncedFrontier || !durableFrontierCovers(token.syncedFrontier, frontier) {
+	if !contentCertified && (!token.hasSyncedFrontier || !durableFrontierCovers(token.syncedFrontier, frontier)) {
 		physicalStarted := time.Now()
 		err = token.sync(token.pinned, frontier)
 		if err == nil {
@@ -1888,9 +1892,11 @@ type ResourceKindStats struct {
 	FlushDuration          time.Duration
 	Syncs                  uint64
 	SyncDuration           time.Duration
-	// PhysicalFileSyncs counts successful producer-certified file barriers.
+	// PhysicalFileSyncs counts successful producer-certified file barriers,
+	// including a barrier retained by a coalesced resource-set entry.
 	// Unlike Syncs, it does not increase when SyncThrough is skipped because an
-	// already-synced frontier covers the request.
+	// already-synced frontier covers the request. Duration includes only barriers
+	// timed by the active token; transferred entry certificates add no duration.
 	PhysicalFileSyncs        uint64
 	PhysicalFileSyncDuration time.Duration
 	NamespaceSyncs           uint64

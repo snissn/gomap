@@ -86,11 +86,14 @@ directory should be rebuilt; no complex migration scaffold is required yet.
 
 ### Resource cloning and content certificates
 
-Freezing or cloning a resource set does not certify content durability. Clones
-preserve the source token's exact certified frontier (or its absence), independently
-of namespace stability, and retain producer-specific flush and sync callbacks. A
-coalesced frontier beyond that certificate still requires its physical barrier; a
-failed barrier remains retryable and cannot manufacture a stronger certificate.
+Freezing or cloning a resource set does not create content durability. Token
+clones preserve the source token's exact certified frontier (or its absence),
+independently of namespace stability, and retain producer-specific flush and sync
+callbacks. A resource-set entry may also retain one producer certificate that
+covers its complete coalesced frontier even when its representative token has a
+smaller certificate. Absent or incomparable certificates still require a physical
+barrier; a failed barrier remains retryable and successful callbacks are not
+memoized into a stronger certificate.
 
 ## HashDB
 
