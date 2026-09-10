@@ -67,6 +67,7 @@ type columnManifestSnapshot struct {
 	RowRemainderBytes  int64
 	ColumnPayloadBytes int64
 	ManifestBytes      int64
+	SegmentOwnership   []columnManifestSegmentOwnership
 	Parts              []columnManifestPartSnapshot
 	AggregateMetadata  []columnManifestAggregateMetadataSnapshot
 	DictionaryCodes    []columnManifestDictionaryCodesSnapshot
@@ -223,6 +224,14 @@ func encodeColumnManifestAtGeneration(input ColumnPublishManifestEncodeInput, ge
 			value: partValue,
 		})
 	}
+	assetNamespace := ""
+	if input.ColumnStore.AssetManager != nil {
+		assetNamespace = input.ColumnStore.AssetManager.Namespace
+	}
+	records, err = normalizeColumnManifestSegmentOwnership(records, input.Prepared.ownedSegmentFileIDs, generation, assetNamespace)
+	if err != nil {
+		return ColumnPublishManifestEncodeResult{}, err
+	}
 	sortColumnManifestRecords(records)
 	checksum := checksumColumnManifestRecords(input, generation, records)
 	identity := ColumnManifestIdentity{
@@ -344,6 +353,14 @@ func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, gener
 	}
 	retained := make([]columnManifestRecord, 0, len(records))
 	for _, record := range records {
+		if bytes.HasPrefix(record.key, columnManifestSegmentOwnershipRecordPrefixBytes) {
+			_, err := decodeColumnManifestSegmentOwnership(record.key, record.value)
+			if err != nil {
+				return nil, err
+			}
+			retained = append(retained, columnManifestRecord{key: bytes.Clone(record.key), value: bytes.Clone(record.value)})
+			continue
+		}
 		if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
 			if !retainColumnManifestVectorGraphRecordForWrite(record.key, activeVectorIndexesKnown, activeVectorIndexes) {
 				continue
@@ -645,6 +662,12 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest int64 values rows=%d does not match part rows=%d", values.Rows, partRows)
 			}
 			snapshot.Int64Values = append(snapshot.Int64Values, values)
+		case bytes.HasPrefix(record.key, columnManifestSegmentOwnershipRecordPrefixBytes):
+			marker, err := decodeColumnManifestSegmentOwnershipForScan(record.key, record.value, "", snapshot.Generation)
+			if err != nil {
+				return columnManifestSnapshot{}, err
+			}
+			snapshot.SegmentOwnership = append(snapshot.SegmentOwnership, marker)
 		}
 	}
 	if uint64(len(snapshot.Parts)) != snapshot.ExpectedParts {

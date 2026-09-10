@@ -261,6 +261,11 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, fmt.Errorf("collections: column asset rewrite patched %d manifest refs, want %d", patched, len(remap.oldRefs))
 	}
+	patchedRecords, err = normalizeColumnManifestSegmentOwnership(patchedRecords, nil, state.manifest.Generation, state.cfg.AssetManager.Namespace)
+	if err != nil {
+		return stats, err
+	}
+	sortColumnManifestRecords(patchedRecords)
 	updatedIdentity, err := columnAssetRewriteUpdatedIdentity(state, patchedRecords)
 	if err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)

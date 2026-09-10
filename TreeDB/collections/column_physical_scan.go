@@ -228,6 +228,7 @@ type columnPhysicalScanSnapshotView struct {
 	AggregateMetadata     []columnManifestAggregateMetadataSnapshot
 	DictionaryCodes       []columnManifestDictionaryCodesSnapshot
 	Int64Values           []columnManifestInt64ValuesSnapshot
+	SegmentOwnership      []columnManifestSegmentOwnership
 	GraphAssetRefs        []ColumnAssetRef
 	VectorIndexState      columnVectorIndexStateSnapshot
 	VectorIndexStateFound bool
@@ -486,6 +487,7 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars
 	view.AssetRefs = refs
 	view.TypedColumnPartRefs = typedColumnPartRefs
 	view.ManifestCatalogBytes = manifest.ManifestBytes
+	view.SegmentOwnership = manifest.SegmentOwnership
 	view.AggregateMetadata = manifest.AggregateMetadata
 	view.DictionaryCodes = manifest.DictionaryCodes
 	view.Int64Values = manifest.Int64Values
@@ -993,6 +995,14 @@ func decodeColumnManifestSnapshotViewForScanFromIterator(iter iterator.UnsafeIte
 			}
 			writeHashBytes(&d, key)
 			writeHashBytes(&d, value)
+		case bytes.HasPrefix(key, columnManifestSegmentOwnershipRecordPrefixBytes):
+			marker, err := decodeColumnManifestSegmentOwnershipForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation)
+			if err != nil {
+				return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, err
+			}
+			snapshot.SegmentOwnership = append(snapshot.SegmentOwnership, marker)
+			writeHashBytes(&d, key)
+			writeHashBytes(&d, value)
 		}
 		iter.Next()
 	}
@@ -1233,6 +1243,14 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 				writeHashBytes(&d, key)
 				writeHashBytes(&d, value)
 			}
+		case bytes.HasPrefix(key, columnManifestSegmentOwnershipRecordPrefixBytes):
+			marker, err := decodeColumnManifestSegmentOwnershipForScan(key, value, cfg.AssetManager.Namespace, header.generation)
+			if err != nil {
+				return columnManifestPlannerCapabilitiesForScan{}, err
+			}
+			_ = marker
+			writeHashBytes(&d, key)
+			writeHashBytes(&d, value)
 		}
 		iter.Next()
 	}
@@ -1318,6 +1336,11 @@ func activeColumnManifestRecordsForScan(records []columnManifestRecord, generati
 		case bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes):
 			active = append(active, record)
 		case bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes):
+			active = append(active, record)
+		case bytes.HasPrefix(record.key, columnManifestSegmentOwnershipRecordPrefixBytes):
+			if _, err := decodeColumnManifestSegmentOwnership(record.key, record.value); err != nil {
+				return nil, err
+			}
 			active = append(active, record)
 		case bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes):
 			partGeneration, err := columnManifestPartGenerationFromRecordKeyForScan(record.key)
@@ -1419,6 +1442,12 @@ func decodeColumnManifestSnapshotForScan(records []columnManifestRecord) (column
 			if valuesGeneration > snapshot.Generation {
 				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest int64 values generation=%d is newer than header generation=%d", valuesGeneration, snapshot.Generation)
 			}
+		case bytes.HasPrefix(record.key, columnManifestSegmentOwnershipRecordPrefixBytes):
+			marker, err := decodeColumnManifestSegmentOwnershipForScan(record.key, record.value, "", snapshot.Generation)
+			if err != nil {
+				return columnManifestSnapshot{}, err
+			}
+			snapshot.SegmentOwnership = append(snapshot.SegmentOwnership, marker)
 		}
 	}
 	if !sawHeader {
@@ -1540,6 +1569,12 @@ func decodeColumnManifestSnapshotViewForScan(records []columnManifestRecord, exp
 				return columnManifestSnapshot{}, nil, 0, err
 			}
 			snapshot.Int64Values = append(snapshot.Int64Values, values)
+		case bytes.HasPrefix(record.key, columnManifestSegmentOwnershipRecordPrefixBytes):
+			marker, err := decodeColumnManifestSegmentOwnershipForScan(record.key, record.value, expectedNamespace, snapshot.Generation)
+			if err != nil {
+				return columnManifestSnapshot{}, nil, 0, err
+			}
+			snapshot.SegmentOwnership = append(snapshot.SegmentOwnership, marker)
 		}
 	}
 	if uint64(activeParts) != snapshot.ExpectedParts {

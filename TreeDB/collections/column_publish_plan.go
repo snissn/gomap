@@ -163,6 +163,7 @@ type ColumnPublishPreparedAssets struct {
 	AssetMetrics            ColumnPublishAssetPreparationMetrics
 	stableResources         *rootpublication.StableResourceSet
 	stableResourcesRequired bool
+	ownedSegmentFileIDs     map[uint32]struct{}
 }
 
 // ColumnPublishManifestEncodeInput is passed to the manifest encoding stage.

@@ -9,6 +9,29 @@ import (
 	"testing"
 )
 
+func TestTypedGraphServingMetadataChargesSegmentOwnership(t *testing.T) {
+	b := &typedGraphServingBaseMetadata{}
+	base, err := typedGraphServingMetadataBytes(b, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.view.SegmentOwnership = make([]columnManifestSegmentOwnership, 1, 3)
+	b.materializerView.SegmentOwnership = make([]columnManifestSegmentOwnership, 1, 5)
+	b.view.SegmentOwnership[0].Ref = ColumnAssetRef{Kind: "row-kind", Namespace: "row-namespace"}
+	b.materializerView.SegmentOwnership[0].Ref = ColumnAssetRef{Kind: "typed-kind", Namespace: "typed-namespace"}
+	want := base + 8*int64(reflect.TypeFor[columnManifestSegmentOwnership]().Size()) + int64(len("row-kindrow-namespacetyped-kindtyped-namespace"))
+	charged, err := typedGraphServingMetadataBytes(b, math.MaxInt64)
+	if err != nil || charged != want {
+		t.Fatalf("ownership charge=%d want %d: %v", charged, want, err)
+	}
+	if _, err := typedGraphServingMetadataBytes(b, want-1); !errors.Is(err, errTypedGraphOwnerBudget) {
+		t.Fatalf("accepted insufficient ownership budget: %v", err)
+	}
+	if _, err := typedGraphServingMetadataBytes(b, want); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTypedGraphServingRetainsExactPreparedKey(t *testing.T) {
 	requireTypedGraphPublicServingTest(t)
 	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)

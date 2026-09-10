@@ -1471,6 +1471,10 @@ func newColumnPhysicalAssetSegmentAppendWriter(rootDir string, cfg ColumnStoreCo
 }
 
 func newColumnPhysicalAssetSegmentAppendWriterWithStableResources(rootDir string, cfg ColumnStoreConfig, fileID uint32, registry *rootpublication.IdentityPinRegistry) (*columnPhysicalAssetSegmentAppender, error) {
+	return newColumnPhysicalAssetSegmentAppendWriterWithStableResourcesMode(rootDir, cfg, fileID, registry, true)
+}
+
+func newColumnPhysicalAssetSegmentAppendWriterWithStableResourcesMode(rootDir string, cfg ColumnStoreConfig, fileID uint32, registry *rootpublication.IdentityPinRegistry, create bool) (*columnPhysicalAssetSegmentAppender, error) {
 	if registry == nil {
 		return nil, errors.New("collections: stable column physical asset append requires identity pin registry")
 	}
@@ -1506,7 +1510,16 @@ func newColumnPhysicalAssetSegmentAppendWriterWithStableResources(rootDir string
 		cfg: cfg, namespace: namespace, fileID: fileID, assetPath: assetPath,
 		lock: segmentLock, unlockLock: true, stableRegistry: registry,
 	}
-	file, namespaceNeedsSync, created, err := openColumnAssetSegmentAppendFileAt(parent, assetPath)
+	var file *os.File
+	var namespaceNeedsSync, created bool
+	if create {
+		file, namespaceNeedsSync, created, err = openColumnAssetSegmentAppendFileAt(parent, assetPath)
+	} else {
+		// The segment lock and SeekEnd establish the append position. Retain
+		// write-data permission so a rejected append can truncate its suffix.
+		file, err = rootpublication.OpenStableChildFile(parent, filepath.Base(assetPath), os.O_RDWR, 0o600)
+		namespaceNeedsSync = true
+	}
 	if err != nil {
 		_ = parent.Close()
 		appender.releaseLock()
@@ -1654,14 +1667,15 @@ func openColumnAssetSegmentAppendFile(assetPath string) (*os.File, bool, bool, e
 
 func openColumnAssetSegmentAppendFileAt(parent *os.File, assetPath string) (*os.File, bool, bool, error) {
 	name := filepath.Base(assetPath)
-	file, err := rootpublication.OpenStableChildFile(parent, name, os.O_CREATE|os.O_EXCL|os.O_RDWR|os.O_APPEND, 0o600)
+	// Stable appenders seek under the segment lock and need Truncate on rollback.
+	file, err := rootpublication.OpenStableChildFile(parent, name, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err == nil {
 		return file, true, true, nil
 	}
 	if !errors.Is(err, os.ErrExist) {
 		return nil, false, false, err
 	}
-	file, err = rootpublication.OpenStableChildFile(parent, name, os.O_RDWR|os.O_APPEND, 0o600)
+	file, err = rootpublication.OpenStableChildFile(parent, name, os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, false, false, err
 	}
@@ -3386,4 +3400,35 @@ func syncColumnAssetDir(dir string) error {
 		return err
 	}
 	return durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceAuxiliary, dir, dir)
+}
+
+// existingOwnedAppender never creates a missing file or writes before proving
+// its exact physical binding against a retained publication-root resource.
+func (s *columnPhysicalAssetAppendSession) existingOwnedAppender(marker columnManifestSegmentOwnership, resources *rootpublication.StableResourceSet) (*columnPhysicalAssetSegmentAppender, error) {
+	if s == nil || s.active != nil || s.stableRegistry == nil || resources == nil {
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	if err := s.candidateAdmission.charge(0, 1); err != nil {
+		return nil, err
+	}
+	appender, err := newColumnPhysicalAssetSegmentAppendWriterWithStableResourcesMode(s.rootDir, s.cfg, marker.Ref.FileID, s.stableRegistry, false)
+	if err != nil {
+		return nil, err
+	}
+	descriptors := resources.Descriptors()
+	if len(descriptors) != 1 {
+		return nil, errors.Join(rootpublication.ErrUnresolvedResource, appender.abort())
+	}
+	descriptor := descriptors[0]
+	namespace, ok := descriptor.Namespace()
+	if !ok || !rootpublication.SamePhysicalIdentity(descriptor.Identity(), appender.stableChildIdentity) ||
+		!rootpublication.SamePhysicalIdentity(namespace.ParentIdentity, appender.stableParentIdentity) || namespace.NewName != appender.stableChildName ||
+		descriptor.Digest() != stableColumnSegmentDigest(marker.Ref) || descriptor.DiagnosticPath() != filepath.ToSlash(stableColumnAssetDiagnosticPath(marker.Ref)) ||
+		descriptor.Frontier().Bytes < marker.Frontier || appender.offset < 0 || uint64(appender.offset) < descriptor.Frontier().Bytes {
+		return nil, errors.Join(rootpublication.ErrResourceConflict, appender.abort())
+	}
+	appender.stableRecoveryRetainer = s.stableRecoveryRetainer
+	appender.candidateAdmission = s.candidateAdmission
+	s.active, s.activeFile = appender, marker.Ref.FileID
+	return appender, nil
 }

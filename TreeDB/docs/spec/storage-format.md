@@ -3102,16 +3102,39 @@ fold additionally writes compacted assets at the real captured generation T,
 with a fresh row part and typed part 2, and preserves post-T records under the
 current U manifest header. Its separately checksummed captured manifest and
 independent native roots describe T, not the current U scalar/primary authority.
-For the supported non-column-retained typed FP32 schema, each physical batch or
-fold attempt puts row metadata and aligned typed images in one fresh O_EXCL
-segment from the existing manager allocator. Atomic source delete/insert stages
-share that attempt's file only while the first stage's prepared authority is
-still held. Delete-only output and same-generation retries also start fresh;
-logical generation/part identities and typed alignment/padding are unchanged.
-The file ID is no longer derived from generation for this selected path; other
-schemas retain their existing placement. Failed output remains persistent but
-cannot become an unknown prefix of a later live attempt. Reachability and exact
-captured/fallback/reader protection are unchanged.
+For the supported non-column-retained typed FP32 schema, an ordinary INSERT
+can append row metadata and aligned typed images to a previously owned segment.
+Selection runs inside the serialized command-publication context and requires
+an exact live logical obligation and independently retained physical authority.
+The existing file is opened without creation; its inode, parent, name and
+minimum durable frontier must match before any write. Its physical tail plus
+the pending batch must fit the private 16 MiB target. Otherwise the still-unwritten
+handle is released and the existing allocator creates a fresh O_EXCL segment.
+A single larger batch gets one fresh segment. Every batch still closes and
+syncs its output before publication. Compound source replacement, replay,
+maintenance and prebuilt outputs retain their fresh-output behavior; the two
+stages of one compound source attempt may share that attempt's prepared file.
+
+Eligible isolated typed producers mark their file in its first committed
+manifest with the private key `\x06column-manifest/v1/segment-ownership/` followed
+by the four-byte big-endian file ID. The value has magic `TCMO`, version 1, a
+complete real asset-reference witness, its end offset, and a graph/state witness
+flag. It is included in the ordinary manifest checksum. Generic prepared assets
+cannot acquire ownership implicitly. Normalization retains a marker only while
+its file has final live references and selects a maximum-end witness from those
+references, including retained sidecars and graph/state records. That minimum
+live frontier may decrease when the highest reference retires; it is not a
+physical size or a reclaimable-byte boundary.
+
+Reachability binds each marker to the exact snapshot's recovery-selectable root
+and its stable physical resource. All real logical references still undergo
+normal validation, including bounds checks. The entire matching physical file
+is protected while any reference remains, including retired gaps and an
+unacknowledged append suffix. Those bytes are neither parsed as assets nor
+claimed reclaimable. Removing the final reference removes the marker in the
+same manifest publication; existing exact GC can reclaim the whole file only
+when captured/fallback/reader/construction pins also allow deletion. Older
+manifests retain their own references and ownership records.
 
 The reused allocator uses IDs 2 through 1,048,575, excluding legacy file 1 and
 the direct-view reserved band. Its high-water cache is only a hint. On exhaustion,

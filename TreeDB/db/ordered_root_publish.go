@@ -301,6 +301,17 @@ type CommandWALPublishContext struct {
 	durableResourceAppendMutation       *rootpublication.StableLogicalObligationMutation
 	durableResourceRequirementWork      *rootpublication.StableResourceClosureWork
 	durableResourceRequirementsFallback *func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error)
+	cloneVisibleStableResource          func(rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error)
+}
+
+// CloneVisibleStableResource returns an independently pinned resource selected
+// from the visible root bound to this context. The capability expires when the
+// context delta builder returns.
+func (ctx CommandWALPublishContext) CloneVisibleStableResource(selector rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error) {
+	if ctx.cloneVisibleStableResource == nil {
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	return ctx.cloneVisibleStableResource(selector)
 }
 
 // RegisterDurableLogicalObligationAppendMutation supplies collections-owned,
@@ -3673,6 +3684,21 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	durableResourceAppendMutation := rootpublication.StableLogicalObligationMutation{}
 	durableResourceRequirementWork := rootpublication.StableResourceClosureWork{}
 	var durableResourceRequirementsFallback func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error)
+	var visibleSelectorMu sync.Mutex
+	visibleSelectorEnabled := true
+	cloneVisibleStableResource := func(selector rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error) {
+		visibleSelectorMu.Lock()
+		defer visibleSelectorMu.Unlock()
+		if !visibleSelectorEnabled || db.rootPublication == nil {
+			return nil, rootpublication.ErrResourceOwnership
+		}
+		return db.rootPublication.cloneVisibleStableResource(selector)
+	}
+	revokeVisibleSelector := func() {
+		visibleSelectorMu.Lock()
+		visibleSelectorEnabled = false
+		visibleSelectorMu.Unlock()
+	}
 	ctx := CommandWALPublishContext{
 		AppliedCommandLSN: lsn, durableResources: durableResourceBuilder,
 		durableResourceRequirements:         &durableResourceRequirements,
@@ -3680,6 +3706,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		durableResourceAppendMutation:       &durableResourceAppendMutation,
 		durableResourceRequirementWork:      &durableResourceRequirementWork,
 		durableResourceRequirementsFallback: &durableResourceRequirementsFallback,
+		cloneVisibleStableResource:          cloneVisibleStableResource,
 	}
 
 	allOrdered := ordered
@@ -3692,7 +3719,10 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	if buildContextDeltas != nil {
 		contextBuildStart := time.Now()
 		var buildErr error
-		contextOrdered, buildErr = buildContextDeltas(ctx)
+		func() {
+			defer revokeVisibleSelector()
+			contextOrdered, buildErr = buildContextDeltas(ctx)
+		}()
 		if timing != nil {
 			timing.ContextBuild += time.Since(contextBuildStart)
 		}
@@ -3707,6 +3737,10 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 			allOrdered = append(allOrdered, ordered...)
 			allOrdered = append(allOrdered, contextOrdered...)
 		}
+	}
+
+	if buildContextDeltas == nil {
+		revokeVisibleSelector()
 	}
 
 	rootIDs = make([]uint64, len(allOrdered))

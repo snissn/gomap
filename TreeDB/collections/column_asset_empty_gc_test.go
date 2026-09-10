@@ -40,8 +40,13 @@ func TestTypedGraphWorkEpochEmptyDeniedOutput(t *testing.T) {
 	epoch := coord.typedGraphWorkEpoch
 	stats, err := col.renewTypedGraphWorkEpoch(context.Background(), limits)
 	if !rootpublication.StableRelativeNamespaceSupported() {
-		if !errors.Is(err, ErrColumnAssetReachabilityIncomplete) || stats.Columns.SegmentsDeleted != 0 || coord.typedGraphCandidateAttempts != 1 || coord.typedGraphWorkEpoch != epoch {
-			t.Fatalf("unverifiable empty output must retain debt and authority: stats=%+v err=%v", stats, err)
+		wantErr := ErrColumnAssetReachabilityIncomplete
+		if rootpublication.StableNamespaceCreationSupported() {
+			// Exact discovery can verify the empty file while deletion is unsupported.
+			wantErr = rootpublication.ErrNamespacePersistenceUnsupported
+		}
+		if !errors.Is(err, wantErr) || stats.Columns.Plan.Complete != rootpublication.StableNamespaceCreationSupported() || stats.Columns.SegmentsDeleted != 0 || coord.typedGraphCandidateAttempts != 1 || coord.typedGraphWorkEpoch != epoch {
+			t.Fatalf("unsupported empty cleanup must retain debt and authority: stats=%+v err=%v", stats, err)
 		}
 		return
 	}

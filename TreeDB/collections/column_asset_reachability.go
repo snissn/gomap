@@ -11,7 +11,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
@@ -58,6 +60,8 @@ var ErrColumnAssetReachabilityManifestLimit = errors.New("collections: column as
 
 // ErrColumnAssetReachabilityLifecycleLimit reports a lifecycle copy limit failure.
 var ErrColumnAssetReachabilityLifecycleLimit = errors.New("collections: column asset lifecycle copy limit exceeded or invalid")
+
+var columnAssetReachabilityBeforeOwnershipBindTestHook atomic.Pointer[func(*Collection)]
 
 type columnAssetReachabilityOptionsInternal struct {
 	ColumnAssetReachabilityOptions
@@ -346,6 +350,18 @@ func (opts ColumnAssetReachabilityOptions) validateDiscoveryLimits() error {
 }
 
 func (c *Collection) planColumnAssetReachability(ctx context.Context, opts columnAssetReachabilityOptionsInternal) (ColumnAssetReachabilityPlan, map[ColumnAssetRef]columnAssetReachabilitySourceMask, error) {
+	// A pinned scan root may leave both durable slots before ownership binding.
+	// Rebuild the entire plan with a fresh snapshot, releasing each stale attempt
+	// first so inspection pins never become apparent external readers.
+	for attempt := 0; ; attempt++ {
+		plan, refs, err := c.planColumnAssetReachabilityOnce(ctx, opts)
+		if attempt == 2 || !errors.Is(err, backenddb.ErrRecoverableRootSetStale) {
+			return plan, refs, err
+		}
+	}
+}
+
+func (c *Collection) planColumnAssetReachabilityOnce(ctx context.Context, opts columnAssetReachabilityOptionsInternal) (ColumnAssetReachabilityPlan, map[ColumnAssetRef]columnAssetReachabilitySourceMask, error) {
 	if err := opts.validateDiscoveryLimits(); err != nil {
 		return ColumnAssetReachabilityPlan{ProtectOnly: true}, nil, err
 	}
@@ -459,6 +475,7 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 			input.recoveryBytes = addColumnAssetReachabilityBytes(input.recoveryBytes, positiveColumnAssetReachabilityLength(ref.Length))
 		}
 	}
+
 	if err := input.addRefs(ctx, opts.CandidateRefs, ColumnAssetReachabilitySourceCandidate); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
@@ -498,6 +515,17 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 	}
 	if err := ctx.Err(); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
+	}
+	// Capture our inspection pins after classifying external older readers.
+	if len(view.SegmentOwnership) != 0 {
+		if hook := columnAssetReachabilityBeforeOwnershipBindTestHook.Load(); hook != nil {
+			(*hook)(c)
+		}
+		release, err := c.bindColumnSegmentOwnership(ctx, view, &input)
+		if err != nil {
+			return columnAssetReachabilityPlanIdentity(input), input.refs, err
+		}
+		defer release()
 	}
 	plan, err := buildColumnAssetReachabilityPlan(ctx, input)
 	return plan, input.refs, err
@@ -738,6 +766,7 @@ type columnAssetReachabilityInput struct {
 	unknownSources     map[ColumnAssetRef][]ColumnAssetReachabilitySource
 	sourceCounts       ColumnAssetReachabilitySourceStats
 	mappedResources    ColumnAssetReachabilityMappedResourceStats
+	ownedSegments      map[uint32]rootpublication.StableResourceDescriptor
 	quarantineSegments map[uint32]int64
 	pinStateIncomplete bool
 }
@@ -995,6 +1024,16 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			}
 		}
 		rangeSet := rangesByFile[segment.fileID]
+		logicalRefCount := rangeSet.count
+		if owned, ok := input.ownedSegments[segment.fileID]; ok {
+			namespace, ok := owned.Namespace()
+			if !ok || !rootpublication.SamePhysicalIdentity(owned.Identity(), segment.childIdentity) ||
+				!rootpublication.SamePhysicalIdentity(namespace.ParentIdentity, segment.parentIdentity) || namespace.NewName != segment.name ||
+				segment.bytes < 0 || uint64(segment.bytes) < owned.Frontier().Bytes {
+				return columnAssetReachabilityPlanIdentity(input), errors.New("collections: owned segment physical identity/frontier changed")
+			}
+			rangeSet.appendRange(columnAssetReachabilityRange{start: 0, end: segment.bytes, status: ColumnAssetReachabilityProtected})
+		}
 		if quarantineBytes, ok := input.quarantineSegments[segment.fileID]; ok {
 			seenQuarantineSegments[segment.fileID] = struct{}{}
 			plan.Segments.QuarantineSegments++
@@ -1009,6 +1048,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 					end:    segment.bytes,
 					status: ColumnAssetReachabilityProtected,
 				})
+				logicalRefCount++
 				rangesByFile[segment.fileID] = rangeSet
 			}
 		}
@@ -1054,7 +1094,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 				ProtectedBytes:        segmentPlan.protectedBytes,
 				ReclaimableBytes:      segmentPlan.reclaimableBytes,
 				UnknownBytes:          segmentPlan.unknownBytes,
-				RefCount:              rangeSet.count,
+				RefCount:              logicalRefCount,
 				plannedParentIdentity: segment.parentIdentity,
 				plannedChildIdentity:  segment.childIdentity,
 			})
@@ -1414,7 +1454,9 @@ func listColumnAssetReachabilitySegmentsWithLimit(ctx context.Context, segmentDi
 	if maxEntries < 0 {
 		return nil, ErrColumnAssetReachabilitySegmentLimit
 	}
-	if !rootpublication.StableRelativeNamespaceSupported() {
+	// Read-only identity capture also works with Windows' narrower exact-child
+	// contract; rename/remove support is only needed by destructive GC.
+	if !rootpublication.StableNamespaceCreationSupported() {
 		return listColumnAssetReachabilitySegmentsLegacy(ctx, segmentDir, maxEntries)
 	}
 	if ctx == nil {
@@ -1423,7 +1465,7 @@ func listColumnAssetReachabilitySegmentsWithLimit(ctx context.Context, segmentDi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	dir, err := os.Open(segmentDir)
+	dir, err := rootpublication.OpenStableParent(segmentDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil

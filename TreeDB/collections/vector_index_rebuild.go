@@ -1830,6 +1830,11 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
+	nextRecords, err = normalizeColumnManifestSegmentOwnership(nextRecords, nil, manifest.Generation, cfg.AssetManager.Namespace)
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+	}
+	sortColumnManifestRecords(nextRecords)
 	identity := ColumnManifestIdentity{
 		Generation: manifest.Generation,
 		Format:     columnManifestFormatTCS1,
