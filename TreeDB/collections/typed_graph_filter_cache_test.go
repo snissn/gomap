@@ -159,11 +159,21 @@ func TestTypedGraphFilterKeeper(t *testing.T) {
 	if _, _, err := col.InsertTypedBatchWithStats([][]byte{[]byte("new-id")}, [][]byte{[]byte(`{"id":"new-id","residual":"kept"}`)}, row); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []HybridScalarFilter{all, filters[2]} {
+	for _, f := range []HybridScalarFilter{all, filters[2], filters[5]} {
 		w, err := query(ctx, f, limits)
-		if err != nil || w.SourceIDs != 3 || w.InspectedEntries != 0 {
+		if err != nil {
 			t.Fatalf("current suffix: %+v %v", w, err)
 		}
+		if f.IndexName == "path" {
+			if w.SourceIDs != 3 || w.InspectedEntries != 0 {
+				t.Fatalf("broad predicate lost suffix binding: %+v", w)
+			}
+		} else if w.InspectedEntries == 0 {
+			t.Fatalf("narrow predicate bound the larger or equal suffix: %+v", w)
+		}
+	}
+	if keeper.capturedBase.filters[2].filter == nil || keeper.capturedBase.filters[5].filter == nil {
+		t.Fatal("cheaper current preparation evicted cached predicates")
 	}
 	// Cancellation on a warm plan preserves errors and no completed result.
 	canceled, cancel := context.WithCancel(ctx)
@@ -289,6 +299,9 @@ func TestTypedGraphFilterKeeperWaitAndAdmission(t *testing.T) {
 	buildErr := <-finished
 	if !errors.Is(waitErr, context.DeadlineExceeded) || waiting.Completed || waiting.SourceIDs != 0 || buildErr != nil || cold.SourceIDs != 64 || !cold.Completed {
 		t.Fatalf("wait=%+v %v build=%+v %v", waiting, waitErr, cold, buildErr)
+	}
+	if first.overlay.base.documentView != nil {
+		t.Fatal("zero-suffix cold preparation rebuilt the validated base view")
 	}
 	var warm ColumnGraphFilterWork
 	if _, err := prepareTypedGraphServingFilter(context.Background(), p, second.overlay, filter, f, &warm); err != nil || warm.SourceIDs != 0 {

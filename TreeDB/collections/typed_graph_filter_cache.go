@@ -86,6 +86,11 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 				entry = nil
 				continue
 			}
+			// ponytail: source-ID counts estimate preparation cost; use measured
+			// weighted costs only if similarly sized plans need finer selection.
+			if d := len(overlay.rows); d > 0 && d >= base.plan.sourceIDs {
+				return prepareTypedGraphFilterUnmetered(ctx, overlay, filter, limits, &work)
+			}
 			return bindTypedGraphServingFilter(ctx, base, overlay, limits, &work)
 		}
 		if empty == nil {
@@ -109,7 +114,14 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 		close(ready)
 		r.filtersMu.Unlock()
 	}()
-	if err := candidate.prepare(ctx, overlay.base, filter, limits, &work); err != nil {
+	if len(overlay.rows) == 0 {
+		// The current owner already validated this base-only overlay. Reuse it
+		// instead of rebuilding and comparing the same manifest views again.
+		candidate.plan, err = prepareTypedGraphFilterUnmetered(ctx, overlay, filter, limits, &work)
+	} else {
+		err = candidate.prepare(ctx, overlay.base, filter, limits, &work)
+	}
+	if err != nil {
 		return nil, err
 	}
 	// Detached plans contain only owned immutable selections and predicates, never

@@ -112,10 +112,14 @@ The existing captured-base keeper retains the first eight distinct supported
 string filters per index, including their exact preparation limits and compiled
 bounds. Same-key cold requests share one preparation. Entries own immutable row
 selections and predicates; they retain no request snapshot or mutation suffix.
-Every query opens its own current owner, removes shadowed/deleted base rows, and
-evaluates current typed suffix values before scoring and full fetch. A changed
-base/schema cannot reuse the old selection. Unsupported filters, a full keeper,
-or a keeper being retired use ordinary current-snapshot preparation.
+Every query opens its own current owner. Cached binding removes shadowed/deleted
+base rows and evaluates current typed suffix values before scoring and full
+fetch. When a nonempty suffix has at least as many IDs as the cached plan's
+original source work, ordinary current-snapshot preparation handles that query;
+the cached entry stays available. This simple cost estimate avoids scanning a
+large suffix for an empty or narrow filter. A changed base/schema cannot reuse
+the old selection. Unsupported filters, a full keeper, or a keeper being retired
+also use ordinary current-snapshot preparation.
 
 Known selection/predicate backing is charged under `Owners.StateBytes` until
 keeper closure. Insufficient retained-state allowance leaves the successful
@@ -124,8 +128,8 @@ its entries; new queries do not join a retiring keeper. This can couple maintena
 latency to active query duration. It is not a separate document or vector cache.
 Cold preparation and suffix binding share the declared per-request filter budget;
 a cold miss can exhaust it even when a warm bind fits. Filter work reports actual
-cold work only on misses and current changed-ID checks on hits. Mapping work also
-charges suffix predicates/escaped values and exact-rank enumeration; these are
+cold posting work only when performed and changed-ID checks when binding. Mapping
+work also charges suffix predicates/escaped values and exact-rank enumeration; these are
 admitted bounds, not a total comparison or heap measurement. Compiled predicate
 bounds are separately limited by the smaller of `SourceBytes` and `MappingWork`.
 

@@ -400,7 +400,8 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// #4618 capture bounds reuse the existing exported schema/asset descriptors.
 	{path: "TreeDB/collections/typed_graph_base_copy.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/typed_graph_base_copy_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
-	{path: "TreeDB/collections/typed_graph_base_filter.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
+	{path: "TreeDB/collections/typed_graph_base_filter.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
+	{path: "TreeDB/collections/typed_graph_filter_cache.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/typed_graph_lifecycle_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 5},
 	{path: "TreeDB/collections/typed_graph_overlay.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 8},
 	{path: "TreeDB/collections/typed_graph_overlay_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 6},

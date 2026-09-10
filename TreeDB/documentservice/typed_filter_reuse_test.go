@@ -14,7 +14,7 @@ import (
 // The ordinary Dense64/v2 handler calls this same native service method. This
 // fixture measures service owner/filter/search/full-fetch work, excluding wire
 // encoding and the client. It is not the frozen Minima dataset or qualification.
-func typedFilterReuseFixture(t testing.TB, rows int) (*Service, [8]DenseVectorSearchRequest) {
+func typedFilterReuseFixture(t testing.TB, rows, batchSize int) (*Service, [8]DenseVectorSearchRequest) {
 	t.Helper()
 	requireTypedServiceServingTest(t)
 	svc, db := newTestService(t)
@@ -41,8 +41,22 @@ func typedFilterReuseFixture(t testing.TB, rows int) (*Service, [8]DenseVectorSe
 		input.Columns[1].Strings[i] = "full requested content"
 		input.Columns[2].Strings[i] = fmt.Sprintf("user-%d", i%8)
 	}
-	if result, err := svc.UpsertTypedDocuments(ctx, info.Name, input); err != nil || result.Inserted != rows {
-		t.Fatalf("initial upsert=%+v err=%v", result, err)
+	for start := 0; start < rows; start += batchSize {
+		end := min(rows, start+batchSize)
+		part := input
+		part.IDs, part.Retained = input.IDs[start:end], input.Retained[start:end]
+		part.Columns = make([]collections.TypedColumnBatch, len(input.Columns))
+		for i, column := range input.Columns {
+			part.Columns[i] = column
+			if column.Float32Vectors != nil {
+				part.Columns[i].Float32Vectors = column.Float32Vectors[start:end]
+			} else {
+				part.Columns[i].Strings = column.Strings[start:end]
+			}
+		}
+		if result, err := svc.UpsertTypedDocuments(ctx, info.Name, part); err != nil || result.Inserted != end-start {
+			t.Fatalf("initial upsert=%+v err=%v", result, err)
+		}
 	}
 	serving := typedServiceTestOptions()
 	serving.Owners.StateBytes, serving.Owners.AssetBytes = 256<<20, 256<<20
@@ -62,7 +76,7 @@ func typedFilterReuseFixture(t testing.TB, rows int) (*Service, [8]DenseVectorSe
 }
 
 func TestServiceTypedFilterReuseEightPredicates(t *testing.T) {
-	svc, queries := typedFilterReuseFixture(t, 128)
+	svc, queries := typedFilterReuseFixture(t, 128, 128)
 	ctx := context.Background()
 	var expected [8][]RawDenseVectorResult
 	for i, query := range queries {
@@ -97,7 +111,7 @@ func TestServiceTypedFilterReuseEightPredicates(t *testing.T) {
 }
 
 func BenchmarkServiceTypedFilterReuse(b *testing.B) {
-	svc, queries := typedFilterReuseFixture(b, 50000)
+	svc, queries := typedFilterReuseFixture(b, 50000, 50000)
 	ctx := context.Background()
 	for _, query := range queries {
 		out, err := svc.SearchDenseVectorNativeRawInto(ctx, "filter-reuse", query, nil)
@@ -137,4 +151,39 @@ func BenchmarkServiceTypedFilterReuse(b *testing.B) {
 	b.ReportMetric(float64(sourceIDs)/float64(b.N), "filter-source-IDs/op")
 	b.ReportMetric(float64(inspected)/float64(b.N), "filter-inspected/op")
 	b.ReportMetric(float64(scored)/float64(b.N), "scored/op")
+}
+
+// One operation is all eight cold predicates, including preparation and full
+// fetch. Keeper retirement/Ensure are setup outside the measured cohort.
+func BenchmarkServiceTypedFilterReuseCold(b *testing.B) {
+	svc, queries := typedFilterReuseFixture(b, 50000, 256)
+	ctx := context.Background()
+	col, _, err := svc.openIndex(ctx, "filter-reuse", 0)
+	if err != nil {
+		b.Fatal(err)
+	}
+	serving := typedServiceTestOptions()
+	serving.Owners.StateBytes, serving.Owners.AssetBytes = 256<<20, 256<<20
+	serving.Filter.SourceIDs, serving.Filter.InspectedEntries = 50000+512, 100000+512
+	serving.Filter.MappingWork = 8 << 20
+	serving.SearchCandidates = 8192
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		b.StopTimer()
+		if err := col.CloseVectorIndexPreparedSearchCache(); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := svc.OptimizeIndex(ctx, "filter-reuse", OptimizeIndexRequest{ColumnGraphAction: "ensure", ColumnGraphServing: &serving}); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		for _, query := range queries {
+			out, err := svc.SearchDenseVectorNativeRawInto(ctx, "filter-reuse", query, nil)
+			if err != nil || len(out.Results) != 5 || out.DenseWork == nil || !out.DenseWork.Completed || out.DenseWork.Graph.Filter.SourceIDs != 6250 || out.DenseWork.Output.Fetched != 5 {
+				b.Fatalf("cold native service cohort: work=%+v err=%v", out.DenseWork, err)
+			}
+		}
+	}
+	b.ReportMetric(8, "requests/op")
 }
