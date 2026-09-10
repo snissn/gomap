@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -31,5 +32,20 @@ func TestPowerLossOraclePostMetaFailurePoisonsPublicHandle(t *testing.T) {
 	}
 	if err := d.SetSync([]byte("after/poison"), []byte("must-reopen")); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("public SetSync after post-meta failure error=%v, want ErrRecoveryRequired", err)
+	}
+	if _, err := d.CaptureRecoverableRootSet(context.Background()); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("destructive capture after poison=%v", err)
+	}
+	if snapshot := d.AcquireSnapshot(); snapshot != nil {
+		_ = snapshot.Close()
+		t.Fatal("publication-poisoned handle allowed a new snapshot")
+	}
+	roots, err := d.CaptureRecoverableRootSetForInspection(context.Background())
+	if roots != nil {
+		roots.Release()
+		t.Fatal("publication-poisoned handle granted inspection authority")
+	}
+	if !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("inspection error=%v, want ErrRecoveryRequired", err)
 	}
 }

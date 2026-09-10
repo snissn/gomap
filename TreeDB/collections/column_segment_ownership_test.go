@@ -6,11 +6,118 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestColumnSegmentOwnershipInspectionRecoveryBoundaries(t *testing.T) {
+	if !rootpublication.StableNamespaceCreationSupported() {
+		t.Skip("segment reuse requires exact child creation authority")
+	}
+	for _, rootPoison := range []bool{false, true} {
+		name := "command_wal_poison"
+		if rootPoison {
+			name = "root_publication_poison"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir, db, col := openTypedMinimaCollection(t)
+			defer func() { _ = db.Close() }()
+			insertColumnOwnedSegmentBatch(t, col, "stable")
+			if err := db.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			parts := columnManifestAllPartsForCollectionM12C(t, db, col)
+			if len(parts) == 0 {
+				t.Fatal("missing owned parts")
+			}
+			path, err := columnAssetSegmentPath(db.ColumnAssetRootDir(), parts[0].AssetRef)
+			if err != nil {
+				t.Fatal(err)
+			}
+			injected := errors.New("inspection recovery cut")
+			var fired atomic.Bool
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				cut := event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyFileSync
+				if rootPoison {
+					cut = event.Point == durabilitycut.AfterMetaWrite
+				}
+				if cut && fired.CompareAndSwap(false, true) {
+					return injected
+				}
+				return nil
+			})
+			if rootPoison {
+				err = db.SetSync([]byte("inspection-poison"), []byte("ambiguous"))
+				if err == nil {
+					err = db.Checkpoint()
+				}
+			} else {
+				_, err = col.UpsertTypedBatch(typedUpsertRecoveryBatch("ambiguous", 2))
+			}
+			restore()
+			if !fired.Load() || !errors.Is(err, injected) {
+				t.Fatalf("publication cut fired=%v err=%v", fired.Load(), err)
+			}
+			if err := db.CheckStorageMaintenanceReady(); !errors.Is(err, backenddb.ErrRecoveryRequired) {
+				t.Fatalf("poison did not block maintenance: %v", err)
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, planErr := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
+			stats, gcErr := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{DryRun: true})
+			if rootPoison {
+				if planErr == nil || plan.Complete || gcErr == nil || stats.Plan.Complete {
+					t.Fatalf("new inspection bypassed root poison: plan=%+v err=%v dry=%+v err=%v", plan, planErr, stats, gcErr)
+				}
+			} else {
+				if planErr != nil || !plan.Complete || gcErr != nil || !stats.Plan.Complete {
+					t.Fatalf("WAL-poison inspection failed: plan=%+v err=%v dry=%+v err=%v", plan, planErr, stats, gcErr)
+				}
+				found := false
+				for _, segment := range plan.SegmentEntries {
+					if segment.FileID == parts[0].AssetRef.FileID {
+						found = true
+						if segment.ProtectedBytes != segment.Bytes || segment.ReclaimableBytes != 0 {
+							t.Fatalf("owned segment not protected: %+v", segment)
+						}
+					}
+				}
+				if !found {
+					t.Fatal("inspection omitted owned segment")
+				}
+			}
+			if stats.SegmentsDeleted != 0 {
+				t.Fatal("dry-run deleted segments")
+			}
+			if _, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{}); !errors.Is(err, backenddb.ErrRecoveryRequired) {
+				t.Fatalf("destructive GC after poison=%v", err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("inspection changed owned bytes: %v", err)
+			}
+			_ = db.Close()
+			db = openTypedMinimaDB(t, dir)
+			col, err = NewCollectionManager(db).OpenCollection("minima")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if doc, err := col.Get([]byte("stable0")); err != nil || doc == nil {
+				t.Fatalf("reopen lost committed row: %s, %v", doc, err)
+			}
+			plan, err = col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{})
+			if err != nil || !plan.Complete {
+				t.Fatalf("reopened inspection=%+v err=%v", plan, err)
+			}
+		})
+	}
+}
 
 func insertColumnOwnedSegmentBatch(t *testing.T, col *Collection, prefix string) {
 	t.Helper()
