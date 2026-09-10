@@ -883,11 +883,11 @@ func (c *Collection) prepareColumnPublishPlanLease(input columnWritePublishInput
 		CurrentManifestRecords:   currentRecords,
 		AppliedCommandLSN:        appliedCommandLSN,
 		BaseManifestRootID:       baseManifestRootID,
+		builtinManifestEncoder:   true,
 		Hooks: ColumnPublishPlanHooks{
 			PrepareAssets: func(hookInput ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
 				return c.prepareColumnPhysicalAssetsForCommand(input, hookInput)
 			},
-			EncodeManifest: encodeColumnManifestIdentityForWrite,
 			abandonPreparedAssets: func(assets []ColumnPreparedAsset, stable bool) error {
 				retained := columnPublishPlanPreparedRefs(ColumnPublishPlan{PreparedAssets: assets})
 				var cleanupErr error

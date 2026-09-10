@@ -121,6 +121,9 @@ type ColumnPublishPlanInput struct {
 	AppliedCommandLSN        uint64
 	BaseManifestRootID       uint64
 	Hooks                    ColumnPublishPlanHooks
+	// The built-in codec reads records synchronously and owns its output. Only
+	// the production lease selects it; arbitrary hooks still receive copies.
+	builtinManifestEncoder bool
 }
 
 // ColumnPublishPlanHooks provide the engine-specific stages for a publish plan.
@@ -827,10 +830,20 @@ func prepareColumnPublishAssets(input ColumnPublishPlanInput, cfg ColumnStoreCon
 }
 
 func encodeColumnPublishManifest(input ColumnPublishPlanInput, cfg ColumnStoreConfig, prepared ColumnPublishPreparedAssets) (ColumnPublishManifestEncodeResult, error) {
-	if input.Hooks.EncodeManifest == nil {
+	encode := input.Hooks.EncodeManifest
+	records := input.CurrentManifestRecords
+	if input.builtinManifestEncoder {
+		if encode != nil {
+			return ColumnPublishManifestEncodeResult{}, errors.New("collections: built-in manifest encoder cannot be combined with an encode hook")
+		}
+		encode = encodeColumnManifestIdentityForWrite
+	} else if encode != nil {
+		records = cloneColumnManifestRecords(records)
+	}
+	if encode == nil {
 		return ColumnPublishManifestEncodeResult{}, errors.New("collections: column publish manifest encode hook is required")
 	}
-	return input.Hooks.EncodeManifest(ColumnPublishManifestEncodeInput{
+	return encode(ColumnPublishManifestEncodeInput{
 		Collection:               input.Collection,
 		ColumnStore:              columnPublishHookConfig(cfg),
 		ActiveVectorIndexes:      append([]VectorIndexDefinition(nil), input.ActiveVectorIndexes...),
@@ -838,7 +851,7 @@ func encodeColumnPublishManifest(input ColumnPublishPlanInput, cfg ColumnStoreCo
 		Operation:                input.Operation,
 		AppliedCommandLSN:        input.AppliedCommandLSN,
 		CurrentManifest:          cloneColumnManifestIdentityPtr(input.CurrentManifest),
-		CurrentManifestRecords:   cloneColumnManifestRecords(input.CurrentManifestRecords),
+		CurrentManifestRecords:   records,
 		Prepared:                 cloneColumnPublishPreparedAssets(prepared),
 	})
 }

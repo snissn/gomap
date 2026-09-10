@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1899,6 +1901,110 @@ func mustSumColumnPreparedAssetBytes(t testing.TB, assets []ColumnPreparedAsset)
 		t.Fatalf("checkedSumColumnPreparedAssetBytes: %v", err)
 	}
 	return total
+}
+
+func TestColumnPublishBuiltinManifestOwnership(t *testing.T) {
+	input, cfg := testColumnPublishManifestWithParts(t, 2)
+	want, err := encodeColumnPublishManifest(input, cfg, ColumnPublishPreparedAssets{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Hooks.EncodeManifest = nil
+	input.builtinManifestEncoder = true
+	before := cloneColumnManifestRecords(input.CurrentManifestRecords)
+	got, err := encodeColumnPublishManifest(input, cfg, ColumnPublishPreparedAssets{})
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("built-in encoder differs from hook: err=%v", err)
+	}
+	if !reflect.DeepEqual(input.CurrentManifestRecords, before) {
+		t.Fatal("built-in encoder mutated current records")
+	}
+	for i := range input.CurrentManifestRecords {
+		input.CurrentManifestRecords[i].key[0] ^= 0xff
+		input.CurrentManifestRecords[i].value[0] ^= 0xff
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatal("encoded output aliases current records")
+	}
+
+	input.CurrentManifestRecords = before
+	input.CurrentManifestRecords[1].value = []byte{0}
+	if _, err := encodeColumnPublishManifest(input, cfg, ColumnPublishPreparedAssets{}); err == nil {
+		t.Fatal("built-in encoder accepted a truncated retained part")
+	}
+	input.Hooks.EncodeManifest = func(ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
+		t.Fatal("ambiguous encoder selection invoked hook")
+		return ColumnPublishManifestEncodeResult{}, nil
+	}
+	if _, err := encodeColumnPublishManifest(input, cfg, ColumnPublishPreparedAssets{}); err == nil {
+		t.Fatal("accepted simultaneous built-in encoder and hook")
+	}
+}
+
+func TestColumnPublishManifestHookOwnsRecordCopies(t *testing.T) {
+	input, cfg := testColumnPublishManifestWithParts(t, 2)
+	before := cloneColumnManifestRecords(input.CurrentManifestRecords)
+	var retained []columnManifestRecord
+	input.Hooks.EncodeManifest = func(in ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
+		retained = in.CurrentManifestRecords
+		retained[1].value[0] ^= 0xff
+		return ColumnPublishManifestEncodeResult{}, nil
+	}
+	if _, err := encodeColumnPublishManifest(input, cfg, ColumnPublishPreparedAssets{}); err != nil {
+		t.Fatal(err)
+	}
+	retained[1].key[0] ^= 0xff
+	if !reflect.DeepEqual(input.CurrentManifestRecords, before) {
+		t.Fatal("hook mutated caller records through retained input")
+	}
+}
+
+func BenchmarkColumnPublishManifestEncode(b *testing.B) {
+	for _, parts := range []int{32, 512, 2048} {
+		b.Run(strconv.Itoa(parts), func(b *testing.B) {
+			for _, mode := range []string{"hook", "builtin"} {
+				b.Run(mode, func(b *testing.B) {
+					input, cfg := testColumnPublishManifestWithParts(b, parts)
+					if mode == "builtin" {
+						input.Hooks.EncodeManifest = nil
+						input.builtinManifestEncoder = true
+					}
+					b.ReportAllocs()
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						if _, err := encodeColumnPublishManifest(input, cfg, ColumnPublishPreparedAssets{}); err != nil {
+							b.Fatal(err)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func testColumnPublishManifestWithParts(t testing.TB, parts int) (ColumnPublishPlanInput, ColumnStoreConfig) {
+	t.Helper()
+	cfg, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets := make([]ColumnPreparedAsset, parts)
+	for i := range assets {
+		assets[i] = testColumnPublishPreparedAssetM10A()
+		assets[i].Ref.PartID = uint64(i + 1)
+	}
+	current, err := encodeColumnManifestForWrite(ColumnPublishManifestEncodeInput{
+		Collection: "events", ColumnStore: *cfg, Operation: ColumnPublishOperationInsert,
+		AppliedCommandLSN: 101, Prepared: ColumnPublishPreparedAssets{Assets: assets},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ColumnPublishPlanInput{
+		Collection: "events", Operation: ColumnPublishOperationInsert, AppliedCommandLSN: 102,
+		CurrentManifest: &current.Identity, CurrentManifestRecords: current.Records,
+		Hooks: ColumnPublishPlanHooks{EncodeManifest: encodeColumnManifestIdentityForWrite},
+	}, *cfg
 }
 
 func testColumnPublishPreparedAssetM10A() ColumnPreparedAsset {
