@@ -3421,8 +3421,8 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 			s.Frontier = NewRIDFrontier([]uint64{8})
 			s.Frontier.Bytes, s.Frontier.MaxLSN = 12, 4
 		}},
-		{name: "advanced bytes", change: func(s *StableResourceSpec) { s.Frontier.Bytes = 20 }, want: 20},
-		{name: "advanced LSN", change: func(s *StableResourceSpec) { s.Frontier.MaxLSN++ }, want: 16},
+		{name: "advanced bytes", change: func(s *StableResourceSpec) { s.Frontier.Bytes = 20 }, want: 4},
+		{name: "advanced LSN", change: func(s *StableResourceSpec) { s.Frontier.MaxLSN++ }},
 		{name: "same maximum different RID", change: func(s *StableResourceSpec) {
 			s.Frontier = NewRIDFrontier([]uint64{3, 8})
 			s.Frontier.Bytes, s.Frontier.MaxLSN = 16, 5
@@ -3437,7 +3437,7 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 		{name: "cross kind", change: func(s *StableResourceSpec) {
 			s.Kind, s.Reachability = ResourceOuterLeafLog, ReachabilityOuterLeafRawPointer
 		}, want: 16},
-		{name: "advanced coalesced entry", change: func(s *StableResourceSpec) { s.Frontier.Bytes = 20 }, extra: true, want: 20},
+		{name: "advanced coalesced entry", change: func(s *StableResourceSpec) { s.Frontier.Bytes = 20 }, extra: true, want: 4},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3463,6 +3463,35 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 			}
 		})
 	}
+	logical := func(offset, length int64, label string) StableLogicalObligation {
+		return StableLogicalObligation{
+			Class: "value", Kind: "record", Namespace: "main", Generation: 1, FileID: 1,
+			Offset: offset, Length: length, Reachability: ReachabilityValueLogPointer,
+			Digest: sha256.Sum256([]byte(label)),
+		}
+	}
+	baseWithObligation := baseSpec
+	baseWithObligation.LogicalObligations = []StableLogicalObligation{logical(0, 8, "old")}
+	publishedWithObligation := makeSet(baseWithObligation)
+	for _, tc := range []struct {
+		name        string
+		obligations []StableLogicalObligation
+		want        uint64
+	}{
+		{name: "suffix obligation", obligations: []StableLogicalObligation{logical(0, 8, "old"), logical(16, 4, "new")}, want: 4},
+		{name: "prefix alias", obligations: []StableLogicalObligation{logical(0, 8, "old"), logical(8, 1, "alias")}, want: 20},
+		{name: "missing durable obligation", obligations: []StableLogicalObligation{logical(16, 4, "new")}, want: 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidateSpec := baseSpec
+			candidateSpec.Frontier.Bytes = 20
+			candidateSpec.LogicalObligations = tc.obligations
+			candidate := makeSet(candidateSpec)
+			if got, err := candidate.BytesNotCoveredBy(publishedWithObligation); err != nil || got != tc.want {
+				t.Fatalf("debt=%d err=%v want=%d", got, err, tc.want)
+			}
+		})
+	}
 	// Alias and logical coverage is directional, independently of byte coverage.
 	prior := &stableResourceEntry{token: &StableResourceToken{kind: ResourceColumnAsset, generation: 1, stability: ResourceMutableAppend}, frontier: DurableFrontier{Bytes: 16}, reachability: map[ReachabilityField]struct{}{ReachabilityColumnManifest: {}}}
 	candidate := *prior
@@ -3470,6 +3499,9 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 	candidate.token.namespace = &StableNamespaceToken{operation: NamespaceCreate, newName: "new", hasLinkedResource: true}
 	if stableResourceEntryCoversPublication(prior, &candidate) {
 		t.Fatal("new namespace credited by namespace-free baseline")
+	}
+	if _, ok := stableResourceEntryDurablePrefix(prior, &candidate); ok {
+		t.Fatal("new namespace received durable-prefix credit")
 	}
 	prior.token.namespace = &StableNamespaceToken{operation: NamespaceCreate, newName: "new", hasLinkedResource: true}
 	if !stableResourceEntryCoversPublication(prior, &candidate) {

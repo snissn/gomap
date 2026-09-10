@@ -90,6 +90,9 @@ func TestServiceTypedNativeUpsertPublishesLastCompletedInsertStats(t *testing.T)
 	if second == nil || second.Insert.Documents != 2 || second.Insert.SourceReplacementPlan <= 0 || second.Insert.Publish <= 0 || second.Insert.ColumnPublishRows != 2 || second.Insert.ColumnPublishBuildColumnDelta <= 0 || second.Insert.ColumnPublishCommit <= 0 || second.Insert.ColumnPublishCommitExclusiveTotal() <= 0 || second.Insert.ColumnPublishManifestBytes <= 0 || second.Insert.ColumnPublishFinalizeCandidateResourceWork.SourceEntriesInspected == 0 || second.Insert.ColumnPublishFinalizeCandidateDependencyBytes == 0 || second.Insert.ColumnPublishFinalizeCandidateOwnedBytes < second.Insert.ColumnPublishFinalizeCandidateDependencyBytes || second.Insert.ColumnPublishFinalizeAdmissionPendingBytes < second.Insert.ColumnPublishFinalizeCandidateOwnedBytes || second.Insert.ColumnPublishFinalizeAdmissionPendingBytes == 0 || second.Insert.ColumnPublishFinalizeAdmissionPendingCommits == 0 {
 		t.Fatalf("second typed insert diagnostics=%+v", second)
 	}
+	if second.Insert.ColumnPublishFinalizeCandidateDependencyBytes >= second.Insert.ColumnPublishFinalizeCandidateOwnedBytes {
+		t.Fatalf("ordinary typed append received no durable-prefix credit: dependency=%d owned=%d", second.Insert.ColumnPublishFinalizeCandidateDependencyBytes, second.Insert.ColumnPublishFinalizeCandidateOwnedBytes)
+	}
 	if first.Insert.Documents != 1 {
 		t.Fatalf("first snapshot changed after second completion: %+v", first.Insert)
 	}
