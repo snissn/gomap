@@ -1741,7 +1741,16 @@ func (plan *certifiedAppendOnlyPhysicalCoalescePlan) abandon() {
 // all-distinct roots transfer directly; mixed roots pin only their distinct
 // delta so repeated collisions cannot accumulate hidden tokens or descriptors.
 func certifiedAppendOnlyPhysicalCoalesce(target, incoming map[ResourceKind]stableResourceKindView, mutation StableLogicalObligationMutation) (*certifiedAppendOnlyPhysicalCoalescePlan, StableResourceClosureWork, bool, error) {
-	if stableResourceKindViewCount(target)+stableResourceKindViewCount(incoming) <= stableResourceEntryLinearLookupLimit {
+	// Even a few shared files can retain many logical obligations. Keep their
+	// existing indexes instead of selecting the flat path by physical count.
+	retainedWork := stableResourceKindViewCount(target) + stableResourceKindViewCount(incoming)
+	for _, view := range target {
+		if retainedWork > stableResourceEntryLinearLookupLimit {
+			break
+		}
+		retainedWork += view.logicalObligationCount
+	}
+	if retainedWork <= stableResourceEntryLinearLookupLimit {
 		return nil, StableResourceClosureWork{}, false, nil
 	}
 	if stableResourceKindViewCount(incoming) > stableResourceEntryLinearLookupLimit {
@@ -1783,7 +1792,21 @@ func certifiedAppendOnlyPhysicalCoalesce(target, incoming map[ResourceKind]stabl
 			if len(matches) == 0 {
 				continue
 			}
-			if kind != child.token.kind || candidates != nil {
+			if kind != child.token.kind {
+				for _, match := range matches {
+					coalesce, err := stableResourcesCoalesce(match.token, child.token)
+					if err != nil {
+						preflightErr = err
+						return false
+					}
+					if coalesce {
+						certified = false
+						return false
+					}
+				}
+				continue
+			}
+			if candidates != nil {
 				certified = false
 				return false
 			}

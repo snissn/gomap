@@ -190,6 +190,7 @@ func typedGraphServingMetadataBytes(b *typedGraphServingBaseMetadata, limit int6
 		{cap(v.DictionaryCodes), reflect.TypeFor[columnManifestDictionaryCodesSnapshot]().Size()},
 		{cap(v.Int64Values), reflect.TypeFor[columnManifestInt64ValuesSnapshot]().Size()},
 		{cap(v.GraphAssetRefs), reflect.TypeFor[ColumnAssetRef]().Size()},
+		{cap(v.SegmentOwnership), reflect.TypeFor[columnManifestSegmentOwnership]().Size()},
 		{cap(v.VectorIndexState.Assets), reflect.TypeFor[columnVectorIndexStateAssetSnapshot]().Size()},
 		{cap(b.graph.AdjacencyLayerSources), reflect.TypeFor[columnVectorGraphAdjacencySourceSnapshot]().Size()},
 	} {
@@ -221,6 +222,7 @@ func typedGraphServingMetadataBytes(b *typedGraphServingBaseMetadata, limit int6
 		{cap(m.AssetRefs), reflect.TypeFor[columnManifestAssetRefForScan]().Size()},
 		{cap(m.TypedColumnPartRefs), reflect.TypeFor[columnManifestAssetRefForScan]().Size()},
 		{cap(m.GraphAssetRefs), reflect.TypeFor[ColumnAssetRef]().Size()},
+		{cap(m.SegmentOwnership), reflect.TypeFor[columnManifestSegmentOwnership]().Size()},
 		{cap(m.Config.Columns), reflect.TypeFor[ColumnStoreColumn]().Size()},
 		{cap(m.Config.SortKey), reflect.TypeFor[ColumnSortKey]().Size()},
 		{cap(m.Config.AggregateMetadata), reflect.TypeFor[ColumnAggregateMetadata]().Size()},
@@ -244,6 +246,13 @@ func typedGraphServingMetadataBytes(b *typedGraphServingBaseMetadata, limit int6
 			}
 		}
 		return true
+	}
+	for _, ownership := range [][]columnManifestSegmentOwnership{v.SegmentOwnership, m.SegmentOwnership} {
+		for _, record := range ownership {
+			if !addStrings(string(record.Ref.Kind), record.Ref.Namespace) {
+				return 0, errTypedGraphOwnerBudget
+			}
+		}
 	}
 	for _, refs := range [][]columnManifestAssetRefForScan{m.AssetRefs, m.TypedColumnPartRefs} {
 		for _, ref := range refs {

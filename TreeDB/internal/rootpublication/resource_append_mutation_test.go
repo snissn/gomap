@@ -75,6 +75,143 @@ func appendMutationFor(obligations ...StableLogicalObligation) StableLogicalObli
 	return StableLogicalObligationMutation{ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: obligations}
 }
 
+func TestMergeAppendOnlyLogicalObligationsSharedMutableKindsAreMutationLocal(t *testing.T) {
+	for _, extraEntries := range []int{0, 32} {
+		t.Run(fmt.Sprint(extraEntries), func(t *testing.T) {
+			file := writeStableResourceFixture(t, t.TempDir(), "shared.bin", string(make([]byte, 4096)))
+			parentBuilder := NewStableResourceSetBuilder()
+			defer parentBuilder.Abandon()
+			for id := uint64(1); id <= uint64(extraEntries); id++ {
+				if err := parentBuilder.Add(distinctPhysicalTokenFixture(t, file, id)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			producerBuilder := NewStableResourceSetBuilder()
+			defer producerBuilder.Abandon()
+			mutation := StableLogicalObligationMutation{}
+			kinds := []ResourceKind{ResourceColumnAsset, ResourceTypedColumnAsset}
+			fields := []ReachabilityField{ReachabilityColumnManifest, ReachabilityTypedColumnMultipart}
+			for i, kind := range kinds {
+				retained := make([]StableLogicalObligation, 64)
+				for j := range retained {
+					retained[j] = appendMutationTestObligation(uint64(i*128 + j + 1))
+					retained[j].Reachability = fields[i]
+				}
+				if err := parentBuilder.Add(appendMutationResourceToken(t, file, kind, "shared", 2048, fields[i], retained...)); err != nil {
+					t.Fatal(err)
+				}
+				added := appendMutationTestObligation(uint64(i*128 + 65))
+				added.Reachability = fields[i]
+				mutation.ScopedFields = append(mutation.ScopedFields, fields[i])
+				mutation.Added = append(mutation.Added, added)
+				if err := producerBuilder.Add(appendMutationResourceToken(t, file, kind, "shared", 4096, fields[i], added)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			parent, err := parentBuilder.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer parent.Release()
+			producer, err := producerBuilder.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer producer.Release()
+			candidate := NewStableResourceSetBuilder()
+			defer candidate.Abandon()
+			if err := candidate.Merge(parent); err != nil {
+				t.Fatal(err)
+			}
+			work, err := candidate.MergeAppendOnlyLogicalObligations(producer, mutation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if work.AppendOnlyCollisionFastPath != 1 || work.AppendOnlyCollisionFallbacks != 0 || work.CopiedEntries != 0 || work.PhysicalHandleShares != 0 {
+				t.Fatalf("shared mutable kinds rebuilt retained closure: %+v", work)
+			}
+			merged, err := candidate.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer merged.Release()
+			if merged.Len() != extraEntries+len(kinds) {
+				t.Fatalf("entries=%d want %d", merged.Len(), extraEntries+len(kinds))
+			}
+			for i, kind := range kinds {
+				entry := findStableResourceLogical(merged.kindViews[kind].logical, stableLogicalResourceKey{kind: kind, lane: string(kind), resourceID: "shared", generation: 1})
+				if entry == nil || entry.logicalObligations.count != 65 || entry.frontier.Bytes != 4096 {
+					t.Fatalf("kind %s lost retained or appended authority", kind)
+				}
+				if got, found := findStableLogicalObligationIndex(entry.logicalObligations.index, mutation.Added[i], nil); !found || got != mutation.Added[i] {
+					t.Fatalf("kind %s lost appended obligation", kind)
+				}
+			}
+		})
+	}
+}
+
+func TestMergeAppendOnlyLogicalObligationsCrossKindCoalescingChecks(t *testing.T) {
+	for _, scenario := range []string{"stability-conflict", "digest-conflict", "immutable-coalesce"} {
+		t.Run(scenario, func(t *testing.T) {
+			file := writeStableResourceFixture(t, t.TempDir(), "shared.bin", "x")
+			digest := sha256.Sum256([]byte("immutable"))
+			parentBuilder := NewStableResourceSetBuilder()
+			defer parentBuilder.Abandon()
+			for id := uint64(1); id <= 32; id++ {
+				if err := parentBuilder.Add(distinctPhysicalTokenFixture(t, file, id)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := parentBuilder.Add(immutableGenerationTokenFixture(t, file, 1, digest)); err != nil {
+				t.Fatal(err)
+			}
+			parent, err := parentBuilder.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer parent.Release()
+			spec := StableResourceSpec{Kind: ResourceDictionary, LogicalLane: "dictionary", ResourceID: "shared", Generation: 1, DiagnosticPath: "shared.bin",
+				File: file, Frontier: DurableFrontier{Bytes: 1}, Digest: digest, Reachability: ReachabilityDictionaryGeneration}
+			if scenario == "stability-conflict" {
+				spec.Kind, spec.Reachability = ResourceColumnAsset, ReachabilityColumnManifest
+			} else if scenario == "digest-conflict" {
+				spec.Digest[0] ^= 1
+			}
+			token, err := NewStableResourceToken(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			producer := freezeAppendMutationResources(t, token)
+			defer producer.Release()
+			candidate := NewStableResourceSetBuilder()
+			defer candidate.Abandon()
+			if err := candidate.Merge(parent); err != nil {
+				t.Fatal(err)
+			}
+			before := candidate.kindViews[ResourceOuterLeafPack]
+			work, err := candidate.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{})
+			if scenario != "immutable-coalesce" {
+				if !errors.Is(err, ErrResourceConflict) || ResourceOwnerState(producer.owner.Load()) != ResourceOwnerBuilder || candidate.kindViews[ResourceOuterLeafPack].logical != before.logical || stableResourceKindViewCount(candidate.kindViews) != 33 {
+					t.Fatalf("conflict mutated ownership or candidate: %v", err)
+				}
+				return
+			}
+			if err != nil || work.AppendOnlyCollisionFastPath != 0 || work.AppendOnlyCollisionFallbacks != 1 {
+				t.Fatalf("immutable cross-kind coalescing bypassed exact fallback: %+v %v", work, err)
+			}
+			merged, err := candidate.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer merged.Release()
+			if merged.Len() != 33 {
+				t.Fatalf("immutable physical identity duplicated: entries=%d", merged.Len())
+			}
+		})
+	}
+}
+
 func TestStableLogicalObligationFreshBulkBuildDoesNotPathCopy(t *testing.T) {
 	const obligationCount = 64
 	obligations := make([]StableLogicalObligation, obligationCount)
