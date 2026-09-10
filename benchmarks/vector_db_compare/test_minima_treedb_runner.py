@@ -6,6 +6,7 @@ from dataclasses import asdict, replace
 import io
 import os
 import socket
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -125,6 +126,16 @@ Server((host, int(port)), Handler).serve_forever()
 
 
 class ProbeContractTest(unittest.TestCase):
+    def test_probe_and_analyzer_reject_optimized_python(self):
+        for module in (probe, probe_analyze):
+            for flags, setting in [(['-O'], ''), ([], '1'), ([], '2')]:
+                with self.subTest(module=module.__name__, flags=flags, setting=setting):
+                    completed = subprocess.run([sys.executable, *flags, module.__file__, '--help'],
+                        env={**os.environ, 'PYTHONOPTIMIZE': setting,
+                             'PYTHONPATH': os.pathsep.join(sys.path)}, capture_output=True, text=True)
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertIn('require Python without -O or PYTHONOPTIMIZE', completed.stderr)
+
     def test_affinity_and_imported_client_identity(self):
         probe.validate_affinity(list(range(8, 14)), list(range(8, 14)))
         for client, server in [([0] * 6, [0] * 6), (list(range(5)), list(range(5))),

@@ -20,6 +20,9 @@ from urllib.error import HTTPError
 
 import minima_treedb_runner as tr
 
+if sys.flags.optimize:
+    raise RuntimeError('Minima diagnostics require Python without -O or PYTHONOPTIMIZE')
+
 def python_inputs():
     """Bind concrete imported files and reject an installed client substitution."""
     source = Path(__file__).resolve().parents[2]
