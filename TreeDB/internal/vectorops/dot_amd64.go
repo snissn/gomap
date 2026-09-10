@@ -38,8 +38,16 @@ func DotFloat32(left, right []float32) float32 {
 	if n == 0 {
 		return 0
 	}
+	// Below the selected packed width, the dependency only executes its serial
+	// FMA tail. Preserve that arithmetic without wide-register setup/reduction.
+	if n < dotFloat32OptimizedMinLength && simdcpu.X86.AVX && simdcpu.X86.FMA {
+		return dotFloat32ShortFMA(&left[0], &right[0], n)
+	}
 	return simdf32.DotProduct(left[:n], right[:n])
 }
+
+//go:noescape
+func dotFloat32ShortFMA(left, right *float32, n int) float32
 
 // DotFloat32Implementation identifies the active DotFloat32 implementation.
 func DotFloat32Implementation() string { return dotFloat32Implementation }
