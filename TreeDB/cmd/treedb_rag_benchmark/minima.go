@@ -660,6 +660,10 @@ func validateMinimaManifest(manifest *minimaManifest) error {
 			frozen = buildMinimaManifestForRows(50000)
 		case "bounded-250k":
 			frozen = buildMinimaManifestForRows(250000)
+		case "bounded-500k":
+			frozen = buildMinimaManifestForRows(500000)
+		case "bounded-1000k":
+			frozen = buildMinimaManifestForRows(1000000)
 		default:
 			return fmt.Errorf("minima manifest: unknown bounded fixture %q", manifest.Fixture)
 		}

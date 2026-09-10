@@ -970,11 +970,12 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         self.index_info = info
         self.effective_collection = info.to_dict()
 
-    def initial_load_to_query_boundary(self) -> None:
+    def initial_load_to_query_boundary(self) -> Any:
         if self.strategy == "column_graph":
-            self.evidence.call("column_graph_initial_build", "writer_wait", "all", lambda: self.client.optimize_index(
+            response = self.evidence.call("column_graph_initial_build", "writer_wait", "all", lambda: self.client.optimize_index(
                 self.collection, column_graph_action="build", column_graph_serving=self.column_graph_serving))
             self._graph_built = True
+            return response
 
     def _upsert_batch(self, batch: list[dict[str, Any]]) -> Any:
         if self.transport == "native":
