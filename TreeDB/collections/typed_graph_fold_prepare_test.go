@@ -14,7 +14,7 @@ func TestTypedGraphCompactionRowsOwnReconstructedValues(t *testing.T) {
 	if _, err := col.ReplaceTypedBatch(ids[:1], retained[:1], changed); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := col.DeleteBatch(ids[7:]); err != nil {
+	if _, err := col.DeleteBatch(ids[len(ids)-1:]); err != nil {
 		t.Fatal(err)
 	}
 	state, closeState, err := col.loadColumnStoreCompactionState(context.Background())
@@ -32,8 +32,8 @@ func TestTypedGraphCompactionRowsOwnReconstructedValues(t *testing.T) {
 	if err := col.db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 7 {
-		t.Fatalf("rows=%d want 7", len(rows))
+	if want := len(ids) - 1; len(rows) != want {
+		t.Fatalf("rows=%d want %d", len(rows), want)
 	}
 	// Both materialization caches and the source DB are closed. Values remain
 	// independently owned and preserve the interleaved column/row asset order.

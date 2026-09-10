@@ -3,8 +3,78 @@ package collections
 import (
 	"fmt"
 	"reflect"
+	"runtime"
 	"testing"
 )
+
+func TestColumnPhysicalVisibilityIndexReplacementReusesAndClearsValues(t *testing.T) {
+	for _, reserve := range []int{0, 4} {
+		t.Run(fmt.Sprint(reserve), func(t *testing.T) {
+			idx := columnPhysicalVisibilityIndex{reserveValuesPerRow: reserve}
+			values := []columnDeclaredValue{{Present: true, Float32Vector: []float32{1, 2}}, {Present: true, StringBytes: []byte("owned")}}
+			row := columnPhysicalScanRowView{ID: []byte("hot"), AppliedCommandLSN: 1, Values: values}
+			idx.upsert(row)
+			idx.upsert(columnPhysicalScanRowView{ID: []byte("cold"), AppliedCommandLSN: 1, Values: values})
+			span := idx.rows[0].Values
+			arenaLen := len(idx.valuesArena)
+			for version := uint64(2); version <= 32; version++ {
+				row.AppliedCommandLSN = version
+				row.Values = values[:1]
+				values[0].Float32Vector[0] = float32(version)
+				idx.upsert(row)
+				if &idx.rows[0].Values[0] != &span[0] || len(idx.valuesArena) != arenaLen {
+					t.Fatal("replacement allocated another row span")
+				}
+				if idx.rows[0].Values[0].Float32Vector[0] != float32(version) || !reflect.DeepEqual(span[1], columnDeclaredValue{}) {
+					t.Fatal("replacement lost its value or retained the old tail")
+				}
+			}
+			values[0].Float32Vector[0], values[1].StringBytes[0] = 99, 'X'
+			if idx.rows[0].Values[0].Float32Vector[0] != 32 || idx.rows[1].Values[0].Float32Vector[0] != 1 || string(idx.rows[1].Values[1].StringBytes) != "owned" {
+				t.Fatal("replacement aliased scanner scratch or an adjacent row")
+			}
+			row.AppliedCommandLSN++
+			row.Values = make([]columnDeclaredValue, 5) // Grow beyond either initial reservation.
+			row.Values[0] = values[0]
+			idx.upsert(row)
+			if !reflect.DeepEqual(span, make([]columnDeclaredValue, len(span))) {
+				t.Fatal("growth retained payloads in the abandoned span")
+			}
+			span = idx.rows[0].Values
+			row.AppliedCommandLSN++
+			row.Deleted = true
+			idx.upsert(row)
+			if idx.rows[0].Values != nil || !reflect.DeepEqual(span, make([]columnDeclaredValue, len(span))) {
+				t.Fatal("deletion retained row values")
+			}
+		})
+	}
+}
+
+func BenchmarkColumnPhysicalVisibilityReplacementHistory(b *testing.B) {
+	for _, versions := range []int{1, 16} {
+		b.Run(fmt.Sprint(versions), func(b *testing.B) {
+			ids := make([][]byte, 1024+versions)
+			for i := range ids {
+				ids[i] = []byte(fmt.Sprint(i))
+			}
+			values := []columnDeclaredValue{{Present: true, Int64: 1}}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				idx := columnPhysicalVisibilityIndex{reserveValuesPerRow: 4}
+				for version := range versions {
+					// Leave one cold row among each round of hot-row replacements.
+					idx.upsert(columnPhysicalScanRowView{ID: ids[1024+version], AppliedCommandLSN: 1, Values: values})
+					for _, id := range ids[:1024] {
+						idx.upsert(columnPhysicalScanRowView{ID: id, AppliedCommandLSN: uint64(version + 1), Values: values})
+					}
+				}
+				runtime.KeepAlive(idx)
+			}
+		})
+	}
+}
 
 func TestColumnPhysicalVisibilityIndexReservedValuesRemainRowOwned(t *testing.T) {
 	const width = 4
@@ -239,7 +309,7 @@ func TestColumnPhysicalVisibilityIndexClonesSliceBackedValues1930(t *testing.T) 
 		{Type: ColumnStoreValueBytes, Present: true, Bytes: []byte{11, 12}},
 		{Type: ColumnStoreValueString, Present: true, StringBytes: []byte("before")},
 	}
-	cloned := idx.cloneColumnDeclaredValues(values)
+	cloned := idx.cloneColumnDeclaredValues(nil, values)
 
 	values[0].Float32Vector[0] = 101
 	values[1].DenseNumericVector[0] = 102
