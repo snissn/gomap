@@ -3422,6 +3422,10 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 			s.Frontier.Bytes, s.Frontier.MaxLSN = 12, 4
 		}},
 		{name: "advanced bytes", change: func(s *StableResourceSpec) { s.Frontier.Bytes = 20 }, want: 4},
+		{name: "advanced bytes and exact RID superset", change: func(s *StableResourceSpec) {
+			s.Frontier = NewRIDFrontier([]uint64{2, 8, 10})
+			s.Frontier.Bytes, s.Frontier.MaxLSN = 20, 6
+		}, want: 4},
 		{name: "advanced LSN", change: func(s *StableResourceSpec) { s.Frontier.MaxLSN++ }},
 		{name: "same maximum different RID", change: func(s *StableResourceSpec) {
 			s.Frontier = NewRIDFrontier([]uint64{3, 8})
@@ -3479,7 +3483,7 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 		want        uint64
 	}{
 		{name: "suffix obligation", obligations: []StableLogicalObligation{logical(0, 8, "old"), logical(16, 4, "new")}, want: 4},
-		{name: "prefix alias", obligations: []StableLogicalObligation{logical(0, 8, "old"), logical(8, 1, "alias")}, want: 20},
+		{name: "partial prefix obligation", obligations: []StableLogicalObligation{logical(0, 8, "old"), logical(15, 2, "overlap")}, want: 20},
 		{name: "missing durable obligation", obligations: []StableLogicalObligation{logical(16, 4, "new")}, want: 20},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3489,6 +3493,26 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 			candidate := makeSet(candidateSpec)
 			if got, err := candidate.BytesNotCoveredBy(publishedWithObligation); err != nil || got != tc.want {
 				t.Fatalf("debt=%d err=%v want=%d", got, err, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name         string
+		kind         ResourceKind
+		reachability ReachabilityField
+	}{
+		{name: "immutable resource", kind: ResourceOuterLeafLog, reachability: ReachabilityOuterLeafPackedPointer},
+		{name: "index resource", kind: ResourceIndex, reachability: ReachabilityIndexFile},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			priorSpec := baseSpec
+			priorSpec.Kind, priorSpec.Reachability = tc.kind, tc.reachability
+			published := makeSet(priorSpec)
+			candidateSpec := priorSpec
+			candidateSpec.Frontier.Bytes = 20
+			candidate := makeSet(candidateSpec)
+			if got, err := candidate.BytesNotCoveredBy(published); err != nil || got != 20 {
+				t.Fatalf("debt=%d err=%v want full immutable/index debt", got, err)
 			}
 		})
 	}
