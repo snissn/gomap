@@ -361,3 +361,35 @@ func TestTypedSourceMixedUpsertContract(t *testing.T) {
 	}
 	t.Log("mixed existing/new uses one WAL frame; duplicate rejects before WAL; identical source replacement creates one additional version")
 }
+
+func TestTypedSourceReplacementRejectsNonReplacingPrimary(t *testing.T) {
+	meta := typedMinimaCollectionMeta()
+	// Reach the primary conflict check without an earlier text-ordinal conflict.
+	meta.TextIndexes = nil
+	dir, db, col := openTypedMinimaCollectionMeta(t, meta)
+	defer db.Close()
+	ids := [][]byte{[]byte("a"), []byte("b")}
+	docs := [][]byte{[]byte(`{"id":"a"}`), []byte(`{"id":"b"}`)}
+	columns := []TypedColumnBatch{
+		{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}, {0, 1, 0, 0, 0, 0, 0, 0}}},
+		{Name: "content", Strings: []string{"alpha", "beta"}},
+		{Name: "user", Strings: []string{"u1", "u2"}},
+		{Name: "path", Strings: []string{"p1", "p2"}},
+	}
+	if _, err := col.ReplaceTypedSourceByID(nil, ids, docs, columns); err != nil {
+		t.Fatal(err)
+	}
+	frames := len(collectionCommandWALFrames(t, dir))
+	seq, root := dbCommitSeqAndSystemRoot(db)
+	// a is a valid replacement; b exists outside the replacement set.
+	_, err := col.ReplaceTypedSourceByID(ids[:1], ids, docs, columns)
+	if !errors.Is(err, ErrDocumentExists) {
+		t.Fatalf("non-replacing primary conflict err=%v", err)
+	}
+	if afterSeq, afterRoot := dbCommitSeqAndSystemRoot(db); afterSeq != seq || afterRoot != root {
+		t.Fatal("primary conflict changed publication authority")
+	}
+	if len(collectionCommandWALFrames(t, dir)) != frames {
+		t.Fatal("primary conflict appended WAL")
+	}
+}

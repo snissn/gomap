@@ -511,6 +511,10 @@ func (plan *insertBatchPlan) checkPersistedConflictsReplacing(snap *backenddb.Sn
 	}
 	rootName := collectionPrimaryRootName(catalog.meta.Name)
 	for _, key := range plan.primaryKeys {
+		// Delete planning already checked each replacement ID on this snapshot.
+		if _, ok := replacing[string(key)]; ok {
+			continue
+		}
 		entry, _, err := collectionGetEntryAtCatalogRoot(snap, catalog, rootName, key)
 		if errors.Is(err, tree.ErrKeyNotFound) {
 			continue
@@ -519,9 +523,7 @@ func (plan *insertBatchPlan) checkPersistedConflictsReplacing(snap *backenddb.Sn
 			return err
 		}
 		if entry.Flags&node.FlagTombstone == 0 {
-			if _, ok := replacing[string(key)]; !ok {
-				return ErrDocumentExists
-			}
+			return ErrDocumentExists
 		}
 	}
 	uniqueNames := uniqueIndexNamesWithDataOrOverlays(catalog)
