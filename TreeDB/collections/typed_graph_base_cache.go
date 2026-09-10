@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 )
 
 // No snapshot, catalog or suffix is retained here. Ref owns immutable prepared
@@ -16,12 +17,17 @@ type typedGraphCapturedBaseResources struct {
 	assetBytes      int64
 	descriptorBytes int64
 	backingBytes    int64
+	filtersMu       sync.Mutex
+	// ponytail: keep the first eight distinct predicates until keeper Close.
+	// Overflow uses uncached preparation; add eviction only if this ceiling matters.
+	filters [8]typedGraphCachedFilter
 }
 
 func (r *typedGraphCapturedBaseResources) Close() error {
 	if r == nil {
 		return nil
 	}
+	clear(r.filters[:])
 	err := r.ref.release()
 	err = errors.Join(err, r.pin.Close())
 	r.ref, r.pin = nil, nil

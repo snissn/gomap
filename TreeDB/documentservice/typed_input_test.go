@@ -140,6 +140,15 @@ func TestServiceTypedInputServingLifecycle(t *testing.T) {
 	if work == nil || !work.Completed || !work.Graph.Completed || work.Graph.Route != "typed_exact" || work.Graph.ExactBaseScored != 1 || !work.Graph.Filter.Completed || work.Graph.Filter.EligibleRows != 1 || !work.Graph.Snapshot.Available || work.Graph.Snapshot.SchemaHash == 0 || work.Output.Fetched != 1 || !work.Output.Completed || work.Output.OutputBytes == 0 {
 		t.Fatalf("missing exact/snapshot/output work: %+v", work)
 	}
+	// Exercise a cold preparation prefix even after earlier queries warmed
+	// the immutable filter. Closing this optional keeper leaves normal serving.
+	col, _, err := svc.openIndex(ctx, create.Name, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := col.CloseVectorIndexPreparedSearchCache(); err != nil {
+		t.Fatal(err)
+	}
 	// Reuse the service counting context to stop inside typed filter work.
 	// The ordinary HTTP handler must preserve that same request context and
 	// serialize the owned positive error prefix without partial documents.

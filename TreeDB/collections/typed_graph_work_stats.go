@@ -61,10 +61,15 @@ func (o *typedGraphReadOwner) querySnapshot() ColumnGraphQuerySnapshot {
 
 // Filter cardinality is final only when Completed is true. MappingWorkCharged
 // sums admitted ordinal-mapping bounds, submitted secondary point requests,
-// and temporary encoded-prefix/key payload bounds for selective string EQ AND.
+// temporary encoded-prefix/key payload bounds for selective string EQ AND,
+// and current-suffix inverse/predicate/escaped-value and exact-rank scan bounds.
 // It is not a measured comparison/page/heap count. Posting source counts include
-// probes and fallback rereads, excluding point keys and rejected lookahead IDs.
-// Retained bytes and ordinal growth measure per-call ordinal capacity. Scratch
+// probes and fallback rereads, plus changed IDs submitted for cached-base inverse
+// lookup; they exclude point keys and rejected lookahead IDs. InspectedEntries
+// counts postings, not cached selection access or current-suffix predicates.
+// Retained bytes and ordinal growth measure per-call ordinal capacity; keeper
+// selection backing is charged once under read-owner StateBytes. Cold misses
+// report cold plus bind work; hits report only actual bind work. Scratch
 // fields measure logical peak rows/ID bytes, not Go capacity or cumulative allocation.
 type ColumnGraphFilterWork struct {
 	Attempted              bool   `json:"attempted"`

@@ -28,7 +28,8 @@ type ColumnGraphMaintenanceLimits = typedGraphWorkEpochLimits
 
 // ColumnGraphFilterLimits bounds cumulative preparation work, including selective
 // discovery and any full fallback. MappingWork admits ordinal-mapping bounds,
-// secondary point requests and temporary encoded-prefix/key payload byte bounds;
+// secondary point requests, temporary encoded-prefix/key payload byte bounds,
+// and cached-base inverse/predicate/escaped-value and exact-rank scan bounds;
 // it is not a comparison count or a total Go heap bound.
 type ColumnGraphFilterLimits = typedGraphFilterLimits
 type ColumnGraphMaintenanceStats = typedGraphWorkEpochStats
@@ -270,7 +271,11 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 		response.Results, stats, err = owner.overlay.searchWithContext(ctx, opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
 	} else {
 		var filter *typedGraphPreparedFilter
-		filter, err = prepareTypedGraphFilterWithContext(ctx, owner.overlay, *opts.DeclaredScalarFilter, p.options.Filter, &filterWork)
+		keeper := c.borrowTypedGraphFilterKeeper(owner, p.index)
+		if keeper != nil {
+			defer keeper.mu.RUnlock()
+		}
+		filter, err = prepareTypedGraphServingFilter(ctx, keeper, owner.overlay, *opts.DeclaredScalarFilter, p.options.Filter, &filterWork)
 		if err == nil {
 			response.Results, stats, err = owner.overlay.searchPreparedFilterWithContext(ctx, filter, opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
 		}
