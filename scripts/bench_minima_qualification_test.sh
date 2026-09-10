@@ -37,6 +37,7 @@ output=""
 report=""
 validate=""
 expected_commit=""
+bounded_rows=""
 while (($#)); do
 	case "$1" in
 	-dump-minima-manifest) manifest=$2; shift 2 ;;
@@ -44,10 +45,12 @@ while (($#)); do
 	-validate-minima-artifact) validate=$2; shift 2 ;;
 	-minima-report) report=$2; shift 2 ;;
 	-minima-expected-commit) expected_commit=$2; shift 2 ;;
+	-minima-bounded-total-rows) bounded_rows=$2; shift 2 ;;
 	*) shift ;;
 	esac
 done
 if [[ -n "$manifest" ]]; then
+	[[ -z "${FAKE_BOUNDED_ROWS_PATH:-}" ]] || printf '%s\n' "$bounded_rows" >"$FAKE_BOUNDED_ROWS_PATH"
 	printf '{}\n' >"$manifest"
 	exit 0
 fi
@@ -118,16 +121,19 @@ printf '{}\n' >"$OUTPUT_PATH"
 EOF
 chmod +x "$REPO/scripts/bench_minima_qdrant.sh"
 
-for mode in bounded-50k bounded-250k; do
+for fixture in bounded-50k:50000 bounded-250k:250000 bounded-500k:500000 bounded-1000k:1000000; do
+	mode=${fixture%:*}
+	expected_rows=${fixture#*:}
 	bounded_dir="$TMP/$mode"
 	output=$(env -u MINIMA_WALL_SECONDS PATH="$FAKE_BIN:$PATH" PYTHON="$FAKE_BIN/python" RUN_DIR="$bounded_dir" \
-		MODE="$mode" FAKE_PYTHON_ARGS="$TMP/$mode-args" \
+		MODE="$mode" FAKE_PYTHON_ARGS="$TMP/$mode-args" FAKE_BOUNDED_ROWS_PATH="$TMP/$mode-rows" \
 		"$REPO/scripts/bench_minima_qualification.sh" 2>&1)
 	[[ "$output" == *"total rows across scenarios"* ]]
 	[[ "$output" == *"full <1% sparse selectivity excluded; cannot qualify"* ]]
 	[[ -f "$bounded_dir/treedb_backend.json" ]]
 	[[ ! -f "$bounded_dir/qdrant_backend.json" ]]
 	grep -qx -- '--strategy' "$TMP/$mode-args"
+	grep -qx -- "$expected_rows" "$TMP/$mode-rows"
 done
 
 set +e

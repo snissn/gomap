@@ -55,6 +55,18 @@ BOUNDED_HASHES = {
         "operation_sha256": "8e1f611148f6e87258c3aa95307f96c82e72f47e36739cfc5765edabd1e515e7",
         "expected_state_sha256": "30e35dbe357f46d0c1e6a05506af9ca6a6392b6f8e4ab795e526cc284ccc7878",
     },
+    "bounded-500k": {
+        "corpus_sha256": "28d815dc222ac524857b25d3e9925824612ada23d1b7da14fc6b18a512dcff21",
+        "query_sha256": "7411397fc4d10e7803d4345d980f551687069b1c5cb6516a1156e28f05b6b130",
+        "operation_sha256": "dd06e9c1e31f6cf935891f34ae5914f45267bdc972338a63ac4ed51007d97c84",
+        "expected_state_sha256": "bdf7badc2716ed3848bd6e6e857b277bf2953fa12baea6517a67be90f00a4b8b",
+    },
+    "bounded-1000k": {
+        "corpus_sha256": "c80830ff18b7bda1ab0da129f91d63d68808cb0f617c9a590cdd09382d4bf207",
+        "query_sha256": "cebfcb7ce8160ba062fc5cfed131316c62a51b25eee8b996e4f541e0925036cf",
+        "operation_sha256": "4e3becb639cac6b9cb9d70f0c2498a7054741dc0bc819bc29954778c508d6e15",
+        "expected_state_sha256": "0ae7beaa8d7e0e523dbd09b3fa829cf0fa608b2ddff60c7353bc7c71c482328b",
+    },
 }
 ARTIFACT_SCHEMA = "treedb_rag_application/minima_v4"
 MEASURED_SCHEMA = "treedb_rag_application/minima_measured_v1"

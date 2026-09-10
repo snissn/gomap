@@ -32,11 +32,22 @@ Linux GNU `timeout` bounds the entire command, including builds, to 600 seconds
 plus a 10-second forced-stop grace period. Individual service requests and
 startup are bounded at 120 seconds. A timeout/failure is incomplete evidence,
 not permission to reuse a previous output. Use a fresh run directory every time.
-`MODE=bounded-250k` selects 250,000 total rows; `MINIMA_WALL_SECONDS` sets an
+`MODE=bounded-250k`, `MODE=bounded-500k` and `MODE=bounded-1000k` select
+250,000, 500,000 and 1,000,000 total rows; `MINIMA_WALL_SECONDS` sets an
 explicit run budget. These totals span all scenarios. They preserve the 4,097
-cutoff but not the full fixture's <1% sparse case. Both emit a diagnostic schema
+cutoff but not the full fixture's <1% sparse case. All emit a diagnostic schema
 that cannot pass full qualification. `MODE=representative` retains the frozen
 full workload and its existing validation.
+
+The larger bounded fixtures reuse the 50K/250K generator's scaling rule while
+small/empty controls, the 4,097 crossover, five narrow
+matches, 256-row batches and 1,328 concurrent inserts stay fixed. Initial
+ingest therefore writes `total - 1328` rows; final state has `total - 1` rows.
+Generate manifests with `-workload=minima -dump-minima-manifest <path>
+-minima-bounded-total-rows 500000` (or `1000000`). Go and Python both reject
+unknown fixture names or changed frozen hashes. Freeze each generated manifest
+separately before measured execution; these fixtures diagnose scaling and do
+not change full qualification limits or demonstrate a performance result.
 
 A completed bounded artifact must still prove its manifest operations, timed
 reader/writer overlap, reindex/reopen, and final-state scroll. Diagnostic-only

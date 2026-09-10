@@ -11,7 +11,7 @@ import (
 )
 
 func TestMinimaBoundedFixtures(t *testing.T) {
-	for _, total := range []int{50000, 250000} {
+	for _, total := range []int{50000, 250000, 500000, 1000000} {
 		m, err := buildMinimaBoundedManifest(total)
 		if err != nil {
 			t.Fatal(err)
@@ -29,6 +29,17 @@ func TestMinimaBoundedFixtures(t *testing.T) {
 		if minimaScenarioMap(&m)["over_limit_4097"].EligibleRows != 4097 {
 			t.Fatal("lost boundary")
 		}
+		initial, concurrent := minimaInsertRanges(m.Corpora, m.Config.BatchSize)
+		initialRows, concurrentRows := 0, 0
+		for _, r := range initial {
+			initialRows += r.Rows
+		}
+		for _, r := range concurrent {
+			concurrentRows += r.Rows
+		}
+		if concurrentRows != 1328 || initialRows != total-1328 {
+			t.Fatalf("total=%d initial=%d concurrent=%d", total, initialRows, concurrentRows)
+		}
 		// The reduced corpus cannot preserve 4097 eligible rows at <1%.
 		if minimaScenarioMap(&m)["sparse_over_limit"].Selectivity < 0.01 {
 			t.Fatal("bounded fixture mislabeled as full sparse coverage")
@@ -38,7 +49,20 @@ func TestMinimaBoundedFixtures(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := exec.LookPath("python3"); err == nil {
-			cmd := exec.Command("python3", "-c", "import sys; sys.path.insert(0, '../../../benchmarks/vector_db_compare'); import minima_qdrant_runner as m; from pathlib import Path; m.load_manifest(Path(sys.argv[1]))", path)
+			cmd := exec.Command("python3", "-c", `
+import sys
+sys.path.insert(0, '../../../benchmarks/vector_db_compare')
+import minima_qdrant_runner as m
+from pathlib import Path
+manifest = m.load_manifest(Path(sys.argv[1]))
+manifest['corpus_sha256'] = 'x' + manifest['corpus_sha256'][1:]
+try:
+    m.validate_manifest(manifest)
+except ValueError:
+    pass
+else:
+    raise AssertionError('accepted corrupted corpus hash')
+`, path)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("Python manifest validation: %v %s", err, out)
 			}

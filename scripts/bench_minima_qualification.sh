@@ -49,7 +49,7 @@ fi
 # Re-exec before measured setup populates its output directories. Export the
 # chosen run directory so automatic temporary paths survive the one wrapper.
 case "$MODE" in
-bounded-50k|bounded-250k|measured)
+bounded-50k|bounded-250k|bounded-500k|bounded-1000k|measured)
 	wall_seconds=${MINIMA_WALL_SECONDS:-}
 	if [[ "$MODE" != measured ]]; then
 		wall_seconds=${wall_seconds:-600}
@@ -116,9 +116,9 @@ else
 fi
 
 case "$MODE" in
-bounded-50k|bounded-250k)
-	rows=50000
-	[[ "$MODE" != bounded-250k ]] || rows=250000
+bounded-50k|bounded-250k|bounded-500k|bounded-1000k)
+	rows=${MODE#bounded-}
+	rows=$((${rows%k} * 1000))
 	go build -o "$RUN_DIR/bin/treedb-document-service" -buildvcs=true ./cmd/treedb-document-service
 	go build -o "$RUN_DIR/bin/treedb-rag-benchmark" ./TreeDB/cmd/treedb_rag_benchmark
 	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -dump-minima-manifest "$MANIFEST_PATH" -minima-bounded-total-rows "$rows"
@@ -182,7 +182,7 @@ small)
 	exit "$treedb_status"
 	;;
 *)
-	printf 'unsupported MODE=%s (use measured, small, representative, diagnostic-resume, bounded-50k, or bounded-250k)\n' "$MODE" >&2
+	printf 'unsupported MODE=%s (use measured, small, representative, diagnostic-resume, bounded-50k, bounded-250k, bounded-500k, or bounded-1000k)\n' "$MODE" >&2
 	exit 2
 	;;
 esac

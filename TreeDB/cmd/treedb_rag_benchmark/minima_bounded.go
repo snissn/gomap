@@ -20,8 +20,8 @@ type minimaNativePathProof struct {
 }
 
 func buildMinimaBoundedManifest(total int) (minimaManifest, error) {
-	if total != 50000 && total != 250000 {
-		return minimaManifest{}, fmt.Errorf("minima bounded total rows must be 50000 or 250000")
+	if total != 50000 && total != 250000 && total != 500000 && total != 1000000 {
+		return minimaManifest{}, fmt.Errorf("minima bounded total rows must be 50000, 250000, 500000 or 1000000")
 	}
 	return buildMinimaManifestForRows(total), nil
 }

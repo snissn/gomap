@@ -213,7 +213,7 @@ engine microbenchmark cannot stand in for the application response boundary.
 
 ## Evidence and acceptance
 
-Frozen full v1 manifests/artifacts remain unchanged. Bounded 50K/250K fixtures
+Frozen full v1 manifests/artifacts remain unchanged. Bounded 50K/250K/500K/1M fixtures
 count **total generated corpus rows across scenarios** (initial plus overlapping
 insert batches, excluding later lifecycle replacements), not rows per scenario. They are
 diagnostic only: 4,097 eligible rows at less than 1% selectivity needs more than

@@ -32,7 +32,7 @@ func main() {
 		compareOutput        = flag.String("application-comparison-output", "", "validated #4331 comparison JSON")
 		compareReport        = flag.String("application-comparison-report", "", "validated #4331 comparison markdown")
 		dumpMinima           = flag.String("dump-minima-manifest", "", "write the frozen compact Minima fixture/operation manifest and exit")
-		minimaBoundedRows    = flag.Int("minima-bounded-total-rows", 0, "diagnostic manifest total rows: 50000 or 250000; zero preserves frozen full workload")
+		minimaBoundedRows    = flag.Int("minima-bounded-total-rows", 0, "diagnostic manifest total rows: 50000, 250000, 500000 or 1000000; zero preserves frozen full workload")
 		minimaTree           = flag.String("minima-treedb-evidence", "", "TreeDB partial backend evidence to compare and validate")
 		validateMinima       = flag.String("validate-minima-artifact", "", "validate one Minima JSON artifact fail closed and exit")
 		minimaQdrant         = flag.String("minima-qdrant-evidence", "", "Qdrant partial backend evidence to compare and validate")
