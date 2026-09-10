@@ -393,3 +393,157 @@ func TestTypedSourceReplacementRejectsNonReplacingPrimary(t *testing.T) {
 		t.Fatal("primary conflict appended WAL")
 	}
 }
+
+func TestTypedUpsertGroupedPrimaryPreservesInputMapping(t *testing.T) {
+	dir, db, col := openTypedMinimaCollection(t)
+	defer func() { _ = db.Close() }()
+	batch := func(mixed bool) ([][]byte, [][]byte, []TypedColumnBatch) {
+		ids, docs := make([][]byte, 96), make([][]byte, 96)
+		columns := []TypedColumnBatch{
+			{Name: "embedding", Float32Vectors: make([][]float32, 96)},
+			{Name: "content", Strings: make([]string, 96)},
+			{Name: "user", Strings: make([]string, 96)},
+			{Name: "path", Strings: make([]string, 96)},
+		}
+		for i := range ids {
+			n := (i * 37) % len(ids) // Permute adjacent keys across grouped leaves.
+			word := "alpha"
+			if mixed && n >= 32 {
+				word = "beta"
+				if n >= 80 {
+					n += 16 // Sixteen new rows; the old 80..95 rows remain live.
+				}
+			}
+			ids[i] = fmt.Appendf(nil, "row%03d", n)
+			docs[i] = fmt.Appendf(nil, `{"id":"row%03d"}`, n)
+			columns[0].Float32Vectors[i] = make([]float32, 8)
+			columns[0].Float32Vectors[i][n%8] = 1
+			columns[1].Strings[i] = fmt.Sprintf("%s token%03d", word, n)
+			columns[2].Strings[i] = fmt.Sprintf("%s%03d", word, n)
+			columns[3].Strings[i] = fmt.Sprintf("path%03d", n)
+		}
+		return ids, docs, columns
+	}
+	if matched, err := col.UpsertTypedBatch(batch(false)); err != nil || matched != 0 {
+		t.Fatalf("initial matched=%d err=%v", matched, err)
+	}
+	frames := len(collectionCommandWALFrames(t, dir))
+	seq, root := dbCommitSeqAndSystemRoot(db)
+	if matched, err := col.UpsertTypedBatch(batch(false)); err != nil || matched != 96 {
+		t.Fatalf("no-op matched=%d err=%v", matched, err)
+	}
+	if afterSeq, afterRoot := dbCommitSeqAndSystemRoot(db); afterSeq != seq || afterRoot != root || len(collectionCommandWALFrames(t, dir)) != frames {
+		t.Fatal("grouped no-op changed publication or WAL")
+	}
+	if matched, err := col.UpsertTypedBatch(batch(true)); err != nil || matched != 80 {
+		t.Fatalf("mixed matched=%d err=%v", matched, err)
+	}
+	accepted := collectionCommandWALFrames(t, dir)
+	if len(accepted) != frames+1 {
+		t.Fatalf("mixed appended %d frames want one", len(accepted)-frames)
+	}
+	payload, err := commitlog.DecodeCollectionTypedSourcePayload(accepted[len(accepted)-1].Payload)
+	if err != nil || len(payload.DeleteIDs) != 64 || len(payload.Inserted.Documents) != 64 {
+		t.Fatalf("mixed frame includes unchanged rows: %+v err=%v", payload, err)
+	}
+	ids, docs, _ := batch(true)
+	wantRetained := make(map[string][]byte, 64)
+	for i, id := range ids {
+		if bytes.Compare(id, []byte("row032")) < 0 {
+			continue
+		}
+		wantRetained[string(id)] = docs[i]
+	}
+	// WAL encoding sorts IDs; each ID must still retain its own input values.
+	for _, id := range payload.DeleteIDs {
+		if _, ok := wantRetained[string(id)]; !ok {
+			t.Fatalf("mixed frame deletes unchanged ID %q", id)
+		}
+	}
+	for _, doc := range payload.Inserted.Documents {
+		if !bytes.Equal(doc.Retained, wantRetained[string(doc.ID)]) {
+			t.Fatalf("mixed frame changed input mapping for %q", doc.ID)
+		}
+	}
+	check := func(n int) {
+		t.Helper()
+		word := "alpha"
+		if n >= 32 && (n < 80 || n >= 96) {
+			word = "beta"
+		}
+		id := fmt.Sprintf("row%03d", n)
+		got, err := col.Get([]byte(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		vector := make([]float32, 8)
+		vector[n%8] = 1
+		want, err := json.Marshal(map[string]any{"id": id, "content": fmt.Sprintf("%s token%03d", word, n), "embedding": vector, "meta": map[string]any{"user_id": fmt.Sprintf("%s%03d", word, n), "fpath": fmt.Sprintf("path%03d", n)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertJSONEqualM13C(t, got, want)
+		found, err := col.FindByIndex("user", fmt.Sprintf("%s%03d", word, n))
+		if err != nil || len(found) != 1 {
+			t.Fatalf("scalar %s rows=%d err=%v", id, len(found), err)
+		}
+	}
+	for n := 0; n < 112; n++ {
+		check(n)
+	}
+	for word, count := range map[string]int{"alpha": 48, "beta": 64} {
+		result, err := col.SearchText(TextSearchOptions{IndexName: "content", Query: word, TopK: 112})
+		if err != nil || len(result.Results) != count {
+			t.Fatalf("text %s rows=%d want=%d err=%v", word, len(result.Results), count, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db = openTypedMinimaDB(t, dir)
+	col, err = NewCollectionManager(db).OpenCollection("minima")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []int{0, 47, 80, 95, 111} {
+		check(n)
+	}
+}
+
+func TestTypedUpsertGroupedPrimaryRejectsMissingIndexState(t *testing.T) {
+	dir, db, col := openTypedMinimaCollection(t)
+	defer db.Close()
+	if _, err := col.UpsertTypedBatch(typedUpsertRecoveryBatch("alpha", 2)); err != nil {
+		t.Fatal(err)
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing snapshot")
+	}
+	defer snap.Close()
+	catalog, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Present a damaged catalog to the planner without changing stored roots.
+	catalog = cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{collectionIndexStateRootName("minima")}, []uint64{0})
+	opts, err := collectionPlannerOptionsForDB(db, catalog.meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := &sourceReplacementPlan{snap: snap, catalog: catalog, meta: catalog.meta}
+	ids, docs := make([][]byte, 96), make([][]byte, 96)
+	for i := range ids {
+		ids[i], docs[i] = fmt.Appendf(nil, "missing%03d", i), []byte(`{"changed":true}`)
+	}
+	ids[0] = []byte("a")
+	frames := len(collectionCommandWALFrames(t, dir))
+	seq, root := dbCommitSeqAndSystemRoot(db)
+	err = col.appendSourceDeleteDeltas(plan, ids, opts, docs)
+	if err == nil || err.Error() != `collections: typed scalar old index state missing for "a"` {
+		t.Fatalf("missing typed index state err=%v", err)
+	}
+	if afterSeq, afterRoot := dbCommitSeqAndSystemRoot(db); afterSeq != seq || afterRoot != root || len(collectionCommandWALFrames(t, dir)) != frames {
+		t.Fatal("failed planning changed publication or WAL")
+	}
+}

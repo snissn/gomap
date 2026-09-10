@@ -357,16 +357,41 @@ func (c *Collection) appendSourceDeleteDeltas(plan *sourceReplacementPlan, docum
 		typedOldView = newCollectionReadViewAtSnapshot(c, plan.snap, plan.catalog, false, "")
 		defer typedOldView.Close()
 	}
-	for documentIndex, documentID := range documentIDs {
-		entry, _, err := collectionGetEntryAtCatalogRoot(plan.snap, plan.catalog, primaryRootName, documentID)
-		if errors.Is(err, tree.ErrKeyNotFound) {
-			continue
-		}
-		if err != nil {
+	var primaryValues [][]byte
+	var primaryFound []bool
+	if typedOldView != nil && (len(runtimes) == 0 || columnStoreTypedScalarIndexesSupported(plan.meta)) {
+		// Typed index state does not need the raw primary entry. Group these
+		// reads by leaf, owning values in input order before planning deletions.
+		primaryValues = make([][]byte, len(documentIDs))
+		primaryFound = make([]bool, len(documentIDs))
+		if err := collectionGetManyViewAtCatalogRoot(plan.snap, plan.catalog, primaryRootName, documentIDs, func(i int, _ []byte, value []byte, found bool) error {
+			primaryFound[i] = found
+			if found {
+				primaryValues[i] = bytes.Clone(value)
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
-		if entry.Flags&node.FlagTombstone != 0 {
-			continue
+	}
+	for documentIndex, documentID := range documentIDs {
+		var entry node.LeafEntry
+		if primaryFound != nil {
+			if !primaryFound[documentIndex] {
+				continue
+			}
+			entry.Value = primaryValues[documentIndex] // Already pointer-resolved.
+		} else {
+			entry, _, err = collectionGetEntryAtCatalogRoot(plan.snap, plan.catalog, primaryRootName, documentID)
+			if errors.Is(err, tree.ErrKeyNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if entry.Flags&node.FlagTombstone != 0 {
+				continue
+			}
 		}
 		item := existingDelete{id: documentID}
 		if columnStoreRetainedPayloadUsesSemanticStreamV1(plan.meta.Options.ColumnStore) {
@@ -378,7 +403,9 @@ func (c *Collection) appendSourceDeleteDeltas(plan *sourceReplacementPlan, docum
 				item.primaryValue = primaryValue
 			}
 		}
-		if len(plan.meta.TextIndexes) > 0 || typedOldView != nil {
+		if primaryFound != nil {
+			item.document = entry.Value
+		} else if len(plan.meta.TextIndexes) > 0 || typedOldView != nil {
 			document, found, err := collectionGetAppendAtCatalogRoot(plan.snap, plan.catalog, primaryRootName, documentID, nil)
 			if err != nil {
 				return err
