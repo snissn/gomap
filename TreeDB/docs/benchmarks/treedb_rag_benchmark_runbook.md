@@ -471,3 +471,51 @@ python3 -m py_compile \
 These gates cover metric hand calculations, dimension/timing/filter corruption,
 fixture/vector stability, insufficient-sample rejection, counter corruption,
 source lifecycle/reopen, direct/service smoke, and artifact hashing.
+
+### Bounded ingest and Build attribution
+
+`benchmarks/vector_db_compare/minima_treedb_probe.py` reuses the native Minima
+client and service for one fresh initial ingest at 250K, 500K, or 1M. It records
+existing stats after every acknowledged 256-row batch, outside the request
+interval. Two fixed eight-second CPU observations cover the first and last 32
+full batches. Allocation endpoints include process/background work; pprof
+allocation samples may lag GC. The observer changes scheduling, so these are
+nonqualifying attribution records, separate from ordinary lifecycle timings.
+
+Prepare a clean, reviewed source and naturally stamped service binary, then bind
+all source/harness blobs, dependencies, manifest, serving configuration, launch
+wrapper and binary before collection. The `--binding` JSON requires
+`source_commit`, `binary` (absolute path), `binary_sha256`, `manifest_sha256`,
+`serving` (absolute path), `serving_sha256`, and Boolean `build_profile`. The strict existing manifest
+validator checks fixture identity and hashes. Use a fresh packet directory on
+`/mnt/fast4tb`; retain failures and never rerun into its output directory.
+
+With the pinned environment and client source on `PYTHONPATH`, launch through the
+reviewed wrapper with a 600-second timeout, six-CPU affinity, GOMAXPROCS=6,
+GOMEMLIMIT=4GiB, and exclusive ownership of loopback ports 17220/17221/17222:
+
+```sh
+python benchmarks/vector_db_compare/minima_treedb_probe.py   --binary "$SERVICE" --binding "$PACKET/source-binding.json"   --manifest "$MANIFEST" --serving "$SERVING" --output "$PACKET/run"   --build-profile
+```
+
+`--build-profile` appends one call through the ordinary initial Build boundary.
+It retains the existing optimize response (including `status.column_graph_build`
+and optimize timing), allocation endpoints, and a fixed 60-second CPU profile.
+The profiler must be active before Build and remain active through completion;
+overrunning the window fails the diagnostic. Idle remainder is included in CPU
+samples, not in the separately recorded Build request interval. Stage timers
+are nested. The initial Build's serving admission produces one successful renew;
+ingest still requires zero graph/Fold work. No query workload follows this probe.
+
+After the owned service and wrapper have exited and their ports are free, use:
+
+```sh
+python benchmarks/vector_db_compare/minima_treedb_probe_analyze.py   --packet "$PACKET" --manifest "$MANIFEST" --source "$SOURCE"
+```
+
+The analyzer requires the wrapper's `execution.json`, `command.log`, and
+`launch-authorization.json` SHA-256 map. It validates all batch coordinates,
+identities, acknowledgements, profile coverage, bound inputs, work counters and
+cleanup before writing `run-verification.json` and `run-attribution.json`.
+Run the ordinary measured lifecycle separately for Build/Fold/reopen, mutation,
+full payload and final-state correctness; the probe does not replace those gates.

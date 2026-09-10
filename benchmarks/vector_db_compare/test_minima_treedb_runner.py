@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 from dataclasses import asdict, replace
 import io
 import os
@@ -16,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parents[2] / "clients/python/treedb_client/src"))
 import minima_qdrant_runner as common
 import minima_treedb_runner as runner
+import minima_treedb_probe as probe
+import minima_treedb_probe_analyze as probe_analyze
 from treedb_client import DenseSearchWork, TreeDBProtocolError, TreeDBServiceError
 from treedb_client._native import _dense_work
 
@@ -119,6 +122,90 @@ Server((host, int(port)), Handler).serve_forever()
     binary.chmod(0o755)
 
 
+
+
+class ProbeContractTest(unittest.TestCase):
+    def test_population_and_partial_batches(self):
+        for size in (250_000, 500_000, 1_000_000):
+            manifest = {'fixture': f'bounded-{size // 1000}k', 'corpora': [{'corpus_rows': size}],
+                        'config': {'batch_size': 256}, 'operations': [{'name': 'initial_batch_insert',
+                        'insert_ranges': [{'scenario': 'first', 'start': 0, 'rows': 128},
+                                          {'scenario': 'rest', 'start': 128, 'rows': size - 1456}]}]}
+            batches = probe.initial_batches(manifest)
+            self.assertEqual(batches[:2], [('first', 0, 128), ('rest', 128, 256)])
+            self.assertEqual(sum(x[2] for x in batches), size - 1328)
+            self.assertEqual(batches[-1][1] + batches[-1][2], size - 1328)
+            for key, value in [('fixture', 'full'), ('corpora', [{'corpus_rows': size + 1}]),
+                               ('config', {'batch_size': 512}), ('operations', [{'name': 'initial_batch_insert', 'insert_ranges': []}])]:
+                with self.subTest(size=size, key=key), self.assertRaises(AssertionError):
+                    probe.initial_batches({**manifest, key: value})
+
+    def test_build_requires_complete_profile_identity_and_work(self):
+        def snapshot(renews, allocated):
+            return {'work': {'pid': 42, 'origin_unix_nano': 7, 'indexed_json': {'rows': 0},
+                    'runtime': {'queries_completed': 0}, 'memory': {'total_alloc': allocated, 'mallocs': allocated},
+                    'fold': {'publications': 0, 'candidate_bytes_charged': 0, 'appender_attempts_charged': 0,
+                             **{key: {'attempts': n, 'completed': n, 'errors': 0}
+                                for key, n in [('build', 0), ('public', 0), ('renew', renews)]}}}}
+        capture = {'requests': [{'operation_name': 'column_graph_initial_build', 'outcome': 'success',
+                   'started_monotonic_ns': 3, 'ended_monotonic_ns': 4}], 'profile_seconds': 60,
+                   'cpu': {'started_monotonic_ns': 1, 'ended_monotonic_ns': 5},
+                   'active_profile_probe': {'status': 500, 'body': 'profiling already in use', 'observed_monotonic_ns': 2},
+                   'before_work': snapshot(0, 10), 'after_work': snapshot(1, 20), 'after_profile_work': snapshot(1, 25),
+                   'public_count': 248672, 'response': {'status': {'strategy': 'column_graph',
+                   'column_graph_build': {'total_nanos': 10}}, 'timing': {'total_nanos': 11}},
+                   'allocation_delta': {'total_alloc': 10, 'mallocs': 10}}
+        probe.validate_build_capture(capture, 42, 7, 248672)
+        cases = [(('cpu', 'ended_monotonic_ns'), 4), (('active_profile_probe', 'status'), 200),
+                 (('active_profile_probe', 'body'), 'not active'), (('profile_seconds',), 8),
+                 (('after_work', 'work', 'pid'), 43), (('after_work', 'work', 'origin_unix_nano'), 8),
+                 (('after_work', 'work', 'indexed_json', 'rows'), 1),
+                 (('after_work', 'work', 'fold', 'renew', 'errors'), 1),
+                 (('public_count',), 248671), (('allocation_delta', 'total_alloc'), 11),
+                 (('response', 'status', 'column_graph_build', 'total_nanos'), 0)]
+        for path, value in cases:
+            bad = copy.deepcopy(capture)
+            target = bad
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            with self.subTest(path=path), self.assertRaises(AssertionError):
+                probe.validate_build_capture(bad, 42, 7, 248672)
+
+
+
+    def test_analyzer_rejects_recorded_input_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            packet = Path(directory)
+            binary, serving, manifest = (packet / name for name in ('service', 'serving.json', 'manifest.json'))
+            for path in (binary, serving, manifest):
+                path.write_text(path.name)
+            binding = {'source_commit': 'reviewed', 'binary': str(binary), 'serving': str(serving),
+                       'binary_sha256': probe_analyze.h(binary), 'serving_sha256': probe_analyze.h(serving),
+                       'manifest_sha256': probe_analyze.h(manifest), 'build_profile': False}
+            binding_path = packet / 'source-binding.json'
+            binding_path.write_text(json.dumps(binding))
+            probe_path, analyzer_path = Path(probe.__file__).resolve(), Path(probe_analyze.__file__).resolve()
+            inputs = (binary, serving, manifest, binding_path, probe_path, analyzer_path)
+            authorization = {'authorized': True, 'sha256': {str(path): probe_analyze.h(path) for path in inputs}}
+            authorization_path = packet / 'launch-authorization.json'
+            authorization_path.write_text(json.dumps(authorization))
+            result = {key: binding[key] for key in ('source_commit', 'binary_sha256', 'serving_sha256', 'manifest_sha256', 'build_profile')}
+            result.update(binding_sha256=probe_analyze.h(binding_path), script_sha256=probe_analyze.h(probe_path))
+            probe_analyze.validate_run_inputs(result, packet, manifest)
+            for key in result:
+                bad = {**result, key: True if key == 'build_profile' else 'different-run'}
+                with self.subTest(key=key), self.assertRaises(AssertionError):
+                    probe_analyze.validate_run_inputs(bad, packet, manifest)
+            authorization['authorized'] = False
+            authorization_path.write_text(json.dumps(authorization))
+            with self.assertRaises(AssertionError):
+                probe_analyze.validate_run_inputs(result, packet, manifest)
+            authorization['authorized'] = True
+            del authorization['sha256'][str(manifest)]
+            authorization_path.write_text(json.dumps(authorization))
+            with self.assertRaises(KeyError):
+                probe_analyze.validate_run_inputs(result, packet, manifest)
 
 
 class MinimaTreeDBRunnerTest(unittest.TestCase):
@@ -1613,7 +1700,8 @@ class MinimaTypedRunnerTest(unittest.TestCase):
         workload.upsert("insert", "mixed", [document])
         self.assertIs(native.upsert_documents.call_args.kwargs["index_info"], info)
         control.upsert_documents.assert_not_called()
-        workload.initial_load_to_query_boundary()
+        self.assertIs(workload.initial_load_to_query_boundary(), control.optimize_index.return_value)
+        self.assertTrue(workload._graph_built)
         self.assertEqual(control.optimize_index.call_args.kwargs["column_graph_action"], "build")
         self.assertEqual(workload.search("query", "mixed"), (["d"], [1.]))
         self.assertIs(native.query_by_embedding.call_args.kwargs["index_info"], info)
