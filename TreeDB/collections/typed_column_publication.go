@@ -445,6 +445,7 @@ type typedColumnPartReconstructionCache struct {
 	Fields       []TypedStorageField
 	Refs         map[uint64]columnManifestAssetRefForScan
 	RefsLoaded   bool
+	Prepared     *columnPhysicalScanSnapshotView
 	ReadCache    *columnPhysicalAssetReadCache
 	SelectionKey string
 
@@ -621,6 +622,10 @@ func (c *Collection) typedColumnPartRefForGeneration(snap *backenddb.Snapshot, r
 }
 
 func (c *Collection) typedColumnPartRefForGenerationWithCache(snap *backenddb.Snapshot, rootID uint64, cfg ColumnStoreConfig, generation uint64, cache *typedColumnPartReconstructionCache) (columnManifestAssetRefForScan, bool, error) {
+	if cache != nil && cache.Prepared != nil {
+		ref, found := materializerPartRef(cache.Prepared.TypedColumnPartRefs, generation, typedColumnPartAssetPartID)
+		return ref, found, nil
+	}
 	if cache != nil && cache.RefsLoaded {
 		ref, found := cache.Refs[generation]
 		return ref, found, nil

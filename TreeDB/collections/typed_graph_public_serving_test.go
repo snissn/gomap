@@ -555,7 +555,7 @@ func TestTypedGraphPublicFoldPostCaptureSuffixAndDebt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer view.Close()
-	assertTypedGraphMaterializerReuse(t, view, false)
+	assertTypedGraphMaterializerReuse(t, view, true)
 	docs, err := view.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
 	want := map[string]bool{string(ids[0]): true, string(ids[2]): true, "growing": true, "growing-again": true}
 	if err != nil || len(docs.Results) != len(want) {
@@ -620,7 +620,7 @@ func TestTypedGraphPublicSameOwnerServing(t *testing.T) {
 		t.Fatalf("public mutable filtered search: %v", err)
 	}
 	defer view.Close()
-	assertTypedGraphMaterializerReuse(t, view, false)
+	assertTypedGraphMaterializerReuse(t, view, true)
 	if len(response.Results) != 1 || !bytes.Equal(response.Results[0].ID, ids[0]) {
 		t.Fatalf("results=%+v", response.Results)
 	}

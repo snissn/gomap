@@ -2,9 +2,11 @@ package collections
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -182,6 +184,7 @@ type CollectionReadView struct {
 	typedColumnAssetReadCache       *columnPhysicalAssetReadCache
 	typedColumnReconstructionCache  *typedColumnPartReconstructionCache
 	columnSnapshotView              *columnPhysicalScanSnapshotView
+	preparedMaterializer            *columnPhysicalScanSnapshotView // immutable, fully validated publication metadata
 	rowLocator                      *documentRowLocator
 	pointRowRefs                    map[documentRowPartKey]columnManifestAssetRefForScan
 	pointRowBlocks                  map[documentRowPartKey]*columnPhysicalRowReaderBlock
@@ -586,6 +589,10 @@ func (v *CollectionReadView) clearDerivedRowFetchCaches() {
 	v.pointRowBlocks = nil
 	v.rowLocator = nil
 	v.columnSnapshotView = nil
+	v.preparedMaterializer = nil
+	if v.typedColumnReconstructionCache != nil {
+		v.typedColumnReconstructionCache.Prepared = nil
+	}
 	v.pointRowRefs = nil
 	v.pointRowProjection = nil
 }
@@ -920,25 +927,48 @@ func (v *CollectionReadView) fetchDocumentPointRow(view columnPhysicalScanSnapsh
 }
 
 func (v *CollectionReadView) pointRowAssetRef(view columnPhysicalScanSnapshotView, ref DocumentRowRef) (columnManifestAssetRefForScan, error) {
-	if v.pointRowRefs == nil {
-		v.pointRowRefs = make(map[documentRowPartKey]columnManifestAssetRefForScan, len(view.AssetRefs))
-		for _, assetRef := range view.AssetRefs {
-			if assetRef.Ref.Kind != ColumnAssetKindTCS1PartImage {
-				return columnManifestAssetRefForScan{}, fmt.Errorf("collections: document row ref unsupported asset kind %q", assetRef.Ref.Kind)
-			}
-			key := documentRowPartKey{Generation: assetRef.Ref.Generation, PartID: assetRef.Ref.PartID}
-			if _, exists := v.pointRowRefs[key]; exists {
-				return columnManifestAssetRefForScan{}, fmt.Errorf("collections: duplicate document row ref asset generation=%d part_id=%d", key.Generation, key.PartID)
-			}
-			v.pointRowRefs[key] = assetRef
-		}
-	}
 	key := documentRowPartKey{Generation: ref.Generation, PartID: ref.PartID}
-	assetRef, ok := v.pointRowRefs[key]
+	var assetRef columnManifestAssetRefForScan
+	var ok bool
+	if v.preparedMaterializer != nil {
+		assetRef, ok = materializerPartRef(v.preparedMaterializer.AssetRefs, ref.Generation, ref.PartID)
+	} else {
+		if v.pointRowRefs == nil {
+			v.pointRowRefs = make(map[documentRowPartKey]columnManifestAssetRefForScan, len(view.AssetRefs))
+			for _, assetRef := range view.AssetRefs {
+				if assetRef.Ref.Kind != ColumnAssetKindTCS1PartImage {
+					return columnManifestAssetRefForScan{}, fmt.Errorf("collections: document row ref unsupported asset kind %q", assetRef.Ref.Kind)
+				}
+				key := documentRowPartKey{Generation: assetRef.Ref.Generation, PartID: assetRef.Ref.PartID}
+				if _, exists := v.pointRowRefs[key]; exists {
+					return columnManifestAssetRefForScan{}, fmt.Errorf("collections: duplicate document row ref asset generation=%d part_id=%d", key.Generation, key.PartID)
+				}
+				v.pointRowRefs[key] = assetRef
+			}
+		}
+		assetRef, ok = v.pointRowRefs[key]
+	}
 	if !ok {
 		return columnManifestAssetRefForScan{}, fmt.Errorf("collections: document row ref for id %q generation=%d part_id=%d is not present in snapshot", string(ref.DocumentID), ref.Generation, ref.PartID)
 	}
 	return assetRef, nil
+}
+
+func compareMaterializerPartRefs(a, b columnManifestAssetRefForScan) int {
+	if order := cmp.Compare(a.Ref.Generation, b.Ref.Generation); order != 0 {
+		return order
+	}
+	return cmp.Compare(a.Ref.PartID, b.Ref.PartID)
+}
+
+// Publication validates strict generation/part ordering once. Readers borrow
+// the owned sorted refs and keep only decoded payloads in their request cache.
+func materializerPartRef(refs []columnManifestAssetRefForScan, generation, partID uint64) (columnManifestAssetRefForScan, bool) {
+	i, found := slices.BinarySearchFunc(refs, columnManifestAssetRefForScan{Ref: ColumnAssetRef{Generation: generation, PartID: partID}}, compareMaterializerPartRefs)
+	if !found {
+		return columnManifestAssetRefForScan{}, false
+	}
+	return refs[i], true
 }
 
 func (v *CollectionReadView) loadPointRowBlock(view columnPhysicalScanSnapshotView, assetRef columnManifestAssetRefForScan) (*columnPhysicalRowReaderBlock, error) {
@@ -1504,6 +1534,7 @@ func (v *CollectionReadView) typedColumnReconstructionCacheForConfig(cfg ColumnS
 			ReadCache: v.typedColumnAssetReadCache,
 		}
 	}
+	v.typedColumnReconstructionCache.Prepared = v.preparedMaterializer
 	return v.typedColumnReconstructionCache
 }
 

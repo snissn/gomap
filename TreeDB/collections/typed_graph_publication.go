@@ -214,6 +214,7 @@ func typedGraphPublicationInputCost(input columnWritePublishInput, limits typedG
 
 type typedGraphPublicationState struct {
 	servingBase              *typedGraphServingBaseMetadata
+	servingMaterializer      columnPhysicalScanSnapshotView
 	servingRefs              []ColumnAssetRef
 	servingMetadataBytes     int64
 	servingAdmitted          bool

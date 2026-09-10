@@ -35,11 +35,14 @@ Serving admission prepares full materializer metadata through the same manifest
 decoder used by ordinary fetches. The existing publication owner retains this
 snapshot-free metadata, including typed-part sort keys, under the cold decoded
 metadata budget; temporary record-adapter headers include the identity entry.
-An admitted read owner reuses it only when captured and current collection
-metadata are fully equal, then binds its own snapshot and manifest-root header.
-Independent captured/current root pages need not be equal. Mutation or
-concurrent-tail coverage uses the current full loader; asset-cache integrity or
-namespace invalidation and Close retain their existing behavior.
+Each accepted mutation and Fold prepares complete current metadata before root
+publication; unchanged base metadata remains shared. Read admission checks the
+exact installed catalog and roots, then binds its own full config, snapshot and
+manifest-root header. Generation-wide reconstruction validation runs during
+preparation, so full fetch can binary-search immutable row and typed-part refs
+without rebuilding request maps. Decoded payloads remain local to each reader.
+Asset-cache integrity or namespace invalidation and Close clear prepared reuse
+and retain the ordinary full-loader behavior.
 
 The ordinary Python client and benchmark runner select this lifecycle through
 HTTP controls and native 64/v2 dense, 65/v1 typed upsert and 50/v2 GetMany.

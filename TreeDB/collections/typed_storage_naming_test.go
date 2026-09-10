@@ -409,7 +409,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/typed_graph_publication_initializer_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/typed_graph_public_control_policy_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/typed_graph_public_serving_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
-	{path: "TreeDB/collections/typed_graph_serving_metadata.go", classification: typedStorageLegacyCompatibility, matchingLines: 9, occurrences: 10},
+	{path: "TreeDB/collections/typed_graph_serving_metadata.go", classification: typedStorageLegacyCompatibility, matchingLines: 11, occurrences: 13},
 	{path: "TreeDB/collections/typed_graph_publication_bench_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
 	{path: "TreeDB/collections/typed_graph_reconcile.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
 	{path: "TreeDB/collections/typed_graph_read_owner.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
@@ -462,7 +462,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// #4619 typed service, materializer and work-proof controls reuse existing
 	// compatibility schema names; they add no legacy umbrella terminology.
 	{path: "TreeDB/collections/document_row_index_cache_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
-	{path: "TreeDB/collections/typed_graph_prepared_key_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/typed_graph_prepared_key_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 5},
 	{path: "TreeDB/collections/typed_graph_serving_stats.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
 	{path: "TreeDB/collections/typed_graph_work_stats.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/work_stats_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 6},

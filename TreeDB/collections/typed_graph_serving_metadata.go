@@ -87,7 +87,7 @@ func (c *Collection) prepareTypedGraphServingMetadata(ctx context.Context, cold 
 		}
 		next := *state
 		next.servingBase = metadata
-		if err := next.prepareServingRefs(records, catalog.meta.Options.ColumnStore.ActiveManifest.Generation, cold); err != nil {
+		if err := next.prepareServingRefs(records, catalog.meta, cold); err != nil {
 			return err
 		}
 		if !coord.typedPublication.CompareAndSwap(state, &next) {
@@ -155,6 +155,18 @@ func prepareTypedGraphMaterializerMetadata(view columnPhysicalScanSnapshotView, 
 	if err != nil {
 		return columnPhysicalScanSnapshotView{}, err
 	}
+	// Preserve the full reconstruction loader's generation-wide validation once,
+	// before any reader may use the immutable sorted refs without request maps.
+	if _, err := typedColumnPartRefsByGenerationFromManifestRecords(records, cfg.AssetManager.Namespace); err != nil {
+		return columnPhysicalScanSnapshotView{}, err
+	}
+	for _, parts := range [][]columnManifestAssetRefForScan{refs, typedRefs} {
+		for i := 1; i < len(parts); i++ {
+			if compareMaterializerPartRefs(parts[i-1], parts[i]) >= 0 {
+				return columnPhysicalScanSnapshotView{}, ErrVectorIndexSnapshotMismatch
+			}
+		}
+	}
 	return columnPhysicalScanSnapshotView{
 		CollectionName: view.Catalog.meta.Name, Catalog: view.Catalog,
 		Config: rowConfig, FullConfig: cfg, ColumnStoreEnabled: true,
@@ -211,10 +223,32 @@ func typedGraphServingMetadataBytes(b *typedGraphServingBaseMetadata, limit int6
 			return 0, errTypedGraphOwnerBudget
 		}
 	}
+	for _, record := range v.SegmentOwnership {
+		if !add(len(record.Ref.Kind), 1) || !add(len(record.Ref.Namespace), 1) {
+			return 0, errTypedGraphOwnerBudget
+		}
+	}
+	materializerBytes, err := typedGraphMaterializerMetadataBytes(b.materializerView, limit-n)
+	if err != nil {
+		return 0, err
+	}
+	return n + materializerBytes, nil
+}
+
+// The view header is already charged as part of its owning base or publication
+// state. This accounts only the backing owned by a full materializer view.
+func typedGraphMaterializerMetadataBytes(m columnPhysicalScanSnapshotView, limit int64) (int64, error) {
+	var n int64
+	add := func(count int, size uintptr) bool {
+		if count < 0 || size == 0 || n > limit || int64(count) > (limit-n)/int64(size) {
+			return false
+		}
+		n += int64(count) * int64(size)
+		return true
+	}
 	// The full view adds owned ref/SortKey slices and a row-asset config copy.
 	// FullConfig borrows the already-retained catalog. Conservatively charge row
 	// config strings and pointer fields even when they also borrow catalog data.
-	m := b.materializerView
 	for _, term := range []struct {
 		count int
 		size  uintptr
@@ -247,11 +281,9 @@ func typedGraphServingMetadataBytes(b *typedGraphServingBaseMetadata, limit int6
 		}
 		return true
 	}
-	for _, ownership := range [][]columnManifestSegmentOwnership{v.SegmentOwnership, m.SegmentOwnership} {
-		for _, record := range ownership {
-			if !addStrings(string(record.Ref.Kind), record.Ref.Namespace) {
-				return 0, errTypedGraphOwnerBudget
-			}
+	for _, record := range m.SegmentOwnership {
+		if !addStrings(string(record.Ref.Kind), record.Ref.Namespace) {
+			return 0, errTypedGraphOwnerBudget
 		}
 	}
 	for _, refs := range [][]columnManifestAssetRefForScan{m.AssetRefs, m.TypedColumnPartRefs} {
@@ -302,7 +334,7 @@ func typedGraphServingMetadataBytes(b *typedGraphServingBaseMetadata, limit int6
 	return n, nil
 }
 
-func (s *typedGraphPublicationState) prepareServingRefs(records []columnManifestRecord, generation uint64, cold typedGraphColdLimits) error {
+func (s *typedGraphPublicationState) prepareServingRefs(records []columnManifestRecord, meta CollectionMeta, cold typedGraphColdLimits) error {
 	if s.servingBase == nil {
 		return nil
 	}
@@ -310,7 +342,10 @@ func (s *typedGraphPublicationState) prepareServingRefs(records []columnManifest
 		return errTypedGraphOverlayFoldNeeded
 	}
 	b := s.servingBase
-	refs, err := typedGraphOwnerRefs(records, generation, b.view.AssetNamespace, b.graph, b.view.VectorIndexState)
+	if meta.Options.ColumnStore == nil || meta.Options.ColumnStore.ActiveManifest == nil {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	refs, err := typedGraphOwnerRefs(records, meta.Options.ColumnStore.ActiveManifest.Generation, b.view.AssetNamespace, b.graph, b.view.VectorIndexState)
 	if err != nil {
 		return err
 	}
@@ -321,6 +356,28 @@ func (s *typedGraphPublicationState) prepareServingRefs(records []columnManifest
 	if n < 0 || n > cold.DecodedTermBytes-b.bytes {
 		return errTypedGraphOwnerBudget
 	}
+	materializer := b.materializerView
+	if !collectionMetaValuesEqual(b.view.Catalog.meta, meta) {
+		materializer, err = prepareTypedGraphMaterializerMetadata(columnPhysicalScanSnapshotView{
+			Catalog: &collectionCatalog{meta: meta}, ColumnAssetRootDir: b.view.ColumnAssetRootDir, graphOwnerRecords: records,
+		}, cold)
+		if err != nil {
+			return err
+		}
+		owned, err := typedGraphMaterializerMetadataBytes(materializer, cold.DecodedTermBytes-b.bytes-n)
+		if err != nil {
+			return err
+		}
+		n += owned
+	}
+	// Installed state.catalog is the current authority. Bind the actual catalog,
+	// full config and snapshot at read admission; retain no temporary catalog or
+	// pager roots that would need a separate relocation protocol.
+	materializer.Catalog, materializer.snapshot = nil, nil
+	materializer.FullConfig = ColumnStoreConfig{}
+	materializer.CommitSeq, materializer.SystemRoot = 0, 0
+	materializer.Diagnostics.ManifestRoot = 0
+	s.servingMaterializer = materializer
 	s.servingRefs, s.servingMetadataBytes = refs, n+b.bytes
 	return nil
 }
@@ -333,5 +390,9 @@ func (p *typedGraphPublicationCandidate) prepareServingPlan(plan ColumnPublishPl
 	if policy == nil {
 		return ErrVectorIndexSnapshotMismatch
 	}
-	return p.next.prepareServingRefs(plan.RootDelta.Records, plan.UpdatedActiveManifest.Generation, policy.options.Owners.Cold)
+	meta, err := columnPublishUpdatedMeta(p.before.catalog.meta, plan)
+	if err != nil {
+		return err
+	}
+	return p.next.prepareServingRefs(plan.RootDelta.Records, meta, policy.options.Owners.Cold)
 }
