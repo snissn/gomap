@@ -721,6 +721,21 @@ func mergeStableLogicalObligations(target *stableLogicalObligationView, incoming
 	if base.index == nil && base.count != 0 {
 		base = newStableLogicalObligationView(base.slice())
 	}
+	// Exact tail ancestry proves containment of these immutable histories.
+	// Reuse the descendant instead of scanning its accumulated obligations.
+	older, newer := base, incoming
+	if older.count > newer.count {
+		older, newer = newer, older
+	}
+	tail, count := newer.tail, newer.count
+	for tail != nil && count > older.count {
+		count -= len(tail.values)
+		tail = tail.parent
+	}
+	if count == older.count && tail == older.tail {
+		*target = newer
+		return nil
+	}
 	// Both views own immutable, normalized obligations. Probe the existing index
 	// and retain only additions instead of copying and hashing the full retained
 	// payload again on each closure merge.
