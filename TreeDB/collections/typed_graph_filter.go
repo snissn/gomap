@@ -45,18 +45,33 @@ func prepareTypedGraphFilterWithContext(ctx context.Context, overlay *typedGraph
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var plan *typedGraphPreparedFilter
+	var work ColumnGraphFilterWork
 	workstats.Graph.Filters.Attempts.Add(1)
 	defer func() {
-		w := plan.work(err == nil)
 		if workOut != nil {
-			*workOut = w
+			*workOut = work
 		}
-		workstats.Graph.Filters.Finish(err == nil)
-		workstats.Graph.FilterSourceIDs.Add(w.SourceIDs)
-		workstats.Graph.FilterSourceBytes.Add(w.SourceBytes)
-		workstats.Graph.FilterInspectedEntries.Add(w.InspectedEntries)
-		workstats.Graph.FilterMappingWorkCharged.Add(w.MappingWorkCharged)
+		recordTypedGraphFilterWork(work)
+	}()
+	return prepareTypedGraphFilterUnmetered(ctx, overlay, filter, limits, &work)
+}
+
+func recordTypedGraphFilterWork(w ColumnGraphFilterWork) {
+	workstats.Graph.Filters.Finish(w.Completed)
+	workstats.Graph.FilterSourceIDs.Add(w.SourceIDs)
+	workstats.Graph.FilterSourceBytes.Add(w.SourceBytes)
+	workstats.Graph.FilterInspectedEntries.Add(w.InspectedEntries)
+	workstats.Graph.FilterMappingWorkCharged.Add(w.MappingWorkCharged)
+}
+
+// The serving cache composes cold preparation and current-suffix binding into
+// one request's work. Direct callers retain the same metered wrapper above.
+func prepareTypedGraphFilterUnmetered(ctx context.Context, overlay *typedGraphOverlaySearch, filter HybridScalarFilter, limits typedGraphFilterLimits, workOut *ColumnGraphFilterWork) (_ *typedGraphPreparedFilter, err error) {
+	var plan *typedGraphPreparedFilter
+	defer func() {
+		if workOut != nil {
+			*workOut = plan.work(err == nil)
+		}
 	}()
 	if !overlay.validOpen() {
 		return nil, ErrVectorIndexSnapshotMismatch
@@ -365,7 +380,7 @@ func (overlay *typedGraphOverlaySearch) ordinalForCurrentRef(ref DocumentRowRef)
 }
 
 func (p *typedGraphPreparedFilter) validFor(overlay *typedGraphOverlaySearch) bool {
-	return p != nil && p.overlay == overlay && overlay.validOpen() && overlay.baseInverseReady() && (p.borrowedBaseFilter == nil || p.borrowedBaseFilter.plan.validFor(p.borrowedBaseFilter.plan.overlay))
+	return p != nil && p.overlay == overlay && overlay.validOpen() && overlay.baseInverseReady() && (p.borrowedBaseFilter == nil || p.borrowedBaseFilter.validFor(overlay))
 }
 
 func (v *typedGraphOverlaySearch) baseInverseReady() bool {

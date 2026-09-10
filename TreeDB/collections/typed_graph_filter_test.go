@@ -489,6 +489,10 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 
 		// The public filtered route owns both preparation and exact-scoring
 		// prefixes, and must release its owner for cancellation in either stage.
+		// Keep this prefix sweep cold after earlier queries warmed the keeper.
+		if err := col.CloseVectorIndexPreparedSearchCache(); err != nil {
+			t.Fatal(err)
+		}
 		filter := rangeFilter("user", 0, 4095)
 		q.DeclaredScalarFilter = &filter
 		counted := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: int(^uint(0) >> 1)}

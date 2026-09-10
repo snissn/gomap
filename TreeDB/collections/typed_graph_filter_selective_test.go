@@ -283,6 +283,10 @@ func TestTypedGraphPreparedFilterSelectiveAND(t *testing.T) {
 				t.Fatalf("public AND IDs=%q work=%+v", got, response.Stats.ColumnGraphWork)
 			}
 		}
+		// This sweep measures a cold secondary-membership submission prefix.
+		if err := col.CloseVectorIndexPreparedSearchCache(); err != nil {
+			t.Fatal(err)
+		}
 		counted := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: int(^uint(0) >> 1)}
 		q.Context = counted
 		checkResults(col)

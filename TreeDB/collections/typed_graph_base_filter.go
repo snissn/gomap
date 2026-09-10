@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"math/bits"
 	"reflect"
 	"slices"
@@ -22,6 +23,10 @@ type typedGraphBaseFilter struct {
 	plan           *typedGraphPreparedFilter
 	predicates     []typedGraphScalarPredicate
 	predicateBytes int
+	// Only the keeper installs detached plans. Its existing read lock protects
+	// these immutable fields through scoring; each query supplies its own pin.
+	holder     *columnVectorGraphSharedPreparedSearch
+	schemaHash uint64
 }
 
 type typedGraphScalarPredicate struct {
@@ -31,6 +36,18 @@ type typedGraphScalarPredicate struct {
 }
 
 func prepareTypedGraphBaseFilter(base *VectorIndexSearcher, filter HybridScalarFilter, limits typedGraphBaseFilterLimits) (*typedGraphBaseFilter, error) {
+	result, err := compileTypedGraphBaseFilter(base, filter, limits)
+	if err != nil {
+		return nil, err
+	}
+	err = result.prepare(context.Background(), base, filter, limits.typedGraphFilterLimits, nil)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func compileTypedGraphBaseFilter(base *VectorIndexSearcher, filter HybridScalarFilter, limits typedGraphBaseFilterLimits) (*typedGraphBaseFilter, error) {
 	if base == nil || base.closed || base.snapshot == nil || base.catalog == nil || base.reader == nil || base.collection == nil || base.collection.db == nil || base.collection.db.IsClosing() {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
@@ -109,6 +126,13 @@ func prepareTypedGraphBaseFilter(base *VectorIndexSearcher, filter HybridScalarF
 		}
 		result.predicates = append(result.predicates, typedGraphScalarPredicate{definition: def, column: column, clause: clause})
 	}
+	return result, nil
+}
+
+func (result *typedGraphBaseFilter) prepare(ctx context.Context, base *VectorIndexSearcher, filter HybridScalarFilter, limits typedGraphFilterLimits, workOut *ColumnGraphFilterWork) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Searchers are single-owner. Reuse their existing lazy materializer and
 	// immutable pin; this does not introduce concurrent bind/Close semantics.
 	if base.documentView == nil {
@@ -116,23 +140,50 @@ func prepareTypedGraphBaseFilter(base *VectorIndexSearcher, filter HybridScalarF
 	}
 	overlay, err := prepareTypedGraphOverlaySearch(base, base.documentView, typedGraphOverlayLimits{Rows: 1, Tombstones: 1, Bytes: 1})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if len(overlay.rows) != 0 {
-		return nil, ErrVectorIndexSnapshotMismatch
+		return ErrVectorIndexSnapshotMismatch
 	}
-	result.plan, err = prepareTypedGraphFilter(overlay, filter, limits.typedGraphFilterLimits)
-	if err != nil {
-		return nil, err
+	if workOut == nil {
+		result.plan, err = prepareTypedGraphFilterWithContext(ctx, overlay, filter, limits, nil)
+	} else {
+		result.plan, err = prepareTypedGraphFilterUnmetered(ctx, overlay, filter, limits, workOut)
 	}
-	return result, nil
+	return err
+}
+
+func (b *typedGraphBaseFilter) validFor(overlay *typedGraphOverlaySearch) bool {
+	if b == nil || b.plan == nil || !overlay.validOpen() {
+		return false
+	}
+	if b.holder == nil {
+		return b.plan.validFor(b.plan.overlay) && overlay.base == b.plan.overlay.base
+	}
+	ref := overlay.base.reader.sharedPreparedSearch
+	cfg := overlay.base.catalog.meta.Options.ColumnStore
+	return ref != nil && ref.holder == b.holder && cfg != nil && cfg.SchemaHash == b.schemaHash
 }
 
 func bindTypedGraphBaseFilter(base *typedGraphBaseFilter, overlay *typedGraphOverlaySearch, limits typedGraphFilterBindLimits) (*typedGraphPreparedFilter, error) {
-	if base == nil || base.plan == nil || !base.plan.validFor(base.plan.overlay) || !overlay.validOpen() || overlay.base != base.plan.overlay.base {
+	return bindTypedGraphBaseFilterWithContext(context.Background(), base, overlay, limits, nil)
+}
+
+func bindTypedGraphBaseFilterWithContext(ctx context.Context, base *typedGraphBaseFilter, overlay *typedGraphOverlaySearch, limits typedGraphFilterBindLimits, workOut *ColumnGraphFilterWork) (_ *typedGraphPreparedFilter, err error) {
+	var plan *typedGraphPreparedFilter
+	defer func() {
+		if workOut != nil {
+			*workOut = plan.work(err == nil)
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !base.validFor(overlay) {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
-	if limits.Rows <= 0 || limits.IDBytes <= 0 || limits.ValueBytes <= 0 || limits.MappingWork <= 0 || limits.PredicateWork <= 0 || limits.RetainedBytes <= 0 || limits.ExactScanRows <= 0 || len(overlay.rows) > limits.Rows {
+	// Remaining cold-plus-bind allowances may be exactly zero with no suffix.
+	if limits.Rows < 0 || limits.IDBytes < 0 || limits.ValueBytes < 0 || limits.MappingWork < 0 || limits.PredicateWork < 0 || limits.RetainedBytes < 0 || limits.ExactScanRows <= 0 || len(overlay.rows) > limits.Rows {
 		return nil, errTypedGraphSearchBudget
 	}
 	for _, predicate := range base.predicates {
@@ -146,10 +197,18 @@ func bindTypedGraphBaseFilter(base *typedGraphBaseFilter, overlay *typedGraphOve
 	if d > limits.RetainedBytes/(2*word) {
 		return nil, errTypedGraphSearchBudget
 	}
-	plan := &typedGraphPreparedFilter{overlay: overlay, base: base.plan.base, borrowedBaseFilter: base, retainedBytes: 2 * d * word}
+	plan = &typedGraphPreparedFilter{overlay: overlay, base: base.plan.base, borrowedBaseFilter: base, retainedBytes: 2 * d * word, ordinalGrowthPeakBytes: 2 * d * word}
+	if d == 0 {
+		plan.count = plan.base.Count()
+		plan.exactBaseByID = base.plan.exactBaseByID
+		return plan, nil
+	}
 	storage := make([]int, 2*d)
 	excluded, matched := storage[:0:d], storage[d:d:2*d]
-	view := base.plan.overlay.current
+	if overlay.base.documentView == nil {
+		overlay.base.documentView = newCollectionReadViewAtSnapshot(overlay.base.collection, overlay.base.snapshot, overlay.base.catalog, false, mappedresource.ScopePreparedSearch)
+	}
+	view := overlay.base.documentView
 	end := view.beginForegroundRead()
 	defer end()
 	ids := make([][]byte, 0, min(512, d))
@@ -157,7 +216,11 @@ func bindTypedGraphBaseFilter(base *typedGraphBaseFilter, overlay *typedGraphOve
 	// comparisons. Exact enumeration is separately counted below.
 	perID := bits.Len(uint(overlay.base.reader.graph.RowCount)) + bits.Len(uint(plan.base.Count())) + bits.Len(uint(d)) + 2
 	for start := 0; start < d; {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		ids = ids[:0]
+		bytesInChunk := 0
 		for start < d && len(ids) < cap(ids) {
 			id := overlay.rows[start].ID
 			if len(id) > limits.IDBytes-plan.sourceBytes || perID > limits.MappingWork-plan.mappingWork {
@@ -165,10 +228,13 @@ func bindTypedGraphBaseFilter(base *typedGraphBaseFilter, overlay *typedGraphOve
 			}
 			plan.sourceIDs++
 			plan.sourceBytes += len(id)
+			bytesInChunk += len(id)
 			plan.mappingWork += perID
 			ids = append(ids, id)
 			start++
 		}
+		plan.scratchRows = max(plan.scratchRows, len(ids))
+		plan.scratchIDBytes = max(plan.scratchIDBytes, bytesInChunk)
 		_, err := view.visitDocumentRowRefsByID(ids, func(_ []byte, ref DocumentRowRef, found bool) error {
 			if !found {
 				return nil
@@ -188,6 +254,11 @@ func bindTypedGraphBaseFilter(base *typedGraphBaseFilter, overlay *typedGraphOve
 	}
 	var scratch []byte
 	for i, row := range overlay.rows {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if row.Deleted {
 			continue
 		}
@@ -210,8 +281,13 @@ func bindTypedGraphBaseFilter(base *typedGraphBaseFilter, overlay *typedGraphOve
 			if remaining < 2 || len(value.String) > (remaining-2)/2 {
 				return nil, errTypedGraphSearchBudget
 			}
+			remainingMapping := limits.MappingWork - plan.mappingWork
+			if remainingMapping < 3 || len(value.String) > (remainingMapping-3)/2 {
+				return nil, errTypedGraphSearchBudget
+			}
 			scratch = appendIndexStringComponent(scratch[:0], []byte(value.String))
 			plan.predicateValueBytes += len(scratch)
+			plan.mappingWork += 1 + len(scratch)
 			if !predicate.clause.matches(scratch, true) {
 				matches = false
 				break
@@ -221,7 +297,13 @@ func bindTypedGraphBaseFilter(base *typedGraphBaseFilter, overlay *typedGraphOve
 			matched = append(matched, i)
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	slices.Sort(excluded)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(excluded) > 0 {
 		plan.excludedBase = excluded
 	}
@@ -232,18 +314,27 @@ func bindTypedGraphBaseFilter(base *typedGraphBaseFilter, overlay *typedGraphOve
 	if len(excluded) == 0 && len(matched) == 0 {
 		plan.retainedBytes = 0
 	}
-	plan.ordinalGrowthPeakBytes = 2 * d * word
-	if plan.count <= typedGraphScalarExactLimit {
-		if plan.base.Count() > limits.ExactScanRows || plan.base.Count()-len(excluded) > typedGraphScalarExactLimit {
+	if plan.count <= typedGraphScalarExactLimit && len(excluded) == 0 && base.plan.count <= typedGraphScalarExactLimit {
+		plan.exactBaseByID = base.plan.exactBaseByID
+	} else if plan.count <= typedGraphScalarExactLimit {
+		if plan.base.Count() > limits.MappingWork-plan.mappingWork || plan.base.Count() > limits.ExactScanRows || plan.base.Count()-len(excluded) > typedGraphScalarExactLimit {
 			return nil, errTypedGraphSearchBudget
 		}
 		plan.exactScanRows = plan.base.Count()
+		plan.mappingWork += plan.exactScanRows
 		survivors := plan.base.Count() - len(excluded)
 		if survivors > (limits.RetainedBytes-plan.retainedBytes)/word {
 			return nil, errTypedGraphSearchBudget
 		}
 		ordinals := make([]int, 0, survivors)
+		plan.retainedBytes += cap(ordinals) * word
+		plan.ordinalGrowthPeakBytes += cap(ordinals) * word
 		for position := 0; position < plan.base.Count(); position++ {
+			if position&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+			}
 			ordinal, ok := typedGraphFilterOrdinalAt(plan.base, position)
 			if !ok {
 				return nil, ErrVectorIndexSnapshotMismatch
@@ -254,9 +345,7 @@ func bindTypedGraphBaseFilter(base *typedGraphBaseFilter, overlay *typedGraphOve
 		}
 		// This owned survivor slice becomes the exact rank itself, no clone.
 		plan.exactBaseByID = ordinals
-		plan.retainedBytes += cap(ordinals) * word
-		plan.ordinalGrowthPeakBytes += cap(ordinals) * word
-		if err := sortTypedGraphExactRanks(plan); err != nil {
+		if err := sortTypedGraphExactRanksWithContext(ctx, plan); err != nil {
 			return nil, err
 		}
 	}
