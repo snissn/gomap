@@ -290,28 +290,32 @@ func (idx *columnPhysicalVisibilityIndex) assignColumnPhysicalVisibleRow(dst *co
 	dst.RowIndex = row.RowIndex
 	dst.Deleted = row.Deleted
 	if row.Deleted {
+		clear(dst.Values)
 		dst.Values = nil
 		return
 	}
-	dst.Values = idx.cloneColumnDeclaredValues(row.Values)
+	dst.Values = idx.cloneColumnDeclaredValues(dst.Values, row.Values)
 }
 
-func (idx *columnPhysicalVisibilityIndex) cloneColumnDeclaredValues(values []columnDeclaredValue) []columnDeclaredValue {
+func (idx *columnPhysicalVisibilityIndex) cloneColumnDeclaredValues(out, values []columnDeclaredValue) []columnDeclaredValue {
 	width := max(len(values), idx.reserveValuesPerRow)
 	if width == 0 {
+		clear(out)
 		return nil
 	}
-	if cap(idx.valuesArena)-len(idx.valuesArena) < width {
-		chunk := columnPhysicalVisibilityValuesArenaChunk
-		if width > chunk {
-			chunk = width
+	stale := out
+	if cap(out) >= width {
+		stale = out[min(len(out), len(values)):]
+		out = out[:len(values)]
+	} else {
+		if cap(idx.valuesArena)-len(idx.valuesArena) < width {
+			idx.valuesArena = make([]columnDeclaredValue, 0, max(columnPhysicalVisibilityValuesArenaChunk, width))
 		}
-		idx.valuesArena = make([]columnDeclaredValue, 0, chunk)
+		start := len(idx.valuesArena)
+		idx.valuesArena = idx.valuesArena[:start+width]
+		// Each row may expand only into its own reserved span during reconstruction.
+		out = idx.valuesArena[start : start+len(values) : start+width]
 	}
-	start := len(idx.valuesArena)
-	idx.valuesArena = idx.valuesArena[:start+width]
-	// Each row may expand only into its own reserved span during reconstruction.
-	out := idx.valuesArena[start : start+len(values) : start+width]
 	copy(out, values)
 	for i := range out {
 		if out[i].Float32Vector != nil {
@@ -334,6 +338,8 @@ func (idx *columnPhysicalVisibilityIndex) cloneColumnDeclaredValues(values []col
 			out[i].String = ""
 		}
 	}
+	// Clear after cloning so an input alias of the old span remains readable.
+	clear(stale)
 	return out
 }
 
