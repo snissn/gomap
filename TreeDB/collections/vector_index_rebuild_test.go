@@ -1927,6 +1927,29 @@ func TestRebuildVectorIndexCommandWALReplayAdvancesLSNV2A(t *testing.T) {
 	}
 }
 
+func BenchmarkColumnVectorGraphAdjacencyBuild(b *testing.B) {
+	for _, count := range []int{1024, 16384} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			const dimensions = 8
+			vectors := vectorIndexReciprocalParityRows4257(count, dimensions, false)
+			input := make([]columnVectorGraphAssetRow, count)
+			for i := range input {
+				input[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("doc-%08d", i)), Vector: vectors[i]}
+			}
+			def := columnGraphRebuildVectorIndexDefinitionV2A(dimensions, 8)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				rows := slices.Clone(input)
+				if err := buildColumnVectorGraphAdjacency(rows, def); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(count), "rows/op")
+		})
+	}
+}
+
 func BenchmarkColumnGraphRebuildVectorIndexV2A(b *testing.B) {
 	const (
 		rows = 128

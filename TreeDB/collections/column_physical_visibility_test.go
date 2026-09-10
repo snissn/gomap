@@ -2,8 +2,57 @@ package collections
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 )
+
+func TestColumnPhysicalVisibilityIndexReservedValuesRemainRowOwned(t *testing.T) {
+	const width = 4
+	idx := columnPhysicalVisibilityIndex{reserveValuesPerRow: width}
+	// Cross an arena boundary, and include live rows without row-owned values.
+	for i := range 1100 {
+		var values []columnDeclaredValue
+		if i%2 == 0 {
+			values = []columnDeclaredValue{{Present: true, Int64: int64(i)}}
+		}
+		idx.upsert(columnPhysicalScanRowView{ID: []byte(fmt.Sprint(i)), AppliedCommandLSN: 1, Values: values})
+	}
+	idx.upsert(columnPhysicalScanRowView{ID: []byte("0"), AppliedCommandLSN: 2, Values: []columnDeclaredValue{{Present: true, Int64: -1}}})
+	beforeDelete := len(idx.valuesArena)
+	idx.upsert(columnPhysicalScanRowView{ID: []byte("deleted"), AppliedCommandLSN: 2, Deleted: true})
+	if len(idx.valuesArena) != beforeDelete || idx.rows[1100].Values != nil {
+		t.Fatal("deleted row reserved values")
+	}
+	full := []columnDeclaredValue{
+		{Present: true, StringBytes: []byte("owned")},
+		{Present: true, Float32Vector: []float32{1, 2}},
+		{Present: true, Bytes: []byte{3, 4}},
+		{Present: true, Int64: 42},
+	}
+	want := cloneColumnDeclaredValues(full)
+	for i := range 1100 {
+		row := &idx.rows[i]
+		if len(row.Values) != 1-i%2 || cap(row.Values) != width {
+			t.Fatalf("row %d len/cap=%d/%d", i, len(row.Values), cap(row.Values))
+		}
+		if i%2 == 0 {
+			expected := int64(i)
+			if i == 0 {
+				expected = -1
+			}
+			if row.Values[0].Int64 != expected {
+				t.Fatalf("row %d overwritten by an adjacent expansion", i)
+			}
+		}
+		row.Values = cloneColumnDeclaredValuesInto(row.Values, full)
+	}
+	full[0].StringBytes[0], full[1].Float32Vector[0], full[2].Bytes[0] = 'X', 99, 99
+	for i := range 1100 {
+		if !reflect.DeepEqual(idx.rows[i].Values, want) {
+			t.Fatalf("row %d values aliased another row or reconstruction scratch", i)
+		}
+	}
+}
 
 func TestColumnPhysicalVisibilityIndexUpsertKeepsLatestAndClonesID2378(t *testing.T) {
 	var idx columnPhysicalVisibilityIndex

@@ -1082,6 +1082,9 @@ func buildColumnVectorGraphAdjacencyV1WithFixedRows(rows []columnVectorGraphAsse
 	if err != nil {
 		return err
 	}
+	// Offline construction knows its final node count; avoid growing and
+	// copying the node array while the graph and publication buffers coexist.
+	index.nodes = make([]vectorIndexNode, 0, len(rows))
 	index.constructionTrace = trace
 	index.decisionObserver = observer
 	index.layer0ConstructionPolicy = policy
