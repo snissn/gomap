@@ -111,7 +111,7 @@ func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadIn
 	projected []string,
 	readIntegrity ColumnAssetReadIntegrity,
 ) (columnPhysicalVisibilityResult, error) {
-	return c.scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCache(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, targets, projected, readIntegrity, nil, nil)
+	return c.scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCache(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, targets, projected, readIntegrity, nil, nil, 0)
 }
 
 func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCache(
@@ -126,6 +126,7 @@ func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCa
 	readIntegrity ColumnAssetReadIntegrity,
 	ctx context.Context,
 	readCache *columnPhysicalAssetReadCache,
+	reserveValuesPerRow int,
 ) (columnPhysicalVisibilityResult, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
@@ -137,7 +138,7 @@ func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCa
 		shouldCancel = func() bool { return ctx.Err() != nil }
 	}
 	rowsSinceContextCheck := 0
-	var latest columnPhysicalVisibilityIndex
+	latest := columnPhysicalVisibilityIndex{reserveValuesPerRow: reserveValuesPerRow}
 	diag, err := c.scanColumnPhysicalRowsAtSnapshot(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, columnPhysicalScanRequest{
 		ProjectedColumns: projected,
 		ReadIntegrity:    readIntegrity,
@@ -251,6 +252,8 @@ type columnPhysicalVisibilityIndex struct {
 	byHash      map[uint64][]int
 	bytesArena  []byte
 	valuesArena []columnDeclaredValue
+	// Compaction reserves full reconstructed rows; ordinary scans leave this zero.
+	reserveValuesPerRow int
 }
 
 const (
@@ -294,19 +297,22 @@ func (idx *columnPhysicalVisibilityIndex) assignColumnPhysicalVisibleRow(dst *co
 }
 
 func (idx *columnPhysicalVisibilityIndex) cloneColumnDeclaredValues(values []columnDeclaredValue) []columnDeclaredValue {
-	if len(values) == 0 {
+	width := max(len(values), idx.reserveValuesPerRow)
+	if width == 0 {
 		return nil
 	}
-	if cap(idx.valuesArena)-len(idx.valuesArena) < len(values) {
+	if cap(idx.valuesArena)-len(idx.valuesArena) < width {
 		chunk := columnPhysicalVisibilityValuesArenaChunk
-		if len(values) > chunk {
-			chunk = len(values)
+		if width > chunk {
+			chunk = width
 		}
 		idx.valuesArena = make([]columnDeclaredValue, 0, chunk)
 	}
 	start := len(idx.valuesArena)
-	idx.valuesArena = append(idx.valuesArena, values...)
-	out := idx.valuesArena[start:len(idx.valuesArena)]
+	idx.valuesArena = idx.valuesArena[:start+width]
+	// Each row may expand only into its own reserved span during reconstruction.
+	out := idx.valuesArena[start : start+len(values) : start+width]
+	copy(out, values)
 	for i := range out {
 		if out[i].Float32Vector != nil {
 			out[i].Float32Vector = append([]float32(nil), out[i].Float32Vector...)

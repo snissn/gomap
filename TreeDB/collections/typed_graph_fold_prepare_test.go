@@ -8,6 +8,51 @@ import (
 	"testing"
 )
 
+func TestTypedGraphCompactionRowsOwnReconstructedValues(t *testing.T) {
+	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
+	changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[1:2]}, {Name: "content", Strings: []string{"changed"}}, {Name: "user", Strings: []string{"new-user"}}, {Name: "path", Strings: []string{"new-path"}}}
+	if _, err := col.ReplaceTypedBatch(ids[:1], retained[:1], changed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.DeleteBatch(ids[7:]); err != nil {
+		t.Fatal(err)
+	}
+	state, closeState, err := col.loadColumnStoreCompactionState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := col.materializeColumnStoreCompactionRows(context.Background(), state, "")
+	closeState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := col.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 7 {
+		t.Fatalf("rows=%d want 7", len(rows))
+	}
+	// Both materialization caches and the source DB are closed. Values remain
+	// independently owned and preserve the interleaved column/row asset order.
+	for i, row := range rows {
+		expected, source := columns, i
+		if i == 0 {
+			expected, source = changed, 0
+		}
+		if !bytes.Equal(row.ID, ids[i]) || len(row.Values) != 4 || !reflect.DeepEqual(row.Values[0].Float32Vector, expected[0].Float32Vectors[source]) {
+			t.Fatalf("row %d identity/vector mismatch: %+v", i, row)
+		}
+		for j := 1; j < 4; j++ {
+			if row.Values[j].String != expected[j].Strings[source] || row.Values[j].StringBytes != nil {
+				t.Fatalf("row %d column %d lost owned string", i, j)
+			}
+		}
+	}
+}
+
 func TestTypedGraphCapturedAssetIdentity(t *testing.T) {
 	col, _, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
 	state, closeState, err := col.loadColumnStoreCompactionState(context.Background())

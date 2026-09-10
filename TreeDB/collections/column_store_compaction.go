@@ -402,7 +402,7 @@ func (c *Collection) loadColumnStoreCompactionStateWithBudget(ctx context.Contex
 }
 
 func (c *Collection) materializeColumnStoreCompactionRows(ctx context.Context, state columnStoreCompactionState, readIntegrity ColumnAssetReadIntegrity) ([]columnDeclaredRow, columnPhysicalScanDiagnostics, error) {
-	visible, err := c.scanColumnPhysicalVisibleRowsAtSnapshotWithReadIntegrity(state.snap, state.catalog, state.meta.Name, state.baseRoot, state.cfg, true, nil, readIntegrity)
+	visible, err := c.scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCache(state.snap, state.catalog, state.meta.Name, state.baseRoot, state.cfg, true, nil, nil, readIntegrity, nil, nil, len(state.cfg.Columns))
 	if err != nil {
 		return nil, visible.Diagnostics, err
 	}
@@ -437,7 +437,7 @@ func (c *Collection) materializeColumnStoreCompactionRows(ctx context.Context, s
 		fullScratch = fullValues
 		rows = append(rows, columnDeclaredRow{
 			ID:     bytes.Clone(row.ID),
-			Values: cloneColumnDeclaredValues(fullValues),
+			Values: cloneColumnDeclaredValuesInto(row.Values, fullValues),
 		})
 	}
 	return rows, visible.Diagnostics, nil
