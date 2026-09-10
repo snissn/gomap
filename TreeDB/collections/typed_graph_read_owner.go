@@ -316,15 +316,16 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 		}
 		view.rows, view.invNorms = state.rows, state.invNorms
 		view.sourceRows, view.sourceTombstones, view.sourceBytes = state.physicalRows, state.tombstones, state.installedAssetBytes
-		// Captured roots are independently published copies. Full metadata equality,
-		// under the already-admitted joint owner, proves current materializer coverage.
-		if metadata := state.servingBase; metadata != nil && collectionMetaValuesEqual(metadata.view.Catalog.meta, catalog.meta) {
-			prepared := metadata.materializerView
+		// state.matches admitted the exact current catalog and roots. Publication
+		// prepared complete immutable materializer metadata for that same frontier.
+		if state.servingBase != nil {
+			prepared := state.servingMaterializer
 			token, ok := snap.StateToken()
 			if !ok {
 				return backenddb.ErrClosed
 			}
 			prepared.Catalog, prepared.snapshot = catalog, snap
+			prepared.FullConfig = *cfg
 			prepared.CommitSeq, prepared.SystemRoot = token.CommitSeq, token.SystemRootPageID
 			prepared.Diagnostics.ManifestRootName = catalog.columnManifestRootName
 			if prepared.Diagnostics.ManifestRootName == "" && cfg.ManifestRoot != nil {
@@ -335,6 +336,7 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 			}
 			prepared.Diagnostics.ManifestRoot = catalog.rootID(prepared.Diagnostics.ManifestRootName)
 			view.current.columnSnapshotView = &prepared
+			view.current.preparedMaterializer = &state.servingMaterializer
 		}
 		snap.DetachForegroundRead()
 		owner = candidate

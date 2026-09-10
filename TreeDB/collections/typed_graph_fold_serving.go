@@ -12,7 +12,7 @@ func typedGraphStateCost(s *typedGraphPublicationState) typedGraphPublicationCos
 	return typedGraphPublicationCost{rows: s.physicalRows, tombstones: s.tombstones, slots: s.valueSlots, bytes: s.admittedPayloadBytes}
 }
 
-func (f *typedGraphFoldServing) prepareNext(before *typedGraphPublicationState, generation uint64, records []columnManifestRecord, identity ColumnManifestIdentity, cold typedGraphColdLimits) (*typedGraphPublicationState, error) {
+func (f *typedGraphFoldServing) prepareNext(before *typedGraphPublicationState, generation uint64, records []columnManifestRecord, meta CollectionMeta, cold typedGraphColdLimits) (*typedGraphPublicationState, error) {
 	next := *before
 	// Same-schema install validation preserves the precomputed control and
 	// manifest/delete encoded bounds: those already use maximal generation,
@@ -43,7 +43,7 @@ func (f *typedGraphFoldServing) prepareNext(before *typedGraphPublicationState, 
 	next.installedAssetBytes -= f.capturedAssetBytes
 	next.servingBase = f.metadata
 	next.servingAdmitted = true
-	if err := next.prepareServingRefs(records, identity.Generation, cold); err != nil {
+	if err := next.prepareServingRefs(records, meta, cold); err != nil {
 		return nil, err
 	}
 	return &next, nil

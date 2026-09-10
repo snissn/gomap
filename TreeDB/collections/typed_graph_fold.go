@@ -350,7 +350,7 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 		if pending != (typedGraphPublicationCost{}) {
 			return ErrConcurrentMutation
 		}
-		nextState, err = serving.prepareNext(before, captured.manifest.Generation, currentRecords, identity, cold)
+		nextState, err = serving.prepareNext(before, captured.manifest.Generation, currentRecords, updated, cold)
 		if err != nil {
 			return err
 		}

@@ -6,6 +6,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -63,13 +64,13 @@ func TestTypedGraphServingRetainsExactPreparedKey(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(full.Results, fallback.Results) {
 		t.Fatalf("full FP32/content/meta differs from root loader: %v", err)
 	}
-	if read.columnSnapshotView == shared {
+	if read.columnSnapshotView == shared || read.preparedMaterializer != nil || read.typedColumnReconstructionCache.Prepared != nil {
 		t.Fatal("integrity change retained derived metadata")
 	}
 	if err := owner.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if read.columnSnapshotView != nil {
+	if read.columnSnapshotView != nil || read.preparedMaterializer != nil {
 		t.Fatal("closed owner retained derived metadata")
 	}
 	if _, err := read.FetchDocumentsByID(ids, DocumentFetchOptions{}); err == nil {
@@ -109,6 +110,42 @@ func TestTypedGraphServingRetainsExactPreparedKey(t *testing.T) {
 	}
 	realView := b.view
 	realView.graphOwnerRecords = records
+	t.Run("reconstruction pair validation", func(t *testing.T) {
+		bad := realView
+		bad.Catalog = realView.Catalog.copy()
+		cfg := bad.Catalog.meta.Options.ColumnStore.copy()
+		bad.Catalog.meta.Options.ColumnStore = &cfg
+		bad.graphOwnerRecords = slices.Clone(records)
+		changed := false
+		for i, record := range bad.graphOwnerRecords {
+			if !strings.HasPrefix(string(record.key), string(columnManifestPartRecordPrefixBytes)) {
+				continue
+			}
+			ref, rows, _, _, _, reason, err := decodeColumnManifestPartFieldsForScan(record.value, cfg.AssetManager.Namespace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ref.Kind == ColumnAssetKindTCS1TypedColumnPart {
+				operation, _ := columnPhysicalScanOperationFromBytes(reason)
+				bad.graphOwnerRecords[i] = typedColumnManifestPartRecord1778(t, ref, rows-1, operation, ref.Generation, ref.PartID)
+				changed = true
+				break
+			}
+		}
+		if !changed {
+			t.Fatal("fixture has no typed part")
+		}
+		header, err := decodeColumnManifestSnapshotForScan(bad.graphOwnerRecords)
+		if err != nil {
+			t.Fatal(err)
+		}
+		identity := *cfg.ActiveManifest
+		identity.Checksum = checksumColumnManifestRecords(ColumnPublishManifestEncodeInput{Collection: bad.Catalog.meta.Name, ColumnStore: cfg, Operation: header.Operation, AppliedCommandLSN: header.AppliedCommandLSN}, identity.Generation, bad.graphOwnerRecords)
+		cfg.ActiveManifest, cfg.RecoveryAuthoritativeManifest = &identity, &identity
+		if _, err := prepareTypedGraphMaterializerMetadata(bad, opts.Owners.Cold); err == nil || !strings.Contains(err.Error(), "does not match physical rows") {
+			t.Fatalf("checksum-consistent corrupt reconstruction pair accepted: %v", err)
+		}
+	})
 	if _, err := prepareTypedGraphServingBaseMetadata(b.graph, b.view, opts.Owners.Cold); err == nil {
 		t.Fatal("accepted missing real records")
 	}
@@ -239,11 +276,12 @@ func assertTypedGraphMaterializerReuse(t *testing.T, read *CollectionReadView, r
 	if !reflect.DeepEqual(view.FullConfig, *read.catalog.meta.Options.ColumnStore) || !reflect.DeepEqual(view.Config, columnStoreRowAssetConfig(view.FullConfig)) {
 		t.Fatal("materializer reused partial config")
 	}
-	if len(view.TypedColumnPartRefs) == 0 || &view.TypedColumnPartRefs[0] != &b.materializerView.TypedColumnPartRefs[0] {
-		t.Fatal("materializer did not share complete typed refs")
+	prepared := read.preparedMaterializer
+	if prepared == nil || len(view.TypedColumnPartRefs) == 0 || &view.TypedColumnPartRefs[0] != &prepared.TypedColumnPartRefs[0] || &view.AssetRefs[0] != &prepared.AssetRefs[0] {
+		t.Fatal("materializer did not share complete publication refs")
 	}
-	if b.materializerView.snapshot != nil || b.materializerView.CommitSeq != 0 || b.materializerView.SystemRoot != 0 {
-		t.Fatal("shared metadata retained a query snapshot")
+	if prepared.Catalog != nil || prepared.snapshot != nil || prepared.CommitSeq != 0 || prepared.SystemRoot != 0 || prepared.Diagnostics.ManifestRoot != 0 || !reflect.DeepEqual(prepared.FullConfig, ColumnStoreConfig{}) {
+		t.Fatal("shared current metadata retained a catalog, full config, or snapshot")
 	}
 }
 
@@ -295,6 +333,7 @@ func TestTypedGraphCurrentMaterializerAcrossMutations(t *testing.T) {
 			if read.columnSnapshotView == nil {
 				t.Fatal("current full fetch must reuse validated publication metadata after mutation")
 			}
+			assertTypedGraphMaterializerReuse(t, read, true)
 			got, err := read.FetchDocumentsByID(allIDs, DocumentFetchOptions{})
 			if err != nil {
 				t.Fatal(err)
@@ -312,6 +351,26 @@ func TestTypedGraphCurrentMaterializerAcrossMutations(t *testing.T) {
 			old, err := held.overlay.current.FetchDocumentsByID(ids, DocumentFetchOptions{})
 			if err != nil || !reflect.DeepEqual(old.Results, original.Results) {
 				t.Fatalf("old owner lost original full payload: %v", err)
+			}
+			// A detached candidate has the same exact retained metadata budget;
+			// a failed preparation never replaces the installed publication view.
+			state := owner.state
+			records, err := loadColumnManifestRecordsFromRoot(read.snapshot, read.catalog.rootID(collectionColumnManifestRootName(read.catalog.meta.Name)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cold := opts.Owners.Cold
+			cold.DecodedTermBytes = state.servingMetadataBytes
+			next := *state
+			if err := next.prepareServingRefs(records, read.catalog.meta, cold); err != nil {
+				t.Fatalf("exact metadata budget rejected: %v", err)
+			}
+			cold.DecodedTermBytes--
+			if err := next.prepareServingRefs(records, read.catalog.meta, cold); !errors.Is(err, errTypedGraphOwnerBudget) {
+				t.Fatalf("insufficient metadata budget accepted: %v", err)
+			}
+			if col.collectionSchemaCoordinator().typedPublication.Load() != state || read.preparedMaterializer != &state.servingMaterializer {
+				t.Fatal("detached preparation replaced admitted current metadata")
 			}
 		})
 	}
