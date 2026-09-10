@@ -1,10 +1,54 @@
 package typedcolumn
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestRowSelectionSparseBitmapMembership(t *testing.T) {
+	want := []int{0, 2, 64, 129}
+	plain := mustSparseSelection(t, 130, want)
+	for _, budget := range []int{-1, 0, 23, 24} {
+		got, err := plain.WithBitmapMembership(context.Background(), budget)
+		if err != nil || got.Kind() != RowSelectionSparse || got.Count() != len(want) || &got.SparseRows()[0] != &plain.SparseRows()[0] {
+			t.Fatalf("budget=%d shape=%+v err=%v", budget, got.Shape(), err)
+		}
+		assertSelectionRows(t, got, want)
+		for row := -1; row <= 130; row++ {
+			if got.Contains(row) != plain.Contains(row) {
+				t.Fatalf("budget=%d row=%d changed membership", budget, row)
+			}
+		}
+		if (got.Shape().BitmapWords == 3) != (budget == 24) || plain.Shape().BitmapWords != 0 {
+			t.Fatalf("budget=%d bitmap allocation/ownership: got=%+v plain=%+v", budget, got.Shape(), plain.Shape())
+		}
+		if budget == 24 {
+			again, err := got.WithBitmapMembership(nil, 0)
+			if err != nil || &again.bitmap[0] != &got.bitmap[0] {
+				t.Fatal("existing accelerator was not reused")
+			}
+			without, err := SubtractRowSelectionsInto(got, mustSparseSelection(t, 130, []int{2, 129}), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertSelectionRows(t, without, []int{0, 64})
+		}
+	}
+	for _, plain := range []RowSelection{mustEmptySelection(t, 130), mustAllSelection(t, 130), mustRangeSelection(t, 130, 2, 7), mustSparseSelection(t, int(^uint(0)>>1), []int{0, 2})} {
+		got, err := plain.WithBitmapMembership(context.Background(), 24)
+		if err != nil || !reflect.DeepEqual(got, plain) {
+			t.Fatalf("unexpected accelerator: got=%+v plain=%+v err=%v", got.Shape(), plain.Shape(), err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got, err := plain.WithBitmapMembership(ctx, 24); !errors.Is(err, context.Canceled) || !got.IsEmpty() {
+		t.Fatalf("canceled construction: got=%+v err=%v", got.Shape(), err)
+	}
+}
 
 func TestRowSelectionShapesCountIterateAndRanges(t *testing.T) {
 	all := mustAllSelection(t, 8)

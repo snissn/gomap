@@ -25,8 +25,8 @@ type typedGraphPreparedFilter struct {
 	sourceIDs, sourceBytes, retainedBytes, mappingWork int
 	inspectedEntries                                   int
 	scratchIDBytes, scratchRows                        int
-	// Ordinal growth peak includes old and new backing arrays during copying;
-	// it is separate from retained capacity, not a total Go heap measurement.
+	// Ordinal growth peak includes old and new backing arrays during copying
+	// and any membership bitmap; it is not a total Go heap measurement.
 	ordinalGrowthPeakBytes                            int
 	borrowedBaseFilter                                *typedGraphBaseFilter
 	excludedBase                                      []int
@@ -208,6 +208,15 @@ func finishTypedGraphFilter(ctx context.Context, plan *typedGraphPreparedFilter,
 	// All/range selection with no delta drops that arena entirely.
 	if len(plan.delta) == 0 && len(plan.base.SparseRows()) == 0 {
 		plan.retainedBytes = 0
+	}
+	if plan.count > typedGraphScalarExactLimit && plan.base.Kind() == typedcolumn.RowSelectionSparse {
+		plan.base, err = plan.base.WithBitmapMembership(ctx, limits.RetainedBytes-plan.retainedBytes)
+		if err != nil {
+			return nil, err
+		}
+		bitmapBytes := plan.base.Shape().BitmapWords * 8
+		plan.retainedBytes += bitmapBytes
+		plan.ordinalGrowthPeakBytes = max(plan.ordinalGrowthPeakBytes, liveOrdinalBytes+bitmapBytes)
 	}
 	if plan.count <= typedGraphScalarExactLimit {
 		rankBytes := len(baseOrdinals) * (bits.UintSize / 8)

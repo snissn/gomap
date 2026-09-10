@@ -1,6 +1,7 @@
 package typedcolumn
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/bits"
@@ -382,6 +383,43 @@ func (s RowSelection) BitmapWords() []uint64 {
 // Contains reports whether row is selected.
 func (s RowSelection) Contains(row int) bool { return s.contains(row) }
 
+// WithBitmapMembership accelerates sparse Contains calls without changing sparse
+// enumeration or its ownership. It owns the new bitmap and shares the immutable
+// sparse slice. If the bitmap exceeds maxBytes, it returns the original selection.
+// An existing accelerator needs no new allocation.
+func (s RowSelection) WithBitmapMembership(ctx context.Context, maxBytes int) (RowSelection, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return RowSelection{}, err
+	}
+	if s.kind != rowSelectionSparse || len(s.bitmap) != 0 || maxBytes < 0 {
+		return s, nil
+	}
+	words := s.rows / 64
+	if s.rows%64 != 0 {
+		words++
+	}
+	if words > maxBytes/8 {
+		return s, nil
+	}
+	bitmap := make([]uint64, words)
+	for i, row := range s.sparse {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return RowSelection{}, err
+			}
+		}
+		bitmap[row/64] |= uint64(1) << uint(row%64)
+	}
+	if err := ctx.Err(); err != nil {
+		return RowSelection{}, err
+	}
+	s.bitmap = bitmap
+	return s, nil
+}
+
 // ForEach calls fn once for each selected row in ascending order. It does not
 // allocate, but performance-sensitive kernels should switch on Kind and use the
 // concrete accessors to avoid callback overhead in inner loops.
@@ -405,6 +443,7 @@ func (s rowSelection) shape() rowSelectionShape {
 		shape.BitmapWords = len(s.bitmap)
 	case rowSelectionSparse:
 		shape.SparseRows = len(s.sparse)
+		shape.BitmapWords = len(s.bitmap)
 	case rowSelectionRange:
 		shape.Ranges = 1
 	}
@@ -436,6 +475,9 @@ func (s rowSelection) contains(row int) bool {
 	case rowSelectionBitmap:
 		return s.bitmap[row/64]&(uint64(1)<<uint(row%64)) != 0
 	case rowSelectionSparse:
+		if len(s.bitmap) != 0 {
+			return s.bitmap[row/64]&(uint64(1)<<uint(row%64)) != 0
+		}
 		lo, hi := 0, len(s.sparse)
 		for lo < hi {
 			mid := int(uint(lo+hi) >> 1)

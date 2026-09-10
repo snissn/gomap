@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
+	"reflect"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
@@ -27,17 +28,23 @@ func TestTypedGraphPreparedFilterDisconnectedSelectedSeeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	accelerated, err := selection.WithBitmapMembership(context.Background(), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var scratch columnVectorGraphNativeSearchScratch
-	for _, cap := range []int{3, 2, 3} {
-		results, stats, err := pack.searchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: 2, StrictScoreBudget: true, CandidateLimit: cap, CandidateRows: selection, HasCandidateRows: true}, &scratch)
-		if cap == 2 {
-			if !errors.Is(err, errTypedGraphSearchBudget) || len(results) != 0 || stats.Candidates != 2 || stats.FilteredSeedInspections != 1 {
-				t.Fatalf("cap results=%+v stats=%+v err=%v", results, stats, err)
+	for _, selection := range []typedcolumn.RowSelection{selection, accelerated} {
+		for _, cap := range []int{3, 2, 3} {
+			results, stats, err := pack.searchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: 2, StrictScoreBudget: true, CandidateLimit: cap, CandidateRows: selection, HasCandidateRows: true}, &scratch)
+			if cap == 2 {
+				if !errors.Is(err, errTypedGraphSearchBudget) || len(results) != 0 || stats.Candidates != 2 || stats.FilteredSeedInspections != 1 {
+					t.Fatalf("cap results=%+v stats=%+v err=%v", results, stats, err)
+				}
+				continue
 			}
-			continue
-		}
-		if err != nil || len(results) != 2 || results[0].Ordinal != 0 || results[1].Ordinal != 2 || stats.Candidates != 3 || stats.FilteredSeedInspections != 2 || stats.FilteredIneligibleScores != 1 || stats.Edges != 0 {
-			t.Fatalf("selected seeds results=%+v stats=%+v err=%v", results, stats, err)
+			if err != nil || len(results) != 2 || results[0].Ordinal != 0 || results[1].Ordinal != 2 || stats.Candidates != 3 || stats.FilteredSeedInspections != 2 || stats.FilteredIneligibleScores != 1 || stats.Edges != 0 {
+				t.Fatalf("selected seeds results=%+v stats=%+v err=%v", results, stats, err)
+			}
 		}
 	}
 }
@@ -134,6 +141,49 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 			}
 		}
 	})
+	t.Run("sparse_membership_budget_and_search", func(t *testing.T) {
+		filter := rangeFilter("user", 0, 4096)
+		plan, err := prepareTypedGraphFilter(overlay, filter, limits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bitmapBytes := ((n + 63) / 64) * 8
+		if shape := plan.base.Shape(); shape.Kind != "sparse" || shape.BitmapWords*8 != bitmapBytes {
+			t.Fatalf("missing sparse membership accelerator: %+v", shape)
+		}
+		limited := limits
+		limited.RetainedBytes = plan.retainedBytes - bitmapBytes
+		plain, err := prepareTypedGraphFilter(overlay, filter, limited)
+		if err != nil || plain.base.Shape().BitmapWords != 0 || plain.retainedBytes+bitmapBytes != plan.retainedBytes || plan.ordinalGrowthPeakBytes < plan.retainedBytes {
+			t.Fatalf("bitmap budget/fallback: plain=%+v accelerated=%+v err=%v", plain, plan, err)
+		}
+		cold, err := prepareTypedGraphBaseFilter(base, filter, typedGraphBaseFilterLimits{typedGraphFilterLimits: limits, Clauses: 1, PredicateBytes: 1024})
+		if err != nil {
+			t.Fatal(err)
+		}
+		bound, err := bindTypedGraphBaseFilter(cold, overlay, typedGraphFilterBindLimits{Rows: 1, IDBytes: 1024, ValueBytes: 1024, MappingWork: 1024, PredicateWork: 1024, RetainedBytes: 1024, ExactScanRows: n})
+		if err != nil || bound.borrowedBaseFilter != cold || bound.retainedBytes != 0 || bound.base.Shape() != plan.base.Shape() {
+			t.Fatalf("borrowed accelerator ownership: bound=%+v err=%v", bound, err)
+		}
+		query := []float32{1, .5, 0, 0, 0, 0, 0, 0}
+		var a, b VectorIndexSearchBuffer
+		want, wantStats, err := overlay.searchPreparedFilter(plain, query, 10, 128, n, &a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, accelerated := range []*typedGraphPreparedFilter{plan, bound} {
+			got, stats, err := overlay.searchPreparedFilter(accelerated, query, 10, 128, n, &b)
+			if err != nil || !reflect.DeepEqual(got, want) || stats.Base.PreparedScoreCalls != wantStats.Base.PreparedScoreCalls || stats.Base.FilteredIneligibleScores != wantStats.Base.FilteredIneligibleScores || stats.Base.FilteredSeedInspections != wantStats.Base.FilteredSeedInspections || stats.Base.Edges != wantStats.Base.Edges || stats.Base.Candidates != wantStats.Base.Candidates {
+				t.Fatalf("membership changed results/work: got=%+v want=%+v stats=%+v wantStats=%+v err=%v", got, want, stats, wantStats, err)
+			}
+		}
+		ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 6}
+		ordinals := append([]int(nil), plan.base.SparseRows()...)
+		building := &typedGraphPreparedFilter{overlay: overlay, count: len(ordinals), retainedBytes: len(ordinals) * (bits.UintSize / 8)}
+		if partial, err := finishTypedGraphFilter(ctx, building, ordinals, nil, limits); !errors.Is(err, context.Canceled) || partial != nil {
+			t.Fatalf("canceled bitmap construction: plan=%+v err=%v", partial, err)
+		}
+	})
 	t.Run("filter_cancellation_prefix", func(t *testing.T) {
 		leaf := rangeFilter("user", 0, 4095)
 		for _, filter := range []HybridScalarFilter{leaf, {And: []HybridScalarFilter{leaf, rangeFilter("path", 0, 4095)}}} {
@@ -182,6 +232,9 @@ func TestTypedGraphPreparedFilterFinalIntersectionAndBounds(t *testing.T) {
 		plan, err := prepareTypedGraphFilter(overlay, rangeFilter("user", 0, count-1), limits)
 		if err != nil || plan.count != count || plan.base.Count() != count || len(plan.delta) != 0 || !plan.validFor(overlay) {
 			t.Fatalf("count%d plan=%+v err=%v", count, plan, err)
+		}
+		if count <= typedGraphScalarExactLimit && plan.base.Shape().BitmapWords != 0 {
+			t.Fatal("exact filter allocated a membership bitmap")
 		}
 		other := *overlay
 		if plan.validFor(&other) {

@@ -32,9 +32,11 @@ func BenchmarkTypedGraphPreparedFilterBoundaries(b *testing.B) {
 					b.Fatal(err)
 				}
 				var buffer VectorIndexSearchBuffer
-				if _, _, err := overlay.searchPreparedFilter(plan, query, 10, 256, 8192, &buffer); err != nil {
+				_, warmStats, err := overlay.searchPreparedFilter(plan, query, 10, 256, 8192, &buffer)
+				if err != nil {
 					b.Fatal(err)
 				}
+				b.Logf("selection=%+v scores=%d ineligible=%d seeds=%d edges=%d", plan.base.Shape(), warmStats.Base.PreparedScoreCalls, warmStats.Base.FilteredIneligibleScores, warmStats.Base.FilteredSeedInspections, warmStats.Base.Edges)
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
@@ -54,7 +56,8 @@ func BenchmarkTypedGraphPreparedFilterBoundaries(b *testing.B) {
 				b.StopTimer()
 				b.ReportMetric(float64(plan.sourceIDs), "plan-source-IDs")
 				b.ReportMetric(float64(plan.sourceBytes), "plan-source-ID-payload-B")
-				b.ReportMetric(float64(plan.retainedBytes), "retained-ordinals-B")
+				b.ReportMetric(float64(plan.retainedBytes), "retained-filter-B")
+				b.ReportMetric(float64(plan.base.Shape().BitmapWords*8), "retained-bitmap-B")
 				b.ReportMetric(float64(plan.ordinalGrowthPeakBytes), "ordinal-growth-peak-B")
 				runtime.KeepAlive(plan)
 			})
