@@ -126,6 +126,59 @@ Server((host, int(port)), Handler).serve_forever()
 
 
 class ProbeContractTest(unittest.TestCase):
+    def test_batch_stats_io_failure_preserves_cleanup_and_failure_result(self):
+        from contextlib import ExitStack
+        for operation in ('close', 'hash'):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+                root = Path(tmp)
+                args = SimpleNamespace(binary=root / 'binary', binding=root / 'binding.json',
+                    manifest=root / 'manifest.json', serving=root / 'serving.json',
+                    output=root / 'run', build_profile=False)
+                args.binding.write_text(json.dumps({'manifest_sha256': 'hash', 'serving': str(args.serving),
+                    'serving_sha256': 'hash', 'build_profile': False, 'source_commit': 'commit',
+                    'binary': str(args.binary), 'binary_sha256': 'hash'}))
+                args.serving.write_text('{}')
+                batch_file = mock.Mock()
+                if operation == 'close':
+                    batch_file.close.side_effect = OSError('injected close failure')
+                original_open = Path.open
+                def open_file(path, *positional, **keywords):
+                    return batch_file if path.name == 'batch-stats.jsonl' else original_open(path, *positional, **keywords)
+                def digest(path):
+                    if Path(path).name == 'batch-stats.jsonl' and operation == 'hash':
+                        raise OSError('injected hash failure')
+                    return 'hash'
+                controller = mock.Mock(pid=42, lifetimes=[{'exit_code': 0}])
+                fake_runner = mock.Mock(evidence=SimpleNamespace(requests=[], samples=[]))
+                fake_runner.create_owned_collection.side_effect = RuntimeError('injected setup failure')
+                for patch in (
+                    mock.patch.object(probe.argparse.ArgumentParser, 'parse_args', return_value=args),
+                    mock.patch.object(Path, 'open', open_file),
+                    mock.patch.object(probe.tr.common, 'load_manifest', return_value={}),
+                    mock.patch.object(probe, 'initial_batches', return_value=[('test', i * 256, 256) for i in range(64)]),
+                    mock.patch.object(probe.tr, 'file_sha256', side_effect=digest),
+                    mock.patch.object(probe.tr, 'repository_commit', return_value='commit'),
+                    mock.patch.object(probe.tr, 'service_binary_build_provenance'),
+                    mock.patch.object(probe.subprocess, 'check_output', return_value=b''),
+                    mock.patch.object(probe.socket, 'socket'),
+                    mock.patch.object(probe.os, 'sched_getaffinity', return_value=set(range(6)), create=True),
+                    mock.patch.object(probe, 'python_inputs', return_value={}),
+                    mock.patch.object(probe.tr.common, 'linux_process_identity', return_value={}),
+                    mock.patch.object(probe.tr, 'ServiceController', return_value=controller),
+                    mock.patch.object(probe.tr, 'TreeDBMinimaRunner', return_value=fake_runner),
+                    mock.patch.object(probe.signal, 'signal'),
+                    mock.patch.object(probe.traceback, 'print_exc'),
+                ):
+                    stack.enter_context(patch)
+                self.assertTrue(probe.main())
+                fake_runner.close.assert_called_once_with()
+                controller.stop.assert_called_once_with()
+                result = json.loads((args.output / 'result.json').read_text())
+                self.assertIn(f'batch stats finalization: OSError: injected {operation} failure', result['failures'])
+                self.assertEqual(result['lifetimes'], controller.lifetimes)
+                self.assertEqual(result['requests'], [])
+                self.assertNotIn('batch_stats_sha256', result)
+
     def test_probe_and_analyzer_reject_optimized_python(self):
         for module in (probe, probe_analyze):
             for flags, setting in [(['-O'], ''), ([], '1'), ([], '2')]:

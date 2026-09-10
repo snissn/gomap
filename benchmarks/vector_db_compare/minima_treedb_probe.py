@@ -373,8 +373,11 @@ def main():
         result['failures'].append(f'{type(exc).__name__}: {exc}')
         traceback.print_exc()
     finally:
-        batch_stats_file.close()
-        result['batch_stats_sha256'] = tr.file_sha256(args.output / 'batch-stats.jsonl')
+        try:
+            batch_stats_file.close()
+            result['batch_stats_sha256'] = tr.file_sha256(args.output / 'batch-stats.jsonl')
+        except BaseException as exc:
+            result['failures'].append(f'batch stats finalization: {type(exc).__name__}: {exc}')
         if runner is not None:
             result['requests'] = runner.evidence.requests
             result['samples'] = runner.evidence.samples
