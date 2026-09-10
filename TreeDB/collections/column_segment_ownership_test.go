@@ -3,10 +3,12 @@ package collections
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -23,7 +25,9 @@ func insertColumnOwnedSegmentBatch(t *testing.T, col *Collection, prefix string)
 }
 
 func TestColumnSegmentOwnershipReuseSuffixAndReopen(t *testing.T) {
-	requireStandaloneColumnProductionAuthorityTest(t)
+	if !rootpublication.StableNamespaceCreationSupported() {
+		t.Skip("segment reuse requires exact child creation authority")
+	}
 	dir, db, col := openTypedMinimaCollection(t)
 	defer func() { _ = db.Close() }()
 	insertColumnOwnedSegmentBatch(t, col, "a")
@@ -195,10 +199,17 @@ func TestColumnSegmentOwnershipRotation(t *testing.T) {
 	}
 	insertColumnOwnedSegmentBatch(t, col, "b")
 	all := columnManifestAllPartsForCollectionM12C(t, db, col)
+	rotated := false
 	for _, part := range all {
-		if part.AssetRef.Generation > first[0].AssetRef.Generation && part.AssetRef.FileID == first[0].AssetRef.FileID {
-			t.Fatal("full segment reused")
+		if part.AssetRef.Generation > first[0].AssetRef.Generation {
+			rotated = true
+			if part.AssetRef.FileID == first[0].AssetRef.FileID {
+				t.Fatal("full segment reused")
+			}
 		}
+	}
+	if !rotated {
+		t.Fatal("second insert produced no rotated segment")
 	}
 	info, err := os.Stat(path)
 	if err != nil || info.Size() != columnPhysicalAssetSegmentTargetBytes {
@@ -309,6 +320,57 @@ func TestColumnSegmentOwnershipBindingRejectsForgedWitness(t *testing.T) {
 			}
 			if err == nil {
 				t.Fatal("forged ownership accepted")
+			}
+		})
+	}
+}
+
+func TestColumnSegmentOwnershipPlanningRetriesRotatedRoot(t *testing.T) {
+	if !rootpublication.StableNamespaceCreationSupported() {
+		t.Skip("segment ownership requires exact child creation authority")
+	}
+	for _, mode := range []string{"plan", "dry_gc", "churn"} {
+		t.Run(mode, func(t *testing.T) {
+			_, db, col := openTypedMinimaCollection(t)
+			defer db.Close()
+			insertColumnOwnedSegmentBatch(t, col, "initial")
+			calls := 0
+			hook := func(c *Collection) {
+				if c != col {
+					return
+				}
+				calls++
+				if calls > 1 && mode != "churn" {
+					return
+				}
+				// Evict the held scan root from the visible root and both durable slots.
+				for i := 0; i < 3; i++ {
+					insertColumnOwnedSegmentBatch(t, col, fmt.Sprintf("advance%d_%d_", calls, i))
+					if err := db.Checkpoint(); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			previous := columnAssetReachabilityBeforeOwnershipBindTestHook.Swap(&hook)
+			defer columnAssetReachabilityBeforeOwnershipBindTestHook.Store(previous)
+			var plan ColumnAssetReachabilityPlan
+			var err error
+			if mode == "dry_gc" {
+				var stats ColumnAssetGCStats
+				stats, err = col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{DryRun: true})
+				plan = stats.Plan
+			} else {
+				plan, err = col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{})
+			}
+			if mode == "churn" {
+				if calls != 3 || !errors.Is(err, backenddb.ErrRecoverableRootSetStale) || plan.Complete {
+					t.Fatalf("unbounded or accepted churn: calls=%d plan=%+v err=%v", calls, plan, err)
+				}
+				return
+			}
+			token, _ := db.StateToken()
+			if calls != 2 || err != nil || !plan.Complete || plan.PlanCommitSeq != token.CommitSeq || plan.Sources.PinnedRefs != 0 {
+				t.Fatalf("retry calls=%d current=%d plan=%+v err=%v", calls, token.CommitSeq, plan, err)
 			}
 		})
 	}

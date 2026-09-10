@@ -114,8 +114,8 @@ func TestColumnPhysicalAssetReservedPayloadStableOpenRejectsReplacement4429(t *t
 }
 
 func TestAppendColumnPhysicalAssetsWithStableResourcesValidationFailureRestoresAlignedAppendStart(t *testing.T) {
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		t.Skip("stable column append requires exact relative namespace support")
+	if !rootpublication.StableNamespaceCreationSupported() {
+		t.Skip("stable column append requires exact child creation authority")
 	}
 	rootDir := t.TempDir()
 	cfg := stableColumnAppendTestConfig("stable-append-aligned-rollback")
@@ -514,5 +514,54 @@ func TestAppendColumnPhysicalAssetsWithStableResourcesExistingSegmentRollbackRej
 	stats = registry.Stats()
 	if stats.ActivePins != 0 || stats.ActiveIdentities != 0 || stats.ActiveStableNamespaceLinks != 1 {
 		t.Fatalf("existing rebound teardown registry state=%+v want handles released and stale proof retained", stats)
+	}
+}
+
+func TestColumnPhysicalAssetOwnedAppenderValidationRollbackAndRetry(t *testing.T) {
+	if !rootpublication.StableNamespaceCreationSupported() {
+		t.Skip("stable append requires exact child creation authority")
+	}
+	rootDir := t.TempDir()
+	cfg := stableColumnAppendTestConfig("owned-rollback")
+	const fileID = uint32(71)
+	path := stableColumnAppendTestPath(t, rootDir, cfg, fileID)
+	original := []byte("odd")
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	registry := rootpublication.NewIdentityPinRegistry()
+	appender, err := newColumnPhysicalAssetSegmentAppendWriterWithStableResourcesMode(rootDir, cfg, fileID, registry, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer appender.abort()
+	ref, err := appender.appendKind([]byte("rejected"), ColumnAssetKindTCS1Int64Values, 1, 1)
+	if err != nil || ref.Offset <= int64(len(original)) {
+		t.Fatalf("aligned ref=%+v err=%v", ref, err)
+	}
+	rejected := errors.New("reject captured append")
+	if err := appender.closeWithStableValidation(func(*rootpublication.StableResourceSet) error { return rejected }); !errors.Is(err, rejected) || errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("rollback error=%v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, original) || registry.ActivePins() != 0 {
+		t.Fatalf("rollback bytes=%q pins=%d err=%v", got, registry.ActivePins(), err)
+	}
+	retry, err := newColumnPhysicalAssetSegmentAppendWriterWithStableResourcesMode(rootDir, cfg, fileID, registry, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer retry.abort()
+	payload := []byte("accepted")
+	ref, err = retry.appendKind(payload, ColumnAssetKindTCS1Int64Values, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := retry.close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err = os.ReadFile(path)
+	if err != nil || int64(len(got)) != ref.Offset+ref.Length || !bytes.Equal(got[:len(original)], original) || !bytes.Equal(got[ref.Offset:], payload) {
+		t.Fatalf("retry bytes=%q ref=%+v err=%v", got, ref, err)
 	}
 }

@@ -1515,7 +1515,9 @@ func newColumnPhysicalAssetSegmentAppendWriterWithStableResourcesMode(rootDir st
 	if create {
 		file, namespaceNeedsSync, created, err = openColumnAssetSegmentAppendFileAt(parent, assetPath)
 	} else {
-		file, err = rootpublication.OpenStableChildFile(parent, filepath.Base(assetPath), os.O_RDWR|os.O_APPEND, 0o600)
+		// The segment lock and SeekEnd establish the append position. Retain
+		// write-data permission so a rejected append can truncate its suffix.
+		file, err = rootpublication.OpenStableChildFile(parent, filepath.Base(assetPath), os.O_RDWR, 0o600)
 		namespaceNeedsSync = true
 	}
 	if err != nil {
@@ -1665,14 +1667,15 @@ func openColumnAssetSegmentAppendFile(assetPath string) (*os.File, bool, bool, e
 
 func openColumnAssetSegmentAppendFileAt(parent *os.File, assetPath string) (*os.File, bool, bool, error) {
 	name := filepath.Base(assetPath)
-	file, err := rootpublication.OpenStableChildFile(parent, name, os.O_CREATE|os.O_EXCL|os.O_RDWR|os.O_APPEND, 0o600)
+	// Stable appenders seek under the segment lock and need Truncate on rollback.
+	file, err := rootpublication.OpenStableChildFile(parent, name, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err == nil {
 		return file, true, true, nil
 	}
 	if !errors.Is(err, os.ErrExist) {
 		return nil, false, false, err
 	}
-	file, err = rootpublication.OpenStableChildFile(parent, name, os.O_RDWR|os.O_APPEND, 0o600)
+	file, err = rootpublication.OpenStableChildFile(parent, name, os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, false, false, err
 	}
@@ -3420,7 +3423,7 @@ func (s *columnPhysicalAssetAppendSession) existingOwnedAppender(marker columnMa
 	namespace, ok := descriptor.Namespace()
 	if !ok || !rootpublication.SamePhysicalIdentity(descriptor.Identity(), appender.stableChildIdentity) ||
 		!rootpublication.SamePhysicalIdentity(namespace.ParentIdentity, appender.stableParentIdentity) || namespace.NewName != appender.stableChildName ||
-		descriptor.Digest() != stableColumnSegmentDigest(marker.Ref) || descriptor.DiagnosticPath() != stableColumnAssetDiagnosticPath(marker.Ref) ||
+		descriptor.Digest() != stableColumnSegmentDigest(marker.Ref) || descriptor.DiagnosticPath() != filepath.ToSlash(stableColumnAssetDiagnosticPath(marker.Ref)) ||
 		descriptor.Frontier().Bytes < marker.Frontier || appender.offset < 0 || uint64(appender.offset) < descriptor.Frontier().Bytes {
 		return nil, errors.Join(rootpublication.ErrResourceConflict, appender.abort())
 	}

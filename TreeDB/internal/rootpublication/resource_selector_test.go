@@ -100,7 +100,7 @@ func TestCloneStableResourceForSelectorRejectsReleasedSource(t *testing.T) {
 
 func TestCloneStableResourceForSelectorPinsIdentityAndRejectsNamespaceRebound(t *testing.T) {
 	dir := t.TempDir()
-	parent, err := os.Open(dir)
+	parent, err := OpenStableParent(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,8 @@ func TestCloneStableResourceForSelectorPinsIdentityAndRejectsNamespaceRebound(t 
 	if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	file, err := os.Open(path)
+	// Stable handles permit namespace rebinding while open, including on Windows.
+	file, err := OpenStableChildFile(parent, "asset.bin", os.O_RDONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
