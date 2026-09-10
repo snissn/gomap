@@ -246,3 +246,73 @@ func assertTypedGraphMaterializerReuse(t *testing.T, read *CollectionReadView, r
 		t.Fatal("shared metadata retained a query snapshot")
 	}
 }
+
+func TestTypedGraphCurrentMaterializerAcrossMutations(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
+	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
+	index := base.indexName
+	if err := base.Close(); err != nil {
+		t.Fatal(err)
+	}
+	opts := typedGraphPublicTestOptions()
+	if err := col.EnsureColumnGraphServing(context.Background(), index, opts); err != nil {
+		t.Fatal(err)
+	}
+	held, err := col.openTypedGraphReadOwner(opts.Owners)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	original, err := held.overlay.current.FetchDocumentsByID(ids, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newIDs := [][]byte{[]byte("new-row")}
+	allIDs := append(slices.Clone(ids), newIDs...)
+	changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: []string{"changed content"}}, {Name: "user", Strings: []string{"changed user"}}, {Name: "path", Strings: []string{"changed path"}}}
+	for _, step := range []struct {
+		name string
+		run  func() error
+	}{
+		{"replace", func() error { _, err := col.ReplaceTypedBatch(ids[:1], retained[:1], changed); return err }},
+		{"insert", func() error {
+			_, _, err := col.InsertTypedBatchWithStats(newIDs, [][]byte{[]byte(`{"id":"new-row"}`)}, changed)
+			return err
+		}},
+		{"delete", func() error { _, err := col.DeleteBatch(ids[1:2]); return err }},
+		{"fold", func() error { return col.FoldColumnGraphServing(context.Background(), index) }},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			if err := step.run(); err != nil {
+				t.Fatal(err)
+			}
+			owner, err := col.openTypedGraphReadOwner(opts.Owners)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer owner.Close()
+			read := owner.overlay.current
+			if read.columnSnapshotView == nil {
+				t.Fatal("current full fetch must reuse validated publication metadata after mutation")
+			}
+			got, err := read.FetchDocumentsByID(allIDs, DocumentFetchOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if read.pointRowRefs != nil || read.typedColumnReconstructionCache == nil || read.typedColumnReconstructionCache.Refs != nil {
+				t.Fatal("prepared full fetch rebuilt per-request reference maps")
+			}
+			// Independent ordinary loader, bound to exactly the same snapshot.
+			plain := &CollectionReadView{collection: col, snapshot: read.snapshot, catalog: read.catalog}
+			defer plain.Close()
+			want, err := plain.FetchDocumentsByID(allIDs, DocumentFetchOptions{})
+			if err != nil || !reflect.DeepEqual(got.Results, want.Results) {
+				t.Fatalf("current full payload differs from root loader: %v", err)
+			}
+			old, err := held.overlay.current.FetchDocumentsByID(ids, DocumentFetchOptions{})
+			if err != nil || !reflect.DeepEqual(old.Results, original.Results) {
+				t.Fatalf("old owner lost original full payload: %v", err)
+			}
+		})
+	}
+}

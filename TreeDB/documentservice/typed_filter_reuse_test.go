@@ -1,8 +1,10 @@
 package documentservice
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"reflect"
 	"sync"
@@ -111,12 +113,58 @@ func TestServiceTypedFilterReuseEightPredicates(t *testing.T) {
 }
 
 func BenchmarkServiceTypedFilterReuse(b *testing.B) {
-	svc, queries := typedFilterReuseFixture(b, 50000, 50000)
+	benchmarkServiceTypedFilterReuse(b, 50000, false)
+}
+
+func BenchmarkServiceTypedCurrentMaterializer(b *testing.B) {
+	b.Run("base", func(b *testing.B) { benchmarkServiceTypedFilterReuse(b, 256, false) })
+	b.Run("suffix", func(b *testing.B) { benchmarkServiceTypedFilterReuse(b, 256, true) })
+}
+
+func benchmarkServiceTypedFilterReuse(b *testing.B, batchSize int, suffix bool) {
+	svc, queries := typedFilterReuseFixture(b, 50000, batchSize)
 	ctx := context.Background()
-	for _, query := range queries {
+	var expected [8][]RawDenseVectorResult
+	for i, query := range queries {
 		out, err := svc.SearchDenseVectorNativeRawInto(ctx, "filter-reuse", query, nil)
 		if err != nil || len(out.Results) != 5 || out.DenseWork == nil || !out.DenseWork.Completed || !out.DenseWork.Graph.Filter.Completed || out.DenseWork.Graph.Filter.SourceIDs != 6250 || !out.DenseWork.Output.Completed || out.DenseWork.Output.Fetched != 5 || out.DenseWork.Output.Missing != 0 {
 			b.Fatalf("cold native service filter/fetch: work=%+v err=%v", out.DenseWork, err)
+		}
+		if suffix {
+			expected[i] = out.Results
+		}
+	}
+	if suffix {
+		in := TypedDocumentsRequest{ExpectedGeneration: queries[0].ExpectedGeneration,
+			IDs: [][]byte{[]byte("doc-00019")}, Retained: [][]byte{[]byte(`{"id":"doc-00019","meta":{"residual":"changed"}}`)},
+			Columns: []collections.TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{queries[0].QueryEmbedding}}, {Name: "content", Strings: []string{"changed full content"}}, {Name: "meta.user_id", Strings: []string{"user-3"}}},
+		}
+		if out, err := svc.UpsertTypedDocuments(ctx, "filter-reuse", in); err != nil || out.Updated != 1 {
+			b.Fatalf("suffix replacement=%+v err=%v", out, err)
+		}
+		sawChanged := false
+		for i, query := range queries {
+			out, err := svc.SearchDenseVectorNativeRawInto(ctx, "filter-reuse", query, nil)
+			if err != nil || len(out.Results) != len(expected[i]) {
+				b.Fatalf("suffix parity query=%d err=%v", i, err)
+			}
+			for j, got := range out.Results {
+				want := expected[i][j]
+				if !bytes.Equal(got.ID, want.ID) || math.Abs(got.Score-want.Score) > 1e-6 {
+					b.Fatalf("suffix changed ranking query=%d result=%d", i, j)
+				}
+				if bytes.Equal(got.ID, in.IDs[0]) {
+					sawChanged = true
+					if !bytes.Contains(got.Document, []byte("changed full content")) || !bytes.Contains(got.Document, []byte(`"residual":"changed"`)) {
+						b.Fatal("suffix full fetch lost replacement payload")
+					}
+				} else if !bytes.Equal(got.Document, want.Document) {
+					b.Fatal("suffix changed another document's full payload")
+				}
+			}
+		}
+		if !sawChanged {
+			b.Fatal("suffix parity did not fetch the replacement document")
 		}
 	}
 	var totals [4]struct{ sourceIDs, inspected, scored uint64 }
@@ -151,6 +199,28 @@ func BenchmarkServiceTypedFilterReuse(b *testing.B) {
 	b.ReportMetric(float64(sourceIDs)/float64(b.N), "filter-source-IDs/op")
 	b.ReportMetric(float64(inspected)/float64(b.N), "filter-inspected/op")
 	b.ReportMetric(float64(scored)/float64(b.N), "scored/op")
+}
+
+// Every operation replaces one real row, including durable publication and
+// serving metadata preparation. Initial load/Build and request storage are setup.
+func BenchmarkServiceTypedCurrentMaterializerPublish(b *testing.B) {
+	if b.N > 128 {
+		b.Skip("bounded serving epoch: use -benchtime=64x")
+	}
+	svc, queries := typedFilterReuseFixture(b, 50000, 256)
+	in := TypedDocumentsRequest{ExpectedGeneration: queries[0].ExpectedGeneration,
+		IDs: [][]byte{[]byte("doc-00019")}, Retained: [][]byte{[]byte(`{"id":"doc-00019","meta":{"residual":"kept"}}`)},
+		Columns: []collections.TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{queries[0].QueryEmbedding}}, {Name: "content", Strings: []string{"changed"}}, {Name: "meta.user_id", Strings: []string{"user-3"}}},
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		in.Columns[1].Strings[0] = []string{"changed a", "changed b"}[i%2]
+		if out, err := svc.UpsertTypedDocuments(ctx, "filter-reuse", in); err != nil || out.Updated != 1 {
+			b.Fatalf("replacement=%+v err=%v", out, err)
+		}
+	}
 }
 
 // One operation is all eight cold predicates, including preparation and full
