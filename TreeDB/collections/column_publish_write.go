@@ -1,8 +1,10 @@
 package collections
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -34,7 +36,10 @@ func setColumnPhysicalAssetPreparationAfterPrepareTestHook(hook func(ColumnPubli
 }
 
 type columnWritePublishInput struct {
-	candidateAdmission *typedGraphFoldAssetAdmission
+	candidateAdmission   *typedGraphFoldAssetAdmission
+	selectStableResource func(rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error)
+	reuseSegment         *columnManifestSegmentOwnership
+	reuseResources       *rootpublication.StableResourceSet
 	// Only the second half of one source attempt may reuse its still-owned output.
 	sourcePreparedOutput  *ColumnPublishPreparedAssets
 	meta                  CollectionMeta
@@ -60,6 +65,8 @@ type columnWritePublishInput struct {
 	columnPayloadBytes    int64
 	insertStats           *CollectionInsertStats
 }
+
+const columnPhysicalAssetSegmentTargetBytes int64 = 16 << 20
 
 func columnStoreWriteEnabled(meta CollectionMeta) bool {
 	return meta.Options.ColumnStore != nil && meta.Options.ColumnStore.Enabled
@@ -210,6 +217,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		nextLease := input.preparedPlan
 		if nextLease == nil {
 			var err error
+			input.selectStableResource = ctx.CloneVisibleStableResource
 			nextLease, err = c.prepareColumnPublishPlanLease(input, columnBaseRoot, ctx.AppliedCommandLSN)
 			if err != nil {
 				return nil, err
@@ -377,6 +385,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		nextLease := input.preparedPlan
 		if nextLease == nil {
 			var err error
+			input.selectStableResource = ctx.CloneVisibleStableResource
 			nextLease, err = c.prepareColumnPublishPlanLease(input, columnBaseRoot, ctx.AppliedCommandLSN)
 			if err != nil {
 				return nil, err
@@ -837,6 +846,32 @@ func (c *Collection) prepareColumnPublishPlanLease(input columnWritePublishInput
 	if err != nil {
 		return nil, err
 	}
+	_, replay := input.commandWALIntent.ReplayAssignedLSN()
+	if !replay && input.selectStableResource != nil && input.operation == ColumnPublishOperationInsert && len(input.sourceDeleteDocuments) == 0 &&
+		columnStoreTypedScalarIndexesSupported(input.meta) && columnStoreConfigNeedsDirectViewTypedColumnAlignment(*cfg) {
+		// Prefer the highest live owned file ID in the sorted manifest.
+		end := sort.Search(len(currentRecords), func(i int) bool {
+			return bytes.Compare(currentRecords[i].key, []byte(columnManifestSegmentOwnershipRecordPrefix+"\xff\xff\xff\xff\x00")) >= 0
+		})
+		if end > 0 && bytes.HasPrefix(currentRecords[end-1].key, columnManifestSegmentOwnershipRecordPrefixBytes) {
+			marker, selectErr := decodeColumnManifestSegmentOwnership(currentRecords[end-1].key, currentRecords[end-1].value)
+			if selectErr != nil {
+				return nil, selectErr
+			}
+			if marker.Frontier < uint64(columnPhysicalAssetSegmentTargetBytes) {
+				selector, selectErr := marker.selector()
+				if selectErr != nil {
+					return nil, selectErr
+				}
+				resources, selectErr := input.selectStableResource(selector)
+				if selectErr != nil {
+					return nil, selectErr
+				}
+				defer resources.Release()
+				input.reuseSegment, input.reuseResources = &marker, resources
+			}
+		}
+	}
 	plan, err := BuildColumnPublishPlan(ColumnPublishPlanInput{
 		Collection:               input.meta.Name,
 		ColumnStore:              cfg,
@@ -1009,6 +1044,14 @@ func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePubl
 
 func mergeSourceColumnPreparedAssets(deleted, inserted ColumnPublishPreparedAssets) (ColumnPublishPreparedAssets, error) {
 	merged := inserted
+	if len(deleted.ownedSegmentFileIDs) != 0 {
+		if merged.ownedSegmentFileIDs == nil {
+			merged.ownedSegmentFileIDs = make(map[uint32]struct{}, len(deleted.ownedSegmentFileIDs))
+		}
+		for id := range deleted.ownedSegmentFileIDs {
+			merged.ownedSegmentFileIDs[id] = struct{}{}
+		}
+	}
 	merged.Assets = append(append([]ColumnPreparedAsset(nil), deleted.Assets...), inserted.Assets...)
 	merged.RowCount = deleted.RowCount + inserted.RowCount
 	merged.CommandBytes = saturatingAddNonNegativeInt64(deleted.CommandBytes, inserted.CommandBytes)
@@ -1177,13 +1220,48 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPub
 						}
 					}
 				} else {
+					var appender *columnPhysicalAssetSegmentAppender
+					var err error
+					if input.reuseSegment != nil {
+						start := time.Now()
+						appender, err = session.existingOwnedAppender(*input.reuseSegment, input.reuseResources)
+						appendOpenDuration += time.Since(start)
+						if err != nil {
+							return err
+						}
+						end := appender.offset
+						for _, asset := range pendingAssets {
+							if asset.hasRef {
+								continue
+							}
+							padding := int64(columnAssetSegmentPrefixPadding(end, columnAssetSegmentPayloadAlignment(asset.kind, appender.cfg)))
+							if end > columnPhysicalAssetSegmentTargetBytes || padding > columnPhysicalAssetSegmentTargetBytes-end || int64(len(asset.payload)) > columnPhysicalAssetSegmentTargetBytes-end-padding {
+								end = columnPhysicalAssetSegmentTargetBytes + 1
+								break
+							}
+							end += padding + int64(len(asset.payload))
+						}
+						if end > columnPhysicalAssetSegmentTargetBytes {
+							session.active, session.activeFile = nil, 0
+							if err := appender.abort(); err != nil {
+								return err
+							}
+							appender = nil
+						}
+					}
 					start := time.Now()
-					appender, err := session.freshAppender()
+					if appender == nil {
+						appender, err = session.freshAppender()
+					}
 					appendOpenDuration += time.Since(start)
 					if err != nil {
 						return err
 					}
 					fileID = appender.fileID
+					if prepared.ownedSegmentFileIDs == nil {
+						prepared.ownedSegmentFileIDs = make(map[uint32]struct{}, 1)
+					}
+					prepared.ownedSegmentFileIDs[fileID] = struct{}{}
 				}
 				for i := range pendingAssets {
 					if !pendingAssets[i].hasRef {

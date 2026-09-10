@@ -110,6 +110,17 @@ func (db *DB) CaptureRecoverableRootSet(ctx context.Context) (*RecoverableRootSe
 	return db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
 }
 
+// CaptureRecoverableRootSetForInspection captures root-bound resource authority
+// for read-only inspection, including on read-only or recovery-required handles.
+func (db *DB) CaptureRecoverableRootSetForInspection(ctx context.Context) (*RecoverableRootSet, error) {
+	if db == nil {
+		return nil, ErrClosed
+	}
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+	return db.captureRecoverableRootSetForInspectionWithMaintenanceLockHeld(ctx)
+}
+
 const recoverableRootSetCaptureAttempts = 8
 
 func (db *DB) captureRecoverableRootSetWithMaintenanceLockHeld(ctx context.Context) (*RecoverableRootSet, error) {
@@ -349,6 +360,28 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 		identityPinRegistry: db.StableResourceIdentityPinRegistry(),
 		identityPins:        make(map[rootpublication.StableIdentity]recoverableIdentityPin),
 	}, false, nil
+}
+
+// CloneStableResourceForRoot selects one independently pinned resource from
+// the exact five-scalar root identity captured by this set.
+func (set *RecoverableRootSet) CloneStableResourceForRoot(root RecoverableRoot, selector rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error) {
+	if set == nil {
+		return nil, ErrRecoverableRootSetStale
+	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	if set.released.Load() {
+		return nil, ErrRecoverableRootSetStale
+	}
+	resources, ok := set.rootResources[recoverableRootIdentity(root)]
+	if !ok {
+		return nil, ErrRecoverableRootSetStale
+	}
+	selected, err := rootpublication.CloneStableResourceForSelector(resources, selector)
+	if err != nil {
+		return nil, err
+	}
+	return selected, nil
 }
 
 func (set *RecoverableRootSet) resourcesForRoot(root RecoverableRoot) *rootpublication.StableResourceSet {

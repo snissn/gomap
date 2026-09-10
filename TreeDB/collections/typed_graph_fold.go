@@ -294,13 +294,19 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 			currentRecords = append(currentRecords, record)
 		}
 	}
+	// Ownership follows the complete final manifest, including inserts after capture.
+	for _, record := range latest.records {
+		if bytes.HasPrefix(record.key, columnManifestSegmentOwnershipRecordPrefixBytes) {
+			currentRecords = append(currentRecords, record)
+		}
+	}
 	if latest.manifest.Generation > captured.manifest.Generation {
 		for _, record := range latest.records {
 			if bytes.Equal(record.key, columnManifestHeaderRecordKeyBytes) {
 				currentRecords = append(currentRecords, record)
 				continue
 			}
-			if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) || bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes) {
+			if bytes.HasPrefix(record.key, columnManifestSegmentOwnershipRecordPrefixBytes) || bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) || bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes) {
 				continue
 			}
 			part, e := decodeColumnManifestPartRecord(record.value)
@@ -311,6 +317,10 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 				currentRecords = append(currentRecords, record)
 			}
 		}
+	}
+	currentRecords, err = normalizeColumnManifestSegmentOwnership(currentRecords, nil, latest.manifest.Generation, latest.cfg.AssetManager.Namespace)
+	if err != nil {
+		return err
 	}
 	sortColumnManifestRecords(currentRecords)
 	header, err := decodeColumnManifestSnapshotForScan(currentRecords)

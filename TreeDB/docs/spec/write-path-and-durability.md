@@ -2,6 +2,16 @@
 
 This document defines write semantics for TreeDB cached mode and backend mode.
 
+Ordinary typed INSERTs may append to a manifest-owned column asset segment under
+the serialized command-publication context. Exact retained resource authority
+must match the existing file and parent before writing; every batch retains its
+file-sync/close boundary. Replay and compound source replacement use fresh
+output. A private marker in the first committed manifest protects the whole
+shared file, including retired gaps or an unacknowledged suffix, until the last
+live reference retires. The marker grants no new logical asset authority and
+never substitutes for reference integrity or exact GC pins. See the
+[typed storage layout](storage-format.md) for the record and rotation rules.
+
 ## 0. Frozen Publication Contract
 
 This section is normative for every production durability profile. It freezes

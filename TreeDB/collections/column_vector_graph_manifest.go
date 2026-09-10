@@ -135,7 +135,8 @@ func columnManifestRecordKeyKnownForScan(key []byte) bool {
 		bytes.HasPrefix(key, columnManifestDictionaryCodesRecordPrefixBytes) ||
 		bytes.HasPrefix(key, columnManifestInt64ValuesRecordPrefixBytes) ||
 		bytes.HasPrefix(key, columnManifestVectorGraphRecordPrefixBytes) ||
-		bytes.HasPrefix(key, columnVectorIndexStateRecordPrefixBytes)
+		bytes.HasPrefix(key, columnVectorIndexStateRecordPrefixBytes) ||
+		bytes.HasPrefix(key, columnManifestSegmentOwnershipRecordPrefixBytes)
 }
 
 func findColumnVectorGraphManifestRecord(records []columnManifestRecord, indexName string) (columnManifestRecord, bool) {

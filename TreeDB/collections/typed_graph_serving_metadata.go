@@ -160,7 +160,7 @@ func prepareTypedGraphMaterializerMetadata(view columnPhysicalScanSnapshotView, 
 		Config: rowConfig, FullConfig: cfg, ColumnStoreEnabled: true,
 		ColumnAssetRootDir: view.ColumnAssetRootDir, AssetNamespace: cfg.AssetManager.Namespace,
 		AssetRefs: refs, TypedColumnPartRefs: typedRefs, GraphAssetRefs: graphRefs,
-		AggregateMetadata: manifest.AggregateMetadata, DictionaryCodes: manifest.DictionaryCodes, Int64Values: manifest.Int64Values,
+		SegmentOwnership: manifest.SegmentOwnership, AggregateMetadata: manifest.AggregateMetadata, DictionaryCodes: manifest.DictionaryCodes, Int64Values: manifest.Int64Values,
 		MutationParts: mutations, ManifestCatalogBytes: manifest.ManifestBytes,
 		Diagnostics: columnPhysicalScanDiagnostics{ManifestGeneration: cfg.ActiveManifest.Generation, ActiveManifestChecksum: cfg.ActiveManifest.Checksum, RecoveryManifestGeneration: cfg.RecoveryAuthoritativeManifest.Generation, RecoveryManifestChecksum: cfg.RecoveryAuthoritativeManifest.Checksum, AppliedCommandLSN: cfg.RecoveryAuthoritativeAppliedCommandLSN, ManifestRecords: count, AssetRefs: len(refs), MutationParts: mutations},
 	}, nil

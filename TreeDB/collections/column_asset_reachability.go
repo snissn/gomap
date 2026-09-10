@@ -459,6 +459,7 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 			input.recoveryBytes = addColumnAssetReachabilityBytes(input.recoveryBytes, positiveColumnAssetReachabilityLength(ref.Length))
 		}
 	}
+
 	if err := input.addRefs(ctx, opts.CandidateRefs, ColumnAssetReachabilitySourceCandidate); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
@@ -498,6 +499,14 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 	}
 	if err := ctx.Err(); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
+	}
+	// Capture our inspection pins after classifying external older readers.
+	if len(view.SegmentOwnership) != 0 {
+		release, err := c.bindColumnSegmentOwnership(ctx, view, &input)
+		if err != nil {
+			return columnAssetReachabilityPlanIdentity(input), input.refs, err
+		}
+		defer release()
 	}
 	plan, err := buildColumnAssetReachabilityPlan(ctx, input)
 	return plan, input.refs, err
@@ -738,6 +747,7 @@ type columnAssetReachabilityInput struct {
 	unknownSources     map[ColumnAssetRef][]ColumnAssetReachabilitySource
 	sourceCounts       ColumnAssetReachabilitySourceStats
 	mappedResources    ColumnAssetReachabilityMappedResourceStats
+	ownedSegments      map[uint32]rootpublication.StableResourceDescriptor
 	quarantineSegments map[uint32]int64
 	pinStateIncomplete bool
 }
@@ -995,6 +1005,16 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			}
 		}
 		rangeSet := rangesByFile[segment.fileID]
+		logicalRefCount := rangeSet.count
+		if owned, ok := input.ownedSegments[segment.fileID]; ok {
+			namespace, ok := owned.Namespace()
+			if !ok || !rootpublication.SamePhysicalIdentity(owned.Identity(), segment.childIdentity) ||
+				!rootpublication.SamePhysicalIdentity(namespace.ParentIdentity, segment.parentIdentity) || namespace.NewName != segment.name ||
+				segment.bytes < 0 || uint64(segment.bytes) < owned.Frontier().Bytes {
+				return columnAssetReachabilityPlanIdentity(input), errors.New("collections: owned segment physical identity/frontier changed")
+			}
+			rangeSet.appendRange(columnAssetReachabilityRange{start: 0, end: segment.bytes, status: ColumnAssetReachabilityProtected})
+		}
 		if quarantineBytes, ok := input.quarantineSegments[segment.fileID]; ok {
 			seenQuarantineSegments[segment.fileID] = struct{}{}
 			plan.Segments.QuarantineSegments++
@@ -1009,6 +1029,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 					end:    segment.bytes,
 					status: ColumnAssetReachabilityProtected,
 				})
+				logicalRefCount++
 				rangesByFile[segment.fileID] = rangeSet
 			}
 		}
@@ -1054,7 +1075,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 				ProtectedBytes:        segmentPlan.protectedBytes,
 				ReclaimableBytes:      segmentPlan.reclaimableBytes,
 				UnknownBytes:          segmentPlan.unknownBytes,
-				RefCount:              rangeSet.count,
+				RefCount:              logicalRefCount,
 				plannedParentIdentity: segment.parentIdentity,
 				plannedChildIdentity:  segment.childIdentity,
 			})

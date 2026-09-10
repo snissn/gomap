@@ -157,6 +157,18 @@ func (db *DB) acquireCommandWALPublicationBuilderV1() (*rootpublication.BuilderT
 	}
 }
 
+func (runtime *rootPublicationRuntimeV1) cloneVisibleStableResource(selector rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error) {
+	if runtime == nil {
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.poison != nil {
+		return nil, runtime.poison
+	}
+	return rootpublication.CloneStableResourceForSelector(runtime.visibleResources, selector)
+}
+
 func (runtime *rootPublicationRuntimeV1) cloneVisibleResources() (*rootpublication.StableResourceSet, error) {
 	resources, _, err := runtime.cloneVisibleResourcesWithWork()
 	return resources, err
