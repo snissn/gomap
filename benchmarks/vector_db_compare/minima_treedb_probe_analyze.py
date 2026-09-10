@@ -1,8 +1,8 @@
 """Validate and attribute the completed one-run diagnostic; never opens its DB."""
 from pathlib import Path
-import argparse,hashlib,json,socket,statistics,subprocess
+import argparse,hashlib,json,socket,statistics,subprocess,sys
 import minima_treedb_runner as tr
-from minima_treedb_probe import initial_batches, validate_build_capture
+from minima_treedb_probe import initial_batches, validate_build_capture, python_inputs, validate_affinity
 def h(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -13,12 +13,31 @@ def validate_run_inputs(result, packet, manifest):
     ledger = authorization['sha256']
     for path, digest in ledger.items():
         assert h(path) == digest, path
+    for name in ('launch.py', 'run.sh'):
+        path = packet / name
+        assert ledger[str(path)] == h(path), str(path)
     binding_path = packet / 'source-binding.json'
     binding = json.loads(binding_path.read_text())
     probe = Path(__file__).resolve().with_name('minima_treedb_probe.py')
     binary, serving = (Path(binding[key]).resolve() for key in ('binary', 'serving'))
     for path in (binding_path.resolve(), manifest.resolve(), binary, serving, probe, Path(__file__).resolve()):
         assert ledger[str(path)] == h(path), str(path)
+    source = probe.parents[2]
+    required = [source / 'benchmarks/vector_db_compare' / name for name in
+                ('minima_treedb_runner.py', 'minima_qdrant_runner.py')]
+    required += list((source / 'clients/python/treedb_client/src/treedb_client').rglob('*.py'))
+    loaded = result['python_inputs_sha256']
+    executable = str(Path(sys.executable).resolve())
+    assert result['python_executable'] == executable
+    assert loaded[executable] == ledger[executable] == h(executable)
+    for path in required:
+        assert ledger[str(path)] == h(path), str(path)
+    for path in required[:2]:
+        assert loaded[str(path)] == h(path), str(path)
+    assert any(Path(path).is_relative_to(source / 'clients/python/treedb_client/src') for path in loaded)
+    for path, digest in {**python_inputs(), **loaded}.items():
+        assert digest == ledger[path] == h(path), path
+    validate_affinity(result['affinity'], result['server_affinity'])
     assert result['source_commit'] == binding['source_commit']
     assert result['binding_sha256'] == h(binding_path)
     assert result['script_sha256'] == h(probe)
@@ -40,6 +59,8 @@ def main():
     expected_count=len(expected); expected_rows=sum(x[2] for x in expected)
     j=json.loads((d/'result.json').read_text());e=json.loads((p/'execution.json').read_text())
     assert e['exit_code']==0 and e['status']=='exited'
+    assert e['command']==['bash', str(p/'run.sh')]
+    assert Path(e['cwd']).resolve()==args.source.resolve()==Path(__file__).resolve().parents[2]
     assert j['completed'] and not j['failures']
     assert j['manifest_sha256']==h(args.manifest)
     assert j['source_commit']==subprocess.check_output(['git','rev-parse','HEAD'],cwd=args.source,text=True).strip()

@@ -20,6 +20,32 @@ from urllib.error import HTTPError
 
 import minima_treedb_runner as tr
 
+def python_inputs():
+    """Bind concrete imported files and reject an installed client substitution."""
+    source = Path(__file__).resolve().parents[2]
+    expected = {'minima_treedb_runner': source / 'benchmarks/vector_db_compare/minima_treedb_runner.py',
+                'minima_qdrant_runner': source / 'benchmarks/vector_db_compare/minima_qdrant_runner.py'}
+    client = source / 'clients/python/treedb_client/src/treedb_client'
+    paths = {Path(sys.executable).resolve()}
+    for name, module in list(sys.modules.items()):
+        filename = getattr(module, '__file__', None)
+        if not filename:
+            continue
+        path = Path(filename).resolve()
+        if name in expected:
+            assert path == expected[name], (name, path)
+        if name == 'treedb_client' or name.startswith('treedb_client.'):
+            assert path.is_relative_to(client), (name, path)
+        if path.is_file():
+            paths.add(path)
+    return {str(path): tr.file_sha256(path) for path in sorted(paths)}
+
+
+def validate_affinity(client, server):
+    assert client == server and len(client) == len(set(client)) == 6
+    assert all(type(cpu) is int and cpu >= 0 for cpu in client)
+
+
 def validate_batch_stats(observed, pid, name, generation, rows):
     assert observed['status'] == 'captured', observed
     snapshot = observed['snapshot']
@@ -155,6 +181,7 @@ def main():
               'manifest_sha256': tr.file_sha256(args.manifest),
               'serving_sha256': tr.file_sha256(args.serving),
               'affinity': sorted(os.sched_getaffinity(0)), 'batch_size': 256,
+              'python_inputs_sha256': python_inputs(), 'python_executable': str(Path(sys.executable).resolve()),
               'profile_seconds': 8, 'build_profile': args.build_profile, 'profile_rates': {'block': 0, 'mutex': 0},
               'expected_batches': len(batches), 'expected_rows': sum(x[2] for x in batches),
               'window_batch_indices_zero_based': windows, 'windows': [], 'failures': [],
@@ -306,7 +333,7 @@ def main():
         result['pid'] = controller.pid
         result['linux_process_identity'] = tr.common.linux_process_identity(controller.pid)
         result['server_affinity'] = sorted(os.sched_getaffinity(controller.pid))
-        assert result['server_affinity'] == result['affinity'] == list(range(6))
+        validate_affinity(result['affinity'], result['server_affinity'])
         runner.connect()
         runner.measured = True
         runner.evidence.request_context = runner._request_context
@@ -355,6 +382,13 @@ def main():
                 result['failures'].append(f'cleanup: {type(exc).__name__}: {exc}')
         if controller:
             result['lifetimes'] = controller.lifetimes
+        try:
+            loaded = python_inputs()
+            for path, digest in result['python_inputs_sha256'].items():
+                assert tr.file_sha256(Path(path)) == digest, path
+            result['python_inputs_sha256'].update(loaded)
+        except BaseException as exc:
+            result['failures'].append(f'Python provenance: {type(exc).__name__}: {exc}')
         save()
     return bool(result['failures'])
 

@@ -125,6 +125,17 @@ Server((host, int(port)), Handler).serve_forever()
 
 
 class ProbeContractTest(unittest.TestCase):
+    def test_affinity_and_imported_client_identity(self):
+        probe.validate_affinity(list(range(8, 14)), list(range(8, 14)))
+        for client, server in [([0] * 6, [0] * 6), (list(range(5)), list(range(5))),
+                               (list(range(6)), list(range(8, 14)))]:
+            with self.assertRaises(AssertionError):
+                probe.validate_affinity(client, server)
+        client = sys.modules['treedb_client']
+        with mock.patch.object(client, '__file__', '/installed/treedb_client/__init__.py'):
+            with self.assertRaises(AssertionError):
+                probe.python_inputs()
+
     def test_population_and_partial_batches(self):
         for size in (250_000, 500_000, 1_000_000):
             manifest = {'fixture': f'bounded-{size // 1000}k', 'corpora': [{'corpus_rows': size}],
@@ -178,7 +189,7 @@ class ProbeContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             packet = Path(directory)
             binary, serving, manifest = (packet / name for name in ('service', 'serving.json', 'manifest.json'))
-            for path in (binary, serving, manifest):
+            for path in (binary, serving, manifest, packet / 'launch.py', packet / 'run.sh'):
                 path.write_text(path.name)
             binding = {'source_commit': 'reviewed', 'binary': str(binary), 'serving': str(serving),
                        'binary_sha256': probe_analyze.h(binary), 'serving_sha256': probe_analyze.h(serving),
@@ -186,14 +197,20 @@ class ProbeContractTest(unittest.TestCase):
             binding_path = packet / 'source-binding.json'
             binding_path.write_text(json.dumps(binding))
             probe_path, analyzer_path = Path(probe.__file__).resolve(), Path(probe_analyze.__file__).resolve()
-            inputs = (binary, serving, manifest, binding_path, probe_path, analyzer_path)
-            authorization = {'authorized': True, 'sha256': {str(path): probe_analyze.h(path) for path in inputs}}
+            inputs = [binary, serving, manifest, binding_path, probe_path, analyzer_path, packet / 'launch.py', packet / 'run.sh']
+            inputs += list((probe_path.parents[2] / 'clients/python/treedb_client/src/treedb_client').rglob('*.py'))
+            loaded = probe.python_inputs()
+            authorization = {'authorized': True, 'sha256': {**loaded, **{str(path): probe_analyze.h(path) for path in inputs}}}
             authorization_path = packet / 'launch-authorization.json'
             authorization_path.write_text(json.dumps(authorization))
             result = {key: binding[key] for key in ('source_commit', 'binary_sha256', 'serving_sha256', 'manifest_sha256', 'build_profile')}
-            result.update(binding_sha256=probe_analyze.h(binding_path), script_sha256=probe_analyze.h(probe_path))
+            result.update(binding_sha256=probe_analyze.h(binding_path), script_sha256=probe_analyze.h(probe_path),
+                          python_inputs_sha256=loaded, python_executable=str(Path(sys.executable).resolve()),
+                          affinity=list(range(8,14)), server_affinity=list(range(8,14)))
             probe_analyze.validate_run_inputs(result, packet, manifest)
-            for key in result:
+            for key in binding:
+                if key not in result:
+                    continue
                 bad = {**result, key: True if key == 'build_profile' else 'different-run'}
                 with self.subTest(key=key), self.assertRaises(AssertionError):
                     probe_analyze.validate_run_inputs(bad, packet, manifest)
@@ -202,10 +219,17 @@ class ProbeContractTest(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 probe_analyze.validate_run_inputs(result, packet, manifest)
             authorization['authorized'] = True
-            del authorization['sha256'][str(manifest)]
+            for path in (str(manifest), str(Path(runner.__file__).resolve()), str(Path(sys.executable).resolve())):
+                bad = copy.deepcopy(authorization)
+                del bad['sha256'][path]
+                authorization_path.write_text(json.dumps(bad))
+                with self.subTest(missing=path), self.assertRaises(KeyError):
+                    probe_analyze.validate_run_inputs(result, packet, manifest)
             authorization_path.write_text(json.dumps(authorization))
-            with self.assertRaises(KeyError):
-                probe_analyze.validate_run_inputs(result, packet, manifest)
+            bad = copy.deepcopy(result)
+            bad['python_inputs_sha256'][str(Path(runner.__file__).resolve())] = 'substituted'
+            with self.assertRaises(AssertionError):
+                probe_analyze.validate_run_inputs(bad, packet, manifest)
 
 
 class MinimaTreeDBRunnerTest(unittest.TestCase):
