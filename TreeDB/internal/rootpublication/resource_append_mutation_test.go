@@ -416,6 +416,72 @@ func TestStableLogicalObligationMergePreservesSharedViews(t *testing.T) {
 	}
 }
 
+func TestStableLogicalObligationMergeReusesExactAncestor(t *testing.T) {
+	first := appendMutationTestObligation(1)
+	second := appendMutationTestObligation(2)
+	third := appendMutationTestObligation(3)
+	base := newStableLogicalObligationView([]StableLogicalObligation{first})
+	descendant, err := base.appendCertified([]StableLogicalObligation{second, third}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detached := newStableLogicalObligationView(descendant.slice())
+	partial := newStableLogicalObligationView([]StableLogicalObligation{first, second})
+	for _, tc := range []struct {
+		name     string
+		target   stableLogicalObligationView
+		incoming stableLogicalObligationView
+		wantTail *stableLogicalObligationNode
+		wantIdx  *stableLogicalObligationIndexNode
+	}{
+		{name: "older_target", target: base, incoming: descendant, wantTail: descendant.tail, wantIdx: descendant.index},
+		{name: "newer_target", target: descendant, incoming: base, wantTail: descendant.tail, wantIdx: descendant.index},
+		{name: "empty_target", incoming: descendant, wantTail: descendant.tail, wantIdx: descendant.index},
+		{name: "unrelated_equal", target: detached, incoming: descendant, wantTail: detached.tail, wantIdx: detached.index},
+		{name: "partial_node_count", target: partial, incoming: descendant},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := tc.target
+			beforeTarget, beforeIncoming := target.slice(), tc.incoming.slice()
+			if err := mergeStableLogicalObligations(&target, tc.incoming); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(target.slice(), descendant.slice()) || target.count != descendant.count || !maps.Equal(target.commitments, descendant.commitments) {
+				t.Fatal("merge changed the exact logical union")
+			}
+			if tc.wantTail != nil {
+				if target.tail != tc.wantTail || target.index != tc.wantIdx {
+					t.Fatal("merge rebuilt an existing immutable view")
+				}
+			} else if target.tail == descendant.tail {
+				t.Fatal("unrelated partial-node prefix bypassed the exact union")
+			}
+			if !slices.Equal(tc.target.slice(), beforeTarget) || !slices.Equal(tc.incoming.slice(), beforeIncoming) {
+				t.Fatal("merge changed an input view")
+			}
+		})
+	}
+
+	// Divergent descendants share a parent but cannot share union authority.
+	target, err := base.appendCertified([]StableLogicalObligation{second}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflict := second
+	conflict.Checksum++
+	incoming, err := base.appendCertified([]StableLogicalObligation{third, conflict}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := target
+	if err := mergeStableLogicalObligations(&target, incoming); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("divergent descendants error=%v want %v", err, ErrResourceConflict)
+	}
+	if target.tail != before.tail || target.index != before.index || target.count != before.count || !maps.Equal(target.commitments, before.commitments) {
+		t.Fatal("late conflict changed the target")
+	}
+}
+
 func TestAppendOnlyPhysicalClosureCloneIsMutationLocal(t *testing.T) {
 	// The certified append-only path must retain the immutable physical closure
 	// itself. Re-cloning every retained entry makes repeated root publication
