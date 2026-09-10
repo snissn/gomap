@@ -661,8 +661,8 @@ func (work *ColumnPublishCandidateResourceWork) Add(other ColumnPublishCandidate
 	work.FinalRequirementObligationsMaterialized += other.FinalRequirementObligationsMaterialized
 }
 
-// CollectionInsertStats captures phase timings and counters from the most
-// recent successful InsertBatch call on a Collection handle.
+// CollectionInsertStats captures phase timings and counters from a completed
+// InsertBatch call or an optional diagnostics-enabled typed upsert.
 type CollectionInsertStats struct {
 	Documents                    int
 	Indexes                      int
@@ -722,16 +722,22 @@ type CollectionInsertStats struct {
 	ColumnPublishFinalizeCandidateCOWPrepare       time.Duration
 	ColumnPublishFinalizeCandidateOther            time.Duration
 	ColumnPublishFinalizeCandidateResourceWork     ColumnPublishCandidateResourceWork
-	ColumnPublishFinalizeEnqueueActivation         time.Duration
-	ColumnPublishFinalizeAdmissionWait             time.Duration
-	ColumnPublishFinalizeDurabilityWait            time.Duration
-	ColumnPublishPostFinalize                      time.Duration
-	ColumnPublishDocumentExtraction                time.Duration
-	ColumnPublishValidatedFloat32ProjectionRows    int
-	ColumnPublishDeclaredColumnEncoding            time.Duration
-	ColumnPublishAssetPreparation                  time.Duration
-	ColumnPublishRowAssetPreparation               time.Duration
-	ColumnPublishTypedColumnPreparation            time.Duration
+	// DependencyBytes, OwnedBytes and HardAdmissionCount sum accepted publications; Pending* are maxima.
+	ColumnPublishFinalizeCandidateDependencyBytes uint64
+	ColumnPublishFinalizeCandidateOwnedBytes      uint64
+	ColumnPublishFinalizeAdmissionPendingBytes    uint64
+	ColumnPublishFinalizeAdmissionPendingCommits  uint64
+	ColumnPublishFinalizeHardAdmissionCount       uint64
+	ColumnPublishFinalizeEnqueueActivation        time.Duration
+	ColumnPublishFinalizeAdmissionWait            time.Duration
+	ColumnPublishFinalizeDurabilityWait           time.Duration
+	ColumnPublishPostFinalize                     time.Duration
+	ColumnPublishDocumentExtraction               time.Duration
+	ColumnPublishValidatedFloat32ProjectionRows   int
+	ColumnPublishDeclaredColumnEncoding           time.Duration
+	ColumnPublishAssetPreparation                 time.Duration
+	ColumnPublishRowAssetPreparation              time.Duration
+	ColumnPublishTypedColumnPreparation           time.Duration
 
 	ColumnPublishTypedColumnDictionaryBuild    time.Duration
 	ColumnPublishTypedColumnRowMaterialization time.Duration
@@ -791,12 +797,14 @@ type CollectionInsertStats struct {
 	PrimaryRunBuild                                    time.Duration
 	IndexStateRunBuild                                 time.Duration
 	SecondaryRunBuild                                  time.Duration
-	Publish                                            time.Duration
-	SecondaryEntries                                   int
-	SecondaryKeyBytes                                  int
-	SecondarySortedRuns                                int
-	SecondaryUnsortedRuns                              int
-	SecondaryRuns                                      []CollectionSecondaryRunStats
+	// SourceReplacementPlan includes buildSourceReplacementPlan across retries.
+	SourceReplacementPlan time.Duration
+	Publish               time.Duration
+	SecondaryEntries      int
+	SecondaryKeyBytes     int
+	SecondarySortedRuns   int
+	SecondaryUnsortedRuns int
+	SecondaryRuns         []CollectionSecondaryRunStats
 }
 
 // ColumnPublishCommitExclusiveTotal returns the non-overlapping DB publication

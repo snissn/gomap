@@ -497,7 +497,7 @@ func (c *Collection) replaceChunkedDocumentBatchLocked(plans []chunkedDocumentBa
 			return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", err)
 		}
 		replaced = attemptReplaced
-		publishErr := c.publishSourceReplacementPlan(plan, nil)
+		publishErr := c.publishSourceReplacementPlan(plan, nil, nil)
 		plan.close()
 		if isRetriableCollectionMutationError(publishErr) {
 			lastErr = publishErr

@@ -235,10 +235,17 @@ type CommandWALPublishTiming struct {
 	FinalizeCandidateCOWPrepare       time.Duration
 	FinalizeCandidateOther            time.Duration
 	FinalizeCandidateResourceWork     rootpublication.StableResourceClosureWork
-	FinalizeEnqueueActivation         time.Duration
-	FinalizeAdmissionWait             time.Duration
-	FinalizeDurabilityWait            time.Duration
-	PostFinalize                      time.Duration
+	// DependencyBytes, OwnedBytes and HardAdmissionCount are summed across accepted publications.
+	// AdmissionPending* retain the largest admission-time snapshot.
+	FinalizeCandidateDependencyBytes uint64
+	FinalizeCandidateOwnedBytes      uint64
+	FinalizeAdmissionPendingBytes    uint64
+	FinalizeAdmissionPendingCommits  uint64
+	FinalizeHardAdmissionCount       uint64
+	FinalizeEnqueueActivation        time.Duration
+	FinalizeAdmissionWait            time.Duration
+	FinalizeDurabilityWait           time.Duration
+	PostFinalize                     time.Duration
 }
 
 // SetPublishTiming requests request-scoped timings from the preflight
@@ -281,6 +288,11 @@ func (timing *CommandWALPublishTiming) Add(other CommandWALPublishTiming) {
 	timing.FinalizeCandidateCOWPrepare += other.FinalizeCandidateCOWPrepare
 	timing.FinalizeCandidateOther += other.FinalizeCandidateOther
 	timing.FinalizeCandidateResourceWork.Add(other.FinalizeCandidateResourceWork)
+	timing.FinalizeCandidateDependencyBytes += other.FinalizeCandidateDependencyBytes
+	timing.FinalizeCandidateOwnedBytes += other.FinalizeCandidateOwnedBytes
+	timing.FinalizeAdmissionPendingBytes = max(timing.FinalizeAdmissionPendingBytes, other.FinalizeAdmissionPendingBytes)
+	timing.FinalizeAdmissionPendingCommits = max(timing.FinalizeAdmissionPendingCommits, other.FinalizeAdmissionPendingCommits)
+	timing.FinalizeHardAdmissionCount += other.FinalizeHardAdmissionCount
 	timing.FinalizeEnqueueActivation += other.FinalizeEnqueueActivation
 	timing.FinalizeAdmissionWait += other.FinalizeAdmissionWait
 	timing.FinalizeDurabilityWait += other.FinalizeDurabilityWait

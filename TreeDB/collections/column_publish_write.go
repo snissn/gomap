@@ -764,6 +764,11 @@ func recordColumnPublishTiming(stats *CollectionInsertStats, timing backenddb.Co
 		FinalRequirementProofFastPath: work.FinalRequirementProofFastPath, FinalRequirementProofFallbacks: work.FinalRequirementProofFallbacks,
 		FinalRequirementRecordsDecoded: work.FinalRequirementRecordsDecoded, FinalRequirementObligationsMaterialized: work.FinalRequirementObligationsMaterialized,
 	})
+	stats.ColumnPublishFinalizeCandidateDependencyBytes += timing.FinalizeCandidateDependencyBytes
+	stats.ColumnPublishFinalizeCandidateOwnedBytes += timing.FinalizeCandidateOwnedBytes
+	stats.ColumnPublishFinalizeAdmissionPendingBytes = max(stats.ColumnPublishFinalizeAdmissionPendingBytes, timing.FinalizeAdmissionPendingBytes)
+	stats.ColumnPublishFinalizeAdmissionPendingCommits = max(stats.ColumnPublishFinalizeAdmissionPendingCommits, timing.FinalizeAdmissionPendingCommits)
+	stats.ColumnPublishFinalizeHardAdmissionCount += timing.FinalizeHardAdmissionCount
 	stats.ColumnPublishFinalizeEnqueueActivation += timing.FinalizeEnqueueActivation
 	stats.ColumnPublishFinalizeAdmissionWait += timing.FinalizeAdmissionWait
 	stats.ColumnPublishFinalizeDurabilityWait += timing.FinalizeDurabilityWait

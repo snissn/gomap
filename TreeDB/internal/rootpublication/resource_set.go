@@ -4052,8 +4052,9 @@ func (guard StableResourceDeletionGuard) Check(identity StableIdentity, generati
 }
 
 // BytesNotCoveredBy returns conservative publication debt against an already
-// published resource closure. Only fully covered entries receive credit; an
-// advanced frontier is charged in full. ContentSynced does not establish root
+// published resource closure. A compatible mutable append receives credit for
+// its exact durable prefix; every other advanced frontier is charged in full.
+// ContentSynced does not establish root
 // publication. The caller must supply its owned durable-root authority.
 // Neither closure, its pins, nor its ordinary resource statistics are changed.
 func (set *StableResourceSet) BytesNotCoveredBy(published *StableResourceSet) (uint64, error) {
@@ -4074,18 +4075,60 @@ func (set *StableResourceSet) BytesNotCoveredBy(published *StableResourceSet) (u
 	}
 	var total uint64
 	set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
-		var covered bool
+		var covered uint64
 		if baseline != nil {
 			view := baseline.kindViews[entry.token.kind]
 			prior := findStableResourceLogical(view.logical, entry.token.logicalKey())
-			covered = stableResourceEntryCoversPublication(prior, entry)
+			if stableResourceEntryCoversPublication(prior, entry) {
+				covered = entry.frontier.Bytes
+			} else if prefix, ok := stableResourceEntryDurablePrefix(prior, entry); ok {
+				covered = prefix
+			}
 		}
-		if !covered {
-			total = saturatingAdd(total, entry.frontier.Bytes)
-		}
+		total = saturatingAdd(total, entry.frontier.Bytes-covered)
 		return true
 	})
 	return total, nil
+}
+
+func stableResourceEntryDurablePrefix(prior, entry *stableResourceEntry) (uint64, bool) {
+	if prior == nil || prior.logicalLane != entry.logicalLane || prior.resourceID != entry.resourceID {
+		return 0, false
+	}
+	coalesce, err := stableResourcesCoalesce(prior.token, entry.token)
+	if err != nil || !coalesce || prior.token.kind != entry.token.kind || entry.token.stability != ResourceMutableAppend || entry.token.kind == ResourceIndex {
+		return 0, false
+	}
+	if entry.token.namespace != nil && (prior.token.namespace == nil || !prior.token.namespace.compatible(entry.token.namespace)) {
+		return 0, false
+	}
+	if !durableFrontierCovers(entry.frontier, prior.frontier) {
+		return 0, false
+	}
+	for field := range entry.reachability {
+		if _, exists := prior.reachability[field]; !exists {
+			return 0, false
+		}
+	}
+	exact := true
+	prior.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+		current, exists := findStableLogicalObligationIndex(entry.logicalObligations.index, obligation, nil)
+		exact = exists && current == obligation
+		return exact
+	})
+	if !exact {
+		return 0, false
+	}
+	entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+		if previous, exists := findStableLogicalObligationIndex(prior.logicalObligations.index, obligation, nil); exists {
+			exact = previous == obligation
+			return exact
+		}
+		offset, length := uint64(obligation.Offset), uint64(obligation.Length)
+		exact = obligation.Offset >= 0 && obligation.Length > 0 && offset >= prior.frontier.Bytes && offset <= entry.frontier.Bytes && length <= entry.frontier.Bytes-offset
+		return exact
+	})
+	return prior.frontier.Bytes, exact
 }
 
 func stableResourceEntryCoversPublication(prior, entry *stableResourceEntry) bool {

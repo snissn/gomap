@@ -792,6 +792,16 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		return post, prePublishErr(enqueueErr)
 	}
 	candidateOwned = false
+	if opts.publishTiming != nil {
+		opts.publishTiming.FinalizeCandidateDependencyBytes += candidate.DependencyBytes()
+		opts.publishTiming.FinalizeCandidateOwnedBytes += candidate.OwnedBytes()
+		pendingBytes, pendingCommits, hard := receipt.AdmissionSnapshot()
+		opts.publishTiming.FinalizeAdmissionPendingBytes = max(opts.publishTiming.FinalizeAdmissionPendingBytes, pendingBytes)
+		opts.publishTiming.FinalizeAdmissionPendingCommits = max(opts.publishTiming.FinalizeAdmissionPendingCommits, pendingCommits)
+		if hard {
+			opts.publishTiming.FinalizeHardAdmissionCount++
+		}
+	}
 	reportErr := install.completeOrderedPostActivation()
 	post = install.post
 	post.accepted = true
