@@ -663,6 +663,188 @@ func TestAppendOnlyLargeNonInlineKeyUsesReusableSlice(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyKeyArenaClassForLen(t *testing.T) {
+	tests := []struct {
+		name     string
+		length   int
+		wantCap  int
+		wantPool bool
+	}{
+		{name: "zero", length: 0, wantPool: false},
+		{name: "single-byte", length: 1, wantCap: appendOnlyKeyArenaDefaultChunk, wantPool: true},
+		{name: "default", length: appendOnlyKeyArenaDefaultChunk, wantCap: appendOnlyKeyArenaDefaultChunk, wantPool: true},
+		{name: "round-up", length: appendOnlyKeyArenaDefaultChunk + 1, wantCap: appendOnlyKeyArenaDefaultChunk * 2, wantPool: true},
+		{name: "retention-maximum", length: appendOnlyKeyArenaPoolMaxCap, wantCap: appendOnlyKeyArenaPoolMaxCap, wantPool: true},
+		{name: "above-retention-maximum", length: appendOnlyKeyArenaPoolMaxCap + 1, wantPool: false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			_, gotCap, gotPool := appendOnlyKeyArenaClassForLen(tc.length)
+			if gotPool != tc.wantPool {
+				t.Fatalf("pooled=%v want %v", gotPool, tc.wantPool)
+			}
+			if gotPool && gotCap != tc.wantCap {
+				t.Fatalf("cap=%d want %d", gotCap, tc.wantCap)
+			}
+		})
+	}
+}
+
+func TestAppendOnlyKeyArenaPoolStatsTrackRetainedChunks(t *testing.T) {
+	DropAppendOnlyKeyArenaPools()
+	t.Cleanup(DropAppendOnlyKeyArenaPools)
+
+	before := AppendOnlyKeyArenaPoolStatsSnapshot()
+	chunk := make([]byte, appendOnlyKeyArenaDefaultChunk)
+	wantBytes := appendOnlyKeyArenaPoolBytes(cap(chunk))
+
+	putAppendOnlyKeyArenaChunk(chunk)
+	afterPut := AppendOnlyKeyArenaPoolStatsSnapshot()
+	if got := afterPut.RetainedBytesEstimate; got != wantBytes {
+		t.Fatalf("retained bytes after put=%d want %d", got, wantBytes)
+	}
+	if got := afterPut.PutsTotal; got != before.PutsTotal+1 {
+		t.Fatalf("puts total=%d want %d", got, before.PutsTotal+1)
+	}
+
+	got, ok := getAppendOnlyKeyArenaChunkFromPool(1)
+	if !ok {
+		t.Fatal("expected pooled key arena chunk")
+	}
+	afterGet := AppendOnlyKeyArenaPoolStatsSnapshot()
+	if cap(got) != appendOnlyKeyArenaDefaultChunk {
+		t.Fatalf("pooled cap=%d want %d", cap(got), appendOnlyKeyArenaDefaultChunk)
+	}
+	if gotRetained := afterGet.RetainedBytesEstimate; gotRetained != 0 {
+		t.Fatalf("retained bytes after pooled get=%d want 0", gotRetained)
+	}
+	if gotGets := afterGet.GetsTotal; gotGets != before.GetsTotal+1 {
+		t.Fatalf("gets total=%d want %d", gotGets, before.GetsTotal+1)
+	}
+
+	putAppendOnlyKeyArenaChunk(got)
+	beforeDrop := AppendOnlyKeyArenaPoolStatsSnapshot()
+	DropAppendOnlyKeyArenaPools()
+	afterDrop := AppendOnlyKeyArenaPoolStatsSnapshot()
+	if gotRetained := afterDrop.RetainedBytesEstimate; gotRetained != 0 {
+		t.Fatalf("retained bytes after drop=%d want 0", gotRetained)
+	}
+	if gotDrops := afterDrop.DropsTotal; gotDrops != beforeDrop.DropsTotal+1 {
+		t.Fatalf("drops total=%d want %d", gotDrops, beforeDrop.DropsTotal+1)
+	}
+	if gotDropBytes := afterDrop.DropBytesTotal; gotDropBytes < beforeDrop.DropBytesTotal+beforeDrop.RetainedBytesEstimate {
+		t.Fatalf("drop bytes total=%d want at least %d", gotDropBytes, beforeDrop.DropBytesTotal+beforeDrop.RetainedBytesEstimate)
+	}
+}
+
+func TestAppendOnlyKeyArenaPoolRetainsBackingAcrossGC(t *testing.T) {
+	DropAppendOnlyKeyArenaPools()
+	t.Cleanup(DropAppendOnlyKeyArenaPools)
+
+	chunk := make([]byte, appendOnlyKeyArenaDefaultChunk)
+	wantBytes := appendOnlyKeyArenaPoolBytes(cap(chunk))
+	putAppendOnlyKeyArenaChunk(chunk)
+
+	runtime.GC()
+
+	afterGC := AppendOnlyKeyArenaPoolStatsSnapshot()
+	if got := afterGC.RetainedBytesEstimate; got != wantBytes {
+		t.Fatalf("retained bytes after GC=%d want %d", got, wantBytes)
+	}
+
+	reused, ok := getAppendOnlyKeyArenaChunkFromPool(1)
+	if !ok {
+		t.Fatal("expected retained key arena chunk after GC")
+	}
+	if cap(reused) != cap(chunk) {
+		t.Fatalf("reused cap after GC=%d want %d", cap(reused), cap(chunk))
+	}
+	if got := AppendOnlyKeyArenaPoolStatsSnapshot().RetainedBytesEstimate; got != 0 {
+		t.Fatalf("retained bytes after get=%d want 0", got)
+	}
+	putAppendOnlyKeyArenaChunk(reused)
+}
+
+func TestAppendOnlyKeyArenaReusesPooledChunkAfterHardReset(t *testing.T) {
+	DropAppendOnlyKeyArenaPools()
+	t.Cleanup(DropAppendOnlyKeyArenaPools)
+
+	m := NewAppendOnlyWithCapacity(0)
+	key := bytes.Repeat([]byte("k"), 32)
+	m.Set(key, nil)
+	if m.count != 1 || len(m.entries[0].key) == 0 {
+		t.Fatalf("test setup did not store a key-arena key")
+	}
+	firstPtr := uintptr(unsafe.Pointer(&m.entries[0].key[0]))
+
+	m.ResetWithCapacityHard(0, 0)
+	if got := AppendOnlyKeyArenaPoolStatsSnapshot().RetainedBytesEstimate; got == 0 {
+		t.Fatalf("retained key arena pool bytes=0 after hard reset")
+	}
+	beforeGet := AppendOnlyKeyArenaPoolStatsSnapshot().GetsTotal
+
+	key[0] = 'z'
+	m.Set(key, nil)
+	if m.count != 1 || len(m.entries[0].key) == 0 {
+		t.Fatalf("post-reset write did not store a key-arena key")
+	}
+	reusedPtr := uintptr(unsafe.Pointer(&m.entries[0].key[0]))
+	if reusedPtr != firstPtr {
+		t.Fatalf("post-reset key arena pointer=%#x want reused %#x", reusedPtr, firstPtr)
+	}
+	if got := AppendOnlyKeyArenaPoolStatsSnapshot().GetsTotal; got != beforeGet+1 {
+		t.Fatalf("key arena pool gets=%d want %d", got, beforeGet+1)
+	}
+}
+
+func TestAppendOnlyReleaseDropEntriesDropsKeyArenaWithoutPooling(t *testing.T) {
+	DropAppendOnlyKeyArenaPools()
+	t.Cleanup(DropAppendOnlyKeyArenaPools)
+
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set(bytes.Repeat([]byte("k"), 32), nil)
+	if len(m.keyArena.chunks) == 0 {
+		t.Fatal("test setup did not populate key arena")
+	}
+
+	m.ReleaseDropEntries()
+
+	if got := AppendOnlyKeyArenaPoolStatsSnapshot().RetainedBytesEstimate; got != 0 {
+		t.Fatalf("retained key arena pool bytes after cold release=%d want 0", got)
+	}
+	if len(m.keyArena.chunks) != 0 || m.keyArena.cur != nil || m.keyArena.curPos != 0 {
+		t.Fatalf("key arena not dropped after cold release: chunks=%d cur=%v pos=%d", len(m.keyArena.chunks), m.keyArena.cur != nil, m.keyArena.curPos)
+	}
+}
+
+func TestPutAppendOnlyKeyArenaChunkAdmissionDropsOnRetainBudgetPressure(t *testing.T) {
+	DropAppendOnlyKeyArenaPools()
+	t.Cleanup(DropAppendOnlyKeyArenaPools)
+
+	savedBudget := appendOnlyKeyArenaPoolRetainBudgetBytes
+	appendOnlyKeyArenaPoolRetainBudgetBytes = appendOnlyKeyArenaPoolBytes(appendOnlyKeyArenaDefaultChunk)
+	t.Cleanup(func() {
+		appendOnlyKeyArenaPoolRetainBudgetBytes = savedBudget
+	})
+
+	before := AppendOnlyKeyArenaPoolStatsSnapshot()
+	putAppendOnlyKeyArenaChunk(make([]byte, appendOnlyKeyArenaDefaultChunk))
+	putAppendOnlyKeyArenaChunk(make([]byte, appendOnlyKeyArenaDefaultChunk))
+
+	after := AppendOnlyKeyArenaPoolStatsSnapshot()
+	if got, want := after.RetainedBytesEstimate, appendOnlyKeyArenaPoolBytes(appendOnlyKeyArenaDefaultChunk); got != want {
+		t.Fatalf("retained bytes=%d want %d", got, want)
+	}
+	if got := after.PutsTotal - before.PutsTotal; got != 1 {
+		t.Fatalf("puts delta=%d want 1", got)
+	}
+	if got := after.AdmissionDropsTotal - before.AdmissionDropsTotal; got != 1 {
+		t.Fatalf("admission drops delta=%d want 1", got)
+	}
+}
+
 func TestAppendOnlyResetClearsValueArenaState(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	key := []byte("k")

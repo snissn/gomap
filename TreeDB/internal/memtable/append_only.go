@@ -34,7 +34,11 @@ const (
 	appendOnlyIteratorPoolMaxCap     = 1 << 20
 	appendOnlyIteratorPtrPoolMaxCap  = 1 << 20
 	appendOnlyReusableKeyMaxCap      = 1 << 10
-	appendOnlyKeyArenaDefaultChunk   = 2 << 10
+	appendOnlyKeyArenaMinShift       = 11
+	appendOnlyKeyArenaMaxShift       = 20
+	appendOnlyKeyArenaClassCount     = appendOnlyKeyArenaMaxShift - appendOnlyKeyArenaMinShift + 1
+	appendOnlyKeyArenaDefaultChunk   = 1 << appendOnlyKeyArenaMinShift
+	appendOnlyKeyArenaPoolMaxCap     = 1 << appendOnlyKeyArenaMaxShift
 	appendOnlyValueArenaMinShift     = 12
 	appendOnlyValueArenaMaxShift     = 20
 	appendOnlyValueArenaClassCount   = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
@@ -58,6 +62,7 @@ const (
 )
 
 var appendOnlyEntryPoolRetainBudgetBytes = uint64(256 << 20)
+var appendOnlyKeyArenaPoolRetainBudgetBytes = uint64(64 << 20)
 var appendOnlyValueArenaPoolRetainBudgetBytes = uint64(64 << 20)
 
 // Serializes package-pool replacement and retained entry backing accounting.
@@ -81,6 +86,16 @@ var appendOnlyEntryReserveGrowCallsTotal atomic.Uint64
 var appendOnlyEntryReserveGrowBytesTotal atomic.Uint64
 var appendOnlyEntryReserveSkippedGrowthAllocsTotal atomic.Uint64
 var appendOnlyEntryReserveSkippedGrowthBytesTotal atomic.Uint64
+var appendOnlyKeyArenaPoolMu sync.Mutex
+var appendOnlyKeyArenaPoolBins [appendOnlyKeyArenaClassCount][][]byte
+var appendOnlyKeyArenaPoolRetainedBytes atomic.Uint64
+var appendOnlyKeyArenaPoolRetainedBytesMax atomic.Uint64
+var appendOnlyKeyArenaPoolGetTotal atomic.Uint64
+var appendOnlyKeyArenaPoolPutTotal atomic.Uint64
+var appendOnlyKeyArenaPoolDropTotal atomic.Uint64
+var appendOnlyKeyArenaPoolDropBytesTotal atomic.Uint64
+var appendOnlyKeyArenaPoolAdmissionDropTotal atomic.Uint64
+var appendOnlyKeyArenaPoolAdmissionDropBytesTotal atomic.Uint64
 var appendOnlyValueArenaPoolPtrs [appendOnlyValueArenaClassCount]atomic.Pointer[sync.Pool]
 var appendOnlyValueArenaPoolRetainedBytes atomic.Uint64
 var appendOnlyValueArenaPoolRetainedBytesMax atomic.Uint64
@@ -187,6 +202,17 @@ type AppendOnlyValueArenaStats struct {
 	ActiveBytes    int64
 	RetainedChunks int64
 	RetainedBytes  int64
+}
+
+type AppendOnlyKeyArenaPoolStats struct {
+	RetainedBytesEstimate    uint64
+	RetainedBytesMaxEstimate uint64
+	GetsTotal                uint64
+	PutsTotal                uint64
+	DropsTotal               uint64
+	DropBytesTotal           uint64
+	AdmissionDropsTotal      uint64
+	AdmissionDropBytesTotal  uint64
 }
 
 type AppendOnlyValueArenaPoolStats struct {
@@ -405,6 +431,160 @@ func appendOnlyValueArenaPoolForClass(class int) *sync.Pool {
 		return pool
 	}
 	return appendOnlyValueArenaPoolPtrs[class].Load()
+}
+
+func appendOnlyKeyArenaPoolBytes(capacity int) uint64 {
+	if capacity <= 0 {
+		return 0
+	}
+	return uint64(capacity)
+}
+
+func appendOnlyKeyArenaClassForLen(length int) (idx int, classCap int, ok bool) {
+	if length <= 0 || length > appendOnlyKeyArenaPoolMaxCap {
+		return 0, 0, false
+	}
+	classCap = 1 << uint(bits.Len(uint(length-1)))
+	if classCap < appendOnlyKeyArenaDefaultChunk {
+		classCap = appendOnlyKeyArenaDefaultChunk
+	}
+	if classCap > appendOnlyKeyArenaPoolMaxCap {
+		return 0, 0, false
+	}
+	shift := bits.Len(uint(classCap)) - 1
+	idx = shift - appendOnlyKeyArenaMinShift
+	if idx < 0 || idx >= appendOnlyKeyArenaClassCount {
+		return 0, 0, false
+	}
+	return idx, classCap, true
+}
+
+func appendOnlyKeyArenaClassForCap(capacity int) (idx int, ok bool) {
+	if capacity < appendOnlyKeyArenaDefaultChunk || capacity > appendOnlyKeyArenaPoolMaxCap {
+		return 0, false
+	}
+	if capacity&(capacity-1) != 0 {
+		return 0, false
+	}
+	shift := bits.TrailingZeros(uint(capacity))
+	idx = shift - appendOnlyKeyArenaMinShift
+	if idx < 0 || idx >= appendOnlyKeyArenaClassCount {
+		return 0, false
+	}
+	return idx, true
+}
+
+func updateAppendOnlyKeyArenaPoolRetainedBytesMax(value uint64) {
+	for {
+		prev := appendOnlyKeyArenaPoolRetainedBytesMax.Load()
+		if value <= prev || appendOnlyKeyArenaPoolRetainedBytesMax.CompareAndSwap(prev, value) {
+			return
+		}
+	}
+}
+
+func getAppendOnlyKeyArenaChunkFromPool(length int) ([]byte, bool) {
+	idx, classCap, ok := appendOnlyKeyArenaClassForLen(length)
+	if !ok {
+		return nil, false
+	}
+	appendOnlyKeyArenaPoolMu.Lock()
+	bin := appendOnlyKeyArenaPoolBins[idx]
+	if len(bin) == 0 {
+		appendOnlyKeyArenaPoolMu.Unlock()
+		return nil, false
+	}
+	last := len(bin) - 1
+	chunk := bin[last]
+	bin[last] = nil
+	appendOnlyKeyArenaPoolBins[idx] = bin[:last]
+	bytes := appendOnlyKeyArenaPoolBytes(cap(chunk))
+	if bytes > 0 {
+		current := appendOnlyKeyArenaPoolRetainedBytes.Load()
+		if current > bytes {
+			appendOnlyKeyArenaPoolRetainedBytes.Store(current - bytes)
+		} else {
+			appendOnlyKeyArenaPoolRetainedBytes.Store(0)
+		}
+	}
+	appendOnlyKeyArenaPoolGetTotal.Add(1)
+	appendOnlyKeyArenaPoolMu.Unlock()
+	if cap(chunk) < classCap {
+		return nil, false
+	}
+	return chunk[:0], true
+}
+
+func recordAppendOnlyKeyArenaPoolAdmissionDrop(bytes uint64) {
+	appendOnlyKeyArenaPoolAdmissionDropTotal.Add(1)
+	if bytes > 0 {
+		appendOnlyKeyArenaPoolAdmissionDropBytesTotal.Add(bytes)
+	}
+}
+
+func putAppendOnlyKeyArenaChunk(chunk []byte) {
+	if chunk == nil {
+		return
+	}
+	bytes := appendOnlyKeyArenaPoolBytes(cap(chunk))
+	idx, ok := appendOnlyKeyArenaClassForCap(cap(chunk))
+	if !ok {
+		if bytes > 0 {
+			recordAppendOnlyKeyArenaPoolAdmissionDrop(bytes)
+		}
+		return
+	}
+	appendOnlyKeyArenaPoolMu.Lock()
+	budget := appendOnlyKeyArenaPoolRetainBudgetBytes
+	retained := appendOnlyKeyArenaPoolRetainedBytes.Load()
+	if budget == 0 || retained >= budget || bytes > budget-retained {
+		appendOnlyKeyArenaPoolMu.Unlock()
+		recordAppendOnlyKeyArenaPoolAdmissionDrop(bytes)
+		return
+	}
+	next := retained + bytes
+	appendOnlyKeyArenaPoolRetainedBytes.Store(next)
+	updateAppendOnlyKeyArenaPoolRetainedBytesMax(next)
+	appendOnlyKeyArenaPoolPutTotal.Add(1)
+	appendOnlyKeyArenaPoolBins[idx] = append(appendOnlyKeyArenaPoolBins[idx], chunk[:0])
+	appendOnlyKeyArenaPoolMu.Unlock()
+}
+
+func dropAppendOnlyKeyArenaPools() {
+	appendOnlyKeyArenaPoolMu.Lock()
+	for i := range appendOnlyKeyArenaPoolBins {
+		appendOnlyKeyArenaPoolBins[i] = nil
+	}
+	dropped := appendOnlyKeyArenaPoolRetainedBytes.Swap(0)
+	appendOnlyKeyArenaPoolMu.Unlock()
+	if dropped > 0 {
+		appendOnlyKeyArenaPoolDropBytesTotal.Add(dropped)
+	}
+	appendOnlyKeyArenaPoolDropTotal.Add(1)
+}
+
+// DropAppendOnlyKeyArenaPools abandons package-level append-only key-arena
+// chunks. It is intended for cold transitions away from append-only mutable
+// memtables and for tests that need deterministic pool state.
+func DropAppendOnlyKeyArenaPools() {
+	dropAppendOnlyKeyArenaPools()
+}
+
+func AppendOnlyKeyArenaPoolDropTotal() uint64 {
+	return appendOnlyKeyArenaPoolDropTotal.Load()
+}
+
+func AppendOnlyKeyArenaPoolStatsSnapshot() AppendOnlyKeyArenaPoolStats {
+	return AppendOnlyKeyArenaPoolStats{
+		RetainedBytesEstimate:    appendOnlyKeyArenaPoolRetainedBytes.Load(),
+		RetainedBytesMaxEstimate: appendOnlyKeyArenaPoolRetainedBytesMax.Load(),
+		GetsTotal:                appendOnlyKeyArenaPoolGetTotal.Load(),
+		PutsTotal:                appendOnlyKeyArenaPoolPutTotal.Load(),
+		DropsTotal:               appendOnlyKeyArenaPoolDropTotal.Load(),
+		DropBytesTotal:           appendOnlyKeyArenaPoolDropBytesTotal.Load(),
+		AdmissionDropsTotal:      appendOnlyKeyArenaPoolAdmissionDropTotal.Load(),
+		AdmissionDropBytesTotal:  appendOnlyKeyArenaPoolAdmissionDropBytesTotal.Load(),
+	}
 }
 
 func appendOnlyValueArenaPoolBytes(capacity int) uint64 {
@@ -947,9 +1127,13 @@ func (a *appendOnlyKeyArena) alloc(length int) []byte {
 		if length > chunkCap {
 			chunkCap = 1 << uint(bits.Len(uint(length-1)))
 		}
-		chunk := make([]byte, chunkCap)
-		a.chunks = append(a.chunks, chunk)
-		a.cur = chunk
+		chunk, ok := getAppendOnlyKeyArenaChunkFromPool(chunkCap)
+		if !ok {
+			chunk = make([]byte, chunkCap)
+		}
+		full := chunk[:cap(chunk)]
+		a.chunks = append(a.chunks, full)
+		a.cur = full
 		a.curPos = 0
 	}
 	out := a.cur[a.curPos : a.curPos+length : a.curPos+length]
@@ -959,9 +1143,19 @@ func (a *appendOnlyKeyArena) alloc(length int) []byte {
 
 func (a *appendOnlyKeyArena) reset() {
 	for i := range a.chunks {
+		putAppendOnlyKeyArenaChunk(a.chunks[i])
 		a.chunks[i] = nil
 	}
 	a.chunks = a.chunks[:0]
+	a.cur = nil
+	a.curPos = 0
+}
+
+func (a *appendOnlyKeyArena) drop() {
+	for i := range a.chunks {
+		a.chunks[i] = nil
+	}
+	a.chunks = nil
 	a.cur = nil
 	a.curPos = 0
 }
@@ -2392,7 +2586,11 @@ func (m *AppendOnly) release(poolEntries bool) {
 	m.runMergeBuf = nil
 	m.snapshot = nil
 	m.indexBuf = nil
-	m.keyArena.reset()
+	if poolEntries {
+		m.keyArena.reset()
+	} else {
+		m.keyArena.drop()
+	}
 	m.valueArena.reset()
 	m.valueArena.dropRetained()
 	m.count = 0
