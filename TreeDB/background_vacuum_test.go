@@ -131,7 +131,11 @@ func TestBackgroundIndexVacuumUsesReturnedOnlineAttemptSnapshot(t *testing.T) {
 	if stats.VacuumWorkCompleted != 1 || stats.Vacuums != 1 {
 		t.Fatalf("successful returned snapshot counters=%+v want one completed worker vacuum", stats)
 	}
-	if got := d.Stats()["treedb.bg_vacuum.last_online.phase"]; got != global.Phase {
+	publicStats := d.Stats()
+	if got := publicStats["treedb.bg_vacuum.last_online.phase"]; got != attemptA.Phase {
+		t.Fatalf("published attempt phase=%q want returned phase %q", got, attemptA.Phase)
+	}
+	if got := publicStats["treedb.bg_vacuum.online_phase"]; got != global.Phase {
 		t.Fatalf("published active phase=%q want backend phase %q", got, global.Phase)
 	}
 }
