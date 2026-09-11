@@ -167,6 +167,9 @@ func typedGraphFilterNavigationConstructionFits(count, dimensions int) bool {
 }
 
 func acquireTypedGraphFilterNavigationConstruction(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case typedGraphFilterNavigationConstruction <- struct{}{}:
 		return nil

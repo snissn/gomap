@@ -18,13 +18,16 @@ func TestTypedGraphFilterNavigationBoundsConstructionMatrix(t *testing.T) {
 }
 
 func TestTypedGraphFilterNavigationSerializesConstruction(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := acquireTypedGraphFilterNavigationConstruction(canceled); !errors.Is(err, context.Canceled) || len(typedGraphFilterNavigationConstruction) != 0 {
+		t.Fatalf("pre-canceled construction admission: err=%v slots=%d", err, len(typedGraphFilterNavigationConstruction))
+	}
 	if err := acquireTypedGraphFilterNavigationConstruction(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	defer releaseTypedGraphFilterNavigationConstruction()
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	if err := acquireTypedGraphFilterNavigationConstruction(ctx); !errors.Is(err, context.Canceled) {
+	if err := acquireTypedGraphFilterNavigationConstruction(canceled); !errors.Is(err, context.Canceled) {
 		t.Fatalf("contended construction cancellation: %v", err)
 	}
 }
