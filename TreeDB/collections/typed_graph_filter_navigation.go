@@ -1,10 +1,12 @@
 package collections
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
 	"reflect"
+	"slices"
 
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
@@ -60,6 +62,9 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 		}
 		rows[i] = columnVectorGraphAssetRow{ID: id, Vector: vector, InvNorm: invNorm, BaseRowRef: DocumentRowRef{RowIndex: ordinal}}
 	}
+	// Base packs are locality-remapped after construction. Restore the primary
+	// document-ID order used by rebuild before deriving another HNSW graph.
+	slices.SortFunc(rows, func(a, b columnVectorGraphAssetRow) int { return bytes.Compare(a.ID, b.ID) })
 	if err := buildColumnVectorGraphAdjacency(rows, overlay.base.reader.def); err != nil {
 		return nil, err
 	}
