@@ -1728,6 +1728,9 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		}
 		tombstoned[nodeID] = struct{}{}
 	}
+	if !vectorIndexNodeOrdinalsFitUint32(0, uint64(len(snapshot.Nodes))) {
+		return vectorIndexFallbackInvalidEdgeNode
+	}
 	nodes := make([]vectorIndexNode, len(snapshot.Nodes))
 	for i, node := range snapshot.Nodes {
 		if reason := validateVectorIndexPersistNode(node, snapshot.Meta); reason != "" {

@@ -21,6 +21,18 @@ func TestVectorIndexNeighborSlotSize4662(t *testing.T) {
 	}
 }
 
+func TestVectorIndexNodeOrdinalsFitUint324662(t *testing.T) {
+	if !vectorIndexNodeOrdinalsFitUint32(math.MaxUint32, 1) {
+		t.Fatal("maximum uint32 node ordinal was rejected")
+	}
+	if vectorIndexNodeOrdinalsFitUint32(math.MaxUint32+1, 1) {
+		t.Fatal("node ordinal above uint32 was accepted")
+	}
+	if vectorIndexNodeOrdinalsFitUint32(math.MaxUint32, 2) {
+		t.Fatal("batch crossing uint32 node ordinals was accepted")
+	}
+}
+
 func TestCollectionVectorIndexSearchReranksCanonicalRows(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

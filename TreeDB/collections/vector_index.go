@@ -900,6 +900,10 @@ type vectorIndexNeighbor struct {
 	distance float32
 }
 
+func vectorIndexNodeOrdinalsFitUint32(existing, additional uint64) bool {
+	return additional == 0 || (existing <= math.MaxUint32 && additional-1 <= math.MaxUint32-existing)
+}
+
 // BuildVectorIndex builds an in-memory vector secondary index from the current
 // live collection rows.
 func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, error) {
@@ -2380,6 +2384,9 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 			}
 		}
 	}
+	if !vectorIndexNodeOrdinalsFitUint32(uint64(len(idx.nodes)), 1) {
+		return errors.New("collections: vector index node ordinal exceeds uint32")
+	}
 	idx.prepareSearchViewForMutationLocked()
 	idx.tombstoneDocumentIDLocked(documentID)
 
@@ -2578,6 +2585,9 @@ func (idx *VectorIndex) bindFixedConstructionRowsLocked(rows []float32, rowCount
 func (idx *VectorIndex) validateVectorBatch(documentIDs [][]byte, vectors [][]float32) error {
 	if len(documentIDs) != len(vectors) {
 		return errors.New("collections: vector index batch ids/vectors length mismatch")
+	}
+	if !vectorIndexNodeOrdinalsFitUint32(uint64(len(idx.nodes)), uint64(len(documentIDs))) {
+		return errors.New("collections: vector index node ordinal exceeds uint32")
 	}
 	dimensions := idx.dimensions
 	for row := range documentIDs {
