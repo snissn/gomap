@@ -889,7 +889,7 @@ type vectorIndexNode struct {
 	quantized     []int8
 	quantScale    float32
 	normSquared   float64
-	cachedInvNorm float32
+	cachedInvNorm float64
 	level         int
 	neighbors     [][]vectorIndexNeighbor
 	deleted       bool
@@ -3583,7 +3583,7 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 			if rerankLimit > len(resultNodeIDStack) {
 				resultNodeIDs = make([]int, 0, rerankLimit)
 			}
-			results, resultNodeIDs, err = idx.rerankFloat32CosineCandidatesFromNodesLocked(query, queryNorm, prepared.invNorm, candidates, rerankLimit, resultNodeIDs, &trace)
+			results, resultNodeIDs, err = idx.rerankFloat32CosineCandidatesFromNodesLocked(query, prepared.invNorm, candidates, rerankLimit, resultNodeIDs, &trace)
 		} else {
 			candidateIDs = idx.currentCandidateDocumentIDsLocked(candidates)
 			trace.CandidatesAfterTombstone = len(candidateIDs)
@@ -3865,7 +3865,7 @@ func vectorDocumentIDSet(ids [][]byte) map[string]struct{} {
 	return out
 }
 
-func (idx *VectorIndex) rerankFloat32CosineCandidatesFromNodesLocked(query []float32, queryNormSquared float64, queryInvNorm float32, candidates []vectorIndexCandidate, topK int, rankedNodeIDs []int, trace *VectorIndexTrace) ([]VectorSearchResult, []int, error) {
+func (idx *VectorIndex) rerankFloat32CosineCandidatesFromNodesLocked(query []float32, queryInvNorm float64, candidates []vectorIndexCandidate, topK int, rankedNodeIDs []int, trace *VectorIndexTrace) ([]VectorSearchResult, []int, error) {
 	if len(candidates) == 0 {
 		return []VectorSearchResult{}, nil, nil
 	}
@@ -3896,8 +3896,7 @@ func (idx *VectorIndex) rerankFloat32CosineCandidatesFromNodesLocked(query []flo
 		if node.cachedInvNorm == 0 {
 			return nil, nil, errors.New("collections: cosine vector cannot have zero magnitude")
 		}
-		dot := dotProductFloat32ForCosine(query, node.vector, queryNormSquared, node.normSquared)
-		distance := float32(1 - dot*float64(queryInvNorm)*float64(node.cachedInvNorm))
+		distance := vectorops.CosineDistanceFloat32Normalized(query, node.vector, queryInvNorm, node.cachedInvNorm)
 		ranked, rankedNodeIDs = appendBoundedVectorIndexNodeResult(ranked, rankedNodeIDs, VectorSearchResult{
 			DocumentID: node.documentID,
 			Distance:   distance,
@@ -5023,9 +5022,24 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseWithFrozenPrefixScratchObse
 	if idx.metric == VectorMetricCosine && candidate.nodeID >= 0 && candidate.nodeID < len(idx.nodes) {
 		candidateNode := &idx.nodes[candidate.nodeID]
 		if len(candidateNode.vector) > 0 && candidateNode.cachedInvNorm != 0 {
+			// Squared normalized differences cannot be smaller than zero.
+			if candidate.distance <= 0 {
+				if context != nil {
+					context.recordEarlyExit(0, len(selected), true)
+				}
+				return true
+			}
 			if idx.frozenPrefixIndexedDotRowsReadyLocked(candidate.nodeID, candidateNode, selected, dotScratch, context) {
 				for i, existing := range selected {
-					distance := float32(1 - float64(dotScratch.dots[i])*float64(candidateNode.cachedInvNorm)*float64(idx.nodes[existing.nodeID].cachedInvNorm))
+					distance := float32(1 - float64(dotScratch.dots[i])*candidateNode.cachedInvNorm*idx.nodes[existing.nodeID].cachedInvNorm)
+					// A separated comparison can keep the indexed FP32 dot. Close
+					// decisions require the same stable distance as scalar construction.
+					if math.Abs(float64(distance)-float64(candidate.distance)) <= float64(idx.dimensions+2)*0x1p-21 || math.IsNaN(float64(distance)) || math.IsInf(float64(distance), 0) {
+						if context != nil {
+							context.recordRowFrom(candidate.nodeID, existing.nodeID, false)
+						}
+						distance = vectorDistanceBetweenFloat32NodesCosineUnchecked(candidateNode, &idx.nodes[existing.nodeID])
+					}
 					if distance < candidate.distance {
 						if context != nil {
 							context.recordEarlyExit(i+1, len(selected), false)
@@ -5085,6 +5099,13 @@ func (idx *VectorIndex) frozenPrefixIndexedDotRowsReadyLocked(candidateNodeID in
 	if candidateNodeID < 0 || candidateNodeID >= len(idx.nodes) || scratch == nil || !vectorops.DotFloat32IndexedOptimizedEligible(len(selected), idx.dimensions) || len(candidate.vector) != idx.dimensions || len(idx.vectorRows) != len(idx.nodes)*idx.dimensions {
 		return false
 	}
+	// The comparison margin below bounds FP32 product/accumulation error by
+	// 8*(dims+2)*2^-24. Decline shapes where that bound or gradual-underflow
+	// allowance is unavailable; scalar normalized differences remain valid.
+	if idx.dimensions >= 1<<21 {
+		return false
+	}
+	minNormProduct := float64(idx.dimensions) * 0x1p-126 / 0x1p-24
 	if cap(scratch.rowIDs) < len(selected) {
 		scratch.rowIDs = make([]uint32, len(selected))
 	} else {
@@ -5097,6 +5118,9 @@ func (idx *VectorIndex) frozenPrefixIndexedDotRowsReadyLocked(candidateNodeID in
 	}
 	for i, existing := range selected {
 		if existing.nodeID < 0 || uint64(existing.nodeID) > uint64(^uint32(0)) || existing.nodeID >= len(idx.nodes) || idx.nodes[existing.nodeID].cachedInvNorm == 0 || !safeFloat32DotProductForCosine(candidate.normSquared, idx.nodes[existing.nodeID].normSquared) {
+			return false
+		}
+		if candidate.normSquared*idx.nodes[existing.nodeID].normSquared < minNormProduct*minNormProduct {
 			return false
 		}
 		scratch.rowIDs[i] = uint32(existing.nodeID)
@@ -5324,9 +5348,8 @@ func vectorDistanceBetweenStoredNodes(left, right *vectorIndexNode, metric Vecto
 }
 
 type preparedFloat32CosineQuery struct {
-	vector      []float32
-	normSquared float64
-	invNorm     float32
+	vector  []float32
+	invNorm float64
 }
 
 func prepareFloat32CosineQuery(query []float32, queryNormSquared float64) (preparedFloat32CosineQuery, error) {
@@ -5338,9 +5361,8 @@ func prepareFloat32CosineQuery(query []float32, queryNormSquared float64) (prepa
 		return preparedFloat32CosineQuery{}, errors.New("collections: cosine vector cannot have zero magnitude")
 	}
 	return preparedFloat32CosineQuery{
-		vector:      query,
-		normSquared: leftNorm,
-		invNorm:     float32(1 / math.Sqrt(leftNorm)),
+		vector:  query,
+		invNorm: 1 / math.Sqrt(leftNorm),
 	}, nil
 }
 
@@ -5363,12 +5385,7 @@ func vectorDistanceToFloat32NodeCosinePrepared(query preparedFloat32CosineQuery,
 }
 
 func vectorDistanceToFloat32NodeCosineUnchecked(query preparedFloat32CosineQuery, node *vectorIndexNode) float32 {
-	n := len(query.vector)
-	if n != len(node.vector) {
-		panic(fmt.Sprintf("collections: vector dimensions differ: %d vs %d", n, len(node.vector)))
-	}
-	dot := dotProductFloat32ForCosine(query.vector, node.vector, query.normSquared, node.normSquared)
-	return float32(1 - dot*float64(query.invNorm)*float64(node.cachedInvNorm))
+	return vectorops.CosineDistanceFloat32Normalized(query.vector, node.vector, query.invNorm, node.cachedInvNorm)
 }
 
 func vectorDistanceBetweenFloat32NodesCosine(left, right *vectorIndexNode) (float32, error) {
@@ -5390,15 +5407,7 @@ func canUseUncheckedFloat32NodeCosine(left, right *vectorIndexNode, dimensions i
 }
 
 func vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right *vectorIndexNode) float32 {
-	dot := dotProductFloat32ForCosine(left.vector, right.vector, left.normSquared, right.normSquared)
-	return float32(1 - dot*float64(left.cachedInvNorm)*float64(right.cachedInvNorm))
-}
-
-func dotProductFloat32ForCosine(left, right []float32, leftNormSquared, rightNormSquared float64) float64 {
-	if safeFloat32DotProductForCosine(leftNormSquared, rightNormSquared) {
-		return float64(vectorDotProductFloat32(left, right))
-	}
-	return dotProductFloat32Wide(left, right)
+	return vectorops.CosineDistanceFloat32Normalized(left.vector, right.vector, left.cachedInvNorm, right.cachedInvNorm)
 }
 
 func safeFloat32DotProductForCosine(leftNormSquared, rightNormSquared float64) bool {
@@ -5441,7 +5450,7 @@ func (node *vectorIndexNode) cachedNormSquared() float64 {
 func (node *vectorIndexNode) cacheVectorNorms() {
 	node.normSquared = node.storedNormSquared()
 	if node.normSquared > 0 {
-		node.cachedInvNorm = float32(1 / math.Sqrt(node.normSquared))
+		node.cachedInvNorm = 1 / math.Sqrt(node.normSquared)
 	} else {
 		node.cachedInvNorm = 0
 	}

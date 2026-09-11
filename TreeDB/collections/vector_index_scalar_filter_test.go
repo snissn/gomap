@@ -918,7 +918,7 @@ func TestNativeScalarANNSeedsEligibleRegionBeyondGlobalFrontier(t *testing.T) {
 			documentID:    []byte(fmt.Sprintf("doc-%05d", row)),
 			vector:        vector,
 			normSquared:   normSquared,
-			cachedInvNorm: float32(1 / math.Sqrt(normSquared)),
+			cachedInvNorm: 1 / math.Sqrt(normSquared),
 			neighbors:     make([][]vectorIndexNeighbor, 1),
 		}
 		column.appendPrevalidated(tenant, true)
@@ -1122,7 +1122,7 @@ func TestNativeScalarANNReservesLayerZeroExpansion(t *testing.T) {
 		normSquared := float64(vector[0]*vector[0] + vector[1]*vector[1])
 		nodes[row] = vectorIndexNode{
 			documentID: []byte(fmt.Sprintf("doc-%02d", row)), vector: vector,
-			normSquared: normSquared, cachedInvNorm: float32(1 / math.Sqrt(normSquared)),
+			normSquared: normSquared, cachedInvNorm: 1 / math.Sqrt(normSquared),
 			neighbors: make([][]vectorIndexNeighbor, 2),
 		}
 		tenant := []byte("beta")

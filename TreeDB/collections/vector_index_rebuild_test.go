@@ -1261,6 +1261,35 @@ func TestColumnVectorGraphOfflineBuildCoalescesFrozenPrefixPruning4419And4421(t 
 	}
 }
 
+func BenchmarkColumnVectorGraphCosinePrecision(b *testing.B) {
+	const count = 4096
+	for _, dims := range []int{8, 64} {
+		b.Run(fmt.Sprintf("dims=%d", dims), func(b *testing.B) {
+			vectors := vectorIndexReciprocalParityRows4257(count, dims, false)
+			rows := make([]columnVectorGraphAssetRow, count)
+			for i := range rows {
+				if dims == 8 {
+					clear(vectors[i])
+					s := 0.9 - float64(10000+i)*0.000003
+					vectors[i][0], vectors[i][1] = float32(s), float32(math.Sqrt(1-s*s))
+				}
+				rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("row-%05d", i)), Vector: vectors[i]}
+			}
+			def := columnGraphRebuildVectorIndexDefinitionV2A(dims, 16)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				input := append([]columnVectorGraphAssetRow(nil), rows...)
+				if err := buildColumnVectorGraphAdjacency(input, def); err != nil {
+					b.Fatal(err)
+				}
+				runtime.KeepAlive(input)
+			}
+			b.ReportMetric(count, "rows/build")
+		})
+	}
+}
+
 func BenchmarkColumnVectorGraphOfflineFrozenPrefix4419(b *testing.B) {
 	const dimensions = 768
 	rowsCount := 10_000

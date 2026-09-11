@@ -700,7 +700,7 @@ func (r *vectorIndexNativeRootBackedGraphReader) readDistanceNode(nodeID int) (v
 			deleted:     vectorIndexNativeRootJSONBoolTrue(data, "deleted"),
 		}
 		if normSquared > 0 {
-			node.cachedInvNorm = float32(1 / math.Sqrt(normSquared))
+			node.cachedInvNorm = 1 / math.Sqrt(normSquared)
 		}
 		return node, true, nil
 	}
@@ -1081,7 +1081,7 @@ func parseVectorIndexTemplateV1RawDistanceNode(data []byte, dst []float32) (vect
 		deleted:     deleted,
 	}
 	if normSquared > 0 {
-		node.cachedInvNorm = float32(1 / math.Sqrt(normSquared))
+		node.cachedInvNorm = 1 / math.Sqrt(normSquared)
 	}
 	return node, true, nil
 }
