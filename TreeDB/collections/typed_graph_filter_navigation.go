@@ -21,7 +21,6 @@ type typedGraphFilterNavigation struct {
 	view          columnHNSWSearchPackPreparedView
 	baseOrdinals  []uint32
 	retainedBytes int
-	maxScoreCalls int
 }
 
 func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOverlaySearch, plan *typedGraphPreparedFilter, maxBytes int) (*typedGraphFilterNavigation, error) {
@@ -121,7 +120,6 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 	baseOrdinals := make([]uint32, count)
 	preparedLayers := make([]columnHNSWSearchPackPreparedLayer, len(layers))
 	retained := int(reflect.TypeFor[typedGraphFilterNavigation]().Size()) + cap(baseOrdinals)*4 + cap(levels)*2 + cap(preparedLayers)*int(reflect.TypeFor[columnHNSWSearchPackPreparedLayer]().Size())
-	maxScoreCalls := count + maxLayer
 	for i := range rows {
 		ordinal := rows[i].BaseRowRef.RowIndex
 		if ordinal < 0 || uint64(ordinal) > math.MaxUint32 {
@@ -132,9 +130,6 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 	for i := range layers {
 		preparedLayers[i] = columnHNSWSearchPackPreparedLayer{Offsets: layers[i].Offsets, Neighbors: layers[i].Neighbors}
 		retained += cap(layers[i].Offsets)*8 + cap(layers[i].Neighbors)*4
-		if i > 0 {
-			maxScoreCalls += len(layers[i].Neighbors)
-		}
 	}
 	if retained > maxBytes {
 		return nil, errTypedGraphFilterNavigationDeclined
@@ -148,7 +143,7 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 			},
 			Levels: levels, AdjacencyLayers: preparedLayers, status: columnHNSWSearchPackPreparedStatusHeap, ephemeralHeap: true,
 		},
-		baseOrdinals: baseOrdinals, retainedBytes: retained, maxScoreCalls: maxScoreCalls,
+		baseOrdinals: baseOrdinals, retainedBytes: retained,
 	}, nil
 }
 
@@ -156,6 +151,7 @@ type typedGraphFilterNavigationScorePlane struct {
 	ctx      context.Context
 	base     columnHNSWPreparedExactFP32ScorePlane
 	ordinals []uint32
+	limit    uint64
 }
 
 func (p *typedGraphFilterNavigationScorePlane) kind() columnHNSWPreparedTraversalScorePlaneKind {
@@ -173,6 +169,9 @@ func (p *typedGraphFilterNavigationScorePlane) scoreOrdinal(ordinal int, scratch
 	if err := p.ctx.Err(); err != nil {
 		return 0, err
 	}
+	if stats.PreparedScoreCalls >= p.limit {
+		return 0, errTypedGraphFilterNavigationDeclined
+	}
 	if ordinal < 0 || ordinal >= len(p.ordinals) {
 		return 0, ErrVectorIndexSnapshotMismatch
 	}
@@ -182,6 +181,9 @@ func (p *typedGraphFilterNavigationScorePlane) scoreOrdinal(ordinal int, scratch
 func (p *typedGraphFilterNavigationScorePlane) scoreOrdinals(ordinals []int, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
 	if err := p.ctx.Err(); err != nil {
 		return dst[:0], err
+	}
+	if stats.PreparedScoreCalls > p.limit || uint64(len(ordinals)) > p.limit-stats.PreparedScoreCalls {
+		return dst[:0], errTypedGraphFilterNavigationDeclined
 	}
 	rows := p.mapOrdinals(scratch, len(ordinals))
 	for i, ordinal := range ordinals {
@@ -196,6 +198,9 @@ func (p *typedGraphFilterNavigationScorePlane) scoreOrdinals(ordinals []int, dst
 func (p *typedGraphFilterNavigationScorePlane) scoreRowIDsPrevalidated(rowIDs []uint32, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
 	if err := p.ctx.Err(); err != nil {
 		return dst[:0], err
+	}
+	if stats.PreparedScoreCalls > p.limit || uint64(len(rowIDs)) > p.limit-stats.PreparedScoreCalls {
+		return dst[:0], errTypedGraphFilterNavigationDeclined
 	}
 	rows := p.mapOrdinals(scratch, len(rowIDs))
 	for i, rowID := range rowIDs {
@@ -215,13 +220,13 @@ func (p *typedGraphFilterNavigationScorePlane) mapOrdinals(scratch *columnVector
 }
 
 func (n *typedGraphFilterNavigation) search(ctx context.Context, query []float32, topK, efSearch, candidateLimit int, base *columnHNSWSearchPackPreparedView, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
-	if n == nil || base == nil || candidateLimit < n.maxScoreCalls {
+	if n == nil || base == nil || candidateLimit <= 0 {
 		return nil, columnVectorGraphNativeSearchStats{}, errTypedGraphFilterNavigationDeclined
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	plane := typedGraphFilterNavigationScorePlane{ctx: ctx, base: columnHNSWPreparedExactFP32ScorePlane{pack: base}, ordinals: n.baseOrdinals}
+	plane := typedGraphFilterNavigationScorePlane{ctx: ctx, base: columnHNSWPreparedExactFP32ScorePlane{pack: base}, ordinals: n.baseOrdinals, limit: uint64(candidateLimit)}
 	_, stats, err := n.view.searchCosinePreparedScorePlane(query, columnHNSWPreparedTraversalOptions{TopK: topK, EfSearch: efSearch, RetainedCandidateLimit: efSearch, ScoreBatchMode: columnVectorGraphScoreBatchModeDefault, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics, OmitResultMaterialization: true, SuppressOmittedResultMaterialization: true}, scratch, &plane)
 	if err != nil {
 		return nil, stats, err
