@@ -401,6 +401,26 @@ func TestTypedGraphFilterKeeperCutoffAndRebuild(t *testing.T) {
 	if err := col.Delete(ids[removed]); err != nil {
 		t.Fatal(err)
 	}
+	if old.navigation == nil {
+		t.Fatal("missing broad-filter navigation")
+	}
+	tightOwner, err := col.openTypedGraphReadOwner(owners)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := col.borrowTypedGraphFilterKeeper(tightOwner, "embedding_graph")
+	if p == nil {
+		t.Fatal("missing keeper")
+	}
+	tight := limits
+	tight.RetainedBytes = old.plan.retainedBytes + old.navigation.retainedBytes
+	var work ColumnGraphFilterWork
+	plan, err := prepareTypedGraphServingFilter(context.Background(), p, tightOwner.overlay, filter, tight, &work)
+	p.mu.RUnlock()
+	_ = tightOwner.Close()
+	if err != nil || plan.count != 4096 || plan.borrowedBaseFilter.navigation != nil {
+		t.Fatalf("suffix binding did not preempt optional navigation: work=%+v err=%v", work, err)
+	}
 	query(4096, false)
 	row := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[removed : removed+1]}, {Name: "content", Strings: columns[1].Strings[removed : removed+1]}, {Name: "user", Strings: columns[2].Strings[removed : removed+1]}, {Name: "path", Strings: columns[3].Strings[removed : removed+1]}}
 	if _, _, err := col.InsertTypedBatchWithStats(ids[removed:removed+1], retained[removed:removed+1], row); err != nil {

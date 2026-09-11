@@ -2645,7 +2645,9 @@ func (idx *VectorIndex) validateVectorBatchWithContext(ctx context.Context, docu
 			if math.IsNaN(f) || math.IsInf(f, 0) {
 				return fmt.Errorf("element %d is not finite", i)
 			}
-			norm += f * f
+			if idx.metric == VectorMetricCosine {
+				norm += f * f
+			}
 		}
 		if idx.metric == VectorMetricCosine && norm == 0 {
 			return errors.New("collections: cosine vector cannot have zero magnitude")

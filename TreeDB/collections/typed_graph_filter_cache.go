@@ -125,13 +125,6 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 	if err != nil {
 		return nil, err
 	}
-	navigation, navigationErr := buildTypedGraphFilterNavigation(ctx, overlay, candidate.plan, limits.RetainedBytes-candidate.plan.retainedBytes)
-	if navigationErr == nil {
-		candidate.navigation = navigation
-		work.RetainedBytes += uint64(navigation.retainedBytes)
-	} else if !errors.Is(navigationErr, errTypedGraphFilterNavigationDeclined) {
-		return nil, navigationErr
-	}
 	// Detached plans contain only owned immutable selections and predicates, never
 	// a request searcher, snapshot, catalog, suffix or current materializer.
 	candidate.holder = r.ref.holder
@@ -139,6 +132,13 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 	plan, err := bindTypedGraphServingFilter(ctx, candidate, overlay, limits, &work)
 	if err != nil {
 		return nil, err
+	}
+	navigation, navigationErr := buildTypedGraphFilterNavigation(ctx, overlay, candidate.plan, limits.RetainedBytes-int(work.RetainedBytes))
+	if navigationErr == nil {
+		candidate.navigation = navigation
+		work.RetainedBytes += uint64(navigation.retainedBytes)
+	} else if !errors.Is(navigationErr, errTypedGraphFilterNavigationDeclined) {
+		return nil, navigationErr
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
