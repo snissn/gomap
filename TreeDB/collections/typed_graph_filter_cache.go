@@ -155,18 +155,18 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 	}
 	a := r.accounting
 	a.Lock()
-	if n <= a.limits.StateBytes-a.stateBytes-a.baseDescriptorBytes-a.baseBackingBytes {
+	remaining := a.limits.StateBytes - a.stateBytes - a.baseDescriptorBytes - a.baseBackingBytes
+	if n > remaining && candidate.navigation != nil {
+		n -= int64(candidate.navigation.retainedBytes)
+		work.RetainedBytes -= uint64(candidate.navigation.retainedBytes)
+		candidate.navigation = nil
+	}
+	if n <= remaining {
 		a.baseBackingBytes += n
 		r.backingBytes += n
 		installed = true
 	}
 	a.Unlock()
-	if !installed {
-		if candidate.navigation != nil {
-			work.RetainedBytes -= uint64(candidate.navigation.retainedBytes)
-		}
-		candidate.navigation = nil
-	}
 	if installed {
 		r.filtersMu.Lock()
 		for i := range candidate.predicates {

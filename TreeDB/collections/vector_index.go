@@ -2482,7 +2482,7 @@ func (idx *VectorIndex) insertVectorBatchWithContextLocked(ctx context.Context, 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := idx.validateVectorBatch(documentIDs, vectors); err != nil {
+	if err := idx.validateVectorBatchWithContext(ctx, documentIDs, vectors); err != nil {
 		return err
 	}
 	if len(documentIDs) == 0 {
@@ -2604,6 +2604,16 @@ func (idx *VectorIndex) bindFixedConstructionRowsLocked(rows []float32, rowCount
 }
 
 func (idx *VectorIndex) validateVectorBatch(documentIDs [][]byte, vectors [][]float32) error {
+	return idx.validateVectorBatchWithContext(context.Background(), documentIDs, vectors)
+}
+
+func (idx *VectorIndex) validateVectorBatchWithContext(ctx context.Context, documentIDs [][]byte, vectors [][]float32) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(documentIDs) != len(vectors) {
 		return errors.New("collections: vector index batch ids/vectors length mismatch")
 	}
@@ -2612,6 +2622,9 @@ func (idx *VectorIndex) validateVectorBatch(documentIDs [][]byte, vectors [][]fl
 	}
 	dimensions := idx.dimensions
 	for row := range documentIDs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if len(documentIDs[row]) == 0 {
 			return errors.New("collections: document id cannot be empty")
 		}
@@ -2621,10 +2634,20 @@ func (idx *VectorIndex) validateVectorBatch(documentIDs [][]byte, vectors [][]fl
 		if len(vectors[row]) != dimensions {
 			return fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, documentIDs[row], len(vectors[row]), dimensions)
 		}
-		if err := validateFloat32Vector(vectors[row]); err != nil {
-			return err
+		var norm float64
+		for i, value := range vectors[row] {
+			if i&1023 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			f := float64(value)
+			if math.IsNaN(f) || math.IsInf(f, 0) {
+				return fmt.Errorf("element %d is not finite", i)
+			}
+			norm += f * f
 		}
-		if idx.metric == VectorMetricCosine && vectorNormSquared(vectors[row]) == 0 {
+		if idx.metric == VectorMetricCosine && norm == 0 {
 			return errors.New("collections: cosine vector cannot have zero magnitude")
 		}
 	}

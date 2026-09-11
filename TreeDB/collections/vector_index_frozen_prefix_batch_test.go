@@ -1,11 +1,29 @@
 package collections
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"runtime"
 	"testing"
 )
+
+func TestVectorIndexBatchValidationObservesCancellation(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2048, M: 4, EfConstruction: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vector := make([]float32, 2048)
+	vector[0] = 1
+	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 4}
+	if err := index.insertVectorBatchWithContextLocked(ctx, [][]byte{[]byte("a")}, [][]float32{vector}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("validation cancellation: %v", err)
+	}
+	if len(index.nodes) != 0 {
+		t.Fatal("canceled validation mutated graph")
+	}
+}
 
 func TestVectorIndexFrozenPrefixBatchIsDeterministicAndSearchable4297(t *testing.T) {
 	rows := vectorIndexReciprocalParityRows4257(192, 16, false)

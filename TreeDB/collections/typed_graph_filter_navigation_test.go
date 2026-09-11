@@ -9,6 +9,7 @@ import (
 )
 
 func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
+	requireTypedGraphPreparedHolderTest(t)
 	const n = 20000
 	col, base, ids, _, columns, ranks := openTypedGraphQualityFixture(t, n)
 	if err := base.Close(); err != nil {
@@ -36,6 +37,10 @@ func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 	filter := HybridScalarFilter{IndexName: "user", Range: &IndexRangeOptions{Lower: IndexRangeBound{Value: "00000", Inclusive: true}, Upper: IndexRangeBound{Value: "04096", Inclusive: true}}}
 	limits := typedGraphFilterLimits{SourceIDs: n + 32, SourceBytes: 4 << 20, RetainedBytes: 16 << 20, MappingWork: 4 << 20, InspectedEntries: 2 * n}
 	started := time.Now()
+	accounting := borrowed.capturedBase.accounting
+	accounting.Lock()
+	beforeBacking := accounting.baseBackingBytes
+	accounting.Unlock()
 	var work ColumnGraphFilterWork
 	plan, err := prepareTypedGraphServingFilter(t.Context(), borrowed, owner.overlay, filter, limits, &work)
 	if err != nil {
@@ -44,6 +49,32 @@ func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 	navigation := plan.borrowedBaseFilter.navigation
 	if navigation == nil || work.RetainedBytes < uint64(navigation.retainedBytes) {
 		t.Fatalf("missing or uncharged navigation: work=%+v", work)
+	}
+	accounting.Lock()
+	baseBytes := accounting.baseBackingBytes - beforeBacking - int64(navigation.retainedBytes)
+	remaining := accounting.limits.StateBytes - accounting.stateBytes - accounting.baseDescriptorBytes - accounting.baseBackingBytes
+	reserve := remaining - baseBytes
+	if baseBytes <= 0 || reserve <= 0 {
+		accounting.Unlock()
+		t.Fatalf("invalid admission fixture base=%d remaining=%d", baseBytes, remaining)
+	}
+	accounting.stateBytes += reserve
+	accounting.Unlock()
+	defer func() {
+		accounting.Lock()
+		accounting.stateBytes -= reserve
+		accounting.Unlock()
+	}()
+	withoutNavigation := HybridScalarFilter{IndexName: "user", Range: &IndexRangeOptions{Lower: IndexRangeBound{Value: "00001", Inclusive: true}, Upper: IndexRangeBound{Value: "04097", Inclusive: true}}}
+	var admitted ColumnGraphFilterWork
+	baseOnly, err := prepareTypedGraphServingFilter(t.Context(), borrowed, owner.overlay, withoutNavigation, limits, &admitted)
+	if err != nil || baseOnly.borrowedBaseFilter.navigation != nil {
+		t.Fatalf("base-only admission work=%+v err=%v", admitted, err)
+	}
+	var cached ColumnGraphFilterWork
+	baseOnly, err = prepareTypedGraphServingFilter(t.Context(), borrowed, owner.overlay, withoutNavigation, limits, &cached)
+	if err != nil || cached.SourceIDs != 0 || baseOnly.borrowedBaseFilter.navigation != nil {
+		t.Fatalf("base-only cache hit work=%+v err=%v", cached, err)
 	}
 	fresh, err := prepareTypedGraphFilter(owner.overlay, filter, limits)
 	if err != nil {
