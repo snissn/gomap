@@ -46,10 +46,6 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 	if !typedGraphFilterNavigationConstructionFits(count, overlay.base.reader.def.Dimensions) {
 		return nil, errTypedGraphFilterNavigationDeclined
 	}
-	if err := acquireTypedGraphFilterNavigationConstruction(ctx); err != nil {
-		return nil, err
-	}
-	defer releaseTypedGraphFilterNavigationConstruction()
 	levelIndex, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(overlay.base.reader.def))
 	if err != nil {
 		return nil, err
@@ -91,6 +87,10 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 	if !charge(layersCount, uint64(reflect.TypeFor[columnHNSWSearchPackPreparedLayer]().Size())) || !charge(layersCount*uint64(count+1), 8) {
 		return nil, errTypedGraphFilterNavigationDeclined
 	}
+	if err := acquireTypedGraphFilterNavigationConstruction(ctx); err != nil {
+		return nil, err
+	}
+	defer releaseTypedGraphFilterNavigationConstruction()
 	rows := make([]columnVectorGraphAssetRow, count)
 	for i := range rows {
 		if i&255 == 0 {

@@ -104,8 +104,13 @@ func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := buildTypedGraphFilterNavigation(t.Context(), owner.overlay, fresh, 1); got != nil || !errors.Is(err, errTypedGraphFilterNavigationDeclined) {
-		t.Fatalf("one-byte retained budget navigation=%v err=%v", got, err)
+	if err := acquireTypedGraphFilterNavigationConstruction(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	declinedNavigation, buildErr := buildTypedGraphFilterNavigation(t.Context(), owner.overlay, fresh, 1)
+	releaseTypedGraphFilterNavigationConstruction()
+	if declinedNavigation != nil || !errors.Is(buildErr, errTypedGraphFilterNavigationDeclined) {
+		t.Fatalf("one-byte retained budget navigation=%v err=%v", declinedNavigation, buildErr)
 	}
 	queryRow := slices.Index(ranks, 1000)
 	if queryRow < 0 {
