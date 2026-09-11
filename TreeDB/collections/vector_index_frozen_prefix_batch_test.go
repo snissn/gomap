@@ -25,6 +25,23 @@ func TestVectorIndexBatchValidationObservesCancellation(t *testing.T) {
 	}
 }
 
+func TestVectorIndexBatchDoesNotCancelAfterRowMutationStarts(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := index.insertVectorLocked([]byte("a"), []float32{1, 0}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 5}
+	if err := index.insertVectorBatchWithContextLocked(ctx, [][]byte{[]byte("a")}, [][]float32{{0, 1}}); err != nil {
+		t.Fatalf("atomic row insertion: %v", err)
+	}
+	if ctx.calls != 4 || len(index.nodes) != 2 || !index.nodes[0].deleted || index.nodes[1].deleted || index.currentNode["a"] != 1 {
+		t.Fatalf("calls=%d nodes=%d old_deleted=%v new_deleted=%v current=%d", ctx.calls, len(index.nodes), index.nodes[0].deleted, index.nodes[1].deleted, index.currentNode["a"])
+	}
+}
+
 func TestVectorIndexFrozenPrefixBatchIsDeterministicAndSearchable4297(t *testing.T) {
 	rows := vectorIndexReciprocalParityRows4257(192, 16, false)
 	want := buildVectorIndexFrozenPrefixBatch4297(t, rows)

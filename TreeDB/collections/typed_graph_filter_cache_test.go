@@ -417,7 +417,9 @@ func TestTypedGraphFilterKeeperCutoffAndRebuild(t *testing.T) {
 	var work ColumnGraphFilterWork
 	plan, err := prepareTypedGraphServingFilter(context.Background(), p, tightOwner.overlay, filter, tight, &work)
 	p.mu.RUnlock()
-	_ = tightOwner.Close()
+	if closeErr := tightOwner.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
 	if err != nil || plan.count != 4096 || plan.borrowedBaseFilter.navigation != nil {
 		t.Fatalf("suffix binding did not preempt optional navigation: work=%+v err=%v", work, err)
 	}

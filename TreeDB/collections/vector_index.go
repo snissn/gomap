@@ -2409,16 +2409,10 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	}
 	entryPoint := idx.entry
 	for layer := idx.maxLevel; layer > level; layer-- {
-		if err := idx.insertScratch.finalContextErr(); err != nil {
-			return err
-		}
 		entryPoint = idx.greedyNearestAtLayerLocked(vector, vectorNorm, prepared, entryPoint, layer)
 	}
 	for layer := minInt(level, idx.maxLevel); layer >= 0; layer-- {
 		candidates := idx.searchLayerWithScratchLocked(vector, vectorNorm, prepared, entryPoint, idx.efConstruction, layer, &idx.insertScratch)
-		if err := idx.insertScratch.finalContextErr(); err != nil {
-			return err
-		}
 		selectionLimit := idx.maxNeighborsForLayer(layer)
 		if layer == 0 && idx.layer0ConstructionPolicy != nil {
 			selectionLimit = idx.m * idx.layer0ConstructionPolicy.initialSelectionFactor
@@ -2488,8 +2482,6 @@ func (idx *VectorIndex) insertVectorBatchWithContextLocked(ctx context.Context, 
 	if len(documentIDs) == 0 {
 		return nil
 	}
-	idx.insertScratch.setContext(ctx)
-	defer idx.insertScratch.clearContext()
 	idx.prepareSearchViewForMutationLocked()
 	if len(documentIDs) < nativeVectorFrozenPrefixBatchMinimum {
 		for row := range documentIDs {
