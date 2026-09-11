@@ -42,6 +42,35 @@ func TestVectorIndexBatchDoesNotCancelAfterRowMutationStarts(t *testing.T) {
 	}
 }
 
+func TestVectorIndexSerialFallbackChecksCancellationBetweenRows(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 16, EfConstruction: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index.setNativePersistent(true)
+	if err := index.insertVectorLocked([]byte("existing"), []float32{1, 0}); err != nil {
+		t.Fatal(err)
+	}
+	ids := make([][]byte, nativeVectorFrozenPrefixBatchMinimum)
+	vectors := make([][]float32, len(ids))
+	for row := range ids {
+		ids[row] = []byte(fmt.Sprintf("new-%d", row))
+		vectors[row] = []float32{1, 0}
+	}
+	ids[0] = []byte("existing")
+	vectors[0] = []float32{0, 1}
+	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 68}
+	if err := index.insertVectorBatchWithContextLocked(ctx, ids, vectors); !errors.Is(err, context.Canceled) {
+		t.Fatalf("serial fallback cancellation: %v", err)
+	}
+	if len(index.nodes) != 2 || index.currentNode["existing"] != 1 {
+		t.Fatalf("calls=%d nodes=%d current=%d", ctx.calls, len(index.nodes), index.currentNode["existing"])
+	}
+	if _, ok := index.currentNode["new-1"]; ok {
+		t.Fatal("serial fallback inserted a row after cancellation")
+	}
+}
+
 func TestVectorIndexFrozenPrefixBatchIsDeterministicAndSearchable4297(t *testing.T) {
 	rows := vectorIndexReciprocalParityRows4257(192, 16, false)
 	want := buildVectorIndexFrozenPrefixBatch4297(t, rows)

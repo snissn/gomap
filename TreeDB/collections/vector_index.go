@@ -2513,6 +2513,9 @@ func (idx *VectorIndex) insertVectorBatchWithContextLocked(ctx context.Context, 
 		end := minInt(start+batchWidth, len(documentIDs))
 		if !idx.canPlanFrozenPrefixBatchLocked(documentIDs[start:end]) {
 			for row := start; row < end; row++ {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				if err := idx.insertVectorLocked(documentIDs[row], vectors[row]); err != nil {
 					return err
 				}
