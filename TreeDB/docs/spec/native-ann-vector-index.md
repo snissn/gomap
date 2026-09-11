@@ -338,7 +338,7 @@ type vectorIndexNode struct {
     vector []float32 // or quantized []int8 when Encoding is int8
     quantized []int8
     normSquared float64
-    cachedInvNorm float32
+    cachedInvNorm float64
     level int
     neighbors [][]vectorIndexNeighbor
     deleted bool
@@ -349,6 +349,10 @@ type vectorIndexNeighbor struct {
     distance float32
 }
 ```
+
+For float32 cosine scoring, derive `cachedInvNorm` in FP64 from `normSquared`
+and retain that precision in the runtime cache. Rounding the inverse norm
+through FP32 can erase the angular ordering of nearby vectors.
 
 The runtime graph MAY use narrower types than Go `int` internally after the
 format stabilizes. For example, `uint32` node IDs are sufficient until a single
