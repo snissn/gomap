@@ -132,23 +132,33 @@ func validateMinimaPeakRSSLifetimes(raw minimaRawBackendEvidence) error {
 }
 
 func validateMinimaCompletedBounded(artifact *minimaArtifact, raw minimaRawBackendEvidence) error {
-	if artifact.NativePathProof == nil || artifact.NativePathProof.Strategy != "native_runtime" || artifact.Backends[0].Configuration["vector_strategy"] != "native_runtime" {
-		return fmt.Errorf("minima bounded diagnostic: completed strategy must be native_runtime until M4")
+	backend := artifact.Backends[0]
+	switch backend.Name {
+	case "treedb":
+		if artifact.NativePathProof == nil || artifact.NativePathProof.Strategy != "native_runtime" || backend.Configuration["vector_strategy"] != "native_runtime" {
+			return fmt.Errorf("minima bounded diagnostic: completed strategy must be native_runtime until M4")
+		}
+		if raw.ResourceMeasurement.PeakRSSAvailability == "" {
+			return fmt.Errorf("minima bounded diagnostic: missing peak RSS availability")
+		}
+	case "qdrant":
+		if artifact.NativePathProof != nil {
+			return fmt.Errorf("minima bounded diagnostic: Qdrant cannot carry native path proof")
+		}
+	default:
+		return fmt.Errorf("minima bounded diagnostic: unknown backend %q", backend.Name)
 	}
-	if raw.ResourceMeasurement.PeakRSSAvailability == "" {
-		return fmt.Errorf("minima bounded diagnostic: missing peak RSS availability")
-	}
-	if err := validateMinimaBackendLifecycle(artifact.Backends[0], &artifact.Manifest); err != nil {
+	if err := validateMinimaBackendLifecycle(backend, &artifact.Manifest); err != nil {
 		return err
 	}
 	specs, queries := minimaScenarioMap(&artifact.Manifest), minimaQueryMap(&artifact.Manifest)
-	if len(artifact.Scenarios) != len(specs) || len(raw.NativeRouteResponses) != len(specs) {
+	if len(artifact.Scenarios) != len(specs) || (backend.Name == "treedb" && len(raw.NativeRouteResponses) != len(specs)) {
 		return fmt.Errorf("minima bounded diagnostic: missing scenario route evidence")
 	}
 	seen := make(map[string]bool, len(specs))
 	for _, row := range artifact.Scenarios {
 		spec, ok := specs[row.Scenario]
-		if !ok || seen[row.Scenario] || row.Backend != "treedb" {
+		if !ok || seen[row.Scenario] || row.Backend != backend.Name {
 			return fmt.Errorf("minima bounded diagnostic: duplicate or unknown scenario")
 		}
 		seen[row.Scenario] = true
@@ -156,5 +166,5 @@ func validateMinimaCompletedBounded(artifact *minimaArtifact, raw minimaRawBacke
 			return fmt.Errorf("minima bounded diagnostic: %s: %w", row.Scenario, err)
 		}
 	}
-	return validateMinimaRawEvidence(artifact, map[string]minimaBackendEvidence{"treedb": artifact.Backends[0]})
+	return validateMinimaRawEvidence(artifact, map[string]minimaBackendEvidence{backend.Name: backend})
 }

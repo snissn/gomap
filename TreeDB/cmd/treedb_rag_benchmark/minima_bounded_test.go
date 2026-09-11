@@ -103,7 +103,7 @@ func TestMinimaLookupBoundaryUsesAggregateEligibleCardinality(t *testing.T) {
 
 func TestMinimaCompletedBoundedRejectsFalseStrategyAndMissingPeak(t *testing.T) {
 	m, _ := buildMinimaBoundedManifest(50000)
-	a := minimaArtifact{Manifest: m, NativePathProof: &minimaNativePathProof{Strategy: "column_graph"}, Backends: []minimaBackendEvidence{{Configuration: map[string]string{"vector_strategy": "native_runtime"}}}}
+	a := minimaArtifact{Manifest: m, NativePathProof: &minimaNativePathProof{Strategy: "column_graph"}, Backends: []minimaBackendEvidence{{Name: "treedb", Configuration: map[string]string{"vector_strategy": "native_runtime"}}}}
 	if err := validateMinimaCompletedBounded(&a, minimaRawBackendEvidence{}); err == nil || !strings.Contains(err.Error(), "strategy") {
 		t.Fatalf("false strategy: %v", err)
 	}
@@ -180,6 +180,57 @@ func TestMinimaCompletedBoundedValidatesLifecycle(t *testing.T) {
 				t.Fatal("accepted incomplete completed bounded lifecycle")
 			}
 		})
+	}
+}
+
+func TestMinimaCompletedBoundedQdrantValidatesAndRoundTrips(t *testing.T) {
+	m, _ := buildMinimaBoundedManifest(50000)
+	base := validMinimaArtifactForManifest(m)
+	base.Schema, base.State, base.Passing, base.Recommendation = minimaBoundedArtifactSchema, "partial", false, "not_evaluated"
+	base.Backends = base.Backends[1:]
+	base.Scenarios = base.Scenarios[len(m.Corpora):]
+	delete(base.RawEvidence, "treedb")
+	if err := validateMinimaArtifact(&base); err != nil {
+		t.Fatalf("valid completed bounded Qdrant diagnostic: %v", err)
+	}
+	data, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "qdrant.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readMinimaBackendEvidence(path, "qdrant"); err != nil {
+		t.Fatalf("read completed bounded Qdrant diagnostic: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*minimaArtifact)
+	}{
+		{"approximate_route", func(a *minimaArtifact) { a.Scenarios[0].Route.Identity = "qdrant_filtered_hnsw" }},
+		{"missing_exact_option", func(a *minimaArtifact) { delete(a.Backends[0].Configuration, "query_search_params") }},
+		{"native_path_proof", func(a *minimaArtifact) {
+			a.NativePathProof = &minimaNativePathProof{Schema: minimaNativeProofSchema, Strategy: "native_runtime", Availability: "unavailable", Reason: "invalid"}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := cloneMinimaArtifact(t, base)
+			tc.mutate(&a)
+			if err := validateMinimaArtifact(&a); err == nil {
+				t.Fatal("accepted doctored bounded Qdrant diagnostic")
+			}
+		})
+	}
+
+	incomplete := cloneMinimaArtifact(t, base)
+	incomplete.Backends, incomplete.Scenarios = nil, nil
+	incomplete.Failures = []string{"Qdrant execution failed"}
+	raw := incomplete.RawEvidence["qdrant"]
+	raw.FinalScrollState = minimaRawFinalState{}
+	incomplete.RawEvidence["qdrant"] = raw
+	if err := validateMinimaArtifact(&incomplete); err != nil {
+		t.Fatalf("explicitly incomplete bounded Qdrant diagnostic: %v", err)
 	}
 }
 
