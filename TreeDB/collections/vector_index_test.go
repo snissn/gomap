@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/vectorops"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
@@ -63,6 +64,76 @@ func TestCollectionVectorIndexSearchReranksCanonicalRows(t *testing.T) {
 	stats := index.Stats()
 	if stats.LiveDocs != 4 || stats.DeletedDocs != 0 || stats.Dimensions != 2 || stats.AvgDegree == 0 {
 		t.Fatalf("unexpected stats: %+v", stats)
+	}
+}
+
+func TestCollectionVectorIndexCloseCosineRerankIsStableWithFilterAndLiveDelta(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfSearch: 8}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	query := []float32{-0.2935306131839752, -0.0021982011385262012}
+	closer := []byte(`{"embedding":[-0.2935306131839752,-0.0021982009056955576]}`)
+	farther := []byte(`{"embedding":[-0.29353055357933044,-0.0021982011385262012]}`)
+	if _, err := col.InsertBatch([][]byte{[]byte("closer"), []byte("farther")}, [][]byte{closer, farther}); err != nil {
+		t.Fatalf("insert base: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("rebuild vector index: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("registered vector index is nil")
+	}
+
+	unfiltered, _, err := index.Search(query, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("unfiltered search: %v", err)
+	}
+	filtered, _, err := index.Search(query, VectorIndexSearchOptions{
+		TopK:                 2,
+		DisableExactFallback: true,
+		Filter:               func(DocumentRecord) (bool, error) { return true, nil },
+	})
+	if err != nil {
+		t.Fatalf("filtered search: %v", err)
+	}
+	requireVectorResultIDs(t, unfiltered, "closer", "farther")
+	requireVectorResultIDs(t, filtered, "closer", "farther")
+	for i := range unfiltered {
+		if filtered[i].Distance != unfiltered[i].Distance {
+			t.Fatalf("filtered result %d distance=%g want unfiltered %g", i, filtered[i].Distance, unfiltered[i].Distance)
+		}
+	}
+
+	exact := []byte(`{"embedding":[-0.2935306131839752,-0.0021982011385262012]}`)
+	if _, err := col.InsertBatch([][]byte{[]byte("exact")}, [][]byte{exact}); err != nil {
+		t.Fatalf("insert live delta: %v", err)
+	}
+	index.mu.RLock()
+	hasLiveDelta := index.liveDelta != nil
+	index.mu.RUnlock()
+	if !hasLiveDelta {
+		t.Fatal("expected live delta")
+	}
+	live, _, err := index.Search(query, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("live-delta search: %v", err)
+	}
+	requireVectorResultIDs(t, live, "exact", "closer", "farther")
+	if live[0].Distance != 0 || live[1].Distance <= 0 || live[2].Distance <= live[1].Distance {
+		t.Fatalf("live-delta distances=%g,%g,%g want zero then increasing", live[0].Distance, live[1].Distance, live[2].Distance)
 	}
 }
 
@@ -925,6 +996,184 @@ func TestVectorIndexRobustPruneCosineThresholdUsesEuclideanAlphaV1(t *testing.T)
 	}
 }
 
+func TestVectorIndexCosineCloseVectorsRetainDistanceAndDiversity(t *testing.T) {
+	for _, dims := range []int{8, 64} {
+		for _, scale := range []float32{1, 1e20, 1e-20} {
+			t.Run(fmt.Sprintf("dims=%d/scale=%g", dims, scale), func(t *testing.T) {
+				index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: dims})
+				if err != nil {
+					t.Fatal(err)
+				}
+				index.nodes = make([]vectorIndexNode, 9)
+				index.vectorRows = make([]float32, len(index.nodes)*dims)
+				for i := range index.nodes {
+					// The Minima ordinal-v3 values are rounded to FP32 before indexing.
+					s := 0.9 - float64(10000+i)*0.000003
+					v := index.vectorRows[i*dims : (i+1)*dims]
+					v[0], v[1] = float32(s)*scale, float32(math.Sqrt(1-s*s))*scale
+					id := fmt.Sprintf("row-%d", i)
+					index.nodes[i] = vectorIndexNode{documentID: []byte(id), vector: v}
+					index.nodes[i].cacheVectorNorms()
+					index.currentNode[id] = i
+				}
+				left := &index.nodes[0]
+				prepared, err := prepareFloat32CosineQuery(left.vector, left.normSquared)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// An independent two-dimensional angular reference avoids 1-cos cancellation.
+				reference := func(right *vectorIndexNode) float32 {
+					angle := math.Atan2(float64(left.vector[1]), float64(left.vector[0])) - math.Atan2(float64(right.vector[1]), float64(right.vector[0]))
+					sine := math.Sin(angle / 2)
+					return float32(2 * sine * sine)
+				}
+				var previous float32
+				for i := 1; i < len(index.nodes); i++ {
+					right := &index.nodes[i]
+					want := reference(right)
+					forward := vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right)
+					backward := vectorDistanceBetweenFloat32NodesCosineUnchecked(right, left)
+					query := vectorDistanceToFloat32NodeCosineUnchecked(prepared, right)
+					for name, got := range map[string]float32{"node": forward, "reversed": backward, "query": query} {
+						if math.IsNaN(float64(got)) || math.Abs(float64(got-want)) > float64(want)*1e-5 {
+							t.Errorf("row %d %s distance=%g want %g", i, name, got, want)
+						}
+					}
+					if forward <= previous || forward != backward {
+						t.Errorf("row %d distances must increase and be symmetric: previous=%g forward=%g backward=%g", i, previous, forward, backward)
+					}
+					previous = forward
+				}
+				selected := []vectorIndexCandidate{{nodeID: 1}, {nodeID: 8}}
+				for _, multiplier := range []float32{0.5, 2} {
+					candidate := vectorIndexCandidate{nodeID: 0, distance: reference(&index.nodes[1]) * multiplier}
+					want := multiplier < 1
+					var scratch vectorIndexFrozenPrefixDiversityScratch
+					plain := index.vectorIndexCandidateIsDiverseLocked(candidate, selected)
+					batched := index.vectorIndexCandidateIsDiverseWithFrozenPrefixScratchLocked(candidate, selected, &scratch)
+					if plain != want || batched != want {
+						t.Errorf("diversity multiplier=%g plain=%t batched=%t want=%t", multiplier, plain, batched, want)
+					}
+					if scale == 1 && want && vectorops.DotFloat32IndexedOptimizedEligible(len(selected), dims) && scratch.indexedBatches != 1 {
+						t.Error("eligible diversity check did not exercise the indexed branch")
+					}
+				}
+				candidates := make([]vectorIndexCandidate, len(index.nodes))
+				for i := range candidates {
+					candidates[i].nodeID = len(candidates) - 1 - i
+				}
+				ranked, _, err := index.rerankFloat32CosineCandidatesFromNodesLocked(left.vector, prepared.invNorm, candidates, len(candidates), nil, nil)
+				if err != nil || len(ranked) != len(candidates) {
+					t.Fatalf("rerank len=%d err=%v", len(ranked), err)
+				}
+				for i, row := range ranked {
+					if string(row.DocumentID) != fmt.Sprintf("row-%d", i) || math.Abs(float64(row.Distance-reference(&index.nodes[i]))) > float64(reference(&index.nodes[i]))*1e-5 {
+						t.Errorf("rerank row %d=%+v", i, row)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestVectorIndexCosineIndexedDiversityMatchesStable(t *testing.T) {
+	for _, dims := range []int{32, 33, 63, 64, 65, 71, 127, 128} {
+		for _, scale := range []float32{1, 1e-15, 1e-20, 1e20, math.Nextafter32(float32(math.Sqrt(float64(math.MaxFloat32)/float64(dims))), 0)} {
+			for _, shape := range []string{"mixed", "close", "cancellation"} {
+				t.Run(fmt.Sprintf("dims=%d/scale=%g/%s", dims, scale, shape), func(t *testing.T) {
+					index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: dims})
+					if err != nil {
+						t.Fatal(err)
+					}
+					index.nodes = make([]vectorIndexNode, 3)
+					index.vectorRows = make([]float32, 3*dims)
+					for n := range index.nodes {
+						v := index.vectorRows[n*dims : (n+1)*dims]
+						for i := range v {
+							value := float32(math.Sin(float64(i+1) * 0.17))
+							if n > 0 {
+								switch shape {
+								case "mixed":
+									value = float32(math.Cos(float64(i+1) * 0.53))
+								case "close":
+									value = math.Nextafter32(value, float32(math.Inf(1)))
+								case "cancellation":
+									value = 1
+								}
+							} else if shape == "cancellation" {
+								value = 1
+								if i%2 == 0 {
+									value = -1
+								}
+							}
+							v[i] = value * scale
+						}
+						index.nodes[n] = vectorIndexNode{vector: v}
+						index.nodes[n].cacheVectorNorms()
+					}
+					selected := []vectorIndexCandidate{{nodeID: 1}, {nodeID: 2}}
+					stable := vectorDistanceBetweenFloat32NodesCosineUnchecked(&index.nodes[0], &index.nodes[1])
+					margin := float64(dims+2) * 0x1p-21
+					var scratch vectorIndexFrozenPrefixDiversityScratch
+					ready := index.frozenPrefixIndexedDotRowsReadyLocked(0, &index.nodes[0], selected, &scratch, nil)
+					if (scale == 1e-20 || scale == 1e20) && ready {
+						t.Fatal("unsafe norm product used indexed dot")
+					}
+					if scale == 1 && vectorops.DotFloat32IndexedOptimizedEligible(2, dims) && !ready {
+						t.Fatal("eligible indexed dot declined")
+					}
+					var approximate float32
+					if ready {
+						approximate = float32(1 - float64(scratch.dots[0])*index.nodes[0].cachedInvNorm*index.nodes[1].cachedInvNorm)
+						if !math.IsInf(float64(approximate), 0) && math.Abs(float64(approximate)-float64(stable)) > margin {
+							t.Fatalf("indexed error outside bound: approximate=%g stable=%g margin=%g", approximate, stable, margin)
+						}
+					}
+					thresholds := []float32{0, math.Nextafter32(stable, float32(math.Inf(-1))), stable, math.Nextafter32(stable, float32(math.Inf(1))), stable - float32(2*margin), stable + float32(2*margin)}
+					if ready {
+						boundary := approximate + float32(margin)
+						thresholds = append(thresholds, math.Nextafter32(boundary, float32(math.Inf(-1))), boundary, math.Nextafter32(boundary, float32(math.Inf(1))))
+					}
+					for _, threshold := range thresholds {
+						observer := &vectorIndexConstructionDecisionObserverV1{}
+						context := &vectorIndexConstructionDecisionContextV1{observer: observer, phase: vectorIndexConstructionDecisionPlanning, source: 0, dimensions: dims}
+						candidate := vectorIndexCandidate{nodeID: 0, distance: threshold}
+						got := index.vectorIndexCandidateIsDiverseWithFrozenPrefixScratchObservedLocked(candidate, selected, &scratch, context)
+						if got != (stable >= threshold) {
+							t.Fatalf("threshold=%g got=%t stable=%g", threshold, got, stable)
+						}
+						stats := observer.snapshot().Planning
+						if threshold <= 0 {
+							if stats.DirectExactFP32Rows != 0 || stats.IndexedExactFP32Rows != 0 || stats.DiversityComparisonsExecuted != 0 {
+								t.Fatalf("nonpositive threshold executed distance work: %+v", stats)
+							}
+							continue
+						}
+						comparisons := uint64(2)
+						if stable < threshold {
+							comparisons = 1
+						}
+						expectedDirect := comparisons
+						if ready {
+							if stats.IndexedExactFP32Rows != 2 {
+								t.Fatalf("indexed rows=%d", stats.IndexedExactFP32Rows)
+							}
+							if !math.IsInf(float64(approximate), 0) && math.Abs(float64(approximate)-float64(threshold)) > margin {
+								expectedDirect = 0
+							}
+						} else if stats.IndexedExactFP32Rows != 0 {
+							t.Fatal("declined indexed work was counted")
+						}
+						if stats.DirectExactFP32Rows != expectedDirect {
+							t.Fatalf("threshold=%g direct rows=%d want=%d", threshold, stats.DirectExactFP32Rows, expectedDirect)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestVectorIndexFloat32CosineCandidateDistanceFastPathMatchesExact(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",
@@ -1183,7 +1432,7 @@ func TestVectorIndexInsertCachesStoredNorm(t *testing.T) {
 	if got, want := index.nodes[0].normSquared, float64(25); got != want {
 		t.Fatalf("node cached norm=%v want %v", got, want)
 	}
-	if got, want := index.nodes[0].cachedInvNorm, float32(0.2); got != want {
+	if got, want := index.nodes[0].cachedInvNorm, float64(0.2); got != want {
 		t.Fatalf("node cached inverse norm=%v want %v", got, want)
 	}
 }
@@ -1308,7 +1557,7 @@ func TestPrepareFloat32CosineQueryCachesInverseNorm(t *testing.T) {
 	if &prepared.vector[0] != &query[0] {
 		t.Fatal("prepared query copied vector")
 	}
-	if got, want := prepared.invNorm, float32(0.2); got != want {
+	if got, want := prepared.invNorm, float64(0.2); got != want {
 		t.Fatalf("prepared inverse norm=%v want %v", got, want)
 	}
 	if _, err := prepareFloat32CosineQuery([]float32{0, 0}, -1); err == nil {

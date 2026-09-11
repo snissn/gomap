@@ -2,6 +2,14 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+`TestCollectionVectorIndexCloseCosineRerankIsStableWithFilterAndLiveDelta`
+proves that materialized FP32 cosine reranking preserves close-vector order and
+filtered/unfiltered distance parity, with zero distance for an identical live
+delta.
+The vectorops cosine tests and `TestVectorIndexCosineCloseVectorsRetainDistanceAndDiversity`
+cover normalized-difference arithmetic, scale, close-vector ordering and graph
+construction diversity.
+
 Point FP32 reconstruction: `TestTypedColumnPointFetchDoesNotExpandFP32Part`
 checks four public results against 128/1024-row parts without whole-column FP32
 union expansion. `TestTypedColumnPointFP32OwnershipAndBounds` checks constant

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/buger/jsonparser"
+	"github.com/snissn/gomap/TreeDB/internal/vectorops"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
@@ -392,18 +393,12 @@ func exactVectorDistance(left, right []float32, metric VectorMetric) (float32, e
 	}
 	switch metric {
 	case VectorMetricCosine:
-		var dot, leftNorm, rightNorm float64
-		for i := range left {
-			l := float64(left[i])
-			r := float64(right[i])
-			dot += l * r
-			leftNorm += l * l
-			rightNorm += r * r
-		}
+		leftNorm := vectorNormSquared(left)
+		rightNorm := vectorNormSquared(right)
 		if leftNorm == 0 || rightNorm == 0 {
 			return 0, errors.New("cosine vectors cannot have zero magnitude")
 		}
-		return float32(1 - dot/(math.Sqrt(leftNorm)*math.Sqrt(rightNorm))), nil
+		return vectorops.CosineDistanceFloat32Normalized(left, right, 1/math.Sqrt(leftNorm), 1/math.Sqrt(rightNorm)), nil
 	case VectorMetricL2:
 		var sum float64
 		for i := range left {
