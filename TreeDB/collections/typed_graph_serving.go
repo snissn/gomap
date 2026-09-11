@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
@@ -172,8 +173,35 @@ func (c *Collection) FoldColumnGraphServing(ctx context.Context, index string) (
 		return err
 	}
 	// Publication already installed its ready immutable state. Checkpoint and
-	// work-epoch reclamation remain outside install admission; neither is a
-	// reason to expose an invalid serving frontier.
+	// bounded reclamation remain outside install admission; neither is a reason
+	// to expose an invalid serving frontier. Retire the stale keeper before GC;
+	// caller-held read owners and in-flight replacement builds retain exact pins.
+	slot := collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}
+	var stale *collectionVectorIndexPreparedSearch
+	c.vectorBufferedSearchMu.Lock()
+	if entry := c.vectorBufferedSearch[slot]; entry != nil && !entry.building {
+		delete(c.vectorBufferedSearch, slot)
+		stale = entry.prepared
+		c.vectorBufferedSearchInvalidations++
+	}
+	c.vectorBufferedSearchMu.Unlock()
+	if stale != nil {
+		_ = stale.Close()
+	}
+	packed, err := c.db.LeafGenerationPackRunOnce(ctx, backenddb.LeafGenerationPackFromPlanOptions{
+		Sync: true, MaxGenerations: p.options.Maintenance.NativeEntries, MaxBytesToCopy: p.options.Maintenance.NativeBytes,
+	})
+	if err != nil {
+		return err
+	}
+	if packed.Ran {
+		if err := c.db.RefreshCommandWALCheckpointFallback(); err != nil {
+			return err
+		}
+		if _, err := c.db.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{}); err != nil {
+			return err
+		}
+	}
 	if _, err := c.renewTypedGraphWorkEpoch(ctx, p.options.Maintenance); err != nil {
 		return err
 	}

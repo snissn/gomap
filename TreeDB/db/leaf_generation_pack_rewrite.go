@@ -1747,6 +1747,34 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if runStats != nil {
 		runStats.ApplyStages.CollectionPublishTimeNanos += time.Since(collectionPublishStarted).Nanoseconds()
 	}
+	relocationFinish := func(bool) {}
+	if len(descriptors) > 0 {
+		rootRelocations := make(map[uint64]uint64, len(descriptors))
+		for _, descriptor := range descriptors {
+			next := descriptor.rootID
+			if staged, ok := leafCtx.lookupInternalRemap(next); ok {
+				next = staged
+			}
+			if next >= leafGenerationPackPrivatePageIDBase {
+				var ok bool
+				next, ok = remap[next]
+				if !ok {
+					return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: missing published collection root remap for %d", descriptor.rootID))
+				}
+			}
+			rootRelocations[descriptor.rootID] = next
+		}
+		relocationFinish, err = db.prepareCollectionRelocation(snap, idx.pager, rootRelocations)
+		if err != nil {
+			return cleanupAndUnlock(err)
+		}
+	}
+	relocationCommitted := false
+	defer func() {
+		if !relocationCommitted {
+			relocationFinish(false)
+		}
+	}()
 	publishEvent.Phase = leafGenerationPackBeforeMetaWrite
 	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: meta write failpoint: %w", err))
@@ -1796,6 +1824,8 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr))
 	}
+	relocationFinish(true)
+	relocationCommitted = true
 	// Metadata now makes the manager-owned exact identities reachable. Its
 	// observers take over deletion fencing, so the local packed candidate set
 	// can be released only at this point.

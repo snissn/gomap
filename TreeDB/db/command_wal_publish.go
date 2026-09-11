@@ -238,13 +238,19 @@ func (db *DB) PublishCommandWALAppliedLSN(appliedLSN uint64, covered []CommandWA
 	return db.publishCurrentCommandWALRootsTeardownPinned(appliedLSN, covered, sync)
 }
 
-// RefreshCommandWALCheckpointFallback republishes the current durable root at
-// a checkpoint only when the recovery fallback slot still names an older
-// AppliedCommandLSN. It does not append a command frame or advance the LSN.
+func commandWALCheckpointFallbackNeedsRefresh(appliedLSN uint64, selected, fallback rootpublication.DurableRootRecordV1) bool {
+	return appliedLSN != 0 && selected.AppliedCommandLSN == appliedLSN &&
+		(fallback.AppliedCommandLSN < selected.AppliedCommandLSN ||
+			fallback.UserRootPageID != selected.UserRootPageID ||
+			fallback.SystemRootPageID != selected.SystemRootPageID)
+}
+
+// RefreshCommandWALCheckpointFallback republishes the current durable root when
+// the recovery fallback slot names older command coverage or different roots.
+// It does not append a command frame or advance the LSN.
 //
-// This is intentionally a checkpoint-maintenance seam for the cached public
-// command-WAL owner. Callers must exclude new public command frames while
-// deciding whether a refresh is needed.
+// Checkpoints and root-changing maintenance share this seam. The backend
+// raw-publish lock excludes new command frames while it decides and refreshes.
 func (db *DB) RefreshCommandWALCheckpointFallback() error {
 	if db == nil || !db.commandWAL {
 		return nil
@@ -256,6 +262,15 @@ func (db *DB) RefreshCommandWALCheckpointFallback() error {
 	// the sampled AppliedCommandLSN stale before the fallback is refreshed.
 	unlockCommandWALPublish := db.lockCommandWALRawPublishWithTeardown()
 	defer unlockCommandWALPublish()
+	if runtime := db.rootPublication; runtime != nil && runtime.coordinator != nil {
+		visible := db.state.Load()
+		if visible == nil {
+			return ErrClosed
+		}
+		if err := runtime.coordinator.WaitThrough(context.Background(), visible.CommitSeq); err != nil {
+			return publicRootPublicationErrorV1(err)
+		}
+	}
 	db.durablePublishMu.Lock()
 	if db.durableRoot.slot > 1 {
 		db.durablePublishMu.Unlock()
@@ -264,9 +279,7 @@ func (db *DB) RefreshCommandWALCheckpointFallback() error {
 	selected := db.durableRoot.slotRecord[db.durableRoot.slot]
 	fallback := db.durableRoot.slotRecord[db.durableRoot.slot^1]
 	state := db.state.Load()
-	needsRefresh := state != nil && state.AppliedCommandLSN != 0 &&
-		selected.AppliedCommandLSN == state.AppliedCommandLSN &&
-		fallback.AppliedCommandLSN < selected.AppliedCommandLSN
+	needsRefresh := state != nil && commandWALCheckpointFallbackNeedsRefresh(state.AppliedCommandLSN, selected, fallback)
 	db.durablePublishMu.Unlock()
 	if !needsRefresh {
 		return nil
@@ -293,8 +306,9 @@ func (db *DB) RefreshCommandWALCheckpointFallback() error {
 	}
 	selected = db.durableRoot.slotRecord[db.durableRoot.slot]
 	fallback = db.durableRoot.slotRecord[db.durableRoot.slot^1]
-	if selected.AppliedCommandLSN != state.AppliedCommandLSN || fallback.AppliedCommandLSN != state.AppliedCommandLSN {
-		return fmt.Errorf("command WAL checkpoint fallback refresh did not converge: selected=%d fallback=%d want=%d", selected.AppliedCommandLSN, fallback.AppliedCommandLSN, state.AppliedCommandLSN)
+	if selected.AppliedCommandLSN != state.AppliedCommandLSN || fallback.AppliedCommandLSN != state.AppliedCommandLSN ||
+		selected.UserRootPageID != fallback.UserRootPageID || selected.SystemRootPageID != fallback.SystemRootPageID {
+		return fmt.Errorf("command WAL checkpoint fallback refresh did not converge: selected_lsn=%d fallback_lsn=%d want_lsn=%d selected_roots=%d/%d fallback_roots=%d/%d", selected.AppliedCommandLSN, fallback.AppliedCommandLSN, state.AppliedCommandLSN, selected.UserRootPageID, selected.SystemRootPageID, fallback.UserRootPageID, fallback.SystemRootPageID)
 	}
 	return nil
 }
