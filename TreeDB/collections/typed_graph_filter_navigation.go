@@ -17,6 +17,9 @@ const (
 
 var errTypedGraphFilterNavigationDeclined = errors.New("collections: typed graph filter navigation declined")
 
+// Cold builds share the process heap, so admit one construction matrix at a time.
+var typedGraphFilterNavigationConstruction = make(chan struct{}, 1)
+
 // typedGraphFilterNavigation is derived, process-local navigation. The base
 // pack remains the sole vector and document-ID owner.
 type typedGraphFilterNavigation struct {
@@ -43,6 +46,10 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 	if !typedGraphFilterNavigationConstructionFits(count, overlay.base.reader.def.Dimensions) {
 		return nil, errTypedGraphFilterNavigationDeclined
 	}
+	if err := acquireTypedGraphFilterNavigationConstruction(ctx); err != nil {
+		return nil, err
+	}
+	defer releaseTypedGraphFilterNavigationConstruction()
 	levelIndex, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(overlay.base.reader.def))
 	if err != nil {
 		return nil, err
@@ -157,6 +164,19 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 func typedGraphFilterNavigationConstructionFits(count, dimensions int) bool {
 	const maxValues = typedGraphFilterNavigationMaxConstructionBytes / 4
 	return count > 0 && dimensions > 0 && uint64(dimensions) <= maxValues && uint64(count) <= maxValues/uint64(dimensions)
+}
+
+func acquireTypedGraphFilterNavigationConstruction(ctx context.Context) error {
+	select {
+	case typedGraphFilterNavigationConstruction <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func releaseTypedGraphFilterNavigationConstruction() {
+	<-typedGraphFilterNavigationConstruction
 }
 
 type typedGraphFilterNavigationScorePlane struct {

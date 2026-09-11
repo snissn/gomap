@@ -17,6 +17,18 @@ func TestTypedGraphFilterNavigationBoundsConstructionMatrix(t *testing.T) {
 	}
 }
 
+func TestTypedGraphFilterNavigationSerializesConstruction(t *testing.T) {
+	if err := acquireTypedGraphFilterNavigationConstruction(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	defer releaseTypedGraphFilterNavigationConstruction()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := acquireTypedGraphFilterNavigationConstruction(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("contended construction cancellation: %v", err)
+	}
+}
+
 func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 	requireTypedGraphPreparedHolderTest(t)
 	const n = 20000
