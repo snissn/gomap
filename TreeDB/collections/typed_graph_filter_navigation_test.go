@@ -91,5 +91,16 @@ func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 	if navigation.retainedBytes <= 0 {
 		t.Fatal("invalid retained bytes")
 	}
+	all, err := prepareTypedGraphServingFilter(t.Context(), borrowed, owner.overlay, HybridScalarFilter{IndexName: "user", Range: &IndexRangeOptions{Lower: IndexRangeBound{Value: "00000", Inclusive: true}, Upper: IndexRangeBound{Value: "19999", Inclusive: true}}}, limits, &work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, allStats, err := owner.overlay.searchPreparedFilter(all, query, 10, 2048, 1<<20, &buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allStats.Base.PreparedScoreCalls == 0 || allStats.Base.QuantizedScoreCalls != 0 {
+		t.Fatalf("all-match filter left FP32 traversal: %+v", allStats.Base)
+	}
 	t.Logf("build=%s retained=%d max_scores=%d scores=%d legacy_scores=%d edges=%d legacy_edges=%d", time.Since(started), navigation.retainedBytes, navigation.maxScoreCalls, stats.Base.PreparedScoreCalls, legacyStats.Base.PreparedScoreCalls, stats.Base.Edges, legacyStats.Base.Edges)
 }
