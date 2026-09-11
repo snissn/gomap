@@ -1165,7 +1165,10 @@ func buildColumnVectorGraphAdjacencyV1WithFixedRowsAndContext(ctx context.Contex
 		}
 		inputOrdinalByNode[nodeID] = i
 	}
-	order := columnVectorGraphNativeLocalityOrder(index)
+	order, err := columnVectorGraphNativeLocalityOrder(ctx, index)
+	if err != nil {
+		return err
+	}
 	if len(order) != len(rows) {
 		return fmt.Errorf("collections: column vector graph locality order rows=%d want %d", len(order), len(rows))
 	}
@@ -1441,9 +1444,15 @@ func vectorPartitionConstructionAdjacencyLayersV1(adjacency []uint32) ([][]uint3
 	return layers, nil
 }
 
-func columnVectorGraphNativeLocalityOrder(index *VectorIndex) []int {
+func columnVectorGraphNativeLocalityOrder(ctx context.Context, index *VectorIndex) ([]int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if index == nil || len(index.nodes) == 0 {
-		return nil
+		return nil, nil
 	}
 	order := make([]int, 0, len(index.nodes))
 	visited := make([]bool, len(index.nodes))
@@ -1452,12 +1461,24 @@ func columnVectorGraphNativeLocalityOrder(index *VectorIndex) []int {
 		visited[index.entry] = true
 		queue = append(queue, index.entry)
 	}
+	edges := 0
 	for head := 0; head < len(queue); head++ {
+		if head&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		nodeID := queue[head]
 		order = append(order, nodeID)
 		node := &index.nodes[nodeID]
 		for layer := len(node.neighbors) - 1; layer >= 0; layer-- {
 			for _, neighbor := range node.neighbors[layer] {
+				if edges&1023 == 0 {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
+				}
+				edges++
 				neighborID := int(neighbor.nodeID)
 				if neighborID < 0 || neighborID >= len(index.nodes) || visited[neighborID] || index.nodes[neighborID].deleted {
 					continue
@@ -1468,12 +1489,17 @@ func columnVectorGraphNativeLocalityOrder(index *VectorIndex) []int {
 		}
 	}
 	for nodeID := range index.nodes {
+		if nodeID&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if visited[nodeID] || index.nodes[nodeID].deleted {
 			continue
 		}
 		order = append(order, nodeID)
 	}
-	return order
+	return order, ctx.Err()
 }
 
 func columnVectorGraphLayeredAdjacencyFromNativeNode(node *vectorIndexNode, nodeOrdinal []int) ([]uint32, error) {

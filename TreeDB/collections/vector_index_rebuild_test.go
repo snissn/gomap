@@ -2233,7 +2233,10 @@ func columnGraphRebuildNativeGraphLayoutV2A(tb testing.TB, def VectorIndexDefini
 		}
 		inputOrdinalByNode[nodeID] = i
 	}
-	order := columnVectorGraphNativeLocalityOrder(index)
+	order, err := columnVectorGraphNativeLocalityOrder(context.Background(), index)
+	if err != nil {
+		tb.Fatalf("columnVectorGraphNativeLocalityOrder: %v", err)
+	}
 	nodeOrdinal := make([]int, len(index.nodes))
 	for i := range nodeOrdinal {
 		nodeOrdinal[i] = -1
@@ -2255,6 +2258,20 @@ func columnGraphRebuildNativeGraphLayoutV2A(tb testing.TB, def VectorIndexDefini
 		adjacency[ordinal] = encoded
 	}
 	return columnGraphRebuildNativeGraphLayoutResultV2A{ids: ids, adjacency: adjacency}
+}
+
+func TestColumnVectorGraphNativeLocalityOrderObservesCancellation(t *testing.T) {
+	index := &VectorIndex{entry: 0, nodes: make([]vectorIndexNode, 2049)}
+	neighbors := make([]vectorIndexNeighbor, 2048)
+	for i := range neighbors {
+		neighbors[i].nodeID = uint32(i + 1)
+	}
+	index.nodes[0].neighbors = [][]vectorIndexNeighbor{neighbors}
+	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 3}
+	order, err := columnVectorGraphNativeLocalityOrder(ctx, index)
+	if order != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("locality cancellation order=%v err=%v", order, err)
+	}
 }
 
 func uint32SlicesEqual(a, b []uint32) bool {
