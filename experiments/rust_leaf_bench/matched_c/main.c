@@ -28,7 +28,13 @@ enum {
 typedef struct {
   int prefix;
   int columnar;
+  int key_kind;
 } Options;
+
+enum {
+  KEY_KIND_BYTES = 0,
+  KEY_KIND_FIXED_BE8 = 1
+};
 
 typedef struct {
   size_t key_off;
@@ -70,6 +76,14 @@ typedef struct {
 } BytesTable;
 
 typedef struct {
+  uint8_t *data;
+  size_t *offsets;
+  size_t count;
+  size_t len;
+  size_t cap;
+} VarBytesTable;
+
+typedef struct {
   size_t prefixLen;
   size_t suffixLen;
   size_t keyOff;
@@ -92,6 +106,12 @@ typedef struct {
   BytesTable queries;
 } SearchCtx;
 
+typedef struct {
+  int iters;
+  Page *page;
+  VarBytesTable queries;
+} VarSearchCtx;
+
 typedef uint64_t (*BenchFn)(void *);
 
 static volatile uint64_t sink;
@@ -100,16 +120,24 @@ static int env_int_any(const char **names, int n_names, int def);
 static void run_case(const char *name, int iters, BenchFn fn, void *ctx);
 static uint64_t splitmix_next(SplitMix64 *rng);
 static void splitmix_fill(SplitMix64 *rng, uint8_t *dst, size_t len);
+static uint64_t load_be64_unaligned(const uint8_t *src);
 static BytesTable make_bench_keys(size_t count, size_t prefix_bytes);
 static BytesTable make_bench_values(size_t count);
 static void free_table(BytesTable *table);
 static uint8_t *table_at(BytesTable table, size_t index);
+static void var_table_init(VarBytesTable *table, size_t count, size_t bytes);
+static void var_table_push(VarBytesTable *table, const uint8_t *value, size_t value_len);
+static void free_var_table(VarBytesTable *table);
+static uint8_t *var_table_at(VarBytesTable table, size_t index, size_t *value_len);
 static void fill_be8(uint8_t *dst, uint64_t v);
 static void fill_be16(uint8_t *dst, uint64_t a, uint64_t b);
+static size_t fill_variable_len_key(uint8_t *dst, size_t i);
 static uint64_t bench_builder_prepared(void *raw);
 static void setup_search_columnar(int fixed_be8, Page *page, BytesTable *queries);
+static void setup_search_columnar_variable_len(Page *page, VarBytesTable *queries);
 static void setup_search_prefix_variant(Options opts, Page *page, BytesTable *queries);
 static uint64_t bench_search_prepared(void *raw);
+static uint64_t bench_search_prepared_var(void *raw);
 static void builder_init(Builder *b, Options opts);
 static int builder_add_leaf_entry(Builder *b, const uint8_t *key, size_t key_len,
                                   const uint8_t *value, size_t value_len, uint8_t flags);
@@ -139,6 +167,8 @@ static void search_plain(const Page *page, const uint8_t *key, size_t key_len, i
                          int *found);
 static void search_columnar_v2(const Page *page, const uint8_t *key, size_t key_len,
                                int *idx, int *found);
+static void search_columnar_v2_fixed_be8(const Page *page, const uint8_t *key, int *idx,
+                                         int *found);
 static void search_prefix_v2(const Page *page, const uint8_t *key, size_t key_len, int *idx,
                              int *found);
 static void search_prefix_block(const Page *page, int block_start, int block_end,
@@ -181,15 +211,24 @@ int main(void) {
   SearchCtx columnar_variable = {search_iters, &columnar_variable_page, columnar_variable_queries};
   run_case("search/columnar_variable16", search_iters, bench_search_prepared, &columnar_variable);
 
+  Page columnar_variable_len_page;
+  VarBytesTable columnar_variable_len_queries;
+  setup_search_columnar_variable_len(&columnar_variable_len_page, &columnar_variable_len_queries);
+  VarSearchCtx columnar_variable_len = {search_iters, &columnar_variable_len_page,
+                                        columnar_variable_len_queries};
+  run_case("search/columnar_variable_len", search_iters, bench_search_prepared_var,
+           &columnar_variable_len);
+
   Page prefix_page;
   BytesTable prefix_queries;
-  setup_search_prefix_variant((Options){1, 0}, &prefix_page, &prefix_queries);
+  setup_search_prefix_variant((Options){1, 0, KEY_KIND_BYTES}, &prefix_page, &prefix_queries);
   SearchCtx prefix = {search_iters, &prefix_page, prefix_queries};
   run_case("search/prefix_v2", search_iters, bench_search_prepared, &prefix);
 
   Page columnar_prefix_page;
   BytesTable columnar_prefix_queries;
-  setup_search_prefix_variant((Options){1, 1}, &columnar_prefix_page, &columnar_prefix_queries);
+  setup_search_prefix_variant((Options){1, 1, KEY_KIND_BYTES}, &columnar_prefix_page,
+                              &columnar_prefix_queries);
   SearchCtx columnar_prefix = {search_iters, &columnar_prefix_page, columnar_prefix_queries};
   run_case("search/columnar_prefix_v2", search_iters, bench_search_prepared, &columnar_prefix);
 
@@ -199,6 +238,7 @@ int main(void) {
   free_table(&keys_prefix_light);
   free_table(&columnar_fixed_queries);
   free_table(&columnar_variable_queries);
+  free_var_table(&columnar_variable_len_queries);
   free_table(&prefix_queries);
   free_table(&columnar_prefix_queries);
   return (int)(sink & 0);
@@ -253,6 +293,24 @@ static void splitmix_fill(SplitMix64 *rng, uint8_t *dst, size_t len) {
   }
 }
 
+static uint64_t load_be64_unaligned(const uint8_t *src) {
+  uint64_t v = 0;
+  memcpy(&v, src, sizeof(v));
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
+    __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#if defined(__GNUC__) || defined(__clang__)
+  return __builtin_bswap64(v);
+#else
+  return ((v & 0x00000000000000ffULL) << 56) | ((v & 0x000000000000ff00ULL) << 40) |
+         ((v & 0x0000000000ff0000ULL) << 24) | ((v & 0x00000000ff000000ULL) << 8) |
+         ((v & 0x000000ff00000000ULL) >> 8) | ((v & 0x0000ff0000000000ULL) >> 24) |
+         ((v & 0x00ff000000000000ULL) >> 40) | ((v & 0xff00000000000000ULL) >> 56);
+#endif
+#else
+  return v;
+#endif
+}
+
 static int key_cmp_32(const void *a, const void *b) {
   return memcmp(a, b, BENCH_KEY_SIZE);
 }
@@ -296,6 +354,45 @@ static uint8_t *table_at(BytesTable table, size_t index) {
   return table.data + index * table.len;
 }
 
+static void var_table_init(VarBytesTable *table, size_t count, size_t bytes) {
+  table->data = malloc(bytes);
+  table->offsets = malloc((count + 1) * sizeof(table->offsets[0]));
+  if (table->data == NULL || table->offsets == NULL) {
+    abort();
+  }
+  table->count = 0;
+  table->len = 0;
+  table->cap = bytes;
+  table->offsets[0] = 0;
+}
+
+static void var_table_push(VarBytesTable *table, const uint8_t *value, size_t value_len) {
+  if (table->len + value_len > table->cap) {
+    abort();
+  }
+  memcpy(table->data + table->len, value, value_len);
+  table->len += value_len;
+  table->count++;
+  table->offsets[table->count] = table->len;
+}
+
+static void free_var_table(VarBytesTable *table) {
+  free(table->data);
+  free(table->offsets);
+  table->data = NULL;
+  table->offsets = NULL;
+  table->count = 0;
+  table->len = 0;
+  table->cap = 0;
+}
+
+static uint8_t *var_table_at(VarBytesTable table, size_t index, size_t *value_len) {
+  size_t start = table.offsets[index];
+  size_t end = table.offsets[index + 1];
+  *value_len = end - start;
+  return table.data + start;
+}
+
 static void fill_be8(uint8_t *dst, uint64_t v) {
   for (int i = 7; i >= 0; i--) {
     dst[7 - i] = (uint8_t)(v >> (8 * i));
@@ -307,10 +404,19 @@ static void fill_be16(uint8_t *dst, uint64_t a, uint64_t b) {
   fill_be8(dst + 8, b);
 }
 
+static size_t fill_variable_len_key(uint8_t *dst, size_t i) {
+  size_t key_len = 9 + (i % (BENCH_KEY_SIZE - 8));
+  fill_be8(dst, (uint64_t)i);
+  for (size_t j = 8; j < key_len; j++) {
+    dst[j] = (uint8_t)(i * 31 + (j - 8));
+  }
+  return key_len;
+}
+
 static uint64_t bench_builder_prepared(void *raw) {
   BuildCtx *ctx = (BuildCtx *)raw;
   Builder b;
-  builder_init(&b, (Options){ctx->prefix, 0});
+  builder_init(&b, (Options){ctx->prefix, 0, KEY_KIND_BYTES});
   uint64_t checksum = 0;
   for (int i = 0; i < ctx->iters;) {
     size_t k = (size_t)i & (ctx->keys.count - 1);
@@ -326,7 +432,7 @@ static uint64_t bench_builder_prepared(void *raw) {
       checksum += (uint64_t)b.count;
       i++;
     } else {
-      builder_init(&b, (Options){ctx->prefix, 0});
+      builder_init(&b, (Options){ctx->prefix, 0, KEY_KIND_BYTES});
     }
   }
   return checksum;
@@ -334,7 +440,7 @@ static uint64_t bench_builder_prepared(void *raw) {
 
 static void setup_search_columnar(int fixed_be8, Page *page, BytesTable *queries) {
   Builder b;
-  builder_init(&b, (Options){0, 1});
+  builder_init(&b, (Options){0, 1, fixed_be8 ? KEY_KIND_FIXED_BE8 : KEY_KIND_BYTES});
   int inserted = 0;
   uint8_t key[16];
   for (int i = 0; i < BENCH_KEY_COUNT; i++) {
@@ -361,6 +467,26 @@ static void setup_search_columnar(int fixed_be8, Page *page, BytesTable *queries
     } else {
       fill_be16(table_at(*queries, i), (uint64_t)i, (uint64_t)i * 17ULL + 3ULL);
     }
+  }
+}
+
+static void setup_search_columnar_variable_len(Page *page, VarBytesTable *queries) {
+  Builder b;
+  builder_init(&b, (Options){0, 1, KEY_KIND_BYTES});
+  int inserted = 0;
+  uint8_t key[BENCH_KEY_SIZE];
+  for (int i = 0; i < BENCH_KEY_COUNT; i++) {
+    size_t key_len = fill_variable_len_key(key, (size_t)i);
+    if (!builder_add_leaf_entry(&b, key, key_len, NULL, 0, FLAG_POINTER)) {
+      break;
+    }
+    inserted++;
+  }
+  builder_finish(&b, page);
+  var_table_init(queries, (size_t)inserted, (size_t)inserted * BENCH_KEY_SIZE);
+  for (int i = 0; i < inserted; i++) {
+    size_t key_len = fill_variable_len_key(key, (size_t)i);
+    var_table_push(queries, key, key_len);
   }
 }
 
@@ -411,6 +537,20 @@ static uint64_t bench_search_prepared(void *raw) {
     int found = 0;
     uint8_t *query = table_at(ctx->queries, (size_t)i % ctx->queries.count);
     page_search_leaf(ctx->page, query, ctx->queries.len, &idx, &found);
+    checksum += (uint64_t)idx + (uint64_t)found;
+  }
+  return checksum;
+}
+
+static uint64_t bench_search_prepared_var(void *raw) {
+  VarSearchCtx *ctx = (VarSearchCtx *)raw;
+  uint64_t checksum = 0;
+  for (int i = 0; i < ctx->iters; i++) {
+    int idx = 0;
+    int found = 0;
+    size_t query_len = 0;
+    uint8_t *query = var_table_at(ctx->queries, (size_t)i % ctx->queries.count, &query_len);
+    page_search_leaf(ctx->page, query, query_len, &idx, &found);
     checksum += (uint64_t)idx + (uint64_t)found;
   }
   return checksum;
@@ -753,15 +893,6 @@ static void finish_columnar_prefix_v2(const Builder *b, Page *page) {
 }
 
 static int compare_leaf_key(const uint8_t *a, size_t a_len, const uint8_t *b, size_t b_len) {
-  if (a_len == 8 && b_len == 8) {
-    uint64_t av = 0;
-    uint64_t bv = 0;
-    for (int i = 0; i < 8; i++) {
-      av = (av << 8) | a[i];
-      bv = (bv << 8) | b[i];
-    }
-    return (av > bv) - (av < bv);
-  }
   size_t n = a_len < b_len ? a_len : b_len;
   int cmp = memcmp(a, b, n);
   if (cmp != 0) {
@@ -775,7 +906,11 @@ static void page_search_leaf(Page *page, const uint8_t *key, size_t key_len, int
   if (page->opts.columnar && page->opts.prefix) {
     search_columnar_prefix_v2(page, key, key_len, idx, found);
   } else if (page->opts.columnar) {
-    search_columnar_v2(page, key, key_len, idx, found);
+    if (page->opts.key_kind == KEY_KIND_FIXED_BE8) {
+      search_columnar_v2_fixed_be8(page, key, idx, found);
+    } else {
+      search_columnar_v2(page, key, key_len, idx, found);
+    }
   } else if (page->opts.prefix) {
     search_prefix_v2(page, key, key_len, idx, found);
   } else {
@@ -823,6 +958,43 @@ static void columnar_key_at(const Page *page, int index, const uint8_t **key, si
   int key_end = index + 1 < page->count ? page_offset_at(page, index + 1) : PAGE_SIZE;
   *key = &page->data[key_start];
   *key_len = (size_t)(key_end - key_start);
+}
+
+static uint64_t columnar_fixed_be8_at(const Page *page, int index) {
+  return load_be64_unaligned(&page->data[page_offset_at(page, index)]);
+}
+
+static void search_columnar_v2_fixed_be8(const Page *page, const uint8_t *key, int *idx,
+                                         int *found) {
+  uint64_t target = load_be64_unaligned(key);
+  if (page->count <= SMALL_SEARCH_THRESHOLD) {
+    for (int i = 0; i < page->count; i++) {
+      uint64_t entry = columnar_fixed_be8_at(page, i);
+      if (entry >= target) {
+        *idx = i;
+        *found = entry == target;
+        return;
+      }
+    }
+    *idx = page->count;
+    *found = 0;
+    return;
+  }
+  int lo = 0;
+  int hi = page->count;
+  while (lo < hi) {
+    int mid = (int)((unsigned)(lo + hi) >> 1);
+    if (columnar_fixed_be8_at(page, mid) < target) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  *idx = lo;
+  *found = 0;
+  if (lo < page->count) {
+    *found = columnar_fixed_be8_at(page, lo) == target;
+  }
 }
 
 static void search_columnar_v2(const Page *page, const uint8_t *key, size_t key_len,
@@ -892,32 +1064,6 @@ static void prefix_restart_key(const Page *page, int index, const uint8_t **key,
   *key_len = layout.suffixLen;
 }
 
-static int compare_prefix_virtual_key(const uint8_t *prev, size_t prev_len, size_t prefix_len,
-                                      const uint8_t *suffix, size_t suffix_len,
-                                      const uint8_t *target, size_t target_len) {
-  (void)prev_len;
-  size_t n = prefix_len < target_len ? prefix_len : target_len;
-  if (n > 0) {
-    int cmp = memcmp(prev, target, n);
-    if (cmp != 0) {
-      return cmp < 0 ? -1 : 1;
-    }
-  }
-  if (target_len < prefix_len) {
-    return 1;
-  }
-  const uint8_t *tail = target + prefix_len;
-  size_t tail_len = target_len - prefix_len;
-  n = suffix_len < tail_len ? suffix_len : tail_len;
-  if (n > 0) {
-    int cmp = memcmp(suffix, tail, n);
-    if (cmp != 0) {
-      return cmp < 0 ? -1 : 1;
-    }
-  }
-  return (suffix_len > tail_len) - (suffix_len < tail_len);
-}
-
 static void search_prefix_v2(const Page *page, const uint8_t *key, size_t key_len, int *idx,
                              int *found) {
   if (page->count == 0) {
@@ -974,25 +1120,21 @@ static void search_prefix_block(const Page *page, int block_start, int block_end
     return;
   }
   uint8_t prev[BENCH_KEY_SIZE];
-  uint8_t next[BENCH_KEY_SIZE];
   memcpy(prev, restart, restart_len);
   size_t prev_len = restart_len;
   for (int i = block_start + 1; i < block_end; i++) {
     int off = page_offset_at(page, i);
     prefixLayout layout = parse_prefix_layout(page->data, off);
     const uint8_t *suffix = &page->data[off + (int)layout.keyOff];
-    cmp = compare_prefix_virtual_key(prev, prev_len, layout.prefixLen, suffix, layout.suffixLen,
-                                     target, target_len);
+    size_t key_len = layout.prefixLen + layout.suffixLen;
+    memcpy(prev + layout.prefixLen, suffix, layout.suffixLen);
+    prev_len = key_len;
+    cmp = compare_leaf_key(prev, prev_len, target, target_len);
     if (cmp >= 0) {
       *idx = i;
       *found = cmp == 0;
       return;
     }
-    size_t key_len = layout.prefixLen + layout.suffixLen;
-    memcpy(next, prev, layout.prefixLen);
-    memcpy(next + layout.prefixLen, suffix, layout.suffixLen);
-    memcpy(prev, next, key_len);
-    prev_len = key_len;
   }
   *idx = block_end;
   *found = 0;
@@ -1068,7 +1210,6 @@ static void search_columnar_prefix_block(const Page *page, int block_start, int 
     return;
   }
   uint8_t prev[BENCH_KEY_SIZE];
-  uint8_t next[BENCH_KEY_SIZE];
   memcpy(prev, restart, restart_len);
   size_t prev_len = restart_len;
   for (int i = block_start + 1; i < block_end; i++) {
@@ -1076,18 +1217,15 @@ static void search_columnar_prefix_block(const Page *page, int block_start, int 
     size_t suffix_len = 0;
     columnar_prefix_suffix_at(page, i, &suffix, &suffix_len);
     size_t prefix_len = columnar_prefix_len_at(page, i);
-    cmp = compare_prefix_virtual_key(prev, prev_len, prefix_len, suffix, suffix_len, target,
-                                     target_len);
+    size_t key_len = prefix_len + suffix_len;
+    memcpy(prev + prefix_len, suffix, suffix_len);
+    prev_len = key_len;
+    cmp = compare_leaf_key(prev, prev_len, target, target_len);
     if (cmp >= 0) {
       *idx = i;
       *found = cmp == 0;
       return;
     }
-    size_t key_len = prefix_len + suffix_len;
-    memcpy(next, prev, prefix_len);
-    memcpy(next + prefix_len, suffix, suffix_len);
-    memcpy(prev, next, key_len);
-    prev_len = key_len;
   }
   *idx = block_end;
   *found = 0;
