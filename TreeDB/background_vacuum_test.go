@@ -110,6 +110,7 @@ func TestBackgroundIndexVacuumUsesReturnedOnlineAttemptSnapshot(t *testing.T) {
 	if attemptA.AttemptID == 0 || attemptA.Phase != "rebuild" {
 		t.Fatalf("seed backend snapshot=%+v want attempt ID and retained rebuild phase", attemptA)
 	}
+	attemptA.Phase = "stale-returned-phase"
 	restore := setBackgroundIndexVacuumRunHookForTest(func(db *DB, ctx context.Context) (backenddb.VacuumOnlineStats, error) {
 		if err := db.backend.VacuumIndexOnline(ctx); err != nil {
 			return backenddb.VacuumOnlineStats{}, err
@@ -130,8 +131,8 @@ func TestBackgroundIndexVacuumUsesReturnedOnlineAttemptSnapshot(t *testing.T) {
 	if stats.VacuumWorkCompleted != 1 || stats.Vacuums != 1 {
 		t.Fatalf("successful returned snapshot counters=%+v want one completed worker vacuum", stats)
 	}
-	if got := d.Stats()["treedb.bg_vacuum.last_online.phase"]; got != attemptA.Phase {
-		t.Fatalf("published worker phase=%q want %q", got, attemptA.Phase)
+	if got := d.Stats()["treedb.bg_vacuum.last_online.phase"]; got != global.Phase {
+		t.Fatalf("published active phase=%q want backend phase %q", got, global.Phase)
 	}
 }
 
