@@ -83,6 +83,9 @@ func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 	if results, _, err := navigation.search(&cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 2}, query, 10, 2048, 1<<20, owner.overlay.pack, &buffer.searchScratch); len(results) != 0 || !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled navigation results=%d err=%v", len(results), err)
 	}
+	if results, stats, err := navigation.search(t.Context(), query, 10, 2048, 1, owner.overlay.pack, &buffer.searchScratch); len(results) != 0 || !errors.Is(err, errTypedGraphSearchBudget) || stats.PreparedScoreCalls > 1 {
+		t.Fatalf("exhausted navigation results=%d scores=%d err=%v", len(results), stats.PreparedScoreCalls, err)
+	}
 	if results, budgetStats, err := navigation.search(t.Context(), query, 10, 2048, plan.count-1, owner.overlay.pack, &buffer.searchScratch); err != nil || len(results) != 10 || budgetStats.PreparedScoreCalls > uint64(plan.count-1) {
 		t.Fatalf("budgeted navigation results=%d scores=%d err=%v", len(results), budgetStats.PreparedScoreCalls, err)
 	}

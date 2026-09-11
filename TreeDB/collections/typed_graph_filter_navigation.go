@@ -170,7 +170,7 @@ func (p *typedGraphFilterNavigationScorePlane) scoreOrdinal(ordinal int, scratch
 		return 0, err
 	}
 	if stats.PreparedScoreCalls >= p.limit {
-		return 0, errTypedGraphFilterNavigationDeclined
+		return 0, errTypedGraphSearchBudget
 	}
 	if ordinal < 0 || ordinal >= len(p.ordinals) {
 		return 0, ErrVectorIndexSnapshotMismatch
@@ -183,7 +183,7 @@ func (p *typedGraphFilterNavigationScorePlane) scoreOrdinals(ordinals []int, dst
 		return dst[:0], err
 	}
 	if stats.PreparedScoreCalls > p.limit || uint64(len(ordinals)) > p.limit-stats.PreparedScoreCalls {
-		return dst[:0], errTypedGraphFilterNavigationDeclined
+		return dst[:0], errTypedGraphSearchBudget
 	}
 	rows := p.mapOrdinals(scratch, len(ordinals))
 	for i, ordinal := range ordinals {
@@ -200,7 +200,7 @@ func (p *typedGraphFilterNavigationScorePlane) scoreRowIDsPrevalidated(rowIDs []
 		return dst[:0], err
 	}
 	if stats.PreparedScoreCalls > p.limit || uint64(len(rowIDs)) > p.limit-stats.PreparedScoreCalls {
-		return dst[:0], errTypedGraphFilterNavigationDeclined
+		return dst[:0], errTypedGraphSearchBudget
 	}
 	rows := p.mapOrdinals(scratch, len(rowIDs))
 	for i, rowID := range rowIDs {
