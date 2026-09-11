@@ -145,7 +145,11 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 	if n > remaining {
 		return plan, nil
 	}
-	navigation, navigationErr := buildTypedGraphFilterNavigation(ctx, overlay, candidate.plan, limits.RetainedBytes-int(work.RetainedBytes))
+	navigationBudget := limits.RetainedBytes - int(work.RetainedBytes)
+	if keeperBudget := remaining - n; keeperBudget < int64(navigationBudget) {
+		navigationBudget = int(keeperBudget)
+	}
+	navigation, navigationErr := buildTypedGraphFilterNavigation(ctx, overlay, candidate.plan, navigationBudget)
 	if navigationErr == nil {
 		candidate.navigation = navigation
 		work.RetainedBytes += uint64(navigation.retainedBytes)
