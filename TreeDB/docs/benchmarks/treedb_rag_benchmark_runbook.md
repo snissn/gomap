@@ -10,6 +10,13 @@ requests against the document service. The selected `column_graph` product and
 the measured harness have separate review and evidence gates; neither a harness
 change nor a bounded diagnostic is a full-scale performance result.
 
+Qdrant queries use its explicit filtered exact mode as the result-equivalent
+correctness, mutation, reopen, and payload reference. Qdrant is not the matched
+ANN performance comparator or a denominator for TreeDB performance gates;
+separate approximate-search probes remain quality diagnostics.
+The frozen bounded manifests may exercise this Qdrant lifecycle, but their
+diagnostic schema cannot satisfy full qualification.
+
 The [retained full qualification report](../evidence/minima-native-qualification-4620/README.md)
 records the failed, incomplete a0992241 attempt and the earlier failure. Neither
 provides full qualification; M4/M5 remain open and D1 requires an actual M5 pass.

@@ -1564,6 +1564,8 @@ func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScena
 		if spec.Name == "mixed_broad_narrow" && (*row.Route.RetainedCandidateIDs < spec.NarrowRows || *row.Route.RefinedCandidateIDs != spec.EligibleRows || row.Route.MembershipSource != "bounded_candidate_refinement" || (row.Route.Plan != "mixed_refined" && row.Route.Plan != "complete_finite_ann")) {
 			return fmt.Errorf("mixed row lacks retained/refined exact or finite plan")
 		}
+	} else if row.Backend == "qdrant" && (row.Route.Identity != "qdrant_filtered_exact" || row.Route.Plan != "qdrant_filtered_exact") {
+		return fmt.Errorf("wrong Qdrant exact comparator route")
 	} else if !row.Route.DeclaredScalarFiltering || row.Route.MembershipSource == "" || row.Route.Plan == "" {
 		return fmt.Errorf("missing comparator filter route evidence")
 	}

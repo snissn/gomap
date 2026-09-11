@@ -133,6 +133,7 @@ var minimaMeasuredTreeConfigKeys = []string{
 var minimaMeasuredQdrantConfigKeys = []string{
 	"server_version", "client_version", "optimizer_timeout_seconds", "write_wait", "point_id_mapping", "deployment", "image",
 	"initial_upload_hnsw", "initial_upload_optimizers", "production_hnsw", "production_optimizers",
+	"query_search_params",
 }
 
 // Only the measured seam uses strict presence/type decoding. The producer field
