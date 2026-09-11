@@ -9,9 +9,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
-// ponytail: bound cold per-filter construction; raise only if larger selective
-// filters show measured benefit within the existing retained-byte budget.
-const typedGraphFilterNavigationMaxRows = 1 << 16
+// ponytail: bound cold per-filter construction above the frozen 200K-row shape;
+// raise only if a larger selective workload fits the retained-byte budget.
+const typedGraphFilterNavigationMaxRows = 1 << 18
 
 var errTypedGraphFilterNavigationDeclined = errors.New("collections: typed graph filter navigation declined")
 
