@@ -7,6 +7,7 @@ import contextlib
 import datetime as _dt
 import functools
 import gzip
+import hashlib
 import io
 import inspect
 import json
@@ -14,13 +15,16 @@ import os
 import shlex
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
+from types import SimpleNamespace
 
+import treedb_construction_policy_4587 as policy
 import treedb_vectordbbench_artifact as harness
 
 
@@ -271,6 +275,13 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
                     "state": "column_graph_loaded",
                     "loaded": True,
                     "rebuild_needed": False,
+                    "column_graph_build": {
+                        "adjacency_build_nanos": 1,
+                        "construction_decisions": {
+                            "planning": {"decisions": 1, "saturated": False},
+                            "reciprocal": {"decisions": 1, "saturated": False},
+                        },
+                    },
                 },
             },
         },
@@ -401,6 +412,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         "dataset": {
             "name": "cohere-50k",
             "sha256": harness.sha256_file(dataset_path),
+            "sha256_after": harness.sha256_file(dataset_path),
             "dimensions": 768,
             "vectors": 50_000,
         },
@@ -576,6 +588,38 @@ class ArtifactRootTest(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "must be new or empty"):
                 harness.prepare_artifact_root(root)
+
+
+class IsolationEvidenceTest(unittest.TestCase):
+    def test_finalize_isolation_aggregates_timestamped_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "isolation.json"
+            harness.write_json(path, {
+                "schema_version": "treedb-construction-policy-4587-isolation/v2",
+                "samples": [],
+            })
+            monitor = mock.Mock()
+            monitor.stop.return_value = [
+                {"timestamp": "2026-09-02T00:00:00+00:00", "swap_used_bytes": 0,
+                 "competing_processes": []},
+                {"timestamp": "2026-09-02T00:01:00+00:00", "swap_used_bytes": 0,
+                 "competing_processes": []},
+            ]
+
+            harness.finalize_isolation(path, monitor)
+
+            evidence = json.loads(path.read_text())
+            self.assertEqual(evidence["coverage_completed_at"], "2026-09-02T00:01:00+00:00")
+            self.assertEqual(evidence["peak_swap_used_bytes"], 0)
+            self.assertEqual(evidence["competing_processes"], [])
+
+    def test_explicit_exclusive_lock_is_resolved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            args = harness.parse_args([
+                "--out", str(Path(tmp) / "artifact"),
+                "--exclusive-lock", str(Path(tmp) / "matrix.lock"),
+            ])
+            self.assertEqual(args.exclusive_lock, (Path(tmp) / "matrix.lock").resolve())
 
 
 class HostContextTest(unittest.TestCase):
@@ -765,6 +809,18 @@ class HostContextTest(unittest.TestCase):
 
         self.assertEqual(args.port, 7120)
         self.assertEqual(args.pprof_port, 7121)
+        self.assertEqual(args.exclusive_lock, harness.LIFECYCLE_EXCLUSIVE_LOCK)
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = Path(tmp) / "train.parquet"
+            dataset.write_bytes(b"dataset")
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                harness.parse_args([
+                    "--run-vdbbench", "--rows", "exact", "--lifecycle",
+                    "--case-type", "PerformanceCustomDataset",
+                    "--lifecycle-dataset-file", str(dataset),
+                    "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
+                    "--exclusive-lock", str(Path(tmp) / "run-specific.lock"),
+                ])
 
 
 class SmokeShapeTest(unittest.TestCase):
@@ -1278,6 +1334,7 @@ class ServiceProcessOwnershipTest(unittest.TestCase):
             with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 state = harness.HarnessState(root=root)
+                environment = {"GOMAXPROCS": "12"}
                 proc = mock.Mock(pid=1234)
                 with mock.patch.object(harness.subprocess, "Popen", return_value=proc) as popen, \
                         mock.patch.object(harness, "wait_health", return_value={"ok": True}):
@@ -1293,6 +1350,7 @@ class ServiceProcessOwnershipTest(unittest.TestCase):
                         construction_decision_diagnostics=enabled,
                         pprof_addr="127.0.0.1:6060",
                         append_log=append_log,
+                        environment=environment,
                     )
 
                 expected = [
@@ -1307,6 +1365,33 @@ class ServiceProcessOwnershipTest(unittest.TestCase):
                 self.assertEqual(command, expected)
                 self.assertEqual(command.count("-diagnostic-construction-decisions"), int(enabled))
                 self.assertEqual(popen.call_args.args[0], expected)
+                self.assertEqual(popen.call_args.kwargs["env"], environment)
+                self.assertEqual(state.service_environment, environment)
+
+    def test_lifecycle_vdbbench_environment_is_complete_and_non_inherited(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            harness.os.environ,
+            {"GOMAXPROCS": "12", "GOGC": "off", "HTTPS_PROXY": "http://proxy",
+             "PYTHONPATH": "/unreviewed"},
+            clear=False,
+        ):
+            root = Path(tmp)
+            state = harness.HarnessState(root=root)
+            args = SimpleNamespace(lifecycle=True, num_per_batch=500)
+            environment = harness.vdbbench_row_env(
+                args, Path("/vectordbbench"), Path("/gomap"), state, "scalar",
+            )
+
+        self.assertEqual(set(environment), {
+            "GOMAXPROCS", "PYTHONPATH", "RESULTS_LOCAL_DIR", "LOG_FILE",
+            "NUM_PER_BATCH", "TREEDB_LIFECYCLE_SIDECAR",
+            "TREEDB_LIFECYCLE_BOUNDARY_ACK",
+        })
+        self.assertEqual(
+            environment["PYTHONPATH"],
+            "/vectordbbench:/gomap/clients/python/treedb_client/src",
+        )
+        self.assertEqual(state.vdbbench_environments, {"scalar": environment})
 
     def test_construction_decision_diagnostics_cli_defaults_off(self) -> None:
         default = harness.parse_args(["--port", "9876"])
@@ -1393,6 +1478,7 @@ class HarnessOrderTest(unittest.TestCase):
 
             with mock.patch.object(harness, "collect_context", return_value=context), \
                     mock.patch.object(harness, "build_service", return_value=binary), \
+                    mock.patch.object(harness, "build_storage_audit", return_value=binary), \
                     mock.patch.object(harness, "start_service", side_effect=start), \
                     mock.patch.object(harness, "DiagnosticsSampler", Sampler), \
                     mock.patch.object(harness, "run_vdbbench_tests", side_effect=KeyboardInterrupt), \
@@ -2111,6 +2197,7 @@ class LifecycleValidatorTest(unittest.TestCase):
             manifest["vdbbench"][0]["load_metrics"] = metrics
             set_fixture_vdbbench_command(manifest, "exact")
             manifest["lifecycle"]["dataset"]["sha256"] = harness.sha256_file(dataset_file)
+            manifest["lifecycle"]["dataset"]["sha256_after"] = harness.sha256_file(dataset_file)
             manifest["lifecycle"]["task_config_binding"] = {
                 key: metrics[key] for key in ("result_file", "result_sha256", "task_config_sha256")
             }
@@ -2119,6 +2206,14 @@ class LifecycleValidatorTest(unittest.TestCase):
 
             got = harness.validate_lifecycle_artifact(root)
             self.assertTrue(got["complete"], got)
+            dataset_file.write_bytes(b"mutated after load")
+            tampered = harness.validate_lifecycle_artifact(root)
+            self.assertFalse(tampered["analyzable"], tampered)
+            self.assertTrue(
+                any("dataset checksum" in error for error in tampered["errors"]),
+                tampered,
+            )
+            dataset_file.write_bytes(b"cohere vectors")
 
             sidecar = root / "adapter-lifecycle.jsonl"
             records = [json.loads(line) for line in sidecar.read_text(encoding="utf-8").splitlines()]
@@ -2377,6 +2472,39 @@ class LifecycleValidatorTest(unittest.TestCase):
 
             self.assertFalse(got["analyzable"], got)
             self.assertTrue(any(expected in error for error in got["errors"]), got)
+
+    def test_completed_fixture_requires_work_in_each_construction_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _ = lifecycle_fixture(root)
+            manifest["harness"]["construction_decision_diagnostics"] = True
+            manifest["service"]["command"].append("-diagnostic-construction-decisions")
+            manifest["lifecycle"]["identity"]["config_sha256"] = (
+                harness.lifecycle_config_sha256(manifest))
+            sidecar = root / "adapter-lifecycle.jsonl"
+            records = [
+                json.loads(line)
+                for line in sidecar.read_text(encoding="utf-8").splitlines()
+            ]
+            records[-3]["response"]["status"]["column_graph_build"][
+                "construction_decisions"]["reciprocal"]["decisions"] = 0
+            sidecar.write_text(
+                "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            next(
+                artifact for artifact in manifest["lifecycle"]["raw_artifacts"]
+                if artifact["path"] == "adapter-lifecycle.jsonl"
+            )["sha256"] = harness.sha256_file(sidecar)
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["complete"], got)
+        self.assertTrue(any(
+            "construction-decision diagnostics are missing, empty, or saturated" in error
+            for error in got["completion_errors"]
+        ), got)
 
     def test_completed_fixture_binds_build_parameters_to_raw_optimize_response(self) -> None:
         for key, value in (("m", 17), ("ef_construction", 129)):
@@ -4167,6 +4295,236 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
 
 
+class ProtocolMeasurementProducerTest(unittest.TestCase):
+    def test_protocol_canonical_sha256_includes_record_terminator(self) -> None:
+        value = {"b": 2, "a": 1}
+        expected = hashlib.sha256(b'{"a":1,"b":2}\n').hexdigest()
+        self.assertEqual(harness.protocol_canonical_sha256(value), expected)
+
+    def test_isolation_monitor_rethrows_sampler_failure(self) -> None:
+        initial = {
+            "timestamp": "2026-09-02T00:00:00Z",
+            "swap_used_bytes": 0,
+            "competing_processes": [],
+        }
+        with mock.patch.object(
+            harness, "isolation_sample",
+            side_effect=[initial, RuntimeError("sample failed")],
+        ):
+            monitor = harness.IsolationMonitor(0.001)
+            self.assertTrue(monitor.stop_event.wait(1))
+            with self.assertRaisesRegex(RuntimeError, "isolation monitor failed"):
+                monitor.stop()
+
+    def test_construction_measurements_require_positive_work_in_each_phase(self) -> None:
+        for phase in ("planning", "reciprocal"):
+            for invalid in (None, False, 0, -1, 1.0):
+                with self.subTest(phase=phase, invalid=invalid):
+                    decisions = {
+                        "planning": {"decisions": 1},
+                        "reciprocal": {"decisions": 1},
+                    }
+                    decisions[phase]["decisions"] = invalid
+                    with self.assertRaisesRegex(RuntimeError, f"positive {phase}"):
+                        harness.require_positive_construction_work(decisions)
+
+    def test_diagnostics_sampler_records_first_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            harness, "http_json", return_value={"status": "ok"},
+        ):
+            root = Path(tmp)
+            sampler = harness.DiagnosticsSampler(
+                "http://127.0.0.1:1/diagnostics", root / "diagnostics.jsonl", 60, root,
+            )
+            sample = sampler.sample()
+
+        self.assertEqual(sampler.samples, [sample])
+
+    def test_linux_process_metrics_are_positive(self) -> None:
+        got = harness.linux_process_metrics(os.getpid())
+        self.assertGreaterEqual(got["cpu_nanoseconds"], 0)
+        self.assertGreater(got["peak_rss_bytes"], 0)
+
+    def test_measurements_are_derived_from_raw_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_dir = root / "treedb-data"
+            (data_dir / "maindb").mkdir(parents=True)
+            (data_dir / "maindb" / "index.db").write_bytes(b"persistent")
+            records = [
+                {"event": "reset", "timestamp_ns": 1, "response": {}},
+                {"event": "load_start", "timestamp_ns": 2},
+                {
+                    "event": "batch_accepted",
+                    "timestamp_ns": 3,
+                    "client_sent": 1,
+                    "server_accepted": 1,
+                },
+                {"event": "load_end", "timestamp_ns": 4},
+                {"event": "optimize_start", "timestamp_ns": 1_000_000_000},
+                {
+                    "event": "optimize_end",
+                    "timestamp_ns": 3_000_000_000,
+                    "response": {
+                        "status": {
+                            "column_graph_build": {
+                                "adjacency_build_nanos": 500_000_000,
+                                "construction_decisions": {
+                                    "planning": {"decisions": 1},
+                                    "reciprocal": {"decisions": 1},
+                                },
+                            }
+                        }
+                    },
+                },
+                {"event": "cache_prime", "timestamp_ns": 4_000_000_000},
+                {"event": "cache_warm", "timestamp_ns": 5_000_000_000},
+            ]
+            (root / "adapter-lifecycle.jsonl").write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            diagnostic_records = [
+                {
+                    "boundary": "optimize_start",
+                    "process": {"cpu_nanoseconds": 1_000_000_000, "peak_rss_bytes": 100},
+                    "snapshot": {"treedb.process.memory.total_alloc_bytes": "1000"},
+                },
+                {
+                    "boundary": "optimize_end",
+                    "process": {"cpu_nanoseconds": 3_000_000_000, "peak_rss_bytes": 200},
+                    "snapshot": {"treedb.process.memory.total_alloc_bytes": "2000"},
+                },
+            ]
+            (root / "diagnostics.jsonl").write_text(
+                "".join(json.dumps(record) + "\n" for record in diagnostic_records),
+                encoding="utf-8",
+            )
+            (root / "lifecycle.jsonl").write_text(
+                "\n".join([
+                    json.dumps({"stage": "startup", "timestamp": "2026-09-02T00:00:00Z"}),
+                    json.dumps({"stage": "teardown", "timestamp": "2026-09-02T00:01:00Z"}),
+                    "",
+                ]),
+                encoding="utf-8",
+            )
+            harness.write_json(root / "isolation.json", {"complete": True})
+            storage_audit = {
+                "schema_version": "treedb-column-section-audit/v2",
+                "status": "passed",
+                "collection": "fixture-index",
+                "detailed_sections": False,
+                "read_integrity": "verify",
+                "owned_files": [{
+                    "path": str((data_dir / "maindb/index.db").resolve()),
+                    "bytes": 10,
+                    "domain": "index",
+                }],
+                "physical_accounting": {
+                    "complete": True,
+                    "collection": "fixture-index",
+                    "manifest_generation": 1,
+                    "recovery_manifest_generation": 1,
+                    "manifest_checksum": 123,
+                    "recovery_manifest_checksum": 123,
+                },
+                "storage_plan": {
+                    "before": [
+                        {
+                            "name": name,
+                            "path": str((data_dir / path).resolve()),
+                            "bytes": 10 if name in {"index", "total"} else 0,
+                            "files": 1 if name in {"index", "total"} else 0,
+                            "zero_byte_files": 0,
+                        }
+                        for name, path in (
+                            ("index", "maindb/index.db"),
+                            ("wal", "maindb/wal"),
+                            ("value_vlog", "maindb/value_vlog"),
+                            ("leaf_vlog", "maindb/leaf_vlog"),
+                            ("total", "maindb"),
+                        )
+                    ],
+                    "value_log_gc": {
+                        "BytesTotal": 0, "SegmentsTotal": 0,
+                        "BytesReferenced": 0, "SegmentsReferenced": 0,
+                    },
+                    "leaf_generation_plan": {"Generations": []},
+                },
+                "asset_lifecycle": {
+                    "reachability_complete": True,
+                    "reachability": {"Complete": True, "SegmentEntries": []},
+                },
+            }
+            harness.write_json(root / "storage-ownership-audit.json", storage_audit)
+            args = SimpleNamespace(
+                data_dir=data_dir,
+                lifecycle_dimensions=768,
+                lifecycle_vectors=250000,
+                m=16,
+                ef_construction=128,
+                ef_search=192,
+                rerank_candidates=400,
+                k=100,
+                measurement_run_id="screening-ef128",
+                measurement_dataset_sha256="d" * 64,
+                measurement_role="screening_candidate",
+                measurement_partition="selection",
+            )
+            harness.write_protocol_measurements(
+                harness.HarnessState(root=root), args, "e" * 40
+            )
+            measurements = json.loads((root / "measurements.json").read_text())
+            source = json.loads((root / "measurement-source.json").read_text())
+            configuration = {
+                "dimensions": 768,
+                "metric": "cosine",
+                "m": 16,
+                "ef_construction": 128,
+                "ef_search": 192,
+                "configured_rerank_candidates": 400,
+                "effective_rerank_candidates": 192,
+                "top_k": 100,
+            }
+            manifest = {
+                "lifecycle": {
+                    "expected_rows": 250000,
+                    "storage_ownership_audit": "storage-ownership-audit.json",
+                    "raw_artifacts": [
+                        {"path": "adapter-lifecycle.jsonl",
+                         "sha256": harness.sha256_file(root / "adapter-lifecycle.jsonl")},
+                        {"path": "diagnostics.jsonl",
+                         "sha256": harness.sha256_file(root / "diagnostics.jsonl")},
+                        {"path": "storage-ownership-audit.json",
+                         "sha256": harness.sha256_file(root / "storage-ownership-audit.json")},
+                    ],
+                },
+                "service": {"data_dir": str(data_dir)},
+                "harness": {"quantized_index_name": "fixture-index"},
+            }
+            validator_values = policy.measurement_source_values(
+                root,
+                measurements["source"],
+                measurements["phase_seconds"],
+                measurements["diagnostic_work_profile"],
+                configuration,
+                manifest,
+                source["isolation"],
+            )
+            self.assertEqual(measurements["determinism"], validator_values["determinism"])
+
+        self.assertEqual(measurements["phase_seconds"], {"adjacency": 0.5, "optimize": 2.0})
+        self.assertEqual(measurements["cpu_utilization_logical_cores"], 1.0)
+        self.assertEqual(measurements["resources"], {
+            "peak_rss_bytes": 200,
+            "persisted_bytes": 10,
+            "cumulative_allocated_bytes": 2000.0,
+        })
+        self.assertEqual(measurements["origin"]["run_id"], "screening-ef128")
+        self.assertEqual(source["data_files"][0]["path"], "maindb/index.db")
+        self.assertEqual(source["isolation"]["path"], "isolation.json")
+
+
 class LifecycleIntegrationTest(unittest.TestCase):
     def _complete_fixture(self, root: Path):
         dataset = root / "train.parquet"
@@ -4740,14 +5098,20 @@ class LifecycleIntegrationTest(unittest.TestCase):
             sidecar.write_text(
                 "".join(json.dumps(record) + "\n" for record in records[:-1]), encoding="utf-8"
             )
+            initial_dataset_sha = state.lifecycle["dataset"]["sha256"]
+            args.lifecycle_dataset_file.write_bytes(b"mutated after failed load")
+            mutated_dataset_sha = harness.sha256_file(args.lifecycle_dataset_file)
 
             harness.finalize_partial_lifecycle(state, args, sampler)
             stages = [
                 json.loads(line)["stage"]
                 for line in (root / "lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
             ]
+            captured_dataset_sha = state.lifecycle["dataset"]["sha256_after"]
 
         self.assertEqual(state.lifecycle["result_status"], "partial")
+        self.assertEqual(captured_dataset_sha, mutated_dataset_sha)
+        self.assertNotEqual(captured_dataset_sha, initial_dataset_sha)
         self.assertEqual(stages, [
             "startup", "reset", "load_start", "load_end", "optimize_start",
             "optimize_end", "cache_prime",
@@ -4928,6 +5292,14 @@ class ManifestFileListTest(unittest.TestCase):
             manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
             self.assertIsNone(manifest["vdbbench_load_metrics"])
             self.assertFalse(manifest["harness"]["construction_decision_diagnostics"])
+            self.assertEqual(
+                manifest["harness"]["python_executable"], str(Path(sys.executable))
+            )
+            self.assertEqual(
+                manifest["harness"]["python_sha256"],
+                harness.sha256_file(Path(sys.executable)),
+            )
+            self.assertEqual(manifest["harness"]["use_uv"], "auto")
             self.assertNotIn("lifecycle_route_proof", manifest)
 
     def test_manifest_uses_service_identity_captured_before_launch(self) -> None:

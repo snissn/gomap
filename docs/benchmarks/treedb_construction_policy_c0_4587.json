@@ -1,0 +1,649 @@
+{
+  "schema_version": "treedb-construction-policy-4587/v8",
+  "authority": "FROZEN_AUTHORITATIVE",
+  "engineering_status": "QUALIFIED",
+  "execution_validity": "REQUIRES_FINAL_EXTERNAL_AUTHORIZATION",
+  "protocol_verdict": "PROTOCOL_ACCEPTED",
+  "scientific_inference": "none",
+  "issue": 4587,
+  "parent_issue": 4586,
+  "profile": "promotion",
+  "stage": "frozen",
+  "trial_started": false,
+  "scope": "C0_ONLY",
+  "forbidden": [
+    "production_default_change",
+    "C1_before_complete_C0_NO_GO",
+    "C2_without_parent_amendment",
+    "post_holdout_tuning",
+    "AWS"
+  ],
+  "source_identity": {
+    "accepted_baseline_commit": "fcc1d79696a9b7c6655b793f6224f6937e698ce5",
+    "definition_base_commit": "05c7bd35b02196879dc4378248228927ed367517",
+    "branch": "codex/4587-construction-policy",
+    "gomap_root": "/mnt/fast4tb/gomap-4586-exec/issue-4587",
+    "gomap_required_clean": true,
+    "runtime_subtrees": {
+      "TreeDB/collections": "e42347cf4f85a815eb1c3f8b91bb4c73ae1136b8",
+      "cmd/treedb-document-service": "a27f75f3dfd36de4001b7ab50fb64afc737e665f"
+    },
+    "runtime_blobs": {
+      "TreeDB/collections/vector_index.go": "5533e5b75670f52c0b711ca699c7a03d60648bf6",
+      "TreeDB/collections/vector_index_ops.go": "dd41fd9619215df367cc910a1390ae5d49798e4b",
+      "TreeDB/collections/vector_index_rebuild.go": "21bed0f84ae5301d17619ed2753300be73cf422c"
+    },
+    "harness_blobs": {
+      "scripts/treedb_vectordbbench_artifact.py": "eae8a3ce940829fdab2ea7fb38db6a3f921c701d",
+      "cmd/treedb_column_section_audit/main.go": "606e64d9962b179ac1643aa7f43ead3df27e0b81"
+    },
+    "vectordbbench": {
+      "root": "/mnt/fast4tb/codex-vectordbbench-4545",
+      "commit": "52a46b55e41c34cfb86f8d21eafb70b4cca19787",
+      "required_clean": true,
+      "subtrees": {
+        "vectordb_bench/backend/clients/treedb": "69fb911940af2c2d7d93c3664aef50a82f6ed4b0",
+        "vectordb_bench/backend/runner": "92d5d4d6acd32dff629bab5abacf7a274575dfa9",
+        "vectordb_bench/cli": "bfda581170a572454aaaa87983aa35aafb645aa1"
+      },
+      "blobs": {
+        "vectordb_bench/backend/dataset.py": "c249f91c983044694baebdbe6eab761922756d44",
+        "vectordb_bench/backend/task_runner.py": "ac95643f27fe6fefb4866f636c584fe0b07901da",
+        "vectordb_bench/backend/clients/treedb/cli.py": "478fd3ceb62de76f25e234a54cc66d9cbde74ad3"
+      }
+    },
+    "runtime": {
+      "go": "go1.26.0 linux/amd64",
+      "go_executable": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin/go",
+      "go_sha256": "61e7455a40a2fdfcdab99e881cd30ba10e216e3d0f32ab5f8e59d10cac4ecf57",
+      "go_root": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64",
+      "go_path": "/home/mikers/.gvm/pkgsets/go1.25/global",
+      "go_mod_cache": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod",
+      "python": "3.10.12",
+      "python_executable": "/usr/bin/python3",
+      "python_sha256": "7d51cd6b48b521277f5caa4610a82126e315fa2be4df069823a8b1eeb5bd4a86",
+      "pyarrow": "20.0.0",
+      "host_cpu": "11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz",
+      "physical_cores": 6,
+      "logical_cpus": 12,
+      "gomaxprocs": 12,
+      "storage_mount": "/mnt/fast4tb",
+      "filesystem": "ext4"
+    }
+  },
+  "datasets": {
+    "canonical_query_source": {
+      "rows": 1000,
+      "dimensions": 768,
+      "ids": "int64 0..999 in ascending source order",
+      "test_sha256": "a2ec76c907da22e5533ce31c1105e4fd4d3c4597915a7771d5e41897a95ecbed",
+      "neighbors_sha256": "30e7467766be3e2a6b167df16388a4a35e38fa6cc9e593fb659cce81ffde0940",
+      "test_path": "/mnt/fast4tb/treedb-4568-dataset-cohere250k/test.parquet",
+      "neighbors_path": "/mnt/fast4tb/treedb-4568-dataset-cohere250k/neighbors.parquet"
+    },
+    "partition": {
+      "algorithm": "sort query ordinals by (SHA256(seed || NUL || signed-int64-big-endian(query_id)), query_id, source_ordinal); selection is first 500 ranks; emit both partitions in source order",
+      "seed": "snissn/gomap#4587-c0-query-split-v1",
+      "selection_rows": 500,
+      "holdout_rows": 500,
+      "selection_ordinals_sha256": "8b13d4b20cecc10d0332e347ba99f71ef043152c85ba3c6d4b149d23088428c2",
+      "holdout_ordinals_sha256": "8dec75b203bc32ffc385553f5dc096a318fd4ffa93b80a934364da7d88b239cd",
+      "holdout_use": "untouched until the selected C0 winner and matched 1M efConstruction=300 control; no parameter change or rerun after inspection"
+    },
+    "screening": {
+      "name": "cohere-medium-250k-selection-v1",
+      "directory": "/mnt/fast4tb/treedb-4587-c0-inputs-draft/selection-250k",
+      "vectors": 250000,
+      "dimensions": 768,
+      "metric": "COSINE",
+      "files": {
+        "train.parquet": "27c6144b8ab65e24015775f18943690c30ac17df4e052745877f3663d350db0b",
+        "test.parquet": "0b8e69435dfdfe010d8017b4bf1456168866ac08ca20d6a27723172e89e525b9",
+        "neighbors.parquet": "babf22a38f63b8a119b5fcf9386ed0bb83eb97f6f11d25b794ce68e4a19e7c91"
+      }
+    },
+    "decision": {
+      "name": "cohere-medium-1m-holdout-v1",
+      "directory": "/mnt/fast4tb/treedb-4587-c0-inputs-draft/holdout-1m",
+      "vectors": 1000000,
+      "dimensions": 768,
+      "metric": "COSINE",
+      "files": {
+        "train.parquet": "023b16f7abafecda7c790a25f6eb3837367070f6ea8837be1f986fbd302ccf21",
+        "test.parquet": "f69442c9c5c0c6487d975e58740c8dd1092417e128de5f9800d4be69fb96c81c",
+        "neighbors.parquet": "6ef9523d55b8111e1c01dd0fd3363dd969ece21f40df6ce03c3f9d9a267e3c15"
+      }
+    }
+  },
+  "experiment": {
+    "family": "C0_no_code_exact_HNSW_construction_width",
+    "causal_difference": "changes the prospectively quality-gated efConstruction topology contract; it does not preserve graph bytes or resurrect exact-dot, worker, batch, epoch, replay, coalescing, chunking, scalar-u8 ordinary-diversity, Vamana, or landmark work",
+    "graph": {
+      "strategy": "column_graph",
+      "metric": "cosine",
+      "dimensions": 768,
+      "m": 16,
+      "ef_construction_coordinates": [128, 192, 256, 300],
+      "control_ef_construction": 300,
+      "row_order": "source parquet order",
+      "document_id": "source parquet id",
+      "tie_contract": "existing exact-FP32 production comparator and document-ID-derived level/tie behavior; no code or build-flag change"
+    },
+    "search": {
+      "top_k": 100,
+      "ef_search": 192,
+      "exact_route": "exact_hnsw_search_pack_v1",
+      "production_route": "quantized_rerank",
+      "score_plane": "embedding.scalar_u8.fast",
+      "configured_rerank_candidates": 400,
+      "effective_rerank_candidates": 192,
+      "diagnostic_transport": {
+        "stats_mode": "full_diagnostics",
+        "response_format": "full",
+        "require_vector_index_guards": true
+      },
+      "production_transport": {
+        "stats_mode": "production",
+        "response_format": "ids",
+        "require_vector_index_guards": false
+      },
+      "concurrency": 32,
+      "concurrency_duration_seconds": 30
+    },
+    "ordering": {
+      "screening_run_order": [128, 192, 256, 300],
+      "screening_repetitions": 1,
+      "decision_run_order": [300, "selected_screening_winner"],
+      "winner_order": [
+        "largest adjacency_reduction_fraction",
+        "smallest max(recall_loss, ndcg_loss)",
+        "lowest efConstruction"
+      ],
+      "screening_promotion_requires": "all GO gates except 1M projection, applied to the selection partition against the efConstruction=300 screening control, including at least 30% adjacency reduction",
+      "no_screening_winner": "C0_NO_GO; do not inspect holdout and do not run 1M",
+      "holdout_failure": "C0_NO_GO; no retuning or rerun; C1 may be designed only after recording the complete C0 disposition",
+      "winner_selection_event": "after every ordered 250K lifecycle completes, validate the checksum-bound screening rows and write one checksum-bound selection event; neither 1M lifecycle may start until after that event, and the decision control lifecycle must complete strictly before the decision candidate lifecycle starts"
+    },
+    "isolation_and_noise": {
+      "lock_path": "/mnt/fast4tb/treedb-4587-c0.lock",
+      "gomaxprocs": 12,
+      "fixed_build_flags": ["-trimpath", "-buildvcs=false"],
+      "profiles_on_timed_rows": false,
+      "diagnostics_interval_seconds": 5,
+      "sampling_gap_tolerance_seconds": 1,
+      "warmup": "no construction warmup; each diagnostic full-response route preflight immediately precedes its production-stats IDs-only row",
+      "repetition": "one timed build per frozen coordinate; deterministic identity is the checksum-bound exact configuration, complete persisted-data ledger, and adapter lifecycle ledger from that run; no A/A, synthetic repeat, or quality-triggered rerun",
+      "captured_evidence": {
+        "artifact_owned_fresh_root": "validated by the lifecycle artifact manifest and base lifecycle validator",
+        "process_isolation": "the lifecycle harness holds the configured exclusive lock for the full run and emits checksum-bound timestamped process samples spanning lifecycle startup through teardown; every sample must contain no competing external gomap/VectorDBBench process",
+        "swap": "the same timestamped isolation series records swap used bytes throughout lifecycle; every sample and the derived peak must be zero",
+        "noise_action": "mark the entire matrix invalid and stop; rerun requires coordinator amendment before any quality inspection"
+      }
+    },
+    "required_metrics_per_run": {
+      "phase_seconds": ["adjacency", "optimize"],
+      "cpu_utilization": "cpu_utilization_logical_cores",
+      "determinism": [
+        "graph_config_checksum", "persisted_data_ledger_checksum",
+        "adapter_lifecycle_checksum"
+      ],
+      "diagnostic_work_profile": ["planning", "reciprocal"],
+      "resources": [
+        "peak_rss_bytes", "cumulative_allocated_bytes", "persisted_bytes"
+      ],
+      "search_evidence_order": [
+        "diagnostic exact full_diagnostics/full with guards",
+        "production exact production/ids",
+        "diagnostic scalar_u8_rerank full_diagnostics/full with guards",
+        "production scalar_u8_rerank production/ids"
+      ],
+      "index_identity": [
+        "name", "generation", "dimension", "metric", "vector_strategy", "vector_m",
+        "vector_ef_construction", "vector_ef_search", "quantized_indexes"
+      ]
+    },
+    "go_gates": {
+      "minimum_adjacency_reduction_fraction": 0.30,
+      "maximum_absolute_recall_loss": 0.002,
+      "maximum_absolute_ndcg_loss": 0.002,
+      "minimum_production_qps_ratio": 0.95,
+      "maximum_concurrent_p99_ratio": 1.05,
+      "maximum_peak_rss_ratio": 1.0,
+      "maximum_unexplained_persisted_or_allocation_increase_bytes": 0,
+      "minimum_projected_10m_adjacency_reduction_fraction": 0.30,
+      "require_deterministic_identity": true,
+      "require_all_route_and_reopen_guardrails": true
+    },
+    "projection_model": {
+      "source_scale": 1000000,
+      "target_scale": 10000000,
+      "complexity": "n_log_n",
+      "frozen_10m_control_adjacency_seconds": 5774.242
+    }
+  },
+  "commands": {
+    "artifact_root": "/mnt/fast4tb/treedb-4587-c0-evidence",
+    "authorization_manifest": "/mnt/fast4tb/treedb-4587-c0-evidence/execution-authorization.json",
+    "binary": "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
+    "build_argv": ["/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin/go", "build", "-trimpath", "-buildvcs=false", "-o", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service", "./cmd/treedb-document-service"],
+    "storage_audit_binary": "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-column-section-audit",
+    "storage_audit_build_argv": ["/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin/go", "build", "-trimpath", "-buildvcs=false", "-o", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-column-section-audit", "./cmd/treedb_column_section_audit"],
+    "build_environment": {
+      "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin",
+      "GOROOT": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64",
+      "GOPATH": "/home/mikers/.gvm/pkgsets/go1.25/global",
+      "GOMODCACHE": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod",
+      "GOCACHE": "/mnt/fast4tb/treedb-4587-c0-evidence/go-build-cache",
+      "TMPDIR": "/mnt/fast4tb/treedb-4587-c0-evidence/tmp",
+      "GOENV": "off",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "GOFLAGS": "",
+      "GOEXPERIMENT": "",
+      "GODEBUG": "",
+      "GOFIPS140": "off",
+      "GOTELEMETRY": "off",
+      "GO111MODULE": "on",
+      "GOPROXY": "off",
+      "GOSUMDB": "off",
+      "CGO_ENABLED": "0",
+      "GOOS": "linux",
+      "GOARCH": "amd64",
+      "GOAMD64": "v1",
+      "GOMAXPROCS": "12"
+    },
+    "authorization_generate_argv_template": [
+      "/usr/bin/python3", "scripts/treedb_construction_policy_4587.py",
+      "docs/benchmarks/treedb_construction_policy_c0_4587.json",
+      "--generate-authorization", "/mnt/fast4tb/treedb-4587-c0-evidence/execution-authorization.json",
+      "--service-binary", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
+      "--storage-audit-binary", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-column-section-audit",
+      "--reviewed-head", "{final_reviewed_head}"
+    ],
+    "authorized_preflight_argv": [
+      "/usr/bin/python3", "scripts/treedb_construction_policy_4587.py",
+      "docs/benchmarks/treedb_construction_policy_c0_4587.json",
+      "--authorization", "/mnt/fast4tb/treedb-4587-c0-evidence/execution-authorization.json"
+    ],
+    "screening_runs_file": "/mnt/fast4tb/treedb-4587-c0-evidence/screening-runs.json",
+    "winner_selection_generate_argv_template": [
+      "/usr/bin/python3", "scripts/treedb_construction_policy_4587.py",
+      "docs/benchmarks/treedb_construction_policy_c0_4587.json",
+      "--authorization", "/mnt/fast4tb/treedb-4587-c0-evidence/execution-authorization.json",
+      "--screening-runs", "/mnt/fast4tb/treedb-4587-c0-evidence/screening-runs.json",
+      "--generate-winner-selection", "/mnt/fast4tb/treedb-4587-c0-evidence/winner-selection.json"
+    ],
+    "lifecycle_service_environment": {
+      "GOMAXPROCS": "12"
+    },
+    "lifecycle_vdbbench_environment_template": {
+      "GOMAXPROCS": "12",
+      "PYTHONPATH": "/mnt/fast4tb/codex-vectordbbench-4545:/mnt/fast4tb/gomap-4586-exec/issue-4587/clients/python/treedb_client/src",
+      "RESULTS_LOCAL_DIR": "{artifact_root}/vdbbench-results/{row}",
+      "LOG_FILE": "{artifact_root}/vdbbench.log",
+      "NUM_PER_BATCH": "500",
+      "TREEDB_LIFECYCLE_SIDECAR": "{artifact_root}/adapter-lifecycle.jsonl",
+      "TREEDB_LIFECYCLE_BOUNDARY_ACK": "{artifact_root}/lifecycle-boundary-diagnostics.json"
+    },
+    "lifecycle_harness_argv_template": [
+      "/usr/bin/python3", "scripts/treedb_vectordbbench_artifact.py",
+      "--python", "/usr/bin/python3", "--use-uv", "off",
+      "--out", "{artifact_root}",
+      "--vectordbbench-dir", "/mnt/fast4tb/codex-vectordbbench-4545",
+      "--service-bin", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
+      "--storage-audit-bin", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-column-section-audit",
+      "--run-tests", "off", "--run-vdbbench", "--rows", "scalar", "--lifecycle",
+      "--construction-decision-diagnostics",
+      "--measurement-run-id", "{run_id}",
+      "--measurement-dataset-sha256", "{dataset_sha256}",
+      "--measurement-role", "{role}", "--measurement-partition", "{partition}",
+      "--exclusive-lock", "/mnt/fast4tb/treedb-4587-c0.lock",
+      "--case-type", "PerformanceCustomDataset", "--k", "100",
+      "--num-concurrency", "32", "--concurrency-duration", "30",
+      "--client-timeout", "3600", "--vdbbench-timeout", "36000",
+      "--m", "16", "--ef-construction", "{ef_construction}", "--ef-search", "192",
+      "--quantized-index-name", "embedding.scalar_u8.fast", "--rerank-candidates", "400",
+      "--num-per-batch", "500", "--diagnostics-interval", "5",
+      "--lifecycle-dataset-file", "{dataset_dir}/train.parquet",
+      "--lifecycle-dataset-name", "{dataset_name}",
+      "--lifecycle-vectors", "{vectors}", "--lifecycle-dimensions", "768",
+      "--index-prefix", "{index_prefix}", "--db-label", "{db_label}",
+      "--vdbbench-extra-args", "--custom-case-name {case_name} --custom-dataset-name {dataset_name} --custom-dataset-dir {dataset_dir} --custom-dataset-size {vectors} --custom-dataset-dim 768 --custom-dataset-file-count 1 --document-embedding-encoding f32_le_b64 --query-embedding-encoding f32_le --stats-mode production --response-format ids --skip-vector-index-guards"
+    ],
+    "existing_index_search": {
+      "service_argv_template": [
+        "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
+        "-dir", "{artifact_root}/treedb-data", "-addr", "{addr}", "-profile", "command_wal_durable"
+      ],
+      "service_environment": {
+        "GOMAXPROCS": "12"
+      },
+      "probe_runner": "scripts/treedb_vdbbench_search_existing_index.py",
+      "probe_argv_template": [
+        "/usr/bin/python3", "scripts/treedb_vdbbench_search_existing_index.py",
+        "--base-url", "{base_url}", "--index-name", "{index_name}",
+        "--query-json", "{query_json}", "--metadata-out", "{metadata_out}",
+        "--diagnostic-response-out", "{diagnostic_response_out}",
+        "--production-response-out", "{production_response_out}",
+        "--diagnostic-result", "{diagnostic_result}",
+        "--production-result", "{production_result}",
+        "--diagnostic-origin-out", "{diagnostic_origin_out}",
+        "--production-origin-out", "{production_origin_out}",
+        "--command-ledger", "{artifact_root}/probe-command-ledger.jsonl",
+        "--run-id", "{run_id}", "--artifact-root", "{artifact_root}",
+        "--manifest-sha256", "{manifest_sha256}", "--execution-commit", "{execution_commit}",
+        "--dataset-sha256", "{dataset_sha256}", "--scale", "{vectors}",
+        "--dataset-name", "{dataset_name}", "--dataset-dir", "{dataset_dir}",
+        "--vectordbbench-dir", "/mnt/fast4tb/codex-vectordbbench-4545",
+        "--role", "{role}", "--partition", "{partition}",
+        "--lifecycle-sha256", "{lifecycle_sha256}",
+        "--lifecycle-started-at", "{lifecycle_started_at}",
+        "--lifecycle-completed-at", "{lifecycle_completed_at}",
+        "--ef-construction", "{ef_construction}",
+        "--expected-generation", "{expected_generation}", "--route", "{route}",
+        "--service-bin", "/mnt/fast4tb/treedb-4587-c0-evidence/bin/treedb-document-service",
+        "--service-binary-sha256", "{service_binary_sha256}",
+        "--python-executable", "/usr/bin/python3",
+        "--python-sha256", "7d51cd6b48b521277f5caa4610a82126e315fa2be4df069823a8b1eeb5bd4a86",
+        "--search-isolation-out", "{artifact_root}/search-isolation-{route}.json",
+        "--exclusive-lock", "/mnt/fast4tb/treedb-4587-c0.lock",
+        "--diagnostics-interval", "5", "--service-health-timeout", "60"
+      ],
+      "probe_contract": "for each route, the helper acquires the frozen exclusive lock, starts isolation sampling, launches the exact authorized service binary against the retained artifact data root with the complete frozen non-inherited service environment, waits healthy, then executes diagnostic probe to canonical VectorDBBench and production probe to canonical VectorDBBench sequentially. It terminates the service, closes monitoring, writes checksum-bound isolation and origin sidecars, and only then releases the lock. Preexisting outputs, lock contention, binary/argv/environment/data-root drift, service exit, swap, competing processes, sampling errors, reruns, stale results, reordered routes, or ledger rebinding fail closed.",
+      "vectordbbench_common_argv_template": [
+        "/usr/bin/python3", "-m", "vectordb_bench.cli.vectordbbench", "{subcommand}",
+        "--base-url", "{base_url}", "--index-name", "{index_name}",
+        "--skip-drop-old", "--skip-load", "--search-serial", "--search-concurrent",
+        "--m", "16", "--ef-construction", "{ef_construction}", "--ef-search", "192",
+        "--case-type", "PerformanceCustomDataset", "--k", "100",
+        "--num-concurrency", "32", "--concurrency-duration", "30",
+        "--custom-case-name", "{case_name}", "--custom-dataset-name", "{dataset_name}",
+        "--custom-dataset-dir", "{dataset_dir}", "--custom-dataset-size", "{vectors}",
+        "--custom-dataset-dim", "768", "--custom-dataset-file-count", "1",
+        "--query-embedding-encoding", "f32_le"
+      ],
+      "diagnostic_transport_argv": ["--stats-mode", "full_diagnostics", "--response-format", "full"],
+      "production_transport_argv": [
+        "--stats-mode", "production", "--response-format", "ids", "--skip-vector-index-guards"
+      ],
+      "subcommands": {
+        "exact": "treedbcolumngraphexact",
+        "scalar_u8_rerank": "treedbscalaru8rerank"
+      },
+      "route_extra_argv": {
+        "exact": [],
+        "scalar_u8_rerank": [
+          "--quantized-index-name", "embedding.scalar_u8.fast", "--quantized-rerank-candidates", "400"
+        ]
+      },
+      "identity_check": "the helper owns the complete search envelope and never creates or resets the index; it launches the authorized service binary with the exact retained data root and the unmodified adapter's idempotent create_index independently opens only a compatible existing index",
+      "required_stages": ["search_serial", "search_concurrent"],
+      "required_order": ["diagnostic_exact", "production_exact", "diagnostic_scalar_u8_rerank", "production_scalar_u8_rerank"]
+    },
+    "decision_packet": "/mnt/fast4tb/treedb-4587-c0-evidence/decision.json",
+    "decision_validation_argv": [
+      "/usr/bin/python3", "scripts/treedb_construction_policy_4587.py",
+      "docs/benchmarks/treedb_construction_policy_c0_4587.json",
+      "--decision", "/mnt/fast4tb/treedb-4587-c0-evidence/decision.json"
+    ]
+  },
+  "execution_authorization_policy": {
+    "initial_status": "MISSING_PRE_REVIEW",
+    "creation_boundary": "the coordinator creates the external manifest only after the final reviewed protocol head is merged/rebased and the exact service binary exists",
+    "trust_boundary": "the durable coordinator artifact records review provenance and detects accidental drift; checksums are not a cryptographic signature",
+    "validation": "draft mode is never authorized; non-draft preflight and every decision require the manifest and its checksum"
+  },
+  "execution_authorization_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "treedb-construction-policy-4587-execution-authorization/v3",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schema_version",
+      "authorization_kind",
+      "artifact_root",
+      "execution_commit",
+      "contract_sha256",
+      "protocol_files",
+      "source_identity",
+      "service_binary",
+      "storage_audit_binary"
+    ],
+    "properties": {
+      "schema_version": {
+        "const": "treedb-construction-policy-4587-execution-authorization/v3"
+      },
+      "authorization_kind": {
+        "const": "COORDINATOR_REVIEW_PROVENANCE"
+      },
+      "artifact_root": {
+        "const": "/mnt/fast4tb/treedb-4587-c0-evidence"
+      },
+      "execution_commit": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{40}$"
+      },
+      "contract_sha256": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "protocol_files": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "docs/benchmarks/treedb_construction_policy_c0_4587.json",
+          "docs/benchmarks/treedb_construction_policy_history_2026-09-02.md",
+          "scripts/treedb_construction_policy_4587.py",
+          "scripts/test_treedb_construction_policy_4587.py",
+          "scripts/treedb_vdbbench_search_existing_index.py",
+          "scripts/treedb_vectordbbench_artifact.py",
+          "scripts/treedb_vectordbbench_artifact_test.py",
+          "cmd/treedb_column_section_audit/main.go",
+          "cmd/treedb_column_section_audit/main_test.go"
+        ],
+        "properties": {
+          "docs/benchmarks/treedb_construction_policy_c0_4587.json": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "docs/benchmarks/treedb_construction_policy_history_2026-09-02.md": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "scripts/treedb_construction_policy_4587.py": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "scripts/test_treedb_construction_policy_4587.py": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "scripts/treedb_vdbbench_search_existing_index.py": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "scripts/treedb_vectordbbench_artifact.py": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "scripts/treedb_vectordbbench_artifact_test.py": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "cmd/treedb_column_section_audit/main.go": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "cmd/treedb_column_section_audit/main_test.go": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "source_identity": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runtime_subtrees": {
+            "type": "object"
+          },
+          "runtime_blobs": {
+            "type": "object"
+          },
+          "harness_blobs": {
+            "type": "object"
+          },
+          "vectordbbench": {
+            "type": "object"
+          },
+          "runtime": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "runtime_subtrees",
+          "runtime_blobs",
+          "harness_blobs",
+          "vectordbbench",
+          "runtime"
+        ]
+      },
+      "service_binary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "build_argv", "build_environment", "go_version"],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "build_argv": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "build_environment": {
+            "type": "object",
+            "additionalProperties": {"type": "string"}
+          },
+          "go_version": {
+            "const": "go version go1.26.0 linux/amd64"
+          }
+        }
+      },
+      "storage_audit_binary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "build_argv", "build_environment", "go_version"],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "build_argv": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "build_environment": {
+            "type": "object",
+            "additionalProperties": {"type": "string"}
+          },
+          "go_version": {
+            "const": "go version go1.26.0 linux/amd64"
+          }
+        }
+      }
+    }
+  },
+  "isolation_schema": {
+    "schema_version": "treedb-construction-policy-4587-isolation/v2",
+    "exact_keys": [
+      "schema_version", "artifact_root", "lock_path", "lock_acquired_at",
+      "lock_held_through_evidence", "coverage_completed_at", "gomaxprocs",
+      "competing_processes", "peak_swap_used_bytes", "samples"
+    ],
+    "sample_exact_keys": ["timestamp", "swap_used_bytes", "competing_processes"],
+    "coverage": "exclusive lock and timestamped samples span lifecycle startup through teardown; every sample proves zero swap use and no competing external benchmark process; every adjacent timestamp gap is positive and no greater than diagnostics_interval_seconds plus sampling_gap_tolerance_seconds"
+  },
+  "measurement_schema": {
+    "schema_version": "treedb-construction-policy-4587-measurements/v4",
+    "exact_keys": [
+      "schema_version", "source", "origin", "phase_seconds",
+      "cpu_utilization_logical_cores", "determinism", "diagnostic_work_profile",
+      "resources", "projected_10m_adjacency_reduction_fraction"
+    ],
+    "source_exact_keys": [
+      "schema_version", "adapter_lifecycle", "diagnostics", "isolation", "storage_ownership_audit", "data_root", "data_files", "audited_data_files"
+    ],
+    "origin_exact_keys": [
+      "run_id", "artifact_root", "execution_commit", "dataset_sha256", "scale",
+      "role", "partition", "ef_construction", "lifecycle_sha256",
+      "lifecycle_started_at", "lifecycle_completed_at"
+    ],
+    "producer_binding": "the lifecycle harness finalizes isolation monitoring before writing checksum-bound measurement-source.json and measurements.json, including finalized isolation, originating run/dataset/artifact root/scale/role/partition, and lifecycle checksum/start/completion. The validator requires those origin values to equal the enclosing retained run, requires the measurement-source isolation binding to equal the run isolation binding, verifies the source adapter and diagnostics bindings against manifest.lifecycle.raw_artifacts, requires data_root to equal manifest.service.data_dir, resolves the complete persisted-data ledger for filesystem closure, derives audited_data_files from the storage-ownership audit for persisted-byte accounting, and recomputes every emitted measurement value exactly. The producer leaves projected_10m_adjacency_reduction_fraction null; the validator derives the prospective 10M adjacency reduction from the raw 1M candidate adjacency seconds by (10M*ln(10M))/(1M*ln(1M)) and compares that derived value against the gate.",
+    "observer_phase_exact_keys": [
+      "decisions", "accepted", "rejected", "direct_exact_fp32_rows", "direct_exact_fp32_calls",
+      "indexed_exact_fp32_rows", "indexed_exact_fp32_calls", "approximate_score_rows",
+      "approximate_score_calls", "exact_fp32_dimensions", "diversity_predicates",
+      "diversity_candidates", "diversity_comparisons_requested",
+      "diversity_comparisons_executed", "unique_row_pairs", "repeated_row_pairs",
+      "row_pair_replacements", "active_wall_nanos", "saturated",
+      "candidate_count_histogram", "selected_count_histogram",
+      "diversity_early_exit_histogram", "reciprocal_group_histogram",
+      "prune_survivor_histogram"
+    ],
+    "timing_source": "checksum-bound lifecycle JSONL startup and teardown events"
+  },
+  "result_schema": {
+    "schema_version": "treedb-construction-policy-4587-results/v5",
+    "allowed_verdicts": ["GO", "C0_NO_GO"],
+    "decision_exact_keys": [
+      "schema_version", "execution_commit", "contract_sha256", "authorization",
+      "winner_selection", "verdict", "runs"
+    ],
+    "authorization_binding": {
+      "exact_keys": ["path", "sha256"],
+      "path": "absolute or relative to commands.artifact_root"
+    },
+    "winner_selection_binding": {
+      "exact_keys": ["path", "sha256"],
+      "schema_version": "treedb-construction-policy-4587-winner-selection/v2",
+      "no_winner_value": null
+    },
+    "search_origin_schema_version": "treedb-construction-policy-4587-search-origin/v3",
+    "search_evidence_exact_keys": [
+      "kind", "route", "origin", "result", "response", "index_metadata"
+    ],
+    "search_origin_exact_keys": [
+      "schema_version", "run_id", "artifact_root", "manifest_sha256",
+      "execution_commit", "dataset_sha256", "scale", "role", "partition",
+      "ef_construction", "lifecycle_sha256", "lifecycle_started_at",
+      "lifecycle_completed_at", "kind", "route", "result_sha256",
+      "response_sha256", "index_metadata_sha256", "command_ledger_path",
+      "command_sequence", "command_record_sha256", "probe_started_at",
+      "probe_completed_at", "service_binary_sha256", "service_argv", "isolation",
+      "search_started_at", "search_completed_at"
+    ],
+    "search_isolation_schema": {
+      "schema_version": "treedb-construction-policy-4587-search-isolation/v3",
+      "exact_keys": [
+        "schema_version", "artifact_root", "lock_path", "lock_acquired_at",
+        "coverage_completed_at", "gomaxprocs", "service_environment",
+        "service_binary_sha256", "service_argv",
+        "service_started_at", "service_completed_at", "service_exit_code", "samples"
+      ],
+      "sample_exact_keys": ["timestamp", "swap_used_bytes", "competing_processes"]
+    },
+    "production_metric_bounds": "Recall and NDCG are finite in [0,1]; QPS and concurrent p99 are finite and strictly positive",
+    "decision_resource_bounds": "peak_rss_bytes, persisted_bytes, and cumulative_allocated_bytes are strictly positive for both decision rows",
+    "run_roles": ["screening_candidate", "screening_control", "decision_candidate", "decision_control"],
+    "run_cardinality": "exactly four ordered 250K rows, then either stop with a null winner_selection or bind one selection event and exactly matched 1M control and selected winner",
+    "evidence_binding": "every lifecycle plus its exact and scalar search envelopes completes before the next lifecycle starts. Each checksum-bound search origin binds the authorized service binary and exact argv, retained manifest data root, exclusive lock, GOMAXPROCS, zero-swap/no-competitor sampled isolation with bounded positive gaps, complete command coverage, append-only command/result evidence, run identity, dataset, scale, role, partition, coordinate, and execution timing. Exact and scalar envelopes are strictly ordered after lifecycle teardown; unknown or extra evidence is rejected.",
+    "runs": []
+  }
+}
