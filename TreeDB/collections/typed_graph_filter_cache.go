@@ -2,6 +2,7 @@ package collections
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 
@@ -124,6 +125,13 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 	if err != nil {
 		return nil, err
 	}
+	navigation, navigationErr := buildTypedGraphFilterNavigation(ctx, overlay, candidate.plan.base, limits.RetainedBytes-candidate.plan.retainedBytes)
+	if navigationErr == nil {
+		candidate.navigation = navigation
+		work.RetainedBytes += uint64(navigation.retainedBytes)
+	} else if !errors.Is(navigationErr, errTypedGraphFilterNavigationDeclined) {
+		return nil, navigationErr
+	}
 	// Detached plans contain only owned immutable selections and predicates, never
 	// a request searcher, snapshot, catalog, suffix or current materializer.
 	candidate.holder = r.ref.holder
@@ -138,6 +146,9 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 	// This backing becomes keeper-owned only after successful preparation/bind.
 	// Until admission it remains bounded temporary work owned by this request.
 	n := int64(candidate.plan.retainedBytes) + int64(reflect.TypeFor[typedGraphBaseFilter]().Size()+reflect.TypeFor[typedGraphPreparedFilter]().Size())
+	if candidate.navigation != nil {
+		n += int64(candidate.navigation.retainedBytes)
+	}
 	n += int64(cap(candidate.predicates)) * int64(reflect.TypeFor[typedGraphScalarPredicate]().Size())
 	for _, p := range candidate.predicates {
 		n += int64(cap(p.clause.lower) + cap(p.clause.upper) + len(p.definition.Name) + len(p.definition.Field) + len(p.definition.ValueType) + len(p.definition.StoragePolicy))
@@ -150,6 +161,12 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 		installed = true
 	}
 	a.Unlock()
+	if !installed {
+		if candidate.navigation != nil {
+			work.RetainedBytes -= uint64(candidate.navigation.retainedBytes)
+		}
+		candidate.navigation = nil
+	}
 	if installed {
 		r.filtersMu.Lock()
 		for i := range candidate.predicates {

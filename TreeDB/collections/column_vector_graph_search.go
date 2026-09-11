@@ -1082,6 +1082,7 @@ type columnVectorGraphNativeSearchScratch struct {
 	scoreTileOrdinals            []int
 	scoreTileScores              []float64
 	scoreTileRowIDs              []uint32
+	filterNavigationRowIDs       []uint32
 	scoreTileDots                []float32
 	scoreTileQuantizedDots       []int64
 	quantizedQueryCentered       []vectorops.ScalarU8CenteredCode

@@ -21,6 +21,7 @@ type typedGraphFilterBindLimits struct {
 
 type typedGraphBaseFilter struct {
 	plan           *typedGraphPreparedFilter
+	navigation     *typedGraphFilterNavigation
 	predicates     []typedGraphScalarPredicate
 	predicateBytes int
 	// Only the keeper installs detached plans. Its existing read lock protects
