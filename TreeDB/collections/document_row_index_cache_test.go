@@ -180,7 +180,11 @@ func TestColumnPhysicalRowReaderFreshReadersReuseRowIndex(t *testing.T) {
 			reader.Close()
 		}
 		after := workstats.Read().RowIndexCache
-		if after.Hits != before.Hits || after.Builds-before.Builds != 2 {
+		wantBuilds, wantHits := uint64(2), uint64(0)
+		if mode == ColumnAssetReadIntegrityCachedVerify && stableIdentity {
+			wantBuilds, wantHits = 0, 2
+		}
+		if after.Hits-before.Hits != wantHits || after.Builds-before.Builds != wantBuilds {
 			t.Fatalf("mode=%s before=%+v after=%+v", mode, before, after)
 		}
 	}

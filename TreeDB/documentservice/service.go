@@ -2342,7 +2342,7 @@ type scoredDocument struct {
 }
 
 func serviceDocumentFetchOptions(returnEmbedding bool) collections.DocumentFetchOptions {
-	opts := collections.DocumentFetchOptions{Format: collections.DocumentFormatJSON}
+	opts := collections.DocumentFetchOptions{Format: collections.DocumentFormatJSON, ColumnAssetReadIntegrity: collections.ColumnAssetReadIntegrityCachedVerify}
 	if !returnEmbedding {
 		opts.ExcludePaths = []string{defaultEmbeddingField}
 	}

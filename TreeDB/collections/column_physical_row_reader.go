@@ -619,9 +619,9 @@ func (r *columnPhysicalRowReader) decodeDenseIDRangeRowFromBlock(block *columnPh
 }
 
 // The caller has parsed and validated the header against its captured schema.
-// Only a successful strict read of this exact ref can reuse structural offsets.
+// Only a successful checksum-verified read of this exact ref can reuse structural offsets.
 func (c *columnPhysicalAssetReadCache) indexRows(raw []byte, ref ColumnAssetRef, version uint16, rowsOffset int, header columnPhysicalAssetScanHeader, cfg *ColumnStoreConfig) (columnPhysicalAssetReaderRowIndex, error) {
-	eligible := c != nil && c.hasVerifiedRowIndexKey && c.verifiedRowIndexRef == ref && c.readIntegrity == ColumnAssetReadIntegrityVerify && version < columnPhysicalAssetVersionV7
+	eligible := c != nil && c.hasVerifiedRowIndexKey && c.verifiedRowIndexRef == ref && (c.readIntegrity == ColumnAssetReadIntegrityVerify || c.readIntegrity == ColumnAssetReadIntegrityCachedVerify) && version < columnPhysicalAssetVersionV7
 	if c != nil {
 		c.hasVerifiedRowIndexKey = false
 	}

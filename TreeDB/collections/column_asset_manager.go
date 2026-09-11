@@ -2889,7 +2889,7 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 // Capture only the identity of the opened reader that supplied the verified
 // bytes. A failed, unchecked or subsequent read cannot authorize memo reuse.
 func (c *columnPhysicalAssetReadCache) rememberVerifiedRowIndexRead(ref ColumnAssetRef, reader *columnPhysicalAssetSegmentReader) {
-	if c.readIntegrity != ColumnAssetReadIntegrityVerify || !c.verifyChecksum || !reader.identity.valid {
+	if (c.readIntegrity != ColumnAssetReadIntegrityVerify && c.readIntegrity != ColumnAssetReadIntegrityCachedVerify) || !c.verifyChecksum || !reader.identity.valid {
 		return
 	}
 	c.verifiedRowIndexRef = ref
