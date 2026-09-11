@@ -6,7 +6,6 @@ import (
 	"errors"
 	"math"
 	"reflect"
-	"slices"
 )
 
 // ponytail: bound cold per-filter construction above the frozen 200K-row shape;
@@ -106,7 +105,9 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 	}
 	// Base packs are locality-remapped after construction. Restore the primary
 	// document-ID order used by rebuild before deriving another HNSW graph.
-	slices.SortFunc(rows, func(a, b columnVectorGraphAssetRow) int { return bytes.Compare(a.ID, b.ID) })
+	if err := sortVectorPartitionSliceWithContextV1(ctx, rows, func(a, b columnVectorGraphAssetRow) bool { return bytes.Compare(a.ID, b.ID) < 0 }); err != nil {
+		return nil, err
+	}
 	if err := buildColumnVectorGraphAdjacencyWithContext(ctx, rows, overlay.base.reader.def); err != nil {
 		return nil, err
 	}
