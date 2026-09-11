@@ -5129,12 +5129,12 @@ func TestPublishOrderedRootCommandWALValueLogLeavesSeekAfterMixedKeyMutations(t 
 	}
 }
 
-func TestOrderedRootDeltaBatchFromIterator_StableIteratorUsesViews(t *testing.T) {
+func TestOrderedRootDeltaBatchFromIterator_CollectedStableIteratorUsesViews(t *testing.T) {
 	key := []byte("root/a")
 	value := []byte("value-a")
-	iter := &stableRootDeltaIterator{
+	_, iter := newPendingValueLogAppendPtrCollectingIterator(&stableRootDeltaIterator{
 		entries: []stableRootDeltaEntry{{key: key, value: value}},
-	}
+	})
 
 	delta, err := orderedRootDeltaBatchFromIterator(iter)
 	if err != nil {
