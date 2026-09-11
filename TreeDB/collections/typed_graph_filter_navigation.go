@@ -9,8 +9,11 @@ import (
 )
 
 // ponytail: bound cold per-filter construction above the frozen 200K-row shape;
-// raise only if a larger selective workload fits the retained-byte budget.
-const typedGraphFilterNavigationMaxRows = 1 << 18
+// raise only if a larger selective workload fits both retained and process memory.
+const (
+	typedGraphFilterNavigationMaxRows              = 1 << 18
+	typedGraphFilterNavigationMaxConstructionBytes = 512 << 20
+)
 
 var errTypedGraphFilterNavigationDeclined = errors.New("collections: typed graph filter navigation declined")
 
@@ -35,6 +38,9 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
 	if count <= typedGraphScalarExactLimit || count > typedGraphFilterNavigationMaxRows || selection.IsAll() || maxBytes <= 0 {
+		return nil, errTypedGraphFilterNavigationDeclined
+	}
+	if !typedGraphFilterNavigationConstructionFits(count, overlay.base.reader.def.Dimensions) {
 		return nil, errTypedGraphFilterNavigationDeclined
 	}
 	levelIndex, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(overlay.base.reader.def))
@@ -146,6 +152,11 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 		},
 		baseOrdinals: baseOrdinals, retainedBytes: retained,
 	}, nil
+}
+
+func typedGraphFilterNavigationConstructionFits(count, dimensions int) bool {
+	const maxValues = typedGraphFilterNavigationMaxConstructionBytes / 4
+	return count > 0 && dimensions > 0 && uint64(dimensions) <= maxValues && uint64(count) <= maxValues/uint64(dimensions)
 }
 
 type typedGraphFilterNavigationScorePlane struct {

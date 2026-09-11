@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+func TestTypedGraphFilterNavigationBoundsConstructionMatrix(t *testing.T) {
+	if !typedGraphFilterNavigationConstructionFits(typedGraphFilterNavigationMaxRows, 512) {
+		t.Fatal("maximum 512 MiB construction matrix was declined")
+	}
+	if typedGraphFilterNavigationConstructionFits(typedGraphFilterNavigationMaxRows, 513) {
+		t.Fatal("construction matrix above 512 MiB was accepted")
+	}
+}
+
 func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 	requireTypedGraphPreparedHolderTest(t)
 	const n = 20000
