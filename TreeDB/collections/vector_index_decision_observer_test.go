@@ -170,7 +170,7 @@ func TestVectorIndexConstructionDecisionObserverCountsReciprocalCandidateScores(
 			continue
 		}
 		fromNodeID = source
-		toNodeID = neighbors[len(neighbors)-1].nodeID
+		toNodeID = int(neighbors[len(neighbors)-1].nodeID)
 		index.nodes[source].neighbors[0] = neighbors[:len(neighbors)-1]
 		break
 	}

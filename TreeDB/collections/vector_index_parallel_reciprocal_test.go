@@ -100,7 +100,7 @@ func snapshotVectorIndexTopology4257(index *VectorIndex) vectorIndexTopologySnap
 			out.nodes[nodeID].neighbors[layer] = make([]vectorIndexNeighborTopologySnapshot4257, len(node.neighbors[layer]))
 			for neighbor := range node.neighbors[layer] {
 				edge := node.neighbors[layer][neighbor]
-				out.nodes[nodeID].neighbors[layer][neighbor] = vectorIndexNeighborTopologySnapshot4257{nodeID: edge.nodeID, distanceBits: math.Float32bits(edge.distance)}
+				out.nodes[nodeID].neighbors[layer][neighbor] = vectorIndexNeighborTopologySnapshot4257{nodeID: int(edge.nodeID), distanceBits: math.Float32bits(edge.distance)}
 			}
 		}
 	}

@@ -924,12 +924,12 @@ func TestNativeScalarANNSeedsEligibleRegionBeyondGlobalFrontier(t *testing.T) {
 		column.appendPrevalidated(tenant, true)
 	}
 	for row := 0; row+1 < eligibleStart; row++ {
-		nodes[row].neighbors[0] = append(nodes[row].neighbors[0], vectorIndexNeighbor{nodeID: row + 1})
-		nodes[row+1].neighbors[0] = append(nodes[row+1].neighbors[0], vectorIndexNeighbor{nodeID: row})
+		nodes[row].neighbors[0] = append(nodes[row].neighbors[0], vectorIndexNeighbor{nodeID: uint32(row + 1)})
+		nodes[row+1].neighbors[0] = append(nodes[row+1].neighbors[0], vectorIndexNeighbor{nodeID: uint32(row)})
 	}
 	for row := eligibleStart; row+1 < eligibleEnd; row++ {
-		nodes[row].neighbors[0] = append(nodes[row].neighbors[0], vectorIndexNeighbor{nodeID: row + 1})
-		nodes[row+1].neighbors[0] = append(nodes[row+1].neighbors[0], vectorIndexNeighbor{nodeID: row})
+		nodes[row].neighbors[0] = append(nodes[row].neighbors[0], vectorIndexNeighbor{nodeID: uint32(row + 1)})
+		nodes[row+1].neighbors[0] = append(nodes[row+1].neighbors[0], vectorIndexNeighbor{nodeID: uint32(row)})
 	}
 	columns := map[string]vectorIndexScalarColumn{"tenant_idx": column}
 	plan := &nativeScalarFilterExecution{
@@ -1132,10 +1132,10 @@ func TestNativeScalarANNReservesLayerZeroExpansion(t *testing.T) {
 		column.appendPrevalidated(tenant, true)
 	}
 	for row := range 15 {
-		nodes[row].neighbors[1] = []vectorIndexNeighbor{{nodeID: row + 1}}
+		nodes[row].neighbors[1] = []vectorIndexNeighbor{{nodeID: uint32(row + 1)}}
 	}
-	nodes[13].neighbors[0] = []vectorIndexNeighbor{{nodeID: rows - 1}}
-	nodes[14].neighbors[0] = []vectorIndexNeighbor{{nodeID: rows - 1}}
+	nodes[13].neighbors[0] = []vectorIndexNeighbor{{nodeID: uint32(rows - 1)}}
+	nodes[14].neighbors[0] = []vectorIndexNeighbor{{nodeID: uint32(rows - 1)}}
 	plan := &nativeScalarFilterExecution{
 		identity: NativeScalarFilterPlanVectorAligned,
 		clauses: []nativeScalarClause{{

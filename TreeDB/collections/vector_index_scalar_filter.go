@@ -1450,7 +1450,7 @@ search:
 			break
 		}
 		for _, neighbor := range idx.layerNeighborsLocked(current.nodeID, 0) {
-			nodeID := neighbor.nodeID
+			nodeID := int(neighbor.nodeID)
 			if nodeID < 0 || nodeID >= len(idx.nodes) || visited[nodeID] == mark {
 				continue
 			}

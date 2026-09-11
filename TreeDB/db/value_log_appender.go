@@ -322,6 +322,16 @@ func (iter *pendingValueLogAppendPtrCollectingIterator) UnsafeEntryWithRevision(
 	return val, ptr, flags, revision
 }
 
+func (iter *pendingValueLogAppendPtrCollectingIterator) StableUnsafeIteratorSlices() bool {
+	stable, ok := iter.UnsafeIterator.(orderedRootStableUnsafeIterator)
+	return ok && stable.StableUnsafeIteratorSlices()
+}
+
+func (iter *pendingValueLogAppendPtrCollectingIterator) OrderedUniqueUnsafeIterator() bool {
+	trusted, ok := iter.UnsafeIterator.(orderedRootTrustedSortedUniqueIterator)
+	return ok && trusted.OrderedUniqueUnsafeIterator()
+}
+
 func (db *DB) releasePendingValueLogAppendPtrCollector(collector *pendingValueLogAppendPtrCollectingIterator) {
 	if db == nil || collector == nil || len(collector.ptrCounts) == 0 {
 		return

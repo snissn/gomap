@@ -896,8 +896,12 @@ type vectorIndexNode struct {
 }
 
 type vectorIndexNeighbor struct {
-	nodeID   int
+	nodeID   uint32
 	distance float32
+}
+
+func vectorIndexNodeOrdinalsFitUint32(existing, additional uint64) bool {
+	return additional == 0 || (existing <= math.MaxUint32 && additional-1 <= math.MaxUint32-existing)
 }
 
 // BuildVectorIndex builds an in-memory vector secondary index from the current
@@ -2380,6 +2384,9 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 			}
 		}
 	}
+	if !vectorIndexNodeOrdinalsFitUint32(uint64(len(idx.nodes)), 1) {
+		return errors.New("collections: vector index node ordinal exceeds uint32")
+	}
 	idx.prepareSearchViewForMutationLocked()
 	idx.tombstoneDocumentIDLocked(documentID)
 
@@ -2579,6 +2586,9 @@ func (idx *VectorIndex) validateVectorBatch(documentIDs [][]byte, vectors [][]fl
 	if len(documentIDs) != len(vectors) {
 		return errors.New("collections: vector index batch ids/vectors length mismatch")
 	}
+	if !vectorIndexNodeOrdinalsFitUint32(uint64(len(idx.nodes)), uint64(len(documentIDs))) {
+		return errors.New("collections: vector index node ordinal exceeds uint32")
+	}
 	dimensions := idx.dimensions
 	for row := range documentIDs {
 		if len(documentIDs[row]) == 0 {
@@ -2767,7 +2777,7 @@ func (idx *VectorIndex) linkFrozenPrefixReciprocalGroupLocked(links []vectorInde
 	for _, link := range links {
 		duplicate := false
 		for _, existing := range candidates {
-			if existing.nodeID == link.toNodeID {
+			if existing.nodeID == uint32(link.toNodeID) {
 				duplicate = true
 				break
 			}
@@ -2780,7 +2790,7 @@ func (idx *VectorIndex) linkFrozenPrefixReciprocalGroupLocked(links []vectorInde
 		}
 		distance, ok := normalizeVectorIndexEdgeDistance(idx.distanceBetweenNodesLocked(fromNodeID, link.toNodeID))
 		if ok {
-			candidates = append(candidates, vectorIndexNeighbor{nodeID: link.toNodeID, distance: distance})
+			candidates = append(candidates, vectorIndexNeighbor{nodeID: uint32(link.toNodeID), distance: distance})
 		}
 	}
 	limit := idx.maxNeighborsForLayer(layer)
@@ -3320,7 +3330,7 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int, markDir
 		preexisting = append(preexisting, neighbors...)
 	}
 	for _, existing := range neighbors {
-		if existing.nodeID == toNodeID {
+		if existing.nodeID == uint32(toNodeID) {
 			return
 		}
 	}
@@ -3330,7 +3340,7 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int, markDir
 	if !ok {
 		return
 	}
-	neighbors = append(neighbors, vectorIndexNeighbor{nodeID: toNodeID, distance: distance})
+	neighbors = append(neighbors, vectorIndexNeighbor{nodeID: uint32(toNodeID), distance: distance})
 	trace := idx.constructionTrace
 	var origin string
 	if trace != nil {
@@ -3352,18 +3362,18 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int, markDir
 		if trace != nil {
 			kept := make(map[int]struct{}, len(neighbors))
 			for _, neighbor := range neighbors {
-				kept[neighbor.nodeID] = struct{}{}
+				kept[int(neighbor.nodeID)] = struct{}{}
 			}
 			// The just-pruned list is the authoritative reciprocal maintenance
 			// outcome for every edge that was present before the prune.
 			for _, neighbor := range preexisting {
-				key := vectorIndexConstructionEdgeKeyV1{From: fromNodeID, To: neighbor.nodeID, Layer: layer}
+				key := vectorIndexConstructionEdgeKeyV1{From: fromNodeID, To: int(neighbor.nodeID), Layer: layer}
 				edgeOrigin := trace.origins[key]
-				if _, ok := kept[neighbor.nodeID]; ok {
-					trace.record(fromNodeID, neighbor.nodeID, layer, edgeOrigin, "reciprocal_prune_keep")
+				if _, ok := kept[int(neighbor.nodeID)]; ok {
+					trace.record(fromNodeID, int(neighbor.nodeID), layer, edgeOrigin, "reciprocal_prune_keep")
 					continue
 				}
-				trace.record(fromNodeID, neighbor.nodeID, layer, edgeOrigin, "reciprocal_prune_drop")
+				trace.record(fromNodeID, int(neighbor.nodeID), layer, edgeOrigin, "reciprocal_prune_drop")
 				delete(trace.origins, key)
 			}
 			// The newly added edge is not yet in the node slice above.
@@ -3403,7 +3413,7 @@ func (idx *VectorIndex) pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked
 		scored = make([]vectorIndexCandidate, 0, len(neighbors))
 	}
 	for _, neighbor := range neighbors {
-		neighborID := neighbor.nodeID
+		neighborID := int(neighbor.nodeID)
 		if neighborID < 0 || neighborID >= len(idx.nodes) {
 			continue
 		}
@@ -3416,7 +3426,7 @@ func (idx *VectorIndex) pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked
 	scored, _, _, _, _ = idx.selectDiverseCandidatesWithDetailsAndFrozenPrefixScratchObservedLocked(scored, limit, false, true, false, dotScratch, context)
 	out := neighbors[:0]
 	for _, candidate := range scored {
-		out = append(out, vectorIndexNeighbor{nodeID: candidate.nodeID, distance: candidate.distance})
+		out = append(out, vectorIndexNeighbor{nodeID: uint32(candidate.nodeID), distance: candidate.distance})
 	}
 	return out
 }
@@ -4299,7 +4309,7 @@ search:
 			continue
 		}
 		for _, neighbor := range idx.layerNeighborsLocked(current.nodeID, 0) {
-			neighborID := neighbor.nodeID
+			neighborID := int(neighbor.nodeID)
 			if neighborID < 0 || neighborID >= len(idx.nodes) || visited[neighborID] == mark {
 				continue
 			}
@@ -4343,10 +4353,10 @@ func (idx *VectorIndex) greedyNearestAtLayerBoundedLocked(query []float32, query
 			if *scored >= scoreLimit {
 				return best
 			}
-			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighbor.nodeID)
+			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, int(neighbor.nodeID))
 			(*scored)++
 			if distance < bestDistance {
-				best = neighbor.nodeID
+				best = int(neighbor.nodeID)
 				bestDistance = distance
 				changed = true
 			}
@@ -4365,7 +4375,7 @@ func (idx *VectorIndex) greedyNearestAtLayerLocked(query []float32, queryNormSqu
 	for changed {
 		changed = false
 		for _, neighbor := range idx.layerNeighborsLocked(best, layer) {
-			neighborID := neighbor.nodeID
+			neighborID := int(neighbor.nodeID)
 			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighborID)
 			if distance < bestDistance {
 				best = neighborID
@@ -4387,7 +4397,7 @@ func (idx *VectorIndex) greedyNearestAtLayerObservedLocked(query []float32, quer
 	for changed {
 		changed = false
 		for _, neighbor := range idx.layerNeighborsLocked(best, layer) {
-			neighborID := neighbor.nodeID
+			neighborID := int(neighbor.nodeID)
 			context.recordRow(neighborID, false)
 			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighborID)
 			if distance < bestDistance {
@@ -4471,7 +4481,7 @@ search:
 			continue
 		}
 		for _, neighbor := range idx.layerNeighborsLocked(current.nodeID, layer) {
-			neighborID := neighbor.nodeID
+			neighborID := int(neighbor.nodeID)
 			if neighborID < 0 || neighborID >= len(idx.nodes) || visited[neighborID] == mark {
 				continue
 			}
@@ -4821,7 +4831,7 @@ func (idx *VectorIndex) applyQualityPostfillLocked(trace *vectorIndexConstructio
 		for len(neighbors) < target {
 			present := make(map[int]struct{}, len(neighbors))
 			for _, neighbor := range neighbors {
-				present[neighbor.nodeID] = struct{}{}
+				present[int(neighbor.nodeID)] = struct{}{}
 			}
 			best, bestMargin, bestDistance := -1, float32(math.Inf(-1)), float32(math.Inf(1))
 			for to := range pool {
@@ -4837,7 +4847,7 @@ func (idx *VectorIndex) applyQualityPostfillLocked(trace *vectorIndexConstructio
 				}
 				margin := float32(math.Inf(1))
 				for _, neighbor := range neighbors {
-					separation, err := vectorDistanceBetweenFloat32NodesCosine(&idx.nodes[to], &idx.nodes[neighbor.nodeID])
+					separation, err := vectorDistanceBetweenFloat32NodesCosine(&idx.nodes[to], &idx.nodes[int(neighbor.nodeID)])
 					if err != nil {
 						return err
 					}
@@ -4852,7 +4862,7 @@ func (idx *VectorIndex) applyQualityPostfillLocked(trace *vectorIndexConstructio
 			if best < 0 {
 				break
 			}
-			neighbors = append(neighbors, vectorIndexNeighbor{nodeID: best, distance: bestDistance})
+			neighbors = append(neighbors, vectorIndexNeighbor{nodeID: uint32(best), distance: bestDistance})
 			if trace != nil {
 				trace.init()
 				key := vectorIndexConstructionEdgeKeyV1{From: from, To: best, Layer: 0}
@@ -4900,7 +4910,7 @@ func (idx *VectorIndex) applyRobustPruneRefinementLocked(trace *vectorIndexConst
 		old := append([]vectorIndexNeighbor(nil), idx.nodes[from].neighbors[0]...)
 		pool := make(map[int]struct{}, len(old)+len(idx.qualityPostfillCandidates[from]))
 		for _, neighbor := range old {
-			pool[neighbor.nodeID] = struct{}{}
+			pool[int(neighbor.nodeID)] = struct{}{}
 		}
 		for to := range idx.qualityPostfillCandidates[from] {
 			pool[to] = struct{}{}
@@ -4968,21 +4978,21 @@ func (idx *VectorIndex) applyRobustPruneRefinementLocked(trace *vectorIndexConst
 		}
 		oldSet := make(map[int]struct{}, len(old))
 		for _, neighbor := range old {
-			oldSet[neighbor.nodeID] = struct{}{}
+			oldSet[int(neighbor.nodeID)] = struct{}{}
 		}
 		if trace != nil {
 			trace.init()
 			for _, neighbor := range old {
-				if _, keep := present[neighbor.nodeID]; keep {
+				if _, keep := present[int(neighbor.nodeID)]; keep {
 					continue
 				}
-				key := vectorIndexConstructionEdgeKeyV1{From: from, To: neighbor.nodeID, Layer: 0}
+				key := vectorIndexConstructionEdgeKeyV1{From: from, To: int(neighbor.nodeID), Layer: 0}
 				origin, ok := trace.origins[key]
 				if !ok {
-					return fmt.Errorf("collections: robust prune refinement missing origin from=%d to=%d", from, neighbor.nodeID)
+					return fmt.Errorf("collections: robust prune refinement missing origin from=%d to=%d", from, int(neighbor.nodeID))
 				}
 				delete(trace.origins, key)
-				trace.record(from, neighbor.nodeID, 0, origin, "robust_prune_drop")
+				trace.record(from, int(neighbor.nodeID), 0, origin, "robust_prune_drop")
 			}
 			for _, item := range selected {
 				if _, existed := oldSet[item.nodeID]; existed {
@@ -4999,7 +5009,7 @@ func (idx *VectorIndex) applyRobustPruneRefinementLocked(trace *vectorIndexConst
 		}
 		neighbors := make([]vectorIndexNeighbor, len(selected))
 		for i, item := range selected {
-			neighbors[i] = vectorIndexNeighbor{nodeID: item.nodeID, distance: item.distance}
+			neighbors[i] = vectorIndexNeighbor{nodeID: uint32(item.nodeID), distance: item.distance}
 		}
 		idx.nodes[from].neighbors[0] = neighbors
 	}
