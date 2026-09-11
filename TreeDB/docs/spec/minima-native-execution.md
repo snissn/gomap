@@ -185,8 +185,9 @@ exercise ANN; intended broad/base and mutation-overlay scenarios need positive
 base/overlay work. Empty filters return empty results without a document scan.
 No `native_runtime`, whole-document-scan or undeclared exact fallback is allowed.
 
-FP32 graph construction, node-query distance and FP32 node reranking use FP64
-inverse norms and half the squared difference of normalized components. This
+FP32 graph construction, node-query distance, materialized exact search and
+FP32 reranking use FP64 inverse norms and half the squared difference of
+normalized components. This includes filtered and live-delta reranking. It
 preserves small angular distances that a rounded dot product subtracted from
 one can erase. Indexed construction diversity keeps FP32 dot comparisons only
 when their separation exceeds the dimension-dependent error bound; ambiguous

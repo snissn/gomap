@@ -352,7 +352,10 @@ type vectorIndexNeighbor struct {
 
 For float32 cosine scoring, derive `cachedInvNorm` in FP64 from `normSquared`
 and retain that precision in the runtime cache. Rounding the inverse norm
-through FP32 can erase the angular ordering of nearby vectors.
+through FP32 can erase the angular ordering of nearby vectors. Canonical-row
+exact search and reranking, including filtered and live-delta paths, use the
+same normalized-difference calculation rather than subtracting a rounded dot
+product from one.
 
 The runtime graph MAY use narrower types than Go `int` internally after the
 format stabilizes. For example, `uint32` node IDs are sufficient until a single

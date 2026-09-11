@@ -67,6 +67,76 @@ func TestCollectionVectorIndexSearchReranksCanonicalRows(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorIndexCloseCosineRerankIsStableWithFilterAndLiveDelta(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfSearch: 8}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	query := []float32{-0.2935306131839752, -0.0021982011385262012}
+	closer := []byte(`{"embedding":[-0.2935306131839752,-0.0021982009056955576]}`)
+	farther := []byte(`{"embedding":[-0.29353055357933044,-0.0021982011385262012]}`)
+	if _, err := col.InsertBatch([][]byte{[]byte("closer"), []byte("farther")}, [][]byte{closer, farther}); err != nil {
+		t.Fatalf("insert base: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("rebuild vector index: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("registered vector index is nil")
+	}
+
+	unfiltered, _, err := index.Search(query, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("unfiltered search: %v", err)
+	}
+	filtered, _, err := index.Search(query, VectorIndexSearchOptions{
+		TopK:                 2,
+		DisableExactFallback: true,
+		Filter:               func(DocumentRecord) (bool, error) { return true, nil },
+	})
+	if err != nil {
+		t.Fatalf("filtered search: %v", err)
+	}
+	requireVectorResultIDs(t, unfiltered, "closer", "farther")
+	requireVectorResultIDs(t, filtered, "closer", "farther")
+	for i := range unfiltered {
+		if filtered[i].Distance != unfiltered[i].Distance {
+			t.Fatalf("filtered result %d distance=%g want unfiltered %g", i, filtered[i].Distance, unfiltered[i].Distance)
+		}
+	}
+
+	exact := []byte(`{"embedding":[-0.2935306131839752,-0.0021982011385262012]}`)
+	if _, err := col.InsertBatch([][]byte{[]byte("exact")}, [][]byte{exact}); err != nil {
+		t.Fatalf("insert live delta: %v", err)
+	}
+	index.mu.RLock()
+	hasLiveDelta := index.liveDelta != nil
+	index.mu.RUnlock()
+	if !hasLiveDelta {
+		t.Fatal("expected live delta")
+	}
+	live, _, err := index.Search(query, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("live-delta search: %v", err)
+	}
+	requireVectorResultIDs(t, live, "exact", "closer", "farther")
+	if live[0].Distance != 0 || live[1].Distance <= 0 || live[2].Distance <= live[1].Distance {
+		t.Fatalf("live-delta distances=%g,%g,%g want zero then increasing", live[0].Distance, live[1].Distance, live[2].Distance)
+	}
+}
+
 func TestCollectionVectorIndexSearchRejectsMixedDocumentGenerationRerank(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {

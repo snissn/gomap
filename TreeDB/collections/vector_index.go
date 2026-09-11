@@ -5418,14 +5418,6 @@ func safeFloat32DotProductForCosine(leftNormSquared, rightNormSquared float64) b
 	return leftNormSquared <= maxDot*maxDot/rightNormSquared
 }
 
-func dotProductFloat32Wide(left, right []float32) float64 {
-	var dot float64
-	for i := range left {
-		dot += float64(left[i]) * float64(right[i])
-	}
-	return dot
-}
-
 func (node *vectorIndexNode) vectorDimensions() int {
 	if len(node.vector) > 0 {
 		return len(node.vector)
