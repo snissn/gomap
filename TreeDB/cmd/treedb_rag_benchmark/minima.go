@@ -1314,22 +1314,33 @@ func validateMinimaArtifact(artifact *minimaArtifact, trusted ...*minimaMeasured
 		if artifact.Manifest.Schema != minimaBoundedManifestSchema || artifact.State != "partial" || artifact.Passing {
 			return fmt.Errorf("minima artifact: bounded diagnostics cannot qualify")
 		}
-		if artifact.NativePathProof == nil || artifact.NativePathProof.Schema != minimaNativeProofSchema || artifact.NativePathProof.Availability != "unavailable" || artifact.NativePathProof.Reason == "" || artifact.NativePathProof.Counters != nil {
-			return fmt.Errorf("minima artifact: bounded native path proof must explicitly report unavailable counters")
-		}
-		if artifact.NativePathProof.Strategy != "native_runtime" && artifact.NativePathProof.Strategy != "column_graph" {
-			return fmt.Errorf("minima artifact: unknown requested strategy")
+		backendName := "treedb"
+		if artifact.NativePathProof == nil {
+			backendName = "qdrant"
+		} else {
+			if artifact.NativePathProof.Schema != minimaNativeProofSchema || artifact.NativePathProof.Availability != "unavailable" || artifact.NativePathProof.Reason == "" || artifact.NativePathProof.Counters != nil {
+				return fmt.Errorf("minima artifact: bounded native path proof must explicitly report unavailable counters")
+			}
+			if artifact.NativePathProof.Strategy != "native_runtime" && artifact.NativePathProof.Strategy != "column_graph" {
+				return fmt.Errorf("minima artifact: unknown requested strategy")
+			}
 		}
 		if len(artifact.Backends) == 0 {
-			if len(artifact.Scenarios) != 0 || len(artifact.RawEvidence) != 0 {
+			if backendName == "treedb" && (len(artifact.Scenarios) != 0 || len(artifact.RawEvidence) != 0) {
 				return fmt.Errorf("minima bounded diagnostic: execution evidence has no backend")
 			}
+			if backendName == "qdrant" {
+				raw, ok := artifact.RawEvidence["qdrant"]
+				if len(artifact.Scenarios) != 0 || strings.TrimSpace(strings.Join(artifact.Failures, "")) == "" || len(artifact.RawEvidence) != 1 || !ok || raw.FinalScrollState.Match {
+					return fmt.Errorf("minima bounded diagnostic: incomplete Qdrant execution evidence is invalid")
+				}
+			}
 		} else {
-			if len(artifact.Backends) != 1 || artifact.Backends[0].Name != "treedb" {
-				return fmt.Errorf("minima bounded diagnostic: execution requires exactly one TreeDB backend")
+			if len(artifact.Backends) != 1 || artifact.Backends[0].Name != backendName {
+				return fmt.Errorf("minima bounded diagnostic: execution requires exactly one %s backend", backendName)
 			}
 			if !artifact.Backends[0].Operations.ManifestOrdered &&
-				(strings.TrimSpace(strings.Join(artifact.Failures, "")) == "" || artifact.RawEvidence["treedb"].FinalScrollState.Match) {
+				(strings.TrimSpace(strings.Join(artifact.Failures, "")) == "" || artifact.RawEvidence[backendName].FinalScrollState.Match) {
 				return fmt.Errorf("minima bounded diagnostic: incomplete execution requires an explicit failure and cannot claim completed full-state parity")
 			}
 		}
@@ -1348,14 +1359,17 @@ func validateMinimaArtifact(artifact *minimaArtifact, trusted ...*minimaMeasured
 		if artifact.Passing || artifact.Recommendation != "not_evaluated" {
 			return fmt.Errorf("minima artifact: partial run marked passing or recommended")
 		}
-		if len(artifact.Backends) == 1 && artifact.Backends[0].Name == "treedb" &&
-			artifact.Backends[0].Operations.ManifestOrdered {
-			raw, ok := artifact.RawEvidence["treedb"]
+		if len(artifact.Backends) == 1 && artifact.Backends[0].Operations.ManifestOrdered {
+			backendName := artifact.Backends[0].Name
+			raw, ok := artifact.RawEvidence[backendName]
 			if !ok {
-				return fmt.Errorf("minima artifact: completed TreeDB partial evidence is missing raw evidence")
+				return fmt.Errorf("minima artifact: completed %s partial evidence is missing raw evidence", backendName)
 			}
 			if artifact.Schema == minimaBoundedArtifactSchema {
 				return validateMinimaCompletedBounded(artifact, raw)
+			}
+			if backendName != "treedb" {
+				return nil
 			}
 			if err := validateMinimaTreeDBProvenance(artifact.Backends[0]); err != nil {
 				return err
@@ -1564,8 +1578,13 @@ func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScena
 		if spec.Name == "mixed_broad_narrow" && (*row.Route.RetainedCandidateIDs < spec.NarrowRows || *row.Route.RefinedCandidateIDs != spec.EligibleRows || row.Route.MembershipSource != "bounded_candidate_refinement" || (row.Route.Plan != "mixed_refined" && row.Route.Plan != "complete_finite_ann")) {
 			return fmt.Errorf("mixed row lacks retained/refined exact or finite plan")
 		}
-	} else if !row.Route.DeclaredScalarFiltering || row.Route.MembershipSource == "" || row.Route.Plan == "" {
-		return fmt.Errorf("missing comparator filter route evidence")
+	} else {
+		if row.Backend == "qdrant" && (row.Route.Identity != "qdrant_filtered_exact" || row.Route.Plan != "qdrant_filtered_exact") {
+			return fmt.Errorf("wrong Qdrant exact comparator route")
+		}
+		if !row.Route.DeclaredScalarFiltering || row.Route.MembershipSource == "" || row.Route.Plan == "" {
+			return fmt.Errorf("missing comparator filter route evidence")
+		}
 	}
 	if !row.Visibility.GenerationConsistent {
 		return fmt.Errorf("mixed-generation result")

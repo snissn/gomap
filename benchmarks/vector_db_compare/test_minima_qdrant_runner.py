@@ -39,7 +39,7 @@ class Model:
 
 class Models:
     FieldCondition = MatchValue = Filter = VectorParams = PointStruct = PointIdsList = Model
-    HnswConfigDiff = OptimizersConfigDiff = Model
+    HnswConfigDiff = OptimizersConfigDiff = SearchParams = Model
     Distance = SimpleNamespace(COSINE="cosine")
     PayloadSchemaType = SimpleNamespace(KEYWORD="keyword")
 
@@ -56,6 +56,7 @@ class SharedQdrant:
         self.clients: list[FakeClient] = []
         self.index_fields: list[str] = []
         self.query_filters: list[Model] = []
+        self.query_search_params: list[Model] = []
         self.lock = threading.Lock()
         self.writer_completed = threading.Event()
         self.synchronize_overlap = True
@@ -154,6 +155,7 @@ class FakeClient:
             barrier.wait(timeout=1)
         with self.shared.lock:
             self.shared.query_filters.append(query_filter)
+            self.shared.query_search_params.append(_["search_params"])
             matches = [point for point in self.shared.points.values() if self._matches(point, query_filter)]
         scored = sorted(
             ((runner.document_score({"vector": point.vector[using]}), point) for point in matches),
@@ -955,14 +957,11 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertEqual(resource["peak_rss"]["availability"], "unavailable")
         self.assertIsNone(resource["peak_rss"]["bytes"])
 
-    def test_qdrant_cli_rejects_bounded_before_client_or_server_access(self) -> None:
-        with mock.patch.object(runner, "parse_args", return_value=SimpleNamespace(server_pid=123, storage_path=Path("."), manifest=Path("manifest"))), \
-             mock.patch.object(runner, "validate_qdrant_evidence_inputs"), \
-             mock.patch.object(runner, "load_manifest", return_value={"schema": runner.BOUNDED_MANIFEST_SCHEMA}), \
-             mock.patch.object(runner.importlib.metadata, "version") as version:
-            with self.assertRaisesRegex(SystemExit, "bounded Minima Qdrant execution unavailable"):
-                runner.main()
-        version.assert_not_called()
+    def test_bounded_qdrant_artifact_stays_diagnostic(self) -> None:
+        manifest, shared = tiny_manifest(), SharedQdrant()
+        manifest["schema"] = runner.BOUNDED_MANIFEST_SCHEMA
+        workload = new_runner(manifest, shared)
+        self.assertEqual(workload.artifact()["schema"], runner.BOUNDED_ARTIFACT_SCHEMA)
 
     def test_unowned_server_resources_are_not_claimed(self) -> None:
         resource = runner.server_resource_usage(None, None, "Qdrant")
@@ -1133,6 +1132,9 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertTrue(all(row["actual_ids"] == row["final_oracle_ids"] for row in artifact["scenarios"]))
         self.assertTrue(all(row["reopen_ids"] == row["actual_ids"] for row in artifact["scenarios"]))
         self.assertTrue(shared.query_filters)
+        self.assertTrue(shared.query_search_params)
+        self.assertTrue(all(params.model_dump() == runner.QUERY_SEARCH_PARAMS
+                            for params in shared.query_search_params))
 
     def test_fake_qdrant_multi_reader_plan_records_every_reader(self) -> None:
         manifest, shared = tiny_manifest(2), SharedQdrant()

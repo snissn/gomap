@@ -322,6 +322,9 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		{"inflated score tolerance", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").ScoreTolerance = 1 }},
 		{"missing native route", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Route.Identity = "" }},
 		{"wrong native route", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Route.Identity = "exact_fallback" }},
+		{"wrong Qdrant comparator route", func(a *minimaArtifact) {
+			minimaTestRow(a, "qdrant", "small").Route.Identity = "qdrant_filtered_hnsw"
+		}},
 		{"missing fallback counter", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Route.FullDocumentScanFallbacks = nil }},
 		{"fallback counter used", func(a *minimaArtifact) {
 			minimaTestRow(a, "treedb", "small").Route.FullDocumentScanFallbacks = minimaTestInt(1)
@@ -655,6 +658,12 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.Readiness = nil
 			a.RawEvidence["qdrant"] = raw
 		}},
+		{"missing Qdrant query configuration", func(a *minimaArtifact) {
+			delete(minimaTestBackend(a, "qdrant").Configuration, "query_search_params")
+		}},
+		{"wrong Qdrant query configuration", func(a *minimaArtifact) {
+			minimaTestBackend(a, "qdrant").Configuration["query_search_params"] = `{"exact":false}`
+		}},
 		{"incomplete Qdrant production transition", func(a *minimaArtifact) {
 			raw := a.RawEvidence["qdrant"]
 			raw.CollectionConfigurationTransition.Completed = false
@@ -820,6 +829,7 @@ func validMinimaArtifactForManifest(manifest minimaManifest) minimaArtifact {
 			"effective":           "test",
 			"initial_upload_hnsw": minimaQdrantInitialHNSWConfig, "initial_upload_optimizers": minimaQdrantInitialOptimizerConfig,
 			"production_hnsw": minimaQdrantProductionHNSWConfig, "production_optimizers": minimaQdrantProductionOptimizerConfig,
+			"query_search_params":  minimaQdrantQuerySearchParams,
 			"effective_collection": fmt.Sprintf(`{"config":{"hnsw_config":%s,"optimizer_config":%s}}`, minimaQdrantProductionHNSWConfig, minimaQdrantProductionOptimizerConfig),
 		}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
 	}
@@ -952,11 +962,11 @@ func validMinimaArtifactForManifest(manifest minimaManifest) minimaArtifact {
 				candidateIDs, visited, scored, admitted = 5, 41, 41, 5
 			}
 			route := minimaRouteEvidence{
-				Identity: "qdrant_filtered_hnsw", DeclaredScalarFiltering: true,
+				Identity: "qdrant_filtered_exact", DeclaredScalarFiltering: true,
 				FullDocumentScanFallbacks: minimaTestInt(0), ScalarFilterUnbounded: minimaTestInt(0),
 				ProbeIDs: minimaTestInt(0), CandidateIDs: minimaTestInt(candidateIDs),
 				RetainedCandidateIDs: minimaTestInt(0), RefinedCandidateIDs: minimaTestInt(0),
-				MembershipSource: "finite_scalar", Plan: "complete_finite_ann",
+				MembershipSource: "finite_scalar", Plan: "qdrant_filtered_exact",
 				AllowedIDMaterializationRows: minimaTestInt(0), PrimaryDocumentScans: minimaTestInt(0),
 				VisitedCandidates: minimaTestInt(visited), ScoredCandidates: minimaTestInt(scored),
 				AdmittedCandidates: minimaTestInt(admitted),

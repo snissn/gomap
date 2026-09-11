@@ -83,6 +83,7 @@ PRODUCTION_OPTIMIZERS_CONFIG = {
     "default_segment_number": 0, "indexing_threshold": 10000,
     "flush_interval_sec": 5, "max_optimization_threads": 1,
 }
+QUERY_SEARCH_PARAMS = {"exact": True}
 INITIAL_UPLOAD_HNSW_CONFIG = {**PRODUCTION_HNSW_CONFIG, "m": 0}
 INITIAL_UPLOAD_OPTIMIZERS_CONFIG = {**PRODUCTION_OPTIMIZERS_CONFIG, "indexing_threshold": 0}
 RESOURCE_STARVATION_MARKERS = (
@@ -1375,7 +1376,8 @@ class QdrantMinimaRunner:
                 initial_upload_hnsw=json.dumps(INITIAL_UPLOAD_HNSW_CONFIG, sort_keys=True, separators=(",", ":")),
                 initial_upload_optimizers=json.dumps(INITIAL_UPLOAD_OPTIMIZERS_CONFIG, sort_keys=True, separators=(",", ":")),
                 production_hnsw=json.dumps(PRODUCTION_HNSW_CONFIG, sort_keys=True, separators=(",", ":")),
-                production_optimizers=json.dumps(PRODUCTION_OPTIMIZERS_CONFIG, sort_keys=True, separators=(",", ":")))
+                production_optimizers=json.dumps(PRODUCTION_OPTIMIZERS_CONFIG, sort_keys=True, separators=(",", ":")),
+                query_search_params=json.dumps(QUERY_SEARCH_PARAMS, sort_keys=True, separators=(",", ":")))
         else:
             config.update(self._measured_settings())
         expected = freeze["configuration"][backend]
@@ -1944,7 +1946,8 @@ class QdrantMinimaRunner:
             response = self.evidence.call(operation, "search", scenario, lambda: self.client.query_points(
                 collection_name=self.collection, query=query["vector"], using=self.config["vector_field"],
                 query_filter=payload_filter(self.models, spec), limit=self.config["top_k"], with_payload=True,
-                with_vectors=False, timeout=self.operation_timeout), record=owned)
+                with_vectors=False, search_params=self.models.SearchParams(**QUERY_SEARCH_PARAMS),
+                timeout=self.operation_timeout), record=owned)
         except BaseException as exc:
             failure = exc
         finally:
@@ -2487,10 +2490,10 @@ class QdrantMinimaRunner:
                 "score_tolerance": self.config["score_tolerance"], "errors": self.evidence.errors[name], "timeouts": self.evidence.timeouts[name],
                 "correctness": {"cross_user_results": self.evidence.cross_user[name], "stale_insert_ids": self.evidence.stale_insert[name],
                     "stale_update_ids": self.evidence.stale_update[name], "stale_delete_ids": self.evidence.stale_delete[name]},
-                "route": {"identity": "qdrant_filtered_hnsw", "declared_scalar_filtering": True, "native_base_plus_live_delta": False,
+                "route": {"identity": "qdrant_filtered_exact", "declared_scalar_filtering": True, "native_base_plus_live_delta": False,
                     "full_document_scan_fallbacks": None, "scalar_filter_unbounded": None, "probe_ids": None, "candidate_ids": None,
                     "retained_candidate_ids": None, "refined_candidate_ids": None, "membership_source": "qdrant_keyword_payload_index",
-                    "plan": "qdrant_filtered_hnsw", "allowed_id_materialization_rows": None, "primary_document_scans": None,
+                    "plan": "qdrant_filtered_exact", "allowed_id_materialization_rows": None, "primary_document_scans": None,
                     "visited_candidates": None, "scored_candidates": None, "admitted_candidates": None},
                 "visibility": {"generation_consistent": self.evidence.errors[name] == 0, "visibility_mismatch_count": 0, "visibility_retry_count": 0},
                 "timing": {"captured": True, "writer_millis": timing[name]["writer"] / 1e6, "search_millis": timing[name]["search"] / 1e6,
@@ -2514,10 +2517,12 @@ class QdrantMinimaRunner:
             "initial_upload_optimizers": json.dumps(INITIAL_UPLOAD_OPTIMIZERS_CONFIG, sort_keys=True, separators=(",", ":")),
             "production_hnsw": json.dumps(PRODUCTION_HNSW_CONFIG, sort_keys=True, separators=(",", ":")),
             "production_optimizers": json.dumps(PRODUCTION_OPTIMIZERS_CONFIG, sort_keys=True, separators=(",", ":")),
+            "query_search_params": json.dumps(QUERY_SEARCH_PARAMS, sort_keys=True, separators=(",", ":")),
             "effective_collection": json.dumps(self.effective_collection, sort_keys=True, separators=(",", ":"))}
         environment = {"os": platform.system() + " " + platform.release(), "arch": platform.machine() or "unavailable",
             "cpu": platform.processor() or "unavailable", "memory": memory_bytes(), "python": platform.python_version()}
-        artifact = {"schema": ARTIFACT_SCHEMA, "state": "partial", "passing": False, "manifest": self.manifest,
+        schema = BOUNDED_ARTIFACT_SCHEMA if self.manifest["schema"] == BOUNDED_MANIFEST_SCHEMA else ARTIFACT_SCHEMA
+        artifact = {"schema": schema, "state": "partial", "passing": False, "manifest": self.manifest,
             "backends": [{"name": "qdrant", "server_version": self.server_version, "client_version": CLIENT_VERSION,
                 "durability": "Qdrant wait=true; effective WAL/optimizer collection config recorded", "configuration": configuration,
                 "environment": environment, "manifest": {key: self.manifest[key] for key in ("corpus_sha256", "query_sha256", "operation_sha256")},
@@ -2656,8 +2661,6 @@ def main() -> int:
     freeze = load_measured_freeze(args.freeze, args.expected_freeze_sha256, args.manifest, manifest)
     if args.measured and (freeze is None or args.comparator_bin is None):
         raise SystemExit("measured collection requires trusted freeze and comparator binary")
-    if manifest["schema"] == BOUNDED_MANIFEST_SCHEMA and not args.measured:
-        raise SystemExit("bounded Minima Qdrant execution unavailable: M0 fixtures are TreeDB diagnostics; use the frozen v1 manifest for comparator evidence")
     installed = importlib.metadata.version("qdrant-client")
     if installed != CLIENT_VERSION:
         raise RuntimeError(f"qdrant-client must be exactly {CLIENT_VERSION}, got {installed}")
@@ -2687,7 +2690,9 @@ def main() -> int:
             if not isinstance(artifact, dict) or not isinstance(artifact.get("failures", []), list):
                 raise RuntimeError("artifact construction returned an invalid envelope")
         except BaseException as exc:
-            artifact = {"schema": MEASURED_SCHEMA if args.measured else ARTIFACT_SCHEMA,
+            schema = (MEASURED_SCHEMA if args.measured else BOUNDED_ARTIFACT_SCHEMA
+                      if manifest["schema"] == BOUNDED_MANIFEST_SCHEMA else ARTIFACT_SCHEMA)
+            artifact = {"schema": schema,
                         "state": "partial", "passing": False, "manifest": manifest,
                         "backends": [], "scenarios": [],
                         "backend_raw_evidence": {"qdrant": retained_partial_evidence(runner)},

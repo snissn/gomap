@@ -25,6 +25,7 @@ const (
 	minimaQdrantInitialOptimizerConfig    = `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":0,"flush_interval_sec":5,"max_optimization_threads":1}`
 	minimaQdrantProductionHNSWConfig      = `{"m":16,"ef_construct":100,"full_scan_threshold":10000,"max_indexing_threads":0,"on_disk":false}`
 	minimaQdrantProductionOptimizerConfig = `{"deleted_threshold":0.2,"vacuum_min_vector_number":1000,"default_segment_number":0,"indexing_threshold":10000,"flush_interval_sec":5,"max_optimization_threads":1}`
+	minimaQdrantQuerySearchParams         = `{"exact":true}`
 )
 
 const (
@@ -1024,6 +1025,11 @@ func minimaQdrantOptimizerReady(raw json.RawMessage) bool {
 func validateMinimaQdrantReadiness(raw minimaRawBackendEvidence, backend minimaBackendEvidence, expectedSessions int) error {
 	if raw.CollectionConfigurationTransition == nil || raw.Readiness == nil {
 		return fmt.Errorf("minima artifact: Qdrant transition/readiness evidence is missing")
+	}
+	if !minimaRawJSONMatchesConfiguration(
+		json.RawMessage(backend.Configuration["query_search_params"]), minimaQdrantQuerySearchParams,
+	) {
+		return fmt.Errorf("minima artifact: Qdrant exact query configuration is missing or invalid")
 	}
 	transition := *raw.CollectionConfigurationTransition
 	if transition.Boundary != "initial_batch_insert_to_warmup_search" ||
