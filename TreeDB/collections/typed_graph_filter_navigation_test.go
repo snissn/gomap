@@ -8,12 +8,15 @@ import (
 	"time"
 )
 
-func TestTypedGraphFilterNavigationBoundsConstructionMatrix(t *testing.T) {
-	if !typedGraphFilterNavigationConstructionFits(typedGraphFilterNavigationMaxRows, 512) {
-		t.Fatal("maximum 512 MiB construction matrix was declined")
+func TestTypedGraphFilterNavigationBoundsConstructionMemory(t *testing.T) {
+	if !typedGraphFilterNavigationConstructionFits(100_000, 768, 128) {
+		t.Fatal("bounded construction matrix and search scratch were declined")
 	}
-	if typedGraphFilterNavigationConstructionFits(typedGraphFilterNavigationMaxRows, 513) {
-		t.Fatal("construction matrix above 512 MiB was accepted")
+	if typedGraphFilterNavigationConstructionFits(typedGraphFilterNavigationMaxRows, 512, 128) {
+		t.Fatal("construction matrix plus parallel search scratch above 512 MiB was accepted")
+	}
+	if typedGraphFilterNavigationConstructionFits(100_000, 1150, 100_000) {
+		t.Fatal("large construction exploration scratch above 512 MiB was accepted")
 	}
 }
 

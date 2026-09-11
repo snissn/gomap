@@ -43,7 +43,7 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 	if count <= typedGraphScalarExactLimit || count > typedGraphFilterNavigationMaxRows || selection.IsAll() || maxBytes <= 0 {
 		return nil, errTypedGraphFilterNavigationDeclined
 	}
-	if !typedGraphFilterNavigationConstructionFits(count, overlay.base.reader.def.Dimensions) {
+	if !typedGraphFilterNavigationConstructionFits(count, overlay.base.reader.def.Dimensions, overlay.base.reader.def.EfConstruction) {
 		return nil, errTypedGraphFilterNavigationDeclined
 	}
 	levelIndex, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(overlay.base.reader.def))
@@ -161,9 +161,27 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 	}, nil
 }
 
-func typedGraphFilterNavigationConstructionFits(count, dimensions int) bool {
-	const maxValues = typedGraphFilterNavigationMaxConstructionBytes / 4
-	return count > 0 && dimensions > 0 && uint64(dimensions) <= maxValues && uint64(count) <= maxValues/uint64(dimensions)
+func typedGraphFilterNavigationConstructionFits(count, dimensions, efConstruction int) bool {
+	if count <= 0 || count > typedGraphFilterNavigationMaxRows || dimensions <= 0 || efConstruction <= 0 || uint64(dimensions) > uint64(typedGraphFilterNavigationMaxConstructionBytes)/4 {
+		return false
+	}
+	remaining := uint64(typedGraphFilterNavigationMaxConstructionBytes)
+	charge := func(items, bytes uint64) bool {
+		if items != 0 && bytes > remaining/items {
+			return false
+		}
+		remaining -= items * bytes
+		return true
+	}
+	workers := uint64(min(count, nativeVectorFrozenPrefixBatchWidth))
+	rows := uint64(count)
+	candidates := uint64(reflect.TypeFor[vectorIndexCandidate]().Size())
+	ef := uint64(min(count, efConstruction))
+	// Slice growth stays below twice the requested rows: visited and queue use
+	// row capacity, while best and output use ef capacity for every planner.
+	return charge(rows, uint64(dimensions)*4) &&
+		charge(workers*rows, 8+2*candidates) &&
+		charge(workers*ef, 4*candidates)
 }
 
 func acquireTypedGraphFilterNavigationConstruction(ctx context.Context) error {
