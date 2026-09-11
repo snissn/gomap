@@ -1094,10 +1094,10 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 			neighborIDs := make([]int, len(neighbors))
 			distances := make([]float32, len(neighbors))
 			for j, neighbor := range neighbors {
-				neighborIDs[j] = neighbor.nodeID
+				neighborIDs[j] = int(neighbor.nodeID)
 				distance, ok := normalizeVectorIndexEdgeDistance(neighbor.distance)
 				if !ok {
-					distance = idx.distanceBetweenNodesLocked(i, neighbor.nodeID)
+					distance = idx.distanceBetweenNodesLocked(i, int(neighbor.nodeID))
 					distance, ok = normalizeVectorIndexEdgeDistance(distance)
 					if !ok {
 						distance = math.MaxFloat32
@@ -1241,10 +1241,10 @@ func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Tabl
 				Distances: make([]float32, len(neighbors)),
 			}
 			for i, neighbor := range neighbors {
-				edge.Neighbor[i] = neighbor.nodeID
+				edge.Neighbor[i] = int(neighbor.nodeID)
 				distance, ok := normalizeVectorIndexEdgeDistance(neighbor.distance)
 				if !ok {
-					distance = idx.distanceBetweenNodesLocked(nodeID, neighbor.nodeID)
+					distance = idx.distanceBetweenNodesLocked(nodeID, int(neighbor.nodeID))
 					distance, ok = normalizeVectorIndexEdgeDistance(distance)
 					if !ok {
 						distance = math.MaxFloat32
@@ -1792,7 +1792,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 				}
 				distance = normalized
 			}
-			neighbors[i] = vectorIndexNeighbor{nodeID: neighbor, distance: distance}
+			neighbors[i] = vectorIndexNeighbor{nodeID: uint32(neighbor), distance: distance}
 		}
 		nodes[edge.NodeID].neighbors[edge.Layer] = neighbors
 	}

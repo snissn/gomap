@@ -147,9 +147,9 @@ func TestVectorIndexFrozenPrefixBatchM8IsDeterministicSearchableAndReachable4487
 			nodeID := queue[0]
 			queue = queue[1:]
 			for _, neighbor := range index.nodes[nodeID].neighbors[0] {
-				if !reachable[neighbor.nodeID] {
-					reachable[neighbor.nodeID] = true
-					queue = append(queue, neighbor.nodeID)
+				if !reachable[int(neighbor.nodeID)] {
+					reachable[int(neighbor.nodeID)] = true
+					queue = append(queue, int(neighbor.nodeID))
 				}
 			}
 		}
@@ -201,9 +201,9 @@ func TestVectorIndexFrozenPrefixBatchKeepsSmallMReachable4297(t *testing.T) {
 		nodeID := queue[0]
 		queue = queue[1:]
 		for _, neighbor := range index.nodes[nodeID].neighbors[0] {
-			if !reachable[neighbor.nodeID] {
-				reachable[neighbor.nodeID] = true
-				queue = append(queue, neighbor.nodeID)
+			if !reachable[int(neighbor.nodeID)] {
+				reachable[int(neighbor.nodeID)] = true
+				queue = append(queue, int(neighbor.nodeID))
 			}
 		}
 	}
@@ -251,7 +251,7 @@ func TestVectorIndexFrozenPrefixReciprocalScratchDoesNotAliasNodes4514(t *testin
 				}
 				found := false
 				for _, neighbor := range node.neighbors[0] {
-					if neighbor.nodeID == to {
+					if int(neighbor.nodeID) == to {
 						found = true
 						break
 					}

@@ -8,11 +8,18 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/vectorops"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
+
+func TestVectorIndexNeighborSlotSize4662(t *testing.T) {
+	if got := unsafe.Sizeof(vectorIndexNeighbor{}); got != 8 {
+		t.Fatalf("vector neighbor slot=%d bytes want 8", got)
+	}
+}
 
 func TestCollectionVectorIndexSearchReranksCanonicalRows(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
@@ -1634,9 +1641,9 @@ func TestVectorIndexCurrentSearchCountsUpperLayerScoresInBound(t *testing.T) {
 			neighbors:  make([][]vectorIndexNeighbor, 2),
 		}
 		if i+1 < staleNodes {
-			index.nodes[i].neighbors[1] = []vectorIndexNeighbor{{nodeID: i + 1}}
+			index.nodes[i].neighbors[1] = []vectorIndexNeighbor{{nodeID: uint32(i + 1)}}
 		}
-		index.nodes[i].neighbors[0] = []vectorIndexNeighbor{{nodeID: staleNodes}}
+		index.nodes[i].neighbors[0] = []vectorIndexNeighbor{{nodeID: uint32(staleNodes)}}
 		index.nodes[i].cacheVectorNorms()
 	}
 	index.nodes[staleNodes] = vectorIndexNode{documentID: []byte("live"), vector: []float32{1, 0}, neighbors: make([][]vectorIndexNeighbor, 1)}

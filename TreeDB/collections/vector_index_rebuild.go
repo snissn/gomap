@@ -1416,7 +1416,7 @@ func columnVectorGraphNativeLocalityOrder(index *VectorIndex) []int {
 		node := &index.nodes[nodeID]
 		for layer := len(node.neighbors) - 1; layer >= 0; layer-- {
 			for _, neighbor := range node.neighbors[layer] {
-				neighborID := neighbor.nodeID
+				neighborID := int(neighbor.nodeID)
 				if neighborID < 0 || neighborID >= len(index.nodes) || visited[neighborID] || index.nodes[neighborID].deleted {
 					continue
 				}
@@ -1452,7 +1452,7 @@ func columnVectorGraphLayeredAdjacencyFromNativeNode(node *vectorIndexNode, node
 		}
 		layers[layer] = make([]uint32, 0, len(node.neighbors[layer]))
 		for _, neighbor := range node.neighbors[layer] {
-			neighborID := neighbor.nodeID
+			neighborID := int(neighbor.nodeID)
 			if neighborID < 0 || neighborID >= len(nodeOrdinal) {
 				return nil, fmt.Errorf("collections: column vector graph neighbor node=%d out of range", neighborID)
 			}

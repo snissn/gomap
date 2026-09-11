@@ -230,8 +230,8 @@ func buildColumnHNSWSearchPackLevelsAndAdjacency(rows []columnVectorGraphAssetRo
 	layers := make([]columnHNSWSearchPackLayerInput, len(lists))
 	for layer, list := range lists {
 		layers[layer] = columnHNSWSearchPackLayerInput{
-			Offsets:   append([]uint64(nil), list.Offsets...),
-			Neighbors: append([]uint32(nil), list.Values...),
+			Offsets:   list.Offsets,
+			Neighbors: list.Values,
 		}
 	}
 	return levels, layers, maxLayer, nil
