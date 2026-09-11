@@ -180,6 +180,28 @@ func TestRefreshCommandWALCheckpointFallbackWaitsForVisibleRoot(t *testing.T) {
 	}
 }
 
+func TestRefreshCommandWALCheckpointFallbackSnapshotsRuntimeUnderDBMu(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL DB: %v", err)
+	}
+	defer db.Close()
+
+	db.mu.Lock()
+	refreshed := make(chan error, 1)
+	go func() { refreshed <- db.RefreshCommandWALCheckpointFallback() }()
+	select {
+	case err := <-refreshed:
+		db.mu.Unlock()
+		t.Fatalf("fallback refresh bypassed root-publication snapshot: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	db.mu.Unlock()
+	if err := <-refreshed; err != nil {
+		t.Fatalf("RefreshCommandWALCheckpointFallback: %v", err)
+	}
+}
+
 func TestRefreshCommandWALCheckpointFallbackPublicationFailureRetainsFallback(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
