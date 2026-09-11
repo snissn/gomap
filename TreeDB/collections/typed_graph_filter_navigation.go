@@ -7,8 +7,6 @@ import (
 	"math"
 	"reflect"
 	"slices"
-
-	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 // ponytail: bound cold per-filter construction above the frozen 200K-row shape;
@@ -26,10 +24,14 @@ type typedGraphFilterNavigation struct {
 	maxScoreCalls int
 }
 
-func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOverlaySearch, selection typedcolumn.RowSelection, maxBytes int) (*typedGraphFilterNavigation, error) {
+func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOverlaySearch, plan *typedGraphPreparedFilter, maxBytes int) (*typedGraphFilterNavigation, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if plan == nil {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	selection := plan.base
 	count := selection.Count()
 	if overlay == nil || !overlay.validOpen() || overlay.pack == nil {
 		return nil, ErrVectorIndexSnapshotMismatch
