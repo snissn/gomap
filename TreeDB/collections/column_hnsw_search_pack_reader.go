@@ -57,6 +57,9 @@ type columnHNSWSearchPackPreparedView struct {
 	handle  *mappedresource.Handle
 	source  mappedresource.Source
 	status  columnHNSWSearchPackPreparedStatus
+	// Process-local derived adjacency views borrow vectors from another pinned
+	// pack, so they intentionally have no mapped-resource handle.
+	ephemeralHeap bool
 
 	openNanos     uint64
 	mappedBytes   uint64
@@ -836,6 +839,9 @@ func (v *columnHNSWSearchPackPreparedView) fastStatus(defaultStatus columnHNSWSe
 	}
 	if v.closed.Load() {
 		return columnHNSWSearchPackPreparedStatusClosed
+	}
+	if v.ephemeralHeap {
+		return columnHNSWSearchPackPreparedStatusHeap
 	}
 	if v.handle == nil || v.handle.Released() {
 		return columnHNSWSearchPackPreparedStatusStale

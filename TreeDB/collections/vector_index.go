@@ -2469,7 +2469,14 @@ type vectorIndexFrozenPrefixDiversityScratch struct {
 }
 
 func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors [][]float32) error {
-	if err := idx.validateVectorBatch(documentIDs, vectors); err != nil {
+	return idx.insertVectorBatchWithContextLocked(context.Background(), documentIDs, vectors)
+}
+
+func (idx *VectorIndex) insertVectorBatchWithContextLocked(ctx context.Context, documentIDs [][]byte, vectors [][]float32) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := idx.validateVectorBatchWithContext(ctx, documentIDs, vectors); err != nil {
 		return err
 	}
 	if len(documentIDs) == 0 {
@@ -2478,6 +2485,9 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 	idx.prepareSearchViewForMutationLocked()
 	if len(documentIDs) < nativeVectorFrozenPrefixBatchMinimum {
 		for row := range documentIDs {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if err := idx.insertVectorLocked(documentIDs[row], vectors[row]); err != nil {
 				return err
 			}
@@ -2486,6 +2496,9 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 	}
 	var commitScratch vectorIndexFrozenPrefixCommitScratch
 	for start := 0; start < len(documentIDs); {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if idx.entry < 0 {
 			if err := idx.insertVectorLocked(documentIDs[start], vectors[start]); err != nil {
 				return err
@@ -2500,6 +2513,9 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 		end := minInt(start+batchWidth, len(documentIDs))
 		if !idx.canPlanFrozenPrefixBatchLocked(documentIDs[start:end]) {
 			for row := start; row < end; row++ {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				if err := idx.insertVectorLocked(documentIDs[row], vectors[row]); err != nil {
 					return err
 				}
@@ -2515,12 +2531,12 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 		for worker := 1; worker < workers; worker++ {
 			wg.Go(func() {
 				for plan := worker; plan < len(plans); plan += workers {
-					plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan)
+					plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(ctx, documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan)
 				}
 			})
 		}
 		for plan := 0; plan < len(plans); plan += workers {
-			plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan)
+			plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(ctx, documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan)
 		}
 		wg.Wait()
 		for row, err := range errs {
@@ -2583,6 +2599,16 @@ func (idx *VectorIndex) bindFixedConstructionRowsLocked(rows []float32, rowCount
 }
 
 func (idx *VectorIndex) validateVectorBatch(documentIDs [][]byte, vectors [][]float32) error {
+	return idx.validateVectorBatchWithContext(context.Background(), documentIDs, vectors)
+}
+
+func (idx *VectorIndex) validateVectorBatchWithContext(ctx context.Context, documentIDs [][]byte, vectors [][]float32) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(documentIDs) != len(vectors) {
 		return errors.New("collections: vector index batch ids/vectors length mismatch")
 	}
@@ -2591,6 +2617,9 @@ func (idx *VectorIndex) validateVectorBatch(documentIDs [][]byte, vectors [][]fl
 	}
 	dimensions := idx.dimensions
 	for row := range documentIDs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if len(documentIDs[row]) == 0 {
 			return errors.New("collections: document id cannot be empty")
 		}
@@ -2600,10 +2629,22 @@ func (idx *VectorIndex) validateVectorBatch(documentIDs [][]byte, vectors [][]fl
 		if len(vectors[row]) != dimensions {
 			return fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, documentIDs[row], len(vectors[row]), dimensions)
 		}
-		if err := validateFloat32Vector(vectors[row]); err != nil {
-			return err
+		var norm float64
+		for i, value := range vectors[row] {
+			if i&1023 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			f := float64(value)
+			if math.IsNaN(f) || math.IsInf(f, 0) {
+				return fmt.Errorf("element %d is not finite", i)
+			}
+			if idx.metric == VectorMetricCosine {
+				norm += f * f
+			}
 		}
-		if idx.metric == VectorMetricCosine && vectorNormSquared(vectors[row]) == 0 {
+		if idx.metric == VectorMetricCosine && norm == 0 {
 			return errors.New("collections: cosine vector cannot have zero magnitude")
 		}
 	}
@@ -2627,7 +2668,7 @@ func (idx *VectorIndex) canPlanFrozenPrefixBatchLocked(documentIDs [][]byte) boo
 	return true
 }
 
-func (idx *VectorIndex) planFrozenPrefixInsertLocked(documentID []byte, vector []float32, entry, maxLevel, sourceNodeID int) (vectorIndexFrozenPrefixInsert, error) {
+func (idx *VectorIndex) planFrozenPrefixInsertLocked(ctx context.Context, documentID []byte, vector []float32, entry, maxLevel, sourceNodeID int) (vectorIndexFrozenPrefixInsert, error) {
 	observer := idx.decisionObserver
 	started := time.Time{}
 	if observer != nil {
@@ -2643,6 +2684,9 @@ func (idx *VectorIndex) planFrozenPrefixInsertLocked(documentID []byte, vector [
 		return plan, err
 	}
 	for layer := maxLevel; layer > plan.level; layer-- {
+		if err := ctx.Err(); err != nil {
+			return plan, err
+		}
 		if observer == nil {
 			entry = idx.greedyNearestAtLayerLocked(vector, norm, &prepared, entry, layer)
 		} else {
@@ -2652,14 +2696,22 @@ func (idx *VectorIndex) planFrozenPrefixInsertLocked(documentID []byte, vector [
 	}
 	scratch := idx.getSearchScratch()
 	defer idx.putSearchScratch(scratch)
+	scratch.setContext(ctx)
+	defer scratch.clearContext()
 	plan.neighbors = make([][]int, minInt(plan.level, maxLevel)+1)
 	for layer := len(plan.neighbors) - 1; layer >= 0; layer-- {
 		if observer == nil {
 			candidates := idx.searchLayerWithScratchLocked(vector, norm, &prepared, entry, idx.efConstruction, layer, scratch)
+			if err := scratch.finalContextErr(); err != nil {
+				return plan, err
+			}
 			plan.neighbors[layer] = idx.selectLayerNeighborsLocked(vector, norm, &prepared, candidates, layer, idx.maxNeighborsForLayer(layer), -1)
 		} else {
 			context := &vectorIndexConstructionDecisionContextV1{observer: observer, phase: vectorIndexConstructionDecisionPlanning, source: sourceNodeID, layer: layer, dimensions: idx.dimensions}
 			candidates := idx.searchLayerWithScratchObservedLocked(vector, norm, &prepared, entry, idx.efConstruction, layer, scratch, context)
+			if err := scratch.finalContextErr(); err != nil {
+				return plan, err
+			}
 			plan.neighbors[layer] = idx.selectLayerNeighborsObservedLocked(vector, norm, &prepared, candidates, layer, idx.maxNeighborsForLayer(layer), -1, context)
 		}
 		if len(plan.neighbors[layer]) > 0 {

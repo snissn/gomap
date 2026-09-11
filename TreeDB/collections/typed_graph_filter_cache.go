@@ -2,6 +2,7 @@ package collections
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 
@@ -132,11 +133,6 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 	if err != nil {
 		return nil, err
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	// This backing becomes keeper-owned only after successful preparation/bind.
-	// Until admission it remains bounded temporary work owned by this request.
 	n := int64(candidate.plan.retainedBytes) + int64(reflect.TypeFor[typedGraphBaseFilter]().Size()+reflect.TypeFor[typedGraphPreparedFilter]().Size())
 	n += int64(cap(candidate.predicates)) * int64(reflect.TypeFor[typedGraphScalarPredicate]().Size())
 	for _, p := range candidate.predicates {
@@ -144,7 +140,38 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 	}
 	a := r.accounting
 	a.Lock()
-	if n <= a.limits.StateBytes-a.stateBytes-a.baseDescriptorBytes-a.baseBackingBytes {
+	remaining := a.limits.StateBytes - a.stateBytes - a.baseDescriptorBytes - a.baseBackingBytes
+	a.Unlock()
+	if n > remaining {
+		return plan, nil
+	}
+	navigationBudget := limits.RetainedBytes - int(work.RetainedBytes)
+	if keeperBudget := remaining - n; keeperBudget < int64(navigationBudget) {
+		navigationBudget = int(keeperBudget)
+	}
+	navigation, navigationErr := buildTypedGraphFilterNavigation(ctx, overlay, candidate.plan, navigationBudget)
+	if navigationErr == nil {
+		candidate.navigation = navigation
+		work.RetainedBytes += uint64(navigation.retainedBytes)
+	} else if !errors.Is(navigationErr, errTypedGraphFilterNavigationDeclined) {
+		return nil, navigationErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// This backing becomes keeper-owned only after successful preparation/bind.
+	// Until admission it remains bounded temporary work owned by this request.
+	if candidate.navigation != nil {
+		n += int64(candidate.navigation.retainedBytes)
+	}
+	a.Lock()
+	remaining = a.limits.StateBytes - a.stateBytes - a.baseDescriptorBytes - a.baseBackingBytes
+	if n > remaining && candidate.navigation != nil {
+		n -= int64(candidate.navigation.retainedBytes)
+		work.RetainedBytes -= uint64(candidate.navigation.retainedBytes)
+		candidate.navigation = nil
+	}
+	if n <= remaining {
 		a.baseBackingBytes += n
 		r.backingBytes += n
 		installed = true

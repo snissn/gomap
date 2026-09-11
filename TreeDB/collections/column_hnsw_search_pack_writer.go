@@ -205,10 +205,17 @@ func buildColumnHNSWSearchPackNormalizedVectors(rows []columnVectorGraphAssetRow
 }
 
 func buildColumnHNSWSearchPackLevelsAndAdjacency(rows []columnVectorGraphAssetRow) ([]uint16, []columnHNSWSearchPackLayerInput, int, error) {
+	return buildColumnHNSWSearchPackLevelsAndAdjacencyWithContext(context.Background(), rows)
+}
+
+func buildColumnHNSWSearchPackLevelsAndAdjacencyWithContext(ctx context.Context, rows []columnVectorGraphAssetRow) ([]uint16, []columnHNSWSearchPackLayerInput, int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if len(rows) == 0 {
 		return nil, nil, -1, nil
 	}
-	lists, err := buildColumnVectorIndexStateAdjacencyLists(rows)
+	lists, err := buildColumnVectorIndexStateAdjacencyListsWithContext(ctx, rows)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -218,6 +225,11 @@ func buildColumnHNSWSearchPackLevelsAndAdjacency(rows []columnVectorGraphAssetRo
 	maxLayer := len(lists) - 1
 	levels := make([]uint16, len(rows))
 	for ordinal, row := range rows {
+		if ordinal&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, 0, err
+			}
+		}
 		level, err := columnVectorGraphAdjacencyMaxLayer(row.Adjacency)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("collections: hnsw search pack row[%d] adjacency max layer: %w", ordinal, err)

@@ -2,6 +2,7 @@ package collections
 
 import (
 	"context"
+	"errors"
 	"slices"
 )
 
@@ -117,7 +118,19 @@ func (v *typedGraphOverlaySearch) searchPreparedFilterWithContext(ctx context.Co
 			efSearch = min(v.base.reader.def.EfSearch, baseLimit)
 		}
 		stats.Route = "typed_hnsw"
-		results, baseStats, err := v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: max(baseRequestK, efSearch), StrictScoreBudget: true, CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
+		searchEF := max(baseRequestK, efSearch)
+		var results []columnVectorGraphNativeSearchResult
+		var baseStats columnVectorGraphNativeSearchStats
+		var err error
+		if base := plan.borrowedBaseFilter; base != nil && base.navigation != nil {
+			navigation := base.navigation
+			results, baseStats, err = navigation.search(ctx, query, baseRequestK, searchEF, baseLimit, v.pack, &buffer.searchScratch)
+			if errors.Is(err, errTypedGraphFilterNavigationDeclined) {
+				results, baseStats, err = v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: searchEF, StrictScoreBudget: true, CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
+			}
+		} else {
+			results, baseStats, err = v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: searchEF, StrictScoreBudget: true, CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
+		}
 		stats.Base = baseStats
 		stats.BaseResultIDs = len(results)
 		if err != nil {
