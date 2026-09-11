@@ -133,6 +133,18 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 	if err != nil {
 		return nil, err
 	}
+	n := int64(candidate.plan.retainedBytes) + int64(reflect.TypeFor[typedGraphBaseFilter]().Size()+reflect.TypeFor[typedGraphPreparedFilter]().Size())
+	n += int64(cap(candidate.predicates)) * int64(reflect.TypeFor[typedGraphScalarPredicate]().Size())
+	for _, p := range candidate.predicates {
+		n += int64(cap(p.clause.lower) + cap(p.clause.upper) + len(p.definition.Name) + len(p.definition.Field) + len(p.definition.ValueType) + len(p.definition.StoragePolicy))
+	}
+	a := r.accounting
+	a.Lock()
+	remaining := a.limits.StateBytes - a.stateBytes - a.baseDescriptorBytes - a.baseBackingBytes
+	a.Unlock()
+	if n > remaining {
+		return plan, nil
+	}
 	navigation, navigationErr := buildTypedGraphFilterNavigation(ctx, overlay, candidate.plan, limits.RetainedBytes-int(work.RetainedBytes))
 	if navigationErr == nil {
 		candidate.navigation = navigation
@@ -145,17 +157,11 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 	}
 	// This backing becomes keeper-owned only after successful preparation/bind.
 	// Until admission it remains bounded temporary work owned by this request.
-	n := int64(candidate.plan.retainedBytes) + int64(reflect.TypeFor[typedGraphBaseFilter]().Size()+reflect.TypeFor[typedGraphPreparedFilter]().Size())
 	if candidate.navigation != nil {
 		n += int64(candidate.navigation.retainedBytes)
 	}
-	n += int64(cap(candidate.predicates)) * int64(reflect.TypeFor[typedGraphScalarPredicate]().Size())
-	for _, p := range candidate.predicates {
-		n += int64(cap(p.clause.lower) + cap(p.clause.upper) + len(p.definition.Name) + len(p.definition.Field) + len(p.definition.ValueType) + len(p.definition.StoragePolicy))
-	}
-	a := r.accounting
 	a.Lock()
-	remaining := a.limits.StateBytes - a.stateBytes - a.baseDescriptorBytes - a.baseBackingBytes
+	remaining = a.limits.StateBytes - a.stateBytes - a.baseDescriptorBytes - a.baseBackingBytes
 	if n > remaining && candidate.navigation != nil {
 		n -= int64(candidate.navigation.retainedBytes)
 		work.RetainedBytes -= uint64(candidate.navigation.retainedBytes)
