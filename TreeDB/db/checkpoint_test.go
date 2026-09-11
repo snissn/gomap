@@ -72,6 +72,38 @@ func TestCheckpointReleasesCommandWALAdmissionBeforeCleanupMaintenance(t *testin
 	}
 }
 
+func TestPrepareCommandWALCoveredPrefixCleanupDefersBusyPublish(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	d.commandWALRawPublishMu.Lock()
+	defer d.commandWALRawPublishMu.Unlock()
+	done := make(chan error, 1)
+	go func() {
+		pending, err := d.PrepareCommandWALCoveredPrefixCleanup()
+		if err == nil && pending {
+			err = errors.New("busy publish unexpectedly created cleanup debt")
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("automatic cleanup waited for command-WAL publish while holding maintenance")
+	}
+	if !d.maintenanceMu.TryLock() {
+		t.Fatal("deferred automatic cleanup retained maintenance lock")
+	}
+	d.maintenanceMu.Unlock()
+}
+
 func (l *checkpointTestLeafPageLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {
 	return page.LeafLogPtr{}, nil
 }

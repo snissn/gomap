@@ -213,7 +213,7 @@ func TestPublishVacuumOnlineStatsKeepsNewestAttempt(t *testing.T) {
 	}
 }
 
-func TestVacuumOnlineStatsAttemptIDFollowsMaintenanceAdmission(t *testing.T) {
+func TestVacuumOnlineStatsAttemptIDRequiresMaintenanceAdmission(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
 	}
@@ -252,8 +252,49 @@ func TestVacuumOnlineStatsAttemptIDFollowsMaintenanceAdmission(t *testing.T) {
 		t.Fatalf("first vacuum error=%v want context.Canceled", err)
 	}
 	stats := database.VacuumOnlineStats()
-	if stats.AttemptID != 2 || !stats.Canceled || stats.WorkCompleted {
-		t.Fatalf("latest completed stats=%+v want later-admitted canceled attempt", stats)
+	if stats.AttemptID != 1 || stats.Canceled || !stats.WorkCompleted {
+		t.Fatalf("latest completed stats=%+v want only maintenance-admitted attempt", stats)
+	}
+}
+
+func TestVacuumIndexOnlineCancellationWhileWaitingForBackendMaintenance(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+
+	database.maintenanceMu.Lock()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- database.VacuumIndexOnline(ctx) }()
+	deadline := time.Now().Add(time.Second)
+	for database.VacuumOnlinePhase() != "maintenance-admission" {
+		if time.Now().After(deadline) {
+			database.maintenanceMu.Unlock()
+			cancel()
+			t.Fatal("vacuum did not reach backend maintenance admission")
+		}
+		runtime.Gosched()
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			database.maintenanceMu.Unlock()
+			t.Fatalf("VacuumIndexOnline error=%v want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		database.maintenanceMu.Unlock()
+		<-done
+		t.Fatal("vacuum ignored cancellation during backend maintenance admission")
+	}
+	database.maintenanceMu.Unlock()
+	if got := database.Stats()["treedb.vacuum_online.last_phase"]; got != "maintenance-admission" {
+		t.Fatalf("last vacuum phase=%q want maintenance-admission", got)
 	}
 }
 

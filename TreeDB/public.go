@@ -1213,7 +1213,7 @@ func (db *DB) publicCachedExpvarStatsInto(stats map[string]string) {
 	db.publicCommandWALBatchStatsInto(stats)
 	db.publicCommandWALGroupStatsInto(stats)
 	db.publicOperationStatsInto(stats)
-	bgIndexVacuumStatsInto(stats, &db.bgVac)
+	bgIndexVacuumStatsInto(stats, &db.bgVac, db.backend.VacuumOnlinePhase())
 	maintenanceStatsInto(stats, &db.maintenance)
 }
 
@@ -2363,7 +2363,7 @@ func (db *DB) Stats() map[string]string {
 		db.publicOperationStatsInto(stats)
 		stats["treedb.durability_mode"] = db.durabilityMode
 		stats["treedb.vlog.read_integrity"] = db.valueLogReadIntegrity
-		bgIndexVacuumStatsInto(stats, &db.bgVac)
+		bgIndexVacuumStatsInto(stats, &db.bgVac, db.backend.VacuumOnlinePhase())
 		maintenanceStatsInto(stats, &db.maintenance)
 		return stats
 	}
@@ -2377,7 +2377,7 @@ func (db *DB) Stats() map[string]string {
 	db.publicOperationStatsInto(stats)
 	stats["treedb.durability_mode"] = db.durabilityMode
 	stats["treedb.vlog.read_integrity"] = db.valueLogReadIntegrity
-	bgIndexVacuumStatsInto(stats, &db.bgVac)
+	bgIndexVacuumStatsInto(stats, &db.bgVac, db.backend.VacuumOnlinePhase())
 	maintenanceStatsInto(stats, &db.maintenance)
 	return stats
 }
