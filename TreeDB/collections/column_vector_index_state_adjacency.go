@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -107,9 +108,21 @@ func columnVectorIndexStateAdjacencyColumnStoreConfig(collection string, base Co
 }
 
 func buildColumnVectorIndexStateAdjacencyLists(rows []columnVectorGraphAssetRow) ([]typedcolumn.Uint32List, error) {
+	return buildColumnVectorIndexStateAdjacencyListsWithContext(context.Background(), rows)
+}
+
+func buildColumnVectorIndexStateAdjacencyListsWithContext(ctx context.Context, rows []columnVectorGraphAssetRow) ([]typedcolumn.Uint32List, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	maxLayer := 0
 	layerValueCounts := []int{0}
 	for rowIdx := range rows {
+		if rowIdx&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		adjacency := rows[rowIdx].Adjacency
 		rowMaxLayer, err := columnVectorGraphAdjacencyMaxLayer(adjacency)
 		if err != nil {
@@ -153,6 +166,11 @@ func buildColumnVectorIndexStateAdjacencyLists(rows []columnVectorGraphAssetRow)
 		layers[layer].Values = make([]uint32, 0, layerValueCounts[layer])
 	}
 	for rowIdx := range rows {
+		if rowIdx&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		adjacency := rows[rowIdx].Adjacency
 		if !columnVectorGraphAdjacencyIsLayered(adjacency) {
 			if len(adjacency) > math.MaxInt-len(layers[0].Values) {

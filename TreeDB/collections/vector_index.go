@@ -2409,10 +2409,16 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	}
 	entryPoint := idx.entry
 	for layer := idx.maxLevel; layer > level; layer-- {
+		if err := idx.insertScratch.finalContextErr(); err != nil {
+			return err
+		}
 		entryPoint = idx.greedyNearestAtLayerLocked(vector, vectorNorm, prepared, entryPoint, layer)
 	}
 	for layer := minInt(level, idx.maxLevel); layer >= 0; layer-- {
 		candidates := idx.searchLayerWithScratchLocked(vector, vectorNorm, prepared, entryPoint, idx.efConstruction, layer, &idx.insertScratch)
+		if err := idx.insertScratch.finalContextErr(); err != nil {
+			return err
+		}
 		selectionLimit := idx.maxNeighborsForLayer(layer)
 		if layer == 0 && idx.layer0ConstructionPolicy != nil {
 			selectionLimit = idx.m * idx.layer0ConstructionPolicy.initialSelectionFactor
@@ -2469,15 +2475,27 @@ type vectorIndexFrozenPrefixDiversityScratch struct {
 }
 
 func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors [][]float32) error {
+	return idx.insertVectorBatchWithContextLocked(context.Background(), documentIDs, vectors)
+}
+
+func (idx *VectorIndex) insertVectorBatchWithContextLocked(ctx context.Context, documentIDs [][]byte, vectors [][]float32) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := idx.validateVectorBatch(documentIDs, vectors); err != nil {
 		return err
 	}
 	if len(documentIDs) == 0 {
 		return nil
 	}
+	idx.insertScratch.setContext(ctx)
+	defer idx.insertScratch.clearContext()
 	idx.prepareSearchViewForMutationLocked()
 	if len(documentIDs) < nativeVectorFrozenPrefixBatchMinimum {
 		for row := range documentIDs {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if err := idx.insertVectorLocked(documentIDs[row], vectors[row]); err != nil {
 				return err
 			}
@@ -2486,6 +2504,9 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 	}
 	var commitScratch vectorIndexFrozenPrefixCommitScratch
 	for start := 0; start < len(documentIDs); {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if idx.entry < 0 {
 			if err := idx.insertVectorLocked(documentIDs[start], vectors[start]); err != nil {
 				return err
@@ -2515,12 +2536,12 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 		for worker := 1; worker < workers; worker++ {
 			wg.Go(func() {
 				for plan := worker; plan < len(plans); plan += workers {
-					plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan)
+					plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(ctx, documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan)
 				}
 			})
 		}
 		for plan := 0; plan < len(plans); plan += workers {
-			plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan)
+			plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(ctx, documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan)
 		}
 		wg.Wait()
 		for row, err := range errs {
@@ -2627,7 +2648,7 @@ func (idx *VectorIndex) canPlanFrozenPrefixBatchLocked(documentIDs [][]byte) boo
 	return true
 }
 
-func (idx *VectorIndex) planFrozenPrefixInsertLocked(documentID []byte, vector []float32, entry, maxLevel, sourceNodeID int) (vectorIndexFrozenPrefixInsert, error) {
+func (idx *VectorIndex) planFrozenPrefixInsertLocked(ctx context.Context, documentID []byte, vector []float32, entry, maxLevel, sourceNodeID int) (vectorIndexFrozenPrefixInsert, error) {
 	observer := idx.decisionObserver
 	started := time.Time{}
 	if observer != nil {
@@ -2643,6 +2664,9 @@ func (idx *VectorIndex) planFrozenPrefixInsertLocked(documentID []byte, vector [
 		return plan, err
 	}
 	for layer := maxLevel; layer > plan.level; layer-- {
+		if err := ctx.Err(); err != nil {
+			return plan, err
+		}
 		if observer == nil {
 			entry = idx.greedyNearestAtLayerLocked(vector, norm, &prepared, entry, layer)
 		} else {
@@ -2652,14 +2676,22 @@ func (idx *VectorIndex) planFrozenPrefixInsertLocked(documentID []byte, vector [
 	}
 	scratch := idx.getSearchScratch()
 	defer idx.putSearchScratch(scratch)
+	scratch.setContext(ctx)
+	defer scratch.clearContext()
 	plan.neighbors = make([][]int, minInt(plan.level, maxLevel)+1)
 	for layer := len(plan.neighbors) - 1; layer >= 0; layer-- {
 		if observer == nil {
 			candidates := idx.searchLayerWithScratchLocked(vector, norm, &prepared, entry, idx.efConstruction, layer, scratch)
+			if err := scratch.finalContextErr(); err != nil {
+				return plan, err
+			}
 			plan.neighbors[layer] = idx.selectLayerNeighborsLocked(vector, norm, &prepared, candidates, layer, idx.maxNeighborsForLayer(layer), -1)
 		} else {
 			context := &vectorIndexConstructionDecisionContextV1{observer: observer, phase: vectorIndexConstructionDecisionPlanning, source: sourceNodeID, layer: layer, dimensions: idx.dimensions}
 			candidates := idx.searchLayerWithScratchObservedLocked(vector, norm, &prepared, entry, idx.efConstruction, layer, scratch, context)
+			if err := scratch.finalContextErr(); err != nil {
+				return plan, err
+			}
 			plan.neighbors[layer] = idx.selectLayerNeighborsObservedLocked(vector, norm, &prepared, candidates, layer, idx.maxNeighborsForLayer(layer), -1, context)
 		}
 		if len(plan.neighbors[layer]) > 0 {

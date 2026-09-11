@@ -1,6 +1,8 @@
 package collections
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -47,6 +49,9 @@ func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got, err := buildTypedGraphFilterNavigation(t.Context(), owner.overlay, fresh, 1); got != nil || !errors.Is(err, errTypedGraphFilterNavigationDeclined) {
+		t.Fatalf("one-byte retained budget navigation=%v err=%v", got, err)
+	}
 	queryRow := slices.Index(ranks, 1000)
 	if queryRow < 0 {
 		t.Fatal("missing selected query row")
@@ -75,6 +80,9 @@ func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 	})
 	oracle = oracle[:10]
 	var buffer VectorIndexSearchBuffer
+	if results, _, err := navigation.search(&cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 2}, query, 10, 2048, 1<<20, owner.overlay.pack, &buffer.searchScratch); len(results) != 0 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled navigation results=%d err=%v", len(results), err)
+	}
 	legacy, legacyStats, err := owner.overlay.searchPreparedFilter(fresh, query, 10, 2048, 1<<20, &buffer)
 	if err != nil {
 		t.Fatal(err)

@@ -124,7 +124,7 @@ func (v *typedGraphOverlaySearch) searchPreparedFilterWithContext(ctx context.Co
 		var err error
 		if base := plan.borrowedBaseFilter; base != nil && base.navigation != nil {
 			navigation := base.navigation
-			results, baseStats, err = navigation.search(query, baseRequestK, searchEF, baseLimit, v.pack, &buffer.searchScratch)
+			results, baseStats, err = navigation.search(ctx, query, baseRequestK, searchEF, baseLimit, v.pack, &buffer.searchScratch)
 			if errors.Is(err, errTypedGraphFilterNavigationDeclined) {
 				results, baseStats, err = v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: searchEF, StrictScoreBudget: true, CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
 			}

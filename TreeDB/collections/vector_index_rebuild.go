@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -1024,7 +1025,12 @@ func columnVectorGraphInvNorm(vector []float32) (float32, error) {
 }
 
 func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def VectorIndexDefinition) error {
-	return buildColumnVectorGraphAdjacencyV1(rows, def, nil, true, nil, true, nil)
+	return buildColumnVectorGraphAdjacencyWithContext(context.Background(), rows, def)
+
+}
+
+func buildColumnVectorGraphAdjacencyWithContext(ctx context.Context, rows []columnVectorGraphAssetRow, def VectorIndexDefinition) error {
+	return buildColumnVectorGraphAdjacencyV1WithFixedRowsAndContext(ctx, rows, def, nil, true, nil, true, nil, nil, nil)
 }
 
 func buildColumnVectorGraphAdjacencyTimed(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, timing *ColumnGraphBuildTiming) error {
@@ -1062,6 +1068,13 @@ func buildColumnVectorGraphAdjacencyV1(rows []columnVectorGraphAssetRow, def Vec
 }
 
 func buildColumnVectorGraphAdjacencyV1WithFixedRows(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool, policy *vectorIndexLayer0ConstructionPolicyV1, parallelReciprocalLinks bool, timing *ColumnGraphBuildTiming, fixedRows []float32, observer *vectorIndexConstructionDecisionObserverV1) error {
+	return buildColumnVectorGraphAdjacencyV1WithFixedRowsAndContext(context.Background(), rows, def, trace, recordFinal, policy, parallelReciprocalLinks, timing, fixedRows, observer)
+}
+
+func buildColumnVectorGraphAdjacencyV1WithFixedRowsAndContext(ctx context.Context, rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool, policy *vectorIndexLayer0ConstructionPolicyV1, parallelReciprocalLinks bool, timing *ColumnGraphBuildTiming, fixedRows []float32, observer *vectorIndexConstructionDecisionObserverV1) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if uint64(len(rows)) > maxColumnVectorGraphAdjacencyOrdinal {
 		return fmt.Errorf("collections: column vector graph row count=%d exceeds uint32 adjacency encoding", len(rows))
 	}
@@ -1072,6 +1085,11 @@ func buildColumnVectorGraphAdjacencyV1WithFixedRows(rows []columnVectorGraphAsse
 		trace.sampleIDs = vectorPartitionConstructionSampleIDsV1(rows)
 	}
 	for i := range rows {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		if len(rows[i].Vector) != def.Dimensions {
 			return fmt.Errorf("collections: column vector graph row[%d] vector dims=%d want %d", i, len(rows[i].Vector), def.Dimensions)
 		}
@@ -1102,7 +1120,7 @@ func buildColumnVectorGraphAdjacencyV1WithFixedRows(rows []columnVectorGraphAsse
 			}
 		}
 	}
-	if err := insertColumnVectorGraphRowsLocked(index, rows); err != nil {
+	if err := insertColumnVectorGraphRowsWithContextLocked(ctx, index, rows); err != nil {
 		return err
 	}
 	if fixedRows != nil {
@@ -1128,9 +1146,19 @@ func buildColumnVectorGraphAdjacencyV1WithFixedRows(rows []columnVectorGraphAsse
 	localityStarted := time.Now()
 	inputOrdinalByNode := make([]int, len(index.nodes))
 	for i := range inputOrdinalByNode {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		inputOrdinalByNode[i] = -1
 	}
 	for i := range rows {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		nodeID, ok := index.currentNode[string(rows[i].ID)]
 		if !ok || nodeID < 0 || nodeID >= len(index.nodes) || index.nodes[nodeID].deleted {
 			return fmt.Errorf("collections: column vector graph row[%d] missing native graph node", i)
@@ -1147,6 +1175,11 @@ func buildColumnVectorGraphAdjacencyV1WithFixedRows(rows []columnVectorGraphAsse
 		nodeOrdinal[i] = -1
 	}
 	for ordinal, nodeID := range order {
+		if ordinal&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		inputOrdinal := -1
 		if nodeID >= 0 && nodeID < len(inputOrdinalByNode) {
 			inputOrdinal = inputOrdinalByNode[nodeID]
@@ -1163,6 +1196,11 @@ func buildColumnVectorGraphAdjacencyV1WithFixedRows(rows []columnVectorGraphAsse
 	copy(rows, orderedRows)
 	nodeIDByOrdinal := order
 	for i := range rows {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		nodeID := nodeIDByOrdinal[i]
 		adjacency, err := columnVectorGraphLayeredAdjacencyFromNativeNode(&index.nodes[nodeID], nodeOrdinal)
 		if err != nil {
@@ -1185,12 +1223,16 @@ func buildColumnVectorGraphAdjacencyV1WithFixedRows(rows []columnVectorGraphAsse
 }
 
 func insertColumnVectorGraphRowsLocked(index *VectorIndex, rows []columnVectorGraphAssetRow) error {
+	return insertColumnVectorGraphRowsWithContextLocked(context.Background(), index, rows)
+}
+
+func insertColumnVectorGraphRowsWithContextLocked(ctx context.Context, index *VectorIndex, rows []columnVectorGraphAssetRow) error {
 	ids := make([][]byte, len(rows))
 	vectors := make([][]float32, len(rows))
 	for i := range rows {
 		ids[i], vectors[i] = rows[i].ID, rows[i].Vector
 	}
-	if err := index.insertVectorBatchLocked(ids, vectors); err != nil {
+	if err := index.insertVectorBatchWithContextLocked(ctx, ids, vectors); err != nil {
 		return fmt.Errorf("collections: build column vector graph: %w", err)
 	}
 	return nil
