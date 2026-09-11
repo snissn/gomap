@@ -209,6 +209,7 @@ func TestMinimaCompletedBoundedQdrantValidatesAndRoundTrips(t *testing.T) {
 		mutate func(*minimaArtifact)
 	}{
 		{"approximate_route", func(a *minimaArtifact) { a.Scenarios[0].Route.Identity = "qdrant_filtered_hnsw" }},
+		{"missing_filter_evidence", func(a *minimaArtifact) { a.Scenarios[0].Route.DeclaredScalarFiltering = false }},
 		{"missing_exact_option", func(a *minimaArtifact) { delete(a.Backends[0].Configuration, "query_search_params") }},
 		{"native_path_proof", func(a *minimaArtifact) {
 			a.NativePathProof = &minimaNativePathProof{Schema: minimaNativeProofSchema, Strategy: "native_runtime", Availability: "unavailable", Reason: "invalid"}
