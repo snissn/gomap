@@ -63,6 +63,7 @@ const (
 
 type VacuumOnlineStats struct {
 	AttemptID                               uint64
+	Phase                                   string
 	TotalDuration                           time.Duration
 	UserTreeDuration                        time.Duration
 	SystemReserveDuration                   time.Duration
@@ -192,6 +193,40 @@ func vacuumDurableResourceSummary(resources *rootpublication.StableResourceSet) 
 // VacuumOnlineStats returns an owned snapshot of the most recently completed
 // online-vacuum attempt. It is safe to call while a vacuum is running.
 func (db *DB) VacuumOnlineStats() VacuumOnlineStats { return db.vacuumOnlineStatsSnapshot() }
+
+// VacuumOnlinePhase returns the most recent active or terminal online-vacuum
+// phase. It remains available after an attempt returns so timeout diagnostics
+// do not lose the last blocking boundary.
+func (db *DB) VacuumOnlinePhase() string {
+	if db == nil {
+		return ""
+	}
+	phase, _ := db.vacuumOnlinePhase.Load().(string)
+	return phase
+}
+
+func lockVacuumMaintenanceContext(ctx context.Context, mu *sync.Mutex) error {
+	if ctx.Done() == nil {
+		mu.Lock()
+		return nil
+	}
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if mu.TryLock() {
+			if err := ctx.Err(); err != nil {
+				mu.Unlock()
+				return err
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
 
 type vacuumRecorder struct {
 	active atomic.Bool
@@ -408,6 +443,7 @@ func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance
 		return ErrVacuumUnsupported
 	}
 	if lockMaintenance {
+		db.vacuumOnlinePhase.Store("publication-drain")
 		if publication := db.rootPublication; publication != nil && publication.coordinator != nil {
 			if err := publication.coordinator.Drain(ctx); err != nil {
 				return publicRootPublicationErrorV1(err)
@@ -416,12 +452,16 @@ func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance
 		if hook := db.vacuumBeforeMaintenanceHook; hook != nil {
 			hook()
 		}
-		db.maintenanceMu.Lock()
+		db.vacuumOnlinePhase.Store("maintenance-admission")
+		if err := lockVacuumMaintenanceContext(ctx, &db.maintenanceMu); err != nil {
+			return err
+		}
 		defer db.maintenanceMu.Unlock()
 	}
 	attemptID := db.vacuumOnlineAttemptID.Add(1)
 	attemptStarted := time.Now()
-	seed := VacuumOnlineStats{AttemptID: attemptID}
+	db.vacuumOnlinePhase.Store("recoverable-root-capture")
+	seed := VacuumOnlineStats{AttemptID: attemptID, Phase: "recoverable-root-capture"}
 	rebuildStarted := false
 	defer func() {
 		if retErr == nil || rebuildStarted {
@@ -445,6 +485,8 @@ func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance
 	seed.RecoverableSetCaptures = 1
 	seed.RecoverableRoots = uint64(len(roots.Roots()))
 	rebuildStarted = true
+	db.vacuumOnlinePhase.Store("rebuild")
+	seed.Phase = "rebuild"
 	return db.vacuumIndexOnlineRebuildV1(ctx, false, nil, roots, &seed, attemptStarted, result)
 }
 

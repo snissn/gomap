@@ -886,6 +886,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.profile.production"] = fmt.Sprintf("%t", db.resolvedProfile.Production())
 	stats["treedb.profile.bench_unsafe"] = fmt.Sprintf("%t", db.resolvedProfile == ProfileBenchUnsafe)
 	stats["treedb.profile.deprecated_alias"] = string(db.deprecatedProfileAlias)
+	stats["treedb.vacuum_online.last_phase"] = db.VacuumOnlinePhase()
 
 	snap := db.AcquireSnapshot()
 	if snap == nil || snap.idx == nil || snap.state == nil {

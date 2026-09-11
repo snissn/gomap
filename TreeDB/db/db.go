@@ -220,6 +220,7 @@ type DB struct {
 	systemRootPublishEpoch atomic.Uint64
 	vacuumOnlineAttemptID  atomic.Uint64
 	vacuumOnlineLast       atomic.Pointer[VacuumOnlineStats]
+	vacuumOnlinePhase      atomic.Value // string
 	// Package-private deterministic hooks for online-vacuum concurrency tests.
 	vacuumCollectionClonePageHook    func(vacuumCollectionClonePhase, uint64)
 	vacuumBeforeCutoverHook          func(int)
@@ -3932,7 +3933,13 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
 		return false, db.checkpointTeardownPinned(true)
 	}
 
-	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	// Covered-prefix maintenance is retryable. Never wait for a public vacuum's
+	// publish guard while holding maintenanceMu: vacuum takes those locks in the
+	// opposite order before entering backend maintenance.
+	if !db.commandWALRawPublishMu.TryLock() {
+		return false, nil
+	}
+	unlockCommandWALPublish := db.commandWALRawPublishMu.Unlock
 	rotated, advanced, err := db.closeCommandWALCheckpointPrefix()
 	unlockCommandWALPublish()
 	if err != nil {

@@ -1276,6 +1276,7 @@ func bgIndexVacuumStatsInto(out map[string]string, w *bgIndexVacuumWorker) {
 	out["treedb.bg_vacuum.last_online.swap_publish_ns"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.SwapPublishDuration.Nanoseconds())
 	out["treedb.bg_vacuum.last_online.max_writer_pause_ns"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.MaxWriterPause.Nanoseconds())
 	out["treedb.bg_vacuum.last_online.attempt_id"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.AttemptID)
+	out["treedb.bg_vacuum.last_online.phase"] = stats.LastOnlineVacuum.Phase
 	out["treedb.bg_vacuum.last_online.recoverable_set_capture_ns"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.RecoverableSetCaptureDuration.Nanoseconds())
 	out["treedb.bg_vacuum.last_online.recoverable_set_capture_attempts"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.RecoverableSetCaptureAttempts)
 	out["treedb.bg_vacuum.last_online.recoverable_set_captures"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.RecoverableSetCaptures)
