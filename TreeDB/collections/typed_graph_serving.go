@@ -232,19 +232,8 @@ func (c *Collection) retireTypedGraphCapturedBaseKeepers(index string) {
 		}
 		m.collectionsMu.RUnlock()
 	}
-	slot := collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}
 	for _, handle := range handles {
-		var stale *collectionVectorIndexPreparedSearch
-		handle.vectorBufferedSearchMu.Lock()
-		if entry := handle.vectorBufferedSearch[slot]; entry != nil && !entry.building {
-			delete(handle.vectorBufferedSearch, slot)
-			stale = entry.prepared
-			handle.vectorBufferedSearchInvalidations++
-		}
-		handle.vectorBufferedSearchMu.Unlock()
-		if stale != nil {
-			_ = stale.Close()
-		}
+		handle.invalidateTypedGraphStaleBaseKeeper(index)
 	}
 }
 

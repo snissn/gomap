@@ -76,6 +76,22 @@ func TestTypedGraphFoldRetiresSiblingKeepers(t *testing.T) {
 			if err := sibling.EnsureColumnGraphServing(context.Background(), index, opts); err != nil {
 				t.Fatalf("rewarm sibling: %v", err)
 			}
+			sibling.vectorBufferedSearchMu.Lock()
+			currentEntry := sibling.vectorBufferedSearch[slot]
+			sibling.vectorBufferedSearchMu.Unlock()
+			col.retireTypedGraphCapturedBaseKeepers(index)
+			sibling.vectorBufferedSearchMu.Lock()
+			preserved := sibling.vectorBufferedSearch[slot]
+			sibling.vectorBufferedSearchMu.Unlock()
+			currentClosed := true
+			if currentEntry != nil && currentEntry.prepared != nil {
+				currentEntry.prepared.mu.RLock()
+				currentClosed = currentEntry.prepared.closed
+				currentEntry.prepared.mu.RUnlock()
+			}
+			if currentEntry == nil || preserved != currentEntry || currentClosed {
+				t.Fatal("sibling keeper for current folded base was retired")
+			}
 			query.DeclaredScalarFilter = &HybridScalarFilter{IndexName: "path", Value: "new"}
 			var currentBuffer VectorIndexSearchBuffer
 			current, view, err := sibling.SearchVectorIndexWithBufferReadView(query, &currentBuffer)
