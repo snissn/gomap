@@ -57,7 +57,7 @@ func TestTypedGraphInverseMappedAndOptional(t *testing.T) {
 		if got, ok := source.ordinalForPhysicalRow(ref); !ok || got != ordinal {
 			t.Fatalf("inverse=%d/%v want %d", got, ok, ordinal)
 		}
-		for _, mutate := range []func(*DocumentRowRef){func(r *DocumentRowRef) { r.AppliedCommandLSN++ }, func(r *DocumentRowRef) { r.Generation += 100 }, func(r *DocumentRowRef) { r.PartID += 100 }, func(r *DocumentRowRef) { r.RowIndex += 100 }} {
+		for _, mutate := range []func(*DocumentRowRef){func(r *DocumentRowRef) { r.AppliedCommandLSN++ }, func(r *DocumentRowRef) { r.Generation += 100 }, func(r *DocumentRowRef) { r.PartID += 100 }, func(r *DocumentRowRef) { r.RowIndex += 100 }, func(r *DocumentRowRef) { r.Generation = ^uint64(0) }, func(r *DocumentRowRef) { r.PartID = ^uint64(0) }, func(r *DocumentRowRef) { r.RowIndex = -1 }} {
 			invalid := ref
 			mutate(&invalid)
 			if _, ok := source.ordinalForPhysicalRow(invalid); ok {

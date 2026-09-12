@@ -169,6 +169,12 @@ delete visibility, cumulative physical bounds and the still-gated public route.
 `TestTypedGraphInverse*` covers the optional mapped inverse, coordinate/LSN
 validation, corruption and handle lifetime. `TestTypedGraphLocatorVisitorOwnership`
 checks the shared borrowed lookup boundary and unchanged owning public results.
+`TestTypedGraphReadOwnerDoesNotWaitForImmediatePublication` checks admission and
+public search while an immediate writer is paused before publication.
+`TestTypedGraphReadOwnerRetriesPublicationChangedDuringCapture`,
+`TestTypedGraphReadOwnerInstallationGapWaiters`, and
+`TestTypedGraphReadOwnerCloseWakesPublicationWaiter` cover coherent capture,
+publication-gap notification, cancellation, and Close without polling or spins.
 `TestTypedGraphPreparedFilterFinalIntersectionAndBounds` preserves complete
 512/513/1,000/4,096/4,097 classification and large-leaf/small-intersection behavior;
 `TestTypedGraphPreparedFilterDispersedQuality` supplies a separate 50,000-row

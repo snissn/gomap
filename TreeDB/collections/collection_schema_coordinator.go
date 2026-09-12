@@ -20,6 +20,13 @@ type collectionSchemaCoordinator struct {
 	typedPublicationDebtMu  sync.Mutex
 	typedPublicationDebt    typedGraphPublicationCost
 	typedPublicationPending typedGraphPublicationCost
+
+	// Protected by typedPublicationDebtMu. Buffered acknowledgments still need
+	// a drain before read admission; immediate publications do not.
+	typedPublicationBuffered int
+	typedPublicationChanged  chan struct{}
+	typedPublicationClosed   bool
+
 	schemaMu                sync.RWMutex
 	nativeVectorAdmissionMu sync.RWMutex
 	nativeVectorBaseline    atomic.Pointer[uint64]
@@ -195,6 +202,14 @@ func collectionDBSchemaCoordinatorForDB(db *backenddb.DB) *collectionDBSchemaCoo
 		}
 		return !loaded
 	}, func() error {
+		coord.mu.Lock()
+		for _, collection := range coord.collections {
+			collection.typedPublicationDebtMu.Lock()
+			collection.typedPublicationClosed = true
+			collection.wakeTypedGraphPublicationWaitersLocked()
+			collection.typedPublicationDebtMu.Unlock()
+		}
+		coord.mu.Unlock()
 		unregisterRelocation()
 		collectionSchemaCoordinators.Delete(db)
 		return nil
