@@ -2781,8 +2781,8 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	}
 
 	// The system root was applied as a delta, so we do not have an exact
-	// value-log ref delta for system-root pointer changes. Passing nil keeps the
-	// tracker conservative by invalidating it after commit.
+	// value-log ref delta for system-root pointer changes. Passing nil invalidates
+	// the tracker after commit unless the candidate's exact scan repairs it.
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
 	accepted, finalizeErr := db.finalizeOrderedRootPublishWithCommandWALOptions(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, baseSeq, commandWALIntent, opts, releaseWrite)

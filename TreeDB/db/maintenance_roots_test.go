@@ -443,9 +443,7 @@ func TestValueLogGC_KeepsSegmentMadeReachableByDeltaGroupSystemDescriptorOnly(t 
 	}); err != nil {
 		t.Fatalf("publish system descriptor via delta group builder: %v", err)
 	}
-	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); ok {
-		t.Fatal("expected delta group descriptor publish to invalidate value-log ref tracker")
-	}
+	assertCandidateTrackerMatchesFullScan(t, d)
 
 	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
@@ -492,9 +490,7 @@ func TestValueLogGC_RemovesSegmentAfterSystemDescriptorRemoval(t *testing.T) {
 	if _, err := d.PublishSystemRootIterator(mustFrozenRawMemtable(t, "sys/after", encodeMaintenanceRootID(collectionRoot)).NewIterator(nil, nil)); err != nil {
 		t.Fatalf("remove collection descriptor: %v", err)
 	}
-	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); ok {
-		t.Fatal("expected descriptor removal to invalidate value-log ref tracker")
-	}
+	assertCandidateTrackerMatchesFullScan(t, d)
 
 	advancePastRetainedDurableSlotForTest(t, d)
 	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
@@ -539,9 +535,7 @@ func TestValueLogGC_RemovesSegmentAfterGroupedSystemDescriptorRemoval(t *testing
 	if _, _, err := d.PublishOrderedRootGroup(mustFrozenRawMemtable(t, "sys/after", encodeMaintenanceRootID(collectionRoot)).NewIterator(nil, nil), nil); err != nil {
 		t.Fatalf("remove collection descriptor via grouped system publish: %v", err)
 	}
-	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); ok {
-		t.Fatal("expected grouped descriptor removal to invalidate value-log ref tracker")
-	}
+	assertCandidateTrackerMatchesFullScan(t, d)
 
 	advancePastRetainedDurableSlotForTest(t, d)
 	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
@@ -591,9 +585,7 @@ func TestValueLogGC_RemovesSegmentAfterDeltaGroupSystemDescriptorRemoval(t *test
 	}); err != nil {
 		t.Fatalf("remove collection descriptor via delta group builder: %v", err)
 	}
-	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); ok {
-		t.Fatal("expected delta group descriptor removal to invalidate value-log ref tracker")
-	}
+	assertCandidateTrackerMatchesFullScan(t, d)
 
 	advancePastRetainedDurableSlotForTest(t, d)
 	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})

@@ -1235,11 +1235,7 @@ func TestValueLogRewriteOnline_CollectionRootCommitUsesCurrentStoragePolicy(t *t
 	if err := db.applyRewriteSwapBatchToCollectionRoot(target, []rewriteSwap{{key: []byte("doc/p"), oldPtr: oldPtr, newPtr: newPtr}}, false); err != nil {
 		t.Fatalf("apply collection rewrite swap with stale policy: %v", err)
 	}
-	if db.valueLogRefTracker != nil {
-		if _, ok := db.valueLogRefTracker.referencedSet(db.currentCommitSeq()); ok {
-			t.Fatal("expected value-log-leaf collection rewrite to invalidate value-log ref tracker")
-		}
-	}
+	assertCandidateTrackerMatchesFullScan(t, db)
 
 	newRoot := readCollectionRootID(t, db, maintenanceTestCollectionRootKey)
 	if newRoot == oldRoot {
