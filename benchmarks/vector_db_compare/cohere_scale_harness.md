@@ -49,7 +49,8 @@ search fixture. `write` and `write_schema` perform eight 256-ID changed replacem
 the latter first creates unrelated metadata-only schema. They preserve vector and
 scalar truth. Same IDs bound the live replacement set, not physical mutation
 history: eight batches consume all 4096 publication rows (replacement plus delete).
-`write_schema_roots` names a prior run via `TREEDB_SCALE_PRECEDING_RUN` and creates
+`write_schema_roots` names an operator-declared prior run via
+`TREEDB_SCALE_PRECEDING_RUN`; the label is not verified DB lineage. It creates
 unrelated text roots; reuse of that exhausted fixture is a fold-budget negative
 diagnostic, not successful write-throughput evidence. All phases fail on write
 errors; rejected attempts must not be reported as completed durable writes.

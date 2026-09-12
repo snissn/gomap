@@ -224,6 +224,9 @@ func TestTypedGraphScaleDiagnostic(t *testing.T) {
 				if err != nil || len(results) != 10 {
 					t.Fatalf("%s eligible=%d ef=%d q=%d results=%d err=%v", label, count, ef, q, len(results), err)
 				}
+				if err := scaleValidateResults(results, manifest.Rows, count); err != nil {
+					t.Fatal(err)
+				}
 				if work.Filter.Attempted && (!work.Filter.Completed || work.Filter.EligibleRows != uint64(count)) {
 					t.Fatalf("filter cardinality mismatch: want=%d work=%+v", count, work.Filter)
 				}
@@ -358,11 +361,8 @@ func scaleConcurrentWrites(t *testing.T, col *Collection, rows int, data string,
 		if !response.Stats.ColumnGraphWork.Completed || response.Stats.ColumnGraphWork.Filter.EligibleRows != 4097 {
 			t.Fatalf("incoherent read work=%+v", response.Stats.ColumnGraphWork)
 		}
-		for _, r := range response.Results {
-			row, err := scaleDocumentRow(string(r.ID), rows)
-			if err != nil || (row*7919)%rows >= 4097 {
-				t.Fatalf("ineligible result %q", r.ID)
-			}
+		if err := scaleValidateResults(response.Results, rows, 4097); err != nil {
+			t.Fatal(err)
 		}
 		return readSample{float64(elapsed.Nanoseconds()) / 1000, response.Stats.ColumnGraphOwnerAcquireNanos, active, response.Stats.ColumnGraphWork}
 	}
@@ -392,7 +392,7 @@ func scaleConcurrentWrites(t *testing.T, col *Collection, rows int, data string,
 		}
 		schemaCreation = time.Since(started)
 	}
-	emit(map[string]any{"phase": "write_state", "db_reopened": true, "unrelated_schema_creation": phase != "write", "schema_creates_text_v2_roots": phase == "write_schema_roots", "schema_creation_ns": schemaCreation.Nanoseconds(), "preceding_run": os.Getenv("TREEDB_SCALE_PRECEDING_RUN"), "after_prior_eight_replacements": phase == "write_schema_roots"})
+	emit(map[string]any{"phase": "write_state", "db_reopened": true, "unrelated_schema_creation": phase != "write", "schema_creates_text_v2_roots": phase == "write_schema_roots", "schema_creation_ns": schemaCreation.Nanoseconds(), "preceding_run": os.Getenv("TREEDB_SCALE_PRECEDING_RUN"), "after_prior_eight_replacements_claimed": phase == "write_schema_roots"})
 	var done atomic.Bool
 	writeResult := make(chan error, 1)
 	writerDone := make(chan struct{})
@@ -513,6 +513,21 @@ func scaleValidateTruth(manifest scaleDatasetManifest, truth map[string][][]stri
 	return nil
 }
 
+func scaleValidateResults(results []VectorIndexSearchResult, rows, eligible int) error {
+	for i, result := range results {
+		row, err := scaleDocumentRow(string(result.ID), rows)
+		if err != nil || (row*7919)%rows >= eligible {
+			return fmt.Errorf("invalid or ineligible result %q", result.ID)
+		}
+		for _, previous := range results[:i] {
+			if string(previous.ID) == string(result.ID) {
+				return fmt.Errorf("duplicate result %q", result.ID)
+			}
+		}
+	}
+	return nil
+}
+
 func TestTypedGraphScaleDiagnosticFileValidation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vectors.f32")
 	if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
@@ -548,5 +563,13 @@ func TestTypedGraphScaleDiagnosticFileValidation(t *testing.T) {
 	}
 	if _, err := scaleDocumentRow("x", manifest.Rows); err == nil {
 		t.Fatal("short result ID accepted")
+	}
+	results := []VectorIndexSearchResult{{ID: []byte("row-000000")}, {ID: []byte("row-000001")}}
+	if err := scaleValidateResults(results, manifest.Rows, manifest.Rows); err != nil {
+		t.Fatal(err)
+	}
+	results[1].ID = results[0].ID
+	if err := scaleValidateResults(results, manifest.Rows, manifest.Rows); err == nil {
+		t.Fatal("duplicate search result accepted")
 	}
 }
