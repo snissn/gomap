@@ -892,8 +892,6 @@ func TestCompactStorageAudit_RepeatedProtectedRootDriftReturnsStaleWithoutTracke
 		t.Fatalf("Open: %v", err)
 	}
 	defer closeNoErr(t, db)
-	db.valueLogRefTracker.invalidate()
-
 	firstRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "protected/stale-a", "a").NewIterator(nil, nil))
 	if err != nil {
 		t.Fatalf("PublishOrderedRootIterator first: %v", err)
@@ -902,6 +900,10 @@ func TestCompactStorageAudit_RepeatedProtectedRootDriftReturnsStaleWithoutTracke
 	if err != nil {
 		t.Fatalf("PublishOrderedRootIterator second: %v", err)
 	}
+	// Fixture publications can repair the tracker from their exact candidate
+	// scans. Invalidate after setup so this test isolates stale audit work.
+	db.valueLogRefTracker.invalidate()
+	beforeAudit := snapshotCandidateTracker(db)
 	var providerMu sync.RWMutex
 	providerRoot := firstRoot
 	opts := CompactStorageOptions{
@@ -931,6 +933,9 @@ func TestCompactStorageAudit_RepeatedProtectedRootDriftReturnsStaleWithoutTracke
 	}
 	if _, ok := db.valueLogRefTracker.referencedSet(db.currentCommitSeq()); ok {
 		t.Fatal("repeated protected-root drift published a current tracker")
+	}
+	if got := snapshotCandidateTracker(db); !reflect.DeepEqual(got, beforeAudit) {
+		t.Fatalf("stale protected-root audit changed tracker: before=%+v after=%+v", beforeAudit, got)
 	}
 }
 
@@ -1224,17 +1229,33 @@ func TestCompactStorageAudit_RepeatedInvalidationReturnsStaleError(t *testing.T)
 	defer closeNoErr(t, db)
 	db.valueLogRefTracker.invalidate()
 
+	var lastWrite candidateTrackerSnapshot
+	attempts := 0
 	db.compactStorageAuditBeforeRevalidate = func(attempt int) {
+		attempts++
+		if attempt > 0 {
+			if got := snapshotCandidateTracker(db); !reflect.DeepEqual(got, lastWrite) {
+				t.Fatalf("stale audit attempt changed tracker before next write: writer=%+v after=%+v", lastWrite, got)
+			}
+		}
 		writeCompactStorageAuditInvalidation(t, db, fmt.Sprintf("stale-%d", attempt))
+		// This real write may legitimately repair/advance the tracker. The
+		// rejected audit must not overwrite that exact, newer publication.
+		assertCandidateTrackerMatchesFullScan(t, db)
+		lastWrite = snapshotCandidateTracker(db)
 	}
 	t.Cleanup(func() { db.compactStorageAuditBeforeRevalidate = nil })
 	_, err = db.CompactStoragePlan(context.Background(), CompactStorageOptions{})
 	if !errors.Is(err, ErrCompactStorageAuditStale) {
 		t.Fatalf("CompactStoragePlan error=%v want ErrCompactStorageAuditStale", err)
 	}
-	if _, ok := db.valueLogRefTracker.referencedSet(db.currentCommitSeq()); ok {
-		t.Fatal("repeated invalidation published a current tracker")
+	if attempts != 2 {
+		t.Fatalf("revalidation attempts=%d want 2", attempts)
 	}
+	if got := snapshotCandidateTracker(db); !reflect.DeepEqual(got, lastWrite) {
+		t.Fatalf("stale audit changed last writer's tracker: writer=%+v after=%+v", lastWrite, got)
+	}
+	assertCandidateTrackerMatchesFullScan(t, db)
 }
 
 func writeCompactStorageAuditInvalidation(t *testing.T, db *DB, key string) {

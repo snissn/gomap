@@ -5564,7 +5564,7 @@ func TestPublishOrderedRootGroup_NonSystemWarmApplyPreservesValueLogRefTracker(t
 	assertValueLogRefTrackerMatchesFullScan(t, db)
 }
 
-func TestPublishOrderedRootDeltaGroupWithSystemDeltaBuilder_InvalidatesValueLogRefTracker(t *testing.T) {
+func TestPublishOrderedRootDeltaGroupWithSystemDeltaBuilder_RebuildsValueLogRefTracker(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -5601,13 +5601,12 @@ func TestPublishOrderedRootDeltaGroupWithSystemDeltaBuilder_InvalidatesValueLogR
 		t.Fatalf("publish system delta group: %v", err)
 	}
 
-	afterSeq := db.currentCommitSeq()
-	if refs, ok := db.valueLogRefTracker.referencedSet(afterSeq); ok {
-		t.Fatalf("value-log ref tracker stayed valid after untracked system delta: refs=%v", refs)
-	}
+	// Missing incremental evidence still requires a full candidate scan. Its
+	// exact logical counts now repair the tracker only after activation.
+	assertCandidateTrackerMatchesFullScan(t, db)
 }
 
-func TestPublishOrderedRootDeltaGroupWithSystemBuilder_InvalidatesValueLogRefTrackerForNonSystemDelta(t *testing.T) {
+func TestPublishOrderedRootDeltaGroupWithSystemBuilder_RebuildsValueLogRefTrackerForNonSystemDelta(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -5659,10 +5658,7 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_InvalidatesValueLogRefTra
 		t.Fatalf("publish non-system delta group: %v", err)
 	}
 
-	afterSeq := db.currentCommitSeq()
-	if refs, ok := db.valueLogRefTracker.referencedSet(afterSeq); ok {
-		t.Fatalf("value-log ref tracker stayed valid after untracked non-system delta: refs=%v", refs)
-	}
+	assertCandidateTrackerMatchesFullScan(t, db)
 }
 
 func assertValueLogRefTrackerMatchesFullScan(t *testing.T, db *DB) {

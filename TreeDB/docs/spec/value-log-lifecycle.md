@@ -179,6 +179,13 @@ TreeDB maintains commit-time reference counters per value-log segment.
 If counters are unavailable, stale, or corrupt, TreeDB rebuilds by scanning trees
 and rewrites metadata.
 
+A durable-root fallback scan may also supply exact counters for its candidate.
+These counts remain private and are bound to the candidate index, sequence, and
+user/system roots until that matching candidate activates. Publication then
+installs the already computed counts without applying its commit delta twice.
+Aborted or mismatched candidates cannot repair the live tracker. This reuses the
+required scan; it does not add a scan or change the reachability authority for GC.
+
 ## 4. GC Algorithm (`DB.ValueLogGC`)
 
 For each segment in current value-log set:

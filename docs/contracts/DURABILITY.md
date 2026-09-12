@@ -52,6 +52,11 @@ resolved profile. A durable acknowledgement is not allowed until the exact
 transitive dependency closure for its command/root is stable. Unsupported
 command kinds or incomplete dependency evidence fail closed.
 
+Exact reference counts recovered by a durable-root fallback scan remain private
+until their matching candidate activates. Aborted candidates do not advance the
+live tracker; reusing these counts changes neither acknowledgement durability
+nor GC reachability rules.
+
 ### Checkpoint and close
 
 `Checkpoint()` and clean `Close()` capture the current frontier, drain pending

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"runtime"
 	"slices"
 	"sync"
 
@@ -112,9 +113,11 @@ func (o *typedGraphReadOwner) reserve(a *typedGraphReadOwnerAccounting, limits t
 // Open consumes already installed derived state. It never bootstraps, decodes a
 // suffix or repairs an invalid state. Public admission additionally requires
 // ready metadata on this exact installed state, never the cold fallback below.
-// The existing schema-exclusive cross-domain drain is outside the non-reentrant
-// storage barrier, and released before mapping. It includes pre-open accepted
-// buffered work from every manager. Later writes may linearize after this read.
+// Only acknowledged buffered work needs a cross-domain drain. Shared schema
+// admission keeps maintenance exclusive while allowing a fully published read
+// to capture the previous coherent generation during an immediate write. A
+// post-snapshot buffered check upgrades only that capture to an exclusive drain
+// and retry. Later writes may linearize after this read.
 func (c *Collection) openTypedGraphReadOwner(limits typedGraphReadOwnerLimits) (owner *typedGraphReadOwner, err error) {
 	return c.openTypedGraphReadOwnerWithContext(context.Background(), limits)
 }
@@ -126,23 +129,21 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 	if c == nil || c.db == nil || c.db.IsClosing() || limits.Owners <= 0 || limits.States <= 0 || limits.StateBytes <= 0 || limits.AssetBytes <= 0 || limits.Cold.ManifestRecords <= 0 || limits.Cold.ManifestBytes <= 0 || limits.Cold.AssetBytes <= 0 || limits.Cold.DecodedTermBytes <= 0 {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
-	unlock := c.lockCollectionSchemaWrite()
-	drainErr := c.flushCollectionWriteDomainsForSchemaMutation()
-	unlock()
-	if drainErr != nil {
-		return nil, drainErr
-	}
-	typedGraphOwnerAfterSnapshotHook.RLock()
-	afterDrain := typedGraphOwnerAfterSnapshotHook.afterDrain
-	typedGraphOwnerAfterSnapshotHook.RUnlock()
-	if afterDrain != nil {
-		afterDrain(c)
-	}
 	coord := c.collectionSchemaCoordinator()
 	if coord == nil {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
-	err = WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() (err error) {
+	typedGraphOwnerAfterSnapshotHook.RLock()
+	afterDrain := typedGraphOwnerAfterSnapshotHook.afterDrain
+	afterCapture := typedGraphOwnerAfterSnapshotHook.afterCapture
+	typedGraphOwnerAfterSnapshotHook.RUnlock()
+	if afterDrain != nil {
+		afterDrain(c)
+	}
+	var drain, retry bool
+	var changed <-chan struct{}
+	capture := func() (err error) {
+		before := coord.typedPublication.Load()
 		snap := c.db.AcquireSnapshot()
 		if snap == nil {
 			return ErrVectorIndexSnapshotMismatch
@@ -154,6 +155,24 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 				_ = candidate.Close()
 			}
 		}()
+		if afterCapture != nil {
+			afterCapture(c)
+		}
+		coord.typedPublicationDebtMu.Lock()
+		if c.db.IsClosing() || coord.typedPublicationClosed {
+			coord.typedPublicationDebtMu.Unlock()
+			return backenddb.ErrClosed
+		}
+		if state := coord.typedPublication.Load(); state == nil || state.invalid {
+			coord.typedPublicationDebtMu.Unlock()
+			return ErrVectorIndexSnapshotMismatch
+		}
+		if coord.typedPublicationBuffered != 0 {
+			drain = true
+			coord.typedPublicationDebtMu.Unlock()
+			return ErrVectorIndexSnapshotMismatch
+		}
+		coord.typedPublicationDebtMu.Unlock()
 		catalog, err := loadCollectionCatalog(snap, c.collectionName())
 		if err != nil {
 			return err
@@ -162,7 +181,25 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 		if coord.typedGraphServing.Load() != nil && (state == nil || state.servingBase == nil || !state.servingAdmitted) {
 			return ErrVectorIndexSnapshotMismatch
 		}
-		if !state.matches(catalog) || catalog.typedGraphBase == nil || len(catalog.meta.VectorIndexes) != 1 || !typedGraphBaseSchemaMatches(catalog.typedGraphBase.meta, catalog.meta) {
+		if state == nil || state.invalid || catalog == nil || catalog.typedGraphBase == nil || len(catalog.meta.VectorIndexes) != 1 || !typedGraphBaseSchemaMatches(catalog.typedGraphBase.meta, catalog.meta) {
+			return ErrVectorIndexSnapshotMismatch
+		}
+		if !state.matches(catalog) {
+			coord.typedPublicationDebtMu.Lock()
+			defer coord.typedPublicationDebtMu.Unlock()
+			if c.db.IsClosing() || coord.typedPublicationClosed {
+				return backenddb.ErrClosed
+			}
+			// A changed pointer can put an older snapshot beside a newer state.
+			// Otherwise only an unfinished publication can repair this mismatch.
+			retry = before != state || coord.typedPublication.Load() != state
+			if !retry && coord.typedPublicationPending.rows != 0 {
+				retry = true
+				if coord.typedPublicationChanged == nil {
+					coord.typedPublicationChanged = make(chan struct{})
+				}
+				changed = coord.typedPublicationChanged
+			}
 			return ErrVectorIndexSnapshotMismatch
 		}
 		candidate.state = state
@@ -341,6 +378,42 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 		snap.DetachForegroundRead()
 		owner = candidate
 		return nil
-	})
-	return owner, err
+	}
+	for {
+		if c.db.IsClosing() {
+			return nil, backenddb.ErrClosed
+		}
+		exclusive := drain
+		drain = false
+		var unlockSchema func()
+		if exclusive {
+			unlockSchema = c.lockCollectionSchemaWrite()
+			if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
+				unlockSchema()
+				return nil, err
+			}
+		} else {
+			unlockSchema = c.lockCollectionSchemaRead()
+		}
+		retry, changed = false, nil
+		err = WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), capture)
+		unlockSchema()
+		if drain {
+			continue
+		}
+		if !retry {
+			return owner, err
+		}
+		// Never retain a snapshot or the storage barrier while waiting for the
+		// durable-root -> immutable-state installation gap to close.
+		if changed != nil {
+			select {
+			case <-changed:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		} else {
+			runtime.Gosched()
+		}
+	}
 }
