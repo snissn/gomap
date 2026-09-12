@@ -14,7 +14,7 @@ It is not a bare HNSW microbenchmark. The protocol's producer work record is
 retained separately after each search timer.
 
 The declared 500K workload uses 100 existing diagnostic queries, an independent
-float64 cosine top-10 oracle, EF128/256/512/2048, and eligible populations
+float64 cosine top-10 oracle, EF128/256/512/1024/2048, and eligible populations
 4096/4097/5000/50000/500000. Scalar labels are synthetic, dispersed unique ranks
 with range predicates, **not** a categorical tenant posting-list benchmark.
 First-predicate timings are predicate-cache-cold, not OS-cache-cold. Each curve

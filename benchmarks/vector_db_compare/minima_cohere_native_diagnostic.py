@@ -120,7 +120,7 @@ def prepare(args):
             "dataset_manifest_sha256": digest(dataset / "manifest.json"), "dataset_files_sha256": files,
             "serving": serving, "serving_sha256": digest(args.serving), "serving_path": str(args.serving.resolve()),
             "run_dir": str(args.run_dir.resolve()), "rows": args.rows, "dimensions": 768, "queries": query_count,
-            "top_k": 10, "batch_size": 256, "efs": [128, 256, 512, 2048], "overlap_ef": 512,
+            "top_k": 10, "batch_size": 256, "efs": [128, 256, 512, 1024, 2048], "overlap_ef": 512,
             "overlap_eligible": counts(args.rows)[1],
             "eligible_counts": counts(args.rows), "reader_concurrency": 4, "writer_calls": 8,
             "scalar_shape": "dispersed unique rank=(row*7919)%rows; user_id range, fpath equality for lifecycle delete",
