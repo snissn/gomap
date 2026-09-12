@@ -112,9 +112,10 @@ func (o *typedGraphReadOwner) reserve(a *typedGraphReadOwnerAccounting, limits t
 // Open consumes already installed derived state. It never bootstraps, decodes a
 // suffix or repairs an invalid state. Public admission additionally requires
 // ready metadata on this exact installed state, never the cold fallback below.
-// Only acknowledged buffered work needs a cross-domain drain. Fully published
-// reads can capture the previous coherent generation while an immediate writer
-// prepares or syncs its successor. Later writes may linearize after this read.
+// Only acknowledged buffered work needs a cross-domain drain. Shared schema
+// admission keeps maintenance exclusive while allowing a fully published read
+// to capture the previous coherent generation during an immediate write.
+// Later writes may linearize after this read.
 func (c *Collection) openTypedGraphReadOwner(limits typedGraphReadOwnerLimits) (owner *typedGraphReadOwner, err error) {
 	return c.openTypedGraphReadOwnerWithContext(context.Background(), limits)
 }
@@ -154,6 +155,8 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 	if afterDrain != nil {
 		afterDrain(c)
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	var retry bool
 	var changed <-chan struct{}
 	capture := func() (err error) {

@@ -90,6 +90,60 @@ func TestTypedGraphReadOwnerDoesNotWaitForImmediatePublication(t *testing.T) {
 	}
 }
 
+func TestTypedGraphReadOwnerWaitsForSchemaMaintenance(t *testing.T) {
+	col, base, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
+	defer base.Close()
+	limits := typedGraphOverlapLimits()
+	if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 32, Tombstones: 32, ValueSlots: 128, OwnedBytes: 1 << 20}, limits.Cold); err != nil {
+		t.Fatal(err)
+	}
+
+	reachedAdmission := make(chan struct{})
+	typedGraphOwnerAfterSnapshotHook.Lock()
+	typedGraphOwnerAfterSnapshotHook.afterDrain = func(c *Collection) {
+		if c == col {
+			close(reachedAdmission)
+		}
+	}
+	typedGraphOwnerAfterSnapshotHook.Unlock()
+	defer func() {
+		typedGraphOwnerAfterSnapshotHook.Lock()
+		typedGraphOwnerAfterSnapshotHook.afterDrain = nil
+		typedGraphOwnerAfterSnapshotHook.Unlock()
+	}()
+
+	unlockSchema := col.lockCollectionSchemaWrite()
+	done := make(chan error, 1)
+	go func() {
+		owner, err := col.openTypedGraphReadOwner(limits)
+		if owner != nil {
+			err = errors.Join(err, owner.Close())
+		}
+		done <- err
+	}()
+	select {
+	case <-reachedAdmission:
+	case <-time.After(10 * time.Second):
+		unlockSchema()
+		t.Fatal("reader did not reach schema admission")
+	}
+	select {
+	case err := <-done:
+		unlockSchema()
+		t.Fatalf("reader crossed schema maintenance: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	unlockSchema()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("reader did not resume after schema maintenance")
+	}
+}
+
 func waitTypedGraphReadAdmissionWaiter(t *testing.T, coord *collectionSchemaCoordinator) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
