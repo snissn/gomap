@@ -20,6 +20,8 @@ func TestLeafGenerationPlan_CachedModeCheckpointsBeforePlan(t *testing.T) {
 		BackgroundCheckpointIdleDuration: -1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
+			// Only the explicit maintenance call may checkpoint this fixture.
+			Generational: treedb.ValueLogGenerationConfig{Policy: treedb.ValueLogGenerationOff},
 		},
 	})
 	if err != nil {
@@ -66,6 +68,7 @@ func TestLeafGenerationPack_CachedModeCheckpointsBeforeNoOpPack(t *testing.T) {
 		BackgroundCheckpointIdleDuration: -1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
+			Generational:     treedb.ValueLogGenerationConfig{Policy: treedb.ValueLogGenerationOff},
 		},
 	})
 	if err != nil {
@@ -112,6 +115,7 @@ func TestLeafGenerationPackFromPlan_CachedModeCheckpointsBeforeSelectionError(t 
 		BackgroundCheckpointIdleDuration: -1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
+			Generational:     treedb.ValueLogGenerationConfig{Policy: treedb.ValueLogGenerationOff},
 		},
 	})
 	if err != nil {
@@ -155,6 +159,7 @@ func TestLeafGenerationPackRunOnce_CachedModeCheckpointsBeforeSkip(t *testing.T)
 		BackgroundCheckpointIdleDuration: -1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
+			Generational:     treedb.ValueLogGenerationConfig{Policy: treedb.ValueLogGenerationOff},
 		},
 	})
 	if err != nil {
