@@ -756,7 +756,10 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		return post, prePublishErr(fmt.Errorf("prepare queued visible root: %w", err))
 	}
 	if scanned.counts != nil {
-		install.vlogRefCounts = &scanned
+		// Retain evidence only after a fallback scan, keeping the ordinary
+		// publication's scratch value on the stack.
+		captured := scanned
+		install.vlogRefCounts = &captured
 	}
 	installOwned := true
 	defer func() {
