@@ -44,6 +44,14 @@ without rebuilding request maps. Decoded payloads remain local to each reader.
 Asset-cache integrity or namespace invalidation and Close clear prepared reuse
 and retain the ordinary full-loader behavior.
 
+Ordinary read admission does not drain immediate writes. Under the storage read
+barrier it captures a DB snapshot and installed immutable publication, accepting
+only matching catalog/root identities. A changed publication or an outstanding
+publication-installation gap permits retry; an unexplained mismatch fails
+closed. Acknowledged buffered writes still drain for cross-manager visibility.
+Schema mutation, fold, reconciliation and vacuum retain exclusive admission;
+existing owner and asset pins keep previously admitted readers coherent.
+
 The ordinary Python client and benchmark runner select this lifecycle through
 HTTP controls and native 64/v2 dense, 65/v1 typed upsert and 50/v2 GetMany.
 Selected dense HTTP/native responses expose versioned owned `dense_work`:

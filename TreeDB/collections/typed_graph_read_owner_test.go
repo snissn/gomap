@@ -135,12 +135,25 @@ func TestTypedGraphReadOwnerOtherManagerPendingAndInstallGap(t *testing.T) {
 	if col.typedGraphPublicationSnapshot().physicalRows != 0 {
 		t.Fatal("fixture did not retain acknowledged pending input")
 	}
+	coord := col.collectionSchemaCoordinator()
+	coord.typedPublicationDebtMu.Lock()
+	buffered := coord.typedPublicationBuffered
+	coord.typedPublicationDebtMu.Unlock()
+	if buffered != 1 {
+		t.Fatalf("buffered receipts=%d want=1", buffered)
+	}
 	owner, err := col.openTypedGraphReadOwner(limits)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if owner.state.physicalRows != 1 {
 		t.Fatal("owner omitted other-manager acknowledged pending input")
+	}
+	coord.typedPublicationDebtMu.Lock()
+	buffered = coord.typedPublicationBuffered
+	coord.typedPublicationDebtMu.Unlock()
+	if buffered != 0 {
+		t.Fatalf("drained buffered receipts=%d want=0", buffered)
 	}
 	if err := owner.Close(); err != nil {
 		t.Fatal(err)

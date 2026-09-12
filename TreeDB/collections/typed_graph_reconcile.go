@@ -36,12 +36,46 @@ func (c *Collection) reconcileTypedGraphPublicationWithContext(ctx context.Conte
 	if c == nil || c.db == nil || !c.db.CommandWALEnabled() || limits.Rows <= 0 || limits.Tombstones < 0 || limits.ValueSlots <= 0 || limits.OwnedBytes <= 0 || cold.ManifestRecords <= 0 || cold.ManifestBytes <= 0 || cold.AssetBytes <= 0 || cold.DecodedTermBytes <= 0 {
 		return ErrVectorIndexSnapshotMismatch
 	}
-	unlock := c.lockCollectionSchemaWrite()
-	defer unlock()
 	coord := c.collectionSchemaCoordinator()
 	if coord == nil {
 		return ErrVectorIndexSnapshotMismatch
 	}
+	typedGraphPublicationAfterAcceptedHook.RLock()
+	beforeCapture := typedGraphPublicationAfterAcceptedHook.reconcileBeforeCapture
+	typedGraphPublicationAfterAcceptedHook.RUnlock()
+	if state := coord.typedPublication.Load(); state != nil && !state.invalid {
+		// A healthy ensure is observation, not maintenance. Keep it concurrent
+		// with admitted readers; only a stale or invalid publication upgrades to
+		// schema-exclusive reconciliation below.
+		unlockRead := c.lockCollectionSchemaRead()
+		if beforeCapture != nil {
+			beforeCapture(c)
+		}
+		current := false
+		err := WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() error {
+			snap := c.db.AcquireSnapshot()
+			if snap == nil {
+				return backenddb.ErrClosed
+			}
+			defer snap.Close()
+			catalog, err := loadCollectionCatalog(snap, c.collectionName())
+			if err != nil {
+				return err
+			}
+			state := coord.typedPublication.Load()
+			current = state != nil && !state.invalid && catalog != nil && catalog.typedGraphBase != nil && len(catalog.meta.VectorIndexes) == 1 && typedGraphBaseSchemaMatches(catalog.typedGraphBase.meta, catalog.meta) && state.matches(catalog)
+			return nil
+		})
+		unlockRead()
+		if err != nil {
+			return err
+		}
+		if current {
+			return nil
+		}
+	}
+	unlock := c.lockCollectionSchemaWrite()
+	defer unlock()
 	before := coord.typedPublication.Load()
 	if before == nil || !before.invalid {
 		// Pre-existing feature-off writes cannot be retroactively reserved.
@@ -80,9 +114,6 @@ func (c *Collection) reconcileTypedGraphPublicationWithContext(ctx context.Conte
 			}
 		}
 	}
-	typedGraphPublicationAfterAcceptedHook.RLock()
-	beforeCapture := typedGraphPublicationAfterAcceptedHook.reconcileBeforeCapture
-	typedGraphPublicationAfterAcceptedHook.RUnlock()
 	if beforeCapture != nil {
 		beforeCapture(c)
 	}
@@ -248,6 +279,7 @@ func (c *Collection) reconcileTypedGraphPublicationWithContext(ctx context.Conte
 		}
 		coord.typedPublicationDebt = cost
 		coord.typedPublicationPending = typedGraphPublicationCost{}
+		coord.typedPublicationBuffered = 0
 		return nil
 	})
 }
