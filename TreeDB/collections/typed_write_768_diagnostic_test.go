@@ -35,6 +35,7 @@ func TestTypedWrite768Diagnostic(t *testing.T) {
 	if os.Getenv("GOMAP_WRITE_768_DIAGNOSTIC") != "1" {
 		t.Skip("set GOMAP_WRITE_768_DIAGNOSTIC=1 to run the bounded durable-write sweep")
 	}
+	requireTypedGraphPublicServingTest(t)
 	const calls = 16
 	for _, rows := range []int{1, 64, 256, 1024} {
 		for _, writers := range []int{1, 2, 4} {
@@ -107,7 +108,7 @@ func TestTypedWrite768Diagnostic(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, in := range inputs {
-					for _, id := range [][]byte{in.ids[0], in.ids[len(in.ids)-1]} {
+					for _, id := range in.ids {
 						if doc, err := got.Get(id); err != nil || len(doc) == 0 {
 							t.Fatalf("reopen Get(%q): len=%d err=%v", id, len(doc), err)
 						}
@@ -124,6 +125,7 @@ func TestTypedWrite768ReadWriteInteractionDiagnostic(t *testing.T) {
 	if os.Getenv("GOMAP_WRITE_768_DIAGNOSTIC") != "1" {
 		t.Skip("set GOMAP_WRITE_768_DIAGNOSTIC=1 to run the bounded durable-write sweep")
 	}
+	requireTypedGraphPublicServingTest(t)
 	const preload, calls, rows, readsPerReader = 5000, 16, 256, 256
 	for _, cell := range []struct {
 		readers, writers int
@@ -267,8 +269,8 @@ func TestTypedWrite768ReadWriteInteractionDiagnostic(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				for _, call := range []int{0, len(inputs) - 1} {
-					for _, id := range [][]byte{inputs[call].ids[0], inputs[call].ids[len(inputs[call].ids)-1]} {
+				for _, input := range inputs {
+					for _, id := range input.ids {
 						if doc, err := got.Get(id); err != nil || len(doc) == 0 {
 							t.Fatalf("reopen Get(%q): len=%d err=%v", id, len(doc), err)
 						}

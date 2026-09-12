@@ -55,14 +55,19 @@ unrelated text roots; reuse of that exhausted fixture is a fold-budget negative
 diagnostic, not successful write-throughput evidence. All phases fail on write
 errors; rejected attempts must not be reported as completed durable writes.
 
-`TestTypedWrite768Diagnostic` is a separate opt-in synthetic-vector diagnostic:
-`GOMAP_WRITE_768_DIAGNOSTIC=1 go test ./TreeDB/collections -run
-'^TestTypedWrite768Diagnostic$' -count=1 -v`. It times 16 durable upsert calls of
-previously absent IDs at 64/256/1024 rows and 1/4 writers, includes two scalar
-indexes and one text index, and checks sampled IDs after clean reopen. Optional
-`GOMAP_WRITE_768_PRELOAD` is setup outside timing. This is neither ANN quality
-evidence nor crash/power-loss certification. Direct Go runs need their own clean
-source/binary provenance capture; the scale wrapper runs only the scale fixture.
+The 768D write diagnostics are separate opt-in synthetic-vector diagnostics:
+`GOMAP_WRITE_768_DIAGNOSTIC=1 go test ./TreeDB/collections
+./TreeDB/documentservice -run
+'^Test(TypedWrite768(Diagnostic|ReadWriteInteractionDiagnostic)|DocumentServiceTypedWrite768Diagnostic)$'
+-count=1 -v`. They time 16 durable upsert calls of previously absent IDs at
+1/64/256/1024 rows and 1/2/4 writers, include two scalar indexes and one text
+index, and check acknowledged IDs after clean reopen. The document-service cells
+exercise the typed method used by native Minima but exclude wire/client encoding.
+Matched collection read controls distinguish a growing exact-scored suffix from
+writer interaction. Optional `GOMAP_WRITE_768_PRELOAD` is setup outside timing.
+This is neither ANN quality evidence nor crash/power-loss certification. Direct
+Go runs need their own clean source/binary provenance capture; the scale wrapper
+runs only the scale fixture.
 
 ## Retained evidence gate
 
