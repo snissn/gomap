@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 import numpy as np
 
@@ -69,6 +70,14 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         document["embedding"] = [0.0] * 768
         with self.assertRaisesRegex(RuntimeError, "zero/nonfinite vector norm"):
             run.check_documents([SimpleNamespace(**document)], ["row-000000"])
+
+    def test_fold_uses_previously_admitted_limits(self):
+        run = object.__new__(diagnostic.Run)
+        run.plan, run.info, run.clients = {"serving": {"limit": 1}}, SimpleNamespace(generation=7), Mock()
+        run.optimize("build")
+        self.assertEqual(run.clients.optimize_index.call_args.kwargs["column_graph_serving"], {"limit": 1})
+        run.optimize("fold")
+        self.assertIsNone(run.clients.optimize_index.call_args.kwargs["column_graph_serving"])
 
 
 if __name__ == "__main__":

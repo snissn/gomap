@@ -247,7 +247,8 @@ class Run:
 
     def optimize(self, action):
         return self.clients.optimize_index("minima_cohere", column_graph_action=action,
-                                           column_graph_serving=self.plan["serving"], expected_generation=self.info.generation)
+            column_graph_serving=self.plan["serving"] if action in ("build", "ensure") else None,
+            expected_generation=self.info.generation)
 
     def upsert(self, rows, phase, updated=False):
         batch = [make_document(self.vectors, row, self.plan["rows"], updated) for row in rows]
