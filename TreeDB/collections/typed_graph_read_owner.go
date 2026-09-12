@@ -163,6 +163,10 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 			coord.typedPublicationDebtMu.Unlock()
 			return backenddb.ErrClosed
 		}
+		if state := coord.typedPublication.Load(); state == nil || state.invalid {
+			coord.typedPublicationDebtMu.Unlock()
+			return ErrVectorIndexSnapshotMismatch
+		}
 		if coord.typedPublicationBuffered != 0 {
 			drain = true
 			coord.typedPublicationDebtMu.Unlock()

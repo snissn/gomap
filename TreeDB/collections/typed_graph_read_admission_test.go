@@ -155,6 +155,41 @@ func TestTypedGraphReadOwnerDrainsBufferedReceiptCreatedBeforeCapture(t *testing
 	}
 }
 
+func TestTypedGraphReadOwnerRejectsInvalidOrphanedBufferedReceipt(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
+	_, db, col := openTypedMinimaCollection(t)
+	defer db.Close()
+	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+		t.Fatal(err)
+	}
+	limits := typedGraphReadOwnerLimits{Owners: 2, States: 2, StateBytes: 1 << 20, AssetBytes: 8 << 20, Cold: typedGraphColdLimits{ManifestRecords: 128, ManifestBytes: 128 << 10, AssetBytes: 4 << 20, DecodedTermBytes: 4 << 20}}
+	if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 8, Tombstones: 8, ValueSlots: 32, OwnedBytes: 4096, EncodedOutputBytes: 1 << 20}, limits.Cold); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := col.reserveBufferedTypedGraphPublication([]columnWriteDocument{{ID: []byte("orphan"), declaredValuesReady: true}}, typedGraphEncodedCost{primary: 1, flush: 1})
+	if err != nil || receipt == nil {
+		t.Fatalf("reserve orphaned receipt=%v err=%v", receipt, err)
+	}
+	receipt.invalidate()
+	coord := col.collectionSchemaCoordinator()
+	coord.typedPublicationDebtMu.Lock()
+	buffered := coord.typedPublicationBuffered
+	state := coord.typedPublication.Load()
+	coord.typedPublicationDebtMu.Unlock()
+	if buffered != 1 || state == nil || !state.invalid {
+		t.Fatalf("orphaned receipt buffered=%d state=%+v", buffered, state)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	owner, err := col.openTypedGraphReadOwnerWithContext(ctx, limits)
+	if owner != nil {
+		_ = owner.Close()
+	}
+	if !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		t.Fatalf("invalid publication admission=%v", err)
+	}
+}
+
 func TestTypedGraphReadOwnerWaitsForSchemaMaintenance(t *testing.T) {
 	col, base, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
