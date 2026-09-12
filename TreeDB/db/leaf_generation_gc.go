@@ -13,7 +13,8 @@ import (
 )
 
 type LeafGenerationGCOptions struct {
-	DryRun bool
+	MaintenanceLimits LeafGenerationMaintenanceLimits
+	DryRun            bool
 
 	// ProtectedRootIDs are additional ordinary root page IDs whose leaf-log
 	// children must be treated as live even when they are not reachable from the
@@ -103,7 +104,7 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 		return stats, false, nil
 	}
 
-	prepared, err := db.prepareLeafGenerationGCScan()
+	prepared, err := db.prepareLeafGenerationGCScan(ctx, opts.MaintenanceLimits)
 	if err != nil || !prepared {
 		return stats, false, err
 	}
@@ -129,8 +130,16 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 		_ = snap.Close()
 		return stats, false, nil
 	}
+	if err := opts.MaintenanceLimits.admitSnapshot(ctx, snap); err != nil {
+		_ = snap.Close()
+		return stats, false, err
+	}
 
-	basis, ok := db.captureLeafGenerationGCScanBasis(snap)
+	basis, ok, err := db.captureLeafGenerationGCScanBasis(snap, opts.MaintenanceLimits)
+	if err != nil {
+		_ = snap.Close()
+		return stats, false, err
+	}
 	if !ok {
 		_ = snap.Close()
 		return stats, opts.DryRun, nil
@@ -143,7 +152,7 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 	}
 	var recoverableLive map[uint64]struct{}
 	if recoverableRoots != nil {
-		recoverableLive, err = db.collectRecoverableLeafGenerationIDs(ctx, recoverableRoots, snap.state.LeafGenerations)
+		recoverableLive, err = db.collectRecoverableLeafGenerationIDs(ctx, recoverableRoots, snap.state.LeafGenerations, opts.MaintenanceLimits)
 		if err != nil {
 			_ = snap.Close()
 			if opts.DryRun && errors.Is(err, ErrRecoverableRootSetStale) {
@@ -177,9 +186,12 @@ type leafGenerationGCDecision struct {
 	zombieFileIDs       map[uint32]struct{}
 }
 
-func (db *DB) prepareLeafGenerationGCScan() (bool, error) {
+func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenerationMaintenanceLimits) (bool, error) {
 	if db.closing.Load() {
 		return false, nil
+	}
+	if err := db.admitLeafGenerationMaintenance(ctx, limits); err != nil {
+		return false, err
 	}
 	db.mu.RLock()
 	if db.leafGenerationManifest == nil || db.valueLogManager == nil {
@@ -205,6 +217,9 @@ func (db *DB) prepareLeafGenerationGCScan() (bool, error) {
 	if db.closing.Load() || db.leafGenerationManifest == nil || db.valueLogManager == nil {
 		return false, nil
 	}
+	if err := limits.admitManifest(db.leafGenerationManifest); err != nil {
+		return false, err
+	}
 	commitSeq := uint64(1)
 	if state, ok := db.StateToken(); ok && state.CommitSeq != 0 {
 		commitSeq = state.CommitSeq
@@ -215,16 +230,20 @@ func (db *DB) prepareLeafGenerationGCScan() (bool, error) {
 	return true, nil
 }
 
-func (db *DB) captureLeafGenerationGCScanBasis(snap *Snapshot) (leafGenerationGCScanBasis, bool) {
+func (db *DB) captureLeafGenerationGCScanBasis(snap *Snapshot, limits LeafGenerationMaintenanceLimits) (leafGenerationGCScanBasis, bool, error) {
 	var basis leafGenerationGCScanBasis
 	if snap == nil || snap.state == nil || snap.state.LeafGenerations == nil {
-		return basis, false
+		return basis, false, nil
 	}
 
 	// Optimistic publishers swap the state and manifest under db.mu, so capture
 	// the pair under that lock. The teardown read lock protects backing resources
 	// from Close; snapshot references handle normal index-generation cutovers.
 	db.mu.RLock()
+	if err := limits.admitManifest(db.leafGenerationManifest); err != nil {
+		db.mu.RUnlock()
+		return basis, false, err
+	}
 	current := db.state.Load()
 	var manifest *leafGenerationManifest
 	if db.leafGenerationManifest != nil {
@@ -233,15 +252,15 @@ func (db *DB) captureLeafGenerationGCScanBasis(snap *Snapshot) (leafGenerationGC
 	db.mu.RUnlock()
 
 	if current == nil || current.CommitSeq != snap.state.CommitSeq || current.LeafGenerationStateVersion != snap.state.LeafGenerationStateVersion {
-		return basis, false
+		return basis, false, nil
 	}
 	if manifest == nil {
-		return basis, false
+		return basis, false, nil
 	}
 	basis.commitSeq = snap.state.CommitSeq
 	basis.leafGenerationStateVersion = snap.state.LeafGenerationStateVersion
 	basis.manifest = manifest
-	return basis, true
+	return basis, true, nil
 }
 
 func (db *DB) leafGenerationGCValidatedManifestClone(basis leafGenerationGCScanBasis) (*leafGenerationManifest, bool) {
@@ -377,7 +396,7 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 	return stats, nil
 }
 
-func (db *DB) collectRecoverableLeafGenerationIDs(ctx context.Context, roots *RecoverableRootSet, current *leafGenerationView) (map[uint64]struct{}, error) {
+func (db *DB) collectRecoverableLeafGenerationIDs(ctx context.Context, roots *RecoverableRootSet, current *leafGenerationView, limits LeafGenerationMaintenanceLimits) (map[uint64]struct{}, error) {
 	captured := roots.Roots()
 	if len(captured) == 0 {
 		return nil, ErrRecoverableRootSetStale
@@ -385,6 +404,10 @@ func (db *DB) collectRecoverableLeafGenerationIDs(ctx context.Context, roots *Re
 	snap := roots.AcquireSnapshotForRoot(captured[0])
 	if snap == nil {
 		return nil, ErrRecoverableRootSetStale
+	}
+	if err := limits.admitSnapshot(ctx, snap); err != nil {
+		_ = snap.Close()
+		return nil, err
 	}
 	protectedRootIDs := make([]uint64, 0, len(captured))
 	protectedSystemRootIDs := make([]uint64, 0, len(captured))

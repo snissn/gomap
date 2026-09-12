@@ -35,6 +35,7 @@ const (
 )
 
 type LeafGenerationPlanOptions struct {
+	MaintenanceLimits          LeafGenerationMaintenanceLimits
 	MinPublishedAgeCommits     uint64
 	MinCandidateGenerations    int
 	MinExpectedReclaimBytes    int64
@@ -226,8 +227,18 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 		ctx = context.Background()
 	}
 
+	if err := db.admitLeafGenerationMaintenance(ctx, opts.MaintenanceLimits); err != nil {
+		return plan, err
+	}
 	db.writeMu.RLock()
+	db.mu.RLock()
+	if err := opts.MaintenanceLimits.admitManifest(db.leafGenerationManifest); err != nil {
+		db.mu.RUnlock()
+		db.writeMu.RUnlock()
+		return plan, err
+	}
 	manifest := db.leafGenerationManifest.clone()
+	db.mu.RUnlock()
 	snap := db.AcquireSnapshot()
 	db.writeMu.RUnlock()
 	if snap == nil {
@@ -237,6 +248,9 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 		snap.releaseLeafGenerationPins()
 	}
 	defer func() { _ = snap.Close() }()
+	if err := opts.MaintenanceLimits.admitSnapshot(ctx, snap); err != nil {
+		return plan, err
+	}
 
 	if manifest == nil || snap.state == nil {
 		plan.Admission = leafGenerationPlanAdmissionNoCandidates

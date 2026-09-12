@@ -176,20 +176,15 @@ func (c *Collection) FoldColumnGraphServing(ctx context.Context, index string) (
 	// bounded reclamation remain outside install admission; neither is a reason
 	// to expose an invalid serving frontier. Retire the stale keeper before GC;
 	// caller-held read owners and in-flight replacement builds retain exact pins.
-	slot := collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}
-	var stale *collectionVectorIndexPreparedSearch
-	c.vectorBufferedSearchMu.Lock()
-	if entry := c.vectorBufferedSearch[slot]; entry != nil && !entry.building {
-		delete(c.vectorBufferedSearch, slot)
-		stale = entry.prepared
-		c.vectorBufferedSearchInvalidations++
-	}
-	c.vectorBufferedSearchMu.Unlock()
-	if stale != nil {
-		_ = stale.Close()
+	c.retireTypedGraphCapturedBaseKeepers(index)
+	maintenance := backenddb.LeafGenerationMaintenanceLimits{
+		NativeEntries: p.options.Maintenance.NativeEntries,
+		NativeBytes:   p.options.Maintenance.NativeBytes,
+		PagerPages:    p.options.Maintenance.PagerPages,
 	}
 	packed, err := c.db.LeafGenerationPackRunOnce(ctx, backenddb.LeafGenerationPackFromPlanOptions{
 		Sync: true, MaxGenerations: p.options.Maintenance.NativeEntries, MaxBytesToCopy: p.options.Maintenance.NativeBytes,
+		MaintenanceLimits: maintenance,
 	})
 	if err != nil {
 		return err
@@ -198,7 +193,7 @@ func (c *Collection) FoldColumnGraphServing(ctx context.Context, index string) (
 		if err := c.db.RefreshCommandWALCheckpointFallback(); err != nil {
 			return err
 		}
-		if _, err := c.db.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{}); err != nil {
+		if _, err := c.db.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{MaintenanceLimits: maintenance}); err != nil {
 			return err
 		}
 	}
@@ -217,6 +212,40 @@ func (c *Collection) FoldColumnGraphServing(ctx context.Context, index string) (
 		c.invalidateTypedGraphEmptyBaseKeeper(index)
 	}
 	return err
+}
+
+// Idle sibling handles do not observe publication and self-invalidate. Visit
+// their existing manager registrations through the shared collection domains;
+// no new keeper registry or ownership of independently held readers is needed.
+func (c *Collection) retireTypedGraphCapturedBaseKeepers(index string) {
+	handles := []*Collection{c}
+	for _, domain := range c.collectionSchemaCoordinator().snapshotDomains() {
+		m := domain.manager
+		if m == nil {
+			continue
+		}
+		m.collectionsMu.RLock()
+		for handle := range m.collections {
+			if handle != c && handle.collectionName() == c.collectionName() {
+				handles = append(handles, handle)
+			}
+		}
+		m.collectionsMu.RUnlock()
+	}
+	slot := collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}
+	for _, handle := range handles {
+		var stale *collectionVectorIndexPreparedSearch
+		handle.vectorBufferedSearchMu.Lock()
+		if entry := handle.vectorBufferedSearch[slot]; entry != nil && !entry.building {
+			delete(handle.vectorBufferedSearch, slot)
+			stale = entry.prepared
+			handle.vectorBufferedSearchInvalidations++
+		}
+		handle.vectorBufferedSearchMu.Unlock()
+		if stale != nil {
+			_ = stale.Close()
+		}
+	}
 }
 
 // Without a replacement warm, an empty base must release its previous keeper.

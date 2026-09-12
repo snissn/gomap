@@ -18,6 +18,7 @@ type LeafGenerationPackFromPlanOptions struct {
 	LeafFrameK                 int
 	ProtectedRootIDs           []uint64
 	ProtectedSystemRootIDs     []uint64
+	MaintenanceLimits          LeafGenerationMaintenanceLimits
 }
 
 func leafGenerationPackFromPlanPlanOptions(opts LeafGenerationPackFromPlanOptions) LeafGenerationPlanOptions {
@@ -28,6 +29,7 @@ func leafGenerationPackFromPlanPlanOptions(opts LeafGenerationPackFromPlanOption
 		Force:                   opts.Force,
 		ProtectedRootIDs:        opts.ProtectedRootIDs,
 		ProtectedSystemRootIDs:  opts.ProtectedSystemRootIDs,
+		MaintenanceLimits:       opts.MaintenanceLimits,
 	}
 }
 
@@ -55,6 +57,7 @@ func leafGenerationPackFromPlanPackOptions(opts LeafGenerationPackFromPlanOption
 		LeafFrameK:                 opts.LeafFrameK,
 		ProtectedRootIDs:           opts.ProtectedRootIDs,
 		ProtectedSystemRootIDs:     opts.ProtectedSystemRootIDs,
+		MaintenanceLimits:          opts.MaintenanceLimits,
 	}
 }
 

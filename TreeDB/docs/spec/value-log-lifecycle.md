@@ -307,6 +307,31 @@ cannot tear down the snapshot, pager, or private reader during copy. Ordinary
 value-log pointers embedded in copied leaf pages remain persistent references;
 leaf packing does not alter their reachability or lifetime.
 
+Collection catalog relocation follows visible publication acceptance, not only
+the finalizer's successful return. If `CommitPublicationAccepted(err)` is true,
+the relocation completion installs the replacement root coordinates exactly
+once before releasing its existing admission gates, even when a subsequent
+durability/admission wait failed. A retained but not accepted candidate does not
+authorize relocation. Existing ambiguous-outcome resource retention and
+fail-closed/reopen behavior are unchanged.
+
+The optional `LeafGenerationMaintenanceLimits` on planning, packing, and GC
+admits the native input footprint before expensive indexing or reachability
+work. `NativeEntries`, `NativeBytes`, and `PagerPages` must all be positive when
+enabled; all-zero limits preserve the legacy manual API. Bounded directory
+inspection precedes refresh/reconciliation, and each independently captured
+snapshot is checked again, including a pack retry and GC's recoverable-root
+scan. These are per-phase storage-footprint bounds, not a cumulative I/O meter
+or quota on concurrent filesystem growth. An admission error never authorizes
+reclamation from a partial scan.
+
+Explicit typed graph fold passes its existing maintenance footprint envelope
+to these native phases. Before reclamation it retires completed captured-base
+cache keepers on registered handles of the same collection, across managers.
+It does not take ownership of in-flight builds or independently admitted read
+owners; their exact snapshot, holder, and asset pins continue to protect their
+generation.
+
 `BenchmarkLeafGenerationPackCopyPublish` provides the pinned before/after
 performance fixture. Run five externally alternating base/head invocations with
 `-benchtime=1x -count=1 -benchmem`; it reports copy bytes/second, frames, wall

@@ -65,7 +65,8 @@ func cleanupLeafGenerationPackStagingDirs(leafDir string) error {
 }
 
 type LeafGenerationPackOptions struct {
-	GenerationIDs []uint64
+	MaintenanceLimits LeafGenerationMaintenanceLimits
+	GenerationIDs     []uint64
 	// Sync is retained for API compatibility. Leaf-generation pack publication
 	// is always durable: copied records/pages, the promoted-directory entry, and
 	// the alternate meta page are synchronized before source generations can
@@ -258,6 +259,9 @@ func (db *DB) leafGenerationPackSelectedWithCarry(ctx context.Context, opts Leaf
 }
 
 func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationPackOptions, selectedPlan LeafGenerationPlan, stats LeafGenerationPackStats, carry *leafGenerationPackCarryResult) (LeafGenerationPackStats, error) {
+	if err := db.admitLeafGenerationMaintenance(ctx, opts.MaintenanceLimits); err != nil {
+		return stats, err
+	}
 	rawSourceIDs, matchedGenerations, err := db.resolveLeafGenerationPackSourceFileIDs(opts.GenerationIDs)
 	if err != nil {
 		return stats, err
@@ -349,6 +353,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		}
 
 		rewriteStats := leafRefRewriteRunStats{
+			maintenanceLimits:      opts.MaintenanceLimits,
 			trackCarry:             carry != nil,
 			trackSourceLiveMoved:   carry != nil && (len(opts.ProtectedRootIDs) > 0 || len(opts.ProtectedSystemRootIDs) > 0),
 			protectedRootIDs:       opts.ProtectedRootIDs,
@@ -472,6 +477,7 @@ func normalizeLeafGenerationPackLeafFrameK(k int) int {
 
 func leafGenerationPackPlanOptions(opts LeafGenerationPackOptions) LeafGenerationPlanOptions {
 	return LeafGenerationPlanOptions{
+		MaintenanceLimits:          opts.MaintenanceLimits,
 		MinPublishedAgeCommits:     opts.MinPublishedAgeCommits,
 		MinExpectedReclaimBytes:    opts.MinExpectedReclaimBytes,
 		MinExpectedReclaimRatioPPM: opts.MinExpectedReclaimRatioPPM,

@@ -9,6 +9,7 @@ import (
 // LeafGenerationGCOptions controls whole-generation leaf-log garbage
 // collection.
 type LeafGenerationGCOptions struct {
+	MaintenanceLimits      treedbdb.LeafGenerationMaintenanceLimits
 	DryRun                 bool
 	ProtectedRootIDs       []uint64
 	ProtectedSystemRootIDs []uint64
@@ -51,6 +52,7 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	}
 
 	stats, err := db.backend.LeafGenerationGC(ctx, treedbdb.LeafGenerationGCOptions{
+		MaintenanceLimits:      opts.MaintenanceLimits,
 		DryRun:                 opts.DryRun,
 		ProtectedRootIDs:       opts.ProtectedRootIDs,
 		ProtectedSystemRootIDs: opts.ProtectedSystemRootIDs,

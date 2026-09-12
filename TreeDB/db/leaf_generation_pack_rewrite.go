@@ -232,6 +232,7 @@ func (a *leafRefRewritePageAppender) AppendLeafPage(leafPage []byte) (page.LeafL
 }
 
 type leafRefRewriteRunStats struct {
+	maintenanceLimits                      LeafGenerationMaintenanceLimits
 	InternalPagesVisited                   int
 	SubtreesPruned                         int
 	LeafFramesWritten                      int
@@ -1234,6 +1235,11 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return 0, 0, fmt.Errorf("missing snapshot state")
 	}
 	defer closeRewriteSnapshot(&err, snap)
+	if runStats != nil {
+		if err := runStats.maintenanceLimits.admitSnapshot(ctx, snap); err != nil {
+			return 0, 0, err
+		}
+	}
 
 	idx := snap.idx
 	rootID := snap.state.RootPageID
@@ -1796,6 +1802,13 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	// candidate, when present, now owns their exact handles independently of the
 	// construction authority below.
 	durableResources = nil
+	// Acceptance means the replacement roots are already visible even if a
+	// subsequent admission/durability wait fails. Catalog relocation follows
+	// that visibility boundary, not the successful return of the finalizer.
+	if finalizeErr == nil || CommitPublicationAccepted(finalizeErr) {
+		relocationFinish(true)
+		relocationCommitted = true
+	}
 	finalizeDuration := time.Since(finalizeStarted)
 	if runStats != nil {
 		runStats.ApplyStages.FinalizeTimeNanos += finalizeDuration.Nanoseconds()
@@ -1824,8 +1837,6 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr))
 	}
-	relocationFinish(true)
-	relocationCommitted = true
 	// Metadata now makes the manager-owned exact identities reachable. Its
 	// observers take over deletion fencing, so the local packed candidate set
 	// can be released only at this point.
