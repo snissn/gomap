@@ -6,10 +6,14 @@ import (
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 )
 
+// LeafGenerationMaintenanceLimits bounds explicit leaf planning, packing, and
+// garbage-collection input footprints.
+type LeafGenerationMaintenanceLimits = treedbdb.LeafGenerationMaintenanceLimits
+
 // LeafGenerationGCOptions controls whole-generation leaf-log garbage
 // collection.
 type LeafGenerationGCOptions struct {
-	MaintenanceLimits      treedbdb.LeafGenerationMaintenanceLimits
+	MaintenanceLimits      LeafGenerationMaintenanceLimits
 	DryRun                 bool
 	ProtectedRootIDs       []uint64
 	ProtectedSystemRootIDs []uint64

@@ -47,6 +47,9 @@ var (
 	// ErrLeafGenerationManifestIncompatible indicates the split-leaf manifest
 	// requires an unsupported pre-alpha format or has no persistent revision.
 	ErrLeafGenerationManifestIncompatible = db.ErrLeafGenerationManifestIncompatible
+	// ErrLeafGenerationMaintenanceLimit indicates explicit leaf maintenance
+	// exceeded its admitted storage footprint.
+	ErrLeafGenerationMaintenanceLimit = db.ErrLeafGenerationMaintenanceLimit
 	// ErrConditionalTxnUnsupported indicates the selected TreeDB mode cannot
 	// provide native conditional transaction semantics.
 	ErrConditionalTxnUnsupported = db.ErrConditionalTxnUnsupported
