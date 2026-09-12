@@ -102,15 +102,30 @@ func (r *typedGraphPublicationReceipt) rejectBeforeAppend() {
 	defer r.coord.typedPublicationDebtMu.Unlock()
 	if !r.consumed {
 		r.coord.typedPublicationDebt.subtract(r.cost)
-		r.coord.typedPublicationPending.subtract(r.cost)
 		if !r.primaryAttempted {
 			r.coord.typedPublicationEncodedBytes -= r.encoded.primary
 		}
 		if !r.flushAttempted {
 			r.coord.typedPublicationEncodedBytes -= r.encoded.flush
 		}
-		r.consumed = true
+		r.consumePendingLocked()
 	}
+}
+
+func (coord *collectionSchemaCoordinator) wakeTypedGraphPublicationWaitersLocked() {
+	if coord.typedPublicationChanged != nil {
+		close(coord.typedPublicationChanged)
+		coord.typedPublicationChanged = nil
+	}
+}
+
+func (r *typedGraphPublicationReceipt) consumePendingLocked() {
+	r.coord.typedPublicationPending.subtract(r.cost)
+	if len(r.documents) != 0 {
+		r.coord.typedPublicationBuffered--
+	}
+	r.consumed = true
+	r.coord.wakeTypedGraphPublicationWaitersLocked()
 }
 
 func (r *typedGraphPublicationReceipt) invalidate() {
@@ -119,6 +134,7 @@ func (r *typedGraphPublicationReceipt) invalidate() {
 	}
 	r.coord.typedPublicationDebtMu.Lock()
 	defer r.coord.typedPublicationDebtMu.Unlock()
+	defer r.coord.wakeTypedGraphPublicationWaitersLocked()
 	if r.consumed {
 		return
 	}
@@ -150,7 +166,12 @@ func (c *Collection) reserveBufferedTypedGraphPublication(documents []columnWrit
 	}
 	receipt, err := c.reserveTypedGraphPublication(cost, encoded...)
 	if err == nil && receipt != nil {
+		coord.typedPublicationDebtMu.Lock()
 		receipt.documents = documents
+		if len(documents) != 0 {
+			coord.typedPublicationBuffered++
+		}
+		coord.typedPublicationDebtMu.Unlock()
 	}
 	return receipt, err
 }
@@ -466,6 +487,9 @@ func (p *typedGraphPublicationCandidate) invalidate() {
 	invalid := *p.before
 	invalid.invalid = true
 	p.coord.typedPublication.CompareAndSwap(p.before, &invalid)
+	p.coord.typedPublicationDebtMu.Lock()
+	p.coord.wakeTypedGraphPublicationWaitersLocked()
+	p.coord.typedPublicationDebtMu.Unlock()
 }
 
 func (p *typedGraphPublicationCandidate) rejectBeforeAppend() {
@@ -489,8 +513,7 @@ func (p *typedGraphPublicationCandidate) install(meta CollectionMeta, rootNames 
 		}
 		for _, receipt := range p.receipts {
 			if !receipt.consumed {
-				p.coord.typedPublicationPending.subtract(receipt.cost)
-				receipt.consumed = true
+				receipt.consumePendingLocked()
 			}
 		}
 		return
@@ -514,11 +537,11 @@ func (p *typedGraphPublicationCandidate) install(meta CollectionMeta, rootNames 
 	}
 	p.coord.typedPublicationDebtMu.Lock()
 	defer p.coord.typedPublicationDebtMu.Unlock()
+	defer p.coord.wakeTypedGraphPublicationWaitersLocked()
 	if p.coord.typedPublication.CompareAndSwap(p.before, p.next) {
 		for _, r := range p.receipts {
 			if !r.consumed {
-				p.coord.typedPublicationPending.subtract(r.cost)
-				r.consumed = true
+				r.consumePendingLocked()
 			}
 		}
 	}

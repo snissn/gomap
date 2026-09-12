@@ -248,6 +248,7 @@ func (c *Collection) reconcileTypedGraphPublicationWithContext(ctx context.Conte
 		}
 		coord.typedPublicationDebt = cost
 		coord.typedPublicationPending = typedGraphPublicationCost{}
+		coord.typedPublicationBuffered = 0
 		return nil
 	})
 }
