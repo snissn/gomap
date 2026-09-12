@@ -115,8 +115,9 @@ func (o *typedGraphReadOwner) reserve(a *typedGraphReadOwnerAccounting, limits t
 // ready metadata on this exact installed state, never the cold fallback below.
 // Only acknowledged buffered work needs a cross-domain drain. Shared schema
 // admission keeps maintenance exclusive while allowing a fully published read
-// to capture the previous coherent generation during an immediate write.
-// Later writes may linearize after this read.
+// to capture the previous coherent generation during an immediate write. A
+// post-snapshot buffered check upgrades only that capture to an exclusive drain
+// and retry. Later writes may linearize after this read.
 func (c *Collection) openTypedGraphReadOwner(limits typedGraphReadOwnerLimits) (owner *typedGraphReadOwner, err error) {
 	return c.openTypedGraphReadOwnerWithContext(context.Background(), limits)
 }
@@ -132,23 +133,6 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 	if coord == nil {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
-	coord.typedPublicationDebtMu.Lock()
-	buffered := coord.typedPublicationBuffered != 0
-	closed := coord.typedPublicationClosed
-	coord.typedPublicationDebtMu.Unlock()
-	if closed {
-		return nil, backenddb.ErrClosed
-	}
-	if buffered {
-		// Keep the existing cross-manager visibility contract for buffered
-		// acknowledgments, without waiting on ordinary immediate publications.
-		unlock := c.lockCollectionSchemaWrite()
-		drainErr := c.flushCollectionWriteDomainsForSchemaMutation()
-		unlock()
-		if drainErr != nil {
-			return nil, drainErr
-		}
-	}
 	typedGraphOwnerAfterSnapshotHook.RLock()
 	afterDrain := typedGraphOwnerAfterSnapshotHook.afterDrain
 	afterCapture := typedGraphOwnerAfterSnapshotHook.afterCapture
@@ -156,9 +140,7 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 	if afterDrain != nil {
 		afterDrain(c)
 	}
-	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
-	var retry bool
+	var drain, retry bool
 	var changed <-chan struct{}
 	capture := func() (err error) {
 		before := coord.typedPublication.Load()
@@ -176,6 +158,17 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 		if afterCapture != nil {
 			afterCapture(c)
 		}
+		coord.typedPublicationDebtMu.Lock()
+		if c.db.IsClosing() || coord.typedPublicationClosed {
+			coord.typedPublicationDebtMu.Unlock()
+			return backenddb.ErrClosed
+		}
+		if coord.typedPublicationBuffered != 0 {
+			drain = true
+			coord.typedPublicationDebtMu.Unlock()
+			return ErrVectorIndexSnapshotMismatch
+		}
+		coord.typedPublicationDebtMu.Unlock()
 		catalog, err := loadCollectionCatalog(snap, c.collectionName())
 		if err != nil {
 			return err
@@ -386,8 +379,24 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 		if c.db.IsClosing() {
 			return nil, backenddb.ErrClosed
 		}
+		exclusive := drain
+		drain = false
+		var unlockSchema func()
+		if exclusive {
+			unlockSchema = c.lockCollectionSchemaWrite()
+			if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
+				unlockSchema()
+				return nil, err
+			}
+		} else {
+			unlockSchema = c.lockCollectionSchemaRead()
+		}
 		retry, changed = false, nil
 		err = WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), capture)
+		unlockSchema()
+		if drain {
+			continue
+		}
 		if !retry {
 			return owner, err
 		}

@@ -90,6 +90,71 @@ func TestTypedGraphReadOwnerDoesNotWaitForImmediatePublication(t *testing.T) {
 	}
 }
 
+func TestTypedGraphReadOwnerDrainsBufferedReceiptCreatedBeforeCapture(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
+	col, base, _, _, columns, _ := openTypedGraphQualityFixture(t, 8)
+	defer base.Close()
+	opts := typedGraphPublicTestOptions()
+	if err := col.EnsureColumnGraphServing(context.Background(), base.indexName, opts); err != nil {
+		t.Fatal(err)
+	}
+	other, err := NewCollectionManager(col.db).OpenCollection(col.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reached, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	typedGraphOwnerAfterSnapshotHook.Lock()
+	typedGraphOwnerAfterSnapshotHook.afterDrain = func(c *Collection) {
+		if c == col {
+			once.Do(func() { close(reached); <-release })
+		}
+	}
+	typedGraphOwnerAfterSnapshotHook.Unlock()
+	defer func() {
+		typedGraphOwnerAfterSnapshotHook.Lock()
+		typedGraphOwnerAfterSnapshotHook.afterDrain = nil
+		typedGraphOwnerAfterSnapshotHook.Unlock()
+	}()
+	type opened struct {
+		owner *typedGraphReadOwner
+		err   error
+	}
+	done := make(chan opened, 1)
+	go func() {
+		owner, err := col.openTypedGraphReadOwner(opts.Owners)
+		done <- opened{owner, err}
+	}()
+	select {
+	case <-reached:
+	case <-time.After(10 * time.Second):
+		close(release)
+		t.Fatal("reader did not reach pre-capture admission")
+	}
+	changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: []string{"buffered"}}, {Name: "user", Strings: []string{"new"}}, {Name: "path", Strings: []string{"new"}}}
+	if _, _, err := other.InsertTypedBatchWithStats([][]byte{[]byte("buffered")}, [][]byte{[]byte(`{"id":"buffered"}`)}, changed); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	coord := col.collectionSchemaCoordinator()
+	coord.typedPublicationDebtMu.Lock()
+	buffered := coord.typedPublicationBuffered
+	coord.typedPublicationDebtMu.Unlock()
+	if buffered != 1 {
+		close(release)
+		t.Fatalf("buffered receipts=%d want=1", buffered)
+	}
+	close(release)
+	result := <-done
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	defer result.owner.Close()
+	if result.owner.state.physicalRows != 1 {
+		t.Fatal("read omitted acknowledged buffered insert created before capture")
+	}
+}
+
 func TestTypedGraphReadOwnerWaitsForSchemaMaintenance(t *testing.T) {
 	col, base, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
