@@ -19,6 +19,8 @@ float64 cosine top-10 oracle, EF128/256/512/1024/2048, and eligible populations
 with range predicates, **not** a categorical tenant posting-list benchmark.
 First-predicate timings are predicate-cache-cold, not OS-cache-cold. Each curve
 follows that predicate's first query. Reopen curves use EF512.
+Diagnostic mode requires exactly 500,000 exported rows and 100 queries: an oracle
+from a larger corpus uses different rank membership and cannot be prefix-sliced.
 
 Four readers execute 64 EF512 queries each at 4097 eligible rows while one writer performs eight 256-row
 same-ID replacements. This is fixed-live-count replacement throughput, not

@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -13,6 +13,19 @@ import minima_qdrant_runner as frozen
 
 
 class NativeCohereDiagnosticTests(unittest.TestCase):
+    def test_diagnostic_rejects_superset_exports_before_reading_payloads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = Path(directory)
+            args = SimpleNamespace(dataset=dataset, rows=500000)
+            for rows, queries in ((500001, 100), (500000, 101)):
+                with self.subTest(rows=rows, queries=queries):
+                    manifest = {"dimensions": 768, "top_k": 10, "exact_train_query_overlap": 0,
+                                "rows": rows, "query_count": queries}
+                    (dataset / "manifest.json").write_bytes(diagnostic.canonical(manifest))
+                    with patch.object(diagnostic.existing, "repository_commit", return_value="a" * 40):
+                        with self.assertRaisesRegex(ValueError, "exactly 500000 exported rows and 100 queries"):
+                            diagnostic.prepare(args)
+
     def test_real_dimension_independent_oracle_and_scalar_membership(self):
         vectors = np.zeros((16, 768), dtype=np.float32)
         vectors[:, 0] = 1

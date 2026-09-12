@@ -96,6 +96,8 @@ def prepare(args):
     query_count = 4 if args.rows == 512 else 100
     if query_count > manifest["query_count"]:
         raise ValueError("not enough exported queries")
+    if args.rows == 500000 and (manifest["rows"], manifest["query_count"]) != (500000, 100):
+        raise ValueError("diagnostic oracle requires exactly 500000 exported rows and 100 queries")
     files = {}
     for name, expected_size in (("documents", manifest["rows"] * 768 * 4),
                                 ("queries", manifest["query_count"] * 768 * 4), ("truth", None)):
