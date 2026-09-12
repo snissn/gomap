@@ -21,6 +21,12 @@ type typedWrite768Result struct {
 	err    error
 }
 
+type typedWrite768SearchResult struct {
+	WallNS        int64
+	BaseANNScored uint64
+	DeltaScored   uint64
+}
+
 // Opt-in phase diagnostic, not a latency assertion or a vector-recall benchmark.
 // Input generation, empty graph capture, stats collection, and clean Close are
 // outside the measured interval. Every timed request is a durable public typed
@@ -47,6 +53,7 @@ func TestTypedWrite768Diagnostic(t *testing.T) {
 				}
 				results := make([]typedWrite768Result, calls)
 				before := db.Stats()
+				beforeManager := col.manager.StatsSnapshot()
 				start := make(chan struct{})
 				var ready, done sync.WaitGroup
 				ready.Add(writers)
@@ -76,6 +83,7 @@ func TestTypedWrite768Diagnostic(t *testing.T) {
 				done.Wait()
 				elapsed := time.Since(began)
 				after := db.Stats()
+				afterManager := col.manager.StatsSnapshot()
 				for _, r := range results {
 					if r.err != nil || r.WallNS == 0 {
 						t.Fatalf("call %d: %v (wall=%d)", r.Call, r.err, r.WallNS)
@@ -87,7 +95,7 @@ func TestTypedWrite768Diagnostic(t *testing.T) {
 					t.Logf("write768_request=%s", encoded)
 				}
 				delta := typedWrite768StatsDelta(t, before, after)
-				t.Logf("write768_summary preload=%d rows=%d writers=%d calls=%d wall_ns=%d rows_per_second=%.3f db_delta=%s pending=%s", preload, rows, writers, calls, elapsed.Nanoseconds(), float64(rows*calls)/elapsed.Seconds(), typedWrite768JSON(t, delta), typedWrite768JSON(t, typedWrite768ManagerSnapshot(col.manager.StatsSnapshot())))
+				t.Logf("write768_summary layer=collections_sync preload=%d rows=%d writers=%d calls=%d wall_ns=%d rows_per_second=%.3f db_delta=%s manager_delta=%s pending=%s", preload, rows, writers, calls, elapsed.Nanoseconds(), float64(rows*calls)/elapsed.Seconds(), typedWrite768JSON(t, delta), typedWrite768JSON(t, typedWrite768ManagerDelta(t, beforeManager, afterManager)), typedWrite768JSON(t, typedWrite768ManagerGauges(afterManager)))
 				if err := db.Close(); err != nil {
 					t.Fatal(err)
 				}
@@ -116,19 +124,14 @@ func TestTypedWrite768ReadWriteInteractionDiagnostic(t *testing.T) {
 	if os.Getenv("GOMAP_WRITE_768_DIAGNOSTIC") != "1" {
 		t.Skip("set GOMAP_WRITE_768_DIAGNOSTIC=1 to run the bounded durable-write sweep")
 	}
-	const preload, calls, rows, readsPerReader = 5000, 16, 256, 64
+	const preload, calls, rows, readsPerReader = 5000, 16, 256, 256
 	for _, cell := range []struct {
 		readers, writers int
-	}{{1, 0}, {4, 0}, {0, 1}, {4, 1}} {
-		t.Run(fmt.Sprintf("readers%d/writers%d", cell.readers, cell.writers), func(t *testing.T) {
+		state            string
+	}{{1, 0, "base"}, {4, 0, "base"}, {4, 0, "postwrite"}, {0, 1, "base"}, {4, 1, "base"}} {
+		t.Run(fmt.Sprintf("readers%d/writers%d/state%s", cell.readers, cell.writers, cell.state), func(t *testing.T) {
 			dir, db, col := openTypedWrite768Diagnostic(t, preload, calls*rows)
 			defer db.Close()
-			query := vectorBenchmarkEmbedding(7, 768)
-			for range 3 {
-				if _, err := typedWrite768Search(col, query); err != nil {
-					t.Fatal(err)
-				}
-			}
 
 			type input struct {
 				ids, retained [][]byte
@@ -138,12 +141,24 @@ func TestTypedWrite768ReadWriteInteractionDiagnostic(t *testing.T) {
 			for call := range inputs {
 				inputs[call].ids, inputs[call].retained, inputs[call].columns = typedWrite768DiagnosticInput("mixed", call*rows, rows)
 			}
+			if cell.state == "postwrite" {
+				for _, in := range inputs {
+					if updated, _, err := col.UpsertTypedBatchWithStats(in.ids, in.retained, in.columns); err != nil || updated != 0 {
+						t.Fatalf("prepare postwrite state: updated=%d err=%v", updated, err)
+					}
+				}
+			}
+			query := vectorBenchmarkEmbedding(7, 768)
+			for range 3 {
+				if _, err := typedWrite768Search(col, query); err != nil {
+					t.Fatal(err)
+				}
+			}
 			results := make([]typedWrite768Result, calls)
-			latencies := make([][]int64, cell.readers)
+			searches := make([][]typedWrite768SearchResult, cell.readers)
 			beforeDB := db.Stats()
 			beforeManager := col.manager.StatsSnapshot()
 			start := make(chan struct{})
-			writerDone := make(chan struct{})
 			errs := make(chan error, cell.readers+cell.writers)
 			var ready, readers, writers sync.WaitGroup
 			ready.Add(cell.readers + cell.writers)
@@ -154,31 +169,18 @@ func TestTypedWrite768ReadWriteInteractionDiagnostic(t *testing.T) {
 					defer readers.Done()
 					ready.Done()
 					<-start
-					for operation := 0; ; operation++ {
-						if cell.writers == 0 {
-							if operation == readsPerReader {
-								return
-							}
-						} else {
-							select {
-							case <-writerDone:
-								return
-							default:
-							}
-						}
-						elapsed, err := typedWrite768Search(col, query)
+					for range readsPerReader {
+						result, err := typedWrite768Search(col, query)
 						if err != nil {
 							errs <- err
 							return
 						}
-						latencies[reader] = append(latencies[reader], elapsed.Nanoseconds())
+						searches[reader] = append(searches[reader], result)
 					}
 				}()
 			}
 			var writerStarted, writerEnded time.Time
-			if cell.writers == 0 {
-				close(writerDone)
-			} else {
+			if cell.writers > 0 {
 				writers.Add(1)
 				go func() {
 					defer writers.Done()
@@ -199,17 +201,15 @@ func TestTypedWrite768ReadWriteInteractionDiagnostic(t *testing.T) {
 					}
 					writerEnded = time.Now()
 				}()
-				go func() {
-					writers.Wait()
-					close(writerDone)
-				}()
 			}
 			ready.Wait()
 			cellStarted := time.Now()
 			close(start)
 			readers.Wait()
-			<-writerDone
+			writers.Wait()
 			cellElapsed := time.Since(cellStarted)
+			afterDB := db.Stats()
+			afterManager := col.manager.StatsSnapshot()
 			close(errs)
 			for err := range errs {
 				if err != nil {
@@ -218,8 +218,13 @@ func TestTypedWrite768ReadWriteInteractionDiagnostic(t *testing.T) {
 			}
 
 			var all []int64
-			for _, samples := range latencies {
-				all = append(all, samples...)
+			var baseANNScored, deltaScored uint64
+			for _, readerSearches := range searches {
+				for _, search := range readerSearches {
+					all = append(all, search.WallNS)
+					baseANNScored += search.BaseANNScored
+					deltaScored += search.DeltaScored
+				}
 			}
 			if cell.readers > 0 && len(all) == 0 {
 				t.Fatal("reader interval produced no samples")
@@ -227,11 +232,13 @@ func TestTypedWrite768ReadWriteInteractionDiagnostic(t *testing.T) {
 			slices.Sort(all)
 			summary := map[string]any{
 				"phase": "write768_interaction", "preload": preload,
+				"layer": "collections_sync", "state": cell.state,
 				"readers": cell.readers, "writers": cell.writers,
 				"cell_wall_ns": cellElapsed.Nanoseconds(), "read_samples": len(all),
-				"db_delta":       typedWrite768StatsDelta(t, beforeDB, db.Stats()),
-				"manager_before": typedWrite768ManagerSnapshot(beforeManager),
-				"manager_after":  typedWrite768ManagerSnapshot(col.manager.StatsSnapshot()),
+				"base_ann_scored": baseANNScored, "delta_scored": deltaScored,
+				"db_delta":      typedWrite768StatsDelta(t, beforeDB, afterDB),
+				"manager_delta": typedWrite768ManagerDelta(t, beforeManager, afterManager),
+				"pending":       typedWrite768ManagerGauges(afterManager),
 			}
 			if len(all) > 0 {
 				summary["read_p50_ns"] = all[len(all)/2]
@@ -324,20 +331,21 @@ func openTypedWrite768Diagnostic(t *testing.T, preload, writeRows int) (string, 
 	return dir, db, col
 }
 
-func typedWrite768Search(col *Collection, query []float32) (time.Duration, error) {
+func typedWrite768Search(col *Collection, query []float32) (typedWrite768SearchResult, error) {
 	var buffer VectorIndexSearchBuffer
 	started := time.Now()
 	response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: "embedding_graph", Query: query, TopK: 10, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeMinimal}, &buffer)
-	elapsed := time.Since(started)
 	if view != nil {
 		if closeErr := view.Close(); err == nil {
 			err = closeErr
 		}
 	}
+	elapsed := time.Since(started)
 	if err == nil && (len(response.Results) != 10 || !response.Stats.ColumnGraphWork.Completed) {
 		err = fmt.Errorf("incomplete public column_graph search: results=%d work=%+v", len(response.Results), response.Stats.ColumnGraphWork)
 	}
-	return elapsed, err
+	work := response.Stats.ColumnGraphWork
+	return typedWrite768SearchResult{WallNS: elapsed.Nanoseconds(), BaseANNScored: work.BaseANNScored, DeltaScored: work.DeltaScored}, err
 }
 
 func typedWrite768StatsDelta(t *testing.T, before, after map[string]string) map[string]uint64 {
@@ -374,24 +382,42 @@ func typedWrite768StatsDelta(t *testing.T, before, after map[string]string) map[
 	return delta
 }
 
-func typedWrite768ManagerSnapshot(stats CollectionManagerStats) map[string]any {
+func typedWrite768ManagerGauges(stats CollectionManagerStats) map[string]any {
 	return map[string]any{
-		"pending_documents":            stats.PendingDocuments,
-		"pending_root_runs":            stats.PendingRootRuns,
-		"pending_indexed_flush_units":  stats.PendingIndexedFlushUnits,
-		"overlay_queued_units":         stats.OverlayQueuedIndexedFlushUnits,
-		"overlay_active_units":         stats.OverlayActiveIndexedFlushUnits,
-		"indexed_async_flush_running":  stats.IndexedAsyncFlushRunning,
-		"mutation_lock_calls":          stats.MutationLockCalls,
-		"mutation_lock_wait_ns":        stats.MutationLockWait.Nanoseconds(),
-		"mutation_lock_hold_ns":        stats.MutationLockHold.Nanoseconds(),
-		"indexed_flush_calls":          stats.IndexedFlushCalls,
-		"indexed_flush_docs":           stats.IndexedFlushDocs,
-		"indexed_flush_duration_ns":    stats.IndexedFlushDuration.Nanoseconds(),
-		"indexed_flush_materialize_ns": stats.IndexedFlushMaterialize.Nanoseconds(),
-		"indexed_flush_pointerize_ns":  stats.IndexedFlushPointerize.Nanoseconds(),
-		"indexed_flush_publish_ns":     stats.IndexedFlushPublish.Nanoseconds(),
-		"root_delta_plan_entries":      stats.RootDeltaPlanEntries,
+		"pending_bytes":               stats.PendingBytes,
+		"pending_documents":           stats.PendingDocuments,
+		"pending_root_runs":           stats.PendingRootRuns,
+		"pending_indexed_flush_units": stats.PendingIndexedFlushUnits,
+		"pending_publication_bytes":   stats.PendingIndexedPublicationBytes,
+		"overlay_mutable_documents":   stats.OverlayMutableDocuments,
+		"overlay_queued_units":        stats.OverlayQueuedIndexedFlushUnits,
+		"overlay_active_units":        stats.OverlayActiveIndexedFlushUnits,
+		"overlay_visible_depth":       stats.OverlayVisibleDepth,
+		"indexed_async_flush_running": stats.IndexedAsyncFlushRunning,
+	}
+}
+
+func typedWrite768ManagerDelta(t *testing.T, before, after CollectionManagerStats) map[string]uint64 {
+	t.Helper()
+	delta := func(name string, left, right uint64) uint64 {
+		if right < left {
+			t.Fatalf("invalid monotonic collection stat %s: before=%d after=%d", name, left, right)
+		}
+		return right - left
+	}
+	return map[string]uint64{
+		"mutation_lock_calls":          delta("mutation_lock_calls", before.MutationLockCalls, after.MutationLockCalls),
+		"mutation_lock_wait_ns":        delta("mutation_lock_wait_ns", uint64(before.MutationLockWait), uint64(after.MutationLockWait)),
+		"mutation_lock_hold_ns":        delta("mutation_lock_hold_ns", uint64(before.MutationLockHold), uint64(after.MutationLockHold)),
+		"indexed_stage_batches":        delta("indexed_stage_batches", before.IndexedStageBatches, after.IndexedStageBatches),
+		"indexed_stage_docs":           delta("indexed_stage_docs", before.IndexedStageDocs, after.IndexedStageDocs),
+		"indexed_flush_calls":          delta("indexed_flush_calls", before.IndexedFlushCalls, after.IndexedFlushCalls),
+		"indexed_flush_docs":           delta("indexed_flush_docs", before.IndexedFlushDocs, after.IndexedFlushDocs),
+		"indexed_flush_duration_ns":    delta("indexed_flush_duration_ns", uint64(before.IndexedFlushDuration), uint64(after.IndexedFlushDuration)),
+		"indexed_flush_materialize_ns": delta("indexed_flush_materialize_ns", uint64(before.IndexedFlushMaterialize), uint64(after.IndexedFlushMaterialize)),
+		"indexed_flush_pointerize_ns":  delta("indexed_flush_pointerize_ns", uint64(before.IndexedFlushPointerize), uint64(after.IndexedFlushPointerize)),
+		"indexed_flush_publish_ns":     delta("indexed_flush_publish_ns", uint64(before.IndexedFlushPublish), uint64(after.IndexedFlushPublish)),
+		"root_delta_plan_entries":      delta("root_delta_plan_entries", before.RootDeltaPlanEntries, after.RootDeltaPlanEntries),
 	}
 }
 
