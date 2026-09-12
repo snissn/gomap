@@ -63,7 +63,7 @@ func (c *Collection) reconcileTypedGraphPublicationWithContext(ctx context.Conte
 				return err
 			}
 			state := coord.typedPublication.Load()
-			current = state != nil && !state.invalid && catalog != nil && catalog.typedGraphBase != nil && catalog.meta.Options.ColumnStore != nil && len(catalog.meta.VectorIndexes) == 1 && typedGraphBaseSchemaMatches(catalog.typedGraphBase.meta, catalog.meta) && state.matches(catalog)
+			current = state != nil && !state.invalid && catalog != nil && catalog.typedGraphBase != nil && len(catalog.meta.VectorIndexes) == 1 && typedGraphBaseSchemaMatches(catalog.typedGraphBase.meta, catalog.meta) && state.matches(catalog)
 			return nil
 		})
 		unlockRead()
