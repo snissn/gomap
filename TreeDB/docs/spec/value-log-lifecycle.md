@@ -330,7 +330,12 @@ to these native phases. Before reclamation it retires completed captured-base
 cache keepers on registered handles of the same collection, across managers.
 It does not take ownership of in-flight builds or independently admitted read
 owners; their exact snapshot, holder, and asset pins continue to protect their
-generation.
+generation. After a warm completes, Ensure and Fold compare that exact keeper's
+immutable base key with the healthy current publication and release an obsolete
+keeper, including a first sibling warm that registered after the fold sweep.
+Same-base suffix advances preserve the keeper. A successful no-op pack still
+advances the fallback horizon and runs bounded native GC: wholly dead generations
+need no copying and are deliberately excluded from pack candidates.
 
 `BenchmarkLeafGenerationPackCopyPublish` provides the pinned before/after
 performance fixture. Run five externally alternating base/head invocations with

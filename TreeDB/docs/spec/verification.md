@@ -95,6 +95,12 @@ forces actual collection-root packing through success, a pre-acceptance error,
 and an accepted meta-wait error; it checks exactly-once relocation completion,
 the visible root coordinates, and value preservation before fail-closed error
 handling. These are lifetime/publication tests, not memory-peak evidence.
+`TestTypedGraphPublicEnsureLateSiblingKeeper` pauses the first, still-unregistered
+sibling warm across a nonempty fold, checks exact keeper-accounting release and
+held-reader preservation, and keeps a same-base suffix-only control warmed.
+`TestTypedGraphPublicFoldReclaimsWholeGenerationsWithoutPack` observes actual
+whole-dead generation files and a no-op pack, requires public Fold to remove
+those files, and checks current filtered search/materialization plus reopen.
 The `TestLeafGenerationMaintenanceLimits*` cases reject oversized directory,
 pager, manifest, and recoverable-snapshot inputs before indexing/GC work, inject
 growth between plan and actual pack snapshot, and retain successful admitted
