@@ -1,6 +1,9 @@
 package collections
 
-import "errors"
+import (
+	"cmp"
+	"errors"
+)
 
 var errTypedGraphInverseRequired = errors.New("collections: typed graph inverse row mapping missing; rebuild required")
 
@@ -65,22 +68,23 @@ func (s *columnVectorGraphRowRefStateSource) ordinalForPhysicalRow(ref DocumentR
 	// This does not permit concurrent Close of the caller-owned searcher.
 	ordinals := s.ordinalsByPhysicalRow.Values
 	generations, parts, rows, lsns := s.forwardValues()
-	at := func(index int) (int, DocumentRowRef, bool) {
-		ordinal := ordinals[index]
-		if ordinal < 0 || ordinal >= int64(s.rows) {
-			return 0, DocumentRowRef{}, false
-		}
-		candidate, err := columnVectorGraphRowRefFromPreparedValues(int(ordinal), generations[ordinal], parts[ordinal], rows[ordinal], lsns[ordinal])
-		return int(ordinal), candidate, err == nil
-	}
 	lo, hi := 0, s.rows
 	for lo < hi {
 		mid := lo + (hi-lo)/2
-		ordinal, candidate, ok := at(mid)
-		if !ok {
+		ordinal := ordinals[mid]
+		if ordinal < 0 || ordinal >= int64(s.rows) {
 			return 0, false
 		}
-		switch compareColumnVectorGraphPhysicalRow(candidate, ref) {
+		// Open certifies the immutable coordinates. Compare only the ordering
+		// fields here; the LSN and owning row ref are needed only on an exact hit.
+		order := cmp.Compare(uint64(generations[ordinal]), ref.Generation)
+		if order == 0 {
+			order = cmp.Compare(uint64(parts[ordinal]), ref.PartID)
+		}
+		if order == 0 {
+			order = cmp.Compare(int(rows[ordinal]), ref.RowIndex)
+		}
+		switch order {
 		case -1:
 			lo = mid + 1
 		case 1:
@@ -88,7 +92,8 @@ func (s *columnVectorGraphRowRefStateSource) ordinalForPhysicalRow(ref DocumentR
 		default:
 			// Construction certifies unique physical coordinates. An exact
 			// hit needs no lower-bound search through unrelated pinned rows.
-			return ordinal, candidate.AppliedCommandLSN == ref.AppliedCommandLSN
+			candidate, err := columnVectorGraphRowRefFromPreparedValues(int(ordinal), generations[ordinal], parts[ordinal], rows[ordinal], lsns[ordinal])
+			return int(ordinal), err == nil && candidate.AppliedCommandLSN == ref.AppliedCommandLSN
 		}
 	}
 	return 0, false
