@@ -23,6 +23,14 @@
 - A TreeDB iterator is a point-in-time view of the DB as of iterator creation.
 - The iterator must be closed to release pinned resources.
 
+### Typed graph reads
+
+An ordinary typed graph read may use the previous coherent generation while an
+immediate write is in progress. Admission requires the snapshot catalog and
+immutable publication to match; only a publication transition permits retry.
+Acknowledged buffered writes retain their visibility drain. Schema and storage
+maintenance remain exclusive, and caller-held views retain their generation pins.
+
 ### Online index vacuum
 
 Online index vacuum preserves admitted typed graph authority by replacing
