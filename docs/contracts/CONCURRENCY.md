@@ -27,9 +27,10 @@
 
 An ordinary typed graph read may use the previous coherent generation while an
 immediate write is in progress. Admission requires the snapshot catalog and
-immutable publication to match; only a publication transition permits retry.
-Acknowledged buffered writes retain their visibility drain. Schema and storage
-maintenance remain exclusive, and caller-held views retain their generation pins.
+immutable publication to match; a changed publication or an outstanding
+publication-installation gap permits retry. Acknowledged buffered writes retain
+their visibility drain. Schema and storage maintenance remain exclusive, and
+caller-held views retain their generation pins.
 
 ### Online index vacuum
 

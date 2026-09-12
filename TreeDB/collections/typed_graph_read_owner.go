@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"runtime"
 	"slices"
 	"sync"
 
@@ -398,6 +399,8 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
+		} else {
+			runtime.Gosched()
 		}
 	}
 }
