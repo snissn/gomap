@@ -22,6 +22,12 @@ func TestErrLeafGenerationManifestIncompatibleReexportsBackendSentinel(t *testin
 	}
 }
 
+func TestErrLeafGenerationMaintenanceLimitReexportsBackendSentinel(t *testing.T) {
+	if !errors.Is(treedbdb.ErrLeafGenerationMaintenanceLimit, treedb.ErrLeafGenerationMaintenanceLimit) {
+		t.Fatal("public ErrLeafGenerationMaintenanceLimit does not match backend sentinel")
+	}
+}
+
 func TestOpenRejectsStructurallyInvalidLeafGenerationManifestWithPublicSentinel(t *testing.T) {
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.Options{Dir: dir, IndexOuterLeavesInValueLog: true})

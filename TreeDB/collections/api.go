@@ -1494,6 +1494,7 @@ type bufferedColumnDocumentIndex struct {
 
 type collectionWriteDomain struct {
 	typedReceipts []*typedGraphPublicationReceipt
+	manager       *CollectionManager // immutable owner; shared coordinator domains reach sibling handles
 	// mutationMu serializes root descriptor publishes for handles opened
 	// through the same manager so optimistic retries do not starve under
 	// sustained collection write contention.
@@ -3210,6 +3211,7 @@ func (m *CollectionManager) writeDomainForCollection(name string) *collectionWri
 		return domain
 	}
 	domain := &collectionWriteDomain{
+		manager:             m,
 		updateCombineShards: defaultCollectionUpdateCombineShards,
 		schemaCoordinator:   schemaCoord,
 	}

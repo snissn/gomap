@@ -18,6 +18,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 func expectLeafGenerationValue(t *testing.T, db *DB, key []byte, fill byte) {
@@ -699,6 +700,13 @@ func TestLeafGenerationPack_RewritesCollectionLeafRefRoot(t *testing.T) {
 		t.Fatalf("publish collection leaf-ref root: %v", err)
 	}
 	oldRoot := rootIDs[0]
+	var relocatedRoot uint64
+	var relocationCommitted bool
+	unregister := db.RegisterCollectionRootRelocation(func(_ *Snapshot, _ *pager.Pager, roots map[uint64]uint64) (func(bool), error) {
+		relocatedRoot = roots[oldRoot]
+		return func(committed bool) { relocationCommitted = committed }, nil
+	})
+	defer unregister()
 	oldLeafPtr := requireLeafLogRootChildren(t, db, oldRoot)[0]
 	oldLeafPath := leafLogSegmentPath(t, dir, oldLeafPtr.FileID)
 	rawFileID := page.ValueLogSegmentID(oldLeafPtr.FileID)
@@ -741,6 +749,9 @@ func TestLeafGenerationPack_RewritesCollectionLeafRefRoot(t *testing.T) {
 	newRoot := readCollectionRootID(t, db, descriptorKey)
 	if newRoot == oldRoot {
 		t.Fatalf("collection descriptor still points at old leaf-ref root %d", oldRoot)
+	}
+	if relocatedRoot != newRoot || !relocationCommitted {
+		t.Fatalf("collection relocation root=%d committed=%t, want %d/true", relocatedRoot, relocationCommitted, newRoot)
 	}
 	newLeafPtr := requireLeafLogRootChildren(t, db, newRoot)[0]
 	if newLeafPtr.FileID == oldLeafPtr.FileID && newLeafPtr.Offset == oldLeafPtr.Offset {

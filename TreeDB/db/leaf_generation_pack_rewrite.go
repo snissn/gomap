@@ -232,6 +232,7 @@ func (a *leafRefRewritePageAppender) AppendLeafPage(leafPage []byte) (page.LeafL
 }
 
 type leafRefRewriteRunStats struct {
+	maintenanceLimits                      LeafGenerationMaintenanceLimits
 	InternalPagesVisited                   int
 	SubtreesPruned                         int
 	LeafFramesWritten                      int
@@ -1234,6 +1235,11 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return 0, 0, fmt.Errorf("missing snapshot state")
 	}
 	defer closeRewriteSnapshot(&err, snap)
+	if runStats != nil {
+		if err := runStats.maintenanceLimits.admitSnapshot(ctx, snap); err != nil {
+			return 0, 0, err
+		}
+	}
 
 	idx := snap.idx
 	rootID := snap.state.RootPageID
@@ -1747,6 +1753,34 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if runStats != nil {
 		runStats.ApplyStages.CollectionPublishTimeNanos += time.Since(collectionPublishStarted).Nanoseconds()
 	}
+	relocationFinish := func(bool) {}
+	if len(descriptors) > 0 {
+		rootRelocations := make(map[uint64]uint64, len(descriptors))
+		for _, descriptor := range descriptors {
+			next := descriptor.rootID
+			if staged, ok := leafCtx.lookupInternalRemap(next); ok {
+				next = staged
+			}
+			if next >= leafGenerationPackPrivatePageIDBase {
+				var ok bool
+				next, ok = remap[next]
+				if !ok {
+					return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: missing published collection root remap for %d", descriptor.rootID))
+				}
+			}
+			rootRelocations[descriptor.rootID] = next
+		}
+		relocationFinish, err = db.prepareCollectionRelocation(snap, idx.pager, rootRelocations)
+		if err != nil {
+			return cleanupAndUnlock(err)
+		}
+	}
+	relocationCommitted := false
+	defer func() {
+		if !relocationCommitted {
+			relocationFinish(false)
+		}
+	}()
 	publishEvent.Phase = leafGenerationPackBeforeMetaWrite
 	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: meta write failpoint: %w", err))
@@ -1768,6 +1802,13 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	// candidate, when present, now owns their exact handles independently of the
 	// construction authority below.
 	durableResources = nil
+	// Acceptance means the replacement roots are already visible even if a
+	// subsequent admission/durability wait fails. Catalog relocation follows
+	// that visibility boundary, not the successful return of the finalizer.
+	if finalizeErr == nil || CommitPublicationAccepted(finalizeErr) {
+		relocationFinish(true)
+		relocationCommitted = true
+	}
 	finalizeDuration := time.Since(finalizeStarted)
 	if runStats != nil {
 		runStats.ApplyStages.FinalizeTimeNanos += finalizeDuration.Nanoseconds()

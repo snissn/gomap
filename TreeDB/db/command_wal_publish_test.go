@@ -127,6 +127,81 @@ func TestRefreshCommandWALCheckpointFallbackConvergesSlotsWithoutNewLSN(t *testi
 	}
 }
 
+func TestCommandWALCheckpointFallbackNeedsRefreshForDifferentRoots(t *testing.T) {
+	selected := rootpublication.DurableRootRecordV1{AppliedCommandLSN: 7, UserRootPageID: 10, SystemRootPageID: 20}
+	fallback := selected
+	if commandWALCheckpointFallbackNeedsRefresh(7, selected, fallback) {
+		t.Fatal("equal fallback requires refresh")
+	}
+	fallback.UserRootPageID++
+	if !commandWALCheckpointFallbackNeedsRefresh(7, selected, fallback) {
+		t.Fatal("different user root did not require refresh")
+	}
+	fallback = selected
+	fallback.SystemRootPageID++
+	if !commandWALCheckpointFallbackNeedsRefresh(7, selected, fallback) {
+		t.Fatal("different system root did not require refresh")
+	}
+}
+
+func TestRefreshCommandWALCheckpointFallbackWaitsForVisibleRoot(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db, err := Open(Options{
+		Dir:                       dir,
+		CommandWAL:                true,
+		DisableBackgroundPrune:    true,
+		rootPublicationFixedDelay: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL DB: %v", err)
+	}
+	defer db.Close()
+	if err := db.SetSync([]byte("pending"), []byte("root")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+	visible := db.State()
+	db.durablePublishMu.Lock()
+	durableLSN := db.durableRoot.slotRecord[db.durableRoot.slot].AppliedCommandLSN
+	db.durablePublishMu.Unlock()
+	if durableLSN == visible.AppliedCommandLSN {
+		t.Fatal("fixed-delay root publication did not leave a pending visible root")
+	}
+	if err := db.RefreshCommandWALCheckpointFallback(); err != nil {
+		t.Fatalf("RefreshCommandWALCheckpointFallback: %v", err)
+	}
+	db.durablePublishMu.Lock()
+	selected := db.durableRoot.slotRecord[db.durableRoot.slot]
+	fallback := db.durableRoot.slotRecord[db.durableRoot.slot^1]
+	db.durablePublishMu.Unlock()
+	if selected.AppliedCommandLSN != visible.AppliedCommandLSN || fallback.AppliedCommandLSN != visible.AppliedCommandLSN ||
+		selected.UserRootPageID != fallback.UserRootPageID || selected.SystemRootPageID != fallback.SystemRootPageID {
+		t.Fatalf("root slots did not converge after pending visible root: selected=%+v fallback=%+v", selected, fallback)
+	}
+}
+
+func TestRefreshCommandWALCheckpointFallbackSnapshotsRuntimeUnderDBMu(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL DB: %v", err)
+	}
+	defer db.Close()
+
+	db.mu.Lock()
+	refreshed := make(chan error, 1)
+	go func() { refreshed <- db.RefreshCommandWALCheckpointFallback() }()
+	select {
+	case err := <-refreshed:
+		db.mu.Unlock()
+		t.Fatalf("fallback refresh bypassed root-publication snapshot: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	db.mu.Unlock()
+	if err := <-refreshed; err != nil {
+		t.Fatalf("RefreshCommandWALCheckpointFallback: %v", err)
+	}
+}
+
 func TestRefreshCommandWALCheckpointFallbackPublicationFailureRetainsFallback(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

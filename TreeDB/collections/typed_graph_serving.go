@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
@@ -110,13 +111,13 @@ func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string,
 		// Admission belongs to the shared authority, but its optional prepared
 		// keeper belongs to this handle. Explicit Ensure warms new handles too.
 		if state.servingBase.graph.RowCount == 0 {
-			c.invalidateTypedGraphEmptyBaseKeeper(index)
+			c.invalidateTypedGraphStaleBaseKeeper(index)
 			return nil
 		}
 		_, err := c.acquireTypedGraphCapturedBaseCacheWithContext(ctx, index, o)
 		if err == nil {
-			// A concurrent empty fold may have passed cleanup during the warm.
-			c.invalidateTypedGraphEmptyBaseKeeper(index)
+			// A concurrent fold may have passed cleanup during the warm.
+			c.invalidateTypedGraphStaleBaseKeeper(index)
 		}
 		return err
 	}
@@ -154,7 +155,7 @@ func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string,
 		return err
 	}
 	if ready.servingBase.graph.RowCount == 0 {
-		c.invalidateTypedGraphEmptyBaseKeeper(index)
+		c.invalidateTypedGraphStaleBaseKeeper(index)
 	}
 	return nil
 }
@@ -172,42 +173,93 @@ func (c *Collection) FoldColumnGraphServing(ctx context.Context, index string) (
 		return err
 	}
 	// Publication already installed its ready immutable state. Checkpoint and
-	// work-epoch reclamation remain outside install admission; neither is a
-	// reason to expose an invalid serving frontier.
+	// bounded reclamation remain outside install admission; neither is a reason
+	// to expose an invalid serving frontier. Retire the stale keeper before GC;
+	// caller-held read owners and in-flight replacement builds retain exact pins.
+	c.retireTypedGraphCapturedBaseKeepers(index)
+	maintenance := backenddb.LeafGenerationMaintenanceLimits{
+		NativeEntries: p.options.Maintenance.NativeEntries,
+		NativeBytes:   p.options.Maintenance.NativeBytes,
+		PagerPages:    p.options.Maintenance.PagerPages,
+	}
+	_, err = c.db.LeafGenerationPackRunOnce(ctx, backenddb.LeafGenerationPackFromPlanOptions{
+		Sync: true, MaxGenerations: p.options.Maintenance.NativeEntries, MaxBytesToCopy: p.options.Maintenance.NativeBytes,
+		MaintenanceLimits: maintenance,
+	})
+	if err != nil {
+		return err
+	}
+	// Whole-dead generations need no copying and are deliberately excluded
+	// from pack candidates. Their fallback horizon and GC still need service.
+	if err := c.db.RefreshCommandWALCheckpointFallback(); err != nil {
+		return err
+	}
+	if _, err := c.db.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{MaintenanceLimits: maintenance}); err != nil {
+		return err
+	}
 	if _, err := c.renewTypedGraphWorkEpoch(ctx, p.options.Maintenance); err != nil {
 		return err
 	}
 	if state := c.collectionSchemaCoordinator().typedPublication.Load(); state != nil && !state.invalid && state.servingAdmitted && state.servingBase != nil && state.servingBase.graph.RowCount == 0 {
 		// Empty publication needs no optional shared prepared search holder.
-		c.invalidateTypedGraphEmptyBaseKeeper(index)
+		c.invalidateTypedGraphStaleBaseKeeper(index)
 		return nil
 	}
 	_, err = c.acquireTypedGraphCapturedBaseCacheWithContext(ctx, index, p.options.Owners)
 	if err == nil {
-		// A concurrent empty fold may have passed cleanup while this build
+		// A concurrent fold may have passed cleanup while this build
 		// was in flight. Recheck after installing our optional keeper.
-		c.invalidateTypedGraphEmptyBaseKeeper(index)
+		c.invalidateTypedGraphStaleBaseKeeper(index)
 	}
 	return err
 }
 
-// Without a replacement warm, an empty base must release its previous keeper.
-// Observe the exact cache object only while the installed state is healthy and
-// empty. A later nonempty publication/cache replacement cannot be invalidated
-// by this exact-object cleanup; independent read-owner refs remain alive.
-func (c *Collection) invalidateTypedGraphEmptyBaseKeeper(index string) {
+// Idle sibling handles do not observe publication and self-invalidate. Visit
+// their existing manager registrations through the shared collection domains;
+// no new keeper registry or ownership of independently held readers is needed.
+func (c *Collection) retireTypedGraphCapturedBaseKeepers(index string) {
+	handles := []*Collection{c}
+	for _, domain := range c.collectionSchemaCoordinator().snapshotDomains() {
+		m := domain.manager
+		if m == nil {
+			continue
+		}
+		m.collectionsMu.RLock()
+		for handle := range m.collections {
+			if handle != c && handle.collectionName() == c.collectionName() {
+				handles = append(handles, handle)
+			}
+		}
+		m.collectionsMu.RUnlock()
+	}
+	for _, handle := range handles {
+		handle.invalidateTypedGraphStaleBaseKeeper(index)
+	}
+}
+
+// A build may finish after another handle's fold has swept idle keepers, even
+// before this handle first registers with its manager. Recheck the completed
+// keeper against current immutable base identity; suffix-only advances keep
+// that identity. Exact-object invalidation leaves replacements and owners alone.
+func (c *Collection) invalidateTypedGraphStaleBaseKeeper(index string) {
 	slot := collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}
 	coord := c.collectionSchemaCoordinator()
 	var old *collectionVectorIndexPreparedSearch
 	c.vectorBufferedSearchMu.Lock()
-	if state := coord.typedPublication.Load(); state != nil && !state.invalid && state.servingAdmitted && state.servingBase != nil && state.servingBase.graph.RowCount == 0 {
-		if entry := c.vectorBufferedSearch[slot]; entry != nil && !entry.building {
-			old = entry.prepared
-		}
+	if entry := c.vectorBufferedSearch[slot]; entry != nil && !entry.building {
+		old = entry.prepared
 	}
 	c.vectorBufferedSearchMu.Unlock()
 	if old != nil {
-		c.invalidateCollectionVectorIndexPreparedSearch(slot, old)
+		old.mu.RLock()
+		stale := false
+		if state := coord.typedPublication.Load(); state != nil && !state.invalid && state.servingAdmitted && state.servingBase != nil && !old.closed && old.capturedBase != nil && old.capturedBase.ref != nil {
+			stale = state.servingBase.graph.RowCount == 0 || state.servingBase.preparedKey != old.capturedBase.ref.key
+		}
+		old.mu.RUnlock()
+		if stale {
+			c.invalidateCollectionVectorIndexPreparedSearch(slot, old)
+		}
 	}
 }
 

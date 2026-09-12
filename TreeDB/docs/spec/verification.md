@@ -88,6 +88,25 @@ CAS conflict after physical apply, asserts public write rejection, then explicit
 Ensure recovery. These are deterministic correctness gates, not latency targets
 or power-loss qualification.
 
+`TestTypedGraphFoldRetiresSiblingKeepers` exercises warmed idle handles from the
+same and separate managers, keeper release after fold, independent old-view
+fetch, and refreshed public search. `TestLeafGenerationPackRelocationFollowsAcceptance`
+forces actual collection-root packing through success, a pre-acceptance error,
+and an accepted meta-wait error; it checks exactly-once relocation completion,
+the visible root coordinates, and value preservation before fail-closed error
+handling. These are lifetime/publication tests, not memory-peak evidence.
+`TestTypedGraphPublicEnsureLateSiblingKeeper` pauses the first, still-unregistered
+sibling warm across a nonempty fold, checks exact keeper-accounting release and
+held-reader preservation, and keeps a same-base suffix-only control warmed.
+`TestTypedGraphPublicFoldReclaimsWholeGenerationsWithoutPack` observes actual
+whole-dead generation files and a no-op pack, requires public Fold to remove
+those files, and checks current filtered search/materialization plus reopen.
+The `TestLeafGenerationMaintenanceLimits*` cases reject oversized directory,
+pager, manifest, and recoverable-snapshot inputs before indexing/GC work, inject
+growth between plan and actual pack snapshot, and retain successful admitted
+packing/GC plus reopen coverage. They verify per-phase footprint admission, not
+a cumulative I/O quota.
+
 `TestRecoverableColumnAssetReplayStrictFloor` checks exact excluded identities,
 strict equality retention, namespace mismatch, and disabled-floor behavior.
 `TestRecoverableColumnAssetReplayFloorUnknownAuthority` checks missing/zero and
