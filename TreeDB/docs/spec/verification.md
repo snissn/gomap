@@ -541,6 +541,14 @@ Invariant:
 Coverage:
 - `TreeDB/db/vlog_gc_test.go`:
   - `TestValueLogGC_RemovesUnreferencedSegment`
+- `TreeDB/db/durable_root_tracker_repair_test.go`:
+  - `TestDurableRootCandidateScanRepairsReferenceTracker`
+  - `TestDurableRootCandidateScanColdCollectionAttachmentRepairsTracker`
+  - `TestDurableRootCandidateScanAbortPreservesReferenceTracker`
+  - `TestDurableRootCandidateScanRejectsMismatchedEvidence`
+  - `TestDurableRootCandidateScanDoesNotApplyDeltaTwice`
+  - Covers exact empty/nonempty counts, candidate identity, activation ordering,
+    reopen, and avoiding repeated fallback scans on subsequent ordinary writes.
 
 ## 4. Value-Log Rewrite Correctness
 

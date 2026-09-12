@@ -61,6 +61,7 @@ type rootPublicationVisibleInstallV1 struct {
 	next page.MetaPageBody
 
 	post                        finalizeCommitPost
+	vlogRefCounts               *candidateValueLogRefCountsV1
 	valueLogSet                 *valuelog.Set
 	leafManifest                *leafGenerationManifest
 	installLeafManifest         bool
@@ -381,7 +382,11 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 }
 
 func (install *rootPublicationVisibleInstallV1) abort() {
-	if install == nil || install.activated || install.valueLogSet == nil || install.db == nil || install.db.valueLogManager == nil {
+	if install == nil || install.activated {
+		return
+	}
+	install.vlogRefCounts = nil
+	if install.valueLogSet == nil || install.db == nil || install.db.valueLogManager == nil {
 		return
 	}
 	_ = install.db.valueLogManager.Release(install.valueLogSet)
@@ -400,6 +405,12 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 	if db.meta.CommitSeq+1 != install.next.CommitSeq {
 		db.mu.Unlock()
 		return fmt.Errorf("%w: visible=%d candidate=%d", errDurableRootCandidateStale, db.meta.CommitSeq, install.next.CommitSeq)
+	}
+	if scanned := install.vlogRefCounts; scanned != nil && (scanned.idx != install.idx ||
+		scanned.commitSeq != install.next.CommitSeq || scanned.userRootID != install.next.UserRootPageID ||
+		scanned.systemRootID != install.next.SystemRootPageID || scanned.counts == nil) {
+		db.mu.Unlock()
+		return errors.New("root-publication scanned reference counts do not match candidate")
 	}
 	if db.testFailDurableRootVisibleInstall.Load() {
 		db.mu.Unlock()
@@ -462,7 +473,13 @@ func (install *rootPublicationVisibleInstallV1) completeOrderedPostActivation() 
 	db := install.db
 	var reportErr error
 	if db.valueLogRefTracker != nil {
-		if install.post.vlogRefDelta != nil {
+		if scanned := install.vlogRefCounts; scanned != nil {
+			// The full fallback scan already counted this exact candidate. Only
+			// its successful activation makes those counts current; aborted or
+			// stale candidates must leave the tracker untouched. This work stays
+			// ordered by durablePublishMu, like incremental delta application.
+			db.valueLogRefTracker.replace(scanned.counts, install.next.CommitSeq, true)
+		} else if install.post.vlogRefDelta != nil {
 			if err := db.valueLogRefTracker.applyDelta(install.post.commitSeq, install.post.vlogRefDelta); err != nil {
 				db.valueLogRefTracker.invalidate()
 				reportErr = err
@@ -472,6 +489,7 @@ func (install *rootPublicationVisibleInstallV1) completeOrderedPostActivation() 
 		}
 		install.post.vlogRefTrackerAdvanced = true
 	}
+	install.vlogRefCounts = nil
 	install.post.kickPrune = db.pruner.Enabled()
 	install.post.doPrune = !install.post.kickPrune
 	if !install.skipConditionalRootConflict {
@@ -695,12 +713,13 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	}
 	defer visibleBase.Release()
 
-	resources, err := db.captureDurableRootResourcesFromBaseV1(
+	var scanned candidateValueLogRefCountsV1
+	resources, err := db.captureDurableRootResourcesFromBaseWithRefCountsV1(
 		idx, next, vlogRefDelta, visibleBase, opts.durableResources,
 		opts.durableResourceRequirements, opts.durableResourceMutation,
 		opts.durableResourceAppendMutation, opts.durableResourceRequirementWork, opts.durableResourceRequirementsFallback,
 		opts.valueLogPublicationLocked,
-		&candidateTiming,
+		&candidateTiming, &scanned,
 	)
 	if err != nil {
 		return post, prePublishErr(fmt.Errorf("capture queued root dependencies: %w", err))
@@ -735,6 +754,9 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	)
 	if err != nil {
 		return post, prePublishErr(fmt.Errorf("prepare queued visible root: %w", err))
+	}
+	if scanned.counts != nil {
+		install.vlogRefCounts = &scanned
 	}
 	installOwned := true
 	defer func() {
