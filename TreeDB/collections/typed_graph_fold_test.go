@@ -8,6 +8,28 @@ import (
 	"time"
 )
 
+func TestTypedGraphFoldRowSourceCloseFailureReleasesPreparedResources(t *testing.T) {
+	col, _, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
+	registry := col.db.StableResourceIdentityPinRegistry()
+	beforePins := registry.ActivePins()
+	beforeIdentities := registry.ActiveIdentities()
+	beforeSeq, beforeRoot := dbCommitSeqAndSystemRoot(col.db)
+	injected := errors.New("injected streamed row close failure")
+	typedGraphFoldRowSourceCloseErrorForTest = injected
+	t.Cleanup(func() { typedGraphFoldRowSourceCloseErrorForTest = nil })
+
+	err := col.foldTypedGraph(context.Background(), typedGraphOverlapLimits().Cold, 128, typedGraphFoldTestAssetLimits(), nil)
+	if !errors.Is(err, injected) {
+		t.Fatalf("fold error=%v want %v", err, injected)
+	}
+	if afterSeq, afterRoot := dbCommitSeqAndSystemRoot(col.db); afterSeq != beforeSeq || afterRoot != beforeRoot {
+		t.Fatal("row close failure changed publication authority")
+	}
+	if pins, identities := registry.ActivePins(), registry.ActiveIdentities(); pins != beforePins || identities != beforeIdentities {
+		t.Fatalf("row close failure retained stable ownership: pins=%d/%d identities=%d/%d", pins, beforePins, identities, beforeIdentities)
+	}
+}
+
 func TestTypedGraphFoldCanceledStorageBarrier(t *testing.T) {
 	for _, phase := range []string{"capture", "install"} {
 		t.Run(phase, func(t *testing.T) {

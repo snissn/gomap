@@ -130,8 +130,26 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 	if err = ctx.Err(); err != nil {
 		return err
 	}
+	def := captured.meta.VectorIndexes[0]
 	stage := time.Now()
-	rows, _, err := c.materializeColumnStoreCompactionRows(ctx, captured, "")
+	streamed, err := typedGraphFoldStreamedSourcesEligible(captured.cfg, def)
+	if err != nil {
+		return err
+	}
+	var rows []columnDeclaredRow
+	var graphRows []columnVectorGraphAssetRow
+	var vectorSource *columnVectorGraphTypedColumnVectorSource
+	if streamed {
+		var used bool
+		graphRows, vectorSource, used, err = c.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(captured.snap, captured.catalog, captured.cfg, captured.records, captured.manifest, def)
+		streamed = used
+	}
+	if vectorSource != nil {
+		defer func() { err = errors.Join(err, vectorSource.Close()) }()
+	}
+	if err == nil && !streamed {
+		rows, _, err = c.materializeColumnStoreCompactionRows(ctx, captured, "")
+	}
 	if timing != nil {
 		timing.RowExtraction = time.Since(stage)
 	}
@@ -142,18 +160,29 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 		return err
 	}
 	stage = time.Now()
-	prepared, err := c.prepareTypedGraphCapturedAssets(captured, rows, admission)
+	var prepared ColumnPublishPreparedAssets
+	defer func() {
+		if prepared.stableResources != nil {
+			prepared.stableResources.Release()
+		}
+	}()
+	if streamed {
+		rowSource, sourceErr := newTypedGraphFoldRowSource(ctx, c, captured, graphRows)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		typedSource := typedGraphFoldVectorSource{ctx: ctx, rows: graphRows, field: columnStoreTypedColumnPartFields(captured.cfg)[0]}
+		prepared, err = c.prepareTypedGraphCapturedAssetsFromSources(captured, nil, rowSource, typedSource, admission)
+		err = errors.Join(err, rowSource.Close())
+	} else {
+		prepared, err = c.prepareTypedGraphCapturedAssets(captured, rows, admission)
+	}
 	if timing != nil {
 		timing.AssetPreparation = time.Since(stage)
 	}
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if prepared.stableResources != nil {
-			prepared.stableResources.Release()
-		}
-	}()
 	baseManifest, err := encodeColumnManifestAtGeneration(ColumnPublishManifestEncodeInput{Collection: captured.meta.Name, ColumnStore: captured.cfg, Operation: ColumnPublishOperationInsert, AppliedCommandLSN: captured.manifest.AppliedCommandLSN, Prepared: prepared}, captured.manifest.Generation)
 	if err != nil {
 		return err
@@ -162,33 +191,37 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 	if err != nil {
 		return err
 	}
-	def := captured.meta.VectorIndexes[0]
-	vectorColumn := -1
-	for i, column := range captured.cfg.Columns {
-		if column.Path == def.Field {
-			vectorColumn = i
-		}
-	}
-	if vectorColumn < 0 {
-		return ErrHybridSearchUnsupported
-	}
 	var rowPart uint64
 	for _, asset := range prepared.Assets {
 		if asset.Ref.Kind == ColumnAssetKindTCS1PartImage {
 			rowPart = asset.Ref.PartID
 		}
 	}
-	graphRows := make([]columnVectorGraphAssetRow, len(rows))
-	locators := make([]systemTargetEntry, len(rows))
-	for i, row := range rows {
-		ref := DocumentRowRef{DocumentID: row.ID, Generation: captured.manifest.Generation, PartID: rowPart, RowIndex: i, AppliedCommandLSN: captured.manifest.AppliedCommandLSN}
-		vector := row.Values[vectorColumn].Float32Vector
-		norm, e := columnVectorGraphInvNorm(vector)
-		if e != nil {
-			return e
+	if !streamed {
+		vectorColumn := -1
+		for i, column := range captured.cfg.Columns {
+			if column.Path == def.Field {
+				vectorColumn = i
+			}
 		}
-		graphRows[i] = columnVectorGraphAssetRow{ID: row.ID, Vector: vector, InvNorm: norm, BaseRowRef: ref}
-		locators[i] = systemTargetEntry{key: row.ID, value: encodeColumnPrimaryRowLocator(ref)}
+		if vectorColumn < 0 {
+			return ErrHybridSearchUnsupported
+		}
+		graphRows = make([]columnVectorGraphAssetRow, len(rows))
+		for i, row := range rows {
+			vector := row.Values[vectorColumn].Float32Vector
+			norm, e := columnVectorGraphInvNorm(vector)
+			if e != nil {
+				return e
+			}
+			graphRows[i] = columnVectorGraphAssetRow{ID: row.ID, Vector: vector, InvNorm: norm}
+		}
+	}
+	locators := make([]systemTargetEntry, len(graphRows))
+	for i := range graphRows {
+		ref := DocumentRowRef{DocumentID: graphRows[i].ID, Generation: captured.manifest.Generation, PartID: rowPart, RowIndex: i, AppliedCommandLSN: captured.manifest.AppliedCommandLSN}
+		graphRows[i].BaseRowRef = ref
+		locators[i] = systemTargetEntry{key: graphRows[i].ID, value: encodeColumnPrimaryRowLocator(ref)}
 	}
 	sort.Slice(locators, func(i, j int) bool { return bytes.Compare(locators[i].key, locators[j].key) < 0 })
 	if err = ctx.Err(); err != nil {

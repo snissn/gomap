@@ -318,6 +318,24 @@ type columnDeclaredRow struct {
 	Values  []columnDeclaredValue
 }
 
+type columnDeclaredRowSource interface {
+	// Row is repeatable. Returned values may be borrowed until the next Row
+	// call, and callers must serialize calls or provide their own synchronization.
+	Len() int
+	Row(int) (columnDeclaredRow, error)
+}
+
+type columnDeclaredRowsSource []columnDeclaredRow
+
+func (s columnDeclaredRowsSource) Len() int { return len(s) }
+
+func (s columnDeclaredRowsSource) Row(i int) (columnDeclaredRow, error) {
+	if i < 0 || i >= len(s) {
+		return columnDeclaredRow{}, fmt.Errorf("row index=%d outside rows=%d", i, len(s))
+	}
+	return s[i], nil
+}
+
 type columnPhysicalAssetEncodeInput struct {
 	Collection        string
 	Namespace         string
@@ -858,13 +876,28 @@ func convertJSONBytes(raw any) ([]byte, error) {
 }
 
 func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, columnPhysicalAssetSummary, error) {
+	return encodeColumnPhysicalAssetFromSource(input, columnDeclaredRowsSource(input.Rows))
+}
+
+func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, rows columnDeclaredRowSource) ([]byte, columnPhysicalAssetSummary, error) {
 	if input.Collection == "" || input.Namespace == "" || input.Generation == 0 || input.PartID == 0 {
 		return nil, columnPhysicalAssetSummary{}, errors.New("collections: column physical asset missing collection, namespace, generation, or part_id")
+	}
+	if rows == nil {
+		return nil, columnPhysicalAssetSummary{}, errors.New("collections: column physical asset missing row source")
 	}
 	if !isSupportedColumnPhysicalAssetOperation(input.Operation) {
 		return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: unsupported column physical asset operation %q", input.Operation)
 	}
-	for rowIdx, row := range input.Rows {
+	rowCount := rows.Len()
+	if rowCount < 0 {
+		return nil, columnPhysicalAssetSummary{}, errors.New("collections: column physical asset negative row count")
+	}
+	for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
+		row, err := rows.Row(rowIdx)
+		if err != nil {
+			return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d]: %w", rowIdx, err)
+		}
 		switch input.Operation {
 		case ColumnPublishOperationInsert, ColumnPublishOperationUpdate:
 			if row.Deleted {
@@ -904,8 +937,14 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 		}
 	}
 	var b bytes.Buffer
-	denseIDBase, useDenseIDRows := columnPhysicalAssetDenseBigEndianUint64RangeBase(input)
-	fixedIDWidth, useFixedIDRows := columnPhysicalAssetFixedIDRowEncodingWidth(input)
+	denseIDBase, useDenseIDRows, err := columnPhysicalAssetDenseBigEndianUint64RangeBaseFromSource(input, rows)
+	if err != nil {
+		return nil, columnPhysicalAssetSummary{}, err
+	}
+	fixedIDWidth, useFixedIDRows, err := columnPhysicalAssetFixedIDRowEncodingWidthFromSource(input, rows)
+	if err != nil {
+		return nil, columnPhysicalAssetSummary{}, err
+	}
 	version, err := columnPhysicalAssetVersionForColumns(input.Columns)
 	if err != nil {
 		return nil, columnPhysicalAssetSummary{}, err
@@ -925,7 +964,7 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 	writeManifestString(&b, string(input.Operation))
 	writeManifestUint64(&b, input.SchemaHash)
 	writeManifestUint64(&b, uint64(len(input.Columns)))
-	writeManifestUint64(&b, uint64(len(input.Rows)))
+	writeManifestUint64(&b, uint64(rowCount))
 	for _, col := range input.Columns {
 		writeManifestString(&b, col.Name)
 		writeManifestString(&b, col.Path)
@@ -945,7 +984,7 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 		writeManifestUint64(&b, denseIDBase)
 		payload := b.Bytes()
 		return payload, columnPhysicalAssetSummary{
-			RowCount:     len(input.Rows),
+			RowCount:     rowCount,
 			ColumnCount:  len(input.Columns),
 			PayloadBytes: int64(len(payload)),
 		}, nil
@@ -953,17 +992,25 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 	if useFixedIDRows {
 		writeManifestString(&b, columnPhysicalAssetRowEncodingFixedID)
 		writeManifestUint64(&b, uint64(fixedIDWidth))
-		for _, row := range input.Rows {
+		for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
+			row, err := rows.Row(rowIdx)
+			if err != nil {
+				return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d]: %w", rowIdx, err)
+			}
 			_, _ = b.Write(row.ID)
 		}
 		payload := b.Bytes()
 		return payload, columnPhysicalAssetSummary{
-			RowCount:     len(input.Rows),
+			RowCount:     rowCount,
 			ColumnCount:  len(input.Columns),
 			PayloadBytes: int64(len(payload)),
 		}, nil
 	}
-	for _, row := range input.Rows {
+	for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
+		row, err := rows.Row(rowIdx)
+		if err != nil {
+			return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d]: %w", rowIdx, err)
+		}
 		writeManifestBytes(&b, row.ID)
 		writeManifestBool(&b, row.Deleted)
 		if row.Deleted {
@@ -1030,7 +1077,7 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 	}
 	payload := b.Bytes()
 	return payload, columnPhysicalAssetSummary{
-		RowCount:     len(input.Rows),
+		RowCount:     rowCount,
 		ColumnCount:  len(input.Columns),
 		PayloadBytes: int64(len(payload)),
 	}, nil
@@ -1365,47 +1412,73 @@ func isSupportedColumnPhysicalAssetVersion(version uint16) bool {
 }
 
 func columnPhysicalAssetFixedIDRowEncodingWidth(input columnPhysicalAssetEncodeInput) (int, bool) {
-	if len(input.Columns) != 0 || len(input.Rows) == 0 {
-		return 0, false
+	width, ok, _ := columnPhysicalAssetFixedIDRowEncodingWidthFromSource(input, columnDeclaredRowsSource(input.Rows))
+	return width, ok
+}
+
+func columnPhysicalAssetFixedIDRowEncodingWidthFromSource(input columnPhysicalAssetEncodeInput, rows columnDeclaredRowSource) (int, bool, error) {
+	if len(input.Columns) != 0 || rows.Len() == 0 {
+		return 0, false, nil
 	}
 	if !isSupportedColumnPhysicalAssetOperation(input.Operation) {
-		return 0, false
+		return 0, false, nil
 	}
 	deleted := input.Operation == ColumnPublishOperationDelete
-	width := len(input.Rows[0].ID)
-	if width == 0 || input.Rows[0].Deleted != deleted {
-		return 0, false
+	first, err := rows.Row(0)
+	if err != nil {
+		return 0, false, fmt.Errorf("collections: column physical asset row[0]: %w", err)
 	}
-	for _, row := range input.Rows[1:] {
+	width := len(first.ID)
+	if width == 0 || first.Deleted != deleted {
+		return 0, false, nil
+	}
+	for i := 1; i < rows.Len(); i++ {
+		row, err := rows.Row(i)
+		if err != nil {
+			return 0, false, fmt.Errorf("collections: column physical asset row[%d]: %w", i, err)
+		}
 		if len(row.ID) != width || row.Deleted != deleted {
-			return 0, false
+			return 0, false, nil
 		}
 	}
-	return width, true
+	return width, true, nil
 }
 
 func columnPhysicalAssetDenseBigEndianUint64RangeBase(input columnPhysicalAssetEncodeInput) (uint64, bool) {
-	if len(input.Columns) != 0 || len(input.Rows) == 0 {
-		return 0, false
+	base, ok, _ := columnPhysicalAssetDenseBigEndianUint64RangeBaseFromSource(input, columnDeclaredRowsSource(input.Rows))
+	return base, ok
+}
+
+func columnPhysicalAssetDenseBigEndianUint64RangeBaseFromSource(input columnPhysicalAssetEncodeInput, rows columnDeclaredRowSource) (uint64, bool, error) {
+	if len(input.Columns) != 0 || rows.Len() == 0 {
+		return 0, false, nil
 	}
 	if !isSupportedColumnPhysicalAssetOperation(input.Operation) {
-		return 0, false
+		return 0, false, nil
 	}
 	deleted := input.Operation == ColumnPublishOperationDelete
-	base, ok := columnPhysicalAssetParseBigEndianUint64ID(input.Rows[0].ID)
-	if !ok || input.Rows[0].Deleted != deleted {
-		return 0, false
+	first, err := rows.Row(0)
+	if err != nil {
+		return 0, false, fmt.Errorf("collections: column physical asset row[0]: %w", err)
 	}
-	if len(input.Rows) > 1 && base > ^uint64(0)-uint64(len(input.Rows)-1) {
-		return 0, false
+	base, ok := columnPhysicalAssetParseBigEndianUint64ID(first.ID)
+	if !ok || first.Deleted != deleted {
+		return 0, false, nil
 	}
-	for i, row := range input.Rows[1:] {
+	if rows.Len() > 1 && base > ^uint64(0)-uint64(rows.Len()-1) {
+		return 0, false, nil
+	}
+	for i := 1; i < rows.Len(); i++ {
+		row, err := rows.Row(i)
+		if err != nil {
+			return 0, false, fmt.Errorf("collections: column physical asset row[%d]: %w", i, err)
+		}
 		value, ok := columnPhysicalAssetParseBigEndianUint64ID(row.ID)
-		if !ok || row.Deleted != deleted || value != base+uint64(i+1) {
-			return 0, false
+		if !ok || row.Deleted != deleted || value != base+uint64(i) {
+			return 0, false, nil
 		}
 	}
-	return base, true
+	return base, true, nil
 }
 
 func columnPhysicalAssetParseBigEndianUint64ID(id []byte) (uint64, bool) {

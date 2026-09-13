@@ -327,6 +327,10 @@ func buildTypedColumnPartImageForDeclaredRows(cfg ColumnStoreConfig, generation,
 }
 
 func buildTypedColumnPartImageForDeclaredRowsWithResult(cfg ColumnStoreConfig, generation, partID uint64, rows []columnDeclaredRow) (typedColumnPartImageBuildResult, error) {
+	return buildTypedColumnPartImageFromSourceWithResult(cfg, generation, partID, newTypedColumnDeclaredRowSource(cfg.Columns, rows))
+}
+
+func buildTypedColumnPartImageFromSourceWithResult(cfg ColumnStoreConfig, generation, partID uint64, rows typedColumnAdapterRowSource) (typedColumnPartImageBuildResult, error) {
 	if !columnStoreHasTypedColumnPartOwners(cfg) {
 		return typedColumnPartImageBuildResult{}, nil
 	}
@@ -343,7 +347,7 @@ func buildTypedColumnPartImageForDeclaredRowsWithResult(cfg ColumnStoreConfig, g
 		return typedColumnPartImageBuildResult{}, err
 	}
 	adapterOpts.DictionaryModes = typedColumnPublicationDictionaryModes(fields)
-	part, err := buildTypedColumnAdapterPartFromDeclaredRows(adapterOpts, cfg.Columns, rows)
+	part, err := buildTypedColumnAdapterPartFromSource(adapterOpts, rows)
 	if err != nil {
 		return typedColumnPartImageBuildResult{}, err
 	}
