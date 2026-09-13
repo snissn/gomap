@@ -8,9 +8,10 @@ import (
 )
 
 type collectionCommandWALCoordinator struct {
-	mu    sync.Mutex
-	cond  *sync.Cond
-	owner *collectionWriteDomain
+	mu               sync.Mutex
+	cond             *sync.Cond
+	owner            *collectionWriteDomain
+	typedUpsertGroup *typedUpsertGroup
 }
 
 var collectionCommandWALCoordinators sync.Map
