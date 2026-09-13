@@ -97,8 +97,9 @@ The admission states are:
    coherent base plus preceding successful requests. It rejects semantic
    failures before assigning that request an LSN, then finalizes and appends one
    command frame per changing request and publishes the coalesced roots/assets
-   with contiguous LSN coverage. An all-unchanged request retains the existing
-   no-frame/no-publication shortcut.
+   with contiguous LSN coverage. An all-unchanged typed upsert retains the
+   existing no-frame/no-publication shortcut; explicit source replacement does
+   not.
 4. **Installed:** the durable command prefix and coherent collection state are
    installed. Only now may each covered request return success.
 
