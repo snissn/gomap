@@ -402,6 +402,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/typed_graph_base_copy_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
 	{path: "TreeDB/collections/typed_graph_base_filter.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
 	{path: "TreeDB/collections/typed_graph_filter_cache.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	// The Q1 scalar-u8 traversal fixture reads the retained public configuration
+	// only to bind a cached typed-graph schema pin.
+	{path: "TreeDB/collections/typed_graph_scalar_u8_traversal_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	// Full-width diagnostic fixtures use the existing compatibility configuration.
 	{path: "TreeDB/collections/typed_graph_scale_diagnostic_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/typed_write_768_diagnostic_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
