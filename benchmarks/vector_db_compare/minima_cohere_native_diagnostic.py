@@ -27,6 +27,10 @@ import numpy as np
 import minima_treedb_runner as existing
 
 SCHEMA = "treedb_minima_cohere_native_diagnostic/v1"
+RSS_ARTIFACT_SCHEMA = "treedb_cohere_768_rss_boundary/v1"
+RSS_RECALL_TARGET = .90
+RSS_CALIBRATION_QUERIES = list(range(20))
+RSS_EVALUATION_QUERIES = list(range(20, 100))
 GIB = 1 << 30
 
 
@@ -83,20 +87,17 @@ def quantiles(values):
                for name, fraction in (("p50", .5), ("p95", .95), ("p99", .99), ("max", 1))}}
 
 
-def prepare(args):
-    source = Path(__file__).resolve().parents[2]
-    validate_imports(source)
-    harness = existing.repository_commit()
-    dataset = args.dataset.resolve()
+def dataset_identity(dataset, rows):
+    dataset = Path(dataset).resolve()
     manifest = json.loads((dataset / "manifest.json").read_text())
     if (manifest.get("dimensions"), manifest.get("top_k"), manifest.get("exact_train_query_overlap")) != (768, 10, 0):
         raise ValueError("expected the existing real 768D top-10 nonoverlapping diagnostic export")
-    if args.rows not in (512, 500000) or args.rows > manifest["rows"] or math.gcd(args.rows, 7919) != 1:
+    if rows not in (512, 500000) or rows > manifest["rows"] or math.gcd(rows, 7919) != 1:
         raise ValueError("only real-prefix 512-row smoke or 500000-row diagnostic runs are supported")
-    query_count = 4 if args.rows == 512 else 100
+    query_count = 4 if rows == 512 else 100
     if query_count > manifest["query_count"]:
         raise ValueError("not enough exported queries")
-    if args.rows == 500000 and (manifest["rows"], manifest["query_count"]) != (500000, 100):
+    if rows == 500000 and (manifest["rows"], manifest["query_count"]) != (500000, 100):
         raise ValueError("diagnostic oracle requires exactly 500000 exported rows and 100 queries")
     files = {}
     for name, expected_size in (("documents", manifest["rows"] * 768 * 4),
@@ -107,6 +108,86 @@ def prepare(args):
         files[name] = digest(path)
         if files[name] != manifest[name + "_sha256"]:
             raise ValueError(f"{name} hash does not match dataset manifest")
+    return dataset, manifest, files, query_count
+
+
+def calibrate_ann_control(search, truth, controls, calibration_queries, evaluation_queries, target):
+    if (not controls or controls != sorted(set(controls)) or not calibration_queries or not evaluation_queries
+            or set(calibration_queries) & set(evaluation_queries) or not 0 < target <= 1):
+        raise ValueError("invalid ANN quality calibration contract")
+
+    def recalls(control, queries):
+        result = []
+        for query in queries:
+            expected = truth[query]
+            actual = search(control, query)
+            if len(actual) != len(expected) or len(set(actual)) != len(actual):
+                raise RuntimeError("ANN result cardinality differs from exact truth")
+            result.append(len(set(actual) & set(expected)) / len(expected))
+        return result
+
+    curve, selected = [], None
+    for control in controls:
+        values = recalls(control, calibration_queries)
+        mean = sum(values) / len(values)
+        curve.append({"control": control, "mean_recall_at_10": mean, "per_query": values})
+        if mean >= target:
+            selected = control
+            break
+    evaluation = [] if selected is None else recalls(selected, evaluation_queries)
+    mean = sum(evaluation) / len(evaluation) if evaluation else 0.0
+    return {
+        "target_mean_recall_at_10": target, "selected_control": selected,
+        "calibration": {"queries": list(calibration_queries), "curve": curve},
+        "evaluation": {"queries": list(evaluation_queries), "per_query": evaluation,
+                       "mean_recall_at_10": mean, "passed": selected is not None and mean >= target},
+    }
+
+
+def rss_comparison_contract(plan):
+    return {
+        "schema": "cohere_500k_768d_matched_rss/v1", "rows": plan["rows"],
+        "dimensions": plan["dimensions"], "metric": "cosine", "top_k": plan["top_k"],
+        "dataset_manifest_sha256": plan["dataset_manifest_sha256"],
+        "dataset_files_sha256": plan["dataset_files_sha256"],
+        "logical_ids": "row-<six-digit-ordinal>",
+        "document": "id, content, FP32 embedding, nested meta.user_id and meta.fpath",
+        "scalar_indexes": ["meta.fpath:string", "meta.user_id:string"],
+        "query_filter": "none (all 500000 rows eligible)",
+        "batch_size": plan["batch_size"], "durability_visibility": "durable_and_visible_before_ack",
+        "cpu_affinity": plan["cpu_affinity"], "host_memory_bytes": plan["host_memory_bytes"],
+        "platform": plan["platform"], "quality_metric": "mean_recall_at_10",
+        "quality_target": plan["rss_recall_target"],
+        "calibration_queries": plan["rss_calibration_queries"],
+        "evaluation_queries": plan["rss_evaluation_queries"],
+        "rss_boundary": "fresh_server_and_backend_through_initial_ann_ready_and_quality_gated_query",
+        "rss_scope": "server_process_lifetime_VmHWM_including_resident_mappings",
+    }
+
+
+def process_peak_at_boundary(pid, expected_identity, expected_affinity):
+    sample = existing.common.process_peak_rss(pid)
+    identity = existing.common.linux_process_identity(pid)
+    try:
+        affinity = sorted(os.sched_getaffinity(pid)) if type(pid) is int and pid > 0 else []
+    except (OSError, ProcessLookupError):
+        affinity = []
+    if (sample.get("availability") != "measured" or sample.get("bytes") is None
+            or identity != expected_identity or sample.get("process_identity") != expected_identity
+            or affinity != expected_affinity):
+        return {**sample, "availability": "unavailable", "bytes": None,
+                "reason": "server process identity, affinity, or VmHWM changed/unavailable at boundary"}
+    return sample
+
+
+def prepare(args):
+    source = Path(__file__).resolve().parents[2]
+    validate_imports(source)
+    harness = existing.repository_commit()
+    dataset, manifest, files, query_count = dataset_identity(args.dataset, args.rows)
+    rss_only = getattr(args, "rss_only", False)
+    if rss_only and args.rows != 500000:
+        raise ValueError("matched RSS mode requires the frozen 500000-row export")
     existing.service_binary_build_provenance(args.service_bin, args.product_commit)
     root_tree = lambda path: subprocess.check_output(["git", "rev-parse", "HEAD:" + path], cwd=source, text=True).strip()
     product_tree = lambda path: subprocess.check_output(["git", "rev-parse", args.product_commit + ":" + path], cwd=source, text=True).strip()
@@ -123,6 +204,9 @@ def prepare(args):
             "serving": serving, "serving_sha256": digest(args.serving), "serving_path": str(args.serving.resolve()),
             "run_dir": str(args.run_dir.resolve()), "rows": args.rows, "dimensions": 768, "queries": query_count,
             "top_k": 10, "batch_size": 256, "efs": [128, 256, 512, 1024, 2048], "overlap_ef": 512,
+            "rss_only": rss_only, "rss_recall_target": RSS_RECALL_TARGET,
+            "rss_calibration_queries": RSS_CALIBRATION_QUERIES,
+            "rss_evaluation_queries": RSS_EVALUATION_QUERIES,
             "overlap_eligible": counts(args.rows)[1],
             "eligible_counts": counts(args.rows), "reader_concurrency": 4, "writer_calls": 8,
             "scalar_shape": "dispersed unique rank=(row*7919)%rows; user_id range, fpath equality for lifecycle delete",
@@ -131,6 +215,7 @@ def prepare(args):
             "operation_timeout_s": 600, "wall_limit_s": 2700, "minimum_free_bytes": 10 * GIB,
             "maximum_output_bytes": 11 * GIB, "maximum_combined_rss_bytes": 24 * GIB,
             "gomaxprocs": os.environ.get("GOMAXPROCS", ""), "cpu_affinity": sorted(os.sched_getaffinity(0)),
+            "host_memory_bytes": existing.common.memory_bytes(),
             "blas_threads": {key: os.environ.get(key, "") for key in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS")},
             "python": os.sys.version, "numpy": np.__version__, "platform": platform.platform(),
             "query_usage": "previously opened diagnostic/calibration queries, not final holdout",
@@ -376,6 +461,45 @@ class Run:
             raise RuntimeError("public full-state count mismatch")
         self.emit("full_state_verified", rows=seen, vectors_checked=seen, normalized_full_vector_tolerance=1e-6)
 
+    def rss_boundary(self):
+        truth = self.truth[str(self.plan["rows"])]
+
+        def search(ef, query):
+            response = self.search("rss_quality", self.plan["rows"], ef, query)
+            return [document.id for document in response.documents]
+
+        quality = calibrate_ann_control(
+            search, truth, self.plan["efs"], self.plan["rss_calibration_queries"],
+            self.plan["rss_evaluation_queries"], self.plan["rss_recall_target"],
+        )
+        process = self.controller.process
+        rss = process_peak_at_boundary(
+            process.pid if process else None, self.controller._owned_identity, self.plan["cpu_affinity"],
+        )
+        reasons = []
+        if not quality["evaluation"]["passed"]:
+            reasons.append("no independently selected TreeDB EF passed evaluation recall")
+        if rss.get("availability") != "measured":
+            reasons.append("TreeDB server VmHWM unavailable or process drifted")
+        artifact = {
+            "schema": RSS_ARTIFACT_SCHEMA, "state": "calibrated" if not reasons else "uncalibrated",
+            "backend": "treedb", "comparison_contract": rss_comparison_contract(self.plan),
+            "quality": {**quality, "control_name": "ef_search", "exact_mode": False},
+            "rss": rss, "reasons": reasons,
+            "readiness": {"graph_action": "build", "successful_ann_queries": sum(
+                len(row["per_query"]) for row in quality["calibration"]["curve"]
+            ) + len(quality["evaluation"]["per_query"])},
+            "provenance": {key: self.plan[key] for key in (
+                "harness_commit", "harness_source_sha256", "harness_trees", "product_commit",
+                "product_trees", "service_sha256", "dataset_manifest_sha256", "dataset_files_sha256",
+                "serving_sha256",
+            )},
+        }
+        (self.output / "rss.json").write_bytes(canonical(artifact))
+        self.emit("rss_boundary", artifact=artifact)
+        if reasons:
+            raise RuntimeError("; ".join(reasons))
+
     def execute(self):
         self.started = time.monotonic()
         monitor = threading.Thread(target=self.guard, daemon=True)
@@ -388,24 +512,27 @@ class Run:
             for start in range(0, self.plan["rows"], 256):
                 self.upsert(list(range(start, min(start + 256, self.plan["rows"]))), "initial_durable_ingest")
             self.timed("initial_graph_build", lambda: self.optimize("build"))
-            # Cache-cold means first request for this predicate, not OS/disk-cold.
-            for eligible in self.plan["eligible_counts"]:
-                self.search("predicate_first_query", eligible, 512, 0)
-                for ef in self.plan["efs"]:
+            if self.plan["rss_only"]:
+                self.rss_boundary()
+            else:
+                # Cache-cold means first request for this predicate, not OS/disk-cold.
+                for eligible in self.plan["eligible_counts"]:
+                    self.search("predicate_first_query", eligible, 512, 0)
+                    for ef in self.plan["efs"]:
+                        for query in range(self.plan["queries"]):
+                            self.search("warm_curve", eligible, ef, query)
+                self.overlap()
+                self.lifecycle()
+                self.timed("pre_close_fold", lambda: self.optimize("fold"))
+                self.timed("close", self.clients.close)
+                validate_shutdowns(self.controller.lifetimes, 1)
+                self.timed("reopen", self.controller.start)
+                self.timed("idempotent_ensure", self.ensure)
+                self.timed("reopen_graph_ensure", lambda: self.optimize("ensure"))
+                for eligible in self.plan["eligible_counts"]:
                     for query in range(self.plan["queries"]):
-                        self.search("warm_curve", eligible, ef, query)
-            self.overlap()
-            self.lifecycle()
-            self.timed("pre_close_fold", lambda: self.optimize("fold"))
-            self.timed("close", self.clients.close)
-            validate_shutdowns(self.controller.lifetimes, 1)
-            self.timed("reopen", self.controller.start)
-            self.timed("idempotent_ensure", self.ensure)
-            self.timed("reopen_graph_ensure", lambda: self.optimize("ensure"))
-            for eligible in self.plan["eligible_counts"]:
-                for query in range(self.plan["queries"]):
-                    self.search("post_reopen_curve", eligible, 512, query)
-            self.timed("verification_only_full_scroll", self.scroll)
+                        self.search("post_reopen_curve", eligible, 512, query)
+                self.timed("verification_only_full_scroll", self.scroll)
             if self.failure:
                 raise RuntimeError(self.failure)
         except BaseException as exc:
@@ -414,7 +541,7 @@ class Run:
         finally:
             try:
                 self.clients.close()
-                validate_shutdowns(self.controller.lifetimes, 2)
+                validate_shutdowns(self.controller.lifetimes, 1 if self.plan["rss_only"] else 2)
             except BaseException as exc:
                 failed = failed or f"shutdown: {exc}"
             self.cancel.set()
@@ -444,6 +571,7 @@ def main():
     parser.add_argument("--serving", required=True, type=Path)
     parser.add_argument("--run-dir", required=True, type=Path)
     parser.add_argument("--rows", type=int, choices=[512, 500000], default=500000)
+    parser.add_argument("--rss-only", action="store_true")
     parser.add_argument("--url", default="http://127.0.0.1:17420")
     parser.add_argument("--native-address", default="127.0.0.1:17422")
     parser.add_argument("--diagnostics-url", default="http://127.0.0.1:17421")

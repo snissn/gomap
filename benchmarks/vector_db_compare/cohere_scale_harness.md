@@ -81,6 +81,68 @@ This is neither ANN quality evidence nor crash/power-loss certification. Direct
 Go runs need their own clean source/binary provenance capture; the scale wrapper
 runs only the scale fixture.
 
+## Matched query-ready RSS comparison
+
+`minima_cohere_native_diagnostic.py --rss-only` and
+`minima_cohere_qdrant_rss_diagnostic.py` compare fresh server processes on the
+same frozen 500K x 768D export. Run them serially on the same CPU set and quiet
+host. Both use 256-row durable-and-visible batches, logical `row-*` IDs, FP32
+cosine vectors, `content`, nested `meta.user_id`/`meta.fpath`, and both scalar
+indexes. Qdrant maps the logical ID to a deterministic UUID only because its
+physical point-ID type requires it; the matched logical ID remains in payload.
+
+Each backend selects its lowest tested ANN control on queries 0..19 at mean
+recall@10 >= 0.90, then must independently pass the same target on queries
+20..99. TreeDB tunes `ef_search`; Qdrant tunes `hnsw_ef`. Qdrant `exact=true` is
+run once after the RSS sample as a correctness reference and is never used as
+the ANN latency, quality, or RSS boundary.
+
+First freeze and run TreeDB from a clean committed checkout and an exact clean
+service binary. `SERVING_JSON` is the already reviewed column-graph serving
+configuration. The result is `TREE_RUN/rss.json`.
+
+```sh
+taskset -c 0-5 python benchmarks/vector_db_compare/minima_cohere_native_diagnostic.py \
+  --freeze "$TREE_PLAN" --dataset "$COHERE_EXPORT" --rows 500000 --rss-only \
+  --service-bin "$TREE_SERVICE" --product-commit "$TREE_COMMIT" \
+  --serving "$SERVING_JSON" --run-dir "$TREE_RUN"
+TREE_PLAN_SHA=$(sha256sum "$TREE_PLAN" | awk '{print $1}')
+taskset -c 0-5 python benchmarks/vector_db_compare/minima_cohere_native_diagnostic.py \
+  --run "$TREE_PLAN" --expected-plan-sha256 "$TREE_PLAN_SHA" \
+  --dataset "$COHERE_EXPORT" --rows 500000 --rss-only \
+  --service-bin "$TREE_SERVICE" --product-commit "$TREE_COMMIT" \
+  --serving "$SERVING_JSON" --run-dir "$TREE_RUN"
+```
+
+Then start the pinned standalone Qdrant 1.19.0 binary with the existing owned
+restart helper and a new storage directory. Use the repository's pinned
+`qdrant-client==1.19.0` Python environment. Freeze and run while that exact PID
+and empty backend remain alive; `QDRANT_RUN` must not already exist.
+
+```sh
+QDRANT_PID=$(taskset -c 0-5 scripts/restart_minima_qdrant_backend.sh standalone \
+  "$QDRANT_BIN" "$QDRANT_PORT" "$QDRANT_STORAGE" "$QDRANT_LOG" "$QDRANT_PID_FILE")
+taskset -c 0-5 "$QDRANT_PYTHON" benchmarks/vector_db_compare/minima_cohere_qdrant_rss_diagnostic.py \
+  --freeze "$QDRANT_PLAN" --dataset "$COHERE_EXPORT" --treedb-artifact "$TREE_RUN/rss.json" \
+  --qdrant-bin "$QDRANT_BIN" --storage-path "$QDRANT_STORAGE" --server-pid "$QDRANT_PID" \
+  --pid-file "$QDRANT_PID_FILE" --url "http://127.0.0.1:$QDRANT_PORT" --run-dir "$QDRANT_RUN"
+QDRANT_PLAN_SHA=$(sha256sum "$QDRANT_PLAN" | awk '{print $1}')
+taskset -c 0-5 "$QDRANT_PYTHON" benchmarks/vector_db_compare/minima_cohere_qdrant_rss_diagnostic.py \
+  --run "$QDRANT_PLAN" --expected-plan-sha256 "$QDRANT_PLAN_SHA" \
+  --dataset "$COHERE_EXPORT" --treedb-artifact "$TREE_RUN/rss.json" \
+  --qdrant-bin "$QDRANT_BIN" --storage-path "$QDRANT_STORAGE" --server-pid "$QDRANT_PID" \
+  --pid-file "$QDRANT_PID_FILE" --url "http://127.0.0.1:$QDRANT_PORT" --run-dir "$QDRANT_RUN"
+```
+
+`comparison.json` says `accept` when TreeDB server-process `VmHWM` is no greater
+than Qdrant's and recommends stopping further RSS work. Otherwise it reports the
+TreeDB-minus-Qdrant byte delta and ratio as `investigate`. Missing `VmHWM`, PID
+drift, nonempty backends, readiness/quality failures, or mismatched frozen
+artifacts produce `uncalibrated`. Qdrant readiness requires green/OK optimizer
+state, exact and indexed vector counts of 500,000, and both scalar indexes.
+This comparison does not replace or retroactively pass the historical 2.5M x 8D
+M5 contract; fold and restart RSS remain separately reported there.
+
 ## Retained evidence gate
 
 Land the reviewed harness before expensive retained collection. Freeze the exact
