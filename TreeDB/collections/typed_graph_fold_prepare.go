@@ -77,6 +77,8 @@ type typedGraphFoldRowSource struct {
 	scratch    columnPhysicalRowReaderScratch
 }
 
+var typedGraphFoldRowSourceCloseErrorForTest error
+
 func newTypedGraphFoldRowSource(ctx context.Context, c *Collection, state columnStoreCompactionState, rows []columnVectorGraphAssetRow) (*typedGraphFoldRowSource, error) {
 	view, err := c.prepareColumnPhysicalScanSnapshotViewAtSnapshot(state.snap, state.catalog, state.meta.Name, state.baseRoot, state.cfg, true)
 	if err != nil {
@@ -125,7 +127,9 @@ func (s *typedGraphFoldRowSource) Row(i int) (columnDeclaredRow, error) {
 	return columnDeclaredRow{ID: graphRow.ID, Values: row.Values}, nil
 }
 
-func (s *typedGraphFoldRowSource) Close() error { return s.readView.Close() }
+func (s *typedGraphFoldRowSource) Close() error {
+	return errors.Join(s.readView.Close(), typedGraphFoldRowSourceCloseErrorForTest)
+}
 
 type typedGraphFoldVectorSource struct {
 	ctx   context.Context

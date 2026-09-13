@@ -161,6 +161,11 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 	}
 	stage = time.Now()
 	var prepared ColumnPublishPreparedAssets
+	defer func() {
+		if prepared.stableResources != nil {
+			prepared.stableResources.Release()
+		}
+	}()
 	if streamed {
 		rowSource, sourceErr := newTypedGraphFoldRowSource(ctx, c, captured, graphRows)
 		if sourceErr != nil {
@@ -178,11 +183,6 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if prepared.stableResources != nil {
-			prepared.stableResources.Release()
-		}
-	}()
 	baseManifest, err := encodeColumnManifestAtGeneration(ColumnPublishManifestEncodeInput{Collection: captured.meta.Name, ColumnStore: captured.cfg, Operation: ColumnPublishOperationInsert, AppliedCommandLSN: captured.manifest.AppliedCommandLSN, Prepared: prepared}, captured.manifest.Generation)
 	if err != nil {
 		return err

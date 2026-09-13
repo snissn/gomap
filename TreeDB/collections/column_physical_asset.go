@@ -319,6 +319,8 @@ type columnDeclaredRow struct {
 }
 
 type columnDeclaredRowSource interface {
+	// Row is repeatable. Returned values may be borrowed until the next Row
+	// call, and callers must serialize calls or provide their own synchronization.
 	Len() int
 	Row(int) (columnDeclaredRow, error)
 }
