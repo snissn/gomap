@@ -25,6 +25,8 @@ type typedWrite768SearchResult struct {
 	WallNS        int64
 	BaseANNScored uint64
 	DeltaScored   uint64
+	Started       time.Time
+	Ended         time.Time
 }
 
 // Opt-in phase diagnostic, not a latency assertion or a vector-recall benchmark.
@@ -223,6 +225,9 @@ func TestTypedWrite768ReadWriteInteractionDiagnostic(t *testing.T) {
 			var baseANNScored, deltaScored uint64
 			for _, readerSearches := range searches {
 				for _, search := range readerSearches {
+					if cell.writers > 0 && (!search.Ended.After(writerStarted) || !search.Started.Before(writerEnded)) {
+						continue
+					}
 					all = append(all, search.WallNS)
 					baseANNScored += search.BaseANNScored
 					deltaScored += search.DeltaScored
@@ -342,12 +347,13 @@ func typedWrite768Search(col *Collection, query []float32) (typedWrite768SearchR
 			err = closeErr
 		}
 	}
-	elapsed := time.Since(started)
+	ended := time.Now()
+	elapsed := ended.Sub(started)
 	if err == nil && (len(response.Results) != 10 || !response.Stats.ColumnGraphWork.Completed) {
 		err = fmt.Errorf("incomplete public column_graph search: results=%d work=%+v", len(response.Results), response.Stats.ColumnGraphWork)
 	}
 	work := response.Stats.ColumnGraphWork
-	return typedWrite768SearchResult{WallNS: elapsed.Nanoseconds(), BaseANNScored: work.BaseANNScored, DeltaScored: work.DeltaScored}, err
+	return typedWrite768SearchResult{WallNS: elapsed.Nanoseconds(), BaseANNScored: work.BaseANNScored, DeltaScored: work.DeltaScored, Started: started, Ended: ended}, err
 }
 
 func typedWrite768StatsDelta(t *testing.T, before, after map[string]string) map[string]uint64 {

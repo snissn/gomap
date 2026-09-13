@@ -56,7 +56,7 @@ diagnostic, not successful write-throughput evidence. All phases fail on write
 errors; rejected attempts must not be reported as completed durable writes.
 
 The 768D write diagnostics are separate opt-in synthetic-vector diagnostics:
-`GOMAP_WRITE_768_DIAGNOSTIC=1 go test ./TreeDB/collections
+`GOMAP_WRITE_768_DIAGNOSTIC=1 go test -p=1 ./TreeDB/collections
 ./TreeDB/documentservice -run
 '^Test(TypedWrite768(Diagnostic|ReadWriteInteractionDiagnostic)|DocumentServiceTypedWrite768Diagnostic)$'
 -count=1 -v`. They time 16 durable upsert calls of previously absent IDs at
