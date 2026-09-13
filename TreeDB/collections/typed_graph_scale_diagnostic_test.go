@@ -279,18 +279,28 @@ func TestTypedGraphScaleDiagnostic(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if plan.count != count || plan.base.Count() != count {
+			t.Fatalf("filter membership cardinality: eligible=%d plan=%d base=%d", count, plan.count, plan.base.Count())
+		}
 		membershipWork := plan.work(true)
 		emit(map[string]any{"phase": "filter_membership_prepare", "eligible": count, "elapsed_us": float64(time.Since(started).Nanoseconds()) / 1000, "work": membershipWork})
 		if count == 4096 || count == 4097 || count == 5000 || count == 50000 {
+			navigationBudget := opts.Filter.RetainedBytes - int(membershipWork.RetainedBytes)
 			started = time.Now()
-			navigation, buildErr := buildTypedGraphFilterNavigation(t.Context(), owner.overlay, plan, opts.Filter.RetainedBytes-int(membershipWork.RetainedBytes))
+			navigation, buildErr := buildTypedGraphFilterNavigation(t.Context(), owner.overlay, plan, navigationBudget)
 			buildElapsed := time.Since(started)
 			if buildErr == errTypedGraphFilterNavigationDeclined {
-				emit(map[string]any{"phase": "filter_navigation_build", "eligible": count, "elapsed_us": float64(buildElapsed.Nanoseconds()) / 1000, "declined": true})
+				if count != 4096 {
+					t.Fatalf("navigation unexpectedly declined: eligible=%d budget=%d", count, navigationBudget)
+				}
+				emit(map[string]any{"phase": "filter_navigation_build", "eligible": count, "elapsed_us": float64(buildElapsed.Nanoseconds()) / 1000, "declined": true, "budget_bytes": navigationBudget})
 			} else if buildErr != nil {
 				t.Fatal(buildErr)
 			} else {
-				emit(map[string]any{"phase": "filter_navigation_build", "eligible": count, "elapsed_us": float64(buildElapsed.Nanoseconds()) / 1000, "declined": false, "retained_bytes": navigation.retainedBytes})
+				if count == 4096 {
+					t.Fatal("navigation accepted exact-scan cutoff")
+				}
+				emit(map[string]any{"phase": "filter_navigation_build", "eligible": count, "elapsed_us": float64(buildElapsed.Nanoseconds()) / 1000, "declined": false, "budget_bytes": navigationBudget, "retained_bytes": navigation.retainedBytes})
 				var navigationBuffer VectorIndexSearchBuffer
 				started = time.Now()
 				results, stats, err := navigation.search(t.Context(), queries[0], 10, 512, opts.SearchCandidates, owner.overlay.pack, &navigationBuffer.searchScratch)
@@ -305,7 +315,13 @@ func TestTypedGraphScaleDiagnostic(t *testing.T) {
 				if err := scaleValidateResults(validated, manifest.Rows, count); err != nil {
 					t.Fatal(err)
 				}
-				emit(map[string]any{"phase": "filter_navigation_search", "eligible": count, "ef": 512, "elapsed_us": float64(searchElapsed.Nanoseconds()) / 1000, "stats": stats})
+				hits := 0
+				for _, result := range validated {
+					if slices.Contains(truth[strconv.Itoa(count)][0], string(result.ID)) {
+						hits++
+					}
+				}
+				emit(map[string]any{"phase": "filter_navigation_search", "eligible": count, "ef": 512, "elapsed_us": float64(searchElapsed.Nanoseconds()) / 1000, "recall": float64(hits) / 10, "stats": stats})
 			}
 		}
 		var buffer VectorIndexSearchBuffer
@@ -318,11 +334,21 @@ func TestTypedGraphScaleDiagnostic(t *testing.T) {
 		}
 		run := public(filter)
 		started = time.Now()
-		_, work, _, err := run(0, 512)
-		if err != nil {
+		coldResults, work, _, err := run(0, 512)
+		coldElapsed := time.Since(started)
+		if err != nil || len(coldResults) != 10 {
+			t.Fatalf("public cold filter eligible=%d results=%d err=%v", count, len(coldResults), err)
+		}
+		if err := scaleValidateResults(coldResults, manifest.Rows, count); err != nil {
 			t.Fatal(err)
 		}
-		emit(map[string]any{"phase": "public_cold_filter", "eligible": count, "ef": 512, "elapsed_us": float64(time.Since(started).Nanoseconds()) / 1000, "work": work})
+		coldHits := 0
+		for _, result := range coldResults {
+			if slices.Contains(truth[strconv.Itoa(count)][0], string(result.ID)) {
+				coldHits++
+			}
+		}
+		emit(map[string]any{"phase": "public_cold_filter", "eligible": count, "ef": 512, "elapsed_us": float64(coldElapsed.Nanoseconds()) / 1000, "recall": float64(coldHits) / 10, "work": work})
 		curve("public_warm_filter", count, run)
 	}
 	// Twelve distinct predicates expose the existing keeper's eight-entry limit.
