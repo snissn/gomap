@@ -460,6 +460,82 @@ func TestCommandWALIntentZeroValueLSNSentinelsM10C(t *testing.T) {
 	}
 }
 
+func TestCommandWALDurablePrefixGroupPrevalidatesEveryParticipant(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveFormatConfig(dir, FormatConfig{
+		RequiredFeatures:  []string{RequiredFeatureCommandWALV1},
+		DurabilityProfile: ProfileCommandWALDurable,
+	}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d, err := Open(Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		Durability:             DurabilityDurable,
+		ResolvedProfile:        ProfileCommandWALDurable,
+		DisableBackgroundPrune: true,
+		ValueLog:               ValueLogOptions{ReadIntegrity: IntegrityVerify},
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	newIntent := func(key string) *CommandWALIntent {
+		t.Helper()
+		payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+			Op: commitlog.RawKVOpSet, Key: []byte(key), Value: []byte("value"),
+		}})
+		if err != nil {
+			t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+		}
+		intent, err := d.NewCommandWALIntent(
+			commitlog.CommandKindRawKVBatch,
+			commitlog.CommandScopeRawKV,
+			commitlog.PayloadFormatRawKVBatchV1,
+			payload,
+		)
+		if err != nil {
+			t.Fatalf("NewCommandWALIntent: %v", err)
+		}
+		return intent
+	}
+	first, second := newIntent("first"), newIntent("second")
+	beforeNextLSN := d.CommandWALNextLSN()
+	if _, err := d.NewCommandWALDurablePrefixGroupIntent([]*CommandWALIntent{first, first}); !errors.Is(err, ErrCommandWALRejected) {
+		t.Fatalf("duplicate participant error=%v want ErrCommandWALRejected", err)
+	}
+	if first.AssignedLSN() != 0 || d.CommandWALNextLSN() != beforeNextLSN {
+		t.Fatalf("duplicate participant changed WAL: first=%d next=%d want next=%d", first.AssignedLSN(), d.CommandWALNextLSN(), beforeNextLSN)
+	}
+	if err := d.commandWALPoisonedError(); err != nil {
+		t.Fatalf("duplicate participant poisoned untouched handle: %v", err)
+	}
+	group, err := d.NewCommandWALDurablePrefixGroupIntent([]*CommandWALIntent{first, second})
+	if err != nil {
+		t.Fatalf("NewCommandWALDurablePrefixGroupIntent: %v", err)
+	}
+	if !commandWALIntentPublishSync(group, false) {
+		t.Fatal("durable-prefix group does not require durable root publication")
+	}
+	if _, err := d.AppendCommandWALIntent(second, false); err != nil {
+		t.Fatalf("assign second participant: %v", err)
+	}
+	beforeNextLSN = d.CommandWALNextLSN()
+	if _, err := d.AppendCommandWALIntent(group, false); !errors.Is(err, ErrCommandWALRejected) {
+		t.Fatalf("append invalidated group error=%v want ErrCommandWALRejected", err)
+	}
+	if first.AssignedLSN() != 0 || group.AssignedLSN() != 0 {
+		t.Fatalf("prevalidation assigned first=%d group=%d", first.AssignedLSN(), group.AssignedLSN())
+	}
+	if got := d.CommandWALNextLSN(); got != beforeNextLSN {
+		t.Fatalf("next LSN=%d want unchanged %d", got, beforeNextLSN)
+	}
+	if err := d.commandWALPoisonedError(); err != nil {
+		t.Fatalf("prevalidation poisoned untouched handle: %v", err)
+	}
+}
+
 func TestCommandWALIntentRawKVPayloadSetsMaxEntryRevision(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
 	if err != nil {

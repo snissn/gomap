@@ -39,6 +39,7 @@ type commandWALBatchIntent struct {
 	maxEntryRevision    page.EntryRevision
 	replayToken         uint64
 	coveredRange        [1]CommandWALLSNRange
+	durablePrefixGroup  []*CommandWALIntent
 	syncOnPublish       bool
 	staged              bool
 	dependencyResources *rootpublication.StableResourceSet
@@ -327,6 +328,59 @@ func (intent *CommandWALIntent) ReplayAssignedLSN() (uint64, bool) {
 // command-WAL staging lock through root publication.
 func (intent *CommandWALIntent) StagedForPublish() bool {
 	return intent.staged()
+}
+
+// PayloadBytes reports the encoded command payload retained by an unappended
+// intent. Higher-level bounded admission uses it for exact queue accounting.
+func (intent *CommandWALIntent) PayloadBytes() int {
+	if intent == nil {
+		return 0
+	}
+	return len(intent.inner.payload)
+}
+
+// NewCommandWALDurablePrefixGroupIntent joins existing unassigned command
+// intents behind one durable-prefix barrier. It adds no command kind: the
+// ordered-root publisher appends every participant frame in order, appends and
+// syncs the existing barrier frame, then publishes the returned contiguous
+// coverage as part of its normal preflight-protected commit.
+func (db *DB) NewCommandWALDurablePrefixGroupIntent(participants []*CommandWALIntent) (*CommandWALIntent, error) {
+	if db == nil {
+		return nil, ErrClosed
+	}
+	if !db.CommandWALEnabled() {
+		return nil, ErrCommandWALUnsupported
+	}
+	if db.readOnly {
+		return nil, ErrReadOnly
+	}
+	if db.resolvedProfile != ProfileCommandWALDurable {
+		return nil, fmt.Errorf("%w: durable-prefix groups require command-wal durable profile", ErrCommandWALRejected)
+	}
+	if len(participants) < 2 {
+		return nil, fmt.Errorf("%w: durable-prefix group requires at least two participants", ErrCommandWALRejected)
+	}
+	owned := append([]*CommandWALIntent(nil), participants...)
+	seen := make(map[*CommandWALIntent]struct{}, len(owned))
+	var maxEntryRevision page.EntryRevision
+	for i, participant := range owned {
+		if participant == nil || participant.AssignedLSN() != 0 || len(participant.inner.durablePrefixGroup) != 0 {
+			return nil, fmt.Errorf("%w: durable-prefix group participant %d is nil, assigned, or nested", ErrCommandWALRejected, i)
+		}
+		if _, duplicate := seen[participant]; duplicate {
+			return nil, fmt.Errorf("%w: durable-prefix group participant %d is duplicated", ErrCommandWALRejected, i)
+		}
+		seen[participant] = struct{}{}
+		if _, replay := participant.ReplayAssignedLSN(); replay {
+			return nil, fmt.Errorf("%w: durable-prefix group participant %d is a replay intent", ErrCommandWALRejected, i)
+		}
+		maxEntryRevision = max(maxEntryRevision, participant.inner.maxEntryRevision)
+	}
+	return &CommandWALIntent{inner: commandWALBatchIntent{
+		durablePrefixGroup: owned,
+		maxEntryRevision:   maxEntryRevision,
+		syncOnPublish:      true,
+	}}, nil
 }
 
 func (intent *CommandWALIntent) staged() bool {
@@ -1941,6 +1995,9 @@ func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) 
 	if intent == nil {
 		return 0, nil
 	}
+	if len(intent.inner.durablePrefixGroup) != 0 {
+		return db.appendCommandWALDurablePrefixGroup(intent)
+	}
 	if intent.inner.fromReplay && intent.inner.lsn == 0 {
 		return 0, fmt.Errorf("%w: replay intent missing assigned lsn", ErrCommandWALRejected)
 	}
@@ -1973,6 +2030,65 @@ func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) 
 		return intent.inner.lsn, nil
 	}
 	return db.appendCommandWALIntent(&intent.inner, sync)
+}
+
+func (db *DB) appendCommandWALDurablePrefixGroup(group *CommandWALIntent) (uint64, error) {
+	if group == nil || len(group.inner.durablePrefixGroup) < 2 {
+		return 0, fmt.Errorf("%w: invalid durable-prefix group", ErrCommandWALRejected)
+	}
+	if group.inner.lsn != 0 {
+		if err := db.commandWALPoisonedError(); err != nil {
+			return 0, err
+		}
+		return group.inner.lsn, nil
+	}
+	for i, participant := range group.inner.durablePrefixGroup {
+		if participant == nil || participant.AssignedLSN() != 0 || len(participant.inner.durablePrefixGroup) != 0 || participant.inner.fromReplay {
+			return 0, fmt.Errorf("%w: durable-prefix group participant %d is nil, assigned, nested, or replay", ErrCommandWALRejected, i)
+		}
+	}
+	var first, last uint64
+	markAssigned := func() {
+		if last == 0 {
+			return
+		}
+		group.inner.lsn = last
+		group.inner.coveredRange[0] = CommandWALLSNRange{First: first, Last: last}
+		db.poisonCommandWALAfterPostAppendFailure(&group.inner)
+	}
+	for _, participant := range group.inner.durablePrefixGroup {
+		lsn, err := db.appendCommandWALIntent(&participant.inner, false)
+		if err != nil {
+			if assigned := participant.AssignedLSN(); assigned > last {
+				last = assigned
+			}
+			markAssigned()
+			return last, err
+		}
+		if first == 0 {
+			first = lsn
+		} else if lsn != last+1 {
+			previous := last
+			last = lsn
+			markAssigned()
+			return last, fmt.Errorf("%w: durable-prefix group lsn=%d after %d", ErrCommandWALAppliedLSNNonContig, lsn, previous)
+		}
+		last = lsn
+	}
+	barrierLSN, err := db.appendCommandWALDurablePrefixBarrier()
+	if err != nil {
+		markAssigned()
+		return last, err
+	}
+	if barrierLSN != last+1 {
+		previous := last
+		last = barrierLSN
+		markAssigned()
+		return last, fmt.Errorf("%w: durable-prefix barrier lsn=%d after %d", ErrCommandWALAppliedLSNNonContig, barrierLSN, previous)
+	}
+	group.inner.lsn = barrierLSN
+	group.inner.coveredRange[0] = CommandWALLSNRange{First: first, Last: barrierLSN}
+	return barrierLSN, nil
 }
 
 func commandWALIntentFrameAlreadyAppended(intent *CommandWALIntent) bool {
