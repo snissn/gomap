@@ -38,9 +38,19 @@ TREEDB_SCALE_PHASE=measure benchmarks/vector_db_compare/run_cohere_scale.sh
 
 The caller creates TMPDIR, confirms capacity, freezes inputs, and excludes other
 CPU/I/O-heavy work. Compilation and full dataset hashing precede measured search
-intervals: “cold” means process/application-cache cold, **not** OS-page-cache cold.
-Report cold preparation separately from warm per-query p50/p95 and recall at each
-EF. The prepared-global helper is a diagnostic comparator, not the public path.
+intervals. The first unfiltered call is process/application-cache cold, **not**
+OS-page-cache cold. A `public_cold_filter` row is an uncached-predicate call in
+that already warmed process. For 4,096, 4,097, 5,000, and 50,000 eligible rows,
+the measure phase separately reports predicate-membership preparation, optional
+navigation construction, one direct EF512 navigation search, and the outer
+public uncached-predicate call. The direct construction budget is reported and
+does not include the public keeper's additional capacity cap; its timer includes
+construction admission wait. A declined navigation build is required only at
+the 4,096-row exact-scan cutoff. Direct phase helpers are differently budgeted
+diagnostic comparators, not components timed inside the public call: they do not
+populate its serving predicate cache, and their times must not be summed into a
+public-call decomposition. Warm per-query p50/p95 and recall remain reported at
+each EF. EF512 here is diagnostic and does not revise frozen M5 EF2048.
 
 Write phases require `TREEDB_SCALE_WRITE_COPY=1` and a separately copied, cleanly
 closed DB fixture. This acknowledgement does not create or prove the copy: retain
