@@ -166,6 +166,12 @@ def rss_comparison_contract(plan):
     }
 
 
+def treedb_service_environment(plan):
+    child = {key: os.environ[key] for key in ("HOME", "PATH", "TMPDIR", "TZ") if key in os.environ}
+    child.update({key: value for key, value in plan["treedb_go_runtime"].items() if value})
+    return child
+
+
 def process_peak_at_boundary(pid, expected_identity, expected_affinity):
     sample = existing.common.process_peak_rss(pid)
     identity = existing.common.linux_process_identity(pid)
@@ -269,7 +275,8 @@ class Run:
         self.failure = None
         self.controller = existing.ServiceController(Path(plan["service_bin"]), plan["url"], self.output / "db",
             "command_wal_durable", 600, 120, diagnostics_url=plan["diagnostics_url"],
-            block_profile_rate=0, mutex_profile_fraction=0, native_address=plan["native_address"], measured=True)
+            block_profile_rate=0, mutex_profile_fraction=0, native_address=plan["native_address"], measured=True,
+            environment=treedb_service_environment(plan))
         self.clients = existing.ThreadLocalClients(plan["url"], plan["operation_timeout_s"], self.controller)
         data = Path(plan["dataset"])
         self.vectors = np.memmap(data / "documents.f32", mode="r", dtype="<f4", shape=(plan["rows"], 768))

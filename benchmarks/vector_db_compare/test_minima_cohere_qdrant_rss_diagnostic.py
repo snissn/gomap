@@ -16,11 +16,14 @@ import minima_cohere_qdrant_rss_diagnostic as qdrant_rss
 class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
     def test_comparison_contract_binds_treedb_go_runtime(self):
         with patch.dict(qdrant_rss.os.environ,
-                        {"GOMAXPROCS": "6", "GOGC": "75", "GOMEMLIMIT": "12GiB"}, clear=True):
+                        {"GOMAXPROCS": "6", "GOGC": "75", "GOMEMLIMIT": "12GiB",
+                         "TREEDB_LEAF_PAGE_CACHE_ENTRIES": "262144"}, clear=True):
             contract = qdrant_rss.comparison_contract("a" * 64, {"documents": "b" * 64}, [0, 1])
+            child = native.treedb_service_environment({"treedb_go_runtime": contract["treedb_go_runtime"]})
         self.assertEqual(contract["treedb_go_runtime"], {
             "GOMAXPROCS": "6", "GOGC": "75", "GOMEMLIMIT": "12GiB",
         })
+        self.assertNotIn("TREEDB_LEAF_PAGE_CACHE_ENTRIES", child)
 
     def test_control_selection_uses_disjoint_calibration_and_evaluation(self):
         truth = [[f"row-{query}-{rank}" for rank in range(10)] for query in range(6)]
