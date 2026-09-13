@@ -171,8 +171,9 @@ class Run:
     optimization_snapshot = existing.QdrantMinimaRunner.optimization_snapshot
     server_log_snapshot = existing.QdrantMinimaRunner.server_log_snapshot
 
-    def __init__(self, plan, client_factory, models):
+    def __init__(self, plan, client_factory, models, api_key=""):
         self.plan, self.client_factory, self.models = plan, client_factory, models
+        self.api_key = api_key
         self.client = self.process = self.process_identity = self.process_command_identity = None
         self.server_pid = None
         self.server_log = None
@@ -227,7 +228,7 @@ class Run:
                 raise RuntimeError(f"owned Qdrant exited during startup with {self.process.returncode}")
             try:
                 identity = existing.linux_process_identity(self.server_pid)
-                info = existing.server_info(self.plan["url"], "")
+                info = existing.server_info(self.plan["url"], self.api_key)
                 if (identity and info.get("version") == self.plan["qdrant_server_version"]
                         and Path(f"/proc/{self.server_pid}/exe").resolve() == Path(self.plan["qdrant_bin"])
                         and existing.server_process_owns_endpoint(self.server_pid, self.plan["url"])):
@@ -443,7 +444,7 @@ def main():
     from qdrant_client import QdrantClient, models
     factory = lambda: QdrantClient(url=args.url, api_key=args.api_key or None,
                                    timeout=args.operation_timeout, prefer_grpc=False)
-    return Run(plan, factory, models).execute()
+    return Run(plan, factory, models, args.api_key).execute()
 
 
 if __name__ == "__main__":

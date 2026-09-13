@@ -1,7 +1,11 @@
 """Fail-closed checks for the matched Cohere 768D RSS boundary."""
 import copy
+import os
+from pathlib import Path
+import sys
+import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 
@@ -123,6 +127,29 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
                 patch.object(qdrant_rss.time, "sleep"):
             self.assertEqual(run.wait_ready(500000, "initial"), {"poll": 1})
         self.assertEqual(wait.call_count, 2)
+
+    def test_owned_qdrant_readiness_uses_configured_api_key(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+            run.output = Path(temporary) / "run"
+            run.output.mkdir()
+            run.storage_path = Path(temporary) / "storage"
+            run.api_key = "secret"
+            run.client_factory = object
+            run.plan = {
+                "url": "http://127.0.0.1:6333", "qdrant_bin": str(Path(sys.executable).resolve()),
+                "qdrant_server_version": "1.19.0", "startup_timeout_s": 1, "poll_interval_s": 0,
+            }
+            process = MagicMock(pid=os.getpid())
+            process.poll.return_value = None
+            with patch.object(qdrant_rss.subprocess, "Popen", return_value=process), \
+                    patch.object(qdrant_rss.existing, "linux_process_identity", return_value="1:1"), \
+                    patch.object(qdrant_rss.existing, "server_info", return_value={"version": "1.19.0"}) as info, \
+                    patch.object(qdrant_rss.existing, "server_process_owns_endpoint", return_value=True), \
+                    patch.object(qdrant_rss.existing, "server_process_identity", return_value="qdrant"):
+                run.start_server()
+            info.assert_called_once_with(run.plan["url"], "secret")
+            run.server_log.close()
 
 
 if __name__ == "__main__":
