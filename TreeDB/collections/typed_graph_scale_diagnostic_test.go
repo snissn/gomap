@@ -279,7 +279,35 @@ func TestTypedGraphScaleDiagnostic(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		emit(map[string]any{"phase": "uncached_filter_prepare", "eligible": count, "elapsed_us": float64(time.Since(started).Nanoseconds()) / 1000, "work": plan.work(true)})
+		membershipWork := plan.work(true)
+		emit(map[string]any{"phase": "filter_membership_prepare", "eligible": count, "elapsed_us": float64(time.Since(started).Nanoseconds()) / 1000, "work": membershipWork})
+		if count == 4096 || count == 4097 || count == 5000 || count == 50000 {
+			started = time.Now()
+			navigation, buildErr := buildTypedGraphFilterNavigation(t.Context(), owner.overlay, plan, opts.Filter.RetainedBytes-int(membershipWork.RetainedBytes))
+			buildElapsed := time.Since(started)
+			if buildErr == errTypedGraphFilterNavigationDeclined {
+				emit(map[string]any{"phase": "filter_navigation_build", "eligible": count, "elapsed_us": float64(buildElapsed.Nanoseconds()) / 1000, "declined": true})
+			} else if buildErr != nil {
+				t.Fatal(buildErr)
+			} else {
+				emit(map[string]any{"phase": "filter_navigation_build", "eligible": count, "elapsed_us": float64(buildElapsed.Nanoseconds()) / 1000, "declined": false, "retained_bytes": navigation.retainedBytes})
+				var navigationBuffer VectorIndexSearchBuffer
+				started = time.Now()
+				results, stats, err := navigation.search(t.Context(), queries[0], 10, 512, opts.SearchCandidates, owner.overlay.pack, &navigationBuffer.searchScratch)
+				searchElapsed := time.Since(started)
+				if err != nil || len(results) != 10 {
+					t.Fatalf("navigation search eligible=%d results=%d err=%v", count, len(results), err)
+				}
+				validated := make([]VectorIndexSearchResult, len(results))
+				for i, result := range results {
+					validated[i] = VectorIndexSearchResult{ID: result.ID, Score: result.Score}
+				}
+				if err := scaleValidateResults(validated, manifest.Rows, count); err != nil {
+					t.Fatal(err)
+				}
+				emit(map[string]any{"phase": "filter_navigation_search", "eligible": count, "ef": 512, "elapsed_us": float64(searchElapsed.Nanoseconds()) / 1000, "stats": stats})
+			}
+		}
 		var buffer VectorIndexSearchBuffer
 		curve("prepared_global", count, func(q, ef int) ([]VectorIndexSearchResult, ColumnGraphQueryWork, int64, error) {
 			results, stats, err := owner.overlay.searchPreparedFilter(plan, queries[q], 10, ef, opts.SearchCandidates, &buffer)

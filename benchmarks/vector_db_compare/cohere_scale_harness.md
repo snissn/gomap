@@ -40,7 +40,11 @@ The caller creates TMPDIR, confirms capacity, freezes inputs, and excludes other
 CPU/I/O-heavy work. Compilation and full dataset hashing precede measured search
 intervals: “cold” means process/application-cache cold, **not** OS-page-cache cold.
 Report cold preparation separately from warm per-query p50/p95 and recall at each
-EF. The prepared-global helper is a diagnostic comparator, not the public path.
+EF. For 4,096, 4,097, 5,000, and 50,000 eligible rows, the measure phase reports
+predicate-membership preparation, optional navigation construction, one direct
+navigation search, and the outer public cold call separately. A declined
+navigation build at the exact-scan cutoff is expected. Direct phase helpers are
+diagnostic comparators, not the public path; they do not populate its cache.
 
 Write phases require `TREEDB_SCALE_WRITE_COPY=1` and a separately copied, cleanly
 closed DB fixture. This acknowledgement does not create or prove the copy: retain
