@@ -26,11 +26,12 @@ import numpy as np
 
 import minima_treedb_runner as existing
 
-SCHEMA = "treedb_minima_cohere_native_diagnostic/v1"
-RSS_ARTIFACT_SCHEMA = "treedb_cohere_768_rss_boundary/v1"
+SCHEMA = "treedb_minima_cohere_native_diagnostic/v2"
+RSS_ARTIFACT_SCHEMA = "treedb_cohere_768_rss_boundary/v2"
 RSS_RECALL_TARGET = .90
-RSS_CALIBRATION_QUERIES = list(range(20))
-RSS_EVALUATION_QUERIES = list(range(20, 100))
+RSS_CONTROLS = [32, 64, 128, 256, 512, 1024, 2048]
+RSS_CALIBRATION_QUERIES = list(range(100))
+RSS_EVALUATION_QUERIES = list(range(100, 200))
 GIB = 1 << 30
 
 
@@ -94,11 +95,11 @@ def dataset_identity(dataset, rows):
         raise ValueError("expected the existing real 768D top-10 nonoverlapping diagnostic export")
     if rows not in (512, 500000) or rows > manifest["rows"] or math.gcd(rows, 7919) != 1:
         raise ValueError("only real-prefix 512-row smoke or 500000-row diagnostic runs are supported")
-    query_count = 4 if rows == 512 else 100
+    query_count = 4 if rows == 512 else 200
     if query_count > manifest["query_count"]:
         raise ValueError("not enough exported queries")
-    if rows == 500000 and (manifest["rows"], manifest["query_count"]) != (500000, 100):
-        raise ValueError("diagnostic oracle requires exactly 500000 exported rows and 100 queries")
+    if rows == 500000 and (manifest["rows"], manifest["query_count"]) != (500000, 200):
+        raise ValueError("diagnostic oracle requires exactly 500000 exported rows and 200 queries")
     files = {}
     for name, expected_size in (("documents", manifest["rows"] * 768 * 4),
                                 ("queries", manifest["query_count"] * 768 * 4), ("truth", None)):
@@ -146,7 +147,7 @@ def calibrate_ann_control(search, truth, controls, calibration_queries, evaluati
 
 def rss_comparison_contract(plan):
     return {
-        "schema": "cohere_500k_768d_matched_rss/v1", "rows": plan["rows"],
+        "schema": "cohere_500k_768d_matched_rss/v2", "rows": plan["rows"],
         "dimensions": plan["dimensions"], "metric": "cosine", "top_k": plan["top_k"],
         "dataset_manifest_sha256": plan["dataset_manifest_sha256"],
         "dataset_files_sha256": plan["dataset_files_sha256"],
@@ -160,6 +161,10 @@ def rss_comparison_contract(plan):
         "host_resource_identity": plan["host_resource_identity"],
         "platform": plan["platform"], "quality_metric": "mean_recall_at_10",
         "quality_target": plan["rss_recall_target"],
+        "ann_controls": {
+            "treedb_ef_search": plan["rss_controls"],
+            "qdrant_hnsw_ef": plan["rss_controls"],
+        },
         "calibration_queries": plan["rss_calibration_queries"],
         "evaluation_queries": plan["rss_evaluation_queries"],
         "rss_boundary": "fresh_server_and_backend_through_initial_ann_ready_and_quality_gated_query",
@@ -249,6 +254,7 @@ def prepare(args):
             "run_dir": str(args.run_dir.resolve()), "rows": args.rows, "dimensions": 768, "queries": query_count,
             "top_k": 10, "batch_size": 256, "efs": [128, 256, 512, 1024, 2048], "overlap_ef": 512,
             "rss_only": rss_only, "rss_recall_target": RSS_RECALL_TARGET,
+            "rss_controls": RSS_CONTROLS,
             "rss_calibration_queries": RSS_CALIBRATION_QUERIES,
             "rss_evaluation_queries": RSS_EVALUATION_QUERIES,
             "overlap_eligible": counts(args.rows)[1],
@@ -517,7 +523,7 @@ class Run:
             return [document.id for document in response.documents]
 
         quality = calibrate_ann_control(
-            search, truth, self.plan["efs"], self.plan["rss_calibration_queries"],
+            search, truth, self.plan["rss_controls"], self.plan["rss_calibration_queries"],
             self.plan["rss_evaluation_queries"], self.plan["rss_recall_target"],
         )
         process = self.controller.process

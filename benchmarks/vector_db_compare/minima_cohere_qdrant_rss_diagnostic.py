@@ -18,7 +18,7 @@ import minima_cohere_native_diagnostic as native
 import minima_qdrant_runner as existing
 
 SCHEMA = native.RSS_ARTIFACT_SCHEMA
-CONTROLS = [32, 64, 128, 256, 512, 1024, 2048]
+CONTROLS = native.RSS_CONTROLS
 
 
 def qdrant_point(document):
@@ -97,6 +97,7 @@ def comparison_contract(dataset_manifest_sha256, dataset_files_sha256, cpu_affin
         "treedb_go_runtime": {key: os.environ.get(key, "") for key in ("GOMAXPROCS", "GOGC", "GOMEMLIMIT")},
         "host_resource_identity": native.host_resource_identity(),
         "rss_recall_target": native.RSS_RECALL_TARGET,
+        "rss_controls": native.RSS_CONTROLS,
         "rss_calibration_queries": native.RSS_CALIBRATION_QUERIES,
         "rss_evaluation_queries": native.RSS_EVALUATION_QUERIES,
     })
@@ -112,7 +113,7 @@ def prepare(args):
     source = Path(__file__).resolve().parents[2]
     validate_imports(source)
     harness = native.existing.repository_commit()
-    dataset, _, files, _ = native.dataset_identity(args.dataset, 500000)
+    dataset, _, files, query_count = native.dataset_identity(args.dataset, 500000)
     tree = json.loads(args.treedb_artifact.read_text())
     if not isinstance(tree, dict):
         raise ValueError("TreeDB RSS artifact must be a JSON object")
@@ -141,7 +142,7 @@ def prepare(args):
             or tree.get("provenance", {}).get("harness_trees") != harness_trees):
         raise RuntimeError("TreeDB RSS artifact quality, contract, or harness provenance is not current")
     return {
-        "schema": "treedb_cohere_qdrant_rss_plan/v1", "harness_commit": harness,
+        "schema": "treedb_cohere_qdrant_rss_plan/v2", "harness_commit": harness,
         "harness_source_sha256": native.digest(Path(__file__)),
         "harness_trees": harness_trees,
         "dataset": str(dataset), "dataset_manifest_sha256": native.digest(dataset / "manifest.json"),
@@ -152,7 +153,7 @@ def prepare(args):
         "qdrant_client_version": existing.CLIENT_VERSION,
         "storage_path": str(args.storage_path.resolve()), "url": args.url, "collection": args.collection,
         "run_dir": str(args.run_dir.resolve()), "cpu_affinity": affinity,
-        "batch_size": 256, "rows": 500000, "dimensions": 768, "top_k": 10,
+        "batch_size": 256, "rows": 500000, "queries": query_count, "dimensions": 768, "top_k": 10,
         "controls": CONTROLS, "operation_timeout_s": args.operation_timeout,
         "startup_timeout_s": args.startup_timeout,
         "optimizer_timeout_s": args.optimizer_timeout, "poll_interval_s": args.poll_interval,
@@ -191,7 +192,9 @@ class Run:
         self.readiness_evidence = []
         data = Path(plan["dataset"])
         self.vectors = np.memmap(data / "documents.f32", mode="r", dtype="<f4", shape=(500000, 768))
-        self.queries = np.memmap(data / "queries.f32", mode="r", dtype="<f4", shape=(100, 768))
+        self.queries = np.memmap(
+            data / "queries.f32", mode="r", dtype="<f4", shape=(plan["queries"], 768),
+        )
         self.truth = json.loads((data / "truth.json").read_text())["500000"]
 
     def wait_ready(self, rows, phase, production=True):
