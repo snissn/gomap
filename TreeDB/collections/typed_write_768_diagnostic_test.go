@@ -318,6 +318,7 @@ func openTypedWrite768Diagnostic(t *testing.T, preload, writeRows int) (string, 
 		db.Close()
 		t.Fatal(err)
 	}
+	capacity := max(1024, preload+writeRows)
 	opts := typedGraphPublicTestOptions()
 	opts.Publication = publication
 	opts.Owners = typedGraphReadOwnerLimits{Owners: 16, States: 16, StateBytes: 512 << 20, AssetBytes: 1 << 30, Cold: cold}
