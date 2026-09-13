@@ -284,7 +284,7 @@ func TestTypedGraphScaleDiagnostic(t *testing.T) {
 		}
 		membershipWork := plan.work(true)
 		emit(map[string]any{"phase": "filter_membership_prepare", "eligible": count, "elapsed_us": float64(time.Since(started).Nanoseconds()) / 1000, "work": membershipWork})
-		if count == 4096 || count == 4097 || count == 5000 || count == 50000 {
+		if count != manifest.Rows {
 			navigationBudget := opts.Filter.RetainedBytes - int(membershipWork.RetainedBytes)
 			started = time.Now()
 			navigation, buildErr := buildTypedGraphFilterNavigation(t.Context(), owner.overlay, plan, navigationBudget)
