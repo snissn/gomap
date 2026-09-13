@@ -34,15 +34,14 @@ def ready_snapshot(snapshot, rows):
     hnsw, optimizer, params = (config.get("hnsw_config") or {}, config.get("optimizer_config") or {},
                                config.get("params") or {})
     vector = params.get("vectors") or {}
-    if (any((schema.get(field) or {}).get("data_type") != "keyword"
+    config_matches = not (any((schema.get(field) or {}).get("data_type") != "keyword"
             for field in ("meta.user_id", "meta.fpath"))
             or hnsw.get("m") != 16 or hnsw.get("ef_construct") != 100
             or hnsw.get("full_scan_threshold") != 10000 or hnsw.get("on_disk") is not False
             or optimizer.get("indexing_threshold") != 10000 or optimizer.get("max_optimization_threads") != 1
             or params.get("on_disk_payload") is not True or vector.get("size") != 768
-            or str(vector.get("distance", "")).lower() != "cosine" or vector.get("on_disk") is not False):
-        raise RuntimeError("Qdrant configuration differs from the matched query-ready contract")
-    return (snapshot.get("status") == "green"
+            or str(vector.get("distance", "")).lower() != "cosine" or vector.get("on_disk") is not False)
+    return (config_matches and snapshot.get("status") == "green"
             and existing.optimizer_is_ok(snapshot.get("optimizer_status"))
             and snapshot.get("points_count") == rows
             and snapshot.get("exact_points_count") == rows
@@ -215,12 +214,14 @@ class Run:
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         self.server_log = (self.output / "qdrant.log").open("xb")
         parsed = urllib.parse.urlparse(self.plan["url"])
-        env = {**os.environ, "QDRANT__SERVICE__HOST": "127.0.0.1",
-               "QDRANT__SERVICE__HTTP_PORT": str(parsed.port),
-               "QDRANT__STORAGE__STORAGE_PATH": str(self.storage_path)}
+        env = {key: os.environ[key] for key in ("HOME", "PATH", "TMPDIR", "TZ") if key in os.environ}
+        env.update(QDRANT__SERVICE__HOST="127.0.0.1", QDRANT__SERVICE__HTTP_PORT=str(parsed.port),
+                   QDRANT__STORAGE__STORAGE_PATH=str(self.storage_path))
+        if self.api_key:
+            env["QDRANT__SERVICE__API_KEY"] = self.api_key
         self.process = subprocess.Popen([self.plan["qdrant_bin"]], stdin=subprocess.DEVNULL,
                                         stdout=self.server_log, stderr=subprocess.STDOUT,
-                                        env=env, start_new_session=True)
+                                        cwd=self.output, env=env, start_new_session=True)
         self.server_pid = self.process.pid
         deadline, last = time.monotonic() + self.plan["startup_timeout_s"], None
         while time.monotonic() < deadline:

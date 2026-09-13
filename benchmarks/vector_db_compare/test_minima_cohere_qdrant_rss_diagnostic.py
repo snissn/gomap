@@ -65,6 +65,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
                     qdrant_rss.validate_ready_snapshot(changed, 500000)
         changed = copy.deepcopy(ready)
         del changed["payload_schema"]["meta.fpath"]
+        self.assertFalse(qdrant_rss.ready_snapshot(changed, 500000))
         with self.assertRaisesRegex(RuntimeError, "query-ready"):
             qdrant_rss.validate_ready_snapshot(changed, 500000)
 
@@ -142,13 +143,16 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             }
             process = MagicMock(pid=os.getpid())
             process.poll.return_value = None
-            with patch.object(qdrant_rss.subprocess, "Popen", return_value=process), \
+            with patch.dict(qdrant_rss.os.environ, {"QDRANT__CLUSTER__ENABLED": "true"}), \
+                    patch.object(qdrant_rss.subprocess, "Popen", return_value=process) as launch, \
                     patch.object(qdrant_rss.existing, "linux_process_identity", return_value="1:1"), \
                     patch.object(qdrant_rss.existing, "server_info", return_value={"version": "1.19.0"}) as info, \
                     patch.object(qdrant_rss.existing, "server_process_owns_endpoint", return_value=True), \
                     patch.object(qdrant_rss.existing, "server_process_identity", return_value="qdrant"):
                 run.start_server()
             info.assert_called_once_with(run.plan["url"], "secret")
+            self.assertNotIn("QDRANT__CLUSTER__ENABLED", launch.call_args.kwargs["env"])
+            self.assertEqual(launch.call_args.kwargs["env"]["QDRANT__SERVICE__API_KEY"], "secret")
             run.server_log.close()
 
     def test_owned_qdrant_rejects_nonzero_shutdown(self):
