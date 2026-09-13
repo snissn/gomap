@@ -6,13 +6,18 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestTypedGraphFoldRowSourceCloseFailureReleasesPreparedResources(t *testing.T) {
 	col, _, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
-	registry := col.db.StableResourceIdentityPinRegistry()
-	beforePins := registry.ActivePins()
-	beforeIdentities := registry.ActiveIdentities()
+	var preparedResources *rootpublication.StableResourceSet
+	restore := setColumnPhysicalAssetPreparationAfterPrepareTestHook(func(prepared ColumnPublishPreparedAssets) error {
+		preparedResources = prepared.stableResources
+		return nil
+	})
+	t.Cleanup(restore)
 	beforeSeq, beforeRoot := dbCommitSeqAndSystemRoot(col.db)
 	injected := errors.New("injected streamed row close failure")
 	typedGraphFoldRowSourceCloseErrorForTest = injected
@@ -25,8 +30,11 @@ func TestTypedGraphFoldRowSourceCloseFailureReleasesPreparedResources(t *testing
 	if afterSeq, afterRoot := dbCommitSeqAndSystemRoot(col.db); afterSeq != beforeSeq || afterRoot != beforeRoot {
 		t.Fatal("row close failure changed publication authority")
 	}
-	if pins, identities := registry.ActivePins(), registry.ActiveIdentities(); pins != beforePins || identities != beforeIdentities {
-		t.Fatalf("row close failure retained stable ownership: pins=%d/%d identities=%d/%d", pins, beforePins, identities, beforeIdentities)
+	if preparedResources == nil {
+		t.Fatal("fold did not prepare stable resources")
+	}
+	if owner := preparedResources.Owner(); owner != rootpublication.ResourceOwnerReleased {
+		t.Fatalf("row close failure retained prepared resources: owner=%d", owner)
 	}
 }
 
