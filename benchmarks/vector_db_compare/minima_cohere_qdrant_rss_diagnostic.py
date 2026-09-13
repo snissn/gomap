@@ -94,6 +94,7 @@ def comparison_contract(dataset_manifest_sha256, dataset_files_sha256, cpu_affin
         "dataset_manifest_sha256": dataset_manifest_sha256,
         "dataset_files_sha256": dataset_files_sha256, "cpu_affinity": cpu_affinity,
         "host_memory_bytes": existing.memory_bytes(), "platform": native.platform.platform(),
+        "treedb_go_runtime": {key: os.environ.get(key, "") for key in ("GOMAXPROCS", "GOGC", "GOMEMLIMIT")},
         "rss_recall_target": native.RSS_RECALL_TARGET,
         "rss_calibration_queries": native.RSS_CALIBRATION_QUERIES,
         "rss_evaluation_queries": native.RSS_EVALUATION_QUERIES,
