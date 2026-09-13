@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -50,6 +51,45 @@ type columnHNSWPreparedTraversalOptions struct {
 	// scratch.top for internal rerank callers without also appending ordinal-only
 	// results that the caller will immediately discard.
 	SuppressOmittedResultMaterialization bool
+
+	// Context and Admission are internal typed-graph controls. The public
+	// prepared routes leave both at their zero values, preserving their existing
+	// search dispatch and fast paths. Admission restricts result retention only:
+	// every scored node remains eligible to expand the immutable graph frontier.
+	Context   context.Context
+	Admission columnHNSWPreparedTraversalAdmission
+}
+
+// columnHNSWPreparedTraversalAdmission is the type-agnostic retained-result
+// and selected-seed seam for the shared HNSW traversal. Typed graph code owns
+// the concrete selection/mapping implementation; this package only observes
+// immutable ordinal admission facts. The interface is entered only for the
+// private filtered path, keeping the nil-admission prepared fast path intact.
+type columnHNSWPreparedTraversalAdmission interface {
+	enabled() bool
+	validate(rowCount int) error
+	eligibleCount() int
+	hasSelectedSeeds() bool
+	selectedSeedCount() int
+	selectedSeedAt(position int) (ordinal int, ok bool)
+	admits(ordinal int) bool
+}
+
+func columnHNSWPreparedTraversalAdmit(candidate columnVectorGraphSearchCandidate, topK int, admission columnHNSWPreparedTraversalAdmission, admissionEnabled bool, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) {
+	if !admissionEnabled || admission.admits(candidate.ordinal) {
+		if scratch.insertTop(topK, candidate) {
+			scratch.pushFrontierAccounting(candidate, stats)
+		}
+	} else {
+		if stats != nil {
+			stats.FilteredIneligibleScores++
+		}
+		// Matching typedGraphFilteredAdmit, ineligible nodes remain navigable.
+		scratch.pushFrontierAccounting(candidate, stats)
+	}
+	if admissionEnabled && stats != nil {
+		stats.FilteredFrontierPeak = max(stats.FilteredFrontierPeak, uint64(len(scratch.frontier)))
+	}
 }
 
 // columnHNSWPreparedTraversalScorePlane is the explicit scoring seam for the
@@ -219,6 +259,12 @@ func (p *columnHNSWPreparedQuantizedScorePlane) scoreOrdinals(ordinals []int, ds
 }
 
 func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query []float32, opts columnHNSWPreparedTraversalOptions, scratch *columnVectorGraphNativeSearchScratch, scorePlane columnHNSWPreparedTraversalScorePlane) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
+	ctx := opts.Context
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, columnVectorGraphNativeSearchStats{}, err
+		}
+	}
 	if v == nil {
 		return nil, columnVectorGraphNativeSearchStats{}, errColumnHNSWSearchPackSearchUnavailable
 	}
@@ -244,6 +290,13 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	}
 	columnVectorGraphNativeSearchStartWorkAccounting(stats, statsMode)
 	rowCount := v.Header.Rows
+	admission := opts.Admission
+	admissionEnabled := admission != nil && admission.enabled()
+	if admissionEnabled {
+		if err := admission.validate(rowCount); err != nil {
+			return nil, *stats, err
+		}
+	}
 	topK := opts.TopK
 	if topK < 0 {
 		return nil, *stats, errColumnVectorGraphNativeSearchTopKNegative
@@ -259,7 +312,17 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	if topK == 0 || rowCount == 0 {
 		return nil, *stats, nil
 	}
-	stats.CandidateRows = uint64(rowCount)
+	candidateRows := rowCount
+	if admissionEnabled {
+		candidateRows = admission.eligibleCount()
+		if candidateRows <= 0 {
+			return nil, *stats, nil
+		}
+	}
+	stats.CandidateRows = uint64(candidateRows)
+	if topK > candidateRows {
+		topK = candidateRows
+	}
 	if topK > rowCount {
 		topK = rowCount
 	}
@@ -272,6 +335,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	if efSearch > rowCount {
 		efSearch = rowCount
 	}
+	if efSearch > candidateRows {
+		efSearch = candidateRows
+	}
 	if retainedCandidateLimit == 0 {
 		retainedCandidateLimit = efSearch
 	}
@@ -280,6 +346,12 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	}
 	if retainedCandidateLimit > rowCount {
 		retainedCandidateLimit = rowCount
+	}
+	if retainedCandidateLimit > candidateRows {
+		retainedCandidateLimit = candidateRows
+	}
+	if retainedCandidateLimit < topK {
+		return nil, *stats, fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal retained candidates=%d below filtered top_k=%d", retainedCandidateLimit, topK)
 	}
 	degree := v.Header.M
 	if degree < 1 {
@@ -294,6 +366,11 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	}
 	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, resultScratchK, retainedCandidateLimit, opts.ScoreTileCapacity, degree, degree); err != nil {
 		return nil, *stats, fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal scratch prepare: %w", err)
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, *stats, err
+		}
 	}
 	if err := scorePlane.prepareForHNSWPreparedTraversal(v, query, opts, scratch); err != nil {
 		return nil, *stats, fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal %s score plane: %w", scorePlane.kind(), err)
@@ -312,7 +389,16 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	}
 	traversalStart, traversalDistanceBefore := columnVectorGraphNativeSearchStartGraphTraversal(stats)
 	for layer := maxLayer; layer > 0; layer-- {
-		entryOrdinal, err = v.greedyNearestAtLayerPreparedScorePlane(scorePlane, rowIDScorePlane, entryOrdinal, layer, scratch, stats, countLoopEdges, &loopEdgeVisits)
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, *stats, err
+			}
+		}
+		if ctx == nil {
+			entryOrdinal, err = v.greedyNearestAtLayerPreparedScorePlane(scorePlane, rowIDScorePlane, entryOrdinal, layer, scratch, stats, countLoopEdges, &loopEdgeVisits)
+		} else {
+			entryOrdinal, err = v.greedyNearestAtLayerPreparedScorePlaneWithContext(ctx, scorePlane, rowIDScorePlane, entryOrdinal, layer, scratch, stats, countLoopEdges, &loopEdgeVisits)
+		}
 		if err != nil {
 			return nil, *stats, err
 		}
@@ -320,24 +406,67 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	visitMarks := scratch.visitMarks
 	visitEpoch := scratch.visitEpoch
 	visitMarks[entryOrdinal] = visitEpoch
-	if err := v.scoreAndPushFrontierVisitedPreparedScorePlane(scorePlane, entryOrdinal, retainedCandidateLimit, scratch, stats, &visitedCandidates); err != nil {
+	if err := v.scoreAndPushFrontierVisitedPreparedScorePlane(ctx, scorePlane, entryOrdinal, retainedCandidateLimit, admission, admissionEnabled, scratch, stats, &visitedCandidates); err != nil {
 		return nil, *stats, err
 	}
 	nextSeed := 0
+	selectedSeed := 0
 	rowCount64 := uint64(rowCount)
+	traversalSteps := 0
 	for {
+		if ctx != nil && traversalSteps&63 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, *stats, err
+			}
+		}
+		traversalSteps++
 		candidate, ok := scratch.popFrontierAccounting(stats)
 		if !ok {
 			if len(scratch.top) >= retainedCandidateLimit {
 				break
 			}
-			seed, seedOK := columnHNSWSearchPackNextCandidateSeed(nextSeed, rowCount, visitMarks, visitEpoch)
+			var seed int
+			var seedOK bool
+			if admissionEnabled && admission.hasSelectedSeeds() {
+				for selectedSeed < admission.selectedSeedCount() {
+					if ctx != nil && selectedSeed&63 == 0 {
+						if err := ctx.Err(); err != nil {
+							return nil, *stats, err
+						}
+					}
+					if stats != nil {
+						stats.FilteredSeedInspections++
+					}
+					seed, seedOK = admission.selectedSeedAt(selectedSeed)
+					selectedSeed++
+					if !seedOK {
+						return nil, *stats, errColumnHNSWSearchPackSearchCandidateRows
+					}
+					if visitMarks[seed] != visitEpoch {
+						break
+					}
+					seedOK = false
+				}
+			} else {
+				if ctx == nil {
+					seed, seedOK = columnHNSWSearchPackNextCandidateSeed(nextSeed, rowCount, visitMarks, visitEpoch)
+				} else {
+					var seedErr error
+					seed, seedOK, seedErr = columnHNSWSearchPackNextCandidateSeedWithContext(ctx, nextSeed, rowCount, visitMarks, visitEpoch)
+					if seedErr != nil {
+						return nil, *stats, seedErr
+					}
+				}
+			}
 			if !seedOK {
 				break
 			}
+			if seed < 0 || seed >= rowCount {
+				return nil, *stats, errColumnHNSWSearchPackSearchCandidateRows
+			}
 			nextSeed = seed + 1
 			visitMarks[seed] = visitEpoch
-			if err := v.scoreAndPushFrontierVisitedPreparedScorePlane(scorePlane, seed, retainedCandidateLimit, scratch, stats, &visitedCandidates); err != nil {
+			if err := v.scoreAndPushFrontierVisitedPreparedScorePlane(ctx, scorePlane, seed, retainedCandidateLimit, admission, admissionEnabled, scratch, stats, &visitedCandidates); err != nil {
 				return nil, *stats, err
 			}
 			continue
@@ -352,13 +481,21 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 		if len(adjacency) == 0 {
 			continue
 		}
-		if countLoopEdges {
+		if countLoopEdges && ctx == nil {
 			loopEdgeVisits += uint64(len(adjacency))
 		}
 		if rowIDScorePlane != nil {
 			scratch.scoreTileRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.scoreTileRowIDs, len(adjacency))
 			tile := scratch.scoreTileRowIDs[:0]
 			for i, neighbor := range adjacency {
+				if ctx != nil && i&255 == 0 {
+					if err := ctx.Err(); err != nil {
+						return nil, *stats, err
+					}
+				}
+				if countLoopEdges && ctx != nil {
+					loopEdgeVisits++
+				}
 				if uint64(neighbor) >= rowCount64 {
 					return nil, *stats, fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 				}
@@ -370,17 +507,29 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 				tile = append(tile, neighbor)
 			}
 			if len(tile) != 0 {
-				scored, err := rowIDScorePlane.scoreAndPushFrontierVisitedRowIDsPrevalidated(tile, retainedCandidateLimit, scratch, stats)
-				if err != nil {
+				if !admissionEnabled {
+					scored, err := rowIDScorePlane.scoreAndPushFrontierVisitedRowIDsPrevalidated(tile, retainedCandidateLimit, scratch, stats)
+					if err != nil {
+						return nil, *stats, err
+					}
+					visitedCandidates += uint64(scored)
+				} else if err := v.scoreAndPushFrontierVisitedRowIDTilePreparedScorePlane(ctx, rowIDScorePlane, tile, retainedCandidateLimit, admission, admissionEnabled, scratch, stats, &visitedCandidates); err != nil {
 					return nil, *stats, err
 				}
-				visitedCandidates += uint64(scored)
 			}
 			continue
 		}
 		scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, len(adjacency))
 		tile := scratch.scoreTileOrdinals[:0]
 		for i, neighbor := range adjacency {
+			if ctx != nil && i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, *stats, err
+				}
+			}
+			if countLoopEdges && ctx != nil {
+				loopEdgeVisits++
+			}
 			if uint64(neighbor) >= rowCount64 {
 				return nil, *stats, fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 			}
@@ -392,14 +541,23 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 			tile = append(tile, neighborOrdinal)
 		}
 		if len(tile) != 0 {
-			if err := v.scoreAndPushFrontierVisitedTilePreparedScorePlane(scorePlane, tile, retainedCandidateLimit, scratch, stats, &visitedCandidates); err != nil {
+			if err := v.scoreAndPushFrontierVisitedTilePreparedScorePlane(ctx, scorePlane, tile, retainedCandidateLimit, admission, admissionEnabled, scratch, stats, &visitedCandidates); err != nil {
 				return nil, *stats, err
 			}
+		}
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, *stats, err
 		}
 	}
 	if countLoopEdges {
 		stats.Edges = loopEdgeVisits
 		stats.VisitedEdges = loopEdgeVisits
+		stats.Candidates = visitedCandidates
+	} else if admissionEnabled {
+		// The typed candidate collector must retain a truthful attempted prefix
+		// even when its caller requests minimal graph diagnostics.
 		stats.Candidates = visitedCandidates
 	}
 	columnVectorGraphNativeSearchFinishGraphTraversal(stats, traversalStart, traversalDistanceBefore)
@@ -424,6 +582,15 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 }
 
 func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerPreparedScorePlane(scorePlane columnHNSWPreparedTraversalScorePlane, rowIDScorePlane columnHNSWPreparedTraversalRowIDScorePlane, entryOrdinal int, layer int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, countLoopEdges bool, loopEdgeVisits *uint64) (int, error) {
+	return v.greedyNearestAtLayerPreparedScorePlaneWithContext(nil, scorePlane, rowIDScorePlane, entryOrdinal, layer, scratch, stats, countLoopEdges, loopEdgeVisits)
+}
+
+func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerPreparedScorePlaneWithContext(ctx context.Context, scorePlane columnHNSWPreparedTraversalScorePlane, rowIDScorePlane columnHNSWPreparedTraversalRowIDScorePlane, entryOrdinal int, layer int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, countLoopEdges bool, loopEdgeVisits *uint64) (int, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+	}
 	greedyScorePlane, _ := rowIDScorePlane.(columnHNSWPreparedTraversalRowIDGreedyScorePlane)
 	best := entryOrdinal
 	bestScore, err := scorePlane.scoreOrdinal(best, scratch, stats)
@@ -432,6 +599,11 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerPreparedScorePlan
 	}
 	changed := true
 	for changed {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+		}
 		changed = false
 		adjacency, err := v.adjacencyLayerForOrdinal(best, layer, stats)
 		if err != nil {
@@ -440,10 +612,18 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerPreparedScorePlan
 		if len(adjacency) == 0 {
 			continue
 		}
-		if countLoopEdges && loopEdgeVisits != nil {
+		if countLoopEdges && loopEdgeVisits != nil && ctx == nil {
 			*loopEdgeVisits += uint64(len(adjacency))
 		}
 		for i, neighbor := range adjacency {
+			if ctx != nil && i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return 0, err
+				}
+			}
+			if countLoopEdges && loopEdgeVisits != nil && ctx != nil {
+				(*loopEdgeVisits)++
+			}
 			if uint64(neighbor) >= uint64(v.Header.Rows) {
 				return 0, fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal ordinal=%d layer=%d adjacency[%d]=%d outside row_count=%d: %w", best, layer, i, neighbor, v.Header.Rows, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 			}
@@ -452,6 +632,11 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerPreparedScorePlan
 			newBest, newBestScore, greedyChanged, err := greedyScorePlane.scoreGreedyBestRowIDsPrevalidated(adjacency, best, bestScore, scratch, stats)
 			if err != nil {
 				return 0, err
+			}
+			if ctx != nil {
+				if err := ctx.Err(); err != nil {
+					return 0, err
+				}
 			}
 			if greedyChanged {
 				best = newBest
@@ -465,6 +650,11 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerPreparedScorePlan
 			scores, err := rowIDScorePlane.scoreRowIDsPrevalidated(adjacency, scratch.scoreTileScores, scratch, stats)
 			if err != nil {
 				return 0, err
+			}
+			if ctx != nil {
+				if err := ctx.Err(); err != nil {
+					return 0, err
+				}
 			}
 			for i, neighbor := range adjacency {
 				neighborOrdinal := int(neighbor)
@@ -488,6 +678,11 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerPreparedScorePlan
 		if err != nil {
 			return 0, err
 		}
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+		}
 		for i, neighborOrdinal := range tile {
 			score := scores[i]
 			// Keep exact-pack tie handling stable with the current route.
@@ -501,26 +696,43 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerPreparedScorePlan
 	return best, nil
 }
 
-func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedPreparedScorePlane(scorePlane columnHNSWPreparedTraversalScorePlane, ordinal, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, visitedCandidates *uint64) error {
+func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedPreparedScorePlane(ctx context.Context, scorePlane columnHNSWPreparedTraversalScorePlane, ordinal, topK int, admission columnHNSWPreparedTraversalAdmission, admissionEnabled bool, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, visitedCandidates *uint64) error {
 	_ = v
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 	score, err := scorePlane.scoreOrdinal(ordinal, scratch, stats)
 	if err != nil {
 		return err
 	}
 	if visitedCandidates != nil {
 		(*visitedCandidates)++
+		if admissionEnabled && stats != nil {
+			// Errors after a successful scalar invocation still report the actual
+			// layer-0 attempted prefix; only successful admission is discarded.
+			stats.Candidates = *visitedCandidates
+		}
 	}
-	candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: score}
-	if scratch.insertTop(topK, candidate) {
-		scratch.pushFrontierAccounting(candidate, stats)
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
+	columnHNSWPreparedTraversalAdmit(columnVectorGraphSearchCandidate{ordinal: ordinal, score: score}, topK, admission, admissionEnabled, scratch, stats)
 	return nil
 }
 
-func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTilePreparedScorePlane(scorePlane columnHNSWPreparedTraversalScorePlane, ordinals []int, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, visitedCandidates *uint64) error {
+func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTilePreparedScorePlane(ctx context.Context, scorePlane columnHNSWPreparedTraversalScorePlane, ordinals []int, topK int, admission columnHNSWPreparedTraversalAdmission, admissionEnabled bool, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, visitedCandidates *uint64) error {
 	_ = v
 	if len(ordinals) == 0 {
 		return nil
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 	scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(ordinals))
 	scores, err := scorePlane.scoreOrdinals(ordinals, scratch.scoreTileScores, scratch, stats)
@@ -529,12 +741,55 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTilePrepar
 	}
 	if visitedCandidates != nil {
 		*visitedCandidates += uint64(len(ordinals))
+		if admissionEnabled && stats != nil {
+			stats.Candidates = *visitedCandidates
+		}
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 	for i, ordinal := range ordinals {
-		candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: scores[i]}
-		if scratch.insertTop(topK, candidate) {
-			scratch.pushFrontierAccounting(candidate, stats)
+		columnHNSWPreparedTraversalAdmit(columnVectorGraphSearchCandidate{ordinal: ordinal, score: scores[i]}, topK, admission, admissionEnabled, scratch, stats)
+	}
+	return nil
+}
+
+// scoreAndPushFrontierVisitedRowIDTilePreparedScorePlane is the filtered
+// counterpart to the scalar-u8 fused row-ID path. Candidate admission cannot
+// be delegated to the base scalar plane because filtered nodes must remain in
+// the frontier while being excluded from retained results. Keep the score call
+// row-ID/batched, then apply typed admission against the original graph
+// ordinals without staging a generic []int tile.
+func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedRowIDTilePreparedScorePlane(ctx context.Context, scorePlane columnHNSWPreparedTraversalRowIDScorePlane, rowIDs []uint32, topK int, admission columnHNSWPreparedTraversalAdmission, admissionEnabled bool, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, visitedCandidates *uint64) error {
+	_ = v
+	if len(rowIDs) == 0 {
+		return nil
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
+	}
+	scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(rowIDs))
+	scores, err := scorePlane.scoreRowIDsPrevalidated(rowIDs, scratch.scoreTileScores, scratch, stats)
+	if err != nil {
+		return err
+	}
+	if visitedCandidates != nil {
+		*visitedCandidates += uint64(len(rowIDs))
+		if admissionEnabled && stats != nil {
+			stats.Candidates = *visitedCandidates
+		}
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	for i, rowID := range rowIDs {
+		columnHNSWPreparedTraversalAdmit(columnVectorGraphSearchCandidate{ordinal: int(rowID), score: scores[i]}, topK, admission, admissionEnabled, scratch, stats)
 	}
 	return nil
 }

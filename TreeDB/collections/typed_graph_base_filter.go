@@ -199,6 +199,13 @@ func bindTypedGraphBaseFilterWithContext(ctx context.Context, base *typedGraphBa
 		return nil, errTypedGraphSearchBudget
 	}
 	plan = &typedGraphPreparedFilter{overlay: overlay, base: base.plan.base, borrowedBaseFilter: base, retainedBytes: 2 * d * word, ordinalGrowthPeakBytes: 2 * d * word}
+	// Keeper-backed base plans are detached before binding. Keep that exact
+	// immutable origin on the ephemeral wrapper so private navigation consumers
+	// can reject a same-cardinality but different selection in O(1), without
+	// retaining request-local snapshots or scanning the selection at query time.
+	if base.holder != nil && base.plan.overlay == nil {
+		plan.cachedBasePlan = base.plan
+	}
 	if d == 0 {
 		plan.count = plan.base.Count()
 		plan.exactBaseByID = base.plan.exactBaseByID

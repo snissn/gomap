@@ -23,8 +23,12 @@ var typedGraphFilterNavigationConstruction = make(chan struct{}, 1)
 // typedGraphFilterNavigation is derived, process-local navigation. The base
 // pack remains the sole vector and document-ID owner.
 type typedGraphFilterNavigation struct {
-	view          columnHNSWSearchPackPreparedView
-	baseOrdinals  []uint32
+	view         columnHNSWSearchPackPreparedView
+	baseOrdinals []uint32
+	// basePack is the exact immutable base code/graph pin used while deriving
+	// baseOrdinals. It lets a private score-plane consumer reject a same-shape
+	// pack from another snapshot without a per-query map validation pass.
+	basePack      *columnHNSWSearchPackPreparedView
 	retainedBytes int
 }
 
@@ -157,7 +161,7 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 			},
 			Levels: levels, AdjacencyLayers: preparedLayers, status: columnHNSWSearchPackPreparedStatusHeap, ephemeralHeap: true,
 		},
-		baseOrdinals: baseOrdinals, retainedBytes: retained,
+		baseOrdinals: baseOrdinals, basePack: overlay.pack, retainedBytes: retained,
 	}, nil
 }
 

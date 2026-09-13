@@ -77,6 +77,33 @@ No-document buffered serving is available through both lower-level
 projections, filters, and benchmark-debug stats remain outside this buffered
 collection route.
 
+### Private typed filtered scalar-u8 candidate collection (#4684)
+
+The typed mutable-search implementation has a private **legacy** scalar-u8 v1
+candidate collector for a prepared immutable base graph. It reuses the existing
+prepared scalar-u8 code plane and HNSW traversal; calibrated scalar-u8 alpha
+planes are intentionally rejected by this narrow seam. It is not a new public query mode and
+must not set the public `quantized_only` or `quantized_rerank` route evidence.
+The collector returns graph ordinals plus estimated scores only. It does not
+fetch document IDs/rows or exact FP32 vectors/norms, and final visibility,
+shadow handling, exact rerank, and public option exposure remain later work.
+
+Its typed candidate selection and base exclusions are traversal admission, not
+a post-filter over an unfiltered top K: an ineligible node can still enter the
+frontier and expand the immutable graph, but cannot enter the retained result
+set. For an optional local derived navigation graph, scalar scoring maps local
+ordinals to validated base code rows while retained ties continue to use the
+navigation ordinal order. The collector has a strict scalar score allowance:
+every scalar-u8 invocation, including upper layers, seeds, repeats, and batched
+row-ID calls, is charged through `quantized_score_calls`; a whole batch is
+prechecked against remaining allowance before dispatch. Cancellation, an
+exhausted allowance, or an unavailable/mismatched code asset fails closed and
+returns no partial successful shortlist.
+
+This internal collector does **not** make public mutable filtered quantized
+search available. In particular, it does not install a mutable mode, alter the
+existing exact or buffered quantized APIs, or claim Q2/Q3 rerank/public support.
+
 ## Durable asset model
 
 Each declared legacy scalar_u8 score plane rebuilds one TVIS vector-index-state
