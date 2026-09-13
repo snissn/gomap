@@ -71,6 +71,55 @@ unique-value helper tables, and accounting for the staged documents.
 Flush units are a visibility and publish-amortization mechanism. They are not a
 separate durable log.
 
+## Bounded Typed Durable Grouping
+
+Ordinary typed source replacement currently drains pending writes and publishes
+one command-WAL/root/asset transaction per API call. The #1242 throughput slice
+may instead admit several concurrent typed calls into one bounded FIFO
+write-domain group. This is a collection write-domain responsibility, not a
+document-service queue or a second durability mode.
+
+The group reuses the existing command-WAL frames, contiguous coverage intent,
+typed publication receipts, `indexedFlushUnit` ownership, and ordered-root
+publisher. It does not add a WAL format or another durable overlay. One group
+may close one durable command prefix and publish one coherent root/asset state
+for several calls; each call retains its own result and error boundary.
+
+The admission states are:
+
+1. **Private:** validation and planning inputs are caller-owned, have no LSN,
+   and are neither visible nor recoverable.
+2. **Queued:** the write domain has accepted FIFO ownership of immutable input,
+   command bytes, and required external references. The caller's buffers are no
+   longer retained. The request is not visible and cannot return success.
+3. **Publishing:** one write-domain leader plans the accepted prefix in FIFO
+   order against one coherent base, appends its command frames, and publishes
+   the coalesced roots/assets with contiguous LSN coverage.
+4. **Installed:** the durable command prefix and coherent collection state are
+   installed. Only now may each covered request return success.
+
+Duplicate IDs, same-ID writes, uniqueness checks, and per-request update counts
+must match serial FIFO execution. Insert wins within one source replacement as
+it does today; later accepted requests win across requests. Readers must never
+observe a partial request or a group whose durable prefix is incomplete.
+
+Cancellation before queued admission returns without an LSN. After admission,
+the write domain completes the request; a failure after an LSN may be durable is
+commit-ambiguous and poisons the normal handle for recovery. It must not report
+a rollback or invite a blind retry.
+
+Admission is bounded by the existing write-domain byte/document/unit limits and
+backpressure. Schema changes, fold, reconciliation, vacuum, explicit flush,
+checkpoint, and close stop new admission and drain every accepted request
+through the captured frontier. Interleaved raw or sibling-collection command
+LSNs must be drained or excluded before forming a coverage intent; a group must
+never claim a non-contiguous prefix.
+
+The first product gate is two concurrent ordinary typed calls that join one
+group, require one physical durability boundary and one root publication, and
+cannot acknowledge before installation. A service-only scheduler, hidden
+post-ack drain, or a group that remains size one does not satisfy this contract.
+
 ## Async Indexed Flush
 
 Indexed schemas enable `BufferedIndexedAsyncFlush` by default, so
