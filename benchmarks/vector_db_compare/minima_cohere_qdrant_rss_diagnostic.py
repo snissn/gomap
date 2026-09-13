@@ -243,17 +243,18 @@ class Run:
     def stop_server(self):
         if self.process is None:
             return
-        if self.process.poll() is None:
-            if (self.process_identity is not None
-                    and existing.linux_process_identity(self.server_pid) != self.process_identity):
-                raise RuntimeError("owned Qdrant identity changed; refusing to signal")
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=10)
-                raise RuntimeError("owned Qdrant required forced shutdown")
+        if self.process.poll() is not None:
+            raise RuntimeError(f"owned Qdrant exited before shutdown with {self.process.returncode}")
+        if (self.process_identity is not None
+                and existing.linux_process_identity(self.server_pid) != self.process_identity):
+            raise RuntimeError("owned Qdrant identity changed; refusing to signal")
+        self.process.terminate()
+        try:
+            self.process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=10)
+            raise RuntimeError("owned Qdrant required forced shutdown")
         if self.server_log:
             self.server_log.close()
 
@@ -395,13 +396,15 @@ class Run:
                 if self.client:
                     self.client.close()
             except BaseException as exc:
-                comparison = {"state": "uncalibrated", "reasons": [f"client close: {type(exc).__name__}: {exc}"]}
-                artifact["state"], artifact["reasons"] = "uncalibrated", comparison["reasons"]
+                artifact["state"] = "uncalibrated"
+                artifact.setdefault("reasons", []).append(f"client close: {type(exc).__name__}: {exc}")
+                comparison = {"state": "uncalibrated", "reasons": artifact["reasons"]}
             try:
                 self.stop_server()
             except BaseException as exc:
-                comparison = {"state": "uncalibrated", "reasons": [f"server stop: {type(exc).__name__}: {exc}"]}
-                artifact["state"], artifact["reasons"] = "uncalibrated", comparison["reasons"]
+                artifact["state"] = "uncalibrated"
+                artifact.setdefault("reasons", []).append(f"server stop: {type(exc).__name__}: {exc}")
+                comparison = {"state": "uncalibrated", "reasons": artifact["reasons"]}
         (self.output / "qdrant-rss.json").write_bytes(native.canonical(artifact))
         (self.output / "comparison.json").write_bytes(native.canonical(comparison))
         print(json.dumps(comparison, sort_keys=True, allow_nan=False))

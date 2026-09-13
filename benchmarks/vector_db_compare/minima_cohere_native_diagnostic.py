@@ -561,11 +561,12 @@ class Run:
                 failed = failed or f"final resource guard: {exc}"
             if rss_artifact is not None:
                 rss_artifact = finalize_rss_artifact(rss_artifact, failed)
-                (self.output / "rss.json").write_bytes(canonical(rss_artifact))
                 self.emit("rss_boundary", artifact=rss_artifact)
             self.emit("terminal", lifecycle_complete=failed is None, qualification="not_evaluated", error=failed,
                       process_lifetimes=self.controller.lifetimes, final_disk_bytes=existing.common.disk_bytes(self.output / "db"))
             self.events.close()
+            if rss_artifact is not None:
+                (self.output / "rss.json").write_bytes(canonical(rss_artifact))
         return int(failed is not None)
 
 
