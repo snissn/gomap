@@ -151,6 +151,14 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             info.assert_called_once_with(run.plan["url"], "secret")
             run.server_log.close()
 
+    def test_owned_qdrant_rejects_nonzero_shutdown(self):
+        run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+        run.process = MagicMock(returncode=1)
+        run.process.poll.return_value = None
+        run.process_identity, run.server_log = None, None
+        with self.assertRaisesRegex(RuntimeError, "shutdown exited with 1"):
+            run.stop_server()
+
 
 if __name__ == "__main__":
     unittest.main()

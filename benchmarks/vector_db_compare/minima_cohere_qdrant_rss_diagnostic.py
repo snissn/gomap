@@ -258,6 +258,8 @@ class Run:
             raise RuntimeError("owned Qdrant required forced shutdown")
         if self.server_log:
             self.server_log.close()
+        if self.process.returncode != 0:
+            raise RuntimeError(f"owned Qdrant shutdown exited with {self.process.returncode}")
 
     def validate_fresh(self):
         identity = existing.linux_process_identity(self.server_pid)
