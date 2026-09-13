@@ -1099,8 +1099,16 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 // Its caller owns collision admission; the normal command wrapper advances the
 // generation, while captured-frontier preparation reserves a fresh row part.
 func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow, generation, rowPartID, typedPartID uint64) (_ ColumnPublishPreparedAssets, retErr error) {
+	return c.prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepared, input, hookInput, rows, nil, nil, generation, rowPartID, typedPartID)
+}
+
+func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow, rowSource columnDeclaredRowSource, typedSource typedColumnAdapterRowSource, generation, rowPartID, typedPartID uint64) (_ ColumnPublishPreparedAssets, retErr error) {
 	if generation == 0 || rowPartID == 0 || typedPartID == 0 || rowPartID == typedPartID {
 		return ColumnPublishPreparedAssets{}, errors.New("collections: invalid column physical asset identity")
+	}
+	rowCount := len(rows)
+	if rowSource != nil {
+		rowCount = rowSource.Len()
 	}
 	isolatedTypedOutput := columnStoreTypedScalarIndexesSupported(input.meta) && columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore)
 	cleanupAssets := make([]ColumnPreparedAsset, 0, 8)
@@ -1439,11 +1447,15 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPub
 	prepareRowAsset := func() (rowAssetPrepareResult, error) {
 		start := time.Now()
 		rowAssetConfig := columnStoreRowAssetConfig(hookInput.ColumnStore)
-		rowAssetRows, err := projectColumnDeclaredRowsForColumns(hookInput.ColumnStore.Columns, rowAssetConfig.Columns, rows)
-		if err != nil {
-			return rowAssetPrepareResult{}, err
+		rowAssetRows := rows
+		var err error
+		if rowSource == nil {
+			rowAssetRows, err = projectColumnDeclaredRowsForColumns(hookInput.ColumnStore.Columns, rowAssetConfig.Columns, rows)
+			if err != nil {
+				return rowAssetPrepareResult{}, err
+			}
 		}
-		encoded, summary, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		encodeInput := columnPhysicalAssetEncodeInput{
 			Collection:        hookInput.Collection,
 			Namespace:         hookInput.ColumnStore.AssetManager.Namespace,
 			Generation:        generation,
@@ -1453,7 +1465,14 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPub
 			SchemaHash:        hookInput.ColumnStore.SchemaHash,
 			Columns:           rowAssetConfig.Columns,
 			Rows:              rowAssetRows,
-		})
+		}
+		var encoded []byte
+		var summary columnPhysicalAssetSummary
+		if rowSource == nil {
+			encoded, summary, err = encodeColumnPhysicalAsset(encodeInput)
+		} else {
+			encoded, summary, err = encodeColumnPhysicalAssetFromSource(encodeInput, rowSource)
+		}
 		if err != nil {
 			return rowAssetPrepareResult{}, err
 		}
@@ -1475,7 +1494,13 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPub
 		typedColumnDone = make(chan typedColumnPrepareResult, 1)
 		go func(done chan<- typedColumnPrepareResult) {
 			start := time.Now()
-			build, err := buildTypedColumnPartImageForDeclaredRowsWithResult(hookInput.ColumnStore, generation, typedPartID, rows)
+			var build typedColumnPartImageBuildResult
+			var err error
+			if typedSource == nil {
+				build, err = buildTypedColumnPartImageForDeclaredRowsWithResult(hookInput.ColumnStore, generation, typedPartID, rows)
+			} else {
+				build, err = buildTypedColumnPartImageFromSourceWithResult(hookInput.ColumnStore, generation, typedPartID, typedSource)
+			}
 			done <- typedColumnPrepareResult{
 				build:    build,
 				duration: time.Since(start),
@@ -1568,7 +1593,11 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPub
 	}
 	if hookInput.Operation == ColumnPublishOperationInsert {
 		typedMetadataStart := time.Now()
-		typedMetadataAssets, err := buildColumnAggregateMetadataAssetsWithOptions(hookInput.ColumnStore, rows, columnStoreTypedColumnPartAggregateMetadata(hookInput.ColumnStore), hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, typedPartID, hookInput.AppliedCommandLSN, columnAggregateMetadataAssetBuildOptions{
+		typedMetadata := columnStoreTypedColumnPartAggregateMetadata(hookInput.ColumnStore)
+		if rowSource != nil && len(typedMetadata) != 0 {
+			return ColumnPublishPreparedAssets{}, errors.New("collections: streamed column asset preparation does not support typed aggregate metadata")
+		}
+		typedMetadataAssets, err := buildColumnAggregateMetadataAssetsWithOptions(hookInput.ColumnStore, rows, typedMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, typedPartID, hookInput.AppliedCommandLSN, columnAggregateMetadataAssetBuildOptions{
 			TypedGranuleRowOrder: typedGranuleRowOrder,
 		})
 		if err != nil {
@@ -1581,7 +1610,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPub
 				return ColumnPublishPreparedAssets{}, err
 			}
 			typedMetadataBytes = saturatingAddNonNegativeInt64(typedMetadataBytes, int64(len(encodedMetadata)))
-			queueRegularAsset(encodedMetadata, ColumnAssetKindTCS1AggregateMetadata, typedPartID, len(rows), metadata.AggregateName)
+			queueRegularAsset(encodedMetadata, ColumnAssetKindTCS1AggregateMetadata, typedPartID, rowCount, metadata.AggregateName)
 		}
 		if typedMetadataBytes > 0 {
 			prepared.AssetMetrics.AggregateMetadataDuration += time.Since(typedMetadataStart)
@@ -1589,12 +1618,24 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPub
 			prepared.AssetMetrics.AggregateMetadataCount += len(typedMetadataAssets)
 		}
 		rowSidecarStart := time.Now()
-		rowSidecarAssets, fusedRowSidecars, err := buildColumnRowSidecarAssets(rowAsset.config, rowAsset.rows, rowAsset.config.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, rowPartID, hookInput.AppliedCommandLSN)
+		var rowSidecarAssets columnRowSidecarAssets
+		var fusedRowSidecars bool
+		if rowSource == nil {
+			rowSidecarAssets, fusedRowSidecars, err = buildColumnRowSidecarAssets(rowAsset.config, rowAsset.rows, rowAsset.config.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, rowPartID, hookInput.AppliedCommandLSN)
+		} else {
+			rowSidecarAssets, fusedRowSidecars, err = buildColumnRowSidecarAssetsFromSource(rowAsset.config, rowSource, rowAsset.config.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, rowPartID, hookInput.AppliedCommandLSN)
+		}
 		rowSidecarBuildDuration := time.Since(rowSidecarStart)
 		if err != nil {
+			if rowSource != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
 			rowSidecarAssets = columnRowSidecarAssets{}
 			fusedRowSidecars = false
 			err = nil
+		}
+		if rowSource != nil && !fusedRowSidecars {
+			return ColumnPublishPreparedAssets{}, errors.New("collections: streamed column asset preparation requires fused row sidecars")
 		}
 		if fusedRowSidecars {
 			prepared.AssetMetrics.RowSidecarSharedBuildDuration += rowSidecarBuildDuration

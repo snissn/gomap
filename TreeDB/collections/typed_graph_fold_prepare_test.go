@@ -53,6 +53,67 @@ func TestTypedGraphCompactionRowsOwnReconstructedValues(t *testing.T) {
 	}
 }
 
+func TestTypedGraphFoldStreamedAssetsMatchMaterializedRows(t *testing.T) {
+	col, _, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
+	state, closeState, err := col.loadColumnStoreCompactionState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeState()
+	rows, _, err := col.materializeColumnStoreCompactionRows(context.Background(), state, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := state.meta.VectorIndexes[0]
+	eligible, err := typedGraphFoldStreamedSourcesEligible(state.cfg, def)
+	if err != nil || !eligible {
+		t.Fatalf("streamed eligibility=%t err=%v", eligible, err)
+	}
+	graphRows, vectorSource, used, err := col.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(state.snap, state.catalog, state.cfg, state.records, state.manifest, def)
+	if err != nil || !used {
+		t.Fatalf("typed graph rows used=%t err=%v", used, err)
+	}
+	if vectorSource != nil {
+		defer vectorSource.Close()
+	}
+	streamedRows, err := newTypedGraphFoldRowSource(context.Background(), col, state, graphRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer streamedRows.Close()
+	rowCfg := columnStoreRowAssetConfig(state.cfg)
+	if rowCfg.Columns == nil || len(rowCfg.Columns) >= len(state.cfg.Columns) {
+		t.Fatalf("row columns=%d full columns=%d", len(rowCfg.Columns), len(state.cfg.Columns))
+	}
+	rowInput := columnPhysicalAssetEncodeInput{Collection: state.meta.Name, Namespace: state.cfg.AssetManager.Namespace, Generation: state.manifest.Generation, PartID: 99, AppliedCommandLSN: state.manifest.AppliedCommandLSN, Operation: ColumnPublishOperationInsert, SchemaHash: state.cfg.SchemaHash, Columns: rowCfg.Columns}
+	projected, err := projectColumnDeclaredRowsForColumns(state.cfg.Columns, rowCfg.Columns, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRows, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{Collection: rowInput.Collection, Namespace: rowInput.Namespace, Generation: rowInput.Generation, PartID: rowInput.PartID, AppliedCommandLSN: rowInput.AppliedCommandLSN, Operation: rowInput.Operation, SchemaHash: rowInput.SchemaHash, Columns: rowInput.Columns, Rows: projected})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotRows, _, err := encodeColumnPhysicalAssetFromSource(rowInput, streamedRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotRows, wantRows) {
+		t.Fatal("streamed row asset differs from materialized encoding")
+	}
+	wantTyped, err := buildTypedColumnPartImageForDeclaredRowsWithResult(state.cfg, state.manifest.Generation, typedColumnPartAssetPartID, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotTyped, err := buildTypedColumnPartImageFromSourceWithResult(state.cfg, state.manifest.Generation, typedColumnPartAssetPartID, typedGraphFoldVectorSource{ctx: context.Background(), rows: graphRows, field: columnStoreTypedColumnPartFields(state.cfg)[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotTyped.Bytes, wantTyped.Bytes) || !reflect.DeepEqual(gotTyped.TypedGranuleRowOrder, wantTyped.TypedGranuleRowOrder) {
+		t.Fatal("streamed typed-column asset differs from materialized encoding")
+	}
+}
+
 func TestTypedGraphCapturedAssetIdentity(t *testing.T) {
 	col, _, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
 	state, closeState, err := col.loadColumnStoreCompactionState(context.Background())

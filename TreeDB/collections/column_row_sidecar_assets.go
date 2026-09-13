@@ -1,5 +1,7 @@
 package collections
 
+import "fmt"
+
 type columnRowSidecarAssets struct {
 	DictionaryCodes   []columnDictionaryCodesAsset
 	Int64Values       []columnInt64ValuesAsset
@@ -7,14 +9,18 @@ type columnRowSidecarAssets struct {
 }
 
 func buildColumnRowSidecarAssets(cfg ColumnStoreConfig, rows []columnDeclaredRow, aggregates []ColumnAggregateMetadata, collection, namespace string, generation, partID, appliedLSN uint64) (columnRowSidecarAssets, bool, error) {
+	return buildColumnRowSidecarAssetsFromSource(cfg, columnDeclaredRowsSource(rows), aggregates, collection, namespace, generation, partID, appliedLSN)
+}
+
+func buildColumnRowSidecarAssetsFromSource(cfg ColumnStoreConfig, rows columnDeclaredRowSource, aggregates []ColumnAggregateMetadata, collection, namespace string, generation, partID, appliedLSN uint64) (columnRowSidecarAssets, bool, error) {
 	dictionaryBuilders := make([]columnDictionaryCodesAssetBuilder, 0)
 	int64Builders := make([]columnInt64ValuesAssetBuilder, 0)
 	for colIdx, col := range cfg.Columns {
 		if col.Dictionary && col.ValueType == ColumnStoreValueString {
-			dictionaryBuilders = append(dictionaryBuilders, newColumnDictionaryCodesAssetBuilder(col, colIdx, len(rows)))
+			dictionaryBuilders = append(dictionaryBuilders, newColumnDictionaryCodesAssetBuilder(col, colIdx, rows.Len()))
 		}
 		if col.ValueType == ColumnStoreValueInt64 && !col.Nullable {
-			int64Builders = append(int64Builders, newColumnInt64ValuesAssetBuilder(col, colIdx, len(rows)))
+			int64Builders = append(int64Builders, newColumnInt64ValuesAssetBuilder(col, colIdx, rows.Len()))
 		}
 	}
 	aggregateSpecs, ok, err := newColumnRowSidecarAggregateSpecs(cfg, aggregates)
@@ -22,7 +28,11 @@ func buildColumnRowSidecarAssets(cfg ColumnStoreConfig, rows []columnDeclaredRow
 		return columnRowSidecarAssets{}, ok, err
 	}
 	accumulators, specAccumulatorIdx := newColumnAggregateMetadataAccumulators(aggregateSpecs)
-	for rowIdx, row := range rows {
+	for rowIdx := 0; rowIdx < rows.Len(); rowIdx++ {
+		row, err := rows.Row(rowIdx)
+		if err != nil {
+			return columnRowSidecarAssets{}, true, fmt.Errorf("collections: row sidecar row[%d]: %w", rowIdx, err)
+		}
 		if row.Deleted {
 			return columnRowSidecarAssets{}, false, nil
 		}
@@ -64,7 +74,7 @@ func buildColumnRowSidecarAssets(cfg ColumnStoreConfig, rows []columnDeclaredRow
 	}
 	for idx, spec := range aggregateSpecs {
 		entries := sortedColumnAggregateMetadataEntries(accumulators[specAccumulatorIdx[idx]].entries)
-		assets.AggregateMetadata = append(assets.AggregateMetadata, spec.asset(cfg.SchemaHash, collection, namespace, generation, partID, appliedLSN, len(rows), entries))
+		assets.AggregateMetadata = append(assets.AggregateMetadata, spec.asset(cfg.SchemaHash, collection, namespace, generation, partID, appliedLSN, rows.Len(), entries))
 	}
 	return assets, true, nil
 }
