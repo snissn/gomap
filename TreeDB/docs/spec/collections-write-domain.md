@@ -87,38 +87,58 @@ for several calls; each call retains its own result and error boundary.
 
 The admission states are:
 
-1. **Private:** validation and planning inputs are caller-owned, have no LSN,
-   and are neither visible nor recoverable.
-2. **Queued:** the write domain has accepted FIFO ownership of immutable input,
-   command bytes, and required external references. The caller's buffers are no
-   longer retained. The request is not visible and cannot return success.
-3. **Publishing:** one write-domain leader plans the accepted prefix in FIFO
-   order against one coherent base, appends its command frames, and publishes
-   the coalesced roots/assets with contiguous LSN coverage.
+1. **Private:** validation inputs are caller-owned, have no LSN, and are neither
+   visible nor recoverable.
+2. **Queued:** the write domain accepts FIFO responsibility for validated,
+   immutable request inputs and their required lifetimes. Borrowed inputs cannot
+   outlive the synchronous call; anything retained beyond that lifetime must be
+   owned. Queue admission alone assigns no LSN and cannot return success.
+3. **Publishing:** one write-domain leader evaluates each request against one
+   coherent base plus preceding successful requests. It rejects semantic
+   failures before assigning that request an LSN, then finalizes and appends one
+   command frame per changing request and publishes the coalesced roots/assets
+   with contiguous LSN coverage. An all-unchanged request retains the existing
+   no-frame/no-publication shortcut.
 4. **Installed:** the durable command prefix and coherent collection state are
    installed. Only now may each covered request return success.
 
 Duplicate IDs, same-ID writes, uniqueness checks, and per-request update counts
 must match serial FIFO execution. Insert wins within one source replacement as
-it does today; later accepted requests win across requests. Readers must never
+it does today; later successful requests win across requests. Readers must never
 observe a partial request or a group whose durable prefix is incomplete.
 
 Cancellation before queued admission returns without an LSN. After admission,
-the write domain completes the request; a failure after an LSN may be durable is
-commit-ambiguous and poisons the normal handle for recovery. It must not report
-a rollback or invite a blind retry.
+the write domain completes the request. Semantic rejection before append is
+definitive. A failure after an affected request's LSN has been assigned may
+leave that mutation durable; that outcome is commit-ambiguous and poisons the
+normal handle for recovery. It must not report a rollback or invite a blind
+retry, and every affected waiter must be released.
 
-Admission is bounded by the existing write-domain byte/document/unit limits and
-backpressure. Schema changes, fold, reconciliation, vacuum, explicit flush,
-checkpoint, and close stop new admission and drain every accepted request
-through the captured frontier. Interleaved raw or sibling-collection command
-LSNs must be drained or excluded before forming a coverage intent; a group must
-never claim a non-contiguous prefix.
+Group admission accounts for retained request bytes, command bytes, and
+in-flight ownership, and applies bounded backpressure using the existing
+write-domain limits where applicable. Group formation has a bounded wait; a lone
+valid request progresses without another arrival. Oversized requests retain
+existing atomicity and pre-LSN rejection semantics.
 
-The first product gate is two concurrent ordinary typed calls that join one
-group, require one physical durability boundary and one root publication, and
-cannot acknowledge before installation. A service-only scheduler, hidden
-post-ack drain, or a group that remains size one does not satisfy this contract.
+Schema changes, fold, reconciliation, vacuum, explicit flush, checkpoint, and
+close establish an admission cut in the relevant scope and drain accepted work
+through that frontier. Lower interleaved raw or sibling-collection command LSNs
+must be applied, or excluded before group admission, before collection coverage
+advances; a group must never claim a non-contiguous prefix.
+
+The first product gate is two concurrent changing ordinary typed calls that
+share one command-WAL file-sync boundary in a controlled no-rotation cell and
+one coherent root-group publication; neither may acknowledge before
+installation. Required external-resource and column-asset durability closure
+remains mandatory and is counted separately. A service-only scheduler, hidden
+post-ack drain, or an implementation that never groups temporally overlapping
+calls does not satisfy this contract.
+
+The first implementation must also permit ordinary same-service typed callers
+to overlap while preserving generation and maintenance exclusion. Passing
+`false` to `AppendStagedCommandWALIntent` is not a grouping mechanism because a
+durable-profile intent still requests sync-on-publish; use the backend prefix
+and resource machinery without a relaxed-profile workaround.
 
 ## Async Indexed Flush
 
