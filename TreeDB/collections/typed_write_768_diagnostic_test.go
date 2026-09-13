@@ -288,8 +288,8 @@ func typedWrite768Preload(t *testing.T) int {
 		return 0
 	}
 	preload, err := strconv.Atoi(raw)
-	if err != nil || preload < 0 || preload > 500000 {
-		t.Fatal("GOMAP_WRITE_768_PRELOAD must be in [0,500000]")
+	if err != nil || preload < 0 || preload > 10000 {
+		t.Fatal("GOMAP_WRITE_768_PRELOAD must be in [0,10000]")
 	}
 	return preload
 }
@@ -318,7 +318,6 @@ func openTypedWrite768Diagnostic(t *testing.T, preload, writeRows int) (string, 
 		db.Close()
 		t.Fatal(err)
 	}
-	capacity := max(1024, preload+writeRows)
 	opts := typedGraphPublicTestOptions()
 	opts.Publication = publication
 	opts.Owners = typedGraphReadOwnerLimits{Owners: 16, States: 16, StateBytes: 512 << 20, AssetBytes: 1 << 30, Cold: cold}

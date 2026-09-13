@@ -75,7 +75,7 @@ func TestDocumentServiceTypedWrite768Diagnostic(t *testing.T) {
 				}
 				serving := serviceWrite768Serving(preload + calls*rows)
 				if _, err := svc.OptimizeIndex(ctx, info.Name, OptimizeIndexRequest{ColumnGraphAction: "build", ColumnGraphServing: &serving}); err != nil {
-					t.Fatal(err)
+					t.Fatal(formatErrorChain(err))
 				}
 
 				inputs := make([]TypedDocumentsRequest, calls)
@@ -167,8 +167,8 @@ func TestDocumentServiceTypedWrite768Diagnostic(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				for _, call := range []int{0, len(inputs) - 1} {
-					for _, id := range [][]byte{inputs[call].IDs[0], inputs[call].IDs[len(inputs[call].IDs)-1]} {
+				for _, input := range inputs {
+					for _, id := range input.IDs {
 						if doc, err := reopenedCollection.Get(id); err != nil || len(doc) == 0 {
 							t.Fatalf("reopen Get(%q): len=%d err=%v", id, len(doc), err)
 						}
@@ -186,8 +186,8 @@ func serviceWrite768Preload(t *testing.T) int {
 		return 0
 	}
 	preload, err := strconv.Atoi(raw)
-	if err != nil || preload < 0 || preload > 500000 {
-		t.Fatal("GOMAP_WRITE_768_PRELOAD must be in [0,500000]")
+	if err != nil || preload < 0 || preload > 10000 {
+		t.Fatal("GOMAP_WRITE_768_PRELOAD must be in [0,10000]")
 	}
 	return preload
 }

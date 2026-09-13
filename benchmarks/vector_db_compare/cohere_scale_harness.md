@@ -65,6 +65,8 @@ index, and check acknowledged IDs after clean reopen. The document-service cells
 exercise the typed method used by native Minima but exclude wire/client encoding.
 Matched collection read controls distinguish a growing exact-scored suffix from
 writer interaction. Optional `GOMAP_WRITE_768_PRELOAD` is setup outside timing.
+The synthetic diagnostic accepts at most 10,000 preloaded rows; use the separate
+500K Minima qualification for large-scale evidence.
 This is neither ANN quality evidence nor crash/power-loss certification. Direct
 Go runs need their own clean source/binary provenance capture; the scale wrapper
 runs only the scale fixture.
