@@ -101,6 +101,18 @@ func TestTypedGraphFoldStreamedAssetsMatchMaterializedRows(t *testing.T) {
 	if !bytes.Equal(gotRows, wantRows) {
 		t.Fatal("streamed row asset differs from materialized encoding")
 	}
+	sidecarCfg := rowCfg
+	sidecarCfg.Columns = append([]ColumnStoreColumn(nil), rowCfg.Columns...)
+	sidecarCfg.Columns[0].Dictionary = true
+	wantSidecars, wantFused, err := buildColumnRowSidecarAssets(sidecarCfg, projected, nil, state.meta.Name, sidecarCfg.AssetManager.Namespace, state.manifest.Generation, 99, state.manifest.AppliedCommandLSN)
+	if err != nil || !wantFused || len(wantSidecars.DictionaryCodes) != 1 {
+		t.Fatalf("materialized dictionary sidecars=%d fused=%t err=%v", len(wantSidecars.DictionaryCodes), wantFused, err)
+	}
+	gotSidecars, gotFused, err := buildColumnRowSidecarAssetsFromSource(sidecarCfg, streamedRows, nil, state.meta.Name, sidecarCfg.AssetManager.Namespace, state.manifest.Generation, 99, state.manifest.AppliedCommandLSN)
+	if err != nil || !gotFused {
+		t.Fatalf("streamed dictionary sidecars fused=%t err=%v", gotFused, err)
+	}
+	assertColumnDictionaryCodesAssetsEqual3137(t, gotSidecars.DictionaryCodes, wantSidecars.DictionaryCodes)
 	wantTyped, err := buildTypedColumnPartImageForDeclaredRowsWithResult(state.cfg, state.manifest.Generation, typedColumnPartAssetPartID, rows)
 	if err != nil {
 		t.Fatal(err)
