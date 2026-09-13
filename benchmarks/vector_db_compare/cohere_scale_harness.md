@@ -114,29 +114,26 @@ taskset -c 0-5 python benchmarks/vector_db_compare/minima_cohere_native_diagnost
   --serving "$SERVING_JSON" --run-dir "$TREE_RUN"
 ```
 
-Then start the pinned standalone Qdrant 1.19.0 binary with the existing owned
-restart helper and a new storage directory. Use the repository's pinned
-`qdrant-client==1.19.0` Python environment. Freeze and run while that exact PID
-and empty backend remain alive; `QDRANT_RUN` must not already exist.
+Then use the repository's pinned `qdrant-client==1.19.0` Python environment.
+The run owns a fresh standalone Qdrant 1.19.0 process and requires both
+`QDRANT_STORAGE` and `QDRANT_RUN` not to exist before launch.
 
 ```sh
-QDRANT_PID=$(taskset -c 0-5 scripts/restart_minima_qdrant_backend.sh standalone \
-  "$QDRANT_BIN" "$QDRANT_PORT" "$QDRANT_STORAGE" "$QDRANT_LOG" "$QDRANT_PID_FILE")
 taskset -c 0-5 "$QDRANT_PYTHON" benchmarks/vector_db_compare/minima_cohere_qdrant_rss_diagnostic.py \
   --freeze "$QDRANT_PLAN" --dataset "$COHERE_EXPORT" --treedb-artifact "$TREE_RUN/rss.json" \
-  --qdrant-bin "$QDRANT_BIN" --storage-path "$QDRANT_STORAGE" --server-pid "$QDRANT_PID" \
-  --pid-file "$QDRANT_PID_FILE" --url "http://127.0.0.1:$QDRANT_PORT" --run-dir "$QDRANT_RUN"
+  --qdrant-bin "$QDRANT_BIN" --storage-path "$QDRANT_STORAGE" \
+  --url "http://127.0.0.1:$QDRANT_PORT" --run-dir "$QDRANT_RUN"
 QDRANT_PLAN_SHA=$(sha256sum "$QDRANT_PLAN" | awk '{print $1}')
 taskset -c 0-5 "$QDRANT_PYTHON" benchmarks/vector_db_compare/minima_cohere_qdrant_rss_diagnostic.py \
   --run "$QDRANT_PLAN" --expected-plan-sha256 "$QDRANT_PLAN_SHA" \
   --dataset "$COHERE_EXPORT" --treedb-artifact "$TREE_RUN/rss.json" \
-  --qdrant-bin "$QDRANT_BIN" --storage-path "$QDRANT_STORAGE" --server-pid "$QDRANT_PID" \
-  --pid-file "$QDRANT_PID_FILE" --url "http://127.0.0.1:$QDRANT_PORT" --run-dir "$QDRANT_RUN"
+  --qdrant-bin "$QDRANT_BIN" --storage-path "$QDRANT_STORAGE" \
+  --url "http://127.0.0.1:$QDRANT_PORT" --run-dir "$QDRANT_RUN"
 ```
 
 `comparison.json` says `accept` when TreeDB server-process `VmHWM` is no greater
-than Qdrant's and recommends stopping further RSS work. Otherwise it reports the
-TreeDB-minus-Qdrant byte delta and ratio as `investigate`. Missing `VmHWM`, PID
+than Qdrant's and recommends stopping RSS work for this initial-ready workload.
+Otherwise it reports the TreeDB-minus-Qdrant byte delta and ratio as `investigate`. Missing `VmHWM`, PID
 drift, nonempty backends, readiness/quality failures, or mismatched frozen
 artifacts produce `uncalibrated`. Qdrant readiness requires green/OK optimizer
 state, exact and indexed vector counts of 500,000, and both scalar indexes.

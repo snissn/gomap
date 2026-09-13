@@ -180,6 +180,13 @@ def process_peak_at_boundary(pid, expected_identity, expected_affinity):
     return sample
 
 
+def finalize_rss_artifact(artifact, failure):
+    if failure:
+        artifact["state"] = "uncalibrated"
+        artifact["reasons"].append(f"terminal failure: {failure}")
+    return artifact
+
+
 def prepare(args):
     source = Path(__file__).resolve().parents[2]
     validate_imports(source)
@@ -495,17 +502,14 @@ class Run:
                 "serving_sha256",
             )},
         }
-        (self.output / "rss.json").write_bytes(canonical(artifact))
-        self.emit("rss_boundary", artifact=artifact)
-        if reasons:
-            raise RuntimeError("; ".join(reasons))
+        return artifact
 
     def execute(self):
         self.started = time.monotonic()
         monitor = threading.Thread(target=self.guard, daemon=True)
         self.emit("plan", plan=self.plan)
         monitor.start()
-        failed = None
+        failed, rss_artifact = None, None
         try:
             self.timed("service_start", self.controller.start)
             self.timed("schema_ensure", self.ensure)
@@ -513,7 +517,9 @@ class Run:
                 self.upsert(list(range(start, min(start + 256, self.plan["rows"]))), "initial_durable_ingest")
             self.timed("initial_graph_build", lambda: self.optimize("build"))
             if self.plan["rss_only"]:
-                self.rss_boundary()
+                rss_artifact = self.rss_boundary()
+                if rss_artifact["reasons"]:
+                    raise RuntimeError("; ".join(rss_artifact["reasons"]))
             else:
                 # Cache-cold means first request for this predicate, not OS/disk-cold.
                 for eligible in self.plan["eligible_counts"]:
@@ -553,6 +559,10 @@ class Run:
                 self.check_resources()
             except BaseException as exc:
                 failed = failed or f"final resource guard: {exc}"
+            if rss_artifact is not None:
+                rss_artifact = finalize_rss_artifact(rss_artifact, failed)
+                (self.output / "rss.json").write_bytes(canonical(rss_artifact))
+                self.emit("rss_boundary", artifact=rss_artifact)
             self.emit("terminal", lifecycle_complete=failed is None, qualification="not_evaluated", error=failed,
                       process_lifetimes=self.controller.lifetimes, final_disk_bytes=existing.common.disk_bytes(self.output / "db"))
             self.events.close()

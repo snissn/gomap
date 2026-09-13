@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import time
+import urllib.parse
 
 import numpy as np
 
@@ -26,25 +28,31 @@ def qdrant_point(document):
     }
 
 
-def validate_ready_snapshot(snapshot, rows):
+def ready_snapshot(snapshot, rows):
     schema = snapshot.get("payload_schema") or {}
     config = snapshot.get("config") or {}
     hnsw, optimizer, params = (config.get("hnsw_config") or {}, config.get("optimizer_config") or {},
                                config.get("params") or {})
     vector = params.get("vectors") or {}
-    scalar_ready = all(
-        (schema.get(field) or {}).get("data_type") == "keyword"
-        and (schema.get(field) or {}).get("points") == rows
-        for field in ("meta.user_id", "meta.fpath")
-    )
-    if (snapshot.get("status") != "green" or not existing.optimizer_is_ok(snapshot.get("optimizer_status"))
-            or snapshot.get("points_count") != rows or snapshot.get("exact_points_count") != rows
-            or snapshot.get("indexed_vectors_count") != rows or not scalar_ready
+    if (any((schema.get(field) or {}).get("data_type") != "keyword"
+            for field in ("meta.user_id", "meta.fpath"))
             or hnsw.get("m") != 16 or hnsw.get("ef_construct") != 100
             or hnsw.get("full_scan_threshold") != 10000 or hnsw.get("on_disk") is not False
             or optimizer.get("indexing_threshold") != 10000 or optimizer.get("max_optimization_threads") != 1
             or params.get("on_disk_payload") is not True or vector.get("size") != 768
             or str(vector.get("distance", "")).lower() != "cosine" or vector.get("on_disk") is not False):
+        raise RuntimeError("Qdrant configuration differs from the matched query-ready contract")
+    return (snapshot.get("status") == "green"
+            and existing.optimizer_is_ok(snapshot.get("optimizer_status"))
+            and snapshot.get("points_count") == rows
+            and snapshot.get("exact_points_count") == rows
+            and snapshot.get("indexed_vectors_count") == rows
+            and all((schema.get(field) or {}).get("points") == rows
+                    for field in ("meta.user_id", "meta.fpath")))
+
+
+def validate_ready_snapshot(snapshot, rows):
+    if not ready_snapshot(snapshot, rows):
         raise RuntimeError("Qdrant did not reach the matched query-ready boundary")
 
 
@@ -76,7 +84,7 @@ def compare_artifacts(treedb, qdrant):
         "state": "accept" if accepted else "investigate", "treedb_rss_bytes": tree_bytes,
         "qdrant_rss_bytes": qdrant_bytes, "delta_bytes": tree_bytes - qdrant_bytes,
         "treedb_to_qdrant_ratio": tree_bytes / qdrant_bytes,
-        "recommendation": ("stop prioritizing further TreeDB RSS work"
+        "recommendation": ("stop prioritizing TreeDB RSS for this 500K x 768D initial-ready workload"
                            if accepted else "quantify the higher TreeDB owner before redesign"),
     }
 
@@ -110,19 +118,14 @@ def prepare(args):
     binary = args.qdrant_bin.resolve()
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise ValueError("Qdrant binary must be an executable file")
-    existing.validate_qdrant_evidence_inputs(args.server_pid, args.storage_path)
-    identity = existing.linux_process_identity(args.server_pid)
-    if (not identity or not existing.server_process_owns_endpoint(args.server_pid, args.url)
-            or Path(f"/proc/{args.server_pid}/exe").resolve() != binary):
-        raise RuntimeError("Qdrant PID, binary, or listener ownership differs")
+    parsed = urllib.parse.urlparse(args.url)
+    if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.port is None:
+        raise ValueError("Qdrant URL must name an explicit 127.0.0.1 HTTP port")
+    if args.storage_path.exists() or args.run_dir.exists():
+        raise ValueError("Qdrant storage and run directories must not exist before the owned launch")
     if importlib.metadata.version("qdrant-client") != existing.CLIENT_VERSION:
         raise RuntimeError(f"qdrant-client must be exactly {existing.CLIENT_VERSION}")
-    info = existing.server_info(args.url, args.api_key)
-    affinity = sorted(os.sched_getaffinity(args.server_pid))
-    pid_lines = args.pid_file.read_text().splitlines()
-    if (len(pid_lines) < 2 or pid_lines[0] != str(args.server_pid)
-            or " ".join(" ".join(pid_lines[1:]).split()) != existing.server_process_identity(args.server_pid)):
-        raise RuntimeError("Qdrant owned-start PID file differs from the running process")
+    affinity = sorted(os.sched_getaffinity(0))
     root_tree = lambda path: subprocess.check_output(
         ["git", "rev-parse", "HEAD:" + path], cwd=source, text=True,
     ).strip()
@@ -144,14 +147,13 @@ def prepare(args):
         "dataset_files_sha256": files, "treedb_artifact": str(args.treedb_artifact.resolve()),
         "treedb_artifact_sha256": native.digest(args.treedb_artifact),
         "comparison_contract": contract, "qdrant_bin": str(binary),
-        "qdrant_bin_sha256": native.digest(binary), "qdrant_server_version": info["version"],
-        "qdrant_client_version": existing.CLIENT_VERSION, "server_pid": args.server_pid,
-        "process_identity": identity, "process_command_identity": existing.server_process_identity(args.server_pid),
-        "owned_start_pid_file": str(args.pid_file.resolve()), "owned_start_pid_file_sha256": native.digest(args.pid_file),
+        "qdrant_bin_sha256": native.digest(binary), "qdrant_server_version": existing.SERVER_VERSION,
+        "qdrant_client_version": existing.CLIENT_VERSION,
         "storage_path": str(args.storage_path.resolve()), "url": args.url, "collection": args.collection,
         "run_dir": str(args.run_dir.resolve()), "cpu_affinity": affinity,
         "batch_size": 256, "rows": 500000, "dimensions": 768, "top_k": 10,
         "controls": CONTROLS, "operation_timeout_s": args.operation_timeout,
+        "startup_timeout_s": args.startup_timeout,
         "optimizer_timeout_s": args.optimizer_timeout, "poll_interval_s": args.poll_interval,
         "production_hnsw": existing.PRODUCTION_HNSW_CONFIG,
         "production_optimizers": existing.PRODUCTION_OPTIMIZERS_CONFIG,
@@ -169,18 +171,20 @@ class Run:
     optimization_snapshot = existing.QdrantMinimaRunner.optimization_snapshot
     server_log_snapshot = existing.QdrantMinimaRunner.server_log_snapshot
 
-    def __init__(self, plan, client, models):
-        self.plan, self.client, self.models = plan, client, models
+    def __init__(self, plan, client_factory, models):
+        self.plan, self.client_factory, self.models = plan, client_factory, models
+        self.client = self.process = self.process_identity = self.process_command_identity = None
+        self.server_pid = None
+        self.server_log = None
         self.output = Path(plan["run_dir"])
         self.output.mkdir(parents=True, exist_ok=False)
         self.collection = plan["collection"]
         self.operation_timeout = plan["operation_timeout_s"]
         self.optimizer_timeout = plan["optimizer_timeout_s"]
         self.poll_interval = plan["poll_interval_s"]
-        self.server_pid = plan["server_pid"]
         self.storage_path = Path(plan["storage_path"])
         self.resource_server_name = "Qdrant"
-        self.server_log_path = self.storage_path.parent / "qdrant.log"
+        self.server_log_path = self.output / "qdrant.log"
         self.config = {"scalar_fields": ["meta.user_id", "meta.fpath"]}
         self.readiness_evidence = []
         data = Path(plan["dataset"])
@@ -189,17 +193,75 @@ class Run:
         self.truth = json.loads((data / "truth.json").read_text())["500000"]
 
     def wait_ready(self, rows, phase, production=True):
-        existing.QdrantMinimaRunner.wait_ready(self, expected_count=rows, phase=phase)
-        snapshot = self.readiness_evidence[-1]["snapshots"][-1]
-        if production:
-            validate_ready_snapshot(snapshot, rows)
-        return snapshot
+        deadline = time.monotonic() + self.optimizer_timeout
+        while True:
+            saved_timeout = self.optimizer_timeout
+            self.optimizer_timeout = max(0, deadline - time.monotonic())
+            try:
+                existing.QdrantMinimaRunner.wait_ready(self, expected_count=rows, phase=phase)
+            finally:
+                self.optimizer_timeout = saved_timeout
+            snapshot = self.readiness_evidence[-1]["snapshots"][-1]
+            if not production or ready_snapshot(snapshot, rows):
+                return snapshot
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Qdrant full query-ready boundary exceeded optimizer timeout")
+            time.sleep(self.poll_interval)
+
+    def start_server(self):
+        if self.storage_path.exists():
+            raise RuntimeError("owned Qdrant storage path already exists")
+        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+        self.server_log = (self.output / "qdrant.log").open("xb")
+        parsed = urllib.parse.urlparse(self.plan["url"])
+        env = {**os.environ, "QDRANT__SERVICE__HOST": "127.0.0.1",
+               "QDRANT__SERVICE__HTTP_PORT": str(parsed.port),
+               "QDRANT__STORAGE__STORAGE_PATH": str(self.storage_path)}
+        self.process = subprocess.Popen([self.plan["qdrant_bin"]], stdin=subprocess.DEVNULL,
+                                        stdout=self.server_log, stderr=subprocess.STDOUT,
+                                        env=env, start_new_session=True)
+        self.server_pid = self.process.pid
+        deadline, last = time.monotonic() + self.plan["startup_timeout_s"], None
+        while time.monotonic() < deadline:
+            if self.process.poll() is not None:
+                raise RuntimeError(f"owned Qdrant exited during startup with {self.process.returncode}")
+            try:
+                identity = existing.linux_process_identity(self.server_pid)
+                info = existing.server_info(self.plan["url"], "")
+                if (identity and info.get("version") == self.plan["qdrant_server_version"]
+                        and Path(f"/proc/{self.server_pid}/exe").resolve() == Path(self.plan["qdrant_bin"])
+                        and existing.server_process_owns_endpoint(self.server_pid, self.plan["url"])):
+                    self.process_identity = identity
+                    self.process_command_identity = existing.server_process_identity(self.server_pid)
+                    self.client = self.client_factory()
+                    return
+            except Exception as exc:
+                last = exc
+            time.sleep(self.plan["poll_interval_s"])
+        raise TimeoutError(f"owned Qdrant startup exceeded timeout: {last}")
+
+    def stop_server(self):
+        if self.process is None:
+            return
+        if self.process.poll() is None:
+            if (self.process_identity is not None
+                    and existing.linux_process_identity(self.server_pid) != self.process_identity):
+                raise RuntimeError("owned Qdrant identity changed; refusing to signal")
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=10)
+                raise RuntimeError("owned Qdrant required forced shutdown")
+        if self.server_log:
+            self.server_log.close()
 
     def validate_fresh(self):
         identity = existing.linux_process_identity(self.server_pid)
         collections = getattr(self.client.get_collections(), "collections", None)
         collection_dir = self.storage_path / "collections"
-        if (identity != self.plan["process_identity"] or sorted(os.sched_getaffinity(self.server_pid)) != self.plan["cpu_affinity"]
+        if (identity != self.process_identity or sorted(os.sched_getaffinity(self.server_pid)) != self.plan["cpu_affinity"]
                 or collections is None or collections or (collection_dir.exists() and any(collection_dir.iterdir()))):
             raise RuntimeError("Qdrant process/backend is not fresh or changed before load")
         peak = native.process_peak_at_boundary(self.server_pid, identity, self.plan["cpu_affinity"])
@@ -266,6 +328,7 @@ class Run:
     def execute(self):
         artifact = None
         try:
+            self.start_server()
             baseline = self.validate_fresh()
             tree = json.loads(Path(self.plan["treedb_artifact"]).read_text())
             if native.digest(self.plan["treedb_artifact"]) != self.plan["treedb_artifact_sha256"]:
@@ -279,7 +342,7 @@ class Run:
                 native.RSS_CALIBRATION_QUERIES, native.RSS_EVALUATION_QUERIES, native.RSS_RECALL_TARGET,
             )
             rss = native.process_peak_at_boundary(
-                self.server_pid, self.plan["process_identity"], self.plan["cpu_affinity"],
+                self.server_pid, self.process_identity, self.plan["cpu_affinity"],
             )
             # Keep the exact correctness reference outside the sampled ANN RSS boundary.
             exact_ids = self.search(self.plan["controls"][-1], 0, exact=True)
@@ -290,7 +353,7 @@ class Run:
                 reasons.append("no independently selected Qdrant hnsw_ef passed evaluation recall")
             if rss.get("availability") != "measured":
                 reasons.append("Qdrant server VmHWM unavailable or process drifted")
-            if (existing.server_process_identity(self.server_pid) != self.plan["process_command_identity"]
+            if (existing.server_process_identity(self.server_pid) != self.process_command_identity
                     or Path(f"/proc/{self.server_pid}/exe").resolve() != Path(self.plan["qdrant_bin"])
                     or not existing.server_process_owns_endpoint(self.server_pid, self.plan["url"])):
                 reasons.append("Qdrant binary, command, or listener changed before result finalization")
@@ -310,25 +373,35 @@ class Run:
                 "provenance": {key: self.plan[key] for key in (
                     "harness_commit", "harness_source_sha256", "harness_trees", "qdrant_bin_sha256",
                     "qdrant_server_version", "qdrant_client_version", "dataset_manifest_sha256",
-                    "dataset_files_sha256", "treedb_artifact_sha256", "process_identity",
-                    "process_command_identity", "owned_start_pid_file_sha256",
+                    "dataset_files_sha256", "treedb_artifact_sha256",
                 )},
             }
+            artifact["provenance"].update(process_identity=self.process_identity,
+                                          process_command_identity=self.process_command_identity)
             comparison = compare_artifacts(tree, artifact)
         except BaseException as exc:
-            artifact = artifact or {"schema": SCHEMA, "state": "uncalibrated", "backend": "qdrant",
+            reason = f"{type(exc).__name__}: {exc}"
+            artifact = artifact or {"schema": SCHEMA, "backend": "qdrant",
                                     "comparison_contract": self.plan["comparison_contract"],
                                     "quality": {"evaluation": {"passed": False}},
                                     "rss": {"availability": "unavailable", "bytes": None,
-                                            "process_identity": self.plan["process_identity"]},
-                                    "readiness": self.readiness_evidence[-1] if self.readiness_evidence else {},
-                                    "reasons": [f"{type(exc).__name__}: {exc}"]}
+                                            "process_identity": self.process_identity or ""},
+                                    "readiness": self.readiness_evidence[-1] if self.readiness_evidence else {}}
+            artifact["state"] = "uncalibrated"
+            artifact.setdefault("reasons", []).append(reason)
             comparison = {"state": "uncalibrated", "reasons": artifact["reasons"]}
         finally:
             try:
-                self.client.close()
+                if self.client:
+                    self.client.close()
             except BaseException as exc:
                 comparison = {"state": "uncalibrated", "reasons": [f"client close: {type(exc).__name__}: {exc}"]}
+                artifact["state"], artifact["reasons"] = "uncalibrated", comparison["reasons"]
+            try:
+                self.stop_server()
+            except BaseException as exc:
+                comparison = {"state": "uncalibrated", "reasons": [f"server stop: {type(exc).__name__}: {exc}"]}
+                artifact["state"], artifact["reasons"] = "uncalibrated", comparison["reasons"]
         (self.output / "qdrant-rss.json").write_bytes(native.canonical(artifact))
         (self.output / "comparison.json").write_bytes(native.canonical(comparison))
         print(json.dumps(comparison, sort_keys=True, allow_nan=False))
@@ -345,13 +418,12 @@ def main():
     parser.add_argument("--treedb-artifact", required=True, type=Path)
     parser.add_argument("--qdrant-bin", required=True, type=Path)
     parser.add_argument("--storage-path", required=True, type=Path)
-    parser.add_argument("--server-pid", required=True, type=int)
-    parser.add_argument("--pid-file", required=True, type=Path)
     parser.add_argument("--url", required=True)
     parser.add_argument("--api-key", default=os.environ.get("QDRANT_API_KEY", ""))
     parser.add_argument("--collection", default="minima_cohere_rss")
     parser.add_argument("--run-dir", required=True, type=Path)
     parser.add_argument("--operation-timeout", type=int, default=600)
+    parser.add_argument("--startup-timeout", type=float, default=120)
     parser.add_argument("--optimizer-timeout", type=float, default=2700)
     parser.add_argument("--poll-interval", type=float, default=.25)
     args = parser.parse_args()
@@ -366,9 +438,9 @@ def main():
         raise ValueError("externally pinned Qdrant RSS plan hash required")
     validate_plan(json.loads(args.run.read_text()), plan)
     from qdrant_client import QdrantClient, models
-    client = QdrantClient(url=args.url, api_key=args.api_key or None,
-                          timeout=args.operation_timeout, prefer_grpc=False)
-    return Run(plan, client, models).execute()
+    factory = lambda: QdrantClient(url=args.url, api_key=args.api_key or None,
+                                   timeout=args.operation_timeout, prefer_grpc=False)
+    return Run(plan, factory, models).execute()
 
 
 if __name__ == "__main__":

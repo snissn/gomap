@@ -105,6 +105,25 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
         self.assertEqual(sample["availability"], "unavailable")
         self.assertIsNone(sample["bytes"])
 
+    def test_terminal_failure_invalidates_sampled_treedb_rss(self):
+        artifact = {"state": "calibrated", "reasons": []}
+        self.assertEqual(native.finalize_rss_artifact(artifact, "shutdown failed"), {
+            "state": "uncalibrated", "reasons": ["terminal failure: shutdown failed"],
+        })
+
+    def test_qdrant_readiness_keeps_polling_for_full_index_counts(self):
+        run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+        run.optimizer_timeout, run.poll_interval, run.readiness_evidence = 1, 0, []
+
+        def weak_ready(*_args, **_kwargs):
+            run.readiness_evidence.append({"snapshots": [{"poll": len(run.readiness_evidence)}]})
+
+        with patch.object(qdrant_rss.existing.QdrantMinimaRunner, "wait_ready", side_effect=weak_ready) as wait, \
+                patch.object(qdrant_rss, "ready_snapshot", side_effect=[False, True]), \
+                patch.object(qdrant_rss.time, "sleep"):
+            self.assertEqual(run.wait_ready(500000, "initial"), {"poll": 1})
+        self.assertEqual(wait.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
