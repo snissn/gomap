@@ -24,6 +24,9 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             "GOMAXPROCS": "6", "GOGC": "75", "GOMEMLIMIT": "12GiB",
         })
         self.assertNotIn("TREEDB_LEAF_PAGE_CACHE_ENTRIES", child)
+        self.assertTrue(contract["host_resource_identity"]["machine_id"])
+        self.assertTrue(contract["host_resource_identity"]["boot_id"])
+        self.assertGreater(contract["host_resource_identity"]["page_size_bytes"], 0)
 
     def test_control_selection_uses_disjoint_calibration_and_evaluation(self):
         truth = [[f"row-{query}-{rank}" for rank in range(10)] for query in range(6)]

@@ -157,6 +157,7 @@ def rss_comparison_contract(plan):
         "batch_size": plan["batch_size"], "durability_visibility": "durable_and_visible_before_ack",
         "cpu_affinity": plan["cpu_affinity"], "host_memory_bytes": plan["host_memory_bytes"],
         "treedb_go_runtime": plan["treedb_go_runtime"],
+        "host_resource_identity": plan["host_resource_identity"],
         "platform": plan["platform"], "quality_metric": "mean_recall_at_10",
         "quality_target": plan["rss_recall_target"],
         "calibration_queries": plan["rss_calibration_queries"],
@@ -170,6 +171,35 @@ def treedb_service_environment(plan):
     child = {key: os.environ[key] for key in ("HOME", "PATH", "TMPDIR", "TZ") if key in os.environ}
     child.update({key: value for key, value in plan["treedb_go_runtime"].items() if value})
     return child
+
+
+def host_resource_identity():
+    cgroup = Path("/proc/self/cgroup").read_text().strip()
+    status = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines() if ":" in line)
+    unified = next((line.split("::", 1)[1] for line in cgroup.splitlines() if line.startswith("0::")), None)
+    limits = {}
+    if unified is not None:
+        root, current = Path("/sys/fs/cgroup"), Path("/sys/fs/cgroup") / unified.lstrip("/")
+        if not current.resolve().is_relative_to(root):
+            raise RuntimeError("cgroup path escaped its mount")
+        while True:
+            for name in ("cpu.max", "cpuset.cpus.effective", "cpuset.mems.effective",
+                         "memory.high", "memory.max", "memory.swap.max"):
+                path = current / name
+                if path.is_file():
+                    limits[f"{current.relative_to(root)}/{name}"] = path.read_text().strip()
+            if current == root:
+                break
+            current = current.parent
+    identity = {
+        "machine_id": Path("/etc/machine-id").read_text().strip(),
+        "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+        "page_size_bytes": os.sysconf("SC_PAGE_SIZE"), "numa_mems": status.get("Mems_allowed_list", "").strip(),
+        "cgroup_membership": cgroup, "cgroup_limits": limits,
+    }
+    if not identity["machine_id"] or not identity["boot_id"] or not identity["numa_mems"]:
+        raise RuntimeError("host resource identity is incomplete")
+    return identity
 
 
 def process_peak_at_boundary(pid, expected_identity, expected_affinity):
@@ -232,6 +262,7 @@ def prepare(args):
             "treedb_go_runtime": {key: os.environ.get(key, "") for key in ("GOMAXPROCS", "GOGC", "GOMEMLIMIT")},
             "cpu_affinity": sorted(os.sched_getaffinity(0)),
             "host_memory_bytes": existing.common.memory_bytes(),
+            "host_resource_identity": host_resource_identity(),
             "blas_threads": {key: os.environ.get(key, "") for key in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS")},
             "python": os.sys.version, "numpy": np.__version__, "platform": platform.platform(),
             "query_usage": "previously opened diagnostic/calibration queries, not final holdout",
