@@ -10,6 +10,11 @@ import (
 
 func TestTypedGraphFoldRowSourceCloseFailureReleasesPreparedResources(t *testing.T) {
 	col, _, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
+	// The fixture's insert/rebuild may still have an admitted durable-publication
+	// transition. Settle it before establishing this test's exact resource baseline.
+	if err := col.db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
 	registry := col.db.StableResourceIdentityPinRegistry()
 	beforePins := registry.ActivePins()
 	beforeIdentities := registry.ActiveIdentities()
