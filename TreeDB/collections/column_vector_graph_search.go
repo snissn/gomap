@@ -1092,9 +1092,15 @@ type columnVectorGraphNativeSearchScratch struct {
 	quantizedBRQWorkspace        brq.Workspace
 	preparedQuantizedPlane       columnHNSWPreparedQuantizedScorePlane
 	preparedScalarU8Plane        columnHNSWPreparedScalarU8ScorePlane
-	preparedTraversalStats       columnVectorGraphNativeSearchStats
-	wavefrontCandidates          []columnVectorGraphSearchCandidate
-	searchPlan                   columnVectorGraphSearchPlan
+	// typedScalarU8Plane is reused by the private typed-graph scalar-u8
+	// candidate collector. Keeping the adapter in caller scratch avoids a
+	// per-query interface escape while the immutable prepared scalar plane stays
+	// the code/kernel owner.
+	typedScalarU8Plane     typedGraphScalarU8ScorePlane
+	typedScalarU8Filter    columnHNSWPreparedTraversalFilter
+	preparedTraversalStats columnVectorGraphNativeSearchStats
+	wavefrontCandidates    []columnVectorGraphSearchCandidate
+	searchPlan             columnVectorGraphSearchPlan
 }
 
 func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, degree, topK, efSearch, scoreTileCapacity, wavefrontWidth int) error {

@@ -69,6 +69,17 @@ This is not installed by ordinary mutable `column_graph` search. Existing typed
 writes retain their selected durability profile, but a stale graph search remains
 unavailable until the M3 lifecycle installs a coherent consumer/fold. Do not
 infer public mutable search readiness from the base-only quickstart below.
+
+The #4684 scalar-u8 work is deliberately narrower: it supplies only a private
+typed filtered **legacy scalar-u8 v1** candidate collector over the prepared
+immutable base graph (calibrated alpha planes are not part of this seam). The
+collector admits eligible rows to retained results while allowing ineligible or
+excluded rows to navigate the frontier, maps optional local navigation ordinals
+to validated scalar-u8 code rows, and charges all scalar invocations against a
+prechecked quantized-score allowance. It returns ordinal/estimated-score
+candidates without document or FP32 vector/norm materialization. It neither
+installs a public mutable query mode nor performs visibility/shadow completion
+or exact reranking; those public Q2/Q3 behaviors remain unavailable.
 Complete eligible sets of at most 4,096 use explicitly labeled typed exact
 scoring; larger supported sets require genuine bounded graph work. Resource
 exhaustion returns an error rather than partial success. See the
