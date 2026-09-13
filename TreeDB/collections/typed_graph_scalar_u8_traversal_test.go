@@ -186,16 +186,37 @@ func typedGraphScalarU8DirectPlan4684(overlay *typedGraphOverlaySearch, selectio
 	return &typedGraphPreparedFilter{overlay: overlay, base: selection, count: selection.Count()}
 }
 
+// typedGraphScalarU8SharedPreparedHolder4684 supplies the holder identity
+// required by the cached base-filter binding contract. Some supported builds
+// intentionally do not install the optional shared prepared-search cache for
+// this tiny fixture. A synthetic ref is sufficient here because the binding
+// path only proves holder identity and schema pinning; the traversal continues
+// to use the fixture reader's real prepared scalar-u8/code assets. Restore the
+// reader before its owning searcher closes.
+func typedGraphScalarU8SharedPreparedHolder4684(tb testing.TB, overlay *typedGraphOverlaySearch) *columnVectorGraphSharedPreparedSearch {
+	tb.Helper()
+	reader := overlay.base.reader
+	if ref := reader.sharedPreparedSearch; ref != nil && ref.holder != nil {
+		return ref.holder
+	}
+	original := reader.sharedPreparedSearch
+	ref := &columnVectorGraphSharedPreparedSearchRef{holder: &columnVectorGraphSharedPreparedSearch{}}
+	reader.sharedPreparedSearch = ref
+	tb.Cleanup(func() { reader.sharedPreparedSearch = original })
+	return ref.holder
+}
+
 func typedGraphScalarU8CachedPlan4684(tb testing.TB, overlay *typedGraphOverlaySearch, selection typedcolumn.RowSelection, navigation *typedGraphFilterNavigation) *typedGraphPreparedFilter {
 	tb.Helper()
-	if overlay == nil || overlay.base == nil || overlay.base.reader == nil || overlay.base.reader.sharedPreparedSearch == nil || overlay.base.reader.sharedPreparedSearch.holder == nil || overlay.base.catalog == nil || overlay.base.catalog.meta.Options.ColumnStore == nil {
-		tb.Fatal("fixture missing shared prepared base required for cached navigation binding")
+	if overlay == nil || overlay.base == nil || overlay.base.reader == nil || overlay.base.catalog == nil || overlay.base.catalog.meta.Options.ColumnStore == nil {
+		tb.Fatal("fixture missing base required for cached navigation binding")
 	}
+	holder := typedGraphScalarU8SharedPreparedHolder4684(tb, overlay)
 	origin := &typedGraphPreparedFilter{base: selection, count: selection.Count()}
 	base := &typedGraphBaseFilter{
 		plan:       origin,
 		navigation: navigation,
-		holder:     overlay.base.reader.sharedPreparedSearch.holder,
+		holder:     holder,
 		schemaHash: overlay.base.catalog.meta.Options.ColumnStore.SchemaHash,
 	}
 	return &typedGraphPreparedFilter{
@@ -415,6 +436,14 @@ func TestTypedGraphScalarU8PreparedCandidatesBudgetBoundary4684(t *testing.T) {
 
 func TestTypedGraphScalarU8PreparedCandidatesNavigationBinding4684(t *testing.T) {
 	fixture := openTypedGraphScalarU8Fixture4684(t)
+	// Exercise the portable fixture path explicitly: Windows does not always
+	// populate the optional shared prepared-search cache for this small index.
+	// The cached-plan test must still prove the holder/schema identity binding,
+	// rather than silently skipping navigation coverage on that platform.
+	reader := fixture.overlay.base.reader
+	originalSharedPreparedSearch := reader.sharedPreparedSearch
+	reader.sharedPreparedSearch = nil
+	t.Cleanup(func() { reader.sharedPreparedSearch = originalSharedPreparedSearch })
 	selection := typedGraphScalarU8Selection4684(t, fixture, 0, 2, 4)
 	navigation := typedGraphScalarU8Navigation4684(fixture, fixture.overlay.pack, false)
 	plan := typedGraphScalarU8CachedPlan4684(t, fixture.overlay, selection, navigation)
