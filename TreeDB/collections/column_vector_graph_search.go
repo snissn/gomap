@@ -1097,7 +1097,7 @@ type columnVectorGraphNativeSearchScratch struct {
 	// per-query interface escape while the immutable prepared scalar plane stays
 	// the code/kernel owner.
 	typedScalarU8Plane     typedGraphScalarU8ScorePlane
-	typedScalarU8Filter    columnHNSWPreparedTraversalFilter
+	typedScalarU8Admission typedGraphScalarU8TraversalAdmission
 	preparedTraversalStats columnVectorGraphNativeSearchStats
 	wavefrontCandidates    []columnVectorGraphSearchCandidate
 	searchPlan             columnVectorGraphSearchPlan

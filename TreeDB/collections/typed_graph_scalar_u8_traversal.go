@@ -3,8 +3,6 @@ package collections
 import (
 	"context"
 	"fmt"
-
-	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 // typedGraphScalarU8TraversalOptions is the private Q1 handoff between typed
@@ -285,7 +283,7 @@ func (v *typedGraphOverlaySearch) searchScalarU8PreparedCandidatesWithContext(ct
 	// installed its own state, so a caller-owned scratch neither retains an old
 	// snapshot/context nor makes that state observable to a later request.
 	defer func() {
-		scratch.typedScalarU8Filter = columnHNSWPreparedTraversalFilter{}
+		scratch.typedScalarU8Admission = typedGraphScalarU8TraversalAdmission{}
 		scratch.typedScalarU8Plane = typedGraphScalarU8ScorePlane{}
 	}()
 	completed := false
@@ -317,22 +315,14 @@ func (v *typedGraphOverlaySearch) searchScalarU8PreparedCandidatesWithContext(ct
 		return nil, stats, ErrVectorIndexSnapshotMismatch
 	}
 	plan := opts.PreparedFilter
-	var candidateRows typedcolumn.RowSelection
-	hasCandidateRows := false
-	var excludedBaseRows []int
-	eligibleCount := baseRows
 	if plan != nil {
 		if !plan.validFor(v) {
 			return nil, stats, ErrVectorIndexSnapshotMismatch
 		}
-		candidateRows = plan.base
-		hasCandidateRows = true
-		excludedBaseRows = plan.excludedBase
-		var err error
-		eligibleCount, err = typedGraphScalarU8EligibleCount(baseRows, candidateRows, true, excludedBaseRows)
-		if err != nil {
-			return nil, stats, err
-		}
+	}
+	eligibleCount, err := typedGraphScalarU8PrepareBaseAdmission(plan, baseRows, &scratch.typedScalarU8Admission)
+	if err != nil {
+		return nil, stats, err
 	}
 	// This is a private candidate-collection seam. It reports scalar asset and
 	// work facts, but deliberately does not claim either public quantized route:
@@ -376,17 +366,9 @@ func (v *typedGraphOverlaySearch) searchScalarU8PreparedCandidatesWithContext(ct
 	}
 
 	traversalPack := basePack
-	var filter *columnHNSWPreparedTraversalFilter
-	if hasCandidateRows || len(excludedBaseRows) != 0 {
-		filter = &scratch.typedScalarU8Filter
-		*filter = columnHNSWPreparedTraversalFilter{
-			candidateRows:        candidateRows,
-			hasCandidateRows:     hasCandidateRows,
-			excludedBaseOrdinals: excludedBaseRows,
-			baseRows:             baseRows,
-			eligibleCount:        eligibleCount,
-			eligibleCountSet:     true,
-		}
+	var admission columnHNSWPreparedTraversalAdmission
+	if plan != nil {
+		admission = &scratch.typedScalarU8Admission
 	}
 	plane := &scratch.typedScalarU8Plane
 	*plane = typedGraphScalarU8ScorePlane{ctx: ctx, base: &scratch.preparedScalarU8Plane, baseRows: baseRows, scoreLimit: uint64(opts.ScoreBudget)}
@@ -404,14 +386,8 @@ func (v *typedGraphOverlaySearch) searchScalarU8PreparedCandidatesWithContext(ct
 				return nil, setupStats, ErrVectorIndexSnapshotMismatch
 			}
 			traversalPack = &navigation.view
-			filter = &scratch.typedScalarU8Filter
-			*filter = columnHNSWPreparedTraversalFilter{
-				excludedBaseOrdinals: excludedBaseRows,
-				localToBase:          navigation.baseOrdinals,
-				baseRows:             baseRows,
-				eligibleCount:        eligibleCount,
-				eligibleCountSet:     true,
-			}
+			typedGraphScalarU8BindNavigationAdmission(&scratch.typedScalarU8Admission, navigation.baseOrdinals)
+			admission = &scratch.typedScalarU8Admission
 			plane.ordinals = navigation.baseOrdinals
 		}
 	}
@@ -426,7 +402,7 @@ func (v *typedGraphOverlaySearch) searchScalarU8PreparedCandidatesWithContext(ct
 		// nor navigation form allocates or appends an intermediate result slice.
 		SuppressOmittedResultMaterialization: true,
 		Context:                              ctx,
-		Filter:                               filter,
+		Admission:                            admission,
 	}
 	_, traversalStats, err := traversalPack.searchCosinePreparedScorePlane(query, traversalOpts, scratch, plane)
 	columnVectorGraphApplyQuantizedPreparedTraversalSetupStats(&traversalStats, setupStats)
@@ -452,7 +428,7 @@ func (v *typedGraphOverlaySearch) searchScalarU8PreparedCandidatesWithContext(ct
 				return nil, stats, err
 			}
 		}
-		if !filter.admits(candidate.ordinal) {
+		if admission != nil && !admission.admits(candidate.ordinal) {
 			return nil, stats, ErrVectorIndexSnapshotMismatch
 		}
 		ordinal := candidate.ordinal
@@ -469,29 +445,4 @@ func (v *typedGraphOverlaySearch) searchScalarU8PreparedCandidatesWithContext(ct
 	}
 	completed = true
 	return scratch.results, stats, nil
-}
-
-func typedGraphScalarU8EligibleCount(rows int, selection typedcolumn.RowSelection, hasSelection bool, excluded []int) (int, error) {
-	if rows < 0 {
-		return 0, ErrVectorIndexSnapshotMismatch
-	}
-	count := rows
-	if hasSelection {
-		if selection.Rows() != rows {
-			return 0, ErrVectorIndexSnapshotMismatch
-		}
-		count = selection.Count()
-	}
-	for i, ordinal := range excluded {
-		if ordinal < 0 || ordinal >= rows || (i > 0 && ordinal <= excluded[i-1]) {
-			return 0, ErrVectorIndexSnapshotMismatch
-		}
-		if !hasSelection || selection.Contains(ordinal) {
-			count--
-		}
-	}
-	if count < 0 {
-		return 0, fmt.Errorf("collections: typed scalar_u8 eligible count underflow")
-	}
-	return count, nil
 }

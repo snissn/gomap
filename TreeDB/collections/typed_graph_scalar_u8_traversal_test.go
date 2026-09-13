@@ -269,10 +269,10 @@ func assertTypedGraphScalarU8ScratchReferencesCleared4684(t *testing.T, scratch 
 	if scratch == nil {
 		t.Fatal("nil scalar-u8 scratch")
 	}
-	filter := scratch.typedScalarU8Filter
+	admission := scratch.typedScalarU8Admission
 	plane := scratch.typedScalarU8Plane
-	if filter.hasCandidateRows || filter.candidateRows.Rows() != 0 || filter.candidateRows.Count() != 0 || len(filter.excludedBaseOrdinals) != 0 || len(filter.localToBase) != 0 || plane.ctx != nil || plane.base != nil || len(plane.ordinals) != 0 {
-		t.Fatalf("typed scalar-u8 scratch retained borrowed state filter=%+v plane=%+v", filter, plane)
+	if admission.hasCandidateRows || admission.candidateRows.Rows() != 0 || admission.candidateRows.Count() != 0 || len(admission.excludedBaseOrdinals) != 0 || len(admission.localToBase) != 0 || plane.ctx != nil || plane.base != nil || len(plane.ordinals) != 0 {
+		t.Fatalf("typed scalar-u8 scratch retained borrowed state admission=%+v plane=%+v", admission, plane)
 	}
 }
 
