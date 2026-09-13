@@ -271,7 +271,9 @@ def prepare(args):
             "host_resource_identity": host_resource_identity(),
             "blas_threads": {key: os.environ.get(key, "") for key in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS")},
             "python": os.sys.version, "numpy": np.__version__, "platform": platform.platform(),
-            "query_usage": "previously opened diagnostic/calibration queries, not final holdout",
+            "query_usage": ("observed calibration 0..99; fresh one-shot evaluation 100..199; "
+                            "separate from final qualification holdout" if rss_only
+                            else "diagnostic queries, not final holdout"),
             "infrastructure": "INFRASTRUCTURE_UNAVAILABLE: runner: shared workstation, serialized quiet window; persistent cache and local artifact storage"}
 
 
