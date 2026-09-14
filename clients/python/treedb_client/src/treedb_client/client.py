@@ -1034,7 +1034,7 @@ def _validate_http_dense_quantized_response(
         or expected_graph_route is None
         or work.graph.route != expected_graph_route
         or work.graph.snapshot != proof.snapshot
-        or not _dense_http_score_plane_counters_match_graph(work, proof)
+        or not _dense_http_score_plane_counters_match_graph(work, proof, len(response.documents))
         or response.index.name != index
         or response.metric != "cosine"
         or response.metric != response.index.metric
@@ -1076,13 +1076,18 @@ def _validate_http_dense_quantized_response(
         )
 
 
-def _dense_http_score_plane_counters_match_graph(work: Any, proof: Any) -> bool:
-    if work is None or proof is None:
+def _dense_http_score_plane_counters_match_graph(work: Any, proof: Any, result_count: int) -> bool:
+    if work is None or proof is None or result_count < 0:
         return False
     return (
         proof.quantized_score_calls == work.graph.base_ann_scored
         and proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls == work.graph.exact_base_scored
         and proof.exact_suffix_score_calls == work.graph.delta_scored
+        and result_count <= (
+            proof.exact_base_rerank_score_calls
+            + proof.exact_small_filter_score_calls
+            + proof.exact_suffix_score_calls
+        )
     )
 
 

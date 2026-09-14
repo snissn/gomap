@@ -102,6 +102,19 @@ class NativeCodecTests(unittest.TestCase):
                     quantized_rerank_candidates=0,
                     ef_search=0,
                 )
+            overflow_docs = _vector([b"a", b"b"])
+            overflow_payloads = _vector([b'{"id":"a"}', b'{"id":"b"}'])
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, overflow_docs) + _section(103, overflow_payloads) +
+                    _section(130, meta) + _section(134, raw_work) + _section(136, score_plane),
+                    2,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=0,
+                )
             capped_values = list(values)
             capped_values[9] = 2
             capped_values[12] = 3

@@ -217,7 +217,7 @@ func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWo
 		(proof.Route != "typed_empty" && proof.Route != "typed_exact" && proof.Route != "quantized_rerank") ||
 		!work.Completed || !work.Graph.Completed || graphRoute != expectedGraphRoute ||
 		proof.Snapshot != work.Graph.Snapshot ||
-		!denseScorePlaneCountersMatchWork(work, proof) ||
+		!denseScorePlaneCountersMatchWork(work, proof, resultCount) ||
 		(proof.Route == "typed_empty" && resultCount != 0) ||
 		(proof.Route == "quantized_rerank" && (proof.ActualRerankCandidates > proof.RerankCandidateCap ||
 			proof.LiveShortlistCandidates > proof.RawRetainedCandidates ||
@@ -231,13 +231,18 @@ func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWo
 	return nil
 }
 
-func denseScorePlaneCountersMatchWork(work documentservice.DenseSearchWork, proof *collections.ColumnGraphScorePlaneWork) bool {
-	if proof == nil || proof.ExactSmallFilterScoreCalls > ^uint64(0)-proof.ExactBaseRerankScoreCalls {
+func denseScorePlaneCountersMatchWork(work documentservice.DenseSearchWork, proof *collections.ColumnGraphScorePlaneWork, resultCount int) bool {
+	if proof == nil || resultCount < 0 || proof.ExactSmallFilterScoreCalls > ^uint64(0)-proof.ExactBaseRerankScoreCalls {
+		return false
+	}
+	exactBaseScoreCalls := proof.ExactBaseRerankScoreCalls + proof.ExactSmallFilterScoreCalls
+	if proof.ExactSuffixScoreCalls > ^uint64(0)-exactBaseScoreCalls {
 		return false
 	}
 	return proof.QuantizedScoreCalls == work.Graph.BaseANNScored &&
-		proof.ExactBaseRerankScoreCalls+proof.ExactSmallFilterScoreCalls == work.Graph.ExactBaseScored &&
-		proof.ExactSuffixScoreCalls == work.Graph.DeltaScored
+		exactBaseScoreCalls == work.Graph.ExactBaseScored &&
+		proof.ExactSuffixScoreCalls == work.Graph.DeltaScored &&
+		uint64(resultCount) <= exactBaseScoreCalls+proof.ExactSuffixScoreCalls
 }
 
 func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, sections []iwire.Section, dst []byte) ([]byte, error) {

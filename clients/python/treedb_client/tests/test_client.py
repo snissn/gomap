@@ -718,6 +718,20 @@ class TreeDBClientTests(unittest.TestCase):
                             "docs", [1, 0], 1, query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public"
                         )
                     bad_client.close()
+            overflow = copy.deepcopy(payload)
+            overflow["documents"] = [
+                {"id": "a", "content": "alpha", "score": 1.0},
+                {"id": "b", "content": "beta", "score": 0.5},
+            ]
+            overflow["dense_work"]["output"].update(requested=2, fetched=2, output_bytes=2, json_reconstruction_rows=2, typed_column_rows=2)
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, overflow, 0)}) as overflow_server:
+                overflow_client = TreeDBClient(overflow_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    overflow_client.query_by_embedding(
+                        "docs", [1, 0], 2, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                overflow_client.close()
             capped = copy.deepcopy(payload)
             capped["score_plane"].update(
                 requested_rerank_candidates=2,

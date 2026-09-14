@@ -123,6 +123,9 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	if err := validateDenseQuantizedScorePlaneResponse(work, &counterMismatch, request, 0); err == nil {
 		t.Fatal("score-plane proof accepted with contradictory graph counters")
 	}
+	if err := validateDenseQuantizedScorePlaneResponse(work, proof, request, 2); err == nil {
+		t.Fatal("score-plane proof accepted more results than exact score calls")
+	}
 	emptyProof := *proof
 	emptyProof.Route = "typed_empty"
 	emptyWork := work

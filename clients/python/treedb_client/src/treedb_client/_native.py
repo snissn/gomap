@@ -322,7 +322,7 @@ def _dense_score_plane(raw):
     }
 
 
-def _dense_score_plane_matches_graph(work, score_plane):
+def _dense_score_plane_matches_graph(work, score_plane, result_count):
     expected = {
         "typed_empty": "typed_empty",
         "typed_exact": "typed_exact",
@@ -338,6 +338,12 @@ def _dense_score_plane_matches_graph(work, score_plane):
         and score_plane.quantized_score_calls == work.graph.base_ann_scored
         and score_plane.exact_base_rerank_score_calls + score_plane.exact_small_filter_score_calls == work.graph.exact_base_scored
         and score_plane.exact_suffix_score_calls == work.graph.delta_scored
+        and result_count >= 0
+        and result_count <= (
+            score_plane.exact_base_rerank_score_calls
+            + score_plane.exact_small_filter_score_calls
+            + score_plane.exact_suffix_score_calls
+        )
     )
 
 
@@ -378,7 +384,7 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
                 or score_plane.requested_mode != (query_mode or "quantized_rerank")
                 or score_plane.effective_mode != "quantized_rerank"
                 or score_plane.route not in ("typed_empty", "typed_exact", "quantized_rerank")
-                or not _dense_score_plane_matches_graph(work, score_plane)
+                or not _dense_score_plane_matches_graph(work, score_plane, count)
                 or (score_plane.route == "typed_empty" and count != 0)
                 or (score_plane.route == "quantized_rerank" and (
                     score_plane.actual_rerank_candidates > score_plane.rerank_candidate_cap
