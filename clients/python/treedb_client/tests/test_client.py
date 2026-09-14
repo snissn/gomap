@@ -858,6 +858,32 @@ class TreeDBClientTests(unittest.TestCase):
                         quantized_index_name="embedding.scalar_u8.public",
                     )
                 exact_client.close()
+            impossible_empty_plan = copy.deepcopy(payload)
+            impossible_empty_plan["documents"] = []
+            impossible_empty_plan["candidates"] = 0
+            impossible_empty_plan["dense_work"]["graph"].update(
+                route="typed_empty", base_ann_scored=0, exact_base_scored=0, base_result_ids=0,
+            )
+            impossible_empty_plan["dense_work"]["output"].update(
+                requested=0, fetched=0, output_bytes=0, retained_payload_fetches=0,
+                json_reconstruction_rows=0, typed_column_rows=0,
+            )
+            impossible_empty_plan["score_plane"].update(
+                route="typed_empty", requested_ef_search=1,
+                normalized_candidate_width=100, raw_candidate_width=100, rerank_candidate_cap=100,
+                raw_retained_candidates=0, live_shortlist_candidates=0, actual_rerank_candidates=0,
+                quantized_score_calls=0, quantized_code_bytes_read=0,
+                exact_base_rerank_score_calls=0, exact_suffix_score_calls=0, exact_small_filter_score_calls=0,
+                exact_base_vector_bytes_read=0, exact_suffix_vector_bytes_read=0,
+            )
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, impossible_empty_plan, 0)}) as plan_server:
+                plan_client = TreeDBClient(plan_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    plan_client.query_by_embedding(
+                        "docs", [1, 0], 1, ef_search=1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                plan_client.close()
             overflow = copy.deepcopy(payload)
             overflow["documents"] = [
                 {"id": "a", "content": "alpha", "score": 1.0},

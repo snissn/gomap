@@ -199,15 +199,17 @@ class DenseScorePlaneProof:
         if values["completed"] and values["route"] == "quantized_rerank" and values["quantized_score_calls"] == 0:
             raise ValueError("completed quantized rerank proof has no quantized score calls")
         if values["completed"]:
+            expected_cap = min(values["normalized_candidate_width"], values["requested_rerank_candidates"] or values["normalized_candidate_width"])
+            if (
+                (values["requested_ef_search"] != 0 and values["normalized_candidate_width"] > max(values["requested_top_k"], values["requested_ef_search"]))
+                or values["rerank_candidate_cap"] != expected_cap
+                or values["live_shortlist_candidates"] > values["normalized_candidate_width"]
+                or values["normalized_candidate_width"] > values["raw_candidate_width"]
+            ):
+                raise ValueError("completed dense score-plane proof planning counters are inconsistent")
             if values["route"] == "quantized_rerank":
                 if (
-                    (values["requested_ef_search"] != 0 and values["normalized_candidate_width"] > max(values["requested_top_k"], values["requested_ef_search"]))
-                    or
-                    values["rerank_candidate_cap"] > values["normalized_candidate_width"]
-                    or values["rerank_candidate_cap"] != min(values["normalized_candidate_width"], values["requested_rerank_candidates"] or values["normalized_candidate_width"])
-                    or values["raw_retained_candidates"] > values["quantized_score_calls"]
-                    or values["live_shortlist_candidates"] > values["normalized_candidate_width"]
-                    or values["normalized_candidate_width"] > values["raw_candidate_width"]
+                    values["raw_retained_candidates"] > values["quantized_score_calls"]
                     or values["exact_small_filter_score_calls"] != 0
                     or values["actual_rerank_candidates"] != values["exact_base_rerank_score_calls"]
                     or values["actual_rerank_candidates"] != min(values["live_shortlist_candidates"], values["rerank_candidate_cap"])

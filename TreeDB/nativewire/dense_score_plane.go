@@ -128,26 +128,27 @@ func denseScorePlaneRerankCountersMatch(proof *collections.ColumnGraphScorePlane
 	if proof == nil || !proof.Completed {
 		return true
 	}
+	if proof.RequestedEFSearch != 0 {
+		effectiveWidth := proof.RequestedTopK
+		if proof.RequestedEFSearch > effectiveWidth {
+			effectiveWidth = proof.RequestedEFSearch
+		}
+		if proof.NormalizedCandidateWidth > effectiveWidth {
+			return false
+		}
+	}
+	expectedCap := proof.NormalizedCandidateWidth
+	if proof.RequestedRerankCandidates != 0 && proof.RequestedRerankCandidates < expectedCap {
+		expectedCap = proof.RequestedRerankCandidates
+	}
+	if proof.RerankCandidateCap != expectedCap ||
+		proof.LiveShortlistCandidates > proof.NormalizedCandidateWidth ||
+		proof.NormalizedCandidateWidth > proof.RawCandidateWidth {
+		return false
+	}
 	switch proof.Route {
 	case "quantized_rerank":
-		if proof.RequestedEFSearch != 0 {
-			effectiveWidth := proof.RequestedTopK
-			if proof.RequestedEFSearch > effectiveWidth {
-				effectiveWidth = proof.RequestedEFSearch
-			}
-			if proof.NormalizedCandidateWidth > effectiveWidth {
-				return false
-			}
-		}
-		expectedCap := proof.NormalizedCandidateWidth
-		if proof.RequestedRerankCandidates != 0 && proof.RequestedRerankCandidates < expectedCap {
-			expectedCap = proof.RequestedRerankCandidates
-		}
-		return proof.RerankCandidateCap <= proof.NormalizedCandidateWidth &&
-			proof.RerankCandidateCap == expectedCap &&
-			proof.RawRetainedCandidates <= proof.QuantizedScoreCalls &&
-			proof.LiveShortlistCandidates <= proof.NormalizedCandidateWidth &&
-			proof.NormalizedCandidateWidth <= proof.RawCandidateWidth &&
+		return proof.RawRetainedCandidates <= proof.QuantizedScoreCalls &&
 			proof.ExactSmallFilterScoreCalls == 0 &&
 			proof.ActualRerankCandidates == proof.ExactBaseRerankScoreCalls &&
 			proof.ActualRerankCandidates == minUint64(proof.LiveShortlistCandidates, proof.RerankCandidateCap)

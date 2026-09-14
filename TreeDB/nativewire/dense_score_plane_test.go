@@ -281,6 +281,16 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 			t.Fatalf("typed-exact proof accepted %s: %+v", name, candidate)
 		}
 	}
+	for name, candidate := range map[string]collections.ColumnGraphScorePlaneWork{
+		"typed-empty": strictEmptyProof,
+		"typed-exact": strictExactProof,
+	} {
+		candidate.RequestedTopK, candidate.RequestedEFSearch = 1, 1
+		candidate.NormalizedCandidateWidth, candidate.RawCandidateWidth, candidate.RerankCandidateCap = 100, 100, 100
+		if denseScorePlaneRerankCountersMatch(&candidate) {
+			t.Fatalf("%s proof accepted impossible shortcut planning widths: %+v", name, candidate)
+		}
+	}
 }
 
 func TestDenseV3CandidateCountMatchesRows(t *testing.T) {

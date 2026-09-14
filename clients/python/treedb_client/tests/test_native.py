@@ -334,6 +334,30 @@ class NativeCodecTests(unittest.TestCase):
                         ef_search=0,
                         query_dimension=2,
                     )
+            shortcut_work_values = list(work_values)
+            shortcut_work_values[2] = 2
+            shortcut_work_values[3] = shortcut_work_values[7] = shortcut_work_values[9] = 0
+            shortcut_work_values[6] = 1
+            shortcut_proof_values = list(values)
+            shortcut_proof_values[4] = 2  # typed_exact
+            shortcut_proof_values[8] = 1  # explicit EF bound
+            shortcut_proof_values[10:13] = [100, 100, 100]
+            shortcut_proof_values[13:19] = [0, 0, 0, 0, 0, 0]
+            shortcut_proof_values[19:23] = [1, 0, 0, 8]
+            shortcut_plane = b"".join(_uint(value) for value in shortcut_proof_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            shortcut_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in shortcut_work_values)) + _section(136, shortcut_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=1,
+                    query_dimension=2,
+                )
             incomplete_values = list(values)
             incomplete_values[1] = 1  # available proof, incomplete execution, unavailable snapshot.
             incomplete_plane = b"".join(_uint(value) for value in incomplete_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
