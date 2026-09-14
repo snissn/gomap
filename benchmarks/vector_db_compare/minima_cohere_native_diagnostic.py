@@ -367,15 +367,16 @@ class Run:
 
     def guard(self):
         while not self.cancel.wait(1):
-            try:
-                self.check_resources()
-            except BaseException as exc:
-                self.failure = f"resource guard: {exc}"
-                self.emit("guard_failed", error=self.failure)
+            if not self.failure:
+                try:
+                    self.check_resources()
+                except BaseException as exc:
+                    self.failure = f"resource guard: {exc}"
+                    self.emit("guard_failed", error=self.failure)
+            if self.failure:
                 process = self.controller.process
                 if process and existing.common.linux_process_identity(process.pid) == self.controller._owned_identity:
                     os.kill(process.pid, signal.SIGTERM)
-                return
 
     def ensure(self):
         info = self.clients.ensure_index("minima_cohere", 768, "cosine", typed_input=True,
