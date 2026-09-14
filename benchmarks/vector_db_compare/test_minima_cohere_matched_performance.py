@@ -22,15 +22,18 @@ class MatchedPerformanceTest(unittest.TestCase):
 
     def test_reviewed_control_requires_every_lower_candidate_to_fail(self):
         artifact = {"quality": {"selected_control": 64, "target_mean_recall_at_10": .9,
+            "selection_protocol": subject.native.RSS_SELECTION_PROTOCOL,
             "calibration": {"queries": list(range(100)), "curve": [
-                {"control": 32, "mean_recall_at_10": .89, "per_query": [.89] * 100},
+                {"control": 32, "mean_recall_at_10": .9, "per_query": [.9] * 100},
                 {"control": 64, "mean_recall_at_10": .91, "per_query": [.91] * 100},
-            ]}, "evaluation": {"queries": subject.EVALUATION_QUERIES,
-                                "passed": True, "mean_recall_at_10": .9,
-                                "per_query": [.9] * 100}}}
+            ]}, "revalidation": {"queries": subject.MEASUREMENT_QUERIES, "passed": True, "curve": [
+                {"control": 32, "mean_recall_at_10": .89, "per_query": [.89] * 100},
+                {"control": 64, "mean_recall_at_10": .9, "per_query": [.9] * 100},
+            ]}}}
         self.assertEqual(subject.reviewed_selected_control(artifact, "test", [32, 64, 128]), 64)
-        artifact["quality"]["calibration"]["curve"][0]["mean_recall_at_10"] = .9
-        with self.assertRaisesRegex(RuntimeError, "differs from retained samples"):
+        artifact["quality"]["revalidation"]["curve"][0]["mean_recall_at_10"] = .9
+        artifact["quality"]["revalidation"]["curve"][0]["per_query"] = [.9] * 100
+        with self.assertRaisesRegex(RuntimeError, "lowest passing control"):
             subject.reviewed_selected_control(artifact, "test", [32, 64, 128])
 
     def test_control_and_host_provenance_fail_closed(self):

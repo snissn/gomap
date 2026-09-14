@@ -28,21 +28,24 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
         self.assertTrue(contract["host_resource_identity"]["boot_id"])
         self.assertGreater(contract["host_resource_identity"]["page_size_bytes"], 0)
 
-    def test_control_selection_uses_disjoint_calibration_and_evaluation(self):
+    def test_control_selection_requires_both_fixed_query_sets(self):
         truth = [[f"row-{query}-{rank}" for rank in range(10)] for query in range(6)]
         calls = []
 
         def search(control, query):
             calls.append((control, query))
-            keep = {8: 8, 16: 9}[control]
+            keep = 8 if control == 8 and query >= 2 else 9
             return truth[query][:keep] + [f"miss-{query}-{rank}" for rank in range(10 - keep)]
 
         quality = native.calibrate_ann_control(search, truth, [8, 16], [0, 1], [2, 3, 4, 5], .9)
         self.assertEqual(quality["selected_control"], 16)
+        self.assertEqual(quality["selection_protocol"], native.RSS_SELECTION_PROTOCOL)
         self.assertEqual(quality["calibration"]["queries"], [0, 1])
-        self.assertEqual(quality["evaluation"]["queries"], [2, 3, 4, 5])
-        self.assertTrue(quality["evaluation"]["passed"])
-        self.assertEqual(calls, [(8, 0), (8, 1), (16, 0), (16, 1),
+        self.assertEqual(quality["revalidation"]["queries"], [2, 3, 4, 5])
+        self.assertTrue(quality["revalidation"]["passed"])
+        self.assertEqual([point["control"] for point in quality["revalidation"]["curve"]], [8, 16])
+        self.assertEqual(calls, [(8, 0), (8, 1), (8, 2), (8, 3), (8, 4), (8, 5),
+                                 (16, 0), (16, 1),
                                  (16, 2), (16, 3), (16, 4), (16, 5)])
 
     def test_qdrant_document_preserves_native_logical_shape(self):
@@ -87,7 +90,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
         contract = {"schema": "cohere-rss/v1", "rows": 500000, "dimensions": 768,
                     "dataset_files_sha256": {"documents": "a" * 64}, "cpu_affinity": [0, 1]}
         tree = {"schema": native.RSS_ARTIFACT_SCHEMA, "state": "calibrated", "backend": "treedb",
-                "comparison_contract": contract, "quality": {"evaluation": {"passed": True}},
+                "comparison_contract": contract, "quality": {"revalidation": {"passed": True}},
                 "rss": {"availability": "measured", "bytes": 100, "process_identity": "1:1"},
                 "provenance": {"harness_commit": "a" * 40, "harness_trees": {"benchmarks": "b" * 40}}}
         qdrant = {**copy.deepcopy(tree), "backend": "qdrant",
@@ -110,7 +113,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
                 elif mutation == "rss":
                     changed["rss"]["availability"] = "unavailable"
                 elif mutation == "quality":
-                    changed["quality"]["evaluation"]["passed"] = False
+                    changed["quality"]["revalidation"]["passed"] = False
                 else:
                     changed["provenance"]["harness_commit"] = "c" * 40
                 self.assertEqual(qdrant_rss.compare_artifacts(tree, changed)["state"], "uncalibrated")

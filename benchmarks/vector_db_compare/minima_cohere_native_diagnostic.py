@@ -27,11 +27,12 @@ import numpy as np
 import minima_treedb_runner as existing
 
 SCHEMA = "treedb_minima_cohere_native_diagnostic/v2"
-RSS_ARTIFACT_SCHEMA = "treedb_cohere_768_rss_boundary/v2"
+RSS_ARTIFACT_SCHEMA = "treedb_cohere_768_rss_boundary/v3"
 RSS_RECALL_TARGET = .90
 RSS_CONTROLS = [32, 64, 128, 256, 512, 1024, 2048]
 RSS_CALIBRATION_QUERIES = list(range(100))
-RSS_EVALUATION_QUERIES = list(range(100, 200))
+RSS_REVALIDATION_QUERIES = list(range(100, 200))
+RSS_SELECTION_PROTOCOL = "lowest_control_passing_both_fixed_query_sets/v1"
 GIB = 1 << 30
 
 
@@ -112,9 +113,9 @@ def dataset_identity(dataset, rows):
     return dataset, manifest, files, query_count
 
 
-def calibrate_ann_control(search, truth, controls, calibration_queries, evaluation_queries, target):
-    if (not controls or controls != sorted(set(controls)) or not calibration_queries or not evaluation_queries
-            or set(calibration_queries) & set(evaluation_queries) or not 0 < target <= 1):
+def calibrate_ann_control(search, truth, controls, calibration_queries, revalidation_queries, target):
+    if (not controls or controls != sorted(set(controls)) or not calibration_queries or not revalidation_queries
+            or set(calibration_queries) & set(revalidation_queries) or not 0 < target <= 1):
         raise ValueError("invalid ANN quality calibration contract")
 
     def recalls(control, queries):
@@ -127,27 +128,29 @@ def calibrate_ann_control(search, truth, controls, calibration_queries, evaluati
             result.append(len(set(actual) & set(expected)) / len(expected))
         return result
 
-    curve, selected = [], None
+    calibration, revalidation, selected = [], [], None
     for control in controls:
-        values = recalls(control, calibration_queries)
-        mean = sum(values) / len(values)
-        curve.append({"control": control, "mean_recall_at_10": mean, "per_query": values})
-        if mean >= target:
+        first = recalls(control, calibration_queries)
+        second = recalls(control, revalidation_queries)
+        calibration.append({"control": control, "mean_recall_at_10": sum(first) / len(first),
+                            "per_query": first})
+        revalidation.append({"control": control, "mean_recall_at_10": sum(second) / len(second),
+                             "per_query": second})
+        if calibration[-1]["mean_recall_at_10"] >= target and revalidation[-1]["mean_recall_at_10"] >= target:
             selected = control
             break
-    evaluation = [] if selected is None else recalls(selected, evaluation_queries)
-    mean = sum(evaluation) / len(evaluation) if evaluation else 0.0
     return {
+        "selection_protocol": RSS_SELECTION_PROTOCOL,
         "target_mean_recall_at_10": target, "selected_control": selected,
-        "calibration": {"queries": list(calibration_queries), "curve": curve},
-        "evaluation": {"queries": list(evaluation_queries), "per_query": evaluation,
-                       "mean_recall_at_10": mean, "passed": selected is not None and mean >= target},
+        "calibration": {"queries": list(calibration_queries), "curve": calibration},
+        "revalidation": {"queries": list(revalidation_queries), "curve": revalidation,
+                         "passed": selected is not None},
     }
 
 
 def rss_comparison_contract(plan):
     return {
-        "schema": "cohere_500k_768d_matched_rss/v2", "rows": plan["rows"],
+        "schema": "cohere_500k_768d_matched_rss/v3", "rows": plan["rows"],
         "dimensions": plan["dimensions"], "metric": "cosine", "top_k": plan["top_k"],
         "dataset_manifest_sha256": plan["dataset_manifest_sha256"],
         "dataset_files_sha256": plan["dataset_files_sha256"],
@@ -161,12 +164,13 @@ def rss_comparison_contract(plan):
         "host_resource_identity": plan["host_resource_identity"],
         "platform": plan["platform"], "quality_metric": "mean_recall_at_10",
         "quality_target": plan["rss_recall_target"],
+        "quality_selection_protocol": RSS_SELECTION_PROTOCOL,
         "ann_controls": {
             "treedb_ef_search": plan["rss_controls"],
             "qdrant_hnsw_ef": plan["rss_controls"],
         },
         "calibration_queries": plan["rss_calibration_queries"],
-        "evaluation_queries": plan["rss_evaluation_queries"],
+        "revalidation_queries": plan["rss_revalidation_queries"],
         "rss_boundary": "fresh_server_and_backend_through_initial_ann_ready_and_quality_gated_query",
         "rss_scope": "server_process_lifetime_VmHWM_including_resident_mappings",
     }
@@ -256,7 +260,7 @@ def prepare(args):
             "rss_only": rss_only, "rss_recall_target": RSS_RECALL_TARGET,
             "rss_controls": RSS_CONTROLS,
             "rss_calibration_queries": RSS_CALIBRATION_QUERIES,
-            "rss_evaluation_queries": RSS_EVALUATION_QUERIES,
+            "rss_revalidation_queries": RSS_REVALIDATION_QUERIES,
             "overlap_eligible": counts(args.rows)[1],
             "eligible_counts": counts(args.rows), "reader_concurrency": 4, "writer_calls": 8,
             "scalar_shape": "dispersed unique rank=(row*7919)%rows; user_id range, fpath equality for lifecycle delete",
@@ -271,8 +275,8 @@ def prepare(args):
             "host_resource_identity": host_resource_identity(),
             "blas_threads": {key: os.environ.get(key, "") for key in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS")},
             "python": os.sys.version, "numpy": np.__version__, "platform": platform.platform(),
-            "query_usage": ("observed calibration 0..99; fresh one-shot evaluation 100..199; "
-                            "separate from final qualification holdout" if rss_only
+            "query_usage": ("observed calibration 0..99 and observed revalidation 100..199; "
+                            "both fixed sets select the control; neither is a holdout" if rss_only
                             else "diagnostic queries, not final holdout"),
             "infrastructure": "INFRASTRUCTURE_UNAVAILABLE: runner: shared workstation, serialized quiet window; persistent cache and local artifact storage"}
 
@@ -527,15 +531,15 @@ class Run:
 
         quality = calibrate_ann_control(
             search, truth, self.plan["rss_controls"], self.plan["rss_calibration_queries"],
-            self.plan["rss_evaluation_queries"], self.plan["rss_recall_target"],
+            self.plan["rss_revalidation_queries"], self.plan["rss_recall_target"],
         )
         process = self.controller.process
         rss = process_peak_at_boundary(
             process.pid if process else None, self.controller._owned_identity, self.plan["cpu_affinity"],
         )
         reasons = []
-        if not quality["evaluation"]["passed"]:
-            reasons.append("no independently selected TreeDB EF passed evaluation recall")
+        if not quality["revalidation"]["passed"]:
+            reasons.append("no TreeDB EF passed both fixed recall query sets")
         if rss.get("availability") != "measured":
             reasons.append("TreeDB server VmHWM unavailable or process drifted")
         artifact = {
@@ -545,7 +549,7 @@ class Run:
             "rss": rss, "reasons": reasons,
             "readiness": {"graph_action": "build", "successful_ann_queries": sum(
                 len(row["per_query"]) for row in quality["calibration"]["curve"]
-            ) + len(quality["evaluation"]["per_query"])},
+            ) + sum(len(row["per_query"]) for row in quality["revalidation"]["curve"])},
             "provenance": {key: self.plan[key] for key in (
                 "harness_commit", "harness_source_sha256", "harness_trees", "product_commit",
                 "product_trees", "service_sha256", "dataset_manifest_sha256", "dataset_files_sha256",
