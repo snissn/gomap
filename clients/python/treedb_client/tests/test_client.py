@@ -714,6 +714,7 @@ class TreeDBClientTests(unittest.TestCase):
                 lambda item: item.update(score_plane={**score_plane, "exact_suffix_vector_bytes_read": 1}),
                 lambda item: item.update(score_plane={**score_plane, "quantized_config_hash": 1}),
                 lambda item: item.update(score_plane={**score_plane, "requested_ef_search": 1, "normalized_candidate_width": 2, "raw_candidate_width": 2, "rerank_candidate_cap": 2, "raw_retained_candidates": 2, "live_shortlist_candidates": 2, "actual_rerank_candidates": 2}),
+                lambda item: item.update(candidates=2),
             ):
                 invalid = copy.deepcopy(payload)
                 mutation(invalid)

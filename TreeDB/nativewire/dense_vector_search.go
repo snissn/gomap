@@ -180,7 +180,11 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	if err == nil && version == iwire.DenseVectorSearchTypedQuantizedVersion {
 		out.ScorePlane, err = decodeDenseScorePlaneSection(c.vectorSections, true, c.limits)
 		if err == nil {
-			err = validateDenseQuantizedScorePlaneResponse(out.DenseWork, out.ScorePlane, request, len(out.Results))
+			if !denseV3CandidateCountMatchesRows(out.Candidates, len(out.Results)) {
+				err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 candidate count does not match returned rows")
+			} else {
+				err = validateDenseQuantizedScorePlaneResponse(out.DenseWork, out.ScorePlane, request, len(out.Results))
+			}
 		}
 	}
 	if err == nil && version >= iwire.DenseVectorSearchTypedVersion {
@@ -196,6 +200,10 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 		return DenseVectorSearchResponse{}, &DenseVectorSearchDecodeError{Err: err, DenseWork: work, ScorePlane: out.ScorePlane}
 	}
 	return out, err
+}
+
+func denseV3CandidateCountMatchesRows(candidates, resultCount int) bool {
+	return candidates >= 0 && resultCount >= 0 && candidates == resultCount
 }
 
 func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWork, proof *collections.ColumnGraphScorePlaneWork, request DenseVectorSearchRequest, resultCount int) error {

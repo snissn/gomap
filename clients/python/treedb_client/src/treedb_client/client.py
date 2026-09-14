@@ -1040,6 +1040,7 @@ def _validate_http_dense_quantized_response(
         or work.graph.route != expected_graph_route
         or work.graph.snapshot != proof.snapshot
         or len(response.documents) > top_k
+        or response.candidates != len(response.documents)
         or response.index.dimension != query_dimension
         or not dense_score_plane_byte_counters_match(proof, query_dimension)
         or not _dense_http_score_plane_counters_match_graph(work, proof, len(response.documents))

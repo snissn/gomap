@@ -367,7 +367,7 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
     exact, offset = _read_uint(meta, offset)
     scan, offset = _read_uint(meta, offset)
     count, offset = _read_uint(meta, offset)
-    if exact or scan or count > top_k or candidates < count or len(meta) - offset != count * 8:
+    if exact or scan or count > top_k or candidates < count or (version == 3 and candidates != count) or len(meta) - offset != count * 8:
         raise TreeDBProtocolError("native dense response bounds or route mismatch")
     scores = struct.unpack(f"<{count}d", meta[offset:])
     if not all(math.isfinite(score) for score in scores):

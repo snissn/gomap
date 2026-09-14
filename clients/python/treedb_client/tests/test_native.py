@@ -152,6 +152,19 @@ class NativeCodecTests(unittest.TestCase):
                     ef_search=0,
                     query_dimension=2,
                 )
+            candidate_meta = bytes([3, 2, 0, 0, 1]) + meta[5:]
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, candidate_meta) + _section(134, raw_work) + _section(136, score_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=0,
+                    query_dimension=2,
+                )
             inconsistent_values = list(values)
             inconsistent_values[18] = 0  # actual rerank is not backed by exact-base scoring.
             inconsistent_values[20] = 1

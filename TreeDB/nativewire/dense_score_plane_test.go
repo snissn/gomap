@@ -224,6 +224,14 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	}
 }
 
+func TestDenseV3CandidateCountMatchesRows(t *testing.T) {
+	for _, candidate := range [][3]int{{1, 1, 1}, {0, 0, 1}, {2, 1, 0}, {-1, 0, 0}, {0, -1, 0}} {
+		if got := denseV3CandidateCountMatchesRows(candidate[0], candidate[1]); (got && candidate[2] == 0) || (!got && candidate[2] == 1) {
+			t.Fatalf("candidate count match (%d,%d)=%v, want %v", candidate[0], candidate[1], got, candidate[2] == 1)
+		}
+	}
+}
+
 func TestDenseTypedQuantizedNativePublicPath(t *testing.T) {
 	// The selected typed serving path relies on the exact retained-parent
 	// namespace contract. Windows intentionally does not advertise that
