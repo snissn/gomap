@@ -304,6 +304,7 @@ func denseScorePlaneCountersMatchWork(work documentservice.DenseSearchWork, proo
 		return false
 	}
 	return proof.QuantizedScoreCalls == work.Graph.BaseANNScored &&
+		work.Graph.BaseCandidates <= proof.QuantizedScoreCalls &&
 		exactBaseScoreCalls == work.Graph.ExactBaseScored &&
 		work.Graph.BaseResultIDs == exactBaseScoreCalls &&
 		proof.ExactSuffixScoreCalls == work.Graph.DeltaScored &&

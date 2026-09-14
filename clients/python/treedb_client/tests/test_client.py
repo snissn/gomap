@@ -724,6 +724,7 @@ class TreeDBClientTests(unittest.TestCase):
                 ),
                 lambda item: item.update(metric="l2"),
                 lambda item: item.update(score_plane={**score_plane, "quantized_score_calls": 2}),
+                lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "base_candidates": 2}}),
                 lambda item: item.update(score_plane={**score_plane, "exact_base_rerank_score_calls": 0, "exact_small_filter_score_calls": 1}),
                 lambda item: item.update(score_plane={**score_plane, "quantized_code_bytes_read": 0}),
                 lambda item: item.update(score_plane={**score_plane, "exact_base_vector_bytes_read": 0}),

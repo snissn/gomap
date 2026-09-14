@@ -1113,6 +1113,7 @@ def _dense_http_score_plane_counters_match_graph(work: Any, proof: Any, result_c
         return False
     return (
         proof.quantized_score_calls == work.graph.base_ann_scored
+        and work.graph.base_candidates <= proof.quantized_score_calls
         and proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls == work.graph.exact_base_scored
         and work.graph.base_result_ids == proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls
         and proof.exact_suffix_score_calls == work.graph.delta_scored

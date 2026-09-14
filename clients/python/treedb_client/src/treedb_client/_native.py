@@ -336,6 +336,7 @@ def _dense_score_plane_matches_graph(work, score_plane, result_count):
         and work.graph.route == expected
         and work.graph.snapshot == score_plane.snapshot
         and score_plane.quantized_score_calls == work.graph.base_ann_scored
+        and work.graph.base_candidates <= score_plane.quantized_score_calls
         and score_plane.exact_base_rerank_score_calls + score_plane.exact_small_filter_score_calls == work.graph.exact_base_scored
         and work.graph.base_result_ids == score_plane.exact_base_rerank_score_calls + score_plane.exact_small_filter_score_calls
         and score_plane.exact_suffix_score_calls == work.graph.delta_scored

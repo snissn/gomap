@@ -158,6 +158,11 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	if err := validateDenseQuantizedScorePlaneResponse(work, &counterMismatch, request, 0); err == nil {
 		t.Fatal("score-plane proof accepted with contradictory graph counters")
 	}
+	candidateMismatch := work
+	candidateMismatch.Graph.BaseCandidates = proof.QuantizedScoreCalls + 1
+	if err := validateDenseQuantizedScorePlaneResponse(candidateMismatch, proof, request, 0); err == nil {
+		t.Fatal("score-plane proof accepted more graph candidates than quantized score calls")
+	}
 	if err := validateDenseQuantizedScorePlaneResponse(work, proof, request, 2); err == nil {
 		t.Fatal("score-plane proof accepted more results than exact score calls")
 	}

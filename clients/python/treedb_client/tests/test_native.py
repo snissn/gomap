@@ -168,6 +168,20 @@ class NativeCodecTests(unittest.TestCase):
                     ef_search=0,
                     query_dimension=2,
                 )
+            candidate_work_values = list(work_values)
+            candidate_work_values[4] = 2  # base candidates cannot exceed quantized score calls.
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in candidate_work_values)) + _section(136, score_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=0,
+                    query_dimension=2,
+                )
             overflow_docs = _vector([b"a", b"b"])
             overflow_payloads = _vector([b'{"id":"a"}', b'{"id":"b"}'])
             with self.assertRaises(TreeDBProtocolError):
