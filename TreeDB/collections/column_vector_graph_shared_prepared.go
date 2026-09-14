@@ -669,7 +669,7 @@ func (c *Collection) requestAndAttachColumnVectorGraphSharedPreparedLegacyScalar
 	}
 	attached := status
 	attached.ownsResource = false
-	reader.quantizedAssetStatus[name] = attached
+	reader.quantizedAssetStatus[descriptor.definition.Name] = attached
 	return nil
 }
 

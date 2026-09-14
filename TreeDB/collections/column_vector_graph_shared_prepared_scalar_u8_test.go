@@ -2,10 +2,12 @@ package collections
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 func TestColumnGraphLegacyScalarU8ZeroRowValidationCache(t *testing.T) {
@@ -87,6 +89,8 @@ func TestColumnGraphSharedPreparedLegacyScalarU8AssetAttachment(t *testing.T) {
 		t.Fatalf("RebuildVectorIndex: %v", err)
 	}
 	qName := def.QuantizedIndexes[0].Name
+	callerNameBacking := strings.Repeat("x", 8192) + qName
+	selectedName := callerNameBacking[len(callerNameBacking)-len(qName):]
 	open := func() *columnVectorGraphPhysicalRowReader {
 		t.Helper()
 		reader, err := collection.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{SkipQuantizedAssets: true})
@@ -107,7 +111,7 @@ func TestColumnGraphSharedPreparedLegacyScalarU8AssetAttachment(t *testing.T) {
 		_ = second.Close()
 		t.Fatal("SkipQuantizedAssets unexpectedly loaded a code plane")
 	}
-	if err := collection.requestAndAttachColumnVectorGraphSharedPreparedLegacyScalarU8Asset(first, qName); err != nil {
+	if err := collection.requestAndAttachColumnVectorGraphSharedPreparedLegacyScalarU8Asset(first, selectedName); err != nil {
 		_ = first.Close()
 		_ = second.Close()
 		t.Fatalf("first shared scalar_u8 attach: %v", err)
@@ -120,6 +124,26 @@ func TestColumnGraphSharedPreparedLegacyScalarU8AssetAttachment(t *testing.T) {
 	}
 	resource := firstStatus.resource
 	holder := first.sharedPreparedSearch.holder
+	if len(holder.legacyScalarU8Assets) != 1 {
+		_ = first.Close()
+		_ = second.Close()
+		t.Fatalf("holder legacy assets=%d want one", len(holder.legacyScalarU8Assets))
+	}
+	canonicalName := holder.legacyScalarU8Assets[0].definition.Name
+	var storedName string
+	for key := range first.quantizedAssetStatus {
+		storedName = key
+	}
+	if storedName != canonicalName || unsafe.StringData(storedName) != unsafe.StringData(canonicalName) {
+		_ = first.Close()
+		_ = second.Close()
+		t.Fatalf("retained map key=%q is not canonical holder name=%q", storedName, canonicalName)
+	}
+	if unsafe.StringData(storedName) == unsafe.StringData(selectedName) {
+		_ = first.Close()
+		_ = second.Close()
+		t.Fatal("retained caller-provided name backing")
+	}
 	holder.legacyScalarU8Mu.Lock()
 	var entry *columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry
 	for _, candidate := range holder.legacyScalarU8Entries {
