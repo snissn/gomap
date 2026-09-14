@@ -87,10 +87,10 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 		RequestedMode: collections.VectorIndexQueryModeQuantizedRerank,
 		EffectiveMode: collections.VectorIndexQueryModeQuantizedRerank,
 		Route:         "quantized_rerank", QuantizedIndexName: "embedding.scalar_u8.public",
-		RequestedTopK: 1, RequestedEFSearch: 8,
+		RequestedTopK: 1, RequestedEFSearch: 8, QuantizedScoreCalls: 1,
 		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true},
 	}
-	work := documentservice.DenseSearchWork{Completed: true, Graph: collections.ColumnGraphQueryWork{Available: true, Completed: true, Route: "typed_hnsw"}}
+	work := documentservice.DenseSearchWork{Completed: true, Graph: collections.ColumnGraphQueryWork{Available: true, Completed: true, Route: "typed_hnsw", BaseANNScored: 1}}
 	work.Graph.Snapshot = proof.Snapshot
 	request := DenseVectorSearchRequest{QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: proof.QuantizedIndexName, TopK: 1, EfSearch: 8}
 	if err := validateDenseQuantizedScorePlaneResponse(work, proof, request, 0); err != nil {
@@ -117,6 +117,11 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	wrongSnapshot.Graph.Snapshot.SchemaHash++
 	if err := validateDenseQuantizedScorePlaneResponse(wrongSnapshot, proof, request, 0); err == nil {
 		t.Fatal("score-plane proof accepted with a contradictory snapshot")
+	}
+	counterMismatch := *proof
+	counterMismatch.QuantizedScoreCalls++
+	if err := validateDenseQuantizedScorePlaneResponse(work, &counterMismatch, request, 0); err == nil {
+		t.Fatal("score-plane proof accepted with contradictory graph counters")
 	}
 	emptyProof := *proof
 	emptyProof.Route = "typed_empty"

@@ -622,7 +622,7 @@ class TreeDBClientTests(unittest.TestCase):
                 "base_candidates": 1,
                 "base_edges": 1,
                 "delta_scored": 0,
-                "exact_base_scored": 0,
+                "exact_base_scored": 1,
                 "base_shadowed": 0,
                 "base_result_ids": 1,
                 "filter": {
@@ -707,6 +707,7 @@ class TreeDBClientTests(unittest.TestCase):
                     score_plane={**score_plane, "route": "typed_empty"},
                 ),
                 lambda item: item.update(metric="l2"),
+                lambda item: item.update(score_plane={**score_plane, "quantized_score_calls": 2}),
             ):
                 invalid = copy.deepcopy(payload)
                 mutation(invalid)
