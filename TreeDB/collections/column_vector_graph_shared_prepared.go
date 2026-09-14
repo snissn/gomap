@@ -399,7 +399,6 @@ func columnVectorGraphSharedPreparedLegacyScalarU8AssetStatusReady(status column
 		quantizedVectorIndexDefinitionValuesEqual(status.Definition, q) && status.Asset == descriptor.assets.Codes
 }
 
-
 // removeLegacyScalarU8AssetEntryLocked removes one terminal failed entry while
 // preserving the fixed declared-plane backing capacity. legacyScalarU8Mu must
 // be held. Clearing the old slot is important: the removed entry may otherwise
