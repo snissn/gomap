@@ -35,8 +35,9 @@ CONTROLS = {"treedb": 32, "qdrant": 64}
 CONTROL_NAMES = {"treedb": "ef_search", "qdrant": "hnsw_ef"}
 EVALUATION_QUERIES = list(range(100, 200))
 PAIR_ORDER = [["treedb", "qdrant"], ["qdrant", "treedb"], ["treedb", "qdrant"]]
-SOURCE_PATHS = ("benchmarks/vector_db_compare", "clients/python/treedb_client", "TreeDB",
-                "cmd/treedb-document-service")
+HARNESS_PATHS = ("benchmarks/vector_db_compare", "clients/python/treedb_client")
+PRODUCT_PATHS = ("TreeDB", "cmd/treedb-document-service", "go.mod", "go.sum", "internal")
+SOURCE_PATHS = HARNESS_PATHS + PRODUCT_PATHS
 
 
 def canonical(value):
@@ -115,9 +116,34 @@ def measured_rss(sample, backend, boundary):
     return sample
 
 
+def validate_control_provenance(tree, qdrant_result, commit, trees, hashes):
+    tree_provenance = tree.get("provenance") or {}
+    qdrant_provenance = qdrant_result.get("provenance") or {}
+    harness_trees = {path: trees[path] for path in HARNESS_PATHS}
+    product_trees = {path: trees[path] for path in PRODUCT_PATHS}
+    if (tree_provenance.get("harness_commit") != commit
+            or tree_provenance.get("product_commit") != commit
+            or tree_provenance.get("harness_trees") != harness_trees
+            or tree_provenance.get("product_trees") != product_trees
+            or tree_provenance.get("service_sha256") != hashes["service"]
+            or tree_provenance.get("serving_sha256") != hashes["serving"]
+            or qdrant_provenance.get("harness_commit") != commit
+            or qdrant_provenance.get("harness_trees") != harness_trees
+            or qdrant_provenance.get("qdrant_bin_sha256") != hashes["qdrant"]
+            or qdrant_provenance.get("qdrant_client_version") != "1.19.0"):
+        raise RuntimeError("reviewed control artifacts were not calibrated from the campaign checkout")
+
+
+def validate_host_identity(plan):
+    if (platform.platform() != plan["platform"]
+            or native.host_resource_identity() != plan["host_resource_identity"]):
+        raise RuntimeError("campaign host resource identity drifted")
+
+
 def frozen_plan(args):
     source = Path(__file__).resolve().parents[2]
     commit = repository_commit(source)
+    source_trees = repository_trees(source)
     dataset, _, files, query_count = native.dataset_identity(args.dataset, ROWS)
     if query_count != 200 or sorted(os.sched_getaffinity(0)) != list(range(6)):
         raise RuntimeError("freeze requires the 200-query fixture and CPU affinity 0-5")
@@ -138,6 +164,9 @@ def frozen_plan(args):
     tree_artifact = evidence_root / "treedb" / "rss.json"
     qdrant_artifact = evidence_root / "qdrant" / "qdrant-rss.json"
     tree, qdrant_result = json.loads(tree_artifact.read_text()), json.loads(qdrant_artifact.read_text())
+    validate_control_provenance(tree, qdrant_result, commit, source_trees, {
+        "service": digest(service), "serving": digest(serving), "qdrant": digest(qdrant),
+    })
     expected_comparison = qdrant_rss.compare_artifacts(tree, qdrant_result)
     contract = tree.get("comparison_contract") or {}
     if (evidence != expected_comparison
@@ -163,7 +192,7 @@ def frozen_plan(args):
     return {
         "schema": PLAN_SCHEMA, "campaign_commit": commit,
         "harness_sha256": digest(__file__),
-        "source_trees": repository_trees(source),
+        "source_trees": source_trees,
         "dataset": str(dataset), "dataset_manifest_sha256": digest(dataset / "manifest.json"),
         "dataset_files_sha256": files, "rows": ROWS, "dimensions": DIMENSIONS, "queries": query_count,
         "top_k": TOP_K,
@@ -219,6 +248,7 @@ def validate_runtime(plan, expected_sha256, plan_path):
         raise RuntimeError("campaign source provenance drifted")
     if importlib.metadata.version("qdrant-client") != plan["qdrant_client_version"]:
         raise RuntimeError("Qdrant client version drifted")
+    validate_host_identity(plan)
     if sorted(os.sched_getaffinity(0)) != plan["cpu_affinity"]:
         raise RuntimeError("campaign CPU affinity drifted")
     if os.environ.get("GOMAXPROCS") != "6" or any(

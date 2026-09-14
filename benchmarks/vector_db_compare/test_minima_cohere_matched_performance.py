@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 import minima_cohere_matched_performance as subject
 
@@ -28,6 +29,30 @@ class MatchedPerformanceTest(unittest.TestCase):
         artifact["quality"]["calibration"]["curve"][0]["mean_recall_at_10"] = .9
         with self.assertRaisesRegex(RuntimeError, "lowest passing"):
             subject.reviewed_selected_control(artifact, "test", [32, 64, 128])
+
+    def test_control_and_host_provenance_fail_closed(self):
+        trees = {path: path + "-tree" for path in subject.SOURCE_PATHS}
+        hashes = {"service": "service", "serving": "serving", "qdrant": "qdrant"}
+        tree = {"provenance": {"harness_commit": "head", "product_commit": "head",
+            "harness_trees": {path: trees[path] for path in subject.HARNESS_PATHS},
+            "product_trees": {path: trees[path] for path in subject.PRODUCT_PATHS},
+            "service_sha256": "service", "serving_sha256": "serving"}}
+        qdrant = {"provenance": {"harness_commit": "head",
+            "harness_trees": {path: trees[path] for path in subject.HARNESS_PATHS},
+            "qdrant_bin_sha256": "qdrant", "qdrant_client_version": "1.19.0"}}
+        subject.validate_control_provenance(tree, qdrant, "head", trees, hashes)
+        tree["provenance"]["product_commit"] = "old"
+        with self.assertRaisesRegex(RuntimeError, "campaign checkout"):
+            subject.validate_control_provenance(tree, qdrant, "head", trees, hashes)
+
+        plan = {"platform": "platform", "host_resource_identity": {"boot_id": "boot"}}
+        with mock.patch.object(subject.platform, "platform", return_value="platform"), \
+                mock.patch.object(subject.native, "host_resource_identity", return_value={"boot_id": "boot"}):
+            subject.validate_host_identity(plan)
+        with mock.patch.object(subject.platform, "platform", return_value="platform"), \
+                mock.patch.object(subject.native, "host_resource_identity", return_value={"boot_id": "new"}):
+            with self.assertRaisesRegex(RuntimeError, "host resource identity"):
+                subject.validate_host_identity(plan)
 
     def test_timed_window_runs_each_worker(self):
         result, samples = subject.timed_window(lambda query: query, [0, 1], 2, .01)
