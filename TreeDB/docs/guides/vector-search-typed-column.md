@@ -88,15 +88,71 @@ collection handles, and immutable until DB close. Reapply the same explicit
 policy after reopen. A failed setup can leave that policy selected with writes
 and queries fenced; fix the cause and retry setup, not a different fallback.
 
-Search with explicit `QueryMode: VectorIndexQueryModeExact` and
-`StatsMode: VectorIndexSearchStatsModeMinimal` (or production stats). The selected
-route rejects quantized modes and unsupported controls rather than ignoring
-them. For full documents use `SearchVectorIndexWithBufferReadView`, fetch from
-the **returned view**, and close it after fetching. Do not open a fresh view
-between search and fetch: publication can change the current collection in
+For ordinary selected serving, search with explicit
+`QueryMode: VectorIndexQueryModeExact` and
+`StatsMode: VectorIndexSearchStatsModeMinimal` (or production stats). The Q2
+exception is intentionally narrow: the same selected
+`SearchVectorIndexWithBufferReadView` route also admits
+`VectorIndexQueryModeQuantizedRerank` for one explicitly named **legacy**
+`scalar_u8` v1 plane. It does not admit `quantized_only`, calibrated scalar-u8,
+RaBitQ, BRQ, Hybrid, or wire/native entry points. Other unsupported controls are
+rejected rather than ignored. For full documents use the returned read view,
+fetch from that **same view**, and close it after fetching. Do not open a fresh
+view between search and fetch: publication can change the current collection in
 between. Buffered IDs remain buffer-owned; plain `SearchVectorIndex` returns
 owned results. Indexed filtering/scoring stays typed; retained flexible payloads
 may be decoded when fetching final results.
+
+### Selected mutable scalar-u8 rerank
+
+Use this Q2 route only after `EnsureColumnGraphServing` has admitted the typed
+index and a declared legacy scalar-u8 v1 code plane has been rebuilt with it:
+
+```go
+response, view, err := col.SearchVectorIndexWithBufferReadView(
+    collections.VectorIndexSearchOptions{
+        IndexName:                 "embedding_graph",
+        Query:                     query,
+        QueryMode:                 collections.VectorIndexQueryModeQuantizedRerank,
+        QuantizedIndexName:        "embedding.scalar_u8.legacy",
+        QuantizedRerankCandidates: 32,
+        TopK:                      10,
+        EfSearch:                  64,
+        StatsMode:                 collections.VectorIndexSearchStatsModeMinimal,
+    },
+    &buffer,
+)
+if err != nil {
+    return err
+}
+defer view.Close()
+consumeTopK(response.Results)
+```
+
+The captured read owner is the lifetime boundary for the immutable base, current
+suffix, filter plan, final typed FP32 reads, IDs, and fetch. Its shared prepared
+holder owns the named scalar code resource; request readers attach a non-owning
+reference, so no query reopens or copies the full code plane. A zero-row base
+still validates its selected immutable scalar image before it returns an empty
+or suffix-only answer, but retains no empty scorer/resource. Asset failures are
+fail-closed and never turn this request into exact or document-scan search.
+
+The route validates `TopK` and `EfSearch` up front; when an explicit nonzero
+rerank width is supplied, it must be at least `TopK` (zero selects the default
+`E0` width). Its raw base width is deliberately larger than the final rerank
+width when shadows are possible: `A` is the pre-shadow base domain, `S` the
+conservative shadow allowance, `E0 = min(A, max(TopK, requested EF or the index
+default))`, `Rcap = min(A, E0, requested rerank width or E0)`, and
+`C = min(A, E0 + S)`. It asks Q1 for at most raw `C`, removes
+shadows/ineligible rows afterwards, keeps at most `E0` live candidates,
+exact-reranks at most `Rcap`, and does not refill. Positive `SearchCandidates`
+reserves the eligible suffix (`D`) and `Rcap` first; the remaining scalar
+allowance must be strictly greater than `C`. Complete eligible filters of at
+most 4,096 rows intentionally exact-score typed vectors instead; 4,097+
+exercises ANN. Final scores use the stable FP32 cosine distance with FP64 inverse
+norms, not quantized estimates or the packed raw-dot scorer. See
+the [quantized score-plane contract](../spec/quantized-vector-index.md#selected-typed-read-view-legacy-scalar-u8-rerank-4685)
+for the exact budget/empty-base rules and Q2's internal proof boundary.
 
 Dense requests preserve their supplied context through the captured owner,
 scalar posting/locator preparation, prepared ANN traversal, exact scoring, and

@@ -80,6 +80,8 @@ type columnVectorGraphPhysicalRowReader struct {
 	hnswSearchPackOpenNanos             uint64
 	preparedSearch                      *columnVectorGraphPreparedSearchView
 	sharedPreparedSearch                *columnVectorGraphSharedPreparedSearchRef
+	sharedPreparedLegacyScalarU8Assets  []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor
+	zeroRowLegacyScalarU8Validation     *columnVectorGraphLegacyScalarU8ZeroRowValidationCache
 	adjacencyLayerSources               *columnVectorGraphAdjacencyDirectSources
 	layer0AdjacencySource               *columnVectorGraphLayer0AdjacencyDirectSource
 	layer0AdjacencySourceUnavailable    bool
@@ -184,7 +186,14 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderWithBoundKey(snap *ba
 	}
 	if sharedEligible {
 		shared, err := c.acquireColumnVectorGraphSharedPreparedSearch(key, func() (*columnVectorGraphSharedPreparedSearch, error) {
-			buildReader := &columnVectorGraphPhysicalRowReader{def: def, graph: graph, catalog: catalog, quantizedAssetStatus: make(map[string]columnVectorGraphQuantizedAssetLoadStatus), skipQuantizedAssets: true}
+			buildReader := &columnVectorGraphPhysicalRowReader{
+				def:                                def,
+				graph:                              graph,
+				catalog:                            catalog,
+				quantizedAssetStatus:               make(map[string]columnVectorGraphQuantizedAssetLoadStatus),
+				skipQuantizedAssets:                true,
+				sharedPreparedLegacyScalarU8Assets: columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptors(def, view.VectorIndexState),
+			}
 			success := false
 			defer func() {
 				if !success {

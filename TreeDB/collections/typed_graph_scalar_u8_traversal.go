@@ -7,8 +7,8 @@ import (
 
 // typedGraphScalarU8TraversalOptions is the private Q1 handoff between typed
 // filter preparation and scalar-u8 candidate collection. It intentionally has
-// no public query-mode surface: Q2 owns visibility-aware reranking and Q3 owns
-// public option exposure.
+// no generic public query-mode surface: Q2 owns selected typed read-view
+// visibility-aware reranking and Q3 owns transport/wire exposure.
 type typedGraphScalarU8TraversalOptions struct {
 	TopK        int
 	EfSearch    int

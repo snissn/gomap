@@ -19,6 +19,47 @@ type ColumnGraphQueryWork struct {
 	BaseResultIDs   uint64                   `json:"base_result_ids"`
 	Filter          ColumnGraphFilterWork    `json:"filter"`
 	Snapshot        ColumnGraphQuerySnapshot `json:"snapshot"`
+	// ScorePlane is a separately versioned selected-score-plane proof. The
+	// original graph-work fields intentionally retain their v1 meanings for
+	// existing callers; Q3 owns any wire exposure of this owned evidence.
+	ScorePlane ColumnGraphScorePlaneWork `json:"score_plane"`
+}
+
+// ColumnGraphScorePlaneWork is owner-local evidence for an explicitly selected
+// score plane. It is populated from the captured owner and actual calls, never
+// from request flags or process-wide counters. Version 1 is intentionally
+// internal until the Q3 transport contract is introduced.
+type ColumnGraphScorePlaneWork struct {
+	Version   uint16 `json:"version"`
+	Available bool   `json:"available"`
+	Completed bool   `json:"completed"`
+
+	RequestedMode VectorIndexQueryMode `json:"requested_mode"`
+	EffectiveMode VectorIndexQueryMode `json:"effective_mode"`
+	Route         string               `json:"route"`
+	Reason        string               `json:"reason,omitempty"`
+
+	QuantizedIndexName  string `json:"quantized_index_name,omitempty"`
+	QuantizedCodec      string `json:"quantized_codec,omitempty"`
+	QuantizedVersion    uint16 `json:"quantized_version,omitempty"`
+	QuantizedConfigHash uint64 `json:"quantized_config_hash,omitempty"`
+
+	RequestedTopK              uint64 `json:"requested_top_k"`
+	RequestedEFSearch          uint64 `json:"requested_ef_search"`
+	RequestedRerankCandidates  uint64 `json:"requested_rerank_candidates"`
+	NormalizedCandidateWidth   uint64 `json:"normalized_candidate_width"`
+	RawCandidateWidth          uint64 `json:"raw_candidate_width"`
+	RerankCandidateCap         uint64 `json:"rerank_candidate_cap"`
+	RawRetainedCandidates      uint64 `json:"raw_retained_candidates"`
+	LiveShortlistCandidates    uint64 `json:"live_shortlist_candidates"`
+	ActualRerankCandidates     uint64 `json:"actual_rerank_candidates"`
+	QuantizedScoreCalls        uint64 `json:"quantized_score_calls"`
+	QuantizedCodeBytesRead     uint64 `json:"quantized_code_bytes_read"`
+	ExactBaseRerankScoreCalls  uint64 `json:"exact_base_rerank_score_calls"`
+	ExactSuffixScoreCalls      uint64 `json:"exact_suffix_score_calls"`
+	ExactSmallFilterScoreCalls uint64 `json:"exact_small_filter_score_calls"`
+
+	Snapshot ColumnGraphQuerySnapshot `json:"snapshot"`
 }
 
 // ColumnGraphQuerySnapshot is copied from the acquired owner, never the latest
@@ -97,7 +138,15 @@ func (p *typedGraphPreparedFilter) work(completed bool) ColumnGraphFilterWork {
 }
 
 func (s typedGraphOverlaySearchStats) work() ColumnGraphQueryWork {
-	return ColumnGraphQueryWork{Available: true, Route: s.Route, BaseANNScored: s.Base.PreparedScoreCalls,
+	baseANNScored := s.Base.PreparedScoreCalls
+	if s.Base.QuantizedScoreCalls != 0 {
+		// Q1's scalar-u8 collector intentionally does not pretend quantized
+		// traversal is exact prepared-vector work. Preserve the v1 aggregate
+		// meaning (actual base ANN score calls) while selecting its truthful
+		// counter for the Q2 route.
+		baseANNScored = s.Base.QuantizedScoreCalls
+	}
+	return ColumnGraphQueryWork{Available: true, Route: s.Route, BaseANNScored: baseANNScored,
 		BaseCandidates: s.Base.Candidates, BaseEdges: s.Base.Edges, DeltaScored: uint64(s.DeltaScored),
 		ExactBaseScored: uint64(s.ExactBaseScored), BaseShadowed: uint64(s.BaseShadowed), BaseResultIDs: uint64(s.BaseResultIDs)}
 }
@@ -113,7 +162,11 @@ func (s *typedGraphOverlaySearchStats) recordWork() {
 	case "typed_hnsw":
 		workstats.Graph.HNSW.Add(1)
 	}
-	workstats.Graph.BaseANNScored.Add(s.Base.PreparedScoreCalls)
+	baseANNScored := s.Base.PreparedScoreCalls
+	if s.Base.QuantizedScoreCalls != 0 {
+		baseANNScored = s.Base.QuantizedScoreCalls
+	}
+	workstats.Graph.BaseANNScored.Add(baseANNScored)
 	workstats.Graph.BaseCandidates.Add(s.Base.Candidates)
 	workstats.Graph.BaseEdges.Add(s.Base.Edges)
 	workstats.Graph.DeltaScored.Add(uint64(s.DeltaScored))

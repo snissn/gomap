@@ -315,7 +315,7 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 // snapshot while excluding coverage mutations across the combined operation.
 func (c *Collection) SearchVectorIndexWithBufferReadView(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, *CollectionReadView, error) {
 	if c.typedGraphServingPolicy() != nil {
-		return c.searchTypedGraphServing(opts, buffer)
+		return c.searchTypedGraphServing(opts, buffer, true)
 	}
 	unlock := c.lockVectorIndexCoveragePersistence()
 	defer unlock()

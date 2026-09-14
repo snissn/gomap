@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/quantizedasset"
 )
 
 func TestTypedGraphCapturedBaseCache(t *testing.T) {
@@ -126,6 +128,156 @@ func checkTypedGraphCapturedBacking(t testing.TB, r *typedGraphCapturedBaseResou
 		t.Fatalf("known backing=%d reservation=%d", actual, r.backingBytes)
 	}
 	t.Logf("keeper assets=%d lease/key descriptors=%d known backing actual=%d reserved=%d mappedresource=%+v", r.assetBytes, r.descriptorBytes, actual, r.backingBytes, h.stats())
+}
+
+func TestTypedGraphCapturedBaseBackingBoundReservesLegacyScalarU8PreparedMetadata(t *testing.T) {
+	const rows = 7
+	base, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, nil, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	one, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, make([]columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, 1), 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, make([]columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, 2), 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparedMetadataBound, preparedMetadataBounded := quantizedasset.PreparedOneColumnRetainedMetadataBound()
+	if !preparedMetadataBounded {
+		t.Fatal("native one-column Prepared bound is unavailable")
+	}
+	perPlane := int64(reflect.TypeFor[columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor]().Size()) +
+		int64(reflect.TypeFor[*columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry]().Size()) +
+		int64(reflect.TypeFor[columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry]().Size()) +
+		int64(typedGraphLegacyScalarU8EntryReadyChannelBackingBound) +
+		int64(reflect.TypeFor[columnVectorGraphQuantizedAssetResource]().Size()) +
+		int64(preparedMetadataBound) +
+		int64(reflect.TypeFor[ScalarU8CalibrationConfig]().Size()) +
+		rows*int64(reflect.TypeFor[uint32]().Size())
+	if got := one - base; got != perPlane {
+		t.Fatalf("one-plane delta=%d want=%d", got, perPlane)
+	}
+	if got := two - one; got != perPlane {
+		t.Fatalf("two-plane delta=%d want=%d", got, perPlane)
+	}
+	if got, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, make([]columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, 1), one); err != nil || got != one {
+		t.Fatalf("exact budget got=%d err=%v want=%d", got, err, one)
+	}
+	if _, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, make([]columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, 1), one-1); !errors.Is(err, errTypedGraphOwnerBudget) {
+		t.Fatalf("one byte short err=%v", err)
+	}
+}
+
+func TestTypedGraphLegacyScalarU8DescriptorPayloadBytes(t *testing.T) {
+	descriptors := []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor{{
+		definition: QuantizedVectorIndexDefinition{
+			Name:    "legacy-plane",
+			Codec:   QuantizedVectorCodecScalarU8,
+			Version: 1,
+			ScalarU8Calibration: &ScalarU8CalibrationConfig{
+				Mode:     ScalarU8CalibrationModeLegacy,
+				Grouping: "legacy-group",
+				AlphaPolicy: ScalarU8AlphaPolicy{
+					Name: "none",
+				},
+			},
+		},
+		assets: columnVectorGraphQuantizedAssetSet{
+			HasCodes: true,
+			Codes: columnVectorIndexStateAssetSnapshot{
+				Role:             columnVectorIndexStateAssetRoleQuantizedCodes,
+				AssetID:          "quantized/legacy-plane/codes",
+				LogicalType:      "u8",
+				PhysicalEncoding: "typed_column",
+				Ref: ColumnAssetRef{
+					Kind:      "column",
+					Namespace: "minima",
+				},
+			},
+		},
+	}}
+	want := int64(
+		len(descriptors[0].definition.Name) +
+			len(descriptors[0].definition.Codec) +
+			len(descriptors[0].definition.ScalarU8Calibration.Mode) +
+			len(descriptors[0].definition.ScalarU8Calibration.Grouping) +
+			len(descriptors[0].definition.ScalarU8Calibration.AlphaPolicy.Name) +
+			len(descriptors[0].assets.Codes.Role) +
+			len(descriptors[0].assets.Codes.AssetID) +
+			len(descriptors[0].assets.Codes.LogicalType) +
+			len(descriptors[0].assets.Codes.PhysicalEncoding) +
+			len(descriptors[0].assets.Codes.Ref.Kind) +
+			len(descriptors[0].assets.Codes.Ref.Namespace),
+	)
+	got, err := typedGraphLegacyScalarU8DescriptorPayloadBytes(descriptors, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("payload bytes=%d want=%d", got, want)
+	}
+	if _, err := typedGraphLegacyScalarU8DescriptorPayloadBytes(descriptors, want-1); !errors.Is(err, errTypedGraphOwnerBudget) {
+		t.Fatalf("one byte short payload err=%v", err)
+	}
+
+	base, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(7, 0, 0, make([]columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, 1), 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withPayload, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(7, 0, 0, descriptors, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := withPayload - base; got != want {
+		t.Fatalf("bound payload delta=%d want=%d", got, want)
+	}
+	if got, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(7, 0, 0, descriptors, withPayload); err != nil || got != withPayload {
+		t.Fatalf("exact bound got=%d err=%v want=%d", got, err, withPayload)
+	}
+	if _, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(7, 0, 0, descriptors, withPayload-1); !errors.Is(err, errTypedGraphOwnerBudget) {
+		t.Fatalf("one byte short bound err=%v", err)
+	}
+}
+
+func TestTypedGraphLegacyScalarU8ReaderAttachmentBackingBound(t *testing.T) {
+	for _, tc := range []struct {
+		pointerBytes uintptr
+		want         uintptr
+		ok           bool
+	}{
+		{pointerBytes: 8, want: 768, ok: true},
+		{pointerBytes: 4, want: 2 << 10, ok: true},
+		{pointerBytes: 16, want: 0, ok: false},
+	} {
+		got, ok := typedGraphLegacyScalarU8ReaderAttachmentBoundForPointerBytes(tc.pointerBytes)
+		if got != tc.want || ok != tc.ok {
+			t.Fatalf("pointer bytes=%d got=(%d,%t) want=(%d,%t)", tc.pointerBytes, got, ok, tc.want, tc.ok)
+		}
+	}
+	if reflect.TypeFor[*columnVectorGraphPhysicalRowReader]().Size() == 8 {
+		if got, want := reflect.TypeFor[columnVectorGraphQuantizedAssetLoadStatus]().Size(), uintptr(344); got != want {
+			t.Fatalf("quantized status size=%d want=%d; update reader attachment bound", got, want)
+		}
+	}
+	one, err := typedGraphLegacyScalarU8ReaderAttachmentBackingBound(1, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := typedGraphLegacyScalarU8ReaderAttachmentBackingBound(2, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := two, 2*one; got != want {
+		t.Fatalf("two planes=%d want=%d", got, want)
+	}
+	if got, err := typedGraphLegacyScalarU8ReaderAttachmentBackingBound(2, two); err != nil || got != two {
+		t.Fatalf("exact budget got=%d err=%v want=%d", got, err, two)
+	}
+	if _, err := typedGraphLegacyScalarU8ReaderAttachmentBackingBound(2, two-1); !errors.Is(err, errTypedGraphOwnerBudget) {
+		t.Fatalf("one byte short err=%v", err)
+	}
 }
 
 func TestTypedGraphCapturedBaseCacheCrossManagerAndFailure(t *testing.T) {

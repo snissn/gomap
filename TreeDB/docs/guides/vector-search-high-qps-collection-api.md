@@ -13,6 +13,7 @@ separate. Benchmark snapshots and full counter workflow are documented by the
 | --- | --- | --- | --- | --- |
 | Production high-QPS exact no-document serving through the collection API | `Collection.SearchVectorIndexWithBuffer` | caller-owned `VectorIndexSearchBuffer` | `IncludeDocuments=false`; document fetch/projection/filter/fallback controls rejected | Primary exact collection-level fast path. Warm the collection-owned prepared `hnsw_search_pack_v1` state before the timed/serving loop; steady state targets `0 B/op`, `0 allocs/op`. |
 | Collection-level buffered quantized serving for supported score planes | `Collection.SearchVectorIndexWithBuffer` with `QueryMode=quantized_only` or `quantized_rerank` and `QuantizedIndexName` | caller-owned `VectorIndexSearchBuffer` | `IncludeDocuments=false`; document materialization remains separate | Separate route state from exact FP32. Current collection evidence covers `scalar_u8` and `rabitq_1bit`; `quantized_only` reads no exact vectors/norms, while `quantized_rerank` exact-reads only the shortlist. |
+| Selected mutable typed Minima scalar-u8 rerank | `Collection.SearchVectorIndexWithBufferReadView` with `QueryMode=quantized_rerank` and a named legacy scalar-u8 v1 plane | caller-owned buffer plus a returned captured `CollectionReadView` | fetch only through the returned view; close it after use | Narrow Q2 serving route, not a generic high-QPS no-document claim. It shares one typed owner/resource across base traversal, rerank, suffix merge, IDs, and fetch; qonly/codecs/transport outside its contract remain rejected. |
 | Simple no-document call when per-call result allocation is acceptable | `Collection.SearchVectorIndex` with `IncludeDocuments=false` | response-owned results/IDs | no documents materialized | Convenience route. Healthy exact calls use the cached `hnsw_search_pack_v1` route, but returned result/ID storage is response-owned and intentionally allocates. |
 | Search and materialize documents in the same call | `Collection.SearchVectorIndex` with `IncludeDocuments=true` | response-owned results/documents | with-document materialization is part of the call | explicit materialization path. Do not mix these rows into no-document high-QPS claims; report document fetch counters separately. |
 | Search first, fetch top-k documents later | `CollectionReadView.FetchDocumentsForVectorIndexSearchResults` after a no-document search | response-owned documents | separate fetch/materialization phase | Use when a service can keep ANN search no-document and fetch only selected top-k IDs later. Buffered-search results alias the caller buffer, so do not reuse/reset the buffer until this fetch returns. |
@@ -72,6 +73,27 @@ For quantized collection serving, use the same buffered API with an explicit
 `brq_1bit` evidence separate: #2487 covers collection-level `scalar_u8` and
 `rabitq_1bit`; #2507 adds lower-level prototype `brq_1bit` rows only.
 
+The Q2 mutable Minima path is deliberately different from those generic
+buffered evidence rows. It is only the selected typed read-view legacy
+`scalar_u8` v1 rerank route; it has no `quantized_only`, calibrated-scalar,
+RaBitQ/BRQ, HTTP/native, Hybrid, or standalone-searcher extension. Keep its
+captured view open through any final fetch. The immutable base's shared holder
+owns one mapped code resource and request readers borrow a non-owning status, so
+the route avoids a full code-plane reopen/copy per request. An empty base still
+validates its selected zero-row image before empty/suffix-only success and holds
+no fabricated resource/scorer; asset failures fail closed.
+
+Its bounded work is a correctness contract, not a high-QPS throughput claim:
+with base domain `A`, conservative shadow allowance `S`, effective width `E0`,
+rerank cap `Rcap`, raw width `C=min(A,E0+S)`, eligible suffix count `D`, and
+positive `B=SearchCandidates`, a nonempty ANN request requires
+`B-D-Rcap > C`. It removes shadows after raw collection, never refills, and
+uses the typed exact route for complete eligible filters of at most 4,096 rows.
+Final rerank uses stable FP32 cosine distance with FP64 inverse norms. Its
+versioned score-plane proof is internal in Q2; Q3 owns any transport/wire form.
+See the [typed-column guide](vector-search-typed-column.md#selected-mutable-scalar-u8-rerank)
+and [quantized score-plane contract](../spec/quantized-vector-index.md#selected-typed-read-view-legacy-scalar-u8-rerank-4685).
+
 For lower-level serving, open `OpenVectorIndexSearcher` once per worker, warm
 `SearchWithBuffer` with that worker's own buffer, and close/reopen the searcher
 when the worker must move to a newer collection/vector-index generation.
@@ -114,6 +136,11 @@ evidence.
   lower-level prototype with its own benchmark evidence and no promotion claim.
   Future scale-sensitive positioning should consume #2494 crossover synthesis or
   say explicitly that crossover evidence is pending.
+- The Q2 typed read-view rerank route is not one of the `0 B/op`, `0 allocs/op`,
+  no-document high-QPS evidence rows. It pins a view, scores a live suffix, and
+  performs bounded exact rerank work by design; measure it under its own
+  correctness and allocation evidence instead of borrowing exact/collection
+  benchmark claims.
 
 ## Required no-document route counters
 
