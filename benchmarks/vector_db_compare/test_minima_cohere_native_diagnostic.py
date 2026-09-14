@@ -65,7 +65,7 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         self.assertIn("0x6", frozen.GENERATOR)
         self.assertNotEqual(diagnostic.SCHEMA, frozen.MEASURED_SCHEMA)
         self.assertEqual(diagnostic.RSS_CALIBRATION_QUERIES, list(range(100)))
-        self.assertEqual(diagnostic.RSS_EVALUATION_QUERIES, list(range(100, 200)))
+        self.assertEqual(diagnostic.RSS_REVALIDATION_QUERIES, list(range(100, 200)))
 
     def test_shutdown_history_import_origin_and_zero_vectors_fail_closed(self):
         lifetime = {"pid": 123, "linux_process_identity": "123:456",

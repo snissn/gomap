@@ -60,8 +60,8 @@ def compare_artifacts(treedb, qdrant):
     for artifact, backend in ((treedb, "treedb"), (qdrant, "qdrant")):
         if artifact.get("schema") != SCHEMA or artifact.get("backend") != backend or artifact.get("state") != "calibrated":
             reasons.append(f"{backend} artifact is not calibrated")
-        if artifact.get("quality", {}).get("evaluation", {}).get("passed") is not True:
-            reasons.append(f"{backend} evaluation quality missed the target")
+        if artifact.get("quality", {}).get("revalidation", {}).get("passed") is not True:
+            reasons.append(f"{backend} fixed-set quality missed the target")
         rss = artifact.get("rss", {})
         if (rss.get("availability") != "measured" or type(rss.get("bytes")) is not int
                 or rss["bytes"] <= 0 or not rss.get("process_identity")):
@@ -99,7 +99,7 @@ def comparison_contract(dataset_manifest_sha256, dataset_files_sha256, cpu_affin
         "rss_recall_target": native.RSS_RECALL_TARGET,
         "rss_controls": native.RSS_CONTROLS,
         "rss_calibration_queries": native.RSS_CALIBRATION_QUERIES,
-        "rss_evaluation_queries": native.RSS_EVALUATION_QUERIES,
+        "rss_revalidation_queries": native.RSS_REVALIDATION_QUERIES,
     })
 
 
@@ -136,13 +136,13 @@ def prepare(args):
     )}
     contract = comparison_contract(native.digest(dataset / "manifest.json"), files, affinity)
     if (tree.get("schema") != SCHEMA or tree.get("backend") != "treedb" or tree.get("state") != "calibrated"
-            or tree.get("quality", {}).get("evaluation", {}).get("passed") is not True
+            or tree.get("quality", {}).get("revalidation", {}).get("passed") is not True
             or tree.get("comparison_contract") != contract
             or tree.get("provenance", {}).get("harness_commit") != harness
             or tree.get("provenance", {}).get("harness_trees") != harness_trees):
         raise RuntimeError("TreeDB RSS artifact quality, contract, or harness provenance is not current")
     return {
-        "schema": "treedb_cohere_qdrant_rss_plan/v2", "harness_commit": harness,
+        "schema": "treedb_cohere_qdrant_rss_plan/v3", "harness_commit": harness,
         "harness_source_sha256": native.digest(Path(__file__)),
         "harness_trees": harness_trees,
         "dataset": str(dataset), "dataset_manifest_sha256": native.digest(dataset / "manifest.json"),
@@ -349,7 +349,7 @@ class Run:
             readiness = self.load()
             quality = native.calibrate_ann_control(
                 lambda control, query: self.search(control, query), self.truth, self.plan["controls"],
-                native.RSS_CALIBRATION_QUERIES, native.RSS_EVALUATION_QUERIES, native.RSS_RECALL_TARGET,
+                native.RSS_CALIBRATION_QUERIES, native.RSS_REVALIDATION_QUERIES, native.RSS_RECALL_TARGET,
             )
             rss = native.process_peak_at_boundary(
                 self.server_pid, self.process_identity, self.plan["cpu_affinity"],
@@ -359,8 +359,8 @@ class Run:
             if set(exact_ids) != set(self.truth[0]):
                 raise RuntimeError("Qdrant exact correctness reference differs from exhaustive truth")
             reasons = []
-            if not quality["evaluation"]["passed"]:
-                reasons.append("no independently selected Qdrant hnsw_ef passed evaluation recall")
+            if not quality["revalidation"]["passed"]:
+                reasons.append("no Qdrant hnsw_ef passed both fixed recall query sets")
             if rss.get("availability") != "measured":
                 reasons.append("Qdrant server VmHWM unavailable or process drifted")
             if (existing.server_process_identity(self.server_pid) != self.process_command_identity
@@ -393,7 +393,7 @@ class Run:
             reason = f"{type(exc).__name__}: {exc}"
             artifact = artifact or {"schema": SCHEMA, "backend": "qdrant",
                                     "comparison_contract": self.plan["comparison_contract"],
-                                    "quality": {"evaluation": {"passed": False}},
+                                    "quality": {"revalidation": {"passed": False}},
                                     "rss": {"availability": "unavailable", "bytes": None,
                                             "process_identity": self.process_identity or ""},
                                     "readiness": self.readiness_evidence[-1] if self.readiness_evidence else {}}
