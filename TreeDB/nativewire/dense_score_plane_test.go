@@ -93,7 +93,7 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	work := documentservice.DenseSearchWork{Completed: true, Graph: collections.ColumnGraphQueryWork{Available: true, Completed: true, Route: "typed_hnsw"}}
 	work.Graph.Snapshot = proof.Snapshot
 	request := DenseVectorSearchRequest{QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: proof.QuantizedIndexName, TopK: 1, EfSearch: 8}
-	if err := validateDenseQuantizedScorePlaneResponse(work, proof, request); err != nil {
+	if err := validateDenseQuantizedScorePlaneResponse(work, proof, request, 0); err != nil {
 		t.Fatalf("valid public proof rejected: %v", err)
 	}
 	for _, mutate := range []func(*collections.ColumnGraphScorePlaneWork){
@@ -104,19 +104,26 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	} {
 		candidate := *proof
 		mutate(&candidate)
-		if err := validateDenseQuantizedScorePlaneResponse(work, &candidate, request); err == nil {
+		if err := validateDenseQuantizedScorePlaneResponse(work, &candidate, request, 0); err == nil {
 			t.Fatalf("invalid proof accepted: %+v", candidate)
 		}
 	}
 	wrongGraph := work
 	wrongGraph.Graph.Route = "typed_exact"
-	if err := validateDenseQuantizedScorePlaneResponse(wrongGraph, proof, request); err == nil {
+	if err := validateDenseQuantizedScorePlaneResponse(wrongGraph, proof, request, 0); err == nil {
 		t.Fatal("score-plane proof accepted with a contradictory dense-work route")
 	}
 	wrongSnapshot := work
 	wrongSnapshot.Graph.Snapshot.SchemaHash++
-	if err := validateDenseQuantizedScorePlaneResponse(wrongSnapshot, proof, request); err == nil {
+	if err := validateDenseQuantizedScorePlaneResponse(wrongSnapshot, proof, request, 0); err == nil {
 		t.Fatal("score-plane proof accepted with a contradictory snapshot")
+	}
+	emptyProof := *proof
+	emptyProof.Route = "typed_empty"
+	emptyWork := work
+	emptyWork.Graph.Route = "typed_empty"
+	if err := validateDenseQuantizedScorePlaneResponse(emptyWork, &emptyProof, request, 1); err == nil {
+		t.Fatal("typed-empty score-plane proof accepted nonempty results")
 	}
 }
 

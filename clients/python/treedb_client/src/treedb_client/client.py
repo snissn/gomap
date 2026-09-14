@@ -1041,6 +1041,7 @@ def _validate_http_dense_quantized_response(
         or not response.index.capabilities.typed_dense_quantized_rerank
         or response.route != "ann"
         or response.exact
+        or (proof.route == "typed_empty" and len(response.documents) != 0)
         or not proof.available
         or not proof.completed
         or not proof.snapshot.available

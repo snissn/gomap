@@ -702,6 +702,10 @@ class TreeDBClientTests(unittest.TestCase):
                 lambda item: item.update(exact=True),
                 lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "route": "typed_exact"}}),
                 lambda item: item.update(score_plane={**score_plane, "snapshot": {**snapshot, "schema_hash": 2}}),
+                lambda item: item.update(
+                    dense_work={**dense_work, "graph": {**dense_work["graph"], "route": "typed_empty"}},
+                    score_plane={**score_plane, "route": "typed_empty"},
+                ),
             ):
                 invalid = copy.deepcopy(payload)
                 mutation(invalid)
