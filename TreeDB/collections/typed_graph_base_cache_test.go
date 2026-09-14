@@ -132,15 +132,15 @@ func checkTypedGraphCapturedBacking(t testing.TB, r *typedGraphCapturedBaseResou
 
 func TestTypedGraphCapturedBaseBackingBoundReservesLegacyScalarU8PreparedMetadata(t *testing.T) {
 	const rows = 7
-	base, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, 0, 1<<30)
+	base, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, nil, 1<<30)
 	if err != nil {
 		t.Fatal(err)
 	}
-	one, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, 1, 1<<30)
+	one, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, make([]columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, 1), 1<<30)
 	if err != nil {
 		t.Fatal(err)
 	}
-	two, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, 2, 1<<30)
+	two, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, make([]columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, 2), 1<<30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,11 +162,82 @@ func TestTypedGraphCapturedBaseBackingBoundReservesLegacyScalarU8PreparedMetadat
 	if got := two - one; got != perPlane {
 		t.Fatalf("two-plane delta=%d want=%d", got, perPlane)
 	}
-	if got, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, 1, one); err != nil || got != one {
+	if got, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, make([]columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, 1), one); err != nil || got != one {
 		t.Fatalf("exact budget got=%d err=%v want=%d", got, err, one)
 	}
-	if _, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, 1, one-1); !errors.Is(err, errTypedGraphOwnerBudget) {
+	if _, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, make([]columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, 1), one-1); !errors.Is(err, errTypedGraphOwnerBudget) {
 		t.Fatalf("one byte short err=%v", err)
+	}
+}
+
+func TestTypedGraphLegacyScalarU8DescriptorPayloadBytes(t *testing.T) {
+	descriptors := []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor{{
+		definition: QuantizedVectorIndexDefinition{
+			Name:    "legacy-plane",
+			Codec:   QuantizedVectorCodecScalarU8,
+			Version: 1,
+			ScalarU8Calibration: &ScalarU8CalibrationConfig{
+				Mode:     ScalarU8CalibrationModeLegacy,
+				Grouping: "legacy-group",
+				AlphaPolicy: ScalarU8AlphaPolicy{
+					Name: "none",
+				},
+			},
+		},
+		assets: columnVectorGraphQuantizedAssetSet{
+			HasCodes: true,
+			Codes: columnVectorIndexStateAssetSnapshot{
+				Role:             columnVectorIndexStateAssetRoleQuantizedCodes,
+				AssetID:          "quantized/legacy-plane/codes",
+				LogicalType:      "u8",
+				PhysicalEncoding: "typed_column",
+				Ref: ColumnAssetRef{
+					Kind:      "column",
+					Namespace: "minima",
+				},
+			},
+		},
+	}}
+	want := int64(
+		len(descriptors[0].definition.Name) +
+			len(descriptors[0].definition.Codec) +
+			len(descriptors[0].definition.ScalarU8Calibration.Mode) +
+			len(descriptors[0].definition.ScalarU8Calibration.Grouping) +
+			len(descriptors[0].definition.ScalarU8Calibration.AlphaPolicy.Name) +
+			len(descriptors[0].assets.Codes.Role) +
+			len(descriptors[0].assets.Codes.AssetID) +
+			len(descriptors[0].assets.Codes.LogicalType) +
+			len(descriptors[0].assets.Codes.PhysicalEncoding) +
+			len(descriptors[0].assets.Codes.Ref.Kind) +
+			len(descriptors[0].assets.Codes.Ref.Namespace),
+	)
+	got, err := typedGraphLegacyScalarU8DescriptorPayloadBytes(descriptors, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("payload bytes=%d want=%d", got, want)
+	}
+	if _, err := typedGraphLegacyScalarU8DescriptorPayloadBytes(descriptors, want-1); !errors.Is(err, errTypedGraphOwnerBudget) {
+		t.Fatalf("one byte short payload err=%v", err)
+	}
+
+	base, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(7, 0, 0, make([]columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, 1), 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withPayload, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(7, 0, 0, descriptors, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := withPayload - base; got != want {
+		t.Fatalf("bound payload delta=%d want=%d", got, want)
+	}
+	if got, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(7, 0, 0, descriptors, withPayload); err != nil || got != withPayload {
+		t.Fatalf("exact bound got=%d err=%v want=%d", got, err, withPayload)
+	}
+	if _, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(7, 0, 0, descriptors, withPayload-1); !errors.Is(err, errTypedGraphOwnerBudget) {
+		t.Fatalf("one byte short bound err=%v", err)
 	}
 }
 

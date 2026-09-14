@@ -177,11 +177,14 @@ func (c *Collection) openTypedGraphCapturedBaseCache(ctx context.Context, index 
 			return errTypedGraphOwnerBudget
 		}
 		r.descriptorBytes += fixed + int64(cap(refs))*refSize
-		legacyScalarU8Assets := 0
+		var legacyScalarU8Descriptors []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor
 		if graph.RowCount > 0 {
-			legacyScalarU8Assets = columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptorCount(catalog.meta.VectorIndexes[0])
+			// The shared holder transfers this descriptor shape beyond the
+			// decoded view that produced it. Construct the same descriptor
+			// shape for admission before opening any source.
+			legacyScalarU8Descriptors = columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptors(catalog.meta.VectorIndexes[0], view.VectorIndexState)
 		}
-		r.backingBytes, err = typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(graph.RowCount, len(view.graphOwnerRecords), graph.AdjacencyLayerCount, legacyScalarU8Assets, limits.StateBytes-r.descriptorBytes)
+		r.backingBytes, err = typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(graph.RowCount, len(view.graphOwnerRecords), graph.AdjacencyLayerCount, legacyScalarU8Descriptors, limits.StateBytes-r.descriptorBytes)
 		if err != nil {
 			return err
 		}
@@ -229,7 +232,7 @@ func (c *Collection) openTypedGraphCapturedBaseCache(ctx context.Context, index 
 // not a total process heap ceiling. Shared holders are charged conservatively
 // per keeper and per read owner, including owners surviving keeper retirement.
 func typedGraphCapturedBaseBackingBound(rows, records, layers int, limit int64) (int64, error) {
-	return typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, records, layers, 0, limit)
+	return typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, records, layers, nil, limit)
 }
 
 // typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets extends the
@@ -280,7 +283,43 @@ func typedGraphLegacyScalarU8ReaderAttachmentBackingBound(legacyScalarU8Assets i
 	return int64(legacyScalarU8Assets) * int64(perPlane), nil
 }
 
-func typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, records, layers, legacyScalarU8Assets int, limit int64) (int64, error) {
+// typedGraphLegacyScalarU8DescriptorPayloadBytes accounts string backing
+// transferred from a decoded VectorIndexState into a long-lived shared holder.
+// The descriptor and calibration headers themselves are charged separately by
+// the captured-base bound; this helper covers only their retained payload.
+func typedGraphLegacyScalarU8DescriptorPayloadBytes(descriptors []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, limit int64) (int64, error) {
+	if limit < 0 {
+		return 0, errTypedGraphOwnerBudget
+	}
+	var total int64
+	addString := func(value string) bool {
+		bytes := int64(len(value))
+		if bytes < 0 || total > limit || bytes > limit-total {
+			return false
+		}
+		total += bytes
+		return true
+	}
+	for _, descriptor := range descriptors {
+		if !addString(descriptor.definition.Name) ||
+			!addString(descriptor.definition.Codec) ||
+			!addString(descriptor.assets.Codes.Role) ||
+			!addString(descriptor.assets.Codes.AssetID) ||
+			!addString(descriptor.assets.Codes.LogicalType) ||
+			!addString(descriptor.assets.Codes.PhysicalEncoding) ||
+			!addString(descriptor.assets.Codes.Ref.Kind) ||
+			!addString(descriptor.assets.Codes.Ref.Namespace) {
+			return 0, errTypedGraphOwnerBudget
+		}
+		if cfg := descriptor.definition.ScalarU8Calibration; cfg != nil &&
+			(!addString(cfg.Mode) || !addString(cfg.Grouping) || !addString(cfg.AlphaPolicy.Name)) {
+			return 0, errTypedGraphOwnerBudget
+		}
+	}
+	return total, nil
+}
+
+func typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, records, layers int, legacyScalarU8Assets []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, limit int64) (int64, error) {
 	var total int64
 	add := func(count int, size uintptr) bool {
 		if count < 0 || size == 0 || int64(count) > (limit-total)/int64(size) {
@@ -289,7 +328,7 @@ func typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, records, l
 		total += int64(count) * int64(size)
 		return true
 	}
-	if limit < 0 || rows < 0 || records < 0 || layers < 0 || legacyScalarU8Assets < 0 {
+	if limit < 0 || rows < 0 || records < 0 || layers < 0 {
 		return 0, errTypedGraphOwnerBudget
 	}
 	for _, size := range []uintptr{
@@ -322,7 +361,7 @@ func typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, records, l
 			return 0, errTypedGraphOwnerBudget
 		}
 	}
-	if legacyScalarU8Assets > 0 {
+	if len(legacyScalarU8Assets) > 0 {
 		preparedMetadataBound, preparedMetadataBounded := quantizedasset.PreparedOneColumnRetainedMetadataBound()
 		if !preparedMetadataBounded {
 			return 0, errTypedGraphOwnerBudget
@@ -340,25 +379,30 @@ func typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, records, l
 			preparedMetadataBound,
 			reflect.TypeFor[ScalarU8CalibrationConfig]().Size(),
 		} {
-			if !add(legacyScalarU8Assets, size) {
+			if !add(len(legacyScalarU8Assets), size) {
 				return 0, errTypedGraphOwnerBudget
 			}
 		}
 	}
+	descriptorPayloadBytes, err := typedGraphLegacyScalarU8DescriptorPayloadBytes(legacyScalarU8Assets, limit-total)
+	if err != nil {
+		return 0, err
+	}
+	total += descriptorPayloadBytes
 	// Resource loading derives one uint32 sum per base row. Keep this checked
 	// separately so the product cannot overflow and no query can add an
 	// unadmitted O(N) slice after its owner was accepted.
-	if rows > 0 && legacyScalarU8Assets > 0 {
+	if rows > 0 && len(legacyScalarU8Assets) > 0 {
 		remaining := limit - total
 		sumSize := int64(reflect.TypeFor[uint32]().Size())
 		if sumSize <= 0 || int64(rows) > remaining/sumSize {
 			return 0, errTypedGraphOwnerBudget
 		}
 		perPlane := int64(rows) * sumSize
-		if perPlane <= 0 || int64(legacyScalarU8Assets) > remaining/perPlane {
+		if perPlane <= 0 || int64(len(legacyScalarU8Assets)) > remaining/perPlane {
 			return 0, errTypedGraphOwnerBudget
 		}
-		total += int64(legacyScalarU8Assets) * perPlane
+		total += int64(len(legacyScalarU8Assets)) * perPlane
 	}
 	return total, nil
 }

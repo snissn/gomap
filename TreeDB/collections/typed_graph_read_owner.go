@@ -319,15 +319,18 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 			recordCount = state.servingBase.recordCount
 		}
 		def := catalog.meta.VectorIndexes[0]
-		legacyScalarU8Assets := 0
+		var legacyScalarU8Descriptors []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor
 		if graph.RowCount > 0 {
-			legacyScalarU8Assets = columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptorCount(def)
+			// Per-owner admission covers a holder built independently of any
+			// keeper, so construct the exact descriptor shape that can outlive
+			// this decoded base view before opening sources.
+			legacyScalarU8Descriptors = columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptors(def, baseView.VectorIndexState)
 		}
-		candidate.backingBytes, err = typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(graph.RowCount, recordCount, graph.AdjacencyLayerCount, legacyScalarU8Assets, limits.StateBytes-candidate.descriptorBytes)
+		candidate.backingBytes, err = typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(graph.RowCount, recordCount, graph.AdjacencyLayerCount, legacyScalarU8Descriptors, limits.StateBytes-candidate.descriptorBytes)
 		if err != nil {
 			return err
 		}
-		readerAttachmentBytes, err := typedGraphLegacyScalarU8ReaderAttachmentBackingBound(legacyScalarU8Assets, limits.StateBytes-candidate.descriptorBytes-candidate.backingBytes)
+		readerAttachmentBytes, err := typedGraphLegacyScalarU8ReaderAttachmentBackingBound(len(legacyScalarU8Descriptors), limits.StateBytes-candidate.descriptorBytes-candidate.backingBytes)
 		if err != nil {
 			return err
 		}

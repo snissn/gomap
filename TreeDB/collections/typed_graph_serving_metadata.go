@@ -241,22 +241,11 @@ func typedGraphServingMetadataBytes(b *typedGraphServingBaseMetadata, limit int6
 				return 0, errTypedGraphOwnerBudget
 			}
 		}
-		for _, descriptor := range cache.descriptors {
-			if !add(len(descriptor.definition.Name), 1) ||
-				!add(len(descriptor.definition.Codec), 1) ||
-				!add(len(descriptor.assets.Codes.Role), 1) ||
-				!add(len(descriptor.assets.Codes.AssetID), 1) ||
-				!add(len(descriptor.assets.Codes.LogicalType), 1) ||
-				!add(len(descriptor.assets.Codes.PhysicalEncoding), 1) ||
-				!add(len(descriptor.assets.Codes.Ref.Kind), 1) ||
-				!add(len(descriptor.assets.Codes.Ref.Namespace), 1) {
-				return 0, errTypedGraphOwnerBudget
-			}
-			if cfg := descriptor.definition.ScalarU8Calibration; cfg != nil &&
-				(!add(len(cfg.Mode), 1) || !add(len(cfg.Grouping), 1) || !add(len(cfg.AlphaPolicy.Name), 1)) {
-				return 0, errTypedGraphOwnerBudget
-			}
+		descriptorPayloadBytes, err := typedGraphLegacyScalarU8DescriptorPayloadBytes(cache.descriptors, limit-n)
+		if err != nil {
+			return 0, err
 		}
+		n += descriptorPayloadBytes
 	}
 	// Both decoded views originate in the same bounded manifest. Account their
 	// decoded string payload separately from slice backing; namespace strings
