@@ -46,7 +46,14 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 	if overlay == nil || !overlay.validOpen() || overlay.pack == nil {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
-	return buildTypedGraphFilterNavigationFromSource(ctx, typedGraphFilterNavigationBuildSource{
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := acquireTypedGraphFilterNavigationConstruction(ctx); err != nil {
+		return nil, err
+	}
+	defer releaseTypedGraphFilterNavigationConstruction()
+	return buildTypedGraphFilterNavigationFromAdmittedSource(ctx, typedGraphFilterNavigationBuildSource{
 		def:          overlay.base.reader.def,
 		pack:         overlay.pack,
 		vectorSource: overlay.base.reader.typedVectorSource,
@@ -54,7 +61,7 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 	}, plan, maxBytes)
 }
 
-func buildTypedGraphFilterNavigationFromSource(ctx context.Context, source typedGraphFilterNavigationBuildSource, plan *typedGraphPreparedFilter, maxBytes int) (*typedGraphFilterNavigation, error) {
+func buildTypedGraphFilterNavigationFromAdmittedSource(ctx context.Context, source typedGraphFilterNavigationBuildSource, plan *typedGraphPreparedFilter, maxBytes int) (*typedGraphFilterNavigation, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -113,10 +120,6 @@ func buildTypedGraphFilterNavigationFromSource(ctx context.Context, source typed
 	if !charge(layersCount, uint64(reflect.TypeFor[columnHNSWSearchPackPreparedLayer]().Size())) || !charge(layersCount*uint64(count+1), 8) {
 		return nil, errTypedGraphFilterNavigationDeclined
 	}
-	if err := acquireTypedGraphFilterNavigationConstruction(ctx); err != nil {
-		return nil, err
-	}
-	defer releaseTypedGraphFilterNavigationConstruction()
 	rows := make([]columnVectorGraphAssetRow, count)
 	for i := range rows {
 		if i&255 == 0 {
@@ -219,6 +222,15 @@ func acquireTypedGraphFilterNavigationConstruction(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func tryAcquireTypedGraphFilterNavigationConstruction() bool {
+	select {
+	case typedGraphFilterNavigationConstruction <- struct{}{}:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -29,13 +29,21 @@ func TestTypedGraphFilterNavigationSerializesConstruction(t *testing.T) {
 	if err := acquireTypedGraphFilterNavigationConstruction(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	defer releaseTypedGraphFilterNavigationConstruction()
+	if tryAcquireTypedGraphFilterNavigationConstruction() {
+		releaseTypedGraphFilterNavigationConstruction()
+		t.Fatal("contended nonblocking construction admission succeeded")
+	}
 	if err := acquireTypedGraphFilterNavigationConstruction(canceled); !errors.Is(err, context.Canceled) {
 		t.Fatalf("contended construction cancellation: %v", err)
 	}
+	releaseTypedGraphFilterNavigationConstruction()
+	if !tryAcquireTypedGraphFilterNavigationConstruction() {
+		t.Fatal("released construction slot remained unavailable")
+	}
+	releaseTypedGraphFilterNavigationConstruction()
 }
 
-func TestTypedGraphFilterNavigationDoesNotBlockColdPublicQuery(t *testing.T) {
+func TestTypedGraphFilterNavigationDoesNotQueueBehindBusySlot(t *testing.T) {
 	requireTypedGraphPublicServingTest(t)
 	col, base, _, _, columns, _ := openTypedGraphQualityFixture(t, 4098)
 	if err := base.Close(); err != nil {
@@ -87,7 +95,7 @@ func TestTypedGraphFilterNavigationDoesNotBlockColdPublicQuery(t *testing.T) {
 		t.Fatalf("cold public query results=%d err=%v", len(result.response.Results), result.err)
 	}
 	work := result.response.Stats.ColumnGraphWork
-	if work.Route != "typed_exact" || work.Filter.EligibleRows != 4097 {
+	if work.Route != "typed_hnsw" || work.Filter.EligibleRows != 4097 {
 		t.Fatalf("cold public fallback=%+v", work)
 	}
 	slot := collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: "embedding_graph"}
@@ -97,26 +105,22 @@ func TestTypedGraphFilterNavigationDoesNotBlockColdPublicQuery(t *testing.T) {
 	keeper.capturedBase.filtersMu.Lock()
 	cached := keeper.capturedBase.filters[0].filter
 	keeper.capturedBase.filtersMu.Unlock()
-	if cached == nil || cached.navigation.Load() != nil {
-		t.Fatal("cold membership was not published independently of navigation")
-	}
-	closed := make(chan error, 1)
-	go func() { closed <- col.CloseVectorIndexPreparedSearchCache() }()
-	select {
-	case err := <-closed:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(3 * time.Second):
-		releaseTypedGraphFilterNavigationConstruction()
-		held = false
-		if err := <-closed; err != nil {
-			t.Fatal(err)
-		}
-		t.Fatal("keeper close did not cancel optional navigation")
+	if cached == nil || cached.navigation.Load() != nil || cached.navigationPending.Load() {
+		t.Fatal("busy construction slot queued optional navigation")
 	}
 	releaseTypedGraphFilterNavigationConstruction()
 	held = false
+	var warmBuffer VectorIndexSearchBuffer
+	warm, warmView, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{
+		IndexName: "embedding_graph", Query: columns[0].Float32Vectors[0], TopK: 10, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeMinimal,
+		DeclaredScalarFilter: &HybridScalarFilter{IndexName: "user", Range: &IndexRangeOptions{Lower: IndexRangeBound{Value: "00000", Inclusive: true}, Upper: IndexRangeBound{Value: "04096", Inclusive: true}}},
+	}, &warmBuffer)
+	if warmView != nil {
+		defer warmView.Close()
+	}
+	if err != nil || len(warm.Results) != 10 || warm.Stats.ColumnGraphWork.Route != "typed_hnsw" || cached.navigation.Load() != nil || cached.navigationPending.Load() {
+		t.Fatalf("busy-slot cache hit retried navigation: results=%d work=%+v err=%v", len(warm.Results), warm.Stats.ColumnGraphWork, err)
+	}
 }
 
 func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
@@ -152,15 +156,6 @@ func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 	accounting.Lock()
 	beforeBacking := accounting.baseBackingBytes
 	accounting.Unlock()
-	if err := acquireTypedGraphFilterNavigationConstruction(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	held := true
-	defer func() {
-		if held {
-			releaseTypedGraphFilterNavigationConstruction()
-		}
-	}()
 	var work ColumnGraphFilterWork
 	plan, err := prepareTypedGraphServingFilter(t.Context(), borrowed, owner.overlay, filter, limits, &work)
 	if err != nil {
@@ -171,8 +166,6 @@ func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 	if err != nil || boundedStats.FilteredExact || boundedStats.Route != "typed_hnsw" {
 		t.Fatalf("tight candidate budget did not retain ANN fallback: stats=%+v err=%v", boundedStats, err)
 	}
-	releaseTypedGraphFilterNavigationConstruction()
-	held = false
 	navigation := waitTypedGraphFilterNavigation(t, plan.borrowedBaseFilter)
 	accounting.Lock()
 	baseBytes := accounting.baseBackingBytes - beforeBacking - int64(navigation.retainedBytes)
@@ -204,11 +197,7 @@ func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := acquireTypedGraphFilterNavigationConstruction(t.Context()); err != nil {
-		t.Fatal(err)
-	}
 	declinedNavigation, buildErr := buildTypedGraphFilterNavigation(t.Context(), owner.overlay, fresh, 1)
-	releaseTypedGraphFilterNavigationConstruction()
 	if declinedNavigation != nil || !errors.Is(buildErr, errTypedGraphFilterNavigationDeclined) {
 		t.Fatalf("one-byte retained budget navigation=%v err=%v", declinedNavigation, buildErr)
 	}

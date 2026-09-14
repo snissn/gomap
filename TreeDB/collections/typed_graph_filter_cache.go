@@ -231,12 +231,16 @@ func startTypedGraphFilterNavigationBuild(keeper *collectionVectorIndexPreparedS
 	}
 	def.QuantizedIndexes = nil
 	source := typedGraphFilterNavigationBuildSource{def: def, pack: holder.hnswSearchPack, vectorSource: holder.typedVectorSource, normSource: holder.invNormSource}
+	if !tryAcquireTypedGraphFilterNavigationConstruction() {
+		return
+	}
 	base.navigationPending.Store(true)
 	r.background.Add(1)
 	go func() {
 		defer r.background.Done()
+		defer releaseTypedGraphFilterNavigationConstruction()
 		defer base.navigationPending.Store(false)
-		navigation, err := buildTypedGraphFilterNavigationFromSource(r.backgroundCtx, source, base.plan, maxBytes)
+		navigation, err := buildTypedGraphFilterNavigationFromAdmittedSource(r.backgroundCtx, source, base.plan, maxBytes)
 		if err != nil || r.backgroundCtx.Err() != nil {
 			return
 		}
