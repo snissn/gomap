@@ -76,17 +76,20 @@ manifest, service binary and source provenance as the baseline:
 PYTHONPATH=clients/python/treedb_client/src python3 \
   benchmarks/vector_db_compare/minima_treedb_runner.py \
   --strategy column_graph --transport native \
-  --column-graph-serving "$MINIMA_SERVING_LIMITS" --ef-search "$MINIMA_EF_SEARCH" \
+  --column-graph-serving "$MINIMA_SERVING_LIMITS" \
+  --ef-construction 32 --ef-search "$MINIMA_EF_SEARCH" \
   --native-address 127.0.0.1:17122 \
   --manifest "$MINIMA_MANIFEST" --service-bin "$MINIMA_SERVICE_BINARY" \
   --data-dir "$MINIMA_TYPED_RUN/db" --output "$MINIMA_TYPED_RUN/result.json" \
   --collection minima --operation-timeout 120 --startup-timeout 120
 ```
 
-Set these paths and `MINIMA_EF_SEARCH` explicitly before running. The parser's
-omitted-EF default is 128, not a qualified typed configuration: predeclare EF and
-limits, then complete whole-population semantic checks before repetitions. Do
-not tune an individual failed row. Use a fresh task directory on `/mnt/fast4tb`,
+The `column_graph` Minima profile defaults construction EF to 32 and records and
+verifies the effective value; `--ef-construction` overrides it. Set these paths
+and `MINIMA_EF_SEARCH` explicitly before running. The query-EF default remains
+128, not a qualified typed configuration: predeclare query EF and limits, then
+complete whole-population semantic checks before repetitions. Do not tune an
+individual failed row. Use a fresh task directory on `/mnt/fast4tb`,
 a committed clean source/binary pair and a bounded manifest, never the final
 holdout for calibration. Wrap the invocation in the same bounded wall deadline
 as above. `--transport http` is the typed-storage HTTP bridge: use a separate

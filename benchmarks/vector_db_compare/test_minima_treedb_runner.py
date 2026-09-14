@@ -305,6 +305,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.collection = "owned"
         workload.config = {"top_k": 5, "batch_size": 3}
         workload.ef_search = 64
+        workload.ef_construction = 32
         workload.specs = {"mixed": {"name": "mixed", "filter": "user_id+fpath", "user_id": "u", "fpath": "/a"}}
         workload.queries = {"mixed": {"vector": [1.0, 0.0]}}
         workload.evidence = common.Evidence({"corpora": [{"name": "mixed"}]})
@@ -1455,9 +1456,17 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             args = runner.parse_args()
         self.assertEqual(args.operation_timeout, 120)
         self.assertEqual(args.startup_timeout, 120)
+        self.assertEqual(args.ef_construction, 32)
         self.assertIsNone(args.diagnostics_dir)
         self.assertIsNone(args.diagnostic_resume_scenario)
         self.assertIsNone(args.diagnostic_resume_start)
+        with mock.patch.object(sys, "argv", [*argv, "--ef-construction", "96"]):
+            self.assertEqual(runner.parse_args().ef_construction, 96)
+        with mock.patch.object(sys, "argv", [*argv, "--strategy", "column_graph",
+                                              "--ef-construction", "0"]), \
+             mock.patch.object(sys, "stderr", io.StringIO()), \
+             self.assertRaises(SystemExit):
+            runner.parse_args()
 
     def test_script_guards_empty_diagnostic_array_for_bash_nounset(self) -> None:
         script = (Path(__file__).parents[2] / "scripts/bench_minima_qualification.sh").read_text(encoding="utf-8")
@@ -1730,11 +1739,34 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertEqual(artifact["scenarios"][0]["route"]["visited_candidates"], 41)
         self.assertEqual(raw["native_route_responses"]["small"]["candidates"], 41)
         self.assertEqual(raw["native_route_responses"]["small"]["candidate_ids"], 5)
+        self.assertNotIn("ef_construction_requested", configuration)
+
+        workload.strategy, workload.transport = "column_graph", "native"
+        workload.ef_construction = 32
+        workload.index_info = SimpleNamespace(vector_ef_construction=32)
+        workload.effective_collection = {"vector_ef_construction": 32}
+        workload.route_evidence = {}
+        self.assertEqual(workload._measured_settings()["ef_construction_requested"], "32")
+        column_artifact = {
+            "backends": [{"configuration": {}}], "scenarios": [],
+            "backend_raw_evidence": {"qdrant": {"resource_measurement": resource}},
+        }
+        with mock.patch.object(common.QdrantMinimaRunner, "artifact", return_value=column_artifact):
+            emitted = workload.artifact()["backends"][0]["configuration"]
+        self.assertEqual(emitted["ef_construction_requested"], "32")
+        self.assertEqual(emitted["ef_construction_effective"], "32")
 
 
 class MinimaTypedRunnerTest(unittest.TestCase):
     workload = MinimaTreeDBRunnerTest.workload
     response = MinimaTreeDBRunnerTest.response
+
+    def test_column_graph_rejects_nonpositive_construction_ef_before_start(self) -> None:
+        with self.assertRaisesRegex(ValueError, "positive integer"):
+            runner.TreeDBMinimaRunner({}, controller=object(), collection="owned",
+                                      operation_timeout=1, ef_search=1, ef_construction=0,
+                                      strategy="column_graph", transport="http",
+                                      column_graph_serving={"SearchCandidates": 1})
 
     def test_native_and_control_clients_share_shutdown_ownership(self) -> None:
         controller = SimpleNamespace(native_address="127.0.0.1:17122", stop=mock.Mock())
@@ -1763,12 +1795,14 @@ class MinimaTypedRunnerTest(unittest.TestCase):
         workload.ensure_compatible.assert_called_once()
         workload.clients.optimize_index.assert_called_once_with(
             "owned", column_graph_action="ensure", column_graph_serving=workload.column_graph_serving)
-    def test_typed_runner_uses_native_batches_and_snapshot_fetch(self) -> None:
+    def test_typed_runner_pins_construction_ef_and_uses_native_batches(self) -> None:
         info = SimpleNamespace(name="owned", generation=7, dimension=2, metric="cosine",
-                               vector_strategy="column_graph", extra={"typed_input": True},
+                               vector_strategy="column_graph", vector_ef_construction=32,
+                               extra={"typed_input": True},
                                scalar_fields=[SimpleNamespace(field=f"meta.{name}", value_type="string")
                                               for name in ("user_id", "fpath")],
-                               to_dict=lambda: {"typed_input": True, "generation": 7})
+                               to_dict=lambda: {"typed_input": True, "generation": 7,
+                                                "vector_ef_construction": info.vector_ef_construction})
         response = self.response(native_base_plus_live_delta=False, native_command_version=2, index=info)
         workload = self.workload(response)
         workload.strategy, workload.transport = "column_graph", "native"
@@ -1785,7 +1819,13 @@ class MinimaTypedRunnerTest(unittest.TestCase):
         native.get_many.return_value = [response.documents[0], None, response.documents[0]]
         workload.create_owned_collection()
         self.assertTrue(control.ensure_index.call_args.kwargs["typed_input"])
-        self.assertEqual(control.ensure_index.call_args.kwargs["vector_index_options"], {"strategy": "column_graph"})
+        self.assertEqual(control.ensure_index.call_args.kwargs["vector_index_options"],
+                         {"strategy": "column_graph", "ef_construction": 32})
+        self.assertEqual(workload.effective_collection["vector_ef_construction"], 32)
+        info.vector_ef_construction = 64
+        with self.assertRaisesRegex(RuntimeError, "effective ef_construction"):
+            workload.create_owned_collection()
+        info.vector_ef_construction = 32
         document = {"id": "d", "content": "c", "vector": [1., 0.], "user_id": "u", "fpath": "/a"}
         workload.upsert("insert", "mixed", [document])
         self.assertIs(native.upsert_documents.call_args.kwargs["index_info"], info)

@@ -613,7 +613,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
     restart_requires_configuration_reassertion = False
 
     def __init__(self, manifest: dict[str, Any], *, controller: ServiceController, collection: str,
-                 operation_timeout: float, ef_search: int, diagnostics_dir: Path | None = None,
+                 operation_timeout: float, ef_search: int, ef_construction: int = 32,
+                 diagnostics_dir: Path | None = None,
                  diagnostic_slow_seconds: float = 30, diagnostic_profile_seconds: int = 5,
                  diagnostic_capture_timeout: float = 10, strategy: str = "native_runtime",
                  transport: str | None = None, column_graph_serving: dict[str, Any] | None = None) -> None:
@@ -621,6 +622,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         self.transport = transport or ("native" if strategy == "column_graph" else "http")
         if strategy not in ("native_runtime", "column_graph") or self.transport not in ("http", "native"):
             raise ValueError("unsupported Minima strategy or transport")
+        if strategy == "column_graph" and (type(ef_construction) is not int or ef_construction <= 0):
+            raise ValueError("column_graph ef_construction must be a positive integer")
         if strategy == "native_runtime" and self.transport != "http":
             raise ValueError("legacy Minima baseline requires HTTP transport")
         if strategy == "column_graph" and not column_graph_serving:
@@ -654,7 +657,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                          storage_path=controller.data_dir, server_pid=controller.pid,
                          restart_server=self.restart_controller, restart_identity="owned TreeDB service controller",
                          resource_server_name="TreeDB")
-        self.clients, self.ef_search = clients, ef_search
+        self.clients, self.ef_search, self.ef_construction = clients, ef_search, ef_construction
         self.route_evidence: dict[str, Any] = {}
         self.diagnostics_dir = diagnostics_dir
         self.diagnostic_slow_seconds = diagnostic_slow_seconds
@@ -704,6 +707,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 "service_binary_vcs_modified": self.service_binary_vcs_modified,
                 "vector_strategy": self.strategy, "transport": self.transport, "control_transport": "http",
                 "ef_search": str(self.ef_search), "column_graph_serving": json.dumps(self.column_graph_serving, sort_keys=True),
+                **({"ef_construction_requested": str(self.ef_construction)}
+                   if self.strategy == "column_graph" else {}),
                 "profile": self.controller.profile,
                 "operation_timeout_seconds": str(self.operation_timeout_seconds),
                 "startup_reopen_timeout_seconds": str(self.controller.startup_timeout),
@@ -958,11 +963,14 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
 
     def ensure_compatible(self) -> None:
         assert self.client is not None
+        vector_index_options = {"strategy": self.strategy}
+        if self.strategy == "column_graph":
+            vector_index_options["ef_construction"] = self.ef_construction
         info = self.client.ensure_index(
             self.collection, self.config["dimension"], self.config["metric"],
             scalar_fields=[{"field": "meta.user_id", "value_type": "string"},
                            {"field": "meta.fpath", "value_type": "string"}],
-            vector_index_options={"strategy": self.strategy},
+            vector_index_options=vector_index_options,
             **({"typed_input": True} if self.strategy == "column_graph" else {}),
         )
         fields = {(row.field, row.value_type) for row in info.scalar_fields}
@@ -973,6 +981,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             raise RuntimeError("TreeDB index is not the compatible selected Minima schema")
         if self.strategy == "column_graph" and info.extra.get("typed_input") is not True:
             raise RuntimeError("TreeDB column_graph index lacks authoritative typed input")
+        if self.strategy == "column_graph" and info.vector_ef_construction != self.ef_construction:
+            raise RuntimeError("TreeDB column_graph effective ef_construction differs from the requested value")
         self.index_info = info
         self.effective_collection = info.to_dict()
 
@@ -1652,6 +1662,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                               "metric": self.config["metric"], "scalar_fields": "meta.user_id,meta.fpath",
                               "vector_strategy": self.strategy, "transport": self.transport,
                               "control_transport": "http", "ef_search": str(self.ef_search),
+                              **({"ef_construction_requested": str(self.ef_construction),
+                                  **({"ef_construction_effective": str(self.index_info.vector_ef_construction)}
+                                     if self.index_info is not None else {})}
+                                 if self.strategy == "column_graph" else {}),
                               "column_graph_serving": json.dumps(self.column_graph_serving, sort_keys=True),
                               "profile": self.controller.profile, "service_binary": str(self.controller.binary),
                               "service_binary_sha256": self.service_binary_sha256,
@@ -1786,6 +1800,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--operation-timeout", type=float, default=120)
     parser.add_argument("--startup-timeout", type=float, default=120)
     parser.add_argument("--ef-search", type=int, default=128)
+    parser.add_argument("--ef-construction", type=int, default=32,
+                        help="column_graph construction EF (default: 32; ignored by native_runtime)")
     parser.add_argument("--small", action="store_true", help="run the real small-scenario lifecycle and emit validated partial evidence")
     parser.add_argument("--diagnostics-dir", type=Path)
     parser.add_argument("--diagnostics-url", default="http://127.0.0.1:17121")
@@ -1804,12 +1820,15 @@ def parse_args() -> argparse.Namespace:
         parser.error("--small and diagnostic resume are mutually exclusive")
     if args.diagnostic_slow_seconds <= 0 or args.diagnostic_profile_seconds <= 0 or args.diagnostic_capture_timeout <= 0:
         parser.error("diagnostic durations must be positive")
+    if args.strategy == "column_graph" and args.ef_construction <= 0:
+        parser.error("--ef-construction must be positive for column_graph")
     return args
 
 
 def main() -> int:
     args = parse_args()
     for name, default in (("measured", False), ("legacy_diagnostic_control", False),
+                          ("ef_construction", 32),
                           ("freeze", None), ("expected_freeze_sha256", None), ("comparator_bin", None)):
         if not hasattr(args, name):
             setattr(args, name, default)
@@ -1845,6 +1864,7 @@ def main() -> int:
         runner = TreeDBMinimaRunner(
             manifest, controller=controller, collection=args.collection,
             operation_timeout=args.operation_timeout, ef_search=args.ef_search,
+            ef_construction=args.ef_construction,
             diagnostics_dir=diagnostics_dir, diagnostic_slow_seconds=args.diagnostic_slow_seconds,
             diagnostic_profile_seconds=args.diagnostic_profile_seconds,
             diagnostic_capture_timeout=args.diagnostic_capture_timeout,
