@@ -800,8 +800,8 @@ func TestTypedGraphPublicScalarU8QuantizedRerankLiveSuffixAndRebuild(t *testing.
 	unfiltered, unfilteredView := search(nil)
 	assertCurrent("unfiltered suffix", unfiltered)
 	unfilteredWork := unfiltered.Stats.ColumnGraphWork
-	if unfilteredWork.BaseShadowed == 0 || unfilteredWork.DeltaScored != 1 || unfilteredWork.ScorePlane.ExactSuffixScoreCalls != 1 || unfilteredWork.ScorePlane.ExactSuffixVectorBytesRead == 0 {
-		t.Fatalf("unfiltered suffix work=%+v proof=%+v", unfilteredWork, unfilteredWork.ScorePlane)
+	if unfilteredWork.BaseShadowed == 0 || unfilteredWork.DeltaScored != 1 || unfilteredWork.ScorePlane.ExactSuffixScoreCalls != 1 || unfilteredWork.ScorePlane.ExactSuffixVectorBytesRead == 0 || unfiltered.Stats.VectorBytesRead == 0 || unfiltered.Stats.CandidateFetches == 0 || unfiltered.Stats.FP32ScoreCalls == 0 {
+		t.Fatalf("unfiltered suffix stats=%+v work=%+v proof=%+v", unfiltered.Stats, unfilteredWork, unfilteredWork.ScorePlane)
 	}
 	if err := unfilteredView.Close(); err != nil {
 		t.Fatal(err)
@@ -811,8 +811,8 @@ func TestTypedGraphPublicScalarU8QuantizedRerankLiveSuffixAndRebuild(t *testing.
 	filtered, filteredView := search(&filter)
 	assertCurrent("filtered suffix", filtered)
 	filteredWork := filtered.Stats.ColumnGraphWork
-	if filteredWork.DeltaScored != 1 || filteredWork.ScorePlane.ExactSuffixScoreCalls != 1 || filteredWork.ScorePlane.ExactSuffixVectorBytesRead == 0 {
-		t.Fatalf("filtered suffix work=%+v proof=%+v", filteredWork, filteredWork.ScorePlane)
+	if filteredWork.DeltaScored != 1 || filteredWork.ScorePlane.ExactSuffixScoreCalls != 1 || filteredWork.ScorePlane.ExactSuffixVectorBytesRead == 0 || filtered.Stats.VectorBytesRead == 0 || filtered.Stats.CandidateFetches == 0 || filtered.Stats.FP32ScoreCalls == 0 {
+		t.Fatalf("filtered suffix stats=%+v work=%+v proof=%+v", filtered.Stats, filteredWork, filteredWork.ScorePlane)
 	}
 	if err := filteredView.Close(); err != nil {
 		t.Fatal(err)

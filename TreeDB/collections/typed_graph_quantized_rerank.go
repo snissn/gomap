@@ -227,8 +227,12 @@ func typedGraphQuantizedRerankAppendDelta(ctx context.Context, v *typedGraphOver
 		if err != nil {
 			return err
 		}
+		vectorBytes := uint64(len(row.Values[v.vectorColumn].Float32Vector)) * 4
+		stats.Base.VectorBytesRead += vectorBytes
+		stats.Base.CandidateFetches++
+		stats.Base.FP32ScoreCalls++
 		stats.DeltaScored++
-		proof.ExactSuffixVectorBytesRead += uint64(len(row.Values[v.vectorColumn].Float32Vector)) * 4
+		proof.ExactSuffixVectorBytesRead += vectorBytes
 		proof.ExactSuffixScoreCalls++
 		buffer.deltaResults = append(buffer.deltaResults, VectorIndexSearchResult{ID: row.ID, Score: score})
 		return nil
@@ -252,6 +256,7 @@ func typedGraphQuantizedRerankAppendExactBase(ctx context.Context, v *typedGraph
 	vectorBytes := uint64(len(vector)) * 4
 	stats.Base.VectorBytesRead += vectorBytes
 	stats.Base.CandidateFetches++
+	stats.Base.FP32ScoreCalls++
 	proof.ExactBaseVectorBytesRead += vectorBytes
 	id, ok := v.pack.documentIDForOrdinal(ordinal)
 	if !ok {
@@ -290,6 +295,7 @@ func (o *typedGraphReadOwner) validateTypedGraphQuantizedRerankAsset(ctx context
 	}, &buffer.searchScratch)
 	stats.Base = baseStats
 	stats.Base.SearchRouteQuantizedRerank = 1
+	stats.Base.WorkAccountingSearches = 1
 	return err
 }
 
@@ -325,6 +331,7 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 		return nil, stats, proof, err
 	}
 	stats.Base.SearchRouteQuantizedRerank = 1
+	stats.Base.WorkAccountingSearches = 1
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
 		return nil, stats, proof, err
 	}
@@ -510,6 +517,7 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 	proof.QuantizedScoreCalls = baseStats.QuantizedScoreCalls
 	proof.QuantizedCodeBytesRead = baseStats.QuantizedCodeBytesRead
 	stats.Base.SearchRouteQuantizedRerank = 1
+	stats.Base.WorkAccountingSearches = 1
 	if err != nil {
 		return nil, stats, proof, err
 	}
@@ -565,7 +573,6 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 		proof.ActualRerankCandidates++
 		stats.Base.QuantizedRerankCandidates++
 		stats.Base.QuantizedRerankExactScoreCalls++
-		stats.Base.FP32ScoreCalls++
 	}
 	if err := typedGraphQuantizedRerankAppendDelta(ctx, v, filter, opts.Query, queryInvNorm, buffer, &stats, &proof); err != nil {
 		return nil, stats, proof, err
