@@ -198,15 +198,16 @@ def check_qdrant_resources(run, started):
 
 def guard_qdrant_resources(run, started, cancel, failures):
     while not cancel.wait(1):
-        try:
-            check_qdrant_resources(run, started)
-        except BaseException as exc:
-            failures.append(f"resource guard: {exc}")
+        if not failures:
+            try:
+                check_qdrant_resources(run, started)
+            except BaseException as exc:
+                failures.append(f"resource guard: {exc}")
+        if failures:
             process = run.process
             if (process and process.poll() is None
                     and qdrant_rss.existing.linux_process_identity(process.pid) == run.process_identity):
                 process.terminate()
-            return
 
 
 def frozen_plan(args):
@@ -663,10 +664,6 @@ def qdrant_query(run, client, query, control):
     )
 
 
-def qdrant_ids(response):
-    return [(getattr(point, "payload", None) or {}).get("id") for point in getattr(response, "points", response)]
-
-
 def validate_qdrant_upserts(responses):
     for response in responses:
         status = getattr(response, "status", None)
@@ -674,11 +671,38 @@ def validate_qdrant_upserts(responses):
             raise RuntimeError("Qdrant wait=true upsert did not complete")
 
 
-def validate_qdrant_queries(responses):
+def validate_qdrant_queries(responses, updated_rows=(), transitioning=False):
+    updated_rows = set(updated_rows)
     for response in responses:
-        ids = qdrant_ids(response)
-        if len(ids) != TOP_K or None in ids or len(set(ids)) != TOP_K:
-            raise RuntimeError("Qdrant mixed read returned invalid logical IDs")
+        points = list(getattr(response, "points", response))
+        ids = []
+        for point in points:
+            payload = getattr(point, "payload", None) or {}
+            try:
+                row = int(payload["id"].removeprefix("row-"))
+                base_content = f"minima-cohere:{row}"
+                contents = ({base_content, base_content + ":updated"}
+                            if transitioning and row in updated_rows else
+                            {base_content + (":updated" if row in updated_rows else "")})
+                score = getattr(point, "score", None)
+                valid = (set(payload) == {"id", "content", "meta"}
+                         and payload["id"] == f"row-{row:06d}" and 0 <= row < ROWS
+                         and payload["content"] in contents
+                         and payload["meta"] == {
+                             "user_id": f"{(row * 7919) % ROWS:06d}",
+                             "fpath": f"/cohere/{row // 256:06d}.txt",
+                         }
+                         and getattr(point, "id", None) == qdrant_rss.existing.point_id(payload["id"])
+                         and getattr(point, "vector", None) is None
+                         and isinstance(score, (int, float)) and not isinstance(score, bool)
+                         and math.isfinite(score))
+            except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+                valid = False
+            if not valid:
+                raise RuntimeError("Qdrant read returned an invalid logical document")
+            ids.append(payload["id"])
+        if len(ids) != TOP_K or len(set(ids)) != TOP_K:
+            raise RuntimeError("Qdrant read returned invalid logical IDs")
 
 
 def validate_qdrant_updates(run, rows):
@@ -804,14 +828,14 @@ def run_qdrant(plan, run_dir):
             prepared.append(points)
         writes = [lambda points=points: run.client.upsert(collection_name=run.collection, points=points,
             wait=True, timeout=run.operation_timeout) for points in prepared]
-        mixed, mixed_reads, mixed_writes = mixed_window(
-            concurrent_query, writes, EVALUATION_QUERIES, plan["mixed_reader_concurrency"],
-            plan["mixed_queries_per_reader"], plan["mixed_write_batch_rows"])
-        validate_qdrant_queries(mixed_reads)
-        validate_qdrant_upserts(mixed_writes)
         updated_rows = [row for index in range(plan["mixed_write_batches"])
                         for row in range(ROWS - (index + 1) * plan["mixed_write_batch_rows"],
                                          ROWS - index * plan["mixed_write_batch_rows"])]
+        mixed, mixed_reads, mixed_writes = mixed_window(
+            concurrent_query, writes, EVALUATION_QUERIES, plan["mixed_reader_concurrency"],
+            plan["mixed_queries_per_reader"], plan["mixed_write_batch_rows"])
+        validate_qdrant_queries(mixed_reads, updated_rows, transitioning=True)
+        validate_qdrant_upserts(mixed_writes)
         validate_qdrant_updates(run, updated_rows)
         post_mixed_ready = time.monotonic_ns()
         run.wait_ready(ROWS, "profile_post_mixed_ready")
@@ -828,7 +852,7 @@ def run_qdrant(plan, run_dir):
         restart_start = time.monotonic_ns(); shutdown_disk = restart_qdrant(run)
         response = qdrant_query(run, run.client, EVALUATION_QUERIES[0], control)
         restart_ns = time.monotonic_ns() - restart_start
-        validate_qdrant_queries([response])
+        validate_qdrant_queries([response], updated_rows)
         validate_qdrant_updates(run, updated_rows)
         restart_rss = measured_rss(native.process_peak_at_boundary(
             run.server_pid, run.process_identity, plan["cpu_affinity"]), "Qdrant", "restart")

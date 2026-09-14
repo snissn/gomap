@@ -109,6 +109,24 @@ class MatchedPerformanceTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "duplicate logical IDs"):
             subject.validate_tree_queries([response], 7)
 
+    def test_qdrant_query_validation_checks_logical_documents(self):
+        points = []
+        for row in range(subject.TOP_K):
+            logical_id = f"row-{row:06d}"
+            points.append(SimpleNamespace(
+                id=subject.qdrant_rss.existing.point_id(logical_id), score=.5, vector=None,
+                payload={"id": logical_id, "content": f"minima-cohere:{row}", "meta": {
+                    "user_id": f"{(row * 7919) % subject.ROWS:06d}",
+                    "fpath": f"/cohere/{row // 256:06d}.txt",
+                }},
+            ))
+        response = SimpleNamespace(points=points)
+        subject.validate_qdrant_queries([response])
+        points[-1].payload["content"] += ":updated"
+        with self.assertRaisesRegex(RuntimeError, "invalid logical document"):
+            subject.validate_qdrant_queries([response])
+        subject.validate_qdrant_queries([response], [subject.TOP_K - 1])
+
     def test_adapter_plan_and_mixed_overlap(self):
         runtime = {"GOMAXPROCS": "6", "GOGC": "80", "GOMEMLIMIT": "20GiB"}
         plan = {"queries": 200, "treedb_go_runtime": runtime, "qdrant_configuration": {
@@ -126,6 +144,22 @@ class MatchedPerformanceTest(unittest.TestCase):
             limits["wall_limit_s"] = -1
             with self.assertRaisesRegex(RuntimeError, "Qdrant disk/RAM/wall budget"):
                 subject.check_qdrant_resources(run, subject.time.monotonic())
+
+        class CancelAfterThreeChecks:
+            calls = 0
+            def wait(self, _):
+                self.calls += 1
+                return self.calls == 3
+        process = mock.Mock(pid=17)
+        process.poll.side_effect = [None, 0]
+        guarded = SimpleNamespace(process=process, process_identity="owned")
+        failures = []
+        with mock.patch.object(subject, "check_qdrant_resources", side_effect=RuntimeError("over")), \
+                mock.patch.object(subject.qdrant_rss.existing, "linux_process_identity", return_value="owned"):
+            cancel = CancelAfterThreeChecks()
+            subject.guard_qdrant_resources(guarded, 0, cancel, failures)
+        self.assertEqual((cancel.calls, failures), (3, ["resource guard: over"]))
+        process.terminate.assert_called_once()
 
         writer_started, reader_seen = threading.Event(), threading.Event()
         def read(query):
