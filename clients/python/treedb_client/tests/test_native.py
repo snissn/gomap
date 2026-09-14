@@ -115,6 +115,22 @@ class NativeCodecTests(unittest.TestCase):
                     quantized_rerank_candidates=0,
                     ef_search=0,
                 )
+            inconsistent_values = list(values)
+            inconsistent_values[18] = 0  # actual rerank is not backed by exact-base scoring.
+            inconsistent_values[20] = 1
+            inconsistent_plane = b"".join(_uint(value) for value in inconsistent_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            inconsistent_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, raw_work) + _section(136, inconsistent_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=0,
+                )
             capped_values = list(values)
             capped_values[9] = 2
             capped_values[12] = 3

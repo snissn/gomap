@@ -23,7 +23,8 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 		Route:         "quantized_rerank", QuantizedIndexName: "embedding.scalar_u8.public",
 		QuantizedCodec: collections.QuantizedVectorCodecScalarU8, QuantizedVersion: 1,
 		RequestedTopK: 2, RequestedEFSearch: 8, RequestedRerankCandidates: 0,
-		QuantizedScoreCalls: 4, ActualRerankCandidates: 2,
+		RawCandidateWidth: 2, RerankCandidateCap: 2, RawRetainedCandidates: 2, LiveShortlistCandidates: 2,
+		QuantizedScoreCalls: 4, ActualRerankCandidates: 2, ExactBaseRerankScoreCalls: 2,
 		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true, SchemaHash: 11, SchemaGeneration: 3,
 			BaseManifest:    collections.ColumnGraphManifestWork{Generation: 5, Format: "tcs1", Version: 1, Checksum: 7},
 			CurrentManifest: collections.ColumnGraphManifestWork{Generation: 6, Format: "tcs1", Version: 1, Checksum: 8}},
@@ -79,6 +80,11 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	if _, err := appendDenseScorePlane(nil, noQuantizedWork, iwire.DefaultLimits()); err == nil {
 		t.Fatal("completed quantized rerank proof without score calls accepted")
 	}
+	inconsistentRerank := proof
+	inconsistentRerank.ExactBaseRerankScoreCalls = 1
+	if _, err := appendDenseScorePlane(nil, inconsistentRerank, iwire.DefaultLimits()); err == nil {
+		t.Fatal("completed quantized rerank proof with inconsistent exact counters accepted")
+	}
 }
 
 func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
@@ -125,6 +131,12 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	}
 	if err := validateDenseQuantizedScorePlaneResponse(work, proof, request, 2); err == nil {
 		t.Fatal("score-plane proof accepted more results than exact score calls")
+	}
+	inconsistentRerank := *proof
+	inconsistentRerank.ExactBaseRerankScoreCalls = 0
+	inconsistentRerank.ExactSmallFilterScoreCalls = 1
+	if err := validateDenseQuantizedScorePlaneResponse(work, &inconsistentRerank, request, 0); err == nil {
+		t.Fatal("score-plane proof accepted inconsistent rerank counters")
 	}
 	emptyProof := *proof
 	emptyProof.Route = "typed_empty"

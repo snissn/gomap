@@ -708,6 +708,7 @@ class TreeDBClientTests(unittest.TestCase):
                 ),
                 lambda item: item.update(metric="l2"),
                 lambda item: item.update(score_plane={**score_plane, "quantized_score_calls": 2}),
+                lambda item: item.update(score_plane={**score_plane, "exact_base_rerank_score_calls": 0, "exact_small_filter_score_calls": 1}),
             ):
                 invalid = copy.deepcopy(payload)
                 mutation(invalid)

@@ -217,6 +217,7 @@ func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWo
 		(proof.Route != "typed_empty" && proof.Route != "typed_exact" && proof.Route != "quantized_rerank") ||
 		!work.Completed || !work.Graph.Completed || graphRoute != expectedGraphRoute ||
 		proof.Snapshot != work.Graph.Snapshot ||
+		!denseScorePlaneRerankCountersMatch(proof) ||
 		!denseScorePlaneCountersMatchWork(work, proof, resultCount) ||
 		(proof.Route == "typed_empty" && resultCount != 0) ||
 		(proof.Route == "quantized_rerank" && (proof.ActualRerankCandidates > proof.RerankCandidateCap ||

@@ -118,7 +118,33 @@ func validateDenseScorePlane(proof collections.ColumnGraphScorePlaneWork) error 
 	if proof.Completed && proof.Route == "quantized_rerank" && proof.QuantizedScoreCalls == 0 {
 		return protocolError(iwire.ErrConsistencyUnavailable, "completed quantized rerank proof has no quantized score calls")
 	}
+	if proof.Completed && !denseScorePlaneRerankCountersMatch(&proof) {
+		return protocolError(iwire.ErrConsistencyUnavailable, "completed dense score-plane rerank counters are inconsistent")
+	}
 	return nil
+}
+
+func denseScorePlaneRerankCountersMatch(proof *collections.ColumnGraphScorePlaneWork) bool {
+	if proof == nil || !proof.Completed {
+		return true
+	}
+	switch proof.Route {
+	case "quantized_rerank":
+		return proof.ExactSmallFilterScoreCalls == 0 &&
+			proof.ActualRerankCandidates == proof.ExactBaseRerankScoreCalls &&
+			proof.ActualRerankCandidates == minUint64(proof.LiveShortlistCandidates, proof.RerankCandidateCap)
+	case "typed_empty", "typed_exact":
+		return proof.ActualRerankCandidates == 0 && proof.ExactBaseRerankScoreCalls == 0
+	default:
+		return true
+	}
+}
+
+func minUint64(a, b uint64) uint64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // appendDenseScorePlane encodes the versioned sibling proof. Dense work v1 is
