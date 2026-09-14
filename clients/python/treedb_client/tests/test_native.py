@@ -54,9 +54,10 @@ class NativeCodecTests(unittest.TestCase):
             self.assertEqual(response.native_command_version, 3)
             self.assertIsNotNone(response.score_plane)
             self.assertEqual(response.score_plane.quantized_index_name, "embedding.scalar_u8.public")
-            for route_tag in (4,):  # typed_hnsw is not a public quantized score-plane route.
+            for route_tag, score_calls in ((4, 1), (3, 0)):  # typed_hnsw and zero-work rerank proofs are invalid.
                 invalid_values = list(values)
                 invalid_values[4] = route_tag
+                invalid_values[16] = score_calls
                 invalid_plane = b"".join(_uint(value) for value in invalid_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
                 invalid_plane += b"\x01\x01\x01\x00" * 2
                 with self.assertRaises(TreeDBProtocolError):

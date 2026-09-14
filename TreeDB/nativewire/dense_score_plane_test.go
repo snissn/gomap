@@ -63,6 +63,11 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	if !bytes.Equal(raw, make([]byte, len(raw))) {
 		t.Fatal("clear should only affect the encoded buffer")
 	}
+	noQuantizedWork := proof
+	noQuantizedWork.QuantizedScoreCalls = 0
+	if _, err := appendDenseScorePlane(nil, noQuantizedWork, iwire.DefaultLimits()); err == nil {
+		t.Fatal("completed quantized rerank proof without score calls accepted")
+	}
 }
 
 func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {

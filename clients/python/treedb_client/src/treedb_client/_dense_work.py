@@ -196,6 +196,8 @@ class DenseScorePlaneProof:
         snapshot = DenseSnapshotWork.from_dict(data["snapshot"])
         if values["completed"] and (not values["available"] or not snapshot.available or not values["route"]):
             raise ValueError("completed dense score-plane proof lacks captured work")
+        if values["completed"] and values["route"] == "quantized_rerank" and values["quantized_score_calls"] == 0:
+            raise ValueError("completed quantized rerank proof has no quantized score calls")
         return cls(**values, snapshot=snapshot)
 
 
