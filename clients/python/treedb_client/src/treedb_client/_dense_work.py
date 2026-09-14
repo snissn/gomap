@@ -191,7 +191,7 @@ class DenseScorePlaneProof:
                 or values["route"] not in ("", "typed_empty", "typed_exact", "quantized_rerank", "typed_hnsw"):
             raise ValueError("unsupported dense score-plane proof")
         if values["requested_mode"] == "quantized_rerank" or values["effective_mode"] == "quantized_rerank":
-            if not values["quantized_index_name"] or values["quantized_codec"] != "scalar_u8" or values["quantized_version"] != 1:
+            if not values["quantized_index_name"] or values["quantized_codec"] != "scalar_u8" or values["quantized_version"] != 1 or values["quantized_config_hash"] != 0:
                 raise ValueError("dense score-plane proof requires the legacy scalar_u8/v1 codec")
         snapshot = DenseSnapshotWork.from_dict(data["snapshot"])
         if values["completed"] and (not values["available"] or not snapshot.available or not values["route"]):

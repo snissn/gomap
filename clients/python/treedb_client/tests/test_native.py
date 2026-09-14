@@ -74,6 +74,22 @@ class NativeCodecTests(unittest.TestCase):
                         ef_search=0,
                         query_dimension=2,
                     )
+            hash_values = list(values)
+            hash_values[6] = 1
+            hash_plane = b"".join(_uint(value) for value in hash_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            hash_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, raw_work) + _section(136, hash_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=0,
+                    query_dimension=2,
+                )
             wrong_work_values = list(work_values)
             wrong_work_values[2] = 2  # typed_exact contradicts the quantized rerank score plane.
             wrong_work = b"".join(_uint(value) for value in wrong_work_values)

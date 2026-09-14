@@ -100,7 +100,7 @@ func validateDenseScorePlane(proof collections.ColumnGraphScorePlaneWork) error 
 		return protocolError(iwire.ErrMalformedFrame, "invalid dense score-plane query mode")
 	}
 	if proof.RequestedMode == collections.VectorIndexQueryModeQuantizedRerank || proof.EffectiveMode == collections.VectorIndexQueryModeQuantizedRerank {
-		if proof.QuantizedIndexName == "" || proof.QuantizedCodec != collections.QuantizedVectorCodecScalarU8 || proof.QuantizedVersion != 1 {
+		if proof.QuantizedIndexName == "" || proof.QuantizedCodec != collections.QuantizedVectorCodecScalarU8 || proof.QuantizedVersion != 1 || proof.QuantizedConfigHash != 0 {
 			return protocolError(iwire.ErrUnsupportedFeature, "dense score-plane proof requires the legacy scalar_u8/v1 codec")
 		}
 	}

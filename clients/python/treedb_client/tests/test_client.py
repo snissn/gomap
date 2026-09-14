@@ -663,7 +663,7 @@ class TreeDBClientTests(unittest.TestCase):
             "quantized_index_name": "embedding.scalar_u8.public",
             "quantized_codec": "scalar_u8",
             "quantized_version": 1,
-            "quantized_config_hash": 1,
+            "quantized_config_hash": 0,
             "requested_top_k": 1,
             "requested_ef_search": 0,
             "requested_rerank_candidates": 0,
@@ -712,6 +712,7 @@ class TreeDBClientTests(unittest.TestCase):
                 lambda item: item.update(score_plane={**score_plane, "quantized_code_bytes_read": 0}),
                 lambda item: item.update(score_plane={**score_plane, "exact_base_vector_bytes_read": 0}),
                 lambda item: item.update(score_plane={**score_plane, "exact_suffix_vector_bytes_read": 1}),
+                lambda item: item.update(score_plane={**score_plane, "quantized_config_hash": 1}),
             ):
                 invalid = copy.deepcopy(payload)
                 mutation(invalid)

@@ -80,6 +80,11 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	if _, err := appendDenseScorePlane(nil, noQuantizedWork, iwire.DefaultLimits()); err == nil {
 		t.Fatal("completed quantized rerank proof without score calls accepted")
 	}
+	legacyHash := proof
+	legacyHash.QuantizedConfigHash = 1
+	if _, err := appendDenseScorePlane(nil, legacyHash, iwire.DefaultLimits()); err == nil {
+		t.Fatal("completed legacy score-plane proof with nonzero config hash accepted")
+	}
 	inconsistentRerank := proof
 	inconsistentRerank.ExactBaseRerankScoreCalls = 1
 	if _, err := appendDenseScorePlane(nil, inconsistentRerank, iwire.DefaultLimits()); err == nil {
