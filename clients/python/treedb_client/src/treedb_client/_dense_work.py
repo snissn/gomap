@@ -38,6 +38,9 @@ class DenseManifestWork:
             raise ValueError("unsupported dense manifest identity")
         return out
 
+    def is_complete(self):
+        return self.generation != 0 and self.version != 0 and self.checksum != 0
+
 
 @dataclass(frozen=True)
 class DenseSnapshotWork:
@@ -57,6 +60,8 @@ class DenseSnapshotWork:
         current = DenseManifestWork.from_dict(data["current_manifest"])
         if not values["available"] and (any(values.values()) or any(vars(base).values()) or any(vars(current).values())):
             raise ValueError("unavailable dense snapshot carries identity")
+        if values["available"] and (not base.is_complete() or not current.is_complete()):
+            raise ValueError("available dense snapshot has an incomplete manifest identity")
         if values["available"] and values["current_coverage_lsn"] < values["base_coverage_lsn"]:
             raise ValueError("dense snapshot coverage is reversed")
         return cls(**values, base_manifest=base, current_manifest=current)

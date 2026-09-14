@@ -44,6 +44,10 @@ func denseWorkRouteTag(route string) uint64 {
 	return 0
 }
 
+func denseManifestWorkComplete(m collections.ColumnGraphManifestWork) bool {
+	return m.Generation != 0 && m.Version != 0 && m.Checksum != 0
+}
+
 func validateDenseWork(w documentservice.DenseSearchWork) error {
 	g, f, s, o := w.Graph, w.Graph.Filter, w.Graph.Snapshot, w.Output
 	bad := w.Version != 1 || (g.Route != "" && denseWorkRouteTag(g.Route) == 0)
@@ -57,6 +61,7 @@ func validateDenseWork(w documentservice.DenseSearchWork) error {
 	bad = bad || (w.Completed && (!g.Completed || !o.Completed || o.Missing != 0 || o.Fetched != o.Requested))
 	for _, m := range []collections.ColumnGraphManifestWork{s.BaseManifest, s.CurrentManifest} {
 		bad = bad || (m.Format != "" && m.Format != "tcs1")
+		bad = bad || (s.Available && !denseManifestWorkComplete(m))
 	}
 	if bad {
 		return protocolError(iwire.ErrMalformedFrame, "invalid dense work proof")

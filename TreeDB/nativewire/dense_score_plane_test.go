@@ -119,6 +119,19 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	if _, err := appendDenseScorePlane(nil, reversedCoverage, iwire.DefaultLimits()); err == nil {
 		t.Fatal("score-plane proof with reversed snapshot coverage accepted")
 	}
+	for name, mutate := range map[string]func(*collections.ColumnGraphManifestWork){
+		"generation": func(m *collections.ColumnGraphManifestWork) { m.Generation = 0 },
+		"version":    func(m *collections.ColumnGraphManifestWork) { m.Version = 0 },
+		"checksum":   func(m *collections.ColumnGraphManifestWork) { m.Checksum = 0 },
+	} {
+		t.Run("incomplete manifest "+name, func(t *testing.T) {
+			candidate := proof
+			mutate(&candidate.Snapshot.BaseManifest)
+			if _, err := appendDenseScorePlane(nil, candidate, iwire.DefaultLimits()); err == nil {
+				t.Fatalf("score-plane proof with zero manifest %s accepted", name)
+			}
+		})
+	}
 }
 
 func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
@@ -130,7 +143,9 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 		RequestedTopK: 1, RequestedEFSearch: 8,
 		NormalizedCandidateWidth: 1, RawCandidateWidth: 1, RerankCandidateCap: 1,
 		RawRetainedCandidates: 1, QuantizedScoreCalls: 1,
-		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true},
+		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true,
+			BaseManifest:    collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3},
+			CurrentManifest: collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3}},
 	}
 	work := documentservice.DenseSearchWork{Completed: true, Graph: collections.ColumnGraphQueryWork{Available: true, Completed: true, Route: "typed_hnsw", BaseANNScored: 1, BaseShadowed: 1}}
 	work.Graph.Snapshot = proof.Snapshot
@@ -531,7 +546,9 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 		RawRetainedCandidates: 1, LiveShortlistCandidates: 1, ActualRerankCandidates: 1,
 		QuantizedScoreCalls: 1, QuantizedCodeBytesRead: 2,
 		ExactBaseRerankScoreCalls: 1, ExactBaseVectorBytesRead: 8,
-		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true, SchemaHash: 7, SchemaGeneration: 2},
+		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true, SchemaHash: 7, SchemaGeneration: 2,
+			BaseManifest:    collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3},
+			CurrentManifest: collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3}},
 	}
 	work := documentservice.DenseSearchWork{
 		Version: 1, Completed: true,
@@ -604,6 +621,48 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 				t.Fatalf("decode error proofs changed: work=%+v score_plane=%+v", decodeErr.DenseWork, decodeErr.ScorePlane)
 			}
 		})
+	}
+}
+
+func TestDenseV3WireErrorMalformedScorePlanePreservesDenseWork(t *testing.T) {
+	snapshot := collections.ColumnGraphQuerySnapshot{
+		Available: true,
+		BaseManifest: collections.ColumnGraphManifestWork{
+			Generation: 1, Format: "tcs1", Version: 1, Checksum: 3,
+		},
+		CurrentManifest: collections.ColumnGraphManifestWork{
+			Generation: 1, Format: "tcs1", Version: 1, Checksum: 3,
+		},
+	}
+	work := documentservice.DenseSearchWork{
+		Version: 1,
+		Graph: collections.ColumnGraphQueryWork{
+			Available: true,
+			Snapshot:  snapshot,
+		},
+	}
+	workRaw, err := appendDenseWork(nil, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body []byte
+	for _, section := range []iwire.Section{
+		{ID: iwire.SectionError, Bytes: appendErrorPayload(nil, iwire.ErrInternal, false, "original")},
+		{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
+		{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: []byte{1}},
+	} {
+		body, err = iwire.AppendSection(body, section)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := decodeWireErrorVersion(body, iwire.DefaultLimits(), iwire.DenseVectorSearchTypedQuantizedVersion)
+	var decodeErr *DenseVectorSearchDecodeError
+	if !errors.As(got, &decodeErr) || decodeErr.DenseWork == nil || decodeErr.ScorePlane != nil {
+		t.Fatalf("malformed score-plane error lost valid dense work: %v", got)
+	}
+	if *decodeErr.DenseWork != work || nativeCodeOf(got) != iwire.ErrMalformedFrame {
+		t.Fatalf("malformed score-plane error changed proof or code: %+v code=%d", decodeErr.DenseWork, nativeCodeOf(got))
 	}
 }
 

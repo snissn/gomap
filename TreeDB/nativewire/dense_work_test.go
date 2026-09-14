@@ -43,6 +43,19 @@ func TestDenseWorkGoldenStrictOwnershipAndAllocations(t *testing.T) {
 	if _, err := appendDenseWork(nil, reversedCoverage); err == nil {
 		t.Fatal("dense work with reversed snapshot coverage accepted")
 	}
+	for name, mutate := range map[string]func(*collections.ColumnGraphManifestWork){
+		"generation": func(m *collections.ColumnGraphManifestWork) { m.Generation = 0 },
+		"version":    func(m *collections.ColumnGraphManifestWork) { m.Version = 0 },
+		"checksum":   func(m *collections.ColumnGraphManifestWork) { m.Checksum = 0 },
+	} {
+		t.Run("incomplete manifest "+name, func(t *testing.T) {
+			candidate := w
+			mutate(&candidate.Graph.Snapshot.CurrentManifest)
+			if _, err := appendDenseWork(nil, candidate); err == nil {
+				t.Fatalf("dense work with zero manifest %s accepted", name)
+			}
+		})
+	}
 	for size := range len(raw) {
 		if _, err := decodeDenseWork(raw[:size]); err == nil {
 			t.Fatalf("truncated proof accepted at %d", size)

@@ -111,6 +111,9 @@ func validateDenseScorePlane(proof collections.ColumnGraphScorePlaneWork) error 
 		if manifest.Format != "" && manifest.Format != "tcs1" {
 			return protocolError(iwire.ErrMalformedFrame, "invalid dense score-plane manifest format")
 		}
+		if proof.Snapshot.Available && !denseManifestWorkComplete(manifest) {
+			return protocolError(iwire.ErrConsistencyUnavailable, "dense score-plane snapshot manifest is incomplete")
+		}
 	}
 	if (!proof.Snapshot.Available && proof.Snapshot != (collections.ColumnGraphQuerySnapshot{})) ||
 		(proof.Snapshot.Available && proof.Snapshot.CurrentCoverageLSN < proof.Snapshot.BaseCoverageLSN) {

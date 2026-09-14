@@ -406,14 +406,14 @@ func decodeWireErrorVersion(body []byte, limits iwire.Limits, denseVersion uint6
 		out.DenseWork = &work
 	}
 	if raw, found, err := singletonSection(sections, iwire.SectionDenseSearchScorePlaneProof); err != nil {
-		return err
+		return &DenseVectorSearchDecodeError{Err: err, DenseWork: out.DenseWork}
 	} else if found {
 		if denseVersion != iwire.DenseVectorSearchTypedQuantizedVersion {
-			return protocolError(iwire.ErrMalformedFrame, "dense score-plane proof does not match command version")
+			return &DenseVectorSearchDecodeError{Err: protocolError(iwire.ErrMalformedFrame, "dense score-plane proof does not match command version"), DenseWork: out.DenseWork}
 		}
 		proof, err := decodeDenseScorePlane(raw, limits)
 		if err != nil {
-			return err
+			return &DenseVectorSearchDecodeError{Err: err, DenseWork: out.DenseWork}
 		}
 		out.ScorePlane = &proof
 	}

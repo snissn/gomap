@@ -883,6 +883,9 @@ completed, filter attempted, filter completed, captured snapshot available,
 output attempted, output completed. Other bits are invalid. Route tags are
 `0` no executed branch, `1` typed empty, `2` typed exact, `3` typed HNSW.
 Manifest format tags are `0` empty and `1` `tcs1`; manifest version fits uint16.
+Every available snapshot carries complete base and current manifest identities:
+generation, version, and checksum are nonzero (the empty format tag retains its
+canonical `tcs1` compatibility meaning).
 Unknown versions/tags, missing or duplicate sections, nonminimal/overflowing
 integers, truncation and trailing bytes fail closed. Unavailable/unattempted
 groups contain zero values. Successful responses require completed graph and
@@ -913,7 +916,10 @@ preserves completed service/graph/output and score-plane prefixes. This
 completion does not certify wire delivery.
 Version 1 never emits or accepts section 134 and retains its response/error
 bytes. The Go response owns its fixed proof value independently of borrowed
-result documents; `WireError.DenseWork` is optional owned error detail.
+result documents; `WireError.DenseWork` is optional owned error detail. If a
+later sibling score-plane section is malformed, clients reject that section
+while preserving the independently decoded dense-work detail on the protocol
+error.
 
 Hello capabilities advertise `dense_vector_search_versions` as a comma-separated
 set derived from registered command versions and an available standalone

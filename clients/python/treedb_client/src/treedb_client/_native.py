@@ -507,7 +507,7 @@ class _NativeConnection:
                 from ._dense_work import DenseScorePlaneProof
                 try:
                     score_plane = DenseScorePlaneProof.from_dict(_dense_score_plane(sections[136]))
-                except (ValueError, TypeError, KeyError, UnicodeError) as exc:
+                except (ValueError, TypeError, KeyError, UnicodeError, TreeDBProtocolError) as exc:
                     raise TreeDBProtocolError("invalid native dense score-plane proof", dense_work=work) from exc
             raise TreeDBProtocolError(f"native error {code}: {error[offset:].decode('utf-8', errors='replace')}", dense_work=work, score_plane=score_plane)
         if kind != response_type:

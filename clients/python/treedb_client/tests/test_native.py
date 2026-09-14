@@ -75,6 +75,18 @@ class NativeCodecTests(unittest.TestCase):
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
                     ef_search=0, query_dimension=2,
                 )
+            for name, offset in (("generation", -8), ("version", -6), ("checksum", -5)):
+                incomplete_manifest_plane = bytearray(score_plane)
+                incomplete_manifest_plane[offset] = 0
+                with self.subTest(incomplete_manifest=name), self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                        _section(130, meta) + _section(134, raw_work) +
+                        _section(136, bytes(incomplete_manifest_plane)),
+                        1, version=3, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                        ef_search=0, query_dimension=2,
+                    )
             filtered_work_values = list(work_values)
             filtered_work_values[1] |= (1 << 3) | (1 << 4)
             filtered_work_values[10] = 4097
@@ -597,7 +609,10 @@ class NativeCodecTests(unittest.TestCase):
         for action in (lambda d: d.pop("version"), lambda d: d.update(extra=0), lambda d: d.update(version=True),
                        lambda d: d["graph"].update(base_edges=-1), lambda d: d["graph"].update(base_edges=1 << 64),
                        lambda d: d["output"].pop("missing"), lambda d: d["graph"].update(route="ann"),
-                       lambda d: d["graph"]["snapshot"].update(base_coverage_lsn=100, current_coverage_lsn=1)):
+                       lambda d: d["graph"]["snapshot"].update(base_coverage_lsn=100, current_coverage_lsn=1),
+                       lambda d: d["graph"]["snapshot"]["base_manifest"].update(generation=0),
+                       lambda d: d["graph"]["snapshot"]["base_manifest"].update(version=0),
+                       lambda d: d["graph"]["snapshot"]["base_manifest"].update(checksum=0)):
             candidate = copy.deepcopy(asdict(work))
             action(candidate)
             with self.assertRaises((ValueError, TypeError)):
@@ -620,6 +635,18 @@ class NativeCodecTests(unittest.TestCase):
                 self.assertNotIn("object_pairs_hook", parse.call_args.kwargs)
         finally:
             client.close()
+
+        # A malformed sibling score-plane cannot erase already owned dense work.
+        error_payload = _uint(1) + b"\x00" + _bytes_for_test("original")
+        payload = _section(2, error_payload) + _section(134, raw) + _section(136, b"\x01")
+        connection = _NativeConnection("127.0.0.1:2", 1)
+        connection.socket = mock.Mock()
+        header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(payload))
+        with mock.patch.object(connection, "_read", side_effect=(header, payload)), self.assertRaises(TreeDBProtocolError) as caught:
+            connection._round_trip(1, b"", 2, 10**12, dense_proof=True, dense_version=3)
+        self.assertEqual(caught.exception.dense_work, work)
+        self.assertIsNone(caught.exception.score_plane)
+        self.assertIsInstance(caught.exception.__cause__, TreeDBProtocolError)
 
         # Existing exceptions retain decoded proof if client document parsing fails.
         body = _section(102, _vector([b"a"])) + _section(103, _vector([b"{}"])) + _section(130, bytes.fromhex("0201000001000000000000f03f")) + _section(134, raw)
