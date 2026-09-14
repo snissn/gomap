@@ -75,16 +75,32 @@ def reviewed_selected_control(artifact, backend, candidates):
     if selected not in candidates:
         raise RuntimeError(f"{backend} selected control is outside the reviewed candidates")
     prefix = candidates[:candidates.index(selected) + 1]
-    curve = (quality.get("calibration") or {}).get("curve") or []
-    means = [point.get("mean_recall_at_10") for point in curve]
+    calibration = quality.get("calibration") or {}
+    curve = calibration.get("curve") or []
     evaluation = quality.get("evaluation") or {}
+
+    def verified_mean(record, count):
+        samples, reported = record.get("per_query"), record.get("mean_recall_at_10")
+        if (not isinstance(samples, list) or len(samples) != count
+                or any(not isinstance(value, (int, float)) or isinstance(value, bool)
+                       or not 0 <= value <= 1 for value in samples)
+                or not isinstance(reported, (int, float)) or isinstance(reported, bool)):
+            raise RuntimeError(f"{backend} artifact has invalid retained recall samples")
+        recomputed = sum(samples) / len(samples)
+        if not math.isclose(reported, recomputed, rel_tol=0, abs_tol=1e-12):
+            raise RuntimeError(f"{backend} artifact recall summary differs from retained samples")
+        return recomputed
+
+    means = [verified_mean(point, 100) for point in curve]
+    evaluation_mean = verified_mean(evaluation, len(EVALUATION_QUERIES))
     if ([point.get("control") for point in curve] != prefix
+            or calibration.get("queries") != list(range(100))
+            or evaluation.get("queries") != EVALUATION_QUERIES
             or quality.get("target_mean_recall_at_10") != QUALITY_TARGET
-            or any(not isinstance(value, (int, float)) for value in means)
             or any(value >= QUALITY_TARGET for value in means[:-1])
             or not means or means[-1] < QUALITY_TARGET
-            or evaluation.get("passed") is not True
-            or evaluation.get("mean_recall_at_10", 0) < QUALITY_TARGET):
+            or evaluation.get("passed") != (evaluation_mean >= QUALITY_TARGET)
+            or evaluation_mean < QUALITY_TARGET):
         raise RuntimeError(f"{backend} artifact does not prove the lowest passing control")
     return selected
 
@@ -180,18 +196,24 @@ def validate_thread_environment():
 
 
 def check_qdrant_resources(run, started):
-    rss = 0
+    rss, peak_rss = 0, 0
     for pid in (os.getpid(), run.process.pid if run.process else None):
         if pid is not None:
             try:
                 for line in Path(f"/proc/{pid}/status").read_text().splitlines():
                     if line.startswith("VmRSS:"):
                         rss += int(line.split()[1]) * 1024
+                    elif line.startswith("VmHWM:"):
+                        peak_rss += int(line.split()[1]) * 1024
             except FileNotFoundError:
                 pass
+    with run.resource_lock:
+        run.combined_peak_rss_bytes = max(run.combined_peak_rss_bytes, peak_rss)
+        combined_peak_rss = run.combined_peak_rss_bytes
     if (shutil.disk_usage(run.output).free < run.plan["minimum_free_bytes"]
             or qdrant_rss.existing.disk_bytes(run.output) > run.plan["maximum_output_bytes"]
             or rss > run.plan["maximum_combined_rss_bytes"]
+            or combined_peak_rss > run.plan["maximum_combined_rss_bytes"]
             or time.monotonic() - started > run.plan["wall_limit_s"]):
         raise RuntimeError("frozen Qdrant disk/RAM/wall budget exceeded")
 
@@ -772,6 +794,7 @@ def run_qdrant(plan, run_dir):
     local = qdrant_plan(plan, run_dir)
     factory = lambda: QdrantClient(url=local["url"], timeout=local["operation_timeout_s"], prefer_grpc=False)
     run = qdrant_rss.Run(local, factory, models)
+    run.resource_lock, run.combined_peak_rss_bytes = threading.Lock(), 0
     failure, monitor = None, None
     guard_cancel, guard_failures = threading.Event(), []
     started_at, started = time.monotonic(), time.monotonic_ns()
@@ -868,6 +891,7 @@ def run_qdrant(plan, run_dir):
             run.server_pid, run.process_identity, plan["cpu_affinity"]), "Qdrant", "extended-live")
         final_live_disk = qdrant_rss.existing.disk_bytes(run.storage_path)
 
+        check_qdrant_resources(run, started_at)
         restart_start = time.monotonic_ns(); shutdown_disk = restart_qdrant(run)
         response = qdrant_query(run, run.client, EVALUATION_QUERIES[0], control)
         restart_ns = time.monotonic_ns() - restart_start
@@ -898,6 +922,8 @@ def run_qdrant(plan, run_dir):
             check_qdrant_resources(run, started_at)
             if guard_failures:
                 raise RuntimeError(guard_failures[0])
+            if result.get("state") == "complete":
+                result["resources"]["combined_lifetime_peak_rss_bytes"] = run.combined_peak_rss_bytes
         except BaseException as exc:
             result = {"schema": SCHEMA, "state": "failed", "backend": "qdrant",
                       "failure": result.get("failure") or f"final resource guard: {type(exc).__name__}: {exc}"}

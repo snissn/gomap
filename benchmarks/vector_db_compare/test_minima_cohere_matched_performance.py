@@ -22,13 +22,15 @@ class MatchedPerformanceTest(unittest.TestCase):
 
     def test_reviewed_control_requires_every_lower_candidate_to_fail(self):
         artifact = {"quality": {"selected_control": 64, "target_mean_recall_at_10": .9,
-            "calibration": {"curve": [
-                {"control": 32, "mean_recall_at_10": .89},
-                {"control": 64, "mean_recall_at_10": .91},
-            ]}, "evaluation": {"passed": True, "mean_recall_at_10": .9}}}
+            "calibration": {"queries": list(range(100)), "curve": [
+                {"control": 32, "mean_recall_at_10": .89, "per_query": [.89] * 100},
+                {"control": 64, "mean_recall_at_10": .91, "per_query": [.91] * 100},
+            ]}, "evaluation": {"queries": subject.EVALUATION_QUERIES,
+                                "passed": True, "mean_recall_at_10": .9,
+                                "per_query": [.9] * 100}}}
         self.assertEqual(subject.reviewed_selected_control(artifact, "test", [32, 64, 128]), 64)
         artifact["quality"]["calibration"]["curve"][0]["mean_recall_at_10"] = .9
-        with self.assertRaisesRegex(RuntimeError, "lowest passing"):
+        with self.assertRaisesRegex(RuntimeError, "differs from retained samples"):
             subject.reviewed_selected_control(artifact, "test", [32, 64, 128])
 
     def test_control_and_host_provenance_fail_closed(self):
@@ -151,8 +153,14 @@ class MatchedPerformanceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             limits = {"minimum_free_bytes": 0, "maximum_output_bytes": 1 << 40,
                       "maximum_combined_rss_bytes": 1 << 40, "wall_limit_s": 60}
-            run = SimpleNamespace(output=Path(directory), process=None, plan=limits)
+            run = SimpleNamespace(output=Path(directory), process=None, plan=limits,
+                                  resource_lock=threading.Lock(), combined_peak_rss_bytes=0)
             subject.check_qdrant_resources(run, subject.time.monotonic())
+            self.assertGreater(run.combined_peak_rss_bytes, 0)
+            limits["maximum_combined_rss_bytes"] = 1
+            with self.assertRaisesRegex(RuntimeError, "Qdrant disk/RAM/wall budget"):
+                subject.check_qdrant_resources(run, subject.time.monotonic())
+            limits["maximum_combined_rss_bytes"] = 1 << 40
             limits["wall_limit_s"] = -1
             with self.assertRaisesRegex(RuntimeError, "Qdrant disk/RAM/wall budget"):
                 subject.check_qdrant_resources(run, subject.time.monotonic())
