@@ -307,12 +307,12 @@ func typedGraphLegacyScalarU8DescriptorPayloadBytes(descriptors []columnVectorGr
 			!addString(descriptor.assets.Codes.AssetID) ||
 			!addString(descriptor.assets.Codes.LogicalType) ||
 			!addString(descriptor.assets.Codes.PhysicalEncoding) ||
-			!addString(descriptor.assets.Codes.Ref.Kind) ||
+			!addString(string(descriptor.assets.Codes.Ref.Kind)) ||
 			!addString(descriptor.assets.Codes.Ref.Namespace) {
 			return 0, errTypedGraphOwnerBudget
 		}
 		if cfg := descriptor.definition.ScalarU8Calibration; cfg != nil &&
-			(!addString(cfg.Mode) || !addString(cfg.Grouping) || !addString(cfg.AlphaPolicy.Name)) {
+			(!addString(string(cfg.Mode)) || !addString(string(cfg.Grouping)) || !addString(string(cfg.AlphaPolicy.Name))) {
 			return 0, errTypedGraphOwnerBudget
 		}
 	}
