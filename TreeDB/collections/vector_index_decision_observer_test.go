@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"runtime"
 	"testing"
 	"unsafe"
 )
@@ -55,6 +56,9 @@ func TestVectorIndexConstructionDecisionObserverPreservesFrozenPrefix4461(t *tes
 		}
 		if firstPhase.ApproximateScoreRows != 0 || firstPhase.ApproximateScoreCalls != 0 {
 			t.Fatalf("phase %d exact route reported approximate scores: %+v", phase, firstPhase)
+		}
+		if firstPhase.UniqueRowPairs+firstPhase.RepeatedRowPairs+firstPhase.RowPairReplacements != firstPhase.DirectExactFP32Rows+firstPhase.IndexedExactFP32Rows {
+			t.Fatalf("phase %d row-pair sketch lost scored rows: %+v", phase, firstPhase)
 		}
 		if firstPhase.Accepted+firstPhase.Rejected != firstPhase.DiversityPredicates ||
 			firstPhase.DiversityCandidates == 0 ||
@@ -125,6 +129,43 @@ func TestVectorIndexConstructionDecisionObserverPreservesFrozenPrefix4461(t *tes
 	}
 	if got := loaded.persistMetaLocked(); !reflect.DeepEqual(got, persistedMeta) {
 		t.Fatalf("reopened metadata=%+v want %+v", got, persistedMeta)
+	}
+}
+
+func TestVectorIndexConstructionDecisionObserverWorkerLocalReduction(t *testing.T) {
+	if runtime.GOMAXPROCS(0) < 2 {
+		t.Skip("requires more than one construction worker")
+	}
+	rows := vectorIndexReciprocalParityRows4257(96, 16, true)
+	serialObserver, parallelObserver := &vectorIndexConstructionDecisionObserverV1{}, &vectorIndexConstructionDecisionObserverV1{}
+	buildVectorIndexDecisionObserverWorkers4587(t, rows, serialObserver, 1)
+	buildVectorIndexDecisionObserverWorkers4587(t, rows, parallelObserver, 2)
+	serial, parallel := serialObserver.snapshot(), parallelObserver.snapshot()
+	for phase, pair := range [][2]*VectorIndexConstructionDecisionPhaseSnapshot{
+		{&serial.Planning, &parallel.Planning}, {&serial.Reciprocal, &parallel.Reciprocal},
+	} {
+		pair[0].ActiveWallNanos, pair[1].ActiveWallNanos = 0, 0
+		pair[0].UniqueRowPairs, pair[1].UniqueRowPairs = 0, 0
+		pair[0].RepeatedRowPairs, pair[1].RepeatedRowPairs = 0, 0
+		pair[0].RowPairReplacements, pair[1].RowPairReplacements = 0, 0
+		if !reflect.DeepEqual(*pair[0], *pair[1]) {
+			t.Fatalf("phase %d worker-local reduction changed exact accounting:\nserial=%+v\nparallel=%+v", phase, *pair[0], *pair[1])
+		}
+	}
+}
+
+func BenchmarkVectorIndexConstructionDecisionObserver768D(b *testing.B) {
+	rows := vectorIndexReciprocalParityRows4257(1024, 768, true)
+	for _, observed := range []bool{false, true} {
+		b.Run(fmt.Sprintf("observed=%t", observed), func(b *testing.B) {
+			for b.Loop() {
+				var observer *vectorIndexConstructionDecisionObserverV1
+				if observed {
+					observer = &vectorIndexConstructionDecisionObserverV1{}
+				}
+				buildVectorIndexDecisionObserverWorkers4587(b, rows, observer, 2)
+			}
+		})
 	}
 }
 
@@ -204,6 +245,10 @@ func vectorIndexDecisionMetadata4461(index *VectorIndex) vectorIndexDecisionMeta
 // a focused same-package test can load preserved source rows and snapshot the
 // returned observer without changing the production builder.
 func buildVectorIndexDecisionObserver4461(t testing.TB, rows [][]float32, observer *vectorIndexConstructionDecisionObserverV1) *VectorIndex {
+	return buildVectorIndexDecisionObserverWorkers4587(t, rows, observer, 0)
+}
+
+func buildVectorIndexDecisionObserverWorkers4587(t testing.TB, rows [][]float32, observer *vectorIndexConstructionDecisionObserverV1, workers int) *VectorIndex {
 	t.Helper()
 	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: len(rows[0]), M: 16, EfConstruction: 64})
 	if err != nil {
@@ -211,6 +256,7 @@ func buildVectorIndexDecisionObserver4461(t testing.TB, rows [][]float32, observ
 	}
 	index.setNativePersistent(true)
 	index.decisionObserver = observer
+	index.constructionWorkers = workers
 	ids := make([][]byte, len(rows))
 	for row := range ids {
 		ids[row] = []byte(fmt.Sprintf("doc-%04d", row))

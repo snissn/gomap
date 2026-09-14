@@ -67,11 +67,29 @@ class DocumentModelTests(unittest.TestCase):
 
 class IndexModelTests(unittest.TestCase):
     def test_optimize_timing_models_parse_column_graph_build(self) -> None:
+        phase = {
+            **{name: 0 for name in (
+                "digest_xor", "digest_sum", "decisions", "accepted", "rejected",
+                "direct_exact_fp32_rows", "direct_exact_fp32_calls", "indexed_exact_fp32_rows",
+                "indexed_exact_fp32_calls", "approximate_score_rows", "approximate_score_calls",
+                "exact_fp32_dimensions", "diversity_predicates", "diversity_candidates",
+                "diversity_comparisons_requested", "diversity_comparisons_executed", "unique_row_pairs",
+                "repeated_row_pairs", "row_pair_replacements", "active_wall_nanos",
+            )},
+            "saturated": False,
+            **{name: [0] * 16 for name in (
+                "candidate_count_histogram", "selected_count_histogram", "diversity_early_exit_histogram",
+                "reciprocal_group_histogram", "prune_survivor_histogram",
+            )},
+        }
         response = OptimizeIndexResponse.from_dict(
             {
                 "index": _sample_index(),
                 "vector_index_name": "embedding",
-                "status": {"name": "embedding", "column_graph_build": {"total_nanos": 10, "file_sync_count": 2}},
+                "status": {"name": "embedding", "column_graph_build": {
+                    "total_nanos": 10, "file_sync_count": 2,
+                    "construction_decisions": {"planning": phase, "reciprocal": phase},
+                }},
                 "timing": {"total_nanos": 20, "cache_warm_nanos": 3},
             }
         )
@@ -80,6 +98,12 @@ class IndexModelTests(unittest.TestCase):
         self.assertIsInstance(response.status.column_graph_build, ColumnGraphBuildTiming)
         self.assertEqual(response.status.column_graph_build.total_nanos, 10)
         self.assertEqual(response.status.column_graph_build.file_sync_count, 2)
+        self.assertEqual(response.status.column_graph_build.construction_decisions["planning"]["decisions"], 0)
+        with self.assertRaisesRegex(ValueError, "must contain 16 counters"):
+            ColumnGraphBuildTiming.from_dict({
+                "construction_decisions": {"planning": {**phase, "candidate_count_histogram": []},
+                                           "reciprocal": phase},
+            })
 
     def test_index_info_round_trip(self) -> None:
         info = IndexInfo.from_dict(

@@ -125,7 +125,8 @@ class ServiceController:
                  diagnostics_url: str | None = None, block_profile_rate: int = 1,
                  mutex_profile_fraction: int = 1, diagnostics_timeout: float = 2,
                  native_address: str | None = None, measured: bool = False,
-                 environment: dict[str, str] | None = None) -> None:
+                 environment: dict[str, str] | None = None,
+                 construction_decisions: bool = False) -> None:
         self.binary, self.url, self.data_dir, self.profile = binary, url.rstrip("/"), data_dir, profile
         self.startup_timeout, self.shutdown_timeout = startup_timeout, shutdown_timeout
         self.diagnostics_url = diagnostics_url.rstrip("/") if diagnostics_url else None
@@ -134,6 +135,7 @@ class ServiceController:
         self.diagnostics_timeout = diagnostics_timeout
         self.native_address = native_address
         self.measured = measured
+        self.construction_decisions = construction_decisions
         self.environment = None if environment is None else dict(environment)
         self.lifetimes: list[dict[str, Any]] = []
         self._log_region_start = 0
@@ -268,6 +270,8 @@ class ServiceController:
         argv = [str(self.binary), "-addr", address, "-dir", str(self.data_dir), "-profile", self.profile]
         if self.native_address is not None:
             argv.extend(["-native-addr", self.native_address])
+        if self.construction_decisions:
+            argv.append("-diagnostic-construction-decisions")
         if self.diagnostics_url is not None:
             argv.extend([
                 "-pprof", self._listen_address(self.diagnostics_url, "diagnostics"),

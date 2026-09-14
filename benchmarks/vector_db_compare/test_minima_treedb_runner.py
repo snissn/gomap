@@ -1044,7 +1044,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             controller = runner.ServiceController(
                 Path("/service"), "http://127.0.0.1:17120", root / "data", "command_wal_durable", 1, 1,
                 diagnostics_url="http://127.0.0.1:17121", block_profile_rate=7,
-                mutex_profile_fraction=11,
+                mutex_profile_fraction=11, construction_decisions=True,
             )
             process = mock.MagicMock(pid=42)
             process.poll.return_value = None
@@ -1061,6 +1061,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 "-pprof", "127.0.0.1:17121", "-block-profile-rate", "7",
                 "-mutex-profile-fraction", "11",
             ])
+            self.assertIn("-diagnostic-construction-decisions", argv)
             read_stats.assert_called_once_with(runner.DIAGNOSTICS_STATS_PATH)
             controller.process = None
             assert controller.log_file is not None
@@ -1080,6 +1081,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                  mock.patch.object(runner, "TreeDBClient", return_value=health_client):
                 default.start()
             self.assertNotIn("-pprof", popen.call_args.args[0])
+            self.assertNotIn("-diagnostic-construction-decisions", popen.call_args.args[0])
             default.process = None
             assert default.log_file is not None
             default.log_file.close()
