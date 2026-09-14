@@ -154,6 +154,15 @@ func TestVectorIndexConstructionDecisionObserverWorkerLocalReduction(t *testing.
 	}
 }
 
+func TestVectorIndexConstructionDecisionObserverRecordsZeroWallSample(t *testing.T) {
+	observer := &vectorIndexConstructionDecisionObserverV1{}
+	context := vectorIndexConstructionDecisionContextV1{observer: observer, phase: vectorIndexConstructionDecisionPlanning}
+	context.recordWall(0)
+	if got := observer.snapshot().Planning.ActiveWallNanos; got != 1 {
+		t.Fatalf("active wall nanos=%d want 1", got)
+	}
+}
+
 func BenchmarkVectorIndexConstructionDecisionObserver768D(b *testing.B) {
 	rows := vectorIndexReciprocalParityRows4257(1024, 768, true)
 	for _, observed := range []bool{false, true} {

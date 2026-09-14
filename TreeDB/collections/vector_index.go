@@ -789,8 +789,8 @@ func (context *vectorIndexConstructionDecisionContextV1) recordGroup(groupSize, 
 
 func (context *vectorIndexConstructionDecisionContextV1) recordWall(elapsed time.Duration) {
 	stats := context.phaseStats()
-	if stats != nil && elapsed > 0 {
-		vectorIndexConstructionDecisionAddV1(&stats.activeWallNanos, uint64(elapsed), &stats.saturated)
+	if stats != nil && elapsed >= 0 {
+		vectorIndexConstructionDecisionAddV1(&stats.activeWallNanos, uint64(max(elapsed, time.Nanosecond)), &stats.saturated)
 	}
 }
 
