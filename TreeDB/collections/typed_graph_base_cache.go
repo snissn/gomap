@@ -235,8 +235,8 @@ func typedGraphCapturedBaseBackingBound(rows, records, layers int, limit int64) 
 // existing retained-holder bound with the maximum metadata that a shared
 // holder can keep after an owner lazily requests legacy scalar_u8 v1. The code
 // file bytes remain covered by typedGraphOwnerRefs/lifecycle pins; this adds
-// only holder descriptors, entry/status/resource structs, Prepared metadata,
-// and the O(rows) derived code sums for each declared legacy plane.
+// only holder descriptors, entry/status/resource structs, one-column Prepared
+// metadata, and the O(rows) derived code sums for each declared legacy plane.
 func typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, records, layers, legacyScalarU8Assets int, limit int64) (int64, error) {
 	var total int64
 	add := func(count int, size uintptr) bool {
@@ -288,7 +288,7 @@ func typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, records, l
 		reflect.TypeFor[*columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry]().Size(),
 		reflect.TypeFor[columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry]().Size(),
 		reflect.TypeFor[columnVectorGraphQuantizedAssetResource]().Size(),
-		reflect.TypeFor[quantizedasset.Prepared]().Size(),
+		quantizedasset.PreparedOneColumnRetainedMetadataBound(),
 		reflect.TypeFor[ScalarU8CalibrationConfig]().Size(),
 	} {
 		if !add(legacyScalarU8Assets, size) {

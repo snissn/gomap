@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/quantizedasset"
 )
 
 func TestTypedGraphCapturedBaseCache(t *testing.T) {
@@ -126,6 +128,41 @@ func checkTypedGraphCapturedBacking(t testing.TB, r *typedGraphCapturedBaseResou
 		t.Fatalf("known backing=%d reservation=%d", actual, r.backingBytes)
 	}
 	t.Logf("keeper assets=%d lease/key descriptors=%d known backing actual=%d reserved=%d mappedresource=%+v", r.assetBytes, r.descriptorBytes, actual, r.backingBytes, h.stats())
+}
+
+func TestTypedGraphCapturedBaseBackingBoundReservesLegacyScalarU8PreparedMetadata(t *testing.T) {
+	const rows = 7
+	base, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, 0, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	one, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, 1, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, 2, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	perPlane := int64(reflect.TypeFor[columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor]().Size()) +
+		int64(reflect.TypeFor[*columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry]().Size()) +
+		int64(reflect.TypeFor[columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry]().Size()) +
+		int64(reflect.TypeFor[columnVectorGraphQuantizedAssetResource]().Size()) +
+		int64(quantizedasset.PreparedOneColumnRetainedMetadataBound()) +
+		int64(reflect.TypeFor[ScalarU8CalibrationConfig]().Size()) +
+		rows*int64(reflect.TypeFor[uint32]().Size())
+	if got := one - base; got != perPlane {
+		t.Fatalf("one-plane delta=%d want=%d", got, perPlane)
+	}
+	if got := two - one; got != perPlane {
+		t.Fatalf("two-plane delta=%d want=%d", got, perPlane)
+	}
+	if got, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, 1, one); err != nil || got != one {
+		t.Fatalf("exact budget got=%d err=%v want=%d", got, err, one)
+	}
+	if _, err := typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, 0, 0, 1, one-1); !errors.Is(err, errTypedGraphOwnerBudget) {
+		t.Fatalf("one byte short err=%v", err)
+	}
 }
 
 func TestTypedGraphCapturedBaseCacheCrossManagerAndFailure(t *testing.T) {

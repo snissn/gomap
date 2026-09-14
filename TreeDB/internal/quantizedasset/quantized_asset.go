@@ -157,6 +157,25 @@ type Prepared struct {
 	footprint Footprint
 }
 
+// preparedOneColumnRetainedMetadataBound is the Go 1.26 64-bit retained
+// metadata maximum for a Prepared with exactly one column. It includes the
+// Prepared allocation, its map header and one map group, the indirect
+// preparedColumn value, and a cap=1 Footprint.Columns backing allocation.
+//
+// The bound intentionally excludes the referenced payload and string bytes:
+// Prepared aliases those immutable inputs rather than copying them. It is also
+// conservative on narrower supported architectures. Keep the companion shape
+// test in sync if the Prepared layout or one-column construction changes.
+const preparedOneColumnRetainedMetadataBound uintptr = 648
+
+// PreparedOneColumnRetainedMetadataBound returns a conservative retained
+// metadata bound for a Prepared built from an exactly-one-column schema. It is
+// for admission accounting by callers that validate that cardinality; callers
+// with general schemas must not use it as a bound for more than one column.
+func PreparedOneColumnRetainedMetadataBound() uintptr {
+	return preparedOneColumnRetainedMetadataBound
+}
+
 // CodeRowView is an immutable, zero-copy fixed-width row view over a prepared
 // code role. RowBytes slices the validated payload directly, avoiding per-row
 // role-map lookups. The returned row slices alias prepared image bytes and must
