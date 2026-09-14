@@ -472,19 +472,19 @@ type vectorIndexConstructionDecisionObserverV1 struct {
 }
 
 type vectorIndexConstructionDecisionPhaseV1 struct {
-	digestXOR, digestSum                                          atomic.Uint64
-	decisions, accepted, rejected                                 atomic.Uint64
-	directExactFP32Rows, directExactFP32Calls                     atomic.Uint64
-	indexedExactFP32Rows, indexedExactFP32Calls                   atomic.Uint64
-	approximateScoreRows, approximateScoreCalls                   atomic.Uint64
-	exactFP32Dimensions, diversityPredicates, diversityCandidates atomic.Uint64
-	diversityComparisonsRequested, diversityComparisonsExecuted   atomic.Uint64
-	uniqueRowPairs, repeatedRowPairs, rowPairReplacements         atomic.Uint64
-	activeWallNanos                                               atomic.Uint64
-	saturated                                                     atomic.Bool
-	candidateCount, selectedCount, earlyExit, groupSize           [16]atomic.Uint64
-	pruneSurvivors                                                [16]atomic.Uint64
-	rowPairs                                                      [vectorIndexConstructionDecisionPairSlots]atomic.Uint64
+	digestXOR, digestSum                                          uint64
+	decisions, accepted, rejected                                 uint64
+	directExactFP32Rows, directExactFP32Calls                     uint64
+	indexedExactFP32Rows, indexedExactFP32Calls                   uint64
+	approximateScoreRows, approximateScoreCalls                   uint64
+	exactFP32Dimensions, diversityPredicates, diversityCandidates uint64
+	diversityComparisonsRequested, diversityComparisonsExecuted   uint64
+	uniqueRowPairs, repeatedRowPairs, rowPairReplacements         uint64
+	activeWallNanos                                               uint64
+	saturated                                                     bool
+	candidateCount, selectedCount, earlyExit, groupSize           [16]uint64
+	pruneSurvivors                                                [16]uint64
+	rowPairs                                                      [vectorIndexConstructionDecisionPairSlots]uint64
 }
 
 type vectorIndexConstructionDecisionContextV1 struct {
@@ -514,8 +514,10 @@ type VectorIndexConstructionDecisionSnapshot struct {
 // and are zero for the current exact route. Active wall nanoseconds sum observed
 // function time and may exceed elapsed adjacency wall when reciprocal work runs
 // concurrently. Histogram buckets are powers of two (0, 1, 2, 3-4, ...),
-// capped at bucket 15. Row-pair counters describe a fixed 4096-slot replacement
-// sketch. Saturated means at least one counter overflowed.
+// capped at bucket 15. Row-pair counters describe worker-local fixed 4096-slot
+// replacement sketches reduced in worker order; cross-worker boundaries compare
+// the retained final pair in each occupied slot. Saturated means at least one
+// counter overflowed.
 type VectorIndexConstructionDecisionPhaseSnapshot struct {
 	DigestXOR                     uint64     `json:"digest_xor"`
 	DigestSum                     uint64     `json:"digest_sum"`
@@ -558,36 +560,90 @@ func (observer *vectorIndexConstructionDecisionObserverV1) snapshot() *VectorInd
 func (observer *vectorIndexConstructionDecisionObserverV1) phaseSnapshot(phase int) VectorIndexConstructionDecisionPhaseSnapshot {
 	source := &observer.phases[phase]
 	target := VectorIndexConstructionDecisionPhaseSnapshot{
-		DigestXOR:                     source.digestXOR.Load(),
-		DigestSum:                     source.digestSum.Load(),
-		Decisions:                     source.decisions.Load(),
-		Accepted:                      source.accepted.Load(),
-		Rejected:                      source.rejected.Load(),
-		DirectExactFP32Rows:           source.directExactFP32Rows.Load(),
-		DirectExactFP32Calls:          source.directExactFP32Calls.Load(),
-		IndexedExactFP32Rows:          source.indexedExactFP32Rows.Load(),
-		IndexedExactFP32Calls:         source.indexedExactFP32Calls.Load(),
-		ApproximateScoreRows:          source.approximateScoreRows.Load(),
-		ApproximateScoreCalls:         source.approximateScoreCalls.Load(),
-		ExactFP32Dimensions:           source.exactFP32Dimensions.Load(),
-		DiversityPredicates:           source.diversityPredicates.Load(),
-		DiversityCandidates:           source.diversityCandidates.Load(),
-		DiversityComparisonsRequested: source.diversityComparisonsRequested.Load(),
-		DiversityComparisonsExecuted:  source.diversityComparisonsExecuted.Load(),
-		UniqueRowPairs:                source.uniqueRowPairs.Load(),
-		RepeatedRowPairs:              source.repeatedRowPairs.Load(),
-		RowPairReplacements:           source.rowPairReplacements.Load(),
-		ActiveWallNanos:               source.activeWallNanos.Load(),
-		Saturated:                     source.saturated.Load(),
+		DigestXOR:                     source.digestXOR,
+		DigestSum:                     source.digestSum,
+		Decisions:                     source.decisions,
+		Accepted:                      source.accepted,
+		Rejected:                      source.rejected,
+		DirectExactFP32Rows:           source.directExactFP32Rows,
+		DirectExactFP32Calls:          source.directExactFP32Calls,
+		IndexedExactFP32Rows:          source.indexedExactFP32Rows,
+		IndexedExactFP32Calls:         source.indexedExactFP32Calls,
+		ApproximateScoreRows:          source.approximateScoreRows,
+		ApproximateScoreCalls:         source.approximateScoreCalls,
+		ExactFP32Dimensions:           source.exactFP32Dimensions,
+		DiversityPredicates:           source.diversityPredicates,
+		DiversityCandidates:           source.diversityCandidates,
+		DiversityComparisonsRequested: source.diversityComparisonsRequested,
+		DiversityComparisonsExecuted:  source.diversityComparisonsExecuted,
+		UniqueRowPairs:                source.uniqueRowPairs,
+		RepeatedRowPairs:              source.repeatedRowPairs,
+		RowPairReplacements:           source.rowPairReplacements,
+		ActiveWallNanos:               source.activeWallNanos,
+		Saturated:                     source.saturated,
 	}
 	for bucket := range target.CandidateCountHistogram {
-		target.CandidateCountHistogram[bucket] = source.candidateCount[bucket].Load()
-		target.SelectedCountHistogram[bucket] = source.selectedCount[bucket].Load()
-		target.DiversityEarlyExitHistogram[bucket] = source.earlyExit[bucket].Load()
-		target.ReciprocalGroupHistogram[bucket] = source.groupSize[bucket].Load()
-		target.PruneSurvivorHistogram[bucket] = source.pruneSurvivors[bucket].Load()
+		target.CandidateCountHistogram[bucket] = source.candidateCount[bucket]
+		target.SelectedCountHistogram[bucket] = source.selectedCount[bucket]
+		target.DiversityEarlyExitHistogram[bucket] = source.earlyExit[bucket]
+		target.ReciprocalGroupHistogram[bucket] = source.groupSize[bucket]
+		target.PruneSurvivorHistogram[bucket] = source.pruneSurvivors[bucket]
 	}
 	return target
+}
+
+func (observer *vectorIndexConstructionDecisionObserverV1) merge(source *vectorIndexConstructionDecisionObserverV1) {
+	if observer == nil || source == nil {
+		return
+	}
+	for phase := range observer.phases {
+		target, local := &observer.phases[phase], &source.phases[phase]
+		target.digestXOR ^= local.digestXOR
+		target.digestSum += local.digestSum
+		for _, values := range []struct {
+			target, local *uint64
+		}{
+			{&target.decisions, &local.decisions}, {&target.accepted, &local.accepted}, {&target.rejected, &local.rejected},
+			{&target.directExactFP32Rows, &local.directExactFP32Rows}, {&target.directExactFP32Calls, &local.directExactFP32Calls},
+			{&target.indexedExactFP32Rows, &local.indexedExactFP32Rows}, {&target.indexedExactFP32Calls, &local.indexedExactFP32Calls},
+			{&target.approximateScoreRows, &local.approximateScoreRows}, {&target.approximateScoreCalls, &local.approximateScoreCalls},
+			{&target.exactFP32Dimensions, &local.exactFP32Dimensions}, {&target.diversityPredicates, &local.diversityPredicates},
+			{&target.diversityCandidates, &local.diversityCandidates}, {&target.diversityComparisonsRequested, &local.diversityComparisonsRequested},
+			{&target.diversityComparisonsExecuted, &local.diversityComparisonsExecuted}, {&target.uniqueRowPairs, &local.uniqueRowPairs},
+			{&target.repeatedRowPairs, &local.repeatedRowPairs}, {&target.rowPairReplacements, &local.rowPairReplacements},
+			{&target.activeWallNanos, &local.activeWallNanos},
+		} {
+			vectorIndexConstructionDecisionAddV1(values.target, *values.local, &target.saturated)
+		}
+		// Classify each worker-local sketch boundary in worker order. The sketch
+		// intentionally retains only the final pair per occupied slot.
+		for pair := range target.rowPairs {
+			if local.rowPairs[pair] == 0 {
+				continue
+			}
+			if target.rowPairs[pair] != 0 {
+				target.uniqueRowPairs--
+				if target.rowPairs[pair] == local.rowPairs[pair] {
+					vectorIndexConstructionDecisionAddV1(&target.repeatedRowPairs, 1, &target.saturated)
+				} else {
+					vectorIndexConstructionDecisionAddV1(&target.rowPairReplacements, 1, &target.saturated)
+				}
+			}
+			target.rowPairs[pair] = local.rowPairs[pair]
+		}
+		for bucket := range target.candidateCount {
+			for _, values := range []struct {
+				target, local *uint64
+			}{
+				{&target.candidateCount[bucket], &local.candidateCount[bucket]}, {&target.selectedCount[bucket], &local.selectedCount[bucket]},
+				{&target.earlyExit[bucket], &local.earlyExit[bucket]}, {&target.groupSize[bucket], &local.groupSize[bucket]},
+				{&target.pruneSurvivors[bucket], &local.pruneSurvivors[bucket]},
+			} {
+				vectorIndexConstructionDecisionAddV1(values.target, *values.local, &target.saturated)
+			}
+		}
+		target.saturated = target.saturated || local.saturated
+	}
 }
 
 func vectorIndexConstructionDecisionHashV1(hash, value uint64) uint64 {
@@ -612,31 +668,21 @@ func vectorIndexConstructionDecisionBucketV1(value int) int {
 	return bucket
 }
 
-func vectorIndexConstructionDecisionAddV1(counter *atomic.Uint64, delta uint64, saturated *atomic.Bool) {
-	for {
-		current := counter.Load()
-		if current == ^uint64(0) {
-			saturated.Store(true)
-			return
-		}
-		next := current + delta
-		if next < current {
-			next = ^uint64(0)
-			saturated.Store(true)
-		}
-		if counter.CompareAndSwap(current, next) {
-			return
-		}
+func vectorIndexConstructionDecisionAddV1(counter *uint64, delta uint64, saturated *bool) {
+	if *counter == ^uint64(0) {
+		*saturated = true
+		return
 	}
+	next := *counter + delta
+	if next < *counter {
+		next = ^uint64(0)
+		*saturated = true
+	}
+	*counter = next
 }
 
-func vectorIndexConstructionDecisionXORV1(counter *atomic.Uint64, value uint64) {
-	for {
-		current := counter.Load()
-		if counter.CompareAndSwap(current, current^value) {
-			return
-		}
-	}
+func vectorIndexConstructionDecisionXORV1(counter *uint64, value uint64) {
+	*counter ^= value
 }
 
 func (context *vectorIndexConstructionDecisionContextV1) phaseStats() *vectorIndexConstructionDecisionPhaseV1 {
@@ -661,7 +707,9 @@ func (context *vectorIndexConstructionDecisionContextV1) recordRowFrom(source, n
 	vectorIndexConstructionDecisionAddV1(&stats.exactFP32Dimensions, uint64(context.dimensions), &stats.saturated)
 	pair := vectorIndexConstructionDecisionMixV1(uint64(source + 1))
 	pair = vectorIndexConstructionDecisionHashV1(pair, uint64(nodeID+1)) | 1
-	seen := stats.rowPairs[pair&(vectorIndexConstructionDecisionPairSlots-1)].Swap(pair)
+	slot := &stats.rowPairs[pair&(vectorIndexConstructionDecisionPairSlots-1)]
+	seen := *slot
+	*slot = pair
 	switch seen {
 	case 0:
 		vectorIndexConstructionDecisionAddV1(&stats.uniqueRowPairs, 1, &stats.saturated)
@@ -722,7 +770,7 @@ func (context *vectorIndexConstructionDecisionContextV1) recordDecision(orderedH
 	}
 	hash = vectorIndexConstructionDecisionMixV1(hash)
 	vectorIndexConstructionDecisionXORV1(&stats.digestXOR, hash)
-	stats.digestSum.Add(hash)
+	stats.digestSum += hash
 	vectorIndexConstructionDecisionAddV1(&stats.decisions, 1, &stats.saturated)
 	vectorIndexConstructionDecisionAddV1(&stats.diversityCandidates, uint64(candidates), &stats.saturated)
 	vectorIndexConstructionDecisionAddV1(&stats.candidateCount[vectorIndexConstructionDecisionBucketV1(candidates)], 1, &stats.saturated)
@@ -741,8 +789,8 @@ func (context *vectorIndexConstructionDecisionContextV1) recordGroup(groupSize, 
 
 func (context *vectorIndexConstructionDecisionContextV1) recordWall(elapsed time.Duration) {
 	stats := context.phaseStats()
-	if stats != nil && elapsed > 0 {
-		vectorIndexConstructionDecisionAddV1(&stats.activeWallNanos, uint64(elapsed), &stats.saturated)
+	if stats != nil && elapsed >= 0 {
+		vectorIndexConstructionDecisionAddV1(&stats.activeWallNanos, uint64(max(elapsed, time.Nanosecond)), &stats.saturated)
 	}
 }
 
@@ -2455,10 +2503,11 @@ type vectorIndexFrozenPrefixReciprocalGroup struct {
 }
 
 type vectorIndexFrozenPrefixCommitScratch struct {
-	links  []vectorIndexFrozenPrefixReciprocalLink
-	groups []vectorIndexFrozenPrefixReciprocalGroup
-	pruned []bool
-	dots   []vectorIndexFrozenPrefixDiversityScratch
+	links             []vectorIndexFrozenPrefixReciprocalLink
+	groups            []vectorIndexFrozenPrefixReciprocalGroup
+	pruned            []bool
+	dots              []vectorIndexFrozenPrefixDiversityScratch
+	decisionObservers []vectorIndexConstructionDecisionObserverV1
 }
 
 type vectorIndexFrozenPrefixDiversityScratch struct {
@@ -2495,6 +2544,13 @@ func (idx *VectorIndex) insertVectorBatchWithContextLocked(ctx context.Context, 
 		return nil
 	}
 	var commitScratch vectorIndexFrozenPrefixCommitScratch
+	if idx.decisionObserver != nil {
+		defer func() {
+			for worker := range commitScratch.decisionObservers {
+				idx.decisionObserver.merge(&commitScratch.decisionObservers[worker])
+			}
+		}()
+	}
 	for start := 0; start < len(documentIDs); {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -2527,16 +2583,28 @@ func (idx *VectorIndex) insertVectorBatchWithContextLocked(ctx context.Context, 
 		plans := make([]vectorIndexFrozenPrefixInsert, end-start)
 		errs := make([]error, len(plans))
 		workers := idx.constructionWorkerCount(len(plans))
+		var decisionObservers []vectorIndexConstructionDecisionObserverV1
+		if idx.decisionObserver != nil {
+			decisionObservers = commitScratch.decisionObserverWorkers(workers)
+		}
 		var wg sync.WaitGroup
 		for worker := 1; worker < workers; worker++ {
+			observer := (*vectorIndexConstructionDecisionObserverV1)(nil)
+			if decisionObservers != nil {
+				observer = &decisionObservers[worker]
+			}
 			wg.Go(func() {
 				for plan := worker; plan < len(plans); plan += workers {
-					plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(ctx, documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan)
+					plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(ctx, documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan, observer)
 				}
 			})
 		}
+		observer := (*vectorIndexConstructionDecisionObserverV1)(nil)
+		if decisionObservers != nil {
+			observer = &decisionObservers[0]
+		}
 		for plan := 0; plan < len(plans); plan += workers {
-			plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(ctx, documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan)
+			plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(ctx, documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan, observer)
 		}
 		wg.Wait()
 		for row, err := range errs {
@@ -2668,8 +2736,7 @@ func (idx *VectorIndex) canPlanFrozenPrefixBatchLocked(documentIDs [][]byte) boo
 	return true
 }
 
-func (idx *VectorIndex) planFrozenPrefixInsertLocked(ctx context.Context, documentID []byte, vector []float32, entry, maxLevel, sourceNodeID int) (vectorIndexFrozenPrefixInsert, error) {
-	observer := idx.decisionObserver
+func (idx *VectorIndex) planFrozenPrefixInsertLocked(ctx context.Context, documentID []byte, vector []float32, entry, maxLevel, sourceNodeID int, observer *vectorIndexConstructionDecisionObserverV1) (vectorIndexFrozenPrefixInsert, error) {
 	started := time.Time{}
 	if observer != nil {
 		started = time.Now()
@@ -2767,6 +2834,10 @@ func (idx *VectorIndex) commitFrozenPrefixBatchLocked(plans []vectorIndexFrozenP
 	}
 	pruned := scratch.pruned
 	workers := idx.constructionWorkerCount(vectorIndexReciprocalLinkWorkerCount(len(groups)))
+	var decisionObservers []vectorIndexConstructionDecisionObserverV1
+	if idx.decisionObserver != nil {
+		decisionObservers = scratch.decisionObserverWorkers(workers)
+	}
 	if cap(scratch.dots) < workers {
 		scratch.dots = make([]vectorIndexFrozenPrefixDiversityScratch, workers)
 	} else {
@@ -2777,12 +2848,16 @@ func (idx *VectorIndex) commitFrozenPrefixBatchLocked(plans []vectorIndexFrozenP
 	}
 	var nextGroup atomic.Int64
 	runGroup := func(worker int) {
+		observer := (*vectorIndexConstructionDecisionObserverV1)(nil)
+		if decisionObservers != nil {
+			observer = &decisionObservers[worker]
+		}
 		for {
 			group := int(nextGroup.Add(1) - 1)
 			if group >= len(groups) {
 				return
 			}
-			pruned[group] = idx.linkFrozenPrefixReciprocalGroupLocked(links[groups[group].start:groups[group].end], &scratch.dots[worker])
+			pruned[group] = idx.linkFrozenPrefixReciprocalGroupObservedLocked(links[groups[group].start:groups[group].end], &scratch.dots[worker], observer)
 		}
 	}
 	var wg sync.WaitGroup
@@ -2807,11 +2882,14 @@ func (idx *VectorIndex) commitFrozenPrefixBatchLocked(plans []vectorIndexFrozenP
 }
 
 func (idx *VectorIndex) linkFrozenPrefixReciprocalGroupLocked(links []vectorIndexFrozenPrefixReciprocalLink, dotScratch *vectorIndexFrozenPrefixDiversityScratch) bool {
+	return idx.linkFrozenPrefixReciprocalGroupObservedLocked(links, dotScratch, idx.decisionObserver)
+}
+
+func (idx *VectorIndex) linkFrozenPrefixReciprocalGroupObservedLocked(links []vectorIndexFrozenPrefixReciprocalLink, dotScratch *vectorIndexFrozenPrefixDiversityScratch, observer *vectorIndexConstructionDecisionObserverV1) bool {
 	if len(links) == 0 {
 		return false
 	}
 	fromNodeID, layer := links[0].fromNodeID, links[0].layer
-	observer := idx.decisionObserver
 	var context *vectorIndexConstructionDecisionContextV1
 	if observer != nil {
 		context = &vectorIndexConstructionDecisionContextV1{observer: observer, phase: vectorIndexConstructionDecisionReciprocal, source: fromNodeID, layer: layer, dimensions: idx.dimensions}
@@ -2866,6 +2944,17 @@ func (idx *VectorIndex) linkFrozenPrefixReciprocalGroupLocked(links []vectorInde
 	}
 	idx.nodes[fromNodeID].neighbors[layer] = neighbors
 	return pruned
+}
+
+func (scratch *vectorIndexFrozenPrefixCommitScratch) decisionObserverWorkers(workers int) []vectorIndexConstructionDecisionObserverV1 {
+	if cap(scratch.decisionObservers) < workers {
+		observers := make([]vectorIndexConstructionDecisionObserverV1, workers)
+		copy(observers, scratch.decisionObservers)
+		scratch.decisionObservers = observers
+	} else if len(scratch.decisionObservers) < workers {
+		scratch.decisionObservers = scratch.decisionObservers[:workers]
+	}
+	return scratch.decisionObservers[:workers]
 }
 
 func (idx *VectorIndex) linkSelectedNeighborsLocked(nodeID int, neighbors []int, layer int) {

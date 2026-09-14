@@ -118,24 +118,27 @@ def calibrate_ann_control(search, truth, controls, calibration_queries, revalida
             or set(calibration_queries) & set(revalidation_queries) or not 0 < target <= 1):
         raise ValueError("invalid ANN quality calibration contract")
 
-    def recalls(control, queries):
-        result = []
+    def metrics(control, queries):
+        recalls, ndcgs = [], []
         for query in queries:
             expected = truth[query]
             actual = search(control, query)
             if len(actual) != len(expected) or len(set(actual)) != len(actual):
                 raise RuntimeError("ANN result cardinality differs from exact truth")
-            result.append(len(set(actual) & set(expected)) / len(expected))
-        return result
+            recalls.append(len(set(actual) & set(expected)) / len(expected))
+            ndcgs.append(binary_ndcg(actual, expected))
+        return recalls, ndcgs
 
     calibration, revalidation, selected = [], [], None
     for control in controls:
-        first = recalls(control, calibration_queries)
-        second = recalls(control, revalidation_queries)
+        first, first_ndcg = metrics(control, calibration_queries)
+        second, second_ndcg = metrics(control, revalidation_queries)
         calibration.append({"control": control, "mean_recall_at_10": sum(first) / len(first),
-                            "per_query": first})
+                            "mean_ndcg_at_10": sum(first_ndcg) / len(first_ndcg),
+                            "per_query": first, "per_query_ndcg_at_10": first_ndcg})
         revalidation.append({"control": control, "mean_recall_at_10": sum(second) / len(second),
-                             "per_query": second})
+                             "mean_ndcg_at_10": sum(second_ndcg) / len(second_ndcg),
+                             "per_query": second, "per_query_ndcg_at_10": second_ndcg})
         if calibration[-1]["mean_recall_at_10"] >= target and revalidation[-1]["mean_recall_at_10"] >= target:
             selected = control
             break
@@ -145,6 +148,21 @@ def calibrate_ann_control(search, truth, controls, calibration_queries, revalida
         "calibration": {"queries": list(calibration_queries), "curve": calibration},
         "revalidation": {"queries": list(revalidation_queries), "curve": revalidation,
                          "passed": selected is not None},
+    }
+
+
+def binary_ndcg(actual, expected):
+    relevant = set(expected)
+    ideal = sum(1 / math.log2(rank + 2) for rank in range(len(expected)))
+    return sum(1 / math.log2(rank + 2) for rank, item in enumerate(actual) if item in relevant) / ideal
+
+
+def construction_calibration_contract(ef_construction):
+    return {
+        "schema": "treedb_column_graph_construction_calibration/v1",
+        "ef_construction": ef_construction, "control_ef_construction": 128,
+        "max_absolute_recall_loss": .002, "max_absolute_binary_ndcg_loss": .002,
+        "max_selected_route_regression": {"qps": .05, "p95": .05, "p99": .05},
     }
 
 
@@ -258,6 +276,9 @@ def prepare(args):
             "run_dir": str(args.run_dir.resolve()), "rows": args.rows, "dimensions": 768, "queries": query_count,
             "top_k": 10, "batch_size": 256, "efs": [128, 256, 512, 1024, 2048], "overlap_ef": 512,
             "rss_only": rss_only, "rss_recall_target": RSS_RECALL_TARGET,
+            "ef_construction": args.ef_construction,
+            "construction_decisions": args.construction_decisions,
+            "construction_calibration_contract": construction_calibration_contract(args.ef_construction),
             "rss_controls": RSS_CONTROLS,
             "rss_calibration_queries": RSS_CALIBRATION_QUERIES,
             "rss_revalidation_queries": RSS_REVALIDATION_QUERIES,
@@ -319,7 +340,8 @@ class Run:
         self.controller = existing.ServiceController(Path(plan["service_bin"]), plan["url"], self.output / "db",
             "command_wal_durable", 600, 120, diagnostics_url=plan["diagnostics_url"],
             block_profile_rate=0, mutex_profile_fraction=0, native_address=plan["native_address"], measured=True,
-            environment=treedb_service_environment(plan))
+            environment=treedb_service_environment(plan),
+            construction_decisions=plan["construction_decisions"])
         self.clients = existing.ThreadLocalClients(plan["url"], plan["operation_timeout_s"], self.controller)
         data = Path(plan["dataset"])
         self.vectors = np.memmap(data / "documents.f32", mode="r", dtype="<f4", shape=(plan["rows"], 768))
@@ -331,6 +353,7 @@ class Run:
                 raise ValueError("oracle query cardinality mismatch")
         self.updated = set()
         self.info = None
+        self.initial_graph_build = None
 
     def emit(self, event, **fields):
         with self.lock:
@@ -385,8 +408,9 @@ class Run:
     def ensure(self):
         info = self.clients.ensure_index("minima_cohere", 768, "cosine", typed_input=True,
             scalar_fields=[{"field": "meta.user_id", "value_type": "string"}, {"field": "meta.fpath", "value_type": "string"}],
-            vector_index_options={"strategy": "column_graph"})
+            vector_index_options={"strategy": "column_graph", "ef_construction": self.plan["ef_construction"]})
         if (info.dimension != 768 or info.metric != "cosine" or info.vector_strategy != "column_graph"
+                or info.vector_m != 16 or info.vector_ef_construction != self.plan["ef_construction"]
                 or info.extra.get("typed_input") is not True
                 or {(f.field, f.value_type) for f in info.scalar_fields} != {("meta.user_id", "string"), ("meta.fpath", "string")}):
             raise RuntimeError("public collection schema differs from frozen typed schema")
@@ -545,11 +569,15 @@ class Run:
         artifact = {
             "schema": RSS_ARTIFACT_SCHEMA, "state": "calibrated" if not reasons else "uncalibrated",
             "backend": "treedb", "comparison_contract": rss_comparison_contract(self.plan),
+            "construction_calibration_contract": self.plan["construction_calibration_contract"],
             "quality": {**quality, "control_name": "ef_search", "exact_mode": False},
             "rss": rss, "reasons": reasons,
             "readiness": {"graph_action": "build", "successful_ann_queries": sum(
                 len(row["per_query"]) for row in quality["calibration"]["curve"]
-            ) + sum(len(row["per_query"]) for row in quality["revalidation"]["curve"])},
+            ) + sum(len(row["per_query"]) for row in quality["revalidation"]["curve"]),
+                "effective_index": {"m": self.info.vector_m, "ef_construction": self.info.vector_ef_construction},
+                "column_graph_build": asdict(self.initial_graph_build.status.column_graph_build),
+            },
             "provenance": {key: self.plan[key] for key in (
                 "harness_commit", "harness_source_sha256", "harness_trees", "product_commit",
                 "product_trees", "service_sha256", "dataset_manifest_sha256", "dataset_files_sha256",
@@ -569,7 +597,10 @@ class Run:
             self.timed("schema_ensure", self.ensure)
             for start in range(0, self.plan["rows"], 256):
                 self.upsert(list(range(start, min(start + 256, self.plan["rows"]))), "initial_durable_ingest")
-            self.timed("initial_graph_build", lambda: self.optimize("build"))
+            self.initial_graph_build = self.timed("initial_graph_build", lambda: self.optimize("build"))
+            decisions = self.initial_graph_build.status.column_graph_build.construction_decisions
+            if (decisions is not None) != self.plan["construction_decisions"]:
+                raise RuntimeError("construction decision observer response differs from frozen mode")
             if self.plan["rss_only"]:
                 rss_artifact = self.rss_boundary()
                 if rss_artifact["reasons"]:
@@ -637,6 +668,8 @@ def main():
     parser.add_argument("--run-dir", required=True, type=Path)
     parser.add_argument("--rows", type=int, choices=[512, 500000], default=500000)
     parser.add_argument("--rss-only", action="store_true")
+    parser.add_argument("--ef-construction", type=int, choices=(32, 64, 96, 128), default=128)
+    parser.add_argument("--construction-decisions", action="store_true")
     parser.add_argument("--url", default="http://127.0.0.1:17420")
     parser.add_argument("--native-address", default="127.0.0.1:17422")
     parser.add_argument("--diagnostics-url", default="http://127.0.0.1:17421")

@@ -66,6 +66,13 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         self.assertNotEqual(diagnostic.SCHEMA, frozen.MEASURED_SCHEMA)
         self.assertEqual(diagnostic.RSS_CALIBRATION_QUERIES, list(range(100)))
         self.assertEqual(diagnostic.RSS_REVALIDATION_QUERIES, list(range(100, 200)))
+        self.assertEqual(diagnostic.binary_ndcg(["a", "x"], ["a", "b"]), 1 / (1 + 1 / np.log2(3)))
+        self.assertEqual(diagnostic.construction_calibration_contract(64), {
+            "schema": "treedb_column_graph_construction_calibration/v1",
+            "ef_construction": 64, "control_ef_construction": 128,
+            "max_absolute_recall_loss": .002, "max_absolute_binary_ndcg_loss": .002,
+            "max_selected_route_regression": {"qps": .05, "p95": .05, "p99": .05},
+        })
 
     def test_shutdown_history_import_origin_and_zero_vectors_fail_closed(self):
         lifetime = {"pid": 123, "linux_process_identity": "123:456",
@@ -93,6 +100,20 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         self.assertEqual(run.clients.optimize_index.call_args.kwargs["column_graph_serving"], {"limit": 1})
         run.optimize("fold")
         self.assertIsNone(run.clients.optimize_index.call_args.kwargs["column_graph_serving"])
+
+    def test_ensure_binds_effective_construction_width(self):
+        run = object.__new__(diagnostic.Run)
+        run.plan = {"ef_construction": 64}
+        run.clients = Mock()
+        run.clients.ensure_index.return_value = SimpleNamespace(
+            dimension=768, metric="cosine", vector_strategy="column_graph", vector_m=16,
+            vector_ef_construction=64, extra={"typed_input": True},
+            scalar_fields=[SimpleNamespace(field="meta.user_id", value_type="string"),
+                           SimpleNamespace(field="meta.fpath", value_type="string")],
+        )
+        run.ensure()
+        self.assertEqual(run.clients.ensure_index.call_args.kwargs["vector_index_options"],
+                         {"strategy": "column_graph", "ef_construction": 64})
 
 
 if __name__ == "__main__":
