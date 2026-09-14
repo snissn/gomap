@@ -733,6 +733,17 @@ class TreeDBClientTests(unittest.TestCase):
                 lambda item: item.update(candidates=2),
                 lambda item: item.update(score_plane={**score_plane, "raw_retained_candidates": 2, "quantized_score_calls": 1}),
                 lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "base_result_ids": 0}}),
+                lambda item: item.update(
+                    dense_work={**dense_work, "graph": {**dense_work["graph"], "route": "typed_exact"}},
+                    score_plane={**score_plane, "route": "typed_exact", "quantized_score_calls": 0, "raw_retained_candidates": 1,
+                                 "live_shortlist_candidates": 0, "actual_rerank_candidates": 0, "exact_base_rerank_score_calls": 0},
+                ),
+                lambda item: item.update(
+                    dense_work={**dense_work, "graph": {**dense_work["graph"], "route": "typed_empty"}},
+                    score_plane={**score_plane, "route": "typed_empty", "quantized_score_calls": 0, "raw_retained_candidates": 0,
+                                 "live_shortlist_candidates": 1, "actual_rerank_candidates": 0, "exact_base_rerank_score_calls": 0,
+                                 "exact_suffix_score_calls": 0, "exact_small_filter_score_calls": 0},
+                ),
             ):
                 invalid = copy.deepcopy(payload)
                 mutation(invalid)

@@ -217,12 +217,16 @@ class DenseScorePlaneProof:
                 values["quantized_score_calls"] != 0
                 or values["exact_suffix_score_calls"] != 0
                 or values["exact_small_filter_score_calls"] != 0
+                or values["raw_retained_candidates"] != 0
+                or values["live_shortlist_candidates"] != 0
                 or values["actual_rerank_candidates"] != 0
                 or values["exact_base_rerank_score_calls"] != 0
             ):
                 raise ValueError("completed dense score-plane proof typed-empty counters are inconsistent")
             elif values["route"] == "typed_exact" and (
                 values["quantized_score_calls"] != 0
+                or values["raw_retained_candidates"] != 0
+                or values["live_shortlist_candidates"] != 0
                 or values["actual_rerank_candidates"] != 0
                 or values["exact_base_rerank_score_calls"] != 0
             ):

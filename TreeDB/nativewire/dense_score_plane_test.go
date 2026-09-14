@@ -244,15 +244,39 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	strictEmptyWork := work
 	strictEmptyWork.Graph.Route = "typed_empty"
 	for name, mutate := range map[string]func(*collections.ColumnGraphScorePlaneWork){
-		"quantized work":    func(p *collections.ColumnGraphScorePlaneWork) { p.QuantizedScoreCalls = 1 },
-		"exact suffix work": func(p *collections.ColumnGraphScorePlaneWork) { p.ExactSuffixScoreCalls = 1 },
-		"small-filter work": func(p *collections.ColumnGraphScorePlaneWork) { p.ExactSmallFilterScoreCalls = 1 },
+		"quantized work":      func(p *collections.ColumnGraphScorePlaneWork) { p.QuantizedScoreCalls = 1 },
+		"exact suffix work":   func(p *collections.ColumnGraphScorePlaneWork) { p.ExactSuffixScoreCalls = 1 },
+		"small-filter work":   func(p *collections.ColumnGraphScorePlaneWork) { p.ExactSmallFilterScoreCalls = 1 },
+		"retained candidates": func(p *collections.ColumnGraphScorePlaneWork) { p.RawRetainedCandidates = 1 },
+		"live shortlist":      func(p *collections.ColumnGraphScorePlaneWork) { p.LiveShortlistCandidates = 1 },
 	} {
 		candidate := strictEmptyProof
 		candidate.QuantizedScoreCalls, candidate.ExactSuffixScoreCalls, candidate.ExactSmallFilterScoreCalls = 0, 0, 0
 		mutate(&candidate)
 		if err := validateDenseQuantizedScorePlaneResponse(strictEmptyWork, &candidate, request, 0); err == nil {
 			t.Fatalf("typed-empty proof accepted %s: %+v", name, candidate)
+		}
+	}
+	strictExactProof := *proof
+	strictExactProof.Route = "typed_exact"
+	strictExactProof.QuantizedScoreCalls = 0
+	strictExactProof.QuantizedCodeBytesRead = 0
+	strictExactProof.ActualRerankCandidates = 0
+	strictExactProof.ExactBaseRerankScoreCalls = 0
+	strictExactProof.ExactSuffixScoreCalls = 1
+	strictExactProof.ExactSuffixVectorBytesRead = 8
+	strictExactWork := work
+	strictExactWork.Graph.Route = "typed_exact"
+	strictExactWork.Graph.BaseANNScored = 0
+	strictExactWork.Graph.DeltaScored = 1
+	for name, mutate := range map[string]func(*collections.ColumnGraphScorePlaneWork){
+		"retained candidates": func(p *collections.ColumnGraphScorePlaneWork) { p.RawRetainedCandidates = 1 },
+		"live shortlist":      func(p *collections.ColumnGraphScorePlaneWork) { p.LiveShortlistCandidates = 1 },
+	} {
+		candidate := strictExactProof
+		mutate(&candidate)
+		if err := validateDenseQuantizedScorePlaneResponse(strictExactWork, &candidate, request, 1); err == nil {
+			t.Fatalf("typed-exact proof accepted %s: %+v", name, candidate)
 		}
 	}
 }
