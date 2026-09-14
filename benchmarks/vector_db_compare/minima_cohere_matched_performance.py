@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+import fcntl
 import hashlib
 import importlib.metadata
 import json
@@ -34,6 +35,8 @@ CONTROLS = {"treedb": 32, "qdrant": 64}
 CONTROL_NAMES = {"treedb": "ef_search", "qdrant": "hnsw_ef"}
 EVALUATION_QUERIES = list(range(100, 200))
 PAIR_ORDER = [["treedb", "qdrant"], ["qdrant", "treedb"], ["treedb", "qdrant"]]
+SOURCE_PATHS = ("benchmarks/vector_db_compare", "clients/python/treedb_client", "TreeDB",
+                "cmd/treedb-document-service")
 
 
 def canonical(value):
@@ -69,6 +72,11 @@ def repository_commit(source):
     if status:
         raise RuntimeError("campaign source tree must be clean")
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+
+
+def repository_trees(source):
+    return {path: subprocess.check_output(
+        ["git", "rev-parse", "HEAD:" + path], cwd=source, text=True).strip() for path in SOURCE_PATHS}
 
 
 def go_binary_commit(binary):
@@ -119,12 +127,10 @@ def frozen_plan(args):
     return {
         "schema": PLAN_SCHEMA, "campaign_commit": commit,
         "harness_sha256": digest(__file__),
-        "source_trees": {path: subprocess.check_output(
-            ["git", "rev-parse", "HEAD:" + path], cwd=source, text=True).strip()
-            for path in ("benchmarks/vector_db_compare", "clients/python/treedb_client", "TreeDB",
-                         "cmd/treedb-document-service")},
+        "source_trees": repository_trees(source),
         "dataset": str(dataset), "dataset_manifest_sha256": digest(dataset / "manifest.json"),
-        "dataset_files_sha256": files, "rows": ROWS, "dimensions": DIMENSIONS, "top_k": TOP_K,
+        "dataset_files_sha256": files, "rows": ROWS, "dimensions": DIMENSIONS, "queries": query_count,
+        "top_k": TOP_K,
         "service_bin": str(service), "service_sha256": digest(service),
         "qdrant_bin": str(qdrant), "qdrant_sha256": digest(qdrant),
         "qdrant_server_version": "1.19.0", "qdrant_client_version": "1.19.0",
@@ -169,6 +175,14 @@ def validate_runtime(plan, expected_sha256, plan_path):
         raise RuntimeError("unsupported campaign plan")
     if digest(__file__) != plan["harness_sha256"]:
         raise RuntimeError("campaign harness drifted")
+    source = Path(__file__).resolve().parents[2]
+    native.validate_imports(source)
+    qdrant_rss.validate_imports(source)
+    if (repository_commit(source) != plan["campaign_commit"]
+            or repository_trees(source) != plan["source_trees"]):
+        raise RuntimeError("campaign source provenance drifted")
+    if importlib.metadata.version("qdrant-client") != plan["qdrant_client_version"]:
+        raise RuntimeError("Qdrant client version drifted")
     if sorted(os.sched_getaffinity(0)) != plan["cpu_affinity"]:
         raise RuntimeError("campaign CPU affinity drifted")
     if os.environ.get("GOMAXPROCS") != "6" or any(
@@ -189,6 +203,47 @@ def validate_runtime(plan, expected_sha256, plan_path):
             raise RuntimeError(f"dataset input drifted: {name}")
 
 
+def campaign_sequence(plan):
+    return [(repeat, backend, order) for repeat, pair in enumerate(plan["pair_order"], 1)
+            for order, backend in enumerate(pair, 1)]
+
+
+def validate_result_identity(result, plan, plan_sha256, repeat, backend, order):
+    expected = {
+        "state": "complete", "backend": backend, "repetition": repeat, "order": order,
+        "plan_sha256": plan_sha256, "campaign_commit": plan["campaign_commit"],
+        "harness_sha256": plan["harness_sha256"],
+        "dataset_manifest_sha256": plan["dataset_manifest_sha256"],
+        "dataset_files_sha256": plan["dataset_files_sha256"],
+    }
+    if any(result.get(key) != value for key, value in expected.items()):
+        raise RuntimeError(f"campaign result identity mismatch for repetition {repeat} {backend}")
+
+
+def require_predecessors(plan, root, plan_sha256, repeat, backend):
+    sequence = campaign_sequence(plan)
+    position = next(index for index, item in enumerate(sequence)
+                    if item[:2] == (repeat, backend))
+    for prior_repeat, prior_backend, prior_order in sequence[:position]:
+        path = root / f"repeat-{prior_repeat}-{prior_backend}" / "result.json"
+        if not path.is_file():
+            raise RuntimeError(f"campaign predecessor is incomplete: {prior_repeat} {prior_backend}")
+        validate_result_identity(json.loads(path.read_text()), plan, plan_sha256,
+                                 prior_repeat, prior_backend, prior_order)
+    return sequence[position][2]
+
+
+def acquire_campaign_lock(root):
+    root.mkdir(parents=True, exist_ok=True)
+    handle = (root / "campaign.lock").open("a+")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        raise RuntimeError("another campaign backend is running") from None
+    return handle
+
+
 def timed_window(call, query_ordinals, concurrency, seconds):
     gate = threading.Barrier(concurrency + 1)
     stop_ns = [0]
@@ -206,7 +261,7 @@ def timed_window(call, query_ordinals, concurrency, seconds):
         return samples
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        futures = [pool.submit(worker, worker) for worker in range(concurrency)]
+        futures = [pool.submit(worker, worker_id) for worker_id in range(concurrency)]
         started = time.monotonic_ns()
         stop_ns[0] = started + int(seconds * 1e9)
         gate.wait(timeout=30)
@@ -225,9 +280,9 @@ def mixed_window(read, write_batches, query_ordinals, readers):
         gate.wait(timeout=30)
         for index in range(64):
             started = time.monotonic_ns()
-            read(query_ordinals[(index * readers + worker_id) % len(query_ordinals)])
+            value = read(query_ordinals[(index * readers + worker_id) % len(query_ordinals)])
             ended = time.monotonic_ns()
-            result.append((started, ended))
+            result.append((started, ended, value))
         return result
 
     def writer():
@@ -235,9 +290,9 @@ def mixed_window(read, write_batches, query_ordinals, readers):
         gate.wait(timeout=30)
         for write in write_batches:
             started = time.monotonic_ns()
-            write()
+            value = write()
             ended = time.monotonic_ns()
-            result.append((started, ended))
+            result.append((started, ended, value))
         return result
 
     with ThreadPoolExecutor(max_workers=readers + 1) as pool:
@@ -247,21 +302,22 @@ def mixed_window(read, write_batches, query_ordinals, readers):
         gate.wait(timeout=30)
         read_samples = [sample for future in reads for sample in future.result()]
         write_samples = writes.result()
-    ended = max(max(end for _, end in read_samples), max(end for _, end in write_samples))
-    write_start, write_end = min(start for start, _ in write_samples), max(end for _, end in write_samples)
-    overlap = [(start, end) for start, end in read_samples if start < write_end and end > write_start]
+    ended = max(max(end for _, end, _ in read_samples), max(end for _, end, _ in write_samples))
+    write_start = min(start for start, _, _ in write_samples)
+    write_end = max(end for _, end, _ in write_samples)
+    overlap = [(start, end) for start, end, _ in read_samples if start < write_end and end > write_start]
     if not overlap:
         raise RuntimeError("mixed phase produced no observed read/write overlap")
     return {
         "wall_ns": ended - started,
         "reads": {"qps": len(read_samples) * 1e9 / (ended - started),
-                  "latency": distribution([end - start for start, end in read_samples])},
+                  "latency": distribution([end - start for start, end, _ in read_samples])},
         "overlapping_reads": {"interval_ns": write_end - write_start,
                               "latency": distribution([end - start for start, end in overlap])},
         "writes": {"batches": len(write_samples), "rows": len(write_samples) * 256,
                    "rows_per_second": len(write_samples) * 256 * 1e9 / (write_end - write_start),
-                   "latency": distribution([end - start for start, end in write_samples])},
-    }
+                   "latency": distribution([end - start for start, end, _ in write_samples])},
+    }, [value for _, _, value in read_samples], [value for _, _, value in write_samples]
 
 
 def tree_plan(plan, run_dir):
@@ -282,6 +338,28 @@ def tree_query(run, query, control):
     )
 
 
+def validate_tree_upsert(response, documents):
+    if response.upserted != len(documents) or response.ids != [doc["id"] for doc in documents]:
+        raise RuntimeError("TreeDB public upsert completion mismatch")
+
+
+def validate_tree_queries(responses, generation):
+    for response in responses:
+        if (len(response.documents) != TOP_K or response.route != "ann"
+                or response.index.generation != generation or response.exact_fallbacks
+                or response.full_document_scan_fallbacks):
+            raise RuntimeError("TreeDB mixed read left the required ANN route")
+
+
+def validate_tree_updates(run, rows):
+    for first in range(0, len(rows), 256):
+        ids = [f"row-{row:06d}" for row in rows[first:first + 256]]
+        documents = run.clients.native.get_many("minima_cohere", ids, index_info=run.info)
+        found = {doc.id: doc for doc in documents if doc is not None}
+        if set(found) != set(ids) or any(not found[doc_id].content.endswith(":updated") for doc_id in ids):
+            raise RuntimeError("TreeDB replacement verification failed")
+
+
 def run_treedb(plan, run_dir):
     run = native.Run(tree_plan(plan, run_dir))
     monitor, failure = None, None
@@ -300,8 +378,7 @@ def run_treedb(plan, run_dir):
             before = time.monotonic_ns()
             response = run.clients.native.upsert_documents("minima_cohere", docs, index_info=run.info)
             ingest_calls.append(time.monotonic_ns() - before)
-            if response.upserted != len(rows) or response.ids != [doc["id"] for doc in docs]:
-                raise RuntimeError("TreeDB public upsert completion mismatch")
+            validate_tree_upsert(response, docs)
         phase["ingest_wall_ns"] = time.monotonic_ns() - ingest_start
         build_start = time.monotonic_ns(); run.optimize("build"); phase["ann_ready_transition_ns"] = time.monotonic_ns() - build_start
         phase["fresh_process_to_ann_ready_ns"] = time.monotonic_ns() - started
@@ -330,11 +407,20 @@ def run_treedb(plan, run_dir):
             rows = list(range(first, first + plan["mixed_write_batch_rows"]))
             docs = [native.make_document(run.vectors, row, ROWS, updated=True) for row in rows]
             prepared.append((rows, docs))
-        writes = [lambda rows=rows, docs=docs: run.clients.native.upsert_documents(
-            "minima_cohere", docs, index_info=run.info) for rows, docs in prepared]
-        mixed = mixed_window(lambda query: tree_query(run, query, control), writes,
-                             EVALUATION_QUERIES, plan["mixed_reader_concurrency"])
-        run.updated.update(row for rows, _ in prepared for row in rows)
+        writes = [lambda docs=docs: run.clients.native.upsert_documents(
+            "minima_cohere", docs, index_info=run.info) for _, docs in prepared]
+        mixed, mixed_reads, mixed_writes = mixed_window(
+            lambda query: tree_query(run, query, control), writes,
+            EVALUATION_QUERIES, plan["mixed_reader_concurrency"])
+        validate_tree_queries(mixed_reads, run.info.generation)
+        for (_, docs), response in zip(prepared, mixed_writes, strict=True):
+            validate_tree_upsert(response, docs)
+        updated_rows = [row for rows, _ in prepared for row in rows]
+        validate_tree_updates(run, updated_rows)
+        run.updated.update(updated_rows)
+        post_mixed_ready = time.monotonic_ns()
+        run.optimize("ensure")
+        phase["post_mixed_ann_ready_ns"] = time.monotonic_ns() - post_mixed_ready
         extended_rss = measured_rss(native.process_peak_at_boundary(
             run.controller.process.pid, run.controller._owned_identity, plan["cpu_affinity"]),
             "TreeDB", "extended-live")
@@ -348,9 +434,7 @@ def run_treedb(plan, run_dir):
         restart_ns = time.monotonic_ns() - restart_start
         if not response.documents:
             raise RuntimeError("TreeDB restart query returned no results")
-        docs = run.clients.native.get_many("minima_cohere", [f"row-{ROWS - 1:06d}"], index_info=run.info)
-        if not docs or not docs[0] or not docs[0].content.endswith(":updated"):
-            raise RuntimeError("TreeDB acknowledged replacement did not survive clean restart")
+        validate_tree_updates(run, updated_rows)
         restart_rss = measured_rss(native.process_peak_at_boundary(
             run.controller.process.pid, run.controller._owned_identity, plan["cpu_affinity"]),
             "TreeDB", "restart")
@@ -406,6 +490,31 @@ def qdrant_ids(response):
     return [(getattr(point, "payload", None) or {}).get("id") for point in getattr(response, "points", response)]
 
 
+def validate_qdrant_upserts(responses):
+    for response in responses:
+        status = getattr(response, "status", None)
+        if getattr(status, "value", status) != "completed":
+            raise RuntimeError("Qdrant wait=true upsert did not complete")
+
+
+def validate_qdrant_queries(responses):
+    for response in responses:
+        ids = qdrant_ids(response)
+        if len(ids) != TOP_K or None in ids or len(set(ids)) != TOP_K:
+            raise RuntimeError("Qdrant mixed read returned invalid logical IDs")
+
+
+def validate_qdrant_updates(run, rows):
+    for first in range(0, len(rows), 256):
+        logical_ids = [f"row-{row:06d}" for row in rows[first:first + 256]]
+        points = run.client.retrieve(collection_name=run.collection,
+            ids=[qdrant_rss.existing.point_id(value) for value in logical_ids], with_payload=True)
+        found = {(point.payload or {}).get("id"): point.payload or {} for point in points}
+        if set(found) != set(logical_ids) or any(
+                not found[doc_id].get("content", "").endswith(":updated") for doc_id in logical_ids):
+            raise RuntimeError("Qdrant replacement verification failed")
+
+
 def restart_qdrant(run):
     run.client.close(); run.stop_server()
     shutdown_disk = qdrant_rss.existing.disk_bytes(run.storage_path)
@@ -459,8 +568,10 @@ def run_qdrant(plan, run_dir):
                 points.append(models.PointStruct(id=qdrant_rss.existing.point_id(value["logical_id"]),
                     vector=value["vector"], payload=value["payload"]))
             before = time.monotonic_ns()
-            run.client.upsert(collection_name=run.collection, points=points, wait=True, timeout=run.operation_timeout)
+            response = run.client.upsert(
+                collection_name=run.collection, points=points, wait=True, timeout=run.operation_timeout)
             ingest_calls.append(time.monotonic_ns() - before)
+            validate_qdrant_upserts([response])
         phase["ingest_wall_ns"] = time.monotonic_ns() - ingest_start
         build_start = time.monotonic_ns()
         run.client.update_collection(collection_name=run.collection,
@@ -510,8 +621,17 @@ def run_qdrant(plan, run_dir):
             prepared.append(points)
         writes = [lambda points=points: run.client.upsert(collection_name=run.collection, points=points,
             wait=True, timeout=run.operation_timeout) for points in prepared]
-        mixed = mixed_window(concurrent_query, writes, EVALUATION_QUERIES, plan["mixed_reader_concurrency"])
+        mixed, mixed_reads, mixed_writes = mixed_window(
+            concurrent_query, writes, EVALUATION_QUERIES, plan["mixed_reader_concurrency"])
+        validate_qdrant_queries(mixed_reads)
+        validate_qdrant_upserts(mixed_writes)
+        updated_rows = [row for index in range(plan["mixed_write_batches"])
+                        for row in range(ROWS - (index + 1) * plan["mixed_write_batch_rows"],
+                                         ROWS - index * plan["mixed_write_batch_rows"])]
+        validate_qdrant_updates(run, updated_rows)
+        post_mixed_ready = time.monotonic_ns()
         run.wait_ready(ROWS, "profile_post_mixed_ready")
+        phase["post_mixed_ann_ready_ns"] = time.monotonic_ns() - post_mixed_ready
         for client in clients:
             try:
                 client.close()
@@ -526,10 +646,7 @@ def run_qdrant(plan, run_dir):
         restart_ns = time.monotonic_ns() - restart_start
         if not qdrant_ids(response):
             raise RuntimeError("Qdrant restart query returned no results")
-        point_id = qdrant_rss.existing.point_id(f"row-{ROWS - 1:06d}")
-        points = run.client.retrieve(collection_name=run.collection, ids=[point_id], with_payload=True)
-        if not points or not (points[0].payload or {}).get("content", "").endswith(":updated"):
-            raise RuntimeError("Qdrant acknowledged replacement did not survive clean restart")
+        validate_qdrant_updates(run, updated_rows)
         restart_rss = measured_rss(native.process_peak_at_boundary(
             run.server_pid, run.process_identity, plan["cpu_affinity"]), "Qdrant", "restart")
         result = {"schema": SCHEMA, "state": "complete", "backend": "qdrant", "phases": phase,
@@ -566,14 +683,15 @@ def add_provenance(result, plan, plan_path, plan_sha256, repeat, order):
     return result
 
 
-def summarize(plan, root):
+def summarize(plan, root, plan_sha256):
     results = []
     for repeat, order in enumerate(plan["pair_order"], 1):
-        for backend in order:
+        for position, backend in enumerate(order, 1):
             path = root / f"repeat-{repeat}-{backend}" / "result.json"
             result = json.loads(path.read_text())
-            if result.get("schema") != SCHEMA or result.get("state") != "complete":
+            if result.get("schema") != SCHEMA:
                 raise RuntimeError(f"incomplete campaign result: {path}")
+            validate_result_identity(result, plan, plan_sha256, repeat, backend, position)
             results.append(result)
 
     def value(result, path):
@@ -655,7 +773,7 @@ def main():
     validate_runtime(plan, args.expected_plan_sha256, args.plan)
     root = Path(plan["run_root"])
     if args.command == "summarize":
-        result = summarize(plan, root)
+        result = summarize(plan, root, args.expected_plan_sha256)
         path = root / "summary.json"
         path.write_bytes(canonical(result))
         print(json.dumps(result, indent=2, sort_keys=True))
@@ -663,14 +781,19 @@ def main():
     if plan["pair_order"][args.repetition - 1].count(args.backend) != 1:
         raise SystemExit("backend is not in the frozen repetition")
     run_dir = root / f"repeat-{args.repetition}-{args.backend}"
-    if run_dir.exists():
-        raise SystemExit(f"run directory already exists: {run_dir}")
-    if shutil.disk_usage(root.parent).free < 20 << 30:
-        raise SystemExit("less than 20 GiB free before campaign run")
-    order = plan["pair_order"][args.repetition - 1].index(args.backend) + 1
-    result = run_treedb(plan, run_dir) if args.backend == "treedb" else run_qdrant(plan, run_dir)
-    result = add_provenance(result, plan, args.plan, args.expected_plan_sha256, args.repetition, order)
-    (run_dir / "result.json").write_bytes(canonical(result))
+    lock = acquire_campaign_lock(root)
+    try:
+        order = require_predecessors(plan, root, args.expected_plan_sha256,
+                                     args.repetition, args.backend)
+        if run_dir.exists():
+            raise SystemExit(f"run directory already exists: {run_dir}")
+        if shutil.disk_usage(root.parent).free < 20 << 30:
+            raise SystemExit("less than 20 GiB free before campaign run")
+        result = run_treedb(plan, run_dir) if args.backend == "treedb" else run_qdrant(plan, run_dir)
+        result = add_provenance(result, plan, args.plan, args.expected_plan_sha256, args.repetition, order)
+        (run_dir / "result.json").write_bytes(canonical(result))
+    finally:
+        lock.close()
     print(json.dumps({"backend": args.backend, "repetition": args.repetition,
                       "state": result["state"], "failure": result.get("failure")}, sort_keys=True))
     return int(result["state"] != "complete")
