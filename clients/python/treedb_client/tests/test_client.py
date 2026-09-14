@@ -698,6 +698,11 @@ class TreeDBClientTests(unittest.TestCase):
                 "docs", [1, 0], 1, query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public"
             )
             self.assertEqual(result.documents[0].id, "a")
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, payload, 0)}) as exact_proof_server:
+                exact_proof_client = TreeDBClient(exact_proof_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    exact_proof_client.query_by_embedding("docs", [1, 0], 1, query_mode="exact")
+                exact_proof_client.close()
             for mutation in (
                 lambda item: item.update(exact=True),
                 lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "route": "typed_exact"}}),
@@ -775,6 +780,28 @@ class TreeDBClientTests(unittest.TestCase):
                         quantized_index_name="embedding.scalar_u8.public",
                     )
                 duplicate_client.close()
+            under_cap = copy.deepcopy(duplicate)
+            under_cap["score_plane"]["rerank_candidate_cap"] = 1
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, under_cap, 0)}) as under_cap_server:
+                under_cap_client = TreeDBClient(under_cap_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    under_cap_client.query_by_embedding(
+                        "docs", [1, 0], 2, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                under_cap_client.close()
+            underfill = copy.deepcopy(duplicate)
+            underfill["documents"] = [copy.deepcopy(duplicate["documents"][0])]
+            underfill["candidates"] = 1
+            underfill["dense_work"]["output"].update(requested=1, fetched=1, output_bytes=1, json_reconstruction_rows=1, typed_column_rows=1)
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, underfill, 0)}) as underfill_server:
+                underfill_client = TreeDBClient(underfill_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    underfill_client.query_by_embedding(
+                        "docs", [1, 0], 2, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                underfill_client.close()
             exact_route = copy.deepcopy(payload)
             exact_route["documents"] = []
             exact_route["candidates"] = 0

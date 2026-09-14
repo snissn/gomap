@@ -204,6 +204,7 @@ class DenseScorePlaneProof:
                     (values["requested_ef_search"] != 0 and values["normalized_candidate_width"] > max(values["requested_top_k"], values["requested_ef_search"]))
                     or
                     values["rerank_candidate_cap"] > values["normalized_candidate_width"]
+                    or values["rerank_candidate_cap"] != min(values["normalized_candidate_width"], values["requested_rerank_candidates"] or values["normalized_candidate_width"])
                     or values["raw_retained_candidates"] > values["quantized_score_calls"]
                     or values["live_shortlist_candidates"] > values["normalized_candidate_width"]
                     or values["normalized_candidate_width"] > values["raw_candidate_width"]

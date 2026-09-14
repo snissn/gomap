@@ -515,6 +515,12 @@ class TreeDBClient:
                 quantized_index_name=quantized_index_name,
                 quantized_rerank_candidates=rerank_value,
             )
+        elif response.score_plane is not None:
+            raise TreeDBProtocolError(
+                "dense HTTP exact response unexpectedly includes a score-plane proof",
+                dense_work=response.dense_work,
+                score_plane=response.score_plane,
+            )
         return response
 
     def search_vector_index(
@@ -1057,7 +1063,7 @@ def _validate_http_dense_quantized_response(
         or response.route != "ann"
         or response.exact
         or (proof.route == "typed_empty" and len(response.documents) != 0)
-        or (proof.route == "typed_exact" and len(response.documents) != min(top_k, proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls + proof.exact_suffix_score_calls))
+        or (proof.route in ("typed_exact", "quantized_rerank") and len(response.documents) != min(top_k, proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls + proof.exact_suffix_score_calls))
         or (proof.route == "quantized_rerank" and (
             proof.actual_rerank_candidates > proof.rerank_candidate_cap
             or proof.live_shortlist_candidates > proof.raw_retained_candidates

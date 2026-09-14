@@ -139,7 +139,12 @@ func denseScorePlaneRerankCountersMatch(proof *collections.ColumnGraphScorePlane
 				return false
 			}
 		}
+		expectedCap := proof.NormalizedCandidateWidth
+		if proof.RequestedRerankCandidates != 0 && proof.RequestedRerankCandidates < expectedCap {
+			expectedCap = proof.RequestedRerankCandidates
+		}
 		return proof.RerankCandidateCap <= proof.NormalizedCandidateWidth &&
+			proof.RerankCandidateCap == expectedCap &&
 			proof.RawRetainedCandidates <= proof.QuantizedScoreCalls &&
 			proof.LiveShortlistCandidates <= proof.NormalizedCandidateWidth &&
 			proof.NormalizedCandidateWidth <= proof.RawCandidateWidth &&

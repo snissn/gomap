@@ -91,6 +91,20 @@ class NativeCodecTests(unittest.TestCase):
                     ef_search=0,
                     query_dimension=2,
                 )
+            underfill_work_values = list(work_values)
+            underfill_work_values[31:38] = [0, 0, 0, 0, 0, 0, 0]
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([])) + _section(103, _vector([])) +
+                    _section(130, bytes([3, 0, 0, 0, 0])) + _section(134, b"".join(_uint(value) for value in underfill_work_values)) + _section(136, score_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=0,
+                    query_dimension=2,
+                )
             base_id_values = list(work_values)
             base_id_values[9] = 0
             with self.assertRaises(TreeDBProtocolError):

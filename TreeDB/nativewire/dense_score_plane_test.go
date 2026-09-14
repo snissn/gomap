@@ -95,6 +95,11 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	if _, err := appendDenseScorePlane(nil, efBounded, iwire.DefaultLimits()); err == nil {
 		t.Fatal("completed quantized rerank proof exceeded the explicit EF width")
 	}
+	underCap := proof
+	underCap.RerankCandidateCap = 1
+	if _, err := appendDenseScorePlane(nil, underCap, iwire.DefaultLimits()); err == nil {
+		t.Fatal("completed quantized rerank proof accepted a producer-inconsistent cap")
+	}
 }
 
 func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
@@ -204,6 +209,16 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	exactWork.Graph.Route, exactWork.Graph.BaseANNScored, exactWork.Graph.DeltaScored = "typed_exact", 0, 1
 	if err := validateDenseQuantizedScorePlaneResponse(exactWork, &exactProof, request, 0); err == nil {
 		t.Fatal("typed-exact proof accepted fewer rows than exact score calls")
+	}
+	quantizedUnderfill := *proof
+	quantizedUnderfill.NormalizedCandidateWidth, quantizedUnderfill.RawCandidateWidth = 1, 1
+	quantizedUnderfill.RerankCandidateCap, quantizedUnderfill.RawRetainedCandidates, quantizedUnderfill.LiveShortlistCandidates = 1, 1, 1
+	quantizedUnderfill.ActualRerankCandidates, quantizedUnderfill.QuantizedScoreCalls = 1, 1
+	quantizedUnderfill.QuantizedCodeBytesRead, quantizedUnderfill.ExactBaseRerankScoreCalls, quantizedUnderfill.ExactBaseVectorBytesRead = 2, 1, 8
+	quantizedWork := work
+	quantizedWork.Graph.ExactBaseScored, quantizedWork.Graph.BaseResultIDs = 1, 1
+	if err := validateDenseQuantizedScorePlaneResponse(quantizedWork, &quantizedUnderfill, request, 0); err == nil {
+		t.Fatal("quantized proof accepted fewer rows than exact score calls")
 	}
 	baseResultMismatch := work
 	baseResultMismatch.Graph.BaseResultIDs = 1
