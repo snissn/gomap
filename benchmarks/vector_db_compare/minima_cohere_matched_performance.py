@@ -614,6 +614,9 @@ def run_treedb(plan, run_dir):
         restart_start = time.monotonic_ns()
         run.clients.close(); native.validate_shutdowns(run.controller.lifetimes, 1)
         shutdown_disk = native.existing.common.disk_bytes(run.output / "db")
+        run.check_resources()
+        if run.failure:
+            raise RuntimeError(run.failure)
         run.controller.start(); run.ensure(); run.optimize("ensure")
         response = tree_query(run, EVALUATION_QUERIES[0], control)
         restart_ns = time.monotonic_ns() - restart_start

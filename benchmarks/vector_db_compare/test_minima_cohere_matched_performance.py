@@ -173,6 +173,20 @@ class MatchedPerformanceTest(unittest.TestCase):
         self.assertEqual((cancel.calls, failures), (3, ["resource guard: over"]))
         process.terminate.assert_called_once()
 
+        tree_process = mock.Mock(pid=18)
+        tree_guarded = SimpleNamespace(
+            cancel=CancelAfterThreeChecks(), failure=None,
+            check_resources=mock.Mock(side_effect=RuntimeError("over")), emit=mock.Mock(),
+            controller=SimpleNamespace(process=tree_process, _owned_identity="owned"),
+        )
+        with mock.patch.object(subject.native.existing.common, "linux_process_identity",
+                               side_effect=["owned", None]), \
+                mock.patch.object(subject.native.os, "kill") as kill:
+            subject.native.Run.guard(tree_guarded)
+        self.assertEqual(tree_guarded.failure, "resource guard: over")
+        self.assertEqual(tree_guarded.cancel.calls, 3)
+        kill.assert_called_once_with(18, subject.native.signal.SIGTERM)
+
         writer_started, reader_seen = threading.Event(), threading.Event()
         def read(query):
             self.assertTrue(writer_started.wait(1))
