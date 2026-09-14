@@ -182,6 +182,8 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 		if err == nil {
 			if !denseV3CandidateCountMatchesRows(out.Candidates, len(out.Results)) {
 				err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 candidate count does not match returned rows")
+			} else if !denseV3ResultsHaveUniqueIDs(out.Results) {
+				err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 results contain duplicate IDs")
 			} else {
 				err = validateDenseQuantizedScorePlaneResponse(out.DenseWork, out.ScorePlane, request, len(out.Results))
 			}
@@ -204,6 +206,18 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 
 func denseV3CandidateCountMatchesRows(candidates, resultCount int) bool {
 	return candidates >= 0 && resultCount >= 0 && candidates == resultCount
+}
+
+func denseV3ResultsHaveUniqueIDs(results []DenseVectorSearchResult) bool {
+	seen := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		key := string(result.ID)
+		if _, exists := seen[key]; exists {
+			return false
+		}
+		seen[key] = struct{}{}
+	}
+	return true
 }
 
 func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWork, proof *collections.ColumnGraphScorePlaneWork, request DenseVectorSearchRequest, resultCount int) error {
@@ -268,6 +282,7 @@ func denseScorePlaneCountersMatchWork(work documentservice.DenseSearchWork, proo
 	}
 	return proof.QuantizedScoreCalls == work.Graph.BaseANNScored &&
 		exactBaseScoreCalls == work.Graph.ExactBaseScored &&
+		work.Graph.BaseResultIDs == exactBaseScoreCalls &&
 		proof.ExactSuffixScoreCalls == work.Graph.DeltaScored &&
 		uint64(resultCount) <= exactBaseScoreCalls+proof.ExactSuffixScoreCalls
 }

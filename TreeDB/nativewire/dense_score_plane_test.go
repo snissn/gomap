@@ -205,6 +205,11 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	if err := validateDenseQuantizedScorePlaneResponse(exactWork, &exactProof, request, 0); err == nil {
 		t.Fatal("typed-exact proof accepted fewer rows than exact score calls")
 	}
+	baseResultMismatch := work
+	baseResultMismatch.Graph.BaseResultIDs = 1
+	if err := validateDenseQuantizedScorePlaneResponse(baseResultMismatch, proof, request, 0); err == nil {
+		t.Fatal("score-plane proof accepted base-result IDs unrelated to exact scoring")
+	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphScorePlaneWork){
 		"cap exceeds normalized width":       func(p *collections.ColumnGraphScorePlaneWork) { p.RerankCandidateCap = 2 },
 		"shortlist exceeds normalized width": func(p *collections.ColumnGraphScorePlaneWork) { p.LiveShortlistCandidates = 2 },
@@ -242,6 +247,15 @@ func TestDenseV3CandidateCountMatchesRows(t *testing.T) {
 		if got := denseV3CandidateCountMatchesRows(candidate[0], candidate[1]); (got && candidate[2] == 0) || (!got && candidate[2] == 1) {
 			t.Fatalf("candidate count match (%d,%d)=%v, want %v", candidate[0], candidate[1], got, candidate[2] == 1)
 		}
+	}
+}
+
+func TestDenseV3ResultsHaveUniqueIDs(t *testing.T) {
+	if !denseV3ResultsHaveUniqueIDs([]DenseVectorSearchResult{{ID: []byte("a")}, {ID: []byte("b")}}) {
+		t.Fatal("unique result IDs rejected")
+	}
+	if denseV3ResultsHaveUniqueIDs([]DenseVectorSearchResult{{ID: []byte("a")}, {ID: []byte("a")}}) {
+		t.Fatal("duplicate result IDs accepted")
 	}
 }
 

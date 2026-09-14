@@ -337,6 +337,7 @@ def _dense_score_plane_matches_graph(work, score_plane, result_count):
         and work.graph.snapshot == score_plane.snapshot
         and score_plane.quantized_score_calls == work.graph.base_ann_scored
         and score_plane.exact_base_rerank_score_calls + score_plane.exact_small_filter_score_calls == work.graph.exact_base_scored
+        and work.graph.base_result_ids == score_plane.exact_base_rerank_score_calls + score_plane.exact_small_filter_score_calls
         and score_plane.exact_suffix_score_calls == work.graph.delta_scored
         and result_count >= 0
         and result_count <= (
@@ -373,6 +374,8 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
     if not all(math.isfinite(score) for score in scores):
         raise TreeDBProtocolError("native dense response has nonfinite score")
     ids, docs = _decode_vector(sections[102], count), _decode_vector(sections[103], count)
+    if version == 3 and len(set(ids)) != len(ids):
+        raise TreeDBProtocolError("native dense response has duplicate IDs", dense_work=work)
     score_plane = None
     if version == 3:
         from ._dense_work import DenseScorePlaneProof, dense_score_plane_byte_counters_match

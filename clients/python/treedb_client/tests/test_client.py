@@ -716,6 +716,7 @@ class TreeDBClientTests(unittest.TestCase):
                 lambda item: item.update(score_plane={**score_plane, "requested_ef_search": 1, "normalized_candidate_width": 2, "raw_candidate_width": 2, "rerank_candidate_cap": 2, "raw_retained_candidates": 2, "live_shortlist_candidates": 2, "actual_rerank_candidates": 2}),
                 lambda item: item.update(candidates=2),
                 lambda item: item.update(score_plane={**score_plane, "raw_retained_candidates": 2, "quantized_score_calls": 1}),
+                lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "base_result_ids": 0}}),
             ):
                 invalid = copy.deepcopy(payload)
                 mutation(invalid)
@@ -748,6 +749,32 @@ class TreeDBClientTests(unittest.TestCase):
                             quantized_index_name="embedding.scalar_u8.public",
                         )
                     score_client.close()
+            duplicate = copy.deepcopy(payload)
+            duplicate["documents"] = [copy.deepcopy(payload["documents"][0]), copy.deepcopy(payload["documents"][0])]
+            duplicate["candidates"] = 2
+            duplicate["dense_work"]["graph"].update(base_ann_scored=2, exact_base_scored=2, base_result_ids=2)
+            duplicate["dense_work"]["output"].update(requested=2, fetched=2, output_bytes=2, json_reconstruction_rows=2, typed_column_rows=2)
+            duplicate["score_plane"].update(
+                requested_top_k=2,
+                normalized_candidate_width=2,
+                raw_candidate_width=2,
+                rerank_candidate_cap=2,
+                raw_retained_candidates=2,
+                live_shortlist_candidates=2,
+                actual_rerank_candidates=2,
+                quantized_score_calls=2,
+                quantized_code_bytes_read=4,
+                exact_base_rerank_score_calls=2,
+                exact_base_vector_bytes_read=16,
+            )
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, duplicate, 0)}) as duplicate_server:
+                duplicate_client = TreeDBClient(duplicate_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    duplicate_client.query_by_embedding(
+                        "docs", [1, 0], 2, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                duplicate_client.close()
             exact_route = copy.deepcopy(payload)
             exact_route["documents"] = []
             exact_route["candidates"] = 0

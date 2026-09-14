@@ -29,6 +29,7 @@ class NativeCodecTests(unittest.TestCase):
             work_values.append(value)
         work_values[2] = 3  # the public quantized rerank score plane uses typed_hnsw work.
         work_values[3] = 1  # dense-work base ANN scoring equals the quantized score calls.
+        work_values[9] = 1  # dense-work base result IDs equal exact-base score calls.
         work_values[34] = len(b'{"id":"a"}')
         raw_work = b"".join(_uint(value) for value in work_values)
         meta = bytes.fromhex("0301000001000000000000f03f")
@@ -82,6 +83,20 @@ class NativeCodecTests(unittest.TestCase):
                 _dense_response(
                     _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
                     _section(130, meta) + _section(134, raw_work) + _section(136, hash_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=0,
+                    query_dimension=2,
+                )
+            base_id_values = list(work_values)
+            base_id_values[9] = 0
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in base_id_values)) + _section(136, score_plane),
                     1,
                     version=3,
                     query_mode="quantized_rerank",
