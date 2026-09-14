@@ -29,9 +29,97 @@ func TestTypedGraphFilterNavigationSerializesConstruction(t *testing.T) {
 	if err := acquireTypedGraphFilterNavigationConstruction(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	defer releaseTypedGraphFilterNavigationConstruction()
+	if tryAcquireTypedGraphFilterNavigationConstruction() {
+		releaseTypedGraphFilterNavigationConstruction()
+		t.Fatal("contended nonblocking construction admission succeeded")
+	}
 	if err := acquireTypedGraphFilterNavigationConstruction(canceled); !errors.Is(err, context.Canceled) {
 		t.Fatalf("contended construction cancellation: %v", err)
+	}
+	releaseTypedGraphFilterNavigationConstruction()
+	if !tryAcquireTypedGraphFilterNavigationConstruction() {
+		t.Fatal("released construction slot remained unavailable")
+	}
+	releaseTypedGraphFilterNavigationConstruction()
+}
+
+func TestTypedGraphFilterNavigationDoesNotQueueBehindBusySlot(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
+	col, base, _, _, columns, _ := openTypedGraphQualityFixture(t, 4098)
+	if err := base.Close(); err != nil {
+		t.Fatal(err)
+	}
+	opts := typedGraphPublicTestOptions()
+	opts.Filter = ColumnGraphFilterLimits{SourceIDs: 8192, SourceBytes: 1 << 20, RetainedBytes: 1 << 20, MappingWork: 1 << 20, InspectedEntries: 16384}
+	opts.SearchCandidates = 8192
+	if err := col.EnsureColumnGraphServing(t.Context(), "embedding_graph", opts); err != nil {
+		t.Fatal(err)
+	}
+	if err := acquireTypedGraphFilterNavigationConstruction(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	held := true
+	defer func() {
+		if held {
+			releaseTypedGraphFilterNavigationConstruction()
+		}
+		_ = col.CloseVectorIndexPreparedSearchCache()
+	}()
+	type queryResult struct {
+		response VectorIndexSearchResponse
+		view     *CollectionReadView
+		err      error
+	}
+	done := make(chan queryResult, 1)
+	go func() {
+		var buffer VectorIndexSearchBuffer
+		response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{
+			IndexName: "embedding_graph", Query: columns[0].Float32Vectors[0], TopK: 10, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeMinimal,
+			DeclaredScalarFilter: &HybridScalarFilter{IndexName: "user", Range: &IndexRangeOptions{Lower: IndexRangeBound{Value: "00000", Inclusive: true}, Upper: IndexRangeBound{Value: "04096", Inclusive: true}}},
+		}, &buffer)
+		done <- queryResult{response: response, view: view, err: err}
+	}()
+	var result queryResult
+	select {
+	case result = <-done:
+	case <-time.After(3 * time.Second):
+		releaseTypedGraphFilterNavigationConstruction()
+		held = false
+		result = <-done
+		t.Fatalf("cold public query waited for optional navigation: %v", result.err)
+	}
+	if result.view != nil {
+		defer result.view.Close()
+	}
+	if result.err != nil || len(result.response.Results) != 10 {
+		t.Fatalf("cold public query results=%d err=%v", len(result.response.Results), result.err)
+	}
+	work := result.response.Stats.ColumnGraphWork
+	if work.Route != "typed_hnsw" || work.Filter.EligibleRows != 4097 {
+		t.Fatalf("cold public fallback=%+v", work)
+	}
+	slot := collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: "embedding_graph"}
+	col.vectorBufferedSearchMu.Lock()
+	keeper := col.vectorBufferedSearch[slot].prepared
+	col.vectorBufferedSearchMu.Unlock()
+	keeper.capturedBase.filtersMu.Lock()
+	cached := keeper.capturedBase.filters[0].filter
+	keeper.capturedBase.filtersMu.Unlock()
+	if cached == nil || cached.navigation.Load() != nil || cached.navigationPending.Load() {
+		t.Fatal("busy construction slot queued optional navigation")
+	}
+	releaseTypedGraphFilterNavigationConstruction()
+	held = false
+	var warmBuffer VectorIndexSearchBuffer
+	warm, warmView, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{
+		IndexName: "embedding_graph", Query: columns[0].Float32Vectors[0], TopK: 10, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeMinimal,
+		DeclaredScalarFilter: &HybridScalarFilter{IndexName: "user", Range: &IndexRangeOptions{Lower: IndexRangeBound{Value: "00000", Inclusive: true}, Upper: IndexRangeBound{Value: "04096", Inclusive: true}}},
+	}, &warmBuffer)
+	if warmView != nil {
+		defer warmView.Close()
+	}
+	if err != nil || len(warm.Results) != 10 || warm.Stats.ColumnGraphWork.Route != "typed_hnsw" || cached.navigation.Load() != nil || cached.navigationPending.Load() {
+		t.Fatalf("busy-slot cache hit retried navigation: results=%d work=%+v err=%v", len(warm.Results), warm.Stats.ColumnGraphWork, err)
 	}
 }
 
@@ -73,10 +161,12 @@ func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	navigation := plan.borrowedBaseFilter.navigation
-	if navigation == nil || work.RetainedBytes < uint64(navigation.retainedBytes) {
-		t.Fatalf("missing or uncharged navigation: work=%+v", work)
+	var boundedBuffer VectorIndexSearchBuffer
+	_, boundedStats, err := owner.overlay.searchPreparedFilter(plan, columns[0].Float32Vectors[0], 10, 128, plan.count-1, &boundedBuffer)
+	if err != nil || boundedStats.FilteredExact || boundedStats.Route != "typed_hnsw" {
+		t.Fatalf("tight candidate budget did not retain ANN fallback: stats=%+v err=%v", boundedStats, err)
 	}
+	navigation := waitTypedGraphFilterNavigation(t, plan.borrowedBaseFilter)
 	accounting.Lock()
 	baseBytes := accounting.baseBackingBytes - beforeBacking - int64(navigation.retainedBytes)
 	remaining := accounting.limits.StateBytes - accounting.stateBytes - accounting.baseDescriptorBytes - accounting.baseBackingBytes
@@ -95,23 +185,19 @@ func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 	withoutNavigation := HybridScalarFilter{IndexName: "user", Range: &IndexRangeOptions{Lower: IndexRangeBound{Value: "00001", Inclusive: true}, Upper: IndexRangeBound{Value: "04097", Inclusive: true}}}
 	var admitted ColumnGraphFilterWork
 	baseOnly, err := prepareTypedGraphServingFilter(t.Context(), borrowed, owner.overlay, withoutNavigation, limits, &admitted)
-	if err != nil || baseOnly.borrowedBaseFilter.navigation != nil {
+	if err != nil || baseOnly.borrowedBaseFilter.navigation.Load() != nil {
 		t.Fatalf("base-only admission work=%+v err=%v", admitted, err)
 	}
 	var cached ColumnGraphFilterWork
 	baseOnly, err = prepareTypedGraphServingFilter(t.Context(), borrowed, owner.overlay, withoutNavigation, limits, &cached)
-	if err != nil || cached.SourceIDs != 0 || baseOnly.borrowedBaseFilter.navigation != nil {
+	if err != nil || cached.SourceIDs != 0 || baseOnly.borrowedBaseFilter.navigation.Load() != nil {
 		t.Fatalf("base-only cache hit work=%+v err=%v", cached, err)
 	}
 	fresh, err := prepareTypedGraphFilter(owner.overlay, filter, limits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := acquireTypedGraphFilterNavigationConstruction(t.Context()); err != nil {
-		t.Fatal(err)
-	}
 	declinedNavigation, buildErr := buildTypedGraphFilterNavigation(t.Context(), owner.overlay, fresh, 1)
-	releaseTypedGraphFilterNavigationConstruction()
 	if declinedNavigation != nil || !errors.Is(buildErr, errTypedGraphFilterNavigationDeclined) {
 		t.Fatalf("one-byte retained budget navigation=%v err=%v", declinedNavigation, buildErr)
 	}
@@ -120,6 +206,11 @@ func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 		t.Fatal("missing selected query row")
 	}
 	query := columns[0].Float32Vectors[queryRow]
+	var fallbackBuffer VectorIndexSearchBuffer
+	_, fallbackStats, err := owner.overlay.searchPreparedFilter(baseOnly, query, 10, 128, baseOnly.count-1, &fallbackBuffer)
+	if err != nil || fallbackStats.FilteredExact || fallbackStats.Route != "typed_hnsw" || baseOnly.borrowedBaseFilter.navigationPending.Load() {
+		t.Fatalf("declined navigation did not retain ANN fallback: stats=%+v err=%v", fallbackStats, err)
+	}
 	oracle := make([]VectorIndexSearchResult, 0, plan.count)
 	for i, vector := range columns[0].Float32Vectors {
 		if ranks[i] > 4096 {
@@ -180,4 +271,24 @@ func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 		t.Fatalf("all-match filter left FP32 traversal: %+v", allStats.Base)
 	}
 	t.Logf("build=%s retained=%d scores=%d legacy_scores=%d edges=%d legacy_edges=%d", time.Since(started), navigation.retainedBytes, stats.Base.PreparedScoreCalls, legacyStats.Base.PreparedScoreCalls, stats.Base.Edges, legacyStats.Base.Edges)
+}
+
+func waitTypedGraphFilterNavigation(t *testing.T, base *typedGraphBaseFilter) *typedGraphFilterNavigation {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if base != nil {
+			if navigation := base.navigation.Load(); navigation != nil {
+				return navigation
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for filter navigation")
+		}
+		select {
+		case <-t.Context().Done():
+			t.Fatal(t.Context().Err())
+		case <-time.After(time.Millisecond):
+		}
+	}
 }

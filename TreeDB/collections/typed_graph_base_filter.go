@@ -5,6 +5,7 @@ import (
 	"math/bits"
 	"reflect"
 	"slices"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
@@ -20,10 +21,11 @@ type typedGraphFilterBindLimits struct {
 }
 
 type typedGraphBaseFilter struct {
-	plan           *typedGraphPreparedFilter
-	navigation     *typedGraphFilterNavigation
-	predicates     []typedGraphScalarPredicate
-	predicateBytes int
+	plan              *typedGraphPreparedFilter
+	navigation        atomic.Pointer[typedGraphFilterNavigation]
+	navigationPending atomic.Bool
+	predicates        []typedGraphScalarPredicate
+	predicateBytes    int
 	// Only the keeper installs detached plans. Its existing read lock protects
 	// these immutable fields through scoring; each query supplies its own pin.
 	holder     *columnVectorGraphSharedPreparedSearch

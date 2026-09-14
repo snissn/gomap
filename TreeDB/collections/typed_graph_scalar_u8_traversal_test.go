@@ -213,12 +213,8 @@ func typedGraphScalarU8CachedPlan4684(tb testing.TB, overlay *typedGraphOverlayS
 	}
 	holder := typedGraphScalarU8SharedPreparedHolder4684(tb, overlay)
 	origin := &typedGraphPreparedFilter{base: selection, count: selection.Count()}
-	base := &typedGraphBaseFilter{
-		plan:       origin,
-		navigation: navigation,
-		holder:     holder,
-		schemaHash: overlay.base.catalog.meta.Options.ColumnStore.SchemaHash,
-	}
+	base := &typedGraphBaseFilter{plan: origin, holder: holder, schemaHash: overlay.base.catalog.meta.Options.ColumnStore.SchemaHash}
+	base.navigation.Store(navigation)
 	return &typedGraphPreparedFilter{
 		overlay:            overlay,
 		base:               selection,

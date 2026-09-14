@@ -2,7 +2,7 @@ package collections
 
 import (
 	"context"
-	"errors"
+	"math/bits"
 	"reflect"
 	"strings"
 
@@ -119,6 +119,9 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 		// The current owner already validated this base-only overlay. Reuse it
 		// instead of rebuilding and comparing the same manifest views again.
 		candidate.plan, err = prepareTypedGraphFilterUnmetered(ctx, overlay, filter, limits, &work)
+		if err == nil {
+			err = prepareTypedGraphColdExactFallback(ctx, candidate.plan, limits, &work)
+		}
 	} else {
 		err = candidate.prepare(ctx, overlay.base, filter, limits, &work)
 	}
@@ -149,28 +152,13 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 	if keeperBudget := remaining - n; keeperBudget < int64(navigationBudget) {
 		navigationBudget = int(keeperBudget)
 	}
-	navigation, navigationErr := buildTypedGraphFilterNavigation(ctx, overlay, candidate.plan, navigationBudget)
-	if navigationErr == nil {
-		candidate.navigation = navigation
-		work.RetainedBytes += uint64(navigation.retainedBytes)
-	} else if !errors.Is(navigationErr, errTypedGraphFilterNavigationDeclined) {
-		return nil, navigationErr
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	// This backing becomes keeper-owned only after successful preparation/bind.
 	// Until admission it remains bounded temporary work owned by this request.
-	if candidate.navigation != nil {
-		n += int64(candidate.navigation.retainedBytes)
-	}
 	a.Lock()
 	remaining = a.limits.StateBytes - a.stateBytes - a.baseDescriptorBytes - a.baseBackingBytes
-	if n > remaining && candidate.navigation != nil {
-		n -= int64(candidate.navigation.retainedBytes)
-		work.RetainedBytes -= uint64(candidate.navigation.retainedBytes)
-		candidate.navigation = nil
-	}
 	if n <= remaining {
 		a.baseBackingBytes += n
 		r.backingBytes += n
@@ -192,8 +180,84 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 			}
 		}
 		r.filtersMu.Unlock()
+		startTypedGraphFilterNavigationBuild(keeper, candidate, overlay.base.reader.def, navigationBudget)
 	}
 	return plan, nil
+}
+
+func prepareTypedGraphColdExactFallback(ctx context.Context, plan *typedGraphPreparedFilter, limits typedGraphFilterLimits, work *ColumnGraphFilterWork) error {
+	if plan == nil || plan.count <= typedGraphScalarExactLimit || plan.count > typedGraphFilterNavigationColdExactMaxRows || plan.base.Count() != plan.count || len(plan.exactBaseByID) != 0 {
+		return nil
+	}
+	const word = bits.UintSize / 8
+	if plan.count > (limits.RetainedBytes-plan.retainedBytes)/word {
+		return nil
+	}
+	n := plan.count * word
+	plan.exactBaseByID = make([]int, plan.count)
+	plan.retainedBytes += n
+	plan.ordinalGrowthPeakBytes = max(plan.ordinalGrowthPeakBytes, plan.retainedBytes)
+	work.RetainedBytes += uint64(n)
+	work.OrdinalGrowthPeakBytes = max(work.OrdinalGrowthPeakBytes, uint64(plan.ordinalGrowthPeakBytes))
+	for i := range plan.exactBaseByID {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		ordinal, ok := typedGraphFilterOrdinalAt(plan.base, i)
+		if !ok {
+			return ErrVectorIndexSnapshotMismatch
+		}
+		plan.exactBaseByID[i] = ordinal
+	}
+	if err := sortTypedGraphExactRanksWithContext(ctx, plan); err != nil {
+		return err
+	}
+	return nil
+}
+
+func startTypedGraphFilterNavigationBuild(keeper *collectionVectorIndexPreparedSearch, base *typedGraphBaseFilter, def VectorIndexDefinition, maxBytes int) {
+	if keeper == nil || base == nil || maxBytes <= 0 {
+		return
+	}
+	r := keeper.capturedBase
+	if r == nil || r.ref == nil || r.backgroundCtx == nil || r.backgroundCtx.Err() != nil {
+		return
+	}
+	holder := r.ref.holder
+	if holder == nil || !holder.ready() || base.holder != holder || holder.hnswSearchPack == nil {
+		return
+	}
+	def.QuantizedIndexes = nil
+	source := typedGraphFilterNavigationBuildSource{def: def, pack: holder.hnswSearchPack, vectorSource: holder.typedVectorSource, normSource: holder.invNormSource}
+	if !tryAcquireTypedGraphFilterNavigationConstruction() {
+		return
+	}
+	base.navigationPending.Store(true)
+	r.background.Add(1)
+	go func() {
+		defer r.background.Done()
+		defer releaseTypedGraphFilterNavigationConstruction()
+		defer base.navigationPending.Store(false)
+		navigation, err := buildTypedGraphFilterNavigationFromAdmittedSource(r.backgroundCtx, source, base.plan, maxBytes)
+		if err != nil || r.backgroundCtx.Err() != nil {
+			return
+		}
+		a := r.accounting
+		if a == nil {
+			return
+		}
+		n := int64(navigation.retainedBytes)
+		a.Lock()
+		remaining := a.limits.StateBytes - a.stateBytes - a.baseDescriptorBytes - a.baseBackingBytes
+		if n <= remaining && base.navigation.Load() == nil {
+			a.baseBackingBytes += n
+			r.backingBytes += n
+			base.navigation.Store(navigation)
+		}
+		a.Unlock()
+	}()
 }
 
 func bindTypedGraphServingFilter(ctx context.Context, base *typedGraphBaseFilter, overlay *typedGraphOverlaySearch, limits typedGraphFilterLimits, work *ColumnGraphFilterWork) (*typedGraphPreparedFilter, error) {

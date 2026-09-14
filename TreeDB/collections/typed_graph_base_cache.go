@@ -11,13 +11,16 @@ import (
 // mappings; pin protects the complete captured typed closure. Both are released
 // by the existing collection cache lifecycle, outside its mutex.
 type typedGraphCapturedBaseResources struct {
-	ref             *columnVectorGraphSharedPreparedSearchRef
-	pin             *ColumnAssetLifecyclePinSet
-	accounting      *typedGraphReadOwnerAccounting
-	assetBytes      int64
-	descriptorBytes int64
-	backingBytes    int64
-	filtersMu       sync.Mutex
+	ref              *columnVectorGraphSharedPreparedSearchRef
+	pin              *ColumnAssetLifecyclePinSet
+	accounting       *typedGraphReadOwnerAccounting
+	backgroundCtx    context.Context
+	backgroundCancel context.CancelFunc
+	background       sync.WaitGroup
+	assetBytes       int64
+	descriptorBytes  int64
+	backingBytes     int64
+	filtersMu        sync.Mutex
 	// ponytail: keep the first eight distinct predicates until keeper Close.
 	// Overflow uses uncached preparation; add eviction only if this ceiling matters.
 	filters [8]typedGraphCachedFilter
@@ -27,6 +30,10 @@ func (r *typedGraphCapturedBaseResources) Close() error {
 	if r == nil {
 		return nil
 	}
+	if r.backgroundCancel != nil {
+		r.backgroundCancel()
+	}
+	r.background.Wait()
 	clear(r.filters[:])
 	err := r.ref.release()
 	err = errors.Join(err, r.pin.Close())
@@ -142,7 +149,8 @@ func (c *Collection) openTypedGraphCapturedBaseCache(ctx context.Context, index 
 		if err != nil {
 			return err
 		}
-		r := &typedGraphCapturedBaseResources{}
+		backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
+		r := &typedGraphCapturedBaseResources{backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel}
 		defer func() {
 			if err != nil {
 				err = errors.Join(err, r.Close())

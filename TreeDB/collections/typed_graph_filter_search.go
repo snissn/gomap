@@ -48,7 +48,13 @@ func (v *typedGraphOverlaySearch) searchPreparedFilterWithContext(ctx context.Co
 	default:
 		return nil, stats, errColumnHNSWSearchPackSearchUnavailable
 	}
-	stats.FilteredExact = plan.count <= typedGraphScalarExactLimit
+	var navigation *typedGraphFilterNavigation
+	base := plan.borrowedBaseFilter
+	if base != nil {
+		navigation = base.navigation.Load()
+	}
+	coldExact := navigation == nil && base != nil && base.navigationPending.Load() && len(plan.exactBaseByID) > 0 && len(plan.exactBaseByID) == plan.base.Count() && plan.count <= candidateLimit
+	stats.FilteredExact = plan.count <= typedGraphScalarExactLimit || coldExact
 	if candidateLimit <= 0 {
 		return nil, stats, errTypedGraphSearchBudget
 	}
@@ -122,8 +128,7 @@ func (v *typedGraphOverlaySearch) searchPreparedFilterWithContext(ctx context.Co
 		var results []columnVectorGraphNativeSearchResult
 		var baseStats columnVectorGraphNativeSearchStats
 		var err error
-		if base := plan.borrowedBaseFilter; base != nil && base.navigation != nil {
-			navigation := base.navigation
+		if navigation != nil {
 			results, baseStats, err = navigation.search(ctx, query, baseRequestK, searchEF, baseLimit, v.pack, &buffer.searchScratch)
 			if errors.Is(err, errTypedGraphFilterNavigationDeclined) {
 				results, baseStats, err = v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: searchEF, StrictScoreBudget: true, CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)

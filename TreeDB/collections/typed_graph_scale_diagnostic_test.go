@@ -349,6 +349,11 @@ func TestTypedGraphScaleDiagnostic(t *testing.T) {
 			}
 		}
 		emit(map[string]any{"phase": "public_cold_filter", "eligible": count, "ef": 512, "elapsed_us": float64(coldElapsed.Nanoseconds()) / 1000, "recall": float64(coldHits) / 10, "work": work})
+		if count > typedGraphScalarExactLimit && count < manifest.Rows {
+			started = time.Now()
+			navigation := waitTypedGraphFilterNavigation(t, scaleCachedBaseFilter(t, col, "embedding_graph", count))
+			emit(map[string]any{"phase": "filter_navigation_publish_wait", "eligible": count, "elapsed_us": float64(time.Since(started).Nanoseconds()) / 1000, "retained_bytes": navigation.retainedBytes})
+		}
 		curve("public_warm_filter", count, run)
 	}
 	// Twelve distinct predicates expose the existing keeper's eight-entry limit.
@@ -367,6 +372,34 @@ func TestTypedGraphScaleDiagnostic(t *testing.T) {
 			emit(map[string]any{"phase": "distinct_filter", "predicate": i, "repeat": repeat, "elapsed_us": float64(time.Since(started).Nanoseconds()) / 1000, "work": work})
 		}
 	}
+}
+
+func scaleCachedBaseFilter(t *testing.T, col *Collection, index string, count int) *typedGraphBaseFilter {
+	t.Helper()
+	slot := collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}
+	col.vectorBufferedSearchMu.Lock()
+	entry := col.vectorBufferedSearch[slot]
+	col.vectorBufferedSearchMu.Unlock()
+	if entry == nil || entry.prepared == nil {
+		t.Fatal("missing captured-base keeper")
+	}
+	keeper := entry.prepared
+	keeper.mu.RLock()
+	defer keeper.mu.RUnlock()
+	if keeper.closed || keeper.capturedBase == nil {
+		t.Fatal("closed captured-base keeper")
+	}
+	r := keeper.capturedBase
+	r.filtersMu.Lock()
+	defer r.filtersMu.Unlock()
+	for i := range r.filters {
+		base := r.filters[i].filter
+		if base != nil && base.plan != nil && base.plan.count == count {
+			return base
+		}
+	}
+	t.Fatalf("missing cached filter with %d eligible rows", count)
+	return nil
 }
 
 // Run only after pristine baseline/candidate searches, on a separate DB copy.
