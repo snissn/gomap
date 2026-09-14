@@ -80,13 +80,13 @@ type columnVectorGraphLegacyScalarU8ZeroRowValidationCache struct {
 	descriptors []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor
 
 	mu      sync.Mutex
+	cond    *sync.Cond
 	entries []columnVectorGraphLegacyScalarU8ZeroRowValidationEntry
 }
 
 type columnVectorGraphLegacyScalarU8ZeroRowValidationEntry struct {
 	building  bool
 	completed bool
-	ready     chan struct{}
 }
 
 func newColumnVectorGraphLegacyScalarU8ZeroRowValidationCache(def VectorIndexDefinition, state columnVectorIndexStateSnapshot) *columnVectorGraphLegacyScalarU8ZeroRowValidationCache {
@@ -98,13 +98,30 @@ func newColumnVectorGraphLegacyScalarU8ZeroRowValidationCache(def VectorIndexDef
 		descriptors: descriptors,
 		entries:     make([]columnVectorGraphLegacyScalarU8ZeroRowValidationEntry, len(descriptors)),
 	}
-	for i := range cache.entries {
-		cache.entries[i].ready = make(chan struct{})
-	}
 	// Keep one fixed waiter primitive for every immutable publication. It
 	// serializes first validation without growing a name map, a code-plane cache,
 	// or a retry-generation allocation after read-owner admission.
+	cache.cond = sync.NewCond(&cache.mu)
 	return cache
+}
+
+func (c *columnVectorGraphLegacyScalarU8ZeroRowValidationCache) waitWithContext(ctx context.Context) error {
+	if c == nil || c.cond == nil {
+		return errColumnVectorGraphQuantizedAssetInvalid
+	}
+	var stop func() bool
+	if ctx.Done() != nil {
+		stop = context.AfterFunc(ctx, func() {
+			c.mu.Lock()
+			c.cond.Broadcast()
+			c.mu.Unlock()
+		})
+	}
+	c.cond.Wait()
+	if stop != nil {
+		stop()
+	}
+	return ctx.Err()
 }
 
 // validate serializes the one bounded parse/prepare check for a selected
@@ -145,22 +162,14 @@ func (c *columnVectorGraphLegacyScalarU8ZeroRowValidationCache) validateWithCont
 			c.mu.Unlock()
 			return nil
 		}
-		if entry.ready == nil {
-			entry.ready = make(chan struct{})
-		}
 		if entry.building {
-			ready := entry.ready
-			c.mu.Unlock()
-			select {
-			case <-ready:
-			case <-ctx.Done():
-				return ctx.Err()
+			if err := c.waitWithContext(ctx); err != nil {
+				c.mu.Unlock()
+				return err
 			}
-			c.mu.Lock()
 			continue
 		}
 		entry.building = true
-		entry.ready = make(chan struct{})
 		descriptor := c.descriptors[index]
 		c.mu.Unlock()
 
@@ -176,7 +185,7 @@ func (c *columnVectorGraphLegacyScalarU8ZeroRowValidationCache) validateWithCont
 		if err == nil {
 			entry.completed = true
 		}
-		close(entry.ready)
+		c.cond.Broadcast()
 		c.mu.Unlock()
 		return err
 	}
