@@ -267,7 +267,8 @@ func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWo
 		!denseScorePlaneCountersMatchWork(work, proof, resultCount) ||
 		((proof.Route == "typed_exact" || proof.Route == "quantized_rerank") && !denseExactResultCountMatchesTopK(proof, request.TopK, resultCount)) ||
 		resultCount > request.TopK ||
-		(proof.Route == "typed_empty" && resultCount != 0) ||
+		(proof.Route == "typed_empty" && (resultCount != 0 || !work.Graph.Filter.Attempted ||
+			!work.Graph.Filter.Completed || work.Graph.Filter.EligibleRows != 0)) ||
 		(proof.Route == "quantized_rerank" && (proof.ActualRerankCandidates > proof.RerankCandidateCap ||
 			proof.LiveShortlistCandidates > proof.RawRetainedCandidates ||
 			proof.RawRetainedCandidates > proof.RawCandidateWidth ||

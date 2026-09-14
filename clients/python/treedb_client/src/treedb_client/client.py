@@ -1066,7 +1066,12 @@ def _validate_http_dense_quantized_response(
         or not response.index.capabilities.typed_dense_quantized_rerank
         or response.route != "ann"
         or response.exact
-        or (proof.route == "typed_empty" and len(response.documents) != 0)
+        or (proof.route == "typed_empty" and (
+            len(response.documents) != 0
+            or not work.graph.filter.attempted
+            or not work.graph.filter.completed
+            or work.graph.filter.eligible_rows != 0
+        ))
         or (proof.route in ("typed_exact", "quantized_rerank") and len(response.documents) != min(top_k, proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls + proof.exact_suffix_score_calls))
         or (proof.route == "quantized_rerank" and (
             proof.actual_rerank_candidates > proof.rerank_candidate_cap

@@ -885,6 +885,50 @@ class TreeDBClientTests(unittest.TestCase):
                         quantized_index_name="embedding.scalar_u8.public",
                     )
                 plan_client.close()
+            valid_empty = copy.deepcopy(payload)
+            valid_empty["documents"] = []
+            valid_empty["candidates"] = 0
+            valid_empty["dense_work"]["graph"].update(
+                route="typed_empty", base_ann_scored=0, base_candidates=0, base_edges=0,
+                delta_scored=0, exact_base_scored=0, base_shadowed=0, base_result_ids=0,
+                filter={**dense_work["graph"]["filter"], "attempted": True, "completed": True, "eligible_rows": 0},
+            )
+            valid_empty["dense_work"]["output"].update(
+                requested=0, fetched=0, missing=0, output_bytes=0, retained_payload_fetches=0,
+                json_reconstruction_rows=0, typed_column_rows=0,
+            )
+            valid_empty["score_plane"].update(
+                route="typed_empty", normalized_candidate_width=0, raw_candidate_width=0,
+                rerank_candidate_cap=0, raw_retained_candidates=0, live_shortlist_candidates=0,
+                actual_rerank_candidates=0, quantized_score_calls=0, quantized_code_bytes_read=0,
+                exact_base_rerank_score_calls=0, exact_suffix_score_calls=0, exact_small_filter_score_calls=0,
+                exact_base_vector_bytes_read=0, exact_suffix_vector_bytes_read=0,
+            )
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, valid_empty, 0)}) as empty_server:
+                empty_client = TreeDBClient(empty_server.base_url, timeout=1)
+                self.assertEqual(
+                    empty_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    ).documents,
+                    [],
+                )
+                empty_client.close()
+            for filter_patch in (
+                {"attempted": False, "completed": False},
+                {"attempted": True, "completed": False},
+                {"attempted": True, "completed": True, "eligible_rows": 1},
+            ):
+                invalid_empty = copy.deepcopy(valid_empty)
+                invalid_empty["dense_work"]["graph"]["filter"].update(filter_patch)
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid_empty, 0)}) as empty_server:
+                    empty_client = TreeDBClient(empty_server.base_url, timeout=1)
+                    with self.assertRaises(TreeDBProtocolError):
+                        empty_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    empty_client.close()
             overflow = copy.deepcopy(payload)
             overflow["documents"] = [
                 {"id": "a", "content": "alpha", "score": 1.0},

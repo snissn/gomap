@@ -335,6 +335,9 @@ def _dense_score_plane_matches_graph(work, score_plane, result_count):
         and work.graph.completed
         and work.graph.route == expected
         and work.graph.snapshot == score_plane.snapshot
+        and (score_plane.route != "typed_empty" or (
+            work.graph.filter.attempted and work.graph.filter.completed and work.graph.filter.eligible_rows == 0
+        ))
         and score_plane.quantized_score_calls == work.graph.base_ann_scored
         and work.graph.base_candidates <= score_plane.quantized_score_calls
         and score_plane.exact_base_rerank_score_calls + score_plane.exact_small_filter_score_calls == work.graph.exact_base_scored

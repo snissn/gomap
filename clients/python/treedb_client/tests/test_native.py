@@ -348,6 +348,46 @@ class NativeCodecTests(unittest.TestCase):
                         ef_search=0,
                         query_dimension=2,
                     )
+            empty_values = list(values)
+            empty_values[4] = 1  # typed_empty
+            empty_values[10:23] = [0] * 13
+            empty_plane = b"".join(_uint(value) for value in empty_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            empty_plane += b"\x01\x01\x01\x03" * 2
+            valid_empty_work_values = list(work_values)
+            valid_empty_work_values[1] |= (1 << 3) | (1 << 4)
+            valid_empty_work_values[2] = 1
+            valid_empty_work_values[3:19] = [0] * 16
+            valid_empty_work_values[31:38] = [0] * 7
+            valid_empty_work = b"".join(_uint(value) for value in valid_empty_work_values)
+            _dense_response(
+                _section(102, _vector([])) + _section(103, _vector([])) +
+                _section(130, bytes([3]) + b"\x00" * 4) + _section(134, valid_empty_work) + _section(136, empty_plane),
+                1,
+                version=3,
+                query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.public",
+                quantized_rerank_candidates=0,
+                ef_search=0,
+                query_dimension=2,
+            )
+            for filter_flags, eligible_rows in ((0, 0), (1 << 3, 0), ((1 << 3) | (1 << 4), 1)):
+                invalid_empty_work_values = list(valid_empty_work_values)
+                invalid_empty_work_values[1] &= ~((1 << 3) | (1 << 4))
+                invalid_empty_work_values[1] |= filter_flags
+                invalid_empty_work_values[10] = eligible_rows
+                with self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([])) + _section(103, _vector([])) +
+                        _section(130, bytes([3]) + b"\x00" * 4) +
+                        _section(134, b"".join(_uint(value) for value in invalid_empty_work_values)) + _section(136, empty_plane),
+                        0,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=0,
+                        query_dimension=2,
+                    )
             shortcut_work_values = list(work_values)
             shortcut_work_values[2] = 2
             shortcut_work_values[3] = shortcut_work_values[7] = shortcut_work_values[9] = 0

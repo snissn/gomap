@@ -248,8 +248,26 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	}
 	strictEmptyProof := *proof
 	strictEmptyProof.Route = "typed_empty"
+	strictEmptyProof.QuantizedScoreCalls = 0
+	strictEmptyProof.QuantizedCodeBytesRead = 0
 	strictEmptyWork := work
 	strictEmptyWork.Graph.Route = "typed_empty"
+	strictEmptyWork.Graph.BaseANNScored = 0
+	strictEmptyWork.Graph.Filter = collections.ColumnGraphFilterWork{Attempted: true, Completed: true}
+	if err := validateDenseQuantizedScorePlaneResponse(strictEmptyWork, &strictEmptyProof, request, 0); err != nil {
+		t.Fatalf("valid typed-empty proof rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*collections.ColumnGraphFilterWork){
+		"unattempted filter": func(f *collections.ColumnGraphFilterWork) { f.Attempted = false; f.Completed = false },
+		"incomplete filter":  func(f *collections.ColumnGraphFilterWork) { f.Completed = false },
+		"eligible rows":      func(f *collections.ColumnGraphFilterWork) { f.EligibleRows = 1 },
+	} {
+		candidate := strictEmptyWork
+		mutate(&candidate.Graph.Filter)
+		if err := validateDenseQuantizedScorePlaneResponse(candidate, &strictEmptyProof, request, 0); err == nil {
+			t.Fatalf("typed-empty proof accepted %s: %+v", name, candidate.Graph.Filter)
+		}
+	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphScorePlaneWork){
 		"quantized work":      func(p *collections.ColumnGraphScorePlaneWork) { p.QuantizedScoreCalls = 1 },
 		"exact suffix work":   func(p *collections.ColumnGraphScorePlaneWork) { p.ExactSuffixScoreCalls = 1 },
@@ -261,7 +279,6 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 		},
 	} {
 		candidate := strictEmptyProof
-		candidate.QuantizedScoreCalls, candidate.ExactSuffixScoreCalls, candidate.ExactSmallFilterScoreCalls = 0, 0, 0
 		mutate(&candidate)
 		if err := validateDenseQuantizedScorePlaneResponse(strictEmptyWork, &candidate, request, 0); err == nil {
 			t.Fatalf("typed-empty proof accepted %s: %+v", name, candidate)
