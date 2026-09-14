@@ -125,6 +125,15 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	if err := validateDenseQuantizedScorePlaneResponse(emptyWork, &emptyProof, request, 1); err == nil {
 		t.Fatal("typed-empty score-plane proof accepted nonempty results")
 	}
+	cappedProof := *proof
+	cappedProof.RequestedRerankCandidates = 2
+	cappedProof.RerankCandidateCap = 3
+	cappedProof.ActualRerankCandidates = 3
+	cappedRequest := request
+	cappedRequest.QuantizedRerankCandidates = 2
+	if err := validateDenseQuantizedScorePlaneResponse(work, &cappedProof, cappedRequest, 0); err == nil {
+		t.Fatal("score-plane proof exceeded the explicit rerank cap")
+	}
 }
 
 func TestDenseTypedQuantizedNativePublicPath(t *testing.T) {

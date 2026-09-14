@@ -1042,6 +1042,10 @@ def _validate_http_dense_quantized_response(
         or response.route != "ann"
         or response.exact
         or (proof.route == "typed_empty" and len(response.documents) != 0)
+        or (proof.route == "quantized_rerank" and (
+            proof.actual_rerank_candidates > proof.rerank_candidate_cap
+            or (quantized_rerank_candidates and proof.rerank_candidate_cap > quantized_rerank_candidates)
+        ))
         or not proof.available
         or not proof.completed
         or not proof.snapshot.available

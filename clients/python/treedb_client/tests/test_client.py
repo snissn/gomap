@@ -716,6 +716,16 @@ class TreeDBClientTests(unittest.TestCase):
                             "docs", [1, 0], 1, query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public"
                         )
                     bad_client.close()
+            capped = copy.deepcopy(payload)
+            capped["score_plane"].update(requested_rerank_candidates=2, rerank_candidate_cap=3, actual_rerank_candidates=3)
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, capped, 0)}) as capped_server:
+                capped_client = TreeDBClient(capped_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    capped_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=2,
+                    )
+                capped_client.close()
 
 
     def test_benchmark_lifecycle_and_vector_index_search_methods(self) -> None:
