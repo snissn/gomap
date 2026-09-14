@@ -67,6 +67,12 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         self.assertEqual(diagnostic.RSS_CALIBRATION_QUERIES, list(range(100)))
         self.assertEqual(diagnostic.RSS_REVALIDATION_QUERIES, list(range(100, 200)))
         self.assertEqual(diagnostic.binary_ndcg(["a", "x"], ["a", "b"]), 1 / (1 + 1 / np.log2(3)))
+        self.assertEqual(diagnostic.construction_calibration_contract(64), {
+            "schema": "treedb_column_graph_construction_calibration/v1",
+            "ef_construction": 64, "control_ef_construction": 128,
+            "max_absolute_recall_loss": .002, "max_absolute_binary_ndcg_loss": .002,
+            "max_selected_route_regression": {"qps": .05, "p95": .05, "p99": .05},
+        })
 
     def test_shutdown_history_import_origin_and_zero_vectors_fail_closed(self):
         lifetime = {"pid": 123, "linux_process_identity": "123:456",

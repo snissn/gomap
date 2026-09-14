@@ -33,7 +33,6 @@ RSS_CONTROLS = [32, 64, 128, 256, 512, 1024, 2048]
 RSS_CALIBRATION_QUERIES = list(range(100))
 RSS_REVALIDATION_QUERIES = list(range(100, 200))
 RSS_SELECTION_PROTOCOL = "lowest_control_passing_both_fixed_query_sets/v1"
-RSS_RELATIVE_NDCG_MAX_LOSS = .002
 GIB = 1 << 30
 
 
@@ -158,6 +157,15 @@ def binary_ndcg(actual, expected):
     return sum(1 / math.log2(rank + 2) for rank, item in enumerate(actual) if item in relevant) / ideal
 
 
+def construction_calibration_contract(ef_construction):
+    return {
+        "schema": "treedb_column_graph_construction_calibration/v1",
+        "ef_construction": ef_construction, "control_ef_construction": 128,
+        "max_absolute_recall_loss": .002, "max_absolute_binary_ndcg_loss": .002,
+        "max_selected_route_regression": {"qps": .05, "p95": .05, "p99": .05},
+    }
+
+
 def rss_comparison_contract(plan):
     return {
         "schema": "cohere_500k_768d_matched_rss/v3", "rows": plan["rows"],
@@ -174,8 +182,6 @@ def rss_comparison_contract(plan):
         "host_resource_identity": plan["host_resource_identity"],
         "platform": plan["platform"], "quality_metric": "mean_recall_at_10",
         "quality_target": plan["rss_recall_target"],
-        "relative_ndcg_max_absolute_loss": RSS_RELATIVE_NDCG_MAX_LOSS,
-        "relative_ndcg_control_ef_construction": 128,
         "quality_selection_protocol": RSS_SELECTION_PROTOCOL,
         "ann_controls": {
             "treedb_ef_search": plan["rss_controls"],
@@ -272,6 +278,7 @@ def prepare(args):
             "rss_only": rss_only, "rss_recall_target": RSS_RECALL_TARGET,
             "ef_construction": args.ef_construction,
             "construction_decisions": args.construction_decisions,
+            "construction_calibration_contract": construction_calibration_contract(args.ef_construction),
             "rss_controls": RSS_CONTROLS,
             "rss_calibration_queries": RSS_CALIBRATION_QUERIES,
             "rss_revalidation_queries": RSS_REVALIDATION_QUERIES,
@@ -562,6 +569,7 @@ class Run:
         artifact = {
             "schema": RSS_ARTIFACT_SCHEMA, "state": "calibrated" if not reasons else "uncalibrated",
             "backend": "treedb", "comparison_contract": rss_comparison_contract(self.plan),
+            "construction_calibration_contract": self.plan["construction_calibration_contract"],
             "quality": {**quality, "control_name": "ef_search", "exact_mode": False},
             "rss": rss, "reasons": reasons,
             "readiness": {"graph_action": "build", "successful_ann_queries": sum(

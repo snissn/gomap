@@ -27,6 +27,8 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
         self.assertTrue(contract["host_resource_identity"]["machine_id"])
         self.assertTrue(contract["host_resource_identity"]["boot_id"])
         self.assertGreater(contract["host_resource_identity"]["page_size_bytes"], 0)
+        self.assertNotIn("relative_ndcg_max_absolute_loss", contract)
+        self.assertNotIn("relative_ndcg_control_ef_construction", contract)
 
     def test_control_selection_requires_both_fixed_query_sets(self):
         truth = [[f"row-{query}-{rank}" for rank in range(10)] for query in range(6)]
