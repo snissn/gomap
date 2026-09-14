@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
@@ -157,23 +158,42 @@ type Prepared struct {
 	footprint Footprint
 }
 
-// preparedOneColumnRetainedMetadataBound is the Go 1.26 64-bit retained
-// metadata maximum for a Prepared with exactly one column. It includes the
-// Prepared allocation, its map header and one map group, the indirect
-// preparedColumn value, and a cap=1 Footprint.Columns backing allocation.
-//
-// The bound intentionally excludes the referenced payload and string bytes:
-// Prepared aliases those immutable inputs rather than copying them. It is also
-// conservative on narrower supported architectures. Keep the companion shape
-// test in sync if the Prepared layout or one-column construction changes.
-const preparedOneColumnRetainedMetadataBound uintptr = 648
+const (
+	// A Go 1.26 amd64 one-column Prepared retains the Prepared allocation, map
+	// header and one small map group, indirect preparedColumn value, and cap=1
+	// Footprint.Columns backing. The known 640-byte allocation shape is padded
+	// by eight bytes so a map allocator size-class detail is never charged short.
+	preparedOneColumnRetainedMetadata64BitBound uintptr = 648
+
+	// On 32-bit Go, preparedColumn is stored inline in the small map group rather
+	// than indirectly. Reserve a deliberately wider per-plane bound for that
+	// distinct layout; it keeps a future 32-bit-capable build fail-closed without
+	// burdening the supported 64-bit serving path.
+	preparedOneColumnRetainedMetadata32BitBound uintptr = 2 << 10
+)
+
+// preparedOneColumnRetainedMetadataBoundForPointerBytes reports the retained
+// metadata bound for a Prepared with exactly one column. It is separated from
+// the native wrapper so the architecture cases remain unit-testable on amd64.
+func preparedOneColumnRetainedMetadataBoundForPointerBytes(pointerBytes uintptr) (uintptr, bool) {
+	switch pointerBytes {
+	case 8:
+		return preparedOneColumnRetainedMetadata64BitBound, true
+	case 4:
+		return preparedOneColumnRetainedMetadata32BitBound, true
+	default:
+		return 0, false
+	}
+}
 
 // PreparedOneColumnRetainedMetadataBound returns a conservative retained
 // metadata bound for a Prepared built from an exactly-one-column schema. It is
 // for admission accounting by callers that validate that cardinality; callers
-// with general schemas must not use it as a bound for more than one column.
-func PreparedOneColumnRetainedMetadataBound() uintptr {
-	return preparedOneColumnRetainedMetadataBound
+// with general schemas must not use it as a bound for more than one column. It
+// returns ok=false for an unknown pointer width so admission can reject rather
+// than silently under-account a runtime layout it has not bounded.
+func PreparedOneColumnRetainedMetadataBound() (bound uintptr, ok bool) {
+	return preparedOneColumnRetainedMetadataBoundForPointerBytes(unsafe.Sizeof(uintptr(0)))
 }
 
 // CodeRowView is an immutable, zero-copy fixed-width row view over a prepared

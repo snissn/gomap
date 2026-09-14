@@ -237,6 +237,11 @@ func typedGraphCapturedBaseBackingBound(rows, records, layers int, limit int64) 
 // file bytes remain covered by typedGraphOwnerRefs/lifecycle pins; this adds
 // only holder descriptors, entry/status/resource structs, one-column Prepared
 // metadata, and the O(rows) derived code sums for each declared legacy plane.
+// A first lazy request also retains the entry's unbuffered ready channel. Go
+// 1.26's 64-bit hchan is 112 bytes; this bound covers the channel allocation on
+// both known pointer widths without exposing runtime internals here.
+const typedGraphLegacyScalarU8EntryReadyChannelBackingBound uintptr = 128
+
 func typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, records, layers, legacyScalarU8Assets int, limit int64) (int64, error) {
 	var total int64
 	add := func(count int, size uintptr) bool {
@@ -279,20 +284,27 @@ func typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, records, l
 			return 0, errTypedGraphOwnerBudget
 		}
 	}
-	// The descriptor slice and request-entry slice retain exactly one slot per
-	// declared legacy plane. Entries are allocated lazily, but a captured keeper
-	// can outlive the owner that first populates them, so admit their maximum
-	// safely at holder construction time.
-	for _, size := range []uintptr{
-		reflect.TypeFor[columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor]().Size(),
-		reflect.TypeFor[*columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry]().Size(),
-		reflect.TypeFor[columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry]().Size(),
-		reflect.TypeFor[columnVectorGraphQuantizedAssetResource]().Size(),
-		quantizedasset.PreparedOneColumnRetainedMetadataBound(),
-		reflect.TypeFor[ScalarU8CalibrationConfig]().Size(),
-	} {
-		if !add(legacyScalarU8Assets, size) {
+	if legacyScalarU8Assets > 0 {
+		preparedMetadataBound, preparedMetadataBounded := quantizedasset.PreparedOneColumnRetainedMetadataBound()
+		if !preparedMetadataBounded {
 			return 0, errTypedGraphOwnerBudget
+		}
+		// The descriptor slice and request-entry slice retain exactly one slot per
+		// declared legacy plane. Entries are allocated lazily, but a captured keeper
+		// can outlive the owner that first populates them, so admit their maximum
+		// safely at holder construction time.
+		for _, size := range []uintptr{
+			reflect.TypeFor[columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor]().Size(),
+			reflect.TypeFor[*columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry]().Size(),
+			reflect.TypeFor[columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry]().Size(),
+			typedGraphLegacyScalarU8EntryReadyChannelBackingBound,
+			reflect.TypeFor[columnVectorGraphQuantizedAssetResource]().Size(),
+			preparedMetadataBound,
+			reflect.TypeFor[ScalarU8CalibrationConfig]().Size(),
+		} {
+			if !add(legacyScalarU8Assets, size) {
+				return 0, errTypedGraphOwnerBudget
+			}
 		}
 	}
 	// Resource loading derives one uint32 sum per base row. Keep this checked

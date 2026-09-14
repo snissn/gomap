@@ -144,11 +144,16 @@ func TestTypedGraphCapturedBaseBackingBoundReservesLegacyScalarU8PreparedMetadat
 	if err != nil {
 		t.Fatal(err)
 	}
+	preparedMetadataBound, preparedMetadataBounded := quantizedasset.PreparedOneColumnRetainedMetadataBound()
+	if !preparedMetadataBounded {
+		t.Fatal("native one-column Prepared bound is unavailable")
+	}
 	perPlane := int64(reflect.TypeFor[columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor]().Size()) +
 		int64(reflect.TypeFor[*columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry]().Size()) +
 		int64(reflect.TypeFor[columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry]().Size()) +
+		int64(typedGraphLegacyScalarU8EntryReadyChannelBackingBound) +
 		int64(reflect.TypeFor[columnVectorGraphQuantizedAssetResource]().Size()) +
-		int64(quantizedasset.PreparedOneColumnRetainedMetadataBound()) +
+		int64(preparedMetadataBound) +
 		int64(reflect.TypeFor[ScalarU8CalibrationConfig]().Size()) +
 		rows*int64(reflect.TypeFor[uint32]().Size())
 	if got := one - base; got != perPlane {
