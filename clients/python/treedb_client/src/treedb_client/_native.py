@@ -379,6 +379,9 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
                 or (score_plane.route == "typed_empty" and count != 0)
                 or (score_plane.route == "quantized_rerank" and (
                     score_plane.actual_rerank_candidates > score_plane.rerank_candidate_cap
+                    or score_plane.live_shortlist_candidates > score_plane.raw_retained_candidates
+                    or score_plane.raw_retained_candidates > score_plane.raw_candidate_width
+                    or score_plane.actual_rerank_candidates > score_plane.live_shortlist_candidates
                     or (quantized_rerank_candidates and score_plane.rerank_candidate_cap > quantized_rerank_candidates)
                 ))
                 or score_plane.quantized_index_name != (quantized_index_name or score_plane.quantized_index_name)

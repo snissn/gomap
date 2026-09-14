@@ -671,7 +671,7 @@ class TreeDBClientTests(unittest.TestCase):
             "raw_candidate_width": 1,
             "rerank_candidate_cap": 1,
             "raw_retained_candidates": 1,
-            "live_shortlist_candidates": 0,
+            "live_shortlist_candidates": 1,
             "actual_rerank_candidates": 1,
             "quantized_score_calls": 1,
             "quantized_code_bytes_read": 1,
@@ -706,6 +706,7 @@ class TreeDBClientTests(unittest.TestCase):
                     dense_work={**dense_work, "graph": {**dense_work["graph"], "route": "typed_empty"}},
                     score_plane={**score_plane, "route": "typed_empty"},
                 ),
+                lambda item: item.update(metric="l2"),
             ):
                 invalid = copy.deepcopy(payload)
                 mutation(invalid)
@@ -717,7 +718,14 @@ class TreeDBClientTests(unittest.TestCase):
                         )
                     bad_client.close()
             capped = copy.deepcopy(payload)
-            capped["score_plane"].update(requested_rerank_candidates=2, rerank_candidate_cap=3, actual_rerank_candidates=3)
+            capped["score_plane"].update(
+                requested_rerank_candidates=2,
+                rerank_candidate_cap=3,
+                raw_candidate_width=3,
+                raw_retained_candidates=3,
+                live_shortlist_candidates=3,
+                actual_rerank_candidates=3,
+            )
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, capped, 0)}) as capped_server:
                 capped_client = TreeDBClient(capped_server.base_url, timeout=1)
                 with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):

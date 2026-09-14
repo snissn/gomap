@@ -134,6 +134,22 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	if err := validateDenseQuantizedScorePlaneResponse(work, &cappedProof, cappedRequest, 0); err == nil {
 		t.Fatal("score-plane proof exceeded the explicit rerank cap")
 	}
+	for name, mutate := range map[string]func(*collections.ColumnGraphScorePlaneWork){
+		"shortlist exceeds retained": func(p *collections.ColumnGraphScorePlaneWork) {
+			p.LiveShortlistCandidates = p.RawRetainedCandidates + 1
+		},
+		"retained exceeds width": func(p *collections.ColumnGraphScorePlaneWork) { p.RawRetainedCandidates = p.RawCandidateWidth + 1 },
+		"actual exceeds shortlist": func(p *collections.ColumnGraphScorePlaneWork) {
+			p.ActualRerankCandidates = p.LiveShortlistCandidates + 1
+		},
+	} {
+		candidate := *proof
+		candidate.RawCandidateWidth, candidate.RawRetainedCandidates, candidate.LiveShortlistCandidates, candidate.ActualRerankCandidates = 4, 3, 2, 1
+		mutate(&candidate)
+		if err := validateDenseQuantizedScorePlaneResponse(work, &candidate, request, 0); err == nil {
+			t.Fatalf("invalid rerank counts accepted (%s): %+v", name, candidate)
+		}
+	}
 }
 
 func TestDenseTypedQuantizedNativePublicPath(t *testing.T) {

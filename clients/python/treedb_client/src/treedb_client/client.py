@@ -1035,6 +1035,8 @@ def _validate_http_dense_quantized_response(
         or work.graph.route != expected_graph_route
         or work.graph.snapshot != proof.snapshot
         or response.index.name != index
+        or response.metric != "cosine"
+        or response.metric != response.index.metric
         or response.index.metric != "cosine"
         or response.index.vector_strategy != "column_graph"
         or response.index.extra.get("typed_input") is not True
@@ -1044,6 +1046,9 @@ def _validate_http_dense_quantized_response(
         or (proof.route == "typed_empty" and len(response.documents) != 0)
         or (proof.route == "quantized_rerank" and (
             proof.actual_rerank_candidates > proof.rerank_candidate_cap
+            or proof.live_shortlist_candidates > proof.raw_retained_candidates
+            or proof.raw_retained_candidates > proof.raw_candidate_width
+            or proof.actual_rerank_candidates > proof.live_shortlist_candidates
             or (quantized_rerank_candidates and proof.rerank_candidate_cap > quantized_rerank_candidates)
         ))
         or not proof.available
