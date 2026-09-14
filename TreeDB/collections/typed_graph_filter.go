@@ -17,8 +17,14 @@ type typedGraphFilterLimits struct {
 }
 
 type typedGraphPreparedFilter struct {
-	overlay                                            *typedGraphOverlaySearch
-	base                                               typedcolumn.RowSelection
+	overlay *typedGraphOverlaySearch
+	base    typedcolumn.RowSelection
+	// cachedBasePlan binds a current-snapshot suffix wrapper to the detached
+	// cached base plan from which its immutable base selection was copied. It is
+	// deliberately nil for ordinary request-local plans. Private score-plane
+	// consumers use it to prove a cached navigation graph belongs to this
+	// selection without scanning or materializing the selection per query.
+	cachedBasePlan                                     *typedGraphPreparedFilter
 	delta                                              []int
 	exactBaseByID                                      []int
 	count                                              int
