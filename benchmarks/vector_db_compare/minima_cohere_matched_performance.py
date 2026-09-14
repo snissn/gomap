@@ -31,7 +31,6 @@ ROWS = 500_000
 DIMENSIONS = 768
 TOP_K = 10
 QUALITY_TARGET = 0.90
-CONTROLS = {"treedb": 32, "qdrant": 64}
 CONTROL_NAMES = {"treedb": "ef_search", "qdrant": "hnsw_ef"}
 EVALUATION_QUERIES = list(range(100, 200))
 PAIR_ORDER = [["treedb", "qdrant"], ["qdrant", "treedb"], ["treedb", "qdrant"]]
@@ -185,8 +184,6 @@ def frozen_plan(args):
         raise RuntimeError("reviewed control candidate sets differ from the v2 policy")
     selected = {backend: reviewed_selected_control(artifact, backend, candidates[backend])
                 for backend, artifact in (("treedb", tree), ("qdrant", qdrant_result))}
-    if selected != CONTROLS:
-        raise RuntimeError(f"fixed controls differ from reviewed v2 evidence: {selected}")
     if args.run_root.exists():
         raise ValueError("campaign run root must not exist at freeze")
     return {
@@ -212,7 +209,7 @@ def frozen_plan(args):
         "control_artifacts_sha256": {"treedb": digest(tree_artifact), "qdrant": digest(qdrant_artifact)},
         "control_selection": {backend: {"name": CONTROL_NAMES[backend], "value": control,
             "policy": "lowest passing candidate in reviewed v2 calibration"}
-            for backend, control in CONTROLS.items()},
+            for backend, control in selected.items()},
         "quality_target_mean_recall_at_10": QUALITY_TARGET,
         "quality_queries": EVALUATION_QUERIES,
         "pair_order": PAIR_ORDER, "repetitions": 3, "batch_size": 256,
@@ -449,7 +446,7 @@ def run_treedb(plan, run_dir):
         build_start = time.monotonic_ns(); run.optimize("build"); phase["ann_ready_transition_ns"] = time.monotonic_ns() - build_start
         phase["fresh_process_to_ann_ready_ns"] = time.monotonic_ns() - started
 
-        control = CONTROLS["treedb"]
+        control = plan["control_selection"]["treedb"]["value"]
         actual = []
         for query in EVALUATION_QUERIES:
             actual.append([doc.id for doc in run.search("profile_quality", ROWS, control, query).documents])
@@ -649,7 +646,7 @@ def run_qdrant(plan, run_dir):
         phase["ann_ready_transition_ns"] = time.monotonic_ns() - build_start
         phase["fresh_process_to_ann_ready_ns"] = time.monotonic_ns() - started
 
-        control = CONTROLS["qdrant"]
+        control = plan["control_selection"]["qdrant"]["value"]
         actual = [run.search(control, query) for query in EVALUATION_QUERIES]
         quality = mean_recall(actual, [run.truth[query] for query in EVALUATION_QUERIES])
         if quality["mean_recall_at_10"] < QUALITY_TARGET:
