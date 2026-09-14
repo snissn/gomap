@@ -27,6 +27,7 @@ class NativeCodecTests(unittest.TestCase):
         for _ in range(38):
             value, work_offset = _read_uint(raw_work, work_offset)
             work_values.append(value)
+        work_values[2] = 3  # the public quantized rerank score plane uses typed_hnsw work.
         work_values[34] = len(b'{"id":"a"}')
         raw_work = b"".join(_uint(value) for value in work_values)
         meta = bytes.fromhex("0301000001000000000000f03f")
@@ -71,6 +72,20 @@ class NativeCodecTests(unittest.TestCase):
                         quantized_rerank_candidates=0,
                         ef_search=0,
                     )
+            wrong_work_values = list(work_values)
+            wrong_work_values[2] = 2  # typed_exact contradicts the quantized rerank score plane.
+            wrong_work = b"".join(_uint(value) for value in wrong_work_values)
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, wrong_work) + _section(136, score_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=0,
+                )
         finally:
             client.close()
 

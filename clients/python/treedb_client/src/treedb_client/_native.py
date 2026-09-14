@@ -322,6 +322,21 @@ def _dense_score_plane(raw):
     }
 
 
+def _dense_score_plane_matches_graph(work, score_plane):
+    expected = {
+        "typed_empty": "typed_empty",
+        "typed_exact": "typed_exact",
+        "quantized_rerank": "typed_hnsw",
+    }.get(score_plane.route)
+    return (
+        expected is not None
+        and work.completed
+        and work.graph.available
+        and work.graph.completed
+        and work.graph.route == expected
+    )
+
+
 def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_name=None,
                     quantized_rerank_candidates=0, ef_search=None):
     if version not in (1, 2, 3):
@@ -359,6 +374,7 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
                 or score_plane.requested_mode != (query_mode or "quantized_rerank")
                 or score_plane.effective_mode != "quantized_rerank"
                 or score_plane.route not in ("typed_empty", "typed_exact", "quantized_rerank")
+                or not _dense_score_plane_matches_graph(work, score_plane)
                 or score_plane.quantized_index_name != (quantized_index_name or score_plane.quantized_index_name)
                 or score_plane.requested_top_k != top_k
                 or (ef_search is not None and score_plane.requested_ef_search != ef_search)

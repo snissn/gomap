@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import http.client
 import json
 import os
@@ -594,6 +595,122 @@ class TreeDBClientTests(unittest.TestCase):
                     query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.fast",
                 )
+
+    def test_http_quantized_query_binds_outer_response_and_dense_work(self) -> None:
+        typed_index = copy.deepcopy(SAMPLE_INDEX)
+        typed_index["typed_input"] = True
+        typed_index["quantized_indexes"] = [{"name": "embedding.scalar_u8.public", "codec": "scalar_u8", "version": 1}]
+        typed_index["capabilities"]["typed_dense_quantized_rerank"] = True
+        manifest = {"generation": 1, "format": "", "version": 0, "checksum": 0}
+        snapshot = {
+            "available": True,
+            "schema_hash": 1,
+            "schema_generation": 1,
+            "base_manifest": manifest,
+            "current_manifest": manifest,
+            "base_coverage_lsn": 1,
+            "current_coverage_lsn": 1,
+        }
+        dense_work = {
+            "version": 1,
+            "completed": True,
+            "graph": {
+                "available": True,
+                "completed": True,
+                "route": "typed_hnsw",
+                "base_ann_scored": 1,
+                "base_candidates": 1,
+                "base_edges": 1,
+                "delta_scored": 0,
+                "exact_base_scored": 0,
+                "base_shadowed": 0,
+                "base_result_ids": 1,
+                "filter": {
+                    "attempted": False,
+                    "completed": False,
+                    "eligible_rows": 0,
+                    "source_ids": 0,
+                    "source_bytes": 0,
+                    "inspected_entries": 0,
+                    "mapping_work_charged": 0,
+                    "retained_bytes": 0,
+                    "scratch_id_bytes": 0,
+                    "scratch_rows": 0,
+                    "ordinal_growth_peak_bytes": 0,
+                },
+                "snapshot": snapshot,
+            },
+            "output": {
+                "attempted": True,
+                "completed": True,
+                "requested": 1,
+                "fetched": 1,
+                "missing": 0,
+                "output_bytes": 1,
+                "retained_payload_fetches": 0,
+                "json_reconstruction_rows": 1,
+                "typed_column_rows": 1,
+            },
+        }
+        score_plane = {
+            "version": 1,
+            "available": True,
+            "completed": True,
+            "requested_mode": "quantized_rerank",
+            "effective_mode": "quantized_rerank",
+            "route": "quantized_rerank",
+            "reason": "",
+            "quantized_index_name": "embedding.scalar_u8.public",
+            "quantized_codec": "scalar_u8",
+            "quantized_version": 1,
+            "quantized_config_hash": 1,
+            "requested_top_k": 1,
+            "requested_ef_search": 0,
+            "requested_rerank_candidates": 0,
+            "normalized_candidate_width": 1,
+            "raw_candidate_width": 1,
+            "rerank_candidate_cap": 1,
+            "raw_retained_candidates": 1,
+            "live_shortlist_candidates": 0,
+            "actual_rerank_candidates": 1,
+            "quantized_score_calls": 1,
+            "quantized_code_bytes_read": 1,
+            "exact_base_rerank_score_calls": 1,
+            "exact_suffix_score_calls": 0,
+            "exact_small_filter_score_calls": 0,
+            "exact_base_vector_bytes_read": 0,
+            "exact_suffix_vector_bytes_read": 0,
+            "snapshot": snapshot,
+        }
+        payload = {
+            "index": typed_index,
+            "metric": "cosine",
+            "exact": False,
+            "candidates": 1,
+            "route": "ann",
+            "documents": [{"id": "a", "content": "alpha", "score": 1.0}],
+            "dense_work": dense_work,
+            "score_plane": score_plane,
+        }
+        with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, payload, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+            result = client.query_by_embedding(
+                "docs", [1, 0], 1, query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public"
+            )
+            self.assertEqual(result.documents[0].id, "a")
+            for mutation in (
+                lambda item: item.update(exact=True),
+                lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "route": "typed_exact"}}),
+            ):
+                invalid = copy.deepcopy(payload)
+                mutation(invalid)
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid, 0)}) as bad_server:
+                    bad_client = TreeDBClient(bad_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        bad_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public"
+                        )
+                    bad_client.close()
 
 
     def test_benchmark_lifecycle_and_vector_index_search_methods(self) -> None:

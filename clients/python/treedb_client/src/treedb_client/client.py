@@ -506,6 +506,7 @@ class TreeDBClient:
         if mode == "quantized_rerank":
             _validate_http_dense_quantized_response(
                 response,
+                index=index,
                 top_k=top_k_value,
                 ef_search=ef_search_value or 0,
                 quantized_index_name=quantized_index_name,
@@ -1008,6 +1009,7 @@ def _parse_response(
 def _validate_http_dense_quantized_response(
     response: DenseVectorSearchResponse,
     *,
+    index: str,
     top_k: int,
     ef_search: int,
     quantized_index_name: str,
@@ -1016,8 +1018,28 @@ def _validate_http_dense_quantized_response(
     """Require the HTTP response proof for an explicitly selected public route."""
 
     proof = response.score_plane
+    work = response.dense_work
+    selected = next((item for item in response.index.quantized_indexes if item.name == quantized_index_name), None)
+    expected_graph_route = {
+        "typed_empty": "typed_empty",
+        "typed_exact": "typed_exact",
+        "quantized_rerank": "typed_hnsw",
+    }.get(proof.route if proof is not None else "")
     if (
         proof is None
+        or work is None
+        or not work.completed
+        or not work.graph.available
+        or not work.graph.completed
+        or expected_graph_route is None
+        or work.graph.route != expected_graph_route
+        or response.index.name != index
+        or response.index.metric != "cosine"
+        or response.index.vector_strategy != "column_graph"
+        or response.index.extra.get("typed_input") is not True
+        or not response.index.capabilities.typed_dense_quantized_rerank
+        or response.route != "ann"
+        or response.exact
         or not proof.available
         or not proof.completed
         or not proof.snapshot.available
@@ -1027,6 +1049,10 @@ def _validate_http_dense_quantized_response(
         or proof.quantized_index_name != quantized_index_name
         or proof.quantized_codec != "scalar_u8"
         or proof.quantized_version != 1
+        or selected is None
+        or selected.codec != "scalar_u8"
+        or selected.version != 1
+        or (selected.scalar_u8_calibration is not None and getattr(selected.scalar_u8_calibration, "mode", "") not in ("", "legacy"))
         or proof.requested_top_k != top_k
         or proof.requested_ef_search != ef_search
         or proof.requested_rerank_candidates != quantized_rerank_candidates

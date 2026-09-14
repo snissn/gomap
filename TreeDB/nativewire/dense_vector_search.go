@@ -180,7 +180,7 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	if err == nil && version == iwire.DenseVectorSearchTypedQuantizedVersion {
 		out.ScorePlane, err = decodeDenseScorePlaneSection(c.vectorSections, true, c.limits)
 		if err == nil {
-			err = validateDenseQuantizedScorePlaneResponse(out.ScorePlane, request)
+			err = validateDenseQuantizedScorePlaneResponse(out.DenseWork, out.ScorePlane, request)
 		}
 	}
 	if err == nil && version >= iwire.DenseVectorSearchTypedVersion {
@@ -198,10 +198,24 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	return out, err
 }
 
-func validateDenseQuantizedScorePlaneResponse(proof *collections.ColumnGraphScorePlaneWork, request DenseVectorSearchRequest) error {
+func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWork, proof *collections.ColumnGraphScorePlaneWork, request DenseVectorSearchRequest) error {
+	graphRoute := ""
+	if work.Graph.Available {
+		graphRoute = work.Graph.Route
+	}
+	expectedGraphRoute := ""
+	switch {
+	case proof != nil && proof.Route == "typed_empty":
+		expectedGraphRoute = "typed_empty"
+	case proof != nil && proof.Route == "typed_exact":
+		expectedGraphRoute = "typed_exact"
+	case proof != nil && proof.Route == "quantized_rerank":
+		expectedGraphRoute = "typed_hnsw"
+	}
 	if proof == nil || !proof.Available || !proof.Completed || !proof.Snapshot.Available ||
 		proof.RequestedMode != request.QueryMode || proof.EffectiveMode != collections.VectorIndexQueryModeQuantizedRerank ||
 		(proof.Route != "typed_empty" && proof.Route != "typed_exact" && proof.Route != "quantized_rerank") ||
+		!work.Completed || !work.Graph.Completed || graphRoute != expectedGraphRoute ||
 		proof.QuantizedIndexName != request.QuantizedIndexName || proof.RequestedTopK != uint64(request.TopK) ||
 		proof.RequestedEFSearch != uint64(request.EfSearch) || proof.RequestedRerankCandidates != uint64(request.QuantizedRerankCandidates) {
 		return protocolError(iwire.ErrConsistencyUnavailable, "dense score-plane proof does not match the request")
