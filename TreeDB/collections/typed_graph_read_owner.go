@@ -48,6 +48,17 @@ type typedGraphReadOwner struct {
 	closed                        bool
 }
 
+// attachTypedGraphLegacyScalarU8QuantizedAsset is the Q2-only acquisition seam
+// for the private filtered scalar-u8 collector. Owner assembly keeps generic
+// quantized assets skipped; this attaches exactly one holder-owned legacy v1
+// code plane to the base reader without transferring resource ownership.
+func (o *typedGraphReadOwner) attachTypedGraphLegacyScalarU8QuantizedAsset(name string) error {
+	if o == nil || o.closed || o.overlay == nil || o.overlay.base == nil || o.overlay.base.reader == nil || o.overlay.base.collection == nil {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	return o.overlay.base.collection.requestAndAttachColumnVectorGraphSharedPreparedLegacyScalarU8Asset(o.overlay.base.reader, name)
+}
+
 // Like VectorIndexSearcher.Close, Close is idempotent, not concurrently callable
 // with searches. Resource release never runs under the accounting mutex.
 func (o *typedGraphReadOwner) Close() error {
@@ -307,13 +318,25 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 		if state.servingBase != nil {
 			recordCount = state.servingBase.recordCount
 		}
-		candidate.backingBytes, err = typedGraphCapturedBaseBackingBound(graph.RowCount, recordCount, graph.AdjacencyLayerCount, limits.StateBytes-candidate.descriptorBytes)
+		def := catalog.meta.VectorIndexes[0]
+		var legacyScalarU8Descriptors []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor
+		if graph.RowCount > 0 {
+			// Per-owner admission covers a holder built independently of any
+			// keeper, so construct the exact descriptor shape that can outlive
+			// this decoded base view before opening sources.
+			legacyScalarU8Descriptors = columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptors(def, baseView.VectorIndexState)
+		}
+		candidate.backingBytes, err = typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(graph.RowCount, recordCount, graph.AdjacencyLayerCount, legacyScalarU8Descriptors, limits.StateBytes-candidate.descriptorBytes)
 		if err != nil {
 			return err
 		}
-		def := catalog.meta.VectorIndexes[0]
+		readerAttachmentBytes, err := typedGraphLegacyScalarU8ReaderAttachmentBackingBound(len(legacyScalarU8Descriptors), limits.StateBytes-candidate.descriptorBytes-candidate.backingBytes)
+		if err != nil {
+			return err
+		}
+		candidate.backingBytes += readerAttachmentBytes
 		baseView.graphOwnerRecords = nil
-		readerOptions := columnVectorGraphPhysicalRowReaderOptions{admitSources: func(keyBytes int) error {
+		readerOptions := columnVectorGraphPhysicalRowReaderOptions{SkipQuantizedAssets: true, admitSources: func(keyBytes int) error {
 			if !addDescriptor(int64(keyBytes), 2) {
 				return errTypedGraphOwnerBudget
 			}

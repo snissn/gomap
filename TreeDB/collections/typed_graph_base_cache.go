@@ -5,6 +5,9 @@ import (
 	"errors"
 	"reflect"
 	"sync"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/quantizedasset"
 )
 
 // No snapshot, catalog or suffix is retained here. Ref owns immutable prepared
@@ -174,7 +177,14 @@ func (c *Collection) openTypedGraphCapturedBaseCache(ctx context.Context, index 
 			return errTypedGraphOwnerBudget
 		}
 		r.descriptorBytes += fixed + int64(cap(refs))*refSize
-		r.backingBytes, err = typedGraphCapturedBaseBackingBound(graph.RowCount, len(view.graphOwnerRecords), graph.AdjacencyLayerCount, limits.StateBytes-r.descriptorBytes)
+		var legacyScalarU8Descriptors []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor
+		if graph.RowCount > 0 {
+			// The shared holder transfers this descriptor shape beyond the
+			// decoded view that produced it. Construct the same descriptor
+			// shape for admission before opening any source.
+			legacyScalarU8Descriptors = columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptors(catalog.meta.VectorIndexes[0], view.VectorIndexState)
+		}
+		r.backingBytes, err = typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(graph.RowCount, len(view.graphOwnerRecords), graph.AdjacencyLayerCount, legacyScalarU8Descriptors, limits.StateBytes-r.descriptorBytes)
 		if err != nil {
 			return err
 		}
@@ -222,6 +232,94 @@ func (c *Collection) openTypedGraphCapturedBaseCache(ctx context.Context, index 
 // not a total process heap ceiling. Shared holders are charged conservatively
 // per keeper and per read owner, including owners surviving keeper retirement.
 func typedGraphCapturedBaseBackingBound(rows, records, layers int, limit int64) (int64, error) {
+	return typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, records, layers, nil, limit)
+}
+
+// typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets extends the
+// existing retained-holder bound with the maximum metadata that a shared
+// holder can keep after an owner lazily requests legacy scalar_u8 v1. The code
+// file bytes remain covered by typedGraphOwnerRefs/lifecycle pins; this adds
+// only holder descriptors, entry/status/resource structs, one-column Prepared
+// metadata, and the O(rows) derived code sums for each declared legacy plane.
+// A first lazy request also retains the entry's unbuffered ready channel. Go
+// 1.26's 64-bit hchan is 112 bytes; this bound covers the channel allocation on
+// both known pointer widths without exposing runtime internals here.
+const typedGraphLegacyScalarU8EntryReadyChannelBackingBound uintptr = 128
+
+const (
+	// The reader starts with an empty quantizedAssetStatus map. A Q2 attachment
+	// fills its first group and stores an indirect
+	// columnVectorGraphQuantizedAssetLoadStatus value. This includes that map
+	// header/group plus its first value allocation on Go 1.26 amd64.
+	typedGraphLegacyScalarU8ReaderAttachment64BitBound uintptr = 768
+
+	// Keep a separately conservative future 32-bit bound: the map layout and
+	// value indirection threshold differ from amd64.
+	typedGraphLegacyScalarU8ReaderAttachment32BitBound uintptr = 2 << 10
+)
+
+func typedGraphLegacyScalarU8ReaderAttachmentBoundForPointerBytes(pointerBytes uintptr) (uintptr, bool) {
+	switch pointerBytes {
+	case 8:
+		return typedGraphLegacyScalarU8ReaderAttachment64BitBound, true
+	case 4:
+		return typedGraphLegacyScalarU8ReaderAttachment32BitBound, true
+	default:
+		return 0, false
+	}
+}
+
+func typedGraphLegacyScalarU8ReaderAttachmentBackingBound(legacyScalarU8Assets int, limit int64) (int64, error) {
+	if legacyScalarU8Assets < 0 || limit < 0 {
+		return 0, errTypedGraphOwnerBudget
+	}
+	if legacyScalarU8Assets == 0 {
+		return 0, nil
+	}
+	perPlane, bounded := typedGraphLegacyScalarU8ReaderAttachmentBoundForPointerBytes(unsafe.Sizeof(uintptr(0)))
+	if !bounded || int64(legacyScalarU8Assets) > limit/int64(perPlane) {
+		return 0, errTypedGraphOwnerBudget
+	}
+	return int64(legacyScalarU8Assets) * int64(perPlane), nil
+}
+
+// typedGraphLegacyScalarU8DescriptorPayloadBytes accounts string backing
+// transferred from a decoded VectorIndexState into a long-lived shared holder.
+// The descriptor and calibration headers themselves are charged separately by
+// the captured-base bound; this helper covers only their retained payload.
+func typedGraphLegacyScalarU8DescriptorPayloadBytes(descriptors []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, limit int64) (int64, error) {
+	if limit < 0 {
+		return 0, errTypedGraphOwnerBudget
+	}
+	var total int64
+	addString := func(value string) bool {
+		bytes := int64(len(value))
+		if bytes < 0 || total > limit || bytes > limit-total {
+			return false
+		}
+		total += bytes
+		return true
+	}
+	for _, descriptor := range descriptors {
+		if !addString(descriptor.definition.Name) ||
+			!addString(descriptor.definition.Codec) ||
+			!addString(descriptor.assets.Codes.Role) ||
+			!addString(descriptor.assets.Codes.AssetID) ||
+			!addString(descriptor.assets.Codes.LogicalType) ||
+			!addString(descriptor.assets.Codes.PhysicalEncoding) ||
+			!addString(string(descriptor.assets.Codes.Ref.Kind)) ||
+			!addString(descriptor.assets.Codes.Ref.Namespace) {
+			return 0, errTypedGraphOwnerBudget
+		}
+		if cfg := descriptor.definition.ScalarU8Calibration; cfg != nil &&
+			(!addString(string(cfg.Mode)) || !addString(string(cfg.Grouping)) || !addString(string(cfg.AlphaPolicy.Name))) {
+			return 0, errTypedGraphOwnerBudget
+		}
+	}
+	return total, nil
+}
+
+func typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, records, layers int, legacyScalarU8Assets []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, limit int64) (int64, error) {
 	var total int64
 	add := func(count int, size uintptr) bool {
 		if count < 0 || size == 0 || int64(count) > (limit-total)/int64(size) {
@@ -262,6 +360,49 @@ func typedGraphCapturedBaseBackingBound(rows, records, layers int, limit int64) 
 		if !add(term.n, term.size) {
 			return 0, errTypedGraphOwnerBudget
 		}
+	}
+	if len(legacyScalarU8Assets) > 0 {
+		preparedMetadataBound, preparedMetadataBounded := quantizedasset.PreparedOneColumnRetainedMetadataBound()
+		if !preparedMetadataBounded {
+			return 0, errTypedGraphOwnerBudget
+		}
+		// The descriptor slice and request-entry slice retain exactly one slot per
+		// declared legacy plane. Entries are allocated lazily, but a captured keeper
+		// can outlive the owner that first populates them, so admit their maximum
+		// safely at holder construction time.
+		for _, size := range []uintptr{
+			reflect.TypeFor[columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor]().Size(),
+			reflect.TypeFor[*columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry]().Size(),
+			reflect.TypeFor[columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry]().Size(),
+			typedGraphLegacyScalarU8EntryReadyChannelBackingBound,
+			reflect.TypeFor[columnVectorGraphQuantizedAssetResource]().Size(),
+			preparedMetadataBound,
+			reflect.TypeFor[ScalarU8CalibrationConfig]().Size(),
+		} {
+			if !add(len(legacyScalarU8Assets), size) {
+				return 0, errTypedGraphOwnerBudget
+			}
+		}
+	}
+	descriptorPayloadBytes, err := typedGraphLegacyScalarU8DescriptorPayloadBytes(legacyScalarU8Assets, limit-total)
+	if err != nil {
+		return 0, err
+	}
+	total += descriptorPayloadBytes
+	// Resource loading derives one uint32 sum per base row. Keep this checked
+	// separately so the product cannot overflow and no query can add an
+	// unadmitted O(N) slice after its owner was accepted.
+	if rows > 0 && len(legacyScalarU8Assets) > 0 {
+		remaining := limit - total
+		sumSize := int64(reflect.TypeFor[uint32]().Size())
+		if sumSize <= 0 || int64(rows) > remaining/sumSize {
+			return 0, errTypedGraphOwnerBudget
+		}
+		perPlane := int64(rows) * sumSize
+		if perPlane <= 0 || int64(len(legacyScalarU8Assets)) > remaining/perPlane {
+			return 0, errTypedGraphOwnerBudget
+		}
+		total += int64(len(legacyScalarU8Assets)) * perPlane
 	}
 	return total, nil
 }

@@ -273,17 +273,31 @@ func (c *Collection) RenewColumnGraphServing(ctx context.Context, index string) 
 	return c.renewTypedGraphWorkEpoch(ctx, p.options.Maintenance)
 }
 
-func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (response VectorIndexSearchResponse, view *CollectionReadView, err error) {
+// searchTypedGraphServing owns both public typed serving wrappers. Q2's
+// quantized rerank exception is intentionally callable only from the read-view
+// wrapper: a buffer-only caller cannot preserve the captured owner needed for
+// the coherent mutable base/suffix/fetch contract.
+func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, allowSelectedQuantizedRerank bool) (response VectorIndexSearchResponse, view *CollectionReadView, err error) {
 	workstats.Graph.Requests.Attempts.Add(1)
 	var stats typedGraphOverlaySearchStats
 	var filterWork ColumnGraphFilterWork
 	var snapshot ColumnGraphQuerySnapshot
+	var scorePlane ColumnGraphScorePlaneWork
 	defer func() {
 		workstats.Graph.Requests.Finish(err == nil)
-		response.Stats.ColumnGraphWork = stats.work()
-		response.Stats.ColumnGraphWork.Completed = err == nil
-		response.Stats.ColumnGraphWork.Filter = filterWork
-		response.Stats.ColumnGraphWork.Snapshot = snapshot
+		work := stats.work()
+		work.Completed = err == nil
+		work.Filter = filterWork
+		work.Snapshot = snapshot
+		if scorePlane.Available {
+			scorePlane.Completed = err == nil
+			scorePlane.Snapshot = snapshot
+			if err != nil && scorePlane.Reason == "" {
+				scorePlane.Reason = err.Error()
+			}
+			work.ScorePlane = scorePlane
+		}
+		response.Stats.ColumnGraphWork = work
 	}()
 	if err = validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
 		return
@@ -293,7 +307,16 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 	if p == nil || p.index != opts.IndexName {
 		return response, nil, ErrVectorIndexSearchUnavailable
 	}
-	if opts.QueryMode != "" && opts.QueryMode != VectorIndexQueryModeExact || opts.StatsMode != VectorIndexSearchStatsModeMinimal && opts.StatsMode != VectorIndexSearchStatsModeProduction || opts.MaxDecodedBlocks != 0 {
+	queryMode, modeErr := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+	if modeErr != nil {
+		return response, nil, modeErr
+	}
+	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank && !allowSelectedQuantizedRerank {
+		return response, nil, ErrHybridSearchUnsupported
+	}
+	unsupportedMode := queryMode != columnVectorGraphNativeSearchQueryModeExact && queryMode != columnVectorGraphNativeSearchQueryModeQuantizedRerank
+	unsupportedStats := opts.StatsMode != VectorIndexSearchStatsModeMinimal && opts.StatsMode != VectorIndexSearchStatsModeProduction
+	if unsupportedMode || unsupportedStats || opts.MaxDecodedBlocks != 0 {
 		return response, nil, ErrHybridSearchUnsupported
 	}
 	if opts.Context != nil {
@@ -319,16 +342,20 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 			response.Results = nil
 		}
 	}()
-	if opts.DeclaredScalarFilter == nil {
-		response.Results, stats, err = owner.overlay.searchWithContext(ctx, opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
-	} else {
-		var filter *typedGraphPreparedFilter
+	var filter *typedGraphPreparedFilter
+	if opts.DeclaredScalarFilter != nil {
 		keeper := c.borrowTypedGraphFilterKeeper(owner, p.index)
 		if keeper != nil {
 			defer keeper.mu.RUnlock()
 		}
 		filter, err = prepareTypedGraphServingFilter(ctx, keeper, owner.overlay, *opts.DeclaredScalarFilter, p.options.Filter, &filterWork)
-		if err == nil {
+	}
+	if err == nil {
+		if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
+			response.Results, stats, scorePlane, err = owner.searchScalarU8QuantizedRerankWithContext(ctx, opts, filter, p.options.SearchCandidates, buffer)
+		} else if filter == nil {
+			response.Results, stats, err = owner.overlay.searchWithContext(ctx, opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
+		} else {
 			response.Results, stats, err = owner.overlay.searchPreparedFilterWithContext(ctx, filter, opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
 		}
 	}

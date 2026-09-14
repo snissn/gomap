@@ -377,6 +377,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_hnsw_search_pack_test.go", classification: typedStorageLegacyDerived, matchingLines: 6, occurrences: 7},
 	{path: "TreeDB/collections/column_hnsw_search_pack_writer.go", classification: typedStorageLegacyDerived, matchingLines: 5, occurrences: 5},
 	{path: "TreeDB/collections/collection_vector_index_prepared_search_cache.go", classification: typedStorageLegacyDerived, matchingLines: 5, occurrences: 5},
+	// Q2's holder-owned scalar-u8 loader reaches the published typed-column
+	// asset authority through the compatibility-retained configuration API.
+	{path: "TreeDB/collections/column_vector_graph_shared_prepared.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
 	// The persistent vector-partition searcher consumes the compatibility-retained
 	// public collection configuration solely to reach derived typed-column assets.
 	{path: "TreeDB/collections/vector_partition_persistent_searcher_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
@@ -405,6 +408,10 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// The Q1 scalar-u8 traversal fixture reads the retained public configuration
 	// only to bind a cached typed-graph schema pin.
 	{path: "TreeDB/collections/typed_graph_scalar_u8_traversal_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
+	// Q2 benchmark and corruption fixtures use the retained configuration only
+	// to parameterize or copy the published typed-graph test fixture.
+	{path: "TreeDB/collections/typed_graph_quantized_rerank_bench_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/typed_graph_quantized_rerank_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	// Full-width diagnostic fixtures use the existing compatibility configuration.
 	{path: "TreeDB/collections/typed_graph_scale_diagnostic_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/typed_write_768_diagnostic_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},

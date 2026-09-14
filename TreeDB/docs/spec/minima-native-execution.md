@@ -217,6 +217,54 @@ upper repeats consume allowance even when the row domain fits within the cap.
 The shared pack default retains the partition router's distinct layer-0 cap,
 entry-at-layer-0 traversal, and permitted approximate success at that cap.
 
+### Selected Q2 quantized rerank
+
+Q2 (#4685) adds one selected mutable score plane to
+`Collection.SearchVectorIndexWithBufferReadView`: a named legacy `scalar_u8`
+v1 plane with `QueryMode=quantized_rerank`. It is an opt-in cosine route after
+normal typed serving admission, not a promotion of mutable quantized search in
+general. `quantized_only`, calibrated scalar-u8, RaBitQ/BRQ, `SearchHybrid`,
+`native_runtime`, and HTTP/native transport remain outside Q2; existing exact
+requests and their arithmetic remain unchanged.
+
+The request keeps one captured owner for scalar traversal, filter visibility,
+typed FP32 rerank, suffix merge, result IDs, and final fetch. The immutable base
+borrows one named code resource from the existing full-identity shared prepared
+holder, so a reader gets a non-owning status rather than a per-query code-plane
+open or copy. A zero-row base has no exact holder, but its selected zero-row
+code image is still validated against immutable published metadata before an
+empty, `TopK=0`, or suffix-only result; the memoized validation holds no code
+image, scorer, or mapped handle. Missing, stale, corrupt, or mismatched assets
+fail closed and do not select an exact or document-scan fallback.
+
+For an admitted request, `A` is the pre-shadow base domain (`plan.base.Count()`
+when filtered); `S` is the conservative shadow allowance (all suffix rows when
+unfiltered, `len(plan.excludedBase)` when filtered); and `D` is the eligible
+nondeleted suffix count. With `K` as TopK, `E0` is
+`min(A, max(K, requested EF or the index default))`, `Rcap` is
+`min(A, E0, requested rerank width or E0)`, and raw candidate width
+`C = min(A, E0 + S)`. These widths are checked before allocation and do not
+silently shrink for a small `SearchCandidates` value. In particular, `C` is a
+raw collection width, not an extension of `Rcap`.
+
+For a nonempty ANN base, positive budget `B=SearchCandidates` first reserves
+the worst-case exact suffix and rerank work: Q1 receives
+`B - D - Rcap`, which must be **strictly greater** than `C`. The strict spare is
+required by the Q1 terminal-score contract. Q2 then removes ineligible/shadowed
+rows from the raw collection, retains no more than `E0` live rows, exact-reranks
+no more than `Rcap`, and never refills after visibility removal. A zero-base
+route exact-scores only the suffix and requires `D <= B`. A complete eligible
+filter of at most 4,096 rows is intentionally the typed exact route (still with
+selected-asset validation for a nonempty base), and its actual live base plus
+suffix exact scores must fit `B`; the 4,097 boundary goes through ANN.
+
+Q2's final base and suffix ordering uses raw authoritative FP32 vectors with
+FP64 inverse norms and `vectorops.CosineDistanceFloat32Normalized`, returning
+`1 - float64(distance)`. It must not substitute a packed raw dot or rounded
+selected-codec score. `ColumnGraphQueryWork.ScorePlane` captures the versioned
+Q2 normalized widths and actual work within the owner-local Go evidence; Q3
+(#4686), not Q2, owns any transport/wire representation of that proof.
+
 M0's bounded-50k baseline exposed a concrete regression target: 1,000 eligible
 `broad_10pct` IDs, zero returned IDs, `complete_finite_ann`, 2,064 visited/scored.
 The existing runtime exact cap is 512; larger complete sets do not receive the
