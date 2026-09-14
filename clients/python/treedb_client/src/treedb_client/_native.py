@@ -334,6 +334,7 @@ def _dense_score_plane_matches_graph(work, score_plane):
         and work.graph.available
         and work.graph.completed
         and work.graph.route == expected
+        and work.graph.snapshot == score_plane.snapshot
     )
 
 

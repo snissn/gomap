@@ -31,9 +31,9 @@ class NativeCodecTests(unittest.TestCase):
         work_values[34] = len(b'{"id":"a"}')
         raw_work = b"".join(_uint(value) for value in work_values)
         meta = bytes.fromhex("0301000001000000000000f03f")
-        values = [1, 7, 2, 2, 3, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 11, 1, 0, 0]
+        values = [1, 7, 2, 2, 3, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 7, 1, 2, 2]
         score_plane = b"".join(_uint(value) for value in values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
-        score_plane += b"\x01\x01\x01\x00" * 2
+        score_plane += b"\x01\x01\x01\x03" * 2
         body = _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) + _section(130, meta) + _section(134, raw_work) + _section(136, score_plane)
         info = SimpleNamespace(
             name="a", dimension=2, generation=2, vector_strategy="column_graph", metric="cosine",
@@ -60,7 +60,7 @@ class NativeCodecTests(unittest.TestCase):
                 invalid_values[4] = route_tag
                 invalid_values[16] = score_calls
                 invalid_plane = b"".join(_uint(value) for value in invalid_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
-                invalid_plane += b"\x01\x01\x01\x00" * 2
+                invalid_plane += b"\x01\x01\x01\x03" * 2
                 with self.assertRaises(TreeDBProtocolError):
                     _dense_response(
                         _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +

@@ -216,6 +216,7 @@ func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWo
 		proof.RequestedMode != request.QueryMode || proof.EffectiveMode != collections.VectorIndexQueryModeQuantizedRerank ||
 		(proof.Route != "typed_empty" && proof.Route != "typed_exact" && proof.Route != "quantized_rerank") ||
 		!work.Completed || !work.Graph.Completed || graphRoute != expectedGraphRoute ||
+		proof.Snapshot != work.Graph.Snapshot ||
 		proof.QuantizedIndexName != request.QuantizedIndexName || proof.RequestedTopK != uint64(request.TopK) ||
 		proof.RequestedEFSearch != uint64(request.EfSearch) || proof.RequestedRerankCandidates != uint64(request.QuantizedRerankCandidates) {
 		return protocolError(iwire.ErrConsistencyUnavailable, "dense score-plane proof does not match the request")

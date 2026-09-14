@@ -1033,6 +1033,7 @@ def _validate_http_dense_quantized_response(
         or not work.graph.completed
         or expected_graph_route is None
         or work.graph.route != expected_graph_route
+        or work.graph.snapshot != proof.snapshot
         or response.index.name != index
         or response.index.metric != "cosine"
         or response.index.vector_strategy != "column_graph"

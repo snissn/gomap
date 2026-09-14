@@ -91,6 +91,7 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true},
 	}
 	work := documentservice.DenseSearchWork{Completed: true, Graph: collections.ColumnGraphQueryWork{Available: true, Completed: true, Route: "typed_hnsw"}}
+	work.Graph.Snapshot = proof.Snapshot
 	request := DenseVectorSearchRequest{QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: proof.QuantizedIndexName, TopK: 1, EfSearch: 8}
 	if err := validateDenseQuantizedScorePlaneResponse(work, proof, request); err != nil {
 		t.Fatalf("valid public proof rejected: %v", err)
@@ -111,6 +112,11 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	wrongGraph.Graph.Route = "typed_exact"
 	if err := validateDenseQuantizedScorePlaneResponse(wrongGraph, proof, request); err == nil {
 		t.Fatal("score-plane proof accepted with a contradictory dense-work route")
+	}
+	wrongSnapshot := work
+	wrongSnapshot.Graph.Snapshot.SchemaHash++
+	if err := validateDenseQuantizedScorePlaneResponse(wrongSnapshot, proof, request); err == nil {
+		t.Fatal("score-plane proof accepted with a contradictory snapshot")
 	}
 }
 
