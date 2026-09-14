@@ -33,7 +33,7 @@ DIMENSIONS = 768
 TOP_K = 10
 QUALITY_TARGET = 0.90
 CONTROL_NAMES = {"treedb": "ef_search", "qdrant": "hnsw_ef"}
-EVALUATION_QUERIES = list(range(100, 200))
+MEASUREMENT_QUERIES = list(range(100, 200))
 PAIR_ORDER = [["treedb", "qdrant"], ["qdrant", "treedb"], ["treedb", "qdrant"]]
 HARNESS_PATHS = ("benchmarks/vector_db_compare", "clients/python/treedb_client")
 PRODUCT_PATHS = ("TreeDB", "cmd/treedb-document-service", "go.mod", "go.sum", "internal")
@@ -76,8 +76,9 @@ def reviewed_selected_control(artifact, backend, candidates):
         raise RuntimeError(f"{backend} selected control is outside the reviewed candidates")
     prefix = candidates[:candidates.index(selected) + 1]
     calibration = quality.get("calibration") or {}
-    curve = calibration.get("curve") or []
-    evaluation = quality.get("evaluation") or {}
+    revalidation = quality.get("revalidation") or {}
+    calibration_curve = calibration.get("curve") or []
+    revalidation_curve = revalidation.get("curve") or []
 
     def verified_mean(record, count):
         samples, reported = record.get("per_query"), record.get("mean_recall_at_10")
@@ -91,16 +92,20 @@ def reviewed_selected_control(artifact, backend, candidates):
             raise RuntimeError(f"{backend} artifact recall summary differs from retained samples")
         return recomputed
 
-    means = [verified_mean(point, 100) for point in curve]
-    evaluation_mean = verified_mean(evaluation, len(EVALUATION_QUERIES))
-    if ([point.get("control") for point in curve] != prefix
+    if ([point.get("control") for point in calibration_curve] != prefix
+            or [point.get("control") for point in revalidation_curve] != prefix):
+        raise RuntimeError(f"{backend} artifact does not retain both candidate prefixes")
+    calibration_means = [verified_mean(point, 100) for point in calibration_curve]
+    revalidation_means = [verified_mean(point, len(MEASUREMENT_QUERIES)) for point in revalidation_curve]
+    if (quality.get("selection_protocol") != native.RSS_SELECTION_PROTOCOL
             or calibration.get("queries") != list(range(100))
-            or evaluation.get("queries") != EVALUATION_QUERIES
+            or revalidation.get("queries") != MEASUREMENT_QUERIES
             or quality.get("target_mean_recall_at_10") != QUALITY_TARGET
-            or any(value >= QUALITY_TARGET for value in means[:-1])
-            or not means or means[-1] < QUALITY_TARGET
-            or evaluation.get("passed") != (evaluation_mean >= QUALITY_TARGET)
-            or evaluation_mean < QUALITY_TARGET):
+            or any(first >= QUALITY_TARGET and second >= QUALITY_TARGET
+                   for first, second in zip(calibration_means[:-1], revalidation_means[:-1], strict=True))
+            or not calibration_means or calibration_means[-1] < QUALITY_TARGET
+            or revalidation_means[-1] < QUALITY_TARGET
+            or revalidation.get("passed") is not True):
         raise RuntimeError(f"{backend} artifact does not prove the lowest passing control")
     return selected
 
@@ -269,14 +274,15 @@ def frozen_plan(args):
             or contract.get("top_k") != TOP_K or contract.get("quality_target") != QUALITY_TARGET
             or contract.get("dataset_manifest_sha256") != digest(dataset / "manifest.json")
             or contract.get("dataset_files_sha256") != files
+            or contract.get("quality_selection_protocol") != native.RSS_SELECTION_PROTOCOL
             or contract.get("calibration_queries") != list(range(100))
-            or contract.get("evaluation_queries") != EVALUATION_QUERIES):
+            or contract.get("revalidation_queries") != MEASUREMENT_QUERIES):
         raise RuntimeError("reviewed control artifacts do not share the frozen comparison contract")
     control_environment = validate_control_environment(contract)
     candidates = {"treedb": contract.get("ann_controls", {}).get("treedb_ef_search"),
                   "qdrant": contract.get("ann_controls", {}).get("qdrant_hnsw_ef")}
     if any(value != native.RSS_CONTROLS for value in candidates.values()):
-        raise RuntimeError("reviewed control candidate sets differ from the v2 policy")
+        raise RuntimeError("reviewed control candidate sets differ from the v3 policy")
     selected = {backend: reviewed_selected_control(artifact, backend, candidates[backend])
                 for backend, artifact in (("treedb", tree), ("qdrant", qdrant_result))}
     if args.run_root.exists():
@@ -303,10 +309,10 @@ def frozen_plan(args):
         "control_evidence_sha256": digest(args.control_evidence),
         "control_artifacts_sha256": {"treedb": digest(tree_artifact), "qdrant": digest(qdrant_artifact)},
         "control_selection": {backend: {"name": CONTROL_NAMES[backend], "value": control,
-            "policy": "lowest passing candidate in reviewed v2 calibration"}
+            "policy": "lowest candidate passing both fixed query sets in reviewed v3 calibration"}
             for backend, control in selected.items()},
         "quality_target_mean_recall_at_10": QUALITY_TARGET,
-        "quality_queries": EVALUATION_QUERIES,
+        "quality_queries": MEASUREMENT_QUERIES,
         "pair_order": PAIR_ORDER, "repetitions": 3, "batch_size": 256,
         "warmup_queries": 100, "query_window_seconds": args.query_window_seconds,
         "query_concurrency": 4, "mixed_reader_concurrency": 4,
@@ -587,22 +593,22 @@ def run_treedb(plan, run_dir):
 
         control = plan["control_selection"]["treedb"]["value"]
         actual = []
-        for query in EVALUATION_QUERIES:
+        for query in MEASUREMENT_QUERIES:
             actual.append([doc.id for doc in run.search("profile_quality", ROWS, control, query).documents])
-        quality = mean_recall(actual, [run.truth[str(ROWS)][query] for query in EVALUATION_QUERIES])
+        quality = mean_recall(actual, [run.truth[str(ROWS)][query] for query in MEASUREMENT_QUERIES])
         if quality["mean_recall_at_10"] < QUALITY_TARGET:
             raise RuntimeError("TreeDB fixed control missed the recall target")
         initial_rss = measured_rss(native.process_peak_at_boundary(
             run.controller.process.pid, run.controller._owned_identity, plan["cpu_affinity"]),
             "TreeDB", "initial-ready")
         initial_disk = native.existing.common.disk_bytes(run.output / "db")
-        for query in EVALUATION_QUERIES:
+        for query in MEASUREMENT_QUERIES:
             validate_tree_queries([tree_query(run, query, control)], run.info.generation)
         validate = lambda response: validate_tree_queries([response], run.info.generation)
         single, _ = timed_window(lambda query: tree_query(run, query, control), validate,
-                                 EVALUATION_QUERIES, 1, plan["query_window_seconds"])
+                                 MEASUREMENT_QUERIES, 1, plan["query_window_seconds"])
         concurrent, _ = timed_window(lambda query: tree_query(run, query, control), validate,
-                                     EVALUATION_QUERIES, plan["query_concurrency"],
+                                     MEASUREMENT_QUERIES, plan["query_concurrency"],
                                      plan["query_window_seconds"])
 
         prepared = []
@@ -615,7 +621,7 @@ def run_treedb(plan, run_dir):
             "minima_cohere", docs, index_info=run.info)) for rows, docs in prepared]
         mixed, mixed_reads, mixed_writes = mixed_window(
             lambda query: tree_query(run, query, control), writes,
-            EVALUATION_QUERIES, plan["mixed_reader_concurrency"],
+            MEASUREMENT_QUERIES, plan["mixed_reader_concurrency"],
             plan["mixed_queries_per_reader"], plan["mixed_write_batch_rows"])
         for start, end, response in mixed_reads:
             updated, transitioning = mixed_read_state(start, end, mixed_writes)
@@ -640,7 +646,7 @@ def run_treedb(plan, run_dir):
         if run.failure:
             raise RuntimeError(run.failure)
         run.controller.start(); run.ensure(); run.optimize("ensure")
-        response = tree_query(run, EVALUATION_QUERIES[0], control)
+        response = tree_query(run, MEASUREMENT_QUERIES[0], control)
         restart_ns = time.monotonic_ns() - restart_start
         validate_tree_queries([response], run.info.generation, updated_rows)
         validate_tree_updates(run, updated_rows)
@@ -829,18 +835,18 @@ def run_qdrant(plan, run_dir):
         phase["fresh_process_to_ann_ready_ns"] = time.monotonic_ns() - started
 
         control = plan["control_selection"]["qdrant"]["value"]
-        actual = [run.search(control, query) for query in EVALUATION_QUERIES]
-        quality = mean_recall(actual, [run.truth[query] for query in EVALUATION_QUERIES])
+        actual = [run.search(control, query) for query in MEASUREMENT_QUERIES]
+        quality = mean_recall(actual, [run.truth[query] for query in MEASUREMENT_QUERIES])
         if quality["mean_recall_at_10"] < QUALITY_TARGET:
             raise RuntimeError("Qdrant fixed control missed the recall target")
         initial_rss = measured_rss(native.process_peak_at_boundary(
             run.server_pid, run.process_identity, plan["cpu_affinity"]), "Qdrant", "initial-ready")
         initial_disk = qdrant_rss.existing.disk_bytes(run.storage_path)
-        for query in EVALUATION_QUERIES:
+        for query in MEASUREMENT_QUERIES:
             validate_qdrant_queries([qdrant_query(run, run.client, query, control)])
         single, _ = timed_window(lambda query: qdrant_query(run, run.client, query, control),
                                  lambda response: validate_qdrant_queries([response]),
-                                 EVALUATION_QUERIES, 1, plan["query_window_seconds"])
+                                 MEASUREMENT_QUERIES, 1, plan["query_window_seconds"])
 
         clients = []
         lock = threading.Lock()
@@ -852,7 +858,7 @@ def run_qdrant(plan, run_dir):
                     clients.append(local_clients.client)
             return qdrant_query(run, local_clients.client, query, control)
         concurrent, _ = timed_window(concurrent_query, lambda response: validate_qdrant_queries([response]),
-                                     EVALUATION_QUERIES, plan["query_concurrency"],
+                                     MEASUREMENT_QUERIES, plan["query_concurrency"],
                                      plan["query_window_seconds"])
         for client in clients:
             client.close()
@@ -871,7 +877,7 @@ def run_qdrant(plan, run_dir):
         writes = [(rows, lambda points=points: run.client.upsert(collection_name=run.collection, points=points,
             wait=True, timeout=run.operation_timeout)) for rows, points in prepared]
         mixed, mixed_reads, mixed_writes = mixed_window(
-            concurrent_query, writes, EVALUATION_QUERIES, plan["mixed_reader_concurrency"],
+            concurrent_query, writes, MEASUREMENT_QUERIES, plan["mixed_reader_concurrency"],
             plan["mixed_queries_per_reader"], plan["mixed_write_batch_rows"])
         for start, end, response in mixed_reads:
             updated, transitioning = mixed_read_state(start, end, mixed_writes)
@@ -893,7 +899,7 @@ def run_qdrant(plan, run_dir):
 
         check_qdrant_resources(run, started_at)
         restart_start = time.monotonic_ns(); shutdown_disk = restart_qdrant(run)
-        response = qdrant_query(run, run.client, EVALUATION_QUERIES[0], control)
+        response = qdrant_query(run, run.client, MEASUREMENT_QUERIES[0], control)
         restart_ns = time.monotonic_ns() - restart_start
         validate_qdrant_queries([response], updated_rows)
         validate_qdrant_updates(run, updated_rows)

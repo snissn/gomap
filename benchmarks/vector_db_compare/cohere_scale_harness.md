@@ -91,11 +91,11 @@ cosine vectors, `content`, nested `meta.user_id`/`meta.fpath`, and both scalar
 indexes. Qdrant maps the logical ID to a deterministic UUID only because its
 physical point-ID type requires it; the matched logical ID remains in payload.
 
-The v2 protocol treats the previously observed queries 0..99 as calibration and
-reserves fresh queries 100..199 for one evaluation. Each backend selects its
-lowest control in the predeclared 32, 64, 128, 256, 512, 1024, 2048 grid at
-calibration mean recall@10 >= 0.90, then must independently pass the same target
-on the fresh evaluation set. TreeDB tunes `ef_search`; Qdrant tunes `hnsw_ef`.
+The v3 protocol uses queries 0..99 as observed calibration and 100..199 as
+observed revalidation; neither fixed set is a holdout. Each backend selects the
+lowest control in the predeclared 32, 64, 128, 256, 512, 1024, 2048 grid whose
+mean recall@10 is at least 0.90 on both sets. TreeDB tunes `ef_search`; Qdrant
+tunes `hnsw_ef`.
 Qdrant `exact=true` is
 run once after the RSS sample as a correctness reference and is never used as
 the ANN latency, quality, or RSS boundary.
