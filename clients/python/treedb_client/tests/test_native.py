@@ -165,6 +165,26 @@ class NativeCodecTests(unittest.TestCase):
                     ef_search=0,
                     query_dimension=2,
                 )
+            exact_work_values = list(work_values)
+            exact_work_values[2], exact_work_values[3], exact_work_values[6], exact_work_values[7], exact_work_values[9] = 2, 0, 1, 0, 0
+            exact_work_values[31:38] = [0, 0, 0, 0, 0, 0, 0]
+            exact_work = b"".join(_uint(value) for value in exact_work_values)
+            exact_values = list(values)
+            exact_values[4], exact_values[16], exact_values[17], exact_values[18], exact_values[19], exact_values[20], exact_values[22] = 2, 0, 0, 0, 1, 0, 8
+            exact_plane = b"".join(_uint(value) for value in exact_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            exact_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([])) + _section(103, _vector([])) +
+                    _section(130, bytes([3, 0, 0, 0, 0])) + _section(134, exact_work) + _section(136, exact_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=0,
+                    query_dimension=2,
+                )
             inconsistent_values = list(values)
             inconsistent_values[18] = 0  # actual rerank is not backed by exact-base scoring.
             inconsistent_values[20] = 1

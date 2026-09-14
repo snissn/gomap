@@ -197,6 +197,14 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	if err := validateDenseQuantizedScorePlaneResponse(work, &retainedWithoutScore, request, 0); err == nil {
 		t.Fatal("score-plane proof retained more candidates than quantized score calls")
 	}
+	exactProof := *proof
+	exactProof.Route, exactProof.QuantizedScoreCalls, exactProof.QuantizedCodeBytesRead = "typed_exact", 0, 0
+	exactProof.ExactSuffixScoreCalls, exactProof.ExactSuffixVectorBytesRead = 1, 8
+	exactWork := work
+	exactWork.Graph.Route, exactWork.Graph.BaseANNScored, exactWork.Graph.DeltaScored = "typed_exact", 0, 1
+	if err := validateDenseQuantizedScorePlaneResponse(exactWork, &exactProof, request, 0); err == nil {
+		t.Fatal("typed-exact proof accepted fewer rows than exact score calls")
+	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphScorePlaneWork){
 		"cap exceeds normalized width":       func(p *collections.ColumnGraphScorePlaneWork) { p.RerankCandidateCap = 2 },
 		"shortlist exceeds normalized width": func(p *collections.ColumnGraphScorePlaneWork) { p.LiveShortlistCandidates = 2 },

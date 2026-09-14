@@ -228,6 +228,7 @@ func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWo
 		!denseScorePlaneRerankCountersMatch(proof) ||
 		!denseScorePlaneByteCountersMatch(proof, uint64(len(request.Query))) ||
 		!denseScorePlaneCountersMatchWork(work, proof, resultCount) ||
+		(proof.Route == "typed_exact" && !denseExactResultCountMatchesTopK(proof, request.TopK, resultCount)) ||
 		resultCount > request.TopK ||
 		(proof.Route == "typed_empty" && resultCount != 0) ||
 		(proof.Route == "quantized_rerank" && (proof.ActualRerankCandidates > proof.RerankCandidateCap ||
@@ -240,6 +241,21 @@ func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWo
 		return protocolError(iwire.ErrConsistencyUnavailable, "dense score-plane proof does not match the request")
 	}
 	return nil
+}
+
+func denseExactResultCountMatchesTopK(proof *collections.ColumnGraphScorePlaneWork, topK, resultCount int) bool {
+	if proof == nil || topK < 0 || resultCount < 0 || proof.ExactSmallFilterScoreCalls > ^uint64(0)-proof.ExactBaseRerankScoreCalls {
+		return false
+	}
+	total := proof.ExactBaseRerankScoreCalls + proof.ExactSmallFilterScoreCalls
+	if proof.ExactSuffixScoreCalls > ^uint64(0)-total {
+		return false
+	}
+	total += proof.ExactSuffixScoreCalls
+	if uint64(topK) < total {
+		total = uint64(topK)
+	}
+	return uint64(resultCount) == total
 }
 
 func denseScorePlaneCountersMatchWork(work documentservice.DenseSearchWork, proof *collections.ColumnGraphScorePlaneWork, resultCount int) bool {

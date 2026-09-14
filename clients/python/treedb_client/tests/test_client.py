@@ -748,6 +748,20 @@ class TreeDBClientTests(unittest.TestCase):
                             quantized_index_name="embedding.scalar_u8.public",
                         )
                     score_client.close()
+            exact_route = copy.deepcopy(payload)
+            exact_route["documents"] = []
+            exact_route["candidates"] = 0
+            exact_route["dense_work"]["graph"].update(route="typed_exact", base_ann_scored=0, delta_scored=1)
+            exact_route["dense_work"]["output"].update(requested=0, fetched=0, output_bytes=0, json_reconstruction_rows=0, typed_column_rows=0)
+            exact_route["score_plane"].update(route="typed_exact", quantized_score_calls=0, quantized_code_bytes_read=0, exact_base_rerank_score_calls=0, exact_suffix_score_calls=1, exact_suffix_vector_bytes_read=8)
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, exact_route, 0)}) as exact_server:
+                exact_client = TreeDBClient(exact_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    exact_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                exact_client.close()
             overflow = copy.deepcopy(payload)
             overflow["documents"] = [
                 {"id": "a", "content": "alpha", "score": 1.0},

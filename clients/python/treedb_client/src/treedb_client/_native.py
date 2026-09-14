@@ -387,6 +387,7 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
                 or not dense_score_plane_byte_counters_match(score_plane, query_dimension)
                 or not _dense_score_plane_matches_graph(work, score_plane, count)
                 or (score_plane.route == "typed_empty" and count != 0)
+                or (score_plane.route == "typed_exact" and count != min(top_k, score_plane.exact_base_rerank_score_calls + score_plane.exact_small_filter_score_calls + score_plane.exact_suffix_score_calls))
                 or (score_plane.route == "quantized_rerank" and (
                     score_plane.actual_rerank_candidates > score_plane.rerank_candidate_cap
                     or score_plane.live_shortlist_candidates > score_plane.raw_retained_candidates
