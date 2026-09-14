@@ -399,6 +399,27 @@ func columnVectorGraphSharedPreparedLegacyScalarU8AssetStatusReady(status column
 		quantizedVectorIndexDefinitionValuesEqual(status.Definition, q) && status.Asset == descriptor.assets.Codes
 }
 
+
+// removeLegacyScalarU8AssetEntryLocked removes one terminal failed entry while
+// preserving the fixed declared-plane backing capacity. legacyScalarU8Mu must
+// be held. Clearing the old slot is important: the removed entry may otherwise
+// retain its descriptor and ready channel until the holder is released.
+func (h *columnVectorGraphSharedPreparedSearch) removeLegacyScalarU8AssetEntryLocked(entry *columnVectorGraphSharedPreparedLegacyScalarU8AssetEntry) {
+	if h == nil || entry == nil {
+		return
+	}
+	for i, candidate := range h.legacyScalarU8Entries {
+		if candidate != entry {
+			continue
+		}
+		last := len(h.legacyScalarU8Entries) - 1
+		copy(h.legacyScalarU8Entries[i:], h.legacyScalarU8Entries[i+1:])
+		h.legacyScalarU8Entries[last] = nil
+		h.legacyScalarU8Entries = h.legacyScalarU8Entries[:last]
+		return
+	}
+}
+
 // acquireLegacyScalarU8Asset serializes one requested code-plane load per
 // holder/name. The holder is already selected by the complete prepared-search
 // key, while descriptor equality prevents a same name from being attached to a
@@ -435,6 +456,17 @@ func (h *columnVectorGraphSharedPreparedSearch) acquireLegacyScalarU8Asset(descr
 			// Do not hold either the collection prepared-holder mutex or this
 			// holder mutex while mapping/parsing the requested code plane.
 			status, err := load()
+			if err == nil && !columnVectorGraphSharedPreparedLegacyScalarU8AssetStatusReady(status, descriptor) {
+				err = fmt.Errorf("%w: shared legacy scalar_u8 asset %q did not produce a ready resource", errColumnVectorGraphQuantizedAssetInvalid, descriptor.definition.Name)
+			}
+			if err != nil {
+				// A normal loader already releases a partially opened resource on
+				// error, but retain that invariant at this synchronization seam
+				// for every loader. Failed entries are immediately forgettable.
+				closeErr := status.close()
+				status.ownsResource = false
+				err = errors.Join(err, closeErr)
+			}
 
 			h.legacyScalarU8Mu.Lock()
 			if h.legacyScalarU8Closed {
@@ -452,14 +484,17 @@ func (h *columnVectorGraphSharedPreparedSearch) acquireLegacyScalarU8Asset(descr
 				return columnVectorGraphQuantizedAssetLoadStatus{}, errors.Join(closedErr, closeErr)
 			}
 			entry.status, entry.err, entry.building = status, err, false
-			close(entry.ready)
-			h.legacyScalarU8Mu.Unlock()
 			if err != nil {
+				// Publish first so waiters leave their channel receive, then
+				// remove this exact failed generation before they re-lock and
+				// coalesce on one fresh retry.
+				close(entry.ready)
+				h.removeLegacyScalarU8AssetEntryLocked(entry)
+				h.legacyScalarU8Mu.Unlock()
 				return status, err
 			}
-			if !columnVectorGraphSharedPreparedLegacyScalarU8AssetStatusReady(status, descriptor) {
-				return status, fmt.Errorf("%w: shared legacy scalar_u8 asset %q did not produce a ready resource", errColumnVectorGraphQuantizedAssetInvalid, descriptor.definition.Name)
-			}
+			close(entry.ready)
+			h.legacyScalarU8Mu.Unlock()
 			return status, nil
 		}
 		if !columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptorEqual(entry.descriptor, descriptor) {

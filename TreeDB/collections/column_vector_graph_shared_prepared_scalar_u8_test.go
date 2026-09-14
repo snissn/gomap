@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/quantizedasset"
 )
 
 func TestColumnGraphLegacyScalarU8ZeroRowValidationCache(t *testing.T) {
@@ -192,6 +194,75 @@ func TestColumnGraphSharedPreparedLegacyScalarU8AssetAttachment(t *testing.T) {
 	resource.mu.Unlock()
 	if !closedAfterLast {
 		t.Fatal("last shared ref did not close the holder-owned resource")
+	}
+}
+
+func TestColumnGraphSharedPreparedLegacyScalarU8AssetFailureRetries(t *testing.T) {
+	holder := &columnVectorGraphSharedPreparedSearch{}
+	descriptor := columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor{
+		definition: QuantizedVectorIndexDefinition{Name: "q", Codec: QuantizedVectorCodecScalarU8, Version: 1},
+	}
+	transient := errors.New("temporary scalar plane read failure")
+	resource := &columnVectorGraphQuantizedAssetResource{}
+	var loads atomic.Int32
+	load := func() (columnVectorGraphQuantizedAssetLoadStatus, error) {
+		switch loads.Add(1) {
+		case 1:
+			return columnVectorGraphQuantizedAssetLoadStatus{}, transient
+		case 2:
+			// A nil-error malformed result must be retryable too; otherwise a
+			// broken loader seam would cache a permanently not-ready entry.
+			return columnVectorGraphQuantizedAssetLoadStatus{}, nil
+		default:
+			return columnVectorGraphQuantizedAssetLoadStatus{
+				Definition:   descriptor.definition,
+				Asset:        descriptor.assets.Codes,
+				Prepared:     &quantizedasset.Prepared{},
+				resource:     resource,
+				ownsResource: true,
+			}, nil
+		}
+	}
+	assertForgotten := func(label string) {
+		t.Helper()
+		holder.legacyScalarU8Mu.Lock()
+		defer holder.legacyScalarU8Mu.Unlock()
+		if got := len(holder.legacyScalarU8Entries); got != 0 {
+			t.Fatalf("%s retained entries=%d want zero", label, got)
+		}
+		for _, entry := range holder.legacyScalarU8Entries[:cap(holder.legacyScalarU8Entries)] {
+			if entry != nil {
+				t.Fatalf("%s retained a failed entry in backing storage", label)
+			}
+		}
+	}
+
+	if _, err := holder.acquireLegacyScalarU8Asset(descriptor, load); !errors.Is(err, transient) {
+		t.Fatalf("first load err=%v want %v", err, transient)
+	}
+	assertForgotten("transient failure")
+	if _, err := holder.acquireLegacyScalarU8Asset(descriptor, load); !errors.Is(err, errColumnVectorGraphQuantizedAssetInvalid) {
+		t.Fatalf("malformed status err=%v want invalid asset", err)
+	}
+	assertForgotten("malformed status")
+	status, err := holder.acquireLegacyScalarU8Asset(descriptor, load)
+	if err != nil {
+		t.Fatalf("successful retry: %v", err)
+	}
+	if !columnVectorGraphSharedPreparedLegacyScalarU8AssetStatusReady(status, descriptor) || status.resource != resource {
+		t.Fatalf("successful retry status=%+v", status)
+	}
+	if got := loads.Load(); got != 3 {
+		t.Fatalf("loads=%d want three", got)
+	}
+	if err := holder.close(); err != nil {
+		t.Fatalf("holder close: %v", err)
+	}
+	resource.mu.Lock()
+	closed := resource.closed
+	resource.mu.Unlock()
+	if !closed {
+		t.Fatal("successful retry resource was not closed")
 	}
 }
 
