@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ func TestColumnGraphLegacyScalarU8ZeroRowValidationCache(t *testing.T) {
 			descriptors: []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor{{definition: q}},
 			entries:     make([]columnVectorGraphLegacyScalarU8ZeroRowValidationEntry, 1),
 		}
+		cache.cond = sync.NewCond(&cache.mu)
 		return cache
 	}
 
@@ -378,8 +380,9 @@ func TestColumnGraphLegacyScalarU8ZeroRowValidationWaiterCancellation(t *testing
 	q := QuantizedVectorIndexDefinition{Name: "q", Codec: QuantizedVectorCodecScalarU8, Version: 1}
 	cache := &columnVectorGraphLegacyScalarU8ZeroRowValidationCache{
 		descriptors: []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor{{definition: q}},
-		entries:     []columnVectorGraphLegacyScalarU8ZeroRowValidationEntry{{ready: make(chan struct{})}},
+		entries:     make([]columnVectorGraphLegacyScalarU8ZeroRowValidationEntry, 1),
 	}
+	cache.cond = sync.NewCond(&cache.mu)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	validate := func(columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor) error {
