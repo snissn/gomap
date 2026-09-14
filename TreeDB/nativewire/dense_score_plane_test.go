@@ -12,6 +12,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/documentservice"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
@@ -65,6 +66,18 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 }
 
 func TestDenseTypedQuantizedNativePublicPath(t *testing.T) {
+	// The selected typed serving path relies on the exact retained-parent
+	// namespace contract. Windows intentionally does not advertise that
+	// contract; keep this integration test aligned with the service-level
+	// serving tests instead of turning the platform limitation into a failure.
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("selected serving requires exact relative namespace support")
+	}
+	var native [2]byte
+	binary.NativeEndian.PutUint16(native[:], 1)
+	if native[0] != 1 {
+		t.Skip("selected serving requires little-endian mmap-direct prepared views")
+	}
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
