@@ -432,11 +432,11 @@ def mixed_window(read, write_batches, query_ordinals, readers, reads_per_reader,
     def writer():
         result = []
         gate.wait(timeout=30)
-        for write in write_batches:
+        for rows, write in write_batches:
             started = time.monotonic_ns()
             value = write()
             ended = time.monotonic_ns()
-            result.append((started, ended, value))
+            result.append((started, ended, value, rows))
         return result
 
     with ThreadPoolExecutor(max_workers=readers + 1) as pool:
@@ -446,9 +446,9 @@ def mixed_window(read, write_batches, query_ordinals, readers, reads_per_reader,
         gate.wait(timeout=30)
         read_samples = [sample for future in reads for sample in future.result()]
         write_samples = writes.result()
-    ended = max(max(end for _, end, _ in read_samples), max(end for _, end, _ in write_samples))
-    write_start = min(start for start, _, _ in write_samples)
-    write_end = max(end for _, end, _ in write_samples)
+    ended = max(max(end for _, end, _ in read_samples), max(end for _, end, _, _ in write_samples))
+    write_start = min(start for start, _, _, _ in write_samples)
+    write_end = max(end for _, end, _, _ in write_samples)
     overlap = [(start, end) for start, end, _ in read_samples if start < write_end and end > write_start]
     if not overlap:
         raise RuntimeError("mixed phase produced no observed read/write overlap")
@@ -460,8 +460,18 @@ def mixed_window(read, write_batches, query_ordinals, readers, reads_per_reader,
                               "latency": distribution([end - start for start, end in overlap])},
         "writes": {"batches": len(write_samples), "rows": len(write_samples) * rows_per_batch,
                    "rows_per_second": len(write_samples) * rows_per_batch * 1e9 / (write_end - write_start),
-                   "latency": distribution([end - start for start, end, _ in write_samples])},
-    }, [value for _, _, value in read_samples], [value for _, _, value in write_samples]
+                   "latency": distribution([end - start for start, end, _, _ in write_samples])},
+    }, read_samples, write_samples
+
+
+def mixed_read_state(start, end, write_samples):
+    updated, transitioning = set(), set()
+    for write_start, write_end, _, rows in write_samples:
+        if write_end <= start:
+            updated.update(rows)
+        elif write_start < end and write_end > start:
+            transitioning.update(rows)
+    return updated, transitioning
 
 
 def tree_plan(plan, run_dir):
@@ -487,7 +497,8 @@ def validate_tree_upsert(response, documents):
         raise RuntimeError("TreeDB public upsert completion mismatch")
 
 
-def validate_tree_queries(responses, generation):
+def validate_tree_queries(responses, generation, updated_rows=(), transitioning_rows=()):
+    updated_rows, transitioning_rows = set(updated_rows), set(transitioning_rows)
     for response in responses:
         work = response.dense_work
         if (response.native_command_version != 2 or len(response.documents) != TOP_K
@@ -504,8 +515,10 @@ def validate_tree_queries(responses, generation):
             try:
                 row = int(document.id.removeprefix("row-"))
                 content = f"minima-cohere:{row}"
+                contents = ({content, content + ":updated"} if row in transitioning_rows else
+                            {content + (":updated" if row in updated_rows else "")})
                 valid = (document.id == f"row-{row:06d}" and 0 <= row < ROWS
-                         and document.content in (content, content + ":updated")
+                         and document.content in contents
                          and document.meta == {
                              "user_id": f"{(row * 7919) % ROWS:06d}",
                              "fpath": f"/cohere/{row // 256:06d}.txt",
@@ -576,14 +589,16 @@ def run_treedb(plan, run_dir):
             rows = list(range(first, first + plan["mixed_write_batch_rows"]))
             docs = [native.make_document(run.vectors, row, ROWS, updated=True) for row in rows]
             prepared.append((rows, docs))
-        writes = [lambda docs=docs: run.clients.native.upsert_documents(
-            "minima_cohere", docs, index_info=run.info) for _, docs in prepared]
+        writes = [(rows, lambda docs=docs: run.clients.native.upsert_documents(
+            "minima_cohere", docs, index_info=run.info)) for rows, docs in prepared]
         mixed, mixed_reads, mixed_writes = mixed_window(
             lambda query: tree_query(run, query, control), writes,
             EVALUATION_QUERIES, plan["mixed_reader_concurrency"],
             plan["mixed_queries_per_reader"], plan["mixed_write_batch_rows"])
-        validate_tree_queries(mixed_reads, run.info.generation)
-        for (_, docs), response in zip(prepared, mixed_writes, strict=True):
+        for start, end, response in mixed_reads:
+            updated, transitioning = mixed_read_state(start, end, mixed_writes)
+            validate_tree_queries([response], run.info.generation, updated, transitioning)
+        for (_, docs), (_, _, response, _) in zip(prepared, mixed_writes, strict=True):
             validate_tree_upsert(response, docs)
         updated_rows = [row for rows, _ in prepared for row in rows]
         validate_tree_updates(run, updated_rows)
@@ -602,7 +617,7 @@ def run_treedb(plan, run_dir):
         run.controller.start(); run.ensure(); run.optimize("ensure")
         response = tree_query(run, EVALUATION_QUERIES[0], control)
         restart_ns = time.monotonic_ns() - restart_start
-        validate_tree_queries([response], run.info.generation)
+        validate_tree_queries([response], run.info.generation, updated_rows)
         validate_tree_updates(run, updated_rows)
         restart_rss = measured_rss(native.process_peak_at_boundary(
             run.controller.process.pid, run.controller._owned_identity, plan["cpu_affinity"]),
@@ -671,8 +686,8 @@ def validate_qdrant_upserts(responses):
             raise RuntimeError("Qdrant wait=true upsert did not complete")
 
 
-def validate_qdrant_queries(responses, updated_rows=(), transitioning=False):
-    updated_rows = set(updated_rows)
+def validate_qdrant_queries(responses, updated_rows=(), transitioning_rows=()):
+    updated_rows, transitioning_rows = set(updated_rows), set(transitioning_rows)
     for response in responses:
         points = list(getattr(response, "points", response))
         ids = []
@@ -682,7 +697,7 @@ def validate_qdrant_queries(responses, updated_rows=(), transitioning=False):
                 row = int(payload["id"].removeprefix("row-"))
                 base_content = f"minima-cohere:{row}"
                 contents = ({base_content, base_content + ":updated"}
-                            if transitioning and row in updated_rows else
+                            if row in transitioning_rows else
                             {base_content + (":updated" if row in updated_rows else "")})
                 score = getattr(point, "score", None)
                 valid = (set(payload) == {"id", "content", "meta"}
@@ -820,22 +835,23 @@ def run_qdrant(plan, run_dir):
         prepared = []
         for index in range(plan["mixed_write_batches"]):
             first = ROWS - (index + 1) * plan["mixed_write_batch_rows"]
+            rows = list(range(first, first + plan["mixed_write_batch_rows"]))
             points = []
-            for row in range(first, first + plan["mixed_write_batch_rows"]):
+            for row in rows:
                 value = qdrant_rss.qdrant_point(native.make_document(run.vectors, row, ROWS, updated=True))
                 points.append(models.PointStruct(id=qdrant_rss.existing.point_id(value["logical_id"]),
                     vector=value["vector"], payload=value["payload"]))
-            prepared.append(points)
-        writes = [lambda points=points: run.client.upsert(collection_name=run.collection, points=points,
-            wait=True, timeout=run.operation_timeout) for points in prepared]
-        updated_rows = [row for index in range(plan["mixed_write_batches"])
-                        for row in range(ROWS - (index + 1) * plan["mixed_write_batch_rows"],
-                                         ROWS - index * plan["mixed_write_batch_rows"])]
+            prepared.append((rows, points))
+        writes = [(rows, lambda points=points: run.client.upsert(collection_name=run.collection, points=points,
+            wait=True, timeout=run.operation_timeout)) for rows, points in prepared]
         mixed, mixed_reads, mixed_writes = mixed_window(
             concurrent_query, writes, EVALUATION_QUERIES, plan["mixed_reader_concurrency"],
             plan["mixed_queries_per_reader"], plan["mixed_write_batch_rows"])
-        validate_qdrant_queries(mixed_reads, updated_rows, transitioning=True)
-        validate_qdrant_upserts(mixed_writes)
+        for start, end, response in mixed_reads:
+            updated, transitioning = mixed_read_state(start, end, mixed_writes)
+            validate_qdrant_queries([response], updated, transitioning)
+        validate_qdrant_upserts([response for _, _, response, _ in mixed_writes])
+        updated_rows = [row for rows, _ in prepared for row in rows]
         validate_qdrant_updates(run, updated_rows)
         post_mixed_ready = time.monotonic_ns()
         run.wait_ready(ROWS, "profile_post_mixed_ready")

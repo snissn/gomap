@@ -105,6 +105,14 @@ class MatchedPerformanceTest(unittest.TestCase):
                                        output=SimpleNamespace(fetched=subject.TOP_K)),
         )
         subject.validate_tree_queries([response], 7)
+        documents[-1].content += ":updated"
+        with self.assertRaisesRegex(RuntimeError, "invalid logical document"):
+            subject.validate_tree_queries([response], 7)
+        subject.validate_tree_queries([response], 7, [subject.TOP_K - 1])
+        documents[-1].content = f"minima-cohere:{subject.TOP_K - 1}"
+        with self.assertRaisesRegex(RuntimeError, "invalid logical document"):
+            subject.validate_tree_queries([response], 7, [subject.TOP_K - 1])
+        subject.validate_tree_queries([response], 7, transitioning_rows=[subject.TOP_K - 1])
         documents[-1] = documents[0]
         with self.assertRaisesRegex(RuntimeError, "duplicate logical IDs"):
             subject.validate_tree_queries([response], 7)
@@ -126,6 +134,10 @@ class MatchedPerformanceTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "invalid logical document"):
             subject.validate_qdrant_queries([response])
         subject.validate_qdrant_queries([response], [subject.TOP_K - 1])
+        points[-1].payload["content"] = f"minima-cohere:{subject.TOP_K - 1}"
+        with self.assertRaisesRegex(RuntimeError, "invalid logical document"):
+            subject.validate_qdrant_queries([response], [subject.TOP_K - 1])
+        subject.validate_qdrant_queries([response], transitioning_rows=[subject.TOP_K - 1])
 
     def test_adapter_plan_and_mixed_overlap(self):
         runtime = {"GOMAXPROCS": "6", "GOGC": "80", "GOMEMLIMIT": "20GiB"}
@@ -170,9 +182,12 @@ class MatchedPerformanceTest(unittest.TestCase):
             writer_started.set()
             self.assertTrue(reader_seen.wait(1))
             return "complete"
-        result, reads, writes = subject.mixed_window(read, [write], [0, 1], 2, 64, 256)
+        result, reads, writes = subject.mixed_window(read, [([7], write)], [0, 1], 2, 64, 256)
         self.assertGreater(result["overlapping_reads"]["latency"]["count"], 0)
-        self.assertEqual((len(reads), writes), (128, ["complete"]))
+        self.assertEqual((len(reads), [value for _, _, value, _ in writes]), (128, ["complete"]))
+        self.assertEqual(subject.mixed_read_state(25, 35, [
+            (10, 20, None, [1]), (30, 40, None, [2]), (50, 60, None, [3]),
+        ]), ({1}, {2}))
 
     def test_lock_order_and_result_provenance_fail_closed(self):
         plan = {"pair_order": [["treedb", "qdrant"]], "campaign_commit": "c",
