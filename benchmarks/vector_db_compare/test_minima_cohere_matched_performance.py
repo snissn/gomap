@@ -18,6 +18,17 @@ class MatchedPerformanceTest(unittest.TestCase):
             "mean_recall_at_10": .5, "per_query": [.5, .5],
         })
 
+    def test_reviewed_control_requires_every_lower_candidate_to_fail(self):
+        artifact = {"quality": {"selected_control": 64, "target_mean_recall_at_10": .9,
+            "calibration": {"curve": [
+                {"control": 32, "mean_recall_at_10": .89},
+                {"control": 64, "mean_recall_at_10": .91},
+            ]}, "evaluation": {"passed": True, "mean_recall_at_10": .9}}}
+        self.assertEqual(subject.reviewed_selected_control(artifact, "test", [32, 64, 128]), 64)
+        artifact["quality"]["calibration"]["curve"][0]["mean_recall_at_10"] = .9
+        with self.assertRaisesRegex(RuntimeError, "lowest passing"):
+            subject.reviewed_selected_control(artifact, "test", [32, 64, 128])
+
     def test_timed_window_runs_each_worker(self):
         result, samples = subject.timed_window(lambda query: query, [0, 1], 2, .01)
         self.assertGreater(result["qps"], 0)

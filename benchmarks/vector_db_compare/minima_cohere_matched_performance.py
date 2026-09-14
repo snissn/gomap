@@ -67,6 +67,26 @@ def mean_recall(actual, truth):
     return {"mean_recall_at_10": sum(values) / len(values), "per_query": values}
 
 
+def reviewed_selected_control(artifact, backend, candidates):
+    quality = artifact.get("quality") or {}
+    selected = quality.get("selected_control")
+    if selected not in candidates:
+        raise RuntimeError(f"{backend} selected control is outside the reviewed candidates")
+    prefix = candidates[:candidates.index(selected) + 1]
+    curve = (quality.get("calibration") or {}).get("curve") or []
+    means = [point.get("mean_recall_at_10") for point in curve]
+    evaluation = quality.get("evaluation") or {}
+    if ([point.get("control") for point in curve] != prefix
+            or quality.get("target_mean_recall_at_10") != QUALITY_TARGET
+            or any(not isinstance(value, (int, float)) for value in means)
+            or any(value >= QUALITY_TARGET for value in means[:-1])
+            or not means or means[-1] < QUALITY_TARGET
+            or evaluation.get("passed") is not True
+            or evaluation.get("mean_recall_at_10", 0) < QUALITY_TARGET):
+        raise RuntimeError(f"{backend} artifact does not prove the lowest passing control")
+    return selected
+
+
 def repository_commit(source):
     status = subprocess.check_output(["git", "status", "--porcelain"], cwd=source, text=True)
     if status:
@@ -118,8 +138,24 @@ def frozen_plan(args):
     tree_artifact = evidence_root / "treedb" / "rss.json"
     qdrant_artifact = evidence_root / "qdrant" / "qdrant-rss.json"
     tree, qdrant_result = json.loads(tree_artifact.read_text()), json.loads(qdrant_artifact.read_text())
-    selected = {"treedb": tree["quality"]["selected_control"],
-                "qdrant": qdrant_result["quality"]["selected_control"]}
+    expected_comparison = qdrant_rss.compare_artifacts(tree, qdrant_result)
+    contract = tree.get("comparison_contract") or {}
+    if (evidence != expected_comparison
+            or qdrant_result.get("comparison_contract") != contract
+            or (qdrant_result.get("provenance") or {}).get("treedb_artifact_sha256") != digest(tree_artifact)
+            or contract.get("rows") != ROWS or contract.get("dimensions") != DIMENSIONS
+            or contract.get("top_k") != TOP_K or contract.get("quality_target") != QUALITY_TARGET
+            or contract.get("dataset_manifest_sha256") != digest(dataset / "manifest.json")
+            or contract.get("dataset_files_sha256") != files
+            or contract.get("calibration_queries") != list(range(100))
+            or contract.get("evaluation_queries") != EVALUATION_QUERIES):
+        raise RuntimeError("reviewed control artifacts do not share the frozen comparison contract")
+    candidates = {"treedb": contract.get("ann_controls", {}).get("treedb_ef_search"),
+                  "qdrant": contract.get("ann_controls", {}).get("qdrant_hnsw_ef")}
+    if any(value != native.RSS_CONTROLS for value in candidates.values()):
+        raise RuntimeError("reviewed control candidate sets differ from the v2 policy")
+    selected = {backend: reviewed_selected_control(artifact, backend, candidates[backend])
+                for backend, artifact in (("treedb", tree), ("qdrant", qdrant_result))}
     if selected != CONTROLS:
         raise RuntimeError(f"fixed controls differ from reviewed v2 evidence: {selected}")
     if args.run_root.exists():
