@@ -54,6 +54,22 @@ class NativeCodecTests(unittest.TestCase):
             self.assertEqual(response.native_command_version, 3)
             self.assertIsNotNone(response.score_plane)
             self.assertEqual(response.score_plane.quantized_index_name, "embedding.scalar_u8.public")
+            for route_tag in (4,):  # typed_hnsw is not a public quantized score-plane route.
+                invalid_values = list(values)
+                invalid_values[4] = route_tag
+                invalid_plane = b"".join(_uint(value) for value in invalid_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+                invalid_plane += b"\x01\x01\x01\x00" * 2
+                with self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                        _section(130, meta) + _section(134, raw_work) + _section(136, invalid_plane),
+                        1,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=0,
+                    )
         finally:
             client.close()
 

@@ -502,7 +502,16 @@ class TreeDBClient:
         _add_filter(request, filter)
         _add_expected_generation(request, expected_generation)
         payload = self._request("POST", self._index_path(index, "search", "vector"), request, dense_proof=True)
-        return _parse_response("vector search response", DenseVectorSearchResponse.from_dict, payload)
+        response = _parse_response("vector search response", DenseVectorSearchResponse.from_dict, payload)
+        if mode == "quantized_rerank":
+            _validate_http_dense_quantized_response(
+                response,
+                top_k=top_k_value,
+                ef_search=ef_search_value or 0,
+                quantized_index_name=quantized_index_name,
+                quantized_rerank_candidates=rerank_value,
+            )
+        return response
 
     def search_vector_index(
         self,
@@ -994,6 +1003,39 @@ def _parse_response(
     payload: Any,
 ) -> _ResponseT:
     return _parse_mapping(label, parser, _expect_mapping(payload, label))
+
+
+def _validate_http_dense_quantized_response(
+    response: DenseVectorSearchResponse,
+    *,
+    top_k: int,
+    ef_search: int,
+    quantized_index_name: str,
+    quantized_rerank_candidates: int,
+) -> None:
+    """Require the HTTP response proof for an explicitly selected public route."""
+
+    proof = response.score_plane
+    if (
+        proof is None
+        or not proof.available
+        or not proof.completed
+        or not proof.snapshot.available
+        or proof.requested_mode != "quantized_rerank"
+        or proof.effective_mode != "quantized_rerank"
+        or proof.route not in ("typed_empty", "typed_exact", "quantized_rerank")
+        or proof.quantized_index_name != quantized_index_name
+        or proof.quantized_codec != "scalar_u8"
+        or proof.quantized_version != 1
+        or proof.requested_top_k != top_k
+        or proof.requested_ef_search != ef_search
+        or proof.requested_rerank_candidates != quantized_rerank_candidates
+    ):
+        raise TreeDBProtocolError(
+            "dense HTTP score-plane proof does not match the request",
+            dense_work=response.dense_work,
+            score_plane=proof,
+        )
 
 
 def _parse_benchmark_vector_search_response(

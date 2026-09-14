@@ -65,6 +65,33 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	}
 }
 
+func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
+	proof := &collections.ColumnGraphScorePlaneWork{
+		Version: 1, Available: true, Completed: true,
+		RequestedMode: collections.VectorIndexQueryModeQuantizedRerank,
+		EffectiveMode: collections.VectorIndexQueryModeQuantizedRerank,
+		Route:         "quantized_rerank", QuantizedIndexName: "embedding.scalar_u8.public",
+		RequestedTopK: 1, RequestedEFSearch: 8,
+		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true},
+	}
+	request := DenseVectorSearchRequest{QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: proof.QuantizedIndexName, TopK: 1, EfSearch: 8}
+	if err := validateDenseQuantizedScorePlaneResponse(proof, request); err != nil {
+		t.Fatalf("valid public proof rejected: %v", err)
+	}
+	for _, mutate := range []func(*collections.ColumnGraphScorePlaneWork){
+		func(p *collections.ColumnGraphScorePlaneWork) { p.Route = "typed_hnsw" },
+		func(p *collections.ColumnGraphScorePlaneWork) { p.Available = false },
+		func(p *collections.ColumnGraphScorePlaneWork) { p.Completed = false },
+		func(p *collections.ColumnGraphScorePlaneWork) { p.Snapshot.Available = false },
+	} {
+		candidate := *proof
+		mutate(&candidate)
+		if err := validateDenseQuantizedScorePlaneResponse(&candidate, request); err == nil {
+			t.Fatalf("invalid proof accepted: %+v", candidate)
+		}
+	}
+}
+
 func TestDenseTypedQuantizedNativePublicPath(t *testing.T) {
 	// The selected typed serving path relies on the exact retained-parent
 	// namespace contract. Windows intentionally does not advertise that

@@ -575,6 +575,26 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(filter_body["after_id"], "before")
             self.assertTrue(filter_body["cursor_page"])
 
+    def test_http_quantized_query_requires_completed_matching_score_plane(self) -> None:
+        payload = {
+            "index": SAMPLE_INDEX,
+            "metric": "cosine",
+            "exact": False,
+            "candidates": 1,
+            "route": "ann",
+            "documents": [{"id": "a", "content": "alpha", "score": 1.0}],
+        }
+        with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, payload, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+            with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                client.query_by_embedding(
+                    "docs",
+                    [1, 0],
+                    1,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.fast",
+                )
+
 
     def test_benchmark_lifecycle_and_vector_index_search_methods(self) -> None:
         reset_route = "/v1/indexes/bench/reset"

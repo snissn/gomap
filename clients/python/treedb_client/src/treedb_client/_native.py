@@ -358,6 +358,7 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
         if (not score_plane.available or not score_plane.completed or not score_plane.snapshot.available
                 or score_plane.requested_mode != (query_mode or "quantized_rerank")
                 or score_plane.effective_mode != "quantized_rerank"
+                or score_plane.route not in ("typed_empty", "typed_exact", "quantized_rerank")
                 or score_plane.quantized_index_name != (quantized_index_name or score_plane.quantized_index_name)
                 or score_plane.requested_top_k != top_k
                 or (ef_search is not None and score_plane.requested_ef_search != ef_search)
