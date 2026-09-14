@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -45,14 +46,27 @@ class MatchedPerformanceTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "campaign checkout"):
             subject.validate_control_provenance(tree, qdrant, "head", trees, hashes)
 
-        plan = {"platform": "platform", "host_resource_identity": {"boot_id": "boot"}}
+        runtime = {key: subject.os.environ.get(key, "") for key in ("GOMAXPROCS", "GOGC", "GOMEMLIMIT")}
+        plan = {"platform": "platform", "host_resource_identity": {"boot_id": "boot"},
+                "host_memory_bytes": "memory", "treedb_go_runtime": runtime}
         with mock.patch.object(subject.platform, "platform", return_value="platform"), \
                 mock.patch.object(subject.native, "host_resource_identity", return_value={"boot_id": "boot"}):
-            subject.validate_host_identity(plan)
+            with mock.patch.object(subject.native.existing.common, "memory_bytes", return_value="memory"):
+                subject.validate_host_identity(plan)
         with mock.patch.object(subject.platform, "platform", return_value="platform"), \
                 mock.patch.object(subject.native, "host_resource_identity", return_value={"boot_id": "new"}):
             with self.assertRaisesRegex(RuntimeError, "host resource identity"):
                 subject.validate_host_identity(plan)
+
+        contract = {**plan, "cpu_affinity": [0, 1]}
+        with mock.patch.object(subject.platform, "platform", return_value="platform"), \
+                mock.patch.object(subject.native, "host_resource_identity", return_value={"boot_id": "boot"}), \
+                mock.patch.object(subject.native.existing.common, "memory_bytes", return_value="memory"), \
+                mock.patch.object(subject.os, "sched_getaffinity", return_value={0, 1}):
+            self.assertEqual(subject.validate_control_environment(contract)["cpu_affinity"], [0, 1])
+            contract["cpu_affinity"] = [0]
+            with self.assertRaisesRegex(RuntimeError, "different environment"):
+                subject.validate_control_environment(contract)
         environment = subject.python_environment()
         self.assertEqual(json.loads(json.dumps(environment)), environment)
 
@@ -70,6 +84,24 @@ class MatchedPerformanceTest(unittest.TestCase):
             raise RuntimeError("invalid response")
         with self.assertRaisesRegex(RuntimeError, "invalid response"):
             subject.timed_window(lambda query: query, reject, [0], 1, .001)
+
+    def test_tree_query_validation_checks_logical_documents(self):
+        documents = [SimpleNamespace(
+            id=f"row-{row:06d}", content=f"minima-cohere:{row}", embedding=None, score=.5,
+            meta={"user_id": f"{(row * 7919) % subject.ROWS:06d}",
+                  "fpath": f"/cohere/{row // 256:06d}.txt"},
+        ) for row in range(subject.TOP_K)]
+        response = SimpleNamespace(
+            native_command_version=2, documents=documents, route="ann", exact_fallbacks=0,
+            full_document_scan_fallbacks=0,
+            index=SimpleNamespace(generation=7, vector_strategy="column_graph", extra={"typed_input": True}),
+            dense_work=SimpleNamespace(completed=True,
+                                       output=SimpleNamespace(fetched=subject.TOP_K)),
+        )
+        subject.validate_tree_queries([response], 7)
+        documents[-1] = documents[0]
+        with self.assertRaisesRegex(RuntimeError, "duplicate logical IDs"):
+            subject.validate_tree_queries([response], 7)
 
     def test_adapter_plan_and_mixed_overlap(self):
         plan = {"queries": 200, "qdrant_configuration": {

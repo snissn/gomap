@@ -136,8 +136,26 @@ def validate_control_provenance(tree, qdrant_result, commit, trees, hashes):
 
 def validate_host_identity(plan):
     if (platform.platform() != plan["platform"]
-            or native.host_resource_identity() != plan["host_resource_identity"]):
+            or native.host_resource_identity() != plan["host_resource_identity"]
+            or native.existing.common.memory_bytes() != plan["host_memory_bytes"]
+            or {key: os.environ.get(key, "") for key in ("GOMAXPROCS", "GOGC", "GOMEMLIMIT")}
+               != plan["treedb_go_runtime"]):
         raise RuntimeError("campaign host resource identity drifted")
+
+
+def validate_control_environment(contract):
+    expected = {
+        "cpu_affinity": sorted(os.sched_getaffinity(0)),
+        "host_resource_identity": native.host_resource_identity(),
+        "platform": platform.platform(),
+        "host_memory_bytes": native.existing.common.memory_bytes(),
+        "treedb_go_runtime": {
+            key: os.environ.get(key, "") for key in ("GOMAXPROCS", "GOGC", "GOMEMLIMIT")
+        },
+    }
+    if any(contract.get(key) != value for key, value in expected.items()):
+        raise RuntimeError("reviewed controls were calibrated in a different environment")
+    return expected
 
 
 def python_environment():
@@ -194,6 +212,7 @@ def frozen_plan(args):
             or contract.get("calibration_queries") != list(range(100))
             or contract.get("evaluation_queries") != EVALUATION_QUERIES):
         raise RuntimeError("reviewed control artifacts do not share the frozen comparison contract")
+    control_environment = validate_control_environment(contract)
     candidates = {"treedb": contract.get("ann_controls", {}).get("treedb_ef_search"),
                   "qdrant": contract.get("ann_controls", {}).get("qdrant_hnsw_ef")}
     if any(value != native.RSS_CONTROLS for value in candidates.values()):
@@ -233,6 +252,8 @@ def frozen_plan(args):
         "query_concurrency": 4, "mixed_reader_concurrency": 4,
         "mixed_queries_per_reader": 64, "mixed_write_batches": 8, "mixed_write_batch_rows": 256,
         "cpu_affinity": list(range(6)), "gomaxprocs": "6",
+        "host_memory_bytes": control_environment["host_memory_bytes"],
+        "treedb_go_runtime": control_environment["treedb_go_runtime"],
         "blas_threads": {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"},
         "python_environment": python_environment(),
         "platform": platform.platform(), "host_resource_identity": native.host_resource_identity(),
@@ -331,24 +352,28 @@ def timed_window(call, validate, query_ordinals, concurrency, seconds):
     stop_ns = [0]
 
     def worker(worker_id):
-        samples, index = [], worker_id
+        samples, responses, index, first = [], [], worker_id, True
         gate.wait(timeout=30)
-        while time.monotonic_ns() < stop_ns[0]:
+        while first or time.monotonic_ns() < stop_ns[0]:
+            first = False
             query = query_ordinals[index % len(query_ordinals)]
             started = time.monotonic_ns()
             value = call(query)
             ended = time.monotonic_ns()
-            validate(value)
             samples.append((started, ended))
+            responses.append(value)
             index += concurrency
-        return samples
+        return samples, responses
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = [pool.submit(worker, worker_id) for worker_id in range(concurrency)]
         started = time.monotonic_ns()
         stop_ns[0] = started + int(seconds * 1e9)
         gate.wait(timeout=30)
-        samples = [sample for future in futures for sample in future.result()]
+        batches = [future.result() for future in futures]
+    samples = [sample for batch, _ in batches for sample in batch]
+    for response in (response for _, batch in batches for response in batch):
+        validate(response)
     ended = max(end for _, end in samples)
     durations = [end - start for start, end in samples]
     return {"wall_ns": ended - started, "qps": len(samples) * 1e9 / (ended - started),
@@ -428,10 +453,33 @@ def validate_tree_upsert(response, documents):
 
 def validate_tree_queries(responses, generation):
     for response in responses:
-        if (len(response.documents) != TOP_K or response.route != "ann"
-                or response.index.generation != generation or response.exact_fallbacks
-                or response.full_document_scan_fallbacks):
-            raise RuntimeError("TreeDB mixed read left the required ANN route")
+        work = response.dense_work
+        if (response.native_command_version != 2 or len(response.documents) != TOP_K
+                or response.route != "ann" or response.index.generation != generation
+                or response.index.vector_strategy != "column_graph"
+                or response.index.extra.get("typed_input") is not True
+                or response.exact_fallbacks or response.full_document_scan_fallbacks
+                or work is None or not work.completed or work.output.fetched != TOP_K):
+            raise RuntimeError("TreeDB read left the required native ANN route")
+        ids = [document.id for document in response.documents]
+        if len(set(ids)) != TOP_K:
+            raise RuntimeError("TreeDB read returned duplicate logical IDs")
+        for document in response.documents:
+            try:
+                row = int(document.id.removeprefix("row-"))
+                content = f"minima-cohere:{row}"
+                valid = (document.id == f"row-{row:06d}" and 0 <= row < ROWS
+                         and document.content in (content, content + ":updated")
+                         and document.meta == {
+                             "user_id": f"{(row * 7919) % ROWS:06d}",
+                             "fpath": f"/cohere/{row // 256:06d}.txt",
+                         }
+                         and document.embedding is None and document.score is not None
+                         and math.isfinite(document.score))
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                valid = False
+            if not valid:
+                raise RuntimeError("TreeDB read returned an invalid logical document")
 
 
 def validate_tree_updates(run, rows):
@@ -776,7 +824,7 @@ def add_provenance(result, plan, plan_path, plan_sha256, repeat, order):
 
 
 def summarize(plan, root, plan_sha256):
-    results = []
+    results, result_identities = [], []
     for repeat, order in enumerate(plan["pair_order"], 1):
         for position, backend in enumerate(order, 1):
             path = root / f"repeat-{repeat}-{backend}" / "result.json"
@@ -785,6 +833,10 @@ def summarize(plan, root, plan_sha256):
                 raise RuntimeError(f"incomplete campaign result: {path}")
             validate_result_identity(result, plan, plan_sha256, repeat, backend, position)
             results.append(result)
+            result_identities.append({
+                "backend": backend, "repetition": repeat, "order": position,
+                "path": str(path.relative_to(root)), "sha256": digest(path),
+            })
 
     def value(result, path):
         current = result
@@ -811,7 +863,12 @@ def summarize(plan, root, plan_sha256):
     scaled = {name: (1e-9 if name.endswith("seconds") else 1e-6 if name.endswith("_ms") else 1.0)
               for name in metrics}
     summary = {"schema": SCHEMA + "/summary", "state": "complete", "repetitions": 3,
-               "pair_order": plan["pair_order"], "backends": {}}
+               "pair_order": plan["pair_order"], "plan_sha256": plan_sha256,
+               "campaign_commit": plan["campaign_commit"], "harness_sha256": plan["harness_sha256"],
+               "dataset_manifest_sha256": plan["dataset_manifest_sha256"],
+               "dataset_files_sha256": plan["dataset_files_sha256"],
+               "control_artifacts_sha256": plan["control_artifacts_sha256"],
+               "results": result_identities, "backends": {}}
     for backend in ("treedb", "qdrant"):
         rows = [result for result in results if result["backend"] == backend]
         summary["backends"][backend] = {"control": plan["control_selection"][backend], "metrics": {}}
