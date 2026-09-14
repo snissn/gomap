@@ -124,7 +124,8 @@ class ServiceController:
                  startup_timeout: float, shutdown_timeout: float, *,
                  diagnostics_url: str | None = None, block_profile_rate: int = 1,
                  mutex_profile_fraction: int = 1, diagnostics_timeout: float = 2,
-                 native_address: str | None = None, measured: bool = False) -> None:
+                 native_address: str | None = None, measured: bool = False,
+                 environment: dict[str, str] | None = None) -> None:
         self.binary, self.url, self.data_dir, self.profile = binary, url.rstrip("/"), data_dir, profile
         self.startup_timeout, self.shutdown_timeout = startup_timeout, shutdown_timeout
         self.diagnostics_url = diagnostics_url.rstrip("/") if diagnostics_url else None
@@ -133,6 +134,7 @@ class ServiceController:
         self.diagnostics_timeout = diagnostics_timeout
         self.native_address = native_address
         self.measured = measured
+        self.environment = None if environment is None else dict(environment)
         self.lifetimes: list[dict[str, Any]] = []
         self._log_region_start = 0
         self._owned_identity = ""
@@ -277,7 +279,7 @@ class ServiceController:
         self.log_file = self.log_path.open("a", encoding="utf-8", buffering=1)
         try:
             self.process = subprocess.Popen(
-                argv, stdout=self.log_file, stderr=subprocess.STDOUT, text=True,
+                argv, stdout=self.log_file, stderr=subprocess.STDOUT, text=True, env=self.environment,
             )
             if self.measured:
                 self._owned_identity = common.linux_process_identity(self.process.pid)

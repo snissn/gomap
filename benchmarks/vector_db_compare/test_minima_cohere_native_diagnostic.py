@@ -17,13 +17,13 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             dataset = Path(directory)
             args = SimpleNamespace(dataset=dataset, rows=500000)
-            for rows, queries in ((500001, 100), (500000, 101)):
+            for rows, queries in ((500001, 200), (500000, 201)):
                 with self.subTest(rows=rows, queries=queries):
                     manifest = {"dimensions": 768, "top_k": 10, "exact_train_query_overlap": 0,
                                 "rows": rows, "query_count": queries}
                     (dataset / "manifest.json").write_bytes(diagnostic.canonical(manifest))
                     with patch.object(diagnostic.existing, "repository_commit", return_value="a" * 40):
-                        with self.assertRaisesRegex(ValueError, "exactly 500000 exported rows and 100 queries"):
+                        with self.assertRaisesRegex(ValueError, "exactly 500000 exported rows and 200 queries"):
                             diagnostic.prepare(args)
 
     def test_real_dimension_independent_oracle_and_scalar_membership(self):
@@ -64,6 +64,8 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         self.assertEqual(diagnostic.predicate(500000, 4097)["value"], "004097")
         self.assertIn("0x6", frozen.GENERATOR)
         self.assertNotEqual(diagnostic.SCHEMA, frozen.MEASURED_SCHEMA)
+        self.assertEqual(diagnostic.RSS_CALIBRATION_QUERIES, list(range(100)))
+        self.assertEqual(diagnostic.RSS_EVALUATION_QUERIES, list(range(100, 200)))
 
     def test_shutdown_history_import_origin_and_zero_vectors_fail_closed(self):
         lifetime = {"pid": 123, "linux_process_identity": "123:456",

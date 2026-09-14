@@ -42,6 +42,7 @@ type Service struct {
 	diagnosticsCompleted            sync.Map // map[string]*diagnosticsCompletedInsert
 	diagnosticsUpsert               UpsertDiagnosticsStats
 	diagnosticsBeforeActivePublish  func()
+	typedUpsertBeforeGroup          func(*collections.Collection)
 	deferredMaintenanceBeforeCommit func()
 	documentScanBefore              func()
 	deferredVectorBuildMaintenance  *treedb.DeferredVectorBuildMaintenance
@@ -1587,6 +1588,14 @@ func (s *Service) benchmarkSearchCacheSizeForTest() int {
 }
 
 func (s *Service) openIndex(ctx context.Context, name string, expectedGeneration uint64) (*collections.Collection, IndexInfo, error) {
+	return s.openIndexWithCache(ctx, name, expectedGeneration, true)
+}
+
+func (s *Service) openIndexUncached(ctx context.Context, name string, expectedGeneration uint64) (*collections.Collection, IndexInfo, error) {
+	return s.openIndexWithCache(ctx, name, expectedGeneration, false)
+}
+
+func (s *Service) openIndexWithCache(ctx context.Context, name string, expectedGeneration uint64, allowCache bool) (*collections.Collection, IndexInfo, error) {
 	if err := ctxErr(ctx); err != nil {
 		return nil, IndexInfo{}, err
 	}
@@ -1599,18 +1608,20 @@ func (s *Service) openIndex(ctx context.Context, name string, expectedGeneration
 	if err := collections.ValidateCollectionName(name); err != nil {
 		return nil, IndexInfo{}, wrapServiceError(CodeInvalidRequest, "invalid index name", err)
 	}
-	s.benchmarkSearchCacheMu.RLock()
-	entry := s.benchmarkSearchCache[name]
-	if entry.matches(name) {
-		col, info := entry.collection, entry.info
-		s.benchmarkSearchCacheMu.RUnlock()
-		if expectedGeneration != 0 && expectedGeneration != info.Generation {
-			return nil, IndexInfo{}, serviceErrorf(CodeIndexStale, "index %q generation %d does not match expected_generation %d", name, info.Generation, expectedGeneration)
+	if allowCache {
+		s.benchmarkSearchCacheMu.RLock()
+		entry := s.benchmarkSearchCache[name]
+		if entry.matches(name) {
+			col, info := entry.collection, entry.info
+			s.benchmarkSearchCacheMu.RUnlock()
+			if expectedGeneration != 0 && expectedGeneration != info.Generation {
+				return nil, IndexInfo{}, serviceErrorf(CodeIndexStale, "index %q generation %d does not match expected_generation %d", name, info.Generation, expectedGeneration)
+			}
+			s.noteDiagnosticsIndex(name, info)
+			return col, info, nil
 		}
-		s.noteDiagnosticsIndex(name, info)
-		return col, info, nil
+		s.benchmarkSearchCacheMu.RUnlock()
 	}
-	s.benchmarkSearchCacheMu.RUnlock()
 	col, err := s.manager.OpenCollection(name)
 	if err != nil {
 		return nil, IndexInfo{}, serviceErrorFromCollectionOpen(err, name)

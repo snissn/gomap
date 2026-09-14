@@ -24,15 +24,39 @@ type TypedDocumentsRequest struct {
 // indexed JSON. It has the same durability and unchanged-row counting contract
 // as UpsertDocuments; graph build/admission remains explicit.
 func (s *Service) UpsertTypedDocuments(ctx context.Context, index string, req TypedDocumentsRequest) (UpsertDocumentsResponse, error) {
+	return s.upsertTypedDocumentsAdmission(ctx, index, req, true)
+}
+
+func (s *Service) upsertTypedDocumentsAdmission(ctx context.Context, index string, req TypedDocumentsRequest, shared bool) (UpsertDocumentsResponse, error) {
 	if s == nil {
 		return UpsertDocumentsResponse{}, serviceError(CodeInternal, "service is nil")
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
+	locked := true
+	if shared {
+		s.writeMu.RLock()
+	} else {
+		s.writeMu.Lock()
+	}
+	release := func() {
+		if !locked {
+			return
+		}
+		locked = false
+		if shared {
+			s.writeMu.RUnlock()
+		} else {
+			s.writeMu.Unlock()
+		}
+	}
+	defer release()
 	if req.ExpectedGeneration == 0 {
 		return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "typed upsert requires expected generation")
 	}
-	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
+	openIndex := s.openIndex
+	if shared {
+		openIndex = s.openIndexUncached
+	}
+	col, info, err := openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
 	}
@@ -79,6 +103,23 @@ func (s *Service) UpsertTypedDocuments(ctx context.Context, index string, req Ty
 	}
 	if err := ctxErr(ctx); err != nil {
 		return UpsertDocumentsResponse{}, err
+	}
+	if shared {
+		if hook := s.typedUpsertBeforeGroup; hook != nil {
+			hook(col)
+		}
+		updated, handled, stats, err := col.TryUpsertTypedBatchGroup(req.IDs, req.Retained, req.Columns)
+		if handled {
+			if err != nil {
+				return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "typed upsert failed", err)
+			}
+			if s.diagnosticsEnabled.Load() {
+				s.publishDiagnosticsInsert(info.Name, info, stats)
+			}
+			return completedTypedDocuments(info, req.IDs, names, 0, updated), nil
+		}
+		release()
+		return s.upsertTypedDocumentsAdmission(ctx, index, req, false)
 	}
 	return s.finishTypedDocuments(col, info, req.IDs, req.Retained, req.Columns, names, 0)
 }
@@ -221,7 +262,11 @@ func (s *Service) finishTypedDocuments(col *collections.Collection, info IndexIn
 	if err != nil {
 		return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "typed upsert failed", err)
 	}
-	return UpsertDocumentsResponse{Index: info, Upserted: len(ids), Inserted: len(ids) - updated, Updated: updated, IDs: names, CompactEmbeddings: compact}, nil
+	return completedTypedDocuments(info, ids, names, compact, updated), nil
+}
+
+func completedTypedDocuments(info IndexInfo, ids [][]byte, names []string, compact, updated int) UpsertDocumentsResponse {
+	return UpsertDocumentsResponse{Index: info, Upserted: len(ids), Inserted: len(ids) - updated, Updated: updated, IDs: names, CompactEmbeddings: compact}
 }
 
 // The schema, not a process-local flag, identifies selected typed input after
