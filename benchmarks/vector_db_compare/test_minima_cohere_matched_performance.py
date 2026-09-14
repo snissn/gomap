@@ -39,7 +39,7 @@ class MatchedPerformanceTest(unittest.TestCase):
             writer_started.set()
             self.assertTrue(reader_seen.wait(1))
             return "complete"
-        result, reads, writes = subject.mixed_window(read, [write], [0, 1], 2)
+        result, reads, writes = subject.mixed_window(read, [write], [0, 1], 2, 64, 256)
         self.assertGreater(result["overlapping_reads"]["latency"]["count"], 0)
         self.assertEqual((len(reads), writes), (128, ["complete"]))
 

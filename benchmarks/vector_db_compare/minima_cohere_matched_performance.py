@@ -272,13 +272,13 @@ def timed_window(call, query_ordinals, concurrency, seconds):
             "latency": distribution(durations)}, samples
 
 
-def mixed_window(read, write_batches, query_ordinals, readers):
+def mixed_window(read, write_batches, query_ordinals, readers, reads_per_reader, rows_per_batch):
     gate = threading.Barrier(readers + 2)
 
     def reader(worker_id):
         result = []
         gate.wait(timeout=30)
-        for index in range(64):
+        for index in range(reads_per_reader):
             started = time.monotonic_ns()
             value = read(query_ordinals[(index * readers + worker_id) % len(query_ordinals)])
             ended = time.monotonic_ns()
@@ -314,8 +314,8 @@ def mixed_window(read, write_batches, query_ordinals, readers):
                   "latency": distribution([end - start for start, end, _ in read_samples])},
         "overlapping_reads": {"interval_ns": write_end - write_start,
                               "latency": distribution([end - start for start, end in overlap])},
-        "writes": {"batches": len(write_samples), "rows": len(write_samples) * 256,
-                   "rows_per_second": len(write_samples) * 256 * 1e9 / (write_end - write_start),
+        "writes": {"batches": len(write_samples), "rows": len(write_samples) * rows_per_batch,
+                   "rows_per_second": len(write_samples) * rows_per_batch * 1e9 / (write_end - write_start),
                    "latency": distribution([end - start for start, end, _ in write_samples])},
     }, [value for _, _, value in read_samples], [value for _, _, value in write_samples]
 
@@ -411,7 +411,8 @@ def run_treedb(plan, run_dir):
             "minima_cohere", docs, index_info=run.info) for _, docs in prepared]
         mixed, mixed_reads, mixed_writes = mixed_window(
             lambda query: tree_query(run, query, control), writes,
-            EVALUATION_QUERIES, plan["mixed_reader_concurrency"])
+            EVALUATION_QUERIES, plan["mixed_reader_concurrency"],
+            plan["mixed_queries_per_reader"], plan["mixed_write_batch_rows"])
         validate_tree_queries(mixed_reads, run.info.generation)
         for (_, docs), response in zip(prepared, mixed_writes, strict=True):
             validate_tree_upsert(response, docs)
@@ -622,7 +623,8 @@ def run_qdrant(plan, run_dir):
         writes = [lambda points=points: run.client.upsert(collection_name=run.collection, points=points,
             wait=True, timeout=run.operation_timeout) for points in prepared]
         mixed, mixed_reads, mixed_writes = mixed_window(
-            concurrent_query, writes, EVALUATION_QUERIES, plan["mixed_reader_concurrency"])
+            concurrent_query, writes, EVALUATION_QUERIES, plan["mixed_reader_concurrency"],
+            plan["mixed_queries_per_reader"], plan["mixed_write_batch_rows"])
         validate_qdrant_queries(mixed_reads)
         validate_qdrant_upserts(mixed_writes)
         updated_rows = [row for index in range(plan["mixed_write_batches"])
