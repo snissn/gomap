@@ -385,7 +385,7 @@ func TestTypedGraphFilterKeeperCutoffAndRebuild(t *testing.T) {
 		}
 		var buffer VectorIndexSearchBuffer
 		_, stats, err := owner.overlay.searchPreparedFilter(plan, columns[0].Float32Vectors[0], 10, 256, 8192, &buffer)
-		if err != nil || stats.FilteredExact != (want <= 4096) {
+		if err != nil || (want <= 4096 && !stats.FilteredExact) {
 			t.Fatalf("cutoff scoring=%+v %v", stats, err)
 		}
 	}
@@ -401,9 +401,7 @@ func TestTypedGraphFilterKeeperCutoffAndRebuild(t *testing.T) {
 	if err := col.Delete(ids[removed]); err != nil {
 		t.Fatal(err)
 	}
-	if old.navigation == nil {
-		t.Fatal("missing broad-filter navigation")
-	}
+	navigation := waitTypedGraphFilterNavigation(t, old)
 	tightOwner, err := col.openTypedGraphReadOwner(owners)
 	if err != nil {
 		t.Fatal(err)
@@ -413,14 +411,14 @@ func TestTypedGraphFilterKeeperCutoffAndRebuild(t *testing.T) {
 		t.Fatal("missing keeper")
 	}
 	tight := limits
-	tight.RetainedBytes = old.plan.retainedBytes + old.navigation.retainedBytes
+	tight.RetainedBytes = old.plan.retainedBytes + navigation.retainedBytes
 	var work ColumnGraphFilterWork
 	plan, err := prepareTypedGraphServingFilter(context.Background(), p, tightOwner.overlay, filter, tight, &work)
 	p.mu.RUnlock()
 	if closeErr := tightOwner.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	if err != nil || plan.count != 4096 || plan.borrowedBaseFilter.navigation != nil {
+	if err != nil || plan.count != 4096 || plan.borrowedBaseFilter.navigation.Load() != nil {
 		t.Fatalf("suffix binding did not preempt optional navigation: work=%+v err=%v", work, err)
 	}
 	query(4096, false)

@@ -375,8 +375,10 @@ func (v *typedGraphOverlaySearch) searchScalarU8PreparedCandidatesWithContext(ct
 	var navigation *typedGraphFilterNavigation
 	if plan != nil {
 		baseFilter := plan.borrowedBaseFilter
-		if baseFilter != nil && baseFilter.navigation != nil {
-			navigation = baseFilter.navigation
+		if baseFilter != nil {
+			navigation = baseFilter.navigation.Load()
+		}
+		if navigation != nil {
 			// A bound plan is a fresh wrapper for every request. Its detached cached
 			// origin, rather than wrapper identity, proves that the cached local map
 			// was built from this exact immutable base selection. The base pack pin

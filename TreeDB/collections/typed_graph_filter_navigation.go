@@ -13,6 +13,9 @@ import (
 const (
 	typedGraphFilterNavigationMaxRows              = 1 << 18
 	typedGraphFilterNavigationMaxConstructionBytes = 512 << 20
+	// Keep the public cold query bounded while its optional local graph builds.
+	// Warm queries switch back to navigation as soon as it is published.
+	typedGraphFilterNavigationColdExactMaxRows = 5000
 )
 
 var errTypedGraphFilterNavigationDeclined = errors.New("collections: typed graph filter navigation declined")
@@ -32,7 +35,26 @@ type typedGraphFilterNavigation struct {
 	retainedBytes int
 }
 
+type typedGraphFilterNavigationBuildSource struct {
+	def          VectorIndexDefinition
+	pack         *columnHNSWSearchPackPreparedView
+	vectorSource *columnVectorGraphTypedColumnVectorSource
+	normSource   *columnVectorGraphInvNormStateSource
+}
+
 func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOverlaySearch, plan *typedGraphPreparedFilter, maxBytes int) (*typedGraphFilterNavigation, error) {
+	if overlay == nil || !overlay.validOpen() || overlay.pack == nil {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	return buildTypedGraphFilterNavigationFromSource(ctx, typedGraphFilterNavigationBuildSource{
+		def:          overlay.base.reader.def,
+		pack:         overlay.pack,
+		vectorSource: overlay.base.reader.typedVectorSource,
+		normSource:   overlay.base.reader.invNormSource,
+	}, plan, maxBytes)
+}
+
+func buildTypedGraphFilterNavigationFromSource(ctx context.Context, source typedGraphFilterNavigationBuildSource, plan *typedGraphPreparedFilter, maxBytes int) (*typedGraphFilterNavigation, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -41,16 +63,16 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 	}
 	selection := plan.base
 	count := selection.Count()
-	if overlay == nil || !overlay.validOpen() || overlay.pack == nil {
+	if source.pack == nil || source.vectorSource == nil || source.normSource == nil {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
 	if count <= typedGraphScalarExactLimit || count > typedGraphFilterNavigationMaxRows || selection.IsAll() || maxBytes <= 0 {
 		return nil, errTypedGraphFilterNavigationDeclined
 	}
-	if !typedGraphFilterNavigationConstructionFits(count, overlay.base.reader.def.Dimensions, overlay.base.reader.def.EfConstruction) {
+	if !typedGraphFilterNavigationConstructionFits(count, source.def.Dimensions, source.def.EfConstruction) {
 		return nil, errTypedGraphFilterNavigationDeclined
 	}
-	levelIndex, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(overlay.base.reader.def))
+	levelIndex, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(source.def))
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +98,7 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 		if !ok {
 			return nil, ErrVectorIndexSnapshotMismatch
 		}
-		id, ok := overlay.pack.documentIDForOrdinal(ordinal)
+		id, ok := source.pack.documentIDForOrdinal(ordinal)
 		if !ok {
 			return nil, ErrVectorIndexSnapshotMismatch
 		}
@@ -106,15 +128,15 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 		if !ok || uint64(ordinal) > math.MaxUint32 {
 			return nil, ErrVectorIndexSnapshotMismatch
 		}
-		id, ok := overlay.pack.documentIDForOrdinal(ordinal)
+		id, ok := source.pack.documentIDForOrdinal(ordinal)
 		if !ok {
 			return nil, ErrVectorIndexSnapshotMismatch
 		}
-		vector, _, _, ok := overlay.base.reader.typedVectorSource.vectorForOrdinal(ordinal)
+		vector, _, _, ok := source.vectorSource.vectorForOrdinal(ordinal)
 		if !ok {
 			return nil, ErrVectorIndexSnapshotMismatch
 		}
-		invNorm, _, _, ok := overlay.base.reader.invNormForOrdinal(ordinal)
+		invNorm, _, _, ok := source.normSource.invNormForOrdinal(ordinal)
 		if !ok {
 			return nil, ErrVectorIndexSnapshotMismatch
 		}
@@ -125,7 +147,7 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 	if err := sortVectorPartitionSliceWithContextV1(ctx, rows, func(a, b columnVectorGraphAssetRow) bool { return bytes.Compare(a.ID, b.ID) < 0 }); err != nil {
 		return nil, err
 	}
-	if err := buildColumnVectorGraphAdjacencyWithContext(ctx, rows, overlay.base.reader.def); err != nil {
+	if err := buildColumnVectorGraphAdjacencyWithContext(ctx, rows, source.def); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -155,13 +177,13 @@ func buildTypedGraphFilterNavigation(ctx context.Context, overlay *typedGraphOve
 	return &typedGraphFilterNavigation{
 		view: columnHNSWSearchPackPreparedView{
 			Header: columnHNSWSearchPackHeader{
-				Rows: count, Dimensions: overlay.pack.Header.Dimensions, VectorStride: overlay.pack.Header.VectorStride,
-				M: overlay.pack.Header.M, EfConstruction: overlay.pack.Header.EfConstruction, EfSearch: overlay.pack.Header.EfSearch,
+				Rows: count, Dimensions: source.pack.Header.Dimensions, VectorStride: source.pack.Header.VectorStride,
+				M: source.pack.Header.M, EfConstruction: source.pack.Header.EfConstruction, EfSearch: source.pack.Header.EfSearch,
 				EntryOrdinal: 0, MaxLayer: maxLayer, AdjacencyLayerCount: len(preparedLayers),
 			},
 			Levels: levels, AdjacencyLayers: preparedLayers, status: columnHNSWSearchPackPreparedStatusHeap, ephemeralHeap: true,
 		},
-		baseOrdinals: baseOrdinals, basePack: overlay.pack, retainedBytes: retained,
+		baseOrdinals: baseOrdinals, basePack: source.pack, retainedBytes: retained,
 	}, nil
 }
 
