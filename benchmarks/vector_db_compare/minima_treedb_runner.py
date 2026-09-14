@@ -1749,6 +1749,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             "profile_seconds": self.diagnostic_profile_seconds,
             "capture_timeout_seconds": self.diagnostic_capture_timeout,
             "nonqualifying": self.diagnostic_resume is not None,
+            **({"ef_construction_requested": self.ef_construction,
+                **({"ef_construction_effective": self.index_info.vector_ef_construction}
+                   if self.index_info is not None else {})}
+               if self.strategy == "column_graph" else {}),
         }
         raw["resource_availability"] = {
             "measurement": common.RESOURCE_SEMANTICS,

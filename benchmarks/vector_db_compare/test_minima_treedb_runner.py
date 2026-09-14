@@ -1752,9 +1752,13 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             "backend_raw_evidence": {"qdrant": {"resource_measurement": resource}},
         }
         with mock.patch.object(common.QdrantMinimaRunner, "artifact", return_value=column_artifact):
-            emitted = workload.artifact()["backends"][0]["configuration"]
+            result = workload.artifact()
+            emitted = result["backends"][0]["configuration"]
         self.assertEqual(emitted["ef_construction_requested"], "32")
         self.assertEqual(emitted["ef_construction_effective"], "32")
+        diagnostics = result["backend_raw_evidence"]["treedb"]["diagnostics"]
+        self.assertEqual(diagnostics["ef_construction_requested"], 32)
+        self.assertEqual(diagnostics["ef_construction_effective"], 32)
 
 
 class MinimaTypedRunnerTest(unittest.TestCase):
