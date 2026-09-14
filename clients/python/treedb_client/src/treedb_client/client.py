@@ -428,8 +428,7 @@ class TreeDBClient:
                 if index_info.name != index or not index_info.capabilities.typed_dense_quantized_rerank:
                     raise TreeDBConfigError("typed dense quantized rerank capability is unavailable")
                 selected = next((item for item in index_info.quantized_indexes if item.name == quantized_index_name), None)
-                if selected is None or selected.codec != "scalar_u8" or selected.version != 1 \
-                        or (selected.scalar_u8_calibration is not None and getattr(selected.scalar_u8_calibration, "mode", "") not in ("", "legacy")):
+                if not _is_legacy_scalar_u8_v1_index(selected):
                     raise TreeDBConfigError("typed dense quantized rerank requires the selected legacy scalar_u8/v1 index")
         ef_search_value = None
         if ef_search is not None:
@@ -444,8 +443,7 @@ class TreeDBClient:
                 if not index_info.capabilities.typed_dense_quantized_rerank:
                     raise TreeDBConfigError("native dense quantized rerank capability is unavailable")
                 selected = next((item for item in index_info.quantized_indexes if item.name == quantized_index_name), None)
-                if selected is None or selected.codec != "scalar_u8" or selected.version != 1 \
-                        or (selected.scalar_u8_calibration is not None and getattr(selected.scalar_u8_calibration, "mode", "") not in ("", "legacy")):
+                if not _is_legacy_scalar_u8_v1_index(selected):
                     raise TreeDBConfigError("native dense quantized rerank requires the selected legacy scalar_u8/v1 index")
             if route not in (None, "ann") or (expected_generation is not None and expected_generation != index_info.generation):
                 raise TreeDBConfigError("native dense route or generation conflicts with IndexInfo")
@@ -1032,7 +1030,7 @@ def _validate_http_dense_quantized_response(
 ) -> None:
     """Require the HTTP response proof for an explicitly selected public route."""
 
-    from ._dense_work import dense_score_plane_byte_counters_match
+    from ._dense_work import dense_quantized_response_work_matches, dense_score_plane_byte_counters_match
 
     proof = response.score_plane
     work = response.dense_work
@@ -1061,7 +1059,9 @@ def _validate_http_dense_quantized_response(
         or not _dense_http_results_ordered(response.documents)
         or response.index.dimension != query_dimension
         or not dense_score_plane_byte_counters_match(proof, query_dimension)
-        or not _dense_http_score_plane_counters_match_graph(work, proof, len(response.documents))
+        or not dense_quantized_response_work_matches(
+            work, proof, top_k, len(response.documents), filter_requested
+        )
         or response.index.name != index
         or (expected_generation is not None and response.index.generation != expected_generation)
         or response.metric != "cosine"
@@ -1099,10 +1099,7 @@ def _validate_http_dense_quantized_response(
         or proof.quantized_index_name != quantized_index_name
         or proof.quantized_codec != "scalar_u8"
         or proof.quantized_version != 1
-        or selected is None
-        or selected.codec != "scalar_u8"
-        or selected.version != 1
-        or (selected.scalar_u8_calibration is not None and getattr(selected.scalar_u8_calibration, "mode", "") not in ("", "legacy"))
+        or not _is_legacy_scalar_u8_v1_index(selected)
         or proof.requested_top_k != top_k
         or proof.requested_ef_search != ef_search
         or proof.requested_rerank_candidates != quantized_rerank_candidates
@@ -1123,29 +1120,22 @@ def _dense_http_results_ordered(documents: Sequence[Document]) -> bool:
     return True
 
 
-def _dense_http_score_plane_counters_match_graph(work: Any, proof: Any, result_count: int) -> bool:
-    if work is None or proof is None or result_count < 0:
+def _is_legacy_scalar_u8_v1_index(selected: Any) -> bool:
+    if selected is None or selected.codec != "scalar_u8" or selected.version != 1:
         return False
-    exact_score_calls = (
-        proof.exact_base_rerank_score_calls
-        + proof.exact_small_filter_score_calls
-        + proof.exact_suffix_score_calls
-    )
+    calibration = selected.scalar_u8_calibration
+    if calibration is None:
+        return True
+
+    def field(value: Any, name: str, default: Any) -> Any:
+        return value.get(name, default) if isinstance(value, Mapping) else getattr(value, name, default)
+
+    policy = field(calibration, "alpha_policy", None)
     return (
-        proof.quantized_score_calls == work.graph.base_ann_scored
-        and work.graph.base_candidates <= proof.quantized_score_calls
-        and proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls == work.graph.exact_base_scored
-        and work.graph.base_result_ids == proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls
-        and proof.exact_suffix_score_calls == work.graph.delta_scored
-        and (not work.graph.filter.attempted or (
-            exact_score_calls <= work.graph.filter.eligible_rows
-            and (proof.route != "typed_exact" or exact_score_calls == work.graph.filter.eligible_rows)
-        ))
-        and result_count <= (
-            proof.exact_base_rerank_score_calls
-            + proof.exact_small_filter_score_calls
-            + proof.exact_suffix_score_calls
-        )
+        field(calibration, "mode", "") in ("", "legacy")
+        and field(calibration, "grouping", "") == ""
+        and field(policy, "name", "") == ""
+        and field(policy, "quantile_ppm", 0) == 0
     )
 
 

@@ -112,7 +112,7 @@ func validateDenseScorePlane(proof collections.ColumnGraphScorePlaneWork) error 
 			return protocolError(iwire.ErrMalformedFrame, "invalid dense score-plane manifest format")
 		}
 	}
-	if proof.Completed && (!proof.Available || !proof.Snapshot.Available || proof.Route == "") {
+	if proof.Completed && (!proof.Available || !proof.Snapshot.Available || proof.Route == "" || proof.Reason != "") {
 		return protocolError(iwire.ErrConsistencyUnavailable, "completed dense score-plane proof is incomplete")
 	}
 	if proof.Completed && proof.Route == "quantized_rerank" && proof.QuantizedScoreCalls == 0 {
@@ -148,7 +148,10 @@ func denseScorePlaneRerankCountersMatch(proof *collections.ColumnGraphScorePlane
 	}
 	switch proof.Route {
 	case "quantized_rerank":
-		return proof.RawRetainedCandidates <= proof.QuantizedScoreCalls &&
+		return proof.NormalizedCandidateWidth != 0 &&
+			proof.RawCandidateWidth != 0 &&
+			proof.RerankCandidateCap != 0 &&
+			proof.RawRetainedCandidates <= proof.QuantizedScoreCalls &&
 			proof.ExactSmallFilterScoreCalls == 0 &&
 			proof.ActualRerankCandidates == proof.ExactBaseRerankScoreCalls &&
 			proof.ActualRerankCandidates == minUint64(proof.LiveShortlistCandidates, proof.RerankCandidateCap)

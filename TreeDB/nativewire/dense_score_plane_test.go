@@ -102,6 +102,18 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	if _, err := appendDenseScorePlane(nil, underCap, iwire.DefaultLimits()); err == nil {
 		t.Fatal("completed quantized rerank proof accepted a producer-inconsistent cap")
 	}
+	completedWithReason := proof
+	completedWithReason.Reason = "stale error"
+	if _, err := appendDenseScorePlane(nil, completedWithReason, iwire.DefaultLimits()); err == nil {
+		t.Fatal("completed score-plane proof with an error reason accepted")
+	}
+	zeroPlan := proof
+	zeroPlan.NormalizedCandidateWidth, zeroPlan.RawCandidateWidth, zeroPlan.RerankCandidateCap = 0, 0, 0
+	zeroPlan.RawRetainedCandidates, zeroPlan.LiveShortlistCandidates = 0, 0
+	zeroPlan.ActualRerankCandidates, zeroPlan.ExactBaseRerankScoreCalls = 0, 0
+	if _, err := appendDenseScorePlane(nil, zeroPlan, iwire.DefaultLimits()); err == nil {
+		t.Fatal("completed quantized rerank proof with a zero plan accepted")
+	}
 }
 
 func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
@@ -110,15 +122,33 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 		RequestedMode: collections.VectorIndexQueryModeQuantizedRerank,
 		EffectiveMode: collections.VectorIndexQueryModeQuantizedRerank,
 		Route:         "quantized_rerank", QuantizedIndexName: "embedding.scalar_u8.public",
-		RequestedTopK: 1, RequestedEFSearch: 8, QuantizedScoreCalls: 1,
+		RequestedTopK: 1, RequestedEFSearch: 8,
+		NormalizedCandidateWidth: 1, RawCandidateWidth: 1, RerankCandidateCap: 1,
+		RawRetainedCandidates: 1, QuantizedScoreCalls: 1,
 		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true},
 	}
-	work := documentservice.DenseSearchWork{Completed: true, Graph: collections.ColumnGraphQueryWork{Available: true, Completed: true, Route: "typed_hnsw", BaseANNScored: 1}}
+	work := documentservice.DenseSearchWork{Completed: true, Graph: collections.ColumnGraphQueryWork{Available: true, Completed: true, Route: "typed_hnsw", BaseANNScored: 1, BaseShadowed: 1}}
 	work.Graph.Snapshot = proof.Snapshot
 	proof.QuantizedCodeBytesRead = 2
 	request := DenseVectorSearchRequest{Query: []float32{1, 0}, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: proof.QuantizedIndexName, TopK: 1, EfSearch: 8}
 	if err := validateDenseQuantizedScorePlaneResponse(work, proof, request, 0); err != nil {
 		t.Fatalf("valid public proof rejected: %v", err)
+	}
+	for name, candidate := range map[string]documentservice.DenseSearchWork{
+		"base edge work": func() documentservice.DenseSearchWork {
+			candidate := work
+			candidate.Graph.BaseEdges = 1
+			return candidate
+		}(),
+		"shadow/shortlist mismatch": func() documentservice.DenseSearchWork {
+			candidate := work
+			candidate.Graph.BaseShadowed = 0
+			return candidate
+		}(),
+	} {
+		if err := validateDenseQuantizedScorePlaneResponse(candidate, proof, request, 0); err == nil {
+			t.Fatalf("quantized route accepted %s: %+v", name, candidate.Graph)
+		}
 	}
 	filteredRequest := request
 	filteredRequest.Filter = new(documentservice.Filter)
@@ -127,8 +157,9 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	filteredProof.RawRetainedCandidates, filteredProof.LiveShortlistCandidates, filteredProof.ActualRerankCandidates = 1, 1, 1
 	filteredProof.ExactBaseRerankScoreCalls, filteredProof.ExactBaseVectorBytesRead = 1, 8
 	filteredWork := work
+	filteredWork.Graph.BaseShadowed = 0
 	filteredWork.Graph.ExactBaseScored, filteredWork.Graph.BaseResultIDs = 1, 1
-	filteredWork.Graph.Filter = collections.ColumnGraphFilterWork{Attempted: true, Completed: true, EligibleRows: 1}
+	filteredWork.Graph.Filter = collections.ColumnGraphFilterWork{Attempted: true, Completed: true, EligibleRows: denseTypedScalarExactLimit + 1}
 	if err := validateDenseQuantizedScorePlaneResponse(filteredWork, &filteredProof, filteredRequest, 1); err != nil {
 		t.Fatalf("valid filtered public proof rejected: %v", err)
 	}
@@ -149,12 +180,15 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 		t.Fatal("filtered response underfilled captured eligible rows")
 	}
 	overScoredProof := filteredProof
-	overScoredProof.NormalizedCandidateWidth, overScoredProof.RawCandidateWidth, overScoredProof.RerankCandidateCap = 2, 2, 2
-	overScoredProof.RawRetainedCandidates, overScoredProof.LiveShortlistCandidates, overScoredProof.ActualRerankCandidates = 2, 2, 2
-	overScoredProof.QuantizedScoreCalls, overScoredProof.QuantizedCodeBytesRead = 2, 4
-	overScoredProof.ExactBaseRerankScoreCalls, overScoredProof.ExactBaseVectorBytesRead = 2, 16
+	overScoredProof.Route = "typed_exact"
+	overScoredProof.RawRetainedCandidates, overScoredProof.LiveShortlistCandidates, overScoredProof.ActualRerankCandidates = 0, 0, 0
+	overScoredProof.QuantizedScoreCalls, overScoredProof.QuantizedCodeBytesRead = 0, 0
+	overScoredProof.ExactBaseRerankScoreCalls, overScoredProof.ExactSmallFilterScoreCalls = 0, 2
+	overScoredProof.ExactBaseVectorBytesRead = 16
 	overScoredWork := filteredWork
-	overScoredWork.Graph.BaseANNScored, overScoredWork.Graph.ExactBaseScored, overScoredWork.Graph.BaseResultIDs = 2, 2, 2
+	overScoredWork.Graph.Route = "typed_exact"
+	overScoredWork.Graph.BaseANNScored, overScoredWork.Graph.ExactBaseScored, overScoredWork.Graph.BaseResultIDs = 0, 2, 2
+	overScoredWork.Graph.Filter.EligibleRows = 1
 	if err := validateDenseQuantizedScorePlaneResponse(overScoredWork, &overScoredProof, filteredRequest, 1); err == nil {
 		t.Fatal("filtered response exact-scored beyond captured eligible rows")
 	}
@@ -306,9 +340,11 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	strictEmptyProof.NormalizedCandidateWidth = 1
 	strictEmptyProof.RawCandidateWidth = 1
 	strictEmptyProof.RerankCandidateCap = 1
+	strictEmptyProof.RawRetainedCandidates = 0
 	strictEmptyWork := work
 	strictEmptyWork.Graph.Route = "typed_empty"
 	strictEmptyWork.Graph.BaseANNScored = 0
+	strictEmptyWork.Graph.BaseShadowed = 0
 	strictEmptyWork.Graph.Filter = collections.ColumnGraphFilterWork{Attempted: true, Completed: true}
 	emptyRequest := request
 	emptyRequest.Filter = new(documentservice.Filter)
@@ -347,10 +383,40 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	strictExactProof.ExactBaseRerankScoreCalls = 0
 	strictExactProof.ExactSuffixScoreCalls = 1
 	strictExactProof.ExactSuffixVectorBytesRead = 8
+	strictExactProof.NormalizedCandidateWidth = 0
+	strictExactProof.RawCandidateWidth = 0
+	strictExactProof.RerankCandidateCap = 0
+	strictExactProof.RawRetainedCandidates = 0
+	strictExactProof.LiveShortlistCandidates = 0
 	strictExactWork := work
 	strictExactWork.Graph.Route = "typed_exact"
 	strictExactWork.Graph.BaseANNScored = 0
+	strictExactWork.Graph.BaseShadowed = 0
 	strictExactWork.Graph.DeltaScored = 1
+	if err := validateDenseQuantizedScorePlaneResponse(strictExactWork, &strictExactProof, request, 1); err != nil {
+		t.Fatalf("valid unfiltered typed-exact proof rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*documentservice.DenseSearchWork, *collections.ColumnGraphScorePlaneWork){
+		"planning widths": func(_ *documentservice.DenseSearchWork, proof *collections.ColumnGraphScorePlaneWork) {
+			proof.NormalizedCandidateWidth, proof.RawCandidateWidth, proof.RerankCandidateCap = 1, 1, 1
+		},
+		"small-filter scoring": func(work *documentservice.DenseSearchWork, proof *collections.ColumnGraphScorePlaneWork) {
+			proof.ExactSmallFilterScoreCalls, proof.ExactBaseVectorBytesRead = 1, 8
+			work.Graph.ExactBaseScored, work.Graph.BaseResultIDs = 1, 1
+		},
+		"base shadowing": func(work *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			work.Graph.BaseShadowed = 1
+		},
+		"base edge work": func(work *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			work.Graph.BaseEdges = 1
+		},
+	} {
+		candidateWork, candidateProof := strictExactWork, strictExactProof
+		mutate(&candidateWork, &candidateProof)
+		if err := validateDenseQuantizedScorePlaneResponse(candidateWork, &candidateProof, request, 1); err == nil {
+			t.Fatalf("unfiltered typed-exact route accepted %s", name)
+		}
+	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphScorePlaneWork){
 		"retained candidates": func(p *collections.ColumnGraphScorePlaneWork) { p.RawRetainedCandidates = 1 },
 		"live shortlist":      func(p *collections.ColumnGraphScorePlaneWork) { p.LiveShortlistCandidates = 1 },
@@ -377,6 +443,31 @@ func TestDenseV3CandidateCountMatchesRows(t *testing.T) {
 	for _, candidate := range [][3]int{{1, 1, 1}, {0, 0, 1}, {2, 1, 0}, {-1, 0, 0}, {0, -1, 0}} {
 		if got := denseV3CandidateCountMatchesRows(candidate[0], candidate[1]); (got && candidate[2] == 0) || (!got && candidate[2] == 1) {
 			t.Fatalf("candidate count match (%d,%d)=%v, want %v", candidate[0], candidate[1], got, candidate[2] == 1)
+		}
+	}
+}
+
+func TestDenseWorkResultsBindOutputDiagnostics(t *testing.T) {
+	results := []DenseVectorSearchResult{{ID: []byte("a"), Document: []byte("{}")}}
+	work := documentservice.DenseSearchWork{
+		Completed: true,
+		Output: documentservice.DenseSearchOutputWork{
+			Fetched: 1, OutputBytes: 2, RetainedPayloadFetches: 1,
+			JSONReconstructionRows: 1, TypedColumnRows: 1,
+		},
+	}
+	if err := validateDenseWorkResults(work, results); err != nil {
+		t.Fatalf("valid dense output diagnostics rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*documentservice.DenseSearchOutputWork){
+		"retained payload fetches": func(output *documentservice.DenseSearchOutputWork) { output.RetainedPayloadFetches = 0 },
+		"JSON reconstruction rows": func(output *documentservice.DenseSearchOutputWork) { output.JSONReconstructionRows = 0 },
+		"typed column rows":        func(output *documentservice.DenseSearchOutputWork) { output.TypedColumnRows = 2 },
+	} {
+		candidate := work
+		mutate(&candidate.Output)
+		if err := validateDenseWorkResults(candidate, results); err == nil {
+			t.Fatalf("dense output accepted inconsistent %s", name)
 		}
 	}
 }

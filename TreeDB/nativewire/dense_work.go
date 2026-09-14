@@ -192,7 +192,9 @@ func validateDenseWorkResults(work documentservice.DenseSearchWork, results []De
 	for _, result := range results {
 		bytes += uint64(len(result.Document))
 	}
-	if !work.Completed || work.Output.Fetched != uint64(len(results)) || work.Output.OutputBytes != bytes {
+	rows := uint64(len(results))
+	if !work.Completed || work.Output.Fetched != rows || work.Output.OutputBytes != bytes ||
+		work.Output.RetainedPayloadFetches != rows || work.Output.JSONReconstructionRows != rows || work.Output.TypedColumnRows > rows {
 		return protocolError(iwire.ErrMalformedFrame, "dense work does not match response documents")
 	}
 	return nil

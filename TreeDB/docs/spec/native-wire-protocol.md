@@ -843,6 +843,22 @@ captured snapshot is available; all other flag bits are invalid. This keeps
 incomplete error prefixes distinguishable from completed proofs without
 deriving snapshot availability from the outer proof bit. Missing, duplicate, stale, malformed, unsupported-codec,
 unknown-name, or out-of-bound options fail closed.
+
+Completed public v3 proofs use this producer/consumer route matrix. `E`, `C`,
+and `R` denote normalized candidate width, raw candidate width, and rerank cap.
+
+| Score-plane route | Filter/cardinality | Planning and scoring invariants |
+|---|---|---|
+| `typed_empty` | A completed filter is required and eligible rows are zero | Result and all score/retained/live/actual counters are zero. `E/C/R` may be nonzero because planning can precede removal of shadowed filter matches. |
+| `typed_exact` | Without a filter, the base domain is empty. A filter has positive eligibility; with a nonzero `E`, eligible rows are at most 4096. | Unfiltered `E/C/R`, small-filter calls, and base-shadowed are zero. Filtered total exact calls equal eligible rows. Result count is `min(top-K, total exact calls)`. |
+| `quantized_rerank` | A filtered route has more than 4096 eligible rows. | `E/C/R` are positive; small-filter calls are zero; base-shadowed is no greater than raw retained; live shortlist is `min(E, raw retained - base shadowed)`; actual rerank is `min(live shortlist, R)`. Result count is `min(top-K, total exact calls)`. |
+
+For every route, completed proofs have an empty reason, graph base-edge work is
+zero, quantized calls equal graph base-ANN scoring, exact base calls equal graph
+exact-base/result-ID counts, and exact suffix calls equal graph delta scoring.
+Graph base candidates may be lower than quantized calls because public minimal
+stats do not require that optional count.
+
 Requested documents are fetched from the search's same read owner before
 release. Content/meta are returned; embedding echo is opt-in through the
 return-embedding bool (default false), as on HTTP. Stored FP32 embeddings are
@@ -869,8 +885,10 @@ Manifest format tags are `0` empty and `1` `tcs1`; manifest version fits uint16.
 Unknown versions/tags, missing or duplicate sections, nonminimal/overflowing
 integers, truncation and trailing bytes fail closed. Unavailable/unattempted
 groups contain zero values. Successful responses require completed graph and
-output, fetched=requested=result count, no missing rows, and output bytes equal
-the sum of materialized document byte lengths. Output bytes exclude framing.
+output, fetched=requested=result count, no missing rows, retained payload
+fetches=JSON reconstruction rows=result count, typed column rows no greater
+than result count, and output bytes equal the sum of materialized document byte
+lengths. Output bytes exclude framing and HTTP JSON encoding.
 
 The snapshot comes from the actual acquired owner, including base/current
 manifest identities and coverage, and remains owned after owner close or client

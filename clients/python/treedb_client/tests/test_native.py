@@ -62,7 +62,7 @@ class NativeCodecTests(unittest.TestCase):
             self.assertEqual(response.score_plane.quantized_index_name, "embedding.scalar_u8.public")
             filtered_work_values = list(work_values)
             filtered_work_values[1] |= (1 << 3) | (1 << 4)
-            filtered_work_values[10] = 1
+            filtered_work_values[10] = 4097
             filtered_body = (
                 _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
                 _section(130, meta) + _section(134, b"".join(_uint(value) for value in filtered_work_values)) +
@@ -102,10 +102,14 @@ class NativeCodecTests(unittest.TestCase):
                     ef_search=0, query_dimension=2, filter_requested=True,
                 )
             over_scored_work_values = list(filtered_work_values)
-            over_scored_work_values[3] = over_scored_work_values[7] = over_scored_work_values[9] = 2
+            over_scored_work_values[2] = 2  # typed_exact
+            over_scored_work_values[3] = 0
+            over_scored_work_values[7] = over_scored_work_values[9] = 2
+            over_scored_work_values[10] = 1
             over_scored_values = list(values)
-            over_scored_values[10:17] = [2, 2, 2, 2, 2, 2, 2]
-            over_scored_values[17], over_scored_values[18], over_scored_values[21] = 4, 2, 16
+            over_scored_values[4] = 2  # typed_exact
+            over_scored_values[13:19] = [0, 0, 0, 0, 0, 0]
+            over_scored_values[20], over_scored_values[21] = 2, 16
             over_scored_plane = b"".join(_uint(value) for value in over_scored_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
             over_scored_plane += b"\x01\x01\x01\x03" * 2
             with self.assertRaises(TreeDBProtocolError):

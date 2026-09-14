@@ -194,7 +194,12 @@ class DenseScorePlaneProof:
             if not values["quantized_index_name"] or values["quantized_codec"] != "scalar_u8" or values["quantized_version"] != 1 or values["quantized_config_hash"] != 0:
                 raise ValueError("dense score-plane proof requires the legacy scalar_u8/v1 codec")
         snapshot = DenseSnapshotWork.from_dict(data["snapshot"])
-        if values["completed"] and (not values["available"] or not snapshot.available or not values["route"]):
+        if values["completed"] and (
+            not values["available"]
+            or not snapshot.available
+            or not values["route"]
+            or values["reason"]
+        ):
             raise ValueError("completed dense score-plane proof lacks captured work")
         if values["completed"] and values["route"] == "quantized_rerank" and values["quantized_score_calls"] == 0:
             raise ValueError("completed quantized rerank proof has no quantized score calls")
@@ -209,7 +214,10 @@ class DenseScorePlaneProof:
                 raise ValueError("completed dense score-plane proof planning counters are inconsistent")
             if values["route"] == "quantized_rerank":
                 if (
-                    values["raw_retained_candidates"] > values["quantized_score_calls"]
+                    values["normalized_candidate_width"] == 0
+                    or values["raw_candidate_width"] == 0
+                    or values["rerank_candidate_cap"] == 0
+                    or values["raw_retained_candidates"] > values["quantized_score_calls"]
                     or values["exact_small_filter_score_calls"] != 0
                     or values["actual_rerank_candidates"] != values["exact_base_rerank_score_calls"]
                     or values["actual_rerank_candidates"] != min(values["live_shortlist_candidates"], values["rerank_candidate_cap"])
@@ -249,6 +257,92 @@ def dense_score_plane_byte_counters_match(proof, dimension):
         proof.quantized_code_bytes_read == proof.quantized_score_calls * dimension
         and proof.exact_base_vector_bytes_read == exact_base_calls * bytes_per_exact
         and proof.exact_suffix_vector_bytes_read == proof.exact_suffix_score_calls * bytes_per_exact
+    )
+
+
+_DENSE_TYPED_SCALAR_EXACT_LIMIT = 4096
+
+
+def dense_quantized_response_work_matches(work, proof, top_k, result_count, filter_requested):
+    """Bind the public quantized response to one producer-owned route model."""
+
+    if (
+        work is None
+        or proof is None
+        or type(top_k) is not int
+        or top_k <= 0
+        or type(result_count) is not int
+        or result_count < 0
+        or type(filter_requested) is not bool
+    ):
+        return False
+    expected_route = {
+        "typed_empty": "typed_empty",
+        "typed_exact": "typed_exact",
+        "quantized_rerank": "typed_hnsw",
+    }.get(proof.route)
+    graph = work.graph
+    output = work.output
+    exact_base_calls = proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls
+    exact_score_calls = exact_base_calls + proof.exact_suffix_score_calls
+    if (
+        expected_route is None
+        or not work.completed
+        or not graph.available
+        or not graph.completed
+        or graph.route != expected_route
+        or graph.snapshot != proof.snapshot
+        or graph.filter.attempted != filter_requested
+        or (graph.filter.attempted and not graph.filter.completed)
+        or (filter_requested and result_count != min(top_k, graph.filter.eligible_rows))
+        or graph.base_edges != 0
+        or (not filter_requested and proof.exact_small_filter_score_calls != 0)
+        or (filter_requested and (
+            exact_score_calls > graph.filter.eligible_rows
+            or (proof.route == "typed_exact" and exact_score_calls != graph.filter.eligible_rows)
+        ))
+        or proof.quantized_score_calls != graph.base_ann_scored
+        or graph.base_candidates > proof.quantized_score_calls
+        or exact_base_calls != graph.exact_base_scored
+        or graph.base_result_ids != exact_base_calls
+        or proof.exact_suffix_score_calls != graph.delta_scored
+        or result_count > exact_score_calls
+        or output.fetched != result_count
+        or output.retained_payload_fetches != result_count
+        or output.json_reconstruction_rows != result_count
+        or output.typed_column_rows > result_count
+    ):
+        return False
+    if proof.route == "typed_empty":
+        return (
+            result_count == 0
+            and graph.filter.attempted
+            and graph.filter.completed
+            and graph.filter.eligible_rows == 0
+            and graph.base_shadowed == 0
+        )
+    if result_count != min(top_k, exact_score_calls):
+        return False
+    if proof.route == "typed_exact":
+        if not filter_requested:
+            return (
+                proof.normalized_candidate_width == 0
+                and proof.raw_candidate_width == 0
+                and proof.rerank_candidate_cap == 0
+                and graph.base_shadowed == 0
+            )
+        return (
+            graph.filter.eligible_rows > 0
+            and (
+                proof.normalized_candidate_width == 0
+                or graph.filter.eligible_rows <= _DENSE_TYPED_SCALAR_EXACT_LIMIT
+            )
+        )
+    return (
+        (not filter_requested or graph.filter.eligible_rows > _DENSE_TYPED_SCALAR_EXACT_LIMIT)
+        and graph.base_shadowed <= proof.raw_retained_candidates
+        and proof.live_shortlist_candidates
+        == min(proof.normalized_candidate_width, proof.raw_retained_candidates - graph.base_shadowed)
     )
 
 

@@ -322,48 +322,6 @@ def _dense_score_plane(raw):
     }
 
 
-def _dense_score_plane_matches_graph(work, score_plane, top_k, result_count, filter_requested):
-    expected = {
-        "typed_empty": "typed_empty",
-        "typed_exact": "typed_exact",
-        "quantized_rerank": "typed_hnsw",
-    }.get(score_plane.route)
-    exact_score_calls = (
-        score_plane.exact_base_rerank_score_calls
-        + score_plane.exact_small_filter_score_calls
-        + score_plane.exact_suffix_score_calls
-    )
-    return (
-        expected is not None
-        and work.completed
-        and work.graph.available
-        and work.graph.completed
-        and work.graph.route == expected
-        and work.graph.snapshot == score_plane.snapshot
-        and work.graph.filter.attempted == filter_requested
-        and (not work.graph.filter.attempted or work.graph.filter.completed)
-        and (not filter_requested or result_count == min(top_k, work.graph.filter.eligible_rows))
-        and (not filter_requested or (
-            exact_score_calls <= work.graph.filter.eligible_rows
-            and (score_plane.route != "typed_exact" or exact_score_calls == work.graph.filter.eligible_rows)
-        ))
-        and (score_plane.route != "typed_empty" or (
-            work.graph.filter.attempted and work.graph.filter.completed and work.graph.filter.eligible_rows == 0
-        ))
-        and score_plane.quantized_score_calls == work.graph.base_ann_scored
-        and work.graph.base_candidates <= score_plane.quantized_score_calls
-        and score_plane.exact_base_rerank_score_calls + score_plane.exact_small_filter_score_calls == work.graph.exact_base_scored
-        and work.graph.base_result_ids == score_plane.exact_base_rerank_score_calls + score_plane.exact_small_filter_score_calls
-        and score_plane.exact_suffix_score_calls == work.graph.delta_scored
-        and result_count >= 0
-        and result_count <= (
-            score_plane.exact_base_rerank_score_calls
-            + score_plane.exact_small_filter_score_calls
-            + score_plane.exact_suffix_score_calls
-        )
-    )
-
-
 def _dense_results_ordered(ids, scores):
     return all(
         scores[i - 1] > scores[i]
@@ -383,7 +341,11 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
     work = None
     score_plane = None
     if version == 3 and 136 in sections:
-        from ._dense_work import DenseScorePlaneProof, dense_score_plane_byte_counters_match
+        from ._dense_work import (
+            DenseScorePlaneProof,
+            dense_quantized_response_work_matches,
+            dense_score_plane_byte_counters_match,
+        )
         try:
             score_plane = DenseScorePlaneProof.from_dict(_dense_score_plane(sections[136]))
         except (TreeDBProtocolError, ValueError, TypeError, KeyError, UnicodeError) as exc:
@@ -432,7 +394,9 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
                 or score_plane.effective_mode != "quantized_rerank"
                 or score_plane.route not in ("typed_empty", "typed_exact", "quantized_rerank")
                 or not dense_score_plane_byte_counters_match(score_plane, query_dimension)
-                or not _dense_score_plane_matches_graph(work, score_plane, top_k, count, filter_requested)
+                or not dense_quantized_response_work_matches(
+                    work, score_plane, top_k, count, filter_requested
+                )
                 or (score_plane.route == "typed_empty" and count != 0)
                 or (score_plane.route in ("typed_exact", "quantized_rerank") and count != min(top_k, score_plane.exact_base_rerank_score_calls + score_plane.exact_small_filter_score_calls + score_plane.exact_suffix_score_calls))
                 or (score_plane.route == "quantized_rerank" and (

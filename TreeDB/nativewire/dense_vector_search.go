@@ -265,10 +265,9 @@ func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWo
 		work.Graph.Filter.Attempted != (request.Filter != nil) ||
 		(work.Graph.Filter.Attempted && !work.Graph.Filter.Completed) ||
 		(request.Filter != nil && (resultCount < 0 || uint64(resultCount) != minUint64(uint64(request.TopK), work.Graph.Filter.EligibleRows))) ||
-		(request.Filter != nil && !denseFilteredExactScoreCallsMatchWork(work, proof)) ||
 		!denseScorePlaneRerankCountersMatch(proof) ||
 		!denseScorePlaneByteCountersMatch(proof, uint64(len(request.Query))) ||
-		!denseScorePlaneCountersMatchWork(work, proof, resultCount) ||
+		!denseScorePlaneCountersMatchWork(work, proof, resultCount, request.Filter != nil) ||
 		((proof.Route == "typed_exact" || proof.Route == "quantized_rerank") && !denseExactResultCountMatchesTopK(proof, request.TopK, resultCount)) ||
 		resultCount > request.TopK ||
 		(proof.Route == "typed_empty" && (resultCount != 0 || !work.Graph.Filter.Attempted || work.Graph.Filter.EligibleRows != 0)) ||
@@ -299,7 +298,9 @@ func denseExactResultCountMatchesTopK(proof *collections.ColumnGraphScorePlaneWo
 	return uint64(resultCount) == total
 }
 
-func denseScorePlaneCountersMatchWork(work documentservice.DenseSearchWork, proof *collections.ColumnGraphScorePlaneWork, resultCount int) bool {
+const denseTypedScalarExactLimit = uint64(4096)
+
+func denseScorePlaneCountersMatchWork(work documentservice.DenseSearchWork, proof *collections.ColumnGraphScorePlaneWork, resultCount int, filterRequested bool) bool {
 	if proof == nil || resultCount < 0 || proof.ExactSmallFilterScoreCalls > ^uint64(0)-proof.ExactBaseRerankScoreCalls {
 		return false
 	}
@@ -307,25 +308,43 @@ func denseScorePlaneCountersMatchWork(work documentservice.DenseSearchWork, proo
 	if proof.ExactSuffixScoreCalls > ^uint64(0)-exactBaseScoreCalls {
 		return false
 	}
+	exactScoreCalls := exactBaseScoreCalls + proof.ExactSuffixScoreCalls
+	if work.Graph.BaseEdges != 0 || (!filterRequested && proof.ExactSmallFilterScoreCalls != 0) ||
+		(filterRequested && (exactScoreCalls > work.Graph.Filter.EligibleRows ||
+			(proof.Route == "typed_exact" && exactScoreCalls != work.Graph.Filter.EligibleRows))) {
+		return false
+	}
+	switch proof.Route {
+	case "typed_empty":
+		if work.Graph.BaseShadowed != 0 {
+			return false
+		}
+	case "typed_exact":
+		if filterRequested {
+			if work.Graph.Filter.EligibleRows == 0 ||
+				(proof.NormalizedCandidateWidth != 0 && work.Graph.Filter.EligibleRows > denseTypedScalarExactLimit) {
+				return false
+			}
+		} else if proof.NormalizedCandidateWidth != 0 || proof.RawCandidateWidth != 0 || proof.RerankCandidateCap != 0 || work.Graph.BaseShadowed != 0 {
+			return false
+		}
+	case "quantized_rerank":
+		if filterRequested && work.Graph.Filter.EligibleRows <= denseTypedScalarExactLimit {
+			return false
+		}
+		if work.Graph.BaseShadowed > proof.RawRetainedCandidates ||
+			proof.LiveShortlistCandidates != minUint64(proof.NormalizedCandidateWidth, proof.RawRetainedCandidates-work.Graph.BaseShadowed) {
+			return false
+		}
+	default:
+		return false
+	}
 	return proof.QuantizedScoreCalls == work.Graph.BaseANNScored &&
 		work.Graph.BaseCandidates <= proof.QuantizedScoreCalls &&
 		exactBaseScoreCalls == work.Graph.ExactBaseScored &&
 		work.Graph.BaseResultIDs == exactBaseScoreCalls &&
 		proof.ExactSuffixScoreCalls == work.Graph.DeltaScored &&
-		uint64(resultCount) <= exactBaseScoreCalls+proof.ExactSuffixScoreCalls
-}
-
-func denseFilteredExactScoreCallsMatchWork(work documentservice.DenseSearchWork, proof *collections.ColumnGraphScorePlaneWork) bool {
-	if proof == nil || proof.ExactSmallFilterScoreCalls > ^uint64(0)-proof.ExactBaseRerankScoreCalls {
-		return false
-	}
-	exactScoreCalls := proof.ExactBaseRerankScoreCalls + proof.ExactSmallFilterScoreCalls
-	if proof.ExactSuffixScoreCalls > ^uint64(0)-exactScoreCalls {
-		return false
-	}
-	exactScoreCalls += proof.ExactSuffixScoreCalls
-	return exactScoreCalls <= work.Graph.Filter.EligibleRows &&
-		(proof.Route != "typed_exact" || exactScoreCalls == work.Graph.Filter.EligibleRows)
+		uint64(resultCount) <= exactScoreCalls
 }
 
 func denseScorePlaneByteCountersMatch(proof *collections.ColumnGraphScorePlaneWork, dimension uint64) bool {

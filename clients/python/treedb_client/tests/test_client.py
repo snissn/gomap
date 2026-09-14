@@ -34,6 +34,7 @@ from treedb_client import (
     TreeDBTransportError,
     UnsupportedError,
 )
+from treedb_client.client import _is_legacy_scalar_u8_v1_index
 
 
 SAMPLE_INDEX = {
@@ -156,6 +157,23 @@ def json_body(record: dict[str, Any]) -> Any:
 
 
 class TreeDBClientTests(unittest.TestCase):
+    def test_selected_quantized_index_requires_legacy_calibration(self) -> None:
+        selected = QuantizedIndexInfo(name="embedding.scalar_u8.public")
+        self.assertTrue(_is_legacy_scalar_u8_v1_index(selected))
+        self.assertTrue(_is_legacy_scalar_u8_v1_index(QuantizedIndexInfo(
+            name=selected.name,
+            scalar_u8_calibration={"mode": "legacy"},
+        )))
+        for calibration in (
+            {"mode": "legacy", "grouping": "per_granule"},
+            {"mode": "legacy", "alpha_policy": {"name": "quantile", "quantile_ppm": 999000}},
+        ):
+            with self.subTest(calibration=calibration):
+                self.assertFalse(_is_legacy_scalar_u8_v1_index(QuantizedIndexInfo(
+                    name=selected.name,
+                    scalar_u8_calibration=calibration,
+                )))
+
     def test_vector_index_proxy_selection_preserves_urllib_and_bypass_uses_direct_connection(self) -> None:
         response = {"index": SAMPLE_INDEX, "results": [], "metric": "cosine", "vector_index_name": "embedding", "query_mode": "exact", "no_documents": True, "stats": {}, "diagnostics": {}}
 
@@ -620,7 +638,7 @@ class TreeDBClientTests(unittest.TestCase):
                 "route": "typed_hnsw",
                 "base_ann_scored": 1,
                 "base_candidates": 1,
-                "base_edges": 1,
+                "base_edges": 0,
                 "delta_scored": 0,
                 "exact_base_scored": 1,
                 "base_shadowed": 0,
@@ -647,7 +665,7 @@ class TreeDBClientTests(unittest.TestCase):
                 "fetched": 1,
                 "missing": 0,
                 "output_bytes": 1,
-                "retained_payload_fetches": 0,
+                "retained_payload_fetches": 1,
                 "json_reconstruction_rows": 1,
                 "typed_column_rows": 1,
             },
@@ -700,7 +718,7 @@ class TreeDBClientTests(unittest.TestCase):
             )
             self.assertEqual(result.documents[0].id, "a")
             filtered_payload = copy.deepcopy(payload)
-            filtered_payload["dense_work"]["graph"]["filter"].update(attempted=True, completed=True, eligible_rows=1)
+            filtered_payload["dense_work"]["graph"]["filter"].update(attempted=True, completed=True, eligible_rows=4097)
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, filtered_payload, 0)}) as filtered_server:
                 filtered_client = TreeDBClient(filtered_server.base_url, timeout=1)
                 filtered_result = filtered_client.query_by_embedding(
@@ -709,6 +727,42 @@ class TreeDBClientTests(unittest.TestCase):
                 )
                 self.assertEqual(filtered_result.documents[0].id, "a")
                 filtered_client.close()
+            filtered_exact = copy.deepcopy(filtered_payload)
+            filtered_exact["dense_work"]["graph"].update(
+                route="typed_exact", base_ann_scored=0, base_candidates=0,
+                exact_base_scored=1, base_result_ids=1,
+            )
+            filtered_exact["dense_work"]["graph"]["filter"]["eligible_rows"] = 1
+            filtered_exact["score_plane"].update(
+                route="typed_exact", raw_retained_candidates=0, live_shortlist_candidates=0,
+                actual_rerank_candidates=0, quantized_score_calls=0, quantized_code_bytes_read=0,
+                exact_base_rerank_score_calls=0, exact_small_filter_score_calls=1,
+                exact_base_vector_bytes_read=8,
+            )
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, filtered_exact, 0)}) as filtered_exact_server:
+                filtered_exact_client = TreeDBClient(filtered_exact_server.base_url, timeout=1)
+                self.assertEqual(
+                    filtered_exact_client.query_by_embedding(
+                        "docs", [1, 0], 1,
+                        filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    ).documents[0].id,
+                    "a",
+                )
+                filtered_exact_client.close()
+            oversized_filtered_exact = copy.deepcopy(filtered_exact)
+            oversized_filtered_exact["dense_work"]["graph"]["filter"]["eligible_rows"] = 4097
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, oversized_filtered_exact, 0)}) as oversized_server:
+                oversized_client = TreeDBClient(oversized_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    oversized_client.query_by_embedding(
+                        "docs", [1, 0], 1,
+                        filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                oversized_client.close()
             underfilled_filter = copy.deepcopy(filtered_payload)
             underfilled_filter["dense_work"]["graph"]["filter"]["eligible_rows"] = 2
             underfilled_filter["score_plane"].update(
@@ -723,17 +777,19 @@ class TreeDBClientTests(unittest.TestCase):
                     )
                 underfilled_client.close()
             over_scored_filter = copy.deepcopy(filtered_payload)
-            over_scored_filter["dense_work"]["graph"].update(base_ann_scored=2, exact_base_scored=2, base_result_ids=2)
+            over_scored_filter["dense_work"]["graph"].update(
+                route="typed_exact", base_ann_scored=0, exact_base_scored=2, base_result_ids=2
+            )
+            over_scored_filter["dense_work"]["graph"]["filter"]["eligible_rows"] = 1
             over_scored_filter["score_plane"].update(
-                normalized_candidate_width=2,
-                raw_candidate_width=2,
-                rerank_candidate_cap=2,
-                raw_retained_candidates=2,
-                live_shortlist_candidates=2,
-                actual_rerank_candidates=2,
-                quantized_score_calls=2,
-                quantized_code_bytes_read=4,
-                exact_base_rerank_score_calls=2,
+                route="typed_exact",
+                raw_retained_candidates=0,
+                live_shortlist_candidates=0,
+                actual_rerank_candidates=0,
+                quantized_score_calls=0,
+                quantized_code_bytes_read=0,
+                exact_base_rerank_score_calls=0,
+                exact_small_filter_score_calls=2,
                 exact_base_vector_bytes_read=16,
             )
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, over_scored_filter, 0)}) as over_scored_server:
@@ -783,7 +839,21 @@ class TreeDBClientTests(unittest.TestCase):
                 lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "filter": {**dense_work["graph"]["filter"], "attempted": True, "completed": True, "eligible_rows": 1}}}),
                 lambda item: item.update(score_plane={**score_plane, "quantized_score_calls": 2}),
                 lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "base_candidates": 2}}),
+                lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "base_edges": 1}}),
+                lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "base_shadowed": 1}}),
                 lambda item: item.update(score_plane={**score_plane, "exact_base_rerank_score_calls": 0, "exact_small_filter_score_calls": 1}),
+                lambda item: item.update(score_plane={**score_plane, "reason": "stale error"}),
+                lambda item: item.update(score_plane={
+                    **score_plane,
+                    "normalized_candidate_width": 0,
+                    "raw_candidate_width": 0,
+                    "rerank_candidate_cap": 0,
+                    "raw_retained_candidates": 0,
+                    "live_shortlist_candidates": 0,
+                    "actual_rerank_candidates": 0,
+                    "exact_base_rerank_score_calls": 0,
+                    "exact_base_vector_bytes_read": 0,
+                }),
                 lambda item: item.update(score_plane={**score_plane, "quantized_code_bytes_read": 0}),
                 lambda item: item.update(score_plane={**score_plane, "exact_base_vector_bytes_read": 0}),
                 lambda item: item.update(score_plane={**score_plane, "exact_suffix_vector_bytes_read": 1}),
@@ -794,6 +864,30 @@ class TreeDBClientTests(unittest.TestCase):
                 lambda item: item.update(candidates=2),
                 lambda item: item.update(score_plane={**score_plane, "raw_retained_candidates": 2, "quantized_score_calls": 1}),
                 lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "base_result_ids": 0}}),
+                lambda item: item.update(dense_work={**dense_work, "output": {**dense_work["output"], "retained_payload_fetches": 0}}),
+                lambda item: item.update(dense_work={**dense_work, "output": {**dense_work["output"], "json_reconstruction_rows": 0}}),
+                lambda item: item.update(dense_work={**dense_work, "output": {**dense_work["output"], "typed_column_rows": 2}}),
+                lambda item: item.update(index={
+                    **typed_index,
+                    "quantized_indexes": [{
+                        "name": "embedding.scalar_u8.public",
+                        "codec": "scalar_u8",
+                        "version": 1,
+                        "scalar_u8_calibration": {"mode": "legacy", "grouping": "per_granule"},
+                    }],
+                }),
+                lambda item: item.update(index={
+                    **typed_index,
+                    "quantized_indexes": [{
+                        "name": "embedding.scalar_u8.public",
+                        "codec": "scalar_u8",
+                        "version": 1,
+                        "scalar_u8_calibration": {
+                            "mode": "legacy",
+                            "alpha_policy": {"name": "quantile", "quantile_ppm": 999000},
+                        },
+                    }],
+                }),
                 lambda item: item.update(
                     dense_work={**dense_work, "graph": {**dense_work["graph"], "route": "typed_exact"}},
                     score_plane={**score_plane, "route": "typed_exact", "quantized_score_calls": 0, "raw_retained_candidates": 1,
@@ -841,7 +935,7 @@ class TreeDBClientTests(unittest.TestCase):
             duplicate["documents"] = [copy.deepcopy(payload["documents"][0]), copy.deepcopy(payload["documents"][0])]
             duplicate["candidates"] = 2
             duplicate["dense_work"]["graph"].update(base_ann_scored=2, exact_base_scored=2, base_result_ids=2)
-            duplicate["dense_work"]["output"].update(requested=2, fetched=2, output_bytes=2, json_reconstruction_rows=2, typed_column_rows=2)
+            duplicate["dense_work"]["output"].update(requested=2, fetched=2, output_bytes=2, retained_payload_fetches=2, json_reconstruction_rows=2, typed_column_rows=2)
             duplicate["score_plane"].update(
                 requested_top_k=2,
                 normalized_candidate_width=2,
@@ -896,7 +990,7 @@ class TreeDBClientTests(unittest.TestCase):
             underfill = copy.deepcopy(duplicate)
             underfill["documents"] = [copy.deepcopy(duplicate["documents"][0])]
             underfill["candidates"] = 1
-            underfill["dense_work"]["output"].update(requested=1, fetched=1, output_bytes=1, json_reconstruction_rows=1, typed_column_rows=1)
+            underfill["dense_work"]["output"].update(requested=1, fetched=1, output_bytes=1, retained_payload_fetches=1, json_reconstruction_rows=1, typed_column_rows=1)
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, underfill, 0)}) as underfill_server:
                 underfill_client = TreeDBClient(underfill_server.base_url, timeout=1)
                 with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
@@ -906,19 +1000,52 @@ class TreeDBClientTests(unittest.TestCase):
                     )
                 underfill_client.close()
             exact_route = copy.deepcopy(payload)
-            exact_route["documents"] = []
-            exact_route["candidates"] = 0
-            exact_route["dense_work"]["graph"].update(route="typed_exact", base_ann_scored=0, delta_scored=1)
-            exact_route["dense_work"]["output"].update(requested=0, fetched=0, output_bytes=0, json_reconstruction_rows=0, typed_column_rows=0)
-            exact_route["score_plane"].update(route="typed_exact", quantized_score_calls=0, quantized_code_bytes_read=0, exact_base_rerank_score_calls=0, exact_suffix_score_calls=1, exact_suffix_vector_bytes_read=8)
+            exact_route["dense_work"]["graph"].update(
+                route="typed_exact", base_ann_scored=0, base_candidates=0, delta_scored=1,
+                exact_base_scored=0, base_shadowed=0, base_result_ids=0,
+            )
+            exact_route["score_plane"].update(
+                route="typed_exact", normalized_candidate_width=0, raw_candidate_width=0,
+                rerank_candidate_cap=0, raw_retained_candidates=0, live_shortlist_candidates=0,
+                actual_rerank_candidates=0, quantized_score_calls=0, quantized_code_bytes_read=0,
+                exact_base_rerank_score_calls=0, exact_base_vector_bytes_read=0,
+                exact_suffix_score_calls=1,
+                exact_suffix_vector_bytes_read=8,
+            )
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, exact_route, 0)}) as exact_server:
                 exact_client = TreeDBClient(exact_server.base_url, timeout=1)
-                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                self.assertEqual(
                     exact_client.query_by_embedding(
                         "docs", [1, 0], 1, query_mode="quantized_rerank",
                         quantized_index_name="embedding.scalar_u8.public",
-                    )
+                    ).documents[0].id,
+                    "a",
+                )
                 exact_client.close()
+            exact_mutations = []
+            exact_with_plan = copy.deepcopy(exact_route)
+            exact_with_plan["score_plane"].update(
+                normalized_candidate_width=1, raw_candidate_width=1, rerank_candidate_cap=1,
+            )
+            exact_mutations.append(exact_with_plan)
+            exact_with_small_filter = copy.deepcopy(exact_route)
+            exact_with_small_filter["dense_work"]["graph"].update(exact_base_scored=1, base_result_ids=1)
+            exact_with_small_filter["score_plane"].update(
+                exact_small_filter_score_calls=1, exact_base_vector_bytes_read=8,
+            )
+            exact_mutations.append(exact_with_small_filter)
+            exact_with_shadow = copy.deepcopy(exact_route)
+            exact_with_shadow["dense_work"]["graph"]["base_shadowed"] = 1
+            exact_mutations.append(exact_with_shadow)
+            for invalid_exact in exact_mutations:
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid_exact, 0)}) as exact_server:
+                    exact_client = TreeDBClient(exact_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        exact_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    exact_client.close()
             valid_empty = copy.deepcopy(payload)
             valid_empty["documents"] = []
             valid_empty["candidates"] = 0
@@ -970,7 +1097,7 @@ class TreeDBClientTests(unittest.TestCase):
                 {"id": "a", "content": "alpha", "score": 1.0},
                 {"id": "b", "content": "beta", "score": 0.5},
             ]
-            overflow["dense_work"]["output"].update(requested=2, fetched=2, output_bytes=2, json_reconstruction_rows=2, typed_column_rows=2)
+            overflow["dense_work"]["output"].update(requested=2, fetched=2, output_bytes=2, retained_payload_fetches=2, json_reconstruction_rows=2, typed_column_rows=2)
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, overflow, 0)}) as overflow_server:
                 overflow_client = TreeDBClient(overflow_server.base_url, timeout=1)
                 with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
@@ -1019,7 +1146,7 @@ class TreeDBClientTests(unittest.TestCase):
                 invalid["dense_work"]["graph"]["route"] = "typed_empty"
                 invalid["dense_work"]["graph"]["base_ann_scored"] = invalid["dense_work"]["graph"]["exact_base_scored"] = invalid["dense_work"]["graph"]["delta_scored"] = 0
                 invalid["documents"] = []
-                invalid["dense_work"]["output"].update(requested=0, fetched=0, output_bytes=0, json_reconstruction_rows=0, typed_column_rows=0)
+                invalid["dense_work"]["output"].update(requested=0, fetched=0, output_bytes=0, retained_payload_fetches=0, json_reconstruction_rows=0, typed_column_rows=0)
                 mutation(invalid)
                 with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid, 0)}) as bad_server:
                     bad_client = TreeDBClient(bad_server.base_url, timeout=1)
