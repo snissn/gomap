@@ -837,7 +837,11 @@ validated by the service. Section 136 is owned score-plane evidence and never
 extends section 134 or the v2 response schema. It includes version/flags,
 requested/effective mode and route tags, owned reason/name/codec strings,
 candidate/call/byte counters, and the captured base/current manifest and
-coverage snapshot. Missing, duplicate, stale, malformed, unsupported-codec,
+coverage snapshot. In section-136 version 1, flag bit 0 means score-plane
+available, bit 1 means execution completed, and bit 2 independently means the
+captured snapshot is available; all other flag bits are invalid. This keeps
+incomplete error prefixes distinguishable from completed proofs without
+deriving snapshot availability from the outer proof bit. Missing, duplicate, stale, malformed, unsupported-codec,
 unknown-name, or out-of-bound options fail closed.
 Requested documents are fetched from the search's same read owner before
 release. Content/meta are returned; embedding echo is opt-in through the

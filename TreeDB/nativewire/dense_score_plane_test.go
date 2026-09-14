@@ -36,9 +36,9 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	if err != nil || decoded != proof {
 		t.Fatalf("round trip decoded=%+v err=%v", decoded, err)
 	}
-	owned := decoded.QuantizedIndexName
+	expectedName := proof.QuantizedIndexName
 	clear(raw)
-	if decoded.QuantizedIndexName != owned || decoded.Snapshot.BaseManifest.Format != "tcs1" {
+	if decoded.QuantizedIndexName != expectedName || decoded.Snapshot.BaseManifest.Format != "tcs1" {
 		t.Fatal("score-plane proof borrowed encoded bytes")
 	}
 	for size := range len(raw) {
@@ -52,9 +52,9 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 			t.Fatalf("truncated score-plane proof accepted at %d", size)
 		}
 	}
-	bad := append([]byte(nil), raw...)
-	if len(bad) == 0 {
-		bad, _ = appendDenseScorePlane(nil, proof, iwire.DefaultLimits())
+	bad, err := appendDenseScorePlane(nil, proof, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
 	}
 	bad = append(bad, 0)
 	if _, err := decodeDenseScorePlane(bad, iwire.DefaultLimits()); err == nil {
@@ -62,6 +62,17 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	}
 	if !bytes.Equal(raw, make([]byte, len(raw))) {
 		t.Fatal("clear should only affect the encoded buffer")
+	}
+	incomplete := proof
+	incomplete.Completed = false
+	incomplete.Snapshot = collections.ColumnGraphQuerySnapshot{}
+	incompleteRaw, err := appendDenseScorePlane(nil, incomplete, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	incompleteDecoded, err := decodeDenseScorePlane(incompleteRaw, iwire.DefaultLimits())
+	if err != nil || !incompleteDecoded.Available || incompleteDecoded.Completed || incompleteDecoded.Snapshot.Available {
+		t.Fatalf("incomplete score-plane flags were not preserved: %+v err=%v", incompleteDecoded, err)
 	}
 	noQuantizedWork := proof
 	noQuantizedWork.QuantizedScoreCalls = 0

@@ -9,7 +9,7 @@ from unittest import mock
 import _support
 from treedb_client import TreeDBClient
 from treedb_client.errors import TreeDBConfigError, TreeDBProtocolError, TreeDBTimeoutError, TreeDBTransportError, UnsupportedError
-from treedb_client._native import _dense_work, _dense_quantized_options
+from treedb_client._native import _dense_work, _dense_quantized_options, _dense_score_plane
 from treedb_client._dense_work import DenseSearchWork
 from treedb_client.client import _decode_json_body
 from treedb_client._native import _HEADER, _NativeConnection, _dense_request, _dense_response, _decode_vector, _read_uint, _section, _sections, _string_map, _uint, _vector, _typed_upsert_request, _typed_upsert_response
@@ -31,7 +31,7 @@ class NativeCodecTests(unittest.TestCase):
         work_values[34] = len(b'{"id":"a"}')
         raw_work = b"".join(_uint(value) for value in work_values)
         meta = bytes.fromhex("0301000001000000000000f03f")
-        values = [1, 3, 2, 2, 3, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 11, 1, 0, 0]
+        values = [1, 7, 2, 2, 3, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 11, 1, 0, 0]
         score_plane = b"".join(_uint(value) for value in values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
         score_plane += b"\x01\x01\x01\x00" * 2
         body = _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) + _section(130, meta) + _section(134, raw_work) + _section(136, score_plane)
@@ -86,6 +86,14 @@ class NativeCodecTests(unittest.TestCase):
                     quantized_rerank_candidates=0,
                     ef_search=0,
                 )
+            incomplete_values = list(values)
+            incomplete_values[1] = 1  # available proof, incomplete execution, unavailable snapshot.
+            incomplete_plane = b"".join(_uint(value) for value in incomplete_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            incomplete_plane += b"\x00" * 8
+            parsed_incomplete = _dense_score_plane(incomplete_plane)
+            self.assertTrue(parsed_incomplete["available"])
+            self.assertFalse(parsed_incomplete["completed"])
+            self.assertFalse(parsed_incomplete["snapshot"]["available"])
         finally:
             client.close()
 

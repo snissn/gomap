@@ -277,7 +277,7 @@ def _dense_score_plane(raw):
     for _ in range(27):
         value, offset = _read_uint(raw, offset)
         values.append(value)
-    if values[0] != 1 or values[1] > 3 or values[2] not in (1, 2, 3) or values[3] not in (1, 2, 3) or values[4] > 4 or values[5] > 65535:
+    if values[0] != 1 or values[1] > 7 or values[2] not in (1, 2, 3) or values[3] not in (1, 2, 3) or values[4] > 4 or values[5] > 65535:
         raise TreeDBProtocolError("invalid native dense score-plane proof")
 
     def read_string():
@@ -304,7 +304,7 @@ def _dense_score_plane(raw):
     modes = ("", "exact", "quantized_rerank", "quantized_only")
     routes = ("", "typed_empty", "typed_exact", "quantized_rerank", "typed_hnsw")
     snapshot = {
-        "available": bool(values[1] & 1), "schema_hash": values[23], "schema_generation": values[24],
+        "available": bool(values[1] & 4), "schema_hash": values[23], "schema_generation": values[24],
         "base_manifest": manifests[0], "current_manifest": manifests[1],
         "base_coverage_lsn": values[25], "current_coverage_lsn": values[26],
     }

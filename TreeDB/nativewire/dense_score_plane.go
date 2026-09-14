@@ -136,6 +136,9 @@ func appendDenseScorePlane(dst []byte, proof collections.ColumnGraphScorePlaneWo
 	if proof.Completed {
 		flags |= 2
 	}
+	if proof.Snapshot.Available {
+		flags |= 4
+	}
 	for _, value := range []uint64{
 		denseScorePlaneVersion, flags, denseScorePlaneModeTag(proof.RequestedMode), denseScorePlaneModeTag(proof.EffectiveMode), denseScorePlaneRouteTag(proof.Route),
 		uint64(proof.QuantizedVersion), proof.QuantizedConfigHash,
@@ -180,7 +183,7 @@ func decodeDenseScorePlane(raw []byte, limits iwire.Limits) (collections.ColumnG
 		}
 		values = append(values, value)
 	}
-	if values[0] != denseScorePlaneVersion || values[1] > 3 || values[2] == 0 || values[3] == 0 || values[4] > 4 || values[5] > 65535 {
+	if values[0] != denseScorePlaneVersion || values[1] > 7 || values[2] == 0 || values[3] == 0 || values[4] > 4 || values[5] > 65535 {
 		return proof, protocolError(iwire.ErrMalformedFrame, "invalid dense score-plane fields")
 	}
 	requested, ok := denseScorePlaneMode(values[2])
@@ -205,7 +208,7 @@ func decodeDenseScorePlane(raw []byte, limits iwire.Limits) (collections.ColumnG
 	proof.QuantizedScoreCalls, proof.QuantizedCodeBytesRead = values[16], values[17]
 	proof.ExactBaseRerankScoreCalls, proof.ExactSuffixScoreCalls, proof.ExactSmallFilterScoreCalls = values[18], values[19], values[20]
 	proof.ExactBaseVectorBytesRead, proof.ExactSuffixVectorBytesRead = values[21], values[22]
-	proof.Snapshot.Available = proof.Available
+	proof.Snapshot.Available = values[1]&4 != 0
 	proof.Snapshot.SchemaHash, proof.Snapshot.SchemaGeneration = values[23], values[24]
 	proof.Snapshot.BaseCoverageLSN, proof.Snapshot.CurrentCoverageLSN = values[25], values[26]
 	for _, target := range [](*string){&proof.Reason, &proof.QuantizedIndexName, &proof.QuantizedCodec} {
