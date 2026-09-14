@@ -196,6 +196,8 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 candidate count does not match returned rows")
 		} else if !denseV3ResultsHaveUniqueIDs(out.Results) {
 			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 results contain duplicate IDs")
+		} else if !denseV3ResultsHaveCosineScores(out.Results) {
+			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 results contain an invalid cosine score")
 		} else if !denseV3ResultsOrdered(out.Results) {
 			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 results are not in score and ID order")
 		} else {
@@ -215,6 +217,18 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 		return DenseVectorSearchResponse{}, &DenseVectorSearchDecodeError{Err: err, DenseWork: work, ScorePlane: out.ScorePlane}
 	}
 	return out, err
+}
+
+const denseCosineScoreTolerance = 1e-6
+
+func denseV3ResultsHaveCosineScores(results []DenseVectorSearchResult) bool {
+	for _, result := range results {
+		if math.IsNaN(result.Score) || math.IsInf(result.Score, 0) ||
+			result.Score < -1-denseCosineScoreTolerance || result.Score > 1+denseCosineScoreTolerance {
+			return false
+		}
+	}
+	return true
 }
 
 func denseV3CandidateCountMatchesRows(candidates, resultCount int) bool {

@@ -60,6 +60,21 @@ class NativeCodecTests(unittest.TestCase):
             self.assertEqual(response.native_command_version, 3)
             self.assertIsNotNone(response.score_plane)
             self.assertEqual(response.score_plane.quantized_index_name, "embedding.scalar_u8.public")
+            reversed_work_values = list(work_values)
+            reversed_work_values[21:23] = [100, 1]
+            reversed_plane_values = list(values)
+            reversed_plane_values[25:27] = [100, 1]
+            reversed_plane = b"".join(_uint(value) for value in reversed_plane_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            reversed_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in reversed_work_values)) +
+                    _section(136, reversed_plane),
+                    1, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=0, query_dimension=2,
+                )
             filtered_work_values = list(work_values)
             filtered_work_values[1] |= (1 << 3) | (1 << 4)
             filtered_work_values[10] = 4097
@@ -262,6 +277,7 @@ class NativeCodecTests(unittest.TestCase):
             invalid_result_meta = {
                 "candidate count": bytes([3, 2, 0, 0, 1]) + meta[5:],
                 "nonfinite score": bytes([3, 1, 0, 0, 1]) + struct.pack("<d", float("nan")),
+                "out-of-range score": bytes([3, 1, 0, 0, 1]) + struct.pack("<d", 100),
             }
             for name, candidate_meta in invalid_result_meta.items():
                 with self.subTest(name=name), self.assertRaises(TreeDBProtocolError) as caught:
@@ -580,7 +596,8 @@ class NativeCodecTests(unittest.TestCase):
                 _dense_work(candidate)
         for action in (lambda d: d.pop("version"), lambda d: d.update(extra=0), lambda d: d.update(version=True),
                        lambda d: d["graph"].update(base_edges=-1), lambda d: d["graph"].update(base_edges=1 << 64),
-                       lambda d: d["output"].pop("missing"), lambda d: d["graph"].update(route="ann")):
+                       lambda d: d["output"].pop("missing"), lambda d: d["graph"].update(route="ann"),
+                       lambda d: d["graph"]["snapshot"].update(base_coverage_lsn=100, current_coverage_lsn=1)):
             candidate = copy.deepcopy(asdict(work))
             action(candidate)
             with self.assertRaises((ValueError, TypeError)):

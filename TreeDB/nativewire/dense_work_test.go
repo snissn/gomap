@@ -38,6 +38,11 @@ func TestDenseWorkGoldenStrictOwnershipAndAllocations(t *testing.T) {
 	if allocs := testing.AllocsPerRun(100, func() { _, err = decodeDenseWork(raw) }); err != nil || allocs != 0 {
 		t.Fatalf("proof decode allocs=%g err=%v", allocs, err)
 	}
+	reversedCoverage := w
+	reversedCoverage.Graph.Snapshot.BaseCoverageLSN, reversedCoverage.Graph.Snapshot.CurrentCoverageLSN = 100, 1
+	if _, err := appendDenseWork(nil, reversedCoverage); err == nil {
+		t.Fatal("dense work with reversed snapshot coverage accepted")
+	}
 	for size := range len(raw) {
 		if _, err := decodeDenseWork(raw[:size]); err == nil {
 			t.Fatalf("truncated proof accepted at %d", size)

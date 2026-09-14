@@ -114,6 +114,11 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	if _, err := appendDenseScorePlane(nil, zeroPlan, iwire.DefaultLimits()); err == nil {
 		t.Fatal("completed quantized rerank proof with a zero plan accepted")
 	}
+	reversedCoverage := proof
+	reversedCoverage.Snapshot.BaseCoverageLSN, reversedCoverage.Snapshot.CurrentCoverageLSN = 100, 1
+	if _, err := appendDenseScorePlane(nil, reversedCoverage, iwire.DefaultLimits()); err == nil {
+		t.Fatal("score-plane proof with reversed snapshot coverage accepted")
+	}
 }
 
 func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
@@ -481,6 +486,20 @@ func TestDenseV3ResultsHaveUniqueIDs(t *testing.T) {
 	}
 }
 
+func TestDenseV3ResultsHaveCosineScores(t *testing.T) {
+	if !denseV3ResultsHaveCosineScores([]DenseVectorSearchResult{
+		{Score: -1 - denseCosineScoreTolerance},
+		{Score: 1 + denseCosineScoreTolerance},
+	}) {
+		t.Fatal("bounded cosine rounding tolerance rejected")
+	}
+	for _, score := range []float64{-100, 100, math.NaN(), math.Inf(1)} {
+		if denseV3ResultsHaveCosineScores([]DenseVectorSearchResult{{Score: score}}) {
+			t.Fatalf("invalid cosine score accepted: %v", score)
+		}
+	}
+}
+
 func TestDenseV3ResultsOrdered(t *testing.T) {
 	for name, results := range map[string][]DenseVectorSearchResult{
 		"descending score": {{ID: []byte("b"), Score: 0.9}, {ID: []byte("a"), Score: 0.1}},
@@ -549,8 +568,9 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 	}
 	validScore := binary.LittleEndian.AppendUint64(nil, math.Float64bits(1))
 	for name, meta := range map[string][]byte{
-		"candidate count": append([]byte{3, 0, 0, 0, 1}, validScore...),
-		"nonfinite score": append([]byte{3, 1, 0, 0, 1}, binary.LittleEndian.AppendUint64(nil, math.Float64bits(math.NaN()))...),
+		"candidate count":    append([]byte{3, 0, 0, 0, 1}, validScore...),
+		"nonfinite score":    append([]byte{3, 1, 0, 0, 1}, binary.LittleEndian.AppendUint64(nil, math.Float64bits(math.NaN()))...),
+		"out-of-range score": append([]byte{3, 1, 0, 0, 1}, binary.LittleEndian.AppendUint64(nil, math.Float64bits(100))...),
 	} {
 		t.Run(name, func(t *testing.T) {
 			clientConn, serverConn := net.Pipe()

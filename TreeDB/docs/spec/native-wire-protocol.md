@@ -857,7 +857,8 @@ For every route, completed proofs have an empty reason, graph base-edge work is
 zero, quantized calls equal graph base-ANN scoring, exact base calls equal graph
 exact-base/result-ID counts, and exact suffix calls equal graph delta scoring.
 Graph base candidates may be lower than quantized calls because public minimal
-stats do not require that optional count.
+stats do not require that optional count. Returned exact cosine scores are
+finite and within `[-1.000001, 1.000001]`, allowing only bounded FP32 rounding.
 
 Requested documents are fetched from the search's same read owner before
 release. Content/meta are returned; embedding echo is opt-in through the
@@ -893,6 +894,7 @@ lengths. Output bytes exclude framing and HTTP JSON encoding.
 The snapshot comes from the actual acquired owner, including base/current
 manifest identities and coverage, and remains owned after owner close or client
 buffer reuse. It is not the requested generation or a later diagnostics read.
+Current coverage LSN is never lower than base coverage LSN.
 Schema generation is the acquired vector definition's generation; the service's
 expected-generation guard can also include a newer text-index generation.
 Filter cardinality is final only on completed preparation; mapping work is an

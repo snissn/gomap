@@ -343,6 +343,7 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
     if version == 3 and 136 in sections:
         from ._dense_work import (
             DenseScorePlaneProof,
+            dense_cosine_scores_valid,
             dense_quantized_response_work_matches,
             dense_score_plane_byte_counters_match,
         )
@@ -380,6 +381,8 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
     scores = struct.unpack(f"<{count}d", meta[offset:])
     if not all(math.isfinite(score) for score in scores):
         raise TreeDBProtocolError("native dense response has nonfinite score", dense_work=work, score_plane=score_plane)
+    if version == 3 and not dense_cosine_scores_valid(scores):
+        raise TreeDBProtocolError("native dense response has an invalid cosine score", dense_work=work, score_plane=score_plane)
     try:
         ids, docs = _decode_vector(sections[102], count), _decode_vector(sections[103], count)
     except TreeDBProtocolError as exc:

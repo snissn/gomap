@@ -1,5 +1,6 @@
 """Owned dense-work v1 values shared by HTTP and native decoding."""
 
+import math
 from dataclasses import dataclass
 
 
@@ -56,6 +57,8 @@ class DenseSnapshotWork:
         current = DenseManifestWork.from_dict(data["current_manifest"])
         if not values["available"] and (any(values.values()) or any(vars(base).values()) or any(vars(current).values())):
             raise ValueError("unavailable dense snapshot carries identity")
+        if values["available"] and values["current_coverage_lsn"] < values["base_coverage_lsn"]:
+            raise ValueError("dense snapshot coverage is reversed")
         return cls(**values, base_manifest=base, current_manifest=current)
 
 
@@ -261,6 +264,17 @@ def dense_score_plane_byte_counters_match(proof, dimension):
 
 
 _DENSE_TYPED_SCALAR_EXACT_LIMIT = 4096
+_DENSE_COSINE_SCORE_TOLERANCE = 1e-6
+
+
+def dense_cosine_scores_valid(scores):
+    return all(
+        isinstance(score, (int, float))
+        and not isinstance(score, bool)
+        and math.isfinite(score)
+        and -1 - _DENSE_COSINE_SCORE_TOLERANCE <= score <= 1 + _DENSE_COSINE_SCORE_TOLERANCE
+        for score in scores
+    )
 
 
 def dense_quantized_response_work_matches(work, proof, top_k, result_count, filter_requested):

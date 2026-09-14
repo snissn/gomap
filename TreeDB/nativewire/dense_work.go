@@ -50,6 +50,7 @@ func validateDenseWork(w documentservice.DenseSearchWork) error {
 	bad = bad || (!g.Available && g != (collections.ColumnGraphQueryWork{}))
 	bad = bad || (!f.Attempted && f != (collections.ColumnGraphFilterWork{}))
 	bad = bad || (!s.Available && s != (collections.ColumnGraphQuerySnapshot{}))
+	bad = bad || (s.Available && s.CurrentCoverageLSN < s.BaseCoverageLSN)
 	bad = bad || (!o.Attempted && o != (documentservice.DenseSearchOutputWork{}))
 	bad = bad || (g.Completed && (!g.Available || !s.Available || g.Route == "" || (f.Attempted && !f.Completed)))
 	bad = bad || o.Fetched > o.Requested || o.Missing > o.Requested-o.Fetched

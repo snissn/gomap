@@ -823,6 +823,18 @@ class TreeDBClientTests(unittest.TestCase):
                 with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
                     exact_proof_client.query_by_embedding("docs", [1, 0], 1, query_mode="exact")
                 exact_proof_client.close()
+            reversed_coverage = copy.deepcopy(payload)
+            reversed_snapshot = {**snapshot, "base_coverage_lsn": 100, "current_coverage_lsn": 1}
+            reversed_coverage["dense_work"]["graph"]["snapshot"] = reversed_snapshot
+            reversed_coverage["score_plane"]["snapshot"] = copy.deepcopy(reversed_snapshot)
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, reversed_coverage, 0)}) as reversed_server:
+                reversed_client = TreeDBClient(reversed_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "snapshot coverage"):
+                    reversed_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                reversed_client.close()
             for mutation in (
                 lambda item: item.update(exact=True),
                 lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "route": "typed_exact"}}),
@@ -920,7 +932,7 @@ class TreeDBClientTests(unittest.TestCase):
                         quantized_index_name="embedding.scalar_u8.public",
                     )
                 dimension_client.close()
-            for bad_score in (None, float("nan")):
+            for bad_score in (None, float("nan"), -100, 100):
                 invalid_score = copy.deepcopy(payload)
                 invalid_score["documents"][0]["score"] = bad_score
                 with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid_score, 0)}) as score_server:

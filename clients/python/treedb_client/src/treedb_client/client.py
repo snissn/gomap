@@ -1030,7 +1030,11 @@ def _validate_http_dense_quantized_response(
 ) -> None:
     """Require the HTTP response proof for an explicitly selected public route."""
 
-    from ._dense_work import dense_quantized_response_work_matches, dense_score_plane_byte_counters_match
+    from ._dense_work import (
+        dense_cosine_scores_valid,
+        dense_quantized_response_work_matches,
+        dense_score_plane_byte_counters_match,
+    )
 
     proof = response.score_plane
     work = response.dense_work
@@ -1055,7 +1059,8 @@ def _validate_http_dense_quantized_response(
         or len(response.documents) > top_k
         or response.candidates != len(response.documents)
         or len({document.id for document in response.documents}) != len(response.documents)
-        or any(document.score is None or not math.isfinite(document.score) for document in response.documents)
+        or any(document.score is None for document in response.documents)
+        or not dense_cosine_scores_valid(document.score for document in response.documents)
         or not _dense_http_results_ordered(response.documents)
         or response.index.dimension != query_dimension
         or not dense_score_plane_byte_counters_match(proof, query_dimension)

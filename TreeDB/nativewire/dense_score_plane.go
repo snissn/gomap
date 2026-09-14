@@ -112,6 +112,10 @@ func validateDenseScorePlane(proof collections.ColumnGraphScorePlaneWork) error 
 			return protocolError(iwire.ErrMalformedFrame, "invalid dense score-plane manifest format")
 		}
 	}
+	if (!proof.Snapshot.Available && proof.Snapshot != (collections.ColumnGraphQuerySnapshot{})) ||
+		(proof.Snapshot.Available && proof.Snapshot.CurrentCoverageLSN < proof.Snapshot.BaseCoverageLSN) {
+		return protocolError(iwire.ErrConsistencyUnavailable, "dense score-plane snapshot is inconsistent")
+	}
 	if proof.Completed && (!proof.Available || !proof.Snapshot.Available || proof.Route == "" || proof.Reason != "") {
 		return protocolError(iwire.ErrConsistencyUnavailable, "completed dense score-plane proof is incomplete")
 	}
