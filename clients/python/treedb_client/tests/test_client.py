@@ -695,9 +695,20 @@ class TreeDBClientTests(unittest.TestCase):
         with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, payload, 0)}) as server:
             client = TreeDBClient(server.base_url, timeout=1)
             result = client.query_by_embedding(
-                "docs", [1, 0], 1, query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public"
+                "docs", [1, 0], 1, query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public",
+                expected_generation=1,
             )
             self.assertEqual(result.documents[0].id, "a")
+            stale_generation = copy.deepcopy(payload)
+            stale_generation["index"]["generation"] = 2
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, stale_generation, 0)}) as stale_server:
+                stale_client = TreeDBClient(stale_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    stale_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", expected_generation=1,
+                    )
+                stale_client.close()
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, payload, 0)}) as exact_proof_server:
                 exact_proof_client = TreeDBClient(exact_proof_server.base_url, timeout=1)
                 with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):

@@ -514,6 +514,7 @@ class TreeDBClient:
                 query_dimension=len(request["query_embedding"]),
                 quantized_index_name=quantized_index_name,
                 quantized_rerank_candidates=rerank_value,
+                expected_generation=expected_generation,
             )
         elif response.score_plane is not None:
             raise TreeDBProtocolError(
@@ -1024,6 +1025,7 @@ def _validate_http_dense_quantized_response(
     query_dimension: int,
     quantized_index_name: str,
     quantized_rerank_candidates: int,
+    expected_generation: Optional[int],
 ) -> None:
     """Require the HTTP response proof for an explicitly selected public route."""
 
@@ -1054,6 +1056,7 @@ def _validate_http_dense_quantized_response(
         or not dense_score_plane_byte_counters_match(proof, query_dimension)
         or not _dense_http_score_plane_counters_match_graph(work, proof, len(response.documents))
         or response.index.name != index
+        or (expected_generation is not None and response.index.generation != expected_generation)
         or response.metric != "cosine"
         or response.metric != response.index.metric
         or response.index.metric != "cosine"
