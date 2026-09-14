@@ -142,6 +142,7 @@ func measuredTestArtifact(t *testing.T) (minimaArtifact, *minimaMeasuredFreeze) 
 			config["vector_strategy"] = "column_graph"
 			config["transport"] = "native"
 			config["control_transport"] = "http"
+			config["ef_construction_requested"] = "32"
 			config["block_profile_rate"] = "0"
 			config["mutex_profile_fraction"] = "0"
 		} else {
@@ -151,6 +152,10 @@ func measuredTestArtifact(t *testing.T) (minimaArtifact, *minimaMeasuredFreeze) 
 		f.Configuration[b.Name] = config
 		for key, v := range config {
 			b.Configuration[key] = v
+		}
+		if b.Name == "treedb" {
+			b.Configuration["ef_construction_effective"] = "32"
+			b.Configuration["effective_collection"] = `{"vector_ef_construction":32}`
 		}
 		raw := a.RawEvidence[b.Name]
 		phases := minimaTestPhaseAttribution()
@@ -914,6 +919,12 @@ func TestMinimaMeasuredFiveCapsUseRawIntervals(t *testing.T) {
 
 func TestMinimaMeasuredRejectsDoctoredJoinsAndLifetimeWork(t *testing.T) {
 	base, freeze := measuredTestArtifact(t)
+	early := cloneMinimaArtifact(t, base)
+	delete(early.Backends[0].Configuration, "ef_construction_effective")
+	early.Backends[0].Configuration["effective_collection"] = "{}"
+	if err := validateMinimaArtifact(&early, freeze); err != nil {
+		t.Fatalf("pre-admission partial evidence rejected: %v", err)
+	}
 	cases := map[string]func(*minimaArtifact){
 		"missing request": func(a *minimaArtifact) {
 			r := a.RawEvidence["treedb"]
@@ -996,7 +1007,7 @@ func TestMinimaMeasuredRejectsDoctoredJoinsAndLifetimeWork(t *testing.T) {
 			}
 		})
 	}
-	for _, key := range []string{"service_binary_sha256", "shared_runner_sha256", "client_sha256", "product_source_sha256", "harness_source_sha256", "comparator_binary_sha256", "column_graph_serving", "manifest_file_sha256"} {
+	for _, key := range []string{"service_binary_sha256", "shared_runner_sha256", "client_sha256", "product_source_sha256", "harness_source_sha256", "comparator_binary_sha256", "column_graph_serving", "ef_construction_requested", "ef_construction_effective", "effective_collection", "manifest_file_sha256"} {
 		t.Run(key, func(t *testing.T) {
 			a := cloneMinimaArtifact(t, base)
 			a.Backends[0].Configuration[key] = strings.Repeat("e", 64)

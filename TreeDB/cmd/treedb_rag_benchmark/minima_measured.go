@@ -127,7 +127,7 @@ var minimaMeasuredCommonConfigKeys = []string{
 }
 var minimaMeasuredTreeConfigKeys = []string{
 	"product_commit", "service_binary_sha256", "service_binary_vcs_revision", "service_binary_vcs_modified",
-	"vector_strategy", "transport", "control_transport", "ef_search", "column_graph_serving", "profile",
+	"vector_strategy", "transport", "control_transport", "ef_search", "ef_construction_requested", "column_graph_serving", "profile",
 	"startup_reopen_timeout_seconds", "shutdown_timeout_seconds", "block_profile_rate", "mutex_profile_fraction",
 }
 var minimaMeasuredQdrantConfigKeys = []string{
@@ -422,6 +422,17 @@ func validateMinimaMeasuredBinding(a *minimaArtifact, f *minimaMeasuredFreeze) e
 		for key, want := range config {
 			if backend.Configuration[key] != want {
 				return fmt.Errorf("measured %s observed configuration differs: %s", backend.Name, key)
+			}
+		}
+		if backend.Name == "treedb" && (a.State != "partial" || backend.Configuration["ef_construction_effective"] != "" || strings.TrimSpace(backend.Configuration["effective_collection"]) != "{}") {
+			requested, requestedErr := strconv.Atoi(config["ef_construction_requested"])
+			effective, effectiveErr := strconv.Atoi(backend.Configuration["ef_construction_effective"])
+			var collection struct {
+				VectorEFConstruction int `json:"vector_ef_construction"`
+			}
+			collectionErr := json.Unmarshal([]byte(backend.Configuration["effective_collection"]), &collection)
+			if requestedErr != nil || effectiveErr != nil || collectionErr != nil || requested <= 0 || effective != requested || collection.VectorEFConstruction != requested {
+				return errors.New("measured TreeDB effective construction EF differs from frozen request")
 			}
 		}
 	}
