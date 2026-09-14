@@ -435,7 +435,7 @@ def tree_plan(plan, run_dir):
         "operation_timeout_s": 600, "minimum_free_bytes": 10 << 30,
         "maximum_output_bytes": 12 << 30, "maximum_combined_rss_bytes": 26 << 30,
         "wall_limit_s": 3600, "mode": "diagnostic", "queries": 200,
-        "eligible_counts": [ROWS], "treedb_go_runtime": {"GOMAXPROCS": "6", "GOGC": "", "GOMEMLIMIT": ""},
+        "eligible_counts": [ROWS],
     }
 
 

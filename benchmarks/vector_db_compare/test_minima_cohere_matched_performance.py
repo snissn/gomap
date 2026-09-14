@@ -104,11 +104,13 @@ class MatchedPerformanceTest(unittest.TestCase):
             subject.validate_tree_queries([response], 7)
 
     def test_adapter_plan_and_mixed_overlap(self):
-        plan = {"queries": 200, "qdrant_configuration": {
+        runtime = {"GOMAXPROCS": "6", "GOGC": "80", "GOMEMLIMIT": "20GiB"}
+        plan = {"queries": 200, "treedb_go_runtime": runtime, "qdrant_configuration": {
             "initial_upload_hnsw": {}, "initial_upload_optimizers": {},
             "production_hnsw": {}, "production_optimizers": {},
         }}
         self.assertEqual(subject.qdrant_plan(plan, Path("/tmp/run"))["queries"], 200)
+        self.assertEqual(subject.tree_plan(plan, Path("/tmp/run"))["treedb_go_runtime"], runtime)
 
         writer_started, reader_seen = threading.Event(), threading.Event()
         def read(query):
