@@ -300,6 +300,25 @@ func TestDenseV3ResultsHaveUniqueIDs(t *testing.T) {
 	}
 }
 
+func TestDenseV3ResultsOrdered(t *testing.T) {
+	for name, results := range map[string][]DenseVectorSearchResult{
+		"descending score": {{ID: []byte("b"), Score: 0.9}, {ID: []byte("a"), Score: 0.1}},
+		"ascending ID tie": {{ID: []byte("a"), Score: 0.5}, {ID: []byte("b"), Score: 0.5}},
+	} {
+		if !denseV3ResultsOrdered(results) {
+			t.Fatalf("valid %s order rejected", name)
+		}
+	}
+	for name, results := range map[string][]DenseVectorSearchResult{
+		"ascending score":   {{ID: []byte("a"), Score: 0.1}, {ID: []byte("b"), Score: 0.9}},
+		"descending ID tie": {{ID: []byte("b"), Score: 0.5}, {ID: []byte("a"), Score: 0.5}},
+	} {
+		if denseV3ResultsOrdered(results) {
+			t.Fatalf("invalid %s order accepted", name)
+		}
+	}
+}
+
 func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 	proof := collections.ColumnGraphScorePlaneWork{
 		Version: 1, Available: true, Completed: true,

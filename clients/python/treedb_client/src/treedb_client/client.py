@@ -1052,6 +1052,7 @@ def _validate_http_dense_quantized_response(
         or response.candidates != len(response.documents)
         or len({document.id for document in response.documents}) != len(response.documents)
         or any(document.score is None or not math.isfinite(document.score) for document in response.documents)
+        or not _dense_http_results_ordered(response.documents)
         or response.index.dimension != query_dimension
         or not dense_score_plane_byte_counters_match(proof, query_dimension)
         or not _dense_http_score_plane_counters_match_graph(work, proof, len(response.documents))
@@ -1096,6 +1097,15 @@ def _validate_http_dense_quantized_response(
             dense_work=response.dense_work,
             score_plane=proof,
         )
+
+
+def _dense_http_results_ordered(documents: Sequence[Document]) -> bool:
+    for previous, current in zip(documents, documents[1:]):
+        if previous.score is None or current.score is None:
+            return False
+        if previous.score < current.score or (previous.score == current.score and previous.id.encode("utf-8") >= current.id.encode("utf-8")):
+            return False
+    return True
 
 
 def _dense_http_score_plane_counters_match_graph(work: Any, proof: Any, result_count: int) -> bool:

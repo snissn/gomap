@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -195,6 +196,8 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 candidate count does not match returned rows")
 		} else if !denseV3ResultsHaveUniqueIDs(out.Results) {
 			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 results contain duplicate IDs")
+		} else if !denseV3ResultsOrdered(out.Results) {
+			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 results are not in score and ID order")
 		} else {
 			err = validateDenseQuantizedScorePlaneResponse(out.DenseWork, out.ScorePlane, request, len(out.Results))
 		}
@@ -226,6 +229,16 @@ func denseV3ResultsHaveUniqueIDs(results []DenseVectorSearchResult) bool {
 			return false
 		}
 		seen[key] = struct{}{}
+	}
+	return true
+}
+
+func denseV3ResultsOrdered(results []DenseVectorSearchResult) bool {
+	for i := 1; i < len(results); i++ {
+		previous, current := results[i-1], results[i]
+		if previous.Score < current.Score || (previous.Score == current.Score && bytes.Compare(previous.ID, current.ID) >= 0) {
+			return false
+		}
 	}
 	return true
 }

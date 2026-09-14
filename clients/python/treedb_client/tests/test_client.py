@@ -802,6 +802,26 @@ class TreeDBClientTests(unittest.TestCase):
                         quantized_index_name="embedding.scalar_u8.public",
                     )
                 duplicate_client.close()
+            for name, documents in (
+                ("ascending score", [
+                    {"id": "a", "content": "alpha", "score": 0.1},
+                    {"id": "b", "content": "beta", "score": 0.9},
+                ]),
+                ("descending ID tie", [
+                    {"id": "b", "content": "beta", "score": 0.5},
+                    {"id": "a", "content": "alpha", "score": 0.5},
+                ]),
+            ):
+                out_of_order = copy.deepcopy(duplicate)
+                out_of_order["documents"] = documents
+                with self.subTest(name=name), FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, out_of_order, 0)}) as order_server:
+                    order_client = TreeDBClient(order_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        order_client.query_by_embedding(
+                            "docs", [1, 0], 2, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    order_client.close()
             under_cap = copy.deepcopy(duplicate)
             under_cap["score_plane"]["rerank_candidate_cap"] = 1
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, under_cap, 0)}) as under_cap_server:

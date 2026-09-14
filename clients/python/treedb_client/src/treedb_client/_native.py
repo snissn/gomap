@@ -348,6 +348,14 @@ def _dense_score_plane_matches_graph(work, score_plane, result_count):
     )
 
 
+def _dense_results_ordered(ids, scores):
+    return all(
+        scores[i - 1] > scores[i]
+        or (scores[i - 1] == scores[i] and ids[i - 1] < ids[i])
+        for i in range(1, len(ids))
+    )
+
+
 def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_name=None,
                     quantized_rerank_candidates=0, ef_search=None, query_dimension=None):
     if version not in (1, 2, 3):
@@ -400,6 +408,8 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
         raise TreeDBProtocolError("invalid native dense result vectors", dense_work=work, score_plane=score_plane) from exc
     if version == 3 and len(set(ids)) != len(ids):
         raise TreeDBProtocolError("native dense response has duplicate IDs", dense_work=work, score_plane=score_plane)
+    if version == 3 and not _dense_results_ordered(ids, scores):
+        raise TreeDBProtocolError("native dense response is not in score and ID order", dense_work=work, score_plane=score_plane)
     if version == 3:
         if (not score_plane.available or not score_plane.completed or not score_plane.snapshot.available
                 or score_plane.requested_mode != (query_mode or "quantized_rerank")

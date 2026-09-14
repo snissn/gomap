@@ -202,6 +202,34 @@ class NativeCodecTests(unittest.TestCase):
                 self.assertEqual(caught.exception.dense_work, _dense_work(raw_work))
                 self.assertIsNotNone(caught.exception.score_plane)
                 self.assertEqual(caught.exception.score_plane.quantized_index_name, "embedding.scalar_u8.public")
+            ordered_work_values = list(work_values)
+            ordered_work_values[3] = ordered_work_values[7] = ordered_work_values[9] = 2
+            ordered_work_values[31:38] = [2, 2, 0, 4, 2, 2, 2]
+            ordered_plane_values = list(values)
+            for index in (7, 10, 11, 12, 13, 14, 15, 16, 18):
+                ordered_plane_values[index] = 2
+            ordered_plane_values[17], ordered_plane_values[21] = 4, 16
+            ordered_plane = b"".join(_uint(value) for value in ordered_plane_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            ordered_plane += b"\x01\x01\x01\x03" * 2
+            for name, ids, scores in (
+                ("ascending score", [b"a", b"b"], (0.1, 0.9)),
+                ("descending ID tie", [b"b", b"a"], (0.5, 0.5)),
+            ):
+                out_of_order_meta = bytes([3, 2, 0, 0, 2]) + struct.pack("<2d", *scores)
+                with self.subTest(name=name), self.assertRaises(TreeDBProtocolError) as caught:
+                    _dense_response(
+                        _section(102, _vector(ids)) + _section(103, _vector([b"{}", b"{}"])) +
+                        _section(130, out_of_order_meta) + _section(134, b"".join(_uint(value) for value in ordered_work_values)) + _section(136, ordered_plane),
+                        2,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=0,
+                        query_dimension=2,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
             exact_work_values = list(work_values)
             exact_work_values[2], exact_work_values[3], exact_work_values[6], exact_work_values[7], exact_work_values[9] = 2, 0, 1, 0, 0
             exact_work_values[31:38] = [0, 0, 0, 0, 0, 0, 0]
