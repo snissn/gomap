@@ -424,7 +424,7 @@ func validateMinimaMeasuredBinding(a *minimaArtifact, f *minimaMeasuredFreeze) e
 				return fmt.Errorf("measured %s observed configuration differs: %s", backend.Name, key)
 			}
 		}
-		if backend.Name == "treedb" {
+		if backend.Name == "treedb" && (a.State != "partial" || backend.Configuration["ef_construction_effective"] != "" || strings.TrimSpace(backend.Configuration["effective_collection"]) != "{}") {
 			requested, requestedErr := strconv.Atoi(config["ef_construction_requested"])
 			effective, effectiveErr := strconv.Atoi(backend.Configuration["ef_construction_effective"])
 			var collection struct {

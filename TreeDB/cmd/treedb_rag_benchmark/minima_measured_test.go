@@ -919,6 +919,12 @@ func TestMinimaMeasuredFiveCapsUseRawIntervals(t *testing.T) {
 
 func TestMinimaMeasuredRejectsDoctoredJoinsAndLifetimeWork(t *testing.T) {
 	base, freeze := measuredTestArtifact(t)
+	early := cloneMinimaArtifact(t, base)
+	delete(early.Backends[0].Configuration, "ef_construction_effective")
+	early.Backends[0].Configuration["effective_collection"] = "{}"
+	if err := validateMinimaArtifact(&early, freeze); err != nil {
+		t.Fatalf("pre-admission partial evidence rejected: %v", err)
+	}
 	cases := map[string]func(*minimaArtifact){
 		"missing request": func(a *minimaArtifact) {
 			r := a.RawEvidence["treedb"]
